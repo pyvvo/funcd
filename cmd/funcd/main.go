@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 	_ "time/tzdata" // ADR-0211: cron time zones resolve on a host without zoneinfo
 
@@ -30,6 +31,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/backup"
+	"github.com/pyvvo/funcd/internal/backup/blobmirror"
 	"github.com/pyvvo/funcd/internal/backup/envelope"
 	"github.com/pyvvo/funcd/internal/backup/runner"
 	"github.com/pyvvo/funcd/internal/blob"
@@ -175,7 +177,7 @@ func serve(parent context.Context, configPath string, memoryFlag *bool, out io.W
 		return err
 	}
 
-	opts, closeExec, startKV, substrate, err := buildOptions(parent, cfg, root, held)
+	opts, closeExec, startLoops, substrate, err := buildOptions(parent, cfg, root, held)
 	if err != nil {
 		return err
 	}
@@ -196,7 +198,7 @@ func serve(parent context.Context, configPath string, memoryFlag *bool, out io.W
 	root.InfoContext(ctx, "funcd starting",
 		"version", version.Get().Version, "commit", version.Get().Commit, "substrate", substrate, "config", configSource(path))
 
-	startKV(ctx) // launch the opt-in KV DR export loop (ADR-0067), if enabled — stops when ctx is cancelled
+	startLoops(ctx) // launch the opt-in KV DR export (ADR-0067) and the blob mirror (ADR-0208) loops — they stop with ctx
 
 	// A start is clean once it runs stableAfter, or when Run returns nil after a stop signal (ADR-0207 Decision 3).
 	stable := time.AfterFunc(stableAfter, func() {
@@ -267,9 +269,9 @@ func safeModeConfig(cfg config.Config) (safemode.Config, error) {
 // buildOptions assembles the daemon's []funcd.Option from the resolved config (ADR-0061): the
 // production drivers, the substrate, the store (+ optional at-rest encryptor), the credential, the
 // bind addresses, the logger, telemetry, and the execution wiring. held is the hold serve opened (ADR-0206; nil ⇒
-// never held), which the platform and the backup runner ask. It returns the options, the
-// execution closer the caller must defer, and the substrate label. The platform owns the drivers; a failed
-// call closes the ones it already opened (issue #437).
+// never held), which the platform, the backup runner and the blob mirror ask. It returns the options, the
+// execution closer the caller must defer, the start of the KV export and blob mirror loops, and the substrate label.
+// The platform owns the drivers; a failed call closes the ones it already opened (issue #437).
 func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, held *hold.Hold) (_ []funcd.Option, _ func() error, _ func(context.Context), _ string, err error) {
 	// Credentials first: a bad token file or entry refuses startup before anything opens (ADR-0171 Decision 3).
 	credOpt, err := credentialOption(cfg, root)
@@ -327,19 +329,29 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 		}
 	}
 
-	// Substrate: file-backed (durable) by default, in-memory (ephemeral) with storage.mode: memory (ADR-0043).
-	// Built before the KV driver so the opt-in KV CDC (ADR-0068) can publish to the same bus.
-	substrateOpts, substrate, bucket, theBus, err := substrateOptions(ctx, cfg.Storage.Mode == "memory", cfg.Storage.DataDir)
+	// Substrate: file-backed (durable) by default, in-memory (ephemeral) with storage.mode: memory (ADR-0043), or a
+	// versioned S3-compatible store with blob.target (ADR-0208). Built before the KV driver so the opt-in KV CDC
+	// (ADR-0068) can publish to the same bus.
+	substrateOpts, substrate, bucket, theBus, err := substrateOptions(ctx, cfg, root)
 	if err != nil {
 		return nil, noopClose, nil, "", err
 	}
 	opened = append(opened, bucket, theBus)
+	startMirror, closeMirror, err := mirrorFor(ctx, cfg, backups, target, sealer, held, root)
+	if err != nil {
+		return nil, noopClose, nil, "", err
+	}
+	opened = append(opened, closerFunc(closeMirror))
 	kvDriver, startKV, err := buildKVStore(ctx, cfg, theBus, root)
 	if err != nil {
 		return nil, noopClose, nil, "", err
 	}
 	if c, ok := kvDriver.(io.Closer); ok {
 		opened = append(opened, c)
+	}
+	start := func(runCtx context.Context) {
+		startKV(runCtx)
+		startMirror(runCtx)
 	}
 
 	// Production() wires the fixed production drivers + the data-plane listener (ADR-0028/0033); the
@@ -533,10 +545,15 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 	opts = append(opts, execOpts...)
 	if target != nil {
 		closeRuntime := closeExec
-		closeExec = func() error { return errors.Join(closeRuntime(), target.Close()) }
+		closeExec = func() error { return errors.Join(closeRuntime(), closeMirror(), target.Close()) }
 	}
-	return opts, closeExec, startKV, substrate, nil
+	return opts, closeExec, start, substrate, nil
 }
+
+// closerFunc adapts a close function to io.Closer.
+type closerFunc func() error
+
+func (f closerFunc) Close() error { return f() }
 
 // buildLogger builds the root logger from the resolved log.format/level (ADR-0061 §6).
 func buildLogger(cfg config.Config, w io.Writer) (*observability.Logger, error) {
@@ -880,12 +897,12 @@ func checkSecretsDecode(st store.Store, keyed bool) error {
 	}
 }
 
-// logBackupFindings logs config.CheckBackup's warnings, one line each (ADR-0205 Decision 3); Validate refused its
-// errors. With a target, envelope.New logs ADR-0204 Decision 2's two encryption warnings itself, so they are not
+// logBackupFindings logs config.CheckBackup's and config.CheckBlob's warnings, one line each (ADR-0205 Decision 3,
+// ADR-0208 Decision 1); Validate refused their errors. With a target, envelope.New logs ADR-0204 Decision 2's two encryption warnings itself, so they are not
 // repeated here.
 func logBackupFindings(cfg config.Config, log *slog.Logger) {
 	sealed := cfg.Backup.Target != ""
-	for _, f := range cfg.CheckBackup() {
+	for _, f := range append(cfg.CheckBackup(), cfg.CheckBlob()...) {
 		if f.Error || sealed && (f.Key == "backup.encryption.none" || f.Key == "backup.encryption.recipients") {
 			continue
 		}
@@ -911,15 +928,7 @@ func backupRunner(ctx context.Context, cfg config.Config, sealer *envelope.Seale
 		rc.Hold = held
 	}
 	if platform {
-		r := cfg.Backup.Retention
-		rc.Target, err = backup.Open(ctx, backup.Config{
-			Target:          cfg.Backup.Target,
-			CredentialsFile: cfg.Backup.CredentialsFile,
-			DataDir:         cfg.Storage.DataDir,
-			SingleWriter:    cfg.Backup.SingleWriter,
-			Retention:       backup.Retention{Hourly: r.Hourly, Daily: r.Daily, Weekly: r.Weekly, Verified: r.Verified},
-			Logger:          log,
-		})
+		rc.Target, err = backup.Open(ctx, platformBackupConfig(cfg, log))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -933,6 +942,99 @@ func backupRunner(ctx context.Context, cfg config.Config, sealer *envelope.Seale
 		return nil, nil, err
 	}
 	return runs, rc.Target, nil
+}
+
+// platformBackupConfig is the platform backup target's backup.Config (ADR-0203), which the blob mirror opens too.
+func platformBackupConfig(cfg config.Config, log *slog.Logger) backup.Config {
+	r := cfg.Backup.Retention
+	return backup.Config{
+		Target:          cfg.Backup.Target,
+		CredentialsFile: cfg.Backup.CredentialsFile,
+		DataDir:         cfg.Storage.DataDir,
+		SingleWriter:    cfg.Backup.SingleWriter,
+		Retention:       backup.Retention{Hourly: r.Hourly, Daily: r.Daily, Weekly: r.Weekly, Verified: r.Verified},
+		Logger:          log,
+	}
+}
+
+// mirrorFor builds the local blob store's mirror while the platform backup runs and the store is local (ADR-0208
+// Decision 4): its own bucket on backup.target, the target's Ready and Conditional, the run's sealer, the hold and
+// Recorder("blob"). start runs its Loop on serve's signal context; closer waits for the Loop and closes the bucket.
+func mirrorFor(ctx context.Context, cfg config.Config, runs *runner.Runner, target backup.Target, sealer *envelope.Sealer,
+	held *hold.Hold, log *slog.Logger) (start func(context.Context), closer func() error, err error) {
+	noop := func(context.Context) {}
+	if target == nil || cfg.Blob.Target != "" || cfg.Storage.Mode != "file" {
+		return noop, noopClose, nil
+	}
+	times, err := cfg.BlobTimes()
+	if err != nil {
+		return noop, noopClose, err
+	}
+	bt, err := cfg.BackupTimes()
+	if err != nil {
+		return noop, noopClose, err
+	}
+	url, err := backup.TargetURL(platformBackupConfig(cfg, log))
+	if err != nil {
+		return noop, noopClose, err
+	}
+	b, err := gocloud.OpenWith(ctx, url, gocloud.OpenOptions{CredentialsFile: cfg.Backup.CredentialsFile})
+	if err != nil {
+		return noop, noopClose, fault.Wrapf(err, fault.Invalid, "buildOptions", "backup.target: open it for the blob mirror")
+	}
+	mc := blobmirror.Config{
+		Dir:    blobDir(cfg),
+		Target: b,
+		Ready: func(ctx context.Context) (bool, error) {
+			if err := target.Ready(ctx); err != nil {
+				return false, err
+			}
+			return target.Conditional(), nil
+		},
+		Seal:          sealer.Seal(),
+		Recipients:    sealer.Keys().Recipients,
+		Interval:      times.Interval,
+		Rebaseline:    times.Rebaseline,
+		Retention:     times.Retention,
+		RetryInterval: bt.RetryInterval,
+		Logger:        log,
+		Record:        runs.Recorder("blob"),
+	}
+	if held != nil {
+		mc.Hold = held
+	}
+	m, err := blobmirror.New(mc)
+	if err != nil {
+		_ = b.Close()
+		return noop, noopClose, err
+	}
+	prefix, days := blobmirror.LifecycleRule(times.Rebaseline, times.Retention)
+	log.Info("blob mirror: set one lifecycle expiry on the backup target's blob/ prefix (days)", "key", "backup.target",
+		"prefix", prefix, "days", days)
+	var started atomic.Bool
+	done := make(chan struct{})
+	start = func(runCtx context.Context) {
+		started.Store(true)
+		go func() {
+			defer close(done)
+			m.Loop(runCtx)
+		}()
+	}
+	closer = func() error {
+		if started.Load() {
+			<-done
+		}
+		return b.Close()
+	}
+	return start, closer, nil
+}
+
+// blobDir is the local blob store, blob.dir, which config.Load derives as <storage.dataDir>/blob.
+func blobDir(cfg config.Config) string {
+	if cfg.Blob.Dir != "" {
+		return cfg.Blob.Dir
+	}
+	return filepath.Join(cfg.Storage.DataDir, "blob")
 }
 
 // backupParent is the generation restore.json names while the metastore is on the timeline that restore minted
@@ -976,12 +1078,14 @@ func configSource(path string) string {
 	return path
 }
 
-// substrateOptions builds the blob + bus drivers for the daemon (ADR-0043): in-memory (ephemeral,
-// no disk) when memoryOnly, else file-backed under dataDir (durable). It returns the options, the active
-// substrate label for the startup log, and the bucket and bus (so the opt-in KV CDC can publish to the bus,
-// ADR-0068, and a failed buildOptions can close both). The platform owns + closes the drivers.
-func substrateOptions(ctx context.Context, memoryOnly bool, dataDir string) ([]funcd.Option, string, blob.Bucket, bus.Bus, error) {
-	if memoryOnly {
+// substrateOptions builds the blob + bus drivers for the daemon (ADR-0043): in-memory (ephemeral, no disk) under
+// storage.mode memory, else a file-backed bus under the data dir and the blob store: the versioned S3-compatible
+// blob.target (ADR-0208), checked before it serves and wrapped in blob.NoSign, or the local store at blob.dir. The
+// backup targets are checked against the store's failure domain. It returns the options, the active substrate label
+// for the startup log, and the bucket and bus (so the opt-in KV CDC can publish to the bus, ADR-0068, and a failed
+// buildOptions can close both). The platform owns + closes the drivers.
+func substrateOptions(ctx context.Context, cfg config.Config, log *slog.Logger) (_ []funcd.Option, _ string, _ blob.Bucket, _ bus.Bus, err error) {
+	if cfg.Storage.Mode == "memory" {
 		bucket, err := gocloud.Open(ctx, "mem://")
 		if err != nil {
 			return nil, "", nil, nil, fmt.Errorf("open in-memory blob: %w", err)
@@ -992,22 +1096,100 @@ func substrateOptions(ctx context.Context, memoryOnly bool, dataDir string) ([]f
 		}
 		return []funcd.Option{funcd.WithBlob(bucket), funcd.WithBus(messaging)}, "memory", bucket, messaging, nil
 	}
-	blobDir, natsDir := filepath.Join(dataDir, "blob"), filepath.Join(dataDir, "nats")
-	if err := os.MkdirAll(blobDir, 0o700); err != nil {
-		return nil, "", nil, nil, fmt.Errorf("create blob dir %s: %w", blobDir, err)
+	if err := checkDomains(cfg, log); err != nil {
+		return nil, "", nil, nil, err
 	}
+	natsDir := filepath.Join(cfg.Storage.DataDir, "nats")
 	if err := os.MkdirAll(natsDir, 0o700); err != nil {
 		return nil, "", nil, nil, fmt.Errorf("create nats dir %s: %w", natsDir, err)
 	}
-	bucket, err := gocloud.Open(ctx, gocloud.FileURL(blobDir))
-	if err != nil {
-		return nil, "", nil, nil, fmt.Errorf("open file blob: %w", err)
+	var bucket blob.Bucket
+	if cfg.Blob.Target != "" {
+		if bucket, err = remoteStore(ctx, cfg, log); err != nil {
+			return nil, "", nil, nil, err
+		}
+	} else {
+		dir := blobDir(cfg)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, "", nil, nil, fmt.Errorf("create blob dir %s: %w", dir, err)
+		}
+		if bucket, err = gocloud.Open(ctx, gocloud.FileURL(dir)); err != nil {
+			return nil, "", nil, nil, fmt.Errorf("open file blob: %w", err)
+		}
 	}
 	messaging, err := nats.Open(ctx, nats.Options{Storage: nats.FileStorage, StoreDir: natsDir})
 	if err != nil {
+		_ = bucket.Close()
 		return nil, "", nil, nil, fmt.Errorf("open file bus: %w", err)
 	}
 	return []funcd.Option{funcd.WithBlob(bucket), funcd.WithBus(messaging)}, "file", bucket, messaging, nil
+}
+
+// remoteStore opens blob.target and checks its protection (ADR-0208 Decision 2): versioning not Enabled, or a
+// refused or unimplemented read, refuses the start naming blob.allowUnversioned (with it true, a warning); no Object
+// Lock warns once; no answer refuses it with fault.Unavailable.
+func remoteStore(ctx context.Context, cfg config.Config, log *slog.Logger) (blob.Bucket, error) {
+	const op = "buildOptions"
+	b, err := gocloud.OpenWith(ctx, cfg.Blob.Target, gocloud.OpenOptions{CredentialsFile: cfg.Blob.CredentialsFile})
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Invalid, op, "blob.target: open the store")
+	}
+	v, ok := b.(blob.Versioned)
+	if !ok {
+		_ = b.Close()
+		return nil, fault.Invalidf(op, "blob.target %q is no versioned store", cfg.Blob.Target)
+	}
+	st, err := v.Versioning(ctx)
+	switch {
+	case fault.KindOf(err) == fault.NotFound:
+		_ = b.Close()
+		return nil, fault.Wrapf(err, fault.Invalid, op, "blob.target: the bucket does not exist")
+	case err != nil:
+		_ = b.Close()
+		return nil, fault.Wrapf(err, fault.Unavailable, op, "blob.target: read its versioning")
+	case !st.Enabled && !cfg.Blob.AllowUnversioned:
+		_ = b.Close()
+		return nil, fault.Invalidf(op, "blob.target keeps no versions (versioning off, suspended or unreadable), so "+
+			"nothing protects an object a bug or a leaked credential deletes; enable versioning, or set "+
+			"blob.allowUnversioned to accept it")
+	case !st.Enabled:
+		log.WarnContext(ctx, "blob store keeps no versions: a deleted or overwritten object is gone", "key", "blob.allowUnversioned")
+	case !st.ObjectLock:
+		log.WarnContext(ctx, "blob store has no Object Lock: an administrator credential can still erase its versions",
+			"key", "blob.target")
+	}
+	return blob.NoSign(b), nil
+}
+
+// checkDomains guards the backup targets against the store's failure domain (ADR-0208 Decision 3): the store itself
+// refuses the start naming the key, the same provider warns.
+func checkDomains(cfg config.Config, log *slog.Logger) error {
+	store := cfg.Blob.Target
+	if store == "" {
+		store = gocloud.FileURL(blobDir(cfg))
+	}
+	targets := []struct{ key, url string }{{"backup.target", cfg.Backup.Target}}
+	if cfg.Kvstore.Backup.Enabled {
+		targets = append(targets, struct{ key, url string }{"kvstore.backup.target", cfg.Kvstore.Backup.Target})
+	}
+	for _, t := range targets {
+		if t.url == "" {
+			continue
+		}
+		o, err := gocloud.CompareDomains(store, t.url)
+		if err != nil {
+			return fault.Wrapf(err, fault.Invalid, "buildOptions", "%s", t.key)
+		}
+		switch o {
+		case gocloud.OverlapStore:
+			return fault.Invalidf("buildOptions", "%s is inside the blob store (the same bucket, or a directory in or "+
+				"around blob.dir): a backup there falls with the store and its credential can delete it", t.key)
+		case gocloud.OverlapProvider:
+			log.Warn("backup target shares the blob store's provider (the same endpoint or device): one failure "+
+				"takes both", "key", t.key)
+		}
+	}
+	return nil
 }
 
 // bootSweeper is the containerd driver's boot sweep of every funcd namespace (ADR-0167, ADR-0186); off Linux the driver
