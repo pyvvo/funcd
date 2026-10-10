@@ -46,10 +46,11 @@ test:
 # run the heavy pkg/funcd e2e scenario suite (build-tagged `e2e`; excluded from the fast
 # `test`/`ci` lane). CI runs this in a path-gated job (+ always on main); locally,
 # `just ci && just test-e2e` (or `just ci-full`) is the full-confidence run. Extra flags go to
-# go test (CI passes -v so the job log lists each test's result).
+# go test (CI passes -v so the job log lists each test's result). The suite runs past go test's 10-minute default
+# timeout, so it gets 30 minutes.
 [group('test')]
 test-e2e *flags:
-    go test -tags e2e {{flags}} ./pkg/funcd/...
+    go test -tags e2e -timeout 30m {{flags}} ./pkg/funcd/...
 
 # the Linux integration lane (ADR-0025 L4): real sandbox + the full exit-criterion walk.
 # Linux only — needs a container runtime; excluded from the pure-Go `just ci` gate.
