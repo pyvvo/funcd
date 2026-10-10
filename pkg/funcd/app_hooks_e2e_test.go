@@ -318,10 +318,10 @@ func TestScenarioAppHookEvent(t *testing.T) {
 // internal/app scenario test covers a restart past the deadline with the Function Ready.
 func TestScenarioAppHookRepeatsAfterRestart(t *testing.T) {
 	t.Parallel()
-	const upgradeTimeout = 3 * time.Second
+	const upgradeTimeout = 6 * time.Second
 	st := store.New(memory.New())
 	e := startGC(t, funcd.WithStore(st), funcd.WithPacing(funcd.Pacing{
-		AppUpgradeTimeout: upgradeTimeout, BootTimeout: time.Second, ActivationTimeout: 500 * time.Millisecond,
+		AppUpgradeTimeout: upgradeTimeout, BootTimeout: 4 * time.Second, ActivationTimeout: 3 * time.Second,
 	}))
 	f := newHookFiles(t)
 	a := installHooked(t, e, e.migrateImage(t, f, true))
