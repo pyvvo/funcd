@@ -22,10 +22,12 @@ import (
 const healWithin = 5 * time.Second
 
 // selfHeals records the attributes of each self-healed line the platform logs, the logger's own (component) included.
+// With hold set, the pass that logs a line waits for a value on hold, or for hold to close, before it writes the App status.
 type selfHeals struct {
 	mu    *sync.Mutex
 	lines *[]map[string]string
 	attrs []slog.Attr
+	hold  <-chan struct{}
 }
 
 func newSelfHeals() selfHeals { return selfHeals{mu: &sync.Mutex{}, lines: &[]map[string]string{}} }
@@ -45,8 +47,11 @@ func (s selfHeals) Handle(_ context.Context, r slog.Record) error {
 		return true
 	})
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	*s.lines = append(*s.lines, m)
+	s.mu.Unlock()
+	if s.hold != nil {
+		<-s.hold
+	}
 	return nil
 }
 
@@ -109,6 +114,19 @@ func historyRows(t *testing.T, cli func(...string) (string, error)) []string {
 	return revs
 }
 
+// waitSelfHeal waits until status.lastSelfHeal of the App todo is a record other than since, and returns it. The pass
+// logs its self-healed line before it writes the App status (ADR-0212 Decision 2), so for a moment after the line the
+// App still reads Ready without the record.
+func (e *gcEnv) waitSelfHeal(t *testing.T, since *v1.AppSelfHeal) *v1.AppSelfHeal {
+	t.Helper()
+	var h *v1.AppSelfHeal
+	require.Eventually(t, func() bool {
+		h = e.app(t, "todo").Status.LastSelfHeal
+		return h != nil && (since == nil || time.Time(h.At).After(time.Time(since.At)))
+	}, healWithin, 20*time.Millisecond, "status.lastSelfHeal records the write-back")
+	return h
+}
+
 func requireHealedAt(t *testing.T, h *v1.AppSelfHeal, after time.Time) {
 	t.Helper()
 	require.NotNil(t, h, "status.lastSelfHeal is set")
@@ -132,8 +150,8 @@ func TestScenarioAppDriftSelfHealed(t *testing.T) {
 	require.Eventually(t, func() bool { return len(logs.seen()) == 1 }, healWithin, 20*time.Millisecond, "one self-healed line")
 	require.Equal(t, []map[string]string{todoAPIHealed()}, logs.seen())
 	got := e.waitApp(t, "todo", v1.ConditionTrue, "", appWithin)
-	requireHealedAt(t, got.Status.LastSelfHeal, edited)
-	first := got.Status.LastSelfHeal.At
+	first := e.waitSelfHeal(t, nil)
+	requireHealedAt(t, first, edited)
 	require.Equal(t, v1.ObjectName("todo-1"), got.Status.LatestRevision, "no AppRevision is stamped")
 	require.False(t, e.exists(t, v1.KindAppRevision, "todo-2"))
 
@@ -143,12 +161,53 @@ func TestScenarioAppDriftSelfHealed(t *testing.T) {
 		healWithin, 20*time.Millisecond, "todo-api is re-created")
 	require.Eventually(t, func() bool { return len(logs.seen()) == 2 }, healWithin, 20*time.Millisecond, "a second self-healed line")
 	require.Equal(t, []map[string]string{todoAPIHealed(), todoAPIHealed()}, logs.seen())
-	require.Eventually(t, func() bool {
-		h := e.app(t, "todo").Status.LastSelfHeal
-		return h != nil && time.Time(h.At).After(time.Time(first))
-	}, healWithin, 20*time.Millisecond, "lastSelfHeal records the re-create")
-	requireHealedAt(t, e.app(t, "todo").Status.LastSelfHeal, deleted)
+	requireHealedAt(t, e.waitSelfHeal(t, first), deleted)
 	require.False(t, e.exists(t, v1.KindAppRevision, "todo-2"))
+}
+
+// TestIssue904_SelfHealRecordAwaitsStatusWrite holds each healing pass between its self-healed line and its App status
+// write, where the App still reads the previous status.lastSelfHeal (none, then the first record), and checks that the
+// drift scenario's wait for a newer record outlasts that window instead of reading the App once.
+func TestIssue904_SelfHealRecordAwaitsStatusWrite(t *testing.T) {
+	const window = time.Second
+	gate, stop := make(chan struct{}), make(chan struct{})
+	var releases sync.WaitGroup
+	releaseAfter := func() {
+		releases.Add(1)
+		time.AfterFunc(window, func() {
+			defer releases.Done()
+			select {
+			case gate <- struct{}{}:
+			case <-stop:
+			}
+		})
+	}
+	logs := newSelfHeals()
+	logs.hold = gate
+	e := startGC(t, funcd.WithLogger(slog.New(logs)))
+	// Runs before the platform's cleanups: no release is still pending when the gate closes for good.
+	t.Cleanup(func() {
+		close(stop)
+		releases.Wait()
+		close(gate)
+	})
+	installTodo(t, e)
+
+	edited := time.Now()
+	e.handEdit(t, e.imageV2(t))
+	require.Eventually(t, func() bool { return len(logs.seen()) == 1 }, healWithin, 20*time.Millisecond, "one self-healed line")
+	require.Nil(t, e.waitApp(t, "todo", v1.ConditionTrue, "", appWithin).Status.LastSelfHeal,
+		"the held first pass has not written the App status")
+	releaseAfter()
+	first := e.waitSelfHeal(t, nil)
+	requireHealedAt(t, first, edited)
+
+	deleted := time.Now()
+	e.del(t, v1.KindFunction, "todo-api")
+	require.Eventually(t, func() bool { return len(logs.seen()) == 2 }, healWithin, 20*time.Millisecond, "a second self-healed line")
+	require.Equal(t, first.At, e.app(t, "todo").Status.LastSelfHeal.At, "the held second pass has not written the App status")
+	releaseAfter()
+	requireHealedAt(t, e.waitSelfHeal(t, first), deleted)
 }
 
 // scenario: app-paused-keeps-hotfix
@@ -180,8 +239,7 @@ func TestScenarioAppPausedKeepsHotfix(t *testing.T) {
 	require.Eventually(t, func() bool { return e.apiImage(t) == declared }, healWithin, 20*time.Millisecond,
 		"the declared spec is back")
 	e.waitPaused(t, v1.ConditionFalse, "Resumed")
-	require.Eventually(t, func() bool { return e.app(t, "todo").Status.LastSelfHeal != nil }, healWithin, 20*time.Millisecond)
-	requireHealedAt(t, e.app(t, "todo").Status.LastSelfHeal, resumed)
+	requireHealedAt(t, e.waitSelfHeal(t, nil), resumed)
 	require.Equal(t, []map[string]string{todoAPIHealed()}, logs.seen())
 	require.Equal(t, []string{"1"}, historyRows(t, cli))
 }
