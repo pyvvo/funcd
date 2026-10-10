@@ -55,13 +55,13 @@ func TestScenarioPoolBootClockFromLastStart(t *testing.T) {
 		Revision: "sig", State: runtime.StateRunning, CreatedAt: created, StartedAt: started,
 	}
 
-	u, err := r.stopUnlistenedIn(context.Background(), []runtime.Instance{in})
+	u, err := r.stopUnlistenedIn(context.Background(), []runtime.Instance{in}, poolListened)
 	require.NoError(t, err)
 	require.Empty(t, u.stopped, "bootTimeout runs from its last start, not its creation")
 	require.Empty(t, rec.stopped)
 
 	clk.Advance(time.Millisecond)
-	u, err = r.stopUnlistenedIn(context.Background(), []runtime.Instance{in})
+	u, err = r.stopUnlistenedIn(context.Background(), []runtime.Instance{in}, poolListened)
 	require.NoError(t, err)
 	require.Equal(t, []runtime.InstanceID{in.ID}, u.stopped)
 	require.Equal(t, []runtime.InstanceID{in.ID}, rec.stopped)

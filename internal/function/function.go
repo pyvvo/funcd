@@ -1541,14 +1541,14 @@ func (r *Reconciler) stopUnlistened(ctx context.Context, fn *v1.Function, rev v1
 		return unlistened{}, err
 	}
 	insts = slices.DeleteFunc(insts, func(in runtime.Instance) bool { return in.Revision != rev || in.Replica >= below })
-	return r.stopUnlistenedIn(ctx, insts)
+	return r.stopUnlistenedIn(ctx, insts, r.listening)
 }
 
-// stopUnlistenedIn stops each running worker in insts that has not listened bootTimeout after its last start and
-// counts it as a boot crash, once per CreatedAt (ADR-0161 Decision 3, ADR-0225 Decision 1): a solo replica or a pool
-// worker. A booting worker is one that runs and has not listened: the pinned shims and pool hosts write their port file
-// only once they listen. The legacy placeholder never listens, so it stops nothing.
-func (r *Reconciler) stopUnlistenedIn(ctx context.Context, insts []runtime.Instance) (unlistened, error) {
+// stopUnlistenedIn stops each running worker in insts that has not listened, as listened judges it, bootTimeout after
+// its last start and counts it as a boot crash, once per CreatedAt (ADR-0161 Decision 3, ADR-0225 Decision 1): a solo
+// replica or a pool worker. A booting worker is one that runs and has not listened: the pinned shims and pool hosts
+// write their port file only once they listen. The legacy placeholder never listens, so it stops nothing.
+func (r *Reconciler) stopUnlistenedIn(ctx context.Context, insts []runtime.Instance, listened func(runtime.Instance) bool) (unlistened, error) {
 	var u unlistened
 	if r.materializer == nil {
 		return u, nil
@@ -1556,7 +1556,7 @@ func (r *Reconciler) stopUnlistenedIn(ctx context.Context, insts []runtime.Insta
 	now := r.clock.Now()
 	counted, lowest := true, -1
 	for _, in := range insts {
-		if in.State == runtime.StateRunning && !in.Listened {
+		if in.State == runtime.StateRunning && !listened(in) {
 			deadline := lastStart(in).Add(r.bootTimeout)
 			if now.Before(deadline) {
 				if c, ok := r.boot.crash(in.ID); ok && c.count > 0 {

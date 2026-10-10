@@ -314,6 +314,10 @@ func (r *Reconciler) memberIn(ctx context.Context, key pooling.PoolKey, insts []
 	return runtime.Instance{}, memberHealth{}, false, nil
 }
 
+// poolListened reports whether pool worker in has listened. A listened worker the runtime lists without an address is
+// hung, which poolSilent judges, not a boot crash (#422); a solo replica keeps r.listening.
+func poolListened(in runtime.Instance) bool { return in.Listened }
+
 // poolSilent reports whether the running pool worker in insts that has listened is hung, which ensurePool restarts at
 // once: silent on /health/liveness for livenessTimeout (ADR-0215 Decision 1). One that has not listened is
 // stopUnlistenedIn's (ADR-0225 Decision 1).
@@ -378,7 +382,7 @@ func (r *Reconciler) ensurePool(ctx context.Context, key pooling.PoolKey, self *
 		return poolPass{}, r.reclaimPool(ctx, key, cur, old)
 	}
 	now, legacy := r.clock.Now(), r.materializer == nil
-	ul, err := r.stopUnlistenedIn(ctx, cur)
+	ul, err := r.stopUnlistenedIn(ctx, cur, poolListened)
 	if err != nil {
 		return poolPass{}, err
 	}

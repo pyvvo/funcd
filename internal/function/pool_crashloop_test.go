@@ -486,3 +486,36 @@ func TestPoolStartErrorWhileSwitching(t *testing.T) {
 	h.reconcile(t, "b")
 	require.Equal(t, starts+1, sf.starts.Load(), "started again once its wait has passed")
 }
+
+// A member whose current revision serves (S = C) on an old pool worker while a sibling's redeploy left the current
+// manifest's worker booting again with a count: b reads Ready and its pass comes back at that boot deadline, not after
+// the period and not at 1 ms (ADR-0225 Decision 3). The old worker's drain poll is a period, so it does not set the
+// requeue.
+func TestPooledServedMemberPolledAtBootDeadline(t *testing.T) {
+	t.Parallel()
+	h, clk := crashHarness(t, func(d *function.Deps) { d.DrainPollInterval = healthPeriod })
+	old := pooledPair(t, h)
+	_, release := h.rt.serveWorker(t, old, "old pool")
+	release()
+	clk.Advance(time.Millisecond) // the new pool worker is the newer one
+	h.rt.setHoldNew(true)
+	h.apply(t, "a", func(fn *v1.Function) { fn.Spec.Image = otherArtifact(t) })
+	h.reconcile(t, "a")
+	require.Len(t, h.rt.poolWorkers("default", poolOf("w")), 2)
+	clk.Advance(poolBootTimeout)
+	h.reconcile(t, "b")
+	require.Equal(t, 1, function.BootCount(h.r, h.poolID(t, "w")), "boot crash 1 of the current manifest's worker")
+
+	creates := h.creates()
+	clk.Advance(bootWait(1) - poolBootTimeout)
+	res := h.reconcile(t, "b")
+	require.Equal(t, creates+1, h.creates(), "created again once the wait has passed")
+	b := h.getFn(t, "b")
+	require.Equal(t, v1.PhaseReady, b.Status.Phase, "the old pool worker serves b")
+	require.Equal(t, b.Status.CurrentRevision, b.Status.ServingRevision)
+	require.Equal(t, poolBootTimeout, res.RequeueAfter)
+
+	clk.Advance(400 * time.Millisecond)
+	res = h.reconcile(t, "b")
+	require.Equal(t, 600*time.Millisecond, res.RequeueAfter, "the rest of the boot timeout")
+}
