@@ -26,6 +26,7 @@ import (
 	"golang.org/x/net/http/httpguts"
 
 	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"sigs.k8s.io/yaml"
 )
 
@@ -167,6 +168,12 @@ type Config struct {
 			Recipients []string `json:"recipients,omitempty" env:"FUNCD_BACKUP_ENCRYPTION_RECIPIENTS" envSeparator:","`
 			None       bool     `json:"none,omitempty" env:"FUNCD_BACKUP_ENCRYPTION_NONE"`
 		} `json:"encryption,omitempty"`
+		// Interval, RetryInterval and Objectives.RPO time the runs and the rpoRisk alert (ADR-0205 Decision 1).
+		Interval      string `json:"interval,omitempty" env:"FUNCD_BACKUP_INTERVAL"`
+		RetryInterval string `json:"retryInterval,omitempty" env:"FUNCD_BACKUP_RETRY_INTERVAL"`
+		Objectives    struct {
+			RPO string `json:"rpo,omitempty" env:"FUNCD_BACKUP_OBJECTIVES_RPO"`
+		} `json:"objectives,omitempty"`
 	} `json:"backup,omitempty"`
 	Auth struct {
 		Token      string   `json:"token,omitempty" env:"FUNCD_TOKEN"`
@@ -396,6 +403,10 @@ func defaults() Config {
 	c.Backup.Retention.Daily = 30
 	c.Backup.Retention.Weekly = 12
 	c.Backup.Retention.Verified = 2
+	// Platform backup runs (ADR-0205): one an hour, a retry 5 minutes after a failure, rpoRisk past 2 hours.
+	c.Backup.Interval = v1.Duration(defaultBackupInterval).String()
+	c.Backup.RetryInterval = v1.Duration(defaultBackupRetryInterval).String()
+	c.Backup.Objectives.RPO = v1.Duration(defaultBackupRPO).String()
 	// S3 gateway (ADR-0080/0085): opt-in; node-private loopback; 1 GiB buffered-object cap.
 	c.S3Gateway.Enabled = false
 	c.S3Gateway.ListenAddr = "127.0.0.1:9000"
@@ -542,7 +553,13 @@ func (c Config) Validate() error {
 	})
 	err := v.Struct(c)
 	if err == nil {
-		return c.validateCredentials(op)
+		if err := c.validateCredentials(op); err != nil {
+			return err
+		}
+		if fs := c.CheckBackup(); len(fs) > 0 && fs[0].Error {
+			return fault.Invalidf(op, "%s", fs[0].Message)
+		}
+		return nil
 	}
 	var verrs validator.ValidationErrors
 	if errors.As(err, &verrs) && len(verrs) > 0 {

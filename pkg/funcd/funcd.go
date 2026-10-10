@@ -35,6 +35,7 @@ import (
 	"github.com/pyvvo/funcd/internal/auth"
 	cedarauth "github.com/pyvvo/funcd/internal/auth/cedar"
 	"github.com/pyvvo/funcd/internal/auth/rbac"
+	"github.com/pyvvo/funcd/internal/backup/runner"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
 	"github.com/pyvvo/funcd/internal/bus"
@@ -303,6 +304,9 @@ type config struct {
 	// invokeDefaultTimeout is invoke.defaultTimeout (ADR-0151): an external invoke's response deadline when its
 	// Function sets no spec.timeout.
 	invokeDefaultTimeout time.Duration
+
+	// backupRunner is the platform backup runner (ADR-0205, WithPlatformBackup); nil ⇒ none.
+	backupRunner *runner.Runner
 }
 
 // minRecordBytes is the smallest funclog.maxRecordBytes: a record's envelope and cut marker always fit (ADR-0168).
@@ -1112,7 +1116,16 @@ func (p *Platform) buildControlPlane() error {
 		logReader = reader
 		runLogQuerier = controlplane.NewWorkflowRunLogQuerier(c.store, runs, reader)
 	}
+	// ADR-0205: the platform backup cuts the event store, the metastore and the run state.
+	var backupStatus controlplane.BackupStatuser
+	if c.backupRunner != nil {
+		if err := c.backupRunner.Bind(runner.Inputs{Events: p.eventStore, Meta: c.store, Runs: runs}); err != nil {
+			return fault.Wrapf(err, fault.KindOf(err), op, "bind the platform backup")
+		}
+		backupStatus = c.backupRunner
+	}
 	handler, err := controlplane.NewServer(controlplane.Deps{
+		Backup:      backupStatus,
 		Store:       c.store,
 		Authorizer:  c.authorizer,
 		Credentials: c.credentials,
@@ -1423,6 +1436,13 @@ func (p *Platform) Run(ctx context.Context) error {
 		go func() {
 			defer wg.Done()
 			p.sensorReconciler.RunRetryWorkers(ctx, p.drainTimeout)
+		}()
+	}
+	if p.cfg.backupRunner != nil { // ADR-0205: the platform backup runs (stops on ctx cancel)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p.cfg.backupRunner.Run(ctx)
 		}()
 	}
 	if p.deadLetters != nil && (p.deadletterRetention > 0 || p.deadletterMaxEntries > 0) { // ADR-0118: DLQ retention sweep

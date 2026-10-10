@@ -42,6 +42,8 @@ type Deps struct {
 	// AppRetrier retries an App's failed hook (ADR-0214). Optional; when set, NewServer registers POST
 	// …/apps/{name}/retry.
 	AppRetrier AppRetrier
+	// Backup reads the platform backup's status (ADR-0205). Optional; nil ⇒ the route reads enabled: false.
+	Backup BackupStatuser
 }
 
 // OwnerCollector collects the dead-owned children of a namespace (internal/gc.Collector, ADR-0170).
@@ -86,6 +88,7 @@ func NewServer(d Deps) (http.Handler, error) {
 	if d.AppRetrier != nil {
 		RegisterAppRetry(api, d.AppRetrier, d.Authorizer)
 	}
+	RegisterPlatformBackup(api, d.Backup, d.Authorizer) // ADR-0205: the platform backup status
 	logger.Info("control-plane API server constructed", "component", "controlplane")
 	return r, nil
 }

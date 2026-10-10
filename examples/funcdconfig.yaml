@@ -97,6 +97,10 @@ storage:
 #     recipients:                 # age recipients files (age1… or age1pq1…), at least 2 distinct recipients. default: none
 #       - /etc/funcd/backup-recipients.txt
 #     none: false                 # store unsealed; needs no recipients and secrets.encryptionKeyFile. default: false
+#   interval: 1h                  # time between run starts (ADR-0205). default: 1h
+#   retryInterval: 5m             # wait after a failed run before the next attempt. default: 5m
+#   objectives:
+#     rpo: 2h                     # rpoRisk once the newest verified generation is this old. default: 2h
 # workflow:                       # workflow engine (ADR-0094)
 #   dataDir: ""                   # run-state Badger dir. default: <dataDir>/workflow
 #   defaultStepTimeout: 300s      # per-step invocation timeout. default: 300s
