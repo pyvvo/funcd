@@ -1,6 +1,6 @@
 # ADR-0221: A Degraded Function recovers while a gate fails — a worker of the serving revision that passes its readiness probe makes it Ready
 
-- **Status**: Proposed (2026-10-08)
+- **Status**: Accepted (2026-10-10; judged five rounds, last verdict accept; the decider answered at acceptance on #849)
 - **Date**: 2026-10-08
 - **Deciders**: green-0-rabbit
 - **Tags**: function, supervision, readiness, status, gate, pooling, secrets
@@ -80,7 +80,8 @@ route (an unanswered pool host: the status as read, `RevisionReady=False/Reconci
 ## Scope
 
 **In**: `gateFailed`'s non-asleep branch, `failPass`, `servingReady` (new), the `Degraded` message, Function-side tests.
-**Out**: the asleep branch; any new demotion of a `Ready` Function; the resolver's replica choice; the activator;
+**Out**: the asleep branch; any new demotion of a `Ready` Function (a pooled member keeps sharing its entry read with
+the `Ready` path, so it is demoted as the entry says, today and once ADR-0215 adds `dependency`); the resolver's replica choice; the activator;
 replacing an unready worker while a gate fails (ADR-0161 Decision 3); steady state skipping a `Ready` solo Function's
 gates (ADR-0142 Decision 3); the probe's content (ADR-0215); the App-level test (on the App side, in other files).
 

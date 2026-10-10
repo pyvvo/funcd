@@ -703,7 +703,7 @@ stateDiagram-v2
     Failed --> Ready : a worker becomes ready (ADR-0169)
     note right of Failed : idle reclaim never leaves it
     Ready --> Degraded : partial failure detected
-    Degraded --> Ready : reconciliation repairs
+    Degraded --> Ready : reconciliation repairs, or a serving worker passes its probe while a gate fails (ADR-0221)
     Ready --> Idle : no traffic for idleTimeout (scale-to-zero)
     Degraded --> Idle : no traffic for idleTimeout
     Pending --> Idle : a gate clears with nothing to run (replicas 0, or asleep), written by the reconciler (ADR-0185, ADR-0192)

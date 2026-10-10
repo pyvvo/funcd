@@ -6,6 +6,7 @@
 - **Superseded in part by**: [ADR-0192](0192-asleep-function-gate-stops-worker.md) (2026-10-05) — Decision 2 (gateFailed lead-in line 145, row line 150, header lines 22-23) and Decision 3 line 155: an asleep solo Function's workers are stopped and the gate's own phase is written.
 - **Superseded in part by**: [ADR-0193](0193-asleep-gate-rule-for-every-placement.md) (2026-10-05) — Decision 2's gateFailed lead-in and running row and Decision 3's '(a gate failure stops nothing)', now also for an asleep pooled member.
 - **Superseded in part by**: [ADR-0215](0215-built-in-health.md) (2026-10-10) — Decision 2 and the steady state: liveness and readiness probes in each pass.
+- **Superseded in part by**: [ADR-0221](0221-degraded-recovers-under-gate.md) (2026-10-10; lines at 0cd67ef5) — Decision 1's `failPass` bullets (126-129), Decision 2's `gateFailed` lead-in and rows for a `Degraded` read phase (146-147, 152-153), the rejected alternative "`Degraded → Ready` from a failed pass or gate" (110-111), the constraint at 96, scenario `registry-outage-not-ready` (62) and the header clauses at 18 and 24-28: while a gate or a pass fails, a `Degraded` Function whose serving-revision worker passes its readiness probe becomes `Ready`.
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged once)
 - **Deciders**: green-0-rabbit
 - **Tags**: function, supervision, readiness, status, resolver, activator, crash-recovery
