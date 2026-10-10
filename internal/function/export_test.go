@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -45,4 +46,10 @@ func PoolLiveLen(r *Reconciler) int {
 		}
 	}
 	return n
+}
+
+// BootCount is the boot-crash count r holds for worker id (ADR-0160, ADR-0225).
+func BootCount(r *Reconciler, id runtime.InstanceID) int {
+	c, _ := r.boot.crash(id)
+	return c.count
 }

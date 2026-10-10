@@ -437,37 +437,42 @@ func TestIssue863_PooledRedeployFollowsServingRevision(t *testing.T) {
 	require.Equal(t, h.shimURL()+"/function/b", up)
 }
 
-// A new pool worker that never listens leaves the old one serving the redeployed member at its serving revision, past
-// the boot timeout: the member stays Ready with RevisionReady False/Progressing while the silent pool worker is created
-// again (ADR-0158 Decision 4, ADR-0190 Decision 8), and nothing switches (#863).
-func TestIssue863_SilentNewPoolWorkerLeavesOldServing(t *testing.T) {
+// scenario: silent-new-pool-worker-reports-crash-loop (ADR-0225, #863's regression) — a new pool worker that never
+// listens leaves the old one serving the redeployed member at its serving revision: it is stopped at its boot timeout
+// and created again only once its wait has passed; b stays Ready with RevisionReady False/CrashLoopBackOff, keeps its
+// route on the old pool worker, and its sibling, reconciled after the stop, stays Ready (ADR-0190 Decision 8); nothing
+// switches.
+func TestScenarioSilentNewPoolWorkerReportsCrashLoop(t *testing.T) {
 	t.Parallel()
-	clk := clock.NewManual(time.Unix(1_700_000_000, 0))
-	h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool, func(d *function.Deps) {
-		d.Clock = clk
-		d.BootTimeout = time.Second
-	})
-	old := pooledPair(t, h)
-	oldURL, _ := h.rt.serveWorker(t, old, "old pool")
-
-	h.rt.setHoldNew(true)
-	h.apply(t, "b", func(fn *v1.Function) { fn.Spec.Image = otherArtifact(t) })
-	h.reconcile(t, "b")
-	require.Len(t, h.rt.poolWorkers("default", poolOf("w")), 2)
-	creates, _ := h.rt.counts()
-	clk.Advance(time.Second)
-	h.reconcile(t, "b")
-	after, _ := h.rt.counts()
-	require.Equal(t, creates+1, after, "the pool worker silent past the boot timeout is created again")
+	h, clk := crashHarness(t)
+	old, oldURL := silentRebuild(t, h, clk)
+	next := h.poolID(t, "w")
+	require.NotEqual(t, old, next)
+	require.Equal(t, runtime.StateStopped, h.rt.stateOf(next), "the silent pool worker is stopped")
 	require.False(t, h.rt.wasRemoved(old), "the old pool worker serves while the new one does not listen")
 	b := h.getFn(t, "b")
 	require.Equal(t, v1.PhaseReady, b.Status.Phase)
 	require.Equal(t, "b-1", b.Status.ServingRevision)
 	require.Equal(t, "b-2", b.Status.CurrentRevision)
 	h.requireCondition(t, "b", "Ready", v1.ConditionTrue, "")
-	h.requireCondition(t, "b", "RevisionReady", v1.ConditionFalse, "Progressing")
+	rr := h.requireCondition(t, "b", "RevisionReady", v1.ConditionFalse, "CrashLoopBackOff")
+	require.Equal(t, crashMessage(1), rr.Message)
 	up, ready := h.upstream(t, "b")
 	require.True(t, ready)
 	require.Equal(t, oldURL+"/function/b", up)
+
+	h.reconcile(t, "a")
 	require.Equal(t, v1.PhaseReady, h.getFn(t, "a").Status.Phase, "the sibling keeps serving")
+	h.requireCondition(t, "a", "Ready", v1.ConditionTrue, "")
+	h.requireCondition(t, "a", "RevisionReady", v1.ConditionTrue, "")
+
+	creates := h.creates()
+	clk.Advance(bootWait(1) - poolBootTimeout - time.Millisecond)
+	h.reconcile(t, "b")
+	require.Equal(t, creates, h.creates(), "not created again within its wait")
+	clk.Advance(time.Millisecond)
+	h.reconcile(t, "b")
+	require.Equal(t, creates+1, h.creates(), "created again once its wait has passed")
+	require.Equal(t, next, h.poolID(t, "w"), "in place")
+	require.Equal(t, "b-1", h.getFn(t, "b").Status.ServingRevision, "nothing switches")
 }

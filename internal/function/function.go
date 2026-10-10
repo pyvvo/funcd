@@ -1001,8 +1001,8 @@ type verdict struct {
 	startErr       error     // the first error starting a current-revision replica (nil if every replica started)
 	repairErr      string    // a serving pass: why it stopped a replica that never became ready (issue #309)
 	crashLoop      string    // the serving side's boot-crash message (ADR-0160), "" if none
-	// currentCrashLoop is the current revision's boot-crash message while switching; desired is the serving side's
-	// replica count M.
+	// currentCrashLoop is the current revision's boot-crash message while switching, or a pooled member's while nothing
+	// serves its serving revision (ADR-0225 Decision 3); desired is the serving side's replica count M.
 	currentCrashLoop string
 	desired          int
 	pooled           bool      // a pooled member, judged on its pool host's /health/members (ADR-0046)
@@ -1107,7 +1107,7 @@ func (r *Reconciler) finish(ctx context.Context, fn *v1.Function, v verdict, dra
 		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "ShapeInvalid", Message: "the current revision could not load its handler; the serving revision keeps the calls", ObservedGeneration: gen})
 	case v.switching && v.startErr != nil:
 		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "StartFailed", Message: "a worker of the current revision could not start: " + v.startErr.Error(), ObservedGeneration: gen})
-	case v.switching && v.currentCrashLoop != "":
+	case v.currentCrashLoop != "":
 		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: reasonCrashLoop, Message: v.currentCrashLoop, ObservedGeneration: gen})
 	case v.switching && v.currentReport != nil:
 		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: reasonDependencyNotReady, Message: reportMessage(v.currentReport), ObservedGeneration: gen})
@@ -1177,8 +1177,9 @@ func (r *Reconciler) requeueFor(phase v1.Phase, v verdict) time.Duration {
 		}
 		return r.supervisionPeriod
 	}
-	if v.pooled && v.crashLoop != "" { // a member whose load timed out stays failed until its pool's next start
-		return max(v.retryAt.Sub(now), time.Millisecond)
+	if at := earlier(v.retryAt, v.pollAt); v.pooled && v.startErr == nil && !at.IsZero() {
+		// a pool worker waiting out its boot backoff or booting with a count, or a member whose load timed out (ADR-0225)
+		return min(r.supervisionPeriod, max(at.Sub(now), time.Millisecond))
 	}
 	switch phase {
 	case v1.PhaseDeploying: // shim booting — re-poll readiness soon; a replica in its backoff — at its deadline
@@ -1200,9 +1201,9 @@ func (r *Reconciler) requeueFor(phase v1.Phase, v verdict) time.Duration {
 		}
 		return r.supervisionPeriod
 	case v1.PhaseFailed:
-		// ADR-0169 Decision 4: a replica that could not start is started again at the end of its growing wait; the pool
-		// worker, which has no counter, after the period, as a pooled member's shape failure (ADR-0158). A solo shape
-		// failure is not retried.
+		// ADR-0169 Decision 4: a replica or pool worker that could not start is started again at the end of its growing
+		// wait (ADR-0225); a pooled member's shape failure after the period (ADR-0158). A solo shape failure is not
+		// retried.
 		switch {
 		case !v.retryAt.IsZero():
 			return max(v.retryAt.Sub(now), time.Millisecond)
@@ -1519,9 +1520,9 @@ func (r *Reconciler) stopNeverReady(ctx context.Context, fn *v1.Function, failed
 	return true, nil
 }
 
-// unlistened is what stopUnlistened did to a revision: the replicas it stopped, the earliest time a replica may be
-// re-created, the earliest boot timeout of the booting replicas when every one has a boot-crash count (zero otherwise),
-// and the boot-crash message of the lowest replica with a count.
+// unlistened is what stopUnlistenedIn did to a set of workers: the ones it stopped, the earliest time one may be
+// re-created, the earliest boot timeout of the booting ones when every one has a boot-crash count (zero otherwise), and
+// the boot-crash message of the lowest replica with a count.
 type unlistened struct {
 	stopped   []runtime.InstanceID
 	retryAt   time.Time
@@ -1529,26 +1530,33 @@ type unlistened struct {
 	crashLoop string
 }
 
-// stopUnlistened stops each running replica of solo revision rev below `below` that has not listened within bootTimeout
-// of its last start and counts it as a boot crash, so convergeRevision re-creates it after the growing wait (ADR-0161
-// Decision 3). A booting replica is one that runs and has not listened: the pinned shims write their port file only
-// once ready. The legacy placeholder never listens, so it is never stopped here.
+// stopUnlistened runs stopUnlistenedIn on the replicas of solo revision rev below `below`, so convergeRevision
+// re-creates each one it stops after the growing wait (ADR-0161 Decision 3).
 func (r *Reconciler) stopUnlistened(ctx context.Context, fn *v1.Function, rev v1.ObjectName, below int) (unlistened, error) {
+	if r.materializer == nil {
+		return unlistened{}, nil
+	}
+	insts, err := r.namedInstances(ctx, fn.Namespace, fn.Name)
+	if err != nil {
+		return unlistened{}, err
+	}
+	insts = slices.DeleteFunc(insts, func(in runtime.Instance) bool { return in.Revision != rev || in.Replica >= below })
+	return r.stopUnlistenedIn(ctx, insts)
+}
+
+// stopUnlistenedIn stops each running worker in insts that has not listened bootTimeout after its last start and
+// counts it as a boot crash, once per CreatedAt (ADR-0161 Decision 3, ADR-0225 Decision 1): a solo replica or a pool
+// worker. A booting worker is one that runs and has not listened: the pinned shims and pool hosts write their port file
+// only once they listen. The legacy placeholder never listens, so it stops nothing.
+func (r *Reconciler) stopUnlistenedIn(ctx context.Context, insts []runtime.Instance) (unlistened, error) {
 	var u unlistened
 	if r.materializer == nil {
 		return u, nil
 	}
-	insts, err := r.namedInstances(ctx, fn.Namespace, fn.Name)
-	if err != nil {
-		return u, err
-	}
 	now := r.clock.Now()
 	counted, lowest := true, -1
 	for _, in := range insts {
-		if in.Revision != rev || in.Replica >= below {
-			continue
-		}
-		if in.State == runtime.StateRunning && !r.listening(in) {
+		if in.State == runtime.StateRunning && !in.Listened {
 			deadline := lastStart(in).Add(r.bootTimeout)
 			if now.Before(deadline) {
 				if c, ok := r.boot.crash(in.ID); ok && c.count > 0 {

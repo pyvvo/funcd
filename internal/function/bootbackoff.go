@@ -48,8 +48,9 @@ func classifyExit(in runtime.Instance, serving, legacy bool) exitClass {
 	return exitBootCrash
 }
 
-// bootBackoff counts each solo replica's consecutive boot crashes, in memory and keyed by instance ID, so a new
-// revision starts at zero and a daemon restart forgets them (ADR-0160 Decision 5).
+// bootBackoff counts each worker's consecutive boot crashes, a solo replica's or a pool worker's, in memory and keyed by
+// instance ID, so a new revision or manifest starts at zero and a daemon restart forgets them (ADR-0160 Decision 5,
+// ADR-0225 Decision 3).
 type bootBackoff struct {
 	mu             sync.Mutex
 	initial, limit time.Duration
@@ -91,8 +92,8 @@ func (b *bootBackoff) observe(in runtime.Instance, class exitClass) (bootCrash, 
 		if !ok || !c.counted.Equal(in.CreatedAt) {
 			c.count++
 			c.counted = in.CreatedAt
-			c.message = fmt.Sprintf("replica %d %s before it listened; boot crash %d in a row, retried %s after its last start",
-				in.Replica, describeExit(in.Exit), c.count, b.wait(c.count))
+			c.message = fmt.Sprintf("%s %s before it listened; boot crash %d in a row, retried %s after its last start",
+				workerSubject(in), describeExit(in.Exit), c.count, b.wait(c.count))
 			b.crashes[in.ID] = c
 			b.logger.Warn("a worker ended before it listened", "namespace", in.Namespace, "name", in.Name,
 				"replica", in.Replica, "count", c.count, "exit", describeExit(in.Exit))
@@ -136,9 +137,9 @@ func (b *bootBackoff) reread(c bootCrash, now time.Time) time.Time {
 	return now.Add(w)
 }
 
-// timedOut counts running replica in, which did not listen within bootTimeout, as a boot crash, once per instance
-// (ADR-0161 Decision 3). It is re-created no sooner than bootTimeout after its last start, so the message names
-// max(wait, bootTimeout).
+// timedOut counts running worker in, which did not listen within bootTimeout, as a boot crash, once per instance
+// (ADR-0161 Decision 3, ADR-0225 Decision 1). It is re-created no sooner than bootTimeout after its last start, so the
+// message names max(wait, bootTimeout).
 func (b *bootBackoff) timedOut(in runtime.Instance) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -148,11 +149,20 @@ func (b *bootBackoff) timedOut(in runtime.Instance) {
 	}
 	c.count++
 	c.counted = in.CreatedAt
-	c.message = fmt.Sprintf("replica %d did not listen within %s; boot crash %d in a row, retried %s after its last start",
-		in.Replica, b.bootTimeout, c.count, max(b.wait(c.count), b.bootTimeout))
+	c.message = fmt.Sprintf("%s did not listen within %s; boot crash %d in a row, retried %s after its last start",
+		workerSubject(in), b.bootTimeout, c.count, max(b.wait(c.count), b.bootTimeout))
 	b.crashes[in.ID] = c
 	b.logger.Warn("a worker did not listen within the boot timeout", "namespace", in.Namespace, "name", in.Name,
 		"replica", in.Replica, "count", c.count, "timeout", b.bootTimeout)
+}
+
+// workerSubject names in in a boot-crash message: "the pool worker" for a pool worker, else "replica N" (ADR-0225
+// Decision 4).
+func workerSubject(in runtime.Instance) string {
+	if strings.HasPrefix(string(in.Name), poolInstancePrefix) {
+		return "the pool worker"
+	}
+	return fmt.Sprintf("replica %d", in.Replica)
 }
 
 // crash is the crash record of id, if it has one.
