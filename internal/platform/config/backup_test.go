@@ -44,6 +44,7 @@ func TestBackupTimesDefaults(t *testing.T) {
 // CheckBackup holds Decision 3's config rows: errors first, each naming its key; the run times checked always, the
 // rest once backup.target is set.
 func TestCheckBackupRules(t *testing.T) {
+	t.Parallel()
 	on := func() config.Config {
 		c, err := config.Load(writeCfg(t, "backup:\n  target: file:///srv/backup\n  encryption:\n    recipients:\n"+
 			"      - /etc/funcd/r.txt\nsecrets:\n  encryptionKeyFile: /etc/funcd/secrets.key\n"), config.Flags{})

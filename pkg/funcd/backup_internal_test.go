@@ -25,6 +25,7 @@ import (
 // WithPlatformBackup (ADR-0205): New binds the runner to the event store, the metastore and the run state, Run runs it,
 // and the control plane mounts its status route, which a developer may not read.
 func TestPlatformBackupWired(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dir, targetDir := eventingDir(t), t.TempDir()
 	quiet := slog.New(slog.DiscardHandler)

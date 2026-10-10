@@ -72,6 +72,7 @@ func sealedTarget(t *testing.T, n int) (string, blob.Bucket, []age.Identity) {
 // scenario: verify-detects-damage — one changed byte in a part of generation 7, or its last part missing: verify fails
 // naming the store and part, and writes nothing under gen/verified/.
 func TestScenarioVerifyDetectsDamage(t *testing.T) {
+	t.Parallel()
 	part := func(dir, store string) string {
 		return filepath.Join(dir, "gen", "hourly", "0000000007-"+tl, store, "part-00000")
 	}
@@ -108,6 +109,7 @@ func TestScenarioVerifyDetectsDamage(t *testing.T) {
 // A target without a complete ladder generation, or without the generation asked for, is fault.NotFound; a passed
 // verification of an undamaged one counts every record.
 func TestVerifyNoGeneration(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	empty, err := gocloud.OpenWith(ctx, gocloud.FileURL(t.TempDir()), gocloud.OpenOptions{})
 	require.NoError(t, err)

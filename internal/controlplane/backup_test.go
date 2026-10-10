@@ -31,6 +31,7 @@ func (s fixedStatus) Status(context.Context) (runner.Status, error) { return s.s
 // GET …/platformbackup authorizes get on WorkerNode, so a developer gets 403; without a backup stream it reads
 // enabled: false; a failed listing of the target is 503.
 func TestPlatformBackupRoute(t *testing.T) {
+	t.Parallel()
 	get := func(t *testing.T, s controlplane.BackupStatuser, token string) (int, runner.Status) {
 		t.Helper()
 		creds := middleware.NewStaticCredentials(map[string]auth.Identity{

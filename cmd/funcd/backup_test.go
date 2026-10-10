@@ -89,6 +89,7 @@ func platformBackupStatus(t *testing.T, r *runner.Runner) runner.Status {
 // scenario: backup-off-by-default — no backup.target, or storage.mode memory with one: no run happens, the status
 // reads enabled: false, and the memory case logs one warning.
 func TestScenarioBackupOffByDefault(t *testing.T) {
+	t.Parallel()
 	t.Run("no backup.target", func(t *testing.T) {
 		r, logs := startBackup(t, backupConfig(t, "file", ""))
 		require.Nil(t, r)
@@ -117,6 +118,7 @@ func TestScenarioBackupOffByDefault(t *testing.T) {
 // scenario: impossible-settings-refused — objectives.rpo 30m with interval 1h, or retention 2/0/0 with interval 3h:
 // the daemon exits with fault.Invalid naming the key, and config.CheckBackup's first finding is that error.
 func TestScenarioImpossibleSettingsRefused(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, yaml, key string
 	}{
@@ -145,6 +147,7 @@ func TestScenarioImpossibleSettingsRefused(t *testing.T) {
 // scenario: tight-settings-warn — interval 1h and objectives.rpo 90m: the daemon starts its backup and logs one
 // warning naming both keys, the one finding config.CheckBackup returns.
 func TestScenarioTightSettingsWarn(t *testing.T) {
+	t.Parallel()
 	path := backupConfig(t, "file", "backup:\n  target: \""+gocloud.FileURL(t.TempDir())+"\"\n  encryption:\n    recipients:\n"+
 		"      - \"<recipients>\"\n  interval: 1h\n  objectives:\n    rpo: 90m\n")
 	r, logs := startBackup(t, path)

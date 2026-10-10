@@ -139,6 +139,7 @@ func files(t *testing.T, dir string) map[string]time.Time {
 // scenario: verify-pins-generation — generation 7 the newest complete: `funcdctl backup verify` with an identity
 // copies it to gen/verified/<7>-<timeline>/; a rerun writes nothing and exits 0.
 func TestScenarioVerifyPinsGeneration(t *testing.T) {
+	t.Parallel()
 	a, err := age.GenerateX25519Identity()
 	require.NoError(t, err)
 	b, err := age.GenerateX25519Identity()
@@ -176,6 +177,7 @@ func TestScenarioVerifyPinsGeneration(t *testing.T) {
 // scenario: status-shows-restore-points — generations 3 to 9 complete and 7 verified: an admin's `funcdctl backup
 // status` prints the times of 9, 7 and 3 and rpoRisk; a developer gets 403.
 func TestScenarioStatusShowsRestorePoints(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dir := t.TempDir()
 	writeGenerations(t, dir, 9, unsealed(t))
@@ -213,6 +215,7 @@ func TestScenarioStatusShowsRestorePoints(t *testing.T) {
 // failed KV run, `funcdctl backup status` shows enabled: false and streams.kv.lastFailure. The KV export reports
 // through Recorder("kv"), which ADR-0209 wires into its loop.
 func TestScenarioKVStreamWithoutPlatformBackup(t *testing.T) {
+	t.Parallel()
 	r, err := runner.New(runner.Config{Times: backupTimes(), Logger: quietLog()})
 	require.NoError(t, err)
 	r.Recorder("kv")(time.Now().Add(-time.Second), fault.Forbiddenf("kvbadger.Ship", "the target refused the put"))

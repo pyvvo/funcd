@@ -317,6 +317,7 @@ func complete(t *testing.T, tg backup.Target, class backup.Class) []backup.Entry
 // scenario: runs-on-interval — a file:// target and interval 1h on a test clock: the first run starts at once, the
 // second an hour later, and by the second hour two complete generations exist; lastSuccessTime is the newest one's.
 func TestScenarioRunsOnInterval(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	h.run(t)
 	require.Equal(t, time.Hour, h.wait(t))
@@ -337,6 +338,7 @@ func TestScenarioRunsOnInterval(t *testing.T) {
 // scenario: restart-keeps-cadence — the newest complete hourly generation 20 min old and a pre-upgrade pin 5 min old:
 // after a restart the first run starts 40 min after the start.
 func TestScenarioRestartKeepsCadence(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	h.clock.Advance(-20 * time.Minute)
 	h.write(t, "")
@@ -365,6 +367,7 @@ func (f failing) Write(context.Context, snapshot.Source, snapshot.Source, snapsh
 // scenario: failed-run-retries — a target refusing puts, or unreachable at the start: the runner keeps going,
 // lastFailure holds the error, funcd.backup.runs{result=failed} is 1, and the next attempt is 5 min later.
 func TestScenarioFailedRunRetries(t *testing.T) {
+	t.Parallel()
 	t.Run("a target refusing puts", func(t *testing.T) {
 		h := newHarness(t)
 		require.NoError(t, os.WriteFile(filepath.Join(h.dir, "gen"), nil, 0o600), "gen/ cannot be created")
@@ -397,6 +400,7 @@ func TestScenarioFailedRunRetries(t *testing.T) {
 // scenario: overrun-no-overlap — a 70 min run with interval 1h: the next starts at once when it ends, no two runs
 // overlap, and one warning carries duration_ms and interval_ms.
 func TestScenarioOverrunNoOverlap(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	h.cfg.Times.RPO = 24 * time.Hour
 	h.target.took = []time.Duration{70 * time.Minute, time.Minute}
@@ -416,6 +420,7 @@ func TestScenarioOverrunNoOverlap(t *testing.T) {
 // scenario: rpo-risk-follows-verified — only generation 7 verified and objectives.rpo 2h: when 7 is 2 h old, rpoRisk is
 // true, funcd.backup.rpo_risk is 1 and one warning is logged; once 9 is verified, a listing clears it.
 func TestScenarioRPORiskFollowsVerified(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	for range 7 {
 		h.write(t, "")
@@ -451,6 +456,7 @@ func TestScenarioRPORiskFollowsVerified(t *testing.T) {
 // The first due time: a pin newer than the newest ladder generation does not count; a failed first listing is a failed
 // run; while held, a due time writes nothing, counts nothing and rechecks after retryInterval.
 func TestDueTime(t *testing.T) {
+	t.Parallel()
 	t.Run("a newer pin is ignored", func(t *testing.T) {
 		h := newHarness(t)
 		h.clock.Advance(-30 * time.Minute)
@@ -521,6 +527,7 @@ func (l listed) List(context.Context) ([]backup.Entry, error) { return l.entries
 // pre-upgrade one; and the highest-numbered complete verified copy at its original's time, absent once the original
 // expired. A verified copy is no restore point and an incomplete generation counts for nothing.
 func TestStatusFromEntries(t *testing.T) {
+	t.Parallel()
 	hour := func(n int) time.Time { return t0.Add(time.Duration(n) * time.Hour) }
 	entry := func(n uint64, class backup.Class, complete bool, at time.Time) backup.Entry {
 		return backup.Entry{Generation: n, Timeline: tl, Class: class, Complete: complete, At: at}
@@ -559,6 +566,7 @@ func TestStatusFromEntries(t *testing.T) {
 // The blob mirror and the KV export report through Recorder, kept per stream since the start and counted; a success
 // clears the stream's failure; without a target the status is enabled: false.
 func TestRecorderStreams(t *testing.T) {
+	t.Parallel()
 	c := clock.NewManual(t0)
 	reader := sdkmetric.NewManualReader()
 	r, err := runner.New(runner.Config{Times: times(), Clock: c,
@@ -592,6 +600,7 @@ func TestRecorderStreams(t *testing.T) {
 // While rpoRisk is on the runner relists at each rpo and warns once per rpo, not at each listing; a verified generation
 // within the rpo clears it with one Info line.
 func TestRPOWarnOncePerRPO(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	h.cfg.Times.Interval = 10 * time.Hour
 	h.write(t, "")
