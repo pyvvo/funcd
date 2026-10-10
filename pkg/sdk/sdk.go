@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/danielgtaylor/huma/v2"
 	yamlv3 "go.yaml.in/yaml/v3"
@@ -28,6 +29,9 @@ type Client struct {
 	baseURL    string
 	httpClient *http.Client
 	token      string
+
+	mu      sync.Mutex
+	openAPI *openAPIDocument // the served OpenAPI document, read once before the first dry-run write (ADR-0220)
 }
 
 // Option configures a Client (functional-options facade, ADR-0002).
@@ -83,8 +87,13 @@ func refuseMethodChange(req *http.Request, via []*http.Request) error {
 }
 
 // Apply create-or-replaces obj: PUT the named path; on a 404 (the object does not
-// yet exist) POST the collection path to create it. Returns the stored object.
-func (c *Client) Apply(ctx context.Context, obj v1.Object) (v1.Object, error) {
+// yet exist) POST the collection path to create it. Returns the stored object, or with DryRun the
+// object as it would be stored.
+func (c *Client) Apply(ctx context.Context, obj v1.Object, opts ...ApplyOption) (v1.Object, error) {
+	var o applyOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
 	kind := obj.GroupVersionKind().Kind
 	if ReadOnlyKind(kind) {
 		return nil, errReadOnly("sdk.Apply", kind)
@@ -102,10 +111,13 @@ func (c *Client) Apply(ctx context.Context, obj v1.Object) (v1.Object, error) {
 		if obj.GetObjectMeta().GenerateName == "" {
 			return nil, fault.Invalidf("sdk.Apply", "object has no name and no generateName")
 		}
-		return c.create(ctx, kind, ns, body)
+		return c.applyCreate(ctx, kind, ns, body, o)
 	}
 	itemURL, err := c.itemURL(kind, ns, name)
 	if err != nil {
+		return nil, err
+	}
+	if itemURL, err = c.writeURL(ctx, http.MethodPut, kind, itemURL, o); err != nil {
 		return nil, err
 	}
 	resp, err := c.do(ctx, http.MethodPut, itemURL, body)
@@ -113,9 +125,116 @@ func (c *Client) Apply(ctx context.Context, obj v1.Object) (v1.Object, error) {
 		if fault.KindOf(err) != fault.NotFound {
 			return nil, err
 		}
-		return c.create(ctx, kind, ns, body)
+		return c.applyCreate(ctx, kind, ns, body, o)
 	}
 	return decodeObject(kind, resp)
+}
+
+// ApplyOption tunes an Apply.
+type ApplyOption func(*applyOptions)
+
+type applyOptions struct {
+	dryRun bool
+}
+
+// DryRun makes Apply admit obj without storing it (ADR-0220): every request Apply sends carries dryRun=true, and the
+// answer is the object as the write would store it, an App's with its plan in status.plan. Before its first dry-run
+// write the client reads the server's OpenAPI document once; when the operation does not declare dryRun, Apply sends
+// no write and fails, since an older server would ignore the flag and store the object.
+func DryRun() ApplyOption { return func(o *applyOptions) { o.dryRun = true } }
+
+func (c *Client) applyCreate(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, body []byte, o applyOptions) (v1.Object, error) {
+	colURL, err := c.collectionURL(kind, ns)
+	if err != nil {
+		return nil, err
+	}
+	if colURL, err = c.writeURL(ctx, http.MethodPost, kind, colURL, o); err != nil {
+		return nil, err
+	}
+	resp, err := c.do(ctx, http.MethodPost, colURL, body)
+	if err != nil {
+		return nil, err
+	}
+	return decodeObject(kind, resp)
+}
+
+// writeURL is url with dryRun=true for a dry run, once the served OpenAPI document shows that the operation (method on
+// kind's collection or item path) declares the parameter.
+func (c *Client) writeURL(ctx context.Context, method string, kind v1.Kind, url string, o applyOptions) (string, error) {
+	if !o.dryRun {
+		return url, nil
+	}
+	doc, err := c.openAPIDocument(ctx)
+	if err != nil {
+		return "", err
+	}
+	if !doc.declares(method, operationPath(kind, method == http.MethodPut), "dryRun") {
+		return "", fault.Invalidf("sdk.Apply", "the server does not support dryRun")
+	}
+	return url + "?dryRun=true", nil
+}
+
+// openAPIDocument is the part of the served OpenAPI document the dry-run check reads: each operation's parameters.
+type openAPIDocument struct {
+	Paths map[string]map[string]json.RawMessage `json:"paths"`
+}
+
+type openAPIOperation struct {
+	Parameters []openAPIParameter `json:"parameters"`
+}
+
+type openAPIParameter struct {
+	Name string `json:"name"`
+	In   string `json:"in"`
+}
+
+// declares reports whether the operation method on path declares the query parameter name.
+func (d *openAPIDocument) declares(method, path, name string) bool {
+	raw, ok := d.Paths[path][strings.ToLower(method)]
+	if !ok {
+		return false
+	}
+	var op openAPIOperation
+	if json.Unmarshal(raw, &op) != nil {
+		return false
+	}
+	return slices.ContainsFunc(op.Parameters, func(p openAPIParameter) bool { return p.In == "query" && p.Name == name })
+}
+
+// operationPath is the OpenAPI path template of kind's collection, or of its item.
+func operationPath(kind v1.Kind, item bool) string {
+	d, _ := descriptorFor(kind)
+	path := apiPrefix + "/" + d.plural
+	if d.namespaced {
+		path = apiPrefix + "/namespaces/{namespace}/" + d.plural
+	}
+	if item {
+		path += "/{name}"
+	}
+	return path
+}
+
+// openAPIDocument reads the server's OpenAPI document (/openapi.json, ADR-0005) once and keeps it; a server that
+// serves none supports no dry run.
+func (c *Client) openAPIDocument(ctx context.Context) (*openAPIDocument, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.openAPI != nil {
+		return c.openAPI, nil
+	}
+	raw, err := c.do(ctx, http.MethodGet, c.baseURL+"/openapi.json", nil)
+	if fault.KindOf(err) == fault.NotFound {
+		return nil, fault.Invalidf("sdk.Apply", "the server does not support dryRun")
+	}
+	if err != nil {
+		return nil, err
+	}
+	var doc openAPIDocument
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, fault.Internalf("sdk.Apply", "decode the server's OpenAPI document: %v", err)
+	}
+	c.openAPI = &doc
+	return c.openAPI, nil
 }
 
 // Create creates obj by POSTing the collection path, never replacing an existing object: a taken

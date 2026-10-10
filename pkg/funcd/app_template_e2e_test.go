@@ -95,8 +95,8 @@ func (tpl *todoTemplate) values(name string) string {
 }
 
 // deploy sets the template's version and todo-api image, locks its images at the values/e2e.yaml registry, then runs
-// funcdctl app deploy with values/prod.yaml and values/e2e.yaml.
-func (tpl *todoTemplate) deploy(t *testing.T, version, api string) (string, error) {
+// funcdctl app deploy with values/prod.yaml and values/e2e.yaml and the extra args.
+func (tpl *todoTemplate) deploy(t *testing.T, version, api string, args ...string) (string, error) {
 	t.Helper()
 	path := filepath.Join(tpl.appDir(), "app.yaml")
 	data, err := os.ReadFile(path) //nolint:gosec // the test's own copy of the fixture
@@ -106,12 +106,14 @@ func (tpl *todoTemplate) deploy(t *testing.T, version, api string) (string, erro
 	require.NoError(t, os.WriteFile(path, data, 0o600))
 	out, err := tpl.cli("app", "lock", tpl.appDir(), "-f", tpl.values("e2e"))
 	require.NoError(t, err, out)
-	return tpl.deployFrom(tpl.appDir())
+	return tpl.deployFrom(tpl.appDir(), args...)
 }
 
-// deployFrom runs funcdctl app deploy of src, a directory or a template ref, with values/prod.yaml and values/e2e.yaml.
-func (tpl *todoTemplate) deployFrom(src string) (string, error) {
-	return tpl.cli("app", "deploy", src, "--name", "todo", "-n", "team-a", "-f", tpl.values("prod"), "-f", tpl.values("e2e"))
+// deployFrom runs funcdctl app deploy of src, a directory or a template ref, with values/prod.yaml and values/e2e.yaml
+// and the extra args.
+func (tpl *todoTemplate) deployFrom(src string, args ...string) (string, error) {
+	return tpl.cli(append([]string{"app", "deploy", src, "--name", "todo", "-n", "team-a", "-f", tpl.values("prod"),
+		"-f", tpl.values("e2e")}, args...)...)
 }
 
 // toTodo2 deploys versions 1.2.0 and 1.2.1, so todo-2 is current.

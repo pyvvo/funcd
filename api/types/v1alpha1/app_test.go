@@ -366,3 +366,49 @@ func TestAppSelfHealJSON(t *testing.T) {
 		t.Errorf("an App never healed has lastSelfHeal: %s", empty)
 	}
 }
+
+// ADR-0220 Contracts: a plan travels in status.plan with its empty fields left out; an unchanged spec's plan is {}.
+func TestAppPlanJSON(t *testing.T) {
+	s := AppStatus{Plan: &AppPlan{
+		Revision: "todo-5",
+		Parts: []PlanPart{
+			{Kind: KindFunction, Name: "todo-api", Action: PlanUpdate},
+			{Kind: KindSecret, Name: "todo-key", Reason: "SecretNotFound"},
+		},
+		Hooks: []string{"todo-migrate"},
+	}}
+	data, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshal status: %v", err)
+	}
+	want := `"plan":{"revision":"todo-5","parts":[{"kind":"Function","name":"todo-api","action":"update"},` +
+		`{"kind":"Secret","name":"todo-key","reason":"SecretNotFound"}],"hooks":["todo-migrate"]}`
+	if !strings.Contains(string(data), want) {
+		t.Fatalf("status JSON = %s, want it to hold %s", data, want)
+	}
+	var back AppStatus
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatalf("unmarshal status: %v", err)
+	}
+	if !reflect.DeepEqual(back.Plan, s.Plan) {
+		t.Fatalf("plan after a round trip = %+v, want %+v", back.Plan, s.Plan)
+	}
+	for _, tc := range []struct {
+		status AppStatus
+		want   string
+	}{
+		{AppStatus{}, `{}`},
+		{AppStatus{Plan: &AppPlan{}}, `{"plan":{}}`},
+	} {
+		data, err := json.Marshal(tc.status)
+		if err != nil {
+			t.Fatalf("marshal status: %v", err)
+		}
+		if string(data) != tc.want {
+			t.Errorf("status JSON = %s, want %s", data, tc.want)
+		}
+	}
+	if got := PlanAction("").Schema(nil).Enum; len(got) != 3 || got[0] != "create" || got[1] != "update" || got[2] != "prune" {
+		t.Errorf("PlanAction enum = %v", got)
+	}
+}

@@ -67,7 +67,7 @@ type hold interface {
 // Reconciler drives an App to its declared parts (controller.Reconciler). It keeps no state between passes: the
 // rollout deadline is read from the AppRevision's status.startedAt.
 type Reconciler struct {
-	store             store.Store
+	reader
 	purger            gc.BucketPurger
 	log               *slog.Logger
 	clock             clock.Clock
@@ -107,7 +107,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		clk = clock.System()
 	}
 	return &Reconciler{
-		store:             d.Store,
+		reader:            reader{store: d.Store},
 		purger:            d.Purger,
 		log:               log.With("component", "app"),
 		clock:             clk,
@@ -364,33 +364,19 @@ func healing(revs []*v1.AppRevision, stored map[v1.ObjectName]v1.AppRevisionStat
 // Decision 1): it is logged right after the write and returned, in write order.
 func (r *Reconciler) apply(ctx context.Context, a *v1.App, ents, writes []entry, objs map[v1.ObjectRef]v1.Object, halt *stop,
 	heal bool) (*stop, *v1.ObjectRef, []v1.ObjectRef, error) {
-	parts := make(map[v1.ObjectRef]v1.Object)
-	for _, p := range a.Parts() {
-		parts[keyOf(p)] = p
-	}
-	for _, e := range ents {
-		if e.ref {
-			continue
-		}
-		k := e.key(a.Namespace)
-		cur, err := r.get(ctx, e.kind, a.Namespace, e.name)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		objs[k] = cur
+	if err := r.readParts(ctx, a, ents, objs); err != nil {
+		return nil, nil, nil, err
 	}
 	if halt != nil {
 		return halt, nil, nil, nil
 	}
-	for _, e := range ents {
-		k := e.key(a.Namespace)
-		if cur := objs[k]; !e.ref && cur != nil && !owned(a, cur) {
-			return &stop{reason: reasonChildNotOwned, part: k, detail: "exists and is not owned by App/" + string(a.Name)}, nil, nil, nil
-		}
+	if s := notOwned(a, ents, objs); s != nil {
+		return s, nil, nil, nil
 	}
 	if s, err := r.checkSecrets(ctx, a); s != nil || err != nil {
 		return s, nil, nil, err
 	}
+	parts := partsOf(a)
 	var wrote *v1.ObjectRef
 	var healed []v1.ObjectRef
 	for _, e := range writes {
@@ -398,9 +384,7 @@ func (r *Reconciler) apply(ctx context.Context, a *v1.App, ents, writes []entry,
 			continue
 		}
 		k := e.key(a.Namespace)
-		desired := parts[k]
-		desired.GetObjectMeta().OwnerReferences = ownerRefs(a, e.kind, e.deletion)
-		written, changed, drift, err := r.write(ctx, desired, objs[k])
+		written, changed, drift, err := r.write(ctx, desired(a, parts, e), objs[k])
 		switch fault.KindOf(err) {
 		case "":
 			objs[k] = written
@@ -420,11 +404,58 @@ func (r *Reconciler) apply(ctx context.Context, a *v1.App, ents, writes []entry,
 	return nil, wrote, healed, nil
 }
 
+// readParts reads the stored object of each entry that is not a ref into objs, nil when absent.
+func (r reader) readParts(ctx context.Context, a *v1.App, ents []entry, objs map[v1.ObjectRef]v1.Object) error {
+	for _, e := range ents {
+		if e.ref {
+			continue
+		}
+		cur, err := r.get(ctx, e.kind, a.Namespace, e.name)
+		if err != nil {
+			return err
+		}
+		objs[e.key(a.Namespace)] = cur
+	}
+	return nil
+}
+
+// notOwned is the ChildNotOwned stop of the first declared part, in section order, that exists and is not this App's
+// (Decision 4), nil when there is none.
+func notOwned(a *v1.App, ents []entry, objs map[v1.ObjectRef]v1.Object) *stop {
+	for _, e := range ents {
+		k := e.key(a.Namespace)
+		if cur := objs[k]; !e.ref && cur != nil && !owned(a, cur) {
+			return notOwnedStop(a, k)
+		}
+	}
+	return nil
+}
+
+func notOwnedStop(a *v1.App, k v1.ObjectRef) *stop {
+	return &stop{reason: reasonChildNotOwned, part: k, detail: "exists and is not owned by App/" + string(a.Name)}
+}
+
+// partsOf maps each declared part of a to its object (App.Parts).
+func partsOf(a *v1.App) map[v1.ObjectRef]v1.Object {
+	parts := make(map[v1.ObjectRef]v1.Object)
+	for _, p := range a.Parts() {
+		parts[keyOf(p)] = p
+	}
+	return parts
+}
+
+// desired is e's part as a write stores it: its declared object with the owner references of Decision 7.
+func desired(a *v1.App, parts map[v1.ObjectRef]v1.Object, e entry) v1.Object {
+	d := parts[e.key(a.Namespace)]
+	d.GetObjectMeta().OwnerReferences = ownerRefs(a, e.kind, e.deletion)
+	return d
+}
+
 // checkSecrets gets each declared Secret of the App's namespace with platform rights, in declaration order, and
 // returns the stop of the first one that is missing (SecretNotFound) or lacks a declared key in spec.data
 // (SecretKeyMissing, naming the first missing key), nil when every one is complete (ADR-0213 Decision 8). It tests key
 // membership only, so no value enters a stop, a status or a log line. It only reads.
-func (r *Reconciler) checkSecrets(ctx context.Context, a *v1.App) (*stop, error) {
+func (r reader) checkSecrets(ctx context.Context, a *v1.App) (*stop, error) {
 	for _, d := range a.Spec.Secrets {
 		k := v1.ObjectRef{Kind: v1.KindSecret, Namespace: a.Namespace, Name: d.Name}
 		obj, err := r.get(ctx, v1.KindSecret, a.Namespace, d.Name)
@@ -448,22 +479,35 @@ func (r *Reconciler) checkSecrets(ctx context.Context, a *v1.App) (*stop, error)
 // differs, and reports whether it wrote and whether the part was absent or its spec differed (drift), not only its
 // references or group. It never writes a part's status: an update carries cur's.
 func (r *Reconciler) write(ctx context.Context, desired, cur v1.Object) (obj v1.Object, wrote, drift bool, err error) {
-	if cur == nil {
+	changed, drift, err := differs(desired, cur)
+	switch {
+	case err != nil:
+		return nil, false, false, err
+	case !changed:
+		return cur, false, false, nil
+	case cur == nil:
 		obj, err = r.store.Create(ctx, desired)
 		return obj, err == nil, true, err
 	}
-	same, err := sameSpec(desired, cur)
-	if err != nil {
-		return nil, false, false, err
-	}
 	dm, cm := desired.GetObjectMeta(), cur.GetObjectMeta()
-	if same && slices.Equal(dm.OwnerReferences, cm.OwnerReferences) && dm.ResourceGroup == cm.ResourceGroup {
-		return cur, false, false, nil
-	}
 	spec(cur).Set(spec(desired))
 	cm.OwnerReferences, cm.ResourceGroup = dm.OwnerReferences, dm.ResourceGroup
 	obj, err = r.store.Update(ctx, cur)
-	return obj, err == nil, !same, err
+	return obj, err == nil, drift, err
+}
+
+// differs is write's predicate: desired is written over cur when cur is absent or its spec, owner references or
+// resource group differ; drift when cur is absent or its spec differs.
+func differs(desired, cur v1.Object) (changed, drift bool, err error) {
+	if cur == nil {
+		return true, true, nil
+	}
+	same, err := sameSpec(desired, cur)
+	if err != nil {
+		return false, false, err
+	}
+	dm, cm := desired.GetObjectMeta(), cur.GetObjectMeta()
+	return !same || !slices.Equal(dm.OwnerReferences, cm.OwnerReferences) || dm.ResourceGroup != cm.ResourceGroup, !same, nil
 }
 
 // spec is the Spec field of a part: every section kind has one.
@@ -482,7 +526,12 @@ func sameSpec(a, b v1.Object) (bool, error) {
 	return string(ja) == string(jb), nil
 }
 
-func (r *Reconciler) get(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName) (v1.Object, error) {
+// reader is the store reads the pass and the Planner share (ADR-0220 Decision 5).
+type reader struct {
+	store store.Store
+}
+
+func (r reader) get(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName) (v1.Object, error) {
 	obj, err := r.store.Get(ctx, kind.GVK(), ns, name)
 	switch {
 	case fault.KindOf(err) == fault.NotFound:
@@ -547,7 +596,7 @@ func controls(a *v1.App, obj v1.Object) bool {
 }
 
 // dropped lists the objects this App controls that no entry names, in gc.Pairs' order: users before stores.
-func (r *Reconciler) dropped(ctx context.Context, a *v1.App, ents []entry) ([]v1.Object, error) {
+func (r reader) dropped(ctx context.Context, a *v1.App, ents []entry) ([]v1.Object, error) {
 	named := make(map[v1.ObjectRef]bool, len(ents))
 	for _, e := range ents {
 		named[e.key(a.Namespace)] = true

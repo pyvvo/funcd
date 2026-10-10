@@ -254,27 +254,29 @@ func (a *cli) workflowPauseCmd(verb string, paused bool) *cobra.Command {
 // and applyRead).
 const applyAttempts = 5
 
-// applyRead reads the object, lets change edit it and applies it. The apply is conditional on the version read
-// (ADR-0210), so a controller's status write in between answers fault.Conflict: it reads again, at most
-// applyAttempts times. A change that returns false applies nothing; applyRead reports whether it applied.
+// applyRead reads the object, lets change edit it and applies it with opts. The apply is conditional on the version
+// read (ADR-0210), so a controller's status write in between answers fault.Conflict: it reads again, at most
+// applyAttempts times. A change that returns false applies nothing; applyRead returns what the apply answered, nil
+// when it applied nothing.
 func applyRead(ctx context.Context, c *sdk.Client, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName,
-	change func(v1.Object) (bool, error),
-) (bool, error) {
+	change func(v1.Object) (bool, error), opts ...sdk.ApplyOption,
+) (v1.Object, error) {
 	var err error
 	for range applyAttempts {
 		obj, gerr := c.Get(ctx, kind, ns, name)
 		if gerr != nil {
-			return false, gerr
+			return nil, gerr
 		}
 		apply, cerr := change(obj)
 		if cerr != nil || !apply {
-			return false, cerr
+			return nil, cerr
 		}
-		if _, err = c.Apply(ctx, obj); fault.KindOf(err) != fault.Conflict {
-			return err == nil, err
+		var out v1.Object
+		if out, err = c.Apply(ctx, obj, opts...); fault.KindOf(err) != fault.Conflict {
+			return out, err
 		}
 	}
-	return false, err
+	return nil, err
 }
 
 // workflowCancelCmd requests cancellation declaratively (patches spec.cancel), the same shape

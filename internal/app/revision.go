@@ -33,7 +33,7 @@ const (
 )
 
 // revisions lists the AppRevisions whose controller reference names a's UID, by number (Decision 3).
-func (r *Reconciler) revisions(ctx context.Context, a *v1.App) ([]*v1.AppRevision, error) {
+func (r reader) revisions(ctx context.Context, a *v1.App) ([]*v1.AppRevision, error) {
 	res, err := r.store.List(ctx, v1.KindAppRevision.GVK(), store.ListOptions{Namespace: a.Namespace})
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.KindOf(err), op, "list app revisions in %q", a.Namespace)
@@ -48,54 +48,40 @@ func (r *Reconciler) revisions(ctx context.Context, a *v1.App) ([]*v1.AppRevisio
 	return out, nil
 }
 
-// stamp creates <app>-<n+1>, n the latest revision's number or 0, when none exists or a's spec without its pause
-// (ADR-0212 Decision 3) differs from the latest's spec.spec by json.Marshal, byte for byte, as the store's
-// specChanged compares (Decision 3). A stored namesake whose controller reference names this App's kind and name with
-// another UID is deleted at its resourceVersion first; any other owner stops the pass with ChildNotOwned naming it,
-// before any part is written. When the spec has a hook, the new revision freezes its hook input (ADR-0214 Decision 2).
-// The new revision gets startedAt only when every requirement is met (met), else it waits (ADR-0219 Decision 3).
+// stamp creates the revision nextStamp names, when it names one. A stored namesake whose controller reference names
+// this App's kind and name with another UID is deleted at its resourceVersion first; any other owner stops the pass
+// with ChildNotOwned naming it, before any part is written (namesake). When the spec has a hook, the new revision
+// freezes its hook input (ADR-0214 Decision 2). The new revision gets startedAt only when every requirement is met
+// (met), else it waits (ADR-0219 Decision 3).
 func (r *Reconciler) stamp(ctx context.Context, a *v1.App, revs []*v1.AppRevision, met bool) ([]*v1.AppRevision, *stop, error) {
-	declared := a.Spec.WithoutPause()
-	want, err := json.Marshal(declared)
-	if err != nil {
-		return nil, nil, fault.Wrapf(err, fault.Internal, op, "marshal the spec of app %s/%s", a.Namespace, a.Name)
-	}
-	var n int64
-	if len(revs) > 0 {
-		latest := revs[len(revs)-1]
-		have, err := json.Marshal(latest.Spec.Spec)
-		if err != nil {
-			return nil, nil, fault.Wrapf(err, fault.Internal, op, "marshal the spec of app revision %s", latest.Name)
-		}
-		if bytes.Equal(want, have) {
-			return revs, nil, nil
-		}
-		n = latest.Spec.Number
-	}
-	name := v1.AppRevisionName(a.Name, n+1)
-	k := v1.ObjectRef{Kind: v1.KindAppRevision, Namespace: a.Namespace, Name: name}
-	old, err := r.get(ctx, v1.KindAppRevision, a.Namespace, name)
+	next, err := nextStamp(a, revs)
 	if err != nil {
 		return nil, nil, err
 	}
-	if old != nil {
-		m := old.GetObjectMeta()
-		c, ok := v1.ControllerOf(m.OwnerReferences)
-		switch {
-		case !ok || c.Kind != v1.KindApp || c.Name != a.Name:
-			return revs, &stop{reason: reasonChildNotOwned, part: k, detail: "exists and is not owned by App/" + string(a.Name)}, nil
-		case c.UID == a.UID:
-			return nil, nil, fault.Conflictf(op, "%s was stamped after the revisions were listed", partName(k))
-		}
-		if err := r.store.Delete(ctx, k.Kind.GVK(), a.Namespace, name, m.ResourceVersion); err != nil && fault.KindOf(err) != fault.NotFound {
+	if next == nil {
+		return revs, nil, nil
+	}
+	k := v1.ObjectRef{Kind: v1.KindAppRevision, Namespace: a.Namespace, Name: next.name}
+	old, err := r.get(ctx, v1.KindAppRevision, a.Namespace, next.name)
+	if err != nil {
+		return nil, nil, err
+	}
+	halt, drop, err := namesake(a, k, old)
+	switch {
+	case err != nil:
+		return nil, nil, err
+	case halt != nil:
+		return revs, halt, nil
+	case drop:
+		if err := r.store.Delete(ctx, k.Kind.GVK(), a.Namespace, next.name, old.GetObjectMeta().ResourceVersion); err != nil && fault.KindOf(err) != fault.NotFound {
 			return nil, nil, fault.Wrapf(err, fault.KindOf(err), op, "drop %s of a deleted app", partName(k))
 		}
 	}
 	obj, _ := v1.NewObject(v1.KindAppRevision)
 	rev := obj.(*v1.AppRevision)
-	rev.ObjectMeta = v1.ObjectMeta{Name: name, Namespace: a.Namespace, ResourceGroup: a.ResourceGroup, OwnerReferences: []v1.OwnerReference{controllerRef(a)}}
-	rev.Spec = v1.AppRevisionSpec{App: v1.ObjectRef{Kind: v1.KindApp, Namespace: a.Namespace, Name: a.Name}, Number: n + 1, Spec: declared}
-	if rev.Spec.HookInput, err = hookInput(a, name, declared, want, revs); err != nil {
+	rev.ObjectMeta = v1.ObjectMeta{Name: next.name, Namespace: a.Namespace, ResourceGroup: a.ResourceGroup, OwnerReferences: []v1.OwnerReference{controllerRef(a)}}
+	rev.Spec = v1.AppRevisionSpec{App: v1.ObjectRef{Kind: v1.KindApp, Namespace: a.Namespace, Name: a.Name}, Number: next.number, Spec: next.declared}
+	if rev.Spec.HookInput, err = hookInput(a, next.name, next.declared, next.want, revs); err != nil {
 		return nil, nil, err
 	}
 	rev.Status = v1.AppRevisionStatus{Status: v1.Status{Phase: v1.PhaseDeploying}}
@@ -107,8 +93,58 @@ func (r *Reconciler) stamp(ctx context.Context, a *v1.App, revs []*v1.AppRevisio
 	if err != nil {
 		return nil, nil, fault.Wrapf(err, fault.KindOf(err), op, "stamp %s", partName(k))
 	}
-	r.log.InfoContext(ctx, "stamped", "namespace", string(a.Namespace), "app", string(a.Name), "revision", string(name))
+	r.log.InfoContext(ctx, "stamped", "namespace", string(a.Namespace), "app", string(a.Name), "revision", string(next.name))
 	return append(revs, created.(*v1.AppRevision)), nil, nil
+}
+
+// stampTarget is the revision a stamp creates: its name and number, the spec it freezes and that spec's JSON.
+type stampTarget struct {
+	name     v1.ObjectName
+	number   int64
+	declared v1.AppSpec
+	want     []byte
+}
+
+// nextStamp names <app>-<n+1>, n the latest revision's number or 0, when none exists or a's spec without its pause
+// (ADR-0212 Decision 3) differs from the latest's spec.spec by json.Marshal, byte for byte, as the store's specChanged
+// compares (Decision 3); nil when the latest holds that spec.
+func nextStamp(a *v1.App, revs []*v1.AppRevision) (*stampTarget, error) {
+	t := &stampTarget{declared: a.Spec.WithoutPause()}
+	var err error
+	if t.want, err = json.Marshal(t.declared); err != nil {
+		return nil, fault.Wrapf(err, fault.Internal, op, "marshal the spec of app %s/%s", a.Namespace, a.Name)
+	}
+	if len(revs) > 0 {
+		latest := revs[len(revs)-1]
+		have, err := json.Marshal(latest.Spec.Spec)
+		if err != nil {
+			return nil, fault.Wrapf(err, fault.Internal, op, "marshal the spec of app revision %s", latest.Name)
+		}
+		if bytes.Equal(t.want, have) {
+			return nil, nil
+		}
+		t.number = latest.Spec.Number
+	}
+	t.number++
+	t.name = v1.AppRevisionName(a.Name, t.number)
+	return t, nil
+}
+
+// namesake judges old, the stored object named like the revision to stamp (k), nil when there is none: one whose
+// controller reference names this App's kind and name with another UID, a deleted namesake's, is dropped first; one of
+// this UID was stamped after the revisions were listed (Conflict); any other owner stops the pass with ChildNotOwned.
+func namesake(a *v1.App, k v1.ObjectRef, old v1.Object) (halt *stop, drop bool, err error) {
+	if old == nil {
+		return nil, false, nil
+	}
+	c, ok := v1.ControllerOf(old.GetObjectMeta().OwnerReferences)
+	switch {
+	case !ok || c.Kind != v1.KindApp || c.Name != a.Name:
+		return notOwnedStop(a, k), false, nil
+	case c.UID == a.UID:
+		return nil, false, fault.Conflictf(op, "%s was stamped after the revisions were listed", partName(k))
+	}
+	return nil, true, nil
 }
 
 // settle derives the rollout record of this pass from the App's currentRevision and the highest number (Decisions 5

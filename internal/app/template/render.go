@@ -48,7 +48,7 @@ var (
 	imagePath  = regexp.MustCompile(`(?i)^(functions\[\d+\]|workflows\[\d+\]\.steps\[\d+\]\.function|sites\[\d+\])\.image$`)
 	digestPath = regexp.MustCompile(`(?i)^functions\[\d+\]\.imageDigest$`)
 	imageRef   = regexp.MustCompile(`^\s*\$\{\{\s*images\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}\s*$`)
-	specEntry  = regexp.MustCompile(`spec\.([A-Za-z]+)\[(\d+)\]`)
+	specEntry  = regexp.MustCompile(`spec\.((?:hooks\.)?[A-Za-z]+)\[(\d+)\]`)
 )
 
 // Render renders the template into one App (ADR-0217 Decisions 3-7): it merges and validates the values, evaluates
@@ -445,6 +445,21 @@ func appendSections(dst *v1.AppSpec, src v1.AppSpec, file string, origins map[st
 		}
 		dv.Field(i).Set(reflect.AppendSlice(dv.Field(i), sv.Field(i)))
 	}
+	if h := src.Hooks; h != nil && len(h.PreApply)+len(h.PostApply) > 0 {
+		if dst.Hooks == nil {
+			dst.Hooks = &v1.AppHooks{}
+		}
+		dst.Hooks.PreApply = appendHooks(dst.Hooks.PreApply, h.PreApply, "hooks.preApply", file, origins)
+		dst.Hooks.PostApply = appendHooks(dst.Hooks.PostApply, h.PostApply, "hooks.postApply", file, origins)
+	}
+}
+
+// appendHooks appends a file's list of one hook point, as appendSections appends a section (ADR-0217 Decision 7).
+func appendHooks(dst, src []v1.AppHook, list, file string, origins map[string][]origin) []v1.AppHook {
+	for j := range src {
+		origins[list] = append(origins[list], origin{file: file, index: j})
+	}
+	return append(dst, src...)
 }
 
 // relocate rewrites each spec.<section>[i] of an App.Validate refusal as <file>: <section>[j].

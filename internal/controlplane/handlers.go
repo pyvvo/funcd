@@ -25,12 +25,13 @@ type storeHandlers struct {
 	admit     *admission.Pipeline
 	locks     *nsLocks       // ADR-0147
 	collector OwnerCollector // ADR-0170: a forced ResourceGroup delete; nil ⇒ force answers Unavailable
+	planner   AppPlanner     // ADR-0220: a dry-run App write's plan; nil ⇒ such a write answers Unavailable
 }
 
 // NewStoreHandlers builds the store-backed control-plane Handlers (ADR-0018). The admission
 // pipeline (ADR-0063) is the admit step on every write; pass admission.NewPipeline(...).
-func NewStoreHandlers(st store.Store, authz auth.Authorizer, admit *admission.Pipeline, collector OwnerCollector) Handlers {
-	return &storeHandlers{store: st, authz: authz, admit: admit, locks: newNSLocks(), collector: collector}
+func NewStoreHandlers(st store.Store, authz auth.Authorizer, admit *admission.Pipeline, collector OwnerCollector, planner AppPlanner) Handlers {
+	return &storeHandlers{store: st, authz: authz, admit: admit, locks: newNSLocks(), collector: collector, planner: planner}
 }
 
 // listReader adapts store.Store to admission.StoreReader.
@@ -122,6 +123,9 @@ func (h *storeHandlers) createObj(ctx context.Context, kind v1.Kind, obj v1.Obje
 		return nil, err
 	}
 	withServerMeta(admitted, nil)
+	if dryRunFrom(ctx) { // ADR-0220: every step above is the real write's
+		return h.dryRunCreate(ctx, admitted)
+	}
 	return h.store.Create(ctx, admitted)
 }
 
@@ -243,6 +247,9 @@ func (h *storeHandlers) replaceObjIf(ctx context.Context, kind v1.Kind, ns v1.Na
 		}
 		withServerMeta(admitted, cur)
 		admitted.GetObjectMeta().ResourceVersion = cur.GetObjectMeta().ResourceVersion
+		if dryRunFrom(ctx) { // ADR-0220: every step above is the real write's
+			return dryRunReplace(admitted, cur), false, nil
+		}
 		out, err := h.store.Update(ctx, admitted)
 		return out, want == "" && fault.KindOf(err) == fault.Conflict, err
 	})
@@ -714,7 +721,7 @@ func (h *storeHandlers) GetApp(ctx context.Context, ns v1.NamespaceName, name v1
 }
 
 func (h *storeHandlers) CreateApp(ctx context.Context, app v1.App) (v1.App, error) {
-	return typedObj[v1.App](h.createObj(ctx, v1.KindApp, &app))
+	return typedObj[v1.App](h.withPlan(ctx)(h.createObj(ctx, v1.KindApp, &app)))
 }
 
 func (h *storeHandlers) ListApps(ctx context.Context, ns v1.NamespaceName) ([]v1.App, error) {
@@ -722,7 +729,7 @@ func (h *storeHandlers) ListApps(ctx context.Context, ns v1.NamespaceName) ([]v1
 }
 
 func (h *storeHandlers) ReplaceApp(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, app v1.App) (v1.App, error) {
-	return typedObj[v1.App](h.replaceObj(ctx, v1.KindApp, ns, name, &app))
+	return typedObj[v1.App](h.withPlan(ctx)(h.replaceObj(ctx, v1.KindApp, ns, name, &app)))
 }
 
 func (h *storeHandlers) DeleteApp(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {

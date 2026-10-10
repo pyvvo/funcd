@@ -47,6 +47,17 @@ func hasHooks(s v1.AppSpec) bool {
 	return len(hooksOf(s, pointPreApply))+len(hooksOf(s, pointPostApply)) > 0
 }
 
+// hookNames are s's hook Functions in call order, pre-hooks then post-hooks, a name in both lists twice (Decision 9).
+func hookNames(s v1.AppSpec) []string {
+	var out []string
+	for _, point := range []string{pointPreApply, pointPostApply} {
+		for _, h := range hooksOf(s, point) {
+			out = append(out, string(h.Function))
+		}
+	}
+	return out
+}
+
 // hookInput is the input of a new revision's hook calls (Decision 2), nil when its spec has no hook: from is the App's
 // current revision and its version, empty on an install; the event is install without from, rollback when the spec
 // (want, as the stamp marshals it) equals that of a retained Ready revision, else upgrade.
@@ -125,10 +136,7 @@ func lastPreApply(rev *v1.AppRevision) time.Time {
 // section order, the configMaps a pre-hook Function's spec.config names and the kv, buckets and catalogs entries it
 // binds, with the configMaps and buckets of such a catalog, then the pre-hook Functions. A ref entry is never written.
 func preHookParts(a *v1.App, ents []entry) []entry {
-	parts := make(map[v1.ObjectRef]v1.Object)
-	for _, p := range a.Parts() {
-		parts[keyOf(p)] = p
-	}
+	parts := partsOf(a)
 	need := make(map[v1.ObjectRef]bool)
 	add := func(kind v1.Kind, name v1.ObjectName) {
 		need[v1.ObjectRef{Kind: kind, Namespace: a.Namespace, Name: name}] = true

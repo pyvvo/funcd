@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"maps"
 	"os"
@@ -151,6 +152,7 @@ func orDash(s string) string {
 
 func (a *cli) appRollbackCmd() *cobra.Command {
 	var ns string
+	var dryRun bool
 	cmd := &cobra.Command{
 		Use:   "rollback <app> <n>",
 		Short: "Apply the spec of the App's revision n again (the App reconciler stamps it as a new revision)",
@@ -190,18 +192,72 @@ func (a *cli) appRollbackCmd() *cobra.Command {
 				app.Spec = rev.Spec.Spec
 				app.Spec.Paused = paused
 				return true, nil
-			})
-			if err != nil {
+			}, applyOptions(dryRun)...)
+			switch {
+			case err != nil:
 				return err
-			}
-			if !applied {
+			case applied == nil:
 				return a.writef("no change: App %s already has the spec of %s\n", appName, name)
+			case dryRun:
+				return a.printDryRun(applied)
 			}
 			return a.writef("applied App %s with the spec of %s\n", appName, name)
 		},
 	}
 	cmd.Flags().StringVarP(&ns, "namespace", "n", "", "namespace (default: default)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "admit the rollback and store nothing; print what it would do (ADR-0220)")
 	return cmd
+}
+
+// applyOptions are the Apply options of a command's --dry-run.
+func applyOptions(dryRun bool) []sdk.ApplyOption {
+	if dryRun {
+		return []sdk.ApplyOption{sdk.DryRun()}
+	}
+	return nil
+}
+
+// printDryRun prints a dry-run answer: would apply <Kind>/<name>, then an App's plan lines (ADR-0220 Contracts).
+func (a *cli) printDryRun(obj v1.Object) error {
+	if err := a.writef("would apply %s/%s\n", obj.GroupVersionKind().Kind, obj.GetName()); err != nil {
+		return err
+	}
+	app, ok := obj.(*v1.App)
+	if !ok {
+		return nil
+	}
+	for _, l := range planLines(app.Status.Plan) {
+		if err := a.writef("  %s\n", l); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// planLines are a plan's lines: revision <name>, then <action> <Kind>/<name> per part (stop with no action, its reason
+// in parentheses when set), then hook <name> per hook; no change when the plan names no revision and no part.
+func planLines(p *v1.AppPlan) []string {
+	if p == nil {
+		return nil
+	}
+	if p.Revision == "" && len(p.Parts) == 0 {
+		return []string{"no change"}
+	}
+	var out []string
+	if p.Revision != "" {
+		out = append(out, "revision "+string(p.Revision))
+	}
+	for _, part := range p.Parts {
+		l := fmt.Sprintf("%s %s/%s", cmp.Or(string(part.Action), "stop"), part.Kind, part.Name)
+		if part.Reason != "" {
+			l += " (" + part.Reason + ")"
+		}
+		out = append(out, l)
+	}
+	for _, h := range p.Hooks {
+		out = append(out, "hook "+h)
+	}
+	return out
 }
 
 // sameAppSpec compares the two specs as the App reconciler's stamp does (ADR-0200 Decision 3, ADR-0212 Decision 3):
@@ -437,7 +493,7 @@ func (a *cli) printApp(app *v1.App, asJSON bool) error {
 
 func (a *cli) appDeployCmd() *cobra.Command {
 	var f templateFlags
-	var noWait bool
+	var noWait, dryRun bool
 	cmd := &cobra.Command{
 		Use:   "deploy <dir|ref>",
 		Short: "Render an App template, apply the App and wait until its new revision is current or failed",
@@ -456,29 +512,35 @@ func (a *cli) appDeployCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return a.deploy(cmd.Context(), c, t, in, noWait)
+			return a.deploy(cmd.Context(), c, t, in, noWait, dryRun)
 		},
 	}
 	f.bind(cmd)
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "return once the App is applied")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "admit the App and store nothing; print what the deploy would do and wait for nothing (ADR-0220)")
 	return cmd
 }
 
 // deploy renders and applies the App unless the stored spec already equals it, retrying a conflict, then follows
-// its revision (ADR-0217 Decision 8).
-func (a *cli) deploy(ctx context.Context, c *sdk.Client, t *template.Template, in template.RenderInput, noWait bool) error {
+// its revision (ADR-0217 Decision 8). A dry run applies it with sdk.DryRun even when the spec is equal, prints the
+// answer and waits for nothing (ADR-0220 Decision 7).
+func (a *cli) deploy(ctx context.Context, c *sdk.Client, t *template.Template, in template.RenderInput, noWait, dryRun bool) error {
 	var (
-		s   *deployStart
-		err error
+		s      *deployStart
+		answer v1.Object
+		err    error
 	)
 	for attempt := 1; ; attempt++ {
-		s, err = applyRendered(ctx, c, t, in)
+		s, answer, err = applyRendered(ctx, c, t, in, dryRun)
 		if err == nil || fault.KindOf(err) != fault.Conflict || attempt == applyAttempts {
 			break
 		}
 	}
 	if err != nil {
 		return err
+	}
+	if dryRun {
+		return a.printDryRun(answer)
 	}
 	if s.same {
 		held, err := revisionHolds(ctx, c, s.applied, s.n0)
@@ -508,36 +570,37 @@ type deployStart struct {
 }
 
 // applyRendered reads the App, renders the template for it (the stored App's group unless --resource-group names
-// another, which is refused) and applies the result on the read resourceVersion unless the stored spec equals it. The
-// applied spec keeps the stored spec.paused, so a deploy never resumes an App (ADR-0212 Decision 9).
-func applyRendered(ctx context.Context, c *sdk.Client, t *template.Template, in template.RenderInput) (*deployStart, error) {
+// another, which is refused) and applies the result on the read resourceVersion unless the stored spec equals it,
+// and returns the apply's answer. The applied spec keeps the stored spec.paused, so a deploy never resumes an App
+// (ADR-0212 Decision 9). A dry run applies even an equal spec, with sdk.DryRun.
+func applyRendered(ctx context.Context, c *sdk.Client, t *template.Template, in template.RenderInput, dryRun bool) (*deployStart, v1.Object, error) {
 	stored, err := storedApp(ctx, c, in.Namespace, in.Name)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	s := &deployStart{}
 	if stored != nil {
 		if in.ResourceGroup != "" && in.ResourceGroup != stored.ResourceGroup {
-			return nil, fault.Invalidf("funcdctl app deploy", "--resource-group %s names another group than App %s's, %s",
+			return nil, nil, fault.Invalidf("funcdctl app deploy", "--resource-group %s names another group than App %s's, %s",
 				in.ResourceGroup, in.Name, stored.ResourceGroup)
 		}
 		in.ResourceGroup, s.ready = stored.ResourceGroup, readyLine(stored)
 		if s.n0, err = revisionNumber(stored); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	if s.applied, err = template.Render(t, in); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if stored != nil {
 		s.applied.Spec.Paused = stored.Spec.Paused
-		if s.same, err = sameAppSpec(stored.Spec, s.applied.Spec); err != nil || s.same {
-			return s, err
+		if s.same, err = sameAppSpec(stored.Spec, s.applied.Spec); err != nil || (s.same && !dryRun) {
+			return s, nil, err
 		}
 		s.applied.ResourceVersion = stored.ResourceVersion
 	}
-	_, err = c.Apply(ctx, s.applied)
-	return s, err
+	answer, err := c.Apply(ctx, s.applied, applyOptions(dryRun)...)
+	return s, answer, err
 }
 
 // storedApp gets the App, nil when it does not exist.

@@ -328,7 +328,8 @@ func (e AppCatalog) MarshalJSON() ([]byte, error) {
 
 // AppStatus is the observed state (ADR-0199 Decision 5): phase Deploying, Ready, Degraded or Failed (ADR-0200
 // Decision 6), the Ready condition, the current and latest AppRevision, the state of each child, the last part the
-// App wrote back (ADR-0212) and its requirements in both directions (ADR-0219).
+// App wrote back (ADR-0212), its requirements in both directions (ADR-0219) and, in a dry-run answer only, the plan
+// (ADR-0220).
 type AppStatus struct {
 	Status          `json:",inline"`
 	CurrentRevision ObjectName `json:"currentRevision,omitempty"`
@@ -341,6 +342,42 @@ type AppStatus struct {
 	Requires []AppRequirementState `json:"requires,omitempty"`
 	// RequiredBy is every App of the namespace whose spec.requires names this one, sorted by name.
 	RequiredBy []ObjectName `json:"requiredBy,omitempty"`
+	// Plan is what the write would do (ADR-0220 Decision 5), set only in a dry-run answer and never stored.
+	Plan *AppPlan `json:"plan,omitempty"`
+}
+
+// AppPlan is what a write of the App would make its rollout do (ADR-0220 Decision 5): the revision the stamp would
+// name, the parts it would create, update or prune, or the one part where a pass would stop, and the hook Functions in
+// call order (ADR-0214 Decision 9). It says what, not when.
+type AppPlan struct {
+	// Revision is empty for an unchanged spec.
+	Revision ObjectName `json:"revision,omitempty"`
+	Parts    []PlanPart `json:"parts,omitempty"`
+	Hooks    []string   `json:"hooks,omitempty"`
+}
+
+// PlanPart is one line of a plan: a part and its action, or the part where a pass would stop and the reason
+// (ChildNotOwned, SecretNotFound or SecretKeyMissing); a Secret stop has no action.
+type PlanPart struct {
+	Kind   Kind       `json:"kind"`
+	Name   ObjectName `json:"name"`
+	Action PlanAction `json:"action,omitempty"`
+	Reason string     `json:"reason,omitempty"`
+}
+
+// PlanAction is what the rollout does to a part (ADR-0220).
+type PlanAction string
+
+// The actions of a plan's part.
+const (
+	PlanCreate PlanAction = "create"
+	PlanUpdate PlanAction = "update"
+	PlanPrune  PlanAction = "prune"
+)
+
+// Schema carries PlanAction's enum into the generated OpenAPI (ADR-0048).
+func (PlanAction) Schema(huma.Registry) *huma.Schema {
+	return enumSchema(string(PlanCreate), string(PlanUpdate), string(PlanPrune))
 }
 
 // AppRequirementState is one requires entry's state: the required App's spec.version and whether it is met.

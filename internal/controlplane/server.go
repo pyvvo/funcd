@@ -47,6 +47,9 @@ type Deps struct {
 	// Hold is the platform hold's status and release (ADR-0206). Optional; when set, NewServer registers
 	// GET …/hold and POST …/hold/release.
 	Hold Holder
+	// Planner plans a dry-run App write (ADR-0220). Optional; nil ⇒ a dry-run App create or replace answers
+	// fault.Unavailable.
+	Planner AppPlanner
 }
 
 // OwnerCollector collects the dead-owned children of a namespace (internal/gc.Collector, ADR-0170).
@@ -78,7 +81,7 @@ func NewServer(d Deps) (http.Handler, error) {
 	r := chi.NewRouter()
 	r.Use(middleware.Authn(d.Credentials))
 	admissions := append([]admission.Admission{admission.NewValidateAdmission()}, d.Admissions...)
-	api := NewAPI(r, NewStoreHandlers(d.Store, d.Authorizer, admission.NewPipeline(admissions...), d.Collector))
+	api := NewAPI(r, NewStoreHandlers(d.Store, d.Authorizer, admission.NewPipeline(admissions...), d.Collector, d.Planner))
 	if d.Logs != nil { // ADR-0084: the function-log read route, tenant-scoped by the same RBAC PEP
 		RegisterLogs(api, d.Logs, d.Authorizer)
 	}
