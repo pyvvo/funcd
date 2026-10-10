@@ -70,7 +70,6 @@ func pruningChild(a *v1.App, kind v1.Kind, name v1.ObjectName) (v1.AppChild, boo
 
 // scenario: app-store-deletion-flip
 func TestScenarioAppStoreDeletionFlip(t *testing.T) {
-	t.Parallel()
 	e := startGC(t)
 	a := todoApp(t, e)
 	e.apply(t, a)
@@ -103,7 +102,6 @@ func TestScenarioAppStoreDeletionFlip(t *testing.T) {
 
 // scenario: app-prune-dropped-part
 func TestScenarioAppPruneDroppedPart(t *testing.T) {
-	t.Parallel()
 	e := startGC(t)
 	a := todoApp(t, e)
 	e.apply(t, a)
@@ -123,7 +121,6 @@ func TestScenarioAppPruneDroppedPart(t *testing.T) {
 
 // scenario: app-store-in-use-kept
 func TestScenarioAppStoreInUseKept(t *testing.T) {
-	t.Parallel()
 	e := startGC(t, funcd.WithGCSweepInterval(time.Second))
 	a := todoApp(t, e)
 	e.apply(t, a)
@@ -182,7 +179,6 @@ func TestScenarioAppStoreInUseKept(t *testing.T) {
 
 // scenario: app-store-not-taken-over
 func TestScenarioAppStoreNotTakenOver(t *testing.T) {
-	t.Parallel()
 	e := startGC(t)
 	e.apply(t, todoApp(t, e))
 	live := e.waitApp(t, "todo", v1.ConditionTrue, "", appWithin)
@@ -208,7 +204,6 @@ func TestScenarioAppStoreNotTakenOver(t *testing.T) {
 
 // scenario: app-ref-kept-store
 func TestScenarioAppRefKeptStore(t *testing.T) {
-	t.Parallel()
 	e := startGC(t)
 	writeStep(t, e.src, "reader", `export async function handle(ctx) { return { v: await ctx.kv.getText("store", "k") }; }`)
 	a := todoApp(t, e)
@@ -245,7 +240,6 @@ func TestScenarioAppRefKeptStore(t *testing.T) {
 
 // scenario: app-delete-collects-tree
 func TestScenarioAppDeleteCollectsTree(t *testing.T) {
-	t.Parallel()
 	e := startGC(t)
 	e.apply(t, todoApp(t, e))
 	live := e.waitApp(t, "todo", v1.ConditionTrue, "", appWithin)

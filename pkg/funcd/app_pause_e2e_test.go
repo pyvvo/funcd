@@ -120,7 +120,6 @@ func requireHealedAt(t *testing.T, h *v1.AppSelfHeal, after time.Time) {
 
 // scenario: app-drift-self-healed
 func TestScenarioAppDriftSelfHealed(t *testing.T) {
-	t.Parallel()
 	logs := newSelfHeals()
 	e := startGC(t, funcd.WithLogger(slog.New(logs)))
 	installTodo(t, e)
@@ -154,7 +153,6 @@ func TestScenarioAppDriftSelfHealed(t *testing.T) {
 
 // scenario: app-paused-keeps-hotfix
 func TestScenarioAppPausedKeepsHotfix(t *testing.T) {
-	t.Parallel()
 	logs := newSelfHeals()
 	e := startGC(t, funcd.WithLogger(slog.New(logs)))
 	installTodo(t, e)
@@ -190,7 +188,6 @@ func TestScenarioAppPausedKeepsHotfix(t *testing.T) {
 
 // scenario: app-rollout-is-not-self-heal
 func TestScenarioAppRolloutIsNotSelfHeal(t *testing.T) {
-	t.Parallel()
 	logs := newSelfHeals()
 	e := startGC(t, funcd.WithLogger(slog.New(logs)))
 	a := installTodo(t, e)
@@ -221,7 +218,6 @@ func TestScenarioAppRolloutIsNotSelfHeal(t *testing.T) {
 
 // scenario: app-paused-defers-upgrade
 func TestScenarioAppPausedDefersUpgrade(t *testing.T) {
-	t.Parallel()
 	e := startGC(t)
 	a := installTodo(t, e)
 	cli := funcdctl(t, e)
@@ -253,7 +249,6 @@ func TestScenarioAppPausedDefersUpgrade(t *testing.T) {
 
 // scenario: app-apply-without-paused-resumes
 func TestScenarioAppApplyWithoutPausedResumes(t *testing.T) {
-	t.Parallel()
 	e := startGC(t)
 	a := installTodo(t, e)
 	out, err := funcdctl(t, e)("app", "pause", "todo")
@@ -273,11 +268,13 @@ func TestScenarioAppApplyWithoutPausedResumes(t *testing.T) {
 	require.Contains(t, body, todoV2Marker, "todo-2 rolled out")
 }
 
-// scenario: app-paused-rollout-full-timeout — the ADR pauses 5 s after the stamp for 30 s at app.upgradeTimeout 20s;
-// the test keeps those ratios to failedPacing's shorter upgradeTimeout: the pause outlasts the stamp's deadline.
+// scenario: app-paused-rollout-full-timeout — the ADR pauses 5 s after the stamp for 30 s at app.upgradeTimeout 20s.
+// The test pauses as soon as it sees the stamp and stays paused past the stamp's deadline, with a 6 s timeout: long
+// enough that the pause lands before the deadline under -race load, short enough to keep the test fast.
 func TestScenarioAppPausedRolloutFullTimeout(t *testing.T) {
-	t.Parallel()
-	e := startGC(t, failedPacing())
+	const timeout = 6 * time.Second
+	e := startGC(t, funcd.WithPacing(funcd.Pacing{AppUpgradeTimeout: timeout, BootTimeout: 2 * time.Second,
+		ActivationTimeout: time.Second}))
 	a := installTodo(t, e)
 	cli := funcdctl(t, e)
 
@@ -288,21 +285,21 @@ func TestScenarioAppPausedRolloutFullTimeout(t *testing.T) {
 		"todo-2 is stamped")
 	stamped := e.appRevision(t, "todo-2").Status.StartedAt
 	require.NotNil(t, stamped)
-	time.Sleep(time.Until(time.Time(*stamped).Add(upgradeTimeout / 4)))
 	out, err := cli("app", "pause", "todo")
 	require.NoError(t, err, out)
 	e.waitPaused(t, v1.ConditionTrue, "SpecPaused")
 
 	require.Never(t, func() bool { return e.appRevision(t, "todo-2").Status.Phase != v1.PhaseDeploying },
-		3*upgradeTimeout/2, 100*time.Millisecond, "todo-2 stays Deploying while paused")
+		time.Until(time.Time(*stamped).Add(timeout+2*time.Second)), 100*time.Millisecond,
+		"todo-2 stays Deploying while paused, past its stamp's deadline")
 	out, err = cli("app", "resume", "todo")
 	require.NoError(t, err, out)
 	resumed := time.Time(e.waitPaused(t, v1.ConditionFalse, "Resumed").LastTransitionTime)
 
 	r2 := e.waitRevisionPhase(t, "todo-2", v1.PhaseFailed, 2*appWithin)
 	after := time.Since(resumed)
-	require.GreaterOrEqual(t, after, upgradeTimeout, "todo-2 fails no sooner than app.upgradeTimeout after the resume")
-	require.Less(t, after, upgradeTimeout+upgradeSlack, "todo-2 fails at app.upgradeTimeout after the resume")
+	require.GreaterOrEqual(t, after, timeout, "todo-2 fails no sooner than app.upgradeTimeout after the resume")
+	require.Less(t, after, timeout+upgradeSlack, "todo-2 fails at app.upgradeTimeout after the resume")
 	require.Equal(t, *stamped, *r2.Status.StartedAt, "the stamp time is kept")
 	got := e.waitApp(t, "todo", v1.ConditionFalse, "ChildNotReady", appWithin)
 	require.Equal(t, v1.PhaseFailed, got.Status.Phase)

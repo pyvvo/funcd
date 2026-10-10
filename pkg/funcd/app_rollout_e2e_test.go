@@ -106,7 +106,6 @@ func failUpgrade(t *testing.T, e *gcEnv) (*v1.AppRevision, time.Duration) {
 
 // scenario: app-one-part-changes
 func TestScenarioAppOnePartChanges(t *testing.T) {
-	t.Parallel()
 	st, rt := store.New(memory.New()), process.New(nil)
 	e := startGC(t, funcd.WithStore(st), funcd.WithRuntime(rt))
 	gate := filepath.Join(shortDataDir(t), "gate")
@@ -164,7 +163,6 @@ export const handle = async () => { while (!existsSync(%q)) await new Promise((r
 
 // scenario: app-failed-upgrade-keeps-serving
 func TestScenarioAppFailedUpgradeKeepsServing(t *testing.T) {
-	t.Parallel()
 	e := startGC(t, failedPacing())
 	r3, after := failUpgrade(t, e)
 	require.GreaterOrEqual(t, after, upgradeTimeout, "todo-3 fails no sooner than app.upgradeTimeout after its stamp")
@@ -188,7 +186,6 @@ func TestScenarioAppFailedUpgradeKeepsServing(t *testing.T) {
 
 // scenario: app-rollback
 func TestScenarioAppRollback(t *testing.T) {
-	t.Parallel()
 	e := startGC(t, failedPacing())
 	failUpgrade(t, e)
 	cli := funcdctl(t, e)
@@ -221,7 +218,6 @@ func TestScenarioAppRollback(t *testing.T) {
 
 // scenario: app-upgrade-superseded
 func TestScenarioAppUpgradeSuperseded(t *testing.T) {
-	t.Parallel()
 	e := startGC(t)
 	a := installTodo(t, e)
 	a.Spec.Version = "2.0.0"
@@ -254,7 +250,6 @@ func TestScenarioAppUpgradeSuperseded(t *testing.T) {
 
 // scenario: app-history-kept
 func TestScenarioAppHistoryKept(t *testing.T) {
-	t.Parallel()
 	e := startGC(t, funcd.WithAppRevisionHistory(2))
 	a := installTodo(t, e)
 	for n := int64(2); n <= 6; n++ {

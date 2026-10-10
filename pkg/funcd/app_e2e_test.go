@@ -20,7 +20,6 @@ import (
 
 // scenario: app-install
 func TestScenarioAppInstall(t *testing.T) {
-	t.Parallel()
 	e := startGC(t)
 	e.apply(t, todoApp(t, e))
 	a := e.waitApp(t, "todo", v1.ConditionTrue, "", appWithin)
@@ -58,7 +57,6 @@ func requireNothingStored(t *testing.T, e *gcEnv) {
 
 // scenario: app-admission-refuses
 func TestScenarioAppAdmissionRefuses(t *testing.T) {
-	t.Parallel()
 	e := startGC(t, funcd.WithBucketQuotaForTest(1))
 	for name, tc := range map[string]struct {
 		edit func(*v1.App)
@@ -121,7 +119,6 @@ spec:
 
 // scenario: app-shared-writer-refused
 func TestScenarioAppSharedWriterRefused(t *testing.T) {
-	t.Parallel()
 	e := startGC(t)
 	site, _ := pushSiteBundle(t, e.layout, "web", map[string]string{"index.html": "<!doctype html><title>todo</title>"})
 	for name, tc := range map[string]struct {
@@ -162,7 +159,6 @@ func TestScenarioAppSharedWriterRefused(t *testing.T) {
 
 // scenario: app-child-not-owned
 func TestScenarioAppChildNotOwned(t *testing.T) {
-	t.Parallel()
 	e := startGC(t)
 	e.apply(t, &v1.Function{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindFunction.GVK().APIVersion(), Kind: v1.KindFunction},
@@ -188,7 +184,6 @@ func TestScenarioAppChildNotOwned(t *testing.T) {
 
 // scenario: app-spec-change-applies
 func TestScenarioAppSpecChangeApplies(t *testing.T) {
-	t.Parallel()
 	e := startGC(t)
 	a := todoApp(t, e)
 	e.apply(t, a)
@@ -207,7 +202,6 @@ func TestScenarioAppSpecChangeApplies(t *testing.T) {
 
 // scenario: app-ref-waits
 func TestScenarioAppRefWaits(t *testing.T) {
-	t.Parallel()
 	e := startGC(t)
 	a := todoApp(t, e)
 	a.Spec.Functions = append(a.Spec.Functions, v1.AppFunction{Ref: "mailer"})

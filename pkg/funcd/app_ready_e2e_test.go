@@ -59,7 +59,6 @@ func (e *gcEnv) waitPhase(t *testing.T, fn string, phase v1.Phase) {
 
 // scenario: app-idle-function-stays-current
 func TestScenarioAppIdleFunctionStaysCurrent(t *testing.T) {
-	t.Parallel()
 	st := store.New(memory.New())
 	e := startGC(t, funcd.WithStore(st), appPacing(100*time.Millisecond))
 	e.apply(t, idleTodo(t, e, time.Second))
@@ -85,7 +84,6 @@ func TestScenarioAppIdleFunctionStaysCurrent(t *testing.T) {
 
 // scenario: app-scale-to-zero-not-started
 func TestScenarioAppScaleToZeroNotStarted(t *testing.T) {
-	t.Parallel()
 	e := startGC(t)
 	e.apply(t, idleTodo(t, e, 0))
 	a := e.waitApp(t, "todo", v1.ConditionUnknown, "NotStarted", appWithin)
