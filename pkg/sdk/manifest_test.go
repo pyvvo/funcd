@@ -402,7 +402,7 @@ spec:
 `,
 		},
 		"nested unknown timer key": {
-			key: "cron",
+			key: "jitter",
 			manifest: `
 apiVersion: funcd.io/v1alpha1
 kind: EventSource
@@ -414,7 +414,7 @@ spec:
     events:
       - name: tick
         interval: 5s
-        cron: "*/5 * * * *"
+        jitter: 1s
 `,
 		},
 		"unknown function spec key": {

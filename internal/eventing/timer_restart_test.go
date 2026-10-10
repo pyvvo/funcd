@@ -156,22 +156,23 @@ func TestGridFloor(t *testing.T) {
 	}
 }
 
-// storeCronEvent rewrites the stored bytes of team-a/clock so its 24h event name is an ADR-0211 cron event, as a
-// newer funcd writes it: no interval, which this funcd decodes leniently as 0.
-func storeCronEvent(t *testing.T, eng store.Engine, name string) {
+// storeEventBytes rewrites the stored bytes of team-a/clock so its 24h event name becomes event, bypassing
+// admission as a newer funcd's write or a restored metastore does.
+func storeEventBytes(t *testing.T, eng store.Engine, name, event string) {
 	t.Helper()
 	bucket := v1.KindEventSource.GVK().String()
 	interval := []byte(`{"name":"` + name + `","interval":"24h"}`)
-	cron := []byte(`{"name":"` + name + `","cron":"0 3 * * *","timeZone":"Europe/Paris"}`)
 	require.NoError(t, eng.Update(t.Context(), func(tx store.Txn) error {
 		raw, found, err := tx.Get(bucket, "team-a/clock")
 		require.NoError(t, err)
 		require.True(t, found)
 		require.Equal(t, 1, bytes.Count(raw, interval), "stored event %s", raw)
-		return tx.Put(bucket, "team-a/clock", bytes.Replace(raw, interval, cron, 1))
+		return tx.Put(bucket, "team-a/clock", bytes.Replace(raw, interval, []byte(event), 1))
 	}))
 }
 
+// Since ADR-0211 a cron event registers, so the guard's case is an event with no schedule this funcd knows: no
+// interval, which it decodes leniently as 0, and no cron.
 func TestIssue872_ZeroIntervalEventSkipped(t *testing.T) {
 	ctx := t.Context()
 	eng := memory.New()
@@ -206,7 +207,7 @@ func TestIssue872_ZeroIntervalEventSkipped(t *testing.T) {
 	var runLogs bytes.Buffer
 	running := boot(&runLogs)
 	require.Equal(t, 2, running.ActiveTimers())
-	storeCronEvent(t, eng, "nightly")
+	storeEventBytes(t, eng, "nightly", `{"name":"nightly","schedule":"0 3 * * *"}`)
 	_, err = running.Reconcile(ctx, req)
 	require.NoError(t, err)
 	requireSkipped(running, &runLogs)

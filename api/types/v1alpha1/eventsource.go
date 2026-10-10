@@ -19,7 +19,7 @@ type EventSource struct {
 // pointer is non-nil (the source kind), each carrying a list of named events. A firing publishes a named
 // CloudEvent that the F69 Sensor (ADR-0109) binds to actions — the source no longer binds a function.
 type EventSourceSpec struct {
-	// Timer is the timer source kind (V1): named events, each ticking on its own interval. The webhook
+	// Timer is the timer source kind (V1): named events, each on its own interval or cron schedule. The webhook
 	// source kind is a named follow-on (it needs an eventing-ingress gateway decision).
 	Timer *TimerSource `json:"timer,omitempty"`
 	// Blob is the object-store source kind (ADR-0119, F83): named events that fire on object-created under
@@ -32,13 +32,16 @@ type TimerSource struct {
 	Events []TimerEvent `json:"events"` // ≥1; unique names
 }
 
-// TimerEvent is one named timer event: a DNS-1123 name + its own interval. Each fires independently and
-// publishes a named CloudEvent (source=<eventsource> URI, type=<name>).
+// TimerEvent is one named timer event: a DNS-1123 name and its own schedule, an interval or a cron expression in a
+// time zone (ADR-0211). Each fires independently and publishes a named CloudEvent (source=<eventsource> URI,
+// type=<name>).
 type TimerEvent struct {
 	Name ObjectName `json:"name"`
 	// Interval is the tick period (ADR-0023): the floor bars a fire-storm, the ceiling an unbounded one. Validate
 	// checks the bounds, also at store.Create (ADR-0194).
-	Interval Duration `json:"interval" doc:"The tick period: 100ms to 24h."`
+	Interval Duration `json:"interval,omitempty" doc:"The tick period: 100ms to 24h. Exactly one of interval and cron."`
+	Cron     string   `json:"cron,omitempty" doc:"A cron expression: 5 fields (minute hour day-of-month month day-of-week) or a macro such as @daily. Exactly one of interval and cron."`
+	TimeZone string   `json:"timeZone,omitempty" doc:"The IANA time zone of cron, such as Europe/Paris; UTC when empty. Only with cron."`
 }
 
 // BlobSource hosts the blob kind's named events over one Bucket (ADR-0119, F83): a poll watcher lists the
@@ -85,7 +88,7 @@ func (es *EventSource) Normalize() {
 func (es *EventSource) GroupVersionKind() GroupVersionKind { return KindEventSource.GVK() }
 
 // Validate enforces the v2 kind-union rules JSON Schema can't express (ADR-0108/ADR-0048): exactly one
-// source kind set; each kind's events non-empty with unique DNS-1123 names and in-bounds intervals. The
+// source kind set; each kind's events non-empty with unique DNS-1123 names and, for a timer, one valid schedule. The
 // removed v1 `type:`/`function:` keys are rejected at the schema edge (additionalProperties:false → 422).
 func (es *EventSource) Validate() error {
 	if err := validateMeta(es.TypeMeta, &es.ObjectMeta, KindEventSource); err != nil {
@@ -121,12 +124,34 @@ func (es *EventSource) Validate() error {
 				return fault.Invalidf(op, "duplicate event name %q under spec.timer", ev.Name)
 			}
 			seen[ev.Name] = true
-			if err := CheckDuration(op, fmt.Sprintf("spec.timer.events[%d].interval", i), ev.Interval, MinTimerInterval, MaxTimerInterval); err != nil {
+			if err := ev.validate(op, i); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+// validate checks one timer event's schedule (ADR-0211 Decision 4): exactly one of interval and cron, an interval
+// of 0s counting as unset, and timeZone only with cron.
+func (ev *TimerEvent) validate(op string, i int) error {
+	schedules := 0
+	if ev.Interval != 0 {
+		schedules++
+	}
+	if ev.Cron != "" {
+		schedules++
+	}
+	if schedules != 1 {
+		return fault.Invalidf(op, "spec.timer.events[%d] (%q) must set exactly one schedule (interval or cron), got %d", i, ev.Name, schedules)
+	}
+	if ev.Cron == "" {
+		if ev.TimeZone != "" {
+			return fault.Invalidf(op, "spec.timer.events[%d].timeZone is set without cron", i)
+		}
+		return CheckDuration(op, fmt.Sprintf("spec.timer.events[%d].interval", i), ev.Interval, MinTimerInterval, MaxTimerInterval)
+	}
+	return CheckCron(op, fmt.Sprintf("spec.timer.events[%d].cron", i), ev.Cron, fmt.Sprintf("spec.timer.events[%d].timeZone", i), ev.TimeZone)
 }
 
 // validate enforces the blob source kind's rules JSON Schema can't express (ADR-0119): a DNS-1123 `bucket`,

@@ -2,6 +2,7 @@ package eventing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -10,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pyvvo/funcd/api/cron"
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controller"
@@ -77,10 +79,15 @@ type Source struct {
 	timers map[eventKey]*timerEntry
 }
 
-// timerEntry is a registered named event's firing state.
+// timerEntry is a registered named event's firing state: an interval event's lastFire on its creation grid
+// (ADR-0182), or a cron event's timetable and next slot (ADR-0211). A cron entry has a non-nil table.
 type timerEntry struct {
 	interval time.Duration
 	lastFire time.Time
+	cron     string // a cron event: cron and zone are the unchanged-check key
+	zone     string
+	table    *cron.Timetable
+	next     time.Time
 }
 
 // NewSource builds the Source. Store and Publisher are required.
@@ -140,7 +147,9 @@ func (s *Source) Reconcile(ctx context.Context, req controller.Request) (control
 		s.deregisterTimers(req.Namespace, req.Name) // no timer kind (a future webhook source): not tick-driven
 		return controller.Result{}, s.purgeBlob(ctx, req.Namespace, req.Name)
 	}
-	s.registerTimer(req.Namespace, req.Name, time.Time(es.CreationTime), es.Spec.Timer)
+	if err := s.registerTimer(req.Namespace, req.Name, time.Time(es.CreationTime), es.Spec.Timer); err != nil {
+		return controller.Result{}, err
+	}
 	cur, hasReady := es.Status.Conditions.Get(condReady)
 	_, seenCond := es.Status.Conditions.Get(condSeenListSaved)
 	if es.Status.Phase != v1.PhaseReady || !hasReady || cur.Status != v1.ConditionTrue || cur.ObservedGeneration != es.Generation || seenCond {
@@ -205,25 +214,41 @@ func (s *Source) setBlobNotReady(ctx context.Context, es *v1.EventSource, reason
 	return nil
 }
 
-// registerTimer (re)registers every named event of a timer source, preserving lastFire when the interval
-// is unchanged (a frequent reconcile can't starve firing), and prunes events removed from the spec. A new or
-// re-intervaled entry is seeded on the creation grid created + k×interval (ADR-0182), so its schedule survives
-// a daemon restart; a grid point passed while the daemon was down is skipped. An event with no positive interval,
-// such as an ADR-0211 cron event stored by a newer funcd, is skipped with a warning and left idle (#872).
-func (s *Source) registerTimer(ns v1.NamespaceName, source v1.ObjectName, created time.Time, t *v1.TimerSource) {
+// registerTimer (re)registers every named event of a timer source, keeping an entry whose schedule is unchanged
+// (a frequent reconcile can't starve firing), and prunes events removed from the spec. A new or re-intervaled
+// interval entry is seeded on the creation grid created + k×interval (ADR-0182), so its schedule survives a daemon
+// restart; a grid point passed while the daemon was down is skipped. A new cron entry, or one whose expression,
+// zone or kind changed, is seeded with the first slot strictly after now (ADR-0211 Decision 6). An event whose
+// cron does not parse keeps its previous entry and its error is returned after the other events are registered.
+// An event with neither cron nor a positive interval is skipped with a warning and left idle (#872).
+func (s *Source) registerTimer(ns v1.NamespaceName, source v1.ObjectName, created time.Time, t *v1.TimerSource) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	want := make(map[eventKey]bool, len(t.Events))
+	var errs []error
 	for i := range t.Events {
 		ev := &t.Events[i]
 		k := eventKey{ns: ns, source: source, event: ev.Name}
+		if ev.Cron != "" {
+			want[k] = true
+			if e, ok := s.timers[k]; ok && e.table != nil && e.cron == ev.Cron && e.zone == ev.TimeZone {
+				continue // unchanged — keep its next
+			}
+			table, err := parseCron(ev)
+			if err != nil {
+				errs = append(errs, fault.Wrapf(err, fault.Invalid, "eventing.registerTimer", "event %s/%s/%s", ns, source, ev.Name))
+				continue
+			}
+			s.timers[k] = &timerEntry{cron: ev.Cron, zone: ev.TimeZone, table: table, next: table.Next(s.clock.Now())}
+			continue
+		}
 		interval := time.Duration(ev.Interval)
 		if interval <= 0 {
 			s.logger.Warn("timer event has no positive interval; skipped", "namespace", ns, "eventsource", source, "event", ev.Name, "interval", interval)
 			continue
 		}
 		want[k] = true
-		if e, ok := s.timers[k]; ok && e.interval == interval {
+		if e, ok := s.timers[k]; ok && e.table == nil && e.interval == interval {
 			continue // unchanged — keep its lastFire
 		}
 		s.timers[k] = &timerEntry{interval: interval, lastFire: gridFloor(created, s.clock.Now(), interval)}
@@ -233,6 +258,16 @@ func (s *Source) registerTimer(ns v1.NamespaceName, source v1.ObjectName, create
 			delete(s.timers, k)
 		}
 	}
+	return errors.Join(errs...)
+}
+
+// parseCron parses a cron event's expression in its zone; admission (v1alpha1.CheckCron) refuses what fails here.
+func parseCron(ev *v1.TimerEvent) (*cron.Timetable, error) {
+	loc, err := cron.LoadZone(ev.TimeZone)
+	if err != nil {
+		return nil, err
+	}
+	return cron.Parse(ev.Cron, loc)
 }
 
 // gridFloor returns the largest created + k×interval (k any integer) that is not after now. A zero created
@@ -327,8 +362,8 @@ func (s *Source) Fire(ctx context.Context, ns v1.NamespaceName, source, event v1
 	return s.publisher.Publish(ctx, ev)
 }
 
-// Run ticks the registered named-event set until ctx is cancelled, publishing each event whose Interval
-// has elapsed. Started by the pkg/funcd lifecycle (ADR-0033); not part of the reconciler.
+// Run ticks the registered named-event set until ctx is cancelled, publishing each event that is due. Started
+// by the pkg/funcd lifecycle (ADR-0033); not part of the reconciler.
 func (s *Source) Run(ctx context.Context) error {
 	ticker := time.NewTicker(runTick)
 	defer ticker.Stop()
@@ -346,15 +381,22 @@ func (s *Source) Run(ctx context.Context) error {
 	}
 }
 
-// dueTimers marks and returns the named events whose interval has elapsed, advancing their lastFire
-// under the lock so a fire is never double-counted across ticks. lastFire advances to the latest period
-// boundary, not to the tick time, so tick lateness never stretches the period, and periods missed while a
-// publish was in flight are skipped rather than fired in a burst.
+// dueTimers marks and returns the named events that are due, advancing them under the lock so a fire is never
+// double-counted across ticks. An interval event's lastFire advances to the latest period boundary, not to the tick
+// time, so tick lateness never stretches the period; a cron event's next advances to the first slot after now.
+// Either way, periods or slots missed while a publish was in flight are skipped rather than fired in a burst.
 func (s *Source) dueTimers(now time.Time) []eventKey {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var due []eventKey
 	for k, e := range s.timers {
+		if e.table != nil {
+			if !now.Before(e.next) {
+				e.next = e.table.Next(now)
+				due = append(due, k)
+			}
+			continue
+		}
 		if elapsed := now.Sub(e.lastFire); elapsed >= e.interval {
 			e.lastFire = now.Add(-(elapsed % e.interval))
 			due = append(due, k)
