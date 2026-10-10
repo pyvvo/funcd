@@ -52,7 +52,7 @@ type StoreFile struct {
 
 // ReadManifest reads the manifest of e; it needs a credential that reads.
 func ReadManifest(ctx context.Context, b blob.Bucket, e Entry) (Manifest, error) {
-	key := genDir(e.Class, e.Generation, e.Timeline) + manifestName
+	key := GenDir(e.Class, e.Generation, e.Timeline) + manifestName
 	data, err := b.Get(ctx, key)
 	if err != nil {
 		return Manifest{}, err

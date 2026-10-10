@@ -83,7 +83,7 @@ func Write(dataDir string, m Marker) error {
 	if err != nil {
 		return fault.Wrapf(err, fault.Internal, "hold.Write", "encode the marker")
 	}
-	return writeFile("hold.Write", dataDir, MarkerFile, data)
+	return WriteFile("hold.Write", dataDir, MarkerFile, data)
 }
 
 // Begin writes BusyFile naming command (run, kv, blob); a BusyFile naming another command is fault.Conflict. One
@@ -102,7 +102,7 @@ func Begin(dataDir, command string) error {
 	if err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "encode %s", BusyFile)
 	}
-	return writeFile(op, dataDir, BusyFile, data)
+	return WriteFile(op, dataDir, BusyFile, data)
 }
 
 // End removes BusyFile: the restore finished.
@@ -191,7 +191,7 @@ func (h *Hold) Release(now time.Time) error {
 	if err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "encode the release time")
 	}
-	if err := writeFile(op, h.dir, ReleasedFile, data); err != nil {
+	if err := WriteFile(op, h.dir, ReleasedFile, data); err != nil {
 		return err
 	}
 	if err := os.Remove(filepath.Join(h.dir, MarkerFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -264,9 +264,9 @@ func readFile(op, dir, name string) ([]byte, error) {
 	return data, nil
 }
 
-// writeFile replaces dir/name with data, mode 0600: a temporary file synced and renamed, then the directory synced,
-// so a crash leaves the old file or the new one.
-func writeFile(op, dir, name string, data []byte) error {
+// WriteFile replaces dir/name with data, mode 0600: a temporary file synced and renamed, then the directory synced,
+// so a crash leaves the old file or the new one. op names the caller in the error; ADR-0207's safemode.json uses it.
+func WriteFile(op, dir, name string, data []byte) error {
 	f, err := os.CreateTemp(dir, name+".tmp-*")
 	if err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "write %s", name)
@@ -298,5 +298,5 @@ func syncDir(op, dir string) error {
 
 // WriteReport writes ReportFile, mode 0600, synced as Write is.
 func WriteReport(dataDir string, report json.RawMessage) error {
-	return writeFile("hold.WriteReport", dataDir, ReportFile, report)
+	return WriteFile("hold.WriteReport", dataDir, ReportFile, report)
 }

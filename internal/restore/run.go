@@ -179,7 +179,7 @@ func Run(ctx context.Context, p Point, o Options) (_ Report, err error) {
 	}
 	r.st = store.New(r.eng, opts...)
 	rep := Report{From: g.Ref(), Funcd: version.Version, At: v1.NewTimestamp(time.Now())}
-	if rep.Timeline, err = timeline(ctx, r.st); err != nil {
+	if rep.Timeline, err = Timeline(ctx, r.st); err != nil {
 		return Report{}, err
 	}
 	if err = r.canary(ctx, key != nil); err != nil {
@@ -339,8 +339,8 @@ func removeFile(p string) error {
 	return nil
 }
 
-// timeline is the timeline store.New minted over the loaded engine (ADR-0202 Decision 3).
-func timeline(ctx context.Context, st store.Store) (string, error) {
+// Timeline is the timeline store.New minted over the loaded engine (ADR-0202 Decision 3).
+func Timeline(ctx context.Context, st store.Store) (string, error) {
 	l, err := st.List(ctx, v1.KindNamespace.GVK(), store.ListOptions{})
 	if err != nil {
 		return "", err
