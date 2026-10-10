@@ -24,6 +24,7 @@ import (
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/scheduler"
 	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/workernode/local"
 )
 
 // poolManifestEntry is one row of the pool worker's FUNCD_POOL_MANIFEST (ADR-0044): the
@@ -232,6 +233,12 @@ func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pool
 		in, m, ok, _ := r.memberIn(ctx, a.Key, judge, fn.Name)
 		switch {
 		case !ok:
+		case m.State == memberReady && m.Dependency != nil:
+			// judged by its own entry alone: its siblings and the pool host are unaffected (ADR-0215 Decision 5)
+			v.report = m.Dependency
+			if r.clock.Now().Sub(lastStart(in)) >= r.bootTimeout {
+				v.settled = 1
+			}
 		case m.State == memberReady:
 			v.ready = 1
 		case m.State == memberFailed && m.Error == loadTimedOut:
@@ -262,11 +269,13 @@ const (
 	loadTimedOut = "load timed out"
 )
 
-// memberHealth is one entry of a pool host's GET /health/members.
+// memberHealth is one entry of a pool host's GET /health/members; Dependency is the member's dependency report, absent
+// when its check passes (ADR-0215 Decision 4).
 type memberHealth struct {
-	Name  string `json:"name"`
-	State string `json:"state"`
-	Error string `json:"error,omitempty"`
+	Name       string                  `json:"name"`
+	State      string                  `json:"state"`
+	Error      string                  `json:"error,omitempty"`
+	Dependency *local.DependencyReport `json:"dependency,omitempty"`
 }
 
 // memberIn reads member's entry from the newest running pool worker among insts, key's pool workers; ok is false when
@@ -279,7 +288,7 @@ func (r *Reconciler) memberIn(ctx context.Context, key pooling.PoolKey, insts []
 		if !ok {
 			return in, memberHealth{}, false, fault.Unavailablef("function.memberIn", "pool worker %s did not answer %s", in.ID, membersPath)
 		}
-		r.markPoolLive(key, in.ID, r.clock.Now())
+		r.markLive(in.ID, r.clock.Now())
 		for _, m := range members {
 			if m.Name == string(member) {
 				return in, m, true, nil
@@ -290,9 +299,10 @@ func (r *Reconciler) memberIn(ctx context.Context, key pooling.PoolKey, insts []
 	return runtime.Instance{}, memberHealth{}, false, nil
 }
 
-// poolSilent reports whether the running pool worker in insts has not answered /health/liveness for bootTimeout since
-// its last answer, else since it was created: a hung host, which ensurePool restarts.
-func (r *Reconciler) poolSilent(ctx context.Context, key pooling.PoolKey, insts []runtime.Instance) bool {
+// poolSilent reports whether the running pool worker in insts is hung, which ensurePool restarts: once it has listened,
+// silent on /health/liveness for livenessTimeout (ADR-0215 Decision 1), and before, not listening bootTimeout after
+// its creation.
+func (r *Reconciler) poolSilent(ctx context.Context, insts []runtime.Instance) bool {
 	if r.materializer == nil {
 		return false
 	}
@@ -300,15 +310,10 @@ func (r *Reconciler) poolSilent(ctx context.Context, key pooling.PoolKey, insts 
 		if in.State != runtime.StateRunning {
 			continue
 		}
-		if in.Port > 0 && r.probeReady(ctx, in.IP, in.Port, livenessPath) {
-			r.markPoolLive(key, in.ID, r.clock.Now())
-			return false
+		if !in.Listened {
+			return r.clock.Now().Sub(in.CreatedAt) >= r.bootTimeout
 		}
-		last := r.poolLastLive(key, in.ID)
-		if last.Before(in.CreatedAt) {
-			last = in.CreatedAt
-		}
-		return r.clock.Now().Sub(last) >= r.bootTimeout
+		return r.probeLiveness(ctx, in)
 	}
 	return false
 }
@@ -374,7 +379,7 @@ func (r *Reconciler) ensurePool(ctx context.Context, key pooling.PoolKey, self *
 		if pass.startErr, err = r.restartPool(ctx, key, cur, sig, manifest, shared, keep); err != nil {
 			return poolPass{}, err
 		}
-	case r.poolSilent(ctx, key, cur):
+	case r.poolSilent(ctx, cur):
 		// a running host that stopped answering its liveness is restarted (issue #422); a member's state never is
 		r.logger.Warn("restarting a pool worker silent on its liveness", "namespace", key.Namespace, "pool", poolName)
 		if pass.startErr, err = r.restartPool(ctx, key, cur, sig, manifest, shared, keep); err != nil {
@@ -929,11 +934,7 @@ func (r *Reconciler) forgetPool(ns v1.NamespaceName, name v1.ObjectName) {
 			delete(r.poolDrains, key)
 		}
 	}
-	for key := range r.poolLive {
-		if ofPool(key) {
-			delete(r.poolLive, key)
-		}
-	}
+	r.forgetLive(ns, name)
 	for key := range r.poolHolds {
 		if ofPool(key) {
 			delete(r.poolHolds, key)

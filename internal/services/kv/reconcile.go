@@ -4,17 +4,15 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"reflect"
 	"strings"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controller"
+	"github.com/pyvvo/funcd/internal/health"
 	"github.com/pyvvo/funcd/internal/store"
 )
-
-// condReady is the readiness condition the KVStore reconciler raises (ADR-0072), stamped with the generation it
-// observed so a reader tells a Ready of the current spec from an earlier one (ADR-0199 Decision 5).
-const condReady v1.ConditionType = "Ready"
 
 // PrefixManager is the narrow KV-driver view the reconciler needs (ADR-0072/0073): DropPrefix reclaims a
 // store/table prefix, and List(prefix) enumerates the live keys used to discover orphaned table
@@ -31,6 +29,8 @@ type ReconcilerDeps struct {
 	Store  store.Store
 	KV     PrefixManager // nil ⇒ delete + table-removal reclamation is a no-op
 	Logger *slog.Logger
+	// Health is the storage prober whose KV result sets the Ready condition (ADR-0215 Decision 7); nil ⇒ always Ready.
+	Health *health.Prober
 }
 
 // Reconciler is the controller.Reconciler for KindKVStore (ADR-0072/0073): present ⇒ Ready +
@@ -39,6 +39,7 @@ type ReconcilerDeps struct {
 type Reconciler struct {
 	store  store.Store
 	kv     PrefixManager
+	health *health.Prober
 	logger *slog.Logger
 }
 
@@ -51,11 +52,12 @@ func NewReconciler(d ReconcilerDeps) (*Reconciler, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Reconciler{store: d.Store, kv: d.KV, logger: logger.With("component", "services.kv.reconciler")}, nil
+	return &Reconciler{store: d.Store, kv: d.KV, health: d.Health, logger: logger.With("component", "services.kv.reconciler")}, nil
 }
 
-// Reconcile converges one KVStore. A present store reaches Ready with status.tables (declared
-// sub-domains) + status.bindings (Function.spec.kv entries referencing it), and any table removed from
+// Reconcile converges one KVStore. A present store reports status.tables (declared sub-domains) + status.bindings
+// (Function.spec.kv entries referencing it) and is Ready while the KV storage probe passes, else Degraded
+// StorageUnreachable (ADR-0215 Decision 7), its status written only when it changed; any table removed from
 // spec.tables[] but still holding data is reclaimed via DropPrefix(<ns>/<store>/<table>/); a deleted
 // store (NotFound) reclaims its whole prefix via DropPrefix(<ns>/<store>/).
 func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (controller.Result, error) {
@@ -86,10 +88,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	if err != nil {
 		return controller.Result{}, err
 	}
-	ks.Status.Tables = len(ks.Spec.Tables)
-	ks.Status.Bindings = bindings
-	ks.Status.Phase = v1.PhaseReady
-	ks.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue, ObservedGeneration: ks.Generation})
+	next := v1.KVStoreStatus{
+		Status: health.StoreStatus(ks.Status.Status, r.health.Result(health.TargetKV), ks.Generation),
+		Tables: len(ks.Spec.Tables), Bindings: bindings,
+	}
+	if reflect.DeepEqual(next, ks.Status) {
+		return controller.Result{}, nil
+	}
+	ks.Status = next
 	if _, uerr := r.store.Update(ctx, ks); uerr != nil {
 		if fault.KindOf(uerr) == fault.Conflict {
 			return controller.Result{}, nil // re-reconciled on the next watch event

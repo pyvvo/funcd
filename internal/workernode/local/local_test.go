@@ -93,7 +93,7 @@ func TestScenarioInvokeErrorTaxonomy(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			res := &fakeResolver{target: local.Ref{Namespace: "team-a", Function: "b"}, err: tc.resolveErr}
-			h := local.NewHandler(caller, res, fakeInvoker{out: tc.invokeOut, err: tc.invokeErr}, nil, nil, nil, nil)
+			h := local.NewHandler(caller, res, fakeInvoker{out: tc.invokeOut, err: tc.invokeErr}, nil, nil, nil, nil, nil)
 			rec := post(t, h, "payments", `{}`)
 			require.Equal(t, tc.wantStatus, rec.Code)
 		})
@@ -105,7 +105,7 @@ func TestScenarioInvokeErrorTaxonomy(t *testing.T) {
 func TestScenarioCallerIdentityFromConnection(t *testing.T) {
 	caller := local.Ref{Namespace: "team-a", Function: "a"}
 	res := &fakeResolver{target: local.Ref{Namespace: "team-a", Function: "b"}}
-	h := local.NewHandler(caller, res, fakeInvoker{out: []byte(`{}`)}, nil, nil, nil, nil)
+	h := local.NewHandler(caller, res, fakeInvoker{out: []byte(`{}`)}, nil, nil, nil, nil, nil)
 
 	post(t, h, "payments", `{"caller":"evil/other","sneaky":true}`)
 	require.Equal(t, caller, res.gotCaller, "caller is the fixed sandbox Ref, never the request body")
@@ -119,7 +119,7 @@ func TestInvokeIsLogged(t *testing.T) {
 	caller := local.Ref{Namespace: "team-a", Function: "a"}
 
 	h := local.NewHandler(caller, &fakeResolver{target: local.Ref{Namespace: "team-a", Function: "b"}},
-		fakeInvoker{out: []byte(`{}`)}, nil, nil, nil, logger)
+		fakeInvoker{out: []byte(`{}`)}, nil, nil, nil, nil, logger)
 	post(t, h, "payments", `{}`)
 	got := buf.String()
 	require.Contains(t, got, "fn-to-fn invoke")
@@ -128,7 +128,7 @@ func TestInvokeIsLogged(t *testing.T) {
 	require.Contains(t, got, "alias=payments")
 
 	buf.Reset()
-	hDeny := local.NewHandler(caller, &fakeResolver{err: fault.Forbiddenf("op", "no link")}, fakeInvoker{}, nil, nil, nil, logger)
+	hDeny := local.NewHandler(caller, &fakeResolver{err: fault.Forbiddenf("op", "no link")}, fakeInvoker{}, nil, nil, nil, nil, logger)
 	post(t, hDeny, "ghost", `{}`)
 	require.Contains(t, buf.String(), "fn-to-fn invoke denied")
 	require.Contains(t, buf.String(), "level=WARN")
@@ -147,7 +147,7 @@ func TestScenarioPolicyRevokesInvoke(t *testing.T) {
 		az := &fakeAuthz{allowed: false}
 		var forwarded bool
 		inv := fakeInvoker{out: []byte(`{}`)}
-		h := local.NewHandler(caller, res, recordingInvoker{inner: inv, hit: &forwarded}, az, nil, nil, nil)
+		h := local.NewHandler(caller, res, recordingInvoker{inner: inv, hit: &forwarded}, az, nil, nil, nil, nil)
 		rec := post(t, h, "pricing", `{"caller":"evil/other"}`)
 		require.Equal(t, http.StatusForbidden, rec.Code, "a forbid Policy revokes a declared invoke")
 		require.False(t, forwarded, "a denied invoke never reaches the Invoker")
@@ -160,7 +160,7 @@ func TestScenarioPolicyRevokesInvoke(t *testing.T) {
 	t.Run("permit → forwarded (declared link invokes)", func(t *testing.T) {
 		az := &fakeAuthz{allowed: true}
 		var forwarded bool
-		h := local.NewHandler(caller, res, recordingInvoker{inner: fakeInvoker{out: []byte(`{"ok":1}`)}, hit: &forwarded}, az, nil, nil, nil)
+		h := local.NewHandler(caller, res, recordingInvoker{inner: fakeInvoker{out: []byte(`{"ok":1}`)}, hit: &forwarded}, az, nil, nil, nil, nil)
 		rec := post(t, h, "pricing", `{}`)
 		require.Equal(t, http.StatusOK, rec.Code, "a permitted declared link forwards")
 		require.True(t, forwarded, "an allowed invoke reaches the Invoker")
@@ -276,7 +276,7 @@ func TestIssue337_LinkTimeoutMidBodyIs503(t *testing.T) {
 	rp := httputil.NewSingleHostReverseProxy(target)
 	rp.FlushInterval = -1
 	res := &fakeResolver{target: local.Ref{Namespace: "team-a", Function: "b"}, timeout: 100 * time.Millisecond}
-	api := httptest.NewServer(local.NewHandler(local.Ref{Namespace: "team-a", Function: "a"}, res, local.NewInvoker(rp), nil, nil, nil, nil))
+	api := httptest.NewServer(local.NewHandler(local.Ref{Namespace: "team-a", Function: "a"}, res, local.NewInvoker(rp), nil, nil, nil, nil, nil))
 	defer api.Close()
 
 	resp, err := http.Post(api.URL+"/invoke/b", "application/json", strings.NewReader(`{}`))

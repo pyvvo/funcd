@@ -7,13 +7,19 @@ import (
 // Bucket is a namespaced blob domain (ADR-0080): the S3 *bucket*, mirroring KVStore — a named domain
 // with a set of sub-domains (prefixes, the medallion layers) each with a single-writer owner, and an
 // optional per-object resource policy. A function reaches a prefix only through a Function.spec.blob
-// binding (default-deny); the prefix's owner is the single writer. Unlike KVStore, Bucket carries NO
-// observed status (no reconciler) — it is a pure data-model resource. Deletion-protected by referencing
-// bindings and by non-empty data.
+// binding (default-deny); the prefix's owner is the single writer. Its status reports the blob storage's health
+// (ADR-0215 Decision 7). Deletion-protected by referencing bindings and by non-empty data.
 type Bucket struct {
 	TypeMeta   `json:",inline"`
 	ObjectMeta `json:"metadata"`
-	Spec       BucketSpec `json:"spec"`
+	Spec       BucketSpec   `json:"spec"`
+	Status     BucketStatus `json:"status,omitempty"`
+}
+
+// BucketStatus is the observed state of a Bucket (ADR-0215 Decision 7): phase Ready or Degraded, and a Ready
+// condition that follows the blob storage probe.
+type BucketStatus struct {
+	Status `json:",inline"`
 }
 
 // BucketSpec is the desired state of a Bucket (ADR-0080): its sub-domains (prefixes) and an optional
@@ -40,6 +46,9 @@ type BucketPrefix struct {
 
 // GroupVersionKind returns the constant GVK for Bucket.
 func (b *Bucket) GroupVersionKind() GroupVersionKind { return KindBucket.GVK() }
+
+// GetStatus returns the shared Status pointer, implementing StatusObject.
+func (b *Bucket) GetStatus() *Status { return &b.Status.Status }
 
 // Validate performs envelope validation via the shared validateMeta helper, then the BucketSpec rules
 // JSON Schema can't express: MaxObjectBytes is non-negative; and within the bucket, prefix names are

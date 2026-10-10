@@ -612,10 +612,13 @@ type pacingKey struct {
 	lo, hi     v1.Duration
 }
 
-// pacing parses the ADR-0163 keys and app.upgradeTimeout (ADR-0200) with parseDuration and their bounds (ADR-0194),
-// then checks ADR-0163 Decision 5's orderings and that a set app.upgradeTimeout is more than runtime.bootTimeout, each
-// failure a fault.Invalid naming the first key with the other bound. An unset app.upgradeTimeout is max(5m, twice
-// runtime.bootTimeout), so one boot retry fits.
+// pacing parses the ADR-0163 keys, app.upgradeTimeout (ADR-0200), runtime.livenessTimeout and the health keys
+// (ADR-0215) with parseDuration and their bounds (ADR-0194), then checks ADR-0163 Decision 5's orderings, that a set
+// app.upgradeTimeout is more than runtime.bootTimeout, that a set runtime.livenessTimeout is at least twice
+// runtime.supervisionPeriod and that health.storageProbeTimeout is less than health.storageProbeInterval, each failure a
+// fault.Invalid naming the first key with the other bound. An unset app.upgradeTimeout is max(5m, twice
+// runtime.bootTimeout), so one boot retry fits; an unset runtime.livenessTimeout is max(30s, three
+// runtime.supervisionPeriod).
 func pacing(cfg config.Config) (funcd.Pacing, error) {
 	var p funcd.Pacing
 	keys := []pacingKey{
@@ -639,6 +642,9 @@ func pacing(cfg config.Config) (funcd.Pacing, error) {
 		{"server.shutdownTimeout", cfg.Server.ShutdownTimeout, 15 * time.Second, &p.ShutdownTimeout, minPositive, v1.MaxDuration},
 		{"server.network.workerSyncInterval", cfg.Server.Network.WorkerSyncInterval, 2 * time.Second, &p.WorkerSyncInterval, minPositive, v1.MaxDuration},
 		{"app.upgradeTimeout", cfg.App.UpgradeTimeout, 0, &p.AppUpgradeTimeout, minPositive, v1.MaxDuration},
+		{"runtime.livenessTimeout", cfg.Runtime.LivenessTimeout, 0, &p.LivenessTimeout, minPositive, v1.MaxDuration},
+		{"health.storageProbeInterval", cfg.Health.StorageProbeInterval, 10 * time.Second, &p.StorageProbeInterval, minPositive, v1.MaxDuration},
+		{"health.storageProbeTimeout", cfg.Health.StorageProbeTimeout, 2 * time.Second, &p.StorageProbeTimeout, minPositive, v1.MaxDuration},
 	}
 	for _, k := range keys {
 		d, err := parseDuration(k.key, k.value, k.def, k.lo, k.hi)
@@ -658,6 +664,10 @@ func pacing(cfg config.Config) (funcd.Pacing, error) {
 			p.AppUpgradeTimeout = max(5*time.Minute, 2*p.BootTimeout)
 		}
 	}
+	livenessSet := p.LivenessTimeout > 0
+	if !livenessSet {
+		p.LivenessTimeout = funcd.DefaultLivenessTimeout(p.SupervisionPeriod)
+	}
 	refuse := func(key string, d time.Duration, want string) error {
 		return fault.Invalidf("buildOptions", "config key %q has invalid value %q (want %s)", key, d.String(), want)
 	}
@@ -670,6 +680,10 @@ func pacing(cfg config.Config) (funcd.Pacing, error) {
 		return funcd.Pacing{}, refuse("eventing.deliveryBackoffMax", p.DeliveryBackoffMax, "at least eventing.deliveryBackoffInitial, "+p.DeliveryBackoffInitial.String())
 	case upgradeSet && p.AppUpgradeTimeout <= p.BootTimeout:
 		return funcd.Pacing{}, refuse("app.upgradeTimeout", p.AppUpgradeTimeout, "more than runtime.bootTimeout, "+p.BootTimeout.String())
+	case livenessSet && p.LivenessTimeout/2 < p.SupervisionPeriod:
+		return funcd.Pacing{}, refuse("runtime.livenessTimeout", p.LivenessTimeout, "at least twice runtime.supervisionPeriod, "+p.SupervisionPeriod.String())
+	case p.StorageProbeTimeout >= p.StorageProbeInterval:
+		return funcd.Pacing{}, refuse("health.storageProbeTimeout", p.StorageProbeTimeout, "less than health.storageProbeInterval, "+p.StorageProbeInterval.String())
 	}
 	return p, nil
 }

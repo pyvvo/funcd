@@ -120,6 +120,13 @@ func (f *Facade) resolveAuth(ctx context.Context, ns v1.NamespaceName, fn v1.Obj
 	return b, sub, nil
 }
 
+// CheckRead resolves the alias, asks the PDP s3::read on its prefix and resolves its bucket, as Get does, with no
+// storage call: the dependency check of a caller's binding (ADR-0215 Decision 3).
+func (f *Facade) CheckRead(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias string) error {
+	_, _, err := f.resolveAuth(ctx, ns, fn, alias, auth.ActionS3Read)
+	return err
+}
+
 // Get returns the object's bytes for the alias's key (found=false on a missing object). The PDP
 // authorizes s3::read on the bound prefix (ADR-0127).
 func (f *Facade) Get(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias, key string) ([]byte, bool, error) {

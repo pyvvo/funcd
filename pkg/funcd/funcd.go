@@ -61,6 +61,7 @@ import (
 	"github.com/pyvvo/funcd/internal/function"
 	"github.com/pyvvo/funcd/internal/gateway"
 	"github.com/pyvvo/funcd/internal/gc"
+	"github.com/pyvvo/funcd/internal/health"
 	"github.com/pyvvo/funcd/internal/kvstore"
 	kvmemory "github.com/pyvvo/funcd/internal/kvstore/memory"
 	"github.com/pyvvo/funcd/internal/network"
@@ -362,6 +363,7 @@ type Platform struct {
 
 	routeReconciler *route.Reconciler // Sets the full Route table once before the controller runs (ADR-0176)
 	kvReconciler    *kvsvc.Reconciler // reclaims deleted stores' data once before the controller runs (issue #708)
+	prober          *health.Prober    // the storage probes (ADR-0215), started before the controller runs
 
 	dataPlaneServer   *http.Server // function-invocation listener (ADR-0033)
 	dataPlaneListener net.Listener
@@ -593,6 +595,7 @@ func (p *Platform) buildControlPlane() error {
 	// written via context.blob are the objects the S3 frontend serves. A nil interface (not a nil
 	// *Facade) keeps the routes off; a typed nil pointer would slip past NewHandler's nil check.
 	var blobPort local.Blob
+	var blobCheck health.ReadChecker
 	if c.blob != nil {
 		blobResolver, rerr := blobsvc.NewResolver(metaReader{c.store})
 		if rerr != nil {
@@ -607,14 +610,28 @@ func (p *Platform) buildControlPlane() error {
 		if berr != nil {
 			return fault.Wrapf(berr, fault.KindOf(berr), op, "build blob facade")
 		}
-		blobPort = blobFacade
+		blobPort, blobCheck = blobFacade, blobFacade
 	}
+	// ADR-0215: the storage probes read a sentinel key of the KV engine and the blob store; the dependency check the
+	// local API answers reads their results, the Facades' resolve and read authorization, the link resolver and the PDP.
+	probes := map[health.Target]health.Probe{health.TargetKV: health.KVProbe(c.kvStore)}
+	if c.blob != nil {
+		probes[health.TargetBlob] = health.BlobProbe(c.blob)
+	}
+	p.prober, err = health.NewProber(clock.System(), orDefault(c.pacing.StorageProbeInterval, defaultStorageProbeInterval),
+		orDefault(c.pacing.StorageProbeTimeout, defaultStorageProbeTimeout), probes, p.logger)
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build storage prober")
+	}
+	deps := health.NewChecker(health.CheckerDeps{
+		Store: c.store, KV: kvFacade, Blob: blobCheck, Links: local.NewResolver(c.store), Authz: cedarPDP, Health: p.prober,
+	})
 	nestedCap := c.nestedInFlightCap
 	if nestedCap == 0 {
 		nestedCap = defaultNestedInFlightCap
 	}
 	invoker := local.NewNestedCapInvoker(local.NewInvoker(dpHolder), nestedCap, invokeMeter(c.telemetry))
-	p.invokeMgr = local.NewManager(invokeSockDir, c.store, invoker, cedarPDP, kvFacade, blobPort, p.logger)
+	p.invokeMgr = local.NewManager(invokeSockDir, c.store, invoker, cedarPDP, kvFacade, blobPort, deps, p.logger)
 
 	// Egress gateway + DNS forwarder (ADR-0117, F81): the sole egress PEP + the domain trust anchor.
 	// Wired only when enabled (Linux/containerd only; egress.New is a no-op elsewhere, mirroring F80).
@@ -733,6 +750,7 @@ func (p *Platform) buildControlPlane() error {
 		BootBackoffMax:       c.bootBackoffMax,
 		SupervisionPeriod:    c.pacing.SupervisionPeriod,
 		BootTimeout:          c.pacing.BootTimeout,
+		LivenessTimeout:      c.pacing.livenessTimeout(),
 		DrainGrace:           c.pacing.DrainGrace,
 		HandOutSettle:        c.pacing.HandOutSettle,
 		DrainPollInterval:    c.pacing.DrainPollInterval,
@@ -906,13 +924,26 @@ func (p *Platform) buildControlPlane() error {
 	// prefix and on a table removed from spec.tables[] reclaim its sub-prefix, via the driver's
 	// DropPrefix+List (type-asserted PrefixManager — a driver without it gets a no-op).
 	prefixMgr, _ := c.kvStore.(kvsvc.PrefixManager)
-	kvReconciler, err := kvsvc.NewReconciler(kvsvc.ReconcilerDeps{Store: c.store, KV: prefixMgr, Logger: p.logger})
+	kvReconciler, err := kvsvc.NewReconciler(kvsvc.ReconcilerDeps{Store: c.store, KV: prefixMgr, Logger: p.logger, Health: p.prober})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build KVStore reconciler")
 	}
 	ctrl.Register(v1.KindKVStore.GVK(), kvReconciler)
 	p.kvReconciler = kvReconciler
 	ctrl.Watches(v1.KindFunction.GVK(), kvReconciler.MapFunction) // status.bindings counts Function.spec.kv
+	// ADR-0215 Decision 7: a Bucket's status follows the blob probe; a probe flip re-runs every KVStore or Bucket.
+	bucketReconciler, err := blobsvc.NewReconciler(blobsvc.ReconcilerDeps{Store: c.store, Health: p.prober, Logger: p.logger})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build Bucket reconciler")
+	}
+	ctrl.Register(v1.KindBucket.GVK(), bucketReconciler)
+	p.prober.OnChange(func(t health.Target, _ health.Result) {
+		kind := v1.KindKVStore
+		if t == health.TargetBlob {
+			kind = v1.KindBucket
+		}
+		enqueueAll(context.Background(), c.store, ctrl, kind, p.logger)
+	})
 	// CatalogService reconciler (ADR-0086 as reworked by ADR-0087/F48/F57): the DuckDB/Quack engine
 	// is deployed by the add-on-provider runtime (NOT a backing Function). The provider-runtime reuses
 	// the EXISTING container port + ingress gateway; the reconciler derives the per-fn S3 keypair over
@@ -1058,6 +1089,7 @@ func (p *Platform) buildControlPlane() error {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build App reconciler")
 	}
 	ctrl.Register(v1.KindApp.GVK(), appReconciler)
+	ctrl.Watches(v1.KindFunction.GVK(), appReconciler.MapStepFunction) // a Workflow part waits for its step Functions (ADR-0215)
 	for _, pair := range gc.Pairs() {
 		if pair.Owner == v1.KindApp && pair.Child != v1.KindAppRevision { // a record, not a part (ADR-0200)
 			ctrl.Watches(pair.Child.GVK(), appReconciler.MapPart)
@@ -1373,6 +1405,9 @@ func (p *Platform) Run(ctx context.Context) error {
 	if _, err := p.routeReconciler.Reconcile(ctx, controller.Request{GVK: v1.KindRoute.GVK()}); err != nil && ctx.Err() == nil {
 		return abort(fault.Wrapf(err, fault.KindOf(err), "funcd.Run", "load the Route table"))
 	}
+
+	// ADR-0215 Decision 6: the first storage probe runs before the reconcilers read its result.
+	p.prober.Start(ctx)
 
 	wg.Add(4)
 	go func() {
@@ -1978,6 +2013,19 @@ func (p *Platform) reconcileEgressWorkers(ctx context.Context, prev map[netip.Ad
 		}
 	}
 	return live
+}
+
+// enqueueAll enqueues every object of kind in the store.
+func enqueueAll(ctx context.Context, st store.Store, ctrl *controller.Controller, kind v1.Kind, logger *slog.Logger) {
+	list, err := st.List(ctx, kind.GVK(), store.ListOptions{})
+	if err != nil {
+		logger.WarnContext(ctx, "could not list the objects a storage probe change affects", "kind", string(kind), "error", err)
+		return
+	}
+	for _, o := range list.Items {
+		m := o.GetObjectMeta()
+		ctrl.Enqueue(controller.Request{GVK: kind.GVK(), Namespace: m.Namespace, Name: m.Name})
+	}
 }
 
 // s3BucketFor builds the s3gateway BucketFor resolver (ADR-0080): it maps an S3

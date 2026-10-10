@@ -351,6 +351,27 @@ func (h *shimRig) poolPID(t *testing.T, rt, worker string) int {
 	return 0
 }
 
+// settledPoolPID waits until the pool of worker id worker on runtime rt runs one pool worker and returns its PID. The
+// first bring-up builds a worker for a's manifest, then one for a and b's beside it, and drains the first once the
+// second serves, so a PID read before then can be the drained one's.
+func (h *shimRig) settledPoolPID(t *testing.T, rt, worker string) int {
+	t.Helper()
+	var pid int
+	require.Eventually(t, func() bool {
+		insts, err := h.rt.List(context.Background(), "default")
+		require.NoError(t, err)
+		running := 0
+		for _, in := range insts {
+			if strings.HasPrefix(string(in.Name), "__pool__"+rt+"__"+worker+"__") && in.State == runtime.StateRunning {
+				running++
+				pid = in.PID
+			}
+		}
+		return running == 1
+	}, 20*time.Second, 50*time.Millisecond, "the pool settles on one worker")
+	return pid
+}
+
 // scenario: workflow-steps-split-by-secrets — in a default-shared Workflow, step s1 binds Secret db and s2 none:
 // both are Ready, only s1's env holds db's key, and their status.pool differ.
 func TestScenarioWorkflowStepsSplitBySecrets(t *testing.T) {

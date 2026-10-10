@@ -197,7 +197,7 @@ func TestNestedCapRefusalResponseAndLog(t *testing.T) {
 
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	h := local.NewHandler(ref("A"), &fakeResolver{target: ref("H"), timeout: time.Second}, inv, nil, nil, nil, logger)
+	h := local.NewHandler(ref("A"), &fakeResolver{target: ref("H"), timeout: time.Second}, inv, nil, nil, nil, nil, logger)
 	rec := post(t, h, "h", `{}`)
 
 	require.Equal(t, http.StatusTooManyRequests, rec.Code)

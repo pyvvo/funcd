@@ -154,6 +154,7 @@ runtime:
   # drainGrace: 30s               # longest drain of a demoted revision. default: 30s
   # handOutSettle: 2s             # idle-after-hand-out wait; at most drainGrace. default: 2s
   # drainPollInterval: 1s         # longest gap between drain passes. default: 1s
+  # livenessTimeout: 30s          # a listening replica silent on /health/liveness this long is restarted (ADR-0215); when set, at least twice supervisionPeriod. default: 30s, or three supervisionPeriod when larger
   process:
     stopGrace: 3s                 # SIGTERM-to-SIGKILL wait for stop, shutdown and the boot reap (ADR-0167); 0 < d <= 10s. default: 3s; server.shutdownTimeout + stopGrace + 5s must fit TimeoutStopSec
   # containerd:                   # used only when mode: containerd
@@ -220,3 +221,8 @@ log:
 # app:
 #   upgradeTimeout: 5m            # an upgrade not Ready this long fails its AppRevision; more than runtime.bootTimeout. default: 5m, or twice runtime.bootTimeout when larger
 #   revisionHistory: 10           # AppRevisions kept besides the current one; 1..100. default: 10
+
+# --- health: the storage probes behind KVStore and Bucket status (ADR-0215) ---------------------
+# health:
+#   storageProbeInterval: 10s     # how often the KV engine and blob store are read. default: 10s
+#   storageProbeTimeout: 2s       # bound of one storage probe; less than storageProbeInterval. default: 2s

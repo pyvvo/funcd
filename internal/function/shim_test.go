@@ -33,6 +33,7 @@ import (
 	"github.com/pyvvo/funcd/internal/store/memory"
 	"github.com/pyvvo/funcd/internal/testkit/langmod"
 	"github.com/pyvvo/funcd/internal/testkit/realshim"
+	"github.com/pyvvo/funcd/internal/workernode/local"
 )
 
 // fakeRuntime is a controllable runtime.Runtime for the shim-mode reconciler tests
@@ -69,7 +70,8 @@ type fakeRuntime struct {
 	clk       clock.Clock // ages instances, as Deps.Clock does the reconciler's reads (ADR-0161)
 	// memberStates overrides a pool member's /health/members entry (state, error); every other member reads ready.
 	memberStates map[string][2]string
-	membersDown  bool // GET /health/members answers 503, as a pool host too slow for the probe's timeout
+	memberDeps   map[string]*local.DependencyReport // a member's dependency report (ADR-0215 Decision 4)
+	membersDown  bool                               // GET /health/members answers 503, as a pool host too slow for the probe's timeout
 }
 
 func newFakeRuntime(ip string, port int) *fakeRuntime {
@@ -91,6 +93,7 @@ func newFakeRuntime(ip string, port int) *fakeRuntime {
 		clk:       clock.System(),
 
 		memberStates: map[string][2]string{},
+		memberDeps:   map[string]*local.DependencyReport{},
 	}
 }
 
@@ -123,9 +126,15 @@ func (f *fakeRuntime) serveMembers(w http.ResponseWriter) {
 			paths = append(paths, p)
 		}
 	}
-	states := maps.Clone(f.memberStates)
+	states, deps := maps.Clone(f.memberStates), maps.Clone(f.memberDeps)
 	f.mu.Unlock()
-	out := []map[string]string{}
+	type entry struct {
+		Name       string                  `json:"name"`
+		State      string                  `json:"state"`
+		Error      string                  `json:"error,omitempty"`
+		Dependency *local.DependencyReport `json:"dependency,omitempty"`
+	}
+	out := []entry{}
 	seen := map[string]bool{}
 	for _, p := range paths {
 		data, err := os.ReadFile(p)
@@ -141,9 +150,9 @@ func (f *fakeRuntime) serveMembers(w http.ResponseWriter) {
 				continue
 			}
 			seen[row.Name] = true
-			e := map[string]string{"name": row.Name, "state": "ready"}
+			e := entry{Name: row.Name, State: "ready", Dependency: deps[row.Name]}
 			if st, ok := states[row.Name]; ok {
-				e["state"], e["error"] = st[0], st[1]
+				e.State, e.Error = st[0], st[1]
 			}
 			out = append(out, e)
 		}

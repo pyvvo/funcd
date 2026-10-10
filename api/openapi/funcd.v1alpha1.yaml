@@ -821,6 +821,8 @@ components:
           $ref: "#/components/schemas/ObjectMeta"
         spec:
           $ref: "#/components/schemas/BucketSpec"
+        status:
+          $ref: "#/components/schemas/BucketStatus"
       required:
         - apiVersion
         - kind
@@ -856,6 +858,29 @@ components:
             - "null"
       required:
         - prefixes
+      type: object
+    BucketStatus:
+      additionalProperties: false
+      properties:
+        conditions:
+          items:
+            $ref: "#/components/schemas/Condition"
+          type:
+            - array
+            - "null"
+        observedGeneration:
+          format: int64
+          type: integer
+        phase:
+          enum:
+            - Pending
+            - Deploying
+            - Ready
+            - Idle
+            - Degraded
+            - Failed
+            - Terminating
+          type: string
       type: object
     BuiltinStep:
       additionalProperties: false

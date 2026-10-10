@@ -16,7 +16,7 @@ import (
 // Issue #172: a body over a local-API MaxBytesReader cap is 413 payload-too-large (as on the data plane,
 // ADR-0134), not 400 invalid. The cap fires before the resolver, invoker or port is reached.
 func TestIssue172_OverCapBodyIs413(t *testing.T) {
-	h := NewHandler(Ref{Namespace: "default", Function: "fn"}, nil, nil, nil, capFakeBlob{}, capFakeBlob{}, nil)
+	h := NewHandler(Ref{Namespace: "default", Function: "fn"}, nil, nil, nil, capFakeBlob{}, capFakeBlob{}, nil, nil)
 	for _, tc := range []struct {
 		name, method, path string
 		limit              int64

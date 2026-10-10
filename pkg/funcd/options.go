@@ -680,6 +680,11 @@ type Pacing struct {
 	DeliveryBackoffMax, ActivationTimeout, ReclaimInterval, ShutdownTimeout, WorkerSyncInterval time.Duration
 	// AppUpgradeTimeout bounds an App upgrade (ADR-0200): zero ⇒ max(5m, twice the effective BootTimeout).
 	AppUpgradeTimeout time.Duration
+	// LivenessTimeout is how long a listening replica may stay silent on /health/liveness (ADR-0215): zero ⇒
+	// DefaultLivenessTimeout of the effective SupervisionPeriod; a set one is at least twice it. StorageProbeInterval
+	// and StorageProbeTimeout pace the storage probes: zero ⇒ 10s and 2s; the effective timeout is less than the
+	// effective interval.
+	LivenessTimeout, StorageProbeInterval, StorageProbeTimeout time.Duration
 }
 
 // The defaults WithPacing checks its orderings against: the components' own zero defaults.
@@ -695,7 +700,29 @@ const (
 	defaultWorkerSyncInterval     = 2 * time.Second
 	maxDefaultRetryBackoff        = time.Hour
 	minDefaultAppUpgradeTimeout   = 5 * time.Minute
+	defaultSupervisionPeriod      = 10 * time.Second
+	minDefaultLivenessTimeout     = 30 * time.Second
+	defaultStorageProbeInterval   = 10 * time.Second
+	defaultStorageProbeTimeout    = 2 * time.Second
 )
+
+// DefaultLivenessTimeout is runtime.livenessTimeout's default for a supervision period (ADR-0215): max(30s, three
+// periods), saturating.
+func DefaultLivenessTimeout(supervisionPeriod time.Duration) time.Duration {
+	if supervisionPeriod > math.MaxInt64/3 {
+		return math.MaxInt64
+	}
+	return max(minDefaultLivenessTimeout, 3*supervisionPeriod)
+}
+
+// livenessTimeout is the effective liveness timeout: a zero LivenessTimeout is DefaultLivenessTimeout of the
+// effective SupervisionPeriod.
+func (p Pacing) livenessTimeout() time.Duration {
+	if p.LivenessTimeout > 0 {
+		return p.LivenessTimeout
+	}
+	return DefaultLivenessTimeout(orDefault(p.SupervisionPeriod, defaultSupervisionPeriod))
+}
 
 func orDefault(d, def time.Duration) time.Duration {
 	if d > 0 {
@@ -725,9 +752,10 @@ func (p Pacing) appUpgradeTimeout() time.Duration {
 	return max(minDefaultAppUpgradeTimeout, 2*boot)
 }
 
-// WithPacing sets the pacing times (ADR-0163). A negative field, the five orderings of Decision 5, or a non-zero
-// AppUpgradeTimeout at or below BootTimeout (ADR-0200), broken on the effective values (a zero field read as its
-// default; a zero DeliveryBackoffMax is max(10s, DeliveryBackoffInitial)), ⇒ fault.Invalid naming the field.
+// WithPacing sets the pacing times (ADR-0163). A negative field, the five orderings of Decision 5, a non-zero
+// AppUpgradeTimeout at or below BootTimeout (ADR-0200), a non-zero LivenessTimeout below twice SupervisionPeriod or a
+// StorageProbeTimeout not below StorageProbeInterval (ADR-0215), broken on the effective values (a zero field read as
+// its default; a zero DeliveryBackoffMax is max(10s, DeliveryBackoffInitial)), ⇒ fault.Invalid naming the field.
 func WithPacing(p Pacing) Option {
 	return func(c *config) error {
 		const op = "funcd.WithPacing"
@@ -754,6 +782,11 @@ func WithPacing(p Pacing) Option {
 			return fault.Invalidf(op, "Pacing.DeliveryBackoffMax %s is below DeliveryBackoffInitial %s", p.DeliveryBackoffMax, initial)
 		case p.AppUpgradeTimeout > 0 && p.AppUpgradeTimeout <= boot:
 			return fault.Invalidf(op, "Pacing.AppUpgradeTimeout %s must be more than BootTimeout %s", p.AppUpgradeTimeout, boot)
+		case p.LivenessTimeout > 0 && p.LivenessTimeout/2 < orDefault(p.SupervisionPeriod, defaultSupervisionPeriod):
+			return fault.Invalidf(op, "Pacing.LivenessTimeout %s must be at least twice SupervisionPeriod %s", p.LivenessTimeout, orDefault(p.SupervisionPeriod, defaultSupervisionPeriod))
+		case orDefault(p.StorageProbeTimeout, defaultStorageProbeTimeout) >= orDefault(p.StorageProbeInterval, defaultStorageProbeInterval):
+			return fault.Invalidf(op, "Pacing.StorageProbeTimeout %s must be less than StorageProbeInterval %s",
+				orDefault(p.StorageProbeTimeout, defaultStorageProbeTimeout), orDefault(p.StorageProbeInterval, defaultStorageProbeInterval))
 		}
 		c.pacing = p
 		return nil

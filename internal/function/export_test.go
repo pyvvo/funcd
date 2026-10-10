@@ -2,6 +2,7 @@ package function
 
 import (
 	"context"
+	"strings"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/store"
@@ -33,9 +34,15 @@ func (s RefusingStore) Update(ctx context.Context, obj v1.Object) (v1.Object, er
 	return s.Store.Update(ctx, obj)
 }
 
-// PoolLiveLen is how many pool keys r holds a liveness time for.
+// PoolLiveLen is how many pool workers r holds a liveness time for.
 func PoolLiveLen(r *Reconciler) int {
-	r.poolMu.Lock()
-	defer r.poolMu.Unlock()
-	return len(r.poolLive)
+	r.liveMu.Lock()
+	defer r.liveMu.Unlock()
+	n := 0
+	for id := range r.live {
+		if strings.Contains(string(id), "/"+poolInstancePrefix) {
+			n++
+		}
+	}
+	return n
 }
