@@ -17,6 +17,11 @@ import (
 // Snapshot emits every key and its latest value, in key order, from ONE read transaction with ONE iterator:
 // never DB.Backup or a Stream, whose producers each read at their own time (#806).
 func Snapshot(ctx context.Context, db *badger.DB, emit func(snapshot.Record) error) error {
+	return SnapshotPrefix(ctx, db, nil, emit)
+}
+
+// SnapshotPrefix is Snapshot over the keys under prefix, each emitted without it (ADR-0209 Decision 7).
+func SnapshotPrefix(ctx context.Context, db *badger.DB, prefix []byte, emit func(snapshot.Record) error) error {
 	const op = "badger.Snapshot"
 	if err := ctx.Err(); err != nil {
 		return err
@@ -24,9 +29,10 @@ func Snapshot(ctx context.Context, db *badger.DB, emit func(snapshot.Record) err
 	return db.View(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
 		opts.PrefetchValues = false
+		opts.Prefix = prefix
 		it := txn.NewIterator(opts)
 		defer it.Close()
-		for it.Rewind(); it.Valid(); it.Next() {
+		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
@@ -35,7 +41,7 @@ func Snapshot(ctx context.Context, db *badger.DB, emit func(snapshot.Record) err
 			if err != nil {
 				return fault.Internalf(op, "value of %q: %v", item.Key(), err)
 			}
-			if err := emit(snapshot.Record{Key: item.KeyCopy(nil), Value: val}); err != nil {
+			if err := emit(snapshot.Record{Key: item.KeyCopy(nil)[len(prefix):], Value: val}); err != nil {
 				return err
 			}
 		}

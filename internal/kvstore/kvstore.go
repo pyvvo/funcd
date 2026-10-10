@@ -5,7 +5,12 @@
 // are deferred behind this port.
 package kvstore
 
-import "context"
+import (
+	"context"
+	"strings"
+
+	"github.com/pyvvo/funcd/api/fault"
+)
 
 // KV is the key/value port. Errors are api/fault; every method is ctx-first.
 type KV interface {
@@ -18,4 +23,13 @@ type KV interface {
 	Delete(ctx context.Context, key string) error
 	// List returns the keys that start with prefix.
 	List(ctx context.Context, prefix string) (keys []string, err error)
+}
+
+// CheckStorePrefix refuses a per-store export prefix (ADR-0209 Decision 7) that is empty, lacks the trailing "/" or
+// starts with the NUL of a driver's reserved keys.
+func CheckStorePrefix(op, prefix string) error {
+	if prefix == "" || !strings.HasSuffix(prefix, "/") || strings.HasPrefix(prefix, "\x00") {
+		return fault.Invalidf(op, "store prefix %q: want <namespace>/<store>/", prefix)
+	}
+	return nil
 }

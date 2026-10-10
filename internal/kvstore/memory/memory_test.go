@@ -37,3 +37,9 @@ func TestScenarioKVStoreContractHolds(t *testing.T) {
 	t.Parallel()
 	kvstorecontract.Run(t, memory.New())
 }
+
+// The per-store export contract (ADR-0209 Decision 7) on the in-memory driver.
+func TestSnapshotPrefixContract(t *testing.T) {
+	t.Parallel()
+	kvstorecontract.RunSnapshotPrefix(t, memory.New())
+}
