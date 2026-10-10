@@ -1,0 +1,4 @@
+configMaps:
+  - name: ${{ app.name + "-settings" }}
+    data:
+      TZ: Europe/Paris

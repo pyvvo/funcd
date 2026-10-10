@@ -1,0 +1,16 @@
+functions:
+  - name: ${{ app.name + "-planner" }}
+    runtime: nodejs22
+    handler: handle
+    image: ${{ images.planner }}
+    kv:
+      - alias: todos
+        store: ${{ app.name + "-store" }}
+        table: todos
+      - alias: runs
+        store: ${{ app.name + "-store" }}
+        table: runs
+    blob:
+      - alias: events
+        bucket: ${{ app.name + "-files" }}
+        prefix: events

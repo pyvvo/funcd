@@ -1,0 +1,10 @@
+host: todo.example.com
+minReplicas: 1
+planEvery: 1h
+analytics:
+  enabled: true
+data:
+  deletion: retain
+backup:
+  enabled: true
+  target: s3://todo-backups/nightly

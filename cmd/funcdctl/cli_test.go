@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -27,7 +28,28 @@ import (
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
-const devToken = "dev-secret"
+const (
+	devToken    = "dev-secret"
+	viewerToken = "viewer-secret"
+)
+
+// lockedBuffer is an io.Writer a test reads while other goroutines write to it.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
 
 // execCLI drives the cobra root (ADR-0042) with an injected SDK client (nil for the artifact
 // verbs), the test seam replacing the old run(ctx, args, out, c).
@@ -77,7 +99,8 @@ func newRacingServer(t *testing.T, path string, races int32, bump func(store.Sto
 func newTestServerVia(t *testing.T, wrap func(http.Handler, store.Store) http.Handler) (*sdk.Client, string, store.Store) {
 	t.Helper()
 	creds := middleware.NewStaticCredentials(map[string]auth.Identity{
-		devToken: {Subject: "dev", Role: auth.RoleDeveloper, Namespaces: []v1.NamespaceName{"team-a"}},
+		devToken:    {Subject: "dev", Role: auth.RoleDeveloper, Namespaces: []v1.NamespaceName{"team-a"}},
+		viewerToken: {Subject: "viewer", Role: auth.RoleViewer, Namespaces: []v1.NamespaceName{"team-a"}},
 	})
 	st := store.New(memory.New())
 	h, err := controlplane.NewServer(controlplane.Deps{
@@ -367,7 +390,8 @@ spec:
 func TestScenarioCLIApplySite(t *testing.T) {
 	t.Parallel()
 	creds := middleware.NewStaticCredentials(map[string]auth.Identity{
-		devToken: {Subject: "dev", Role: auth.RoleDeveloper, Namespaces: []v1.NamespaceName{"team-a"}},
+		devToken:    {Subject: "dev", Role: auth.RoleDeveloper, Namespaces: []v1.NamespaceName{"team-a"}},
+		viewerToken: {Subject: "viewer", Role: auth.RoleViewer, Namespaces: []v1.NamespaceName{"team-a"}},
 	})
 	h, err := controlplane.NewServer(controlplane.Deps{
 		Store:       store.New(memory.New()),

@@ -250,8 +250,8 @@ func (a *cli) workflowPauseCmd(verb string, paused bool) *cobra.Command {
 	return cmd
 }
 
-// applyAttempts bounds the re-apply of one resource that loses its update with a Conflict (funcdctl dev and
-// applyRead).
+// applyAttempts bounds the re-apply of one resource that loses its update with a Conflict (funcdctl dev, app deploy
+// and applyRead).
 const applyAttempts = 5
 
 // applyRead reads the object, lets change edit it and applies it. The apply is conditional on the version read

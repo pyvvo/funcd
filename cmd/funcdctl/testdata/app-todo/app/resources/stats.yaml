@@ -1,0 +1,15 @@
+functions:
+  - name: ${{ app.name + "-stats" }}
+    runtime: nodejs22
+    handler: handle
+    image: ${{ images.stats }}
+    catalogs:
+      - alias: lake
+        catalog: ${{ app.name + "-lake" }}
+routes:
+  - name: ${{ app.name + "-stats" }}
+    host: ${{ values.host }}
+    rules:
+      - path: /stats
+        backend:
+          function: ${{ app.name + "-stats" }}

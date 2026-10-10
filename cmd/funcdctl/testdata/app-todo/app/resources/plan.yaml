@@ -1,0 +1,6 @@
+workflows:
+  - name: ${{ app.name + "-plan" }}
+    steps:
+      - name: due
+        function:
+          image: ${{ images.planner }}

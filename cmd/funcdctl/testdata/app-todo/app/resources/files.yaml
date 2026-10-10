@@ -1,0 +1,10 @@
+buckets:
+  - name: ${{ app.name + "-files" }}
+    deletion: ${{ values.data.deletion }}
+    prefixes:
+      - name: attachments
+        owner: ${{ app.name + "-api" }}
+      - name: events
+        owner: ${{ app.name + "-planner" }}
+      - name: lake
+        owner: ${{ app.name + "-lake" }}

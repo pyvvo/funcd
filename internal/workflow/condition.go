@@ -39,7 +39,7 @@ func checkWhenConditions(spec v1.WorkflowSpec, rs *runState, contracts map[v1.Ob
 // whenSchemaResolver builds the schema-backed Resolver for one step's when: the roots are `input` (the
 // derived workflow input schema) and `step.<parent>.output` for each typed direct parent. A join: any
 // step with two or more parents may run with a branch skipped, so its parent roots are optional (ADR-0166).
-func whenSchemaResolver(n *stepNode, contracts map[v1.ObjectName]v1.WorkflowContract, inputSchema json.RawMessage) schemaResolver {
+func whenSchemaResolver(n *stepNode, contracts map[v1.ObjectName]v1.WorkflowContract, inputSchema json.RawMessage) expr.Resolver {
 	schemas := map[string]json.RawMessage{}
 	if len(inputSchema) > 0 {
 		schemas["input"] = inputSchema
@@ -57,79 +57,7 @@ func whenSchemaResolver(n *stepNode, contracts map[v1.ObjectName]v1.WorkflowCont
 			}
 		}
 	}
-	return schemaResolver{schemas: schemas, decoded: map[string]*schemaNode{}, optionalRoots: optional}
-}
-
-// schemaResolver is an expr.Resolver answering path types from cached JSON-Schema documents (the
-// reconcile-time twin of the runtime docResolver): it descends `properties`, strict where the schema is
-// precise (a declared-properties object with a missing key ⇒ NotFound, catching a misspelling) and
-// permissive where the schema is silent about nesting (V1 primitive-only — structural typing is deferred).
-// It decodes each schema once, on its first reference, so a check costs one decoding of each schema
-// however many references it resolves.
-type schemaResolver struct {
-	schemas       map[string]json.RawMessage
-	decoded       map[string]*schemaNode
-	optionalRoots map[string]bool
-}
-
-// schemaNode is the part of a JSON Schema the resolvers read. A schema that is not an object, or a
-// keyword of the wrong type, decodes to its zero value, which reads as a schema silent about the keyword.
-type schemaNode struct {
-	Properties map[string]*schemaNode `json:"properties"`
-	Required   []string               `json:"required"`
-	Type       string                 `json:"type"`
-	Items      struct {
-		Type string `json:"type"`
-	} `json:"items"`
-	Default json.RawMessage `json:"default"`
-}
-
-func (s schemaResolver) Roots() []string {
-	out := make([]string, 0, len(s.schemas))
-	for k := range s.schemas {
-		out = append(out, k)
-	}
-	return out
-}
-
-func (s schemaResolver) Resolve(root string, path []string) (expr.Field, error) {
-	raw, ok := s.schemas[root]
-	if !ok {
-		return expr.Field{}, fault.NotFoundf("workflow.when", "root %q not in scope", root)
-	}
-	cur, ok := s.decoded[root]
-	if !ok {
-		cur = &schemaNode{}
-		_ = json.Unmarshal(raw, cur)
-		s.decoded[root] = cur
-	}
-	required := true // ADR-0095: a path is required only if every segment is in its parent's `required`
-	for _, seg := range path {
-		if cur == nil || cur.Properties == nil {
-			// The schema is silent about nesting — V1 can't type deeper; accept permissively.
-			return expr.Field{Type: "string", Required: required}, nil
-		}
-		next, found := cur.Properties[seg]
-		if !found {
-			return expr.Field{}, fault.NotFoundf("workflow.when", "field %q not in the schema", seg)
-		}
-		required = required && slices.Contains(cur.Required, seg)
-		cur = next
-	}
-	if cur == nil {
-		return expr.Field{Required: required}, nil
-	}
-	if len(path) == 0 && s.optionalRoots[root] {
-		// An optional root is never required or defaulted (a default does not stand in for a skipped
-		// branch), and its Type is never empty: an empty one reads as absent, and the root's guard would
-		// then skip checking what it guards (ADR-0166).
-		typ := cur.Type
-		if typ == "" {
-			typ = "object"
-		}
-		return expr.Field{Type: typ, Items: cur.Items.Type}, nil
-	}
-	return expr.Field{Type: cur.Type, Items: cur.Items.Type, Required: required, HasDefault: cur.Default != nil, Default: cur.Default}, nil
+	return expr.NewSchemaResolver(schemas, optional)
 }
 
 // evalWhen evaluates a step's when.condition (ADR-0095 native-JS boolean) against
@@ -254,7 +182,7 @@ func runtimeResolver(n *stepNode, rec *runstate.Record, input json.RawMessage, o
 type docResolver struct {
 	docs        map[string]json.RawMessage
 	decoded     map[string]interface{}
-	schemas     schemaResolver // per root, the run-pinned schema; none ⇒ no defaults
+	schemas     expr.Resolver // per root, the run-pinned schema; none ⇒ no defaults
 	absentRoots []string
 }
 

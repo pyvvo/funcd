@@ -1,0 +1,154 @@
+apiVersion: funcd.io/v1alpha1
+kind: App
+metadata:
+  name: todo
+  namespace: team-a
+  resourceGroup: todo
+spec:
+  buckets:
+  - deletion: retain
+    name: todo-files
+    prefixes:
+    - name: attachments
+      owner: todo-api
+    - name: events
+      owner: todo-planner
+    - name: lake
+      owner: todo-lake
+  catalogs:
+  - blob:
+    - alias: events
+      bucket: todo-files
+      prefix: events
+    - alias: lake
+      bucket: todo-files
+      prefix: lake
+    catalog:
+      bucket: todo-files
+      prefix: lake
+    name: todo-lake
+    resources: {}
+  configMaps:
+  - data:
+      TZ: Europe/Paris
+    name: todo-settings
+  eventSources:
+  - name: todo-plan-timer
+    timer:
+      events:
+      - interval: 1h
+        name: tick
+  functions:
+  - blob:
+    - alias: attachments
+      bucket: todo-files
+      prefix: attachments
+    config:
+    - todo-settings
+    handler: handle
+    image: registry.example/todo-api:1.0.0
+    kv:
+    - alias: todos
+      store: todo-store
+      table: todos
+    name: todo-api
+    pooling: {}
+    runtime: nodejs22
+    scaling:
+      minReplicas: 1
+    secrets:
+    - todo-stripe-key
+  - blob:
+    - alias: events
+      bucket: todo-files
+      prefix: events
+    handler: handle
+    image: registry.example/todo-planner:1.0.0
+    kv:
+    - alias: todos
+      store: todo-store
+      table: todos
+    - alias: runs
+      store: todo-store
+      table: runs
+    name: todo-planner
+    pooling: {}
+    runtime: nodejs22
+    scaling: {}
+  - catalogs:
+    - alias: lake
+      catalog: todo-lake
+    handler: handle
+    image: registry.example/todo-stats:1.0.3
+    name: todo-stats
+    pooling: {}
+    runtime: nodejs22
+    scaling: {}
+  - handler: handle
+    image: registry.example/todo-migrate:1.2.0
+    kv:
+    - alias: todos
+      store: todo-store
+      table: todos
+    name: todo-migrate
+    pooling: {}
+    runtime: nodejs22
+    scaling: {}
+    timeout: 10m
+  kv:
+  - deletion: retain
+    name: todo-store
+    tables:
+    - name: todos
+      owner: todo-api
+    - name: runs
+      owner: todo-planner
+  routes:
+  - host: todo.example.com
+    name: todo-api
+    rules:
+    - backend:
+        function: todo-api
+      path: /api
+  - host: todo.example.com
+    name: todo-stats
+    rules:
+    - backend:
+        function: todo-stats
+      path: /stats
+  secrets:
+  - description: Stripe keys for payments and webhooks
+    keys:
+    - STRIPE_API_KEY
+    - STRIPE_WEBHOOK_SECRET
+    name: todo-stripe-key
+  sensors:
+  - do:
+    - input:
+        tick: ${{ event.type }}
+      name: run-plan
+      "on": tick
+      workflow: todo-plan
+    name: todo-plan-schedule
+    "on":
+    - event: tick
+      name: tick
+      source: todo-plan-timer
+  sites:
+  - bucket:
+      name: todo-web
+    image: registry.example/todo-web:1.0.0
+    ingress:
+      host: todo.example.com
+      public: true
+    name: todo-web
+    prefix: web
+    spa: true
+  version: 1.2.0
+  workflows:
+  - name: todo-plan
+    pooling: {}
+    steps:
+    - function:
+        image: registry.example/todo-planner:1.0.0
+      name: due
