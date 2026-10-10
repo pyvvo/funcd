@@ -316,3 +316,53 @@ func TestAppChildStateSchema(t *testing.T) {
 		t.Fatalf("AppChildState enum = %v", got)
 	}
 }
+
+// ADR-0212 Decision 3: WithoutPause clears Paused alone and leaves the receiver unchanged; paused: false is absent
+// from the JSON, so a frozen spec never holds the key.
+func TestAppSpecWithoutPause(t *testing.T) {
+	a := fullApp()
+	a.Spec.Paused = true
+	got := a.Spec.WithoutPause()
+	if got.Paused || !a.Spec.Paused {
+		t.Fatalf("WithoutPause: Paused = %v, receiver Paused = %v", got.Paused, a.Spec.Paused)
+	}
+	want := a.Spec
+	want.Paused = false
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("WithoutPause changed another field:\n%+v\nwant\n%+v", got, want)
+	}
+	paused, err := json.Marshal(a.Spec)
+	if err != nil {
+		t.Fatalf("marshal spec: %v", err)
+	}
+	if !strings.Contains(string(paused), `"paused":true`) {
+		t.Errorf("a paused spec lacks paused: %s", paused)
+	}
+	data, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal spec: %v", err)
+	}
+	if strings.Contains(string(data), "paused") {
+		t.Errorf("paused: false is on the wire: %s", data)
+	}
+}
+
+// ADR-0212 Decision 2: lastSelfHeal names the part and marshals at as UTC milliseconds (ADR-0196).
+func TestAppSelfHealJSON(t *testing.T) {
+	at := time.Date(2026, 10, 8, 11, 12, 3, 123456789, time.FixedZone("CEST", 2*60*60))
+	s := AppStatus{LastSelfHeal: &AppSelfHeal{Kind: KindFunction, Name: "todo-api", At: NewTimestamp(at)}}
+	data, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshal status: %v", err)
+	}
+	if want := `"lastSelfHeal":{"kind":"Function","name":"todo-api","at":"2026-10-08T09:12:03.123Z"}`; !strings.Contains(string(data), want) {
+		t.Fatalf("status JSON = %s, want it to hold %s", data, want)
+	}
+	empty, err := json.Marshal(AppStatus{})
+	if err != nil {
+		t.Fatalf("marshal status: %v", err)
+	}
+	if strings.Contains(string(empty), "lastSelfHeal") {
+		t.Errorf("an App never healed has lastSelfHeal: %s", empty)
+	}
+}

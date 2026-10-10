@@ -1,7 +1,8 @@
 // Package app is the App kind's server side (ADR-0199, F113): the app-parts admission, which admits each declared
 // part as a direct write of it would be admitted, and the App reconciler, which writes the parts, reports one status
 // and prunes what a new spec drops. The reconciler also stamps an AppRevision per changed spec and records its
-// rollout, its deadline and the history (ADR-0200, F114). The owner GC removes the tree on App delete (internal/gc).
+// rollout, its deadline and the history (ADR-0200, F114), records each write-back of a hand edit and writes nothing
+// while spec.paused is set (ADR-0212, F115). The owner GC removes the tree on App delete (internal/gc).
 package app
 
 import (
@@ -39,6 +40,12 @@ type Deps struct {
 	// SupervisionPeriod is runtime.supervisionPeriod, the retry of a stopped pass or a blocked prune (ADR-0199
 	// Decision 6, as the Workflow materializer); 0 ⇒ controller.SupervisionPeriod.
 	SupervisionPeriod time.Duration
+	// Hold is the platform hold (ADR-0206 Decision 6); nil ⇒ never held. The deadline reads its ReleasedAt (ADR-0212
+	// Decision 6).
+	Hold interface {
+		Held() bool
+		ReleasedAt() time.Time
+	}
 }
 
 // Reconciler drives an App to its declared parts (controller.Reconciler). It keeps no state between passes: the
@@ -51,6 +58,7 @@ type Reconciler struct {
 	upgradeTimeout    time.Duration
 	revisionHistory   int
 	supervisionPeriod time.Duration
+	hold              interface{ ReleasedAt() time.Time }
 }
 
 // NewReconciler builds the App reconciler.
@@ -84,6 +92,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		upgradeTimeout:    cmp.Or(d.UpgradeTimeout, defaultUpgradeTimeout),
 		revisionHistory:   cmp.Or(d.RevisionHistory, defaultRevisionHistory),
 		supervisionPeriod: cmp.Or(d.SupervisionPeriod, controller.SupervisionPeriod),
+		hold:              d.Hold,
 	}, nil
 }
 
@@ -164,9 +173,9 @@ type stop struct {
 func (s *stop) msg() string { return fmt.Sprintf("%s: %s", partName(s.part), s.detail) }
 
 // Reconcile stamps an AppRevision when the spec changed, checks that the App owns every part that exists, writes the
-// parts that are absent or differ, reads each part's readiness, derives the rollout record, prunes the dropped objects
-// it controls once the latest revision is current, writes the App's status, then each changed AppRevision status,
-// and trims the history.
+// parts that are absent or differ, recording each self-heal, reads each part's readiness, derives the rollout record,
+// prunes the dropped objects it controls once the latest revision is current, writes the App's status, then each
+// changed AppRevision status, and trims the history. A paused App gets only its Paused condition (ADR-0212).
 func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (controller.Result, error) {
 	obj, err := r.store.Get(ctx, v1.KindApp.GVK(), req.Namespace, req.Name)
 	if fault.KindOf(err) == fault.NotFound {
@@ -176,6 +185,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), op, "get app %s/%s", req.Namespace, req.Name)
 	}
 	a := obj.(*v1.App)
+	if a.Spec.Paused {
+		return r.paused(ctx, a)
+	}
+	r.resume(a)
 	revs, err := r.revisions(ctx, a)
 	if err != nil {
 		return controller.Result{}, err
@@ -187,9 +200,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	stored := statuses(revs)
 	ents := entries(a)
 	objs := make(map[v1.ObjectRef]v1.Object, len(ents))
-	halt, wrote, err := r.apply(ctx, a, ents, objs, halt)
+	halt, wrote, healed, err := r.apply(ctx, a, ents, objs, halt, healing(revs, stored))
 	if err != nil {
 		return controller.Result{}, err
+	}
+	if len(healed) > 0 {
+		k := healed[len(healed)-1]
+		a.Status.LastSelfHeal = &v1.AppSelfHeal{Kind: k.Kind, Name: k.Name, At: v1.NewTimestamp(r.clock.Now())}
 	}
 	for _, e := range ents {
 		if e.ref {
@@ -227,11 +244,45 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	return res, r.record(ctx, a, revs, stored)
 }
 
+// paused is the pass of a paused App (ADR-0212 Decision 4): it reads only the App, sets Paused True SpecPaused and
+// writes the App status, which the store coalesces when unchanged. It stamps, writes, prunes and fails nothing, and
+// requeues nothing: a resume is an App update, which the App's watch brings. A Conflict is left to that next pass.
+func (r *Reconciler) paused(ctx context.Context, a *v1.App) (controller.Result, error) {
+	r.setCondition(&a.Status.Conditions, v1.Condition{
+		Type: condPaused, Status: v1.ConditionTrue, Reason: reasonPaused, Message: messagePaused, ObservedGeneration: a.Generation,
+	})
+	if _, err := r.store.Update(ctx, a); err != nil && fault.KindOf(err) != fault.Conflict {
+		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), op, "update app status %s/%s", a.Namespace, a.Name)
+	}
+	return controller.Result{}, nil
+}
+
+// resume sets Paused False Resumed on the first pass not paused that finds it True (ADR-0212 Decision 5), before the
+// stamp, so the deadline reads the resume; the pass's App status write stores it.
+func (r *Reconciler) resume(a *v1.App) {
+	if c, ok := a.Status.Conditions.Get(condPaused); ok && c.Status == v1.ConditionTrue {
+		r.setCondition(&a.Status.Conditions, v1.Condition{Type: condPaused, Status: v1.ConditionFalse, Reason: reasonResumed, ObservedGeneration: a.Generation})
+	}
+}
+
+// healing reports whether the latest revision's Applied was True before the pass (ADR-0212 Decision 1): only then is
+// the write of a part that is absent or whose spec differs a self-heal. A stamped revision has no Applied yet.
+func healing(revs []*v1.AppRevision, stored map[v1.ObjectName]v1.AppRevisionStatus) bool {
+	if len(revs) == 0 {
+		return false
+	}
+	c, ok := stored[revs[len(revs)-1].Name].Conditions.Get(condApplied)
+	return ok && c.Status == v1.ConditionTrue
+}
+
 // apply reads every declared part, stops with ChildNotOwned before any write when one is not this App's, then writes
 // each part, in section order, that is absent or whose spec, owner references or resource group differ. A write the
 // store refuses stops the pass with ChildInvalid. A pass the stamp stopped (halt) reads the parts and writes none.
-// objs gains each part's stored object, nil when absent; wrote is the first part written, nil when none was.
-func (r *Reconciler) apply(ctx context.Context, a *v1.App, ents []entry, objs map[v1.ObjectRef]v1.Object, halt *stop) (*stop, *v1.ObjectRef, error) {
+// objs gains each part's stored object, nil when absent; wrote is the first part written, nil when none was. When
+// heal is set, each write of a part that was absent or whose spec differed is a self-heal (ADR-0212 Decision 1): it
+// is logged right after the write and returned, in section order.
+func (r *Reconciler) apply(ctx context.Context, a *v1.App, ents []entry, objs map[v1.ObjectRef]v1.Object, halt *stop,
+	heal bool) (*stop, *v1.ObjectRef, []v1.ObjectRef, error) {
 	parts := make(map[v1.ObjectRef]v1.Object)
 	for _, p := range a.Parts() {
 		parts[keyOf(p)] = p
@@ -243,20 +294,21 @@ func (r *Reconciler) apply(ctx context.Context, a *v1.App, ents []entry, objs ma
 		k := e.key(a.Namespace)
 		cur, err := r.get(ctx, e.kind, a.Namespace, e.name)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		objs[k] = cur
 	}
 	if halt != nil {
-		return halt, nil, nil
+		return halt, nil, nil, nil
 	}
 	for _, e := range ents {
 		k := e.key(a.Namespace)
 		if cur := objs[k]; !e.ref && cur != nil && !owned(a, cur) {
-			return &stop{reason: reasonChildNotOwned, part: k, detail: "exists and is not owned by App/" + string(a.Name)}, nil, nil
+			return &stop{reason: reasonChildNotOwned, part: k, detail: "exists and is not owned by App/" + string(a.Name)}, nil, nil, nil
 		}
 	}
 	var wrote *v1.ObjectRef
+	var healed []v1.ObjectRef
 	for _, e := range ents {
 		if e.ref {
 			continue
@@ -264,41 +316,46 @@ func (r *Reconciler) apply(ctx context.Context, a *v1.App, ents []entry, objs ma
 		k := e.key(a.Namespace)
 		desired := parts[k]
 		desired.GetObjectMeta().OwnerReferences = ownerRefs(a, e.kind, e.deletion)
-		written, changed, err := r.write(ctx, desired, objs[k])
+		written, changed, drift, err := r.write(ctx, desired, objs[k])
 		switch fault.KindOf(err) {
 		case "":
 			objs[k] = written
 			if changed && wrote == nil {
 				wrote = &k
 			}
+			if changed && drift && heal {
+				healed = append(healed, k)
+				r.log.InfoContext(ctx, "self-healed", "kind", k.Kind, "namespace", k.Namespace, "name", k.Name, "app", a.Name)
+			}
 		case fault.Invalid, fault.PayloadTooLarge:
-			return &stop{reason: reasonChildInvalid, part: k, detail: err.Error()}, wrote, nil
+			return &stop{reason: reasonChildInvalid, part: k, detail: err.Error()}, wrote, healed, nil
 		default:
-			return nil, nil, fault.Wrapf(err, fault.KindOf(err), op, "write %s of app %s/%s", partName(k), a.Namespace, a.Name)
+			return nil, nil, nil, fault.Wrapf(err, fault.KindOf(err), op, "write %s of app %s/%s", partName(k), a.Namespace, a.Name)
 		}
 	}
-	return nil, wrote, nil
+	return nil, wrote, healed, nil
 }
 
 // write creates desired, or updates cur with desired's spec, owner references and resource group when one of them
-// differs, and reports whether it wrote. It never writes a part's status: an update carries cur's.
-func (r *Reconciler) write(ctx context.Context, desired, cur v1.Object) (v1.Object, bool, error) {
+// differs, and reports whether it wrote and whether the part was absent or its spec differed (drift), not only its
+// references or group. It never writes a part's status: an update carries cur's.
+func (r *Reconciler) write(ctx context.Context, desired, cur v1.Object) (obj v1.Object, wrote, drift bool, err error) {
 	if cur == nil {
-		obj, err := r.store.Create(ctx, desired)
-		return obj, err == nil, err
+		obj, err = r.store.Create(ctx, desired)
+		return obj, err == nil, true, err
 	}
 	same, err := sameSpec(desired, cur)
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	dm, cm := desired.GetObjectMeta(), cur.GetObjectMeta()
 	if same && slices.Equal(dm.OwnerReferences, cm.OwnerReferences) && dm.ResourceGroup == cm.ResourceGroup {
-		return cur, false, nil
+		return cur, false, false, nil
 	}
 	spec(cur).Set(spec(desired))
 	cm.OwnerReferences, cm.ResourceGroup = dm.OwnerReferences, dm.ResourceGroup
-	obj, err := r.store.Update(ctx, cur)
-	return obj, err == nil, err
+	obj, err = r.store.Update(ctx, cur)
+	return obj, err == nil, !same, err
 }
 
 // spec is the Spec field of a part: every section kind has one.

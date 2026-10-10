@@ -18,14 +18,15 @@ import (
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
-// appCmd groups the App verbs of ADR-0200 Decision 9: history reads an App's AppRevisions, and rollback re-applies an
-// earlier revision's spec as an ordinary apply, so the App admission runs again with the caller's rights.
+// appCmd groups the App verbs of ADR-0200 Decision 9 and ADR-0212 Decision 9: history reads an App's AppRevisions,
+// rollback re-applies an earlier revision's spec, and pause and resume set spec.paused, each as an ordinary apply, so
+// the App admission runs again with the caller's rights.
 func (a *cli) appCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "app",
-		Short: "Manage Apps (history|rollback)",
+		Short: "Manage Apps (history|rollback|pause|resume)",
 	}
-	cmd.AddCommand(a.appHistoryCmd(), a.appRollbackCmd())
+	cmd.AddCommand(a.appHistoryCmd(), a.appRollbackCmd(), a.appPauseCmd("pause", true), a.appPauseCmd("resume", false))
 	return cmd
 }
 
@@ -157,7 +158,9 @@ func (a *cli) appRollbackCmd() *cobra.Command {
 			if same {
 				return a.writef("no change: App %s already has the spec of %s\n", appName, name)
 			}
+			paused := app.Spec.Paused
 			app.Spec = rev.Spec.Spec
+			app.Spec.Paused = paused
 			if _, err := c.Apply(ctx, app); err != nil {
 				return err
 			}
@@ -168,16 +171,63 @@ func (a *cli) appRollbackCmd() *cobra.Command {
 	return cmd
 }
 
-// sameAppSpec compares the two specs as the App reconciler's stamp does (ADR-0200 Decision 3): json.Marshal of the
-// typed spec, byte for byte.
+// sameAppSpec compares the two specs as the App reconciler's stamp does (ADR-0200 Decision 3, ADR-0212 Decision 3):
+// json.Marshal of the typed spec without its pause, byte for byte.
 func sameAppSpec(x, y v1.AppSpec) (bool, error) {
-	bx, err := json.Marshal(x)
+	bx, err := json.Marshal(x.WithoutPause())
 	if err != nil {
 		return false, fault.Internalf("funcdctl app rollback", "marshal the App spec: %v", err)
 	}
-	by, err := json.Marshal(y)
+	by, err := json.Marshal(y.WithoutPause())
 	if err != nil {
 		return false, fault.Internalf("funcdctl app rollback", "marshal the revision spec: %v", err)
 	}
 	return bytes.Equal(bx, by), nil
+}
+
+// appPauseCmd builds the pause or resume verb (ADR-0212 Decision 9): it sets the App's spec.paused, as
+// workflowPauseCmd sets a run's, through applyAppChange.
+func (a *cli) appPauseCmd(verb string, paused bool) *cobra.Command {
+	var ns string
+	cmd := &cobra.Command{
+		Use:   verb + " <app>",
+		Short: strings.ToUpper(verb[:1]) + verb[1:] + " an App (sets spec.paused: a paused App writes no part)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := a.sdkClient()
+			if err != nil {
+				return err
+			}
+			name := v1.ObjectName(args[0])
+			err = applyAppChange(cmd.Context(), c, v1.NamespaceName(nsOrDefault(ns)), name, func(app *v1.App) { app.Spec.Paused = paused })
+			if err != nil {
+				return err
+			}
+			return a.writef("%sd %s\n", verb, name)
+		},
+	}
+	cmd.Flags().StringVarP(&ns, "namespace", "n", "", "namespace (default: default)")
+	return cmd
+}
+
+// appApplyAttempts bounds a read-change-apply of an App that loses its update with a Conflict (ADR-0210 Decision 4,
+// the bound of funcdctl dev's re-apply).
+const appApplyAttempts = 5
+
+// applyAppChange reads the App, lets change edit it and applies it; a PUT that answers fault.Conflict re-reads and
+// retries, at most appApplyAttempts times (ADR-0210 Decision 4's read-change-apply).
+func applyAppChange(ctx context.Context, c *sdk.Client, ns v1.NamespaceName, name v1.ObjectName, change func(*v1.App)) error {
+	var err error
+	for range appApplyAttempts {
+		var obj v1.Object
+		if obj, err = c.Get(ctx, v1.KindApp, ns, name); err != nil {
+			return err
+		}
+		app := obj.(*v1.App)
+		change(app)
+		if _, err = c.Apply(ctx, app); fault.KindOf(err) != fault.Conflict {
+			return err
+		}
+	}
+	return err
 }

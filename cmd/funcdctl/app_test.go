@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -57,7 +60,7 @@ func resourceVersion(t *testing.T, c *sdk.Client, kind v1.Kind, name v1.ObjectNa
 	return obj.GetObjectMeta().ResourceVersion
 }
 
-// ADR-0200 Decision 9: F114's app group holds only history and rollback.
+// ADR-0200 Decision 9 and ADR-0212 Decision 9: the app group holds history, rollback, pause and resume.
 func TestCLIAppGroupVerbs(t *testing.T) {
 	t.Parallel()
 	app, _, err := newRootCmdWith(&bytes.Buffer{}, nil).Find([]string{"app"})
@@ -66,7 +69,8 @@ func TestCLIAppGroupVerbs(t *testing.T) {
 	for _, sub := range app.Commands() {
 		verbs = append(verbs, sub.Name())
 	}
-	require.Equal(t, []string{"history", "rollback"}, verbs)
+	require.Equal(t, []string{"history", "pause", "resume", "rollback"}, verbs)
+	require.Equal(t, "Manage Apps (history|rollback|pause|resume)", app.Short)
 }
 
 // ADR-0200 Decision 9: app history lists the App's revisions by number with REVISION, VERSION, PHASE and STAMPED;
@@ -172,4 +176,131 @@ func TestScenarioCLIAppRollback(t *testing.T) {
 	seedAppRevision(t, st, "gone", "uid-a", 1, todoSpec("1.0.0"), v1.PhaseReady)
 	err = execCLI(&bytes.Buffer{}, c, "app", "rollback", "gone", "1", "-n", "team-a")
 	require.Equal(t, fault.NotFound, fault.KindOf(err), "a revision without its App is not applied")
+}
+
+func getApp(t *testing.T, c *sdk.Client) *v1.App {
+	t.Helper()
+	obj, err := c.Get(context.Background(), v1.KindApp, "team-a", "todo")
+	require.NoError(t, err)
+	return obj.(*v1.App)
+}
+
+// ADR-0212 Decision 9: app pause and resume set spec.paused alone and print the verb; -n names the namespace, which
+// defaults to default.
+func TestCLIAppPauseResume(t *testing.T) {
+	t.Parallel()
+	c, _, _ := newTestServer(t)
+	app := applyTodo(t, c, todoSpec("1.0.0"))
+
+	require.Error(t, execCLI(&bytes.Buffer{}, c, "app", "pause", "todo"), "without -n the App is looked up in default")
+	require.Equal(t, app.ResourceVersion, resourceVersion(t, c, v1.KindApp, "todo"))
+
+	var out bytes.Buffer
+	require.NoError(t, execCLI(&out, c, "app", "pause", "todo", "-n", "team-a"))
+	require.Equal(t, "paused todo\n", out.String())
+	got := getApp(t, c)
+	want := todoSpec("1.0.0")
+	want.Paused = true
+	require.Equal(t, want, got.Spec)
+	require.Equal(t, app.UID, got.UID)
+	require.Equal(t, app.Generation+1, got.Generation)
+
+	out.Reset()
+	require.NoError(t, execCLI(&out, c, "app", "resume", "todo", "--namespace", "team-a"))
+	require.Equal(t, "resumed todo\n", out.String())
+	require.Equal(t, todoSpec("1.0.0"), getApp(t, c).Spec)
+}
+
+// putConflicts answers the next armed PUTs of one path with a Conflict, as the API does when the App changed between
+// the read and the write, and counts the PUTs of that path.
+type putConflicts struct {
+	mu   sync.Mutex
+	path string
+	left int
+	puts int
+}
+
+func (p *putConflicts) arm(n int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.left, p.puts = n, 0
+}
+
+func (p *putConflicts) count() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.puts
+}
+
+func (p *putConflicts) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.Method == http.MethodPut && r.URL.Path == p.path {
+		p.mu.Lock()
+		p.puts++
+		fail := p.left > 0
+		if fail {
+			p.left--
+		}
+		p.mu.Unlock()
+		if fail {
+			rec := httptest.NewRecorder()
+			fault.WriteProblem(rec, fault.Conflictf("store.Update", "App %q resourceVersion mismatch", "todo"))
+			return rec.Result(), nil
+		}
+	}
+	return http.DefaultTransport.RoundTrip(r)
+}
+
+// ADR-0212 Decision 9 on ADR-0210 Decision 4: a PUT that answers Conflict re-reads the App and retries, at most five
+// attempts in all.
+func TestCLIAppPauseRetriesAConflict(t *testing.T) {
+	t.Parallel()
+	_, url, _ := newTestServer(t)
+	conflicts := &putConflicts{path: "/apis/funcd.io/v1alpha1/namespaces/team-a/apps/todo"}
+	c, err := sdk.New(url, sdk.WithToken(devToken), sdk.WithHTTPClient(&http.Client{Transport: conflicts}))
+	require.NoError(t, err)
+	applyTodo(t, c, todoSpec("1.0.0"))
+
+	conflicts.arm(2)
+	var out bytes.Buffer
+	require.NoError(t, execCLI(&out, c, "app", "pause", "todo", "-n", "team-a"))
+	require.Equal(t, "paused todo\n", out.String())
+	require.Equal(t, 3, conflicts.count(), "two Conflicts, then the write")
+	require.True(t, getApp(t, c).Spec.Paused)
+
+	conflicts.arm(appApplyAttempts)
+	err = execCLI(&bytes.Buffer{}, c, "app", "resume", "todo", "-n", "team-a")
+	require.Equal(t, fault.Conflict, fault.KindOf(err))
+	require.Equal(t, 5, conflicts.count())
+	require.True(t, getApp(t, c).Spec.Paused, "nothing is written")
+}
+
+// ADR-0212 Decisions 3 and 9: rollback copies the revision's spec and keeps the App's paused, and sameAppSpec ignores
+// paused, so a paused App with the revision's spec has no change.
+func TestCLIAppRollbackKeepsPaused(t *testing.T) {
+	t.Parallel()
+	c, _, st := newTestServer(t)
+	paused := todoSpec("2.0.0")
+	paused.Paused = true
+	app := applyTodo(t, c, paused)
+	seedAppRevision(t, st, "todo", app.UID, 1, todoSpec("1.0.0"), v1.PhaseReady)
+	seedAppRevision(t, st, "todo", app.UID, 2, todoSpec("2.0.0"), v1.PhaseReady)
+
+	var out bytes.Buffer
+	require.NoError(t, execCLI(&out, c, "app", "rollback", "todo", "2", "-n", "team-a"))
+	require.Equal(t, "no change: App todo already has the spec of todo-2\n", out.String())
+	require.Equal(t, app.ResourceVersion, resourceVersion(t, c, v1.KindApp, "todo"))
+
+	out.Reset()
+	require.NoError(t, execCLI(&out, c, "app", "rollback", "todo", "1", "-n", "team-a"))
+	require.Equal(t, "applied App todo with the spec of todo-1\n", out.String())
+	want := todoSpec("1.0.0")
+	want.Paused = true
+	require.Equal(t, want, getApp(t, c).Spec)
+
+	same, err := sameAppSpec(want, todoSpec("1.0.0"))
+	require.NoError(t, err)
+	require.True(t, same)
+	same, err = sameAppSpec(want, todoSpec("2.0.0"))
+	require.NoError(t, err)
+	require.False(t, same)
 }

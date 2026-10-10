@@ -30,7 +30,9 @@ type App struct {
 // AppSpec is the App's parts, one section per kind, applied in this order (Decision 2).
 type AppSpec struct {
 	// Version is a free label that funcd does not interpret.
-	Version      string           `json:"version,omitempty"`
+	Version string `json:"version,omitempty"`
+	// Paused stops every write of the App (ADR-0212); it is not part of an AppRevision.
+	Paused       bool             `json:"paused,omitempty"`
 	KV           []AppKVStore     `json:"kv,omitempty"`
 	Buckets      []AppBucket      `json:"buckets,omitempty"`
 	Functions    []AppFunction    `json:"functions,omitempty"`
@@ -40,6 +42,13 @@ type AppSpec struct {
 	Routes       []AppRoute       `json:"routes,omitempty"`
 	Sites        []AppSite        `json:"sites,omitempty"`
 	Catalogs     []AppCatalog     `json:"catalogs,omitempty"`
+}
+
+// WithoutPause returns s with Paused cleared: what the stamp compares, an AppRevision freezes and rollback compares
+// (ADR-0212 Decision 3).
+func (s AppSpec) WithoutPause() AppSpec {
+	s.Paused = false
+	return s
 }
 
 // AppKVStore is a kv entry: a KVStore the App declares by name, or only the ref of an existing one.
@@ -200,14 +209,23 @@ func (e AppCatalog) MarshalJSON() ([]byte, error) {
 }
 
 // AppStatus is the observed state (ADR-0199 Decision 5): phase Deploying, Ready, Degraded or Failed (ADR-0200
-// Decision 6), the Ready condition, the current and latest AppRevision, and the state of each child.
+// Decision 6), the Ready condition, the current and latest AppRevision, the state of each child and the last part the
+// App wrote back (ADR-0212).
 type AppStatus struct {
 	Status          `json:",inline"`
 	CurrentRevision ObjectName `json:"currentRevision,omitempty"`
 	LatestRevision  ObjectName `json:"latestRevision,omitempty"`
 	// Version is the spec.version of the current revision.
-	Version  string     `json:"version,omitempty"`
-	Children []AppChild `json:"children,omitempty"`
+	Version      string       `json:"version,omitempty"`
+	Children     []AppChild   `json:"children,omitempty"`
+	LastSelfHeal *AppSelfHeal `json:"lastSelfHeal,omitempty"`
+}
+
+// AppSelfHeal is the last part the App wrote back (ADR-0212 Decision 2).
+type AppSelfHeal struct {
+	Kind Kind       `json:"kind"`
+	Name ObjectName `json:"name"`
+	At   Timestamp  `json:"at"`
 }
 
 // AppChild is a declared part, or a dropped object not yet deleted (state Pruning), with its state and reason.

@@ -744,6 +744,29 @@ func TestInUse(t *testing.T) {
 	})
 }
 
+// ADR-0212 Decision 4: a paused App writes nothing, but the owner GC, not its reconciler, collects its tree once it is
+// deleted; a retained store keeps only the marker and stays.
+func TestDeletedPausedAppTreeCollected(t *testing.T) {
+	ctx := context.Background()
+	st := store.New(memory.New())
+	paused := object(t, v1.KindApp, "app").(*v1.App)
+	paused.Spec.Paused = true
+	app := put(t, st, paused)
+	put(t, st, ownedBy(object(t, v1.KindFunction, "todo-api"), app, true, false))
+	put(t, st, ownedBy(object(t, v1.KindRoute, "todo-api"), app, true, false))
+	put(t, st, ownedBy(object(t, v1.KindKVStore, "todo-cache"), app, true, true))
+	put(t, st, ownedBy(object(t, v1.KindKVStore, "todo-store"), app, false, true))
+	put(t, st, ownedBy(object(t, v1.KindAppRevision, v1.AppRevisionName("app", 1)), app, true, false))
+	del(t, st, v1.KindApp, "app")
+
+	require.NoError(t, newCollector(t, st, 0).CollectNamespace(ctx, ns))
+	require.False(t, exists(t, st, v1.KindFunction, "todo-api"))
+	require.False(t, exists(t, st, v1.KindRoute, "todo-api"))
+	require.False(t, exists(t, st, v1.KindKVStore, "todo-cache"))
+	require.False(t, exists(t, st, v1.KindAppRevision, v1.AppRevisionName("app", 1)))
+	require.True(t, exists(t, st, v1.KindKVStore, "todo-store"))
+}
+
 // scenario: app-store-in-use-kept (the collector half, ADR-0199 Decision 7) — a store a dead App controls waits
 // while something the sweep does not delete uses it; an unused Bucket goes through DeleteBucket.
 func TestAppStoreInUseWaitsForALaterSweep(t *testing.T) {
