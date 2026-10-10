@@ -58,6 +58,9 @@ These constraints hold for real code just as they did for skeletons — the same
   Scenario test that exercises it runs and passes — not skipped.
 - **Test bodies** → exercise the real behavior and assert the outcome; the contract suite carries
   real assertions every driver runs. Name each test after its `scenario: <name>` for traceability.
+- **e2e scenario tests stay fast** (CLAUDE.md, Known pitfall 5): `t.Parallel()`, short pacing values that keep the
+  rule the ADR states (its durations are the rule, not the test's length), `require.Eventually` instead of fixed
+  sleeps. Never raise `go test -timeout`; report the new scenarios' `--- PASS` times.
 - **Avoid unexported funcs/types nothing references** — `staticcheck`'s `unused` check fails the
   build on dead unexported code. Don't leave helpers behind that no live path calls.
 - **`fmt.Print*` is banned** (forbidigo) — log through `log/slog`, never print.
