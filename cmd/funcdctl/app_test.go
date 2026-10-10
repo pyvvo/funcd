@@ -65,8 +65,8 @@ func resourceVersion(t *testing.T, c *sdk.Client, kind v1.Kind, name v1.ObjectNa
 	return obj.GetObjectMeta().ResourceVersion
 }
 
-// ADR-0200 Decision 9, ADR-0212 Decision 9, ADR-0214 Decision 7 and ADR-0217: the app group holds history and rollback
-// (F114), pause and resume (F115), retry (F117), and render, deploy and delete (F120).
+// ADR-0200 Decision 9, ADR-0212 Decision 9, ADR-0214 Decision 7, ADR-0217 and ADR-0218: the app group holds history and
+// rollback (F114), pause and resume (F115), retry (F117), render, deploy and delete (F120), and lock (F121).
 func TestCLIAppGroupVerbs(t *testing.T) {
 	t.Parallel()
 	app, _, err := newRootCmdWith(&bytes.Buffer{}, nil).Find([]string{"app"})
@@ -75,8 +75,8 @@ func TestCLIAppGroupVerbs(t *testing.T) {
 	for _, sub := range app.Commands() {
 		verbs = append(verbs, sub.Name())
 	}
-	require.Equal(t, []string{"delete", "deploy", "history", "pause", "render", "resume", "retry", "rollback"}, verbs)
-	require.Equal(t, "Manage Apps (render|deploy|delete|history|rollback|pause|resume|retry)", app.Short)
+	require.Equal(t, []string{"delete", "deploy", "history", "lock", "pause", "render", "resume", "retry", "rollback"}, verbs)
+	require.Equal(t, "Manage Apps (render|deploy|delete|lock|history|rollback|pause|resume|retry)", app.Short)
 }
 
 // ADR-0200 Decision 9: app history lists the App's revisions by number with REVISION, VERSION, PHASE and STAMPED;

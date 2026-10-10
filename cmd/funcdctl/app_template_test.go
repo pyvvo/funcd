@@ -3,7 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"io"
 	"maps"
 	"net/http"
 	"os"
@@ -36,6 +39,35 @@ func writeFile(t *testing.T, path, body string) {
 	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
 }
 
+// hashDigest is the sha256 of ref's text: the digest hashImages gives ref, and the digest the fixtures lock.
+func hashDigest(ref string) string {
+	sum := sha256.Sum256([]byte(ref))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// hashImages resolves each image ref to hashDigest(ref), so a lock of those digests never reports a moved tag and
+// no test reaches a registry.
+type hashImages struct{}
+
+func (hashImages) Tags(_ context.Context, repo string) ([]string, error) {
+	return nil, fault.NotFoundf("hashImages", "no tag list for %s", repo)
+}
+
+func (hashImages) Digest(_ context.Context, ref string) (string, error) { return hashDigest(ref), nil }
+
+// execApp runs funcdctl over hashImages, its stderr discarded.
+func execApp(out io.Writer, c *sdk.Client, args ...string) error {
+	return execAppErr(out, io.Discard, c, hashImages{}, args...)
+}
+
+// execAppErr runs funcdctl over images, writing stdout to out and stderr to errOut.
+func execAppErr(out, errOut io.Writer, c *sdk.Client, images template.ImageResolver, args ...string) error {
+	root := newRootCmdFor(out, c, images)
+	root.SetErr(errOut)
+	root.SetArgs(args)
+	return root.Execute()
+}
+
 // editFile replaces old with new in path, once.
 func editFile(t *testing.T, path, old, new string) {
 	t.Helper()
@@ -51,12 +83,11 @@ func TestScenarioAppRenderMatches(t *testing.T) {
 	args := []string{"app", "render", filepath.Join(todoFixture, "app"), "--name", "todo", "-n", "team-a",
 		"-f", filepath.Join(todoFixture, "values", "prod.yaml")}
 	var out bytes.Buffer
-	require.NoError(t, execCLI(&out, nil, args...))
+	require.NoError(t, execApp(&out, nil, args...))
 	golden, err := os.ReadFile(filepath.Join(todoFixture, "render.golden.yaml"))
 	require.NoError(t, err)
 	require.Equal(t, string(golden), out.String())
 	require.Contains(t, out.String(), "tick: ${{ event.type }}", "an expression without values, app or images comes out byte for byte")
-	require.NotContains(t, out.String(), "@sha256:", "no digest until ADR-0218")
 
 	obj, err := sdk.DecodeManifest(out.Bytes())
 	require.NoError(t, err, "the printed App is a manifest funcdctl apply reads")
@@ -64,11 +95,22 @@ func TestScenarioAppRenderMatches(t *testing.T) {
 	require.Equal(t, v1.ResourceGroupName("todo"), app.ResourceGroup)
 	require.Equal(t, "1.2.0", app.Spec.Version)
 	require.True(t, slices.ContainsFunc(app.Spec.Functions, func(f v1.AppFunction) bool {
-		return f.Name == "todo-stats" && f.Image == "registry.example/todo-stats:1.0.3"
+		return f.Name == "todo-stats" && f.Image == "registry.example/todo-stats:1.0.3@"+hashDigest("registry.example/todo-stats:1.0.3")
 	}), "analytics.enabled includes todo-stats")
+	lock, err := template.ReadLock(filepath.Join(todoFixture, "app"))
+	require.NoError(t, err)
+	digests := map[string]bool{}
+	for _, l := range lock {
+		digests[l.Digest] = true
+	}
+	for _, f := range app.Spec.Functions {
+		_, digest, ok := strings.Cut(f.Image, "@")
+		require.True(t, ok && digests[digest], "%s's image %s carries a digest of app.lock", f.Name, f.Image)
+		require.Empty(t, f.ImageDigest)
+	}
 
 	out.Reset()
-	require.NoError(t, execCLI(&out, nil, append(args, "-o", "json")...))
+	require.NoError(t, execApp(&out, nil, append(args, "-o", "json")...))
 	var asJSON v1.App
 	require.NoError(t, json.Unmarshal(out.Bytes(), &asJSON))
 	require.Equal(t, app.ObjectMeta, asJSON.ObjectMeta)
@@ -98,8 +140,8 @@ func TestScenarioAppRenderRefuses(t *testing.T) {
 			want: []string{"resources/api.yaml:6: functions[0].imageDigest"}},
 		"unknown key": {edit: edit{"app/resources/api.yaml", "handler: handle\n", "handler: handle\n    minReplica: 1\n"},
 			want: []string{"resources/api.yaml: ", "minReplica"}},
-		"range": {edit: edit{"app/app.yaml", "stats: todo-stats:1.0.3", "stats: todo-stats:^1.0.0"},
-			want: []string{"images.stats", "ADR-0218"}},
+		"bad spec": {edit: edit{"app/app.yaml", "stats: todo-stats:1.0.3", "stats: todo-stats:latest"},
+			want: []string{"images.stats", "todo-stats:latest"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -117,7 +159,7 @@ func TestScenarioAppRenderRefuses(t *testing.T) {
 				editFile(t, filepath.Join(dir, tc.edit.file), tc.edit.old, tc.edit.new)
 			}
 			var out bytes.Buffer
-			err := execCLI(&out, nil, args...)
+			err := execApp(&out, nil, args...)
 			require.Error(t, err)
 			require.Equal(t, fault.Invalid, fault.KindOf(err), err.Error())
 			for _, w := range tc.want {
@@ -128,7 +170,8 @@ func TestScenarioAppRenderRefuses(t *testing.T) {
 	}
 }
 
-// deployTemplate writes a one-function template of App todo at version, its image at that version too.
+// deployTemplate writes a one-function template of App todo at version, its image at that version too, locked at
+// the digest hashImages gives.
 func deployTemplate(t *testing.T, version string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -136,6 +179,9 @@ func deployTemplate(t *testing.T, version string) string {
 		"name: todo\nversion: "+version+"\nregistry: oci-layout://layout\nimages:\n  api: todo-api:"+version+"\n")
 	writeFile(t, filepath.Join(dir, "resources", "api.yaml"),
 		"functions:\n  - name: todo-api\n    runtime: nodejs22\n    handler: handle\n    image: ${{ images.api }}\n")
+	require.NoError(t, template.WriteLock(dir, map[string]template.LockedImage{"api": {
+		Requested: "todo-api:" + version, Version: version, Digest: hashDigest("oci-layout://layout/todo-api:" + version),
+	}}))
 	return dir
 }
 
@@ -160,7 +206,8 @@ func startCLI(t *testing.T, c *sdk.Client, args ...string) *cliRun {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	r := &cliRun{done: make(chan struct{})}
-	root := newRootCmdWith(&r.out, c)
+	root := newRootCmdFor(&r.out, c, hashImages{})
+	root.SetErr(io.Discard)
 	root.SetArgs(args)
 	go func() {
 		defer close(r.done)
@@ -230,7 +277,7 @@ func TestCLIAppDeployFollowsRevision(t *testing.T) {
 	run := startCLI(t, c, "app", "deploy", deployTemplate(t, "1.0.0"), "-n", "team-a")
 	app := waitApplied(t, c, "1.0.0")
 	require.Equal(t, v1.ResourceGroupName("todo"), app.ResourceGroup, "the group defaults to the App's name")
-	require.Equal(t, "oci-layout://layout/todo-api:1.0.0", app.Spec.Functions[0].Image)
+	require.Equal(t, "oci-layout://layout/todo-api:1.0.0@"+hashDigest("oci-layout://layout/todo-api:1.0.0"), app.Spec.Functions[0].Image)
 
 	seedAppRevision(t, st, "todo", app.UID, 1, app.Spec, v1.PhaseDeploying)
 	setAppStatus(t, st, func(s *v1.AppStatus) {
@@ -256,7 +303,7 @@ func TestCLIAppDeployNoChange(t *testing.T) {
 	c, _, st := newTestServer(t)
 	dir := deployTemplate(t, "1.0.0")
 	var out bytes.Buffer
-	require.NoError(t, execCLI(&out, c, "app", "deploy", dir, "-n", "team-a", "--no-wait"))
+	require.NoError(t, execApp(&out, c, "app", "deploy", dir, "-n", "team-a", "--no-wait"))
 	require.Empty(t, out.String())
 	app := waitApplied(t, c, "1.0.0")
 	seedAppRevision(t, st, "todo", app.UID, 1, app.Spec, v1.PhaseReady)
@@ -264,10 +311,10 @@ func TestCLIAppDeployNoChange(t *testing.T) {
 	rv := resourceVersion(t, c, v1.KindApp, "todo")
 
 	out.Reset()
-	require.NoError(t, execCLI(&out, c, "app", "deploy", dir, "-n", "team-a", "--no-wait"))
+	require.NoError(t, execApp(&out, c, "app", "deploy", dir, "-n", "team-a", "--no-wait"))
 	require.Equal(t, "no change\n", out.String())
 	out.Reset()
-	require.NoError(t, execCLI(&out, c, "app", "deploy", dir, "-n", "team-a"))
+	require.NoError(t, execApp(&out, c, "app", "deploy", dir, "-n", "team-a"))
 	require.Equal(t, "no change\ntodo-1\n", out.String())
 	require.Equal(t, rv, resourceVersion(t, c, v1.KindApp, "todo"), "nothing is applied")
 }
@@ -293,7 +340,7 @@ func TestCLIAppDeployWaitsForStamp(t *testing.T) {
 	t.Parallel()
 	c, url, st := newTestServer(t)
 	dir := deployTemplate(t, "1.0.0")
-	require.NoError(t, execCLI(&bytes.Buffer{}, c, "app", "deploy", dir, "-n", "team-a", "--no-wait"))
+	require.NoError(t, execApp(&bytes.Buffer{}, c, "app", "deploy", dir, "-n", "team-a", "--no-wait"))
 	app := waitApplied(t, c, "1.0.0")
 	seedAppRevision(t, st, "todo", app.UID, 1, renderedSpec(t, "0.9.0"), v1.PhaseReady)
 	setAppStatus(t, st, func(s *v1.AppStatus) { s.LatestRevision, s.CurrentRevision = "todo-1", "todo-1" })
@@ -322,7 +369,7 @@ func TestCLIAppDeployWaitsForStamp(t *testing.T) {
 func TestCLIAppDeployFollowsLatest(t *testing.T) {
 	t.Parallel()
 	c, _, st := newTestServer(t)
-	require.NoError(t, execCLI(&bytes.Buffer{}, c, "app", "deploy", deployTemplate(t, "2.0.0"), "-n", "team-a", "--no-wait"))
+	require.NoError(t, execApp(&bytes.Buffer{}, c, "app", "deploy", deployTemplate(t, "2.0.0"), "-n", "team-a", "--no-wait"))
 	app := waitApplied(t, c, "2.0.0")
 	seedAppRevision(t, st, "todo", app.UID, 1, renderedSpec(t, "0.9.0"), v1.PhaseReady)
 	seedAppRevision(t, st, "todo", app.UID, 2, renderedSpec(t, "1.0.0"), v1.PhaseDeploying)
@@ -397,9 +444,9 @@ func TestCLIAppDeployFails(t *testing.T) {
 func TestCLIAppDeployKeepsPaused(t *testing.T) {
 	t.Parallel()
 	c, _, st := newTestServer(t)
-	require.NoError(t, execCLI(&bytes.Buffer{}, c, "app", "deploy", deployTemplate(t, "1.0.0"), "-n", "team-a", "--no-wait"))
+	require.NoError(t, execApp(&bytes.Buffer{}, c, "app", "deploy", deployTemplate(t, "1.0.0"), "-n", "team-a", "--no-wait"))
 	waitApplied(t, c, "1.0.0")
-	require.NoError(t, execCLI(&bytes.Buffer{}, c, "app", "pause", "todo", "-n", "team-a"))
+	require.NoError(t, execApp(&bytes.Buffer{}, c, "app", "pause", "todo", "-n", "team-a"))
 
 	dir := deployTemplate(t, "2.0.0")
 	run := startCLI(t, c, "app", "deploy", dir, "-n", "team-a")
@@ -408,10 +455,10 @@ func TestCLIAppDeployKeepsPaused(t *testing.T) {
 	want.Paused = true
 	require.Equal(t, want, app.Spec, "a deploy never resumes an App")
 
-	require.NoError(t, execCLI(&bytes.Buffer{}, c, "app", "deploy", dir, "-n", "team-a", "--no-wait"))
+	require.NoError(t, execApp(&bytes.Buffer{}, c, "app", "deploy", dir, "-n", "team-a", "--no-wait"))
 	require.Equal(t, app.ResourceVersion, resourceVersion(t, c, v1.KindApp, "todo"), "the same spec is not applied")
 
-	require.NoError(t, execCLI(&bytes.Buffer{}, c, "app", "resume", "todo", "-n", "team-a"))
+	require.NoError(t, execApp(&bytes.Buffer{}, c, "app", "resume", "todo", "-n", "team-a"))
 	seedAppRevision(t, st, "todo", app.UID, 1, app.Spec.WithoutPause(), v1.PhaseReady)
 	setAppStatus(t, st, func(s *v1.AppStatus) { s.LatestRevision, s.CurrentRevision = "todo-1", "todo-1" })
 	require.NoError(t, run.wait(t))
@@ -423,9 +470,9 @@ func TestCLIAppDeployRefusesOtherGroup(t *testing.T) {
 	t.Parallel()
 	c, _, _ := newTestServer(t)
 	dir := deployTemplate(t, "1.0.0")
-	require.NoError(t, execCLI(&bytes.Buffer{}, c, "app", "deploy", dir, "-n", "team-a", "--no-wait"))
+	require.NoError(t, execApp(&bytes.Buffer{}, c, "app", "deploy", dir, "-n", "team-a", "--no-wait"))
 	var out bytes.Buffer
-	err := execCLI(&out, c, "app", "deploy", dir, "-n", "team-a", "--resource-group", "other")
+	err := execApp(&out, c, "app", "deploy", dir, "-n", "team-a", "--resource-group", "other")
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
 	require.ErrorContains(t, err, "other")
 	require.ErrorContains(t, err, "todo")
@@ -487,10 +534,10 @@ func TestCLIAppDeleteReports(t *testing.T) {
 	viewer, err := sdk.New(url, sdk.WithToken(viewerToken))
 	require.NoError(t, err)
 	var out bytes.Buffer
-	err = execCLI(&out, viewer, "app", "delete", "todo", "-n", "team-a")
+	err = execApp(&out, viewer, "app", "delete", "todo", "-n", "team-a")
 	require.Equal(t, fault.Forbidden, fault.KindOf(err), "a refused delete is surfaced: %v", err)
 	require.Empty(t, out.String())
-	require.Equal(t, fault.NotFound, fault.KindOf(execCLI(&out, c, "app", "delete", "nope", "-n", "team-a")))
+	require.Equal(t, fault.NotFound, fault.KindOf(execApp(&out, c, "app", "delete", "nope", "-n", "team-a")))
 
 	run := startCLI(t, c, "app", "delete", "todo", "-n", "team-a")
 	require.Eventually(t, func() bool {
@@ -527,7 +574,7 @@ func TestCLIAppDeleteNoWait(t *testing.T) {
 	c, _, _ := newTestServer(t)
 	applyTodo(t, c, todoSpec("1.0.0"))
 	var out bytes.Buffer
-	require.NoError(t, execCLI(&out, c, "app", "delete", "todo", "-n", "team-a", "--no-wait"))
+	require.NoError(t, execApp(&out, c, "app", "delete", "todo", "-n", "team-a", "--no-wait"))
 	require.Empty(t, out.String())
 	_, err := c.Get(context.Background(), v1.KindApp, "team-a", "todo")
 	require.Equal(t, fault.NotFound, fault.KindOf(err))

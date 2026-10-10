@@ -51,17 +51,23 @@ var (
 	specEntry  = regexp.MustCompile(`spec\.([A-Za-z]+)\[(\d+)\]`)
 )
 
-// Render renders the template into one App (Decisions 3-7): it merges and validates the values, evaluates registry
-// and every when, routes the scalars of each included fragment, decodes each fragment strictly, appends their
-// sections in file order and runs App.Validate. It returns nothing unless every step succeeded.
+// Render renders the template into one App (ADR-0217 Decisions 3-7): it merges and validates the values, evaluates
+// registry and every when, routes the scalars of each included fragment, decodes each fragment strictly, appends
+// their sections in file order and runs App.Validate. Each image is the pinned value of its lock entry (ADR-0218
+// Decision 4), so a template without a lock or with a stale one is refused. It returns nothing unless every step
+// succeeded.
 func Render(t *Template, in RenderInput) (*v1.App, error) {
 	name := cmp.Or(in.Name, t.Name)
 	ns := cmp.Or(in.Namespace, v1.NamespaceName("default"))
+	if err := CheckLock(t); err != nil {
+		return nil, err
+	}
 	values, err := mergeValues(in.Values)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateValues(t.ValuesSchema, values); err != nil {
+	registry, err := evalRegistry(t, values, false)
+	if err != nil {
 		return nil, err
 	}
 	appDoc, err := json.Marshal(map[string]string{"name": string(name), "namespace": string(ns), "version": t.Version})
@@ -72,7 +78,7 @@ func Render(t *Template, in RenderInput) (*v1.App, error) {
 		docs:    map[string]json.RawMessage{valuesRoot: values, appRoot: appDoc},
 		schemas: map[string]json.RawMessage{valuesRoot: t.ValuesSchema, appRoot: json.RawMessage(appSchema)},
 	}
-	if err := r.renderImages(t); err != nil {
+	if err := r.renderImages(t, registry); err != nil {
 		return nil, err
 	}
 	app := &v1.App{
@@ -106,7 +112,7 @@ func Render(t *Template, in RenderInput) (*v1.App, error) {
 type router struct {
 	docs    map[string]json.RawMessage
 	schemas map[string]json.RawMessage
-	images  map[string]string // name → <registry>/<repo>:<version>
+	images  map[string]string // name → <registry>/<repo>:<version>@<digest>
 }
 
 // resolver types the given roots strictly from their schemas (Decision 4).
@@ -118,28 +124,18 @@ func (r *router) resolver(roots ...string) expr.Resolver {
 	return expr.NewSchemaResolver(schemas, nil, expr.StrictTypes())
 }
 
-// renderImages evaluates registry over values and renders each image as <registry>/<repo>:<version>.
-func (r *router) renderImages(t *Template) error {
+// renderImages renders each image as its pinned value, <registry>/<repo>:<version>@<digest>, from the lock.
+func (r *router) renderImages(t *Template, registry string) error {
 	r.images = make(map[string]string, len(t.Images))
-	registry := t.Registry
-	if isExpression(registry) {
-		out, err := r.eval(registry, expr.Select, valuesRoot)
-		if err != nil {
-			return fault.Invalidf(renderOp, "app.yaml: registry: %v", err)
-		}
-		if json.Unmarshal(out, &registry) != nil {
-			return fault.Invalidf(renderOp, "app.yaml: registry gives %s, not a string", out)
-		}
-		if isExpression(registry) || interpolates(registry) {
-			return fault.Invalidf(renderOp, "app.yaml: registry gives %q: render never writes an expression", registry)
-		}
-	}
-	if t.Registry != "" && (registry == "" || strings.HasSuffix(registry, "/")) {
-		return fault.Invalidf(renderOp, "app.yaml: registry gives %q: it must be a non-empty string without a trailing /", registry)
-	}
 	props := map[string]json.RawMessage{}
-	for name, ref := range t.Images {
-		r.images[name] = registry + "/" + ref
+	for name := range t.Images {
+		img, err := t.parsed(name)
+		if err != nil {
+			return fault.Wrapf(err, fault.Invalid, renderOp, "app.yaml: images.%s", name)
+		}
+		if r.images[name], err = ImageRef(registry, img.Repo, t.Lock[name]); err != nil {
+			return err
+		}
 		props[name] = json.RawMessage(`{"type":"string"}`)
 	}
 	doc, err := json.Marshal(r.images)
@@ -172,18 +168,6 @@ func (r *router) included(t *Template, file string) (bool, error) {
 		return false, fault.Invalidf(renderOp, "app.yaml: when.%s: %v", file, err)
 	}
 	return ok, nil
-}
-
-// eval checks and evaluates one expression over roots.
-func (r *router) eval(src string, mode expr.Mode, roots ...string) (json.RawMessage, error) {
-	e, err := expr.Parse(src, mode)
-	if err != nil {
-		return nil, err
-	}
-	if err := e.Check(r.resolver(roots...)); err != nil {
-		return nil, err
-	}
-	return e.Eval(r.docs)
 }
 
 // fragment parses one resource file, routes its scalars and decodes it alone as the spec of an App.

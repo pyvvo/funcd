@@ -15,18 +15,21 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/app/template"
 	"github.com/pyvvo/funcd/internal/artifact"
 	"github.com/pyvvo/funcd/internal/contract"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
 // cli holds the funcdctl command state (ADR-0042): where to write, the persistent connection
-// flags, and an optionally injected SDK client (tests mount the real control plane on httptest).
+// flags, an optionally injected SDK client (tests mount the real control plane on httptest), and
+// the image registries an App template's lock reads (ADR-0218).
 type cli struct {
 	out    io.Writer
 	server string
 	token  string
 	client *sdk.Client // non-nil → injected (tests); else built from server/token on demand
+	images template.ImageResolver
 }
 
 // newRootCmd builds the funcdctl cobra command tree writing to out (production path).
@@ -35,7 +38,12 @@ func newRootCmd(out io.Writer) *cobra.Command { return newRootCmdWith(out, nil) 
 // newRootCmdWith builds the tree with an optional injected SDK client — the test seam
 // (drive via root.SetArgs(...).Execute()).
 func newRootCmdWith(out io.Writer, client *sdk.Client) *cobra.Command {
-	a := &cli{out: out, client: client}
+	return newRootCmdFor(out, client, artifact.TagResolver{})
+}
+
+// newRootCmdFor is newRootCmdWith reading image registries through images.
+func newRootCmdFor(out io.Writer, client *sdk.Client, images template.ImageResolver) *cobra.Command {
+	a := &cli{out: out, client: client, images: images}
 	root := &cobra.Command{
 		Use:           "funcdctl",
 		Short:         "funcd control-plane CLI (kubectl-style)",
@@ -221,13 +229,28 @@ func (a *cli) pushCmd() *cobra.Command {
 	var entry string
 	var runtime string
 	var platform string
-	var isSite bool
+	var isSite, isTemplate bool
 	cmd := &cobra.Command{
 		Use:   "push <path> <ref>",
-		Short: "Package a function (a file or a bundle directory) — or, with --site, a prebuilt static web app — as an OCI artifact and push it (prints <ref>@<digest>)",
+		Short: "Package a function (a file or a bundle directory) — or, with --site, a prebuilt static web app, or with --template, an App template — as an OCI artifact and push it (prints <ref>@<digest>)",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path, ref := args[0], args[1]
+			// ADR-0218: an App template is pushed as git holds it, tagged with its version, once its lock is fresh.
+			if isTemplate {
+				if isSite || schemaPath != "" || runtime != "" || platform != "" || cmd.Flags().Changed("entry") {
+					return fault.Invalidf("funcdctl push", "--template is mutually exclusive with --site, --schema, --runtime, --platform and --entry")
+				}
+				t, err := template.CheckPush(path)
+				if err != nil {
+					return err
+				}
+				digest, err := artifact.PushTemplate(cmd.Context(), ref, path, t.Version)
+				if err != nil {
+					return err
+				}
+				return a.writef("%s@%s\n", ref, digest)
+			}
 			// ADR-0139: a static-site bundle is its own artifact type — no contract, no runtime, no entry.
 			if isSite {
 				if schemaPath != "" || runtime != "" || platform != "" || cmd.Flags().Changed("entry") {
@@ -295,6 +318,8 @@ func (a *cli) pushCmd() *cobra.Command {
 		"the platform the artifact was built for (linux/amd64 or linux/arm64), recorded on the manifest so `funcdctl index` can combine per-platform pushes (ADR-0145)")
 	cmd.Flags().BoolVar(&isSite, "site", false,
 		"push <path> (a directory) as a static-site bundle for a Site (ADR-0139): one deterministic tar+gzip layer, no contract/runtime/entry")
+	cmd.Flags().BoolVar(&isTemplate, "template", false,
+		"push <path> (an App template directory with a fresh app.lock) as it is, tagged with its version (ADR-0218)")
 	return cmd
 }
 
@@ -507,8 +532,10 @@ func checkOutput(op, output string, formats ...string) error {
 
 // writef is a checked fmt.Fprintf to the cli's writer (errcheck-clean); the ...any variadic is
 // the sanctioned printf form (ADR-0002 §3 / forbidigo exclusion).
-func (a *cli) writef(format string, args ...any) error {
-	if _, err := fmt.Fprintf(a.out, format, args...); err != nil {
+func (a *cli) writef(format string, args ...any) error { return fprintf(a.out, format, args...) }
+
+func fprintf(w io.Writer, format string, args ...any) error {
+	if _, err := fmt.Fprintf(w, format, args...); err != nil {
 		return fault.Internalf("funcdctl", "write output: %v", err)
 	}
 	return nil

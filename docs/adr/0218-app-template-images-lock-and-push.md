@@ -1,6 +1,6 @@
 # ADR-0218: App templates — images, lock and push
 
-- **Status**: Accepted (2026-10-10)
+- **Status**: Implemented (2026-10-10; the implementation review passed, docs/reviews/adr-0218-implementation-claude-opus-5-5.md; accepted 2026-10-10)
 - **Date**: 2026-10-08 (self-accepted 2026-10-10 under adr-batch after drafting, three-lens judging with a skeptic per
   finding, cross-ADR audits and alignment with the disaster-recovery ADRs)
 - **Deciders**: green-0-rabbit
