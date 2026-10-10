@@ -250,18 +250,18 @@ func (a *cli) workflowPauseCmd(verb string, paused bool) *cobra.Command {
 	return cmd
 }
 
-// devApplyAttempts bounds the re-apply of one resource that loses its update with a Conflict (funcdctl dev and
+// applyAttempts bounds the re-apply of one resource that loses its update with a Conflict (funcdctl dev and
 // applyRead).
-const devApplyAttempts = 5
+const applyAttempts = 5
 
 // applyRead reads the object, lets change edit it and applies it. The apply is conditional on the version read
 // (ADR-0210), so a controller's status write in between answers fault.Conflict: it reads again, at most
-// devApplyAttempts times. A change that returns false applies nothing; applyRead reports whether it applied.
+// applyAttempts times. A change that returns false applies nothing; applyRead reports whether it applied.
 func applyRead(ctx context.Context, c *sdk.Client, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName,
 	change func(v1.Object) (bool, error),
 ) (bool, error) {
 	var err error
-	for range devApplyAttempts {
+	for range applyAttempts {
 		obj, gerr := c.Get(ctx, kind, ns, name)
 		if gerr != nil {
 			return false, gerr

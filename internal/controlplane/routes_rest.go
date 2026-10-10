@@ -1607,6 +1607,9 @@ func registerNamespacedCRUD[T crudKind, PT objectPtr[T]](api huma.API, r crudRou
 		})
 	huma.Register(api, huma.Operation{OperationID: "replace" + r.kind, Method: http.MethodPut, Path: item, Tags: tags},
 		func(ctx context.Context, in *namespacedNameBodyInput[T]) (*bodyOutput[T], error) {
+			if err := withReplaceVersion(in.IfMatchParams, PT(&in.Body).GetObjectMeta()); err != nil {
+				return nil, wrapFaultError(err)
+			}
 			return respond(r.replace(ctx, in.Namespace, in.Name, in.Body))
 		})
 	huma.Register(api, huma.Operation{OperationID: "delete" + r.kind, Method: http.MethodDelete, Path: item, Tags: tags},

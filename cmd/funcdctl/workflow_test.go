@@ -31,7 +31,7 @@ func bumpStatus(t *testing.T, st store.Store, kind v1.Kind, name v1.ObjectName, 
 }
 
 // scenario: workflow-pause-retries-on-conflict (ADR-0210) — the run controller's status write between the read
-// and the write makes the PUT conflict; pause re-reads and applies again, at most devApplyAttempts times.
+// and the write makes the PUT conflict; pause re-reads and applies again, at most applyAttempts times.
 func TestScenarioWorkflowPauseRetriesOnConflict(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -39,7 +39,7 @@ func TestScenarioWorkflowPauseRetriesOnConflict(t *testing.T) {
 	for _, tc := range []struct {
 		races   int32
 		applied bool
-	}{{races: 2, applied: true}, {races: devApplyAttempts}} {
+	}{{races: 2, applied: true}, {races: applyAttempts}} {
 		c, st, puts := newRacingServer(t, path, tc.races, func(st store.Store) {
 			bumpStatus(t, st, v1.KindWorkflowRun, "r1", func(o v1.Object) { o.(*v1.WorkflowRun).Status.ObservedGeneration++ })
 		})
@@ -52,7 +52,7 @@ func TestScenarioWorkflowPauseRetriesOnConflict(t *testing.T) {
 		paused := obj.(*v1.WorkflowRun).Spec.Paused
 		if !tc.applied {
 			require.Equal(t, fault.Conflict, fault.KindOf(err), "every attempt lost its race")
-			require.Equal(t, int32(devApplyAttempts), puts.Load())
+			require.Equal(t, int32(applyAttempts), puts.Load())
 			require.False(t, paused)
 			continue
 		}

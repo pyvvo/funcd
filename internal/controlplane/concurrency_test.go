@@ -96,6 +96,46 @@ func twoVersions(t *testing.T, srv http.Handler, st store.Store) (v1RV, v2RV str
 	return v1RV, v2RV
 }
 
+// appTwoVersions creates App todo through the generic CRUD route, then replaces it once: it returns the server,
+// the App's first and its current version.
+func appTwoVersions(t *testing.T) (srv http.Handler, v1RV, v2RV string) {
+	t.Helper()
+	srv = newServer(t)
+	rvOf := func(rec *httptest.ResponseRecorder) string {
+		t.Helper()
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		var app v1.App
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &app))
+		return app.ResourceVersion
+	}
+	v1RV = rvOf(send(t, srv, http.MethodPost, appBase, appBody(t, "todo", nil)))
+	v2RV = rvOf(send(t, srv, http.MethodPut, appBase+"/todo", appBody(t, "todo", func(s *v1.AppSpec) { s.Version = "2" })))
+	require.NotEqual(t, v1RV, v2RV)
+	return srv, v1RV, v2RV
+}
+
+// appBodyAt is App todo with spec.version version and metadata.resourceVersion rv.
+func appBodyAt(t *testing.T, version, rv string) []byte {
+	t.Helper()
+	var app v1.App
+	require.NoError(t, json.Unmarshal(appBody(t, "todo", func(s *v1.AppSpec) { s.Version = version }), &app))
+	app.ResourceVersion = rv
+	b, err := json.Marshal(app)
+	require.NoError(t, err)
+	return b
+}
+
+// requireAppAt asserts the stored App todo still has version rv and spec.version version.
+func requireAppAt(t *testing.T, srv http.Handler, rv, version string) {
+	t.Helper()
+	rec := send(t, srv, http.MethodGet, appBase+"/todo", nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var app v1.App
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &app))
+	require.Equal(t, rv, app.ResourceVersion)
+	require.Equal(t, version, app.Spec.Version)
+}
+
 func requireConflict(t *testing.T, rec *httptest.ResponseRecorder) string {
 	t.Helper()
 	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
@@ -117,6 +157,11 @@ func TestScenarioStaleReplaceConflicts(t *testing.T) {
 	rv, handler := stored(t, st, "f")
 	require.Equal(t, cur, rv)
 	require.Equal(t, "h2", handler)
+
+	app, oldApp, curApp := appTwoVersions(t)
+	requireConflict(t, send(t, app, http.MethodPut, appBase+"/todo", appBodyAt(t, "3", oldApp)))
+	requireConflict(t, send(t, app, http.MethodPut, appBase+"/todo", appBodyAt(t, "3", ""), `"`+oldApp+`"`))
+	requireAppAt(t, app, curApp, "2")
 }
 
 // scenario: current-replace-succeeds
@@ -193,6 +238,13 @@ func TestScenarioBadPreconditionRejected(t *testing.T) {
 	rv, handler := stored(t, st, "f")
 	require.Equal(t, cur, rv)
 	require.Equal(t, "h2", handler)
+
+	app, oldApp, curApp := appTwoVersions(t)
+	rec = send(t, app, http.MethodPut, appBase+"/todo", appBodyAt(t, "3", curApp), quoted(oldApp))
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	rec = send(t, app, http.MethodPut, appBase+"/todo", appBodyAt(t, "3", ""), "W/"+quoted(curApp))
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	requireAppAt(t, app, curApp, "2")
 }
 
 // scenario: stale-delete-conflicts — a Function (compared at the Delete admission's Get) and a ConfigMap (compared
