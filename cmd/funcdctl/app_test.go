@@ -267,7 +267,7 @@ func TestCLIAppPauseRetriesAConflict(t *testing.T) {
 	require.Equal(t, 3, conflicts.count(), "two Conflicts, then the write")
 	require.True(t, getApp(t, c).Spec.Paused)
 
-	conflicts.arm(appApplyAttempts)
+	conflicts.arm(applyAttempts)
 	err = execCLI(&bytes.Buffer{}, c, "app", "resume", "todo", "-n", "team-a")
 	require.Equal(t, fault.Conflict, fault.KindOf(err))
 	require.Equal(t, 5, conflicts.count())
