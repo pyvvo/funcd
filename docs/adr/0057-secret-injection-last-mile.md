@@ -1,6 +1,7 @@
 # ADR-0057: Secret injection last-mile — a Function declares its bound Secrets; the reconciler resolves them (PDP-authorized) into the worker's env
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0221](0221-degraded-recovers-under-gate.md) (2026-10-10) — Decision 5 (129) and scenarios `unauthorized-secret-fails-materialization` (54) and `missing-secret-fails` (57): "not Ready" holds only while no worker of the serving revision passes its readiness probe; a `Degraded` Function then serves again with its start-time env. No worker is created or started while the Secret fails.
 - **Date**: 2026-06-19 (**Implemented 2026-06-19** — review pass (0 blockers, 0 majors; DoD 8/8, 5 scenarios race-clean),
   see docs/reviews/adr-0057-implementation-claude-opus-4-8.md. Completes the V1 exit criterion's "reads a secret" clause.
   **Reviewing 2026-06-19** — implemented: `FunctionSpec.Secrets []ObjectName` (+ OpenAPI regen);

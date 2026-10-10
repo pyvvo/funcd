@@ -2,6 +2,7 @@
 
 - **Status**: Implemented
 - **Superseded in part by**: [ADR-0158](0158-pool-member-identity.md) (2026-10-05) — the pooled gate: a pooled Function declaring spec.config or spec.secrets no longer fails closed.
+- **Superseded in part by**: [ADR-0221](0221-degraded-recovers-under-gate.md) (2026-10-10) — Decision 3 (116-117) and scenario `config-missing-fails-closed` (52-53): `Ready=False` holds only while no worker of the serving revision passes its readiness probe; a `Degraded` Function then serves again with its start-time env. No worker is created or started while the ConfigMap is missing.
 - **Date**: 2026-07-02 (accepted 2026-07-02 — judge: **ACCEPT**, sound + faithful to the code + cycle-free, 0
   Blockers/0 Majors; folded 3 Minors [the resolve-trigger + pooled gate flip to config-OR-secrets; sentinel
   `ErrConfig`/`ErrSecret` so the reconciler attributes `ConfigResolveFailed` vs `SecretResolveFailed` from one
