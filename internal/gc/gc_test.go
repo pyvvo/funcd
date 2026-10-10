@@ -375,7 +375,7 @@ func appPairs() []gc.Pair {
 	var out []gc.Pair
 	for _, k := range []v1.Kind{
 		v1.KindFunction, v1.KindWorkflow, v1.KindEventSource, v1.KindSensor, v1.KindRoute, v1.KindSite,
-		v1.KindCatalogService, v1.KindKVStore, v1.KindBucket,
+		v1.KindCatalogService, v1.KindKVStore, v1.KindBucket, v1.KindConfigMap,
 	} {
 		out = append(out, gc.Pair{Owner: v1.KindApp, Child: k})
 	}
@@ -709,6 +709,14 @@ func TestInUse(t *testing.T) {
 			return r
 		}()},
 		{"a Site's spec.bucket.name", object(t, v1.KindBucket, "assets"), object(t, v1.KindSite, "web")},
+		{"a Function's spec.config", object(t, v1.KindConfigMap, "settings"), fn("api", func(s *v1.FunctionSpec) {
+			s.Config = []v1.ObjectName{"settings"}
+		})},
+		{"a CatalogService's spec.config", object(t, v1.KindConfigMap, "settings"), func() v1.Object {
+			c := object(t, v1.KindCatalogService, "catalog").(*v1.CatalogService)
+			c.Spec.Config = []v1.ObjectName{"settings"}
+			return c
+		}()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st := store.New(memory.New())
@@ -825,4 +833,48 @@ func TestAppStoreInUseWaitsForALaterSweep(t *testing.T) {
 		require.False(t, exists(t, st, v1.KindFunction, "todo-api"))
 		require.False(t, exists(t, st, v1.KindKVStore, "todo-cache"))
 	})
+}
+
+// ADR-0213 Decision 5: the GC collects an App's ConfigMaps, and keeps one while a Function the App does not control,
+// or a Function of the App an open run holds, names it.
+func TestAppConfigMapInUseWaitsForALaterSweep(t *testing.T) {
+	ctx := context.Background()
+	st := store.New(memory.New())
+	app := create(t, st, v1.KindApp, "todo", nil)
+	put(t, st, ownedBy(object(t, v1.KindConfigMap, "todo-settings-0000000001"), app, true, false))
+	put(t, st, ownedBy(object(t, v1.KindConfigMap, "todo-settings-0000000002"), app, true, false))
+	put(t, st, ownedBy(object(t, v1.KindConfigMap, "todo-unused-0000000003"), app, true, false))
+	api := object(t, v1.KindFunction, "todo-api").(*v1.Function)
+	api.Spec.Config = []v1.ObjectName{"todo-settings-0000000002"}
+	run := holdPins(t, st, put(t, st, ownedBy(api, app, true, false)), "todo-api-1").(*v1.WorkflowRun)
+	audit := object(t, v1.KindFunction, "audit").(*v1.Function)
+	audit.Spec.Config = []v1.ObjectName{"todo-settings-0000000001"}
+	audit = put(t, st, audit).(*v1.Function)
+	del(t, st, v1.KindApp, "todo")
+
+	c := newCollector(t, st, 0)
+	require.NoError(t, c.CollectNamespace(ctx, ns))
+	require.False(t, exists(t, st, v1.KindConfigMap, "todo-unused-0000000003"), "an unused ConfigMap of the App is collected")
+	require.True(t, exists(t, st, v1.KindConfigMap, "todo-settings-0000000001"), "audit, outside the App, still names it")
+	require.True(t, exists(t, st, v1.KindConfigMap, "todo-settings-0000000002"), "a held Function counts as a user")
+
+	audit.Spec.Config = nil
+	_, err := st.Update(ctx, audit)
+	require.NoError(t, err)
+	run.Status.Phase = v1.RunCancelled
+	_, err = st.Update(ctx, run)
+	require.NoError(t, err)
+	require.NoError(t, c.CollectNamespace(ctx, ns))
+	require.False(t, exists(t, st, v1.KindFunction, "todo-api"))
+	require.False(t, exists(t, st, v1.KindConfigMap, "todo-settings-0000000001"))
+	require.False(t, exists(t, st, v1.KindConfigMap, "todo-settings-0000000002"))
+}
+
+// ADR-0213 Decision 5: (App, ConfigMap) follows (App, Bucket) and precedes (App, AppRevision).
+func TestPairsOrderAppConfigMapAfterBucket(t *testing.T) {
+	pairs := gc.Pairs()
+	at := slices.Index(pairs, gc.Pair{Owner: v1.KindApp, Child: v1.KindConfigMap})
+	require.Equal(t, slices.Index(pairs, gc.Pair{Owner: v1.KindApp, Child: v1.KindBucket})+1, at)
+	require.Equal(t, at+1, slices.Index(pairs, gc.Pair{Owner: v1.KindApp, Child: v1.KindAppRevision}))
+	require.NotContains(t, pairs, gc.Pair{Owner: v1.KindApp, Child: v1.KindSecret}, "the App never owns a Secret")
 }

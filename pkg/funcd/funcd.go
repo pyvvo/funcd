@@ -1036,6 +1036,7 @@ func (p *Platform) buildControlPlane() error {
 			ctrl.Watches(pair.Child.GVK(), appReconciler.MapPart)
 		}
 	}
+	ctrl.Watches(v1.KindSecret.GVK(), appReconciler.MapSecret) // ADR-0213: a declared Secret created, changed or deleted
 	p.controller = ctrl
 
 	// partAdmissions are the admissions a direct write passes, over the reader r: the control plane runs them over

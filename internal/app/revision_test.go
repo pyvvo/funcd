@@ -61,7 +61,7 @@ func requireCond(t *testing.T, c v1.Condition, s v1.ConditionStatus, reason, msg
 func (h *harness) versionsAll() map[v1.ObjectRef]string {
 	h.t.Helper()
 	out := map[v1.ObjectRef]string{}
-	for _, k := range []v1.Kind{v1.KindApp, v1.KindAppRevision, v1.KindKVStore, v1.KindBucket, v1.KindFunction, v1.KindWorkflow, v1.KindRoute} {
+	for _, k := range []v1.Kind{v1.KindApp, v1.KindAppRevision, v1.KindConfigMap, v1.KindKVStore, v1.KindBucket, v1.KindFunction, v1.KindWorkflow, v1.KindRoute} {
 		res, err := h.st.List(h.ctx, k.GVK(), store.ListOptions{Namespace: ns})
 		require.NoError(h.t, err)
 		for _, o := range res.Items {

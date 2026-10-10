@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"slices"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -50,13 +51,17 @@ func (partsAdmission) Handles(gvk v1.GroupVersionKind, op admission.Operation) b
 	return gvk == v1.KindApp.GVK() && (op == admission.Create || op == admission.Update)
 }
 
-// Admit refuses a ref to an object this App controls, then runs each declared part through the part admissions as a
-// create when it is absent, else as an update over the stored object, with the App writer's identity, against a view
-// that already holds the App's other parts, so a quota counts them together. A refusal names the entry's path.
+// Admit refuses a Secret that a part names and spec.secrets does not declare (ADR-0213 Decision 7) and a ref to an
+// object this App controls, then runs each declared part through the part admissions as a create when it is absent,
+// else as an update over the stored object, with the App writer's identity, against a view that already holds the
+// App's other parts, so a quota counts them together. A refusal names the entry's path.
 func (a partsAdmission) Admit(ctx context.Context, req admission.Request) (v1.Object, error) {
 	app, ok := req.Object.(*v1.App)
 	if !ok {
 		return req.Object, nil
+	}
+	if err := undeclaredSecret(app); err != nil {
+		return nil, err
 	}
 	st := stored{r: a.r, ns: app.Namespace, lists: map[v1.Kind][]v1.Object{}}
 	paths := make(map[v1.ObjectRef]string)
@@ -93,6 +98,47 @@ func (a partsAdmission) Admit(ctx context.Context, req admission.Request) (v1.Ob
 		}
 	}
 	return req.Object, nil
+}
+
+// undeclaredSecret refuses the first name in a declared Function's or CatalogService's spec.secrets, or in a declared
+// Workflow's image step function.secrets, that spec.secrets does not declare (ADR-0213 Decision 7). A ref entry, which
+// sets no spec field, and a ref step are exempt: the App does not define them. The rule is admission-only, so an App
+// stored before ADR-0213 still writes its status (Decision 9).
+func undeclaredSecret(app *v1.App) error {
+	declared := make(map[v1.ObjectName]bool, len(app.Spec.Secrets))
+	for _, s := range app.Spec.Secrets {
+		declared[s.Name] = true
+	}
+	check := func(path string, kind v1.Kind, name v1.ObjectName, secrets []v1.ObjectName) error {
+		for j, n := range secrets {
+			if !declared[n] {
+				return fault.Invalidf(admitOp, "%s.secrets[%d]: %s/%s names Secret %q, which spec.secrets does not declare", path, j, kind, name, n)
+			}
+		}
+		return nil
+	}
+	s := &app.Spec
+	for i, f := range s.Functions {
+		if err := check(fmt.Sprintf("spec.functions[%d]", i), v1.KindFunction, f.Name, f.Secrets); err != nil {
+			return err
+		}
+	}
+	for i, w := range s.Workflows {
+		for j, st := range w.Steps {
+			if st.Function == nil || st.Function.Image == "" {
+				continue
+			}
+			if err := check(fmt.Sprintf("spec.workflows[%d].steps[%d].function", i, j), v1.KindWorkflow, w.Name, st.Function.Secrets); err != nil {
+				return err
+			}
+		}
+	}
+	for i, c := range s.Catalogs {
+		if err := check(fmt.Sprintf("spec.catalogs[%d]", i), v1.KindCatalogService, c.Name, c.Secrets); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // stored reads the namespace's objects of a kind once per Admit.

@@ -28,7 +28,8 @@ const rewatchBackoff = time.Second
 type Pair struct{ Owner, Child v1.Kind }
 
 // Pairs is every pair a reconciler stamps. Revision is last: one sweep collects a Function, then its Revisions.
-// The App pairs are one per App section kind (ADR-0199 Decision 7), then (App, AppRevision) (ADR-0200 Decision 8).
+// The App pairs are one per App section kind (ADR-0199 Decision 7), users before stores, with (App, ConfigMap) after
+// (App, Bucket) (ADR-0213 Decision 5), then (App, AppRevision) (ADR-0200 Decision 8).
 func Pairs() []Pair {
 	return []Pair{
 		{Owner: v1.KindWorkflow, Child: v1.KindFunction}, {Owner: v1.KindWorkflow, Child: v1.KindKVStore},
@@ -37,7 +38,8 @@ func Pairs() []Pair {
 		{Owner: v1.KindApp, Child: v1.KindEventSource}, {Owner: v1.KindApp, Child: v1.KindSensor},
 		{Owner: v1.KindApp, Child: v1.KindRoute}, {Owner: v1.KindApp, Child: v1.KindSite},
 		{Owner: v1.KindApp, Child: v1.KindCatalogService}, {Owner: v1.KindApp, Child: v1.KindKVStore},
-		{Owner: v1.KindApp, Child: v1.KindBucket}, {Owner: v1.KindApp, Child: v1.KindAppRevision},
+		{Owner: v1.KindApp, Child: v1.KindBucket}, {Owner: v1.KindApp, Child: v1.KindConfigMap},
+		{Owner: v1.KindApp, Child: v1.KindAppRevision},
 		{Owner: v1.KindFunction, Child: v1.KindRevision},
 	}
 }
@@ -414,14 +416,15 @@ func (c *Collector) remove(ctx context.Context, obj v1.Object, ref v1.OwnerRefer
 	return err
 }
 
-// usedElsewhere reports whether obj, a KVStore or Bucket an App controls, is still used by an object the App does
-// not control or by a Function an open run holds, which this pass does not delete (ADR-0199 Decisions 6 and 7).
+// usedElsewhere reports whether obj, a KVStore, Bucket or ConfigMap an App controls, is still used by an object the
+// App does not control or by a Function an open run holds, which this pass does not delete (ADR-0199 Decisions 6 and
+// 7, ADR-0213 Decision 5).
 func (c *Collector) usedElsewhere(ctx context.Context, obj v1.Object, ref v1.OwnerReference) (bool, error) {
 	if ref.Kind != v1.KindApp {
 		return false, nil
 	}
 	switch obj.(type) {
-	case *v1.KVStore, *v1.Bucket:
+	case *v1.KVStore, *v1.Bucket, *v1.ConfigMap:
 	default:
 		return false, nil
 	}
@@ -523,7 +526,8 @@ func bucketUsers() []v1.Kind {
 // none), as the deletion protections bind it (ADR-0199 Decision 6): a Function another Function links to (ADR-0064),
 // a KVStore a Function's spec.kv names (ADR-0073), a Bucket a Function's or CatalogService's spec.blob, an
 // EventSource's spec.blob.bucket, a Route's spec.rules[].backend.static.bucket or a Site's spec.bucket.name names
-// (ADR-0080). Nothing uses an object of another kind.
+// (ADR-0080), a ConfigMap a Function's or CatalogService's spec.config names (ADR-0213 Decision 5). Nothing uses an
+// object of another kind.
 func InUse(ctx context.Context, s store.Store, obj v1.Object, skip func(v1.Object) bool) (v1.ObjectRef, bool, error) {
 	const op = "gc.InUse"
 	var kinds []v1.Kind
@@ -532,6 +536,8 @@ func InUse(ctx context.Context, s store.Store, obj v1.Object, skip func(v1.Objec
 		kinds = []v1.Kind{v1.KindFunction}
 	case *v1.Bucket:
 		kinds = bucketUsers()
+	case *v1.ConfigMap:
+		kinds = []v1.Kind{v1.KindFunction, v1.KindCatalogService}
 	default:
 		return v1.ObjectRef{}, false, nil
 	}
@@ -563,6 +569,13 @@ func uses(u, obj v1.Object) bool {
 		return ok && slices.ContainsFunc(f.Spec.KV, func(b v1.FunctionKV) bool { return b.Store == name })
 	case *v1.Bucket:
 		return usesBucket(u, name)
+	case *v1.ConfigMap:
+		switch o := u.(type) {
+		case *v1.Function:
+			return slices.Contains(o.Spec.Config, name)
+		case *v1.CatalogService:
+			return slices.Contains(o.Spec.Config, name)
+		}
 	}
 	return false
 }
