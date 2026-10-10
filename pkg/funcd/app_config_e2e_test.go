@@ -118,7 +118,9 @@ func (e *gcEnv) anyPartExists(t *testing.T) bool {
 
 // scenario: app-secret-declared
 func TestScenarioAppSecretDeclared(t *testing.T) {
+	t.Parallel()
 	t.Run("held until the Secret is complete", func(t *testing.T) {
+		t.Parallel()
 		e := startGC(t)
 		a := configTodo(t, e)
 		e.apply(t, a)
@@ -151,6 +153,7 @@ func TestScenarioAppSecretDeclared(t *testing.T) {
 		e.waitAPIEnv(t, apiEnv{TZ: "Europe/Paris", Stripe: "sk-test-2"})
 	})
 	t.Run("provided after the deadline", func(t *testing.T) {
+		t.Parallel()
 		e := startGC(t, failedPacing())
 		a := configTodo(t, e)
 		e.apply(t, a)
@@ -194,6 +197,7 @@ func (e *gcEnv) postApp(t *testing.T, body string) (int, string) {
 
 // scenario: app-secret-undeclared-refused
 func TestScenarioAppSecretUndeclaredRefused(t *testing.T) {
+	t.Parallel()
 	e := startGC(t)
 	for name, tc := range map[string]struct {
 		edit func(*v1.App)
@@ -257,6 +261,7 @@ spec:
 
 // scenario: app-config-change-rolls
 func TestScenarioAppConfigChangeRolls(t *testing.T) {
+	t.Parallel()
 	st := store.New(memory.New())
 	e := startGC(t, funcd.WithStore(st))
 	applyConfigMap(t, e.c, "shared", map[string]string{"SHARED": "one"})
@@ -309,6 +314,7 @@ func TestScenarioAppConfigChangeRolls(t *testing.T) {
 
 // scenario: app-pre-f116-app
 func TestScenarioAppPreF116App(t *testing.T) {
+	t.Parallel()
 	st := store.New(memory.New())
 	e := startGC(t, funcd.WithStore(st))
 	applySecret(t, e.c, "todo-billing", map[string][]byte{"BILLING_KEY": []byte("bk-test")})

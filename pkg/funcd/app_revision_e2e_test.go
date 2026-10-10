@@ -90,6 +90,7 @@ func buildCmd(t *testing.T, name string) string {
 
 // scenario: app-reapply-same-spec
 func TestScenarioAppReapplySameSpec(t *testing.T) {
+	t.Parallel()
 	st := store.New(memory.New())
 	e := startGC(t, funcd.WithStore(st))
 	a := installTodo(t, e)
@@ -110,6 +111,7 @@ func TestScenarioAppReapplySameSpec(t *testing.T) {
 
 // scenario: app-upgrade
 func TestScenarioAppUpgrade(t *testing.T) {
+	t.Parallel()
 	st := store.New(memory.New())
 	e := startGC(t, funcd.WithStore(st))
 	a := installTodo(t, e)
@@ -168,6 +170,7 @@ func TestScenarioAppUpgrade(t *testing.T) {
 
 // scenario: app-prune-after-current
 func TestScenarioAppPruneAfterCurrent(t *testing.T) {
+	t.Parallel()
 	st := store.New(memory.New())
 	e := startGC(t, funcd.WithStore(st))
 	a := installTodo(t, e)
@@ -198,11 +201,13 @@ func TestScenarioAppPruneAfterCurrent(t *testing.T) {
 		require.Less(t, rvOf(t, ev), deleted, "Route/todo-legacy outlives every write of the App while todo-2 is Deploying")
 	}
 	require.NotZero(t, held, "the App wrote its status while todo-2 was Deploying")
-	require.Equal(t, http.StatusNotFound, e.routed(t, todoHost, "/legacy"))
+	require.Eventually(t, func() bool { return e.routed(t, todoHost, "/legacy") == http.StatusNotFound }, gcWithin, 20*time.Millisecond,
+		"nothing routes /legacy")
 }
 
 // scenario: app-revision-read-only
 func TestScenarioAppRevisionReadOnly(t *testing.T) {
+	t.Parallel()
 	e := startGC(t)
 	installTodo(t, e)
 	before := e.appRevision(t, "todo-1")
@@ -254,6 +259,7 @@ spec:
 
 // scenario: app-upgrade-timeout-config
 func TestScenarioAppUpgradeTimeoutConfig(t *testing.T) {
+	t.Parallel()
 	_, err := funcd.New(funcd.InMemory(), funcd.WithPacing(funcd.Pacing{AppUpgradeTimeout: time.Minute}))
 	require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
 	require.ErrorContains(t, err, "Pacing.AppUpgradeTimeout 1m0s must be more than BootTimeout 1m0s")

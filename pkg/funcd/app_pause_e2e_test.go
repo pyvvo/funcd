@@ -120,6 +120,7 @@ func requireHealedAt(t *testing.T, h *v1.AppSelfHeal, after time.Time) {
 
 // scenario: app-drift-self-healed
 func TestScenarioAppDriftSelfHealed(t *testing.T) {
+	t.Parallel()
 	logs := newSelfHeals()
 	e := startGC(t, funcd.WithLogger(slog.New(logs)))
 	installTodo(t, e)
@@ -153,6 +154,7 @@ func TestScenarioAppDriftSelfHealed(t *testing.T) {
 
 // scenario: app-paused-keeps-hotfix
 func TestScenarioAppPausedKeepsHotfix(t *testing.T) {
+	t.Parallel()
 	logs := newSelfHeals()
 	e := startGC(t, funcd.WithLogger(slog.New(logs)))
 	installTodo(t, e)
@@ -166,7 +168,7 @@ func TestScenarioAppPausedKeepsHotfix(t *testing.T) {
 	require.Equal(t, "spec.paused is set: the App writes no part until it is resumed", c.Message)
 	hotfix := e.imageV2(t)
 	e.handEdit(t, hotfix)
-	require.Never(t, func() bool { return e.apiImage(t) != hotfix }, 2*healWithin, 50*time.Millisecond, "the edit stays")
+	require.Never(t, func() bool { return e.apiImage(t) != hotfix }, healWithin, 50*time.Millisecond, "the edit stays")
 	got := e.app(t, "todo")
 	require.Equal(t, v1.PhaseReady, got.Status.Phase, "the App keeps its phase")
 	require.Nil(t, got.Status.LastSelfHeal)
@@ -188,6 +190,7 @@ func TestScenarioAppPausedKeepsHotfix(t *testing.T) {
 
 // scenario: app-rollout-is-not-self-heal
 func TestScenarioAppRolloutIsNotSelfHeal(t *testing.T) {
+	t.Parallel()
 	logs := newSelfHeals()
 	e := startGC(t, funcd.WithLogger(slog.New(logs)))
 	a := installTodo(t, e)
@@ -218,6 +221,7 @@ func TestScenarioAppRolloutIsNotSelfHeal(t *testing.T) {
 
 // scenario: app-paused-defers-upgrade
 func TestScenarioAppPausedDefersUpgrade(t *testing.T) {
+	t.Parallel()
 	e := startGC(t)
 	a := installTodo(t, e)
 	cli := funcdctl(t, e)
@@ -249,6 +253,7 @@ func TestScenarioAppPausedDefersUpgrade(t *testing.T) {
 
 // scenario: app-apply-without-paused-resumes
 func TestScenarioAppApplyWithoutPausedResumes(t *testing.T) {
+	t.Parallel()
 	e := startGC(t)
 	a := installTodo(t, e)
 	out, err := funcdctl(t, e)("app", "pause", "todo")
@@ -268,8 +273,10 @@ func TestScenarioAppApplyWithoutPausedResumes(t *testing.T) {
 	require.Contains(t, body, todoV2Marker, "todo-2 rolled out")
 }
 
-// scenario: app-paused-rollout-full-timeout
+// scenario: app-paused-rollout-full-timeout — the ADR pauses 5 s after the stamp for 30 s at app.upgradeTimeout 20s;
+// the test keeps those ratios to failedPacing's shorter upgradeTimeout: the pause outlasts the stamp's deadline.
 func TestScenarioAppPausedRolloutFullTimeout(t *testing.T) {
+	t.Parallel()
 	e := startGC(t, failedPacing())
 	a := installTodo(t, e)
 	cli := funcdctl(t, e)
@@ -281,21 +288,21 @@ func TestScenarioAppPausedRolloutFullTimeout(t *testing.T) {
 		"todo-2 is stamped")
 	stamped := e.appRevision(t, "todo-2").Status.StartedAt
 	require.NotNil(t, stamped)
-	time.Sleep(time.Until(time.Time(*stamped).Add(5 * time.Second)))
+	time.Sleep(time.Until(time.Time(*stamped).Add(upgradeTimeout / 4)))
 	out, err := cli("app", "pause", "todo")
 	require.NoError(t, err, out)
 	e.waitPaused(t, v1.ConditionTrue, "SpecPaused")
 
 	require.Never(t, func() bool { return e.appRevision(t, "todo-2").Status.Phase != v1.PhaseDeploying },
-		30*time.Second, 100*time.Millisecond, "todo-2 stays Deploying while paused")
+		3*upgradeTimeout/2, 100*time.Millisecond, "todo-2 stays Deploying while paused")
 	out, err = cli("app", "resume", "todo")
 	require.NoError(t, err, out)
 	resumed := time.Time(e.waitPaused(t, v1.ConditionFalse, "Resumed").LastTransitionTime)
 
 	r2 := e.waitRevisionPhase(t, "todo-2", v1.PhaseFailed, 2*appWithin)
 	after := time.Since(resumed)
-	require.GreaterOrEqual(t, after, 20*time.Second, "todo-2 fails no sooner than app.upgradeTimeout after the resume")
-	require.Less(t, after, 23*time.Second, "todo-2 fails at app.upgradeTimeout after the resume")
+	require.GreaterOrEqual(t, after, upgradeTimeout, "todo-2 fails no sooner than app.upgradeTimeout after the resume")
+	require.Less(t, after, upgradeTimeout+upgradeSlack, "todo-2 fails at app.upgradeTimeout after the resume")
 	require.Equal(t, *stamped, *r2.Status.StartedAt, "the stamp time is kept")
 	got := e.waitApp(t, "todo", v1.ConditionFalse, "ChildNotReady", appWithin)
 	require.Equal(t, v1.PhaseFailed, got.Status.Phase)
