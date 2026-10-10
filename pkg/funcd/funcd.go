@@ -635,9 +635,9 @@ func (p *Platform) buildControlPlane() error {
 	}
 
 	// S3 gateway (ADR-0080/0085): opt-in S3-protocol frontend over the blob substrate, reusing the
-	// cedar PDP as the PEP. When enabled, load/generate the node master secret, build the server, and
-	// expose the per-function keypair deriver to the reconciler for worker-env injection. Disabled ⇒
-	// nothing is built (no listener, no IAM, no injection) — zero-config unchanged.
+	// cedar PDP as the PEP. When enabled, build the server and expose the per-function keypair deriver to
+	// the reconciler for worker-env injection. Disabled ⇒ nothing is built (no listener, no IAM, no
+	// injection) — zero-config unchanged. The master below is loaded either way (ADR-0204 Decision 7).
 	// The node master secret (ADR-0085): the SAME 32-byte key the S3 gateway derives per-function
 	// SigV4 keypairs from AND the catalog PEP proxy derives/verifies per-function catalog tokens with
 	// (ADR-0137). Loaded ONCE here — before both the s3gw and the catalog wiring — so they share one

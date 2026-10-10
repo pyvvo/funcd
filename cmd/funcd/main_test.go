@@ -456,6 +456,24 @@ func TestIssue850_GatewayOffMasterUnderDataDir(t *testing.T) {
 	require.Equal(t, fs.FileMode(0o600), info.Mode().Perm())
 }
 
+// Issue #850, ADR-0204 scenario master-key-migrates: a gateway-off node whose master is only in the working
+// directory copies it under storage.dataDir when it starts, so the catalog tokens it issued stay valid.
+func TestIssue850_StartMigratesWorkingDirMaster(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	old := bytes.Repeat([]byte{7}, 32)
+	require.NoError(t, os.MkdirAll(filepath.Join(cwd, "s3gateway"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(cwd, "s3gateway", "master.key"), old, 0o600))
+
+	_, dataDir := addressesFromConfigFile(t)
+
+	got, err := os.ReadFile(filepath.Join(dataDir, "s3gateway", "master.key"))
+	require.NoError(t, err)
+	require.Equal(t, old, got, "the start copies the working-directory key instead of creating a new one")
+	_, err = os.Stat(filepath.Join(cwd, "s3gateway", "master.key"))
+	require.NoError(t, err, "the old file is left to the operator")
+}
+
 // Issue #850, default (c) of ADR-0204 Decision 7: a platform with no data dir and no masterSecretFile (the InMemory
 // preset) keeps its master in memory and writes nothing to the working directory.
 func TestIssue850_InMemoryMasterNotWritten(t *testing.T) {
