@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.9.0](https://github.com/pyvvo/funcd/compare/v0.8.0...v0.9.0) (2026-10-10)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** the `since` query parameter of the function and workflow-run logs routes refuses, with 400, a Go duration outside ADR-0194's grammar (`500us`, `1.5h`, `-15m`) and a timestamp not in ADR-0196's form (an offset other than `Z`, or a precision other than exactly three fractional digits, such as `2026-10-07T22:00:00Z`). `funcdctl` still accepts any RFC3339 time and converts it.
+
+### Features
+
+* **api:** the logs since parameter takes only the duration and timestamp forms ([#875](https://github.com/pyvvo/funcd/issues/875)) ([d85d26b](https://github.com/pyvvo/funcd/commit/d85d26b0c78d64393610ad541bbbdc75e2fc9caa))
+* **app:** implement ADR-0199 and ADR-0200, the App resource and App revisions (FEAT-0010 F113, F114) ([#851](https://github.com/pyvvo/funcd/issues/851)) ([c35bdf5](https://github.com/pyvvo/funcd/commit/c35bdf5e54207edc79b28b90cb3460210692d7d1))
+* **app:** self-heal record and pause for an App (ADR-0212) ([#876](https://github.com/pyvvo/funcd/issues/876)) ([390497d](https://github.com/pyvvo/funcd/commit/390497d83ce9db92968f3120b521c98186994035))
+
+
+### Bug Fixes
+
+* **agents:** keep TMPDIR when scripts/agent/d runs inside another d call ([#861](https://github.com/pyvvo/funcd/issues/861)) ([6ea5259](https://github.com/pyvvo/funcd/commit/6ea5259dc0d046ed2d5f832aedb535daa2258a89))
+* **agents:** report PRs of every branch in the PR watcher ([#860](https://github.com/pyvvo/funcd/issues/860)) ([441331d](https://github.com/pyvvo/funcd/commit/441331d978ca154d96de0b1b2461809039f84994))
+* **agents:** scripts/agent/d sources the whole dev shell under bash 3.2 and leaves no temp directory ([#864](https://github.com/pyvvo/funcd/issues/864)) ([6c6d5bf](https://github.com/pyvvo/funcd/commit/6c6d5bf0055498706f82e7a40f0e80bf718ac39b))
+* **eventing:** skip a timer event with no positive interval instead of panicking ([#873](https://github.com/pyvvo/funcd/issues/873)) ([2a03fc7](https://github.com/pyvvo/funcd/commit/2a03fc7fef76fa103c195e6addb1e1049ed3759f))
+* **function:** keep a redeployed pooled member Ready while its old pool worker serves it ([#869](https://github.com/pyvvo/funcd/issues/869)) ([b589760](https://github.com/pyvvo/funcd/commit/b5897603951d42ea5ad6000e0bf1d4b9d1fc9871))
+* **function:** wait for a released call to end before the pool drain tests check its worker ([#862](https://github.com/pyvvo/funcd/issues/862)) ([a5c916f](https://github.com/pyvvo/funcd/commit/a5c916fc0f10374b2f11753c4fcdde72971c5081))
+
 ## [0.8.0](https://github.com/pyvvo/funcd/compare/v0.7.3...v0.8.0) (2026-10-08)
 
 
