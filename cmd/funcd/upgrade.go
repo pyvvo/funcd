@@ -59,7 +59,7 @@ func runUpgrade(ctx context.Context, out io.Writer, f upgradeFlags, newBinary, s
 		return err
 	}
 	if f.unit != "" {
-		if err := requireLinuxRoot("funcd upgrade --unit"); err != nil {
+		if err := requireLinuxRoot("funcd upgrade --unit", false); err != nil {
 			return err
 		}
 	}

@@ -134,13 +134,18 @@ func newUninstallCmd(out io.Writer) *cobra.Command {
 }
 
 // requireLinuxRoot gates an op that manages the systemd unit (the real install/uninstall, `upgrade --unit`), which is
-// Linux + root only. Off Linux or as a non-root user it returns a clear, actionable error.
-func requireLinuxRoot(op string) error {
+// Linux + root only. Off Linux or as a non-root user it returns a clear, actionable error; printHint points install
+// and uninstall at the non-gated `install --print` dry-run.
+func requireLinuxRoot(op string, printHint bool) error {
+	offLinux, noRoot := "", ""
+	if printHint {
+		offLinux, noRoot = "; use --print to preview the unit", " (or use --print)"
+	}
 	if runtime.GOOS != "linux" {
-		return fmt.Errorf("%s manages a systemd unit — Linux only (got %s)", op, runtime.GOOS)
+		return fmt.Errorf("%s manages a systemd unit — Linux only (got %s)%s", op, runtime.GOOS, offLinux)
 	}
 	if os.Geteuid() != 0 {
-		return fmt.Errorf("%s manages a systemd unit and needs root — re-run with sudo", op)
+		return fmt.Errorf("%s manages a systemd unit and needs root — re-run with sudo%s", op, noRoot)
 	}
 	return nil
 }
@@ -170,7 +175,7 @@ func printPlan(out io.Writer, unit string) error {
 // Linux+root only; the real path is exercised in the deferred integration lane.
 func runInstall(ctx context.Context, out io.Writer, unit string) error {
 	const op = "funcd install"
-	if err := requireLinuxRoot(op); err != nil {
+	if err := requireLinuxRoot(op, true); err != nil {
 		return err
 	}
 	if err := os.WriteFile(unitPath, []byte(unit), 0o644); err != nil { //nolint:gosec // a systemd unit is world-readable by design
@@ -198,7 +203,7 @@ func runInstall(ctx context.Context, out io.Writer, unit string) error {
 // The funcd data-root is left in place (operator data). Linux+root only.
 func runUninstall(out io.Writer) error {
 	const op = "funcd uninstall"
-	if err := requireLinuxRoot(op); err != nil {
+	if err := requireLinuxRoot(op, true); err != nil {
 		return err
 	}
 	_, _ = systemctl("disable", "--now", "funcd.service") // best-effort: not-loaded ⇒ already gone
