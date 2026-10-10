@@ -1,6 +1,6 @@
 # ADR-0210: API optimistic concurrency — replace and delete honor the client's resourceVersion
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-10-10, by an `adr-batch` run after a clean `adr-judge` gate; the defaults below were not confirmed one by one)
 - **Date**: 2026-10-08
 - **Deciders**: green-0-rabbit
 - **Tags**: api, control-plane, resource-version, optimistic-concurrency, sdk, funcdctl, openapi, disaster-recovery
@@ -90,7 +90,7 @@ writes and `HandoverKVStore` in `kvhandover.go`, a POST action, write through th
 
 ## Decision
 
-**1. Request form** (proposed; decider confirms at acceptance). A PUT's version is the body's
+**1. Request form** (proposed; accepted as default, not confirmed by the decider). A PUT's version is the body's
 `metadata.resourceVersion` or the `If-Match` header; a DELETE's is `If-Match`. `If-Match` holds exactly one strong
 entity-tag `"<resourceVersion>"`, or `*`, which counts as no version (RFC 9110: true when the object exists, which both
 verbs already require). A weak tag, a list (in one line or over several `If-Match` lines), an unquoted or an empty
@@ -115,11 +115,11 @@ admission; store.
 | `deleteMember` → `deleteObjIf` with each listed version | listed version | unchanged (internal, already conditional) |
 | `HandoverKVStore`, controllers, collector, status writes | own read version | unchanged (they never call these helpers) |
 
-**3. No version** (proposed; decider confirms at acceptance). A write without a version stays unconditional, with no
+**3. No version** (proposed; accepted as default, not confirmed by the decider). A write without a version stays unconditional, with no
 end date: a PUT is read-then-update, a DELETE has no precondition. A manifest has no version, and ADR-0206 Decision 5
 prints a restored object without one so that `funcdctl apply -f` replaces the current object.
 
-**4. Clients** (proposed; decider confirms at acceptance). The server ships first; no client breaks.
+**4. Clients** (proposed; accepted as default, not confirmed by the decider). The server ships first; no client breaks.
 
 | Client | Change |
 |---|---|
@@ -131,7 +131,7 @@ prints a restored object without one so that `funcdctl apply -f` replaces the cu
 | `funcdctl dev` `applyDesired`, `funcdctl delete` | none: they send no version; `applyDesired` keeps its retry for the Get-to-Update race |
 | TypeScript and Python | no control-plane client exists (verified 2026-10-08, see References); one added later sends the version it holds (body on PUT, `If-Match` on DELETE) and treats 409 as re-read |
 
-**5. OpenAPI** (proposed; decider confirms at acceptance). The spec stays generated (`just generate`,
+**5. OpenAPI** (proposed; accepted as default, not confirmed by the decider). The spec stays generated (`just generate`,
 `internal/controlplane/cmd/specgen`); every PUT and DELETE operation gains an optional `If-Match` header parameter
 from the embedded input field. No `ETag` response header (Open questions).
 
@@ -231,7 +231,7 @@ RFC 9110's 412. **Risk**: a client that holds a version but sends none stays las
 
 ## Open questions
 
-| Item | Recommended default (proposed; decider confirms at acceptance) | Why |
+| Item | Recommended default (proposed; accepted as default, not confirmed by the decider) | Why |
 |---|---|---|
 | Header or body, and precedence | PUT: body or `If-Match`, equal or 400; DELETE: `If-Match` | the body is where a client holds its version today; DELETE has no body; ambiguity fails closed |
 | A write without a version | unconditional, no end date | manifests and ADR-0206's `--object` output carry none; requiring one adds a GET and the same race |

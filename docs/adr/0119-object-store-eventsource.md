@@ -3,6 +3,7 @@
 - **Status**: Implemented
 - **Superseded in part by**: [ADR-0157](0157-blob-event-seen-list.md) (2026-10-05) — Decision §3 cursor/new-object rule, Watermark/Cursor contracts, §5 never-drops, sizing.
 - **Superseded in part by**: [ADR-0196](0196-utc-millisecond-timestamps.md) (2026-10-07) — the `time.Time` field type (255): the blob-event `time` is RFC3339 UTC with exactly 3 fractional digits.
+- **Superseded in part by**: [ADR-0201](0201-event-store.md) (2026-10-10) — the placement of the blob watermark driver: the V1 driver over `internal/kvstore.KV` (Scope In, Decision §3, Dependencies & I/O, the checklist) and the constraint to reuse the KV substrate for persistence; the seen list now lives in the event store.
 - **Date**: 2026-07-10
 - **Accepted**: 2026-07-10
 - **Reviewing**: 2026-07-10

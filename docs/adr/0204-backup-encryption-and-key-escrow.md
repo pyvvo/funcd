@@ -1,6 +1,6 @@
 # ADR-0204: Backup encryption and key escrow
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-10-10, by an `adr-batch` run after a clean `adr-judge` gate; the defaults below were not confirmed one by one)
 - **Date**: 2026-10-08
 - **Deciders**: green-0-rabbit
 - **Tags**: backup, disaster-recovery, encryption, secrets, keys
@@ -102,10 +102,10 @@ inside the envelope; run state and event store alike; no generation holds a key.
 | `masterSecret` | `Fingerprint` of the node master secret; absent ⇒ none recorded (Decision 5) |
 | `recipients` | sorted `Fingerprint`s of each parsed recipient's canonical `String()` (`*age.X25519Recipient`, `*age.HybridRecipient`); absent ⇒ `none` |
 
-`Fingerprint(b)` (proposed; decider confirms at acceptance) = the first 16 lowercase hex of SHA-256(label ‖ 0x00 ‖
+`Fingerprint(b)` (proposed; accepted as default, not confirmed by the decider) = the first 16 lowercase hex of SHA-256(label ‖ 0x00 ‖
 b), label `funcd-key-fingerprint-v1`, apart from `hs256Key`. At start with a target, funcd logs the three, not bytes.
 
-**4. Escrow set** (location and format proposed; decider confirms at acceptance). The operator keeps it outside the
+**4. Escrow set** (location and format proposed; accepted as default, not confirmed by the decider). The operator keeps it outside the
 box, every target and every generation; funcd never reads or writes it while serving.
 
 ```
@@ -134,9 +134,9 @@ mirror generation `blob/<e>/gen/<n>` (kept `blob.backup.rebaseline` + `retention
   (`spec.catalogs`, `resolveCatalogEnv`), `CatalogService <ns>/<name>: s3-keypair` (`spec.blob`, `services/catalog`
   `engineEnv`), s3-keypair rows gateway on or off (a copy may predate the config). Workers re-derive at start, so the
   list finds copies held outside funcd; Identity secrets are stored (ADR-0135). `masterSecret` absent (proposed;
-  decider confirms at acceptance): no check, nothing written, the list printed as credentials that may change.
+  accepted as default, not confirmed by the decider): no check, nothing written, the list printed as credentials that may change.
 
-**6. Rotation** (proposed; decider confirms at acceptance).
+**6. Rotation** (proposed; accepted as default, not confirmed by the decider).
 
 | Key | Procedure | Generations |
 |---|---|---|
@@ -146,7 +146,7 @@ mirror generation `blob/<e>/gen/<n>` (kept `blob.backup.rebaseline` + `retention
 | TLS, config | the operator refreshes the escrow copy after a change | not in generations |
 
 **7. Master location.** `s3gateway.masterSecretFile` when set, else `<storage.dataDir>/s3gateway/master.key`, gateway
-on or off. Migration (proposed; decider confirms at acceptance) on a gateway-off node, the only one that reads the
+on or off. Migration (proposed; accepted as default, not confirmed by the decider) on a gateway-off node, the only one that reads the
 working directory's `s3gateway/master.key` today (References, #850): that file present and the new path absent
 ⇒ funcd copies it there 0600 and warns naming both, leaving the old file to the operator; both present and different
 ⇒ `fault.Invalid` naming both paths and `s3gateway.masterSecretFile`. A gateway-on node keeps its key and warns naming
@@ -231,7 +231,7 @@ set and identities are the operator's to guard and keep complete, unchecked by f
 
 ## Open questions
 
-| Item | Recommended default (proposed; decider confirms at acceptance) | Why |
+| Item | Recommended default (proposed; accepted as default, not confirmed by the decider) | Why |
 |---|---|---|
 | Manifest sealed or checksummed | plain, ADR-0203's `sha256`, no signature | keys must be named before they are present; a signing key on the box adds nothing against a box compromise |
 | Escrow location and format | operator-held directory of Decision 4, matched by content fingerprint; funcd never writes it | keeps keys and data behind different holders |

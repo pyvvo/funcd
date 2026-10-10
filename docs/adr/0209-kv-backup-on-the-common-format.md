@@ -1,6 +1,6 @@
 # ADR-0209: KV backup on the common format
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-10-10, by an `adr-batch` run after a clean `adr-judge` gate; the defaults below were not confirmed one by one)
 - **Date**: 2026-10-08
 - **Deciders**: green-0-rabbit
 - **Tags**: kvstore, backup, disaster-recovery, badger, encryption, retention
@@ -83,7 +83,7 @@ envelope, escrow (ADR-0204); platform switch, status, metrics (ADR-0205); restor
 
 ## Decision
 
-**1. Inheritance** (precedence proposed; decider confirms at acceptance). Each group comes whole from `kvstore.backup`
+**1. Inheritance** (precedence proposed; accepted as default, not confirmed by the decider). Each group comes whole from `kvstore.backup`
 when its lead key is set there, else whole from `backup:`, whatever ADR-0205's platform switch says. The KV switch stays
 `kvstore.backup.enabled`; memory mode and a non-badger engine behave as today (`checkKVStoreConfig`).
 
@@ -99,7 +99,7 @@ target is fenced by the platform's `backup.Target` (one probe, one lock; open wh
 memory mode, which runs no KV backup); an own target its own `backup.Open` with `KeyPrefix: "kvstore.backup."`.
 ADR-0204's secrets-key rules do not apply: the KV holds no Secret (`envelope.Config.NoSecrets`, ADR-0204).
 
-**2. Layout** (proposed; decider confirms at acceptance), under the target root beside ADR-0203's `gen/`:
+**2. Layout** (proposed; accepted as default, not confirmed by the decider), under the target root beside ADR-0203's `gen/`:
 
 ```
 kv/base/<class>/<n>/part-00000 …    n: chain, 10 digits, one sequence across classes; class hourly|daily|weekly
@@ -121,7 +121,7 @@ record is absent (#808), 8 bytes long (legacy, restored, older binary) or names 
 listing lacks. A re-baseline is due one `rebaseline` after the newest complete base manifest's `ModTime` (a List,
 replacing #807's `at` read); none ⇒ now. Legacy `manifest.json`, `base/`, `inc/` are never read; the operator removes them.
 
-**4. Manifest** (`manifest.yaml` via `sigs.k8s.io/yaml`; fields proposed; decider confirms at acceptance):
+**4. Manifest** (`manifest.yaml` via `sigs.k8s.io/yaml`; fields proposed; accepted as default, not confirmed by the decider):
 
 | Field | Meaning |
 |---|---|
@@ -135,7 +135,7 @@ Point (n, m) is restorable when base n and segment m are complete and the walk r
 order every complete segment up to m whose `since` is at or below the head (a re-shipped range loads idempotently,
 ADR-0067) and raise the head to its `to`; a `since` above the head breaks the chain from there.
 
-**5. Retention** (proposed; decider confirms at acceptance). A base takes ADR-0203 Decision 6's class rule over the
+**5. Retention** (proposed; accepted as default, not confirmed by the decider). A base takes ADR-0203 Decision 6's class rule over the
 complete manifests under `kv/base/`, with `kvstore.backup.retention.hourly`, `.daily`, `.weekly` (NEW; 48, 30, 12;
 `hourly` ≥ 1). The operator sets, and funcd logs at start, a lifecycle rule per prefix: `kv/inc/` and `kv/base/hourly/`
 ⌈hourly/24⌉ days, `kv/base/daily/` `daily`, `kv/base/weekly/` 7 × `weekly`. A 30 s point lives at least ⌈hourly/24⌉ days
@@ -143,7 +143,7 @@ less `rebaseline`, a base its class term; a `rebaseline` of ⌈hourly/24⌉ days
 
 **6. Fencing and reading.** Each run first awaits its `Target.Ready` (ADR-0203 Decision 4): not ready ⇒ nothing written,
 the KV serving; each outcome, a refusal included, goes to its log and via `Record` to ADR-0205's `streams.kv` (proposed;
-decider confirms at acceptance). While held (`Hold`, ADR-0206 Decision 6) a due Ship or re-baseline writes nothing and
+accepted as default, not confirmed by the decider). While held (`Hold`, ADR-0206 Decision 6) a due Ship or re-baseline writes nothing and
 calls no `Record`; Ships recheck each interval, a re-baseline after `RebaselineRetry`. `restore kv [<chain>/<segment>]`
 (ADR-0206's surface and flags, the operator's credential) runs `ListPoints` (default: the newest restorable), ADR-0206's
 `CheckVersion` (Q10) on its `Funcd` (the walk's highest; refused: listed `newer`), then `RestoreDir` into
@@ -237,7 +237,7 @@ without recipients or `none`, or with `chunkBytes` above 8 MiB, stops the upgrad
 
 ## Open questions
 
-| Item | Recommended default (proposed; decider confirms at acceptance) | Why |
+| Item | Recommended default (proposed; accepted as default, not confirmed by the decider) | Why |
 |---|---|---|
 | Retention of a 30 s chain | bases by class, incrementals under `kv/inc/` for the hourly term; own keys 48/30/12 | ladder terms without delete; inheriting `backup.retention` instead stays open |
 | Layout and parts | `kv/` beside `gen/`; `chunkBytes` 8 MiB at most | one target serves both; one `PutObject` a part |

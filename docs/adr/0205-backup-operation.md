@@ -1,6 +1,6 @@
 # ADR-0205: Backup operation — runs, settings check, status, metrics and verification
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-10-10, by an `adr-batch` run after a clean `adr-judge` gate; the defaults below were not confirmed one by one)
 - **Date**: 2026-10-08
 - **Deciders**: green-0-rabbit
 - **Tags**: backup, disaster-recovery, config, observability, metrics
@@ -77,8 +77,8 @@ use ADR-0194's grammar within [1ms, `v1.MaxDuration`]; a change applies at the n
 | Key (`backup.`) | Meaning | Default |
 |---|---|---|
 | `interval` (NEW) | time between run starts (Decision 2) | `1h` (Q1) |
-| `objectives.rpo` (NEW) | age of the newest verified generation that sets `rpoRisk` | `2h` (proposed; decider confirms at acceptance) |
-| `retryInterval` (NEW) | wait after a failed run before the next attempt | `5m` (proposed; decider confirms at acceptance) |
+| `objectives.rpo` (NEW) | age of the newest verified generation that sets `rpoRisk` | `2h` (proposed; accepted as default, not confirmed by the decider) |
+| `retryInterval` (NEW) | wait after a failed run before the next attempt | `5m` (proposed; accepted as default, not confirmed by the decider) |
 
 **2. Runner.** `cmd/funcd` builds it when the platform backup or the KV export is on, before the blob and KV wiring that
 take its `Recorder` (backup off: no `Target`, streams only); `funcd.New` binds its stores, `Platform.Run` runs it.
@@ -93,15 +93,15 @@ loop:  wait for due → held: due = now + retryInterval, no run → else Target.
   listing anchors on ModTime, which trails the run start by the run's length (seconds at metastore size), so the first
   run after a restart is that late (accepted). A failed first listing (target down at start) is a failed run.
 - **Writes**: `Target.Write` with `WriteOptions{Seal: s.Seal(), Keys: s.Keys(), Parent: in.Parent}` (ADR-0203, 0206).
-- **Held** (ADR-0206 Decision 6; the recheck proposed; decider confirms at acceptance): a due time while `Hold.Held()`
+- **Held** (ADR-0206 Decision 6; the recheck proposed; accepted as default, not confirmed by the decider): a due time while `Hold.Held()`
   writes nothing, counts as neither a run nor a failure, sets `held: true` and rechecks after `retryInterval`.
-- **Overrun** (proposed; decider confirms at acceptance): no overlap, no queue: a late run's successor starts when it
+- **Overrun** (proposed; accepted as default, not confirmed by the decider): no overlap, no queue: a late run's successor starts when it
   ends, with one Warn `backup run overran its interval` (`duration_ms`, `interval_ms`); a stuck run shows as `rpoRisk`.
 - **Failure** (`Ready` not ready, a list, cut or put error, or ADR-0203 Decision 4's second-writer `fault.Conflict`
   naming `backup.target`): Error `backup run failed`, `lastFailure`, a `failed` count; the daemon serves. Shutdown
   cancelling a run is no failure (as `RunBackup`'s `ctx.Err()` guard).
 
-**3. Settings check** (table proposed; decider confirms at acceptance). An error is `fault.Invalid` naming the key and
+**3. Settings check** (table proposed; accepted as default, not confirmed by the decider). An error is `fault.Invalid` naming the key and
 no start; a warning is one Warn line at start. The daemon (`Validate`) and F112 run `config.CheckBackup` (every row
 reading only the merged config but `kvstore.backup.*`, which ADR-0209 moves in) and ADR-0208's `config.CheckBlob` (`blob.*`).
 
@@ -117,7 +117,7 @@ reading only the merged config but `kvstore.backup.*`, which ADR-0209 moves in) 
 | `backup.*` without `target`; `storage.mode: memory` with `target`; `encryption.none: true`; recipients without a secrets key | a key off its default is ignored, no platform backup runs; ADR-0204 Decision 2 | warning | `CheckBackup` |
 | target on the data dir's device; failed probe with `singleWriter: true`; `kvstore.backup` in memory mode; `OverlapProvider` | ADR-0203 Decision 4; today; ADR-0208 Decision 3 | warning | `Target.Ready`; as above |
 
-**4. Status** (place proposed; decider confirms at acceptance). The runner keeps it in memory; times are listing
+**4. Status** (place proposed; accepted as default, not confirmed by the decider). The runner keeps it in memory; times are listing
 `Entry.At` (the manifest's ModTime; the box cannot read `at`), so they survive a restart; `lastFailure` does not.
 
 | Field (beside `enabled`, `held` (NEW, the gate at the read), `interval`, `rpo`) | Value |
@@ -129,18 +129,18 @@ reading only the merged config but `kvstore.backup.*`, which ADR-0209 moves in) 
 | `rpoRisk` | backup on, and `lastVerifiedTime` absent or older than `objectives.rpo`; besides after each run and per status read, the runner relists at `lastVerifiedTime + rpo`, so a fresh listing turns it on |
 | `lastFailure` | `time`, `error` of the last failed run since start; a success clears it |
 
-**Streams** (proposed; decider confirms at acceptance): ADR-0208's mirror and ADR-0209's KV export report each run (a
+**Streams** (proposed; accepted as default, not confirmed by the decider): ADR-0208's mirror and ADR-0209's KV export report each run (a
 `Ready` refusal too) to `Runner.Recorder`, kept as `streams.blob`, `streams.kv` (`lastSuccessTime`, `lastFailure`) since
 start, no `rpoRisk` (never verified). `GET /apis/funcd.io/v1alpha1/platformbackup` (NEW; 503 on a failed listing)
 authorizes `get` on `WorkerNode` (cluster-scoped, so admin-only); `funcdctl backup status` (NEW) prints it as YAML.
 
-**5. Metrics and alert** (names proposed; decider confirms at acceptance). Meter `funcd.backup` from
+**5. Metrics and alert** (names proposed; accepted as default, not confirmed by the decider). Meter `funcd.backup` from
 `observability.Telemetry.MeterProvider()`, named like `funcd.edge.*` (ADR-0114): `funcd.backup.runs` (Int64Counter,
 `stream` `platform`/`blob`/`kv`, `result` `ok`/`failed`), `funcd.backup.duration_ms` (Float64Histogram, `stream`,
 `result`), `funcd.backup.rpo_risk` (Int64ObservableGauge, 0/1). The alert is `rpoRisk`: Warn `backup rpo at risk`
 (`rpo_ms`, `age_ms` when verified exists) on turning on and once per `objectives.rpo` while on, Info on clearing.
 
-**6. Verified** (checks proposed; decider confirms at acceptance). `funcdctl backup verify` (NEW; off the box, with
+**6. Verified** (checks proposed; accepted as default, not confirmed by the decider). `funcdctl backup verify` (NEW; off the box, with
 ADR-0203's verify credential and an ADR-0204 identity; flags `--target`, `--credentials-file`, `--identity`, `--escrow`,
 `--generation`, default the newest complete ladder one) reads the manifest and each store's parts in order, matching
 `parts`, `bytes`, `sha256`; decrypts each store file to its end with the `Unseal` that `envelope.Opener(ids)` returns for
@@ -236,7 +236,7 @@ length of cadence; each status read lists the target. **Risk**: the verify host 
 
 ## Open questions
 
-| Item | Recommended default (proposed; decider confirms at acceptance) | Why |
+| Item | Recommended default (proposed; accepted as default, not confirmed by the decider) | Why |
 |---|---|---|
 | Where status lives; its scope | runner memory, times from the listing; route `platformbackup`, `get` on `WorkerNode`; a `streams` section the mirror and KV export feed through `Recorder`, no `rpoRisk` (the alternative: platform only, the others logging) | no second truth; a restore cannot bring back a stale status; the KV export's failures stop being silent |
 | What verification does; cost; cadence | checksums, full decrypt, framing; keys only with `--escrow`; no Secret decrypt; a read per verify, a write per generation; every `(rpo − interval)/2` (the alternative: `rpoRisk` tolerates one verify's length) | catches damage and wrong recipients without a restore; the slack absorbs a verify's own length and the alert stays exact |

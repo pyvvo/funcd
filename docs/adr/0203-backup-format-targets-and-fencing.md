@@ -1,6 +1,6 @@
 # ADR-0203: Backup format, targets and fencing
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-10-10, by an `adr-batch` run after a clean `adr-judge` gate; the defaults below were not confirmed one by one)
 - **Date**: 2026-10-08
 - **Deciders**: green-0-rabbit
 - **Tags**: backup, disaster-recovery, blob, s3, fencing, retention
@@ -82,7 +82,7 @@ stored path may differ) or whose path leaves the root (as `fileblob.go:370-377`)
 the suffix is reserved (NEW: `checkKey` refuses it as `.attrs`, the walk skips it, `gocloud.go:113,444`), so no listing
 or `Exists` shows a temp, even a crash's. No `.attrs` sidecar: `ContentType` or `Metadata` with it is `fault.Invalid`.
 
-**2. Layout** (proposed; decider confirms at acceptance):
+**2. Layout** (proposed; accepted as default, not confirmed by the decider):
 
 ```
 <target root>
@@ -99,7 +99,7 @@ complete or not) and before the manifest (Decision 4). A store file is ADR-0204'
 `uvarint(len key) ‖ key ‖ uvarint(len value) ‖ value`, in 8 MiB parts. Each part, then the manifest, goes `IfNotExist`
 unless `Conditional()` is false; an error ends the run. One run at a time; no `Delete`, `Get`, `Attributes` on the box.
 
-**3. Manifest** (`manifest.yaml` via `sigs.k8s.io/yaml`; format numbering proposed; decider confirms at acceptance):
+**3. Manifest** (`manifest.yaml` via `sigs.k8s.io/yaml`; format numbering proposed; accepted as default, not confirmed by the decider):
 
 | Field | Meaning |
 |---|---|
@@ -107,7 +107,7 @@ unless `Conditional()` is false; an error ends the run. One run at a time; no `D
 | `generation`, `at` | n; when the cut began, a `v1alpha1.Timestamp` (ADR-0196: UTC milliseconds through its `MarshalJSON`) |
 | `funcd` | the writer's `internal/platform/version.Version`; ADR-0206 applies Q10 to it |
 | `timeline`, `revision` | the metastore version `Cut` returned, split by `store.ParseVersion` (ADR-0202 Decision 3) |
-| `parent` | the timeline and generation a restore loaded (from ADR-0206); absent if the timeline began at a first start. Lineage (proposed; decider confirms at acceptance): a parent timeline's generations numbered above it are on an abandoned branch (`Abandoned`). No two complete generations the target holds share n (Decision 4; a `verified` copy keeps its original's name), but expiry can return an expired number, so a generation is named, and lineage keyed, by (timeline, n) (`GenRef`) |
+| `parent` | the timeline and generation a restore loaded (from ADR-0206); absent if the timeline began at a first start. Lineage (proposed; accepted as default, not confirmed by the decider): a parent timeline's generations numbered above it are on an abandoned branch (`Abandoned`). No two complete generations the target holds share n (Decision 4; a `verified` copy keeps its original's name), but expiry can return an expired number, so a generation is named, and lineage keyed, by (timeline, n) (`GenRef`) |
 | `stores` | in cut order: `name` (`events`, `metastore`, `runs`), `parts`, `bytes`, `sha256` (hex of the stored bytes) |
 | `secretsKey`, `masterSecret`, `recipients` (`Keys`) | reserved: ADR-0204 defines the values; absent ⇒ none recorded (no `recipients`: stored unsealed) |
 
@@ -122,7 +122,7 @@ independent copy (Q8). Probe: two goroutines `Put` one random `probe/<32 hex>` w
 `Conflict` pass; both nil, or a refused condition (`Target.Conditional`, Open questions), ⇒ `fault.Invalid` naming
 `<KeyPrefix>singleWriter`; any other outcome is not ready, with its cause. Not ready ⇒ no generation, the error logged
 and in ADR-0205's status, the daemon serving; `singleWriter: true` makes a failed probe a warning. **Second writer**
-(proposed; decider confirms at acceptance): `Write` checks both listings against `Cut`'s timeline. Another timeline's
+(proposed; accepted as default, not confirmed by the decider): `Write` checks both listings against `Cut`'s timeline. Another timeline's
 key above the run's last (its highest complete n, else `parent`'s n, else 0; a `parent` key counts only from the run's
 first n: its lowest own n, else the n it writes), or at the second listing a key at n the run did not put, ends the run
 before the manifest with `fault.Conflict` naming `<KeyPrefix>target` and that key (ADR-0205's `lastFailure`); refused at
@@ -139,9 +139,9 @@ one with `s3:PutObject` on `gen/verified/`; a directory's owner or root reads it
 | `credentialsFile` | `s3://` only: an AWS shared credentials file, its `[default]` profile the only credential source. Its box policy grants `s3:ListBucket` on the prefix and `s3:PutObject` on every class prefix but `gen/verified/`, on `probe/` and on the prefixes sibling backups add (`blob/`, ADR-0208; `kv/`, ADR-0209), and denies `s3:PutObject` on `gen/verified/` (sample in `examples/backup-lifecycle.md`, with those grants) | empty ⇒ the SDK chain, as `kvstore.backup` (`cmd/funcd/main.go` `kvBackup`) |
 | `singleWriter` | the operator's promise that one funcd writes here | `false` |
 | `retention.hourly`, `.daily`, `.weekly` | hours, days, weeks a class is kept; `daily`/`weekly` `0` ⇒ unused; `hourly` ≥ 1 | 48, 30, 12 |
-| `retention.verified` | days a `gen/verified/` copy (ADR-0205 verify) is kept; ≥ 1; `Retention.Verified` `0` ⇒ no `gen/verified/` rule (the KV, ADR-0209, only) | 2 (proposed; decider confirms at acceptance) |
+| `retention.verified` | days a `gen/verified/` copy (ADR-0205 verify) is kept; ≥ 1; `Retention.Verified` `0` ⇒ no `gen/verified/` rule (the KV, ADR-0209, only) | 2 (proposed; accepted as default, not confirmed by the decider) |
 
-**6. Ladder without delete** (proposed; decider confirms at acceptance). A run is `weekly` when `weekly > 0` and no
+**6. Ladder without delete** (proposed; accepted as default, not confirmed by the decider). A run is `weekly` when `weekly > 0` and no
 complete weekly manifest's `ModTime` is in the current ISO week (UTC); else `daily` when `daily > 0` and no daily or
 weekly one is in the current UTC day; else `hourly`; pins never count. The operator sets a lifecycle rule per prefix
 (`LifecycleRules`, logged at start): `gen/hourly/` ⌈48/24⌉ = 2 days, `gen/daily/` 30, `gen/weekly/` 7 × 12 = 84,
@@ -234,7 +234,7 @@ directory cannot stop its owner deleting (POSIX `unlink` needs only directory wr
 
 ## Open questions
 
-| Item | Recommended default (proposed; decider confirms at acceptance) | Why |
+| Item | Recommended default (proposed; accepted as default, not confirmed by the decider) | Why |
 |---|---|---|
 | `verified` pin; its expiry | ADR-0205 verifies and copies to `gen/verified/<n>-<timeline>/` with the verify credential, the only one that puts there; copies expire by a `gen/verified/` lifecycle rule of `retention.verified` days (this ADR's key, Decision 5: default 2, at least 1), which `LifecycleRules` emits from `Retention.Verified` (`0`, as the KV passes: no rule) and `examples/backup-lifecycle.md` shows; the alternative: ADR-0205's verify prints the older copies to prune, as ADR-0207 Decision 2 does for pre-upgrade pins | the box cannot read; a pointer keeps no objects; verify runs every `(rpo − interval)/2` (30 min at defaults, ADR-0205 Decision 6) and copies each generation once, so without either copies never expire; the rule keeps the newest while verify runs and the last for `retention.verified` days after it stops, at up to 24 copies a day; one key sets both the rule and ADR-0205's `CheckBackup` checks (an error below 1; a warning when `retention.verified` × 24 h is below `rpo − interval`); S3 expiry days are at least 1; printing keeps one but needs an operator with delete |
 | Layout, format numbering | `gen/<class>/<n>-<timeline>/`, n 10 digits across classes, 8 MiB parts, platform `format` from 1; the alternative: an empty `gen/<class>/<n>/timeline-<timeline>` key put first, keeping `<n>/` (one more object a run) | a listing shows the timeline the box cannot read; lexical order; one `PutObject` a part (under transfermanager v0.2.11's 16 MiB multipart threshold, `api_client.go:13`) |

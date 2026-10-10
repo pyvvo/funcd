@@ -1,13 +1,12 @@
 # ADR-0208: Blob store backend and backup target
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-10-10, by an `adr-batch` run after a clean `adr-judge` gate; the defaults below were not confirmed one by one)
 - **Date**: 2026-10-08
 - **Deciders**: green-0-rabbit
 - **Tags**: blob, s3, versioning, object-lock, backup, disaster-recovery
-- **Realizes**: [FEAT-0009/F111](../feat/0009-feat-disaster-recovery.md) (workload data protection; DR plan item DR-8)
+- **Realizes**: [FEAT-0009/F111](../feat/0009-feat-disaster-recovery.md) (workload data protection; DR plan item ADR-0208)
 - **Supersedes in part** (stays `Implemented`; back-link at acceptance): [ADR-0043](0043-single-binary-substrate-selection.md)
-  Decision 2's file default `WithBlob(gocloud.Open(ctx, "file://"+dataDir+"/blob"))` (line 71): the file store sits at
-  `blob.dir` (same default) unless `blob.target` selects S3; its Out item "S3/remote blob" (line 43) is decided here.
+  Decision 2's file default (line 71) becomes `blob.dir`'s; `blob.target` adds its Out item "S3/remote blob" (line 43).
 - **Relates to**: ADR-0007 (its Out item "versioning") · ADR-0080 (`RangeReader` precedent) · ADR-0086 · ADR-0159 ·
   ADR-0194 · ADR-0196 · ADR-0203 to ADR-0206 · DR-10, the workload resources ADR (catalog rule, `BackupSchedule` targets)
 
@@ -75,9 +74,9 @@ flags and the hold (ADR-0206); per-app `BackupSchedule` scopes and their catalog
 
 ## Decision
 
-**1. Backend and keys** (names proposed; decider confirms at acceptance). `blob.target` set ⇒ `gocloud.OpenWith(ctx,
+**1. Backend and keys** (names proposed; accepted as default, not confirmed by the decider). `blob.target` set ⇒ `gocloud.OpenWith(ctx,
 target, OpenOptions{CredentialsFile})` behind `blob.NoSign` (no presign; Open questions); else `blob.dir` (absolute,
-`config.Load`) through `gocloud.FileURL`. `config.CheckBlob` (NEW; rows proposed; decider confirms at acceptance) holds
+`config.Load`) through `gocloud.FileURL`. `config.CheckBlob` (NEW; rows proposed; accepted as default, not confirmed by the decider) holds
 ADR-0205 Decision 3's `blob.*` rules (`Validate`, F112): `fault.Invalid` naming the key: a non-`s3://` `target`, `target`
 with `dir` set, `credentialsFile` without `target`, `dir` at or above `storage.dataDir`, a duration off ADR-0194,
 `backup.retention` or `.rebaseline` below `.interval`; a warning for `blob.` keys, ignored under `storage.mode: memory`.
@@ -96,7 +95,7 @@ with `dir` set, `credentialsFile` without `target`, `dir` at or above `storage.d
 The store credential holds `s3:GetObject`, `PutObject`, `DeleteObject`, `ListBucket` and Decision 2's two reads, never
 `s3:DeleteObjectVersion`, `BypassGovernanceRetention` or a bucket-configuration write (`examples/backup-lifecycle.md`).
 
-**2. Protection check** (proposed; decider confirms at acceptance). With `target`, before serving, `Versioning` reads
+**2. Protection check** (proposed; accepted as default, not confirmed by the decider). With `target`, before serving, `Versioning` reads
 `GetBucketVersioning` and `GetObjectLockConfiguration` through `As(**s3.Client)` (`s3blob.go:562`). Status not
 `Enabled`, or a refused or unimplemented versioning call (403, 501) ⇒ `fault.Invalid` naming `blob.allowUnversioned`
 (with it `true`, a warning). `ObjectLockEnabled` not `Enabled`, or an error answer to the lock call ⇒ one warning. A
@@ -130,7 +129,7 @@ a failure. id = hex SHA-256 of `key ‖ 0x00 ‖ size ‖ ModTime ns ‖ MD5 ‖
 `recipients`, `,`-joined). The operator expires `blob/` after ⌈(`rebaseline` + `retention`) / 24h⌉ days (`LifecycleRule`,
 logged at start): no object is older than its epoch, so a generation stays restorable for `retention` less one run.
 
-**5. Frozen image** (proposed; decider confirms at acceptance). `<blob.dir>-frozen` (NEW), emptied first.
+**5. Frozen image** (proposed; accepted as default, not confirmed by the decider). `<blob.dir>-frozen` (NEW), emptied first.
 `gocloud.WalkFileKeys` walks `blob.dir` as the store decodes its paths (no `.attrs` or `.funcd-tmp`; an unreadable
 directory fails the run) and `link(2)`s each data file into the image, then reads its live `Attributes`. `fileblob`
 writes `.attrs` before its `Rename`, truncating it in place (`fileblob.go:840-854`, `attrs.go:42-53`), so the linked
@@ -141,8 +140,7 @@ walked key gone at its link, re-freezes `<p>/`; elsewhere a gone key is left out
 fails the run (`fault.Conflict` naming it). `EXDEV` (`blob.dir` a mount point) ⇒ a live read, same checks, warned.
 
 **6. Whole-store restore**, offline: `funcd restore blob [<generation>]` (default: the newest complete) or `--at <RFC
-3339>` (`RestoreAt`), on ADR-0206's surface (flags, `envelope.Opener(ids)`, `hold.Begin`, `hold.Own(storage.dataDir,
-blob.dir)` for a local destination, `hold.End`), into the configured store (`--store-credentials-file`: Open questions).
+3339>` (`RestoreAt`), on ADR-0206's surface, into the configured store (`--store-credentials-file`: Open questions).
 - **Mirror**: `Restore` reads manifest n, calls `open` once with its `recipients` (one `backup.Unseal` for the index and
   every object), lists `blob/<e>/objects/`; a missing part or `sha256-` key ⇒ `fault.NotFound` before any write; a
   non-empty destination (`ListAfter` limit 1) ⇒ `fault.Conflict`; per object a SHA-256 mismatch over its parts ⇒
@@ -184,7 +182,7 @@ type Manifest struct { // YAML keys: lowerCamel names (json tags); Index.Name is
 type Object struct{ Key, ID, SHA256, ContentType string; Gen uint64; Parts int; Size int64; Metadata map[string]string }
 type Entry struct{ Generation, Epoch uint64; Complete bool; At time.Time }                         // At: ModTime
 type Mirror interface{ Run(ctx context.Context) (Manifest, error); Loop(ctx context.Context) } // Decision 4
-// Loop: Run when due, each outcome (a Ready refusal too) to Record; held: no run, no Record, recheck after Interval
+// Loop until ctx ends: Run when due, outcomes to Record (Ready refusals too, cancels never); held: no run or Record, recheck after Interval
 func New(cfg Config) (Mirror, error) // bad duration or empty Dir ⇒ fault.Invalid
 func List(ctx context.Context, src blob.Bucket) ([]Entry, error)
 func Restore(ctx context.Context, src blob.Bucket, generation uint64, dst blob.Bucket, open backup.Opener) (Manifest, error)
@@ -193,28 +191,30 @@ func LifecycleRule(rebaseline, retention time.Duration) (prefix string, days int
 
 | consumes | exposes |
 |---|---|
-| Go CDK v0.46.0 `s3blob` (`As`), `fileblob`; aws-sdk-go-v2 `service/s3` v1.104.1 (`GetBucketVersioning`, `GetObjectLockConfiguration`, `ListObjectVersions`, `CopyObject`, `DeleteObject`); `link(2)`; `internal/blob/gocloud`'s unexported `fileWalker`, `fileUnescapeKey` (under `WalkFileKeys`); `blob.Capped` (the forwarding precedent); ADR-0203 `OpenWith`, `Target.Ready`, `Target.Conditional`, `Seal`, `StoreFile`, `backup.Unseal`, `Opener`, the 8 MiB part rule, the walk's `.funcd-tmp` skip; ADR-0204 `Sealer.Keys`, `envelope.Opener`; ADR-0205 `Runner.Recorder` (the runner its Decision 2 builds first), `config.Finding`; ADR-0206 `hold.Begin`, `End`, `Own` (a local `blob.dir` destination, before `End`), the restore flags (with `--store-credentials-file`, NEW); `v1alpha1.Timestamp` (ADR-0196); no new module | `blob.Versioned`, `NoSign`; `gocloud.CompareDomains`, `WalkFileKeys`; `config.CheckBlob`; `internal/backup/blobmirror`; keys `blob.target`, `.credentialsFile`, `.dir`, `.allowUnversioned`, `.versionRetention`, `.backup.interval`, `.backup.rebaseline`, `.backup.retention` (env `FUNCD_BLOB_TARGET`, `…_CREDENTIALS_FILE`, `…_DIR`, `…_ALLOW_UNVERSIONED`, `…_VERSION_RETENTION`, `FUNCD_BLOB_BACKUP_INTERVAL`, `…_REBASELINE`, `…_RETENTION`) |
+| Go CDK v0.46.0 `s3blob` (`As`), `fileblob`; aws-sdk-go-v2 `service/s3` v1.104.1 (`GetBucketVersioning`, `GetObjectLockConfiguration`, `ListObjectVersions`, `CopyObject`, `DeleteObject`); `link(2)`; `internal/blob/gocloud`'s unexported `fileWalker`, `fileUnescapeKey` (under `WalkFileKeys`); `blob.Capped` (the forwarding precedent); ADR-0203 `OpenWith`, `Target.Ready`, `Target.Conditional`, `Seal`, `StoreFile`, `backup.Unseal`, `Opener`, the 8 MiB part rule, the walk's `.funcd-tmp` skip; ADR-0204 `Sealer.Keys`, `envelope.Opener`; ADR-0205 `Runner.Recorder` (the runner its Decision 2 builds first), `config.Finding`; ADR-0206 `hold.Open` (the daemon's hold, opened by `serve` before `buildOptions`), `Begin`, `End`, `Own` (a local `blob.dir` destination, before `End`), the restore flags (with `--store-credentials-file`, NEW); `v1alpha1.Timestamp` (ADR-0196); no new module | `blob.Versioned`, `NoSign`; `gocloud.CompareDomains`, `WalkFileKeys`; `config.CheckBlob`; `internal/backup/blobmirror`; keys `blob.target`, `.credentialsFile`, `.dir`, `.allowUnversioned`, `.versionRetention`, `.backup.interval`, `.backup.rebaseline`, `.backup.retention` (env `FUNCD_BLOB_TARGET`, `…_CREDENTIALS_FILE`, `…_DIR`, `…_ALLOW_UNVERSIONED`, `…_VERSION_RETENTION`, `FUNCD_BLOB_BACKUP_INTERVAL`, `…_REBASELINE`, `…_RETENTION`) |
 
 ## Implementation plan
 
 **Files**: `internal/platform/config/config.go` (`Blob`, `dir` derived in `Load`, `CheckBlob` in `Validate`);
-`cmd/funcd/main.go` (`substrateOptions` opens `target` behind `NoSign` or `dir`, runs Decisions 2 and 3, starts
-`Mirror.Loop` with the daemon's hold and `Recorder("blob")`); ADR-0206's `cmd/funcd/restore.go` (`restore blob`, the blob
-rows of `restore list`); `internal/blob/{blob,nosign}.go`; NEW `internal/backup/blobmirror/{mirror,freeze,restore}.go`;
-`internal/blob/gocloud/gocloud.go` (`Versioning`, `RestoreAt`, `CompareDomains`, `WalkFileKeys`; `OpenWith` keeps the
-URL's bucket and `prefix`); `examples/funcdconfig.yaml`; ADR-0203's `examples/backup-lifecycle.md` (the `blob/` and
-noncurrent rules, store and box policies). **Order**: DR-8 after DR-3 to DR-5. **go.mod**: none. **Blueprint** (at
-acceptance): lines 81 (the store list), 212, at main c35bdf5e. **Test plan**: one `TestScenario<Name>` per scenario on
-ADR-0203's `httptest` S3 stub plus versioning and lock answers (on, off, 403, 501), `ListObjectVersions`, `CopyObject`
-from a `versionId` and delete markers; the freeze takes hooks after each walk and link, the epoch test a clock. Units:
-`TestCheckBlobRows`, `TestObjectIDStable` (with recipients), `TestLargeObjectPartedBoundedMemory` (20 MiB: three parts,
-no request over 8 MiB; redone after a crash past part 0), `TestLifecycleRule`, `TestCompareDomains` (Decision 3's cases),
-`TestWalkFileKeys` (escapes, `.attrs`, `.funcd-tmp`, an unreadable dir), `TestNoSign`, `TestFreezeEXDEVReadsLive`,
-`TestAttrsMismatchRefrozen` (a torn `.attrs`; for a checkpoint, re-linked before `<p>/` is walked; the fourth fails),
-`TestCheckpointChangedAfterListingRelistsPrefix`, `TestMissingCatalogKeyRefreezesPrefix` (a Parquet gone before its link;
-a checkpoint and cleanup during the prefix walk), `TestRestoreAtRefusesLargeVersion`, `TestRestoreAtErrorKeepsDone`,
-`TestRestoreOpensOnce`, `TestLoopSkipsWhileHeld` (in ADR-0206's `TestEveryRunnerConsultsHold`). **Definition of done**:
-`scripts/agent/d go test -race -count=1`, `just ci` green; no new module; no identity or path leak.
+`cmd/funcd/main.go` (`substrateOptions` opens `target`, runs Decisions 2 and 3, wraps it in `NoSign`, else opens `dir`;
+NEW `mirrorFor` builds the `Mirror` with the daemon's hold and `Recorder("blob")`, adds its target to `opened`, returns,
+as `buildKVStore`, a start hook `serve` runs on the signal context beside `startKV(ctx)`: `Loop`, then the target's
+`Close`); `internal/blob/{blob,nosign}.go`; ADR-0206's `cmd/funcd/restore.go` (`restore blob`, the blob rows of
+`restore list`); NEW `internal/backup/blobmirror/{mirror,freeze,restore}.go`; `internal/blob/gocloud/gocloud.go`
+(`Versioning`, `RestoreAt`, `CompareDomains`, `WalkFileKeys`; `OpenWith` keeps the URL's bucket and `prefix`); ADR-0203's
+`examples/backup-lifecycle.md` (the `blob/` and noncurrent rules, store and box policies); `examples/funcdconfig.yaml`.
+**Order**: after ADR-0203 to ADR-0206. **go.mod**: none. **Blueprint** (at acceptance): lines 81 (the store list), 212,
+at main c35bdf5e. **Test plan**: one `TestScenario<Name>` per scenario on ADR-0203's `httptest` S3 stub plus versioning
+and lock answers (on, off, 403, 501), `ListObjectVersions`, `CopyObject` from a `versionId` and delete markers; the
+freeze takes hooks after each walk and link, the epoch test a clock. Units: `TestCheckBlobRows`, `TestObjectIDStable`
+(with recipients), `TestLargeObjectPartedBoundedMemory` (20 MiB: three parts, no request over 8 MiB; redone after a crash
+past part 0), `TestLifecycleRule`, `TestCompareDomains` (Decision 3's cases), `TestWalkFileKeys` (escapes, `.attrs`,
+`.funcd-tmp`, an unreadable dir), `TestNoSign`, `TestFreezeEXDEVReadsLive`, `TestAttrsMismatchRefrozen` (a torn `.attrs`;
+for a checkpoint, re-linked before `<p>/` is walked; the fourth fails), `TestCheckpointChangedAfterListingRelistsPrefix`,
+`TestMissingCatalogKeyRefreezesPrefix` (a Parquet gone before its link; a checkpoint and cleanup during the prefix walk),
+`TestRestoreAtRefusesLargeVersion`, `TestRestoreAtErrorKeepsDone`, `TestRestoreOpensOnce`, `TestLoopSkipsWhileHeld` (in
+ADR-0206's `TestEveryRunnerConsultsHold`), `TestLoopCancelRecordsNothing` (no `Record`, no image). **Definition of
+done**: `scripts/agent/d go test -race -count=1`, `just ci` green; no new module; no identity or path leak.
 
 ## Review checklist
 
@@ -235,7 +235,7 @@ a run; a lock-less store relies on IAM alone; escrow keeps each identity a retai
 
 ## Open questions
 
-| Item | Recommended default (proposed; decider confirms at acceptance) | Why |
+| Item | Recommended default (proposed; accepted as default, not confirmed by the decider) | Why |
 |---|---|---|
 | Missing protection; presign | versioning off ⇒ refuse unless `blob.allowUnversioned`; no Object Lock ⇒ warn; unreachable ⇒ no start. `blob.NoSign`: `SignedURL` stays `fault.Unavailable`, as on every store funcd opens today (ADR-0007; `blobcontract` `testSignedURLUnsupported`), until a presign ADR; the driver itself still signs | fail closed without barring lock-less stores. `Facade.SignedURL` (`internal/services/blob`) would hand out a URL signed with the store credential (it holds `s3:DeleteObject`), naming the store's endpoint, often private, and the `s3/<ns>/<bucket>/` layout. Alternative: serve it (ADR-0021, ADR-0198); versioning then turns a presigned DELETE into a marker |
 | Frozen image; catalog verify | hard links under `<blob.dir>-frozen`; across devices a live read and a warning; a checkpoint linked before its prefix is listed again, a changed checkpoint or a missing key re-freezing the prefix; a fourth re-freeze fails the run. The mirror never runs report §4.D's verify step; DR-10's `catalogs` scope does | portable, unprivileged, a seconds-long walk; never mixes versions: Parquet precedes its checkpoint and a cleanup follows a newer one (ADR-0086; else the Risk), which the checks see. Verifying reads `ducklake_data_file` (relative paths), which needs a SQLite reader: a new module (none in `go.mod`) |
@@ -245,6 +245,6 @@ a run; a lock-less store relies on IAM alone; escrow keeps each identity a retai
 ## References
 
 - `docs/reports/platform-disaster-recovery-design.md` §1, §3, §4.B2, §4.D, §4.I row 8, §5 (Q1, Q7, Q8);
-  `docs/roadmap/dr-plan.json` (DR-8); Go CDK v0.46.0 `s3blob.go:562-569, 741-767`, `fileblob.go:840-858`,
+  `docs/roadmap/dr-plan.json` (ADR-0208); Go CDK v0.46.0 `s3blob.go:562-569, 741-767`, `fileblob.go:840-858`,
   `attrs.go:42-53`; aws-sdk-go-v2 `service/s3` v1.104.1, transfermanager v0.2.11 `api_client.go:13`; [S3 Object
   Lock](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html). Licenses checked 2026-10-08: Apache-2.0.

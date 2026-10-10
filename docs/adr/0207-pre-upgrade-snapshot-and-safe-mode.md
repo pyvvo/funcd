@@ -1,6 +1,6 @@
 # ADR-0207: Pre-upgrade snapshot and safe mode
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-10-10, by an `adr-batch` run after a clean `adr-judge` gate; the defaults below were not confirmed one by one)
 - **Date**: 2026-10-08
 - **Deciders**: green-0-rabbit
 - **Tags**: disaster-recovery, upgrade, backup, hold, crash
@@ -109,7 +109,7 @@ the three store directories aside; `<self>.previous restore run <timeline>/<n>` 
 it; not the class `pre-upgrade`, whose newest may be an older upgrade's; ADR-0206, the operator's credential,
 identity); install `<self>.previous` at `<self>`; `funcd safe-mode reset` if stopped; start held; verify; `hold release`.
 
-**3. Counting starts** (proposed; decider confirms at acceptance). `serve` (`cmd/funcd/main.go`) calls `safemode.Begin`
+**3. Counting starts** (proposed; accepted as default, not confirmed by the decider). `serve` (`cmd/funcd/main.go`) calls `safemode.Begin`
 after `config.Load` and the data directory exist, before `buildOptions`, so store opens and migrations count. `Begin`
 records the start as unclean (`unclean` + 1, `version`) in `<storage.dataDir>/safemode.json` (NEW, 0600, file and
 directory `fsync`ed; Decision 1's owner from `RecordUpgrade`, `Reset`). A start is clean when it runs `stableAfter` (a
@@ -117,7 +117,7 @@ timer started before `platform.Run`) or `Run` returns nil after a stop signal: `
 as `lastError`; a panic, a kill or a power loss leaves it unclean. A `version` that `version.Compare` orders after the
 last start's and `upgrade.to` does not name logs one Warn (manual-swap-warns). `storage.mode: memory` skips all this.
 
-**4. Safe mode** (proposed; decider confirms at acceptance). With N = `recovery.safeMode.afterCrashes`, `Begin`
+**4. Safe mode** (proposed; accepted as default, not confirmed by the decider). With N = `recovery.safeMode.afterCrashes`, `Begin`
 reads `unclean` before counting this start:
 
 ```
@@ -229,7 +229,7 @@ stores: a release migrating KV or blob data must say how it rolls back (`restore
 
 ## Open questions
 
-| Item | Recommended default (proposed; decider confirms at acceptance) | Why |
+| Item | Recommended default (proposed; accepted as default, not confirmed by the decider) | Why |
 |---|---|---|
 | How the old binary learns of the upgrade | the operator runs `funcd upgrade` with the installed binary (Decision 1); a manual swap warns | the repo's only path is a binary swap; the old binary must write the pin (Q10) |
 | Pre-upgrade snapshot fails | the upgrade stops before the swap; `--no-snapshot` is the explicit opt-out | fail closed |

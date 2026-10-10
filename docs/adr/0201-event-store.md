@@ -1,6 +1,6 @@
 # ADR-0201: Event store — the one durable home of eventing state (dead letters and blob seen lists)
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-10-10, by an `adr-batch` run after a clean `adr-judge` gate; the defaults below were not confirmed one by one)
 - **Date**: 2026-10-08
 - **Deciders**: green-0-rabbit
 - **Tags**: eventing, dead-letter, eventsource, blob, badger, disaster-recovery
@@ -92,7 +92,7 @@ other state (Decision 3); a crash-durable delivery queue and a remote engine (Op
    `pkg/funcd` opens it once (`eventstore.Open`, new package `internal/eventing/eventstore`) before the BlobWatcher
    and the Sensor reconciler, gives its dead-letter view to the Sensor and the DLQ routes and its seen-list view to the
    BlobWatcher, and closes it in `Shutdown` after both stopped. The directory stays `<dataDir>/deadletter` (proposed;
-   decider confirms at acceptance).
+   accepted as default, not confirmed by the decider).
 2. **Tenants and prefixes.**
 
    | Prefix | Tenant | Written by | Removed by (iterates only its prefix) |
@@ -111,23 +111,23 @@ other state (Decision 3); a crash-durable delivery queue and a remote engine (Op
    committed write. In memory, ephemeral by design: dead letters in Badger's in-memory mode, seen lists in a
    `MemWatermark` (parts there would keep every rewrite in RAM until a compaction, up to 1.25 GiB at the defaults); a
    restart loses both and each watched prefix fires once more. `kvstore.engine` no longer affects the seen lists.
-5. **Seen-list layout and reclaim (proposed; decider confirms at acceptance).** On disk a seen list's JSON is stored in
+5. **Seen-list layout and reclaim (proposed; accepted as default, not confirmed by the decider).** On disk a seen list's JSON is stored in
    parts below the 1 MiB value threshold (`partSize`), so compactions reclaim its rewrites. `Save` writes the next
    generation's parts in one `WriteBatch`, then one transaction sets the head and deletes the event's other keys; `Load`
    reads both in one `View`, so a stopped `Save` leaves the previous list (ADR-0157 :98's atomicity); over `maxRecord`
    it fails. Disk: live lists plus at most 15 level-0 tables (`options.go:139`) and the memtable logs, 16 MiB each, at
    any save count. GC (`RunValueLogGC(0.5)` every 5 minutes, disk only, as the KV driver) serves dead letters ≥ 1 MiB.
-6. **The move (proposed; decider confirms at acceptance).** In `buildControlPlane`, after the event store opens and
+6. **The move (proposed; accepted as default, not confirmed by the decider).** In `buildControlPlane`, after the event store opens and
    before the BlobWatcher is built, `MigrateSeenLists` reads every KV key under `_eventing/blobwatch/`. A record with an
    empty `bucket` (an ADR-0119 `Cursor`) is skipped; any other is saved unless the event store holds one for that event
    (`Load` returns a non-empty `bucket`). After every copy committed, every key under the prefix is deleted, `Cursor`
    records included, through the KV driver (ADR-0195 records the deletes when the KV backup is on). An error fails the
    start and leaves the KV keys, so the next start resumes. An event store in memory skips the move and a durable KV
    keeps its lists; the memory KV engine is empty at start.
-7. **Config keys (proposed; decider confirms at acceptance).** None new, none renamed: `eventing.deadletter.dataDir`
+7. **Config keys (proposed; accepted as default, not confirmed by the decider).** None new, none renamed: `eventing.deadletter.dataDir`
    names the event store's directory; `eventing.deadletter.retention` and `maxEntries` govern dead letters only.
    `WithDeadLetterQueue` keeps its signature.
-8. **In-flight deliveries (proposed; decider confirms at acceptance).** The Sensor delivery queue stays in memory
+8. **In-flight deliveries (proposed; accepted as default, not confirmed by the decider).** The Sensor delivery queue stays in memory
    (`internal/sensor/retry.go`, `retryQueue`). A graceful shutdown already parks queued deliveries here as dead letters
    within the drain bound (ADR-0156 Decision 7, `parkQueued`); a crash loses them, including those whose objects the
    seen list already records (ADR-0156 Decision 6). A crash-durable queue would be a third tenant, in its own ADR.

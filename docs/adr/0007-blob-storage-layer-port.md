@@ -3,6 +3,7 @@
 - **Status**: Implemented
 - **Superseded in part by**: [ADR-0159](0159-blob-content-digest-and-metadata.md) (2026-10-05) — Bucket contract: Attributes verb, Put PutOptions, MD5/ContentType/Metadata, error mapping.
 - **Superseded in part by**: [ADR-0184](0184-stateless-listing-pushdown.md) (2026-10-05) — Decision §4 List (lines 123-126): file:// List uses funcd's key-ordered walk, and listing gains ListAfter.
+- **Superseded in part by**: [ADR-0203](0203-backup-format-targets-and-fencing.md) (2026-10-10) — Decision §3's error mapping: a create-if-absent `Put` that finds its key returns `fault.Conflict`.
 - **Date**: 2026-06-14 (Accepted + **Implemented 2026-06-14** — review pass, see docs/reviews/adr-0007-implementation-claude-opus-4-8.md; post-judge: typed `SignMethod`, §3 mapping note, encryptor-asymmetry note)
 - **Deciders**: green-0-rabbit
 - **Tags**: blob, storage-layer, gocloud, bytes-substrate, port, presign

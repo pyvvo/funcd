@@ -1,6 +1,6 @@
 # ADR-0206: Restore and held boot
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-10-10, by an `adr-batch` run after a clean `adr-judge` gate; the defaults below were not confirmed one by one)
 - **Date**: 2026-10-08
 - **Deciders**: green-0-rabbit
 - **Tags**: disaster-recovery, restore, hold, workflow, eventing, backup
@@ -70,7 +70,7 @@ safe mode (ADR-0207); blob, KV readers and their `restore` subcommands (ADR-0208
 
 ## Decision
 
-**1. Commands** (names and flags proposed; decider confirms at acceptance), all NEW. Offline work is a daemon subcommand
+**1. Commands** (names and flags proposed; accepted as default, not confirmed by the decider), all NEW. Offline work is a daemon subcommand
 beside `version` (`cmd/funcd/main.go` `newRootCmd`); work on a running daemon is a funcdctl noun group as `workflow`:
 
 | Command | Does |
@@ -99,7 +99,7 @@ beside `version` (`cmd/funcd/main.go` `newRootCmd`); work on a running daemon is
    owner (ADR-0026 §4); `hold.End`. A kill before it leaves `restore.inprogress`; `hold.Open` then refuses the start
    (`fault.Conflict`: empty, rerun), as `store.New` would mint a timeline over a partial `Load`.
 
-**3. Points and listing** (proposed; decider confirms at acceptance). A generation is ADR-0203's (timeline, n):
+**3. Points and listing** (proposed; accepted as default, not confirmed by the decider). A generation is ADR-0203's (timeline, n):
 
 | `<point>` | Resolves to |
 |---|---|
@@ -127,8 +127,8 @@ flags and `envelope.Opener(ids)`, refuse a memory store (`fault.Invalid`) and, b
 local one to `hold.Own`. Registry (Q9): nothing read or pulled; a Function lacking its artifact is not Ready.
 
 **6. The hold** (Q4). `<storage.dataDir>/.hold` exists iff the platform is held; `restore run` and ADR-0207 write it,
-only the release deletes it (a failed restore, its own). `cmd/funcd` opens it and passes `funcd.WithHold` (default
-`hold.Never`); API, controllers and data plane serve. Each runner asks `Held()`; per-namespace holds are DR-10's.
+only the release deletes it (a failed restore, its own). `serve` (`cmd/funcd/main.go`) opens it (`hold.Open`) before `buildOptions`, after ADR-0207's `safemode.Begin` and any safe-mode `hold.Write`, and passes it to `funcd.WithHold` (default
+`hold.Never`) and to each backup loop's `Hold` (ADR-0205 runner, ADR-0208 `blobmirror.Config`, ADR-0209 `BackupConfig`); API, controllers and data plane serve. Each runner asks `Held()`; per-namespace holds are DR-10's.
 
 | Runner | While held | After the release |
 |---|---|---|
@@ -138,16 +138,16 @@ only the release deletes it (a failed restore, its own). `cmd/funcd` opens it an
 | dead letters, `(*Reconciler).Replay` | `fault.Unavailable` | operator-run as today; nothing redelivers by itself (ADR-0118) |
 | runs, `(*RunReconciler).Reconcile` | no start, resume or replay; `RequeueAfter: waitRequeue`; status untouched | a run created while held starts |
 | `runWorkflowRetention`, `runDeadLetterRetention` | skipped: they delete evidence | sweep |
-| data reclaims: the boot calls in `(*Platform).Run` of `(*kv.Reconciler).ReclaimDeleted` (#708) and, right after it, `reclaimDeletedBuckets` (ADR-0199 Decision 7; `pkg/funcd/funcd.go:1325`, `:1329` at main c35bdf5e); the KV reconciler's `reclaimOrphanTables` | skipped: KV or blob data newer than the restored metastore, or left intact, may have no KVStore, table or Bucket yet; `hold status` lists it: `Orphans`, and `bucketOrphans`, the walk split out of `reclaimDeletedBuckets`: each `<ns>/<bucket>` with objects under `bucketPrefix` (`s3/<ns>/<bucket>/`) and no Bucket, on each of which the boot purge calls `bucketPurger.Purge` | as today, the boot ones at the next start (proposed; decider confirms at acceptance); the operator applies, while held, the objects whose data stays |
-| backups: ADR-0205 `(*Runner).Run`, ADR-0208 `Mirror.Loop`, ADR-0209 `RunBackup`, each through its config's `Hold` (`interface{ Held() bool }`, nil ⇒ never held), set from the daemon's `*hold.Hold` | skipped (proposed; decider confirms at acceptance): a held drill writes no generation that turns the source's later ones `Abandoned` (ADR-0203) | the next due run; the platform runner's `parent` from `restore.Parent`; a copy still naming its source's `backup.target` is refused there and refuses its source (ADR-0203 Decision 4), so a drill moves `prefix` before its release |
-| App reconciler and its rollouts (ADR-0199, ADR-0200; F117's hooks, unbuilt, run in it per FEAT-0010), through `app.Deps.Hold` | `(*Reconciler).Reconcile` first returns `RequeueAfter: SupervisionPeriod`, status untouched, as runs: no apply (self-heal included), prune, stamp, switch, history deletion or `Failed`, so the rollout deadline (`startedAt`, set at the stamp, + `app.upgradeTimeout`, ADR-0200 Decision 6) cannot run out while held | `(*Reconciler).deadline` is max(`startedAt`, `ReleasedAt`) + `app.upgradeTimeout`, read again after a restart (proposed; decider confirms at acceptance): a `Deploying` AppRevision gets a full timeout after the release, and the App reconciler stays its only writer (ADR-0200 Decision 1); one `Failed` before the hold stays `Failed` |
+| data reclaims: the boot calls in `(*Platform).Run` of `(*kv.Reconciler).ReclaimDeleted` (#708) and, right after it, `reclaimDeletedBuckets` (ADR-0199 Decision 7; `pkg/funcd/funcd.go:1325`, `:1329` at main c35bdf5e); the KV reconciler's `reclaimOrphanTables` | skipped: KV or blob data newer than the restored metastore, or left intact, may have no KVStore, table or Bucket yet; `hold status` lists it: `Orphans`, and `bucketOrphans`, the walk split out of `reclaimDeletedBuckets`: each `<ns>/<bucket>` with objects under `bucketPrefix` (`s3/<ns>/<bucket>/`) and no Bucket, on each of which the boot purge calls `bucketPurger.Purge` | as today, the boot ones at the next start (proposed; accepted as default, not confirmed by the decider); the operator applies, while held, the objects whose data stays |
+| backups: ADR-0205 `(*Runner).Run`, ADR-0208 `Mirror.Loop`, ADR-0209 `RunBackup`, each through its config's `Hold` (`interface{ Held() bool }`, nil ⇒ never held), set from the daemon's `*hold.Hold` | skipped (proposed; accepted as default, not confirmed by the decider): a held drill writes no generation that turns the source's later ones `Abandoned` (ADR-0203) | the next due run; the platform runner's `parent` from `restore.Parent`; a copy still naming its source's `backup.target` is refused there and refuses its source (ADR-0203 Decision 4), so a drill moves `prefix` before its release |
+| App reconciler and its rollouts (ADR-0199, ADR-0200; F117's hooks, unbuilt, run in it per FEAT-0010), through `app.Deps.Hold` | `(*Reconciler).Reconcile` first returns `RequeueAfter: SupervisionPeriod`, status untouched, as runs: no apply (self-heal included), prune, stamp, switch, history deletion or `Failed`, so the rollout deadline (`startedAt`, set at the stamp, + `app.upgradeTimeout`, ADR-0200 Decision 6) cannot run out while held | `(*Reconciler).deadline` is max(`startedAt`, `ReleasedAt`) + `app.upgradeTimeout`, read again after a restart (proposed; accepted as default, not confirmed by the decider): a `Deploying` AppRevision gets a full timeout after the release, and the App reconciler stays its only writer (ADR-0200 Decision 1); one `Failed` before the hold stays `Failed` |
 
 **7. Evidence** (Q3). A restored non-terminal run is paused (step 2.4); the operator runs `funcdctl workflow resume`
 (from its record, or step 1 without one: no step had dispatched, ADR-0202 Decision 2), `cancel`, or `cancel` then
 `replay --from` (`(*Engine).replay`: `SeedInvalid` unless terminal). `Reconcile` checks `spec.paused` before it starts a
 run without a record; the hold never reads the flag. Records without a WorkflowRun stay inert, listed, never deleted.
 
-**8. Release and status** (proposed; decider confirms at acceptance). `POST /apis/funcd.io/v1alpha1/hold/release`
+**8. Release and status** (proposed; accepted as default, not confirmed by the decider). `POST /apis/funcd.io/v1alpha1/hold/release`
 authorizes `update`, `GET /apis/funcd.io/v1alpha1/hold` `get`, on `WorkerNode` as ADR-0205's route (cluster-scoped,
 admin-only under the built-in RBAC, `internal/auth/rbac`). Not held ⇒ `fault.Conflict`; an `--advance` naming no blob
 event of an existing EventSource ⇒ `fault.Invalid`; both before any change. Then `Advance` per source, rerun-safe: a
@@ -203,7 +203,7 @@ Hold interface{ Held() bool; ReleasedAt() time.Time } // NEW in app.Deps, nil �
 
 **Files**: NEW `internal/platform/hold/hold.go`, `cmd/funcd/restore.go`, `cmd/funcdctl/hold.go`, `pkg/sdk/hold.go`,
 `internal/restore/{point,list,run,inspect,version}.go`, `internal/controlplane/hold.go`, `examples/restore-runbook.md`
-(recovery order, drill); `cmd/funcd/main.go`; `pkg/funcd/{options.go,funcd.go}`; `internal/app/{reconcile,revision}.go`;
+(recovery order, drill); `cmd/funcd/main.go` (`serve`: `hold.Open` before `buildOptions`); `pkg/funcd/{options.go,funcd.go}`; `internal/app/{reconcile,revision}.go`;
 `internal/workflow/reconcile_run.go`; `internal/eventing/{eventing.go,blobwatch.go}`; `internal/sensor/sensor.go`;
 `internal/services/kv/reconcile.go`. **Order**: ADR-0207 to ADR-0209 follow; ADR-0208 and ADR-0209 wire their loop's
 `Hold`, restore subcommand and `TestEveryRunnerConsultsHold` case; ADR-0205, if later, its runner and case.
@@ -234,7 +234,7 @@ while held; `replay --from` of a held run needs a `cancel` first. **Risk**: a la
 
 ## Open questions
 
-| Item | Recommended default (proposed; decider confirms at acceptance) | Why |
+| Item | Recommended default (proposed; accepted as default, not confirmed by the decider) | Why |
 |---|---|---|
 | Command names, flags; lineage display; blob `inspect` | Decision 1; a tree indented by `parent`, `abandoned` marked (Decision 3); blob generations listed, not inspected | the daemon owns offline work, funcdctl the API verbs; a restore leaves later generations on a dead branch; ADR-0208 has no manifest reader (else it adds a `ReadManifest`) |
 | Where the hold lives; runner checks; what release verifies | the marker in `storage.dataDir`; `hold.Gate` per runner (Decision 6); held, valid `--advance`, and `hold status`, with pending blob keys, is the operator's check | travels with the data; one switch; funcd cannot judge the real world |

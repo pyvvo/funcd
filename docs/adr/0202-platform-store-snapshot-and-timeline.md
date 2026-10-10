@@ -1,6 +1,6 @@
 # ADR-0202: Platform store snapshot and version timeline
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-10-10, by an `adr-batch` run after a clean `adr-judge` gate; the defaults below were not confirmed one by one)
 - **Date**: 2026-10-08
 - **Deciders**: green-0-rabbit
 - **Tags**: store, metastore, backup, disaster-recovery, badger, resource-version
@@ -92,7 +92,7 @@ bounded batches (on Badger a `WriteBatch`, as `SweepExpired` deletes), not atomi
 `fault.Conflict` first. Implementers: the metastore (`store.Store` snapshots over `Engine.Snapshot`; `store.Engine`
 loads, before `store.New`), the run state (`runstate.Store`) and ADR-0201's `eventstore.Store` over its whole instance.
 
-Memory engines (proposed; decider confirms at acceptance): the memory metastore engine copies its map under its read
+Memory engines (proposed; accepted as default, not confirmed by the decider): the memory metastore engine copies its map under its read
 lock and emits after releasing it, so writers wait only for the copy; Badger's in-memory mode behaves as on disk. A
 memory-mode daemon runs no backup (ADR-0205 Decision 1).
 
@@ -104,21 +104,21 @@ Event store before metastore: a seen-list entry (there once ADR-0201 moves it) i
 (`internal/eventing/blobwatch.go` `BlobWatcher`), so an object fired between the reads replays at release, at worst a
 second run (at-least-once, Q5), never lost; a Sensor's in-flight firing is lost as in a crash (ADR-0201).
 
-**3. Timeline** (key and form proposed; decider confirms at acceptance). 64 bits from `crypto/rand` as 16 lowercase hex
+**3. Timeline** (key and form proposed; accepted as default, not confirmed by the decider). 64 bits from `crypto/rand` as 16 lowercase hex
 characters, stored as the record `timeline` in the wrapper's meta bucket `"\x00store-meta"` beside `revision`
 (`store.go` `metaBucket`, `revisionKey`). When there is none, `store.New` mints and stores one before serving: at first
 start, at the first start after this change, and after any `Load`, since no `Engine.Load` writes the record
 (`IsTimelineRecord`) and the metastore's `Snapshot` leaves it out. So a restore, or any copy between engines, takes a
-new timeline by opening the loaded engine (proposed; decider confirms at acceptance); two restores of one backup get
+new timeline by opening the loaded engine (proposed; accepted as default, not confirmed by the decider); two restores of one backup get
 two. A version is `<timeline>-<n>`, `n` the existing counter, which continues; a memory store mints one per start.
 
-**4. Legacy versions** (proposed; decider confirms at acceptance). An object written before this change keeps its plain
+**4. Legacy versions** (proposed; accepted as default, not confirmed by the decider). An object written before this change keeps its plain
 version (`"120"` on the wire, timeline `""`) until rewritten; no bulk rewrite, which would emit a Modified event per
 object. No store mints a plain number again.
 
 **5. Comparison.** Preconditions (`Update`, `Delete`) stay string equality: a version minted after the backup or by
 another instance equals none that a restored store holds or mints. Clients treat a version as opaque (proposed;
-decider confirms at acceptance): the doc comment on `ObjectMeta.ResourceVersion` says to compare it for equality only,
+accepted as default, not confirmed by the decider): the doc comment on `ObjectMeta.ResourceVersion` says to compare it for equality only,
 and `pkg/sdk` and `cmd/funcdctl` never read it. Order exists only inside one timeline:
 
 | Site | Today | Change |
@@ -234,7 +234,7 @@ timelines may resume on the older one and re-list. **Risk**: a hand-copied engin
 
 ## Open questions
 
-| Item | Recommended default (proposed; decider confirms at acceptance) | Why |
+| Item | Recommended default (proposed; accepted as default, not confirmed by the decider) | Why |
 |---|---|---|
 | Port signature and place | `internal/snapshot` `Source`/`Loader`/`Cut`, embedded in the ports (Contracts) | one shape for ADR-0205 and ADR-0206 across the three stores; ADR-0203's `backup.Target` and `funclog.Sink` hold the other names |
 | Timeline key and form | record `timeline` in `"\x00store-meta"`; 16 lowercase hex (64 bits) | the meta bucket is the wrapper's, engine-independent |

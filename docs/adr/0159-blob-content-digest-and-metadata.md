@@ -2,6 +2,7 @@
 
 - **Status**: Implemented (2026-10-05)
 - **Superseded in part by**: [ADR-0184](0184-stateless-listing-pushdown.md) (2026-10-05) — Contracts Bucket (lines 146-157) gains ListAfter; Temporary workarounds (lines 140-141) no longer apply on file://.
+- **Superseded in part by**: [ADR-0203](0203-backup-format-targets-and-fencing.md) (2026-10-10) — Contracts `PutOptions` gains `IfNotExist`.
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged twice)
 - **Deciders**: green-0-rabbit
 - **Tags**: blob, s3, etag, conditional-requests, port

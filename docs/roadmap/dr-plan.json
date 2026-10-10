@@ -22,7 +22,7 @@
     },
     {
       "id": "ADR-0202",
-      "title": "store layer for backup",
+      "title": "store layer for backup (Accepted 2026-10-10)",
       "features": [
         "F109"
       ],
@@ -33,7 +33,7 @@
     },
     {
       "id": "ADR-0201",
-      "title": "event store",
+      "title": "event store (Accepted 2026-10-10)",
       "features": [
         "F110"
       ],
@@ -46,7 +46,7 @@
     },
     {
       "id": "ADR-0203",
-      "title": "backup format, targets and fencing",
+      "title": "backup format, targets and fencing (Accepted 2026-10-10)",
       "features": [
         "F109"
       ],
@@ -58,7 +58,7 @@
     },
     {
       "id": "ADR-0204",
-      "title": "backup encryption and key escrow",
+      "title": "backup encryption and key escrow (Accepted 2026-10-10)",
       "features": [
         "F109"
       ],
@@ -68,7 +68,7 @@
     },
     {
       "id": "ADR-0205",
-      "title": "backup operation",
+      "title": "backup operation (Accepted 2026-10-10)",
       "features": [
         "F109"
       ],
@@ -79,7 +79,7 @@
     },
     {
       "id": "ADR-0206",
-      "title": "restore and held boot",
+      "title": "restore and held boot (Accepted 2026-10-10)",
       "features": [
         "F109"
       ],
@@ -93,7 +93,7 @@
     },
     {
       "id": "ADR-0207",
-      "title": "pre-upgrade snapshot and safe mode",
+      "title": "pre-upgrade snapshot and safe mode (Accepted 2026-10-10)",
       "features": [
         "F109"
       ],
@@ -105,7 +105,7 @@
     },
     {
       "id": "ADR-0208",
-      "title": "blob store backend and backup target",
+      "title": "blob store backend and backup target (Accepted 2026-10-10)",
       "features": [
         "F111"
       ],
@@ -119,7 +119,7 @@
     },
     {
       "id": "ADR-0209",
-      "title": "KV backup on the common format",
+      "title": "KV backup on the common format (Accepted 2026-10-10)",
       "features": [
         "F111"
       ],
@@ -147,7 +147,7 @@
     },
     {
       "id": "ADR-0210",
-      "title": "API optimistic concurrency: PUT and DELETE honor the client's version (If-Match), issue #844",
+      "title": "API optimistic concurrency: PUT and DELETE honor the client's version (If-Match), issue #844 (Accepted 2026-10-10)",
       "features": [
         "F109"
       ],
