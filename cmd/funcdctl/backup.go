@@ -2,12 +2,11 @@ package main
 
 import (
 	"github.com/spf13/cobra"
-	"sigs.k8s.io/yaml"
 
-	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/backup/envelope"
 	"github.com/pyvvo/funcd/internal/backup/verify"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
+	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
 // backupCmd groups the platform backup verbs (ADR-0205): the status the daemon reports, and the verification the
@@ -27,19 +26,7 @@ func (a *cli) backupStatusCmd() *cobra.Command {
 		Short: "Print the platform backup status as YAML: restore points, rpoRisk, failures (admin only)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			c, err := a.sdkClient()
-			if err != nil {
-				return err
-			}
-			st, err := c.PlatformBackup(cmd.Context())
-			if err != nil {
-				return err
-			}
-			out, err := yaml.Marshal(st)
-			if err != nil {
-				return fault.Internalf("funcdctl backup status", "encode the status: %v", err)
-			}
-			return a.writef("%s", out)
+			return printStatus(cmd.Context(), a, "funcdctl backup status", "encode the status", (*sdk.Client).PlatformBackup)
 		},
 	}
 }

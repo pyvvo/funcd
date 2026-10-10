@@ -12,12 +12,15 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"sigs.k8s.io/yaml"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/app/template"
 	"github.com/pyvvo/funcd/internal/artifact"
+	"github.com/pyvvo/funcd/internal/backup/runner"
 	"github.com/pyvvo/funcd/internal/contract"
+	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
@@ -533,6 +536,24 @@ func checkOutput(op, output string, formats ...string) error {
 // writef is a checked fmt.Fprintf to the cli's writer (errcheck-clean); the ...any variadic is
 // the sanctioned printf form (ADR-0002 §3 / forbidigo exclusion).
 func (a *cli) writef(format string, args ...any) error { return fprintf(a.out, format, args...) }
+
+// printStatus fetches a status through the SDK and writes it as YAML (`funcdctl backup status`, `funcdctl hold
+// status`); encode prefixes the encode error.
+func printStatus[T runner.Status | hold.Evidence](ctx context.Context, a *cli, op, encode string, fetch func(*sdk.Client, context.Context) (T, error)) error {
+	c, err := a.sdkClient()
+	if err != nil {
+		return err
+	}
+	st, err := fetch(c, ctx)
+	if err != nil {
+		return err
+	}
+	out, err := yaml.Marshal(st)
+	if err != nil {
+		return fault.Internalf(op, "%s: %v", encode, err)
+	}
+	return a.writef("%s", out)
+}
 
 func fprintf(w io.Writer, format string, args ...any) error {
 	if _, err := fmt.Fprintf(w, format, args...); err != nil {

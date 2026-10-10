@@ -2,9 +2,8 @@ package main
 
 import (
 	"github.com/spf13/cobra"
-	"sigs.k8s.io/yaml"
 
-	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
 // holdCmd groups the platform hold verbs (ADR-0206 Decision 1): `funcdctl hold status` prints the hold's evidence,
@@ -24,19 +23,7 @@ func (a *cli) holdStatusCmd() *cobra.Command {
 		Short: "Show the hold: marker, restore report, counts, paused runs, dead letters, pending blob keys, orphan data",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			c, err := a.sdkClient()
-			if err != nil {
-				return err
-			}
-			st, err := c.HoldStatus(cmd.Context())
-			if err != nil {
-				return err
-			}
-			out, err := yaml.Marshal(st)
-			if err != nil {
-				return fault.Internalf("funcdctl hold status", "encode: %v", err)
-			}
-			return a.writef("%s", out)
+			return printStatus(cmd.Context(), a, "funcdctl hold status", "encode", (*sdk.Client).HoldStatus)
 		},
 	}
 }
