@@ -72,6 +72,15 @@ aws_secret_access_key = <box secret>
 The operator keeps a separate credential for restore (ADR-0206) and verification (ADR-0205). It reads, lists, and is
 the only one that puts under `gen/verified/`. It deletes nothing either.
 
+Run `funcdctl backup verify` off the box with it every `(backup.objectives.rpo − backup.interval) / 2` (30 minutes at
+the defaults), for example from a systemd timer: `rpoRisk` follows the newest verified generation, and that slack
+lets a generation verified at the age of one interval stay inside the rpo while the next verify runs.
+
+```sh
+funcdctl backup verify --target <backup.target> --credentials-file <verify credentials> \
+  --identity <operator identity file> --escrow <escrow dir>
+```
+
 ```json
 {
   "Version": "2012-10-17",

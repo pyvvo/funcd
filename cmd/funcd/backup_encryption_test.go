@@ -93,9 +93,10 @@ func TestScenarioMasterKeyMigrates(t *testing.T) {
 }
 
 // ADR-0204 Decision 2 at the daemon's start: with backup.target set, a recipients rule violation refuses the start
-// naming the key, and a valid configuration logs the keys' fingerprints. ADR-0205 runs the backups.
+// naming the key (config.CheckBackup in the config's Validate, ADR-0205), and a valid configuration logs the keys'
+// fingerprints.
 func TestBackupEncryptionCheckedAtStart(t *testing.T) {
-	load := func(t *testing.T, backupYAML string) (config.Config, string) {
+	load := func(t *testing.T, backupYAML string) (config.Config, string, error) {
 		t.Helper()
 		dataDir := shortDataDir(t)
 		path := filepath.Join(dataDir, "funcdconfig.yaml")
@@ -104,8 +105,7 @@ func TestBackupEncryptionCheckedAtStart(t *testing.T) {
 				"storage:\n  mode: memory\n  dataDir: \""+dataDir+"\"\n"+
 				"backup:\n  target: \"file://"+t.TempDir()+"\"\n"+backupYAML), 0o600))
 		cfg, err := config.Load(path, config.Flags{})
-		require.NoError(t, err)
-		return cfg, dataDir
+		return cfg, dataDir, err
 	}
 	start := func(t *testing.T, cfg config.Config) (string, error) {
 		t.Helper()
@@ -132,16 +132,14 @@ func TestBackupEncryptionCheckedAtStart(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("no recipients refuses", func(t *testing.T) {
-		cfg, _ := load(t, "")
-		_, err := start(t, cfg)
+		_, _, err := load(t, "")
 		require.Equal(t, fault.Invalid, fault.KindOf(err))
 		require.ErrorContains(t, err, "backup.encryption.recipients")
 	})
 	// scenario: plaintext-secrets-refused — none without a secrets key refuses naming both keys; with one it starts
 	// and warns.
 	t.Run("none without a secrets key refuses", func(t *testing.T) {
-		cfg, _ := load(t, "  encryption:\n    none: true\n")
-		_, err := start(t, cfg)
+		_, _, err := load(t, "  encryption:\n    none: true\n")
 		require.Equal(t, fault.Invalid, fault.KindOf(err))
 		require.ErrorContains(t, err, "backup.encryption.none")
 		require.ErrorContains(t, err, "secrets.encryptionKeyFile")
@@ -149,7 +147,8 @@ func TestBackupEncryptionCheckedAtStart(t *testing.T) {
 	t.Run("none with a secrets key starts", func(t *testing.T) {
 		key := filepath.Join(t.TempDir(), "secrets.key")
 		require.NoError(t, os.WriteFile(key, bytes.Repeat([]byte{3}, 32), 0o600))
-		cfg, _ := load(t, "  encryption:\n    none: true\nsecrets:\n  encryptionKeyFile: \""+key+"\"\n")
+		cfg, _, err := load(t, "  encryption:\n    none: true\nsecrets:\n  encryptionKeyFile: \""+key+"\"\n")
+		require.NoError(t, err)
 		logs, err := start(t, cfg)
 		require.NoError(t, err)
 		require.Contains(t, logs, "level=WARN")
@@ -157,7 +156,8 @@ func TestBackupEncryptionCheckedAtStart(t *testing.T) {
 	})
 	t.Run("recipients from the env start", func(t *testing.T) {
 		t.Setenv("FUNCD_BACKUP_ENCRYPTION_RECIPIENTS", recipientsFile(t, a)+","+recipientsFile(t, b))
-		cfg, _ := load(t, "")
+		cfg, _, err := load(t, "")
+		require.NoError(t, err)
 		require.Len(t, cfg.Backup.Encryption.Recipients, 2)
 		logs, err := start(t, cfg)
 		require.NoError(t, err)
@@ -165,7 +165,8 @@ func TestBackupEncryptionCheckedAtStart(t *testing.T) {
 		require.Contains(t, logs, envelope.Fingerprint([]byte(b.Recipient().String())))
 	})
 	t.Run("valid recipients log the fingerprints", func(t *testing.T) {
-		cfg, dataDir := load(t, "  encryption:\n    recipients:\n      - \""+recipientsFile(t, a, b)+"\"\n")
+		cfg, dataDir, err := load(t, "  encryption:\n    recipients:\n      - \""+recipientsFile(t, a, b)+"\"\n")
+		require.NoError(t, err)
 		logs, err := start(t, cfg)
 		require.NoError(t, err)
 		master, err := os.ReadFile(filepath.Join(dataDir, "s3gateway", "master.key")) //nolint:gosec // a test temp path

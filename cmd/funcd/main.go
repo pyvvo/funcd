@@ -20,6 +20,8 @@ import (
 	_ "time/tzdata" // ADR-0211: cron time zones resolve on a host without zoneinfo
 
 	"github.com/spf13/cobra"
+	"go.opentelemetry.io/otel/metric"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
 
 	"net/netip"
 
@@ -27,7 +29,9 @@ import (
 	shimnode "github.com/pyvvo/funcd-typescript/shim"
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/backup"
 	"github.com/pyvvo/funcd/internal/backup/envelope"
+	"github.com/pyvvo/funcd/internal/backup/runner"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
@@ -184,7 +188,9 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) (_ 
 	if err != nil {
 		return nil, noopClose, nil, "", err
 	}
-	if err := checkBackupEncryption(cfg, master, root); err != nil {
+	logBackupFindings(cfg, root)
+	sealer, err := backupSealer(cfg, master, root)
+	if err != nil {
 		return nil, noopClose, nil, "", err
 	}
 
@@ -202,6 +208,26 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) (_ 
 		return nil, noopClose, nil, "", err
 	}
 	opened = append(opened, st)
+
+	// Telemetry: override the preset's no-op pipeline only when an OTLP endpoint is configured. Built before the
+	// backup runner, whose funcd.backup meter it provides (ADR-0205).
+	var tel *observability.Telemetry
+	if cfg.Telemetry.Endpoint != "" {
+		tel, err = observability.NewTelemetry(ctx,
+			observability.TelemetryConfig{Endpoint: cfg.Telemetry.Endpoint, Insecure: cfg.Telemetry.Insecure})
+		if err != nil {
+			return nil, noopClose, nil, "", fmt.Errorf("build telemetry: %w", err)
+		}
+		opened = append(opened, telemetryCloser{tel})
+	}
+	// The backup runner, before the blob and KV wiring that take its Recorder (ADR-0205 Decision 2).
+	backups, target, err := backupRunner(ctx, cfg, sealer, backupMeter(tel), root)
+	if err != nil {
+		return nil, noopClose, nil, "", err
+	}
+	if target != nil {
+		opened = append(opened, target)
+	}
 
 	// Substrate: file-backed (durable) by default, in-memory (ephemeral) with storage.mode: memory (ADR-0043).
 	// Built before the KV driver so the opt-in KV CDC (ADR-0068) can publish to the same bus.
@@ -234,15 +260,11 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) (_ 
 		funcd.WithDataPlaneAddr(cfg.Server.DataPlaneAddr),
 		funcd.WithLogger(root),
 	)
-	// Telemetry: override the preset's no-op pipeline only when an OTLP endpoint is configured.
-	if cfg.Telemetry.Endpoint != "" {
-		tel, terr := observability.NewTelemetry(ctx,
-			observability.TelemetryConfig{Endpoint: cfg.Telemetry.Endpoint, Insecure: cfg.Telemetry.Insecure})
-		if terr != nil {
-			return nil, noopClose, nil, "", fmt.Errorf("build telemetry: %w", terr)
-		}
+	if tel != nil {
 		opts = append(opts, funcd.WithTelemetry(tel))
-		opened = append(opened, telemetryCloser{tel})
+	}
+	if backups != nil {
+		opts = append(opts, funcd.WithPlatformBackup(backups))
 	}
 
 	// TLS termination (ADR-0111, F74): opt-in HTTPS on both listeners. The daemon keeps TLS state in
@@ -408,6 +430,10 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) (_ 
 		return nil, noopClose, nil, "", fmt.Errorf("wire execution: %w", err)
 	}
 	opts = append(opts, execOpts...)
+	if target != nil {
+		closeRuntime := closeExec
+		closeExec = func() error { return errors.Join(closeRuntime(), target.Close()) }
+	}
 	return opts, closeExec, startKV, substrate, nil
 }
 
@@ -749,24 +775,83 @@ func loadMaster(cfg config.Config, log *slog.Logger) ([]byte, error) {
 	return s3gateway.LoadOrCreateMaster(file, dataDir)
 }
 
-// checkBackupEncryption applies ADR-0204 Decision 2's start rules when backup.target is set: a violation refuses
-// the start, and the keys' fingerprints are logged. ADR-0205 runs the backups with the sealer.
-func checkBackupEncryption(cfg config.Config, master []byte, log *slog.Logger) error {
+// logBackupFindings logs config.CheckBackup's warnings, one line each (ADR-0205 Decision 3); Validate refused its
+// errors. With a target, envelope.New logs ADR-0204 Decision 2's two encryption warnings itself, so they are not
+// repeated here.
+func logBackupFindings(cfg config.Config, log *slog.Logger) {
+	sealed := cfg.Backup.Target != ""
+	for _, f := range cfg.CheckBackup() {
+		if f.Error || sealed && (f.Key == "backup.encryption.none" || f.Key == "backup.encryption.recipients") {
+			continue
+		}
+		log.Warn(f.Message, "key", f.Key)
+	}
+}
+
+// backupSealer applies ADR-0204 Decision 2's start rules when backup.target is set: a violation refuses the start,
+// and the keys' fingerprints are logged. nil without a target.
+func backupSealer(cfg config.Config, master []byte, log *slog.Logger) (*envelope.Sealer, error) {
 	if cfg.Backup.Target == "" {
-		return nil
+		return nil, nil
 	}
 	key, err := readSecretsKey(cfg)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	_, err = envelope.New(envelope.Config{
+	return envelope.New(envelope.Config{
 		Recipients: cfg.Backup.Encryption.Recipients,
 		None:       cfg.Backup.Encryption.None,
 		SecretsKey: key,
 		Master:     master,
 		Logger:     log,
 	})
-	return err
+}
+
+// backupRunner builds the backup runner when the platform backup (backup.target with storage.mode file) or the KV
+// export is on (ADR-0205 Decision 2), nil otherwise; with the platform backup it opens the target, which the caller
+// closes. A backup.Open error refuses the start.
+func backupRunner(ctx context.Context, cfg config.Config, sealer *envelope.Sealer, meter metric.Meter, log *slog.Logger) (*runner.Runner, backup.Target, error) {
+	file := cfg.Storage.Mode == "file"
+	platform, kv := file && cfg.Backup.Target != "", file && cfg.Kvstore.Backup.Enabled
+	if !platform && !kv {
+		return nil, nil, nil
+	}
+	times, err := cfg.BackupTimes()
+	if err != nil {
+		return nil, nil, err
+	}
+	rc := runner.Config{Times: times, Meter: meter, Logger: log}
+	if platform {
+		r := cfg.Backup.Retention
+		rc.Target, err = backup.Open(ctx, backup.Config{
+			Target:          cfg.Backup.Target,
+			CredentialsFile: cfg.Backup.CredentialsFile,
+			DataDir:         cfg.Storage.DataDir,
+			SingleWriter:    cfg.Backup.SingleWriter,
+			Retention:       backup.Retention{Hourly: r.Hourly, Daily: r.Daily, Weekly: r.Weekly, Verified: r.Verified},
+			Logger:          log,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		rc.Sealer = sealer
+	}
+	runs, err := runner.New(rc)
+	if err != nil {
+		if rc.Target != nil {
+			_ = rc.Target.Close()
+		}
+		return nil, nil, err
+	}
+	return runs, rc.Target, nil
+}
+
+// backupMeter is the backup runner's meter (ADR-0205 Decision 5); a no-op one without telemetry.
+func backupMeter(t *observability.Telemetry) metric.Meter {
+	if t == nil {
+		return metricnoop.NewMeterProvider().Meter("funcd.backup")
+	}
+	return t.MeterProvider().Meter("funcd.backup")
 }
 
 // readSecretsKey reads secrets.encryptionKeyFile; "" ⇒ nil.

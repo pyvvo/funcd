@@ -13,6 +13,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/backup/runner"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/bus"
 	"github.com/pyvvo/funcd/internal/controlplane/middleware"
@@ -241,6 +242,16 @@ func WithDeadLetterQueue(dataDir string, deliveryAttempts int, retention time.Du
 		c.deliveryAttempts = deliveryAttempts
 		c.deadletterRetention = retention
 		c.deadletterMaxEntries = maxEntries
+		return nil
+	}
+}
+
+// WithPlatformBackup runs the platform backup (ADR-0205): New binds r to the event store, the metastore and the run
+// state, Run runs it, and the control plane's platformbackup route reads its status. nil ⇒ no backup stream; the
+// route reads enabled: false.
+func WithPlatformBackup(r *runner.Runner) Option {
+	return func(c *config) error {
+		c.backupRunner = r
 		return nil
 	}
 }

@@ -1,6 +1,6 @@
 # ADR-0205: Backup operation — runs, settings check, status, metrics and verification
 
-- **Status**: Accepted (2026-10-10, by an `adr-batch` run after a clean `adr-judge` gate; the defaults below were not confirmed one by one)
+- **Status**: Implemented (2026-10-10; review passed; implementation done 2026-10-10; accepted 2026-10-10 by an `adr-batch` run after a clean `adr-judge` gate; the defaults below were not confirmed one by one)
 - **Date**: 2026-10-08
 - **Deciders**: green-0-rabbit
 - **Tags**: backup, disaster-recovery, config, observability, metrics

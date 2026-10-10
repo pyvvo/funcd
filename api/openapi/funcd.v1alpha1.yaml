@@ -1247,6 +1247,20 @@ components:
             - Terminating
           type: string
       type: object
+    Failure:
+      additionalProperties: false
+      properties:
+        error:
+          type: string
+        time:
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
+      required:
+        - time
+        - error
+      type: object
     FaultError:
       additionalProperties: false
       properties:
@@ -2008,6 +2022,56 @@ components:
         - kind
         - name
         - uid
+      type: object
+    PlatformBackupStatus:
+      additionalProperties: false
+      properties:
+        earliestRestorePoint:
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
+        enabled:
+          type: boolean
+        held:
+          type: boolean
+        interval:
+          pattern: ^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$
+          patternDescription: "a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms)"
+          type: string
+        lastFailure:
+          $ref: "#/components/schemas/Failure"
+        lastSuccessTime:
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
+        lastVerifiedTime:
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
+        nextRunTime:
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
+        rpo:
+          pattern: ^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$
+          patternDescription: "a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms)"
+          type: string
+        rpoRisk:
+          type: boolean
+        streams:
+          additionalProperties:
+            $ref: "#/components/schemas/Stream"
+          type: object
+      required:
+        - enabled
+        - held
+        - rpoRisk
+        - interval
+        - rpo
       type: object
     Policy:
       additionalProperties: false
@@ -2846,6 +2910,17 @@ components:
           type: string
       required:
         - condition
+      type: object
+    Stream:
+      additionalProperties: false
+      properties:
+        lastFailure:
+          $ref: "#/components/schemas/Failure"
+        lastSuccessTime:
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
       type: object
     TimerEvent:
       additionalProperties: false
@@ -7895,6 +7970,24 @@ paths:
           description: Error
       tags:
         - Namespace
+  /apis/funcd.io/v1alpha1/platformbackup:
+    get:
+      operationId: getPlatformBackup
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlatformBackupStatus"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - PlatformBackup
   /apis/funcd.io/v1alpha1/runtimeclasses:
     get:
       operationId: listRuntimeClasses
