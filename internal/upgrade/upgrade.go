@@ -320,6 +320,7 @@ type snapshotRun struct {
 }
 
 // prepare is step 2: the checks that take no lock. On s3:// the probe runs here; a directory's lock waits for step 4.
+// A master secret it creates under <storage.dataDir> takes that directory's owner (Decision 1, Owner).
 func prepare(ctx context.Context, cfg config.Config, log *slog.Logger) (*snapshotRun, error) {
 	const op = "upgrade.Snapshot"
 	if cfg.Storage.Mode != "file" || cfg.Backup.Target == "" {
@@ -336,7 +337,15 @@ func prepare(ctx context.Context, cfg config.Config, log *slog.Logger) (*snapsho
 		return nil, fault.Invalidf(op, "storage.metastoreDir %s is absent or empty: is --config the daemon's? (its unit "+
 			"sets FUNCD_DATA_DIR, this shell may not), %s", dir, noSnapshotHint)
 	}
+	data := cfg.Storage.DataDir
+	before, err := listDirs(data, masterDirs())
+	if err != nil {
+		return nil, err
+	}
 	master, err := envelope.LoadMaster(cfg, log)
+	if oerr := errors.Join(ownNew(data, data, masterDirs(), before)...); oerr != nil {
+		return nil, errors.Join(err, fault.Wrapf(oerr, fault.Internal, op, "re-own the master secret"))
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -395,7 +404,7 @@ func (s *snapshotRun) stores() []struct{ key, dir string } {
 // pre-upgrade generations past backup.retention.preUpgrade.
 func (s *snapshotRun) write(ctx context.Context) (m backup.Manifest, past []backup.Entry, err error) {
 	const op = "upgrade.Snapshot"
-	before, err := listTarget(s.dir)
+	before, err := listDirs(s.dir, trackedDirs())
 	if err != nil {
 		return m, nil, err
 	}
@@ -493,16 +502,20 @@ func probeLock(op, key, dir string) error {
 // trackedDirs are the target directories, relative to its root, whose new entries a run writes (Decision 1, Owner).
 func trackedDirs() []string { return []string{".", "gen", "gen/pre-upgrade", "probe"} }
 
-// targetListing is, per tracked directory that exists, the names it holds.
-type targetListing map[string]map[string]bool
+// masterDirs are the data directory's directories, relative to it, where loading the master may create an entry
+// (ADR-0204 Decision 7).
+func masterDirs() []string { return []string{".", "s3gateway"} }
 
-// listTarget lists a directory target's tracked directories before the run; nil on s3://.
-func listTarget(root string) (targetListing, error) {
+// dirListing is, per listed directory that exists, the names it holds.
+type dirListing map[string]map[string]bool
+
+// listDirs lists dirs under root before the run writes there; nil when root is "" (s3://, or no data directory).
+func listDirs(root string, dirs []string) (dirListing, error) {
 	if root == "" {
 		return nil, nil
 	}
-	l := targetListing{}
-	for _, d := range trackedDirs() {
+	l := dirListing{}
+	for _, d := range dirs {
 		if fi, err := os.Lstat(filepath.Join(root, d)); err != nil || !fi.IsDir() {
 			continue
 		}
@@ -520,7 +533,7 @@ func listTarget(root string) (targetListing, error) {
 
 // own gives what root wrote its owner: the store directories, and a new lock, take <storage.dataDir>'s; under the
 // target only this run's entries (new in a tracked directory that existed) take the nearest pre-existing directory's.
-func (s *snapshotRun) own(before targetListing) error {
+func (s *snapshotRun) own(before dirListing) error {
 	dataDir := s.cfg.Storage.DataDir
 	var roots []string
 	for _, d := range s.stores() {
@@ -530,26 +543,34 @@ func (s *snapshotRun) own(before targetListing) error {
 	if s.dir == "" {
 		return errors.Join(errs...)
 	}
+	errs = append(errs, ownNew(s.dir, "", trackedDirs(), before)...)
+	// After ownNew, so a new lock ends with <storage.dataDir>'s owner, not the target root's.
 	if _, err := os.Lstat(filepath.Join(s.dir, "lock")); err == nil && !before["."]["lock"] {
 		errs = append(errs, hold.Own(dataDir, filepath.Join(s.dir, "lock")))
 	}
-	for _, d := range trackedDirs() {
+	return errors.Join(errs...)
+}
+
+// ownNew gives each entry of dirs under root that before does not name ref's owner, or, with ref "", its directory's.
+// A directory absent from before is skipped: its entries are under a new entry of a listed one.
+func ownNew(root, ref string, dirs []string, before dirListing) []error {
+	var errs []error
+	for _, d := range dirs {
 		names, existed := before[d]
 		if !existed {
 			continue
 		}
-		parent := filepath.Join(s.dir, d)
+		parent := filepath.Join(root, d)
 		entries, err := os.ReadDir(parent)
 		if err != nil {
 			errs = append(errs, err)
 			continue
 		}
 		for _, e := range entries {
-			if names[e.Name()] || (d == "." && e.Name() == "lock") {
-				continue
+			if !names[e.Name()] {
+				errs = append(errs, hold.Own(cmp.Or(ref, parent), filepath.Join(parent, e.Name())))
 			}
-			errs = append(errs, hold.Own(parent, filepath.Join(parent, e.Name())))
 		}
 	}
-	return errors.Join(errs...)
+	return errs
 }
