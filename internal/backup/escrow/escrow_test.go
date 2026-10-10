@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -245,6 +246,7 @@ func TestFindThroughSymlinks(t *testing.T) {
 	_, err = escrow.Find(dir, escrow.SecretsDir, envelope.Fingerprint(k))
 	require.Equal(t, fault.NotFound, fault.KindOf(err))
 	require.ErrorContains(t, err, envelope.Fingerprint(other), "a symlinked key is listed")
+	require.Equal(t, 1, strings.Count(err.Error(), envelope.Fingerprint(other)), "the loop is read once")
 	require.ErrorContains(t, err, "unresolved symlink (stat "+dangling, "a dangling symlink is named")
 
 	require.NoError(t, os.Symlink(filepath.Join(keys, "absent"), filepath.Join(dir, escrow.MasterDir)))
