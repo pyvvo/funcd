@@ -328,21 +328,34 @@ func TestScenarioAppSpecChangeApplies(t *testing.T) {
 	require.Equal(t, v1.PhaseDeploying, h.app().Status.Phase, "a spec change deploys until no part is Pending")
 }
 
-// Decision 4: every pass converges, so a part edited or deleted by hand is written back, its status kept.
+// Decision 4: every pass converges, so a part edited or deleted by hand is written back, its status kept. ADR-0212
+// Decisions 1 and 2: each write-back is one self-healed line, with no spec value, and lastSelfHeal names the later
+// part in section order with one time for the pass; no AppRevision is stamped.
 func TestAppWritesBackAHandEdit(t *testing.T) {
-	h := newHarness(t, nil)
+	logs := &records{}
+	h := newHarness(t, nil, logs.to)
 	h.install(todoApp(nil))
+	require.Empty(t, logs.selfHealed(), "an install is no self-heal")
 	fn := h.get(v1.KindFunction, "todo-api").(*v1.Function)
 	fn.Spec.Image = "oci-layout://hotfix:2"
 	h.update(fn)
 	rt := h.get(v1.KindRoute, "todo-api")
 	require.NoError(t, h.st.Delete(h.ctx, v1.KindRoute.GVK(), ns, "todo-api", rt.GetObjectMeta().ResourceVersion))
 
+	h.clk.Advance(time.Second)
 	h.reconcile()
 	fn = h.get(v1.KindFunction, "todo-api").(*v1.Function)
 	require.Equal(t, "oci-layout://todo-api:1", fn.Spec.Image)
 	require.Equal(t, v1.PhaseReady, fn.Status.Phase, "the App never writes a part's status")
 	require.NotNil(t, h.get(v1.KindRoute, "todo-api"))
+	require.Equal(t, []map[string]string{
+		{"level": "INFO", "component": "app", "kind": "Function", "namespace": "default", "name": "todo-api", "app": "todo"},
+		{"level": "INFO", "component": "app", "kind": "Route", "namespace": "default", "name": "todo-api", "app": "todo"},
+	}, logs.selfHealed())
+	require.Equal(t, &v1.AppSelfHeal{Kind: v1.KindRoute, Name: "todo-api", At: v1.NewTimestamp(h.clk.Now())}, h.app().Status.LastSelfHeal)
+	require.Equal(t, []v1.ObjectName{"todo-1"}, h.revNames())
+	h.quiet()
+	require.Len(t, logs.selfHealed(), 2, "a repeated pass finds every part equal")
 }
 
 // scenario: app-child-not-owned (the reconciler half) — a part that exists without this App's reference stops the

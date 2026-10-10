@@ -18,6 +18,15 @@ const (
 	condRevisionReady = v1.ConditionType("RevisionReady")
 )
 
+// The App's Paused condition (ADR-0212 Decisions 4 and 5): True SpecPaused while spec.paused is set, False Resumed
+// after a resume, absent on an App never paused.
+const (
+	condPaused    = v1.ConditionType("Paused")
+	reasonPaused  = "SpecPaused"
+	reasonResumed = "Resumed"
+	messagePaused = "spec.paused is set: the App writes no part until it is resumed"
+)
+
 // The App's Ready reasons (ADR-0199 Decisions 4 and 5) and the Pruning reasons (ADR-0199 Decision 6).
 const (
 	reasonProgressing   = "Progressing"
@@ -157,8 +166,9 @@ func readyCondition(vs []verdict, halt *stop) v1.Condition {
 // appPhase sets the App's phase and returns its Ready condition (ADR-0200 Decision 6): Deploying while the latest
 // revision is Deploying or none exists; Failed while it is Failed, with Ready=False ChildNotReady and its message
 // unless the pass stopped; once it is current, ADR-0199 Decision 5: Ready once no part is Pending, which records the
-// generation in status.observedGeneration, then Degraded while a part is Pending or a pass stops. ChildNotReady is for
-// Failed and Degraded only, so a Deploying App reports Progressing instead.
+// generation in status.observedGeneration, then Degraded while a part is Pending or a pass stops, whatever the
+// generation: a pause or a resume bumps it without a stamp (ADR-0212 Decision 7). ChildNotReady is for Failed and
+// Degraded only, so a Deploying App reports Progressing instead.
 func appPhase(a *v1.App, latest *v1.AppRevision, vs []verdict, halt *stop) v1.Condition {
 	ready := readyCondition(vs, halt)
 	switch {
@@ -175,10 +185,8 @@ func appPhase(a *v1.App, latest *v1.AppRevision, vs []verdict, halt *stop) v1.Co
 		}
 	case ready.Status != v1.ConditionFalse:
 		a.Status.Phase, a.Status.ObservedGeneration = v1.PhaseReady, a.Generation
-	case a.Status.ObservedGeneration == a.Generation:
-		a.Status.Phase = v1.PhaseDegraded
 	default:
-		a.Status.Phase = v1.PhaseDeploying
+		a.Status.Phase = v1.PhaseDegraded
 	}
 	return ready
 }

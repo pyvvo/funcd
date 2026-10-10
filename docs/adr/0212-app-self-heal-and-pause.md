@@ -1,6 +1,6 @@
 # ADR-0212: App self-heal record and pause
 
-- **Status**: Accepted (2026-10-10)
+- **Status**: Implemented (2026-10-10)
 - **Date**: 2026-10-08 (self-accepted 2026-10-10 under adr-batch after drafting, three-lens judging with a skeptic per
   finding, cross-ADR audits and alignment with the disaster-recovery ADRs)
 - **Deciders**: green-0-rabbit
