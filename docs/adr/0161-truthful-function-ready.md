@@ -5,6 +5,7 @@
 - **Superseded in part by**: [ADR-0183](0183-boot-timeout-from-start.md) (2026-10-05) — Decision 2 (line 140) and Decision 3 (lines 156-157, 161-162, 165): the boot timeout and re-create times count from the last successful Start.
 - **Superseded in part by**: [ADR-0192](0192-asleep-function-gate-stops-worker.md) (2026-10-05) — Decision 2 (gateFailed lead-in line 145, row line 150, header lines 22-23) and Decision 3 line 155: an asleep solo Function's workers are stopped and the gate's own phase is written.
 - **Superseded in part by**: [ADR-0193](0193-asleep-gate-rule-for-every-placement.md) (2026-10-05) — Decision 2's gateFailed lead-in and running row and Decision 3's '(a gate failure stops nothing)', now also for an asleep pooled member.
+- **Superseded in part by**: [ADR-0215](0215-built-in-health.md) (2026-10-10) — Decision 2 and the steady state: liveness and readiness probes in each pass.
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged once)
 - **Deciders**: green-0-rabbit
 - **Tags**: function, supervision, readiness, status, resolver, activator, crash-recovery

@@ -7,6 +7,7 @@
 - **Superseded in part by**: [ADR-0163](0163-retry-times-in-config.md) (2026-10-05) — Decision 2 no config key, Decision 9 requeue bound: now runtime.supervisionPeriod.
 - **Superseded in part by**: [ADR-0169](0169-failed-stays-failed.md) (2026-10-05) — Decision 4 rows "none -> create" and "Created -> start": failed Start restarts.
 - **Superseded in part by**: [ADR-0183](0183-boot-timeout-from-start.md) (2026-10-05) — Decision 4 Stopped/Failed replace row (line 141): the period counts from the last successful Start.
+- **Superseded in part by**: [ADR-0215](0215-built-in-health.md) (2026-10-10) — Decision 3: the supervision pass also probes liveness and readiness.
 - **Date**: 2026-09-30 (redrafted the same day: an independent re-judge found that the first draft's replacement
   could not work on containerd and that a steady-state requeue would multiply in the engine; the self-acceptance
   was withdrawn before any commit or code, at the decider's choice. The second re-judge found no Blocker and asked

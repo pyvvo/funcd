@@ -2,7 +2,8 @@
 
 - **Status**: Design note, not an ADR yet. Once the design is final, it becomes one or more ADRs per feature row.
 - **Decided by ADRs**: F113 by [ADR-0199](../adr/0199-app-resource.md), F114 by
-  [ADR-0200](../adr/0200-app-revisions.md) (both Accepted 2026-10-08). Where an ADR and this
+  [ADR-0200](../adr/0200-app-revisions.md) (both Implemented); F115 to F123 by ADR-0212 to ADR-0220 and the cron
+  question (open question 3) by ADR-0211 (all Accepted 2026-10-10). Where an ADR and this
   note differ, the ADR wins: ADR-0199 refines the Function readiness rule, moves the `configMaps` and `secrets`
   sections to F116, lets prune skip an object still in use and decides the Bucket teardown; ADR-0200 numbers
   revisions from the latest AppRevision, keeps a `Failed` revision final and derives an unset `app.upgradeTimeout`.

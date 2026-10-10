@@ -2,6 +2,7 @@
 
 - **Status**: Implemented
 - **Superseded in part by**: [ADR-0194](0194-api-duration-strings.md) (2026-10-07) — the `time.Duration` Contracts line (174): the timer `interval` is a duration string.
+- **Superseded in part by**: [ADR-0211](0211-cron-schedules.md) (2026-10-10) — the timer event schedule: `cron` and `timeZone` beside `interval` (Contracts line 175, checklist line 238).
 - **Date**: 2026-07-07
 - **Implemented**: 2026-07-07
 - **Deciders**: green-0-rabbit

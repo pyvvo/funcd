@@ -1,6 +1,12 @@
 # ADR-0199: App — one resource declares, installs and removes a whole app
 
 - **Status**: Implemented (2026-10-08)
+- **Superseded in part by**: [ADR-0206](0206-restore-and-held-boot.md) (2026-10-10) — Decisions 4, 6 and 7 for a held platform and the boot Bucket purge.
+- **Superseded in part by**: [ADR-0212](0212-app-self-heal-and-pause.md) (2026-10-10) — Decisions 4, 5 and 6: pause and the self-heal record.
+- **Superseded in part by**: [ADR-0213](0213-app-config-and-secret-declarations.md) (2026-10-10) — Decisions 2, 4, 5 and 6: ConfigMaps and Secret declarations.
+- **Superseded in part by**: [ADR-0214](0214-app-hooks.md) (2026-10-10) — Decisions 4-6 for an App with hooks.
+- **Superseded in part by**: [ADR-0215](0215-built-in-health.md) (2026-10-10) — Decision 5: Bucket and Workflow readiness.
+- **Superseded in part by**: [ADR-0219](0219-app-requirements.md) (2026-10-10) — Decisions 4 and 5: the requirement wait.
 - **Date**: 2026-10-08 (judged in three rounds: five lenses, then three, then one, each finding checked by a skeptic)
 - **Deciders**: green-0-rabbit
 - **Tags**: app, lifecycle, controller, admission, gc, ownership

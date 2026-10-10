@@ -1,6 +1,7 @@
 # ADR-0194: API durations are duration strings — one `Duration` type, one grammar (h, m, s, ms)
 
 - **Status**: Implemented (2026-10-08)
+- **Superseded in part by**: [ADR-0211](0211-cron-schedules.md) (2026-10-10) — table row 177: `interval` is no longer required, `0s` counts as unset beside `cron`.
 - **Date**: 2026-10-07
 - **Deciders**: green-0-rabbit
 - **Tags**: api, types, openapi, validation, funcdctl, config, workflow, breaking-change
