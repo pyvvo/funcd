@@ -37,6 +37,7 @@ const (
 	reasonRefNotFound   = "RefNotFound"
 	reasonInUse         = "InUse"
 	reasonRunHeld       = "RunHeld"
+	reasonStepNotReady  = "StepNotReady"
 )
 
 // The stops of the Secret check, on the App's Ready and the AppRevision's Applied (ADR-0213 Decision 8).
@@ -56,8 +57,8 @@ type verdict struct {
 func partName(k v1.ObjectRef) string { return fmt.Sprintf("%s/%s", k.Kind, k.Name) }
 
 // readiness judges every declared entry in section order (Decision 5); the part a stopped pass names is Pending
-// with the stop's reason.
-func readiness(a *v1.App, ents []entry, objs map[v1.ObjectRef]v1.Object, halt *stop) []verdict {
+// with the stop's reason. steps holds the step Functions of the Workflow parts, by name, nil when absent.
+func readiness(a *v1.App, ents []entry, objs map[v1.ObjectRef]v1.Object, steps map[v1.ObjectName]*v1.Function, halt *stop) []verdict {
 	out := make([]verdict, 0, len(ents))
 	for _, e := range ents {
 		k := e.key(a.Namespace)
@@ -70,7 +71,7 @@ func readiness(a *v1.App, ents []entry, objs map[v1.ObjectRef]v1.Object, halt *s
 		case obj == nil:
 			v = pending(reasonProgressing, reasonProgressing, "not written yet")
 		default:
-			v = judge(obj)
+			v = judge(obj, steps)
 		}
 		v.child.Kind, v.child.Name = e.kind, e.name
 		out = append(out, v)
@@ -82,9 +83,10 @@ func pending(cause, reason, message string) verdict {
 	return verdict{child: v1.AppChild{State: v1.AppChildPending, Reason: reason}, cause: cause, message: message}
 }
 
-// judge applies Decision 5 to an existing part: a Function by its own rule, a kind without status (a Bucket) is Ready
-// once it exists, and any other part by its Ready condition at its generation.
-func judge(obj v1.Object) verdict {
+// judge applies Decision 5 to an existing part: a Function by its own rule, a kind without status is Ready once it
+// exists, and any other part by its Ready condition at its generation; a Workflow whose Ready passes is then judged by
+// its step Functions (ADR-0215 Decision 8).
+func judge(obj v1.Object, steps map[v1.ObjectName]*v1.Function) verdict {
 	if fn, ok := obj.(*v1.Function); ok {
 		return judgeFunction(fn)
 	}
@@ -96,10 +98,44 @@ func judge(obj v1.Object) verdict {
 	switch {
 	case !ok || c.ObservedGeneration != obj.GetObjectMeta().Generation:
 		return pending(reasonProgressing, reasonProgressing, "")
-	case c.Status == v1.ConditionTrue:
-		return verdict{child: v1.AppChild{State: v1.AppChildReady}}
+	case c.Status != v1.ConditionTrue:
+		return pending(reasonChildNotReady, cmp.Or(c.Reason, reasonChildNotReady), c.Message)
 	}
-	return pending(reasonChildNotReady, cmp.Or(c.Reason, reasonChildNotReady), c.Message)
+	if w, ok := obj.(*v1.Workflow); ok {
+		return judgeSteps(w, steps)
+	}
+	return verdict{child: v1.AppChild{State: v1.AppChildReady}}
+}
+
+// judgeSteps judges each step Function of w with judgeFunction (ADR-0215 Decision 8): a NotStarted one counts as
+// settled (ADR-0200), and the first missing or Pending one makes w Pending StepNotReady, naming it.
+func judgeSteps(w *v1.Workflow, steps map[v1.ObjectName]*v1.Function) verdict {
+	for _, name := range stepFunctions(w) {
+		fn := steps[name]
+		if fn == nil {
+			return pending(reasonChildNotReady, reasonStepNotReady, fmt.Sprintf("Function/%s: not found", name))
+		}
+		if v := judgeFunction(fn); v.child.State == v1.AppChildPending {
+			return pending(v.cause, reasonStepNotReady, fmt.Sprintf("Function/%s: %s", name, v.child.Reason))
+		}
+	}
+	return verdict{child: v1.AppChild{State: v1.AppChildReady}}
+}
+
+// stepFunctions names the Functions w's steps dispatch to: an image step's materialized Function and a ref step's
+// Function. A sub-workflow step is not walked: its Workflow's own Ready counts.
+func stepFunctions(w *v1.Workflow) []v1.ObjectName {
+	var out []v1.ObjectName
+	for _, st := range w.Spec.Steps {
+		switch {
+		case st.Function == nil:
+		case st.Function.Ref != "":
+			out = append(out, st.Function.Ref)
+		case st.Function.Image != "":
+			out = append(out, v1.StepFunctionName(w.Name, st.Name))
+		}
+	}
+	return out
 }
 
 // judgeFunction: a Function is Ready when its generation has served (ShapeValid True for it, ADR-0174) and its phase is

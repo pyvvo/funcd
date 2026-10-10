@@ -50,6 +50,9 @@ func TestScenarioZeroConfigDefaults(t *testing.T) {
 	require.Equal(t, "funcd-system", c.Funclog.Bucket)
 	require.Equal(t, 10, c.App.RevisionHistory, "ADR-0200 revision history")
 	require.Empty(t, c.App.UpgradeTimeout, "ADR-0200: unset, so cmd/funcd derives it from runtime.bootTimeout")
+	require.Empty(t, c.Runtime.LivenessTimeout, "ADR-0215: unset, so cmd/funcd derives it from runtime.supervisionPeriod")
+	require.Equal(t, "10s", c.Health.StorageProbeInterval)
+	require.Equal(t, "2s", c.Health.StorageProbeTimeout)
 }
 
 // scenario: site-default-index-config (ADR-0139) — site.defaultIndex is a config-level knob with the web
@@ -130,25 +133,28 @@ func TestEnvVarsMapToFields(t *testing.T) {
 		val string
 		get func(config.Config) string
 	}{
-		"FUNCD_LISTEN_ADDR":                 {"1.1.1.1:1", func(c config.Config) string { return c.Server.ListenAddr }},
-		"FUNCD_DATA_PLANE_ADDR":             {"2.2.2.2:2", func(c config.Config) string { return c.Server.DataPlaneAddr }},
-		"FUNCD_STORAGE_MODE":                {"memory", func(c config.Config) string { return c.Storage.Mode }},
-		"FUNCD_DATA_DIR":                    {"/d", func(c config.Config) string { return c.Storage.DataDir }},
-		"FUNCD_TOKEN":                       {"tok", func(c config.Config) string { return c.Auth.Token }},
-		"FUNCD_SECRETS_ENCRYPTION_KEY_FILE": {"/k", func(c config.Config) string { return c.Secrets.EncryptionKeyFile }},
-		"FUNCD_RUNTIME":                     {"containerd", func(c config.Config) string { return c.Runtime.Mode }},
-		"FUNCD_CONTAINERD_SOCKET":           {"/s", func(c config.Config) string { return c.Runtime.Containerd.Socket }},
-		"FUNCD_SNAPSHOTTER":                 {"native", func(c config.Config) string { return c.Runtime.Containerd.Snapshotter }},
-		"FUNCD_CNI_BIN_DIR":                 {"/cni", func(c config.Config) string { return c.Runtime.Containerd.CNIBinDir }},
-		"FUNCD_SUBNET_CIDR":                 {"10.0.0.0/8", func(c config.Config) string { return c.Runtime.Containerd.SubnetCIDR }},
-		"FUNCD_IMAGE_PREFIX":                {"my/", func(c config.Config) string { return c.Runtime.Containerd.ImagePrefix }},
-		"FUNCD_LOG_FORMAT":                  {"text", func(c config.Config) string { return c.Log.Format }},
-		"FUNCD_LOG_LEVEL":                   {"warn", func(c config.Config) string { return c.Log.Level }},
-		"FUNCD_TELEMETRY_ENDPOINT":          {"otel:4317", func(c config.Config) string { return c.Telemetry.Endpoint }},
-		"FUNCD_FUNCLOG_SEGMENT_MAX_AGE":     {"2s", func(c config.Config) string { return c.Funclog.SegmentMaxAge }},
-		"FUNCD_FUNCLOG_ENABLED":             {"false", func(c config.Config) string { return strconv.FormatBool(c.Funclog.Enabled) }},
-		"FUNCD_APP_UPGRADE_TIMEOUT":         {"10m", func(c config.Config) string { return c.App.UpgradeTimeout }},
-		"FUNCD_APP_REVISION_HISTORY":        {"3", func(c config.Config) string { return strconv.Itoa(c.App.RevisionHistory) }},
+		"FUNCD_LISTEN_ADDR":                   {"1.1.1.1:1", func(c config.Config) string { return c.Server.ListenAddr }},
+		"FUNCD_DATA_PLANE_ADDR":               {"2.2.2.2:2", func(c config.Config) string { return c.Server.DataPlaneAddr }},
+		"FUNCD_STORAGE_MODE":                  {"memory", func(c config.Config) string { return c.Storage.Mode }},
+		"FUNCD_DATA_DIR":                      {"/d", func(c config.Config) string { return c.Storage.DataDir }},
+		"FUNCD_TOKEN":                         {"tok", func(c config.Config) string { return c.Auth.Token }},
+		"FUNCD_SECRETS_ENCRYPTION_KEY_FILE":   {"/k", func(c config.Config) string { return c.Secrets.EncryptionKeyFile }},
+		"FUNCD_RUNTIME":                       {"containerd", func(c config.Config) string { return c.Runtime.Mode }},
+		"FUNCD_CONTAINERD_SOCKET":             {"/s", func(c config.Config) string { return c.Runtime.Containerd.Socket }},
+		"FUNCD_SNAPSHOTTER":                   {"native", func(c config.Config) string { return c.Runtime.Containerd.Snapshotter }},
+		"FUNCD_CNI_BIN_DIR":                   {"/cni", func(c config.Config) string { return c.Runtime.Containerd.CNIBinDir }},
+		"FUNCD_SUBNET_CIDR":                   {"10.0.0.0/8", func(c config.Config) string { return c.Runtime.Containerd.SubnetCIDR }},
+		"FUNCD_IMAGE_PREFIX":                  {"my/", func(c config.Config) string { return c.Runtime.Containerd.ImagePrefix }},
+		"FUNCD_LOG_FORMAT":                    {"text", func(c config.Config) string { return c.Log.Format }},
+		"FUNCD_LOG_LEVEL":                     {"warn", func(c config.Config) string { return c.Log.Level }},
+		"FUNCD_TELEMETRY_ENDPOINT":            {"otel:4317", func(c config.Config) string { return c.Telemetry.Endpoint }},
+		"FUNCD_FUNCLOG_SEGMENT_MAX_AGE":       {"2s", func(c config.Config) string { return c.Funclog.SegmentMaxAge }},
+		"FUNCD_FUNCLOG_ENABLED":               {"false", func(c config.Config) string { return strconv.FormatBool(c.Funclog.Enabled) }},
+		"FUNCD_APP_UPGRADE_TIMEOUT":           {"10m", func(c config.Config) string { return c.App.UpgradeTimeout }},
+		"FUNCD_APP_REVISION_HISTORY":          {"3", func(c config.Config) string { return strconv.Itoa(c.App.RevisionHistory) }},
+		"FUNCD_RUNTIME_LIVENESS_TIMEOUT":      {"40s", func(c config.Config) string { return c.Runtime.LivenessTimeout }},
+		"FUNCD_HEALTH_STORAGE_PROBE_INTERVAL": {"20s", func(c config.Config) string { return c.Health.StorageProbeInterval }},
+		"FUNCD_HEALTH_STORAGE_PROBE_TIMEOUT":  {"3s", func(c config.Config) string { return c.Health.StorageProbeTimeout }},
 	}
 	for envName, tc := range cases {
 		t.Run(envName, func(t *testing.T) {

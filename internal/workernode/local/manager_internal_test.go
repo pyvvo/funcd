@@ -26,7 +26,7 @@ func TestIssue163_LocalAPIReapsIdleKeepAliveConns(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
-	m := NewManager(dir, nil, nil, nil, nil, nil, nil)
+	m := NewManager(dir, nil, nil, nil, nil, nil, nil, nil)
 	t.Cleanup(m.Close)
 	_, err = m.SocketFor("team-a", "a")
 	require.NoError(t, err)
@@ -46,7 +46,7 @@ func TestIssue454_LocalAPIServerErrorsUseTheManagerLogger(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
 	var logs bytes.Buffer
-	m := NewManager(dir, nil, nil, nil, nil, nil, slog.New(slog.NewJSONHandler(&logs, nil)))
+	m := NewManager(dir, nil, nil, nil, nil, nil, nil, slog.New(slog.NewJSONHandler(&logs, nil)))
 	t.Cleanup(m.Close)
 	_, err = m.SocketFor("team-a", "a")
 	require.NoError(t, err)
@@ -67,7 +67,7 @@ func TestIssue546_ServeFailureIsLoggedAndRebinds(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
 	var logs bytes.Buffer
-	m := NewManager(dir, nil, nil, nil, nil, nil, slog.New(slog.NewJSONHandler(&logs, nil)))
+	m := NewManager(dir, nil, nil, nil, nil, nil, nil, slog.New(slog.NewJSONHandler(&logs, nil)))
 	t.Cleanup(m.Close)
 	const key = "team-a/a"
 	path := filepath.Join(dir, sockName(key))

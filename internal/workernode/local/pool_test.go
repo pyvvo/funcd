@@ -102,7 +102,7 @@ func poolManager(t *testing.T) (*local.Manager, *poolCalls) {
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	rec := &poolCalls{}
 	m := local.NewManager(dir, poolStore{rec}, poolInvoker{rec}, nil, poolPort{rec, "kv"},
-		poolBlob{poolPort{rec, "blob"}}, slog.New(slog.DiscardHandler))
+		poolBlob{poolPort{rec, "blob"}}, nil, slog.New(slog.DiscardHandler))
 	t.Cleanup(m.Close)
 	return m, rec
 }

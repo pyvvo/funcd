@@ -95,6 +95,9 @@ func TestScenarioDefaultsEqualTodaysValues(t *testing.T) {
 		ShutdownTimeout:        15 * time.Second,
 		WorkerSyncInterval:     2 * time.Second,
 		AppUpgradeTimeout:      5 * time.Minute,
+		LivenessTimeout:        30 * time.Second,
+		StorageProbeInterval:   10 * time.Second,
+		StorageProbeTimeout:    2 * time.Second,
 	}, p)
 }
 
@@ -217,6 +220,9 @@ func TestPacingMapsEveryKey(t *testing.T) {
 		ShutdownTimeout:        ms(116),
 		WorkerSyncInterval:     ms(117),
 		AppUpgradeTimeout:      5 * time.Minute,
+		LivenessTimeout:        30 * time.Second,
+		StorageProbeInterval:   10 * time.Second,
+		StorageProbeTimeout:    2 * time.Second,
 	}, p)
 }
 
@@ -279,4 +285,80 @@ func TestAppUpgradeTimeoutConfig(t *testing.T) {
 		require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
 		require.ErrorContains(t, err, `"app.upgradeTimeout"`)
 	})
+}
+
+// ADR-0215 Contracts: runtime.livenessTimeout defaults to max(30s, three runtime.supervisionPeriod) and, when set, is at
+// least twice it; health.storageProbeInterval and health.storageProbeTimeout default to 10s and 2s, the timeout less
+// than the interval. Each key is read from the file or its FUNCD_* variable and bounded as a positive duration.
+func TestHealthConfig(t *testing.T) {
+	for _, tc := range []struct {
+		body                          string
+		liveness, interval, probeTime time.Duration
+	}{
+		{"", 30 * time.Second, 10 * time.Second, 2 * time.Second},
+		{pacingYAML("runtime.supervisionPeriod", "20s"), time.Minute, 10 * time.Second, 2 * time.Second},
+		{pacingYAML("runtime.supervisionPeriod", "2000000h"), math.MaxInt64, 10 * time.Second, 2 * time.Second},
+		{pacingYAML("runtime.livenessTimeout", "20s"), 20 * time.Second, 10 * time.Second, 2 * time.Second},
+		{"health:\n  storageProbeInterval: 1s\n  storageProbeTimeout: 999ms\n", 30 * time.Second, time.Second, 999 * time.Millisecond},
+	} {
+		t.Run(strings.ReplaceAll(tc.body, "\n", " "), func(t *testing.T) {
+			p, err := pacing(loadPacing(t, tc.body))
+			require.NoError(t, err)
+			require.Equal(t, tc.liveness, p.LivenessTimeout)
+			require.Equal(t, tc.interval, p.StorageProbeInterval)
+			require.Equal(t, tc.probeTime, p.StorageProbeTimeout)
+		})
+	}
+	t.Run("env", func(t *testing.T) {
+		t.Setenv("FUNCD_RUNTIME_LIVENESS_TIMEOUT", "45s")
+		t.Setenv("FUNCD_HEALTH_STORAGE_PROBE_INTERVAL", "5s")
+		t.Setenv("FUNCD_HEALTH_STORAGE_PROBE_TIMEOUT", "1s")
+		p, err := pacing(loadPacing(t, ""))
+		require.NoError(t, err)
+		require.Equal(t, 45*time.Second, p.LivenessTimeout)
+		require.Equal(t, 5*time.Second, p.StorageProbeInterval)
+		require.Equal(t, time.Second, p.StorageProbeTimeout)
+	})
+
+	refused := func(t *testing.T, cfg config.Config, want ...string) {
+		t.Helper()
+		_, err := pacing(cfg)
+		require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
+		for _, w := range want {
+			require.ErrorContains(t, err, w)
+		}
+	}
+	t.Run("liveness below twice the period", func(t *testing.T) {
+		refused(t, loadPacing(t, "runtime:\n  livenessTimeout: 15s\n  supervisionPeriod: 10s\n"),
+			`config key "runtime.livenessTimeout" has invalid value "15s" (want at least twice runtime.supervisionPeriod, 10s)`)
+	})
+	t.Run("probe timeout not below the interval", func(t *testing.T) {
+		refused(t, loadPacing(t, pacingYAML("health.storageProbeTimeout", "10s")),
+			`config key "health.storageProbeTimeout" has invalid value "10s" (want less than health.storageProbeInterval, 10s)`)
+	})
+	for _, key := range []string{"runtime.livenessTimeout", "health.storageProbeInterval", "health.storageProbeTimeout"} {
+		for _, v := range []string{"0s", "-1s", "soon"} {
+			t.Run(key+"="+v, func(t *testing.T) {
+				refused(t, loadPacing(t, pacingYAML(key, v)), `"`+key+`"`)
+			})
+		}
+	}
+}
+
+// scenario: health-liveness-config — runtime.livenessTimeout 15s with runtime.supervisionPeriod 10s: funcd does not
+// start, and the error names both keys.
+func TestScenarioHealthLivenessConfig(t *testing.T) {
+	dir := shortDataDir(t)
+	cfg := loadPacing(t, "storage:\n  mode: memory\n  dataDir: \""+dir+"\"\nruntime:\n  livenessTimeout: 15s\n  supervisionPeriod: 10s\n")
+	_, _, _, _, err := buildOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
+	require.ErrorContains(t, err, `"runtime.livenessTimeout"`)
+	require.ErrorContains(t, err, "runtime.supervisionPeriod, 10s")
+
+	cfg = loadPacing(t, "storage:\n  mode: memory\n  dataDir: \""+dir+"\"\nruntime:\n  livenessTimeout: 20s\n  supervisionPeriod: 10s\n")
+	_, closeExec, _, _, err := buildOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	require.NoError(t, err, "exactly twice the period starts")
+	if closeExec != nil {
+		require.NoError(t, closeExec())
+	}
 }

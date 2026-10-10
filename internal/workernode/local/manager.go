@@ -30,9 +30,10 @@ type Manager struct {
 	dir     string
 	store   FunctionStore
 	invoker Invoker
-	authz   auth.Authorizer // the invoke PDP (ADR-0075); nil ⇒ no link::invoke gate (link-as-grant only)
-	kv      KV              // the function-facing KV port (ADR-0069); nil ⇒ no /kv routes
-	blob    Blob            // the function-facing blob port (ADR-0127); nil ⇒ no /blob routes
+	authz   auth.Authorizer   // the invoke PDP (ADR-0075); nil ⇒ no link::invoke gate (link-as-grant only)
+	kv      KV                // the function-facing KV port (ADR-0069); nil ⇒ no /kv routes
+	blob    Blob              // the function-facing blob port (ADR-0127); nil ⇒ no /blob routes
+	deps    DependencyChecker // the dependency check (ADR-0215); nil ⇒ no /health/dependencies route
 	logger  *slog.Logger
 
 	ctx    context.Context
@@ -59,14 +60,15 @@ const MemberHeader = "X-Funcd-Member"
 // data-plane forwarder; store backs link resolution; authz (nil-able) is the invoke PDP (ADR-0075)
 // the per-sandbox handler asks link::invoke; kv (nil-able) is the function-facing KV port (ADR-0069)
 // the per-sandbox handler routes /kv/… to; blob (nil-able) is the function-facing blob port (ADR-0127)
-// the handler routes /blob/… to.
-func NewManager(dir string, store FunctionStore, invoker Invoker, authz auth.Authorizer, kv KV, blob Blob, logger *slog.Logger) *Manager {
+// the handler routes /blob/… to; deps (nil-able) answers GET /health/dependencies (ADR-0215).
+func NewManager(dir string, store FunctionStore, invoker Invoker, authz auth.Authorizer, kv KV, blob Blob,
+	deps DependencyChecker, logger *slog.Logger) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Manager{
-		dir: dir, store: store, invoker: invoker, authz: authz, kv: kv, blob: blob, logger: logger.With("component", "workernode.local"),
+		dir: dir, store: store, invoker: invoker, authz: authz, kv: kv, blob: blob, deps: deps, logger: logger.With("component", "workernode.local"),
 		ctx: ctx, cancel: cancel, active: map[string]*serving{},
 	}
 }
@@ -121,7 +123,7 @@ func (m *Manager) PoolSocketFor(ns v1.NamespaceName, pool v1.ObjectName, members
 
 // handlerFor builds the local API handler that serves caller.
 func (m *Manager) handlerFor(caller Ref) http.Handler {
-	return NewHandler(caller, NewResolver(m.store), m.invoker, m.authz, m.kv, m.blob, m.logger)
+	return NewHandler(caller, NewResolver(m.store), m.invoker, m.authz, m.kv, m.blob, m.deps, m.logger)
 }
 
 // bind starts serving h on key's socket and records it in active. The caller holds mu.

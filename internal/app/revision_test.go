@@ -355,7 +355,7 @@ func TestScenarioAppPruneAfterCurrent(t *testing.T) {
 		require.Equal(t, v1.ObjectName("todo-2"), h.app().Status.CurrentRevision)
 		require.Nil(t, h.get(v1.KindRoute, "todo-api"), "pruned in the switch pass")
 	})
-	t.Run("a Bucket, Ready once written", func(t *testing.T) {
+	t.Run("a Bucket, Ready after its reconciler's pass", func(t *testing.T) {
 		h := newHarness(t, nil)
 		h.install(todoApp(nil))
 		h.edit(func(a *v1.App) {
@@ -364,10 +364,12 @@ func TestScenarioAppPruneAfterCurrent(t *testing.T) {
 		})
 		h.reconcile()
 		require.Len(t, h.get(v1.KindBucket, "todo-files").(*v1.Bucket).Spec.Prefixes, 2)
-		require.False(t, slices.ContainsFunc(h.app().Status.Children, func(c v1.AppChild) bool { return c.State == v1.AppChildPending }))
+		require.Equal(t, v1.AppChild{Kind: v1.KindBucket, Name: "todo-files", State: v1.AppChildPending, Reason: "Progressing"},
+			h.child(v1.KindBucket, "todo-files"), "Pending until the Bucket reconciler writes Ready at its generation (ADR-0215)")
 		require.Equal(t, v1.ObjectName("todo-1"), h.app().Status.CurrentRevision, "the pass wrote a part")
 		require.NotNil(t, h.get(v1.KindRoute, "todo-api"))
 
+		h.markReady(v1.KindBucket, "todo-files")
 		h.reconcile()
 		require.Equal(t, v1.ObjectName("todo-2"), h.app().Status.CurrentRevision)
 		require.Nil(t, h.get(v1.KindRoute, "todo-api"))

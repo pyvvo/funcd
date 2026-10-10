@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -42,6 +43,7 @@ import (
 	"github.com/pyvvo/funcd/internal/scheduler"
 	catalogsvc "github.com/pyvvo/funcd/internal/services/catalog"
 	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/workernode/local"
 )
 
 const (
@@ -191,6 +193,9 @@ type Deps struct {
 	// BootTimeout stops a replica not ready this long after its last successful Start (runtime.bootTimeout, ADR-0163,
 	// ADR-0183); 0 ⇒ 1 min.
 	BootTimeout time.Duration
+	// LivenessTimeout is how long a listening replica or pool host may stay silent on /health/liveness before it is
+	// restarted (runtime.livenessTimeout, ADR-0215); 0 ⇒ max(30 s, three supervision periods).
+	LivenessTimeout time.Duration
 	// ReferentPollInterval re-checks a function waiting for a referent (controller.referentPollInterval, ADR-0163),
 	// bounded by the supervision period (ADR-0142 Decision 9); 0 ⇒ 2 s.
 	ReferentPollInterval time.Duration
@@ -292,13 +297,15 @@ type Reconciler struct {
 	poolLimit         int
 	// poolDrains is when the drain of each key's old pool workers started (ADR-0190 Decision 8); poolHolds is the
 	// manifest each key's pool workers were last built to hold; poolSets is each pool worker's member set ("ns/worker" →
-	// names), recorded before it is created; poolLive is when each key's pool worker last answered its liveness. All
-	// guarded by poolMu, for concurrent reconciles of sibling members of the same pool.
+	// names), recorded before it is created. All guarded by poolMu, for concurrent reconciles of sibling members of
+	// the same pool.
 	poolMu     sync.Mutex
 	poolDrains map[pooling.PoolKey]poolDrain
 	poolHolds  map[pooling.PoolKey]poolHold
 	poolSets   map[string][]v1.ObjectName
-	poolLive   map[pooling.PoolKey]poolLiveness
+	// live is each probed worker's liveness, a solo replica's or a pool host's (ADR-0215 Decision 1), guarded by liveMu.
+	liveMu sync.Mutex
+	live   map[runtime.InstanceID]liveness
 	// poolManifestDir holds the pool manifests; ownManifestDir is set when NewReconciler created it, for Close.
 	poolManifestDir string
 	ownManifestDir  bool
@@ -315,9 +322,11 @@ type Reconciler struct {
 	drainPoll     time.Duration
 	clock         clock.Clock
 
-	// bootTimeout bounds a replica's boot; referentPoll is the referent-gate requeue (ADR-0163).
-	bootTimeout  time.Duration
-	referentPoll time.Duration
+	// bootTimeout bounds a replica's boot; referentPoll is the referent-gate requeue (ADR-0163); livenessTimeout is
+	// how long a listening worker may be silent on its liveness (ADR-0215).
+	bootTimeout     time.Duration
+	referentPoll    time.Duration
+	livenessTimeout time.Duration
 
 	// spared names, by Function, the UID of each Function whose last retire pass kept workers of a revision an open
 	// workflow run holds (ADR-0190 Decision 7): its passes skip the steady state until a pass retires them.
@@ -368,6 +377,8 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		return nil, fault.Invalidf(op, "ImageFor is required when a Materializer is set in container mode")
 	case d.BootBackoffInitial < 0 || d.BootBackoffMax < 0 || d.BootTimeout < 0:
 		return nil, fault.Invalidf(op, "the boot backoff must not be negative")
+	case d.LivenessTimeout < 0:
+		return nil, fault.Invalidf(op, "the liveness timeout must not be negative")
 	}
 	bootInitial := d.BootBackoffInitial
 	if bootInitial == 0 {
@@ -426,6 +437,13 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 	if referentPoll <= 0 {
 		referentPoll = defaultReferentPoll
 	}
+	livenessTO := d.LivenessTimeout
+	if livenessTO == 0 {
+		livenessTO = max(defaultLivenessTimeout, 3*period)
+		if period > math.MaxInt64/3 {
+			livenessTO = math.MaxInt64
+		}
+	}
 	return &Reconciler{
 		store: d.Store, runtime: d.Runtime, scheduler: d.Scheduler,
 		gateway: d.Gateway, validator: d.Validator, logger: logger.With("component", "function"),
@@ -447,7 +465,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		poolDrains:          map[pooling.PoolKey]poolDrain{},
 		poolHolds:           map[pooling.PoolKey]poolHold{},
 		poolSets:            map[string][]v1.ObjectName{},
-		poolLive:            map[pooling.PoolKey]poolLiveness{},
+		live:                map[runtime.InstanceID]liveness{},
 		poolManifestDir:     manifestDir,
 		ownManifestDir:      ownManifestDir,
 		supervisionPeriod:   period,
@@ -459,6 +477,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		clock:               clk,
 		bootTimeout:         bootTO,
 		referentPoll:        min(referentPoll, period),
+		livenessTimeout:     livenessTO,
 		spared:              map[fnKey]v1.UID{},
 		held:                map[fnKey]bool{},
 	}, nil
@@ -988,6 +1007,13 @@ type verdict struct {
 	desired          int
 	pooled           bool      // a pooled member, judged on its pool host's /health/members (ADR-0046)
 	pollAt           time.Time // when every booting replica has a boot-crash count: the earliest boot timeout (ADR-0161)
+	// report is the dependency report of the judged side's lowest replica not ready on one, settled how many such
+	// replicas run past the boot timeout, and currentReport, while switching, the current revision's (ADR-0215
+	// Decision 5); hungRestarted is set when the pass replaced a replica hung on its liveness (Decision 2).
+	report        *local.DependencyReport
+	settled       int
+	currentReport *local.DependencyReport
+	hungRestarted bool
 }
 
 // holdsFailed reports whether a pass that started Failed leaves the status as read (ADR-0169): no worker of the judged
@@ -1031,8 +1057,11 @@ func (r *Reconciler) finish(ctx context.Context, fn *v1.Function, v verdict, dra
 	case v.ready >= 1:
 		fn.Status.Phase = v1.PhaseReady
 		ready := v1.Condition{Type: condReady, Status: v1.ConditionTrue}
-		if v.crashLoop != "" {
+		switch {
+		case v.crashLoop != "":
 			ready.Reason, ready.Message = reasonCrashLoop, fmt.Sprintf("replicas %d ready of %d: %s", v.ready, v.desired, v.crashLoop)
+		case v.report != nil:
+			ready.Reason, ready.Message = reasonDependencyNotReady, fmt.Sprintf("replicas %d ready of %d: %s", v.ready, v.desired, reportMessage(v.report))
 		}
 		fn.Status.Conditions.Set(ready)
 	case v.serving:
@@ -1046,6 +1075,10 @@ func (r *Reconciler) finish(ctx context.Context, fn *v1.Function, v verdict, dra
 			reason, msg = reasonCrashLoop, v.crashLoop
 		case v.repairErr != "":
 			msg = "a replica exited and its replacement was stopped: " + v.repairErr
+		case v.hungRestarted || replacingHung(fn):
+			msg = livenessRestartMessage
+		case v.report != nil:
+			reason, msg = reasonDependencyNotReady, reportMessage(v.report)
 		}
 		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: msg})
 	case v.startErr != nil && v.running == 0:
@@ -1056,6 +1089,10 @@ func (r *Reconciler) finish(ctx context.Context, fn *v1.Function, v verdict, dra
 		// a replica crashed while booting and waits out its backoff (ADR-0160): never Idle, never Failed
 		fn.Status.Phase = v1.PhaseDeploying
 		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reasonCrashLoop, Message: v.crashLoop})
+	case v.report != nil:
+		// a replica runs, not ready on a dependency report, until its bindings pass (ADR-0215 Decision 5)
+		fn.Status.Phase = v1.PhaseDeploying
+		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reasonDependencyNotReady, Message: reportMessage(v.report)})
 	case v.running >= 1 || !v.retryAt.IsZero():
 		// replicas started but the shim is not serving yet, or a replica waits out its backoff (ADR-0142) — keep
 		// polling.
@@ -1072,6 +1109,8 @@ func (r *Reconciler) finish(ctx context.Context, fn *v1.Function, v verdict, dra
 		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "StartFailed", Message: "a worker of the current revision could not start: " + v.startErr.Error(), ObservedGeneration: gen})
 	case v.switching && v.currentCrashLoop != "":
 		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: reasonCrashLoop, Message: v.currentCrashLoop, ObservedGeneration: gen})
+	case v.switching && v.currentReport != nil:
+		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: reasonDependencyNotReady, Message: reportMessage(v.currentReport), ObservedGeneration: gen})
 	case v.switching:
 		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "Progressing", Message: "the current revision is booting beside the serving one", ObservedGeneration: gen})
 	case v.shapeFailed:
@@ -1080,6 +1119,8 @@ func (r *Reconciler) finish(ctx context.Context, fn *v1.Function, v verdict, dra
 		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "StartFailed", Message: v.startErr.Error(), ObservedGeneration: gen})
 	case v.crashLoop != "" && fn.Status.Phase == v1.PhaseDeploying:
 		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: reasonCrashLoop, Message: v.crashLoop, ObservedGeneration: gen})
+	case v.report != nil && fn.Status.Phase == v1.PhaseDeploying:
+		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: reasonDependencyNotReady, Message: reportMessage(v.report), ObservedGeneration: gen})
 	case fn.Status.Phase == v1.PhaseDeploying:
 		fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: "Progressing", ObservedGeneration: gen})
 	case loaded:
@@ -1144,11 +1185,14 @@ func (r *Reconciler) requeueFor(phase v1.Phase, v verdict) time.Duration {
 		if v.running == 0 && !v.retryAt.IsZero() {
 			return max(v.retryAt.Sub(now), time.Millisecond)
 		}
+		if v.report != nil && v.running <= v.ready+v.settled {
+			return r.supervisionPeriod // every reported replica has run its boot timeout (ADR-0215 Decision 5)
+		}
 		return poll
 	case v1.PhaseReady: // ADR-0142: come back to check the replicas
 		return r.supervisionPeriod
 	case v1.PhaseDegraded: // ADR-0142: poll a booting replacement, else wait out the backoff
-		if v.running > v.ready {
+		if v.running > v.ready+v.settled {
 			return poll
 		}
 		if !v.retryAt.IsZero() { // at least 1ms: a zero RequeueAfter would mean no requeue
@@ -1198,9 +1242,10 @@ func servingPhase(p v1.Phase) bool { return p == v1.PhaseReady || p == v1.PhaseD
 
 // steadyState reports whether fn is a solo Function at desired state: Ready with no reason (a crash loop beside a ready
 // replica runs the full pass, ADR-0160), its generation processed, its current revision serving with nothing draining
-// (ADR-0143), status.replicas at desired, every bound catalog Ready (ADR-0162) and every replica listening (ADR-0161).
-// It calls runtime.Status once per replica (ADR-0142) and, for a catalog consumer, one store Get per binding; it writes
-// nothing.
+// (ADR-0143), status.replicas at desired, every bound catalog Ready (ADR-0162), every replica listening (ADR-0161),
+// none hung on its liveness and none answering its readiness with a dependency report (ADR-0215 Decisions 1 and 5).
+// It calls runtime.Status once per replica (ADR-0142), sends each replica its liveness and readiness probes and, for a
+// catalog consumer, one store Get per binding; it writes nothing.
 func (r *Reconciler) steadyState(ctx context.Context, fn *v1.Function) bool {
 	if fn.Status.Phase != v1.PhaseReady || fn.Status.ObservedGeneration != fn.Generation {
 		return false
@@ -1228,6 +1273,15 @@ func (r *Reconciler) steadyState(ctx context.Context, fn *v1.Function) bool {
 	for i := range desired {
 		in, err := r.runtime.Status(ctx, runtime.NewInstanceID(fn.Namespace, fn.Name, v1.ObjectName(c), i))
 		if err != nil || !r.listening(in) {
+			return false
+		}
+		if r.materializer == nil {
+			continue
+		}
+		if r.probeLiveness(ctx, in) {
+			return false
+		}
+		if ok, rep := r.probeReadiness(ctx, in.IP, in.Port); !ok && rep != nil {
 			return false
 		}
 	}
@@ -1263,9 +1317,8 @@ func (r *Reconciler) servingWorkers(ctx context.Context, fn *v1.Function) (runni
 // servingReady counts the running workers of status.servingRevision and those that pass finish's readiness test, from
 // one List, with no fallback (ADR-0221): a solo replica that listens and answers readinessPath with 200 within
 // probeTimeout, as readyReplicas tests it, or that listens in the legacy placeholder mode; a pooled member as
-// servingWorkers counts it, by its /health/members entry, an unanswered probe being an error (issue #838). ADR-0215's
-// member dependency field, once implemented, must reach countWorkers too, so this path never promotes a member that
-// finish keeps Degraded.
+// servingWorkers counts it, by its /health/members entry, an unanswered probe being an error (issue #838). A dependency
+// report makes a worker not ready while its revision is the current one, as finish judges it (ADR-0215 Decision 5).
 func (r *Reconciler) servingReady(ctx context.Context, fn *v1.Function) (running, ready int, err error) {
 	s := v1.ObjectName(fn.Status.ServingRevision)
 	switch {
@@ -1283,7 +1336,14 @@ func (r *Reconciler) servingReady(ctx context.Context, fn *v1.Function) (running
 			continue
 		}
 		running++
-		if r.listening(in) && (r.materializer == nil || r.probeReady(ctx, in.IP, in.Port, readinessPath)) {
+		if !r.listening(in) {
+			continue
+		}
+		if r.materializer == nil {
+			ready++
+			continue
+		}
+		if ok, rep := r.probeReadiness(ctx, in.IP, in.Port); ok || (rep != nil && !judgesReports(fn)) {
 			ready++
 		}
 	}
@@ -1338,7 +1398,7 @@ func (r *Reconciler) countWorkers(ctx context.Context, fn *v1.Function, rev v1.O
 		case !ok:
 			return 0, 0, nil
 		}
-		if m.State != memberReady {
+		if m.State != memberReady || (m.Dependency != nil && judgesReports(fn)) {
 			listening = 0
 		}
 	}
@@ -1391,15 +1451,23 @@ func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned s
 		return r.switchSolo(ctx, fn, s, c, pinned, desired, untried, secretEnv, catalogEnv)
 	}
 	serving := servingPhase(fn.Status.Phase)
+	var hung bool
+	if serving {
+		var herr error
+		if hung, herr = r.restartHung(ctx, fn, c, desired); herr != nil {
+			return verdict{}, herr
+		}
+	}
 	pass, err := r.convergeRevision(ctx, fn, c, pinned, replicaRange(desired), convergeOpts{serving: serving, untried: untried, scaleDown: true}, secretEnv, catalogEnv)
 	if err != nil {
 		return verdict{}, err
 	}
 	running := pass.running
-	ready, failed, readyRetry, crashLoop, err := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, running, desired, readinessPath, r.bootTimeout, serving, r.boot)
+	rd, err := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, running, desired, r.bootTimeout, serving, true, r.boot)
 	if err != nil {
 		return verdict{}, err
 	}
+	ready, failed, crashLoop := rd.ready, rd.failed, rd.crashLoop
 	ul, err := r.stopUnlistened(ctx, fn, c, desired)
 	if err != nil {
 		return verdict{}, err
@@ -1427,8 +1495,9 @@ func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned s
 	}
 	return verdict{
 		running: running, ready: ready, shapeFailed: failed != "", loadErr: r.loadError(ctx, failed),
-		serving: serving, retryAt: earlier(earlier(pass.retryAt, readyRetry), ul.retryAt), booting: running > ready, startErr: pass.startErr,
+		serving: serving, retryAt: earlier(earlier(pass.retryAt, rd.retryAt), ul.retryAt), booting: running > ready+rd.settled, startErr: pass.startErr,
 		repairErr: repairErr, crashLoop: crashLoop, desired: desired, pollAt: ul.pollAt,
+		report: rd.report, settled: rd.settled, hungRestarted: hung,
 	}, nil
 }
 
@@ -1517,11 +1586,15 @@ func (r *Reconciler) switchSolo(ctx context.Context, fn *v1.Function, s, c v1.Ob
 		return verdict{}, err
 	}
 	var sPass revisionPass
+	var hung bool
 	sfn, spinned, err := r.revisionTemplate(ctx, fn, s)
 	switch {
 	case fault.KindOf(err) == fault.NotFound:
 		sPass.running, err = r.runningReplicas(ctx, fn.Namespace, fn.Name, s, sIdx)
 	case err == nil:
+		if hung, err = r.restartHung(ctx, fn, s, maxIndex(sIdx)+1); err != nil {
+			return verdict{}, err
+		}
 		sPass, err = r.convergeRevision(ctx, sfn, s, spinned, sIdx, convergeOpts{serving: true}, secretEnv, catalogEnv)
 	}
 	if err != nil {
@@ -1531,10 +1604,11 @@ func (r *Reconciler) switchSolo(ctx context.Context, fn *v1.Function, s, c v1.Ob
 	if err != nil {
 		return verdict{}, err
 	}
-	readyC, failedC, cRetry, cCrash, err := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, cPass.running, desired, readinessPath, r.bootTimeout, false, r.boot)
+	rdC, err := r.readyReplicas(ctx, fn.Namespace, fn.Name, c, cPass.running, desired, r.bootTimeout, false, true, r.boot)
 	if err != nil {
 		return verdict{}, err
 	}
+	readyC, failedC, cCrash := rdC.ready, rdC.failed, rdC.crashLoop
 	cUl, err := r.stopUnlistened(ctx, fn, c, desired)
 	if err != nil {
 		return verdict{}, err
@@ -1548,10 +1622,11 @@ func (r *Reconciler) switchSolo(ctx context.Context, fn *v1.Function, s, c v1.Ob
 		fn.Status.ServingRevision, fn.Status.DrainingRevision, fn.Status.DrainingSince = string(c), string(s), &now
 		return verdict{running: cPass.running, ready: readyC, serving: true, switched: true, desired: desired}, nil
 	}
-	readyS, _, sRetry, sCrash, err := r.readyReplicas(ctx, fn.Namespace, fn.Name, s, sPass.running, maxIndex(sIdx)+1, readinessPath, r.bootTimeout, true, r.boot)
+	rdS, err := r.readyReplicas(ctx, fn.Namespace, fn.Name, s, sPass.running, maxIndex(sIdx)+1, r.bootTimeout, true, false, r.boot)
 	if err != nil {
 		return verdict{}, err
 	}
+	readyS, sCrash := rdS.ready, rdS.crashLoop
 	sUl, err := r.stopUnlistened(ctx, fn, s, maxIndex(sIdx)+1)
 	if err != nil {
 		return verdict{}, err
@@ -1560,11 +1635,12 @@ func (r *Reconciler) switchSolo(ctx context.Context, fn *v1.Function, s, c v1.Ob
 	if sUl.crashLoop != "" {
 		sCrash = sUl.crashLoop
 	}
-	retryAt := earlier(earlier(earlier(sPass.retryAt, cPass.retryAt), earlier(cRetry, sRetry)), earlier(cUl.retryAt, sUl.retryAt))
+	retryAt := earlier(earlier(earlier(sPass.retryAt, cPass.retryAt), earlier(rdC.retryAt, rdS.retryAt)), earlier(cUl.retryAt, sUl.retryAt))
 	return verdict{
 		running: sPass.running, ready: readyS, serving: true, retryAt: retryAt,
-		booting: cPass.running > readyC, switching: true, currentFailed: failedC != "", loadErr: r.loadError(ctx, failedC), startErr: cPass.startErr,
+		booting: cPass.running > readyC+rdC.settled, switching: true, currentFailed: failedC != "", loadErr: r.loadError(ctx, failedC), startErr: cPass.startErr,
 		crashLoop: sCrash, currentCrashLoop: cCrash, desired: len(sIdx), pollAt: cUl.pollAt,
+		currentReport: rdC.report, hungRestarted: hung,
 	}, nil
 }
 
@@ -1663,6 +1739,7 @@ func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, re
 			continue
 		}
 		r.boot.reset(in.ID)
+		r.forgetWorker(in.ID)
 		if in.State != runtime.StateStopped { // scale down by replica index; a Failed one is stopped too
 			if serr := r.runtime.Stop(ctx, in.ID); serr != nil {
 				return revisionPass{}, fault.Wrapf(serr, fault.KindOf(serr), op, "stop worker")
@@ -1878,6 +1955,7 @@ func (r *Reconciler) idle(fn *v1.Function, in runtime.Instance) bool {
 func (r *Reconciler) retire(ctx context.Context, in runtime.Instance) error {
 	const op = "function.retire"
 	r.boot.reset(in.ID)
+	r.forgetWorker(in.ID)
 	if err := r.runtime.Stop(ctx, in.ID); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "stop worker")
 	}
@@ -2084,10 +2162,11 @@ func (r *Reconciler) convergeHeldRevision(ctx context.Context, fn *v1.Function, 
 	if err != nil {
 		return r.heldBootFailed(ctx, rev, err)
 	}
-	ready, failed, readyRetry, crashLoop, err := r.readyReplicas(ctx, fn.Namespace, fn.Name, rev.Name, pass.running, 1, readinessPath, r.bootTimeout, serving, r.boot)
+	rd, err := r.readyReplicas(ctx, fn.Namespace, fn.Name, rev.Name, pass.running, 1, r.bootTimeout, serving, false, r.boot)
 	if err != nil {
 		return 0, err
 	}
+	ready, failed, readyRetry, crashLoop := rd.ready, rd.failed, rd.retryAt, rd.crashLoop
 	ul, err := r.stopUnlistened(ctx, fn, rev.Name, 1)
 	if err != nil {
 		return 0, err
@@ -2518,6 +2597,12 @@ func (r *Reconciler) pinnedPoolUpstream(ctx context.Context, fn *v1.Function, re
 	return "", nil
 }
 
+// judgesReports reports whether a dependency report of fn's serving workers counts against them: only while they run
+// the current revision, since the check reads the current spec (ADR-0215 Decision 5).
+func judgesReports(fn *v1.Function) bool {
+	return servingRevision(fn) == v1.ObjectName(fn.Status.CurrentRevision)
+}
+
 // servingRevision is the Revision whose workers receive a solo Function's calls: servingRevision, or the current
 // revision while nothing serves yet (ADR-0143).
 func servingRevision(fn *v1.Function) v1.ObjectName {
@@ -2560,27 +2645,42 @@ func instanceURL(ns v1.NamespaceName, name v1.ObjectName, in runtime.Instance) s
 	return "http://" + host + ":" + port
 }
 
+// readiness is what readyReplicas found of a revision's replicas: how many are ready, a failed instance ("" if none),
+// the earliest boot-crash retry, the crash-loop message, and the dependency report of the lowest replica not ready on
+// one (ADR-0215 Decision 5) with how many such replicas have run past the boot limit since their last start.
+type readiness struct {
+	ready     int
+	failed    runtime.InstanceID
+	retryAt   time.Time
+	crashLoop string
+	report    *local.DependencyReport
+	settled   int
+}
+
 // readyReplicas reports how many replicas of revision rev are serving and, for a shape failure, a failed instance
 // ("" if none). In legacy mode (no Materializer) ready == running (ADR-0020, unchanged). In shim mode (ADR-0030) it polls
-// each listening replica's health endpoint at path (ADR-0161), and a listening solo replica, or a running pool worker,
-// that has not become ready within bootLimit of its last start is a shape failure; a zero bootLimit sets no limit. A solo
-// replica that never listens is stopUnlistened's. A terminal replica is read by how it ended (ADR-0160 Decision 4): only an exit 3 before listening in a pass not serving is failed, and the boot crashes it judges are
+// each listening replica's readiness (ADR-0161), and a listening solo replica, or a running pool worker,
+// that has not become ready within bootLimit of its last start is a shape failure; a zero bootLimit sets no limit. A
+// replica whose readiness answers a dependency report is never failed: with judge it is not ready, and without it, as
+// for the serving revision during a rollout, whose report is about the current spec, it is ready (ADR-0215 Decision 5).
+// A solo replica that never listens is stopUnlistened's. A terminal replica is read by how it ended (ADR-0160 Decision
+// 4): only an exit 3 before listening in a pass not serving is failed, and the boot crashes it judges are
 // counted on boot, giving the earliest retry and, from the lowest replica with a count, the crash-loop message. With a
 // nil boot every Failed replica is failed, as before (the pool worker). Only replicas below `below` count (ADR-0142): a
 // replica being scaled away is not judged. A List error is returned, so the pass writes no status from a failed read
 // (issue #353).
 func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, name, rev v1.ObjectName, running, below int,
-	path string, bootLimit time.Duration, serving bool, boot *bootBackoff) (ready int, failed runtime.InstanceID,
-	retryAt time.Time, crashLoop string, err error) {
+	bootLimit time.Duration, serving, judge bool, boot *bootBackoff) (readiness, error) {
 	if r.materializer == nil {
-		return running, "", time.Time{}, "", nil
+		return readiness{ready: running}, nil
 	}
 	insts, err := r.namedInstances(ctx, ns, name)
 	if err != nil {
-		return 0, "", time.Time{}, "", err
+		return readiness{}, err
 	}
+	var rd readiness
 	now := r.clock.Now()
-	lowest := -1
+	lowest, lowestReport := -1, -1
 	for _, in := range insts {
 		if in.Revision != rev || in.Replica >= below {
 			continue
@@ -2594,32 +2694,44 @@ func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, nam
 				crash, _ = boot.crash(in.ID)
 			}
 			listening := r.listening(in)
+			var ok bool
+			var rep *local.DependencyReport
+			if listening {
+				ok, rep = r.probeReadiness(ctx, in.IP, in.Port)
+			}
 			switch {
-			case listening && r.probeReady(ctx, in.IP, in.Port, path):
-				ready++
+			case ok || (rep != nil && !judge):
+				rd.ready++
+			case rep != nil:
+				if lowestReport < 0 || in.Replica < lowestReport {
+					lowestReport, rd.report = in.Replica, rep
+				}
+				if bootLimit <= 0 || now.Sub(lastStart(in)) >= bootLimit {
+					rd.settled++
+				}
 			case bootLimit > 0 && (listening || boot == nil) && now.Sub(lastStart(in)) >= bootLimit:
-				failed = lowerID(failed, in.ID)
+				rd.failed = lowerID(rd.failed, in.ID)
 			}
 		case !in.State.Terminal():
 		case boot == nil:
 			if in.State == runtime.StateFailed {
-				failed = lowerID(failed, in.ID)
+				rd.failed = lowerID(rd.failed, in.ID)
 			}
 		default:
 			class := classifyExit(in, serving, false)
 			if class == exitShapeError {
-				failed = lowerID(failed, in.ID)
+				rd.failed = lowerID(rd.failed, in.ID)
 				continue
 			}
 			var due time.Time
 			crash, due = boot.observe(in, class)
-			retryAt = earlier(retryAt, due)
+			rd.retryAt = earlier(rd.retryAt, due)
 		}
 		if crash.count > 0 && crash.message != "" && (lowest < 0 || in.Replica < lowest) {
-			lowest, crashLoop = in.Replica, crash.message
+			lowest, rd.crashLoop = in.Replica, crash.message
 		}
 	}
-	return ready, failed, retryAt, crashLoop, nil
+	return rd, nil
 }
 
 // lowerID is the lower of two instance IDs, "" counting as none, so the error reported for a shape failure does not
@@ -2668,25 +2780,6 @@ const (
 	livenessPath  = "/health/liveness"
 	membersPath   = "/health/members"
 )
-
-// probeReady issues GET path against a shim and reports a 200 (ADR-0030 §4b).
-func (r *Reconciler) probeReady(ctx context.Context, ip string, port int, path string) bool {
-	host := ip
-	if host == "" {
-		host = "127.0.0.1"
-	}
-	url := fmt.Sprintf("http://%s:%d%s", host, port, path)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return false
-	}
-	resp, err := r.httpClient.Do(req)
-	if err != nil {
-		return false
-	}
-	defer httpx.CloseBody(resp.Body)
-	return resp.StatusCode == http.StatusOK
-}
 
 // probeMembers issues GET /health/members against a pool host and decodes its 200 answer.
 func (r *Reconciler) probeMembers(ctx context.Context, ip string, port int) ([]memberHealth, bool) {

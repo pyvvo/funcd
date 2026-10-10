@@ -22,7 +22,7 @@ func TestIssue41_MaxLengthNamesGetALocalAPISocket(t *testing.T) {
 	dir, err := os.MkdirTemp("", "i41")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	m := local.NewManager(dir, fakeStore{}, fakeInvoker{}, nil, nil, nil, nil)
+	m := local.NewManager(dir, fakeStore{}, fakeInvoker{}, nil, nil, nil, nil, nil)
 	t.Cleanup(m.Close)
 
 	sock, err := m.SocketFor(v1.NamespaceName(strings.Repeat("n", 63)), v1.ObjectName(strings.Repeat("f", 63)))
@@ -39,7 +39,7 @@ func TestIssue433_SocketForAfterCloseFailsAndCreatesNothing(t *testing.T) {
 	dir, err := os.MkdirTemp("", "i433")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	m := local.NewManager(dir, fakeStore{}, fakeInvoker{}, nil, nil, nil, nil)
+	m := local.NewManager(dir, fakeStore{}, fakeInvoker{}, nil, nil, nil, nil, nil)
 	t.Cleanup(m.Close)
 
 	sock, err := m.SocketFor("team-a", "a")
@@ -67,7 +67,7 @@ func TestIssue491_RecreatedFunctionSocketSurvivesTheOldListener(t *testing.T) {
 	dir, err := os.MkdirTemp("", "i491")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	m := local.NewManager(dir, fakeStore{}, fakeInvoker{}, nil, nil, nil, nil)
+	m := local.NewManager(dir, fakeStore{}, fakeInvoker{}, nil, nil, nil, nil, nil)
 	t.Cleanup(m.Close)
 
 	for range 10 {

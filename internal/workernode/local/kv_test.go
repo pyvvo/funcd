@@ -63,7 +63,7 @@ func kvHandler(t *testing.T, ns v1.NamespaceName, resolver kvsvc.BindingResolver
 	t.Helper()
 	f, err := kvsvc.NewFacade(kvsvc.FacadeDeps{KV: kvmemory.New(), Resolver: resolver, Authorizer: pdp})
 	require.NoError(t, err)
-	return local.NewHandler(local.Ref{Namespace: ns, Function: "fn"}, nil, nil, nil, f, nil, nil)
+	return local.NewHandler(local.Ref{Namespace: ns, Function: "fn"}, nil, nil, nil, f, nil, nil, nil)
 }
 
 func do(t *testing.T, h http.Handler, method, path, body string) *httptest.ResponseRecorder {

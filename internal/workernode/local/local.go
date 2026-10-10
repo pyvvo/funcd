@@ -10,6 +10,7 @@ package local
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -82,6 +83,42 @@ type UpstreamError struct {
 
 func (e *UpstreamError) Error() string { return fmt.Sprintf("upstream returned %d", e.Status) }
 
+// DependencyReport is the first binding of a sandbox's caller that fails its dependency check (ADR-0215 Decision 3),
+// the body of a 503 from GET /health/dependencies and, passed through by the shim, from its /health/readiness.
+type DependencyReport struct {
+	Kind    string `json:"kind"`    // kv | blob | link | socket
+	Binding string `json:"binding"` // the alias
+	Reason  string `json:"reason"`  // Forbidden | NotFound | NotReady | StorageUnreachable | Timeout | Unreachable
+	Message string `json:"message"`
+}
+
+// The kinds and reasons of a DependencyReport (ADR-0215 Contracts).
+const (
+	DependencyKV     = "kv"
+	DependencyBlob   = "blob"
+	DependencyLink   = "link"
+	DependencySocket = "socket"
+
+	ReasonForbidden          = "Forbidden"
+	ReasonNotFound           = "NotFound"
+	ReasonNotReady           = "NotReady"
+	ReasonStorageUnreachable = "StorageUnreachable"
+	ReasonTimeout            = "Timeout"
+	ReasonUnreachable        = "Unreachable"
+)
+
+// DependencyChecker checks the bindings of caller (ADR-0215 Decision 3): nil when all pass, else the first failure.
+type DependencyChecker interface {
+	Check(ctx context.Context, caller Ref) *DependencyReport
+}
+
+// DependencyCheckBudget bounds one dependency check: half the reconciler's 100 ms readiness probe, and a pool host's
+// bound for all its members (ADR-0215 Decision 4).
+const DependencyCheckBudget = 50 * time.Millisecond
+
+// dependenciesPath is the dependency check a shim's readiness asks over its invoke socket (ADR-0215 Decision 3).
+const dependenciesPath = "/health/dependencies"
+
 // NewHandler builds the per-sandbox local API handler: POST /invoke/{alias} (ADR-0064/0075) plus, when
 // kv is non-nil, the KV verbs GET/PUT/DELETE /kv/{binding}/{key} + list (ADR-0069). caller is the fixed
 // sandbox identity (connection-scoped) — the handler never reads a caller from the request. authz is the
@@ -89,8 +126,10 @@ func (e *UpstreamError) Error() string { return fmt.Sprintf("upstream returned %
 // handler asks it `link::invoke` on the target Function — a deny (a forbid Policy revoking a declared
 // link) ⇒ Forbidden, before forwarding. The caller principal is built from the fixed Ref, never the
 // request. Every invoke is logged through logger (the broker is the audit point): an allowed call at
-// Info, a denial / upstream error at Warn. A nil logger defaults to slog.Default().
-func NewHandler(caller Ref, res Resolver, inv Invoker, authz auth.Authorizer, kv KV, blob Blob, logger *slog.Logger) http.Handler {
+// Info, a denial / upstream error at Warn. A nil logger defaults to slog.Default(). deps non-nil registers GET
+// /health/dependencies (ADR-0215 Decision 3); nil registers no route, so a shim reads 404 as a pass.
+func NewHandler(caller Ref, res Resolver, inv Invoker, authz auth.Authorizer, kv KV, blob Blob,
+	deps DependencyChecker, logger *slog.Logger) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -106,6 +145,11 @@ func NewHandler(caller Ref, res Resolver, inv Invoker, authz auth.Authorizer, kv
 	}
 	if blob != nil {
 		registerBlob(mux, caller, blob, logger)
+	}
+	if deps != nil {
+		mux.HandleFunc("GET "+dependenciesPath, func(w http.ResponseWriter, r *http.Request) {
+			serveDependencies(w, r, caller, deps)
+		})
 	}
 	mux.HandleFunc("POST /invoke/{alias}", func(w http.ResponseWriter, r *http.Request) {
 		const op = "workernode.local.invoke"
@@ -172,6 +216,29 @@ func NewHandler(caller Ref, res Resolver, inv Invoker, authz auth.Authorizer, kv
 		_, _ = w.Write(out)
 	})
 	return opaqueKeys(mux)
+}
+
+// serveDependencies answers caller's dependency check within DependencyCheckBudget: 200, or 503 with the report; a
+// check that runs past the budget is a 503 Timeout.
+func serveDependencies(w http.ResponseWriter, r *http.Request, caller Ref, deps DependencyChecker) {
+	ctx, cancel := context.WithTimeout(r.Context(), DependencyCheckBudget)
+	defer cancel()
+	done := make(chan *DependencyReport, 1)
+	go func() { done <- deps.Check(ctx, caller) }()
+	var report *DependencyReport
+	select {
+	case report = <-done:
+	case <-ctx.Done():
+		report = &DependencyReport{Kind: DependencySocket, Reason: ReasonTimeout,
+			Message: "the dependency check did not finish within " + DependencyCheckBudget.String()}
+	}
+	if report == nil {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	_ = json.NewEncoder(w).Encode(report)
 }
 
 // opaqueKeys keeps http.ServeMux from cleaning a KV or blob key: the shims send a key's "/" separators

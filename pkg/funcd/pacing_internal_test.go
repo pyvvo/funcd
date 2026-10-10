@@ -86,6 +86,12 @@ func TestWithPacingRefusesInvalidFields(t *testing.T) {
 		{"negative upgrade timeout", Pacing{AppUpgradeTimeout: -time.Second}, "Pacing.AppUpgradeTimeout"},
 		{"upgrade timeout at the default boot timeout", Pacing{AppUpgradeTimeout: time.Minute}, "Pacing.AppUpgradeTimeout 1m0s must be more than BootTimeout 1m0s"},
 		{"upgrade timeout below a set boot timeout", Pacing{BootTimeout: 10 * time.Minute, AppUpgradeTimeout: 6 * time.Minute}, "Pacing.AppUpgradeTimeout 6m0s must be more than BootTimeout 10m0s"},
+		{"negative liveness timeout", Pacing{LivenessTimeout: -time.Second}, "Pacing.LivenessTimeout"},
+		{"liveness below twice the default period", Pacing{LivenessTimeout: 19 * time.Second}, "Pacing.LivenessTimeout 19s must be at least twice SupervisionPeriod 10s"},
+		{"liveness below twice a set period", Pacing{SupervisionPeriod: time.Minute, LivenessTimeout: time.Minute}, "Pacing.LivenessTimeout 1m0s must be at least twice SupervisionPeriod 1m0s"},
+		{"negative probe interval", Pacing{StorageProbeInterval: -time.Second}, "Pacing.StorageProbeInterval"},
+		{"probe timeout at the default interval", Pacing{StorageProbeTimeout: 10 * time.Second}, "Pacing.StorageProbeTimeout 10s must be less than StorageProbeInterval 10s"},
+		{"probe interval at the default timeout", Pacing{StorageProbeInterval: 2 * time.Second}, "Pacing.StorageProbeTimeout 2s must be less than StorageProbeInterval 2s"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -97,6 +103,26 @@ func TestWithPacingRefusesInvalidFields(t *testing.T) {
 	c := &config{}
 	require.NoError(t, WithPacing(Pacing{DeliveryBackoffInitial: 20 * time.Second})(c))
 	require.Equal(t, 20*time.Second, c.pacing.deliveryBackoffMax(), "an unset max follows a larger initial wait")
+}
+
+// ADR-0215 Contracts: a zero Pacing.LivenessTimeout is max(30s, three effective SupervisionPeriods), saturating; a set
+// one at twice the period is kept; the probe pacing defaults to 10s and 2s.
+func TestLivenessTimeoutDefault(t *testing.T) {
+	for _, tc := range []struct {
+		p    Pacing
+		want time.Duration
+	}{
+		{Pacing{}, 30 * time.Second},
+		{Pacing{SupervisionPeriod: 5 * time.Second}, 30 * time.Second},
+		{Pacing{SupervisionPeriod: 20 * time.Second}, time.Minute},
+		{Pacing{SupervisionPeriod: time.Duration(math.MaxInt64 / 2)}, math.MaxInt64},
+		{Pacing{SupervisionPeriod: 20 * time.Second, LivenessTimeout: 40 * time.Second}, 40 * time.Second},
+	} {
+		c := &config{}
+		require.NoError(t, WithPacing(tc.p)(c))
+		require.Equal(t, tc.want, c.pacing.livenessTimeout(), "%+v", tc.p)
+	}
+	require.NoError(t, WithPacing(Pacing{StorageProbeInterval: time.Second, StorageProbeTimeout: 999 * time.Millisecond})(&config{}))
 }
 
 // ADR-0200 Decision 10: a zero Pacing.AppUpgradeTimeout is max(5m, twice the effective BootTimeout); a set one is kept.

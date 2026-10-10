@@ -201,6 +201,26 @@ func (h *harness) markReady(kind v1.Kind, name v1.ObjectName) {
 		setStatus(obj, v1.PhaseReady, cond("Ready", v1.ConditionTrue, "", gen))
 	}
 	h.update(obj)
+	if w, ok := obj.(*v1.Workflow); ok {
+		for _, st := range w.Spec.Steps {
+			if st.Function != nil && st.Function.Image != "" {
+				h.readyStep(v1.StepFunctionName(w.Name, st.Name))
+			}
+		}
+	}
+}
+
+// readyStep creates the step Function name, as the Workflow materializer does, and marks it Ready.
+func (h *harness) readyStep(name v1.ObjectName) {
+	h.t.Helper()
+	if h.get(v1.KindFunction, name) == nil {
+		h.create(&v1.Function{
+			TypeMeta:   v1.TypeMeta{APIVersion: v1.KindFunction.GVK().APIVersion(), Kind: v1.KindFunction},
+			ObjectMeta: v1.ObjectMeta{Name: name, Namespace: ns, ResourceGroup: "todo-rg"},
+			Spec:       v1.FunctionSpec{Runtime: "nodejs22", Handler: "index.handler", Image: "oci-layout://step:1"},
+		})
+	}
+	h.markReady(v1.KindFunction, name)
 }
 
 func (h *harness) markAllReady() {
@@ -279,7 +299,7 @@ func TestScenarioAppInstall(t *testing.T) {
 	got := h.app()
 	require.Equal(t, v1.PhaseDeploying, got.Status.Phase)
 	require.Len(t, got.Status.Children, 7)
-	require.Equal(t, v1.AppChild{Kind: v1.KindBucket, Name: "todo-files", State: v1.AppChildReady}, h.child(v1.KindBucket, "todo-files"), "a Bucket is Ready once it exists")
+	require.Equal(t, v1.AppChild{Kind: v1.KindBucket, Name: "todo-files", State: v1.AppChildPending, Reason: "Progressing"}, h.child(v1.KindBucket, "todo-files"), "a Bucket is Pending until its reconciler's first pass (ADR-0215 Decision 7)")
 	require.Equal(t, v1.AppChild{Kind: v1.KindKVStore, Name: "todo-store", State: v1.AppChildPending, Reason: "Progressing"}, h.child(v1.KindKVStore, "todo-store"))
 	c := h.ready()
 	require.Equal(t, v1.ConditionFalse, c.Status)
@@ -543,7 +563,13 @@ func TestAppReadiness(t *testing.T) {
 		{"a ready CatalogService", catalog, v1.KindCatalogService, "todo-lake", func(g int64) (v1.Phase, []v1.Condition) {
 			return v1.PhaseReady, []v1.Condition{cond("Ready", yes, "", g)}
 		}, v1.AppChildReady, "", yes, ""},
-		{"a Bucket", bucket, v1.KindBucket, "todo-files", nil, v1.AppChildReady, "", yes, ""},
+		{"a Bucket before its first pass", bucket, v1.KindBucket, "todo-files", nil, v1.AppChildPending, "Progressing", no, "Progressing"},
+		{"a ready Bucket", bucket, v1.KindBucket, "todo-files", func(g int64) (v1.Phase, []v1.Condition) {
+			return v1.PhaseReady, []v1.Condition{cond("Ready", yes, "", g)}
+		}, v1.AppChildReady, "", yes, ""},
+		{"a Bucket whose storage is unreachable", bucket, v1.KindBucket, "todo-files", func(g int64) (v1.Phase, []v1.Condition) {
+			return v1.PhaseDegraded, []v1.Condition{cond("Ready", no, "StorageUnreachable", g)}
+		}, v1.AppChildPending, "StorageUnreachable", no, "Progressing"},
 	} {
 		tt := tc
 		t.Run(tt.name, func(t *testing.T) {

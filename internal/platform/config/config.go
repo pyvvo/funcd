@@ -198,6 +198,10 @@ type Config struct {
 		DrainGrace        string `json:"drainGrace,omitempty" env:"FUNCD_RUNTIME_DRAIN_GRACE"`
 		HandOutSettle     string `json:"handOutSettle,omitempty" env:"FUNCD_RUNTIME_HAND_OUT_SETTLE"`
 		DrainPollInterval string `json:"drainPollInterval,omitempty" env:"FUNCD_RUNTIME_DRAIN_POLL_INTERVAL"`
+		// LivenessTimeout is how long a listening replica may stay silent on /health/liveness before it is restarted
+		// (ADR-0215): a positive duration, when set at least twice supervisionPeriod; empty ⇒ max(30s, three
+		// supervisionPeriod), derived in cmd/funcd.
+		LivenessTimeout string `json:"livenessTimeout,omitempty" env:"FUNCD_RUNTIME_LIVENESS_TIMEOUT"`
 		// Process tunes the process driver (ADR-0167): StopGrace is the wait after SIGTERM before SIGKILL for a stop,
 		// the shutdown close and the boot reap, a duration with 0 < d <= 10s.
 		Process struct {
@@ -350,6 +354,13 @@ type Config struct {
 		UpgradeTimeout  string `json:"upgradeTimeout,omitempty" env:"FUNCD_APP_UPGRADE_TIMEOUT"`
 		RevisionHistory int    `json:"revisionHistory,omitempty" env:"FUNCD_APP_REVISION_HISTORY" validate:"min=1,max=100"`
 	} `json:"app,omitempty"`
+
+	// Health paces the storage probes behind the KVStore and Bucket status and the dependency check (ADR-0215):
+	// positive durations, the timeout less than the interval.
+	Health struct {
+		StorageProbeInterval string `json:"storageProbeInterval,omitempty" env:"FUNCD_HEALTH_STORAGE_PROBE_INTERVAL"`
+		StorageProbeTimeout  string `json:"storageProbeTimeout,omitempty" env:"FUNCD_HEALTH_STORAGE_PROBE_TIMEOUT"`
+	} `json:"health,omitempty"`
 }
 
 // Flags are the top precedence tier (CLI flags with no env). MemoryOnly nil ⇒ --memory not set.
@@ -437,6 +448,9 @@ func defaults() Config {
 	c.Site.DefaultIndex = "index.html"
 	// App revisions (ADR-0200): app.upgradeTimeout stays empty, so cmd/funcd derives it from runtime.bootTimeout.
 	c.App.RevisionHistory = 10
+	// Health (ADR-0215): runtime.livenessTimeout stays empty, so cmd/funcd derives it from runtime.supervisionPeriod.
+	c.Health.StorageProbeInterval = "10s"
+	c.Health.StorageProbeTimeout = "2s"
 	return c
 }
 

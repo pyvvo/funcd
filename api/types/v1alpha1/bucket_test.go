@@ -16,7 +16,7 @@ func bucket(name string, mob int64, prefixes ...BucketPrefix) *Bucket {
 }
 
 // scenario (types): Bucket roundtrip — full JSON equality after marshal/unmarshal, including the
-// prefixes[] sub-domains and their owners (ADR-0080). Bucket has NO status.
+// prefixes[] sub-domains and their owners (ADR-0080).
 func TestBucketRoundtrip(t *testing.T) {
 	b := bucket("lakehouse", 4096,
 		BucketPrefix{Name: "bronze", Owner: "bronze-svc"},

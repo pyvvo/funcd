@@ -10663,5 +10663,35 @@
     "dod_total": 12,
     "report": "docs/reviews/issue-900-fix-claude-opus-5-5.md",
     "notes": "pass; TestIssue900 fails pre-fix with the store's resourceVersion-mismatch 409 (replace and KVStore handover) and passes -race; mutants on the attempt bound and the handover's lost flag killed; the retry re-reads and re-judges each attempt (not masking). The same PR fixed a found Bucket delete-protection race (own commit, TestDeleteRechecksProtectionWrittenConcurrently), reviewed twice: 4 model minors folded, re-review pass"
+  },
+  {
+    "date": "2026-10-10",
+    "adr": "0215",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "changes-requested",
+    "blockers": 1,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 0,
+    "dod_passed": 10,
+    "dod_total": 13,
+    "report": "docs/reviews/adr-0215-implementation-claude-opus-5-5.md",
+    "notes": "changes-requested; funcd half complete (just ci EXIT 0, 9 TestScenario tests pass, hung-worker e2e passes, gate PASS); blocker(env): Decision 4 shim contract and plan steps 2-3 (language repos, releases, go get, shim e2e) not in the work, the run confined the implementer to the funcd worktree; minor(adr): hold tests wait for ADR-0206"
+  },
+  {
+    "date": "2026-10-10",
+    "adr": "0215",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 1,
+    "dod_passed": 13,
+    "dod_total": 13,
+    "report": "docs/reviews/adr-0215-implementation-claude-opus-5-5-2.md",
+    "notes": "Round 2 pass: resolves round 1's env blocker (shims v0.10.0/v0.7.0 released with green CI, pinned; 3 e2e scenarios pass on the real shims and the 2 new ones fail on the old pins); just ci EXIT 0, ci-full green on this head. Minor (model): funcd-python relays a 503 object without a kind, funcd-typescript does not. Minor (adr): hold tests wait for ADR-0206."
   }
 ]

@@ -103,6 +103,13 @@ func (f *Facade) resolveAuth(ctx context.Context, ns v1.NamespaceName, fn v1.Obj
 	return b, nil
 }
 
+// CheckRead resolves the alias and asks the PDP kv::read on its table, as Get does, with no engine call: the
+// dependency check of a caller's binding (ADR-0215 Decision 3).
+func (f *Facade) CheckRead(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias string) error {
+	_, err := f.resolveAuth(ctx, ns, fn, alias, auth.ActionKVRead)
+	return err
+}
+
 // Get returns the value for the alias's key. Reads are DEFAULT-DENY: the PDP must permit kv::read
 // (a permitting Policy) on the resolved table (ADR-0074).
 func (f *Facade) Get(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias, key string) ([]byte, bool, error) {

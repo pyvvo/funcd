@@ -32,7 +32,7 @@ func recordingDataPlane(got *[]http.Header, body string) http.Handler {
 func brokerInvoke(t *testing.T, inv Invoker, tp string) *httptest.ResponseRecorder {
 	t.Helper()
 	caller, target := Ref{Namespace: "default", Function: "front"}, Ref{Namespace: "default", Function: "greeter"}
-	h := NewHandler(caller, staticResolver{target: target}, inv, nil, nil, nil, nil)
+	h := NewHandler(caller, staticResolver{target: target}, inv, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/invoke/greeter", strings.NewReader(`{"name":"x"}`))
 	if tp != "" {
 		req.Header.Set(traceparentHeader, tp)

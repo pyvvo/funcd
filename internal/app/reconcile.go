@@ -264,7 +264,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 			}
 		}
 	}
-	children := readiness(a, ents, objs, halt)
+	steps, err := r.stepFunctions(ctx, a.Namespace, objs)
+	if err != nil {
+		return controller.Result{}, err
+	}
+	children := readiness(a, ents, objs, steps, halt)
 	hp, err := r.hooks(ctx, a, latest, current, objs, halt, wrote, busy)
 	if err != nil {
 		return controller.Result{}, err
@@ -614,6 +618,58 @@ func (r *Reconciler) remove(ctx context.Context, o v1.Object) error {
 
 func pruningChild(o v1.Object, reason string) v1.AppChild {
 	return v1.AppChild{Kind: o.GroupVersionKind().Kind, Name: o.GetObjectMeta().Name, State: v1.AppChildPruning, Reason: reason}
+}
+
+// stepFunctions reads the step Functions of every Workflow part in objs, by name; an absent one maps to nil.
+func (r *Reconciler) stepFunctions(ctx context.Context, ns v1.NamespaceName, objs map[v1.ObjectRef]v1.Object) (map[v1.ObjectName]*v1.Function, error) {
+	steps := map[v1.ObjectName]*v1.Function{}
+	for _, obj := range objs {
+		w, ok := obj.(*v1.Workflow)
+		if !ok {
+			continue
+		}
+		for _, name := range stepFunctions(w) {
+			if _, seen := steps[name]; seen {
+				continue
+			}
+			o, err := r.get(ctx, v1.KindFunction, ns, name)
+			if err != nil {
+				return nil, err
+			}
+			fn, _ := o.(*v1.Function)
+			steps[name] = fn
+		}
+	}
+	return steps, nil
+}
+
+// MapStepFunction is the controller.MapFunc of Functions for Workflow health (ADR-0215 Decision 8): it requeues each
+// App of fn's namespace with a Workflow part one of whose steps dispatches to fn.
+func (r *Reconciler) MapStepFunction(ctx context.Context, obj v1.Object) []controller.Request {
+	m := obj.GetObjectMeta()
+	res, err := r.store.List(ctx, v1.KindApp.GVK(), store.ListOptions{Namespace: m.Namespace})
+	if err != nil {
+		r.log.WarnContext(ctx, "list apps of a changed step function", "namespace", string(m.Namespace), "name", string(m.Name), "error", err)
+		return nil
+	}
+	var reqs []controller.Request
+	for _, o := range res.Items {
+		a, ok := o.(*v1.App)
+		if !ok {
+			continue
+		}
+		for _, e := range entries(a) {
+			if e.kind != v1.KindWorkflow {
+				continue
+			}
+			w, err := r.get(ctx, v1.KindWorkflow, m.Namespace, e.name)
+			if wf, ok := w.(*v1.Workflow); err == nil && ok && slices.Contains(stepFunctions(wf), m.Name) {
+				reqs = append(reqs, controller.Request{GVK: v1.KindApp.GVK(), Namespace: a.Namespace, Name: a.Name})
+				break
+			}
+		}
+	}
+	return reqs
 }
 
 // MapPart is the controller.MapFunc of every section kind: it requeues each App whose controller reference or marker

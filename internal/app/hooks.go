@@ -221,7 +221,7 @@ func (r *Reconciler) hooks(ctx context.Context, a *v1.App, latest *v1.AppRevisio
 		return hp, nil
 	}
 	if fn := objs[v1.ObjectRef{Kind: v1.KindFunction, Namespace: a.Namespace, Name: p.fn}]; fn != nil {
-		state := judge(fn).child.State
+		state := judge(fn, nil).child.State
 		hp.ready = state == v1.AppChildReady || state == v1.AppChildNotStarted
 	}
 	if latest.Status.Phase == v1.PhaseDeploying && halt == nil && wrote == nil && !busy && hp.ready {
