@@ -193,8 +193,9 @@ func (h *storeHandlers) replaceObj(ctx context.Context, kind v1.Kind, ns v1.Name
 	return h.replaceObjIf(ctx, kind, ns, name, obj, nil)
 }
 
-// replaceObjIf is replaceObj with guard run on the stored object before admission; the write is conditional on
-// that object's resourceVersion, so the guard's verdict holds for the write.
+// replaceObjIf is replaceObj with guard run on the stored object before admission. A body resourceVersion is the
+// client's precondition (ADR-0210), compared with the stored one before the guard and admission; the write is
+// conditional on the stored object's resourceVersion, so the guard's verdict holds for the write.
 func (h *storeHandlers) replaceObjIf(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName, obj v1.Object, guard func(context.Context, v1.Object) error) (v1.Object, error) {
 	if err := h.authorize(ctx, auth.VerbUpdate, kind, ns); err != nil {
 		return nil, err
@@ -210,6 +211,7 @@ func (h *storeHandlers) replaceObjIf(ctx context.Context, kind v1.Kind, ns v1.Na
 		return nil, fault.Invalidf("controlplane.admit", "body name %q does not match path %q", meta.Name, name)
 	}
 	stampTypeMeta(obj, kind) // route's kind owns TypeMeta (see createObj)
+	want := meta.ResourceVersion
 	unlock, err := h.lockFor(ctx, kind, admission.Update, ns)
 	if err != nil {
 		return nil, err
@@ -217,6 +219,9 @@ func (h *storeHandlers) replaceObjIf(ctx context.Context, kind v1.Kind, ns v1.Na
 	defer unlock()
 	cur, err := h.store.Get(ctx, kind.GVK(), ns, name) // fetch Old BEFORE admit (reused for the RV read)
 	if err != nil {
+		return nil, err
+	}
+	if err := staleVersion(kind, ns, name, want, cur); err != nil {
 		return nil, err
 	}
 	if guard != nil {
@@ -235,7 +240,7 @@ func (h *storeHandlers) replaceObjIf(ctx context.Context, kind v1.Kind, ns v1.Na
 		return nil, err
 	}
 	withServerMeta(admitted, cur)
-	admitted.GetObjectMeta().ResourceVersion = cur.GetObjectMeta().ResourceVersion // read-RV-then-update (ADR-0018 workaround)
+	admitted.GetObjectMeta().ResourceVersion = cur.GetObjectMeta().ResourceVersion
 	return h.store.Update(ctx, admitted)
 }
 
@@ -308,12 +313,9 @@ func jsonFields(obj v1.Object) (map[string]json.RawMessage, error) {
 	return m, nil
 }
 
-func (h *storeHandlers) deleteObj(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName) error {
-	return h.deleteObjIf(ctx, kind, ns, name, "")
-}
-
 // deleteObjIf is the whole delete path: authorize → the namespace admission lock when a Delete admission reads
-// the namespace (ADR-0147) → Get Old → Admit → store.Delete with rv as the precondition ("" ⇒ none) → unlock.
+// the namespace (ADR-0147) → Get Old, compared with rv (ADR-0210) → Admit → store.Delete with rv as the
+// precondition ("" ⇒ none) → unlock.
 func (h *storeHandlers) deleteObjIf(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
 	if err := h.authorize(ctx, auth.VerbDelete, kind, ns); err != nil {
 		return err
@@ -333,6 +335,9 @@ func (h *storeHandlers) deleteObjIf(ctx context.Context, kind v1.Kind, ns v1.Nam
 		if err != nil {
 			return err
 		}
+		if err := staleVersion(kind, ns, name, rv, old); err != nil {
+			return err
+		}
 		id, _ := middleware.IdentityFrom(ctx)
 		if _, err := h.admit.Admit(ctx, admission.Request{
 			Operation: admission.Delete, GVK: kind.GVK(), Old: old, Identity: id,
@@ -347,7 +352,8 @@ func (h *storeHandlers) deleteObjIf(ctx context.Context, kind v1.Kind, ns v1.Nam
 // lists the members and deletes each through deleteObjIf with its listed resourceVersion, Sensors first, so every
 // member's authorization and admissions apply; then it collects the namespace's dead-owned children. A pass that
 // deleted a member runs another; one that deleted none stops with its first 409, else deletes the group normally.
-func (h *storeHandlers) forceDeleteResourceGroup(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+// A client's rv is compared before any member delete and is the final delete's precondition (ADR-0210).
+func (h *storeHandlers) forceDeleteResourceGroup(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
 	const op = "controlplane.forceDeleteResourceGroup"
 	if err := h.authorize(ctx, auth.VerbDelete, v1.KindResourceGroup, ns); err != nil {
 		return err
@@ -355,7 +361,11 @@ func (h *storeHandlers) forceDeleteResourceGroup(ctx context.Context, ns v1.Name
 	if h.collector == nil {
 		return fault.Unavailablef(op, "no owner garbage collector is wired; force is unavailable")
 	}
-	if _, err := h.store.Get(ctx, v1.KindResourceGroup.GVK(), ns, name); err != nil {
+	g, err := h.store.Get(ctx, v1.KindResourceGroup.GVK(), ns, name)
+	if err != nil {
+		return err
+	}
+	if err := staleVersion(v1.KindResourceGroup, ns, name, rv, g); err != nil {
 		return err
 	}
 	group := v1.ResourceGroupName(name)
@@ -391,7 +401,7 @@ func (h *storeHandlers) forceDeleteResourceGroup(ctx context.Context, ns v1.Name
 		if refused != nil {
 			return refused
 		}
-		return h.deleteObj(ctx, v1.KindResourceGroup, ns, name)
+		return h.deleteObjIf(ctx, v1.KindResourceGroup, ns, name, rv)
 	}
 }
 
@@ -473,8 +483,8 @@ func (h *storeHandlers) ReplaceNamespace(ctx context.Context, name v1.ObjectName
 	return *o.(*v1.Namespace), nil
 }
 
-func (h *storeHandlers) DeleteNamespace(ctx context.Context, name v1.ObjectName) error {
-	return h.deleteObj(ctx, v1.KindNamespace, "", name)
+func (h *storeHandlers) DeleteNamespace(ctx context.Context, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindNamespace, "", name, rv)
 }
 
 // --- ResourceGroup (namespaced) ---
@@ -515,11 +525,11 @@ func (h *storeHandlers) ReplaceResourceGroup(ctx context.Context, ns v1.Namespac
 	return *o.(*v1.ResourceGroup), nil
 }
 
-func (h *storeHandlers) DeleteResourceGroup(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, force bool) error {
+func (h *storeHandlers) DeleteResourceGroup(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, force bool, rv string) error {
 	if force {
-		return h.forceDeleteResourceGroup(ctx, ns, name)
+		return h.forceDeleteResourceGroup(ctx, ns, name, rv)
 	}
-	return h.deleteObj(ctx, v1.KindResourceGroup, ns, name)
+	return h.deleteObjIf(ctx, v1.KindResourceGroup, ns, name, rv)
 }
 
 // --- Function (namespaced) ---
@@ -560,8 +570,8 @@ func (h *storeHandlers) ReplaceFunction(ctx context.Context, ns v1.NamespaceName
 	return *o.(*v1.Function), nil
 }
 
-func (h *storeHandlers) DeleteFunction(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
-	return h.deleteObj(ctx, v1.KindFunction, ns, name)
+func (h *storeHandlers) DeleteFunction(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindFunction, ns, name, rv)
 }
 
 // --- Revision (namespaced) ---
@@ -624,8 +634,8 @@ func (h *storeHandlers) ReplaceRoute(ctx context.Context, ns v1.NamespaceName, n
 	return *o.(*v1.Route), nil
 }
 
-func (h *storeHandlers) DeleteRoute(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
-	return h.deleteObj(ctx, v1.KindRoute, ns, name)
+func (h *storeHandlers) DeleteRoute(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindRoute, ns, name, rv)
 }
 
 // --- Site (namespaced) — ADR-0139, FEAT-0003/F103 ---
@@ -666,8 +676,8 @@ func (h *storeHandlers) ReplaceSite(ctx context.Context, ns v1.NamespaceName, na
 	return *o.(*v1.Site), nil
 }
 
-func (h *storeHandlers) DeleteSite(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
-	return h.deleteObj(ctx, v1.KindSite, ns, name)
+func (h *storeHandlers) DeleteSite(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindSite, ns, name, rv)
 }
 
 // --- App (namespaced) — ADR-0199, FEAT-0010/F113 ---
@@ -688,8 +698,8 @@ func (h *storeHandlers) ReplaceApp(ctx context.Context, ns v1.NamespaceName, nam
 	return typedObj[v1.App](h.replaceObj(ctx, v1.KindApp, ns, name, &app))
 }
 
-func (h *storeHandlers) DeleteApp(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
-	return h.deleteObj(ctx, v1.KindApp, ns, name)
+func (h *storeHandlers) DeleteApp(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindApp, ns, name, rv)
 }
 
 // --- AppRevision (namespaced, read-only) — ADR-0200, FEAT-0010/F114 ---
@@ -770,8 +780,8 @@ func (h *storeHandlers) ReplaceService(ctx context.Context, ns v1.NamespaceName,
 	return *o.(*v1.Service), nil
 }
 
-func (h *storeHandlers) DeleteService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
-	return h.deleteObj(ctx, v1.KindService, ns, name)
+func (h *storeHandlers) DeleteService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindService, ns, name, rv)
 }
 
 // --- EventSource (namespaced) ---
@@ -812,8 +822,8 @@ func (h *storeHandlers) ReplaceEventSource(ctx context.Context, ns v1.NamespaceN
 	return *o.(*v1.EventSource), nil
 }
 
-func (h *storeHandlers) DeleteEventSource(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
-	return h.deleteObj(ctx, v1.KindEventSource, ns, name)
+func (h *storeHandlers) DeleteEventSource(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindEventSource, ns, name, rv)
 }
 
 // --- ConfigMap (namespaced) ---
@@ -854,8 +864,8 @@ func (h *storeHandlers) ReplaceConfigMap(ctx context.Context, ns v1.NamespaceNam
 	return *o.(*v1.ConfigMap), nil
 }
 
-func (h *storeHandlers) DeleteConfigMap(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
-	return h.deleteObj(ctx, v1.KindConfigMap, ns, name)
+func (h *storeHandlers) DeleteConfigMap(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindConfigMap, ns, name, rv)
 }
 
 // --- Secret (namespaced) ---
@@ -896,8 +906,8 @@ func (h *storeHandlers) ReplaceSecret(ctx context.Context, ns v1.NamespaceName, 
 	return *o.(*v1.Secret), nil
 }
 
-func (h *storeHandlers) DeleteSecret(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
-	return h.deleteObj(ctx, v1.KindSecret, ns, name)
+func (h *storeHandlers) DeleteSecret(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindSecret, ns, name, rv)
 }
 
 // --- Grant (namespaced) ---
@@ -938,8 +948,8 @@ func (h *storeHandlers) ReplaceGrant(ctx context.Context, ns v1.NamespaceName, n
 	return *o.(*v1.Grant), nil
 }
 
-func (h *storeHandlers) DeleteGrant(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
-	return h.deleteObj(ctx, v1.KindGrant, ns, name)
+func (h *storeHandlers) DeleteGrant(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindGrant, ns, name, rv)
 }
 
 // --- KVStore (namespaced) — ADR-0072 ---
@@ -980,8 +990,8 @@ func (h *storeHandlers) ReplaceKVStore(ctx context.Context, ns v1.NamespaceName,
 	return *o.(*v1.KVStore), nil
 }
 
-func (h *storeHandlers) DeleteKVStore(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
-	return h.deleteObj(ctx, v1.KindKVStore, ns, name)
+func (h *storeHandlers) DeleteKVStore(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindKVStore, ns, name, rv)
 }
 
 // --- Bucket (namespaced) — ADR-0080 ---
@@ -1022,8 +1032,8 @@ func (h *storeHandlers) ReplaceBucket(ctx context.Context, ns v1.NamespaceName, 
 	return *o.(*v1.Bucket), nil
 }
 
-func (h *storeHandlers) DeleteBucket(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
-	return h.deleteObj(ctx, v1.KindBucket, ns, name)
+func (h *storeHandlers) DeleteBucket(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindBucket, ns, name, rv)
 }
 
 // --- CatalogService (namespaced) — ADR-0086 ---
@@ -1064,8 +1074,8 @@ func (h *storeHandlers) ReplaceCatalogService(ctx context.Context, ns v1.Namespa
 	return *o.(*v1.CatalogService), nil
 }
 
-func (h *storeHandlers) DeleteCatalogService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
-	return h.deleteObj(ctx, v1.KindCatalogService, ns, name)
+func (h *storeHandlers) DeleteCatalogService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindCatalogService, ns, name, rv)
 }
 
 // --- Identity (namespaced) — ADR-0135, FEAT-0008/F100 ---
@@ -1106,8 +1116,8 @@ func (h *storeHandlers) ReplaceIdentity(ctx context.Context, ns v1.NamespaceName
 	return *o.(*v1.Identity), nil
 }
 
-func (h *storeHandlers) DeleteIdentity(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
-	return h.deleteObj(ctx, v1.KindIdentity, ns, name)
+func (h *storeHandlers) DeleteIdentity(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindIdentity, ns, name, rv)
 }
 
 // --- Role + RolesAssignment (namespaced) — ADR-0136, FEAT-0008/F101 ---
@@ -1148,8 +1158,8 @@ func (h *storeHandlers) ReplaceRole(ctx context.Context, ns v1.NamespaceName, na
 	return *o.(*v1.Role), nil
 }
 
-func (h *storeHandlers) DeleteRole(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
-	return h.deleteObj(ctx, v1.KindRole, ns, name)
+func (h *storeHandlers) DeleteRole(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindRole, ns, name, rv)
 }
 
 func (h *storeHandlers) GetRolesAssignment(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.RolesAssignment, error) {
@@ -1188,8 +1198,8 @@ func (h *storeHandlers) ReplaceRolesAssignment(ctx context.Context, ns v1.Namesp
 	return *o.(*v1.RolesAssignment), nil
 }
 
-func (h *storeHandlers) DeleteRolesAssignment(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
-	return h.deleteObj(ctx, v1.KindRolesAssignment, ns, name)
+func (h *storeHandlers) DeleteRolesAssignment(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindRolesAssignment, ns, name, rv)
 }
 
 // --- Policy (namespaced) — ADR-0074 ---
@@ -1230,8 +1240,8 @@ func (h *storeHandlers) ReplacePolicy(ctx context.Context, ns v1.NamespaceName, 
 	return *o.(*v1.Policy), nil
 }
 
-func (h *storeHandlers) DeletePolicy(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
-	return h.deleteObj(ctx, v1.KindPolicy, ns, name)
+func (h *storeHandlers) DeletePolicy(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindPolicy, ns, name, rv)
 }
 
 // --- EgressPolicy (namespaced) ---
@@ -1272,8 +1282,8 @@ func (h *storeHandlers) ReplaceEgressPolicy(ctx context.Context, ns v1.Namespace
 	return *o.(*v1.EgressPolicy), nil
 }
 
-func (h *storeHandlers) DeleteEgressPolicy(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
-	return h.deleteObj(ctx, v1.KindEgressPolicy, ns, name)
+func (h *storeHandlers) DeleteEgressPolicy(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindEgressPolicy, ns, name, rv)
 }
 
 // --- Invocation (namespaced) ---
@@ -1314,8 +1324,8 @@ func (h *storeHandlers) ReplaceInvocation(ctx context.Context, ns v1.NamespaceNa
 	return *o.(*v1.Invocation), nil
 }
 
-func (h *storeHandlers) DeleteInvocation(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
-	return h.deleteObj(ctx, v1.KindInvocation, ns, name)
+func (h *storeHandlers) DeleteInvocation(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindInvocation, ns, name, rv)
 }
 
 // --- RuntimeClass (cluster-scoped) ---
@@ -1356,8 +1366,8 @@ func (h *storeHandlers) ReplaceRuntimeClass(ctx context.Context, name v1.ObjectN
 	return *o.(*v1.RuntimeClass), nil
 }
 
-func (h *storeHandlers) DeleteRuntimeClass(ctx context.Context, name v1.ObjectName) error {
-	return h.deleteObj(ctx, v1.KindRuntimeClass, "", name)
+func (h *storeHandlers) DeleteRuntimeClass(ctx context.Context, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindRuntimeClass, "", name, rv)
 }
 
 // --- WorkerNode (cluster-scoped) ---
@@ -1398,8 +1408,8 @@ func (h *storeHandlers) ReplaceWorkerNode(ctx context.Context, name v1.ObjectNam
 	return *o.(*v1.WorkerNode), nil
 }
 
-func (h *storeHandlers) DeleteWorkerNode(ctx context.Context, name v1.ObjectName) error {
-	return h.deleteObj(ctx, v1.KindWorkerNode, "", name)
+func (h *storeHandlers) DeleteWorkerNode(ctx context.Context, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindWorkerNode, "", name, rv)
 }
 
 // --- Gateway (cluster-scoped) ---
@@ -1440,8 +1450,8 @@ func (h *storeHandlers) ReplaceGateway(ctx context.Context, name v1.ObjectName, 
 	return *o.(*v1.Gateway), nil
 }
 
-func (h *storeHandlers) DeleteGateway(ctx context.Context, name v1.ObjectName) error {
-	return h.deleteObj(ctx, v1.KindGateway, "", name)
+func (h *storeHandlers) DeleteGateway(ctx context.Context, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindGateway, "", name, rv)
 }
 
 // ---- Workflow (ADR-0094) ----
@@ -1478,8 +1488,8 @@ func (h *storeHandlers) ReplaceWorkflow(ctx context.Context, ns v1.NamespaceName
 	}
 	return *o.(*v1.Workflow), nil
 }
-func (h *storeHandlers) DeleteWorkflow(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
-	return h.deleteObj(ctx, v1.KindWorkflow, ns, name)
+func (h *storeHandlers) DeleteWorkflow(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindWorkflow, ns, name, rv)
 }
 
 // ---- WorkflowRun (ADR-0094) ----
@@ -1516,8 +1526,8 @@ func (h *storeHandlers) ReplaceWorkflowRun(ctx context.Context, ns v1.NamespaceN
 	}
 	return *o.(*v1.WorkflowRun), nil
 }
-func (h *storeHandlers) DeleteWorkflowRun(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
-	return h.deleteObj(ctx, v1.KindWorkflowRun, ns, name)
+func (h *storeHandlers) DeleteWorkflowRun(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindWorkflowRun, ns, name, rv)
 }
 
 // ---- Sensor (ADR-0109) ----
@@ -1554,6 +1564,6 @@ func (h *storeHandlers) ReplaceSensor(ctx context.Context, ns v1.NamespaceName, 
 	}
 	return *o.(*v1.Sensor), nil
 }
-func (h *storeHandlers) DeleteSensor(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
-	return h.deleteObj(ctx, v1.KindSensor, ns, name)
+func (h *storeHandlers) DeleteSensor(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindSensor, ns, name, rv)
 }

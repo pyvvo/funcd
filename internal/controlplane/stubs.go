@@ -125,7 +125,7 @@ func (s *StubHandlers) ReplaceNamespace(_ context.Context, name v1.ObjectName, n
 	return ns, nil
 }
 
-func (s *StubHandlers) DeleteNamespace(_ context.Context, name v1.ObjectName) error {
+func (s *StubHandlers) DeleteNamespace(_ context.Context, name v1.ObjectName, _ string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := string(name)
@@ -181,7 +181,7 @@ func (s *StubHandlers) ReplaceResourceGroup(_ context.Context, ns v1.NamespaceNa
 	return rg, nil
 }
 
-func (s *StubHandlers) DeleteResourceGroup(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ bool) error {
+func (s *StubHandlers) DeleteResourceGroup(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ bool, _ string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := nsKey(ns, name)
@@ -237,7 +237,7 @@ func (s *StubHandlers) ReplaceFunction(_ context.Context, ns v1.NamespaceName, n
 	return fn, nil
 }
 
-func (s *StubHandlers) DeleteFunction(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+func (s *StubHandlers) DeleteFunction(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := nsKey(ns, name)
@@ -317,7 +317,7 @@ func (s *StubHandlers) ReplaceRoute(_ context.Context, ns v1.NamespaceName, name
 	return rt, nil
 }
 
-func (s *StubHandlers) DeleteRoute(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+func (s *StubHandlers) DeleteRoute(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := nsKey(ns, name)
@@ -373,7 +373,7 @@ func (s *StubHandlers) ReplaceService(_ context.Context, ns v1.NamespaceName, na
 	return svc, nil
 }
 
-func (s *StubHandlers) DeleteService(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+func (s *StubHandlers) DeleteService(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := nsKey(ns, name)
@@ -429,7 +429,7 @@ func (s *StubHandlers) ReplaceEventSource(_ context.Context, ns v1.NamespaceName
 	return es, nil
 }
 
-func (s *StubHandlers) DeleteEventSource(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+func (s *StubHandlers) DeleteEventSource(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := nsKey(ns, name)
@@ -485,7 +485,7 @@ func (s *StubHandlers) ReplaceConfigMap(_ context.Context, ns v1.NamespaceName, 
 	return cfg, nil
 }
 
-func (s *StubHandlers) DeleteConfigMap(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+func (s *StubHandlers) DeleteConfigMap(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := nsKey(ns, name)
@@ -541,7 +541,7 @@ func (s *StubHandlers) ReplaceSecret(_ context.Context, ns v1.NamespaceName, nam
 	return sec, nil
 }
 
-func (s *StubHandlers) DeleteSecret(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+func (s *StubHandlers) DeleteSecret(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := nsKey(ns, name)
@@ -597,7 +597,7 @@ func (s *StubHandlers) ReplaceKVStore(_ context.Context, ns v1.NamespaceName, na
 	return ks, nil
 }
 
-func (s *StubHandlers) DeleteKVStore(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+func (s *StubHandlers) DeleteKVStore(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := nsKey(ns, name)
@@ -657,7 +657,7 @@ func (s *StubHandlers) ReplaceBucket(_ context.Context, ns v1.NamespaceName, nam
 	return b, nil
 }
 
-func (s *StubHandlers) DeleteBucket(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+func (s *StubHandlers) DeleteBucket(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := nsKey(ns, name)
@@ -713,7 +713,7 @@ func (s *StubHandlers) ReplaceSite(_ context.Context, ns v1.NamespaceName, name 
 	return si, nil
 }
 
-func (s *StubHandlers) DeleteSite(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+func (s *StubHandlers) DeleteSite(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := nsKey(ns, name)
@@ -742,7 +742,7 @@ func (s *StubHandlers) ReplaceApp(_ context.Context, ns v1.NamespaceName, name v
 	return stubPut(s, s.apps, "App", nsKey(ns, name), app, true)
 }
 
-func (s *StubHandlers) DeleteApp(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+func (s *StubHandlers) DeleteApp(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
 	return stubDelete(s, s.apps, "App", ns, name)
 }
 
@@ -893,7 +893,7 @@ func (s *StubHandlers) ReplaceIdentity(_ context.Context, ns v1.NamespaceName, n
 	return id, nil
 }
 
-func (s *StubHandlers) DeleteIdentity(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+func (s *StubHandlers) DeleteIdentity(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := nsKey(ns, name)
@@ -947,7 +947,7 @@ func (s *StubHandlers) ReplaceRole(_ context.Context, ns v1.NamespaceName, name 
 	return ro, nil
 }
 
-func (s *StubHandlers) DeleteRole(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+func (s *StubHandlers) DeleteRole(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := nsKey(ns, name)
@@ -1001,7 +1001,7 @@ func (s *StubHandlers) ReplaceRolesAssignment(_ context.Context, ns v1.Namespace
 	return ra, nil
 }
 
-func (s *StubHandlers) DeleteRolesAssignment(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+func (s *StubHandlers) DeleteRolesAssignment(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := nsKey(ns, name)
@@ -1012,7 +1012,7 @@ func (s *StubHandlers) DeleteRolesAssignment(_ context.Context, ns v1.NamespaceN
 	return nil
 }
 
-func (s *StubHandlers) DeleteCatalogService(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+func (s *StubHandlers) DeleteCatalogService(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := nsKey(ns, name)
@@ -1068,7 +1068,7 @@ func (s *StubHandlers) ReplacePolicy(_ context.Context, ns v1.NamespaceName, nam
 	return pol, nil
 }
 
-func (s *StubHandlers) DeletePolicy(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+func (s *StubHandlers) DeletePolicy(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := nsKey(ns, name)
@@ -1124,7 +1124,7 @@ func (s *StubHandlers) ReplaceGrant(_ context.Context, ns v1.NamespaceName, name
 	return g, nil
 }
 
-func (s *StubHandlers) DeleteGrant(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+func (s *StubHandlers) DeleteGrant(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := nsKey(ns, name)
@@ -1180,7 +1180,7 @@ func (s *StubHandlers) ReplaceEgressPolicy(_ context.Context, ns v1.NamespaceNam
 	return ep, nil
 }
 
-func (s *StubHandlers) DeleteEgressPolicy(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+func (s *StubHandlers) DeleteEgressPolicy(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := nsKey(ns, name)
@@ -1236,7 +1236,7 @@ func (s *StubHandlers) ReplaceInvocation(_ context.Context, ns v1.NamespaceName,
 	return inv, nil
 }
 
-func (s *StubHandlers) DeleteInvocation(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+func (s *StubHandlers) DeleteInvocation(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := nsKey(ns, name)
@@ -1290,7 +1290,7 @@ func (s *StubHandlers) ReplaceRuntimeClass(_ context.Context, name v1.ObjectName
 	return rc, nil
 }
 
-func (s *StubHandlers) DeleteRuntimeClass(_ context.Context, name v1.ObjectName) error {
+func (s *StubHandlers) DeleteRuntimeClass(_ context.Context, name v1.ObjectName, _ string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := string(name)
@@ -1344,7 +1344,7 @@ func (s *StubHandlers) ReplaceWorkerNode(_ context.Context, name v1.ObjectName, 
 	return wr, nil
 }
 
-func (s *StubHandlers) DeleteWorkerNode(_ context.Context, name v1.ObjectName) error {
+func (s *StubHandlers) DeleteWorkerNode(_ context.Context, name v1.ObjectName, _ string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := string(name)
@@ -1398,7 +1398,7 @@ func (s *StubHandlers) ReplaceGateway(_ context.Context, name v1.ObjectName, gw 
 	return gw, nil
 }
 
-func (s *StubHandlers) DeleteGateway(_ context.Context, name v1.ObjectName) error {
+func (s *StubHandlers) DeleteGateway(_ context.Context, name v1.ObjectName, _ string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := string(name)
@@ -1457,7 +1457,7 @@ func (s *StubHandlers) ReplaceWorkflow(_ context.Context, ns v1.NamespaceName, n
 	return wf, nil
 }
 
-func (s *StubHandlers) DeleteWorkflow(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+func (s *StubHandlers) DeleteWorkflow(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := nsKey(ns, name)
@@ -1513,7 +1513,7 @@ func (s *StubHandlers) ReplaceWorkflowRun(_ context.Context, ns v1.NamespaceName
 	return run, nil
 }
 
-func (s *StubHandlers) DeleteWorkflowRun(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+func (s *StubHandlers) DeleteWorkflowRun(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := nsKey(ns, name)
@@ -1567,7 +1567,7 @@ func (s *StubHandlers) ReplaceSensor(_ context.Context, ns v1.NamespaceName, nam
 	return se, nil
 }
 
-func (s *StubHandlers) DeleteSensor(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+func (s *StubHandlers) DeleteSensor(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := nsKey(ns, name)

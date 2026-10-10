@@ -51,6 +51,7 @@ type namespacedGet struct {
 
 // namespacedDelete is input for delete on a namespaced resource.
 type namespacedDelete struct {
+	IfMatchParams
 	Namespace v1.NamespaceName `path:"namespace"`
 	Name      v1.ObjectName    `path:"name"`
 }
@@ -67,6 +68,7 @@ type clusterScopedGet struct {
 
 // clusterScopedDelete is input for delete on a cluster-scoped resource.
 type clusterScopedDelete struct {
+	IfMatchParams
 	Name v1.ObjectName `path:"name"`
 }
 
@@ -122,9 +124,13 @@ func registerNamespace(api huma.API, h Handlers) {
 		OperationID: "replaceNamespace", Method: http.MethodPut, Path: base + "/{name}",
 		Tags: []string{"Namespace"},
 	}, func(ctx context.Context, in *struct {
+		IfMatchParams
 		Name v1.ObjectName `path:"name"`
 		Body v1.Namespace
 	}) (*namespaceOutput, error) {
+		if err := withReplaceVersion(in.IfMatchParams, &in.Body.ObjectMeta); err != nil {
+			return nil, wrapFaultError(err)
+		}
 		ns, err := h.ReplaceNamespace(ctx, in.Name, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)
@@ -136,7 +142,7 @@ func registerNamespace(api huma.API, h Handlers) {
 		OperationID: "deleteNamespace", Method: http.MethodDelete, Path: base + "/{name}",
 		Tags: []string{"Namespace"},
 	}, func(ctx context.Context, in *clusterScopedDelete) (*struct{}, error) {
-		return nil, wrapFaultError(h.DeleteNamespace(ctx, in.Name))
+		return nil, wrapFaultError(h.DeleteNamespace(ctx, in.Name, in.rv))
 	})
 }
 
@@ -147,6 +153,7 @@ type createResourceGroupInput struct {
 	Body      v1.ResourceGroup
 }
 type deleteResourceGroupInput struct {
+	IfMatchParams
 	Namespace v1.NamespaceName `path:"namespace"`
 	Name      v1.ObjectName    `path:"name"`
 	Force     bool             `query:"force" doc:"delete the members first; their protections apply (ADR-0170)"`
@@ -201,10 +208,14 @@ func registerResourceGroup(api huma.API, h Handlers) {
 		OperationID: "replaceResourceGroup", Method: http.MethodPut, Path: base + "/{name}",
 		Tags: []string{"ResourceGroup"},
 	}, func(ctx context.Context, in *struct {
+		IfMatchParams
 		Namespace v1.NamespaceName `path:"namespace"`
 		Name      v1.ObjectName    `path:"name"`
 		Body      v1.ResourceGroup
 	}) (*resourceGroupOutput, error) {
+		if err := withReplaceVersion(in.IfMatchParams, &in.Body.ObjectMeta); err != nil {
+			return nil, wrapFaultError(err)
+		}
 		rg, err := h.ReplaceResourceGroup(ctx, in.Namespace, in.Name, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)
@@ -216,7 +227,7 @@ func registerResourceGroup(api huma.API, h Handlers) {
 		OperationID: "deleteResourceGroup", Method: http.MethodDelete, Path: base + "/{name}",
 		Tags: []string{"ResourceGroup"},
 	}, func(ctx context.Context, in *deleteResourceGroupInput) (*struct{}, error) {
-		return nil, wrapFaultError(h.DeleteResourceGroup(ctx, in.Namespace, in.Name, in.Force))
+		return nil, wrapFaultError(h.DeleteResourceGroup(ctx, in.Namespace, in.Name, in.Force, in.rv))
 	})
 }
 
@@ -276,10 +287,14 @@ func registerFunction(api huma.API, h Handlers) {
 		OperationID: "replaceFunction", Method: http.MethodPut, Path: base + "/{name}",
 		Tags: []string{"Function"},
 	}, func(ctx context.Context, in *struct {
+		IfMatchParams
 		Namespace v1.NamespaceName `path:"namespace"`
 		Name      v1.ObjectName    `path:"name"`
 		Body      v1.Function
 	}) (*functionOutput, error) {
+		if err := withReplaceVersion(in.IfMatchParams, &in.Body.ObjectMeta); err != nil {
+			return nil, wrapFaultError(err)
+		}
 		fn, err := h.ReplaceFunction(ctx, in.Namespace, in.Name, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)
@@ -291,7 +306,7 @@ func registerFunction(api huma.API, h Handlers) {
 		OperationID: "deleteFunction", Method: http.MethodDelete, Path: base + "/{name}",
 		Tags: []string{"Function"},
 	}, func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {
-		return nil, wrapFaultError(h.DeleteFunction(ctx, in.Namespace, in.Name))
+		return nil, wrapFaultError(h.DeleteFunction(ctx, in.Namespace, in.Name, in.rv))
 	})
 }
 
@@ -386,10 +401,14 @@ func registerRoute(api huma.API, h Handlers) {
 		OperationID: "replaceRoute", Method: http.MethodPut, Path: base + "/{name}",
 		Tags: []string{"Route"},
 	}, func(ctx context.Context, in *struct {
+		IfMatchParams
 		Namespace v1.NamespaceName `path:"namespace"`
 		Name      v1.ObjectName    `path:"name"`
 		Body      v1.Route
 	}) (*routeOutput, error) {
+		if err := withReplaceVersion(in.IfMatchParams, &in.Body.ObjectMeta); err != nil {
+			return nil, wrapFaultError(err)
+		}
 		rt, err := h.ReplaceRoute(ctx, in.Namespace, in.Name, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)
@@ -401,6 +420,6 @@ func registerRoute(api huma.API, h Handlers) {
 		OperationID: "deleteRoute", Method: http.MethodDelete, Path: base + "/{name}",
 		Tags: []string{"Route"},
 	}, func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {
-		return nil, wrapFaultError(h.DeleteRoute(ctx, in.Namespace, in.Name))
+		return nil, wrapFaultError(h.DeleteRoute(ctx, in.Namespace, in.Name, in.rv))
 	})
 }

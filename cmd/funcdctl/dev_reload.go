@@ -27,7 +27,7 @@ import (
 // whole desired state, so applying it again is safe.
 func applyDesired(ctx context.Context, c *sdk.Client, obj v1.Object) error {
 	var err error
-	for range devApplyAttempts {
+	for range applyAttempts {
 		if _, err = c.Apply(ctx, obj); fault.KindOf(err) != fault.Conflict {
 			return err
 		}

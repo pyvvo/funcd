@@ -142,27 +142,26 @@ func (a *cli) appRollbackCmd() *cobra.Command {
 				return err
 			}
 			rev := revObj.(*v1.AppRevision)
-			appObj, err := c.Get(ctx, v1.KindApp, namespace, appName)
+			applied, err := applyRead(ctx, c, v1.KindApp, namespace, appName, func(obj v1.Object) (bool, error) {
+				app := obj.(*v1.App)
+				if !v1.ControlledBy(rev.OwnerReferences, v1.KindApp, app.UID) {
+					return false, fault.Conflictf(op,
+						"AppRevision %s is not a revision of App %s (uid %s): its controller is another App", name, appName, app.UID)
+				}
+				same, err := sameAppSpec(app.Spec, rev.Spec.Spec)
+				if same || err != nil {
+					return false, err
+				}
+				paused := app.Spec.Paused
+				app.Spec = rev.Spec.Spec
+				app.Spec.Paused = paused
+				return true, nil
+			})
 			if err != nil {
 				return err
 			}
-			app := appObj.(*v1.App)
-			if !v1.ControlledBy(rev.OwnerReferences, v1.KindApp, app.UID) {
-				return fault.Conflictf(op, "AppRevision %s is not a revision of App %s (uid %s): its controller is another App",
-					name, appName, app.UID)
-			}
-			same, err := sameAppSpec(app.Spec, rev.Spec.Spec)
-			if err != nil {
-				return err
-			}
-			if same {
+			if !applied {
 				return a.writef("no change: App %s already has the spec of %s\n", appName, name)
-			}
-			paused := app.Spec.Paused
-			app.Spec = rev.Spec.Spec
-			app.Spec.Paused = paused
-			if _, err := c.Apply(ctx, app); err != nil {
-				return err
 			}
 			return a.writef("applied App %s with the spec of %s\n", appName, name)
 		},
@@ -186,7 +185,7 @@ func sameAppSpec(x, y v1.AppSpec) (bool, error) {
 }
 
 // appPauseCmd builds the pause or resume verb (ADR-0212 Decision 9): it sets the App's spec.paused, as
-// workflowPauseCmd sets a run's, through applyAppChange.
+// workflowPauseCmd sets a run's, through applyRead.
 func (a *cli) appPauseCmd(verb string, paused bool) *cobra.Command {
 	var ns string
 	cmd := &cobra.Command{
@@ -199,7 +198,11 @@ func (a *cli) appPauseCmd(verb string, paused bool) *cobra.Command {
 				return err
 			}
 			name := v1.ObjectName(args[0])
-			err = applyAppChange(cmd.Context(), c, v1.NamespaceName(nsOrDefault(ns)), name, func(app *v1.App) { app.Spec.Paused = paused })
+			_, err = applyRead(cmd.Context(), c, v1.KindApp, v1.NamespaceName(nsOrDefault(ns)), name,
+				func(obj v1.Object) (bool, error) {
+					obj.(*v1.App).Spec.Paused = paused
+					return true, nil
+				})
 			if err != nil {
 				return err
 			}
@@ -208,26 +211,4 @@ func (a *cli) appPauseCmd(verb string, paused bool) *cobra.Command {
 	}
 	cmd.Flags().StringVarP(&ns, "namespace", "n", "", "namespace (default: default)")
 	return cmd
-}
-
-// appApplyAttempts bounds a read-change-apply of an App that loses its update with a Conflict (ADR-0210 Decision 4,
-// the bound of funcdctl dev's re-apply).
-const appApplyAttempts = 5
-
-// applyAppChange reads the App, lets change edit it and applies it; a PUT that answers fault.Conflict re-reads and
-// retries, at most appApplyAttempts times (ADR-0210 Decision 4's read-change-apply).
-func applyAppChange(ctx context.Context, c *sdk.Client, ns v1.NamespaceName, name v1.ObjectName, change func(*v1.App)) error {
-	var err error
-	for range appApplyAttempts {
-		var obj v1.Object
-		if obj, err = c.Get(ctx, v1.KindApp, ns, name); err != nil {
-			return err
-		}
-		app := obj.(*v1.App)
-		change(app)
-		if _, err = c.Apply(ctx, app); fault.KindOf(err) != fault.Conflict {
-			return err
-		}
-	}
-	return err
 }
