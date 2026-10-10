@@ -16,8 +16,6 @@ import (
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/eventing"
-	"github.com/pyvvo/funcd/internal/kvstore"
-	kvmemory "github.com/pyvvo/funcd/internal/kvstore/memory"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
 )
@@ -381,10 +379,10 @@ func (l *scriptLister) List(_ context.Context, _ v1.NamespaceName, bucket v1.Obj
 	return out, nil
 }
 
-// blobRig is a Source + BlobWatcher over a memory store, a scripted lister and a KV-backed watermark.
+// blobRig is a Source + BlobWatcher over a memory store, a scripted lister and in-memory seen lists.
 type blobRig struct {
 	st      store.Store
-	kv      kvstore.KV
+	marks   *eventing.MemWatermark
 	lister  *scriptLister
 	pub     *capturePublisher
 	watcher *eventing.BlobWatcher
@@ -393,11 +391,9 @@ type blobRig struct {
 
 func newBlobRig(t *testing.T, marks eventing.Watermark) *blobRig {
 	t.Helper()
-	r := &blobRig{st: newStore(), kv: kvmemory.New(), lister: &scriptLister{}, pub: &capturePublisher{}}
+	r := &blobRig{st: newStore(), marks: eventing.NewMemWatermark(), lister: &scriptLister{}, pub: &capturePublisher{}}
 	if marks == nil {
-		wm, err := eventing.NewKVWatermark(r.kv)
-		require.NoError(t, err)
-		marks = wm
+		marks = r.marks
 	}
 	var err error
 	r.watcher, err = eventing.NewBlobWatcher(r.lister, r.pub, marks, time.Second, nil)
@@ -417,9 +413,13 @@ func (r *blobRig) poll() { r.watcher.PollOnce(context.Background()) }
 
 func (r *blobRig) records(t *testing.T, source string) []string {
 	t.Helper()
-	keys, err := r.kv.List(context.Background(), "_eventing/blobwatch/team-a/"+source+"/")
-	require.NoError(t, err)
-	return keys
+	var events []string
+	r.marks.Range(func(ns v1.NamespaceName, src, event v1.ObjectName, _ eventing.SeenList) {
+		if ns == "team-a" && string(src) == source {
+			events = append(events, string(event))
+		}
+	})
+	return events
 }
 
 // fired lists "<bucket>/<key>" of every published blob event, in order.
@@ -579,8 +579,7 @@ func TestScenarioBucketMissKeepsRecord(t *testing.T) {
 func TestScenarioStartSweepDeletesOrphans(t *testing.T) {
 	t.Parallel()
 	r := newBlobRig(t, nil)
-	wm, err := eventing.NewKVWatermark(r.kv)
-	require.NoError(t, err)
+	wm := r.marks
 	rec := eventing.SeenList{Bucket: "raw", Prefix: "drop/", Seen: map[string]string{"drop/a": "1-1"}}
 	for _, src := range []v1.ObjectName{"drops", "drops2"} {
 		require.NoError(t, wm.Save(context.Background(), "team-a", src, "arrived", rec))

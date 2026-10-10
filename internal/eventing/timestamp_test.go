@@ -11,7 +11,6 @@ import (
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/blob"
-	kvmemory "github.com/pyvvo/funcd/internal/kvstore/memory"
 )
 
 // scenario: every-timestamp-utc-millisecond — a blob object modified at …35.965999999 (UTC+2) fires an event whose
@@ -19,8 +18,7 @@ import (
 func TestEveryTimestampUTCMillisecond(t *testing.T) {
 	re := regexp.MustCompile(`"time":"` + v1.TimestampPattern[1:len(v1.TimestampPattern)-1] + `"`)
 	pub := &capturePub{}
-	wm, err := NewKVWatermark(kvmemory.New())
-	require.NoError(t, err)
+	wm := NewMemWatermark()
 	lister := &fakeLister{}
 	w := newWatcher(t, lister, pub, wm)
 	mt := time.Date(2026, 10, 7, 22, 3, 35, 965999999, time.FixedZone("UTC+2", 2*60*60))

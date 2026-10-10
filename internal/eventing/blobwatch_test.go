@@ -17,7 +17,6 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
-	kvmemory "github.com/pyvvo/funcd/internal/kvstore/memory"
 )
 
 // fakeLister is a scripted BucketLister: it returns the objects whose Key is under the requested prefix,
@@ -90,8 +89,7 @@ func newWatcher(t *testing.T, lister BucketLister, pub Publisher, marks Watermar
 func TestScenarioObjectCreatedEmitsEvent(t *testing.T) {
 	lister := &fakeLister{}
 	pub := &capturePub{}
-	wm, err := NewKVWatermark(kvmemory.New())
-	require.NoError(t, err)
+	wm := NewMemWatermark()
 	w := newWatcher(t, lister, pub, wm)
 
 	mt := time.Now().UTC().Truncate(time.Second)
@@ -115,8 +113,7 @@ func TestScenarioObjectCreatedEmitsEvent(t *testing.T) {
 func TestScenarioDedupNoRefire(t *testing.T) {
 	lister := &fakeLister{}
 	pub := &capturePub{}
-	wm, err := NewKVWatermark(kvmemory.New())
-	require.NoError(t, err)
+	wm := NewMemWatermark()
 	w := newWatcher(t, lister, pub, wm)
 
 	obj := blob.Attributes{Key: "drop/a.parquet", Size: 10, ModTime: time.Now().UTC().Truncate(time.Second)}
@@ -133,8 +130,7 @@ func TestScenarioDedupNoRefire(t *testing.T) {
 func TestScenarioPrefixScoped(t *testing.T) {
 	lister := &fakeLister{}
 	pub := &capturePub{}
-	wm, err := NewKVWatermark(kvmemory.New())
-	require.NoError(t, err)
+	wm := NewMemWatermark()
 	w := newWatcher(t, lister, pub, wm)
 
 	lister.set(blob.Attributes{Key: "other/c.parquet", Size: 7, ModTime: time.Now().UTC()})
@@ -150,28 +146,24 @@ func TestScenarioPrefixScoped(t *testing.T) {
 	require.Equal(t, "drop/in.parquet", mustData(t, pub.snapshot()[0]).Key)
 }
 
-// scenario: restart-no-replay — the watermark is PERSISTED, so a fresh watcher over the same KV does not
+// scenario: restart-no-replay — the watermark is PERSISTED, so a fresh watcher over the same seen lists does not
 // re-emit the whole prefix after a restart.
 func TestScenarioRestartNoReplay(t *testing.T) {
-	kv := kvmemory.New()
+	wm := NewMemWatermark()
 	lister := &fakeLister{}
 	lister.set(
 		blob.Attributes{Key: "drop/a.parquet", Size: 1, ModTime: time.Now().UTC().Add(-2 * time.Second).Truncate(time.Second)},
 		blob.Attributes{Key: "drop/b.parquet", Size: 2, ModTime: time.Now().UTC().Add(-1 * time.Second).Truncate(time.Second)},
 	)
 
-	wm1, err := NewKVWatermark(kv)
-	require.NoError(t, err)
 	pub1 := &capturePub{}
-	w1 := newWatcher(t, lister, pub1, wm1)
+	w1 := newWatcher(t, lister, pub1, wm)
 	w1.poll(context.Background())
 	require.Equal(t, 2, pub1.count(), "first run emits both objects once")
 
-	// "Restart": a brand-new watcher + watermark over the SAME KV, same registration, same listing.
-	wm2, err := NewKVWatermark(kv)
-	require.NoError(t, err)
+	// "Restart": a brand-new watcher over the SAME seen lists, same registration, same listing.
 	pub2 := &capturePub{}
-	w2 := newWatcher(t, lister, pub2, wm2)
+	w2 := newWatcher(t, lister, pub2, wm)
 	w2.poll(context.Background())
 	require.Equal(t, 0, pub2.count(), "a restart reloads the persisted watermark and replays nothing")
 }
@@ -186,8 +178,7 @@ func TestScenarioExternalS3WriteDetected(t *testing.T) {
 	t.Cleanup(func() { _ = shared.Close() })
 
 	pub := &capturePub{}
-	wm, err := NewKVWatermark(kvmemory.New())
-	require.NoError(t, err)
+	wm := NewMemWatermark()
 	w := newWatcher(t, s3ViewLister{shared: shared}, pub, wm)
 
 	// A write the watcher never made, landing where the ADR-0080 S3 frontend puts a `raw` object under `drop/`.
@@ -211,8 +202,7 @@ func (l s3ViewLister) List(ctx context.Context, ns v1.NamespaceName, bucket v1.O
 func TestBlobWatcherTieBreak(t *testing.T) {
 	lister := &fakeLister{}
 	pub := &capturePub{}
-	wm, err := NewKVWatermark(kvmemory.New())
-	require.NoError(t, err)
+	wm := NewMemWatermark()
 	w := newWatcher(t, lister, pub, wm)
 
 	mt := time.Now().UTC().Truncate(time.Second)
@@ -481,9 +471,7 @@ func TestBlobWatcherPurgeDuringPoll(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
-			kv := kvmemory.New()
-			wm, err := NewKVWatermark(kv)
-			require.NoError(t, err)
+			wm := NewMemWatermark()
 			lister := &fakeLister{}
 			lister.set(blob.Attributes{Key: "drop/a", Size: 1, ModTime: mt}, blob.Attributes{Key: "drop/b", Size: 1, ModTime: mt})
 			pub := &hookPub{}
@@ -492,9 +480,9 @@ func TestBlobWatcherPurgeDuringPoll(t *testing.T) {
 
 			w.poll(ctx)
 			require.Equal(t, 1, pub.count(), "the stale poll publishes nothing more")
-			keys, err := kv.List(ctx, kvWatermarkPrefix+"lake/drops/")
+			srcs, err := wm.ListSources(ctx)
 			require.NoError(t, err)
-			require.Empty(t, keys, "the stale poll saves nothing")
+			require.Empty(t, srcs, "the stale poll saves nothing")
 
 			w.poll(ctx)
 			require.Equal(t, 1+tc.nextPollPub, pub.count())
@@ -546,8 +534,7 @@ func TestBlobWatcherSaveOutcomeOnlyForLiveEntry(t *testing.T) {
 
 func mustWM(t *testing.T) Watermark {
 	t.Helper()
-	wm, err := NewKVWatermark(kvmemory.New())
-	require.NoError(t, err)
+	wm := NewMemWatermark()
 	return wm
 }
 

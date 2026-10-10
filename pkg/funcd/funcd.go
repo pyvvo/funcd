@@ -53,7 +53,7 @@ import (
 	edgetls "github.com/pyvvo/funcd/internal/edge/tls"
 	"github.com/pyvvo/funcd/internal/eventing"
 	"github.com/pyvvo/funcd/internal/eventing/deadletter"
-	dlbadger "github.com/pyvvo/funcd/internal/eventing/deadletter/badger"
+	"github.com/pyvvo/funcd/internal/eventing/eventstore"
 	"github.com/pyvvo/funcd/internal/funclog"
 	"github.com/pyvvo/funcd/internal/funclog/compact"
 	"github.com/pyvvo/funcd/internal/funclog/logread"
@@ -369,7 +369,8 @@ type Platform struct {
 	workflowEngine    *workflow.Engine        // owns the run goroutines; drained on shutdown (ADR-0146)
 	workflowRetention time.Duration           // terminal-run retention horizon (0 ⇒ no sweep)
 
-	deadLetters          deadletter.Store          // eventing DLQ (ADR-0118); closed on shutdown
+	eventStore           *eventstore.Store         // eventing's durable store (ADR-0201): dead letters + seen lists; closed on shutdown
+	deadLetters          deadletter.Store          // the event store's dead-letter tenant (ADR-0118)
 	sensorReconciler     *sensor.Reconciler        // owns the retry workers (drained on shutdown) + the DLQ replay seam
 	deadletterRetention  time.Duration             // DLQ TTL horizon (0 ⇒ no TTL eviction)
 	deadletterMaxEntries int                       // DLQ per-namespace count cap (0 ⇒ unbounded)
@@ -761,15 +762,29 @@ func (p *Platform) buildControlPlane() error {
 	// Sensor subscribes to it (the action side — invoke/start-workflow — moved off the Source).
 	fanout := eventing.NewFanout()
 	p.eventFanout = fanout
-	// ADR-0119 (F83): the blob EventSource poll watcher. It lists the SAME s3BucketFor substrate view
-	// external S3-frontend writes land in (writer-agnostic detection over blob.Bucket.List), persists its
-	// per-event dedup watermark over the in-tree kvstore.KV, and publishes a named CloudEvent per new object
-	// onto the same Fanout the Sensor subscribes to. Registered by the EventSource reconciler; Run in Run().
-	watermark, err := eventing.NewKVWatermark(c.kvStore)
+	// ADR-0201: the event store holds the Sensor's dead letters and the BlobWatcher's seen lists, on disk when
+	// deadletterDataDir is set, else in memory. On disk, the seen lists an earlier release kept in the KV move in
+	// before the BlobWatcher is built; a failed move fails the start and keeps the KV records for the next one.
+	es, err := eventstore.Open(eventstore.Config{InMemory: c.deadletterDataDir == "", Dir: c.deadletterDataDir})
 	if err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), op, "build blob watermark store")
+		return fault.Wrapf(err, fault.KindOf(err), op, "open event store")
 	}
-	blobWatcher, err := eventing.NewBlobWatcher(blobBucketLister{resolve: s3BucketFor(c.blob, c.store)}, fanout, watermark, c.blobPollInterval, p.logger)
+	p.eventStore = es
+	if c.deadletterDataDir != "" {
+		ctx := context.Background()
+		moved, merr := eventstore.MigrateSeenLists(ctx, c.kvStore, es)
+		if merr != nil {
+			return fault.Wrapf(merr, fault.KindOf(merr), op, "move the blob seen lists out of the KV")
+		}
+		if moved > 0 {
+			p.logger.InfoContext(ctx, "moved blob seen lists from the KV into the event store", "count", moved)
+		}
+	}
+	// ADR-0119 (F83): the blob EventSource poll watcher. It lists the SAME s3BucketFor substrate view
+	// external S3-frontend writes land in (writer-agnostic detection over blob.Bucket.List), keeps its per-event
+	// seen lists in the event store, and publishes a named CloudEvent per new object onto the same Fanout the
+	// Sensor subscribes to. Registered by the EventSource reconciler; Run in Run().
+	blobWatcher, err := eventing.NewBlobWatcher(blobBucketLister{resolve: s3BucketFor(c.blob, c.store)}, fanout, es.SeenLists(), c.blobPollInterval, p.logger)
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build blob watcher")
 	}
@@ -829,13 +844,9 @@ func (p *Platform) buildControlPlane() error {
 	ctrl.Watches(v1.KindFunction.GVK(), fnReconciler.MapPoolDisplaced) // an asleep member a newcomer displaces (ADR-0193)
 	ctrl.Register(v1.KindService.GVK(), dispatcher)
 	ctrl.Register(v1.KindEventSource.GVK(), source)
-	// ADR-0118 (F85): the eventing DLQ — a dedicated Badger store (in-memory when deadletterDataDir is
-	// empty, mirroring the run store), independent of the bus driver. It backs the Sensor's bounded
-	// action-delivery retry + dead-lettering and the control-plane read/replay surface.
-	dlq, dlErr := dlbadger.New(dlbadger.Config{InMemory: c.deadletterDataDir == "", Dir: c.deadletterDataDir})
-	if dlErr != nil {
-		return fault.Wrapf(dlErr, fault.KindOf(dlErr), op, "build dead-letter store")
-	}
+	// ADR-0118 (F85): the eventing DLQ — the event store's dead-letter tenant, independent of the bus driver. It
+	// backs the Sensor's bounded action-delivery retry + dead-lettering and the control-plane read/replay surface.
+	dlq := es.DeadLetters()
 	p.deadLetters = dlq
 	p.deadletterRetention = c.deadletterRetention
 	p.deadletterMaxEntries = c.deadletterMaxEntries
@@ -1554,8 +1565,8 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 		if p.workflowRuns != nil {
 			errs = append(errs, p.workflowRuns.Close())
 		}
-		if p.deadLetters != nil { // ADR-0118: close the dedicated DLQ Badger instance
-			errs = append(errs, p.deadLetters.Close())
+		if p.eventStore != nil { // ADR-0201: after Run stopped the BlobWatcher and the Sensor
+			errs = append(errs, p.eventStore.Close())
 		}
 		if p.invokeTmpDir != "" { // after the runtime stopped the workers that dial its sockets (issue #330)
 			errs = append(errs, os.RemoveAll(p.invokeTmpDir))

@@ -205,7 +205,8 @@ func WithWorkflowMaxStepsInFlight(n int) Option {
 // WithDeadLetterQueue tunes the eventing DLQ + bounded action-delivery retry (ADR-0118, F85). The DLQ is
 // always wired; without this option it runs in memory with the daemon config's defaults (720h retention, a
 // per-namespace cap of 1000, three delivery attempts). This option sets its persistence + tunables: dataDir
-// is the dedicated Badger directory (empty ⇒ in-memory, the InMemory-preset / memory-storage path),
+// is the event store's Badger directory, holding the dead letters and the blob seen lists (ADR-0201; empty ⇒
+// in-memory, the InMemory-preset / memory-storage path),
 // deliveryAttempts is the bounded-retry cap before a failed workflow:/function: delivery is dead-lettered
 // (< 1 ⇒ 3), retention is how long parked entries survive the periodic sweep (0 ⇒ never), and maxEntries is
 // the per-namespace count cap (0 ⇒ unbounded). cmd/funcd derives dataDir as <dataDir>/deadletter from config.

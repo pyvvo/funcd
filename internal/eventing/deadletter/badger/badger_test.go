@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	bdb "github.com/dgraph-io/badger/v4"
+
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/eventing/deadletter"
 	"github.com/pyvvo/funcd/internal/eventing/deadletter/badger"
@@ -22,6 +24,19 @@ func TestBadgerContract(t *testing.T) {
 		}
 		t.Cleanup(func() { _ = s.Close() })
 		return s
+	})
+}
+
+// TestBadgerOnDBContract runs the same contract against the dl/ tenant over a DB its caller owns (ADR-0201).
+func TestBadgerOnDBContract(t *testing.T) {
+	deadletter.Contract(t, func(t *testing.T) deadletter.Store {
+		t.Helper()
+		db, err := bdb.Open(badger.Options(badger.Config{InMemory: true}))
+		if err != nil {
+			t.Fatalf("open badger: %v", err)
+		}
+		t.Cleanup(func() { _ = db.Close() })
+		return badger.NewOnDB(db)
 	})
 }
 
