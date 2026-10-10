@@ -128,17 +128,29 @@ type Config struct {
 		// MaxStoresPerNamespace is the per-namespace KVStore count cap enforced at admission (ADR-0072);
 		// 0 ⇒ the default (100); a negative value disables the quota.
 		MaxStoresPerNamespace int `json:"maxStoresPerNamespace,omitempty" env:"FUNCD_KVSTORE_MAX_STORES_PER_NAMESPACE"`
-		// Backup is the opt-in DR export of the KV instance to object storage (ADR-0067), off by default.
-		// Enabled without a Target, or with Engine memory ⇒ fault.Invalid at startup; ignored with a warning when
+		// Backup is the opt-in DR export of the KV instance (ADR-0067) on the common backup format (ADR-0209), off
+		// by default. The target group (Target, CredentialsFile, SingleWriter) and the encryption group each come
+		// whole from here when their lead key is set, else from backup: (ResolveKVBackup); ignored with a warning when
 		// Storage.Mode is memory. Interval/Rebaseline/RebaselineRetry are durations ("30s"); RebaselineRetry is the
-		// delay after a failed re-baseline (ADR-0195).
+		// delay after a failed re-baseline (ADR-0195). Retention is the bases' ladder in hours, days and weeks.
 		Backup struct {
 			Enabled         bool   `json:"enabled,omitempty" env:"FUNCD_KVSTORE_BACKUP_ENABLED"`
 			Target          string `json:"target,omitempty" env:"FUNCD_KVSTORE_BACKUP_TARGET"`
+			CredentialsFile string `json:"credentialsFile,omitempty" env:"FUNCD_KVSTORE_BACKUP_CREDENTIALS_FILE"`
+			SingleWriter    bool   `json:"singleWriter,omitempty" env:"FUNCD_KVSTORE_BACKUP_SINGLE_WRITER"`
 			Interval        string `json:"interval,omitempty" env:"FUNCD_KVSTORE_BACKUP_INTERVAL"`
 			Rebaseline      string `json:"rebaseline,omitempty" env:"FUNCD_KVSTORE_BACKUP_REBASELINE"`
 			RebaselineRetry string `json:"rebaselineRetry,omitempty" env:"FUNCD_KVSTORE_BACKUP_REBASELINE_RETRY"`
 			ChunkBytes      int    `json:"chunkBytes,omitempty" env:"FUNCD_KVSTORE_BACKUP_CHUNK_BYTES" validate:"min=0"`
+			Encryption      struct {
+				Recipients []string `json:"recipients,omitempty" env:"FUNCD_KVSTORE_BACKUP_ENCRYPTION_RECIPIENTS" envSeparator:","`
+				None       bool     `json:"none,omitempty" env:"FUNCD_KVSTORE_BACKUP_ENCRYPTION_NONE"`
+			} `json:"encryption,omitempty"`
+			Retention struct {
+				Hourly int `json:"hourly,omitempty" env:"FUNCD_KVSTORE_BACKUP_RETENTION_HOURLY"`
+				Daily  int `json:"daily,omitempty" env:"FUNCD_KVSTORE_BACKUP_RETENTION_DAILY"`
+				Weekly int `json:"weekly,omitempty" env:"FUNCD_KVSTORE_BACKUP_RETENTION_WEEKLY"`
+			} `json:"retention,omitempty"`
 		} `json:"backup,omitempty"`
 		// Cdc is the opt-in change-feed of the KV instance to the bus (ADR-0068), off by default. Enabled
 		// without a Sink, or with Engine memory ⇒ fault.Invalid at startup; ignored with a warning when Storage.Mode
@@ -440,6 +452,10 @@ func defaults() Config {
 	c.Backup.Retention.Daily = 30
 	c.Backup.Retention.Weekly = 12
 	c.Backup.Retention.Verified = 2
+	// The KV export's bases (ADR-0209 Decision 5): the same ladder.
+	c.Kvstore.Backup.Retention.Hourly = 48
+	c.Kvstore.Backup.Retention.Daily = 30
+	c.Kvstore.Backup.Retention.Weekly = 12
 	// funcd upgrade's pre-upgrade pins kept (ADR-0207, Q10).
 	c.Backup.Retention.PreUpgrade = 3
 	// Safe mode (ADR-0207): held after 3 unclean starts, stopped after 6; a start is clean after 10 minutes.

@@ -73,13 +73,23 @@ storage:
 #   engine: memory                # memory | badger. default: memory (ephemeral)
 #   dataDir: ""                   # KV Badger dir when engine: badger. default: <dataDir>/kv
 #   maxStoresPerNamespace: 100    # KVStore count cap per namespace (ADR-0072); negative ⇒ no cap. default: 100
-#   backup:                       # DR export to object storage (ADR-0067); engine: badger only
+#   backup:                       # DR export under kv/ (ADR-0067, ADR-0209); engine: badger only
 #     enabled: false              # default: false
-#     target: ""                  # bucket URL; required when enabled. default: ""
+#     target: ""                  # own s3:// or file:/// target, not backup.target; empty ⇒ the target group of backup:. default: ""
+#     credentialsFile: ""         # with target only: s3:// credentials file. default: "" (the SDK chain)
+#     singleWriter: false         # with target only: as backup.singleWriter. default: false
 #     interval: 30s               # incremental export cadence. default: 30s
-#     rebaseline: 24h             # full re-baseline cadence. default: 24h
+#     rebaseline: 24h             # full re-baseline cadence; below ⌈retention.hourly/24⌉ days. default: 24h
 #     rebaselineRetry: 1h         # delay before retrying a failed re-baseline. default: 1h
-#     chunkBytes: 67108864        # max bytes per exported object. default: 67108864 (64 MiB)
+#     chunkBytes: 8388608         # max bytes per part, at most 8388608 (8 MiB). default: 8388608
+#     encryption:                 # set recipients or none here, else backup.encryption applies whole
+#       recipients:               # age recipients files, at least 2 distinct recipients. default: none
+#         - /etc/funcd/kv-backup-recipients.txt
+#       none: false               # store unsealed (the KV holds no Secret). default: false
+#     retention:                  # the bases' lifecycle rules funcd logs at start (examples/backup-lifecycle.md)
+#       hourly: 48                # hours; also the term of kv/inc/. default: 48
+#       daily: 30                 # days; 0 = no daily class. default: 30
+#       weekly: 12                # weeks; 0 = no weekly class. default: 12
 #   cdc:                          # change feed to the bus (ADR-0068); engine: badger only
 #     enabled: false              # default: false
 #     sink: ""                    # bus subject; required when enabled. default: ""

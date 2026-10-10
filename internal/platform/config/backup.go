@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -83,9 +84,11 @@ func (f *findings) warn(key, format string, args ...any) {
 
 // CheckBackup applies ADR-0205 Decision 3's rows that read only the config, errors first; the daemon's Validate and
 // F112 run it. The run times are checked always, every other row once backup.target is set; without a target, a
-// backup key off its default is reported as ignored. kvstore.backup.* and blob.* are checked elsewhere.
+// backup key off its default is reported as ignored, backup.encryption.* not while the KV export takes it. The
+// kvstore.backup.* rows are ADR-0209's (checkKVBackup); blob.* is checked elsewhere.
 func (c Config) CheckBackup() []Finding {
 	var f findings
+	c.checkKVBackup(&f)
 	var t BackupTimes
 	timesOK := true
 	for _, k := range c.backupTimeKeys(&t) {
@@ -95,7 +98,11 @@ func (c Config) CheckBackup() []Finding {
 		}
 	}
 	if c.Backup.Target == "" {
-		if keys := c.backupKeysOffDefault(); len(keys) > 0 {
+		keys := c.backupKeysOffDefault()
+		if c.kvInheritsEncryption() {
+			keys = slices.DeleteFunc(keys, func(k string) bool { return k == platformRecipientsKey || k == platformEncryptionNoneKey })
+		}
+		if len(keys) > 0 {
 			f.warn(keys[0], "%s set without backup.target: ignored, no platform backup runs", strings.Join(keys, ", "))
 		}
 		return append(f.errs, f.warns...)
