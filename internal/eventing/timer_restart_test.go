@@ -1,6 +1,8 @@
 package eventing
 
 import (
+	"bytes"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -152,4 +154,63 @@ func TestGridFloor(t *testing.T) {
 			require.Equal(t, tc.want, gridFloor(tc.created, tc.now, day))
 		})
 	}
+}
+
+// storeCronEvent rewrites the stored bytes of team-a/clock so its 24h event name is an ADR-0211 cron event, as a
+// newer funcd writes it: no interval, which this funcd decodes leniently as 0.
+func storeCronEvent(t *testing.T, eng store.Engine, name string) {
+	t.Helper()
+	bucket := v1.KindEventSource.GVK().String()
+	interval := []byte(`{"name":"` + name + `","interval":"24h"}`)
+	cron := []byte(`{"name":"` + name + `","cron":"0 3 * * *","timeZone":"Europe/Paris"}`)
+	require.NoError(t, eng.Update(t.Context(), func(tx store.Txn) error {
+		raw, found, err := tx.Get(bucket, "team-a/clock")
+		require.NoError(t, err)
+		require.True(t, found)
+		require.Equal(t, 1, bytes.Count(raw, interval), "stored event %s", raw)
+		return tx.Put(bucket, "team-a/clock", bytes.Replace(raw, interval, cron, 1))
+	}))
+}
+
+func TestIssue872_ZeroIntervalEventSkipped(t *testing.T) {
+	ctx := t.Context()
+	eng := memory.New()
+	st := store.New(eng)
+	obj, ok := v1.NewObject(v1.KindEventSource)
+	require.True(t, ok)
+	es := obj.(*v1.EventSource)
+	es.Name, es.Namespace, es.ResourceGroup = "clock", "team-a", "rg1"
+	es.Spec.Timer = &v1.TimerSource{Events: []v1.TimerEvent{
+		{Name: "daily", Interval: v1.Duration(24 * time.Hour)},
+		{Name: "nightly", Interval: v1.Duration(24 * time.Hour)},
+	}}
+	created, err := st.Create(ctx, es)
+	require.NoError(t, err)
+	t0 := time.Time(created.(*v1.EventSource).CreationTime)
+	req := controller.Request{GVK: v1.KindEventSource.GVK(), Namespace: "team-a", Name: "clock"}
+	boot := func(logs *bytes.Buffer) *Source {
+		src, err := NewSource(Deps{Store: st, Publisher: &capturePub{}, Clock: clock.NewManual(t0.Add(time.Hour)), Logger: slog.New(slog.NewTextHandler(logs, nil))})
+		require.NoError(t, err)
+		_, err = src.Reconcile(ctx, req)
+		require.NoError(t, err)
+		return src
+	}
+	requireSkipped := func(src *Source, logs *bytes.Buffer) {
+		t.Helper()
+		require.Equal(t, 1, src.ActiveTimers())
+		require.Equal(t, []eventKey{{ns: "team-a", source: "clock", event: "daily"}}, src.dueTimers(t0.Add(24*time.Hour)))
+		require.Contains(t, logs.String(), "level=WARN")
+		require.Contains(t, logs.String(), "event=nightly")
+	}
+
+	var runLogs bytes.Buffer
+	running := boot(&runLogs)
+	require.Equal(t, 2, running.ActiveTimers())
+	storeCronEvent(t, eng, "nightly")
+	_, err = running.Reconcile(ctx, req)
+	require.NoError(t, err)
+	requireSkipped(running, &runLogs)
+
+	var bootLogs bytes.Buffer
+	requireSkipped(boot(&bootLogs), &bootLogs)
 }
