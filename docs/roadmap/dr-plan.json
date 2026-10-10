@@ -15,6 +15,7 @@
     "ADR-0201",
     "ADR-0202",
     "ADR-0203",
+    "ADR-0204",
     "ADR-0210"
   ],
   "items": [
@@ -23,16 +24,6 @@
       "title": "Cron ADR (Apps epoch)",
       "features": [],
       "depends_on": []
-    },
-    {
-      "id": "ADR-0204",
-      "title": "backup encryption and key escrow (Accepted 2026-10-10)",
-      "features": [
-        "F109"
-      ],
-      "depends_on": [
-        "ADR-0203"
-      ]
     },
     {
       "id": "ADR-0205",
@@ -127,22 +118,19 @@
   ],
   "waves": {
     "1": [
-      "ADR-0204",
+      "ADR-0205",
+      "ADR-0206",
       "X-CRON"
     ],
     "2": [
-      "ADR-0205",
-      "ADR-0206"
-    ],
-    "3": [
       "ADR-0207",
       "ADR-0208",
       "ADR-0209"
     ],
-    "4": [
+    "3": [
       "ADR-0222"
     ],
-    "5": [
+    "4": [
       "ADR-0223"
     ]
   }
