@@ -1,6 +1,7 @@
 # ADR-0184: Stateless listing push-down — the S3 gateway seeks storage from the marker instead of re-listing
 
 - **Status**: Implemented (2026-10-05)
+- **Superseded in part by**: [ADR-0203](0203-backup-format-targets-and-fencing.md) (2026-10-10) — Decision 5: the `file://` walk also skips the temporary files of the backup writer.
 - **Date**: 2026-10-05
 - **Deciders**: green-0-rabbit
 - **Tags**: blob, s3, listing, port, performance

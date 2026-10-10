@@ -3,24 +3,17 @@
   "accepted": [
     "ADR-0006",
     "ADR-0007",
+    "ADR-0018",
     "ADR-0065",
     "ADR-0067",
     "ADR-0094",
     "ADR-0118",
     "ADR-0119",
-    "ADR-0157"
+    "ADR-0157",
+    "ADR-0195",
+    "ADR-0196"
   ],
   "items": [
-    {
-      "id": "ADR-0195",
-      "title": "KV backup delete records (Accepted, implementation in progress)",
-      "features": [
-        "F36"
-      ],
-      "depends_on": [
-        "ADR-0067"
-      ]
-    },
     {
       "id": "X-CRON",
       "title": "Cron ADR (Apps epoch)",
@@ -28,8 +21,8 @@
       "depends_on": []
     },
     {
-      "id": "DR-1",
-      "title": "store layer for backup",
+      "id": "ADR-0202",
+      "title": "store layer for backup (Accepted 2026-10-10)",
       "features": [
         "F109"
       ],
@@ -39,96 +32,103 @@
       ]
     },
     {
-      "id": "DR-6",
-      "title": "event store",
+      "id": "ADR-0201",
+      "title": "event store (Accepted 2026-10-10)",
       "features": [
         "F110"
       ],
       "depends_on": [
         "ADR-0118",
         "ADR-0119",
-        "ADR-0157"
+        "ADR-0157",
+        "ADR-0202"
       ]
     },
     {
-      "id": "DR-2",
-      "title": "backup format, targets and fencing",
+      "id": "ADR-0203",
+      "title": "backup format, targets and fencing (Accepted 2026-10-10)",
       "features": [
         "F109"
       ],
       "depends_on": [
-        "DR-1",
-        "ADR-0007"
+        "ADR-0202",
+        "ADR-0007",
+        "ADR-0196"
       ]
     },
     {
-      "id": "DR-3",
-      "title": "backup encryption and key escrow",
+      "id": "ADR-0204",
+      "title": "backup encryption and key escrow (Accepted 2026-10-10)",
       "features": [
         "F109"
       ],
       "depends_on": [
-        "DR-2"
+        "ADR-0203"
       ]
     },
     {
-      "id": "DR-4",
-      "title": "backup operation",
+      "id": "ADR-0205",
+      "title": "backup operation (Accepted 2026-10-10)",
       "features": [
         "F109"
       ],
       "depends_on": [
-        "DR-2",
-        "DR-3"
+        "ADR-0203",
+        "ADR-0204"
       ]
     },
     {
-      "id": "DR-5",
-      "title": "restore and held boot",
+      "id": "ADR-0206",
+      "title": "restore and held boot (Accepted 2026-10-10)",
       "features": [
         "F109"
       ],
       "depends_on": [
-        "DR-1",
-        "DR-2",
-        "DR-3",
-        "DR-6",
-        "ADR-0195",
+        "ADR-0202",
+        "ADR-0203",
+        "ADR-0204",
+        "ADR-0201",
         "ADR-0094"
       ]
     },
     {
-      "id": "DR-7",
-      "title": "pre-upgrade snapshot and safe mode",
+      "id": "ADR-0207",
+      "title": "pre-upgrade snapshot and safe mode (Accepted 2026-10-10)",
       "features": [
         "F109"
       ],
       "depends_on": [
-        "DR-2",
-        "DR-5"
+        "ADR-0203",
+        "ADR-0205",
+        "ADR-0206"
       ]
     },
     {
-      "id": "DR-8",
-      "title": "blob store backend and backup target",
+      "id": "ADR-0208",
+      "title": "blob store backend and backup target (Accepted 2026-10-10)",
       "features": [
         "F111"
       ],
       "depends_on": [
-        "DR-2",
+        "ADR-0203",
+        "ADR-0204",
+        "ADR-0205",
+        "ADR-0206",
         "ADR-0007"
       ]
     },
     {
-      "id": "DR-9",
-      "title": "KV backup on the common format",
+      "id": "ADR-0209",
+      "title": "KV backup on the common format (Accepted 2026-10-10)",
       "features": [
         "F111"
       ],
       "depends_on": [
         "ADR-0195",
-        "DR-2",
-        "DR-3"
+        "ADR-0203",
+        "ADR-0204",
+        "ADR-0205",
+        "ADR-0206"
       ]
     },
     {
@@ -138,11 +138,22 @@
         "F111"
       ],
       "depends_on": [
-        "DR-2",
-        "DR-3",
-        "DR-8",
-        "DR-9",
+        "ADR-0203",
+        "ADR-0204",
+        "ADR-0208",
+        "ADR-0209",
         "X-CRON"
+      ]
+    },
+    {
+      "id": "ADR-0210",
+      "title": "API optimistic concurrency: PUT and DELETE honor the client's version (If-Match), issue #844 (Accepted 2026-10-10)",
+      "features": [
+        "F109"
+      ],
+      "depends_on": [
+        "ADR-0018",
+        "ADR-0202"
       ]
     },
     {
@@ -152,35 +163,37 @@
         "F112"
       ],
       "depends_on": [
-        "DR-4",
+        "ADR-0205",
         "DR-10"
       ]
     }
   ],
   "waves": {
     "1": [
-      "ADR-0195",
-      "DR-1",
-      "DR-6",
+      "ADR-0202",
       "X-CRON"
     ],
     "2": [
-      "DR-2"
+      "ADR-0201",
+      "ADR-0203",
+      "ADR-0210"
     ],
     "3": [
-      "DR-3",
-      "DR-8"
+      "ADR-0204"
     ],
     "4": [
-      "DR-4",
-      "DR-5",
-      "DR-9"
+      "ADR-0205",
+      "ADR-0206"
     ],
     "5": [
-      "DR-7",
-      "DR-10"
+      "ADR-0207",
+      "ADR-0208",
+      "ADR-0209"
     ],
     "6": [
+      "DR-10"
+    ],
+    "7": [
       "DR-L1"
     ]
   }

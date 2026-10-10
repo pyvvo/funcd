@@ -1,6 +1,7 @@
 # ADR-0195: KV backup delete records — every delete reaches the backup chain
 
 - **Status**: Implemented (2026-10-08)
+- **Superseded in part by**: [ADR-0209](0209-kv-backup-on-the-common-format.md) (2026-10-10) — Decision 2's prune of old segments, Decision 5's `format` marker in `manifest.json` and the manifest contracts; its Decisions 1 to 4 and 6 stand.
 - **Date**: 2026-10-07
 - **Deciders**: green-0-rabbit
 - **Tags**: kvstore, backup, disaster-recovery, badger

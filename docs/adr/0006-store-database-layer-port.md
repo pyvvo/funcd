@@ -1,6 +1,7 @@
 # ADR-0006: Store / database-layer port (`store.Store`, slatedb via UniFFI + cgo)
 
 - **Status**: Implemented — **engine choice superseded by [ADR-0065](0065-metastore-badger-engine.md)**
+- **Superseded in part by**: [ADR-0202](0202-platform-store-snapshot-and-timeline.md) (2026-10-10) — Decision §2's decimal-string resource version, now `<timeline>-<n>`, and the `Store` and `Engine` interfaces, which gain the snapshot methods.
   (slatedb/cgo → pure-Go Badger; this ADR's `store.Store` port, RV/generation/watch/keying semantics, and
   the memory engine are retained unchanged)
 - **Date**: 2026-06-14 (revised same day post-judge: "one binary" now requires static-linking

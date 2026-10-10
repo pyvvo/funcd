@@ -1,6 +1,7 @@
 # ADR-0043: Single-binary substrate selection — file by default, `--memory` for ephemeral (refines ADR-0028)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0208](0208-blob-store-backend-and-backup-target.md) (2026-10-10) — Decision 2's file default for the blob store and its Out item "S3/remote blob": the blob store may live on an S3-compatible target.
 - **Date**: 2026-06-16 (**Accepted 2026-06-16** — judge: right decision, leak argument + metastore-honesty verified, advance as-is. **Implemented 2026-06-16** — review: pass, all 3 scenarios tested, leak-free, full suite green.)
 - **Deciders**: green-0-rabbit
 - **Tags**: daemon, single-binary, substrate, durability, cli

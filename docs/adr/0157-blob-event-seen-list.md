@@ -1,6 +1,7 @@
 # ADR-0157: Blob event seen list — a pruned, located record replaces the blob watermark cursor
 
 - **Status**: Implemented (2026-10-05)
+- **Superseded in part by**: [ADR-0201](0201-event-store.md) (2026-10-10) — the placement of the seen list: JSON in `kvstore.KV` under `_eventing/blobwatch/`, Decision 7 (no migration, now a one-time move) and the Consequences on the KV backup export, the value cap and the KV prefix `List`.
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged once)
 - **Deciders**: green-0-rabbit
 - **Tags**: eventing, eventsource, blob, watermark, dedup, kvstore

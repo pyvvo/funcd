@@ -1,6 +1,7 @@
 # ADR-0024: `funcdcli` + Go SDK — the client-access layer (`pkg/sdk`, `cmd/funcdcli`)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0210](0210-api-optimistic-concurrency-if-match.md) (2026-10-10) — the `Apply` contract's note on ADR-0018's read-then-update replace: a body version makes `Apply`'s PUT conditional.
 - **Date**: 2026-06-14 (**Implemented 2026-06-14** · **Accepted 2026-06-14** after judge pass — no Blockers left open. Folded the judge's
   **Blocker** (B1: `v1.NewObject` is `(Object, bool)` + the kind accessor is `GroupVersionKind()`, not a
   `GetGVK` — contract made compile-true) and three **Majors**: M1 `problemToFault` keys on the JSON `status`
