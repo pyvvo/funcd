@@ -138,6 +138,7 @@ func (c Config) checkBackupRetention(f *findings) bool {
 		{"backup.retention.daily", r.Daily, 0},
 		{"backup.retention.weekly", r.Weekly, 0},
 		{"backup.retention.verified", r.Verified, 1},
+		{"backup.retention.preUpgrade", r.PreUpgrade, 1},
 	} {
 		if k.v < k.least {
 			f.refuse(k.key, "%s is %d: want at least %d", k.key, k.v, k.least)
@@ -224,6 +225,7 @@ func (c Config) backupKeysOffDefault() []string {
 		{"backup.retention.daily", b.Retention.Daily != d.Retention.Daily},
 		{"backup.retention.weekly", b.Retention.Weekly != d.Retention.Weekly},
 		{"backup.retention.verified", b.Retention.Verified != d.Retention.Verified},
+		{"backup.retention.preUpgrade", b.Retention.PreUpgrade != d.Retention.PreUpgrade},
 		{"backup.encryption.recipients", len(b.Encryption.Recipients) > 0},
 		{"backup.encryption.none", b.Encryption.None},
 		{"backup.interval", offDuration(b.Interval, defaultBackupInterval)},
