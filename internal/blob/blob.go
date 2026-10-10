@@ -44,6 +44,9 @@ type Attributes struct {
 type PutOptions struct {
 	ContentType string
 	Metadata    map[string]string
+	// IfNotExist creates the object only when its key is absent; a present key is fault.Conflict and the object
+	// stays unchanged (ADR-0203).
+	IfNotExist bool
 }
 
 // SignMethod is the typed HTTP method a SignedURL grants (ADR-0002: typed over magic strings).

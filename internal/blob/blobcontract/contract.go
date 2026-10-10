@@ -7,7 +7,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5" //nolint:gosec // the port's content digest is MD5 (ADR-0159), not a security primitive
+	"fmt"
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -30,6 +32,50 @@ func RunContract(t *testing.T, newBucket func(t *testing.T) blob.Bucket) {
 	t.Run("put-options-roundtrip", func(t *testing.T) { testPutOptionsRoundtrip(t, newBucket(t)) })
 	t.Run("attributes-not-found", func(t *testing.T) { testAttributesNotFound(t, newBucket(t)) })
 	t.Run("list-after", func(t *testing.T) { testListAfter(t, newBucket(t)) })
+	t.Run("create-if-absent-is-atomic", func(t *testing.T) { CreateIfAbsentIsAtomic(t, newBucket(t)) })
+}
+
+// CreateIfAbsentIsAtomic: of 16 concurrent IfNotExist puts of one key exactly one succeeds and the others are
+// fault.Conflict; the winner's bytes stay, a later create is fault.Conflict, and no other key is listed (ADR-0203).
+func CreateIfAbsentIsAtomic(t *testing.T, b blob.Bucket) {
+	ctx := context.Background()
+	const writers = 16
+	errs := make([]error, writers)
+	var wg sync.WaitGroup
+	for i := range writers {
+		wg.Go(func() {
+			errs[i] = b.Put(ctx, "cia/k", fmt.Appendf(nil, "writer %d", i), blob.PutOptions{IfNotExist: true})
+		})
+	}
+	wg.Wait()
+	winner := -1
+	for i, err := range errs {
+		switch {
+		case err == nil && winner < 0:
+			winner = i
+		case err == nil:
+			t.Fatalf("writers %d and %d both created cia/k", winner, i)
+		case fault.KindOf(err) != fault.Conflict:
+			t.Fatalf("writer %d: kind=%v want conflict (%v)", i, fault.KindOf(err), err)
+		}
+	}
+	if winner < 0 {
+		t.Fatal("no writer created cia/k")
+	}
+	want := fmt.Appendf(nil, "writer %d", winner)
+	if err := b.Put(ctx, "cia/k", []byte("late"), blob.PutOptions{IfNotExist: true}); fault.KindOf(err) != fault.Conflict {
+		t.Fatalf("a create of a present key: kind=%v want conflict", fault.KindOf(err))
+	}
+	if got, err := b.Get(ctx, "cia/k"); err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("Get(cia/k): got (%q, %v) want %q", got, err, want)
+	}
+	items, err := b.List(ctx, "")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if got := keysOf(items); !slices.Equal(got, []string{"cia/k"}) {
+		t.Fatalf("List: got %v want [cia/k]", got)
+	}
 }
 
 // testListAfter: ListAfter returns the keys under prefix strictly after `after`, sorted, at most limit, with
