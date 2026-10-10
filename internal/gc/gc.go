@@ -9,7 +9,6 @@ import (
 	"errors"
 	"log/slog"
 	"slices"
-	"strconv"
 	"sync"
 	"time"
 
@@ -180,15 +179,16 @@ func childKinds() []v1.Kind {
 	return out
 }
 
-// watchOwner records each Deleted key of one owner kind. A closed stream re-watches from its last
-// resourceVersion; an expired one (Unavailable), or none seen, re-watches from now and requests a sweep.
+// watchOwner records each Deleted key of one owner kind. A closed stream re-watches from its resume point
+// (store.ResumePoint); one the store cannot replay from (Unavailable: expired, or of another timeline), or
+// none seen, re-watches from now and requests a sweep.
 func (c *Collector) watchOwner(ctx context.Context, kind v1.Kind, w store.Watch) {
-	var last uint64
+	var last store.Version
 	for {
 		for ev := range w.ResultChan() {
 			m := ev.Object.GetObjectMeta()
-			if rv, err := strconv.ParseUint(m.ResourceVersion, 10, 64); err == nil && rv > last {
-				last = rv
+			if v, err := store.ParseVersion(m.ResourceVersion); err == nil {
+				last = store.ResumePoint(last, v)
 			}
 			if ev.Type == store.Deleted {
 				c.record(ownerKey{kind: kind, ns: m.Namespace, name: m.Name}, false)
@@ -200,19 +200,19 @@ func (c *Collector) watchOwner(ctx context.Context, kind v1.Kind, w store.Watch)
 				return
 			}
 			opts := store.WatchOptions{}
-			if last > 0 {
-				opts.SinceResourceVersion = strconv.FormatUint(last, 10)
+			if last != (store.Version{}) {
+				opts.SinceResourceVersion = last.String()
 			}
 			nw, err := c.store.Watch(ctx, kind.GVK(), opts)
 			if err == nil {
-				if last == 0 {
+				if last == (store.Version{}) {
 					c.record(ownerKey{}, true)
 				}
 				w = nw
 				break
 			}
 			if fault.KindOf(err) == fault.Unavailable {
-				last = 0
+				last = store.Version{}
 				continue
 			}
 			c.log.WarnContext(ctx, "re-watch failed", "kind", kind, "error", err)

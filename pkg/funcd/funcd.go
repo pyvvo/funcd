@@ -1761,8 +1761,9 @@ func (r cedarMetaReader) Get(ctx context.Context, gvk v1.GroupVersionKind, ns v1
 // policySource adapts store.Store to cedarauth.PolicySource (ADR-0074/0117): it lists every user
 // v1.Policy AND compiles every v1.EgressPolicy into synthetic v1.Policy Cedar text (ADR-0117, M1 — the
 // egress grant reaches the PDP through the SAME PolicySource path, listed alongside KindPolicy). The
-// cache revision is the store-wide resourceVersion (monotonic, bumped by ANY write — a Policy,
-// EgressPolicy, OR namespace Function add/remove), so an appliesTo-affecting Function change recompiles.
+// cache revision joins the lists' collection resourceVersions, each the store-wide one (changed by ANY
+// write — a Policy, EgressPolicy, RolesAssignment, OR namespace Function add/remove), so an
+// appliesTo-affecting Function change recompiles; the cache compares it for equality only (ADR-0202).
 type policySource struct{ s store.Store }
 
 func (p policySource) Policies(ctx context.Context) ([]v1.Policy, string, error) {
@@ -1814,9 +1815,7 @@ func (p policySource) Policies(ctx context.Context) ([]v1.Policy, string, error)
 	}
 	out = append(out, raPols...)
 
-	// The store-wide resourceVersion is monotonic across kinds; the freshest of the lists keys the cache
-	// so a Policy/EgressPolicy/Function/RolesAssignment write recompiles (ADR-0117 M1 cache-revision fix).
-	rev := maxRevision(polRes.ResourceVersion, epRes.ResourceVersion, fnRes.ResourceVersion, raRV)
+	rev := strings.Join([]string{polRes.ResourceVersion, epRes.ResourceVersion, fnRes.ResourceVersion, raRV}, ",")
 	return out, rev, nil
 }
 
@@ -1934,23 +1933,6 @@ func (p *Platform) reconcileEgressWorkers(ctx context.Context, prev map[netip.Ad
 		}
 	}
 	return live
-}
-
-// maxRevision returns the numerically-greatest of the store resourceVersions (all uint64-formatted); a
-// non-numeric value sorts as 0. Used to key the policy cache on the freshest cross-kind write.
-func maxRevision(revs ...string) string {
-	best := ""
-	var bestN uint64
-	for _, r := range revs {
-		n, perr := strconv.ParseUint(r, 10, 64)
-		if perr != nil {
-			continue
-		}
-		if best == "" || n > bestN {
-			best, bestN = r, n
-		}
-	}
-	return best
 }
 
 // s3BucketFor builds the s3gateway BucketFor resolver (ADR-0080): it maps an S3

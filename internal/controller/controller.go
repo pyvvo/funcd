@@ -9,7 +9,6 @@ package controller
 import (
 	"context"
 	"log/slog"
-	"strconv"
 	"sync"
 	"time"
 
@@ -166,12 +165,13 @@ func (c *Controller) Run(ctx context.Context) error {
 // watch enqueues the Requests for every change on the gvk's watch stream (Added /
 // Modified / Deleted, uniformly). The store closes the stream of a watcher that
 // falls behind (ADR-0006), so a close before ctx ends re-watches: it resumes after
-// the highest resourceVersion seen, or re-lists when the store no longer retains it.
+// the resourceVersion seen last (store.ResumePoint), or re-lists when the store no
+// longer retains it or it is of another timeline (ADR-0202).
 // A re-list reports only the objects that still exist, so it also enqueues the
 // Requests each object seen before it last drove: a delete lost in the gap still
 // reaches its reconcile as NotFound.
 func (c *Controller) watch(ctx context.Context, gvk v1.GroupVersionKind, w store.Watch) {
-	var seen uint64
+	var seen store.Version
 	known := map[Request][]Request{}
 	for {
 		seen = c.forward(ctx, gvk, w, seen, known)
@@ -180,7 +180,7 @@ func (c *Controller) watch(ctx context.Context, gvk v1.GroupVersionKind, w store
 			return
 		}
 		c.logger.WarnContext(ctx, "store closed the watch, re-watching",
-			"kind", gvk.Kind, "resourceVersion", seen)
+			"kind", gvk.Kind, "resourceVersion", seen.String())
 		var relisted bool
 		if w, relisted = c.rewatch(ctx, gvk, seen); w == nil {
 			return
@@ -198,8 +198,8 @@ func (c *Controller) watch(ctx context.Context, gvk v1.GroupVersionKind, w store
 
 // forward enqueues the Requests of every event of w until its stream closes or ctx
 // ends, records in known the Requests each existing object drove, and returns the
-// highest object resourceVersion seen.
-func (c *Controller) forward(ctx context.Context, gvk v1.GroupVersionKind, w store.Watch, seen uint64, known map[Request][]Request) uint64 {
+// resume point after the object resourceVersions seen.
+func (c *Controller) forward(ctx context.Context, gvk v1.GroupVersionKind, w store.Watch, seen store.Version, known map[Request][]Request) store.Version {
 	_, reconciled := c.reconcilers[gvk]
 	for {
 		select {
@@ -210,8 +210,8 @@ func (c *Controller) forward(ctx context.Context, gvk v1.GroupVersionKind, w sto
 				return seen
 			}
 			meta := ev.Object.GetObjectMeta()
-			if rv, err := strconv.ParseUint(meta.ResourceVersion, 10, 64); err == nil && rv > seen {
-				seen = rv
+			if v, err := store.ParseVersion(meta.ResourceVersion); err == nil {
+				seen = store.ResumePoint(seen, v)
 			}
 			key := Request{GVK: gvk, Namespace: meta.Namespace, Name: meta.Name}
 			var reqs []Request
@@ -234,11 +234,14 @@ func (c *Controller) forward(ctx context.Context, gvk v1.GroupVersionKind, w sto
 }
 
 // rewatch opens a Watch that replays the changes after resourceVersion seen,
-// falling back to a full re-list when that revision is too old (fault.Unavailable),
-// and retries other failures with backoff. It reports whether the Watch is a
-// re-list, and returns a nil Watch once ctx ends.
-func (c *Controller) rewatch(ctx context.Context, gvk v1.GroupVersionKind, seen uint64) (store.Watch, bool) {
-	opts := store.WatchOptions{SinceResourceVersion: strconv.FormatUint(seen, 10)}
+// falling back to a full re-list when none was seen or the store cannot replay
+// from it (fault.Unavailable), and retries other failures with backoff. It reports
+// whether the Watch is a re-list, and returns a nil Watch once ctx ends.
+func (c *Controller) rewatch(ctx context.Context, gvk v1.GroupVersionKind, seen store.Version) (store.Watch, bool) {
+	var opts store.WatchOptions
+	if seen != (store.Version{}) {
+		opts.SinceResourceVersion = seen.String()
+	}
 	for failures := 1; ; failures++ {
 		w, err := c.store.Watch(ctx, gvk, opts)
 		if err == nil {

@@ -14,6 +14,8 @@ import (
 	"github.com/dgraph-io/badger/v4/options"
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/snapshot"
+	snapbadger "github.com/pyvvo/funcd/internal/snapshot/badger"
 	"github.com/pyvvo/funcd/internal/workflow/runstate"
 )
 
@@ -142,6 +144,16 @@ func (s *store) List(_ context.Context, opts runstate.ListOptions) ([]*runstate.
 		return nil, fault.Wrapf(err, fault.Internal, op, "listing runs")
 	}
 	return out, nil
+}
+
+// Snapshot emits every run record from one read transaction (ADR-0202); the run state has no version.
+func (s *store) Snapshot(ctx context.Context, emit func(snapshot.Record) error) (string, error) {
+	return "", snapbadger.Snapshot(ctx, s.db, emit)
+}
+
+// Load fills an empty run store from a snapshot of one.
+func (s *store) Load(ctx context.Context, next func() (snapshot.Record, error)) error {
+	return snapbadger.Load(ctx, s.db, next, nil)
 }
 
 func (s *store) Close() error {

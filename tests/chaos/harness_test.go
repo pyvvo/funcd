@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"testing"
 	"time"
 
@@ -19,6 +18,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/process"
+	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/testkit/langmod"
 	"github.com/pyvvo/funcd/pkg/funcd"
 	"github.com/pyvvo/funcd/pkg/sdk"
@@ -102,11 +102,12 @@ func (h *harness) get(t *testing.T, name string) *v1.Function {
 
 func (h *harness) phase(t *testing.T, name string) v1.Phase { return h.get(t, name).Status.Phase }
 
-// rv returns the function's metadata.resourceVersion. It advances on every store write, so a
-// reconcile storm makes it climb fast; quiescence makes it stop (ADR-0047).
+// rv returns the counter of the function's metadata.resourceVersion. It advances on every store write
+// inside the store's one timeline, so a reconcile storm makes it climb fast; quiescence makes it stop
+// (ADR-0047).
 func (h *harness) rv(t *testing.T, name string) uint64 {
 	t.Helper()
-	v, err := strconv.ParseUint(h.get(t, name).GetObjectMeta().ResourceVersion, 10, 64)
+	v, err := store.ParseVersion(h.get(t, name).GetObjectMeta().ResourceVersion)
 	require.NoError(t, err)
-	return v
+	return v.N
 }

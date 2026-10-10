@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"strconv"
 	"sync"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -71,11 +70,12 @@ func (s *store) removeSub(id int) {
 	s.mu.Unlock()
 }
 
-// Watch implements list-then-watch. Without SinceResourceVersion it snapshots the
+// Watch implements list-then-watch. Without SinceResourceVersion it lists the
 // current matching set as Added then streams live; with one it replays the change
 // ring from that revision then streams live. A resourceVersion older than the
-// retained ring returns fault.Unavailable (the caller re-lists). ctx cancellation
-// or Stop ends the watch promptly and leaks no goroutine.
+// retained ring, or of another timeline (a plain one included, ADR-0202), returns
+// fault.Unavailable (the caller re-lists). ctx cancellation or Stop ends the watch
+// promptly and leaks no goroutine.
 func (s *store) Watch(ctx context.Context, gvk v1.GroupVersionKind, opts WatchOptions) (Watch, error) {
 	if s.initErr != nil {
 		return nil, s.initErr
@@ -89,25 +89,29 @@ func (s *store) Watch(ctx context.Context, gvk v1.GroupVersionKind, opts WatchOp
 	sub.sinceRV = startRV
 
 	if opts.SinceResourceVersion == "" {
-		snap, err := s.snapshot(ctx, gvk, opts.Namespace, startRV)
+		evs, err := s.initialEvents(ctx, gvk, opts.Namespace, startRV)
 		if err != nil {
 			s.mu.Unlock()
 			return nil, err
 		}
-		initial = snap
+		initial = evs
 	} else {
-		since, err := strconv.ParseUint(opts.SinceResourceVersion, 10, 64)
+		since, err := ParseVersion(opts.SinceResourceVersion)
 		if err != nil {
 			s.mu.Unlock()
 			return nil, fault.Invalidf("store.Watch", "invalid resourceVersion %q", opts.SinceResourceVersion)
 		}
-		if since < startRV {
-			if len(s.ring) == 0 || s.ring[0].rv > since+1 {
+		if since.Timeline != s.timeline {
+			s.mu.Unlock()
+			return nil, fault.Unavailablef("store.Watch", "resourceVersion %q is of another timeline, too old; re-list", opts.SinceResourceVersion)
+		}
+		if since.N < startRV {
+			if len(s.ring) == 0 || s.ring[0].rv > since.N+1 {
 				s.mu.Unlock()
-				return nil, fault.Unavailablef("store.Watch", "resourceVersion %d is too old; re-list", since)
+				return nil, fault.Unavailablef("store.Watch", "resourceVersion %q is too old; re-list", opts.SinceResourceVersion)
 			}
 			for _, re := range s.ring {
-				if re.rv > since && subMatches(sub, re.ev) {
+				if re.rv > since.N && subMatches(sub, re.ev) {
 					initial = append(initial, re.ev)
 				}
 			}
@@ -125,10 +129,12 @@ func (s *store) Watch(ctx context.Context, gvk v1.GroupVersionKind, opts WatchOp
 	return w, nil
 }
 
-// snapshot returns the current matching objects (with rv <= maxRV) as Added
-// events. Objects created concurrently after the snapshot point (rv > maxRV) are
-// skipped here and delivered on the live stream instead, so there are no dupes.
-func (s *store) snapshot(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, maxRV uint64) ([]Event, error) {
+// initialEvents returns the current matching objects as Added events. An object of
+// this timeline written after the list point (rv > maxRV) is skipped here and
+// delivered on the live stream instead, so there are no dupes; an object of another
+// timeline (restored, or plain from before timelines) predates the current one and
+// is listed (ADR-0202).
+func (s *store) initialEvents(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, maxRV uint64) ([]Event, error) {
 	bucket := gvk.String()
 	var evs []Event
 	err := s.eng.View(ctx, func(tx Txn) error {
@@ -140,11 +146,11 @@ func (s *store) snapshot(ctx context.Context, gvk v1.GroupVersionKind, ns v1.Nam
 			if ns != "" && obj.GetNamespace() != ns {
 				return nil
 			}
-			rv, perr := strconv.ParseUint(obj.GetObjectMeta().ResourceVersion, 10, 64)
+			v, perr := ParseVersion(obj.GetObjectMeta().ResourceVersion)
 			if perr != nil {
-				return fault.Internalf("store.snapshot", "corrupt resourceVersion: %v", perr)
+				return fault.Internalf("store.initialEvents", "corrupt resourceVersion: %v", perr)
 			}
-			if rv > maxRV {
+			if v.Timeline == s.timeline && v.N > maxRV {
 				return nil
 			}
 			evs = append(evs, Event{Type: Added, Object: obj})

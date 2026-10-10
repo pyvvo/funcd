@@ -79,8 +79,8 @@ func (l *Lister) writers(ctx context.Context, ns v1.NamespaceName, covers func(v
 
 // CompilePolicies compiles every RolesAssignment in the store into synthetic read/query/invoke Cedar
 // permits (ADR-0136) — appended by the PolicySource alongside user Policies + EgressPolicies. Write
-// grants are NOT compiled here (they gate the forbid via the Lister above). It also returns the max
-// RolesAssignment resourceVersion so the policy cache recompiles on change.
+// grants are NOT compiled here (they gate the forbid via the Lister above). It also returns its List's
+// collection resourceVersion, the store-wide one, so the policy cache recompiles on change (ADR-0202).
 func CompilePolicies(ctx context.Context, s store.Store) ([]v1.Policy, string, error) {
 	lst, err := s.List(ctx, v1.KindRolesAssignment.GVK(), store.ListOptions{})
 	if err != nil {
@@ -88,14 +88,10 @@ func CompilePolicies(ctx context.Context, s store.Store) ([]v1.Policy, string, e
 	}
 	resolver := cedar.NewRoleResolver(s)
 	var out []v1.Policy
-	var maxRV string
 	for _, obj := range lst.Items {
 		ra, ok := obj.(*v1.RolesAssignment)
 		if !ok {
 			continue
-		}
-		if ra.ResourceVersion > maxRV {
-			maxRV = ra.ResourceVersion
 		}
 		pols, cerr := cedar.CompileRolesAssignment(ctx, ra, resolver)
 		if cerr != nil {
@@ -103,5 +99,5 @@ func CompilePolicies(ctx context.Context, s store.Store) ([]v1.Policy, string, e
 		}
 		out = append(out, pols...)
 	}
-	return out, maxRV, nil
+	return out, lst.ResourceVersion, nil
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/snapshot"
 )
 
 // fakeEngine is a minimal in-test store.Engine. It lives in package store (white-box)
@@ -19,6 +20,12 @@ func newFakeEngine() *fakeEngine { return &fakeEngine{data: map[string]map[strin
 func (e *fakeEngine) View(_ context.Context, fn func(Txn) error) error   { return fn(&fakeTxn{e: e}) }
 func (e *fakeEngine) Update(_ context.Context, fn func(Txn) error) error { return fn(&fakeTxn{e: e}) }
 func (e *fakeEngine) Close() error                                       { return nil }
+
+// Snapshot and Load complete the Engine port; the watch tests never call them.
+func (e *fakeEngine) Snapshot(context.Context, func(snapshot.Record) error) (string, error) {
+	return "", nil
+}
+func (e *fakeEngine) Load(context.Context, func() (snapshot.Record, error)) error { return nil }
 
 type fakeTxn struct{ e *fakeEngine }
 
@@ -76,11 +83,11 @@ func TestWatchSinceTooOldReturnsUnavailable(t *testing.T) {
 		}
 	}
 	// rev is now 5; the cap-3 ring retains rv 3,4,5 — rv 1 was evicted.
-	if _, err := st.Watch(ctx, v1.KindConfigMap.GVK(), WatchOptions{SinceResourceVersion: "1"}); fault.KindOf(err) != fault.Unavailable {
+	if _, err := st.Watch(ctx, v1.KindConfigMap.GVK(), WatchOptions{SinceResourceVersion: st.version(1)}); fault.KindOf(err) != fault.Unavailable {
 		t.Fatalf("Watch(since=1, evicted): kind=%v want unavailable", fault.KindOf(err))
 	}
 	// a since at the current revision needs no replay → no error.
-	w, err := st.Watch(ctx, v1.KindConfigMap.GVK(), WatchOptions{SinceResourceVersion: "5"})
+	w, err := st.Watch(ctx, v1.KindConfigMap.GVK(), WatchOptions{SinceResourceVersion: st.version(5)})
 	if err != nil {
 		t.Fatalf("Watch(since=current): %v", err)
 	}

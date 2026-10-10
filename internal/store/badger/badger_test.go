@@ -11,6 +11,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/snapshot/snapshotcontract"
 	"github.com/pyvvo/funcd/internal/store"
 	bstore "github.com/pyvvo/funcd/internal/store/badger"
 	"github.com/pyvvo/funcd/internal/store/storecontract"
@@ -42,6 +43,16 @@ func mkConfigMap(t *testing.T, ns, name, rg string, data map[string]string) *v1.
 // store contract identically to the memory engine (engine parity behind the port).
 func TestScenarioBadgerEnginePassesStoreContract(t *testing.T) {
 	storecontract.RunContract(t, newBadgerStore)
+}
+
+// scenario: snapshot-is-one-read (metastore, Badger engine) — the snapshot contract: a writer commits a=i, then
+// b=i, while 200 snapshots run, and none holds b above a; the snapshot loads back into an empty engine.
+func TestScenarioSnapshotIsOneRead(t *testing.T) {
+	snapshotcontract.Run(t, func(t *testing.T) snapshotcontract.Subject {
+		e, err := bstore.Open(t.TempDir(), bstore.WithSyncWrites(false), bstore.WithValueLogGCInterval(0))
+		require.NoError(t, err)
+		return storecontract.SnapshotSubject(t, e)
+	})
 }
 
 // scenario: durable-metastore-survives-restart — a resource created in file mode is recovered

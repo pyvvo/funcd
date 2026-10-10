@@ -20,15 +20,24 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/snapshot"
 )
 
-// metaBucket holds store bookkeeping (the monotonic revision counter). The
-// leading NUL keeps it disjoint from every GroupVersionKind.String() bucket.
+// metaBucket holds store bookkeeping: the monotonic revision counter and the
+// store's timeline (ADR-0202). The leading NUL keeps it disjoint from every
+// GroupVersionKind.String() bucket and sorts its records first in a snapshot.
 const (
 	metaBucket     = "\x00store-meta"
 	revisionKey    = "revision"
+	timelineKey    = "timeline"
 	defaultRingCap = 1024
 	watchChanBuf   = 64
+)
+
+// The meta records' snapshot keys, bucket+NUL+key as every Engine emits them.
+const (
+	revisionRecordKey = metaBucket + "\x00" + revisionKey
+	timelineRecordKey = metaBucket + "\x00" + timelineKey
 )
 
 // Store is the metastore port: generic CRUD + List + in-process Watch over
@@ -42,6 +51,9 @@ type Store interface {
 	Delete(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName, rv string) error
 	Watch(ctx context.Context, gvk v1.GroupVersionKind, opts WatchOptions) (Watch, error)
 	Close() error
+	// Snapshot is Engine.Snapshot without the timeline record (ADR-0202); it returns "<timeline>-<revision>"
+	// from the meta records of the same stream, which come first; no revision record reads as 0.
+	snapshot.Source
 }
 
 // ListOptions narrows a List by namespace, resource group, and tag subset.
@@ -130,10 +142,23 @@ func WithEncryptor(kinds []v1.Kind, enc Encryptor) Option {
 // holds a read lock, so it is; not all engines must). Consequently List's collection
 // resourceVersion is best-effort under concurrent writes; a caller needing a strict
 // snapshot re-reads at the returned resourceVersion.
+//
+// Snapshot emits every record, the timeline included, from one read with Key =
+// bucket+NUL+key, and returns "". Load runs before New on an empty engine: it splits
+// each Key at its last NUL (keys hold none; metaBucket starts with one) and skips the
+// record IsTimelineRecord names, so the next New mints a new timeline (ADR-0202).
 type Engine interface {
 	View(ctx context.Context, fn func(Txn) error) error
 	Update(ctx context.Context, fn func(Txn) error) error
+	snapshot.Source
+	snapshot.Loader
 	Close() error
+}
+
+// IsTimelineRecord reports whether (bucket, key) is the store's timeline record, the record every
+// Engine.Load skips (ADR-0202 Decision 3).
+func IsTimelineRecord(bucket, key string) bool {
+	return bucket == metaBucket && key == timelineKey
 }
 
 // Txn is the key/value surface within a View/Update. Keys are scoped by bucket.
@@ -146,9 +171,10 @@ type Txn interface {
 
 // store is the wrapper holding the semantics over an Engine.
 type store struct {
-	eng     Engine
-	enc     map[v1.Kind]Encryptor
-	initErr error // fail-closed: set if an Option or the initial revision read failed
+	eng      Engine
+	enc      map[v1.Kind]Encryptor
+	initErr  error  // fail-closed: set if an Option, the initial meta read or the timeline mint failed
+	timeline string // this store's timeline (ADR-0202), set by New and never changed
 
 	writeMu sync.Mutex // serializes writers for the resourceVersion compare-and-set
 
@@ -171,18 +197,74 @@ func New(e Engine, opts ...Option) Store {
 			return s
 		}
 	}
-	// Preload the persisted revision so the watch cursor is correct after a restart.
-	if err := e.View(context.Background(), func(tx Txn) error {
+	if err := s.loadMeta(context.Background()); err != nil {
+		s.initErr = err
+	}
+	return s
+}
+
+// loadMeta preloads the persisted revision, so the watch cursor is correct after a
+// restart, and the timeline, minting and storing one when there is none: at first
+// start, at the first start after ADR-0202, and after any Engine.Load.
+func (s *store) loadMeta(ctx context.Context) error {
+	const op = "store.New"
+	err := s.eng.View(ctx, func(tx Txn) error {
 		rv, err := readRevision(tx)
 		if err != nil {
 			return err
 		}
 		s.rev = rv
+		raw, found, err := tx.Get(metaBucket, timelineKey)
+		if err != nil || !found {
+			return err
+		}
+		if !isLowerHex(string(raw)) {
+			return fault.Internalf(op, "corrupt timeline %q", raw)
+		}
+		s.timeline = string(raw)
 		return nil
-	}); err != nil {
-		s.initErr = err
+	})
+	if err != nil || s.timeline != "" {
+		return err
 	}
-	return s
+	tl, err := newTimeline()
+	if err != nil {
+		return err
+	}
+	if err := s.eng.Update(ctx, func(tx Txn) error { return tx.Put(metaBucket, timelineKey, []byte(tl)) }); err != nil {
+		return err
+	}
+	s.timeline = tl
+	return nil
+}
+
+// version formats revision n as a resourceVersion of this store's timeline.
+func (s *store) version(n uint64) string { return Version{Timeline: s.timeline, N: n}.String() }
+
+// Snapshot emits the engine's records but the timeline record, from one read, and
+// returns "<timeline>-<revision>" of that read (ADR-0202 Decision 1).
+func (s *store) Snapshot(ctx context.Context, emit func(snapshot.Record) error) (string, error) {
+	if s.initErr != nil {
+		return "", s.initErr
+	}
+	var v Version
+	if _, err := s.eng.Snapshot(ctx, func(r snapshot.Record) error {
+		switch string(r.Key) {
+		case timelineRecordKey:
+			v.Timeline = string(r.Value)
+			return nil
+		case revisionRecordKey:
+			n, err := parseRevision(r.Value)
+			if err != nil {
+				return err
+			}
+			v.N = n
+		}
+		return emit(r)
+	}); err != nil {
+		return "", err
+	}
+	return v.String(), nil
 }
 
 func (s *store) Get(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName) (v1.Object, error) {
@@ -250,7 +332,7 @@ func (s *store) List(ctx context.Context, gvk v1.GroupVersionKind, opts ListOpti
 		}
 		return mi.Name < mj.Name
 	})
-	return List{Items: items, ResourceVersion: strconv.FormatUint(rev, 10)}, nil
+	return List{Items: items, ResourceVersion: s.version(rev)}, nil
 }
 
 // Create persists a new object. When the object carries an empty Name but a GenerateName prefix
@@ -327,7 +409,7 @@ func (s *store) createOnce(ctx context.Context, obj v1.Object) (v1.Object, error
 		rev = r
 		meta.UID = uid
 		meta.Generation = 1
-		meta.ResourceVersion = strconv.FormatUint(rev, 10)
+		meta.ResourceVersion = s.version(rev)
 		meta.CreationTime = v1.NewTimestamp(time.Now())
 		val, eerr := s.encode(ctx, gvk.Kind, obj)
 		if eerr != nil {
@@ -425,7 +507,7 @@ func (s *store) Update(ctx context.Context, obj v1.Object) (v1.Object, error) {
 			return nerr
 		}
 		rev = r
-		meta.ResourceVersion = strconv.FormatUint(rev, 10)
+		meta.ResourceVersion = s.version(rev)
 		val, eerr := s.encode(ctx, gvk.Kind, obj)
 		if eerr != nil {
 			return eerr
@@ -507,7 +589,7 @@ func (s *store) Delete(ctx context.Context, gvk v1.GroupVersionKind, ns v1.Names
 		return err
 	}
 	// The event is the change at rev, and an event's resourceVersion is the watch cursor (ADR-0006 §2).
-	deleted.GetObjectMeta().ResourceVersion = strconv.FormatUint(rev, 10)
+	deleted.GetObjectMeta().ResourceVersion = s.version(rev)
 	s.publish(rev, Event{Type: Deleted, Object: deleted})
 	return nil
 }
@@ -546,6 +628,10 @@ func readRevision(tx Txn) (uint64, error) {
 	if !found {
 		return 0, nil
 	}
+	return parseRevision(raw)
+}
+
+func parseRevision(raw []byte) (uint64, error) {
 	n, err := strconv.ParseUint(string(raw), 10, 64)
 	if err != nil {
 		return 0, fault.Internalf("store.readRevision", "corrupt revision %q: %v", raw, err)

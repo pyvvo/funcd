@@ -140,17 +140,20 @@ type ObjectMeta struct {
 	// is empty and GenerateName is set, the create path fills Name = GenerateName + a random suffix
 	// (GenerateObjectName), retrying on the rare collision. Ignored once Name is set. A plain prefix string
 	// (a trailing '-' is idiomatic and allowed — the generated Name is what must be a valid label).
-	GenerateName    string            `json:"generateName,omitempty" pattern:"^[a-z0-9][a-z0-9-]{0,62}$"`
-	Namespace       NamespaceName     `json:"namespace,omitempty"`
-	ResourceGroup   ResourceGroupName `json:"resourceGroup,omitempty"`
-	Tags            Tags              `json:"tags,omitempty"`
-	UID             UID               `json:"uid,omitempty"`
-	Generation      int64             `json:"generation,omitempty"`
-	ResourceVersion string            `json:"resourceVersion,omitempty"`
-	CreationTime    Timestamp         `json:"creationTimestamp,omitzero"`
-	DeletionTime    *Timestamp        `json:"deletionTimestamp,omitempty"`
-	OwnerReferences []OwnerReference  `json:"ownerReferences,omitempty"`
-	Finalizers      []string          `json:"finalizers,omitempty"`
+	GenerateName  string            `json:"generateName,omitempty" pattern:"^[a-z0-9][a-z0-9-]{0,62}$"`
+	Namespace     NamespaceName     `json:"namespace,omitempty"`
+	ResourceGroup ResourceGroupName `json:"resourceGroup,omitempty"`
+	Tags          Tags              `json:"tags,omitempty"`
+	UID           UID               `json:"uid,omitempty"`
+	Generation    int64             `json:"generation,omitempty"`
+	// ResourceVersion is opaque: "<timeline>-<n>", or a plain "<n>" on an object written before timelines
+	// (ADR-0202). Compare it for equality only; a version minted by another store or before a restore
+	// matches none this store holds.
+	ResourceVersion string           `json:"resourceVersion,omitempty"`
+	CreationTime    Timestamp        `json:"creationTimestamp,omitzero"`
+	DeletionTime    *Timestamp       `json:"deletionTimestamp,omitempty"`
+	OwnerReferences []OwnerReference `json:"ownerReferences,omitempty"`
+	Finalizers      []string         `json:"finalizers,omitempty"`
 }
 
 // Validate checks the ObjectMeta against envelope rules. Scope is derived from

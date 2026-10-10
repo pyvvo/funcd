@@ -5,12 +5,20 @@
 package memory
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"io"
+	"slices"
 	"sync"
 
 	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/snapshot"
 	"github.com/pyvvo/funcd/internal/store"
 )
+
+// loadBatch bounds the records one Load step writes under the lock.
+const loadBatch = 1024
 
 // New returns a fresh, empty in-memory engine.
 func New() store.Engine {
@@ -46,6 +54,91 @@ func (e *engine) Update(ctx context.Context, fn func(store.Txn) error) error {
 }
 
 func (e *engine) Close() error { return nil }
+
+// Snapshot copies the map under the read lock and emits after releasing it, so writers wait only for the copy
+// (ADR-0202 Decision 1). Records come in key order, Key = bucket+NUL+key; a stored value is never changed in
+// place, so the copy may share it until emit gets a clone.
+func (e *engine) Snapshot(ctx context.Context, emit func(snapshot.Record) error) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	e.mu.RLock()
+	var recs []snapshot.Record
+	for bucket, b := range e.data {
+		for key, v := range b {
+			recs = append(recs, snapshot.Record{Key: []byte(bucket + "\x00" + key), Value: v})
+		}
+	}
+	e.mu.RUnlock()
+	slices.SortFunc(recs, func(a, b snapshot.Record) int { return bytes.Compare(a.Key, b.Key) })
+	for _, r := range recs {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		if err := emit(snapshot.Record{Key: r.Key, Value: cloneBytes(r.Value)}); err != nil {
+			return "", err
+		}
+	}
+	return "", nil
+}
+
+// Load fills an empty engine before store.New, loadBatch records per lock, and leaves the timeline record out,
+// so New mints a new one (ADR-0202 Decision 3).
+func (e *engine) Load(ctx context.Context, next func() (snapshot.Record, error)) error {
+	const op = "memory.Load"
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !e.empty() {
+		return fault.Conflictf(op, "the store is not empty")
+	}
+	tx := &txn{e: e, writes: map[pendingKey]pendingVal{}}
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		r, err := next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return fault.Wrapf(err, fault.KindOf(err), op, "read the next record")
+		}
+		i := bytes.LastIndexByte(r.Key, 0)
+		if i < 0 {
+			return fault.Invalidf(op, "record key %q has no bucket", r.Key)
+		}
+		pk := pendingKey{bucket: string(r.Key[:i]), key: string(r.Key[i+1:])}
+		if store.IsTimelineRecord(pk.bucket, pk.key) {
+			continue
+		}
+		tx.writes[pk] = pendingVal{val: cloneBytes(r.Value)}
+		if len(tx.writes) == loadBatch {
+			e.apply(tx)
+			tx = &txn{e: e, writes: map[pendingKey]pendingVal{}}
+		}
+	}
+	e.apply(tx)
+	return nil
+}
+
+func (e *engine) empty() bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	for _, b := range e.data {
+		if len(b) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// apply commits one Load batch under the write lock.
+func (e *engine) apply(tx *txn) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	tx.commit()
+}
 
 type pendingKey struct{ bucket, key string }
 
