@@ -44,6 +44,9 @@ type Deps struct {
 	AppRetrier AppRetrier
 	// Backup reads the platform backup's status (ADR-0205). Optional; nil ⇒ the route reads enabled: false.
 	Backup BackupStatuser
+	// Hold is the platform hold's status and release (ADR-0206). Optional; when set, NewServer registers
+	// GET …/hold and POST …/hold/release.
+	Hold Holder
 }
 
 // OwnerCollector collects the dead-owned children of a namespace (internal/gc.Collector, ADR-0170).
@@ -89,6 +92,10 @@ func NewServer(d Deps) (http.Handler, error) {
 		RegisterAppRetry(api, d.AppRetrier, d.Authorizer)
 	}
 	RegisterPlatformBackup(api, d.Backup, d.Authorizer) // ADR-0205: the platform backup status
+	// ADR-0206: the hold's evidence and its release, admin-only.
+	if d.Hold != nil {
+		RegisterHold(api, d.Hold, d.Authorizer)
+	}
 	logger.Info("control-plane API server constructed", "component", "controlplane")
 	return r, nil
 }

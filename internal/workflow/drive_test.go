@@ -99,7 +99,7 @@ type driveHarness struct {
 	stop func()
 }
 
-func newHarness(t *testing.T, s store.Store, runs runstate.Store, disp Dispatcher, cfg Config, children ChildResolver, drain time.Duration, log *slog.Logger) *driveHarness {
+func newHarness(t *testing.T, s store.Store, runs runstate.Store, disp Dispatcher, cfg Config, children ChildResolver, drain time.Duration, log *slog.Logger, tune ...func(*RunReconciler)) *driveHarness {
 	t.Helper()
 	ctrl, err := controller.New(controller.Deps{Store: s, Workers: 1, Logger: log})
 	if err != nil {
@@ -111,7 +111,11 @@ func newHarness(t *testing.T, s store.Store, runs runstate.Store, disp Dispatche
 	if err != nil {
 		t.Fatalf("engine: %v", err)
 	}
-	ctrl.Register(v1.KindWorkflowRun.GVK(), NewRunReconciler(s, eng, nil, log, 0))
+	rr := NewRunReconciler(s, eng, nil, log, 0)
+	for _, f := range tune {
+		f(rr)
+	}
+	ctrl.Register(v1.KindWorkflowRun.GVK(), rr)
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Add(2)

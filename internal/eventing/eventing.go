@@ -16,6 +16,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/platform/clock"
+	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -62,6 +63,8 @@ type Deps struct {
 	Clock     clock.Clock  // ADR-0182: the timer seed and the Run loop read it; default clock.System()
 	// BucketRecheckInterval is eventing.bucketRecheckInterval (ADR-0163); 0 ⇒ bucketRecheckInterval.
 	BucketRecheckInterval time.Duration
+	// Hold is the platform hold (ADR-0206): while held the Run tick fires no timer; nil ⇒ never held.
+	Hold hold.Gate
 }
 
 // Source is the EventSource reconciler + the registered named-event timer set. A firing PUBLISHES a named
@@ -74,6 +77,7 @@ type Source struct {
 	logger    *slog.Logger
 	clock     clock.Clock
 	recheck   time.Duration // re-check of a blob source's Bucket
+	hold      hold.Gate
 
 	mu     sync.Mutex
 	timers map[eventKey]*timerEntry
@@ -110,6 +114,10 @@ func NewSource(d Deps) (*Source, error) {
 		clock:     d.Clock,
 		timers:    map[eventKey]*timerEntry{},
 		recheck:   d.BucketRecheckInterval,
+		hold:      d.Hold,
+	}
+	if s.hold == nil {
+		s.hold = hold.Never
 	}
 	if s.clock == nil {
 		s.clock = clock.System()
@@ -363,7 +371,8 @@ func (s *Source) Fire(ctx context.Context, ns v1.NamespaceName, source, event v1
 }
 
 // Run ticks the registered named-event set until ctx is cancelled, publishing each event that is due. Started
-// by the pkg/funcd lifecycle (ADR-0033); not part of the reconciler.
+// by the pkg/funcd lifecycle (ADR-0033); not part of the reconciler. A tick while held skips dueTimers, so after the
+// release each timer fires at most once for the periods it missed (ADR-0206 Decision 6).
 func (s *Source) Run(ctx context.Context) error {
 	ticker := time.NewTicker(runTick)
 	defer ticker.Stop()
@@ -372,6 +381,9 @@ func (s *Source) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
+			if s.hold.Held() {
+				continue
+			}
 			for _, k := range s.dueTimers(s.clock.Now()) {
 				if err := s.Fire(ctx, k.ns, k.source, k.event); err != nil {
 					s.logger.WarnContext(ctx, "timer publish failed", "eventsource", k.source, "event", k.event, "error", err)

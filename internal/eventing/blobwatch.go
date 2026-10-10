@@ -12,6 +12,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/blob"
+	"github.com/pyvvo/funcd/internal/platform/hold"
 )
 
 // defaultBlobPollInterval is the platform-wide blob poll cadence when none is configured (ADR-0119).
@@ -74,6 +75,7 @@ type BlobWatcher struct {
 	warnedKeys  map[string]bool
 	saves       map[sourceKey]*saveState
 	hooks       WatchHooks
+	hold        hold.Gate
 }
 
 // NewBlobWatcher builds the watcher. lister/publisher/marks are required; interval ≤ 0 ⇒ the 15s default.
@@ -103,7 +105,22 @@ func NewBlobWatcher(lister BucketLister, pub Publisher, marks Watermark, interva
 		purgeEpochs: map[sourceKey]uint64{},
 		warnedKeys:  map[string]bool{},
 		saves:       map[sourceKey]*saveState{},
+		hold:        hold.Never,
 	}, nil
+}
+
+// SetHold installs the platform hold before Run (ADR-0206): while held Run neither sweeps nor polls.
+func (w *BlobWatcher) SetHold(g hold.Gate) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.hold = g
+}
+
+func (w *BlobWatcher) held() bool {
+	w.mu.Lock()
+	g := w.hold
+	w.mu.Unlock()
+	return g.Held()
 }
 
 // SetHooks installs the store hooks the start sweep and the save-failure condition use.
@@ -175,9 +192,15 @@ func (w *BlobWatcher) ActiveWatches() int {
 }
 
 // Run sweeps orphan records once, then polls the registered set every interval until ctx is cancelled.
-// Started by the pkg/funcd lifecycle beside the timer Source.Run; it is not part of the reconciler.
+// Started by the pkg/funcd lifecycle beside the timer Source.Run; it is not part of the reconciler. While held it
+// neither sweeps nor polls; the first tick after the release sweeps, then polls replay what the seen lists lack
+// (ADR-0206 Decision 6).
 func (w *BlobWatcher) Run(ctx context.Context) error {
-	w.sweep(ctx)
+	swept := false
+	if !w.held() {
+		w.sweep(ctx)
+		swept = true
+	}
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
 	for {
@@ -185,9 +208,109 @@ func (w *BlobWatcher) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
+			if w.held() {
+				continue
+			}
+			if !swept {
+				w.sweep(ctx)
+				swept = true
+			}
 			w.poll(ctx)
 		}
 	}
+}
+
+// sourceWatches returns the registered events of one EventSource.
+func (w *BlobWatcher) sourceWatches(ns v1.NamespaceName, source v1.ObjectName) map[eventKey]watchEntry {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	out := map[eventKey]watchEntry{}
+	for k, e := range w.watches {
+		if k.ns == ns && k.source == source {
+			out[k] = e
+		}
+	}
+	return out
+}
+
+// listed lists e's prefix and loads k's record under the record lock; ok is false once e is no longer k's live
+// entry.
+func (w *BlobWatcher) listed(ctx context.Context, k eventKey, e watchEntry) (objs []blob.Attributes, rec SeenList, ok bool, err error) {
+	if objs, err = w.lister.List(ctx, k.ns, e.bucket, e.prefix); err != nil {
+		return nil, SeenList{}, false, err
+	}
+	w.recordMu.Lock()
+	defer w.recordMu.Unlock()
+	if !w.matches(k, e) {
+		return nil, SeenList{}, false, nil
+	}
+	if rec, err = w.marks.Load(ctx, k.ns, k.source, k.event); err != nil {
+		return nil, SeenList{}, false, err
+	}
+	return objs, rec, true, nil
+}
+
+// fit returns rec, or a fresh record (reset) when rec names another bucket, prefix or UID than e.
+func fit(rec SeenList, e watchEntry) (_ SeenList, reset bool) {
+	if rec.Bucket != e.bucket || rec.Prefix != e.prefix || rec.UID != e.uid {
+		return SeenList{Bucket: e.bucket, Prefix: e.prefix, UID: e.uid, Seen: map[string]string{}}, true
+	}
+	return rec, false
+}
+
+// Advance marks every key the source's events list as seen and publishes nothing (ADR-0206 Decision 8), so the
+// polls after a release replay none of them. A source with no registered event is fault.Unavailable: it is not
+// Ready. Rerun-safe: each event's record is saved on its own.
+func (w *BlobWatcher) Advance(ctx context.Context, ns v1.NamespaceName, source v1.ObjectName) error {
+	const op = "eventing.Advance"
+	watches := w.sourceWatches(ns, source)
+	if len(watches) == 0 {
+		return fault.Unavailablef(op, "eventsource %s/%s watches no blob event: it is not Ready", ns, source)
+	}
+	for k, e := range watches {
+		objs, rec, ok, err := w.listed(ctx, k, e)
+		if err != nil {
+			return fault.Wrapf(err, fault.KindOf(err), op, "eventsource %s/%s event %s", ns, source, k.event)
+		}
+		if !ok {
+			continue
+		}
+		rec, _ = fit(rec, e)
+		rec.Seen = make(map[string]string, len(objs))
+		for _, o := range objs {
+			if utf8.ValidString(o.Key) {
+				rec.Seen[o.Key] = versionOf(o)
+			}
+		}
+		if err := w.saveIfLive(ctx, k, e, rec, true); err != nil {
+			return fault.Wrapf(err, fault.KindOf(err), op, "eventsource %s/%s event %s", ns, source, k.event)
+		}
+	}
+	return nil
+}
+
+// Pending counts, per event of the source, the listed keys whose version its seen list lacks: what a release
+// replays (ADR-0206 Decision 1). A source with no registered event has none.
+func (w *BlobWatcher) Pending(ctx context.Context, ns v1.NamespaceName, source v1.ObjectName) (map[string]int, error) {
+	out := map[string]int{}
+	for k, e := range w.sourceWatches(ns, source) {
+		objs, rec, ok, err := w.listed(ctx, k, e)
+		if err != nil {
+			return nil, fault.Wrapf(err, fault.KindOf(err), "eventing.Pending", "eventsource %s/%s event %s", ns, source, k.event)
+		}
+		if !ok {
+			continue
+		}
+		rec, _ = fit(rec, e)
+		n := 0
+		for _, o := range objs {
+			if utf8.ValidString(o.Key) && rec.Seen[o.Key] != versionOf(o) {
+				n++
+			}
+		}
+		out[string(k.event)] = n
+	}
+	return out, nil
 }
 
 // sweep deletes the records of sources the store no longer holds (ADR-0157 Decision 8). Records are listed
@@ -240,25 +363,11 @@ func (w *BlobWatcher) poll(ctx context.Context) {
 // listing no longer holds, and saves the record if it changed (ADR-0157 Decision 2). It skips, or stops
 // without saving, once the live entry no longer matches e.
 func (w *BlobWatcher) pollOne(ctx context.Context, k eventKey, e watchEntry) error {
-	objs, err := w.lister.List(ctx, k.ns, e.bucket, e.prefix)
-	if err != nil {
+	objs, rec, ok, err := w.listed(ctx, k, e)
+	if err != nil || !ok {
 		return err
 	}
-	w.recordMu.Lock()
-	if !w.matches(k, e) {
-		w.recordMu.Unlock()
-		return nil
-	}
-	rec, err := w.marks.Load(ctx, k.ns, k.source, k.event)
-	w.recordMu.Unlock()
-	if err != nil {
-		return err
-	}
-	changed := false
-	if rec.Bucket != e.bucket || rec.Prefix != e.prefix || rec.UID != e.uid {
-		rec = SeenList{Bucket: e.bucket, Prefix: e.prefix, UID: e.uid, Seen: map[string]string{}}
-		changed = true
-	}
+	rec, changed := fit(rec, e)
 	listed := make(map[string]bool, len(objs))
 	var fireErr error
 	for i := range objs {

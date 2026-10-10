@@ -134,6 +134,7 @@ func TestSpecGeneratedFromGo(t *testing.T) {
 	controlplane.RegisterStubDeadLetters(api)     // ADR-0118: the DLQ read + replay/discard routes are part of the committed spec
 	controlplane.RegisterStubAppRetry(api)        // ADR-0214: the App retry route is part of the committed spec
 	controlplane.RegisterStubPlatformBackup(api)  // ADR-0205: the platform backup status route
+	controlplane.RegisterStubHold(api)            // ADR-0206: the hold status + release routes are part of the committed spec
 
 	raw, err := api.OpenAPI().YAML()
 	if err != nil {

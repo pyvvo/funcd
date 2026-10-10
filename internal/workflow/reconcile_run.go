@@ -16,6 +16,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/funclog"
+	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/workflow/runstate"
 )
@@ -36,6 +37,7 @@ type RunReconciler struct {
 	log    *slog.Logger
 	// waitRequeue is controller.referentPollInterval (ADR-0163).
 	waitRequeue time.Duration
+	hold        hold.Gate
 }
 
 // NewRunReconciler builds the run reconciler. traces is the shared funclog trace sink (ADR-0103): when
@@ -49,8 +51,11 @@ func NewRunReconciler(s store.Store, e *Engine, traces funclog.TraceSink, log *s
 	if referentPollInterval <= 0 {
 		referentPollInterval = waitRequeue
 	}
-	return &RunReconciler{store: s, engine: e, traces: traces, log: log.With("component", "workflow.run"), waitRequeue: referentPollInterval}
+	return &RunReconciler{store: s, engine: e, traces: traces, log: log.With("component", "workflow.run"), waitRequeue: referentPollInterval, hold: hold.Never}
 }
+
+// SetHold installs the platform hold before the controller runs (ADR-0206 Decision 6).
+func (r *RunReconciler) SetHold(g hold.Gate) { r.hold = g }
 
 // buildRunSpan builds the run-root Resource + INTERNAL Span for a terminal run (ADR-0103; shared by the
 // reconciler for top-level runs and the engine for inline sub-workflow child runs, ADR-0104). SpanID is the
@@ -91,8 +96,12 @@ func emitRunSpan(ctx context.Context, sink funclog.TraceSink, rec *runstate.Reco
 
 // Reconcile starts, signals or stops one WorkflowRun and mirrors its run record into status, never waiting
 // for a step (ADR-0146 Decision 1): the run executes on an engine-owned goroutine, whose record writes and
-// exit enqueue the run again.
+// exit enqueue the run again. While held it starts, resumes and replays nothing and leaves the status as it is
+// (ADR-0206 Decision 6); a run created while held starts after the release.
 func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (controller.Result, error) {
+	if r.hold.Held() {
+		return controller.Result{RequeueAfter: r.waitRequeue}, nil
+	}
 	obj, err := r.store.Get(ctx, v1.KindWorkflowRun.GVK(), req.Namespace, req.Name)
 	if fault.KindOf(err) == fault.NotFound {
 		return controller.Result{}, r.engine.forget(ctx, req.Namespace, req.Name) // a deleted run ends Cancelled (ADR-0146)

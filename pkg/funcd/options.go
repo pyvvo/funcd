@@ -25,6 +25,7 @@ import (
 	"github.com/pyvvo/funcd/internal/gateway"
 	"github.com/pyvvo/funcd/internal/kvstore"
 	"github.com/pyvvo/funcd/internal/network"
+	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/platform/observability"
 	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/runtime"
@@ -165,6 +166,18 @@ func WithMasterSecret(secret []byte) Option {
 			return fault.Invalidf("funcd.WithMasterSecret", "the node master secret is empty")
 		}
 		c.masterSecret = slices.Clone(secret)
+		return nil
+	}
+}
+
+// WithHold hands the platform the hold cmd/funcd opened (hold.Open, ADR-0206 Decision 6): while it is held every
+// side-effect runner stays still, and POST …/hold/release lifts it. Absent ⇒ never held.
+func WithHold(h *hold.Hold) Option {
+	return func(c *config) error {
+		if h == nil {
+			return fault.Invalidf("funcd.WithHold", "the hold is nil")
+		}
+		c.hold = h
 		return nil
 	}
 }
