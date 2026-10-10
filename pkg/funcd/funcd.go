@@ -1099,11 +1099,6 @@ func (p *Platform) buildControlPlane() error {
 		Invoker:       &sensor.HTTPInvoker{Endpoints: fnReconciler.Endpoints(), Waker: act, Client: workerClient(calls, 0)},
 		InvokeTimeout: c.invokeDefaultTimeout,
 		Enqueue:       ctrl.Enqueue,
-		// ADR-0214: a second invoker for the hook calls, with no client timeout: the context carries the hook
-		// Function's spec.timeout or invoke.defaultTimeout, as the workflow dispatcher bounds a step.
-		Invoker:       &sensor.HTTPInvoker{Endpoints: fnReconciler.Endpoints(), Waker: act, Client: workerClient(calls, 0)},
-		InvokeTimeout: c.invokeDefaultTimeout,
-		Enqueue:       ctrl.Enqueue,
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build App reconciler")
