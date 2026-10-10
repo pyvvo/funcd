@@ -664,8 +664,9 @@ type boundEnv struct {
 func (r *Reconciler) bindings(ctx context.Context, fn *v1.Function) (boundEnv, error) {
 	// 3c. secret injection gate (ADR-0057, F15 last mile): resolve the function's bound secrets
 	// into an env map BEFORE provisioning any worker. A PDP-deny / missing Secret / unconfigured
-	// resolver fails the function CLOSED (not Ready, SecretResolveFailed, no worker) — never a worker
-	// started with the secret absent. A pooled member resolves its own, like a solo one.
+	// resolver fails the function CLOSED (SecretResolveFailed, no worker) — never a worker
+	// started with the secret absent. A pooled member resolves its own, like a solo one. A running
+	// worker of the serving revision keeps its start-time env and serves on (ADR-0221 Decision 3).
 	secretEnv, serr := r.resolveBindingEnv(ctx, fn)
 	if serr != nil {
 		// Side-attributed reason (ADR-0093 §4): a config-side failure (missing ConfigMap) reports
@@ -749,8 +750,9 @@ const reasonReconcileFailed = "ReconcileFailed"
 
 // failPass writes the status of a pass that failed with err before its own status write, from read, the status the pass
 // started from, and returns err for the engine's backoff (ADR-0161 Decision 1). Ready and status.replicas follow the
-// listening workers; a List error, or a pool worker that does not answer, keeps them as read (issues #353, #838). It
-// never writes Failed and never wakes the Function; only finish makes a Degraded Function Ready.
+// serving revision's workers: a pass that started Ready counts the listening ones, one that started Degraded those that
+// pass finish's readiness test and is Ready while one does (ADR-0221 Decision 2); a List error, or a pool worker that
+// does not answer, keeps them as read (issues #353, #838). It never writes Failed and never wakes the Function.
 func (r *Reconciler) failPass(ctx context.Context, fn *v1.Function, read v1.FunctionStatus, err error) (controller.Result, error) {
 	reason := reasonReconcileFailed
 	if errors.As(err, new(convergeError)) {
@@ -761,7 +763,13 @@ func (r *Reconciler) failPass(ctx context.Context, fn *v1.Function, read v1.Func
 	fn.Status.ObservedGeneration = read.ObservedGeneration
 	fn.Status.Conditions.Set(v1.Condition{Type: condRevisionReady, Status: v1.ConditionFalse, Reason: reason, Message: msg, ObservedGeneration: fn.Generation})
 	readReady, hasReady := read.Conditions.Get(condReady)
-	n, lerr := r.listeningCount(ctx, fn)
+	var n int
+	var lerr error
+	if started == v1.PhaseDegraded {
+		_, n, lerr = r.servingReady(ctx, fn)
+	} else {
+		n, lerr = r.listeningCount(ctx, fn)
+	}
 	switch {
 	case lerr != nil:
 		fn.Status.Phase, fn.Status.Replicas = started, read.Replicas
@@ -773,6 +781,9 @@ func (r *Reconciler) failPass(ctx context.Context, fn *v1.Function, read v1.Func
 		if hasReady {
 			restoreCondition(&fn.Status.Conditions, readReady)
 		}
+	case started == v1.PhaseDegraded && n >= 1:
+		fn.Status.Phase, fn.Status.Replicas = v1.PhaseReady, n
+		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue})
 	default:
 		fn.Status.Replicas = 0
 		fn.Status.Phase = started
@@ -842,7 +853,8 @@ type gateFailure struct {
 // releases its workers: the serving and the current revision's workers stop, and a pooled member's pool worker stops
 // once no admitted member of its key wants one (idx is the pass's access index); it marks it Asleep, then the gate's own
 // writes apply. Otherwise it judges by the serving revision's workers, a pooled member's pool worker (ADR-0161 Decision
-// 2): while one listens and the Function was Ready it stays Ready with their count; while one runs it is Degraded;
+// 2, ADR-0221 Decision 1): while one listens and the Function was Ready it stays Ready with their count; while one passes
+// finish's readiness test and the Function was Degraded it is Ready with their count; while one runs it is Degraded;
 // otherwise the gate's own writes apply. While a worker of the serving revision runs, a solo Function's current
 // revision's workers stop if it is not the serving one (ADR-0143 Decision 4.6) and the pass returns after the period.
 func (r *Reconciler) gateFailed(ctx context.Context, fn *v1.Function, g gateFailure, idx accessIndex, drainAfter time.Duration) (controller.Result, error) {
@@ -862,7 +874,7 @@ func (r *Reconciler) gateFailed(ctx context.Context, fn *v1.Function, g gateFail
 		fn.Status.Conditions.Set(v1.Condition{Type: condPoolFull, Status: v1.ConditionTrue, Reason: "PoolFull", Message: g.message})
 	}
 	requeue := g.requeue
-	var running, listening int
+	var running, n int
 	if r.asleep(fn) {
 		if err := r.stopAsleep(ctx, fn); err != nil {
 			return controller.Result{}, err
@@ -873,8 +885,12 @@ func (r *Reconciler) gateFailed(ctx context.Context, fn *v1.Function, g gateFail
 		fn.Status.Conditions.Set(v1.Condition{Type: condAsleep, Status: v1.ConditionTrue, Reason: "ScaledToZero", Message: "no worker runs; a call wakes the Function"})
 	} else {
 		clearAsleep(fn)
+		count := r.servingWorkers
+		if fn.Status.Phase == v1.PhaseDegraded {
+			count = r.servingReady
+		}
 		var err error
-		if running, listening, err = r.servingWorkers(ctx, fn); err != nil {
+		if running, n, err = count(ctx, fn); err != nil {
 			return controller.Result{}, err
 		}
 	}
@@ -887,12 +903,15 @@ func (r *Reconciler) gateFailed(ctx context.Context, fn *v1.Function, g gateFail
 		requeue = r.supervisionPeriod
 	}
 	switch {
-	case listening >= 1 && fn.Status.Phase == v1.PhaseReady:
-		fn.Status.Replicas = listening
+	case n >= 1 && fn.Status.Phase == v1.PhaseReady:
+		fn.Status.Replicas = n
+	case n >= 1 && fn.Status.Phase == v1.PhaseDegraded:
+		fn.Status.Phase, fn.Status.Replicas = v1.PhaseReady, n
+		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue})
 	case running >= 1:
 		fn.Status.Phase, fn.Status.Replicas = v1.PhaseDegraded, 0
 		if rc, ok := fn.Status.Conditions.Get(condReady); !ok || rc.Status != v1.ConditionFalse {
-			fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "Restarting", Message: "no worker of the serving revision listens"})
+			fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "Restarting", Message: "no worker of the serving revision is ready"})
 		}
 	default:
 		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: g.reason, Message: g.readyMessage})
@@ -1239,6 +1258,36 @@ func (r *Reconciler) servingWorkers(ctx context.Context, fn *v1.Function) (runni
 		return 0, 0, nil
 	}
 	return r.countWorkers(ctx, fn, s)
+}
+
+// servingReady counts the running workers of status.servingRevision and those that pass finish's readiness test, from
+// one List, with no fallback (ADR-0221): a solo replica that listens and answers readinessPath with 200 within
+// probeTimeout, as readyReplicas tests it, or that listens in the legacy placeholder mode; a pooled member as
+// servingWorkers counts it, by its /health/members entry, an unanswered probe being an error (issue #838). ADR-0215's
+// member dependency field, once implemented, must reach countWorkers too, so this path never promotes a member that
+// finish keeps Degraded.
+func (r *Reconciler) servingReady(ctx context.Context, fn *v1.Function) (running, ready int, err error) {
+	s := v1.ObjectName(fn.Status.ServingRevision)
+	switch {
+	case s == "":
+		return 0, 0, nil
+	case r.pooled(fn):
+		return r.countWorkers(ctx, fn, s)
+	}
+	insts, err := r.namedInstances(ctx, fn.Namespace, fn.Name)
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, in := range insts {
+		if in.Revision != s || in.State != runtime.StateRunning {
+			continue
+		}
+		running++
+		if r.listening(in) && (r.materializer == nil || r.probeReady(ctx, in.IP, in.Port, readinessPath)) {
+			ready++
+		}
+	}
+	return running, ready, nil
 }
 
 // countWorkers counts the running and the listening workers of fn's revision rev or, for a pooled member, of the pool

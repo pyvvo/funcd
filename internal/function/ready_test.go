@@ -519,7 +519,7 @@ func TestGateFailedWritesListeningCount(t *testing.T) {
 		require.Equal(t, v1.PhaseDegraded, fn.Status.Phase)
 		require.Zero(t, fn.Status.Replicas)
 		ready := h.requireCondition(t, "echo", "Ready", v1.ConditionFalse, "Restarting")
-		require.Equal(t, "no worker of the serving revision listens", ready.Message)
+		require.Equal(t, "no worker of the serving revision is ready", ready.Message)
 		require.Equal(t, testPeriod, res.RequeueAfter)
 	})
 	t.Run("none-runs", func(t *testing.T) {
@@ -672,9 +672,9 @@ func TestIssue309_ListenedHungReplicaIsReplaced(t *testing.T) {
 	require.Equal(t, v1.PhaseReady, h.getFn(t, "stall").Status.Phase)
 }
 
-// ADR-0161 Decisions 1 and 2: a failed pass or gate leaves a Degraded Function Degraded with no replica even while a
-// worker of its serving revision listens; only finish makes it Ready.
-func TestDegradedWithListeningReplicaStaysDegraded(t *testing.T) {
+// scenario: unready-worker-not-promoted (ADR-0221, issue #309) — a failed pass or gate leaves a Degraded Function
+// Degraded with no replica and no route while the worker of its serving revision listens but is not ready.
+func TestScenarioUnreadyWorkerNotPromoted(t *testing.T) {
 	t.Parallel()
 	degraded := func(t *testing.T) *shimHarness {
 		t.Helper()
@@ -694,6 +694,9 @@ func TestDegradedWithListeningReplicaStaysDegraded(t *testing.T) {
 		require.Equal(t, v1.PhaseDegraded, fn.Status.Phase)
 		require.Zero(t, fn.Status.Replicas)
 		require.Equal(t, v1.ConditionFalse, h.condition(t, "stall", "Ready").Status)
+		require.Empty(t, h.routes(t), "no route")
+		_, ready := h.upstream(t, "stall")
+		require.False(t, ready)
 	}
 	t.Run("failed-pass", func(t *testing.T) {
 		t.Parallel()
@@ -711,5 +714,19 @@ func TestDegradedWithListeningReplicaStaysDegraded(t *testing.T) {
 		h.reconcile(t, "stall")
 		requireDegraded(t, h)
 		h.requireCondition(t, "stall", "RevisionReady", v1.ConditionFalse, "ShapeInvalid")
+	})
+	t.Run("failed-gate-probe-times-out", func(t *testing.T) {
+		t.Parallel()
+		h := newShimHarness(t, http.StatusOK, false, withPeriod, withPlatforms(&fakePlatforms{}))
+		stall := h.rt.serveStalling(t, "stall-1")
+		h.create(t, "stall", func(fn *v1.Function) { fn.Spec.ImageDigest = digestHere })
+		h.reconcile(t, "stall")
+		h.rt.exit("stall", runtime.StateFailed, time.Minute)
+		stall()
+		h.reconcile(t, "stall")
+		require.Equal(t, v1.PhaseDegraded, h.getFn(t, "stall").Status.Phase, "the replacement listens but its probe times out")
+		h.apply(t, "stall", func(fn *v1.Function) { fn.Spec.Handler = "" })
+		h.reconcile(t, "stall")
+		requireDegraded(t, h)
 	})
 }
