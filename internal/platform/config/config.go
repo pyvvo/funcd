@@ -177,6 +177,22 @@ type Config struct {
 			RPO string `json:"rpo,omitempty" env:"FUNCD_BACKUP_OBJECTIVES_RPO"`
 		} `json:"objectives,omitempty"`
 	} `json:"backup,omitempty"`
+	// Blob is the blob store (ADR-0208): Target an S3-compatible bucket funcd protects by its versioning, else the
+	// local store at Dir (derived as <Storage.DataDir>/blob in Load), which Backup mirrors to backup.target while the
+	// platform backup is on. VersionRetention is the store rule's noncurrent-version expiry, the window of a restore
+	// to a time.
+	Blob struct {
+		Target           string `json:"target,omitempty" env:"FUNCD_BLOB_TARGET"`
+		CredentialsFile  string `json:"credentialsFile,omitempty" env:"FUNCD_BLOB_CREDENTIALS_FILE"`
+		Dir              string `json:"dir,omitempty" env:"FUNCD_BLOB_DIR"`
+		AllowUnversioned bool   `json:"allowUnversioned,omitempty" env:"FUNCD_BLOB_ALLOW_UNVERSIONED"`
+		VersionRetention string `json:"versionRetention,omitempty" env:"FUNCD_BLOB_VERSION_RETENTION"`
+		Backup           struct {
+			Interval   string `json:"interval,omitempty" env:"FUNCD_BLOB_BACKUP_INTERVAL"`
+			Rebaseline string `json:"rebaseline,omitempty" env:"FUNCD_BLOB_BACKUP_REBASELINE"`
+			Retention  string `json:"retention,omitempty" env:"FUNCD_BLOB_BACKUP_RETENTION"`
+		} `json:"backup,omitempty"`
+	} `json:"blob,omitempty"`
 	// Recovery is safe mode (ADR-0207): AfterCrashes unclean starts in a row start held, twice it stop with exit
 	// status 70; StableAfter is the continuous run that makes a start clean. Both are checked in cmd/funcd.
 	Recovery struct {
@@ -433,6 +449,10 @@ func defaults() Config {
 	c.Backup.Interval = v1.Duration(defaultBackupInterval).String()
 	c.Backup.RetryInterval = v1.Duration(defaultBackupRetryInterval).String()
 	c.Backup.Objectives.RPO = v1.Duration(defaultBackupRPO).String()
+	// The local blob store's mirror (ADR-0208): due hourly, a new epoch every 30 days, each generation kept 30 days.
+	c.Blob.Backup.Interval = v1.Duration(defaultBlobBackupInterval).String()
+	c.Blob.Backup.Rebaseline = v1.Duration(defaultBlobRebaseline).String()
+	c.Blob.Backup.Retention = v1.Duration(defaultBlobRetention).String()
 	// S3 gateway (ADR-0080/0085): opt-in; node-private loopback; 1 GiB buffered-object cap.
 	c.S3Gateway.Enabled = false
 	c.S3Gateway.ListenAddr = "127.0.0.1:9000"
@@ -553,6 +573,17 @@ func Load(path string, flags Flags) (Config, error) {
 	if c.Eventing.Deadletter.DataDir == "" {
 		c.Eventing.Deadletter.DataDir = filepath.Join(c.Storage.DataDir, "deadletter")
 	}
+	// The local blob store (ADR-0208): derived only where it serves, so a set blob.dir stays visible to CheckBlob.
+	switch {
+	case c.Blob.Dir != "":
+		abs, err := filepath.Abs(c.Blob.Dir)
+		if err != nil {
+			return Config{}, fault.Invalidf(op, "config key %q: resolve %q: %v", "blob.dir", c.Blob.Dir, err)
+		}
+		c.Blob.Dir = abs
+	case c.Storage.Mode == "file" && c.Blob.Target == "":
+		c.Blob.Dir = filepath.Join(c.Storage.DataDir, "blob")
+	}
 	if err := c.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -585,8 +616,10 @@ func (c Config) Validate() error {
 		if err := c.validateCredentials(op); err != nil {
 			return err
 		}
-		if fs := c.CheckBackup(); len(fs) > 0 && fs[0].Error {
-			return fault.Invalidf(op, "%s", fs[0].Message)
+		for _, fs := range [][]Finding{c.CheckBackup(), c.CheckBlob()} {
+			if len(fs) > 0 && fs[0].Error {
+				return fault.Invalidf(op, "%s", fs[0].Message)
+			}
 		}
 		return nil
 	}
