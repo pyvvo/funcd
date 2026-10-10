@@ -26,7 +26,6 @@ one wave ahead of the build track.
 | Plan id | Proposed ADR working title | Realizes | Build-depends on |
 |---|---|---|---|
 | X-CRON | Cron ADR of the Apps epoch (outside this plan; the `schedule` field of `BackupSchedule` needs it) | — | — |
-| ADR-0202 | Store layer for backup: one-transaction snapshot, cut order, version timeline (Accepted 2026-10-10) | F109 | ADR-0006, ADR-0065 |
 | ADR-0201 | Event store: the dead-letter store extended with the blob seen lists (Accepted 2026-10-10) | F110 | ADR-0118, ADR-0119, ADR-0157, ADR-0202 |
 | ADR-0203 | Backup format, targets and fencing (Accepted 2026-10-10) | F109 | ADR-0202, ADR-0007, ADR-0196 |
 | ADR-0204 | Backup encryption and key escrow (Accepted 2026-10-10) | F109 | ADR-0203 |
@@ -36,7 +35,6 @@ one wave ahead of the build track.
 | ADR-0208 | Blob store backend and backup target (Accepted 2026-10-10) | F111 | ADR-0203, ADR-0204, ADR-0205, ADR-0206, ADR-0007 |
 | ADR-0209 | KV backup on the common format (Accepted 2026-10-10) | F111 | ADR-0195, ADR-0203, ADR-0204, ADR-0205, ADR-0206 |
 | ADR-0222 | Workload backup resources and catalog scope (Accepted 2026-10-10) | F111 | ADR-0203, ADR-0204, ADR-0208, ADR-0209, X-CRON |
-| ADR-0210 | API optimistic concurrency: replace and delete honor the client's resourceVersion (If-Match), issue #844 (Accepted 2026-10-10) | F109 | ADR-0018, ADR-0202 |
 | ADR-0223 | `funcdctl backup plan` helper (Accepted 2026-10-10) | F112 | ADR-0205, ADR-0222 |
 
 The report lists 17 rows in its section I. This slate keeps the ADRs that realize FEAT-0009 and one item outside it, X-CRON.
@@ -83,8 +81,9 @@ flowchart TB
     ADR_0157["ADR-0157 ✓"]
     ADR_0195["ADR-0195 ✓"]
     ADR_0196["ADR-0196 ✓"]
+    ADR_0202["ADR-0202 ✓"]
+    ADR_0210["ADR-0210 ✓"]
     X_CRON["X-CRON · —<br/>Cron ADR (Apps epoch)"]
-    ADR_0202["ADR-0202 · F109<br/>store layer for backup (Accepted 2026-10-10)"]
     ADR_0201["ADR-0201 · F110<br/>event store (Accepted 2026-10-10)"]
     ADR_0203["ADR-0203 · F109<br/>backup format, targets and fencing (Accepted 2026-10-10)"]
     ADR_0204["ADR-0204 · F109<br/>backup encryption and key escrow (Accepted 2026-10-10)"]
@@ -94,11 +93,8 @@ flowchart TB
     ADR_0208["ADR-0208 · F111<br/>blob store backend and backup target (Accepted 2026-10-10)"]
     ADR_0209["ADR-0209 · F111<br/>KV backup on the common format (Accepted 2026-10-10)"]
     ADR_0222["ADR-0222 · F111<br/>workload backup resources and catalog scope (Accepted 2026-10-10)"]
-    ADR_0210["ADR-0210 · F109<br/>API optimistic concurrency: PUT and DELETE honor the client's version (If-Match), issue #844 (Accepted 2026-10-10)"]
     ADR_0223["ADR-0223 · F112<br/>funcdctl backup plan (Accepted 2026-10-10)"]
 
-    ADR_0006 --> ADR_0202
-    ADR_0065 --> ADR_0202
     ADR_0118 --> ADR_0201
     ADR_0119 --> ADR_0201
     ADR_0157 --> ADR_0201
@@ -132,8 +128,6 @@ flowchart TB
     ADR_0208 --> ADR_0222
     ADR_0209 --> ADR_0222
     X_CRON --> ADR_0222
-    ADR_0018 --> ADR_0210
-    ADR_0202 --> ADR_0210
     ADR_0205 --> ADR_0223
     ADR_0222 --> ADR_0223
 ```
@@ -142,14 +136,13 @@ flowchart TB
 
 | Tier | Items |
 |---|---|
-| 0 (done) | ADR-0006, ADR-0007, ADR-0018, ADR-0065, ADR-0067, ADR-0094, ADR-0118, ADR-0119, ADR-0157, ADR-0195, ADR-0196 |
-| 1 | ADR-0202, X-CRON |
-| 2 | ADR-0201, ADR-0203, ADR-0210 |
-| 3 | ADR-0204 |
-| 4 | ADR-0205, ADR-0206 |
-| 5 | ADR-0207, ADR-0208, ADR-0209 |
-| 6 | ADR-0222 |
-| 7 | ADR-0223 |
+| 0 (done) | ADR-0006, ADR-0007, ADR-0018, ADR-0065, ADR-0067, ADR-0094, ADR-0118, ADR-0119, ADR-0157, ADR-0195, ADR-0196, ADR-0202, ADR-0210 |
+| 1 | ADR-0201, ADR-0203, X-CRON |
+| 2 | ADR-0204 |
+| 3 | ADR-0205, ADR-0206 |
+| 4 | ADR-0207, ADR-0208, ADR-0209 |
+| 5 | ADR-0222 |
+| 6 | ADR-0223 |
 
 Why each tier:
 
@@ -188,9 +181,9 @@ Why each tier:
 
 ## Critical path & the exit-criterion spine
 
-Critical path (8 items, the longest build chain):
+Critical path (7 items, the longest build chain):
 
-  ADR-0006 → ADR-0202 → ADR-0203 → ADR-0204 → ADR-0205 → ADR-0208 → ADR-0222 → ADR-0223
+  ADR-0007 → ADR-0203 → ADR-0204 → ADR-0205 → ADR-0208 → ADR-0222 → ADR-0223
 
 | Exit-criterion clause (FEAT-0009) | Needs (items) |
 |---|---|
