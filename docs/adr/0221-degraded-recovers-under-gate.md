@@ -1,6 +1,6 @@
 # ADR-0221: A Degraded Function recovers while a gate fails — a worker of the serving revision that passes its readiness probe makes it Ready
 
-- **Status**: Accepted (2026-10-10; judged five rounds, last verdict accept; the decider answered at acceptance on #849)
+- **Status**: Reviewing (2026-10-10; accepted 2026-10-10; judged five rounds, last verdict accept; the decider answered at acceptance on #849)
 - **Date**: 2026-10-08
 - **Deciders**: green-0-rabbit
 - **Tags**: function, supervision, readiness, status, gate, pooling, secrets
