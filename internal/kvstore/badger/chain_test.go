@@ -547,3 +547,19 @@ func TestReadyRefusalWritesNothing(t *testing.T) {
 	require.Equal(t, []byte("v-a"), v)
 	require.Empty(t, bucket.keys(""))
 }
+
+// scenario: every-timestamp-utc-millisecond (ADR-0196) — a chain manifest's at is written in the ADR-0196 form: a
+// base stamped at …35.965999999 reads …35.965Z.
+func TestEveryTimestampUTCMillisecond(t *testing.T) {
+	t.Parallel()
+	c := clock.NewManual(time.Date(2026, 10, 7, 22, 3, 35, 965999999, time.FixedZone("x", 2*3600)))
+	bucket := newFakeBucket()
+	db := openRawDB(t, t.TempDir())
+	writeKeys(t, db, "k/", 3, 8)
+	bk := newExporter(t, db, bucket, BackupConfig{})
+	bk.clock = c
+	require.NoError(t, bk.Rebaseline(context.Background()))
+	raw, err := bucket.Get(context.Background(), baseDirOf(t, bucket, 1)+manifestName)
+	require.NoError(t, err)
+	require.Contains(t, string(raw), "at: \"2026-10-07T20:03:35.965Z\"")
+}
