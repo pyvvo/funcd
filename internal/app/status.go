@@ -39,6 +39,12 @@ const (
 	reasonRunHeld       = "RunHeld"
 )
 
+// The stops of the Secret check, on the App's Ready and the AppRevision's Applied (ADR-0213 Decision 8).
+const (
+	reasonSecretNotFound   = "SecretNotFound"
+	reasonSecretKeyMissing = "SecretKeyMissing"
+)
+
 // verdict is one declared entry's state: its child line, and for a Pending or NotStarted one the App's Ready
 // reason it gives and the part's own message.
 type verdict struct {

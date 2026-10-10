@@ -2,7 +2,9 @@
 // part as a direct write of it would be admitted, and the App reconciler, which writes the parts, reports one status
 // and prunes what a new spec drops. The reconciler also stamps an AppRevision per changed spec and records its
 // rollout, its deadline and the history (ADR-0200, F114), records each write-back of a hand edit and writes nothing
-// while spec.paused is set (ADR-0212, F115). The owner GC removes the tree on App delete (internal/gc).
+// while spec.paused is set (ADR-0212, F115). It writes the ConfigMaps the App defines under their hashed names and
+// writes no part while a declared Secret or key is missing; app-parts refuses a part that names an undeclared Secret
+// (ADR-0213, F116). The owner GC removes the tree on App delete (internal/gc).
 package app
 
 import (
@@ -109,13 +111,21 @@ func (e entry) key(ns v1.NamespaceName) v1.ObjectRef {
 	return v1.ObjectRef{Kind: e.kind, Namespace: ns, Name: e.name}
 }
 
-// entries lists every section entry of a in section order (Decision 2).
+// entries lists every section entry of a in section order (Decision 2), configMaps first, a defined one under its
+// stored name (ADR-0213 Decisions 2 and 4).
 func entries(a *v1.App) []entry {
 	var out []entry
 	add := func(section string, kind v1.Kind, i int, name, ref v1.ObjectName, deletion v1.DeletionPolicy) {
 		out = append(out, entry{path: fmt.Sprintf("spec.%s[%d]", section, i), kind: kind, name: cmp.Or(name, ref), ref: ref != "", deletion: deletion})
 	}
 	s := &a.Spec
+	for i, e := range s.ConfigMaps {
+		name := e.Name
+		if e.Ref == "" {
+			name = v1.AppConfigMapName(e.Name, e.ConfigMapSpec)
+		}
+		add("configMaps", v1.KindConfigMap, i, name, e.Ref, "")
+	}
 	for i, e := range s.KV {
 		add("kv", v1.KindKVStore, i, e.Name, e.Ref, e.Deletion)
 	}
@@ -163,7 +173,8 @@ func keyOf(o v1.Object) v1.ObjectRef {
 	return v1.ObjectRef{Kind: o.GroupVersionKind().Kind, Namespace: m.Namespace, Name: m.Name}
 }
 
-// stop is the reason a pass wrote no further part: ChildNotOwned or ChildInvalid (Decision 4), naming the object.
+// stop is the reason a pass wrote no further part: ChildNotOwned or ChildInvalid (Decision 4), or SecretNotFound or
+// SecretKeyMissing (ADR-0213 Decision 8), naming the object.
 type stop struct {
 	reason string
 	part   v1.ObjectRef
@@ -275,12 +286,12 @@ func healing(revs []*v1.AppRevision, stored map[v1.ObjectName]v1.AppRevisionStat
 	return ok && c.Status == v1.ConditionTrue
 }
 
-// apply reads every declared part, stops with ChildNotOwned before any write when one is not this App's, then writes
-// each part, in section order, that is absent or whose spec, owner references or resource group differ. A write the
-// store refuses stops the pass with ChildInvalid. A pass the stamp stopped (halt) reads the parts and writes none.
-// objs gains each part's stored object, nil when absent; wrote is the first part written, nil when none was. When
-// heal is set, each write of a part that was absent or whose spec differed is a self-heal (ADR-0212 Decision 1): it
-// is logged right after the write and returned, in section order.
+// apply reads every declared part, stops with ChildNotOwned before any write when one is not this App's, then with the
+// Secret check's stop (ADR-0213 Decision 8), then writes each part, in section order, that is absent or whose spec,
+// owner references or resource group differ. A write the store refuses stops the pass with ChildInvalid. A pass the
+// stamp stopped (halt) reads the parts and writes none. objs gains each part's stored object, nil when absent; wrote
+// is the first part written, nil when none was. When heal is set, each write of a part that was absent or whose spec
+// differed is a self-heal (ADR-0212 Decision 1): it is logged right after the write and returned, in section order.
 func (r *Reconciler) apply(ctx context.Context, a *v1.App, ents []entry, objs map[v1.ObjectRef]v1.Object, halt *stop,
 	heal bool) (*stop, *v1.ObjectRef, []v1.ObjectRef, error) {
 	parts := make(map[v1.ObjectRef]v1.Object)
@@ -306,6 +317,9 @@ func (r *Reconciler) apply(ctx context.Context, a *v1.App, ents []entry, objs ma
 		if cur := objs[k]; !e.ref && cur != nil && !owned(a, cur) {
 			return &stop{reason: reasonChildNotOwned, part: k, detail: "exists and is not owned by App/" + string(a.Name)}, nil, nil, nil
 		}
+	}
+	if s, err := r.checkSecrets(ctx, a); s != nil || err != nil {
+		return s, nil, nil, err
 	}
 	var wrote *v1.ObjectRef
 	var healed []v1.ObjectRef
@@ -334,6 +348,30 @@ func (r *Reconciler) apply(ctx context.Context, a *v1.App, ents []entry, objs ma
 		}
 	}
 	return nil, wrote, healed, nil
+}
+
+// checkSecrets gets each declared Secret of the App's namespace with platform rights, in declaration order, and
+// returns the stop of the first one that is missing (SecretNotFound) or lacks a declared key in spec.data
+// (SecretKeyMissing, naming the first missing key), nil when every one is complete (ADR-0213 Decision 8). It tests key
+// membership only, so no value enters a stop, a status or a log line. It only reads.
+func (r *Reconciler) checkSecrets(ctx context.Context, a *v1.App) (*stop, error) {
+	for _, d := range a.Spec.Secrets {
+		k := v1.ObjectRef{Kind: v1.KindSecret, Namespace: a.Namespace, Name: d.Name}
+		obj, err := r.get(ctx, v1.KindSecret, a.Namespace, d.Name)
+		if err != nil {
+			return nil, err
+		}
+		sec, ok := obj.(*v1.Secret)
+		if !ok {
+			return &stop{reason: reasonSecretNotFound, part: k, detail: "no such Secret in the namespace"}, nil
+		}
+		for _, key := range d.Keys {
+			if _, ok := sec.Spec.Data[key]; !ok {
+				return &stop{reason: reasonSecretKeyMissing, part: k, detail: "lacks the declared key " + key}, nil
+			}
+		}
+	}
+	return nil, nil
 }
 
 // write creates desired, or updates cur with desired's spec, owner references and resource group when one of them
@@ -557,6 +595,26 @@ func (r *Reconciler) MapPart(ctx context.Context, obj v1.Object) []controller.Re
 	for _, o := range res.Items {
 		if a, ok := o.(*v1.App); ok && slices.Contains(a.Refs(), k) {
 			add(a.Name)
+		}
+	}
+	return reqs
+}
+
+// MapSecret is the controller.MapFunc of Secret (ADR-0213 Decision 8): it requeues each App of the Secret's namespace
+// that declares its name, so a Secret created, changed or deleted is checked at once. It reads the Secret's metadata
+// only.
+func (r *Reconciler) MapSecret(ctx context.Context, obj v1.Object) []controller.Request {
+	m := obj.GetObjectMeta()
+	res, err := r.store.List(ctx, v1.KindApp.GVK(), store.ListOptions{Namespace: m.Namespace})
+	if err != nil {
+		r.log.WarnContext(ctx, "list apps of a changed secret", "namespace", string(m.Namespace), "name", string(m.Name), "error", err)
+		return nil
+	}
+	var reqs []controller.Request
+	for _, o := range res.Items {
+		a, ok := o.(*v1.App)
+		if ok && slices.ContainsFunc(a.Spec.Secrets, func(s v1.AppSecret) bool { return s.Name == m.Name }) {
+			reqs = append(reqs, controller.Request{GVK: v1.KindApp.GVK(), Namespace: m.Namespace, Name: a.Name})
 		}
 	}
 	return reqs

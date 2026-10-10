@@ -2,11 +2,13 @@ package v1alpha1
 
 import (
 	"cmp"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
 	"reflect"
+	"slices"
 	"strings"
 
 	huma "github.com/danielgtaylor/huma/v2"
@@ -16,6 +18,9 @@ import (
 
 // maxAppNameLength keeps a later <app>-<number> name a DNS label (ADR-0199 Decision 1).
 const maxAppNameLength = 52
+
+// maxAppConfigMapNameLength keeps a defined ConfigMap's stored name, <name>-<10 hex>, a DNS label (ADR-0213 Decision 2).
+const maxAppConfigMapNameLength = 52
 
 // App is a namespaced, status-bearing resource that declares a whole app in typed sections (ADR-0199, F113): the
 // App reconciler writes its parts, reports one status and prunes what a new spec drops; the owner GC removes the tree
@@ -27,7 +32,8 @@ type App struct {
 	Status     AppStatus `json:"status,omitempty"`
 }
 
-// AppSpec is the App's parts, one section per kind, applied in this order (Decision 2).
+// AppSpec is the App's parts, one section per kind: configMaps first, so a ConfigMap is written before the parts that
+// name it (ADR-0213 Decision 4), then the other sections in this order (Decision 2).
 type AppSpec struct {
 	// Version is a free label that funcd does not interpret.
 	Version string `json:"version,omitempty"`
@@ -42,6 +48,9 @@ type AppSpec struct {
 	Routes       []AppRoute       `json:"routes,omitempty"`
 	Sites        []AppSite        `json:"sites,omitempty"`
 	Catalogs     []AppCatalog     `json:"catalogs,omitempty"`
+	ConfigMaps   []AppConfigMap   `json:"configMaps,omitempty"`
+	// Secrets declares the Secrets the parts name, never their values (ADR-0213 Decision 6).
+	Secrets []AppSecret `json:"secrets,omitempty"`
 }
 
 // WithoutPause returns s with Paused cleared: what the stamp compares, an AppRevision freezes and rollback compares
@@ -118,6 +127,61 @@ type AppCatalog struct {
 	CatalogServiceSpec `json:",inline"`
 }
 
+// AppConfigMap is a configMaps entry: a ConfigMap the App defines, stored as AppConfigMapName(name, spec), or only the
+// ref of an existing one (ADR-0213 Decision 2).
+type AppConfigMap struct {
+	Name          ObjectName `json:"name,omitempty"`
+	Ref           ObjectName `json:"ref,omitempty"`
+	ConfigMapSpec `json:",inline"`
+}
+
+// AppSecret declares a Secret of the App's namespace that a part names, and the keys the parts read (ADR-0213
+// Decision 6). The App never holds, writes or owns the Secret.
+type AppSecret struct {
+	Name        ObjectName `json:"name"`
+	Description string     `json:"description,omitempty"`
+	Keys        []string   `json:"keys"`
+}
+
+// AppConfigMapName is the stored name of a configMaps entry the App defines (ADR-0213 Decision 2): "<name>-" and 10 hex
+// characters, the first 5 bytes of SHA-256 over json.Marshal(spec), which writes the data keys sorted, so the name
+// follows the data alone.
+func AppConfigMapName(name ObjectName, spec ConfigMapSpec) ObjectName {
+	b, _ := json.Marshal(spec) // a struct of a map[string]string always marshals
+	sum := sha256.Sum256(b)
+	return ObjectName(fmt.Sprintf("%s-%x", name, sum[:5]))
+}
+
+// Schema is ConfigMapSpec's schema plus name and ref (see entrySchema).
+func (AppConfigMap) Schema(r huma.Registry) *huma.Schema {
+	s := entrySchema(r, reflect.TypeFor[ConfigMapSpec](), false)
+	s.Properties["name"].Description = "The ConfigMap's name, at most 52 characters. It is stored as <name>-<hash of data>, " +
+		"and the config of each part that names it is set to that stored name."
+	return s
+}
+
+// Schema is closed: name and at least one key, each an env-var name; description is free text (ADR-0213 Decision 6).
+func (AppSecret) Schema(huma.Registry) *huma.Schema {
+	one := 1
+	name := dnsLabelSchema()
+	name.Description = "The name of a Secret in the App's namespace. The platform holds its value; the App never writes it."
+	return &huma.Schema{
+		Type: huma.TypeObject,
+		Properties: map[string]*huma.Schema{
+			"name":        name,
+			"description": {Type: huma.TypeString, Description: "What the Secret is for, for the installer who provides it."},
+			"keys": {
+				Type:        huma.TypeArray,
+				Description: "The keys the parts read: the Secret's data must hold each of them.",
+				MinItems:    &one,
+				Items:       &huma.Schema{Type: huma.TypeString, Pattern: envName.String()},
+			},
+		},
+		Required:             []string{"name", "keys"},
+		AdditionalProperties: false,
+	}
+}
+
 // Schema is KVStoreSpec's schema plus name, ref and deletion (see entrySchema).
 func (AppKVStore) Schema(r huma.Registry) *huma.Schema {
 	return entrySchema(r, reflect.TypeFor[KVStoreSpec](), true)
@@ -161,6 +225,11 @@ func (AppSite) Schema(r huma.Registry) *huma.Schema {
 // Schema is CatalogServiceSpec's schema plus name and ref (see entrySchema).
 func (AppCatalog) Schema(r huma.Registry) *huma.Schema {
 	return entrySchema(r, reflect.TypeFor[CatalogServiceSpec](), false)
+}
+
+// MarshalJSON writes a ref entry as its ref alone (see marshalEntry).
+func (e AppConfigMap) MarshalJSON() ([]byte, error) {
+	return marshalEntry(entryHead{Name: e.Name, Ref: e.Ref}, e.ConfigMapSpec)
 }
 
 // MarshalJSON writes a ref entry as its ref alone (see marshalEntry).
@@ -283,8 +352,10 @@ func (a *App) Refs() []ObjectRef {
 
 // Validate enforces the store-free rules of Decision 3, each refusal naming its field path: a name of at most 52
 // characters; each entry either a name or a ref alone; deletion retain or delete; no name repeated within a section;
-// each part valid as its kind; no entry named like an object another part's reconciler writes. The rules that need
-// the store (quotas, a ref to an object this App controls) are the app-parts admission's.
+// a defined ConfigMap name of at most 52 characters and no two entries with one stored name (ADR-0213 Decision 2);
+// each part valid as its kind; no entry named like an object another part's reconciler writes; the secrets rules
+// (ADR-0213 Decision 6). The rules that need the store (quotas, a ref to an object this App controls) and the
+// undeclared-Secret rule (ADR-0213 Decision 7) are the app-parts admission's.
 func (a *App) Validate() error {
 	const op = "App.Validate"
 	if err := validateMeta(a.TypeMeta, &a.ObjectMeta, KindApp); err != nil {
@@ -294,6 +365,7 @@ func (a *App) Validate() error {
 		return fault.Invalidf(op, "metadata.name %q is longer than %d characters", a.Name, maxAppNameLength)
 	}
 	seen := make(map[ObjectRef]string)
+	stored := make(map[ObjectRef]string)
 	declared := make(map[ObjectRef]string)
 	for _, e := range a.entries() {
 		if err := e.validate(op); err != nil {
@@ -304,6 +376,14 @@ func (a *App) Validate() error {
 			return fault.Invalidf(op, "%s repeats the name %q of %s", e.path, id.Name, prev)
 		}
 		seen[id] = e.path
+		if e.kind == KindConfigMap && e.part != nil && len(e.head.Name) > maxAppConfigMapNameLength {
+			return fault.Invalidf(op, "%s.name %q is longer than %d characters", e.path, e.head.Name, maxAppConfigMapNameLength)
+		}
+		obj := ObjectRef{Kind: e.kind, Name: e.object()}
+		if prev, dup := stored[obj]; dup {
+			return fault.Invalidf(op, "%s and %s are both stored as %s/%s", prev, e.path, obj.Kind, obj.Name)
+		}
+		stored[obj] = e.path
 		if e.part == nil {
 			continue
 		}
@@ -312,7 +392,41 @@ func (a *App) Validate() error {
 			return partError(op, e.path, err)
 		}
 	}
-	return a.validateWriters(op, declared)
+	if err := a.validateWriters(op, declared); err != nil {
+		return err
+	}
+	return a.validateSecrets(op)
+}
+
+// validateSecrets refuses a secrets entry whose name is not a DNS label or repeats another's, or whose keys are empty,
+// repeat a key or hold one that is not an env-var name (ADR-0213 Decision 6).
+func (a *App) validateSecrets(op string) error {
+	names := make(map[ObjectName]string, len(a.Spec.Secrets))
+	for i, s := range a.Spec.Secrets {
+		path := fmt.Sprintf("spec.secrets[%d]", i)
+		if !dnsLabel.MatchString(string(s.Name)) {
+			return fault.Invalidf(op, "%s.name %q is not a valid DNS-1123 label", path, s.Name)
+		}
+		if prev, dup := names[s.Name]; dup {
+			return fault.Invalidf(op, "%s repeats the name %q of %s", path, s.Name, prev)
+		}
+		names[s.Name] = path
+		if len(s.Keys) == 0 {
+			return fault.Invalidf(op, "%s.keys is empty: declare at least one key the parts read", path)
+		}
+		keys := make(map[string]string, len(s.Keys))
+		for j, k := range s.Keys {
+			field := fmt.Sprintf("%s.keys[%d]", path, j)
+			if err := validateEnvKey(op, field, k); err != nil {
+				return err
+			}
+			if prev, dup := keys[k]; dup {
+				return fault.Invalidf(op, "%s repeats the key %q of %s", field, k, prev)
+			}
+			keys[k] = field
+		}
+	}
+	return nil
 }
 
 // validateWriters refuses an entry named like an object another part's reconciler writes, since the two would
@@ -370,13 +484,25 @@ type appEntry struct {
 	part     Object
 }
 
-// entries lists every section entry in section order.
+// entries lists every section entry in section order, configMaps first (ADR-0213 Decision 4). Each part is built from
+// a copy of its entry's spec in which every config name of a defined configMaps entry is that entry's stored name
+// (ADR-0213 Decision 3); the App's spec stays as declared.
 func (a *App) entries() []appEntry {
 	meta := func(n ObjectName) ObjectMeta {
 		return ObjectMeta{Name: n, Namespace: a.Namespace, ResourceGroup: a.ResourceGroup}
 	}
 	s := &a.Spec
 	var out []appEntry
+	stored := make(map[ObjectName]ObjectName, len(s.ConfigMaps))
+	for i, e := range s.ConfigMaps {
+		name := e.Name
+		if e.Ref == "" && e.Name != "" {
+			name = AppConfigMapName(e.Name, e.ConfigMapSpec)
+			stored[e.Name] = name
+		}
+		out = append(out, newEntry("configMaps", i, entryHead{Name: e.Name, Ref: e.Ref}, e.ConfigMapSpec,
+			&ConfigMap{TypeMeta: typeMetaFor(KindConfigMap), ObjectMeta: meta(name), Spec: e.ConfigMapSpec}))
+	}
 	for i, e := range s.KV {
 		out = append(out, newEntry("kv", i, entryHead{e.Name, e.Ref, e.Deletion}, e.KVStoreSpec,
 			&KVStore{TypeMeta: typeMetaFor(KindKVStore), ObjectMeta: meta(e.Name), Spec: e.KVStoreSpec}))
@@ -386,12 +512,14 @@ func (a *App) entries() []appEntry {
 			&Bucket{TypeMeta: typeMetaFor(KindBucket), ObjectMeta: meta(e.Name), Spec: e.BucketSpec}))
 	}
 	for i, e := range s.Functions {
+		spec := e.FunctionSpec
+		spec.Config = repoint(spec.Config, stored)
 		out = append(out, newEntry("functions", i, entryHead{Name: e.Name, Ref: e.Ref}, e.FunctionSpec,
-			&Function{TypeMeta: typeMetaFor(KindFunction), ObjectMeta: meta(e.Name), Spec: e.FunctionSpec}))
+			&Function{TypeMeta: typeMetaFor(KindFunction), ObjectMeta: meta(e.Name), Spec: spec}))
 	}
 	for i, e := range s.Workflows {
 		out = append(out, newEntry("workflows", i, entryHead{Name: e.Name, Ref: e.Ref}, e.WorkflowSpec,
-			&Workflow{TypeMeta: typeMetaFor(KindWorkflow), ObjectMeta: meta(e.Name), Spec: e.WorkflowSpec}))
+			&Workflow{TypeMeta: typeMetaFor(KindWorkflow), ObjectMeta: meta(e.Name), Spec: repointSteps(e.WorkflowSpec, stored)}))
 	}
 	for i, e := range s.EventSources {
 		out = append(out, newEntry("eventSources", i, entryHead{Name: e.Name, Ref: e.Ref}, e.EventSourceSpec,
@@ -410,10 +538,47 @@ func (a *App) entries() []appEntry {
 			&Site{TypeMeta: typeMetaFor(KindSite), ObjectMeta: meta(e.Name), Spec: e.SiteSpec}))
 	}
 	for i, e := range s.Catalogs {
+		spec := e.CatalogServiceSpec
+		spec.Config = repoint(spec.Config, stored)
 		out = append(out, newEntry("catalogs", i, entryHead{Name: e.Name, Ref: e.Ref}, e.CatalogServiceSpec,
-			&CatalogService{TypeMeta: typeMetaFor(KindCatalogService), ObjectMeta: meta(e.Name), Spec: e.CatalogServiceSpec}))
+			&CatalogService{TypeMeta: typeMetaFor(KindCatalogService), ObjectMeta: meta(e.Name), Spec: spec}))
 	}
 	return out
+}
+
+// repoint returns names with each name of a defined configMaps entry replaced by its stored name, in a new slice when
+// one is replaced, so the entry's spec is not changed (ADR-0213 Decision 3).
+func repoint(names []ObjectName, stored map[ObjectName]ObjectName) []ObjectName {
+	var out []ObjectName
+	for i, n := range names {
+		if s, ok := stored[n]; ok {
+			if out == nil {
+				out = slices.Clone(names)
+			}
+			out[i] = s
+		}
+	}
+	if out == nil {
+		return names
+	}
+	return out
+}
+
+// repointSteps returns spec with each image step's function.config repointed on copies of its steps, the config that
+// the Workflow copies into the step Function (ADR-0213 Decision 3).
+func repointSteps(spec WorkflowSpec, stored map[ObjectName]ObjectName) WorkflowSpec {
+	if len(stored) == 0 {
+		return spec
+	}
+	spec.Steps = slices.Clone(spec.Steps)
+	for j := range spec.Steps {
+		if f := spec.Steps[j].Function; f != nil && f.Image != "" {
+			fc := *f
+			fc.Config = repoint(f.Config, stored)
+			spec.Steps[j].Function = &fc
+		}
+	}
+	return spec
 }
 
 func newEntry[S partSpec](section string, i int, head entryHead, spec S, part Object) appEntry {
@@ -427,6 +592,15 @@ func newEntry[S partSpec](section string, i int, head entryHead, spec S, part Ob
 		e.part = part
 	}
 	return e
+}
+
+// object is the name of the object the entry names: its part's, which a defined ConfigMap stores under
+// AppConfigMapName, or its ref.
+func (e *appEntry) object() ObjectName {
+	if e.part != nil {
+		return e.part.GetObjectMeta().Name
+	}
+	return e.head.Ref
 }
 
 // validate checks the entry's own fields: a name, or a ref and nothing else (Decision 2).
@@ -477,8 +651,8 @@ type entryHead struct {
 
 // partSpec is the spec of a kind that has a section.
 type partSpec interface {
-	KVStoreSpec | BucketSpec | FunctionSpec | WorkflowSpec | EventSourceSpec | SensorSpec | RouteSpec | SiteSpec |
-		CatalogServiceSpec
+	ConfigMapSpec | KVStoreSpec | BucketSpec | FunctionSpec | WorkflowSpec | EventSourceSpec | SensorSpec | RouteSpec |
+		SiteSpec | CatalogServiceSpec
 }
 
 // marshalEntry writes an entry's head, then its spec's fields only when the spec is set: a ref entry goes out as

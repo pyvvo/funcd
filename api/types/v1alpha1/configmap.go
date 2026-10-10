@@ -40,9 +40,17 @@ var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // validateEnvKeys rejects the first data key, in sorted order, that is not an env-var name.
 func validateEnvKeys[V string | []byte](op string, data map[string]V) error {
 	for _, k := range slices.Sorted(maps.Keys(data)) {
-		if !envName.MatchString(k) {
-			return fault.Invalidf(op, "spec.data key %q is not an env-var name (must match %s)", k, envName)
+		if err := validateEnvKey(op, "spec.data key", k); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+// validateEnvKey rejects key, at field, unless it is an env-var name.
+func validateEnvKey(op, field, key string) error {
+	if !envName.MatchString(key) {
+		return fault.Invalidf(op, "%s %q is not an env-var name (must match %s)", field, key, envName)
 	}
 	return nil
 }
