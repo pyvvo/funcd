@@ -37,6 +37,11 @@ import (
 )
 
 // fixture is an installed funcd: a binary at self printing v0.8.0, a seeded metastore and a file:// target.
+//
+// The tests that write or run a binary, or hand over a target's lock, stay serial: a fork in a parallel test inherits
+// every descriptor the process has open, until its exec, so a script another test is writing fails exec with "text file
+// busy" and a target lock another test closed stays held, since a flock belongs to the open file description. Both were
+// seen on Linux.
 type fixture struct {
 	dataDir, targetDir, self string
 	cfg                      config.Config
@@ -189,7 +194,6 @@ func TestScenarioUpgradePinsOldState(t *testing.T) {
 // directory stop the upgrade before the stop, naming the cause and --no-snapshot; a live Badger with --unit "" is
 // fault.Conflict; --no-snapshot swaps and warns once.
 func TestScenarioSnapshotUnavailableStopsUpgrade(t *testing.T) {
-	t.Parallel()
 	ctx := context.Background()
 	forbidden := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
@@ -217,7 +221,6 @@ func TestScenarioSnapshotUnavailableStopsUpgrade(t *testing.T) {
 		}, fault.Invalid, func(f *fixture) []string { return []string{f.cfg.Storage.MetastoreDir, "--config"} }},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
 			f := newFixture(t, "v0.8.0")
 			c.set(t, f)
 			sd := &systemd{execStart: f.self}
@@ -237,7 +240,6 @@ func TestScenarioSnapshotUnavailableStopsUpgrade(t *testing.T) {
 	}
 
 	t.Run("a live Badger with --unit empty", func(t *testing.T) {
-		t.Parallel()
 		f := newFixture(t, "v0.8.0")
 		eng, err := badgerstore.Open(f.cfg.Storage.MetastoreDir)
 		require.NoError(t, err)
@@ -249,7 +251,6 @@ func TestScenarioSnapshotUnavailableStopsUpgrade(t *testing.T) {
 	})
 
 	t.Run("--no-snapshot", func(t *testing.T) {
-		t.Parallel()
 		f := newFixture(t, "v0.8.0")
 		f.cfg.Backup.Target = ""
 		o := f.options(fakeBinary(t, "funcd-0.9.0", "v0.9.0"))
@@ -331,7 +332,6 @@ func ownedBy(root string, want [2]uint32) error {
 // the store; no binary is swapped, every entry under the data and file:// root has the data's owner when systemctl
 // start runs, and the old binary starts.
 func TestScenarioWriteFailureKeepsOldBinary(t *testing.T) {
-	t.Parallel()
 	f := newFixture(t, "v0.8.0")
 	want := ownTo(t, f.dataDir, f.targetDir)
 	sd := &systemd{execStart: f.self}
@@ -367,7 +367,6 @@ func TestScenarioWriteFailureKeepsOldBinary(t *testing.T) {
 // scenario: downgrade-refused — v0.8.0 over an installed v0.9.0 is fault.Invalid naming both, before any systemctl
 // call, object or file.
 func TestScenarioDowngradeRefused(t *testing.T) {
-	t.Parallel()
 	f := newFixture(t, "v0.9.0")
 	sd := &systemd{execStart: f.self}
 	o := upgrade.WithVersion(f.options(fakeBinary(t, "funcd-0.8.0", "v0.8.0")), "v0.9.0")
@@ -387,7 +386,6 @@ func TestScenarioDowngradeRefused(t *testing.T) {
 // scenario: pre-upgrade-retention-reported — with four complete pins and preUpgrade 3, the fifth reports the two
 // oldest past backup.retention.preUpgrade with their prune lines, and deletes nothing.
 func TestScenarioPreUpgradeRetentionReported(t *testing.T) {
-	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t, "v0.8.0")
 	var pins []backup.Manifest
@@ -412,7 +410,6 @@ func TestScenarioPreUpgradeRetentionReported(t *testing.T) {
 // Q13 (DR, 2026-10-10): a held platform refuses the upgrade naming the marker and its reason; --no-snapshot goes on
 // with one warning naming it.
 func TestUpgradeWhileHeld(t *testing.T) {
-	t.Parallel()
 	f := newFixture(t, "v0.8.0")
 	require.NoError(t, hold.Write(f.dataDir, hold.Marker{Reason: "restore"}))
 	_, err := upgrade.Run(context.Background(), f.options(fakeBinary(t, "funcd-0.9.0", "v0.9.0")))
@@ -442,7 +439,6 @@ func TestParseVersionOutput(t *testing.T) {
 
 // A unit whose ExecStart is not this binary is fault.Invalid naming both, before anything stops.
 func TestExecStartMismatch(t *testing.T) {
-	t.Parallel()
 	require.Equal(t, "/usr/local/bin/funcd", upgrade.ExecStartPath([]byte("ExecStart={ path=/usr/local/bin/funcd ; argv[]=/usr/local/bin/funcd ; }\n")))
 	require.Empty(t, upgrade.ExecStartPath([]byte("ExecStart=\n")))
 
@@ -466,7 +462,6 @@ func TestExecStartMismatch(t *testing.T) {
 
 // A swap that fails leaves self as it was and removes the temporary names.
 func TestSwapLeavesBinaryOnFailure(t *testing.T) {
-	t.Parallel()
 	self, newBin := fakeBinary(t, "funcd", "v0.8.0"), fakeBinary(t, "funcd-new", "v0.9.0")
 	require.Error(t, upgrade.Swap(filepath.Join(t.TempDir(), "absent"), self))
 	require.NoError(t, os.MkdirAll(filepath.Join(self+".previous", "keep"), 0o700))
@@ -486,7 +481,6 @@ func TestSwapLeavesBinaryOnFailure(t *testing.T) {
 
 // A store or the file:// lock a running daemon holds is fault.Conflict naming its directory (Q5).
 func TestStoreHeldConflict(t *testing.T) {
-	t.Parallel()
 	ctx := context.Background()
 	f := newFixture(t, "v0.8.0")
 	runs, err := runbadger.New(runbadger.Config{Dir: f.cfg.Workflow.DataDir})
