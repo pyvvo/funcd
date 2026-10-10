@@ -11,6 +11,8 @@ Group=funcd
 ExecStart=/usr/local/bin/funcd
 Restart=on-failure
 RestartSec=2
+# Exit status 70 is safe mode's stop (ADR-0207): restarting would only repeat the crash loop.
+RestartPreventExitStatus=70
 
 # Writable state — the Badger metastore writes here (<dataDir>/store, ADR-0065).
 StateDirectory=funcd

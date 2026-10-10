@@ -2,10 +2,13 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/pyvvo/funcd/internal/safemode"
 )
 
 // scenario: one-service-install — `funcd install --print` emits a valid, version-stamped
@@ -65,5 +68,22 @@ func TestInstallPrintIsVersionStamped(t *testing.T) {
 	// way the stamp line must be present (proving the template wired version.Get()).
 	if !strings.Contains(unit, "version ") {
 		t.Fatalf("unit not version-stamped:\n%s", unit)
+	}
+}
+
+// TestUnitsPreventRestartOn70: both units stop restarting on safe mode's exit status 70 (ADR-0207 Decision 5).
+func TestUnitsPreventRestartOn70(t *testing.T) {
+	unit, err := renderUnit()
+	if err != nil {
+		t.Fatalf("renderUnit: %v", err)
+	}
+	repo, err := os.ReadFile(filepath.Join(repoRoot(t), "configs/systemd/funcd.service"))
+	if err != nil {
+		t.Fatalf("read the repo unit: %v", err)
+	}
+	for name, text := range map[string]string{"funcd install": unit, "configs/systemd/funcd.service": string(repo)} {
+		if want := fmt.Sprintf("\nRestartPreventExitStatus=%d\n", safemode.ExitStopped); !strings.Contains(text, want) {
+			t.Fatalf("%s lacks %q:\n%s", name, strings.TrimSpace(want), text)
+		}
 	}
 }

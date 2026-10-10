@@ -32,7 +32,7 @@ func TestScenarioMasterKeyMigrates(t *testing.T) {
 		var cfg config.Config
 		cfg.Storage.DataDir, cfg.S3Gateway.Enabled = dataDir, gatewayOn
 		logs := &bytes.Buffer{}
-		master, err := loadMaster(cfg, slog.New(slog.NewTextHandler(logs, nil)))
+		master, err := envelope.LoadMaster(cfg, slog.New(slog.NewTextHandler(logs, nil)))
 		return master, legacy, logs.String(), err
 	}
 	put := func(t *testing.T, dir string, key []byte) string {
@@ -110,7 +110,7 @@ func TestBackupEncryptionCheckedAtStart(t *testing.T) {
 	start := func(t *testing.T, cfg config.Config) (string, error) {
 		t.Helper()
 		logs := &bytes.Buffer{}
-		_, closeExec, _, _, err := buildOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(logs, nil)))
+		_, closeExec, _, _, err := buildOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(logs, nil)), nil)
 		if err == nil {
 			t.Cleanup(func() { _ = closeExec() })
 		}

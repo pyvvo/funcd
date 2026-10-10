@@ -505,7 +505,7 @@ func addressesFromConfigFile(t *testing.T) (*funcd.Platform, string) {
 	require.NoError(t, err)
 
 	root := slog.New(slog.NewTextHandler(io.Discard, nil))
-	opts, closeExec, _, _, err := buildOptions(context.Background(), cfg, root)
+	opts, closeExec, _, _, err := buildOptions(context.Background(), cfg, root, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = closeExec() })
 
@@ -540,7 +540,7 @@ func TestIssue153_FunclogConfigBlockLoadsAndMaps(t *testing.T) {
 			cfg, err := config.Load(path, config.Flags{})
 			require.NoError(t, err, "the funclog block is a known config key")
 
-			opts, closeExec, _, _, err := buildOptions(context.Background(), cfg, root)
+			opts, closeExec, _, _, err := buildOptions(context.Background(), cfg, root, nil)
 			if tc.wantErr {
 				require.ErrorContains(t, err, "funclog.segmentMaxAge")
 				return
@@ -585,7 +585,7 @@ func TestIssue333_NegativeWorkflowEventingDurationRejected(t *testing.T) {
 			t.Run(k.key+"="+bad, func(t *testing.T) {
 				cfg := load(t)
 				k.set(&cfg, bad)
-				_, _, _, _, err := buildOptions(context.Background(), cfg, root)
+				_, _, _, _, err := buildOptions(context.Background(), cfg, root, nil)
 				require.Error(t, err)
 				require.Equal(t, fault.Invalid, fault.KindOf(err))
 				require.ErrorContains(t, err, k.key)
@@ -597,7 +597,7 @@ func TestIssue333_NegativeWorkflowEventingDurationRejected(t *testing.T) {
 		for _, k := range keys {
 			k.set(&cfg, "0s")
 		}
-		_, closeExec, _, _, err := buildOptions(context.Background(), cfg, root)
+		_, closeExec, _, _, err := buildOptions(context.Background(), cfg, root, nil)
 		require.NoError(t, err)
 		require.NoError(t, closeExec())
 	})
@@ -619,7 +619,7 @@ func TestIssue436_NegativeFunclogSegmentMaxAgeRejected(t *testing.T) {
 		t.Run(bad, func(t *testing.T) {
 			cfg := base
 			cfg.Funclog.SegmentMaxAge = bad
-			_, _, _, _, err := buildOptions(context.Background(), cfg, root)
+			_, _, _, _, err := buildOptions(context.Background(), cfg, root, nil)
 			require.Error(t, err)
 			require.Equal(t, fault.Invalid, fault.KindOf(err))
 			require.ErrorContains(t, err, "funclog.segmentMaxAge")
@@ -629,7 +629,7 @@ func TestIssue436_NegativeFunclogSegmentMaxAgeRejected(t *testing.T) {
 		t.Run("ok="+ok, func(t *testing.T) {
 			cfg := base
 			cfg.Funclog.SegmentMaxAge = ok
-			_, closeExec, _, _, err := buildOptions(context.Background(), cfg, root)
+			_, closeExec, _, _, err := buildOptions(context.Background(), cfg, root, nil)
 			require.NoError(t, err)
 			require.NoError(t, closeExec())
 		})
@@ -649,7 +649,7 @@ func TestIssue437_FailedBuildOptionsClosesDrivers(t *testing.T) {
 		return cfg
 	}
 	expectInvalid := func(t *testing.T, cfg config.Config) {
-		_, _, _, _, err := buildOptions(context.Background(), cfg, root)
+		_, _, _, _, err := buildOptions(context.Background(), cfg, root, nil)
 		require.Error(t, err)
 		require.Equal(t, fault.Invalid, fault.KindOf(err))
 	}
@@ -701,7 +701,7 @@ func TestIssue507_FailedBuildOptionsShutsDownTelemetry(t *testing.T) {
 	cfg.Telemetry.Insecure = true
 
 	start := time.Now()
-	_, _, _, _, err = buildOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	_, _, _, _, err = buildOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
 	require.Error(t, err)
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
 	require.Less(t, time.Since(start), 10*time.Second, "the telemetry shutdown is not bounded")
@@ -942,14 +942,14 @@ func TestInvokeDefaultTimeoutNegativeRejected(t *testing.T) {
 	for _, bad := range []string{"-1s", "bogus"} {
 		cfg := base
 		cfg.Invoke.DefaultTimeout = bad
-		_, _, _, _, err := buildOptions(context.Background(), cfg, root)
+		_, _, _, _, err := buildOptions(context.Background(), cfg, root, nil)
 		require.Equal(t, fault.Invalid, fault.KindOf(err), bad)
 		require.ErrorContains(t, err, "invoke.defaultTimeout")
 	}
 	for _, ok := range []string{"", "0s", "90s"} {
 		cfg := base
 		cfg.Invoke.DefaultTimeout = ok
-		_, closeExec, _, _, err := buildOptions(context.Background(), cfg, root)
+		_, closeExec, _, _, err := buildOptions(context.Background(), cfg, root, nil)
 		require.NoError(t, err, ok)
 		require.NoError(t, closeExec())
 	}
@@ -971,14 +971,14 @@ func TestGCSweepIntervalMustBePositive(t *testing.T) {
 		t.Run(bad, func(t *testing.T) {
 			cfg := base
 			cfg.Controller.GCSweepInterval = bad
-			_, _, _, _, err := buildOptions(context.Background(), cfg, root)
+			_, _, _, _, err := buildOptions(context.Background(), cfg, root, nil)
 			require.Equal(t, fault.Invalid, fault.KindOf(err))
 			require.ErrorContains(t, err, "controller.gcSweepInterval")
 		})
 	}
 	cfg := base
 	cfg.Controller.GCSweepInterval = "30s"
-	_, closeExec, _, _, err := buildOptions(context.Background(), cfg, root)
+	_, closeExec, _, _, err := buildOptions(context.Background(), cfg, root, nil)
 	require.NoError(t, err)
 	require.NoError(t, closeExec())
 }

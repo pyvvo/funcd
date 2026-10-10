@@ -12,9 +12,14 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/backup"
+	"github.com/pyvvo/funcd/internal/backup/envelope"
+	"github.com/pyvvo/funcd/internal/backup/runner"
 	"github.com/pyvvo/funcd/internal/blob"
+	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/eventing"
 	"github.com/pyvvo/funcd/internal/eventing/deadletter"
+	funcdconfig "github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/workflow/runstate"
@@ -49,8 +54,8 @@ type runnerCase struct {
 	still func(t *testing.T, p *Platform)
 }
 
-// TestEveryRunnerConsultsHold: on a held platform every Decision 6 runner built so far, the App's included, stays
-// still; it fails when one acts. ADR-0205, ADR-0208 and ADR-0209 add their backup loops' cases.
+// TestEveryRunnerConsultsHold: on a held platform every Decision 6 runner built so far, the App's and the platform
+// backup's included, stays still; it fails when one acts. ADR-0208 and ADR-0209 add their backup loops' cases.
 func TestEveryRunnerConsultsHold(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -58,10 +63,20 @@ func TestEveryRunnerConsultsHold(t *testing.T) {
 	require.NoError(t, hold.Write(dir, hold.Marker{Reason: "restore", Since: v1.NewTimestamp(time.Now())}))
 	h, err := hold.Open(dir)
 	require.NoError(t, err)
-	p, err := New(InMemory(), WithLogger(slog.New(slog.DiscardHandler)), WithHold(h),
+	quiet := slog.New(slog.DiscardHandler)
+	// The platform backup runner as cmd/funcd builds it, its Hold the daemon's (ADR-0205 and ADR-0206, wired by ADR-0207).
+	tg, err := backup.Open(ctx, backup.Config{Target: gocloud.FileURL(t.TempDir()), DataDir: dir, Retention: backup.Retention{Hourly: 1}, Logger: quiet})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tg.Close() })
+	sealer, err := envelope.New(envelope.Config{None: true, NoSecrets: true, Logger: quiet})
+	require.NoError(t, err)
+	backups, err := runner.New(runner.Config{Target: tg, Sealer: sealer, Hold: h, Logger: quiet,
+		Times: funcdconfig.BackupTimes{Interval: 50 * time.Millisecond, RPO: 100 * time.Millisecond, RetryInterval: 50 * time.Millisecond}})
+	require.NoError(t, err)
+	p, err := New(InMemory(), WithLogger(quiet), WithHold(h),
 		WithWorkflow("", defaultWorkflowStepTimeout, 50*time.Millisecond, defaultWorkflowRetry, defaultWorkflowPayloadLimit),
 		WithDeadLetterQueue("", 2, 50*time.Millisecond, 0), WithBlobPollInterval(50*time.Millisecond),
-		WithPacing(Pacing{ReferentPollInterval: 50 * time.Millisecond}))
+		WithPacing(Pacing{ReferentPollInterval: 50 * time.Millisecond}), WithPlatformBackup(backups))
 	require.NoError(t, err)
 	st := p.cfg.store
 	runsIn := func(t *testing.T) []string {
@@ -161,6 +176,14 @@ func TestEveryRunnerConsultsHold(t *testing.T) {
 				require.NoError(t, err)
 				require.True(t, found, "a held reclaim dropped %s", k)
 			}
+		}},
+		{name: "platform backup", seed: func(*testing.T, *Platform) {}, still: func(t *testing.T, _ *Platform) {
+			entries, err := tg.List(ctx)
+			require.NoError(t, err)
+			require.Empty(t, entries, "a held platform backup wrote a generation")
+			st, err := backups.Status(ctx)
+			require.NoError(t, err)
+			require.True(t, st.Held)
 		}},
 		{name: "Bucket reclaim", seed: func(t *testing.T, p *Platform) {
 			require.NoError(t, p.cfg.blob.Put(ctx, bucketPrefix("team", "gone")+"x", []byte("x"), blob.PutOptions{}))

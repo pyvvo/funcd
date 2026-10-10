@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -45,6 +46,8 @@ Type=simple
 ExecStart={{.Bin}}
 Restart=on-failure
 RestartSec=2
+# Exit status 70 is safe mode's stop (ADR-0207): restarting would only repeat the crash loop.
+RestartPreventExitStatus=70
 # funcd needs root for the private containerd (cgroups, netns, mounts) — ADR-0011/0054.
 User=root
 Environment=FUNCD_DATA_DIR={{.DataRoot}}
@@ -130,16 +133,14 @@ func newUninstallCmd(out io.Writer) *cobra.Command {
 	}
 }
 
-// requireLinuxRoot gates the real (non-print) install/uninstall: they write
-// /etc/systemd/system and manage systemd, which is Linux + root only. Off Linux or as a
-// non-root user it returns a clear, actionable error (mirrors the driver's Linux gating).
+// requireLinuxRoot gates an op that manages the systemd unit (the real install/uninstall, `upgrade --unit`), which is
+// Linux + root only. Off Linux or as a non-root user it returns a clear, actionable error.
 func requireLinuxRoot(op string) error {
 	if runtime.GOOS != "linux" {
-		return fmt.Errorf("%s: funcd install/uninstall manages a systemd unit — Linux only "+
-			"(got %s); use --print to preview the unit", op, runtime.GOOS)
+		return fmt.Errorf("%s manages a systemd unit — Linux only (got %s)", op, runtime.GOOS)
 	}
 	if os.Geteuid() != 0 {
-		return fmt.Errorf("%s: writing %s needs root — re-run with sudo (or use --print)", op, unitPath)
+		return fmt.Errorf("%s manages a systemd unit and needs root — re-run with sudo", op)
 	}
 	return nil
 }
@@ -183,10 +184,10 @@ func runInstall(ctx context.Context, out io.Writer, unit string) error {
 	if err := provision.LayDown(ctx, ctrmanager.BinDir(), cniBinDir); err != nil {
 		return fmt.Errorf("%s: lay down runtime: %w", op, err)
 	}
-	if err := systemctl("daemon-reload"); err != nil {
+	if _, err := systemctl("daemon-reload"); err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
-	if err := systemctl("enable", "--now", "funcd.service"); err != nil {
+	if _, err := systemctl("enable", "--now", "funcd.service"); err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}
 	_, _ = fmt.Fprintf(out, "installed and started funcd.service (%s)\n", unitPath)
@@ -200,20 +201,23 @@ func runUninstall(out io.Writer) error {
 	if err := requireLinuxRoot(op); err != nil {
 		return err
 	}
-	_ = systemctl("disable", "--now", "funcd.service") // best-effort: not-loaded ⇒ already gone
+	_, _ = systemctl("disable", "--now", "funcd.service") // best-effort: not-loaded ⇒ already gone
 	if err := os.Remove(unitPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("%s: remove %s: %w", op, unitPath, err)
 	}
-	_ = systemctl("daemon-reload")
+	_, _ = systemctl("daemon-reload")
 	_, _ = fmt.Fprintf(out, "removed funcd.service (%s); data-root %s left in place\n", unitPath, dataRoot)
 	return nil
 }
 
-// systemctl runs `systemctl <args...>`, surfacing its output on failure.
-func systemctl(args ...string) error {
+// systemctl runs `systemctl <args...>` and returns its standard output (`show` is read, ADR-0207); a failure carries
+// both outputs.
+func systemctl(args ...string) ([]byte, error) {
+	var stdout, stderr bytes.Buffer
 	cmd := exec.Command("systemctl", args...)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("systemctl %v: %w: %s", args, err, out)
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return stdout.Bytes(), fmt.Errorf("systemctl %v: %w: %s%s", args, err, stdout.Bytes(), stderr.Bytes())
 	}
-	return nil
+	return stdout.Bytes(), nil
 }

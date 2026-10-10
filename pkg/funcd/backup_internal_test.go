@@ -22,8 +22,9 @@ import (
 	bstore "github.com/pyvvo/funcd/internal/store/badger"
 )
 
-// WithPlatformBackup (ADR-0205): New binds the runner to the event store, the metastore and the run state, Run runs it,
-// and the control plane mounts its status route, which a developer may not read.
+// WithPlatformBackup (ADR-0205): New binds the runner to the event store, the metastore, the run state and the
+// WithBackupParent generation, Run runs it, and the control plane mounts its status route, which a developer may not
+// read.
 func TestPlatformBackupWired(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -37,11 +38,12 @@ func TestPlatformBackupWired(t *testing.T) {
 	r, err := runner.New(runner.Config{Target: tg, Sealer: sealer, Logger: quiet,
 		Times: funcdconfig.BackupTimes{Interval: time.Hour, RPO: 2 * time.Hour, RetryInterval: 5 * time.Minute}})
 	require.NoError(t, err)
+	parent := &backup.GenRef{Timeline: "0123456789abcdef", Generation: 7}
 	eng, err := bstore.Open(filepath.Join(dir, "store"), bstore.WithValueLogGCInterval(0))
 	require.NoError(t, err)
 	p, err := New(InMemory(), WithLogger(quiet), WithoutLogCompaction(), WithStore(store.New(eng)),
 		WithRuntime(&recordingRuntime{insts: map[runtime.InstanceID]runtime.Instance{}}),
-		WithDeadLetterQueue(filepath.Join(dir, "deadletter"), 3, 0, 0), WithPlatformBackup(r))
+		WithDeadLetterQueue(filepath.Join(dir, "deadletter"), 3, 0, 0), WithPlatformBackup(r), WithBackupParent(parent))
 	require.NoError(t, err)
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)
@@ -63,6 +65,7 @@ func TestPlatformBackupWired(t *testing.T) {
 		names = append(names, s.Name)
 	}
 	require.Equal(t, []string{"events", "metastore", "runs"}, names)
+	require.Equal(t, parent, m.Parent, "WithBackupParent is each generation's parent (ADR-0207 wires restore.Parent)")
 
 	srv := httptest.NewServer(p.httpServer.Handler)
 	t.Cleanup(srv.Close)

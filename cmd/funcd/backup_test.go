@@ -18,6 +18,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/auth/rbac"
+	"github.com/pyvvo/funcd/internal/backup/envelope"
 	"github.com/pyvvo/funcd/internal/backup/runner"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/controlplane"
@@ -57,9 +58,9 @@ func startBackup(t *testing.T, path string) (*runner.Runner, string) {
 	var logs bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logs, nil))
 	logBackupFindings(cfg, log)
-	sealer, err := backupSealer(cfg, bytes.Repeat([]byte{7}, 32), log)
+	sealer, err := envelope.FromConfig(cfg, bytes.Repeat([]byte{7}, 32), log)
 	require.NoError(t, err)
-	r, target, err := backupRunner(context.Background(), cfg, sealer, backupMeter(nil), log)
+	r, target, err := backupRunner(context.Background(), cfg, sealer, backupMeter(nil), log, nil)
 	require.NoError(t, err)
 	if target != nil {
 		t.Cleanup(func() { _ = target.Close() })

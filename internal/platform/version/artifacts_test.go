@@ -35,7 +35,7 @@ func TestScenarioPackagingArtifactsPresent(t *testing.T) {
 	require.NoError(t, err, "systemd unit must exist")
 	u := string(unit)
 	require.Contains(t, u, "ExecStart=")
-	for _, directive := range []string{"NoNewPrivileges=true", "ProtectSystem=strict", "PrivateTmp=true", "StateDirectory=funcd"} {
+	for _, directive := range []string{"NoNewPrivileges=true", "ProtectSystem=strict", "PrivateTmp=true", "StateDirectory=funcd", "RestartPreventExitStatus=70"} {
 		require.Containsf(t, u, directive, "unit must ship hardened (%s)", directive)
 	}
 

@@ -163,7 +163,7 @@ func TestScenarioInvalidValueRefusedNamingKey(t *testing.T) {
 	t.Run("exits before serving", func(t *testing.T) {
 		dir := shortDataDir(t)
 		cfg := loadPacing(t, "storage:\n  mode: memory\n  dataDir: \""+dir+"\"\n"+pacingYAML("invoke.activationTimeout", "2m"))
-		_, _, _, _, err := buildOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		_, _, _, _, err := buildOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
 		require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
 		require.ErrorContains(t, err, `"runtime.bootTimeout"`)
 	})
@@ -281,7 +281,7 @@ func TestAppUpgradeTimeoutConfig(t *testing.T) {
 	t.Run("exits before serving", func(t *testing.T) {
 		dir := shortDataDir(t)
 		cfg := loadPacing(t, "storage:\n  mode: memory\n  dataDir: \""+dir+"\"\n"+pacingYAML("app.upgradeTimeout", "1m"))
-		_, _, _, _, err := buildOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		_, _, _, _, err := buildOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
 		require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
 		require.ErrorContains(t, err, `"app.upgradeTimeout"`)
 	})
@@ -350,13 +350,13 @@ func TestHealthConfig(t *testing.T) {
 func TestScenarioHealthLivenessConfig(t *testing.T) {
 	dir := shortDataDir(t)
 	cfg := loadPacing(t, "storage:\n  mode: memory\n  dataDir: \""+dir+"\"\nruntime:\n  livenessTimeout: 15s\n  supervisionPeriod: 10s\n")
-	_, _, _, _, err := buildOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	_, _, _, _, err := buildOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
 	require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
 	require.ErrorContains(t, err, `"runtime.livenessTimeout"`)
 	require.ErrorContains(t, err, "runtime.supervisionPeriod, 10s")
 
 	cfg = loadPacing(t, "storage:\n  mode: memory\n  dataDir: \""+dir+"\"\nruntime:\n  livenessTimeout: 20s\n  supervisionPeriod: 10s\n")
-	_, closeExec, _, _, err := buildOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	_, closeExec, _, _, err := buildOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
 	require.NoError(t, err, "exactly twice the period starts")
 	if closeExec != nil {
 		require.NoError(t, closeExec())
