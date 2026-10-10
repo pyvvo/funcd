@@ -37,7 +37,7 @@ type redeployHarness struct {
 	layout string
 }
 
-func newRedeployHarness(t *testing.T) *redeployHarness {
+func newRedeployHarness(t *testing.T, opts ...funcd.Option) *redeployHarness {
 	t.Helper()
 	shim := langmod.NodeShim(t)
 	node, err := exec.LookPath("node")
@@ -45,7 +45,8 @@ func newRedeployHarness(t *testing.T) *redeployHarness {
 		t.Skip("node not on PATH; skipping the redeploy lane")
 	}
 	rt := process.New(nil)
-	p, err := funcd.New(funcd.InMemory(), funcd.WithRuntime(rt), funcd.WithRuntimeShim(node, shim), funcd.WithArtifactStore(t.TempDir()))
+	p, err := funcd.New(append([]funcd.Option{funcd.InMemory(), funcd.WithRuntime(rt), funcd.WithRuntimeShim(node, shim),
+		funcd.WithArtifactStore(t.TempDir())}, opts...)...)
 	require.NoError(t, err)
 	runCtx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -372,10 +373,11 @@ func TestScenarioE2ENewerApplySupersedesBootingRevision(t *testing.T) {
 // scenario: serving-worker-crash-during-switch-is-replaced (ADR-0143) — v1's only worker dies while a slow v2 boots;
 // supervision replaces it from v1's Revision, v1 answers again, and v2 takes over once ready.
 func TestScenarioE2EServingWorkerCrashDuringSwitchIsReplaced(t *testing.T) {
-	h := newRedeployHarness(t)
+	t.Parallel()
+	h := newRedeployHarness(t, funcd.WithPacing(funcd.Pacing{SupervisionPeriod: 500 * time.Millisecond}))
 	h.apply(t, h.push(t, "greeter", same), keep)
 	waitReady(t, h.c, "greeter")
-	h.apply(t, h.push(t, "greeter-v2", slowBoot("Bonjour", 20*time.Second)), keep)
+	h.apply(t, h.push(t, "greeter-v2", slowBoot("Bonjour", 6*time.Second)), keep)
 	require.Eventually(t, func() bool { return len(h.workers(t)["greeter-2"]) == 1 }, 20*time.Second, 50*time.Millisecond, "v2 boots")
 
 	v1 := h.workers(t)["greeter-1"][0]

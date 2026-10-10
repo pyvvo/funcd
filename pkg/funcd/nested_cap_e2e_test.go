@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -238,9 +239,13 @@ func TestScenarioDanglingLinkRaceRejected(t *testing.T) {
 
 // scenario: quota-race-rejected
 func TestScenarioQuotaRaceRejected(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []v1.Kind{v1.KindKVStore, v1.KindBucket} {
 		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
 			metastores(t, func(t *testing.T, c *sdk.Client) {
+				// A racer's dialed but unused keep-alive conn stays StateNew, which http.Server.Shutdown waits 5 s for.
+				t.Cleanup(http.DefaultClient.CloseIdleConnections)
 				ctx := context.Background()
 				fill := func(ns v1.NamespaceName) [2]func() error {
 					for _, name := range []string{"s1", "s2"} {
