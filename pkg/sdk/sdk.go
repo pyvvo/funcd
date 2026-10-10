@@ -202,7 +202,11 @@ func (c *Client) Delete(ctx context.Context, kind v1.Kind, ns v1.NamespaceName, 
 	if o.force {
 		itemURL += "?force=true"
 	}
-	_, err = c.do(ctx, http.MethodDelete, itemURL, nil)
+	var hdr http.Header
+	if o.version != "" {
+		hdr = http.Header{"If-Match": {`"` + o.version + `"`}}
+	}
+	_, err = c.send(ctx, http.MethodDelete, itemURL, nil, hdr)
 	return err
 }
 
@@ -224,11 +228,17 @@ func (c *Client) HandoverKVStore(ctx context.Context, ns v1.NamespaceName, store
 // DeleteOption tunes a Delete.
 type DeleteOption func(*deleteOptions)
 
-type deleteOptions struct{ force bool }
+type deleteOptions struct {
+	force   bool
+	version string
+}
 
 // Force deletes a ResourceGroup's members first, each under its own protections, then the group (ADR-0170).
 // Delete refuses it with fault.Invalid for any other kind, before a request.
 func Force() DeleteOption { return func(o *deleteOptions) { o.force = true } }
+
+// IfVersion makes Delete conditional on rv: fault.Conflict when the object's resourceVersion differs (ADR-0210).
+func IfVersion(rv string) DeleteOption { return func(o *deleteOptions) { o.version = rv } }
 
 // collectionURL builds the collection path for a kind (and namespace, if namespaced).
 func (c *Client) collectionURL(kind v1.Kind, ns v1.NamespaceName) (string, error) {
@@ -272,6 +282,11 @@ func (c *Client) namespaceURL(ns v1.NamespaceName) (string, error) {
 
 // do executes an HTTP request, returning the 2xx body or a typed fault.Error.
 func (c *Client) do(ctx context.Context, method, url string, body []byte) ([]byte, error) {
+	return c.send(ctx, method, url, body, nil)
+}
+
+// send is do with extra request headers.
+func (c *Client) send(ctx context.Context, method, url string, body []byte, hdr http.Header) ([]byte, error) {
 	var rdr io.Reader
 	if body != nil {
 		rdr = bytes.NewReader(body)
@@ -279,6 +294,9 @@ func (c *Client) do(ctx context.Context, method, url string, body []byte) ([]byt
 	req, err := http.NewRequestWithContext(ctx, method, url, rdr)
 	if err != nil {
 		return nil, fault.Internalf("sdk", "build request: %v", err)
+	}
+	for k, vs := range hdr {
+		req.Header[k] = vs
 	}
 	req.Header.Set("Accept", "application/json")
 	if body != nil {

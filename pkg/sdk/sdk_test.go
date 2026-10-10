@@ -30,6 +30,12 @@ const devToken = "dev-secret"
 // and returns an SDK client pointed at it with a developer token (no mocks).
 func newClient(t *testing.T) *sdk.Client {
 	t.Helper()
+	return newClientVia(t, nil)
+}
+
+// newClientVia is newClient with the server's handler wrapped by wrap, when set.
+func newClientVia(t *testing.T, wrap func(http.Handler) http.Handler) *sdk.Client {
+	t.Helper()
 	creds := middleware.NewStaticCredentials(map[string]auth.Identity{
 		devToken: {Subject: "dev", Role: auth.RoleDeveloper, Namespaces: []v1.NamespaceName{"team-a"}},
 	})
@@ -39,6 +45,9 @@ func newClient(t *testing.T) *sdk.Client {
 		Credentials: creds,
 	})
 	require.NoError(t, err)
+	if wrap != nil {
+		h = wrap(h)
+	}
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	c, err := sdk.New(srv.URL, sdk.WithToken(devToken))
@@ -102,6 +111,44 @@ func TestScenarioSDKDeletes(t *testing.T) {
 	_, err := c.Apply(ctx, newFunction("fn1", "h"))
 	require.NoError(t, err)
 	require.NoError(t, c.Delete(ctx, v1.KindFunction, "team-a", "fn1"))
+	_, err = c.Get(ctx, v1.KindFunction, "team-a", "fn1")
+	require.Equal(t, fault.NotFound, fault.KindOf(err))
+}
+
+// scenario: sdk-held-version-conflicts (ADR-0210) — Apply of a copy read before another writer's change, and
+// Delete with IfVersion of it, answer fault.Conflict; Apply sends no POST after the 409.
+func TestScenarioSDKHeldVersionConflicts(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	var posts atomic.Int32
+	c := newClientVia(t, func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost {
+				posts.Add(1)
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
+	_, err := c.Apply(ctx, newFunction("fn1", "h1"))
+	require.NoError(t, err)
+	held, err := c.Get(ctx, v1.KindFunction, "team-a", "fn1")
+	require.NoError(t, err)
+	_, err = c.Apply(ctx, newFunction("fn1", "other"))
+	require.NoError(t, err)
+	posts.Store(0)
+
+	held.(*v1.Function).Spec.Handler = "mine"
+	_, err = c.Apply(ctx, held)
+	require.Equal(t, fault.Conflict, fault.KindOf(err), "err: %v", err)
+	require.Zero(t, posts.Load(), "a 409 is not a missing object: no POST follows")
+
+	err = c.Delete(ctx, v1.KindFunction, "team-a", "fn1", sdk.IfVersion(held.GetObjectMeta().ResourceVersion))
+	require.Equal(t, fault.Conflict, fault.KindOf(err), "err: %v", err)
+	cur, err := c.Get(ctx, v1.KindFunction, "team-a", "fn1")
+	require.NoError(t, err)
+	require.Equal(t, "other", cur.(*v1.Function).Spec.Handler)
+
+	require.NoError(t, c.Delete(ctx, v1.KindFunction, "team-a", "fn1", sdk.IfVersion(cur.GetObjectMeta().ResourceVersion)))
 	_, err = c.Get(ctx, v1.KindFunction, "team-a", "fn1")
 	require.Equal(t, fault.NotFound, fault.KindOf(err))
 }
