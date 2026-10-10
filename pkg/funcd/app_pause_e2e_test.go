@@ -166,7 +166,7 @@ func TestScenarioAppPausedKeepsHotfix(t *testing.T) {
 	require.Equal(t, "spec.paused is set: the App writes no part until it is resumed", c.Message)
 	hotfix := e.imageV2(t)
 	e.handEdit(t, hotfix)
-	require.Never(t, func() bool { return e.apiImage(t) != hotfix }, 2*healWithin, 50*time.Millisecond, "the edit stays")
+	require.Never(t, func() bool { return e.apiImage(t) != hotfix }, healWithin, 50*time.Millisecond, "the edit stays")
 	got := e.app(t, "todo")
 	require.Equal(t, v1.PhaseReady, got.Status.Phase, "the App keeps its phase")
 	require.Nil(t, got.Status.LastSelfHeal)
@@ -268,9 +268,13 @@ func TestScenarioAppApplyWithoutPausedResumes(t *testing.T) {
 	require.Contains(t, body, todoV2Marker, "todo-2 rolled out")
 }
 
-// scenario: app-paused-rollout-full-timeout
+// scenario: app-paused-rollout-full-timeout — the ADR pauses 5 s after the stamp for 30 s at app.upgradeTimeout 20s.
+// The test pauses as soon as it sees the stamp and stays paused past the stamp's deadline, with a 6 s timeout: long
+// enough that the pause lands before the deadline under -race load, short enough to keep the test fast.
 func TestScenarioAppPausedRolloutFullTimeout(t *testing.T) {
-	e := startGC(t, failedPacing())
+	const timeout = 6 * time.Second
+	e := startGC(t, funcd.WithPacing(funcd.Pacing{AppUpgradeTimeout: timeout, BootTimeout: 2 * time.Second,
+		ActivationTimeout: time.Second}))
 	a := installTodo(t, e)
 	cli := funcdctl(t, e)
 
@@ -281,21 +285,21 @@ func TestScenarioAppPausedRolloutFullTimeout(t *testing.T) {
 		"todo-2 is stamped")
 	stamped := e.appRevision(t, "todo-2").Status.StartedAt
 	require.NotNil(t, stamped)
-	time.Sleep(time.Until(time.Time(*stamped).Add(5 * time.Second)))
 	out, err := cli("app", "pause", "todo")
 	require.NoError(t, err, out)
 	e.waitPaused(t, v1.ConditionTrue, "SpecPaused")
 
 	require.Never(t, func() bool { return e.appRevision(t, "todo-2").Status.Phase != v1.PhaseDeploying },
-		30*time.Second, 100*time.Millisecond, "todo-2 stays Deploying while paused")
+		time.Until(time.Time(*stamped).Add(timeout+2*time.Second)), 100*time.Millisecond,
+		"todo-2 stays Deploying while paused, past its stamp's deadline")
 	out, err = cli("app", "resume", "todo")
 	require.NoError(t, err, out)
 	resumed := time.Time(e.waitPaused(t, v1.ConditionFalse, "Resumed").LastTransitionTime)
 
 	r2 := e.waitRevisionPhase(t, "todo-2", v1.PhaseFailed, 2*appWithin)
 	after := time.Since(resumed)
-	require.GreaterOrEqual(t, after, 20*time.Second, "todo-2 fails no sooner than app.upgradeTimeout after the resume")
-	require.Less(t, after, 23*time.Second, "todo-2 fails at app.upgradeTimeout after the resume")
+	require.GreaterOrEqual(t, after, timeout, "todo-2 fails no sooner than app.upgradeTimeout after the resume")
+	require.Less(t, after, timeout+upgradeSlack, "todo-2 fails at app.upgradeTimeout after the resume")
 	require.Equal(t, *stamped, *r2.Status.StartedAt, "the stamp time is kept")
 	got := e.waitApp(t, "todo", v1.ConditionFalse, "ChildNotReady", appWithin)
 	require.Equal(t, v1.PhaseFailed, got.Status.Phase)

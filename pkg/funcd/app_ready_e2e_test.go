@@ -123,7 +123,8 @@ func todoWorker(t *testing.T, rt runtime.Runtime) runtime.Instance {
 	return w
 }
 
-// scenario: app-degraded-recovers
+// scenario: app-degraded-recovers — not parallel: the App sees Degraded only while todo-api restarts, and on a loaded
+// host the new worker can serve before the App's pass reads it, so no write is Degraded.
 func TestScenarioAppDegradedRecovers(t *testing.T) {
 	st, rt := store.New(memory.New()), process.New(nil)
 	e := startGC(t, funcd.WithStore(st), funcd.WithRuntime(rt), appPacing(0))

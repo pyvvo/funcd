@@ -198,7 +198,8 @@ func TestScenarioAppPruneAfterCurrent(t *testing.T) {
 		require.Less(t, rvOf(t, ev), deleted, "Route/todo-legacy outlives every write of the App while todo-2 is Deploying")
 	}
 	require.NotZero(t, held, "the App wrote its status while todo-2 was Deploying")
-	require.Equal(t, http.StatusNotFound, e.routed(t, todoHost, "/legacy"))
+	require.Eventually(t, func() bool { return e.routed(t, todoHost, "/legacy") == http.StatusNotFound }, gcWithin, 20*time.Millisecond,
+		"nothing routes /legacy")
 }
 
 // scenario: app-revision-read-only

@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -112,10 +113,12 @@ func TestScenarioAppDeployWaits(t *testing.T) {
 	t.Parallel()
 	t.Run("current", func(t *testing.T) {
 		t.Parallel()
-		e := startGC(t, failedPacing(), funcd.WithDevAuth(funcd.DevToken, "team-a"))
+		// The slow start (1.5 s) must stay under the boot timeout, so this subtest gives boot 5 s, not failedPacing's 2 s.
+		e := startGC(t, funcd.WithPacing(funcd.Pacing{AppUpgradeTimeout: 10 * time.Second, BootTimeout: 5 * time.Second,
+			ActivationTimeout: time.Second}), funcd.WithDevAuth(funcd.DevToken, "team-a"))
 		tpl := newTodoTemplate(t, e)
 		tpl.toTodo2(t)
-		writeStep(t, e.src, "1.1.0", `await new Promise((r) => setTimeout(r, 3000));
+		writeStep(t, e.src, "1.1.0", `await new Promise((r) => setTimeout(r, 1500));
 export async function handle(event) { return { image: "1.1.0", event }; }`)
 		tpl.push(t, "todo-api", "1.1.0")
 
