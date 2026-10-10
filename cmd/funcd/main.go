@@ -46,6 +46,7 @@ import (
 	kvmemory "github.com/pyvvo/funcd/internal/kvstore/memory"
 	"github.com/pyvvo/funcd/internal/network"
 	"github.com/pyvvo/funcd/internal/platform/config"
+	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/platform/observability"
 	"github.com/pyvvo/funcd/internal/platform/stopsignal"
 	"github.com/pyvvo/funcd/internal/platform/version"
@@ -104,6 +105,7 @@ func newRootCmd(out io.Writer) *cobra.Command {
 			return err
 		},
 	})
+	root.AddCommand(newRestoreCmd(out))
 	root.AddCommand(newBenchCmd(out))
 	root.AddCommand(newInstallCmd(out))
 	root.AddCommand(newUninstallCmd(out))
@@ -128,6 +130,11 @@ func serve(parent context.Context, configPath string, memoryFlag *bool, out io.W
 	if err := os.MkdirAll(cfg.Storage.DataDir, 0o700); err != nil {
 		return fmt.Errorf("create data dir %s: %w", cfg.Storage.DataDir, err)
 	}
+	// ADR-0206 Decision 6: the hold travels with the data; an interrupted restore refuses the start.
+	held, err := hold.Open(cfg.Storage.DataDir)
+	if err != nil {
+		return err
+	}
 
 	// Logger from log.format/level (overrides the preset's logger, ADR-0061 §6).
 	logger, err := buildLogger(cfg, out)
@@ -146,6 +153,7 @@ func serve(parent context.Context, configPath string, memoryFlag *bool, out io.W
 	if err != nil {
 		return err
 	}
+	opts = append(opts, funcd.WithHold(held))
 	defer func() {
 		if cerr := closeExec(); cerr != nil {
 			root.Warn("funcd: closing execution runtime", "error", cerr)

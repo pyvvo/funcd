@@ -27,6 +27,7 @@ func main() {
 	controlplane.RegisterStubDeadLetters(api)     // ADR-0118: document the DLQ read + replay/discard routes
 	controlplane.RegisterStubAppRetry(api)        // ADR-0214: document the App retry route
 	controlplane.RegisterStubPlatformBackup(api)  // ADR-0205: the platform backup status route
+	controlplane.RegisterStubHold(api)            // ADR-0206: document the hold status + release routes
 
 	raw, yamlErr := api.OpenAPI().YAML()
 	if yamlErr != nil {

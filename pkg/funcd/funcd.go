@@ -67,8 +67,10 @@ import (
 	"github.com/pyvvo/funcd/internal/network"
 	"github.com/pyvvo/funcd/internal/network/egress"
 	"github.com/pyvvo/funcd/internal/platform/clock"
+	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/platform/observability"
 	"github.com/pyvvo/funcd/internal/provider"
+	"github.com/pyvvo/funcd/internal/restore"
 	"github.com/pyvvo/funcd/internal/route"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/process"
@@ -237,9 +239,10 @@ type config struct {
 	s3gwListenAddr     string
 	s3gwEndpoint       string // sandbox-facing S3 URL (ADR-0085); empty ⇒ http://<listenAddr>
 	s3gwMaxUploadBytes int64
-	s3gwMasterFile     string // optional; empty ⇒ generate+persist under the data dir
-	s3gwDataDir        string // where the master.key is persisted when no master file is set; empty ⇒ in memory
-	masterSecret       []byte // set by WithMasterSecret: the loaded master, used instead of loading one
+	s3gwMasterFile     string     // optional; empty ⇒ generate+persist under the data dir
+	s3gwDataDir        string     // where the master.key is persisted when no master file is set; empty ⇒ in memory
+	masterSecret       []byte     // set by WithMasterSecret: the loaded master, used instead of loading one
+	hold               *hold.Hold // set by WithHold (ADR-0206); nil ⇒ never held
 
 	// catalogProxyHost is the netns-reachable host the per-CatalogService catalog PEP proxies publish
 	// (ADR-0137) — the CNI bridge gateway IP (e.g. 10.63.0.1) under containerd, so a worker in its own
@@ -308,6 +311,14 @@ type config struct {
 
 	// backupRunner is the platform backup runner (ADR-0205, WithPlatformBackup); nil ⇒ none.
 	backupRunner *runner.Runner
+}
+
+// gate is the hold every side-effect runner asks (ADR-0206 Decision 6): hold.Never without WithHold.
+func (c *config) gate() hold.Gate {
+	if c.hold == nil {
+		return hold.Never
+	}
+	return c.hold
 }
 
 // minRecordBytes is the smallest funclog.maxRecordBytes: a record's envelope and cut marker always fit (ADR-0168).
@@ -817,12 +828,14 @@ func (p *Platform) buildControlPlane() error {
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build blob watcher")
 	}
+	blobWatcher.SetHold(c.gate())
 	p.blobWatcher = blobWatcher
 	source, err := eventing.NewSource(eventing.Deps{
 		Store:     c.store,
 		Publisher: fanout,
 		Blob:      blobWatcher,
 		Logger:    p.logger,
+		Hold:      c.gate(),
 
 		BucketRecheckInterval: c.pacing.BucketRecheckInterval,
 	})
@@ -895,6 +908,7 @@ func (p *Platform) buildControlPlane() error {
 
 		DeliveryBackoffInitial: c.pacing.DeliveryBackoffInitial,
 		DeliveryBackoffMax:     c.pacing.deliveryBackoffMax(),
+		Hold:                   c.gate(),
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build sensor reconciler")
@@ -924,7 +938,7 @@ func (p *Platform) buildControlPlane() error {
 	// prefix and on a table removed from spec.tables[] reclaim its sub-prefix, via the driver's
 	// DropPrefix+List (type-asserted PrefixManager — a driver without it gets a no-op).
 	prefixMgr, _ := c.kvStore.(kvsvc.PrefixManager)
-	kvReconciler, err := kvsvc.NewReconciler(kvsvc.ReconcilerDeps{Store: c.store, KV: prefixMgr, Logger: p.logger, Health: p.prober})
+	kvReconciler, err := kvsvc.NewReconciler(kvsvc.ReconcilerDeps{Store: c.store, KV: prefixMgr, Logger: p.logger, Health: p.prober, Hold: c.gate()})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build KVStore reconciler")
 	}
@@ -1072,13 +1086,19 @@ func (p *Platform) buildControlPlane() error {
 	}
 	ctrl.Register(v1.KindWorkflow.GVK(), workflow.NewWorkflowReconciler(c.store, wfMaterializer, wfContracts, p.logger, c.pacing.ArtifactPollInterval))
 	p.workflowSweeper = workflow.NewRunReconciler(c.store, wfEngine, traceSink, p.logger, c.pacing.ReferentPollInterval)
+	p.workflowSweeper.SetHold(c.gate())
 	ctrl.Register(v1.KindWorkflowRun.GVK(), p.workflowSweeper)
 	// ADR-0199: the App reconciler writes an App's parts; a change to a part it controls or marks, or to an
 	// object a ref entry names, requeues the App.
 	appReconciler, err := app.NewReconciler(app.Deps{
 		Store: c.store, Purger: bucketPurger{shared: c.blob}, Logger: p.logger, Clock: clock.System(),
 		UpgradeTimeout: c.pacing.appUpgradeTimeout(), RevisionHistory: c.appRevisionHistory,
-		SupervisionPeriod: c.pacing.SupervisionPeriod,
+		SupervisionPeriod: c.pacing.SupervisionPeriod, Hold: c.gate(),
+		// ADR-0214: a second invoker for the hook calls, with no client timeout: the context carries the hook
+		// Function's spec.timeout or invoke.defaultTimeout, as the workflow dispatcher bounds a step.
+		Invoker:       &sensor.HTTPInvoker{Endpoints: fnReconciler.Endpoints(), Waker: act, Client: workerClient(calls, 0)},
+		InvokeTimeout: c.invokeDefaultTimeout,
+		Enqueue:       ctrl.Enqueue,
 		// ADR-0214: a second invoker for the hook calls, with no client timeout: the context carries the hook
 		// Function's spec.timeout or invoke.defaultTimeout, as the workflow dispatcher bounds a step.
 		Invoker:       &sensor.HTTPInvoker{Endpoints: fnReconciler.Endpoints(), Waker: act, Client: workerClient(calls, 0)},
@@ -1169,6 +1189,9 @@ func (p *Platform) buildControlPlane() error {
 		Replayer:    sensorReconciler, // ADR-0118: the imperative replay seam (one synchronous attempt)
 		Collector:   p.collector,      // ADR-0170: a forced ResourceGroup delete collects the members' children
 		AppRetrier:  appReconciler,    // ADR-0214: retry an App's failed hook
+		Hold: controlplane.NewHoldService(controlplane.HoldDeps{ // ADR-0206: the hold's evidence and release
+			Hold: c.hold, Store: c.store, DeadLetters: dlq, Platform: holdPlatform{p},
+		}),
 		// ADR-0219: app-requires runs after app-parts.
 		Admissions: append(partAdmissions(storeReader{c.store}), app.NewAdmission(partAdmissions, storeReader{c.store}),
 			app.NewRequiresAdmission(storeReader{c.store})),
@@ -1393,14 +1416,21 @@ func (p *Platform) Run(ctx context.Context) error {
 		}
 	}
 
-	// Issue #708 (ADR-0170 "also across a crash"): reclaim the data of each KVStore deleted before its reconcile
-	// ran, before the controller or the control plane can create a store of the same name.
-	if err := p.kvReconciler.ReclaimDeleted(ctx); err != nil && ctx.Err() == nil {
-		p.logger.WarnContext(ctx, "reclaim of deleted KV stores incomplete", "error", err)
-	}
-	// ADR-0199 Decision 7: the same for the objects of each Bucket deleted before its second purge ran.
-	if err := reclaimDeletedBuckets(ctx, p.cfg.blob, p.cfg.store, p.logger); err != nil && ctx.Err() == nil {
-		p.logger.WarnContext(ctx, "reclaim of deleted Buckets incomplete", "error", err)
+	if m, held := p.heldMarker(); held {
+		// ADR-0206 Decision 6: KV or blob data newer than a restored metastore may have no object yet, so the boot
+		// reclaims wait for the first start after the release; `funcdctl hold status` lists that data.
+		p.logger.WarnContext(ctx, "platform held: no timer, blob source, Sensor, run, App rollout, retention sweep or "+
+			"reclaim acts until `funcdctl hold release`", "reason", m.Reason, "since", m.Since)
+	} else {
+		// Issue #708 (ADR-0170 "also across a crash"): reclaim the data of each KVStore deleted before its reconcile
+		// ran, before the controller or the control plane can create a store of the same name.
+		if err := p.kvReconciler.ReclaimDeleted(ctx); err != nil && ctx.Err() == nil {
+			p.logger.WarnContext(ctx, "reclaim of deleted KV stores incomplete", "error", err)
+		}
+		// ADR-0199 Decision 7: the same for the objects of each Bucket deleted before its second purge ran.
+		if err := reclaimDeletedBuckets(ctx, p.cfg.blob, p.cfg.store, p.logger); err != nil && ctx.Err() == nil {
+			p.logger.WarnContext(ctx, "reclaim of deleted Buckets incomplete", "error", err)
+		}
 	}
 
 	// ADR-0176 Decision 6: the edge aggregator holds every catalog entry until "routes" has Set once, and no
@@ -1760,6 +1790,9 @@ func (p *Platform) runWorkflowRetention(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if p.cfg.gate().Held() { // held runs are evidence (ADR-0206 Decision 6)
+				continue
+			}
 			n, err := p.workflowSweeper.SweepExpired(ctx, p.workflowRetention)
 			if err != nil {
 				p.logger.WarnContext(ctx, "workflow retention sweep failed", "error", err)
@@ -1787,6 +1820,9 @@ func (p *Platform) runDeadLetterRetention(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if p.cfg.gate().Held() { // held dead letters are evidence (ADR-0206 Decision 6)
+				continue
+			}
 			n, err := p.deadLetters.SweepExpired(ctx, p.deadletterRetention, p.deadletterMaxEntries)
 			if err != nil {
 				p.logger.WarnContext(ctx, "dead-letter retention sweep failed", "error", err)
@@ -2094,20 +2130,36 @@ func (p bucketPurger) Purge(ctx context.Context, ns v1.NamespaceName, bucket v1.
 }
 
 // reclaimDeletedBuckets purges the prefix of every Bucket that no longer exists, which a crash between a Bucket's
-// delete and its second purge leaves behind (ADR-0199 Decision 7). It reads one key per prefix and seeks past the
-// rest, as the S3 frontend rolls up a common prefix.
+// delete and its second purge leaves behind (ADR-0199 Decision 7).
 func reclaimDeletedBuckets(ctx context.Context, shared blob.Bucket, st store.Store, logger *slog.Logger) error {
-	const op = "funcd.reclaimDeletedBuckets"
 	purger := bucketPurger{shared: shared}
+	orphans, err := bucketOrphans(ctx, shared, st)
+	errs := []error{err}
+	for _, b := range orphans {
+		if perr := purger.Purge(ctx, b.Namespace, b.Name); perr != nil {
+			errs = append(errs, perr)
+			continue
+		}
+		logger.InfoContext(ctx, "reclaimed the objects of a deleted Bucket", "namespace", b.Namespace, "bucket", b.Name)
+	}
+	return errors.Join(errs...)
+}
+
+// bucketOrphans lists each <ns>/<bucket> with objects under bucketPrefix and no Bucket (ADR-0206 Decision 6), with
+// the errors of the lookups it could not make. It reads one key per prefix and seeks past the rest, as the S3
+// frontend rolls up a common prefix.
+func bucketOrphans(ctx context.Context, shared blob.Bucket, st store.Store) ([]v1.ObjectRef, error) {
+	const op = "funcd.bucketOrphans"
+	var out []v1.ObjectRef
 	var errs []error
 	after := ""
 	for {
 		items, _, err := shared.ListAfter(ctx, s3Root, after, 1)
 		if err != nil {
-			return errors.Join(append(errs, fault.Wrapf(err, fault.KindOf(err), op, "list bucket prefixes"))...)
+			return out, errors.Join(append(errs, fault.Wrapf(err, fault.KindOf(err), op, "list bucket prefixes"))...)
 		}
 		if len(items) == 0 {
-			return errors.Join(errs...)
+			return out, errors.Join(errs...)
 		}
 		key := items[0].Key
 		parts := strings.SplitN(strings.TrimPrefix(key, s3Root), "/", 3)
@@ -2121,18 +2173,44 @@ func reclaimDeletedBuckets(ctx context.Context, shared blob.Bucket, st store.Sto
 			continue
 		}
 		_, gerr := st.Get(ctx, v1.KindBucket.GVK(), ns, name)
-		if fault.KindOf(gerr) != fault.NotFound {
-			if gerr != nil {
-				errs = append(errs, fault.Wrapf(gerr, fault.KindOf(gerr), op, "get bucket %s/%s", ns, name))
-			}
-			continue
+		switch {
+		case fault.KindOf(gerr) == fault.NotFound:
+			out = append(out, v1.ObjectRef{Kind: v1.KindBucket, Namespace: ns, Name: name})
+		case gerr != nil:
+			errs = append(errs, fault.Wrapf(gerr, fault.KindOf(gerr), op, "get bucket %s/%s", ns, name))
 		}
-		if perr := purger.Purge(ctx, ns, name); perr != nil {
-			errs = append(errs, perr)
-			continue
-		}
-		logger.InfoContext(ctx, "reclaimed the objects of a deleted Bucket", "namespace", ns, "bucket", name)
 	}
+}
+
+// heldMarker reports the hold's marker while the platform is held (ADR-0206).
+func (p *Platform) heldMarker() (hold.Marker, bool) {
+	if p.cfg.hold == nil {
+		return hold.Marker{}, false
+	}
+	return p.cfg.hold.Marker()
+}
+
+// holdPlatform is the controlplane.HoldPlatform over the assembled platform (ADR-0206 Decisions 1, 8).
+type holdPlatform struct{ p *Platform }
+
+func (h holdPlatform) Counts(ctx context.Context) (map[v1.Kind]int, error) {
+	return restore.Counts(ctx, h.p.cfg.store)
+}
+
+func (h holdPlatform) Orphans(ctx context.Context) ([]string, error) {
+	return h.p.kvReconciler.Orphans(ctx)
+}
+
+func (h holdPlatform) BucketOrphans(ctx context.Context) ([]v1.ObjectRef, error) {
+	return bucketOrphans(ctx, h.p.cfg.blob, h.p.cfg.store)
+}
+
+func (h holdPlatform) Advance(ctx context.Context, ns v1.NamespaceName, source v1.ObjectName) error {
+	return h.p.blobWatcher.Advance(ctx, ns, source)
+}
+
+func (h holdPlatform) Pending(ctx context.Context, ns v1.NamespaceName, source v1.ObjectName) (map[string]int, error) {
+	return h.p.blobWatcher.Pending(ctx, ns, source)
 }
 
 // s3Buckets lists a namespace's Bucket resources for the S3 gateway's HeadBucket and

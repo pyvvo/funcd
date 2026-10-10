@@ -29,6 +29,7 @@ import (
 	"github.com/pyvvo/funcd/internal/eventing"
 	"github.com/pyvvo/funcd/internal/eventing/deadletter"
 	"github.com/pyvvo/funcd/internal/expr"
+	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -79,6 +80,8 @@ type Deps struct {
 	DeliveryBackoffInitial time.Duration
 	DeliveryBackoffMax     time.Duration
 	Logger                 *slog.Logger
+	// Hold is the platform hold (ADR-0206): while held no delivery or replay reaches a target; nil ⇒ never held.
+	Hold hold.Gate
 }
 
 // subEntry is a Sensor's live subscription bookkeeping (ADR-0109 B1 idempotency): the cancels for its
@@ -111,6 +114,7 @@ type Reconciler struct {
 	deliveryAttempts      int              // ADR-0118: bounded-retry cap before dead-lettering
 	maxDeliveriesInFlight int              // ADR-0156: the delivery workers
 	retry                 *retryQueue      // ADR-0156: the bounded delivery queue every attempt runs on
+	hold                  hold.Gate        // ADR-0206: deliver and Replay refuse while held
 
 	mu        sync.Mutex
 	subs      map[sensorKey]*subEntry
@@ -137,6 +141,10 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 	if attempts <= 0 {
 		attempts = defaultDeliveryAttempts
 	}
+	gate := d.Hold
+	if gate == nil {
+		gate = hold.Never
+	}
 	workers := d.MaxDeliveriesInFlight
 	if workers < 1 {
 		workers = defaultMaxDeliveriesInFlight
@@ -152,6 +160,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		retry:                 newRetryQueue(d.DeliveryBackoffInitial, d.DeliveryBackoffMax, d.MaxInFlightPerTarget, d.MaxQueuedPerSensor),
 		subs:                  map[sensorKey]*subEntry{},
 		replaying:             map[deadLetterKey]struct{}{},
+		hold:                  gate,
 	}, nil
 }
 
@@ -278,8 +287,12 @@ func (r *Reconciler) runAction(ctx context.Context, ns v1.NamespaceName, rg v1.R
 
 // deliver runs ONE delivery attempt of a unit: build the projected input, then start a WorkflowRun with it
 // (`workflow:`) or invoke a Function with the CloudEvent carrying it as its data (`function:`). Returns the
-// delivery error (nil on success).
+// delivery error (nil on success). While held it is fault.Unavailable, so the attempt retries, then parks: a guard,
+// as no publisher runs held (ADR-0206 Decision 6).
 func (r *Reconciler) deliver(ctx context.Context, d delivery) error {
+	if r.hold.Held() {
+		return errHeld("sensor.deliver")
+	}
 	input, err := buildInput(d.action.Input, d.ce)
 	if err != nil {
 		return err
@@ -374,6 +387,9 @@ func (r *Reconciler) recordTerminal(ctx context.Context, d delivery, actionErr e
 // Sensor / action ⇒ NotFound (the operator discards); a replay of an id already being replayed ⇒ Conflict.
 // Idempotent: a repeat replay of a still-broken target re-parks with a fresh attempt count.
 func (r *Reconciler) Replay(ctx context.Context, ns v1.NamespaceName, id string) error {
+	if r.hold.Held() {
+		return errHeld("sensor.Replay")
+	}
 	if r.deadletters == nil {
 		return fault.Unavailablef("sensor.Replay", "dead-lettering is not enabled")
 	}
@@ -631,4 +647,9 @@ func capMsg(s string) string {
 		return s[:max] + "…"
 	}
 	return s
+}
+
+// errHeld refuses a delivery while the platform is held (ADR-0206 Decision 6).
+func errHeld(op string) error {
+	return fault.Unavailablef(op, "the platform is held: nothing is delivered until `funcdctl hold release`")
 }

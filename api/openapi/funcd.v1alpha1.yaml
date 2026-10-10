@@ -1322,6 +1322,64 @@ components:
             - Terminating
           type: string
       type: object
+    Evidence:
+      additionalProperties: false
+      properties:
+        bucketOrphans:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        counts:
+          additionalProperties:
+            format: int64
+            type: integer
+          type: object
+        deadLetters:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        functionsNotReady:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        held:
+          type: boolean
+        marker:
+          $ref: "#/components/schemas/Marker"
+        orphans:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        pausedRuns:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        pending:
+          additionalProperties:
+            additionalProperties:
+              format: int64
+              type: integer
+            type: object
+          type: object
+        releasedAt:
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
+        report: {}
+      required:
+        - held
+      type: object
     Failure:
       additionalProperties: false
       properties:
@@ -1675,6 +1733,17 @@ components:
     GrantSpec:
       additionalProperties: false
       type: object
+    HoldReleaseInputBody:
+      additionalProperties: false
+      properties:
+        advance:
+          description: blob EventSources, <namespace>/<name>, whose listed keys are marked seen instead of replayed
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+      type: object
     Identity:
       additionalProperties: false
       properties:
@@ -1944,6 +2013,20 @@ components:
             - "null"
       required:
         - items
+      type: object
+    Marker:
+      additionalProperties: false
+      properties:
+        reason:
+          type: string
+        since:
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
+      required:
+        - reason
+        - since
       type: object
     Namespace:
       additionalProperties: false
@@ -3501,6 +3584,44 @@ paths:
           description: Error
       tags:
         - Gateway
+  /apis/funcd.io/v1alpha1/hold:
+    get:
+      operationId: getHold
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Evidence"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - Hold
+  /apis/funcd.io/v1alpha1/hold/release:
+    post:
+      operationId: releaseHold
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HoldReleaseInputBody"
+        required: true
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - Hold
   /apis/funcd.io/v1alpha1/namespaces:
     get:
       operationId: listNamespaces

@@ -11,6 +11,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/health"
+	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -31,6 +32,8 @@ type ReconcilerDeps struct {
 	Logger *slog.Logger
 	// Health is the storage prober whose KV result sets the Ready condition (ADR-0215 Decision 7); nil ⇒ always Ready.
 	Health *health.Prober
+	// Hold is the platform hold (ADR-0206): while held no removed table is reclaimed; nil ⇒ never held.
+	Hold hold.Gate
 }
 
 // Reconciler is the controller.Reconciler for KindKVStore (ADR-0072/0073): present ⇒ Ready +
@@ -41,6 +44,7 @@ type Reconciler struct {
 	kv     PrefixManager
 	health *health.Prober
 	logger *slog.Logger
+	hold   hold.Gate
 }
 
 // NewReconciler builds the KVStore reconciler. Store is required; KV (the PrefixManager) is optional.
@@ -52,7 +56,11 @@ func NewReconciler(d ReconcilerDeps) (*Reconciler, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Reconciler{store: d.Store, kv: d.KV, health: d.Health, logger: logger.With("component", "services.kv.reconciler")}, nil
+	gate := d.Hold
+	if gate == nil {
+		gate = hold.Never
+	}
+	return &Reconciler{store: d.Store, kv: d.KV, health: d.Health, logger: logger.With("component", "services.kv.reconciler"), hold: gate}, nil
 }
 
 // Reconcile converges one KVStore. A present store reports status.tables (declared sub-domains) + status.bindings
@@ -80,8 +88,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		return controller.Result{}, fault.Internalf(op, "object %s/%s is not a KVStore", req.Namespace, req.Name)
 	}
 
-	if err := r.reclaimOrphanTables(ctx, ks); err != nil {
-		return controller.Result{}, err
+	if !r.hold.Held() { // data newer than a restored metastore may have no table yet (ADR-0206 Decision 6)
+		if err := r.reclaimOrphanTables(ctx, ks); err != nil {
+			return controller.Result{}, err
+		}
 	}
 
 	bindings, err := r.countBindings(ctx, ks.Namespace, ks.Name)
@@ -112,14 +122,32 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 // another user of the KV substrate (the eventing watermarks) and is left alone.
 func (r *Reconciler) ReclaimDeleted(ctx context.Context) error {
 	const op = "services.kv.ReclaimDeleted"
+	deleted, err := r.deletedStores(ctx)
+	errs := []error{err}
+	for _, d := range deleted {
+		if derr := r.kv.DropPrefix(storePrefix(d.Namespace, d.Name)); derr != nil {
+			errs = append(errs, fault.Wrapf(derr, fault.KindOf(derr), op, "drop prefix for %s/%s", d.Namespace, d.Name))
+			continue
+		}
+		r.logger.InfoContext(ctx, "reclaimed the data of a deleted KV store", "namespace", d.Namespace, "store", d.Name)
+	}
+	return errors.Join(errs...)
+}
+
+// deletedStores lists each <ns>/<store>/ prefix holding data whose KVStore does not exist, with the errors of the
+// lookups it could not make. A key whose first two segments are not DNS labels belongs to another user of the KV
+// substrate and is left alone.
+func (r *Reconciler) deletedStores(ctx context.Context) ([]v1.ObjectRef, error) {
+	const op = "services.kv.ReclaimDeleted"
 	if r.kv == nil {
-		return nil
+		return nil, nil
 	}
 	keys, err := r.kv.List(ctx, "")
 	if err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), op, "list keys")
+		return nil, fault.Wrapf(err, fault.KindOf(err), op, "list keys")
 	}
 	checked := map[string]bool{}
+	var out []v1.ObjectRef
 	var errs []error
 	for _, k := range keys {
 		parts := strings.SplitN(k, "/", 3)
@@ -133,54 +161,84 @@ func (r *Reconciler) ReclaimDeleted(ctx context.Context) error {
 		}
 		checked[sp] = true
 		_, gerr := r.store.Get(ctx, v1.KindKVStore.GVK(), ns, name)
-		if fault.KindOf(gerr) != fault.NotFound {
-			if gerr != nil {
-				errs = append(errs, fault.Wrapf(gerr, fault.KindOf(gerr), op, "get kvstore %s/%s", ns, name))
-			}
-			continue
+		switch {
+		case fault.KindOf(gerr) == fault.NotFound:
+			out = append(out, v1.ObjectRef{Kind: v1.KindKVStore, Namespace: ns, Name: name})
+		case gerr != nil:
+			errs = append(errs, fault.Wrapf(gerr, fault.KindOf(gerr), op, "get kvstore %s/%s", ns, name))
 		}
-		if derr := r.kv.DropPrefix(sp); derr != nil {
-			errs = append(errs, fault.Wrapf(derr, fault.KindOf(derr), op, "drop prefix for %s/%s", ns, name))
-			continue
-		}
-		r.logger.InfoContext(ctx, "reclaimed the data of a deleted KV store", "namespace", ns, "store", name)
 	}
-	return errors.Join(errs...)
+	return out, errors.Join(errs...)
+}
+
+// Orphans lists what the reclaims would drop (ADR-0206 Decision 6): the prefix of each store whose KVStore does
+// not exist, then each table prefix of a KVStore that no longer declares the table.
+func (r *Reconciler) Orphans(ctx context.Context) ([]string, error) {
+	if r.kv == nil {
+		return nil, nil
+	}
+	deleted, err := r.deletedStores(ctx)
+	errs := []error{err}
+	var out []string
+	for _, d := range deleted {
+		out = append(out, storePrefix(d.Namespace, d.Name))
+	}
+	l, err := r.store.List(ctx, v1.KindKVStore.GVK(), store.ListOptions{})
+	if err != nil {
+		return out, errors.Join(append(errs, err)...)
+	}
+	for _, o := range l.Items {
+		if ks, ok := o.(*v1.KVStore); ok {
+			tables, err := r.orphanTables(ctx, ks)
+			out = append(out, tables...)
+			errs = append(errs, err)
+		}
+	}
+	return out, errors.Join(errs...)
 }
 
 // reclaimOrphanTables drops the data of any table prefix present on disk under <ns>/<store>/ but no
 // longer declared in spec.tables[] (ADR-0073 table-removal reclaim).
 func (r *Reconciler) reclaimOrphanTables(ctx context.Context, ks *v1.KVStore) error {
 	const op = "services.kv.reclaimOrphanTables"
+	prefixes, err := r.orphanTables(ctx, ks)
+	if err != nil {
+		return err
+	}
+	for _, p := range prefixes {
+		if derr := r.kv.DropPrefix(p); derr != nil {
+			return fault.Wrapf(derr, fault.KindOf(derr), op, "drop prefix for removed table %q", p)
+		}
+		r.logger.Info("reclaimed removed KV table", "store", ks.Name, "namespace", ks.Namespace, "prefix", p)
+	}
+	return nil
+}
+
+// orphanTables lists the <ns>/<store>/<table>/ prefixes holding data that spec.tables[] no longer declares.
+func (r *Reconciler) orphanTables(ctx context.Context, ks *v1.KVStore) ([]string, error) {
+	const op = "services.kv.reclaimOrphanTables"
 	if r.kv == nil {
-		return nil
+		return nil, nil
 	}
 	sp := storePrefix(ks.Namespace, ks.Name)
 	keys, err := r.kv.List(ctx, sp)
 	if err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), op, "list keys under %q", sp)
+		return nil, fault.Wrapf(err, fault.KindOf(err), op, "list keys under %q", sp)
 	}
 	desired := make(map[string]bool, len(ks.Spec.Tables))
 	for _, tb := range ks.Spec.Tables {
 		desired[tb.Name] = true
 	}
-	live := map[string]bool{} // table names observed in the live data
+	var out []string
+	seen := map[string]bool{}
 	for _, k := range keys {
 		rest := strings.TrimPrefix(k, sp)
-		if i := strings.IndexByte(rest, '/'); i > 0 {
-			live[rest[:i]] = true
+		if i := strings.IndexByte(rest, '/'); i > 0 && !desired[rest[:i]] && !seen[rest[:i]] {
+			seen[rest[:i]] = true
+			out = append(out, sp+rest[:i]+"/")
 		}
 	}
-	for tableName := range live {
-		if desired[tableName] {
-			continue
-		}
-		if derr := r.kv.DropPrefix(sp + tableName + "/"); derr != nil {
-			return fault.Wrapf(derr, fault.KindOf(derr), op, "drop prefix for removed table %q", tableName)
-		}
-		r.logger.Info("reclaimed removed KV table", "store", ks.Name, "namespace", ks.Namespace, "table", tableName)
-	}
-	return nil
+	return out, nil
 }
 
 // countBindings counts the Function.spec.kv entries in ns whose store is storeName.
