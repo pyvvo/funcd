@@ -225,6 +225,18 @@ func (c *Client) HandoverKVStore(ctx context.Context, ns v1.NamespaceName, store
 	return err
 }
 
+// RetryApp starts again, without waiting, the failed hook of the App's latest revision (ADR-0214 Decision 7). The
+// caller needs App update in ns; fault.Conflict when the App has no failed hook, a hook call of it runs or it is
+// paused.
+func (c *Client) RetryApp(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	itemURL, err := c.itemURL(v1.KindApp, ns, name)
+	if err != nil {
+		return err
+	}
+	_, err = c.do(ctx, http.MethodPost, itemURL+"/retry", nil)
+	return err
+}
+
 // DeleteOption tunes a Delete.
 type DeleteOption func(*deleteOptions)
 

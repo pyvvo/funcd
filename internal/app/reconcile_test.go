@@ -591,6 +591,24 @@ func TestScenarioAppDegradedRecovers(t *testing.T) {
 	require.Equal(t, v1.ConditionTrue, h.ready().Status)
 }
 
+// ADR-0221: a Function that serves while a gate fails (phase Ready, Ready=True, RevisionReady=False with the gate's
+// reason at its generation) is Pending, and the App is Degraded ChildNotReady naming the gate's reason.
+func TestAppFunctionServingUnderGateIsChildNotReady(t *testing.T) {
+	h := newHarness(t, nil)
+	h.install(todoApp(nil))
+	fn := h.get(v1.KindFunction, "todo-api")
+	gen := fn.GetObjectMeta().Generation
+	gate := cond("RevisionReady", v1.ConditionFalse, "ConfigResolveFailed", gen)
+	gate.Message = `configmap "app" not found`
+	setStatus(fn, v1.PhaseReady, cond("Ready", v1.ConditionTrue, "", 0), cond("ShapeValid", v1.ConditionTrue, "", gen), gate)
+	h.update(fn)
+	h.reconcile()
+	require.Equal(t, v1.AppChild{Kind: v1.KindFunction, Name: "todo-api", State: v1.AppChildPending, Reason: "ConfigResolveFailed"},
+		h.child(v1.KindFunction, "todo-api"))
+	require.Equal(t, v1.PhaseDegraded, h.app().Status.Phase)
+	requireCond(t, h.ready(), v1.ConditionFalse, "ChildNotReady", `Function/todo-api: ConfigResolveFailed: configmap "app" not found`)
+}
+
 // scenario: app-ref-waits (the reconciler half) — a missing ref target is RefNotFound; once it exists and serves the
 // App is Ready; the App never writes or owns it.
 func TestScenarioAppRefWaits(t *testing.T) {

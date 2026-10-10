@@ -23,6 +23,9 @@ type AppRevisionSpec struct {
 	App    ObjectRef `json:"app"`
 	Number int64     `json:"number" minimum:"1" maximum:"9999999999"`
 	Spec   AppSpec   `json:"spec"`
+	// HookInput is the data of this revision's hook calls, set by the stamp when the spec has a hook (ADR-0214
+	// Decision 2).
+	HookInput *AppHookInput `json:"hookInput,omitempty"`
 }
 
 // AppRevisionStatus is the rollout record (Decision 5): phase Deploying, Ready or Failed, and the conditions Applied,
@@ -31,6 +34,18 @@ type AppRevisionStatus struct {
 	Status `json:",inline"`
 	// StartedAt is the stamp time, from which app.upgradeTimeout runs (Decision 6).
 	StartedAt *Timestamp `json:"startedAt,omitempty"`
+	// Hooks records every hook call of the revision, retries included, in call order (ADR-0214 Decision 6).
+	Hooks []AppHookCall `json:"hooks,omitempty"`
+}
+
+// AppHookCall is one recorded hook call (ADR-0214 Decision 6): its point, its Function, the Invocation that records
+// it, its outcome and its end, a start term of the rollout deadline.
+type AppHookCall struct {
+	Point      string     `json:"point" enum:"preApply,postApply"`
+	Function   ObjectName `json:"function"`
+	Invocation ObjectName `json:"invocation"`
+	Phase      Phase      `json:"phase"`
+	EndTime    Timestamp  `json:"endTime"`
 }
 
 // AppRevisionName is the name of the App's AppRevision number n: <app>-<n>.

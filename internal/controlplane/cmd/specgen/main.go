@@ -25,6 +25,7 @@ func main() {
 	controlplane.RegisterStubLogs(api)            // ADR-0084: document the function-logs route in the committed spec
 	controlplane.RegisterStubWorkflowRunLogs(api) // ADR-0106: document the run-scoped logs route in the committed spec
 	controlplane.RegisterStubDeadLetters(api)     // ADR-0118: document the DLQ read + replay/discard routes
+	controlplane.RegisterStubAppRetry(api)        // ADR-0214: document the App retry route
 
 	raw, yamlErr := api.OpenAPI().YAML()
 	if yamlErr != nil {

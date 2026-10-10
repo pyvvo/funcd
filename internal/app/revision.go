@@ -52,7 +52,7 @@ func (r *Reconciler) revisions(ctx context.Context, a *v1.App) ([]*v1.AppRevisio
 // (ADR-0212 Decision 3) differs from the latest's spec.spec by json.Marshal, byte for byte, as the store's
 // specChanged compares (Decision 3). A stored namesake whose controller reference names this App's kind and name with
 // another UID is deleted at its resourceVersion first; any other owner stops the pass with ChildNotOwned naming it,
-// before any part is written.
+// before any part is written. When the spec has a hook, the new revision freezes its hook input (ADR-0214 Decision 2).
 func (r *Reconciler) stamp(ctx context.Context, a *v1.App, revs []*v1.AppRevision) ([]*v1.AppRevision, *stop, error) {
 	declared := a.Spec.WithoutPause()
 	want, err := json.Marshal(declared)
@@ -94,6 +94,9 @@ func (r *Reconciler) stamp(ctx context.Context, a *v1.App, revs []*v1.AppRevisio
 	rev := obj.(*v1.AppRevision)
 	rev.ObjectMeta = v1.ObjectMeta{Name: name, Namespace: a.Namespace, ResourceGroup: a.ResourceGroup, OwnerReferences: []v1.OwnerReference{controllerRef(a)}}
 	rev.Spec = v1.AppRevisionSpec{App: v1.ObjectRef{Kind: v1.KindApp, Namespace: a.Namespace, Name: a.Name}, Number: n + 1, Spec: declared}
+	if rev.Spec.HookInput, err = hookInput(a, name, declared, want, revs); err != nil {
+		return nil, nil, err
+	}
 	started := v1.NewTimestamp(r.clock.Now())
 	rev.Status = v1.AppRevisionStatus{Status: v1.Status{Phase: v1.PhaseDeploying}, StartedAt: &started}
 	created, err := r.store.Create(ctx, rev)
@@ -106,27 +109,48 @@ func (r *Reconciler) stamp(ctx context.Context, a *v1.App, revs []*v1.AppRevisio
 
 // settle derives the rollout record of this pass from the App's currentRevision and the highest number (Decisions 5
 // and 6), in memory: latestRevision is the highest; the latest, while Deploying, gets Applied and ChildrenReady, and
-// switches in a pass that was not stopped, wrote no part and left none Pending; short of a switch it turns Failed once
-// the clock reaches startedAt + UpgradeTimeout. Then every revision's phase and Current follow. It returns the time
-// left to the latest's deadline, zero when none runs.
-func (r *Reconciler) settle(ctx context.Context, a *v1.App, revs []*v1.AppRevision, vs []verdict, halt *stop, wrote *v1.ObjectRef) time.Duration {
+// switches in a pass that was not stopped, wrote no part and left none Pending, once its pre-hooks are done; short of
+// a switch it turns Failed once the clock reaches the deadline, unless a pre-hook call runs or started. A failed
+// pre-hook makes it Failed with HookFailed at once, as does a due pre-hook whose Function is not ready at the deadline
+// (ADR-0214 Decision 4). Then every revision's phase and Current follow. It returns the time left to the latest's
+// deadline, zero when none runs, and whether the latest switched.
+func (r *Reconciler) settle(ctx context.Context, a *v1.App, revs []*v1.AppRevision, vs []verdict, halt *stop, wrote *v1.ObjectRef,
+	hp hookPass) (time.Duration, bool) {
 	if len(revs) == 0 {
-		return 0
+		return 0, false
 	}
 	latest := revs[len(revs)-1]
 	a.Status.LatestRevision = latest.Name
 	var left time.Duration
+	switched := false
+	pre := hp.pre
+	if latest.Status.Phase == v1.PhaseFailed && pre != nil && pre.failed && hookFailedOn(latest) {
+		r.failHook(latest, hp.failure) // a retried call failed again: the message names its Invocation
+	}
 	if latest.Status.Phase == v1.PhaseDeploying {
-		r.setCondition(&latest.Status.Conditions, appliedCondition(halt))
+		applied := appliedCondition(halt)
+		if halt == nil && pre != nil {
+			applied = v1.Condition{Type: condApplied, Status: v1.ConditionFalse, Reason: reasonProgressing, Message: preHookMessage(pre)}
+		}
+		r.setCondition(&latest.Status.Conditions, applied)
 		ready := childrenReady(vs)
 		if latest.Name != a.Status.CurrentRevision {
 			now, deadline := r.clock.Now(), r.deadline(a, latest)
 			switch {
-			case halt == nil && wrote == nil && !anyPending(vs):
+			case pre != nil && pre.failed:
+				r.failHook(latest, hp.failure)
+				r.log.WarnContext(ctx, "pre-hook failed", "namespace", string(a.Namespace), "app", string(a.Name), "revision", string(latest.Name), "reason", hp.failure)
+			case pre == nil && halt == nil && wrote == nil && !anyPending(vs):
 				a.Status.CurrentRevision, a.Status.Version = latest.Name, latest.Spec.Spec.Version
+				switched = true
 				r.log.InfoContext(ctx, "switched", "namespace", string(a.Namespace), "app", string(a.Name), "revision", string(latest.Name))
 			case now.Before(deadline):
 				left = max(deadline.Sub(now), time.Millisecond)
+			case pre != nil && (hp.busy || hp.started):
+			case pre != nil && halt == nil && !hp.ready:
+				msg := "Function/" + string(pre.fn) + ": not ready"
+				r.failHook(latest, msg)
+				r.log.WarnContext(ctx, "rollout failed", "namespace", string(a.Namespace), "app", string(a.Name), "revision", string(latest.Name), "reason", msg)
 			default:
 				latest.Status.Phase = v1.PhaseFailed
 				ready = v1.Condition{Type: condChildrenReady, Status: v1.ConditionFalse, Reason: reasonChildNotReady, Message: failure(vs, halt, wrote)}
@@ -139,7 +163,7 @@ func (r *Reconciler) settle(ctx context.Context, a *v1.App, revs []*v1.AppRevisi
 	for _, rev := range revs {
 		r.setCurrent(rev, latest, a.Status.CurrentRevision)
 	}
-	return left
+	return left, switched
 }
 
 // setCurrent sets rev's phase and Current condition (Decision 5): the current revision is Ready and Current; an older
@@ -162,10 +186,11 @@ func (r *Reconciler) setCurrent(rev, latest *v1.AppRevision, current v1.ObjectNa
 	r.setCondition(&rev.Status.Conditions, c)
 }
 
-// deadline is the latest of the revision's startedAt, resumedAt(a) and the hold's ReleasedAt, plus UpgradeTimeout
-// (ADR-0212 Decision 6): paused and held time do not count. A record without startedAt gets the clock's time, so
-// every term is read from the store and the gate on every pass, a restart included; resumedAt and ReleasedAt are
-// zero when absent and never start a deadline alone.
+// deadline is the latest of the revision's startedAt, resumedAt(a), the hold's ReleasedAt and its last preApply
+// call's endTime, plus UpgradeTimeout (ADR-0212 Decision 6, ADR-0214 Decision 4): paused and held time and the time
+// before a pre-hook's last call do not count. A record without startedAt gets the clock's time, so every term is read
+// from the store and the gate on every pass, a restart included; the other terms are zero when absent and never start
+// a deadline alone.
 func (r *Reconciler) deadline(a *v1.App, rev *v1.AppRevision) time.Time {
 	if rev.Status.StartedAt == nil {
 		t := v1.NewTimestamp(r.clock.Now())
@@ -176,7 +201,7 @@ func (r *Reconciler) deadline(a *v1.App, rev *v1.AppRevision) time.Time {
 	if r.hold != nil {
 		released = r.hold.ReleasedAt()
 	}
-	for _, t := range []time.Time{resumedAt(a), released} {
+	for _, t := range []time.Time{resumedAt(a), released, lastPreApply(rev)} {
 		if t.After(start) {
 			start = t
 		}

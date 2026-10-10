@@ -14,7 +14,12 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/auth/rbac"
+	"github.com/pyvvo/funcd/internal/controlplane"
+	"github.com/pyvvo/funcd/internal/controlplane/middleware"
 	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/store/memory"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
@@ -60,8 +65,8 @@ func resourceVersion(t *testing.T, c *sdk.Client, kind v1.Kind, name v1.ObjectNa
 	return obj.GetObjectMeta().ResourceVersion
 }
 
-// ADR-0200 Decision 9, ADR-0212 Decision 9 and ADR-0217: the app group holds history and rollback (F114), pause and
-// resume (F115), and render, deploy and delete (F120).
+// ADR-0200 Decision 9, ADR-0212 Decision 9, ADR-0214 Decision 7 and ADR-0217: the app group holds history and rollback
+// (F114), pause and resume (F115), retry (F117), and render, deploy and delete (F120).
 func TestCLIAppGroupVerbs(t *testing.T) {
 	t.Parallel()
 	app, _, err := newRootCmdWith(&bytes.Buffer{}, nil).Find([]string{"app"})
@@ -70,8 +75,8 @@ func TestCLIAppGroupVerbs(t *testing.T) {
 	for _, sub := range app.Commands() {
 		verbs = append(verbs, sub.Name())
 	}
-	require.Equal(t, []string{"delete", "deploy", "history", "pause", "render", "resume", "rollback"}, verbs)
-	require.Equal(t, "Manage Apps (render|deploy|delete|history|rollback|pause|resume)", app.Short)
+	require.Equal(t, []string{"delete", "deploy", "history", "pause", "render", "resume", "retry", "rollback"}, verbs)
+	require.Equal(t, "Manage Apps (render|deploy|delete|history|rollback|pause|resume|retry)", app.Short)
 }
 
 // ADR-0200 Decision 9: app history lists the App's revisions by number with REVISION, VERSION, PHASE and STAMPED;
@@ -329,4 +334,49 @@ func TestScenarioAppRollbackRetriesOnConflict(t *testing.T) {
 	obj, err := c.Get(ctx, v1.KindApp, "team-a", "todo")
 	require.NoError(t, err)
 	require.Equal(t, todoSpec("1.0.0"), obj.(*v1.App).Spec)
+}
+
+// failedHooks answers a Retry as the App reconciler does: the first of an App with a failed hook starts its call, any
+// other is a Conflict.
+type failedHooks struct {
+	mu      sync.Mutex
+	failed  map[v1.ObjectName]bool
+	retried []string
+}
+
+func (f *failedHooks) Retry(_ context.Context, ns v1.NamespaceName, app v1.ObjectName) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.failed[app] {
+		return fault.Conflictf("app.Retry", "app %s has no failed hook", app)
+	}
+	delete(f.failed, app)
+	f.retried = append(f.retried, string(ns)+"/"+string(app))
+	return nil
+}
+
+// ADR-0214 Decision 7: app retry posts to the App's retry route in the namespace -n names and reports the start; a
+// second retry fails with the server's Conflict.
+func TestCLIAppRetry(t *testing.T) {
+	t.Parallel()
+	creds := middleware.NewStaticCredentials(map[string]auth.Identity{
+		devToken: {Subject: "dev", Role: auth.RoleDeveloper, Namespaces: []v1.NamespaceName{"team-a"}},
+	})
+	hooks := &failedHooks{failed: map[v1.ObjectName]bool{"todo": true}}
+	h, err := controlplane.NewServer(controlplane.Deps{Store: store.New(memory.New()), Authorizer: rbac.New(), Credentials: creds, AppRetrier: hooks})
+	require.NoError(t, err)
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	c, err := sdk.New(srv.URL, sdk.WithToken(devToken))
+	require.NoError(t, err)
+
+	var out bytes.Buffer
+	require.NoError(t, execCLI(&out, c, "app", "retry", "todo", "-n", "team-a"))
+	require.Equal(t, "retrying the failed hook of todo\n", out.String())
+	require.Equal(t, []string{"team-a/todo"}, hooks.retried)
+
+	err = execCLI(&bytes.Buffer{}, c, "app", "retry", "todo", "-n", "team-a")
+	require.Equal(t, fault.Conflict, fault.KindOf(err), "%v", err)
+	require.ErrorContains(t, err, "app todo has no failed hook")
+	require.Equal(t, fault.Forbidden, fault.KindOf(execCLI(&bytes.Buffer{}, c, "app", "retry", "todo")), "without -n the App is looked up in default")
 }
