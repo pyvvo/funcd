@@ -34,8 +34,9 @@ for a credential that puts and lists, never reads or deletes, for ADR-0205 to wr
   written, the error names `backup.singleWriter`, the daemon serves; `singleWriter: true` warns, writes.
 - **scenario: directory-second-writer-refused** — Given process A writing a directory, When B backs up to it, Then B
   writes nothing and reports `fault.Conflict`; after A exits, B's next run writes.
-- **scenario: second-platform-refused** — Given a key of timeline T9 (not the run's or its `parent`'s) above its last,
-  or a `daily` run's parts at its `hourly` n, When the run writes, Then no manifest; `fault.Conflict` names `backup.target`.
+- **scenario: second-platform-refused** — Given T9's key (T9 not its `parent`) above its last, or a `daily` run's parts
+  at its `hourly` n, When the run writes, Then no manifest; `fault.Conflict` names `backup.target`; given T2, restored
+  from T1/40, complete at 43, When live T1, then T2, runs, Then T1 puts only `gen/hourly/44-T1/refused`; both refused.
 - **scenario: ladder-class** — Given defaults, When an ISO week's first run, a later day's first run and that day's
   second run complete, Then they are `weekly`, `daily`, `hourly`; with `daily: 0` the second is `hourly`.
 - **scenario: put-and-list-suffice** — Given a bucket refusing `Get`, `Attributes`, `Delete` and puts under
@@ -87,16 +88,16 @@ or `Exists` shows a temp, even a crash's. No `.attrs` sidecar: `ContentType` or 
 <target root>
   gen/<class>/<n>-<timeline>/{events,metastore,runs}/part-00000 …   n: 10 decimal digits, one sequence across classes
   gen/<class>/<n>-<timeline>/manifest.yaml                           created last: the generation exists once this does
+  gen/hourly/<n>-<timeline>/refused                                  empty: a refused run's mark (Decision 4)
   probe/<32 hex>                                                     one per probe
   lock                                                               file:// only, never written through the port
 ```
 
-`class` is `hourly`, `daily`, `weekly` or a pin, `pre-upgrade` or `verified`; `timeline` is the writer's (ADR-0202
-Decision 3), so a listing shows it. A run runs `snapshot.Cut` once and lists `gen/` before its first put (n = 1 + the
-highest number of any key, complete or not) and before the manifest (Decision 4). A store file is ADR-0204's envelope
-(`Seal`; nil ⇒ as is) of records framed `uvarint(len key) ‖ key ‖ uvarint(len value) ‖ value`, in 8 MiB parts. Every
-part, then the manifest, goes `IfNotExist` (unless `Conditional()` is false); an error ends the run. One run at a time;
-no `Delete`, `Get` or `Attributes` on the box.
+`class` is `hourly`, `daily`, `weekly` or a pin, `pre-upgrade` or `verified`; `timeline` the writer's (ADR-0202
+Decision 3). A run runs `snapshot.Cut` once and lists `gen/` before its first put (n = 1 + the highest n of any key,
+complete or not) and before the manifest (Decision 4). A store file is ADR-0204's envelope (`Seal`) of records framed
+`uvarint(len key) ‖ key ‖ uvarint(len value) ‖ value`, in 8 MiB parts. Each part, then the manifest, goes `IfNotExist`
+unless `Conditional()` is false; an error ends the run. One run at a time; no `Delete`, `Get`, `Attributes` on the box.
 
 **3. Manifest** (`manifest.yaml` via `sigs.k8s.io/yaml`; format numbering proposed; decider confirms at acceptance):
 
@@ -118,14 +119,15 @@ layout bumps `format`. Readers ignore unknown fields and read every format up to
 elsewhere ⇒ `fault.Conflict` naming `<KeyPrefix>target` (`Config.KeyPrefix`, default `backup.`; ADR-0209 passes
 `kvstore.backup.`), even with `singleWriter: true`; on the data directory's device (`stat` `Dev`), a warning: not an
 independent copy (Q8). Probe: two goroutines `Put` one random `probe/<32 hex>` with `IfNotExist`; one nil and one
-`Conflict` pass; both nil, or a refused condition (`Target.Conditional` tells every writer of the target: Open
-questions), ⇒ `fault.Invalid` naming `<KeyPrefix>singleWriter`; any other outcome is not ready, with its cause. Not
-ready ⇒ no generation, the error logged and in ADR-0205's status, the daemon serving; `singleWriter: true` makes a
-failed probe a warning. **Second writer** (proposed; decider confirms at acceptance): `Write` checks both listings
-against the timeline `Cut` returned. A key of a timeline other than the run's and its `parent`'s, numbered above the
-run's last (its highest n, else `parent`'s n, else 0), or at the second listing a key at n the run did not put, ends
-the run before the manifest with `fault.Conflict` naming `<KeyPrefix>target` and that key (ADR-0205's `lastFailure`).
-As each writer lists after its own puts, of two writers at one n at most one writes a manifest.
+`Conflict` pass; both nil, or a refused condition (`Target.Conditional`, Open questions), ⇒ `fault.Invalid` naming
+`<KeyPrefix>singleWriter`; any other outcome is not ready, with its cause. Not ready ⇒ no generation, the error logged
+and in ADR-0205's status, the daemon serving; `singleWriter: true` makes a failed probe a warning. **Second writer**
+(proposed; decider confirms at acceptance): `Write` checks both listings against `Cut`'s timeline. Another timeline's
+key above the run's last (its highest complete n, else `parent`'s n, else 0; a `parent` key counts only from the run's
+first n: its lowest own n, else the n it writes), or at the second listing a key at n the run did not put, ends the run
+before the manifest with `fault.Conflict` naming `<KeyPrefix>target` and that key (ADR-0205's `lastFailure`); refused at
+the first listing, a run with a complete generation of its own puts only the `refused` mark (Decision 2), refusing the
+other writer in turn. As each writer lists after its own puts, of two writers at one n at most one writes a manifest.
 
 **5. Targets, keys, credentials.** Another scheme ⇒ `fault.Invalid` (`gocloud.go` registers no `gs` or `azblob`). The
 operator's restore and verify credential (ADR-0205, ADR-0206) holds `s3:GetObject`, `s3:ListBucket` and is the only
@@ -161,13 +163,12 @@ type PutOptions struct{ ContentType string; Metadata map[string]string; IfNotExi
 type OpenOptions struct{ CredentialsFile string } // s3:// only; another scheme ⇒ fault.Invalid
 func OpenWith(ctx context.Context, url string, opts OpenOptions) (blob.Bucket, error)
 package backup // internal/backup (NEW); YAML keys are the lowerCamel names of Decision 3 (json tags)
-type Class string; const Format = 1 // Format: Decision 3
-const Hourly, Daily, Weekly, PreUpgrade, Verified Class = "hourly", "daily", "weekly", "pre-upgrade", "verified"
+type Class string; const Hourly, Daily, Weekly, PreUpgrade, Verified Class = "hourly", "daily", "weekly", "pre-upgrade", "verified"
 type Manifest struct{ Format int; Generation, Revision uint64; At v1alpha1.Timestamp; Funcd, Timeline string
 	Parent *GenRef; Stores []StoreFile; Keys } // At: ADR-0196; Parent omitempty; Keys embedded, flattened (ADR-0204)
 type Keys struct{ SecretsKey, MasterSecret string; Recipients []string } // json omitempty each; values: ADR-0204
 type GenRef struct{ Timeline string; Generation uint64 } // names a generation: n alone can return after expiry
-type StoreFile struct{ Name, SHA256 string; Parts int; Bytes int64 }
+type StoreFile struct{ Name, SHA256 string; Parts int; Bytes int64 }; const Format = 1 // Format: Decision 3
 type Entry struct{ Generation uint64; Timeline string; Class Class; Complete bool; At time.Time } // all but At from the key; At: manifest ModTime
 type Retention struct{ Hourly, Daily, Weekly, Verified int } // Verified: retention.verified days, 0 ⇒ no gen/verified/ rule (KV); ClassFor ignores it
 type Config struct{ Target, CredentialsFile, DataDir, KeyPrefix string; SingleWriter bool; Retention Retention; Logger *slog.Logger }
@@ -199,10 +200,9 @@ func Abandoned(ms []Manifest) map[GenRef]bool // Decision 3, parent
 
 **Files**: `internal/blob/blob.go`; `internal/blob/gocloud/gocloud.go` (`Put`, `IfNotExist` mapping, `checkKey`, walk,
 `OpenWith`); `internal/blob/blobcontract/contract.go`; NEW `internal/backup/{backup,layout,manifest,write}.go`;
-`internal/platform/config/config.go` (`Backup`; defaults in `defaults()` beside `c.Eventing.MaxInFlightPerTarget`);
-`examples/funcdconfig.yaml`; NEW `examples/backup-lifecycle.md` (lifecycle JSON, box and verify policies, directory
-prune commands, each with `gen/verified/`). **go.mod**: none. **Blueprint** (at acceptance): the blob storage bullet
-(line 81 at main c35bdf5e) and "Backup & disaster recovery" (line 714).
+`internal/platform/config/config.go` (`Backup`, defaults in `defaults()`); `examples/funcdconfig.yaml`; NEW
+`examples/backup-lifecycle.md` (lifecycle JSON, box and verify policies, directory prune commands, each with
+`gen/verified/`). **go.mod**: none. **Blueprint** (at acceptance): the "Blob storage" and "Backup & disaster recovery" bullets.
 
 **Test plan**: one `TestScenario<Name>` per scenario; S3 cases use an `httptest` stub (`If-None-Match: *` honored,
 ignored or refused, a 409 mode, refused prefixes, LIST, signature capture), the lock case a child process, the ladder
@@ -216,9 +216,8 @@ refused), `TestProbeOutcomes` (`Conditional`), `TestLifecycleRules`, `TestS3Cond
 
 - [ ] `IfNotExist` is atomic on all three backends; `FailedPrecondition` → `Conflict` only under it; `file://` uses
       temp, `fsync`, `link`, refuses keys it would escape, never lists a `.funcd-tmp`; the 409 retry stops at 3.
-- [ ] Parts, then after a second listing the manifest, go `IfNotExist` unless `Conditional()` is false; a foreign
-      timeline's newer key or another key at n refuses (Decision 4); lineage on (timeline, n); no `Delete`, `Get` or
-      `Attributes` on the box, no `gen/verified/` put by `Write`; box puts on `probe/`, `blob/`, `kv/`, other classes.
+- [ ] Parts, then after a second listing the manifest, go `IfNotExist` unless `Conditional()` is false; refusals and
+      `refused` match Decision 4; lineage on (timeline, n); the box never deletes, reads or puts on `gen/verified/`.
 - [ ] One random probe key, two concurrent creates, ready only on nil and `Conflict`; not ready ⇒ no generation, daemon
       serves; a held lock beats `singleWriter`. Class rule, rules, defaults, manifest fields match Decisions 3, 5, 6.
 
@@ -228,9 +227,10 @@ refused), `TestProbeOutcomes` (`Conditional`), `TestLifecycleRules`, `TestS3Cond
 credential reads no Secrets ciphertext, erases no history and forges no `verified` pin. **Negative (accepted)**: the
 ladder needs the operator's rules, which funcd cannot read back; S3 expiry rounds up to midnight UTC and acts per
 object, so at its class's end a manifest can outlive a part made the day before (ADR-0206 lists it broken); a failed
-run's partial generation stays until its class expires; a second platform's keys stop the runs until the operator
-acts (Decision 4); a directory cannot stop its owner deleting (POSIX `unlink` needs only directory write); `flock` may
-not span NFS clients. **Risk**: a store accepting `If-None-Match` without enforcing it under concurrency can pass a probe.
+run's partial generation stays until its class expires; a second platform's keys stop the runs until the operator acts
+(Decision 4), and a restore released onto its live source's `target` stops both, its generation then ADR-0206's `latest`; a
+directory cannot stop its owner deleting (POSIX `unlink` needs only directory write); `flock` may not span NFS clients.
+**Risk**: a store accepting `If-None-Match` without enforcing it under concurrency can pass a probe.
 
 ## Open questions
 
@@ -238,7 +238,7 @@ not span NFS clients. **Risk**: a store accepting `If-None-Match` without enforc
 |---|---|---|
 | `verified` pin; its expiry | ADR-0205 verifies and copies to `gen/verified/<n>-<timeline>/` with the verify credential, the only one that puts there; copies expire by a `gen/verified/` lifecycle rule of `retention.verified` days (this ADR's key, Decision 5: default 2, at least 1), which `LifecycleRules` emits from `Retention.Verified` (`0`, as the KV passes: no rule) and `examples/backup-lifecycle.md` shows; the alternative: ADR-0205's verify prints the older copies to prune, as ADR-0207 Decision 2 does for pre-upgrade pins | the box cannot read; a pointer keeps no objects; verify runs every `(rpo − interval)/2` (30 min at defaults, ADR-0205 Decision 6) and copies each generation once, so without either copies never expire; the rule keeps the newest while verify runs and the last for `retention.verified` days after it stops, at up to 24 copies a day; one key sets both the rule and ADR-0205's `CheckBackup` checks (an error below 1; a warning when `retention.verified` × 24 h is below `rpo − interval`); S3 expiry days are at least 1; printing keeps one but needs an operator with delete |
 | Layout, format numbering | `gen/<class>/<n>-<timeline>/`, n 10 digits across classes, 8 MiB parts, platform `format` from 1; the alternative: an empty `gen/<class>/<n>/timeline-<timeline>` key put first, keeping `<n>/` (one more object a run) | a listing shows the timeline the box cannot read; lexical order; one `PutObject` a part (under transfermanager v0.2.11's 16 MiB multipart threshold, `api_client.go:13`) |
-| Second writer (Decision 4) | refuse a run on a key of a timeline other than the writer's and its `parent`'s above its last, and on another key at its n; a fresh platform on a target holding another's keys is refused until the operator stops that writer and moves `prefix` or deletes the keys (the alternative: warn and write) | Q8 fences a second funcd booting by mistake; `IfNotExist` fences only an identical key, so two platforms (or an `hourly` and a `daily` run at one n) interleave unseen and `latest` (ADR-0206) cannot tell them apart; the box reads no manifest, so it knows only `parent`, and older ancestors' keys sit below `parent`'s n |
+| Second writer (Decision 4) | refuse a run on another timeline's key above its last complete n (`parent`'s only from the run's first n up) and on another key at its n; a refused writer with a complete generation puts an empty `refused` key; a fresh platform on a target holding another's keys is refused until the operator stops that writer and moves `prefix` or deletes the keys; a released restore writing to its live source's target stops both (alternatives: warn and write; a refused run puts its parts, a full upload every `retryInterval`, ADR-0205) | Q8 fences a second funcd booting by mistake; `IfNotExist` fences only an identical key, so two platforms (or an `hourly` and a `daily` run at one n) interleave unseen and `latest` (ADR-0206) cannot tell them apart; the box reads no manifest, so it knows only `parent`, and older ancestors' keys sit below `parent`'s n; `parent`'s keys below the run's first n predate the restore (n = 1 + the highest key); a refused run that put nothing is unseen, so a live source refused by its copy's first generation would leave the copy writing on, and a `refused` mark counted in its writer's last would lift it above the other |
 | Directory lock; lineage; `credentialsFile`; failed probe | `flock` on `<dir>/lock` for the process life, a same-device warning; `parent` from ADR-0206's restore and the abandoned rule on (timeline, n) (Decision 3); AWS shared credentials `[default]`; stop the backup, serve, re-probe each run | the `procreg` precedent; revisions alone cannot place a branch point; expiry can return a number; no new parser; a target down at boot heals |
 | Refused condition (S3 `NotImplemented`, 501, via `smithy.APIError`) | fails the probe like both nil; with `singleWriter: true` the runs put without `IfNotExist`: `Target.Conditional()` is then false, and `Write` and every sibling writer sharing the target (ADR-0208's mirror, ADR-0209's KV) read it after `Ready` | Q8: a failed probe is an error unless `singleWriter: true`; with the header every put would fail |
 

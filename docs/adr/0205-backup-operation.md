@@ -36,7 +36,7 @@ and `funcdctl backup plan` (F112); one status for every backup stream, metrics, 
 - **scenario: rpo-risk-follows-verified** — Given only generation 7 verified, `objectives.rpo: 2h`, When 7 is 2 h old,
   Then `rpoRisk` is true, `funcd.backup.rpo_risk` is 1, one warning is logged; once 9 is verified, a listing clears it.
 - **scenario: verify-pins-generation** — Given generation 7 the newest complete, When `funcdctl backup verify` runs with
-  the verify credential and an operator identity, Then `gen/verified/7/` holds 7; a rerun writes nothing, exit 0.
+  the verify credential and an identity, Then `gen/verified/<7>-<timeline>/` holds 7; a rerun writes nothing, exit 0.
 - **scenario: verify-detects-damage** — Given one changed byte in a part of 7, or its last part missing, When verify
   runs, Then it fails naming the store and part, and writes nothing under `gen/verified/`.
 - **scenario: status-shows-restore-points** — Given generations 3 to 9 complete and 7 verified, When an admin runs
@@ -97,8 +97,9 @@ loop:  wait for due → held: due = now + retryInterval, no run → else Target.
   writes nothing, counts as neither a run nor a failure, sets `held: true` and rechecks after `retryInterval`.
 - **Overrun** (proposed; decider confirms at acceptance): no overlap, no queue: a late run's successor starts when it
   ends, with one Warn `backup run overran its interval` (`duration_ms`, `interval_ms`); a stuck run shows as `rpoRisk`.
-- **Failure** (`Ready` not ready, a list, cut or put error): Error `backup run failed`, `lastFailure`, a `failed` count;
-  the daemon serves (ADR-0203 Decision 4). Shutdown cancelling a run is no failure (as `RunBackup`'s `ctx.Err()` guard).
+- **Failure** (`Ready` not ready, a list, cut or put error, or ADR-0203 Decision 4's second-writer `fault.Conflict`
+  naming `backup.target`): Error `backup run failed`, `lastFailure`, a `failed` count; the daemon serves. Shutdown
+  cancelling a run is no failure (as `RunBackup`'s `ctx.Err()` guard).
 
 **3. Settings check** (table proposed; decider confirms at acceptance). An error is `fault.Invalid` naming the key and
 no start; a warning is one Warn line at start. The daemon (`Validate`) and F112 run `config.CheckBackup` (every row
@@ -125,10 +126,9 @@ reading only the merged config but `kvstore.backup.*`, which ADR-0209 moves in) 
 | `lastVerifiedTime` | highest-numbered generation with a complete `verified` copy, at its original's `At`; absent when none or the original expired |
 | `earliestRestorePoint` | oldest complete ladder or `pre-upgrade` generation (both restorable, ADR-0206 Decision 3); a `verified` copy adds none, its ModTime being the verify time |
 | `nextRunTime` | Decision 2's due time |
-| `rpoRisk` | backup on, and `lastVerifiedTime` absent or older than `objectives.rpo` |
+| `rpoRisk` | backup on, and `lastVerifiedTime` absent or older than `objectives.rpo`; besides after each run and per status read, the runner relists at `lastVerifiedTime + rpo`, so a fresh listing turns it on |
 | `lastFailure` | `time`, `error` of the last failed run since start; a success clears it |
 
-It relists after each run, at `lastVerifiedTime + rpo` (a fresh listing turns `rpoRisk` on) and per status read.
 **Streams** (proposed; decider confirms at acceptance): ADR-0208's mirror and ADR-0209's KV export report each run (a
 `Ready` refusal too) to `Runner.Recorder`, kept as `streams.blob`, `streams.kv` (`lastSuccessTime`, `lastFailure`) since
 start, no `rpoRisk` (never verified). `GET /apis/funcd.io/v1alpha1/platformbackup` (NEW; 503 on a failed listing)
@@ -142,15 +142,15 @@ authorizes `get` on `WorkerNode` (cluster-scoped, so admin-only); `funcdctl back
 
 **6. Verified** (checks proposed; decider confirms at acceptance). `funcdctl backup verify` (NEW; off the box, with
 ADR-0203's verify credential and an ADR-0204 identity; flags `--target`, `--credentials-file`, `--identity`, `--escrow`,
-`--generation`, default the newest complete ladder generation) reads the manifest and each store's parts in order,
-matching `parts`, `bytes`, `sha256`; decrypts each store file to its end with the `Unseal` that `envelope.Opener(ids)`
-returns for the manifest's `recipients` (age authenticates every chunk, detects truncation); parses the framing
-(`backup.Records`) to its end, keys strictly ascending (ADR-0202 Decision 1); with `--escrow`, finds the `secretsKey`
-and `masterSecret` fingerprints (`escrow.Find`); decrypts no Secret (the drill does). All passed, it copies the parts,
-the manifest last, to `gen/verified/<n>/` with `IfNotExist` (a part there is read back and compared); a rerun writes
-nothing (`Pinned` false, exit 0). The operator runs it every `(objectives.rpo − interval)/2` (30 min at defaults), as
-`rpo − interval` lets an original verified at age `interval` pass `rpo` while the next verify runs. No backup credential
-deletes (ADR-0203 Decision 5): copies expire by ADR-0203's `gen/verified/` rule after `retention.verified` days.
+`--generation`, default the newest complete ladder one) reads the manifest and each store's parts in order, matching
+`parts`, `bytes`, `sha256`; decrypts each store file to its end with the `Unseal` that `envelope.Opener(ids)` returns for
+the manifest's `recipients` (age authenticates each chunk, detects truncation); parses the framing (`backup.Records`) to
+its end, keys strictly ascending (ADR-0202 Decision 1); with `--escrow`, finds the `secretsKey` and `masterSecret`
+fingerprints (`escrow.Find`); decrypts no Secret (the drill does). All passed, it copies the parts, the manifest last, to
+`gen/verified/<n>-<timeline>/` (the original's name, ADR-0203 Decision 6) with `IfNotExist` (a part already there must
+match); a rerun writes nothing (`Pinned` false, exit 0). The operator runs it every `(objectives.rpo − interval)/2`
+(30 min at defaults), as `rpo − interval` lets an original verified at age `interval` pass `rpo` while the next verify
+runs. Copies expire by ADR-0203's `gen/verified/` rule after `retention.verified` days; no backup credential deletes.
 
 ## Temporary workarounds
 
@@ -205,8 +205,8 @@ func WithPlatformBackup(r *runner.Runner) Option // pkg/funcd (NEW): New calls r
 **Files**: `internal/platform/config/config.go` (fields, defaults beside `c.Eventing`, `CheckBackup` in `Validate`); NEW
 `internal/backup/{runner,verify}/`, `internal/controlplane/backup.go` (route, stub; mounted in `server.go` as
 `RegisterDeadLetters`), `cmd/funcdctl/backup.go`; `pkg/funcd/{options,funcd}.go`; `cmd/funcd/main.go` (warnings; the
-Telemetry block, now after `buildKVStore`, then `runner.New` with its `funcd.backup` meter, no-op only without
-`telemetry.endpoint` as `invokeMeter`, both before `substrateOptions`); `examples/funcdconfig.yaml`; ADR-0203's
+Telemetry block, then `runner.New` with its `funcd.backup` meter, no-op without `telemetry.endpoint` as `invokeMeter`,
+both moved before `substrateOptions` and `buildKVStore`); `examples/funcdconfig.yaml`; ADR-0203's
 `examples/backup-lifecycle.md` (verify every `(rpo − interval)/2`); the OpenAPI. **Order**: no build edge on ADR-0206
 (`Hold` structural, `Parent` a `backup.GenRef`); the later wires both, adds the runner to `TestEveryRunnerConsultsHold`.
 **go.mod**: none. **Blueprint** (at acceptance): the DR bullet gains "scheduled, checked and alerted platform backups".

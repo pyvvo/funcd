@@ -23,9 +23,9 @@ counts unclean starts, starts held, then stops naming the operator's restore (Q7
 ## Scenarios
 
 - **scenario: upgrade-pins-old-state** — Given 0.m.0 installed with a `file://` target, When `funcd upgrade
-  ./funcd-0.(m+1).0` runs with `--unit ""` and the daemon stopped, or with `--unit` and the daemon running (holding
-  the target's lock), Then `gen/pre-upgrade/<n>/manifest.yaml` exists with `funcd: 0.m.0`, the installed path prints
-  0.(m+1).0 and `<path>.previous` prints 0.m.0; with `--unit` the stop came before the lock, the start after the swap.
+  ./funcd-0.(m+1).0` runs with `--unit ""` and the daemon stopped, or with `--unit` and the daemon running (holding the
+  target's lock), Then `gen/pre-upgrade/<n>-<timeline>/manifest.yaml` exists with `funcd: 0.m.0`, the installed path
+  prints 0.(m+1).0, `<path>.previous` 0.m.0; with `--unit` the stop came before the lock, the start after the swap.
 - **scenario: upgrade-keeps-data-owner** — Given the repo unit (`User=funcd`), its data and `file://` target owned by
   `funcd`, When root runs `funcd upgrade`, Then every entry there and `safemode.json` is `funcd`'s; the daemon serves;
   with the target root another uid's, the pin's new entries are that uid's and no older entry changes owner.
@@ -98,8 +98,8 @@ when the operator stops and starts the daemon, `--no-snapshot`). Steps in order;
 
 `--no-snapshot` skips 2 and 4 and warns once; the record carries no generation. **Owner**: the repo unit runs
 `User=funcd` (ADR-0026 §4), install.go's `User=root`. Every exit from step 4 closes what it opened, then re-owns with
-ADR-0206's `hold.Own` (Badger creates files as root): the store directories, and `lock` if new (the daemon opens it),
-take `<storage.dataDir>`'s owner; under the target only this run's new entries (`gen/pre-upgrade/<n>/`, new parents)
+ADR-0206's `hold.Own` (Badger writes as root): the store directories, and `lock` if new (the daemon opens it), take
+`<storage.dataDir>`'s owner; under the target only this run's entries (`gen/pre-upgrade/<n>-<timeline>/`, new parents)
 take the nearest pre-existing directory's (Q8, ADR-0203 Decision 5); deferred in `Snapshot`; an error fails step 4.
 
 **2. Pre-upgrade pins** (Q10, Q8). funcd deletes no pin: step 6 lists `gen/pre-upgrade/` (`Target.List`) and prints

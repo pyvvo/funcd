@@ -77,16 +77,16 @@ beside `version` (`cmd/funcd/main.go` `newRootCmd`); work on a running daemon is
 |---|---|
 | `funcd restore list`; `funcd restore inspect <point>` | generations as a lineage tree (Decision 3), then KV points and blob generations (rows ADR-0209 and ADR-0208 add); manifest, keys needed, version verdict, counts per kind, evidence, `--diff <point>`, `--object <Kind>/<ns>/<name>` (Decision 5); with `--kv`, `<point>` is `<chain>/<segment>`; a blob generation is listed, not inspected (ADR-0208 has no manifest reader); both write nothing |
 | `funcd restore run <point>`; `funcd restore kv [<chain>/<segment>]`; `funcd restore blob [<generation>]` or `--at <RFC 3339>` | the restore (Decision 2); the KV instance at a point, default the newest restorable one (ADR-0209 `ListPoints`, `RestoreDir` into `kvstore.dataDir`); the blob store at a generation, default the newest complete one of `blobmirror.List`, by `blobmirror.Restore` into the configured store (`blob.target`, else `blob.dir`) opened with `--store-credentials-file`, or with `--at` by `RestoreAt` of a `blob.Versioned` store, else `fault.Invalid` (ADR-0208); Decision 5 |
-| restore flags | `--config`, `--from` (default `backup.target`; for `restore kv`, ADR-0209's `ResolveKVBackup`), `--credentials-file` (the operator's restore credential, ADR-0203 Decision 5, never `backup.credentialsFile`), `--store-credentials-file` (`restore blob` only: opens the configured store as the destination; default `blob.credentialsFile`; with `--at` it also needs `s3:ListBucketVersions`, `GetObjectVersion`, ADR-0208 Decision 6), `--identity` (repeatable age identity file), `--escrow` (directory), `--reveal-secrets`, `--secrets-key` (`--object` only), `-o yaml` or `-o json`; `--new-master-secret` (ADR-0204) |
+| restore flags | `--config`, `--from` (default `backup.target`; for `restore kv`, ADR-0209's `ResolveKVBackup`), `--credentials-file` (the operator's restore credential, ADR-0203 Decision 5, never `backup.credentialsFile`), `--store-credentials-file` (`restore blob` only: opens the configured store as the destination; default `blob.credentialsFile`; with `--at` it also needs `s3:ListBucketVersions`, `GetObjectVersion`, ADR-0208 Decision 6), `--identity` (repeatable age identity file), `--escrow` (directory), `--timeline <t>` (Decision 3), `--reveal-secrets`, `--secrets-key` (`--object` only), `-o yaml` or `-o json`; `--new-master-secret` (ADR-0204) |
 | `funcdctl hold status`; `funcdctl hold release [--advance <ns>/<source>]…` | the hold's evidence: marker, report, counts now, paused runs, dead letters, `Pending` blob keys, data with no object (`Orphans`, `bucketOrphans`), Functions not Ready; lifting it (Decision 8) |
-| recovery order | escrow keys, `restore run`, `restore kv`, `restore blob`, start held, read `hold status`, release |
+| recovery order; first drill | escrow keys, `restore run`, `restore kv`, `restore blob`, start held, read `hold status`, release; the drill (test and runbook) is the first-drill scenario with `server.network.egress: true` (ADR-0115; outbound off on Linux), booted held and never released; its integrity checks are steps 2.2 and 2.3, its duration an RTO input |
 
 **2. `restore run`**, in order; an error removes what it created and exits non-zero:
 1. `config.Load`; `storage.mode: memory` ⇒ `fault.Invalid`; the metastore, run-state, event-store directories absent or
    empty, else `fault.Conflict` naming one. Resolve the point, `backup.ReadManifest`; Decision 4; a `format` above
    `backup.Format` ⇒ `fault.Invalid`. ADR-0204 Decision 5: `ReadIdentities`; `envelope.Opener(ids)(m.Recipients)`, the
-   recipient match, once (else `fault.Invalid`); `CheckSecretsKey`; `escrow.PlanMaster` (the master; refuses unless
-   `--new-master-secret`, writes nothing). Then `hold.Begin`, `hold.Write`.
+   recipient match, once (else `fault.Invalid`); `CheckSecretsKey`; `escrow.PlanMaster` (`s3gateway.masterSecretFile`,
+   `storage.dataDir`, `--escrow`; refuses unless `--new-master-secret`; writes nothing). Then `hold.Begin`, `hold.Write`.
 2. Per store in cut order: every part present with the manifest's `sha256`, else `fault.Invalid` naming generation and
    store; step 1's `Unseal`, `backup.Records` into ADR-0202's `snapshot.Loader` (`Load`; on the metastore
    `store.Engine`, which skips the timeline record; ADR-0201 for events).
@@ -103,17 +103,18 @@ beside `version` (`cmd/funcd/main.go` `newRootCmd`); work on a running daemon is
 
 | `<point>` | Resolves to |
 |---|---|
-| `latest`; an RFC 3339 time | the newest complete generation by `at` not `Abandoned` (ADR-0203); the same with `at` at or before the time |
+| `latest`; an RFC 3339 time | the newest complete generation by `at` not `Abandoned` (ADR-0203); the same with `at` at or before the time; when the qualifying complete generations come from two timelines neither of which descends from the other by `parent`, `fault.Conflict` naming both timelines; `--timeline <t>` (NEW) keeps only t and the timelines it descends from |
 | `<timeline>-<n>` (a resourceVersion) | the newest complete generation of that timeline with `revision` below n: the state before that write; none ⇒ the timeline's `parent` |
-| `<timeline>/<n>`; `pre-upgrade` or `verified` | that generation; the newest complete one of that pin class |
+| `<timeline>/<n>`; `pre-upgrade` or `verified` | that generation; the newest complete one of that pin class, with the same two-timeline rule and `--timeline` |
 
 `list` prints a row per generation (timeline, n, class, `at`, `funcd`, state `complete`, `incomplete`, `abandoned` or
 `newer`), each timeline indented under its `parent`. ADR-0205 takes a generation's `parent` from `restore.Parent`.
 
 **4. Version rule** (Q10). The manifest's `funcd` and `version.Version` compare by `semver.MajorMinor`: the same or older
-restores, newer is `fault.Invalid` naming both; either not semver (`dev`, a bare hash: `scripts/build.sh` without tags)
-restores any, warning. An older generation runs the start steps as at an upgrade (`workflow.MarkKVStoresOnce`, ADR-0201's
-move, ADR-0202's legacy versions); until a migration framework exists, generations from ADR-0205's minor on restore.
+restores, newer is `fault.Invalid` naming both; when either is not valid semver (`dev`, or a bare hash:
+`scripts/build.sh`'s `git describe --tags --always --dirty` in a clone without tags), it restores, warning naming both.
+An older generation runs the start steps as at an upgrade (`workflow.MarkKVStoresOnce`, ADR-0201's move, ADR-0202's
+legacy versions); until a migration framework exists, generations from ADR-0205's minor on restore.
 
 **5. Single object, KV, blob, registry.** `inspect` reads into memory engines (ADR-0202), never the data directory;
 `--object` prints one object without `uid`, `resourceVersion`, creation time and status, so `funcdctl apply -f`
@@ -153,9 +154,6 @@ event of an existing EventSource ⇒ `fault.Invalid`; both before any change. Th
 failure returns, the marker kept, and a rerun completes; `Release` writes the time (daemon clock) to `.hold-released`,
 deletes the marker (`fsync` of the directory), lifts the gate. `hold status` shows Decision 1's evidence.
 
-**9. First drill** (test and runbook): the first-drill scenario with `server.network.egress: true` (ADR-0115; outbound
-off on Linux), booted held and never released; its integrity checks are steps 2.2 and 2.3, its duration an RTO input.
-
 ## Temporary workarounds
 
 None.
@@ -174,7 +172,7 @@ func Open(dataDir string) (*Hold, error)   // BusyFile ⇒ fault.Conflict; no ma
 func Own(ref string, roots ...string) error // os.Lchown each root, if it exists, and all below to ref's uid, gid where they differ
 func (h *Hold) Marker() (Marker, bool); func (h *Hold) Release(now time.Time) error // Decision 8: ReleasedFile, no marker
 package restore // internal/restore (NEW)
-type Point struct{ Latest bool; At time.Time; Version store.Version; Gen *backup.GenRef; Pin backup.Class }
+type Point struct{ Latest bool; At time.Time; Version store.Version; Gen *backup.GenRef; Pin backup.Class; Timeline string }
 type Generation struct{ Manifest backup.Manifest; Class backup.Class; State string }
 type Report struct{ From backup.GenRef; Timeline, Funcd string; At v1.Timestamp; Counts map[v1.Kind]int // restore.json
 	PausedByRestore, AlreadyPaused, RecordsWithoutRun []string } // runs as <ns>/<name>
@@ -183,7 +181,7 @@ type Options struct{ Config config.Config; Source blob.Bucket; Identities []age.
 type View struct{ Meta store.Store; Runs runstate.Store; Events *eventstore.Store; Secrets []v1.ObjectRef } // memory engines
 func ParsePoint(s string) (Point, error)                         // Decision 3; malformed ⇒ fault.Invalid
 func List(ctx context.Context, src blob.Bucket) ([]Generation, error)
-func Resolve(gens []Generation, p Point) (Generation, error)     // none ⇒ fault.NotFound
+func Resolve(gens []Generation, p Point) (Generation, error) // none ⇒ fault.NotFound; unrelated timelines ⇒ fault.Conflict
 func Run(ctx context.Context, p Point, o Options) (Report, error); func CheckVersion(writer, binary string) error // Decision 4
 func Inspect(ctx context.Context, g Generation, o Options) (*View, error) // SecretsKey nil ⇒ View.Secrets by key only
 func Diff(from, to *View) (added, removed, changed map[v1.Kind][]v1.ObjectRef, err error)
@@ -213,12 +211,13 @@ Hold interface{ Held() bool; ReleasedAt() time.Time } // NEW in app.Deps, nil �
 
 **Test plan**: one `TestScenario<Name>` per scenario, platform ones on `shortDataDir`, `TestScenarioFirstDrill` in
 `tests/e2e`, the owner one as root on Linux (a second uid owns the data), else skipped. Units: `TestParsePoint`,
-`TestResolve`, `TestCheckVersion`, `TestExportRedacts`, `TestInspectDiff`, `TestHoldMarkerRoundTrip`, `TestOwn`,
-`TestOrphans`, `TestBucketOrphans`, `TestReleaseRefuses` (developer `Forbidden`, unknown `--advance` `Invalid`, not held
-`Conflict`, nothing changed; a failed `Advance` keeps the marker). Conformance: `TestPausedRunWithoutRecordStaysStill`
-(10 passes, no record, no dispatch; Q4's precondition) and `TestEveryRunnerConsultsHold` (each Decision 6 runner built
-by then, the App's included, held; fails when one acts). **Definition of done**: `scripts/agent/d`
-`go test -race -count=1` and `just ci`, the e2e lane green; no identity leak.
+`TestResolve` (unrelated timelines, `--timeline`), `TestCheckVersion` (`dev`, `abc1234`, `abc1234-dirty` as writer or
+binary: restores, warning; `v0.9.0-9-gabc1234-dirty` under v0.8: `Invalid`), `TestExportRedacts`, `TestInspectDiff`,
+`TestHoldMarkerRoundTrip`, `TestOwn`, `TestOrphans`, `TestBucketOrphans`, `TestReleaseRefuses` (developer `Forbidden`,
+unknown `--advance` `Invalid`, not held `Conflict`, nothing changed; a failed `Advance` keeps the marker). Conformance:
+`TestPausedRunWithoutRecordStaysStill` (10 passes, no record, no dispatch; Q4's precondition) and
+`TestEveryRunnerConsultsHold` (each Decision 6 runner built by then, the App's included, held; fails when one acts).
+**Definition of done**: `scripts/agent/d go test -race -count=1` and `just ci`, the e2e lane green; no identity leak.
 
 ## Review checklist
 
@@ -242,6 +241,7 @@ while held; `replay --from` of a held run needs a `cancel` first. **Risk**: a la
 | Backup runners, data reclaims while held | skipped until the release; `hold status` lists the data with no object; the boot reclaims run at the next start after it | a drill or unverified restore must not branch the source's lineage, nor drop data the restored metastore does not name yet; running backups would protect changes made while held; for reclaims, alternative (ADR-0209): none after a restore until the operator runs them over the listed set, which keeps #708 open on a restored node and needs a reclaim command, offline or racing a live create (`ReclaimDeleted`'s comment, `internal/services/kv/reconcile.go`) |
 | Split | one ADR | restore without the hold is unsafe; the hold alone has no caller but ADR-0207 |
 | Registry digest list (Q9, not decided) | none in v1; Functions show not Ready | no registry logic |
+| One function for which stamps order (Decision 4) | `CheckVersion` calls `semver.IsValid` and `semver.MajorMinor` itself and cites no ADR-0207 symbol; the alternative: this ADR defines `version.Compare(a, b string) (c int, ok bool)` (NEW, `internal/platform/version`, ADR-0207's contract comment), `CheckVersion` uses its `ok`, and ADR-0207 consumes it (a paired edit there) | ADR-0207 builds after this ADR; both accept the same stamps (any from a tagged tree, `-<n>-g<hash>-dirty` included; not `dev` or a bare hash), and two library calls hold no ordering logic to drift |
 | Held App rollout deadline (ADR-0200 Decision 6; downtime counts) | restart it at the release, with the App reconciler the only AppRevision writer (ADR-0200 Decision 1): `Release` persists its time (`.hold-released`), the reconciler takes the deadline as max(`startedAt`, `ReleasedAt`) + `app.upgradeTimeout` (Decision 6); alternatives: the release sets each `Deploying` `startedAt` to now (the move F122 makes, ADR-0200 Open question 2), which also supersedes ADR-0200 Decision 1 (a second writer); pause it (subtract held time, a sum ADR-0200 does not store); let it expire, the operator runs F117's `retry` | the release is the operator's decision to continue (Q3, report §4.L row 6); a hold is no failed rollout; the persisted time survives a restart before the first un-held pass, keeps one writer, and the hold edits no object |
 
 ## References
