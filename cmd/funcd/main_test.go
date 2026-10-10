@@ -419,7 +419,7 @@ func TestIssue36_DaemonPoolsNodeFunctions(t *testing.T) {
 // scenario: file-sets-addresses — a funcdconfig.yaml sets the (previously code-only) control-plane
 // + data-plane addresses; the assembled platform binds them (the headline ADR-0061 gap closed).
 func TestScenarioFileSetsAddresses(t *testing.T) {
-	p := addressesFromConfigFile(t)
+	p, _ := addressesFromConfigFile(t)
 	// Production's default is 0.0.0.0:8080; the config set 127.0.0.1:0 → a loopback, ephemeral bind.
 	require.True(t, strings.HasPrefix(p.Addr(), "127.0.0.1:"), "config listenAddr drove the control-plane bind, got %s", p.Addr())
 	require.NotEqual(t, "0.0.0.0:8080", p.Addr(), "not the Production default")
@@ -431,7 +431,7 @@ func TestScenarioFileSetsAddresses(t *testing.T) {
 func TestIssue313_FileSetsAddressesReleasesListeners(t *testing.T) {
 	var addrs []string
 	t.Run("scenario", func(t *testing.T) {
-		p := addressesFromConfigFile(t)
+		p, _ := addressesFromConfigFile(t)
 		addrs = []string{p.Addr(), p.DataPlaneAddr()}
 	})
 	require.Len(t, addrs, 2)
@@ -442,9 +442,54 @@ func TestIssue313_FileSetsAddressesReleasesListeners(t *testing.T) {
 	}
 }
 
+// Issue #850: with the S3 gateway off, the node master secret is created under storage.dataDir, not under the
+// working directory, so a restart from another directory keeps the same key (ADR-0204 Decision 7).
+func TestIssue850_GatewayOffMasterUnderDataDir(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	_, dataDir := addressesFromConfigFile(t)
+
+	_, err := os.Stat(filepath.Join(cwd, "s3gateway", "master.key"))
+	require.ErrorIs(t, err, fs.ErrNotExist, "a gateway-off node writes no master into the working directory")
+	info, err := os.Stat(filepath.Join(dataDir, "s3gateway", "master.key"))
+	require.NoError(t, err, "a gateway-off node keeps its master under storage.dataDir")
+	require.Equal(t, fs.FileMode(0o600), info.Mode().Perm())
+}
+
+// Issue #850, ADR-0204 scenario master-key-migrates: a gateway-off node whose master is only in the working
+// directory copies it under storage.dataDir when it starts, so the catalog tokens it issued stay valid.
+func TestIssue850_StartMigratesWorkingDirMaster(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	old := bytes.Repeat([]byte{7}, 32)
+	require.NoError(t, os.MkdirAll(filepath.Join(cwd, "s3gateway"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(cwd, "s3gateway", "master.key"), old, 0o600))
+
+	_, dataDir := addressesFromConfigFile(t)
+
+	got, err := os.ReadFile(filepath.Join(dataDir, "s3gateway", "master.key"))
+	require.NoError(t, err)
+	require.Equal(t, old, got, "the start copies the working-directory key instead of creating a new one")
+	_, err = os.Stat(filepath.Join(cwd, "s3gateway", "master.key"))
+	require.NoError(t, err, "the old file is left to the operator")
+}
+
+// Issue #850, default (c) of ADR-0204 Decision 7: a platform with no data dir and no masterSecretFile (the InMemory
+// preset) keeps its master in memory and writes nothing to the working directory.
+func TestIssue850_InMemoryMasterNotWritten(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	p, err := funcd.New(funcd.InMemory())
+	require.NoError(t, err)
+	require.NoError(t, p.Shutdown(context.Background()))
+	entries, err := os.ReadDir(cwd)
+	require.NoError(t, err)
+	require.Empty(t, entries)
+}
+
 // addressesFromConfigFile assembles a platform from a funcdconfig.yaml that sets loopback, ephemeral control-plane
-// and data-plane addresses.
-func addressesFromConfigFile(t *testing.T) *funcd.Platform {
+// and data-plane addresses, and returns it with its storage.dataDir.
+func addressesFromConfigFile(t *testing.T) (*funcd.Platform, string) {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "funcdconfig.yaml")
@@ -467,7 +512,7 @@ func addressesFromConfigFile(t *testing.T) *funcd.Platform {
 	p, err := funcd.New(opts...)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
-	return p
+	return p, dataDir
 }
 
 // TestIssue153_FunclogConfigBlockLoadsAndMaps: the funclog block of ADR-0081/ADR-0101 is a daemon config key. It

@@ -236,7 +236,7 @@ type config struct {
 	s3gwEndpoint       string // sandbox-facing S3 URL (ADR-0085); empty ⇒ http://<listenAddr>
 	s3gwMaxUploadBytes int64
 	s3gwMasterFile     string // optional; empty ⇒ generate+persist under the data dir
-	s3gwDataDir        string // where the master.key is persisted when no master file is set
+	s3gwDataDir        string // where the master.key is persisted when no master file is set; empty ⇒ in memory
 
 	// catalogProxyHost is the netns-reachable host the per-CatalogService catalog PEP proxies publish
 	// (ADR-0137) — the CNI bridge gateway IP (e.g. 10.63.0.1) under containerd, so a worker in its own
@@ -636,14 +636,17 @@ func (p *Platform) buildControlPlane() error {
 	}
 
 	// S3 gateway (ADR-0080/0085): opt-in S3-protocol frontend over the blob substrate, reusing the
-	// cedar PDP as the PEP. When enabled, load/generate the node master secret, build the server, and
-	// expose the per-function keypair deriver to the reconciler for worker-env injection. Disabled ⇒
-	// nothing is built (no listener, no IAM, no injection) — zero-config unchanged.
+	// cedar PDP as the PEP. When enabled, build the server and expose the per-function keypair deriver to
+	// the reconciler for worker-env injection. Disabled ⇒ nothing is built (no listener, no IAM, no
+	// injection) — zero-config unchanged. The master below is loaded either way (ADR-0204 Decision 7).
 	// The node master secret (ADR-0085): the SAME 32-byte key the S3 gateway derives per-function
 	// SigV4 keypairs from AND the catalog PEP proxy derives/verifies per-function catalog tokens with
 	// (ADR-0137). Loaded ONCE here — before both the s3gw and the catalog wiring — so they share one
 	// master (LoadOrCreateMaster is deterministic per file/dir, but loading twice risks generating two
 	// different keys on a first run). Never logged.
+	if merr := s3gateway.MigrateMaster(c.s3gwMasterFile, c.s3gwDataDir, c.s3gwEnabled, p.logger); merr != nil {
+		return fault.Wrapf(merr, fault.KindOf(merr), op, "migrate node master secret")
+	}
 	master, merr := s3gateway.LoadOrCreateMaster(c.s3gwMasterFile, c.s3gwDataDir)
 	if merr != nil {
 		return fault.Wrapf(merr, fault.KindOf(merr), op, "load node master secret")

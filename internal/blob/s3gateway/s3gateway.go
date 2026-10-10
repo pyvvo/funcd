@@ -3,7 +3,10 @@ package s3gateway
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
+	"errors"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -285,9 +288,14 @@ func randomRoot() (access, secret string, err error) {
 	return "FUNCDROOT" + hex.EncodeToString(ab), hex.EncodeToString(sb), nil
 }
 
+// masterRel is the master's path under the data dir (ADR-0204 Decision 7), and the working-directory path a
+// gateway-off node used before it (#850).
+const masterRel = "s3gateway/master.key"
+
 // LoadOrCreateMaster loads the node S3 master secret from file (ADR-0085), or, when the
-// path is empty, from / generates+persists 0600 at <dataDir>/s3gateway/master.key. The
-// secret is NEVER logged. A supplied masterSecretFile that does not exist is an error.
+// path is empty, from / generates+persists 0600 at <dataDir>/s3gateway/master.key. With
+// neither, the secret is generated in memory and never written. The secret is NEVER
+// logged. A supplied masterSecretFile that does not exist is an error.
 func LoadOrCreateMaster(masterSecretFile, dataDir string) ([]byte, error) {
 	const op = "s3gateway.LoadOrCreateMaster"
 	if masterSecretFile != "" {
@@ -300,21 +308,103 @@ func LoadOrCreateMaster(masterSecretFile, dataDir string) ([]byte, error) {
 		}
 		return data, nil
 	}
-	path := filepath.Join(dataDir, "s3gateway", "master.key")
+	secret := make([]byte, 32)
+	if dataDir == "" {
+		if _, err := rand.Read(secret); err != nil {
+			return nil, fault.Wrapf(err, fault.Internal, op, "generate master secret")
+		}
+		return secret, nil
+	}
+	path := filepath.Join(dataDir, masterRel)
 	if data, err := os.ReadFile(path); err == nil { //nolint:gosec // daemon-owned data dir
 		if len(data) > 0 {
 			return data, nil
 		}
 	}
-	secret := make([]byte, 32)
 	if _, err := rand.Read(secret); err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "generate master secret")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, fault.Wrapf(err, fault.Internal, op, "create s3gateway dir")
-	}
-	if err := os.WriteFile(path, secret, 0o600); err != nil {
+	if err := writeMaster(path, secret); err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "persist master secret")
 	}
 	return secret, nil
+}
+
+// MigrateMaster moves a working-directory master of an earlier gateway-off node to its ADR-0204 Decision 7
+// location before LoadOrCreateMaster runs. Only a gateway-off node with no masterSecretFile migrates: a
+// working-directory key is copied 0600 to <dataDir>/s3gateway/master.key when that file is absent, and a different
+// key there is fault.Invalid. Otherwise a working-directory key that is not the master's file is ignored with a
+// warning. With neither masterSecretFile nor dataDir the master stays in memory and nothing is checked.
+func MigrateMaster(masterSecretFile, dataDir string, gatewayOn bool, logger *slog.Logger) error {
+	const op = "s3gateway.MigrateMaster"
+	target := masterSecretFile
+	if target == "" {
+		if dataDir == "" {
+			return nil
+		}
+		target = filepath.Join(dataDir, masterRel)
+	}
+	legacy, err := filepath.Abs(masterRel)
+	if err != nil {
+		return fault.Wrapf(err, fault.Internal, op, "resolve the working directory")
+	}
+	if sameFile(legacy, target) {
+		return nil
+	}
+	if gatewayOn || masterSecretFile != "" {
+		if _, err := os.Stat(legacy); err == nil {
+			logger.Warn("s3gateway: ignoring the working-directory master secret", "ignored", legacy, "master", target)
+		}
+		return nil
+	}
+	old, err := os.ReadFile(legacy) //nolint:gosec // the fixed working-directory path of #850
+	if errors.Is(err, fs.ErrNotExist) || (err == nil && len(old) == 0) {
+		return nil
+	}
+	if err != nil {
+		return fault.Wrapf(err, fault.Internal, op, "read working-directory master secret %q", legacy)
+	}
+	cur, err := os.ReadFile(target) //nolint:gosec // daemon-owned data dir
+	switch {
+	case err == nil && len(cur) > 0:
+		if subtle.ConstantTimeCompare(cur, old) != 1 {
+			return fault.Invalidf(op, "master secrets %q and %q differ: keep one at %q or set s3gateway.masterSecretFile",
+				legacy, target, target)
+		}
+		logger.Warn("s3gateway: ignoring the working-directory master secret", "ignored", legacy, "master", target)
+		return nil
+	case err != nil && !errors.Is(err, fs.ErrNotExist):
+		return fault.Wrapf(err, fault.Internal, op, "read master secret %q", target)
+	}
+	if err := writeMaster(target, old); err != nil {
+		return fault.Wrapf(err, fault.Internal, op, "copy master secret to %q", target)
+	}
+	logger.Warn("s3gateway: copied the working-directory master secret under the data dir; remove the old file",
+		"from", legacy, "to", target)
+	return nil
+}
+
+func writeMaster(path string, secret []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, secret, 0o600)
+}
+
+// sameFile reports whether a and b name one file after filepath.Abs and filepath.EvalSymlinks (ADR-0204 Decision 7).
+func sameFile(a, b string) bool {
+	ra, err := resolvePath(a)
+	if err != nil {
+		return false
+	}
+	rb, err := resolvePath(b)
+	return err == nil && ra == rb
+}
+
+func resolvePath(p string) (string, error) {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(abs)
 }

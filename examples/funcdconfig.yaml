@@ -189,7 +189,7 @@ log:
 #   listenAddr: 127.0.0.1:9000    # default: 127.0.0.1:9000
 #   endpoint: ""                  # S3 URL given to spec.blob workers; a node address under containerd. default: "" ⇒ http://<listenAddr>
 #   maxUploadBytes: 1073741824    # buffered-object cap; multipart buffers ≤ 3× it daemon-wide, ≤ 1× per principal. default: 1073741824 (1 GiB)
-#   masterSecretFile: ""          # IAM master secret. default: "" ⇒ generated under <dataDir>/s3gateway
+#   masterSecretFile: ""          # node master secret, used gateway on or off. default: "" ⇒ generated under <dataDir>/s3gateway
 
 # --- catalog: the per-CatalogService query proxies (ADR-0137) ----------------------------------
 # catalog:
