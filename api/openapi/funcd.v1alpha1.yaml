@@ -3096,6 +3096,12 @@ paths:
     delete:
       operationId: deleteGateway
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: name
           required: true
@@ -3144,6 +3150,12 @@ paths:
     put:
       operationId: replaceGateway
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: name
           required: true
@@ -3351,6 +3363,12 @@ paths:
     delete:
       operationId: deleteApp
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -3415,6 +3433,12 @@ paths:
     put:
       operationId: replaceApp
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -3519,6 +3543,12 @@ paths:
     delete:
       operationId: deleteBucket
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -3583,6 +3613,12 @@ paths:
     put:
       operationId: replaceBucket
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -3687,6 +3723,12 @@ paths:
     delete:
       operationId: deleteCatalogService
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -3751,6 +3793,12 @@ paths:
     put:
       operationId: replaceCatalogService
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -3855,6 +3903,12 @@ paths:
     delete:
       operationId: deleteConfigMap
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -3919,6 +3973,12 @@ paths:
     put:
       operationId: replaceConfigMap
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -4137,6 +4197,12 @@ paths:
     delete:
       operationId: deleteEgressPolicy
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -4201,6 +4267,12 @@ paths:
     put:
       operationId: replaceEgressPolicy
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -4305,6 +4377,12 @@ paths:
     delete:
       operationId: deleteEventSource
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -4369,6 +4447,12 @@ paths:
     put:
       operationId: replaceEventSource
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -4473,6 +4557,12 @@ paths:
     delete:
       operationId: deleteFunction
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -4537,6 +4627,12 @@ paths:
     put:
       operationId: replaceFunction
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -4698,6 +4794,12 @@ paths:
     delete:
       operationId: deleteGrant
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -4762,6 +4864,12 @@ paths:
     put:
       operationId: replaceGrant
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -4866,6 +4974,12 @@ paths:
     delete:
       operationId: deleteIdentity
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -4930,6 +5044,12 @@ paths:
     put:
       operationId: replaceIdentity
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -5034,6 +5154,12 @@ paths:
     delete:
       operationId: deleteInvocation
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -5098,6 +5224,12 @@ paths:
     put:
       operationId: replaceInvocation
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -5202,6 +5334,12 @@ paths:
     delete:
       operationId: deleteKVStore
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -5266,6 +5404,12 @@ paths:
     put:
       operationId: replaceKVStore
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -5411,6 +5555,12 @@ paths:
     delete:
       operationId: deletePolicy
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -5475,6 +5625,12 @@ paths:
     put:
       operationId: replacePolicy
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -5579,6 +5735,12 @@ paths:
     delete:
       operationId: deleteResourceGroup
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -5650,6 +5812,12 @@ paths:
     put:
       operationId: replaceResourceGroup
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -5820,6 +5988,12 @@ paths:
     delete:
       operationId: deleteRole
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -5884,6 +6058,12 @@ paths:
     put:
       operationId: replaceRole
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -5988,6 +6168,12 @@ paths:
     delete:
       operationId: deleteRolesAssignment
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -6052,6 +6238,12 @@ paths:
     put:
       operationId: replaceRolesAssignment
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -6156,6 +6348,12 @@ paths:
     delete:
       operationId: deleteRoute
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -6220,6 +6418,12 @@ paths:
     put:
       operationId: replaceRoute
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -6324,6 +6528,12 @@ paths:
     delete:
       operationId: deleteSecret
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -6388,6 +6598,12 @@ paths:
     put:
       operationId: replaceSecret
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -6492,6 +6708,12 @@ paths:
     delete:
       operationId: deleteSensor
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -6556,6 +6778,12 @@ paths:
     put:
       operationId: replaceSensor
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -6660,6 +6888,12 @@ paths:
     delete:
       operationId: deleteService
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -6724,6 +6958,12 @@ paths:
     put:
       operationId: replaceService
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -6828,6 +7068,12 @@ paths:
     delete:
       operationId: deleteSite
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -6892,6 +7138,12 @@ paths:
     put:
       operationId: replaceSite
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -6996,6 +7248,12 @@ paths:
     delete:
       operationId: deleteWorkflowRun
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -7060,6 +7318,12 @@ paths:
     put:
       operationId: replaceWorkflowRun
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -7228,6 +7492,12 @@ paths:
     delete:
       operationId: deleteWorkflow
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -7292,6 +7562,12 @@ paths:
     put:
       operationId: replaceWorkflow
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: namespace
           required: true
@@ -7333,6 +7609,12 @@ paths:
     delete:
       operationId: deleteNamespace
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: name
           required: true
@@ -7381,6 +7663,12 @@ paths:
     put:
       operationId: replaceNamespace
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: name
           required: true
@@ -7459,6 +7747,12 @@ paths:
     delete:
       operationId: deleteRuntimeClass
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: name
           required: true
@@ -7507,6 +7801,12 @@ paths:
     put:
       operationId: replaceRuntimeClass
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: name
           required: true
@@ -7585,6 +7885,12 @@ paths:
     delete:
       operationId: deleteWorkerNode
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: name
           required: true
@@ -7633,6 +7939,12 @@ paths:
     put:
       operationId: replaceWorkerNode
       parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
         - in: path
           name: name
           required: true
