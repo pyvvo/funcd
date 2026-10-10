@@ -3,12 +3,10 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
@@ -90,24 +88,6 @@ func TestScenarioDevWorkflow(t *testing.T) {
 
 	require.Equal(t, v1.StepPhase("Succeeded"), runStepPhase(got, "a"), "step a executed from source")
 	require.Equal(t, v1.StepPhase("Succeeded"), runStepPhase(got, "b"), "step b executed from source (after a)")
-}
-
-// lockedBuffer is an io.Writer a test reads while other goroutines write to it.
-type lockedBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (b *lockedBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
-
-func (b *lockedBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
 }
 
 // TestIssue428_DevReloadsEditedWorkflow — ADR-0125 boot sequence ("watch files, re-apply on change"): an edit to

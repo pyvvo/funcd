@@ -1,6 +1,6 @@
 # ADR-0217: App templates — values and rendering
 
-- **Status**: Accepted (2026-10-10)
+- **Status**: Implemented (2026-10-10; the implementation review passed on its sixth round, docs/reviews/adr-0217-implementation-claude-opus-5-5-6.md; accepted 2026-10-10)
 - **Date**: 2026-10-08 (self-accepted 2026-10-10 under adr-batch after drafting, three-lens judging with a skeptic per
   finding, cross-ADR audits and alignment with the disaster-recovery ADRs)
 - **Deciders**: green-0-rabbit

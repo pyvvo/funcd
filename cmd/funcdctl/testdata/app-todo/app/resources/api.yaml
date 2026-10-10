@@ -1,0 +1,26 @@
+functions:
+  - name: ${{ app.name + "-api" }}
+    runtime: nodejs22
+    handler: handle
+    image: ${{ images.api }}
+    scaling:
+      minReplicas: ${{ values.minReplicas }}
+    kv:
+      - alias: todos
+        store: ${{ app.name + "-store" }}
+        table: todos
+    blob:
+      - alias: attachments
+        bucket: ${{ app.name + "-files" }}
+        prefix: attachments
+    config:
+      - ${{ app.name + "-settings" }}
+    secrets:
+      - ${{ app.name + "-stripe-key" }}
+routes:
+  - name: ${{ app.name + "-api" }}
+    host: ${{ values.host }}
+    rules:
+      - path: /api
+        backend:
+          function: ${{ app.name + "-api" }}

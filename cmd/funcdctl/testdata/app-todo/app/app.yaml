@@ -1,0 +1,70 @@
+name: todo
+version: 1.2.0
+registry: ${{ values.registry }}
+images:
+  api: todo-api:1.0.0
+  planner: todo-planner:1.0.0
+  migrate: todo-migrate:1.2.0
+  stats: todo-stats:1.0.3
+  web: todo-web:1.0.0
+valuesSchema:
+  type: object
+  required:
+    - host
+  properties:
+    registry:
+      type: string
+      default: registry.example
+    host:
+      type: string
+    minReplicas:
+      type: integer
+      minimum: 0
+      default: 0
+    planEvery:
+      type: string
+      default: 1h
+    analytics:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+          default: false
+    data:
+      type: object
+      properties:
+        deletion:
+          type: string
+          enum:
+            - retain
+            - delete
+          default: retain
+    backup:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+          default: false
+        schedule:
+          type: string
+          default: "0 3 * * *"
+        target:
+          type: string
+  if:
+    required:
+      - backup
+    properties:
+      backup:
+        required:
+          - enabled
+        properties:
+          enabled:
+            const: true
+  then:
+    properties:
+      backup:
+        required:
+          - target
+when:
+  resources/stats.yaml: ${{ values.analytics.enabled === true }}
+  resources/lake.yaml: ${{ values.analytics.enabled === true }}

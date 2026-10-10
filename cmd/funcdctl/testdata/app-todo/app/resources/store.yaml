@@ -1,0 +1,18 @@
+kv:
+  - name: ${{ app.name + "-store" }}
+    deletion: ${{ values.data.deletion }}
+    tables:
+      - name: todos
+        owner: ${{ app.name + "-api" }}
+      - name: runs
+        owner: ${{ app.name + "-planner" }}
+functions:
+  - name: ${{ app.name + "-migrate" }}
+    runtime: nodejs22
+    handler: handle
+    image: ${{ images.migrate }}
+    timeout: 10m
+    kv:
+      - alias: todos
+        store: ${{ app.name + "-store" }}
+        table: todos

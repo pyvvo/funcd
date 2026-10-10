@@ -1,0 +1,18 @@
+eventSources:
+  - name: ${{ app.name + "-plan-timer" }}
+    timer:
+      events:
+        - name: tick
+          interval: ${{ values.planEvery }}
+sensors:
+  - name: ${{ app.name + "-plan-schedule" }}
+    "on":
+      - name: tick
+        source: ${{ app.name + "-plan-timer" }}
+        event: tick
+    do:
+      - name: run-plan
+        "on": tick
+        workflow: ${{ app.name + "-plan" }}
+        input:
+          tick: ${{ event.type }}

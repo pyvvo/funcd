@@ -1,0 +1,12 @@
+catalogs:
+  - name: ${{ app.name + "-lake" }}
+    blob:
+      - alias: events
+        bucket: ${{ app.name + "-files" }}
+        prefix: events
+      - alias: lake
+        bucket: ${{ app.name + "-files" }}
+        prefix: lake
+    catalog:
+      bucket: ${{ app.name + "-files" }}
+      prefix: lake

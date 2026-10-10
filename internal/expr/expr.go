@@ -16,6 +16,7 @@ package expr
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"time"
 
@@ -134,6 +135,59 @@ func (e *Expr) Roots() []string {
 		return nil
 	}
 	return e.roots
+}
+
+// Idents reports the root identifier of each reference the expression makes (`undefined` excluded), deduplicated
+// in source order. It needs no Resolver, so it is valid after Parse and before Check: a caller routes an expression
+// by the documents it reads (ADR-0217 Decision 5).
+func (e *Expr) Idents() []string {
+	var out []string
+	collectIdents(e.rootExpr(), &out)
+	return out
+}
+
+func collectIdents(node ast.Node, out *[]string) {
+	if x, ok := node.(ast.Expression); ok {
+		if segs, ok := flattenRef(x); ok {
+			if root := identsOf(segs)[0]; root != "undefined" && !slices.Contains(*out, root) {
+				*out = append(*out, root)
+			}
+			return
+		}
+	}
+	switch n := node.(type) {
+	case *ast.DotExpression:
+		collectIdents(n.Left, out)
+	case *ast.BracketExpression:
+		collectIdents(n.Left, out)
+		collectIdents(n.Member, out)
+	case *ast.CallExpression:
+		if _, helper := n.Callee.(*ast.Identifier); !helper {
+			collectIdents(n.Callee, out)
+		}
+		for _, a := range n.ArgumentList {
+			collectIdents(a, out)
+		}
+	case *ast.BinaryExpression:
+		collectIdents(n.Left, out)
+		collectIdents(n.Right, out)
+	case *ast.UnaryExpression:
+		collectIdents(n.Operand, out)
+	case *ast.ConditionalExpression:
+		collectIdents(n.Test, out)
+		collectIdents(n.Consequent, out)
+		collectIdents(n.Alternate, out)
+	case *ast.ArrayLiteral:
+		for _, v := range n.Value {
+			collectIdents(v, out)
+		}
+	case *ast.ObjectLiteral:
+		for _, p := range n.Value {
+			if pk, ok := p.(*ast.PropertyKeyed); ok {
+				collectIdents(pk.Value, out)
+			}
+		}
+	}
 }
 
 func (e *Expr) rootExpr() ast.Expression {
