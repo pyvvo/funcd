@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	_ "time/tzdata" // ADR-0211: apply validates cron time zones on a host without zoneinfo
 )
 
 func main() {

@@ -2689,8 +2689,11 @@ components:
     TimerEvent:
       additionalProperties: false
       properties:
+        cron:
+          description: "A cron expression: 5 fields (minute hour day-of-month month day-of-week) or a macro such as @daily. Exactly one of interval and cron."
+          type: string
         interval:
-          description: "The tick period: 100ms to 24h."
+          description: "The tick period: 100ms to 24h. Exactly one of interval and cron."
           pattern: ^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$
           patternDescription: "a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms)"
           type: string
@@ -2699,9 +2702,11 @@ components:
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
+        timeZone:
+          description: The IANA time zone of cron, such as Europe/Paris; UTC when empty. Only with cron.
+          type: string
       required:
         - name
-        - interval
       type: object
     TimerSource:
       additionalProperties: false

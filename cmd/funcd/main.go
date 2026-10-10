@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"time"
+	_ "time/tzdata" // ADR-0211: cron time zones resolve on a host without zoneinfo
 
 	"github.com/spf13/cobra"
 

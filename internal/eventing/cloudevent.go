@@ -3,7 +3,7 @@
 // firing — PUBLISHES a named CloudEvent onto a Publisher seam (the in-process Fanout) the F69 Sensor
 // subscribes to. It owns only KindEventSource (one-reconciler-per-gvk, ADR-0015); ticking is a side Run
 // loop, not the reconciler. The action side (invoke a function / start a workflow) is the Sensor
-// (ADR-0109); the webhook source kind, cron schedules, and bus-backed delivery are documented deferrals.
+// (ADR-0109); the webhook source kind and bus-backed delivery are documented deferrals.
 package eventing
 
 import (
