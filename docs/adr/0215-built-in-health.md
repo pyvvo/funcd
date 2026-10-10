@@ -1,6 +1,7 @@
 # ADR-0215: Built-in health — liveness, dependency readiness and storage probes
 
 - **Status**: Implemented (2026-10-10; the implementation review passed on its second round, docs/reviews/adr-0215-implementation-claude-opus-5-5-2.md; accepted 2026-10-10)
+- **Superseded in part by**: [ADR-0225](0225-pool-worker-boot-crash-loop.md) (2026-10-10) — Decision 1's "a pool host that does not listen yet keeps runtime.bootTimeout since creation": since its last successful Start, as a counted boot crash.
 - **Date**: 2026-10-08 (self-accepted 2026-10-10 under adr-batch after drafting, three-lens judging with a skeptic per
   finding, cross-ADR audits and alignment with the disaster-recovery ADRs)
 - **Deciders**: green-0-rabbit
