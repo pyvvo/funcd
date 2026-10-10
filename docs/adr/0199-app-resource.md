@@ -49,8 +49,8 @@ Fixture App `todo`: `kv` `todo-store` (table `todos`, owner `todo-api`) and `tod
   `image`, a section `deployments:`, or two new Buckets one below the `bucket-count` quota ⇒ `funcdctl apply` fails
   naming `spec.functions[1]`, `spec.kv[0].tables[0].name`, `spec.functions[0]`, the field or `bucket-count`; nothing
   is stored.
-- `scenario: app-shared-writer-refused` — `sites[0].bucket.name: todo-files`, a function named `todo-plan-due`, or a
-  second Workflow that declares the `kv` store of the first ⇒ refused naming both fields; nothing is stored.
+- `scenario: app-shared-writer-refused` — `sites[0].bucket.name: todo-files`, a function named `todo-plan-due`, or two
+  Workflows that declare one `kv` store ⇒ refused naming both fields; nothing is stored.
 - `scenario: app-store-deletion-flip` — `todo-cache` changed to `ref` ⇒ refused naming `spec.kv[1].ref`; changed to
   `deletion: retain` ⇒ it keeps only the marker; then `ref` is accepted, and an App delete leaves it with its keys.
 - `scenario: app-child-not-owned` — Function `todo-api` created by hand, then `todo` applied ⇒ `Ready=False`
