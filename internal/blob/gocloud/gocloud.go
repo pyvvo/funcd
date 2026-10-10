@@ -83,7 +83,7 @@ func OpenWith(ctx context.Context, url string, opts OpenOptions) (blob.Bucket, e
 		if err != nil {
 			return nil, err
 		}
-		return &bucket{b: b, s3: true}, nil
+		return newS3Bucket(&bucket{b: b, s3: true}, url), nil
 	}
 	b, err := gcblob.OpenBucket(ctx, url)
 	if err != nil {
@@ -93,6 +93,9 @@ func OpenWith(ctx context.Context, url string, opts OpenOptions) (blob.Bucket, e
 		b:    b,
 		file: strings.HasPrefix(url, fileblob.Scheme+"://"),
 		s3:   strings.HasPrefix(url, s3blob.Scheme+"://"),
+	}
+	if k.s3 {
+		return newS3Bucket(k, url), nil
 	}
 	if k.file {
 		if k.dir, k.dirMode, err = fileDir(url); err != nil {
@@ -617,11 +620,13 @@ func (k *bucket) fileWalk(ctx context.Context, prefix, after string, limit int) 
 	return out, more, nil
 }
 
-// fileWalker collects keys in key order; max <= 0 collects every key.
+// fileWalker collects keys in key order; max <= 0 collects every key. With visit it hands each key and its path to
+// visit instead, and fails on a directory it cannot read (WalkFileKeys).
 type fileWalker struct {
 	prefix, after string
 	max           int
 	found         []fileEntry
+	visit         func(key, path string) error
 }
 
 // fileChild is a directory entry with its decoded key; a directory's sort key ends in "/".
@@ -638,6 +643,9 @@ func (w *fileWalker) walk(ctx context.Context, dir, dirKey string) error {
 	}
 	des, err := os.ReadDir(dir)
 	if err != nil {
+		if w.visit != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
 		return nil // unreadable: skipped, as fileblob does
 	}
 	kids := make([]fileChild, 0, len(des))
@@ -663,9 +671,16 @@ func (w *fileWalker) walk(ctx context.Context, dir, dirKey string) error {
 			return nil
 		}
 		if !c.de.IsDir() {
-			if strings.HasPrefix(c.key, w.prefix) && c.key > w.after {
-				w.found = append(w.found, fileEntry{key: c.key, de: c.de})
+			if !strings.HasPrefix(c.key, w.prefix) || c.key <= w.after {
+				continue
 			}
+			if w.visit != nil {
+				if err := w.visit(c.key, filepath.Join(dir, c.de.Name())); err != nil {
+					return err
+				}
+				continue
+			}
+			w.found = append(w.found, fileEntry{key: c.key, de: c.de})
 			continue
 		}
 		d := c.sortKey
