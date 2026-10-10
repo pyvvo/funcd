@@ -3,6 +3,7 @@ package funcd
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -20,15 +21,23 @@ import (
 )
 
 // poolHost is a recording runtime whose workers all listen on one fake pool host: its /health/members lists every
-// member of the last pool manifest as ready, and every other path answers 200.
+// member of the last pool manifest as ready unless setMember says otherwise, and every other path answers 200.
 type poolHost struct {
 	*recordingRuntime
-	port int
+	port   int
+	states map[string]string
+}
+
+// setMember sets the state member's /health/members entry reads.
+func (h *poolHost) setMember(member, state string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.states[member] = state
 }
 
 func newPoolHost(t *testing.T) *poolHost {
 	t.Helper()
-	h := &poolHost{recordingRuntime: &recordingRuntime{insts: map[runtime.InstanceID]runtime.Instance{}}}
+	h := &poolHost{recordingRuntime: &recordingRuntime{insts: map[runtime.InstanceID]runtime.Instance{}}, states: map[string]string{}}
 	srv := httptest.NewServer(http.HandlerFunc(h.serve))
 	t.Cleanup(srv.Close)
 	h.port = srv.Listener.Addr().(*net.TCPAddr).Port
@@ -55,6 +64,7 @@ func (h *poolHost) serve(w http.ResponseWriter, req *http.Request) {
 			manifest = m
 		}
 	}
+	states := maps.Clone(h.states)
 	h.mu.Unlock()
 	var entries []struct {
 		Name string `json:"name"`
@@ -64,7 +74,11 @@ func (h *poolHost) serve(w http.ResponseWriter, req *http.Request) {
 	}
 	members := make([]map[string]string, 0, len(entries))
 	for _, e := range entries {
-		members = append(members, map[string]string{"name": e.Name, "state": "ready"})
+		state := "ready"
+		if st, ok := states[e.Name]; ok {
+			state = st
+		}
+		members = append(members, map[string]string{"name": e.Name, "state": state})
 	}
 	_ = json.NewEncoder(w).Encode(members)
 }
