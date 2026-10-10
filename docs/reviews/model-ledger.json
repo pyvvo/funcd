@@ -10828,5 +10828,35 @@
     "dod_total": 18,
     "report": "docs/reviews/adr-0220-implementation-claude-opus-5-5-2.md",
     "notes": "pass (round 2); just ci exit 0; the 9 Scenarios 135/135 under -race -count=15; 5/5 mutants killed; round-1 Major(model) fixed: TestScenarioDryRunStoresNothing checks the answer between two equal reads of g's resourceVersion; round-1 Minor(model) fixed: PlanApp split"
+  },
+  {
+    "date": "2026-10-11",
+    "issue": "904",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-904-fix-claude-opus-5-5.md",
+    "notes": "pass; test-only fix: the reconciler logs self-healed before the pass's App status write stores lastSelfHeal (ADR-0212 D2), so the scenario now polls via a shared waitSelfHeal within the ADR's 5 s bound (not masking). Pre-fix scenario fails 48/50 under -race; TestIssue904 holds the pass in the log handler and passes -race 5/5; single-read mutant killed 3/3. Minor (model): the waitSelfHeal since-arm mutant survives 33 runs. Env, unscored: 2 uncaptured App-scenario flakes in about 250 runs, likely #916 (buildCmd under -race). Issue: the first suspected cause (Applied timing) is ruled out"
+  },
+  {
+    "date": "2026-10-11",
+    "issue": "904",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-904-fix-claude-opus-5-5-2.md",
+    "notes": "re-review round 2 pass; round-1 model minor (m2 survivor on waitSelfHeal's since arm) resolved: TestIssue904 now holds both passes and kills m2 3/3; pre-fix single read (m1) fails 3/3; 30/30 -race; commit retitled test(app) with Fixes #904; test-only, one file"
   }
 ]
