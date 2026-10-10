@@ -12,6 +12,7 @@ import (
 // ===== Service (namespaced) =====
 
 type createServiceInput struct {
+	DryRunParams
 	Namespace v1.NamespaceName `path:"namespace"`
 	Body      v1.Service
 }
@@ -36,6 +37,7 @@ func registerService(api huma.API, h Handlers) {
 		OperationID: "createService", Method: http.MethodPost, Path: base,
 		Tags: []string{"Service"},
 	}, func(ctx context.Context, in *createServiceInput) (*serviceOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -62,10 +64,12 @@ func registerService(api huma.API, h Handlers) {
 		Tags: []string{"Service"},
 	}, func(ctx context.Context, in *struct {
 		IfMatchParams
+		DryRunParams
 		Namespace v1.NamespaceName `path:"namespace"`
 		Name      v1.ObjectName    `path:"name"`
 		Body      v1.Service
 	}) (*serviceOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := withReplaceVersion(in.IfMatchParams, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -87,6 +91,7 @@ func registerService(api huma.API, h Handlers) {
 // ===== EventSource (namespaced) =====
 
 type createEventSourceInput struct {
+	DryRunParams
 	Namespace v1.NamespaceName `path:"namespace"`
 	Body      v1.EventSource
 }
@@ -111,6 +116,7 @@ func registerEventSource(api huma.API, h Handlers) {
 		OperationID: "createEventSource", Method: http.MethodPost, Path: base,
 		Tags: []string{"EventSource"},
 	}, func(ctx context.Context, in *createEventSourceInput) (*eventSourceOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -137,10 +143,12 @@ func registerEventSource(api huma.API, h Handlers) {
 		Tags: []string{"EventSource"},
 	}, func(ctx context.Context, in *struct {
 		IfMatchParams
+		DryRunParams
 		Namespace v1.NamespaceName `path:"namespace"`
 		Name      v1.ObjectName    `path:"name"`
 		Body      v1.EventSource
 	}) (*eventSourceOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := withReplaceVersion(in.IfMatchParams, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -162,6 +170,7 @@ func registerEventSource(api huma.API, h Handlers) {
 // ===== ConfigMap (namespaced) =====
 
 type createConfigMapInput struct {
+	DryRunParams
 	Namespace v1.NamespaceName `path:"namespace"`
 	Body      v1.ConfigMap
 }
@@ -186,6 +195,7 @@ func registerConfigMap(api huma.API, h Handlers) {
 		OperationID: "createConfigMap", Method: http.MethodPost, Path: base,
 		Tags: []string{"ConfigMap"},
 	}, func(ctx context.Context, in *createConfigMapInput) (*configMapOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -212,10 +222,12 @@ func registerConfigMap(api huma.API, h Handlers) {
 		Tags: []string{"ConfigMap"},
 	}, func(ctx context.Context, in *struct {
 		IfMatchParams
+		DryRunParams
 		Namespace v1.NamespaceName `path:"namespace"`
 		Name      v1.ObjectName    `path:"name"`
 		Body      v1.ConfigMap
 	}) (*configMapOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := withReplaceVersion(in.IfMatchParams, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -237,6 +249,7 @@ func registerConfigMap(api huma.API, h Handlers) {
 // ===== Secret (namespaced) =====
 
 type createSecretInput struct {
+	DryRunParams
 	Namespace v1.NamespaceName `path:"namespace"`
 	Body      v1.Secret
 }
@@ -261,6 +274,7 @@ func registerSecret(api huma.API, h Handlers) {
 		OperationID: "createSecret", Method: http.MethodPost, Path: base,
 		Tags: []string{"Secret"},
 	}, func(ctx context.Context, in *createSecretInput) (*secretOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -287,10 +301,12 @@ func registerSecret(api huma.API, h Handlers) {
 		Tags: []string{"Secret"},
 	}, func(ctx context.Context, in *struct {
 		IfMatchParams
+		DryRunParams
 		Namespace v1.NamespaceName `path:"namespace"`
 		Name      v1.ObjectName    `path:"name"`
 		Body      v1.Secret
 	}) (*secretOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := withReplaceVersion(in.IfMatchParams, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -312,6 +328,7 @@ func registerSecret(api huma.API, h Handlers) {
 // ===== Grant (namespaced) =====
 
 type createGrantInput struct {
+	DryRunParams
 	Namespace v1.NamespaceName `path:"namespace"`
 	Body      v1.Grant
 }
@@ -336,6 +353,7 @@ func registerGrant(api huma.API, h Handlers) {
 		OperationID: "createGrant", Method: http.MethodPost, Path: base,
 		Tags: []string{"Grant"},
 	}, func(ctx context.Context, in *createGrantInput) (*grantOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -362,10 +380,12 @@ func registerGrant(api huma.API, h Handlers) {
 		Tags: []string{"Grant"},
 	}, func(ctx context.Context, in *struct {
 		IfMatchParams
+		DryRunParams
 		Namespace v1.NamespaceName `path:"namespace"`
 		Name      v1.ObjectName    `path:"name"`
 		Body      v1.Grant
 	}) (*grantOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := withReplaceVersion(in.IfMatchParams, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -387,6 +407,7 @@ func registerGrant(api huma.API, h Handlers) {
 // ===== Identity (namespaced) — ADR-0135, FEAT-0008/F100 =====
 
 type createIdentityInput struct {
+	DryRunParams
 	Namespace v1.NamespaceName `path:"namespace"`
 	Body      v1.Identity
 }
@@ -411,6 +432,7 @@ func registerIdentity(api huma.API, h Handlers) {
 		OperationID: "createIdentity", Method: http.MethodPost, Path: base,
 		Tags: []string{"Identity"},
 	}, func(ctx context.Context, in *createIdentityInput) (*identityOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -437,10 +459,12 @@ func registerIdentity(api huma.API, h Handlers) {
 		Tags: []string{"Identity"},
 	}, func(ctx context.Context, in *struct {
 		IfMatchParams
+		DryRunParams
 		Namespace v1.NamespaceName `path:"namespace"`
 		Name      v1.ObjectName    `path:"name"`
 		Body      v1.Identity
 	}) (*identityOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := withReplaceVersion(in.IfMatchParams, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -462,12 +486,14 @@ func registerIdentity(api huma.API, h Handlers) {
 // ===== Role + RolesAssignment (namespaced) — ADR-0136, FEAT-0008/F101 =====
 
 type createRoleInput struct {
+	DryRunParams
 	Namespace v1.NamespaceName `path:"namespace"`
 	Body      v1.Role
 }
 type roleOutput struct{ Body v1.Role }
 type listRoleOutput struct{ Body []v1.Role }
 type createRolesAssignmentInput struct {
+	DryRunParams
 	Namespace v1.NamespaceName `path:"namespace"`
 	Body      v1.RolesAssignment
 }
@@ -486,6 +512,7 @@ func registerRole(api huma.API, h Handlers) {
 		})
 	huma.Register(api, huma.Operation{OperationID: "createRole", Method: http.MethodPost, Path: base, Tags: []string{"Role"}},
 		func(ctx context.Context, in *createRoleInput) (*roleOutput, error) {
+			ctx = withDryRun(ctx, in.DryRun)
 			if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
 				return nil, wrapFaultError(err)
 			}
@@ -506,10 +533,12 @@ func registerRole(api huma.API, h Handlers) {
 	huma.Register(api, huma.Operation{OperationID: "replaceRole", Method: http.MethodPut, Path: base + "/{name}", Tags: []string{"Role"}},
 		func(ctx context.Context, in *struct {
 			IfMatchParams
+			DryRunParams
 			Namespace v1.NamespaceName `path:"namespace"`
 			Name      v1.ObjectName    `path:"name"`
 			Body      v1.Role
 		}) (*roleOutput, error) {
+			ctx = withDryRun(ctx, in.DryRun)
 			if err := withReplaceVersion(in.IfMatchParams, &in.Body.ObjectMeta); err != nil {
 				return nil, wrapFaultError(err)
 			}
@@ -537,6 +566,7 @@ func registerRolesAssignment(api huma.API, h Handlers) {
 		})
 	huma.Register(api, huma.Operation{OperationID: "createRolesAssignment", Method: http.MethodPost, Path: base, Tags: []string{"RolesAssignment"}},
 		func(ctx context.Context, in *createRolesAssignmentInput) (*rolesAssignmentOutput, error) {
+			ctx = withDryRun(ctx, in.DryRun)
 			if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
 				return nil, wrapFaultError(err)
 			}
@@ -557,10 +587,12 @@ func registerRolesAssignment(api huma.API, h Handlers) {
 	huma.Register(api, huma.Operation{OperationID: "replaceRolesAssignment", Method: http.MethodPut, Path: base + "/{name}", Tags: []string{"RolesAssignment"}},
 		func(ctx context.Context, in *struct {
 			IfMatchParams
+			DryRunParams
 			Namespace v1.NamespaceName `path:"namespace"`
 			Name      v1.ObjectName    `path:"name"`
 			Body      v1.RolesAssignment
 		}) (*rolesAssignmentOutput, error) {
+			ctx = withDryRun(ctx, in.DryRun)
 			if err := withReplaceVersion(in.IfMatchParams, &in.Body.ObjectMeta); err != nil {
 				return nil, wrapFaultError(err)
 			}
@@ -579,6 +611,7 @@ func registerRolesAssignment(api huma.API, h Handlers) {
 // ===== KVStore (namespaced) — ADR-0072 =====
 
 type createKVStoreInput struct {
+	DryRunParams
 	Namespace v1.NamespaceName `path:"namespace"`
 	Body      v1.KVStore
 }
@@ -603,6 +636,7 @@ func registerKVStore(api huma.API, h Handlers) {
 		OperationID: "createKVStore", Method: http.MethodPost, Path: base,
 		Tags: []string{"KVStore"},
 	}, func(ctx context.Context, in *createKVStoreInput) (*kvStoreOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -629,10 +663,12 @@ func registerKVStore(api huma.API, h Handlers) {
 		Tags: []string{"KVStore"},
 	}, func(ctx context.Context, in *struct {
 		IfMatchParams
+		DryRunParams
 		Namespace v1.NamespaceName `path:"namespace"`
 		Name      v1.ObjectName    `path:"name"`
 		Body      v1.KVStore
 	}) (*kvStoreOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := withReplaceVersion(in.IfMatchParams, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -674,6 +710,7 @@ type KVStoreHandover struct {
 // ===== Bucket (namespaced) — ADR-0080 =====
 
 type createBucketInput struct {
+	DryRunParams
 	Namespace v1.NamespaceName `path:"namespace"`
 	Body      v1.Bucket
 }
@@ -698,6 +735,7 @@ func registerBucket(api huma.API, h Handlers) {
 		OperationID: "createBucket", Method: http.MethodPost, Path: base,
 		Tags: []string{"Bucket"},
 	}, func(ctx context.Context, in *createBucketInput) (*bucketOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -724,10 +762,12 @@ func registerBucket(api huma.API, h Handlers) {
 		Tags: []string{"Bucket"},
 	}, func(ctx context.Context, in *struct {
 		IfMatchParams
+		DryRunParams
 		Namespace v1.NamespaceName `path:"namespace"`
 		Name      v1.ObjectName    `path:"name"`
 		Body      v1.Bucket
 	}) (*bucketOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := withReplaceVersion(in.IfMatchParams, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -749,6 +789,7 @@ func registerBucket(api huma.API, h Handlers) {
 // ===== CatalogService (namespaced) — ADR-0086 =====
 
 type createCatalogServiceInput struct {
+	DryRunParams
 	Namespace v1.NamespaceName `path:"namespace"`
 	Body      v1.CatalogService
 }
@@ -773,6 +814,7 @@ func registerCatalogService(api huma.API, h Handlers) {
 		OperationID: "createCatalogService", Method: http.MethodPost, Path: base,
 		Tags: []string{"CatalogService"},
 	}, func(ctx context.Context, in *createCatalogServiceInput) (*catalogServiceOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -799,10 +841,12 @@ func registerCatalogService(api huma.API, h Handlers) {
 		Tags: []string{"CatalogService"},
 	}, func(ctx context.Context, in *struct {
 		IfMatchParams
+		DryRunParams
 		Namespace v1.NamespaceName `path:"namespace"`
 		Name      v1.ObjectName    `path:"name"`
 		Body      v1.CatalogService
 	}) (*catalogServiceOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := withReplaceVersion(in.IfMatchParams, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -824,6 +868,7 @@ func registerCatalogService(api huma.API, h Handlers) {
 // ===== Policy (namespaced) — ADR-0074 =====
 
 type createPolicyInput struct {
+	DryRunParams
 	Namespace v1.NamespaceName `path:"namespace"`
 	Body      v1.Policy
 }
@@ -848,6 +893,7 @@ func registerPolicy(api huma.API, h Handlers) {
 		OperationID: "createPolicy", Method: http.MethodPost, Path: base,
 		Tags: []string{"Policy"},
 	}, func(ctx context.Context, in *createPolicyInput) (*policyOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -874,10 +920,12 @@ func registerPolicy(api huma.API, h Handlers) {
 		Tags: []string{"Policy"},
 	}, func(ctx context.Context, in *struct {
 		IfMatchParams
+		DryRunParams
 		Namespace v1.NamespaceName `path:"namespace"`
 		Name      v1.ObjectName    `path:"name"`
 		Body      v1.Policy
 	}) (*policyOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := withReplaceVersion(in.IfMatchParams, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -899,6 +947,7 @@ func registerPolicy(api huma.API, h Handlers) {
 // ===== EgressPolicy (namespaced) =====
 
 type createEgressPolicyInput struct {
+	DryRunParams
 	Namespace v1.NamespaceName `path:"namespace"`
 	Body      v1.EgressPolicy
 }
@@ -923,6 +972,7 @@ func registerEgressPolicy(api huma.API, h Handlers) {
 		OperationID: "createEgressPolicy", Method: http.MethodPost, Path: base,
 		Tags: []string{"EgressPolicy"},
 	}, func(ctx context.Context, in *createEgressPolicyInput) (*egressPolicyOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -949,10 +999,12 @@ func registerEgressPolicy(api huma.API, h Handlers) {
 		Tags: []string{"EgressPolicy"},
 	}, func(ctx context.Context, in *struct {
 		IfMatchParams
+		DryRunParams
 		Namespace v1.NamespaceName `path:"namespace"`
 		Name      v1.ObjectName    `path:"name"`
 		Body      v1.EgressPolicy
 	}) (*egressPolicyOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := withReplaceVersion(in.IfMatchParams, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -974,6 +1026,7 @@ func registerEgressPolicy(api huma.API, h Handlers) {
 // ===== Invocation (namespaced) =====
 
 type createInvocationInput struct {
+	DryRunParams
 	Namespace v1.NamespaceName `path:"namespace"`
 	Body      v1.Invocation
 }
@@ -998,6 +1051,7 @@ func registerInvocation(api huma.API, h Handlers) {
 		OperationID: "createInvocation", Method: http.MethodPost, Path: base,
 		Tags: []string{"Invocation"},
 	}, func(ctx context.Context, in *createInvocationInput) (*invocationOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -1024,10 +1078,12 @@ func registerInvocation(api huma.API, h Handlers) {
 		Tags: []string{"Invocation"},
 	}, func(ctx context.Context, in *struct {
 		IfMatchParams
+		DryRunParams
 		Namespace v1.NamespaceName `path:"namespace"`
 		Name      v1.ObjectName    `path:"name"`
 		Body      v1.Invocation
 	}) (*invocationOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := withReplaceVersion(in.IfMatchParams, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -1048,7 +1104,10 @@ func registerInvocation(api huma.API, h Handlers) {
 
 // ===== RuntimeClass (cluster-scoped) =====
 
-type createRuntimeClassInput struct{ Body v1.RuntimeClass }
+type createRuntimeClassInput struct {
+	DryRunParams
+	Body v1.RuntimeClass
+}
 type runtimeClassOutput struct{ Body v1.RuntimeClass }
 type listRuntimeClassOutput struct{ Body []v1.RuntimeClass }
 
@@ -1070,6 +1129,7 @@ func registerRuntimeClass(api huma.API, h Handlers) {
 		OperationID: "createRuntimeClass", Method: http.MethodPost, Path: base,
 		Tags: []string{"RuntimeClass"},
 	}, func(ctx context.Context, in *createRuntimeClassInput) (*runtimeClassOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		item, err := h.CreateRuntimeClass(ctx, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)
@@ -1093,9 +1153,11 @@ func registerRuntimeClass(api huma.API, h Handlers) {
 		Tags: []string{"RuntimeClass"},
 	}, func(ctx context.Context, in *struct {
 		IfMatchParams
+		DryRunParams
 		Name v1.ObjectName `path:"name"`
 		Body v1.RuntimeClass
 	}) (*runtimeClassOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := withReplaceVersion(in.IfMatchParams, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -1116,7 +1178,10 @@ func registerRuntimeClass(api huma.API, h Handlers) {
 
 // ===== WorkerNode (cluster-scoped) =====
 
-type createWorkerNodeInput struct{ Body v1.WorkerNode }
+type createWorkerNodeInput struct {
+	DryRunParams
+	Body v1.WorkerNode
+}
 type workerNodeOutput struct{ Body v1.WorkerNode }
 type listWorkerOutput struct{ Body []v1.WorkerNode }
 
@@ -1138,6 +1203,7 @@ func registerWorker(api huma.API, h Handlers) {
 		OperationID: "createWorkerNode", Method: http.MethodPost, Path: base,
 		Tags: []string{"WorkerNode"},
 	}, func(ctx context.Context, in *createWorkerNodeInput) (*workerNodeOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		item, err := h.CreateWorkerNode(ctx, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)
@@ -1161,9 +1227,11 @@ func registerWorker(api huma.API, h Handlers) {
 		Tags: []string{"WorkerNode"},
 	}, func(ctx context.Context, in *struct {
 		IfMatchParams
+		DryRunParams
 		Name v1.ObjectName `path:"name"`
 		Body v1.WorkerNode
 	}) (*workerNodeOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := withReplaceVersion(in.IfMatchParams, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -1184,7 +1252,10 @@ func registerWorker(api huma.API, h Handlers) {
 
 // ===== Gateway (cluster-scoped) =====
 
-type createGatewayInput struct{ Body v1.Gateway }
+type createGatewayInput struct {
+	DryRunParams
+	Body v1.Gateway
+}
 type gatewayOutput struct{ Body v1.Gateway }
 type listGatewayOutput struct{ Body []v1.Gateway }
 
@@ -1206,6 +1277,7 @@ func registerGateway(api huma.API, h Handlers) {
 		OperationID: "createGateway", Method: http.MethodPost, Path: base,
 		Tags: []string{"Gateway"},
 	}, func(ctx context.Context, in *createGatewayInput) (*gatewayOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		item, err := h.CreateGateway(ctx, in.Body)
 		if err != nil {
 			return nil, wrapFaultError(err)
@@ -1229,9 +1301,11 @@ func registerGateway(api huma.API, h Handlers) {
 		Tags: []string{"Gateway"},
 	}, func(ctx context.Context, in *struct {
 		IfMatchParams
+		DryRunParams
 		Name v1.ObjectName `path:"name"`
 		Body v1.Gateway
 	}) (*gatewayOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := withReplaceVersion(in.IfMatchParams, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -1253,6 +1327,7 @@ func registerGateway(api huma.API, h Handlers) {
 // ===== Workflow (namespaced) — ADR-0094 =====
 
 type createWorkflowInput struct {
+	DryRunParams
 	Namespace v1.NamespaceName `path:"namespace"`
 	Body      v1.Workflow
 }
@@ -1277,6 +1352,7 @@ func registerWorkflow(api huma.API, h Handlers) {
 		OperationID: "createWorkflow", Method: http.MethodPost, Path: base,
 		Tags: []string{"Workflow"},
 	}, func(ctx context.Context, in *createWorkflowInput) (*workflowOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -1303,10 +1379,12 @@ func registerWorkflow(api huma.API, h Handlers) {
 		Tags: []string{"Workflow"},
 	}, func(ctx context.Context, in *struct {
 		IfMatchParams
+		DryRunParams
 		Namespace v1.NamespaceName `path:"namespace"`
 		Name      v1.ObjectName    `path:"name"`
 		Body      v1.Workflow
 	}) (*workflowOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := withReplaceVersion(in.IfMatchParams, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -1328,6 +1406,7 @@ func registerWorkflow(api huma.API, h Handlers) {
 // ===== WorkflowRun (namespaced) — ADR-0094 =====
 
 type createWorkflowRunInput struct {
+	DryRunParams
 	Namespace v1.NamespaceName `path:"namespace"`
 	Body      v1.WorkflowRun
 }
@@ -1352,6 +1431,7 @@ func registerWorkflowRun(api huma.API, h Handlers) {
 		OperationID: "createWorkflowRun", Method: http.MethodPost, Path: base,
 		Tags: []string{"WorkflowRun"},
 	}, func(ctx context.Context, in *createWorkflowRunInput) (*workflowRunOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -1378,10 +1458,12 @@ func registerWorkflowRun(api huma.API, h Handlers) {
 		Tags: []string{"WorkflowRun"},
 	}, func(ctx context.Context, in *struct {
 		IfMatchParams
+		DryRunParams
 		Namespace v1.NamespaceName `path:"namespace"`
 		Name      v1.ObjectName    `path:"name"`
 		Body      v1.WorkflowRun
 	}) (*workflowRunOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := withReplaceVersion(in.IfMatchParams, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -1401,6 +1483,7 @@ func registerWorkflowRun(api huma.API, h Handlers) {
 }
 
 type createSensorInput struct {
+	DryRunParams
 	Namespace v1.NamespaceName `path:"namespace"`
 	Body      v1.Sensor
 }
@@ -1423,6 +1506,7 @@ func registerSensor(api huma.API, h Handlers) {
 	huma.Register(api, huma.Operation{
 		OperationID: "createSensor", Method: http.MethodPost, Path: base, Tags: []string{"Sensor"},
 	}, func(ctx context.Context, in *createSensorInput) (*sensorOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -1447,10 +1531,12 @@ func registerSensor(api huma.API, h Handlers) {
 		OperationID: "replaceSensor", Method: http.MethodPut, Path: base + "/{name}", Tags: []string{"Sensor"},
 	}, func(ctx context.Context, in *struct {
 		IfMatchParams
+		DryRunParams
 		Namespace v1.NamespaceName `path:"namespace"`
 		Name      v1.ObjectName    `path:"name"`
 		Body      v1.Sensor
 	}) (*sensorOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := withReplaceVersion(in.IfMatchParams, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -1471,6 +1557,7 @@ func registerSensor(api huma.API, h Handlers) {
 // ===== Site (namespaced) — ADR-0139, FEAT-0003/F103 =====
 
 type createSiteInput struct {
+	DryRunParams
 	Namespace v1.NamespaceName `path:"namespace"`
 	Body      v1.Site
 }
@@ -1495,6 +1582,7 @@ func registerSite(api huma.API, h Handlers) {
 		OperationID: "createSite", Method: http.MethodPost, Path: base,
 		Tags: []string{"Site"},
 	}, func(ctx context.Context, in *createSiteInput) (*siteOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -1521,10 +1609,12 @@ func registerSite(api huma.API, h Handlers) {
 		Tags: []string{"Site"},
 	}, func(ctx context.Context, in *struct {
 		IfMatchParams
+		DryRunParams
 		Namespace v1.NamespaceName `path:"namespace"`
 		Name      v1.ObjectName    `path:"name"`
 		Body      v1.Site
 	}) (*siteOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
 		if err := withReplaceVersion(in.IfMatchParams, &in.Body.ObjectMeta); err != nil {
 			return nil, wrapFaultError(err)
 		}
@@ -1574,12 +1664,14 @@ type crudRoutes[T crudKind] struct {
 }
 
 type namespacedBodyInput[T crudKind] struct {
+	DryRunParams
 	Namespace v1.NamespaceName `path:"namespace"`
 	Body      T
 }
 
 type namespacedNameBodyInput[T crudKind] struct {
 	IfMatchParams
+	DryRunParams
 	Namespace v1.NamespaceName `path:"namespace"`
 	Name      v1.ObjectName    `path:"name"`
 	Body      T
@@ -1603,14 +1695,14 @@ func registerNamespacedCRUD[T crudKind, PT objectPtr[T]](api huma.API, r crudRou
 			if err := matchPathNamespace(in.Namespace, PT(&in.Body).GetObjectMeta()); err != nil {
 				return nil, wrapFaultError(err)
 			}
-			return respond(r.create(ctx, in.Body))
+			return respond(r.create(withDryRun(ctx, in.DryRun), in.Body))
 		})
 	huma.Register(api, huma.Operation{OperationID: "replace" + r.kind, Method: http.MethodPut, Path: item, Tags: tags},
 		func(ctx context.Context, in *namespacedNameBodyInput[T]) (*bodyOutput[T], error) {
 			if err := withReplaceVersion(in.IfMatchParams, PT(&in.Body).GetObjectMeta()); err != nil {
 				return nil, wrapFaultError(err)
 			}
-			return respond(r.replace(ctx, in.Namespace, in.Name, in.Body))
+			return respond(r.replace(withDryRun(ctx, in.DryRun), in.Namespace, in.Name, in.Body))
 		})
 	huma.Register(api, huma.Operation{OperationID: "delete" + r.kind, Method: http.MethodDelete, Path: item, Tags: tags},
 		func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {

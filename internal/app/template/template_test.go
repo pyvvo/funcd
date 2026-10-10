@@ -496,3 +496,31 @@ func TestLoadRefusesRegistryOverImages(t *testing.T) {
 	require.Equal(t, v1.NamespaceName("default"), a.Namespace)
 	require.Equal(t, v1.ResourceGroupName("rg"), a.ResourceGroup)
 }
+
+// ADR-0217 Decision 7: render appends each file's hooks lists in file order, as it appends a section; a refusal of a
+// hook entry names its file and its index there.
+func TestRenderAppendsHooks(t *testing.T) {
+	t.Parallel()
+	fns := "functions:\n  - name: migrate\n    runtime: nodejs22\n    handler: h\n    image: ${{ images.api }}\n" +
+		"  - name: warm\n    runtime: nodejs22\n    handler: h\n    image: ${{ images.api }}\n"
+	app, err := render(t, baseApp, map[string]string{
+		"resources/a.yaml": fns,
+		"resources/b.yaml": "hooks:\n  preApply:\n    - function: migrate\n  postApply:\n    - function: warm\n",
+		"resources/c.yaml": "hooks:\n  preApply:\n    - function: warm\n",
+	})
+	require.NoError(t, err)
+	require.Equal(t, &v1.AppHooks{
+		PreApply:  []v1.AppHook{{Function: "migrate"}, {Function: "warm"}},
+		PostApply: []v1.AppHook{{Function: "warm"}},
+	}, app.Spec.Hooks)
+
+	app, err = render(t, baseApp, map[string]string{"resources/a.yaml": fns, "resources/b.yaml": "hooks:\n  preApply:\n"})
+	require.NoError(t, err)
+	require.Nil(t, app.Spec.Hooks, "an empty hooks section adds none")
+
+	refused(t, baseApp, map[string]string{
+		"resources/a.yaml": fns,
+		"resources/b.yaml": "hooks:\n  preApply:\n    - function: migrate\n",
+		"resources/c.yaml": "hooks:\n  preApply:\n    - function: nope\n",
+	}, nil, "resources/c.yaml: hooks.preApply[0].function")
+}

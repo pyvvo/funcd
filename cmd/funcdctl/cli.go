@@ -141,12 +141,15 @@ func (a *cli) runGet(ctx context.Context, args []string, c *sdk.Client, ns strin
 
 func (a *cli) applyCmd() *cobra.Command {
 	var file string
+	var dryRun bool
 	cmd := &cobra.Command{
 		Use:   "apply",
 		Short: "Apply a manifest of one or more YAML documents, or JSON (- for stdin)",
 		Long: "Apply a manifest of one or more YAML documents, or JSON (- for stdin).\n\n" +
 			"Every document is validated offline first; then the documents are applied in order. Apply stops at " +
-			"the first error the server returns and names that document; the documents before it stay applied.",
+			"the first error the server returns and names that document; the documents before it stay applied.\n\n" +
+			"With --dry-run each document is admitted against the store as it is and nothing is stored: apply " +
+			"prints what it would apply, and an App's plan.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if file == "" {
@@ -178,12 +181,17 @@ func (a *cli) applyCmd() *cobra.Command {
 			}
 			for _, doc := range docs {
 				obj := doc.Object
-				applied, err := c.Apply(cmd.Context(), obj)
+				applied, err := c.Apply(cmd.Context(), obj, applyOptions(dryRun)...)
 				if err != nil {
 					return fault.Wrapf(err, fault.KindOf(err), "funcdctl apply", "document %d (%s %q)",
 						doc.Number, obj.GroupVersionKind().Kind, obj.GetName())
 				}
-				if err := a.writef("applied %s/%s\n", applied.GroupVersionKind().Kind, applied.GetName()); err != nil {
+				if dryRun {
+					err = a.printDryRun(applied)
+				} else {
+					err = a.writef("applied %s/%s\n", applied.GroupVersionKind().Kind, applied.GetName())
+				}
+				if err != nil {
 					return err
 				}
 			}
@@ -191,6 +199,7 @@ func (a *cli) applyCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVarP(&file, "file", "f", "", "manifest file (YAML or JSON); - for stdin")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "admit each document against the store and store nothing; print what would apply (ADR-0220)")
 	return cmd
 }
 

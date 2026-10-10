@@ -95,19 +95,23 @@ func newRacingServer(t *testing.T, path string, races int32, bump func(store.Sto
 	return c, st, &puts
 }
 
-// newTestServerVia is newTestServer with the server's handler wrapped by wrap, when set.
-func newTestServerVia(t *testing.T, wrap func(http.Handler, store.Store) http.Handler) (*sdk.Client, string, store.Store) {
+// newTestServerVia is newTestServer with the server's handler wrapped by wrap, when set, and its Deps edited by deps.
+func newTestServerVia(t *testing.T, wrap func(http.Handler, store.Store) http.Handler, deps ...func(*controlplane.Deps)) (*sdk.Client, string, store.Store) {
 	t.Helper()
 	creds := middleware.NewStaticCredentials(map[string]auth.Identity{
 		devToken:    {Subject: "dev", Role: auth.RoleDeveloper, Namespaces: []v1.NamespaceName{"team-a"}},
 		viewerToken: {Subject: "viewer", Role: auth.RoleViewer, Namespaces: []v1.NamespaceName{"team-a"}},
 	})
 	st := store.New(memory.New())
-	h, err := controlplane.NewServer(controlplane.Deps{
+	d := controlplane.Deps{
 		Store:       st,
 		Authorizer:  rbac.New(),
 		Credentials: creds,
-	})
+	}
+	for _, edit := range deps {
+		edit(&d)
+	}
+	h, err := controlplane.NewServer(d)
 	require.NoError(t, err)
 	if wrap != nil {
 		h = wrap(h, st)

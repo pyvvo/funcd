@@ -1180,10 +1180,11 @@ func (p *Platform) buildControlPlane() error {
 		Logger:      p.logger,
 		Logs:        logReader,
 		RunLogs:     runLogQuerier,
-		DeadLetters: dlq,              // ADR-0118: the DLQ read + replay/discard surface
-		Replayer:    sensorReconciler, // ADR-0118: the imperative replay seam (one synchronous attempt)
-		Collector:   p.collector,      // ADR-0170: a forced ResourceGroup delete collects the members' children
-		AppRetrier:  appReconciler,    // ADR-0214: retry an App's failed hook
+		DeadLetters: dlq,                     // ADR-0118: the DLQ read + replay/discard surface
+		Replayer:    sensorReconciler,        // ADR-0118: the imperative replay seam (one synchronous attempt)
+		Collector:   p.collector,             // ADR-0170: a forced ResourceGroup delete collects the members' children
+		AppRetrier:  appReconciler,           // ADR-0214: retry an App's failed hook
+		Planner:     app.NewPlanner(c.store), // ADR-0220: a dry-run App write's plan
 		Hold: controlplane.NewHoldService(controlplane.HoldDeps{ // ADR-0206: the hold's evidence and release
 			Hold: c.hold, Store: c.store, DeadLetters: dlq, Platform: holdPlatform{p},
 		}),
