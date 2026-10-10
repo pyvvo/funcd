@@ -487,6 +487,22 @@ Linux). A `t.TempDir()` holds the test name, and under a nix shell's `TMPDIR` it
 `funcd.New` fails with `socket dir … is too long` on one host and not another. Take the data dir from
 `shortDataDir(t)` (`cmd/funcd/main_test.go`) or a short `os.MkdirTemp("", "funcd")`.
 
+### 5. Keep the e2e suite fast — shorten slow tests, never raise the timeout
+
+The `pkg/funcd` e2e suite ran in 388–405 s on main CI on 2026-10-07. By 2026-10-10 it had grown to 590 s, close to
+`go test`'s 10-minute default, because new App scenarios ran serially and waited real timeouts copied from their ADR
+(a 20 s `app.upgradeTimeout`, a 56 s pause test). The fix is the tests, never `-timeout` (#896 tried that and was
+closed): a higher limit only hides a hung test for longer.
+
+- A new e2e scenario calls `t.Parallel()`. Each one assembles its own platform, with a short data dir (pitfall 4) and
+  free loopback ports.
+- An ADR scenario's duration is the rule, not the test's length. A test proves the rule with short pacing that keeps
+  the startup orderings (for example `app.upgradeTimeout` 3 s > `runtime.bootTimeout` 1 s > activation 500 ms), and
+  it scales its assertion windows to match.
+- Poll the observable condition (`require.Eventually`, a short tick) instead of a fixed `time.Sleep`.
+- A PR that adds scenarios shows their times (`go test -tags e2e -run <names> -v | grep -- '--- PASS'`). A scenario
+  over about 10 s needs a reason.
+
 ## Before you finish any skill run — propagation checklist
 
 - [ ] Did an ADR change status? Update its feat row (and blueprint, if it refined it).

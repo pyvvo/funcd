@@ -17,6 +17,7 @@ The findings that matter come from *executing*, not reading. Run these and **pas
 | tree | diff produced tree vs the ADR's *Repository surface* | missing file = Blocker; unexplained extra = Major |
 | conventions | grep for `any`/`interface{}` in exported sigs; `panic(` outside main; logging imports ≠ `log/slog`; import-graph violations | ADR-0002 breach = Major/Blocker |
 | behavior | real logic present (no `not implemented` stubs shipped); scenarios un-skipped + passing, none weakened/deleted | stub-in-shipped-path or skipped scenario = Blocker |
+| e2e speed | run the new e2e scenarios with `-v` and read their `--- PASS` times; check they call `t.Parallel()` and use short pacing, and that no `-timeout` was raised (CLAUDE.md, Known pitfall 5) | a serial or long-waiting scenario (over about 10 s with no reason), or a raised timeout = Major (`model`) |
 | tracking | module path; ADR at `Reviewing` with substance unchanged (`git diff` it); feat row at `reviewing`; **silent** no-dev-machine-leak check (absolute path / local username / personal email) — do NOT write it as a report section, never transcribe the value | identity leak / mutated ADR substance = Blocker |
 
 Empty-module trap worth knowing cold: on a module with **zero `.go` files**, `golangci-lint`,
