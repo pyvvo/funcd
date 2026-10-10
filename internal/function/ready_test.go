@@ -715,4 +715,18 @@ func TestScenarioUnreadyWorkerNotPromoted(t *testing.T) {
 		requireDegraded(t, h)
 		h.requireCondition(t, "stall", "RevisionReady", v1.ConditionFalse, "ShapeInvalid")
 	})
+	t.Run("failed-gate-probe-times-out", func(t *testing.T) {
+		t.Parallel()
+		h := newShimHarness(t, http.StatusOK, false, withPeriod, withPlatforms(&fakePlatforms{}))
+		stall := h.rt.serveStalling(t, "stall-1")
+		h.create(t, "stall", func(fn *v1.Function) { fn.Spec.ImageDigest = digestHere })
+		h.reconcile(t, "stall")
+		h.rt.exit("stall", runtime.StateFailed, time.Minute)
+		stall()
+		h.reconcile(t, "stall")
+		require.Equal(t, v1.PhaseDegraded, h.getFn(t, "stall").Status.Phase, "the replacement listens but its probe times out")
+		h.apply(t, "stall", func(fn *v1.Function) { fn.Spec.Handler = "" })
+		h.reconcile(t, "stall")
+		requireDegraded(t, h)
+	})
 }
