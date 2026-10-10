@@ -72,6 +72,10 @@ type fakeRuntime struct {
 	memberStates map[string][2]string
 	memberDeps   map[string]*local.DependencyReport // a member's dependency report (ADR-0215 Decision 4)
 	membersDown  bool                               // GET /health/members answers 503, as a pool host too slow for the probe's timeout
+	// ADR-0224: each pool worker's members as its manifest held them at its Create, and its own entries (setWorkerMember),
+	// which a worker with its own endpoint (servePoolWorker) answers.
+	manifests     map[runtime.InstanceID][]string
+	workerMembers map[runtime.InstanceID]map[string][2]string
 }
 
 func newFakeRuntime(ip string, port int) *fakeRuntime {
@@ -92,8 +96,10 @@ func newFakeRuntime(ip string, port int) *fakeRuntime {
 		imageErr:  map[string]error{},
 		clk:       clock.System(),
 
-		memberStates: map[string][2]string{},
-		memberDeps:   map[string]*local.DependencyReport{},
+		memberStates:  map[string][2]string{},
+		memberDeps:    map[string]*local.DependencyReport{},
+		manifests:     map[runtime.InstanceID][]string{},
+		workerMembers: map[runtime.InstanceID]map[string][2]string{},
 	}
 }
 
@@ -111,9 +117,23 @@ func (f *fakeRuntime) setMembersDown(down bool) {
 	f.membersDown = down
 }
 
+// setWorkerMember sets member name's /health/members entry on pool worker id alone, before setMember's.
+func (f *fakeRuntime) setWorkerMember(id runtime.InstanceID, name, state, errText string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.workerMembers[id] == nil {
+		f.workerMembers[id] = map[string][2]string{}
+	}
+	f.workerMembers[id][name] = [2]string{state, errText}
+}
+
 // serveMembers answers a pool host's GET /health/members: every member of the pool manifests the fake runs, ready
 // unless setMember says otherwise.
-func (f *fakeRuntime) serveMembers(w http.ResponseWriter) {
+func (f *fakeRuntime) serveMembers(w http.ResponseWriter) { f.serveMembersOf(w, "") }
+
+// serveMembersOf answers GET /health/members of pool worker id: the members its manifest held at its Create, each as
+// setWorkerMember, else setMember, says, else ready. Id "" answers as serveMembers.
+func (f *fakeRuntime) serveMembersOf(w http.ResponseWriter, id runtime.InstanceID) {
 	f.mu.Lock()
 	if f.membersDown {
 		f.mu.Unlock()
@@ -122,12 +142,17 @@ func (f *fakeRuntime) serveMembers(w http.ResponseWriter) {
 	}
 	var paths []string
 	for _, s := range f.specs {
-		if p := s.Env["FUNCD_POOL_MANIFEST"]; p != "" {
+		if p := s.Env["FUNCD_POOL_MANIFEST"]; p != "" && id == "" {
 			paths = append(paths, p)
 		}
 	}
+	names := slices.Clone(f.manifests[id])
 	states, deps := maps.Clone(f.memberStates), maps.Clone(f.memberDeps)
+	maps.Copy(states, f.workerMembers[id])
 	f.mu.Unlock()
+	for _, p := range paths {
+		names = append(names, manifestMembers(p)...)
+	}
 	type entry struct {
 		Name       string                  `json:"name"`
 		State      string                  `json:"state"`
@@ -136,28 +161,35 @@ func (f *fakeRuntime) serveMembers(w http.ResponseWriter) {
 	}
 	out := []entry{}
 	seen := map[string]bool{}
-	for _, p := range paths {
-		data, err := os.ReadFile(p)
-		if err != nil {
+	for _, name := range names {
+		if seen[name] {
 			continue
 		}
-		var rows []struct {
-			Name string `json:"name"`
+		seen[name] = true
+		e := entry{Name: name, State: "ready", Dependency: deps[name]}
+		if st, ok := states[name]; ok {
+			e.State, e.Error = st[0], st[1]
 		}
-		_ = json.Unmarshal(data, &rows)
-		for _, row := range rows {
-			if seen[row.Name] {
-				continue
-			}
-			seen[row.Name] = true
-			e := entry{Name: row.Name, State: "ready", Dependency: deps[row.Name]}
-			if st, ok := states[row.Name]; ok {
-				e.State, e.Error = st[0], st[1]
-			}
-			out = append(out, e)
-		}
+		out = append(out, e)
 	}
 	_ = json.NewEncoder(w).Encode(out)
+}
+
+// manifestMembers is the member names of the pool manifest file at path; none when it cannot be read.
+func manifestMembers(path string) []string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var rows []struct {
+		Name string `json:"name"`
+	}
+	_ = json.Unmarshal(data, &rows)
+	names := make([]string, 0, len(rows))
+	for _, row := range rows {
+		names = append(names, row.Name)
+	}
+	return names
 }
 
 func (f *fakeRuntime) Create(_ context.Context, spec runtime.WorkerSpec) (runtime.Instance, error) {
@@ -178,6 +210,9 @@ func (f *fakeRuntime) Create(_ context.Context, spec runtime.WorkerSpec) (runtim
 		return runtime.Instance{}, fault.Conflictf("fake.Create", "instance %q already exists", id)
 	}
 	f.specs[id] = spec
+	if p := spec.Env["FUNCD_POOL_MANIFEST"]; p != "" {
+		f.manifests[id] = manifestMembers(p)
+	}
 	f.state[id] = runtime.StateCreated
 	f.created[id] = f.clk.Now()
 	delete(f.started, id)

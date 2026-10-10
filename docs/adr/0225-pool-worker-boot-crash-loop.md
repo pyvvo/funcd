@@ -1,6 +1,6 @@
 # ADR-0225: A pool worker that never listens is a boot crash — counted, re-created with the growing wait, and reported as CrashLoopBackOff
 
-- **Status**: Accepted (2026-10-10; the decider chose option A on #868 and counted a pool worker's failed Start, then delegated acceptance ("go with the recommended approach … don't wait for me"), so the other defaults in Open questions stand as recommended, not confirmed one by one; judged by four lenses with a skeptic per finding, confirmed, cross-checked with ADR-0224 and ADR-0215, re-judged by three lenses after the Start-failure fold, whose confirm round the 30-minute timer cut and the author's read replaced; ADR-0215's back-link follows its implementation PR #895)
+- **Status**: Implemented (2026-10-10; the implementation review passed on its second round, docs/reviews/adr-0225-implementation-claude-opus-5-5-2.md; accepted 2026-10-10: the decider chose option A on #868 and counted a pool worker's failed Start, then delegated acceptance ("go with the recommended approach … don't wait for me"), so the other defaults in Open questions stand as recommended, not confirmed one by one; judged by four lenses with a skeptic per finding, confirmed, cross-checked with ADR-0224 and ADR-0215, re-judged by three lenses after the Start-failure fold, whose confirm round the 30-minute timer cut and the author's read replaced; ADR-0215's back-link follows its implementation PR #895)
 - **Date**: 2026-10-10
 - **Deciders**: green-0-rabbit
 - **Tags**: function, pooling, supervision, crash-recovery, status

@@ -283,10 +283,13 @@ func TestScenarioPoolMemberLoadFailure(t *testing.T) {
 }
 
 // Issue #70: of pooled a and b, b redeployed to a handler that cannot load is Failed with ShapeInvalid for its new
-// revision, and a answers in the rebuilt pool.
+// revision once the pool switches to the rebuilt worker, runtime.bootTimeout after it listened (ADR-0224 Decision 3),
+// and a answers in the rebuilt pool.
 func TestIssue70_PooledRedeployToUnloadableHandlerIsShapeInvalid(t *testing.T) {
+	t.Parallel()
 	forPoolLangs(t, func(t *testing.T, l poolLang) {
-		h := newShimRig(t, l.python)
+		t.Parallel()
+		h := newShimRig(t, l.python, funcd.WithPacing(funcd.Pacing{BootTimeout: 3 * time.Second, ActivationTimeout: time.Second}))
 		h.deploy(t, "a", l.fn(l.quiet).pooled("redeploy"))
 		h.deploy(t, "b", l.fn(l.quiet).pooled("redeploy"))
 		waitReady(t, h.c, "a", "b")

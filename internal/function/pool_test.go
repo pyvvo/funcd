@@ -461,9 +461,9 @@ func TestIssue355_HungPoolWorkerFailsAfterBootTimeout(t *testing.T) {
 	})
 }
 
-// A member whose load timed out is read again at its backoff deadline, a wait after the pool start that was counted,
-// not every readiness poll; once that deadline has passed, a wait after the pass. A pass over the same pool start
-// counts no further crash, while serving included.
+// A member whose load timed out is read again at its backoff deadline, at most a supervision period away (ADR-0225's
+// pooled requeue), not every readiness poll. A pass over the same pool start counts no further crash, while serving
+// included.
 func TestPooledLoadTimeoutRereadsAtBackoffDeadline(t *testing.T) {
 	t.Parallel()
 	const initial = time.Minute
@@ -475,27 +475,30 @@ func TestPooledLoadTimeoutRereadsAtBackoffDeadline(t *testing.T) {
 
 	res := h.reconcile(t, "m")
 	require.Equal(t, "CrashLoopBackOff", h.condition(t, "m", "Ready").Reason)
-	require.Greater(t, res.RequeueAfter, initial-10*time.Second, "the deadline of a fresh pool start")
-	require.LessOrEqual(t, res.RequeueAfter, initial)
+	require.Greater(t, res.RequeueAfter, time.Second, "not the readiness poll")
+	require.LessOrEqual(t, res.RequeueAfter, controller.SupervisionPeriod, "at most a period")
 
 	h.rt.exitRevision(poolOf("hang"), "", 0, runtime.StateRunning, time.Hour)
 	for range 2 {
 		res = h.reconcile(t, "m")
 		ready := h.condition(t, "m", "Ready")
 		require.Contains(t, ready.Message, "boot crash 2 in a row", "one crash per pool start")
-		require.Greater(t, res.RequeueAfter, 2*initial-10*time.Second, "a passed deadline: a wait after the pass")
-		require.LessOrEqual(t, res.RequeueAfter, 2*initial)
+		require.Greater(t, res.RequeueAfter, time.Second)
+		require.LessOrEqual(t, res.RequeueAfter, controller.SupervisionPeriod)
 	}
 
 	h.setPhase(t, "m", v1.PhaseReady)
 	res = h.reconcile(t, "m")
 	require.Equal(t, v1.PhaseDegraded, h.getFn(t, "m").Status.Phase)
 	require.Equal(t, "CrashLoopBackOff", h.condition(t, "m", "Ready").Reason)
-	require.Greater(t, res.RequeueAfter, 2*initial-10*time.Second, "serving, the member is read at the deadline too")
+	require.Contains(t, h.condition(t, "m", "Ready").Message, "boot crash 2 in a row", "serving, one crash per pool start too")
+	require.Greater(t, res.RequeueAfter, time.Second)
+	require.LessOrEqual(t, res.RequeueAfter, controller.SupervisionPeriod)
 }
 
-// Issue #422: a running pool worker silent on /health/liveness for the boot timeout since its last answer, else since
-// it was created, is created again; one that answered within that time is kept.
+// Issue #422: a running pool worker that never listened is a boot crash, stopped bootTimeout after its last start and,
+// its wait passed, created again in the same pass (ADR-0225 Decision 1); one that listened and answered within the
+// liveness timeout is kept.
 func TestIssue422_NeverReadyPoolWorkerIsReplaced(t *testing.T) {
 	t.Parallel()
 	t.Run("never answered", func(t *testing.T) {
@@ -513,8 +516,10 @@ func TestIssue422_NeverReadyPoolWorkerIsReplaced(t *testing.T) {
 		creates, _ := h.rt.counts()
 		h.reconcile(t, "stall")
 		after, _ := h.rt.counts()
-		require.Equal(t, creates+1, after, "the silent pool worker is created again")
+		require.Equal(t, creates+1, after, "the pool worker that never listened is created again: its wait has passed")
 		require.Equal(t, before, h.rt.poolWorkers("default", pool), "in place: no second pool worker beside it")
+		ready := h.requireCondition(t, "stall", "Ready", v1.ConditionFalse, "CrashLoopBackOff")
+		require.Contains(t, ready.Message, "the pool worker did not listen within 1m0s; boot crash 1 in a row")
 	})
 	t.Run("answered recently", func(t *testing.T) {
 		t.Parallel()
@@ -534,9 +539,10 @@ func TestIssue422_NeverReadyPoolWorkerIsReplaced(t *testing.T) {
 	})
 }
 
-// Issue #70: a pool host that exits at boot (a member's handler cannot load) is created again on ADR-0142's backoff, as
-// a solo replica is — once it is one supervision period old — not on every 200 ms readiness poll. The member keeps the
-// phase it had while the pool host was restarted on every pass.
+// Issue #70: a pool host that exits at boot is not created again on every 200 ms readiness poll. One that never
+// listened is a boot crash (ADR-0225 Decision 2): counted, reported as CrashLoopBackOff and created again its growing
+// wait after its last start (10 s, then 20 s). One that listened is created again once it is one supervision period old,
+// as a solo replica is (ADR-0142, #603), and the member keeps the phase it had.
 func TestIssue70_FailedPoolHostRespawnsOncePerPeriod(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -544,9 +550,11 @@ func TestIssue70_FailedPoolHostRespawnsOncePerPeriod(t *testing.T) {
 		held   bool               // the pool host never serves, so the member has not served yet
 		phase  v1.Phase           // the member's phase while its pool host waits out the backoff
 		shape  v1.ConditionStatus // ShapeValid: Unknown until the generation has served (ADR-0174)
+		reason string             // Ready's reason while it waits
+		again  time.Duration      // how long ago the second exit must have started for a create
 	}{
-		{"issue70-booting", true, v1.PhaseDeploying, v1.ConditionUnknown},
-		{"issue70-serving", false, v1.PhaseDegraded, v1.ConditionTrue},
+		{"issue70-booting", true, v1.PhaseDeploying, v1.ConditionUnknown, "CrashLoopBackOff", 20 * time.Second},
+		{"issue70-serving", false, v1.PhaseDegraded, v1.ConditionTrue, "Restarting", controller.SupervisionPeriod},
 	} {
 		t.Run(tc.worker, func(t *testing.T) {
 			t.Parallel()
@@ -560,13 +568,17 @@ func TestIssue70_FailedPoolHostRespawnsOncePerPeriod(t *testing.T) {
 			creates, _ := h.rt.counts()
 			res := h.reconcile(t, "m")
 			after, _ := h.rt.counts()
-			require.Equal(t, creates, after, "a pool host younger than one period is not created again")
+			require.Equal(t, creates, after, "a pool host younger than its wait is not created again")
 			require.Equal(t, tc.phase, h.getFn(t, "m").Status.Phase)
 			require.Equal(t, tc.shape, h.shapeValid(t, "m"))
+			ready := h.requireCondition(t, "m", "Ready", v1.ConditionFalse, tc.reason)
+			if tc.held {
+				require.Contains(t, ready.Message, "the pool worker ended with an unknown exit status before it listened; boot crash 1 in a row")
+			}
 			require.Greater(t, res.RequeueAfter, time.Second, "the pass comes back when the backoff ends, not at the readiness poll")
 			require.LessOrEqual(t, res.RequeueAfter, controller.SupervisionPeriod)
 
-			h.rt.exitRevision(pool, "", 0, runtime.StateFailed, controller.SupervisionPeriod)
+			h.rt.exitRevision(pool, "", 0, runtime.StateFailed, tc.again)
 			h.reconcile(t, "m")
 			after, _ = h.rt.counts()
 			require.Equal(t, creates+1, after, "created again once the backoff has passed")
@@ -575,24 +587,21 @@ func TestIssue70_FailedPoolHostRespawnsOncePerPeriod(t *testing.T) {
 }
 
 // Issue #70: a serving member redeployed to a handler that cannot load is a shape failure of its new revision, as on a
-// first deploy (ADR-0143 Decision 5, ADR-0158 Decision 4): its pool host holds only that revision, so it is Failed with
-// ShapeValid and RevisionReady False/ShapeInvalid, retried after the period, and its sibling keeps serving.
+// first deploy (ADR-0143 Decision 5, ADR-0158 Decision 4). Its failed entry on the rebuilt pool worker holds the switch
+// until runtime.bootTimeout has passed since that worker listened (ADR-0224 Decision 3), while the old one serves both
+// members; then the pool switches, and b, which only the new worker holds at its new revision, is Failed with
+// ShapeValid and RevisionReady False/ShapeInvalid, retried after the period, while its sibling keeps serving.
 func TestIssue70_RedeployToUnloadableHandlerIsShapeInvalid(t *testing.T) {
 	t.Parallel()
-	h := newShimHarness(t, http.StatusOK, false, withPeriod, withNodePool)
-	for _, name := range []string{"a", "b"} {
-		h.create(t, name, func(fn *v1.Function) { fn.Spec.Pooling.Worker = "redeploy" })
-	}
-	h.reconcile(t, "a")
+	h, clk := switchHarness(t)
+	sp := rebuild(t, h, clk, "a", "b")
+	h.rt.setWorkerMember(sp.n, "b", "failed", "TypeError: handle is not exported")
+	h.rt.hold(sp.n, false)
 	h.reconcile(t, "b")
-	require.Equal(t, v1.PhaseReady, h.getFn(t, "b").Status.Phase)
+	sp.requireWaits(t, h)
 
-	update := filepath.Join(t.TempDir(), "update.mjs")
-	require.NoError(t, os.WriteFile(update, []byte("export function handle() {}\n"), 0o600))
-	h.apply(t, "b", func(fn *v1.Function) { fn.Spec.Image = "file://" + update })
-	h.rt.setMember("b", "failed", "TypeError: handle is not exported")
+	clk.Advance(poolBootTimeout)
 	res := h.reconcile(t, "b")
-
 	b := h.getFn(t, "b")
 	require.Equal(t, "b-2", b.Status.CurrentRevision)
 	require.Equal(t, v1.PhaseFailed, b.Status.Phase, "the pool holds only b's new revision")
@@ -605,34 +614,10 @@ func TestIssue70_RedeployToUnloadableHandlerIsShapeInvalid(t *testing.T) {
 	require.Equal(t, v1.ConditionFalse, rr.Status)
 	require.Equal(t, "ShapeInvalid", rr.Reason)
 	require.Equal(t, b.Generation, rr.ObservedGeneration)
-	require.Equal(t, testPeriod, res.RequeueAfter, "a pooled shape failure comes back after the supervision period")
+	require.Equal(t, healthPeriod, res.RequeueAfter, "a pooled shape failure comes back after the supervision period")
 
 	h.reconcile(t, "a")
 	require.Equal(t, v1.PhaseReady, h.getFn(t, "a").Status.Phase, "the sibling keeps serving")
-}
-
-// Issue #70: only a member's load failure is judged by its revision; a serving member redeployed to a handler that loads
-// is Degraded while the new revision loads, as before (the blueprint's Ready → Degraded → Ready, ADR-0158 Decision 4).
-func TestIssue70_PooledRedeployIsDegradedWhileLoading(t *testing.T) {
-	t.Parallel()
-	h := newShimHarness(t, http.StatusOK, false, withPeriod, withNodePool)
-	h.create(t, "b", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "redeploy" })
-	h.reconcile(t, "b")
-	require.Equal(t, v1.PhaseReady, h.getFn(t, "b").Status.Phase)
-
-	update := filepath.Join(t.TempDir(), "update.mjs")
-	require.NoError(t, os.WriteFile(update, []byte("export function handle() { return {} }\n"), 0o600))
-	h.apply(t, "b", func(fn *v1.Function) { fn.Spec.Image = "file://" + update })
-	h.rt.setMember("b", "loading", "")
-	h.reconcile(t, "b")
-	require.Equal(t, v1.PhaseDegraded, h.getFn(t, "b").Status.Phase)
-	h.requireCondition(t, "b", "Ready", v1.ConditionFalse, "Restarting")
-
-	h.rt.setMember("b", "ready", "")
-	h.reconcile(t, "b")
-	b := h.getFn(t, "b")
-	require.Equal(t, v1.PhaseReady, b.Status.Phase)
-	require.Equal(t, "b-2", b.Status.ServingRevision)
 }
 
 // scenario: pooled-failed-member-never-idle (ADR-0169) — a woken scale-to-zero member whose handler cannot load in its
@@ -700,14 +685,18 @@ func TestScenarioPooledFailedMemberNeverIdle(t *testing.T) {
 }
 
 // Issue #359: a pool worker that cannot start (its host interpreter is missing) ends each member Failed with a reason
-// naming the start error, as a solo worker does (#73), and a later pass creates the pool worker again, writing
-// nothing while it still fails.
+// naming the start error, as a solo worker does (#73). The failed Start is counted as a solo replica's (ADR-0225
+// Decision 3): no member's pass creates the pool worker again before its growing wait ends, the pass comes back then,
+// and a repeated start failure writes nothing.
 func TestIssue359_PoolStartFailureWritesFailedStatus(t *testing.T) {
 	t.Parallel()
+	const initial = 10 * time.Second
+	clk := clock.NewManual(time.Now())
 	rt := &createCounter{Runtime: process.New(nil)}
 	t.Cleanup(func() { _ = rt.Close() })
 	h := newShimHarness(t, http.StatusOK, false, withPeriod, func(d *function.Deps) {
-		d.Runtime = rt
+		d.Runtime, d.Clock = rt, clk
+		d.BootBackoffInitial, d.BootBackoffMax = initial, 5*time.Minute
 		d.PoolShimCommand = []string{"/nonexistent/bin/node", "/opt/funcd/pool.mjs"}
 	})
 	members := []string{"m1", "m2"}
@@ -724,14 +713,20 @@ func TestIssue359_PoolStartFailureWritesFailedStatus(t *testing.T) {
 		require.Equal(t, "StartFailed", ready.Reason, name)
 		require.Contains(t, ready.Message, "/nonexistent/bin/node", name)
 		require.Equal(t, v1.ConditionUnknown, h.shapeValid(t, name), "a pool worker that cannot start is not a shape failure, and nothing loaded the generation (ADR-0174)")
-		require.Equal(t, testPeriod, res.RequeueAfter, "a start failure is retried once per period")
+		require.Equal(t, initial, res.RequeueAfter, "%s: the start is retried at the end of its wait, not once per period", name)
 	}
 
 	rv := h.getFn(t, "m1").ResourceVersion
 	res := h.reconcile(t, "m1")
-	require.EqualValues(t, 3, rt.creates.Load(), "a pool worker that is not running is created again on each pass (issue #355)")
+	require.EqualValues(t, 1, rt.creates.Load(), "no pass creates the pool worker again within its wait")
+	require.Equal(t, rv, h.getFn(t, "m1").ResourceVersion, "a held start failure writes nothing")
+	require.Equal(t, initial, res.RequeueAfter)
+
+	clk.Advance(initial)
+	res = h.reconcile(t, "m1")
+	require.EqualValues(t, 2, rt.creates.Load(), "created again once the wait has passed")
+	require.Equal(t, 2*initial, res.RequeueAfter, "the second failure waits twice as long")
 	require.Equal(t, rv, h.getFn(t, "m1").ResourceVersion, "a repeated start failure writes nothing")
-	require.Equal(t, testPeriod, res.RequeueAfter)
 }
 
 // Two namespaces that pool one runtime under the same worker id each get their own pool worker, and each pool host

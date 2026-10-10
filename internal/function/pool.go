@@ -196,10 +196,14 @@ func (r *Reconciler) servingMember(ctx context.Context, m *v1.Function) *v1.Func
 // a crash under repair only while that revision is the serving one (ADR-0143 Decision 5). A member whose current
 // revision serves is judged on the pool worker the resolver hands out, and one whose current revision does not serve yet
 // on the worker of the current manifest, which alone holds it (ADR-0190 Decision 8). While the resolver still hands out
-// an old pool worker, which serves the member at its serving revision until the current manifest's worker listens, the
-// phase and Ready follow that worker's entry and the current revision is reported as booting beside it, as a solo
-// switch reports its serving revision (ADR-0143 Decision 5, #863). The pool worker is judged on its own liveness
-// (ensurePool), never on a member's state. It also returns how soon an old pool worker's drain needs the pass back.
+// an old pool worker, which serves a carried member at its serving revision until the key switches to the current
+// manifest's worker (ADR-0224 Decision 6), the phase and Ready follow that worker's entry and the current revision is
+// reported as booting beside it, as a solo switch reports its serving revision (ADR-0143 Decision 5, #863); those cases
+// are judged even while the current worker does not run. The current worker's boot crash is reported in the solo
+// vocabulary (ADR-0225 Decision 3): on Ready when the member is judged on that worker, on RevisionReady when the
+// member's current revision differs from the one it serves; a Start error takes its place. The pool worker is judged on
+// its own liveness (ensurePool), never on a member's state. It also returns how soon an old pool worker's drain needs
+// the pass back.
 func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pooling.Assignment, secretEnv, catalogEnv map[string]string, idx accessIndex) (verdict, time.Duration, error) {
 	pass, err := r.ensurePool(ctx, a.Key, fn, secretEnv, catalogEnv, idx)
 	if err != nil {
@@ -209,25 +213,37 @@ func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pool
 	if r.asleep(fn) {
 		return verdict{pooled: true}, pass.drainAfter, nil
 	}
-	v := verdict{running: pass.running, serving: servingPhase(fn.Status.Phase), retryAt: pass.retryAt, startErr: pass.startErr, pooled: true}
-	if pass.running == 0 {
-		return v, pass.drainAfter, nil
-	}
+	v := verdict{running: pass.running, serving: servingPhase(fn.Status.Phase), retryAt: pass.retryAt, pollAt: pass.pollAt, startErr: pass.startErr, pooled: true}
 	if r.materializer == nil {
 		v.ready = pass.running // legacy mode: no shim to ask (ADR-0020)
 	} else {
 		servesCurrent := v.serving && servingRevision(fn) == v1.ObjectName(fn.Status.CurrentRevision)
+		w, handedOut := r.servingPool(a.Key, fn.Name, pass.all)
+		oldOut := handedOut && !slices.ContainsFunc(pass.current, func(in runtime.Instance) bool { return in.ID == w.ID })
+		crash := pass.crashLoop
+		if pass.startErr != nil {
+			crash = ""
+		}
 		judge := pass.current
-		w, handedOut := r.servingPool(pass.all)
 		switch {
+		case oldOut && servesCurrent:
+			judge, v.running = []runtime.Instance{w}, 1
 		case handedOut && servesCurrent:
 			judge = []runtime.Instance{w}
-		case handedOut && v.serving && !slices.ContainsFunc(pass.current, func(in runtime.Instance) bool { return in.ID == w.ID }):
+		case oldOut && v.serving:
 			_, m, ok, _ := r.memberIn(ctx, a.Key, []runtime.Instance{w}, fn.Name)
 			if ok && m.State == memberReady {
 				v.ready = 1
 			}
-			v.running, v.switching, v.booting = 1, true, pass.running > 0
+			v.running, v.switching, v.booting, v.currentCrashLoop = 1, true, pass.running > 0, crash
+			return v, pass.drainAfter, nil
+		default:
+			v.crashLoop = crash
+			if v.serving && !servesCurrent {
+				v.currentCrashLoop = crash
+			}
+		}
+		if v.running == 0 {
 			return v, pass.drainAfter, nil
 		}
 		in, m, ok, _ := r.memberIn(ctx, a.Key, judge, fn.Name)
@@ -255,10 +271,30 @@ func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pool
 	return v, pass.drainAfter, nil
 }
 
-// servingPool is the pool worker among insts, a key's, that the resolver hands out (ADR-0190 Decision 8): the newest
-// listening one, so an old one serves until a new one listens. ok is false when none listens.
-func (r *Reconciler) servingPool(insts []runtime.Instance) (runtime.Instance, bool) {
-	return newestPool(insts, r.listening)
+// servingPool is the pool worker among insts, key's, that the resolver hands out to member (ADR-0190 Decision 8,
+// ADR-0224 Decision 4): while key's switch record waits and member is carried, the worker the record hands out if it
+// listens, else the current manifest's if it listens, else none; otherwise the newest listening one. It reads the
+// record and never probes. ok is false when it hands out none.
+func (r *Reconciler) servingPool(key pooling.PoolKey, member v1.ObjectName, insts []runtime.Instance) (runtime.Instance, bool) {
+	r.poolMu.Lock()
+	d, ok := r.poolDrains[key]
+	waits := ok && d.switched.IsZero() && slices.Contains(d.carried, member)
+	r.poolMu.Unlock()
+	if !waits {
+		return newestPool(insts, r.listening)
+	}
+	for _, id := range []runtime.InstanceID{d.from, d.next} {
+		if in, ok := newestPool(insts, func(in runtime.Instance) bool { return in.ID == id && r.listening(in) }); ok {
+			return in, true
+		}
+	}
+	return runtime.Instance{}, false
+}
+
+// readyForSwitch reports whether member entry m lets its key switch to the worker that reported it (ADR-0224 Decision
+// 3a): ready, with no dependency report (ADR-0215 Decision 4).
+func readyForSwitch(m memberHealth) bool {
+	return m.State == memberReady && m.Dependency == nil
 }
 
 // The member states a pool host reports on /health/members.
@@ -299,43 +335,50 @@ func (r *Reconciler) memberIn(ctx context.Context, key pooling.PoolKey, insts []
 	return runtime.Instance{}, memberHealth{}, false, nil
 }
 
-// poolSilent reports whether the running pool worker in insts is hung, which ensurePool restarts: once it has listened,
-// silent on /health/liveness for livenessTimeout (ADR-0215 Decision 1), and before, not listening bootTimeout after
-// its creation.
+// poolListened reports whether pool worker in has listened. A listened worker the runtime lists without an address is
+// hung, which poolSilent judges, not a boot crash (#422); a solo replica keeps r.listening.
+func poolListened(in runtime.Instance) bool { return in.Listened }
+
+// poolSilent reports whether the running pool worker in insts that has listened is hung, which ensurePool restarts at
+// once: silent on /health/liveness for livenessTimeout (ADR-0215 Decision 1). One that has not listened is
+// stopUnlistenedIn's (ADR-0225 Decision 1).
 func (r *Reconciler) poolSilent(ctx context.Context, insts []runtime.Instance) bool {
 	if r.materializer == nil {
 		return false
 	}
 	for _, in := range insts {
-		if in.State != runtime.StateRunning {
-			continue
+		if in.State == runtime.StateRunning && in.Listened {
+			return r.probeLiveness(ctx, in)
 		}
-		if !in.Listened {
-			return r.clock.Now().Sub(in.CreatedAt) >= r.bootTimeout
-		}
-		return r.probeLiveness(ctx, in)
 	}
 	return false
 }
 
 // poolPass is what ensurePool left of a key's pool workers: the revisionPass of the worker holding the current manifest,
-// that worker (current) and every worker of the key it keeps (all), and how soon the pass must come back for a worker
-// that drains (0 if none drains).
+// that worker (current) and every worker of the key it keeps (all), how soon the pass must come back for a worker that
+// drains (0 if none drains), the current worker's boot-crash message while its count is above 0 (crashLoop) and, while
+// it boots again with a count, its boot deadline (pollAt, #354).
 type poolPass struct {
 	revisionPass
 	current, all []runtime.Instance
 	drainAfter   time.Duration
+	crashLoop    string
+	pollAt       time.Time
 }
 
 // ensurePool drives key's pool workers to their desired state (ADR-0046 Decisions 4 & 6, ADR-0190 Decision 8): it builds
 // the manifest from the key's admitted members and computes the pool's desired replica as the max over those members'
 // effective desired. A pool worker carries its manifest's signature in its revision slot, so a rebuild is due when no
 // worker of the key holds the current signature, as the runtime lists it: the rebuild starts a second worker beside the
-// old one, which serves until the new one listens and then drains (drainPool). The worker of the current signature is
-// restarted (stop and create) when it is stopped or exited, or silent on /health/liveness for bootTimeout, since no call
-// can complete on it; every worker is reclaimed when desired is 0. The pass carries the current worker's running count,
-// its backoff deadline and its Start error, which the pass writes to the member's status, as for a solo worker (issue
-// #73). self is the member being reconciled: its resolved secretEnv and catalogEnv give the pool's shared env.
+// old one, which serves the carried members until the key switches to the new one (beginPoolSwitch, settlePoolSwitch,
+// ADR-0224) and then drains (drainPool). The worker of the current signature follows the boot rule of every Function
+// (ADR-0225): one that has not listened bootTimeout after its last start is stopped, counted as a boot crash and
+// created again once its growing wait has passed, in the same pass when it has; an end before listening and a failed
+// Start go on the same count, and an end after listening is restarted once a period old (#603). One that listened and
+// is silent on /health/liveness for livenessTimeout is restarted at once (#422). Every worker is reclaimed when desired
+// is 0. The pass carries the current worker's running count, its backoff deadline, its Start error and its boot crash,
+// which the pass writes to the member's status, as for a solo worker (issue #73). self is the member being reconciled:
+// its resolved secretEnv and catalogEnv give the pool's shared env.
 func (r *Reconciler) ensurePool(ctx context.Context, key pooling.PoolKey, self *v1.Function, secretEnv, catalogEnv map[string]string, idx accessIndex) (poolPass, error) {
 	members, err := r.admittedMembers(ctx, key, idx)
 	if err != nil {
@@ -356,35 +399,63 @@ func (r *Reconciler) ensurePool(ctx context.Context, key pooling.PoolKey, self *
 	}
 	cur, old := splitPool(insts, sig)
 	keep := r.drainingMembers(key, old)
-
-	var pass poolPass
-	switch {
-	case desired == 0:
+	if desired == 0 {
 		// all members idle → reclaim the pool workers (RSS→0); next request wakes the current one.
 		return poolPass{}, r.reclaimPool(ctx, key, cur, old)
+	}
+	now, legacy := r.clock.Now(), r.materializer == nil
+	ul, err := r.stopUnlistenedIn(ctx, cur, poolListened)
+	if err != nil {
+		return poolPass{}, err
+	}
+
+	var pass poolPass
+	started := false
+	switch {
+	case len(ul.stopped) > 0:
+		// the current worker did not listen within bootTimeout: a boot crash, created again once its wait has passed
+		if ul.retryAt.After(now) {
+			pass.retryAt = ul.retryAt
+			break
+		}
+		if pass.startErr, err = r.restartPool(ctx, key, cur, sig, manifest, shared, keep); err != nil {
+			return poolPass{}, err
+		}
+		started = true
 	case len(cur) == 0:
 		// first bring-up, or membership/artifact changed → a worker of the current manifest beside the old ones (the host
 		// reads its manifest at boot only, ADR-0046 workaround)
 		if pass.startErr, err = r.createPool(ctx, key, sig, manifest, shared, keep); err != nil {
 			return poolPass{}, err
 		}
+		if runningCount(old) > 0 {
+			r.beginPoolSwitch(key, runtime.NewInstanceID(key.Namespace, poolName, v1.ObjectName(sig), 0), old, keep)
+		}
+		started = true
 	case runningCount(cur) == 0:
-		// the current worker is stopped or exited, and a member now wants it up with the same manifest → restart it by
-		// ADR-0142's per-replica table as a crash under repair, so one that exited is created again only once it is a
-		// period old: a pool host that cannot boot is retried once per period, as a solo replica is (issue #70, #603).
-		_, _, _, pass.retryAt = planReplicas(map[int]runtime.Instance{0: cur[0]}, []int{0}, convergeOpts{serving: true}, r.clock.Now(), r.supervisionPeriod, nil, false)
+		// the current worker is stopped, exited or never started, and a member now wants it up with the same manifest: a
+		// failed Start or an end before listening waits out its growing wait, an end after listening a period (ADR-0225
+		// Decision 3, ADR-0142, #603)
+		if at, herr := r.boot.held(cur[0].ID, now); herr != nil {
+			pass.retryAt, pass.startErr = at, herr
+			break
+		}
+		_, _, _, pass.retryAt = planReplicas(map[int]runtime.Instance{0: cur[0]}, []int{0}, convergeOpts{serving: true}, now, r.supervisionPeriod, r.boot, legacy)
 		if !pass.retryAt.IsZero() {
 			break
 		}
 		if pass.startErr, err = r.restartPool(ctx, key, cur, sig, manifest, shared, keep); err != nil {
 			return poolPass{}, err
 		}
+		started = true
 	case r.poolSilent(ctx, cur):
-		// a running host that stopped answering its liveness is restarted (issue #422); a member's state never is
+		// a running host that listened and stopped answering its liveness is restarted (issue #422); a member's state
+		// never is
 		r.logger.Warn("restarting a pool worker silent on its liveness", "namespace", key.Namespace, "pool", poolName)
 		if pass.startErr, err = r.restartPool(ctx, key, cur, sig, manifest, shared, keep); err != nil {
 			return poolPass{}, err
 		}
+		started = true
 	default:
 		// up, manifest unchanged → no-op (the idempotent path; no restart).
 	}
@@ -395,17 +466,42 @@ func (r *Reconciler) ensurePool(ctx context.Context, key pooling.PoolKey, self *
 	}
 	cur, old = splitPool(insts, sig)
 	pass.running = runningCount(cur)
+	if started && len(cur) > 0 {
+		pass.retryAt = earlier(pass.retryAt, r.boot.startResult(cur[0].ID, now, pass.startErr))
+	}
 	if pass.running == 0 && pass.startErr == nil && pass.retryAt.IsZero() && len(cur) > 0 {
 		// a pool worker (re)started in this pass that exited at once waits out its backoff as one found exited does, so
 		// a woken member is not left Idle
-		_, _, _, pass.retryAt = planReplicas(map[int]runtime.Instance{0: cur[0]}, []int{0}, convergeOpts{serving: true}, r.clock.Now(), r.supervisionPeriod, nil, false)
+		_, _, _, pass.retryAt = planReplicas(map[int]runtime.Instance{0: cur[0]}, []int{0}, convergeOpts{serving: true}, now, r.supervisionPeriod, r.boot, legacy)
 	}
-	old, pass.drainAfter, err = r.drainPool(ctx, key, cur, old, manifestNames(manifest))
+	if len(cur) > 0 {
+		pass.crashLoop, pass.pollAt = r.poolBoot(cur[0])
+	}
+	names := manifestNames(manifest)
+	sw := r.settlePoolSwitch(ctx, key, cur, old, names)
+	old, pass.drainAfter, err = r.drainPool(ctx, key, cur, old, names, sw)
 	if err != nil {
 		return poolPass{}, err
 	}
 	pass.current, pass.all = cur, append(slices.Clone(cur), old...)
 	return pass, nil
+}
+
+// poolBoot reads the boot count of in, the current pool worker: once it has listened the count is reset (ADR-0225
+// Decision 1); while it is above 0, its message and, while in runs and has not listened, its boot deadline.
+func (r *Reconciler) poolBoot(in runtime.Instance) (crashLoop string, pollAt time.Time) {
+	if in.Listened {
+		r.boot.reset(in.ID)
+		return "", time.Time{}
+	}
+	c, ok := r.boot.crash(in.ID)
+	if !ok || c.count == 0 {
+		return "", time.Time{}
+	}
+	if in.State == runtime.StateRunning {
+		pollAt = lastStart(in).Add(r.bootTimeout)
+	}
+	return c.message, pollAt
 }
 
 // splitPool splits key's pool workers insts into those holding manifest signature sig and the others.
@@ -441,27 +537,47 @@ func (r *Reconciler) drainingMembers(key pooling.PoolKey, old []runtime.Instance
 	return members
 }
 
-// drainPool retires the old workers of key, those not holding the current manifest (ADR-0190 Decision 8): one that does
-// not run at once, since no call can complete on it; a running one only once the newest current worker listens, as the
-// resolver then hands that one out, and then once no call to it is in flight nor handed out within HandOutSettle, or
-// DrainGrace after that worker was first seen listening. While one drains, the pool's local API keeps the members of
-// both; once none is left, its member set is the current manifest's, names. It returns the old workers left and how
-// soon the pass must come back for them (0 if none is left).
-func (r *Reconciler) drainPool(ctx context.Context, key pooling.PoolKey, cur, old []runtime.Instance, names []v1.ObjectName) ([]runtime.Instance, time.Duration, error) {
+// drainPool retires the old workers of key, those not holding the current manifest (ADR-0190 Decision 8, ADR-0224
+// Decision 5), by sw, settlePoolSwitch's record: at once one that does not run, since no call can complete on it, and
+// one other than sw.from that never listened, since none was handed out; the others are kept while the newest current
+// worker does not listen, and sw.from also until the switch. Then one is retired once no call to it is in flight nor
+// handed out within HandOutSettle, or DrainGrace after its clock started: the switch for sw.from, the first listen of
+// the current worker for the others. A retired worker's boot count goes with it (retire, ADR-0225). While one drains,
+// the pool's local API keeps the members of both; once none is left, its member set is the current manifest's, names.
+// It returns the old workers left and how soon the pass must come back for them (0 if none is left): while the key
+// waits on a listening current worker, by the end of its load clock.
+func (r *Reconciler) drainPool(ctx context.Context, key pooling.PoolKey, cur, old []runtime.Instance, names []v1.ObjectName, sw poolDrain) ([]runtime.Instance, time.Duration, error) {
 	const op = "function.drainPool"
 	if len(old) == 0 {
 		return nil, 0, nil
 	}
 	poolName := poolInstanceName(key)
-	next, listens := newestPool(cur, r.listening)
-	var elapsed time.Duration
-	if listens {
-		elapsed = r.clock.Now().Sub(r.poolDrainSince(key, next.ID))
+	_, listens := newestPool(cur, r.listening)
+	now, waiting := r.clock.Now(), sw.next != "" && sw.switched.IsZero()
+	wait := r.drainPoll
+	if waiting && listens {
+		wait = min(wait, max(r.bootTimeout-now.Sub(sw.since), time.Millisecond))
 	}
 	var left []runtime.Instance
 	for _, in := range old {
-		if in.State == runtime.StateRunning && (!listens || (elapsed < r.drainGrace &&
-			r.calls != nil && !r.calls.Idle(instanceURL(key.Namespace, poolName, in), r.handOutSettle))) {
+		keep := false
+		switch {
+		case in.State != runtime.StateRunning:
+		case in.ID != sw.from && r.materializer != nil && !in.Listened:
+		case !listens || (in.ID == sw.from && waiting):
+			keep = true
+		default:
+			start := sw.since
+			if in.ID == sw.from {
+				start = sw.switched
+			}
+			elapsed := now.Sub(start)
+			keep = elapsed < r.drainGrace && r.calls != nil && !r.calls.Idle(instanceURL(key.Namespace, poolName, in), r.handOutSettle)
+			if keep {
+				wait = min(wait, max(r.drainGrace-elapsed, time.Millisecond))
+			}
+		}
+		if keep {
 			left = append(left, in)
 			continue
 		}
@@ -469,11 +585,8 @@ func (r *Reconciler) drainPool(ctx context.Context, key pooling.PoolKey, cur, ol
 			return nil, 0, err
 		}
 	}
-	switch {
-	case len(left) > 0 && !listens:
-		return left, r.drainPoll, nil
-	case len(left) > 0:
-		return left, min(r.drainPoll, max(r.drainGrace-elapsed, time.Millisecond)), nil
+	if len(left) > 0 {
+		return left, wait, nil
 	}
 	r.endPoolDrain(key)
 	r.setPoolMembers(key.Namespace, poolName, names)
@@ -494,9 +607,12 @@ func manifestNames(manifest []poolManifestEntry) []v1.ObjectName {
 	return names
 }
 
-// reclaimPool stops key's current pool workers cur, retires its old ones and ends their drain: ensurePool's desired == 0
-// branch, shared with releasePool.
+// reclaimPool stops key's current pool workers cur, forgetting their boot counts as a solo scale-down does (ADR-0225
+// Decision 3), retires its old ones and ends their drain: ensurePool's desired == 0 branch, shared with releasePool.
 func (r *Reconciler) reclaimPool(ctx context.Context, key pooling.PoolKey, cur, old []runtime.Instance) error {
+	for _, in := range cur {
+		r.boot.reset(in.ID)
+	}
 	if runningCount(cur) > 0 {
 		if err := r.stopPool(ctx, cur); err != nil {
 			return err
@@ -733,10 +849,9 @@ func (r *Reconciler) restartPool(ctx context.Context, key pooling.PoolKey, insts
 	return r.createPool(ctx, key, sig, manifest, shared, keep)
 }
 
-// startPoolInstance (re)starts the existing pool worker instance(s) — used both to wake a
-// reclaimed pool back up and as the second half of a rebuild. The process driver re-execs the
-// command, so the pool host re-reads its (possibly rewritten) manifest file. Its error is a Start error, which the pass
-// writes to the member's status instead of failing before it (issue #359).
+// startPoolInstance starts the pool worker instance(s) createPool just created, the second half of every bring-up,
+// rebuild and restart. Its error is a Start error, which the pass counts (ADR-0225) and writes to the member's status
+// instead of failing before it (issue #359).
 func (r *Reconciler) startPoolInstance(ctx context.Context, insts []runtime.Instance) error {
 	const op = "function.startPoolInstance"
 	for _, in := range insts {
@@ -892,17 +1007,111 @@ func runningCount(insts []runtime.Instance) int {
 	return n
 }
 
-// poolDrainSince is when the drain of key's old pool workers started: when worker `next` of the current manifest was
-// first seen listening, which a restart of funcd sets again (ADR-0190 Decision 8). Guarded by poolMu.
-func (r *Reconciler) poolDrainSince(key pooling.PoolKey, next runtime.InstanceID) time.Time {
+// beginPoolSwitch makes key's switch record when ensurePool created next, the current manifest's worker, beside a
+// running old one (ADR-0224 Decision 2): it hands out the worker the record being replaced hands out until it switched,
+// that record's next once it switched, else the newest listening one of old; and it carries that record's members until
+// it switched, else keep, the pool's member set before next was created.
+func (r *Reconciler) beginPoolSwitch(key pooling.PoolKey, next runtime.InstanceID, old []runtime.Instance, keep []v1.ObjectName) {
+	d := poolDrain{next: next, carried: slices.Clone(keep)}
+	if f, ok := newestPool(old, r.listening); ok {
+		d.from = f.ID
+	}
 	r.poolMu.Lock()
 	defer r.poolMu.Unlock()
-	d, ok := r.poolDrains[key]
-	if !ok || d.next != next {
-		d = poolDrain{next: next, since: r.clock.Now()}
-		r.poolDrains[key] = d
+	switch prev, ok := r.poolDrains[key]; {
+	case ok && prev.switched.IsZero():
+		d.from, d.carried = prev.from, prev.carried
+	case ok:
+		d.from = prev.next
 	}
-	return d.since
+	r.poolDrains[key] = d
+}
+
+// settlePoolSwitch is the switch decision of key's rebuild (ADR-0224 Decisions 2-3), over cur and old, key's workers of
+// the current manifest and the others, and names, the current manifest's members. With no record for the current
+// worker beside old ones, as after a restart of funcd, it makes one, switched when that worker listens. It starts the
+// load clock when the current worker is first seen listening, and again when it was created again before the switch.
+// While the record waits and the current worker listens, it switches once the worker the record hands out no longer
+// listens, runtime.bootTimeout has passed on the load clock, or every carried member in names reads ready on the
+// current worker (one /health/members read; no answer is not ready). It returns a copy of the record, zero if none.
+func (r *Reconciler) settlePoolSwitch(ctx context.Context, key pooling.PoolKey, cur, old []runtime.Instance, names []v1.ObjectName) poolDrain {
+	next, ok := newestPool(cur, func(runtime.Instance) bool { return true })
+	keep := r.drainingMembers(key, old)
+	now, listens := r.clock.Now(), ok && r.listening(next)
+	r.poolMu.Lock()
+	d, held := r.poolDrains[key]
+	switch {
+	case !ok || (held && d.next == next.ID):
+	case len(old) == 0:
+		delete(r.poolDrains, key)
+		r.poolMu.Unlock()
+		return poolDrain{}
+	default:
+		d, held = poolDrain{next: next.ID, carried: keep}, true
+		if f, fok := newestPool(old, r.listening); fok {
+			d.from = f.ID
+		}
+		if listens {
+			d.switched = now
+		}
+	}
+	if !held {
+		r.poolMu.Unlock()
+		return poolDrain{}
+	}
+	if d.switched.IsZero() && next.CreatedAt.After(d.nextCreated) {
+		d.since, d.nextCreated = time.Time{}, next.CreatedAt
+	}
+	if listens && d.since.IsZero() {
+		d.since = now
+	}
+	r.poolDrains[key] = d
+	d.carried = slices.Clone(d.carried)
+	r.poolMu.Unlock()
+	if !d.switched.IsZero() || !listens || !r.switchDue(ctx, d, next, old, names, now) {
+		return d
+	}
+	r.poolMu.Lock()
+	defer r.poolMu.Unlock()
+	if c, ok := r.poolDrains[key]; ok && c.next == d.next && c.nextCreated.Equal(d.nextCreated) && c.switched.IsZero() {
+		c.switched = now
+		r.poolDrains[key] = c
+	}
+	d = r.poolDrains[key]
+	d.carried = slices.Clone(d.carried)
+	return d
+}
+
+// switchDue reports whether record d, waiting on next, which listens, switches at now (ADR-0224 Decision 3): (c) its
+// from does not listen among old, (b) runtime.bootTimeout has passed since d.since, or (a) every member of d.carried in
+// names reads readyForSwitch on next. With no shim to ask (legacy mode), (a) holds.
+func (r *Reconciler) switchDue(ctx context.Context, d poolDrain, next runtime.Instance, old []runtime.Instance, names []v1.ObjectName, now time.Time) bool {
+	if _, ok := newestPool(old, func(in runtime.Instance) bool { return in.ID == d.from && r.listening(in) }); !ok {
+		return true
+	}
+	if now.Sub(d.since) >= r.bootTimeout {
+		return true
+	}
+	var awaited []v1.ObjectName
+	for _, m := range d.carried {
+		if slices.Contains(names, m) {
+			awaited = append(awaited, m)
+		}
+	}
+	if len(awaited) == 0 || r.materializer == nil {
+		return true
+	}
+	members, ok := r.probeMembers(ctx, next.IP, next.Port)
+	if !ok {
+		return false
+	}
+	for _, name := range awaited {
+		i := slices.IndexFunc(members, func(m memberHealth) bool { return m.Name == string(name) })
+		if i < 0 || !readyForSwitch(members[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // holdPool records manifest, of signature sig, as the one key's pool workers are built to hold.
@@ -923,9 +1132,10 @@ func (r *Reconciler) endPoolDrain(key pooling.PoolKey) {
 	delete(r.poolDrains, key)
 }
 
-// forgetPool drops all r keeps for the reclaimed pool worker named name in ns: its drain, liveness, manifest and member
-// set.
+// forgetPool drops all r keeps for the reclaimed pool worker named name in ns: its drain, liveness, boot counts,
+// manifest and member set.
 func (r *Reconciler) forgetPool(ns v1.NamespaceName, name v1.ObjectName) {
+	r.boot.forget(backoffPrefix(ns, name))
 	ofPool := func(key pooling.PoolKey) bool { return key.Namespace == ns && poolInstanceName(key) == name }
 	r.poolMu.Lock()
 	defer r.poolMu.Unlock()
