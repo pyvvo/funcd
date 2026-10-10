@@ -1,12 +1,15 @@
 # App design note — many resources declared, deployed and versioned as one unit
 
-- **Status**: Design note, not an ADR yet. Once the design is final, it becomes one or more ADRs per feature row.
+- **Status**: Design note. Its decisions became the ADRs below, one or more per feature row.
 - **Decided by ADRs**: F113 by [ADR-0199](../adr/0199-app-resource.md), F114 by
-  [ADR-0200](../adr/0200-app-revisions.md) (both Implemented); F115 to F123 by ADR-0212 to ADR-0220 and the cron
-  question (open question 3) by ADR-0211 (all Accepted 2026-10-10). Where an ADR and this
-  note differ, the ADR wins: ADR-0199 refines the Function readiness rule, moves the `configMaps` and `secrets`
-  sections to F116, lets prune skip an object still in use and decides the Bucket teardown; ADR-0200 numbers
-  revisions from the latest AppRevision, keeps a `Failed` revision final and derives an unset `app.upgradeTimeout`.
+  [ADR-0200](../adr/0200-app-revisions.md), F115 to F123 by ADR-0212 to ADR-0220, and the cron question (open
+  question 3) by ADR-0211. All of them are Implemented except ADR-0216 (F119, App tests), which is Accepted and was
+  deferred by the decider on 2026-10-10. Where an ADR and this note differ, the ADR wins: ADR-0199 refines the
+  Function readiness rule, moves the `configMaps` and `secrets` sections to F116, lets prune skip an object still in
+  use and decides the Bucket teardown; ADR-0200 numbers revisions from the latest AppRevision, keeps a `Failed`
+  revision final and derives an unset `app.upgradeTimeout`. After a `Failed` revision the parts keep its spec, so a
+  Function whose new revision becomes ready after the timeout switches to it, and `currentRevision` names the last
+  complete rollout, not what every part runs (ADR-0200 Consequences).
 - **Date**: 2026-10-06, refined 2026-10-07
 - **Deciders**: green-0-rabbit
 - **Tags**: app, lifecycle, controller, revisions, admission, gc, templates
