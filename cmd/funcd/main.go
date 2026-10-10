@@ -27,8 +27,10 @@ import (
 	shimnode "github.com/pyvvo/funcd-typescript/shim"
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/backup/envelope"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
+	"github.com/pyvvo/funcd/internal/blob/s3gateway"
 	"github.com/pyvvo/funcd/internal/bus"
 	"github.com/pyvvo/funcd/internal/bus/nats"
 	"github.com/pyvvo/funcd/internal/edge/limit"
@@ -177,6 +179,15 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) (_ 
 		return nil, noopClose, nil, "", err
 	}
 
+	// The node master secret, loaded once for the platform and the backup envelope (ADR-0204 Decisions 2, 7).
+	master, err := loadMaster(cfg, root)
+	if err != nil {
+		return nil, noopClose, nil, "", err
+	}
+	if err := checkBackupEncryption(cfg, master, root); err != nil {
+		return nil, noopClose, nil, "", err
+	}
+
 	var opened []io.Closer
 	defer func() {
 		if err != nil {
@@ -303,8 +314,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) (_ 
 		opts = append(opts, funcd.WithEdgeShaping(shCfg))
 	}
 
-	// The node master secret lives at the same place gateway on or off (ADR-0204 Decision 7, #850).
-	opts = append(opts, funcd.WithMasterLocation(cfg.S3Gateway.MasterSecretFile, cfg.Storage.DataDir))
+	opts = append(opts, funcd.WithMasterSecret(master))
 	// S3 gateway (ADR-0080/0085): opt-in S3-protocol frontend over the blob substrate.
 	if cfg.S3Gateway.Enabled {
 		opts = append(opts, funcd.WithS3Gateway(
@@ -729,16 +739,55 @@ func checkSecretsDecode(st store.Store, keyed bool) error {
 	}
 }
 
-// secretEncryptor builds the at-rest Secret encryptor from secrets.encryptionKeyFile (ADR-0022): a
-// 32-byte key file → an AES-256-GCM encryptor; "" ⇒ nil (no encryption); a non-32-byte key ⇒ a
-// fault.Invalid (never silently weak crypto).
-func secretEncryptor(cfg config.Config) (store.Encryptor, error) {
+// loadMaster migrates a working-directory master and loads the node master secret from its place, gateway on or off
+// (ADR-0204 Decision 7).
+func loadMaster(cfg config.Config, log *slog.Logger) ([]byte, error) {
+	file, dataDir := cfg.S3Gateway.MasterSecretFile, cfg.Storage.DataDir
+	if err := s3gateway.MigrateMaster(file, dataDir, cfg.S3Gateway.Enabled, log); err != nil {
+		return nil, err
+	}
+	return s3gateway.LoadOrCreateMaster(file, dataDir)
+}
+
+// checkBackupEncryption applies ADR-0204 Decision 2's start rules when backup.target is set: a violation refuses
+// the start, and the keys' fingerprints are logged. ADR-0205 runs the backups with the sealer.
+func checkBackupEncryption(cfg config.Config, master []byte, log *slog.Logger) error {
+	if cfg.Backup.Target == "" {
+		return nil
+	}
+	key, err := readSecretsKey(cfg)
+	if err != nil {
+		return err
+	}
+	_, err = envelope.New(envelope.Config{
+		Recipients: cfg.Backup.Encryption.Recipients,
+		None:       cfg.Backup.Encryption.None,
+		SecretsKey: key,
+		Master:     master,
+		Logger:     log,
+	})
+	return err
+}
+
+// readSecretsKey reads secrets.encryptionKeyFile; "" ⇒ nil.
+func readSecretsKey(cfg config.Config) ([]byte, error) {
 	if cfg.Secrets.EncryptionKeyFile == "" {
 		return nil, nil
 	}
 	key, err := os.ReadFile(cfg.Secrets.EncryptionKeyFile) //nolint:gosec // operator-supplied key path
 	if err != nil {
 		return nil, fmt.Errorf("read secrets.encryptionKeyFile %s: %w", cfg.Secrets.EncryptionKeyFile, err)
+	}
+	return key, nil
+}
+
+// secretEncryptor builds the at-rest Secret encryptor from secrets.encryptionKeyFile (ADR-0022): a
+// 32-byte key file → an AES-256-GCM encryptor; "" ⇒ nil (no encryption); a non-32-byte key ⇒ a
+// fault.Invalid (never silently weak crypto).
+func secretEncryptor(cfg config.Config) (store.Encryptor, error) {
+	key, err := readSecretsKey(cfg)
+	if err != nil || key == nil {
+		return nil, err
 	}
 	enc, err := aesgcm.NewAESEncryptor(key) // validates exactly 32 bytes (AES-256)
 	if err != nil {
