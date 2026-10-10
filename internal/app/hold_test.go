@@ -16,6 +16,7 @@ import (
 // Restored, the platform boots held: a pass writes nothing and requeues. The release persists its time, and after
 // two restarts before the App runs the revision fails a full timeout after the release.
 func TestScenarioHeldRolloutDeadline(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	open := func() *hold.Hold {
 		h, err := hold.Open(dir)

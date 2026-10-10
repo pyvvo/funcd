@@ -52,6 +52,7 @@ type runnerCase struct {
 // TestEveryRunnerConsultsHold: on a held platform every Decision 6 runner built so far, the App's included, stays
 // still; it fails when one acts. ADR-0205, ADR-0208 and ADR-0209 add their backup loops' cases.
 func TestEveryRunnerConsultsHold(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dir := t.TempDir()
 	require.NoError(t, hold.Write(dir, hold.Marker{Reason: "restore", Since: v1.NewTimestamp(time.Now())}))
@@ -59,7 +60,8 @@ func TestEveryRunnerConsultsHold(t *testing.T) {
 	require.NoError(t, err)
 	p, err := New(InMemory(), WithLogger(slog.New(slog.DiscardHandler)), WithHold(h),
 		WithWorkflow("", defaultWorkflowStepTimeout, 50*time.Millisecond, defaultWorkflowRetry, defaultWorkflowPayloadLimit),
-		WithDeadLetterQueue("", 2, 50*time.Millisecond, 0))
+		WithDeadLetterQueue("", 2, 50*time.Millisecond, 0), WithBlobPollInterval(50*time.Millisecond),
+		WithPacing(Pacing{ReferentPollInterval: 50 * time.Millisecond}))
 	require.NoError(t, err)
 	st := p.cfg.store
 	runsIn := func(t *testing.T) []string {
@@ -175,7 +177,12 @@ func TestEveryRunnerConsultsHold(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- p.Run(runCtx) }()
 	t.Cleanup(func() { cancel(); <-done })
-	time.Sleep(1500 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		pending, err := p.blobWatcher.Pending(ctx, "team", "files")
+		return err == nil && pending["new"] == 1
+	}, 5*time.Second, 10*time.Millisecond, "the blob source registers")
+	// The timers tick every 100 ms; the sweeps, the held requeues and the blob polls every 50 ms.
+	time.Sleep(500 * time.Millisecond)
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) { c.still(t, p) })
 	}

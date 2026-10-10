@@ -49,11 +49,12 @@ func TestPausedRunWithoutRecordStaysStill(t *testing.T) {
 // TestScenarioRestoreBootsHeld) — R, recorded at step 2, and S, without a record, both paused: while held neither
 // moves; after the release both stay Paused; resuming R runs from step 2, cancelling S runs no step.
 func TestScenarioRunsHeldAsEvidence(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, runs, g := newStore(t), newRunStore(t), newGate()
 	g.block["b"] = 1
 	seedWorkflow(t, s, "wf", step("a", ""), step("b", "", "a"))
-	newHarness(t, s, runs, g, Config{}, nil, time.Second, nil)
+	newHarness(t, s, runs, g, Config{}, nil, 10*time.Millisecond, nil)
 	seedRun(t, s, "run-r", "wf", `{}`)
 	receive(t, g.entered, "b")
 	left := getRecord(t, runs, "run-r")
@@ -68,9 +69,12 @@ func TestScenarioRunsHeldAsEvidence(t *testing.T) {
 	}
 	gate := &switchGate{}
 	gate.held.Store(true)
-	newHarness(t, s2, runs2, g2, Config{}, nil, time.Second, nil, gate)
+	newHarness(t, s2, runs2, g2, Config{}, nil, time.Second, nil, func(rr *RunReconciler) {
+		rr.SetHold(gate)
+		rr.waitRequeue = 20 * time.Millisecond // ten held passes in each still window
+	})
 	rvR, rvS := getRunObj(t, s2, "run-r").ResourceVersion, getRunObj(t, s2, "run-s").ResourceVersion
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
 	if getRunObj(t, s2, "run-r").ResourceVersion != rvR || getRunObj(t, s2, "run-s").ResourceVersion != rvS {
 		t.Fatal("a held run's status moved")
 	}

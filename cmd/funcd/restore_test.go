@@ -48,6 +48,9 @@ import (
 
 const restoreToken = "restore-admin-token-0123456789abcdef"
 
+// restorePacing puts many held requeues and blob polls inside a test's still window (pitfall 5).
+const restorePacing = "controller:\n  referentPollInterval: 100ms\neventing:\n  blobPollInterval: 100ms\n"
+
 // gsource is a platform's three stores on disk, written directly and cut into generations on a file:// target with
 // ADR-0203's Target.Write (ADR-0205's runner, which schedules it in the daemon, is built separately).
 type gsource struct {
@@ -233,6 +236,7 @@ func reportOf(t *testing.T, ev hold.Evidence) restore.Report {
 // scenario: restore-refuses-non-empty — a metastore directory holding data refuses the restore with a Conflict
 // naming it, before the target is read (it is unreadable here) and with nothing written.
 func TestScenarioRestoreRefusesNonEmpty(t *testing.T) {
+	t.Parallel()
 	s := newGSource(t, nil)
 	s.cut(t)
 	n := newNode(t, nil, "")
@@ -257,6 +261,7 @@ func TestScenarioRestoreRefusesNonEmpty(t *testing.T) {
 // scenario: restore-crash-refuses-start — what a restore run killed after its metastore Load leaves (restore.inprogress,
 // the marker, a partial metastore) refuses the start with a Conflict naming it; once emptied, a new run boots held.
 func TestScenarioRestoreCrashRefusesStart(t *testing.T) {
+	t.Parallel()
 	s := newGSource(t, nil)
 	s.cut(t)
 	n := newNode(t, nil, "")
@@ -287,6 +292,7 @@ func TestScenarioRestoreCrashRefusesStart(t *testing.T) {
 // As root on Linux a second uid owns the data; otherwise the data directory gets another of this user's groups,
 // which a process may set, and the case holds for the group.
 func TestScenarioRestoreKeepsDataOwner(t *testing.T) {
+	t.Parallel()
 	s := newGSource(t, nil)
 	s.cut(t)
 	n := newNode(t, nil, "")
@@ -335,16 +341,18 @@ func ownerOf(t *testing.T, p string) [2]uint32 {
 	return [2]uint32{st.Uid, st.Gid}
 }
 
-// scenario: restore-boots-held — G with a 1 s timer, a blob source, a Sensor and a run is restored; funcd lists G's
-// objects and reports held, and for 5 s across a restart nothing fires or dispatches: no Invocation, no new run, no
-// dead letter, the run untouched, the blob key pending.
+// scenario: restore-boots-held — G with a timer, a blob source, a Sensor and a run is restored; funcd lists G's
+// objects and reports held, and across a restart nothing fires or dispatches: no Invocation, no new run, no dead
+// letter, the run untouched, the blob key pending. The ADR's 1 s timer and 5 s run here as a 100 ms timer, 100 ms
+// requeues and blob polls, and 500 ms on each side of the restart.
 func TestScenarioRestoreBootsHeld(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := newGSource(t, nil)
 	s.create(t,
 		&v1.Bucket{TypeMeta: tmeta(v1.KindBucket), ObjectMeta: om("inbox")},
 		&v1.EventSource{TypeMeta: tmeta(v1.KindEventSource), ObjectMeta: om("tick"), Spec: v1.EventSourceSpec{
-			Timer: &v1.TimerSource{Events: []v1.TimerEvent{{Name: "t", Interval: v1.Duration(time.Second)}}}}},
+			Timer: &v1.TimerSource{Events: []v1.TimerEvent{{Name: "t", Interval: v1.Duration(100 * time.Millisecond)}}}}},
 		&v1.EventSource{TypeMeta: tmeta(v1.KindEventSource), ObjectMeta: om("files"), Spec: v1.EventSourceSpec{
 			Blob: &v1.BlobSource{Bucket: "inbox", Events: []v1.BlobEvent{{Name: "new"}}}}},
 		&v1.Sensor{TypeMeta: tmeta(v1.KindSensor), ObjectMeta: om("s"), Spec: v1.SensorSpec{
@@ -360,7 +368,7 @@ func TestScenarioRestoreBootsHeld(t *testing.T) {
 	require.NoError(t, err)
 	s.cut(t)
 
-	n := newNode(t, nil, "")
+	n := newNode(t, nil, restorePacing)
 	_, err = n.restore("run", "latest", "--from", s.target)
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(filepath.Join(n.dataDir, "blob"), 0o700))
@@ -383,7 +391,7 @@ func TestScenarioRestoreBootsHeld(t *testing.T) {
 
 	still := func() {
 		t.Helper()
-		time.Sleep(2500 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 		invs, err := c.List(ctx, v1.KindInvocation, "team")
 		require.NoError(t, err)
 		require.Empty(t, invs, "a held timer or blob source fired")
@@ -408,6 +416,7 @@ func TestScenarioRestoreBootsHeld(t *testing.T) {
 // scenario: restore-integrity — a metastore part of another sha256, or a Secret that does not open with the key the
 // manifest names, fails the restore naming the part or the Secret, and leaves the data directory empty.
 func TestScenarioRestoreIntegrity(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	key := bytes.Repeat([]byte{1}, 32)
 	s := newGSource(t, key)
@@ -440,7 +449,8 @@ func TestScenarioRestoreIntegrity(t *testing.T) {
 }
 
 // scenario: version-rule — a generation of a newer minor is Invalid naming both versions; one of an older minor
-// restores and its first start runs the start steps (the ADR-0178 KVStore migration records its completion).
+// restores and its first start runs the start steps (the ADR-0178 KVStore migration records its completion). It
+// sets the process-wide version.Version, so it stays serial.
 func TestScenarioVersionRule(t *testing.T) {
 	prev := version.Version
 	t.Cleanup(func() { version.Version = prev })
@@ -469,6 +479,7 @@ func TestScenarioVersionRule(t *testing.T) {
 // scenario: restore-points — T2 restored from T1/40: list shows T2 under T1/40 and T1/41 abandoned; latest is T2/43;
 // the resourceVersion of 41's revision and that of 43's both resolve to T1/40.
 func TestScenarioRestorePoints(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	const tl1, tl2 = "aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"
 	dir := t.TempDir()
@@ -512,6 +523,7 @@ func TestScenarioRestorePoints(t *testing.T) {
 // scenario: single-secret-restore — inspect --object prints a deleted Secret by key with no value; with
 // --secrets-key and --reveal-secrets its values, and `funcdctl apply -f` of that output brings it back.
 func TestScenarioSingleSecretRestore(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	key := bytes.Repeat([]byte{3}, 32)
 	s := newGSource(t, key)
@@ -557,6 +569,7 @@ func TestScenarioSingleSecretRestore(t *testing.T) {
 // scenario: dead-letters-held — a restored dead letter lists by its id; its replay is Unavailable while held, nothing
 // redelivers it after the release, and then its replay works.
 func TestScenarioDeadLettersHeld(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := newGSource(t, nil)
 	s.create(t, &v1.Sensor{TypeMeta: tmeta(v1.KindSensor), ObjectMeta: om("s"), Spec: v1.SensorSpec{
@@ -572,7 +585,7 @@ func TestScenarioDeadLettersHeld(t *testing.T) {
 		FailedAt: v1.NewTimestamp(time.Now())}))
 	s.cut(t)
 
-	n := newNode(t, nil, "")
+	n := newNode(t, nil, restorePacing)
 	_, err = n.restore("run", "latest", "--from", s.target)
 	require.NoError(t, err)
 	c, _ := n.start(t)
@@ -583,7 +596,7 @@ func TestScenarioDeadLettersHeld(t *testing.T) {
 	require.Equal(t, fault.Unavailable, fault.KindOf(c.ReplayDeadLetter(ctx, "team", id)))
 
 	require.NoError(t, c.ReleaseHold(ctx, nil))
-	time.Sleep(1500 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 	dls, err = c.DeadLetters(ctx, "team")
 	require.NoError(t, err)
 	require.Len(t, dls, 1, "nothing redelivers a dead letter")
@@ -603,6 +616,7 @@ func TestScenarioDeadLettersHeld(t *testing.T) {
 // restored into a scratch directory: the integrity checks pass, the counts per kind equal the source's, a read of
 // each object works on the node booted held (never released), and the time is logged.
 func TestScenarioFirstDrill(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	start := time.Now()
 	key, master := bytes.Repeat([]byte{4}, 32), bytes.Repeat([]byte{5}, 32)

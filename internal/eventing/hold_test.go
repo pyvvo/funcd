@@ -67,6 +67,7 @@ func runWatcher(t *testing.T, w *BlobWatcher) {
 // after the release c and d fire once. With Advance first none fires and a to d are seen. After a blob restore (a
 // new ModTime) Pending counts 4.
 func TestScenarioBlobReplayOrAdvance(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, pub, w, gate := heldWatcher(t)
 	pending, err := w.Pending(ctx, "lake", "drops")
@@ -106,6 +107,7 @@ func TestScenarioBlobReplayOrAdvance(t *testing.T) {
 
 // The timer Run skips due timers while held; after the release each fires once for the periods it missed.
 func TestTimerHeldFiresOnceAfterRelease(t *testing.T) {
+	t.Parallel()
 	pub := &capturePub{}
 	gate := &heldGate{}
 	gate.held.Store(true)

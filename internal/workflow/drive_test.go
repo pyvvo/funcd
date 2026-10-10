@@ -14,7 +14,6 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controller"
-	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/workflow/runstate"
 	wbadger "github.com/pyvvo/funcd/internal/workflow/runstate/badger"
@@ -100,7 +99,7 @@ type driveHarness struct {
 	stop func()
 }
 
-func newHarness(t *testing.T, s store.Store, runs runstate.Store, disp Dispatcher, cfg Config, children ChildResolver, drain time.Duration, log *slog.Logger, gate ...hold.Gate) *driveHarness {
+func newHarness(t *testing.T, s store.Store, runs runstate.Store, disp Dispatcher, cfg Config, children ChildResolver, drain time.Duration, log *slog.Logger, tune ...func(*RunReconciler)) *driveHarness {
 	t.Helper()
 	ctrl, err := controller.New(controller.Deps{Store: s, Workers: 1, Logger: log})
 	if err != nil {
@@ -113,8 +112,8 @@ func newHarness(t *testing.T, s store.Store, runs runstate.Store, disp Dispatche
 		t.Fatalf("engine: %v", err)
 	}
 	rr := NewRunReconciler(s, eng, nil, log, 0)
-	for _, g := range gate {
-		rr.SetHold(g)
+	for _, f := range tune {
+		f(rr)
 	}
 	ctrl.Register(v1.KindWorkflowRun.GVK(), rr)
 	ctx, cancel := context.WithCancel(context.Background())
