@@ -1,6 +1,6 @@
 # ADR-0210: API optimistic concurrency — replace and delete honor the client's resourceVersion
 
-- **Status**: Reviewing (2026-10-10; accepted 2026-10-10 by an `adr-batch` run after a clean `adr-judge` gate; the defaults below were not confirmed one by one)
+- **Status**: Implemented (2026-10-10; the implementation review passed on its second round, docs/reviews/adr-0210-implementation-claude-opus-5-5-2.md; accepted 2026-10-10 by an `adr-batch` run after a clean `adr-judge` gate; the defaults below were not confirmed one by one)
 - **Date**: 2026-10-08
 - **Deciders**: green-0-rabbit
 - **Tags**: api, control-plane, resource-version, optimistic-concurrency, sdk, funcdctl, openapi, disaster-recovery
