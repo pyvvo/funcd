@@ -1,6 +1,6 @@
 # ADR-0207: Pre-upgrade snapshot and safe mode
 
-- **Status**: Accepted (2026-10-10, by an `adr-batch` run after a clean `adr-judge` gate; the defaults below were not confirmed one by one)
+- **Status**: Reviewing (implemented 2026-10-10; accepted 2026-10-10 by an `adr-batch` run after a clean `adr-judge` gate; the defaults below were not confirmed one by one)
 - **Date**: 2026-10-08
 - **Deciders**: green-0-rabbit
 - **Tags**: disaster-recovery, upgrade, backup, hold, crash

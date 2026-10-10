@@ -12,8 +12,8 @@ same table at start (`backup target: set one lifecycle expiry per prefix`), comp
 | `gen/verified/` | 2 days | `retention.verified` |
 | `probe/` | 1 day | fixed |
 
-`gen/pre-upgrade/` pins have no rule here (ADR-0207). With a `prefix=<p>/` in `backup.target`, every prefix below
-starts with `<p>/`. Object Lock is optional; funcd sets none.
+`gen/pre-upgrade/` pins have no rule here: see [Pre-upgrade pins](#pre-upgrade-pins) (ADR-0207). With a
+`prefix=<p>/` in `backup.target`, every prefix below starts with `<p>/`. Object Lock is optional; funcd sets none.
 
 ## S3 lifecycle
 
@@ -33,6 +33,18 @@ starts with `<p>/`. Object Lock is optional; funcd sets none.
 
 S3 expiry rounds up to midnight UTC and acts per object, so a manifest can outlive a part written the day before;
 ADR-0206 lists such a generation as broken.
+
+## Pre-upgrade pins
+
+`funcd upgrade` writes one `gen/pre-upgrade/<n>-<timeline>/` pin per upgrade and deletes none (ADR-0207). It lists the
+complete pins older than the newest `backup.retention.preUpgrade` (3 at the default), each with the command that
+prunes it. Run it with a credential that may delete under the prefix (`s3:DeleteObject` on
+`arn:aws:s3:::<bucket>/<p>/gen/pre-upgrade/*`), never with the box credential; `<n>` is ten digits, as in the key:
+
+```sh
+aws s3 rm --recursive s3://<bucket>/<p>/gen/pre-upgrade/<n>-<timeline>/   # s3://
+rm -r <dir>/gen/pre-upgrade/<n>-<timeline>                                 # a directory target
+```
 
 ## The box credential (`backup.credentialsFile`)
 
@@ -94,7 +106,7 @@ funcdctl backup verify --target <backup.target> --credentials-file <verify crede
 
 ## A directory target
 
-funcd holds `<dir>/lock` while it runs, creates directories 0700 and files 0600, and writes every object through a
+funcd holds `<dir>/lock` from its first backup run until it stops (`funcd upgrade` takes it too), creates directories 0700 and files 0600, and writes every object through a
 temp file and `link(2)`. A directory on the data directory's device is no independent copy (funcd warns). Prune it
 on the same prefixes from a daily cron job or systemd timer, as the directory's owner or root:
 
