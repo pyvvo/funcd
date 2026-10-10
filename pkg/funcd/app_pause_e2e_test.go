@@ -269,10 +269,11 @@ func TestScenarioAppApplyWithoutPausedResumes(t *testing.T) {
 }
 
 // scenario: app-paused-rollout-full-timeout — the ADR pauses 5 s after the stamp for 30 s at app.upgradeTimeout 20s.
-// The test pauses as soon as it sees the stamp and stays paused past the stamp's deadline, with a 6 s timeout: long
-// enough that the pause lands before the deadline under -race load, short enough to keep the test fast.
+// The test keeps failedPacing's boot and activation times with a 3 s timeout, so the pause, which lands within a second
+// of the stamp, comes well before the deadline. It stays paused 1 s past the stamp's deadline: the reconciler requeues
+// at the deadline, so a pause that did not hold would show Failed within that second.
 func TestScenarioAppPausedRolloutFullTimeout(t *testing.T) {
-	const timeout = 6 * time.Second
+	const timeout = 3 * time.Second
 	e := startGC(t, funcd.WithPacing(funcd.Pacing{AppUpgradeTimeout: timeout, BootTimeout: 2 * time.Second,
 		ActivationTimeout: time.Second}))
 	a := installTodo(t, e)
@@ -290,7 +291,7 @@ func TestScenarioAppPausedRolloutFullTimeout(t *testing.T) {
 	e.waitPaused(t, v1.ConditionTrue, "SpecPaused")
 
 	require.Never(t, func() bool { return e.appRevision(t, "todo-2").Status.Phase != v1.PhaseDeploying },
-		time.Until(time.Time(*stamped).Add(timeout+2*time.Second)), 100*time.Millisecond,
+		time.Until(time.Time(*stamped).Add(timeout+time.Second)), 50*time.Millisecond,
 		"todo-2 stays Deploying while paused, past its stamp's deadline")
 	out, err = cli("app", "resume", "todo")
 	require.NoError(t, err, out)
