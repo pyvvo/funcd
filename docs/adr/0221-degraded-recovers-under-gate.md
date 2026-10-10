@@ -28,8 +28,8 @@
   [ADR-0158](0158-pool-member-identity.md) Decision 4 · [ADR-0174](0174-never-booted-revision-is-unknown.md) ·
   [ADR-0192](0192-asleep-function-gate-stops-worker.md)/[ADR-0193](0193-asleep-gate-rule-for-every-placement.md)
   Decision 1 (0192:121's "ADR-0161 Decision 2's table" now reads Decision 1's) · [ADR-0199](0199-app-resource.md)
-  Decision 5 · [ADR-0169](0169-failed-stays-failed.md) · [ADR-0215](0215-built-in-health.md) Decision 5 (its
-  `probeReadiness` becomes `readyReplicas`' test, so a replica with a dependency report is not promoted).
+  Decision 5 · [ADR-0169](0169-failed-stays-failed.md) · [ADR-0215](0215-built-in-health.md) Decision 5
+  (`servingReady` follows its readiness outcome; see Contracts).
 - **Blueprint sync at acceptance**: `Degraded --> Ready : reconciliation repairs` (`blueprint.md:706`) gains "or, while
   a gate or a pass fails, a worker of the serving revision passes its readiness probe (ADR-0221)".
 
@@ -64,9 +64,9 @@ route (an unanswered pool host: the status as read, `RevisionReady=False/Reconci
   deleted; the replacement listens and answers 200 ⇒ it serves.
 - **failed-pass-promotes-degraded** — a pass fails on a platform lookup while S's replica answers 200 ⇒ it serves,
   `RevisionReady=False/ReconcileFailed`.
-- **failed-pass-during-pool-rebuild-not-promoted** — pooled `b` is redeployed; while its new pool worker boots, the old
-  one's entry for `b` reads `restarting`, so `b` is `Degraded`; the entry turns `ready` and a pass fails ⇒ still
-  `Degraded`; the next pass that succeeds ⇒ `Ready` (`finish`, #869).
+- **failed-pass-during-pool-rebuild-promotes** — pooled `b` is redeployed; while its new pool worker boots, the old
+  one's entry for `b` reads `restarting`, so `b` is `Degraded`; the entry turns `ready` and a pass fails ⇒ it serves
+  at S, `RevisionReady=False/ReconcileFailed`, as `finish` does one pass later (#869).
 - **unready-worker-not-promoted** (#309) — S's replacement listens but answers 503; a gate or a pass fails ⇒
   `Degraded`, `replicas: 0`, `Ready=False`, no route, `Upstream` not ready.
 - **ready-function-stays-ready-under-gate** — a `Ready` solo Function whose replica now answers 503 (a timed-out
@@ -125,10 +125,8 @@ gates (ADR-0142 Decision 3); the probe's content (ADR-0215); the App-level test 
    `Asleep=False`, the store write and `programAllRoutes` are unchanged. A count error goes through `failPass`.
 2. **`failPass`.** `n` comes from `servingReady` when `started` is `Degraded`, else from `listeningCount` (today). A
    `List` error or an unanswered pool host keeps the status as read (#353, #838). `started` `Degraded` and `n ≥ 1`:
-   phase `Ready`, `replicas: n`, `Ready=True` with no reason; a pooled member only while S = C
-   (`status.servingRevision == status.currentRevision`), where `finish` judges the same pool worker (`servesCurrent`,
-   `pool.go:218-223`), so the two writers cannot alternate during a pool rebuild. Otherwise, and for `RevisionReady`,
-   as today; never `Failed`, never a wake. Both writers promote only from `Degraded`, where #849 is stuck: a gate pass
+   phase `Ready`, `replicas: n`, `Ready=True` with no reason. Otherwise, and for `RevisionReady`, as today; never
+   `Failed`, never a wake. Both writers promote only from `Degraded`, where #849 is stuck: a gate pass
    moves a phase other than `Ready` or `Degraded` with a running S worker to `Degraded` (row 3), promoted one period
    later; `failPass` keeps a non-serving `started` (ADR-0161 Decision 1, ADR-0169). No new blueprint edge.
 3. **Revocation.** A Function `Degraded` when its Secret was deleted or denied (`SecretResolveFailed`) or its ConfigMap
@@ -137,9 +135,9 @@ gates (ADR-0142 Decision 3); the probe's content (ADR-0215); the App-level test 
    no worker. While it fails, workers stop only on delete or, with `minReplicas: 0`, asleep (ADR-0192/0193).
 4. **What does not promote.** A solo probe that times out or answers non-200 counts not ready: row 3. An unanswered
    `/health/members` is an error: status as read (#838). Option B adds no probe or demotion for a `Ready` Function; a
-   pooled member keeps today's entry read, which demotes it when the entry is not `ready`. The gate path also promotes
-   while S ≠ C (`pooled-probe-failed-recovers-under-shape-gate` stamps a new C). Since #869, during a pool rebuild both
-   writers judge the worker the resolver hands out: `finish` reads its entry (`pool.go:220-230`), and `servingReady`
+   pooled member keeps today's entry read, which demotes it when the entry is not `ready`. Both paths promote while
+   S ≠ C too (`pooled-probe-failed-recovers-under-shape-gate` stamps a new C). Since #869, during a pool rebuild both
+   writers judge the worker the resolver hands out: `finish` reads its entry (`pool.go:220-232`), and `servingReady`
    reads it through `servingPool` (`function.go:1264`).
 5. **Vocabulary.** No new phase, reason, condition, field or config key. The message "no worker of the serving
    revision is ready" (unused at 0cd67ef5) replaces "… listens"; the decider kept the reason `Restarting`.
@@ -160,11 +158,12 @@ None.
 // List, with no fallback to the current revision (no S: 0, 0, nil). A solo replica is ready when it listens and answers
 // readinessPath with 200 within probeTimeout (readyReplicas' test); in the legacy placeholder mode, when it listens. A
 // pooled member counts as servingWorkers counts it (its /health/members entry; an unanswered probe is an error, #838).
-// New (ADR-0221).
+// It applies finish's per-worker test as it stands when ADR-0221 is implemented; whichever of ADR-0215 and ADR-0221 is
+// implemented second aligns countWorkers' pooled check with the member's dependency field, so the gate path never
+// promotes a member that finish keeps Degraded. New (ADR-0221).
 func (r *Reconciler) servingReady(ctx context.Context, fn *v1.Function) (running, ready int, err error)
 
 // Same signatures; bodies per Decisions 1 and 2. Each RevisionReady write keeps ObservedGeneration: fn.Generation.
-// failPass promotes a pooled member only while status.servingRevision == status.currentRevision.
 func (r *Reconciler) gateFailed(ctx context.Context, fn *v1.Function, g gateFailure, idx accessIndex, drainAfter time.Duration) (controller.Result, error)
 func (r *Reconciler) failPass(ctx context.Context, fn *v1.Function, read v1.FunctionStatus, err error) (controller.Result, error)
 ```
@@ -188,12 +187,12 @@ Unchanged: `listeningCount` (its caller is `failPass` for a non-`Degraded` start
      `TestScenarioSoloReplacedReplicaRecoversUnderGate`: each first asserts the state before the worker turns ready
      (Scenarios), then phase, `replicas`, `Ready` reason "", `RevisionReady`'s reason and `ObservedGeneration ==
      fn.Generation`, the route, `upstream` ready; after the gate clears, `RevisionReady=True`.
-   - `TestScenarioFailedPassPromotesDegraded` (`withPlatforms`, `digestOutage`).
+   - `TestScenarioFailedPassPromotesDegraded` (`withPlatforms`, `digestOutage`);
+     `TestScenarioFailedPassDuringPoolRebuildPromotes` (`pooledPair`, `setHoldNew(true)`, a new image on `b`,
+     `setMember`, `digestOutage`; then an empty `ImageDigest` clears the outage and the next pass keeps `b` `Ready`).
    - Guards, passing before and after: `TestScenarioUnreadyWorkerNotPromoted` (renamed from `ready_test.go:677`'s
      `TestDegradedWithListeningReplicaStaysDegraded`; adds no route, `upstream` not ready),
-     `TestScenarioReadyFunctionStaysReadyUnderGate`, `TestScenarioAsleepGateNotPromoted`,
-     `TestScenarioFailedPassDuringPoolRebuildNotPromoted` (`pooledPair`, `setHoldNew(true)`, a new image on `b`,
-     `setMember`, then `digestOutage`).
+     `TestScenarioReadyFunctionStaysReadyUnderGate`, `TestScenarioAsleepGateNotPromoted`.
 3. `pkg/funcd/issue849_internal_test.go` (new): `TestScenarioCallAnsweredWhileGateFails` on `newPooledRig(t, 0,
    2*time.Second)` (on main the call fails after 2 s); `poolHost` gains a per-member state override (new hook). The call
    runs in a goroutine and the entry turns `ready` after a gate pass wrote `Degraded` (as in
@@ -217,12 +216,12 @@ Unchanged: `listeningCount` (its caller is `failPass` for a non-`Degraded` start
       counts as today (a pooled member keeps its entry read): no new probe, no new demotion.
 - [ ] `servingReady`: one `List`, S only, `readyReplicas`' test (solo), `countWorkers` (pooled); a timed-out solo
       probe counts not ready; an unanswered pool host is an error.
-- [ ] `gateFailed` follows Decision 1's table; `failPass` promotes only from `started` `Degraded`, a pooled member
-      only while S = C, never writes `Failed`, never wakes; a promotion writes `Ready=True` with no reason.
+- [ ] `gateFailed` follows Decision 1's table; `failPass` promotes only from `started` `Degraded`, never writes
+      `Failed`, never wakes; a promotion writes `Ready=True` with no reason.
 - [ ] Every gate path and `failPass` stamp `RevisionReady.observedGeneration` (the variant tests assert it); the only
       new vocabulary is the `Degraded` message `no worker of the serving revision is ready`.
 - [ ] `programAllRoutes`, `endpoints.Upstream`, `finish` and the activator are unchanged. The eleven scenario tests
-      exist with `scenario:` comments; the seven promotion tests failed on origin/main.
+      exist with `scenario:` comments; the eight promotion tests failed on origin/main.
 
 ## Consequences
 
