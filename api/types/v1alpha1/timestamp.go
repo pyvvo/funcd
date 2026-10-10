@@ -16,8 +16,8 @@ const TimestampLayout = "2006-01-02T15:04:05.000Z07:00"
 // TimestampPattern is TimestampLayout's RE2 form: the single source for UnmarshalJSON and the OpenAPI schema.
 const TimestampPattern = `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$`
 
-// timestampForm describes TimestampPattern in words: the OpenAPI patternDescription and every decode error.
-const timestampForm = "an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)"
+// TimestampForm describes TimestampPattern in words: the OpenAPI patternDescription and every decode error.
+const TimestampForm = "an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)"
 
 var timestampRe = regexp.MustCompile(TimestampPattern)
 
@@ -40,7 +40,7 @@ func (t Timestamp) String() string {
 // MarshalJSON writes the form as a JSON string; a year outside 0000–9999 is refused.
 func (t Timestamp) MarshalJSON() ([]byte, error) {
 	if y := time.Time(t).UTC().Year(); y < 0 || y > 9999 {
-		return nil, fault.Invalidf("v1alpha1.Timestamp.MarshalJSON", "year %d is outside 0000-9999: want %s", y, timestampForm)
+		return nil, fault.Invalidf("v1alpha1.Timestamp.MarshalJSON", "year %d is outside 0000-9999: want %s", y, TimestampForm)
 	}
 	return json.Marshal(t.String())
 }
@@ -54,14 +54,14 @@ func (t *Timestamp) UnmarshalJSON(b []byte) error {
 	}
 	var s string
 	if len(b) == 0 || b[0] != '"' || json.Unmarshal(b, &s) != nil {
-		return fault.Invalidf(op, "%s is not a JSON string: want %s", b, timestampForm)
+		return fault.Invalidf(op, "%s is not a JSON string: want %s", b, TimestampForm)
 	}
 	if !timestampRe.MatchString(s) {
-		return fault.Invalidf(op, "%q is not %s", s, timestampForm)
+		return fault.Invalidf(op, "%q is not %s", s, TimestampForm)
 	}
 	v, err := time.Parse(TimestampLayout, s)
 	if err != nil {
-		return fault.Invalidf(op, "%q is not %s: %v", s, timestampForm, err)
+		return fault.Invalidf(op, "%q is not %s: %v", s, TimestampForm, err)
 	}
 	*t = Timestamp(v)
 	return nil
@@ -74,6 +74,6 @@ func (Timestamp) Schema(huma.Registry) *huma.Schema {
 		Type:               huma.TypeString,
 		Format:             "date-time",
 		Pattern:            TimestampPattern,
-		PatternDescription: timestampForm,
+		PatternDescription: TimestampForm,
 	}
 }

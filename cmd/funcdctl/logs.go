@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/spf13/cobra"
@@ -29,12 +30,16 @@ func (a *cli) logsCmd() *cobra.Command {
 			if err := checkOutput("funcdctl logs", output, "wide", "json"); err != nil {
 				return err
 			}
+			wireSince, err := sinceParam("funcdctl logs", since)
+			if err != nil {
+				return err
+			}
 			c, err := a.sdkClient()
 			if err != nil {
 				return err
 			}
 			lines, err := c.Logs(cmd.Context(), v1.NamespaceName(ns), v1.ObjectName(args[0]), sdk.LogsOptions{
-				Since: since, Severity: severity, Limit: limit,
+				Since: wireSince, Severity: severity, Limit: limit,
 			})
 			if err != nil {
 				return err
@@ -43,11 +48,26 @@ func (a *cli) logsCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVarP(&ns, "namespace", "n", "", "namespace")
-	cmd.Flags().StringVar(&since, "since", "", "only logs since (RFC3339 time or a duration like 15m)")
+	cmd.Flags().StringVar(&since, "since", "", "only logs since a duration ago (15m, 1h30m) or an RFC3339 time (2026-10-07T22:00:00Z)")
 	cmd.Flags().StringVar(&severity, "severity", "", "minimum level: trace|debug|info|warn|error|fatal")
 	cmd.Flags().IntVar(&limit, "limit", 0, "max records to return, most-recent (default 1000)")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output format: wide (append source/inv/attrs inline) | json")
 	return cmd
+}
+
+// sinceParam returns --since as the API takes it (#824): a duration in ADR-0194's grammar as typed, or any
+// RFC3339 time converted to ADR-0196's form (UTC, truncated to the millisecond); anything else is refused here.
+func sinceParam(op, since string) (string, error) {
+	if since == "" {
+		return "", nil
+	}
+	if _, err := v1.ParseDuration(since); err == nil {
+		return since, nil
+	}
+	if t, err := time.Parse(time.RFC3339, since); err == nil {
+		return v1.NewTimestamp(t).String(), nil
+	}
+	return "", fault.Invalidf(op, "since %q is not %s", since, logread.SinceForms)
 }
 
 // renderLogLines writes log lines in the funcdctl format (ADR-0084), shared by `funcdctl logs` and

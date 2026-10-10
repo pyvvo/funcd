@@ -105,12 +105,16 @@ func (a *cli) workflowLogsCmd() *cobra.Command {
 			if err := checkOutput("funcdctl workflow logs", output, "wide", "json"); err != nil {
 				return err
 			}
+			wireSince, err := sinceParam("funcdctl workflow logs", since)
+			if err != nil {
+				return err
+			}
 			c, err := a.sdkClient()
 			if err != nil {
 				return err
 			}
 			lines, err := c.RunLogs(cmd.Context(), v1.NamespaceName(nsOrDefault(ns)), v1.ObjectName(args[0]), sdk.LogsOptions{
-				Since: since, Severity: severity, Limit: limit, Step: step,
+				Since: wireSince, Severity: severity, Limit: limit, Step: step,
 			})
 			if err != nil {
 				return err
@@ -119,7 +123,7 @@ func (a *cli) workflowLogsCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVarP(&ns, "namespace", "n", "", "namespace (default: default)")
-	cmd.Flags().StringVar(&since, "since", "", "only logs since (RFC3339 time or a duration like 15m)")
+	cmd.Flags().StringVar(&since, "since", "", "only logs since a duration ago (15m, 1h30m) or an RFC3339 time (2026-10-07T22:00:00Z)")
 	cmd.Flags().StringVar(&severity, "severity", "", "minimum level: trace|debug|info|warn|error|fatal")
 	cmd.Flags().StringVar(&step, "step", "", "narrow to one step's function (the --step drill-down)")
 	cmd.Flags().IntVar(&limit, "limit", 0, "max records to return, most-recent (default 1000)")

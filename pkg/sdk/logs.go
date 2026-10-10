@@ -14,7 +14,7 @@ import (
 
 // LogsOptions are the optional filters for Client.Logs / Client.RunLogs (ADR-0084/0106).
 type LogsOptions struct {
-	Since    string // RFC3339 time or a Go duration ("15m"); "" ⇒ no lower bound
+	Since    string // logread.SinceForms: a duration ("15m") or a timestamp ("2026-10-07T22:00:00.000Z"); "" ⇒ no lower bound
 	Severity string // minimum level (trace|debug|info|warn|error|fatal); "" ⇒ all
 	Limit    int    // max records (most-recent); <= 0 ⇒ the server default
 	Step     string // RunLogs only (ADR-0106): narrow to one step's function (the --step drill-down); "" ⇒ all

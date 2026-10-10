@@ -4570,12 +4570,12 @@ paths:
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - description: RFC3339 time or a Go duration (e.g. 15m); empty ⇒ no lower bound
+        - description: a duration (15m, 1h30m, 500ms) or a UTC timestamp with exactly 3 fractional digits (2026-10-07T22:00:00.000Z); empty ⇒ no lower bound
           explode: false
           in: query
           name: since
           schema:
-            description: RFC3339 time or a Go duration (e.g. 15m); empty ⇒ no lower bound
+            description: a duration (15m, 1h30m, 500ms) or a UTC timestamp with exactly 3 fractional digits (2026-10-07T22:00:00.000Z); empty ⇒ no lower bound
             type: string
         - description: "minimum level: trace|debug|info|warn|error|fatal"
           explode: false
@@ -7093,12 +7093,12 @@ paths:
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
-        - description: RFC3339 time or a Go duration (e.g. 15m); empty ⇒ no lower bound
+        - description: a duration (15m, 1h30m, 500ms) or a UTC timestamp with exactly 3 fractional digits (2026-10-07T22:00:00.000Z); empty ⇒ no lower bound
           explode: false
           in: query
           name: since
           schema:
-            description: RFC3339 time or a Go duration (e.g. 15m); empty ⇒ no lower bound
+            description: a duration (15m, 1h30m, 500ms) or a UTC timestamp with exactly 3 fractional digits (2026-10-07T22:00:00.000Z); empty ⇒ no lower bound
             type: string
         - description: "minimum level: trace|debug|info|warn|error|fatal"
           explode: false

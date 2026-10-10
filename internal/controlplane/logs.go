@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -28,7 +29,7 @@ type LogQuerier interface {
 type logsInput struct {
 	Namespace v1.NamespaceName `path:"namespace"`
 	Name      v1.ObjectName    `path:"name"`
-	Since     string           `query:"since" doc:"RFC3339 time or a Go duration (e.g. 15m); empty ⇒ no lower bound"`
+	Since     string           `query:"since" doc:"a duration (15m, 1h30m, 500ms) or a UTC timestamp with exactly 3 fractional digits (2026-10-07T22:00:00.000Z); empty ⇒ no lower bound"`
 	Severity  string           `query:"severity" doc:"minimum level: trace|debug|info|warn|error|fatal"`
 	Limit     int              `query:"limit" doc:"max records returned, most-recent first-bounded; default 1000, capped 10000"`
 }
@@ -194,7 +195,7 @@ func resolveStepFunction(workflow v1.ObjectName, spec *v1.WorkflowSpec, step v1.
 type runLogsInput struct {
 	Namespace v1.NamespaceName `path:"namespace"`
 	Name      v1.ObjectName    `path:"name"`
-	Since     string           `query:"since" doc:"RFC3339 time or a Go duration (e.g. 15m); empty ⇒ no lower bound"`
+	Since     string           `query:"since" doc:"a duration (15m, 1h30m, 500ms) or a UTC timestamp with exactly 3 fractional digits (2026-10-07T22:00:00.000Z); empty ⇒ no lower bound"`
 	Severity  string           `query:"severity" doc:"minimum level: trace|debug|info|warn|error|fatal"`
 	Limit     int              `query:"limit" doc:"max records returned, most-recent first-bounded; default 1000, capped 10000"`
 	Step      string           `query:"step" doc:"narrow to one step's function (the --step drill-down)"`
@@ -300,16 +301,18 @@ func authorizeLogs(ctx context.Context, authz auth.Authorizer, ns v1.NamespaceNa
 	return nil
 }
 
-// parseSince accepts an RFC3339 timestamp or a Go duration ("15m" ⇒ now-15m); "" ⇒ zero (no lower bound).
+// parseSince accepts a duration in ADR-0194's grammar ("15m" ⇒ now-15m) or a timestamp in ADR-0196's form;
+// "" ⇒ zero (no lower bound). Anything else is fault.Invalid naming both forms (#824).
 func parseSince(s string) (time.Time, error) {
 	if s == "" {
 		return time.Time{}, nil
 	}
-	if t, err := time.Parse(time.RFC3339, s); err == nil {
-		return t, nil
+	if d, err := v1.ParseDuration(s); err == nil {
+		return time.Now().Add(-time.Duration(d)), nil
 	}
-	if d, err := time.ParseDuration(s); err == nil {
-		return time.Now().Add(-d), nil
+	var ts v1.Timestamp
+	if err := ts.UnmarshalJSON([]byte(strconv.Quote(s))); err == nil {
+		return time.Time(ts), nil
 	}
-	return time.Time{}, fault.Invalidf("controlplane.logs", "since %q is not an RFC3339 time or a Go duration", s)
+	return time.Time{}, fault.Invalidf("controlplane.logs", "since %q is not %s", s, logread.SinceForms)
 }
