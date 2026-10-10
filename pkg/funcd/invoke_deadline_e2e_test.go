@@ -99,8 +99,9 @@ func TestScenarioStepKeepsOwnLimit(t *testing.T) {
 		Spec: v1.WorkflowSpec{
 			Pooling: v1.WorkflowPooling{Mode: v1.PoolingShared, MinReplicas: 1},
 			Steps: []v1.WorkflowStep{
-				{Name: "brief", Function: &v1.FunctionStep{Image: pushStepImage(t, layout, src, "brief"), Timeout: v1.Duration(5 * time.Second)}},
-				{Name: "long", Function: &v1.FunctionStep{Image: pushStepImage(t, layout, src, "long"), Timeout: v1.Duration(40 * time.Second)}},
+				{Name: "start", Builtin: &v1.BuiltinStep{Pass: `${{ input }}`}},
+				{Name: "brief", Function: &v1.FunctionStep{Image: pushStepImage(t, layout, src, "brief"), Timeout: v1.Duration(5 * time.Second)}, DependsOn: []v1.ObjectName{"start"}},
+				{Name: "long", Function: &v1.FunctionStep{Image: pushStepImage(t, layout, src, "long"), Timeout: v1.Duration(40 * time.Second)}, DependsOn: []v1.ObjectName{"start"}},
 			},
 		},
 	}
