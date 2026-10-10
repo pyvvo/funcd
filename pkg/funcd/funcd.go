@@ -237,6 +237,7 @@ type config struct {
 	s3gwMaxUploadBytes int64
 	s3gwMasterFile     string // optional; empty ⇒ generate+persist under the data dir
 	s3gwDataDir        string // where the master.key is persisted when no master file is set; empty ⇒ in memory
+	masterSecret       []byte // set by WithMasterSecret: the loaded master, used instead of loading one
 
 	// catalogProxyHost is the netns-reachable host the per-CatalogService catalog PEP proxies publish
 	// (ADR-0137) — the CNI bridge gateway IP (e.g. 10.63.0.1) under containerd, so a worker in its own
@@ -644,12 +645,15 @@ func (p *Platform) buildControlPlane() error {
 	// (ADR-0137). Loaded ONCE here — before both the s3gw and the catalog wiring — so they share one
 	// master (LoadOrCreateMaster is deterministic per file/dir, but loading twice risks generating two
 	// different keys on a first run). Never logged.
-	if merr := s3gateway.MigrateMaster(c.s3gwMasterFile, c.s3gwDataDir, c.s3gwEnabled, p.logger); merr != nil {
-		return fault.Wrapf(merr, fault.KindOf(merr), op, "migrate node master secret")
-	}
-	master, merr := s3gateway.LoadOrCreateMaster(c.s3gwMasterFile, c.s3gwDataDir)
-	if merr != nil {
-		return fault.Wrapf(merr, fault.KindOf(merr), op, "load node master secret")
+	master := c.masterSecret
+	if master == nil {
+		if merr := s3gateway.MigrateMaster(c.s3gwMasterFile, c.s3gwDataDir, c.s3gwEnabled, p.logger); merr != nil {
+			return fault.Wrapf(merr, fault.KindOf(merr), op, "migrate node master secret")
+		}
+		var merr error
+		if master, merr = s3gateway.LoadOrCreateMaster(c.s3gwMasterFile, c.s3gwDataDir); merr != nil {
+			return fault.Wrapf(merr, fault.KindOf(merr), op, "load node master secret")
+		}
 	}
 
 	var s3Injection function.S3GatewayInjection

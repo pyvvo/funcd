@@ -161,6 +161,12 @@ type Config struct {
 			Weekly   int `json:"weekly,omitempty" env:"FUNCD_BACKUP_RETENTION_WEEKLY"`
 			Verified int `json:"verified,omitempty" env:"FUNCD_BACKUP_RETENTION_VERIFIED"`
 		} `json:"retention,omitempty"`
+		// Encryption seals every generation to age recipients (ADR-0204): Recipients are paths of recipients files;
+		// None is the explicit choice to store the files unsealed.
+		Encryption struct {
+			Recipients []string `json:"recipients,omitempty" env:"FUNCD_BACKUP_ENCRYPTION_RECIPIENTS" envSeparator:","`
+			None       bool     `json:"none,omitempty" env:"FUNCD_BACKUP_ENCRYPTION_NONE"`
+		} `json:"encryption,omitempty"`
 	} `json:"backup,omitempty"`
 	Auth struct {
 		Token      string   `json:"token,omitempty" env:"FUNCD_TOKEN"`

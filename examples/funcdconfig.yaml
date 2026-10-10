@@ -93,6 +93,10 @@ storage:
 #     daily: 30                   # days; 0 = no daily class. default: 30
 #     weekly: 12                  # weeks; 0 = no weekly class. default: 12
 #     verified: 2                 # days a gen/verified/ copy is kept. default: 2
+#   encryption:                   # ADR-0204; the escrow set and rotation: examples/backup-escrow.md
+#     recipients:                 # age recipients files (age1… or age1pq1…), at least 2 distinct recipients. default: none
+#       - /etc/funcd/backup-recipients.txt
+#     none: false                 # store unsealed; needs no recipients and secrets.encryptionKeyFile. default: false
 # workflow:                       # workflow engine (ADR-0094)
 #   dataDir: ""                   # run-state Badger dir. default: <dataDir>/workflow
 #   defaultStepTimeout: 300s      # per-step invocation timeout. default: 300s

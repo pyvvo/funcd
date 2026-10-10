@@ -292,6 +292,18 @@ func randomRoot() (access, secret string, err error) {
 // gateway-off node used before it (#850).
 const masterRel = "s3gateway/master.key"
 
+// MasterPath is where the node master secret lives (ADR-0204 Decision 7): masterSecretFile when set, else
+// <dataDir>/s3gateway/master.key; "" with neither (the master stays in memory).
+func MasterPath(masterSecretFile, dataDir string) string {
+	switch {
+	case masterSecretFile != "":
+		return masterSecretFile
+	case dataDir == "":
+		return ""
+	}
+	return filepath.Join(dataDir, masterRel)
+}
+
 // LoadOrCreateMaster loads the node S3 master secret from file (ADR-0085), or, when the
 // path is empty, from / generates+persists 0600 at <dataDir>/s3gateway/master.key. With
 // neither, the secret is generated in memory and never written. The secret is NEVER
@@ -337,12 +349,9 @@ func LoadOrCreateMaster(masterSecretFile, dataDir string) ([]byte, error) {
 // warning. With neither masterSecretFile nor dataDir the master stays in memory and nothing is checked.
 func MigrateMaster(masterSecretFile, dataDir string, gatewayOn bool, logger *slog.Logger) error {
 	const op = "s3gateway.MigrateMaster"
-	target := masterSecretFile
+	target := MasterPath(masterSecretFile, dataDir)
 	if target == "" {
-		if dataDir == "" {
-			return nil
-		}
-		target = filepath.Join(dataDir, masterRel)
+		return nil
 	}
 	legacy, err := filepath.Abs(masterRel)
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/netip"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -151,6 +152,18 @@ func WithMasterLocation(masterSecretFile, dataDir string) Option {
 	return func(c *config) error {
 		c.s3gwMasterFile = masterSecretFile
 		c.s3gwDataDir = dataDir
+		return nil
+	}
+}
+
+// WithMasterSecret hands the platform a node master secret the embedder already loaded (cmd/funcd loads it once at
+// start for ADR-0204's backup envelope too); it replaces WithMasterLocation's load and migration. Empty ⇒ fault.Invalid.
+func WithMasterSecret(secret []byte) Option {
+	return func(c *config) error {
+		if len(secret) == 0 {
+			return fault.Invalidf("funcd.WithMasterSecret", "the node master secret is empty")
+		}
+		c.masterSecret = slices.Clone(secret)
 		return nil
 	}
 }
