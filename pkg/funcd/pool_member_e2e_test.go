@@ -4,6 +4,8 @@ package funcd_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -242,7 +244,9 @@ func TestScenarioPooledMemberLogs(t *testing.T) {
 
 // scenario: pool-member-load-failure — of pooled a, b and c, b exports no handle: b is Failed with ShapeInvalid and
 // its load error, a and c are Ready and answer, and once the pool's manifest holds all three the pool process keeps
-// its PID across two supervision periods.
+// its PID across two supervision periods. b and c join a pool already serving a, so that manifest comes from a rebuild
+// beside a's worker (ADR-0224): the pool process is the worker holding it, a's worker draining is no restart, and the
+// manifest stays the same until the end (b's failure rebuilds nothing).
 func TestScenarioPoolMemberLoadFailure(t *testing.T) {
 	t.Parallel()
 	const supervision = time.Second
@@ -252,12 +256,22 @@ func TestScenarioPoolMemberLoadFailure(t *testing.T) {
 		h := newShimRig(t, l.python, funcd.WithPoolManifestDir(manifests),
 			funcd.WithPacing(funcd.Pacing{SupervisionPeriod: supervision}))
 		h.deploy(t, "a", l.fn(l.quiet).pooled("mixed"))
+		waitReady(t, h.c, "a")
 		h.deploy(t, "b", l.fn(l.noHandle).pooled("mixed"))
 		h.deploy(t, "c", l.fn(l.quiet).pooled("mixed"))
+		var rev string
+		require.Eventually(t, func() bool {
+			r, members, ok := poolManifest(manifests, l.runtime, "mixed")
+			rev = r
+			return ok && members["a"] && members["b"] && members["c"]
+		}, 15*time.Second, 20*time.Millisecond, "the pool's manifest holds a, b and c")
+		var pid int
+		require.Eventually(t, func() bool { pid = h.poolRevisionPID(t, l.runtime, "mixed", rev); return pid != 0 },
+			15*time.Second, 20*time.Millisecond, "the worker holding that manifest runs")
+
 		waitReady(t, h.c, "a", "c")
 		require.Eventually(t, func() bool { return h.function(t, "b").Status.Phase == v1.PhaseFailed },
 			30*time.Second, 100*time.Millisecond, "b fails alone")
-
 		b := h.function(t, "b")
 		cond := func(typ v1.ConditionType) v1.Condition {
 			c, ok := b.Status.Conditions.Get(typ)
@@ -273,13 +287,10 @@ func TestScenarioPoolMemberLoadFailure(t *testing.T) {
 		for _, n := range []string{"a", "c"} {
 			require.True(t, h.call(t, n).OK, n)
 		}
-
-		require.Eventually(t, func() bool { return manifestHolds(manifests, "a", "b", "c") },
-			15*time.Second, 100*time.Millisecond, "the pool's manifest holds a, b and c")
-		pid := h.poolPID(t, l.runtime, "mixed")
-		require.NotZero(t, pid)
-		require.True(t, poll.Never(func() bool { return h.poolPID(t, l.runtime, "mixed") != pid },
-			2*supervision+time.Second, 250*time.Millisecond), "a member's load failure never restarts the pool")
+		require.True(t, poll.Never(func() bool {
+			cur, _, ok := poolManifest(manifests, l.runtime, "mixed")
+			return !ok || cur != rev || h.poolRevisionPID(t, l.runtime, "mixed", rev) != pid
+		}, 2*supervision+time.Second, 250*time.Millisecond), "a member's load failure never restarts the pool")
 	})
 }
 
@@ -310,45 +321,46 @@ func TestIssue70_PooledRedeployToUnloadableHandlerIsShapeInvalid(t *testing.T) {
 	})
 }
 
-// manifestHolds reports whether a pool manifest in dir names every member.
-func manifestHolds(dir string, members ...string) bool {
-	files, err := os.ReadDir(dir)
+// poolManifest reads the manifest the pool of worker id worker on runtime rt boots from in dir: the revision of the
+// worker holding it, which is its signature, the first 16 bytes of its SHA-256 in hex (ADR-0190 Decision 8), and its
+// members. ok is false while no such file exists or it does not parse.
+func poolManifest(dir, rt, worker string) (rev string, members map[string]bool, ok bool) {
+	files, err := filepath.Glob(filepath.Join(dir, "default.__pool__"+rt+"__"+worker+"__*.json"))
+	if err != nil || len(files) != 1 {
+		return "", nil, false
+	}
+	data, err := os.ReadFile(files[0]) //nolint:gosec // a test temp path
 	if err != nil {
-		return false
+		return "", nil, false
 	}
-	for _, f := range files {
-		data, err := os.ReadFile(filepath.Join(dir, f.Name()))
-		if err != nil {
-			continue
-		}
-		var rows []struct {
-			Name string `json:"name"`
-		}
-		if json.Unmarshal(data, &rows) != nil {
-			continue
-		}
-		names := map[string]bool{}
-		for _, r := range rows {
-			names[r.Name] = true
-		}
-		all := true
-		for _, m := range members {
-			all = all && names[m]
-		}
-		if all {
-			return true
-		}
+	var rows []struct {
+		Name string `json:"name"`
 	}
-	return false
+	if json.Unmarshal(data, &rows) != nil {
+		return "", nil, false
+	}
+	members = map[string]bool{}
+	for _, r := range rows {
+		members[r.Name] = true
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:16]), members, true
 }
 
-// poolPID is the PID of the running pool worker of worker id worker on runtime rt, or 0.
+// poolPID is the PID of a running pool worker of worker id worker on runtime rt, or 0.
 func (h *shimRig) poolPID(t *testing.T, rt, worker string) int {
+	t.Helper()
+	return h.poolRevisionPID(t, rt, worker, "")
+}
+
+// poolRevisionPID is poolPID of the worker holding manifest revision rev ("": any).
+func (h *shimRig) poolRevisionPID(t *testing.T, rt, worker, rev string) int {
 	t.Helper()
 	insts, err := h.rt.List(context.Background(), "default")
 	require.NoError(t, err)
 	for _, in := range insts {
-		if strings.HasPrefix(string(in.Name), "__pool__"+rt+"__"+worker+"__") && in.State == runtime.StateRunning {
+		if strings.HasPrefix(string(in.Name), "__pool__"+rt+"__"+worker+"__") && in.State == runtime.StateRunning &&
+			(rev == "" || string(in.Revision) == rev) {
 			return in.PID
 		}
 	}
