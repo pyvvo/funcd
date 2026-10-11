@@ -18,11 +18,14 @@
 #             optional schema (single-file --schema), entry (bundle --entry), or site: true (a prebuilt
 #             static web app dir pushed with --site, ADR-0139).
 #   apply   — `funcdctl apply -f` order in the guest (after the pushes).
-#   ready   — the readiness gate for `limactl start`: kind + names polled until Ready (tries × 2s).
+#   ready   — the readiness gate for `limactl start`: kind + names polled until Ready (tries × 2s). Absent = no
+#             gate, for a lane whose suite deploys its resources itself.
 #   tokens  — ADR-0171 static credentials, name → token. Before funcd starts, the guest writes each to
 #             /etc/funcd/tokens/<name> (root, 0600) for the lane funcdconfig's auth.credentials; its funcdctl then
 #             applies and probes with the `developer` token. Absent = the built-in dev token.
 #   venom   — the host-side Venom suite the recipe runs once the VM is up.
+#   optional — true = `just lima-example-all` skips the lane (scripts/lane.py --venom-lanes leaves it out);
+#             `just lima-example <name>` still runs it.
 
 env-echo:
   description: A JS function receiving spec.config (ConfigMap) + spec.secrets (Secret) env (ADR-0093/0057).
@@ -395,3 +398,45 @@ egress:
       - egress-probe
     tries: 60
   venom: e2e/egress.venom.yml
+
+app-todo:
+  description: The todo App of funcd-functions, deployed from its pushed template on real containerd (ADR-0217/0218) — pinned digests, a TypeScript→Python Workflow, a cron timer in a zone with a non-hour offset, a pre-hook that migrates durable KV data and a downgrade, and a delete that keeps the retained stores on disk.
+  module: github.com/pyvvo/funcd-functions
+  dir: apps/todo
+  optional: true
+  stage:
+    - app
+    - values
+    - web
+    - grants.yaml
+    - funcdconfig.yaml
+    - functions/ts/api-1.0.0.mjs
+    - functions/ts/api-1.0.0.funcdctl.yaml
+    - functions/ts/api-1.1.0.mjs
+    - functions/ts/api-1.1.0.funcdctl.yaml
+    - functions/ts/migrate-1.0.0.mjs
+    - functions/ts/migrate-1.0.0.funcdctl.yaml
+    - functions/ts/migrate-1.1.0.mjs
+    - functions/ts/migrate-1.1.0.funcdctl.yaml
+    - functions/ts/collect.mjs
+    - functions/ts/collect.funcdctl.yaml
+    - functions/py/planner.py
+    - functions/py/planner.funcdctl.yaml
+    - functions/py/rank.py
+    - functions/py/rank.funcdctl.yaml
+    - functions/py/warm.py
+    - functions/py/warm.funcdctl.yaml
+    # Version 1.1.0 is the same resources with the app.yaml of 1.1.0.
+    - from: apps/todo/app/resources
+      module: github.com/pyvvo/funcd-functions
+      to: app-1.1.0/resources
+    - from: apps/todo/app-1.1.0.yaml
+      module: github.com/pyvvo/funcd-functions
+      to: app-1.1.0/app.yaml
+    - from: e2e/fixtures/app-todo-secret.yaml
+      to: secret.yaml
+  # The objects the App needs beside it; the Venom suite pushes, locks and deploys the App itself.
+  apply:
+    - grants.yaml
+    - secret.yaml
+  venom: e2e/app-todo.venom.yml

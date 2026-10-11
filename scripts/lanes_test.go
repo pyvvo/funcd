@@ -14,17 +14,19 @@ import (
 
 // The lane tools read scripts/lanes.yaml with PyYAML through the dev shell's python3. When the dev shell pinned a
 // Python without PyYAML, `just lima-example-all` listed no lane, ran only the metastore lane and still reported every
-// lane passed. lane.py --venom-lanes lists the lanes the registry runs under Venom, from the dev shell's interpreter.
+// lane passed. lane.py --venom-lanes lists the lanes the registry runs under Venom, from the dev shell's interpreter,
+// and leaves out an optional lane, which only `just lima-example <name>` runs.
 func TestLaneRegistryListsItsVenomLanes(t *testing.T) {
 	raw, err := os.ReadFile("lanes.yaml")
 	require.NoError(t, err)
 	var registry map[string]struct {
-		Venom string `yaml:"venom"`
+		Venom    string `yaml:"venom"`
+		Optional bool   `yaml:"optional"`
 	}
 	require.NoError(t, yaml.Unmarshal(raw, &registry))
 	var want []string
 	for name, spec := range registry {
-		if spec.Venom != "" {
+		if spec.Venom != "" && !spec.Optional {
 			want = append(want, name)
 		}
 	}
