@@ -10903,5 +10903,35 @@
     "dod_total": 12,
     "report": "docs/reviews/issue-924-fix-claude-opus-5-5.md",
     "notes": "pass; minor (model): the amended app-shared-writer-refused scenario names a kv store the todo fixture lacks; TestIssue924 fails pre-fix with Validate <nil> for both cases and passes -race; the e2e scenario fails pre-fix (App stored) and passes; mutants m1-m4 killed; ref-to-made-object and two-Sites-one-Bucket kept; ADR-0199 amended in place under the decider's waiver (not a finding); obs (unscored, new issue): Workflow.Validate accepts two spec.kv entries of one name"
+  },
+  {
+    "date": "2026-10-11",
+    "adr": "0207",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 1,
+    "dod_passed": 9,
+    "dod_total": 9,
+    "report": "docs/reviews/adr-0207-implementation-claude-opus-5-5.md",
+    "notes": "model: requireLinuxRoot dropped the --print hint for install/uninstall (minor); adr: Q13 upgrade refuses a held platform (DR decision, addendum ADR); Q3 Parent/Hold wiring is ADR-0205's carried obligation, not creep; mutants M1 Begin threshold, M2 PreUpgrade pin, M3 store re-own killed; race ok on 13 packages, lint 0 darwin+linux"
+  },
+  {
+    "date": "2026-10-11",
+    "adr": "0207",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 0,
+    "dod_passed": 9,
+    "dod_total": 9,
+    "report": "docs/reviews/adr-0207-implementation-claude-opus-5-5-2.md",
+    "notes": "round 2: e2b509fc restores the --print hint for install/uninstall via requireLinuxRoot(op, printHint), upgrade --unit unchanged, one helper; TestUnitGateHint pins it, both overlay mutants killed; adr: Q13 upgrade refuses a held platform (DR decision); race ok on 12 packages, build/vet/lint 0 darwin+linux, gofmt+hygiene clean, docs/feat+docs/reviews untouched"
   }
 ]

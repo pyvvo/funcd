@@ -18,6 +18,7 @@
     "ADR-0204",
     "ADR-0205",
     "ADR-0206",
+    "ADR-0207",
     "ADR-0210"
   ],
   "items": [
@@ -26,18 +27,6 @@
       "title": "Cron ADR (Apps epoch)",
       "features": [],
       "depends_on": []
-    },
-    {
-      "id": "ADR-0207",
-      "title": "pre-upgrade snapshot and safe mode (Accepted 2026-10-10)",
-      "features": [
-        "F109"
-      ],
-      "depends_on": [
-        "ADR-0203",
-        "ADR-0205",
-        "ADR-0206"
-      ]
     },
     {
       "id": "ADR-0208",
@@ -95,7 +84,6 @@
   ],
   "waves": {
     "1": [
-      "ADR-0207",
       "ADR-0208",
       "ADR-0209",
       "X-CRON"

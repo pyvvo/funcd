@@ -26,7 +26,6 @@ one wave ahead of the build track.
 | Plan id | Proposed ADR working title | Realizes | Build-depends on |
 |---|---|---|---|
 | X-CRON | Cron ADR of the Apps epoch (outside this plan; the `schedule` field of `BackupSchedule` needs it) | — | — |
-| ADR-0207 | Pre-upgrade snapshot and safe mode (Accepted 2026-10-10) | F109 | ADR-0203, ADR-0205, ADR-0206 |
 | ADR-0208 | Blob store backend and backup target (Accepted 2026-10-10) | F111 | ADR-0203, ADR-0204, ADR-0205, ADR-0206, ADR-0007 |
 | ADR-0209 | KV backup on the common format (Accepted 2026-10-10) | F111 | ADR-0195, ADR-0203, ADR-0204, ADR-0205, ADR-0206 |
 | ADR-0222 | Workload backup resources and catalog scope (Accepted 2026-10-10) | F111 | ADR-0203, ADR-0204, ADR-0208, ADR-0209, X-CRON |
@@ -82,17 +81,14 @@ flowchart TB
     ADR_0204["ADR-0204 ✓"]
     ADR_0205["ADR-0205 ✓"]
     ADR_0206["ADR-0206 ✓"]
+    ADR_0207["ADR-0207 ✓"]
     ADR_0210["ADR-0210 ✓"]
     X_CRON["X-CRON · —<br/>Cron ADR (Apps epoch)"]
-    ADR_0207["ADR-0207 · F109<br/>pre-upgrade snapshot and safe mode (Accepted 2026-10-10)"]
     ADR_0208["ADR-0208 · F111<br/>blob store backend and backup target (Accepted 2026-10-10)"]
     ADR_0209["ADR-0209 · F111<br/>KV backup on the common format (Accepted 2026-10-10)"]
     ADR_0222["ADR-0222 · F111<br/>workload backup resources and catalog scope (Accepted 2026-10-10)"]
     ADR_0223["ADR-0223 · F112<br/>funcdctl backup plan (Accepted 2026-10-10)"]
 
-    ADR_0203 --> ADR_0207
-    ADR_0205 --> ADR_0207
-    ADR_0206 --> ADR_0207
     ADR_0203 --> ADR_0208
     ADR_0204 --> ADR_0208
     ADR_0205 --> ADR_0208
@@ -116,8 +112,8 @@ flowchart TB
 
 | Tier | Items |
 |---|---|
-| 0 (done) | ADR-0006, ADR-0007, ADR-0018, ADR-0065, ADR-0067, ADR-0094, ADR-0118, ADR-0119, ADR-0157, ADR-0195, ADR-0196, ADR-0201, ADR-0202, ADR-0203, ADR-0204, ADR-0205, ADR-0206, ADR-0210 |
-| 1 | ADR-0207, ADR-0208, ADR-0209, X-CRON |
+| 0 (done) | ADR-0006, ADR-0007, ADR-0018, ADR-0065, ADR-0067, ADR-0094, ADR-0118, ADR-0119, ADR-0157, ADR-0195, ADR-0196, ADR-0201, ADR-0202, ADR-0203, ADR-0204, ADR-0205, ADR-0206, ADR-0207, ADR-0210 |
+| 1 | ADR-0208, ADR-0209, X-CRON |
 | 2 | ADR-0222 |
 | 3 | ADR-0223 |
 
