@@ -216,7 +216,7 @@ func TestScenarioPoolWakeKeepsSiblings(t *testing.T) {
 }
 
 // scenario: membership-rebuild — adding a function to a worker id grows the manifest and
-// restarts the pool worker exactly once (a new process); a no-op reconcile leaves it untouched.
+// rebuilds the pool worker exactly once (a new process); a no-op reconcile leaves it untouched.
 func TestScenarioPoolMembershipRebuild(t *testing.T) {
 	h := newPoolHarness(t)
 	h.applyPooled(t, "m1", "grow", v1.Scaling{MinReplicas: 1}, 1)
@@ -224,18 +224,19 @@ func TestScenarioPoolMembershipRebuild(t *testing.T) {
 		20*time.Second, 100*time.Millisecond)
 	require.Equal(t, 1, h.poolWorkers(t))
 
-	// capture the running pool worker's PID; a rebuild restarts the worker (a new PID) while
-	// reusing its stable instance id (so a member never gets a second worker).
+	// capture the running pool worker's PID; a rebuild runs a worker of the grown manifest beside it, switches to the
+	// new one once m1 is ready there and then drains the old one (ADR-0190 Decision 8, ADR-0224), so a member never
+	// keeps a second worker once the pool settles.
 	firstPID := h.poolWorkerPID(t, "grow")
 	require.NotZero(t, firstPID)
 
-	// Add a second member to the SAME worker id → the manifest grows → one restart (new PID).
+	// Add a second member to the SAME worker id → the manifest grows → one rebuild (new PID). m2 is only in the new
+	// worker's manifest, so once it is Ready and one worker runs, that worker is the new one.
 	h.applyPooled(t, "m2", "grow", v1.Scaling{MinReplicas: 1}, 1)
-	require.Eventually(t, func() bool {
-		pid := h.poolWorkerPID(t, "grow")
-		return h.phase(t, "m2") == v1.PhaseReady && pid != 0 && pid != firstPID
-	}, 20*time.Second, 100*time.Millisecond, "the manifest grew and the pool worker was rebuilt once")
-	require.Equal(t, 1, h.poolWorkers(t), "still exactly one pool worker after the rebuild")
+	require.Eventually(t, func() bool { return h.phase(t, "m2") == v1.PhaseReady && h.poolWorkers(t) == 1 },
+		20*time.Second, 100*time.Millisecond, "the manifest grew and the pool settled on one worker")
+	rebuilt := h.poolWorkerPID(t, "grow")
+	require.True(t, rebuilt != 0 && rebuilt != firstPID, "the pool worker was rebuilt once")
 
 	// Both members now serve from the rebuilt pool.
 	code, body := h.invoke(t, "m1", `{}`)
