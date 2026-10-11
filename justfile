@@ -232,7 +232,8 @@ lima-example name:
     limactl delete -f "$vm" >/dev/null 2>&1 || true
     limactl start --name "$vm" --tty=false scripts/lima-lane.yaml
     # Declarative e2e via OVH Venom (ADR-0077) — the generic VM already gated `limactl start` on the lane's
-    # `ready` target, so we invoke immediately. Run from the scratch dir with the absolute suite path.
+    # `ready` target when the lane sets one (a lane without it deploys in its suite), so we invoke immediately.
+    # Run from the scratch dir with the absolute suite path.
     # VENOM_VERBOSE=2 keeps each step's output in venom.<pid>.log even when the suite PASSES (venom
     # prints a step's `info:` line to the console only on failure/retry) — so a green run leaves a
     # transcript to cite, not just a pass/fail XML.

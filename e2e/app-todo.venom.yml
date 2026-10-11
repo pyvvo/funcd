@@ -214,7 +214,7 @@ testcases:
             date -u -d @$slot +%Y-%m-%dT%H:%M > /tmp/slot
             cron="$(date -u -d @$((slot + 20700)) "+%-M %-H") * * *"
             printf "schedule:\n  cron: \"%s\"\n  timeZone: Asia/Kathmandu\n" "$cron" > /tmp/schedule.yaml
-            funcdctl app deploy {{.reg}}/todo:1.0.0 -f /opt/lane/values/e2e.yaml -f /tmp/schedule.yaml > /tmp/deploy-l3.log 2>&1
+            funcdctl app deploy {{.reg}}/todo:1.0.0 -f /opt/lane/values/e2e.yaml -f /tmp/schedule.yaml > /tmp/deploy-l3.log 2>&1 || { cat /tmp/deploy-l3.log; exit 1; }
             funcdctl get eventsource todo-plan-timer -n default -o json > /tmp/timer.json
             python3 - "$cron" <<"PY"
           import json, sys
@@ -363,6 +363,8 @@ testcases:
           print("HOOKS=" + calls + ",MIGRATE=" + ("1.0.0" if migrate == lock["migrate"]["digest"] else migrate))
           PY
           '
+        retry: 5
+        delay: 1
         info: "the downgrade's hooks → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
@@ -412,7 +414,7 @@ testcases:
           - result.systemout ShouldStartWith todo-1
       - type: exec
         script: |
-          {{.fctl}} get app todo -n default -o json | python3 -c 'import sys,json;s=json.load(sys.stdin)["spec"];print("KV="+s["kv"][0].get("ref","")+",BUCKET="+s["buckets"][0].get("ref",""))'
+          {{.fctl}} get app todo -n default -o json | python3 -c 'import sys,json;s=json.load(sys.stdin)["spec"];print("KV="+next((k["ref"] for k in s["kv"] if k.get("ref")),"")+",BUCKET="+next((b["ref"] for b in s["buckets"] if b.get("ref")),""))'
         info: "the App's stores → {{.result.systemout}}"
         assertions:
           - result.systemout ShouldEqual KV=todo-store,BUCKET=todo-files

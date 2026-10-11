@@ -22,7 +22,8 @@ just lima-example-X  ──►  build artifacts + bundle  ──►  limactl sta
 
 - **Venom runs HOST-SIDE.** Its `http` steps hit the VM's **forwarded `127.0.0.1` ports** (Lima auto-forwards
   guest `127.0.0.1` → host): data plane `:8081`, control plane `:8080`.
-- **The VM is already deployed + Ready** before Venom runs (the lane's `probes:` gate `limactl start`).
+- **The VM is already deployed + Ready** before Venom runs (the lane's `ready` gates `limactl start`); a lane
+  without `ready` deploys its resources in its own suite.
 - Venom is the **flake-pinned `venom` binary** (ADR-0077 — `buildGoModule`, v1.3.0; not in nixpkgs); the dev
   shell puts it on `PATH`. Invoke **`venom`**, never `go run …@version`.
 

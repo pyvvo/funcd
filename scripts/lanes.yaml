@@ -13,7 +13,7 @@
 #             .modcopy/lane/<module>, so the example's relative references still resolve.
 #   build   — host shell commands (run in the lane's dir, in order) that produce the artifacts to push.
 #   stage   — files/dirs (relative to dir) copied into the VM's /opt/lane (the manifests + built artifacts);
-#             or {from, module, to}: a file from funcd's root (or from `module`'s root) to a tgz path.
+#             or {from, module, to}: a file or a directory from funcd's root (or from `module`'s root) to a tgz path.
 #   push    — OCI pushes done in the guest: artifact + ref (→ oci-layout:///mnt/funcd-deps/registry:<ref>);
 #             optional schema (single-file --schema), entry (bundle --entry), or site: true (a prebuilt
 #             static web app dir pushed with --site, ADR-0139).
