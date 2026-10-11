@@ -120,6 +120,7 @@ type base struct {
 	mu      sync.Mutex
 	active  map[v1.ObjectRef]bool // the Backups and Restores this process runs
 	risk    map[v1.ObjectRef]bool // each schedule's rpoRisk as last seen
+	warned  map[v1.ObjectRef]bool // the schedules whose SameProvider Warn this process logged
 	running sync.WaitGroup
 }
 
@@ -144,7 +145,8 @@ func New(d Deps) (*Reconcilers, error) {
 	if log == nil {
 		log = slog.Default()
 	}
-	b := &base{d: d, log: log.With("component", "backup.workload"), active: map[v1.ObjectRef]bool{}, risk: map[v1.ObjectRef]bool{}}
+	b := &base{d: d, log: log.With("component", "backup.workload"), active: map[v1.ObjectRef]bool{}, risk: map[v1.ObjectRef]bool{},
+		warned: map[v1.ObjectRef]bool{}}
 	var err error
 	if b.runs, err = d.Meter.Int64Counter("funcd.backup.runs"); err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "register funcd.backup.runs")

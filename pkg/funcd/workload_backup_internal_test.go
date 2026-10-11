@@ -496,7 +496,7 @@ func TestScenarioAPICreatesBackup(t *testing.T) {
 
 // scenario: target-in-store-refused — with blob.target s3://store, a schedule naming s3://store?prefix=b/ is refused
 // with 400 naming spec.target.url; another bucket on that endpoint is stored, Ready with reason SameProvider, and one
-// Warn names it.
+// Warn names it in each process, a restarted one included, and again once its target leaves that provider and returns.
 func TestScenarioTargetInStoreRefused(t *testing.T) {
 	t.Parallel()
 	const endpoint = "&region=us-east-1&endpoint=https://s3.example.com"
@@ -514,6 +514,20 @@ func TestScenarioTargetInStoreRefused(t *testing.T) {
 	require.Eventually(t, func() bool { return warns() == 1 }, 10*time.Second, 10*time.Millisecond, "%s", r.logs.String())
 	r.still(func() bool { return warns() == 1 }, "one Warn")
 	require.Regexp(t, `level=WARN msg="`+warn+`[^\n]*schedule=beside`, r.logs.String())
+	r.restart()
+	require.Eventually(t, func() bool { return warns() == 2 }, 10*time.Second, 10*time.Millisecond, "%s", r.logs.String())
+	r.still(func() bool { return warns() == 2 }, "one Warn after the restart")
+	retarget := func(url, want string) {
+		s := r.getSchedule("beside")
+		s.Spec.Target.URL, s.ResourceVersion = url, ""
+		_, err := r.dev.Apply(r.ctx, s)
+		require.NoError(t, err)
+		require.Eventually(t, func() bool { return reason(r.getSchedule("beside").Status.Status) == want },
+			10*time.Second, 10*time.Millisecond)
+	}
+	retarget("s3://backups?region=us-east-1&endpoint=https://elsewhere.example.com", "")
+	retarget("s3://backups?"+endpoint[1:], "SameProvider")
+	require.Eventually(t, func() bool { return warns() == 3 }, 10*time.Second, 10*time.Millisecond, "%s", r.logs.String())
 }
 
 // scenario: run-interrupted — a Backup Running when funcd is killed is Failed (Interrupted) at the start.
