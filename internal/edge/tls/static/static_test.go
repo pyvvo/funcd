@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"golang.org/x/net/http2"
 
 	"github.com/pyvvo/funcd/internal/edge/tls/static"
 )
@@ -138,7 +137,10 @@ func TestScenarioALPNNegotiatesH2(t *testing.T) {
 	srv.StartTLS()
 	t.Cleanup(srv.Close)
 	client := clientTrusting(t, cfg, "h2.local")
-	require.NoError(t, http2.ConfigureTransport(client.Transport.(*http.Transport)))
+	var protos http.Protocols
+	protos.SetHTTP1(true)
+	protos.SetHTTP2(true)
+	client.Transport.(*http.Transport).Protocols = &protos
 	resp, err := client.Get(srv.URL)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
