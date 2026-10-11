@@ -15,6 +15,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/blob"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 	"github.com/pyvvo/funcd/pkg/funcd"
 )
 
@@ -95,7 +96,7 @@ func TestScenarioAppStoreDeletionFlip(t *testing.T) {
 	e.del(t, v1.KindApp, "todo")
 	e.waitGone(t, v1.KindFunction, "todo-api")
 	e.waitGone(t, v1.KindBucket, "todo-tmp")
-	require.Never(t, func() bool { return !e.exists(t, v1.KindKVStore, "todo-cache") }, time.Second, 50*time.Millisecond, "todo-cache stays")
+	require.True(t, poll.Never(func() bool { return !e.exists(t, v1.KindKVStore, "todo-cache") }, time.Second, 50*time.Millisecond), "todo-cache stays")
 	require.True(t, onlyMarked(e.object(t, v1.KindKVStore, "todo-cache"), live))
 	require.True(t, e.hasAppKey(t, cacheKey), "todo-cache keeps its keys")
 }
@@ -114,7 +115,7 @@ func TestScenarioAppPruneDroppedPart(t *testing.T) {
 	got := e.waitApp(t, "todo", v1.ConditionTrue, "", appWithin)
 	require.Len(t, got.Status.Children, len(todoParts())-2, "no part is left Pruning")
 	require.Eventually(t, func() bool { return e.routed(t, todoHost, "/api") == http.StatusNotFound }, gcWithin, 20*time.Millisecond, "nothing routes /api")
-	require.Never(t, func() bool { return !e.exists(t, v1.KindKVStore, "todo-store") }, time.Second, 50*time.Millisecond, "todo-store stays")
+	require.True(t, poll.Never(func() bool { return !e.exists(t, v1.KindKVStore, "todo-store") }, time.Second, 50*time.Millisecond), "todo-store stays")
 	require.True(t, onlyMarked(e.object(t, v1.KindKVStore, "todo-store"), live), "todo-store keeps its marker")
 	require.True(t, e.hasAppKey(t, storeKey), "todo-store keeps its data")
 }
@@ -167,7 +168,7 @@ func TestScenarioAppStoreInUseKept(t *testing.T) {
 	e.del(t, v1.KindApp, "todo")
 	e.waitGone(t, v1.KindFunction, "todo-api")
 	e.waitGone(t, v1.KindBucket, "todo-tmp")
-	require.Never(t, func() bool { return !e.exists(t, v1.KindKVStore, "todo-cache") }, 3*time.Second, 50*time.Millisecond, "todo-cache waits while Function/audit binds it")
+	require.True(t, poll.Never(func() bool { return !e.exists(t, v1.KindKVStore, "todo-cache") }, 3*time.Second, 50*time.Millisecond), "todo-cache waits while Function/audit binds it")
 	require.True(t, e.hasAppKey(t, cacheKey))
 
 	audit.Spec.KV = nil

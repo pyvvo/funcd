@@ -20,6 +20,7 @@ import (
 	"github.com/pyvvo/funcd/internal/runtime/process"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 	"github.com/pyvvo/funcd/pkg/funcd"
 )
 
@@ -276,7 +277,7 @@ func TestScenarioAppHistoryKept(t *testing.T) {
 	out, err := funcdctl(t, e)("app", "rollback", "todo", "1")
 	require.Error(t, err, out)
 	require.Contains(t, out, "todo-1")
-	require.Never(t, func() bool { return e.exists(t, v1.KindAppRevision, "todo-7") }, time.Second, 50*time.Millisecond,
+	require.True(t, poll.Never(func() bool { return e.exists(t, v1.KindAppRevision, "todo-7") }, time.Second, 50*time.Millisecond),
 		"no AppRevision is stamped")
 	require.Equal(t, before, e.app(t, "todo").ResourceVersion, "the App is not written")
 	require.Equal(t, kept, names())

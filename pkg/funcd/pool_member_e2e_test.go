@@ -23,6 +23,7 @@ import (
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
 	"github.com/pyvvo/funcd/internal/funclog/logread"
 	"github.com/pyvvo/funcd/internal/runtime"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 	"github.com/pyvvo/funcd/pkg/funcd"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
@@ -277,8 +278,8 @@ func TestScenarioPoolMemberLoadFailure(t *testing.T) {
 			15*time.Second, 100*time.Millisecond, "the pool's manifest holds a, b and c")
 		pid := h.poolPID(t, l.runtime, "mixed")
 		require.NotZero(t, pid)
-		require.Never(t, func() bool { return h.poolPID(t, l.runtime, "mixed") != pid },
-			2*supervision+time.Second, 250*time.Millisecond, "a member's load failure never restarts the pool")
+		require.True(t, poll.Never(func() bool { return h.poolPID(t, l.runtime, "mixed") != pid },
+			2*supervision+time.Second, 250*time.Millisecond), "a member's load failure never restarts the pool")
 	})
 }
 

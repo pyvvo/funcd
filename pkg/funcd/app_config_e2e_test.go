@@ -18,6 +18,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 	"github.com/pyvvo/funcd/pkg/funcd"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
@@ -93,13 +94,10 @@ func (e *gcEnv) generations(t *testing.T, parts []todoPart) map[todoPart]int64 {
 	return out
 }
 
-// stays requires cond every tick for d. It checks in the test's goroutine: require.Never runs each check in a
-// goroutine it does not wait for, so a check still reading through e.ctx when the test ends fails on its cancel.
+// stays requires cond every tick for d, checked in the test's goroutine (poll.Never, #950).
 func stays(t *testing.T, cond func() bool, d, tick time.Duration, msg string) {
 	t.Helper()
-	for end := time.Now().Add(d); time.Now().Before(end); time.Sleep(tick) {
-		require.True(t, cond(), msg)
-	}
+	require.True(t, poll.Never(func() bool { return !cond() }, d, tick), msg)
 }
 
 // anyPartExists reports whether any of the fixture's parts, or its ConfigMap, is stored.
@@ -157,7 +155,7 @@ func TestScenarioAppSecretDeclared(t *testing.T) {
 		a := configTodo(t, e)
 		e.apply(t, a)
 		e.waitApp(t, "todo", v1.ConditionFalse, "SecretNotFound", appWithin)
-		require.Never(t, func() bool { return e.anyPartExists(t) }, 3*secretPeriod, 50*time.Millisecond, "no part is written")
+		require.True(t, poll.Never(func() bool { return e.anyPartExists(t) }, 3*secretPeriod, 50*time.Millisecond), "no part is written")
 
 		e.stripeKey(t, map[string]string{"STRIPE_API_KEY": "sk-test-1"})
 		e.waitCurrent(t, "todo-1")
@@ -165,7 +163,7 @@ func TestScenarioAppSecretDeclared(t *testing.T) {
 		parts := append(todoParts(), todoPart{v1.KindConfigMap, settingsName("Europe/Paris")})
 		before := e.settled(t, parts)
 		e.stripeKey(t, map[string]string{"STRIPE_API_KEY": "sk-test-2"})
-		require.Never(t, func() bool { return !maps.Equal(before, e.versions(t, parts)) }, 5*secretPeriod, 50*time.Millisecond,
+		require.True(t, poll.Never(func() bool { return !maps.Equal(before, e.versions(t, parts)) }, 5*secretPeriod, 50*time.Millisecond),
 			"a value changed outside the App writes no object")
 		a.Spec.Functions[0].Image = e.imageEnv(t, "env-restart")
 		e.apply(t, a)
@@ -359,6 +357,6 @@ func TestScenarioAppPreF116App(t *testing.T) {
 	out, err := funcdctl(t, e)("app", "rollback", "todo", "1")
 	require.Error(t, err, out)
 	require.Contains(t, out, "todo-billing")
-	require.Never(t, func() bool { return e.exists(t, v1.KindAppRevision, "todo-3") }, time.Second, 50*time.Millisecond,
+	require.True(t, poll.Never(func() bool { return e.exists(t, v1.KindAppRevision, "todo-3") }, time.Second, 50*time.Millisecond),
 		"the refused rollback stamps nothing")
 }

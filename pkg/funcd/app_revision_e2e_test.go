@@ -22,6 +22,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 	"github.com/pyvvo/funcd/pkg/funcd"
 )
 
@@ -141,7 +142,7 @@ func TestScenarioAppReapplySameSpec(t *testing.T) {
 	// The store drops an unchanged write (ADR-0047), so no pass may follow it; a tag alone makes one over the same spec.
 	a.Tags = v1.Tags{"reapplied": "true"}
 	e.apply(t, a)
-	require.Never(t, func() bool { return e.exists(t, v1.KindAppRevision, "todo-2") }, 2*time.Second, 50*time.Millisecond,
+	require.True(t, poll.Never(func() bool { return e.exists(t, v1.KindAppRevision, "todo-2") }, 2*time.Second, 50*time.Millisecond),
 		"no AppRevision is stamped")
 	require.Empty(t, revs.events(t), "no AppRevision is written")
 	require.Equal(t, before, e.versions(t, parts), "no part is written")

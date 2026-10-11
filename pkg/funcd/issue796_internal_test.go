@@ -12,12 +12,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/runtime"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 )
 
 // poolHost is a recording runtime whose workers all listen on one fake pool host: its /health/members lists every
@@ -335,7 +335,7 @@ func TestScenarioPooledDependencyReturnsBesideSibling(t *testing.T) {
 	r.applyCatalog(t)
 	r.requireIdleAsleepCleared(t)
 	rv := r.fn(t).ResourceVersion
-	held := assert.Never(t, func() bool { return r.fn(t).ResourceVersion != rv }, 3*time.Second, 20*time.Millisecond)
+	held := poll.Never(func() bool { return r.fn(t).ResourceVersion != rv }, 3*time.Second, 20*time.Millisecond)
 	require.True(t, held, "reader's resourceVersion holds; writes %v", writes())
 	require.NotContains(t, writes(), v1.PhaseReady, "reader is never Ready without a call")
 	require.Equal(t, v1.PhaseReady, r.get(t, "writer").Status.Phase, "writer stays Ready")
@@ -363,7 +363,7 @@ func TestScenarioPoolFull(t *testing.T) {
 		fn := r.get(t, "zulu")
 		_, hasAsleep := fn.Status.Conditions.Get("Asleep")
 		require.False(t, hasAsleep, "zulu carries no Asleep condition")
-		held := assert.Never(t, func() bool { return r.get(t, "zulu").ResourceVersion != fn.ResourceVersion }, time.Second, 20*time.Millisecond)
+		held := poll.Never(func() bool { return r.get(t, "zulu").ResourceVersion != fn.ResourceVersion }, time.Second, 20*time.Millisecond)
 		require.True(t, held, "zulu stays quiet")
 		require.Equal(t, wrv, r.get(t, "writer").ResourceVersion, "writer is untouched")
 		require.Equal(t, 1, r.host.poolsRunning(), "the pool worker keeps running")
@@ -390,7 +390,7 @@ func TestScenarioPoolFull(t *testing.T) {
 				condition(fn, "Asleep").Status == v1.ConditionTrue
 		}, 5*time.Second, 10*time.Millisecond, "reader is Pending/PoolFull with Asleep=True; writes %v", writes())
 		rv := r.fn(t).ResourceVersion
-		held := assert.Never(t, func() bool { return r.fn(t).ResourceVersion != rv }, time.Second, 20*time.Millisecond)
+		held := poll.Never(func() bool { return r.fn(t).ResourceVersion != rv }, time.Second, 20*time.Millisecond)
 		require.True(t, held, "reader stays quiet; writes %v", writes())
 		got := writes()
 		i := indexOf(got, v1.PhasePending)

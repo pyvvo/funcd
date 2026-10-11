@@ -24,6 +24,7 @@ import (
 	"github.com/pyvvo/funcd/internal/store"
 	bstore "github.com/pyvvo/funcd/internal/store/badger"
 	"github.com/pyvvo/funcd/internal/testkit/langmod"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 	"github.com/pyvvo/funcd/pkg/funcd"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
@@ -212,7 +213,7 @@ func TestScenarioWorkflowDeleteKeepsRetainStore(t *testing.T) {
 	e.putKey(t, "gcwf-keep")
 	e.del(t, v1.KindWorkflow, "gcwf")
 	e.waitGone(t, v1.KindFunction, "gcwf-s1")
-	require.Never(t, func() bool { return !e.exists(t, v1.KindKVStore, "gcwf-keep") || !e.hasKey(t, "gcwf-keep") }, time.Second, 50*time.Millisecond)
+	require.True(t, poll.Never(func() bool { return !e.exists(t, v1.KindKVStore, "gcwf-keep") || !e.hasKey(t, "gcwf-keep") }, time.Second, 50*time.Millisecond))
 	obj, err := e.c.Get(e.ctx, v1.KindKVStore, "default", "gcwf-keep")
 	require.NoError(t, err)
 	require.Equal(t, v1.ObjectName("gcwf-s1"), obj.(*v1.KVStore).Spec.Tables[0].Owner, "its table owner is a Function that no longer exists")
@@ -236,7 +237,7 @@ func TestScenarioRemovedKvStoreKeptUntilWorkflowDelete(t *testing.T) {
 	e.waitExists(t, v1.KindKVStore, "gcwf-extra")
 	e.putKey(t, "gcwf-extra")
 	e.workflow(t, "gcwf", "rg1", []string{"s1"}, kvStore("gcwf-state", v1.DeletionDelete))
-	require.Never(t, func() bool { return !e.exists(t, v1.KindKVStore, "gcwf-extra") || !e.hasKey(t, "gcwf-extra") }, time.Second, 50*time.Millisecond)
+	require.True(t, poll.Never(func() bool { return !e.exists(t, v1.KindKVStore, "gcwf-extra") || !e.hasKey(t, "gcwf-extra") }, time.Second, 50*time.Millisecond))
 	e.del(t, v1.KindWorkflow, "gcwf")
 	e.waitGone(t, v1.KindKVStore, "gcwf-extra", "gcwf-state")
 }
@@ -262,9 +263,9 @@ func TestScenarioWorkflowRefusesAnothersChildOrUsersFunction(t *testing.T) {
 	for _, n := range []string{"b", "a-b", "u"} {
 		e.del(t, v1.KindWorkflow, n)
 	}
-	require.Never(t, func() bool {
+	require.True(t, poll.Never(func() bool {
 		return !e.exists(t, v1.KindFunction, "a-b-c") || !e.exists(t, v1.KindFunction, "u-s") || !e.exists(t, v1.KindKVStore, "shared") || !e.hasKey(t, "shared")
-	}, 2*time.Second, 50*time.Millisecond)
+	}, 2*time.Second, 50*time.Millisecond))
 }
 
 // scenario: identity-delete-collects-secret

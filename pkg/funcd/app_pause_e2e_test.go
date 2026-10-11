@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 	"github.com/pyvvo/funcd/pkg/funcd"
 )
 
@@ -225,7 +226,7 @@ func TestScenarioAppPausedKeepsHotfix(t *testing.T) {
 	require.Equal(t, "spec.paused is set: the App writes no part until it is resumed", c.Message)
 	hotfix := e.imageV2(t)
 	e.handEdit(t, hotfix)
-	require.Never(t, func() bool { return e.apiImage(t) != hotfix }, healWithin, 50*time.Millisecond, "the edit stays")
+	require.True(t, poll.Never(func() bool { return e.apiImage(t) != hotfix }, healWithin, 50*time.Millisecond), "the edit stays")
 	got := e.app(t, "todo")
 	require.Equal(t, v1.PhaseReady, got.Status.Phase, "the App keeps its phase")
 	require.Nil(t, got.Status.LastSelfHeal)
@@ -288,7 +289,7 @@ func TestScenarioAppPausedDefersUpgrade(t *testing.T) {
 	a.Spec.Version = "2.0.0"
 	a.Spec.Functions[0].Image = e.imageV2(t)
 	e.apply(t, a)
-	require.Never(t, func() bool { return e.exists(t, v1.KindAppRevision, "todo-2") }, 2*time.Second, 50*time.Millisecond,
+	require.True(t, poll.Never(func() bool { return e.exists(t, v1.KindAppRevision, "todo-2") }, 2*time.Second, 50*time.Millisecond),
 		"nothing is stamped")
 	require.Equal(t, declared, e.apiImage(t), "todo-api keeps its image")
 	e.waitPaused(t, v1.ConditionTrue, "SpecPaused")
@@ -348,8 +349,8 @@ func TestScenarioAppPausedRolloutFullTimeout(t *testing.T) {
 	require.NoError(t, err, out)
 	e.waitPaused(t, v1.ConditionTrue, "SpecPaused")
 
-	require.Never(t, func() bool { return e.appRevision(t, "todo-2").Status.Phase != v1.PhaseDeploying },
-		time.Until(time.Time(*stamped).Add(timeout+time.Second)), 50*time.Millisecond,
+	require.True(t, poll.Never(func() bool { return e.appRevision(t, "todo-2").Status.Phase != v1.PhaseDeploying },
+		time.Until(time.Time(*stamped).Add(timeout+time.Second)), 50*time.Millisecond),
 		"todo-2 stays Deploying while paused, past its stamp's deadline")
 	out, err = cli("app", "resume", "todo")
 	require.NoError(t, err, out)

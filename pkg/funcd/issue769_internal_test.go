@@ -21,6 +21,7 @@ import (
 	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
@@ -221,7 +222,7 @@ func (r *asleepRig) requireAsleep(t *testing.T, start time.Time, writes func() [
 	}, 3*time.Second, 10*time.Millisecond)
 	require.True(t, reached, "reader goes %s/%s with Asleep=True; running %d, writes %v", phase, reason, r.running(), writes())
 	rv := r.fn(t).ResourceVersion
-	held := assert.Never(t, func() bool { return r.fn(t).ResourceVersion != rv }, time.Until(start.Add(3*time.Second)), 20*time.Millisecond)
+	held := poll.Never(func() bool { return r.fn(t).ResourceVersion != rv }, time.Until(start.Add(3*time.Second)), 20*time.Millisecond)
 	require.True(t, held, "reader's resourceVersion holds; writes %v", writes())
 	require.Zero(t, r.running(), "no worker runs")
 	require.NotContains(t, writes(), v1.PhaseDegraded, "reader is never Degraded")
@@ -369,7 +370,7 @@ func TestScenarioMinReplicasOneUnaffected(t *testing.T) {
 		rr := condition(r.fn(t), "RevisionReady")
 		return rr.Status == v1.ConditionFalse && rr.Reason == "CatalogNotReady"
 	}, 3*time.Second, 10*time.Millisecond, "reader shows CatalogNotReady")
-	stayed := assert.Never(t, func() bool { return r.fn(t).Status.Phase != v1.PhaseReady || r.running() != 1 }, 3*time.Second, 20*time.Millisecond)
+	stayed := poll.Never(func() bool { return r.fn(t).Status.Phase != v1.PhaseReady || r.running() != 1 }, 3*time.Second, 20*time.Millisecond)
 	require.True(t, stayed, "reader stays Ready with its worker listening; writes %v", writes())
 	fn := r.fn(t)
 	require.Equal(t, v1.PhaseReady, fn.Status.Phase)

@@ -23,6 +23,7 @@ import (
 	"github.com/pyvvo/funcd/internal/runtime/process"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 	"github.com/pyvvo/funcd/internal/workernode/local"
 	"github.com/pyvvo/funcd/pkg/funcd"
 )
@@ -261,7 +262,7 @@ func TestScenarioHealthPoolMemberDependency(t *testing.T) {
 
 		pid := h.settledPoolPID(t, l.runtime, "deps")
 		require.NotZero(t, pid)
-		require.Never(t, func() bool { return h.poolPID(t, l.runtime, "deps") != pid },
-			3*time.Second, 250*time.Millisecond, "a member's failed check never restarts the pool")
+		require.True(t, poll.Never(func() bool { return h.poolPID(t, l.runtime, "deps") != pid },
+			3*time.Second, 250*time.Millisecond), "a member's failed check never restarts the pool")
 	})
 }

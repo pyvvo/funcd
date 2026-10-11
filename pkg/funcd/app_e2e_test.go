@@ -14,6 +14,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 	"github.com/pyvvo/funcd/pkg/funcd"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
@@ -180,14 +181,14 @@ func TestScenarioAppChildNotOwned(t *testing.T) {
 	e.apply(t, todoApp(t, e))
 	a := e.waitApp(t, "todo", v1.ConditionFalse, "ChildNotOwned", appWithin)
 	require.Contains(t, readyCondition(a).Message, "Function/todo-api")
-	require.Never(t, func() bool {
+	require.True(t, poll.Never(func() bool {
 		for _, p := range todoParts() {
 			if p != (todoPart{v1.KindFunction, "todo-api"}) && e.exists(t, p.kind, p.name) {
 				return true
 			}
 		}
 		return false
-	}, time.Second, 50*time.Millisecond, "the App writes no part")
+	}, time.Second, 50*time.Millisecond), "the App writes no part")
 	after := e.object(t, v1.KindFunction, "todo-api").GetObjectMeta()
 	require.Empty(t, after.OwnerReferences, "the App does not take Function/todo-api")
 	require.Equal(t, before.Generation, after.Generation, "the App does not write Function/todo-api")
@@ -231,7 +232,7 @@ func TestScenarioAppRefWaits(t *testing.T) {
 
 	e.del(t, v1.KindApp, "todo")
 	e.waitGone(t, v1.KindFunction, "todo-api")
-	require.Never(t, func() bool { return !e.exists(t, v1.KindFunction, "mailer") }, time.Second, 50*time.Millisecond)
+	require.True(t, poll.Never(func() bool { return !e.exists(t, v1.KindFunction, "mailer") }, time.Second, 50*time.Millisecond))
 	after := e.object(t, v1.KindFunction, "mailer").(*v1.Function)
 	require.Empty(t, after.OwnerReferences)
 	require.Equal(t, before.Generation, after.Generation)

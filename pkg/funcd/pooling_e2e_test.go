@@ -24,6 +24,7 @@ import (
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
 	"github.com/pyvvo/funcd/internal/testkit/langmod"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 	"github.com/pyvvo/funcd/pkg/funcd"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
@@ -248,10 +249,10 @@ func TestScenarioPoolMembershipRebuild(t *testing.T) {
 	stablePID := h.poolWorkerPID(t, "grow")
 	require.NotZero(t, stablePID)
 	h.applyPooled(t, "m2", "grow", v1.Scaling{MinReplicas: 1}, 1)
-	require.Never(t, func() bool {
+	require.True(t, poll.Never(func() bool {
 		pid := h.poolWorkerPID(t, "grow")
 		return pid != 0 && pid != stablePID
-	}, 3*time.Second, 250*time.Millisecond, "an unchanged manifest does not restart the pool worker")
+	}, 3*time.Second, 250*time.Millisecond), "an unchanged manifest does not restart the pool worker")
 }
 
 // scenario: pool-cap-guard — with the cap at 2, a third function naming one worker id is held

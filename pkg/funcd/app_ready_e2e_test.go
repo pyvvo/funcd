@@ -18,6 +18,7 @@ import (
 	"github.com/pyvvo/funcd/internal/runtime/process"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 	"github.com/pyvvo/funcd/pkg/funcd"
 )
 
@@ -68,11 +69,11 @@ func TestScenarioAppIdleFunctionStaysCurrent(t *testing.T) {
 
 	w := watchKind(t, st, v1.KindApp)
 	e.waitPhase(t, "todo-api", v1.PhaseIdle)
-	require.Never(t, func() bool { return readyCondition(e.app(t, "todo")).Status != v1.ConditionTrue }, time.Second, 20*time.Millisecond,
+	require.True(t, poll.Never(func() bool { return readyCondition(e.app(t, "todo")).Status != v1.ConditionTrue }, time.Second, 20*time.Millisecond),
 		"the App stays Ready while todo-api is scaled to zero")
 	require.Equal(t, http.StatusOK, e.routed(t, todoHost, "/api"), "a call wakes todo-api")
 	e.waitPhase(t, "todo-api", v1.PhaseReady)
-	require.Never(t, func() bool { return readyCondition(e.app(t, "todo")).Status != v1.ConditionTrue }, time.Second, 20*time.Millisecond,
+	require.True(t, poll.Never(func() bool { return readyCondition(e.app(t, "todo")).Status != v1.ConditionTrue }, time.Second, 20*time.Millisecond),
 		"the App stays Ready once todo-api serves again")
 
 	for i, wr := range appWrites(w.events(t)) {
