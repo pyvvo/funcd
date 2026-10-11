@@ -1,6 +1,7 @@
 # ADR-0210: API optimistic concurrency — replace and delete honor the client's resourceVersion
 
 - **Status**: Implemented (2026-10-10; the implementation review passed on its second round, docs/reviews/adr-0210-implementation-claude-opus-5-5-2.md; accepted 2026-10-10 by an `adr-batch` run after a clean `adr-judge` gate; the defaults below were not confirmed one by one)
+- **Superseded in part by**: [ADR-0227](0227-disaster-recovery-implementation-addenda.md) (2026-10-11; lines at 74f8e604) — "at most 5 attempts" (129), by Decision 7.2; the optional `If-Match` on "every PUT and DELETE" (135, 147, 180, 215, 240), by Decision 7.1.
 - **Date**: 2026-10-08
 - **Deciders**: green-0-rabbit
 - **Tags**: api, control-plane, resource-version, optimistic-concurrency, sdk, funcdctl, openapi, disaster-recovery

@@ -2,6 +2,7 @@
 
 - **Status**: Implemented (2026-10-10; accepted 2026-10-10 by an `adr-batch` run after a clean `adr-judge` gate; the defaults below were not confirmed one by one)
 - **Superseded in part by**: [ADR-0212](0212-app-self-heal-and-pause.md) (2026-10-10) — the App row of Decision 6: the deadline also counts from `resumedAt` and the last `preApply` `endTime`.
+- **Superseded in part by**: [ADR-0227](0227-disaster-recovery-implementation-addenda.md) (2026-10-11; lines at 74f8e604) — Decision 6's "`restore run` and ADR-0207 write it" (130), by Decision 3.2.
 - **Date**: 2026-10-08
 - **Deciders**: green-0-rabbit
 - **Tags**: disaster-recovery, restore, hold, workflow, eventing, backup

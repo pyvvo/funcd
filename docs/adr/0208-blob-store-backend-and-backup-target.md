@@ -1,6 +1,7 @@
 # ADR-0208: Blob store backend and backup target
 
 - **Status**: Implemented (2026-10-11; the implementation review passed on its first round, docs/reviews/adr-0208-implementation-claude-opus-5-5.md; accepted 2026-10-10 by an `adr-batch` run after a clean `adr-judge` gate; the defaults below were not confirmed one by one)
+- **Superseded in part by**: [ADR-0227](0227-disaster-recovery-implementation-addenda.md) (2026-10-11; lines at 74f8e604) — "the mirror is due when the newest complete manifest is this old" (91), by Decision 5.1; Decision 6's "one `backup.Unseal` for the index and every object" (144–145), by Decision 5.3.
 - **Date**: 2026-10-08
 - **Deciders**: green-0-rabbit
 - **Tags**: blob, s3, versioning, object-lock, backup, disaster-recovery

@@ -1,6 +1,7 @@
 # ADR-0207: Pre-upgrade snapshot and safe mode
 
 - **Status**: Implemented (2026-10-11; the implementation review passed on its second round, docs/reviews/adr-0207-implementation-claude-opus-5-5-2.md; accepted 2026-10-10 by an `adr-batch` run after a clean `adr-judge` gate; the defaults below were not confirmed one by one)
+- **Superseded in part by**: [ADR-0227](0227-disaster-recovery-implementation-addenda.md) (2026-10-11; lines at 74f8e604) — `--no-snapshot`'s "warns once" (36, 99), by Decision 4.1; step 2's order and its On-failure "nothing changed" (93), by Decisions 4.2 and 4.3.
 - **Date**: 2026-10-08
 - **Deciders**: green-0-rabbit
 - **Tags**: disaster-recovery, upgrade, backup, hold, crash

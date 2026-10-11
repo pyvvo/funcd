@@ -1,6 +1,7 @@
 # ADR-0204: Backup encryption and key escrow
 
 - **Status**: Implemented (2026-10-10; the implementation review passed twice, docs/reviews/adr-0204-implementation-claude-opus-5-5-2.md; accepted 2026-10-10 by an `adr-batch` run after a clean `adr-judge` gate; the defaults below were not confirmed one by one)
+- **Superseded in part by**: [ADR-0227](0227-disaster-recovery-implementation-addenda.md) (2026-10-11; lines at 74f8e604) — the Contracts' `Opener` comment "nil recipients ⇒ nil (as is)" (175), by Decision 1.4; Decision 7's gateway-off migration (149–152) and its Open question (241), by Decision 1.7; the Implementation plan's go.mod list (204–206) and the Consequences' "four new modules" (227), by Decision 1.8.
 - **Date**: 2026-10-08
 - **Deciders**: green-0-rabbit
 - **Tags**: backup, disaster-recovery, encryption, secrets, keys
