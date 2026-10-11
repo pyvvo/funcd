@@ -19,6 +19,8 @@
     "ADR-0205",
     "ADR-0206",
     "ADR-0207",
+    "ADR-0208",
+    "ADR-0209",
     "ADR-0210"
   ],
   "items": [
@@ -27,34 +29,6 @@
       "title": "Cron ADR (Apps epoch)",
       "features": [],
       "depends_on": []
-    },
-    {
-      "id": "ADR-0208",
-      "title": "blob store backend and backup target (Accepted 2026-10-10)",
-      "features": [
-        "F111"
-      ],
-      "depends_on": [
-        "ADR-0203",
-        "ADR-0204",
-        "ADR-0205",
-        "ADR-0206",
-        "ADR-0007"
-      ]
-    },
-    {
-      "id": "ADR-0209",
-      "title": "KV backup on the common format (Accepted 2026-10-10)",
-      "features": [
-        "F111"
-      ],
-      "depends_on": [
-        "ADR-0195",
-        "ADR-0203",
-        "ADR-0204",
-        "ADR-0205",
-        "ADR-0206"
-      ]
     },
     {
       "id": "ADR-0222",
@@ -84,8 +58,6 @@
   ],
   "waves": {
     "1": [
-      "ADR-0208",
-      "ADR-0209",
       "X-CRON"
     ],
     "2": [

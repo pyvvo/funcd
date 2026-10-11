@@ -11023,5 +11023,50 @@
     "dod_total": 12,
     "report": "docs/reviews/issue-927-fix-claude-opus-5-5-w13.md",
     "notes": "w13: a32eed2f refuses a repeated kv table, repeated step kv/blob/catalog aliases and a non-DNS config entry at apply via shared validateTables/FunctionSpec.validateBindings (Function and KVStore messages byte-identical); on-the-way 0cb998f6 keeps one digest on a digest-pinned step image. Reverts fail, 5/5 mutants killed, race/vet/lint green. m1(model): validateOwnedStores doc omits the table check; m2(model): commit body says an invalid config entry was stored, but the edge schema refuses it (only repeats reachable); m3(model): replay of a pre-fix run of a pinned step hits a false DigestDrift (--allow-drift works), not noted. DoD 12/12."
+  },
+  {
+    "date": "2026-10-11",
+    "adr": "0208",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 3,
+    "model_attributed": 0,
+    "dod_passed": 13,
+    "dod_total": 13,
+    "report": "docs/reviews/adr-0208-implementation-claude-opus-5-5.md",
+    "notes": "pass on round 1; 10 scenarios + unit tests green on darwin and linux, 3 mutants killed (complete-upload reuse, non-empty-destination refusal, same-bucket guard); minors all adr: Q9 RetryInterval (Contracts gap), Q15 restore blob writes the hold marker (ADR-0206 D5), Q5 --store-credentials-file declared here (ADR-0206)"
+  },
+  {
+    "date": "2026-10-11",
+    "adr": "0209",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 3,
+    "model_attributed": 2,
+    "dod_passed": 8,
+    "dod_total": 9,
+    "report": "docs/reviews/adr-0209-implementation-claude-opus-5-5.md",
+    "notes": "pass; 3 minors: restore list fails on/needs a separate KV target [model]; seam Restore reads chains twice [model]; restore kv writes the hold marker, outside ADR-0206 D5 [adr]; 3/3 mutants killed; just ci left to the gate"
+  },
+  {
+    "date": "2026-10-11",
+    "adr": "0209",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 0,
+    "dod_passed": 8,
+    "dod_total": 9,
+    "report": "docs/reviews/adr-0209-implementation-claude-opus-5-5-2.md",
+    "notes": "re-review round 2: pass; both round-1 model minors resolved (restore list degrades per source + KV-only config lists; seam Restore reads chains once, call-count test); 1 minor [adr]: restore kv writes the hold marker, outside ADR-0206 D5; 3/3 mutants killed; just ci left to the gate"
   }
 ]
