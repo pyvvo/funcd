@@ -7,6 +7,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -173,4 +174,22 @@ func TestIssue362_SymlinkedRootPacksTarget(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, direct, viaLink, "a symlinked bundle root packs the same tree as its target")
 	})
+}
+
+// A pull that cannot fetch names the digest once: a tag ref gains it, a digest-pinned ref already carries it.
+func TestPullErrorNamesDigestOnce(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	ref := layoutRef(t, "bi")
+	_, err := artifact.PushSite(ctx, ref, siteDir(t))
+	require.NoError(t, err)
+	const absent = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	pinned := strings.TrimSuffix(ref, ":bi") + "@" + absent
+
+	for img, named := range map[string]string{ref: ref + "@" + absent, pinned: pinned} {
+		perr := artifact.PullSite(ctx, img, absent, filepath.Join(t.TempDir(), "out"))
+		require.Equal(t, fault.NotFound, fault.KindOf(perr), "%v", perr)
+		require.Contains(t, perr.Error(), named)
+		require.Equal(t, 1, strings.Count(perr.Error(), absent), "%v", perr)
+	}
 }

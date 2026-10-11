@@ -694,3 +694,31 @@ func TestIssue722_GroupMoveRestampsRoute(t *testing.T) {
 	h.reconcile("bi")
 	require.Equal(t, v1.ResourceGroupName("other"), h.route("bi").ResourceGroup)
 }
+
+// A failed pull names the image's digest once: a tag image gains it, a digest-pinned image already carries it.
+func TestSitePullErrorNamesDigestOnce(t *testing.T) {
+	t.Parallel()
+	for _, pin := range []bool{false, true} {
+		h := newHarness(t)
+		digest := h.push("v1", siteA())
+		blobs := filepath.Join(h.layout, "blobs", "sha256")
+		entries, err := os.ReadDir(blobs)
+		require.NoError(t, err)
+		for _, e := range entries {
+			if "sha256:"+e.Name() != digest {
+				require.NoError(t, os.Remove(filepath.Join(blobs, e.Name())))
+			}
+		}
+		image, named := h.ref("v1"), h.ref("v1")+"@"+digest
+		if pin {
+			image = "oci-layout://" + h.layout + "@" + digest
+			named = image
+		}
+		h.seedSite("bi", "v1", func(s *v1.Site) { s.Spec.Image = image })
+
+		_, err = h.r.Reconcile(h.ctx, controller.Request{GVK: v1.KindSite.GVK(), Namespace: ns, Name: "bi"})
+		require.Error(t, err, "the bundle layer is gone, so the pull fails")
+		require.Contains(t, err.Error(), "pull "+named)
+		require.Equal(t, 1, strings.Count(err.Error(), digest), "%v", err)
+	}
+}

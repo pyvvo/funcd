@@ -3200,7 +3200,11 @@ func (r *Reconciler) artifactPlatforms(ctx context.Context, uri, digest string) 
 	}
 	ps, err := r.platformsOf.Platforms(ctx, uri, digest)
 	if err != nil {
-		return nil, fault.Wrapf(err, fault.KindOf(err), "function.artifactPlatforms", "list the platforms of %s@%s", uri, digest)
+		pinned := uri
+		if !strings.HasSuffix(uri, "@"+digest) { // a digest-pinned image resolves to its own digest
+			pinned += "@" + digest
+		}
+		return nil, fault.Wrapf(err, fault.KindOf(err), "function.artifactPlatforms", "list the platforms of %s", pinned)
 	}
 	return ps, nil
 }

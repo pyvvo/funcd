@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -258,7 +259,11 @@ func (r *Reconciler) unpack(ctx context.Context, view blob.Bucket, s *v1.Site, d
 		case fault.Invalid:
 			return "MaterializeFailed", perr.Error(), nil
 		default:
-			return "", "", fault.Wrapf(perr, fault.KindOf(perr), op, "pull %s@%s", s.Spec.Image, digest)
+			pinned := s.Spec.Image
+			if !strings.HasSuffix(pinned, "@"+digest) { // a digest-pinned image resolves to its own digest
+				pinned += "@" + digest
+			}
+			return "", "", fault.Wrapf(perr, fault.KindOf(perr), op, "pull %s", pinned)
 		}
 	}
 	var files []string

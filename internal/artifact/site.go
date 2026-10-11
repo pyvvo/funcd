@@ -11,6 +11,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"oras.land/oras-go/v2"
@@ -121,7 +122,11 @@ func pullTyped(ctx context.Context, op, ref, digest, dir, artifactType, what str
 	}
 	manifestDesc, manifestData, ferr := oras.FetchBytes(ctx, target, digest, oras.DefaultFetchBytesOptions)
 	if ferr != nil {
-		return fault.NotFoundf(op, "fetch %s %s@%s: %v", what, ref, digest, ferr)
+		pinned := ref
+		if !strings.HasSuffix(ref, "@"+digest) { // a digest-pinned ref resolves to its own digest
+			pinned += "@" + digest
+		}
+		return fault.NotFoundf(op, "fetch %s %s: %v", what, pinned, ferr)
 	}
 	if manifestDesc.Digest.String() != digest {
 		return fault.Invalidf(op, "digest mismatch: ref resolved to %s, wanted %s", manifestDesc.Digest.String(), digest)
