@@ -163,8 +163,8 @@ func (r *RestoreReconciler) export(ctx context.Context, rs *v1.Restore, b *v1.Ba
 }
 
 // load reads b with the Restore's credential and identity, checks every part, then loads each member (Decision 7):
-// an empty target or, in place, the store emptied under a namespace hold. A non-empty target is NotEmpty before any
-// write; a failure empties what it wrote. It returns the failure's reason.
+// an empty target or, in place, the store emptied under a namespace hold that only a completed load lifts. A
+// non-empty target is NotEmpty before any write; a failure empties what it wrote. It returns the failure's reason.
 func (r *RestoreReconciler) load(ctx context.Context, rs *v1.Restore, b *v1.Backup) (string, error) {
 	key, err := r.staticKey(ctx, rs.Namespace, rs.Spec.Source.CredentialsSecret)
 	if err != nil {
@@ -199,20 +199,25 @@ func (r *RestoreReconciler) load(ctx context.Context, rs *v1.Restore, b *v1.Back
 	if err != nil {
 		return reason, err
 	}
+	var held *hold.Marker
 	if rs.InPlace() && r.d.Hold != nil {
-		if err := r.d.Hold.HoldNamespace(rs.Namespace, hold.Marker{Reason: hold.ReasonRestore, Since: v1.NewTimestamp(r.d.Clock.Now()), Restore: rs.Name}); err != nil {
+		m := hold.Marker{Reason: hold.ReasonRestore, Since: v1.NewTimestamp(r.d.Clock.Now()), Restore: rs.Name}
+		if err := r.d.Hold.HoldNamespace(rs.Namespace, m); err != nil {
 			return reasonFailed, err
 		}
-		defer func() {
-			if err := r.d.Hold.ReleaseNamespace(rs.Namespace, hold.ReasonRestore); err != nil {
-				r.log.WarnContext(ctx, "workload restore: lift the namespace hold", "namespace", rs.Namespace, "error", err)
-			}
-		}()
+		held = &m
 	}
 	for _, t := range targets {
 		t.written = true
 		if reason, err := r.fill(ctx, rs.Namespace, t, src, b.Status.Path, unseal); err != nil {
 			return reason, errors.Join(err, r.empty(ctx, rs.Namespace, targets))
+		}
+	}
+	// Only a completed load lifts the hold: a failure, a stop or a crash leaves it to hold release --namespace once
+	// the Restore has ended, whatever the emptying did.
+	if held != nil {
+		if err := r.d.Hold.ReleaseNamespaceMarker(rs.Namespace, *held); err != nil {
+			r.log.WarnContext(ctx, "workload restore: lift the namespace hold", "namespace", rs.Namespace, "error", err)
 		}
 	}
 	return "", nil

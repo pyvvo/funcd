@@ -108,9 +108,10 @@ spec:
 or Bucket), `asCatalog` (an empty bucket prefix, then point a CatalogService at it) or `inPlace: true`. An in-place
 Restore needs `update` on the Namespace (an admin), and one runs per namespace at a time: a second is refused while
 the first is `Pending` or `Running`. It first runs Backup `<restore>-before`, then holds the namespace while it
-empties and loads the store. One that funcd stopped during the load ends `Failed` (`Interrupted`) and keeps
-the namespace held: `funcdctl hold status` names it; check the store, then `funcdctl hold release --namespace orders`
-(refused while a Restore it names is `Pending` or `Running`).
+empties and loads the store; only a completed load lifts that hold. One whose load fails, or that funcd stopped
+during the load (it ends `Failed`, `Interrupted`, at the next start), keeps the namespace held: `funcdctl hold status`
+names it; check the store, then `funcdctl hold release --namespace orders` (refused while a Restore it names is
+`Pending` or `Running`).
 
 ## After a platform restore
 

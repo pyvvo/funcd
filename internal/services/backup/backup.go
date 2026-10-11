@@ -77,7 +77,7 @@ type Hold interface {
 	hold.Gate
 	hold.NamespaceGate
 	HoldNamespace(ns v1.NamespaceName, m hold.Marker) error
-	ReleaseNamespace(ns v1.NamespaceName, reason string) error
+	ReleaseNamespaceMarker(ns v1.NamespaceName, m hold.Marker) error
 }
 
 // Deps are the reconcilers' dependencies; Store and Secrets are required.

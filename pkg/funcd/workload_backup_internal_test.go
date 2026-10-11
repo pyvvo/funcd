@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -85,6 +86,9 @@ type wbRig struct {
 	hold               *hold.Hold
 	logs               *syncBuffer
 	metrics            *sdkmetric.ManualReader
+	dir                string
+	opts               []Option
+	stop               func()
 }
 
 type wbOptions struct {
@@ -105,19 +109,12 @@ func newWBRig(t *testing.T, o wbOptions) *wbRig {
 	h, err := hold.Open(dir)
 	require.NoError(t, err)
 	r := &wbRig{t: t, ctx: ctx, clk: clock.NewManual(time.Now().UTC().Truncate(time.Second)), stub: s3stub.New(t, nil),
-		hold: h, logs: &syncBuffer{}, metrics: sdkmetric.NewManualReader()}
+		logs: &syncBuffer{}, metrics: sdkmetric.NewManualReader(), dir: dir, opts: o.opts}
 	r.owner, err = age.GenerateX25519Identity()
 	require.NoError(t, err)
 	r.recovery, err = age.GenerateX25519Identity()
 	require.NoError(t, err)
-	opts := append([]Option{InMemory(), WithLogger(slog.New(slog.NewTextHandler(r.logs, nil))), WithHold(h),
-		WithCredentials(Credential{Token: wbAdmin, Role: "admin"},
-			Credential{Token: wbDev, Role: "developer", Namespaces: []string{"orders", "web"}},
-			Credential{Token: wbViewer, Role: "viewer", Namespaces: []string{"orders"}}),
-		WithPacing(Pacing{SupervisionPeriod: wbPeriod, ReferentPollInterval: wbPeriod}), withBackupClock(r.clk, sdkmetric.NewMeterProvider(sdkmetric.WithReader(r.metrics)).Meter("funcd.backup")),
-		WithBlobPollInterval(wbPeriod)}, o.opts...)
-	r.p, err = New(opts...)
-	require.NoError(t, err)
+	r.newPlatform(h)
 	r.st = r.p.cfg.store
 	tables := v1.KVStoreSpec{Tables: []v1.KVTable{{Name: "t"}}}
 	r.seed(&v1.KVStore{TypeMeta: tmeta(v1.KindKVStore), ObjectMeta: ordersMeta("orders-state"), Spec: tables},
@@ -132,21 +129,54 @@ func newWBRig(t *testing.T, o wbOptions) *wbRig {
 	if o.setup != nil {
 		o.setup(r)
 	}
-	runCtx, cancel := context.WithCancel(ctx)
+	r.run()
+	return r
+}
+
+// newPlatform builds the rig's platform over the hold h, with the rig's options and extra.
+func (r *wbRig) newPlatform(h *hold.Hold, extra ...Option) {
+	r.t.Helper()
+	opts := append([]Option{InMemory(), WithLogger(slog.New(slog.NewTextHandler(r.logs, nil))), WithHold(h),
+		WithCredentials(Credential{Token: wbAdmin, Role: "admin"},
+			Credential{Token: wbDev, Role: "developer", Namespaces: []string{"orders", "web"}},
+			Credential{Token: wbViewer, Role: "viewer", Namespaces: []string{"orders"}}),
+		WithPacing(Pacing{SupervisionPeriod: wbPeriod, ReferentPollInterval: wbPeriod}), withBackupClock(r.clk, sdkmetric.NewMeterProvider(sdkmetric.WithReader(r.metrics)).Meter("funcd.backup")),
+		WithBlobPollInterval(wbPeriod)}, r.opts...)
+	p, err := New(append(opts, extra...)...)
+	require.NoError(r.t, err)
+	r.p, r.hold = p, h
+}
+
+// run runs the platform until stop or the test's end, and waits for its control plane.
+func (r *wbRig) run() {
+	r.t.Helper()
+	runCtx, cancel := context.WithCancel(r.ctx)
 	done := make(chan error, 1)
 	go func() { done <- r.p.Run(runCtx) }()
-	t.Cleanup(func() { cancel(); <-done })
+	r.stop = sync.OnceFunc(func() { cancel(); <-done })
+	r.t.Cleanup(r.stop)
 	client := func(token string) *sdk.Client {
 		c, err := sdk.New("http://"+r.p.Addr(), sdk.WithToken(token))
-		require.NoError(t, err)
+		require.NoError(r.t, err)
 		return c
 	}
 	r.admin, r.dev, r.viewer = client(wbAdmin), client(wbDev), client(wbViewer)
-	require.Eventually(t, func() bool {
-		_, err := r.viewer.List(ctx, v1.KindBackup, "orders")
+	require.Eventually(r.t, func() bool {
+		_, err := r.viewer.List(r.ctx, v1.KindBackup, "orders")
 		return err == nil
 	}, 10*time.Second, 10*time.Millisecond, "the control plane answers")
-	return r
+}
+
+// restart stops the platform and runs another over the same store, KV driver, blob store and data directory. The
+// blob store must survive the first platform's Shutdown.
+func (r *wbRig) restart() {
+	r.t.Helper()
+	r.stop()
+	h, err := hold.Open(r.dir)
+	require.NoError(r.t, err)
+	r.metrics = sdkmetric.NewManualReader()
+	r.newPlatform(h, WithStore(r.st), WithKVStore(r.p.cfg.kvStore))
+	r.run()
 }
 
 func ordersMeta(name string) v1.ObjectMeta {
@@ -519,6 +549,70 @@ func TestRestoreInterruptedHoldRelease(t *testing.T) {
 	require.NoError(t, r.admin.ReleaseNamespaceHold(r.ctx, []string{"orders"}))
 	require.False(t, r.hold.HeldIn("orders"), "the release lifts the restore marker with the data marker")
 	require.Equal(t, fault.Conflict, fault.KindOf(r.admin.ReleaseNamespaceHold(r.ctx, []string{"orders"})))
+}
+
+// stallBucket is the shared blob store whose Put of a key ending in stall, once armed, waits for its context to end:
+// a load that a stop interrupts. Its Close keeps it open for the platform a restart builds.
+type stallBucket struct {
+	blob.Bucket
+	stall   string
+	armed   atomic.Bool
+	stalled chan struct{}
+	once    sync.Once
+}
+
+func (b *stallBucket) Put(ctx context.Context, key string, data []byte, o blob.PutOptions) error {
+	if b.armed.Load() && strings.HasSuffix(key, b.stall) {
+		b.once.Do(func() { close(b.stalled) })
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return b.Bucket.Put(ctx, key, data, o)
+}
+
+func (*stallBucket) Close() error { return nil }
+
+// TestRestoreStopKeepsNamespaceHeld: a graceful stop in the middle of an in-place load of orders-files, a.csv
+// written and b.csv stalled, keeps the namespace held under a marker naming the Restore, which is not Succeeded; after
+// the restart it is Interrupted, still held, and hold release --namespace lifts it.
+func TestRestoreStopKeepsNamespaceHeld(t *testing.T) {
+	t.Parallel()
+	mem, err := gocloud.Open(context.Background(), "mem://")
+	require.NoError(t, err)
+	shared := &stallBucket{Bucket: mem, stall: "/b.csv", stalled: make(chan struct{})}
+	r := newWBRig(t, wbOptions{opts: []Option{WithBlob(shared)}, setup: func(r *wbRig) {
+		require.NoError(r.t, shared.Put(r.ctx, bucketPrefix("orders", "orders-files")+"b.csv", []byte("id\n"), blob.PutOptions{}))
+	}})
+	r.create(r.dev, r.schedule("orders-nightly", "0 3 * * *", nil))
+	r.create(r.dev, r.backupObj("b1", "orders-nightly"))
+	r.waitBackup("b1", v1.RunSucceeded)
+	shared.armed.Store(true)
+	r.create(r.admin, r.restoreObj("rewind", "b1", v1.RestoreMember{Kind: v1.KindBucket, Name: "orders-files", InPlace: true}))
+	require.Eventually(t, func() bool {
+		select {
+		case <-shared.stalled:
+			return true
+		default:
+			return false
+		}
+	}, 10*time.Second, 10*time.Millisecond, "the load stalls on b.csv\n%s", r.logs.String())
+	marker := func() v1.ObjectName { return r.hold.NamespaceMarkers()["orders"][hold.ReasonRestore].Restore }
+	require.Equal(t, v1.ObjectName("rewind"), marker())
+
+	r.stop()
+	require.True(t, r.hold.HeldIn("orders"), "a stop in the middle of the load keeps the namespace held")
+	require.Equal(t, v1.ObjectName("rewind"), marker())
+	obj, err := r.st.Get(r.ctx, v1.KindRestore.GVK(), "orders", "rewind")
+	require.NoError(t, err)
+	require.NotEqual(t, v1.RunSucceeded, obj.(*v1.Restore).Status.Phase)
+
+	r.restart()
+	rs := r.waitRestore("rewind", v1.RunFailed)
+	require.Equal(t, "Interrupted", reason(rs.Status.Status))
+	require.True(t, r.hold.HeldIn("orders"))
+	require.Equal(t, v1.ObjectName("rewind"), marker())
+	require.NoError(t, r.admin.ReleaseNamespaceHold(r.ctx, []string{"orders"}))
+	require.False(t, r.hold.HeldIn("orders"))
 }
 
 // scenario: rpo-risk — a daily schedule whose 03:00 Backup fails turns rpoRisk, the gauge and one Warn on; a success
