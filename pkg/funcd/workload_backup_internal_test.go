@@ -492,6 +492,35 @@ func TestScenarioRunInterrupted(t *testing.T) {
 	require.Equal(t, "Interrupted", reason(b.Status.Status))
 }
 
+// TestRestoreInterruptedHoldRelease: an in-place Restore Running when funcd is killed is Failed (Interrupted) at the
+// start and keeps its namespace held; hold status names it, and hold release --namespace lifts its marker with
+// restore run's data marker.
+func TestRestoreInterruptedHoldRelease(t *testing.T) {
+	t.Parallel()
+	r := newWBRig(t, wbOptions{setup: func(r *wbRig) {
+		rs := r.restoreObj("rewind", "b1", v1.RestoreMember{Kind: v1.KindKVStore, Name: "orders-state", InPlace: true})
+		rs.Status.Phase = v1.RunRunning
+		r.seed(rs)
+		since := v1.NewTimestamp(r.clk.Now())
+		require.NoError(r.t, r.hold.HoldNamespace("orders", hold.Marker{Reason: hold.ReasonData, Since: since}))
+		require.NoError(r.t, r.hold.HoldNamespace("orders", hold.Marker{Reason: hold.ReasonRestore, Since: since, Restore: "rewind"}))
+	}})
+	rs := r.waitRestore("rewind", v1.RunFailed)
+	require.Equal(t, "Interrupted", reason(rs.Status.Status))
+	require.True(t, r.hold.HeldIn("orders"), "an interrupted load keeps its namespace held")
+	ev, err := r.admin.HoldStatus(r.ctx)
+	require.NoError(t, err)
+	require.Len(t, ev.Namespaces, 2)
+	require.Equal(t, [2]string{"orders", hold.ReasonData}, [2]string{string(ev.Namespaces[0].Namespace), ev.Namespaces[0].Reason})
+	got := ev.Namespaces[1]
+	require.Equal(t, []string{"orders", hold.ReasonRestore, "rewind", string(v1.RunFailed)},
+		[]string{string(got.Namespace), got.Reason, string(got.Restore), string(got.Phase)}, "hold status names the Restore and its phase")
+
+	require.NoError(t, r.admin.ReleaseNamespaceHold(r.ctx, []string{"orders"}))
+	require.False(t, r.hold.HeldIn("orders"), "the release lifts the restore marker with the data marker")
+	require.Equal(t, fault.Conflict, fault.KindOf(r.admin.ReleaseNamespaceHold(r.ctx, []string{"orders"})))
+}
+
 // scenario: rpo-risk — a daily schedule whose 03:00 Backup fails turns rpoRisk, the gauge and one Warn on; a success
 // clears them.
 func TestScenarioRPORisk(t *testing.T) {

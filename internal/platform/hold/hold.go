@@ -23,10 +23,12 @@ const MarkerFile, BusyFile, ReleasedFile = ".hold", "restore.inprogress", ".hold
 // ReportFile is restore.json, the report restore run writes beside the marker (Decision 2 step 5).
 const ReportFile = "restore.json"
 
-// Marker is the content of MarkerFile; Reason is "restore" or "safe-mode" (ADR-0207).
+// Marker is the content of MarkerFile; Reason is "restore" or "safe-mode" (ADR-0207). A namespace's restore marker
+// also names the in-place Restore that wrote it (ADR-0222 Decision 8).
 type Marker struct {
-	Reason string       `json:"reason"`
-	Since  v1.Timestamp `json:"since"`
+	Reason  string        `json:"reason"`
+	Since   v1.Timestamp  `json:"since"`
+	Restore v1.ObjectName `json:"restore,omitempty"`
 }
 
 // Gate is what a runner asks: Held, and the time of the last release (zero when none).
@@ -51,9 +53,9 @@ type Hold struct {
 	mu       sync.RWMutex
 	m        *Marker
 	released time.Time
-	// nsHeld and nsReleased are the per-namespace hold (ADR-0222 Decision 8): each namespace's reasons, and its
-	// last release.
-	nsHeld     map[v1.NamespaceName]map[string]bool
+	// nsHeld and nsReleased are the per-namespace hold (ADR-0222 Decision 8): each namespace's markers by reason,
+	// and its last release.
+	nsHeld     map[v1.NamespaceName]map[string]Marker
 	nsReleased map[v1.NamespaceName]time.Time
 }
 
@@ -66,7 +68,7 @@ type busy struct {
 // Evidence is what the hold shows the operator (Decisions 1, 8): GET …/hold returns it, `funcdctl hold status` prints
 // it. Report is restore.json as written; runs and dead letters are <ns>/<name> and <ns>/<id>; Pending is, per
 // <ns>/<source>, the blob keys per event a release replays; Orphans and BucketOrphans are data no object names,
-// which the reclaims would drop; FunctionsNotReady are <ns>/<name>.
+// which the reclaims would drop; FunctionsNotReady are <ns>/<name>; Namespaces are the per-namespace markers.
 type Evidence struct {
 	Held              bool                      `json:"held"`
 	Marker            *Marker                   `json:"marker,omitempty"`
@@ -79,6 +81,15 @@ type Evidence struct {
 	Orphans           []string                  `json:"orphans,omitempty"`
 	BucketOrphans     []string                  `json:"bucketOrphans,omitempty"`
 	FunctionsNotReady []string                  `json:"functionsNotReady,omitempty"`
+	Namespaces        []NamespaceHold           `json:"namespaces,omitempty"`
+}
+
+// NamespaceHold is one per-namespace marker (ADR-0222 Decision 8); Phase is the phase of the in-place Restore a
+// restore marker names, empty once that Restore is deleted.
+type NamespaceHold struct {
+	Namespace v1.NamespaceName `json:"namespace"`
+	Marker
+	Phase v1.RunPhase `json:"phase,omitempty"`
 }
 
 // Write writes the marker: the platform is held from the next start until a release.

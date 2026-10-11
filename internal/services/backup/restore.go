@@ -200,7 +200,7 @@ func (r *RestoreReconciler) load(ctx context.Context, rs *v1.Restore, b *v1.Back
 		return reason, err
 	}
 	if rs.InPlace() && r.d.Hold != nil {
-		if err := r.d.Hold.HoldNamespace(rs.Namespace, hold.Marker{Reason: hold.ReasonRestore, Since: v1.NewTimestamp(r.d.Clock.Now())}); err != nil {
+		if err := r.d.Hold.HoldNamespace(rs.Namespace, hold.Marker{Reason: hold.ReasonRestore, Since: v1.NewTimestamp(r.d.Clock.Now()), Restore: rs.Name}); err != nil {
 			return reasonFailed, err
 		}
 		defer func() {

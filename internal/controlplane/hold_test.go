@@ -116,3 +116,58 @@ func TestReleaseRefuses(t *testing.T) {
 	rec = do(t, srv, http.MethodPost, release, adminToken, releaseBody(t))
 	require.Equal(t, http.StatusConflict, rec.Code, "not held")
 }
+
+// TestReleaseNamespaceWaitsForRestore (ADR-0222 Decision 8): hold status lists a namespace's markers, the restore
+// marker with its Restore's phase; a release of the namespace while that in-place Restore runs is a Conflict naming
+// it, with both markers kept; once the Restore has failed the release lifts both.
+func TestReleaseNamespaceWaitsForRestore(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := store.New(memory.New())
+	rs := &v1.Restore{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindRestore.GVK().APIVersion(), Kind: v1.KindRestore},
+		ObjectMeta: v1.ObjectMeta{Name: "rewind", Namespace: "orders", ResourceGroup: "rg"},
+		Spec: v1.RestoreSpec{Backup: "b1", Source: v1.RestoreSource{CredentialsSecret: "reader", IdentitySecret: "key"},
+			Members: []v1.RestoreMember{{Kind: v1.KindKVStore, Name: "state", InPlace: true}}},
+		Status: v1.RestoreStatus{Phase: v1.RunRunning},
+	}
+	created, err := st.Create(ctx, rs)
+	require.NoError(t, err)
+	h, err := hold.Open(t.TempDir())
+	require.NoError(t, err)
+	since := v1.NewTimestamp(time.Now())
+	require.NoError(t, h.HoldNamespace("orders", hold.Marker{Reason: hold.ReasonData, Since: since}))
+	require.NoError(t, h.HoldNamespace("orders", hold.Marker{Reason: hold.ReasonRestore, Since: since, Restore: "rewind"}))
+	srv, err := controlplane.NewServer(controlplane.Deps{
+		Store: st, Authorizer: rbac.New(),
+		Credentials: middleware.NewStaticCredentials(map[string]auth.Identity{adminToken: {Subject: "ops", Role: auth.RoleAdmin}}),
+		Hold:        controlplane.NewHoldService(controlplane.HoldDeps{Hold: h, Store: st, Platform: &holdPlatform{}}),
+	})
+	require.NoError(t, err)
+	body := []byte(`{"namespaces":["orders"]}`)
+	const release = "/apis/funcd.io/v1alpha1/hold/release"
+
+	rec := do(t, srv, http.MethodGet, "/apis/funcd.io/v1alpha1/hold", adminToken, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var ev hold.Evidence
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &ev))
+	require.Len(t, ev.Namespaces, 2)
+	require.Equal(t, hold.ReasonRestore, ev.Namespaces[1].Reason)
+	require.Equal(t, v1.ObjectName("rewind"), ev.Namespaces[1].Restore)
+	require.Equal(t, v1.RunRunning, ev.Namespaces[1].Phase)
+
+	rec = do(t, srv, http.MethodPost, release, adminToken, body)
+	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), "Restore rewind")
+	require.Len(t, h.NamespaceMarkers()["orders"], 2, "a refused release keeps both markers")
+	require.True(t, h.HeldIn("orders"))
+
+	rs = created.(*v1.Restore)
+	rs.Status.Phase = v1.RunFailed
+	_, err = st.Update(ctx, rs)
+	require.NoError(t, err)
+	rec = do(t, srv, http.MethodPost, release, adminToken, body)
+	require.Less(t, rec.Code, 300, rec.Body.String())
+	require.False(t, h.HeldIn("orders"))
+	require.Equal(t, http.StatusConflict, do(t, srv, http.MethodPost, release, adminToken, body).Code, "not held")
+}

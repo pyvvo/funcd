@@ -20,7 +20,7 @@ func (a *cli) holdCmd() *cobra.Command {
 func (a *cli) holdStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
-		Short: "Show the hold: marker, restore report, counts, paused runs, dead letters, pending blob keys, orphan data",
+		Short: "Show the hold: marker, restore report, counts, paused runs, dead letters, pending blob keys, orphan data, namespace markers",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return printStatus(cmd.Context(), a, "funcdctl hold status", "encode", (*sdk.Client).HoldStatus)
@@ -53,7 +53,7 @@ func (a *cli) holdReleaseCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&advance, "advance", nil,
 		"a blob EventSource <namespace>/<name> whose listed objects are marked seen instead of fired (repeatable)")
 	cmd.Flags().StringArrayVar(&namespaces, "namespace", nil,
-		"a namespace whose data hold a restore left is released instead of the platform's hold (repeatable)")
+		"a namespace whose hold a restore left (restore run's data, an ended in-place Restore's load) is released instead of the platform's hold (repeatable)")
 	cmd.MarkFlagsMutuallyExclusive("advance", "namespace")
 	return cmd
 }

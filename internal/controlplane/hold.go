@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -73,6 +74,9 @@ func (s *HoldService) Status(ctx context.Context) (hold.Evidence, error) {
 		if st.Report, err = h.Report(); err != nil {
 			return hold.Evidence{}, err
 		}
+		if st.Namespaces, err = s.namespaceHolds(ctx); err != nil {
+			return hold.Evidence{}, err
+		}
 	}
 	p := s.d.Platform
 	if st.Counts, err = p.Counts(ctx); err != nil {
@@ -101,6 +105,42 @@ func (s *HoldService) Status(ctx context.Context) (hold.Evidence, error) {
 		return hold.Evidence{}, err
 	}
 	return st, nil
+}
+
+// namespaceHolds lists the per-namespace markers, each restore marker with the phase of the Restore it names.
+func (s *HoldService) namespaceHolds(ctx context.Context) ([]hold.NamespaceHold, error) {
+	markers := s.d.Hold.NamespaceMarkers()
+	var out []hold.NamespaceHold
+	for _, ns := range slices.Sorted(maps.Keys(markers)) {
+		for _, reason := range slices.Sorted(maps.Keys(markers[ns])) {
+			nh := hold.NamespaceHold{Namespace: ns, Marker: markers[ns][reason]}
+			rs, err := s.restoreOf(ctx, ns, nh.Restore)
+			if err != nil {
+				return nil, err
+			}
+			if rs != nil {
+				nh.Phase = rs.Status.Phase
+			}
+			out = append(out, nh)
+		}
+	}
+	return out, nil
+}
+
+// restoreOf reads Restore ns/name; none named or none stored ⇒ nil.
+func (s *HoldService) restoreOf(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (*v1.Restore, error) {
+	if name == "" {
+		return nil, nil
+	}
+	obj, err := s.d.Store.Get(ctx, v1.KindRestore.GVK(), ns, name)
+	if fault.KindOf(err) == fault.NotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	rs, _ := obj.(*v1.Restore)
+	return rs, nil
 }
 
 func (s *HoldService) pausedRuns(ctx context.Context) ([]string, error) {
@@ -202,9 +242,10 @@ func (s *HoldService) Release(ctx context.Context, advance []string) error {
 	return s.d.Hold.Release(s.d.Clock.Now())
 }
 
-// ReleaseNamespaces removes the data marker restore run left on each of nss (ADR-0222 Decision 8): a namespace
-// without one is fault.Conflict, the ones before it released.
-func (s *HoldService) ReleaseNamespaces(_ context.Context, nss []v1.NamespaceName) error {
+// ReleaseNamespaces removes the markers holding each of nss (ADR-0222 Decision 8): the data marker restore run left,
+// and the restore marker of an in-place Restore that ended without lifting it (Interrupted). A namespace not held, or
+// whose restore marker names a Restore still Pending or Running, is fault.Conflict, the ones before it released.
+func (s *HoldService) ReleaseNamespaces(ctx context.Context, nss []v1.NamespaceName) error {
 	const op = "controlplane.ReleaseHold"
 	for _, ns := range nss {
 		if err := ns.Validate(); err != nil {
@@ -212,11 +253,30 @@ func (s *HoldService) ReleaseNamespaces(_ context.Context, nss []v1.NamespaceNam
 		}
 	}
 	for _, ns := range nss {
-		if s.d.Hold == nil {
+		var markers map[string]hold.Marker
+		if s.d.Hold != nil {
+			markers = s.d.Hold.NamespaceMarkers()[ns]
+		}
+		if len(markers) == 0 {
 			return fault.Conflictf(op, "namespace %q is not held", ns)
 		}
-		if err := s.d.Hold.ReleaseNamespace(ns, hold.ReasonData); err != nil {
-			return err
+		if m, ok := markers[hold.ReasonRestore]; ok {
+			rs, err := s.restoreOf(ctx, ns, m.Restore)
+			if err != nil {
+				return err
+			}
+			if rs != nil && rs.Status.Phase != v1.RunSucceeded && rs.Status.Phase != v1.RunFailed {
+				return fault.Conflictf(op, "namespace %q is held by Restore %s, which is %s: release it once the Restore ends",
+					ns, rs.Name, rs.Status.Phase)
+			}
+			if err := s.d.Hold.ReleaseNamespaceMarker(ns, m); err != nil {
+				return err
+			}
+		}
+		if _, ok := markers[hold.ReasonData]; ok {
+			if err := s.d.Hold.ReleaseNamespace(ns, hold.ReasonData); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -250,7 +310,7 @@ type holdStatusOutput struct {
 type holdReleaseInput struct {
 	Body struct {
 		Advance    []string           `json:"advance,omitempty" doc:"blob EventSources, <namespace>/<name>, whose listed keys are marked seen instead of replayed"`
-		Namespaces []v1.NamespaceName `json:"namespaces,omitempty" doc:"namespaces whose data hold a restore left is released, instead of the platform's hold"`
+		Namespaces []v1.NamespaceName `json:"namespaces,omitempty" doc:"namespaces whose hold a restore left is released, instead of the platform's: restore run's data marker, and the marker of an in-place Restore that has ended"`
 	}
 }
 

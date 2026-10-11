@@ -143,3 +143,25 @@ func TestReleaseNamespace(t *testing.T) {
 	require.Equal(t, h.ReleasedAt(), h.ReleasedAtIn("orders"), "the later of the two releases")
 	require.False(t, hold.NeverNamespace.HeldIn("web"))
 }
+
+// TestReleaseNamespaceMarker (ADR-0222 Decision 8): a restore marker names its Restore across an Open; a release of a
+// marker another Restore rewrote since is a Conflict that keeps the namespace held.
+func TestReleaseNamespaceMarker(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	h, err := hold.Open(dir)
+	require.NoError(t, err)
+	require.NoError(t, h.HoldNamespace("web", hold.Marker{Reason: hold.ReasonRestore, Since: v1.NewTimestamp(time.Now()), Restore: "first"}))
+	first := h.NamespaceMarkers()["web"][hold.ReasonRestore]
+	require.NoError(t, h.HoldNamespace("web", hold.Marker{Reason: hold.ReasonRestore, Since: v1.NewTimestamp(time.Now()), Restore: "second"}))
+	require.Equal(t, fault.Conflict, fault.KindOf(h.ReleaseNamespaceMarker("web", first)))
+	require.True(t, h.HeldIn("web"))
+
+	h, err = hold.Open(dir)
+	require.NoError(t, err)
+	second := h.NamespaceMarkers()["web"][hold.ReasonRestore]
+	require.Equal(t, v1.ObjectName("second"), second.Restore)
+	require.NoError(t, h.ReleaseNamespaceMarker("web", second))
+	require.False(t, h.HeldIn("web"))
+	require.Empty(t, h.NamespaceMarkers())
+}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,20 +62,44 @@ func (h *Hold) HoldNamespace(ns v1.NamespaceName, m Marker) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.nsHeld[ns] == nil {
-		h.nsHeld[ns] = map[string]bool{}
+		h.nsHeld[ns] = map[string]Marker{}
 	}
-	h.nsHeld[ns][m.Reason] = true
+	h.nsHeld[ns][m.Reason] = m
 	return nil
+}
+
+// NamespaceMarkers is a copy of each held namespace's markers by reason.
+func (h *Hold) NamespaceMarkers() map[v1.NamespaceName]map[string]Marker {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	out := make(map[v1.NamespaceName]map[string]Marker, len(h.nsHeld))
+	for ns, ms := range h.nsHeld {
+		out[ns] = maps.Clone(ms)
+	}
+	return out
 }
 
 // ReleaseNamespace lifts ns's reason, as Release lifts the platform: it writes now to .hold-ns-released/<ns>,
 // deletes the marker, syncs the directory, then lifts the gate. No such marker ⇒ fault.Conflict.
 func (h *Hold) ReleaseNamespace(ns v1.NamespaceName, reason string) error {
-	const op = "hold.ReleaseNamespace"
+	return h.releaseNamespace("hold.ReleaseNamespace", ns, reason, nil)
+}
+
+// ReleaseNamespaceMarker lifts ns's m.Reason as ReleaseNamespace does, only while that marker is still m: one another
+// Restore wrote since ⇒ fault.Conflict.
+func (h *Hold) ReleaseNamespaceMarker(ns v1.NamespaceName, m Marker) error {
+	return h.releaseNamespace("hold.ReleaseNamespaceMarker", ns, m.Reason, &m)
+}
+
+func (h *Hold) releaseNamespace(op string, ns v1.NamespaceName, reason string, want *Marker) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if !h.nsHeld[ns][reason] {
+	cur, ok := h.nsHeld[ns][reason]
+	if !ok {
 		return fault.Conflictf(op, "namespace %q is not held for %q", ns, reason)
+	}
+	if want != nil && (cur.Restore != want.Restore || !time.Time(cur.Since).Equal(time.Time(want.Since))) {
+		return fault.Conflictf(op, "the %s marker of %q changed (Restore %q): read it again", reason, ns, cur.Restore)
 	}
 	at := v1.NewTimestamp(time.Now())
 	data, err := json.Marshal(at)
@@ -136,7 +161,7 @@ func markerName(ns v1.NamespaceName, reason string) string { return string(ns) +
 
 // openNamespaces reads the namespace markers of the known reasons and the release times into h.
 func (h *Hold) openNamespaces(op string) error {
-	h.nsHeld, h.nsReleased = map[v1.NamespaceName]map[string]bool{}, map[v1.NamespaceName]time.Time{}
+	h.nsHeld, h.nsReleased = map[v1.NamespaceName]map[string]Marker{}, map[v1.NamespaceName]time.Time{}
 	entries, err := os.ReadDir(filepath.Join(h.dir, NamespaceDir))
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fault.Wrapf(err, fault.Internal, op, "read %s", NamespaceDir)
@@ -146,10 +171,18 @@ func (h *Hold) openNamespaces(op string) error {
 		if !ok || (reason != ReasonRestore && reason != ReasonData) || v1.NamespaceName(ns).Validate() != nil {
 			continue
 		}
-		if h.nsHeld[v1.NamespaceName(ns)] == nil {
-			h.nsHeld[v1.NamespaceName(ns)] = map[string]bool{}
+		data, err := readFile(op, filepath.Join(h.dir, NamespaceDir), e.Name())
+		if err != nil {
+			return err
 		}
-		h.nsHeld[v1.NamespaceName(ns)][reason] = true
+		var m Marker
+		if err := json.Unmarshal(data, &m); err != nil {
+			return fault.Wrapf(err, fault.Internal, op, "decode %s/%s", NamespaceDir, e.Name())
+		}
+		if h.nsHeld[v1.NamespaceName(ns)] == nil {
+			h.nsHeld[v1.NamespaceName(ns)] = map[string]Marker{}
+		}
+		h.nsHeld[v1.NamespaceName(ns)][reason] = m
 	}
 	if entries, err = os.ReadDir(filepath.Join(h.dir, NamespaceReleasedDir)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fault.Wrapf(err, fault.Internal, op, "read %s", NamespaceReleasedDir)
