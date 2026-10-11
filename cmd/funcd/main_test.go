@@ -69,7 +69,7 @@ func TestDaemonSubstrate(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			opts, label, _, _, err := substrateOptions(context.Background(), tc.memoryOnly, dir)
+			opts, label, _, _, err := substrateOptions(context.Background(), substrateConfig(tc.memoryOnly, dir), slog.Default())
 			require.NoError(t, err)
 			require.Equal(t, tc.label, label)
 
@@ -94,6 +94,16 @@ func TestDaemonSubstrate(t *testing.T) {
 	}
 }
 
+// substrateConfig is the config substrateOptions reads: the storage mode and data dir, the store at <dataDir>/blob.
+func substrateConfig(memory bool, dataDir string) config.Config {
+	var cfg config.Config
+	cfg.Storage.Mode, cfg.Storage.DataDir = "file", dataDir
+	if memory {
+		cfg.Storage.Mode = "memory"
+	}
+	return cfg
+}
+
 // issue 189: a relative storage.dataDir must reach the file substrate as an absolute path under the
 // working directory, not as a "file://data/blob" URL whose host swallows the first segment.
 func TestIssue189_RelativeDataDirOpensFileSubstrate(t *testing.T) {
@@ -105,7 +115,7 @@ func TestIssue189_RelativeDataDirOpensFileSubstrate(t *testing.T) {
 	cfg, err := config.Load("funcdconfig.yaml", config.Flags{})
 	require.NoError(t, err)
 
-	opts, label, _, _, err := substrateOptions(context.Background(), false, cfg.Storage.DataDir)
+	opts, label, _, _, err := substrateOptions(context.Background(), cfg, slog.Default())
 	require.NoError(t, err)
 	require.Equal(t, "file", label)
 	require.Equal(t, filepath.Join(cwd, "data"), cfg.Storage.DataDir)
@@ -129,7 +139,7 @@ func TestIssue331_DataDirWithURLSyntaxOpensBlobStore(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			base := shortDataDir(t)
 			dataDir := filepath.Join(base, name)
-			opts, label, _, _, err := substrateOptions(context.Background(), false, dataDir)
+			opts, label, _, _, err := substrateOptions(context.Background(), substrateConfig(false, dataDir), slog.Default())
 			require.NoError(t, err)
 			require.Equal(t, "file", label)
 			all := append([]funcd.Option{

@@ -67,7 +67,7 @@ func (t *target) Write(ctx context.Context, events, meta, runs snapshot.Source, 
 	dir := GenDir(class, n, v.Timeline)
 	put := map[string]bool{}
 	files := make([]StoreFile, 0, len(stores))
-	buf := make([]byte, partBytes)
+	buf := make([]byte, PartBytes)
 	for _, s := range stores {
 		parts, err := t.putParts(ctx, dir+s.name+"/", s, buf, put)
 		if err != nil {

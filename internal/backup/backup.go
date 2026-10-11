@@ -102,10 +102,7 @@ type Target interface {
 // Open checks cfg and opens its target; a bad scheme or key is fault.Invalid naming <KeyPrefix><key>.
 func Open(ctx context.Context, cfg Config) (Target, error) {
 	const op = "backup.Open"
-	prefix := cfg.KeyPrefix
-	if prefix == "" {
-		prefix = "backup."
-	}
+	prefix := keyPrefix(cfg)
 	u, dir, err := checkConfig(op, prefix, cfg)
 	if err != nil {
 		return nil, err
@@ -125,6 +122,24 @@ func Open(ctx context.Context, cfg Config) (Target, error) {
 	log.Info("backup target: set one lifecycle expiry per prefix (days)", "key", prefix+"target",
 		"rules", LifecycleRules(cfg.Retention))
 	return &target{cfg: cfg, prefix: prefix, b: b, dir: dir, log: log, clock: clock.System(), conditional: true}, nil
+}
+
+// TargetURL is the bucket URL Open opens for cfg, checked as Open checks it: a directory's carries dir_file_mode 0700.
+// A sibling backup on the same target (ADR-0208, ADR-0209) opens its own bucket on it.
+func TargetURL(cfg Config) (string, error) {
+	u, _, err := checkConfig("backup.TargetURL", keyPrefix(cfg), cfg)
+	if err != nil {
+		return "", err
+	}
+	return u.String(), nil
+}
+
+// keyPrefix names cfg's keys in errors, "backup." by default.
+func keyPrefix(cfg Config) string {
+	if cfg.KeyPrefix == "" {
+		return "backup."
+	}
+	return cfg.KeyPrefix
 }
 
 // checkConfig refuses a scheme other than s3:// and file:///<absolute dir>, a credentials file beside a directory,

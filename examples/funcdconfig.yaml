@@ -102,6 +102,16 @@ storage:
 #   retryInterval: 5m             # wait after a failed run before the next attempt. default: 5m
 #   objectives:
 #     rpo: 2h                     # rpoRisk once the newest verified generation is this old. default: 2h
+# blob:                           # the blob store (ADR-0208); storage.mode memory ignores every key
+#   target: ""                    # s3://<bucket>?region=…&endpoint=…&prefix=<p>/, a versioned S3-compatible bucket. default: "" (the local store)
+#   credentialsFile: ""           # with target: AWS shared credentials file, its [default] profile the only source. default: "" (the SDK chain)
+#   dir: ""                       # the local store; refused with target or at or above storage.dataDir. default: <dataDir>/blob
+#   allowUnversioned: false       # serve a target whose versioning is off, with a warning. default: false
+#   versionRetention: ""          # the store rule's noncurrent-version expiry: `funcd restore blob --at` within it. default: "" (--at refused)
+#   backup:                       # the local store's mirror to backup.target while the platform backup is on
+#     interval: 1h                # a run is due when the newest complete generation is this old. default: 1h
+#     rebaseline: 720h            # age of the current epoch that starts a new full copy; at least interval. default: 720h
+#     retention: 720h             # least time each generation stays restorable; at least interval. default: 720h
 # recovery:                       # safe mode after repeated unclean starts (ADR-0207)
 #   safeMode:
 #     afterCrashes: 3             # unclean starts in a row before a held start; twice it stops with exit status 70. default: 3

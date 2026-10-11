@@ -4,10 +4,14 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,9 +21,12 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/backup"
+	"github.com/pyvvo/funcd/internal/backup/blobmirror"
 	"github.com/pyvvo/funcd/internal/backup/envelope"
+	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/platform/config"
+	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/platform/version"
 	"github.com/pyvvo/funcd/internal/restore"
 	"github.com/pyvvo/funcd/internal/store"
@@ -42,13 +49,18 @@ func (f *restoreFlags) register(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.timeline, "timeline", "", "keep only this timeline and those it descends from")
 }
 
-// open loads the config and opens the restore source and identities.
-func (f *restoreFlags) open(ctx context.Context) (restore.Options, func(), error) {
+// load locates and loads the config as the daemon does.
+func (f *restoreFlags) load() (config.Config, error) {
 	path, err := config.Locate(f.config)
 	if err != nil {
-		return restore.Options{}, nil, err
+		return config.Config{}, err
 	}
-	cfg, err := config.Load(path, config.Flags{})
+	return config.Load(path, config.Flags{})
+}
+
+// open loads the config and opens the restore source and identities.
+func (f *restoreFlags) open(ctx context.Context) (restore.Options, func(), error) {
+	cfg, err := f.load()
 	if err != nil {
 		return restore.Options{}, nil, err
 	}
@@ -79,13 +91,13 @@ func (f *restoreFlags) point(s string) (restore.Point, error) {
 }
 
 // newRestoreCmd is `funcd restore` (ADR-0206 Decision 1): offline work on the backup target and the data
-// directories. `restore kv` and `restore blob` join it with ADR-0209 and ADR-0208.
+// directories, and `restore blob` on the blob store (ADR-0208). `restore kv` joins it with ADR-0209.
 func newRestoreCmd(out io.Writer) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "restore",
 		Short: "List, inspect and restore platform backup generations (offline; the restored platform boots held)",
 	}
-	cmd.AddCommand(newRestoreListCmd(out), newRestoreInspectCmd(out), newRestoreRunCmd(out))
+	cmd.AddCommand(newRestoreListCmd(out), newRestoreInspectCmd(out), newRestoreRunCmd(out), newRestoreBlobCmd(out))
 	return cmd
 }
 
@@ -105,7 +117,14 @@ func newRestoreListCmd(out io.Writer) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return writeTree(out, gens)
+			if err := writeTree(out, gens); err != nil {
+				return err
+			}
+			blobs, err := blobmirror.List(cmd.Context(), o.Source)
+			if err != nil {
+				return err
+			}
+			return writeBlobRows(out, blobs)
 		},
 	}
 	f.register(cmd)
@@ -161,6 +180,23 @@ func writeTree(out io.Writer, gens []restore.Generation) error {
 		if p, ok := parentOf[tl]; !ok || !listed[p] {
 			walk(tl, 0)
 		}
+	}
+	return w.err
+}
+
+// writeBlobRows prints the blob mirror's generations (ADR-0208), none when the target holds none.
+func writeBlobRows(out io.Writer, es []blobmirror.Entry) error {
+	if len(es) == 0 {
+		return nil
+	}
+	w := &errWriter{w: out}
+	w.printf("\n%-16s %-12s %-24s %s\n", "BLOB GENERATION", "EPOCH", "AT", "STATE")
+	for _, e := range es {
+		at, state := "-", "incomplete"
+		if e.Complete {
+			at, state = v1.NewTimestamp(e.At).String(), "complete"
+		}
+		w.printf("%-16d %-12d %-24s %s\n", e.Generation, e.Epoch, at, state)
 	}
 	return w.err
 }
@@ -433,4 +469,187 @@ func newRestoreRunCmd(out io.Writer) *cobra.Command {
 	cmd.Flags().BoolVar(&newMaster, "new-master-secret", false,
 		"restore without the generation's master secret: the credentials derived from it change")
 	return cmd
+}
+
+// newRestoreBlobCmd is `funcd restore blob` (ADR-0208 Decision 6): a mirror generation from the backup target into the
+// empty store (default: the newest complete one), or with --at every key of a versioned blob.target back to its
+// version at that time. Either leaves the platform held, as restore run does (ADR-0206 Decision 5).
+func newRestoreBlobCmd(out io.Writer) *cobra.Command {
+	var f restoreFlags
+	var at, storeCredentials string
+	cmd := &cobra.Command{
+		Use:   "blob [<generation>]",
+		Short: "Restore the blob store: a mirror generation into the empty store, or --at a time on a versioned blob.target",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			const op = "funcd restore blob"
+			cfg, err := f.load()
+			if err != nil {
+				return err
+			}
+			if cfg.Storage.Mode == "memory" {
+				return fault.Invalidf(op, "storage.mode is memory: there is no blob store to restore")
+			}
+			if at != "" && len(args) > 0 {
+				return fault.Invalidf(op, "give a generation or --at, not both")
+			}
+			if storeCredentials == "" {
+				storeCredentials = cfg.Blob.CredentialsFile
+			}
+			dst, err := openBlobStore(cmd.Context(), cfg, storeCredentials)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = dst.Close() }()
+			if at != "" {
+				return restoreBlobAt(cmd.Context(), out, cfg, dst, at)
+			}
+			return restoreBlobGeneration(cmd.Context(), out, &f, cfg, dst, args)
+		},
+	}
+	f.register(cmd)
+	cmd.Flags().StringVar(&at, "at", "", "restore every key of a versioned blob.target to its version at this RFC 3339 time")
+	cmd.Flags().StringVar(&storeCredentials, "store-credentials-file", "",
+		"the operator's credential for blob.target (default blob.credentialsFile); --at needs the version reads")
+	return cmd
+}
+
+// openBlobStore opens the configured store: blob.target with credentials, else blob.dir, created when absent.
+func openBlobStore(ctx context.Context, cfg config.Config, credentials string) (blob.Bucket, error) {
+	const op = "funcd restore blob"
+	if cfg.Blob.Target != "" {
+		b, err := gocloud.OpenWith(ctx, cfg.Blob.Target, gocloud.OpenOptions{CredentialsFile: credentials})
+		if err != nil {
+			return nil, fault.Wrapf(err, fault.Invalid, op, "open blob.target")
+		}
+		return b, nil
+	}
+	if err := os.MkdirAll(cfg.Blob.Dir, 0o700); err != nil {
+		return nil, fault.Wrapf(err, fault.Internal, op, "create blob.dir %s", cfg.Blob.Dir)
+	}
+	return gocloud.Open(ctx, gocloud.FileURL(cfg.Blob.Dir))
+}
+
+// blobHold is restore blob's hold (ADR-0206 Decisions 2, 5): restore.inprogress, then the marker, so the next start
+// is held; undo removes a marker it wrote and the busy file.
+type blobHold struct {
+	dataDir   string
+	hadMarker bool
+}
+
+func beginBlobHold(dataDir string) (*blobHold, error) {
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return nil, fault.Wrapf(err, fault.Internal, "funcd restore blob", "create storage.dataDir %s", dataDir)
+	}
+	_, statErr := os.Stat(filepath.Join(dataDir, hold.MarkerFile))
+	h := &blobHold{dataDir: dataDir, hadMarker: statErr == nil}
+	if err := hold.Begin(dataDir, "blob"); err != nil {
+		return nil, err
+	}
+	if err := hold.Write(dataDir, hold.Marker{Reason: "restore", Since: v1.NewTimestamp(time.Now())}); err != nil {
+		return nil, errors.Join(err, h.undo())
+	}
+	return h, nil
+}
+
+func (h *blobHold) undo() error {
+	var errs []error
+	if !h.hadMarker {
+		if err := os.Remove(filepath.Join(h.dataDir, hold.MarkerFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(append(errs, hold.End(h.dataDir))...)
+}
+
+// end gives a local store and the marker the data directory's owner, then removes the busy file.
+func (h *blobHold) end(cfg config.Config) error {
+	roots := []string{filepath.Join(h.dataDir, hold.MarkerFile)}
+	if cfg.Blob.Target == "" {
+		roots = append(roots, cfg.Blob.Dir)
+	}
+	if err := hold.Own(h.dataDir, roots...); err != nil {
+		return err
+	}
+	return hold.End(h.dataDir)
+}
+
+func restoreBlobGeneration(ctx context.Context, out io.Writer, f *restoreFlags, cfg config.Config, dst blob.Bucket, args []string) error {
+	const op = "funcd restore blob"
+	o, done, err := f.open(ctx)
+	if err != nil {
+		return err
+	}
+	defer done()
+	es, err := blobmirror.List(ctx, o.Source)
+	if err != nil {
+		return err
+	}
+	var n uint64
+	if len(args) == 1 {
+		if n, err = strconv.ParseUint(args[0], 10, 64); err != nil {
+			return fault.Wrapf(err, fault.Invalid, op, "generation %q", args[0])
+		}
+	} else {
+		for _, e := range es {
+			if e.Complete {
+				n = e.Generation
+			}
+		}
+		if n == 0 {
+			return fault.NotFoundf(op, "the backup target holds no complete blob generation")
+		}
+	}
+	h, err := beginBlobHold(cfg.Storage.DataDir)
+	if err != nil {
+		return err
+	}
+	m, err := blobmirror.Restore(ctx, o.Source, n, dst, envelope.Opener(o.Identities))
+	if err != nil {
+		return errors.Join(err, h.undo())
+	}
+	if err := h.end(cfg); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(out, "restored blob generation %d (%d objects); the platform is held: start funcd, read "+
+		"`funcdctl hold status`, then `funcdctl hold release`\n", m.Generation, m.Objects)
+	return err
+}
+
+func restoreBlobAt(ctx context.Context, out io.Writer, cfg config.Config, dst blob.Bucket, at string) error {
+	const op = "funcd restore blob"
+	when, err := time.Parse(time.RFC3339, at)
+	if err != nil {
+		return fault.Wrapf(err, fault.Invalid, op, "--at %q: want an RFC 3339 time", at)
+	}
+	v, ok := dst.(blob.Versioned)
+	if !ok {
+		return fault.Invalidf(op, "--at restores a versioned blob.target; the local store keeps no versions")
+	}
+	times, err := cfg.BlobTimes()
+	if err != nil {
+		return err
+	}
+	h, err := beginBlobHold(cfg.Storage.DataDir)
+	if err != nil {
+		return err
+	}
+	rep, err := v.RestoreAt(ctx, when, times.VersionRetention)
+	if err != nil {
+		if rep.Copied+rep.Deleted == 0 {
+			return errors.Join(err, h.undo())
+		}
+		return fault.Wrapf(err, fault.KindOf(err), op, "%d keys copied and %d deleted before the error: run the same "+
+			"restore again to complete it", rep.Copied, rep.Deleted)
+	}
+	if err := h.end(cfg); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(out, "restored the blob store to %s: %d copied, %d deleted, %d unchanged; no version was removed; "+
+		"the platform is held: start funcd, read `funcdctl hold status`, then `funcdctl hold release`\n",
+		when.Format(time.RFC3339), rep.Copied, rep.Deleted, rep.Unchanged)
+	if err == nil && len(rep.NoVersion) > 0 {
+		_, err = fmt.Fprintf(out, "deleted for want of a version at that time: %s\n", strings.Join(rep.NoVersion, ", "))
+	}
+	return err
 }

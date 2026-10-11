@@ -210,10 +210,6 @@ func ceilDiv(d, unit time.Duration) int64 {
 // backupKeysOffDefault names the backup.* keys besides target set off their defaults; an empty duration is its default.
 func (c Config) backupKeysOffDefault() []string {
 	b, d := c.Backup, defaults().Backup
-	offDuration := func(v string, def time.Duration) bool {
-		d, err := v1.ParseDuration(v)
-		return v != "" && (err != nil || time.Duration(d) != def)
-	}
 	var keys []string
 	for _, k := range []struct {
 		key string
@@ -237,4 +233,10 @@ func (c Config) backupKeysOffDefault() []string {
 		}
 	}
 	return keys
+}
+
+// offDuration reports a duration key set off its default; empty is the default.
+func offDuration(v string, def time.Duration) bool {
+	d, err := v1.ParseDuration(v)
+	return v != "" && (err != nil || time.Duration(d) != def)
 }

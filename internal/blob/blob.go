@@ -64,3 +64,24 @@ type SignOptions struct {
 	Method SignMethod
 	Expiry time.Duration
 }
+
+// Versioned is an OPTIONAL capability, found by type assertion as RangeReader is: a store whose bucket keeps every
+// version of an object (ADR-0208). A Bucket without it cannot be protected or restored to a time; the caller answers
+// fault.Invalid.
+type Versioned interface {
+	// Versioning reads the bucket's versioning status and Object Lock configuration (ADR-0208 Decision 2).
+	Versioning(ctx context.Context) (Versioning, error)
+	// RestoreAt makes every key under the store's prefix hold its version at at (Decision 6): keep is
+	// blob.versionRetention, and 0 or an at older than keep is fault.Invalid. No version is removed.
+	RestoreAt(ctx context.Context, at time.Time, keep time.Duration) (RestoreReport, error)
+}
+
+// Versioning is a bucket's protection: versioning Enabled and Object Lock enabled.
+type Versioning struct{ Enabled, ObjectLock bool }
+
+// RestoreReport counts a RestoreAt's keys: copied from an older version, deleted (a new delete marker) and left as
+// they were; NoVersion lists the deleted keys that had no version at the time.
+type RestoreReport struct {
+	Copied, Deleted, Unchanged int
+	NoVersion                  []string
+}
