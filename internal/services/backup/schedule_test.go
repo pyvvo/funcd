@@ -1,6 +1,10 @@
 package backup
 
 import (
+	"bytes"
+	"context"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -8,6 +12,10 @@ import (
 
 	"github.com/pyvvo/funcd/api/cron"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/controller"
+	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/store/memory"
 )
 
 // TestRPORiskRule (Decision 9): a daily 03:00 schedule whose newest success started Monday 03:00 is at risk once
@@ -56,4 +64,52 @@ func TestNewestDueCollapses(t *testing.T) {
 	require.Equal(t, last.Add(3*time.Hour), got)
 	_, due = newestDue(table, last, last.Add(59*time.Minute))
 	require.False(t, due)
+}
+
+// noSecrets resolves no Secret: a schedule's pass reads none.
+type noSecrets struct{}
+
+func (noSecrets) ResolveEnv(context.Context, auth.Identity, v1.NamespaceName, []string) (map[string]string, error) {
+	return nil, nil
+}
+
+// A deleted schedule leaves the set of schedules warned about as on the blob store's provider (Decision 6), so one
+// re-created under its name warns again; a pass that keeps the target does not.
+func TestSameProviderWarnForgetsADeletedSchedule(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const endpoint = "region=us-east-1&endpoint=https://s3.example.com"
+	st := store.New(memory.New())
+	var logs bytes.Buffer
+	rs, err := New(Deps{Store: st, Secrets: noSecrets{}, StoreURL: "s3://store?" + endpoint,
+		Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+	require.NoError(t, err)
+	req := controller.Request{GVK: v1.KindBackupSchedule.GVK(), Namespace: "orders", Name: "beside"}
+	create := func() {
+		_, err := st.Create(ctx, &v1.BackupSchedule{
+			TypeMeta:   v1.TypeMeta{APIVersion: req.GVK.APIVersion(), Kind: v1.KindBackupSchedule},
+			ObjectMeta: v1.ObjectMeta{Namespace: req.Namespace, ResourceGroup: "rg1", Name: req.Name},
+			Spec: v1.BackupScheduleSpec{Schedule: "0 3 * * *", Scope: v1.BackupScope{KVStores: []v1.ObjectName{"orders-state"}},
+				Target:     v1.BackupTarget{URL: "s3://backups?" + endpoint, CredentialsSecret: "backup-writer"},
+				Encryption: v1.BackupEncryption{Recipients: []string{"age1owner", "age1recovery"}}},
+		})
+		require.NoError(t, err)
+	}
+	pass := func() {
+		_, err := rs.Schedules.Reconcile(ctx, req)
+		require.NoError(t, err)
+	}
+	warns := func() int {
+		return strings.Count(logs.String(), "workload backup target shares the blob store's provider")
+	}
+
+	create()
+	pass()
+	pass()
+	require.Equal(t, 1, warns(), "a pass that keeps the target warns no more")
+	require.NoError(t, st.Delete(ctx, req.GVK, req.Namespace, req.Name, ""))
+	pass()
+	create()
+	pass()
+	require.Equal(t, 2, warns(), "the schedule re-created under the name warns again")
 }
