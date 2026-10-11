@@ -58,8 +58,8 @@ type Member struct {
 	Catalog v1.CatalogRef
 }
 
-// Sources are what Write reads: the KV driver's per-store export (ADR-0209 SnapshotPrefix), the shared blob store and
-// a Bucket's prefix in it.
+// Sources are what Write reads: the KV driver's per-store export (ADR-0209 SnapshotPrefix; nil when the driver offers
+// none), the shared blob store and a Bucket's prefix in it.
 type Sources struct {
 	KV           func(prefix string) snapshot.Source
 	Blob         blob.Bucket
@@ -176,6 +176,9 @@ func Write(ctx context.Context, ns v1.NamespaceName, ms []Member, src Sources, o
 		var err error
 		switch mb.Kind {
 		case v1.KindKVStore:
+			if src.KV == nil {
+				return Manifest{}, fault.Unavailablef(op, "member %s/%s: the KV driver exports no store", mb.Kind, mb.Name)
+			}
 			f, err = w.file(ctx, "kv/"+string(mb.Name), func(emit func(snapshot.Record) error) error {
 				_, err := src.KV(KVPrefix(ns, mb.Name)).Snapshot(ctx, emit)
 				return err

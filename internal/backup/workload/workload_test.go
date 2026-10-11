@@ -209,3 +209,24 @@ func TestWriteReadBack(t *testing.T) {
 	_, err = workload.Write(ctx, "orders", members, src, workload.Options{Target: rt, Path: path, Seal: sealer.Seal()})
 	require.True(t, errors.Is(err, workload.ErrTargetUnconditional), "%v", err)
 }
+
+// A KVStore member on a KV driver that offers no per-store export fails Write with fault.Unavailable naming it, before
+// anything is written, as a Restore fails on a driver that loads no store.
+func TestWriteWithoutKVExport(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := s3stub.New(t, nil)
+	target, err := gocloud.OpenWith(ctx, s.URL(), gocloud.OpenOptions{Static: &gocloud.StaticKey{ID: "AKIDOWNER", Secret: "s"}})
+	require.NoError(t, err)
+	shared, err := gocloud.Open(ctx, "mem://")
+	require.NoError(t, err)
+	src := workload.Sources{Blob: shared, BucketPrefix: func(ns v1.NamespaceName, b v1.ObjectName) string {
+		return string(ns) + "/" + string(b) + "/"
+	}}
+	const path = "orders/nightly-1-uid/"
+	_, err = workload.Write(ctx, "orders", []workload.Member{{Kind: v1.KindKVStore, Name: "orders-state"}}, src,
+		workload.Options{Target: target, Path: path})
+	require.Equal(t, fault.Unavailable, fault.KindOf(err), "%v", err)
+	require.ErrorContains(t, err, "KVStore/orders-state")
+	require.Empty(t, s.PutKeys(path), "nothing is written")
+}
