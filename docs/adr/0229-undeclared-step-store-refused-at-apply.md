@@ -1,7 +1,8 @@
 # ADR-0229: A Workflow step that binds an undeclared KV store is refused at apply; the materializer keeps its check
 
-- **Status**: Accepted (2026-10-11; decided by the decider, judged twice: the first round moved the App case onto
-  `app-parts` and completed the superseded entry, the second found no Blocker or Major)
+- **Status**: Reviewing (2026-10-11; implemented, awaiting the implementation review; accepted 2026-10-11, decided by
+  the decider, judged twice: the first round moved the App case onto `app-parts` and completed the superseded entry,
+  the second found no Blocker or Major)
 - **Date**: 2026-10-11
 - **Deciders**: green-0-rabbit
 - **Tags**: workflow, app, kv, admission

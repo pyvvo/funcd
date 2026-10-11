@@ -1173,6 +1173,8 @@ func (p *Platform) buildControlPlane() error {
 			// ADR-0074 Policy validity: spec.cedar parses + references only the curated schema
 			// (kv::read/kv::write; Function/KVStore/KVTable) — so every stored Policy compiles.
 			admission.NewPolicyValidityAdmission(),
+			// ADR-0229: an image step binds only KV stores its Workflow declares in spec.kv.
+			admission.NewWorkflowStepStoresAdmission(),
 			// ADR-0094 WorkflowRun payload cap: spec.input ≤ payloadLimit (larger data by reference).
 			admission.NewWorkflowRunPayloadAdmission(c.workflowPayloadLimit),
 			// ADR-0098 F65: reject a WorkflowRun whose input violates the parent's cached contract (zero registry I/O).

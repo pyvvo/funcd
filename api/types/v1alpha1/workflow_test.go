@@ -258,3 +258,42 @@ func TestIssue927_ValidateRefusesRepeatedKVName(t *testing.T) {
 		t.Fatalf("two stores of distinct names rejected: %v", err)
 	}
 }
+
+// ADR-0229: UndeclaredStepStore reports the first image step binding a store that spec.kv does not declare; a step
+// without function.image is not checked, and Validate leaves the rule to admission.
+func TestWorkflowSpecUndeclaredStepStore(t *testing.T) {
+	bound := func(st WorkflowStep, stores ...ObjectName) WorkflowStep {
+		for _, s := range stores {
+			st.Function.KV = append(st.Function.KV, FunctionKV{Alias: string(s), Store: s, Table: "t"})
+		}
+		return st
+	}
+	ref := func(name ObjectName) WorkflowStep {
+		return WorkflowStep{Name: name, Function: &FunctionStep{Ref: "shared-fn"}}
+	}
+	own := []WorkflowKVStore{{Name: "own", Tables: []KVTable{{Name: "t"}}}}
+	cases := map[string]struct {
+		spec          WorkflowSpec
+		step, binding int
+		store         ObjectName
+		ok            bool
+	}{
+		"declared":   {spec: WorkflowSpec{KV: own, Steps: []WorkflowStep{bound(imgStep("a"), "own")}}},
+		"undeclared": {spec: WorkflowSpec{KV: own, Steps: []WorkflowStep{bound(imgStep("a"), "own", "shared")}}, binding: 1, store: "shared", ok: true},
+		"no image":   {spec: WorkflowSpec{Steps: []WorkflowStep{bound(ref("a"), "shared"), {Name: "b", Builtin: &BuiltinStep{Wait: "1s"}}}}},
+		"first hit wins": {spec: WorkflowSpec{KV: own, Steps: []WorkflowStep{
+			bound(imgStep("a"), "own"), bound(ref("b"), "x"), bound(imgStep("c"), "own", "first", "y"), bound(imgStep("d"), "second"),
+		}}, step: 2, binding: 1, store: "first", ok: true},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			step, binding, store, ok := c.spec.UndeclaredStepStore()
+			if step != c.step || binding != c.binding || store != c.store || ok != c.ok {
+				t.Fatalf("UndeclaredStepStore() = (%d, %d, %q, %t), want (%d, %d, %q, %t)", step, binding, store, ok, c.step, c.binding, c.store, c.ok)
+			}
+			if err := newWorkflow(c.spec).Validate(); err != nil {
+				t.Fatalf("Validate() = %v, want nil: the rule is admission-only", err)
+			}
+		})
+	}
+}

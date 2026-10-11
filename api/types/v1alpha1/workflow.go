@@ -421,6 +421,27 @@ func (s WorkflowSpec) EffectiveDependsOn() map[ObjectName][]ObjectName {
 	return deps
 }
 
+// UndeclaredStepStore reports the first image step binding a KV store that s.KV does not declare: its index in
+// s.Steps, the binding's index in its function.kv, and the store (ADR-0229); ok is false when there is none.
+func (s WorkflowSpec) UndeclaredStepStore() (step, binding int, store ObjectName, ok bool) {
+	declared := make(map[ObjectName]bool, len(s.KV))
+	for i := range s.KV {
+		declared[s.KV[i].Name] = true
+	}
+	for i := range s.Steps {
+		f := s.Steps[i].Function
+		if f == nil || f.Image == "" {
+			continue
+		}
+		for j, b := range f.KV {
+			if !declared[b.Store] {
+				return i, j, b.Store, true
+			}
+		}
+	}
+	return 0, 0, "", false
+}
+
 // validateAcyclic rejects a cycle in the scheduled graph (EffectiveDependsOn) via DFS: a cycle is
 // unbuildable, including one that closes only through an implicit list-order edge.
 func (w *Workflow) validateAcyclic(op string) error {

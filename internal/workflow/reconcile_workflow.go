@@ -356,22 +356,11 @@ func (m *Materializer) stripBindings(ctx context.Context, wf *v1.Workflow, kvs *
 	return nil
 }
 
-// checkStepStores refuses a step binding to a store wf does not declare in spec.kv.
+// checkStepStores refuses a step binding to a store wf does not declare in spec.kv. Admission refuses the same spec
+// at apply (ADR-0229); this guard covers a Workflow that reached the store without it.
 func checkStepStores(wf *v1.Workflow) error {
-	declared := make(map[v1.ObjectName]bool, len(wf.Spec.KV))
-	for i := range wf.Spec.KV {
-		declared[wf.Spec.KV[i].Name] = true
-	}
-	for i := range wf.Spec.Steps {
-		st := &wf.Spec.Steps[i]
-		if st.Function == nil || st.Function.Image == "" {
-			continue
-		}
-		for _, b := range st.Function.KV {
-			if !declared[b.Store] {
-				return kvNotOwned(b.Store, wf)
-			}
-		}
+	if _, _, name, ok := wf.Spec.UndeclaredStepStore(); ok {
+		return kvNotOwned(name, wf)
 	}
 	return nil
 }
