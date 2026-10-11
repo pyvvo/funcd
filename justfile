@@ -75,12 +75,13 @@ test-linux *flags:
     echo "linux packages:" $pkgs
     GOOS=linux GOARCH={{ARCH}} scripts/linux-exec.sh --run go test -exec "$PWD/scripts/linux-exec.sh" {{flags}} $pkgs
 
-# run the e2e suite on Linux before CI does: `just test-e2e` (CI's e2e job passes -v), each test binary run by
-# scripts/linux-exec.sh in funcd-linux-tests, as test-linux does. The VM has node and the dev shell's Python, and
-# CI=true there fails the Python shim lane instead of skipping it, as on CI. The VM's module cache is filled only from
-# the host's, read-only and offline, through a file:// GOPROXY (with GOMODCACHE on the mount instead, a test's go build
-# once failed to exec the toolchain's asm: permission denied). Opt-in, not a gate step: CI runs the suite on every PR
-# that touches code. Needs a checkout under $HOME.
+# It runs `just test-e2e` (CI's e2e job passes -v) with each test binary run by scripts/linux-exec.sh in
+# funcd-linux-tests, as test-linux does. The VM has node and the dev shell's Python, and CI=true there fails the Python
+# shim lane instead of skipping it, as on CI. The VM's module cache is filled only from the host's, read-only and
+# offline, through a file:// GOPROXY (with GOMODCACHE on the mount instead, a test's go build once failed to exec the
+# toolchain's asm: permission denied). Opt-in, not a gate step: CI runs the suite on every PR that touches code. Needs a
+# checkout under $HOME.
+[doc('run the e2e suite on Linux in the funcd-linux-tests VM before CI does')]
 [group('test')]
 test-linux-e2e *flags:
     #!/usr/bin/env bash

@@ -151,14 +151,12 @@ done
 booted='[ -e /run/lima-boot-done ] && exec "$@"
 echo "linux-exec: the funcd-linux-tests VM has not finished booting" >&2
 exit 125'
-# As runner: write stdin to a new temp dir, run it there with the flags, and remove the dir.
-run='d=$(mktemp -d) && cat >"$d/$1" && chmod 755 "$d/$1" || exit 125
+run='d=$(mktemp -d) || exit 125
+trap "rm -rf \"$d\"" EXIT HUP INT TERM
+cat >"$d/$1" && chmod 755 "$d/$1" || exit 125
 b=$d/$1
 shift
-"$b" "$@" </dev/null
-rc=$?
-rm -r "$d"
-exit $rc'
+"$b" "$@" </dev/null'
 limactl shell --workdir "$(pwd -P)" "$vm" sh -c "$booted" linux-exec sudo -H -u runner \
   env PATH="$goroot/bin:/usr/local/bin:/usr/bin:/bin" GOTOOLCHAIN=local ${vars[@]+"${vars[@]}"} \
   sh -c "$run" linux-exec "${bin##*/}" "$@" <"$bin"
