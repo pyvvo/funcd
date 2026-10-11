@@ -23,14 +23,18 @@
 #   L14 an upload under uploads/ in Bucket todo-files fires the blob EventSource, whose Sensor runs the intake
 #       Function, which records the upload (ADR-0119).
 #   D1-D5 the disaster-recovery drill (FEAT-0009): backups on schedule to an S3 server in the VM (versitygw), sealed;
-#       a lost data directory restored from the target and an escrow copy to the point before the damage, booting
-#       held; a lost write's version conflicts; a release that advances the uploads source fires no restored upload
-#       twice; and funcdctl backup plan (ADR-0202-0206, 0209, 0223).
+#       a total loss of the host (every process, file and link funcd made), then a rebuilt host restored from the
+#       target and an escrow copy alone to the point before the damage, booting held; a lost write's version
+#       conflicts; a release that advances the uploads source fires no restored upload twice; and funcdctl backup
+#       plan (ADR-0202-0206, 0209, 0223).
 #   D6-D8 the App's own data (F111): a backup schedule the App declares backs up its stores to its S3 target, sealed;
 #       a Restore loads a Backup into new stores, and an admin's in-place Restore exports first (ADR-0222).
 #   D9 funcd upgrade writes a pre-upgrade generation and keeps the old binary (ADR-0207).
 #   D10 the blob store on S3: an unversioned bucket is refused, and on a versioned one uploads land there, keep their
 #       old versions and still fire the blob event source (ADR-0208).
+#   D11-D14 the dead letter and the run record of the backup come back as evidence; a target funcd cannot write stops
+#       the backup and backup status says why; a config that breaks a backup rule is refused at start and by backup
+#       plan alike; a plain restart keeps the event store, so nothing fires twice (ADR-0201, 0203, 0205, 0223).
 # The suite pushes, locks and deploys the App itself; the lane only creates the Secret and the grant beside it. Every
 # file it applies comes from funcd-functions, staged by scripts/lanes.yaml.
 name: app-todo — the todo App from its pushed template on real containerd (ADR-0199/0200/0211-0215/0217-0220/0226/0229), and a disaster-recovery drill (ADR-0202-0209/0222/0223)
@@ -1037,6 +1041,45 @@ testcases:
         assertions:
           - result.statuscode ShouldEqual 200
           - result.bodyjson.uploads ShouldHaveLength 1
+      # A dead letter before the backup: a Sensor whose action always fails fires on an upload to a todo of its own,
+      # so milk's uploads stay as they are. D11 finds it again after the restore.
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl apply -f /opt/lane/dr/dead-letter-sensor.yaml'
+        info: "the failing Sensor → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"add","title":"letters","token":"{{.token}}"}}'
+        retry: 30
+        delay: 2
+        info: "add letters → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"attach","id":"letters","name":"dead.txt","content":"x","token":"{{.token}}"}}'
+        retry: 15
+        delay: 2
+        info: "attach → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            funcdctl eventing dlq list -n default | grep todo-dr-dead-letter | head -1 | cut -f1 | grep . | tee /root/dead-letter'
+        retry: 30
+        delay: 2
+        info: "the dead letter → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex "^[0-9A-Z]{26}$"
       # The probe ConfigMap is read before the backup that holds it; D3 writes it back with this old version.
       - type: exec
         script: |
@@ -1091,8 +1134,12 @@ testcases:
         assertions:
           - result.systemout ShouldMatchRegex "^[0-9a-f]{16}/[0-9]+$"
 
-  - name: D2 after a lost data directory the operator restores the point before the damage from the target and the escrow copy, and funcd boots held
+  - name: D2 after a total loss of the host the operator rebuilds it and restores the point before the damage from the target and the escrow copy alone, and funcd boots held
     steps:
+      # A write after the point, which the restore loses; then the host is lost whole: lane-reset.sh kills the unit,
+      # the workers and their mounts, the network and the data directory, and everything funcd install laid down goes
+      # too. The staged kit in /opt/lane, the escrow copy and the notes under /root are the operator's, kept apart;
+      # the S3 server and the registry stand for remote services.
       - type: exec
         script: |
           {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
@@ -1101,9 +1148,42 @@ testcases:
             curl -sf -H "authorization: Bearer todo-lane-developer" $u | sed s/before-the-backup/after-the-backup/ |
               curl -sf -X PUT -H "authorization: Bearer todo-lane-developer" -H "content-type: application/json" \
                 --data-binary @- $u >/root/probe-lost.json
-            systemctl stop funcd-demo
-            systemctl reset-failed funcd-demo 2>/dev/null || true
-            mv /var/lib/funcd/data /var/lib/funcd/data.lost
+            rm -rf /root/lane-kit && cp -a /opt/lane /root/lane-kit
+            bash /opt/lane/dr/lane-reset.sh
+            rm -rf /var/lib/funcd /etc/funcd /etc/cni/net.d /opt/cni/bin /run/funcd-boot /run/funcd-log \
+              /usr/local/bin/funcd /etc/systemd/system/funcd.service
+            systemctl daemon-reload
+            cp -a /root/lane-kit /opt/lane
+            echo LOST'
+        info: "the loss → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring LOST
+      # Nothing of the old host is left: no funcd process, no containerd or shim run from funcd's runtime (by name and
+      # executable; Lima runs a containerd of its own), none of its directories, no bridge.
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            ours() { for p in $(pgrep "$@"); do readlink /proc/$p/exe; done | grep -c "^/var/lib/funcd/"; }
+            echo "funcd=$(pgrep -c -x funcd) containerd=$(ours -x containerd)" \
+              "shims=$(ours containerd-shim)" \
+              "paths=$(ls -d /var/lib/funcd /etc/funcd /opt/cni/bin /usr/local/bin/funcd 2>/dev/null | wc -l)" \
+              "bridge=$(ip -o link show funcd0 2>/dev/null | wc -l)"'
+        info: "what is left → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldEqual "funcd=0 containerd=0 shims=0 paths=0 bridge=0"
+      # The new host: funcd installed as on a fresh machine (its runtime downloaded and checked again), the tokens of
+      # its config, then the restore from the target with the operator's restore credential, identity and escrow copy.
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            install -m 0755 /mnt/funcd-deps/funcd /usr/local/bin/funcd
+            funcd install >/dev/null
+            systemctl disable --now funcd.service
+            install -d -m 700 /etc/funcd/tokens
+            install -m 600 /opt/lane/dr/admin.token /etc/funcd/tokens/admin
+            install -m 600 /opt/lane/dr/developer.token /etc/funcd/tokens/developer
             r="--config /opt/lane/dr/funcdconfig.yaml --credentials-file /opt/lane/dr/restore.credentials --identity /opt/lane/dr/identity.txt"
             unset FUNCD_TOKEN
             p=$(cat /root/point)
@@ -1116,10 +1196,10 @@ testcases:
             curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
             systemctl is-active --quiet funcd-demo || { journalctl -u funcd-demo --no-pager -n 60; exit 1; }
             echo RESTORED'
-        info: "the restore → {{.result.systemout}} {{.result.systemerr}}"
+        info: "the new host → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "the platform is held"
+          - 'result.systemout ShouldContainSubstring "the platform is held"'
           - result.systemout ShouldContainSubstring RESTORED
       - type: exec
         script: |
@@ -1523,3 +1603,118 @@ testcases:
         info: "the intake's log → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.systemout ShouldContainSubstring "intake uploads/milk/remote.txt"
+
+  - name: D11 the dead letter and the workflow run record of the backup came back with the restore, as evidence that nothing resumed
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            funcdctl eventing dlq describe "$(cat /root/dead-letter)" -n default >/dev/null && echo "DEAD LETTER KEPT"
+            funcdctl get workflowrun plan-l2 -n default -o json | python3 -c "import sys,json;d=json.load(sys.stdin)[\"status\"];print(\"PHASE=\"+d.get(\"phase\",\"\")+\",STEPS=\"+\";\".join(s[\"name\"]+\"=\"+s[\"phase\"] for s in d.get(\"steps\",[])))"'
+        info: "the evidence → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "DEAD LETTER KEPT"
+          - result.systemout ShouldContainSubstring PHASE=Succeeded
+          - result.systemout ShouldContainSubstring STEPS=
+
+  - name: D12 a backup target funcd cannot write stops the backup, and backup status says why; the platform keeps serving
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            c=/opt/lane/dr/funcdconfig-blob-s3.yaml
+            sed "s|s3://todo-backup?|s3://todo-missing?|" $c >/root/missing-target.yaml
+            grep -q todo-missing /root/missing-target.yaml
+            systemctl stop funcd-demo
+            systemctl reset-failed funcd-demo 2>/dev/null || true
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 /usr/local/bin/funcd \
+              --config /root/missing-target.yaml
+            curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
+            systemctl is-active --quiet funcd-demo || { journalctl -u funcd-demo --no-pager -n 60; exit 1; }
+            echo STARTED'
+        info: "a missing target → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring STARTED
+      - type: exec
+        script: |
+          {{.vmsh}} 'FUNCD_TOKEN=todo-lane-admin funcdctl backup status'
+        retry: 20
+        delay: 2
+        info: "backup status → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldNotEqual 0
+          - result.systemerr ShouldContainSubstring "bucket does not exist"
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"get","id":"milk"}}'
+        retry: 30
+        delay: 2
+        info: "milk → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+
+  - name: D13 a hand-edited config that breaks a backup rule is refused at start, and funcdctl backup plan refuses it by the same rule
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            unset FUNCD_TOKEN
+            sed "s/^  interval: 20s$/  interval: 0s/" /opt/lane/dr/funcdconfig-blob-s3.yaml >/root/zero-interval.yaml
+            grep -q "^  interval: 0s$" /root/zero-interval.yaml || { echo "no backup.interval to edit"; exit 1; }
+            timeout 30 /usr/local/bin/funcd --config /root/zero-interval.yaml >/root/start.log 2>&1
+            echo "start exit $?"; grep -o "backup.interval[^;]*" /root/start.log | head -1
+            funcdctl backup plan platform --config /root/zero-interval.yaml --rpo 1h --keep 72h >/root/plan.log 2>&1
+            echo "plan exit $?"; grep -o "backup.interval[^;]*" /root/plan.log | head -1'
+        info: "the refusals → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "start exit 1"
+          - result.systemout ShouldContainSubstring "plan exit 1"
+          - result.systemout ShouldContainSubstring backup.interval
+
+  - name: D14 a plain restart keeps eventing state in the event store; no object fires again and the dead letter stays
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            set -e
+            funcdctl logs todo-intake -n default | grep -c "intake uploads/" >/root/intake-before-restart
+            systemctl stop funcd-demo
+            systemctl reset-failed funcd-demo 2>/dev/null || true
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 /usr/local/bin/funcd \
+              --config /opt/lane/dr/funcdconfig-blob-s3.yaml
+            curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
+            systemctl is-active --quiet funcd-demo || { journalctl -u funcd-demo --no-pager -n 60; exit 1; }
+            echo RESTARTED'
+        info: "the restart → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring RESTARTED
+      # The uploads source is Ready and listing again once a new upload fires; nothing listed before fired twice.
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"attach","id":"milk","name":"after-restart.txt","content":"ok","token":"{{.token}}"}}'
+        retry: 30
+        delay: 2
+        info: "attach → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            l=$(funcdctl logs todo-intake -n default)
+            echo "$l" | grep -q "intake uploads/milk/after-restart.txt 2" || { echo WAITING; exit 0; }
+            n=$(echo "$l" | grep -c "intake uploads/")
+            [ "$n" = "$(( $(cat /root/intake-before-restart) + 1 ))" ] && echo "NO REFIRE" || echo "intake ran $n times"
+            funcdctl eventing dlq describe "$(cat /root/dead-letter)" -n default >/dev/null && echo "DEAD LETTER KEPT"'
+        retry: 30
+        delay: 2
+        info: "after the restart → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "NO REFIRE"
+          - result.systemout ShouldContainSubstring "DEAD LETTER KEPT"

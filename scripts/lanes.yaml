@@ -452,6 +452,9 @@ app-todo:
       to: todo-shared
     # The disaster-recovery block: its config, test keys and tokens, and the S3 server that serves its backup target.
     - dr
+    # The reset of the shared lane VM, which the DR block's total loss runs.
+    - from: scripts/lane-reset.sh
+      to: dr/lane-reset.sh
   # versitygw (Apache-2.0), the S3 server of the DR block, built for the VM at a pinned version.
   build:
     - CGO_ENABLED=0 GOOS=linux GOARCH=$(go env GOARCH) GOBIN= go install github.com/versity/versitygw/cmd/versitygw@v1.8.0 && cp "$(go env GOPATH)/bin/linux_$(go env GOARCH)/versitygw" dr/versitygw
