@@ -15,8 +15,8 @@ import (
 // check that uses the test's t (a helper that calls require, reads through the test's platform) can fail the test
 // after its window, once the cleanup has stopped the platform. The t can sit one call away, in a closure, a helper or
 // a rig method no syntax check reads, so every Never check goes through poll.Never, which checks in the caller's
-// goroutine: any other Never or Neverf call with a condition and a window is refused, an aliased testify import's and
-// require.New(t)'s included.
+// goroutine: any other Never or Neverf call with arguments is refused, an aliased testify import's and require.New(t)'s
+// included.
 func TestIssue950_NeverChecksDoNotUseTheTest(t *testing.T) {
 	t.Parallel()
 	root := repoRoot(t)
@@ -31,7 +31,7 @@ func TestIssue950_NeverChecksDoNotUseTheTest(t *testing.T) {
 				return true
 			}
 			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || len(call.Args) < 3 || (sel.Sel.Name != "Never" && sel.Sel.Name != "Neverf") {
+			if !ok || len(call.Args) == 0 || (sel.Sel.Name != "Never" && sel.Sel.Name != "Neverf") {
 				return true
 			}
 			if pkg, ok := sel.X.(*ast.Ident); !ok || pkg.Name != "poll" {
