@@ -240,13 +240,14 @@ func readEvents(t *testing.T, srv *httptest.Server) int {
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	ev, n := make([]byte, 1024), 0
+	ev, n, start := make([]byte, 1024), 0, time.Now()
 	for {
 		_, err := io.ReadFull(resp.Body, ev)
 		if errors.Is(err, io.EOF) {
 			return n
 		}
-		require.NoError(t, err)
+		// which event the cut hit, and when, tells a stall-limit cut from a closed connection (run 38171033278)
+		require.NoError(t, err, "after %d events, %s into the response", n, time.Since(start).Round(time.Millisecond))
 		n++
 	}
 }
