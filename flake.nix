@@ -49,6 +49,7 @@
           # the Python shim's interpreter and runtime dep (ADR-0049/0123), 3.14 for the pool host (ADR-0050)
           # PyYAML: the lane tools read their registry and VM YAML (scripts/lanes.yaml, scripts/lima.yaml) with it
           (python314.withPackages (ps: [ ps.fastjsonschema ps.pyyaml ]))
+          uv  # the duckdb lane's build runs funcd-bundle with it (scripts/lanes.yaml)
         ]) ++ limaFor system ++ [ (venomFor system) ];
         shellHook = ''
           echo "funcd dev shell — go $(go version | awk '{print $3}')"

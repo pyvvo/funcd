@@ -17,7 +17,8 @@ if [ "$part" != lane ]; then
   install -m 0755 /mnt/funcd-deps/funcdctl /usr/local/bin/funcdctl
   # PyYAML so the guest reads the registry directly (the base image is python3 stdlib-only); nftables for the nft
   # that scripts/lane-reset.sh and scripts/lane-leakcheck.sh run (funcd itself programs nftables through netlink).
-  apt-get update -qq && apt-get install -y -qq python3-yaml nftables
+  # The versions of the Debian snapshot scripts/lima-apt-snapshot.sh points apt at: move them together.
+  apt-get update -qq && apt-get install -y -qq python3-yaml=6.0-3+b2 nftables=1.0.6-2+deb12u2
 fi
 [ "$part" != boot ] || exit 0
 if [ ! -f /mnt/funcd-deps/lane.tgz ]; then

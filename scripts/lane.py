@@ -79,11 +79,13 @@ def main() -> None:
         writable_copy(src, copy)
         example_dir = os.path.join(copy, spec["dir"]) if module else copy
 
-    # build (host): run each command in the lane's dir, in order. The child's stdout is redirected to
-    # STDERR so ONLY the final suite path lands on stdout (the recipe captures stdout for the suite).
+    # build (host): run each command in the lane's dir, in order, with FUNCD_ROOT naming this checkout (a build
+    # checks a download against a pin kept in it). The child's stdout is redirected to STDERR so ONLY the final
+    # suite path lands on stdout (the recipe captures stdout for the suite).
+    env = {**os.environ, "FUNCD_ROOT": root}
     for cmd in spec.get("build", []):
         print(f"[lane {name}] build: {cmd}", file=sys.stderr)
-        subprocess.run(cmd, shell=True, check=True, stdout=sys.stderr, cwd=example_dir)
+        subprocess.run(cmd, shell=True, check=True, stdout=sys.stderr, cwd=example_dir, env=env)
 
     # stage the lane's files + the registry + the LANE marker into <deps>/lane.tgz.
     os.makedirs(deps, exist_ok=True)

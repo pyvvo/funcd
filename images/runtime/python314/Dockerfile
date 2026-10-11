@@ -15,11 +15,15 @@
 # pull. Build + export with: just build-runtime-images (gzip -9 OCI tars per arch; the cc base
 # layer is shared with other cc-based images where the build arranges it).
 
+# Both bases are pinned by the digest of their multi-arch index (resolved 2026-10-11), so every build reads
+# the same bytes; move one deliberately, from `docker buildx imagetools inspect <image>:<tag>`, and keep
+# python:3.14-slim-bookworm at the digest images/runtime/duckdb/Dockerfile and scripts/lanes.yaml use.
+
 # --- stage 1: the stock 3.14 build, source of the runtime + stdlib C-ext libs --------------
 # Pinned to the BOOKWORM variant (glibc 2.36) so the interpreter + its C-ext libs link against the SAME
 # glibc the distroless/cc-debian12 final stage ships — the default `:3.14-slim` drifted to trixie
 # (glibc 2.41), whose libpython won't load on cc-debian12 (ADR-0071: a working, reproducible rebuild).
-FROM python:3.14-slim-bookworm AS py
+FROM python:3.14-slim-bookworm@sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83 AS py
 
 # The funcd Python shim package (stdlib-only — ADR-0049/0050). Laid into the site path the
 # embedded 3.14 will see. `shim` is a named build context: the pinned funcd-python module's shim/ dir
@@ -27,9 +31,10 @@ FROM python:3.14-slim-bookworm AS py
 COPY --from=shim src/funcd_shim /opt/funcd/funcd_shim
 # fastjsonschema (pure-Python, BSD-3) — the ONE runtime dependency the build-baked contract validators
 # import (ADR-0060). Shipped onto the same PYTHONPATH as the shim so a contract-validated artifact can
-# import its validator at runtime; without it such functions crash at startup (ADR-0071). Pinned for a
-# reproducible image; the final distroless stage carries it with no pip/venv.
-RUN pip install --no-compile --no-deps --target /opt/funcd fastjsonschema==2.21.2
+# import its validator at runtime; without it such functions crash at startup (ADR-0071). Pinned by version
+# and wheel hash (requirements.txt); the final distroless stage carries it with no pip/venv.
+COPY images/runtime/python314/requirements.txt /tmp/requirements.txt
+RUN pip install --no-compile --no-deps --require-hashes --target /opt/funcd -r /tmp/requirements.txt
 # The system shared-library closure the 3.14 interpreter + its stdlib C-extensions link against (zlib,
 # openssl, ffi, sqlite, lzma, …). distroless/cc ships ONLY glibc + libstdc++/libgcc, so the stdlib's
 # C-extensions (zlib→binascii, ssl, sqlite3, …) fail to load there. Gather the resolved ldd closure here —
@@ -52,7 +57,7 @@ RUN printf 'from funcd_shim.shim import main\nraise SystemExit(main())\n' > /opt
 # shared libpython, and the shim package. The exact lib set is the `ldd` closure of
 # python3.14 + lib-dynload/*.so (ADR-0054 Open question — enumerated at impl, stable once
 # pinned); copying the whole /usr/local/lib/python3.14 tree + libpython is the safe superset.
-FROM gcr.io/distroless/cc-debian12
+FROM gcr.io/distroless/cc-debian12@sha256:e5d81ddde149641e2a9ba55be4545bc125c67de07508b03ba4c22e6eb0ded5aa
 
 COPY --from=py /usr/local/bin/python3.14 /usr/local/bin/python3.14
 COPY --from=py /usr/local/lib/libpython3.14.so* /usr/local/lib/

@@ -132,15 +132,19 @@ act-bundle:
 # run by `just ci` (ci stays green on the tiny placeholders). Compression note: gzip -9 trades
 # build time for the smallest embed; docker save reuses shared base layers (e.g. the cc base
 # across cc-derived images) so a multi-image embed does not pay for the base twice on disk.
+# Reproducible: the Dockerfiles pin every input, SOURCE_DATE_EPOCH (1980-01-01, the dev shell's value)
+# stamps the image config and, with rewrite-timestamp, every file the build writes, and gzip -n stores no
+# time, so a rebuild of the same commit gives the same image IDs and the same tars. Docker's containerd image
+# store refuses rewrite-timestamp on an image it unpacks, hence unpack=false: docker save needs no unpacked image.
 ARCH := `go env GOARCH`
 [group('runtime')]
 build-runtime-images: embedimg-pin
-    docker build --provenance=false --sbom=false --platform linux/{{ARCH}} --build-context shim="$(scripts/moddir.sh github.com/pyvvo/funcd-typescript)/shim" -f images/runtime/nodejs22/Dockerfile -t funcd/runtime-nodejs22:latest .
-    docker build --provenance=false --sbom=false --platform linux/{{ARCH}} --build-context shim="$(scripts/moddir.sh github.com/pyvvo/funcd-python)/shim" -f images/runtime/python314/Dockerfile -t funcd/runtime-python314:latest .
-    docker build --provenance=false --sbom=false --platform linux/{{ARCH}} -f images/runtime/duckdb/Dockerfile -t funcd/runtime-duckdb:latest .
-    docker save funcd/runtime-nodejs22:latest | gzip -9 > internal/runtime/embedimg/nodejs22.tar
-    docker save funcd/runtime-python314:latest | gzip -9 > internal/runtime/embedimg/python314.tar
-    docker save funcd/runtime-duckdb:latest | gzip -9 > internal/runtime/embedimg/duckdb.tar
+    docker build --provenance=false --sbom=false --platform linux/{{ARCH}} --build-arg SOURCE_DATE_EPOCH=315532800 --build-context shim="$(scripts/moddir.sh github.com/pyvvo/funcd-typescript)/shim" -f images/runtime/nodejs22/Dockerfile --output type=image,name=funcd/runtime-nodejs22:latest,rewrite-timestamp=true,unpack=false .
+    docker build --provenance=false --sbom=false --platform linux/{{ARCH}} --build-arg SOURCE_DATE_EPOCH=315532800 --build-context shim="$(scripts/moddir.sh github.com/pyvvo/funcd-python)/shim" -f images/runtime/python314/Dockerfile --output type=image,name=funcd/runtime-python314:latest,rewrite-timestamp=true,unpack=false .
+    docker build --provenance=false --sbom=false --platform linux/{{ARCH}} --build-arg SOURCE_DATE_EPOCH=315532800 -f images/runtime/duckdb/Dockerfile --output type=image,name=funcd/runtime-duckdb:latest,rewrite-timestamp=true,unpack=false .
+    docker save funcd/runtime-nodejs22:latest | gzip -9n > internal/runtime/embedimg/nodejs22.tar
+    docker save funcd/runtime-python314:latest | gzip -9n > internal/runtime/embedimg/python314.tar
+    docker save funcd/runtime-duckdb:latest | gzip -9n > internal/runtime/embedimg/duckdb.tar
     @echo "embedded OCI tars written to internal/runtime/embedimg/ for {{ARCH}} (replaces the placeholders)"
 
 # Fetch + bundle the DuckDB+Quack CATALOG ENGINE for ONE target os/arch into
@@ -244,7 +248,7 @@ lima-down:
 # scripts/lanes.yaml (the REGISTRY), runs scripts/lane.py to execute its `build` + stage its files + the
 # registry into lane.tgz, boots the ONE generic VM (scripts/lima-lane.yaml — which reads the same section
 # in-guest to push + apply + probe Ready), and runs the lane's Venom suite. Add a lane by adding a section
-# to scripts/lanes.yaml — NO per-lane recipe or VM YAML. Needs docker (+ uv for the duckdb lane's `build`).
+# to scripts/lanes.yaml — NO per-lane recipe or VM YAML. Needs docker (the dev shell has uv for the duckdb lane's `build`).
 # Examples: `just lima-example env-echo` · `just lima-example duckdb`.
 [group('example')]
 lima-example name:

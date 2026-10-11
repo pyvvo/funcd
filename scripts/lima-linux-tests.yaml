@@ -7,10 +7,10 @@
 
 # The lanes' Debian image (scripts/lima.yaml; scripts/lima-cache.py primes it): keep the two in step.
 images:
-  - location: "https://laotzu.ftp.acc.umu.se/cdimage/cloud/bookworm/latest/debian-12-genericcloud-arm64.qcow2"
+  - location: "https://laotzu.ftp.acc.umu.se/cdimage/cloud/bookworm/20260706-2531/debian-12-genericcloud-arm64-20260706-2531.qcow2"
     arch: "aarch64"
     digest: "sha512:f7339d10adfe8c4f6aec4cf1134b9fd6086b2710e1f9ba50e7f1d0890024036fe13417b904cc328f7b35dd9ec07165a4857ae425093bb333769f2fb527e2b02b"
-  - location: "https://laotzu.ftp.acc.umu.se/cdimage/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2"
+  - location: "https://laotzu.ftp.acc.umu.se/cdimage/cloud/bookworm/20260706-2531/debian-12-genericcloud-amd64-20260706-2531.qcow2"
     arch: "x86_64"
     digest: "sha512:ee13b9618400b521b83d92dec5106c853c3290d14f25efbacb851828abceac1847b63d3d1bac8059d980c7d443efcbc7451fdd6648b2a134796b28563cedfda9"
 
@@ -18,6 +18,8 @@ images:
 cpus: 4
 memory: "8GiB"
 disk: "20GiB"
+# CI's runner runs in UTC; Lima otherwise gives the guest the host's time zone.
+timezone: "UTC"
 
 mounts:
   - location: "~"
@@ -37,18 +39,21 @@ portForwards:
     proto: any
     ignore: true
 
+# apt reads one Debian snapshot, as in the lane VMs (scripts/lima-apt-snapshot.sh), so git is the version named here.
 # node: the tests that start a worker; the nodejs_22 version of the flake's nixpkgs, pinned by checksum like the image.
 # git: `go build` in a test stamps VCS information, from a checkout runner does not own.
 # python3.14 and fastjsonschema: the Python shim's interpreter and runtime dependency, at the python314 and
 # fastjsonschema versions of the flake's nixpkgs, pinned by checksum: CPython as built by astral-sh's
 # python-build-standalone, and the wheel from PyPI.
 provision:
+  - mode: dependency
+    file: lima-apt-snapshot.sh
   - mode: system
     script: |
       #!/bin/bash
       set -euo pipefail
       id runner >/dev/null 2>&1 || useradd --uid 1001 --user-group --groups adm --create-home --shell /bin/bash runner
-      command -v git >/dev/null || { apt-get update -qq && apt-get install -y -qq git; }
+      command -v git >/dev/null || { apt-get update -qq && apt-get install -y -qq git=1:2.39.5-0+deb12u3; }
       git config --system safe.directory '*'
       v=22.22.3
       if [ "$(node --version 2>/dev/null)" != "v$v" ]; then

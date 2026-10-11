@@ -32,7 +32,9 @@ This recipe (see the repo `justfile`) builds:
 exports each to an OCI tar at gzip max compression (`-9`, shared base layers where possible),
 and writes them into this directory as `nodejs22.tar` / `python314.tar`, **per arch** (a
 per-arch release build embeds its own matching-arch image — ADR-0054). The recipe is **not**
-run by `just ci`.
+run by `just ci`. Every input of the build is pinned (base images by digest, pip packages by hash, the DuckDB
+extensions by checksum) and the build writes no time of its own (`SOURCE_DATE_EPOCH` with `rewrite-timestamp`,
+`gzip -n`), so a rebuild of the same commit on the same architecture gives byte-identical tars.
 
 ## Keeping the working tree clean after a build (`skip-worktree`)
 

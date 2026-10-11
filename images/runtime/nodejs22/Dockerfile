@@ -15,7 +15,10 @@
 # This image is EMBEDDED into the funcd binary (go:embed; see internal/runtime/embedimg) and
 # imported into funcd's managed containerd at startup — NO registry pull. Build + export it
 # with: just build-runtime-images   (docker build -> docker save, gzip -9 OCI tars per arch).
-FROM gcr.io/distroless/nodejs22-debian12
+#
+# The base is pinned by the digest of its multi-arch index (resolved 2026-10-11), so every build reads the
+# same bytes; move it deliberately, from `docker buildx imagetools inspect gcr.io/distroless/nodejs22-debian12`.
+FROM gcr.io/distroless/nodejs22-debian12@sha256:8a3e96fe3345b5d83ecec2066e7c498139a02a6d1214e4f6c39f9ce359f3f5bc
 
 # The funcd runtime shim, copied to a fixed path and run as node's entrypoint target. `shim` is a
 # named build context: the pinned funcd-typescript module's shim/ dir (ADR-0141).

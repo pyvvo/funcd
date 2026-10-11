@@ -13,7 +13,9 @@
 #   dir     — the example directory, relative to the module root; source of the staged files.
 #   copy    — true = build in a writable copy (the module cache is read-only): the whole module goes to
 #             .modcopy/lane/<module>, so the example's relative references still resolve.
-#   build   — host shell commands (run in the lane's dir, in order) that produce the artifacts to push.
+#   build   — host shell commands (run in the lane's dir, in order, with FUNCD_ROOT set to the funcd checkout) that
+#             produce the artifacts to push. A download in one is pinned: an image by digest, a lockfile with --locked,
+#             a file by its checksum (scripts/lanes_test.go holds it).
 #   stage   — files/dirs (relative to dir) copied into the VM's /opt/lane (the manifests + built artifacts);
 #             or {from, module, to}: a file or a directory from funcd's root (or from `module`'s root) to a tgz path.
 #   push    — OCI pushes done in the guest: artifact + ref (→ oci-layout:///mnt/funcd-deps/registry:<ref>);
@@ -123,8 +125,12 @@ duckdb:
   module: github.com/pyvvo/funcd-python
   dir: examples/catalog-quack
   copy: true
+  # funcd-bundle (funcd-python) installs the bundle in the local python:3.14-slim-bookworm image: point that tag at the
+  # digest the runtime images pin first. It downloads the DuckDB extensions: check them against their pins after.
   build:
+    - docker pull -q python:3.14-slim-bookworm@sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83 && docker tag python:3.14-slim-bookworm@sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83 python:3.14-slim-bookworm
     - uv run --locked funcd-bundle
+    - cd dist/catalog-quack/duckdb-ext && grep -E "/linux_$(go env GOARCH)/(httpfs|quack)\." "$FUNCD_ROOT/images/runtime/duckdb/duckdb-extensions.sha256" | sha256sum -c - && test "$(find . -name '*.duckdb_extension' | wc -l)" -eq 2
   stage:
     - configmap.yaml
     - secret.yaml
