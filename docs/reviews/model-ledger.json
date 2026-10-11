@@ -11218,5 +11218,20 @@
     "dod_total": 8,
     "report": "docs/reviews/adr-0229-implementation-claude-opus-5-5.md",
     "notes": "Pass: -race on the 4 touched packages green; 4 scenario + 2 unit tests; ADR-0178's 11 scenario tests and TestScenarioAppAdmissionRefuses green; the 2 apply-time scenarios fail with the change reverted (overlay); mutants M1 (ref steps checked) and M2 (Create only) killed; gate passed. Minor [model]: stored-workflow-still-refused does not pin checkStepStores (mutant M3 survives: patchFunctionKV refuses the same binding later; ADR-0178's step-binding test shares the gap)."
+  },
+  {
+    "date": "2026-10-11",
+    "adr": "0230",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 1,
+    "dod_passed": 17,
+    "dod_total": 17,
+    "report": "docs/reviews/adr-0230-implementation-claude-opus-5-5.md",
+    "notes": "pass, not stamped: 1 minor [adr] Decision 4 names the wrong containerd root (it is <dataDir>/containerd, removed with the data dir; the code is right; the decider corrects in place or supersedes); 1 minor [model] lanes.sh prints no cause when the run stops before any lane; tests -race, vet and lint green; the found-defect test fails on the pre-fix tree; 7 simulated failure paths match Decisions 1 and 5; env-echo single-lane run PASS 16/16; full run (492 s) and forced-failure run read from the logs"
   }
 ]
