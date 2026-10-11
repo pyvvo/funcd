@@ -363,7 +363,7 @@ func TestRestoreKVCreatedDirs(t *testing.T) {
 	t.Run("fails", func(t *testing.T) {
 		t.Parallel()
 		_, path, target, parent := setup(t)
-		damageParts(t, filepath.Join(target, "kv", "base"))
+		damageParts(t, filepath.Join(target, "kv", "base"), "")
 		_, err := runRestore(t, "kv", "--config", path, "1/5")
 		require.Error(t, err)
 		require.NoDirExists(t, parent)

@@ -662,7 +662,9 @@ func restoreBlobGeneration(ctx context.Context, out io.Writer, f *restoreFlags, 
 	defer func() { _ = dst.Close() }()
 	m, err := blobmirror.Restore(ctx, o.Source, n, dst, envelope.Opener(o.Identities))
 	if err != nil {
-		return errors.Join(err, h.undo())
+		// Restore deletes the keys it wrote, not the directories their writes made in a store that existed: those take
+		// the data directory's owner, as after a run that succeeds.
+		return errors.Join(err, hold.Own(cfg.Storage.DataDir, blobRoots(cfg)...), h.undo())
 	}
 	if err := h.end(blobRoots(cfg)...); err != nil {
 		return err

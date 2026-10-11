@@ -301,15 +301,21 @@ func TestRestoreBlobCommand(t *testing.T) {
 	require.NoFileExists(t, filepath.Join(cfg.Storage.DataDir, hold.BusyFile))
 }
 
-// mirrorGeneration writes blob mirror generation 1 of a local store holding one object to the directory target.
-func mirrorGeneration(t *testing.T, target string) {
+// mirrorGeneration writes blob mirror generation 1 of a local store to the directory target: the objects given as key
+// and content, else one.
+func mirrorGeneration(t *testing.T, target string, objects ...[2]string) {
 	t.Helper()
 	ctx := context.Background()
 	src := mustDir(t, filepath.Join(t.TempDir(), "blob"))
 	from, err := gocloud.Open(ctx, gocloud.FileURL(src))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = from.Close() })
-	require.NoError(t, from.Put(ctx, "s3/ns/b/k", []byte("age-encryption.org/v1\nuser bytes"), blob.PutOptions{ContentType: "text/plain"}))
+	if len(objects) == 0 {
+		objects = [][2]string{{"s3/ns/b/k", "age-encryption.org/v1\nuser bytes"}}
+	}
+	for _, o := range objects {
+		require.NoError(t, from.Put(ctx, o[0], []byte(o[1]), blob.PutOptions{ContentType: "text/plain"}))
+	}
 	tb, err := gocloud.Open(ctx, gocloud.FileURL(target))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = tb.Close() })
@@ -320,18 +326,23 @@ func mirrorGeneration(t *testing.T, target string) {
 	require.NoError(t, err)
 }
 
-// damageParts overwrites every part file below dir, so a restore reading them fails its integrity check.
-func damageParts(t *testing.T, dir string) {
+// damageParts overwrites every part file below dir that holds the given bytes (all with ""), so a restore reading
+// them fails its integrity check.
+func damageParts(t *testing.T, dir, holding string) {
 	t.Helper()
 	var n int
 	require.NoError(t, filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasPrefix(d.Name(), "part-") {
 			return err
 		}
+		data, err := os.ReadFile(p) //nolint:gosec // a test temp path
+		if err != nil || !strings.Contains(string(data), holding) {
+			return err
+		}
 		n++
 		return os.WriteFile(p, []byte("damaged"), 0o600)
 	}))
-	require.Positive(t, n, "no part below %s", dir)
+	require.Positive(t, n, "no part below %s holds %q", dir, holding)
 }
 
 // `funcd restore blob` into a blob.dir below a directory that does not exist yet: a successful run gives every
@@ -364,11 +375,35 @@ func TestRestoreBlobCreatedDirs(t *testing.T) {
 	t.Run("fails", func(t *testing.T) {
 		t.Parallel()
 		path, target, parent := setup(t)
-		damageParts(t, filepath.Join(target, "blob"))
+		damageParts(t, filepath.Join(target, "blob"), "")
 		_, err := runRestore(t, "blob", "--config", path)
 		require.Error(t, err)
 		require.NoDirExists(t, parent)
 	})
+}
+
+// A restore into a blob.dir that exists, failing on its second object, deletes the first and leaves the directories
+// that write made the data directory's owner's, not root's after a run as root (ADR-0206 Decision 2).
+func TestRestoreBlobFailedIntoExistingStore(t *testing.T) {
+	t.Parallel()
+	target := t.TempDir()
+	mirrorGeneration(t, target, [2]string{"s3/ns/a/first", "first object"}, [2]string{"s3/ns/b/second", "second object"})
+	damageParts(t, filepath.Join(target, "blob"), "second object")
+	path := backupConfig(t, "file", "backup:\n  target: \""+gocloud.FileURL(target)+"\"\n  encryption:\n    none: true\n")
+	cfg, err := config.Load(path, config.Flags{})
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(cfg.Blob.Dir, 0o700))
+	want := otherOwner(t, cfg.Storage.DataDir)
+
+	_, err = runRestore(t, "blob", "--config", path)
+	require.Error(t, err)
+	require.DirExists(t, filepath.Join(cfg.Blob.Dir, "s3", "ns", "a"), "the first object was written, then deleted")
+	require.NoError(t, filepath.WalkDir(cfg.Blob.Dir, func(p string, d fs.DirEntry, err error) error {
+		require.NoError(t, err)
+		require.True(t, d.IsDir(), "%s is left", p)
+		require.Equal(t, want, ownerOf(t, p), "owner of %s", p)
+		return nil
+	}))
 }
 
 // `funcd restore blob --at` restores a versioned blob.target with --store-credentials-file and blob.versionRetention,
