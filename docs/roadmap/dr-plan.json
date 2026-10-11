@@ -21,7 +21,9 @@
     "ADR-0207",
     "ADR-0208",
     "ADR-0209",
-    "ADR-0210"
+    "ADR-0210",
+    "ADR-0222",
+    "ADR-0227"
   ],
   "items": [
     {
@@ -29,20 +31,6 @@
       "title": "Cron ADR (Apps epoch)",
       "features": [],
       "depends_on": []
-    },
-    {
-      "id": "ADR-0222",
-      "title": "workload backup resources and catalog scope (Accepted 2026-10-10)",
-      "features": [
-        "F111"
-      ],
-      "depends_on": [
-        "ADR-0203",
-        "ADR-0204",
-        "ADR-0208",
-        "ADR-0209",
-        "X-CRON"
-      ]
     },
     {
       "id": "ADR-0223",
@@ -58,13 +46,8 @@
   ],
   "waves": {
     "1": [
+      "ADR-0223",
       "X-CRON"
-    ],
-    "2": [
-      "ADR-0222"
-    ],
-    "3": [
-      "ADR-0223"
     ]
   }
 }
