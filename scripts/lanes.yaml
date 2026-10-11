@@ -407,7 +407,7 @@ egress:
   venom: e2e/egress.venom.yml
 
 app-todo:
-  description: The todo App of funcd-functions, deployed from its pushed template on real containerd (ADR-0217/0218), and the App features on it — pinned digests, a TypeScript→Python Workflow, a zoned cron timer, hooks, kept stores, a dry run, drift and pause, a config roll, rollback, liveness and dependency health, a late call, a refused binding, a requirement and a blob upload; then the disaster-recovery drill of FEAT-0009 — a backup to an S3 server in the VM, a lost data directory restored, held boot and release.
+  description: The todo App of funcd-functions, deployed from its pushed template on real containerd (ADR-0217/0218), and the App features on it — pinned digests, a TypeScript→Python Workflow, a zoned cron timer, hooks, kept stores, a dry run, drift and pause, a config roll, rollback, liveness and dependency health, a late call, a refused binding, a requirement and a blob upload; then the disaster-recovery drill of FEAT-0009 — a backup to an S3 server in the VM, a lost data directory restored, held boot and release, the App's own backups and restores, a pre-upgrade generation, and the blob store on S3.
   module: github.com/pyvvo/funcd-functions
   dir: apps/todo
   # The build writes the S3 server into dr/, so the lane builds in a writable copy of the module.

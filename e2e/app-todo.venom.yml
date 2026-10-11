@@ -26,9 +26,14 @@
 #       a lost data directory restored from the target and an escrow copy to the point before the damage, booting
 #       held; a lost write's version conflicts; a release that advances the uploads source fires no restored upload
 #       twice; and funcdctl backup plan (ADR-0202-0206, 0209, 0223).
+#   D6-D8 the App's own data (F111): a backup schedule the App declares backs up its stores to its S3 target, sealed;
+#       a Restore loads a Backup into new stores, and an admin's in-place Restore exports first (ADR-0222).
+#   D9 funcd upgrade writes a pre-upgrade generation and keeps the old binary (ADR-0207).
+#   D10 the blob store on S3: an unversioned bucket is refused, and on a versioned one uploads land there, keep their
+#       old versions and still fire the blob event source (ADR-0208).
 # The suite pushes, locks and deploys the App itself; the lane only creates the Secret and the grant beside it. Every
 # file it applies comes from funcd-functions, staged by scripts/lanes.yaml.
-name: app-todo — the todo App from its pushed template on real containerd (ADR-0199/0200/0211-0215/0217-0220/0226/0229), and a disaster-recovery drill (ADR-0202-0206/0209/0223)
+name: app-todo — the todo App from its pushed template on real containerd (ADR-0199/0200/0211-0215/0217-0220/0226/0229), and a disaster-recovery drill (ADR-0202-0209/0222/0223)
 
 vars:
   dp: http://127.0.0.1:8081
@@ -1225,3 +1230,296 @@ testcases:
         assertions:
           - result.code ShouldEqual 3
           - result.systemerr ShouldContainSubstring "RTO 1m is impossible"
+
+  # The App's own data (FEAT-0009 F111): a schedule the App declares backs up its stores to an S3 target of its
+  # choice, sealed; a Restore loads a Backup under new names, and only an admin restores in place, after an export.
+  - name: D6 a backup schedule the App declares backs up the App's stores every minute to its S3 target, sealed
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            set -e
+            install -d /var/lib/vgw/data/todo-workload
+            funcdctl apply -f /opt/lane/dr/workload-secrets.yaml >/dev/null
+            funcdctl app deploy {{.reg}}/todo:1.0.0 {{.values}} -f /opt/lane/values/shared.yaml \
+              -f /opt/lane/values/backup.yaml >/tmp/deploy-d6.log 2>&1 || { cat /tmp/deploy-d6.log; exit 1; }
+            funcdctl get backupschedule todo-backup -n default -o json'
+        info: "the schedule → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldMatchRegex app.:\s*.todo.
+      # The newest Succeeded Backup of the schedule: D7 and D8 restore it.
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            for b in $(funcdctl get backups -n default | grep -E "^todo-backup-[0-9]+$" | sort); do
+              funcdctl get backup $b -n default -o json | grep -qE "\"phase\": *\"Succeeded\"" && echo $b
+            done | tail -1 | grep . | tee /root/workload-backup'
+        retry: 60
+        delay: 3
+        info: "the Backups → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex "^todo-backup-[0-9]+$"
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            b=$(cat /root/workload-backup)
+            funcdctl get backup $b -n default -o json >&2
+            d=$(ls -d /var/lib/vgw/data/todo-workload/default/$b-*)
+            test -f $d/manifest.yaml && echo MANIFEST
+            ls $d/kv $d/blob
+            echo "sealed=$(for f in $d/kv/todo-store/part-00000 $d/blob/todo-files/part-00000; do head -c 21 $f; echo; done |
+              grep -c "^age-encryption.org/v1$")."
+            grep -rlaE "milk|receipt" $d/kv $d/blob && echo PLAINTEXT || echo SEALED'
+        info: "the Backup on the target → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring MANIFEST
+          - result.systemout ShouldContainSubstring todo-store
+          - result.systemout ShouldContainSubstring todo-files
+          - result.systemout ShouldContainSubstring "sealed=2."
+          - result.systemout ShouldContainSubstring SEALED
+
+  - name: D7 a Restore loads the Backup into new, empty stores and leaves the App's stores as they are; a store that is not empty is refused
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            sed "s/BACKUP/$(cat /root/workload-backup)/" /opt/lane/dr/restore-copy.yaml | funcdctl apply -f -'
+        info: "apply todo-copy → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get restore todo-copy -n default -o json'
+        retry: 30
+        delay: 2
+        info: "Restore todo-copy → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex "phase.{1,4}Succeeded"
+      # The blob store is a local directory: the copy of the upload sits under the new bucket, byte for byte.
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            f() { find /var/lib/funcd/data/blob -path "*/$1/uploads/milk/receipt.txt" -type f | head -1; }
+            cmp "$(f todo-files)" "$(f todo-files-r)" && echo SAME'
+        info: "the restored upload → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldEqual SAME
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"get","id":"milk"}}'
+        info: "milk after the copy → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.uploads ShouldHaveLength 2
+      # todo-store-r holds the loaded keys now: a second load into it is refused, the KV half of the copy's proof.
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            sed "s/BACKUP/$(cat /root/workload-backup)/" /opt/lane/dr/restore-not-empty.yaml | funcdctl apply -f -'
+        info: "apply todo-copy-again → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get restore todo-copy-again -n default -o json'
+        retry: 30
+        delay: 2
+        info: "Restore todo-copy-again → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex "phase.{1,4}Failed"
+          - result.systemout ShouldContainSubstring NotEmpty
+
+  - name: D8 a developer may not restore in place; an admin's in-place Restore exports the store first, then brings back the todos of the Backup
+    steps:
+      # A todo added after the Backup, which the in-place Restore removes.
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"add","title":"bread","token":"{{.token}}"}}'
+        info: "add bread → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"list"}}'
+        info: "the todos before the in-place Restore → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring bread
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            sed "s/BACKUP/$(cat /root/workload-backup)/" /opt/lane/dr/restore-in-place.yaml | funcdctl apply -f -'
+        info: "the developer's in-place Restore → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldNotEqual 0
+          - result.systemerr ShouldContainSubstring "an in-place Restore needs update on Namespace"
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; 
+            sed "s/BACKUP/$(cat /root/workload-backup)/" /opt/lane/dr/restore-in-place.yaml | funcdctl apply -f - >/dev/null'
+        info: "the admin's in-place Restore → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; 
+            funcdctl get restore todo-back -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1
+            funcdctl get backup todo-back-before -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1 | sed s/phase/export/'
+        retry: 45
+        delay: 2
+        info: "Restore todo-back and its export → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex "phase.{1,4}Succeeded"
+          - result.systemout ShouldMatchRegex "export.{1,4}Succeeded"
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"list"}}'
+        retry: 30
+        delay: 2
+        info: "the todos after the in-place Restore → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring milk
+          - result.body ShouldNotContainSubstring bread
+
+  # F109's way back from a bad release: funcd upgrade writes a pre-upgrade generation before it swaps the binary.
+  - name: D9 funcd upgrade writes a pre-upgrade generation to the target, keeps the old binary, and the upgraded funcd serves
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            unset FUNCD_TOKEN
+            cp /usr/local/bin/funcd /root/funcd-next
+            systemctl stop funcd-demo
+            systemctl reset-failed funcd-demo 2>/dev/null || true
+            /usr/local/bin/funcd upgrade /root/funcd-next --config /opt/lane/dr/funcdconfig.yaml --unit ""
+            test -x /usr/local/bin/funcd.previous && echo PREVIOUS
+            echo "pins=$(find /var/lib/vgw/data/todo-backup/gen/pre-upgrade -name manifest.yaml | grep -c .)."
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 /usr/local/bin/funcd \
+              --config /opt/lane/dr/funcdconfig.yaml
+            curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
+            systemctl is-active --quiet funcd-demo || { journalctl -u funcd-demo --no-pager -n 60; exit 1; }
+            echo UPGRADED'
+        info: "the upgrade → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldMatchRegex "pre-upgrade generation [0-9a-f]{16}/[0-9]+"
+          - result.systemout ShouldContainSubstring PREVIOUS
+          - result.systemout ShouldContainSubstring "pins=1."
+          - result.systemout ShouldContainSubstring UPGRADED
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            unset FUNCD_TOKEN
+            funcd restore list --config /opt/lane/dr/funcdconfig.yaml --credentials-file /opt/lane/dr/restore.credentials |
+              grep -E "^ *[0-9a-f]{16}/[0-9]+ +pre-upgrade "'
+        info: "restore list → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring pre-upgrade
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"get","id":"milk"}}'
+        retry: 60
+        delay: 2
+        info: "milk after the upgrade → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.uploads ShouldHaveLength 2
+
+  # The blob store itself on S3 (ADR-0208): funcd refuses an unversioned bucket, and on a versioned one the App's
+  # uploads land on the S3 server, an overwrite keeps the old version, and the blob event source still fires.
+  - name: D10 funcd refuses a blob store on an unversioned S3 bucket; on a versioned one an upload lands on the S3 server, keeps its old version and fires the intake
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            unset FUNCD_TOKEN
+            install -d /var/lib/vgw/data/todo-blob
+            systemctl stop funcd-demo
+            systemctl reset-failed funcd-demo 2>/dev/null || true
+            timeout 60 /usr/local/bin/funcd --config /opt/lane/dr/funcdconfig-blob-s3.yaml 2>&1 | tail -5
+            echo "exit=${PIPESTATUS[0]}."'
+        info: "an unversioned bucket → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring blob.allowUnversioned
+          # 124 would be the timeout: funcd served instead of refusing.
+          - result.systemout ShouldNotContainSubstring "exit=0."
+          - result.systemout ShouldNotContainSubstring "exit=124."
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            unset FUNCD_TOKEN
+            # curl 7.88 signs a bare ?versioning wrong and sends no payload hash, which versitygw requires.
+            v="<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>"
+            curl -sf -X PUT --aws-sigv4 "aws:amz:us-east-1:s3" --user todo-lane-s3:todo-lane-s3-secret \
+              -H "x-amz-content-sha256: $(printf %s "$v" | sha256sum | cut -d" " -f1)" \
+              -H "content-type: application/xml" --data "$v" "http://127.0.0.1:7070/todo-blob?versioning="
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 /usr/local/bin/funcd \
+              --config /opt/lane/dr/funcdconfig-blob-s3.yaml
+            curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
+            systemctl is-active --quiet funcd-demo || { journalctl -u funcd-demo --no-pager -n 60; exit 1; }
+            echo STARTED'
+        info: "a versioned bucket → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring STARTED
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"attach","id":"milk","name":"remote.txt","content":"first","token":"{{.token}}"}}'
+        retry: 60
+        delay: 2
+        info: "attach on the S3 store → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"attach","id":"milk","name":"remote.txt","content":"second","token":"{{.token}}"}}'
+        info: "attach again → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            f=$(find /var/lib/vgw/data/todo-blob -path "*uploads/milk/remote.txt" -type f | head -1)
+            echo "current $(cat "$f")"
+            k=$(echo "${f#/var/lib/vgw/data/todo-blob/}" | sed "s|/|%2F|g")
+            curl -s --aws-sigv4 "aws:amz:us-east-1:s3" --user todo-lane-s3:todo-lane-s3-secret \
+              -H "x-amz-content-sha256: $(printf "" | sha256sum | cut -d" " -f1)" \
+              "http://127.0.0.1:7070/todo-blob?prefix=$k&versions=" | grep -o "<Version>" | grep -c . | sed "s/^/versions=/; s/$/./"'
+        info: "the object on the S3 server → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "current second"
+          - result.systemout ShouldContainSubstring "versions=2."
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl logs todo-intake -n default | grep "intake uploads/milk/remote.txt"'
+        retry: 30
+        delay: 2
+        info: "the intake's log → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "intake uploads/milk/remote.txt"
