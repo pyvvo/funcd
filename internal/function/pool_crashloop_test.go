@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/activator"
 	"github.com/pyvvo/funcd/internal/function"
 	"github.com/pyvvo/funcd/internal/platform/clock"
 	"github.com/pyvvo/funcd/internal/runtime"
@@ -361,6 +362,27 @@ func TestScenarioListenedHungPoolWorkerRestartsAtOnce(t *testing.T) {
 	require.Equal(t, creates+1, h.creates(), "restarted at once")
 	require.Zero(t, function.BootCount(h.r, id), "a hang after listening is no boot crash")
 	require.NotEqual(t, "CrashLoopBackOff", h.condition(t, "b", "Ready").Reason)
+}
+
+// A pool worker that the liveness check restarts is not handed out while it is stopped, as a solo replica is not
+// (TestHungReplicaIsNotHandedOutWhileItStops).
+func TestHungPoolWorkerIsNotHandedOutWhileItStops(t *testing.T) {
+	t.Parallel()
+	h, clk := crashHarness(t)
+	h.create(t, "b", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "hung" })
+	h.reconcile(t, "b")
+	shim := h.rt.servePoolWorker(t, h.poolID(t, "hung"))
+	h.reconcile(t, "b")
+	require.Equal(t, v1.PhaseReady, h.getFn(t, "b").Status.Phase)
+	ref := activator.FunctionRef{Namespace: "default", Name: "b"}
+	handed := handedOutWhileStopping(t, h, ref)
+	creates := h.creates()
+
+	shim.setLive(http.StatusServiceUnavailable)
+	clk.Advance(healthLiveness)
+	h.reconcile(t, "b")
+	require.Equal(t, creates+1, h.creates(), "the hung pool worker was restarted")
+	require.Empty(t, handed(), "no call is handed to the pool worker while it is stopped")
 }
 
 // scenario: pool-host-exits-after-listen-keeps-period — the pool host listens, then exits while it loads b: no count,

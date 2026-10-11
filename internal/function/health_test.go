@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/activator"
 	"github.com/pyvvo/funcd/internal/function"
 	"github.com/pyvvo/funcd/internal/platform/clock"
 	"github.com/pyvvo/funcd/internal/runtime"
@@ -232,6 +233,53 @@ func TestHungReplicaIsReplacedAtTheSameIndex(t *testing.T) {
 	h.reconcile(t, "todo-api")
 	require.Equal(t, v1.PhaseReady, h.getFn(t, "todo-api").Status.Phase)
 	require.Empty(t, h.requireCondition(t, "todo-api", "Ready", v1.ConditionTrue, "").Message)
+}
+
+// handedOutWhileStopping makes every Stop on h's runtime ask the Endpoints for ref and returns what they handed out
+// meanwhile, "" when they handed out nothing.
+func handedOutWhileStopping(t *testing.T, h *shimHarness, ref activator.FunctionRef) func() string {
+	t.Helper()
+	var mu sync.Mutex
+	var handed string
+	h.rt.mu.Lock()
+	h.rt.onStop = func(runtime.InstanceID) {
+		up, ready, err := h.r.Endpoints().Upstream(context.Background(), ref)
+		if err == nil && ready {
+			mu.Lock()
+			handed = up
+			mu.Unlock()
+		}
+	}
+	h.rt.mu.Unlock()
+	return func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return handed
+	}
+}
+
+// A replica that the liveness check replaces is not handed out while it is stopped: the containerd driver takes the
+// worker's network down when Stop begins and waits up to its grace for the task, so a call sent to the replica in that
+// time waited for its dial timeout and failed instead of waiting for the replacement (found by the app-todo lane).
+func TestHungReplicaIsNotHandedOutWhileItStops(t *testing.T) {
+	t.Parallel()
+	h, clk, _ := healthHarness(t)
+	shim := h.rt.serveShim(t, "todo-api-1")
+	h.deployServing(t, "todo-api", 1)
+	ref := activator.FunctionRef{Namespace: "default", Name: "todo-api"}
+	_, ready, err := h.r.Endpoints().Upstream(context.Background(), ref)
+	require.NoError(t, err)
+	require.True(t, ready, "the replica serves before it hangs")
+	handed := handedOutWhileStopping(t, h, ref)
+	creates := h.creates()
+
+	shim.setLive(http.StatusServiceUnavailable)
+	for range 3 {
+		clk.Advance(healthPeriod)
+		h.reconcile(t, "todo-api")
+	}
+	require.Equal(t, creates+1, h.creates(), "the hung replica was replaced")
+	require.Empty(t, handed(), "no call is handed to the replica while it is stopped")
 }
 
 // A replica's silence counts from this process's first probe of it, not from its creation: a replica created an hour

@@ -306,6 +306,9 @@ type Reconciler struct {
 	// live is each probed worker's liveness, a solo replica's or a pool host's (ADR-0215 Decision 1), guarded by liveMu.
 	liveMu sync.Mutex
 	live   map[runtime.InstanceID]liveness
+	// stopping counts the Stops under way per worker, guarded by stopMu: a worker being stopped gets no calls.
+	stopMu   sync.Mutex
+	stopping map[runtime.InstanceID]int
 	// poolManifestDir holds the pool manifests; ownManifestDir is set when NewReconciler created it, for Close.
 	poolManifestDir string
 	ownManifestDir  bool
@@ -466,6 +469,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		poolHolds:           map[pooling.PoolKey]poolHold{},
 		poolSets:            map[string][]v1.ObjectName{},
 		live:                map[runtime.InstanceID]liveness{},
+		stopping:            map[runtime.InstanceID]int{},
 		poolManifestDir:     manifestDir,
 		ownManifestDir:      ownManifestDir,
 		supervisionPeriod:   period,
@@ -1290,12 +1294,36 @@ func (r *Reconciler) steadyState(ctx context.Context, fn *v1.Function) bool {
 }
 
 // listening reports whether worker in gets calls (ADR-0161 Decision 2): it runs and wrote its port (ADR-0160), at an
-// address. The legacy placeholder writes no port, so there running suffices.
+// address, and no Stop of it is under way. The legacy placeholder writes no port, so there running suffices.
 func (r *Reconciler) listening(in runtime.Instance) bool {
-	if in.State != runtime.StateRunning {
+	if in.State != runtime.StateRunning || r.isStopping(in.ID) {
 		return false
 	}
 	return r.materializer == nil || (in.Listened && in.IP != "" && in.Port > 0)
+}
+
+// stopWorker stops worker id. Until the Stop returns, the worker reads as not listening, so the Endpoints hand it out
+// to no call: a driver reports the task running through the Stop's grace, and the containerd driver takes the worker's
+// network down when the Stop begins.
+func (r *Reconciler) stopWorker(ctx context.Context, id runtime.InstanceID) error {
+	r.stopMu.Lock()
+	r.stopping[id]++
+	r.stopMu.Unlock()
+	defer func() {
+		r.stopMu.Lock()
+		if r.stopping[id]--; r.stopping[id] == 0 {
+			delete(r.stopping, id)
+		}
+		r.stopMu.Unlock()
+	}()
+	return r.runtime.Stop(ctx, id)
+}
+
+// isStopping reports whether a Stop of worker id is under way.
+func (r *Reconciler) isStopping(id runtime.InstanceID) bool {
+	r.stopMu.Lock()
+	defer r.stopMu.Unlock()
+	return r.stopping[id] > 0
 }
 
 // listeningCount is the number of listening workers of fn's serving revision (else its current one), or of its pool
@@ -1514,7 +1542,7 @@ func (r *Reconciler) stopNeverReady(ctx context.Context, fn *v1.Function, failed
 	if in, err := r.runtime.Status(ctx, failed); err != nil || in.State != runtime.StateRunning {
 		return false, nil
 	}
-	if err := r.runtime.Stop(ctx, failed); err != nil {
+	if err := r.stopWorker(ctx, failed); err != nil {
 		return false, fault.Wrapf(err, fault.KindOf(err), "function.converge", "stop a worker that never became ready")
 	}
 	return true, nil
@@ -1565,7 +1593,7 @@ func (r *Reconciler) stopUnlistenedIn(ctx context.Context, insts []runtime.Insta
 					counted = false
 				}
 			} else {
-				if err := r.runtime.Stop(ctx, in.ID); err != nil {
+				if err := r.stopWorker(ctx, in.ID); err != nil {
 					return unlistened{}, fault.Wrapf(err, fault.KindOf(err), "function.converge", "stop a worker that did not listen")
 				}
 				r.boot.timedOut(in)
@@ -1749,7 +1777,7 @@ func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, re
 		r.boot.reset(in.ID)
 		r.forgetWorker(in.ID)
 		if in.State != runtime.StateStopped { // scale down by replica index; a Failed one is stopped too
-			if serr := r.runtime.Stop(ctx, in.ID); serr != nil {
+			if serr := r.stopWorker(ctx, in.ID); serr != nil {
 				return revisionPass{}, fault.Wrapf(serr, fault.KindOf(serr), op, "stop worker")
 			}
 		}
@@ -1788,7 +1816,7 @@ func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, re
 		}
 	}
 	for _, in := range replace {
-		if serr := r.runtime.Stop(ctx, in.ID); serr != nil {
+		if serr := r.stopWorker(ctx, in.ID); serr != nil {
 			return revisionPass{}, fault.Wrapf(serr, fault.KindOf(serr), op, "stop exited worker")
 		}
 	}
@@ -1964,7 +1992,7 @@ func (r *Reconciler) retire(ctx context.Context, in runtime.Instance) error {
 	const op = "function.retire"
 	r.boot.reset(in.ID)
 	r.forgetWorker(in.ID)
-	if err := r.runtime.Stop(ctx, in.ID); err != nil {
+	if err := r.stopWorker(ctx, in.ID); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "stop worker")
 	}
 	if err := r.runtime.Remove(ctx, in.ID); err != nil {
@@ -2000,7 +2028,7 @@ func (r *Reconciler) stopAll(ctx context.Context, fn *v1.Function, c v1.ObjectNa
 			continue
 		}
 		if in.State != runtime.StateStopped {
-			if err := r.runtime.Stop(ctx, in.ID); err != nil {
+			if err := r.stopWorker(ctx, in.ID); err != nil {
 				return fault.Wrapf(err, fault.KindOf(err), "function.stopAll", "stop worker")
 			}
 		}
@@ -2256,7 +2284,7 @@ func (r *Reconciler) stopRevision(ctx context.Context, fn *v1.Function, rev v1.O
 	}
 	for _, in := range insts {
 		if in.Revision == rev && in.State != runtime.StateStopped {
-			if err := r.runtime.Stop(ctx, in.ID); err != nil {
+			if err := r.stopWorker(ctx, in.ID); err != nil {
 				return fault.Wrapf(err, fault.KindOf(err), "function.stopRevision", "stop worker")
 			}
 		}

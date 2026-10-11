@@ -70,8 +70,11 @@ type fakeRuntime struct {
 	clk       clock.Clock // ages instances, as Deps.Clock does the reconciler's reads (ADR-0161)
 	// memberStates overrides a pool member's /health/members entry (state, error); every other member reads ready.
 	memberStates map[string][2]string
-	memberDeps   map[string]*local.DependencyReport // a member's dependency report (ADR-0215 Decision 4)
-	membersDown  bool                               // GET /health/members answers 503, as a pool host too slow for the probe's timeout
+	// onStop runs at the start of each Stop, before the instance reads Stopped: the time the drivers spend in a Stop's
+	// grace, while the task still runs.
+	onStop      func(runtime.InstanceID)
+	memberDeps  map[string]*local.DependencyReport // a member's dependency report (ADR-0215 Decision 4)
+	membersDown bool                               // GET /health/members answers 503, as a pool host too slow for the probe's timeout
 	// ADR-0224: each pool worker's members as its manifest held them at its Create, and its own entries (setWorkerMember),
 	// which a worker with its own endpoint (servePoolWorker) answers.
 	manifests     map[runtime.InstanceID][]string
@@ -248,6 +251,12 @@ func (f *fakeRuntime) Start(_ context.Context, id runtime.InstanceID) error {
 }
 
 func (f *fakeRuntime) Stop(_ context.Context, id runtime.InstanceID) error {
+	f.mu.Lock()
+	onStop := f.onStop
+	f.mu.Unlock()
+	if onStop != nil {
+		onStop(id)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.state[id] = runtime.StateStopped

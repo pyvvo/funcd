@@ -924,7 +924,7 @@ func ensurePrivateDir(dir string) error {
 func (r *Reconciler) stopPool(ctx context.Context, insts []runtime.Instance) error {
 	const op = "function.stopPool"
 	for _, in := range insts {
-		if serr := r.runtime.Stop(ctx, in.ID); serr != nil {
+		if serr := r.stopWorker(ctx, in.ID); serr != nil {
 			return fault.Wrapf(serr, fault.KindOf(serr), op, "stop pool worker")
 		}
 	}
