@@ -4,9 +4,10 @@
 # new lane is just a section here + its manifests + a Venom suite, with NO per-lane recipe or VM YAML.
 #
 # Per lane:
-#   module  — the pinned Go module the example lives in (ADR-0141): github.com/pyvvo/funcd-typescript or
-#             github.com/pyvvo/funcd-python, resolved by scripts/moddir.sh (module cache or go.work).
-#             Absent = the funcd repo root. The language repos commit their example builds.
+#   module  — the pinned Go module the example lives in (ADR-0141): github.com/pyvvo/funcd-typescript,
+#             github.com/pyvvo/funcd-python or github.com/pyvvo/funcd-functions (the example Apps), resolved
+#             by scripts/moddir.sh (module cache or go.work). Absent = the funcd repo root. The language
+#             repos commit their example builds.
 #   dir     — the example directory, relative to the module root; source of the staged files.
 #   copy    — true = build in a writable copy (the module cache is read-only): the whole module goes to
 #             .modcopy/lane/<module>, so the example's relative references still resolve.

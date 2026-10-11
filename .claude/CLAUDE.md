@@ -379,6 +379,10 @@ tags and reads them through the Go module system:
   (`claude --add-dir ../funcd-typescript --add-dir ../funcd-python`), so a shim change, its release and
   the funcd bump happen in one conversation. Each repo keeps its own CLAUDE.md, PR flow and merge queue.
 - **Design decisions still live here**: a change to the funcd ↔ shim contract needs a funcd ADR first.
+- **The example repo** [pyvvo/funcd-functions](https://github.com/pyvvo/funcd-functions) holds the example
+  functions and Apps of the Lima lanes. funcd pins it the same way (`internal/testkit/langmod` imports it, so
+  `go mod tidy` keeps it), a lane names it as its `module`, and its changes follow the same release and
+  `go get` steps.
 
 ## ⛔ Grounding — never present invention as fact
 

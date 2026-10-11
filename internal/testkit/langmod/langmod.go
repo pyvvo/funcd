@@ -1,6 +1,6 @@
-// Package langmod locates the language repos funcd pins as Go modules (ADR-0141): a pinned module's
-// root, for the committed example builds, and the embedded Node and Python shims written to a temp dir,
-// for the tests that exec them.
+// Package langmod locates the repos funcd pins as Go modules (ADR-0141): a pinned module's root, for the
+// committed example builds and the example Apps of funcd-functions, and the embedded Node and Python shims
+// written to a temp dir, for the tests that exec them.
 package langmod
 
 import (
@@ -12,14 +12,16 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	functions "github.com/pyvvo/funcd-functions"
 	shimpython "github.com/pyvvo/funcd-python/shim"
 	shimnode "github.com/pyvvo/funcd-typescript/shim"
 )
 
-// The language modules funcd pins in go.mod.
+// The modules funcd pins in go.mod: the two language repos and the example repo.
 const (
 	TypeScript = "github.com/pyvvo/funcd-typescript"
 	Python     = "github.com/pyvvo/funcd-python"
+	Functions  = functions.Module
 )
 
 // Dir returns module mod's root as the go command resolves it: the pinned module-cache dir, or a

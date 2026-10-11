@@ -367,7 +367,7 @@ check-hygiene:
     fi
     # ADR-0141: only go.mod/go.sum pin a language module, so a bump reaches every consumer; nothing
     # hard-codes a version or a module-cache path (frozen docs keep history).
-    if git grep -n -E 'pyvvo/funcd-(typescript|python)@v[0-9]|pkg/mod/github\.com/pyvvo' -- ':!go.mod' ':!go.sum' ':!docs/adr/' ':!docs/reviews/' ':!docs/legacy/'; then
+    if git grep -n -E 'pyvvo/funcd-(typescript|python|functions)@v[0-9]|pkg/mod/github\.com/pyvvo' -- ':!go.mod' ':!go.sum' ':!docs/adr/' ':!docs/reviews/' ':!docs/legacy/'; then
         echo "hygiene: a language-module version or module-cache path is hard-coded above — resolve it through go.mod (scripts/moddir.sh)"
         fail=1
     fi
