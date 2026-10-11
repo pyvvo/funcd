@@ -37,6 +37,9 @@ type StubHandlers struct {
 	sites            map[string]v1.Site
 	apps             map[string]v1.App
 	appRevisions     map[string]v1.AppRevision
+	backupSchedules  map[string]v1.BackupSchedule
+	backups          map[string]v1.Backup
+	restores         map[string]v1.Restore
 	policies         map[string]v1.Policy
 	workflows        map[string]v1.Workflow
 	workflowRuns     map[string]v1.WorkflowRun
@@ -70,6 +73,9 @@ func NewStubHandlers() *StubHandlers {
 		sites:            make(map[string]v1.Site),
 		apps:             make(map[string]v1.App),
 		appRevisions:     make(map[string]v1.AppRevision),
+		backupSchedules:  make(map[string]v1.BackupSchedule),
+		backups:          make(map[string]v1.Backup),
+		restores:         make(map[string]v1.Restore),
 		policies:         make(map[string]v1.Policy),
 		workflows:        make(map[string]v1.Workflow),
 		workflowRuns:     make(map[string]v1.WorkflowRun),
@@ -754,6 +760,68 @@ func (s *StubHandlers) GetAppRevision(_ context.Context, ns v1.NamespaceName, na
 
 func (s *StubHandlers) ListAppRevisions(_ context.Context, ns v1.NamespaceName) ([]v1.AppRevision, error) {
 	return stubList(s, s.appRevisions, ns)
+}
+
+// ---- BackupSchedule, Backup, Restore (ADR-0222) ----
+
+func (s *StubHandlers) GetBackupSchedule(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.BackupSchedule, error) {
+	return stubGet(s, s.backupSchedules, "BackupSchedule", ns, name)
+}
+
+func (s *StubHandlers) CreateBackupSchedule(_ context.Context, b v1.BackupSchedule) (v1.BackupSchedule, error) {
+	return stubPut(s, s.backupSchedules, "BackupSchedule", nsKey(b.Namespace, b.Name), b, false)
+}
+
+func (s *StubHandlers) ListBackupSchedules(_ context.Context, ns v1.NamespaceName) ([]v1.BackupSchedule, error) {
+	return stubList(s, s.backupSchedules, ns)
+}
+
+func (s *StubHandlers) ReplaceBackupSchedule(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, b v1.BackupSchedule) (v1.BackupSchedule, error) {
+	return stubPut(s, s.backupSchedules, "BackupSchedule", nsKey(ns, name), b, true)
+}
+
+func (s *StubHandlers) DeleteBackupSchedule(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
+	return stubDelete(s, s.backupSchedules, "BackupSchedule", ns, name)
+}
+
+func (s *StubHandlers) GetBackup(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Backup, error) {
+	return stubGet(s, s.backups, "Backup", ns, name)
+}
+
+func (s *StubHandlers) CreateBackup(_ context.Context, b v1.Backup) (v1.Backup, error) {
+	return stubPut(s, s.backups, "Backup", nsKey(b.Namespace, b.Name), b, false)
+}
+
+func (s *StubHandlers) ListBackups(_ context.Context, ns v1.NamespaceName) ([]v1.Backup, error) {
+	return stubList(s, s.backups, ns)
+}
+
+func (s *StubHandlers) ReplaceBackup(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, b v1.Backup) (v1.Backup, error) {
+	return stubPut(s, s.backups, "Backup", nsKey(ns, name), b, true)
+}
+
+func (s *StubHandlers) DeleteBackup(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
+	return stubDelete(s, s.backups, "Backup", ns, name)
+}
+
+func (s *StubHandlers) GetRestore(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Restore, error) {
+	return stubGet(s, s.restores, "Restore", ns, name)
+}
+
+func (s *StubHandlers) CreateRestore(_ context.Context, r v1.Restore) (v1.Restore, error) {
+	return stubPut(s, s.restores, "Restore", nsKey(r.Namespace, r.Name), r, false)
+}
+
+func (s *StubHandlers) ListRestores(_ context.Context, ns v1.NamespaceName) ([]v1.Restore, error) {
+	return stubList(s, s.restores, ns)
+}
+
+func (s *StubHandlers) ReplaceRestore(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, r v1.Restore) (v1.Restore, error) {
+	return stubPut(s, s.restores, "Restore", nsKey(ns, name), r, true)
+}
+
+func (s *StubHandlers) DeleteRestore(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
+	return stubDelete(s, s.restores, "Restore", ns, name)
 }
 
 // stubGet, stubPut, stubList and stubDelete keep one crudKind in a stub map.

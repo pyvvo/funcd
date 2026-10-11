@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -102,8 +103,7 @@ func readRecipients(op, key string, paths []string) ([]age.Recipient, error) {
 	if len(paths) == 0 {
 		return nil, fault.Invalidf(op, "%s is empty: set at least 2 age recipients, or the encryption none key", key)
 	}
-	seen := map[string]bool{}
-	var out []age.Recipient
+	var all []age.Recipient
 	for _, p := range paths {
 		f, err := os.Open(p) //nolint:gosec // an operator-named recipients file
 		if err != nil {
@@ -115,25 +115,57 @@ func readRecipients(op, key string, paths []string) ([]age.Recipient, error) {
 			return nil, fault.Wrapf(err, fault.Invalid, op, "%s: parse %s (X25519 age1… or hybrid age1pq1… only)", key, p)
 		}
 		for _, r := range rs {
-			str := recipientString(r)
-			if str == "" {
+			if recipientString(r) == "" {
 				return nil, fault.Invalidf(op, "%s: %s holds a recipient that is not X25519 or hybrid", key, p)
 			}
-			if !seen[str] {
-				seen[str] = true
-				out = append(out, r)
-			}
+		}
+		all = append(all, rs...)
+	}
+	return distinct(op, fmt.Sprintf("%s (%s)", key, strings.Join(paths, ", ")), all)
+}
+
+// distinct de-duplicates rs by their String() and requires at least two that seal together; where names them in errors.
+func distinct(op, where string, rs []age.Recipient) ([]age.Recipient, error) {
+	seen := map[string]bool{}
+	var out []age.Recipient
+	for _, r := range rs {
+		if str := recipientString(r); !seen[str] {
+			seen[str] = true
+			out = append(out, r)
 		}
 	}
 	if len(out) < 2 {
-		return nil, fault.Invalidf(op, "%s (%s): %d distinct recipient(s), want at least 2 (an operator and a recovery one)",
-			key, strings.Join(paths, ", "), len(out))
+		return nil, fault.Invalidf(op, "%s: %d distinct recipient(s), want at least 2 (an operator and a recovery one)", where, len(out))
 	}
 	if _, err := age.Encrypt(io.Discard, out...); err != nil {
-		return nil, fault.Wrapf(err, fault.Invalid, op, "%s (%s): the recipients do not seal together; a hybrid "+
-			"(age1pq1…) recipient cannot be mixed with an X25519 (age1…) one", key, strings.Join(paths, ", "))
+		return nil, fault.Wrapf(err, fault.Invalid, op, "%s: the recipients do not seal together; a hybrid "+
+			"(age1pq1…) recipient cannot be mixed with an X25519 (age1…) one", where)
 	}
 	return out, nil
+}
+
+// Parse is the Sealer of inline recipients (ADR-0222 Decision 6): Decision 2's recipient rules on age1… and age1pq1…
+// strings, with NoSecrets, and no none. It logs nothing; a violation is fault.Invalid naming the recipient.
+func Parse(recipients []string) (*Sealer, error) {
+	const op = "envelope.Parse"
+	var all []age.Recipient
+	for i, text := range recipients {
+		rs, err := age.ParseRecipients(strings.NewReader(text))
+		if err != nil || len(rs) != 1 || recipientString(rs[0]) == "" {
+			return nil, fault.Invalidf(op, "recipients[%d] %q is not one X25519 (age1…) or hybrid (age1pq1…) recipient", i, text)
+		}
+		all = append(all, rs[0])
+	}
+	rs, err := distinct(op, "recipients", all)
+	if err != nil {
+		return nil, err
+	}
+	s := &Sealer{recipients: rs}
+	for _, r := range rs {
+		s.keys.Recipients = append(s.keys.Recipients, Fingerprint([]byte(recipientString(r))))
+	}
+	slices.Sort(s.keys.Recipients)
+	return s, nil
 }
 
 // recipientString is the canonical String() of an X25519 or hybrid recipient, "" for any other type.
@@ -187,19 +219,30 @@ func ReadIdentities(paths []string) ([]age.Identity, error) {
 		if err != nil {
 			return nil, fault.Wrapf(err, fault.Invalid, op, "open identity file %s", p)
 		}
-		ids, err := age.ParseIdentities(f)
+		ids, err := ParseIdentities("identity file "+p, f)
 		_ = f.Close()
 		if err != nil {
-			return nil, fault.Wrapf(err, fault.Invalid, op, "parse identity file %s (X25519 or hybrid, not passphrase-encrypted)", p)
+			return nil, err
 		}
-		for _, id := range ids {
-			if identityFingerprint(id) == "" {
-				return nil, fault.Invalidf(op, "identity file %s holds an identity that is not X25519 or hybrid", p)
-			}
-			out = append(out, id)
-		}
+		out = append(out, ids...)
 	}
 	return out, nil
+}
+
+// ParseIdentities parses the identities of r, named name in errors, with ReadIdentities' rules: a Restore reads its
+// owner's identity from a Secret key (ADR-0222 Decision 6).
+func ParseIdentities(name string, r io.Reader) ([]age.Identity, error) {
+	const op = "envelope.ParseIdentities"
+	ids, err := age.ParseIdentities(r)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Invalid, op, "parse %s (X25519 or hybrid, not passphrase-encrypted)", name)
+	}
+	for _, id := range ids {
+		if identityFingerprint(id) == "" {
+			return nil, fault.Invalidf(op, "%s holds an identity that is not X25519 or hybrid", name)
+		}
+	}
+	return ids, nil
 }
 
 // identityFingerprint fingerprints an identity's recipient as Keys records it; "" for another type.

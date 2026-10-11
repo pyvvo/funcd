@@ -319,6 +319,42 @@ components:
     AppSpec:
       additionalProperties: false
       properties:
+        backupSchedules:
+          items:
+            additionalProperties: false
+            properties:
+              encryption:
+                $ref: "#/components/schemas/BackupEncryption"
+              name:
+                description: The part's name. The object takes the App's namespace and resource group.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              paused:
+                type: boolean
+              ref:
+                description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              schedule:
+                type: string
+              scope:
+                $ref: "#/components/schemas/BackupScope"
+              target:
+                $ref: "#/components/schemas/BackupTarget"
+              timeZone:
+                type: string
+              ttl:
+                pattern: ^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$
+                patternDescription: "a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms)"
+                type: string
+            type: object
+          type:
+            - array
+            - "null"
         buckets:
           items:
             additionalProperties: false
@@ -836,6 +872,265 @@ components:
           $ref: "#/components/schemas/ScopeRef"
       required:
         - roleRef
+      type: object
+    Backup:
+      additionalProperties: false
+      properties:
+        apiVersion:
+          type: string
+        kind:
+          type: string
+        metadata:
+          $ref: "#/components/schemas/ObjectMeta"
+        spec:
+          $ref: "#/components/schemas/BackupSpec"
+        status:
+          $ref: "#/components/schemas/BackupStatus"
+      required:
+        - apiVersion
+        - kind
+        - metadata
+        - spec
+      type: object
+    BackupEncryption:
+      additionalProperties: false
+      properties:
+        recipients:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+      required:
+        - recipients
+      type: object
+    BackupMember:
+      additionalProperties: false
+      properties:
+        bytes:
+          format: int64
+          type: integer
+        kind:
+          type: string
+        name:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - kind
+        - name
+      type: object
+    BackupSchedule:
+      additionalProperties: false
+      properties:
+        apiVersion:
+          type: string
+        kind:
+          type: string
+        metadata:
+          $ref: "#/components/schemas/ObjectMeta"
+        spec:
+          $ref: "#/components/schemas/BackupScheduleSpec"
+        status:
+          $ref: "#/components/schemas/BackupScheduleStatus"
+      required:
+        - apiVersion
+        - kind
+        - metadata
+        - spec
+      type: object
+    BackupScheduleSpec:
+      additionalProperties: false
+      properties:
+        encryption:
+          $ref: "#/components/schemas/BackupEncryption"
+        paused:
+          type: boolean
+        schedule:
+          type: string
+        scope:
+          $ref: "#/components/schemas/BackupScope"
+        target:
+          $ref: "#/components/schemas/BackupTarget"
+        timeZone:
+          type: string
+        ttl:
+          pattern: ^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$
+          patternDescription: "a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms)"
+          type: string
+      required:
+        - schedule
+        - scope
+        - target
+      type: object
+    BackupScheduleStatus:
+      additionalProperties: false
+      properties:
+        active:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        conditions:
+          items:
+            $ref: "#/components/schemas/Condition"
+          type:
+            - array
+            - "null"
+        earliestRestorePoint:
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
+        lastScheduleTime:
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
+        lastSuccessTime:
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
+        observedGeneration:
+          format: int64
+          type: integer
+        phase:
+          enum:
+            - Pending
+            - Deploying
+            - Ready
+            - Idle
+            - Degraded
+            - Failed
+            - Terminating
+          type: string
+        rpoRisk:
+          type: boolean
+      type: object
+    BackupScope:
+      additionalProperties: false
+      properties:
+        app:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        buckets:
+          items:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+          type:
+            - array
+            - "null"
+        catalogs:
+          items:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+          type:
+            - array
+            - "null"
+        kvStores:
+          items:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+          type:
+            - array
+            - "null"
+        resourceGroup:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      type: object
+    BackupSpec:
+      additionalProperties: false
+      properties:
+        schedule:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        ttl:
+          pattern: ^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$
+          patternDescription: "a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms)"
+          type: string
+      required:
+        - schedule
+      type: object
+    BackupStatus:
+      additionalProperties: false
+      properties:
+        completionTime:
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
+        conditions:
+          items:
+            $ref: "#/components/schemas/Condition"
+          type:
+            - array
+            - "null"
+        expireTime:
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
+        members:
+          items:
+            $ref: "#/components/schemas/BackupMember"
+          type:
+            - array
+            - "null"
+        observedGeneration:
+          format: int64
+          type: integer
+        path:
+          type: string
+        phase:
+          enum:
+            - Pending
+            - Running
+            - Paused
+            - Succeeded
+            - Failed
+            - Cancelled
+          type: string
+        recipients:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        startTime:
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
+        target:
+          type: string
+      type: object
+    BackupTarget:
+      additionalProperties: false
+      properties:
+        credentialsSecret:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        url:
+          type: string
+      required:
+        - url
+        - credentialsSecret
       type: object
     BlobEvent:
       additionalProperties: false
@@ -1766,6 +2061,16 @@ components:
           type:
             - array
             - "null"
+        namespaces:
+          description: namespaces whose data hold a restore left is released, instead of the platform's hold
+          items:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+          type:
+            - array
+            - "null"
       type: object
     Identity:
       additionalProperties: false
@@ -2397,6 +2702,122 @@ components:
         cpu:
           type: string
         memory:
+          type: string
+      type: object
+    Restore:
+      additionalProperties: false
+      properties:
+        apiVersion:
+          type: string
+        kind:
+          type: string
+        metadata:
+          $ref: "#/components/schemas/ObjectMeta"
+        spec:
+          $ref: "#/components/schemas/RestoreSpec"
+        status:
+          $ref: "#/components/schemas/RestoreStatus"
+      required:
+        - apiVersion
+        - kind
+        - metadata
+        - spec
+      type: object
+    RestoreMember:
+      additionalProperties: false
+      properties:
+        as:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        asCatalog:
+          $ref: "#/components/schemas/CatalogRef"
+        inPlace:
+          type: boolean
+        kind:
+          type: string
+        name:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - kind
+        - name
+      type: object
+    RestoreSource:
+      additionalProperties: false
+      properties:
+        credentialsSecret:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        identitySecret:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - credentialsSecret
+      type: object
+    RestoreSpec:
+      additionalProperties: false
+      properties:
+        backup:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        members:
+          items:
+            $ref: "#/components/schemas/RestoreMember"
+          type:
+            - array
+            - "null"
+        source:
+          $ref: "#/components/schemas/RestoreSource"
+      required:
+        - backup
+        - source
+        - members
+      type: object
+    RestoreStatus:
+      additionalProperties: false
+      properties:
+        completionTime:
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
+          type: string
+        conditions:
+          items:
+            $ref: "#/components/schemas/Condition"
+          type:
+            - array
+            - "null"
+        export:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        observedGeneration:
+          format: int64
+          type: integer
+        phase:
+          enum:
+            - Pending
+            - Running
+            - Paused
+            - Succeeded
+            - Failed
+            - Cancelled
+          type: string
+        startTime:
+          format: date-time
+          pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
+          patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
           type: string
       type: object
     Revision:
@@ -4026,6 +4447,394 @@ paths:
           description: Error
       tags:
         - App
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/backups:
+    get:
+      operationId: listBackups
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/Backup"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - Backup
+    post:
+      operationId: createBackup
+      parameters:
+        - description: admit the write and store nothing (ADR-0220)
+          explode: false
+          in: query
+          name: dryRun
+          schema:
+            description: admit the write and store nothing (ADR-0220)
+            type: boolean
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Backup"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Backup"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - Backup
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/backups/{name}:
+    delete:
+      operationId: deleteBackup
+      parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - Backup
+    get:
+      operationId: getBackup
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Backup"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - Backup
+    put:
+      operationId: replaceBackup
+      parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
+        - description: admit the write and store nothing (ADR-0220)
+          explode: false
+          in: query
+          name: dryRun
+          schema:
+            description: admit the write and store nothing (ADR-0220)
+            type: boolean
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Backup"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Backup"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - Backup
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/backupschedules:
+    get:
+      operationId: listBackupSchedules
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/BackupSchedule"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - BackupSchedule
+    post:
+      operationId: createBackupSchedule
+      parameters:
+        - description: admit the write and store nothing (ADR-0220)
+          explode: false
+          in: query
+          name: dryRun
+          schema:
+            description: admit the write and store nothing (ADR-0220)
+            type: boolean
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BackupSchedule"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupSchedule"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - BackupSchedule
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/backupschedules/{name}:
+    delete:
+      operationId: deleteBackupSchedule
+      parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - BackupSchedule
+    get:
+      operationId: getBackupSchedule
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupSchedule"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - BackupSchedule
+    put:
+      operationId: replaceBackupSchedule
+      parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
+        - description: admit the write and store nothing (ADR-0220)
+          explode: false
+          in: query
+          name: dryRun
+          schema:
+            description: admit the write and store nothing (ADR-0220)
+            type: boolean
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BackupSchedule"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupSchedule"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - BackupSchedule
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/buckets:
     get:
       operationId: listBuckets
@@ -6573,6 +7382,200 @@ paths:
           description: Error
       tags:
         - ResourceGroup
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/restores:
+    get:
+      operationId: listRestores
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/Restore"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - Restore
+    post:
+      operationId: createRestore
+      parameters:
+        - description: admit the write and store nothing (ADR-0220)
+          explode: false
+          in: query
+          name: dryRun
+          schema:
+            description: admit the write and store nothing (ADR-0220)
+            type: boolean
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Restore"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Restore"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - Restore
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/restores/{name}:
+    delete:
+      operationId: deleteRestore
+      parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - Restore
+    get:
+      operationId: getRestore
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Restore"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - Restore
+    put:
+      operationId: replaceRestore
+      parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
+        - description: admit the write and store nothing (ADR-0220)
+          explode: false
+          in: query
+          name: dryRun
+          schema:
+            description: admit the write and store nothing (ADR-0220)
+            type: boolean
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Restore"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Restore"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - Restore
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/revisions:
     get:
       operationId: listRevisions

@@ -79,11 +79,13 @@ type restoring struct {
 	dataDir   string
 	dirs      []storeDir
 	hadMarker bool
-	eng       store.Engine
-	st        store.Store
-	runs      runstate.Store
-	events    *eventstore.Store
-	master    *savedFile
+	// nsHeld are the namespaces whose data marker the restore wrote (ADR-0222 Decision 8).
+	nsHeld []v1.NamespaceName
+	eng    store.Engine
+	st     store.Store
+	runs   runstate.Store
+	events *eventstore.Store
+	master *savedFile
 }
 
 // savedFile is a file a restore replaced, with what it held before.
@@ -188,6 +190,9 @@ func Run(ctx context.Context, p Point, o Options) (_ Report, err error) {
 	if err = r.holdRuns(ctx, &rep); err != nil {
 		return Report{}, err
 	}
+	if err = r.holdNamespaces(ctx); err != nil {
+		return Report{}, err
+	}
 	if err = r.installMaster(ctx, plan, m); err != nil {
 		return Report{}, err
 	}
@@ -204,7 +209,8 @@ func Run(ctx context.Context, p Point, o Options) (_ Report, err error) {
 	if err = r.close(); err != nil {
 		return Report{}, err
 	}
-	roots := []string{filepath.Join(r.dataDir, hold.MarkerFile), filepath.Join(r.dataDir, hold.ReportFile)}
+	roots := []string{filepath.Join(r.dataDir, hold.MarkerFile), filepath.Join(r.dataDir, hold.ReportFile),
+		filepath.Join(r.dataDir, hold.NamespaceDir)}
 	for _, d := range r.dirs {
 		roots = append(roots, d.path)
 	}
@@ -218,6 +224,36 @@ func Run(ctx context.Context, p Point, o Options) (_ Report, err error) {
 		return Report{}, err
 	}
 	return rep, nil
+}
+
+// holdNamespaces writes a data marker for each namespace holding a BackupSchedule (ADR-0222 Decision 8): its stores
+// return without their data, so its runners wait for `funcdctl hold release --namespace`. It prints them.
+func (r *restoring) holdNamespaces(ctx context.Context) error {
+	l, err := r.st.List(ctx, v1.KindBackupSchedule.GVK(), store.ListOptions{})
+	if err != nil {
+		return err
+	}
+	seen := map[v1.NamespaceName]bool{}
+	for _, o := range l.Items {
+		if ns := o.GetNamespace(); !seen[ns] {
+			seen[ns] = true
+			r.nsHeld = append(r.nsHeld, ns)
+		}
+	}
+	if len(r.nsHeld) == 0 {
+		return nil
+	}
+	slices.Sort(r.nsHeld)
+	if err := hold.MarkNamespaces(r.dataDir, r.nsHeld, hold.Marker{Reason: hold.ReasonData, Since: v1.NewTimestamp(time.Now())}); err != nil {
+		return err
+	}
+	names := make([]string, len(r.nsHeld))
+	for i, ns := range r.nsHeld {
+		names[i] = string(ns)
+	}
+	r.o.printf("held namespaces with a BackupSchedule, whose data this restore does not bring back: %s; restore each "+
+		"namespace's data, then run `funcdctl hold release --namespace <namespace>`\n", strings.Join(names, ", "))
+	return nil
 }
 
 // readable refuses a generation this funcd cannot read: an incomplete one, a format above backup.Format, a newer
@@ -299,6 +335,9 @@ func (r *restoring) undo() error {
 		errs = append(errs, emptyOut(d))
 	}
 	errs = append(errs, removeFile(filepath.Join(r.dataDir, hold.ReportFile)))
+	for _, ns := range r.nsHeld {
+		errs = append(errs, removeFile(filepath.Join(r.dataDir, hold.NamespaceDir, string(ns)+"."+hold.ReasonData)))
+	}
 	if !r.hadMarker {
 		errs = append(errs, removeFile(filepath.Join(r.dataDir, hold.MarkerFile)))
 	}

@@ -35,6 +35,7 @@ func RegisterRoutes(api huma.API, h Handlers) {
 	registerSite(api, h)
 	registerApp(api, h)
 	registerAppRevision(api, h)
+	registerWorkloadBackup(api, h)
 	registerPolicy(api, h)
 	registerWorkflow(api, h)
 	registerWorkflowRun(api, h)

@@ -378,7 +378,7 @@ func (r *Reconciler) invoke(ctx context.Context, ns v1.NamespaceName, fn v1.Obje
 // call reopens a revision Failed with HookFailed (Decision 4). Nothing is recorded while funcd is held or the App
 // paused (Decision 8), when the revision is gone or no longer the App's latest, or when a store write fails.
 func (r *Reconciler) recordCall(ctx context.Context, c call) {
-	if r.held() {
+	if r.held(c.ns) {
 		return
 	}
 	obj, err := r.get(ctx, v1.KindApp, c.ns, c.app)
@@ -436,7 +436,10 @@ func (r *Reconciler) createInvocation(ctx context.Context, rev *v1.AppRevision, 
 	return err
 }
 
-func (r *Reconciler) held() bool { return r.hold != nil && r.hold.Held() }
+// held reports the platform held (ADR-0206) or ns (ADR-0222 Decision 8).
+func (r *Reconciler) held(ns v1.NamespaceName) bool {
+	return (r.hold != nil && r.hold.Held()) || (r.nsHold != nil && r.nsHold.HeldIn(ns))
+}
 
 // Retry starts again, without waiting, the first pre-hook not done of the App's latest revision when it is Failed
 // with HookFailed, or the first failed post-hook of its current revision when that is the latest (Decision 7). It
@@ -444,7 +447,7 @@ func (r *Reconciler) held() bool { return r.hold != nil && r.hold.Held() }
 // of the App runs or the App is paused; Unavailable while funcd is held; NotFound without the App.
 func (r *Reconciler) Retry(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
 	const op = "app.Retry"
-	if r.held() {
+	if r.held(ns) {
 		return fault.Unavailablef(op, "funcd is held: app %s calls no hook", name)
 	}
 	k := appKey(ns, name)

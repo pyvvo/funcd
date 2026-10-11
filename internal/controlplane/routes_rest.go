@@ -1651,6 +1651,24 @@ func registerAppRevision(api huma.API, h Handlers) {
 	})
 }
 
+// ===== BackupSchedule, Backup, Restore (namespaced) — ADR-0222, FEAT-0009/F111 =====
+
+func registerWorkloadBackup(api huma.API, h Handlers) {
+	registerNamespacedCRUD(api, crudRoutes[v1.BackupSchedule]{
+		kind: "BackupSchedule", kinds: "BackupSchedules", path: "backupschedules",
+		list: h.ListBackupSchedules, create: h.CreateBackupSchedule, get: h.GetBackupSchedule,
+		replace: h.ReplaceBackupSchedule, remove: h.DeleteBackupSchedule,
+	})
+	registerNamespacedCRUD(api, crudRoutes[v1.Backup]{
+		kind: "Backup", kinds: "Backups", path: "backups",
+		list: h.ListBackups, create: h.CreateBackup, get: h.GetBackup, replace: h.ReplaceBackup, remove: h.DeleteBackup,
+	})
+	registerNamespacedCRUD(api, crudRoutes[v1.Restore]{
+		kind: "Restore", kinds: "Restores", path: "restores",
+		list: h.ListRestores, create: h.CreateRestore, get: h.GetRestore, replace: h.ReplaceRestore, remove: h.DeleteRestore,
+	})
+}
+
 // crudRoutes is the REST surface of one namespaced kind under
 // /apis/funcd.io/v1alpha1/namespaces/{namespace}/<path>, registered by registerNamespacedCRUD, or by
 // registerNamespacedRead for a read-only kind, which leaves create, replace and remove nil.

@@ -375,6 +375,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 		funcd.WithListenAddr(cfg.Server.ListenAddr),
 		funcd.WithDataPlaneAddr(cfg.Server.DataPlaneAddr),
 		funcd.WithLogger(root),
+		funcd.WithBlobStoreURL(blobStoreURL(cfg)), // ADR-0222: a BackupSchedule's target is compared with it
 	)
 	if tel != nil {
 		opts = append(opts, funcd.WithTelemetry(tel))
@@ -1123,6 +1124,14 @@ func mirrorFor(ctx context.Context, cfg config.Config, runs *runner.Runner, targ
 	return start, closer, nil
 }
 
+// blobStoreURL is the blob store's URL: blob.target, else the file:// URL of blob.dir.
+func blobStoreURL(cfg config.Config) string {
+	if cfg.Blob.Target != "" {
+		return cfg.Blob.Target
+	}
+	return gocloud.FileURL(blobDir(cfg))
+}
+
 // blobDir is the local blob store, blob.dir, which config.Load derives as <storage.dataDir>/blob.
 func blobDir(cfg config.Config) string {
 	if cfg.Blob.Dir != "" {
@@ -1259,10 +1268,7 @@ func remoteStore(ctx context.Context, cfg config.Config, log *slog.Logger) (blob
 // refuses the start naming the key, the same provider warns. The KV export's target is the resolved one (ADR-0209
 // Decision 1), named kvstore.backup.target only when it is the KV's own.
 func checkDomains(cfg config.Config, log *slog.Logger) error {
-	store := cfg.Blob.Target
-	if store == "" {
-		store = gocloud.FileURL(blobDir(cfg))
-	}
+	store := blobStoreURL(cfg)
 	targets := []struct{ key, url string }{{"backup.target", cfg.Backup.Target}}
 	if cfg.Kvstore.Backup.Enabled {
 		kb, err := cfg.ResolveKVBackup()

@@ -7,6 +7,7 @@ package badger
 import (
 	"context"
 	"errors"
+	"io"
 	"sort"
 	"strings"
 	"sync"
@@ -392,6 +393,39 @@ func (s prefixSource) Snapshot(ctx context.Context, emit func(snapshot.Record) e
 		return "", err
 	}
 	return "", snapbadger.SnapshotPrefix(ctx, s.db, []byte(s.prefix), emit)
+}
+
+// LoadPrefix loads one store (ADR-0222 Decision 7), the reverse of SnapshotPrefix: each record next returns, until
+// io.EOF, goes under prefix through the gateway, so the change feed and the export see it. A store holding a key is
+// fault.Conflict before any write; a bad prefix is fault.Invalid.
+func (d *driver) LoadPrefix(ctx context.Context, prefix string, next func() (snapshot.Record, error)) error {
+	const op = "kvbadger.LoadPrefix"
+	if err := kvstore.CheckStorePrefix(op, prefix); err != nil {
+		return err
+	}
+	keys, err := d.List(ctx, prefix)
+	if err != nil {
+		return err
+	}
+	if len(keys) > 0 {
+		return fault.Conflictf(op, "store %q is not empty: it holds %d key(s)", prefix, len(keys))
+	}
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(dropConcurrency)
+	for {
+		r, err := next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return errors.Join(err, g.Wait())
+		}
+		if gctx.Err() != nil {
+			break
+		}
+		g.Go(func() error { return d.Put(gctx, prefix+string(r.Key), r.Value) })
+	}
+	return g.Wait()
 }
 
 func (d *driver) Close() error {

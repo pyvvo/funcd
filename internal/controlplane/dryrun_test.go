@@ -145,6 +145,15 @@ func sample(k v1.Kind, name v1.ObjectName) v1.Object {
 		x.Spec.Bucket.Name, x.Spec.Prefix = "b", "p"
 	case *v1.Identity:
 		x.Spec.Type = v1.IdentityTypeExternal
+	case *v1.BackupSchedule:
+		x.Spec = v1.BackupScheduleSpec{Schedule: "@daily", Scope: v1.BackupScope{App: "a"},
+			Target:     v1.BackupTarget{URL: "s3://b", CredentialsSecret: "c"},
+			Encryption: v1.BackupEncryption{Recipients: []string{"age1a", "age1b"}}}
+	case *v1.Backup:
+		x.Spec.Schedule = "s"
+	case *v1.Restore:
+		x.Spec = v1.RestoreSpec{Backup: "b", Source: v1.RestoreSource{CredentialsSecret: "c", IdentitySecret: "i"},
+			Members: []v1.RestoreMember{{Kind: v1.KindKVStore, Name: "s", As: "t"}}}
 	}
 	return o
 }

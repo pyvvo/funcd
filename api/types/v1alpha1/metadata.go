@@ -58,6 +58,11 @@ const (
 	// KindAppRevision (ADR-0200, F114) is an App's history and rollout record: one per changed spec, written only by
 	// the App reconciler and served read-only.
 	KindAppRevision Kind = "AppRevision"
+	// KindBackupSchedule, KindBackup and KindRestore (ADR-0222, F111) are an app owner's backups: a schedule's
+	// definition, a run record, and a request to load a run's data.
+	KindBackupSchedule Kind = "BackupSchedule"
+	KindBackup         Kind = "Backup"
+	KindRestore        Kind = "Restore"
 	// KindS3Identity is the external SigV4 S3 principal (ADR-0080): NOT a stored/CRUD resource —
 	// it has no metastore registration (no NewObject/AllKinds/handlers), it exists only as a Cedar
 	// principal type the cedar driver materializes for the external-sigv4 authz path. It is excluded
@@ -81,7 +86,8 @@ func (k Kind) Validate() error {
 		KindSecret, KindGrant, KindEgressPolicy, KindInvocation,
 		KindRuntimeClass, KindWorkerNode, KindGateway, KindKVStore, KindBucket,
 		KindCatalogService, KindPolicy, KindWorkflow, KindWorkflowRun, KindSensor,
-		KindIdentity, KindRole, KindRolesAssignment, KindSite, KindApp, KindAppRevision:
+		KindIdentity, KindRole, KindRolesAssignment, KindSite, KindApp, KindAppRevision,
+		KindBackupSchedule, KindBackup, KindRestore:
 		return nil
 	default:
 		return fault.Invalidf("Kind.Validate", "unknown kind %q", k)
@@ -407,6 +413,18 @@ func NewObject(k Kind) (Object, bool) {
 		ar := &AppRevision{}
 		ar.TypeMeta = typeMetaFor(k)
 		return ar, true
+	case KindBackupSchedule:
+		bs := &BackupSchedule{}
+		bs.TypeMeta = typeMetaFor(k)
+		return bs, true
+	case KindBackup:
+		bk := &Backup{}
+		bk.TypeMeta = typeMetaFor(k)
+		return bk, true
+	case KindRestore:
+		rs := &Restore{}
+		rs.TypeMeta = typeMetaFor(k)
+		return rs, true
 	default:
 		return nil, false
 	}
@@ -443,6 +461,9 @@ func AllKinds() []Kind {
 		KindSite,
 		KindApp,
 		KindAppRevision,
+		KindBackupSchedule,
+		KindBackup,
+		KindRestore,
 	}
 }
 

@@ -186,7 +186,7 @@ func (t *target) cut(ctx context.Context, events, meta, runs snapshot.Source, se
 		ws = append(ws, w)
 	}
 	rv, err := snapshot.Cut(ctx, &tagged{events, 0}, &tagged{meta, 1}, &tagged{runs, 2},
-		func(src snapshot.Source, r snapshot.Record) error { return writeRecord(ws[src.(*tagged).i].buf, r) })
+		func(src snapshot.Source, r snapshot.Record) error { return WriteRecord(ws[src.(*tagged).i].buf, r) })
 	for i, w := range ws {
 		err = errors.Join(err, w.close())
 		out[i].bytes, out[i].sum = w.n, w.h.Sum(nil)

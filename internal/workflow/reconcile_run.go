@@ -38,6 +38,7 @@ type RunReconciler struct {
 	// waitRequeue is controller.referentPollInterval (ADR-0163).
 	waitRequeue time.Duration
 	hold        hold.Gate
+	nsHold      hold.NamespaceGate
 }
 
 // NewRunReconciler builds the run reconciler. traces is the shared funclog trace sink (ADR-0103): when
@@ -51,11 +52,14 @@ func NewRunReconciler(s store.Store, e *Engine, traces funclog.TraceSink, log *s
 	if referentPollInterval <= 0 {
 		referentPollInterval = waitRequeue
 	}
-	return &RunReconciler{store: s, engine: e, traces: traces, log: log.With("component", "workflow.run"), waitRequeue: referentPollInterval, hold: hold.Never}
+	return &RunReconciler{store: s, engine: e, traces: traces, log: log.With("component", "workflow.run"), waitRequeue: referentPollInterval, hold: hold.Never, nsHold: hold.NeverNamespace}
 }
 
 // SetHold installs the platform hold before the controller runs (ADR-0206 Decision 6).
 func (r *RunReconciler) SetHold(g hold.Gate) { r.hold = g }
+
+// SetNamespaceHold installs the per-namespace hold before the controller runs (ADR-0222 Decision 8).
+func (r *RunReconciler) SetNamespaceHold(g hold.NamespaceGate) { r.nsHold = g }
 
 // buildRunSpan builds the run-root Resource + INTERNAL Span for a terminal run (ADR-0103; shared by the
 // reconciler for top-level runs and the engine for inline sub-workflow child runs, ADR-0104). SpanID is the
@@ -99,7 +103,7 @@ func emitRunSpan(ctx context.Context, sink funclog.TraceSink, rec *runstate.Reco
 // exit enqueue the run again. While held it starts, resumes and replays nothing and leaves the status as it is
 // (ADR-0206 Decision 6); a run created while held starts after the release.
 func (r *RunReconciler) Reconcile(ctx context.Context, req controller.Request) (controller.Result, error) {
-	if r.hold.Held() {
+	if r.hold.Held() || r.nsHold.HeldIn(req.Namespace) {
 		return controller.Result{RequeueAfter: r.waitRequeue}, nil
 	}
 	obj, err := r.store.Get(ctx, v1.KindWorkflowRun.GVK(), req.Namespace, req.Name)

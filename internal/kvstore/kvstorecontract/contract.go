@@ -6,6 +6,7 @@ package kvstorecontract
 import (
 	"context"
 	"fmt"
+	"io"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -113,4 +114,50 @@ func RunSnapshotPrefix(t *testing.T, kv kvstore.KV) {
 	for i, k := range got[2:] {
 		require.Equal(t, fmt.Sprintf("w-%06d", i), k, "the writer's keys form no unbroken run")
 	}
+}
+
+// Loader is the per-store load a driver offers beyond the port (ADR-0222 Decision 7).
+type Loader interface {
+	LoadPrefix(ctx context.Context, prefix string, next func() (snapshot.Record, error)) error
+}
+
+// RunLoadPrefix asserts ADR-0222's LoadPrefix against kv, which must be an Exporter and a Loader: a bad prefix is
+// fault.Invalid; a store holding a key is fault.Conflict and gains nothing; an empty one gets every record under the
+// prefix, which SnapshotPrefix then emits as loaded, and the neighbour a/s10/ is untouched.
+func RunLoadPrefix(t *testing.T, kv kvstore.KV) {
+	t.Helper()
+	ctx := context.Background()
+	ld, ok := kv.(Loader)
+	require.True(t, ok, "the driver offers no LoadPrefix")
+	recs := []snapshot.Record{{Key: []byte("t/1"), Value: []byte("one")}, {Key: []byte("t/2"), Value: []byte("two")}}
+	from := func() func() (snapshot.Record, error) {
+		i := 0
+		return func() (snapshot.Record, error) {
+			if i == len(recs) {
+				return snapshot.Record{}, io.EOF
+			}
+			i++
+			return recs[i-1], nil
+		}
+	}
+	require.Equal(t, fault.Invalid, fault.KindOf(ld.LoadPrefix(ctx, "a/s1", from())))
+	require.NoError(t, kv.Put(ctx, "a/s1/old", []byte("x")))
+	require.Equal(t, fault.Conflict, fault.KindOf(ld.LoadPrefix(ctx, "a/s1/", from())))
+	keys, err := kv.List(ctx, "a/s1/")
+	require.NoError(t, err)
+	require.Equal(t, []string{"a/s1/old"}, keys, "a refused load writes nothing")
+
+	require.NoError(t, kv.Put(ctx, "a/s10/x", []byte("x")))
+	require.NoError(t, ld.LoadPrefix(ctx, "a/s1x/", from()))
+	require.NoError(t, ld.LoadPrefix(ctx, "a/s2/", from()))
+	var got []snapshot.Record
+	_, err = kv.(Exporter).SnapshotPrefix("a/s2/").Snapshot(ctx, func(r snapshot.Record) error {
+		got = append(got, r)
+		return nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, recs, got)
+	keys, err = kv.List(ctx, "a/s10/")
+	require.NoError(t, err)
+	require.Equal(t, []string{"a/s10/x"}, keys)
 }

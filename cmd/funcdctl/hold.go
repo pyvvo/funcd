@@ -29,7 +29,7 @@ func (a *cli) holdStatusCmd() *cobra.Command {
 }
 
 func (a *cli) holdReleaseCmd() *cobra.Command {
-	var advance []string
+	var advance, namespaces []string
 	cmd := &cobra.Command{
 		Use:   "release",
 		Short: "Lift the hold: timers, blob sources, Sensors, runs, rollouts, backups and sweeps act again",
@@ -39,7 +39,12 @@ func (a *cli) holdReleaseCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := c.ReleaseHold(cmd.Context(), advance); err != nil {
+			if len(namespaces) > 0 {
+				err = c.ReleaseNamespaceHold(cmd.Context(), namespaces)
+			} else {
+				err = c.ReleaseHold(cmd.Context(), advance)
+			}
+			if err != nil {
 				return err
 			}
 			return a.writef("released\n")
@@ -47,5 +52,8 @@ func (a *cli) holdReleaseCmd() *cobra.Command {
 	}
 	cmd.Flags().StringArrayVar(&advance, "advance", nil,
 		"a blob EventSource <namespace>/<name> whose listed objects are marked seen instead of fired (repeatable)")
+	cmd.Flags().StringArrayVar(&namespaces, "namespace", nil,
+		"a namespace whose data hold a restore left is released instead of the platform's hold (repeatable)")
+	cmd.MarkFlagsMutuallyExclusive("advance", "namespace")
 	return cmd
 }

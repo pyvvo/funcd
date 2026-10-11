@@ -235,7 +235,10 @@ func (r *Reconciler) setCurrent(rev, latest *v1.AppRevision, current v1.ObjectNa
 func (r *Reconciler) deadline(a *v1.App, rev *v1.AppRevision) time.Time {
 	start := time.Time(*rev.Status.StartedAt)
 	var released time.Time
-	if r.hold != nil {
+	switch {
+	case r.nsHold != nil:
+		released = r.nsHold.ReleasedAtIn(a.Namespace)
+	case r.hold != nil:
 		released = r.hold.ReleasedAt()
 	}
 	for _, t := range []time.Time{resumedAt(a), released, lastPreApply(rev)} {

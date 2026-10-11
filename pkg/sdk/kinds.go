@@ -73,6 +73,9 @@ var kindDescriptors = map[v1.Kind]kindDescriptor{
 	v1.KindSite:            {"sites", true},            // ADR-0139, F103
 	v1.KindApp:             {"apps", true},             // ADR-0199, F113
 	v1.KindAppRevision:     {"apprevisions", true},     // ADR-0200, F114
+	v1.KindBackupSchedule:  {"backupschedules", true},  // ADR-0222, F111
+	v1.KindBackup:          {"backups", true},          // ADR-0222, F111
+	v1.KindRestore:         {"restores", true},         // ADR-0222, F111
 }
 
 // kindAliases are short CLI tokens (kubectl-style) for a few common kinds.

@@ -5,11 +5,14 @@ package memory
 
 import (
 	"context"
+	"errors"
+	"io"
 	"slices"
 	"sort"
 	"strings"
 	"sync"
 
+	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/kvstore"
 	"github.com/pyvvo/funcd/internal/snapshot"
 )
@@ -83,6 +86,33 @@ func (d *driver) List(_ context.Context, prefix string) ([]string, error) {
 // order, copied under one read lock and emitted after it; version "". A bad prefix is fault.Invalid before any emit.
 func (d *driver) SnapshotPrefix(prefix string) snapshot.Source {
 	return prefixSource{d: d, prefix: prefix}
+}
+
+// LoadPrefix loads one store (ADR-0222 Decision 7): each record next returns, until io.EOF, under prefix. A store
+// holding a key is fault.Conflict before any write; a bad prefix is fault.Invalid.
+func (d *driver) LoadPrefix(ctx context.Context, prefix string, next func() (snapshot.Record, error)) error {
+	const op = "kvmemory.LoadPrefix"
+	if err := kvstore.CheckStorePrefix(op, prefix); err != nil {
+		return err
+	}
+	if keys, _ := d.List(ctx, prefix); len(keys) > 0 {
+		return fault.Conflictf(op, "store %q is not empty: it holds %d key(s)", prefix, len(keys))
+	}
+	for {
+		r, err := next()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		d.mu.Lock()
+		d.m[prefix+string(r.Key)] = slices.Clone(r.Value)
+		d.mu.Unlock()
+	}
 }
 
 type prefixSource struct {

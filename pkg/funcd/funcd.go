@@ -37,6 +37,7 @@ import (
 	"github.com/pyvvo/funcd/internal/auth/rbac"
 	"github.com/pyvvo/funcd/internal/backup"
 	"github.com/pyvvo/funcd/internal/backup/runner"
+	"github.com/pyvvo/funcd/internal/backup/workload"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
 	"github.com/pyvvo/funcd/internal/bus"
@@ -80,12 +81,14 @@ import (
 	"github.com/pyvvo/funcd/internal/secrets"
 	"github.com/pyvvo/funcd/internal/sensor"
 	"github.com/pyvvo/funcd/internal/services"
+	backupsvc "github.com/pyvvo/funcd/internal/services/backup"
 	blobsvc "github.com/pyvvo/funcd/internal/services/blob"
 	catalogsvc "github.com/pyvvo/funcd/internal/services/catalog"
 	identitysvc "github.com/pyvvo/funcd/internal/services/identity"
 	kvsvc "github.com/pyvvo/funcd/internal/services/kv"
 	rolessvc "github.com/pyvvo/funcd/internal/services/roles"
 	"github.com/pyvvo/funcd/internal/site"
+	"github.com/pyvvo/funcd/internal/snapshot"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/workernode/local"
 	"github.com/pyvvo/funcd/internal/workflow"
@@ -244,6 +247,13 @@ type config struct {
 	s3gwDataDir        string     // where the master.key is persisted when no master file is set; empty ⇒ in memory
 	masterSecret       []byte     // set by WithMasterSecret: the loaded master, used instead of loading one
 	hold               *hold.Hold // set by WithHold (ADR-0206); nil ⇒ never held
+	// blobStoreURL is the blob store's URL (WithBlobStoreURL): a BackupSchedule's target is compared with it
+	// (ADR-0222 Decision 6); "" compares with nothing.
+	blobStoreURL string
+	// backupClock reads the workload backups' times and backupMeter takes their metrics (ADR-0222); nil ⇒
+	// clock.System() and the telemetry's meter.
+	backupClock clock.Clock
+	backupMeter metric.Meter
 
 	// catalogProxyHost is the netns-reachable host the per-CatalogService catalog PEP proxies publish
 	// (ADR-0137) — the CNI bridge gateway IP (e.g. 10.63.0.1) under containerd, so a worker in its own
@@ -324,6 +334,15 @@ func (c *config) gate() hold.Gate {
 	return c.hold
 }
 
+// nsGate is the per-namespace hold the per-namespace runners ask (ADR-0222 Decision 8): hold.NeverNamespace without
+// WithHold.
+func (c *config) nsGate() hold.NamespaceGate {
+	if c.hold == nil {
+		return hold.NeverNamespace
+	}
+	return c.hold
+}
+
 // minRecordBytes is the smallest funclog.maxRecordBytes: a record's envelope and cut marker always fit (ADR-0168).
 const minRecordBytes = 1024
 
@@ -375,9 +394,10 @@ type Platform struct {
 	listener    net.Listener
 	addr        string
 
-	routeReconciler *route.Reconciler // Sets the full Route table once before the controller runs (ADR-0176)
-	kvReconciler    *kvsvc.Reconciler // reclaims deleted stores' data once before the controller runs (issue #708)
-	prober          *health.Prober    // the storage probes (ADR-0215), started before the controller runs
+	routeReconciler *route.Reconciler      // Sets the full Route table once before the controller runs (ADR-0176)
+	backups         *backupsvc.Reconcilers // ADR-0222: the workload backups, whose runs Run waits for
+	kvReconciler    *kvsvc.Reconciler      // reclaims deleted stores' data once before the controller runs (issue #708)
+	prober          *health.Prober         // the storage probes (ADR-0215), started before the controller runs
 
 	dataPlaneServer   *http.Server // function-invocation listener (ADR-0033)
 	dataPlaneListener net.Listener
@@ -832,6 +852,7 @@ func (p *Platform) buildControlPlane() error {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build blob watcher")
 	}
 	blobWatcher.SetHold(c.gate())
+	blobWatcher.SetNamespaceHold(c.nsGate())
 	p.blobWatcher = blobWatcher
 	source, err := eventing.NewSource(eventing.Deps{
 		Store:     c.store,
@@ -840,6 +861,7 @@ func (p *Platform) buildControlPlane() error {
 		Logger:    p.logger,
 		Hold:      c.gate(),
 
+		NamespaceHold:         c.nsGate(),
 		BucketRecheckInterval: c.pacing.BucketRecheckInterval,
 	})
 	if err != nil {
@@ -912,6 +934,7 @@ func (p *Platform) buildControlPlane() error {
 		DeliveryBackoffInitial: c.pacing.DeliveryBackoffInitial,
 		DeliveryBackoffMax:     c.pacing.deliveryBackoffMax(),
 		Hold:                   c.gate(),
+		NamespaceHold:          c.nsGate(),
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build sensor reconciler")
@@ -1090,13 +1113,14 @@ func (p *Platform) buildControlPlane() error {
 	ctrl.Register(v1.KindWorkflow.GVK(), workflow.NewWorkflowReconciler(c.store, wfMaterializer, wfContracts, p.logger, c.pacing.ArtifactPollInterval))
 	p.workflowSweeper = workflow.NewRunReconciler(c.store, wfEngine, traceSink, p.logger, c.pacing.ReferentPollInterval)
 	p.workflowSweeper.SetHold(c.gate())
+	p.workflowSweeper.SetNamespaceHold(c.nsGate())
 	ctrl.Register(v1.KindWorkflowRun.GVK(), p.workflowSweeper)
 	// ADR-0199: the App reconciler writes an App's parts; a change to a part it controls or marks, or to an
 	// object a ref entry names, requeues the App.
 	appReconciler, err := app.NewReconciler(app.Deps{
 		Store: c.store, Purger: bucketPurger{shared: c.blob}, Logger: p.logger, Clock: clock.System(),
 		UpgradeTimeout: c.pacing.appUpgradeTimeout(), RevisionHistory: c.appRevisionHistory,
-		SupervisionPeriod: c.pacing.SupervisionPeriod, Hold: c.gate(),
+		SupervisionPeriod: c.pacing.SupervisionPeriod, Hold: c.gate(), NamespaceHold: c.nsGate(),
 		// ADR-0214: a second invoker for the hook calls, with no client timeout: the context carries the hook
 		// Function's spec.timeout or invoke.defaultTimeout, as the workflow dispatcher bounds a step.
 		Invoker:       &sensor.HTTPInvoker{Endpoints: fnReconciler.Endpoints(), Waker: act, Client: workerClient(calls, 0)},
@@ -1115,6 +1139,10 @@ func (p *Platform) buildControlPlane() error {
 	}
 	ctrl.Watches(v1.KindSecret.GVK(), appReconciler.MapSecret) // ADR-0213: a declared Secret created, changed or deleted
 	ctrl.Watches(v1.KindApp.GVK(), appReconciler.MapRequires)  // ADR-0219: an App's dependents and the Apps it requires
+	// ADR-0222: an app owner's backups, run with the platform's rights on the shared stores.
+	if err := p.registerWorkloadBackups(ctrl, secretResolver); err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build the workload backup reconcilers")
+	}
 	p.controller = ctrl
 
 	// partAdmissions are the admissions a direct write passes, over the reader r: the control plane runs them over
@@ -1153,6 +1181,12 @@ func (p *Platform) buildControlPlane() error {
 			admission.NewWorkflowRunSpecImmutableAdmission(),
 			// ADR-0170: a ResourceGroup is deleted only when it has no member (or with force, members first).
 			admission.NewResourceGroupDeletionProtectionAdmission(r),
+			// ADR-0222: a schedule's recipients and target, a Backup's ttl, immutable records, and update on the
+			// Namespace for an in-place Restore.
+			admission.NewBackupScheduleAdmission(c.blobStoreURL),
+			admission.NewBackupSpecImmutableAdmission(),
+			admission.NewBackupTTLAdmission(r),
+			admission.NewRestoreInPlaceAdmission(c.authorizer),
 		}
 	}
 
@@ -1447,6 +1481,7 @@ func (p *Platform) Run(ctx context.Context) error {
 		if err := p.controller.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			p.logger.ErrorContext(ctx, "controller stopped", "error", err)
 		}
+		p.backups.Wait() // a run's goroutine outlives its reconcile, never the controller (ADR-0222)
 	}()
 	go func() {
 		defer wg.Done()
@@ -2098,6 +2133,48 @@ const s3Root = "s3/"
 // bucketPrefix is one Bucket's substrate key prefix, s3/<ns>/<bucket>/ (ADR-0080).
 func bucketPrefix(ns v1.NamespaceName, bucket v1.ObjectName) string {
 	return s3Root + string(ns) + "/" + string(bucket) + "/"
+}
+
+// registerWorkloadBackups builds the BackupSchedule, Backup and Restore reconcilers (ADR-0222) over the shared stores
+// and registers them: a Backup's change requeues its schedule and the Restores that read or wait for it.
+func (p *Platform) registerWorkloadBackups(ctrl *controller.Controller, secrets backupsvc.SecretReader) error {
+	c := p.cfg
+	d := backupsvc.Deps{
+		Store: c.store, Secrets: secrets, Purger: bucketPurger{shared: c.blob}, StoreURL: c.blobStoreURL,
+		Sources: workload.Sources{Blob: c.blob, BucketPrefix: bucketPrefix},
+		Period:  c.pacing.SupervisionPeriod, Clock: c.backupClock, Meter: c.backupMeter, Logger: p.logger,
+	}
+	if d.Meter == nil {
+		d.Meter = backupMeter(c.telemetry)
+	}
+	if exp, ok := c.kvStore.(interface{ SnapshotPrefix(string) snapshot.Source }); ok {
+		d.Sources.KV = exp.SnapshotPrefix
+	}
+	if kv, ok := c.kvStore.(backupsvc.KVLoader); ok {
+		d.KV = kv
+	}
+	if c.hold != nil {
+		d.Hold = c.hold
+	}
+	rs, err := backupsvc.New(d)
+	if err != nil {
+		return err
+	}
+	p.backups = rs
+	ctrl.Register(v1.KindBackupSchedule.GVK(), rs.Schedules)
+	ctrl.Register(v1.KindBackup.GVK(), rs.Backups)
+	ctrl.Register(v1.KindRestore.GVK(), rs.Restores)
+	ctrl.Watches(v1.KindBackup.GVK(), rs.Schedules.MapBackup)
+	ctrl.Watches(v1.KindBackup.GVK(), rs.Restores.MapBackup)
+	return nil
+}
+
+// backupMeter is the meter of the funcd.backup metrics; a no-op one without telemetry.
+func backupMeter(t *observability.Telemetry) metric.Meter {
+	if t == nil {
+		return metricnoop.NewMeterProvider().Meter("funcd.backup")
+	}
+	return t.MeterProvider().Meter("funcd.backup")
 }
 
 // purgePage is the most objects one listing of a Purge returns.

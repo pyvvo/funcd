@@ -66,3 +66,38 @@ func TestHoldStatusAndRelease(t *testing.T) {
 	require.False(t, h.Held())
 	require.Equal(t, fault.Conflict, fault.KindOf(execCLI(io.Discard, c, "hold", "release")))
 }
+
+// `funcdctl hold release --namespace` (ADR-0222 Decision 8) removes the data marker restore run left, by an admin: a
+// developer of the namespace is Forbidden, a namespace without the marker a Conflict; the platform stays unheld.
+func TestHoldReleaseNamespace(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, hold.MarkNamespaces(dir, []v1.NamespaceName{"orders"}, hold.Marker{Reason: hold.ReasonData}))
+	h, err := hold.Open(dir)
+	require.NoError(t, err)
+	st := store.New(memory.New())
+	const admin, dev = "admin-token", "dev-token"
+	srv, err := controlplane.NewServer(controlplane.Deps{
+		Store: st, Authorizer: rbac.New(),
+		Credentials: middleware.NewStaticCredentials(map[string]auth.Identity{
+			admin: {Subject: "ops", Role: auth.RoleAdmin},
+			dev:   {Subject: "dev", Role: auth.RoleDeveloper, Namespaces: []v1.NamespaceName{"orders"}},
+		}),
+		Hold: controlplane.NewHoldService(controlplane.HoldDeps{Hold: h, Store: st, Platform: quietPlatform{}}),
+	})
+	require.NoError(t, err)
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+	developer, err := sdk.New(ts.URL, sdk.WithToken(dev))
+	require.NoError(t, err)
+	require.Equal(t, fault.Forbidden, fault.KindOf(execCLI(io.Discard, developer, "hold", "release", "--namespace", "orders")))
+	require.True(t, h.HeldIn("orders"))
+	c, err := sdk.New(ts.URL, sdk.WithToken(admin))
+	require.NoError(t, err)
+	var out bytes.Buffer
+	require.NoError(t, execCLI(&out, c, "hold", "release", "--namespace", "orders"))
+	require.Equal(t, "released\n", out.String())
+	require.False(t, h.HeldIn("orders"))
+	require.False(t, h.ReleasedAtIn("orders").IsZero())
+	require.Equal(t, fault.Conflict, fault.KindOf(execCLI(io.Discard, c, "hold", "release", "--namespace", "orders")))
+	require.Error(t, execCLI(io.Discard, c, "hold", "release", "--namespace", "orders", "--advance", "orders/files"))
+}

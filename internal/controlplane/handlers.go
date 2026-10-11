@@ -190,6 +190,12 @@ func stampTypeMeta(obj v1.Object, kind v1.Kind) {
 		o.TypeMeta = tm
 	case *v1.AppRevision:
 		o.TypeMeta = tm
+	case *v1.BackupSchedule:
+		o.TypeMeta = tm
+	case *v1.Backup:
+		o.TypeMeta = tm
+	case *v1.Restore:
+		o.TypeMeta = tm
 	}
 }
 
@@ -746,10 +752,72 @@ func (h *storeHandlers) ListAppRevisions(ctx context.Context, ns v1.NamespaceNam
 	return typedObjs[v1.AppRevision](h.listObj(ctx, v1.KindAppRevision, ns))
 }
 
+// --- BackupSchedule, Backup, Restore (namespaced) — ADR-0222, FEAT-0009/F111 ---
+
+func (h *storeHandlers) GetBackupSchedule(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.BackupSchedule, error) {
+	return typedObj[v1.BackupSchedule](h.getObj(ctx, v1.KindBackupSchedule, ns, name))
+}
+
+func (h *storeHandlers) CreateBackupSchedule(ctx context.Context, s v1.BackupSchedule) (v1.BackupSchedule, error) {
+	return typedObj[v1.BackupSchedule](h.createObj(ctx, v1.KindBackupSchedule, &s))
+}
+
+func (h *storeHandlers) ListBackupSchedules(ctx context.Context, ns v1.NamespaceName) ([]v1.BackupSchedule, error) {
+	return typedObjs[v1.BackupSchedule](h.listObj(ctx, v1.KindBackupSchedule, ns))
+}
+
+func (h *storeHandlers) ReplaceBackupSchedule(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, s v1.BackupSchedule) (v1.BackupSchedule, error) {
+	return typedObj[v1.BackupSchedule](h.replaceObj(ctx, v1.KindBackupSchedule, ns, name, &s))
+}
+
+func (h *storeHandlers) DeleteBackupSchedule(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindBackupSchedule, ns, name, rv)
+}
+
+func (h *storeHandlers) GetBackup(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Backup, error) {
+	return typedObj[v1.Backup](h.getObj(ctx, v1.KindBackup, ns, name))
+}
+
+func (h *storeHandlers) CreateBackup(ctx context.Context, b v1.Backup) (v1.Backup, error) {
+	return typedObj[v1.Backup](h.createObj(ctx, v1.KindBackup, &b))
+}
+
+func (h *storeHandlers) ListBackups(ctx context.Context, ns v1.NamespaceName) ([]v1.Backup, error) {
+	return typedObjs[v1.Backup](h.listObj(ctx, v1.KindBackup, ns))
+}
+
+func (h *storeHandlers) ReplaceBackup(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, b v1.Backup) (v1.Backup, error) {
+	return typedObj[v1.Backup](h.replaceObj(ctx, v1.KindBackup, ns, name, &b))
+}
+
+func (h *storeHandlers) DeleteBackup(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindBackup, ns, name, rv)
+}
+
+func (h *storeHandlers) GetRestore(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Restore, error) {
+	return typedObj[v1.Restore](h.getObj(ctx, v1.KindRestore, ns, name))
+}
+
+func (h *storeHandlers) CreateRestore(ctx context.Context, r v1.Restore) (v1.Restore, error) {
+	return typedObj[v1.Restore](h.createObj(ctx, v1.KindRestore, &r))
+}
+
+func (h *storeHandlers) ListRestores(ctx context.Context, ns v1.NamespaceName) ([]v1.Restore, error) {
+	return typedObjs[v1.Restore](h.listObj(ctx, v1.KindRestore, ns))
+}
+
+func (h *storeHandlers) ReplaceRestore(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, r v1.Restore) (v1.Restore, error) {
+	return typedObj[v1.Restore](h.replaceObj(ctx, v1.KindRestore, ns, name, &r))
+}
+
+func (h *storeHandlers) DeleteRestore(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindRestore, ns, name, rv)
+}
+
 // crudKind lists the namespaced kinds served by the generic CRUD helpers (typedObj, registerNamespacedCRUD, the
 // stub helpers): a new kind joins the union instead of copying the per-kind boilerplate.
 type crudKind interface {
-	v1.App | v1.AppRevision
+	v1.App | v1.AppRevision | v1.BackupSchedule | v1.Backup | v1.Restore
 }
 
 type objectPtr[T crudKind] interface {

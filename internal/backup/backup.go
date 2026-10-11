@@ -287,7 +287,7 @@ func (t *target) probe(ctx context.Context) (bool, error) {
 	switch {
 	case won(errs[0], errs[1]) || won(errs[1], errs[0]):
 		return true, nil
-	case conditionRefused(errs[0]) || conditionRefused(errs[1]):
+	case ConditionRefused(errs[0]) || ConditionRefused(errs[1]):
 		does = "refuses"
 	case errs[0] == nil && errs[1] == nil:
 		does = "ignores"
@@ -304,8 +304,8 @@ func (t *target) probe(ctx context.Context) (bool, error) {
 	return does != "refuses", nil
 }
 
-// conditionRefused reports a store refusing If-None-Match: S3's NotImplemented, or a 501.
-func conditionRefused(err error) bool {
+// ConditionRefused reports a store refusing If-None-Match: S3's NotImplemented, or a 501.
+func ConditionRefused(err error) bool {
 	var ae smithy.APIError
 	if errors.As(err, &ae) && ae.ErrorCode() == "NotImplemented" {
 		return true

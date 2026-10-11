@@ -102,3 +102,44 @@ func stat(t *testing.T, p string) *syscall.Stat_t {
 	require.True(t, ok)
 	return st
 }
+
+// TestReleaseNamespace (ADR-0222 Decision 8): restore run's offline data marker holds its namespace alone across an
+// Open; another reason's file is not read; after the release HeldIn is false and ReleasedAtIn is the release time,
+// also after a restart; a second release is a Conflict.
+func TestReleaseNamespace(t *testing.T) {
+	dir := t.TempDir()
+	m := hold.Marker{Reason: hold.ReasonData, Since: v1.NewTimestamp(time.Now())}
+	require.NoError(t, hold.MarkNamespaces(dir, []v1.NamespaceName{"orders"}, m))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, hold.NamespaceDir, "web.other"), []byte("{}"), 0o600))
+	require.Equal(t, fault.Invalid, fault.KindOf(hold.MarkNamespaces(dir, []v1.NamespaceName{"web"}, hold.Marker{Reason: "other"})))
+	h, err := hold.Open(dir)
+	require.NoError(t, err)
+	require.False(t, h.Held())
+	require.True(t, h.HeldIn("orders"))
+	require.False(t, h.HeldIn("web"), "only the restore and data reasons are read")
+	require.True(t, h.ReleasedAtIn("orders").IsZero())
+
+	before := time.Now().Truncate(time.Millisecond)
+	require.NoError(t, h.ReleaseNamespace("orders", hold.ReasonData))
+	require.False(t, h.HeldIn("orders"))
+	at := h.ReleasedAtIn("orders")
+	require.False(t, at.Before(before))
+	require.True(t, h.ReleasedAtIn("web").IsZero())
+	require.Equal(t, fault.Conflict, fault.KindOf(h.ReleaseNamespace("orders", hold.ReasonData)))
+
+	h, err = hold.Open(dir)
+	require.NoError(t, err)
+	require.False(t, h.HeldIn("orders"))
+	require.Equal(t, at, h.ReleasedAtIn("orders"), "a restart reads the release time back")
+
+	require.NoError(t, hold.Write(dir, hold.Marker{Reason: "restore", Since: v1.NewTimestamp(time.Now())}))
+	h, err = hold.Open(dir)
+	require.NoError(t, err)
+	require.True(t, h.HeldIn("web"), "a held platform holds every namespace")
+	require.NoError(t, h.HoldNamespace("web", hold.Marker{Reason: hold.ReasonRestore}))
+	require.NoError(t, h.Release(time.Now().Add(time.Hour)))
+	require.True(t, h.HeldIn("web"))
+	require.False(t, h.HeldIn("orders"))
+	require.Equal(t, h.ReleasedAt(), h.ReleasedAtIn("orders"), "the later of the two releases")
+	require.False(t, hold.NeverNamespace.HeldIn("web"))
+}

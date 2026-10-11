@@ -51,6 +51,10 @@ type Hold struct {
 	mu       sync.RWMutex
 	m        *Marker
 	released time.Time
+	// nsHeld and nsReleased are the per-namespace hold (ADR-0222 Decision 8): each namespace's reasons, and its
+	// last release.
+	nsHeld     map[v1.NamespaceName]map[string]bool
+	nsReleased map[v1.NamespaceName]time.Time
 }
 
 // busy is the content of BusyFile: the restore command that runs, and since when.
@@ -146,6 +150,9 @@ func Open(dataDir string) (*Hold, error) {
 			return nil, fault.Wrapf(err, fault.Internal, op, "decode %s", ReleasedFile)
 		}
 		h.released = time.Time(at)
+	}
+	if err := h.openNamespaces(op); err != nil {
+		return nil, err
 	}
 	return h, nil
 }

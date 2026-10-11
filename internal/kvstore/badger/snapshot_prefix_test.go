@@ -45,3 +45,12 @@ func TestScenarioStoreExport(t *testing.T) {
 		require.NotContains(t, k, Reserved, "a reserved key or a delete record was exported")
 	}
 }
+
+// TestLoadPrefixRefusesNonEmpty: the per-store load contract (ADR-0222 Decision 7) on the Badger driver, its writes
+// through the gateway.
+func TestLoadPrefixRefusesNonEmpty(t *testing.T) {
+	t.Parallel()
+	kv, _ := openBackupKV(t, t.TempDir(), nil)
+	t.Cleanup(func() { _ = kv.(io.Closer).Close() })
+	kvstorecontract.RunLoadPrefix(t, kv)
+}

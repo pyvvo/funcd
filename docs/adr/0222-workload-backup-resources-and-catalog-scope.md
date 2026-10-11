@@ -1,6 +1,6 @@
 # ADR-0222: Workload backup resources and catalog scope
 
-- **Status**: Accepted (2026-10-10, by an `adr-batch` run after a clean `adr-judge` gate; the defaults below were not confirmed one by one)
+- **Status**: Reviewing (2026-10-11; implementation done; accepted 2026-10-10 by an `adr-batch` run after a clean `adr-judge` gate; the defaults below were not confirmed one by one)
 - **Date**: 2026-10-10
 - **Deciders**: green-0-rabbit
 - **Tags**: backup, restore, disaster-recovery, kvstore, blob, catalog, rbac, app

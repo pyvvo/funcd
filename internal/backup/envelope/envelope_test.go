@@ -515,3 +515,44 @@ func TestReadIdentitiesRefusesOtherTypes(t *testing.T) {
 		})
 	}
 }
+
+// TestParse (ADR-0222 Decision 6): inline recipients follow Decision 2's rules, sealing a stream the owner's identity,
+// parsed from a Secret value, opens; one recipient, a repeat, a mixed family or a non-recipient is fault.Invalid.
+func TestParse(t *testing.T) {
+	owner, err := age.GenerateX25519Identity()
+	require.NoError(t, err)
+	recovery, err := age.GenerateX25519Identity()
+	require.NoError(t, err)
+	hybrid, err := age.GenerateHybridIdentity()
+	require.NoError(t, err)
+	s, err := envelope.Parse([]string{owner.Recipient().String(), recovery.Recipient().String()})
+	require.NoError(t, err)
+	require.Len(t, s.Keys().Recipients, 2)
+	var sealed bytes.Buffer
+	w, err := s.Seal()(&sealed)
+	require.NoError(t, err)
+	_, err = w.Write([]byte("orders"))
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	ids, err := envelope.ParseIdentities("AGE_IDENTITY", strings.NewReader(owner.String()+"\n"))
+	require.NoError(t, err)
+	unseal, err := envelope.Opener(ids)(s.Keys().Recipients)
+	require.NoError(t, err)
+	r, err := unseal(&sealed)
+	require.NoError(t, err)
+	got, err := io.ReadAll(r)
+	require.NoError(t, err)
+	require.Equal(t, "orders", string(got))
+
+	for name, rs := range map[string][]string{
+		"one":    {owner.Recipient().String()},
+		"repeat": {owner.Recipient().String(), owner.Recipient().String()},
+		"mixed":  {owner.Recipient().String(), hybrid.Recipient().String()},
+		"none":   {"none", owner.Recipient().String()},
+	} {
+		_, err := envelope.Parse(rs)
+		require.Equal(t, fault.Invalid, fault.KindOf(err), name)
+	}
+	_, err = envelope.ParseIdentities("AGE_IDENTITY", strings.NewReader("not an identity"))
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+}

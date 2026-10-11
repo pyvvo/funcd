@@ -76,6 +76,7 @@ type BlobWatcher struct {
 	saves       map[sourceKey]*saveState
 	hooks       WatchHooks
 	hold        hold.Gate
+	nsHold      hold.NamespaceGate
 }
 
 // NewBlobWatcher builds the watcher. lister/publisher/marks are required; interval ≤ 0 ⇒ the 15s default.
@@ -106,6 +107,7 @@ func NewBlobWatcher(lister BucketLister, pub Publisher, marks Watermark, interva
 		warnedKeys:  map[string]bool{},
 		saves:       map[sourceKey]*saveState{},
 		hold:        hold.Never,
+		nsHold:      hold.NeverNamespace,
 	}, nil
 }
 
@@ -114,6 +116,14 @@ func (w *BlobWatcher) SetHold(g hold.Gate) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.hold = g
+}
+
+// SetNamespaceHold installs the per-namespace hold before Run (ADR-0222 Decision 8): a held namespace's sources are
+// not polled.
+func (w *BlobWatcher) SetNamespaceHold(g hold.NamespaceGate) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.nsHold = g
 }
 
 func (w *BlobWatcher) held() bool {
@@ -348,7 +358,9 @@ func (w *BlobWatcher) poll(ctx context.Context) {
 	w.mu.Lock()
 	snapshot := make(map[eventKey]watchEntry, len(w.watches))
 	for k, e := range w.watches {
-		snapshot[k] = e
+		if !w.nsHold.HeldIn(k.ns) {
+			snapshot[k] = e
+		}
 	}
 	w.mu.Unlock()
 	for k, e := range snapshot {

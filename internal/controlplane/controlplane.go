@@ -186,6 +186,23 @@ type Handlers interface {
 	GetAppRevision(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.AppRevision, error)
 	ListAppRevisions(ctx context.Context, ns v1.NamespaceName) ([]v1.AppRevision, error)
 
+	// BackupSchedule, Backup and Restore (namespaced) — ADR-0222, FEAT-0009/F111
+	GetBackupSchedule(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.BackupSchedule, error)
+	CreateBackupSchedule(ctx context.Context, s v1.BackupSchedule) (v1.BackupSchedule, error)
+	ListBackupSchedules(ctx context.Context, ns v1.NamespaceName) ([]v1.BackupSchedule, error)
+	ReplaceBackupSchedule(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, s v1.BackupSchedule) (v1.BackupSchedule, error)
+	DeleteBackupSchedule(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error
+	GetBackup(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Backup, error)
+	CreateBackup(ctx context.Context, b v1.Backup) (v1.Backup, error)
+	ListBackups(ctx context.Context, ns v1.NamespaceName) ([]v1.Backup, error)
+	ReplaceBackup(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, b v1.Backup) (v1.Backup, error)
+	DeleteBackup(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error
+	GetRestore(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Restore, error)
+	CreateRestore(ctx context.Context, r v1.Restore) (v1.Restore, error)
+	ListRestores(ctx context.Context, ns v1.NamespaceName) ([]v1.Restore, error)
+	ReplaceRestore(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, r v1.Restore) (v1.Restore, error)
+	DeleteRestore(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error
+
 	// Policy (namespaced) — ADR-0074
 	GetPolicy(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Policy, error)
 	CreatePolicy(ctx context.Context, pol v1.Policy) (v1.Policy, error)

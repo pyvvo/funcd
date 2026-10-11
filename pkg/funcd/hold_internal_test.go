@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +21,7 @@ import (
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/eventing"
 	"github.com/pyvvo/funcd/internal/eventing/deadletter"
+	"github.com/pyvvo/funcd/internal/platform/clock"
 	funcdconfig "github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/store"
@@ -208,5 +211,98 @@ func TestEveryRunnerConsultsHold(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) { c.still(t, p) })
+	}
+}
+
+// nsMeta is teamMeta in namespace ns.
+func nsMeta(ns v1.NamespaceName, name string) v1.ObjectMeta {
+	return v1.ObjectMeta{Namespace: ns, ResourceGroup: "rg1", Name: v1.ObjectName(name)}
+}
+
+// TestEveryRunnerConsultsHoldInNamespace (ADR-0222 Decision 8): with team held by a restore's data marker and web
+// free, every per-namespace runner acts in web only: timers and Sensors start runs, a run moves, a blob source polls,
+// an App writes its part, a schedule's slot creates a Backup, and a dead-letter replay is not refused; in team none
+// does.
+func TestEveryRunnerConsultsHoldInNamespace(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dir, err := os.MkdirTemp("", "funcd")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	require.NoError(t, hold.MarkNamespaces(dir, []v1.NamespaceName{"team"}, hold.Marker{Reason: hold.ReasonData, Since: v1.NewTimestamp(time.Now())}))
+	h, err := hold.Open(dir)
+	require.NoError(t, err)
+	clk := clock.NewManual(time.Now().UTC())
+	p, err := New(InMemory(), WithLogger(slog.New(slog.DiscardHandler)), WithHold(h),
+		WithWorkflow("", defaultWorkflowStepTimeout, 50*time.Millisecond, defaultWorkflowRetry, defaultWorkflowPayloadLimit),
+		WithDeadLetterQueue("", 2, 50*time.Millisecond, 0), WithBlobPollInterval(50*time.Millisecond),
+		WithPacing(Pacing{ReferentPollInterval: 50 * time.Millisecond, SupervisionPeriod: 50 * time.Millisecond}), withBackupClock(clk, nil))
+	require.NoError(t, err)
+	st := p.cfg.store
+	versions := map[v1.NamespaceName]string{}
+	for _, ns := range []v1.NamespaceName{"team", "web"} {
+		seedObjects(t, st,
+			&v1.EventSource{TypeMeta: tmeta(v1.KindEventSource), ObjectMeta: nsMeta(ns, "tick"), Spec: v1.EventSourceSpec{
+				Timer: &v1.TimerSource{Events: []v1.TimerEvent{{Name: "t", Interval: v1.Duration(100 * time.Millisecond)}}}}},
+			&v1.Sensor{TypeMeta: tmeta(v1.KindSensor), ObjectMeta: nsMeta(ns, "s"), Spec: v1.SensorSpec{
+				On: []v1.Dependency{{Name: "tick", Source: "tick", Event: "t"}}, Do: []v1.Action{{Name: "a", On: "tick", Workflow: "wf"}}}},
+			&v1.Bucket{TypeMeta: tmeta(v1.KindBucket), ObjectMeta: nsMeta(ns, "inbox")},
+			&v1.EventSource{TypeMeta: tmeta(v1.KindEventSource), ObjectMeta: nsMeta(ns, "files"), Spec: v1.EventSourceSpec{
+				Blob: &v1.BlobSource{Bucket: "inbox", Events: []v1.BlobEvent{{Name: "new"}}}}},
+			&v1.WorkflowRun{TypeMeta: tmeta(v1.KindWorkflowRun), ObjectMeta: nsMeta(ns, "r1"), Spec: v1.WorkflowRunSpec{Workflow: "wf"}},
+			&v1.App{TypeMeta: tmeta(v1.KindApp), ObjectMeta: nsMeta(ns, "app"), Spec: v1.AppSpec{KV: []v1.AppKVStore{{Name: "appstore"}}}},
+			&v1.BackupSchedule{TypeMeta: tmeta(v1.KindBackupSchedule), ObjectMeta: nsMeta(ns, "every-minute"), Spec: v1.BackupScheduleSpec{
+				Schedule: "* * * * *", Scope: v1.BackupScope{KVStores: []v1.ObjectName{"appstore"}},
+				Target: v1.BackupTarget{URL: "s3://unreachable", CredentialsSecret: "none"}, Encryption: v1.BackupEncryption{Recipients: []string{"a", "b"}}}},
+		)
+		require.NoError(t, p.cfg.blob.Put(ctx, bucketPrefix(ns, "inbox")+"a", []byte("a"), blob.PutOptions{}))
+		obj, err := st.Get(ctx, v1.KindWorkflowRun.GVK(), ns, "r1")
+		require.NoError(t, err)
+		versions[ns] = obj.GetObjectMeta().ResourceVersion
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- p.Run(runCtx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	clk.Advance(2 * time.Minute)
+
+	sensorRuns := func(ns v1.NamespaceName) int {
+		l, err := st.List(ctx, v1.KindWorkflowRun.GVK(), store.ListOptions{Namespace: ns})
+		require.NoError(t, err)
+		n := 0
+		for _, o := range l.Items {
+			if strings.HasPrefix(string(o.GetName()), "s-") {
+				n++
+			}
+		}
+		return n
+	}
+	acted := func(ns v1.NamespaceName) map[string]bool {
+		out := map[string]bool{}
+		out["timers and Sensors"] = sensorRuns(ns) > 0
+		obj, err := st.Get(ctx, v1.KindWorkflowRun.GVK(), ns, "r1")
+		require.NoError(t, err)
+		out["runs"] = obj.GetObjectMeta().ResourceVersion != versions[ns]
+		pending, err := p.blobWatcher.Pending(ctx, ns, "files")
+		require.NoError(t, err)
+		out["blob sources"] = pending["new"] == 0 && len(pending) == 1
+		_, err = st.Get(ctx, v1.KindKVStore.GVK(), ns, "appstore")
+		out["App"] = err == nil
+		l, err := st.List(ctx, v1.KindBackup.GVK(), store.ListOptions{Namespace: ns})
+		require.NoError(t, err)
+		out["schedule slots"] = len(l.Items) > 0
+		out["dead-letter replay"] = fault.KindOf(p.sensorReconciler.Replay(ctx, ns, "01JA0000000000000000000001")) != fault.Unavailable
+		return out
+	}
+	all := map[string]bool{"timers and Sensors": true, "runs": true, "blob sources": true, "App": true, "schedule slots": true,
+		"dead-letter replay": true}
+	require.Eventually(t, func() bool { return reflect.DeepEqual(all, acted("web")) }, 10*time.Second, 20*time.Millisecond,
+		"every per-namespace runner acts in web")
+	require.Eventually(t, func() bool {
+		pending, err := p.blobWatcher.Pending(ctx, "team", "files")
+		return err == nil && pending["new"] == 1
+	}, 5*time.Second, 10*time.Millisecond, "team's blob source registers")
+	for name, did := range acted("team") {
+		require.False(t, did, "%s acted in the held namespace", name)
 	}
 }

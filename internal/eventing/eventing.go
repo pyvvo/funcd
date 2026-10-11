@@ -65,6 +65,9 @@ type Deps struct {
 	BucketRecheckInterval time.Duration
 	// Hold is the platform hold (ADR-0206): while held the Run tick fires no timer; nil ⇒ never held.
 	Hold hold.Gate
+	// NamespaceHold is the per-namespace hold (ADR-0222 Decision 8): a held namespace's timers neither fire nor
+	// advance; nil ⇒ none held.
+	NamespaceHold hold.NamespaceGate
 }
 
 // Source is the EventSource reconciler + the registered named-event timer set. A firing PUBLISHES a named
@@ -78,6 +81,7 @@ type Source struct {
 	clock     clock.Clock
 	recheck   time.Duration // re-check of a blob source's Bucket
 	hold      hold.Gate
+	nsHold    hold.NamespaceGate
 
 	mu     sync.Mutex
 	timers map[eventKey]*timerEntry
@@ -115,9 +119,13 @@ func NewSource(d Deps) (*Source, error) {
 		timers:    map[eventKey]*timerEntry{},
 		recheck:   d.BucketRecheckInterval,
 		hold:      d.Hold,
+		nsHold:    d.NamespaceHold,
 	}
 	if s.hold == nil {
 		s.hold = hold.Never
+	}
+	if s.nsHold == nil {
+		s.nsHold = hold.NeverNamespace
 	}
 	if s.clock == nil {
 		s.clock = clock.System()
@@ -396,12 +404,16 @@ func (s *Source) Run(ctx context.Context) error {
 // dueTimers marks and returns the named events that are due, advancing them under the lock so a fire is never
 // double-counted across ticks. An interval event's lastFire advances to the latest period boundary, not to the tick
 // time, so tick lateness never stretches the period; a cron event's next advances to the first slot after now.
-// Either way, periods or slots missed while a publish was in flight are skipped rather than fired in a burst.
+// Either way, periods or slots missed while a publish was in flight are skipped rather than fired in a burst. A held
+// namespace's events are left as they are (ADR-0222 Decision 8): each fires once after the release.
 func (s *Source) dueTimers(now time.Time) []eventKey {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var due []eventKey
 	for k, e := range s.timers {
+		if s.nsHold.HeldIn(k.ns) {
+			continue
+		}
 		if e.table != nil {
 			if !now.Before(e.next) {
 				e.next = e.table.Next(now)

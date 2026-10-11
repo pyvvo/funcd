@@ -171,6 +171,16 @@ func WithMasterSecret(secret []byte) Option {
 	}
 }
 
+// WithBlobStoreURL names the blob store's URL, blob.target or the file:// URL of blob.dir (ADR-0222 Decision 6): a
+// BackupSchedule whose target is inside it is refused, one on its provider is Ready with reason SameProvider. Absent ⇒
+// targets are compared with nothing.
+func WithBlobStoreURL(url string) Option {
+	return func(c *config) error {
+		c.blobStoreURL = url
+		return nil
+	}
+}
+
 // WithHold hands the platform the hold cmd/funcd opened (hold.Open, ADR-0206 Decision 6): while it is held every
 // side-effect runner stays still, and POST …/hold/release lifts it. Absent ⇒ never held.
 func WithHold(h *hold.Hold) Option {

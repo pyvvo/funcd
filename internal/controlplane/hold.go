@@ -41,6 +41,7 @@ type HoldDeps struct {
 type Holder interface {
 	Status(ctx context.Context) (hold.Evidence, error)
 	Release(ctx context.Context, advance []string) error
+	ReleaseNamespaces(ctx context.Context, nss []v1.NamespaceName) error
 }
 
 // HoldService reads the hold's evidence and releases it (ADR-0206 Decision 8).
@@ -201,6 +202,26 @@ func (s *HoldService) Release(ctx context.Context, advance []string) error {
 	return s.d.Hold.Release(s.d.Clock.Now())
 }
 
+// ReleaseNamespaces removes the data marker restore run left on each of nss (ADR-0222 Decision 8): a namespace
+// without one is fault.Conflict, the ones before it released.
+func (s *HoldService) ReleaseNamespaces(_ context.Context, nss []v1.NamespaceName) error {
+	const op = "controlplane.ReleaseHold"
+	for _, ns := range nss {
+		if err := ns.Validate(); err != nil {
+			return fault.Wrapf(err, fault.Invalid, op, "namespace")
+		}
+	}
+	for _, ns := range nss {
+		if s.d.Hold == nil {
+			return fault.Conflictf(op, "namespace %q is not held", ns)
+		}
+		if err := s.d.Hold.ReleaseNamespace(ns, hold.ReasonData); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // blobSource resolves an --advance <ns>/<source> to an EventSource with a blob event.
 func (s *HoldService) blobSource(ctx context.Context, a string) (v1.ObjectRef, error) {
 	const op = "controlplane.ReleaseHold"
@@ -228,18 +249,20 @@ type holdStatusOutput struct {
 
 type holdReleaseInput struct {
 	Body struct {
-		Advance []string `json:"advance,omitempty" doc:"blob EventSources, <namespace>/<name>, whose listed keys are marked seen instead of replayed"`
+		Advance    []string           `json:"advance,omitempty" doc:"blob EventSources, <namespace>/<name>, whose listed keys are marked seen instead of replayed"`
+		Namespaces []v1.NamespaceName `json:"namespaces,omitempty" doc:"namespaces whose data hold a restore left is released, instead of the platform's hold"`
 	}
 }
 
 // RegisterHold registers the hold routes (ADR-0206 Decision 8), cluster-scoped and admin-only as ADR-0205's
-// backup status: GET …/hold authorizes get on WorkerNode, POST …/hold/release update.
+// backup status: GET …/hold authorizes get on WorkerNode, POST …/hold/release update; a release of namespaces
+// (ADR-0222 Decision 8) authorizes update on the Namespace instead.
 func RegisterHold(api huma.API, h Holder, authz auth.Authorizer) {
 	const base = "/apis/funcd.io/v1alpha1/hold"
 	huma.Register(api, huma.Operation{
 		OperationID: "getHold", Method: http.MethodGet, Path: base, Tags: []string{"Hold"},
 	}, func(ctx context.Context, _ *struct{}) (*holdStatusOutput, error) {
-		if err := authorizeHold(ctx, authz, auth.VerbGet); err != nil {
+		if err := authorizeHold(ctx, authz, auth.VerbGet, v1.KindWorkerNode); err != nil {
 			return nil, wrapFaultError(err)
 		}
 		st, err := h.Status(ctx)
@@ -251,20 +274,29 @@ func RegisterHold(api huma.API, h Holder, authz auth.Authorizer) {
 	huma.Register(api, huma.Operation{
 		OperationID: "releaseHold", Method: http.MethodPost, Path: base + "/release", Tags: []string{"Hold"},
 	}, func(ctx context.Context, in *holdReleaseInput) (*struct{}, error) {
-		if err := authorizeHold(ctx, authz, auth.VerbUpdate); err != nil {
+		if nss := in.Body.Namespaces; len(nss) > 0 {
+			if len(in.Body.Advance) > 0 {
+				return nil, wrapFaultError(fault.Invalidf("controlplane.ReleaseHold", "advance applies to the platform's release, not to a namespace's"))
+			}
+			if err := authorizeHold(ctx, authz, auth.VerbUpdate, v1.KindNamespace); err != nil {
+				return nil, wrapFaultError(err)
+			}
+			return nil, wrapFaultError(h.ReleaseNamespaces(ctx, nss))
+		}
+		if err := authorizeHold(ctx, authz, auth.VerbUpdate, v1.KindWorkerNode); err != nil {
 			return nil, wrapFaultError(err)
 		}
 		return nil, wrapFaultError(h.Release(ctx, in.Body.Advance))
 	})
 }
 
-func authorizeHold(ctx context.Context, authz auth.Authorizer, verb auth.Verb) error {
+func authorizeHold(ctx context.Context, authz auth.Authorizer, verb auth.Verb, kind v1.Kind) error {
 	const op = "controlplane.hold"
 	id, ok := middleware.IdentityFrom(ctx)
 	if !ok {
 		return fault.Unauthorizedf(op, "no authenticated identity")
 	}
-	dec, err := authz.Authorize(ctx, auth.Request{Identity: id, Verb: verb, Kind: v1.KindWorkerNode})
+	dec, err := authz.Authorize(ctx, auth.Request{Identity: id, Verb: verb, Kind: kind})
 	if err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "authorize hold %s", verb)
 	}
@@ -277,8 +309,9 @@ func authorizeHold(ctx context.Context, authz auth.Authorizer, verb auth.Verb) e
 // stubHolder backs RegisterStubHold (spec generation): inert, shape only.
 type stubHolder struct{}
 
-func (stubHolder) Status(context.Context) (hold.Evidence, error) { return hold.Evidence{}, nil }
-func (stubHolder) Release(context.Context, []string) error       { return nil }
+func (stubHolder) Status(context.Context) (hold.Evidence, error)               { return hold.Evidence{}, nil }
+func (stubHolder) Release(context.Context, []string) error                     { return nil }
+func (stubHolder) ReleaseNamespaces(context.Context, []v1.NamespaceName) error { return nil }
 
 // RegisterStubHold registers the hold routes with inert deps for spec generation.
 func RegisterStubHold(api huma.API) { RegisterHold(api, stubHolder{}, stubLogAuthorizer{}) }

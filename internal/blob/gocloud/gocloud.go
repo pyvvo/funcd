@@ -73,13 +73,19 @@ type OpenOptions struct {
 	// CredentialsFile is an AWS shared credentials file whose [default] profile is the only credential source;
 	// s3:// only, another scheme is fault.Invalid.
 	CredentialsFile string
+	// Static is an access key that is the only credential source (ADR-0222 Decision 6, a namespace Secret's keys);
+	// s3:// only, and not with CredentialsFile.
+	Static *StaticKey
 }
+
+// StaticKey is an AWS access key, its secret and an optional session token.
+type StaticKey struct{ ID, Secret, Session string }
 
 // OpenWith adapts a gocloud bucket to blob.Bucket, opened with opts.
 func OpenWith(ctx context.Context, url string, opts OpenOptions) (blob.Bucket, error) {
 	const op = "gocloud.Open"
-	if opts.CredentialsFile != "" {
-		b, err := openS3With(ctx, url, opts.CredentialsFile)
+	if opts.CredentialsFile != "" || opts.Static != nil {
+		b, err := openS3With(ctx, url, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -106,23 +112,20 @@ func OpenWith(ctx context.Context, url string, opts OpenOptions) (blob.Bucket, e
 	return k, nil
 }
 
-// openS3With opens an s3:// URL as s3blob's URL opener does, signing with the [default] profile of credentialsFile
-// alone (ADR-0203 Decision 5).
-func openS3With(ctx context.Context, url, credentialsFile string) (*gcblob.Bucket, error) {
+// openS3With opens an s3:// URL as s3blob's URL opener does, signing with opts' credential alone: the [default]
+// profile of its credentials file (ADR-0203 Decision 5) or its static key (ADR-0222 Decision 6).
+func openS3With(ctx context.Context, url string, opts OpenOptions) (*gcblob.Bucket, error) {
 	const op = "gocloud.OpenWith"
 	u, err := neturl.Parse(url)
-	if err != nil || u.Scheme != s3blob.Scheme {
-		return nil, fault.Invalidf(op, "a credentials file applies to an s3:// URL only, not %q", url)
+	switch {
+	case err != nil || u.Scheme != s3blob.Scheme:
+		return nil, fault.Invalidf(op, "a credentials file or static key applies to an s3:// URL only, not %q", url)
+	case opts.CredentialsFile != "" && opts.Static != nil:
+		return nil, fault.Invalidf(op, "a credentials file and a static key: give one credential source")
 	}
-	sc, err := awsconfig.LoadSharedConfigProfile(ctx, "default", func(o *awsconfig.LoadSharedConfigOptions) {
-		o.CredentialsFiles = []string{credentialsFile}
-		o.ConfigFiles = []string{}
-	})
+	creds, err := credentialsOf(ctx, opts)
 	if err != nil {
-		return nil, fault.Wrapf(err, fault.Invalid, op, "read the [default] profile of %s", credentialsFile)
-	}
-	if !sc.Credentials.HasKeys() {
-		return nil, fault.Invalidf(op, "the [default] profile of %s has no access key", credentialsFile)
+		return nil, err
 	}
 	q := u.Query()
 	prefix := q.Get("prefix")
@@ -135,7 +138,7 @@ func openS3With(ctx context.Context, url, credentialsFile string) (*gcblob.Bucke
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Invalid, op, "open %q", url)
 	}
-	cfg.Credentials = aws.NewCredentialsCache(credentials.StaticCredentialsProvider{Value: sc.Credentials})
+	cfg.Credentials = aws.NewCredentialsCache(credentials.StaticCredentialsProvider{Value: creds})
 	bopts.RequestChecksumCalculation = cfg.RequestChecksumCalculation
 	b, err := s3blob.OpenBucket(ctx, awss3.NewFromConfig(cfg, s3opts...), u.Host, &bopts)
 	if err != nil {
@@ -145,6 +148,28 @@ func openS3With(ctx context.Context, url, credentialsFile string) (*gcblob.Bucke
 		b = gcblob.PrefixedBucket(b, prefix)
 	}
 	return b, nil
+}
+
+// credentialsOf reads opts' one credential source; one without an access key is fault.Invalid.
+func credentialsOf(ctx context.Context, opts OpenOptions) (aws.Credentials, error) {
+	const op = "gocloud.OpenWith"
+	if k := opts.Static; k != nil {
+		if k.ID == "" || k.Secret == "" {
+			return aws.Credentials{}, fault.Invalidf(op, "the static key has no access key id or secret")
+		}
+		return aws.Credentials{AccessKeyID: k.ID, SecretAccessKey: k.Secret, SessionToken: k.Session, Source: "funcd static key"}, nil
+	}
+	sc, err := awsconfig.LoadSharedConfigProfile(ctx, "default", func(o *awsconfig.LoadSharedConfigOptions) {
+		o.CredentialsFiles = []string{opts.CredentialsFile}
+		o.ConfigFiles = []string{}
+	})
+	if err != nil {
+		return aws.Credentials{}, fault.Wrapf(err, fault.Invalid, op, "read the [default] profile of %s", opts.CredentialsFile)
+	}
+	if !sc.Credentials.HasKeys() {
+		return aws.Credentials{}, fault.Invalidf(op, "the [default] profile of %s has no access key", opts.CredentialsFile)
+	}
+	return sc.Credentials, nil
 }
 
 // s3URLOptions takes the parameters s3blob's URL opener reads itself out of q (s3blob.go URLOpener) and refuses

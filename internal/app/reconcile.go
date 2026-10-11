@@ -49,6 +49,9 @@ type Deps struct {
 	// Hold is the platform hold (ADR-0206 Decision 6); nil ⇒ never held. A held pass writes nothing and no hook call
 	// starts or is recorded (ADR-0214 Decision 8); the deadline reads its ReleasedAt (ADR-0212 Decision 6).
 	Hold hold
+	// NamespaceHold is the per-namespace hold (ADR-0222 Decision 8): an App of a held namespace is held as on a held
+	// platform, and the deadline reads ReleasedAtIn of its namespace for ReleasedAt; nil ⇒ none held.
+	NamespaceHold namespaceHold
 	// Invoker calls the hook Functions (ADR-0214 Decision 5); nil ⇒ every call fails Unavailable "no invoker".
 	Invoker Invoker
 	// InvokeTimeout is invoke.defaultTimeout, a hook call's deadline when its Function sets no spec.timeout; 0 ⇒
@@ -64,6 +67,12 @@ type hold interface {
 	ReleasedAt() time.Time
 }
 
+// namespaceHold is hold.NamespaceGate's methods, inline as hold is (ADR-0222 Decision 8).
+type namespaceHold interface {
+	HeldIn(ns v1.NamespaceName) bool
+	ReleasedAtIn(ns v1.NamespaceName) time.Time
+}
+
 // Reconciler drives an App to its declared parts (controller.Reconciler). It keeps no state between passes: the
 // rollout deadline is read from the AppRevision's status.startedAt.
 type Reconciler struct {
@@ -75,6 +84,7 @@ type Reconciler struct {
 	revisionHistory   int
 	supervisionPeriod time.Duration
 	hold              hold
+	nsHold            namespaceHold
 	invoker           Invoker
 	invokeTimeout     time.Duration
 	enqueue           func(controller.Request)
@@ -115,6 +125,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		revisionHistory:   cmp.Or(d.RevisionHistory, defaultRevisionHistory),
 		supervisionPeriod: cmp.Or(d.SupervisionPeriod, controller.SupervisionPeriod),
 		hold:              d.Hold,
+		nsHold:            d.NamespaceHold,
 		invoker:           d.Invoker,
 		invokeTimeout:     cmp.Or(d.InvokeTimeout, v1.DefaultInvokeTimeout),
 		enqueue:           d.Enqueue,
@@ -177,6 +188,9 @@ func entries(a *v1.App) []entry {
 	for i, e := range s.Catalogs {
 		add("catalogs", v1.KindCatalogService, i, e.Name, e.Ref, "")
 	}
+	for i, e := range s.BackupSchedules {
+		add("backupSchedules", v1.KindBackupSchedule, i, e.Name, e.Ref, "")
+	}
 	return out
 }
 
@@ -221,7 +235,7 @@ func (s *stop) msg() string {
 // writing no part, until every App it requires is met (ADR-0219). A held pass writes nothing (ADR-0206 Decision 6); a
 // paused App gets only its Paused condition (ADR-0212).
 func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (controller.Result, error) {
-	if r.held() {
+	if r.held(req.Namespace) {
 		return controller.Result{RequeueAfter: r.supervisionPeriod}, nil
 	}
 	obj, err := r.store.Get(ctx, v1.KindApp.GVK(), req.Namespace, req.Name)

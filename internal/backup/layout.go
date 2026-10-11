@@ -220,8 +220,8 @@ func LifecycleRules(r Retention) map[string]int {
 	return rules
 }
 
-// writeRecord frames r as uvarint(len key) ‖ key ‖ uvarint(len value) ‖ value (Decision 2).
-func writeRecord(w io.Writer, r snapshot.Record) error {
+// WriteRecord frames r as uvarint(len key) ‖ key ‖ uvarint(len value) ‖ value (Decision 2).
+func WriteRecord(w io.Writer, r snapshot.Record) error {
 	var hdr [binary.MaxVarintLen64]byte
 	for _, field := range [][]byte{r.Key, r.Value} {
 		if _, err := w.Write(binary.AppendUvarint(hdr[:0], uint64(len(field)))); err != nil {

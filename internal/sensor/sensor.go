@@ -82,6 +82,9 @@ type Deps struct {
 	Logger                 *slog.Logger
 	// Hold is the platform hold (ADR-0206): while held no delivery or replay reaches a target; nil ⇒ never held.
 	Hold hold.Gate
+	// NamespaceHold is the per-namespace hold (ADR-0222 Decision 8): a held namespace's deliveries and replays are
+	// refused as the platform's are; nil ⇒ none held.
+	NamespaceHold hold.NamespaceGate
 }
 
 // subEntry is a Sensor's live subscription bookkeeping (ADR-0109 B1 idempotency): the cancels for its
@@ -115,6 +118,7 @@ type Reconciler struct {
 	maxDeliveriesInFlight int              // ADR-0156: the delivery workers
 	retry                 *retryQueue      // ADR-0156: the bounded delivery queue every attempt runs on
 	hold                  hold.Gate        // ADR-0206: deliver and Replay refuse while held
+	nsHold                hold.NamespaceGate
 
 	mu        sync.Mutex
 	subs      map[sensorKey]*subEntry
@@ -141,9 +145,12 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 	if attempts <= 0 {
 		attempts = defaultDeliveryAttempts
 	}
-	gate := d.Hold
+	gate, nsGate := d.Hold, d.NamespaceHold
 	if gate == nil {
 		gate = hold.Never
+	}
+	if nsGate == nil {
+		nsGate = hold.NeverNamespace
 	}
 	workers := d.MaxDeliveriesInFlight
 	if workers < 1 {
@@ -161,6 +168,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		subs:                  map[sensorKey]*subEntry{},
 		replaying:             map[deadLetterKey]struct{}{},
 		hold:                  gate,
+		nsHold:                nsGate,
 	}, nil
 }
 
@@ -290,7 +298,7 @@ func (r *Reconciler) runAction(ctx context.Context, ns v1.NamespaceName, rg v1.R
 // delivery error (nil on success). While held it is fault.Unavailable, so the attempt retries, then parks: a guard,
 // as no publisher runs held (ADR-0206 Decision 6).
 func (r *Reconciler) deliver(ctx context.Context, d delivery) error {
-	if r.hold.Held() {
+	if r.held(d.ns) {
 		return errHeld("sensor.deliver")
 	}
 	input, err := buildInput(d.action.Input, d.ce)
@@ -387,7 +395,7 @@ func (r *Reconciler) recordTerminal(ctx context.Context, d delivery, actionErr e
 // Sensor / action ⇒ NotFound (the operator discards); a replay of an id already being replayed ⇒ Conflict.
 // Idempotent: a repeat replay of a still-broken target re-parks with a fresh attempt count.
 func (r *Reconciler) Replay(ctx context.Context, ns v1.NamespaceName, id string) error {
-	if r.hold.Held() {
+	if r.held(ns) {
 		return errHeld("sensor.Replay")
 	}
 	if r.deadletters == nil {
@@ -649,7 +657,10 @@ func capMsg(s string) string {
 	return s
 }
 
-// errHeld refuses a delivery while the platform is held (ADR-0206 Decision 6).
+// held reports the platform held (ADR-0206 Decision 6) or ns (ADR-0222 Decision 8).
+func (r *Reconciler) held(ns v1.NamespaceName) bool { return r.hold.Held() || r.nsHold.HeldIn(ns) }
+
+// errHeld refuses a delivery while the platform or its namespace is held (ADR-0206 Decision 6, ADR-0222 Decision 8).
 func errHeld(op string) error {
-	return fault.Unavailablef(op, "the platform is held: nothing is delivered until `funcdctl hold release`")
+	return fault.Unavailablef(op, "the platform or the namespace is held: nothing is delivered until `funcdctl hold release`")
 }

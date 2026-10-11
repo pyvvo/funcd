@@ -43,3 +43,9 @@ func TestSnapshotPrefixContract(t *testing.T) {
 	t.Parallel()
 	kvstorecontract.RunSnapshotPrefix(t, memory.New())
 }
+
+// TestLoadPrefixRefusesNonEmpty: the per-store load contract (ADR-0222 Decision 7) on the in-memory driver.
+func TestLoadPrefixRefusesNonEmpty(t *testing.T) {
+	t.Parallel()
+	kvstorecontract.RunLoadPrefix(t, memory.New())
+}

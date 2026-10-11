@@ -52,6 +52,8 @@ type AppSpec struct {
 	Sites        []AppSite        `json:"sites,omitempty"`
 	Catalogs     []AppCatalog     `json:"catalogs,omitempty"`
 	ConfigMaps   []AppConfigMap   `json:"configMaps,omitempty"`
+	// BackupSchedules backs up the App's stores (ADR-0222 Decision 2); an entry with an empty scope backs up this App.
+	BackupSchedules []AppBackupSchedule `json:"backupSchedules,omitempty"`
 	// Secrets declares the Secrets the parts name, never their values (ADR-0213 Decision 6).
 	Secrets []AppSecret `json:"secrets,omitempty"`
 	// Hooks names the Functions of this App called before its parts change and after a new revision is current
@@ -274,6 +276,16 @@ func (AppSite) Schema(r huma.Registry) *huma.Schema {
 // Schema is CatalogServiceSpec's schema plus name and ref (see entrySchema).
 func (AppCatalog) Schema(r huma.Registry) *huma.Schema {
 	return entrySchema(r, reflect.TypeFor[CatalogServiceSpec](), false)
+}
+
+// Schema is BackupScheduleSpec's schema plus name and ref (see entrySchema).
+func (AppBackupSchedule) Schema(r huma.Registry) *huma.Schema {
+	return entrySchema(r, reflect.TypeFor[BackupScheduleSpec](), false)
+}
+
+// MarshalJSON writes a ref entry as its ref alone (see marshalEntry).
+func (e AppBackupSchedule) MarshalJSON() ([]byte, error) {
+	return marshalEntry(entryHead{Name: e.Name, Ref: e.Ref}, e.BackupScheduleSpec)
 }
 
 // MarshalJSON writes a ref entry as its ref alone (see marshalEntry).
@@ -722,6 +734,14 @@ func (a *App) entries() []appEntry {
 		out = append(out, newEntry("catalogs", i, entryHead{Name: e.Name, Ref: e.Ref}, e.CatalogServiceSpec,
 			&CatalogService{TypeMeta: typeMetaFor(KindCatalogService), ObjectMeta: meta(e.Name), Spec: spec}))
 	}
+	for i, e := range s.BackupSchedules {
+		spec := e.BackupScheduleSpec
+		if reflect.ValueOf(spec.Scope).IsZero() {
+			spec.Scope.App = a.Name
+		}
+		out = append(out, newEntry("backupSchedules", i, entryHead{Name: e.Name, Ref: e.Ref}, e.BackupScheduleSpec,
+			&BackupSchedule{TypeMeta: typeMetaFor(KindBackupSchedule), ObjectMeta: meta(e.Name), Spec: spec}))
+	}
 	return out
 }
 
@@ -831,7 +851,7 @@ type entryHead struct {
 // partSpec is the spec of a kind that has a section.
 type partSpec interface {
 	ConfigMapSpec | KVStoreSpec | BucketSpec | FunctionSpec | WorkflowSpec | EventSourceSpec | SensorSpec | RouteSpec |
-		SiteSpec | CatalogServiceSpec
+		SiteSpec | CatalogServiceSpec | BackupScheduleSpec
 }
 
 // marshalEntry writes an entry's head, then its spec's fields only when the spec is set: a ref entry goes out as
