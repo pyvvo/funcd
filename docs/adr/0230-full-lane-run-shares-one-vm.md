@@ -1,8 +1,11 @@
 # ADR-0230: The full lane run shares one Lima VM, reset between lanes
 
-- **Status**: Reviewing (2026-10-11; implemented, awaiting the implementation review; accepted 2026-10-11, decided by
-  the decider, judged twice: the first round specified the lane-less boot, a self-contained reset and leak check, and
-  dropped a journal-window change; the second found no technical Blocker or Major)
+- **Status**: Implemented (2026-10-11; the implementation review passed,
+  docs/reviews/adr-0230-implementation-claude-opus-5-5.md; accepted 2026-10-11, decided by the decider, judged twice)
+- **Amended in place**: 2026-10-11 — exceptionally edited after acceptance (immutability waived by the decider for
+  this ADR only, as for ADR-0089 and ADR-0199) to correct three statements the implementation review found wrong:
+  where the containerd root lives (Decision 4), how the template runs the scripts (Decision 2), and the 10 s stop
+  (Constraints). The decision is unchanged.
 - **Date**: 2026-10-11
 - **Deciders**: green-0-rabbit
 - **Tags**: testing, e2e, venom, lima, tooling
@@ -45,7 +48,8 @@ build (Docker, unchanged); CI, which runs no lane.
 - Stopping funcd is not a reset (measured): its workers keep running, and mounts, network namespaces, the bridge,
   IP leases, iptables lines, the egress nftables tables, data and journal lines stay. The journal leak failed a
   suite: duckdb counted two 403 lines that the s3 lane had written.
-- `systemctl stop funcd-demo` takes 10 s; SIGKILL takes 0.02 s, and the reset discards the platform anyway.
+- SIGKILL ends funcd in 0.02 s, and the reset discards the platform anyway. A graceful stop took 10 s only because
+  the lanes' unit lacked the installed unit's `KillMode=mixed`, fixed with this ADR's implementation (about 0.25 s now).
 - `scripts/lane-lock.sh` allows one `funcd-bench*` VM at a time (`:54`, `:102-107`), as today.
 - The reset may wipe `/var/lib/funcd/data` only because every lane config sets `dataDir: /var/lib/funcd/data`; the
   default is `/var/lib/funcd` (`internal/platform/config/config.go:423`).
@@ -71,9 +75,11 @@ build (Docker, unchanged); CI, which runs no lane.
    `nftables` (only the reset and the leak check use `nft`; funcd itself uses netlink); `scripts/lane-provision.sh
    lane` runs only when `/mnt/funcd-deps/lane.tgz` exists (stage `/opt/lane`, tokens, registry, start `funcd-demo`,
    push, apply). `scripts/lane-ready.sh` waits for the lane's `ready` target and exits 0 when `/opt/lane/LANE` is
-   absent. The template calls `boot`, `lane` and the readiness script with Lima's `file:`; the shared run copies the
-   scripts into the deps mount and runs `limactl shell funcd-bench-shared sudo bash /mnt/funcd-deps/<script> <args>`
-   (`boot` once, `lane` per lane).
+   absent. The template runs `lane-provision.sh` with Lima's `file:` (Lima passes no argument, and with none the
+   script runs `boot` then `lane`), and installs `lane-ready.sh` with a `mode: data` provision step that its probe
+   runs (Lima refuses a probe `file:`). The shared VM gets `boot` from the template at start; the shared run copies
+   the scripts into the deps mount and runs `limactl shell funcd-bench-shared sudo bash
+   /mnt/funcd-deps/lane-provision.sh lane` per lane.
 3. **A lane on the shared VM**: `lane.py <lane> <deps>` stages its `lane.tgz`, then the lane part of the provision,
    the readiness script and its suite run, then the reset and the leak check, which run once after the boot too.
 4. **The reset** (`scripts/lane-reset.sh`, as root): `systemctl kill -s KILL funcd-demo` and `systemctl reset-failed
@@ -82,8 +88,9 @@ build (Docker, unchanged); CI, which runs no lane.
    network namespaces pinned under `<dataDir>/run/netns` (`internal/runtime/containerd/containerd_linux.go:298`),
    the `funcd0` link, `/var/lib/cni` and the CNI iptables lines; delete the nftables tables `inet funcd_egress` and
    `bridge funcd_lateral`; rotate and vacuum the journal; remove `/var/lib/funcd/data`, `/opt/lane` and
-   `/etc/funcd/tokens`. It keeps `/var/lib/funcd/bin` and the containerd root `/var/lib/funcd/containerd`: the next
-   funcd's `BootSweep` removes the previous lane's containers at start (`containerd_linux.go:1020`). The leak check
+   `/etc/funcd/tokens`. It keeps `/var/lib/funcd/bin`. The containerd root lives under the data dir
+   (`<dataDir>/containerd`, `internal/platform/config/config.go:578-580`), so removing the data dir removes it too,
+   and each lane's funcd starts on a fresh one. The leak check
    (`scripts/lane-leakcheck.sh`) then counts funcd cgroups, task mounts, pinned namespaces, the `funcd0` link, leases
    in `/var/lib/cni/networks/funcd`, funcd's nftables tables, the three removed paths and the `funcd-demo` journal
    lines; any non-zero count fails the lane that just ran.
