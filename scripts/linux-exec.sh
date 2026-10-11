@@ -8,7 +8,9 @@
 # As the go test -exec program it gets <test binary> [flags] and runs the binary in the VM from the package directory
 # as `runner`, a non-root user with a supplementary group, as on CI's runner. The Go toolchain that built the binary
 # is on PATH (its golang.org/toolchain module, from the host's module cache), and HOME, GOCACHE and GOMODCACHE are
-# writable and persist in the VM. go test resolves a relative -exec path from the package directory, so pass it whole.
+# writable and persist in the VM. sudo starts the binary with a fresh environment: each LINUX_EXEC_<NAME>=<value> in
+# ours sets <NAME>=<value> in it (`just test-linux-e2e` sets CI and GOPROXY this way). go test resolves a relative
+# -exec path from the package directory, so pass it whole.
 # The VM mounts $HOME read-only at its own path: the binary is staged under .cache/linux-exec, and a checkout outside
 # $HOME is refused, because the VM would not see it.
 set -euo pipefail
@@ -88,5 +90,9 @@ stage=$(mktemp -d "$src/.cache/linux-exec/XXXXXX")
 trap 'rm -rf "$stage"' EXIT
 # A copy, not a hard link: a test that re-executes its own binary got EACCES from a link to go test's file.
 cp -c "$bin" "$stage/" 2>/dev/null || cp "$bin" "$stage/"
+vars=()
+for name in ${!LINUX_EXEC_@}; do
+  vars+=("${name#LINUX_EXEC_}=${!name}")
+done
 limactl shell --workdir "$(pwd -P)" "$vm" sudo -H -u runner \
-  env PATH="$goroot/bin:/usr/local/bin:/usr/bin:/bin" GOTOOLCHAIN=local "$stage/${bin##*/}" "$@"
+  env PATH="$goroot/bin:/usr/local/bin:/usr/bin:/bin" GOTOOLCHAIN=local ${vars[@]+"${vars[@]}"} "$stage/${bin##*/}" "$@"

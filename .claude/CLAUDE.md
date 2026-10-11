@@ -332,9 +332,11 @@ rules that did it:
   build/vet/lint, a clean tree — run once per PR via `scripts/agent/gate.sh`, then CI runs them again. The gate also
   runs the Linux-specific packages' tests on Linux (`just test-linux`: `funcd-linux-tests`, a long-lived Lima VM booted
   on first use, runs each test as a non-root user with a supplementary group, like CI's runner) and prints a SKIP line
-  instead when limactl is missing, that VM is not running or the checkout is outside `$HOME`. Never run the e2e suite
-  or `go test ./...` inside a per-item fixer or reviewer. The bloat audit (`scripts/agent/audit.py`) is a gate
-  step too: diff-scoped, a few seconds per PR; its full mode, with the `-count=3` flake run, runs once per campaign.
+  instead when limactl is missing, that VM is not running or the checkout is outside `$HOME`. `just test-linux-e2e`
+  runs the e2e suite on Linux in the same VM, on demand only: CI already runs it on every PR that touches code. Never
+  run the e2e suite or `go test ./...` inside a per-item fixer or reviewer. The bloat audit (`scripts/agent/audit.py`)
+  is a gate step too: diff-scoped, a few seconds per PR; its full mode, with the `-count=3` flake run, runs once per
+  campaign.
 - **Toolchain**: `scripts/agent/d` (above), never a `nix develop -c` per command.
 - **Worktrees, not the shared checkout.** Other sessions switch branches in the main checkout; agents work in their
   own worktree under the session scratchpad. Never `git stash` there: `refs/stash` is shared by every worktree of

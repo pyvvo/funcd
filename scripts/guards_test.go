@@ -388,3 +388,36 @@ func TestLinuxExecRefusesACheckoutOutsideHome(t *testing.T) {
 		require.Contains(t, out, "is outside $HOME", args)
 	}
 }
+
+// sudo starts the test binary with a fresh environment, so linux-exec.sh passes each LINUX_EXEC_<NAME>=<value> of its
+// own as <NAME>=<value>: `just test-linux-e2e` sets CI and GOPROXY so. The script runs under the bash on PATH, and the
+// dev shell's bash has no compgen: a forwarding built on it passed nothing, and the suite still passed.
+func TestLinuxExecPassesItsLinuxExecVariables(t *testing.T) {
+	script, err := filepath.Abs("linux-exec.sh")
+	require.NoError(t, err)
+	root, err := filepath.Abs("..")
+	require.NoError(t, err)
+	modcache := t.TempDir()
+	toolchain := filepath.Join(modcache, "golang.org", "toolchain@v0.0.1-go1.0.linux-arm64", "bin")
+	require.NoError(t, os.MkdirAll(toolchain, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(toolchain, "go"), nil, 0o755))
+	fake := t.TempDir() // limactl shell prints its arguments, so the VM is never reached
+	for name, body := range map[string]string{
+		"limactl": `if [ "$1" = list ]; then echo Running; else printf '%s\n' "$@"; fi`,
+		"go":      `case $1 in version) printf 'x: go1.0\n\tbuild\tGOARCH=arm64\n' ;; env) echo "` + modcache + `" ;; esac`,
+	} {
+		require.NoError(t, os.WriteFile(filepath.Join(fake, name), []byte("#!/bin/sh\n"+body+"\n"), 0o755))
+	}
+	bin := filepath.Join(t.TempDir(), "pkg.test")
+	require.NoError(t, os.WriteFile(bin, nil, 0o755))
+	cmd := exec.Command(script, bin, "-test.v")
+	cmd.Env = append(os.Environ(), "HOME="+root, "PATH="+fake+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"LINUX_EXEC_CI=true", "LINUX_EXEC_GOPROXY=file:///a dir/download")
+	code, out := exitCode(t, cmd)
+	require.Equal(t, 0, code, out)
+	args := strings.Split(strings.TrimSpace(out), "\n")
+	require.Contains(t, args, "CI=true")
+	require.Contains(t, args, "GOPROXY=file:///a dir/download")
+	require.NotContains(t, out, "LINUX_EXEC_")
+	require.Equal(t, "-test.v", args[len(args)-1])
+}

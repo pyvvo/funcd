@@ -96,7 +96,8 @@ a citation, or marked as new: an invented field presented as fact is a defect.
 - **One gate per PR.** `scripts/agent/gate.sh` runs every repo-wide check once: a host check, the bloat audit of
   the diff, `just ci-full` with e2e, the Linux build, vet and lint, the Linux-specific tests in a Lima VM
   (`just test-linux`, skipped when limactl is missing, the VM is not running or the checkout is outside `$HOME`), and
-  a clean tree. CI then runs again in the merge queue.
+  a clean tree. CI then runs again in the merge queue. `just test-linux-e2e` runs the e2e suite in the same VM, on
+  demand only, since CI runs that suite on every PR that touches code.
 - **Shipping.** PRs merge through a merge queue, and release-please cuts one release per resolved batch. The
   language shims live in their own repositories and are pinned as Go modules
   ([ADR-0141](../adr/0141-repo-split-pyvvo-pinned-language-modules.md)).

@@ -1,8 +1,8 @@
-# Long-lived Lima VM for `just test-linux`: scripts/linux-exec.sh boots it on first use, under the lane lock, and then
-# reuses it. Each cross-compiled Linux test binary runs here as `runner`, a non-root user with a supplementary group, as
-# on CI's runner (uid 1001, also in adm). The home directory is mounted read-only at its own path, so a package dir and
-# its testdata resolve as on the host. No port is forwarded, so the VM never collides with a lane VM (8080/8081).
-# After a change here, `limactl delete -f funcd-linux-tests`; the next run boots a new VM.
+# Long-lived Lima VM for `just test-linux` and `just test-linux-e2e`: scripts/linux-exec.sh boots it on first use, under
+# the lane lock, and then reuses it. Each cross-compiled Linux test binary runs here as `runner`, a non-root user with a
+# supplementary group, as on CI's runner (uid 1001, also in adm). The home directory is mounted read-only at its own
+# path, so a package dir and its testdata resolve as on the host. No port is forwarded, so the VM never collides with a
+# lane VM (8080/8081). After a change here, `limactl delete -f funcd-linux-tests`; the next run boots a new VM.
 
 # The lanes' Debian image (scripts/lima.yaml; scripts/lima-cache.py primes it): keep the two in step.
 images:
@@ -13,8 +13,9 @@ images:
     arch: "x86_64"
     digest: "sha512:ee13b9618400b521b83d92dec5106c853c3290d14f25efbacb851828abceac1847b63d3d1bac8059d980c7d443efcbc7451fdd6648b2a134796b28563cedfda9"
 
+# With 4GiB the kernel killed the e2e suite's test binary for memory while its tests linked funcd and funcdctl.
 cpus: 4
-memory: "4GiB"
+memory: "8GiB"
 disk: "20GiB"
 
 mounts:
@@ -37,6 +38,9 @@ portForwards:
 
 # node: the tests that start a worker; the nodejs_22 version of the flake's nixpkgs, pinned by checksum like the image.
 # git: `go build` in a test stamps VCS information, from a checkout runner does not own.
+# python3.14 and fastjsonschema: the Python shim's interpreter and runtime dependency, at the python314 and
+# fastjsonschema versions of the flake's nixpkgs, pinned by checksum: CPython as built by astral-sh's
+# python-build-standalone, and the wheel from PyPI.
 provision:
   - mode: system
     script: |
@@ -57,13 +61,35 @@ provision:
         tar -xzf "/tmp/$file" -C /usr/local --strip-components=1 --no-same-owner
         rm "/tmp/$file"
       fi
+      py=3.14.4 build=20260414
+      if [ "$(python3.14 --version 2>/dev/null)" != "Python $py" ]; then
+        case $(uname -m) in
+        aarch64) sum=5c8db1c21023316adad827a46d917bbbd6a85ae4e39bc3a58febda712c2f963d ;;
+        x86_64) sum=e17275eaf95ceb5877aa6816e209b7733f41fee401d39c3921b88fb73fc4a4ba ;;
+        esac
+        file=cpython-$py+$build-$(uname -m)-unknown-linux-gnu-install_only.tar.gz
+        url=https://github.com/astral-sh/python-build-standalone/releases/download/$build
+        curl -fsSLo "/tmp/$file" "$url/${file/+/%2B}"
+        echo "$sum  /tmp/$file" | sha256sum -c -
+        tar -xzf "/tmp/$file" -C /usr/local --strip-components=1 --no-same-owner
+        rm "/tmp/$file"
+      fi
+      if ! python3.14 -c 'import fastjsonschema' 2>/dev/null; then
+        file=fastjsonschema-2.21.2-py3-none-any.whl
+        url=https://files.pythonhosted.org/packages/cb/a8/20d0723294217e47de6d9e2e40fd4a9d2f7c4b6ef974babd482a59743694
+        curl -fsSLo "/tmp/$file" "$url/$file"
+        echo "1c797122d0a86c5cace2e54bf4e819c36223b552017172f32c5c024a6b77e463  /tmp/$file" | sha256sum -c -
+        python3.14 -m pip install --quiet --no-index --no-deps --root-user-action=ignore "/tmp/$file"
+        rm "/tmp/$file"
+      fi
 
 probes:
-  - description: "runner, git and node are in place"
+  - description: "runner, git, node and python3.14 with fastjsonschema are in place"
     script: |
       #!/bin/bash
       set -eux -o pipefail
       id runner
       command -v git
       command -v node
+      python3.14 -c 'import fastjsonschema'
     hint: "the provision did not complete; see /var/log/cloud-init-output.log in `limactl shell funcd-linux-tests`"
