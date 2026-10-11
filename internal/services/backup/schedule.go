@@ -69,7 +69,7 @@ func (r *ScheduleReconciler) Reconcile(ctx context.Context, req controller.Reque
 		}
 	}
 	r.observe(s, &next, table, backups, now)
-	stored := s.Status.RPORisk
+	stored, storedReason := s.Status.RPORisk, readyReason(s.Status.Status)
 	if !reflect.DeepEqual(next, s.Status) {
 		s.Status = next
 		if _, err := r.d.Store.Update(ctx, s); err != nil {
@@ -80,6 +80,10 @@ func (r *ScheduleReconciler) Reconcile(ctx context.Context, req controller.Reque
 		}
 	}
 	r.alert(key, s, stored, next.RPORisk)
+	if readyReason(next.Status) == ReasonSameProvider && storedReason != ReasonSameProvider { // Decision 6's one Warn
+		r.log.Warn("workload backup target shares the blob store's provider (the same endpoint or device): one "+
+			"failure takes both", "namespace", s.Namespace, "schedule", s.Name)
+	}
 	return controller.Result{RequeueAfter: r.wake(table, s, backups, now)}, nil
 }
 

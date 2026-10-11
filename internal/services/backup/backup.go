@@ -258,6 +258,12 @@ func setReady(st *v1.Status, gen int64, ok bool, reason, message string) {
 	st.ObservedGeneration = gen
 }
 
+// readyReason is st's Ready reason, "" without one.
+func readyReason(st v1.Status) string {
+	c, _ := st.Conditions.Get(condReady)
+	return c.Reason
+}
+
 func ts(t time.Time) *v1.Timestamp {
 	out := v1.NewTimestamp(t)
 	return &out

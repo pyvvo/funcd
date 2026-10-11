@@ -494,7 +494,8 @@ func TestScenarioAPICreatesBackup(t *testing.T) {
 }
 
 // scenario: target-in-store-refused — with blob.target s3://store, a schedule naming s3://store?prefix=b/ is refused
-// with 400 naming spec.target.url; another bucket on that endpoint is stored, Ready with reason SameProvider.
+// with 400 naming spec.target.url; another bucket on that endpoint is stored, Ready with reason SameProvider, and one
+// Warn names it.
 func TestScenarioTargetInStoreRefused(t *testing.T) {
 	t.Parallel()
 	const endpoint = "&region=us-east-1&endpoint=https://s3.example.com"
@@ -507,6 +508,11 @@ func TestScenarioTargetInStoreRefused(t *testing.T) {
 	r.create(r.dev, r.schedule("beside", "0 3 * * *", func(s *v1.BackupScheduleSpec) { s.Target.URL = "s3://backups?" + endpoint[1:] }))
 	require.Eventually(t, func() bool { return reason(r.getSchedule("beside").Status.Status) == "SameProvider" },
 		10*time.Second, 10*time.Millisecond)
+	const warn = "workload backup target shares the blob store's provider"
+	warns := func() int { return strings.Count(r.logs.String(), warn) }
+	require.Eventually(t, func() bool { return warns() == 1 }, 10*time.Second, 10*time.Millisecond, "%s", r.logs.String())
+	r.still(func() bool { return warns() == 1 }, "one Warn")
+	require.Regexp(t, `level=WARN msg="`+warn+`[^\n]*schedule=beside`, r.logs.String())
 }
 
 // scenario: run-interrupted — a Backup Running when funcd is killed is Failed (Interrupted) at the start.
