@@ -126,14 +126,23 @@ func (a backupTTL) Admit(ctx context.Context, req Request) (v1.Object, error) {
 
 // --- restore-in-place (ADR-0222 Decisions 7, 10): Create on Restore ---------------------------------------------
 
-type restoreInPlace struct{ authz auth.Authorizer }
+type restoreInPlace struct {
+	authz auth.Authorizer
+	r     StoreReader
+}
 
-// NewRestoreInPlaceAdmission returns the Validating admission that authorizes update on the Namespace for a Restore
-// with an inPlace member: the built-in RBAC gives it to an admin only.
-func NewRestoreInPlaceAdmission(authz auth.Authorizer) Admission { return restoreInPlace{authz: authz} }
+// NewRestoreInPlaceAdmission returns the Validating admission of a Restore with an inPlace member: it authorizes
+// update on the Namespace (the built-in RBAC gives it to an admin only), and refuses it while another in-place Restore
+// of the namespace has not ended, since they would share the namespace's restore hold.
+func NewRestoreInPlaceAdmission(authz auth.Authorizer, r StoreReader) Admission {
+	return restoreInPlace{authz: authz, r: r}
+}
 
 func (restoreInPlace) Name() string { return "restore-in-place" }
 func (restoreInPlace) Phase() Phase { return Validating }
+
+// ReadsNamespace: the one-active check reads the namespace's Restores (ADR-0147).
+func (restoreInPlace) ReadsNamespace() bool { return true }
 
 func (restoreInPlace) Handles(gvk v1.GroupVersionKind, op Operation) bool {
 	return gvk == v1.KindRestore.GVK() && op == Create
@@ -151,6 +160,16 @@ func (a restoreInPlace) Admit(ctx context.Context, req Request) (v1.Object, erro
 	}
 	if !dec.Allowed {
 		return nil, fault.Forbiddenf(op, "an in-place Restore needs update on Namespace %q: %s", r.Namespace, dec.Reason)
+	}
+	objs, err := a.r.List(ctx, v1.KindRestore.GVK(), r.Namespace)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.KindOf(err), op, "list the Restores of %q", r.Namespace)
+	}
+	for _, o := range objs {
+		if other, ok := o.(*v1.Restore); ok && other.Name != r.Name && other.InPlace() && !other.Ended() {
+			return nil, fault.Conflictf(op, "in-place Restore %s of namespace %q has not ended: create this one once it has",
+				other.Name, r.Namespace)
+		}
 	}
 	return req.Object, nil
 }

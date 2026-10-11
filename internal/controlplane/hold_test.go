@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/auth/rbac"
 	"github.com/pyvvo/funcd/internal/controlplane"
+	"github.com/pyvvo/funcd/internal/controlplane/admission"
 	"github.com/pyvvo/funcd/internal/controlplane/middleware"
 	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/store"
@@ -124,13 +126,8 @@ func TestReleaseNamespaceWaitsForRestore(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := store.New(memory.New())
-	rs := &v1.Restore{
-		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindRestore.GVK().APIVersion(), Kind: v1.KindRestore},
-		ObjectMeta: v1.ObjectMeta{Name: "rewind", Namespace: "orders", ResourceGroup: "rg"},
-		Spec: v1.RestoreSpec{Backup: "b1", Source: v1.RestoreSource{CredentialsSecret: "reader", IdentitySecret: "key"},
-			Members: []v1.RestoreMember{{Kind: v1.KindKVStore, Name: "state", InPlace: true}}},
-		Status: v1.RestoreStatus{Phase: v1.RunRunning},
-	}
+	rs := restoreOf("rewind", v1.RestoreMember{Kind: v1.KindKVStore, Name: "state", InPlace: true})
+	rs.Status.Phase = v1.RunRunning
 	created, err := st.Create(ctx, rs)
 	require.NoError(t, err)
 	h, err := hold.Open(t.TempDir())
@@ -170,4 +167,54 @@ func TestReleaseNamespaceWaitsForRestore(t *testing.T) {
 	require.Less(t, rec.Code, 300, rec.Body.String())
 	require.False(t, h.HeldIn("orders"))
 	require.Equal(t, http.StatusConflict, do(t, srv, http.MethodPost, release, adminToken, body).Code, "not held")
+}
+
+// restoreOf is Restore orders/<name> of Backup b1 loading m.
+func restoreOf(name v1.ObjectName, m v1.RestoreMember) *v1.Restore {
+	return &v1.Restore{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindRestore.GVK().APIVersion(), Kind: v1.KindRestore},
+		ObjectMeta: v1.ObjectMeta{Name: name, Namespace: "orders", ResourceGroup: "rg"},
+		Spec: v1.RestoreSpec{Backup: "b1", Source: v1.RestoreSource{CredentialsSecret: "reader", IdentitySecret: "key"},
+			Members: []v1.RestoreMember{m}},
+	}
+}
+
+// TestRestoreInPlaceOnePerNamespace (ADR-0222 Decision 7): while an in-place Restore of a namespace has not ended, a
+// second in-place one is a Conflict naming it, and a Restore into a new name is admitted; once the first has failed,
+// the second is admitted.
+func TestRestoreInPlaceOnePerNamespace(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := store.New(memory.New())
+	authz := rbac.New()
+	srv, err := controlplane.NewServer(controlplane.Deps{
+		Store: st, Authorizer: authz,
+		Credentials: middleware.NewStaticCredentials(map[string]auth.Identity{adminToken: {Subject: "ops", Role: auth.RoleAdmin}}),
+		Admissions:  []admission.Admission{admission.NewRestoreInPlaceAdmission(authz, raceReader{st})},
+	})
+	require.NoError(t, err)
+	const restores = "/apis/funcd.io/v1alpha1/namespaces/orders/restores"
+	create := func(name v1.ObjectName, m v1.RestoreMember) *httptest.ResponseRecorder {
+		body, err := json.Marshal(restoreOf(name, m))
+		require.NoError(t, err)
+		return do(t, srv, http.MethodPost, restores, adminToken, body)
+	}
+	inPlace := v1.RestoreMember{Kind: v1.KindKVStore, Name: "state", InPlace: true}
+
+	rec := create("first", inPlace)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	rec = create("second", inPlace)
+	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), "Restore first")
+	rec = create("copy", v1.RestoreMember{Kind: v1.KindKVStore, Name: "state", As: "state-r"})
+	require.Equal(t, http.StatusOK, rec.Code, "a Restore into a new name is unaffected: %s", rec.Body)
+
+	obj, err := st.Get(ctx, v1.KindRestore.GVK(), "orders", "first")
+	require.NoError(t, err)
+	first := obj.(*v1.Restore)
+	first.Status.Phase = v1.RunFailed
+	_, err = st.Update(ctx, first)
+	require.NoError(t, err)
+	rec = create("second", inPlace)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 }

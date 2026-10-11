@@ -265,7 +265,7 @@ func (s *HoldService) ReleaseNamespaces(ctx context.Context, nss []v1.NamespaceN
 			if err != nil {
 				return err
 			}
-			if rs != nil && rs.Status.Phase != v1.RunSucceeded && rs.Status.Phase != v1.RunFailed {
+			if rs != nil && !rs.Ended() {
 				return fault.Conflictf(op, "namespace %q is held by Restore %s, which is %s: release it once the Restore ends",
 					ns, rs.Name, rs.Status.Phase)
 			}

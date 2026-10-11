@@ -316,6 +316,9 @@ func (r *Restore) InPlace() bool {
 	return false
 }
 
+// Ended reports a Restore Succeeded or Failed (Interrupted included); one not ended is Pending or Running.
+func (r *Restore) Ended() bool { return r.Status.Phase == RunSucceeded || r.Status.Phase == RunFailed }
+
 // Validate enforces Decision 7's shape: a name of at most 56 characters, the Backup and the two Secrets named, and
 // each member a KVStore, Bucket or CatalogService, once, with exactly one target of its kind.
 func (r *Restore) Validate() error {

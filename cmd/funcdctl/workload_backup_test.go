@@ -91,7 +91,7 @@ func TestScenarioCLIApplyWorkloadBackup(t *testing.T) {
 		}),
 		Admissions: []admission.Admission{admission.NewBackupScheduleAdmission("s3://store?region=eu-west-3"),
 			admission.NewBackupSpecImmutableAdmission(), admission.NewBackupTTLAdmission(storeList{st}),
-			admission.NewRestoreInPlaceAdmission(authz)},
+			admission.NewRestoreInPlaceAdmission(authz, storeList{st})},
 	})
 	require.NoError(t, err)
 	srv := httptest.NewServer(h)
