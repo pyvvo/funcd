@@ -124,10 +124,11 @@ func Open(ctx context.Context, cfg Config) (Target, error) {
 	return &target{cfg: cfg, prefix: prefix, b: b, dir: dir, log: log, clock: clock.System(), conditional: true}, nil
 }
 
-// TargetURL is the bucket URL Open opens for cfg, checked as Open checks it: a directory's carries dir_file_mode 0700.
-// A sibling backup on the same target (ADR-0208, ADR-0209) opens its own bucket on it.
+// TargetURL is the bucket URL Open opens for cfg's target, checked as Open checks a target: a directory's carries
+// dir_file_mode 0700. A sibling backup on the same target (ADR-0208, ADR-0209), or funcdctl backup verify, opens its
+// own bucket on it.
 func TargetURL(cfg Config) (string, error) {
-	u, _, err := checkConfig("backup.TargetURL", keyPrefix(cfg), cfg)
+	u, _, err := checkTarget("backup.TargetURL", keyPrefix(cfg), cfg)
 	if err != nil {
 		return "", err
 	}
@@ -142,9 +143,29 @@ func keyPrefix(cfg Config) string {
 	return cfg.KeyPrefix
 }
 
-// checkConfig refuses a scheme other than s3:// and file:///<absolute dir>, a credentials file beside a directory,
-// and retention out of range (Decision 5). A directory's URL gains dir_file_mode 0700, which fileblob reads decimal.
+// checkConfig refuses what checkTarget refuses, and retention out of range (Decision 5).
 func checkConfig(op, prefix string, cfg Config) (*url.URL, string, error) {
+	u, dir, err := checkTarget(op, prefix, cfg)
+	if err != nil {
+		return nil, "", err
+	}
+	r := cfg.Retention
+	switch {
+	case r.Hourly < 1:
+		return nil, "", fault.Invalidf(op, "%sretention.hourly is %d: want at least 1", prefix, r.Hourly)
+	case r.Daily < 0:
+		return nil, "", fault.Invalidf(op, "%sretention.daily is %d: want 0 or more", prefix, r.Daily)
+	case r.Weekly < 0:
+		return nil, "", fault.Invalidf(op, "%sretention.weekly is %d: want 0 or more", prefix, r.Weekly)
+	case r.Verified < 0:
+		return nil, "", fault.Invalidf(op, "%sretention.verified is %d: want 0 or more", prefix, r.Verified)
+	}
+	return u, dir, nil
+}
+
+// checkTarget refuses a scheme other than s3:// and file:///<absolute dir>, and a credentials file beside a directory
+// (Decision 5). A directory's URL gains dir_file_mode 0700, which fileblob reads decimal.
+func checkTarget(op, prefix string, cfg Config) (*url.URL, string, error) {
 	if cfg.Target == "" {
 		return nil, "", fault.Invalidf(op, "%starget is empty", prefix)
 	}
@@ -170,17 +191,6 @@ func checkConfig(op, prefix string, cfg Config) (*url.URL, string, error) {
 		u.RawQuery = q.Encode()
 	default:
 		return nil, "", fault.Invalidf(op, "%starget %q: the scheme is not s3 or file", prefix, cfg.Target)
-	}
-	r := cfg.Retention
-	switch {
-	case r.Hourly < 1:
-		return nil, "", fault.Invalidf(op, "%sretention.hourly is %d: want at least 1", prefix, r.Hourly)
-	case r.Daily < 0:
-		return nil, "", fault.Invalidf(op, "%sretention.daily is %d: want 0 or more", prefix, r.Daily)
-	case r.Weekly < 0:
-		return nil, "", fault.Invalidf(op, "%sretention.weekly is %d: want 0 or more", prefix, r.Weekly)
-	case r.Verified < 0:
-		return nil, "", fault.Invalidf(op, "%sretention.verified is %d: want 0 or more", prefix, r.Verified)
 	}
 	return u, dir, nil
 }

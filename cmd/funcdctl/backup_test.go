@@ -174,6 +174,28 @@ func TestScenarioVerifyPinsGeneration(t *testing.T) {
 	require.Equal(t, before, files(t, verified))
 }
 
+// verify pins into a directory target as the daemon writes there (ADR-0203 Decision 5): every directory it creates
+// under gen/verified/ is 0700, whatever the umask leaves.
+func TestVerifyPinsInPrivateDirectories(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeGenerations(t, dir, 2, unsealed(t))
+	require.NoError(t, execCLI(io.Discard, nil, "backup", "verify", "--target", gocloud.FileURL(dir)))
+	verified := filepath.Join(dir, "gen", "verified")
+	var dirs int
+	require.NoError(t, filepath.WalkDir(verified, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || !d.IsDir() {
+			return err
+		}
+		info, err := d.Info()
+		require.NoError(t, err)
+		require.Equal(t, fs.FileMode(0o700), info.Mode().Perm(), "mode of %s", p)
+		dirs++
+		return nil
+	}))
+	require.Greater(t, dirs, 1)
+}
+
 // scenario: status-shows-restore-points — generations 3 to 9 complete and 7 verified: an admin's `funcdctl backup
 // status` prints the times of 9, 7 and 3 and rpoRisk; a developer gets 403.
 func TestScenarioStatusShowsRestorePoints(t *testing.T) {

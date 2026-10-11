@@ -12,6 +12,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/backup"
 	"github.com/pyvvo/funcd/internal/backup/envelope"
 	"github.com/pyvvo/funcd/internal/backup/plan"
 	"github.com/pyvvo/funcd/internal/backup/verify"
@@ -61,7 +62,11 @@ func (a *cli) backupVerifyCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			b, err := gocloud.OpenWith(ctx, target, gocloud.OpenOptions{CredentialsFile: credentials})
+			targetURL, err := backup.TargetURL(backup.Config{Target: target, CredentialsFile: credentials})
+			if err != nil {
+				return err
+			}
+			b, err := gocloud.OpenWith(ctx, targetURL, gocloud.OpenOptions{CredentialsFile: credentials})
 			if err != nil {
 				return err
 			}
