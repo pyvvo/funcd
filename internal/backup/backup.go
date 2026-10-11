@@ -219,6 +219,9 @@ func (t *target) Close() error {
 	defer t.mu.Unlock()
 	var errs []error
 	if t.lock != nil {
+		// Unlock before the close: a child forked meanwhile holds a copy of the descriptor until it execs, and a close
+		// alone leaves the lock held until then (#932).
+		errs = append(errs, unix.Flock(int(t.lock.Fd()), unix.LOCK_UN)) //nolint:gosec // a file descriptor fits an int
 		errs = append(errs, t.lock.Close())
 		t.lock = nil
 	}

@@ -64,12 +64,12 @@ func Open(dir, name string) (*Registry, error) {
 	case errors.Is(err, os.ErrNotExist):
 		return r, nil
 	case err != nil:
-		_ = lock.Close()
+		_ = release(lock)
 		return nil, fault.Wrapf(err, fault.Internal, op, "read registry")
 	}
 	var saved []Entry
 	if err := json.Unmarshal(b, &saved); err != nil {
-		_ = lock.Close()
+		_ = release(lock)
 		return nil, fault.Wrapf(err, fault.Internal, op, "decode registry %s", r.path)
 	}
 	for _, e := range saved {
@@ -147,9 +147,16 @@ func (r *Registry) Close() error {
 	}
 	clear(r.entries)
 	err := r.write()
-	_ = r.lock.Close()
+	_ = release(r.lock)
 	r.lock = nil
 	return err
+}
+
+// release unlocks before the close: a child forked meanwhile holds a copy of the descriptor until it execs, and a
+// close alone leaves the lock held until then (#932).
+func release(lock *os.File) error {
+	err := unix.Flock(int(lock.Fd()), unix.LOCK_UN) //nolint:gosec // a file descriptor fits an int
+	return errors.Join(err, lock.Close())
 }
 
 // write replaces the registry file atomically: a temp file, fsync, rename, fsync of the dir.
