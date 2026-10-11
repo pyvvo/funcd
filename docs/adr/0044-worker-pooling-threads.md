@@ -2,6 +2,7 @@
 
 - **Status**: Implemented
 - **Superseded in part by**: [ADR-0158](0158-pool-member-identity.md) (2026-10-05) — Decisions 2 and 4, readiness row, checklist: members load and fail alone; readiness no longer waits on every worker.
+- **Superseded in part by**: [ADR-0226](0226-stuck-calls-deadline-and-stop-ladder.md) (2026-10-11) — the host's liveness, "200 while the host is up" (123): 503 `stuck call` while a worker the host ended has not exited.
 - **Date**: 2026-06-16 (**Accepted 2026-06-16** · **Implemented 2026-06-16** — judge folded: the Blocker — re-anchored the trust boundary to the
   **namespace** (resource group demoted to the placement grouping within it, per the blueprint); handed boundary
   *enforcement* to the placement follow-up ADR (the host trusts its single-namespace manifest); bounded the blast-radius

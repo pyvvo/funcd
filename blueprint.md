@@ -417,7 +417,8 @@ but deferred ([ADR-0216](docs/adr/0216-app-tests.md)); an App waits for the shar
 ([ADR-0217](docs/adr/0217-app-templates-values-and-rendering.md), [ADR-0218](docs/adr/0218-app-template-images-lock-and-push.md)),
 and every create or replace can run as a dry run that stores nothing ([ADR-0220](docs/adr/0220-dry-run-engine.md)).
 Platform health is built in: liveness on every replica, a dependency check behind each shim's readiness, and a probe of
-the KV engine and the blob storage ([ADR-0215](docs/adr/0215-built-in-health.md)). A timer event can tick on a cron
+the KV engine and the blob storage ([ADR-0215](docs/adr/0215-built-in-health.md)). A call past its deadline ends: the handler can read its time left, the shim stops the late call, and
+liveness fails a call that will not stop, so funcd replaces its replica ([ADR-0226](docs/adr/0226-stuck-calls-deadline-and-stop-ladder.md)). A timer event can tick on a cron
 expression in a time zone ([ADR-0211](docs/adr/0211-cron-schedules.md)).
 
 #### Controller

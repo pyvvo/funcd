@@ -3,6 +3,7 @@
 - **Status**: Implemented
 - **Superseded in part by**: [ADR-0160](0160-worker-exit-reason.md) (2026-10-05) — §4b: terminal shape failure (or timeout) → Failed + ShapeValid:False.
 - **Superseded in part by**: [ADR-0215](0215-built-in-health.md) (2026-10-10) — §4b: readiness also covers declared bindings through `/health/dependencies`.
+- **Superseded in part by**: [ADR-0226](0226-stuck-calls-deadline-and-stop-ladder.md) (2026-10-11) — §1, liveness "200 while the process is up" (119, 207): a Python shim or a pool host answers 503 `stuck call` while a call will not stop.
 - **Date**: 2026-06-15 (**Implemented 2026-06-15** — review pass, all 5 scenarios green incl the node-gated
   real-shim e2e + timer-invokes-real-handler; dual-mode keeps the ADR-0020 lifecycle tests unchanged; no new
   dependency. **Accepted 2026-06-15** after judge pass — no Blockers left open. The judge confirmed

@@ -298,6 +298,7 @@ func inFlight(t *testing.T) (string, func(n int)) {
 // replyFields are the reply-body fields the tests read.
 type replyFields struct {
 	PID    int    `json:"pid"`
+	Thread int    `json:"thread"`
 	Caught string `json:"caught"`
 	Error  string `json:"error"`
 }
