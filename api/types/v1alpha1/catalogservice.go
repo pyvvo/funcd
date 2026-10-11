@@ -113,29 +113,21 @@ func (c *CatalogService) GroupVersionKind() GroupVersionKind { return KindCatalo
 func (c *CatalogService) isPrincipalObject() {}
 
 // Validate performs envelope validation via the shared validateMeta helper, then the
-// CatalogServiceSpec rules JSON Schema can't express (mirrors KVStore.Validate / FunctionSpec.Validate's
-// blob loop): each spec.blob entry's alias + prefix is a DNS-1123 label and the alias is unique within
-// Blob; Catalog.Prefix is a DNS-1123 label; and the catalog (bucket, prefix) is one of the spec.blob
-// bindings (so the engine gets the per-fn S3 keypair and can write its own catalog — ADR-0086). Cross-
-// resource validity (the bucket/prefix actually EXIST in the namespace) is the catalog-blob-validity
+// CatalogServiceSpec rules JSON Schema can't express (spec.blob and spec.config take the Function binding
+// checks, FunctionSpec.validateBindings): each spec.blob entry's alias + prefix is a DNS-1123 label and the
+// alias is unique within Blob; Catalog.Prefix is a DNS-1123 label; and the catalog (bucket, prefix) is one of
+// the spec.blob bindings (so the engine gets the per-fn S3 keypair and can write its own catalog — ADR-0086).
+// Cross-resource validity (the bucket/prefix actually EXIST in the namespace) is the catalog-blob-validity
 // admission, NOT structural Validate.
 func (c *CatalogService) Validate() error {
 	const op = "CatalogService.Validate"
 	if err := validateMeta(c.TypeMeta, &c.ObjectMeta, KindCatalogService); err != nil {
 		return err
 	}
-	seen := make(map[string]bool, len(c.Spec.Blob))
-	for _, b := range c.Spec.Blob {
-		if !dnsLabel.MatchString(b.Alias) {
-			return fault.Invalidf(op, "spec.blob alias %q is not a valid DNS-1123 label", b.Alias)
-		}
-		if seen[b.Alias] {
-			return fault.Invalidf(op, "spec.blob alias %q is duplicated", b.Alias)
-		}
-		seen[b.Alias] = true
-		if !dnsLabel.MatchString(b.Prefix) {
-			return fault.Invalidf(op, "spec.blob[%s].prefix %q is not a valid DNS-1123 label", b.Alias, b.Prefix)
-		}
+	// spec.blob and spec.config have the shape of a Function's bindings and take their checks. Each runs at its own
+	// place in the order, which decides the error an input that breaks several rules gets.
+	if err := (&FunctionSpec{Blob: c.Spec.Blob}).validateBindings(op, "spec"); err != nil {
+		return err
 	}
 	if !dnsLabel.MatchString(c.Spec.Catalog.Prefix) {
 		return fault.Invalidf(op, "spec.catalog.prefix %q is not a valid DNS-1123 label", c.Spec.Catalog.Prefix)
@@ -167,10 +159,8 @@ func (c *CatalogService) Validate() error {
 			return fault.Invalidf(op, "spec.secrets entry %q is not a valid DNS-1123 name", s)
 		}
 	}
-	for _, cm := range c.Spec.Config {
-		if !dnsLabel.MatchString(string(cm)) {
-			return fault.Invalidf(op, "spec.config entry %q is not a valid DNS-1123 name", cm)
-		}
+	if err := (&FunctionSpec{Config: c.Spec.Config}).validateBindings(op, "spec"); err != nil {
+		return err
 	}
 	// spec.ingress (ADR-0138) opts the catalog into external edge exposure. Structural Validate checks
 	// only that the declared edge path is a rooted prefix; the route is programmed (to the PEP proxy)
