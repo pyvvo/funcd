@@ -170,3 +170,20 @@ func TestReleaseNamespaceMarker(t *testing.T) {
 	require.False(t, h.HeldIn("web"))
 	require.Empty(t, h.NamespaceMarkers())
 }
+
+// Created records the topmost directory a MkdirAll of a path creates, nothing for a directory that exists, and removes
+// what it recorded, the last first, leaving what existed.
+func TestCreated(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	var c hold.Created
+	c.Track(dir)
+	c.Track(filepath.Join(dir, "a", "b", "c"))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "a", "b", "c"), 0o700))
+	c.Track(filepath.Join(dir, "a", "b", "d"))
+	require.Equal(t, hold.Created{filepath.Join(dir, "a"), filepath.Join(dir, "a", "b", "d")}, c)
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "a", "b", "d"), 0o700))
+	require.NoError(t, c.Remove())
+	require.NoDirExists(t, filepath.Join(dir, "a"))
+	require.DirExists(t, dir)
+}

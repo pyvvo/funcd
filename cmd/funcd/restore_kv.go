@@ -154,6 +154,7 @@ func newRestoreKVCmd(out io.Writer) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			h.created.Track(cfg.Kvstore.DataDir)
 			if err := kvbadger.RestoreDir(ctx, cfg.Kvstore.DataDir, src, p, envelope.Opener(ids)); err != nil {
 				return errors.Join(err, h.undo())
 			}

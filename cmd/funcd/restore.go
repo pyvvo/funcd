@@ -540,15 +540,10 @@ func newRestoreBlobCmd(out io.Writer) *cobra.Command {
 			if storeCredentials == "" {
 				storeCredentials = cfg.Blob.CredentialsFile
 			}
-			dst, err := openBlobStore(cmd.Context(), cfg, storeCredentials)
-			if err != nil {
-				return err
-			}
-			defer func() { _ = dst.Close() }()
 			if at != "" {
-				return restoreBlobAt(cmd.Context(), out, cfg, dst, at)
+				return restoreBlobAt(cmd.Context(), out, cfg, storeCredentials, at)
 			}
-			return restoreBlobGeneration(cmd.Context(), out, &f, cfg, dst, args)
+			return restoreBlobGeneration(cmd.Context(), out, &f, cfg, storeCredentials, args)
 		},
 	}
 	f.register(cmd)
@@ -575,10 +570,11 @@ func openBlobStore(ctx context.Context, cfg config.Config, credentials string) (
 }
 
 // restoreHold is the hold of a store's restore (ADR-0206 Decisions 2, 5): restore.inprogress, then the marker, so the
-// next start is held; undo removes a marker it wrote and the busy file.
+// next start is held; undo removes the directories the restore created, a marker it wrote and the busy file.
 type restoreHold struct {
 	dataDir   string
 	hadMarker bool
+	created   hold.Created
 }
 
 func beginRestoreHold(dataDir, command string) (*restoreHold, error) {
@@ -597,7 +593,7 @@ func beginRestoreHold(dataDir, command string) (*restoreHold, error) {
 }
 
 func (h *restoreHold) undo() error {
-	var errs []error
+	errs := []error{h.created.Remove()}
 	if !h.hadMarker {
 		if err := os.Remove(filepath.Join(h.dataDir, hold.MarkerFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			errs = append(errs, err)
@@ -606,9 +602,11 @@ func (h *restoreHold) undo() error {
 	return errors.Join(append(errs, hold.End(h.dataDir))...)
 }
 
-// end gives the marker and roots the data directory's owner, then removes the busy file.
+// end gives the marker, roots and the directories the restore created the data directory's owner, then removes the
+// busy file.
 func (h *restoreHold) end(roots ...string) error {
-	if err := hold.Own(h.dataDir, append([]string{filepath.Join(h.dataDir, hold.MarkerFile)}, roots...)...); err != nil {
+	roots = append(append([]string{filepath.Join(h.dataDir, hold.MarkerFile)}, roots...), h.created...)
+	if err := hold.Own(h.dataDir, roots...); err != nil {
 		return err
 	}
 	return hold.End(h.dataDir)
@@ -622,7 +620,9 @@ func blobRoots(cfg config.Config) []string {
 	return nil
 }
 
-func restoreBlobGeneration(ctx context.Context, out io.Writer, f *restoreFlags, cfg config.Config, dst blob.Bucket, args []string) error {
+// restoreBlobGeneration opens the store once the hold has begun, so a local store it creates is the hold's to give the
+// data directory's owner or to remove (ADR-0206 Decision 2).
+func restoreBlobGeneration(ctx context.Context, out io.Writer, f *restoreFlags, cfg config.Config, credentials string, args []string) error {
 	const op = "funcd restore blob"
 	o, done, err := f.open(ctx)
 	if err != nil {
@@ -652,6 +652,14 @@ func restoreBlobGeneration(ctx context.Context, out io.Writer, f *restoreFlags, 
 	if err != nil {
 		return err
 	}
+	if cfg.Blob.Target == "" {
+		h.created.Track(cfg.Blob.Dir)
+	}
+	dst, err := openBlobStore(ctx, cfg, credentials)
+	if err != nil {
+		return errors.Join(err, h.undo())
+	}
+	defer func() { _ = dst.Close() }()
 	m, err := blobmirror.Restore(ctx, o.Source, n, dst, envelope.Opener(o.Identities))
 	if err != nil {
 		return errors.Join(err, h.undo())
@@ -664,15 +672,24 @@ func restoreBlobGeneration(ctx context.Context, out io.Writer, f *restoreFlags, 
 	return err
 }
 
-func restoreBlobAt(ctx context.Context, out io.Writer, cfg config.Config, dst blob.Bucket, at string) error {
+func restoreBlobAt(ctx context.Context, out io.Writer, cfg config.Config, credentials, at string) error {
 	const op = "funcd restore blob"
 	when, err := time.Parse(time.RFC3339, at)
 	if err != nil {
 		return fault.Wrapf(err, fault.Invalid, op, "--at %q: want an RFC 3339 time", at)
 	}
+	const unversioned = "--at restores a versioned blob.target; the local store keeps no versions"
+	if cfg.Blob.Target == "" {
+		return fault.Invalidf(op, unversioned)
+	}
+	dst, err := openBlobStore(ctx, cfg, credentials)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dst.Close() }()
 	v, ok := dst.(blob.Versioned)
 	if !ok {
-		return fault.Invalidf(op, "--at restores a versioned blob.target; the local store keeps no versions")
+		return fault.Invalidf(op, unversioned)
 	}
 	times, err := cfg.BlobTimes()
 	if err != nil {

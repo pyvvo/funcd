@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"syscall"
 	"time"
@@ -256,6 +257,37 @@ func Own(ref string, roots ...string) error {
 		}
 	}
 	return nil
+}
+
+// Created is the topmost directories a restore created on the way to the directories it writes: the restore gives
+// them the data directory's owner with the rest (Own), or removes them when it fails (ADR-0206 Decision 2).
+type Created []string
+
+// Track records the topmost directory on dir's path that does not exist yet, the first one os.MkdirAll(dir) creates;
+// nothing when dir exists.
+func (c *Created) Track(dir string) {
+	missing := ""
+	for d := dir; ; d = filepath.Dir(d) {
+		if _, err := os.Lstat(d); !errors.Is(err, fs.ErrNotExist) {
+			break
+		}
+		missing = d
+		if filepath.Dir(d) == d {
+			break
+		}
+	}
+	if missing != "" {
+		*c = append(*c, missing)
+	}
+}
+
+// Remove removes the recorded directories and all below them, the last recorded first.
+func (c Created) Remove() error {
+	var errs []error
+	for _, dir := range slices.Backward(c) {
+		errs = append(errs, os.RemoveAll(dir))
+	}
+	return errors.Join(errs...)
 }
 
 func readBusy(op, dataDir string) (*busy, error) {

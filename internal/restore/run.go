@@ -80,15 +80,13 @@ type restoring struct {
 	dirs      []storeDir
 	hadMarker bool
 	// nsHeld are the namespaces whose data marker the restore wrote (ADR-0222 Decision 8).
-	nsHeld []v1.NamespaceName
-	eng    store.Engine
-	st     store.Store
-	runs   runstate.Store
-	events *eventstore.Store
-	master *savedFile
-	// created are the topmost directories the run created on the way to a directory it writes: Own gives them the
-	// data directory's owner, undo removes them.
-	created []string
+	nsHeld  []v1.NamespaceName
+	eng     store.Engine
+	st      store.Store
+	runs    runstate.Store
+	events  *eventstore.Store
+	master  *savedFile
+	created hold.Created
 }
 
 // savedFile is a file a restore replaced, with what it held before.
@@ -176,7 +174,7 @@ func Run(ctx context.Context, p Point, o Options) (_ Report, err error) {
 		return Report{}, err
 	}
 	for _, d := range r.dirs {
-		r.track(d.path)
+		r.created.Track(d.path)
 	}
 	if err = r.open(); err != nil {
 		return Report{}, err
@@ -250,7 +248,7 @@ func (r *restoring) holdNamespaces(ctx context.Context) error {
 		return nil
 	}
 	slices.Sort(r.nsHeld)
-	r.track(filepath.Join(r.dataDir, hold.NamespaceDir))
+	r.created.Track(filepath.Join(r.dataDir, hold.NamespaceDir))
 	if err := hold.MarkNamespaces(r.dataDir, r.nsHeld, hold.Marker{Reason: hold.ReasonData, Since: v1.NewTimestamp(time.Now())}); err != nil {
 		return err
 	}
@@ -355,10 +353,7 @@ func (r *restoring) undo() error {
 			errs = append(errs, removeFile(m.path))
 		}
 	}
-	for _, dir := range slices.Backward(r.created) {
-		errs = append(errs, os.RemoveAll(dir))
-	}
-	errs = append(errs, hold.End(r.dataDir))
+	errs = append(errs, r.created.Remove(), hold.End(r.dataDir))
 	if err := errors.Join(errs...); err != nil {
 		return fault.Wrapf(err, fault.Internal, "restore.Run", "remove what the failed restore created")
 	}
@@ -379,28 +374,6 @@ func emptyOut(d storeDir) error {
 		errs = append(errs, os.RemoveAll(filepath.Join(d.path, e.Name())))
 	}
 	return errors.Join(errs...)
-}
-
-// track records the topmost directory of dir's path that does not exist yet, which the next step creates with dir.
-func (r *restoring) track(dir string) {
-	if top := missingDir(dir); top != "" {
-		r.created = append(r.created, top)
-	}
-}
-
-// missingDir is the topmost directory on dir's path that does not exist, the first one os.MkdirAll(dir) creates; ""
-// when dir exists.
-func missingDir(dir string) string {
-	missing := ""
-	for d := dir; ; d = filepath.Dir(d) {
-		if _, err := os.Lstat(d); !errors.Is(err, fs.ErrNotExist) {
-			return missing
-		}
-		missing = d
-		if filepath.Dir(d) == d {
-			return missing
-		}
-	}
 }
 
 func removeFile(p string) error {
@@ -515,7 +488,7 @@ func (r *restoring) installMaster(ctx context.Context, plan escrow.MasterPlan, m
 	if plan.Install != nil {
 		old, err := os.ReadFile(plan.Path) //nolint:gosec // the node master secret's place
 		r.master = &savedFile{path: plan.Path, old: old, existed: err == nil}
-		r.track(filepath.Dir(plan.Path))
+		r.created.Track(filepath.Dir(plan.Path))
 		if err := os.MkdirAll(filepath.Dir(plan.Path), 0o700); err != nil {
 			return fault.Wrapf(err, fault.Internal, op, "create the directory of %s", plan.Path)
 		}
