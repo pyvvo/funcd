@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.10.0](https://github.com/pyvvo/funcd/compare/v0.9.0...v0.10.0) (2026-10-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* **funcd:** implement ADR-0207 — pre-upgrade snapshot and safe mode ([#920](https://github.com/pyvvo/funcd/issues/920))
+* **restore:** implement ADR-0206 — Restore and held boot ([#910](https://github.com/pyvvo/funcd/issues/910))
+* **backup:** implement ADR-0205 — backup runs and verification ([#909](https://github.com/pyvvo/funcd/issues/909))
+* **backup:** a config that sets `backup.target` with neither `backup.encryption.recipients` nor `backup.encryption.none: true` no longer starts, nor does `backup.encryption.none: true` without `secrets.encryptionKeyFile`.
+* **backup:** implement ADR-0203 — Backup format, targets, fencing (F109) ([#888](https://github.com/pyvvo/funcd/issues/888))
+* **eventing:** implement ADR-0201 event store (F110) ([#887](https://github.com/pyvvo/funcd/issues/887))
+* **api:** a PUT whose body carries a `metadata.resourceVersion` other than the stored one now answers 409 instead of overwriting the object, and a malformed or disagreeing `If-Match` answers 400. Requests that carry no version behave as before.
+* **store:** implement ADR-0202 — Platform store snapshot and timeline (F109) ([#881](https://github.com/pyvvo/funcd/issues/881))
+
+### Features
+
+* **api:** replace and delete honour the client's resourceVersion (ADR-0210) ([#878](https://github.com/pyvvo/funcd/issues/878)) ([318231e](https://github.com/pyvvo/funcd/commit/318231ebdd9972880a7808e812a2dd6d1ce9b7c6))
+* **app:** App configMaps and secrets declarations (ADR-0213) ([#886](https://github.com/pyvvo/funcd/issues/886)) ([aa6ae31](https://github.com/pyvvo/funcd/commit/aa6ae31e1a3a07d3875b8074b7b551eead5d20a0))
+* **app:** App lifecycle hooks (ADR-0214) ([#898](https://github.com/pyvvo/funcd/issues/898)) ([290222c](https://github.com/pyvvo/funcd/commit/290222c80212f0065af5f8e71c63a86d7e187e04))
+* **app:** App templates with values and client-side rendering (ADR-0217) ([#894](https://github.com/pyvvo/funcd/issues/894)) ([f2db5f9](https://github.com/pyvvo/funcd/commit/f2db5f9979b6342500ea202bd877ad93f3bab04b))
+* **app:** hold an App revision until its required Apps are met (ADR-0219) ([#911](https://github.com/pyvvo/funcd/issues/911)) ([9bdbaf1](https://github.com/pyvvo/funcd/commit/9bdbaf1f4e55bf4a086f21b79060dde36780833e))
+* **app:** pin template images in app.lock, funcdctl app lock and push --template (ADR-0218) ([#906](https://github.com/pyvvo/funcd/issues/906)) ([7f58743](https://github.com/pyvvo/funcd/commit/7f587433cf3d59d29a40856fdc50e996ea3145b8))
+* **backup:** implement ADR-0203 — Backup format, targets, fencing (F109) ([#888](https://github.com/pyvvo/funcd/issues/888)) ([390a698](https://github.com/pyvvo/funcd/commit/390a69811a8eab4cf27f234a9d2a25d1d92369c7))
+* **backup:** implement ADR-0204 — backup encryption and key escrow ([#891](https://github.com/pyvvo/funcd/issues/891)) ([36aae2e](https://github.com/pyvvo/funcd/commit/36aae2e86958863e78992a70c5b699dd4f75db74))
+* **backup:** implement ADR-0205 — backup runs and verification ([#909](https://github.com/pyvvo/funcd/issues/909)) ([a7e77c5](https://github.com/pyvvo/funcd/commit/a7e77c55b1479733809deb8d19db485814adc85a))
+* **dryrun:** the dry-run engine, --dry-run on apply and app commands (ADR-0220) ([#915](https://github.com/pyvvo/funcd/issues/915)) ([ff8965b](https://github.com/pyvvo/funcd/commit/ff8965b94bc9aa446d8b14c16eb7afcd8754293e))
+* **eventing:** cron schedules for timer events (ADR-0211) ([#882](https://github.com/pyvvo/funcd/issues/882)) ([0ba028d](https://github.com/pyvvo/funcd/commit/0ba028df520481db3a46e5d20d420b035ede5c5a))
+* **eventing:** implement ADR-0201 event store (F110) ([#887](https://github.com/pyvvo/funcd/issues/887)) ([1d563ae](https://github.com/pyvvo/funcd/commit/1d563ae5d48d64d4304bbcaf27fb3e1b8cb9109e))
+* **funcd:** implement ADR-0207 — pre-upgrade snapshot and safe mode ([#920](https://github.com/pyvvo/funcd/issues/920)) ([8c18934](https://github.com/pyvvo/funcd/commit/8c1893495d5d5a43cca1467dcef8f48fccb5ddb4))
+* **function:** implement ADR-0225 and ADR-0224 — pool boot crash loop and pool switch on member ready ([#912](https://github.com/pyvvo/funcd/issues/912)) ([78ab5e3](https://github.com/pyvvo/funcd/commit/78ab5e3ed0e8e879a05a4762937b3783a4b703b8))
+* **health:** built-in liveness, dependency readiness and storage probes (ADR-0215) ([#895](https://github.com/pyvvo/funcd/issues/895)) ([7b24a77](https://github.com/pyvvo/funcd/commit/7b24a7760a9b158b8e94673dc5a0932fcd418252))
+* **restore:** implement ADR-0206 — Restore and held boot ([#910](https://github.com/pyvvo/funcd/issues/910)) ([2025947](https://github.com/pyvvo/funcd/commit/20259476e0109397cf604bdf082d067c8e3011fd))
+* **store:** implement ADR-0202 — Platform store snapshot and timeline (F109) ([#881](https://github.com/pyvvo/funcd/issues/881)) ([9164e11](https://github.com/pyvvo/funcd/commit/9164e114a50ada4b964bce46b62e7f2ef372341b))
+
+
+### Bug Fixes
+
+* **app:** refuse an App whose two parts would write one object ([#925](https://github.com/pyvvo/funcd/issues/925)) ([39cf3dc](https://github.com/pyvvo/funcd/commit/39cf3dc99e4bce036eb442459b5ead268478c4bc))
+* **controlplane:** a write without a resourceVersion no longer fails with 409 on a concurrent status write ([#905](https://github.com/pyvvo/funcd/issues/905)) ([e920858](https://github.com/pyvvo/funcd/commit/e920858a317ee62043182966814920e435c5c27c))
+* **controlplane:** keep a typed fault's problem type when an input resolver refuses a request ([#885](https://github.com/pyvvo/funcd/issues/885)) ([6d025a7](https://github.com/pyvvo/funcd/commit/6d025a7548967c6e5a9d8700606d4b49bc673d3f))
+* **funcd:** keep the node master secret under storage.dataDir with the S3 gateway off ([#889](https://github.com/pyvvo/funcd/issues/889)) ([73e1cec](https://github.com/pyvvo/funcd/commit/73e1cec813435956c8f3b1411ffe5675bc042ace))
+* **function:** a Degraded Function serves again while a gate or a pass fails (ADR-0221) ([#879](https://github.com/pyvvo/funcd/issues/879)) ([9ecdfcb](https://github.com/pyvvo/funcd/commit/9ecdfcb4bef286a309ed78a700b450053b429bfa))
+
 ## [0.9.0](https://github.com/pyvvo/funcd/compare/v0.8.0...v0.9.0) (2026-10-10)
 
 
