@@ -111,4 +111,5 @@ with the rest of the batch.
 
 Per group: the PR, the fixed issues (review verdicts and reports), the parked ones with reasons, the gate and
 lane results; the issues set aside for `/adr` or the advisory flow; the ledger PR; the full-mode audit's summary;
-any new defects the fixers listed or the audit suggests, for filing with `/issue-management`.
+the defects fixed on the way (each also a PR comment); and any defect a fixer could not fix on the way or the audit
+suggests, for the next run to fix (filing it with `/issue-management` is opt-in: only when the user asks).

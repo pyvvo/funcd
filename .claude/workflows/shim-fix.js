@@ -111,7 +111,7 @@ Setup, one call: \`git -C ${u.clone} fetch -q origin && git -C ${u.clone} worktr
 5. One commit: subject \`fix(<scope>): <what is fixed>\` (Conventional Commit), a body with the cause, the fix and the test name, a line ${it.repoIssue ? `\`Fixes #${it.repoIssue}\`` : `\`Refs ${ref(it)}\` (funcd closes its own issue when it pins the release)`}, then the line \`${TRAILER}\`.
 PARK instead (no commit; give the reason) if the issue does not reproduce, or the only sound fix needs a design decision or changes the funcd <-> shim contract.
 funcd_side: say what funcd itself still needs once this ships (e.g. a gate, or a regression test through the embedded shim), or "none".
-List in new_defects only another defect you would rate medium or high (wrong behavior a user can hit, data loss, a crash or a hang), one line each with evidence; leave out wording, logging, docs, test-only and unlikely-edge issues. Do not fix it.
+Another defect you find on the way that you would rate medium or high (wrong behavior a user can hit, data loss, a crash or a hang) is fixed in the same go by default: its own commit after this issue's, with its own regression test and revert check. List each in new_defects as \`fixed on the way: <defect>, <cause> (<commit>, <test>)\`. List one without fixing it only when you cannot fix it here: its fix needs a design decision (say needs-adr), it is a security flaw (write only \`security: report privately\`, no detail), or it lies outside this repo. Leave out wording, logging, docs, test-only and unlikely-edge issues.
 
 ${ENV(u)}
 ${EFFICIENT}
@@ -148,6 +148,7 @@ const integratePrompt = (u, passed, parkedEarly) => `Integrate the reviewed fixe
 4. Push (\`git push -q -u origin ${BR}\`) and open the PR: \`gh pr create --repo pyvvo/${u.repo} --base main --head ${BR}\`, with
    - the title \`fix(shim): <what the fixes do, ≤ 72 chars>\` (a Conventional Commit: it becomes the squash commit and the release note);
    - a body: a summary; a table (issue, cause, fix, regression test, review verdict); the parked issues with reasons; the \`just ci\` result; one line per fixed issue: \`Fixes #N\` for this repo's own issues, \`Refs pyvvo/funcd#N\` for funcd issues (funcd closes those when it pins the release); and the final line \`🤖 Generated with [Claude Code](https://claude.com/claude-code)\`.
+5. After the PR exists, post one comment per defect fixed on the way (\`gh pr comment <pr> --repo pyvvo/${u.repo} --body-file <file>\`): the defect, its cause, the commit and the test, never a security detail. They are: ${JSON.stringify(passed.flatMap(p => (p.defects || []).filter(d => /^fixed on the way/i.test(d))))}.
 Do not merge. Issues parked before review (list them in the body): ${JSON.stringify(parkedEarly)}.
 
 ${ENV(u)}

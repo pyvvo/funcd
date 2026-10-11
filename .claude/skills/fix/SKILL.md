@@ -50,11 +50,14 @@ Write the regression test **before** touching the code:
   what the fix needs. Never duplicate logic or hand-roll what already exists; `/fix-review` checks this.
 - Search for siblings before you call it done: grep for the same faulty construct in the other code paths
   that do the same job (the other commands, handlers, printers, parsers, gates or drivers). A sibling with the
-  same cause is this issue's scope: fix it in the same commit, with a regression test case for it. A
-  sibling with another cause is a new issue. The 2026-10-05 campaign found about ten defects that were
-  siblings of issues already fixed on one path only.
-- Change only what this issue needs. A second defect found on the way is a new issue: note it in the
-  handoff and file it with `/issue-management` after the user's go.
+  same cause is this issue's scope: fix it in the same commit, with a regression test case for it. The
+  2026-10-05 campaign found about ten defects that were siblings of issues already fixed on one path only.
+- A defect found on the way, a sibling with another cause included, is fixed in the same go by default: its
+  own commit with its own regression test and revert check, on the same branch, reviewed like the main fix,
+  and a PR comment that records the defect, its cause, the commit and the test. Filing it as an issue
+  instead is opt-in: only when the user asks for it. The exceptions stay: a security flaw goes to a private
+  advisory, and a defect whose fix needs a design decision goes to `/adr` (an issue with `needs-adr`).
+- Change nothing else: only what this issue and the defects found on the way need.
 - Keep living docs true (blueprint, feat, READMEs, CLI help) if the fix changes what they describe.
 - House style holds (ADR-0002, `CLAUDE.md`): block-style YAML, top-level imports, no comment bloat.
 

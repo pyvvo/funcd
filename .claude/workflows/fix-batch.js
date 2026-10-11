@@ -144,7 +144,7 @@ Setup, one call: \`cd ${REPO} && git fetch -q origin && git worktree add -q -b $
 
 ${isTask(it) ? TASK_STEPS(it) : FIX_STEPS(it)}
 needs_lane = true if your commit touches ${LANE_PATHS}.
-List in new_defects only another defect you would rate medium or high (wrong behavior a user can hit, data loss, a crash or a hang), one line each with evidence; leave out wording, logging, docs, test-only and unlikely-edge issues. Do not fix it.
+Another defect you find on the way that you would rate medium or high (wrong behavior a user can hit, data loss, a crash or a hang) is fixed in the same go by default: its own commit after this issue's, with its own regression test and revert check. List each in new_defects as \`fixed on the way: <defect>, <cause> (<commit>, <test>)\`. List one without fixing it only when you cannot fix it here: its fix needs a design decision (say needs-adr), it is a security flaw (write only \`security: report privately\`, no detail), or it lies outside this repo. Leave out wording, logging, docs, test-only and unlikely-edge issues.
 
 ${EFFICIENT}
 
@@ -181,6 +181,7 @@ const integratePrompt = (u, passed, parkedEarly) => `Integrate the reviewed fixe
 5. Push (\`git push -q -u origin ${gbranch(u)}\`) and open the PR: \`gh pr create --repo pyvvo/funcd --base main --head ${gbranch(u)}\`, with
    - the title ${u.tracker ? `\`<type>(<scope>): <what the group does, ≤ 72 chars> (#${u.tracker})\`` : multi(u) ? '`<type>(<scope>): <what the group does, ≤ 72 chars>`' : "of the commit's subject, retyped by this rule when it disagrees"}, where the type is \`fix\` when any applied commit changes product behavior (check \`git log --format=%s --name-only origin/main..HEAD\`: a fix commit whose own files include non-test code outside scripts/ and .claude/), because the release notes list only fix and feat, and \`test\`, \`refactor\`, \`ci\`, \`build\` or \`chore\` otherwise (a Conventional Commit: it becomes the squash commit and the release note);
    - a body: a summary; a table (issue, cause, fix, regression test, review verdict with a link to its docs/reviews report); the parked issues with reasons; the gate result with the audit's size, clone and complexity lines; one \`Fixes #N\` line per fixed issue${u.tracker ? (u.all ? `, plus \`Fixes #${u.tracker}\` if every listed issue is fixed (this unit holds every open issue of the tracker)` : `; do NOT add \`Fixes #${u.tracker}\`: the tracker keeps issues that need an ADR`) : ''}; a "Lima lane pending" note when a fix touches ${LANE_PATHS}; and the final line \`🤖 Generated with [Claude Code](https://claude.com/claude-code)\`.
+6. After the PR exists, post one comment per defect fixed on the way (\`gh pr comment <pr> --repo pyvvo/funcd --body-file <file>\`): the defect, its cause, the commit and the test, never a security detail. They are: ${JSON.stringify(passed.flatMap(p => (p.defects || []).filter(d => /^fixed on the way/i.test(d))))}.
 Do not merge or queue. Issues parked before review (list them in the body): ${JSON.stringify(parkedEarly)}.
 
 ${EFFICIENT.split('\n').slice(0, 3).join('\n')}
