@@ -15,13 +15,33 @@ updates:
       - /images/runtime/duckdb
     schedule:
       interval: weekly
+    groups:
+      runtime-images:
+        patterns:
+          - "*"
   - package-ecosystem: pip
     directories:
       - /images/runtime/python314
       - /images/runtime/duckdb
     schedule:
       interval: weekly
+    groups:
+      pip:
+        patterns:
+          - "*"
+  # Go: otel modules move in lockstep, so they share a PR; other minor and patch bumps share one. A major bump, and
+  # containerd (it needs the Lima lanes), always get a PR of their own.
   - package-ecosystem: gomod
     directory: /
     schedule:
       interval: weekly
+    groups:
+      otel:
+        patterns:
+          - "go.opentelemetry.io/*"
+      go-minor-patch:
+        update-types:
+          - minor
+          - patch
+        exclude-patterns:
+          - "github.com/containerd/*"
