@@ -98,6 +98,9 @@ type child struct {
 	done chan struct{}
 }
 
+// startChild starts cmd and stops it at the end of the test. A test that calls it stays serial: on Linux a fork
+// inherits every open fd until its exec, so a parallel test's Badger or backup lock would stay held for a moment after
+// that test closed it (#920; TestScenarioRestoreAnyPoint failed so in the merge queue).
 func startChild(t *testing.T, cmd *exec.Cmd) *child {
 	t.Helper()
 	ch := &child{cmd: cmd, logs: &lockedBuffer{}, done: make(chan struct{})}
@@ -239,7 +242,7 @@ func requireOwnedTree(t *testing.T, root string, want [2]uint32) {
 // an older entry keeps its own; the daemon serves after it. As root on Linux the data is uid 1000's and the target
 // 1001's; otherwise both get another of this user's groups.
 func TestScenarioUpgradeKeepsDataOwner(t *testing.T) {
-	t.Parallel()
+	// Serial: runUpgrade runs the new binary as a child process (see startChild).
 	ctx := context.Background()
 	target := t.TempDir()
 	n := newNode(t, upgradeKey(), backupYAML(target))
@@ -281,7 +284,7 @@ func TestScenarioUpgradeKeepsDataOwner(t *testing.T) {
 // (stores moved aside, `<self>.previous restore run <pin>`, .previous installed) starts v0.8.0 held with A and
 // without B.
 func TestScenarioRollbackToPreUpgrade(t *testing.T) {
-	t.Parallel()
+	// Serial: it starts a child process (see startChild).
 	ctx := context.Background()
 	v08, v09 := funcdBinary(t, "v0.8.0"), funcdBinary(t, "v0.9.0")
 	self := installed(t, v08)
@@ -334,7 +337,7 @@ func TestScenarioRollbackToPreUpgrade(t *testing.T) {
 // scenario: manual-swap-warns — v0.9.0 started on data v0.8.0 last ran, with no upgrade to it recorded, logs one
 // Warn naming both versions and the missing pre-upgrade generation, and serves.
 func TestScenarioManualSwapWarns(t *testing.T) {
-	t.Parallel()
+	// Serial: it starts a child process (see startChild).
 	v08, v09 := funcdBinary(t, "v0.8.0"), funcdBinary(t, "v0.9.0")
 	n := newNode(t, nil, "")
 	a := n.serveWith(t, v08)
@@ -357,7 +360,7 @@ func TestScenarioSafeModeHolds(t *testing.T) {
 	if runChildDaemon(t) {
 		return
 	}
-	t.Parallel()
+	// Serial: it starts a child process (see startChild).
 	ctx := context.Background()
 	n := newNode(t, nil, restorePacing)
 	s, _, _, err := safemode.Begin(n.dataDir, version.Version, safemode.Config{AfterCrashes: 3})
@@ -458,7 +461,7 @@ func TestScenarioStableRunResetsCount(t *testing.T) {
 // afterCrashes 1) exits 70 at its next start, opening no store and naming the count and `<self>.previous restore run`
 // of the pin; after a --no-snapshot upgrade it names "no way back" and `restore run verified`.
 func TestScenarioSafeModeStopsLoop(t *testing.T) {
-	t.Parallel()
+	// Serial: it starts a child process (see startChild).
 	v08, v09 := funcdBinary(t, "v0.8.0"), funcdBinary(t, "v0.9.0")
 	self := installed(t, v08)
 	n := newNode(t, upgradeKey(), backupYAML(t.TempDir())+"recovery:\n  safeMode:\n    afterCrashes: 1\n")
