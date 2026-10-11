@@ -1,21 +1,58 @@
 #!/usr/bin/env bash
 # linux-exec.sh: run Linux test binaries in funcd-linux-tests, a long-lived Lima VM (scripts/lima-linux-tests.yaml).
 #
-#   scripts/linux-exec.sh --boot     # start the VM unless it runs; the lane lock is held only while it boots
-#   scripts/linux-exec.sh --check    # exit 0 when a test can run: a checkout under $HOME, limactl, the VM running
-#   GOOS=linux GOARCH=<VM arch> go test -exec "$PWD/scripts/linux-exec.sh" <packages>   # as `just test-linux` does
+#   scripts/linux-exec.sh --run <cmd...>  # run cmd holding the run lock, after booting the VM unless it runs
+#   scripts/linux-exec.sh --boot          # start the VM unless it runs; the lane lock is held only while it boots
+#   scripts/linux-exec.sh --recreate      # after a change to the template: delete the VM and boot a new one
+#   scripts/linux-exec.sh --check         # exit 0 when a test can run: a checkout under $HOME, limactl, the VM running
+#   GOOS=linux GOARCH=<VM arch> scripts/linux-exec.sh --run go test -exec "$PWD/scripts/linux-exec.sh" <packages>
+#
+# One run at a time: the runs in the VM share runner's home directory and /tmp, and two at once failed each other's
+# tests. Every mode but --check holds the run lock, a flock on ~/.cache/funcd-lima/linux-tests.lock, waiting while
+# another run holds it. --run holds it for its whole command, whose test binaries then run at once, as `just test-linux`
+# and `just test-linux-e2e` do; a binary run without --run holds it alone.
 #
 # As the go test -exec program it gets <test binary> [flags] and runs the binary in the VM from the package directory
 # as `runner`, a non-root user with a supplementary group, as on CI's runner. The Go toolchain that built the binary
 # is on PATH (its golang.org/toolchain module, from the host's module cache), and HOME, GOCACHE and GOMODCACHE are
 # writable and persist in the VM. sudo starts the binary with a fresh environment: each LINUX_EXEC_<NAME>=<value> in
-# ours sets <NAME>=<value> in it (`just test-linux-e2e` sets CI and GOPROXY this way). go test resolves a relative
-# -exec path from the package directory, so pass it whole.
+# ours sets <NAME>=<value> in it (`just test-linux-e2e` sets CI and GOPROXY this way). A VM that has not finished
+# booting is refused. go test resolves a relative -exec path from the package directory, so pass it whole.
 # The VM mounts $HOME read-only at its own path: the binary is staged under .cache/linux-exec, and a checkout outside
 # $HOME is refused, because the VM would not see it.
 set -euo pipefail
 vm=funcd-linux-tests
 here=$(cd "$(dirname "$0")" && pwd -P)
+lock=${FUNCD_LINUX_TESTS_LOCK:-$HOME/.cache/funcd-lima/linux-tests.lock}
+
+# hold <lock file> <cmd...>: run cmd holding an exclusive flock on the lock file, and pass on its exit status and the
+# signals that end it. It writes its pid into the file, which a waiter names, and gives up after 30 minutes.
+hold='
+import fcntl, os, signal, subprocess, sys, time
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o644)
+deadline, said = time.monotonic() + 1800, None
+while True:
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        break
+    except BlockingIOError:
+        holder, now = os.pread(fd, 32, 0).decode().strip() or "?", time.monotonic()
+        if now >= deadline:
+            sys.exit(f"linux-exec: the run of pid {holder} still holds {sys.argv[1]}; gave up after 30 minutes")
+        if said is None or now - said >= 60:
+            print(f"linux-exec: waiting for the run of pid {holder} to finish (one run at a time in the VM)",
+                  file=sys.stderr, flush=True)
+            said = now
+        time.sleep(1)
+os.ftruncate(fd, 0)
+os.pwrite(fd, f"{os.getpid()}\n".encode(), 0)
+child = subprocess.Popen(sys.argv[2:])
+signal.signal(signal.SIGINT, signal.SIG_IGN)
+for s in (signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT):
+    signal.signal(s, lambda n, _: child.send_signal(n))
+rc = child.wait()
+sys.exit(128 - rc if rc < 0 else rc)
+'
 
 running() { [ "$(limactl list --format '{{.Status}}' "$vm" 2>/dev/null)" = Running ]; }
 
@@ -34,6 +71,21 @@ up() {
   return 1
 }
 
+# boot starts the VM unless it runs, holding the lane lock while it boots.
+boot() {
+  have_limactl
+  running && return
+  (
+    "$here/lane-lock.sh" "$BASHPID"
+    running && exit 0
+    if limactl list --format '{{.Name}}' "$vm" >/dev/null 2>&1; then
+      limactl start --tty=false "$vm"
+    else
+      limactl start --name "$vm" --tty=false "$here/lima-linux-tests.yaml"
+    fi
+  )
+}
+
 # checkout prints the root of the current directory's checkout, or refuses one outside $HOME.
 checkout() {
   local src home
@@ -49,33 +101,38 @@ checkout() {
   esac
 }
 
-case ${1:-} in
---boot)
-  checkout >/dev/null
-  have_limactl
-  running && exit 0
-  (
-    "$here/lane-lock.sh" "$BASHPID"
-    running && exit 0
-    if limactl list --format '{{.Name}}' "$vm" >/dev/null 2>&1; then
-      limactl start --tty=false "$vm"
-    else
-      limactl start --name "$vm" --tty=false "$here/lima-linux-tests.yaml"
-    fi
-  )
-  exit
-  ;;
---check)
+if [ "${1:-}" = --check ]; then
   checkout >/dev/null
   up
   exit
+fi
+src=$(checkout)
+if [ -z "${FUNCD_LINUX_TESTS_LOCKED:-}" ]; then
+  mkdir -p "$(dirname "$lock")"
+  FUNCD_LINUX_TESTS_LOCKED=1 exec python3 -c "$hold" "$lock" "$0" "$@"
+fi
+case ${1:-} in
+--boot)
+  boot
+  exit
+  ;;
+--recreate)
+  have_limactl
+  if limactl list --format '{{.Name}}' "$vm" >/dev/null 2>&1; then limactl delete -f "$vm"; fi
+  boot
+  exit
+  ;;
+--run)
+  shift
+  [ $# -gt 0 ] || { echo "usage: linux-exec.sh --run <cmd...>" >&2; exit 2; }
+  boot
+  exec "$@"
   ;;
 esac
 
-bin=${1:?usage: linux-exec.sh --boot | --check | <test binary> [flags]}
+bin=${1:?usage: linux-exec.sh --run <cmd...> | --boot | --recreate | --check | <test binary> [flags]}
 shift
 case $bin in /*) ;; *) bin=$PWD/$bin ;; esac
-src=$(checkout)
 up
 read -r version arch < <(go version -m "$bin" |
   awk 'NR == 1 { v = $2 } $2 ~ /^GOARCH=/ { a = substr($2, 8) } END { print v, a }')
@@ -94,5 +151,9 @@ vars=()
 for name in ${!LINUX_EXEC_@}; do
   vars+=("${name#LINUX_EXEC_}=${!name}")
 done
-limactl shell --workdir "$(pwd -P)" "$vm" sudo -H -u runner \
+# Lima's boot script removes /run/lima-boot-done when a boot starts and writes it once the provisioning has run.
+booted='[ -e /run/lima-boot-done ] && exec "$@"
+echo "linux-exec: the funcd-linux-tests VM has not finished booting" >&2
+exit 125'
+limactl shell --workdir "$(pwd -P)" "$vm" sh -c "$booted" linux-exec sudo -H -u runner \
   env PATH="$goroot/bin:/usr/local/bin:/usr/bin:/bin" GOTOOLCHAIN=local ${vars[@]+"${vars[@]}"} "$stage/${bin##*/}" "$@"

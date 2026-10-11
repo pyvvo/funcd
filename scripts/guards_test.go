@@ -2,6 +2,7 @@ package scripts_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -389,29 +390,45 @@ func TestLinuxExecRefusesACheckoutOutsideHome(t *testing.T) {
 	}
 }
 
-// sudo starts the test binary with a fresh environment, so linux-exec.sh passes each LINUX_EXEC_<NAME>=<value> of its
-// own as <NAME>=<value>: `just test-linux-e2e` sets CI and GOPROXY so. The script runs under the bash on PATH, and the
-// dev shell's bash has no compgen: a forwarding built on it passed nothing, and the suite still passed.
-func TestLinuxExecPassesItsLinuxExecVariables(t *testing.T) {
-	script, err := filepath.Abs("linux-exec.sh")
-	require.NoError(t, err)
+// linuxExecEnv is the environment of a linux-exec.sh test that gets past the checkout check: the checkout as $HOME, a
+// run lock of its own, a fake go whose toolchain module is in a temp module cache, limactl as the fake limactl, and a
+// sudo that only says it ran, so a fake limactl that runs its command here never reaches the host's sudo.
+func linuxExecEnv(t *testing.T, limactl string) []string {
+	t.Helper()
 	root, err := filepath.Abs("..")
 	require.NoError(t, err)
 	modcache := t.TempDir()
 	toolchain := filepath.Join(modcache, "golang.org", "toolchain@v0.0.1-go1.0.linux-arm64", "bin")
 	require.NoError(t, os.MkdirAll(toolchain, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(toolchain, "go"), nil, 0o755))
-	fake := t.TempDir() // limactl shell prints its arguments, so the VM is never reached
+	fake := t.TempDir()
 	for name, body := range map[string]string{
-		"limactl": `if [ "$1" = list ]; then echo Running; else printf '%s\n' "$@"; fi`,
+		"limactl": limactl,
 		"go":      `case $1 in version) printf 'x: go1.0\n\tbuild\tGOARCH=arm64\n' ;; env) echo "` + modcache + `" ;; esac`,
+		"sudo":    `echo "sudo $*"`,
 	} {
 		require.NoError(t, os.WriteFile(filepath.Join(fake, name), []byte("#!/bin/sh\n"+body+"\n"), 0o755))
 	}
+	return append(os.Environ(), "HOME="+root, "PATH="+fake+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"FUNCD_LINUX_TESTS_LOCK="+filepath.Join(t.TempDir(), "lock"))
+}
+
+// testBinary is an empty stand-in for a test binary.
+func testBinary(t *testing.T) string {
+	t.Helper()
 	bin := filepath.Join(t.TempDir(), "pkg.test")
 	require.NoError(t, os.WriteFile(bin, nil, 0o755))
-	cmd := exec.Command(script, bin, "-test.v")
-	cmd.Env = append(os.Environ(), "HOME="+root, "PATH="+fake+string(os.PathListSeparator)+os.Getenv("PATH"),
+	return bin
+}
+
+// sudo starts the test binary with a fresh environment, so linux-exec.sh passes each LINUX_EXEC_<NAME>=<value> of its
+// own as <NAME>=<value>: `just test-linux-e2e` sets CI and GOPROXY so. The script runs under the bash on PATH, and the
+// dev shell's bash has no compgen: a forwarding built on it passed nothing, and the suite still passed.
+func TestLinuxExecPassesItsLinuxExecVariables(t *testing.T) {
+	script, err := filepath.Abs("linux-exec.sh")
+	require.NoError(t, err)
+	cmd := exec.Command(script, testBinary(t), "-test.v") // limactl shell prints its arguments: the VM is never reached
+	cmd.Env = append(linuxExecEnv(t, `if [ "$1" = list ]; then echo Running; else printf '%s\n' "$@"; fi`),
 		"LINUX_EXEC_CI=true", "LINUX_EXEC_GOPROXY=file:///a dir/download")
 	code, out := exitCode(t, cmd)
 	require.Equal(t, 0, code, out)
@@ -420,4 +437,47 @@ func TestLinuxExecPassesItsLinuxExecVariables(t *testing.T) {
 	require.Contains(t, args, "GOPROXY=file:///a dir/download")
 	require.NotContains(t, out, "LINUX_EXEC_")
 	require.Equal(t, "-test.v", args[len(args)-1])
+}
+
+// One run at a time in the VM: its runs share runner's home directory and /tmp, and when a gate's linux-tests step
+// overlapped an e2e run, tests of both failed. A second --run waits for the first to finish, and a run nested in one
+// (a test binary that go test starts under --run) goes on at once instead of waiting for its own run.
+func TestLinuxExecRunsOneRunAtATime(t *testing.T) {
+	script, err := filepath.Abs("linux-exec.sh")
+	require.NoError(t, err)
+	env, dir := linuxExecEnv(t, "echo Running"), t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	run := func(args ...string) *exec.Cmd {
+		cmd := exec.CommandContext(ctx, script, append([]string{"--run"}, args...)...)
+		cmd.Env = env
+		return cmd
+	}
+	first := run("sh", "-c", `touch "$1/started"; sleep 2; touch "$1/done"`, "sh", dir)
+	require.NoError(t, first.Start())
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(filepath.Join(dir, "started"))
+		return err == nil
+	}, 10*time.Second, 10*time.Millisecond)
+	out, err := run("sh", "-c", `test -e "$1/done" && "$2" --run true`, "sh", dir, script).CombinedOutput()
+	require.NoError(t, err, "the second run started before the first ended, or its nested run waited: %s", out)
+	require.Contains(t, string(out), "waiting for the run of pid")
+	require.NoError(t, first.Wait())
+}
+
+// A VM that has not finished booting is refused with the reason, instead of running a test as a runner user that its
+// provisioning may not have created yet: a run once started while the VM was being recreated.
+func TestLinuxExecRefusesAVMStillBooting(t *testing.T) {
+	script, err := filepath.Abs("linux-exec.sh")
+	require.NoError(t, err)
+	if _, err := os.Stat("/run/lima-boot-done"); err == nil {
+		t.Skip("this host is a Lima VM that has finished booting")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, script, testBinary(t), "-test.v") // limactl shell runs the command here
+	cmd.Env = linuxExecEnv(t, `if [ "$1" = list ]; then echo Running; else shift 4; exec "$@"; fi`)
+	code, out := exitCode(t, cmd)
+	require.Equal(t, 125, code, out)
+	require.Contains(t, out, "the funcd-linux-tests VM has not finished booting")
 }

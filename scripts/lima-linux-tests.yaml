@@ -2,7 +2,8 @@
 # the lane lock, and then reuses it. Each cross-compiled Linux test binary runs here as `runner`, a non-root user with a
 # supplementary group, as on CI's runner (uid 1001, also in adm). The home directory is mounted read-only at its own
 # path, so a package dir and its testdata resolve as on the host. No port is forwarded, so the VM never collides with a
-# lane VM (8080/8081). After a change here, `limactl delete -f funcd-linux-tests`; the next run boots a new VM.
+# lane VM (8080/8081). After a change here, run `scripts/linux-exec.sh --recreate`: it waits for the run in progress,
+# then deletes the VM and boots a new one.
 
 # The lanes' Debian image (scripts/lima.yaml; scripts/lima-cache.py primes it): keep the two in step.
 images:

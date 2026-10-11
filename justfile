@@ -66,7 +66,6 @@ test-integration:
 test-linux *flags:
     #!/usr/bin/env bash
     set -euo pipefail
-    scripts/linux-exec.sh --boot
     m=$(GOWORK=off go list -m)
     f='{{{{.ImportPath}} {{{{.GoFiles}} {{{{.CgoFiles}} {{{{.TestGoFiles}} {{{{.XTestGoFiles}}'
     differ=$(sort <(GOOS=linux go list -e -f "$f" ./...) <(GOOS=darwin go list -e -f "$f" ./...) | uniq -u | sed "s|^$m\([^ ]*\) .*|.\1|")
@@ -74,7 +73,7 @@ test-linux *flags:
     marked=$(git grep -l -E 'runtime\.GOOS (==|!=) "linux"|case "linux"|os\.Getgroups\(' -- '*_test.go' $nested | sed 's|/[^/]*$||; s|^|./|' || true)
     pkgs=$(printf '%s\n' $differ $marked | sort -u)
     echo "linux packages:" $pkgs
-    GOOS=linux GOARCH={{ARCH}} go test -exec "$PWD/scripts/linux-exec.sh" {{flags}} $pkgs
+    GOOS=linux GOARCH={{ARCH}} scripts/linux-exec.sh --run go test -exec "$PWD/scripts/linux-exec.sh" {{flags}} $pkgs
 
 # run the e2e suite on Linux before CI does: `just test-e2e` (CI's e2e job passes -v), each test binary run by
 # scripts/linux-exec.sh in funcd-linux-tests, as test-linux does. The VM has node and the dev shell's Python, and
@@ -86,9 +85,8 @@ test-linux *flags:
 test-linux-e2e *flags:
     #!/usr/bin/env bash
     set -euo pipefail
-    scripts/linux-exec.sh --boot
     export LINUX_EXEC_CI=true LINUX_EXEC_GOPROXY="file://$(go env GOMODCACHE)/cache/download"
-    GOOS=linux GOARCH={{ARCH}} just test-e2e -exec "$PWD/scripts/linux-exec.sh" {{flags}}
+    GOOS=linux GOARCH={{ARCH}} scripts/linux-exec.sh --run just test-e2e -exec "$PWD/scripts/linux-exec.sh" {{flags}}
 
 # compile all packages
 [group('go')]
