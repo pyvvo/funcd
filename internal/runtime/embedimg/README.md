@@ -34,7 +34,8 @@ and writes them into this directory as `nodejs22.tar` / `python314.tar`, **per a
 per-arch release build embeds its own matching-arch image — ADR-0054). The recipe is **not**
 run by `just ci`. Every input of the build is pinned (base images by digest, pip packages by hash, the DuckDB
 extensions by checksum) and the build writes no time of its own (`SOURCE_DATE_EPOCH` with `rewrite-timestamp`,
-`gzip -n`), so a rebuild of the same commit on the same architecture gives byte-identical tars.
+`gzip -n`), so a rebuild of the same commit on the same architecture gives byte-identical tars, given Docker's
+containerd image store and BuildKit 0.13 or later (`rewrite-timestamp` needs both).
 
 ## Keeping the working tree clean after a build (`skip-worktree`)
 

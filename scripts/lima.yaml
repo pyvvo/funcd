@@ -19,7 +19,7 @@
 # handshake was intermittently timing out from here and breaking VM boot; the mirror serves the identical
 # image. The dated build 20260706-2531, not `latest/`, which Debian moves to every new build: the digest
 # then no longer matches and a cold cache cannot boot. Pinned by content digest so integrity is guaranteed
-# regardless of source AND Lima keys the cache by the digest (skipping the flaky last-modified HEAD). To move
+# regardless of source: Lima keys its cache by the URL and verifies each download against the digest. To move
 # to a newer build, change the build in both URLs and both digests together, from its SHA512SUMS
 # (`curl -s https://cloud.debian.org/images/cloud/bookworm/<build>/SHA512SUMS`).
 images:

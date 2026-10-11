@@ -14,7 +14,7 @@
 # The whole engine is ONE pinned DuckDB build — Quack is not a separate artifact but the `quack`
 # extension shipped with DuckDB 1.5.4. Every input is pinned: both bases by the digest of their multi-arch
 # index, every pip package by version and wheel hash (requirements.txt), and every extension by the SHA-256
-# of its file (duckdb-extensions.sha256), all resolved 2026-10-11. python:3.14-slim-bookworm stays at the
+# of its file (duckdb.sha256), all resolved 2026-10-11. python:3.14-slim-bookworm stays at the
 # digest images/runtime/python314/Dockerfile and scripts/lanes.yaml use.
 #
 # The shim entrypoint is Python (images/runtime/duckdb/shim.py): it reads the injected AWS_* keypair
@@ -35,7 +35,7 @@
 FROM python:3.14-slim-bookworm@sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83 AS deps
 ARG TARGETARCH
 ARG SOURCE_DATE_EPOCH
-COPY images/runtime/duckdb/requirements.txt images/runtime/duckdb/duckdb-extensions.sha256 /tmp/
+COPY images/runtime/duckdb/requirements.txt images/runtime/duckdb/duckdb.sha256 /tmp/
 RUN set -eux; \
     pip install --no-compile --no-deps --require-hashes --target /opt/funcd-duckdb -r /tmp/requirements.txt; \
     # The `import duckdb` below caches each module it loads as a .pyc that records its source's mtime: give the
@@ -51,7 +51,7 @@ RUN set -eux; \
     # extensions.duckdb.org can replace an extension of a released DuckDB, so each installed file must
     # match its pin, and every installed file must have one.
     cd /opt/duckdb-ext; \
-    grep "/linux_${TARGETARCH}/" /tmp/duckdb-extensions.sha256 > /tmp/extensions.sha256; \
+    grep "/linux_${TARGETARCH}/" /tmp/duckdb.sha256 > /tmp/extensions.sha256; \
     sha256sum -c /tmp/extensions.sha256; \
     test "$(find . -name '*.duckdb_extension' | wc -l)" -eq "$(wc -l < /tmp/extensions.sha256)"
 

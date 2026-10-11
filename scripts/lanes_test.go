@@ -248,72 +248,201 @@ func TestEveryLaneConfigSetsTheResetDataDir(t *testing.T) {
 	}
 }
 
-// A fresh clone builds the runtime images and runs the lanes the same way on any host on any day only when every
-// external input is read at a pinned value: an image is named by its digest, pip installs hashed requirements, a
-// download is checked against a recorded checksum, a VM image is a dated build with its digest, apt installs named
-// versions from the Debian snapshot archive at one fixed time, and a VM does not take the host's time zone. One image
-// tag names one digest everywhere.
-func TestLaneInputsArePinned(t *testing.T) {
-	pins := imagePins{}
-	problems := dockerfileProblems(t, pins)
-	problems = append(problems, vmTemplateProblems(t)...)
-	problems = append(problems, laneBuildProblems(t, pins)...)
-	problems = append(problems, pins.conflicts()...)
-	sort.Strings(problems)
-	require.Empty(t, problems, "unpinned lane inputs:\n%s", strings.Join(problems, "\n"))
-}
+// The patterns of the lane-input guard (TestLaneInputsArePinned).
+var (
+	pinnedImage      = regexp.MustCompile(`^([^@\s]+)@sha256:[0-9a-f]{64}$`)
+	digestForm       = regexp.MustCompile(`^sha(256|512):[0-9a-f]+$`)
+	movingLocation   = regexp.MustCompile(`latest|/current/|/daily/`)
+	snapshotArchive  = regexp.MustCompile(`snapshot\.debian\.org/archive/`)
+	snapshotTime     = regexp.MustCompile(`\b\d{8}T\d{6}Z\b`)
+	duckdbInstall    = regexp.MustCompile(`\bINSTALL\b`)
+	hashedPin        = regexp.MustCompile(`==\S+.*--hash=sha256:[0-9a-f]{64}`)
+	uvResolve        = regexp.MustCompile(`\buv\s+(run|sync)\b`)
+	uvLocked         = regexp.MustCompile(`--(locked|frozen)\b`)
+	checksumCheck    = regexp.MustCompile(`\b(sha256sum|sha512sum|shasum\s+-a\s+(256|512))\b[^|;&]*\s(-c|--check)\b`)
+	aptInstall       = regexp.MustCompile(`\bapt(?:-get)?\s+install\s+([^;&|)}]*)`)
+	pipInstall       = regexp.MustCompile(`\bpip3?\s+install\b`)
+	npmInstall       = regexp.MustCompile(`\bnpm\s+(install|i)\b`)
+	download         = regexp.MustCompile(`\b(?:curl|wget)\s`)
+	hostURL          = regexp.MustCompile(`https?://(127\.0\.0\.1|localhost|\[::1\]|\$\{?\w+\}?)(:\d+)?([/\s"']|$)`)
+	movingGoQuery    = regexp.MustCompile(`\bgo\s+(run|install)\b[^;&|]*@(latest|upgrade|patch|main|master|HEAD)\b`)
+	shellSeparator   = regexp.MustCompile(`&&|\|\||[;|]`)
+	dockerBoolFlag   = regexp.MustCompile(`^(-[dDiItTqP]+|--(rm|init|privileged|read-only|interactive|tty|detach|quiet|publish-all|disable-content-trust|oom-kill-disable|no-healthcheck|sig-proxy|all-tags))$`)
+	imageInReference = regexp.MustCompile(`[:/]`)
+)
 
-// dockerfileProblems checks the runtime images' Dockerfiles and their pip requirements.
-func dockerfileProblems(t *testing.T, pins imagePins) []string {
-	t.Helper()
+// A fresh clone builds the runtime images, fetches the catalog engine and runs the lanes the same way on any host on
+// any day only when every external input is read at a pinned value: an image is named by its digest, pip installs
+// hashed requirements, a download is checked against a recorded checksum, a VM image is a dated build with its digest,
+// apt installs named versions from the Debian snapshot archive at one fixed time, a VM does not take the host's time
+// zone, and go run or go install names a version. One image tag names one digest everywhere.
+func TestLaneInputsArePinned(t *testing.T) {
+	g := newGuard()
 	dockerfiles, err := filepath.Glob("../images/runtime/*/Dockerfile")
 	require.NoError(t, err)
 	require.NotEmpty(t, dockerfiles)
-	var problems []string
 	for _, path := range dockerfiles {
-		rel := strings.TrimPrefix(path, "../")
-		lines := logicalLines(readText(t, path))
-		problems = append(problems, shellProblems(rel, lines)...)
-		stages := map[string]bool{}
-		for i, l := range lines {
-			where := fmt.Sprintf("%s:%d", rel, l.n)
-			f := strings.Fields(l.text)
-			switch strings.ToUpper(f[0]) {
-			case "FROM":
-				args := slices.DeleteFunc(f[1:], func(a string) bool { return strings.HasPrefix(a, "--") })
-				if !stages[strings.ToLower(args[0])] {
-					problems = append(problems, pins.record(where, args[0])...)
-				}
-				if len(args) == 3 && strings.EqualFold(args[1], "AS") {
-					stages[strings.ToLower(args[2])] = true
-				}
-			case "ADD":
-				if strings.Contains(l.text, "://") && !strings.Contains(l.text, "--checksum=sha256:") {
-					problems = append(problems, where+": ADD downloads a URL without --checksum")
-				}
-			case "RUN":
-				if regexp.MustCompile(`\bINSTALL\b`).MatchString(l.text) && !verified(lines[i:]) {
-					problems = append(problems, where+": DuckDB INSTALL downloads extensions that no sha256sum -c checks")
-				}
-			}
-		}
+		g.dockerfile(strings.TrimPrefix(path, "../"), readText(t, path))
 	}
 	requirements, err := filepath.Glob("../images/runtime/*/requirements*.txt")
 	require.NoError(t, err)
-	hashed := regexp.MustCompile(`==\S+.*--hash=sha256:[0-9a-f]{64}`)
 	for _, path := range requirements {
-		for _, l := range logicalLines(readText(t, path)) {
-			if !hashed.MatchString(l.text) {
-				problems = append(problems, fmt.Sprintf("%s:%d: %s is not pinned to a version and a hash",
-					strings.TrimPrefix(path, "../"), l.n, strings.Fields(l.text)[0]))
+		g.requirements(strings.TrimPrefix(path, "../"), readText(t, path))
+	}
+	g.vmTemplates(t)
+	var registry map[string]struct {
+		Build []string `yaml:"build"`
+	}
+	require.NoError(t, yaml.Unmarshal([]byte(readText(t, "lanes.yaml")), &registry))
+	for name, lane := range registry {
+		for i, cmd := range lane.Build {
+			g.laneBuild(fmt.Sprintf("scripts/lanes.yaml %s build[%d]", name, i), cmd)
+		}
+	}
+	g.conflicts()
+	sort.Strings(g.problems)
+	require.Empty(t, g.problems, "unpinned lane inputs:\n%s", strings.Join(g.problems, "\n"))
+}
+
+// The guard flags each kind of unpinned input and leaves the pinned and the local ones alone.
+func TestLaneInputGuardRules(t *testing.T) {
+	digest := "@sha256:" + strings.Repeat("0", 64)
+	for _, c := range []struct {
+		name, kind, text string
+		want             string // a part of the one problem, or "" for none
+	}{
+		{"FROM by tag", "dockerfile", "FROM python:3.14", "names no sha256 digest"},
+		{"FROM scratch", "dockerfile", "FROM scratch", ""},
+		{"FROM an earlier stage", "dockerfile", "FROM python:3.14" + digest + " AS py\nFROM py", ""},
+		{"COPY from an image by tag", "dockerfile", "COPY --from=busybox:1.36 /bin/sh /sh", "names no sha256 digest"},
+		{"COPY from a named build context", "dockerfile", "COPY --from=shim shim.mjs /opt/funcd/", ""},
+		{"a download no check follows", "script", "curl -fsSLo f https://example.org/f", "no checksum check"},
+		{"sha256sum -c", "script", "curl -fsSLo f https://example.org/f\necho \"$sum  f\" | sha256sum -c -", ""},
+		{"sha256sum --check", "script", "curl -fsSLo f https://example.org/f\necho \"$sum  f\" | sha256sum --check -", ""},
+		{"a check of the next download only", "script",
+			"curl -fsSLo a https://example.org/a\ncurl -fsSLo b https://example.org/b\nsha256sum -c sums", "no checksum check"},
+		{"this host", "script", "curl -s -o /dev/null http://127.0.0.1:8080/healthz", ""},
+		{"the VM's own service by a variable host", "script", "curl -fsS http://$ip:8080/healthz", ""},
+		{"a URL in a variable", "script", "curl -fsSLo f \"$url/f\"", "no checksum check"},
+		{"docker run by tag", "build", "docker run --rm -v a:/b -e X=1 -w /src python:3.14 true", "names no sha256 digest"},
+		{"docker run by digest", "build", "docker run --rm -it -v a:/b python:3.14" + digest + " true", ""},
+		{"docker create by tag", "build", "docker create --platform linux/arm64 node:22 sh", "names no sha256 digest"},
+		{"docker pull by tag", "build", "docker pull -q node:22", "names no sha256 digest"},
+		{"docker build from an image context by tag", "build",
+			"docker build --build-context base=docker-image://alpine:3.20 -t out:1 .", "names no sha256 digest"},
+		{"docker build names its output", "build", "docker build -t out:1 -f Dockerfile .", ""},
+		{"go run @latest", "build", "go run golang.org/x/tools/cmd/stringer@latest -type=T", "moving version"},
+		{"go install @latest", "script", "go install example.org/tool@latest", "moving version"},
+		{"go run at a version", "build", "go run golang.org/x/tools/cmd/stringer@v0.30.0", ""},
+		{"apt at no version", "script", "apt-get install -y git", "at no named version"},
+		{"uv without the lockfile", "build", "uv run funcd-bundle", "without --locked"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			g := newGuard()
+			switch c.kind {
+			case "dockerfile":
+				g.dockerfile("Dockerfile", c.text)
+			case "script":
+				g.shell("script", logicalLines(c.text))
+			case "build":
+				g.laneBuild("build", c.text)
+			}
+			if c.want == "" {
+				require.Empty(t, g.problems)
+				return
+			}
+			require.Len(t, g.problems, 1, "%v", g.problems)
+			require.Contains(t, g.problems[0], c.want)
+		})
+	}
+}
+
+// guard collects the unpinned inputs it finds, and each digest-pinned image reference by its image name and tag.
+type guard struct {
+	problems []string
+	images   map[string]map[string]bool
+}
+
+func newGuard() *guard {
+	return &guard{images: map[string]map[string]bool{}}
+}
+
+func (g *guard) report(problem string) {
+	g.problems = append(g.problems, problem)
+}
+
+// image notes a reference pinned by digest, or reports one that names no digest.
+func (g *guard) image(where, ref string) {
+	m := pinnedImage.FindStringSubmatch(ref)
+	if m == nil {
+		g.report(fmt.Sprintf("%s: the image %s names no sha256 digest", where, ref))
+		return
+	}
+	if g.images[m[1]] == nil {
+		g.images[m[1]] = map[string]bool{}
+	}
+	g.images[m[1]][ref] = true
+}
+
+// conflicts reports each image pinned at more than one digest.
+func (g *guard) conflicts() {
+	for name, refs := range g.images {
+		if len(refs) > 1 {
+			g.report(fmt.Sprintf("the image %s is pinned at %d digests: %v", name, len(refs), slices.Sorted(maps.Keys(refs))))
+		}
+	}
+}
+
+// dockerfile checks a Dockerfile: the images its FROM and COPY --from lines name, ADD of a URL, the DuckDB INSTALL
+// the duckdb image runs, and the installs and downloads of its RUN lines.
+func (g *guard) dockerfile(rel, text string) {
+	lines := logicalLines(text)
+	g.shell(rel, lines)
+	stages := map[string]bool{"scratch": true}
+	for i, l := range lines {
+		where := fmt.Sprintf("%s:%d", rel, l.n)
+		f := strings.Fields(l.text)
+		switch strings.ToUpper(f[0]) {
+		case "FROM":
+			args := slices.DeleteFunc(f[1:], func(a string) bool { return strings.HasPrefix(a, "--") })
+			if !stages[strings.ToLower(args[0])] {
+				g.image(where, args[0])
+			}
+			if len(args) == 3 && strings.EqualFold(args[1], "AS") {
+				stages[strings.ToLower(args[2])] = true
+			}
+		case "COPY":
+			for _, a := range f[1:] {
+				// A name with no tag and no path is a stage or a named build context (--build-context).
+				if from, ok := strings.CutPrefix(a, "--from="); ok && !stages[strings.ToLower(from)] &&
+					imageInReference.MatchString(from) {
+					g.image(where, from)
+				}
+			}
+		case "ADD":
+			if strings.Contains(l.text, "://") && !strings.Contains(l.text, "--checksum=sha256:") {
+				g.report(where + ": ADD downloads a URL without --checksum")
+			}
+		case "RUN":
+			if duckdbInstall.MatchString(l.text) && !verified(lines[i:]) {
+				g.report(where + ": DuckDB INSTALL downloads extensions that no sha256sum -c checks")
 			}
 		}
 	}
-	return problems
 }
 
-// vmTemplateProblems checks the Lima templates, the scripts they read in and the scripts the lane VMs run.
-func vmTemplateProblems(t *testing.T) []string {
+// requirements checks that a pip requirements file pins each requirement to a version and a hash.
+func (g *guard) requirements(rel, text string) {
+	for _, l := range logicalLines(text) {
+		if !hashedPin.MatchString(l.text) {
+			g.report(fmt.Sprintf("%s:%d: %s is not pinned to a version and a hash", rel, l.n, strings.Fields(l.text)[0]))
+		}
+	}
+}
+
+// vmTemplates checks the Lima templates, the scripts they read in, the scripts the lane VMs run and the scripts that
+// download for the code base.
+func (g *guard) vmTemplates(t *testing.T) {
 	t.Helper()
 	type template struct {
 		Base     string `yaml:"base"`
@@ -337,17 +466,13 @@ func vmTemplateProblems(t *testing.T) []string {
 		require.NoError(t, yaml.Unmarshal([]byte(readText(t, name)), &tmpl), name)
 		templates[name] = tmpl
 	}
-	// The scripts a lane VM runs, or a template reads in with file:, each checked once.
+	// Each checked once: the scripts a lane VM runs or a template reads in with file:, and the scripts that download.
 	scripts := map[string]bool{"lane-provision.sh": true, "lane-ready.sh": true, "lane-reset.sh": true,
-		"lane-leakcheck.sh": true, "linux-exec.sh": true}
-	dated := regexp.MustCompile(`^sha(256|512):[0-9a-f]+$`)
-	moving := regexp.MustCompile(`latest|/current/|/daily/`)
-	frozen := regexp.MustCompile(`snapshot\.debian\.org/archive/(?s:.*)\b\d{8}T\d{6}Z\b|\b\d{8}T\d{6}Z\b(?s:.*)snapshot\.debian\.org/archive/`)
-	var problems []string
+		"lane-leakcheck.sh": true, "linux-exec.sh": true, "fetch-catalog-engine.sh": true}
 	for name, tmpl := range templates {
 		for _, img := range tmpl.Images {
-			if !dated.MatchString(img.Digest) || moving.MatchString(img.Location) {
-				problems = append(problems, fmt.Sprintf("scripts/%s: the VM image %s is not a dated build pinned by digest", name, img.Location))
+			if !digestForm.MatchString(img.Digest) || movingLocation.MatchString(img.Location) {
+				g.report(fmt.Sprintf("scripts/%s: the VM image %s is not a dated build pinned by digest", name, img.Location))
 			}
 		}
 		frozenApt, timezone := false, false
@@ -359,75 +484,106 @@ func vmTemplateProblems(t *testing.T) []string {
 					script = readText(t, p.File)
 					scripts[p.File] = true
 				} else if k == 0 {
-					problems = append(problems, shellProblems("scripts/"+name+" provision", logicalLines(script))...)
+					g.shell("scripts/"+name+" provision", logicalLines(script))
 				}
-				frozenApt = frozenApt || p.Mode == "dependency" && frozen.MatchString(script)
+				frozenApt = frozenApt || p.Mode == "dependency" && snapshotArchive.MatchString(script) && snapshotTime.MatchString(script)
 			}
 		}
 		if !frozenApt {
-			problems = append(problems, fmt.Sprintf("scripts/%s: apt in the VM reads the live Debian archive, not a snapshot at a fixed time (a mode: dependency provision step)", name))
+			g.report(fmt.Sprintf("scripts/%s: apt in the VM reads the live Debian archive, not a snapshot at a fixed time (a mode: dependency provision step)", name))
 		}
 		if !timezone {
-			problems = append(problems, fmt.Sprintf("scripts/%s: the VM takes the host's time zone", name))
+			g.report(fmt.Sprintf("scripts/%s: the VM takes the host's time zone", name))
 		}
 		for _, p := range tmpl.Probes {
-			problems = append(problems, shellProblems("scripts/"+name+" probe", logicalLines(p.Script))...)
+			g.shell("scripts/"+name+" probe", logicalLines(p.Script))
 		}
 	}
 	for name := range scripts {
-		problems = append(problems, shellProblems("scripts/"+name, logicalLines(readText(t, name)))...)
+		g.shell("scripts/"+name, logicalLines(readText(t, name)))
 	}
-	return problems
 }
 
-// laneBuildProblems checks the build commands of every lane in scripts/lanes.yaml.
-func laneBuildProblems(t *testing.T, pins imagePins) []string {
-	t.Helper()
-	var registry map[string]struct {
-		Build []string `yaml:"build"`
+// laneBuild checks one build command of a lane: uv reads the lockfile, and the command's installs, downloads and
+// images are pinned.
+func (g *guard) laneBuild(where, cmd string) {
+	if uvResolve.MatchString(cmd) && !uvLocked.MatchString(cmd) {
+		g.report(where + ": uv resolves without --locked or --frozen")
 	}
-	require.NoError(t, yaml.Unmarshal([]byte(readText(t, "lanes.yaml")), &registry))
-	var problems []string
-	for name, lane := range registry {
-		for i, cmd := range lane.Build {
-			where := fmt.Sprintf("scripts/lanes.yaml %s build[%d]", name, i)
-			if regexp.MustCompile(`\buv\s+(run|sync)\b`).MatchString(cmd) && !regexp.MustCompile(`--(locked|frozen)\b`).MatchString(cmd) {
-				problems = append(problems, where+": uv resolves without --locked or --frozen")
+	g.shell(where, logicalLines(cmd))
+}
+
+// shell checks a script's lines: an apt install of a package at no named version, pip reading an index without
+// --require-hashes (with --no-index it installs a local file, which the download rule covers), npm install instead of
+// npm ci, go run or go install at a moving version, an image a docker command reads by tag only, and a curl or wget
+// with no checksum check before the next one, unless it reaches this host or a host in a variable (the VM's or a
+// sandbox's own address).
+func (g *guard) shell(where string, lines []line) {
+	for i, l := range lines {
+		at := fmt.Sprintf("%s:%d", where, l.n)
+		for _, m := range aptInstall.FindAllStringSubmatch(l.text, -1) {
+			for _, pkg := range strings.Fields(m[1]) {
+				if !strings.HasPrefix(pkg, "-") && !strings.Contains(pkg, "=") {
+					g.report(fmt.Sprintf("%s: apt installs %s at no named version", at, pkg))
+				}
 			}
-			for _, m := range regexp.MustCompile(`\bdocker\s+pull\s+(?:-\S+\s+)*(\S+)`).FindAllStringSubmatch(cmd, -1) {
-				problems = append(problems, pins.record(where, m[1])...)
+		}
+		if pipInstall.MatchString(l.text) && !strings.Contains(l.text, "--require-hashes") && !strings.Contains(l.text, "--no-index") {
+			g.report(at + ": pip installs from an index without --require-hashes")
+		}
+		if npmInstall.MatchString(l.text) {
+			g.report(at + ": npm install resolves; npm ci installs the lockfile")
+		}
+		if movingGoQuery.MatchString(l.text) {
+			g.report(at + ": go run or go install resolves a moving version")
+		}
+		for _, ref := range dockerImages(l.text) {
+			g.image(at, ref)
+		}
+		if download.MatchString(l.text) && !hostURL.MatchString(l.text) {
+			next := i + 1
+			for next < len(lines) && !download.MatchString(lines[next].text) {
+				next++
 			}
-			problems = append(problems, shellProblems(where, logicalLines(cmd))...)
+			if !verified(lines[i:next]) {
+				g.report(at + ": a download with no checksum check before the next one")
+			}
 		}
 	}
-	return problems
 }
 
-// imagePins maps an image name and tag to the digest-pinned references that name it.
-type imagePins map[string]map[string]bool
-
-// record notes ref, or reports it when it names no digest.
-func (p imagePins) record(where, ref string) []string {
-	m := regexp.MustCompile(`^([^@\s]+)@sha256:[0-9a-f]{64}$`).FindStringSubmatch(ref)
-	if m == nil {
-		return []string{fmt.Sprintf("%s: the image %s names no sha256 digest", where, ref)}
-	}
-	if p[m[1]] == nil {
-		p[m[1]] = map[string]bool{}
-	}
-	p[m[1]][ref] = true
-	return nil
-}
-
-// conflicts reports each image pinned at more than one digest.
-func (p imagePins) conflicts() []string {
-	var out []string
-	for name, refs := range p {
-		if len(refs) > 1 {
-			out = append(out, fmt.Sprintf("the image %s is pinned at %d digests: %v", name, len(refs), slices.Sorted(maps.Keys(refs))))
+// dockerImages returns the images the docker commands of a line read: the image of pull, run and create, and each
+// docker-image:// build context of build. An image a build names with -t is its output, not an input.
+func dockerImages(text string) []string {
+	var refs []string
+	for _, cmd := range shellSeparator.Split(text, -1) {
+		f := strings.Fields(cmd)
+		i := slices.Index(f, "docker")
+		if i < 0 || i+1 >= len(f) {
+			continue
+		}
+		args := f[i+2:]
+		switch f[i+1] {
+		case "pull", "run", "create":
+			for j := 0; j < len(args); j++ {
+				a := args[j]
+				if !strings.HasPrefix(a, "-") {
+					refs = append(refs, a)
+					break
+				}
+				if !strings.Contains(a, "=") && !dockerBoolFlag.MatchString(a) {
+					j++ // the flag's value
+				}
+			}
+		case "build", "buildx":
+			for _, a := range args {
+				if _, ref, ok := strings.Cut(a, "docker-image://"); ok {
+					refs = append(refs, ref)
+				}
+			}
 		}
 	}
-	return out
+	return refs
 }
 
 // readText returns a file's contents.
@@ -472,43 +628,5 @@ func logicalLines(text string) []line {
 
 // verified reports whether a checksum check (sha256sum -c and its kin) runs on the first line or a later one.
 func verified(lines []line) bool {
-	check := regexp.MustCompile(`\b(sha256sum|sha512sum)\b[^|;&]*\s-c\b|\bshasum\s+-a\s+(256|512)\b[^|;&]*\s-c\b`)
-	return slices.ContainsFunc(lines, func(l line) bool { return check.MatchString(l.text) })
-}
-
-// shellProblems reports the unpinned installs and downloads of a script's lines: an apt install of a package at no
-// named version, pip reading an index without --require-hashes (with --no-index it installs a local file, which the
-// download rule covers), npm install instead of npm ci, and a curl or wget of anything but this host with no checksum
-// check before the next one.
-func shellProblems(where string, lines []line) []string {
-	fetch := regexp.MustCompile(`\b(?:curl|wget)\s`)
-	local := regexp.MustCompile(`https?://(127\.0\.0\.1|localhost)\b`)
-	var out []string
-	for i, l := range lines {
-		at := fmt.Sprintf("%s:%d", where, l.n)
-		for _, m := range regexp.MustCompile(`\bapt(?:-get)?\s+install\s+([^;&|)}]*)`).FindAllStringSubmatch(l.text, -1) {
-			for _, pkg := range strings.Fields(m[1]) {
-				if !strings.HasPrefix(pkg, "-") && !strings.Contains(pkg, "=") {
-					out = append(out, fmt.Sprintf("%s: apt installs %s at no named version", at, pkg))
-				}
-			}
-		}
-		if regexp.MustCompile(`\bpip3?\s+install\b`).MatchString(l.text) && !strings.Contains(l.text, "--require-hashes") &&
-			!strings.Contains(l.text, "--no-index") {
-			out = append(out, at+": pip installs from an index without --require-hashes")
-		}
-		if regexp.MustCompile(`\bnpm\s+(install|i)\b`).MatchString(l.text) {
-			out = append(out, at+": npm install resolves; npm ci installs the lockfile")
-		}
-		if fetch.MatchString(l.text) && !local.MatchString(l.text) {
-			next := i + 1
-			for next < len(lines) && !fetch.MatchString(lines[next].text) {
-				next++
-			}
-			if !verified(lines[i:next]) {
-				out = append(out, at+": a download with no checksum check before the next one")
-			}
-		}
-	}
-	return out
+	return slices.ContainsFunc(lines, func(l line) bool { return checksumCheck.MatchString(l.text) })
 }
