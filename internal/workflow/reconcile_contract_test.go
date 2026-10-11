@@ -32,6 +32,9 @@ func (f fakeContracts) Contract(_ context.Context, image string) (v1.WorkflowCon
 	if !ok {
 		return v1.WorkflowContract{}, "", fault.NotFoundf("test.contract", "no contract for %q", image)
 	}
+	if _, digest, pinned := strings.Cut(image, "@"); pinned { // a registry resolves a digest-pinned ref to that digest
+		return c, digest, nil
+	}
 	return c, "sha256:" + image, nil
 }
 
@@ -102,6 +105,18 @@ func TestContractDerivedAndCached(t *testing.T) {
 	}
 	if len(wf.Status.Steps) != 2 || wf.Status.Steps[0].Image != "oci:ingest@sha256:oci:ingest" || wf.Status.Steps[0].Contract == nil {
 		t.Fatalf("status.steps must cache each step's pinned image + contract, got %+v", wf.Status.Steps)
+	}
+}
+
+// An App renders every step image as <repo>:<version>@<digest>. status.steps[].image, from which each run step's
+// revision is stamped, keeps that one digest.
+func TestPinnedStepImageKeepsOneDigest(t *testing.T) {
+	s := newStore(t)
+	image := "registry.test/acme/ingest:1.0.0@sha256:" + strings.Repeat("f474", 16)
+	c := fakeContracts{byImage: map[string]v1.WorkflowContract{image: {Output: obj(map[string]string{"rows": "integer"}, "rows")}}}
+	wf, _ := reconcileWF(t, s, c, fnStep("ingest", image))
+	if len(wf.Status.Steps) != 1 || wf.Status.Steps[0].Image != image {
+		t.Fatalf("status.steps = %+v, want the image %q with its one digest", wf.Status.Steps, image)
 	}
 }
 

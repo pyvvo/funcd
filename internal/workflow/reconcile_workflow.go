@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -686,7 +687,7 @@ func (r *WorkflowReconciler) deriveAndCheck(ctx context.Context, wf *v1.Workflow
 		}
 		contracts[st.Name] = c
 		pinned := image
-		if digest != "" {
+		if digest != "" && !strings.HasSuffix(image, "@"+digest) { // a digest-pinned image resolves to its own digest
 			pinned = image + "@" + digest
 		}
 		cc := c
