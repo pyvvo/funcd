@@ -124,6 +124,46 @@ func TestWorkflowOnFailureAndOwnedStore(t *testing.T) {
 	}
 }
 
+// Issue #927: the materializer copies each owned store's tables into its KVStore and an image step's bindings into
+// the step's Function, whose own checks refused what Workflow.Validate let through, so the stored Workflow failed on
+// every pass.
+func TestIssue927_ValidateRefusesWhatItsObjectsRefuse(t *testing.T) {
+	spec := func() WorkflowSpec {
+		return WorkflowSpec{
+			Steps: []WorkflowStep{{Name: "s", Function: &FunctionStep{
+				Image:    "oci:img",
+				KV:       []FunctionKV{{Alias: "c", Store: "cache", Table: "a"}, {Alias: "d", Store: "cache", Table: "b"}},
+				Blob:     []FunctionBlob{{Alias: "in", Bucket: "data", Prefix: "in"}, {Alias: "out", Bucket: "data", Prefix: "out"}},
+				Catalogs: []FunctionCatalog{{Alias: "q", Catalog: "lake"}, {Alias: "r", Catalog: "lake"}},
+				Config:   []ObjectName{"settings"},
+			}}},
+			KV: []WorkflowKVStore{{Name: "cache", Tables: []KVTable{{Name: "a", Owner: "s"}, {Name: "b", Owner: "s"}}}},
+		}
+	}
+	if err := newWorkflow(spec()).Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil for distinct names", err)
+	}
+	cases := map[string]struct {
+		edit func(*WorkflowSpec)
+		want string
+	}{
+		"table named twice":       {func(s *WorkflowSpec) { s.KV[0].Tables[1].Name = "a" }, `spec.kv[0].tables[1].name "a" is duplicated`},
+		"kv alias repeated":       {func(s *WorkflowSpec) { s.Steps[0].Function.KV[1].Alias = "c" }, `spec.steps[0].function.kv alias "c" is duplicated`},
+		"blob alias repeated":     {func(s *WorkflowSpec) { s.Steps[0].Function.Blob[1].Alias = "in" }, `spec.steps[0].function.blob alias "in" is duplicated`},
+		"catalog alias repeated":  {func(s *WorkflowSpec) { s.Steps[0].Function.Catalogs[1].Alias = "q" }, `spec.steps[0].function.catalogs alias "q" is duplicated`},
+		"config entry not a name": {func(s *WorkflowSpec) { s.Steps[0].Function.Config[0] = "Settings" }, `spec.steps[0].function.config entry "Settings" is not a valid DNS-1123 name`},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			s := spec()
+			c.edit(&s)
+			if err := newWorkflow(s).Validate(); err == nil || fault.KindOf(err) != fault.Invalid || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("Validate() = %v, want an Invalid error containing %q", err, c.want)
+			}
+		})
+	}
+}
+
 // Issue #179: the engine dispatches the onFailure handler to a Function, so the handler must be a
 // function step (ADR-0096: image or ref). A builtin or workflow: handler has no Function to receive it.
 func TestIssue179_OnFailureHandlerMustBeFunctionStep(t *testing.T) {

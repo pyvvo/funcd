@@ -243,6 +243,8 @@ func (w *Workflow) GetStatus() *Status { return &w.Status.Status }
 // names whose owners name a step, the declared-contract total-defaults rule, the duration bounds and a
 // literal wait's grammar (ADR-0194). Field-format constraints (retry attempts, enums) are
 // schema-enforced at the edge.
+// Each owned store's tables and each image step's bindings, which the materializer copies into the KVStores and step
+// Functions it writes, also pass those objects' own checks (#927).
 func (w *Workflow) Validate() error {
 	const op = "Workflow.Validate"
 	if err := validateMeta(w.TypeMeta, &w.ObjectMeta, KindWorkflow); err != nil {
@@ -268,6 +270,9 @@ func (w *Workflow) Validate() error {
 			return err
 		}
 		if err := s.validateDurations(op, i); err != nil {
+			return err
+		}
+		if err := s.validateBindings(op, i); err != nil {
 			return err
 		}
 		if s.Join != "" && s.Join != JoinAll && s.Join != JoinAny {
@@ -382,6 +387,17 @@ func (s *WorkflowStep) validateDurations(op string, i int) error {
 	return nil
 }
 
+// validateBindings runs the Function binding checks on an image step's bindings, which the materializer copies into
+// the step's Function; a ref step materializes nothing.
+func (s *WorkflowStep) validateBindings(op string, i int) error {
+	f := s.Function
+	if f == nil || f.Image == "" {
+		return nil
+	}
+	spec := FunctionSpec{KV: f.KV, Blob: f.Blob, Config: f.Config, Catalogs: f.Catalogs}
+	return spec.validateBindings(op, fmt.Sprintf("spec.steps[%d].function", i))
+}
+
 // IsWaitExpression reports whether a builtin wait is a ${{ }} expression; apply and the engine both use it.
 func IsWaitExpression(wait string) bool { return strings.HasPrefix(strings.TrimSpace(wait), "${{") }
 
@@ -494,6 +510,9 @@ func (w *Workflow) validateOwnedStores(op string, names map[ObjectName]bool) err
 			if o := st.Tables[j].Owner; o != "" && !names[o] {
 				return fault.Invalidf(op, "spec.kv[%d].tables[%d].owner %q is not a step", i, j, o)
 			}
+		}
+		if err := validateTables(op, fmt.Sprintf("spec.kv[%d].tables", i), st.Tables); err != nil {
+			return err
 		}
 	}
 	return nil

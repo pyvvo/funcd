@@ -264,19 +264,25 @@ func (s *FunctionSpec) Validate() error {
 			return fault.Invalidf(op, "spec.links[%s].target %q is not a valid Function name", l.Alias, l.Target)
 		}
 	}
+	return s.validateBindings(op, "spec")
+}
+
+// validateBindings checks the kv, blob, catalog and config bindings, naming each field under prefix. A Workflow runs
+// it on each image step's bindings, which the materializer copies into the step's Function (#927).
+func (s *FunctionSpec) validateBindings(op, prefix string) error {
 	// KV binding structural rules (ADR-0073): alias is a DNS-1123 label, unique within KV; table is a
 	// DNS-1123 label. Cross-resource rules (the store/table exist) are an admission.
 	kvSeen := make(map[string]bool, len(s.KV))
 	for _, b := range s.KV {
 		if !dnsLabel.MatchString(b.Alias) {
-			return fault.Invalidf(op, "spec.kv alias %q is not a valid DNS-1123 label", b.Alias)
+			return fault.Invalidf(op, "%s.kv alias %q is not a valid DNS-1123 label", prefix, b.Alias)
 		}
 		if kvSeen[b.Alias] {
-			return fault.Invalidf(op, "spec.kv alias %q is duplicated", b.Alias)
+			return fault.Invalidf(op, "%s.kv alias %q is duplicated", prefix, b.Alias)
 		}
 		kvSeen[b.Alias] = true
 		if !dnsLabel.MatchString(b.Table) {
-			return fault.Invalidf(op, "spec.kv[%s].table %q is not a valid DNS-1123 label", b.Alias, b.Table)
+			return fault.Invalidf(op, "%s.kv[%s].table %q is not a valid DNS-1123 label", prefix, b.Alias, b.Table)
 		}
 	}
 	// Blob binding structural rules (ADR-0080): alias is a DNS-1123 label, unique within Blob; prefix is a
@@ -284,14 +290,14 @@ func (s *FunctionSpec) Validate() error {
 	blobSeen := make(map[string]bool, len(s.Blob))
 	for _, b := range s.Blob {
 		if !dnsLabel.MatchString(b.Alias) {
-			return fault.Invalidf(op, "spec.blob alias %q is not a valid DNS-1123 label", b.Alias)
+			return fault.Invalidf(op, "%s.blob alias %q is not a valid DNS-1123 label", prefix, b.Alias)
 		}
 		if blobSeen[b.Alias] {
-			return fault.Invalidf(op, "spec.blob alias %q is duplicated", b.Alias)
+			return fault.Invalidf(op, "%s.blob alias %q is duplicated", prefix, b.Alias)
 		}
 		blobSeen[b.Alias] = true
 		if !dnsLabel.MatchString(b.Prefix) {
-			return fault.Invalidf(op, "spec.blob[%s].prefix %q is not a valid DNS-1123 label", b.Alias, b.Prefix)
+			return fault.Invalidf(op, "%s.blob[%s].prefix %q is not a valid DNS-1123 label", prefix, b.Alias, b.Prefix)
 		}
 	}
 	// Catalog binding structural rules (ADR-0091): alias is a DNS-1123 label, unique within Catalogs;
@@ -299,14 +305,14 @@ func (s *FunctionSpec) Validate() error {
 	catSeen := make(map[string]bool, len(s.Catalogs))
 	for _, c := range s.Catalogs {
 		if !dnsLabel.MatchString(c.Alias) {
-			return fault.Invalidf(op, "spec.catalogs alias %q is not a valid DNS-1123 label", c.Alias)
+			return fault.Invalidf(op, "%s.catalogs alias %q is not a valid DNS-1123 label", prefix, c.Alias)
 		}
 		if catSeen[c.Alias] {
-			return fault.Invalidf(op, "spec.catalogs alias %q is duplicated", c.Alias)
+			return fault.Invalidf(op, "%s.catalogs alias %q is duplicated", prefix, c.Alias)
 		}
 		catSeen[c.Alias] = true
 		if !dnsLabel.MatchString(string(c.Catalog)) {
-			return fault.Invalidf(op, "spec.catalogs[%s].catalog %q is not a valid CatalogService name", c.Alias, c.Catalog)
+			return fault.Invalidf(op, "%s.catalogs[%s].catalog %q is not a valid CatalogService name", prefix, c.Alias, c.Catalog)
 		}
 	}
 	// Config binding structural rules (ADR-0093): each names a ConfigMap in this namespace and
@@ -314,7 +320,7 @@ func (s *FunctionSpec) Validate() error {
 	// existence is the reconciler's plain store read (fail-closed, ConfigResolveFailed), not Validate.
 	for _, cm := range s.Config {
 		if !dnsLabel.MatchString(string(cm)) {
-			return fault.Invalidf(op, "spec.config entry %q is not a valid DNS-1123 name", cm)
+			return fault.Invalidf(op, "%s.config entry %q is not a valid DNS-1123 name", prefix, cm)
 		}
 	}
 	return nil

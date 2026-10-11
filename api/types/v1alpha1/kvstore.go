@@ -110,13 +110,19 @@ func (s *KVStore) Validate() error {
 	if s.Spec.MaxKeyBytes > MaxKeyBytesLimit {
 		return fault.Invalidf(op, "spec.maxKeyBytes (%d) exceeds the largest storable key (%d bytes)", s.Spec.MaxKeyBytes, MaxKeyBytesLimit)
 	}
-	seen := make(map[string]bool, len(s.Spec.Tables))
-	for i, tb := range s.Spec.Tables {
+	return validateTables(op, "spec.tables", s.Spec.Tables)
+}
+
+// validateTables checks that each table name is a DNS-1123 label used once, naming each table under path. A Workflow
+// runs it on each store it declares, whose tables the materializer copies into that KVStore (#927).
+func validateTables(op, path string, tables []KVTable) error {
+	seen := make(map[string]bool, len(tables))
+	for i, tb := range tables {
 		if !dnsLabel.MatchString(tb.Name) {
-			return fault.Invalidf(op, "spec.tables[%d].name %q is not a valid DNS-1123 label", i, tb.Name)
+			return fault.Invalidf(op, "%s[%d].name %q is not a valid DNS-1123 label", path, i, tb.Name)
 		}
 		if seen[tb.Name] {
-			return fault.Invalidf(op, "spec.tables[%d].name %q is duplicated", i, tb.Name)
+			return fault.Invalidf(op, "%s[%d].name %q is duplicated", path, i, tb.Name)
 		}
 		seen[tb.Name] = true
 	}
