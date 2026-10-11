@@ -971,13 +971,14 @@ func (d *driver) Close() error {
 	d.mu.Unlock()
 	closeClient := sync.OnceValue(d.client.Close)
 	done := make(chan struct{})
-	go func() {
+	var watcher sync.WaitGroup
+	watcher.Go(func() {
 		select {
 		case <-d.cfg.Exited:
 			_ = closeClient()
 		case <-done:
 		}
-	}()
+	})
 	errs := make([]error, len(live), len(live)+3)
 	var wg sync.WaitGroup
 	for i, id := range live {
@@ -988,6 +989,7 @@ func (d *driver) Close() error {
 		errs = append(errs, d.SweepAll(context.Background()))
 	}
 	close(done)
+	watcher.Wait()
 	select {
 	case <-d.cfg.Exited:
 		errs = append(errs, fault.Unavailablef("runtime.containerd.Close", "containerd exited, so the workers in it may still run"))

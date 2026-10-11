@@ -67,6 +67,7 @@ func (m *privateManager) Ensure(ctx context.Context) (string, error) {
 	if err := m.startContainerd(ctx, op); err != nil {
 		return "", err
 	}
+	// Not in startContainerd: TestIssue630 and TestIssue707 run it in a synctest bubble, which a reaper in wait4 stalls.
 	m.reap()
 	client, err := containerd.New(m.socket)
 	if err != nil {

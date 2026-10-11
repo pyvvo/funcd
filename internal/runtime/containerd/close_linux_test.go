@@ -147,6 +147,28 @@ func TestClose_FailsFastOnceContainerdExited(t *testing.T) {
 	})
 }
 
+// Close watches for containerd's exit only while it runs: it ends the watcher and waits for it, so Close returns while
+// containerd runs and no watcher outlives it.
+func TestClose_JoinsItsExitWatcher(t *testing.T) {
+	for name, exited := range map[string]chan struct{}{
+		"external containerd": nil,
+		"private containerd":  make(chan struct{}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := newCloseFixture(t).driver(false)
+			d.cfg.Exited = exited
+			done := make(chan error, 1)
+			go func() { done <- d.Close() }()
+			select {
+			case err := <-done:
+				require.NoError(t, err)
+			case <-time.After(2 * time.Second):
+				t.Fatal("Close did not return while containerd runs: its exit watcher never ended")
+			}
+		})
+	}
+}
+
 // stubContainerd stands in for the private containerd: a gRPC server on a short unix socket that answers every call
 // with handler, or Unimplemented when handler is nil.
 type stubContainerd struct {

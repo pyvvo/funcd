@@ -29,6 +29,7 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/config"
 	fnruntime "github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/containerd"
+	"github.com/pyvvo/funcd/internal/runtime/ctrmanager"
 	"github.com/pyvvo/funcd/internal/runtime/process"
 	"github.com/pyvvo/funcd/internal/runtime/procreg"
 	"github.com/pyvvo/funcd/internal/testkit/freeport"
@@ -289,6 +290,33 @@ func (r *sweptRuntime) BootSweep(context.Context) error {
 	return r.err
 }
 
+// exitingManager stands in for the manager of the private containerd (ADR-0054): Ensure yields a socket, and Exited
+// is the channel its reaper closes once containerd exits.
+type exitingManager struct{ exited chan struct{} }
+
+func (m exitingManager) Ensure(context.Context) (string, error) { return "containerd.sock", nil }
+func (m exitingManager) Exited() <-chan struct{}                { return m.exited }
+func (m exitingManager) Close() error                           { return nil }
+
+// The driver of the private containerd gets the manager's exit channel, so its Close fails fast after containerd has
+// exited instead of redialing the socket containerd removed.
+func TestContainerdModeGivesTheDriverContainerdsExit(t *testing.T) {
+	cfg := cfgProcess(t.TempDir())
+	cfg.Runtime.Mode = "containerd"
+	mgr := exitingManager{exited: make(chan struct{})}
+	var got containerd.Config
+	_, closeExec, err := containerdOptions(context.Background(), cfg, slog.New(slog.DiscardHandler),
+		func(ctrmanager.Config) (ctrmanager.Manager, error) { return mgr, nil },
+		func(c containerd.Config) (fnruntime.Runtime, error) {
+			got = c
+			return &sweptRuntime{}, nil
+		})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = closeExec() })
+	require.True(t, got.Private, "with no socket set the driver runs on the private containerd")
+	require.True(t, got.Exited == mgr.Exited(), "the driver must get the manager's exit channel")
+}
+
 // Containerd mode sweeps every funcd namespace once before it hands the driver to the controllers; a failed sweep is
 // logged and funcd still boots (ADR-0167 Decision 8).
 func TestContainerdModeSweepsLeftoversAtBoot(t *testing.T) {
@@ -300,7 +328,7 @@ func TestContainerdModeSweepsLeftoversAtBoot(t *testing.T) {
 			rt := &sweptRuntime{err: sweepErr}
 			var logs bytes.Buffer
 			opts, closeExec, err := containerdOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(&logs, nil)),
-				func(containerd.Config) (fnruntime.Runtime, error) { return rt, nil })
+				ctrmanager.New, func(containerd.Config) (fnruntime.Runtime, error) { return rt, nil })
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = closeExec() })
 			require.NotEmpty(t, opts)

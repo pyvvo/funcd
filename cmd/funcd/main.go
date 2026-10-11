@@ -1332,7 +1332,7 @@ func executionOptions(ctx context.Context, cfg config.Config, logger *slog.Logge
 		return nil, noopClose, err
 	}
 	if cfg.Runtime.Mode == "containerd" {
-		return containerdOptions(ctx, cfg, logger, containerd.New)
+		return containerdOptions(ctx, cfg, logger, ctrmanager.New, containerd.New)
 	}
 
 	// process mode (default, cross-platform): run the embedded Node shim and pool host on the process driver, which
@@ -1350,9 +1350,13 @@ func executionOptions(ctx context.Context, cfg config.Config, logger *slog.Logge
 	return append([]funcd.Option{funcd.WithRuntime(rt)}, opts...), rt.Close, nil
 }
 
-// containerdOptions brings the containerd driver up through newRuntime (containerd.New; a test passes a fake) and
-// sweeps the funcd namespaces before any controller starts.
-func containerdOptions(ctx context.Context, cfg config.Config, logger *slog.Logger, newRuntime func(containerd.Config) (fnruntime.Runtime, error)) ([]funcd.Option, func() error, error) {
+// containerdOptions brings the container runtime up through newManager (ctrmanager.New) and the containerd driver
+// through newRuntime (containerd.New), where a test passes fakes, and sweeps the funcd namespaces before any
+// controller starts.
+func containerdOptions(ctx context.Context, cfg config.Config, logger *slog.Logger,
+	newManager func(ctrmanager.Config) (ctrmanager.Manager, error),
+	newRuntime func(containerd.Config) (fnruntime.Runtime, error),
+) ([]funcd.Option, func() error, error) {
 	c := cfg.Runtime.Containerd
 	// ADR-0054: bring the container runtime up through the Manager. By default it starts +
 	// supervises a PRIVATE containerd and imports the embedded curated images; with an external
@@ -1362,7 +1366,7 @@ func containerdOptions(ctx context.Context, cfg config.Config, logger *slog.Logg
 		DataRoot:       c.Root,
 		ImageOverride:  c.ImageOverride,
 	}
-	mgr, err := ctrmanager.New(mgrCfg)
+	mgr, err := newManager(mgrCfg)
 	if err != nil {
 		return nil, noopClose, fmt.Errorf("build container manager: %w", err)
 	}
