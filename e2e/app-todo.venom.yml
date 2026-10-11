@@ -9,9 +9,22 @@
 #   L4 the 1.1.0 pre-hook migrates the durable KV data before the API switches, and a downgrade runs the hooks of
 #      1.0.0 (ADR-0214);
 #   L5 a delete keeps the retained stores' data on disk for a new install to use through ref, and the stores with
-#      deletion delete leave the disk (ADR-0199).
-# The suite pushes, locks and deploys the App itself; the lane only creates the Secret and the grant beside it.
-name: app-todo — the todo App from its pushed template on real containerd (ADR-0199/0211/0214/0217/0218)
+#      deletion delete leave the disk (ADR-0199);
+#   L6 app deploy --dry-run of 1.1.0 prints the plan and stores nothing (ADR-0220);
+#   L7 a hand edit of a part is written back and recorded; while the App is paused a hand edit stays, and the resume
+#      writes it back (ADR-0212);
+#   L8 a new value of the App's ConfigMap rolls the API to a new Revision that serves it (ADR-0213);
+#   L9 app history lists the revisions, and app rollback applies an earlier spec as a new revision (ADR-0200);
+#   L10 a Python call past its spec.timeout gets 504 and DeadlineExceeded, and its container keeps serving (ADR-0226);
+#   L11 a replica whose handler blocks its event loop is restarted after the liveness timeout, and a binding the
+#       planner may no longer read makes it DependencyNotReady, which the App names (ADR-0215);
+#   L12 an App whose Workflow step binds a store the Workflow does not declare is refused at apply (ADR-0229);
+#   L13 a rollout waits for the App it requires until that App is Ready at a matching version (ADR-0219);
+#   L14 an upload under uploads/ in Bucket todo-files fires the blob EventSource, whose Sensor runs the intake
+#       Function, which records the upload (ADR-0119).
+# The suite pushes, locks and deploys the App itself; the lane only creates the Secret and the grant beside it. Every
+# file it applies comes from funcd-functions, staged by scripts/lanes.yaml.
+name: app-todo — the todo App from its pushed template on real containerd (ADR-0199/0200/0211-0215/0217-0220/0226/0229)
 
 vars:
   dp: http://127.0.0.1:8081
@@ -19,6 +32,8 @@ vars:
   token: todo-lane-token
   fctl: "limactl shell --workdir / {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token funcdctl"
   vmsh: "limactl shell --workdir / {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token bash -c"
+  values: "-f /opt/lane/values/e2e.yaml -f /opt/lane/values/reinstall.yaml"
+  ctr: "/var/lib/funcd/bin/ctr --address /var/lib/funcd/data/containerd/containerd.sock -n funcd-default"
 
 testcases:
   - name: L1 the template pushed to the OCI layout deploys from its ref
@@ -31,21 +46,21 @@ testcases:
             for f in api-1.0.0:todo-api:1.0.0 api-1.1.0:todo-api:1.1.0 migrate-1.0.0:todo-migrate:1.0.0 migrate-1.1.0:todo-migrate:1.1.0 collect:todo-collect:1.0.0; do
               funcdctl push functions/ts/${f%%:*}.mjs {{.reg}}/${f#*:}
             done
-            for f in planner:todo-planner:1.0.0 rank:todo-rank:1.0.0 warm:todo-warm:1.0.0; do
+            for f in planner:todo-planner:1.0.0 rank:todo-rank:1.0.0 warm:todo-warm:1.0.0 intake:todo-intake:1.0.0; do
               funcdctl push functions/py/${f%%:*}.py {{.reg}}/${f#*:}
             done
             funcdctl push --site web {{.reg}}/todo-web:1.0.0' | grep -c "@sha256:"
         info: "pushed → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldEqual 9
+          - result.systemout ShouldEqual 10
       - type: exec
         script: |
           {{.fctl}} app lock /opt/lane/app -f /opt/lane/values/e2e.yaml | grep -E '^[a-z]+ 1[.]0[.]0 sha256:[0-9a-f]{64}$' | cut -d' ' -f1 | paste -sd, -
         info: "app.lock → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldEqual api,collect,migrate,planner,rank,warm,web
+          - result.systemout ShouldEqual api,collect,intake,migrate,planner,rank,warm,web
       - type: exec
         script: "{{.fctl}} push --template /opt/lane/app {{.reg}}/todo:1.0.0"
         info: "template → {{.result.systemout}} {{.result.systemerr}}"
@@ -72,7 +87,7 @@ testcases:
               return json.loads(out.stdout) if out.returncode == 0 else {}
           lock = yaml.safe_load(open("/opt/lane/app/app.lock"))["images"]
           parts = {"todo-api": "api", "todo-migrate": "migrate", "todo-warm": "warm", "todo-planner": "planner",
-                   "todo-plan-collect": "collect", "todo-plan-rank": "rank"}
+                   "todo-plan-collect": "collect", "todo-plan-rank": "rank", "todo-intake": "intake"}
           runs = []
           for fn, image in sorted(parts.items()):
               rev = get("function", fn).get("status", {}).get("currentRevision", "")
@@ -88,7 +103,7 @@ testcases:
         info: "digests → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldEqual todo-api=locked,todo-migrate=locked,todo-plan-collect=locked,todo-plan-rank=locked,todo-planner=locked,todo-warm=locked,todo-web=locked
+          - result.systemout ShouldEqual todo-api=locked,todo-intake=locked,todo-migrate=locked,todo-plan-collect=locked,todo-plan-rank=locked,todo-planner=locked,todo-warm=locked,todo-web=locked
 
   - name: L1 a render from the pushed ref equals the render from the template directory
     steps:
@@ -102,7 +117,7 @@ testcases:
         info: "render → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldEqual SAME=yes,IMAGES=7
+          - result.systemout ShouldEqual SAME=yes,IMAGES=8
 
   - name: L1 the App serves through its Route and its Site on the real edge, after both hooks ran
     steps:
@@ -443,3 +458,534 @@ testcases:
         assertions:
           - result.statuscode ShouldEqual 200
           - result.bodyjson.attachment ShouldEqual passport
+
+  - name: L6 app deploy --dry-run of 1.1.0 prints its plan and stores nothing
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            rv() { funcdctl get "$@" -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"metadata\"][\"resourceVersion\"])"; }
+            state() { echo "$(rv app todo)/$(rv function todo-api)/$(funcdctl app history todo -o json | python3 -c "import sys,json;print(len(json.load(sys.stdin)))")"; }
+            before=$(state)
+            funcdctl app deploy {{.reg}}/todo:1.1.0 {{.values}} --dry-run > /tmp/dry-run.txt
+            after=$(state)
+            [ "$before" = "$after" ] && stored=nothing || stored="$before to $after"
+            echo "PLAN=$(sed "s/^ *//" /tmp/dry-run.txt | paste -sd ";" -),STORED=$stored"'
+        info: "dry run → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual "PLAN=would apply App/todo;revision todo-2;update Function/todo-api;update Function/todo-migrate;hook todo-migrate;hook todo-warm,STORED=nothing"
+
+  - name: L7 a hand edit of the API is written back; while the App is paused a hand edit stays until the resume
+    steps:
+      # A hot fix by hand: the API's image becomes the image of 1.1.0.
+      - type: exec
+        script: &hotfix |
+          {{.vmsh}} '
+            funcdctl get function todo-api -n default -o json \
+              | python3 -c "import sys,json;f=json.load(sys.stdin);f[\"spec\"][\"image\"]=\"{{.reg}}/todo-api:1.1.0\";f[\"spec\"].pop(\"imageDigest\",None);print(json.dumps(f))" \
+              | funcdctl apply -f -'
+        info: "hand edit → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      # The App writes the declared image back, logs self-healed and records it in status.lastSelfHeal.
+      - type: exec
+        script: &drift |
+          {{.vmsh}} '
+          python3 - <<"PY"
+          import json, subprocess
+          def get(*args):
+              out = subprocess.run(["funcdctl", "get", *args, "-n", "default", "-o", "json"], capture_output=True, text=True, check=True)
+              return json.loads(out.stdout)
+          app, api = get("app", "todo"), get("function", "todo-api")
+          paused = next((c["status"] + "/" + c.get("reason", "") for c in app["status"].get("conditions", []) if c["type"] == "Paused"), "none")
+          heal = app["status"].get("lastSelfHeal", {})
+          journal = subprocess.run(["journalctl", "-u", "funcd-demo", "--no-pager", "-o", "cat"], capture_output=True, text=True).stdout
+          lines = sum(1 for l in journal.splitlines() if "msg=self-healed" in l and "kind=Function" in l and "name=todo-api" in l and "app=todo" in l)
+          print("PAUSED=" + paused + ",IMAGE=" + api["spec"]["image"].split("/")[-1].split("@")[0] + ",LAST_SELF_HEAL=" + heal.get("kind", "") + "/" + heal.get("name", "") + ",LINES=" + str(lines) + ",LATEST=" + app["status"].get("latestRevision", ""))
+          PY
+          '
+        retry: 15
+        delay: 1
+        info: "after the hand edit → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldEqual PAUSED=none,IMAGE=todo-api:1.0.0,LAST_SELF_HEAL=Function/todo-api,LINES=1,LATEST=todo-1
+      - type: exec
+        script: "{{.fctl}} app pause todo"
+        info: "pause → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual "paused todo"
+      - type: exec
+        script: *hotfix
+        info: "hand edit while paused → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      # While paused the hot fix stays: the API answers from the image of 1.1.0, and the App wrote and stamped nothing.
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"list"}}'
+        retry: 30
+        delay: 2
+        info: "list while paused → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.version ShouldEqual 1.1.0
+      - type: exec
+        script: *drift
+        info: "while paused → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldEqual PAUSED=True/SpecPaused,IMAGE=todo-api:1.1.0,LAST_SELF_HEAL=Function/todo-api,LINES=1,LATEST=todo-1
+      - type: exec
+        script: "{{.fctl}} app resume todo"
+        info: "resume → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual "resumed todo"
+      - type: exec
+        script: *drift
+        retry: 15
+        delay: 1
+        info: "after the resume → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldEqual PAUSED=False/Resumed,IMAGE=todo-api:1.0.0,LAST_SELF_HEAL=Function/todo-api,LINES=2,LATEST=todo-1
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"list"}}'
+        retry: 30
+        delay: 2
+        info: "list after the resume → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.version ShouldEqual 1.0.0
+
+  - name: L8 a new value of the App's ConfigMap rolls the API to a new Revision that serves it
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            funcdctl get function todo-api -n default -o json | python3 -c "import sys,json;f=json.load(sys.stdin);print(f[\"spec\"][\"config\"][0], f[\"status\"][\"currentRevision\"])" > /tmp/settings-1
+            funcdctl app deploy {{.reg}}/todo:1.0.0 {{.values}} -f /opt/lane/values/greeting.yaml'
+        info: "deploy the new greeting → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldStartWith todo-2
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"list"}}'
+        retry: 15
+        delay: 2
+        info: "list on todo-2 → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.greeting ShouldEqual "good morning from the todo App"
+      # The new data is a new hashed ConfigMap, created before the API's new Revision; todo-1's is pruned.
+      - type: exec
+        script: &settings |
+          {{.vmsh}} '
+          python3 - <<"PY"
+          import json, subprocess
+          def get(*args):
+              out = subprocess.run(["funcdctl", "get", *args, "-n", "default", "-o", "json"], capture_output=True, text=True, check=True)
+              return json.loads(out.stdout)
+          first, first_rev = open("/tmp/settings-1").read().split()
+          api = get("function", "todo-api")
+          name, rev = api["spec"]["config"][0], api["status"]["currentRevision"]
+          maps = sorted(m["metadata"]["name"] for m in get("configmap") if m["metadata"]["name"].startswith("todo-settings-"))
+          first_map = get("configmap", name)["metadata"]["creationTimestamp"] <= get("revision", rev)["metadata"]["creationTimestamp"]
+          print("API_CONFIG=" + ("todo-1" if name == first else "hashed" if len(name) == len("todo-settings-") + 10 else name) + ",MAPS=" + str(len(maps)) + ",REVISION=" + ("todo-1" if rev == first_rev else "new") + ",MAP_BEFORE_REVISION=" + str(first_map))
+          PY
+          '
+        retry: 15
+        delay: 1
+        info: "ConfigMaps and the API → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldEqual API_CONFIG=hashed,MAPS=1,REVISION=new,MAP_BEFORE_REVISION=True
+
+  - name: L9 app history lists the revisions, and app rollback applies the spec of an earlier one as a new revision
+    steps:
+      - type: exec
+        script: &history |
+          {{.vmsh}} '
+            funcdctl app history todo -o json | python3 -c "import sys,json;print(\",\".join(str(r[\"spec\"][\"number\"])+\"=\"+r[\"spec\"][\"spec\"].get(\"version\",\"\")+\"/\"+r[\"status\"].get(\"phase\",\"\") for r in json.load(sys.stdin)))"'
+        info: "history → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual 1=1.0.0/Ready,2=1.0.0/Ready
+      - type: exec
+        script: "{{.fctl}} app rollback todo 1"
+        info: "rollback → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual "applied App todo with the spec of todo-1"
+      # todo-3 holds todo-1's spec and becomes current: todo-1's ConfigMap is created again and todo-2's is pruned.
+      - type: exec
+        script: |
+          {{.vmsh}} '
+          python3 - <<"PY"
+          import json, subprocess
+          def get(*args):
+              out = subprocess.run(["funcdctl", "get", *args, "-n", "default", "-o", "json"], capture_output=True, text=True, check=True)
+              return json.loads(out.stdout)
+          first = open("/tmp/settings-1").read().split()[0]
+          app = get("app", "todo")
+          revs = {r["metadata"]["name"]: r["spec"]["spec"] for r in get("apprevision")}
+          maps = sorted(m["metadata"]["name"] for m in get("configmap") if m["metadata"]["name"].startswith("todo-settings-"))
+          print("CURRENT=" + app["status"].get("currentRevision", "") + ",SPEC=" + ("todo-1" if revs.get("todo-3") == revs["todo-1"] else "other") + ",MAPS=" + ";".join("todo-1" if m == first else m for m in maps) + ",API_CONFIG=" + ("todo-1" if get("function", "todo-api")["spec"]["config"][0] == first else "other"))
+          PY
+          '
+        retry: 30
+        delay: 1
+        info: "after the rollback → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldEqual CURRENT=todo-3,SPEC=todo-1,MAPS=todo-1,API_CONFIG=todo-1
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"list"}}'
+        retry: 15
+        delay: 2
+        info: "list on todo-3 → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.greeting ShouldEqual "hello from the todo App"
+      - type: exec
+        script: *history
+        info: "history → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldEqual 1=1.0.0/Ready,2=1.0.0/Ready,3=1.0.0/Ready
+
+  - name: L10 a Python call past its spec.timeout gets 504 and DeadlineExceeded, and its container keeps serving
+    steps:
+      # The first call wakes the planner; todo-plans holds no plan for the tick none.
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-planner"
+        headers:
+          content-type: application/json
+        body: '{"data":{"tick":"none"}}'
+        retry: 15
+        delay: 2
+        info: "planner → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.found ShouldBeFalse
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            {{.ctr}} task ls | awk "\$1 ~ /^todo-planner-[0-9]+[.]r0\$/ && \$3 == \"RUNNING\" {print \$1, \$2}" | tee /tmp/planner-task'
+        info: "the planner's task → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldMatchRegex "^todo-planner-[0-9]+[.]r0 [0-9]+$"
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            start=$(date +%s.%N)
+            code=$(curl -s -m 10 -o /tmp/late.json -w "%{http_code}" -H "content-type: application/json" -d "{\"data\":{\"tick\":\"none\",\"wait\":30}}" http://127.0.0.1:8081/function/todo-planner)
+            end=$(date +%s.%N)
+            echo "$start" > /tmp/late-start
+            python3 -c "import json,sys;print(\"CODE=%s,TYPE=%s,SECONDS=%.1f\" % (sys.argv[1], json.load(open(\"/tmp/late.json\")).get(\"type\", \"\"), float(sys.argv[3]) - float(sys.argv[2])))" "$code" "$start" "$end"'
+        info: "the late call → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldMatchRegex "^CODE=504,TYPE=urn:funcd:problem:deadline-exceeded,SECONDS=2[.][0-9]$"
+      # The shim raises DeadlineExceeded in the handler 1 s after the deadline; the planner logs it.
+      - type: exec
+        script: |
+          {{.vmsh}} '
+          funcdctl logs todo-planner -n default -o json > /tmp/planner-logs.json
+          python3 - <<"PY"
+          import datetime, json
+          deadline = float(open("/tmp/late-start").read()) + 2
+          for line in open("/tmp/planner-logs.json"):
+              record = json.loads(line)
+              if "DeadlineExceeded" in record.get("body", ""):
+                  at = datetime.datetime.fromisoformat(record["time"].replace("Z", "+00:00")).timestamp()
+                  print("AFTER_DEADLINE=%.1f,BODY=%s" % (at - deadline, record["body"]))
+                  break
+          else:
+              print("WAITING")
+          PY
+          '
+        retry: 20
+        delay: 1
+        info: "the planner's log → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex "^AFTER_DEADLINE=[01][.][0-9],BODY=DeadlineExceeded while the planner waited for the plan of none$"
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-planner"
+        headers:
+          content-type: application/json
+        body: '{"data":{"tick":"none"}}'
+        info: "the next call → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.found ShouldBeFalse
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            now=$({{.ctr}} task ls | awk "\$1 ~ /^todo-planner-[0-9]+[.]r0\$/ && \$3 == \"RUNNING\" {print \$1, \$2}")
+            [ -n "$now" ] && [ "$now" = "$(cat /tmp/planner-task)" ] && echo SAME_TASK || echo "OTHER_TASK $(cat /tmp/planner-task) then $now"'
+        info: "the planner's task → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldEqual SAME_TASK
+
+  - name: L11 a replica whose handler blocks its event loop is restarted after the liveness timeout, and a binding the planner may not read is named by the App
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            {{.ctr}} task ls | awk "\$1 ~ /^todo-api-[0-9]+[.]r0\$/ && \$3 == \"RUNNING\" {print \$1, \$2}" | tee /tmp/api-task'
+        info: "the API's task → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex "^todo-api-[0-9]+[.]r0 [0-9]+$"
+      # The call blocks the API's event loop for good; the client gives up after 2 s.
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            date +%s.%N > /tmp/hang-start
+            code=$(curl -s -m 2 -o /dev/null -w "%{http_code}" -H "content-type: application/json" -d "{\"data\":{\"op\":\"hang\",\"token\":\"{{.token}}\"}}" http://127.0.0.1:8081/api)
+            echo "CODE=$code,EXIT=$?"'
+        info: "the hanging call → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldEqual CODE=000,EXIT=28
+      # The replica stops answering /health/liveness: after runtime.livenessTimeout (6 s in the lane config), at a
+      # supervision pass (every 2 s), funcd logs the restart.
+      - type: exec
+        script: |
+          {{.vmsh}} '
+          journalctl -u funcd-demo --no-pager -o cat | grep "silent on its liveness" | grep "function=todo-api" > /tmp/hang-log
+          python3 - <<"PY"
+          import datetime, re
+          start = float(open("/tmp/hang-start").read())
+          lines = open("/tmp/hang-log").read().splitlines()
+          if lines:
+              at = datetime.datetime.fromisoformat(re.search(r"time=(\S+)", lines[-1]).group(1).replace("Z", "+00:00")).timestamp()
+              print("RESTARTED_AFTER=%d,REPLICA=%s" % (round(at - start), re.search(r"replica=(\d+)", lines[-1]).group(1)))
+          else:
+              print("WAITING")
+          PY
+          '
+        retry: 30
+        delay: 1
+        info: "the restart → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex "^RESTARTED_AFTER=([3-9]|1[0-2]),REPLICA=0$"
+      # A call sent while the hung replica is stopped waits for the replacement: no call is handed to a worker that is
+      # being stopped, so this one is served at its first attempt.
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"list"}}'
+        info: "list after the restart → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.version ShouldEqual 1.0.0
+      # The same replica index runs a new task; the API and the App are Ready again.
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            now=$({{.ctr}} task ls | awk "\$1 ~ /^todo-api-[0-9]+[.]r0\$/ && \$3 == \"RUNNING\" {print \$1, \$2}")
+            read -r task pid < /tmp/api-task
+            [ "${now%% *}" = "$task" ] && [ -n "${now#* }" ] && [ "${now#* }" != "$pid" ] && replaced=yes || replaced="no ($task $pid then $now)"
+            phase() { funcdctl get "$@" -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"phase\"])"; }
+            echo "REPLACED=$replaced,API=$(phase function todo-api),APP=$(phase app todo)"'
+        retry: 15
+        delay: 1
+        info: "after the restart → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldEqual REPLACED=yes,API=Ready,APP=Ready
+      # A Policy forbids the planner to read its table plans: its readiness reports the binding, and the App names it.
+      - type: exec
+        script: "{{.fctl}} apply -f /opt/lane/fixtures/forbid-plan-read.yaml"
+        info: "the Policy → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: &dependency |
+          {{.vmsh}} '
+          python3 - <<"PY"
+          import json, subprocess
+          def get(*args):
+              out = subprocess.run(["funcdctl", "get", *args, "-n", "default", "-o", "json"], capture_output=True, text=True, check=True)
+              return json.loads(out.stdout)
+          def ready(obj):
+              c = next((c for c in obj["status"].get("conditions", []) if c["type"] == "Ready"), {})
+              return (obj["status"].get("phase", "") + "/" + c.get("reason", "") + " " + c.get("message", "")).replace(chr(34), "")
+          print("PLANNER=" + ready(get("function", "todo-planner")))
+          print("APP=" + ready(get("app", "todo")))
+          PY
+          '
+        retry: 20
+        delay: 1
+        info: "the planner and the App → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "PLANNER=Degraded/DependencyNotReady kv binding plans"
+          - "result.systemout ShouldContainSubstring 'APP=Degraded/ChildNotReady Function/todo-planner: DependencyNotReady: kv binding plans'"
+      - type: exec
+        script: "{{.fctl}} delete policy todo-planner-reads-no-plans -n default"
+        info: "delete the Policy → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: *dependency
+        retry: 20
+        delay: 1
+        info: "the planner and the App → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring PLANNER=Ready/
+          - result.systemout ShouldContainSubstring APP=Ready/
+
+  - name: L12 an App whose Workflow step binds a store the Workflow does not declare is refused at apply
+    steps:
+      - type: exec
+        script: |
+          out=$({{.fctl}} apply -f /opt/lane/fixtures/undeclared-step-store.yaml 2>&1); code=$?
+          printf "EXIT=%s %s\n" "$code" "$out" | tr -d '"'
+        info: "apply → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldNotStartWith EXIT=0
+          - "result.systemout ShouldContainSubstring 'spec.workflows[0] (Workflow/todo-replan): admission.workflow-step-stores: spec.steps[0].function.kv[0].store todo-store is not declared in spec.kv'"
+      # The API answers 400 to the create and to its dry run (ADR-0220), naming the field.
+      - type: exec
+        script: |
+          {{.vmsh}} '
+          python3 - <<"PY"
+          import json, urllib.error, urllib.request, yaml
+          app = json.dumps(yaml.safe_load(open("/opt/lane/fixtures/undeclared-step-store.yaml"))).encode()
+          answers = []
+          for query in ("?dryRun=true", ""):
+              req = urllib.request.Request("http://127.0.0.1:8080/apis/funcd.io/v1alpha1/namespaces/default/apps" + query, data=app, method="POST",
+                                           headers={"Authorization": "Bearer funcd-dev-token", "Content-Type": "application/json"})
+              try:
+                  urllib.request.urlopen(req)
+                  answers.append("stored")
+              except urllib.error.HTTPError as e:
+                  answers.append(str(e.code) + " " + json.load(e)["detail"].replace(chr(34), ""))
+          print("DRY_RUN=" + answers[0])
+          print("CREATE=" + answers[1])
+          PY
+          '
+        info: "the API → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - "result.systemout ShouldContainSubstring 'DRY_RUN=400 admission.app-parts: spec.workflows[0] (Workflow/todo-replan): admission.workflow-step-stores: spec.steps[0].function.kv[0].store todo-store is not declared in spec.kv'"
+          - "result.systemout ShouldContainSubstring 'CREATE=400 admission.app-parts: spec.workflows[0] (Workflow/todo-replan): admission.workflow-step-stores: spec.steps[0].function.kv[0].store todo-store is not declared in spec.kv'"
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            for kind in app workflow; do funcdctl get $kind todo-replan -n default >/dev/null 2>&1 && echo "$kind=stored" || echo "$kind=absent"; done | paste -sd, -'
+        info: "stored → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldEqual app=absent,workflow=absent
+
+  - name: L13 a new revision waits for the App it requires, then rolls out once that App is Ready at a matching version
+    steps:
+      - type: exec
+        script: "{{.fctl}} app deploy {{.reg}}/todo:1.0.0 {{.values}} -f /opt/lane/values/shared.yaml --no-wait"
+        info: "deploy with requires → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: &requires |
+          {{.vmsh}} '
+          python3 - <<"PY"
+          import json, subprocess
+          def get(*args):
+              out = subprocess.run(["funcdctl", "get", *args, "-n", "default", "-o", "json"], capture_output=True, text=True)
+              return json.loads(out.stdout) if out.returncode == 0 else None
+          app, shared = get("app", "todo"), get("app", "todo-shared")
+          status = app["status"]
+          ready = next((c for c in status.get("conditions", []) if c["type"] == "Ready"), {})
+          latest = get("apprevision", status["latestRevision"])["status"]
+          print("APP=" + status.get("phase", "") + "/" + ready.get("reason", "") + " " + ready.get("message", ""))
+          print("LATEST=" + status["latestRevision"] + "/" + latest.get("phase", "") + "/" + ("started" if latest.get("startedAt") else "waiting") + ",CURRENT=" + status.get("currentRevision", ""))
+          print("REQUIRES=" + ";".join(r["app"] + "@" + r.get("version", "") + "/" + str(r["met"]) for r in status.get("requires", [])) + ",REQUIRED_BY=" + (",".join(shared["status"].get("requiredBy", [])) if shared else "absent"))
+          PY
+          '
+        retry: 15
+        delay: 1
+        info: "waiting → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - "result.systemout ShouldContainSubstring 'APP=Deploying/RequirementNotMet App/todo-shared does not exist; todo needs ^1.0.0'"
+          - result.systemout ShouldContainSubstring LATEST=todo-4/Deploying/waiting,CURRENT=todo-3
+          - result.systemout ShouldContainSubstring REQUIRES=todo-shared@/False,REQUIRED_BY=absent
+      - type: exec
+        script: "{{.fctl}} app deploy /opt/lane/todo-shared"
+        info: "deploy todo-shared → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldStartWith todo-shared-1
+      - type: exec
+        script: *requires
+        retry: 30
+        delay: 1
+        info: "met → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring APP=Ready/
+          - result.systemout ShouldContainSubstring LATEST=todo-4/Ready/started,CURRENT=todo-4
+          - result.systemout ShouldContainSubstring REQUIRES=todo-shared@1.0.0/True,REQUIRED_BY=todo
+      # The App todo requires stays: its delete is refused, naming the dependent.
+      - type: exec
+        script: |
+          out=$({{.fctl}} app delete todo-shared 2>&1); code=$?
+          printf "EXIT=%s %s\n" "$code" "$out" | tr -d '"'
+        info: "delete todo-shared → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldNotStartWith EXIT=0
+          - "result.systemout ShouldContainSubstring 'app todo-shared is required by todo; remove the requirement first'"
+
+  - name: L14 an upload under uploads/ in Bucket todo-files fires the blob EventSource, whose Sensor runs the intake Function that records it
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"attach","id":"milk","name":"receipt.txt","content":"2 litres","token":"{{.token}}"}}'
+        retry: 15
+        delay: 2
+        info: "attach → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.id ShouldEqual milk
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"get","id":"milk"}}'
+        retry: 30
+        delay: 1
+        info: "the recorded upload → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.uploads ShouldHaveLength 1
+          - result.bodyjson.uploads.uploads0.name ShouldEqual receipt.txt
+          - result.bodyjson.uploads.uploads0.size ShouldEqual 8
+      # The intake Function ran on containerd for the object; a Sensor delivers at least once, so one line or more.
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            funcdctl logs todo-intake -n default | grep -q "intake uploads/milk/receipt.txt 8" && echo LOGGED || echo WAITING'
+        retry: 15
+        delay: 1
+        info: "the intake's log → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldEqual LOGGED

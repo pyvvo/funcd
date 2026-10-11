@@ -39,7 +39,7 @@ require (
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/opencontainers/runtime-spec v1.3.0
 	github.com/parquet-go/parquet-go v0.30.1
-	github.com/pyvvo/funcd-functions v0.2.0
+	github.com/pyvvo/funcd-functions v0.3.0
 	github.com/pyvvo/funcd-python v0.8.0
 	github.com/pyvvo/funcd-typescript v0.11.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2

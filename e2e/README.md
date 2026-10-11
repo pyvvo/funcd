@@ -23,8 +23,11 @@ self-deploys (Lima provisioning), then Venom drives the assertions. It replaced 
 - `app-todo.venom.yml` — the todo App of [pyvvo/funcd-functions](https://github.com/pyvvo/funcd-functions), an
   optional lane: `just lima-example app-todo` runs it and `just lima-example-all` skips it. The suite pushes, locks
   and deploys the App from its pushed template, then proves the locked digests, a TypeScript to Python Workflow, a
-  cron timer in Asia/Kathmandu resolved by the embedded tzdata, an upgrade's KV migration and a downgrade, and a
-  delete that keeps the retained stores on disk.
+  cron timer in Asia/Kathmandu resolved by the embedded tzdata, an upgrade's KV migration and a downgrade, a delete
+  that keeps the retained stores on disk, a dry run, drift correction and pause, a config roll, history and rollback,
+  a late Python call stopped at its deadline, a hung replica restarted, a binding the App names when it cannot be
+  read, a Workflow step binding refused at apply, a requirement on a second App, and an upload that a blob
+  EventSource's Sensor records. Every file it applies comes from funcd-functions.
 
 ## Run it
 
