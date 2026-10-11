@@ -23,6 +23,7 @@
     "ADR-0209",
     "ADR-0210",
     "ADR-0222",
+    "ADR-0223",
     "ADR-0227"
   ],
   "items": [
@@ -31,22 +32,10 @@
       "title": "Cron ADR (Apps epoch)",
       "features": [],
       "depends_on": []
-    },
-    {
-      "id": "ADR-0223",
-      "title": "funcdctl backup plan (Accepted 2026-10-10)",
-      "features": [
-        "F112"
-      ],
-      "depends_on": [
-        "ADR-0205",
-        "ADR-0222"
-      ]
     }
   ],
   "waves": {
     "1": [
-      "ADR-0223",
       "X-CRON"
     ]
   }

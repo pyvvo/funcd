@@ -26,7 +26,6 @@ one wave ahead of the build track.
 | Plan id | Proposed ADR working title | Realizes | Build-depends on |
 |---|---|---|---|
 | X-CRON | Cron ADR of the Apps epoch (outside this plan; the `schedule` field of `BackupSchedule` needs it) | — | — |
-| ADR-0223 | `funcdctl backup plan` helper (Accepted 2026-10-10) | F112 | ADR-0205, ADR-0222 |
 
 The report lists 17 rows in its section I. This slate keeps the ADRs that realize FEAT-0009 and one item outside it, X-CRON.
 ADR-0195 (KV delete records) and ADR-0196 (UTC timestamps) are Implemented and appear only as built dependencies in tier 0.
@@ -83,20 +82,18 @@ flowchart TB
     ADR_0209["ADR-0209 ✓"]
     ADR_0210["ADR-0210 ✓"]
     ADR_0222["ADR-0222 ✓"]
+    ADR_0223["ADR-0223 ✓"]
     ADR_0227["ADR-0227 ✓"]
     X_CRON["X-CRON · —<br/>Cron ADR (Apps epoch)"]
-    ADR_0223["ADR-0223 · F112<br/>funcdctl backup plan (Accepted 2026-10-10)"]
 
-    ADR_0205 --> ADR_0223
-    ADR_0222 --> ADR_0223
 ```
 
 ## Build waves (computed)
 
 | Tier | Items |
 |---|---|
-| 0 (done) | ADR-0006, ADR-0007, ADR-0018, ADR-0065, ADR-0067, ADR-0094, ADR-0118, ADR-0119, ADR-0157, ADR-0195, ADR-0196, ADR-0201, ADR-0202, ADR-0203, ADR-0204, ADR-0205, ADR-0206, ADR-0207, ADR-0208, ADR-0209, ADR-0210, ADR-0222, ADR-0227 |
-| 1 | ADR-0223, X-CRON |
+| 0 (done) | ADR-0006, ADR-0007, ADR-0018, ADR-0065, ADR-0067, ADR-0094, ADR-0118, ADR-0119, ADR-0157, ADR-0195, ADR-0196, ADR-0201, ADR-0202, ADR-0203, ADR-0204, ADR-0205, ADR-0206, ADR-0207, ADR-0208, ADR-0209, ADR-0210, ADR-0222, ADR-0223, ADR-0227 |
+| 1 | X-CRON |
 
 Why each tier:
 
@@ -135,9 +132,9 @@ Why each tier:
 
 ## Critical path & the exit-criterion spine
 
-Critical path (2 items, the longest build chain):
+Critical path (1 items, the longest build chain):
 
-  ADR-0205 → ADR-0223
+  ADR-0006
 
 | Exit-criterion clause (FEAT-0009) | Needs (items) |
 |---|---|
