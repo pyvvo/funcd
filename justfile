@@ -67,7 +67,7 @@ test-linux *flags:
     #!/usr/bin/env bash
     set -euo pipefail
     scripts/linux-exec.sh --boot
-    m=$(go list -m)
+    m=$(GOWORK=off go list -m)
     f='{{{{.ImportPath}} {{{{.GoFiles}} {{{{.CgoFiles}} {{{{.TestGoFiles}} {{{{.XTestGoFiles}}'
     differ=$(sort <(GOOS=linux go list -e -f "$f" ./...) <(GOOS=darwin go list -e -f "$f" ./...) | uniq -u | sed "s|^$m\([^ ]*\) .*|.\1|")
     nested=$(git ls-files '*/go.mod' | sed 's|go.mod$||; s|^|:!|')

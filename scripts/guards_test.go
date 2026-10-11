@@ -373,13 +373,16 @@ func TestIssue563_WaveCheckReportsConflicts(t *testing.T) {
 }
 
 // linux-exec.sh refuses a checkout outside $HOME, which the funcd-linux-tests VM does not mount: the VM would see no
-// package dir and no testdata. --check, which the gate runs before its linux-tests step, refuses it the same way.
+// package dir and no testdata. --check, which the gate runs before its linux-tests step, and --boot, which
+// `just test-linux` runs first, refuse it the same way, so nothing waits for the lane lock or boots the VM in vain.
 func TestLinuxExecRefusesACheckoutOutsideHome(t *testing.T) {
 	script, err := filepath.Abs("linux-exec.sh")
 	require.NoError(t, err)
-	for _, args := range [][]string{{"pkg.test", "-test.v"}, {"--check"}} {
+	fake := t.TempDir() // a limactl that fails, so a refusal that regresses never reaches the real VM
+	require.NoError(t, os.WriteFile(filepath.Join(fake, "limactl"), []byte("#!/bin/sh\nexit 99\n"), 0o755))
+	for _, args := range [][]string{{"pkg.test", "-test.v"}, {"--check"}, {"--boot"}} {
 		cmd := exec.Command(script, args...)
-		cmd.Env = append(os.Environ(), "HOME="+t.TempDir())
+		cmd.Env = append(os.Environ(), "HOME="+t.TempDir(), "PATH="+fake+string(os.PathListSeparator)+os.Getenv("PATH"))
 		code, out := exitCode(t, cmd)
 		require.Equal(t, 2, code, "%v: %s", args, out)
 		require.Contains(t, out, "is outside $HOME", args)

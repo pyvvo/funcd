@@ -125,15 +125,17 @@ test -f scripts/agent/d || { echo "the checkout of this run is gone"; exit 1; }
 	require.Empty(t, left, "no checkout directory is left behind")
 }
 
-// The funcd-linux-tests VM boots the lanes' image, so the cache lima-cache.py primes serves it too, and forwards no
-// port, so a test listening in it never takes a host port, such as a lane VM's 8080 or 8081. An ignore rule with the
-// default guestIP, 127.0.0.1, still forwards a port bound on 0.0.0.0.
-func TestLinuxTestsVMBootsTheLaneImageAndForwardsNoPort(t *testing.T) {
+// The funcd-linux-tests VM boots the lanes' image, so the cache lima-cache.py primes serves it too, and its one port
+// rule ignores every guest port, so a test listening in the VM never takes a host port, such as a lane VM's 8080 or
+// 8081. The rule must set guestIPMustBeZero to false: with guestIP 0.0.0.0 Lima defaults it to true, the rule then
+// matches only a bind on 0.0.0.0 or ::, and Lima's built-in rule forwards a bind on 127.0.0.1 to the host.
+func TestLinuxTestsVMBootsTheLaneImageAndIgnoresEveryGuestPort(t *testing.T) {
 	type rule struct {
-		GuestIP        string `yaml:"guestIP"`
-		GuestPortRange []int  `yaml:"guestPortRange"`
-		Proto          string `yaml:"proto"`
-		Ignore         bool   `yaml:"ignore"`
+		GuestIP           string `yaml:"guestIP"`
+		GuestIPMustBeZero *bool  `yaml:"guestIPMustBeZero"`
+		GuestPortRange    []int  `yaml:"guestPortRange"`
+		Proto             string `yaml:"proto"`
+		Ignore            bool   `yaml:"ignore"`
 	}
 	type vm struct {
 		Images       []map[string]string `yaml:"images"`
@@ -149,6 +151,7 @@ func TestLinuxTestsVMBootsTheLaneImageAndForwardsNoPort(t *testing.T) {
 	lane, tests := read("lima.yaml"), read("lima-linux-tests.yaml")
 	require.NotEmpty(t, lane.Images)
 	require.Equal(t, lane.Images, tests.Images)
-	require.Equal(t, []rule{{GuestIP: "0.0.0.0", GuestPortRange: []int{1, 65535}, Proto: "any", Ignore: true}},
-		tests.PortForwards)
+	anyIP := false
+	require.Equal(t, []rule{{GuestIP: "0.0.0.0", GuestIPMustBeZero: &anyIP, GuestPortRange: []int{1, 65535}, Proto: "any",
+		Ignore: true}}, tests.PortForwards)
 }

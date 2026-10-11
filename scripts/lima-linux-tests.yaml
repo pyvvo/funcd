@@ -24,17 +24,19 @@ containerd:
   system: false
   user: false
 
-# guestIP 0.0.0.0 matches every bind address; the default 127.0.0.1 would leave a port bound on 0.0.0.0 forwarded.
+# One ignore rule for every bind address. guestIP 0.0.0.0 alone makes Lima default guestIPMustBeZero to true: the rule
+# then matches only a bind on 0.0.0.0 or ::, and Lima's built-in rule forwards a bind on 127.0.0.1 to the host.
 portForwards:
   - guestIP: "0.0.0.0"
+    guestIPMustBeZero: false
     guestPortRange:
       - 1
       - 65535
     proto: any
     ignore: true
 
-# node: the tests that start a worker. git: `go build` in a test stamps VCS information, from a checkout runner does
-# not own.
+# node: the tests that start a worker; the nodejs_22 version of the flake's nixpkgs, pinned by checksum like the image.
+# git: `go build` in a test stamps VCS information, from a checkout runner does not own.
 provision:
   - mode: system
     script: |
@@ -43,17 +45,17 @@ provision:
       id runner >/dev/null 2>&1 || useradd --uid 1001 --user-group --groups adm --create-home --shell /bin/bash runner
       command -v git >/dev/null || { apt-get update -qq && apt-get install -y -qq git; }
       git config --system safe.directory '*'
-      if ! command -v node >/dev/null; then
-        arch=$(uname -m)
-        case $arch in aarch64) arch=arm64 ;; x86_64) arch=x64 ;; esac
-        url=https://nodejs.org/dist/latest-v22.x
-        line=$(curl -fsSL "$url/SHASUMS256.txt" | grep -- "-linux-$arch.tar.gz\$")
-        file=${line##* }
-        cd /tmp
-        curl -fsSLO "$url/$file"
-        sha256sum -c <<<"$line"
-        tar -xzf "$file" -C /usr/local --strip-components=1 --no-same-owner
-        rm "$file"
+      v=22.22.3
+      if [ "$(node --version 2>/dev/null)" != "v$v" ]; then
+        case $(uname -m) in
+        aarch64) arch=arm64 sum=cc8bc82b2dd0b595c3b95a4c3c9c8c350907cff011afbdee3d1379e812e1e3e3 ;;
+        x86_64) arch=x64 sum=c7a10d6816da8eaaa7534dd73c71c6e2b2c391dbbf845e364902d156615dd1b8 ;;
+        esac
+        file=node-v$v-linux-$arch.tar.gz
+        curl -fsSLo "/tmp/$file" "https://nodejs.org/dist/v$v/$file"
+        echo "$sum  /tmp/$file" | sha256sum -c -
+        tar -xzf "/tmp/$file" -C /usr/local --strip-components=1 --no-same-owner
+        rm "/tmp/$file"
       fi
 
 probes:

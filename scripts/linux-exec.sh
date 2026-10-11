@@ -49,6 +49,7 @@ checkout() {
 
 case ${1:-} in
 --boot)
+  checkout >/dev/null
   have_limactl
   running && exit 0
   (
@@ -79,8 +80,9 @@ read -r version arch < <(go version -m "$bin" |
 toolchain=golang.org/toolchain@v0.0.1-$version.linux-$arch
 (cd / && go mod download "$toolchain")
 goroot=$(go env GOMODCACHE)/$toolchain
-# A module zip keeps no execute bit; go sets them the same way when it switches to a downloaded toolchain.
-[ -x "$goroot/bin/go" ] || chmod a+x "$goroot"/bin/* "$goroot"/pkg/tool/*/*
+# A module zip keeps no execute bit. As go's own toolchain switch does, set the tools' bits before bin/go's, which the
+# check reads, so a parallel run never finds go executable before its tools.
+[ -x "$goroot/bin/go" ] || chmod a+x "$goroot"/pkg/tool/*/* "$goroot"/bin/*
 mkdir -p "$src/.cache/linux-exec"
 stage=$(mktemp -d "$src/.cache/linux-exec/XXXXXX")
 trap 'rm -rf "$stage"' EXIT

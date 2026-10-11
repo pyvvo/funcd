@@ -3,8 +3,9 @@
 # ephemeral ports are nearly used up (scripts/agent/host-check.sh), the bloat audit of the branch's diff
 # against origin/main (scripts/agent/audit.py, report in .cache/gate/audit.log), `just ci-full` (the canonical CI
 # set, e2e included), the Linux build/vet/lint, the Linux-specific tests in the funcd-linux-tests Lima VM (`just
-# test-linux`; a SKIP line when the VM is not running), and that the run changed no file (tidy/generate/fmt had
-# nothing to do). One PASS/FAIL line per step; full logs in .cache/gate/. Run it once per PR, not per change.
+# test-linux`; a SKIP line instead when limactl is missing, the VM is not running or the checkout is outside $HOME),
+# and that the run changed no file (tidy/generate/fmt had nothing to do). One PASS/FAIL line per step; full logs in
+# .cache/gate/. Run it once per PR, not per change.
 #
 #   scripts/agent/gate.sh
 set -uo pipefail
