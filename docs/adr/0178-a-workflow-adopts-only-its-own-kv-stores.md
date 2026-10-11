@@ -2,6 +2,7 @@
 
 - **Status**: Implemented (2026-10-05)
 - **Superseded in part by**: [ADR-0180](0180-kv-store-adoption-corrections.md) (2026-10-05) — the `stale-step-binding-removed` scenario's last clause, the migration's event, its completion record and the Risks line naming the event.
+- **Superseded in part by**: [ADR-0229](0229-undeclared-step-store-refused-at-apply.md) (2026-10-11) — Decision 2, "admission is unchanged": an admission also refuses a step store that `spec.kv` does not declare, and the materializer's check stays; the scenario `step-binding-to-unowned-store-refused` now holds for a Workflow that reaches the store without admission.
 - **Date**: 2026-10-05 (judged twice by three lenses; held from publication)
 - **Deciders**: green-0-rabbit
 - **Tags**: workflow, kv, owner-references, lifecycle, garbage-collection, upgrade
