@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.12.0](https://github.com/pyvvo/funcd/compare/v0.11.0...v0.12.0) (2026-10-11)
+
+
+### Features
+
+* **lanes:** implement ADR-0230, the full lane run shares one Lima VM (FEAT-0001/F46) ([#962](https://github.com/pyvvo/funcd/issues/962)) ([d295adc](https://github.com/pyvvo/funcd/commit/d295adc32cb5c15cb25bdec52045a1eedc32ec31))
+
+
+### Bug Fixes
+
+* **dr:** a restore hands over what it creates, and four smaller DR fixes ([#964](https://github.com/pyvvo/funcd/issues/964)) ([d6b3c81](https://github.com/pyvvo/funcd/commit/d6b3c813786c36887b129c29005354c9adc3a622))
+* **runtime:** fail Close fast when the private containerd has exited ([#961](https://github.com/pyvvo/funcd/issues/961)) ([9178d36](https://github.com/pyvvo/funcd/commit/9178d36d9a9094707ff41103091708ee0f6905de))
+
 ## [0.11.0](https://github.com/pyvvo/funcd/compare/v0.10.0...v0.11.0) (2026-10-11)
 
 
