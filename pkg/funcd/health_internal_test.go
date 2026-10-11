@@ -151,6 +151,12 @@ func TestScenarioHealthStorageDown(t *testing.T) {
 	require.Eventually(t, readyIs(v1.KindBucket, "todo-files", v1.PhaseReady, v1.ConditionTrue, "", ""), wait, tick,
 		"a new Bucket is Ready at its generation after one pass")
 	require.Eventually(t, checkIs(http.StatusOK, nil), wait, tick)
+	// the store's first status can predate todo-api, so its count of bindings is written once more
+	require.Eventually(t, func() bool {
+		obj, err := p.cfg.store.Get(context.Background(), v1.KindKVStore.GVK(), "default", "todo-store")
+		require.NoError(t, err)
+		return obj.(*v1.KVStore).Status.Bindings == 1
+	}, wait, tick)
 	_, _, rv := storeReady(t, p, v1.KindKVStore, "todo-store")
 	time.Sleep(100 * time.Millisecond)
 	_, _, again := storeReady(t, p, v1.KindKVStore, "todo-store")
