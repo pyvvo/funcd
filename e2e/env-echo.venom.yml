@@ -398,7 +398,7 @@ testcases:
           limactl shell --workdir / {{.vm}} bash -lc '
             systemctl is-active -q funcd-demo && exit 1
             sudo systemctl reset-failed funcd-demo 2>/dev/null
-            sudo systemd-run --unit funcd-demo /usr/local/bin/funcd --config /opt/lane/funcdconfig.yaml'
+            sudo systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 /usr/local/bin/funcd --config /opt/lane/funcdconfig.yaml'
         retry: 15
         delay: 2
         assertions:

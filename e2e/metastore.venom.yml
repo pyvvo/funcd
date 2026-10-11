@@ -15,11 +15,11 @@ testcases:
   - name: boot #1 — start funcd (containerd + file/Badger metastore) and apply a ConfigMap
     steps:
       # start funcd #1 with the REAL production config (transient systemd unit). systemd-run returns at once. The unit
-      # takes the installed funcd.service's KillMode=mixed: a stop signals funcd alone, so it stops its workers before
-      # its private containerd.
+      # takes the installed funcd.service's KillMode=mixed and stop timeout: a stop signals funcd alone, so it stops its
+      # workers before its private containerd.
       - type: exec
         script: |
-          limactl shell {{.vm}} -- sudo bash -c 'mkdir -p /var/lib/funcd/data && systemd-run --unit funcd-meta -p KillMode=mixed /mnt/funcd-deps/funcd --config /mnt/funcd-deps/metastore-daemon.yaml'
+          limactl shell {{.vm}} -- sudo bash -c 'mkdir -p /var/lib/funcd/data && systemd-run --unit funcd-meta -p KillMode=mixed -p TimeoutStopSec=30 /mnt/funcd-deps/funcd --config /mnt/funcd-deps/metastore-daemon.yaml'
         assertions:
           - result.code ShouldEqual 0
       # apply the ConfigMap — retry/delay IS the wait: it re-issues until the daemon is up and accepts it.
@@ -45,7 +45,7 @@ testcases:
       # same unit name starts again.
       - type: exec
         script: |
-          limactl shell {{.vm}} -- sudo bash -c 'systemctl stop funcd-meta; sleep 2; mkdir -p /var/lib/funcd/data; systemd-run --unit funcd-meta -p KillMode=mixed /mnt/funcd-deps/funcd --config /mnt/funcd-deps/metastore-daemon.yaml'
+          limactl shell {{.vm}} -- sudo bash -c 'systemctl stop funcd-meta; sleep 2; mkdir -p /var/lib/funcd/data; systemd-run --unit funcd-meta -p KillMode=mixed -p TimeoutStopSec=30 /mnt/funcd-deps/funcd --config /mnt/funcd-deps/metastore-daemon.yaml'
         assertions:
           - result.code ShouldEqual 0
       # read the ConfigMap back — retry/delay IS the wait: re-issues until funcd is back up AND the ConfigMap is
