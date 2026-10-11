@@ -359,3 +359,40 @@ func TestScenarioNewerChainRefusedCommand(t *testing.T) {
 	require.Contains(t, out, `"funcd": "v0.9.0"`)
 	require.Contains(t, out, "newer than this funcd v0.8.1")
 }
+
+// A KV-only config (kvstore.backup.target, no backup.target) lists and inspects its KV points without --from.
+func TestRestoreListKVOnlyConfig(t *testing.T) {
+	t.Parallel()
+	target := t.TempDir()
+	kvChain(t, target)
+	_, path := kvYAML(t, "  backup:\n    enabled: true\n    target: \""+gocloud.FileURL(target)+"\"\n    encryption:\n      none: true\n")
+	out, err := runRestore(t, "list", "--config", path)
+	require.NoError(t, err)
+	require.NotContains(t, out, "GENERATION", "no platform target to list")
+	require.Regexp(t, `\n1/5 +\S+ +\S+ +\S+ +restorable\n`, out)
+	out, err = runRestore(t, "inspect", "--config", path, "--kv", "1/5", "-o", "json")
+	require.NoError(t, err)
+	require.Contains(t, out, `"segment": 5`)
+}
+
+// restore list prints a KV target it cannot open as its own line after the platform rows, and lists no KV rows
+// while the KV export is off and no kvstore.backup.target is set.
+func TestRestoreListKVSourceFailureOwnLine(t *testing.T) {
+	t.Parallel()
+	platform := "backup:\n  target: \"" + gocloud.FileURL(t.TempDir()) + "\"\n  encryption:\n    none: true\n"
+	missing := gocloud.FileURL(filepath.Join(t.TempDir(), "missing"))
+	path := backupConfig(t, "file", platform+"kvstore:\n  engine: badger\n  backup:\n    target: \""+missing+"\"\n")
+	out, err := runRestore(t, "list", "--config", path)
+	require.NoError(t, err)
+	require.Contains(t, out, "GENERATION")
+	require.Contains(t, out, "\nKV POINTS: cannot list "+missing+": ")
+
+	target := t.TempDir()
+	kvChain(t, target)
+	path = backupConfig(t, "file", "backup:\n  target: \""+gocloud.FileURL(target)+"\"\n  encryption:\n    none: true\n"+
+		"kvstore:\n  engine: badger\n")
+	out, err = runRestore(t, "list", "--config", path)
+	require.NoError(t, err)
+	require.Contains(t, out, "GENERATION")
+	require.NotContains(t, out, "KV POINT", "the KV export is off and has no target of its own")
+}

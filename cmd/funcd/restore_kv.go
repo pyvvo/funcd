@@ -15,6 +15,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/backup/envelope"
+	"github.com/pyvvo/funcd/internal/blob"
 	kvbadger "github.com/pyvvo/funcd/internal/kvstore/badger"
 	"github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/platform/version"
@@ -24,18 +25,29 @@ import (
 // kvTarget is the KV export's target group's target (ADR-0209 Decision 1): kvstore.backup.target, else backup.target.
 func kvTarget(cfg config.Config) string { return cmp.Or(cfg.Kvstore.Backup.Target, cfg.Backup.Target) }
 
-// kvPoints lists the KV points for restore list: from o's source when the KV target is that source, else from the
-// KV target with the same credential; none when no KV target is configured.
-func kvPoints(ctx context.Context, f *restoreFlags, o restore.Options) ([]kvbadger.Point, error) {
-	if f.from != "" || kvTarget(o.Config) == o.Config.Backup.Target {
-		return kvbadger.ListPoints(ctx, o.Source)
+// kvListed reports whether restore list shows KV rows: the KV export is on or kvstore.backup.target is set.
+func kvListed(cfg config.Config) bool {
+	return cfg.Kvstore.Backup.Enabled || cfg.Kvstore.Backup.Target != ""
+}
+
+// kvPoints lists the KV points: from shared (the platform source) when the KV target is that source, else from
+// --from or the KV target, with the same credential.
+func kvPoints(ctx context.Context, f *restoreFlags, cfg config.Config, shared blob.Bucket) ([]kvbadger.Point, error) {
+	if shared != nil && (f.from != "" || kvTarget(cfg) == cfg.Backup.Target) {
+		return kvbadger.ListPoints(ctx, shared)
 	}
-	src, _, err := f.source(ctx, "kvstore.backup.target", kvTarget(o.Config))
+	src, _, err := f.source(ctx, "kvstore.backup.target", kvTarget(cfg))
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = src.Close() }()
 	return kvbadger.ListPoints(ctx, src)
+}
+
+// writeKVFailure prints a KV source that could not be listed as its own line, after the platform's rows.
+func writeKVFailure(out io.Writer, target string, err error) error {
+	_, werr := fmt.Fprintf(out, "\nKV POINTS: cannot list %s: %v\n", target, err)
+	return werr
 }
 
 // kvState is a point's restore verdict: restorable, newer (ADR-0206's CheckVersion refuses its funcd) or not restorable.
@@ -169,8 +181,12 @@ type kvInspectReport struct {
 	Version    string `json:"version"`
 }
 
-func inspectKV(ctx context.Context, out io.Writer, f *restoreFlags, o restore.Options, point, output string) error {
-	ps, err := kvPoints(ctx, f, o)
+func inspectKV(ctx context.Context, out io.Writer, f *restoreFlags, point, output string) error {
+	cfg, err := f.load()
+	if err != nil {
+		return err
+	}
+	ps, err := kvPoints(ctx, f, cfg, nil)
 	if err != nil {
 		return err
 	}

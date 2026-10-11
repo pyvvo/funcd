@@ -65,6 +65,11 @@ func (f *restoreFlags) open(ctx context.Context) (restore.Options, func(), error
 	if err != nil {
 		return restore.Options{}, nil, err
 	}
+	return f.openConfig(ctx, cfg)
+}
+
+// openConfig opens cfg's restore source and identities.
+func (f *restoreFlags) openConfig(ctx context.Context, cfg config.Config) (restore.Options, func(), error) {
 	src, ids, err := f.source(ctx, "backup.target", cfg.Backup.Target)
 	if err != nil {
 		return restore.Options{}, nil, err
@@ -116,34 +121,54 @@ func newRestoreListCmd(out io.Writer) *cobra.Command {
 		Short: "List the generations as a lineage tree: each timeline under the generation its restore loaded",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			o, done, err := f.open(cmd.Context())
+			ctx := cmd.Context()
+			cfg, err := f.load()
 			if err != nil {
 				return err
 			}
-			defer done()
-			gens, err := restore.List(cmd.Context(), o.Source)
-			if err != nil {
-				return err
+			var shared blob.Bucket
+			if f.from != "" || cfg.Backup.Target != "" || !kvListed(cfg) {
+				o, done, err := f.openConfig(ctx, cfg)
+				if err != nil {
+					return err
+				}
+				defer done()
+				if err := writePlatformRows(ctx, out, o.Source); err != nil {
+					return err
+				}
+				shared = o.Source
 			}
-			if err := writeTree(out, gens); err != nil {
-				return err
+			if !kvListed(cfg) {
+				return nil
 			}
-			blobs, err := blobmirror.List(cmd.Context(), o.Source)
-			if err != nil {
+			points, err := kvPoints(ctx, &f, cfg, shared)
+			switch {
+			case err != nil && shared == nil:
 				return err
-			}
-			if err := writeBlobRows(out, blobs); err != nil {
-				return err
-			}
-			points, err := kvPoints(cmd.Context(), &f, o)
-			if err != nil {
-				return err
+			case err != nil:
+				return writeKVFailure(out, cmp.Or(f.from, kvTarget(cfg)), err)
 			}
 			return writeKVRows(out, points)
 		},
 	}
 	f.register(cmd)
 	return cmd
+}
+
+// writePlatformRows prints the generations and the blob mirror's rows of src.
+func writePlatformRows(ctx context.Context, out io.Writer, src blob.Bucket) error {
+	gens, err := restore.List(ctx, src)
+	if err != nil {
+		return err
+	}
+	if err := writeTree(out, gens); err != nil {
+		return err
+	}
+	blobs, err := blobmirror.List(ctx, src)
+	if err != nil {
+		return err
+	}
+	return writeBlobRows(out, blobs)
 }
 
 // writeTree prints a row per generation, each timeline indented under the generation its restore loaded; a
@@ -263,14 +288,14 @@ func newRestoreInspectCmd(out io.Writer) *cobra.Command {
 				return fault.Invalidf("funcd restore inspect", "unknown output %q (want yaml or json)", output)
 			}
 			ctx := cmd.Context()
+			if kv {
+				return inspectKV(ctx, out, &f, args[0], output)
+			}
 			o, done, err := f.open(ctx)
 			if err != nil {
 				return err
 			}
 			defer done()
-			if kv {
-				return inspectKV(ctx, out, &f, o, args[0], output)
-			}
 			if secretsKey != "" {
 				if o.SecretsKey, err = os.ReadFile(secretsKey); err != nil { //nolint:gosec // the operator's escrowed key file
 					return fault.Wrapf(err, fault.Invalid, "funcd restore inspect", "read --secrets-key %s", secretsKey)

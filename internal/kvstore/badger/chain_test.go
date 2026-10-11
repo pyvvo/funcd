@@ -563,3 +563,43 @@ func TestEveryTimestampUTCMillisecond(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(raw), "at: \"2026-10-07T20:03:35.965Z\"")
 }
+
+// readCountingBucket counts the List calls and the manifest reads on the embedded fake.
+type readCountingBucket struct {
+	*fakeBucket
+	lists, manifestGets atomic.Int32
+}
+
+func (r *readCountingBucket) List(ctx context.Context, prefix string) ([]blob.Attributes, error) {
+	r.lists.Add(1)
+	return r.fakeBucket.List(ctx, prefix)
+}
+
+func (r *readCountingBucket) Get(ctx context.Context, key string) ([]byte, error) {
+	if strings.HasSuffix(key, manifestName) {
+		r.manifestGets.Add(1)
+	}
+	return r.fakeBucket.Get(ctx, key)
+}
+
+// The seam's Restore lists kv/ once and reads each manifest once.
+func TestSeamRestoreReadsChainsOnce(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	bucket := &readCountingBucket{fakeBucket: newFakeBucket()}
+	src := openRawDB(t, t.TempDir())
+	bk := newExporter(t, src, bucket, BackupConfig{})
+	writeKeys(t, src, "base/", 10, 16)
+	require.NoError(t, bk.Rebaseline(ctx))
+	writeKeys(t, src, "inc/", 5, 16)
+	_, err := bk.Ship(ctx)
+	require.NoError(t, err)
+
+	bucket.lists.Store(0)
+	bucket.manifestGets.Store(0)
+	dst := restoreDB(t, bucket)
+	require.Equal(t, int32(1), bucket.lists.Load(), "List calls")
+	require.Equal(t, int32(2), bucket.manifestGets.Load(), "manifest reads (one base, one segment)")
+	require.Equal(t, 10, countKeys(dst, "base/"))
+	require.Equal(t, 5, countKeys(dst, "inc/"))
+}

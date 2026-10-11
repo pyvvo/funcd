@@ -168,6 +168,11 @@ func ListPoints(ctx context.Context, src blob.Bucket) ([]Point, error) {
 	if err != nil {
 		return nil, err
 	}
+	return points(chains), nil
+}
+
+// points is every point of chains, by chain then segment.
+func points(chains map[uint64]*chain) []Point {
 	var out []Point
 	for _, n := range slices.Sorted(maps.Keys(chains)) {
 		c := chains[n]
@@ -192,7 +197,7 @@ func ListPoints(ctx context.Context, src blob.Bucket) ([]Point, error) {
 			out = append(out, p)
 		}
 	}
-	return out, nil
+	return out
 }
 
 // RestoreDir restores point p of src into dir (Decision 6). Before any write it refuses a non-empty dir
@@ -248,13 +253,10 @@ func (b *exporter) Restore(ctx context.Context) error {
 		return err
 	}
 	var best *Point
-	points, err := ListPoints(ctx, b.bucket)
-	if err != nil {
-		return err
-	}
-	for i := range points {
-		if points[i].Restorable {
-			best = &points[i]
+	ps := points(chains)
+	for i := range ps {
+		if ps[i].Restorable {
+			best = &ps[i]
 		}
 	}
 	if best == nil {
