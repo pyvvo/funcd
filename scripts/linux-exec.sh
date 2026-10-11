@@ -10,7 +10,8 @@
 # One run at a time: the runs in the VM share runner's home directory and /tmp, and two at once failed each other's
 # tests. Every mode but --check holds the run lock, a flock on ~/.cache/funcd-lima/linux-tests.lock, waiting while
 # another run holds it. --run holds it for its whole command, whose test binaries then run at once, as `just test-linux`
-# and `just test-linux-e2e` do; a binary run without --run holds it alone.
+# and `just test-linux-e2e` do; a binary run without --run holds it alone. A run killed on the host leaves its test
+# binary running in the VM, so each take of the lock first kills what still runs there as runner: no run is active then.
 #
 # As the go test -exec program it gets <test binary> [flags] and runs the binary in the VM from the package directory
 # as `runner`, a non-root user with a supplementary group, as on CI's runner. The Go toolchain that built the binary
@@ -56,6 +57,15 @@ sys.exit(128 - rc if rc < 0 else rc)
 '
 
 running() { [ "$(limactl list --format '{{.Status}}' "$vm" 2>/dev/null)" = Running ]; }
+
+# sweep kills what still runs as runner in the VM. It runs once per take of the run lock, when no run is active, so what
+# it finds is what a run killed on the host left behind.
+sweep() {
+  command -v limactl >/dev/null && running || return 0
+  { limactl shell "$vm" sudo sh -c 'ps -o pid=,etime=,comm= -u runner && pkill -KILL -u runner' linux-exec-sweep |
+    awk '{ print "linux-exec: killed " $3 " (pid " $1 ", running " $2 "), left in the VM by a run killed on the host" }' >&2
+  } || true
+}
 
 # have_limactl fails, saying why, without limactl on PATH.
 have_limactl() {
@@ -110,7 +120,11 @@ fi
 checkout >/dev/null
 if [ -z "${FUNCD_LINUX_TESTS_LOCKED:-}" ]; then
   mkdir -p "$(dirname "$lock")"
-  FUNCD_LINUX_TESTS_LOCKED=1 exec python3 -c "$hold" "$lock" "$0" "$@"
+  FUNCD_LINUX_TESTS_LOCKED=1 FUNCD_LINUX_TESTS_SWEEP=1 exec python3 -c "$hold" "$lock" "$0" "$@"
+fi
+if [ -n "${FUNCD_LINUX_TESTS_SWEEP:-}" ]; then
+  unset FUNCD_LINUX_TESTS_SWEEP
+  sweep
 fi
 case ${1:-} in
 --boot)

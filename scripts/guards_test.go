@@ -393,7 +393,8 @@ func TestLinuxExecRefusesACheckoutOutsideHome(t *testing.T) {
 // linuxExecEnv is the environment of a linux-exec.sh test that gets past the checkout check: the checkout as $HOME, a
 // run lock of its own and no lock inherited from a --run this test may run under, a fake go whose toolchain module is in
 // a temp module cache, limactl as the fake limactl, and a sudo that runs its command as the caller, so a fake limactl
-// that runs its command here never reaches the host's sudo.
+// that runs its command here never reaches the host's sudo. Every fake limactl records the VM sweep in
+// $FUNCD_TEST_LIMACTL_LOG instead of running it: its pkill -u runner, run here, would kill CI's runner user.
 func linuxExecEnv(t *testing.T, limactl string) []string {
 	t.Helper()
 	root, err := filepath.Abs("..")
@@ -403,15 +404,17 @@ func linuxExecEnv(t *testing.T, limactl string) []string {
 	require.NoError(t, os.MkdirAll(toolchain, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(toolchain, "go"), nil, 0o755))
 	fake := t.TempDir()
+	sweep := `for a; do [ "$a" != linux-exec-sweep ] || { echo sweep >>"${FUNCD_TEST_LIMACTL_LOG:-/dev/null}"; exit; }; done`
 	for name, body := range map[string]string{
-		"limactl": limactl,
+		"limactl": sweep + "\n" + limactl,
 		"go":      `case $1 in version) printf 'x: go1.0\n\tbuild\tGOARCH=arm64\n' ;; env) echo "` + modcache + `" ;; esac`,
 		"sudo":    `shift 3; exec "$@"`,
 	} {
 		require.NoError(t, os.WriteFile(filepath.Join(fake, name), []byte("#!/bin/sh\n"+body+"\n"), 0o755))
 	}
 	return append(os.Environ(), "HOME="+root, "PATH="+fake+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"FUNCD_LINUX_TESTS_LOCK="+filepath.Join(t.TempDir(), "lock"), "FUNCD_LINUX_TESTS_LOCKED=")
+		"FUNCD_LINUX_TESTS_LOCK="+filepath.Join(t.TempDir(), "lock"), "FUNCD_LINUX_TESTS_LOCKED=",
+		"FUNCD_LINUX_TESTS_SWEEP=")
 }
 
 // testBinary is an empty stand-in for a test binary.
@@ -464,6 +467,37 @@ func TestLinuxExecRunsOneRunAtATime(t *testing.T) {
 	require.NoError(t, err, "the second run started before the first ended, or its nested run waited: %s", out)
 	require.Contains(t, string(out), "waiting for the run of pid")
 	require.NoError(t, first.Wait())
+}
+
+// A run killed on the host leaves its test binary running in the VM as runner, beside the next run: killing the host
+// side of a run (lock holder, linux-exec.sh, limactl shell, ssh) left the binary running there. Each take of the run
+// lock first kills what still runs as runner in the VM, once: the test binaries a --run then runs at once, which may
+// still be running, are never swept.
+func TestLinuxExecSweepsTheVMOncePerRunLock(t *testing.T) {
+	script, err := filepath.Abs("linux-exec.sh")
+	require.NoError(t, err)
+	log := filepath.Join(t.TempDir(), "limactl.log")
+	env := append(linuxExecEnv(t, `if [ "$1" = list ]; then echo Running; else echo run >>"$FUNCD_TEST_LIMACTL_LOG"; fi`),
+		"FUNCD_TEST_LIMACTL_LOG="+log)
+	bin := testBinary(t)
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "a binary run", args: []string{bin}, want: "sweep\nrun\n"},
+		{name: "a --run of two binaries", args: []string{"--run", "sh", "-c", `"$0" "$1" && "$0" "$1"`, script, bin},
+			want: "sweep\nrun\nrun\n"},
+	} {
+		require.NoError(t, os.WriteFile(log, nil, 0o600))
+		cmd := exec.Command(script, tc.args...)
+		cmd.Env = env
+		code, out := exitCode(t, cmd)
+		require.Equal(t, 0, code, "%s: %s", tc.name, out)
+		got, err := os.ReadFile(log)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, string(got), tc.name)
+	}
 }
 
 // A VM that has not finished booting is refused with the reason, instead of running a test as a runner user that its
