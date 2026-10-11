@@ -30,7 +30,7 @@ for spec in "$@"; do
   t0=$SECONDS
   if [ "$lane" = all ]; then recipe=(just lima-example-all); else recipe=(just lima-example "$lane"); fi
   if (cd "$wt" && scripts/agent/d "${recipe[@]}") >"$log" 2>&1; then r=PASS; else r=FAIL; fail=1; fi
-  echo "$spec @ $sha: $r ($((SECONDS - t0))s); $(grep -E 'final status|FAILED:|lane-lock' "$log" | tail -1)"
+  echo "$spec @ $sha: $r ($((SECONDS - t0))s); $(grep -E 'final status|FAILED:|lanes not run|lane-lock' "$log" | tail -1)"
   git -C "$root" worktree remove --force "$wt"
   wt=
 done
