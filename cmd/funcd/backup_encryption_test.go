@@ -110,9 +110,9 @@ func TestBackupEncryptionCheckedAtStart(t *testing.T) {
 	start := func(t *testing.T, cfg config.Config) (string, error) {
 		t.Helper()
 		logs := &bytes.Buffer{}
-		_, closeExec, _, _, err := buildOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(logs, nil)), nil)
+		opts, closeExec, _, _, err := buildOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(logs, nil)), nil)
 		if err == nil {
-			t.Cleanup(func() { _ = closeExec() })
+			t.Cleanup(func() { release(t, opts, closeExec) })
 		}
 		return logs.String(), err
 	}

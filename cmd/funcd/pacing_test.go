@@ -356,9 +356,7 @@ func TestScenarioHealthLivenessConfig(t *testing.T) {
 	require.ErrorContains(t, err, "runtime.supervisionPeriod, 10s")
 
 	cfg = loadPacing(t, "storage:\n  mode: memory\n  dataDir: \""+dir+"\"\nruntime:\n  livenessTimeout: 20s\n  supervisionPeriod: 10s\n")
-	_, closeExec, _, _, err := buildOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	opts, closeExec, _, _, err := buildOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
 	require.NoError(t, err, "exactly twice the period starts")
-	if closeExec != nil {
-		require.NoError(t, closeExec())
-	}
+	release(t, opts, closeExec)
 }

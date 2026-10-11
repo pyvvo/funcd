@@ -607,9 +607,9 @@ func TestIssue333_NegativeWorkflowEventingDurationRejected(t *testing.T) {
 		for _, k := range keys {
 			k.set(&cfg, "0s")
 		}
-		_, closeExec, _, _, err := buildOptions(context.Background(), cfg, root, nil)
+		opts, closeExec, _, _, err := buildOptions(context.Background(), cfg, root, nil)
 		require.NoError(t, err)
-		require.NoError(t, closeExec())
+		release(t, opts, closeExec)
 	})
 }
 
@@ -639,9 +639,9 @@ func TestIssue436_NegativeFunclogSegmentMaxAgeRejected(t *testing.T) {
 		t.Run("ok="+ok, func(t *testing.T) {
 			cfg := base
 			cfg.Funclog.SegmentMaxAge = ok
-			_, closeExec, _, _, err := buildOptions(context.Background(), cfg, root, nil)
+			opts, closeExec, _, _, err := buildOptions(context.Background(), cfg, root, nil)
 			require.NoError(t, err)
-			require.NoError(t, closeExec())
+			release(t, opts, closeExec)
 		})
 	}
 }
@@ -930,6 +930,34 @@ func TestExampleConfigResolves(t *testing.T) {
 
 // shortDataDir is a data dir for an assembled platform. Not t.TempDir(): on macOS its path overruns the Unix socket
 // path limit for <dataDir>/invoke, which startup rejects (issue #41).
+// release closes what a successful buildOptions opened. The platform owns the drivers, so it builds one from opts and
+// shuts it down, then closes the executor: a test that dropped opts left the in-memory bus running, with its JetStream
+// dir in TMPDIR.
+func release(t *testing.T, opts []funcd.Option, closeExec func() error) {
+	t.Helper()
+	p, err := funcd.New(opts...)
+	require.NoError(t, err)
+	require.NoError(t, p.Shutdown(context.Background()))
+	require.NoError(t, closeExec())
+}
+
+// A test that releases a successful buildOptions leaves no in-memory bus dir behind: twelve tests that dropped the
+// options left one each run, in the shared TMPDIR of the host or the Linux test VM.
+func TestReleaseLeavesNoBusDir(t *testing.T) {
+	dir := shortDataDir(t)
+	t.Setenv("TMPDIR", dir)
+	path := filepath.Join(dir, "funcdconfig.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("storage:\n  mode: memory\n  dataDir: \""+dir+"\"\n"), 0o600))
+	cfg, err := config.Load(path, config.Flags{})
+	require.NoError(t, err)
+	opts, closeExec, _, _, err := buildOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	require.NoError(t, err)
+	release(t, opts, closeExec)
+	left, err := filepath.Glob(filepath.Join(dir, "funcd-bus-mem-*"))
+	require.NoError(t, err)
+	require.Empty(t, left)
+}
+
 func shortDataDir(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "funcd")
@@ -959,9 +987,9 @@ func TestInvokeDefaultTimeoutNegativeRejected(t *testing.T) {
 	for _, ok := range []string{"", "0s", "90s"} {
 		cfg := base
 		cfg.Invoke.DefaultTimeout = ok
-		_, closeExec, _, _, err := buildOptions(context.Background(), cfg, root, nil)
+		opts, closeExec, _, _, err := buildOptions(context.Background(), cfg, root, nil)
 		require.NoError(t, err, ok)
-		require.NoError(t, closeExec())
+		release(t, opts, closeExec)
 	}
 }
 
@@ -988,9 +1016,9 @@ func TestGCSweepIntervalMustBePositive(t *testing.T) {
 	}
 	cfg := base
 	cfg.Controller.GCSweepInterval = "30s"
-	_, closeExec, _, _, err := buildOptions(context.Background(), cfg, root, nil)
+	opts, closeExec, _, _, err := buildOptions(context.Background(), cfg, root, nil)
 	require.NoError(t, err)
-	require.NoError(t, closeExec())
+	release(t, opts, closeExec)
 }
 
 // scenario: configured-backoff-honored (ADR-0160) — runtime.bootBackoffInitial 2s and runtime.bootBackoffMax 8s are
