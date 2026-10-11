@@ -124,16 +124,17 @@ func (a backupTTL) Admit(ctx context.Context, req Request) (v1.Object, error) {
 	return req.Object, nil
 }
 
-// --- restore-in-place (ADR-0222 Decisions 7, 10): Create on Restore ---------------------------------------------
+// --- restore-in-place (ADR-0222 Decisions 7, 10): Create and Delete on Restore ----------------------------------
 
 type restoreInPlace struct {
 	authz auth.Authorizer
 	r     StoreReader
 }
 
-// NewRestoreInPlaceAdmission returns the Validating admission of a Restore with an inPlace member: it authorizes
-// update on the Namespace (the built-in RBAC gives it to an admin only), and refuses it while another in-place Restore
-// of the namespace has not ended, since they would share the namespace's restore hold.
+// NewRestoreInPlaceAdmission returns the Validating admission of a Restore with an inPlace member: its create needs
+// update on the Namespace (the built-in RBAC gives it to an admin only) and is refused while another in-place Restore
+// of the namespace has not ended, since they would share the namespace's restore hold; its delete is refused until it
+// has ended, so the hold keeps the Restore that names it. It reads Request.Old on a delete.
 func NewRestoreInPlaceAdmission(authz auth.Authorizer, r StoreReader) Admission {
 	return restoreInPlace{authz: authz, r: r}
 }
@@ -145,11 +146,18 @@ func (restoreInPlace) Phase() Phase { return Validating }
 func (restoreInPlace) ReadsNamespace() bool { return true }
 
 func (restoreInPlace) Handles(gvk v1.GroupVersionKind, op Operation) bool {
-	return gvk == v1.KindRestore.GVK() && op == Create
+	return gvk == v1.KindRestore.GVK() && (op == Create || op == Delete)
 }
 
 func (a restoreInPlace) Admit(ctx context.Context, req Request) (v1.Object, error) {
 	const op = "admission.restore-in-place"
+	if req.Operation == Delete {
+		if old, ok := req.Old.(*v1.Restore); ok && old.InPlace() && !old.Ended() {
+			return nil, fault.Conflictf(op, "in-place Restore %s of namespace %q has not ended: delete it once it has",
+				old.Name, old.Namespace)
+		}
+		return req.Old, nil
+	}
 	r, ok := req.Object.(*v1.Restore)
 	if !ok || !r.InPlace() {
 		return req.Object, nil

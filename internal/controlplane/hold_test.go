@@ -218,3 +218,49 @@ func TestRestoreInPlaceOnePerNamespace(t *testing.T) {
 	rec = create("second", inPlace)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 }
+
+// TestRestoreInPlaceDeleteWaitsForEnd (ADR-0222 Decision 7): an in-place Restore that is Running cannot be deleted, a
+// Conflict naming it; a Restore into a new name deletes; once the in-place one has failed it deletes.
+func TestRestoreInPlaceDeleteWaitsForEnd(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := store.New(memory.New())
+	authz := rbac.New()
+	srv, err := controlplane.NewServer(controlplane.Deps{
+		Store: st, Authorizer: authz,
+		Credentials: middleware.NewStaticCredentials(map[string]auth.Identity{adminToken: {Subject: "ops", Role: auth.RoleAdmin}}),
+		Admissions:  []admission.Admission{admission.NewRestoreInPlaceAdmission(authz, raceReader{st})},
+	})
+	require.NoError(t, err)
+	const restores = "/apis/funcd.io/v1alpha1/namespaces/orders/restores"
+	setPhase := func(name v1.ObjectName, phase v1.RunPhase) {
+		obj, err := st.Get(ctx, v1.KindRestore.GVK(), "orders", name)
+		require.NoError(t, err)
+		rs := obj.(*v1.Restore)
+		rs.Status.Phase = phase
+		_, err = st.Update(ctx, rs)
+		require.NoError(t, err)
+	}
+	for name, m := range map[v1.ObjectName]v1.RestoreMember{
+		"rewind": {Kind: v1.KindKVStore, Name: "state", InPlace: true},
+		"copy":   {Kind: v1.KindKVStore, Name: "state", As: "state-r"},
+	} {
+		body, err := json.Marshal(restoreOf(name, m))
+		require.NoError(t, err)
+		rec := do(t, srv, http.MethodPost, restores, adminToken, body)
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		setPhase(name, v1.RunRunning)
+	}
+
+	rec := do(t, srv, http.MethodDelete, restores+"/rewind", adminToken, nil)
+	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), "Restore rewind")
+	rec = do(t, srv, http.MethodDelete, restores+"/copy", adminToken, nil)
+	require.Less(t, rec.Code, 300, "a Restore into a new name is unaffected: %s", rec.Body)
+
+	setPhase("rewind", v1.RunFailed)
+	rec = do(t, srv, http.MethodDelete, restores+"/rewind", adminToken, nil)
+	require.Less(t, rec.Code, 300, rec.Body.String())
+	_, err = st.Get(ctx, v1.KindRestore.GVK(), "orders", "rewind")
+	require.Equal(t, fault.NotFound, fault.KindOf(err))
+}
