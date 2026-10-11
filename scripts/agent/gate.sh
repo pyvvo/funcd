@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# gate.sh — every repo-wide check, once, for a branch that is ready to PR: a host check that stops early when the
-# ephemeral ports are nearly used up (scripts/agent/host-check.sh), the bloat audit of the branch's diff
+# gate.sh — every repo-wide check, once, for a branch that is ready to PR: a host check that kills the caller's test
+# binaries left running 30 minutes without a parent and stops early when the ephemeral ports are nearly used up
+# (scripts/agent/host-check.sh), the bloat audit of the branch's diff
 # against origin/main (scripts/agent/audit.py, report in .cache/gate/audit.log), `just ci-full` (the canonical CI
 # set, e2e included), the Linux build/vet/lint, the Linux-specific tests in the funcd-linux-tests Lima VM (`just
 # test-linux`; a SKIP line instead when limactl is missing, the VM is not running or the checkout is outside $HOME),

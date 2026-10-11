@@ -343,7 +343,10 @@ rules that did it:
   connection per request, exhaust the ~16k ephemeral ports ("connect: can't assign requested address"; count
   `TIME_WAIT` with `netstat -an`). Run at most two gates at once, rerun only the step that failed for the
   environment, and keep probes to a few thousand keep-alive connections. `scripts/agent/gate.sh` stops first when
-  the host has more than 8000 sockets in `TIME_WAIT` (`scripts/agent/host-check.sh`).
+  the host has more than 8000 sockets in `TIME_WAIT` (`scripts/agent/host-check.sh`). That check first SIGKILLs your
+  test binaries that have run 30 minutes without a parent: a go test killed from outside leaves its binary running.
+  A test of anything that kills processes lets it see only the test's own (a `ps` shim, as `scripts/guards_test.go`
+  does): a mutant run against the real process list once killed every app of the user.
 - **Group PRs of one wave conflict with each other.** Before queueing any of them, run
   `scripts/agent/wave-check.sh <branch>...` on all of the wave's group branches, in queue order: it names each branch
   that conflicts with the ones before it (rebase it on them) and, when none conflicts, gates the merged wave once.

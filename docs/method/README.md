@@ -170,6 +170,8 @@ lesson is now enforced (tracker #567):
 | Parallel agents share `refs/stash`, and one agent's pop lost another's fix | A Claude Code hook ([`.claude/settings.json`](../../.claude/settings.json)) refuses a command that changes the stash |
 | Two Lima VMs collided on the same forwarded ports | Every Lima recipe takes a host lock first (`scripts/lane-lock.sh`) |
 | A stress loop exhausted the host's ephemeral ports, and gates failed in confusing ways | The gate stops first when too many sockets wait in `TIME_WAIT` (`scripts/agent/host-check.sh`) |
+| A go test killed by a tool's timeout left its test binary spinning for hours | The gate's host check SIGKILLs the caller's test binaries that have run 30 minutes without a parent |
+| A mutant of that check, run against the real process list, killed every app of the user | Its tests give it a `ps` that lists only the test's own processes |
 | Group PRs of one wave conflicted with each other at merge time | `scripts/agent/wave-check.sh` merges and gates a wave's branches together before any is queued |
 | A test that closed the process-wide HTTP transport broke other tests | A lint rule bans the shared `http.DefaultClient` and `http.DefaultTransport`; callers use `internal/platform/httpx` |
 | A committed archive carried a local owner name | A test reads every committed archive and fails on owner names or macOS metadata |

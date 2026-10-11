@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -288,9 +290,11 @@ func TestIssue576_LaneLockReportsItsGuard(t *testing.T) {
 func TestIssue562_HostCheckStopsOnTimeWait(t *testing.T) {
 	check, err := filepath.Abs(filepath.Join("agent", "host-check.sh"))
 	require.NoError(t, err)
+	noProcesses := confinedPS(t, "")
 	run := func(name, count string) (int, string) {
 		cmd := exec.Command(name)
-		cmd.Env = append(os.Environ(), "FUNCD_TIME_WAIT_COUNT="+count, "FUNCD_GATE_MAX_TIME_WAIT=8000")
+		cmd.Env = append(os.Environ(), "FUNCD_TIME_WAIT_COUNT="+count, "FUNCD_GATE_MAX_TIME_WAIT=8000",
+			"PATH="+noProcesses+string(os.PathListSeparator)+os.Getenv("PATH"))
 		return exitCode(t, cmd)
 	}
 	code, out := run(check, "9000")
@@ -305,6 +309,185 @@ func TestIssue562_HostCheckStopsOnTimeWait(t *testing.T) {
 	require.Equal(t, 1, code, out)
 	require.Contains(t, out, "GATE FAIL")
 	require.NotContains(t, out, "audit", "the gate stops before its first step")
+}
+
+// standInEnv makes the test binary stand in for a hung test binary (TestMain): it ignores SIGTERM, as the binary the
+// gate's host check was written for did, writes the file the variable names and sleeps.
+const standInEnv = "FUNCD_SCRIPTS_STAND_IN"
+
+func TestMain(m *testing.M) {
+	if ready := os.Getenv(standInEnv); ready != "" {
+		signal.Ignore(syscall.SIGTERM)
+		if os.WriteFile(ready, nil, 0o600) != nil {
+			os.Exit(2)
+		}
+		time.Sleep(10 * time.Minute)
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+// standIn links name to the test binary, so ps shows that name, and returns the link, the environment that runs it as
+// a hung test binary, and a wait that returns once the stand-in ignores SIGTERM.
+func standIn(t *testing.T, name string) (string, []string, func()) {
+	t.Helper()
+	exe, err := os.Executable()
+	require.NoError(t, err)
+	dir := t.TempDir()
+	link, ready := filepath.Join(dir, name), filepath.Join(dir, "ready")
+	require.NoError(t, os.Symlink(exe, link))
+	return link, append(os.Environ(), standInEnv+"="+ready), func() {
+		t.Helper()
+		require.Eventually(t, func() bool {
+			_, err := os.Stat(ready)
+			return err == nil
+		}, 10*time.Second, 20*time.Millisecond, "%s starts", name)
+	}
+}
+
+// startStandIn starts a stand-in as the test's child and returns it with a channel closed once it has exited.
+func startStandIn(t *testing.T, name string) (*exec.Cmd, <-chan struct{}) {
+	t.Helper()
+	link, env, wait := standIn(t, name)
+	cmd := exec.Command(link)
+	cmd.Env = env
+	require.NoError(t, cmd.Start())
+	exited := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(exited)
+	}()
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		<-exited
+	})
+	wait()
+	return cmd, exited
+}
+
+// confinedPS returns a directory whose ps prints only the lines of the host's ps that contain marker, none for an
+// empty marker. First on PATH, it keeps a host check under test, even a broken one, from seeing any process but the
+// test's own: a mutant without the name filter, run against the real ps, killed every process of the user whose
+// parent was launchd.
+func confinedPS(t *testing.T, marker string) string {
+	t.Helper()
+	ps, err := exec.LookPath("ps")
+	require.NoError(t, err)
+	require.NotContains(t, ps+marker, "'")
+	body := "#!/bin/sh\n"
+	if marker != "" {
+		body += "'" + ps + `' "$@" | grep -F -e '` + marker + "'\n"
+	}
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "ps"), []byte(body), 0o755))
+	return dir
+}
+
+// hostCheck runs the gate's host check with the ps in psDir first on PATH and env, and returns its output; it passes.
+func hostCheck(t *testing.T, psDir string, env ...string) string {
+	t.Helper()
+	check, err := filepath.Abs(filepath.Join("agent", "host-check.sh"))
+	require.NoError(t, err)
+	cmd := exec.Command(check)
+	cmd.Env = append(append(os.Environ(), "FUNCD_TIME_WAIT_COUNT=0",
+		"PATH="+psDir+string(os.PathListSeparator)+os.Getenv("PATH")), env...)
+	code, out := exitCode(t, cmd)
+	require.Equal(t, 0, code, out)
+	return out
+}
+
+func orphanKilled(pid int) string { return fmt.Sprintf("killed orphaned test binary %d (", pid) }
+
+// A test binary that a killed go test left running, adopted by launchd or init (parent 1), gets SIGKILL from the
+// gate's host check once it has run FUNCD_GATE_ORPHAN_TEST_MINUTES: a hung one keeps a core busy for hours and may
+// ignore SIGTERM. A test binary whose parent lives, as one that go test still runs, is left alone.
+func TestHostCheckKillsOrphanedTestBinaries(t *testing.T) {
+	suffix := fmt.Sprintf("-hostcheck%d.test", os.Getpid())
+	child, exited := startStandIn(t, "child"+suffix)
+	link, env, wait := standIn(t, "orphan"+suffix)
+	sh := exec.Command("sh", "-c", `"$0" >/dev/null 2>&1 & echo $!`, link)
+	sh.Env = env
+	out, err := sh.Output()
+	require.NoError(t, err)
+	pid, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	require.NoError(t, err)
+	gone := false
+	t.Cleanup(func() {
+		if !gone {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	})
+	wait()
+	parent, err := exec.Command("ps", "-o", "ppid=", "-p", strconv.Itoa(pid)).Output()
+	require.NoError(t, err)
+	if p := strings.TrimSpace(string(parent)); p != "1" || os.Getpid() == 1 {
+		t.Skipf("the orphan's parent is %s: a subreaper adopted it, or the test is pid 1 and would not reap it", p)
+	}
+
+	report := hostCheck(t, confinedPS(t, suffix), "FUNCD_GATE_ORPHAN_TEST_MINUTES=0",
+		"FUNCD_ORPHAN_TEST_SUFFIX="+suffix)
+	require.Contains(t, report, orphanKilled(pid))
+	require.Eventually(t, func() bool { return syscall.Kill(pid, 0) != nil }, 5*time.Second, 20*time.Millisecond,
+		"the orphan is gone, although it ignores SIGTERM")
+	gone = true
+	require.NotContains(t, report, orphanKilled(child.Process.Pid))
+	select {
+	case <-exited:
+		t.Fatal("the host check killed a test binary whose parent lives")
+	default:
+	}
+}
+
+// The host check kills a parentless test binary only once it has run FUNCD_GATE_ORPHAN_TEST_MINUTES (30 by default),
+// reading each form of ps's elapsed time, and passes over another user's process, a command that is no test binary
+// and a line it cannot read. A ps first on PATH lists the test's own stand-ins as parentless, with the ages below.
+func TestHostCheckKillsOrphansPastTheAgeLimit(t *testing.T) {
+	suffix := fmt.Sprintf("-hostcheck%d.test", os.Getpid())
+	uid := os.Geteuid()
+	rows := []struct {
+		name, age string
+		uid       int
+		killed    bool
+	}{
+		{"garbled" + suffix, "-5:00", uid, false},
+		{"young" + suffix, "29:59", uid, false},
+		{"minutes" + suffix, "30:00", uid, true},
+		{"hours" + suffix, "08:09:10", uid, true},
+		{"days" + suffix, "09-00:00:00", uid, true},
+		{"other-user" + suffix, "09-00:00:00", uid + 1, false},
+		{"not-a-test-binary", "09-00:00:00", uid, false},
+	}
+	ps := "#!/bin/sh\ncat <<'EOF'\n"
+	procs := make([]*exec.Cmd, len(rows))
+	exited := make([]<-chan struct{}, len(rows))
+	for i, r := range rows {
+		procs[i], exited[i] = startStandIn(t, r.name)
+		ps += fmt.Sprintf("%d %d 1 %s %s\n", r.uid, procs[i].Process.Pid, r.age, procs[i].Path)
+	}
+	fake := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(fake, "ps"), []byte(ps+"EOF\n"), 0o755))
+
+	report := hostCheck(t, fake, "FUNCD_GATE_ORPHAN_TEST_MINUTES=", "FUNCD_ORPHAN_TEST_SUFFIX="+suffix)
+	for i, r := range rows {
+		if r.killed {
+			require.Contains(t, report, orphanKilled(procs[i].Process.Pid), r.name)
+			select {
+			case <-exited[i]:
+			case <-time.After(5 * time.Second):
+				t.Fatalf("%s outlived its SIGKILL", r.name)
+			}
+		}
+	}
+	for i, r := range rows {
+		if !r.killed {
+			require.NotContains(t, report, orphanKilled(procs[i].Process.Pid), r.name)
+			select {
+			case <-exited[i]:
+				t.Fatalf("the host check killed %s", r.name)
+			default:
+			}
+		}
+	}
 }
 
 // The wave check names a branch that conflicts with the ones merged before it and a branch that does not exist,
