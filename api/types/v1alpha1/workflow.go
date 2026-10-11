@@ -491,7 +491,7 @@ func (w *Workflow) validateOnFailure(op string, names map[ObjectName]bool) error
 }
 
 // validateOwnedStores checks each owned store's name is used once, since each entry is materialized as the KVStore
-// of that name, and each table owner names a step.
+// of that name, that each table owner names a step, and that the tables pass the KVStore's own table checks.
 func (w *Workflow) validateOwnedStores(op string, names map[ObjectName]bool) error {
 	seen := make(map[ObjectName]int, len(w.Spec.KV))
 	for i := range w.Spec.KV {
