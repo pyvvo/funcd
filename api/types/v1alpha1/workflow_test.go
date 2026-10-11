@@ -198,3 +198,23 @@ func TestWorkflowPoolingMode(t *testing.T) {
 		t.Fatalf("valid pooling config rejected: %v", err)
 	}
 }
+
+// Issue #927: the materializer writes one KVStore per spec.kv entry in turn, so two entries with one name would
+// rewrite one store on every pass.
+func TestIssue927_ValidateRefusesRepeatedKVName(t *testing.T) {
+	w := newWorkflow(WorkflowSpec{
+		Steps: []WorkflowStep{imgStep("s")},
+		KV: []WorkflowKVStore{
+			{Name: "cache", Tables: []KVTable{{Name: "a", Owner: "s"}}},
+			{Name: "cache", Tables: []KVTable{{Name: "b", Owner: "s"}}},
+		},
+	})
+	err := w.Validate()
+	if want := `spec.kv[1].name repeats the name "cache" of spec.kv[0]`; err == nil || fault.KindOf(err) != fault.Invalid || !strings.Contains(err.Error(), want) {
+		t.Fatalf("Validate() = %v, want an Invalid error containing %q", err, want)
+	}
+	w.Spec.KV[1].Name = "store"
+	if err := w.Validate(); err != nil {
+		t.Fatalf("two stores of distinct names rejected: %v", err)
+	}
+}
