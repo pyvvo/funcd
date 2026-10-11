@@ -161,6 +161,8 @@ type Config struct {
 			Daily    int `json:"daily,omitempty" env:"FUNCD_BACKUP_RETENTION_DAILY"`
 			Weekly   int `json:"weekly,omitempty" env:"FUNCD_BACKUP_RETENTION_WEEKLY"`
 			Verified int `json:"verified,omitempty" env:"FUNCD_BACKUP_RETENTION_VERIFIED"`
+			// PreUpgrade is the complete pre-upgrade generations funcd upgrade keeps listing as kept (ADR-0207).
+			PreUpgrade int `json:"preUpgrade,omitempty" env:"FUNCD_BACKUP_RETENTION_PRE_UPGRADE"`
 		} `json:"retention,omitempty"`
 		// Encryption seals every generation to age recipients (ADR-0204): Recipients are paths of recipients files;
 		// None is the explicit choice to store the files unsealed.
@@ -175,6 +177,14 @@ type Config struct {
 			RPO string `json:"rpo,omitempty" env:"FUNCD_BACKUP_OBJECTIVES_RPO"`
 		} `json:"objectives,omitempty"`
 	} `json:"backup,omitempty"`
+	// Recovery is safe mode (ADR-0207): AfterCrashes unclean starts in a row start held, twice it stop with exit
+	// status 70; StableAfter is the continuous run that makes a start clean. Both are checked in cmd/funcd.
+	Recovery struct {
+		SafeMode struct {
+			AfterCrashes int    `json:"afterCrashes,omitempty" env:"FUNCD_RECOVERY_SAFE_MODE_AFTER_CRASHES"`
+			StableAfter  string `json:"stableAfter,omitempty" env:"FUNCD_RECOVERY_SAFE_MODE_STABLE_AFTER"`
+		} `json:"safeMode,omitempty"`
+	} `json:"recovery,omitempty"`
 	Auth struct {
 		Token      string   `json:"token,omitempty" env:"FUNCD_TOKEN"`
 		Namespaces []string `json:"namespaces,omitempty" env:"FUNCD_AUTH_NAMESPACES" envSeparator:","`
@@ -414,6 +424,11 @@ func defaults() Config {
 	c.Backup.Retention.Daily = 30
 	c.Backup.Retention.Weekly = 12
 	c.Backup.Retention.Verified = 2
+	// funcd upgrade's pre-upgrade pins kept (ADR-0207, Q10).
+	c.Backup.Retention.PreUpgrade = 3
+	// Safe mode (ADR-0207): held after 3 unclean starts, stopped after 6; a start is clean after 10 minutes.
+	c.Recovery.SafeMode.AfterCrashes = 3
+	c.Recovery.SafeMode.StableAfter = "10m"
 	// Platform backup runs (ADR-0205): one an hour, a retry 5 minutes after a failure, rpoRisk past 2 hours.
 	c.Backup.Interval = v1.Duration(defaultBackupInterval).String()
 	c.Backup.RetryInterval = v1.Duration(defaultBackupRetryInterval).String()

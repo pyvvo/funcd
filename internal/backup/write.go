@@ -64,7 +64,7 @@ func (t *target) Write(ctx context.Context, events, meta, runs snapshot.Source, 
 	if class == "" {
 		class = ClassFor(entries(objs), at, t.cfg.Retention)
 	}
-	dir := genDir(class, n, v.Timeline)
+	dir := GenDir(class, n, v.Timeline)
 	put := map[string]bool{}
 	files := make([]StoreFile, 0, len(stores))
 	buf := make([]byte, partBytes)
@@ -108,7 +108,7 @@ func (t *target) refuse(ctx context.Context, f fence, objs []object, key string)
 	if !f.complete(objs) {
 		return err
 	}
-	if perr := t.put(ctx, genDir(Hourly, f.n, f.timeline)+refusedName, nil); perr != nil {
+	if perr := t.put(ctx, GenDir(Hourly, f.n, f.timeline)+refusedName, nil); perr != nil {
 		return errors.Join(err, perr)
 	}
 	return err

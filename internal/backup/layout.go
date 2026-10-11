@@ -29,8 +29,8 @@ const (
 	partBytes    = 8 << 20
 )
 
-// genDir is a generation's directory, gen/<class>/<n>-<timeline>/, n in 10 decimal digits.
-func genDir(class Class, n uint64, timeline string) string {
+// GenDir is a generation's directory, gen/<class>/<n>-<timeline>/, n in 10 decimal digits.
+func GenDir(class Class, n uint64, timeline string) string {
 	return fmt.Sprintf("%s%s/%010d-%s/", genPrefix, class, n, timeline)
 }
 

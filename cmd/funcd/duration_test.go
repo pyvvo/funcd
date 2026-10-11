@@ -27,7 +27,7 @@ func TestScenarioConfigSharesGrammar(t *testing.T) {
 	} {
 		t.Run(c.key+"="+c.value, func(t *testing.T) {
 			cfg := loadPacing(t, "storage:\n  mode: memory\n  dataDir: \""+shortDataDir(t)+"\"\n"+pacingYAML(c.key, c.value))
-			_, _, _, _, err := buildOptions(context.Background(), cfg, root)
+			_, _, _, _, err := buildOptions(context.Background(), cfg, root, nil)
 			require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
 			require.ErrorContains(t, err, `config key "`+c.key+`"`)
 			require.ErrorContains(t, err, c.want)

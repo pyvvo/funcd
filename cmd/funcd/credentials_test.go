@@ -363,7 +363,7 @@ func requireRefused(t *testing.T, c startCase, log *syncBuf) error {
 	dataDir := shortDataDir(t)
 	cfg, err := loadConfig(t, dataDir, c.body)
 	if err == nil {
-		_, _, _, _, err = buildOptions(context.Background(), cfg, debugLogger(log))
+		_, _, _, _, err = buildOptions(context.Background(), cfg, debugLogger(log), nil)
 	}
 	require.Error(t, err)
 	require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)

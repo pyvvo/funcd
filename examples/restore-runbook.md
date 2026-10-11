@@ -47,6 +47,41 @@ To bring back one object, `funcd restore inspect <point> --object Secret/<ns>/<n
 --reveal-secrets > s.yaml`, then `funcdctl apply -f s.yaml`. Without `--reveal-secrets` Secret values print as
 `REDACTED`.
 
+## Roll back an upgrade
+
+`funcd upgrade` (ADR-0207) wrote a `pre-upgrade` generation with the old version and printed it as
+`<timeline>/<n>`; `upgrade.generation` in `<dataDir>/safemode.json` keeps it. Restore that generation, not the point
+`pre-upgrade`, whose newest may be an older upgrade's. Every write after the pin is lost, and KV and blob data are
+outside it: a release that migrates them says how it rolls back.
+
+1. `sudo systemctl stop funcd`.
+2. Move the metastore, workflow and dead-letter directories aside (`<dataDir>/store`, `workflow`, `deadletter`).
+3. Restore with the old binary, which reads what it wrote (a newer minor's generation it refuses, ADR-0206):
+
+   ```sh
+   sudo <path>.previous restore run <timeline>/<n> --credentials-file <restore credential> \
+     --identity recovery.key --escrow /mnt/escrow
+   ```
+
+4. Install the old binary: `sudo mv <path>.previous <path>`.
+5. After a stopped start (exit status 70, below), `sudo funcd safe-mode reset`.
+6. Start funcd: it boots held. Verify with `funcdctl hold status`, then `funcdctl hold release`.
+
+## Crash loop (safe mode)
+
+funcd counts its unclean starts in `<dataDir>/safemode.json` (ADR-0207): a start is clean once it ran
+`recovery.safeMode.stableAfter` (10 minutes) or stopped on a signal. A fault outside a runner, such as a taken port,
+counts like a crash.
+
+- After `recovery.safeMode.afterCrashes` (3) unclean starts in a row, funcd starts held, marker reason `safe-mode`, and
+  logs an error naming the count and the last error. A loop born in a timer, a Sensor, a run or a backup stops there.
+  Fix the cause, then `funcdctl hold release`; the count clears after `stableAfter`.
+- After twice as many, funcd exits with status 70 before it opens a store, and the unit does not restart it
+  (`RestartPreventExitStatus=70`). The error names the next step: the rollback above to `upgrade.generation` when the
+  loop follows `funcd upgrade` to this version; else `funcd restore run verified` into directories moved aside ("no
+  way back" after a `--no-snapshot` upgrade). Then `funcd safe-mode reset` clears the count and keeps the marker, so
+  the next start is held.
+
 ## The first drill
 
 Run the drill on a scratch node before relying on a backup:

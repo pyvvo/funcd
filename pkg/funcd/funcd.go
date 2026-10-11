@@ -35,6 +35,7 @@ import (
 	"github.com/pyvvo/funcd/internal/auth"
 	cedarauth "github.com/pyvvo/funcd/internal/auth/cedar"
 	"github.com/pyvvo/funcd/internal/auth/rbac"
+	"github.com/pyvvo/funcd/internal/backup"
 	"github.com/pyvvo/funcd/internal/backup/runner"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
@@ -311,6 +312,8 @@ type config struct {
 
 	// backupRunner is the platform backup runner (ADR-0205, WithPlatformBackup); nil ⇒ none.
 	backupRunner *runner.Runner
+	// backupParent is the generation a restore loaded (WithBackupParent); nil ⇒ none.
+	backupParent *backup.GenRef
 }
 
 // gate is the hold every side-effect runner asks (ADR-0206 Decision 6): hold.Never without WithHold.
@@ -1167,7 +1170,7 @@ func (p *Platform) buildControlPlane() error {
 	// ADR-0205: the platform backup cuts the event store, the metastore and the run state.
 	var backupStatus controlplane.BackupStatuser
 	if c.backupRunner != nil {
-		if err := c.backupRunner.Bind(runner.Inputs{Events: p.eventStore, Meta: c.store, Runs: runs}); err != nil {
+		if err := c.backupRunner.Bind(runner.Inputs{Events: p.eventStore, Meta: c.store, Runs: runs, Parent: c.backupParent}); err != nil {
 			return fault.Wrapf(err, fault.KindOf(err), op, "bind the platform backup")
 		}
 		backupStatus = c.backupRunner

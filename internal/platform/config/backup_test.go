@@ -95,6 +95,12 @@ func TestCheckBackupRules(t *testing.T) {
 		{"retention out of range", func(c *config.Config) {
 			c.Backup.Retention.Hourly, c.Backup.Retention.Daily, c.Backup.Retention.Weekly, c.Backup.Retention.Verified = 0, -1, -1, 0
 		}, []finding{{"backup.retention.hourly", true}, {"backup.retention.daily", true}, {"backup.retention.weekly", true}, {"backup.retention.verified", true}}},
+		{"no pre-upgrade pin kept", func(c *config.Config) { c.Backup.Retention.PreUpgrade = 0 },
+			[]finding{{"backup.retention.preUpgrade", true}}},
+		{"preUpgrade without a target", func(c *config.Config) {
+			c.Backup.Target, c.Backup.Encryption.Recipients = "", nil
+			c.Backup.Retention.PreUpgrade = 5
+		}, []finding{{"backup.retention.preUpgrade", false}}},
 		{"no recipients", func(c *config.Config) { c.Backup.Encryption.Recipients = nil }, []finding{{"backup.encryption.recipients", true}}},
 		{"none beside recipients", func(c *config.Config) { c.Backup.Encryption.None = true }, []finding{{"backup.encryption.none", true}}},
 		{"none without a secrets key", func(c *config.Config) {

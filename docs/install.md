@@ -37,7 +37,8 @@ systemctl status funcd
 journalctl -u funcd -f             # structured slog output
 ```
 
-The unit runs as the unprivileged `funcd` user, restarts on failure, and ships hardened
+The unit runs as the unprivileged `funcd` user, restarts on failure except safe mode's exit status 70 (ADR-0207,
+`examples/restore-runbook.md`), and ships hardened
 (`NoNewPrivileges`, `ProtectSystem=strict`, `PrivateTmp`, …). The function-worker lane
 (F12/F13) later adds `CAP_NET_ADMIN` for netns wiring — see the comment in the unit.
 
@@ -52,6 +53,27 @@ Use the CLI (built alongside via `go build ./cmd/funcdctl`, ADR-0024):
 ```sh
 funcdctl --server http://localhost:8080 get functions -n default
 ```
+
+## Upgrade
+
+Run the upgrade with the installed binary, as root (ADR-0207):
+
+```sh
+sudo funcd upgrade ./funcd-<new version>
+```
+
+It runs `<new binary> version` and refuses an older release, checks that `--unit` (default `funcd.service`) runs this
+binary, and stops the unit. It then writes a `pre-upgrade` backup generation of the metastore, run state and event
+store, which this version can restore (the platform backup must be on: `backup.target`). It installs the new binary,
+keeping the old one at `<path>.previous`, records the upgrade in `<dataDir>/safemode.json` and starts the unit. It
+prints the generation as `<timeline>/<n>`: the way back (`examples/restore-runbook.md`, "Roll back an upgrade").
+
+- A failure before the swap starts the old binary again; a held platform is refused until `funcdctl hold release`.
+- `--config` must name the daemon's config: the unit may set `FUNCD_DATA_DIR`, and this shell may not.
+- `--unit ""` leaves stopping and starting funcd to you; a funcd still running is then refused.
+- `--no-snapshot` upgrades without a generation, so without a way back.
+- funcd deletes no pin: it lists those older than the newest `backup.retention.preUpgrade` (3) with their prune
+  command (`examples/backup-lifecycle.md`).
 
 ## Uninstall
 

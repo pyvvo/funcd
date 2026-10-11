@@ -2,10 +2,14 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/pyvvo/funcd/internal/safemode"
 )
 
 // scenario: one-service-install — `funcd install --print` emits a valid, version-stamped
@@ -65,5 +69,53 @@ func TestInstallPrintIsVersionStamped(t *testing.T) {
 	// way the stamp line must be present (proving the template wired version.Get()).
 	if !strings.Contains(unit, "version ") {
 		t.Fatalf("unit not version-stamped:\n%s", unit)
+	}
+}
+
+// TestUnitsPreventRestartOn70: both units stop restarting on safe mode's exit status 70 (ADR-0207 Decision 5).
+func TestUnitsPreventRestartOn70(t *testing.T) {
+	unit, err := renderUnit()
+	if err != nil {
+		t.Fatalf("renderUnit: %v", err)
+	}
+	repo, err := os.ReadFile(filepath.Join(repoRoot(t), "configs/systemd/funcd.service"))
+	if err != nil {
+		t.Fatalf("read the repo unit: %v", err)
+	}
+	for name, text := range map[string]string{"funcd install": unit, "configs/systemd/funcd.service": string(repo)} {
+		if want := fmt.Sprintf("\nRestartPreventExitStatus=%d\n", safemode.ExitStopped); !strings.Contains(text, want) {
+			t.Fatalf("%s lacks %q:\n%s", name, strings.TrimSpace(want), text)
+		}
+	}
+}
+
+// TestUnitGateHint: off Linux or without root, install and uninstall point at the --print dry-run; upgrade --unit,
+// which has no --print, does not.
+func TestUnitGateHint(t *testing.T) {
+	if runtime.GOOS == "linux" && os.Geteuid() == 0 {
+		t.Skip("as root on Linux the gate passes and the commands would manage the real unit")
+	}
+	cfg := filepath.Join(t.TempDir(), "funcdconfig.yaml")
+	if err := os.WriteFile(cfg, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		args []string
+		hint bool
+	}{
+		{[]string{"install"}, true},
+		{[]string{"uninstall"}, true},
+		{[]string{"upgrade", "funcd-new", "--config", cfg}, false},
+	} {
+		cmd := newRootCmd(&bytes.Buffer{})
+		cmd.SetArgs(tc.args)
+		cmd.SilenceErrors, cmd.SilenceUsage = true, true
+		err := cmd.Execute()
+		if err == nil || !strings.Contains(err.Error(), "manages a systemd unit") {
+			t.Fatalf("%v: want the Linux/root gate, got %v", tc.args, err)
+		}
+		if got := strings.Contains(err.Error(), "--print"); got != tc.hint {
+			t.Fatalf("%v: names --print = %v, want %v: %v", tc.args, got, tc.hint, err)
+		}
 	}
 }

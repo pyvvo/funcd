@@ -34,7 +34,6 @@ import (
 	"github.com/pyvvo/funcd/internal/backup/runner"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
-	"github.com/pyvvo/funcd/internal/blob/s3gateway"
 	"github.com/pyvvo/funcd/internal/bus"
 	"github.com/pyvvo/funcd/internal/bus/nats"
 	"github.com/pyvvo/funcd/internal/edge/limit"
@@ -50,10 +49,12 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/observability"
 	"github.com/pyvvo/funcd/internal/platform/stopsignal"
 	"github.com/pyvvo/funcd/internal/platform/version"
+	"github.com/pyvvo/funcd/internal/restore"
 	fnruntime "github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/containerd"
 	"github.com/pyvvo/funcd/internal/runtime/ctrmanager"
 	"github.com/pyvvo/funcd/internal/runtime/process"
+	"github.com/pyvvo/funcd/internal/safemode"
 	"github.com/pyvvo/funcd/internal/secrets/aesgcm"
 	"github.com/pyvvo/funcd/internal/store"
 	badgerstore "github.com/pyvvo/funcd/internal/store/badger"
@@ -66,12 +67,22 @@ func main() {
 		if !errors.As(err, new(loggedError)) {
 			slog.Error("funcd", "error", err) // failed before the configured logger existed
 		}
-		os.Exit(1)
+		os.Exit(exitCode(err))
 	}
+}
+
+// exitCode is safe mode's status for a stopped start (ADR-0207 Decision 4), which the units do not restart, else 1.
+func exitCode(err error) int {
+	if errors.As(err, new(*safemode.StoppedError)) {
+		return safemode.ExitStopped
+	}
+	return 1
 }
 
 // loggedError is a serve failure the configured logger already wrote, so main does not log it again.
 type loggedError struct{ error }
+
+func (e loggedError) Unwrap() error { return e.error }
 
 // newRootCmd builds the funcd daemon command tree (ADR-0042): the root runs the platform; the
 // `version` subcommand prints the stamped build identity (ADR-0026) to out (the test seam), and the
@@ -109,6 +120,8 @@ func newRootCmd(out io.Writer) *cobra.Command {
 	root.AddCommand(newBenchCmd(out))
 	root.AddCommand(newInstallCmd(out))
 	root.AddCommand(newUninstallCmd(out))
+	root.AddCommand(newUpgradeCmd(out))
+	root.AddCommand(newSafeModeCmd(out))
 	return root
 }
 
@@ -149,11 +162,23 @@ func serve(parent context.Context, configPath string, memoryFlag *bool, out io.W
 		}
 	}()
 
-	opts, closeExec, startKV, substrate, err := buildOptions(parent, cfg, root)
+	// ADR-0207 Decisions 3 and 4: this start counts before any store opens; a crash loop starts held, then stops.
+	start, held, stableAfter, err := safeModeStart(parent, cfg, held, root)
+	defer func() {
+		if err != nil {
+			if ferr := start.Failed(err); ferr != nil {
+				root.Warn("funcd: safe mode: record the failed start", "error", ferr)
+			}
+		}
+	}()
 	if err != nil {
 		return err
 	}
-	opts = append(opts, funcd.WithHold(held))
+
+	opts, closeExec, startKV, substrate, err := buildOptions(parent, cfg, root, held)
+	if err != nil {
+		return err
+	}
 	defer func() {
 		if cerr := closeExec(); cerr != nil {
 			root.Warn("funcd: closing execution runtime", "error", cerr)
@@ -173,18 +198,79 @@ func serve(parent context.Context, configPath string, memoryFlag *bool, out io.W
 
 	startKV(ctx) // launch the opt-in KV DR export loop (ADR-0067), if enabled — stops when ctx is cancelled
 
-	if err := platform.Run(ctx); err != nil {
-		return fmt.Errorf("run: %w", err)
+	// A start is clean once it runs stableAfter, or when Run returns nil after a stop signal (ADR-0207 Decision 3).
+	stable := time.AfterFunc(stableAfter, func() {
+		if cerr := start.Clean(); cerr != nil {
+			root.Warn("funcd: safe mode: record the stable start", "error", cerr)
+		}
+	})
+	runErr := platform.Run(ctx)
+	stable.Stop()
+	if runErr != nil {
+		return fmt.Errorf("run: %w", runErr)
 	}
-	return nil
+	return start.Clean()
+}
+
+// safeModeStart counts this start in <storage.dataDir>/safemode.json (ADR-0207 Decisions 3, 4): a newer version that
+// funcd upgrade did not install warns; held writes the safe-mode marker when none exists and opens the hold again;
+// stopped writes it too and returns the *safemode.StoppedError. storage.mode memory skips it all.
+func safeModeStart(ctx context.Context, cfg config.Config, held *hold.Hold, log *slog.Logger) (*safemode.Start, *hold.Hold, time.Duration, error) {
+	if cfg.Storage.Mode == "memory" {
+		return nil, held, 0, nil
+	}
+	sc, err := safeModeConfig(cfg)
+	if err != nil {
+		return nil, held, 0, err
+	}
+	dataDir := cfg.Storage.DataDir
+	start, state, mode, err := safemode.Begin(dataDir, version.Version, sc)
+	if mode == safemode.Stopped {
+		if !held.Held() {
+			err = errors.Join(err, hold.Write(dataDir, hold.Marker{Reason: safemode.MarkerReason, Since: v1.NewTimestamp(time.Now())}))
+		}
+		return nil, held, 0, err
+	}
+	if err != nil {
+		return nil, held, 0, err
+	}
+	if c, ok := version.Compare(state.Version, version.Version); ok && c < 0 && (state.Upgrade == nil || state.Upgrade.To != version.Version) {
+		log.WarnContext(ctx, "funcd: this version replaced the last one without `funcd upgrade`: no pre-upgrade generation "+
+			"of the previous version exists, so there is no way back to it", "previous", state.Version, "version", version.Version)
+	}
+	if mode == safemode.Held {
+		if !held.Held() {
+			if err := hold.Write(dataDir, hold.Marker{Reason: safemode.MarkerReason, Since: v1.NewTimestamp(time.Now())}); err != nil {
+				return start, held, 0, err
+			}
+			if held, err = hold.Open(dataDir); err != nil {
+				return start, held, 0, err
+			}
+		}
+		log.ErrorContext(ctx, "funcd: safe mode: unclean starts in a row, so the platform starts held; read `funcdctl hold "+
+			"status`, fix the cause, then `funcdctl hold release`", "unclean", state.Unclean, "lastError", state.LastError,
+			"afterCrashes", sc.AfterCrashes)
+	}
+	return start, held, sc.StableAfter, nil
+}
+
+// safeModeConfig parses recovery.safeMode (ADR-0207): afterCrashes at least 1, stableAfter 1ms to the maximum.
+func safeModeConfig(cfg config.Config) (safemode.Config, error) {
+	n := cfg.Recovery.SafeMode.AfterCrashes
+	if n < 1 {
+		return safemode.Config{}, fault.Invalidf("buildOptions", "config key %q has value %d (want at least 1)", "recovery.safeMode.afterCrashes", n)
+	}
+	d, err := parseDuration("recovery.safeMode.stableAfter", cfg.Recovery.SafeMode.StableAfter, 10*time.Minute, minPositive, v1.MaxDuration)
+	return safemode.Config{AfterCrashes: n, StableAfter: d}, err
 }
 
 // buildOptions assembles the daemon's []funcd.Option from the resolved config (ADR-0061): the
 // production drivers, the substrate, the store (+ optional at-rest encryptor), the credential, the
-// bind addresses, the logger, telemetry, and the execution wiring. It returns the options, the
+// bind addresses, the logger, telemetry, and the execution wiring. held is the hold serve opened (ADR-0206; nil ⇒
+// never held), which the platform and the backup runner ask. It returns the options, the
 // execution closer the caller must defer, and the substrate label. The platform owns the drivers; a failed
 // call closes the ones it already opened (issue #437).
-func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) (_ []funcd.Option, _ func() error, _ func(context.Context), _ string, err error) {
+func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, held *hold.Hold) (_ []funcd.Option, _ func() error, _ func(context.Context), _ string, err error) {
 	// Credentials first: a bad token file or entry refuses startup before anything opens (ADR-0171 Decision 3).
 	credOpt, err := credentialOption(cfg, root)
 	if err != nil {
@@ -192,12 +278,12 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) (_ 
 	}
 
 	// The node master secret, loaded once for the platform and the backup envelope (ADR-0204 Decisions 2, 7).
-	master, err := loadMaster(cfg, root)
+	master, err := envelope.LoadMaster(cfg, root)
 	if err != nil {
 		return nil, noopClose, nil, "", err
 	}
 	logBackupFindings(cfg, root)
-	sealer, err := backupSealer(cfg, master, root)
+	sealer, err := envelope.FromConfig(cfg, master, root)
 	if err != nil {
 		return nil, noopClose, nil, "", err
 	}
@@ -229,12 +315,16 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) (_ 
 		opened = append(opened, telemetryCloser{tel})
 	}
 	// The backup runner, before the blob and KV wiring that take its Recorder (ADR-0205 Decision 2).
-	backups, target, err := backupRunner(ctx, cfg, sealer, backupMeter(tel), root)
+	backups, target, err := backupRunner(ctx, cfg, sealer, backupMeter(tel), root, held)
 	if err != nil {
 		return nil, noopClose, nil, "", err
 	}
+	var parent *backup.GenRef
 	if target != nil {
 		opened = append(opened, target)
+		if parent, err = backupParent(ctx, cfg, st); err != nil {
+			return nil, noopClose, nil, "", err
+		}
 	}
 
 	// Substrate: file-backed (durable) by default, in-memory (ephemeral) with storage.mode: memory (ADR-0043).
@@ -272,7 +362,10 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger) (_ 
 		opts = append(opts, funcd.WithTelemetry(tel))
 	}
 	if backups != nil {
-		opts = append(opts, funcd.WithPlatformBackup(backups))
+		opts = append(opts, funcd.WithPlatformBackup(backups), funcd.WithBackupParent(parent))
+	}
+	if held != nil {
+		opts = append(opts, funcd.WithHold(held))
 	}
 
 	// TLS termination (ADR-0111, F74): opt-in HTTPS on both listeners. The daemon keeps TLS state in
@@ -787,16 +880,6 @@ func checkSecretsDecode(st store.Store, keyed bool) error {
 	}
 }
 
-// loadMaster migrates a working-directory master and loads the node master secret from its place, gateway on or off
-// (ADR-0204 Decision 7).
-func loadMaster(cfg config.Config, log *slog.Logger) ([]byte, error) {
-	file, dataDir := cfg.S3Gateway.MasterSecretFile, cfg.Storage.DataDir
-	if err := s3gateway.MigrateMaster(file, dataDir, cfg.S3Gateway.Enabled, log); err != nil {
-		return nil, err
-	}
-	return s3gateway.LoadOrCreateMaster(file, dataDir)
-}
-
 // logBackupFindings logs config.CheckBackup's warnings, one line each (ADR-0205 Decision 3); Validate refused its
 // errors. With a target, envelope.New logs ADR-0204 Decision 2's two encryption warnings itself, so they are not
 // repeated here.
@@ -810,29 +893,10 @@ func logBackupFindings(cfg config.Config, log *slog.Logger) {
 	}
 }
 
-// backupSealer applies ADR-0204 Decision 2's start rules when backup.target is set: a violation refuses the start,
-// and the keys' fingerprints are logged. nil without a target.
-func backupSealer(cfg config.Config, master []byte, log *slog.Logger) (*envelope.Sealer, error) {
-	if cfg.Backup.Target == "" {
-		return nil, nil
-	}
-	key, err := readSecretsKey(cfg)
-	if err != nil {
-		return nil, err
-	}
-	return envelope.New(envelope.Config{
-		Recipients: cfg.Backup.Encryption.Recipients,
-		None:       cfg.Backup.Encryption.None,
-		SecretsKey: key,
-		Master:     master,
-		Logger:     log,
-	})
-}
-
 // backupRunner builds the backup runner when the platform backup (backup.target with storage.mode file) or the KV
 // export is on (ADR-0205 Decision 2), nil otherwise; with the platform backup it opens the target, which the caller
-// closes. A backup.Open error refuses the start.
-func backupRunner(ctx context.Context, cfg config.Config, sealer *envelope.Sealer, meter metric.Meter, log *slog.Logger) (*runner.Runner, backup.Target, error) {
+// closes, and asks held before each run (ADR-0206 Decision 6; nil ⇒ never held). A backup.Open error refuses the start.
+func backupRunner(ctx context.Context, cfg config.Config, sealer *envelope.Sealer, meter metric.Meter, log *slog.Logger, held *hold.Hold) (*runner.Runner, backup.Target, error) {
 	file := cfg.Storage.Mode == "file"
 	platform, kv := file && cfg.Backup.Target != "", file && cfg.Kvstore.Backup.Enabled
 	if !platform && !kv {
@@ -843,6 +907,9 @@ func backupRunner(ctx context.Context, cfg config.Config, sealer *envelope.Seale
 		return nil, nil, err
 	}
 	rc := runner.Config{Times: times, Meter: meter, Logger: log}
+	if held != nil {
+		rc.Hold = held
+	}
 	if platform {
 		r := cfg.Backup.Retention
 		rc.Target, err = backup.Open(ctx, backup.Config{
@@ -868,6 +935,16 @@ func backupRunner(ctx context.Context, cfg config.Config, sealer *envelope.Seale
 	return runs, rc.Target, nil
 }
 
+// backupParent is the generation restore.json names while the metastore is on the timeline that restore minted
+// (restore.Parent, ADR-0206): each generation's parent. ADR-0205 left it to the later of ADR-0206 and ADR-0207 to wire.
+func backupParent(ctx context.Context, cfg config.Config, st store.Store) (*backup.GenRef, error) {
+	tl, err := restore.Timeline(ctx, st)
+	if err != nil {
+		return nil, err
+	}
+	return restore.Parent(cfg.Storage.DataDir, tl)
+}
+
 // backupMeter is the backup runner's meter (ADR-0205 Decision 5); a no-op one without telemetry.
 func backupMeter(t *observability.Telemetry) metric.Meter {
 	if t == nil {
@@ -876,23 +953,11 @@ func backupMeter(t *observability.Telemetry) metric.Meter {
 	return t.MeterProvider().Meter("funcd.backup")
 }
 
-// readSecretsKey reads secrets.encryptionKeyFile; "" ⇒ nil.
-func readSecretsKey(cfg config.Config) ([]byte, error) {
-	if cfg.Secrets.EncryptionKeyFile == "" {
-		return nil, nil
-	}
-	key, err := os.ReadFile(cfg.Secrets.EncryptionKeyFile) //nolint:gosec // operator-supplied key path
-	if err != nil {
-		return nil, fmt.Errorf("read secrets.encryptionKeyFile %s: %w", cfg.Secrets.EncryptionKeyFile, err)
-	}
-	return key, nil
-}
-
 // secretEncryptor builds the at-rest Secret encryptor from secrets.encryptionKeyFile (ADR-0022): a
 // 32-byte key file → an AES-256-GCM encryptor; "" ⇒ nil (no encryption); a non-32-byte key ⇒ a
 // fault.Invalid (never silently weak crypto).
 func secretEncryptor(cfg config.Config) (store.Encryptor, error) {
-	key, err := readSecretsKey(cfg)
+	key, err := envelope.ReadSecretsKey(cfg)
 	if err != nil || key == nil {
 		return nil, err
 	}

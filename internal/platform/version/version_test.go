@@ -30,3 +30,33 @@ func TestScenarioVersionStringWellFormed(t *testing.T) {
 		require.Contains(t, s, want)
 	}
 }
+
+// TestCompareVersions orders scripts/build.sh stamps (ADR-0207): describe counts after their tag, -dirty equal, a
+// prerelease before its tag, a bare hash and dev unordered; restore.CheckVersion's stamps order as semver.
+func TestCompareVersions(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		a, b string
+		want int
+		ok   bool
+	}{
+		{"v0.8.0", "v0.8.0-9-gabc1234", -1, true},
+		{"v0.8.0-9-gabc1234", "v0.8.0-10-gabc1234", -1, true},
+		{"v0.8.0-10-gdef5678", "v0.8.0-9-gabc1234", 1, true},
+		{"v0.8.0-dirty", "v0.8.0", 0, true},
+		{"v0.8.0-3-gabc1234-dirty", "v0.8.0-3-gabc1234", 0, true},
+		{"v0.8.0-rc.1", "v0.8.0", -1, true},
+		{"v0.8.0-rc.1-2-gabc1234", "v0.8.0-rc.1", 1, true},
+		{"v0.9.0", "v0.8.1", 1, true},
+		{"v0.7.2", "v0.8.1", -1, true},
+		{"v0.8.0", "v0.8.0", 0, true},
+		{"abc1234", "v0.8.0", 0, false},
+		{"v0.8.0", "abc1234-dirty", 0, false},
+		{"dev", "v0.8.0", 0, false},
+		{"v0.8.0", "dev", 0, false},
+	} {
+		got, ok := version.Compare(c.a, c.b)
+		require.Equal(t, c.ok, ok, "%s vs %s", c.a, c.b)
+		require.Equal(t, c.want, got, "%s vs %s", c.a, c.b)
+	}
+}

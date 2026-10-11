@@ -13,6 +13,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/backup"
 	"github.com/pyvvo/funcd/internal/backup/runner"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/bus"
@@ -265,6 +266,16 @@ func WithDeadLetterQueue(dataDir string, deliveryAttempts int, retention time.Du
 func WithPlatformBackup(r *runner.Runner) Option {
 	return func(c *config) error {
 		c.backupRunner = r
+		return nil
+	}
+}
+
+// WithBackupParent is the generation a restore loaded while the metastore is on the timeline that restore minted
+// (restore.Parent, ADR-0206): the platform backup writes it as each generation's parent (ADR-0205 Inputs.Parent).
+// nil ⇒ none.
+func WithBackupParent(p *backup.GenRef) Option {
+	return func(c *config) error {
+		c.backupParent = p
 		return nil
 	}
 }
