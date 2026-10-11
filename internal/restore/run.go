@@ -1,6 +1,7 @@
 package restore
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -88,11 +89,13 @@ type restoring struct {
 	master *savedFile
 }
 
-// savedFile is a file a restore replaced, with what it held before.
+// savedFile is a file a restore replaced, with what it held before; dir is the topmost directory the restore created
+// to hold it, "" when its directory existed.
 type savedFile struct {
 	path    string
 	old     []byte
 	existed bool
+	dir     string
 }
 
 // Run restores the generation p names into o.Config's empty directories and leaves the platform held (Decision 2):
@@ -214,8 +217,8 @@ func Run(ctx context.Context, p Point, o Options) (_ Report, err error) {
 	for _, d := range r.dirs {
 		roots = append(roots, d.path)
 	}
-	if r.master != nil {
-		roots = append(roots, r.master.path)
+	if m := r.master; m != nil {
+		roots = append(roots, cmp.Or(m.dir, m.path))
 	}
 	if err = hold.Own(r.dataDir, roots...); err != nil {
 		return Report{}, err
@@ -342,9 +345,12 @@ func (r *restoring) undo() error {
 		errs = append(errs, removeFile(filepath.Join(r.dataDir, hold.MarkerFile)))
 	}
 	if m := r.master; m != nil {
-		if m.existed {
+		switch {
+		case m.dir != "":
+			errs = append(errs, os.RemoveAll(m.dir))
+		case m.existed:
 			errs = append(errs, os.WriteFile(m.path, m.old, 0o600))
-		} else {
+		default:
 			errs = append(errs, removeFile(m.path))
 		}
 	}
@@ -369,6 +375,21 @@ func emptyOut(d storeDir) error {
 		errs = append(errs, os.RemoveAll(filepath.Join(d.path, e.Name())))
 	}
 	return errors.Join(errs...)
+}
+
+// missingDir is the topmost directory on dir's path that does not exist, the first one os.MkdirAll(dir) creates; ""
+// when dir exists.
+func missingDir(dir string) string {
+	missing := ""
+	for d := dir; ; d = filepath.Dir(d) {
+		if _, err := os.Lstat(d); !errors.Is(err, fs.ErrNotExist) {
+			return missing
+		}
+		missing = d
+		if filepath.Dir(d) == d {
+			return missing
+		}
+	}
 }
 
 func removeFile(p string) error {
@@ -482,7 +503,7 @@ func (r *restoring) installMaster(ctx context.Context, plan escrow.MasterPlan, m
 	const op = "restore.Run"
 	if plan.Install != nil {
 		old, err := os.ReadFile(plan.Path) //nolint:gosec // the node master secret's place
-		r.master = &savedFile{path: plan.Path, old: old, existed: err == nil}
+		r.master = &savedFile{path: plan.Path, old: old, existed: err == nil, dir: missingDir(filepath.Dir(plan.Path))}
 		if err := os.MkdirAll(filepath.Dir(plan.Path), 0o700); err != nil {
 			return fault.Wrapf(err, fault.Internal, op, "create the directory of %s", plan.Path)
 		}

@@ -296,24 +296,7 @@ func TestScenarioRestoreKeepsDataOwner(t *testing.T) {
 	s := newGSource(t, nil)
 	s.cut(t)
 	n := newNode(t, nil, "")
-	uid, gid := -1, -1
-	if os.Geteuid() == 0 && runtime.GOOS == "linux" {
-		uid, gid = 1000, 1000
-	} else {
-		groups, err := os.Getgroups()
-		require.NoError(t, err)
-		for _, g := range groups {
-			if g != os.Getgid() {
-				gid = g
-				break
-			}
-		}
-		if gid < 0 {
-			t.Skip("needs root on Linux, or a user with a second group")
-		}
-	}
-	require.NoError(t, os.Lchown(n.dataDir, uid, gid))
-	want := ownerOf(t, n.dataDir)
+	want := otherOwner(t, n.dataDir)
 
 	_, err := n.restore("run", "latest", "--from", s.target)
 	require.NoError(t, err)
@@ -330,6 +313,75 @@ func TestScenarioRestoreKeepsDataOwner(t *testing.T) {
 	ev, err := c.HoldStatus(context.Background())
 	require.NoError(t, err)
 	require.True(t, ev.Held)
+}
+
+// otherOwner gives dir an owner a restore must carry over and returns it: as root on Linux uid and gid 1000, else
+// another of this user's groups, which a process may set; it skips the test when neither is possible.
+func otherOwner(t *testing.T, dir string) [2]uint32 {
+	t.Helper()
+	uid, gid := -1, -1
+	if os.Geteuid() == 0 && runtime.GOOS == "linux" {
+		uid, gid = 1000, 1000
+	} else {
+		groups, err := os.Getgroups()
+		require.NoError(t, err)
+		for _, g := range groups {
+			if g != os.Getgid() {
+				gid = g
+				break
+			}
+		}
+		if gid < 0 {
+			t.Skip("needs root on Linux, or a user with a second group")
+		}
+	}
+	require.NoError(t, os.Lchown(dir, uid, gid))
+	return ownerOf(t, dir)
+}
+
+// masterGeneration cuts a generation whose manifest names a node master and returns its target and an escrow set
+// holding that master (ADR-0204 Decision 5).
+func masterGeneration(t *testing.T) (target, escrowDir string) {
+	t.Helper()
+	master := bytes.Repeat([]byte{5}, 32)
+	s := newGSource(t, nil)
+	s.opts.Keys.MasterSecret = envelope.Fingerprint(master)
+	s.cut(t)
+	escrowDir = t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(escrowDir, "master"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(escrowDir, "master", "node.key"), master, 0o600))
+	return s.target, escrowDir
+}
+
+// A restore that installs the escrowed master where no directory holds it gives the directory it creates the data
+// directory's owner, as everything else it creates (ADR-0206 Decision 2 step 5): a daemon running as that owner
+// reads the master. Run as root on Linux, the directory was root's and the daemon could not read the master.
+func TestRestoreMasterDir_TakesTheDataOwner(t *testing.T) {
+	t.Parallel()
+	target, escrowDir := masterGeneration(t)
+	n := newNode(t, nil, "")
+	want := otherOwner(t, n.dataDir)
+
+	_, err := n.restore("run", "latest", "--from", target, "--escrow", escrowDir)
+	require.NoError(t, err)
+	master := s3gateway.MasterPath("", n.dataDir)
+	for _, p := range []string{filepath.Dir(master), master} {
+		require.Equal(t, want, ownerOf(t, p), "owner of %s", p)
+	}
+}
+
+// A restore that fails after installing the master removes the directory it created for it, as it removes what else
+// it created (ADR-0206 Decision 2): here its report cannot be written. A directory left behind would be taken for the
+// operator's by the next run, which would not give it the data directory's owner.
+func TestRestoreMasterDir_FailedRunRemovesIt(t *testing.T) {
+	t.Parallel()
+	target, escrowDir := masterGeneration(t)
+	n := newNode(t, nil, "")
+	require.NoError(t, os.MkdirAll(filepath.Join(n.dataDir, hold.ReportFile, "squat"), 0o700))
+
+	_, err := n.restore("run", "latest", "--from", target, "--escrow", escrowDir)
+	require.ErrorContains(t, err, hold.ReportFile)
+	require.NoDirExists(t, filepath.Dir(s3gateway.MasterPath("", n.dataDir)))
 }
 
 func ownerOf(t *testing.T, p string) [2]uint32 {
