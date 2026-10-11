@@ -21,6 +21,7 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/clock"
 	"github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/platform/hold"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 	"github.com/pyvvo/funcd/internal/testkit/s3stub"
 )
 
@@ -243,7 +244,7 @@ func TestBlobMirrorAssembledWithHold(t *testing.T) {
 	t.Cleanup(func() { cancel(); _ = closeExec() })
 	require.Contains(t, logs.String(), "prefix=blob/ days=60")
 	manifest := filepath.Join(target, "blob", "0000000001", "gen", "0000000001", "manifest.yaml")
-	require.Never(t, func() bool { _, err := os.Stat(manifest); return err == nil }, 400*time.Millisecond, 20*time.Millisecond)
+	require.True(t, poll.Never(func() bool { _, err := os.Stat(manifest); return err == nil }, 400*time.Millisecond, 20*time.Millisecond))
 	require.NoError(t, held.Release(time.Now()))
 	require.Eventually(t, func() bool { _, err := os.Stat(manifest); return err == nil }, 10*time.Second, 20*time.Millisecond)
 }

@@ -25,6 +25,7 @@ import (
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/kvstore"
 	"github.com/pyvvo/funcd/internal/kvstore/kvstorecontract"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 )
 
 func openRawDB(t *testing.T, dir string) *badger.DB {
@@ -1183,7 +1184,7 @@ func TestFailedRebaselineRetriesAfterRebaselineRetry(t *testing.T) {
 	require.Eventually(t, func() bool { return attempts.Load() >= 2 }, 5*time.Second, 10*time.Millisecond,
 		"a failed re-baseline was not retried within rebaselineRetry")
 	require.Len(t, bucket.chains(t), 1, "the retry did not write a base")
-	require.Never(t, func() bool { return attempts.Load() > 2 }, 500*time.Millisecond, 10*time.Millisecond,
+	require.True(t, poll.Never(func() bool { return attempts.Load() > 2 }, 500*time.Millisecond, 10*time.Millisecond),
 		"a successful re-baseline was followed by another before the period")
 }
 

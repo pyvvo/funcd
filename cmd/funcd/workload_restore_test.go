@@ -14,6 +14,7 @@ import (
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/platform/hold"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 	"github.com/pyvvo/funcd/internal/testkit/s3stub"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
@@ -85,7 +86,7 @@ func TestScenarioPlatformRestoreHoldsNamespace(t *testing.T) {
 		return l
 	}
 	require.Eventually(t, func() bool { return sensorRuns("web") > 0 }, 15*time.Second, 20*time.Millisecond, "web's timers fire")
-	require.Never(t, func() bool { return sensorRuns("orders") > 0 || len(backups()) > 0 }, time.Second, 50*time.Millisecond,
+	require.True(t, poll.Never(func() bool { return sensorRuns("orders") > 0 || len(backups()) > 0 }, time.Second, 50*time.Millisecond),
 		"orders' timers and slots wait")
 
 	_, err = c.Create(ctx, &v1.Backup{TypeMeta: tmeta(v1.KindBackup), ObjectMeta: nsObj("orders", "by-api"),

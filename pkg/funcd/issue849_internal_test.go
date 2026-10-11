@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 )
 
 // scenario: call-answered-while-gate-fails (ADR-0221, issue #849) — a call to a Degraded pooled member whose Secret is
@@ -34,7 +35,7 @@ func TestScenarioCallAnsweredWhileGateFails(t *testing.T) {
 	defer cancel()
 	answered := make(chan error, 1)
 	go func() { answered <- r.wake(ctx) }()
-	require.Never(t, func() bool { return len(answered) > 0 }, 300*time.Millisecond, 10*time.Millisecond, "the call is held")
+	require.True(t, poll.Never(func() bool { return len(answered) > 0 }, 300*time.Millisecond, 10*time.Millisecond), "the call is held")
 	r.host.setMember("reader", "ready")
 	require.NoError(t, <-answered, "the held call is answered")
 

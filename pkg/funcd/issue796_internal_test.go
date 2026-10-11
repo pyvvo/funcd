@@ -319,8 +319,8 @@ func TestScenarioPooledDependencyReturnsStaysAsleep(t *testing.T) {
 	creates := r.host.poolCreates()
 	r.applyCatalog(t)
 	r.requireIdleAsleepCleared(t)
-	require.Never(t, func() bool { return r.host.poolCreates() != creates || r.host.poolsRunning() != 0 }, time.Second,
-		20*time.Millisecond, "no pool worker is created before a call")
+	require.True(t, poll.Never(func() bool { return r.host.poolCreates() != creates || r.host.poolsRunning() != 0 }, time.Second,
+		20*time.Millisecond), "no pool worker is created before a call")
 	r.wakeReady(t)
 }
 

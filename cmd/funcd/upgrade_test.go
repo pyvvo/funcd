@@ -31,6 +31,7 @@ import (
 	"github.com/pyvvo/funcd/internal/safemode"
 	"github.com/pyvvo/funcd/internal/store"
 	badgerstore "github.com/pyvvo/funcd/internal/store/badger"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
@@ -407,10 +408,10 @@ func TestScenarioSafeModeHolds(t *testing.T) {
 		dls, err3 := c.DeadLetters(ctx, "team")
 		return len(invs) + len(runs) + len(dls), errors.Join(err1, err2, err3)
 	}
-	require.Never(t, func() bool {
+	require.True(t, poll.Never(func() bool {
 		k, err := acted()
 		return err == nil && k > 0
-	}, 500*time.Millisecond, 50*time.Millisecond, "a held timer fired")
+	}, 500*time.Millisecond, 50*time.Millisecond), "a held timer fired")
 	count, err := acted()
 	require.NoError(t, err)
 	require.Zero(t, count, "a held timer fired")

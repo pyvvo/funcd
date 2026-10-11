@@ -22,6 +22,7 @@ import (
 	dlmemory "github.com/pyvvo/funcd/internal/eventing/deadletter/memory"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 )
 
 type targetMode int
@@ -662,11 +663,11 @@ func TestScenarioDeliverySizesFromSettings(t *testing.T) {
 		defer g.tg.mu.Unlock()
 		return g.tg.total == 5
 	}, 2*time.Second, 5*time.Millisecond)
-	require.Never(t, func() bool {
+	require.True(t, poll.Never(func() bool {
 		g.tg.mu.Lock()
 		defer g.tg.mu.Unlock()
 		return g.tg.total > 5
-	}, 200*time.Millisecond, 10*time.Millisecond)
+	}, 200*time.Millisecond, 10*time.Millisecond))
 	g.tg.mu.Lock()
 	defer g.tg.mu.Unlock()
 	require.Equal(t, 5, g.tg.peakTotal, "the peak in flight is the worker count")

@@ -25,6 +25,7 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/clock"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 )
 
 // --- real (non-mock) fakes for the two seams + a controllable clock ---
@@ -424,7 +425,7 @@ func TestIssue144_RunWaitsForRunningActivation(t *testing.T) {
 	go func() { served <- serve(a, activator.FunctionRef{Namespace: "default", Name: "cold"}) }()
 	<-woke
 	cancel()
-	require.Never(t, func() bool { return len(ran) > 0 }, 50*time.Millisecond, 5*time.Millisecond,
+	require.True(t, poll.Never(func() bool { return len(ran) > 0 }, 50*time.Millisecond, 5*time.Millisecond),
 		"Run returned while an activation was still running: its goroutine outlives Run")
 
 	close(release)

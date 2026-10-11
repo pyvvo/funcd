@@ -19,6 +19,7 @@ import (
 	"github.com/pyvvo/funcd/internal/controlplane/middleware"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 )
 
 // appNamespaceReader is an App admission that reads the namespace (ADR-0147), as app-parts does.
@@ -83,7 +84,7 @@ func TestDryRunWaitsForTheLockAndPlansAfter(t *testing.T) {
 		r.ServeHTTP(rec, req)
 		done <- rec
 	}()
-	require.Never(t, func() bool { return len(done) > 0 || probe.calls.Load() > 0 }, 200*time.Millisecond, 10*time.Millisecond,
+	require.True(t, poll.Never(func() bool { return len(done) > 0 || probe.calls.Load() > 0 }, 200*time.Millisecond, 10*time.Millisecond),
 		"the dry run waits for the namespace lock")
 	unlock()
 	var rec *httptest.ResponseRecorder

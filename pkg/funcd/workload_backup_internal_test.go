@@ -33,6 +33,7 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/snapshot"
 	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 	"github.com/pyvvo/funcd/internal/testkit/s3stub"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
@@ -294,7 +295,7 @@ func (r *wbRig) waitRestore(name v1.ObjectName, phase v1.RunPhase) *v1.Restore {
 // still waits a few periods and checks cond still holds, for an act that must not happen.
 func (r *wbRig) still(cond func() bool, msg string) {
 	r.t.Helper()
-	require.Never(r.t, func() bool { return !cond() }, 6*wbPeriod, wbPeriod/2, msg)
+	require.True(r.t, poll.Never(func() bool { return !cond() }, 6*wbPeriod, wbPeriod/2), msg)
 }
 
 func reason(st v1.Status) string {

@@ -26,6 +26,7 @@ import (
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/platform/clock"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 	"github.com/pyvvo/funcd/internal/testkit/s3stub"
 )
 
@@ -515,8 +516,8 @@ func TestRunBackupSkipsWhileHeld(t *testing.T) {
 		RunBackup(ctx, b, quiet())
 	}()
 	t.Cleanup(func() { cancel(); <-done })
-	require.Never(t, func() bool { return len(bucket.keys(KVPrefix)) > 0 || records.Load() > 0 },
-		200*time.Millisecond, 10*time.Millisecond, "a held run wrote or recorded")
+	require.True(t, poll.Never(func() bool { return len(bucket.keys(KVPrefix)) > 0 || records.Load() > 0 },
+		200*time.Millisecond, 10*time.Millisecond), "a held run wrote or recorded")
 	g.held.Store(false)
 	require.Eventually(t, func() bool { return len(bucket.chains(t)) == 1 && records.Load() > 0 }, 10*time.Second, 5*time.Millisecond)
 }

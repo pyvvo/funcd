@@ -299,7 +299,7 @@ func TestScenarioDependencyReturnsStaysAsleep(t *testing.T) {
 			ready, asleep := condition(fn, "Ready"), condition(fn, "Asleep")
 			return fn.Status.Phase == v1.PhaseIdle && ready.Reason == "NoReplicas" && asleep.Status == v1.ConditionFalse
 		}, 5*time.Second, 10*time.Millisecond, "reader goes Idle/NoReplicas with Asleep=False")
-		require.Never(t, func() bool { return r.creates() != created || r.running() != 0 }, time.Second, 20*time.Millisecond,
+		require.True(t, poll.Never(func() bool { return r.creates() != created || r.running() != 0 }, time.Second, 20*time.Millisecond),
 			"no worker is created before a call")
 		require.Zero(t, r.fn(t).Status.Replicas)
 		r.wakeReady(t)

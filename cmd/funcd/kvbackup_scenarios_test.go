@@ -25,6 +25,7 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/platform/version"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 	"github.com/pyvvo/funcd/internal/testkit/s3stub"
 )
 
@@ -165,7 +166,7 @@ func TestScenarioInheritsPlatformTarget(t *testing.T) {
 		require.NotContains(t, a, "AKIDPLATFORM", "a request to K is signed with backup.credentialsFile")
 	}
 	before := len(platform.Keys(kvbadger.KVPrefix))
-	require.Never(t, func() bool { return len(platform.Keys(kvbadger.KVPrefix)) != before }, 100*time.Millisecond, 10*time.Millisecond,
+	require.True(t, poll.Never(func() bool { return len(platform.Keys(kvbadger.KVPrefix)) != before }, 100*time.Millisecond, 10*time.Millisecond),
 		"the KV with its own target wrote to backup.target")
 }
 
@@ -252,7 +253,7 @@ func TestKVBackupAssembledWithHold(t *testing.T) {
 	t.Cleanup(func() { cancel(); _ = closeExec() })
 	require.Contains(t, logs.String(), "kv/inc/:2")
 	bases := filepath.Join(target, "kv", "base")
-	require.Never(t, func() bool { _, err := os.Stat(bases); return err == nil }, 300*time.Millisecond, 20*time.Millisecond)
+	require.True(t, poll.Never(func() bool { _, err := os.Stat(bases); return err == nil }, 300*time.Millisecond, 20*time.Millisecond))
 	require.NoError(t, held.Release(time.Now()))
 	require.Eventually(t, func() bool { _, err := os.Stat(bases); return err == nil }, 10*time.Second, 20*time.Millisecond)
 }
