@@ -11158,5 +11158,20 @@
     "dod_total": 15,
     "report": "docs/reviews/adr-0222-implementation-claude-opus-5-5-4.md",
     "notes": "Minor (model): no committed test covers the load-time NamespaceHeld refusal (its mutant survives; closed by a test-only commit, 9fd461d9); Minor (adr): the three consequences and the new NamespaceHeld reason go to the second addendum, none breaks a Decision; round-3 gap closed."
+  },
+  {
+    "date": "2026-10-11",
+    "issue": "950",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-950-fix-claude-opus-5-5.md",
+    "notes": "pass; 26 Never sites moved to internal/testkit/poll.Never with identical args (AST 26/26); guard fails on base with the 26 sites; poll mutants 3/3 killed; real-harness repro fails 3/3 on require.Never, passes 3/3 on poll.Never; Minor (model): the guard missed a Never whose condition is a named variable, fixed before the PR"
   }
 ]
