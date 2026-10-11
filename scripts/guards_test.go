@@ -392,7 +392,7 @@ func TestLinuxExecRefusesACheckoutOutsideHome(t *testing.T) {
 
 // linuxExecEnv is the environment of a linux-exec.sh test that gets past the checkout check: the checkout as $HOME, a
 // run lock of its own, a fake go whose toolchain module is in a temp module cache, limactl as the fake limactl, and a
-// sudo that only says it ran, so a fake limactl that runs its command here never reaches the host's sudo.
+// sudo that runs its command as the caller, so a fake limactl that runs its command here never reaches the host's sudo.
 func linuxExecEnv(t *testing.T, limactl string) []string {
 	t.Helper()
 	root, err := filepath.Abs("..")
@@ -405,7 +405,7 @@ func linuxExecEnv(t *testing.T, limactl string) []string {
 	for name, body := range map[string]string{
 		"limactl": limactl,
 		"go":      `case $1 in version) printf 'x: go1.0\n\tbuild\tGOARCH=arm64\n' ;; env) echo "` + modcache + `" ;; esac`,
-		"sudo":    `echo "sudo $*"`,
+		"sudo":    `shift 3; exec "$@"`,
 	} {
 		require.NoError(t, os.WriteFile(filepath.Join(fake, name), []byte("#!/bin/sh\n"+body+"\n"), 0o755))
 	}
@@ -480,4 +480,26 @@ func TestLinuxExecRefusesAVMStillBooting(t *testing.T) {
 	code, out := exitCode(t, cmd)
 	require.Equal(t, 125, code, out)
 	require.Contains(t, out, "the funcd-linux-tests VM has not finished booting")
+}
+
+// The test binary reaches the VM over the shell's stdin and runs from a temp dir on the VM's own disk, never from the
+// read-only $HOME mount: an exec through the mount failed now and then with EACCES, also for a fresh copy. limactl and
+// sudo run their command here, past the VM's boot check, so this is the run the VM does.
+func TestLinuxExecRunsTheBinaryFromItsOwnCopy(t *testing.T) {
+	script, err := filepath.Abs("linux-exec.sh")
+	require.NoError(t, err)
+	bin := filepath.Join(t.TempDir(), "pkg.test")
+	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\necho \"ran $0 $*\"\n"), 0o755))
+	cmd := exec.Command(script, bin, "-test.v")
+	cmd.Env = linuxExecEnv(t, `if [ "$1" = list ]; then echo Running; else shift 8; exec "$@"; fi`)
+	code, out := exitCode(t, cmd)
+	require.Equal(t, 0, code, out)
+	ran := strings.Fields(out)
+	require.Len(t, ran, 3, out)
+	require.Equal(t, []string{"ran", "pkg.test", "-test.v"}, []string{ran[0], filepath.Base(ran[1]), ran[2]})
+	root, err := filepath.Abs("..") // $HOME here, so the VM's mount
+	require.NoError(t, err)
+	require.False(t, strings.HasPrefix(ran[1], root+string(filepath.Separator)), "the binary ran from the mount: %s", out)
+	require.NotEqual(t, filepath.Dir(bin), filepath.Dir(ran[1]), "the binary ran where go test built it")
+	require.NoDirExists(t, filepath.Dir(ran[1]), "the copy's temp dir is left behind")
 }

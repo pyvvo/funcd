@@ -18,8 +18,9 @@
 # writable and persist in the VM. sudo starts the binary with a fresh environment: each LINUX_EXEC_<NAME>=<value> in
 # ours sets <NAME>=<value> in it (`just test-linux-e2e` sets CI and GOPROXY this way). A VM that has not finished
 # booting is refused. go test resolves a relative -exec path from the package directory, so pass it whole.
-# The VM mounts $HOME read-only at its own path: the binary is staged under .cache/linux-exec, and a checkout outside
-# $HOME is refused, because the VM would not see it.
+# The VM mounts $HOME read-only at its own path, where the package dir and its testdata resolve, so a checkout outside
+# $HOME is refused. The binary itself goes to the VM's own disk over the shell's stdin and runs from there: an exec
+# through the mount failed now and then with EACCES, also for a fresh copy of the binary.
 set -euo pipefail
 vm=funcd-linux-tests
 here=$(cd "$(dirname "$0")" && pwd -P)
@@ -106,7 +107,7 @@ if [ "${1:-}" = --check ]; then
   up
   exit
 fi
-src=$(checkout)
+checkout >/dev/null
 if [ -z "${FUNCD_LINUX_TESTS_LOCKED:-}" ]; then
   mkdir -p "$(dirname "$lock")"
   FUNCD_LINUX_TESTS_LOCKED=1 exec python3 -c "$hold" "$lock" "$0" "$@"
@@ -142,11 +143,6 @@ goroot=$(go env GOMODCACHE)/$toolchain
 # A module zip keeps no execute bit. As go's own toolchain switch does, set the tools' bits before bin/go's, which the
 # check reads, so a parallel run never finds go executable before its tools.
 [ -x "$goroot/bin/go" ] || chmod a+x "$goroot"/pkg/tool/*/* "$goroot"/bin/*
-mkdir -p "$src/.cache/linux-exec"
-stage=$(mktemp -d "$src/.cache/linux-exec/XXXXXX")
-trap 'rm -rf "$stage"' EXIT
-# A copy, not a hard link: a test that re-executes its own binary got EACCES from a link to go test's file.
-cp -c "$bin" "$stage/" 2>/dev/null || cp "$bin" "$stage/"
 vars=()
 for name in ${!LINUX_EXEC_@}; do
   vars+=("${name#LINUX_EXEC_}=${!name}")
@@ -155,5 +151,14 @@ done
 booted='[ -e /run/lima-boot-done ] && exec "$@"
 echo "linux-exec: the funcd-linux-tests VM has not finished booting" >&2
 exit 125'
+# As runner: write stdin to a new temp dir, run it there with the flags, and remove the dir.
+run='d=$(mktemp -d) && cat >"$d/$1" && chmod 755 "$d/$1" || exit 125
+b=$d/$1
+shift
+"$b" "$@" </dev/null
+rc=$?
+rm -r "$d"
+exit $rc'
 limactl shell --workdir "$(pwd -P)" "$vm" sh -c "$booted" linux-exec sudo -H -u runner \
-  env PATH="$goroot/bin:/usr/local/bin:/usr/bin:/bin" GOTOOLCHAIN=local ${vars[@]+"${vars[@]}"} "$stage/${bin##*/}" "$@"
+  env PATH="$goroot/bin:/usr/local/bin:/usr/bin:/bin" GOTOOLCHAIN=local ${vars[@]+"${vars[@]}"} \
+  sh -c "$run" linux-exec "${bin##*/}" "$@" <"$bin"
