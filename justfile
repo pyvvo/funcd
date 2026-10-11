@@ -57,6 +57,25 @@ test-e2e *flags:
 test-integration:
     go test -tags integration ./...
 
+# run the Linux-specific tests on Linux before CI does: in funcd-linux-tests, a long-lived Lima VM that
+# scripts/linux-exec.sh boots on first use, as a non-root user with a supplementary group, like CI's runner. The
+# packages: those whose files differ between GOOS=linux and GOOS=darwin, and those whose tests branch on the OS
+# (runtime.GOOS against "linux", os.Getgroups). No -race: on Linux it needs cgo, which the cross-compile lacks.
+# Extra flags go to go test. Needs a checkout under $HOME (the VM mounts only $HOME).
+[group('test')]
+test-linux *flags:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    scripts/linux-exec.sh --boot
+    m=$(go list -m)
+    f='{{{{.ImportPath}} {{{{.GoFiles}} {{{{.CgoFiles}} {{{{.TestGoFiles}} {{{{.XTestGoFiles}}'
+    differ=$(sort <(GOOS=linux go list -e -f "$f" ./...) <(GOOS=darwin go list -e -f "$f" ./...) | uniq -u | sed "s|^$m\([^ ]*\) .*|.\1|")
+    nested=$(git ls-files '*/go.mod' | sed 's|go.mod$||; s|^|:!|')
+    marked=$(git grep -l -E 'runtime\.GOOS (==|!=) "linux"|case "linux"|os\.Getgroups\(' -- '*_test.go' $nested | sed 's|/[^/]*$||; s|^|./|' || true)
+    pkgs=$(printf '%s\n' $differ $marked | sort -u)
+    echo "linux packages:" $pkgs
+    GOOS=linux GOARCH={{ARCH}} go test -exec "$PWD/scripts/linux-exec.sh" {{flags}} $pkgs
+
 # compile all packages
 [group('go')]
 build:

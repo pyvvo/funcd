@@ -371,3 +371,17 @@ func TestIssue563_WaveCheckReportsConflicts(t *testing.T) {
 	require.Equal(t, 2, code, out)
 	require.Contains(t, out, "git fetch origin failed")
 }
+
+// linux-exec.sh refuses a checkout outside $HOME, which the funcd-linux-tests VM does not mount: the VM would see no
+// package dir and no testdata. --check, which the gate runs before its linux-tests step, refuses it the same way.
+func TestLinuxExecRefusesACheckoutOutsideHome(t *testing.T) {
+	script, err := filepath.Abs("linux-exec.sh")
+	require.NoError(t, err)
+	for _, args := range [][]string{{"pkg.test", "-test.v"}, {"--check"}} {
+		cmd := exec.Command(script, args...)
+		cmd.Env = append(os.Environ(), "HOME="+t.TempDir())
+		code, out := exitCode(t, cmd)
+		require.Equal(t, 2, code, "%v: %s", args, out)
+		require.Contains(t, out, "is outside $HOME", args)
+	}
+}

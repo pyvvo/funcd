@@ -1,0 +1,67 @@
+# Long-lived Lima VM for `just test-linux`: scripts/linux-exec.sh boots it on first use, under the lane lock, and then
+# reuses it. Each cross-compiled Linux test binary runs here as `runner`, a non-root user with a supplementary group, as
+# on CI's runner (uid 1001, also in adm). The home directory is mounted read-only at its own path, so a package dir and
+# its testdata resolve as on the host. No port is forwarded, so the VM never collides with a lane VM (8080/8081).
+# After a change here, `limactl delete -f funcd-linux-tests`; the next run boots a new VM.
+
+# The lanes' Debian image (scripts/lima.yaml; scripts/lima-cache.py primes it): keep the two in step.
+images:
+  - location: "https://laotzu.ftp.acc.umu.se/cdimage/cloud/bookworm/latest/debian-12-genericcloud-arm64.qcow2"
+    arch: "aarch64"
+    digest: "sha512:f7339d10adfe8c4f6aec4cf1134b9fd6086b2710e1f9ba50e7f1d0890024036fe13417b904cc328f7b35dd9ec07165a4857ae425093bb333769f2fb527e2b02b"
+  - location: "https://laotzu.ftp.acc.umu.se/cdimage/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2"
+    arch: "x86_64"
+    digest: "sha512:ee13b9618400b521b83d92dec5106c853c3290d14f25efbacb851828abceac1847b63d3d1bac8059d980c7d443efcbc7451fdd6648b2a134796b28563cedfda9"
+
+cpus: 4
+memory: "4GiB"
+disk: "20GiB"
+
+mounts:
+  - location: "~"
+
+containerd:
+  system: false
+  user: false
+
+# guestIP 0.0.0.0 matches every bind address; the default 127.0.0.1 would leave a port bound on 0.0.0.0 forwarded.
+portForwards:
+  - guestIP: "0.0.0.0"
+    guestPortRange:
+      - 1
+      - 65535
+    proto: any
+    ignore: true
+
+# node: the tests that start a worker. git: `go build` in a test stamps VCS information, from a checkout runner does
+# not own.
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -euo pipefail
+      id runner >/dev/null 2>&1 || useradd --uid 1001 --user-group --groups adm --create-home --shell /bin/bash runner
+      command -v git >/dev/null || { apt-get update -qq && apt-get install -y -qq git; }
+      git config --system safe.directory '*'
+      if ! command -v node >/dev/null; then
+        arch=$(uname -m)
+        case $arch in aarch64) arch=arm64 ;; x86_64) arch=x64 ;; esac
+        url=https://nodejs.org/dist/latest-v22.x
+        line=$(curl -fsSL "$url/SHASUMS256.txt" | grep -- "-linux-$arch.tar.gz\$")
+        file=${line##* }
+        cd /tmp
+        curl -fsSLO "$url/$file"
+        sha256sum -c <<<"$line"
+        tar -xzf "$file" -C /usr/local --strip-components=1 --no-same-owner
+        rm "$file"
+      fi
+
+probes:
+  - description: "runner, git and node are in place"
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      id runner
+      command -v git
+      command -v node
+    hint: "the provision did not complete; see /var/log/cloud-init-output.log in `limactl shell funcd-linux-tests`"
