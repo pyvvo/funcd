@@ -239,8 +239,8 @@ func (w *Workflow) GetStatus() *Status { return &w.Status.Status }
 // Validate enforces the Workflow rules JSON Schema can't express (ADR-0094): the
 // step kind-union, unique step names, each image step's <workflow>-<step> Function
 // name fitting a DNS label, dependsOn edge validity + acyclicity, the reserved
-// workflow: kind, the onFailure handler constraints, workflow-owned store owners
-// naming a step, the declared-contract total-defaults rule, the duration bounds and a
+// workflow: kind, the onFailure handler constraints, workflow-owned stores of distinct
+// names whose owners name a step, the declared-contract total-defaults rule, the duration bounds and a
 // literal wait's grammar (ADR-0194). Field-format constraints (retry attempts, enums) are
 // schema-enforced at the edge.
 func (w *Workflow) Validate() error {
@@ -474,13 +474,19 @@ func (w *Workflow) validateOnFailure(op string, names map[ObjectName]bool) error
 	return nil
 }
 
-// validateOwnedStores checks each owned store's table owner names a step.
+// validateOwnedStores checks each owned store's name is used once, since each entry is materialized as the KVStore
+// of that name, and each table owner names a step.
 func (w *Workflow) validateOwnedStores(op string, names map[ObjectName]bool) error {
+	seen := make(map[ObjectName]int, len(w.Spec.KV))
 	for i := range w.Spec.KV {
 		st := &w.Spec.KV[i]
 		if st.Name == "" || !dnsLabel.MatchString(string(st.Name)) {
 			return fault.Invalidf(op, "spec.kv[%d].name %q is not a valid DNS-1123 label", i, st.Name)
 		}
+		if prev, dup := seen[st.Name]; dup {
+			return fault.Invalidf(op, "spec.kv[%d].name repeats the name %q of spec.kv[%d]", i, st.Name, prev)
+		}
+		seen[st.Name] = i
 		if st.Deletion != "" && st.Deletion != DeletionRetain && st.Deletion != DeletionDelete {
 			return fault.Invalidf(op, "spec.kv[%d].deletion must be %q or %q", i, DeletionRetain, DeletionDelete)
 		}
