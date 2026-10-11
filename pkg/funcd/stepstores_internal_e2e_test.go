@@ -41,10 +41,13 @@ func TestScenarioStoredWorkflowStillRefused(t *testing.T) {
 	_, err = s.Create(ctx, &v1.Workflow{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
 		ObjectMeta: v1.ObjectMeta{Name: "w", Namespace: "default", ResourceGroup: "rg1"},
-		Spec: v1.WorkflowSpec{Steps: []v1.WorkflowStep{{Name: "s", Function: &v1.FunctionStep{
-			Image: img,
-			KV:    []v1.FunctionKV{{Alias: "shared", Store: "shared", Table: "t"}},
-		}}}},
+		Spec: v1.WorkflowSpec{
+			KV: []v1.WorkflowKVStore{{Name: "w-kv", Tables: []v1.KVTable{{Name: "t"}}}},
+			Steps: []v1.WorkflowStep{
+				{Name: "a", Function: &v1.FunctionStep{Image: img, KV: []v1.FunctionKV{{Alias: "own", Store: "w-kv", Table: "t"}}}},
+				{Name: "s", Function: &v1.FunctionStep{Image: img, KV: []v1.FunctionKV{{Alias: "shared", Store: "shared", Table: "t"}}}},
+			},
+		},
 	})
 	require.NoError(t, err)
 	readyOf := func() (*v1.Workflow, v1.Condition) {
@@ -66,9 +69,15 @@ func TestScenarioStoredWorkflowStillRefused(t *testing.T) {
 	require.Equal(t, `kvstore "shared" was not made by this incarnation of workflow "w"`, c.Message)
 	require.Equal(t, wf.Generation, c.ObservedGeneration, "the status write of the stored generation succeeded")
 	require.Equal(t, v1.PhasePending, wf.Status.Phase)
-	fn, err := s.Get(ctx, v1.KindFunction.GVK(), "default", "w-s")
-	require.NoError(t, err)
-	require.Empty(t, fn.(*v1.Function).Spec.KV, "no binding is written")
-	_, err = s.Get(ctx, v1.KindKVStore.GVK(), "default", "shared")
-	require.Equal(t, fault.NotFound, fault.KindOf(err), "no store is made")
+	// Step a's declared store and binding pin the materializer's own check: without it they are written before the
+	// later refusal of step s.
+	for _, name := range []v1.ObjectName{"w-a", "w-s"} {
+		fn, err := s.Get(ctx, v1.KindFunction.GVK(), "default", name)
+		require.NoError(t, err)
+		require.Empty(t, fn.(*v1.Function).Spec.KV, "no binding is written to %s", name)
+	}
+	for _, name := range []v1.ObjectName{"w-kv", "shared"} {
+		_, err = s.Get(ctx, v1.KindKVStore.GVK(), "default", name)
+		require.Equal(t, fault.NotFound, fault.KindOf(err), "no store %s is made", name)
+	}
 }
