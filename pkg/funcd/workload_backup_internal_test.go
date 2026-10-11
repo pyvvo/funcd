@@ -651,6 +651,25 @@ func TestRestoreInPlaceRefusedWhileMarkerStands(t *testing.T) {
 	require.False(t, r.hold.HeldIn("orders"))
 }
 
+// TestRestoreLoadRefusedWhileMarkerStands: an in-place Restore that reaches the load past admission while another
+// Restore's marker stands fails NamespaceHeld before any write, and the standing marker is unchanged.
+func TestRestoreLoadRefusedWhileMarkerStands(t *testing.T) {
+	t.Parallel()
+	r := newWBRig(t, wbOptions{})
+	r.create(r.dev, r.schedule("orders-nightly", "0 3 * * *", nil))
+	r.create(r.dev, r.backupObj("b1", "orders-nightly"))
+	r.waitBackup("b1", v1.RunSucceeded)
+	r.put("orders/orders-state/t/1", "changed")
+	standing := hold.Marker{Reason: hold.ReasonRestore, Since: v1.NewTimestamp(r.clk.Now()), Restore: "other"}
+	require.NoError(t, r.hold.HoldNamespace("orders", standing))
+	r.seed(r.restoreObj("rewind", "b1", v1.RestoreMember{Kind: v1.KindKVStore, Name: "orders-state", InPlace: true}))
+
+	rs := r.waitRestore("rewind", v1.RunFailed)
+	require.Equal(t, "NamespaceHeld", reason(rs.Status.Status))
+	require.Equal(t, map[string]string{"t/1": "changed"}, r.kv("orders-state"), "no member was written")
+	require.Equal(t, standing, r.hold.NamespaceMarkers()["orders"][hold.ReasonRestore], "the standing marker is unchanged")
+}
+
 // scenario: rpo-risk — a daily schedule whose 03:00 Backup fails turns rpoRisk, the gauge and one Warn on; a success
 // clears them.
 func TestScenarioRPORisk(t *testing.T) {
