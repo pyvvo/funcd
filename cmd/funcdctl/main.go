@@ -5,6 +5,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -14,8 +15,17 @@ import (
 func main() {
 	if err := newRootCmd(os.Stdout).Execute(); err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, errorLine(err))
-		os.Exit(1)
+		os.Exit(exitCode(err))
 	}
+}
+
+// exitCode is the code of an error carrying an ExitCode method (ADR-0223 Decision 6: 3 for an impossible RTO), else 1.
+func exitCode(err error) int {
+	var coded interface{ ExitCode() int }
+	if errors.As(err, &coded) && coded.ExitCode() > 0 {
+		return coded.ExitCode()
+	}
+	return 1
 }
 
 // errorLine renders a returned error for the terminal. Its text can relay a function's answer (a failed

@@ -531,20 +531,32 @@ func Locate(explicit string) (string, error) {
 	return "", nil
 }
 
-// Load builds the effective Config (ADR-0062): defaults() → strict-decode the file at path ("" ⇒
-// skip) → overlay env (caarlos0/env; an unset FUNCD_* var leaves the field untouched) → apply the
-// --memory flag → make storage.dataDir absolute → derive the dataDir-relative defaults → Validate. Any
+// Load builds the effective Config (ADR-0062) from the file at path ("" ⇒ none): os.ReadFile, then Parse. Any
 // read/parse/unknown-key/enum error ⇒ fault.Invalid. The returned Config is fully populated + valid.
 func Load(path string, flags Flags) (Config, error) {
-	const op = "config.Load"
-	c := defaults()
+	var data []byte
 	if path != "" {
-		data, err := os.ReadFile(path) //nolint:gosec // operator-supplied config location
-		if err != nil {
-			return Config{}, fault.Invalidf(op, "read config %q: %v", path, err)
+		var err error
+		if data, err = os.ReadFile(path); err != nil { //nolint:gosec // operator-supplied config location
+			return Config{}, fault.Invalidf(loadOp, "read config %q: %v", path, err)
 		}
+	}
+	return Parse(path, data, flags)
+}
+
+// loadOp names Load in its errors, and Parse's, so the start and funcdctl backup plan print one message for the same
+// bytes (ADR-0223 Decision 3).
+const loadOp = "config.Load"
+
+// Parse builds the effective Config from data (nil ⇒ none; name appears only in messages): defaults() →
+// strict-decode data → overlay env (caarlos0/env; an unset FUNCD_* var leaves the field untouched) → apply the
+// --memory flag → make storage.dataDir absolute → derive the dataDir-relative defaults → Validate.
+func Parse(name string, data []byte, flags Flags) (Config, error) {
+	const op = loadOp
+	c := defaults()
+	if data != nil {
 		if err := yaml.UnmarshalStrict(data, &c); err != nil { // file overrides defaults; unknown key ⇒ error
-			return Config{}, fault.Invalidf(op, "parse config %q: %v", path, err)
+			return Config{}, fault.Invalidf(op, "parse config %q: %v", name, err)
 		}
 	}
 	if err := env.Parse(&c); err != nil { // env overrides file, only where set (no clobber)

@@ -31,6 +31,24 @@ class term; a rule that expires a base early breaks the points of its chain.
 `gen/pre-upgrade/` pins have no rule here: see [Pre-upgrade pins](#pre-upgrade-pins) (ADR-0207). With a
 `prefix=<p>/` in `backup.target`, every prefix below starts with `<p>/`. Object Lock is optional; funcd sets none.
 
+## From recovery objectives to settings
+
+`funcdctl backup plan` (ADR-0223) turns recovery objectives into these keys, offline: `--rpo` (the most data a loss may
+take) sets the interval to half of it, and `--keep` (how far back a restore point must reach) sets the retention. The
+result passes the daemon's own loader before it is printed, or written in place with `--write`, which keeps every
+other byte of the file. A value the start would refuse exits 1 with the start's error, and nothing is written.
+
+```sh
+funcdctl backup plan platform --rpo 1h --keep 720h
+funcdctl backup plan kv --rpo 1m --keep 168h --write
+funcdctl backup plan blob --rpo 2h --keep 720h
+funcdctl backup plan schedule -f orders-nightly.yaml --rpo 2h --keep 336h | funcdctl apply -f -
+funcdctl backup plan platform --rpo 1h --rto 4h --size 2Gi --speed 50Mi
+```
+
+A config key applies at the next start; a `BackupSchedule` applies live. `--rto` with `--size` and `--speed` checks
+the download time alone, a lower bound: an RTO below it exits 3, and only a restore drill (ADR-0206) proves an RTO.
+
 ## S3 lifecycle
 
 `aws s3api put-bucket-lifecycle-configuration --bucket <bucket> --lifecycle-configuration file://lifecycle.json`:

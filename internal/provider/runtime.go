@@ -12,6 +12,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/gateway"
 	"github.com/pyvvo/funcd/internal/platform/httpx"
+	"github.com/pyvvo/funcd/internal/platform/units"
 	containerrt "github.com/pyvvo/funcd/internal/runtime"
 )
 
@@ -311,30 +312,8 @@ func limitsFrom(rs ResourceSpec) containerrt.Limits {
 	if cpu, err := strconv.ParseFloat(strings.TrimSpace(rs.CPU), 64); err == nil && cpu > 0 {
 		l.CPUs = cpu
 	}
-	if b, ok := parseMemoryBytes(rs.Memory); ok {
+	if b, ok := units.ParseBytes(rs.Memory); ok {
 		l.MemoryBytes = b
 	}
 	return l
-}
-
-// parseMemoryBytes parses a memory hint like "4Gi"/"512Mi"/"1024" into bytes (binary suffixes).
-// Returns (0, false) on an empty or unparseable value.
-func parseMemoryBytes(s string) (int64, bool) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return 0, false
-	}
-	mult := int64(1)
-	for suffix, m := range map[string]int64{"Ki": 1 << 10, "Mi": 1 << 20, "Gi": 1 << 30, "Ti": 1 << 40} {
-		if strings.HasSuffix(s, suffix) {
-			mult = m
-			s = strings.TrimSuffix(s, suffix)
-			break
-		}
-	}
-	n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
-	if err != nil || n < 0 {
-		return 0, false
-	}
-	return n * mult, true
 }

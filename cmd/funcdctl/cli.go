@@ -163,17 +163,8 @@ func (a *cli) applyCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// Pre-flight: the shared api/types validator, offline, on every document before any network call.
-			for _, doc := range docs {
-				obj := doc.Object
-				if k := obj.GroupVersionKind().Kind; sdk.ReadOnlyKind(k) {
-					return fault.Invalidf("funcdctl apply", "document %d (%s %q): %s is read-only: %s writes it",
-						doc.Number, k, obj.GetName(), k, sdk.ReadOnlyWriter(k))
-				}
-				if verr := obj.Validate(); verr != nil {
-					return fault.Wrapf(verr, fault.KindOf(verr), "funcdctl apply", "manifest is invalid (%s %q)",
-						obj.GroupVersionKind().Kind, obj.GetName())
-				}
+			if err := preflight(docs); err != nil {
+				return err
 			}
 			c, err := a.sdkClient()
 			if err != nil {
@@ -485,6 +476,23 @@ func (a *cli) logoutCmd() *cobra.Command {
 			return a.writef("logout succeeded for %s\n", args[0])
 		},
 	}
+}
+
+// preflight is apply's offline check of every document before any network call, which backup plan runs on the
+// BackupSchedule it edits (ADR-0223 Decision 3): a read-only kind is refused, then the shared api/types validator.
+func preflight(docs []sdk.ManifestDocument) error {
+	for _, doc := range docs {
+		obj := doc.Object
+		if k := obj.GroupVersionKind().Kind; sdk.ReadOnlyKind(k) {
+			return fault.Invalidf("funcdctl apply", "document %d (%s %q): %s is read-only: %s writes it",
+				doc.Number, k, obj.GetName(), k, sdk.ReadOnlyWriter(k))
+		}
+		if verr := obj.Validate(); verr != nil {
+			return fault.Wrapf(verr, fault.KindOf(verr), "funcdctl apply", "manifest is invalid (%s %q)",
+				obj.GroupVersionKind().Kind, obj.GetName())
+		}
+	}
+	return nil
 }
 
 // readManifest reads a manifest file, or stdin when path is "-".
