@@ -44,8 +44,8 @@ func InMemory() Option {
 		}
 
 		c.store = store.New(memory.New())
-		c.blob = bucket
-		c.bus = messaging
+		c.blob, c.presetBlob = bucket, bucket
+		c.bus, c.presetBus = messaging, messaging
 		c.runtime, c.processRuntime = nil, true
 		c.gateway = embedded.New()
 		c.logger = logger.Root()

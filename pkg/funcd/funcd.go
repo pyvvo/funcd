@@ -324,6 +324,11 @@ type config struct {
 	backupRunner *runner.Runner
 	// backupParent is the generation a restore loaded (WithBackupParent); nil ⇒ none.
 	backupParent *backup.GenRef
+
+	// presetBlob and presetBus are what InMemory opened. WithBlob and WithBus close the one they replace, as nothing else
+	// would: the platform closes only the drivers it ends up with.
+	presetBlob blob.Bucket
+	presetBus  bus.Bus
 }
 
 // gate is the hold every side-effect runner asks (ADR-0206 Decision 6): hold.Never without WithHold.

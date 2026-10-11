@@ -70,12 +70,24 @@ func WithNestedInFlightCap(n int) Option {
 
 // WithBlob injects the blob (storage layer) port.
 func WithBlob(b blob.Bucket) Option {
-	return func(c *config) error { c.blob = b; return nil }
+	return func(c *config) error {
+		if c.presetBlob != nil && c.presetBlob != b {
+			_ = c.presetBlob.Close()
+		}
+		c.blob, c.presetBlob = b, nil
+		return nil
+	}
 }
 
 // WithBus injects the messaging port.
 func WithBus(b bus.Bus) Option {
-	return func(c *config) error { c.bus = b; return nil }
+	return func(c *config) error {
+		if c.presetBus != nil && c.presetBus != b {
+			_ = c.presetBus.Close()
+		}
+		c.bus, c.presetBus = b, nil
+		return nil
+	}
 }
 
 // WithFunclog tunes structured function-log capture (ADR-0081): the segment seal age and size
