@@ -84,6 +84,7 @@ flowchart TB
     ADR_0222["ADR-0222 ✓"]
     ADR_0223["ADR-0223 ✓"]
     ADR_0227["ADR-0227 ✓"]
+    ADR_0228["ADR-0228 ✓"]
     X_CRON["X-CRON · —<br/>Cron ADR (Apps epoch)"]
 
 ```
