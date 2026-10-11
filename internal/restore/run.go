@@ -1,7 +1,6 @@
 package restore
 
 import (
-	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -87,15 +86,16 @@ type restoring struct {
 	runs   runstate.Store
 	events *eventstore.Store
 	master *savedFile
+	// created are the topmost directories the run created on the way to a directory it writes: Own gives them the
+	// data directory's owner, undo removes them.
+	created []string
 }
 
-// savedFile is a file a restore replaced, with what it held before; dir is the topmost directory the restore created
-// to hold it, "" when its directory existed.
+// savedFile is a file a restore replaced, with what it held before.
 type savedFile struct {
 	path    string
 	old     []byte
 	existed bool
-	dir     string
 }
 
 // Run restores the generation p names into o.Config's empty directories and leaves the platform held (Decision 2):
@@ -175,6 +175,9 @@ func Run(ctx context.Context, p Point, o Options) (_ Report, err error) {
 	if err = hold.Write(r.dataDir, hold.Marker{Reason: "restore", Since: v1.NewTimestamp(time.Now())}); err != nil {
 		return Report{}, err
 	}
+	for _, d := range r.dirs {
+		r.track(d.path)
+	}
 	if err = r.open(); err != nil {
 		return Report{}, err
 	}
@@ -217,10 +220,10 @@ func Run(ctx context.Context, p Point, o Options) (_ Report, err error) {
 	for _, d := range r.dirs {
 		roots = append(roots, d.path)
 	}
-	if m := r.master; m != nil {
-		roots = append(roots, cmp.Or(m.dir, m.path))
+	if r.master != nil {
+		roots = append(roots, r.master.path)
 	}
-	if err = hold.Own(r.dataDir, roots...); err != nil {
+	if err = hold.Own(r.dataDir, append(roots, r.created...)...); err != nil {
 		return Report{}, err
 	}
 	if err = hold.End(r.dataDir); err != nil {
@@ -247,6 +250,7 @@ func (r *restoring) holdNamespaces(ctx context.Context) error {
 		return nil
 	}
 	slices.Sort(r.nsHeld)
+	r.track(filepath.Join(r.dataDir, hold.NamespaceDir))
 	if err := hold.MarkNamespaces(r.dataDir, r.nsHeld, hold.Marker{Reason: hold.ReasonData, Since: v1.NewTimestamp(time.Now())}); err != nil {
 		return err
 	}
@@ -345,14 +349,14 @@ func (r *restoring) undo() error {
 		errs = append(errs, removeFile(filepath.Join(r.dataDir, hold.MarkerFile)))
 	}
 	if m := r.master; m != nil {
-		switch {
-		case m.dir != "":
-			errs = append(errs, os.RemoveAll(m.dir))
-		case m.existed:
+		if m.existed {
 			errs = append(errs, os.WriteFile(m.path, m.old, 0o600))
-		default:
+		} else {
 			errs = append(errs, removeFile(m.path))
 		}
+	}
+	for _, dir := range slices.Backward(r.created) {
+		errs = append(errs, os.RemoveAll(dir))
 	}
 	errs = append(errs, hold.End(r.dataDir))
 	if err := errors.Join(errs...); err != nil {
@@ -375,6 +379,13 @@ func emptyOut(d storeDir) error {
 		errs = append(errs, os.RemoveAll(filepath.Join(d.path, e.Name())))
 	}
 	return errors.Join(errs...)
+}
+
+// track records the topmost directory of dir's path that does not exist yet, which the next step creates with dir.
+func (r *restoring) track(dir string) {
+	if top := missingDir(dir); top != "" {
+		r.created = append(r.created, top)
+	}
 }
 
 // missingDir is the topmost directory on dir's path that does not exist, the first one os.MkdirAll(dir) creates; ""
@@ -503,7 +514,8 @@ func (r *restoring) installMaster(ctx context.Context, plan escrow.MasterPlan, m
 	const op = "restore.Run"
 	if plan.Install != nil {
 		old, err := os.ReadFile(plan.Path) //nolint:gosec // the node master secret's place
-		r.master = &savedFile{path: plan.Path, old: old, existed: err == nil, dir: missingDir(filepath.Dir(plan.Path))}
+		r.master = &savedFile{path: plan.Path, old: old, existed: err == nil}
+		r.track(filepath.Dir(plan.Path))
 		if err := os.MkdirAll(filepath.Dir(plan.Path), 0o700); err != nil {
 			return fault.Wrapf(err, fault.Internal, op, "create the directory of %s", plan.Path)
 		}

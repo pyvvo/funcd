@@ -339,12 +339,23 @@ func otherOwner(t *testing.T, dir string) [2]uint32 {
 	return ownerOf(t, dir)
 }
 
-// masterGeneration cuts a generation whose manifest names a node master and returns its target and an escrow set
-// holding that master (ADR-0204 Decision 5).
-func masterGeneration(t *testing.T) (target, escrowDir string) {
+// dirsGeneration cuts a generation whose manifest names a node master and whose metastore holds a BackupSchedule, so a
+// restore of it installs the master and marks the schedule's namespace; it returns the target and an escrow set
+// holding the master (ADR-0204 Decision 5).
+func dirsGeneration(t *testing.T) (target, escrowDir string) {
 	t.Helper()
 	master := bytes.Repeat([]byte{5}, 32)
+	var recipients []string
+	for range 2 {
+		id, err := age.GenerateX25519Identity()
+		require.NoError(t, err)
+		recipients = append(recipients, id.Recipient().String())
+	}
 	s := newGSource(t, nil)
+	s.create(t, &v1.BackupSchedule{TypeMeta: tmeta(v1.KindBackupSchedule), ObjectMeta: nsObj("orders", "nightly"),
+		Spec: v1.BackupScheduleSpec{Schedule: "0 3 * * *", Scope: v1.BackupScope{KVStores: []v1.ObjectName{"orders-state"}},
+			Target:     v1.BackupTarget{URL: "s3://backups", CredentialsSecret: "backup-writer"},
+			Encryption: v1.BackupEncryption{Recipients: recipients}}})
 	s.opts.Keys.MasterSecret = envelope.Fingerprint(master)
 	s.cut(t)
 	escrowDir = t.TempDir()
@@ -353,35 +364,67 @@ func masterGeneration(t *testing.T) (target, escrowDir string) {
 	return s.target, escrowDir
 }
 
-// A restore that installs the escrowed master where no directory holds it gives the directory it creates the data
-// directory's owner, as everything else it creates (ADR-0206 Decision 2 step 5): a daemon running as that owner
-// reads the master. Run as root on Linux, the directory was root's and the daemon could not read the master.
-func TestRestoreMasterDir_TakesTheDataOwner(t *testing.T) {
+// nestedWorkflowDir is a node config whose workflow.dataDir sits below a directory that does not exist yet, which the
+// restore creates; it returns that directory too.
+func nestedWorkflowDir(t *testing.T) (extra, parent string) {
+	t.Helper()
+	parent = filepath.Join(t.TempDir(), "nested")
+	return fmt.Sprintf("workflow:\n  dataDir: %q\n", filepath.Join(parent, "workflow")), parent
+}
+
+// A restore gives every directory it creates the data directory's owner (ADR-0206 Decision 2 step 5): the escrowed
+// master's, the namespace markers' and a store directory's parent. Run as root, the master's and the parent were root's,
+// so a daemon running as the data directory's owner could not read its master or reach its store.
+func TestRestoreCreatedDirs_TakeTheDataOwner(t *testing.T) {
 	t.Parallel()
-	target, escrowDir := masterGeneration(t)
-	n := newNode(t, nil, "")
+	target, escrowDir := dirsGeneration(t)
+	extra, parent := nestedWorkflowDir(t)
+	n := newNode(t, nil, extra)
 	want := otherOwner(t, n.dataDir)
 
 	_, err := n.restore("run", "latest", "--from", target, "--escrow", escrowDir)
 	require.NoError(t, err)
 	master := s3gateway.MasterPath("", n.dataDir)
-	for _, p := range []string{filepath.Dir(master), master} {
+	for _, p := range []string{filepath.Dir(master), master, filepath.Join(n.dataDir, hold.NamespaceDir), parent,
+		filepath.Join(parent, "workflow")} {
 		require.Equal(t, want, ownerOf(t, p), "owner of %s", p)
 	}
 }
 
-// A restore that fails after installing the master removes the directory it created for it, as it removes what else
-// it created (ADR-0206 Decision 2): here its report cannot be written. A directory left behind would be taken for the
-// operator's by the next run, which would not give it the data directory's owner.
-func TestRestoreMasterDir_FailedRunRemovesIt(t *testing.T) {
+// A restore that fails after installing the master removes every directory it created (ADR-0206 Decision 2): here
+// its report cannot be written. Left behind after a run as root, the namespace markers' would stop the next start
+// and the master's would be taken for the operator's by the next run.
+func TestRestoreCreatedDirs_FailedRunRemovesThem(t *testing.T) {
 	t.Parallel()
-	target, escrowDir := masterGeneration(t)
-	n := newNode(t, nil, "")
+	target, escrowDir := dirsGeneration(t)
+	extra, parent := nestedWorkflowDir(t)
+	n := newNode(t, nil, extra)
 	require.NoError(t, os.MkdirAll(filepath.Join(n.dataDir, hold.ReportFile, "squat"), 0o700))
 
 	_, err := n.restore("run", "latest", "--from", target, "--escrow", escrowDir)
 	require.ErrorContains(t, err, hold.ReportFile)
-	require.NoDirExists(t, filepath.Dir(s3gateway.MasterPath("", n.dataDir)))
+	for _, dir := range []string{filepath.Dir(s3gateway.MasterPath("", n.dataDir)), filepath.Join(n.dataDir, hold.NamespaceDir),
+		parent} {
+		require.NoDirExists(t, dir)
+	}
+}
+
+// A failed restore keeps a master directory that existed before it, with the master it held: it removes only what it
+// created.
+func TestRestoreMasterDir_FailedRunKeepsAnExistingOne(t *testing.T) {
+	t.Parallel()
+	target, escrowDir := dirsGeneration(t)
+	n := newNode(t, nil, "")
+	master, old := s3gateway.MasterPath("", n.dataDir), bytes.Repeat([]byte{9}, 32)
+	require.NoError(t, os.MkdirAll(filepath.Dir(master), 0o700))
+	require.NoError(t, os.WriteFile(master, old, 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Join(n.dataDir, hold.ReportFile, "squat"), 0o700))
+
+	_, err := n.restore("run", "latest", "--from", target, "--escrow", escrowDir)
+	require.ErrorContains(t, err, hold.ReportFile)
+	got, err := os.ReadFile(master) //nolint:gosec // a test temp path
+	require.NoError(t, err)
+	require.Equal(t, old, got)
 }
 
 func ownerOf(t *testing.T, p string) [2]uint32 {
