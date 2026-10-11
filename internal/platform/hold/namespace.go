@@ -54,13 +54,18 @@ func (h *Hold) ReleasedAtIn(ns v1.NamespaceName) time.Time {
 	return h.released
 }
 
-// HoldNamespace writes ns's marker for m.Reason and holds ns live.
+// HoldNamespace writes ns's marker for m.Reason and holds ns live. It never replaces a marker: ns already held for
+// m.Reason ⇒ fault.Conflict naming the Restore of the marker that stands.
 func (h *Hold) HoldNamespace(ns v1.NamespaceName, m Marker) error {
-	if err := writeNamespaceMarker("hold.HoldNamespace", h.dir, ns, m); err != nil {
-		return err
-	}
+	const op = "hold.HoldNamespace"
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if cur, ok := h.nsHeld[ns][m.Reason]; ok {
+		return fault.Conflictf(op, "namespace %q is already held for %q (Restore %q)", ns, m.Reason, cur.Restore)
+	}
+	if err := writeNamespaceMarker(op, h.dir, ns, m); err != nil {
+		return err
+	}
 	if h.nsHeld[ns] == nil {
 		h.nsHeld[ns] = map[string]Marker{}
 	}

@@ -203,6 +203,9 @@ func (r *RestoreReconciler) load(ctx context.Context, rs *v1.Restore, b *v1.Back
 	if rs.InPlace() && r.d.Hold != nil {
 		m := hold.Marker{Reason: hold.ReasonRestore, Since: v1.NewTimestamp(r.d.Clock.Now()), Restore: rs.Name}
 		if err := r.d.Hold.HoldNamespace(rs.Namespace, m); err != nil {
+			if fault.KindOf(err) == fault.Conflict {
+				return ReasonNamespaceHeld, err
+			}
 			return reasonFailed, err
 		}
 		held = &m

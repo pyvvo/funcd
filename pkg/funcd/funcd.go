@@ -1182,11 +1182,11 @@ func (p *Platform) buildControlPlane() error {
 			// ADR-0170: a ResourceGroup is deleted only when it has no member (or with force, members first).
 			admission.NewResourceGroupDeletionProtectionAdmission(r),
 			// ADR-0222: a schedule's recipients and target, a Backup's ttl, immutable records, and update on the
-			// Namespace and one active at a time for an in-place Restore.
+			// Namespace, one active at a time and none while a restore marker stands for an in-place Restore.
 			admission.NewBackupScheduleAdmission(c.blobStoreURL),
 			admission.NewBackupSpecImmutableAdmission(),
 			admission.NewBackupTTLAdmission(r),
-			admission.NewRestoreInPlaceAdmission(c.authorizer, r),
+			admission.NewRestoreInPlaceAdmission(c.authorizer, r, c.hold),
 		}
 	}
 

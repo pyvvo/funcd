@@ -551,11 +551,13 @@ func TestRestoreInterruptedHoldRelease(t *testing.T) {
 	require.Equal(t, fault.Conflict, fault.KindOf(r.admin.ReleaseNamespaceHold(r.ctx, []string{"orders"})))
 }
 
-// stallBucket is the shared blob store whose Put of a key ending in stall, once armed, waits for its context to end:
-// a load that a stop interrupts. Its Close keeps it open for the platform a restart builds.
+// stallBucket is the shared blob store whose Put of a key ending in stall, once armed, waits for its context to end
+// (a load that a stop interrupts), or with fail set fails at once. Its Close keeps it open for the platform a restart
+// builds.
 type stallBucket struct {
 	blob.Bucket
 	stall   string
+	fail    bool
 	armed   atomic.Bool
 	stalled chan struct{}
 	once    sync.Once
@@ -563,6 +565,9 @@ type stallBucket struct {
 
 func (b *stallBucket) Put(ctx context.Context, key string, data []byte, o blob.PutOptions) error {
 	if b.armed.Load() && strings.HasSuffix(key, b.stall) {
+		if b.fail {
+			return fault.Unavailablef("test", "the blob store refused %s", key)
+		}
 		b.once.Do(func() { close(b.stalled) })
 		<-ctx.Done()
 		return ctx.Err()
@@ -612,6 +617,37 @@ func TestRestoreStopKeepsNamespaceHeld(t *testing.T) {
 	require.True(t, r.hold.HeldIn("orders"))
 	require.Equal(t, v1.ObjectName("rewind"), marker())
 	require.NoError(t, r.admin.ReleaseNamespaceHold(r.ctx, []string{"orders"}))
+	require.False(t, r.hold.HeldIn("orders"))
+}
+
+// TestRestoreInPlaceRefusedWhileMarkerStands: an in-place load of orders-files that fails on b.csv keeps the
+// namespace held; a second in-place Restore, of orders-state only, is refused naming the first and the release; after
+// hold release --namespace it is admitted and succeeds.
+func TestRestoreInPlaceRefusedWhileMarkerStands(t *testing.T) {
+	t.Parallel()
+	mem, err := gocloud.Open(context.Background(), "mem://")
+	require.NoError(t, err)
+	shared := &stallBucket{Bucket: mem, stall: "/b.csv", fail: true}
+	r := newWBRig(t, wbOptions{opts: []Option{WithBlob(shared)}, setup: func(r *wbRig) {
+		require.NoError(r.t, shared.Put(r.ctx, bucketPrefix("orders", "orders-files")+"b.csv", []byte("id\n"), blob.PutOptions{}))
+	}})
+	r.create(r.dev, r.schedule("orders-nightly", "0 3 * * *", nil))
+	r.create(r.dev, r.backupObj("b1", "orders-nightly"))
+	r.waitBackup("b1", v1.RunSucceeded)
+	shared.armed.Store(true)
+	r.create(r.admin, r.restoreObj("first", "b1", v1.RestoreMember{Kind: v1.KindBucket, Name: "orders-files", InPlace: true}))
+	r.waitRestore("first", v1.RunFailed)
+	require.True(t, r.hold.HeldIn("orders"), "a failed load keeps the namespace held")
+
+	second := r.restoreObj("second", "b1", v1.RestoreMember{Kind: v1.KindKVStore, Name: "orders-state", InPlace: true})
+	_, err = r.admin.Create(r.ctx, second)
+	require.Equal(t, fault.Conflict, fault.KindOf(err), "%v", err)
+	require.ErrorContains(t, err, "first")
+	require.ErrorContains(t, err, "hold release --namespace orders")
+
+	require.NoError(t, r.admin.ReleaseNamespaceHold(r.ctx, []string{"orders"}))
+	r.create(r.admin, second)
+	r.waitRestore("second", v1.RunSucceeded)
 	require.False(t, r.hold.HeldIn("orders"))
 }
 

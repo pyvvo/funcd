@@ -9,6 +9,7 @@ import (
 	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/backup/envelope"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
+	"github.com/pyvvo/funcd/internal/platform/hold"
 )
 
 // --- backup-schedule (ADR-0222 Decision 6): Create and Update on BackupSchedule ---------------------------------
@@ -129,14 +130,17 @@ func (a backupTTL) Admit(ctx context.Context, req Request) (v1.Object, error) {
 type restoreInPlace struct {
 	authz auth.Authorizer
 	r     StoreReader
+	h     *hold.Hold
 }
 
 // NewRestoreInPlaceAdmission returns the Validating admission of a Restore with an inPlace member: its create needs
 // update on the Namespace (the built-in RBAC gives it to an admin only) and is refused while another in-place Restore
 // of the namespace has not ended, since they would share the namespace's restore hold; its delete is refused until it
-// has ended, so the hold keeps the Restore that names it. It reads Request.Old on a delete.
-func NewRestoreInPlaceAdmission(authz auth.Authorizer, r StoreReader) Admission {
-	return restoreInPlace{authz: authz, r: r}
+// has ended, so the hold keeps the Restore that names it. A create is also refused while the namespace carries a
+// restore marker, which only hold release --namespace lifts once its load did not complete; h nil holds nothing. It
+// reads Request.Old on a delete.
+func NewRestoreInPlaceAdmission(authz auth.Authorizer, r StoreReader, h *hold.Hold) Admission {
+	return restoreInPlace{authz: authz, r: r, h: h}
 }
 
 func (restoreInPlace) Name() string { return "restore-in-place" }
@@ -177,6 +181,12 @@ func (a restoreInPlace) Admit(ctx context.Context, req Request) (v1.Object, erro
 		if other, ok := o.(*v1.Restore); ok && other.Name != r.Name && other.InPlace() && !other.Ended() {
 			return nil, fault.Conflictf(op, "in-place Restore %s of namespace %q has not ended: create this one once it has",
 				other.Name, r.Namespace)
+		}
+	}
+	if a.h != nil {
+		if m, ok := a.h.NamespaceMarkers()[r.Namespace][hold.ReasonRestore]; ok {
+			return nil, fault.Conflictf(op, "namespace %q is held by in-place Restore %q, whose load did not complete: "+
+				"check the store, then funcdctl hold release --namespace %s", r.Namespace, m.Restore, r.Namespace)
 		}
 	}
 	return req.Object, nil

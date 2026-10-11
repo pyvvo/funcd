@@ -190,7 +190,7 @@ func TestRestoreInPlaceOnePerNamespace(t *testing.T) {
 	srv, err := controlplane.NewServer(controlplane.Deps{
 		Store: st, Authorizer: authz,
 		Credentials: middleware.NewStaticCredentials(map[string]auth.Identity{adminToken: {Subject: "ops", Role: auth.RoleAdmin}}),
-		Admissions:  []admission.Admission{admission.NewRestoreInPlaceAdmission(authz, raceReader{st})},
+		Admissions:  []admission.Admission{admission.NewRestoreInPlaceAdmission(authz, raceReader{st}, nil)},
 	})
 	require.NoError(t, err)
 	const restores = "/apis/funcd.io/v1alpha1/namespaces/orders/restores"
@@ -229,7 +229,7 @@ func TestRestoreInPlaceDeleteWaitsForEnd(t *testing.T) {
 	srv, err := controlplane.NewServer(controlplane.Deps{
 		Store: st, Authorizer: authz,
 		Credentials: middleware.NewStaticCredentials(map[string]auth.Identity{adminToken: {Subject: "ops", Role: auth.RoleAdmin}}),
-		Admissions:  []admission.Admission{admission.NewRestoreInPlaceAdmission(authz, raceReader{st})},
+		Admissions:  []admission.Admission{admission.NewRestoreInPlaceAdmission(authz, raceReader{st}, nil)},
 	})
 	require.NoError(t, err)
 	const restores = "/apis/funcd.io/v1alpha1/namespaces/orders/restores"

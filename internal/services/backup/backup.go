@@ -40,6 +40,8 @@ const (
 	ReasonIntegrity           = "Integrity"
 	ReasonExportFailed        = "ExportFailed"
 	ReasonSameProvider        = "SameProvider"
+	// ReasonNamespaceHeld is an in-place Restore whose namespace already carries a restore marker.
+	ReasonNamespaceHeld = "NamespaceHeld"
 	// reasonFailed is a run's failure no other reason names; its message carries the cause.
 	reasonFailed = "Failed"
 	// reasonBackupNotReady is a Restore's Backup that is missing or Failed.

@@ -144,8 +144,9 @@ func TestReleaseNamespace(t *testing.T) {
 	require.False(t, hold.NeverNamespace.HeldIn("web"))
 }
 
-// TestReleaseNamespaceMarker (ADR-0222 Decision 8): a restore marker names its Restore across an Open; a release of a
-// marker another Restore rewrote since is a Conflict that keeps the namespace held.
+// TestReleaseNamespaceMarker (ADR-0222 Decision 8): a restore marker names its Restore across an Open and is never
+// replaced while it stands; a release of a marker another Restore wrote since is a Conflict that keeps the namespace
+// held.
 func TestReleaseNamespaceMarker(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -153,6 +154,10 @@ func TestReleaseNamespaceMarker(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, h.HoldNamespace("web", hold.Marker{Reason: hold.ReasonRestore, Since: v1.NewTimestamp(time.Now()), Restore: "first"}))
 	first := h.NamespaceMarkers()["web"][hold.ReasonRestore]
+	err = h.HoldNamespace("web", hold.Marker{Reason: hold.ReasonRestore, Since: v1.NewTimestamp(time.Now()), Restore: "second"})
+	require.Equal(t, fault.Conflict, fault.KindOf(err))
+	require.Equal(t, first, h.NamespaceMarkers()["web"][hold.ReasonRestore], "a standing marker is never replaced")
+	require.NoError(t, h.ReleaseNamespaceMarker("web", first))
 	require.NoError(t, h.HoldNamespace("web", hold.Marker{Reason: hold.ReasonRestore, Since: v1.NewTimestamp(time.Now()), Restore: "second"}))
 	require.Equal(t, fault.Conflict, fault.KindOf(h.ReleaseNamespaceMarker("web", first)))
 	require.True(t, h.HeldIn("web"))
