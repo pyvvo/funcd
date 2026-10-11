@@ -355,3 +355,35 @@ func TestScenarioAppHookRepeatsAfterRestart(t *testing.T) {
 	require.Equal(t, v1.AppHookInput{Event: "upgrade", App: "todo", From: "todo-1", To: "todo-2", FromVersion: "3.0.0", ToVersion: "4.0.0"},
 		e.hookInput(t, "todo-2"), "the second call wrote its input")
 }
+
+// A hook call wakes its Function within the hook Function's spec.timeout (ADR-0214 Decision 5): a pre-hook
+// Function that scales to zero and takes 2 s to load fails its call at a 1 s timeout, and passes at 10 s.
+func TestAppHookTimeoutCoversWake(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		timeout time.Duration
+		ok      bool
+	}{{time.Second, false}, {10 * time.Second, true}} {
+		t.Run(tc.timeout.String(), func(t *testing.T) {
+			t.Parallel()
+			e := startGC(t)
+			writeStep(t, e.src, "slowload", "await new Promise((r) => setTimeout(r, 2000));\nexport async function handle() { return { ok: true }; }\n")
+			a := todoV1(t, e)
+			a.Spec.Functions = append(a.Spec.Functions, v1.AppFunction{Name: "todo-hook", FunctionSpec: v1.FunctionSpec{
+				Runtime: "nodejs22", Handler: "handle", Image: pushStepImage(t, e.layout, e.src, "slowload"), Timeout: v1.Duration(tc.timeout),
+			}})
+			a.Spec.Hooks = &v1.AppHooks{PreApply: []v1.AppHook{{Function: "todo-hook"}}}
+			e.apply(t, a)
+			if tc.ok {
+				e.waitCurrent(t, "todo-1")
+				e.waitApp(t, "todo", v1.ConditionTrue, "", appWithin)
+				return
+			}
+			c := condition(e.waitRevisionPhase(t, "todo-1", v1.PhaseFailed, appWithin), "Applied")
+			require.Equal(t, "HookFailed", c.Reason)
+			require.Contains(t, c.Message, "Function/todo-hook: Invocation/")
+			require.Contains(t, c.Message, "wake default/todo-hook", "the call ended while it woke the Function")
+			e.waitApp(t, "todo", v1.ConditionFalse, "HookFailed", appWithin)
+		})
+	}
+}
