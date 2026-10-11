@@ -1,8 +1,8 @@
 # ADR-0230: The full lane run shares one Lima VM, reset between lanes
 
-- **Status**: Accepted (2026-10-11; decided by the decider, judged twice: the first round specified the lane-less
-  boot, a self-contained reset and leak check, and dropped a journal-window change; the second found no technical
-  Blocker or Major)
+- **Status**: Reviewing (2026-10-11; implemented, awaiting the implementation review; accepted 2026-10-11, decided by
+  the decider, judged twice: the first round specified the lane-less boot, a self-contained reset and leak check, and
+  dropped a journal-window change; the second found no technical Blocker or Major)
 - **Date**: 2026-10-11
 - **Deciders**: green-0-rabbit
 - **Tags**: testing, e2e, venom, lima, tooling

@@ -268,11 +268,15 @@ lima-example name:
 lima-cache-image from="":
     python3 scripts/lima-cache.py {{ if from == "" { "" } else { "--from " + from } }}
 
-# Run EVERY Venom e2e lane back-to-back: the data-driven lanes from scripts/lanes.yaml (each has its own
-# `venom:` suite, ADR-0077) PLUS the metastore lane. Lanes are enumerated from the registry, so a new lane
-# is covered automatically; an `optional` lane is left out (`just lima-example <name>` runs it). Continues
-# past a failing lane and prints a PASS/FAIL summary, exiting non-zero if any lane failed. Needs docker
-# (colima) up. `just lima-example-all`.
+# Run EVERY Venom e2e lane (ADR-0230): the data-driven lanes from scripts/lanes.yaml (each has its own `venom:` suite,
+# ADR-0077) share ONE VM, then the metastore lane runs on its own. Lanes are enumerated from the registry, so a new lane
+# is covered automatically; an `optional` lane is left out (`just lima-example <name>` runs it). The images and binaries
+# are built once and the VM boots once from scripts/lima-lane.yaml with no lane; each lane is then staged
+# (scripts/lane.py), deployed and probed by the template's scripts, runs its suite, and the VM is reset and leak-checked
+# (scripts/lane-reset.sh, scripts/lane-leakcheck.sh). A failed suite is recorded and the run goes on; a failed reset or
+# leak check fails the lane that just ran and stops the run, listing the lanes not run. Prints a PASS/FAIL summary,
+# exiting non-zero if any lane failed. A rerun of one lane is `just lima-example <name>`, on a VM of its own. Needs
+# docker (colima) up. `just lima-example-all`.
 [group('example')]
 lima-example-all:
     #!/usr/bin/env bash
@@ -281,16 +285,45 @@ lima-example-all:
     export FUNCD_LANE_LOCK_HOLDER="${FUNCD_LANE_LOCK_HOLDER:-$$}"
     lanes=$(python3 scripts/lane.py --venom-lanes) || { echo "lima-example-all: cannot list the lanes of scripts/lanes.yaml" >&2; exit 1; }
     echo "venom lanes: $lanes metastore"
-    passed=""; failed=""
-    for lane in $lanes; do
-        echo "═════════════ venom lane: $lane ═════════════"
-        if just lima-example "$lane"; then passed="$passed $lane"; else failed="$failed $lane"; fi
+    deps='{{lima_deps}}'; vm='{{lima_name}}-shared'
+    just ARCH={{ARCH}} build-runtime-images || exit 1
+    mkdir -p "$deps" || exit 1
+    for pkg in cmd/funcd cmd/funcdctl e2e/cniadd; do
+        CGO_ENABLED=0 GOOS=linux GOARCH={{ARCH}} go build -o "$deps/${pkg##*/}" "./$pkg" || exit 1
     done
-    echo "═════════════ venom lane: metastore ═════════════"
-    if just lima-example-metastore; then passed="$passed metastore"; else failed="$failed metastore"; fi
+    cp scripts/lane-provision.sh scripts/lane-ready.sh scripts/lane-reset.sh scripts/lane-leakcheck.sh "$deps/" || exit 1
+    down() { limactl stop -f "$vm" >/dev/null 2>&1; limactl delete -f "$vm" >/dev/null 2>&1; true; }
+    in_vm() { local script=$1; shift; limactl shell --workdir / "$vm" sudo bash "/mnt/funcd-deps/$script" "$@"; }
+    clean() { in_vm lane-reset.sh && in_vm lane-leakcheck.sh; }
+    trap down EXIT
+    down
+    rm -f "$deps/lane.tgz"
+    read -ra all <<<"$lanes"
+    passed=""; failed=""; halted=""; i=0
+    echo "═════════════ shared VM: $vm ═════════════"
+    if ! limactl start --name "$vm" --tty=false scripts/lima-lane.yaml; then halted="the boot of $vm"
+    elif ! clean; then halted="the reset or the leak check after the boot"; fi
+    while [ -z "$halted" ] && [ "$i" -lt "${#all[@]}" ]; do
+        lane=${all[$i]}; i=$((i + 1)); ok=0
+        echo "═════════════ venom lane: $lane ═════════════"
+        if suite=$(python3 scripts/lane.py "$lane" "$deps") && in_vm lane-provision.sh lane && in_vm lane-ready.sh; then
+            ( cd "$deps" && VENOM_VERBOSE=2 venom run --output-dir "$deps" --var "vm=$vm" "$suite" ) && ok=1
+            echo "venom results: $deps/test_results_$(basename "$suite" .yml).xml"
+        fi
+        clean || { ok=0; halted="the reset or the leak check after $lane"; }
+        if [ "$ok" = 1 ]; then passed="$passed $lane"; else failed="$failed $lane"; fi
+    done
+    down
+    if [ -n "$halted" ]; then
+        echo "lima-example-all: $halted failed; lanes not run: ${all[*]:$i} metastore"
+    else
+        echo "═════════════ venom lane: metastore ═════════════"
+        if just lima-example-metastore; then passed="$passed metastore"; else failed="$failed metastore"; fi
+    fi
     echo "═════════════════════════════════════════════════"
     echo "PASSED:$passed"
-    [ -n "$failed" ] && { echo "FAILED:$failed"; exit 1; }
+    [ -z "$failed" ] || echo "FAILED:$failed"
+    [ -z "$failed$halted" ] || exit 1
     echo "ALL VENOM E2E LANES PASSED ✅"
 
 # the containerd-lane METASTORE e2e (ADR-0065): boot funcd with the REAL production config (runtime

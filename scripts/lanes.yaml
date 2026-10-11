@@ -1,7 +1,9 @@
 # The funcd example-lane REGISTRY (ADR-0077 declarative e2e). One section per lane; the single generic
 # recipe `just lima-example <name>` (host side) and the single generic VM `scripts/lima-lane.yaml`
-# (guest side) read the section for the lane being launched and drive it entirely from this data — so a
-# new lane is just a section here + its manifests + a Venom suite, with NO per-lane recipe or VM YAML.
+# (guest side, through scripts/lane-provision.sh and scripts/lane-ready.sh) read the section for the lane
+# being launched and drive it entirely from this data — so a new lane is just a section here + its
+# manifests + a Venom suite, with NO per-lane recipe or VM YAML. `just lima-example-all` runs the lanes one
+# after the other on one shared VM (ADR-0230), so every lane funcdconfig sets dataDir: /var/lib/funcd/data.
 #
 # Per lane:
 #   module  — the pinned Go module the example lives in (ADR-0141): github.com/pyvvo/funcd-typescript,

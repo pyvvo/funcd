@@ -3,9 +3,9 @@
 
 `scripts/lane.py <name> <deps-dir>` reads the lane's section, runs its `build` commands (in the lane's
 dir), stages its `stage` files + the registry + a `LANE` marker into `<deps>/lane.tgz` (exactly what the
-generic VM `scripts/lima-lane.yaml` extracts + interprets in-guest), and prints the ABSOLUTE path of the
-lane's Venom suite (for the recipe to run once the VM is up). No per-lane logic lives here — a new lane is
-just a section in lanes.yaml. Its guest-side twin is the python block inside `scripts/lima-lane.yaml`.
+guest's `scripts/lane-provision.sh` extracts + interprets), and prints the ABSOLUTE path of the
+lane's Venom suite (for the recipe to run once the lane is up). No per-lane logic lives here — a new lane is
+just a section in lanes.yaml. Its guest-side twin is `scripts/lane-provision.sh`.
 `scripts/lane.py --venom-lanes` lists the lanes `just lima-example-all` runs: those with a suite, not `optional`.
 
 A lane's `module` names the pinned Go module its `dir` lives in (ADR-0141): the funcd-typescript or

@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"go.yaml.in/yaml/v3"
+
+	"github.com/pyvvo/funcd/internal/testkit/langmod"
 )
 
 // The lane tools read scripts/lanes.yaml with PyYAML through the dev shell's python3. When the dev shell pinned a
@@ -154,4 +156,90 @@ func TestLinuxTestsVMBootsTheLaneImageAndIgnoresEveryGuestPort(t *testing.T) {
 	anyIP := false
 	require.Equal(t, []rule{{GuestIP: "0.0.0.0", GuestIPMustBeZero: &anyIP, GuestPortRange: []int{1, 65535}, Proto: "any",
 		Ignore: true}}, tests.PortForwards)
+}
+
+// ADR-0230: the lane template and `just lima-example-all`'s shared VM run the same provision, readiness, reset and
+// leak-check scripts; each must at least parse.
+func TestLaneVMScriptsParse(t *testing.T) {
+	for _, script := range []string{"lane-provision.sh", "lane-ready.sh", "lane-reset.sh", "lane-leakcheck.sh"} {
+		out, err := exec.Command("bash", "-n", script).CombinedOutput()
+		require.NoError(t, err, "bash -n %s: %s", script, out)
+	}
+}
+
+// ADR-0230: the lane template keeps no provision or readiness code of its own; it reads the shared scripts in, so a
+// single-lane VM and the shared VM deploy and probe a lane the same way. Lima 2.1 reads no `file:` of a probe, so the
+// readiness script is a data file that the probe runs.
+func TestLaneTemplateRunsTheSharedScripts(t *testing.T) {
+	raw, err := os.ReadFile("lima-lane.yaml")
+	require.NoError(t, err)
+	var tmpl struct {
+		Provision []struct {
+			Mode   string `yaml:"mode"`
+			File   string `yaml:"file"`
+			Path   string `yaml:"path"`
+			Script string `yaml:"script"`
+		} `yaml:"provision"`
+		Probes []struct {
+			Script string `yaml:"script"`
+		} `yaml:"probes"`
+	}
+	require.NoError(t, yaml.Unmarshal(raw, &tmpl))
+	files := map[string]string{}
+	for _, p := range tmpl.Provision {
+		require.Empty(t, p.Script, "a provision step of the template reads a shared script with file:")
+		require.FileExists(t, p.File, "the template reads %s from beside it", p.File)
+		files[p.Mode+" "+p.File] = p.Path
+	}
+	require.Contains(t, files, "system lane-provision.sh")
+	ready, ok := files["data lane-ready.sh"]
+	require.True(t, ok, "the template writes lane-ready.sh into the guest: %v", files)
+	require.Len(t, tmpl.Probes, 1)
+	require.Contains(t, tmpl.Probes[0].Script, "exec "+ready)
+}
+
+// The reset of the shared lane VM (scripts/lane-reset.sh) removes /var/lib/funcd/data whole, which is a lane's own
+// data only because every lane config sets that dataDir (ADR-0230); funcd's default is /var/lib/funcd.
+func TestEveryLaneConfigSetsTheResetDataDir(t *testing.T) {
+	raw, err := os.ReadFile("lanes.yaml")
+	require.NoError(t, err)
+	var registry map[string]struct {
+		Module string      `yaml:"module"`
+		Dir    string      `yaml:"dir"`
+		Stage  []yaml.Node `yaml:"stage"`
+	}
+	require.NoError(t, yaml.Unmarshal(raw, &registry))
+	root := func(module string) string {
+		if module == "" {
+			return ".."
+		}
+		return langmod.Dir(t, module)
+	}
+	require.NotEmpty(t, registry)
+	for name, lane := range registry {
+		config := ""
+		for _, node := range lane.Stage {
+			if node.Kind == yaml.ScalarNode {
+				if node.Value == "funcdconfig.yaml" {
+					config = filepath.Join(root(lane.Module), lane.Dir, node.Value)
+				}
+				continue
+			}
+			var entry struct{ From, Module, To string }
+			require.NoError(t, node.Decode(&entry), "lane %s", name)
+			if entry.To == "funcdconfig.yaml" {
+				config = filepath.Join(root(entry.Module), entry.From)
+			}
+		}
+		require.NotEmpty(t, config, "lane %s stages a funcdconfig.yaml", name)
+		raw, err := os.ReadFile(config)
+		require.NoError(t, err, "lane %s", name)
+		var cfg struct {
+			Storage struct {
+				DataDir string `yaml:"dataDir"`
+			} `yaml:"storage"`
+		}
+		require.NoError(t, yaml.Unmarshal(raw, &cfg), "lane %s", name)
+		require.Equal(t, "/var/lib/funcd/data", cfg.Storage.DataDir, "lane %s: %s", name, config)
+	}
 }

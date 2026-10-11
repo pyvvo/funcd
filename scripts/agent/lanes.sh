@@ -5,7 +5,7 @@
 # lane lock, prints one PASS/FAIL line, and removes the checkout. The checkout is lane-<branch>-<lane>.<random>, so two
 # runs at once never share one, and only the run that made it removes it, also when the run is stopped. Full logs:
 # .cache/lanes/<branch>-<lane>.log in the main checkout. Both names turn the slashes of the branch into underscores. A
-# full lane run takes about 12 minutes per spec.
+# spec of all lanes takes about 8 minutes (one shared VM, ADR-0230).
 set -u
 [ $# -gt 0 ] || { echo "usage: lanes.sh <branch>:<lane|all>..." >&2; exit 2; }
 root=$(cd "$(git -C "$(dirname "$0")" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)

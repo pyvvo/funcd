@@ -8,8 +8,8 @@
 # the lock of one that has exited. Every removal, a takeover or the release by the detached watcher that follows the
 # holder, runs under a second lock and re-reads the holder first, so a live holder's lock is never removed; a removal
 # that finds the lock gone, or waits two minutes for that second lock, gives up. The holder then refuses to start
-# beside a running funcd VM. A recipe run by one that holds the lock (lima-example-all running lima-example) passes it
-# on through FUNCD_LANE_LOCK_HOLDER.
+# beside a running funcd VM. A recipe run by one that holds the lock (lima-example-all running lima-example-metastore)
+# passes it on through FUNCD_LANE_LOCK_HOLDER.
 #
 #   scripts/lane-lock.sh $$          # under set -e, on its own line: a refusal must stop the recipe
 #   export FUNCD_LANE_LOCK_HOLDER="${FUNCD_LANE_LOCK_HOLDER:-$$}"
