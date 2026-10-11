@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -250,14 +251,20 @@ func (r *catalogRun) env(t *testing.T, name string) (url, token string) {
 	return spec.Env["FUNCD_CATALOG_LAKE_URL"], spec.Env["FUNCD_CATALOG_LAKE_TOKEN"]
 }
 
-// catalogQuery sends a Quack handshake carrying token to the catalog URL a consumer was injected with.
+// catalogQuery sends a Quack handshake carrying token to the catalog URL a consumer was injected with, on a connection
+// of its own, as a worker started in a new run dials one: a pooled connection of the previous run is closed, and a
+// POST written onto it before the client notices fails with EOF (#931).
 func catalogQuery(t *testing.T, url, token string) (int, string) {
 	t.Helper()
 	body := make([]byte, 8)
 	body = append(body, 0x01, 0x00)
 	body = binary.AppendUvarint(body, uint64(len(token)))
 	body = append(body, token...)
-	resp, err := http.Post("http://"+url, "application/octet-stream", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://"+url, bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Close = true
+	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, resp.Body.Close()) }()
 	out, err := io.ReadAll(resp.Body)
@@ -489,5 +496,32 @@ func TestScenarioLastBinderClosesListener(t *testing.T) {
 			unbind(t, r)
 			requireDialRefused(t, url)
 		})
+	}
+}
+
+// servedKey keys a connection's served flag in its context.
+type servedKey struct{}
+
+// TestIssue931_QueryOpensItsOwnConnection: a server that serves one request per connection, as a restarted daemon
+// serves none of its previous run's, answers every catalogQuery: a query is never written onto an earlier query's
+// connection, which net/http does not retry for a POST once the server has closed it.
+func TestIssue931_QueryOpensItsOwnConnection(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if served, _ := r.Context().Value(servedKey{}).(*atomic.Bool); served.Swap(true) {
+			panic(http.ErrAbortHandler)
+		}
+		_, _ = io.WriteString(w, "[[42]]")
+	}))
+	srv.Config.ConnContext = func(ctx context.Context, _ net.Conn) context.Context {
+		return context.WithValue(ctx, servedKey{}, new(atomic.Bool))
+	}
+	srv.Start()
+	t.Cleanup(srv.Close)
+	url := strings.TrimPrefix(srv.URL, "http://")
+	for range 2 {
+		code, body := catalogQuery(t, url, "token")
+		require.Equal(t, http.StatusOK, code)
+		require.Equal(t, "[[42]]", body)
 	}
 }
