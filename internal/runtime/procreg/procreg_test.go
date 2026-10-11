@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/runtime/procreg"
@@ -120,6 +121,22 @@ func TestRegistryLockIsExclusive(t *testing.T) {
 	require.NoError(t, r.Close())
 	r, err = procreg.Open(dir, "workers")
 	require.NoError(t, err, "Close releases the lock")
+	require.NoError(t, r.Close())
+}
+
+// Issue #932: Close releases the lock while a child forked meanwhile, as the driver forks its workers, still holds a
+// copy of the descriptor until it execs, so the next Open in this process is not refused; a close-on-exec copy of the
+// descriptor stands in for the child's.
+func TestIssue932_CloseReleasesLockWhileChildHoldsDescriptor(t *testing.T) {
+	dir := t.TempDir()
+	r, err := procreg.Open(dir, "workers")
+	require.NoError(t, err)
+	child, err := unix.FcntlInt(procreg.LockFile(r).Fd(), unix.F_DUPFD_CLOEXEC, 0)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = unix.Close(child) })
+	require.NoError(t, r.Close())
+	r, err = procreg.Open(dir, "workers")
+	require.NoError(t, err)
 	require.NoError(t, r.Close())
 }
 

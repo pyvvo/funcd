@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 	"sigs.k8s.io/yaml"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -374,6 +375,22 @@ func TestScenarioDirectorySecondWriterRefused(t *testing.T) {
 	m, err := write(b, tl1, backup.WriteOptions{})
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), m.Generation)
+}
+
+// Issue #932: a child that another goroutine forks holds a copy of the lock's descriptor until it execs. Close
+// releases the lock all the same, so the next Ready in this process is not refused as a second writer; a close-on-exec
+// copy of the descriptor stands in for the child's.
+func TestIssue932_CloseReleasesLockWhileChildHoldsDescriptor(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dir := t.TempDir()
+	tg := fileTarget(t, dir, nil)
+	require.NoError(t, tg.Ready(ctx))
+	child, err := unix.FcntlInt(backup.LockFile(tg).Fd(), unix.F_DUPFD_CLOEXEC, 0)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = unix.Close(child) })
+	require.NoError(t, tg.Close())
+	require.NoError(t, fileTarget(t, dir, nil).Ready(ctx))
 }
 
 // scenario: second-platform-refused — another timeline's key above the run's last, or another run's parts at the
