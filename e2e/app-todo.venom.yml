@@ -35,6 +35,9 @@
 #   D11-D14 the dead letter and the run record of the backup come back as evidence; a target funcd cannot write stops
 #       the backup and backup status says why; a config that breaks a backup rule is refused at start and by backup
 #       plan alike; a plain restart keeps the event store, so nothing fires twice (ADR-0201, 0203, 0205, 0223).
+#   D15 a crash-looping funcd starts held, then stops with status 70 naming the restore (ADR-0207 safe mode);
+#   D16 funcd restore blob --at on the S3 store; D17 the App swaps a restored copy in through ref, and its Backups
+#       outlive it until their ttl (ADR-0208, ADR-0222).
 # The suite pushes, locks and deploys the App itself; the lane only creates the Secret and the grant beside it. Every
 # file it applies comes from funcd-functions, staged by scripts/lanes.yaml.
 name: app-todo — the todo App from its pushed template on real containerd (ADR-0199/0200/0211-0215/0217-0220/0226/0229), and a disaster-recovery drill (ADR-0202-0209/0222/0223)
@@ -1718,3 +1721,232 @@ testcases:
         assertions:
           - result.systemout ShouldContainSubstring "NO REFIRE"
           - result.systemout ShouldContainSubstring "DEAD LETTER KEPT"
+
+  # F109's crash loop (ADR-0207 Decisions 3-5): with recovery.safeMode.afterCrashes 1, one unclean start makes the next
+  # start held, two make it stop with status 70 and name the way back; safe-mode reset and a release leave it.
+  - name: D15 a funcd that keeps crashing starts held, then stops with status 70 naming the restore, and safe-mode reset and a release bring it back
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            unset FUNCD_TOKEN
+            run() {
+              systemctl stop funcd-demo 2>/dev/null
+              systemctl reset-failed funcd-demo 2>/dev/null || true
+              systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 "$@" /usr/local/bin/funcd \
+                --config /opt/lane/dr/funcdconfig.yaml
+            }
+            ready() { curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz; }
+            loop="-p Environment=FUNCD_RECOVERY_SAFE_MODE_AFTER_CRASHES=1 -p Environment=FUNCD_RECOVERY_SAFE_MODE_STABLE_AFTER=1h"
+            run $loop; ready; systemctl kill -s KILL funcd-demo; sleep 2
+            run $loop; ready
+            FUNCD_TOKEN=todo-lane-admin funcdctl hold status'
+        info: "after one crash → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - 'result.systemout ShouldContainSubstring "held: true"'
+          - 'result.systemout ShouldContainSubstring "reason: safe-mode"'
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            unset FUNCD_TOKEN
+            systemctl kill -s KILL funcd-demo; sleep 2
+            systemctl stop funcd-demo 2>/dev/null
+            systemctl reset-failed funcd-demo 2>/dev/null || true
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 \
+              -p Environment=FUNCD_RECOVERY_SAFE_MODE_AFTER_CRASHES=1 \
+              -p Environment=FUNCD_RECOVERY_SAFE_MODE_STABLE_AFTER=1h /usr/local/bin/funcd --config /opt/lane/dr/funcdconfig.yaml
+            for i in $(seq 30); do systemctl is-active --quiet funcd-demo || break; sleep 1; done
+            echo "status=$(systemctl show -p ExecMainStatus --value funcd-demo)."
+            journalctl -u funcd-demo --no-pager -n 20 | grep -oE "safe mode: [0-9]+ unclean starts in a row.*" | tail -1'
+        info: "after two crashes → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "status=70."
+          - 'result.systemout ShouldContainSubstring "safe mode: 2 unclean starts in a row"'
+          # D9's upgrade recorded a pre-upgrade generation, so the way back is the old binary's restore of it.
+          - result.systemout ShouldMatchRegex "funcd[.]previous restore run [0-9a-f]{16}/[0-9]+"
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            unset FUNCD_TOKEN
+            funcd safe-mode reset --config /opt/lane/dr/funcdconfig.yaml
+            systemctl reset-failed funcd-demo 2>/dev/null || true
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 /usr/local/bin/funcd \
+              --config /opt/lane/dr/funcdconfig.yaml
+            curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
+            FUNCD_TOKEN=todo-lane-admin funcdctl hold status | grep -E "held|reason"
+            FUNCD_TOKEN=todo-lane-admin funcdctl hold release
+            FUNCD_TOKEN=todo-lane-admin funcdctl hold status | grep -E "^held"
+            echo RELEASED'
+        info: "reset and release → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "the unclean-start count is 0"
+          - 'result.systemout ShouldContainSubstring "reason: safe-mode"'
+          - 'result.systemout ShouldContainSubstring "held: false"'
+          - result.systemout ShouldContainSubstring RELEASED
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"get","id":"milk"}}'
+        retry: 60
+        delay: 2
+        info: "milk after the release → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+
+  # ADR-0208 Decision 6: on a versioned S3 blob store, funcd restore blob --at puts every key back to its state at a time,
+  # removing no version, and leaves the platform held. versitygw v1.8.0 stamps a version it moves aside with the time it
+  # was replaced, not written (versity/versitygw#2311), so no point brings back an older version there; the case restores
+  # to a time before the object existed, which deletes the key and must keep both of its versions (#994).
+  - name: D16 funcd restore blob --at returns the S3 store to a time before an object existed, deleting its key and keeping its versions
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            unset FUNCD_TOKEN
+            systemctl stop funcd-demo
+            systemctl reset-failed funcd-demo 2>/dev/null || true
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 /usr/local/bin/funcd \
+              --config /opt/lane/dr/funcdconfig-blob-s3.yaml
+            curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
+            systemctl is-active --quiet funcd-demo || { journalctl -u funcd-demo --no-pager -n 60; exit 1; }
+            sleep 2; date -u +%Y-%m-%dT%H:%M:%SZ >/root/blob-at; sleep 2
+            echo STARTED'
+        info: "the S3 store and the point → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring STARTED
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"attach","id":"milk","name":"at.txt","content":"before","token":"{{.token}}"}}'
+        retry: 60
+        delay: 2
+        info: "attach → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"attach","id":"milk","name":"at.txt","content":"after","token":"{{.token}}"}}'
+        info: "attach again → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            unset FUNCD_TOKEN
+            k=s3/default/todo-files/uploads/milk/at.txt
+            s3() { curl -s --aws-sigv4 "aws:amz:us-east-1:s3" --user todo-lane-s3:todo-lane-s3-secret \
+              -H "x-amz-content-sha256: $(printf "" | sha256sum | cut -d" " -f1)" "$@"; }
+            echo "before=$(s3 -o /dev/null -w %{http_code} "http://127.0.0.1:7070/todo-blob/$k")."
+            systemctl stop funcd-demo
+            systemctl reset-failed funcd-demo 2>/dev/null || true
+            funcd restore blob --at "$(cat /root/blob-at)" --config /opt/lane/dr/funcdconfig-blob-s3.yaml
+            echo "after=$(s3 -o /dev/null -w %{http_code} "http://127.0.0.1:7070/todo-blob/$k")."
+            echo "versions=$(s3 "http://127.0.0.1:7070/todo-blob?prefix=$(echo $k | sed "s|/|%2F|g")&versions=" | grep -o "<Version>" | grep -c .)."
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 /usr/local/bin/funcd \
+              --config /opt/lane/dr/funcdconfig-blob-s3.yaml
+            curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
+            FUNCD_TOKEN=todo-lane-admin funcdctl hold release >/dev/null
+            echo RELEASED'
+        info: "restore blob --at → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "before=200."
+          - result.systemout ShouldContainSubstring "restored the blob store to"
+          - result.systemout ShouldContainSubstring "no version was removed"
+          - result.systemout ShouldContainSubstring "the platform is held"
+          - 'result.systemout ShouldContainSubstring "deleted for want of a version at that time:"'
+          - result.systemout ShouldContainSubstring uploads/milk/at.txt
+          - result.systemout ShouldContainSubstring "after=404."
+          - result.systemout ShouldContainSubstring "versions=2."
+          - result.systemout ShouldContainSubstring RELEASED
+
+  # ADR-0222: the owner swaps a restored copy in through ref, and an App's Backups outlive it until their ttl.
+  - name: D17 the App swaps the restored copy in through ref; once the App is deleted its Backups stay until their ttl, then go
+    steps:
+      # A todo in todo-store that the copy restored in D7 does not hold.
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"add","title":"eggs","token":"{{.token}}"}}'
+        retry: 60
+        delay: 2
+        info: "add eggs → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            set -e
+            funcdctl app deploy {{.reg}}/todo:1.0.0 {{.values}} -f /opt/lane/values/shared.yaml \
+              -f /opt/lane/values/backup.yaml -f /opt/lane/values/restored-store.yaml \
+              -f /opt/lane/values/short-backup-ttl.yaml >/tmp/deploy-d17.log 2>&1 || { cat /tmp/deploy-d17.log; exit 1; }
+            # the slots after this minute are created once the schedule holds the 2m ttl
+            echo $(( $(date +%s) / 60 )) >/root/swap-minute
+            echo DEPLOYED'
+        info: "deploy on todo-store-r → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring DEPLOYED
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"list"}}'
+        retry: 30
+        delay: 2
+        info: "the todos on the copy → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring milk
+          - result.body ShouldNotContainSubstring eggs
+      # A Backup of a slot after the swap, so it carries the 2m ttl.
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            m=$(cat /root/swap-minute)
+            for b in $(funcdctl get backups -n default | grep -E "^todo-backup-[0-9]+$" | sort); do
+              [ "${b#todo-backup-}" -gt "$m" ] || continue
+              funcdctl get backup $b -n default -o json | grep -qE "\"phase\": *\"Succeeded\"" && echo $b
+            done | tail -1 | grep . | tee /root/short-backup'
+        retry: 60
+        delay: 3
+        info: "a Backup after the swap → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex "^todo-backup-[0-9]+$"
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            funcdctl app delete todo -n default >/dev/null
+            for i in $(seq 60); do funcdctl get backupschedule todo-backup -n default >/dev/null 2>&1 || break; sleep 2; done
+            funcdctl get backupschedule todo-backup -n default 2>&1 | grep -qi "not found" && echo "schedule gone"
+            funcdctl get backup $(cat /root/short-backup) -n default >/dev/null && echo "short kept"
+            funcdctl get backup $(cat /root/workload-backup) -n default >/dev/null && echo "long kept"'
+        info: "after the App's delete → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "schedule gone"
+          - result.systemout ShouldContainSubstring "short kept"
+          - result.systemout ShouldContainSubstring "long kept"
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            funcdctl get backup $(cat /root/short-backup) -n default 2>&1 | grep -qi "not found" && echo "short gone" || echo "short kept"
+            funcdctl get backup $(cat /root/workload-backup) -n default >/dev/null && echo "long kept"'
+        retry: 60
+        delay: 5
+        info: "after the ttl → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "short gone"
+          - result.systemout ShouldContainSubstring "long kept"
