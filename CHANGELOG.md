@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.11.0](https://github.com/pyvvo/funcd/compare/v0.10.0...v0.11.0) (2026-10-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* **backup:** implement ADR-0222 — workload backup resources (F111) ([#949](https://github.com/pyvvo/funcd/issues/949))
+
+### Features
+
+* **backup:** implement ADR-0222 — workload backup resources (F111) ([#949](https://github.com/pyvvo/funcd/issues/949)) ([3eccee2](https://github.com/pyvvo/funcd/commit/3eccee2f5c00dc1a009732ebe16cb55da1c12b55))
+* implement ADR-0223 — funcdctl backup plan (FEAT-0009/F112) ([#954](https://github.com/pyvvo/funcd/issues/954)) ([ae8869a](https://github.com/pyvvo/funcd/commit/ae8869a9cba4c0ce468e78e2f2833afcb54deba4))
+* implement ADR-0229, an undeclared step store is refused at apply (FEAT-0010/F126) ([#959](https://github.com/pyvvo/funcd/issues/959)) ([5652957](https://github.com/pyvvo/funcd/commit/5652957802ec37184c657ad70135292d70ee685d))
+
 ## [0.10.0](https://github.com/pyvvo/funcd/compare/v0.9.0...v0.10.0) (2026-10-11)
 
 
