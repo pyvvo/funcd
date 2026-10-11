@@ -22,9 +22,13 @@
 #   L13 a rollout waits for the App it requires until that App is Ready at a matching version (ADR-0219);
 #   L14 an upload under uploads/ in Bucket todo-files fires the blob EventSource, whose Sensor runs the intake
 #       Function, which records the upload (ADR-0119).
+#   D1-D5 the disaster-recovery drill (FEAT-0009): backups on schedule to an S3 server in the VM (versitygw), sealed;
+#       a lost data directory restored from the target and an escrow copy to the point before the damage, booting
+#       held; a lost write's version conflicts; a release that advances the uploads source fires no restored upload
+#       twice; and funcdctl backup plan (ADR-0202-0206, 0209, 0223).
 # The suite pushes, locks and deploys the App itself; the lane only creates the Secret and the grant beside it. Every
 # file it applies comes from funcd-functions, staged by scripts/lanes.yaml.
-name: app-todo — the todo App from its pushed template on real containerd (ADR-0199/0200/0211-0215/0217-0220/0226/0229)
+name: app-todo — the todo App from its pushed template on real containerd (ADR-0199/0200/0211-0215/0217-0220/0226/0229), and a disaster-recovery drill (ADR-0202-0206/0209/0223)
 
 vars:
   dp: http://127.0.0.1:8081
@@ -989,3 +993,235 @@ testcases:
         info: "the intake's log → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.systemout ShouldEqual LOGGED
+
+  # The disaster-recovery block (FEAT-0009): the platform backup to an S3 server in the VM, a lost data directory
+  # restored by the operator from the target and an escrow copy alone, a held boot, the release, and the backup plan.
+  - name: D1 with a target set, the platform, KV and blob backups run on schedule to the S3 server, sealed
+    steps:
+      # versitygw (Apache-2.0), built at a pinned version and staged by the lane, serves s3://todo-backup. funcd
+      # restarts with the DR config: the lane's config with the backups and static credentials (ADR-0203/0204/0209).
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            set -e
+            install -d /var/lib/vgw/data/todo-backup /var/lib/vgw/versions /etc/funcd/tokens
+            systemd-run --unit todo-s3 -p EnvironmentFile=/opt/lane/dr/versitygw.env /opt/lane/dr/versitygw \
+              --port 127.0.0.1:7070 posix --versioning-dir /var/lib/vgw/versions /var/lib/vgw/data
+            install -m 600 /opt/lane/dr/admin.token /etc/funcd/tokens/admin
+            install -m 600 /opt/lane/dr/developer.token /etc/funcd/tokens/developer
+            systemctl stop funcd-demo
+            systemctl reset-failed funcd-demo 2>/dev/null || true
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 /usr/local/bin/funcd \
+              --config /opt/lane/dr/funcdconfig.yaml
+            curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
+            systemctl is-active --quiet funcd-demo || { journalctl -u funcd-demo --no-pager -n 60; exit 1; }
+            echo RESTARTED'
+        info: "the DR config → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring RESTARTED
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"get","id":"milk"}}'
+        retry: 60
+        delay: 2
+        info: "milk after the restart → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.uploads ShouldHaveLength 1
+      # The probe ConfigMap is read before the backup that holds it; D3 writes it back with this old version.
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            set -e
+            funcdctl apply -f /opt/lane/dr/probe-configmap.yaml >/dev/null
+            curl -sf -H "authorization: Bearer todo-lane-developer" \
+              http://127.0.0.1:8080/apis/funcd.io/v1alpha1/namespaces/default/configmaps/todo-dr-probe >/root/probe-before.json
+            funcdctl logs todo-intake -n default | grep -c "intake uploads/milk/receipt.txt 8" >/root/intake-before
+            install -d /root/escrow/master
+            cp -p /var/lib/funcd/data/s3gateway/master.key /root/escrow/master/
+            echo SAVED'
+        info: "the probe and the escrow copy → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring SAVED
+      # A generation and a KV point written after the probe, and a blob mirror generation.
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            cd /var/lib/vgw/data/todo-backup
+            n() { d=$1; shift; find "$d" -name manifest.yaml "$@" 2>/dev/null | head -1 | grep -c .; }
+            echo "gen=$(n gen -newer /root/probe-before.json) kv=$(n kv) blob=$(n blob)"
+            find . -type f | head -30 >&2'
+        retry: 45
+        delay: 2
+        info: "the backups → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldEqual "gen=1 kv=1 blob=1"
+      # Sealed: neither the probe value nor a todo is readable in the generation or the KV parts.
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            cd /var/lib/vgw/data/todo-backup
+            grep -rlaE "before-the-backup|milk" gen kv && echo PLAINTEXT || echo SEALED'
+        info: "the parts → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldEqual SEALED
+      - type: exec
+        script: |
+          {{.vmsh}} 'FUNCD_TOKEN=todo-lane-admin funcdctl backup status'
+        info: "backup status → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      # The restore point P, the newest generation now: D2 restores it, the point before the damage.
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            unset FUNCD_TOKEN
+            funcd restore list --config /opt/lane/dr/funcdconfig.yaml --credentials-file /opt/lane/dr/restore.credentials |
+              grep -E "^[0-9a-f]{16}/[0-9]+ " | tail -1 | cut -d" " -f1 | tee /root/point'
+        info: "the restore point → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex "^[0-9a-f]{16}/[0-9]+$"
+
+  - name: D2 after a lost data directory the operator restores the point before the damage from the target and the escrow copy, and funcd boots held
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            set -e
+            u=http://127.0.0.1:8080/apis/funcd.io/v1alpha1/namespaces/default/configmaps/todo-dr-probe
+            curl -sf -H "authorization: Bearer todo-lane-developer" $u | sed s/before-the-backup/after-the-backup/ |
+              curl -sf -X PUT -H "authorization: Bearer todo-lane-developer" -H "content-type: application/json" \
+                --data-binary @- $u >/root/probe-lost.json
+            systemctl stop funcd-demo
+            systemctl reset-failed funcd-demo 2>/dev/null || true
+            mv /var/lib/funcd/data /var/lib/funcd/data.lost
+            r="--config /opt/lane/dr/funcdconfig.yaml --credentials-file /opt/lane/dr/restore.credentials --identity /opt/lane/dr/identity.txt"
+            unset FUNCD_TOKEN
+            p=$(cat /root/point)
+            echo "point $p"
+            funcd restore run "$p" $r --escrow /root/escrow
+            funcd restore kv $r
+            funcd restore blob $r
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 /usr/local/bin/funcd \
+              --config /opt/lane/dr/funcdconfig.yaml
+            curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
+            systemctl is-active --quiet funcd-demo || { journalctl -u funcd-demo --no-pager -n 60; exit 1; }
+            echo RESTORED'
+        info: "the restore → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "the platform is held"
+          - result.systemout ShouldContainSubstring RESTORED
+      - type: exec
+        script: |
+          {{.vmsh}} 'FUNCD_TOKEN=todo-lane-admin funcdctl hold status'
+        # The pending list appears once the uploads source is Ready again and has listed its bucket.
+        retry: 45
+        delay: 2
+        info: "hold status → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - 'result.systemout ShouldContainSubstring "held: true"'
+          - 'result.systemout ShouldContainSubstring "reason: restore"'
+          # The restored blob store gave receipt.txt a new ModTime, so the seen list no longer matches it (ADR-0206).
+          - result.systemout ShouldContainSubstring "default/todo-uploads"
+      # Every resource of the backup is readable while held: the App at the revision it had.
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get app todo -n default -o json'
+        retry: 15
+        delay: 2
+        info: "the App while held → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring todo-4
+
+  - name: D3 a write carrying a version that the restore lost conflicts; the restored object holds the value of the point, and a write at its version succeeds
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            u=http://127.0.0.1:8080/apis/funcd.io/v1alpha1/namespaces/default/configmaps/todo-dr-probe
+            a="authorization: Bearer todo-lane-developer"
+            put() { curl -s -o /dev/null -w "%{http_code}" -X PUT -H "$a" -H "content-type: application/json" --data-binary @- $u; }
+            echo "lost $(sed s/after-the-backup/a-lost-write/ /root/probe-lost.json | put)"
+            curl -sf -H "$a" $u >/root/probe-restored.json
+            grep -o "before-the-backup" /root/probe-restored.json
+            echo "current $(sed s/before-the-backup/after-the-restore/ /root/probe-restored.json | put)"'
+        info: "the writes → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "lost 409"
+          - result.systemout ShouldContainSubstring before-the-backup
+          - result.systemout ShouldContainSubstring "current 200"
+
+  - name: D4 a release that advances todo-uploads marks the restored upload seen, so it does not fire again, and a new upload fires once
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} 'FUNCD_TOKEN=todo-lane-admin funcdctl hold release --advance default/todo-uploads'
+        # An advance needs the source Ready; a refused release leaves the platform held and may run again.
+        retry: 15
+        delay: 2
+        info: "release → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"attach","id":"milk","name":"late.txt","content":"1 loaf","token":"{{.token}}"}}'
+        retry: 60
+        delay: 2
+        info: "attach after the release → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"get","id":"milk"}}'
+        retry: 30
+        delay: 1
+        info: "the uploads → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.uploads ShouldHaveLength 2
+      # Without --advance the release replays receipt.txt (ADR-0206); advanced, the intake logged it as often as before
+      # the loss.
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            l=$(funcdctl logs todo-intake -n default)
+            n=$(echo "$l" | grep -c "intake uploads/milk/receipt.txt 8")
+            [ "$n" = "$(cat /root/intake-before)" ] && echo "RECEIPT ONCE" || echo "receipt $n times"
+            echo "$l" | grep "intake uploads/milk" >&2
+            echo "$l" | grep -q "intake uploads/milk/late.txt 6" && echo LATE'
+        retry: 15
+        delay: 1
+        info: "the intake's log → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring LATE
+          - result.systemout ShouldContainSubstring "RECEIPT ONCE"
+
+  - name: D5 funcdctl backup plan turns objectives into the settings the daemon accepts, and names an impossible recovery time
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} 'unset FUNCD_TOKEN; funcdctl backup plan platform --config /opt/lane/dr/funcdconfig.yaml --rpo 1m --keep 72h'
+        info: "plan → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - 'result.systemout ShouldContainSubstring "interval: 30s"'
+      - type: exec
+        script: |
+          {{.vmsh}} 'unset FUNCD_TOKEN; funcdctl backup plan platform --config /opt/lane/dr/funcdconfig.yaml --rpo 1h --keep 720h \
+            --rto 1m --size 10Gi --speed 10Mi'
+        info: "plan with an RTO → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 3
+          - result.systemerr ShouldContainSubstring "RTO 1m is impossible"

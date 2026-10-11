@@ -407,9 +407,11 @@ egress:
   venom: e2e/egress.venom.yml
 
 app-todo:
-  description: The todo App of funcd-functions, deployed from its pushed template on real containerd (ADR-0217/0218), and the App features on it — pinned digests, a TypeScript→Python Workflow, a zoned cron timer, hooks, kept stores, a dry run, drift and pause, a config roll, rollback, liveness and dependency health, a late call, a refused binding, a requirement and a blob upload.
+  description: The todo App of funcd-functions, deployed from its pushed template on real containerd (ADR-0217/0218), and the App features on it — pinned digests, a TypeScript→Python Workflow, a zoned cron timer, hooks, kept stores, a dry run, drift and pause, a config roll, rollback, liveness and dependency health, a late call, a refused binding, a requirement and a blob upload; then the disaster-recovery drill of FEAT-0009 — a backup to an S3 server in the VM, a lost data directory restored, held boot and release.
   module: github.com/pyvvo/funcd-functions
   dir: apps/todo
+  # The build writes the S3 server into dr/, so the lane builds in a writable copy of the module.
+  copy: true
   optional: true
   stage:
     - app
@@ -448,6 +450,11 @@ app-todo:
     - from: apps/todo-shared/app
       module: github.com/pyvvo/funcd-functions
       to: todo-shared
+    # The disaster-recovery block: its config, test keys and tokens, and the S3 server that serves its backup target.
+    - dr
+  # versitygw (Apache-2.0), the S3 server of the DR block, built for the VM at a pinned version.
+  build:
+    - CGO_ENABLED=0 GOOS=linux GOARCH=$(go env GOARCH) GOBIN= go install github.com/versity/versitygw/cmd/versitygw@v1.8.0 && cp "$(go env GOPATH)/bin/linux_$(go env GOARCH)/versitygw" dr/versitygw
   # The objects the App needs beside it; the Venom suite pushes, locks and deploys the App itself.
   apply:
     - grants.yaml
