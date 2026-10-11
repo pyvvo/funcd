@@ -1381,6 +1381,7 @@ func containerdOptions(ctx context.Context, cfg config.Config, logger *slog.Logg
 		Logger:      logger,
 		Pullable:    mgrCfg.Pullable(c.ImagePrefix),
 		Private:     c.Socket == "",
+		Exited:      mgr.Exited(),
 	})
 	if err != nil {
 		_ = mgr.Close()

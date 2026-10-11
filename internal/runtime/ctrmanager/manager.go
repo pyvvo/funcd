@@ -42,6 +42,9 @@ type Manager interface {
 	// as-is when --containerd is set. crun is laid down so the runc-v2 shim finds it. ctx bounds the
 	// start-up only: a private containerd runs until Close.
 	Ensure(ctx context.Context) (socket string, err error)
+	// Exited is closed once the private containerd has exited, so the driver's Close need not dial its socket to find
+	// out; nil for the external-socket path and before Ensure started one.
+	Exited() <-chan struct{}
 	// Close stops a supervised private containerd; a no-op for the external-socket path.
 	Close() error
 }
@@ -115,6 +118,9 @@ func (m *externalManager) Ensure(_ context.Context) (string, error) {
 	}
 	return m.socket, nil
 }
+
+// Exited is nil: funcd does not supervise the external containerd.
+func (m *externalManager) Exited() <-chan struct{} { return nil }
 
 // Close is a no-op: funcd does not own the external containerd.
 func (m *externalManager) Close() error { return nil }

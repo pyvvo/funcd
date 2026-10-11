@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"testing"
 	"testing/synctest"
+	"time"
 )
 
 // The private containerd runs in its own process group: a signal to funcd's group (a terminal's Ctrl-C) must not stop
@@ -43,6 +44,26 @@ func TestPrivateContainerdLogsThroughAPipe(t *testing.T) {
 		if got == own || !strings.HasPrefix(got, "pipe:") {
 			t.Fatalf("the private containerd's fd %d is %s, not a pipe of its own (funcd's stderr is %s)", fd, got, own)
 		}
+	}
+}
+
+// Once supervised, the private containerd's exit closes Exited as it happens, so the runtime's Close need not dial its
+// socket to find out.
+func TestPrivateContainerdReportsItsExit(t *testing.T) {
+	m := startFakeContainerd(t)
+	m.reap() // as Ensure does once containerd listens
+	select {
+	case <-m.Exited():
+		t.Fatal("Exited is closed while containerd runs")
+	default:
+	}
+	if err := m.cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-m.Exited():
+	case <-time.After(5 * time.Second):
+		t.Fatal("Exited is still open after containerd died")
 	}
 }
 

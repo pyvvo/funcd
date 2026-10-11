@@ -84,6 +84,9 @@ type Config struct {
 	// Close may sweep every funcd namespace in it. An external containerd may hold another daemon's or a bench's
 	// workers (ADR-0055), so there Close stops only the workers this driver runs.
 	Private bool
+
+	// Exited is closed once the containerd at Socket has exited (ctrmanager.Manager.Exited); nil ⇒ never known.
+	Exited <-chan struct{}
 }
 
 // worker tracks the per-instance bookkeeping the port needs but containerd does
@@ -954,7 +957,9 @@ func (d *driver) List(ctx context.Context, ns v1alpha1.NamespaceName) ([]runtime
 // SIGTERM, and releases the client. On the private containerd it also sweeps every funcd namespace, which catches the
 // workers an earlier hard-killed run left behind: no driver tracks them and the private containerd keeps them running.
 // A worker left running would serve on after the daemon stops, outside the egress fence (ADR-0115), so Close reports
-// every worker it could not stop and Shutdown then keeps the fence.
+// every worker it could not stop and Shutdown then keeps the fence. Once containerd has exited, before Close or during
+// it, Close closes the client so that every call fails at once, and reports the exit: a call would otherwise redial the
+// socket containerd removed, which the client retries for its connect timeout (10 s) while nothing can answer.
 func (d *driver) Close() error {
 	d.mu.Lock()
 	var live []runtime.InstanceID
@@ -964,7 +969,16 @@ func (d *driver) Close() error {
 		}
 	}
 	d.mu.Unlock()
-	errs := make([]error, len(live), len(live)+2)
+	closeClient := sync.OnceValue(d.client.Close)
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-d.cfg.Exited:
+			_ = closeClient()
+		case <-done:
+		}
+	}()
+	errs := make([]error, len(live), len(live)+3)
 	var wg sync.WaitGroup
 	for i, id := range live {
 		wg.Go(func() { errs[i] = d.stop(context.Background(), id, closeGrace) })
@@ -973,10 +987,16 @@ func (d *driver) Close() error {
 	if d.cfg.Private {
 		errs = append(errs, d.SweepAll(context.Background()))
 	}
+	close(done)
+	select {
+	case <-d.cfg.Exited:
+		errs = append(errs, fault.Unavailablef("runtime.containerd.Close", "containerd exited, so the workers in it may still run"))
+	default:
+	}
 	if d.ownFifo {
 		errs = append(errs, os.RemoveAll(d.fifoDir))
 	}
-	return errors.Join(append(errs, d.client.Close())...)
+	return errors.Join(append(errs, closeClient())...)
 }
 
 // SweepAll sweeps every funcd containerd namespace at once, then releases the netns pins no worker holds: Close on the

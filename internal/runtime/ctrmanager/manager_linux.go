@@ -32,6 +32,7 @@ type privateManager struct {
 	cfg     Config
 	socket  string
 	cmd     *exec.Cmd
+	exited  chan struct{}
 	client  *containerd.Client
 	started bool
 }
@@ -66,6 +67,7 @@ func (m *privateManager) Ensure(ctx context.Context) (string, error) {
 	if err := m.startContainerd(ctx, op); err != nil {
 		return "", err
 	}
+	m.reap()
 	client, err := containerd.New(m.socket)
 	if err != nil {
 		return "", fault.Wrapf(err, fault.Unavailable, op, "connect to private containerd at %q", m.socket)
@@ -148,6 +150,21 @@ func (m *privateManager) layDownCrun(op string) error {
 	return nil
 }
 
+// reap starts, once, the goroutine that waits for the containerd child, and returns the channel it closes when the
+// child has exited.
+func (m *privateManager) reap() <-chan struct{} {
+	if m.exited == nil {
+		cmd, exited := m.cmd, make(chan struct{})
+		go func() { _ = cmd.Wait(); close(exited) }()
+		m.exited = exited
+	}
+	return m.exited
+}
+
+// Exited is closed once the containerd child has exited, whether Close stopped it or it died; nil before Ensure
+// started it.
+func (m *privateManager) Exited() <-chan struct{} { return m.exited }
+
 // Close stops the supervised containerd child and closes the client (idempotent).
 func (m *privateManager) Close() error {
 	var firstErr error
@@ -159,10 +176,8 @@ func (m *privateManager) Close() error {
 	}
 	if m.started && m.cmd != nil && m.cmd.Process != nil {
 		_ = m.cmd.Process.Signal(os.Interrupt)
-		done := make(chan struct{})
-		go func() { _ = m.cmd.Wait(); close(done) }()
 		select {
-		case <-done:
+		case <-m.reap():
 		case <-time.After(10 * time.Second):
 			_ = m.cmd.Process.Kill()
 		}

@@ -5,9 +5,13 @@ package containerd
 import (
 	"context"
 	"log/slog"
+	"net"
+	"os"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/containers"
@@ -18,6 +22,7 @@ import (
 	gocni "github.com/containerd/go-cni"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -104,6 +109,109 @@ func TestClose_ReportsWorkerWhoseTaskItCouldNotLoad(t *testing.T) {
 	left.client.TaskService().(*createdTasks).getErr = unavailable
 	require.Error(t, left.driver(true).Close(), "Close must report a leftover worker whose task it could not load")
 	require.Contains(t, left.ctrs.records, leftover, "Close deleted a leftover worker whose task it could not load")
+}
+
+// Once containerd has exited no call can be answered, yet each would first redial the socket containerd removed, which
+// the client retries for its connect timeout (10 s). Close fails at once whether containerd exited before Close or
+// during it, and it still fails, so Shutdown keeps the egress fence.
+func TestClose_FailsFastOnceContainerdExited(t *testing.T) {
+	t.Run("before Close", func(t *testing.T) {
+		c := startStubContainerd(t, nil)
+		_, err := c.client.NamespaceService().List(context.Background())
+		require.True(t, errdefs.IsNotImplemented(err), "the client must reach the stub: %v", err)
+		c.exit(t)
+		d := c.driver()
+		done := make(chan error, 1)
+		go func() { done <- d.Close() }()
+		requireFailsWithinASecond(t, done, time.Now())
+		requireNoneReleased(t, d)
+	})
+	t.Run("during Close", func(t *testing.T) {
+		called := make(chan struct{}, 1)
+		answer := func(_ any, stream grpc.ServerStream) error { //nolint:forbidigo // grpc.StreamHandler's signature
+			select {
+			case called <- struct{}{}:
+			default:
+			}
+			<-stream.Context().Done()
+			return stream.Context().Err()
+		}
+		c := startStubContainerd(t, answer)
+		d := c.driver()
+		done := make(chan error, 1)
+		go func() { done <- d.Close() }()
+		<-called // Close waits on containerd
+		c.exit(t)
+		requireFailsWithinASecond(t, done, time.Now())
+		requireNoneReleased(t, d)
+	})
+}
+
+// stubContainerd stands in for the private containerd: a gRPC server on a short unix socket that answers every call
+// with handler, or Unimplemented when handler is nil.
+type stubContainerd struct {
+	socket string
+	srv    *grpc.Server
+	client *containerd.Client
+	exited chan struct{}
+}
+
+func startStubContainerd(t *testing.T, handler grpc.StreamHandler) *stubContainerd {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "funcd")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	c := &stubContainerd{socket: filepath.Join(dir, "containerd.sock"), exited: make(chan struct{})}
+	ln, err := net.Listen("unix", c.socket)
+	require.NoError(t, err)
+	var opts []grpc.ServerOption
+	if handler != nil {
+		opts = append(opts, grpc.UnknownServiceHandler(handler))
+	}
+	c.srv = grpc.NewServer(opts...)
+	go func() { _ = c.srv.Serve(ln) }()
+	t.Cleanup(c.srv.Stop)
+	c.client, err = containerd.New(c.socket)
+	require.NoError(t, err)
+	return c
+}
+
+// exit stops the stub as containerd exits, closing and removing its socket, then closes exited as the manager does.
+func (c *stubContainerd) exit(t *testing.T) {
+	t.Helper()
+	c.srv.Stop()
+	require.NoFileExists(t, c.socket)
+	close(c.exited)
+}
+
+// driver runs one worker on the stub.
+func (c *stubContainerd) driver() *driver {
+	id := runtime.NewInstanceID("default", "exited", "exited-1", 0)
+	ctrID, cniID := workerNames("default", "exited", "exited-1", "0")
+	return &driver{
+		cfg: Config{
+			Logger:  slog.Default(),
+			Private: true,
+			Exited:  c.exited,
+		},
+		client: c.client,
+		cni:    &removedCNI{},
+		instances: map[runtime.InstanceID]*worker{
+			id: {ctrID: ctrID, cniID: cniID, namespace: "default", name: "exited", revision: "exited-1", ownerKind: v1alpha1.KindFunction},
+		},
+	}
+}
+
+// requireFailsWithinASecond waits for Close's error and fails when it came over a second after since.
+func requireFailsWithinASecond(t *testing.T, done <-chan error, since time.Time) {
+	t.Helper()
+	select {
+	case err := <-done:
+		require.ErrorContains(t, err, "containerd exited", "Close must fail, so Shutdown keeps the egress fence")
+	case <-time.After(time.Second):
+		err := <-done
+		t.Fatalf("Close returned %s after containerd exited: %v", time.Since(since).Round(time.Millisecond), err)
+	}
 }
 
 // Stop releases a worker only when containerd no longer has its container: a transient error must not release a

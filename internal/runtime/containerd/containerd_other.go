@@ -31,6 +31,9 @@ type Config struct {
 	// Close may sweep every funcd namespace in it. An external containerd may hold another daemon's or a bench's
 	// workers (ADR-0055), so there Close stops only the workers this driver runs.
 	Private bool
+
+	// Exited is closed once the containerd at Socket has exited (ctrmanager.Manager.Exited); nil ⇒ never known.
+	Exited <-chan struct{}
 }
 
 // New returns fault.Unavailable on non-Linux platforms — the containerd runtime

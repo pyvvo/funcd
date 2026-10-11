@@ -28,5 +28,8 @@ func (m *privateManager) Ensure(_ context.Context) (string, error) {
 		"private containerd is Linux-only; pass --containerd <socket> to use an existing daemon (got a non-linux build)")
 }
 
+// Exited is nil: no child was ever started off Linux.
+func (m *privateManager) Exited() <-chan struct{} { return nil }
+
 // Close is a no-op: no child was ever started off Linux.
 func (m *privateManager) Close() error { return nil }
