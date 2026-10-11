@@ -450,7 +450,7 @@ func (a *App) Refs() []ObjectRef {
 // Validate enforces the store-free rules of Decision 3, each refusal naming its field path: a name of at most 52
 // characters; each entry either a name or a ref alone; deletion retain or delete; no name repeated within a section;
 // a defined ConfigMap name of at most 52 characters and no two entries with one stored name (ADR-0213 Decision 2);
-// each part valid as its kind; no entry named like an object another part's reconciler writes; the secrets rules
+// each part valid as its kind; no object that two parts would write (validateWriters); the secrets rules
 // (ADR-0213 Decision 6); the requires rules (ADR-0219 Decision 1). The rules that need the store (quotas, a ref to an object this App controls) and the
 // undeclared-Secret rule (ADR-0213 Decision 7) are the app-parts admission's.
 func (a *App) Validate() error {
@@ -600,14 +600,22 @@ func (a *App) validateSecrets(op string) error {
 	return nil
 }
 
-// validateWriters refuses an entry named like an object another part's reconciler writes, since the two would
-// overwrite each other (Decision 3): a Site's Route (<site>) and Bucket (bucket.name), a Workflow's step Function
-// (<workflow>-<step>) and kv stores. declared maps each declared entry's object to its path.
+// validateWriters refuses two writers of one object, since they would overwrite each other (Decision 3, amended in
+// place for #924): an entry named like an object another part's reconciler writes, a Site's Route (<site>) and Bucket
+// (bucket.name), a Workflow's step Function (<workflow>-<step>) and kv stores, and two such objects of one kind and
+// name. Sites may name one Bucket: a Site adopts an existing Bucket and adds only its own prefix (ADR-0139). declared
+// maps each declared entry's object to its path.
 func (a *App) validateWriters(op string, declared map[ObjectRef]string) error {
-	clash := func(field string, kind Kind, name ObjectName) error {
-		if p, ok := declared[ObjectRef{Kind: kind, Name: name}]; ok {
+	made := make(map[ObjectRef]string)
+	clash := func(field string, kind Kind, name ObjectName, shared bool) error {
+		obj := ObjectRef{Kind: kind, Name: name}
+		if p, ok := declared[obj]; ok {
 			return fault.Invalidf(op, "%s and %s.name both write %s/%s: one object would have two writers", field, p, kind, name)
 		}
+		if p, ok := made[obj]; ok && !shared {
+			return fault.Invalidf(op, "%s and %s both write %s/%s: one object would have two writers", p, field, kind, name)
+		}
+		made[obj] = field
 		return nil
 	}
 	for i := range a.Spec.Sites {
@@ -615,10 +623,10 @@ func (a *App) validateWriters(op string, declared map[ObjectRef]string) error {
 		if s.Ref != "" {
 			continue
 		}
-		if err := clash(fmt.Sprintf("spec.sites[%d].name", i), KindRoute, s.Name); err != nil {
+		if err := clash(fmt.Sprintf("spec.sites[%d].name", i), KindRoute, s.Name, false); err != nil {
 			return err
 		}
-		if err := clash(fmt.Sprintf("spec.sites[%d].bucket.name", i), KindBucket, s.Bucket.Name); err != nil {
+		if err := clash(fmt.Sprintf("spec.sites[%d].bucket.name", i), KindBucket, s.Bucket.Name, true); err != nil {
 			return err
 		}
 	}
@@ -632,12 +640,12 @@ func (a *App) validateWriters(op string, declared map[ObjectRef]string) error {
 			if st.Function == nil || st.Function.Image == "" {
 				continue
 			}
-			if err := clash(fmt.Sprintf("spec.workflows[%d].steps[%d].name", i, j), KindFunction, StepFunctionName(w.Name, st.Name)); err != nil {
+			if err := clash(fmt.Sprintf("spec.workflows[%d].steps[%d].name", i, j), KindFunction, StepFunctionName(w.Name, st.Name), false); err != nil {
 				return err
 			}
 		}
 		for j := range w.KV {
-			if err := clash(fmt.Sprintf("spec.workflows[%d].kv[%d].name", i, j), KindKVStore, w.KV[j].Name); err != nil {
+			if err := clash(fmt.Sprintf("spec.workflows[%d].kv[%d].name", i, j), KindKVStore, w.KV[j].Name, false); err != nil {
 				return err
 			}
 		}

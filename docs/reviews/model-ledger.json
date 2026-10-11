@@ -10888,5 +10888,20 @@
     "dod_total": 12,
     "report": "docs/reviews/issue-916-fix-claude-opus-5-5-2.md",
     "notes": "re-review 2: pass; round-1 Major (build count) and Minor (subject) resolved; revert fails (4 builds), fix passes -race -count=3 with 1 build; M1-M4 killed; 53 App scenarios -race -count=2 with 2 builds, dry-run scenarios ok on the merge with main; env: 2 health-scenario timing flakes under load and #904, outside the change"
+  },
+  {
+    "date": "2026-10-11",
+    "issue": "924",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-924-fix-claude-opus-5-5.md",
+    "notes": "pass; minor (model): the amended app-shared-writer-refused scenario names a kv store the todo fixture lacks; TestIssue924 fails pre-fix with Validate <nil> for both cases and passes -race; the e2e scenario fails pre-fix (App stored) and passes; mutants m1-m4 killed; ref-to-made-object and two-Sites-one-Bucket kept; ADR-0199 amended in place under the decider's waiver (not a finding); obs (unscored, new issue): Workflow.Validate accepts two spec.kv entries of one name"
   }
 ]

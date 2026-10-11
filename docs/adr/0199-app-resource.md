@@ -7,6 +7,11 @@
 - **Superseded in part by**: [ADR-0214](0214-app-hooks.md) (2026-10-10) — Decisions 4-6 for an App with hooks.
 - **Superseded in part by**: [ADR-0215](0215-built-in-health.md) (2026-10-10) — Decision 5: Bucket and Workflow readiness.
 - **Superseded in part by**: [ADR-0219](0219-app-requirements.md) (2026-10-10) — Decisions 4 and 5: the requirement wait.
+- **Amended in place**: 2026-10-11 — **exceptionally edited after `Implemented`** (immutability waived by the decider
+  for this ADR only, as for ADR-0089, to fix [#924](https://github.com/pyvvo/funcd/issues/924)): Decision 3 also
+  refuses two objects of one kind and name that parts' reconcilers would make, such as the `kv` stores or step
+  Functions of two Workflows, and the scenario `app-shared-writer-refused` gains that case. The normal rule (correct a
+  frozen ADR through a superseding ADR) is preserved for every other ADR.
 - **Date**: 2026-10-08 (judged in three rounds: five lenses, then three, then one, each finding checked by a skeptic)
 - **Deciders**: green-0-rabbit
 - **Tags**: app, lifecycle, controller, admission, gc, ownership
@@ -44,8 +49,8 @@ Fixture App `todo`: `kv` `todo-store` (table `todos`, owner `todo-api`) and `tod
   `image`, a section `deployments:`, or two new Buckets one below the `bucket-count` quota ⇒ `funcdctl apply` fails
   naming `spec.functions[1]`, `spec.kv[0].tables[0].name`, `spec.functions[0]`, the field or `bucket-count`; nothing
   is stored.
-- `scenario: app-shared-writer-refused` — `sites[0].bucket.name: todo-files`, or a function named `todo-plan-due` ⇒
-  refused naming both fields; nothing is stored.
+- `scenario: app-shared-writer-refused` — `sites[0].bucket.name: todo-files`, a function named `todo-plan-due`, or two
+  Workflows that declare one `kv` store ⇒ refused naming both fields; nothing is stored.
 - `scenario: app-store-deletion-flip` — `todo-cache` changed to `ref` ⇒ refused naming `spec.kv[1].ref`; changed to
   `deletion: retain` ⇒ it keeps only the marker; then `ref` is accepted, and an App delete leaves it with its keys.
 - `scenario: app-child-not-owned` — Function `todo-api` created by hand, then `todo` applied ⇒ `Ready=False`
@@ -115,7 +120,10 @@ nothing else uses it; the namespace stays the tenancy boundary.
    52 characters; an entry with neither `ref` nor `name`, or a `ref` entry that sets any other field; a name repeated
    within a section; a part (from `Parts()`) that fails its kind's `Validate`; two parts that would write one object,
    that is an entry named like an object another part's reconciler makes: a Site's Route (`<site>`) or Bucket
-   (`bucket.name`), a Workflow's step Function (`<workflow>-<step>`) or `kv` store. The validating admission
+   (`bucket.name`), a Workflow's step Function (`<workflow>-<step>`) or `kv` store; or two such objects of one kind
+   and name, such as the `kv` stores or step Functions of two Workflows. Sites may name one Bucket: a Site adopts an
+   existing Bucket and adds only its own prefix (ADR-0139). (The last case was amended in place; see the header.)
+   The validating admission
    `app-parts` (ADR-0063) then runs each declared part through the admissions a direct write of it passes (create when
    absent, else update over the stored object; the App writer's identity) against a view of the store that already
    holds the App's other parts, so a quota counts them together, under the namespace lock when a part admission needs
