@@ -64,12 +64,15 @@ func createObject(t *testing.T, st store.Store, kind v1.Kind, name string) {
 	require.NoError(t, err)
 }
 
+// workers is the number of workers run starts.
+const workers = 2
+
 // run starts a controller registered for gvk (then set up by configure) in a goroutine; the returned func
 // cancels it and waits for a clean drain. The object is created first so the watch
 // snapshot delivers it (deterministic, no watch-startup race).
 func run(t *testing.T, st store.Store, gvk v1.GroupVersionKind, r controller.Reconciler, configure ...func(*controller.Controller)) func() {
 	t.Helper()
-	c, err := controller.New(controller.Deps{Store: st, Workers: 2})
+	c, err := controller.New(controller.Deps{Store: st, Workers: workers})
 	require.NoError(t, err)
 	c.Register(gvk, r)
 	for _, fn := range configure {

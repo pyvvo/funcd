@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -224,7 +226,7 @@ func TestScenarioRewritesDoNotGrowDisk(t *testing.T) {
 		list.Seen["drop/rewrite"] = time.Unix(int64(i), 0).String()
 		require.NoError(t, s.SeenLists().Save(ctx, "lake", "drops", "arrived", list))
 		if i%25 == 0 {
-			require.Less(t, diskBlocks(t, dir), int64(384<<20), "disk blocks after %d saves", i)
+			require.Less(t, diskBlocks(t, os.DirFS(dir)), int64(384<<20), "disk blocks after %d saves", i)
 		}
 	}
 	got, err := s.SeenLists().Load(ctx, "lake", "drops", "arrived")
@@ -232,14 +234,31 @@ func TestScenarioRewritesDoNotGrowDisk(t *testing.T) {
 	require.Equal(t, list, got)
 }
 
-func diskBlocks(t *testing.T, dir string) int64 {
+// TestIssue934_DiskBlocksSkipsAFileRemovedMidWalk: a file the store removes between the directory read and its stat
+// is not counted and does not fail the walk.
+func TestIssue934_DiskBlocksSkipsAFileRemovedMidWalk(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"00030.mem", "00031.mem"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), bytes.Repeat([]byte("x"), 64<<10), 0o600))
+	}
+	got := diskBlocks(t, removeAfterRead{FS: os.DirFS(dir), victim: filepath.Join(dir, "00031.mem")})
+	left := diskBlocks(t, os.DirFS(dir))
+	require.Positive(t, left)
+	require.Equal(t, left, got, "the walk counts the file left and skips the removed one")
+}
+
+// diskBlocks sums the disk blocks of the files in fsys, skipping a file the store removed after the directory read.
+func diskBlocks(t *testing.T, fsys fs.FS) int64 {
 	t.Helper()
 	var total int64
-	require.NoError(t, filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+	require.NoError(t, fs.WalkDir(fsys, ".", func(_ string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
 		info, err := d.Info()
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -247,6 +266,21 @@ func diskBlocks(t *testing.T, dir string) int64 {
 		return nil
 	}))
 	return total
+}
+
+// removeAfterRead is an fs.FS whose ReadDir removes victim after listing the directory, as the store removes its own
+// files during a walk.
+type removeAfterRead struct {
+	fs.FS
+	victim string
+}
+
+func (r removeAfterRead) ReadDir(name string) ([]fs.DirEntry, error) {
+	des, err := fs.ReadDir(r.FS, name)
+	if err != nil {
+		return nil, err
+	}
+	return des, os.Remove(r.victim)
 }
 
 func keys(t *testing.T, s *Store, prefix []byte) [][]byte {
