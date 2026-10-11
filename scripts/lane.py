@@ -6,6 +6,7 @@ dir), stages its `stage` files + the registry + a `LANE` marker into `<deps>/lan
 generic VM `scripts/lima-lane.yaml` extracts + interprets in-guest), and prints the ABSOLUTE path of the
 lane's Venom suite (for the recipe to run once the VM is up). No per-lane logic lives here — a new lane is
 just a section in lanes.yaml. Its guest-side twin is the python block inside `scripts/lima-lane.yaml`.
+`scripts/lane.py --venom-lanes` lists the lanes `just lima-example-all` runs: those with a suite, not `optional`.
 
 A lane's `module` names the pinned Go module its `dir` lives in (ADR-0141): the funcd-typescript or
 funcd-python example, resolved through `scripts/moddir.sh` (the module cache, or a go.work override). The
@@ -53,7 +54,7 @@ def main() -> None:
     os.chdir(root)
     lanes = yaml.safe_load(open(REGISTRY, encoding="utf-8"))
     if sys.argv[1:] == ["--venom-lanes"]:
-        venom = [k for k, v in lanes.items() if isinstance(v, dict) and v.get("venom")]
+        venom = [k for k, v in lanes.items() if isinstance(v, dict) and v.get("venom") and not v.get("optional")]
         if not venom:
             sys.exit(f"{REGISTRY} lists no venom lane")
         print(" ".join(venom))

@@ -20,6 +20,11 @@ self-deploys (Lima provisioning), then Venom drives the assertions. It replaced 
   **restart the daemon**, and prove the `Config` is **recovered** from the durable metastore. Every step is an
   in-VM `exec` (the suite starts the daemon itself); the **wait is `retry` on the `exec` steps** (no poll
   loop, no host port-forwarding). Fixtures in `e2e/fixtures/`.
+- `app-todo.venom.yml` — the todo App of [pyvvo/funcd-functions](https://github.com/pyvvo/funcd-functions), an
+  optional lane: `just lima-example app-todo` runs it and `just lima-example-all` skips it. The suite pushes, locks
+  and deploys the App from its pushed template, then proves the locked digests, a TypeScript to Python Workflow, a
+  cron timer in Asia/Kathmandu resolved by the embedded tzdata, an upgrade's KV migration and a downgrade, and a
+  delete that keeps the retained stores on disk.
 
 ## Run it
 

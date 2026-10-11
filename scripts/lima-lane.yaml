@@ -3,7 +3,7 @@
 # file adds the identical boilerplate every lane shared (install funcdctl, extract the staged tgz, run funcd
 # in containerd mode, health-gate) and then drives the only per-lane variation from DATA: it reads the
 # lane's section of the staged `scripts/lanes.yaml` (the lane name is in /opt/lane/LANE) and runs its
-# `push` + `apply`; the probe polls its `ready` target. No per-lane VM YAML and no per-lane shell — a new
+# `push` + `apply`; the probe polls its `ready` target, if any. No per-lane VM YAML and no per-lane shell — a new
 # lane is just a section in lanes.yaml. Booted by `just lima-example <name>` with `--name funcd-bench-<name>`.
 # Lima merge (2.1.x): provision + probes APPEND after base's; mounts dedup by mountPoint (child wins).
 base: lima.yaml
@@ -92,7 +92,9 @@ probes:
       lane = open(d + "/LANE").read().strip()
       spec = yaml.safe_load(open(d + "/lanes.yaml"))[lane]
       os.environ["FUNCD_TOKEN"] = spec.get("tokens", {}).get("developer", "funcd-dev-token")
-      r = spec["ready"]
+      r = spec.get("ready")
+      if not r:
+          sys.exit(0)
       kind, names, tries = r["kind"], r["names"], int(r.get("tries", 60))
       def phase(n):
           out = subprocess.run(["funcdctl", "get", kind, n, "-n", "default", "-o", "json"],

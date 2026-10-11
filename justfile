@@ -250,8 +250,9 @@ lima-cache-image from="":
 
 # Run EVERY Venom e2e lane back-to-back: the data-driven lanes from scripts/lanes.yaml (each has its own
 # `venom:` suite, ADR-0077) PLUS the metastore lane. Lanes are enumerated from the registry, so a new lane
-# is covered automatically. Continues past a failing lane and prints a PASS/FAIL summary, exiting non-zero
-# if any lane failed. Needs docker (colima) up. `just lima-example-all`.
+# is covered automatically; an `optional` lane is left out (`just lima-example <name>` runs it). Continues
+# past a failing lane and prints a PASS/FAIL summary, exiting non-zero if any lane failed. Needs docker
+# (colima) up. `just lima-example-all`.
 [group('example')]
 lima-example-all:
     #!/usr/bin/env bash

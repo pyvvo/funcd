@@ -1,0 +1,443 @@
+# Venom e2e suite for the app-todo lane: the todo App of github.com/pyvvo/funcd-functions (apps/todo) deployed as one
+# unit on real containerd. The pkg/funcd e2e suite covers the App control logic in process; each testcase here proves
+# what only the real runtime shows:
+#   L1 the template pushed to the VM's OCI layout deploys, every Function runs the digest app.lock pinned, and a render
+#      from the pushed ref equals the render from the directory (ADR-0217, ADR-0218);
+#   L2 a Workflow run passes data from a TypeScript step to a Python step on containerd;
+#   L3 a cron timer fires on the wall clock in Asia/Kathmandu (UTC+5:45) with the VM's zone files hidden, so only
+#      funcd's embedded tzdata resolves the zone (ADR-0211);
+#   L4 the 1.1.0 pre-hook migrates the durable KV data before the API switches, and a downgrade runs the hooks of
+#      1.0.0 (ADR-0214);
+#   L5 a delete keeps the retained stores' data on disk for a new install to use through ref, and the stores with
+#      deletion delete leave the disk (ADR-0199).
+# The suite pushes, locks and deploys the App itself; the lane only creates the Secret and the grant beside it.
+name: app-todo — the todo App from its pushed template on real containerd (ADR-0199/0211/0214/0217/0218)
+
+vars:
+  dp: http://127.0.0.1:8081
+  reg: oci-layout:///mnt/funcd-deps/registry
+  token: todo-lane-token
+  fctl: "limactl shell --workdir / {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token funcdctl"
+  vmsh: "limactl shell --workdir / {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token bash -c"
+
+testcases:
+  - name: L1 the template pushed to the OCI layout deploys from its ref
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            cd /opt/lane
+            for f in api-1.0.0:todo-api:1.0.0 api-1.1.0:todo-api:1.1.0 migrate-1.0.0:todo-migrate:1.0.0 migrate-1.1.0:todo-migrate:1.1.0 collect:todo-collect:1.0.0; do
+              funcdctl push functions/ts/${f%%:*}.mjs {{.reg}}/${f#*:}
+            done
+            for f in planner:todo-planner:1.0.0 rank:todo-rank:1.0.0 warm:todo-warm:1.0.0; do
+              funcdctl push functions/py/${f%%:*}.py {{.reg}}/${f#*:}
+            done
+            funcdctl push --site web {{.reg}}/todo-web:1.0.0' | grep -c "@sha256:"
+        info: "pushed → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual 9
+      - type: exec
+        script: |
+          {{.fctl}} app lock /opt/lane/app -f /opt/lane/values/e2e.yaml | grep -E '^[a-z]+ 1[.]0[.]0 sha256:[0-9a-f]{64}$' | cut -d' ' -f1 | paste -sd, -
+        info: "app.lock → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual api,collect,migrate,planner,rank,warm,web
+      - type: exec
+        script: "{{.fctl}} push --template /opt/lane/app {{.reg}}/todo:1.0.0"
+        info: "template → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldMatchRegex "^oci-layout:///mnt/funcd-deps/registry/todo:1[.]0[.]0@sha256:[0-9a-f]{64}$"
+      - type: exec
+        script: "{{.fctl}} app deploy {{.reg}}/todo:1.0.0 -f /opt/lane/values/e2e.yaml"
+        info: "deploy → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldStartWith todo-1
+          - result.systemerr ShouldContainSubstring "template oci-layout:///mnt/funcd-deps/registry/todo:1.0.0@sha256:"
+
+  - name: L1 every Function of the App runs the image digest that app.lock pinned
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} '
+          python3 - <<"PY"
+          import json, subprocess, yaml
+          def get(kind, name):
+              out = subprocess.run(["funcdctl", "get", kind, name, "-n", "default", "-o", "json"], capture_output=True, text=True)
+              return json.loads(out.stdout) if out.returncode == 0 else {}
+          lock = yaml.safe_load(open("/opt/lane/app/app.lock"))["images"]
+          parts = {"todo-api": "api", "todo-migrate": "migrate", "todo-warm": "warm", "todo-planner": "planner",
+                   "todo-plan-collect": "collect", "todo-plan-rank": "rank"}
+          runs = []
+          for fn, image in sorted(parts.items()):
+              rev = get("function", fn).get("status", {}).get("currentRevision", "")
+              digest = get("revision", rev).get("spec", {}).get("imageDigest", "") if rev else ""
+              runs.append(fn + "=" + ("locked" if digest == lock[image]["digest"] else "other:" + digest))
+          site = get("site", "todo-web").get("status", {}).get("digest", "")
+          runs.append("todo-web=" + ("locked" if site == lock["web"]["digest"] else "other:" + site))
+          print(",".join(runs))
+          PY
+          '
+        retry: 15
+        delay: 2
+        info: "digests → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual todo-api=locked,todo-migrate=locked,todo-plan-collect=locked,todo-plan-rank=locked,todo-planner=locked,todo-warm=locked,todo-web=locked
+
+  - name: L1 a render from the pushed ref equals the render from the template directory
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            funcdctl app render {{.reg}}/todo:1.0.0 -f /opt/lane/values/e2e.yaml >/tmp/render-ref.yaml 2>/dev/null
+            funcdctl app render /opt/lane/app -f /opt/lane/values/e2e.yaml >/tmp/render-dir.yaml
+            cmp -s /tmp/render-ref.yaml /tmp/render-dir.yaml && same=yes || same=no
+            echo "SAME=$same,IMAGES=$(grep -c "@sha256:" /tmp/render-ref.yaml)"'
+        info: "render → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual SAME=yes,IMAGES=7
+
+  - name: L1 the App serves through its Route and its Site on the real edge, after both hooks ran
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"add","title":"milk","token":"{{.token}}"}}'
+        retry: 15
+        delay: 2
+        info: "add milk → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.id ShouldEqual milk
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"add","title":"passport","token":"{{.token}}"}}'
+        info: "add passport → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.id ShouldEqual passport
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"list"}}'
+        retry: 15
+        delay: 2
+        info: "list → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.version ShouldEqual 1.0.0
+          - result.bodyjson.todos ShouldHaveLength 2
+          - result.bodyjson.todos.todos0.title ShouldEqual milk
+          - result.bodyjson.todos.todos1.title ShouldEqual passport
+          - result.bodyjson.greeting ShouldEqual "hello from the todo App"
+          - result.bodyjson.tokenSet ShouldBeTrue
+          - result.bodyjson.migration.by ShouldEqual "todo-migrate 1.0.0"
+          - result.bodyjson.migration.event ShouldEqual install
+          - result.bodyjson.release.by ShouldEqual todo-warm
+          - result.bodyjson.release.revision ShouldEqual todo-1
+      - type: http
+        method: GET
+        url: "{{.dp}}/site/todo-web/"
+        info: "site → status {{.result.statuscode}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring <title>todo</title>
+
+  - name: L2 a Workflow run passes data from its TypeScript step to its Python step on containerd
+    steps:
+      - type: exec
+        script: "{{.fctl}} workflow run todo-plan plan-l2 --input '{\"tick\":\"manual-l2\"}'"
+        info: "run → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.fctl}} get workflowrun plan-l2 -n default -o json | python3 -c 'import sys,json;d=json.load(sys.stdin);print("PHASE="+d["status"].get("phase","")+",STEPS="+";".join(s["name"]+"="+s["phase"] for s in d["status"].get("steps",[])))'
+        retry: 60
+        delay: 2
+        info: "plan-l2 → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldEqual PHASE=Succeeded,STEPS=collect=Succeeded;rank=Succeeded
+      # The Python planner reads the plan that the Python rank step stored from the titles the TypeScript step read.
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-planner"
+        headers:
+          content-type: application/json
+        body: '{"data":{"tick":"manual-l2"}}'
+        retry: 15
+        delay: 2
+        info: "planner → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.found ShouldBeTrue
+          - result.bodyjson.collected_by ShouldEqual collect
+          - result.bodyjson.ranked_by ShouldEqual rank
+          - result.bodyjson.plan ShouldHaveLength 2
+          - result.bodyjson.plan.plan0 ShouldEqual milk
+          - result.bodyjson.plan.plan1 ShouldEqual passport
+
+  - name: L3 a cron timer fires on the wall clock in Asia/Kathmandu (UTC+5:45) with only funcd's embedded tzdata
+    steps:
+      # Hide the VM's zone files: from here the system cannot resolve Asia/Kathmandu, and funcd only through the tzdata
+      # it embeds.
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            mkdir -p /run/no-zoneinfo && mount --bind /run/no-zoneinfo /usr/share/zoneinfo
+            echo "FILES=$(ls -A /usr/share/zoneinfo | wc -l),OFFSET=$(TZ=Asia/Kathmandu date +%z)"'
+        info: "zone files → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual FILES=0,OFFSET=+0000
+      # The slot is the minute two minutes ahead; the cron names its minute and hour in Kathmandu, 5 h 45 min ahead of
+      # UTC all year, so a zone resolved to a whole-hour offset or to UTC misses the slot.
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            slot=$(( ($(date +%s) / 60 + 2) * 60 ))
+            date -u -d @$slot +%Y-%m-%dT%H:%M > /tmp/slot
+            cron="$(date -u -d @$((slot + 20700)) "+%-M %-H") * * *"
+            printf "schedule:\n  cron: \"%s\"\n  timeZone: Asia/Kathmandu\n" "$cron" > /tmp/schedule.yaml
+            funcdctl app deploy {{.reg}}/todo:1.0.0 -f /opt/lane/values/e2e.yaml -f /tmp/schedule.yaml > /tmp/deploy-l3.log 2>&1
+            funcdctl get eventsource todo-plan-timer -n default -o json > /tmp/timer.json
+            python3 - "$cron" <<"PY"
+          import json, sys
+          timer = json.load(open("/tmp/timer.json"))
+          event = timer["spec"]["timer"]["events"][0]
+          ready = [c["status"] for c in timer.get("status", {}).get("conditions", []) if c["type"] == "Ready"]
+          print("CRON=" + str(event.get("cron") == sys.argv[1]) + ",ZONE=" + event.get("timeZone", "") + ",READY=" + "".join(ready))
+          PY
+          '
+        info: "timer → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual CRON=True,ZONE=Asia/Kathmandu,READY=True
+      # The Sensor starts a run per tick with the event's time as its input: the run of the slot fired within seconds of
+      # it, and it Succeeds.
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            funcdctl get workflowrun -n default -o json > /tmp/runs.json
+            python3 - "$(cat /tmp/slot)" <<"PY"
+          import json, sys
+          slot = sys.argv[1] + ":"
+          runs = json.load(open("/tmp/runs.json"))
+          runs = runs if isinstance(runs, list) else runs.get("items", [])
+          fired = [r for r in runs if r["metadata"]["name"].startswith("todo-plan-schedule-plan-")
+                   and str((r["spec"].get("input") or {}).get("tick", "")).startswith(slot)]
+          if fired:
+              tick = fired[0]["spec"]["input"]["tick"]
+              print("PHASE=" + fired[0].get("status", {}).get("phase", "") + ",SECOND=" + tick[len(slot):len(slot) + 2])
+          else:
+              print("WAITING=" + slot)
+          PY
+          '
+        retry: 100
+        delay: 2
+        info: "the run of the slot → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex ^PHASE=Succeeded,SECOND=0[0-9]$
+
+  - name: L4 the 1.1.0 pre-hook migrates the durable KV data before the API switches
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            funcdctl app lock /opt/lane/app-1.1.0 -f /opt/lane/values/e2e.yaml > /dev/null
+            funcdctl push --template /opt/lane/app-1.1.0 {{.reg}}/todo:1.1.0 > /dev/null
+            funcdctl app deploy {{.reg}}/todo:1.1.0 -f /opt/lane/values/e2e.yaml'
+        info: "deploy 1.1.0 → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldMatchRegex ^todo-[0-9]+
+      # The 1.1.0 API lists only schema-2 todos: it shows the todos of 1.0.0 because the pre-hook rewrote them.
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"list"}}'
+        retry: 15
+        delay: 2
+        info: "list on 1.1.0 → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.version ShouldEqual 1.1.0
+          - result.bodyjson.unmigrated ShouldEqual 0
+          - result.bodyjson.todos ShouldHaveLength 2
+          - result.bodyjson.todos.todos0.title ShouldEqual milk
+          - result.bodyjson.todos.todos0.done ShouldBeFalse
+          - result.bodyjson.todos.todos1.title ShouldEqual passport
+          - result.bodyjson.migration.by ShouldEqual "todo-migrate 1.1.0"
+          - result.bodyjson.migration.event ShouldEqual upgrade
+          - result.bodyjson.migration.fromVersion ShouldEqual 1.0.0
+          - result.bodyjson.migration.migrated ShouldEqual 2
+          - result.bodyjson.release.version ShouldEqual 1.1.0
+      # The pre-hook's call ended before the API's 1.1.0 Revision was stamped, so the API switched after the migration.
+      - type: exec
+        script: |
+          {{.vmsh}} '
+          python3 - <<"PY"
+          import json, subprocess
+          def get(kind, name):
+              out = subprocess.run(["funcdctl", "get", kind, name, "-n", "default", "-o", "json"], capture_output=True, text=True)
+              return json.loads(out.stdout) if out.returncode == 0 else {}
+          rev = get("apprevision", get("app", "todo")["status"]["currentRevision"])
+          pre = [h for h in rev["status"].get("hooks", []) if h["point"] == "preApply"][-1]
+          api = get("revision", get("function", "todo-api")["status"]["currentRevision"])
+          order = "hook-first" if pre["endTime"] < api["metadata"]["creationTimestamp"] else "api-first"
+          print("HOOK=" + pre["function"] + "/" + pre["phase"] + ",API=" + api["spec"]["image"].split("/")[-1].split("@")[0] + ",ORDER=" + order)
+          PY
+          '
+        info: "pre-hook and API revision → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual HOOK=todo-migrate/Ready,API=todo-api:1.1.0,ORDER=hook-first
+      # The migrated records are in the KV engine's files under the daemon's data dir.
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c 'for t in milk passport; do grep -rqF "{\"title\":\"$t\",\"done\":false}" /var/lib/funcd/data/kv && echo "$t=on-disk" || echo "$t=missing"; done | paste -sd, -'
+        info: "migrated records on disk → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual milk=on-disk,passport=on-disk
+
+  - name: L4 a downgrade to 1.0.0 runs the hooks of 1.0.0 and keeps the data
+    steps:
+      - type: exec
+        script: "{{.fctl}} app deploy {{.reg}}/todo:1.0.0 -f /opt/lane/values/e2e.yaml"
+        info: "deploy 1.0.0 → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldMatchRegex ^todo-[0-9]+
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"list"}}'
+        retry: 15
+        delay: 2
+        info: "list on 1.0.0 → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.version ShouldEqual 1.0.0
+          - result.bodyjson.todos ShouldHaveLength 2
+          - result.bodyjson.todos.todos0.title ShouldEqual milk
+          - result.bodyjson.todos.todos1.title ShouldEqual passport
+          - result.bodyjson.migration.by ShouldEqual "todo-migrate 1.0.0"
+          - result.bodyjson.migration.event ShouldEqual rollback
+          - result.bodyjson.migration.fromVersion ShouldEqual 1.1.0
+          - result.bodyjson.migration.toVersion ShouldEqual 1.0.0
+          - result.bodyjson.release.version ShouldEqual 1.0.0
+      # The downgrade's revision records both hook calls, and its hook Function runs the image of 1.0.0's lock.
+      - type: exec
+        script: |
+          {{.vmsh}} '
+          python3 - <<"PY"
+          import json, subprocess, yaml
+          def get(kind, name):
+              out = subprocess.run(["funcdctl", "get", kind, name, "-n", "default", "-o", "json"], capture_output=True, text=True)
+              return json.loads(out.stdout) if out.returncode == 0 else {}
+          lock = yaml.safe_load(open("/opt/lane/app/app.lock"))["images"]
+          rev = get("apprevision", get("app", "todo")["status"]["currentRevision"])
+          calls = ";".join(h["point"] + "=" + h["function"] + "/" + h["phase"] for h in rev["status"].get("hooks", []))
+          migrate = get("revision", get("function", "todo-migrate")["status"]["currentRevision"])["spec"]["imageDigest"]
+          print("HOOKS=" + calls + ",MIGRATE=" + ("1.0.0" if migrate == lock["migrate"]["digest"] else migrate))
+          PY
+          '
+        info: "the downgrade's hooks → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual HOOKS=preApply=todo-migrate/Ready;postApply=todo-warm/Ready,MIGRATE=1.0.0
+
+  - name: L5 a delete keeps the retained stores on disk and removes the stores with deletion delete
+    steps:
+      # Each store holds data on disk before the delete: todo-store and todo-files are retained, todo-cache, todo-tmp
+      # and the Workflow's todo-plans have deletion delete.
+      - type: exec
+        script: &disk |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            kv=/var/lib/funcd/data/kv; s3=/var/lib/funcd/data/blob/s3/default
+            has() { grep -rqF "$1" $kv && echo yes || echo no; }
+            files() { find "$1" -type f ! -name "*.attrs" 2>/dev/null | wc -l; }
+            echo "STORE=$(has "{\"title\":\"milk\"")" "FILES=$(files $s3/todo-files)" "CACHE=$(has "\"by\": \"todo-warm\"")" "PLANS=$(has "\"ranked_by\": \"rank\"")" "TMP=$(files $s3/todo-tmp)" | tr " " ,'
+        info: "on disk before the delete → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual STORE=yes,FILES=2,CACHE=yes,PLANS=yes,TMP=2
+      - type: exec
+        script: "{{.fctl}} app delete todo -n default"
+        info: "delete → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "kept KVStore/todo-store"
+          - result.systemout ShouldContainSubstring "kept Bucket/todo-files"
+          - result.systemout ShouldContainSubstring "deleted KVStore/todo-cache"
+          - result.systemout ShouldContainSubstring "deleted Bucket/todo-tmp"
+          - result.systemout ShouldContainSubstring "deleted KVStore/todo-plans"
+      - type: exec
+        script: *disk
+        retry: 15
+        delay: 2
+        info: "on disk after the delete → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual STORE=yes,FILES=2,CACHE=no,PLANS=no,TMP=0
+
+  - name: L5 a new install uses the kept stores through ref
+    steps:
+      - type: exec
+        script: "{{.fctl}} app deploy {{.reg}}/todo:1.0.0 -f /opt/lane/values/e2e.yaml -f /opt/lane/values/reinstall.yaml"
+        info: "reinstall → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldStartWith todo-1
+      - type: exec
+        script: |
+          {{.fctl}} get app todo -n default -o json | python3 -c 'import sys,json;s=json.load(sys.stdin)["spec"];print("KV="+s["kv"][0].get("ref","")+",BUCKET="+s["buckets"][0].get("ref",""))'
+        info: "the App's stores → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldEqual KV=todo-store,BUCKET=todo-files
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"list"}}'
+        retry: 15
+        delay: 2
+        info: "list after the reinstall → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.todos ShouldHaveLength 2
+          - result.bodyjson.todos.todos0.title ShouldEqual milk
+          - result.bodyjson.todos.todos1.title ShouldEqual passport
+          - result.bodyjson.migration.event ShouldEqual install
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"get","id":"passport"}}'
+        info: "the kept attachment → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.attachment ShouldEqual passport
