@@ -1,6 +1,6 @@
 # ADR-0208: Blob store backend and backup target
 
-- **Status**: Reviewing (implemented 2026-10-11; accepted 2026-10-10 by an `adr-batch` run after a clean `adr-judge` gate; the defaults below were not confirmed one by one)
+- **Status**: Implemented (2026-10-11; the implementation review passed on its first round, docs/reviews/adr-0208-implementation-claude-opus-5-5.md; accepted 2026-10-10 by an `adr-batch` run after a clean `adr-judge` gate; the defaults below were not confirmed one by one)
 - **Date**: 2026-10-08
 - **Deciders**: green-0-rabbit
 - **Tags**: blob, s3, versioning, object-lock, backup, disaster-recovery
