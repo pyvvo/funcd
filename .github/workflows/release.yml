@@ -13,9 +13,11 @@ name: Build funcdctl (local)
 #     (~12 MB, ADR-0237) built by the build-sql-engine job. Both engines are subprocesses, never linked,
 #     so the client stays CGO_ENABLED=0.
 #
-# rqlited needs cgo and has no macOS release, so build-sql-engine builds it with scripts/build-sql-engine.sh:
-# linux in the rqlite image's Docker builder stage, darwin natively. It runs on macos-latest, which .actrc maps
-# to the macOS host (self-hosted), where both Docker (colima) and clang are; releases are built locally.
+# rqlited needs cgo and has no macOS release, so build-sql-engine builds it with scripts/build-sql-engine.sh on a
+# native runner per target: linux in the rqlite image's Docker builder stage on a Linux runner of that arch, darwin
+# with clang on macOS (darwin/amd64 through clang -arch). A Go build under emulation crashes, so no target is built on
+# a host of the other arch. Under act, .actrc runs the macOS and linux/arm64 jobs on an arm64 Mac host (self-hosted,
+# Docker from colima); linux/amd64 needs an amd64 host: GitHub's runner, or an amd64 Lima VM running the script.
 #
 # Run locally — the flags live in ./.actrc (image, colima socket fix, --pull=false, artifact dir):
 #   docker pull catthehacker/ubuntu:act-latest      # once (act won't pull with --pull=false)
@@ -32,19 +34,23 @@ on:
 
 jobs:
   build-sql-engine:
-    runs-on: macos-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: linux
             arch: amd64
+            runner: ubuntu-latest
           - os: linux
             arch: arm64
+            runner: ubuntu-24.04-arm
           - os: darwin
             arch: amd64
+            runner: macos-latest
           - os: darwin
             arch: arm64
+            runner: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

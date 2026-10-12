@@ -1,5 +1,6 @@
 -P ubuntu-latest=catthehacker/ubuntu:act-latest
 -P macos-latest=-self-hosted
+-P ubuntu-24.04-arm=-self-hosted
 --container-daemon-socket -
 --pull=false
 --artifact-server-path .act-artifacts
