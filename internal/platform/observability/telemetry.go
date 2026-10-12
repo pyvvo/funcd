@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
 
 	"go.opentelemetry.io/contrib/bridges/otelslog"
 	"go.opentelemetry.io/otel/attribute"
@@ -145,14 +146,18 @@ func (t *Telemetry) LoggerProvider() otellog.LoggerProvider { return t.loggerPro
 func (t *Telemetry) LogHandler() slog.Handler { return t.logHandler }
 
 // Shutdown flushes and closes every provider. It is deadline-bounded (honors ctx)
-// and idempotent — a second call is a no-op.
+// and idempotent — a second call is a no-op. The providers shut down at once, each within the whole deadline: in
+// turn, an exporter stuck on an unreachable collector used it up, and the log SDK's batch processor (v1.x) then kept
+// its worker and connection running past a Shutdown whose context had expired.
 func (t *Telemetry) Shutdown(ctx context.Context) error {
 	funcs := t.shutdownFuncs
 	t.shutdownFuncs = nil
-	var errs []error
-	for _, fn := range funcs {
-		errs = append(errs, fn(ctx))
+	errs := make([]error, len(funcs))
+	var wg sync.WaitGroup
+	for i, fn := range funcs {
+		wg.Go(func() { errs[i] = fn(ctx) })
 	}
+	wg.Wait()
 	return errors.Join(errs...)
 }
 
