@@ -51,7 +51,7 @@ func walk(s *schema, path string) error {
 		return err
 	}
 	switch {
-	// The empty schema {} (and the boolean schema `true`) is the explicit `Json` form: any value.
+	// The empty schema {} is the explicit `Json` form: any value. A boolean schema (`true`) does not decode.
 	case s.isEmpty():
 		return nil
 	case !s.Type.inProfile():
