@@ -295,9 +295,8 @@ type Config struct {
 		Enabled    bool   `json:"enabled,omitempty" env:"FUNCD_S3GATEWAY_ENABLED"`
 		ListenAddr string `json:"listenAddr,omitempty" env:"FUNCD_S3GATEWAY_LISTEN_ADDR"`
 		// Endpoint is the sandbox-facing S3 URL injected into a spec.blob worker's AWS_ENDPOINT_URL_S3
-		// (ADR-0085). Empty ⇒ derived as http://<ListenAddr>. Under containerd a worker is in its own
-		// netns, so this MUST be a node address the sandbox can reach (the CNI bridge gateway IP, e.g.
-		// http://10.63.0.1:9000), NOT a 127.0.0.1 ListenAddr.
+		// (ADR-0085). Empty ⇒ derived: under containerd, http://<bridge address>:<port> when ListenAddr's host is
+		// empty, unspecified or the bridge address (ADR-0238), else http://<ListenAddr>.
 		Endpoint         string `json:"endpoint,omitempty" env:"FUNCD_S3GATEWAY_ENDPOINT"`
 		MaxUploadBytes   int64  `json:"maxUploadBytes,omitempty" env:"FUNCD_S3GATEWAY_MAX_UPLOAD_BYTES" validate:"min=0"`
 		MasterSecretFile string `json:"masterSecretFile,omitempty" env:"FUNCD_S3GATEWAY_MASTER_SECRET_FILE"`

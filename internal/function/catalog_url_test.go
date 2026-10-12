@@ -184,7 +184,7 @@ func (w *catalogWorld) run(t *testing.T, engineNotReadyFirst bool) *catalogRun {
 	rt := &recordingRuntime{fakeRuntime: newFakeRuntime(host, port), urls: map[v1.ObjectName][]string{}}
 	sch, err := singlenode.New("local", v1.HostPlatform())
 	require.NoError(t, err)
-	mgr := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(w.master, w.st), allowCatalogQuery{}, nil)
+	mgr := cataloggw.NewManager("", cataloggw.NewCatalogKeys(w.master, w.st), allowCatalogQuery{}, nil)
 	t.Cleanup(mgr.Shutdown)
 	fn, err := function.NewReconciler(function.Deps{
 		Store: w.st, Runtime: rt, Scheduler: sch, Gateway: embedded.New(), Validator: function.NewBasicValidator(),

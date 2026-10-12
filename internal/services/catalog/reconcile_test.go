@@ -307,7 +307,7 @@ func TestReconcile_ready_publishes_proxy_endpoint(t *testing.T) {
 	st := store.New(storemem.New())
 	seedCatalogBucket(t, st)
 	prov := &fakeProvider{status: provider.ProviderStatus{Running: 1, Ready: true, Address: "10.63.0.7:8080"}}
-	mgr := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(nil, st), nil, nil)
+	mgr := cataloggw.NewManager("", cataloggw.NewCatalogKeys(nil, st), nil, nil)
 	t.Cleanup(mgr.Shutdown)
 	r := newReconciler(t, st, prov, func(d *catalogsvc.ReconcilerDeps) { d.Proxy = mgr })
 	_, err := st.Create(ctx, mkCatalogService("lake"))
@@ -335,7 +335,7 @@ func TestReconcile_engine_move_keeps_proxy_endpoint(t *testing.T) {
 	st := store.New(storemem.New())
 	seedCatalogBucket(t, st)
 	prov := &fakeProvider{status: provider.ProviderStatus{Running: 1, Ready: true, Address: "10.63.0.7:8080"}}
-	mgr := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(nil, st), nil, nil)
+	mgr := cataloggw.NewManager("", cataloggw.NewCatalogKeys(nil, st), nil, nil)
 	t.Cleanup(mgr.Shutdown)
 	r := newReconciler(t, st, prov, func(d *catalogsvc.ReconcilerDeps) { d.Proxy = mgr })
 	_, err := st.Create(ctx, mkCatalogService("lake"))
@@ -364,7 +364,7 @@ func TestScenarioCrashedCatalogEngineRestarts(t *testing.T) {
 	st := store.New(storemem.New())
 	seedCatalogBucket(t, st)
 	prov := &fakeProvider{status: provider.ProviderStatus{Running: 1, Ready: true, Address: "10.63.0.7:8080"}}
-	mgr := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(nil, st), nil, nil)
+	mgr := cataloggw.NewManager("", cataloggw.NewCatalogKeys(nil, st), nil, nil)
 	t.Cleanup(mgr.Shutdown)
 	r := newReconciler(t, st, prov, func(d *catalogsvc.ReconcilerDeps) {
 		d.Proxy = mgr
@@ -407,7 +407,7 @@ func TestIssue104_ConvergeErrorMarksCatalogNotReady(t *testing.T) {
 	st := store.New(storemem.New())
 	seedCatalogBucket(t, st)
 	prov := &fakeProvider{status: provider.ProviderStatus{Running: 1, Ready: true, Address: "10.63.0.7:8080"}}
-	mgr := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(nil, st), nil, nil)
+	mgr := cataloggw.NewManager("", cataloggw.NewCatalogKeys(nil, st), nil, nil)
 	t.Cleanup(mgr.Shutdown)
 	routes := newRecordingRoutes()
 	r := newReconciler(t, st, prov, func(d *catalogsvc.ReconcilerDeps) {
@@ -486,7 +486,7 @@ func TestIssue372_NotReadyGateStopsServing(t *testing.T) {
 			st := store.New(storemem.New())
 			seedCatalogBucket(t, st)
 			secrets := &fakeSecrets{env: map[string]string{"QUACK_TOKEN": "change-me"}}
-			mgr := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(nil, st), nil, nil)
+			mgr := cataloggw.NewManager("", cataloggw.NewCatalogKeys(nil, st), nil, nil)
 			t.Cleanup(mgr.Shutdown)
 			prov := &fakeProvider{status: provider.ProviderStatus{Running: 1, Ready: true, Address: strings.TrimPrefix(engine.URL, "http://")}}
 			r := newReconciler(t, st, prov, func(d *catalogsvc.ReconcilerDeps) {
@@ -679,7 +679,7 @@ func newEdgeHarness(t *testing.T, modes router.ModeFunc) *edgeHarness {
 	var err error
 	h.routes, err = route.NewReconciler(route.Deps{Store: h.st, Routes: agg})
 	require.NoError(t, err)
-	mgr := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(nil, h.st), nil, nil)
+	mgr := cataloggw.NewManager("", cataloggw.NewCatalogKeys(nil, h.st), nil, nil)
 	t.Cleanup(mgr.Shutdown)
 	h.prov = &fakeProvider{status: provider.ProviderStatus{Running: 1, Ready: true, Address: "10.63.0.7:8080"}}
 	h.catalogs = newReconciler(t, h.st, h.prov, func(d *catalogsvc.ReconcilerDeps) {
@@ -855,7 +855,7 @@ func TestReconcileRecordsProxyPort(t *testing.T) {
 			require.NoError(t, err)
 			port := freeport.Port(t)
 			for run := range 2 {
-				mgr := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(nil, st), nil, nil)
+				mgr := cataloggw.NewManager("", cataloggw.NewCatalogKeys(nil, st), nil, nil)
 				if run == 0 {
 					_, _, err = mgr.Listen("default", "lake", port)
 					require.NoError(t, err)
@@ -892,7 +892,7 @@ func TestReconcileDeleteKeepsBoundListener(t *testing.T) {
 	ctx := context.Background()
 	st := store.New(storemem.New())
 	seedCatalogBucket(t, st)
-	mgr := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(nil, st), nil, nil)
+	mgr := cataloggw.NewManager("", cataloggw.NewCatalogKeys(nil, st), nil, nil)
 	t.Cleanup(mgr.Shutdown)
 	prov := &fakeProvider{status: provider.ProviderStatus{Running: 1, Ready: true, Address: "10.63.0.7:8080"}}
 	r := newReconciler(t, st, prov, func(d *catalogsvc.ReconcilerDeps) { d.Proxy = mgr })
@@ -959,7 +959,7 @@ func TestMapFunctionMapsReleasedListeners(t *testing.T) {
 	fn.Name, fn.Namespace = "reader", "default"
 	require.Nil(t, newReconciler(t, st, &fakeProvider{}, nil).MapFunction(context.Background(), fn), "no proxy wired maps nothing")
 
-	mgr := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(nil, st), nil, nil)
+	mgr := cataloggw.NewManager("", cataloggw.NewCatalogKeys(nil, st), nil, nil)
 	t.Cleanup(mgr.Shutdown)
 	for _, ref := range []struct {
 		ns   v1.NamespaceName
@@ -1008,7 +1008,7 @@ func TestIssue716_NotReadyEngineStopsServing(t *testing.T) {
 			engineReady := provider.ProviderStatus{Running: 1, Ready: true, Address: strings.TrimPrefix(engine.URL, "http://")}
 			st := store.New(storemem.New())
 			seedCatalogBucket(t, st)
-			mgr := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(nil, st), nil, nil)
+			mgr := cataloggw.NewManager("", cataloggw.NewCatalogKeys(nil, st), nil, nil)
 			t.Cleanup(mgr.Shutdown)
 			prov := &fakeProvider{status: engineReady}
 			r := newReconciler(t, st, prov, func(d *catalogsvc.ReconcilerDeps) {
@@ -1063,7 +1063,7 @@ func TestReconcileConvergesBeforeTheBridgeAddressExists(t *testing.T) {
 	st := store.New(storemem.New())
 	seedCatalogBucket(t, st)
 	prov := &fakeProvider{status: provider.ProviderStatus{Reason: "Starting"}}
-	mgr := cataloggw.NewManager("192.0.2.1", "192.0.2.1", cataloggw.NewCatalogKeys(nil, st), nil, nil)
+	mgr := cataloggw.NewManager("192.0.2.1", cataloggw.NewCatalogKeys(nil, st), nil, nil)
 	t.Cleanup(mgr.Shutdown)
 	r := newReconciler(t, st, prov, func(d *catalogsvc.ReconcilerDeps) { d.Proxy = mgr })
 	_, err := st.Create(ctx, mkCatalogService("lake"))

@@ -43,7 +43,7 @@ func bindLake(fn *v1.Function) {
 // URL (ADR-0162 Decision 3).
 func TestIssue662_ConsumerWaitsForTheLiveCatalogProxy(t *testing.T) {
 	t.Parallel()
-	proxies := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(nil, nil), nil, nil)
+	proxies := cataloggw.NewManager("", cataloggw.NewCatalogKeys(nil, nil), nil, nil)
 	t.Cleanup(proxies.Shutdown)
 	h := newShimHarness(t, http.StatusOK, false, func(d *function.Deps) { d.CatalogProxies = proxies })
 	cs := storeReadyCatalog(t, h.st)
@@ -66,7 +66,7 @@ func TestIssue662_ConsumerWaitsForTheLiveCatalogProxy(t *testing.T) {
 // run, even one that answers 503 until the engine is targeted; without it, the catalog's status.endpoint.
 func TestResolveCatalogEnvInjectsBoundListener(t *testing.T) {
 	t.Parallel()
-	proxies := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(nil, nil), nil, nil)
+	proxies := cataloggw.NewManager("", cataloggw.NewCatalogKeys(nil, nil), nil, nil)
 	t.Cleanup(proxies.Shutdown)
 	_, _, err := proxies.Listen("default", "lake", 0)
 	require.NoError(t, err)
@@ -190,7 +190,7 @@ func TestIssue690_PooledMemberServesThroughAFailedGate(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			proxies := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(nil, nil), nil, nil)
+			proxies := cataloggw.NewManager("", cataloggw.NewCatalogKeys(nil, nil), nil, nil)
 			t.Cleanup(proxies.Shutdown)
 			_, _, err := proxies.Listen("default", "lake", 0)
 			require.NoError(t, err)

@@ -336,8 +336,8 @@ func (w *devWorkflow) reapply(ctx context.Context, op string, c *sdk.Client, hs 
 // pruneRemoved deletes, last applied first, each resource of prev that next no longer holds (ADR-0125: the
 // manifests are the session's desired state) and returns what the session keeps: next, then each removed resource it
 // did not delete. del is false when the reload failed to apply, as a Function may still bind a removed resource. A
-// KVStore or Bucket that still holds data refuses the delete (ADR-0073), so a reload never drops data: it stays with
-// a warning, and the next reload retries it.
+// KVStore, Bucket or SQLDatabase that still holds data refuses the delete (ADR-0073, ADR-0232), so a reload never drops
+// data: it stays with a warning, and the next reload retries it.
 func pruneRemoved(ctx context.Context, c *sdk.Client, prev, next []v1.Object, del bool, logger *slog.Logger) []v1.Object {
 	key := func(o v1.Object) string { return string(o.GroupVersionKind().Kind) + "/" + string(o.GetName()) }
 	want := make(map[string]bool, len(next))

@@ -32,14 +32,10 @@ type Manager struct {
 	proxyLog *slog.Logger    // the proxies' logger (component catalog.gateway)
 	engines  *http.Transport // the proxies' engine transport, kept across retargets
 
-	// bindHost is the interface each proxy listens on; publishHost is the host injected into functions as
-	// FUNCD_CATALOG_<ALIAS>_URL. They differ under containerd (ADR-0137, mirroring the s3gateway
-	// ListenAddr/Endpoint split): a worker runs in its OWN netns, so it CANNOT reach the daemon's
-	// 127.0.0.1 — the proxy must bind a netns-reachable interface (0.0.0.0) and publish the CNI bridge
-	// gateway IP (e.g. 10.63.0.1). In the process runtime (funcdctl dev) both are 127.0.0.1 (shared
-	// loopback). Empty ⇒ 127.0.0.1 (the dev/loopback default).
-	bindHost    string
-	publishHost string
+	// host is the address each proxy binds and the host injected into functions as FUNCD_CATALOG_<ALIAS>_URL: the
+	// container bridge address under containerd, node-private, which a worker in its own netns reaches (ADR-0238), and
+	// 127.0.0.1 in the process runtime (funcdctl dev, shared loopback).
+	host string
 
 	mu      sync.Mutex
 	servers map[string]*managedProxy // key = "ns/name"
@@ -81,29 +77,23 @@ func (s *retargetable) set(h http.Handler) {
 
 // NewManager builds the catalog proxy Manager over the shared token resolver + PDP (ADR-0137). The
 // same CatalogKeys/Authorizer back every per-catalog proxy; each proxy differs only in its
-// EngineTarget (the catalog ref + its netns engine URL + shared engine token). bindHost is the interface
-// each proxy binds; publishHost is the host injected into functions (see Manager). Both empty ⇒
-// 127.0.0.1 (the process-runtime/dev default, shared loopback); under containerd pass bindHost "0.0.0.0"
-// and publishHost the CNI bridge gateway IP so a worker in its own netns can reach the proxy.
-func NewManager(bindHost, publishHost string, keys CatalogKeys, pdp auth.Authorizer, log *slog.Logger) *Manager {
+// EngineTarget (the catalog ref + its netns engine URL + shared engine token). host is the address each proxy binds
+// and publishes (see Manager); empty ⇒ 127.0.0.1.
+func NewManager(host string, keys CatalogKeys, pdp auth.Authorizer, log *slog.Logger) *Manager {
 	if log == nil {
 		log = slog.Default()
 	}
-	if bindHost == "" {
-		bindHost = "127.0.0.1"
-	}
-	if publishHost == "" {
-		publishHost = "127.0.0.1"
+	if host == "" {
+		host = "127.0.0.1"
 	}
 	return &Manager{
-		keys:        keys,
-		pdp:         pdp,
-		log:         log.With("component", "catalog.gateway.manager"),
-		proxyLog:    log.With("component", "catalog.gateway"),
-		engines:     httpx.NodeTransport(),
-		bindHost:    bindHost,
-		publishHost: publishHost,
-		servers:     make(map[string]*managedProxy),
+		keys:     keys,
+		pdp:      pdp,
+		log:      log.With("component", "catalog.gateway.manager"),
+		proxyLog: log.With("component", "catalog.gateway"),
+		engines:  httpx.NodeTransport(),
+		host:     host,
+		servers:  make(map[string]*managedProxy),
 	}
 }
 
@@ -113,9 +103,8 @@ func managerKey(ns v1.NamespaceName, name v1.ObjectName) string {
 }
 
 // Ensure guarantees a node-private proxy is running for catalog, fronting upstream with engineToken,
-// and returns the bare "<publishHost>:<port>" host:port the function injects as FUNCD_CATALOG_<ALIAS>_URL
-// (its handler wraps it in quack://; the engine endpoint was bare too). Under containerd publishHost is
-// the CNI bridge gateway IP (netns-reachable), NOT the bind interface; in dev both are 127.0.0.1. If a
+// and returns the bare "<host>:<port>" host:port the function injects as FUNCD_CATALOG_<ALIAS>_URL
+// (its handler wraps it in quack://; the engine endpoint was bare too). If a
 // proxy already runs for the catalog it is reused (idempotent — a re-reconcile does not rebind); if the
 // upstream or engineToken differs, the running proxy is retargeted in place and its URL stays the same.
 // Thread-safe.
@@ -141,7 +130,7 @@ func (m *Manager) Ensure(catalog auth.EntityRef, upstream, engineToken string) (
 		return m.publishURL(existing.listener.Addr()), nil
 	}
 
-	ln, err := net.Listen("tcp", net.JoinHostPort(m.bindHost, "0"))
+	ln, err := net.Listen("tcp", net.JoinHostPort(m.host, "0"))
 	if err != nil {
 		return "", fault.Unavailablef(op, "bind node-private catalog proxy listener for %s: %v", key, err)
 	}
@@ -170,7 +159,7 @@ func (m *Manager) Listen(ns v1.NamespaceName, name v1.ObjectName, port int) (bou
 	}
 	var ln net.Listener
 	if port > 0 {
-		if ln, err = net.Listen("tcp", net.JoinHostPort(m.bindHost, strconv.Itoa(port))); err != nil {
+		if ln, err = net.Listen("tcp", net.JoinHostPort(m.host, strconv.Itoa(port))); err != nil {
 			// An address not on this host yet (the bridge before its first container, ADR-0238) keeps the recorded port.
 			if errors.Is(err, syscall.EADDRNOTAVAIL) {
 				return 0, false, fault.Wrapf(err, fault.Unavailable, op, "bind node-private catalog proxy listener for %s", key)
@@ -179,7 +168,7 @@ func (m *Manager) Listen(ns v1.NamespaceName, name v1.ObjectName, port int) (bou
 		}
 	}
 	if ln == nil {
-		if ln, err = net.Listen("tcp", net.JoinHostPort(m.bindHost, "0")); err != nil {
+		if ln, err = net.Listen("tcp", net.JoinHostPort(m.host, "0")); err != nil {
 			return 0, false, fault.Wrapf(err, fault.Unavailable, op, "bind node-private catalog proxy listener for %s", key)
 		}
 	}
@@ -230,7 +219,7 @@ func (m *Manager) Released(ns v1.NamespaceName) []v1.ObjectName {
 	return out
 }
 
-// ProxyURL returns the bare "<publishHost>:<port>" of the catalog's listener when one is bound in this daemon run,
+// ProxyURL returns the bare "<host>:<port>" of the catalog's listener when one is bound in this daemon run,
 // and false when none is: a restarted daemon binds none until the catalog's first pass, so a URL stored before the
 // restart may be dead (#662, ADR-0162).
 func (m *Manager) ProxyURL(ns v1.NamespaceName, name v1.ObjectName) (string, bool) {
@@ -308,9 +297,8 @@ func listenerPort(addr net.Addr) int {
 	return 0
 }
 
-// publishURL renders the BARE "<publishHost>:<port>" host:port a function is injected with: the ephemeral
-// PORT the listener bound, joined to the Manager's publishHost (the netns-reachable host — the CNI bridge
-// gateway IP under containerd, 127.0.0.1 in dev), NOT the bind interface. Bare because the handler prepends
+// publishURL renders the BARE "<host>:<port>" host:port a function is injected with: the ephemeral PORT the
+// listener bound, joined to the Manager's host. Bare because the handler prepends
 // quack:// (a scheme here would produce quack://http://… → Invalid Port). On a malformed addr it falls back
 // to the raw addr string.
 func (m *Manager) publishURL(addr net.Addr) string {
@@ -318,5 +306,5 @@ func (m *Manager) publishURL(addr net.Addr) string {
 	if err != nil {
 		return addr.String()
 	}
-	return net.JoinHostPort(m.publishHost, port)
+	return net.JoinHostPort(m.host, port)
 }

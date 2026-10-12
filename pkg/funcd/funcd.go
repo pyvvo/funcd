@@ -842,7 +842,7 @@ func (p *Platform) buildControlPlane() error {
 	// The proxies bind and publish the bridge address, node-private, or the shared loopback (ADR-0238).
 	catHost := cmp.Or(c.bridgeAddress, "127.0.0.1")
 	catalogKeys := cataloggw.NewCatalogKeys(master, c.store)
-	catalogMgr := cataloggw.NewManager(catHost, catHost, catalogKeys, cedarPDP, p.logger)
+	catalogMgr := cataloggw.NewManager(catHost, catalogKeys, cedarPDP, p.logger)
 	p.catalogProxy = catalogMgr
 
 	// ADR-0143: one tracker counts every call to a worker — the activator's proxy, the Sensor invoker and the workflow

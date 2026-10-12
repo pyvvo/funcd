@@ -117,7 +117,7 @@ func newCatalogWorld(t *testing.T) *catalogWorld {
 
 	engine := &engineProvider{}
 	engine.start()
-	proxies := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(master, fn.store), allowAll{}, nil)
+	proxies := cataloggw.NewManager("", cataloggw.NewCatalogKeys(master, fn.store), allowAll{}, nil)
 	catalog, err := catalogsvc.NewReconciler(catalogsvc.ReconcilerDeps{
 		Store:    fn.store,
 		Provider: engine,

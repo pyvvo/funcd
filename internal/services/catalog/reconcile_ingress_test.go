@@ -56,7 +56,7 @@ const lakeRouteSource = "catalog/default/lake"
 // 10.63.0.7:8080), a real node-private PEP proxy Manager, and the given edge aggregator seam.
 func ingressReconciler(t *testing.T, st store.Store, routes router.EntrySetter) *catalogsvc.Reconciler {
 	t.Helper()
-	mgr := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(nil, st), nil, nil)
+	mgr := cataloggw.NewManager("", cataloggw.NewCatalogKeys(nil, st), nil, nil)
 	t.Cleanup(mgr.Shutdown)
 	r, err := catalogsvc.NewReconciler(catalogsvc.ReconcilerDeps{
 		Store:    st,
@@ -185,7 +185,7 @@ func TestIssue103_NotReadyRetractsEdgeEntry(t *testing.T) {
 			seedCatalogBucket(t, st)
 			routes := newRecordingRoutes()
 			secrets := &fakeSecrets{env: map[string]string{"QUACK_TOKEN": "change-me"}}
-			mgr := cataloggw.NewManager("", "", cataloggw.NewCatalogKeys(nil, st), nil, nil)
+			mgr := cataloggw.NewManager("", cataloggw.NewCatalogKeys(nil, st), nil, nil)
 			t.Cleanup(mgr.Shutdown)
 			prov := &fakeProvider{status: provider.ProviderStatus{Running: 1, Ready: true, Address: "10.63.0.7:8080"}}
 			r := newReconciler(t, st, prov, func(d *catalogsvc.ReconcilerDeps) {

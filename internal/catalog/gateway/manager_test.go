@@ -42,7 +42,7 @@ func TestManager_EnsureProxiesThroughToEngine(t *testing.T) {
 	up := httptest.NewServer(stub.handler())
 	t.Cleanup(up.Close)
 
-	mgr := NewManager("", "", keys, pdp, nil)
+	mgr := NewManager("", keys, pdp, nil)
 	t.Cleanup(mgr.Shutdown)
 
 	catalog := auth.EntityRef{Type: v1.KindCatalogService, Namespace: "data", Name: "lake"}
@@ -100,7 +100,7 @@ func TestManager_EnsureKeepsURLWhenEngineMoves(t *testing.T) {
 	up2 := httptest.NewServer(stub2.handler())
 	t.Cleanup(up2.Close)
 
-	mgr := NewManager("", "", keys, pdp, nil)
+	mgr := NewManager("", keys, pdp, nil)
 	t.Cleanup(mgr.Shutdown)
 	catalog := auth.EntityRef{Type: v1.KindCatalogService, Namespace: "data", Name: "lake"}
 
@@ -123,36 +123,6 @@ func TestManager_EnsureKeepsURLWhenEngineMoves(t *testing.T) {
 	require.Equal(t, "token-b", forwarded, "the new shared engine token is swapped in")
 }
 
-// TestManager_PublishHostSplit confirms the containerd bind/publish split (ADR-0137): with a
-// publishHost set, Ensure binds a netns-reachable interface but PUBLISHES the injected URL on the
-// publishHost (the CNI bridge gateway IP), NOT the bind interface — the query-path analog of the
-// s3gateway ListenAddr/Endpoint split. The published port still matches the actually-bound port.
-func TestManager_PublishHostSplit(t *testing.T) {
-	t.Parallel()
-	st := store.New(memory.New())
-	seedCatalogWorld(t, st)
-	pdp := buildPDP(t, st)
-	keys := NewCatalogKeys([]byte("publish-split-master"), st)
-
-	up := httptest.NewServer((&engineStub{}).handler())
-	t.Cleanup(up.Close)
-
-	// bind loopback (reachable from the test), publish the "bridge gateway" host.
-	const publishHost = "10.63.0.1"
-	mgr := NewManager("127.0.0.1", publishHost, keys, pdp, nil)
-	t.Cleanup(mgr.Shutdown)
-	catalog := auth.EntityRef{Type: v1.KindCatalogService, Namespace: "data", Name: "lake"}
-
-	url, err := mgr.Ensure(catalog, up.URL, engineToken)
-	require.NoError(t, err)
-	require.True(t, strings.HasPrefix(url, publishHost+":"), "Ensure publishes on publishHost, got %q", url)
-
-	// the published port is the port the listener actually bound on loopback (only the host differs).
-	_, port, err := net.SplitHostPort(url)
-	require.NoError(t, err)
-	require.NotEmpty(t, port, "a real ephemeral port is published")
-}
-
 // TestIssue312_ProxyBoundsStalledAndIdleConns: a peer that connects to a catalog proxy and stalls before
 // the PEP reads its token, or holds a keep-alive connection idle, pins a daemon goroutine without limit
 // unless the proxy's http.Server bounds the header read, the body read and the idle wait. The idle bound
@@ -160,7 +130,7 @@ func TestManager_PublishHostSplit(t *testing.T) {
 func TestIssue312_ProxyBoundsStalledAndIdleConns(t *testing.T) {
 	t.Parallel()
 	st := store.New(memory.New())
-	mgr := NewManager("", "", NewCatalogKeys([]byte("i312-master"), st), buildPDP(t, st), nil)
+	mgr := NewManager("", NewCatalogKeys([]byte("i312-master"), st), buildPDP(t, st), nil)
 	t.Cleanup(mgr.Shutdown)
 	_, err := mgr.Ensure(auth.EntityRef{Type: v1.KindCatalogService, Namespace: "data", Name: "lake"}, "http://127.0.0.1:1", engineToken)
 	require.NoError(t, err)
@@ -181,7 +151,7 @@ func TestIssue454_ProxyServerErrorsUseTheManagerLogger(t *testing.T) {
 	t.Parallel()
 	var logs bytes.Buffer
 	st := store.New(memory.New())
-	mgr := NewManager("", "", NewCatalogKeys([]byte("i454-master"), st), buildPDP(t, st), slog.New(slog.NewJSONHandler(&logs, nil)))
+	mgr := NewManager("", NewCatalogKeys([]byte("i454-master"), st), buildPDP(t, st), slog.New(slog.NewJSONHandler(&logs, nil)))
 	t.Cleanup(mgr.Shutdown)
 	_, err := mgr.Ensure(auth.EntityRef{Type: v1.KindCatalogService, Namespace: "data", Name: "lake"}, "http://127.0.0.1:1", engineToken)
 	require.NoError(t, err)
@@ -213,7 +183,7 @@ func TestIssue379_ProxyLogsThroughManagerLogger(t *testing.T) {
 	dead.Close()
 
 	var logs bytes.Buffer
-	mgr := NewManager("", "", keys, pdp, slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	mgr := NewManager("", keys, pdp, slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(mgr.Shutdown)
 	url, err := mgr.Ensure(auth.EntityRef{Type: v1.KindCatalogService, Namespace: "data", Name: "lake"}, dead.URL, engineToken)
 	require.NoError(t, err)
@@ -255,7 +225,7 @@ func TestIssue531_EngineCallsSurviveDefaultTransportCloseIdle(t *testing.T) {
 	up.Start()
 	t.Cleanup(up.Close)
 
-	mgr := NewManager("", "", keys, buildPDP(t, st), nil)
+	mgr := NewManager("", keys, buildPDP(t, st), nil)
 	t.Cleanup(mgr.Shutdown)
 	url, err := mgr.Ensure(auth.EntityRef{Type: v1.KindCatalogService, Namespace: "data", Name: "lake"}, up.URL, engineToken)
 	require.NoError(t, err)
@@ -288,7 +258,7 @@ func statusAt(t *testing.T, url string) int {
 // could take the recorded port between the first run's Shutdown and the rebind, and a freeport port, not an ephemeral
 // one: another test process's :0 bind could take that (#758).
 func TestManagerListenRebindsRecordedPort(t *testing.T) {
-	first := NewManager("", "", NewCatalogKeys(nil, nil), nil, nil)
+	first := NewManager("", NewCatalogKeys(nil, nil), nil, nil)
 	port := freeport.Port(t)
 	bound, moved, err := first.Listen("data", "lake", port)
 	require.NoError(t, err)
@@ -296,7 +266,7 @@ func TestManagerListenRebindsRecordedPort(t *testing.T) {
 	require.Equal(t, port, bound)
 	first.Shutdown()
 
-	mgr := NewManager("", "", NewCatalogKeys(nil, nil), nil, nil)
+	mgr := NewManager("", NewCatalogKeys(nil, nil), nil, nil)
 	t.Cleanup(mgr.Shutdown)
 	bound, moved, err = mgr.Listen("data", "lake", port)
 	require.NoError(t, err)
@@ -321,7 +291,7 @@ func TestManagerListenTakesNewPortWhenTaken(t *testing.T) {
 	t.Cleanup(func() { _ = holder.Close() })
 	taken := holder.Addr().(*net.TCPAddr).Port
 
-	mgr := NewManager("", "", NewCatalogKeys(nil, nil), nil, nil)
+	mgr := NewManager("", NewCatalogKeys(nil, nil), nil, nil)
 	t.Cleanup(mgr.Shutdown)
 	bound, moved, err := mgr.Listen("data", "lake", taken)
 	require.NoError(t, err)
@@ -338,7 +308,7 @@ func TestManagerReleaseKeepsURL(t *testing.T) {
 	t.Parallel()
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
 	t.Cleanup(up.Close)
-	mgr := NewManager("", "", NewCatalogKeys(nil, nil), nil, nil)
+	mgr := NewManager("", NewCatalogKeys(nil, nil), nil, nil)
 	t.Cleanup(mgr.Shutdown)
 	mgr.Release("data", "lake")
 	require.Empty(t, mgr.Released("data"), "releasing an unknown catalog is a no-op")
