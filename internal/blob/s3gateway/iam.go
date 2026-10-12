@@ -14,6 +14,7 @@ import (
 	"crypto/sha256"
 	"encoding/base32"
 	"encoding/base64"
+	"errors"
 	"strings"
 
 	"github.com/versity/versitygw/auth"
@@ -168,6 +169,20 @@ func (s *iam) GetUserAccount(access string) (auth.Account, error) {
 	// maps the sentinel auth.ErrNoSuchUser → 403 InvalidAccessKeyId, but any other error → 500 InternalError
 	// (which the AWS SDK then retries). Return the sentinel so a forged/unknown key gets an immediate 403.
 	return auth.Account{}, auth.ErrNoSuchUser
+}
+
+// ResolveAccounts returns the access keys of accessKeyIDs that resolve to no account, which versitygw (v1.8 on)
+// asks when it checks the principals of an ACL or a bucket policy; any other lookup error is returned.
+func (s *iam) ResolveAccounts(accessKeyIDs []string) ([]string, error) {
+	missing := []string{}
+	for _, access := range accessKeyIDs {
+		if _, err := s.GetUserAccount(access); errors.Is(err, auth.ErrNoSuchUser) {
+			missing = append(missing, access)
+		} else if err != nil {
+			return nil, err
+		}
+	}
+	return missing, nil
 }
 
 // ListUserAccounts returns the external store's accounts (ADR-0085). In-platform

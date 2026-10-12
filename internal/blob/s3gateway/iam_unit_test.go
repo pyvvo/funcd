@@ -80,6 +80,18 @@ func TestIAMGetUserAccount(t *testing.T) {
 	require.ErrorIs(t, err, auth.ErrNoSuchUser, "an unknown access key fails closed with the 403-mapped sentinel")
 }
 
+// TestIAMResolveAccounts — versitygw's principal check: a derived and an external key resolve, an unknown one is
+// returned as missing.
+func TestIAMResolveAccounts(t *testing.T) {
+	t.Parallel()
+	master := []byte("node-master")
+	im := &iam{master: master, external: mapExternal{"EXT": {secret: "s3cr3t", ns: "tenantA"}}}
+	kp := DeriveKeypair(master, v1.KindFunction, "default", "fn1")
+	missing, err := im.ResolveAccounts([]string{kp.AccessKey, "EXT", "NOPE"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"NOPE"}, missing)
+}
+
 // TestIAMMutatorsNotSupported (ADR-0085) — the three mutators reject (derived accounts
 // have no mutable state); ListUserAccounts + Shutdown are inert.
 func TestIAMMutatorsNotSupported(t *testing.T) {
