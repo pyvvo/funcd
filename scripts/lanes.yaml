@@ -489,6 +489,122 @@ sql:
     tries: 90
   venom: e2e/sql.venom.yml
 
+sql-examples:
+  description: The SQL examples of funcd-typescript and funcd-python on real containerd, one round trip each (FEAT-0011) — Drizzle migrations and queries, full-text search with FTS5 and JSON, SQLModel with Alembic migrations and an audit trail filled by the change feed, and a Workflow whose steps share a database.
+  module: github.com/pyvvo/funcd-python
+  dir: examples
+  # funcd-bundle writes dist/ beside each Python example, so the lane builds in a writable copy of the module.
+  copy: true
+  # funcd-bundle installs the bundles in the local python:3.14-slim-bookworm image: that tag first points at the
+  # digest the python314 runtime image pins.
+  build:
+    - docker pull python:3.14-slim-bookworm@sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83 && docker tag python:3.14-slim-bookworm@sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83 python:3.14-slim-bookworm
+    - cd sql-orders && uv run --locked funcd-bundle
+    - cd sql-readings && uv run --locked funcd-bundle
+  stage:
+    - sql-orders/orders-db.yaml
+    - sql-orders/orders.yaml
+    - sql-orders/orders-migrate.yaml
+    - sql-orders/audit.yaml
+    - sql-orders/grant.yaml
+    - sql-orders/changes.yaml
+    - sql-orders/dist/orders
+    - sql-orders/dist/orders-migrate
+    - sql-orders/dist/audit
+    - sql-readings/readings-db.yaml
+    - sql-readings/workflow.yaml
+    - sql-readings/run.yaml
+    - sql-readings/dist/ingest
+    - sql-readings/dist/summarize
+    # The engines post their changes to the bridge address this config sets (ADR-0235).
+    - from: examples/sql-orders/funcdconfig.yaml
+      module: github.com/pyvvo/funcd-python
+      to: funcdconfig.yaml
+    - from: examples/sql-notes/notes.mjs
+      module: github.com/pyvvo/funcd-typescript
+      to: sql-notes/notes.mjs
+    - from: examples/sql-notes/notes.funcdctl.yaml
+      module: github.com/pyvvo/funcd-typescript
+      to: sql-notes/notes.funcdctl.yaml
+    - from: examples/sql-notes/notes-migrate.mjs
+      module: github.com/pyvvo/funcd-typescript
+      to: sql-notes/notes-migrate.mjs
+    - from: examples/sql-notes/notes-migrate.funcdctl.yaml
+      module: github.com/pyvvo/funcd-typescript
+      to: sql-notes/notes-migrate.funcdctl.yaml
+    - from: examples/sql-notes/notes-db.yaml
+      module: github.com/pyvvo/funcd-typescript
+      to: sql-notes/notes-db.yaml
+    - from: examples/sql-notes/notes.yaml
+      module: github.com/pyvvo/funcd-typescript
+      to: sql-notes/notes.yaml
+    - from: examples/sql-notes/notes-migrate.yaml
+      module: github.com/pyvvo/funcd-typescript
+      to: sql-notes/notes-migrate.yaml
+    - from: examples/sql-notes/grant.yaml
+      module: github.com/pyvvo/funcd-typescript
+      to: sql-notes/grant.yaml
+    - from: examples/sql-search/search.mjs
+      module: github.com/pyvvo/funcd-typescript
+      to: sql-search/search.mjs
+    - from: examples/sql-search/search.funcdctl.yaml
+      module: github.com/pyvvo/funcd-typescript
+      to: sql-search/search.funcdctl.yaml
+    - from: examples/sql-search/search-db.yaml
+      module: github.com/pyvvo/funcd-typescript
+      to: sql-search/search-db.yaml
+    - from: examples/sql-search/search.yaml
+      module: github.com/pyvvo/funcd-typescript
+      to: sql-search/search.yaml
+  push:
+    - artifact: sql-notes/notes.mjs
+      ref: notes
+    - artifact: sql-notes/notes-migrate.mjs
+      ref: notes-migrate
+    - artifact: sql-search/search.mjs
+      ref: search
+    - artifact: sql-orders/dist/orders
+      ref: orders
+      entry: orders.py
+    - artifact: sql-orders/dist/orders-migrate
+      ref: orders-migrate
+      entry: migrate.py
+    - artifact: sql-orders/dist/audit
+      ref: audit
+      entry: audit.py
+    - artifact: sql-readings/dist/ingest
+      ref: ingest
+      entry: ingest.py
+    - artifact: sql-readings/dist/summarize
+      ref: summarize
+      entry: summarize.py
+  apply:
+    - sql-notes/notes-db.yaml
+    - sql-notes/notes.yaml
+    - sql-notes/notes-migrate.yaml
+    - sql-notes/grant.yaml
+    - sql-search/search-db.yaml
+    - sql-search/search.yaml
+    - sql-orders/orders-db.yaml
+    - sql-orders/orders.yaml
+    - sql-orders/orders-migrate.yaml
+    - sql-orders/audit.yaml
+    - sql-orders/grant.yaml
+    - sql-orders/changes.yaml
+    - sql-readings/readings-db.yaml
+    - sql-readings/workflow.yaml
+  # The examples scale to zero, so a Function is Idle until its first call: the gate waits for the databases, and the
+  # suite's first call to each function wakes it.
+  ready:
+    kind: sqldatabase
+    names:
+      - notes-db
+      - search-db
+      - orders-db
+      - readings-db
+    tries: 90
+  venom: e2e/sql-examples.venom.yml
+
 app-todo:
   description: The todo App of funcd-functions, deployed from its pushed template on real containerd (ADR-0217/0218), and the App features on it — pinned digests, a TypeScript→Python Workflow, a zoned cron timer, hooks, kept stores, a dry run, drift and pause, a config roll, rollback, liveness and dependency health, a late call, a refused binding, a requirement and a blob upload; then the disaster-recovery drill of FEAT-0009 — a backup to an S3 server in the VM, a lost data directory restored, held boot and release, the App's own backups and restores, a pre-upgrade generation, and the blob store on S3.
   module: github.com/pyvvo/funcd-functions

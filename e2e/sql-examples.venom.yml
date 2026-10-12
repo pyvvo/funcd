@@ -1,0 +1,174 @@
+# Venom e2e suite for the sql-examples containerd lane: the SQL examples of funcd-typescript and funcd-python, each
+# with its own database on its own rqlite engine, run host-side once the Lima VM is Ready. One round trip per example;
+# the sql lane and the pkg/funcd tests hold the access, failure, restart, backup and change-feed edge cases.
+#   X1 sql-notes: Drizzle's migrator applies both migrations, and the notes come back joined to their notebook, by
+#      priority.
+#   X2 sql-search: full-text search finds an article with a highlighted snippet, filters by a JSON tag, counts tags.
+#   X3 sql-orders: the Alembic migrations apply, and an order's insert and update reach its audit trail through the
+#      change feed, a Sensor and the audit function.
+#   X4 sql-readings: a run of the Workflow stores a batch in one step and summarizes it in the next.
+name: sql-examples — the SQL examples on real containerd (FEAT-0011)
+
+vars:
+  dp: http://127.0.0.1:8081
+  vmsh: "limactl shell --workdir / {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token bash -c"
+
+testcases:
+  - name: X1 Drizzle's migrator applies both migrations and the notes come back joined and ordered
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/notes-migrate"
+        headers:
+          content-type: application/json
+        body: '{"data":{}}'
+        retry: 30
+        delay: 2
+        info: "migrate → {{.result.statuscode}} {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.applied ShouldEqual 2
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/notes"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"add","notebook":"shopping","title":"milk"}}'
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/notes"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"add","title":"call the bank","priority":2}}'
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/notes"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"list"}}'
+        info: "list → {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.notes ShouldHaveLength 2
+          - result.bodyjson.notes.notes0.title ShouldEqual "call the bank"
+          - result.bodyjson.notes.notes0.notebook ShouldEqual inbox
+          - result.bodyjson.notes.notes1.notebook ShouldEqual shopping
+
+  - name: X2 full-text search finds an article with a snippet, filters by a JSON tag and counts tags
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/search"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"init"}}'
+        retry: 30
+        delay: 2
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/search"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"add","title":"Raft in practice","body":"rqlite replicates SQLite with the Raft consensus protocol","tags":["raft","sqlite"]}}'
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.id ShouldEqual 1
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/search"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"add","title":"SQLite tips","body":"indexes make SQLite queries fast","tags":["sqlite"]}}'
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/search"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"search","q":"sqlite","tag":"raft"}}'
+        info: "search → {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.hits ShouldHaveLength 1
+          - result.bodyjson.hits.hits0.snippet ShouldContainSubstring "[SQLite]"
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/search"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"tags"}}'
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.tags.tags0.tag ShouldEqual sqlite
+          - result.bodyjson.tags.tags0.articles ShouldEqual 2
+
+  - name: X3 the Alembic migrations apply and an order's changes reach its audit trail through the change feed
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/orders-migrate"
+        headers:
+          content-type: application/json
+        body: '{"data":{}}'
+        retry: 30
+        delay: 2
+        info: "migrate → {{.result.statuscode}} {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.applied ShouldEqual 2
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/orders"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"place","email":"ada@example.org","item":"tea","quantity":2}}'
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/orders"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"ship","id":1}}'
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.changed ShouldEqual 1
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/orders"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"history","id":1}}'
+        retry: 30
+        delay: 2
+        info: "history → {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.history ShouldHaveLength 2
+          - result.bodyjson.history.history0.change ShouldEqual Insert
+          - result.bodyjson.history.history1.change ShouldEqual Update
+          - result.bodyjson.history.history1.status ShouldEqual shipped
+
+  - name: X4 a run of the readings Workflow stores a batch and summarizes it
+    steps:
+      - type: exec
+        script: "{{.vmsh}} 'funcdctl apply -f /opt/lane/sql-readings/run.yaml'"
+        retry: 15
+        delay: 2
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'funcdctl get workflowrun readings-run-1 -n default -o json' | python3 -c 'import json,sys; s=json.load(sys.stdin)["status"]; print(s.get("phase",""), ",".join(x["name"] + "=" + x["phase"] for x in s.get("steps", [])))'
+        retry: 60
+        delay: 2
+        info: "run → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldEqual "Succeeded ingest=Succeeded,summarize=Succeeded"
