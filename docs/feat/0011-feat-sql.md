@@ -119,7 +119,7 @@ flowchart TB
 | Query builders | SQL text and parameters from a builder that only generates SQL work as they are; ORMs are optional | F129 |
 | Delete | refused while bound or holding data; the App's deletion policy decides whether the database outlives the App | F128, F130 |
 | Schema | migrations run in the App's hooks, in order, once | F130 |
-| Backup | workload backups copy each database; a restore goes into a new name by default | F131 |
+| Backup | workload backups copy each database; a restore goes into a new name or in place | F131 |
 | Changes | a row change becomes an event Sensors react to | F132 |
 | Dev | `funcdctl dev` runs the same engine as a local process | F133 |
 
@@ -160,13 +160,13 @@ each feature passes its checks:
 
 | Question | Decided in |
 |---|---|
-| The kind's name, around the `sql` vocabulary | the SQL database ADR |
-| Who holds a write grant: an owner plus roles, as for KV, or a writers list on the database | the SQL access ADR |
-| Whether a Workflow step may bind an App's database, or only one its Workflow owns, as for KV stores ([ADR-0178](../adr/0178-a-workflow-adopts-only-its-own-kv-stores.md)) | the SQL access ADR |
-| Result size and statement limits per call; how dates and bytes are passed; which call returns `RETURNING` rows | the SQL access ADR |
-| The engine's default memory and CPU bounds, and a per-namespace database quota | the SQL database ADR |
-| The engine image: a static build from source, or the glibc build on a distroless base | the SQL database ADR |
-| How an engine moves to a new rqlite version | the SQL database ADR |
+| The kind's name, around the `sql` vocabulary | `SQLDatabase`, bound by `spec.sql`: [ADR-0232](../adr/0232-sql-database-resource-and-rqlite-engine.md) Decision 1 |
+| Who holds a write grant: an owner plus roles, as for KV, or a writers list on the database | an owner plus `SQL Data Writer` roles, as for KV: [ADR-0233](../adr/0233-sql-access-from-functions.md) Decisions 2 and 6 |
+| Whether a Workflow step may bind an App's database, or only one its Workflow owns, as for KV stores ([ADR-0178](../adr/0178-a-workflow-adopts-only-its-own-kv-stores.md)) | any database of its namespace, as a Function does: [ADR-0233](../adr/0233-sql-access-from-functions.md) Decision 1 |
+| Result size and statement limits per call; how dates and bytes are passed; which call returns `RETURNING` rows | 1 MiB and 500 statements per call, 8 MiB per answer; parameters are JSON values, so a date is text, and a BLOB column comes back base64; `execute` returns `RETURNING` rows: [ADR-0233](../adr/0233-sql-access-from-functions.md) Decisions 3 and 4 |
+| The engine's default memory and CPU bounds, and a per-namespace database quota | 256Mi of memory unless set, no CPU bound unless set; 20 databases per namespace: [ADR-0232](../adr/0232-sql-database-resource-and-rqlite-engine.md) Decisions 1 and 8 |
+| The engine image: a static build from source, or the glibc build on a distroless base | a static build from the pinned source on distroless static: [ADR-0232](../adr/0232-sql-database-resource-and-rqlite-engine.md) Decision 3 |
+| How an engine moves to a new rqlite version | at the first daemon start after a funcd release changes the pin; a change of rqlite's on-disk format needs its own ADR: [ADR-0232](../adr/0232-sql-database-resource-and-rqlite-engine.md) Decision 3 |
 | Whether the platform backup also copies every database | no, for now: [ADR-0234](../adr/0234-sql-backup-and-restore.md) Decision 6 |
-| The shape of a change event, and how a duplicate delivery is dropped | the SQL change-feed ADR |
+| The shape of a change event, and how a duplicate delivery is dropped | one CloudEvent per row change; a Raft-index watermark per database and engine epoch drops a redelivery, and the event `id` lets a function drop the repeat a daemon crash can cause: [ADR-0235](../adr/0235-sql-change-feed.md) Decisions 3 and 5 |
 | The containerd shim cost per engine | the SQL database ADR, measured |
