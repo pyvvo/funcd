@@ -38,21 +38,10 @@ func (sqlDatabaseQuota) Handles(gvk v1.GroupVersionKind, op Operation) bool {
 
 func (a sqlDatabaseQuota) Admit(ctx context.Context, req Request) (v1.Object, error) {
 	const op = "admission.sqldatabase-quota"
-	if a.maxPerNamespace <= 0 {
+	if _, ok := req.Object.(*v1.SQLDatabase); !ok {
 		return req.Object, nil
 	}
-	db, ok := req.Object.(*v1.SQLDatabase)
-	if !ok {
-		return req.Object, nil
-	}
-	existing, err := a.r.List(ctx, v1.KindSQLDatabase.GVK(), db.Namespace)
-	if err != nil {
-		return nil, fault.Wrapf(err, fault.Internal, op, "list sqldatabases in %q", db.Namespace)
-	}
-	if len(existing) >= a.maxPerNamespace {
-		return nil, fault.Invalidf(op, "namespace %q already holds the maximum %d SQLDatabases", db.Namespace, a.maxPerNamespace)
-	}
-	return req.Object, nil
+	return countQuota(ctx, a.r, op, v1.KindSQLDatabase, req.Object, a.maxPerNamespace, "SQLDatabases")
 }
 
 // --- sqldatabase-deletion-protection (ADR-0232 Decision 7): Delete on SQLDatabase --------------

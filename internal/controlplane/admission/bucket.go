@@ -43,21 +43,10 @@ func (bucketQuota) Handles(gvk v1.GroupVersionKind, op Operation) bool {
 
 func (a bucketQuota) Admit(ctx context.Context, req Request) (v1.Object, error) {
 	const op = "admission.bucket-count"
-	if a.maxPerNamespace <= 0 {
+	if _, ok := req.Object.(*v1.Bucket); !ok {
 		return req.Object, nil
 	}
-	b, ok := req.Object.(*v1.Bucket)
-	if !ok {
-		return req.Object, nil
-	}
-	existing, err := a.r.List(ctx, v1.KindBucket.GVK(), b.Namespace)
-	if err != nil {
-		return nil, fault.Wrapf(err, fault.Internal, op, "list buckets in %q", b.Namespace)
-	}
-	if len(existing) >= a.maxPerNamespace {
-		return nil, fault.Invalidf(op, "namespace %q already holds the maximum %d Buckets", b.Namespace, a.maxPerNamespace)
-	}
-	return req.Object, nil
+	return countQuota(ctx, a.r, op, v1.KindBucket, req.Object, a.maxPerNamespace, "Buckets")
 }
 
 // --- bucket-deletion-protection (ADR-0080): Delete AND Update on Bucket ------------------------

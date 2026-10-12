@@ -2,6 +2,7 @@ package admission
 
 import (
 	"context"
+	"strings"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -47,21 +48,27 @@ func (kvStoreQuota) Handles(gvk v1.GroupVersionKind, op Operation) bool {
 
 func (a kvStoreQuota) Admit(ctx context.Context, req Request) (v1.Object, error) {
 	const op = "admission.kvstore-quota"
-	if a.maxPerNamespace <= 0 {
+	if _, ok := req.Object.(*v1.KVStore); !ok {
 		return req.Object, nil
 	}
-	ks, ok := req.Object.(*v1.KVStore)
-	if !ok {
-		return req.Object, nil
+	return countQuota(ctx, a.r, op, v1.KindKVStore, req.Object, a.maxPerNamespace, "KVStores")
+}
+
+// countQuota refuses creating obj when its namespace already holds max objects of kind; max <= 0 is no limit. plural
+// names the kind in the refusal, and its lower case in a list error.
+func countQuota(ctx context.Context, r StoreReader, op string, kind v1.Kind, obj v1.Object, max int, plural string) (v1.Object, error) {
+	if max <= 0 {
+		return obj, nil
 	}
-	existing, err := a.r.List(ctx, v1.KindKVStore.GVK(), ks.Namespace)
+	ns := obj.GetObjectMeta().Namespace
+	existing, err := r.List(ctx, kind.GVK(), ns)
 	if err != nil {
-		return nil, fault.Wrapf(err, fault.Internal, op, "list kvstores in %q", ks.Namespace)
+		return nil, fault.Wrapf(err, fault.Internal, op, "list %s in %q", strings.ToLower(plural), ns)
 	}
-	if len(existing) >= a.maxPerNamespace {
-		return nil, fault.Invalidf(op, "namespace %q already holds the maximum %d KVStores", ks.Namespace, a.maxPerNamespace)
+	if len(existing) >= max {
+		return nil, fault.Invalidf(op, "namespace %q already holds the maximum %d %s", ns, max, plural)
 	}
-	return req.Object, nil
+	return obj, nil
 }
 
 // --- kvstore-deletion-protection (ADR-0073): Delete AND Update on KVStore ----------------------

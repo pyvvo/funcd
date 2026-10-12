@@ -520,6 +520,23 @@ func SQLCapability() Capability { return sqlCapability(nil) }
 // `writers` set (ADR-0136).
 func SQLCapabilityWithWriters(w WriterLister) Capability { return sqlCapability(w) }
 
+// bindFunction is a PrincipalBinding.Bind over a Function's bindings, one entity per binding; a principal that is not a
+// Function contributes nothing.
+func bindFunction[B v1.FunctionSQL | v1.FunctionCatalog | v1.FunctionLink](bindings func(*v1.Function) []B, uid func(v1.NamespaceName, B) cedartypes.EntityUID) func(v1.NamespaceName, PrincipalObject) []cedartypes.EntityUID {
+	return func(ns v1.NamespaceName, src PrincipalObject) []cedartypes.EntityUID {
+		fn, ok := src.(*v1.Function)
+		if !ok {
+			return nil
+		}
+		bs := bindings(fn)
+		out := make([]cedartypes.EntityUID, 0, len(bs))
+		for _, b := range bs {
+			out = append(out, uid(ns, b))
+		}
+		return out
+	}
+}
+
 func sqlCapability(writers WriterLister) Capability {
 	return Capability{
 		Name:            "sql",
@@ -530,17 +547,10 @@ func sqlCapability(writers WriterLister) Capability {
 		},
 		PrincipalBinding: PrincipalBinding{
 			Attr: "sqlBindings",
-			Bind: func(ns v1.NamespaceName, src PrincipalObject) []cedartypes.EntityUID {
-				fn, ok := src.(*v1.Function)
-				if !ok {
-					return nil
-				}
-				out := make([]cedartypes.EntityUID, 0, len(fn.Spec.SQL))
-				for _, b := range fn.Spec.SQL {
-					out = append(out, sqlDatabaseUID(ns, b.Database))
-				}
-				return out
-			},
+			Bind: bindFunction(func(fn *v1.Function) []v1.FunctionSQL { return fn.Spec.SQL },
+				func(ns v1.NamespaceName, b v1.FunctionSQL) cedartypes.EntityUID {
+					return sqlDatabaseUID(ns, b.Database)
+				}),
 		},
 		Builtin: builtinSQLPolicies,
 	}

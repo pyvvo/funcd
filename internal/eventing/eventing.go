@@ -207,14 +207,20 @@ func (s *Source) reconcileBlob(ctx context.Context, es *v1.EventSource) (control
 		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), "eventing.reconcileBlob", "resolve bucket %q", es.Spec.Blob.Bucket)
 	}
 	s.blob.Register(ns, name, es.UID, normalizedBlob(es))
-	if cur, ok := es.Status.Conditions.Get(condReady); !ok || cur.Status != v1.ConditionTrue || cur.ObservedGeneration != es.Generation || es.Status.Phase != v1.PhaseReady {
-		es.Status.Phase = v1.PhaseReady
-		es.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue, Reason: "Watching", ObservedGeneration: es.Generation})
-		if _, uerr := s.store.Update(ctx, es); uerr != nil {
-			return controller.Result{}, fault.Wrapf(uerr, fault.KindOf(uerr), "eventing.reconcileBlob", "set eventsource ready")
-		}
+	return controller.Result{RequeueAfter: s.recheck}, s.setWatching(ctx, es, "eventing.reconcileBlob")
+}
+
+// setWatching records es Ready, reason Watching, unless its status already says so.
+func (s *Source) setWatching(ctx context.Context, es *v1.EventSource, op string) error {
+	if cur, ok := es.Status.Conditions.Get(condReady); ok && cur.Status == v1.ConditionTrue && cur.ObservedGeneration == es.Generation && es.Status.Phase == v1.PhaseReady {
+		return nil
 	}
-	return controller.Result{RequeueAfter: s.recheck}, nil
+	es.Status.Phase = v1.PhaseReady
+	es.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue, Reason: "Watching", ObservedGeneration: es.Generation})
+	if _, err := s.store.Update(ctx, es); err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "set eventsource ready")
+	}
+	return nil
 }
 
 // reconcileSQL owns the `sql:` source branch (ADR-0235): the change feed reads the source from the store on each
@@ -230,14 +236,7 @@ func (s *Source) reconcileSQL(ctx context.Context, es *v1.EventSource) (controll
 	case err != nil:
 		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), "eventing.reconcileSQL", "resolve SQLDatabase %q", es.Spec.SQL.Database)
 	}
-	if cur, ok := es.Status.Conditions.Get(condReady); !ok || cur.Status != v1.ConditionTrue || cur.ObservedGeneration != es.Generation || es.Status.Phase != v1.PhaseReady {
-		es.Status.Phase = v1.PhaseReady
-		es.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue, Reason: "Watching", ObservedGeneration: es.Generation})
-		if _, uerr := s.store.Update(ctx, es); uerr != nil {
-			return controller.Result{}, fault.Wrapf(uerr, fault.KindOf(uerr), "eventing.reconcileSQL", "set eventsource ready")
-		}
-	}
-	return controller.Result{RequeueAfter: s.recheck}, nil
+	return controller.Result{RequeueAfter: s.recheck}, s.setWatching(ctx, es, "eventing.reconcileSQL")
 }
 
 // normalizedBlob returns es's blob source with the ADR-0119 defaults applied to a copy. es is written back
