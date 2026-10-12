@@ -52,6 +52,7 @@ import (
 	goruntime "runtime"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -721,7 +722,7 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, pfs []plannedFu
 		return nil, caterr
 	}
 	opts = append(opts, catOpts...)
-	sqlOpts, sqlerr := devSQLOptions(plan, stateDir, pfs, inst)
+	sqlOpts, sqlerr := devSQLOptions(plan, stateDir, inst)
 	if sqlerr != nil {
 		return nil, sqlerr
 	}
@@ -749,6 +750,15 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, pfs []plannedFu
 	if cfg.cport != 0 {
 		opts = append(opts, funcd.WithListenAddr(fmt.Sprintf("127.0.0.1:%d", cfg.cport)))
 	}
+	// The SQL engines' change feed (ADR-0235) on a free loopback port, so dev runs side by side never contend for the
+	// daemon's fixed default.
+	feed, ferr := freeLocalAddr()
+	if ferr != nil {
+		return nil, fault.Wrapf(ferr, fault.Internal, op, "reserve the SQL change feed port")
+	}
+	_, feedPort, _ := net.SplitHostPort(feed)
+	port, _ := strconv.Atoi(feedPort)
+	opts = append(opts, funcd.WithSQLChangeFeedPort(port))
 
 	// Durable-local drivers (ADR-0125 Decision 7): under --persist (or a `dev.backends` file:// override)
 	// the memory store/KV/blob are swapped for Badger + fileblob under per-service subdirs. dev.backends is
@@ -823,11 +833,12 @@ func bindsSQL(pfs []plannedFunc) bool {
 	return slices.ContainsFunc(pfs, func(pf plannedFunc) bool { return len(pf.m.Bindings.SQL) > 0 })
 }
 
-// devSQLOptions runs the SQL databases on the dev engine (ADR-0237 Decision 2) when a function binds one: the
-// embedded rqlited as a host subprocess per database, its data under <persist-to>/sql with --persist, else in a
-// temporary root, and its processes saved in the state dir for the reap after a crash.
-func devSQLOptions(plan persistPlan, stateDir string, pfs []plannedFunc, inst *devInstance) ([]funcd.Option, error) {
-	if !bindsSQL(pfs) {
+// devSQLOptions runs the SQL databases on the dev engine (ADR-0237 Decision 2) when the build embeds one, so a binding
+// a hot reload adds is served too: the embedded rqlited as a host subprocess per database, its data under
+// <persist-to>/sql with --persist, else in a temporary root, and its processes saved in the state dir for the reap
+// after a crash. bootDev has already refused a binding this build cannot serve.
+func devSQLOptions(plan persistPlan, stateDir string, inst *devInstance) ([]funcd.Option, error) {
+	if !sqlembedengine.Bundled() {
 		return nil, nil
 	}
 	eng, err := sqldevengine.New(inst.logger, sqldevengine.WithStateDir(stateDir), sqldevengine.WithDataDir(plan.sqlDir))

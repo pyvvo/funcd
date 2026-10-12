@@ -4,11 +4,8 @@
 package main
 
 import (
-	"errors"
 	"fmt"
-	"io/fs"
 	"os"
-	"strings"
 	"syscall"
 
 	"github.com/pyvvo/funcd/internal/services/sql/engineargs"
@@ -48,7 +45,7 @@ func run(getenv func(string) string, read func(string) ([]byte, error), write fu
 		AuthFile: authFile, DataDir: dataDir,
 	}
 	if endpoint := getenv("FUNCD_SQL_CDC_ENDPOINT"); endpoint != "" {
-		epoch, err := epochOf(read, write)
+		epoch, err := engineargs.Epoch(read, write, epochFile)
 		if err != nil {
 			return err
 		}
@@ -62,23 +59,4 @@ func run(getenv func(string) string, read func(string) ([]byte, error), write fu
 		args.CDCConfig = cdcFile
 	}
 	return exec(rqlited, append([]string{rqlited}, args.Argv()...), []string{})
-}
-
-// epochOf reads the directory's epoch, writing a new one the first time: it lives as long as the data does.
-func epochOf(read func(string) ([]byte, error), write func(string, []byte, os.FileMode) error) (string, error) {
-	b, err := read(epochFile)
-	switch {
-	case err == nil && strings.TrimSpace(string(b)) != "":
-		return strings.TrimSpace(string(b)), nil
-	case err != nil && !errors.Is(err, fs.ErrNotExist):
-		return "", fmt.Errorf("read the epoch: %w", err)
-	}
-	epoch, err := engineargs.NewEpoch()
-	if err != nil {
-		return "", err
-	}
-	if err := write(epochFile, []byte(epoch+"\n"), 0o600); err != nil {
-		return "", fmt.Errorf("write the epoch: %w", err)
-	}
-	return epoch, nil
 }

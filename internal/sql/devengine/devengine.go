@@ -297,8 +297,9 @@ func (r *Runtime) start(ctx context.Context, spec provider.ProviderSpec, id, dir
 	if err := os.WriteFile(authFile, auth, 0o600); err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "write the auth file")
 	}
+	// As in the engine container: rqlited's data in db/, the change feed's epoch beside it.
 	data := r.dataPath(spec.Ref)
-	if err := os.MkdirAll(data, 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(data, "db"), 0o700); err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "make the data directory")
 	}
 	httpPort, err := freePort()
@@ -312,7 +313,12 @@ func (r *Runtime) start(ctx context.Context, spec provider.ProviderSpec, id, dir
 	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(httpPort))
 	args := engineargs.Args{
 		NodeID: string(spec.Ref.Name), HTTPAddr: addr, HTTPAdvAddr: addr,
-		RaftAddr: net.JoinHostPort("127.0.0.1", strconv.Itoa(raftPort)), AuthFile: authFile, DataDir: data,
+		RaftAddr: net.JoinHostPort("127.0.0.1", strconv.Itoa(raftPort)), AuthFile: authFile, DataDir: filepath.Join(data, "db"),
+	}
+	if endpoint := spec.Env["FUNCD_SQL_CDC_ENDPOINT"]; endpoint != "" {
+		if args.CDCConfig, err = changeFeed(endpoint, data, dir); err != nil {
+			return nil, fault.Wrapf(err, fault.Internal, op, "the change feed's config")
+		}
 	}
 	cmd := exec.CommandContext(context.WithoutCancel(ctx), bin, args.Argv()...) //nolint:gosec // our own embedded engine
 	cmd.Stdout = &lineLogger{logger: r.logger, database: string(spec.Ref.Name)}
@@ -328,6 +334,21 @@ func (r *Runtime) start(ctx context.Context, spec provider.ProviderSpec, id, dir
 		close(p.done)
 	}()
 	return p, nil
+}
+
+// changeFeed writes the change feed's config into the engine's directory, under the epoch kept beside its data, as the
+// container entrypoint does (ADR-0235 Decision 1), and returns its path.
+func changeFeed(endpoint, data, dir string) (string, error) {
+	epoch, err := engineargs.Epoch(os.ReadFile, os.WriteFile, filepath.Join(data, "epoch"))
+	if err != nil {
+		return "", err
+	}
+	cfg, err := engineargs.CDCConfig(endpoint, epoch)
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "cdc.json")
+	return path, os.WriteFile(path, cfg, 0o600)
 }
 
 // save records a started engine in the registry; the caller holds r.mu.

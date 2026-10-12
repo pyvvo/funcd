@@ -7,7 +7,11 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"strings"
 	"time"
 )
 
@@ -63,6 +67,26 @@ func CDCConfig(endpoint, epoch string) ([]byte, error) {
 		return nil, fmt.Errorf("engineargs: the change feed needs an endpoint and an epoch")
 	}
 	return json.Marshal(cdcConfig{Endpoint: endpoint, ServiceID: epoch, MaxBatchSize: cdcMaxBatch, TransmitTimeout: int64(cdcTransmitTimeout)})
+}
+
+// Epoch returns the epoch kept in the file at path beside an engine's data, writing a new one the first time: it
+// lives as long as the data does (ADR-0235 Decision 1). read and write are os.ReadFile and os.WriteFile but in tests.
+func Epoch(read func(string) ([]byte, error), write func(string, []byte, os.FileMode) error, path string) (string, error) {
+	b, err := read(path)
+	switch {
+	case err == nil && strings.TrimSpace(string(b)) != "":
+		return strings.TrimSpace(string(b)), nil
+	case err != nil && !errors.Is(err, fs.ErrNotExist):
+		return "", fmt.Errorf("engineargs: read the epoch: %w", err)
+	}
+	epoch, err := NewEpoch()
+	if err != nil {
+		return "", err
+	}
+	if err := write(path, []byte(epoch+"\n"), 0o600); err != nil {
+		return "", fmt.Errorf("engineargs: write the epoch: %w", err)
+	}
+	return epoch, nil
 }
 
 // NewEpoch returns a random 128-bit epoch, which names one engine directory's Raft indexes (ADR-0235 Decision 1).

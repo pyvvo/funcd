@@ -6,10 +6,12 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -292,4 +294,92 @@ func TestDevWorkflowStepsSharingAMainDirKeepTheirContracts(t *testing.T) {
 		return run.Status.Phase == "Succeeded" || run.Status.Phase == "Failed"
 	}, 60*time.Second, 100*time.Millisecond, "the run ends")
 	require.Equal(t, v1.RunPhase("Succeeded"), run.Status.Phase, "%+v", run.Status.Steps)
+}
+
+// The change feed works under funcdctl dev: an EventSource and a Sensor applied to the session see a row change, and
+// the session's feed takes a free port, so a busy daemon default (7075) does not stop it.
+func TestDevSQLChangeFeedReachesASensor(t *testing.T) {
+	requireSQLEngine(t)
+	if l, err := net.Listen("tcp", "127.0.0.1:7075"); err == nil {
+		t.Cleanup(func() { _ = l.Close() })
+	}
+	bind := "bindings:\n  sql:\n    - alias: app\n      database: feed-db\n"
+	dir := devProject(t, map[string]string{
+		"items.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + bind + permissiveContract,
+		"items.mjs": `export async function handle(ctx, e) {
+  await ctx.sql.execute('app', ['CREATE TABLE IF NOT EXISTS items (name TEXT)', 'CREATE TABLE IF NOT EXISTS seen (name TEXT)']);
+  if (e.data.name) await ctx.sql.execute('app', 'INSERT INTO items VALUES (?)', [e.data.name]);
+  return { seen: (await ctx.sql.query('app', 'SELECT name FROM seen')).map((r) => r.name) };
+}
+`,
+		"seen.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + bind + permissiveContract,
+		"seen.mjs": `export async function handle(ctx, e) {
+  await ctx.sql.execute('app', 'INSERT INTO seen VALUES (?)', [e.data.after.name]);
+  return {};
+}
+`,
+	})
+	inst, _ := startSQLDev(t, dir, devConfig{cacheDir: t.TempDir()})
+	waitFuncsReady(t, inst, "items", "seen")
+	post := func(body string) []string {
+		var out struct{ Seen []string }
+		require.EventuallyWithT(t, func(c *assert.CollectT) {
+			resp, err := http.Post(inst.gatewayURL+"/function/items", "application/json", strings.NewReader(body))
+			if !assert.NoError(c, err) {
+				return
+			}
+			defer func() { _ = resp.Body.Close() }()
+			raw, _ := io.ReadAll(resp.Body)
+			if assert.Equal(c, http.StatusOK, resp.StatusCode, "%s", raw) {
+				assert.NoError(c, json.Unmarshal(raw, &out))
+			}
+		}, 30*time.Second, 200*time.Millisecond)
+		return out.Seen
+	}
+	post(`{"data":{}}`)
+	ctx := context.Background()
+	es := &v1.EventSource{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindEventSource.GVK().APIVersion(), Kind: v1.KindEventSource},
+		ObjectMeta: v1.ObjectMeta{Name: "items-changes", Namespace: devNamespace, ResourceGroup: devResourceGroup},
+		Spec:       v1.EventSourceSpec{SQL: &v1.SQLSource{Database: "feed-db", Events: []v1.SQLEvent{{Name: "added", Table: "items", On: []v1.SQLChangeType{v1.SQLInsert}}}}},
+	}
+	sensor := &v1.Sensor{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindSensor.GVK().APIVersion(), Kind: v1.KindSensor},
+		ObjectMeta: v1.ObjectMeta{Name: "items-seen", Namespace: devNamespace, ResourceGroup: devResourceGroup},
+		Spec: v1.SensorSpec{
+			On: []v1.Dependency{{Name: "added", Source: "items-changes", Event: "added"}},
+			Do: []v1.Action{{Name: "record", On: "added", Function: "seen"}},
+		},
+	}
+	for _, obj := range []v1.Object{es, sensor} {
+		_, err := inst.client.Apply(ctx, obj)
+		require.NoError(t, err)
+	}
+	require.Eventually(t, func() bool {
+		obj, err := inst.client.Get(ctx, v1.KindEventSource, devNamespace, "items-changes")
+		return err == nil && obj.(*v1.EventSource).Status.Phase == v1.PhaseReady
+	}, 30*time.Second, 100*time.Millisecond, "the EventSource watches feed-db")
+	post(`{"data":{"name":"milk"}}`)
+	require.Eventually(t, func() bool {
+		return slices.Equal(post(`{"data":{}}`), []string{"milk"})
+	}, 30*time.Second, 200*time.Millisecond, "the Sensor recorded the new row")
+}
+
+// A SQL binding added to a manifest while funcdctl dev runs is served after the hot reload, as a KV binding is.
+func TestDevSQLBindingAddedWhileRunning(t *testing.T) {
+	requireSQLEngine(t)
+	dir := devProject(t, map[string]string{
+		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
+		"handler.mjs":   "export function handle() { return { n: 0 }; }\n",
+	})
+	inst, _ := startSQLDev(t, dir, devConfig{cacheDir: t.TempDir()})
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "handler.mjs"), []byte(`export async function handle(ctx) {
+  await ctx.sql.execute('app', ['CREATE TABLE IF NOT EXISTS t (x)', 'INSERT INTO t VALUES (1)']);
+  const [row] = await ctx.sql.query('app', 'SELECT count(*) AS n FROM t');
+  return { n: row.n };
+}
+`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "funcdctl.yaml"), []byte("runtime: nodejs22\nhandler: handle\n"+
+		"bindings:\n  sql:\n    - alias: app\n      database: late-db\n"+permissiveContract), 0o600))
+	require.GreaterOrEqual(t, addNote(t, inst), 1, "the reloaded function reaches its new database")
 }

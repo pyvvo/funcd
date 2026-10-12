@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -115,7 +117,8 @@ func TestEngineLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0o600), fi.Mode().Perm())
 	require.Contains(t, p.cmd.Args, "-raft-addr")
-	require.Equal(t, filepath.Join(root, "dev", "todo-db"), p.cmd.Args[len(p.cmd.Args)-1])
+	require.Equal(t, filepath.Join(root, "dev", "todo-db", "db"), p.cmd.Args[len(p.cmd.Args)-1])
+	require.NotContains(t, p.cmd.Args, "-cdc-config", "no change feed was asked for")
 
 	require.Equal(t, fault.Conflict, fault.KindOf(r.Reclaim(ctx, spec().Ref)), "a running engine's data is not reclaimed")
 	require.NoError(t, r.Teardown(ctx, spec().Ref))
@@ -127,6 +130,33 @@ func TestEngineLifecycle(t *testing.T) {
 	refs, err = r.List(ctx)
 	require.NoError(t, err)
 	require.Empty(t, refs)
+}
+
+// With FUNCD_SQL_CDC_ENDPOINT the engine posts its changes there under an epoch kept beside its data, as in the
+// engine container (ADR-0235).
+func TestEngineChangeFeed(t *testing.T) {
+	root := t.TempDir()
+	r := mustNew(t, WithDataDir(root))
+	t.Cleanup(r.StopAll)
+	fake(t, r)
+	s := spec()
+	s.Env["FUNCD_SQL_CDC_ENDPOINT"] = "http://127.0.0.1:7999/sql/x"
+	_, err := r.Converge(context.Background(), s)
+	require.NoError(t, err)
+	args := r.procs[s.Ref].cmd.Args
+	i := slices.Index(args, "-cdc-config")
+	require.Positive(t, i)
+	raw, err := os.ReadFile(args[i+1])
+	require.NoError(t, err)
+	var cfg struct {
+		Endpoint  string `json:"endpoint"`
+		ServiceID string `json:"service_id"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &cfg))
+	epoch, err := os.ReadFile(filepath.Join(root, "dev", "todo-db", "epoch"))
+	require.NoError(t, err)
+	require.Equal(t, "http://127.0.0.1:7999/sql/x", cfg.Endpoint)
+	require.Equal(t, strings.TrimSpace(string(epoch)), cfg.ServiceID)
 }
 
 // An engine that exited is started again at the next Converge.
