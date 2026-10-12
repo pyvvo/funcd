@@ -683,39 +683,19 @@ func (h *storeHandlers) DeleteRoute(ctx context.Context, ns v1.NamespaceName, na
 // --- Site (namespaced) — ADR-0139, FEAT-0003/F103 ---
 
 func (h *storeHandlers) GetSite(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Site, error) {
-	o, err := h.getObj(ctx, v1.KindSite, ns, name)
-	if err != nil {
-		return v1.Site{}, err
-	}
-	return *o.(*v1.Site), nil
+	return typedObj[v1.Site](h.getObj(ctx, v1.KindSite, ns, name))
 }
 
 func (h *storeHandlers) CreateSite(ctx context.Context, si v1.Site) (v1.Site, error) {
-	o, err := h.createObj(ctx, v1.KindSite, &si)
-	if err != nil {
-		return v1.Site{}, err
-	}
-	return *o.(*v1.Site), nil
+	return typedObj[v1.Site](h.createObj(ctx, v1.KindSite, &si))
 }
 
 func (h *storeHandlers) ListSites(ctx context.Context, ns v1.NamespaceName) ([]v1.Site, error) {
-	objs, err := h.listObj(ctx, v1.KindSite, ns)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]v1.Site, len(objs))
-	for i, o := range objs {
-		out[i] = *o.(*v1.Site)
-	}
-	return out, nil
+	return typedObjs[v1.Site](h.listObj(ctx, v1.KindSite, ns))
 }
 
 func (h *storeHandlers) ReplaceSite(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, si v1.Site) (v1.Site, error) {
-	o, err := h.replaceObj(ctx, v1.KindSite, ns, name, &si)
-	if err != nil {
-		return v1.Site{}, err
-	}
-	return *o.(*v1.Site), nil
+	return typedObj[v1.Site](h.replaceObj(ctx, v1.KindSite, ns, name, &si))
 }
 
 func (h *storeHandlers) DeleteSite(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
@@ -816,10 +796,13 @@ func (h *storeHandlers) DeleteRestore(ctx context.Context, ns v1.NamespaceName, 
 	return h.deleteObjIf(ctx, v1.KindRestore, ns, name, rv)
 }
 
-// crudKind lists the namespaced kinds served by the generic CRUD helpers (typedObj, registerNamespacedCRUD, the
-// stub helpers): a new kind joins the union instead of copying the per-kind boilerplate.
+// crudKind lists the kinds served by the generic CRUD helpers (typedObj, registerNamespacedCRUD, registerClusterCRUD,
+// the stub helpers): a new kind joins the union instead of copying the per-kind boilerplate.
 type crudKind interface {
-	v1.App | v1.AppRevision | v1.BackupSchedule | v1.Backup | v1.Restore | v1.SQLDatabase
+	v1.Service | v1.EventSource | v1.ConfigMap | v1.Secret | v1.Grant | v1.Identity | v1.Role | v1.RolesAssignment |
+		v1.KVStore | v1.Bucket | v1.CatalogService | v1.SQLDatabase | v1.Policy | v1.EgressPolicy | v1.Invocation |
+		v1.RuntimeClass | v1.WorkerNode | v1.Gateway | v1.Workflow | v1.WorkflowRun | v1.Sensor | v1.Site |
+		v1.App | v1.AppRevision | v1.BackupSchedule | v1.Backup | v1.Restore
 }
 
 type objectPtr[T crudKind] interface {
@@ -849,39 +832,19 @@ func typedObjs[T crudKind, PT objectPtr[T]](objs []v1.Object, err error) ([]T, e
 // --- Service (namespaced) ---
 
 func (h *storeHandlers) GetService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Service, error) {
-	o, err := h.getObj(ctx, v1.KindService, ns, name)
-	if err != nil {
-		return v1.Service{}, err
-	}
-	return *o.(*v1.Service), nil
+	return typedObj[v1.Service](h.getObj(ctx, v1.KindService, ns, name))
 }
 
 func (h *storeHandlers) CreateService(ctx context.Context, svc v1.Service) (v1.Service, error) {
-	o, err := h.createObj(ctx, v1.KindService, &svc)
-	if err != nil {
-		return v1.Service{}, err
-	}
-	return *o.(*v1.Service), nil
+	return typedObj[v1.Service](h.createObj(ctx, v1.KindService, &svc))
 }
 
 func (h *storeHandlers) ListServices(ctx context.Context, ns v1.NamespaceName) ([]v1.Service, error) {
-	objs, err := h.listObj(ctx, v1.KindService, ns)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]v1.Service, len(objs))
-	for i, o := range objs {
-		out[i] = *o.(*v1.Service)
-	}
-	return out, nil
+	return typedObjs[v1.Service](h.listObj(ctx, v1.KindService, ns))
 }
 
 func (h *storeHandlers) ReplaceService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, svc v1.Service) (v1.Service, error) {
-	o, err := h.replaceObj(ctx, v1.KindService, ns, name, &svc)
-	if err != nil {
-		return v1.Service{}, err
-	}
-	return *o.(*v1.Service), nil
+	return typedObj[v1.Service](h.replaceObj(ctx, v1.KindService, ns, name, &svc))
 }
 
 func (h *storeHandlers) DeleteService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
@@ -891,39 +854,19 @@ func (h *storeHandlers) DeleteService(ctx context.Context, ns v1.NamespaceName, 
 // --- EventSource (namespaced) ---
 
 func (h *storeHandlers) GetEventSource(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.EventSource, error) {
-	o, err := h.getObj(ctx, v1.KindEventSource, ns, name)
-	if err != nil {
-		return v1.EventSource{}, err
-	}
-	return *o.(*v1.EventSource), nil
+	return typedObj[v1.EventSource](h.getObj(ctx, v1.KindEventSource, ns, name))
 }
 
 func (h *storeHandlers) CreateEventSource(ctx context.Context, es v1.EventSource) (v1.EventSource, error) {
-	o, err := h.createObj(ctx, v1.KindEventSource, &es)
-	if err != nil {
-		return v1.EventSource{}, err
-	}
-	return *o.(*v1.EventSource), nil
+	return typedObj[v1.EventSource](h.createObj(ctx, v1.KindEventSource, &es))
 }
 
 func (h *storeHandlers) ListEventSources(ctx context.Context, ns v1.NamespaceName) ([]v1.EventSource, error) {
-	objs, err := h.listObj(ctx, v1.KindEventSource, ns)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]v1.EventSource, len(objs))
-	for i, o := range objs {
-		out[i] = *o.(*v1.EventSource)
-	}
-	return out, nil
+	return typedObjs[v1.EventSource](h.listObj(ctx, v1.KindEventSource, ns))
 }
 
 func (h *storeHandlers) ReplaceEventSource(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, es v1.EventSource) (v1.EventSource, error) {
-	o, err := h.replaceObj(ctx, v1.KindEventSource, ns, name, &es)
-	if err != nil {
-		return v1.EventSource{}, err
-	}
-	return *o.(*v1.EventSource), nil
+	return typedObj[v1.EventSource](h.replaceObj(ctx, v1.KindEventSource, ns, name, &es))
 }
 
 func (h *storeHandlers) DeleteEventSource(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
@@ -933,39 +876,19 @@ func (h *storeHandlers) DeleteEventSource(ctx context.Context, ns v1.NamespaceNa
 // --- ConfigMap (namespaced) ---
 
 func (h *storeHandlers) GetConfigMap(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.ConfigMap, error) {
-	o, err := h.getObj(ctx, v1.KindConfigMap, ns, name)
-	if err != nil {
-		return v1.ConfigMap{}, err
-	}
-	return *o.(*v1.ConfigMap), nil
+	return typedObj[v1.ConfigMap](h.getObj(ctx, v1.KindConfigMap, ns, name))
 }
 
 func (h *storeHandlers) CreateConfigMap(ctx context.Context, cfg v1.ConfigMap) (v1.ConfigMap, error) {
-	o, err := h.createObj(ctx, v1.KindConfigMap, &cfg)
-	if err != nil {
-		return v1.ConfigMap{}, err
-	}
-	return *o.(*v1.ConfigMap), nil
+	return typedObj[v1.ConfigMap](h.createObj(ctx, v1.KindConfigMap, &cfg))
 }
 
 func (h *storeHandlers) ListConfigMaps(ctx context.Context, ns v1.NamespaceName) ([]v1.ConfigMap, error) {
-	objs, err := h.listObj(ctx, v1.KindConfigMap, ns)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]v1.ConfigMap, len(objs))
-	for i, o := range objs {
-		out[i] = *o.(*v1.ConfigMap)
-	}
-	return out, nil
+	return typedObjs[v1.ConfigMap](h.listObj(ctx, v1.KindConfigMap, ns))
 }
 
 func (h *storeHandlers) ReplaceConfigMap(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, cfg v1.ConfigMap) (v1.ConfigMap, error) {
-	o, err := h.replaceObj(ctx, v1.KindConfigMap, ns, name, &cfg)
-	if err != nil {
-		return v1.ConfigMap{}, err
-	}
-	return *o.(*v1.ConfigMap), nil
+	return typedObj[v1.ConfigMap](h.replaceObj(ctx, v1.KindConfigMap, ns, name, &cfg))
 }
 
 func (h *storeHandlers) DeleteConfigMap(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
@@ -975,39 +898,19 @@ func (h *storeHandlers) DeleteConfigMap(ctx context.Context, ns v1.NamespaceName
 // --- Secret (namespaced) ---
 
 func (h *storeHandlers) GetSecret(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Secret, error) {
-	o, err := h.getObj(ctx, v1.KindSecret, ns, name)
-	if err != nil {
-		return v1.Secret{}, err
-	}
-	return *o.(*v1.Secret), nil
+	return typedObj[v1.Secret](h.getObj(ctx, v1.KindSecret, ns, name))
 }
 
 func (h *storeHandlers) CreateSecret(ctx context.Context, sec v1.Secret) (v1.Secret, error) {
-	o, err := h.createObj(ctx, v1.KindSecret, &sec)
-	if err != nil {
-		return v1.Secret{}, err
-	}
-	return *o.(*v1.Secret), nil
+	return typedObj[v1.Secret](h.createObj(ctx, v1.KindSecret, &sec))
 }
 
 func (h *storeHandlers) ListSecrets(ctx context.Context, ns v1.NamespaceName) ([]v1.Secret, error) {
-	objs, err := h.listObj(ctx, v1.KindSecret, ns)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]v1.Secret, len(objs))
-	for i, o := range objs {
-		out[i] = *o.(*v1.Secret)
-	}
-	return out, nil
+	return typedObjs[v1.Secret](h.listObj(ctx, v1.KindSecret, ns))
 }
 
 func (h *storeHandlers) ReplaceSecret(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, sec v1.Secret) (v1.Secret, error) {
-	o, err := h.replaceObj(ctx, v1.KindSecret, ns, name, &sec)
-	if err != nil {
-		return v1.Secret{}, err
-	}
-	return *o.(*v1.Secret), nil
+	return typedObj[v1.Secret](h.replaceObj(ctx, v1.KindSecret, ns, name, &sec))
 }
 
 func (h *storeHandlers) DeleteSecret(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
@@ -1017,39 +920,19 @@ func (h *storeHandlers) DeleteSecret(ctx context.Context, ns v1.NamespaceName, n
 // --- Grant (namespaced) ---
 
 func (h *storeHandlers) GetGrant(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Grant, error) {
-	o, err := h.getObj(ctx, v1.KindGrant, ns, name)
-	if err != nil {
-		return v1.Grant{}, err
-	}
-	return *o.(*v1.Grant), nil
+	return typedObj[v1.Grant](h.getObj(ctx, v1.KindGrant, ns, name))
 }
 
 func (h *storeHandlers) CreateGrant(ctx context.Context, g v1.Grant) (v1.Grant, error) {
-	o, err := h.createObj(ctx, v1.KindGrant, &g)
-	if err != nil {
-		return v1.Grant{}, err
-	}
-	return *o.(*v1.Grant), nil
+	return typedObj[v1.Grant](h.createObj(ctx, v1.KindGrant, &g))
 }
 
 func (h *storeHandlers) ListGrants(ctx context.Context, ns v1.NamespaceName) ([]v1.Grant, error) {
-	objs, err := h.listObj(ctx, v1.KindGrant, ns)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]v1.Grant, len(objs))
-	for i, o := range objs {
-		out[i] = *o.(*v1.Grant)
-	}
-	return out, nil
+	return typedObjs[v1.Grant](h.listObj(ctx, v1.KindGrant, ns))
 }
 
 func (h *storeHandlers) ReplaceGrant(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, g v1.Grant) (v1.Grant, error) {
-	o, err := h.replaceObj(ctx, v1.KindGrant, ns, name, &g)
-	if err != nil {
-		return v1.Grant{}, err
-	}
-	return *o.(*v1.Grant), nil
+	return typedObj[v1.Grant](h.replaceObj(ctx, v1.KindGrant, ns, name, &g))
 }
 
 func (h *storeHandlers) DeleteGrant(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
@@ -1059,39 +942,19 @@ func (h *storeHandlers) DeleteGrant(ctx context.Context, ns v1.NamespaceName, na
 // --- KVStore (namespaced) — ADR-0072 ---
 
 func (h *storeHandlers) GetKVStore(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.KVStore, error) {
-	o, err := h.getObj(ctx, v1.KindKVStore, ns, name)
-	if err != nil {
-		return v1.KVStore{}, err
-	}
-	return *o.(*v1.KVStore), nil
+	return typedObj[v1.KVStore](h.getObj(ctx, v1.KindKVStore, ns, name))
 }
 
 func (h *storeHandlers) CreateKVStore(ctx context.Context, ks v1.KVStore) (v1.KVStore, error) {
-	o, err := h.createObj(ctx, v1.KindKVStore, &ks)
-	if err != nil {
-		return v1.KVStore{}, err
-	}
-	return *o.(*v1.KVStore), nil
+	return typedObj[v1.KVStore](h.createObj(ctx, v1.KindKVStore, &ks))
 }
 
 func (h *storeHandlers) ListKVStores(ctx context.Context, ns v1.NamespaceName) ([]v1.KVStore, error) {
-	objs, err := h.listObj(ctx, v1.KindKVStore, ns)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]v1.KVStore, len(objs))
-	for i, o := range objs {
-		out[i] = *o.(*v1.KVStore)
-	}
-	return out, nil
+	return typedObjs[v1.KVStore](h.listObj(ctx, v1.KindKVStore, ns))
 }
 
 func (h *storeHandlers) ReplaceKVStore(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, ks v1.KVStore) (v1.KVStore, error) {
-	o, err := h.replaceObjIf(ctx, v1.KindKVStore, ns, name, &ks, h.refuseLiveMarked)
-	if err != nil {
-		return v1.KVStore{}, err
-	}
-	return *o.(*v1.KVStore), nil
+	return typedObj[v1.KVStore](h.replaceObjIf(ctx, v1.KindKVStore, ns, name, &ks, h.refuseLiveMarked))
 }
 
 func (h *storeHandlers) DeleteKVStore(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
@@ -1101,39 +964,19 @@ func (h *storeHandlers) DeleteKVStore(ctx context.Context, ns v1.NamespaceName, 
 // --- Bucket (namespaced) — ADR-0080 ---
 
 func (h *storeHandlers) GetBucket(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Bucket, error) {
-	o, err := h.getObj(ctx, v1.KindBucket, ns, name)
-	if err != nil {
-		return v1.Bucket{}, err
-	}
-	return *o.(*v1.Bucket), nil
+	return typedObj[v1.Bucket](h.getObj(ctx, v1.KindBucket, ns, name))
 }
 
 func (h *storeHandlers) CreateBucket(ctx context.Context, b v1.Bucket) (v1.Bucket, error) {
-	o, err := h.createObj(ctx, v1.KindBucket, &b)
-	if err != nil {
-		return v1.Bucket{}, err
-	}
-	return *o.(*v1.Bucket), nil
+	return typedObj[v1.Bucket](h.createObj(ctx, v1.KindBucket, &b))
 }
 
 func (h *storeHandlers) ListBuckets(ctx context.Context, ns v1.NamespaceName) ([]v1.Bucket, error) {
-	objs, err := h.listObj(ctx, v1.KindBucket, ns)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]v1.Bucket, len(objs))
-	for i, o := range objs {
-		out[i] = *o.(*v1.Bucket)
-	}
-	return out, nil
+	return typedObjs[v1.Bucket](h.listObj(ctx, v1.KindBucket, ns))
 }
 
 func (h *storeHandlers) ReplaceBucket(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, b v1.Bucket) (v1.Bucket, error) {
-	o, err := h.replaceObj(ctx, v1.KindBucket, ns, name, &b)
-	if err != nil {
-		return v1.Bucket{}, err
-	}
-	return *o.(*v1.Bucket), nil
+	return typedObj[v1.Bucket](h.replaceObj(ctx, v1.KindBucket, ns, name, &b))
 }
 
 func (h *storeHandlers) DeleteBucket(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
@@ -1143,39 +986,19 @@ func (h *storeHandlers) DeleteBucket(ctx context.Context, ns v1.NamespaceName, n
 // --- CatalogService (namespaced) — ADR-0086 ---
 
 func (h *storeHandlers) GetCatalogService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.CatalogService, error) {
-	o, err := h.getObj(ctx, v1.KindCatalogService, ns, name)
-	if err != nil {
-		return v1.CatalogService{}, err
-	}
-	return *o.(*v1.CatalogService), nil
+	return typedObj[v1.CatalogService](h.getObj(ctx, v1.KindCatalogService, ns, name))
 }
 
 func (h *storeHandlers) CreateCatalogService(ctx context.Context, cs v1.CatalogService) (v1.CatalogService, error) {
-	o, err := h.createObj(ctx, v1.KindCatalogService, &cs)
-	if err != nil {
-		return v1.CatalogService{}, err
-	}
-	return *o.(*v1.CatalogService), nil
+	return typedObj[v1.CatalogService](h.createObj(ctx, v1.KindCatalogService, &cs))
 }
 
 func (h *storeHandlers) ListCatalogServices(ctx context.Context, ns v1.NamespaceName) ([]v1.CatalogService, error) {
-	objs, err := h.listObj(ctx, v1.KindCatalogService, ns)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]v1.CatalogService, len(objs))
-	for i, o := range objs {
-		out[i] = *o.(*v1.CatalogService)
-	}
-	return out, nil
+	return typedObjs[v1.CatalogService](h.listObj(ctx, v1.KindCatalogService, ns))
 }
 
 func (h *storeHandlers) ReplaceCatalogService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, cs v1.CatalogService) (v1.CatalogService, error) {
-	o, err := h.replaceObj(ctx, v1.KindCatalogService, ns, name, &cs)
-	if err != nil {
-		return v1.CatalogService{}, err
-	}
-	return *o.(*v1.CatalogService), nil
+	return typedObj[v1.CatalogService](h.replaceObj(ctx, v1.KindCatalogService, ns, name, &cs))
 }
 
 func (h *storeHandlers) DeleteCatalogService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
@@ -1207,39 +1030,19 @@ func (h *storeHandlers) DeleteSQLDatabase(ctx context.Context, ns v1.NamespaceNa
 // --- Identity (namespaced) — ADR-0135, FEAT-0008/F100 ---
 
 func (h *storeHandlers) GetIdentity(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Identity, error) {
-	o, err := h.getObj(ctx, v1.KindIdentity, ns, name)
-	if err != nil {
-		return v1.Identity{}, err
-	}
-	return *o.(*v1.Identity), nil
+	return typedObj[v1.Identity](h.getObj(ctx, v1.KindIdentity, ns, name))
 }
 
 func (h *storeHandlers) CreateIdentity(ctx context.Context, id v1.Identity) (v1.Identity, error) {
-	o, err := h.createObj(ctx, v1.KindIdentity, &id)
-	if err != nil {
-		return v1.Identity{}, err
-	}
-	return *o.(*v1.Identity), nil
+	return typedObj[v1.Identity](h.createObj(ctx, v1.KindIdentity, &id))
 }
 
 func (h *storeHandlers) ListIdentities(ctx context.Context, ns v1.NamespaceName) ([]v1.Identity, error) {
-	objs, err := h.listObj(ctx, v1.KindIdentity, ns)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]v1.Identity, len(objs))
-	for i, o := range objs {
-		out[i] = *o.(*v1.Identity)
-	}
-	return out, nil
+	return typedObjs[v1.Identity](h.listObj(ctx, v1.KindIdentity, ns))
 }
 
 func (h *storeHandlers) ReplaceIdentity(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, id v1.Identity) (v1.Identity, error) {
-	o, err := h.replaceObj(ctx, v1.KindIdentity, ns, name, &id)
-	if err != nil {
-		return v1.Identity{}, err
-	}
-	return *o.(*v1.Identity), nil
+	return typedObj[v1.Identity](h.replaceObj(ctx, v1.KindIdentity, ns, name, &id))
 }
 
 func (h *storeHandlers) DeleteIdentity(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
@@ -1249,39 +1052,19 @@ func (h *storeHandlers) DeleteIdentity(ctx context.Context, ns v1.NamespaceName,
 // --- Role + RolesAssignment (namespaced) — ADR-0136, FEAT-0008/F101 ---
 
 func (h *storeHandlers) GetRole(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Role, error) {
-	o, err := h.getObj(ctx, v1.KindRole, ns, name)
-	if err != nil {
-		return v1.Role{}, err
-	}
-	return *o.(*v1.Role), nil
+	return typedObj[v1.Role](h.getObj(ctx, v1.KindRole, ns, name))
 }
 
 func (h *storeHandlers) CreateRole(ctx context.Context, ro v1.Role) (v1.Role, error) {
-	o, err := h.createObj(ctx, v1.KindRole, &ro)
-	if err != nil {
-		return v1.Role{}, err
-	}
-	return *o.(*v1.Role), nil
+	return typedObj[v1.Role](h.createObj(ctx, v1.KindRole, &ro))
 }
 
 func (h *storeHandlers) ListRoles(ctx context.Context, ns v1.NamespaceName) ([]v1.Role, error) {
-	objs, err := h.listObj(ctx, v1.KindRole, ns)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]v1.Role, len(objs))
-	for i, o := range objs {
-		out[i] = *o.(*v1.Role)
-	}
-	return out, nil
+	return typedObjs[v1.Role](h.listObj(ctx, v1.KindRole, ns))
 }
 
 func (h *storeHandlers) ReplaceRole(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, ro v1.Role) (v1.Role, error) {
-	o, err := h.replaceObj(ctx, v1.KindRole, ns, name, &ro)
-	if err != nil {
-		return v1.Role{}, err
-	}
-	return *o.(*v1.Role), nil
+	return typedObj[v1.Role](h.replaceObj(ctx, v1.KindRole, ns, name, &ro))
 }
 
 func (h *storeHandlers) DeleteRole(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
@@ -1289,39 +1072,19 @@ func (h *storeHandlers) DeleteRole(ctx context.Context, ns v1.NamespaceName, nam
 }
 
 func (h *storeHandlers) GetRolesAssignment(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.RolesAssignment, error) {
-	o, err := h.getObj(ctx, v1.KindRolesAssignment, ns, name)
-	if err != nil {
-		return v1.RolesAssignment{}, err
-	}
-	return *o.(*v1.RolesAssignment), nil
+	return typedObj[v1.RolesAssignment](h.getObj(ctx, v1.KindRolesAssignment, ns, name))
 }
 
 func (h *storeHandlers) CreateRolesAssignment(ctx context.Context, ra v1.RolesAssignment) (v1.RolesAssignment, error) {
-	o, err := h.createObj(ctx, v1.KindRolesAssignment, &ra)
-	if err != nil {
-		return v1.RolesAssignment{}, err
-	}
-	return *o.(*v1.RolesAssignment), nil
+	return typedObj[v1.RolesAssignment](h.createObj(ctx, v1.KindRolesAssignment, &ra))
 }
 
 func (h *storeHandlers) ListRolesAssignments(ctx context.Context, ns v1.NamespaceName) ([]v1.RolesAssignment, error) {
-	objs, err := h.listObj(ctx, v1.KindRolesAssignment, ns)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]v1.RolesAssignment, len(objs))
-	for i, o := range objs {
-		out[i] = *o.(*v1.RolesAssignment)
-	}
-	return out, nil
+	return typedObjs[v1.RolesAssignment](h.listObj(ctx, v1.KindRolesAssignment, ns))
 }
 
 func (h *storeHandlers) ReplaceRolesAssignment(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, ra v1.RolesAssignment) (v1.RolesAssignment, error) {
-	o, err := h.replaceObj(ctx, v1.KindRolesAssignment, ns, name, &ra)
-	if err != nil {
-		return v1.RolesAssignment{}, err
-	}
-	return *o.(*v1.RolesAssignment), nil
+	return typedObj[v1.RolesAssignment](h.replaceObj(ctx, v1.KindRolesAssignment, ns, name, &ra))
 }
 
 func (h *storeHandlers) DeleteRolesAssignment(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
@@ -1331,39 +1094,19 @@ func (h *storeHandlers) DeleteRolesAssignment(ctx context.Context, ns v1.Namespa
 // --- Policy (namespaced) — ADR-0074 ---
 
 func (h *storeHandlers) GetPolicy(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Policy, error) {
-	o, err := h.getObj(ctx, v1.KindPolicy, ns, name)
-	if err != nil {
-		return v1.Policy{}, err
-	}
-	return *o.(*v1.Policy), nil
+	return typedObj[v1.Policy](h.getObj(ctx, v1.KindPolicy, ns, name))
 }
 
 func (h *storeHandlers) CreatePolicy(ctx context.Context, pol v1.Policy) (v1.Policy, error) {
-	o, err := h.createObj(ctx, v1.KindPolicy, &pol)
-	if err != nil {
-		return v1.Policy{}, err
-	}
-	return *o.(*v1.Policy), nil
+	return typedObj[v1.Policy](h.createObj(ctx, v1.KindPolicy, &pol))
 }
 
 func (h *storeHandlers) ListPolicies(ctx context.Context, ns v1.NamespaceName) ([]v1.Policy, error) {
-	objs, err := h.listObj(ctx, v1.KindPolicy, ns)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]v1.Policy, len(objs))
-	for i, o := range objs {
-		out[i] = *o.(*v1.Policy)
-	}
-	return out, nil
+	return typedObjs[v1.Policy](h.listObj(ctx, v1.KindPolicy, ns))
 }
 
 func (h *storeHandlers) ReplacePolicy(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, pol v1.Policy) (v1.Policy, error) {
-	o, err := h.replaceObj(ctx, v1.KindPolicy, ns, name, &pol)
-	if err != nil {
-		return v1.Policy{}, err
-	}
-	return *o.(*v1.Policy), nil
+	return typedObj[v1.Policy](h.replaceObj(ctx, v1.KindPolicy, ns, name, &pol))
 }
 
 func (h *storeHandlers) DeletePolicy(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
@@ -1373,39 +1116,19 @@ func (h *storeHandlers) DeletePolicy(ctx context.Context, ns v1.NamespaceName, n
 // --- EgressPolicy (namespaced) ---
 
 func (h *storeHandlers) GetEgressPolicy(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.EgressPolicy, error) {
-	o, err := h.getObj(ctx, v1.KindEgressPolicy, ns, name)
-	if err != nil {
-		return v1.EgressPolicy{}, err
-	}
-	return *o.(*v1.EgressPolicy), nil
+	return typedObj[v1.EgressPolicy](h.getObj(ctx, v1.KindEgressPolicy, ns, name))
 }
 
 func (h *storeHandlers) CreateEgressPolicy(ctx context.Context, ep v1.EgressPolicy) (v1.EgressPolicy, error) {
-	o, err := h.createObj(ctx, v1.KindEgressPolicy, &ep)
-	if err != nil {
-		return v1.EgressPolicy{}, err
-	}
-	return *o.(*v1.EgressPolicy), nil
+	return typedObj[v1.EgressPolicy](h.createObj(ctx, v1.KindEgressPolicy, &ep))
 }
 
 func (h *storeHandlers) ListEgressPolicies(ctx context.Context, ns v1.NamespaceName) ([]v1.EgressPolicy, error) {
-	objs, err := h.listObj(ctx, v1.KindEgressPolicy, ns)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]v1.EgressPolicy, len(objs))
-	for i, o := range objs {
-		out[i] = *o.(*v1.EgressPolicy)
-	}
-	return out, nil
+	return typedObjs[v1.EgressPolicy](h.listObj(ctx, v1.KindEgressPolicy, ns))
 }
 
 func (h *storeHandlers) ReplaceEgressPolicy(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, ep v1.EgressPolicy) (v1.EgressPolicy, error) {
-	o, err := h.replaceObj(ctx, v1.KindEgressPolicy, ns, name, &ep)
-	if err != nil {
-		return v1.EgressPolicy{}, err
-	}
-	return *o.(*v1.EgressPolicy), nil
+	return typedObj[v1.EgressPolicy](h.replaceObj(ctx, v1.KindEgressPolicy, ns, name, &ep))
 }
 
 func (h *storeHandlers) DeleteEgressPolicy(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
@@ -1415,39 +1138,19 @@ func (h *storeHandlers) DeleteEgressPolicy(ctx context.Context, ns v1.NamespaceN
 // --- Invocation (namespaced) ---
 
 func (h *storeHandlers) GetInvocation(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Invocation, error) {
-	o, err := h.getObj(ctx, v1.KindInvocation, ns, name)
-	if err != nil {
-		return v1.Invocation{}, err
-	}
-	return *o.(*v1.Invocation), nil
+	return typedObj[v1.Invocation](h.getObj(ctx, v1.KindInvocation, ns, name))
 }
 
 func (h *storeHandlers) CreateInvocation(ctx context.Context, inv v1.Invocation) (v1.Invocation, error) {
-	o, err := h.createObj(ctx, v1.KindInvocation, &inv)
-	if err != nil {
-		return v1.Invocation{}, err
-	}
-	return *o.(*v1.Invocation), nil
+	return typedObj[v1.Invocation](h.createObj(ctx, v1.KindInvocation, &inv))
 }
 
 func (h *storeHandlers) ListInvocations(ctx context.Context, ns v1.NamespaceName) ([]v1.Invocation, error) {
-	objs, err := h.listObj(ctx, v1.KindInvocation, ns)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]v1.Invocation, len(objs))
-	for i, o := range objs {
-		out[i] = *o.(*v1.Invocation)
-	}
-	return out, nil
+	return typedObjs[v1.Invocation](h.listObj(ctx, v1.KindInvocation, ns))
 }
 
 func (h *storeHandlers) ReplaceInvocation(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, inv v1.Invocation) (v1.Invocation, error) {
-	o, err := h.replaceObj(ctx, v1.KindInvocation, ns, name, &inv)
-	if err != nil {
-		return v1.Invocation{}, err
-	}
-	return *o.(*v1.Invocation), nil
+	return typedObj[v1.Invocation](h.replaceObj(ctx, v1.KindInvocation, ns, name, &inv))
 }
 
 func (h *storeHandlers) DeleteInvocation(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
@@ -1457,39 +1160,19 @@ func (h *storeHandlers) DeleteInvocation(ctx context.Context, ns v1.NamespaceNam
 // --- RuntimeClass (cluster-scoped) ---
 
 func (h *storeHandlers) GetRuntimeClass(ctx context.Context, name v1.ObjectName) (v1.RuntimeClass, error) {
-	o, err := h.getObj(ctx, v1.KindRuntimeClass, "", name)
-	if err != nil {
-		return v1.RuntimeClass{}, err
-	}
-	return *o.(*v1.RuntimeClass), nil
+	return typedObj[v1.RuntimeClass](h.getObj(ctx, v1.KindRuntimeClass, "", name))
 }
 
 func (h *storeHandlers) CreateRuntimeClass(ctx context.Context, rc v1.RuntimeClass) (v1.RuntimeClass, error) {
-	o, err := h.createObj(ctx, v1.KindRuntimeClass, &rc)
-	if err != nil {
-		return v1.RuntimeClass{}, err
-	}
-	return *o.(*v1.RuntimeClass), nil
+	return typedObj[v1.RuntimeClass](h.createObj(ctx, v1.KindRuntimeClass, &rc))
 }
 
 func (h *storeHandlers) ListRuntimeClasses(ctx context.Context) ([]v1.RuntimeClass, error) {
-	objs, err := h.listObj(ctx, v1.KindRuntimeClass, "")
-	if err != nil {
-		return nil, err
-	}
-	out := make([]v1.RuntimeClass, len(objs))
-	for i, o := range objs {
-		out[i] = *o.(*v1.RuntimeClass)
-	}
-	return out, nil
+	return typedObjs[v1.RuntimeClass](h.listObj(ctx, v1.KindRuntimeClass, ""))
 }
 
 func (h *storeHandlers) ReplaceRuntimeClass(ctx context.Context, name v1.ObjectName, rc v1.RuntimeClass) (v1.RuntimeClass, error) {
-	o, err := h.replaceObj(ctx, v1.KindRuntimeClass, "", name, &rc)
-	if err != nil {
-		return v1.RuntimeClass{}, err
-	}
-	return *o.(*v1.RuntimeClass), nil
+	return typedObj[v1.RuntimeClass](h.replaceObj(ctx, v1.KindRuntimeClass, "", name, &rc))
 }
 
 func (h *storeHandlers) DeleteRuntimeClass(ctx context.Context, name v1.ObjectName, rv string) error {
@@ -1499,39 +1182,19 @@ func (h *storeHandlers) DeleteRuntimeClass(ctx context.Context, name v1.ObjectNa
 // --- WorkerNode (cluster-scoped) ---
 
 func (h *storeHandlers) GetWorkerNode(ctx context.Context, name v1.ObjectName) (v1.WorkerNode, error) {
-	o, err := h.getObj(ctx, v1.KindWorkerNode, "", name)
-	if err != nil {
-		return v1.WorkerNode{}, err
-	}
-	return *o.(*v1.WorkerNode), nil
+	return typedObj[v1.WorkerNode](h.getObj(ctx, v1.KindWorkerNode, "", name))
 }
 
 func (h *storeHandlers) CreateWorkerNode(ctx context.Context, w v1.WorkerNode) (v1.WorkerNode, error) {
-	o, err := h.createObj(ctx, v1.KindWorkerNode, &w)
-	if err != nil {
-		return v1.WorkerNode{}, err
-	}
-	return *o.(*v1.WorkerNode), nil
+	return typedObj[v1.WorkerNode](h.createObj(ctx, v1.KindWorkerNode, &w))
 }
 
 func (h *storeHandlers) ListWorkerNodes(ctx context.Context) ([]v1.WorkerNode, error) {
-	objs, err := h.listObj(ctx, v1.KindWorkerNode, "")
-	if err != nil {
-		return nil, err
-	}
-	out := make([]v1.WorkerNode, len(objs))
-	for i, o := range objs {
-		out[i] = *o.(*v1.WorkerNode)
-	}
-	return out, nil
+	return typedObjs[v1.WorkerNode](h.listObj(ctx, v1.KindWorkerNode, ""))
 }
 
 func (h *storeHandlers) ReplaceWorkerNode(ctx context.Context, name v1.ObjectName, w v1.WorkerNode) (v1.WorkerNode, error) {
-	o, err := h.replaceObj(ctx, v1.KindWorkerNode, "", name, &w)
-	if err != nil {
-		return v1.WorkerNode{}, err
-	}
-	return *o.(*v1.WorkerNode), nil
+	return typedObj[v1.WorkerNode](h.replaceObj(ctx, v1.KindWorkerNode, "", name, &w))
 }
 
 func (h *storeHandlers) DeleteWorkerNode(ctx context.Context, name v1.ObjectName, rv string) error {
@@ -1541,39 +1204,19 @@ func (h *storeHandlers) DeleteWorkerNode(ctx context.Context, name v1.ObjectName
 // --- Gateway (cluster-scoped) ---
 
 func (h *storeHandlers) GetGateway(ctx context.Context, name v1.ObjectName) (v1.Gateway, error) {
-	o, err := h.getObj(ctx, v1.KindGateway, "", name)
-	if err != nil {
-		return v1.Gateway{}, err
-	}
-	return *o.(*v1.Gateway), nil
+	return typedObj[v1.Gateway](h.getObj(ctx, v1.KindGateway, "", name))
 }
 
 func (h *storeHandlers) CreateGateway(ctx context.Context, gw v1.Gateway) (v1.Gateway, error) {
-	o, err := h.createObj(ctx, v1.KindGateway, &gw)
-	if err != nil {
-		return v1.Gateway{}, err
-	}
-	return *o.(*v1.Gateway), nil
+	return typedObj[v1.Gateway](h.createObj(ctx, v1.KindGateway, &gw))
 }
 
 func (h *storeHandlers) ListGateways(ctx context.Context) ([]v1.Gateway, error) {
-	objs, err := h.listObj(ctx, v1.KindGateway, "")
-	if err != nil {
-		return nil, err
-	}
-	out := make([]v1.Gateway, len(objs))
-	for i, o := range objs {
-		out[i] = *o.(*v1.Gateway)
-	}
-	return out, nil
+	return typedObjs[v1.Gateway](h.listObj(ctx, v1.KindGateway, ""))
 }
 
 func (h *storeHandlers) ReplaceGateway(ctx context.Context, name v1.ObjectName, gw v1.Gateway) (v1.Gateway, error) {
-	o, err := h.replaceObj(ctx, v1.KindGateway, "", name, &gw)
-	if err != nil {
-		return v1.Gateway{}, err
-	}
-	return *o.(*v1.Gateway), nil
+	return typedObj[v1.Gateway](h.replaceObj(ctx, v1.KindGateway, "", name, &gw))
 }
 
 func (h *storeHandlers) DeleteGateway(ctx context.Context, name v1.ObjectName, rv string) error {
@@ -1583,36 +1226,16 @@ func (h *storeHandlers) DeleteGateway(ctx context.Context, name v1.ObjectName, r
 // ---- Workflow (ADR-0094) ----
 
 func (h *storeHandlers) GetWorkflow(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Workflow, error) {
-	o, err := h.getObj(ctx, v1.KindWorkflow, ns, name)
-	if err != nil {
-		return v1.Workflow{}, err
-	}
-	return *o.(*v1.Workflow), nil
+	return typedObj[v1.Workflow](h.getObj(ctx, v1.KindWorkflow, ns, name))
 }
 func (h *storeHandlers) CreateWorkflow(ctx context.Context, wf v1.Workflow) (v1.Workflow, error) {
-	o, err := h.createObj(ctx, v1.KindWorkflow, &wf)
-	if err != nil {
-		return v1.Workflow{}, err
-	}
-	return *o.(*v1.Workflow), nil
+	return typedObj[v1.Workflow](h.createObj(ctx, v1.KindWorkflow, &wf))
 }
 func (h *storeHandlers) ListWorkflows(ctx context.Context, ns v1.NamespaceName) ([]v1.Workflow, error) {
-	objs, err := h.listObj(ctx, v1.KindWorkflow, ns)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]v1.Workflow, len(objs))
-	for i, o := range objs {
-		out[i] = *o.(*v1.Workflow)
-	}
-	return out, nil
+	return typedObjs[v1.Workflow](h.listObj(ctx, v1.KindWorkflow, ns))
 }
 func (h *storeHandlers) ReplaceWorkflow(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, wf v1.Workflow) (v1.Workflow, error) {
-	o, err := h.replaceObj(ctx, v1.KindWorkflow, ns, name, &wf)
-	if err != nil {
-		return v1.Workflow{}, err
-	}
-	return *o.(*v1.Workflow), nil
+	return typedObj[v1.Workflow](h.replaceObj(ctx, v1.KindWorkflow, ns, name, &wf))
 }
 func (h *storeHandlers) DeleteWorkflow(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
 	return h.deleteObjIf(ctx, v1.KindWorkflow, ns, name, rv)
@@ -1621,36 +1244,16 @@ func (h *storeHandlers) DeleteWorkflow(ctx context.Context, ns v1.NamespaceName,
 // ---- WorkflowRun (ADR-0094) ----
 
 func (h *storeHandlers) GetWorkflowRun(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.WorkflowRun, error) {
-	o, err := h.getObj(ctx, v1.KindWorkflowRun, ns, name)
-	if err != nil {
-		return v1.WorkflowRun{}, err
-	}
-	return *o.(*v1.WorkflowRun), nil
+	return typedObj[v1.WorkflowRun](h.getObj(ctx, v1.KindWorkflowRun, ns, name))
 }
 func (h *storeHandlers) CreateWorkflowRun(ctx context.Context, run v1.WorkflowRun) (v1.WorkflowRun, error) {
-	o, err := h.createObj(ctx, v1.KindWorkflowRun, &run)
-	if err != nil {
-		return v1.WorkflowRun{}, err
-	}
-	return *o.(*v1.WorkflowRun), nil
+	return typedObj[v1.WorkflowRun](h.createObj(ctx, v1.KindWorkflowRun, &run))
 }
 func (h *storeHandlers) ListWorkflowRuns(ctx context.Context, ns v1.NamespaceName) ([]v1.WorkflowRun, error) {
-	objs, err := h.listObj(ctx, v1.KindWorkflowRun, ns)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]v1.WorkflowRun, len(objs))
-	for i, o := range objs {
-		out[i] = *o.(*v1.WorkflowRun)
-	}
-	return out, nil
+	return typedObjs[v1.WorkflowRun](h.listObj(ctx, v1.KindWorkflowRun, ns))
 }
 func (h *storeHandlers) ReplaceWorkflowRun(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, run v1.WorkflowRun) (v1.WorkflowRun, error) {
-	o, err := h.replaceObj(ctx, v1.KindWorkflowRun, ns, name, &run)
-	if err != nil {
-		return v1.WorkflowRun{}, err
-	}
-	return *o.(*v1.WorkflowRun), nil
+	return typedObj[v1.WorkflowRun](h.replaceObj(ctx, v1.KindWorkflowRun, ns, name, &run))
 }
 func (h *storeHandlers) DeleteWorkflowRun(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
 	return h.deleteObjIf(ctx, v1.KindWorkflowRun, ns, name, rv)
@@ -1659,36 +1262,16 @@ func (h *storeHandlers) DeleteWorkflowRun(ctx context.Context, ns v1.NamespaceNa
 // ---- Sensor (ADR-0109) ----
 
 func (h *storeHandlers) GetSensor(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Sensor, error) {
-	o, err := h.getObj(ctx, v1.KindSensor, ns, name)
-	if err != nil {
-		return v1.Sensor{}, err
-	}
-	return *o.(*v1.Sensor), nil
+	return typedObj[v1.Sensor](h.getObj(ctx, v1.KindSensor, ns, name))
 }
 func (h *storeHandlers) CreateSensor(ctx context.Context, se v1.Sensor) (v1.Sensor, error) {
-	o, err := h.createObj(ctx, v1.KindSensor, &se)
-	if err != nil {
-		return v1.Sensor{}, err
-	}
-	return *o.(*v1.Sensor), nil
+	return typedObj[v1.Sensor](h.createObj(ctx, v1.KindSensor, &se))
 }
 func (h *storeHandlers) ListSensors(ctx context.Context, ns v1.NamespaceName) ([]v1.Sensor, error) {
-	objs, err := h.listObj(ctx, v1.KindSensor, ns)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]v1.Sensor, len(objs))
-	for i, o := range objs {
-		out[i] = *o.(*v1.Sensor)
-	}
-	return out, nil
+	return typedObjs[v1.Sensor](h.listObj(ctx, v1.KindSensor, ns))
 }
 func (h *storeHandlers) ReplaceSensor(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, se v1.Sensor) (v1.Sensor, error) {
-	o, err := h.replaceObj(ctx, v1.KindSensor, ns, name, &se)
-	if err != nil {
-		return v1.Sensor{}, err
-	}
-	return *o.(*v1.Sensor), nil
+	return typedObj[v1.Sensor](h.replaceObj(ctx, v1.KindSensor, ns, name, &se))
 }
 func (h *storeHandlers) DeleteSensor(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
 	return h.deleteObjIf(ctx, v1.KindSensor, ns, name, rv)
