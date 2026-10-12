@@ -262,10 +262,9 @@ type config struct {
 	backupClock clock.Clock
 	backupMeter metric.Meter
 
-	// catalogProxyHost is the netns-reachable host the per-CatalogService catalog PEP proxies publish
-	// (ADR-0137) — the CNI bridge gateway IP (e.g. 10.63.0.1) under containerd, so a worker in its own
-	// netns can reach the proxy. Empty ⇒ 127.0.0.1 (the process-runtime/dev default; loopback is shared).
-	catalogProxyHost string
+	// bridgeAddress is funcd's address on its container bridge (ADR-0238), bound and published by the catalog proxies and
+	// the SQL change feed; "" ⇒ 127.0.0.1.
+	bridgeAddress string
 
 	// Workflow engine (ADR-0094): always wired. Durable run state is a Badger store at
 	// workflowDataDir; empty ⇒ in-memory (the InMemory preset / tests). The tunables are the
@@ -840,16 +839,10 @@ func (p *Platform) buildControlPlane() error {
 	// the caller token for the shared engine token only after an allow. The catalog reconciler binds a
 	// listener per catalog on its recorded port and Ensures it fronts the Ready engine (publishing its url as
 	// Status.Endpoint); a deleted catalog's listener closes once no Function binds it (ADR-0162).
-	// bindHost/publishHost: a worker under containerd is in its OWN netns and cannot reach the daemon's
-	// 127.0.0.1, so when c.catalogProxyHost is set (the CNI bridge gateway IP) the proxy binds 0.0.0.0
-	// (netns-reachable) and publishes that host; empty ⇒ 127.0.0.1 both (the process-runtime/dev default).
-	// This mirrors the s3gateway ListenAddr/Endpoint split (ADR-0085/0137).
-	catBindHost, catPublishHost := "127.0.0.1", "127.0.0.1"
-	if c.catalogProxyHost != "" {
-		catBindHost, catPublishHost = "0.0.0.0", c.catalogProxyHost
-	}
+	// The proxies bind and publish the bridge address, node-private, or the shared loopback (ADR-0238).
+	catHost := cmp.Or(c.bridgeAddress, "127.0.0.1")
 	catalogKeys := cataloggw.NewCatalogKeys(master, c.store)
-	catalogMgr := cataloggw.NewManager(catBindHost, catPublishHost, catalogKeys, cedarPDP, p.logger)
+	catalogMgr := cataloggw.NewManager(catHost, catHost, catalogKeys, cedarPDP, p.logger)
 	p.catalogProxy = catalogMgr
 
 	// ADR-0143: one tracker counts every call to a worker — the activator's proxy, the Sensor invoker and the workflow
@@ -1144,11 +1137,12 @@ func (p *Platform) buildControlPlane() error {
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build the SQL change feed")
 	}
-	p.sqlFeedHost = cmp.Or(c.catalogProxyHost, "127.0.0.1")
-	if c.imageFor != nil && c.catalogProxyHost == "" {
-		p.logger.Warn("sql change feed listens on loopback, which engine containers cannot reach: set catalog.proxyHost " +
-			"to the bridge gateway address, else no EventSource of kind sql fires")
+	p.sqlFeedHost = cmp.Or(c.bridgeAddress, "127.0.0.1")
+	if c.imageFor != nil && c.bridgeAddress == "" {
+		p.logger.Warn("sql change feed listens on loopback, which engine containers cannot reach: give funcd its bridge " +
+			"address (WithBridgeAddress), else no EventSource of kind sql fires")
 	}
+	p.logger.Info("bridge address", "address", p.sqlFeedHost)
 	sqlReconciler, err := sqlsvc.NewReconciler(sqlsvc.ReconcilerDeps{
 		Store: c.store, Provider: sqlRuntime, Engines: sqlEngines, Master: master, ImageFor: c.imageFor,
 		Hold: c.gate(), Logger: p.logger, SupervisionPeriod: c.pacing.SupervisionPeriod,

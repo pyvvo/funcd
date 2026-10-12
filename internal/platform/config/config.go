@@ -246,13 +246,15 @@ type Config struct {
 			StopGrace string `json:"stopGrace,omitempty" env:"FUNCD_PROCESS_STOP_GRACE"`
 		} `json:"process,omitempty"`
 		Containerd struct {
-			Socket        string            `json:"socket,omitempty" env:"FUNCD_CONTAINERD_SOCKET"`
-			Root          string            `json:"root,omitempty" env:"FUNCD_CONTAINERD_ROOT"`
-			Snapshotter   string            `json:"snapshotter,omitempty" env:"FUNCD_SNAPSHOTTER"`
-			CNIBinDir     string            `json:"cniBinDir,omitempty" env:"FUNCD_CNI_BIN_DIR"`
-			CNIConfDir    string            `json:"cniConfDir,omitempty" env:"FUNCD_CNI_CONF_DIR"`
-			StateDir      string            `json:"stateDir,omitempty" env:"FUNCD_CONTAINERD_STATE_DIR"`
-			SubnetCIDR    string            `json:"subnetCIDR,omitempty" env:"FUNCD_SUBNET_CIDR"`
+			Socket      string `json:"socket,omitempty" env:"FUNCD_CONTAINERD_SOCKET"`
+			Root        string `json:"root,omitempty" env:"FUNCD_CONTAINERD_ROOT"`
+			Snapshotter string `json:"snapshotter,omitempty" env:"FUNCD_SNAPSHOTTER"`
+			CNIBinDir   string `json:"cniBinDir,omitempty" env:"FUNCD_CNI_BIN_DIR"`
+			CNIConfDir  string `json:"cniConfDir,omitempty" env:"FUNCD_CNI_CONF_DIR"`
+			StateDir    string `json:"stateDir,omitempty" env:"FUNCD_CONTAINERD_STATE_DIR"`
+			SubnetCIDR  string `json:"subnetCIDR,omitempty" env:"FUNCD_SUBNET_CIDR"`
+			// BridgeAddress is funcd's address on its container bridge (ADR-0238); empty ⇒ the subnet's network address + 1.
+			BridgeAddress string            `json:"bridgeAddress,omitempty" env:"FUNCD_BRIDGE_ADDRESS"`
 			ImagePrefix   string            `json:"imagePrefix,omitempty" env:"FUNCD_IMAGE_PREFIX"`
 			ImageOverride map[string]string `json:"imageOverride,omitempty" env:"FUNCD_IMAGE_OVERRIDE" envSeparator:"," envKeyValSeparator:"="`
 		} `json:"containerd,omitempty"`
@@ -655,7 +657,7 @@ func (c Config) Validate() error {
 		if err := c.validateCredentials(op); err != nil {
 			return err
 		}
-		for _, fs := range [][]Finding{c.CheckBackup(), c.CheckBlob()} {
+		for _, fs := range [][]Finding{c.CheckBackup(), c.CheckBlob(), c.CheckBridge()} {
 			if len(fs) > 0 && fs[0].Error {
 				return fault.Invalidf(op, "%s", fs[0].Message)
 			}

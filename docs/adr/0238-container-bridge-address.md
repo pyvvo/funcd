@@ -1,6 +1,6 @@
 # ADR-0238: The container bridge address
 
-- **Status**: Accepted (2026-10-12, self-accepted under the decider's batch delegation; judged twice: the first round
+- **Status**: Reviewing (2026-10-12, implementation done). Accepted (2026-10-12, self-accepted under the decider's batch delegation; judged twice: the first round
   kept the proxies node-private, superseded ADR-0085's S3 endpoint default in part, moved the lane proof to the in-repo
   duckdb config and pinned the alias rules; the second found no Blocker or Major)
 - **Date**: 2026-10-12

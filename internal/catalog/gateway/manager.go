@@ -1,12 +1,14 @@
 package gateway
 
 import (
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
 	"slices"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -169,12 +171,16 @@ func (m *Manager) Listen(ns v1.NamespaceName, name v1.ObjectName, port int) (bou
 	var ln net.Listener
 	if port > 0 {
 		if ln, err = net.Listen("tcp", net.JoinHostPort(m.bindHost, strconv.Itoa(port))); err != nil {
+			// An address not on this host yet (the bridge before its first container, ADR-0238) keeps the recorded port.
+			if errors.Is(err, syscall.EADDRNOTAVAIL) {
+				return 0, false, fault.Wrapf(err, fault.Unavailable, op, "bind node-private catalog proxy listener for %s", key)
+			}
 			moved = true
 		}
 	}
 	if ln == nil {
 		if ln, err = net.Listen("tcp", net.JoinHostPort(m.bindHost, "0")); err != nil {
-			return 0, false, fault.Unavailablef(op, "bind node-private catalog proxy listener for %s: %v", key, err)
+			return 0, false, fault.Wrapf(err, fault.Unavailable, op, "bind node-private catalog proxy listener for %s", key)
 		}
 	}
 	m.serve(ns, name, ln, http.HandlerFunc(catalogNotReady))

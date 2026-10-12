@@ -1054,3 +1054,20 @@ func TestIssue716_NotReadyEngineStopsServing(t *testing.T) {
 		})
 	}
 }
+
+// ADR-0238: the proxies bind the bridge address, which appears only with the first container. A pass that cannot bind
+// it yet still converges the engine, whose container creates the bridge, and binds on a later pass; failing the pass
+// instead would never start the engine.
+func TestReconcileConvergesBeforeTheBridgeAddressExists(t *testing.T) {
+	ctx := context.Background()
+	st := store.New(storemem.New())
+	seedCatalogBucket(t, st)
+	prov := &fakeProvider{status: provider.ProviderStatus{Reason: "Starting"}}
+	mgr := cataloggw.NewManager("192.0.2.1", "192.0.2.1", cataloggw.NewCatalogKeys(nil, st), nil, nil)
+	t.Cleanup(mgr.Shutdown)
+	r := newReconciler(t, st, prov, func(d *catalogsvc.ReconcilerDeps) { d.Proxy = mgr })
+	_, err := st.Create(ctx, mkCatalogService("lake"))
+	require.NoError(t, err)
+	reconcileOnce(t, r, "lake")
+	require.Len(t, prov.converged, 1, "the engine is converged though the proxy could not bind")
+}

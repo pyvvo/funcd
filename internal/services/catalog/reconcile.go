@@ -2,9 +2,11 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -50,14 +52,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	// ADR-0162: bind the listener on the recorded port before any branch writes the status, so every write records it.
 	if r.proxy != nil {
 		bound, moved, lerr := r.proxy.Listen(cs.Namespace, cs.Name, cs.Status.ProxyPort)
-		if lerr != nil {
+		switch {
+		case errors.Is(lerr, syscall.EADDRNOTAVAIL):
+			// The bridge address appears with the first container (ADR-0238): converge the engine, whose container
+			// creates it, and bind on a later pass; the not-Ready requeue comes back within the engine poll.
+			r.logger.DebugContext(ctx, "catalog proxy waits for the bridge address", "catalog", string(cs.Namespace)+"/"+string(cs.Name))
+		case lerr != nil:
 			return controller.Result{}, fault.Wrapf(lerr, fault.KindOf(lerr), op, "bind catalog proxy listener %s/%s", cs.Namespace, cs.Name)
+		default:
+			if moved {
+				r.logger.WarnContext(ctx, "catalog proxy port is taken; bound a new one, so its consumers' URL changes",
+					"catalog", string(cs.Namespace)+"/"+string(cs.Name), "recorded", cs.Status.ProxyPort, "bound", bound)
+			}
+			cs.Status.ProxyPort = bound
 		}
-		if moved {
-			r.logger.WarnContext(ctx, "catalog proxy port is taken; bound a new one, so its consumers' URL changes",
-				"catalog", string(cs.Namespace)+"/"+string(cs.Name), "recorded", cs.Status.ProxyPort, "bound", bound)
-		}
-		cs.Status.ProxyPort = bound
 	}
 
 	// ADR-0121: spec.blob + spec.catalog (bucket, prefix) EXISTENCE is reconcile-time — a CatalogService

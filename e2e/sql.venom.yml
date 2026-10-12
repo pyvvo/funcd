@@ -357,7 +357,7 @@ testcases:
           {{.vmsh}} '
             ss -ltn | grep 7075
             curl -s -o /dev/null -w "forged %{http_code}\n" -X POST http://10.63.0.1:7075/v1/changes/forged
-            grep -h -o "proxyHost.*" /opt/lane/funcdconfig.yaml
+            journalctl -u funcd-demo --no-pager | grep -o "bridge address.*" | tail -1
             journalctl -u funcd-demo --no-pager | grep -iE "change feed|sql change" | tail -5'
         info: "the feed → {{.result.systemout}} {{.result.systemerr}}"
         assertions:

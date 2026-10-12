@@ -227,15 +227,20 @@ func WithHold(h *hold.Hold) Option {
 	}
 }
 
-// WithCatalogProxyHost sets the netns-reachable host the per-CatalogService catalog PEP proxies publish
-// (ADR-0137) — the query-path analog of the S3 gateway's sandbox-facing Endpoint host. Under containerd a
-// worker runs in its OWN netns and cannot reach the daemon's 127.0.0.1, so set this to the CNI bridge
-// gateway IP (e.g. "10.63.0.1"): the proxy then binds 0.0.0.0 and publishes that host in
-// FUNCD_CATALOG_<ALIAS>_URL. Empty (the default / process-runtime / funcdctl dev) ⇒ 127.0.0.1, where the
-// daemon and the worker share the loopback.
+// WithBridgeAddress sets funcd's address on its container bridge (ADR-0238): the catalog proxies and the SQL change feed
+// bind and publish it, so a worker or an engine in its own netns reaches them. Unset ⇒ 127.0.0.1, where the daemon and
+// the workers share the loopback (the process runtime, funcdctl dev).
+func WithBridgeAddress(addr netip.Addr) Option {
+	return func(c *config) error {
+		c.bridgeAddress = addr.String()
+		return nil
+	}
+}
+
+// WithCatalogProxyHost is the old name of WithBridgeAddress (ADR-0238), taking the address as a string.
 func WithCatalogProxyHost(host string) Option {
 	return func(c *config) error {
-		c.catalogProxyHost = host
+		c.bridgeAddress = host
 		return nil
 	}
 }
