@@ -641,3 +641,37 @@ func TestScenarioSaveFailureVisible(t *testing.T) {
 	_, ok = getSource(t, r.st, "drops").Status.Conditions.Get("SeenListSaved")
 	require.False(t, ok, "the BucketNotFound status write removes the condition")
 }
+
+// ADR-0235 Decision 5: a `sql:` source is Ready while its SQLDatabase exists, else NotReady DatabaseNotFound, and
+// re-checked; it registers no timer.
+func TestSQLSourceFollowsItsDatabase(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := newStore()
+	es := &v1.EventSource{TypeMeta: v1.TypeMeta{APIVersion: v1.KindEventSource.GVK().APIVersion(), Kind: v1.KindEventSource},
+		Spec: v1.EventSourceSpec{SQL: &v1.SQLSource{Database: "todo-db", Events: []v1.SQLEvent{{Name: "added", Table: "todos"}}}}}
+	es.Name, es.Namespace, es.ResourceGroup = "todo-changes", "team-a", "rg1"
+	_, err := st.Create(ctx, es)
+	require.NoError(t, err)
+	src, err := eventing.NewSource(eventing.Deps{Store: st, Publisher: &capturePublisher{}})
+	require.NoError(t, err)
+	ready := func() v1.Condition {
+		obj, gerr := st.Get(ctx, v1.KindEventSource.GVK(), "team-a", "todo-changes")
+		require.NoError(t, gerr)
+		c, _ := obj.(*v1.EventSource).Status.Conditions.Get("Ready")
+		return c
+	}
+	res, err := src.Reconcile(ctx, reqOf("todo-changes"))
+	require.NoError(t, err)
+	require.Positive(t, res.RequeueAfter)
+	require.Equal(t, "DatabaseNotFound", ready().Reason)
+
+	db := &v1.SQLDatabase{TypeMeta: v1.TypeMeta{APIVersion: v1.KindSQLDatabase.GVK().APIVersion(), Kind: v1.KindSQLDatabase}}
+	db.Name, db.Namespace, db.ResourceGroup = "todo-db", "team-a", "rg1"
+	_, err = st.Create(ctx, db)
+	require.NoError(t, err)
+	_, err = src.Reconcile(ctx, reqOf("todo-changes"))
+	require.NoError(t, err)
+	require.Equal(t, v1.ConditionTrue, ready().Status)
+	require.Equal(t, 0, src.ActiveTimers())
+}

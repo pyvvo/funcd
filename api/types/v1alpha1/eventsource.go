@@ -25,7 +25,33 @@ type EventSourceSpec struct {
 	// Blob is the object-store source kind (ADR-0119, F83): named events that fire on object-created under
 	// a watched Bucket prefix, detected by a poll watcher over the ADR-0007 blob.Bucket List seam.
 	Blob *BlobSource `json:"blob,omitempty"`
+	// SQL is the SQL change-feed source kind (ADR-0235, F132): named events that fire on a row change of a table of
+	// a SQLDatabase in this namespace, from the changes its engine posts to funcd.
+	SQL *SQLSource `json:"sql,omitempty"`
 }
+
+// SQLSource hosts the sql kind's named events (ADR-0235).
+type SQLSource struct {
+	Database ObjectName `json:"database"`
+	Events   []SQLEvent `json:"events"` // ≥1; unique names
+}
+
+// SQLEvent is one named row-change event: a table and the changes it fires on (empty ⇒ all three, by Normalize).
+type SQLEvent struct {
+	Name  ObjectName      `json:"name"`
+	Table string          `json:"table"`
+	On    []SQLChangeType `json:"on,omitempty"`
+}
+
+// SQLChangeType is a row change (ADR-0235).
+type SQLChangeType string
+
+// The row changes a SQL event fires on.
+const (
+	SQLInsert SQLChangeType = "Insert"
+	SQLUpdate SQLChangeType = "Update"
+	SQLDelete SQLChangeType = "Delete"
+)
 
 // TimerSource hosts the timer kind's named events (ADR-0108).
 type TimerSource struct {
@@ -71,9 +97,17 @@ type EventSourceStatus struct {
 }
 
 // Normalize fills declared-but-empty defaults that JSON Schema cannot (ADR-0119): each blob event's empty
-// `on` defaults to [Created]. It is a decode/normalize step — pure defaulting, NOT validation — kept out of
-// Validate so Validate stays non-mutating (ADR-0108). Idempotent; a nil/timer spec is a no-op.
+// `on` defaults to [Created], and each SQL event's to all three changes (ADR-0235). It is a decode/normalize step —
+// pure defaulting, NOT validation — kept out of Validate so Validate stays non-mutating (ADR-0108). Idempotent; a
+// nil/timer spec is a no-op.
 func (es *EventSource) Normalize() {
+	if es.Spec.SQL != nil {
+		for i := range es.Spec.SQL.Events {
+			if len(es.Spec.SQL.Events[i].On) == 0 {
+				es.Spec.SQL.Events[i].On = []SQLChangeType{SQLInsert, SQLUpdate, SQLDelete}
+			}
+		}
+	}
 	if es.Spec.Blob == nil {
 		return
 	}
@@ -102,8 +136,16 @@ func (es *EventSource) Validate() error {
 	if es.Spec.Blob != nil {
 		kinds++
 	}
+	if es.Spec.SQL != nil {
+		kinds++
+	}
 	if kinds != 1 {
-		return fault.Invalidf(op, "exactly one source kind must be set (spec.timer|spec.blob), got %d", kinds)
+		return fault.Invalidf(op, "exactly one source kind must be set (spec.timer|spec.blob|spec.sql), got %d", kinds)
+	}
+	if es.Spec.SQL != nil {
+		if err := es.Spec.SQL.validate(op); err != nil {
+			return err
+		}
 	}
 	if es.Spec.Blob != nil {
 		if err := es.Spec.Blob.validate(op); err != nil {
@@ -177,6 +219,36 @@ func (bs *BlobSource) validate(op string) error {
 		for _, t := range ev.On {
 			if t != BlobCreated {
 				return fault.Invalidf(op, "spec.blob.events[%d].on %q is unsupported in V1 (only %q)", i, t, BlobCreated)
+			}
+		}
+	}
+	return nil
+}
+
+// validate enforces the sql kind's rules (ADR-0235): a DNS-1123 database, ≥1 event with unique DNS-1123 names, a
+// non-empty table, and changes among Insert, Update and Delete.
+func (s *SQLSource) validate(op string) error {
+	if !dnsLabel.MatchString(string(s.Database)) {
+		return fault.Invalidf(op, "spec.sql.database %q is not a valid DNS-1123 label", s.Database)
+	}
+	if len(s.Events) == 0 {
+		return fault.Invalidf(op, "spec.sql.events must list at least one event")
+	}
+	seen := make(map[ObjectName]bool, len(s.Events))
+	for i, ev := range s.Events {
+		if !dnsLabel.MatchString(string(ev.Name)) {
+			return fault.Invalidf(op, "spec.sql.events[%d].name %q is not a valid DNS-1123 label", i, ev.Name)
+		}
+		if seen[ev.Name] {
+			return fault.Invalidf(op, "duplicate event name %q under spec.sql", ev.Name)
+		}
+		seen[ev.Name] = true
+		if ev.Table == "" {
+			return fault.Invalidf(op, "spec.sql.events[%d].table is required", i)
+		}
+		for _, c := range ev.On {
+			if c != SQLInsert && c != SQLUpdate && c != SQLDelete {
+				return fault.Invalidf(op, "spec.sql.events[%d].on %q: want Insert, Update or Delete", i, c)
 			}
 		}
 	}

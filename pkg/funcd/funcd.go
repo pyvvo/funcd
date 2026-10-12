@@ -17,6 +17,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -292,6 +293,8 @@ type config struct {
 	sqlProvider provider.Runtime
 	// sqlCallTimeout bounds one context.sql call (ADR-0233, sql.callTimeout); 0 ⇒ 30 s.
 	sqlCallTimeout time.Duration
+	// sqlChangeFeedPort is the port the engines post their changes to (ADR-0235, sql.changeFeedPort); 0 ⇒ 7075.
+	sqlChangeFeedPort int
 
 	// providerStorage is the root of the add-on engines' durable directories (ADR-0231); "" ⇒ none.
 	providerStorage string
@@ -346,6 +349,53 @@ type config struct {
 	presetBlob blob.Bucket
 	presetBus  bus.Bus
 }
+
+// sqlFeedBootWait bounds how long the change feed's boot gate waits for the Sensors present at the start to subscribe
+// (ADR-0235 Decision 4); one that never does, an invalid Sensor, keeps no other change waiting past it.
+const sqlFeedBootWait = 30 * time.Second
+
+// openSQLFeed opens the change feed's boot gate once every Sensor present at the start has subscribed to each event it
+// names, so a change redelivered at boot reaches it; until then rqlite's deliveries answer 503 and are retried.
+func (p *Platform) openSQLFeed(ctx context.Context) {
+	defer p.sqlFeed.Loaded()
+	l, err := p.cfg.store.List(ctx, v1.KindSensor.GVK(), store.ListOptions{})
+	if err != nil {
+		p.logger.WarnContext(ctx, "sql change feed: list the Sensors to wait for", "error", err)
+		return
+	}
+	type dep struct {
+		ns            v1.NamespaceName
+		source, event v1.ObjectName
+	}
+	var deps []dep
+	for _, o := range l.Items {
+		if se, ok := o.(*v1.Sensor); ok {
+			for _, d := range se.Spec.On {
+				deps = append(deps, dep{ns: se.Namespace, source: d.Source, event: d.Event})
+			}
+		}
+	}
+	deadline := time.Now().Add(sqlFeedBootWait)
+	for {
+		deps = slices.DeleteFunc(deps, func(d dep) bool { return p.eventFanout.Subscribed(d.ns, d.source, d.event) })
+		if len(deps) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			p.logger.WarnContext(ctx, "sql change feed: opening with Sensors not subscribed", "waiting", len(deps),
+				"first", string(deps[0].ns)+"/"+string(deps[0].source)+"/"+string(deps[0].event))
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// sqlChangeFeedPortOrDefault is sql.changeFeedPort, 7075 when unset (ADR-0235 Decision 2).
+func (c *config) sqlChangeFeedPortOrDefault() int { return cmp.Or(c.sqlChangeFeedPort, 7075) }
 
 // gate is the hold every side-effect runner asks (ADR-0206 Decision 6): hold.Never without WithHold.
 func (c *config) gate() hold.Gate {
@@ -419,7 +469,9 @@ type Platform struct {
 	backups         *backupsvc.Reconcilers // ADR-0222: the workload backups, whose runs Run waits for
 	kvReconciler    *kvsvc.Reconciler      // reclaims deleted stores' data once before the controller runs (issue #708)
 	sqlReconciler   *sqlsvc.Reconciler     // reclaims deleted databases' directories before the controller runs (ADR-0232)
-	prober          *health.Prober         // the storage probes (ADR-0215), started before the controller runs
+	sqlFeed         *sqlsvc.Feed           // the engines' change feed, served from Run (ADR-0235)
+	sqlFeedHost     string
+	prober          *health.Prober // the storage probes (ADR-0215), started before the controller runs
 
 	dataPlaneServer   *http.Server // function-invocation listener (ADR-0033)
 	dataPlaneListener net.Listener
@@ -1085,10 +1137,23 @@ func (p *Platform) buildControlPlane() error {
 			return fault.Wrapf(perr, fault.KindOf(perr), op, "build the SQL provider runtime")
 		}
 	}
+	// ADR-0235: every engine posts its changes to the feed, on the catalog proxies' host, which workers reach.
+	feedWatermarks := p.eventStore.ChangeWatermarks()
+	p.sqlFeed, err = sqlsvc.NewFeed(sqlsvc.FeedDeps{Store: c.store, Publisher: p.eventFanout, Watermarks: feedWatermarks, Master: master,
+		Hold: c.gate(), NamespaceHold: c.nsGate(), Logger: p.logger})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build the SQL change feed")
+	}
+	p.sqlFeedHost = cmp.Or(c.catalogProxyHost, "127.0.0.1")
+	if c.imageFor != nil && c.catalogProxyHost == "" {
+		p.logger.Warn("sql change feed listens on loopback, which engine containers cannot reach: set catalog.proxyHost " +
+			"to the bridge gateway address, else no EventSource of kind sql fires")
+	}
 	sqlReconciler, err := sqlsvc.NewReconciler(sqlsvc.ReconcilerDeps{
 		Store: c.store, Provider: sqlRuntime, Engines: sqlEngines, Master: master, ImageFor: c.imageFor,
 		Hold: c.gate(), Logger: p.logger, SupervisionPeriod: c.pacing.SupervisionPeriod,
 		DurableStorage: c.providerStorage != "" && !c.providerStorageEphemeral,
+		ChangeFeedURL:  p.sqlFeed.URL(p.sqlFeedHost, c.sqlChangeFeedPortOrDefault()), Watermarks: feedWatermarks,
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build SQLDatabase reconciler")
@@ -1569,6 +1634,19 @@ func (p *Platform) Run(ctx context.Context) error {
 			p.logger.ErrorContext(ctx, "eventing stopped", "error", err)
 		}
 	}()
+	if p.sqlFeed != nil { // ADR-0235: the engines' change feed (closes on ctx cancel)
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			p.openSQLFeed(ctx)
+		}()
+		go func() {
+			defer wg.Done()
+			if err := p.sqlFeed.Serve(ctx, p.sqlFeedHost, p.cfg.sqlChangeFeedPortOrDefault()); err != nil && !errors.Is(err, context.Canceled) {
+				p.logger.ErrorContext(ctx, "sql change feed stopped", "error", err)
+			}
+		}()
+	}
 	if p.blobWatcher != nil { // ADR-0119: the blob EventSource poll loop (drains on ctx cancel)
 		wg.Add(1)
 		go func() {

@@ -483,6 +483,8 @@ components:
                 minLength: 1
                 pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                 type: string
+              sql:
+                $ref: "#/components/schemas/SQLSource"
               timer:
                 $ref: "#/components/schemas/TimerSource"
             type: object
@@ -1629,6 +1631,8 @@ components:
       properties:
         blob:
           $ref: "#/components/schemas/BlobSource"
+        sql:
+          $ref: "#/components/schemas/SQLSource"
         timer:
           $ref: "#/components/schemas/TimerSource"
       type: object
@@ -3330,6 +3334,44 @@ components:
             - Failed
             - Terminating
           type: string
+      type: object
+    SQLEvent:
+      additionalProperties: false
+      properties:
+        name:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        "on":
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        table:
+          type: string
+      required:
+        - name
+        - table
+      type: object
+    SQLSource:
+      additionalProperties: false
+      properties:
+        database:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        events:
+          items:
+            $ref: "#/components/schemas/SQLEvent"
+          type:
+            - array
+            - "null"
+      required:
+        - database
+        - events
       type: object
     Scaling:
       additionalProperties: false

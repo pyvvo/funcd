@@ -385,12 +385,15 @@ type Config struct {
 		DefaultIndex string `json:"defaultIndex,omitempty" env:"FUNCD_SITE_DEFAULT_INDEX" validate:"omitempty,startsnotwith=/"`
 	} `json:"site,omitempty"`
 
-	// SQL tunes the SQL databases (ADR-0232, ADR-0233). MaxDatabasesPerNamespace is the per-namespace SQLDatabase
+	// SQL tunes the SQL databases (ADR-0232, ADR-0233, ADR-0235). MaxDatabasesPerNamespace is the per-namespace SQLDatabase
 	// count cap enforced at admission; 0 ⇒ the default (20); a negative value disables the quota. CallTimeout bounds
 	// one context.sql call, a positive duration; empty ⇒ 30s.
 	SQL struct {
 		MaxDatabasesPerNamespace int    `json:"maxDatabasesPerNamespace,omitempty" env:"FUNCD_SQL_MAX_DATABASES_PER_NAMESPACE"`
 		CallTimeout              string `json:"callTimeout,omitempty" env:"FUNCD_SQL_CALL_TIMEOUT"`
+		// ChangeFeedPort is the port the engines post their changes to (ADR-0235), on the catalog proxies' host
+		// (catalog.proxyHost, else loopback); 0 ⇒ 7075.
+		ChangeFeedPort int `json:"changeFeedPort,omitempty" env:"FUNCD_SQL_CHANGE_FEED_PORT" validate:"min=0,max=65535"`
 	} `json:"sql,omitempty"`
 
 	// App tunes the App reconciler (ADR-0200). UpgradeTimeout bounds an upgrade, a duration more than

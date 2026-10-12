@@ -238,10 +238,11 @@ log:
 #   referentPollInterval: 2s      # re-check of an object waiting for a referent. default: 2s
 #   routeResyncInterval: 10s      # re-check of every live Route. default: 10s
 
-# --- sql: SQL databases (ADR-0232, ADR-0233) ---------------------------------------------------
+# --- sql: SQL databases (ADR-0232 to ADR-0235) -------------------------------------------------
 # sql:
 #   maxDatabasesPerNamespace: 20  # SQLDatabase count cap per namespace; negative ⇒ no cap. default: 20
 #   callTimeout: 30s              # bound of one context.sql call (ADR-0233), also the engine's db_timeout. default: 30s
+#   changeFeedPort: 7075          # where the engines post their changes (ADR-0235), on catalog.proxyHost or loopback. default: 7075
 
 # --- site: declarative static web apps (ADR-0139) ----------------------------------------------
 # site:

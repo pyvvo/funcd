@@ -11353,5 +11353,35 @@
     "dod_total": 10,
     "report": "docs/reviews/adr-0234-implementation-claude-opus-5-5-2.md",
     "notes": "round 2: all four round-1 findings fixed and tested (stream error without the address, load keeps the file's cause, pending DataMissing survives a lost write, shared clients); m1 model: a pending DataMissing is not dropped when the database is deleted"
+  },
+  {
+    "date": "2026-10-12",
+    "adr": "0235",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "changes-requested",
+    "blockers": 0,
+    "majors": 1,
+    "minors": 2,
+    "model_attributed": 2,
+    "dod_passed": 11,
+    "dod_total": 12,
+    "report": "docs/reviews/adr-0235-implementation-claude-opus-5-5.md",
+    "notes": "M1 model: a boot delivery can be acknowledged before any Sensor subscribes (0 of 2001 subscribed at the first 200), its events lost; m1 model: a commit's changes held whole in memory; m2 adr: containerd without catalog.proxyHost binds loopback, no engine reaches the feed"
+  },
+  {
+    "date": "2026-10-12",
+    "adr": "0235",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 1,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/adr-0235-implementation-claude-opus-5-5-2.md",
+    "notes": "round 2: boot gate fixed (503 until the start's Sensors subscribe; 2001-Sensor probe now 200 only with all subscribed); m1 model: a body torn mid-group repeats its earlier changes (same ids); m2 adr: no proxyHost under containerd, warned"
   }
 ]

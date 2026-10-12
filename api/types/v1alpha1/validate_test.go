@@ -478,3 +478,37 @@ func TestIssue167_DataKeysMustBeEnvVarNames(t *testing.T) {
 		})
 	}
 }
+
+// ADR-0235 Decision 5: the sql kind's rules, and Normalize defaulting an empty `on` to all three changes.
+func TestEventSourceSQLValidate(t *testing.T) {
+	sqlSpec := func(db string, events ...SQLEvent) EventSourceSpec {
+		return EventSourceSpec{SQL: &SQLSource{Database: ObjectName(db), Events: events}}
+	}
+	for _, tc := range []struct {
+		name  string
+		spec  EventSourceSpec
+		valid bool
+	}{
+		{"one event", sqlSpec("todo-db", SQLEvent{Name: "added", Table: "todos", On: []SQLChangeType{SQLInsert}}), true},
+		{"all changes by default", sqlSpec("todo-db", SQLEvent{Name: "any", Table: "todos"}), true},
+		{"bad database", sqlSpec("Todo_DB", SQLEvent{Name: "any", Table: "todos"}), false},
+		{"no events", sqlSpec("todo-db"), false},
+		{"no table", sqlSpec("todo-db", SQLEvent{Name: "any"}), false},
+		{"duplicate names", sqlSpec("todo-db", SQLEvent{Name: "a", Table: "t"}, SQLEvent{Name: "a", Table: "u"}), false},
+		{"unknown change", sqlSpec("todo-db", SQLEvent{Name: "a", Table: "t", On: []SQLChangeType{"Truncate"}}), false},
+		{"sql and timer", EventSourceSpec{SQL: &SQLSource{Database: "d", Events: []SQLEvent{{Name: "a", Table: "t"}}},
+			Timer: &TimerSource{Events: []TimerEvent{{Name: "t", Interval: Duration(time.Minute)}}}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := esWith(tc.spec).Validate()
+			if tc.valid {
+				require.NoError(t, err)
+				return
+			}
+			require.Equal(t, fault.Invalid, fault.KindOf(err))
+		})
+	}
+	es := esWith(sqlSpec("todo-db", SQLEvent{Name: "any", Table: "todos"}))
+	es.Normalize()
+	require.Equal(t, []SQLChangeType{SQLInsert, SQLUpdate, SQLDelete}, es.Spec.SQL.Events[0].On)
+}

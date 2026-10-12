@@ -10,7 +10,9 @@
 #   S6 a Restore loads it into an empty database under the default 256Mi bound, and the copy reads the same rows.
 #   S7 with its engine directory gone, as after a platform restore on a new host, notes-db is Ready and empty with
 #      DataMissing True; an admin's in-place Restore brings its rows back and clears it.
-name: sql — SQL databases on real containerd (ADR-0232, ADR-0233, ADR-0234)
+#   S8 a note added to notes-db fires note-added through the engine's change feed, and a Sensor copies it into
+#      notes-db-restored by invoking notes-restored (ADR-0235).
+name: sql — SQL databases on real containerd (ADR-0232 to ADR-0235)
 
 vars:
   dp: http://127.0.0.1:8081
@@ -309,3 +311,56 @@ testcases:
         assertions:
           - result.statuscode ShouldEqual 200
           - result.bodyjson.notes ShouldHaveLength 2
+
+  - name: S8 a new row starts a Function through the change feed and a Sensor
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            funcdctl apply -f /opt/lane/sql/changes.yaml >/dev/null
+            for i in $(seq 30); do
+              funcdctl get eventsource notes-changes -n default -o json | grep -q "\"phase\": *\"Ready\"" && { echo WATCHING; break; }
+              sleep 2
+            done'
+        info: "the EventSource → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring WATCHING
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/notes"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"add","title":"bread"}}'
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/notes-restored"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"list"}}'
+        retry: 30
+        delay: 2
+        info: "the copy → {{.result.statuscode}} {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '"title":"bread"'
+      # What a failed copy needs: the feed's listener, its answer to a forged token from the bridge, and its log.
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            ss -ltn | grep 7075
+            curl -s -o /dev/null -w "forged %{http_code}\n" -X POST http://10.63.0.1:7075/v1/changes/forged
+            grep -h -o "proxyHost.*" /opt/lane/funcdconfig.yaml
+            journalctl -u funcd-demo --no-pager | grep -iE "change feed|sql change" | tail -5'
+        info: "the feed → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "forged 404"
+      - type: exec
+        script: |
+          {{.vmsh}} 'journalctl -u funcd-demo --no-pager | grep -c "sql change delivery failed" || true'
+        info: "failed deliveries → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldEqual 0

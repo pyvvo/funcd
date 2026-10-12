@@ -159,6 +159,13 @@ func (s *Source) Reconcile(ctx context.Context, req controller.Request) (control
 		return s.reconcileBlob(ctx, es)
 	}
 	s.deregisterBlob(req.Namespace, req.Name) // not (any longer) a blob source: stop watching
+	if es.Spec.SQL != nil {
+		s.deregisterTimers(req.Namespace, req.Name)
+		if err := s.purgeBlob(ctx, req.Namespace, req.Name); err != nil {
+			return controller.Result{}, err
+		}
+		return s.reconcileSQL(ctx, es)
+	}
 	if es.Spec.Timer == nil {
 		s.deregisterTimers(req.Namespace, req.Name) // no timer kind (a future webhook source): not tick-driven
 		return controller.Result{}, s.purgeBlob(ctx, req.Namespace, req.Name)
@@ -188,13 +195,13 @@ func (s *Source) reconcileBlob(ctx context.Context, es *v1.EventSource) (control
 	ns, name := es.Namespace, es.Name
 	s.deregisterTimers(ns, name) // a source that became a blob kind must stop any prior timers
 	if s.blob == nil {
-		return controller.Result{}, s.setBlobNotReady(ctx, es, "BlobWatcherUnavailable", "blob event watching is not enabled")
+		return controller.Result{}, s.setNotReady(ctx, es, "BlobWatcherUnavailable", "blob event watching is not enabled")
 	}
 	_, err := s.store.Get(ctx, v1.KindBucket.GVK(), ns, es.Spec.Blob.Bucket)
 	if err != nil {
 		if fault.KindOf(err) == fault.NotFound {
 			s.deregisterBlob(ns, name)
-			nrErr := s.setBlobNotReady(ctx, es, "BucketNotFound", fmt.Sprintf("bucket %q not found in namespace %q", es.Spec.Blob.Bucket, ns))
+			nrErr := s.setNotReady(ctx, es, "BucketNotFound", fmt.Sprintf("bucket %q not found in namespace %q", es.Spec.Blob.Bucket, ns))
 			return controller.Result{RequeueAfter: s.recheck}, nrErr
 		}
 		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), "eventing.reconcileBlob", "resolve bucket %q", es.Spec.Blob.Bucket)
@@ -210,6 +217,29 @@ func (s *Source) reconcileBlob(ctx context.Context, es *v1.EventSource) (control
 	return controller.Result{RequeueAfter: s.recheck}, nil
 }
 
+// reconcileSQL owns the `sql:` source branch (ADR-0235): the change feed reads the source from the store on each
+// delivery, so it registers nothing; the source is Ready while its SQLDatabase exists, else NotReady
+// DatabaseNotFound, and is re-checked like a blob source's Bucket.
+func (s *Source) reconcileSQL(ctx context.Context, es *v1.EventSource) (controller.Result, error) {
+	ns := es.Namespace
+	_, err := s.store.Get(ctx, v1.KindSQLDatabase.GVK(), ns, es.Spec.SQL.Database)
+	switch {
+	case fault.KindOf(err) == fault.NotFound:
+		nrErr := s.setNotReady(ctx, es, "DatabaseNotFound", fmt.Sprintf("SQLDatabase %q not found in namespace %q", es.Spec.SQL.Database, ns))
+		return controller.Result{RequeueAfter: s.recheck}, nrErr
+	case err != nil:
+		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), "eventing.reconcileSQL", "resolve SQLDatabase %q", es.Spec.SQL.Database)
+	}
+	if cur, ok := es.Status.Conditions.Get(condReady); !ok || cur.Status != v1.ConditionTrue || cur.ObservedGeneration != es.Generation || es.Status.Phase != v1.PhaseReady {
+		es.Status.Phase = v1.PhaseReady
+		es.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue, Reason: "Watching", ObservedGeneration: es.Generation})
+		if _, uerr := s.store.Update(ctx, es); uerr != nil {
+			return controller.Result{}, fault.Wrapf(uerr, fault.KindOf(uerr), "eventing.reconcileSQL", "set eventsource ready")
+		}
+	}
+	return controller.Result{RequeueAfter: s.recheck}, nil
+}
+
 // normalizedBlob returns es's blob source with the ADR-0119 defaults applied to a copy. es is written back
 // for its status, so defaulting es itself would rewrite the user's spec and bump its generation past the
 // condition stamped with it.
@@ -219,13 +249,13 @@ func normalizedBlob(es *v1.EventSource) *v1.BlobSource {
 	return view.Spec.Blob
 }
 
-// setBlobNotReady marks a blob source NotReady with a reason/message (ADR-0119, mirroring Route BackendNotFound).
-func (s *Source) setBlobNotReady(ctx context.Context, es *v1.EventSource, reason, msg string) error {
+// setNotReady marks a blob or SQL source NotReady with a reason/message (ADR-0119, mirroring Route BackendNotFound).
+func (s *Source) setNotReady(ctx context.Context, es *v1.EventSource, reason, msg string) error {
 	es.Status.Phase = v1.PhasePending
 	es.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: msg, ObservedGeneration: es.Generation})
 	es.Status.Conditions = slices.DeleteFunc(es.Status.Conditions, func(c v1.Condition) bool { return c.Type == condSeenListSaved })
 	if _, err := s.store.Update(ctx, es); err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), "eventing.reconcileBlob", "set eventsource not-ready")
+		return fault.Wrapf(err, fault.KindOf(err), "eventing.Reconcile", "set eventsource not-ready")
 	}
 	return nil
 }

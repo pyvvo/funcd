@@ -53,6 +53,10 @@ type ReconcilerDeps struct {
 	Hold              hold.Gate // nil ⇒ never held
 	Logger            *slog.Logger
 	SupervisionPeriod time.Duration
+	// ChangeFeedURL is the endpoint each engine posts its changes to (ADR-0235 Decision 1); nil ⇒ no change feed.
+	ChangeFeedURL func(ns v1.NamespaceName, name v1.ObjectName) string
+	// Watermarks are the change feed's, dropped with a deleted database; nil ⇒ none.
+	Watermarks Watermarks
 	// DurableStorage is engine storage that outlives a daemon start: only then does a missing directory mean lost
 	// data (DataMissing). False with no storage root or with storage.mode memory.
 	DurableStorage bool
@@ -335,14 +339,18 @@ func (r *Reconciler) engineSpec(db *v1.SQLDatabase) provider.ProviderSpec {
 	if res.Memory == "" {
 		res.Memory = defaultMemory
 	}
+	env := map[string]string{
+		"FUNCD_SQL_NODE_ID":  string(db.Name),
+		"FUNCD_SQL_PASSWORD": EnginePassword(r.d.Master, db.Namespace, db.Name),
+	}
+	if r.d.ChangeFeedURL != nil {
+		env["FUNCD_SQL_CDC_ENDPOINT"] = r.d.ChangeFeedURL(db.Namespace, db.Name)
+	}
 	return provider.ProviderSpec{
-		Ref:   provider.ProviderRef{Namespace: db.Namespace, Name: db.Name},
-		Image: r.d.ImageFor(Runtime),
-		Port:  enginePort,
-		Env: map[string]string{
-			"FUNCD_SQL_NODE_ID":  string(db.Name),
-			"FUNCD_SQL_PASSWORD": EnginePassword(r.d.Master, db.Namespace, db.Name),
-		},
+		Ref:       provider.ProviderRef{Namespace: db.Namespace, Name: db.Name},
+		Image:     r.d.ImageFor(Runtime),
+		Port:      enginePort,
+		Env:       env,
 		Readiness: provider.ReadinessProbe{Path: "/readyz", ExpectStatus: http.StatusOK},
 		Replicas:  1,
 		Resources: res,
@@ -361,6 +369,11 @@ func (r *Reconciler) deleted(ctx context.Context, ref provider.ProviderRef) erro
 	r.mu.Unlock()
 	if err := r.d.Provider.Teardown(ctx, ref); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "tear down engine %s/%s", ref.Namespace, ref.Name)
+	}
+	if r.d.Watermarks != nil {
+		if err := r.d.Watermarks.Delete(ctx, ref.Namespace, ref.Name); err != nil {
+			return err
+		}
 	}
 	if r.held() {
 		return nil

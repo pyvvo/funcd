@@ -1,12 +1,13 @@
 // Package eventstore is eventing's one durable store (ADR-0201): one Badger instance holding the Sensor's dead
-// letters under dl/<ns>/<ulid> (ADR-0118) and the BlobWatcher's seen lists under seen/ (ADR-0157), each tenant
-// iterating only its own prefix. With a directory both tenants survive a restart; in memory both are lost, and the
+// letters under dl/<ns>/<ulid> (ADR-0118), the BlobWatcher's seen lists under seen/ (ADR-0157) and the SQL change
+// feed's watermarks under cdc/ (ADR-0235), each tenant iterating only its own prefix. With a directory both tenants survive a restart; in memory both are lost, and the
 // seen lists live in a MemWatermark. The store is one ADR-0202 snapshot unit: Snapshot reads both tenants at once.
 package eventstore
 
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -69,6 +70,73 @@ func (s *Store) DeadLetters() deadletter.Store { return dlbadger.NewOnDB(s.db) }
 
 // SeenLists is the seen/ tenant: heads and parts on disk, a MemWatermark in memory.
 func (s *Store) SeenLists() eventing.Watermark { return s.seen }
+
+// cdcPrefix holds the SQL change feed's watermarks: cdc/<ns>/<database>/<epoch> = the highest Raft index whose
+// events were published, 8 bytes big-endian (ADR-0235 Decision 3).
+const cdcPrefix = "cdc/"
+
+// ChangeWatermarks is the cdc/ tenant, in Badger in both modes, so the store's Snapshot and Load carry it.
+func (s *Store) ChangeWatermarks() ChangeWatermarks { return ChangeWatermarks{db: s.db} }
+
+// ChangeWatermarks keeps, per database and engine epoch, the highest Raft index the change feed published.
+type ChangeWatermarks struct{ db *badger.DB }
+
+func cdcKey(ns v1.NamespaceName, database v1.ObjectName, epoch string) []byte {
+	return []byte(cdcPrefix + string(ns) + "/" + string(database) + "/" + epoch)
+}
+
+// Get is the watermark of (ns, database, epoch); an unknown epoch is 0.
+func (w ChangeWatermarks) Get(_ context.Context, ns v1.NamespaceName, database v1.ObjectName, epoch string) (uint64, error) {
+	var n uint64
+	err := w.db.View(func(txn *badger.Txn) error {
+		it, err := txn.Get(cdcKey(ns, database, epoch))
+		if errors.Is(err, badger.ErrKeyNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		return it.Value(func(v []byte) error {
+			if len(v) != 8 {
+				return fault.Internalf(op, "watermark %s/%s/%s has %d bytes", ns, database, epoch, len(v))
+			}
+			n = binary.BigEndian.Uint64(v)
+			return nil
+		})
+	})
+	if err != nil {
+		return 0, fault.Wrapf(err, fault.KindOf(err), op, "read the change watermark of %s/%s", ns, database)
+	}
+	return n, nil
+}
+
+// Set records index as the watermark of (ns, database, epoch).
+func (w ChangeWatermarks) Set(_ context.Context, ns v1.NamespaceName, database v1.ObjectName, epoch string, index uint64) error {
+	err := w.db.Update(func(txn *badger.Txn) error {
+		return txn.Set(cdcKey(ns, database, epoch), binary.BigEndian.AppendUint64(nil, index))
+	})
+	if err != nil {
+		return fault.Internalf(op, "write the change watermark of %s/%s: %v", ns, database, err)
+	}
+	return nil
+}
+
+// Delete drops every epoch's watermark of a deleted database.
+func (w ChangeWatermarks) Delete(_ context.Context, ns v1.NamespaceName, database v1.ObjectName) error {
+	prefix := []byte(cdcPrefix + string(ns) + "/" + string(database) + "/")
+	err := w.db.Update(func(txn *badger.Txn) error {
+		for _, k := range keysUnder(txn, prefix) {
+			if err := txn.Delete(k); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return fault.Internalf(op, "delete the change watermarks of %s/%s: %v", ns, database, err)
+	}
+	return nil
+}
 
 // Close stops the GC loop, then closes the instance; the BlobWatcher and the Sensor must have stopped.
 func (s *Store) Close() error {

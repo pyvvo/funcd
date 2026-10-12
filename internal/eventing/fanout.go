@@ -43,6 +43,14 @@ func (f *Fanout) Publish(ctx context.Context, ev CloudEvent) error {
 	return nil
 }
 
+// Subscribed reports whether the named event (ns, source, event) has a subscriber, as the SQL change feed's boot gate
+// asks (ADR-0235 Decision 4).
+func (f *Fanout) Subscribed(ns v1.NamespaceName, source, event v1.ObjectName) bool {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return len(f.subs[eventKey{ns: ns, source: source, event: event}]) > 0
+}
+
 // Subscribe registers fn for the named event (ns, source, event); the returned cancel deregisters it.
 func (f *Fanout) Subscribe(ns v1.NamespaceName, source, event v1.ObjectName, fn func(context.Context, CloudEvent)) (cancel func()) {
 	k := eventKey{ns: ns, source: source, event: event}

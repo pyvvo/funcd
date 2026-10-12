@@ -29,8 +29,9 @@ const sourceURIScheme = "funcd://"
 type CloudEvent struct {
 	SpecVersion     string          `json:"specversion"`
 	ID              string          `json:"id"`
-	Source          string          `json:"source"` // funcd://<ns>/eventsource/<name>
-	Type            string          `json:"type"`   // the event name (ADR-0108)
+	Source          string          `json:"source"`            // funcd://<ns>/eventsource/<name>
+	Type            string          `json:"type"`              // the event name (ADR-0108)
+	Subject         string          `json:"subject,omitempty"` // a SQL change's table (ADR-0235)
 	Time            v1.Timestamp    `json:"time"`
 	DataContentType string          `json:"datacontenttype,omitempty"`
 	Data            json.RawMessage `json:"data,omitempty"`

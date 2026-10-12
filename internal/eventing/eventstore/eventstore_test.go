@@ -350,3 +350,39 @@ func (p *publisher) Publish(_ context.Context, ev eventing.CloudEvent) error {
 	p.keys = append(p.keys, d.Key)
 	return nil
 }
+
+// ADR-0235 Decision 3: the change watermarks are kept per database and epoch, dropped with the database, and carried
+// by the store's snapshot in both modes.
+func TestChangeWatermarks(t *testing.T) {
+	ctx := context.Background()
+	for from, fromCfg := range modes() {
+		for to, toCfg := range modes() {
+			t.Run(from+" to "+to, func(t *testing.T) {
+				src := open(t, fromCfg(t))
+				w := src.ChangeWatermarks()
+				n, err := w.Get(ctx, "default", "todo-db", "e1")
+				require.NoError(t, err)
+				require.Zero(t, n, "an unknown epoch starts at 0")
+				require.NoError(t, w.Set(ctx, "default", "todo-db", "e1", 6))
+				require.NoError(t, w.Set(ctx, "default", "todo-db-2", "e1", 9))
+				var recs []snapshot.Record
+				_, err = src.Snapshot(ctx, func(r snapshot.Record) error { recs = append(recs, r); return nil })
+				require.NoError(t, err)
+
+				dst := open(t, toCfg(t))
+				require.NoError(t, dst.Load(ctx, snapshotcontract.Feed(recs)))
+				got, err := dst.ChangeWatermarks().Get(ctx, "default", "todo-db", "e1")
+				require.NoError(t, err)
+				require.Equal(t, uint64(6), got)
+
+				require.NoError(t, dst.ChangeWatermarks().Delete(ctx, "default", "todo-db"))
+				got, err = dst.ChangeWatermarks().Get(ctx, "default", "todo-db", "e1")
+				require.NoError(t, err)
+				require.Zero(t, got, "deleted with the database")
+				got, err = dst.ChangeWatermarks().Get(ctx, "default", "todo-db-2", "e1")
+				require.NoError(t, err)
+				require.Equal(t, uint64(9), got, "a database whose name extends another's keeps its own")
+			})
+		}
+	}
+}

@@ -60,6 +60,11 @@ func WithSQLCallTimeout(d time.Duration) Option {
 	return func(c *config) error { c.sqlCallTimeout = d; return nil }
 }
 
+// WithSQLChangeFeedPort sets the port the engines post their changes to (ADR-0235, sql.changeFeedPort); 0 ⇒ 7075.
+func WithSQLChangeFeedPort(port int) Option {
+	return func(c *config) error { c.sqlChangeFeedPort = port; return nil }
+}
+
 // WithSQLProviderRuntime overrides the SQLDatabase engine runtime (ADR-0232); the production runtime supervises the
 // rqlite container, tests and `funcdctl dev` (ADR-0237) inject their own. It must implement provider.Volumes.
 func WithSQLProviderRuntime(r provider.Runtime) Option {

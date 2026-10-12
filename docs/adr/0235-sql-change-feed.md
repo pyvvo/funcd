@@ -1,6 +1,6 @@
 # ADR-0235: SQL change feed
 
-- **Status**: Accepted (2026-10-12, self-accepted under the decider's batch delegation; judged three times: the first
+- **Status**: Implemented (2026-10-12, review passed). Accepted (2026-10-12, self-accepted under the decider's batch delegation; judged three times: the first
   round keyed the watermark by engine epoch, added the namespace hold, the boot gate, per-database serialization and the
   token's protections; the second made the boot gate answer every valid token and removed the size refusal; the third
   found no Blocker or Major)

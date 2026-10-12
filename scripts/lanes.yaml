@@ -407,7 +407,7 @@ egress:
   venom: e2e/egress.venom.yml
 
 sql:
-  description: SQL databases on real containerd (ADR-0232/0233/0234) — a Drizzle TypeScript owner and a SQLModel Python reader of one rqlite engine, a refused write, an all-or-nothing batch, rows that survive an engine kill and a daemon restart, a 100 MB database backed up to an S3 server in the VM and restored under a new name, and lost engine data reported and restored in place.
+  description: SQL databases on real containerd (ADR-0232/0233/0234/0235) — a Drizzle TypeScript owner and a SQLModel Python reader of one rqlite engine, a refused write, an all-or-nothing batch, rows that survive an engine kill and a daemon restart, a 100 MB database backed up to an S3 server in the VM and restored under a new name, lost engine data reported and restored in place, and a new row that starts a Function through a Sensor.
   module: github.com/pyvvo/funcd-functions
   dir: apps/todo
   # funcd-bundle writes dist/ beside the Python project, so the lane builds in a writable copy of the module.
@@ -429,6 +429,7 @@ sql:
     - sql/restore-copy.yaml
     - sql/notes-restored.yaml
     - sql/restore-in-place.yaml
+    - sql/changes.yaml
     # The todo App's S3 server key, workload Secrets and test identity.
     - dr
     - from: apps/todo/sql/funcdconfig.yaml

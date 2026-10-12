@@ -4,8 +4,11 @@
 package engineargs
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // User is the engine user funcd calls the engine as; its password is the database's EnginePassword.
@@ -19,18 +22,56 @@ type Args struct {
 	RaftAddr    string // Raft stays on loopback, so a recreated engine with a new IP keeps its stored address
 	AuthFile    string // the auth file, outside the durable directory
 	DataDir     string // rqlited's data directory, inside the durable directory
+	CDCConfig   string // the change feed's config file (ADR-0235); "" ⇒ no change feed
 }
 
 // Argv returns rqlited's arguments, without the program name.
 func (a Args) Argv() []string {
-	return []string{
+	argv := []string{
 		"-node-id", a.NodeID,
 		"-http-addr", a.HTTPAddr,
 		"-http-adv-addr", a.HTTPAdvAddr,
 		"-raft-addr", a.RaftAddr,
 		"-auth", a.AuthFile,
-		a.DataDir,
 	}
+	if a.CDCConfig != "" {
+		// -cdc-as: the high-watermark broadcast needs a user with cdc-hwm-update under auth, else rqlite never prunes
+		// its queue of sent changes.
+		argv = append(argv, "-cdc-config", a.CDCConfig, "-cdc-as", User)
+	}
+	return append(argv, a.DataDir)
+}
+
+// The change feed's sending bounds (ADR-0235 Decision 1).
+const (
+	cdcMaxBatch        = 100
+	cdcTransmitTimeout = 10 * time.Second
+)
+
+// cdcConfig is rqlite's CDC config file; durations are nanoseconds.
+type cdcConfig struct {
+	Endpoint        string `json:"endpoint"`
+	ServiceID       string `json:"service_id"`
+	MaxBatchSize    int    `json:"max_batch_size"`
+	TransmitTimeout int64  `json:"transmit_timeout"`
+}
+
+// CDCConfig returns the change feed's config: every committed change posted to endpoint, with the engine's epoch as
+// service_id (ADR-0235 Decision 1).
+func CDCConfig(endpoint, epoch string) ([]byte, error) {
+	if endpoint == "" || epoch == "" {
+		return nil, fmt.Errorf("engineargs: the change feed needs an endpoint and an epoch")
+	}
+	return json.Marshal(cdcConfig{Endpoint: endpoint, ServiceID: epoch, MaxBatchSize: cdcMaxBatch, TransmitTimeout: int64(cdcTransmitTimeout)})
+}
+
+// NewEpoch returns a random 128-bit epoch, which names one engine directory's Raft indexes (ADR-0235 Decision 1).
+func NewEpoch() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("engineargs: generate an epoch: %w", err)
+	}
+	return hex.EncodeToString(b[:]), nil
 }
 
 type credential struct {

@@ -6,17 +6,20 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"math"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"sync/atomic"
 	"time"
 	_ "time/tzdata" // ADR-0211: cron time zones resolve on a host without zoneinfo
@@ -426,7 +429,12 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 				return nil, noopClose, nil, "", fmt.Errorf("egress isolation: parse dnsResolver %q: %w", n.DNSResolver, err)
 			}
 		}
-		for _, s := range n.InternalAllow {
+		internal := slices.Clone(n.InternalAllow)
+		if cfg.Catalog.ProxyHost != "" {
+			// ADR-0235 Decision 2: the engines post their changes to the feed on the bridge address.
+			internal = append(internal, net.JoinHostPort(cfg.Catalog.ProxyHost, strconv.Itoa(cmp.Or(cfg.SQL.ChangeFeedPort, 7075))))
+		}
+		for _, s := range internal {
 			ap, err := netip.ParseAddrPort(s)
 			if err != nil {
 				return nil, noopClose, nil, "", fmt.Errorf("egress isolation: parse internalAllow %q: %w", s, err)
@@ -507,7 +515,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 	if err != nil {
 		return nil, noopClose, nil, "", err
 	}
-	opts = append(opts, funcd.WithSQLCallTimeout(sqlCallTimeout))
+	opts = append(opts, funcd.WithSQLCallTimeout(sqlCallTimeout), funcd.WithSQLChangeFeedPort(cfg.SQL.ChangeFeedPort))
 
 	// Eventing DLQ + bounded action-delivery retry (ADR-0118, F85): its own dedicated Badger store at
 	// Eventing.Deadletter.DataDir (default <dataDir>/deadletter; in-memory when the substrate is memory).
