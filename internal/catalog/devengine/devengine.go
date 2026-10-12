@@ -344,7 +344,8 @@ func buildInitSQL(extDir, localCatalog, addr string, env map[string]string) stri
 	// default catalog (verified), so the consumer qualifies with `lakehouse` / `USE lakehouse` — no
 	// init-time `USE` here (it wouldn't carry to served queries). Needs the S3 secret to exist first.
 	if cat := env["FUNCD_DUCKLAKE_CATALOG"]; cat != "" {
-		fmt.Fprintf(&b, "ATTACH %s AS lakehouse (DATA_PATH %s);\n",
+		// OVERRIDE_DATA_PATH: a catalog restored under another prefix (ADR-0222 asCatalog) records its old one
+		fmt.Fprintf(&b, "ATTACH %s AS lakehouse (DATA_PATH %s, OVERRIDE_DATA_PATH TRUE);\n",
 			sqlStr("ducklake:sqlite:"+localCatalog), sqlStr(dataPathFor(cat)))
 	}
 

@@ -239,7 +239,7 @@ func TestBuildInitSQLAttachesDuckLake(t *testing.T) {
 	}
 	sql := buildInitSQL("/ext", "/tmp/catalog.db", "127.0.0.1:5555", env)
 	for _, want := range []string{
-		"ATTACH 'ducklake:sqlite:/tmp/catalog.db' AS lakehouse (DATA_PATH 's3://releves/gold/')",
+		"ATTACH 'ducklake:sqlite:/tmp/catalog.db' AS lakehouse (DATA_PATH 's3://releves/gold/', OVERRIDE_DATA_PATH TRUE)",
 		"CREATE OR REPLACE SECRET funcd_dev_s3",
 		"quack_serve",
 	} {

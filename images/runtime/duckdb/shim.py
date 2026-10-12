@@ -214,8 +214,10 @@ def main() -> int:
     # Recover: GetObject the catalog from blob → local file → ATTACH (fresh on first deploy). The
     # Parquet DATA_PATH is the owned prefix on S3 (the F47 surface); the catalog is the local SQLite.
     _recover_catalog(s3, bucket, key)
+    # OVERRIDE_DATA_PATH: a catalog restored under another prefix (ADR-0222 asCatalog) records its old
+    # DATA_PATH, which DuckLake refuses to replace otherwise; the data files are relative to it.
     con.execute(
-        "ATTACH 'ducklake:sqlite:" + LOCAL_CATALOG + "' AS lakehouse (DATA_PATH ?)",
+        "ATTACH 'ducklake:sqlite:" + LOCAL_CATALOG + "' AS lakehouse (DATA_PATH ?, OVERRIDE_DATA_PATH TRUE)",
         [data_path],
     )
 
