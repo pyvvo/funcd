@@ -115,12 +115,13 @@ type FunctionStep struct {
 	// Pooling overrides the workflow-level pooling for this step's materialized Function
 	// (nil ⇒ inherit spec.pooling); image steps only.
 	Pooling *WorkflowPooling `json:"pooling,omitempty"`
-	// KV/Blob/Secrets/Config/Catalogs are the step's bindings (Function.spec shapes).
+	// KV/Blob/Secrets/Config/Catalogs/SQL are the step's bindings (Function.spec shapes).
 	KV       []FunctionKV      `json:"kv,omitempty"`
 	Blob     []FunctionBlob    `json:"blob,omitempty"`
 	Secrets  []ObjectName      `json:"secrets,omitempty"`
 	Config   []ObjectName      `json:"config,omitempty"`
 	Catalogs []FunctionCatalog `json:"catalogs,omitempty"`
+	SQL      []FunctionSQL     `json:"sql,omitempty"`
 }
 
 // BuiltinStep is an engine-native step (ADR-0096) — a nested kind-union of exactly one of Wait /
@@ -394,7 +395,7 @@ func (s *WorkflowStep) validateBindings(op string, i int) error {
 	if f == nil || f.Image == "" {
 		return nil
 	}
-	spec := FunctionSpec{KV: f.KV, Blob: f.Blob, Config: f.Config, Catalogs: f.Catalogs}
+	spec := FunctionSpec{KV: f.KV, Blob: f.Blob, Config: f.Config, Catalogs: f.Catalogs, SQL: f.SQL}
 	return spec.validateBindings(op, fmt.Sprintf("spec.steps[%d].function", i))
 }
 

@@ -18,11 +18,13 @@ type ReadChecker interface {
 }
 
 // CheckerDeps are what the dependency check reads: the metastore, the binding Facades' resolve and read
-// authorization, the link resolver, the PDP and the prober's memory. A nil KV, Blob or Links skips that kind.
+// authorization, the link resolver, the PDP and the prober's memory. A nil KV, Blob, SQL or Links skips that kind.
+// SQL's CheckRead also checks that the database's engine is Ready (ADR-0233 Decision 8); it has no prober target.
 type CheckerDeps struct {
 	Store  local.FunctionStore
 	KV     ReadChecker
 	Blob   ReadChecker
+	SQL    ReadChecker
 	Links  local.Resolver
 	Authz  auth.Authorizer
 	Health *Prober
@@ -33,7 +35,7 @@ func NewChecker(d CheckerDeps) local.DependencyChecker { return checker{d} }
 
 type checker struct{ d CheckerDeps }
 
-// Check checks caller's spec.kv, then spec.blob, then spec.links entries in order and returns the first failure. It
+// Check checks caller's spec.kv, then spec.blob, then spec.sql, then spec.links entries in order and returns the first failure. It
 // calls no worker, activator or storage engine and writes nothing. A binding reached after ctx is done is a Timeout.
 func (c checker) Check(ctx context.Context, caller local.Ref) *local.DependencyReport {
 	obj, err := c.d.Store.Get(ctx, v1.KindFunction.GVK(), caller.Namespace, caller.Function)
@@ -58,6 +60,16 @@ func (c checker) Check(ctx context.Context, caller local.Ref) *local.DependencyR
 		for _, b := range fn.Spec.Blob {
 			if r := c.read(ctx, caller, local.DependencyBlob, b.Alias, c.d.Blob, TargetBlob); r != nil {
 				return r
+			}
+		}
+	}
+	if c.d.SQL != nil {
+		for _, b := range fn.Spec.SQL {
+			if r := timedOut(ctx, local.DependencySQL, b.Alias); r != nil {
+				return r
+			}
+			if err := c.d.SQL.CheckRead(ctx, caller.Namespace, caller.Function, b.Alias); err != nil {
+				return &local.DependencyReport{Kind: local.DependencySQL, Binding: b.Alias, Reason: reasonOf(ctx, err), Message: messageOf(err)}
 			}
 		}
 	}
@@ -143,6 +155,8 @@ func reasonOf(ctx context.Context, err error) string {
 	switch {
 	case errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil:
 		return local.ReasonTimeout
+	case errors.Is(err, local.ErrEngineNotReady):
+		return local.ReasonEngineNotReady
 	case fault.KindOf(err) == fault.Forbidden:
 		return local.ReasonForbidden
 	case fault.KindOf(err) == fault.NotFound:

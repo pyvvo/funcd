@@ -82,6 +82,12 @@ const (
 	// Catalog-scoped RolesAssignment grants it to an external Identity. Resource = a CatalogService.
 	// Read-shaped (a Cedar permit, never a writers entry). The catalog PEP proxy is the enforcement point.
 	ActionCatalogQuery Action = "catalog::query"
+	// ActionSQLRead is the Cedar action for a SQL query, and half of an execute, on a SQLDatabase (ADR-0233): a
+	// declared spec.sql binding grants it.
+	ActionSQLRead Action = "sql::read"
+	// ActionSQLWrite is the Cedar action for a SQL execute (ADR-0233): permitted only to the database's writers,
+	// its owner plus writer-role grants.
+	ActionSQLWrite Action = "sql::write"
 )
 
 // Identity is an authenticated principal (resolved by authn from a token / API key).

@@ -40,6 +40,9 @@ const (
 	// ADR-0117 (F81 egress): the ephemeral outbound destination — carries {ip, port, domains} attrs,
 	// materialized from the request EntityRef's Path (no MetaReader read). Its id is the "<ip>:<port>" prefix.
 	entityTypeNetDestination = "NetDestination"
+	// ADR-0233 (F129): a SQL database, the resource of sql::read and sql::write; a Function's spec.sql are its
+	// `sqlBindings`.
+	entityTypeSQLDatabase = "SQLDatabase"
 )
 
 // defaultRegistry is the assembled capability registry (ADR-0116): the three migrated capabilities
@@ -53,7 +56,7 @@ const (
 //
 //nolint:gochecknoglobals // the assembled default capability registry (ADR-0116)
 var defaultRegistry, _ = NewRegistry(
-	[]Capability{KVCapability(), InvokeCapability(), S3Capability(), EgressCapability(), CatalogCapability()},
+	[]Capability{KVCapability(), InvokeCapability(), S3Capability(), EgressCapability(), CatalogCapability(), SQLCapability()},
 	[]PrincipalSource{FunctionPrincipalSource(), CatalogServicePrincipalSource()},
 )
 
@@ -106,7 +109,7 @@ func (e scopeEntity) named() []scopeUID {
 func namespacedEntityType(t string) bool {
 	switch t {
 	case entityTypeFunction, entityTypeKVStore, entityTypeKVTable, entityTypeBucket, entityTypeBlobPrefix,
-		entityTypeS3Identity, entityTypeIdentity, entityTypeCatalogService:
+		entityTypeS3Identity, entityTypeIdentity, entityTypeCatalogService, entityTypeSQLDatabase:
 		return true
 	}
 	return false

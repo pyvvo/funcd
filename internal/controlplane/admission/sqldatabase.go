@@ -62,9 +62,9 @@ type sqlDatabaseDeletionProtection struct {
 	p SQLProber
 }
 
-// NewSQLDatabaseDeletionProtectionAdmission returns the Validating admission that refuses deleting a SQLDatabase
-// whose engine holds a user table, or whose data cannot be checked (fail closed). A controller's delete through the
-// store is not checked.
+// NewSQLDatabaseDeletionProtectionAdmission returns the Validating admission that refuses deleting a SQLDatabase that
+// a Function's spec.sql binds (ADR-0233 Decision 7), or whose engine holds a user table, or whose data cannot be
+// checked (fail closed). A controller's delete through the store is not checked.
 func NewSQLDatabaseDeletionProtectionAdmission(r StoreReader, p SQLProber) Admission {
 	return sqlDatabaseDeletionProtection{r: r, p: p}
 }
@@ -78,10 +78,30 @@ func (sqlDatabaseDeletionProtection) Handles(gvk v1.GroupVersionKind, op Operati
 
 func (a sqlDatabaseDeletionProtection) Admit(ctx context.Context, req Request) (v1.Object, error) {
 	const op = "admission.sqldatabase-deletion-protection"
-	if req.Old == nil || a.p == nil {
+	if req.Old == nil {
 		return req.Old, nil
 	}
 	meta := req.Old.GetObjectMeta()
+	if a.r != nil {
+		fns, lerr := a.r.List(ctx, v1.KindFunction.GVK(), meta.Namespace)
+		if lerr != nil {
+			return nil, fault.Wrapf(lerr, fault.Internal, op, "list functions in %q", meta.Namespace)
+		}
+		for _, o := range fns {
+			f, ok := o.(*v1.Function)
+			if !ok {
+				continue
+			}
+			for _, b := range f.Spec.SQL {
+				if b.Database == meta.Name {
+					return nil, fault.Conflictf(op, "SQLDatabase %q is bound by function %q (alias %q); remove the binding first", meta.Name, f.Name, b.Alias)
+				}
+			}
+		}
+	}
+	if a.p == nil {
+		return req.Old, nil
+	}
 	has, err := a.p.HasTables(ctx, meta.Namespace, meta.Name)
 	switch {
 	case fault.KindOf(err) == fault.Unavailable:

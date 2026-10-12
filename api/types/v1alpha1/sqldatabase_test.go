@@ -23,3 +23,35 @@ func TestSQLDatabaseValidate(t *testing.T) {
 		require.Equal(t, fault.Invalid, fault.KindOf(db(bad[0], bad[1]).Validate()), "%v", bad)
 	}
 }
+
+func TestSQLBindingValidate(t *testing.T) {
+	fn := func(sql ...v1.FunctionSQL) error {
+		f := &v1.Function{TypeMeta: v1.TypeMeta{APIVersion: v1.KindFunction.GVK().APIVersion(), Kind: v1.KindFunction}}
+		f.Name, f.Namespace, f.ResourceGroup = "todo-api", "default", "rg1"
+		f.Spec = v1.FunctionSpec{Runtime: "nodejs22", Handler: "handle", Image: "oci-layout://x:1", SQL: sql}
+		return f.Validate()
+	}
+	require.NoError(t, fn(v1.FunctionSQL{Alias: "app", Database: "todo-db"}, v1.FunctionSQL{Alias: "audit", Database: "todo-db"}))
+	for _, bad := range [][]v1.FunctionSQL{
+		{{Alias: "App", Database: "todo-db"}},
+		{{Alias: "app", Database: "Todo_DB"}},
+		{{Alias: "app", Database: "a"}, {Alias: "app", Database: "b"}},
+	} {
+		require.Equal(t, fault.Invalid, fault.KindOf(fn(bad...)), "%v", bad)
+	}
+
+	d := &v1.SQLDatabase{TypeMeta: v1.TypeMeta{APIVersion: v1.KindSQLDatabase.GVK().APIVersion(), Kind: v1.KindSQLDatabase}}
+	d.Name, d.Namespace, d.ResourceGroup = "todo-db", "default", "rg1"
+	d.Spec.Owner = "todo-api"
+	require.NoError(t, d.Validate())
+	d.Spec.Owner = "Todo API"
+	require.Equal(t, fault.Invalid, fault.KindOf(d.Validate()))
+
+	ra := &v1.RolesAssignment{TypeMeta: v1.TypeMeta{APIVersion: v1.KindRolesAssignment.GVK().APIVersion(), Kind: v1.KindRolesAssignment}}
+	ra.Name, ra.Namespace, ra.ResourceGroup = "writes", "default", "rg1"
+	ra.Spec = v1.RolesAssignmentSpec{
+		Principal:   &v1.PrincipalRef{Kind: v1.PrincipalKindFunction, Name: "todo-migrate"},
+		Assignments: []v1.AssignmentEntry{{RoleRef: v1.RoleRef{Kind: v1.RoleRefKindBuiltin, Name: "SQL Data Writer"}, Scope: &v1.ScopeRef{Kind: v1.ScopeKindSQLDatabase, Name: "todo-db"}}},
+	}
+	require.NoError(t, ra.Validate())
+}

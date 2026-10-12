@@ -270,3 +270,29 @@ func TestDependencyEndpointNeverCallsAWorker(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &rep))
 	require.Equal(t, local.DependencyReport{Kind: "kv", Binding: "audit", Reason: "Forbidden", Message: "kv::read denied"}, rep)
 }
+
+// ADR-0233 Decision 8: a spec.sql binding is checked after blob and before links; a database with no Ready engine
+// reports kind sql, reason EngineNotReady, and a denied read Forbidden.
+func TestCheckerSQL(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	sql := &readCheck{errs: map[string]error{}}
+	check := health.NewChecker(health.CheckerDeps{Store: f.st, KV: f.kv, Blob: f.blob, SQL: sql, Links: local.NewResolver(f.st), Authz: f.pdp, Health: f.prob})
+	f.fn("todo-api", "", func(fn *v1.Function) {
+		api(fn)
+		fn.Spec.SQL = []v1.FunctionSQL{{Alias: "app", Database: "todo-db"}}
+	})
+	f.fn("mailer", v1.PhaseIdle, nil)
+	caller := local.Ref{Namespace: ns, Function: "todo-api"}
+	require.Nil(t, check.Check(context.Background(), caller))
+	require.Equal(t, []string{"app"}, sql.calls)
+
+	sql.errs["app"] = fault.Wrapf(local.ErrEngineNotReady, fault.Unavailable, "sql.CheckRead", "the engine of SQLDatabase %q is not Ready", "todo-db")
+	f.pdp.asked = nil
+	require.Equal(t, &local.DependencyReport{Kind: "sql", Binding: "app", Reason: "EngineNotReady",
+		Message: `the engine of SQLDatabase "todo-db" is not Ready: the database's engine is not ready`}, check.Check(context.Background(), caller))
+	require.Empty(t, f.pdp.asked, "links are not checked after a sql failure")
+
+	sql.errs["app"] = fault.Forbiddenf("sql.authorize", "sql::read denied")
+	require.Equal(t, "Forbidden", check.Check(context.Background(), caller).Reason)
+}

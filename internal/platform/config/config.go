@@ -385,10 +385,12 @@ type Config struct {
 		DefaultIndex string `json:"defaultIndex,omitempty" env:"FUNCD_SITE_DEFAULT_INDEX" validate:"omitempty,startsnotwith=/"`
 	} `json:"site,omitempty"`
 
-	// SQL tunes the SQL databases (ADR-0232). MaxDatabasesPerNamespace is the per-namespace SQLDatabase count cap
-	// enforced at admission; 0 ⇒ the default (20); a negative value disables the quota.
+	// SQL tunes the SQL databases (ADR-0232, ADR-0233). MaxDatabasesPerNamespace is the per-namespace SQLDatabase
+	// count cap enforced at admission; 0 ⇒ the default (20); a negative value disables the quota. CallTimeout bounds
+	// one context.sql call, a positive duration; empty ⇒ 30s.
 	SQL struct {
-		MaxDatabasesPerNamespace int `json:"maxDatabasesPerNamespace,omitempty" env:"FUNCD_SQL_MAX_DATABASES_PER_NAMESPACE"`
+		MaxDatabasesPerNamespace int    `json:"maxDatabasesPerNamespace,omitempty" env:"FUNCD_SQL_MAX_DATABASES_PER_NAMESPACE"`
+		CallTimeout              string `json:"callTimeout,omitempty" env:"FUNCD_SQL_CALL_TIMEOUT"`
 	} `json:"sql,omitempty"`
 
 	// App tunes the App reconciler (ADR-0200). UpgradeTimeout bounds an upgrade, a duration more than

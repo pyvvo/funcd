@@ -21,9 +21,13 @@ const (
 	actionKVWrite      = "kv::write"
 	actionLinkInvoke   = "link::invoke"
 	actionCatalogQuery = "catalog::query" // == string(auth.ActionCatalogQuery); read-shaped (a permit, ADR-0137)
+	actionSQLRead      = "sql::read"
+	actionSQLWrite     = "sql::write"
 )
 
-func isWriteAction(a string) bool { return a == actionS3Write || a == actionKVWrite }
+func isWriteAction(a string) bool {
+	return a == actionS3Write || a == actionKVWrite || a == actionSQLWrite
+}
 
 // builtinRoles is the fixed DATA-PLANE role catalog (ADR-0136). Managing assignments is control-plane
 // RBAC (ADR-0018), a separate plane — so `Owner` here is full data read+write, not assignment management.
@@ -35,6 +39,9 @@ var builtinRoles = map[string][]string{
 	"KV Data Reader":   {actionKVRead},
 	"KV Data Writer":   {actionKVRead, actionKVWrite},
 	"Function Invoker": {actionLinkInvoke},
+	// ADR-0233: Reader, Contributor and Owner stay without SQL, so an existing namespace grant gains no database.
+	"SQL Data Reader": {actionSQLRead},
+	"SQL Data Writer": {actionSQLRead, actionSQLWrite},
 	// ADR-0137 (F102): catalog::query is read-shaped. "Catalog Contributor" is a forward-compat alias —
 	// byte-identical to the reader today, reserved to gain catalog::write when the deferred DDL grant lands.
 	"Catalog Query Reader": {actionCatalogQuery},
@@ -50,11 +57,12 @@ type RoleResolver interface {
 }
 
 // WriterLister returns the writer principal UIDs (beyond the legacy owner) authorized to WRITE a blob
-// prefix / kv table, from writer-role RolesAssignments (ADR-0136). It backs the generalized single-writer
+// prefix / kv table / SQL database, from writer-role RolesAssignments (ADR-0136). It backs the generalized single-writer
 // forbid's `writers` set. A nil WriterLister ⇒ owner-only writers (back-compat, no role grants).
 type WriterLister interface {
 	BlobWriters(ctx context.Context, ns v1.NamespaceName, bucket, prefix string) []cedartypes.EntityUID
 	KVWriters(ctx context.Context, ns v1.NamespaceName, store, table string) []cedartypes.EntityUID
+	SQLWriters(ctx context.Context, ns v1.NamespaceName, database string) []cedartypes.EntityUID
 }
 
 // storeRoleResolver resolves built-in roles from the catalog and custom Roles from the metastore.
@@ -187,6 +195,10 @@ func scopeHead(ns v1.NamespaceName, s v1.ScopeRef) (resHead estNode, whenBody es
 		// catalog (it does not leak past its scope).
 		id := string(ns) + "/" + s.Name
 		return map[string]estNode{"op": "==", "entity": map[string]estNode{"type": entityTypeCatalogService, "id": id}}, nil, true
+	case v1.ScopeKindSQLDatabase:
+		// name is "<database>" → SQLDatabase::"<ns>/<database>" (ADR-0233).
+		id := string(ns) + "/" + s.Name
+		return map[string]estNode{"op": "==", "entity": map[string]estNode{"type": entityTypeSQLDatabase, "id": id}}, nil, true
 	case v1.ScopeKindKVStore:
 		// name is "<store>" (whole store → resource in KVStore) or "<store>/<table>" (exact table).
 		if strings.Contains(s.Name, "/") {
@@ -200,10 +212,12 @@ func scopeHead(ns v1.NamespaceName, s v1.ScopeRef) (resHead estNode, whenBody es
 	}
 }
 
-// WriterGrant is one principal authorized to WRITE a scope (a s3::write / kv::write grant).
+// WriterGrant is one principal authorized to WRITE a scope (a s3::write / kv::write / sql::write grant), with the
+// write actions it holds.
 type WriterGrant struct {
 	Principal cedartypes.EntityUID
 	Scope     v1.ScopeRef
+	Writes    []string
 }
 
 // WriterGrants returns the write-authorizing (principal, scope) grants of a RolesAssignment — consumed by
@@ -219,9 +233,16 @@ func WriterGrants(ctx context.Context, ra *v1.RolesAssignment, roles RoleResolve
 			continue
 		}
 		pType, pID := principalEntity(ra.Namespace, e.principal)
+		var writes []string
+		for _, a := range e.actions {
+			if isWriteAction(a) {
+				writes = append(writes, a)
+			}
+		}
 		out = append(out, WriterGrant{
 			Principal: cedartypes.NewEntityUID(cedartypes.EntityType(pType), cedartypes.String(pID)),
 			Scope:     e.scope,
+			Writes:    writes,
 		})
 	}
 	return out

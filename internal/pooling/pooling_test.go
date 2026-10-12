@@ -1,6 +1,8 @@
 package pooling_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -196,4 +198,15 @@ func TestPoolFullNamesThePool(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, got.Rejected)
 	require.Equal(t, "pool "+keyOf(b2).String()+" is full (1); use another pooling.worker", got.Reason)
+}
+
+// ADR-0233: a SQL binding is access, so it splits pools; a Function with none keeps the key it had before spec.sql.
+func TestAccessHashOfCountsSQL(t *testing.T) {
+	plain := v1.FunctionSpec{KV: []v1.FunctionKV{{Alias: "a", Store: "s", Table: "t"}}}
+	withSQL := plain
+	withSQL.SQL = []v1.FunctionSQL{{Alias: "app", Database: "todo-db"}}
+	require.NotEqual(t, pooling.AccessHashOf(plain, nil, nil), pooling.AccessHashOf(withSQL, nil, nil))
+	before := sha256.Sum256([]byte(`{"kv":[],"blob":[],"catalogs":[],"links":[],"secrets":[],"config":[],"owned":[],"grants":[]}`))
+	require.Equal(t, hex.EncodeToString(before[:])[:16], pooling.AccessHashOf(v1.FunctionSpec{}, nil, nil),
+		"the document of a Function with no spec.sql is the one before spec.sql existed")
 }

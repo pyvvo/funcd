@@ -290,6 +290,8 @@ type config struct {
 	catalogProvider provider.Runtime
 	// sqlProvider overrides the SQLDatabase engine runtime (ADR-0232); nil ⇒ the production runtime.
 	sqlProvider provider.Runtime
+	// sqlCallTimeout bounds one context.sql call (ADR-0233, sql.callTimeout); 0 ⇒ 30 s.
+	sqlCallTimeout time.Duration
 
 	// providerStorage is the root of the add-on engines' durable directories (ADR-0231); "" ⇒ none.
 	providerStorage string
@@ -618,7 +620,8 @@ func (p *Platform) buildControlPlane() error {
 	cedarRegistry, err := cedarauth.NewRegistry(
 		// ADR-0137 (F102): CatalogCapability makes the live PDP understand catalog::query; the per-CatalogService
 		// PEP proxy that calls it is not yet wired here — see TODO(ADR-0137) in internal/services/catalog/reconcile.go.
-		[]cedarauth.Capability{cedarauth.KVCapabilityWithWriters(writerLister), cedarauth.InvokeCapability(), s3Cap, cedarauth.EgressCapability(), cedarauth.CatalogCapability()},
+		[]cedarauth.Capability{cedarauth.KVCapabilityWithWriters(writerLister), cedarauth.InvokeCapability(), s3Cap, cedarauth.EgressCapability(), cedarauth.CatalogCapability(),
+			cedarauth.SQLCapabilityWithWriters(writerLister)},
 		[]cedarauth.PrincipalSource{cedarauth.FunctionPrincipalSource(), cedarauth.CatalogServicePrincipalSource()},
 	)
 	if err != nil {
@@ -678,15 +681,43 @@ func (p *Platform) buildControlPlane() error {
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build storage prober")
 	}
+	// The node master secret (ADR-0085): the SAME 32-byte key the S3 gateway derives per-function
+	// SigV4 keypairs from, the catalog PEP proxy derives/verifies per-function catalog tokens with
+	// (ADR-0137) and the SQL engines' passwords come from (ADR-0232). Loaded ONCE here — before the SQL
+	// facade, the s3gw and the catalog wiring — so they share one master (LoadOrCreateMaster is
+	// deterministic per file/dir, but loading twice risks generating two different keys on a first run).
+	// Never logged.
+	master := c.masterSecret
+	if master == nil {
+		if merr := s3gateway.MigrateMaster(c.s3gwMasterFile, c.s3gwDataDir, c.s3gwEnabled, p.logger); merr != nil {
+			return fault.Wrapf(merr, fault.KindOf(merr), op, "migrate node master secret")
+		}
+		var merr error
+		if master, merr = s3gateway.LoadOrCreateMaster(c.s3gwMasterFile, c.s3gwDataDir); merr != nil {
+			return fault.Wrapf(merr, fault.KindOf(merr), op, "load node master secret")
+		}
+	}
+	// ADR-0233: the SQL facade, context.sql's PEP, over the engines the SQLDatabase reconciler records.
+	sqlEngines := sqlsvc.NewEngines()
+	sqlResolver, err := sqlsvc.NewResolver(metaReader{c.store})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build SQL binding resolver")
+	}
+	sqlFacade, err := sqlsvc.NewFacade(sqlsvc.FacadeDeps{
+		Resolver: sqlResolver, Authorizer: cedarPDP, Engines: sqlEngines, Master: master, CallTimeout: c.sqlCallTimeout, Logger: p.logger,
+	})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build SQL facade")
+	}
 	deps := health.NewChecker(health.CheckerDeps{
-		Store: c.store, KV: kvFacade, Blob: blobCheck, Links: local.NewResolver(c.store), Authz: cedarPDP, Health: p.prober,
+		Store: c.store, KV: kvFacade, Blob: blobCheck, SQL: sqlFacade, Links: local.NewResolver(c.store), Authz: cedarPDP, Health: p.prober,
 	})
 	nestedCap := c.nestedInFlightCap
 	if nestedCap == 0 {
 		nestedCap = defaultNestedInFlightCap
 	}
 	invoker := local.NewNestedCapInvoker(local.NewInvoker(dpHolder), nestedCap, invokeMeter(c.telemetry))
-	p.invokeMgr = local.NewManager(invokeSockDir, c.store, invoker, cedarPDP, kvFacade, blobPort, deps, p.logger)
+	p.invokeMgr = local.NewManager(invokeSockDir, c.store, invoker, cedarPDP, kvFacade, blobPort, deps, p.logger, local.WithSQL(sqlFacade))
 
 	// Egress gateway + DNS forwarder (ADR-0117, F81): the sole egress PEP + the domain trust anchor.
 	// Wired only when enabled (Linux/containerd only; egress.New is a no-op elsewhere, mirroring F80).
@@ -715,22 +746,7 @@ func (p *Platform) buildControlPlane() error {
 	// S3 gateway (ADR-0080/0085): opt-in S3-protocol frontend over the blob substrate, reusing the
 	// cedar PDP as the PEP. When enabled, build the server and expose the per-function keypair deriver to
 	// the reconciler for worker-env injection. Disabled ⇒ nothing is built (no listener, no IAM, no
-	// injection) — zero-config unchanged. The master below is loaded either way (ADR-0204 Decision 7).
-	// The node master secret (ADR-0085): the SAME 32-byte key the S3 gateway derives per-function
-	// SigV4 keypairs from AND the catalog PEP proxy derives/verifies per-function catalog tokens with
-	// (ADR-0137). Loaded ONCE here — before both the s3gw and the catalog wiring — so they share one
-	// master (LoadOrCreateMaster is deterministic per file/dir, but loading twice risks generating two
-	// different keys on a first run). Never logged.
-	master := c.masterSecret
-	if master == nil {
-		if merr := s3gateway.MigrateMaster(c.s3gwMasterFile, c.s3gwDataDir, c.s3gwEnabled, p.logger); merr != nil {
-			return fault.Wrapf(merr, fault.KindOf(merr), op, "migrate node master secret")
-		}
-		var merr error
-		if master, merr = s3gateway.LoadOrCreateMaster(c.s3gwMasterFile, c.s3gwDataDir); merr != nil {
-			return fault.Wrapf(merr, fault.KindOf(merr), op, "load node master secret")
-		}
-	}
+	// injection) — zero-config unchanged. The master is loaded either way (ADR-0204 Decision 7), above.
 
 	var s3Injection function.S3GatewayInjection
 	if c.s3gwEnabled {
@@ -926,7 +942,7 @@ func (p *Platform) buildControlPlane() error {
 	// a held revision's wake or reclaim is written to its Revision's status (ADR-0190 Decision 5)
 	ctrl.Watches(v1.KindRevision.GVK(), fnReconciler.MapRevision)
 	// a change to what a namespace grants its Functions can move a pooled one to another pool
-	for _, k := range []v1.Kind{v1.KindKVStore, v1.KindBucket, v1.KindRolesAssignment, v1.KindEgressPolicy, v1.KindPolicy} {
+	for _, k := range []v1.Kind{v1.KindKVStore, v1.KindBucket, v1.KindSQLDatabase, v1.KindRolesAssignment, v1.KindEgressPolicy, v1.KindPolicy} {
 		ctrl.Watches(k.GVK(), fnReconciler.MapAccess)
 	}
 	ctrl.Watches(v1.KindFunction.GVK(), fnReconciler.MapPoolDisplaced) // an asleep member a newcomer displaces (ADR-0193)
@@ -1067,13 +1083,14 @@ func (p *Platform) buildControlPlane() error {
 		}
 	}
 	sqlReconciler, err := sqlsvc.NewReconciler(sqlsvc.ReconcilerDeps{
-		Store: c.store, Provider: sqlRuntime, Engines: sqlsvc.NewEngines(), Master: master, ImageFor: c.imageFor,
+		Store: c.store, Provider: sqlRuntime, Engines: sqlEngines, Master: master, ImageFor: c.imageFor,
 		Hold: c.gate(), Logger: p.logger, SupervisionPeriod: c.pacing.SupervisionPeriod,
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build SQLDatabase reconciler")
 	}
 	ctrl.Register(v1.KindSQLDatabase.GVK(), sqlReconciler)
+	ctrl.Watches(v1.KindFunction.GVK(), sqlReconciler.MapFunction) // status.bindings counts Function.spec.sql
 	p.sqlReconciler = sqlReconciler
 
 	// ADR-0135 (F100): the Identity credential-issuing reconciler — issues a keypair→owned Secret and

@@ -503,6 +503,11 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 		return nil, noopClose, nil, "", err
 	}
 	opts = append(opts, funcd.WithPacing(pace), funcd.WithAppRevisionHistory(cfg.App.RevisionHistory))
+	sqlCallTimeout, err := parseDuration("sql.callTimeout", cfg.SQL.CallTimeout, 30*time.Second, minPositive, v1.MaxDuration)
+	if err != nil {
+		return nil, noopClose, nil, "", err
+	}
+	opts = append(opts, funcd.WithSQLCallTimeout(sqlCallTimeout))
 
 	// Eventing DLQ + bounded action-delivery retry (ADR-0118, F85): its own dedicated Badger store at
 	// Eventing.Deadletter.DataDir (default <dataDir>/deadletter; in-memory when the substrate is memory).

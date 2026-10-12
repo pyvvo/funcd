@@ -18,10 +18,11 @@ type SQLDatabase struct {
 	Status     SQLDatabaseStatus `json:"status,omitempty"`
 }
 
-// SQLDatabaseSpec is the desired state of a SQLDatabase: the engine's cpu and memory bounds. An empty memory bound
-// means the reconciler's default (256Mi); the spec is not rewritten.
+// SQLDatabaseSpec is the desired state of a SQLDatabase: the engine's cpu and memory bounds and the Function that may
+// write (ADR-0233). An empty memory bound means the reconciler's default (256Mi); the spec is not rewritten.
 type SQLDatabaseSpec struct {
 	Resources ResourceSpec `json:"resources,omitempty"`
+	Owner     ObjectName   `json:"owner,omitempty"`
 }
 
 // SQLDatabaseStatus is the observed state of a SQLDatabase. Bindings counts the Functions that bind it.
@@ -46,6 +47,9 @@ func (d *SQLDatabase) Validate() error {
 	}
 	if m := strings.TrimSpace(d.Spec.Resources.Memory); m != "" && !memoryQuantity.MatchString(m) {
 		return fault.Invalidf(op, "spec.resources.memory %q is not a size such as 64Mi or 1Gi", d.Spec.Resources.Memory)
+	}
+	if d.Spec.Owner != "" && !dnsLabel.MatchString(string(d.Spec.Owner)) {
+		return fault.Invalidf(op, "spec.owner %q is not a valid Function name", d.Spec.Owner)
 	}
 	if c := strings.TrimSpace(d.Spec.Resources.CPU); c != "" {
 		if n, err := strconv.ParseFloat(c, 64); err != nil || n <= 0 {

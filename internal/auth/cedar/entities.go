@@ -195,6 +195,8 @@ func resourceUID(res auth.EntityRef) (cedartypes.EntityUID, error) {
 		// ADR-0137 (F102): the catalog::query resource — CatalogService::"<ns>/<catalog>", byte-matching
 		// what CatalogCapability.Resource emits and a Function's catalogBindings members.
 		return catalogServiceUID(res.Namespace, res.Name), nil
+	case v1.KindSQLDatabase:
+		return sqlDatabaseUID(res.Namespace, res.Name), nil
 	case v1.KindNetDestination:
 		// ADR-0117 (F81): the egress destination — its UID is the Path's "<ip>:<port>" prefix,
 		// byte-matching what EgressCapability.Resource emits (mirroring principalUID's S3Identity case).

@@ -475,6 +475,7 @@ func buildFunction(wf *v1.Workflow, st *v1.WorkflowStep, rt v1.RuntimeName, owne
 			Secrets:  st.Function.Secrets,
 			Config:   st.Function.Config,
 			Catalogs: st.Function.Catalogs,
+			SQL:      st.Function.SQL,
 		},
 	}
 	if pool.Mode != v1.PoolingIsolated { // shared (default): co-locate under a pool worker

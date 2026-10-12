@@ -1,0 +1,156 @@
+# Venom e2e suite for the sql containerd lane (ADR-0232, ADR-0233), run host-side once the Lima VM is Ready. The
+# functions come from funcd-functions (apps/todo): notes, a TypeScript owner of SQLDatabase notes-db whose Drizzle
+# schema runs through context.sql, and notes-report, a Python reader whose SQLModel models compile with the SQLite
+# dialect. One rqlite engine serves notes-db from a durable directory.
+#   S1 the owner creates its table and writes; both runtimes read the rows (bound-function-reads, owner-writes).
+#   S2 the reader's write is refused (non-writer-write-refused).
+#   S3 a batch whose second statement fails applies none (batch-is-all-or-nothing).
+#   S4 the rows survive a kill of the engine and a restart of the daemon (ADR-0231 durable storage).
+name: sql — SQL databases on real containerd (ADR-0232, ADR-0233)
+
+vars:
+  dp: http://127.0.0.1:8081
+  vmsh: "limactl shell --workdir / {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token bash -c"
+  ctr: "/var/lib/funcd/bin/ctr --address /var/lib/funcd/data/containerd/containerd.sock -n funcd-default"
+
+testcases:
+  - name: S1 the owner creates its table and writes, and both runtimes read the rows
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/notes"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"init"}}'
+        retry: 30
+        delay: 2
+        info: "init → {{.result.statuscode}} {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/notes"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"add","title":"milk"}}'
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.added.title ShouldEqual milk
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/notes"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"add","title":"eggs"}}'
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.added.title ShouldEqual eggs
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/notes"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"list"}}'
+        info: "list → {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.notes ShouldHaveLength 2
+          - result.bodyjson.notes.notes0.title ShouldEqual milk
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/notes-report"
+        headers:
+          content-type: application/json
+        body: '{"data":{}}'
+        retry: 15
+        delay: 2
+        info: "report → {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.count ShouldEqual 2
+          - result.body ShouldContainSubstring '"titles":["milk","eggs"]'
+
+  - name: S2 the reader binds the database but its write is refused
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/notes-report"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"write"}}'
+        info: "write → {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.error ShouldContainSubstring 403
+          - result.bodyjson.error ShouldContainSubstring "sql::write"
+
+  - name: S3 a batch whose second statement fails applies none of its statements
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/notes"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"batch","titles":["bread",null,"jam"]}}'
+        info: "batch → {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.error ShouldContainSubstring "statement 1"
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/notes"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"list"}}'
+        assertions:
+          - result.bodyjson.notes ShouldHaveLength 2
+
+  - name: S4 the rows survive a kill of the engine and a restart of the daemon
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            t=$({{.ctr}} task ls | awk "\$1 ~ /^notes-db-r[0-9]+$/ && \$3 == \"RUNNING\" {print \$1}" | head -1)
+            echo "engine $t" >&2
+            [ -n "$t" ] && {{.ctr}} task kill -s SIGKILL "$t" && echo KILLED'
+        info: "the engine kill → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring KILLED
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/notes"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"list"}}'
+        retry: 30
+        delay: 2
+        info: "list after the engine kill → {{.result.statuscode}} {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.notes ShouldHaveLength 2
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            systemctl stop funcd-demo
+            systemctl reset-failed funcd-demo 2>/dev/null || true
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 /usr/local/bin/funcd --config /opt/lane/funcdconfig.yaml
+            curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
+            systemctl is-active --quiet funcd-demo || { journalctl -u funcd-demo --no-pager -n 60; exit 1; }
+            echo RESTARTED'
+        info: "the daemon restart → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring RESTARTED
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/notes-report"
+        headers:
+          content-type: application/json
+        body: '{"data":{}}'
+        retry: 45
+        delay: 2
+        info: "report after the restart → {{.result.statuscode}} {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.count ShouldEqual 2

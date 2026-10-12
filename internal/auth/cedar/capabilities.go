@@ -29,6 +29,9 @@ var builtinS3Policies string
 //go:embed builtin_catalog.cedar
 var builtinCatalogPolicies string
 
+//go:embed builtin_sql.cedar
+var builtinSQLPolicies string
+
 // --- Cedar UID builders (the entity ID encodes the resource's namespaced identity) ----------------
 // Shared by the capability materializers below and by principalUID/resourceUID (the driver's request
 // path in cedar.go).
@@ -71,6 +74,12 @@ func identityUID(ns v1.NamespaceName, name v1.ObjectName) cedartypes.EntityUID {
 // matches.
 func catalogServiceUID(ns v1.NamespaceName, name v1.ObjectName) cedartypes.EntityUID {
 	return cedartypes.NewEntityUID(entityTypeCatalogService, cedartypes.String(string(ns)+"/"+string(name)))
+}
+
+// sqlDatabaseUID is the SQLDatabase UID (ADR-0233): SQLDatabase::"<ns>/<database>", byte-identical to a
+// `sqlBindings` member so `principal.sqlBindings.contains(resource)` matches.
+func sqlDatabaseUID(ns v1.NamespaceName, name v1.ObjectName) cedartypes.EntityUID {
+	return cedartypes.NewEntityUID(entityTypeSQLDatabase, cedartypes.String(string(ns)+"/"+string(name)))
 }
 
 // KVCapability is the kv::read/kv::write capability (ADR-0074/0076): spec.kv → the `kvBindings` Set of
@@ -499,6 +508,78 @@ func netDestinationResource(_ context.Context, _ MetaReader, resource auth.Entit
 		"ip":      ipVal,
 		"port":    cedartypes.Long(nd.Port),
 		"domains": cedartypes.NewSet(domainVals...),
+	}
+	return cedartypes.EntityMap{uid: {UID: uid, Attributes: cedartypes.NewRecord(attrs)}}, true, nil
+}
+
+// SQLCapability is the sql::read/sql::write capability (ADR-0233): spec.sql → the `sqlBindings` Set of SQLDatabase
+// entity-refs (read binding-as-grant); the resource is the SQLDatabase with its owner and `writers`. Owner-only writers.
+func SQLCapability() Capability { return sqlCapability(nil) }
+
+// SQLCapabilityWithWriters is SQLCapability with a WriterLister, so a writer-role RolesAssignment joins a database's
+// `writers` set (ADR-0136).
+func SQLCapabilityWithWriters(w WriterLister) Capability { return sqlCapability(w) }
+
+func sqlCapability(writers WriterLister) Capability {
+	return Capability{
+		Name:            "sql",
+		Actions:         []auth.Action{auth.ActionSQLRead, auth.ActionSQLWrite},
+		EmitsEntityType: entityTypeSQLDatabase,
+		Resource: func(ctx context.Context, r MetaReader, resource auth.EntityRef) (cedartypes.EntityMap, bool, error) {
+			return sqlResource(ctx, r, resource, writers)
+		},
+		PrincipalBinding: PrincipalBinding{
+			Attr: "sqlBindings",
+			Bind: func(ns v1.NamespaceName, src PrincipalObject) []cedartypes.EntityUID {
+				fn, ok := src.(*v1.Function)
+				if !ok {
+					return nil
+				}
+				out := make([]cedartypes.EntityUID, 0, len(fn.Spec.SQL))
+				for _, b := range fn.Spec.SQL {
+					out = append(out, sqlDatabaseUID(ns, b.Database))
+				}
+				return out
+			},
+		},
+		Builtin: builtinSQLPolicies,
+	}
+}
+
+// sqlResource materializes the SQLDatabase with namespace, resourceGroup, owner and writers (ADR-0233). ok==false for
+// another resource; a missing database is a bare entity with its namespace (default-deny for writes).
+func sqlResource(ctx context.Context, r MetaReader, resource auth.EntityRef, writers WriterLister) (cedartypes.EntityMap, bool, error) {
+	const op = "cedar.SQLCapability.Resource"
+	if resource.Type != v1.KindSQLDatabase {
+		return nil, false, nil
+	}
+	uid := sqlDatabaseUID(resource.Namespace, resource.Name)
+	attrs := cedartypes.RecordMap{"namespace": cedartypes.String(resource.Namespace)}
+	obj, err := r.Get(ctx, v1.KindSQLDatabase.GVK(), resource.Namespace, resource.Name)
+	switch {
+	case fault.KindOf(err) == fault.NotFound:
+		return cedartypes.EntityMap{uid: {UID: uid, Attributes: cedartypes.NewRecord(attrs)}}, true, nil
+	case err != nil:
+		return nil, false, fault.Wrapf(err, fault.Internal, op, "get sqldatabase %q", resource.Name)
+	}
+	db, ok := obj.(*v1.SQLDatabase)
+	if !ok {
+		return nil, false, fault.Internalf(op, "object %q is not a SQLDatabase", resource.Name)
+	}
+	attrs["resourceGroup"] = cedartypes.String(db.ResourceGroup)
+	var writerVals []cedartypes.Value
+	if db.Spec.Owner != "" {
+		ownerUID := functionUID(db.Namespace, db.Spec.Owner)
+		attrs["owner"] = ownerUID
+		writerVals = append(writerVals, ownerUID)
+	}
+	if writers != nil {
+		for _, w := range writers.SQLWriters(ctx, resource.Namespace, string(resource.Name)) {
+			writerVals = append(writerVals, w)
+		}
+	}
+	if len(writerVals) > 0 {
+		attrs["writers"] = cedartypes.NewSet(writerVals...)
 	}
 	return cedartypes.EntityMap{uid: {UID: uid, Attributes: cedartypes.NewRecord(attrs)}}, true, nil
 }

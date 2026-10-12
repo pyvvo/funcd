@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -25,7 +26,8 @@ type engineResult struct {
 }
 
 // call POSTs statements to an engine endpoint (/db/query or /db/execute) as user funcd and decodes rqlite's results.
-// A refused connection or a timeout is Unavailable, a 401 Internal (the password never appears in the error).
+// A refused connection or a timeout is Unavailable, a 401 Internal; neither the password nor the address appears in
+// the error.
 func call(ctx context.Context, client *http.Client, addr, password, path string, query url.Values, stmts []json.RawMessage) ([]engineResult, error) {
 	const op = "sql.engine"
 	body, err := json.Marshal(stmts)
@@ -35,18 +37,23 @@ func call(ctx context.Context, client *http.Client, addr, password, path string,
 	u := url.URL{Scheme: "http", Host: addr, Path: path, RawQuery: query.Encode()}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(body))
 	if err != nil {
-		return nil, fault.Wrapf(err, fault.Internal, op, "build the engine request")
+		return nil, fault.Internalf(op, "build the engine request")
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.SetBasicAuth(engineargs.User, password)
+	// A transport error names the engine's address, which must not reach the caller or the logs (ADR-0233 Decision 4),
+	// so it is not wrapped.
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fault.Wrapf(err, fault.Unavailable, op, "the database's engine does not answer")
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, fault.Unavailablef(op, "the database's engine did not answer in time")
+		}
+		return nil, fault.Unavailablef(op, "the database's engine does not answer")
 	}
 	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxEngineResponse+1))
 	if err != nil {
-		return nil, fault.Wrapf(err, fault.Unavailable, op, "read the engine's answer")
+		return nil, fault.Unavailablef(op, "the engine's answer broke off")
 	}
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized:

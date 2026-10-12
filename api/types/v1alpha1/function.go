@@ -115,6 +115,16 @@ type FunctionSpec struct {
 	// bound catalog is Ready. Empty ⇒ no catalog consumption. Cross-resource validity (the catalog
 	// exists) is an admission; only the structural rules (alias is a unique DNS-1123 label) are Validate.
 	Catalogs []FunctionCatalog `json:"catalogs,omitempty"`
+	// SQL declares this function's SQL database bindings (ADR-0233, F129): each binds a local alias to a
+	// SQLDatabase in this namespace, reached through context.sql. The binding is the read grant; writes need the
+	// database's owner or a writer role. A missing database holds the Function Pending (SQLDatabaseNotFound).
+	SQL []FunctionSQL `json:"sql,omitempty"`
+}
+
+// FunctionSQL binds this function to a SQLDatabase of its namespace under a local alias (ADR-0233).
+type FunctionSQL struct {
+	Alias    string     `json:"alias" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"`
+	Database ObjectName `json:"database"`
 }
 
 // FunctionCatalog binds this function to a CatalogService it consumes (ADR-0091, F61). Declaring the
@@ -313,6 +323,21 @@ func (s *FunctionSpec) validateBindings(op, prefix string) error {
 		catSeen[c.Alias] = true
 		if !dnsLabel.MatchString(string(c.Catalog)) {
 			return fault.Invalidf(op, "%s.catalogs[%s].catalog %q is not a valid CatalogService name", prefix, c.Alias, c.Catalog)
+		}
+	}
+	// SQL binding structural rules (ADR-0233): alias is a DNS-1123 label, unique within SQL; database is a
+	// DNS-1123 name. The database's existence is reconcile-time (SQLDatabaseNotFound).
+	sqlSeen := make(map[string]bool, len(s.SQL))
+	for _, b := range s.SQL {
+		if !dnsLabel.MatchString(b.Alias) {
+			return fault.Invalidf(op, "%s.sql alias %q is not a valid DNS-1123 label", prefix, b.Alias)
+		}
+		if sqlSeen[b.Alias] {
+			return fault.Invalidf(op, "%s.sql alias %q is duplicated", prefix, b.Alias)
+		}
+		sqlSeen[b.Alias] = true
+		if !dnsLabel.MatchString(string(b.Database)) {
+			return fault.Invalidf(op, "%s.sql[%s].database %q is not a valid SQLDatabase name", prefix, b.Alias, b.Database)
 		}
 	}
 	// Config binding structural rules (ADR-0093): each names a ConfigMap in this namespace and

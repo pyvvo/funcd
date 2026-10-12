@@ -406,6 +406,45 @@ egress:
     tries: 60
   venom: e2e/egress.venom.yml
 
+sql:
+  description: SQL databases on real containerd (ADR-0232/0233) — a Drizzle TypeScript owner and a SQLModel Python reader of one rqlite engine, a refused write, an all-or-nothing batch, and rows that survive an engine kill and a daemon restart.
+  module: github.com/pyvvo/funcd-functions
+  dir: apps/todo
+  # funcd-bundle writes dist/ beside the Python project, so the lane builds in a writable copy of the module.
+  copy: true
+  # funcd-bundle installs the bundle in the local python:3.14-slim-bookworm image: that tag first points at the digest
+  # the python314 runtime image pins.
+  build:
+    - docker pull python:3.14-slim-bookworm@sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83 && docker tag python:3.14-slim-bookworm@sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83 python:3.14-slim-bookworm
+    - cd functions/py && uv run --locked funcd-bundle
+  stage:
+    - sql/notes-db.yaml
+    - sql/notes.yaml
+    - sql/notes-report.yaml
+    - from: apps/todo/sql/funcdconfig.yaml
+      module: github.com/pyvvo/funcd-functions
+      to: funcdconfig.yaml
+    - functions/ts/notes.mjs
+    - functions/ts/notes.funcdctl.yaml
+    - functions/py/dist/notes_report
+  push:
+    - artifact: functions/ts/notes.mjs
+      ref: notes
+    - artifact: functions/py/dist/notes_report
+      ref: notes-report
+      entry: notes_report.py
+  apply:
+    - sql/notes-db.yaml
+    - sql/notes.yaml
+    - sql/notes-report.yaml
+  ready:
+    kind: function
+    names:
+      - notes
+      - notes-report
+    tries: 90
+  venom: e2e/sql.venom.yml
+
 app-todo:
   description: The todo App of funcd-functions, deployed from its pushed template on real containerd (ADR-0217/0218), and the App features on it — pinned digests, a TypeScript→Python Workflow, a zoned cron timer, hooks, kept stores, a dry run, drift and pause, a config roll, rollback, liveness and dependency health, a late call, a refused binding, a requirement and a blob upload; then the disaster-recovery drill of FEAT-0009 — a backup to an S3 server in the VM, a lost data directory restored, held boot and release, the App's own backups and restores, a pre-upgrade generation, and the blob store on S3.
   module: github.com/pyvvo/funcd-functions

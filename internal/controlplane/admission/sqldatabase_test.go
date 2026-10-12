@@ -73,3 +73,16 @@ func TestSQLDatabaseDeletionProtection(t *testing.T) {
 	require.Contains(t, err.Error(), "not Ready")
 	require.Equal(t, fault.Internal, fault.KindOf(del(sqlProber{err: fault.Internalf("probe", "odd answer")})))
 }
+
+// ADR-0233 Decision 7: an API delete of a database a Function binds is 409 naming the Function.
+func TestSQLDatabaseDeleteRefusedWhileBound(t *testing.T) {
+	gvk := v1.KindSQLDatabase.GVK()
+	fn := mkFn("todo-api")
+	fn.Spec.SQL = []v1.FunctionSQL{{Alias: "app", Database: "todo-db"}}
+	adm := admission.NewSQLDatabaseDeletionProtectionAdmission(kvReader{fns: []*v1.Function{fn}}, sqlProber{})
+	_, err := adm.Admit(context.Background(), admission.Request{Operation: admission.Delete, GVK: gvk, Old: mkDB("todo-db")})
+	require.Equal(t, fault.Conflict, fault.KindOf(err))
+	require.Contains(t, err.Error(), "todo-api")
+	_, err = adm.Admit(context.Background(), admission.Request{Operation: admission.Delete, GVK: gvk, Old: mkDB("audit-db")})
+	require.NoError(t, err, "a database no Function binds")
+}

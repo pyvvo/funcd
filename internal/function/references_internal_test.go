@@ -87,3 +87,24 @@ func TestScenarioNoDataBindingsNoRequeue(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, requeue)
 }
+
+// ADR-0233 Decision 1: a spec.sql binding waits with SQLDatabaseNotFound until its database exists.
+func TestSQLBindingWaitsForDatabase(t *testing.T) {
+	t.Parallel()
+	r := newShimReconciler(t, fakeResolver{})
+	fn := sampleFn()
+	fn.Spec.SQL = []v1.FunctionSQL{{Alias: "app", Database: "todo-db"}}
+	requeue, reason, _, err := r.resolveDataReferences(context.Background(), fn)
+	require.NoError(t, err)
+	require.True(t, requeue)
+	require.Equal(t, "SQLDatabaseNotFound", reason)
+
+	obj, _ := v1.NewObject(v1.KindSQLDatabase)
+	db := obj.(*v1.SQLDatabase)
+	db.Name, db.Namespace, db.ResourceGroup = "todo-db", "default", "rg1"
+	_, err = r.store.Create(context.Background(), db)
+	require.NoError(t, err)
+	requeue, _, _, err = r.resolveDataReferences(context.Background(), fn)
+	require.NoError(t, err)
+	require.False(t, requeue)
+}

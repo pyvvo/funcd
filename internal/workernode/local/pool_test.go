@@ -200,3 +200,31 @@ func TestSoloSocketIgnoresMemberHeader(t *testing.T) {
 	require.Equal(t, http.StatusOK, callAs(t, unixClient(t, sock), http.MethodGet, "/kv/k/key", "c"))
 	require.Equal(t, []string{"kv team-a/a"}, rec.take(), "a function's own socket serves it, whatever the header names")
 }
+
+// ADR-0233: a pool's local API serves /sql as the member a request names, as it does KV, and refuses an outsider.
+func TestPoolServesSQLAsMember(t *testing.T) {
+	dir, err := os.MkdirTemp("", "fl")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	s := &fakeSQL{}
+	m := local.NewManager(dir, fakeStore{}, fakeInvoker{}, nil, nil, nil, nil, slog.New(slog.DiscardHandler), local.WithSQL(s))
+	t.Cleanup(m.Close)
+	sock, err := m.PoolSocketFor("team-a", testPool, []v1.ObjectName{"a", "b"})
+	require.NoError(t, err)
+	c := unixClient(t, sock)
+	post := func(names ...string) int {
+		req, rerr := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://local/sql/app/query", strings.NewReader(`{"statements":[["SELECT 1"]]}`))
+		require.NoError(t, rerr)
+		for _, n := range names {
+			req.Header.Add(local.MemberHeader, n)
+		}
+		resp, derr := c.Do(req)
+		require.NoError(t, derr)
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	require.Equal(t, http.StatusOK, post("b"))
+	require.Equal(t, http.StatusForbidden, post("c"))
+	require.Equal(t, http.StatusForbidden, post())
+	require.Equal(t, []string{"query team-a/b app"}, s.calls)
+}

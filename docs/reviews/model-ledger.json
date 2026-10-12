@@ -11293,5 +11293,35 @@
     "dod_total": 14,
     "report": "docs/reviews/adr-0232-implementation-claude-opus-5-5-2.md",
     "notes": "re-review: gofmt fixed, config/hold comments placed, deletion-protection admission takes the Contract's StoreReader; shim memory still open (env, F129 sql lane)"
+  },
+  {
+    "date": "2026-10-12",
+    "adr": "0233",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "changes-requested",
+    "blockers": 0,
+    "majors": 1,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 13,
+    "dod_total": 14,
+    "report": "docs/reviews/adr-0233-implementation-claude-opus-5-5.md",
+    "notes": "the engine's host:port leaks into the 503 problem detail and the log through the wrapped net/http error (model); Contract [][]any rows and missing FacadeDeps.CallTimeout (adr)"
+  },
+  {
+    "date": "2026-10-12",
+    "adr": "0233",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 0,
+    "dod_passed": 14,
+    "dod_total": 14,
+    "report": "docs/reviews/adr-0233-implementation-claude-opus-5-5-2.md",
+    "notes": "re-review: engine errors no longer wrap the transport error, so no address in the response or log (tested); a role-grant scoping fix in the writer lister; Contract [][]any and FacadeDeps.CallTimeout deviation stays on record (adr)"
   }
 ]

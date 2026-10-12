@@ -55,6 +55,11 @@ func WithSQLDatabaseQuota(maxPerNamespace int) Option {
 	return func(c *config) error { c.sqlMaxDatabasesPerNamespace = maxPerNamespace; return nil }
 }
 
+// WithSQLCallTimeout bounds one context.sql call (ADR-0233, sql.callTimeout); 0 ⇒ 30 s.
+func WithSQLCallTimeout(d time.Duration) Option {
+	return func(c *config) error { c.sqlCallTimeout = d; return nil }
+}
+
 // WithSQLProviderRuntime overrides the SQLDatabase engine runtime (ADR-0232); the production runtime supervises the
 // rqlite container, tests and `funcdctl dev` (ADR-0237) inject their own. It must implement provider.Volumes.
 func WithSQLProviderRuntime(r provider.Runtime) Option {

@@ -182,3 +182,38 @@ func TestScenarioKVWritePath(t *testing.T) {
 	require.True(t, kvWrite(t, pdp, v1.PrincipalKindFunction, "producer", "counters", "owned"),
 		"a legacy table owner still writes — back-compat")
 }
+
+// ADR-0233: SQL Data Writer on the database or the namespace makes a SQL writer; a role writing only KV or blob,
+// even namespace-wide, does not.
+func TestSQLWriters(t *testing.T) {
+	st := store.New(memory.New())
+	grant := func(name, fn, role string, scope v1.ScopeRef) {
+		assign(t, st, name, v1.RolesAssignmentSpec{
+			Principal:   &v1.PrincipalRef{Kind: v1.PrincipalKindFunction, Name: v1.ObjectName(fn)},
+			Assignments: []v1.AssignmentEntry{{RoleRef: v1.RoleRef{Kind: v1.RoleRefKindBuiltin, Name: role}, Scope: &scope}},
+		})
+	}
+	grant("db-writer", "migrate", "SQL Data Writer", v1.ScopeRef{Kind: v1.ScopeKindSQLDatabase, Name: "todo-db"})
+	grant("ns-writer", "batch", "SQL Data Writer", v1.ScopeRef{Kind: v1.ScopeKindNamespace})
+	grant("contributor", "kv-writer", "Contributor", v1.ScopeRef{Kind: v1.ScopeKindNamespace})
+	grant("other-db", "audit", "SQL Data Writer", v1.ScopeRef{Kind: v1.ScopeKindSQLDatabase, Name: "audit-db"})
+	var got []string
+	for _, uid := range NewLister(st).SQLWriters(context.Background(), "data", "todo-db") {
+		got = append(got, string(uid.ID))
+	}
+	require.ElementsMatch(t, []string{"data/migrate", "data/batch"}, got)
+}
+
+// ADR-0233: SQL Data Writer, even namespace-wide, makes no KV or blob writer.
+func TestSQLWriterMakesNoKVOrBlobWriter(t *testing.T) {
+	st := store.New(memory.New())
+	assign(t, st, "sql-writer", v1.RolesAssignmentSpec{
+		Principal: &v1.PrincipalRef{Kind: v1.PrincipalKindFunction, Name: "migrate"},
+		Assignments: []v1.AssignmentEntry{{RoleRef: v1.RoleRef{Kind: v1.RoleRefKindBuiltin, Name: "SQL Data Writer"},
+			Scope: &v1.ScopeRef{Kind: v1.ScopeKindNamespace}}},
+	})
+	l := NewLister(st)
+	require.Empty(t, l.KVWriters(context.Background(), "data", "orders", "customers"))
+	require.Empty(t, l.BlobWriters(context.Background(), "data", "releves", "gold"))
+	require.Len(t, l.SQLWriters(context.Background(), "data", "todo-db"), 1)
+}

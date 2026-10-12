@@ -1,6 +1,6 @@
 # ADR-0233: SQL access from functions
 
-- **Status**: Accepted (2026-10-12, self-accepted under the decider's batch delegation; judged twice: the first round
+- **Status**: Implemented (2026-10-12, review passed). Accepted (2026-10-12, self-accepted under the decider's batch delegation; judged twice: the first round
   made `execute` also ask `sql::read`, since `RETURNING` reads, added `sql.callTimeout`, and fixed the Cedar entity
   shape and the Namespace-scope roles; the second found no Blocker or Major)
 - **Date**: 2026-10-12

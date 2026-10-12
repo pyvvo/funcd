@@ -569,6 +569,12 @@ components:
                 type:
                   - array
                   - "null"
+              sql:
+                items:
+                  $ref: "#/components/schemas/FunctionSQL"
+                type:
+                  - array
+                  - "null"
               timeout:
                 description: "Bounds an external invoke until its response starts: 0s to 1h; 0s or unset means invoke.defaultTimeout."
                 pattern: ^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$
@@ -1836,6 +1842,21 @@ components:
         - alias
         - target
       type: object
+    FunctionSQL:
+      additionalProperties: false
+      properties:
+        alias:
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        database:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+      required:
+        - alias
+        - database
+      type: object
     FunctionSpec:
       additionalProperties: false
       properties:
@@ -1900,6 +1921,12 @@ components:
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
+          type:
+            - array
+            - "null"
+        sql:
+          items:
+            $ref: "#/components/schemas/FunctionSQL"
           type:
             - array
             - "null"
@@ -1995,6 +2022,12 @@ components:
             minLength: 1
             pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
             type: string
+          type:
+            - array
+            - "null"
+        sql:
+          items:
+            $ref: "#/components/schemas/FunctionSQL"
           type:
             - array
             - "null"
@@ -3255,6 +3288,11 @@ components:
     SQLDatabaseSpec:
       additionalProperties: false
       properties:
+        owner:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
         resources:
           $ref: "#/components/schemas/ResourceSpec"
       type: object
@@ -3312,6 +3350,7 @@ components:
             - BucketPrefix
             - KVStore
             - Catalog
+            - SQLDatabase
           type: string
         name:
           type: string

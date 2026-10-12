@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"slices"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -123,9 +124,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		r.log.WarnContext(ctx, "sql engine converge failed", "database", string(req.Namespace)+"/"+string(req.Name), "err", cerr)
 		st = provider.ProviderStatus{Reason: ReasonEngineConvergeFailed}
 	}
+	bindings, berr := r.bindings(ctx, db)
+	if berr != nil {
+		return controller.Result{}, berr
+	}
 	next := db.Status
 	next.Conditions = append(v1.Conditions(nil), db.Status.Conditions...)
 	next.ObservedGeneration = db.Generation
+	next.Bindings = bindings
 	if st.Ready {
 		r.d.Engines.Set(ref.Namespace, ref.Name, st.Address)
 		next.Phase = v1.PhaseReady
@@ -149,6 +155,38 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		return controller.Result{RequeueAfter: enginePoll}, nil
 	}
 	return controller.Result{RequeueAfter: r.d.SupervisionPeriod}, nil
+}
+
+// bindings counts the Functions whose spec.sql names db (ADR-0233 Decision 1).
+func (r *Reconciler) bindings(ctx context.Context, db *v1.SQLDatabase) (int, error) {
+	const op = "sql.Reconcile"
+	fns, err := r.d.Store.List(ctx, v1.KindFunction.GVK(), store.ListOptions{Namespace: db.Namespace})
+	if err != nil {
+		return 0, fault.Wrapf(err, fault.KindOf(err), op, "list functions in %q", db.Namespace)
+	}
+	n := 0
+	for _, o := range fns.Items {
+		if fn, ok := o.(*v1.Function); ok && slices.ContainsFunc(fn.Spec.SQL, func(b v1.FunctionSQL) bool { return b.Database == db.Name }) {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// MapFunction maps a Function change to the databases of its namespace, whose binding counts it may change.
+func (r *Reconciler) MapFunction(ctx context.Context, obj v1.Object) []controller.Request {
+	ns := obj.GetObjectMeta().Namespace
+	list, err := r.d.Store.List(ctx, v1.KindSQLDatabase.GVK(), store.ListOptions{Namespace: ns})
+	if err != nil {
+		r.log.WarnContext(ctx, "list sqldatabases to recount bindings", "namespace", string(ns), "err", err)
+		return nil
+	}
+	reqs := make([]controller.Request, 0, len(list.Items))
+	for _, o := range list.Items {
+		meta := o.GetObjectMeta()
+		reqs = append(reqs, controller.Request{GVK: v1.KindSQLDatabase.GVK(), Namespace: meta.Namespace, Name: meta.Name})
+	}
+	return reqs
 }
 
 // engineSpec is the engine of db (ADR-0232 Decisions 2 to 5).

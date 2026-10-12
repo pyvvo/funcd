@@ -266,3 +266,24 @@ func TestProberHasTables(t *testing.T) {
 	require.Equal(t, fault.Internal, fault.KindOf(err), "a refused credential is funcd's fault")
 	require.NotContains(t, err.Error(), sqlsvc.EnginePassword([]byte(masterKey), todoDB().Namespace, todoDB().Name))
 }
+
+// ADR-0233 Decision 1: status.bindings counts the Functions whose spec.sql names the database.
+func TestReconcileCountsBindings(t *testing.T) {
+	rt := newRuntime()
+	rt.ready = true
+	r, st := setup(t, rt, false)
+	create(t, st, "")
+	for _, name := range []v1.ObjectName{"todo-api", "todo-report", "other"} {
+		fn := &v1.Function{TypeMeta: v1.TypeMeta{APIVersion: v1.KindFunction.GVK().APIVersion(), Kind: v1.KindFunction}}
+		fn.Name, fn.Namespace, fn.ResourceGroup = name, "default", "rg1"
+		fn.Spec = v1.FunctionSpec{Runtime: "nodejs22", Handler: "handle", Image: "oci-layout://x:1"}
+		if name != "other" {
+			fn.Spec.SQL = []v1.FunctionSQL{{Alias: "app", Database: todoDB().Name}}
+		}
+		_, err := st.Create(context.Background(), fn)
+		require.NoError(t, err)
+	}
+	reconcile(t, r)
+	require.Equal(t, 2, get(t, st).Status.Bindings)
+	require.Len(t, r.MapFunction(context.Background(), &v1.Function{ObjectMeta: v1.ObjectMeta{Namespace: "default"}}), 1)
+}

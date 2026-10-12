@@ -36,6 +36,8 @@ const (
 	ScopeKindKVStore ScopeKind = "KVStore"
 	// ScopeKindCatalog scopes a grant to one catalog serving layer ("<catalog>") — ADR-0137, F102.
 	ScopeKindCatalog ScopeKind = "Catalog"
+	// ScopeKindSQLDatabase scopes a grant to one SQL database ("<database>") — ADR-0233, F129.
+	ScopeKindSQLDatabase ScopeKind = "SQLDatabase"
 )
 
 // PrincipalRef names the grantee: a typed {kind, name}. This is the "principal side is no longer
@@ -54,7 +56,7 @@ type RoleRef struct {
 // ScopeRef names the scope: a namespace, a bucket prefix, or a kv store. Name is the scope-relative name
 // ("<bucket>/<prefix>" for BucketPrefix; the namespace is the assignment's own namespace).
 type ScopeRef struct {
-	Kind ScopeKind `json:"kind" enum:"Namespace,BucketPrefix,KVStore,Catalog"`
+	Kind ScopeKind `json:"kind" enum:"Namespace,BucketPrefix,KVStore,Catalog,SQLDatabase"`
 	Name string    `json:"name,omitempty"`
 }
 
@@ -121,7 +123,7 @@ func (ra *RolesAssignment) Validate() error {
 			return fault.Invalidf(op, "spec.assignments[%d] has no scope (and no top-level default)", i)
 		}
 		switch s.Kind {
-		case ScopeKindNamespace, ScopeKindBucketPrefix, ScopeKindKVStore, ScopeKindCatalog:
+		case ScopeKindNamespace, ScopeKindBucketPrefix, ScopeKindKVStore, ScopeKindCatalog, ScopeKindSQLDatabase:
 		default:
 			return fault.Invalidf(op, "spec.assignments[%d].scope.kind %q is invalid", i, s.Kind)
 		}

@@ -5,10 +5,12 @@ package roles
 
 import (
 	"context"
+	"slices"
 
 	cedartypes "github.com/cedar-policy/cedar-go/types"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/auth/cedar"
 	"github.com/pyvvo/funcd/internal/store"
 )
@@ -30,8 +32,11 @@ func NewLister(s store.Store) *Lister {
 
 // BlobWriters returns the principals with a writer-role grant covering the (bucket, prefix).
 func (l *Lister) BlobWriters(ctx context.Context, ns v1.NamespaceName, bucket, prefix string) []cedartypes.EntityUID {
-	return l.writers(ctx, ns, func(sc v1.ScopeRef) bool {
-		switch sc.Kind {
+	return l.writers(ctx, ns, func(g cedar.WriterGrant) bool {
+		if sqlOnly(g) {
+			return false
+		}
+		switch sc := g.Scope; sc.Kind {
 		case v1.ScopeKindNamespace:
 			return true
 		case v1.ScopeKindBucketPrefix:
@@ -44,8 +49,11 @@ func (l *Lister) BlobWriters(ctx context.Context, ns v1.NamespaceName, bucket, p
 
 // KVWriters returns the principals with a writer-role grant covering the (store, table).
 func (l *Lister) KVWriters(ctx context.Context, ns v1.NamespaceName, kvStore, table string) []cedartypes.EntityUID {
-	return l.writers(ctx, ns, func(sc v1.ScopeRef) bool {
-		switch sc.Kind {
+	return l.writers(ctx, ns, func(g cedar.WriterGrant) bool {
+		if sqlOnly(g) {
+			return false
+		}
+		switch sc := g.Scope; sc.Kind {
 		case v1.ScopeKindNamespace:
 			return true
 		case v1.ScopeKindKVStore:
@@ -56,8 +64,31 @@ func (l *Lister) KVWriters(ctx context.Context, ns v1.NamespaceName, kvStore, ta
 	})
 }
 
+// sqlOnly reports whether a grant writes only SQL databases, so it makes no KV or blob writer (ADR-0233).
+func sqlOnly(g cedar.WriterGrant) bool {
+	return !slices.ContainsFunc(g.Writes, func(a string) bool { return a != string(auth.ActionSQLWrite) })
+}
+
+// SQLWriters returns the principals whose grant covering the SQL database holds sql::write (ADR-0233): a role
+// writing only KV or blob, such as Contributor, makes no database writer.
+func (l *Lister) SQLWriters(ctx context.Context, ns v1.NamespaceName, database string) []cedartypes.EntityUID {
+	return l.writers(ctx, ns, func(g cedar.WriterGrant) bool {
+		if !slices.Contains(g.Writes, string(auth.ActionSQLWrite)) {
+			return false
+		}
+		switch sc := g.Scope; sc.Kind {
+		case v1.ScopeKindNamespace:
+			return true
+		case v1.ScopeKindSQLDatabase:
+			return sc.Name == database
+		default:
+			return false
+		}
+	})
+}
+
 // writers lists the namespace's RolesAssignments and collects the writer principals whose scope covers.
-func (l *Lister) writers(ctx context.Context, ns v1.NamespaceName, covers func(v1.ScopeRef) bool) []cedartypes.EntityUID {
+func (l *Lister) writers(ctx context.Context, ns v1.NamespaceName, covers func(cedar.WriterGrant) bool) []cedartypes.EntityUID {
 	lst, err := l.store.List(ctx, v1.KindRolesAssignment.GVK(), store.ListOptions{Namespace: ns})
 	if err != nil {
 		return nil
@@ -69,7 +100,7 @@ func (l *Lister) writers(ctx context.Context, ns v1.NamespaceName, covers func(v
 			continue
 		}
 		for _, g := range cedar.WriterGrants(ctx, ra, l.resolver) {
-			if covers(g.Scope) {
+			if covers(g) {
 				out = append(out, g.Principal)
 			}
 		}

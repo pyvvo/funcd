@@ -19,7 +19,8 @@ import (
 )
 
 // accessIndex is what a namespace grants its Functions outside their specs, built once per pass: per Function, the
-// KV tables ("kv/<store>/<table>") and Bucket prefixes ("blob/<bucket>/<prefix>") it owns, and the grants it holds
+// KV tables ("kv/<store>/<table>"), Bucket prefixes ("blob/<bucket>/<prefix>") and SQL databases ("sql/<database>") it
+// owns, and the grants it holds
 // through RolesAssignments, EgressPolicies and Policies, each named by what it grants.
 type accessIndex struct{ owned, grants map[v1.ObjectName][]string }
 
@@ -29,7 +30,7 @@ func (r *Reconciler) pooled(fn *v1.Function) bool {
 	return fn.Spec.Pooling.Worker != "" && r.poolHostFor(fn.Spec.Runtime) != nil
 }
 
-// accessIn lists the namespace's KVStores, Buckets, RolesAssignments, EgressPolicies and Policies once each into an
+// accessIn lists the namespace's KVStores, Buckets, SQLDatabases, RolesAssignments, EgressPolicies and Policies once each into an
 // accessIndex. An absent referent adds nothing; a List error fails the pass.
 func (r *Reconciler) accessIn(ctx context.Context, ns v1.NamespaceName) (accessIndex, error) {
 	const op = "function.accessIn"
@@ -65,6 +66,15 @@ func (r *Reconciler) accessIn(ctx context.Context, ns v1.NamespaceName) (accessI
 					idx.owned[p.Owner] = append(idx.owned[p.Owner], "blob/"+string(b.Name)+"/"+p.Name)
 				}
 			}
+		}
+	}
+	dbs, err := list(v1.KindSQLDatabase)
+	if err != nil {
+		return accessIndex{}, err
+	}
+	for _, o := range dbs {
+		if db, ok := o.(*v1.SQLDatabase); ok && db.Spec.Owner != "" {
+			idx.owned[db.Spec.Owner] = append(idx.owned[db.Spec.Owner], "sql/"+string(db.Name))
 		}
 	}
 	ras, err := list(v1.KindRolesAssignment)
@@ -145,7 +155,7 @@ func sha256Hex(data []byte) string {
 }
 
 // poolKeyFor returns fn's pool key IFF it is eligible to co-pool (pooled): its namespace, runtime, worker id and
-// access — the KV tables it both owns and binds, every Bucket prefix it owns, its resource group and its grants
+// access — the KV tables and SQL databases it both owns and binds, every Bucket prefix it owns, its resource group and its grants
 // from idx.
 func (r *Reconciler) poolKeyFor(fn *v1.Function, idx accessIndex) (pooling.PoolKey, bool) {
 	if !r.pooled(fn) {
@@ -155,7 +165,7 @@ func (r *Reconciler) poolKeyFor(fn *v1.Function, idx accessIndex) (pooling.PoolK
 	for _, o := range idx.owned[fn.Name] {
 		if strings.HasPrefix(o, "blob/") || slices.ContainsFunc(fn.Spec.KV, func(b v1.FunctionKV) bool {
 			return o == "kv/"+string(b.Store)+"/"+b.Table
-		}) {
+		}) || slices.ContainsFunc(fn.Spec.SQL, func(b v1.FunctionSQL) bool { return o == "sql/"+string(b.Database) }) {
 			owned = append(owned, o)
 		}
 	}
@@ -167,7 +177,7 @@ func (r *Reconciler) poolKeyFor(fn *v1.Function, idx accessIndex) (pooling.PoolK
 	return pooling.KeyOf(fn, owned, slices.Compact(grants))
 }
 
-// MapAccess maps a KVStore, Bucket, RolesAssignment, EgressPolicy or Policy change to every Function of its namespace
+// MapAccess maps a KVStore, Bucket, SQLDatabase, RolesAssignment, EgressPolicy or Policy change to every Function of its namespace
 // that declares a pool worker, Idle included: the change can move each to another pool.
 func (r *Reconciler) MapAccess(ctx context.Context, obj v1.Object) []controller.Request {
 	ns := obj.GetNamespace()

@@ -86,9 +86,9 @@ func (e *UpstreamError) Error() string { return fmt.Sprintf("upstream returned %
 // DependencyReport is the first binding of a sandbox's caller that fails its dependency check (ADR-0215 Decision 3),
 // the body of a 503 from GET /health/dependencies and, passed through by the shim, from its /health/readiness.
 type DependencyReport struct {
-	Kind    string `json:"kind"`    // kv | blob | link | socket
+	Kind    string `json:"kind"`    // kv | blob | sql | link | socket
 	Binding string `json:"binding"` // the alias
-	Reason  string `json:"reason"`  // Forbidden | NotFound | NotReady | StorageUnreachable | Timeout | Unreachable
+	Reason  string `json:"reason"`  // Forbidden | NotFound | NotReady | StorageUnreachable | Timeout | Unreachable | EngineNotReady
 	Message string `json:"message"`
 }
 
@@ -119,6 +119,16 @@ const DependencyCheckBudget = 50 * time.Millisecond
 // dependenciesPath is the dependency check a shim's readiness asks over its invoke socket (ADR-0215 Decision 3).
 const dependenciesPath = "/health/dependencies"
 
+// Option adds an optional port to the local API.
+type Option func(*options)
+
+type options struct {
+	sql SQL
+}
+
+// WithSQL routes /sql/{binding}/query and /execute to s (ADR-0233); without it there are no /sql routes.
+func WithSQL(s SQL) Option { return func(o *options) { o.sql = s } }
+
 // NewHandler builds the per-sandbox local API handler: POST /invoke/{alias} (ADR-0064/0075) plus, when
 // kv is non-nil, the KV verbs GET/PUT/DELETE /kv/{binding}/{key} + list (ADR-0069). caller is the fixed
 // sandbox identity (connection-scoped) — the handler never reads a caller from the request. authz is the
@@ -129,9 +139,13 @@ const dependenciesPath = "/health/dependencies"
 // Info, a denial / upstream error at Warn. A nil logger defaults to slog.Default(). deps non-nil registers GET
 // /health/dependencies (ADR-0215 Decision 3); nil registers no route, so a shim reads 404 as a pass.
 func NewHandler(caller Ref, res Resolver, inv Invoker, authz auth.Authorizer, kv KV, blob Blob,
-	deps DependencyChecker, logger *slog.Logger) http.Handler {
+	deps DependencyChecker, logger *slog.Logger, opts ...Option) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
+	}
+	var o options
+	for _, opt := range opts {
+		opt(&o)
 	}
 	// callerIdentity is connection-scoped: the Cedar principal is the fixed sandbox Ref (ADR-0075),
 	// so a request body can never name a different caller.
@@ -145,6 +159,9 @@ func NewHandler(caller Ref, res Resolver, inv Invoker, authz auth.Authorizer, kv
 	}
 	if blob != nil {
 		registerBlob(mux, caller, blob, logger)
+	}
+	if o.sql != nil {
+		registerSQL(mux, caller, o.sql, logger)
 	}
 	if deps != nil {
 		mux.HandleFunc("GET "+dependenciesPath, func(w http.ResponseWriter, r *http.Request) {
