@@ -267,8 +267,9 @@ func (r *Reconciler) recorded(key string, st v1.SQLDatabaseStatus) {
 	}
 }
 
-// restoredSince reports a Succeeded Restore whose destination is db, created after since: its creation time is the
-// store's, the clock DataMissing's transition reads too.
+// restoredSince reports a Succeeded Restore whose destination is db, created at or after since: its creation time is
+// the store's, the clock DataMissing's transition reads too, both in milliseconds. A Restore of the transition's
+// millisecond counts, since its load waits for the engine that the transition's pass registers.
 func (r *Reconciler) restoredSince(ctx context.Context, db *v1.SQLDatabase, since time.Time) (bool, error) {
 	const op = "sql.Reconcile"
 	l, err := r.d.Store.List(ctx, v1.KindRestore.GVK(), store.ListOptions{Namespace: db.Namespace})
@@ -277,7 +278,7 @@ func (r *Reconciler) restoredSince(ctx context.Context, db *v1.SQLDatabase, sinc
 	}
 	for _, o := range l.Items {
 		rs, ok := o.(*v1.Restore)
-		if !ok || rs.Status.Phase != v1.RunSucceeded || !time.Time(rs.CreationTime).After(since) {
+		if !ok || rs.Status.Phase != v1.RunSucceeded || time.Time(rs.CreationTime).Before(since) {
 			continue
 		}
 		for _, m := range rs.Spec.Members {

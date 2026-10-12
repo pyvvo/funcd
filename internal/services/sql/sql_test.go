@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -380,4 +381,49 @@ func TestStatusWriteLostToConflictRequeuesAtOnce(t *testing.T) {
 	require.Equal(t, controller.Result{RequeueAfter: controller.SupervisionPeriod}, reconcile(t, r), "then the steady supervision")
 	_, ok := get(t, base).Status.Conditions.Get("Ready")
 	require.True(t, ok)
+}
+
+// A Succeeded Restore created in the millisecond DataMissing turned True clears it; one created a millisecond before
+// does not. Both times are the store's, in milliseconds.
+func TestRestoreOfTheTransitionMillisecondClearsDataMissing(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		before  time.Duration
+		cleared bool
+	}{
+		{"same millisecond", 0, true},
+		{"a millisecond before", time.Millisecond, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := newRuntime()
+			rt.ready = true
+			st := store.New(memory.New())
+			d := create(t, st, "")
+			d.Status.Conditions.Set(v1.Condition{Type: "Ready", Status: v1.ConditionTrue})
+			_, err := st.Update(context.Background(), d)
+			require.NoError(t, err)
+			r, err := sqlsvc.NewReconciler(sqlsvc.ReconcilerDeps{Store: st, Provider: rt, Engines: sqlsvc.NewEngines(), Master: []byte(masterKey), DurableStorage: true})
+			require.NoError(t, err)
+			reconcile(t, r)
+
+			rs := &v1.Restore{TypeMeta: v1.TypeMeta{APIVersion: v1.KindRestore.GVK().APIVersion(), Kind: v1.KindRestore}}
+			rs.Name, rs.Namespace, rs.ResourceGroup = "back", todoDB().Namespace, "rg1"
+			rs.Spec = v1.RestoreSpec{Backup: "b1", Source: v1.RestoreSource{CredentialsSecret: "reader", IdentitySecret: "owner"},
+				Members: []v1.RestoreMember{{Kind: v1.KindSQLDatabase, Name: todoDB().Name, InPlace: true}}}
+			rs.Status.Phase = v1.RunSucceeded
+			obj, err := st.Create(context.Background(), rs)
+			require.NoError(t, err)
+			d = get(t, st)
+			i := slices.IndexFunc(d.Status.Conditions, func(c v1.Condition) bool { return c.Type == "DataMissing" })
+			require.NotEqual(t, -1, i)
+			require.Equal(t, v1.ConditionTrue, d.Status.Conditions[i].Status)
+			d.Status.Conditions[i].LastTransitionTime = v1.NewTimestamp(time.Time(obj.GetObjectMeta().CreationTime).Add(tc.before))
+			_, err = st.Update(context.Background(), d)
+			require.NoError(t, err)
+
+			reconcile(t, r)
+			c, _ := get(t, st).Status.Conditions.Get("DataMissing")
+			require.Equal(t, tc.cleared, c.Status == v1.ConditionFalse, "DataMissing cleared")
+		})
+	}
 }
