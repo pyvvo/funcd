@@ -735,8 +735,8 @@ github.com/prometheus/procfs v0.19.2 h1:zUMhqEW66Ex7OXIiDkll3tl9a1ZdilUOd/F6ZXw4
 github.com/prometheus/procfs v0.19.2/go.mod h1:M0aotyiemPhBCM0z5w87kL22CxfcH05ZpYlu+b4J7mw=
 github.com/pyvvo/funcd-functions v0.8.0 h1:JjuFjnnF/a71K1aqz7VQ6L92QhUpwdP+e7+QY1oq1lw=
 github.com/pyvvo/funcd-functions v0.8.0/go.mod h1:L91uY7v74Ik9u+ui8J8p6Zqu/6RAK9uJWJFAKl6TxSY=
-github.com/pyvvo/funcd-python v0.8.1 h1:Fq5hAE6T3CcyXY2/Z0eAPnHH724q9l4v6LW87/GJN6o=
-github.com/pyvvo/funcd-python v0.8.1/go.mod h1:xgR0Do0470V/uB78dA8QEsKrzyiHr4EeO1c37b92E2c=
+github.com/pyvvo/funcd-python v0.8.2 h1:llEHwrQRbEL0ISmjjx9ckHN4Cpkc8Fs0S0CF+qeLAT4=
+github.com/pyvvo/funcd-python v0.8.2/go.mod h1:xgR0Do0470V/uB78dA8QEsKrzyiHr4EeO1c37b92E2c=
 github.com/pyvvo/funcd-typescript v0.11.0 h1:IL3DPGjkXvE5wpvWKnGRMm7f94uFwRW9bklg+3Mg0Jk=
 github.com/pyvvo/funcd-typescript v0.11.0/go.mod h1:DGPLN+6I5a0GD2isOoo/c5EIxkajwtqV6lJlT7+1WX8=
 github.com/quasilyte/go-ruleguard v0.4.5 h1:AGY0tiOT5hJX9BTdx/xBdoCubQUAE2grkqY2lSwvZcA=
