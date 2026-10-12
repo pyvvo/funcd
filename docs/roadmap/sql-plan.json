@@ -114,6 +114,16 @@
         "ADR-0233",
         "ADR-0125"
       ]
+    },
+    {
+      "id": "ADR-0238",
+      "title": "The container bridge address",
+      "features": [
+        "F136"
+      ],
+      "depends_on": [
+        "ADR-0235"
+      ]
     }
   ],
   "waves": {
@@ -130,7 +140,8 @@
     ],
     "4": [
       "ADR-0236",
-      "ADR-0237"
+      "ADR-0237",
+      "ADR-0238"
     ]
   }
 }

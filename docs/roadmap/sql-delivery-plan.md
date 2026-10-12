@@ -1,7 +1,8 @@
 # SQL delivery plan — ADR sequencing to ship FEAT-0011
 
-- **Status**: Complete — the seven ADRs, ADR-0231 to ADR-0237, are Implemented (2026-10-12). The computed sections
-  record the order they were built in; F134 and F135 remain ideas, outside this plan.
+- **Status**: Complete — the eight ADRs, ADR-0231 to ADR-0238, are Implemented (2026-10-12); ADR-0238 (F136, the bridge
+  address) joined after the first seven. The computed sections record the order they were built in; F134 and F135
+  remain ideas, outside this plan.
 - **Date**: 2026-10-12
 - **Realizes**: [FEAT-0011 (SQL databases)](../feat/0011-feat-sql.md)
 - **Process**: [ADR-0000](../adr/0000-adr-process.md) · skills `/adr` → `/adr-judge` → `/adr-impl` → `/adr-impl-review`
@@ -32,6 +33,7 @@ one wave ahead of the build track.
 | ADR-0234 | SQL backup and restore: the workload member, its copy and its load | F131 | ADR-0232, ADR-0203, ADR-0206, ADR-0209, ADR-0222 |
 | ADR-0235 | SQL change feed: row changes as named events | F132 | ADR-0232, ADR-0108 |
 | ADR-0237 | SQL in funcdctl dev: the engine as a local process | F133 | ADR-0232, ADR-0233, ADR-0125 |
+| ADR-0238 | The container bridge address: one setting, derived from the containerd subnet, read by the change feed, the catalog proxies and the S3 endpoint | F136 | ADR-0235 |
 
 Two merges are deliberate. ADR-0232 joins the kind, its engine image and its lifecycle, since an engine is never deployed
 without its resource. ADR-0233 joins the binding, the PEP, Cedar, the roles and the shim helpers, since they form one access
@@ -86,6 +88,7 @@ flowchart TB
     ADR_0234["ADR-0234 · F131<br/>SQL backup and restore"]
     ADR_0235["ADR-0235 · F132<br/>SQL change feed"]
     ADR_0237["ADR-0237 · F133<br/>SQL in funcdctl dev"]
+    ADR_0238["ADR-0238 · F136<br/>The container bridge address"]
 
     ADR_0032 --> ADR_0231
     ADR_0087 --> ADR_0231
@@ -116,6 +119,7 @@ flowchart TB
     ADR_0232 --> ADR_0237
     ADR_0233 --> ADR_0237
     ADR_0125 --> ADR_0237
+    ADR_0235 --> ADR_0238
 ```
 
 ## Build waves (computed)
@@ -126,14 +130,15 @@ flowchart TB
 | 1 | ADR-0231 |
 | 2 | ADR-0232 |
 | 3 | ADR-0233, ADR-0234, ADR-0235 |
-| 4 | ADR-0236, ADR-0237 |
+| 4 | ADR-0236, ADR-0237, ADR-0238 |
 
 Why each tier:
 
 - **Tier 1**: ADR-0231 needs only built ADRs. It is the keystone: no SQL engine keeps its data without it.
 - **Tier 2**: ADR-0232 needs the storage of ADR-0231.
 - **Tier 3**: ADR-0233, ADR-0234 and ADR-0235 each need only the databases of ADR-0232, so they build in parallel.
-- **Tier 4**: ADR-0236 and ADR-0237 need both the databases of ADR-0232 and the function access of ADR-0233.
+- **Tier 4**: ADR-0236 and ADR-0237 need both the databases of ADR-0232 and the function access of ADR-0233;
+  ADR-0238 needs the change feed of ADR-0235.
 
 ### Cross-cutting sequencing notes
 
@@ -189,9 +194,9 @@ Every clause has an item. The exit criterion is met at tier 4, when ADR-0236 and
 
 ## Parallelization & sequencing notes
 
-- **Leaves:** ADR-0234, ADR-0235 and ADR-0237: nothing depends on them and they are off the critical path, so they have slack; the
-  exit criterion still needs all three.
-- **Parallel inside tiers:** ADR-0233, ADR-0234 and ADR-0235 in tier 3; ADR-0236 and ADR-0237 in tier 4.
+- **Leaves:** ADR-0234, ADR-0237 and ADR-0238: nothing depends on them and they are off the critical path, so they have slack; the
+  exit criterion still needs ADR-0234 and ADR-0237.
+- **Parallel inside tiers:** ADR-0233, ADR-0234 and ADR-0235 in tier 3; ADR-0236, ADR-0237 and ADR-0238 in tier 4.
 - **Riskiest ADRs:** ADR-0233 (the authorization surface), ADR-0231 (data reclaim) and ADR-0235 (duplicate delivery).
 - **Not planned:** F134 (external access) and F135 (a shared server) are ideas; they get items only if the decider
   scopes them.
