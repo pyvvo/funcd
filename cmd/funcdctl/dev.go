@@ -467,6 +467,7 @@ func resolveWorkflowPlan(op, path string, wf *v1.Workflow) ([]plannedFunc, error
 	if len(pfs) == 0 {
 		return nil, fault.Invalidf(op, "workflow %q has no function.ref/image steps resolving to a <stem>.funcdctl.yaml", wf.Name)
 	}
+	isolateSharedMains(pfs)
 	// Land the workflow in the dev-authorized namespace/group so the run engine + link resolver reach it.
 	wf.TypeMeta = v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow}
 	wf.Namespace = devNamespace
@@ -1148,6 +1149,7 @@ type plannedFunc struct {
 	srcDir       string // the dir holding the handler source
 	entry        string // the handler entry filename within srcDir
 	isolate      bool
+	linkSrc      bool   // isolated with links to every file of srcDir, which another function's main shares
 	manifestPath string // the funcdctl.yaml (its dir is the base for a dev.python/dev.node relative path)
 }
 
@@ -1236,6 +1238,7 @@ func resolveDirFunctions(op, dir, entryFlag, nameFlag string) ([]plannedFunc, er
 			srcDir, entry, isolate := manifestEntry(m, dir, stemEntry(stem, m.Runtime), true)
 			pfs = append(pfs, plannedFunc{m: m, name: sanitizeName(stem), srcDir: srcDir, entry: entry, isolate: isolate, manifestPath: mp})
 		}
+		isolateSharedMains(pfs)
 		return pfs, nil
 	}
 	generic := filepath.Join(dir, manifestFileName)
@@ -1569,7 +1572,12 @@ func prepareBundle(op string, pf plannedFunc, contractBlob []byte) (imagePath st
 		return "", nil, fault.Wrapf(terr, fault.Internal, op, "create bundle temp dir")
 	}
 	cleanup = func() { _ = os.RemoveAll(tmp) }
-	if nm := filepath.Join(pf.srcDir, "node_modules"); dirExists(nm) {
+	if pf.linkSrc {
+		if lerr := linkSources(op, pf.srcDir, tmp); lerr != nil {
+			cleanup()
+			return "", nil, lerr
+		}
+	} else if nm := filepath.Join(pf.srcDir, "node_modules"); dirExists(nm) {
 		_ = os.Symlink(nm, filepath.Join(tmp, "node_modules")) // best-effort: let a single-file function's imports resolve
 	}
 	if derr := deliverBundle(op, pf, tmp, contractBlob); derr != nil {
@@ -1582,7 +1590,7 @@ func prepareBundle(op string, pf plannedFunc, contractBlob []byte) (imagePath st
 // deliverBundle writes one function's ADR-0123 contract into its bundle dir and, for an isolated bundle, copies
 // the handler entry beside it — at boot, and again on each hot-reload.
 func deliverBundle(op string, pf plannedFunc, bundleDir string, contractBlob []byte) error {
-	if pf.isolate {
+	if pf.isolate && !pf.linkSrc {
 		data, rerr := os.ReadFile(filepath.Join(pf.srcDir, pf.entry)) //nolint:gosec // the resolved handler entry in the manifest dir
 		if rerr != nil {
 			return fault.Wrapf(rerr, fault.NotFound, op, "read handler entry %q", pf.entry)
@@ -1594,6 +1602,28 @@ func deliverBundle(op string, pf plannedFunc, bundleDir string, contractBlob []b
 	contractPath := filepath.Join(bundleDir, devContractFile)
 	if werr := os.WriteFile(contractPath, contractBlob, 0o600); werr != nil {
 		return fault.Wrapf(werr, fault.Internal, op, "deliver contract to %q", contractPath)
+	}
+	return nil
+}
+
+// linkSources links every file of srcDir but its contract dotfile into bundleDir, by absolute path, since srcDir is
+// relative to the working directory when the project is named as `.`.
+func linkSources(op, srcDir, bundleDir string) error {
+	srcDir, err := filepath.Abs(srcDir)
+	if err != nil {
+		return fault.Wrapf(err, fault.Internal, op, "resolve %s", srcDir)
+	}
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		return fault.Wrapf(err, fault.Internal, op, "read %s", srcDir)
+	}
+	for _, e := range entries {
+		if e.Name() == devContractFile {
+			continue
+		}
+		if lerr := os.Symlink(filepath.Join(srcDir, e.Name()), filepath.Join(bundleDir, e.Name())); lerr != nil {
+			return fault.Wrapf(lerr, fault.Internal, op, "link %s into the bundle", e.Name())
+		}
 	}
 	return nil
 }
@@ -1682,6 +1712,23 @@ func stemEntry(stem string, rt v1.RuntimeName) string {
 		return stem + ".py"
 	}
 	return stem + ".mjs"
+}
+
+// isolateSharedMains gives a private bundle to each function whose main shares its directory with another one's: in
+// place they would share that directory's one contract dotfile. The bundle links every file of the directory, so the
+// handler's sibling imports resolve.
+func isolateSharedMains(pfs []plannedFunc) {
+	inPlace := map[string]int{}
+	for _, pf := range pfs {
+		if !pf.isolate {
+			inPlace[pf.srcDir]++
+		}
+	}
+	for i := range pfs {
+		if !pfs[i].isolate && inPlace[pfs[i].srcDir] > 1 {
+			pfs[i].isolate, pfs[i].linkSrc = true, true
+		}
+	}
 }
 
 // manifestEntry resolves a manifest's bundle root + entry file. With the wrangler-style `main` set (a

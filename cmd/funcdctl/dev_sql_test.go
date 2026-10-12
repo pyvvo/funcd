@@ -216,3 +216,80 @@ func TestScenarioDevWorkflowStepBindsDatabase(t *testing.T) {
 	}, 60*time.Second, 100*time.Millisecond, "the run ends")
 	require.Equal(t, v1.RunPhase("Succeeded"), run.Status.Phase, "%+v", run.Status.Steps)
 }
+
+// Two functions whose main files share a directory each run under their own contract: in place they would share the
+// directory's one contract dotfile, and the last one written would judge both. The run names the project as `.`, as
+// `funcdctl dev .` does.
+func TestDevFunctionsSharingAMainDirKeepTheirContracts(t *testing.T) {
+	requireRuntime(t)
+	contract := func(field string) string {
+		return "contract:\n  input:\n    type: object\n    additionalProperties: false\n    properties:\n      " + field +
+			":\n        type: string\n  output:\n    type: object\n    additionalProperties: false\n    properties:\n      " + field +
+			":\n        type: string\n"
+	}
+	dir := devProject(t, map[string]string{
+		"a.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\nmain: src/a.mjs\n" + contract("x"),
+		"b.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\nmain: src/b.mjs\n" + contract("y"),
+	})
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "src"), 0o700))
+	for name, body := range map[string]string{
+		"src/shared.mjs": "export const echo = (d) => d;\n",
+		"src/a.mjs":      "import { echo } from './shared.mjs';\nexport function handle(ctx, e) { return echo(e.data); }\n",
+		"src/b.mjs":      "import { echo } from './shared.mjs';\nexport function handle(ctx, e) { return echo(e.data); }\n",
+	} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600))
+	}
+	t.Chdir(dir)
+	inst := startDevPath(t, ".")
+	for fn, body := range map[string]string{"a": `{"data":{"x":"1"}}`, "b": `{"data":{"y":"2"}}`} {
+		require.EventuallyWithT(t, func(c *assert.CollectT) {
+			resp, err := http.Post(inst.gatewayURL+"/function/"+fn, "application/json", strings.NewReader(body))
+			if !assert.NoError(c, err) {
+				return
+			}
+			defer func() { _ = resp.Body.Close() }()
+			got, _ := io.ReadAll(resp.Body)
+			assert.Equal(c, http.StatusOK, resp.StatusCode, "%s: %s", fn, got)
+		}, 30*time.Second, 100*time.Millisecond, "function %s answers under its own contract", fn)
+	}
+}
+
+// The steps of a workflow whose main files share a directory each run under their own contract too.
+func TestDevWorkflowStepsSharingAMainDirKeepTheirContracts(t *testing.T) {
+	requireRuntime(t)
+	contract := func(in, out string) string {
+		return "contract:\n  input:\n    type: object\n    additionalProperties: false\n    properties:\n      " + in +
+			":\n        type: string\n  output:\n    type: object\n    additionalProperties: false\n    properties:\n      " + out +
+			":\n        type: string\n"
+	}
+	dir := devProject(t, map[string]string{
+		"workflow.yaml": "apiVersion: funcd.io/v1alpha1\nkind: Workflow\nmetadata:\n  name: pair\n  namespace: default\n" +
+			"spec:\n  steps:\n    - name: a\n      function:\n        ref: a\n    - name: b\n      function:\n        ref: b\n" +
+			"      dependsOn:\n        - a\n",
+		"a.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\nmain: src/a.mjs\n" + contract("x", "y"),
+		"b.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\nmain: src/b.mjs\n" + contract("y", "z"),
+	})
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "src"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "src", "a.mjs"), []byte("export function handle(ctx, e) { return { y: e.data.x }; }\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "src", "b.mjs"), []byte("export function handle(ctx, e) { return { z: e.data.y }; }\n"), 0o600))
+	t.Chdir(dir)
+	inst := startDevPath(t, "workflow.yaml")
+	waitFuncsReady(t, inst, "a", "b")
+	ctx := context.Background()
+	_, err := inst.client.Apply(ctx, &v1.WorkflowRun{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflowRun.GVK().APIVersion(), Kind: v1.KindWorkflowRun},
+		ObjectMeta: v1.ObjectMeta{Name: "run-01", Namespace: devNamespace, ResourceGroup: devResourceGroup},
+		Spec:       v1.WorkflowRunSpec{Workflow: "pair", Input: json.RawMessage(`{"x":"1"}`)},
+	})
+	require.NoError(t, err)
+	var run *v1.WorkflowRun
+	require.Eventually(t, func() bool {
+		obj, gerr := inst.client.Get(ctx, v1.KindWorkflowRun, devNamespace, "run-01")
+		if gerr != nil {
+			return false
+		}
+		run = obj.(*v1.WorkflowRun)
+		return run.Status.Phase == "Succeeded" || run.Status.Phase == "Failed"
+	}, 60*time.Second, 100*time.Millisecond, "the run ends")
+	require.Equal(t, v1.RunPhase("Succeeded"), run.Status.Phase, "%+v", run.Status.Steps)
+}
