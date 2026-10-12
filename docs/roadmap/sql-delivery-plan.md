@@ -1,6 +1,7 @@
 # SQL delivery plan — ADR sequencing to ship FEAT-0011
 
-- **Status**: Active (living — update as ADRs are created/accepted/implemented)
+- **Status**: Complete — the seven ADRs, ADR-0231 to ADR-0237, are Implemented (2026-10-12). The computed sections
+  record the order they were built in; F134 and F135 remain ideas, outside this plan.
 - **Date**: 2026-10-12
 - **Realizes**: [FEAT-0011 (SQL databases)](../feat/0011-feat-sql.md)
 - **Process**: [ADR-0000](../adr/0000-adr-process.md) · skills `/adr` → `/adr-judge` → `/adr-impl` → `/adr-impl-review`
