@@ -189,7 +189,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		switch {
 		case uerr == nil:
 			r.recorded(engineKey(db.Namespace, db.Name), next)
-		case fault.KindOf(uerr) != fault.Conflict:
+		case fault.KindOf(uerr) == fault.Conflict:
+			// Another write won: run again on the fresh object at once, so the computed change is not held a whole period.
+			return controller.Result{Requeue: true}, nil
+		default:
 			return controller.Result{}, fault.Wrapf(uerr, fault.KindOf(uerr), op, "write sqldatabase status")
 		}
 	}

@@ -366,3 +366,18 @@ func TestDataMissingForgottenOnDelete(t *testing.T) {
 	_, ok := get(t, base).Status.Conditions.Get("DataMissing")
 	require.False(t, ok, "the new database lost nothing")
 }
+
+// A pass whose status write is lost to a concurrent write runs again at once, not a supervision period later: the
+// change it computed, such as a cleared DataMissing, would otherwise wait that long.
+func TestStatusWriteLostToConflictRequeuesAtOnce(t *testing.T) {
+	rt := newRuntime(todoDB())
+	rt.ready = true
+	base := store.New(memory.New())
+	create(t, base, "")
+	r, err := sqlsvc.NewReconciler(sqlsvc.ReconcilerDeps{Store: &conflictOnce{Store: base}, Provider: rt, Engines: sqlsvc.NewEngines(), Master: []byte(masterKey)})
+	require.NoError(t, err)
+	require.Equal(t, controller.Result{Requeue: true}, reconcile(t, r), "the lost write is retried at once")
+	require.Equal(t, controller.Result{RequeueAfter: controller.SupervisionPeriod}, reconcile(t, r), "then the steady supervision")
+	_, ok := get(t, base).Status.Conditions.Get("Ready")
+	require.True(t, ok)
+}
