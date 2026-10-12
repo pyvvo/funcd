@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.12.1](https://github.com/pyvvo/funcd/compare/v0.12.0...v0.12.1) (2026-10-12)
+
+
+### Bug Fixes
+
+* **backup:** a catalog without a checkpoint backs up as an empty member ([#996](https://github.com/pyvvo/funcd/issues/996)) ([dd04061](https://github.com/pyvvo/funcd/commit/dd04061b2ceb9b42ee960aafab911dec7341319e))
+* **catalog:** serve a catalog restored under another prefix ([#997](https://github.com/pyvvo/funcd/issues/997)) ([1babef5](https://github.com/pyvvo/funcd/commit/1babef5eb5fa1f32ad1443b90268cee6f9ad68b8))
+* **funcd:** close the in-memory bus that tests and WithBus left running ([#983](https://github.com/pyvvo/funcd/issues/983)) ([f5b8899](https://github.com/pyvvo/funcd/commit/f5b889968196c194fba643e11b0ace5491afb6d1))
+* **runtime:** the duckdb engine checkpoints its catalog after each commit, not only on SIGTERM ([#1000](https://github.com/pyvvo/funcd/issues/1000)) ([6b607f2](https://github.com/pyvvo/funcd/commit/6b607f2ba7aff7b8b0ef48c7aa0c85c10d41891a))
+
 ## [0.12.0](https://github.com/pyvvo/funcd/compare/v0.11.0...v0.12.0) (2026-10-11)
 
 
