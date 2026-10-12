@@ -37,7 +37,8 @@ match. Feature status: `idea → adr → accepted → reviewing → implemented`
 
 F127 comes first: a SQL engine keeps its data on disk, and the add-on runtime keeps none today. F128 builds on it.
 F129, F131 and F132 build on F128. F130 and F133 build on F128 and F129, because a migration hook and the dev loop
-both run SQL from functions. F134 and F135 are ideas, not built in this epoch.
+both run SQL from functions. F136 lets the change feed work with no address configured. F134 and F135 are ideas,
+not built in this epoch.
 
 ```mermaid
 flowchart LR
@@ -49,6 +50,7 @@ flowchart LR
     F129 --> F130
     F128 --> F133["F133 SQL in funcdctl dev"]
     F129 --> F133
+    F132 --> F136["F136 Bridge address"]
 ```
 
 | # | Feature | Builds on | ADR(s) | Status |
@@ -62,6 +64,7 @@ flowchart LR
 | F133 | **SQL in funcdctl dev**: `funcdctl dev` gives a function or a workflow that binds a database a local database on the same engine, as a process, so a developer runs the same SQL and migrations before deploying. **Why**: the dev loop must match production, as it does for KV, blob and the catalog. | F128 · F129 · [ADR-0125](../adr/0125-funcdctl-dev-local-run.md) (funcdctl dev) | [ADR-0237](../adr/0237-sql-in-funcdctl-dev.md) | implemented |
 | F134 | **External SQL access**: a client outside the platform, such as a reporting tool, reads a database with an Identity, as the catalog allows. The decider kept this as an idea on 2026-10-12, so it is not built in this epoch. **Why**: not needed yet. | F129 · [ADR-0137](../adr/0137-per-caller-catalog-query-rbac.md)/[ADR-0138](../adr/0138-external-catalog-ingress-and-route-aggregation.md) (the catalog's external path) | — | idea |
 | F135 | **Shared SQL server**: many apps' databases on one engine, with funcd checking the tables and the action of every statement in the daemon before it runs. Recorded as an idea when dedicated engines were chosen on 2026-10-12, so it is not built in this epoch. **Why**: dedicated engines cost about 5 MB each at rest; a shared server would save that, at the price of statement checks and one write log for every app. | F128 · F129 | — | idea |
+| F136 | **The bridge address**: the address containers call funcd back on (the change feed, the catalog proxies, the S3 endpoint) comes from the container network funcd creates, with nothing to configure. **Why**: an install without `catalog.proxyHost` silently lost the change feed, and a SQL feature depended on a catalog field. | F132 | [ADR-0238](../adr/0238-container-bridge-address.md) | adr |
 
 ## How it lands on funcd (high level)
 
