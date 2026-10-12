@@ -1,6 +1,6 @@
 # ADR-0234: SQL backup and restore
 
-- **Status**: Accepted (2026-10-12, self-accepted under the decider's batch delegation; judged twice: the first round
+- **Status**: Implemented (2026-10-12, review passed). Accepted (2026-10-12, self-accepted under the decider's batch delegation; judged twice: the first round
   added emptying a database on a failed restore, a reason of its own for a not-Ready engine, the stream-error check, the
   supported load size and the `DataMissing` condition, and made the no-platform-export call one decision; the second
   found no Blocker or Major. The decider is told that no platform export is the choice)

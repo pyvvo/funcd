@@ -7,6 +7,7 @@ package backup
 import (
 	"cmp"
 	"context"
+	"io"
 	"log/slog"
 	"sync"
 	"time"
@@ -40,6 +41,8 @@ const (
 	ReasonIntegrity           = "Integrity"
 	ReasonExportFailed        = "ExportFailed"
 	ReasonSameProvider        = "SameProvider"
+	// ReasonEngineNotReady is a run that needs a database whose engine is not Ready (ADR-0234).
+	ReasonEngineNotReady = "EngineNotReady"
 	// ReasonNamespaceHeld is an in-place Restore whose namespace already carries a restore marker.
 	ReasonNamespaceHeld = "NamespaceHeld"
 	// reasonFailed is a run's failure no other reason names; its message carries the cause.
@@ -73,6 +76,14 @@ type KVLoader interface {
 	List(ctx context.Context, prefix string) ([]string, error)
 }
 
+// SQLLoader loads, empties and inspects a database through its engine (ADR-0234). HasTables counts tables, views,
+// indexes and triggers.
+type SQLLoader interface {
+	Load(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, file io.Reader) error
+	Empty(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
+	HasTables(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (bool, error)
+}
+
 // Hold is the daemon's hold (ADR-0206): the platform gate the runs wait on, the namespace gate the slots ask, and the
 // namespace hold an in-place Restore takes.
 type Hold interface {
@@ -86,10 +97,12 @@ type Hold interface {
 type Deps struct {
 	Store   store.Store
 	Secrets SecretReader
-	// Sources are what a Backup copies; KV loads and empties a KVStore; Purger empties a Bucket.
+	// Sources are what a Backup copies; KV loads and empties a KVStore; Purger empties a Bucket; SQL loads and empties
+	// a SQLDatabase (nil ⇒ a Restore of one fails).
 	Sources workload.Sources
 	KV      KVLoader
 	Purger  gc.BucketPurger
+	SQL     SQLLoader
 	// Hold nil is a platform never held, whose in-place Restore holds nothing.
 	Hold Hold
 	// StoreURL is the blob store's URL, blob.target or the file:// URL of blob.dir: a schedule on its provider is

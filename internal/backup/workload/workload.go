@@ -45,11 +45,15 @@ const (
 	listPage        = 1000
 )
 
-// The failures a run's record names by reason (Decisions 4, 5).
+// The failures a run's record names by reason (Decisions 4, 5; ADR-0234 Decision 2).
 var (
 	ErrCatalogUnstable     = errors.New("the catalog changed under every copy")
 	ErrTargetUnconditional = errors.New("the target refuses a create-if-absent put")
+	ErrEngineNotReady      = errors.New("the database's engine is not ready")
 )
+
+// sqlRecordBytes is the size of one record of a database's file (ADR-0234 Decision 2).
+const sqlRecordBytes = 8 << 20
 
 // Member is one store of a scope. Catalog is a CatalogService member's spec.catalog, which Write copies.
 type Member struct {
@@ -59,11 +63,14 @@ type Member struct {
 }
 
 // Sources are what Write reads: the KV driver's per-store export (ADR-0209 SnapshotPrefix; nil when the driver offers
-// none), the shared blob store and a Bucket's prefix in it.
+// none), the shared blob store and a Bucket's prefix in it, and a database's SQLite file from its engine (ADR-0234;
+// nil ⇒ no SQL members), which fails ErrEngineNotReady for a database with no Ready engine and returns the stream's
+// error, not io.EOF, when the engine reports one at its end.
 type Sources struct {
 	KV           func(prefix string) snapshot.Source
 	Blob         blob.Bucket
 	BucketPrefix func(ns v1.NamespaceName, b v1.ObjectName) string
+	SQL          func(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (io.ReadCloser, error)
 }
 
 // Options are where Write puts the copy and to whom it seals it: Path is <ns>/<backup>-<uid>/ on Target, Recipients
@@ -95,13 +102,13 @@ type Manifest struct {
 	Recipients []string     `json:"recipients,omitempty"`
 }
 
-// Resolve lists the members s names in ns (Decision 2), KVStores, Buckets then CatalogServices: by name, the
+// Resolve lists the members s names in ns (Decision 2), KVStores, Buckets, CatalogServices then SQLDatabases: by name, the
 // stores of the App's kv, buckets and catalogs entries, or the stores of the ResourceGroup. A named member or App that
 // does not exist is fault.NotFound naming it.
 func Resolve(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1.BackupScope) ([]Member, error) {
 	const op = "workload.Resolve"
 	names := map[v1.Kind][]v1.ObjectName{
-		v1.KindKVStore: s.KVStores, v1.KindBucket: s.Buckets, v1.KindCatalogService: s.Catalogs,
+		v1.KindKVStore: s.KVStores, v1.KindBucket: s.Buckets, v1.KindCatalogService: s.Catalogs, v1.KindSQLDatabase: s.Databases,
 	}
 	switch {
 	case s.App != "":
@@ -152,7 +159,9 @@ func Resolve(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1.Back
 	return out, nil
 }
 
-func memberKinds() []v1.Kind { return []v1.Kind{v1.KindKVStore, v1.KindBucket, v1.KindCatalogService} }
+func memberKinds() []v1.Kind {
+	return []v1.Kind{v1.KindKVStore, v1.KindBucket, v1.KindCatalogService, v1.KindSQLDatabase}
+}
 
 // KVPrefix is a KVStore's key prefix in the KV substrate, <ns>/<store>/ (ADR-0072).
 func KVPrefix(ns v1.NamespaceName, name v1.ObjectName) string {
@@ -161,7 +170,8 @@ func KVPrefix(ns v1.NamespaceName, name v1.ObjectName) string {
 
 // Write copies ms under o.Path, then puts the manifest (Decisions 4, 5): a KVStore to kv/<store>/, a Bucket's
 // objects to blob/<bucket>/, a catalog's objects but catalog.db to catalog/<name>/<attempt>/files/ and then its
-// catalog.db to catalog/<name>/<attempt>/catalog.db/. A refused IfNotExist is ErrTargetUnconditional; a catalog whose
+// catalog.db to catalog/<name>/<attempt>/catalog.db/, and a SQLDatabase's SQLite file to sql/<name>/ in records of
+// 8 MiB keyed 000001, 000002, … (ADR-0234 Decision 2). A refused IfNotExist is ErrTargetUnconditional; a catalog whose
 // checkpoint names an object no attempt copied is ErrCatalogUnstable.
 func Write(ctx context.Context, ns v1.NamespaceName, ms []Member, src Sources, o Options) (Manifest, error) {
 	const op = "workload.Write"
@@ -191,8 +201,16 @@ func Write(ctx context.Context, ns v1.NamespaceName, ms []Member, src Sources, o
 			mf.Files = []backup.StoreFile{f}
 		case v1.KindCatalogService:
 			mf, err = w.catalog(ctx, ns, mb, src)
+		case v1.KindSQLDatabase:
+			if src.SQL == nil {
+				return Manifest{}, fault.Unavailablef(op, "member %s/%s: no SQL engine is wired", mb.Kind, mb.Name)
+			}
+			f, err = w.file(ctx, "sql/"+string(mb.Name), func(emit func(snapshot.Record) error) error {
+				return sqlFile(ctx, src, ns, mb.Name, emit)
+			})
+			mf.Files = []backup.StoreFile{f}
 		default:
-			err = fault.Invalidf(op, "member %s/%s: want a KVStore, Bucket or CatalogService", mb.Kind, mb.Name)
+			err = fault.Invalidf(op, "member %s/%s: want a KVStore, Bucket, CatalogService or SQLDatabase", mb.Kind, mb.Name)
 		}
 		if err != nil {
 			return Manifest{}, err
@@ -258,6 +276,32 @@ func (w *writer) catalog(ctx context.Context, ns v1.NamespaceName, mb Member, sr
 	}
 	return MemberFile{}, fault.Wrapf(ErrCatalogUnstable, fault.Conflict, op, "catalog %s: %d copies missed %q, which its checkpoint names",
 		mb.Name, catalogAttempts, last)
+}
+
+// sqlFile emits a database's SQLite file from its engine as records of sqlRecordBytes, keyed by their 1-based index in
+// six digits; it never holds more than one record in memory.
+func sqlFile(ctx context.Context, src Sources, ns v1.NamespaceName, name v1.ObjectName, emit func(snapshot.Record) error) error {
+	const op = "workload.Write"
+	rc, err := src.SQL(ctx, ns, name)
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "database %s", name)
+	}
+	defer func() { _ = rc.Close() }()
+	buf := make([]byte, sqlRecordBytes)
+	for i := 1; ; i++ {
+		n, err := io.ReadFull(rc, buf)
+		if n > 0 {
+			if eerr := emit(snapshot.Record{Key: fmt.Appendf(nil, "%06d", i), Value: bytes.Clone(buf[:n])}); eerr != nil {
+				return eerr
+			}
+		}
+		switch {
+		case errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF):
+			return nil
+		case err != nil:
+			return fault.Wrapf(err, fault.KindOf(err), op, "database %s: read its file", name)
+		}
+	}
 }
 
 // objects emits every object under prefix in key order, its key relative to prefix and its value EncodeObject's,

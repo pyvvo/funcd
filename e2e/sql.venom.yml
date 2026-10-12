@@ -6,11 +6,15 @@
 #   S2 the reader's write is refused (non-writer-write-refused).
 #   S3 a batch whose second statement fails applies none (batch-is-all-or-nothing).
 #   S4 the rows survive a kill of the engine and a restart of the daemon (ADR-0231 durable storage).
-name: sql — SQL databases on real containerd (ADR-0232, ADR-0233)
+#   S5 a 100 MB database is backed up to the S3 server in the VM, sealed, as one member file (ADR-0234).
+#   S6 a Restore loads it into an empty database under the default 256Mi bound, and the copy reads the same rows.
+#   S7 with its engine directory gone, as after a platform restore on a new host, notes-db is Ready and empty with
+#      DataMissing True; an admin's in-place Restore brings its rows back and clears it.
+name: sql — SQL databases on real containerd (ADR-0232, ADR-0233, ADR-0234)
 
 vars:
   dp: http://127.0.0.1:8081
-  vmsh: "limactl shell --workdir / {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token bash -c"
+  vmsh: "limactl shell --workdir / {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=sql-lane-developer bash -c"
   ctr: "/var/lib/funcd/bin/ctr --address /var/lib/funcd/data/containerd/containerd.sock -n funcd-default"
 
 testcases:
@@ -154,3 +158,154 @@ testcases:
         assertions:
           - result.statuscode ShouldEqual 200
           - result.bodyjson.count ShouldEqual 2
+
+  - name: S5 a 100 MB database is backed up to the S3 server in the VM
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/notes"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"fill","megabytes":100}}'
+        info: "fill → {{.result.statuscode}} {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            install -d /var/lib/vgw/data/todo-workload /var/lib/vgw/versions
+            systemd-run --unit sql-s3 -p EnvironmentFile=/opt/lane/dr/versitygw.env /opt/lane/dr/versitygw \
+              --port 127.0.0.1:7070 posix --versioning-dir /var/lib/vgw/versions /var/lib/vgw/data
+            for i in $(seq 30); do curl -s -o /dev/null http://127.0.0.1:7070 && break; sleep 1; done
+            funcdctl apply -f /opt/lane/dr/workload-secrets.yaml >/dev/null
+            funcdctl apply -f /opt/lane/sql/backup.yaml >/dev/null
+            funcdctl apply -f /opt/lane/sql/backup-b1.yaml >/dev/null
+            for i in $(seq 90); do
+              p=$(funcdctl get backup notes-b1 -n default -o json | python3 -c "import json,sys;print(json.load(sys.stdin)[\"status\"].get(\"phase\",\"\"))")
+              [ "$p" = Succeeded ] && break; [ "$p" = Failed ] && { funcdctl get backup notes-b1 -n default -o json; exit 1; }; sleep 2
+            done
+            funcdctl get backup notes-b1 -n default -o json | python3 -c "import json,sys;s=json.load(sys.stdin)[\"status\"];m=s[\"members\"][0];print(s[\"phase\"],m[\"kind\"],m[\"name\"],m[\"bytes\"])"
+            d=$(ls -d /var/lib/vgw/data/todo-workload/default/notes-b1-*)
+            ls $d/sql/notes-db | head -3; ls $d | grep -q manifest.yaml && echo MANIFEST'
+        info: "the backup → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "Succeeded SQLDatabase notes-db"
+          - result.systemout ShouldContainSubstring part-00000
+          - result.systemout ShouldContainSubstring MANIFEST
+
+  - name: S6 the backup restores into an empty database under the default memory bound
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            funcdctl apply -f /opt/lane/sql/notes-db-restored.yaml >/dev/null
+            for i in $(seq 60); do
+              funcdctl get sqldatabase notes-db-restored -n default -o json | grep -q "\"phase\": *\"Ready\"" && break; sleep 2
+            done
+            sed s/BACKUP/notes-b1/ /opt/lane/sql/restore-copy.yaml | funcdctl apply -f - >/dev/null
+            for i in $(seq 120); do
+              p=$(funcdctl get restore notes-copy -n default -o json | python3 -c "import json,sys;print(json.load(sys.stdin)[\"status\"].get(\"phase\",\"\"))")
+              [ "$p" = Succeeded ] && break; [ "$p" = Failed ] && { funcdctl get restore notes-copy -n default -o json; exit 1; }; sleep 2
+            done
+            echo "restore $p"
+            funcdctl apply -f /opt/lane/sql/notes-restored.yaml >/dev/null'
+        info: "the restore → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "restore Succeeded"
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/notes-restored"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"size"}}'
+        retry: 45
+        delay: 2
+        info: "the copy → {{.result.statuscode}} {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.blobs ShouldEqual 100
+          - result.bodyjson.bytes ShouldEqual 104857600
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/notes-restored"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"list"}}'
+        assertions:
+          - result.bodyjson.notes ShouldHaveLength 2
+
+  - name: S7 lost engine data is reported, and an in-place Restore brings it back
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            systemctl stop funcd-demo
+            systemctl reset-failed funcd-demo 2>/dev/null || true
+            rm -rf /var/lib/funcd/data/providers/sqldatabase/default/notes-db
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 /usr/local/bin/funcd --config /opt/lane/funcdconfig.yaml
+            curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
+            for i in $(seq 60); do
+              funcdctl get sqldatabase notes-db -n default -o json | python3 -c "
+          import json,sys
+          s=json.load(sys.stdin)[\"status\"]
+          c={x[\"type\"]:x for x in s.get(\"conditions\",[])}
+          ok=c.get(\"DataMissing\",{}).get(\"status\")==\"True\" and s.get(\"phase\")==\"Ready\"
+          print(\"MISSING\" if ok else \"waiting\", c.get(\"DataMissing\",{}).get(\"message\",\"\"))" | tee /tmp/missing | grep -q MISSING && break
+              sleep 2
+            done
+            cat /tmp/missing'
+        info: "after the loss → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring MISSING
+          - result.systemout ShouldContainSubstring "workload Restore"
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/notes"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"init"}}'
+        retry: 45
+        delay: 2
+        info: "the empty database → {{.result.statuscode}} {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=sql-lane-admin
+            set -e
+            sed s/BACKUP/notes-b1/ /opt/lane/sql/restore-in-place.yaml | funcdctl apply -f - >/dev/null
+            for i in $(seq 120); do
+              p=$(funcdctl get restore notes-back -n default -o json | python3 -c "import json,sys;print(json.load(sys.stdin)[\"status\"].get(\"phase\",\"\"))")
+              [ "$p" = Succeeded ] && break; [ "$p" = Failed ] && { funcdctl get restore notes-back -n default -o json; exit 1; }; sleep 2
+            done
+            echo "in place $p"
+            for i in $(seq 30); do
+              funcdctl get sqldatabase notes-db -n default -o json | python3 -c "
+          import json,sys
+          c={x[\"type\"]:x for x in json.load(sys.stdin)[\"status\"].get(\"conditions\",[])}
+          print(\"CLEARED\" if c.get(\"DataMissing\",{}).get(\"status\")==\"False\" else \"waiting\")" | grep -q CLEARED && { echo CLEARED; break; }
+              sleep 2
+            done'
+        info: "the in-place restore → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "in place Succeeded"
+          - result.systemout ShouldContainSubstring CLEARED
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/notes"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"list"}}'
+        retry: 15
+        delay: 2
+        info: "the rows after the restore → {{.result.statuscode}} {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.notes ShouldHaveLength 2

@@ -1,6 +1,7 @@
 package sql
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -8,6 +9,7 @@ import (
 	"net/url"
 	"reflect"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -28,12 +30,17 @@ const (
 	defaultMemory = "256Mi"
 	enginePoll    = 2 * time.Second
 	condReady     = v1.ConditionType("Ready")
+	// condDataMissing is a database that was Ready before and came back with no engine directory, as after a
+	// platform restore on a new host (ADR-0234 Decision 6).
+	condDataMissing = v1.ConditionType("DataMissing")
 )
 
-// The Ready reasons a SQLDatabase reports when False.
+// The Ready reasons a SQLDatabase reports when False, and the reasons of DataMissing.
 const (
 	ReasonEngineNotReady       = "EngineNotReady"
 	ReasonEngineConvergeFailed = "EngineConvergeFailed"
+	ReasonNoDirectory          = "NoDirectory"
+	ReasonRestored             = "Restored"
 )
 
 // ReconcilerDeps configures the SQLDatabase reconciler (ADR-0232).
@@ -46,6 +53,9 @@ type ReconcilerDeps struct {
 	Hold              hold.Gate // nil ⇒ never held
 	Logger            *slog.Logger
 	SupervisionPeriod time.Duration
+	// DurableStorage is engine storage that outlives a daemon start: only then does a missing directory mean lost
+	// data (DataMissing). False with no storage root or with storage.mode memory.
+	DurableStorage bool
 }
 
 // Reconciler is the controller.Reconciler for KindSQLDatabase.
@@ -53,6 +63,13 @@ type Reconciler struct {
 	d       ReconcilerDeps
 	volumes provider.Volumes
 	log     *slog.Logger
+
+	// One client each, so engine calls reuse their connections.
+	backupClient, probeClient *http.Client
+
+	mu      sync.Mutex
+	seen    map[string]bool // the databases this process has passed over once
+	missing map[string]bool // DataMissing found but not yet written into the database's status
 }
 
 // NewReconciler builds the reconciler. Store, Provider, Engines and Master are required, and Provider must implement
@@ -82,15 +99,22 @@ func NewReconciler(d ReconcilerDeps) (*Reconciler, error) {
 	if d.Logger == nil {
 		d.Logger = slog.Default()
 	}
-	return &Reconciler{d: d, volumes: vols, log: d.Logger.With("component", "sql.reconciler")}, nil
+	return &Reconciler{d: d, volumes: vols, log: d.Logger.With("component", "sql.reconciler"),
+		backupClient: httpx.NodeClient(0), probeClient: httpx.NodeClient(5 * time.Second),
+		seen: map[string]bool{}, missing: map[string]bool{}}, nil
 }
 
 // Engines is the registry of Ready engines the reconciler fills.
 func (r *Reconciler) Engines() *Engines { return r.d.Engines }
 
+// Backups copies and loads databases over this reconciler's engines, for workload backups (ADR-0234).
+func (r *Reconciler) Backups() Backups {
+	return Backups{Engines: r.d.Engines, Master: r.d.Master, Client: r.backupClient}
+}
+
 // Prober answers the deletion protection over this reconciler's engines and storage.
 func (r *Reconciler) Prober() Prober {
-	return Prober{Engines: r.d.Engines, Master: r.d.Master, Volumes: r.volumes}
+	return Prober{Engines: r.d.Engines, Master: r.d.Master, Volumes: r.volumes, Client: r.probeClient}
 }
 
 func (r *Reconciler) held() bool { return r.d.Hold != nil && r.d.Hold.Held() }
@@ -110,6 +134,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	db, ok := obj.(*v1.SQLDatabase)
 	if !ok {
 		return controller.Result{}, fault.Internalf(op, "object %s/%s is not a SQLDatabase", req.Namespace, req.Name)
+	}
+	missing, merr := r.dataMissing(ctx, db)
+	if merr != nil {
+		return controller.Result{}, merr
 	}
 	// A changed spec (its bounds) reaches the engine only through a new container; the same pass records the
 	// generation, so one change makes exactly one teardown (ADR-0232 Decision 2).
@@ -132,6 +160,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	next.Conditions = append(v1.Conditions(nil), db.Status.Conditions...)
 	next.ObservedGeneration = db.Generation
 	next.Bindings = bindings
+	if missing != nil {
+		next.Conditions.Set(*missing)
+	}
 	if st.Ready {
 		r.d.Engines.Set(ref.Namespace, ref.Name, st.Address)
 		next.Phase = v1.PhaseReady
@@ -145,9 +176,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		next.Phase = v1.PhasePending
 		next.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, ObservedGeneration: db.Generation})
 	}
-	if !reflect.DeepEqual(next, db.Status) {
+	switch {
+	case reflect.DeepEqual(next, db.Status):
+		r.recorded(engineKey(db.Namespace, db.Name), next)
+	default:
 		db.Status = next
-		if _, uerr := r.d.Store.Update(ctx, db); uerr != nil && fault.KindOf(uerr) != fault.Conflict {
+		_, uerr := r.d.Store.Update(ctx, db)
+		switch {
+		case uerr == nil:
+			r.recorded(engineKey(db.Namespace, db.Name), next)
+		case fault.KindOf(uerr) != fault.Conflict:
 			return controller.Result{}, fault.Wrapf(uerr, fault.KindOf(uerr), op, "write sqldatabase status")
 		}
 	}
@@ -155,6 +193,108 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		return controller.Result{RequeueAfter: enginePoll}, nil
 	}
 	return controller.Result{RequeueAfter: r.d.SupervisionPeriod}, nil
+}
+
+// dataMissing is the DataMissing condition db's pass sets, nil for none. On this process's first pass over db, with
+// durable storage, a database whose stored Ready is True and whose directory is gone is missing its data; a
+// Succeeded Restore into db since then clears it. A migration's new tables do not.
+func (r *Reconciler) dataMissing(ctx context.Context, db *v1.SQLDatabase) (*v1.Condition, error) {
+	const op = "sql.Reconcile"
+	key := engineKey(db.Namespace, db.Name)
+	lost := &v1.Condition{Type: condDataMissing, Status: v1.ConditionTrue, Reason: ReasonNoDirectory, ObservedGeneration: db.Generation,
+		Message: "the database was Ready before and its engine directory is gone, so it starts empty: run a workload Restore into it"}
+	r.mu.Lock()
+	first, pending := !r.seen[key], r.missing[key]
+	r.mu.Unlock()
+	if pending {
+		return lost, nil
+	}
+	if cur, ok := db.Status.Conditions.Get(condDataMissing); ok && cur.Status == v1.ConditionTrue {
+		restored, err := r.restoredSince(ctx, db, time.Time(cur.LastTransitionTime))
+		if err != nil || !restored {
+			return nil, err
+		}
+		return &v1.Condition{Type: condDataMissing, Status: v1.ConditionFalse, Reason: ReasonRestored,
+			ObservedGeneration: db.Generation}, nil
+	}
+	if !first {
+		return nil, nil
+	}
+	ready, ok := db.Status.Conditions.Get(condReady)
+	if !r.d.DurableStorage || !ok || ready.Status != v1.ConditionTrue {
+		r.markSeen(key, false)
+		return nil, nil
+	}
+	refs, err := r.volumes.List(ctx)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.KindOf(err), op, "list the engine directories")
+	}
+	for _, ref := range refs {
+		if ref.Namespace == db.Namespace && ref.Name == db.Name {
+			r.markSeen(key, false)
+			return nil, nil
+		}
+	}
+	// The pass's Converge recreates the directory, so the loss stays pending until a status write records it.
+	r.markSeen(key, true)
+	r.log.WarnContext(ctx, "sql database lost its data", "database", key)
+	return lost, nil
+}
+
+// markSeen records the first pass over a database, and whether it found the database's data missing.
+func (r *Reconciler) markSeen(key string, missing bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.seen[key] = true
+	if missing {
+		r.missing[key] = true
+	}
+}
+
+// recorded drops a pending DataMissing once the stored status carries it.
+func (r *Reconciler) recorded(key string, st v1.SQLDatabaseStatus) {
+	if c, ok := st.Conditions.Get(condDataMissing); ok && c.Status == v1.ConditionTrue {
+		r.mu.Lock()
+		delete(r.missing, key)
+		r.mu.Unlock()
+	}
+}
+
+// restoredSince reports a Succeeded Restore whose destination is db, created after since: its creation time is the
+// store's, the clock DataMissing's transition reads too.
+func (r *Reconciler) restoredSince(ctx context.Context, db *v1.SQLDatabase, since time.Time) (bool, error) {
+	const op = "sql.Reconcile"
+	l, err := r.d.Store.List(ctx, v1.KindRestore.GVK(), store.ListOptions{Namespace: db.Namespace})
+	if err != nil {
+		return false, fault.Wrapf(err, fault.KindOf(err), op, "list restores in %q", db.Namespace)
+	}
+	for _, o := range l.Items {
+		rs, ok := o.(*v1.Restore)
+		if !ok || rs.Status.Phase != v1.RunSucceeded || !time.Time(rs.CreationTime).After(since) {
+			continue
+		}
+		for _, m := range rs.Spec.Members {
+			if m.Kind == v1.KindSQLDatabase && cmp.Or(m.As, m.Name) == db.Name {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+// MapRestore maps a Restore to the databases it loads, whose DataMissing it may clear.
+func (r *Reconciler) MapRestore(_ context.Context, obj v1.Object) []controller.Request {
+	rs, ok := obj.(*v1.Restore)
+	if !ok {
+		return nil
+	}
+	var out []controller.Request
+	for _, m := range rs.Spec.Members {
+		if m.Kind == v1.KindSQLDatabase {
+			out = append(out, controller.Request{GVK: v1.KindSQLDatabase.GVK(), Namespace: rs.Namespace, Name: cmp.Or(m.As, m.Name)})
+		}
+	}
+	return out
 }
 
 // bindings counts the Functions whose spec.sql names db (ADR-0233 Decision 1).
@@ -214,6 +354,11 @@ func (r *Reconciler) engineSpec(db *v1.SQLDatabase) provider.ProviderSpec {
 func (r *Reconciler) deleted(ctx context.Context, ref provider.ProviderRef) error {
 	const op = "sql.Reconcile"
 	r.d.Engines.Delete(ref.Namespace, ref.Name)
+	// A database created again under this name is a new one: it has lost nothing.
+	r.mu.Lock()
+	delete(r.seen, engineKey(ref.Namespace, ref.Name))
+	delete(r.missing, engineKey(ref.Namespace, ref.Name))
+	r.mu.Unlock()
 	if err := r.d.Provider.Teardown(ctx, ref); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "tear down engine %s/%s", ref.Namespace, ref.Name)
 	}

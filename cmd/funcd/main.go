@@ -1410,8 +1410,12 @@ func containerdOptions(ctx context.Context, cfg config.Config, logger *slog.Logg
 		return nil, noopClose, err
 	}
 	closer := func() error { return errors.Join(mgr.Close(), closeRoot()) }
-	return []funcd.Option{funcd.WithRuntime(cd), funcd.WithContainerExecution(mgrCfg.ImageFor(c.ImagePrefix)),
-		funcd.WithProviderStorage(root)}, closer, nil
+	opts := []funcd.Option{funcd.WithRuntime(cd), funcd.WithContainerExecution(mgrCfg.ImageFor(c.ImagePrefix)),
+		funcd.WithProviderStorage(root)}
+	if cfg.Storage.Mode == "memory" {
+		opts = append(opts, funcd.WithEphemeralProviderStorage())
+	}
+	return opts, closer, nil
 }
 
 // providerStorageRoot is the add-on engines' storage root on the containerd runtime (ADR-0231 Decision 5):

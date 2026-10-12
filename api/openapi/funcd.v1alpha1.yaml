@@ -1041,6 +1041,15 @@ components:
           type:
             - array
             - "null"
+        databases:
+          items:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+          type:
+            - array
+            - "null"
         kvStores:
           items:
             maxLength: 63

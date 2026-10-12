@@ -407,26 +407,39 @@ egress:
   venom: e2e/egress.venom.yml
 
 sql:
-  description: SQL databases on real containerd (ADR-0232/0233) — a Drizzle TypeScript owner and a SQLModel Python reader of one rqlite engine, a refused write, an all-or-nothing batch, and rows that survive an engine kill and a daemon restart.
+  description: SQL databases on real containerd (ADR-0232/0233/0234) — a Drizzle TypeScript owner and a SQLModel Python reader of one rqlite engine, a refused write, an all-or-nothing batch, rows that survive an engine kill and a daemon restart, a 100 MB database backed up to an S3 server in the VM and restored under a new name, and lost engine data reported and restored in place.
   module: github.com/pyvvo/funcd-functions
   dir: apps/todo
   # funcd-bundle writes dist/ beside the Python project, so the lane builds in a writable copy of the module.
   copy: true
   # funcd-bundle installs the bundle in the local python:3.14-slim-bookworm image: that tag first points at the digest
   # the python314 runtime image pins.
+  # versitygw (Apache-2.0), the S3 server of the backup steps, is built for the VM at the app-todo lane's pinned version.
   build:
     - docker pull python:3.14-slim-bookworm@sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83 && docker tag python:3.14-slim-bookworm@sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83 python:3.14-slim-bookworm
     - cd functions/py && uv run --locked funcd-bundle
+    - CGO_ENABLED=0 GOOS=linux GOARCH=$(go env GOARCH) GOBIN= go install github.com/versity/versitygw/cmd/versitygw@v1.8.0 && cp "$(go env GOPATH)/bin/linux_$(go env GOARCH)/versitygw" dr/versitygw
   stage:
     - sql/notes-db.yaml
     - sql/notes.yaml
     - sql/notes-report.yaml
+    - sql/backup.yaml
+    - sql/backup-b1.yaml
+    - sql/notes-db-restored.yaml
+    - sql/restore-copy.yaml
+    - sql/notes-restored.yaml
+    - sql/restore-in-place.yaml
+    # The todo App's S3 server key, workload Secrets and test identity.
+    - dr
     - from: apps/todo/sql/funcdconfig.yaml
       module: github.com/pyvvo/funcd-functions
       to: funcdconfig.yaml
     - functions/ts/notes.mjs
     - functions/ts/notes.funcdctl.yaml
     - functions/py/dist/notes_report
+  tokens:
+    admin: sql-lane-admin
+    developer: sql-lane-developer
   push:
     - artifact: functions/ts/notes.mjs
       ref: notes

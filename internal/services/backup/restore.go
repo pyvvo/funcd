@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -16,17 +17,20 @@ import (
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/platform/hold"
+	"github.com/pyvvo/funcd/internal/snapshot"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
 // RestoreReconciler is the controller.Reconciler for KindRestore (Decision 7).
 type RestoreReconciler struct{ *base }
 
-// target is one member's destination: a KVStore prefix, or a view of the blob store and whether it is a Bucket.
+// target is one member's destination: a KVStore prefix, a SQLDatabase, or a view of the blob store and whether it is
+// a Bucket.
 type target struct {
 	member  v1.RestoreMember
 	file    workload.MemberFile
 	kv      string
+	sql     v1.ObjectName
 	view    blob.Bucket
 	bucket  v1.ObjectName
 	written bool
@@ -256,6 +260,9 @@ func (r *RestoreReconciler) plan(ctx context.Context, rs *v1.Restore, m workload
 		case mb.Kind == v1.KindBucket:
 			_, err = r.d.Store.Get(ctx, v1.KindBucket.GVK(), ns, dest)
 			t.bucket, t.view = dest, blob.Prefixed(r.d.Sources.Blob, r.d.Sources.BucketPrefix(ns, dest))
+		case mb.Kind == v1.KindSQLDatabase:
+			_, err = r.d.Store.Get(ctx, v1.KindSQLDatabase.GVK(), ns, dest)
+			t.sql = dest
 		case mb.AsCatalog != nil:
 			_, err = r.d.Store.Get(ctx, v1.KindBucket.GVK(), ns, mb.AsCatalog.Bucket)
 			t.view = blob.Prefixed(r.d.Sources.Blob, r.d.Sources.BucketPrefix(ns, mb.AsCatalog.Bucket)+mb.AsCatalog.Prefix+"/")
@@ -273,9 +280,9 @@ func (r *RestoreReconciler) plan(ctx context.Context, rs *v1.Restore, m workload
 			return nil, reasonFailed, err
 		}
 		if !mb.InPlace {
-			empty, err := r.isEmpty(ctx, t)
+			empty, err := r.isEmpty(ctx, ns, t)
 			if err != nil {
-				return nil, reasonFailed, err
+				return nil, failReason(err), err
 			}
 			if !empty {
 				return nil, ReasonNotEmpty, fault.Conflictf(op, "%s/%s is not empty: a Restore loads into an empty one", mb.Kind, dest)
@@ -286,7 +293,25 @@ func (r *RestoreReconciler) plan(ctx context.Context, rs *v1.Restore, m workload
 	return out, "", nil
 }
 
-func (r *RestoreReconciler) isEmpty(ctx context.Context, t *target) (bool, error) {
+// isEmpty reports a target with no data; a SQLDatabase also needs no Function binding it, which closes the race
+// between the check and the load (ADR-0234 Decision 3), and a Ready engine to answer.
+func (r *RestoreReconciler) isEmpty(ctx context.Context, ns v1.NamespaceName, t *target) (bool, error) {
+	if t.sql != "" {
+		if r.d.SQL == nil {
+			return false, fault.Unavailablef("backup.Restore", "no SQL engine loads a database")
+		}
+		fns, err := r.d.Store.List(ctx, v1.KindFunction.GVK(), store.ListOptions{Namespace: ns})
+		if err != nil {
+			return false, err
+		}
+		for _, o := range fns.Items {
+			if fn, ok := o.(*v1.Function); ok && slices.ContainsFunc(fn.Spec.SQL, func(b v1.FunctionSQL) bool { return b.Database == t.sql }) {
+				return false, nil
+			}
+		}
+		has, err := r.d.SQL.HasTables(ctx, ns, t.sql)
+		return !has, err
+	}
 	if t.kv != "" {
 		if r.d.KV == nil {
 			return false, fault.Unavailablef("backup.Restore", "the KV driver loads no store")
@@ -298,9 +323,19 @@ func (r *RestoreReconciler) isEmpty(ctx context.Context, t *target) (bool, error
 	return len(items) == 0, err
 }
 
-// fill empties an in-place target, then loads its member: a KVStore by LoadPrefix, objects by Put, a catalog's
-// files before its catalog.db.
+// fill empties an in-place target, then loads its member: a KVStore by LoadPrefix, a SQLDatabase by streaming its
+// file's records to the engine's load, which replaces all its data, objects by Put, a catalog's files before its
+// catalog.db.
 func (r *RestoreReconciler) fill(ctx context.Context, ns v1.NamespaceName, t *target, src blob.Bucket, path string, unseal backup.Unseal) (string, error) {
+	if t.sql != "" {
+		if r.d.SQL == nil {
+			return reasonFailed, fault.Unavailablef("backup.Restore", "no SQL engine loads a database")
+		}
+		if err := r.d.SQL.Load(ctx, ns, t.sql, &recordReader{next: workload.Records(ctx, src, path, t.file.Files[0], unseal)}); err != nil {
+			return failReason(err), err
+		}
+		return "", nil
+	}
 	if t.member.InPlace {
 		if err := r.emptyOne(ctx, ns, t); err != nil {
 			return reasonFailed, err
@@ -352,9 +387,15 @@ func (r *RestoreReconciler) empty(ctx context.Context, ns v1.NamespaceName, targ
 	return errors.Join(errs...)
 }
 
-// emptyOne empties a target: a KVStore by DropPrefix, a Bucket by BucketPurger.Purge, a catalog prefix key by key.
+// emptyOne empties a target: a KVStore by DropPrefix, a SQLDatabase by its engine, a Bucket by BucketPurger.Purge, a
+// catalog prefix key by key.
 func (r *RestoreReconciler) emptyOne(ctx context.Context, ns v1.NamespaceName, t *target) error {
 	switch {
+	case t.sql != "":
+		if r.d.SQL == nil {
+			return nil
+		}
+		return r.d.SQL.Empty(ctx, ns, t.sql)
 	case t.kv != "":
 		if r.d.KV == nil {
 			return nil
@@ -377,6 +418,33 @@ func (r *RestoreReconciler) emptyOne(ctx context.Context, ns v1.NamespaceName, t
 			return nil
 		}
 	}
+}
+
+// failReason is a load's reason: EngineNotReady for a database whose engine is not Ready, else Failed.
+func failReason(err error) string {
+	if errors.Is(err, workload.ErrEngineNotReady) {
+		return ReasonEngineNotReady
+	}
+	return reasonFailed
+}
+
+// recordReader reads the values of a file's records in order, as one stream: a database's SQLite file.
+type recordReader struct {
+	next func() (snapshot.Record, error)
+	cur  []byte
+}
+
+func (r *recordReader) Read(p []byte) (int, error) {
+	for len(r.cur) == 0 {
+		rec, err := r.next()
+		if err != nil {
+			return 0, err
+		}
+		r.cur = rec.Value
+	}
+	n := copy(p, r.cur)
+	r.cur = r.cur[n:]
+	return n, nil
 }
 
 // finish writes the end of the Restore: Succeeded, or Failed with reason and err's message.

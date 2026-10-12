@@ -287,3 +287,82 @@ func TestReconcileCountsBindings(t *testing.T) {
 	require.Equal(t, 2, get(t, st).Status.Bindings)
 	require.Len(t, r.MapFunction(context.Background(), &v1.Function{ObjectMeta: v1.ObjectMeta{Namespace: "default"}}), 1)
 }
+
+// ADR-0234 Decision 6: without durable storage a missing directory is no lost data; with it, a database that was Ready
+// and lost its directory reports DataMissing on the first pass.
+func TestDataMissingNeedsDurableStorage(t *testing.T) {
+	for _, durable := range []bool{false, true} {
+		rt := newRuntime()
+		rt.ready = true
+		st := store.New(memory.New())
+		d := create(t, st, "")
+		d.Status.Conditions.Set(v1.Condition{Type: "Ready", Status: v1.ConditionTrue})
+		_, err := st.Update(context.Background(), d)
+		require.NoError(t, err)
+		r, err := sqlsvc.NewReconciler(sqlsvc.ReconcilerDeps{Store: st, Provider: rt, Engines: sqlsvc.NewEngines(), Master: []byte(masterKey), DurableStorage: durable})
+		require.NoError(t, err)
+		reconcile(t, r)
+		c, ok := get(t, st).Status.Conditions.Get("DataMissing")
+		require.Equal(t, durable, ok && c.Status == v1.ConditionTrue, "durable=%v", durable)
+		reconcile(t, r)
+		c, _ = get(t, st).Status.Conditions.Get("DataMissing")
+		require.Equal(t, durable, c.Status == v1.ConditionTrue, "a later pass keeps it")
+	}
+}
+
+// conflictOnce is a store whose first status write is lost to a Conflict.
+type conflictOnce struct {
+	store.Store
+	failed bool
+}
+
+func (c *conflictOnce) Update(ctx context.Context, obj v1.Object) (v1.Object, error) {
+	if !c.failed {
+		c.failed = true
+		return nil, fault.Conflictf("test", "lost to another write")
+	}
+	return c.Store.Update(ctx, obj)
+}
+
+// A DataMissing found on a pass whose status write is lost is written by the next pass, though that pass's engine
+// directory exists again.
+func TestDataMissingSurvivesALostWrite(t *testing.T) {
+	rt := newRuntime()
+	rt.ready = true
+	base := store.New(memory.New())
+	d := create(t, base, "")
+	d.Status.Conditions.Set(v1.Condition{Type: "Ready", Status: v1.ConditionTrue})
+	_, err := base.Update(context.Background(), d)
+	require.NoError(t, err)
+	st := &conflictOnce{Store: base}
+	r, err := sqlsvc.NewReconciler(sqlsvc.ReconcilerDeps{Store: st, Provider: rt, Engines: sqlsvc.NewEngines(), Master: []byte(masterKey), DurableStorage: true})
+	require.NoError(t, err)
+	reconcile(t, r)
+	_, ok := get(t, base).Status.Conditions.Get("DataMissing")
+	require.False(t, ok, "the first write was lost")
+	require.True(t, rt.dirs[todoDB()], "and the pass recreated the directory")
+	reconcile(t, r)
+	c, ok := get(t, base).Status.Conditions.Get("DataMissing")
+	require.True(t, ok && c.Status == v1.ConditionTrue, "the next pass records it")
+}
+
+// A database deleted while its DataMissing was pending and created again under the same name reports nothing missing.
+func TestDataMissingForgottenOnDelete(t *testing.T) {
+	rt := newRuntime()
+	rt.ready = true
+	base := store.New(memory.New())
+	d := create(t, base, "")
+	d.Status.Conditions.Set(v1.Condition{Type: "Ready", Status: v1.ConditionTrue})
+	_, err := base.Update(context.Background(), d)
+	require.NoError(t, err)
+	r, err := sqlsvc.NewReconciler(sqlsvc.ReconcilerDeps{Store: &conflictOnce{Store: base}, Provider: rt, Engines: sqlsvc.NewEngines(),
+		Master: []byte(masterKey), DurableStorage: true})
+	require.NoError(t, err)
+	reconcile(t, r)
+	require.NoError(t, base.Delete(context.Background(), v1.KindSQLDatabase.GVK(), todoDB().Namespace, todoDB().Name, ""))
+	reconcile(t, r)
+	create(t, base, "")
+	reconcile(t, r)
+	_, ok := get(t, base).Status.Conditions.Get("DataMissing")
+	require.False(t, ok, "the new database lost nothing")
+}

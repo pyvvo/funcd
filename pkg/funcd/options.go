@@ -500,6 +500,12 @@ func WithProviderStorage(root string) Option {
 	return func(c *config) error { c.providerStorage = root; return nil }
 }
 
+// WithEphemeralProviderStorage marks the storage root of WithProviderStorage as one that does not outlive the daemon
+// (storage.mode memory), so a SQL database never reports DataMissing (ADR-0234 Decision 6).
+func WithEphemeralProviderStorage() Option {
+	return func(c *config) error { c.providerStorageEphemeral = true; return nil }
+}
+
 // WithCatalogProviderRuntime overrides the CatalogService add-on-provider runtime (ADR-0087). The
 // production runtime supervises the curated duckdb CONTAINER image; `funcdctl dev` (ADR-0125) injects
 // a process-mode driver that runs the embedded DuckDB+Quack engine as a host subprocess, since

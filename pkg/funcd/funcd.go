@@ -295,6 +295,9 @@ type config struct {
 
 	// providerStorage is the root of the add-on engines' durable directories (ADR-0231); "" ⇒ none.
 	providerStorage string
+	// providerStorageEphemeral is a root that does not outlive the daemon (storage.mode memory), so a missing engine
+	// directory is no lost data (ADR-0234 Decision 6).
+	providerStorageEphemeral bool
 
 	// catalogExtensionDir is injected as DUCKDB_EXTENSION_DIRECTORY into catalog-consumer functions
 	// (dev analogue of the prod bundle's duckdb-ext, ADR-0089). Set by `funcdctl dev`; empty in prod.
@@ -1085,12 +1088,14 @@ func (p *Platform) buildControlPlane() error {
 	sqlReconciler, err := sqlsvc.NewReconciler(sqlsvc.ReconcilerDeps{
 		Store: c.store, Provider: sqlRuntime, Engines: sqlEngines, Master: master, ImageFor: c.imageFor,
 		Hold: c.gate(), Logger: p.logger, SupervisionPeriod: c.pacing.SupervisionPeriod,
+		DurableStorage: c.providerStorage != "" && !c.providerStorageEphemeral,
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build SQLDatabase reconciler")
 	}
 	ctrl.Register(v1.KindSQLDatabase.GVK(), sqlReconciler)
 	ctrl.Watches(v1.KindFunction.GVK(), sqlReconciler.MapFunction) // status.bindings counts Function.spec.sql
+	ctrl.Watches(v1.KindRestore.GVK(), sqlReconciler.MapRestore)   // a Succeeded Restore clears DataMissing (ADR-0234)
 	p.sqlReconciler = sqlReconciler
 
 	// ADR-0135 (F100): the Identity credential-issuing reconciler — issues a keypair→owned Secret and
@@ -2210,7 +2215,8 @@ func (p *Platform) registerWorkloadBackups(ctrl *controller.Controller, secrets 
 	c := p.cfg
 	d := backupsvc.Deps{
 		Store: c.store, Secrets: secrets, Purger: bucketPurger{shared: c.blob}, StoreURL: c.blobStoreURL,
-		Sources: workload.Sources{Blob: c.blob, BucketPrefix: bucketPrefix},
+		Sources: workload.Sources{Blob: c.blob, BucketPrefix: bucketPrefix, SQL: p.sqlReconciler.Backups().Source},
+		SQL:     p.sqlReconciler.Backups(),
 		Period:  c.pacing.SupervisionPeriod, Clock: c.backupClock, Meter: c.backupMeter, Logger: p.logger,
 	}
 	if d.Meter == nil {
