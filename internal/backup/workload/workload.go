@@ -219,8 +219,7 @@ func (w *writer) catalog(ctx context.Context, ns v1.NamespaceName, mb Member, sr
 	for attempt := 1; attempt <= catalogAttempts; attempt++ {
 		c1, err := src.Blob.Get(ctx, root+checkpointName)
 		if fault.KindOf(err) == fault.NotFound {
-			// no checkpoint yet: DuckLake opens a missing catalog.db as a new, empty catalog, and no object under the
-			// prefix is part of one, so the member is empty rather than a failure of the whole Backup
+			// DuckLake opens a missing catalog.db as a new, empty catalog: no object under the prefix is part of one
 			return MemberFile{Kind: mb.Kind, Name: mb.Name}, nil
 		}
 		if err != nil {

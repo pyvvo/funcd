@@ -233,7 +233,7 @@ func TestWriteWithoutKVExport(t *testing.T) {
 
 // A catalog that has no checkpoint yet (a new DuckLake catalog its engine has not checkpointed) is an empty member, so
 // it does not fail the backup of the stores beside it; an orphan object under its prefix, which no checkpoint names,
-// is not copied. Found by the app-todo lane, where every Backup of an App with a new catalog failed.
+// is not copied.
 func TestWriteCatalogWithoutCheckpoint(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
