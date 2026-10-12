@@ -45,10 +45,10 @@ components:
         status:
           $ref: "#/components/schemas/AppStatus"
       required:
-        - apiVersion
-        - kind
         - metadata
         - spec
+        - apiVersion
+        - kind
       type: object
     AppChild:
       additionalProperties: false
@@ -238,10 +238,10 @@ components:
         status:
           $ref: "#/components/schemas/AppRevisionStatus"
       required:
-        - apiVersion
-        - kind
         - metadata
         - spec
+        - apiVersion
+        - kind
       type: object
     AppRevisionSpec:
       additionalProperties: false
@@ -887,10 +887,10 @@ components:
         status:
           $ref: "#/components/schemas/BackupStatus"
       required:
-        - apiVersion
-        - kind
         - metadata
         - spec
+        - apiVersion
+        - kind
       type: object
     BackupEncryption:
       additionalProperties: false
@@ -935,10 +935,10 @@ components:
         status:
           $ref: "#/components/schemas/BackupScheduleStatus"
       required:
-        - apiVersion
-        - kind
         - metadata
         - spec
+        - apiVersion
+        - kind
       type: object
     BackupScheduleSpec:
       additionalProperties: false
@@ -1192,10 +1192,10 @@ components:
         status:
           $ref: "#/components/schemas/BucketStatus"
       required:
-        - apiVersion
-        - kind
         - metadata
         - spec
+        - apiVersion
+        - kind
       type: object
     BucketPrefix:
       additionalProperties: false
@@ -1297,10 +1297,10 @@ components:
         status:
           $ref: "#/components/schemas/CatalogServiceStatus"
       required:
-        - apiVersion
-        - kind
         - metadata
         - spec
+        - apiVersion
+        - kind
       type: object
     CatalogServiceSpec:
       additionalProperties: false
@@ -1407,10 +1407,10 @@ components:
         spec:
           $ref: "#/components/schemas/ConfigMapSpec"
       required:
-        - apiVersion
-        - kind
         - metadata
         - spec
+        - apiVersion
+        - kind
       type: object
     ConfigMapSpec:
       additionalProperties: false
@@ -1533,10 +1533,10 @@ components:
         spec:
           $ref: "#/components/schemas/EgressPolicySpec"
       required:
-        - apiVersion
-        - kind
         - metadata
         - spec
+        - apiVersion
+        - kind
       type: object
     EgressPolicySpec:
       additionalProperties: false
@@ -1604,10 +1604,10 @@ components:
         status:
           $ref: "#/components/schemas/EventSourceStatus"
       required:
-        - apiVersion
-        - kind
         - metadata
         - spec
+        - apiVersion
+        - kind
       type: object
     EventSourceSpec:
       additionalProperties: false
@@ -1752,10 +1752,10 @@ components:
         status:
           $ref: "#/components/schemas/FunctionStatus"
       required:
-        - apiVersion
-        - kind
         - metadata
         - spec
+        - apiVersion
+        - kind
       type: object
     FunctionBlob:
       additionalProperties: false
@@ -2010,9 +2010,9 @@ components:
         status:
           $ref: "#/components/schemas/GatewayStatus"
       required:
+        - metadata
         - apiVersion
         - kind
-        - metadata
       type: object
     GatewayStatus:
       additionalProperties: false
@@ -2049,10 +2049,10 @@ components:
         spec:
           $ref: "#/components/schemas/GrantSpec"
       required:
-        - apiVersion
-        - kind
         - metadata
         - spec
+        - apiVersion
+        - kind
       type: object
     GrantSpec:
       additionalProperties: false
@@ -2092,10 +2092,10 @@ components:
         status:
           $ref: "#/components/schemas/IdentityStatus"
       required:
-        - apiVersion
-        - kind
         - metadata
         - spec
+        - apiVersion
+        - kind
       type: object
     IdentitySpec:
       additionalProperties: false
@@ -2155,9 +2155,9 @@ components:
         status:
           $ref: "#/components/schemas/InvocationStatus"
       required:
+        - metadata
         - apiVersion
         - kind
-        - metadata
       type: object
     InvocationStatus:
       additionalProperties: false
@@ -2217,10 +2217,10 @@ components:
         status:
           $ref: "#/components/schemas/KVStoreStatus"
       required:
-        - apiVersion
-        - kind
         - metadata
         - spec
+        - apiVersion
+        - kind
       type: object
     KVStoreHandover:
       additionalProperties: false
@@ -2381,9 +2381,9 @@ components:
         status:
           $ref: "#/components/schemas/NamespaceStatus"
       required:
+        - metadata
         - apiVersion
         - kind
-        - metadata
       type: object
     NamespaceHold:
       additionalProperties: false
@@ -2550,9 +2550,9 @@ components:
         uid:
           type: string
       required:
+        - uid
         - kind
         - name
-        - uid
       type: object
     PlanPart:
       additionalProperties: false
@@ -2638,10 +2638,10 @@ components:
         spec:
           $ref: "#/components/schemas/PolicySpec"
       required:
-        - apiVersion
-        - kind
         - metadata
         - spec
+        - apiVersion
+        - kind
       type: object
     PolicySpec:
       additionalProperties: false
@@ -2707,10 +2707,10 @@ components:
         status:
           $ref: "#/components/schemas/ResourceGroupStatus"
       required:
-        - apiVersion
-        - kind
         - metadata
         - spec
+        - apiVersion
+        - kind
       type: object
     ResourceGroupSpec:
       additionalProperties: false
@@ -2763,10 +2763,10 @@ components:
         status:
           $ref: "#/components/schemas/RestoreStatus"
       required:
-        - apiVersion
-        - kind
         - metadata
         - spec
+        - apiVersion
+        - kind
       type: object
     RestoreMember:
       additionalProperties: false
@@ -2879,10 +2879,10 @@ components:
         status:
           $ref: "#/components/schemas/RevisionStatus"
       required:
-        - apiVersion
-        - kind
         - metadata
         - spec
+        - apiVersion
+        - kind
       type: object
     RevisionPin:
       additionalProperties: false
@@ -2967,10 +2967,10 @@ components:
         spec:
           $ref: "#/components/schemas/RoleSpec"
       required:
-        - apiVersion
-        - kind
         - metadata
         - spec
+        - apiVersion
+        - kind
       type: object
     RoleRef:
       additionalProperties: false
@@ -3010,10 +3010,10 @@ components:
         spec:
           $ref: "#/components/schemas/RolesAssignmentSpec"
       required:
-        - apiVersion
-        - kind
         - metadata
         - spec
+        - apiVersion
+        - kind
       type: object
     RolesAssignmentSpec:
       additionalProperties: false
@@ -3045,10 +3045,10 @@ components:
         status:
           $ref: "#/components/schemas/RouteStatus"
       required:
-        - apiVersion
-        - kind
         - metadata
         - spec
+        - apiVersion
+        - kind
       type: object
     RouteAuth:
       additionalProperties: false
@@ -3192,10 +3192,10 @@ components:
         status:
           $ref: "#/components/schemas/RuntimeClassStatus"
       required:
-        - apiVersion
-        - kind
         - metadata
         - spec
+        - apiVersion
+        - kind
       type: object
     RuntimeClassSpec:
       additionalProperties: false
@@ -3273,10 +3273,10 @@ components:
         spec:
           $ref: "#/components/schemas/SecretSpec"
       required:
-        - apiVersion
-        - kind
         - metadata
         - spec
+        - apiVersion
+        - kind
       type: object
     SecretSpec:
       additionalProperties: false
@@ -3305,10 +3305,10 @@ components:
         status:
           $ref: "#/components/schemas/SensorStatus"
       required:
-        - apiVersion
-        - kind
         - metadata
         - spec
+        - apiVersion
+        - kind
       type: object
     SensorSpec:
       additionalProperties: false
@@ -3366,10 +3366,10 @@ components:
         status:
           $ref: "#/components/schemas/ServiceStatus"
       required:
-        - apiVersion
-        - kind
         - metadata
         - spec
+        - apiVersion
+        - kind
       type: object
     ServiceSpec:
       additionalProperties: false
@@ -3421,10 +3421,10 @@ components:
         status:
           $ref: "#/components/schemas/SiteStatus"
       required:
-        - apiVersion
-        - kind
         - metadata
         - spec
+        - apiVersion
+        - kind
       type: object
     SiteBucket:
       additionalProperties: false
@@ -3637,9 +3637,9 @@ components:
         status:
           $ref: "#/components/schemas/WorkerNodeStatus"
       required:
+        - metadata
         - apiVersion
         - kind
-        - metadata
       type: object
     WorkerNodeStatus:
       additionalProperties: false
@@ -3678,10 +3678,10 @@ components:
         status:
           $ref: "#/components/schemas/WorkflowStatus"
       required:
-        - apiVersion
-        - kind
         - metadata
         - spec
+        - apiVersion
+        - kind
       type: object
     WorkflowContract:
       additionalProperties: false
@@ -3754,10 +3754,10 @@ components:
         status:
           $ref: "#/components/schemas/WorkflowRunStatus"
       required:
-        - apiVersion
-        - kind
         - metadata
         - spec
+        - apiVersion
+        - kind
       type: object
     WorkflowRunLinks:
       additionalProperties: false
