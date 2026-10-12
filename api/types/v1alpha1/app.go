@@ -41,9 +41,11 @@ type AppSpec struct {
 	// Paused stops every write of the App (ADR-0212); it is not part of an AppRevision.
 	Paused bool `json:"paused,omitempty"`
 	// Requires names the shared Apps of this namespace that this App needs before it rolls out (ADR-0219).
-	Requires     []AppRequirement `json:"requires,omitempty"`
-	KV           []AppKVStore     `json:"kv,omitempty"`
-	Buckets      []AppBucket      `json:"buckets,omitempty"`
+	Requires []AppRequirement `json:"requires,omitempty"`
+	KV       []AppKVStore     `json:"kv,omitempty"`
+	Buckets  []AppBucket      `json:"buckets,omitempty"`
+	// SQL declares the App's SQL databases (ADR-0236), stores like kv and buckets.
+	SQL          []AppSQLDatabase `json:"sql,omitempty"`
 	Functions    []AppFunction    `json:"functions,omitempty"`
 	Workflows    []AppWorkflow    `json:"workflows,omitempty"`
 	EventSources []AppEventSource `json:"eventSources,omitempty"`
@@ -127,6 +129,16 @@ type AppBucket struct {
 	// Deletion is retain (or empty, the default: the Bucket and its objects outlive the App) or delete.
 	Deletion   DeletionPolicy `json:"deletion,omitempty"`
 	BucketSpec `json:",inline"`
+}
+
+// AppSQLDatabase is a sql entry: a SQLDatabase the App declares by name, or only the ref of an existing one
+// (ADR-0236).
+type AppSQLDatabase struct {
+	Name ObjectName `json:"name,omitempty"`
+	Ref  ObjectName `json:"ref,omitempty"`
+	// Deletion is retain (or empty, the default: the database and its data outlive the App) or delete.
+	Deletion        DeletionPolicy `json:"deletion,omitempty"`
+	SQLDatabaseSpec `json:",inline"`
 }
 
 // AppFunction is a functions entry: a Function the App declares by name, or only the ref of an existing one.
@@ -243,6 +255,11 @@ func (AppBucket) Schema(r huma.Registry) *huma.Schema {
 	return entrySchema(r, reflect.TypeFor[BucketSpec](), true)
 }
 
+// Schema is SQLDatabaseSpec's schema plus name, ref and deletion (see entrySchema).
+func (AppSQLDatabase) Schema(r huma.Registry) *huma.Schema {
+	return entrySchema(r, reflect.TypeFor[SQLDatabaseSpec](), true)
+}
+
 // Schema is FunctionSpec's schema plus name and ref (see entrySchema).
 func (AppFunction) Schema(r huma.Registry) *huma.Schema {
 	return entrySchema(r, reflect.TypeFor[FunctionSpec](), false)
@@ -301,6 +318,11 @@ func (e AppKVStore) MarshalJSON() ([]byte, error) {
 // MarshalJSON writes a ref entry as its ref alone (see marshalEntry).
 func (e AppBucket) MarshalJSON() ([]byte, error) {
 	return marshalEntry(entryHead{e.Name, e.Ref, e.Deletion}, e.BucketSpec)
+}
+
+// MarshalJSON writes a ref entry as its ref alone (see marshalEntry).
+func (e AppSQLDatabase) MarshalJSON() ([]byte, error) {
+	return marshalEntry(entryHead{e.Name, e.Ref, e.Deletion}, e.SQLDatabaseSpec)
 }
 
 // MarshalJSON writes a ref entry as its ref alone (see marshalEntry).
@@ -702,6 +724,10 @@ func (a *App) entries() []appEntry {
 		out = append(out, newEntry("buckets", i, entryHead{e.Name, e.Ref, e.Deletion}, e.BucketSpec,
 			&Bucket{TypeMeta: typeMetaFor(KindBucket), ObjectMeta: meta(e.Name), Spec: e.BucketSpec}))
 	}
+	for i, e := range s.SQL {
+		out = append(out, newEntry("sql", i, entryHead{e.Name, e.Ref, e.Deletion}, e.SQLDatabaseSpec,
+			&SQLDatabase{TypeMeta: typeMetaFor(KindSQLDatabase), ObjectMeta: meta(e.Name), Spec: e.SQLDatabaseSpec}))
+	}
 	for i, e := range s.Functions {
 		spec := e.FunctionSpec
 		spec.Config = repoint(spec.Config, stored)
@@ -851,7 +877,7 @@ type entryHead struct {
 // partSpec is the spec of a kind that has a section.
 type partSpec interface {
 	ConfigMapSpec | KVStoreSpec | BucketSpec | FunctionSpec | WorkflowSpec | EventSourceSpec | SensorSpec | RouteSpec |
-		SiteSpec | CatalogServiceSpec | BackupScheduleSpec
+		SiteSpec | CatalogServiceSpec | BackupScheduleSpec | SQLDatabaseSpec
 }
 
 // marshalEntry writes an entry's head, then its spec's fields only when the spec is set: a ref entry goes out as

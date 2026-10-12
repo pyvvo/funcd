@@ -157,6 +157,9 @@ func preHookParts(a *v1.App, ents []entry) []entry {
 		for _, b := range fn.Spec.Blob {
 			add(v1.KindBucket, b.Bucket)
 		}
+		for _, b := range fn.Spec.SQL {
+			add(v1.KindSQLDatabase, b.Database)
+		}
 		for _, b := range fn.Spec.Catalogs {
 			add(v1.KindCatalogService, b.Catalog)
 			cs, ok := parts[v1.ObjectRef{Kind: v1.KindCatalogService, Namespace: a.Namespace, Name: b.Catalog}].(*v1.CatalogService)
@@ -192,7 +195,8 @@ type hookPass struct {
 	busy    bool         // the runner held a call of this App when the pass began
 	started bool         // the pass started a call
 	pre     *pendingHook // the latest revision's first pre-hook not done, while it is not current
-	ready   bool         // pre's Function is Ready or NotStarted
+	ready   bool         // pre's Function is Ready or NotStarted, and each database it binds is Ready (ADR-0236)
+	waiting string       // what keeps pre from starting: Function/<fn>: not ready, or SQLDatabase/<name>: <reason>
 	post    *pendingHook // the first post-hook not done of the latest revision, current when the pass began
 	failure string       // the HookFailed message of a failed pre or post entry
 }
@@ -228,14 +232,42 @@ func (r *Reconciler) hooks(ctx context.Context, a *v1.App, latest *v1.AppRevisio
 		hp.started = !busy && r.startCall(ctx, a, latest, point, p.fn)
 		return hp, nil
 	}
+	hp.waiting = "Function/" + string(p.fn) + ": not ready"
 	if fn := objs[v1.ObjectRef{Kind: v1.KindFunction, Namespace: a.Namespace, Name: p.fn}]; fn != nil {
 		state := judge(fn, nil).child.State
 		hp.ready = state == v1.AppChildReady || state == v1.AppChildNotStarted
+		if f, ok := fn.(*v1.Function); ok && hp.ready {
+			var err error
+			if hp.ready, hp.waiting, err = r.databasesReady(ctx, a.Namespace, f, objs); err != nil {
+				return hp, err
+			}
+		}
 	}
 	if latest.Status.Phase == v1.PhaseDeploying && halt == nil && wrote == nil && !busy && hp.ready {
 		hp.started = r.startCall(ctx, a, latest, point, p.fn)
 	}
 	return hp, nil
+}
+
+// databasesReady reports whether every SQLDatabase fn's spec.sql names is Ready (ADR-0236 Decision 3, ADR-0214 Decision
+// 4 superseded in part), with the first one that is not as SQLDatabase/<name>: <its Ready reason>.
+func (r *Reconciler) databasesReady(ctx context.Context, ns v1.NamespaceName, fn *v1.Function, objs map[v1.ObjectRef]v1.Object) (bool, string, error) {
+	for _, b := range fn.Spec.SQL {
+		obj := objs[v1.ObjectRef{Kind: v1.KindSQLDatabase, Namespace: ns, Name: b.Database}]
+		if obj == nil {
+			var err error
+			if obj, err = r.get(ctx, v1.KindSQLDatabase, ns, b.Database); err != nil {
+				return false, "", err
+			}
+		}
+		if obj == nil {
+			return false, "SQLDatabase/" + string(b.Database) + ": not found", nil
+		}
+		if v := judge(obj, nil); v.child.State != v1.AppChildReady {
+			return false, "SQLDatabase/" + string(b.Database) + ": " + v.child.Reason, nil
+		}
+	}
+	return true, "", nil
 }
 
 // hookFailure is the HookFailed message of a failed entry: Function/<fn>: Invocation/<inv>: <error>, the error read

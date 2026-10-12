@@ -34,6 +34,10 @@ type SQLDatabaseStatus struct {
 // GroupVersionKind returns the constant GVK for SQLDatabase.
 func (d *SQLDatabase) GroupVersionKind() GroupVersionKind { return KindSQLDatabase.GVK() }
 
+// GetStatus returns the shared Status pointer, implementing StatusObject, so an App judges its database's Ready
+// (ADR-0236 Decision 3).
+func (d *SQLDatabase) GetStatus() *Status { return &d.Status.Status }
+
 // memoryQuantity is the size grammar the runtime parses (internal/platform/units.ParseBytes): an integer with an
 // optional Ki, Mi, Gi or Ti suffix.
 var memoryQuantity = regexp.MustCompile(`^[0-9]+(Ki|Mi|Gi|Ti)?$`)

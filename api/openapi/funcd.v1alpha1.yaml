@@ -760,6 +760,39 @@ components:
           type:
             - array
             - "null"
+        sql:
+          items:
+            additionalProperties: false
+            properties:
+              deletion:
+                description: retain (the default) keeps the store and its data when the App drops it or is deleted; delete removes them.
+                enum:
+                  - retain
+                  - delete
+                type: string
+              name:
+                description: The part's name. The object takes the App's namespace and resource group.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              owner:
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              ref:
+                description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              resources:
+                $ref: "#/components/schemas/ResourceSpec"
+            type: object
+          type:
+            - array
+            - "null"
         version:
           type: string
         workflows:

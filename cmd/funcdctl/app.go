@@ -833,7 +833,7 @@ func (a *cli) deleteApp(ctx context.Context, c *sdk.Client, ns v1.NamespaceName,
 	return nil
 }
 
-// ownStores are the App's kv and buckets entries that it declares by name; a ref store is not the App's.
+// ownStores are the App's kv, buckets and sql entries that it declares by name; a ref store is not the App's.
 func ownStores(app *v1.App) []v1.ObjectRef {
 	var stores []v1.ObjectRef
 	for _, e := range app.Spec.KV {
@@ -844,6 +844,11 @@ func ownStores(app *v1.App) []v1.ObjectRef {
 	for _, e := range app.Spec.Buckets {
 		if e.Ref == "" {
 			stores = append(stores, v1.ObjectRef{Kind: v1.KindBucket, Namespace: app.Namespace, Name: e.Name})
+		}
+	}
+	for _, e := range app.Spec.SQL {
+		if e.Ref == "" {
+			stores = append(stores, v1.ObjectRef{Kind: v1.KindSQLDatabase, Namespace: app.Namespace, Name: e.Name})
 		}
 	}
 	return stores

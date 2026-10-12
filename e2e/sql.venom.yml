@@ -12,11 +12,15 @@
 #      DataMissing True; an admin's in-place Restore brings its rows back and clears it.
 #   S8 a note added to notes-db fires note-added through the engine's change feed, and a Sensor copies it into
 #      notes-db-restored by invoking notes-restored (ADR-0235).
-name: sql — SQL databases on real containerd (ADR-0232 to ADR-0235)
+#   S9 the todo App with its value sql installs todo-db, and its pre-hook applies the 1.0.0 migration before the
+#      API serves; the 1.1.0 upgrade applies only the new one (ADR-0236).
+name: sql — SQL databases on real containerd (ADR-0232 to ADR-0236)
 
 vars:
   dp: http://127.0.0.1:8081
   vmsh: "limactl shell --workdir / {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=sql-lane-developer bash -c"
+  reg: oci-layout:///mnt/funcd-deps/registry
+  values: "-f /opt/lane/values/e2e.yaml -f /opt/lane/values/sql.yaml"
   ctr: "/var/lib/funcd/bin/ctr --address /var/lib/funcd/data/containerd/containerd.sock -n funcd-default"
 
 testcases:
@@ -364,3 +368,62 @@ testcases:
         info: "failed deliveries → {{.result.systemout}}"
         assertions:
           - result.systemout ShouldEqual 0
+
+  - name: S9 the todo App's pre-hook migrates its database at install and at upgrade
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            cd /opt/lane
+            for f in api-1.0.0:todo-api:1.0.0 api-1.1.0:todo-api:1.1.0 migrate-1.0.0:todo-migrate:1.0.0 migrate-1.1.0:todo-migrate:1.1.0 collect:todo-collect:1.0.0; do
+              funcdctl push functions/ts/${f%%:*}.mjs {{.reg}}/${f#*:} > /dev/null
+            done
+            for f in planner:todo-planner rank:todo-rank warm:todo-warm intake:todo-intake stats:todo-stats; do
+              funcdctl push functions/py/dist/${f%%:*} {{.reg}}/${f#*:}:1.0.0 --entry ${f%%:*}.py > /dev/null
+            done
+            funcdctl push --site web {{.reg}}/todo-web:1.0.0 > /dev/null
+            funcdctl app lock app {{.values}} > /dev/null
+            funcdctl push --template app {{.reg}}/todo:1.0.0 > /dev/null
+            funcdctl app deploy {{.reg}}/todo:1.0.0 {{.values}}'
+        info: "deploy 1.0.0 → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldStartWith todo-1
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-stats"
+        headers:
+          content-type: application/json
+        body: '{"data":{}}'
+        retry: 30
+        delay: 2
+        info: "stats on 1.0.0 → {{.result.statuscode}} {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.migrations ShouldEqual 1
+          - result.bodyjson.todos ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            cd /opt/lane
+            funcdctl app lock app-1.1.0 {{.values}} > /dev/null
+            funcdctl push --template app-1.1.0 {{.reg}}/todo:1.1.0 > /dev/null
+            funcdctl app deploy {{.reg}}/todo:1.1.0 {{.values}}'
+        info: "deploy 1.1.0 → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldStartWith todo-2
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-stats"
+        headers:
+          content-type: application/json
+        body: '{"data":{}}'
+        retry: 30
+        delay: 2
+        info: "stats on 1.1.0 → {{.result.statuscode}} {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.migrations ShouldEqual 2

@@ -39,7 +39,7 @@ func Pairs() []Pair {
 		{Owner: v1.KindApp, Child: v1.KindEventSource}, {Owner: v1.KindApp, Child: v1.KindSensor},
 		{Owner: v1.KindApp, Child: v1.KindRoute}, {Owner: v1.KindApp, Child: v1.KindSite},
 		{Owner: v1.KindApp, Child: v1.KindCatalogService}, {Owner: v1.KindApp, Child: v1.KindBackupSchedule},
-		{Owner: v1.KindApp, Child: v1.KindKVStore},
+		{Owner: v1.KindApp, Child: v1.KindKVStore}, {Owner: v1.KindApp, Child: v1.KindSQLDatabase},
 		{Owner: v1.KindApp, Child: v1.KindBucket}, {Owner: v1.KindApp, Child: v1.KindConfigMap},
 		{Owner: v1.KindApp, Child: v1.KindAppRevision}, {Owner: v1.KindAppRevision, Child: v1.KindInvocation},
 		{Owner: v1.KindFunction, Child: v1.KindRevision},
@@ -324,11 +324,12 @@ func (p *pass) judgeAll(ctx context.Context, items []v1.Object, only *ownerKey) 
 	return errors.Join(errs...)
 }
 
-// childRef returns obj's controller ref when obj is a child: a KVStore or a Bucket only when kvStoreCollectable.
+// childRef returns obj's controller ref when obj is a child: a KVStore, a Bucket or a SQLDatabase (ADR-0236) only when
+// kvStoreCollectable.
 func childRef(obj v1.Object) (v1.OwnerReference, bool) {
 	refs := obj.GetObjectMeta().OwnerReferences
 	switch obj.GroupVersionKind().Kind {
-	case v1.KindKVStore, v1.KindBucket:
+	case v1.KindKVStore, v1.KindBucket, v1.KindSQLDatabase:
 		if !kvStoreCollectable(refs) {
 			return v1.OwnerReference{}, false
 		}
@@ -528,13 +529,13 @@ func bucketUsers() []v1.Kind {
 // none), as the deletion protections bind it (ADR-0199 Decision 6): a Function another Function links to (ADR-0064),
 // a KVStore a Function's spec.kv names (ADR-0073), a Bucket a Function's or CatalogService's spec.blob, an
 // EventSource's spec.blob.bucket, a Route's spec.rules[].backend.static.bucket or a Site's spec.bucket.name names
-// (ADR-0080), a ConfigMap a Function's or CatalogService's spec.config names (ADR-0213 Decision 5). Nothing uses an
-// object of another kind.
+// (ADR-0080), a ConfigMap a Function's or CatalogService's spec.config names (ADR-0213 Decision 5), a SQLDatabase a
+// Function's spec.sql names (ADR-0236). Nothing uses an object of another kind.
 func InUse(ctx context.Context, s store.Store, obj v1.Object, skip func(v1.Object) bool) (v1.ObjectRef, bool, error) {
 	const op = "gc.InUse"
 	var kinds []v1.Kind
 	switch obj.(type) {
-	case *v1.Function, *v1.KVStore:
+	case *v1.Function, *v1.KVStore, *v1.SQLDatabase:
 		kinds = []v1.Kind{v1.KindFunction}
 	case *v1.Bucket:
 		kinds = bucketUsers()
@@ -569,6 +570,9 @@ func uses(u, obj v1.Object) bool {
 	case *v1.KVStore:
 		f, ok := u.(*v1.Function)
 		return ok && slices.ContainsFunc(f.Spec.KV, func(b v1.FunctionKV) bool { return b.Store == name })
+	case *v1.SQLDatabase:
+		f, ok := u.(*v1.Function)
+		return ok && slices.ContainsFunc(f.Spec.SQL, func(b v1.FunctionSQL) bool { return b.Database == name })
 	case *v1.Bucket:
 		return usesBucket(u, name)
 	case *v1.ConfigMap:

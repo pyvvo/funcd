@@ -107,7 +107,7 @@ func create(t testing.TB, st store.Store, kind v1.Kind, name v1.ObjectName, owne
 			UID:       om.UID, Controller: true,
 		}
 		obj.GetObjectMeta().OwnerReferences = []v1.OwnerReference{ref}
-		if kind == v1.KindKVStore || kind == v1.KindBucket { // a store's maker marks it (ADR-0178, ADR-0199)
+		if kind == v1.KindKVStore || kind == v1.KindBucket || kind == v1.KindSQLDatabase { // a store's maker marks it (ADR-0178, ADR-0199, ADR-0236)
 			ref.Controller = false
 			obj.GetObjectMeta().OwnerReferences = append(obj.GetObjectMeta().OwnerReferences, ref)
 		}
@@ -382,7 +382,7 @@ func appPairs() []gc.Pair {
 	var out []gc.Pair
 	for _, k := range []v1.Kind{
 		v1.KindFunction, v1.KindWorkflow, v1.KindEventSource, v1.KindSensor, v1.KindRoute, v1.KindSite,
-		v1.KindCatalogService, v1.KindBackupSchedule, v1.KindKVStore, v1.KindBucket, v1.KindConfigMap,
+		v1.KindCatalogService, v1.KindBackupSchedule, v1.KindKVStore, v1.KindSQLDatabase, v1.KindBucket, v1.KindConfigMap,
 	} {
 		out = append(out, gc.Pair{Owner: v1.KindApp, Child: k})
 	}

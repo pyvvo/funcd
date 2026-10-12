@@ -103,7 +103,7 @@ type Manifest struct {
 }
 
 // Resolve lists the members s names in ns (Decision 2), KVStores, Buckets, CatalogServices then SQLDatabases: by name, the
-// stores of the App's kv, buckets and catalogs entries, or the stores of the ResourceGroup. A named member or App that
+// stores of the App's kv, buckets, catalogs and sql entries, or the stores of the ResourceGroup. A named member or App that
 // does not exist is fault.NotFound naming it.
 func Resolve(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1.BackupScope) ([]Member, error) {
 	const op = "workload.Resolve"
@@ -126,6 +126,9 @@ func Resolve(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1.Back
 		}
 		for _, e := range a.Spec.Catalogs {
 			names[v1.KindCatalogService] = append(names[v1.KindCatalogService], cmp.Or(e.Name, e.Ref))
+		}
+		for _, e := range a.Spec.SQL {
+			names[v1.KindSQLDatabase] = append(names[v1.KindSQLDatabase], cmp.Or(e.Name, e.Ref))
 		}
 	case s.ResourceGroup != "":
 		names = map[v1.Kind][]v1.ObjectName{}

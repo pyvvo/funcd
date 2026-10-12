@@ -407,7 +407,7 @@ egress:
   venom: e2e/egress.venom.yml
 
 sql:
-  description: SQL databases on real containerd (ADR-0232/0233/0234/0235) — a Drizzle TypeScript owner and a SQLModel Python reader of one rqlite engine, a refused write, an all-or-nothing batch, rows that survive an engine kill and a daemon restart, a 100 MB database backed up to an S3 server in the VM and restored under a new name, lost engine data reported and restored in place, and a new row that starts a Function through a Sensor.
+  description: SQL databases on real containerd (ADR-0232 to ADR-0236) — a Drizzle TypeScript owner and a SQLModel Python reader of one rqlite engine, a refused write, an all-or-nothing batch, rows that survive an engine kill and a daemon restart, a 100 MB database backed up to an S3 server in the VM and restored under a new name, lost engine data reported and restored in place, a new row that starts a Function through a Sensor, and the todo App's database migrated by its pre-hook at install and upgrade.
   module: github.com/pyvvo/funcd-functions
   dir: apps/todo
   # funcd-bundle writes dist/ beside the Python project, so the lane builds in a writable copy of the module.
@@ -438,6 +438,34 @@ sql:
     - functions/ts/notes.mjs
     - functions/ts/notes.funcdctl.yaml
     - functions/py/dist/notes_report
+    # The todo App with its value sql (ADR-0236): its 1.0.0 and 1.1.0 templates, values and site, and every image its
+    # lock pins; the suite pushes, locks and deploys it.
+    - app
+    - values
+    - web
+    - from: apps/todo/app/resources
+      module: github.com/pyvvo/funcd-functions
+      to: app-1.1.0/resources
+    - from: apps/todo/app-1.1.0.yaml
+      module: github.com/pyvvo/funcd-functions
+      to: app-1.1.0/app.yaml
+    - functions/ts/api-1.0.0.mjs
+    - functions/ts/api-1.0.0.funcdctl.yaml
+    - functions/ts/api-1.1.0.mjs
+    - functions/ts/api-1.1.0.funcdctl.yaml
+    - functions/ts/migrate-1.0.0.mjs
+    - functions/ts/migrate-1.0.0.funcdctl.yaml
+    - functions/ts/migrate-1.1.0.mjs
+    - functions/ts/migrate-1.1.0.funcdctl.yaml
+    - functions/ts/collect.mjs
+    - functions/ts/collect.funcdctl.yaml
+    - functions/py/dist/planner
+    - functions/py/dist/rank
+    - functions/py/dist/warm
+    - functions/py/dist/intake
+    - functions/py/dist/stats
+    - grants.yaml
+    - secret.yaml
   tokens:
     admin: sql-lane-admin
     developer: sql-lane-developer
@@ -451,6 +479,8 @@ sql:
     - sql/notes-db.yaml
     - sql/notes.yaml
     - sql/notes-report.yaml
+    - grants.yaml
+    - secret.yaml
   ready:
     kind: function
     names:
@@ -492,6 +522,8 @@ app-todo:
     - functions/py/warm.funcdctl.yaml
     - functions/py/intake.py
     - functions/py/intake.funcdctl.yaml
+    - functions/py/stats.py
+    - functions/py/stats.funcdctl.yaml
     # Version 1.1.0 is the same resources with the app.yaml of 1.1.0.
     - from: apps/todo/app/resources
       module: github.com/pyvvo/funcd-functions

@@ -189,7 +189,7 @@ func (r *Reconciler) settle(ctx context.Context, a *v1.App, revs []*v1.AppRevisi
 				left = max(deadline.Sub(now), time.Millisecond)
 			case pre != nil && (hp.busy || hp.started):
 			case pre != nil && halt == nil && !hp.ready:
-				msg := "Function/" + string(pre.fn) + ": not ready"
+				msg := hp.waiting
 				r.failHook(latest, msg)
 				r.log.WarnContext(ctx, "rollout failed", "namespace", string(a.Namespace), "app", string(a.Name), "revision", string(latest.Name), "reason", msg)
 			default:

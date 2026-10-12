@@ -64,21 +64,21 @@ testcases:
             for f in api-1.0.0:todo-api:1.0.0 api-1.1.0:todo-api:1.1.0 migrate-1.0.0:todo-migrate:1.0.0 migrate-1.1.0:todo-migrate:1.1.0 collect:todo-collect:1.0.0; do
               funcdctl push functions/ts/${f%%:*}.mjs {{.reg}}/${f#*:}
             done
-            for f in planner:todo-planner:1.0.0 rank:todo-rank:1.0.0 warm:todo-warm:1.0.0 intake:todo-intake:1.0.0; do
+            for f in planner:todo-planner:1.0.0 rank:todo-rank:1.0.0 warm:todo-warm:1.0.0 intake:todo-intake:1.0.0 stats:todo-stats:1.0.0; do
               funcdctl push functions/py/${f%%:*}.py {{.reg}}/${f#*:}
             done
             funcdctl push --site web {{.reg}}/todo-web:1.0.0' | grep -c "@sha256:"
         info: "pushed → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldEqual 10
+          - result.systemout ShouldEqual 11
       - type: exec
         script: |
           {{.fctl}} app lock /opt/lane/app -f /opt/lane/values/e2e.yaml | grep -E '^[a-z]+ 1[.]0[.]0 sha256:[0-9a-f]{64}$' | cut -d' ' -f1 | paste -sd, -
         info: "app.lock → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldEqual api,collect,intake,migrate,planner,rank,warm,web
+          - result.systemout ShouldEqual api,collect,intake,migrate,planner,rank,stats,warm,web
       - type: exec
         script: "{{.fctl}} push --template /opt/lane/app {{.reg}}/todo:1.0.0"
         info: "template → {{.result.systemout}} {{.result.systemerr}}"

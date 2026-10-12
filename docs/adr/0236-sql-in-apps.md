@@ -1,6 +1,6 @@
 # ADR-0236: SQL databases in Apps, and migrations in hooks
 
-- **Status**: Accepted (2026-10-12, self-accepted under the decider's batch delegation; judged twice: the first round
+- **Status**: Implemented (2026-10-12, review passed). Reviewing (2026-10-12, implementation done). Accepted (2026-10-12, self-accepted under the decider's batch delegation; judged twice: the first round
   added the migration hook's writer role, made the ADR-0214 change an explicit partial supersession, kept a bound
   database from being pruned, pinned the migration tools and the expand-then-contract rule, and kept the app-todo lane
   unchanged; the second found no Blocker or Major)

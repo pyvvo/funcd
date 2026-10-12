@@ -699,8 +699,8 @@ github.com/prometheus/common v0.70.1 h1:1HvjP4D5oL3t8RsPlwxA9onvvStjtIHYE5XuuwOi
 github.com/prometheus/common v0.70.1/go.mod h1:VdFUQDMZK3VLkurFUVhia6uys/0suUp86TJz5qbJRhc=
 github.com/prometheus/procfs v0.21.1 h1:GljZCt+zSTS+NZq88cyQ1LjZ+RCHp3uVuabBWA5+OJI=
 github.com/prometheus/procfs v0.21.1/go.mod h1:aB55Cww9pdSJVHk0hUf0inxWyyjPogFIjmHKYgMKmtY=
-github.com/pyvvo/funcd-functions v0.11.0 h1:86KA+/WF3KdKRDe4sNTIf/4JPv7x6uy21kkESX4x0ew=
-github.com/pyvvo/funcd-functions v0.11.0/go.mod h1:L91uY7v74Ik9u+ui8J8p6Zqu/6RAK9uJWJFAKl6TxSY=
+github.com/pyvvo/funcd-functions v0.12.0 h1:mJ4XS/MGmhcfjy6HZCdtPwNJyTPDt2ixA2Uwa/qN5hY=
+github.com/pyvvo/funcd-functions v0.12.0/go.mod h1:L91uY7v74Ik9u+ui8J8p6Zqu/6RAK9uJWJFAKl6TxSY=
 github.com/pyvvo/funcd-python v0.9.0 h1:XHtOWWILu7MjfjPgkg2P9aINjjXwWzHeSEmCWpPb8fs=
 github.com/pyvvo/funcd-python v0.9.0/go.mod h1:xgR0Do0470V/uB78dA8QEsKrzyiHr4EeO1c37b92E2c=
 github.com/pyvvo/funcd-typescript v0.12.0 h1:ooDOsLwGH5pw6ANycB385hwIF3Eghv2MkW1lEQx9RMs=

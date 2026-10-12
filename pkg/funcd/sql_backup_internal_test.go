@@ -203,6 +203,29 @@ func TestScenarioScheduledBackupCopiesDatabase(t *testing.T) {
 		"the file opens with either recipient's identity")
 }
 
+// scenario: app-backup-includes-database — an App declaring todo-db and a backupSchedules entry with an empty scope:
+// the schedule backs up the App, and its Backup holds SQLDatabase/todo-db.
+func TestScenarioAppBackupIncludesDatabase(t *testing.T) {
+	t.Parallel()
+	engines := newFileEngines(t)
+	r := sqlRig(t, engines)
+	spec := r.schedule("x", "0 3 * * *", func(s *v1.BackupScheduleSpec) { s.Scope = v1.BackupScope{} }).Spec
+	r.create(r.dev, &v1.App{TypeMeta: tmeta(v1.KindApp), ObjectMeta: ordersMeta("todo"), Spec: v1.AppSpec{
+		SQL:             []v1.AppSQLDatabase{{Name: "todo-db"}},
+		BackupSchedules: []v1.AppBackupSchedule{{Name: "todo-nightly", BackupScheduleSpec: spec}},
+	}})
+	r.waitSQLReady("todo-db")
+	engines.engine(t, "todo-db").set(func(e *fileEngine) { e.data = sqlite("milk") })
+	require.Eventually(t, func() bool {
+		_, err := r.st.Get(r.ctx, v1.KindBackupSchedule.GVK(), "orders", "todo-nightly")
+		return err == nil
+	}, 10*time.Second, 10*time.Millisecond, "the App writes its schedule")
+	r.create(r.dev, r.backupObj("b1", "todo-nightly"))
+	b := r.waitBackup("b1", v1.RunSucceeded)
+	require.Equal(t, []v1.BackupMember{{Kind: v1.KindSQLDatabase, Name: "todo-db", Bytes: b.Status.Members[0].Bytes}}, b.Status.Members)
+	require.Equal(t, map[string]string{"000001": string(sqlite("milk"))}, r.records(b.Status.Path, v1.KindSQLDatabase, "todo-db", r.recovery))
+}
+
 // scenario: restore-into-new-name — a Restore of SQLDatabase/todo-db as the empty todo-db-restored brings the backup's
 // file there and leaves todo-db unchanged.
 func TestScenarioRestoreIntoNewName(t *testing.T) {

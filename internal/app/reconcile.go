@@ -167,6 +167,9 @@ func entries(a *v1.App) []entry {
 	for i, e := range s.Buckets {
 		add("buckets", v1.KindBucket, i, e.Name, e.Ref, e.Deletion)
 	}
+	for i, e := range s.SQL {
+		add("sql", v1.KindSQLDatabase, i, e.Name, e.Ref, e.Deletion)
+	}
 	for i, e := range s.Functions {
 		add("functions", v1.KindFunction, i, e.Name, e.Ref, "")
 	}
@@ -581,7 +584,9 @@ func ownerRefs(a *v1.App, kind v1.Kind, deletion v1.DeletionPolicy) []v1.OwnerRe
 	return []v1.OwnerReference{m}
 }
 
-func isStore(kind v1.Kind) bool { return kind == v1.KindKVStore || kind == v1.KindBucket }
+func isStore(kind v1.Kind) bool {
+	return kind == v1.KindKVStore || kind == v1.KindBucket || kind == v1.KindSQLDatabase
+}
 
 // marked reports whether refs hold the marker of this App incarnation (kind, name and UID): a marker never moves to
 // another UID (ADR-0178 Decision 4).
