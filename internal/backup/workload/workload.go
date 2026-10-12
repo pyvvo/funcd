@@ -211,12 +211,18 @@ func Write(ctx context.Context, ns v1.NamespaceName, ms []Member, src Sources, o
 
 // catalog copies one catalog in at most catalogAttempts attempts (Decision 5): the checkpoint C1, every other object
 // of the prefix, the check that each file C1 names was copied, then C1.
+// A catalog without a checkpoint is an empty member.
 func (w *writer) catalog(ctx context.Context, ns v1.NamespaceName, mb Member, src Sources) (MemberFile, error) {
 	const op = "workload.Write"
 	root := src.BucketPrefix(ns, mb.Catalog.Bucket) + mb.Catalog.Prefix + "/"
 	var last string
 	for attempt := 1; attempt <= catalogAttempts; attempt++ {
 		c1, err := src.Blob.Get(ctx, root+checkpointName)
+		if fault.KindOf(err) == fault.NotFound {
+			// no checkpoint yet: DuckLake opens a missing catalog.db as a new, empty catalog, and no object under the
+			// prefix is part of one, so the member is empty rather than a failure of the whole Backup
+			return MemberFile{Kind: mb.Kind, Name: mb.Name}, nil
+		}
 		if err != nil {
 			return MemberFile{}, fault.Wrapf(err, fault.KindOf(err), op, "catalog %s: read its checkpoint", mb.Name)
 		}

@@ -230,3 +230,34 @@ func TestWriteWithoutKVExport(t *testing.T) {
 	require.ErrorContains(t, err, "KVStore/orders-state")
 	require.Empty(t, s.PutKeys(path), "nothing is written")
 }
+
+// A catalog that has no checkpoint yet (a new DuckLake catalog its engine has not checkpointed) is an empty member, so
+// it does not fail the backup of the stores beside it; an orphan object under its prefix, which no checkpoint names,
+// is not copied. Found by the app-todo lane, where every Backup of an App with a new catalog failed.
+func TestWriteCatalogWithoutCheckpoint(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	shared, err := gocloud.Open(ctx, "mem://")
+	require.NoError(t, err)
+	require.NoError(t, shared.Put(ctx, "s3/orders/orders-files/a.csv", []byte("a"), blob.PutOptions{}))
+	require.NoError(t, shared.Put(ctx, "s3/orders/lakehouse/gold/orphan.parquet", []byte("p"), blob.PutOptions{}))
+	src := workload.Sources{Blob: shared, BucketPrefix: func(ns v1.NamespaceName, b v1.ObjectName) string {
+		return "s3/" + string(ns) + "/" + string(b) + "/"
+	}}
+	s := s3stub.New(t, nil)
+	target, err := gocloud.OpenWith(ctx, s.URL(), gocloud.OpenOptions{Static: &gocloud.StaticKey{ID: "AKIDOWNER", Secret: "s"}})
+	require.NoError(t, err)
+	members := []workload.Member{
+		{Kind: v1.KindBucket, Name: "orders-files"},
+		{Kind: v1.KindCatalogService, Name: "lake", Catalog: v1.CatalogRef{Bucket: "lakehouse", Prefix: "gold"}},
+	}
+	const path = "orders/nightly-1-uid/"
+	m, err := workload.Write(ctx, "orders", members, src, workload.Options{Target: target, Path: path})
+	require.NoError(t, err)
+	require.Equal(t, []string{path + "blob/orders-files/part-00000", path + "manifest.yaml"}, s.PutKeys(path))
+	require.Len(t, m.Members, 2)
+	require.Equal(t, workload.MemberFile{Kind: v1.KindCatalogService, Name: "lake"}, m.Members[1])
+	got, err := workload.ReadManifest(ctx, target, path)
+	require.NoError(t, err)
+	require.NoError(t, workload.Integrity(ctx, target, path, got))
+}
