@@ -118,6 +118,9 @@ func (r *Runtime) Converge(ctx context.Context, spec provider.ProviderSpec) (pro
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if spec.Storage != nil {
+		return provider.ProviderStatus{}, fault.Invalidf(op, "the dev catalog engine has no durable storage (ADR-0231)")
+	}
 	if !r.bundled() {
 		r.logger.Warn("catalog engine not embedded in this dev build — catalog unavailable",
 			"provider", spec.Ref.Name, "remedy", "just build-catalog-engine <os> <arch>")

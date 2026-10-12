@@ -1398,7 +1398,27 @@ func containerdOptions(ctx context.Context, cfg config.Config, logger *slog.Logg
 			logger.WarnContext(ctx, "funcd: could not clear everything an earlier run left in containerd", "error", serr)
 		}
 	}
-	return []funcd.Option{funcd.WithRuntime(cd), funcd.WithContainerExecution(mgrCfg.ImageFor(c.ImagePrefix))}, mgr.Close, nil
+	root, closeRoot, err := providerStorageRoot(cfg)
+	if err != nil {
+		_ = mgr.Close()
+		return nil, noopClose, err
+	}
+	closer := func() error { return errors.Join(mgr.Close(), closeRoot()) }
+	return []funcd.Option{funcd.WithRuntime(cd), funcd.WithContainerExecution(mgrCfg.ImageFor(c.ImagePrefix)),
+		funcd.WithProviderStorage(root)}, closer, nil
+}
+
+// providerStorageRoot is the add-on engines' storage root on the containerd runtime (ADR-0231 Decision 5):
+// <dataDir>/providers, or with storage.mode memory a temporary directory that the returned closer removes.
+func providerStorageRoot(cfg config.Config) (string, func() error, error) {
+	if cfg.Storage.Mode != "memory" {
+		return filepath.Join(cfg.Storage.DataDir, "providers"), noopClose, nil
+	}
+	dir, err := os.MkdirTemp("", "funcd-providers-")
+	if err != nil {
+		return "", noopClose, fmt.Errorf("create the temporary engine storage root: %w", err)
+	}
+	return dir, func() error { return os.RemoveAll(dir) }, nil
 }
 
 // processShimOptions extracts the embedded Node shim and pool host, and the Python shim when a usable python3 is

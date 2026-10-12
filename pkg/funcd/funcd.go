@@ -283,6 +283,9 @@ type config struct {
 	// as a host subprocess — there are no containers in process-dev.
 	catalogProvider provider.Runtime
 
+	// providerStorage is the root of the add-on engines' durable directories (ADR-0231); "" ⇒ none.
+	providerStorage string
+
 	// catalogExtensionDir is injected as DUCKDB_EXTENSION_DIRECTORY into catalog-consumer functions
 	// (dev analogue of the prod bundle's duckdb-ext, ADR-0089). Set by `funcdctl dev`; empty in prod.
 	catalogExtensionDir string
@@ -1001,7 +1004,7 @@ func (p *Platform) buildControlPlane() error {
 		var perr error
 		providerRuntime, perr = provider.NewRuntime(provider.Deps{
 			Runtime: c.runtime, OwnerKind: v1.KindCatalogService, Gateway: c.gateway, Logger: p.logger,
-			ProbeTimeout: c.pacing.EngineProbeTimeout,
+			ProbeTimeout: c.pacing.EngineProbeTimeout, StorageRoot: c.providerStorage,
 		})
 		if perr != nil {
 			return fault.Wrapf(perr, fault.KindOf(perr), op, "build provider runtime")

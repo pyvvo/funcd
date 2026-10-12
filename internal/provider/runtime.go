@@ -46,17 +46,21 @@ type Deps struct {
 	// ProbeTimeout bounds one readiness probe (catalog.engineProbeTimeout, ADR-0163); 0 ⇒ defaultProbeTimeout. Ignored
 	// when HTTPClient is set.
 	ProbeTimeout time.Duration
+	// StorageRoot is the root of the engines' durable directories (ADR-0231); "" ⇒ no durable storage, so a spec with
+	// Storage fails Invalid.
+	StorageRoot string
 }
 
 const defaultProbeTimeout = 2 * time.Second
 
 // engineRuntime is the in-process driver of the provider Runtime port.
 type engineRuntime struct {
-	rt         containerrt.Runtime
-	ownerKind  v1.Kind
-	gateway    gateway.Gateway // may be nil (internal-only deployment)
-	logger     *slog.Logger
-	httpClient *http.Client
+	rt          containerrt.Runtime
+	ownerKind   v1.Kind
+	gateway     gateway.Gateway // may be nil (internal-only deployment)
+	logger      *slog.Logger
+	httpClient  *http.Client
+	storageRoot string
 }
 
 // NewRuntime builds the add-on-provider runtime. Deps.Runtime is required; Gateway is optional
@@ -82,11 +86,12 @@ func NewRuntime(d Deps) (Runtime, error) {
 		client = httpx.NodeClient(timeout)
 	}
 	return &engineRuntime{
-		rt:         d.Runtime,
-		ownerKind:  d.OwnerKind,
-		gateway:    d.Gateway,
-		logger:     logger.With("component", "provider.runtime"),
-		httpClient: client,
+		rt:          d.Runtime,
+		ownerKind:   d.OwnerKind,
+		gateway:     d.Gateway,
+		logger:      logger.With("component", "provider.runtime"),
+		httpClient:  client,
+		storageRoot: d.StorageRoot,
 	}, nil
 }
 
@@ -106,6 +111,11 @@ func (r *engineRuntime) Converge(ctx context.Context, spec ProviderSpec) (Provid
 	}
 	if spec.Port <= 0 {
 		return ProviderStatus{}, fault.Invalidf(op, "spec.Port must be > 0; got %d", spec.Port)
+	}
+	if spec.Storage != nil {
+		if err := r.prepareStorage(spec); err != nil {
+			return ProviderStatus{}, err
+		}
 	}
 
 	existing, err := r.namedInstances(ctx, spec.Ref)
@@ -225,6 +235,7 @@ func (r *engineRuntime) workerSpec(spec ProviderSpec, replica int) containerrt.W
 		Command:   nil, // the curated image entrypoint is the engine — no artifact, no shape gate
 		Env:       spec.Env,
 		Limits:    limitsFrom(spec.Resources),
+		Mounts:    r.storageMounts(spec),
 	}
 }
 

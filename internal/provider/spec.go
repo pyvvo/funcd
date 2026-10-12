@@ -57,6 +57,15 @@ type ResourceSpec struct {
 	Memory string // e.g. "4Gi"; "" ⇒ unset
 }
 
+// StorageSpec asks for a durable host directory mounted into the engine (ADR-0231): kept across re-creations,
+// teardowns and daemon restarts, removed only by Volumes.Reclaim. UID and GID are the user the engine's image runs as;
+// the provider's ADR pins them equal to that image's user.
+type StorageSpec struct {
+	Path string // the mount path inside the engine, absolute
+	UID  int
+	GID  int
+}
+
 // ProviderSpec is the desired state of one add-on-provider engine, assembled by a per-provider
 // reconciler. The Env is caller-assembled (the ADR-0085 keypair, the engine token, config) — the
 // runtime puts it verbatim on the worker; it owns no engine-specific logic.
@@ -73,6 +82,8 @@ type ProviderSpec struct {
 	// the engine is reachable by in-platform clients via the published netns endpoint
 	// (ProviderStatus.Address).
 	Route *RouteSpec
+	// Storage is OPTIONAL durable storage (ADR-0231); nil ⇒ the engine keeps nothing across re-creations.
+	Storage *StorageSpec
 }
 
 // ProviderStatus is what Converge observes back to the caller (which writes it to its CRD status).

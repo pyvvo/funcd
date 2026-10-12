@@ -478,6 +478,11 @@ func WithLogObserver(obs LogObserver) Option {
 	return func(c *config) error { c.logObserver = obs; return nil }
 }
 
+// WithProviderStorage sets the add-on engines' storage root (ADR-0231); "" keeps durable storage off.
+func WithProviderStorage(root string) Option {
+	return func(c *config) error { c.providerStorage = root; return nil }
+}
+
 // WithCatalogProviderRuntime overrides the CatalogService add-on-provider runtime (ADR-0087). The
 // production runtime supervises the curated duckdb CONTAINER image; `funcdctl dev` (ADR-0125) injects
 // a process-mode driver that runs the embedded DuckDB+Quack engine as a host subprocess, since

@@ -1,8 +1,9 @@
 # ADR-0231: Durable storage for add-on engines
 
-- **Status**: Accepted (2026-10-12, self-accepted under the decider's batch delegation; judged twice: the first round
-  moved the memory-mode root to `cmd/funcd`, made runtimes that cannot mount refuse storage, tied the boot reclaim to the
-  hold and its evidence, and fixed the chown rules; the second found no Blocker or Major)
+- **Status**: Implemented (2026-10-12, review passed). Accepted 2026-10-12, self-accepted under the decider's batch
+  delegation; judged twice: the first round moved the memory-mode root to `cmd/funcd`, made runtimes that cannot mount
+  refuse storage, tied the boot reclaim to the hold and its evidence, and fixed the chown rules; the second found no
+  Blocker or Major
 - **Date**: 2026-10-12
 - **Deciders**: green-0-rabbit
 - **Tags**: provider, runtime, storage

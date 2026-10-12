@@ -1234,7 +1234,7 @@ func bindMounts(mounts []runtime.Mount) []specs.Mount {
 		if m.ReadOnly {
 			opts = append(opts, "ro")
 		} else {
-			opts = append(opts, "rw")
+			opts = append(opts, "rw", "nosuid", "nodev") // a writable host directory never carries setuid or devices (ADR-0231)
 		}
 		out = append(out, specs.Mount{
 			Destination: m.Target,
