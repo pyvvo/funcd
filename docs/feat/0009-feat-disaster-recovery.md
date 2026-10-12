@@ -159,8 +159,8 @@ set alone, nothing repeats that the restore point had already finished, and each
 - **The OCI registry**: funcd does not manage it; a Function stays `NotReady` until its image is there.
 - **A consistent cut of an app's stores**: how an app's KV stores, buckets and catalogs are cut together is discussed
   later, together with the lifecycle hooks of the Apps epoch (FEAT-0010, F117).
-- **The SQL service**: the backup and restore of rqlite data belong to the rqlite service ADRs; restoring one app out
-  of the shared database comes later.
+- **The SQL service**: [FEAT-0011](0011-feat-sql.md) gives each SQL database its own rqlite engine; its F131 covers
+  their backup and restore.
 - **High availability and replication**: a replica is not a backup, and multi-node is a V2 topic (FEAT-0002).
 - **Recovery to any moment between two backups**: copies are snapshots; there is no write-ahead log.
 - **Online restore into a running platform**: a restore is offline.
@@ -177,4 +177,4 @@ set alone, nothing repeats that the restore point had already finished, and each
 | Whether in-flight Sensor firings and the retry queue become durable in the event store | the event store ADR |
 | The event store's name and directory, and the move of the existing seen lists | the event store ADR |
 | Whether "restore and held boot" splits into two ADRs | when it is drafted, if it passes 250 lines |
-| The rqlite backup mode and the per-app restore | the rqlite service ADRs |
+| The rqlite backup mode and the per-app restore | [FEAT-0011](0011-feat-sql.md) F131 |

@@ -1,0 +1,136 @@
+{
+  "version": "sql",
+  "accepted": [
+    "ADR-0032",
+    "ADR-0054",
+    "ADR-0063",
+    "ADR-0069",
+    "ADR-0074",
+    "ADR-0082",
+    "ADR-0087",
+    "ADR-0108",
+    "ADR-0116",
+    "ADR-0125",
+    "ADR-0136",
+    "ADR-0141",
+    "ADR-0142",
+    "ADR-0199",
+    "ADR-0203",
+    "ADR-0206",
+    "ADR-0209",
+    "ADR-0214",
+    "ADR-0215",
+    "ADR-0222"
+  ],
+  "items": [
+    {
+      "id": "P-A",
+      "title": "Durable storage for add-on engines",
+      "features": [
+        "F127"
+      ],
+      "depends_on": [
+        "ADR-0032",
+        "ADR-0087",
+        "ADR-0142"
+      ]
+    },
+    {
+      "id": "P-B",
+      "title": "SQL database resource and its rqlite engine",
+      "features": [
+        "F128"
+      ],
+      "depends_on": [
+        "P-A",
+        "ADR-0054",
+        "ADR-0063",
+        "ADR-0082",
+        "ADR-0087"
+      ]
+    },
+    {
+      "id": "P-C",
+      "title": "SQL access from functions",
+      "features": [
+        "F129"
+      ],
+      "depends_on": [
+        "P-B",
+        "ADR-0069",
+        "ADR-0074",
+        "ADR-0116",
+        "ADR-0136",
+        "ADR-0141",
+        "ADR-0215"
+      ]
+    },
+    {
+      "id": "P-D",
+      "title": "SQL in Apps",
+      "features": [
+        "F130"
+      ],
+      "depends_on": [
+        "P-B",
+        "P-C",
+        "ADR-0199",
+        "ADR-0214"
+      ]
+    },
+    {
+      "id": "P-E",
+      "title": "SQL backup and restore",
+      "features": [
+        "F131"
+      ],
+      "depends_on": [
+        "P-B",
+        "ADR-0203",
+        "ADR-0206",
+        "ADR-0209",
+        "ADR-0222"
+      ]
+    },
+    {
+      "id": "P-F",
+      "title": "SQL change feed",
+      "features": [
+        "F132"
+      ],
+      "depends_on": [
+        "P-B",
+        "ADR-0108"
+      ]
+    },
+    {
+      "id": "P-G",
+      "title": "SQL in funcdctl dev",
+      "features": [
+        "F133"
+      ],
+      "depends_on": [
+        "P-B",
+        "P-C",
+        "ADR-0125"
+      ]
+    }
+  ],
+  "waves": {
+    "1": [
+      "P-A"
+    ],
+    "2": [
+      "P-B"
+    ],
+    "3": [
+      "P-C",
+      "P-E",
+      "P-F"
+    ],
+    "4": [
+      "P-D",
+      "P-G"
+    ]
+  }
+}

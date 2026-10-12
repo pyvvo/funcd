@@ -29,8 +29,8 @@ one wave ahead of the build track.
 
 The report lists 17 rows in its section I. This slate keeps the ADRs that realize FEAT-0009 and one item outside it, X-CRON.
 ADR-0195 (KV delete records) and ADR-0196 (UTC timestamps) are Implemented and appear only as built dependencies in tier 0.
-ADR-0210 (issue #844) was added after the report. The rqlite backup parts (W5) belong to the rqlite service
-ADRs, and the step idempotency keys (L2) to the workflow epoch; neither realizes FEAT-0009. Three merges are
+ADR-0210 (issue #844) was added after the report. The rqlite backup parts (W5) belong to FEAT-0011
+(F131, [sql-delivery-plan.md](sql-delivery-plan.md)), and the step idempotency keys (L2) to the workflow epoch; neither realizes FEAT-0009. Three merges are
 deliberate: ADR-0202 joins the snapshot capability and the version timeline (both change the store), ADR-0206 joins restore
 and the held boot (a restore without the hold repeats side effects), and ADR-0222 joins the workload resources and the
 catalog scope. Split ADR-0206 again if its ADR passes 250 lines.
