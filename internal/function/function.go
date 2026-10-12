@@ -9,6 +9,7 @@ package function
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -196,6 +197,9 @@ type Deps struct {
 	// LivenessTimeout is how long a listening replica or pool host may stay silent on /health/liveness before it is
 	// restarted (runtime.livenessTimeout, ADR-0215); 0 ⇒ max(30 s, three supervision periods).
 	LivenessTimeout time.Duration
+	// ProbeTimeout bounds one readiness or /health/members probe; 0 ⇒ half the readiness poll. Tests that answer
+	// probes from local servers raise it, so a loaded host does not read a ready worker as unready.
+	ProbeTimeout time.Duration
 	// ReferentPollInterval re-checks a function waiting for a referent (controller.referentPollInterval, ADR-0163),
 	// bounded by the supervision period (ADR-0142 Decision 9); 0 ⇒ 2 s.
 	ReferentPollInterval time.Duration
@@ -249,6 +253,7 @@ const (
 
 // Reconciler is the one controller.Reconciler for KindFunction.
 type Reconciler struct {
+	probeTimeout      time.Duration
 	logMaxRecordBytes int // FUNCD_FUNCLOG_MAX_RECORD_BYTES for every shim and pool host (ADR-0168); 0 sets none
 	store             store.Store
 	runtime           runtime.Runtime
@@ -453,7 +458,8 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		logMaxRecordBytes: d.LogMaxRecordBytes,
 		materializer:      d.Materializer, shimCommand: d.ShimCommand, shimByFamily: d.ShimCommandsByFamily,
 		endpointMode: d.EndpointMode, imageFor: d.ImageFor, resolver: d.Resolver, platformsOf: d.Platforms,
-		httpClient:          httpx.NodeClient(probeTimeout),
+		httpClient:          httpx.NodeClient(cmp.Or(d.ProbeTimeout, probeTimeout)),
+		probeTimeout:        cmp.Or(d.ProbeTimeout, probeTimeout),
 		secrets:             d.Secrets,
 		developerFor:        developerFor,
 		invokeSockets:       d.InvokeSockets,
@@ -2823,7 +2829,7 @@ func (r *Reconciler) probeMembers(ctx context.Context, ip string, port int) ([]m
 	if host == "" {
 		host = "127.0.0.1"
 	}
-	pctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	pctx, cancel := context.WithTimeout(ctx, r.probeTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(pctx, http.MethodGet, fmt.Sprintf("http://%s:%d%s", host, port, membersPath), nil)
 	if err != nil {

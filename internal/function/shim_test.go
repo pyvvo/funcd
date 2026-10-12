@@ -577,6 +577,9 @@ func newShimHarness(t *testing.T, readyStatus int, runtimeFailed bool, opts ...f
 		Store: st, Runtime: rt, Scheduler: sch, Gateway: gw, Validator: function.NewBasicValidator(),
 		Materializer: function.NewFileMaterializer(),
 		ShimCommand:  []string{"node", "/opt/funcd/shim.mjs"},
+		// probes reach this test's servers in microseconds, but a loaded host can stall one past the 100 ms default;
+		// below serveStalling's 1 s stall, so a stalled probe still times out
+		ProbeTimeout: 500 * time.Millisecond,
 	}
 	for _, opt := range opts {
 		opt(&deps)
@@ -788,7 +791,8 @@ func TestScenarioShimNotReadyRequeues(t *testing.T) {
 // it the engine's shared worker — for longer than the 200 ms poll it is repeated at.
 func TestIssue75_HungBootingReplicaDoesNotHoldThePass(t *testing.T) {
 	t.Parallel()
-	h := newShimHarness(t, http.StatusOK, false)
+	// the production probe timeout: the pass a hung replica holds is what this test bounds
+	h := newShimHarness(t, http.StatusOK, false, func(d *function.Deps) { d.ProbeTimeout = 0 })
 	hung, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = hung.Close() })
