@@ -36,10 +36,12 @@ const (
 	KindKVStore        Kind = "KVStore"
 	KindBucket         Kind = "Bucket"
 	KindCatalogService Kind = "CatalogService"
-	KindPolicy         Kind = "Policy"
-	KindWorkflow       Kind = "Workflow"
-	KindWorkflowRun    Kind = "WorkflowRun"
-	KindSensor         Kind = "Sensor"
+	// KindSQLDatabase is a SQL database served by its own rqlite engine (ADR-0232).
+	KindSQLDatabase Kind = "SQLDatabase"
+	KindPolicy      Kind = "Policy"
+	KindWorkflow    Kind = "Workflow"
+	KindWorkflowRun Kind = "WorkflowRun"
+	KindSensor      Kind = "Sensor"
 	// KindIdentity is a user-assigned managed identity (ADR-0135, F100): a stored, status-bearing CRUD
 	// resource whose reconciler issues a credential. It resolves on the wire to an S3Identity Cedar
 	// principal (KindS3Identity below is the auth-only wire principal; Identity is the CRUD resource).
@@ -87,7 +89,7 @@ func (k Kind) Validate() error {
 		KindRuntimeClass, KindWorkerNode, KindGateway, KindKVStore, KindBucket,
 		KindCatalogService, KindPolicy, KindWorkflow, KindWorkflowRun, KindSensor,
 		KindIdentity, KindRole, KindRolesAssignment, KindSite, KindApp, KindAppRevision,
-		KindBackupSchedule, KindBackup, KindRestore:
+		KindBackupSchedule, KindBackup, KindRestore, KindSQLDatabase:
 		return nil
 	default:
 		return fault.Invalidf("Kind.Validate", "unknown kind %q", k)
@@ -373,6 +375,10 @@ func NewObject(k Kind) (Object, bool) {
 		cs := &CatalogService{}
 		cs.TypeMeta = typeMetaFor(k)
 		return cs, true
+	case KindSQLDatabase:
+		d := &SQLDatabase{}
+		d.TypeMeta = typeMetaFor(k)
+		return d, true
 	case KindPolicy:
 		pol := &Policy{}
 		pol.TypeMeta = typeMetaFor(k)
@@ -464,6 +470,7 @@ func AllKinds() []Kind {
 		KindBackupSchedule,
 		KindBackup,
 		KindRestore,
+		KindSQLDatabase,
 	}
 }
 

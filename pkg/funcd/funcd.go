@@ -87,6 +87,7 @@ import (
 	identitysvc "github.com/pyvvo/funcd/internal/services/identity"
 	kvsvc "github.com/pyvvo/funcd/internal/services/kv"
 	rolessvc "github.com/pyvvo/funcd/internal/services/roles"
+	sqlsvc "github.com/pyvvo/funcd/internal/services/sql"
 	"github.com/pyvvo/funcd/internal/site"
 	"github.com/pyvvo/funcd/internal/snapshot"
 	"github.com/pyvvo/funcd/internal/store"
@@ -113,6 +114,8 @@ const (
 	defaultKVStoresPerNamespace = 100
 	// defaultBucketsPerNamespace is the per-namespace Bucket count cap when unset (ADR-0080).
 	defaultBucketsPerNamespace = 100
+	// defaultSQLDatabasesPerNamespace is the per-namespace SQLDatabase count cap when unset (ADR-0232).
+	defaultSQLDatabasesPerNamespace = 20
 	// The workflow engine tunables when WithWorkflow is not given: the daemon config's workflow.* defaults
 	// (ADR-0094, internal/platform/config), so a hung step fails the same way in dev and in production.
 	defaultWorkflowStepTimeout  = 300 * time.Second
@@ -139,6 +142,9 @@ type config struct {
 	// bucketMaxPerNamespace is the per-namespace Bucket count cap at admission (ADR-0080); 0 ⇒
 	// the default (100); negative disables the quota.
 	bucketMaxPerNamespace int
+	// sqlMaxDatabasesPerNamespace is the per-namespace SQLDatabase count cap at admission (ADR-0232); 0 ⇒ the default
+	// (20); negative disables the quota.
+	sqlMaxDatabasesPerNamespace int
 	// nestedInFlightCap is the per-target cap on nested fn-to-fn calls in flight (ADR-0147); 0 ⇒ the default (10).
 	nestedInFlightCap int
 	blob              blob.Bucket
@@ -282,6 +288,8 @@ type config struct {
 	// `funcdctl dev` (ADR-0125) to a process-mode driver that runs the embedded DuckDB+Quack engine
 	// as a host subprocess — there are no containers in process-dev.
 	catalogProvider provider.Runtime
+	// sqlProvider overrides the SQLDatabase engine runtime (ADR-0232); nil ⇒ the production runtime.
+	sqlProvider provider.Runtime
 
 	// providerStorage is the root of the add-on engines' durable directories (ADR-0231); "" ⇒ none.
 	providerStorage string
@@ -405,6 +413,7 @@ type Platform struct {
 	routeReconciler *route.Reconciler      // Sets the full Route table once before the controller runs (ADR-0176)
 	backups         *backupsvc.Reconcilers // ADR-0222: the workload backups, whose runs Run waits for
 	kvReconciler    *kvsvc.Reconciler      // reclaims deleted stores' data once before the controller runs (issue #708)
+	sqlReconciler   *sqlsvc.Reconciler     // reclaims deleted databases' directories before the controller runs (ADR-0232)
 	prober          *health.Prober         // the storage probes (ADR-0215), started before the controller runs
 
 	dataPlaneServer   *http.Server // function-invocation listener (ADR-0033)
@@ -530,6 +539,10 @@ func (p *Platform) buildControlPlane() error {
 	bucketMax := c.bucketMaxPerNamespace
 	if bucketMax == 0 {
 		bucketMax = defaultBucketsPerNamespace
+	}
+	sqlMax := c.sqlMaxDatabasesPerNamespace
+	if sqlMax == 0 {
+		sqlMax = defaultSQLDatabasesPerNamespace
 	}
 
 	sched, err := singlenode.New(c.localNode, c.nodePlatform)
@@ -1041,6 +1054,28 @@ func (p *Platform) buildControlPlane() error {
 	ctrl.Watches(v1.KindCatalogService.GVK(), fnReconciler.MapCatalogService)
 	ctrl.Watches(v1.KindFunction.GVK(), catalogReconciler.MapFunction)
 
+	// ADR-0232: one rqlite engine per SQLDatabase, run by its own add-on runtime with durable storage (ADR-0231).
+	sqlRuntime := c.sqlProvider
+	if sqlRuntime == nil {
+		var perr error
+		sqlRuntime, perr = provider.NewRuntime(provider.Deps{
+			Runtime: c.runtime, OwnerKind: v1.KindSQLDatabase, Gateway: c.gateway, Logger: p.logger,
+			ProbeTimeout: c.pacing.EngineProbeTimeout, StorageRoot: c.providerStorage,
+		})
+		if perr != nil {
+			return fault.Wrapf(perr, fault.KindOf(perr), op, "build the SQL provider runtime")
+		}
+	}
+	sqlReconciler, err := sqlsvc.NewReconciler(sqlsvc.ReconcilerDeps{
+		Store: c.store, Provider: sqlRuntime, Engines: sqlsvc.NewEngines(), Master: master, ImageFor: c.imageFor,
+		Hold: c.gate(), Logger: p.logger, SupervisionPeriod: c.pacing.SupervisionPeriod,
+	})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build SQLDatabase reconciler")
+	}
+	ctrl.Register(v1.KindSQLDatabase.GVK(), sqlReconciler)
+	p.sqlReconciler = sqlReconciler
+
 	// ADR-0135 (F100): the Identity credential-issuing reconciler — issues a keypair→owned Secret and
 	// registers it (via storeExternalKeys, wired into s3gateway.Deps.External above).
 	identityReconciler, err := identitysvc.NewReconciler(identitysvc.ReconcilerDeps{Store: c.store, Logger: p.logger, SupervisionPeriod: c.pacing.SupervisionPeriod})
@@ -1174,6 +1209,9 @@ func (p *Platform) buildControlPlane() error {
 			// the same substrate view the s3gateway writes (s3BucketFor).
 			admission.NewBucketQuotaAdmission(r, bucketMax),
 			admission.NewBucketDeletionProtectionAdmission(r, blobProber{blobBucketLister{resolve: s3BucketFor(c.blob, c.store)}}),
+			// ADR-0232 SQLDatabase rules: the count quota, and no API delete while the engine holds a table.
+			admission.NewSQLDatabaseQuotaAdmission(r, sqlMax),
+			admission.NewSQLDatabaseDeletionProtectionAdmission(r, sqlReconciler.Prober()),
 			// ADR-0086/0091 catalog blob + consumer-binding EXISTENCE were write-time gates; now reconcile-time
 			// (ADR-0121): the CatalogService / Function reconcilers wait for the referent (Waiting condition).
 			// ADR-0139 Site: spec.prefix is immutable on Update (the prefix permanently holds the site's bundles).
@@ -1473,6 +1511,10 @@ func (p *Platform) Run(ctx context.Context) error {
 		// ADR-0199 Decision 7: the same for the objects of each Bucket deleted before its second purge ran.
 		if err := reclaimDeletedBuckets(ctx, p.cfg.blob, p.cfg.store, p.logger); err != nil && ctx.Err() == nil {
 			p.logger.WarnContext(ctx, "reclaim of deleted Buckets incomplete", "error", err)
+		}
+		// ADR-0232 Decision 7: the same for the directory of each SQLDatabase deleted before its reconcile ran.
+		if err := p.sqlReconciler.ReclaimOrphans(ctx); err != nil && ctx.Err() == nil {
+			p.logger.WarnContext(ctx, "reclaim of deleted SQL databases incomplete", "error", err)
 		}
 	}
 
@@ -2289,6 +2331,10 @@ func (h holdPlatform) Orphans(ctx context.Context) ([]string, error) {
 
 func (h holdPlatform) BucketOrphans(ctx context.Context) ([]v1.ObjectRef, error) {
 	return bucketOrphans(ctx, h.p.cfg.blob, h.p.cfg.store)
+}
+
+func (h holdPlatform) SQLOrphans(ctx context.Context) ([]v1.ObjectRef, error) {
+	return h.p.sqlReconciler.Orphans(ctx)
 }
 
 func (h holdPlatform) Advance(ctx context.Context, ns v1.NamespaceName, source v1.ObjectName) error {

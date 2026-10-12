@@ -35,6 +35,7 @@ const curatedRepoPrefix = "docker.io/" + config.DefaultImagePrefix
 //go:embed nodejs22.tar
 //go:embed python314.tar
 //go:embed duckdb.tar
+//go:embed rqlite.tar
 var curated embed.FS
 
 // tarFile maps a runtime name to its embedded OCI tar filename.
@@ -44,6 +45,7 @@ var tarFile = map[string]string{
 	"nodejs22":  "nodejs22.tar",
 	"python314": "python314.tar",
 	"duckdb":    "duckdb.tar",
+	"rqlite":    "rqlite.tar",
 }
 
 // Tar returns the embedded OCI image tar for a runtime ("nodejs22"/"python314") as a fresh,

@@ -148,6 +148,12 @@ type Handlers interface {
 	ListCatalogServices(ctx context.Context, ns v1.NamespaceName) ([]v1.CatalogService, error)
 	ReplaceCatalogService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, cs v1.CatalogService) (v1.CatalogService, error)
 	DeleteCatalogService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error
+	// SQLDatabase (namespaced) — ADR-0232
+	GetSQLDatabase(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.SQLDatabase, error)
+	CreateSQLDatabase(ctx context.Context, cs v1.SQLDatabase) (v1.SQLDatabase, error)
+	ListSQLDatabases(ctx context.Context, ns v1.NamespaceName) ([]v1.SQLDatabase, error)
+	ReplaceSQLDatabase(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, cs v1.SQLDatabase) (v1.SQLDatabase, error)
+	DeleteSQLDatabase(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error
 
 	// Identity (namespaced) — ADR-0135, FEAT-0008/F100
 	GetIdentity(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Identity, error)

@@ -1,0 +1,10 @@
+PLACEHOLDER — NOT a real OCI image tar (ADR-0232 / ADR-0054).
+
+This <1 KB committed stand-in exists only so go:embed has a file at compile time and
+embedimg.Tar("rqlite") returns a non-empty reader.
+
+The REAL per-arch rqlite engine image (rqlited built statically from the source pinned in
+images/runtime/rqlite/rqlite.pin + the funcd-rqlite entrypoint, on distroless static) is built by
+'just build-runtime-images' and overwrites this file before the binary ships.
+
+See internal/runtime/embedimg/README.md for the placeholder/release pattern.

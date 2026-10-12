@@ -31,6 +31,7 @@ type StubHandlers struct {
 	kvstores         map[string]v1.KVStore
 	buckets          map[string]v1.Bucket
 	catalogServices  map[string]v1.CatalogService
+	sqlDatabases     map[string]v1.SQLDatabase
 	identities       map[string]v1.Identity
 	roles            map[string]v1.Role
 	rolesAssignments map[string]v1.RolesAssignment
@@ -67,6 +68,7 @@ func NewStubHandlers() *StubHandlers {
 		kvstores:         make(map[string]v1.KVStore),
 		buckets:          make(map[string]v1.Bucket),
 		catalogServices:  make(map[string]v1.CatalogService),
+		sqlDatabases:     make(map[string]v1.SQLDatabase),
 		identities:       make(map[string]v1.Identity),
 		roles:            make(map[string]v1.Role),
 		rolesAssignments: make(map[string]v1.RolesAssignment),
@@ -1088,6 +1090,62 @@ func (s *StubHandlers) DeleteCatalogService(_ context.Context, ns v1.NamespaceNa
 		return fault.NotFoundf("StubHandlers.DeleteCatalogService", "CatalogService %s not found", key)
 	}
 	delete(s.catalogServices, key)
+	return nil
+}
+
+// ---- SQLDatabase (ADR-0232) ----
+
+func (s *StubHandlers) GetSQLDatabase(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.SQLDatabase, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if v, ok := s.sqlDatabases[nsKey(ns, name)]; ok {
+		return v, nil
+	}
+	return v1.SQLDatabase{}, fault.NotFoundf("StubHandlers.GetSQLDatabase", "SQLDatabase %s/%s not found", ns, name)
+}
+
+func (s *StubHandlers) CreateSQLDatabase(_ context.Context, cs v1.SQLDatabase) (v1.SQLDatabase, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(cs.Namespace, cs.Name)
+	if _, exists := s.sqlDatabases[key]; exists {
+		return v1.SQLDatabase{}, fault.Conflictf("StubHandlers.CreateSQLDatabase", "SQLDatabase %s already exists", key)
+	}
+	s.sqlDatabases[key] = cs
+	return cs, nil
+}
+
+func (s *StubHandlers) ListSQLDatabases(_ context.Context, ns v1.NamespaceName) ([]v1.SQLDatabase, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]v1.SQLDatabase, 0)
+	for _, v := range s.sqlDatabases {
+		if v.Namespace == ns {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
+func (s *StubHandlers) ReplaceSQLDatabase(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, cs v1.SQLDatabase) (v1.SQLDatabase, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.sqlDatabases[key]; !exists {
+		return v1.SQLDatabase{}, fault.NotFoundf("StubHandlers.ReplaceSQLDatabase", "SQLDatabase %s not found", key)
+	}
+	s.sqlDatabases[key] = cs
+	return cs, nil
+}
+
+func (s *StubHandlers) DeleteSQLDatabase(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := nsKey(ns, name)
+	if _, exists := s.sqlDatabases[key]; !exists {
+		return fault.NotFoundf("StubHandlers.DeleteSQLDatabase", "SQLDatabase %s not found", key)
+	}
+	delete(s.sqlDatabases, key)
 	return nil
 }
 

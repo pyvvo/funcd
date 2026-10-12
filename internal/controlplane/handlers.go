@@ -170,6 +170,8 @@ func stampTypeMeta(obj v1.Object, kind v1.Kind) {
 		o.TypeMeta = tm
 	case *v1.CatalogService:
 		o.TypeMeta = tm
+	case *v1.SQLDatabase:
+		o.TypeMeta = tm
 	case *v1.Policy:
 		o.TypeMeta = tm
 	case *v1.Workflow:
@@ -1178,6 +1180,48 @@ func (h *storeHandlers) ReplaceCatalogService(ctx context.Context, ns v1.Namespa
 
 func (h *storeHandlers) DeleteCatalogService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
 	return h.deleteObjIf(ctx, v1.KindCatalogService, ns, name, rv)
+}
+
+// --- SQLDatabase (namespaced) — ADR-0232 ---
+
+func (h *storeHandlers) GetSQLDatabase(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.SQLDatabase, error) {
+	o, err := h.getObj(ctx, v1.KindSQLDatabase, ns, name)
+	if err != nil {
+		return v1.SQLDatabase{}, err
+	}
+	return *o.(*v1.SQLDatabase), nil
+}
+
+func (h *storeHandlers) CreateSQLDatabase(ctx context.Context, cs v1.SQLDatabase) (v1.SQLDatabase, error) {
+	o, err := h.createObj(ctx, v1.KindSQLDatabase, &cs)
+	if err != nil {
+		return v1.SQLDatabase{}, err
+	}
+	return *o.(*v1.SQLDatabase), nil
+}
+
+func (h *storeHandlers) ListSQLDatabases(ctx context.Context, ns v1.NamespaceName) ([]v1.SQLDatabase, error) {
+	objs, err := h.listObj(ctx, v1.KindSQLDatabase, ns)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]v1.SQLDatabase, len(objs))
+	for i, o := range objs {
+		out[i] = *o.(*v1.SQLDatabase)
+	}
+	return out, nil
+}
+
+func (h *storeHandlers) ReplaceSQLDatabase(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, cs v1.SQLDatabase) (v1.SQLDatabase, error) {
+	o, err := h.replaceObj(ctx, v1.KindSQLDatabase, ns, name, &cs)
+	if err != nil {
+		return v1.SQLDatabase{}, err
+	}
+	return *o.(*v1.SQLDatabase), nil
+}
+
+func (h *storeHandlers) DeleteSQLDatabase(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindSQLDatabase, ns, name, rv)
 }
 
 // --- Identity (namespaced) — ADR-0135, FEAT-0008/F100 ---

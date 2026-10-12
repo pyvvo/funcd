@@ -238,6 +238,10 @@ log:
 #   referentPollInterval: 2s      # re-check of an object waiting for a referent. default: 2s
 #   routeResyncInterval: 10s      # re-check of every live Route. default: 10s
 
+# --- sql: SQL databases (ADR-0232) -------------------------------------------------------------
+# sql:
+#   maxDatabasesPerNamespace: 20  # SQLDatabase count cap per namespace; negative ⇒ no cap. default: 20
+
 # --- site: declarative static web apps (ADR-0139) ----------------------------------------------
 # site:
 #   defaultIndex: index.html      # document served for "/" when a Site sets no spec.index. default: index.html

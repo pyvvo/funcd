@@ -865,6 +865,85 @@ func registerCatalogService(api huma.API, h Handlers) {
 	})
 }
 
+// ===== SQLDatabase (namespaced) — ADR-0232 =====
+
+type createSQLDatabaseInput struct {
+	DryRunParams
+	Namespace v1.NamespaceName `path:"namespace"`
+	Body      v1.SQLDatabase
+}
+type sqlDatabaseOutput struct{ Body v1.SQLDatabase }
+type listSQLDatabaseOutput struct{ Body []v1.SQLDatabase }
+
+func registerSQLDatabase(api huma.API, h Handlers) {
+	base := "/apis/funcd.io/v1alpha1/namespaces/{namespace}/sqldatabases"
+
+	huma.Register(api, huma.Operation{
+		OperationID: "listSQLDatabases", Method: http.MethodGet, Path: base,
+		Tags: []string{"SQLDatabase"},
+	}, func(ctx context.Context, in *namespacedList) (*listSQLDatabaseOutput, error) {
+		items, err := h.ListSQLDatabases(ctx, in.Namespace)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &listSQLDatabaseOutput{Body: items}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "createSQLDatabase", Method: http.MethodPost, Path: base,
+		Tags: []string{"SQLDatabase"},
+	}, func(ctx context.Context, in *createSQLDatabaseInput) (*sqlDatabaseOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
+		if err := matchPathNamespace(in.Namespace, &in.Body.ObjectMeta); err != nil {
+			return nil, wrapFaultError(err)
+		}
+		item, err := h.CreateSQLDatabase(ctx, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &sqlDatabaseOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "getSQLDatabase", Method: http.MethodGet, Path: base + "/{name}",
+		Tags: []string{"SQLDatabase"},
+	}, func(ctx context.Context, in *namespacedGet) (*sqlDatabaseOutput, error) {
+		item, err := h.GetSQLDatabase(ctx, in.Namespace, in.Name)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &sqlDatabaseOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "replaceSQLDatabase", Method: http.MethodPut, Path: base + "/{name}",
+		Tags: []string{"SQLDatabase"},
+	}, func(ctx context.Context, in *struct {
+		IfMatchParams
+		DryRunParams
+		Namespace v1.NamespaceName `path:"namespace"`
+		Name      v1.ObjectName    `path:"name"`
+		Body      v1.SQLDatabase
+	}) (*sqlDatabaseOutput, error) {
+		ctx = withDryRun(ctx, in.DryRun)
+		if err := withReplaceVersion(in.IfMatchParams, &in.Body.ObjectMeta); err != nil {
+			return nil, wrapFaultError(err)
+		}
+		item, err := h.ReplaceSQLDatabase(ctx, in.Namespace, in.Name, in.Body)
+		if err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return &sqlDatabaseOutput{Body: item}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "deleteSQLDatabase", Method: http.MethodDelete, Path: base + "/{name}",
+		Tags: []string{"SQLDatabase"},
+	}, func(ctx context.Context, in *namespacedDelete) (*struct{}, error) {
+		return nil, wrapFaultError(h.DeleteSQLDatabase(ctx, in.Namespace, in.Name, in.rv))
+	})
+}
+
 // ===== Policy (namespaced) — ADR-0074 =====
 
 type createPolicyInput struct {

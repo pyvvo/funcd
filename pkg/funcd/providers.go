@@ -30,6 +30,7 @@ func providerCatalog() (*provider.Catalog, error) {
 		provider.Descriptor{Name: "log-ingest", Kind: provider.Builtin, Summary: "function-telemetry side channel + funclog read path (ADR-0081/0084)"},
 		// add-on providers — out-of-daemon managed engines (ADR-0087)
 		provider.Descriptor{Name: "catalog-query", Kind: provider.Addon, Bindings: []string{"spec.catalogs"}, Summary: "DuckLake catalog/query service (F48, ADR-0086)"},
+		provider.Descriptor{Name: "sql", Kind: provider.Addon, Summary: "one rqlite SQL engine per SQLDatabase (ADR-0232)"},
 	)
 }
 

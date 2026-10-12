@@ -385,6 +385,12 @@ type Config struct {
 		DefaultIndex string `json:"defaultIndex,omitempty" env:"FUNCD_SITE_DEFAULT_INDEX" validate:"omitempty,startsnotwith=/"`
 	} `json:"site,omitempty"`
 
+	// SQL tunes the SQL databases (ADR-0232). MaxDatabasesPerNamespace is the per-namespace SQLDatabase count cap
+	// enforced at admission; 0 ⇒ the default (20); a negative value disables the quota.
+	SQL struct {
+		MaxDatabasesPerNamespace int `json:"maxDatabasesPerNamespace,omitempty" env:"FUNCD_SQL_MAX_DATABASES_PER_NAMESPACE"`
+	} `json:"sql,omitempty"`
+
 	// App tunes the App reconciler (ADR-0200). UpgradeTimeout bounds an upgrade, a duration more than
 	// runtime.bootTimeout; empty ⇒ max(5m, twice runtime.bootTimeout), derived in cmd/funcd. RevisionHistory is the
 	// number of AppRevisions an App keeps besides its current one.

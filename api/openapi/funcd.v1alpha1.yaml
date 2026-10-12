@@ -1701,6 +1701,12 @@ components:
           patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
           type: string
         report: {}
+        sqlOrphans:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
       required:
         - held
       type: object
@@ -3207,6 +3213,57 @@ components:
     RuntimeClassStatus:
       additionalProperties: false
       properties:
+        conditions:
+          items:
+            $ref: "#/components/schemas/Condition"
+          type:
+            - array
+            - "null"
+        observedGeneration:
+          format: int64
+          type: integer
+        phase:
+          enum:
+            - Pending
+            - Deploying
+            - Ready
+            - Idle
+            - Degraded
+            - Failed
+            - Terminating
+          type: string
+      type: object
+    SQLDatabase:
+      additionalProperties: false
+      properties:
+        apiVersion:
+          type: string
+        kind:
+          type: string
+        metadata:
+          $ref: "#/components/schemas/ObjectMeta"
+        spec:
+          $ref: "#/components/schemas/SQLDatabaseSpec"
+        status:
+          $ref: "#/components/schemas/SQLDatabaseStatus"
+      required:
+        - metadata
+        - spec
+        - apiVersion
+        - kind
+      type: object
+    SQLDatabaseSpec:
+      additionalProperties: false
+      properties:
+        resources:
+          $ref: "#/components/schemas/ResourceSpec"
+      type: object
+    SQLDatabaseStatus:
+      additionalProperties: false
+      properties:
+        bindings:
+          format: int64
+          type: integer
         conditions:
           items:
             $ref: "#/components/schemas/Condition"
@@ -9045,6 +9102,200 @@ paths:
           description: Error
       tags:
         - Site
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/sqldatabases:
+    get:
+      operationId: listSQLDatabases
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/SQLDatabase"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - SQLDatabase
+    post:
+      operationId: createSQLDatabase
+      parameters:
+        - description: admit the write and store nothing (ADR-0220)
+          explode: false
+          in: query
+          name: dryRun
+          schema:
+            description: admit the write and store nothing (ADR-0220)
+            type: boolean
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SQLDatabase"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SQLDatabase"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - SQLDatabase
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/sqldatabases/{name}:
+    delete:
+      operationId: deleteSQLDatabase
+      parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - SQLDatabase
+    get:
+      operationId: getSQLDatabase
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SQLDatabase"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - SQLDatabase
+    put:
+      operationId: replaceSQLDatabase
+      parameters:
+        - description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+          in: header
+          name: If-Match
+          schema:
+            description: one strong entity-tag "<resourceVersion>" or *; the write is conditional on it (ADR-0210)
+            type: string
+        - description: admit the write and store nothing (ADR-0220)
+          explode: false
+          in: query
+          name: dryRun
+          schema:
+            description: admit the write and store nothing (ADR-0220)
+            type: boolean
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SQLDatabase"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SQLDatabase"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - SQLDatabase
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/workflowruns:
     get:
       operationId: listWorkflowRuns

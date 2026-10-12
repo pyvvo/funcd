@@ -25,6 +25,7 @@ type HoldPlatform interface {
 	Counts(ctx context.Context) (map[v1.Kind]int, error)
 	Orphans(ctx context.Context) ([]string, error)
 	BucketOrphans(ctx context.Context) ([]v1.ObjectRef, error)
+	SQLOrphans(ctx context.Context) ([]v1.ObjectRef, error)
 	Advance(ctx context.Context, ns v1.NamespaceName, source v1.ObjectName) error
 	Pending(ctx context.Context, ns v1.NamespaceName, source v1.ObjectName) (map[string]int, error)
 }
@@ -100,6 +101,13 @@ func (s *HoldService) Status(ctx context.Context) (hold.Evidence, error) {
 	}
 	for _, b := range buckets {
 		st.BucketOrphans = append(st.BucketOrphans, string(b.Namespace)+"/"+string(b.Name))
+	}
+	dbs, err := p.SQLOrphans(ctx)
+	if err != nil {
+		return hold.Evidence{}, err
+	}
+	for _, d := range dbs {
+		st.SQLOrphans = append(st.SQLOrphans, string(d.Namespace)+"/"+string(d.Name))
 	}
 	if st.FunctionsNotReady, err = s.functionsNotReady(ctx); err != nil {
 		return hold.Evidence{}, err

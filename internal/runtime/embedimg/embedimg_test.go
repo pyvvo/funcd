@@ -13,7 +13,7 @@ import (
 // import into containerd is the deferred Linux lane; here we assert the embed is wired and
 // non-empty for each curated runtime (the ADR-0054 non-gated unit).
 func TestEmbeddedImageNoRegistry(t *testing.T) {
-	for _, rt := range []string{"nodejs22", "python314", "duckdb"} {
+	for _, rt := range []string{"nodejs22", "python314", "duckdb", "rqlite"} {
 		r, ok := Tar(rt)
 		if !ok {
 			t.Fatalf("Tar(%q): ok=false, want true (runtime must have an embedded tar)", rt)

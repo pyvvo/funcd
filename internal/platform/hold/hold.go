@@ -68,8 +68,9 @@ type busy struct {
 
 // Evidence is what the hold shows the operator (Decisions 1, 8): GET …/hold returns it, `funcdctl hold status` prints
 // it. Report is restore.json as written; runs and dead letters are <ns>/<name> and <ns>/<id>; Pending is, per
-// <ns>/<source>, the blob keys per event a release replays; Orphans and BucketOrphans are data no object names,
-// which the reclaims would drop; FunctionsNotReady are <ns>/<name>; Namespaces are the per-namespace markers.
+// <ns>/<source>, the blob keys per event a release replays; Orphans, BucketOrphans and SQLOrphans (ADR-0232) are
+// data no object names, which the reclaims would drop; FunctionsNotReady are <ns>/<name>; Namespaces are the
+// per-namespace markers.
 type Evidence struct {
 	Held              bool                      `json:"held"`
 	Marker            *Marker                   `json:"marker,omitempty"`
@@ -81,6 +82,7 @@ type Evidence struct {
 	Pending           map[string]map[string]int `json:"pending,omitempty"`
 	Orphans           []string                  `json:"orphans,omitempty"`
 	BucketOrphans     []string                  `json:"bucketOrphans,omitempty"`
+	SQLOrphans        []string                  `json:"sqlOrphans,omitempty"`
 	FunctionsNotReady []string                  `json:"functionsNotReady,omitempty"`
 	Namespaces        []NamespaceHold           `json:"namespaces,omitempty"`
 }

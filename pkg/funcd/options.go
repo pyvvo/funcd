@@ -49,6 +49,18 @@ func WithKVStore(kv kvstore.KV) Option {
 	return func(c *config) error { c.kvStore = kv; return nil }
 }
 
+// WithSQLDatabaseQuota sets the per-namespace SQLDatabase count cap enforced at admission (ADR-0232,
+// sql.maxDatabasesPerNamespace). 0 ⇒ the default (20); a negative value disables the quota.
+func WithSQLDatabaseQuota(maxPerNamespace int) Option {
+	return func(c *config) error { c.sqlMaxDatabasesPerNamespace = maxPerNamespace; return nil }
+}
+
+// WithSQLProviderRuntime overrides the SQLDatabase engine runtime (ADR-0232); the production runtime supervises the
+// rqlite container, tests and `funcdctl dev` (ADR-0237) inject their own. It must implement provider.Volumes.
+func WithSQLProviderRuntime(r provider.Runtime) Option {
+	return func(c *config) error { c.sqlProvider = r; return nil }
+}
+
 // WithKVStoreQuota sets the per-namespace KVStore count cap enforced at admission (ADR-0072,
 // kvstore.maxStoresPerNamespace). 0 ⇒ the default (100); a negative value disables the quota.
 func WithKVStoreQuota(maxPerNamespace int) Option {

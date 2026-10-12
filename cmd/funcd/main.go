@@ -368,6 +368,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 		funcd.WithStore(st),
 		funcd.WithKVStore(kvDriver),
 		funcd.WithKVStoreQuota(cfg.Kvstore.MaxStoresPerNamespace),
+		funcd.WithSQLDatabaseQuota(cfg.SQL.MaxDatabasesPerNamespace),
 		funcd.WithNestedInFlightCap(cfg.Invoke.MaxNestedInFlight),
 		credOpt,
 		funcd.WithArtifactStore(filepath.Join(cfg.Storage.DataDir, "artifacts")),
