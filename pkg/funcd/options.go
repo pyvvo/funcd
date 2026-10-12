@@ -237,14 +237,6 @@ func WithBridgeAddress(addr netip.Addr) Option {
 	}
 }
 
-// WithCatalogProxyHost is the old name of WithBridgeAddress (ADR-0238), taking the address as a string.
-func WithCatalogProxyHost(host string) Option {
-	return func(c *config) error {
-		c.bridgeAddress = host
-		return nil
-	}
-}
-
 // WithWorkflow tunes the workflow engine (ADR-0094). The engine is always wired; without this option it
 // runs in memory with the daemon config's defaults (300s step timeout, 720h retention, one attempt,
 // 256 KiB payload cap). This option sets its persistence + tunables: dataDir is the Badger run-state directory

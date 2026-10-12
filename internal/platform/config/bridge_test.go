@@ -61,29 +61,11 @@ func TestScenarioBridgeAddressOutsideSubnetRefused(t *testing.T) {
 	refused(t, containerd+"  containerd:\n    bridgeAddress: funcd0\n", "runtime.containerd.bridgeAddress")
 }
 
-// scenario: proxy-host-still-read — catalog.proxyHost alone is the bridge address in either runtime, with one warning
-// naming the new field; a hostname or an address nothing on this host can bind is refused.
-func TestScenarioProxyHostStillRead(t *testing.T) {
+// scenario: proxy-host-refused — catalog.proxyHost, the field this replaces, is no longer read: a config that sets it
+// is refused at start, naming it.
+func TestScenarioProxyHostRefused(t *testing.T) {
 	t.Parallel()
-	for _, runtime := range []string{containerd, ""} {
-		c := bridgeCfg(t, runtime+"catalog:\n  proxyHost: 127.0.0.1\n")
-		requireBridge(t, c, "127.0.0.1")
-		fs := c.CheckBridge()
-		require.Len(t, fs, 1)
-		require.False(t, fs[0].Error)
-		require.Equal(t, "catalog.proxyHost", fs[0].Key)
-		require.Contains(t, fs[0].Message, "runtime.containerd.bridgeAddress")
-	}
-	requireBridge(t, bridgeCfg(t, containerd+"catalog:\n  proxyHost: 10.63.0.1\n"), "10.63.0.1")
-	refused(t, containerd+"catalog:\n  proxyHost: node.example\n", "catalog.proxyHost")
-	refused(t, containerd+"catalog:\n  proxyHost: 203.0.113.7\n", "catalog.proxyHost")
-}
-
-// scenario: conflicting-addresses-refused
-func TestScenarioConflictingAddressesRefused(t *testing.T) {
-	t.Parallel()
-	refused(t, containerd+"  containerd:\n    bridgeAddress: 10.63.0.9\ncatalog:\n  proxyHost: 10.63.0.1\n", "runtime.containerd.bridgeAddress")
-	requireBridge(t, bridgeCfg(t, containerd+"  containerd:\n    bridgeAddress: 10.63.0.1\ncatalog:\n  proxyHost: 10.63.0.1\n"), "10.63.0.1")
+	refused(t, containerd+"catalog:\n  proxyHost: 10.63.0.1\n", "proxyHost")
 }
 
 // scenario: process-runtime-loopback

@@ -1,8 +1,11 @@
 # ADR-0238: The container bridge address
 
-- **Status**: Reviewing (2026-10-12, implementation done). Accepted (2026-10-12, self-accepted under the decider's batch delegation; judged twice: the first round
-  kept the proxies node-private, superseded ADR-0085's S3 endpoint default in part, moved the lane proof to the in-repo
-  duckdb config and pinned the alias rules; the second found no Blocker or Major)
+- **Status**: Reviewing (2026-10-12, implementation done). Accepted (2026-10-12, self-accepted under the decider's batch
+  delegation; judged twice: the first round kept the proxies node-private, superseded ADR-0085's S3 endpoint default in
+  part, moved the lane proof to the in-repo duckdb config and pinned the alias rules; the second found no Blocker or
+  Major)
+- **Amended before merge** (2026-10-12, at the decider's request): `catalog.proxyHost` is removed instead of kept as an
+  alias; the configs pinned from funcd-functions and funcd-python drop it in releases this change pins.
 - **Date**: 2026-10-12
 - **Deciders**: green-0-rabbit
 - **Tags**: network, containerd, config, sql, catalog, s3
@@ -42,18 +45,16 @@ exist.
   address is used.
 - `scenario: bridge-address-outside-subnet-refused` — Given a `bridgeAddress` outside `subnetCIDR`, Then funcd refuses
   to start, naming the field.
-- `scenario: proxy-host-still-read` — Given only `catalog.proxyHost` set, in either runtime, Then it is used as before
-  and one warning names the new field.
-- `scenario: conflicting-addresses-refused` — Given both fields set to different addresses, Then funcd refuses to start,
-  naming both.
-- `scenario: process-runtime-loopback` — Given the process runtime (`funcdctl dev`) and no `catalog.proxyHost`, Then the
-  address is `127.0.0.1`.
+- `scenario: proxy-host-refused` — Given a config that still sets `catalog.proxyHost`, Then funcd refuses to start,
+  naming it (the config is parsed strictly).
+- `scenario: process-runtime-loopback` — Given the process runtime (`funcdctl dev`), Then the address is `127.0.0.1`.
 - `scenario: s3-endpoint-from-bridge` — Given containerd, `s3gateway.listenAddr: 0.0.0.0:9000` and no endpoint, Then a
   worker's `AWS_ENDPOINT_URL_S3` is `http://10.63.0.1:9000`.
 
 ## Scope
 
-**In**: the field, its default, its alias, and the three readers. **Out**: changing `s3gateway.listenAddr`'s default
+**In**: the field, its default, the removal of `catalog.proxyHost`, and the three readers. **Out**: changing
+`s3gateway.listenAddr`'s default
 (a loopback S3 gateway stays unreachable from containers, as today); custom CNI setups beyond setting the field.
 
 ## Constraints & Decision drivers
@@ -76,19 +77,16 @@ exist.
 1. **The field.** `runtime.containerd.bridgeAddress` (env `FUNCD_BRIDGE_ADDRESS`) is funcd's IP on its container
    bridge, and must lie in `runtime.containerd.subnetCIDR`. Empty ⇒ the subnet's network address + 1. The process
    runtime does not read it and uses `127.0.0.1`.
-2. **The alias.** `catalog.proxyHost` keeps today's meaning in both runtimes: an IP literal (a hostname is refused at
-   start, naming the field), not checked against the subnet but required to be an address of this host (refused at start
-   otherwise, since it is now bound), used as the bridge address; one warning names the new field. Under containerd,
-   both fields set to different addresses ⇒ start refused, naming both.
+2. **No alias.** `catalog.proxyHost` and `WithCatalogProxyHost` are removed; a config that sets the key is refused at
+   start, as any unknown key is.
 3. **The readers.** The catalog proxies and the change feed bind the bridge address itself, retried until the bridge
-   exists, and publish it: the proxies stay node-private (they bind `0.0.0.0` today only when `catalog.proxyHost` is
-   set). The egress allow list holds `<bridge address>:<sql.changeFeedPort>`, as today; the S3 and catalog ports stay
+   exists, and publish it: the proxies stay node-private (they bound `0.0.0.0` when `catalog.proxyHost` was set). The
+   egress allow list holds `<bridge address>:<sql.changeFeedPort>`, as today; the S3 and catalog ports stay
    operator-listed. `cmd/funcd` computes the S3 endpoint once and passes it to `WithS3Gateway`: an empty
    `s3gateway.endpoint` becomes `http://<bridge address>:<port>` when `s3gateway.listenAddr`'s host is empty,
    unspecified (`0.0.0.0`, `::`) or the bridge address, else `http://<listenAddr>` as before.
-4. **The library.** `pkg/funcd` gains `WithBridgeAddress`; `WithCatalogProxyHost` stays as its alias. Through
-   `cmd/funcd` the address is never empty under containerd; `pkg/funcd` keeps the loopback warning for an embedder that
-   runs containerd without either option.
+4. **The library.** `pkg/funcd` gains `WithBridgeAddress`. Through `cmd/funcd` the address is never empty under
+   containerd; `pkg/funcd` keeps the loopback warning for an embedder that runs containerd without it.
 
 ## Temporary workarounds
 
@@ -107,8 +105,8 @@ runtime:
 ```
 
 ```go
-// internal/platform/config: the effective bridge address: catalog.proxyHost when set, else under containerd
-// runtime.containerd.bridgeAddress or the subnet's network address + 1, else 127.0.0.1. The error names the field.
+// internal/platform/config: the effective bridge address: under containerd runtime.containerd.bridgeAddress or the
+// subnet's network address + 1, else 127.0.0.1. The error names the field.
 func (c *Config) BridgeAddress() (netip.Addr, error)
 
 // pkg/funcd
@@ -117,19 +115,19 @@ func WithBridgeAddress(addr netip.Addr) Option
 
 | Consumes | Exposes |
 |---|---|
-| `runtime.containerd.subnetCIDR`, `runtime.containerd.bridgeAddress`, `catalog.proxyHost` | the address the catalog proxies, the change feed, the allow list and the S3 endpoint use |
+| `runtime.containerd.subnetCIDR`, `runtime.containerd.bridgeAddress` | the address the catalog proxies, the change feed, the allow list and the S3 endpoint use |
 
 ## Implementation plan
 
-1. `internal/platform/config`: the field, `BridgeAddress()` with the alias, subnet and conflict rules.
+1. `internal/platform/config`: the field, `BridgeAddress()` and the subnet rule; `catalog.proxyHost` removed.
 2. `cmd/funcd/main.go`: `BridgeAddress()` wherever `cfg.Catalog.ProxyHost` is read today, and the S3 endpoint computed
    once and passes it to `WithS3Gateway`; the library's fallbacks in `internal/function/function.go` and
    `pkg/funcd/funcd.go` stay for embedders; `pkg/funcd`: `WithBridgeAddress`, the proxies bound on the address, and one
    start-up log line naming the effective bridge address.
 3. Configs in this repo: `e2e/fixtures/duckdb-funcdconfig.yaml` drops `catalog.proxyHost` and `s3gateway.endpoint`, so
    the duckdb lane proves the defaults; `examples/funcdconfig.yaml` documents the field; the `sql` lane's step that
-   greps `proxyHost` prints the effective address instead. The configs pinned from funcd-functions and funcd-python
-   keep the alias and work unchanged; dropping it there is a release and a `go get` (ADR-0141), not part of this ADR.
+   greps `proxyHost` reads the bridge address log line instead. funcd-functions and funcd-python drop the key from the
+   configs this repo pins, in releases this change pins (ADR-0141).
 4. Tests: one `TestScenario<Name>` per scenario, in `internal/platform/config` and `cmd/funcd`; they check the
    addresses passed to `pkg/funcd`, and the duckdb lane proves the real bind on the bridge.
 
@@ -139,7 +137,7 @@ absolute path in a changed file.
 ## Review checklist
 
 - [ ] No reader takes the address from anywhere but `BridgeAddress()`.
-- [ ] A config with only `catalog.proxyHost` behaves as before, plus one warning.
+- [ ] No code or pinned config reads or sets `catalog.proxyHost`.
 - [ ] The process runtime still uses loopback.
 - [ ] One test per scenario, named for it.
 
@@ -148,7 +146,7 @@ absolute path in a changed file.
 - A standard containerd install needs no address setting; the change feed and the catalog work out of the box.
 - funcd never rewrites an existing conflist, so after a `subnetCIDR` change or with an operator's own conflist the
   derived address can be stale: such installs set `bridgeAddress`.
-- `catalog.proxyHost` is deprecated; configs migrate at their own pace.
+- A config that still sets `catalog.proxyHost` no longer starts; the fix is to delete the line.
 
 ## Open questions
 

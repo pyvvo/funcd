@@ -1025,9 +1025,9 @@ func logBackupFindings(cfg config.Config, log *slog.Logger) {
 }
 
 // bridgeAddress is the address the catalog proxies, the SQL change feed and a derived S3 endpoint use (ADR-0238): the
-// config's bridge address under containerd or when catalog.proxyHost is set; false for the process runtime without it.
+// config's bridge address under containerd; false for the process runtime, which keeps the shared loopback.
 func bridgeAddress(cfg config.Config) (netip.Addr, bool) {
-	if cfg.Runtime.Mode != "containerd" && cfg.Catalog.ProxyHost == "" {
+	if cfg.Runtime.Mode != "containerd" {
 		return netip.Addr{}, false
 	}
 	a, err := cfg.BridgeAddress()

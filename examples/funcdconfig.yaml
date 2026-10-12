@@ -228,7 +228,6 @@ log:
 
 # --- catalog: the per-CatalogService query proxies (ADR-0137) ----------------------------------
 # catalog:
-#   proxyHost: ""                 # old name of runtime.containerd.bridgeAddress (ADR-0238), still read. default: ""
 #   enginePollInterval: 2s        # re-check of an engine not answering its probe yet (ADR-0163). default: 2s
 #   engineProbeTimeout: 2s        # bound of one engine probe. default: 2s
 

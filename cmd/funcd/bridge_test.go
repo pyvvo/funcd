@@ -21,16 +21,13 @@ func containerdCfg(mod func(*config.Config)) config.Config {
 }
 
 // The daemon hands the library the derived bridge address under containerd (scenario bridge-address-from-subnet: the
-// proxies, the feed and the allow list read this one value), and none in the process runtime without catalog.proxyHost.
+// proxies, the feed and the allow list read this one value), and none in the process runtime.
 func TestDaemonBridgeAddress(t *testing.T) {
 	a, ok := bridgeAddress(containerdCfg(nil))
 	require.True(t, ok)
 	require.Equal(t, netip.MustParseAddr("10.63.0.1"), a)
 	_, ok = bridgeAddress(containerdCfg(func(c *config.Config) { c.Runtime.Mode = "process" }))
 	require.False(t, ok, "the process runtime keeps the library's loopback")
-	a, ok = bridgeAddress(containerdCfg(func(c *config.Config) { c.Runtime.Mode, c.Catalog.ProxyHost = "process", "127.0.0.1" }))
-	require.True(t, ok, "an explicit catalog.proxyHost is passed in the process runtime too, as before")
-	require.Equal(t, netip.MustParseAddr("127.0.0.1"), a)
 }
 
 // scenario: s3-endpoint-from-bridge — an empty s3gateway.endpoint derives from the bridge address when the gateway
