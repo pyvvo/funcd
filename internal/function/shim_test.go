@@ -676,6 +676,8 @@ func newContainerHarness(t *testing.T, readyStatus int, opts ...func(*function.D
 		Materializer: function.NewFileMaterializer(),
 		EndpointMode: function.EndpointNetnsFixedPort,
 		ImageFor:     func(rtName string) string { return "funcd/runtime-" + rtName + ":latest" },
+		// as newShimHarness: a loaded host must not read a ready replica as unready
+		ProbeTimeout: 500 * time.Millisecond,
 	}
 	for _, opt := range opts {
 		opt(&deps)

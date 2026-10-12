@@ -197,7 +197,7 @@ type Deps struct {
 	// LivenessTimeout is how long a listening replica or pool host may stay silent on /health/liveness before it is
 	// restarted (runtime.livenessTimeout, ADR-0215); 0 ⇒ max(30 s, three supervision periods).
 	LivenessTimeout time.Duration
-	// ProbeTimeout bounds one readiness or /health/members probe; 0 ⇒ half the readiness poll. Tests that answer
+	// ProbeTimeout bounds one readiness, liveness or /health/members probe; 0 ⇒ half the readiness poll. Tests that answer
 	// probes from local servers raise it, so a loaded host does not read a ready worker as unready.
 	ProbeTimeout time.Duration
 	// ReferentPollInterval re-checks a function waiting for a referent (controller.referentPollInterval, ADR-0163),
@@ -387,6 +387,8 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		return nil, fault.Invalidf(op, "the boot backoff must not be negative")
 	case d.LivenessTimeout < 0:
 		return nil, fault.Invalidf(op, "the liveness timeout must not be negative")
+	case d.ProbeTimeout < 0:
+		return nil, fault.Invalidf(op, "the probe timeout must not be negative")
 	}
 	bootInitial := d.BootBackoffInitial
 	if bootInitial == 0 {
