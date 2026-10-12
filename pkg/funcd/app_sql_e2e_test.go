@@ -15,6 +15,8 @@ import (
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/provider"
+	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/store/memory"
 	"github.com/pyvvo/funcd/internal/testkit/fakesql"
 	"github.com/pyvvo/funcd/pkg/funcd"
 )
@@ -170,25 +172,19 @@ func TestScenarioAppInstallsDatabase(t *testing.T) {
 func TestScenarioMigrationRunsBeforeServing(t *testing.T) {
 	t.Parallel()
 	engines := newStrictEngines(t)
-	e := startGC(t, funcd.WithSQLProviderRuntime(engines))
+	st := store.New(memory.New())
+	e := startGC(t, funcd.WithStore(st), funcd.WithSQLProviderRuntime(engines))
+	revs, fns := watchKind(t, st, v1.KindAppRevision), watchKind(t, st, v1.KindFunction)
 	installSQL(t, e)
-	db := engines.engine(t, "todo-db")
-	require.Equal(t, []string{"0001"}, db.Migrations())
-	log := db.Log()
-	recorded := indexOf(log, "INSERT INTO _migrations (version) VALUES (?)")
-	require.Less(t, recorded, len(log), "the hook recorded 0001")
-	require.NotContains(t, log[:recorded], "SELECT id, title FROM todos",
-		"nothing read todos before the migration")
+	require.Equal(t, []string{"0001"}, engines.engine(t, "todo-db").Migrations())
 	require.Equal(t, http.StatusOK, e.invoke(t, "todo-api"), "todo-api reads the new table")
-}
 
-func indexOf(xs []string, x string) int {
-	for i, v := range xs {
-		if v == x {
-			return i
-		}
-	}
-	return len(xs)
+	hookDone := firstRV(t, revs.events(t), "sqltodo-1 records the hook call", hookRecorded("sqltodo-1", v1.PhaseReady))
+	serving := firstRV(t, fns.events(t), "todo-api serves", func(ev store.Event) bool {
+		fn, ok := ev.Object.(*v1.Function)
+		return ok && fn.Name == "todo-api" && fn.Status.Phase == v1.PhaseReady
+	})
+	require.Less(t, hookDone, serving, "the migration's Invocation ends before todo-api first serves")
 }
 
 // scenario: upgrade-runs-pending-migrations — version 2 ships 0001 and 0002, and the hook applies only 0002.
