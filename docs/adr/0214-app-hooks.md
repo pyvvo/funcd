@@ -1,6 +1,8 @@
 # ADR-0214: App lifecycle hooks — pre-apply and post-apply calls, recorded and retried
 
 - **Status**: Implemented (2026-10-10; accepted 2026-10-10)
+- **Superseded in part by**: [ADR-0236](0236-sql-in-apps.md) (2026-10-12): Decision 4's pre-hook start gate also
+  waits for the SQL databases the hook Function binds.
 - **Date**: 2026-10-08 (self-accepted 2026-10-10 under adr-batch after drafting, three-lens judging with a skeptic per
   finding, cross-ADR audits and alignment with the disaster-recovery ADRs)
 - **Deciders**: green-0-rabbit

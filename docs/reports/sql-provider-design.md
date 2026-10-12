@@ -516,29 +516,43 @@ sensors:
 
 ### Query builders and migrations
 
-A query builder that only generates SQL produces what `context.sql` takes: SQL text and its parameters. Kysely does it
-in TypeScript with its `DummyDriver` and its SQLite classes, and SQLAlchemy Core in Python with `compile`. The schema is
+A query builder that only generates SQL produces what `context.sql` takes: SQL text and its parameters. The decider
+picked the tools on 2026-10-12, code first: Drizzle in TypeScript (`drizzle-orm` Apache-2.0, `drizzle-kit` MIT) and
+SQLModel with Alembic in Python. Checked on 2026-10-12 with `drizzle-orm` 0.45.3 and `drizzle-kit` 0.31.11:
+`drizzle-kit generate` writes `CREATE TABLE` and later `ALTER TABLE` migrations from `schema.ts` with no database; the
+`sqlite-proxy` driver sends every query to a callback, so a 20-line adapter maps reads to `queryValues`, writes to
+`execute` and `db.batch` to one all-or-nothing `execute`; Drizzle's migrator applies pending files in one `execute` and
+skips applied ones. Joins need array rows: rows as objects lose a duplicate column name. Kysely and `kysely-codegen`
+were considered first; `kysely-codegen` only generates types from an existing database. Drizzle does it
+in TypeScript through its `sqlite-proxy` driver, and SQLAlchemy Core or SQLModel in Python with `compile`. The schema is
 written once in code; handlers build their queries from it, and the migrations are SQL generated from it.
 
 ```ts
-import { DummyDriver, Kysely, SqliteAdapter, SqliteIntrospector, SqliteQueryCompiler } from 'kysely';
+import { eq } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/sqlite-proxy';
+import { todos } from './schema';
 
-interface DB {
-  todos: { id: number; title: string; done: number };
+const isRead = (sql: string) => /^\s*(select|with)\b/i.test(sql);
+
+export function db(context) {
+  return drizzle(
+    async (sql, params, method) => {
+      if (isRead(sql)) {
+        const r = await context.sql.queryValues('app', sql, params);
+        return { rows: method === 'get' ? r.values[0] : r.values };
+      }
+      const r = await context.sql.execute('app', sql, params);
+      return { rows: r.values ?? [] };
+    },
+    async (queries) => {
+      const rs = await context.sql.execute('app', queries.map((q) => [q.sql, ...q.params]));
+      return rs.map((r) => ({ rows: r.values ?? [] }));
+    },
+  );
 }
 
-const db = new Kysely<DB>({
-  dialect: {
-    createAdapter: () => new SqliteAdapter(),
-    createDriver: () => new DummyDriver(),
-    createIntrospector: (k) => new SqliteIntrospector(k),
-    createQueryCompiler: () => new SqliteQueryCompiler(),
-  },
-});
-
 export async function handle(context, event) {
-  const q = db.selectFrom('todos').select(['id', 'title']).where('done', '=', 0).compile();
-  return context.sql.query('app', q.sql, q.parameters);
+  return db(context).select({ id: todos.id, title: todos.title }).from(todos).where(eq(todos.done, false));
 }
 ```
 
@@ -567,7 +581,7 @@ def handle(context, event):
     return context.sql.query("app", str(q), q.params)
 ```
 
-Versioned migrations are generated at build time, for example by Alembic's offline mode (`alembic upgrade --sql`), and
+Versioned migrations are generated at build time, by `drizzle-kit generate` in TypeScript or Alembic in Python, and
 shipped inside the migration function. The hook applies the pending ones in order:
 
 ```text
@@ -616,7 +630,7 @@ rqlite ADRs.
 | Result size and statement limits per call; how dates and bytes are passed; which call returns `RETURNING` rows | the access ADR |
 | Whether the platform backup also copies every database | the backup ADR |
 | The engine's memory and CPU limits, and a per-namespace database quota | the SQL database ADR |
-| The containerd shim cost per engine | the engine storage ADR, measured |
+| The containerd shim cost per engine | the SQL database ADR, measured |
 | The shape of a change event, how it is named and delivered, and how a duplicate delivery is dropped | the change-feed ADR |
 | The engine image: a static build from source or the glibc build on distroless; its version pin; how an engine is upgraded | the SQL database ADR |
 
@@ -626,4 +640,4 @@ rqlite ADRs.
 - [FAQ](https://rqlite.io/docs/faq/) · [security](https://rqlite.io/docs/guides/security/) · [data API](https://rqlite.io/docs/api/api/) · [read consistency](https://rqlite.io/docs/api/read-consistency/)
 - [backup and restore](https://rqlite.io/docs/guides/backup/) · [CDC](https://rqlite.io/docs/guides/cdc/) · [client libraries](https://rqlite.io/docs/api/client-libraries/) · [install](https://rqlite.io/docs/install-rqlite/)
 - [rqlite/sql](https://github.com/rqlite/sql) · [LICENSE](https://github.com/rqlite/rqlite/blob/master/LICENSE)
-- [Kysely: splitting query building and execution](https://kysely.dev/docs/recipes/splitting-query-building-and-execution) · [SQLAlchemy DDL constructs](https://docs.sqlalchemy.org/en/20/core/ddl.html) · [Alembic offline mode](https://alembic.sqlalchemy.org/en/latest/offline.html)
+- [drizzle-kit generate](https://orm.drizzle.team/docs/drizzle-kit-generate) · [SQLAlchemy DDL constructs](https://docs.sqlalchemy.org/en/20/core/ddl.html) · [Alembic offline mode](https://alembic.sqlalchemy.org/en/latest/offline.html)
