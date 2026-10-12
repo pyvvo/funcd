@@ -429,12 +429,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 				return nil, noopClose, nil, "", fmt.Errorf("egress isolation: parse dnsResolver %q: %w", n.DNSResolver, err)
 			}
 		}
-		internal := slices.Clone(n.InternalAllow)
-		if bridge, ok := bridgeAddress(cfg); ok {
-			// ADR-0235 Decision 2: the engines post their changes to the feed on the bridge address (ADR-0238).
-			internal = append(internal, net.JoinHostPort(bridge.String(), strconv.Itoa(cmp.Or(cfg.SQL.ChangeFeedPort, 7075))))
-		}
-		for _, s := range internal {
+		for _, s := range internalAllow(cfg) {
 			ap, err := netip.ParseAddrPort(s)
 			if err != nil {
 				return nil, noopClose, nil, "", fmt.Errorf("egress isolation: parse internalAllow %q: %w", s, err)
@@ -1032,6 +1027,16 @@ func bridgeAddress(cfg config.Config) (netip.Addr, bool) {
 	}
 	a, err := cfg.BridgeAddress()
 	return a, err == nil
+}
+
+// internalAllow is the egress internal allow list: the configured entries and, where the engines run, the change
+// feed on the bridge address (ADR-0235 Decision 2, ADR-0238).
+func internalAllow(cfg config.Config) []string {
+	internal := slices.Clone(cfg.Server.Network.InternalAllow)
+	if bridge, ok := bridgeAddress(cfg); ok {
+		internal = append(internal, net.JoinHostPort(bridge.String(), strconv.Itoa(cmp.Or(cfg.SQL.ChangeFeedPort, 7075))))
+	}
+	return internal
 }
 
 // s3Endpoint is the S3 URL a worker is given (ADR-0085 as ADR-0238 supersedes it in part): s3gateway.endpoint when set;

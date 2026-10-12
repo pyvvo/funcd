@@ -20,12 +20,14 @@ func containerdCfg(mod func(*config.Config)) config.Config {
 	return c
 }
 
-// The daemon hands the library the derived bridge address under containerd (scenario bridge-address-from-subnet: the
-// proxies, the feed and the allow list read this one value), and none in the process runtime.
-func TestDaemonBridgeAddress(t *testing.T) {
+// scenario: bridge-address-from-subnet (the daemon's side) — under containerd with nothing configured the daemon hands
+// the library 10.63.0.1, which the proxies and the feed bind, and the egress allow list holds the feed on it; the
+// process runtime hands none and keeps the library's loopback.
+func TestScenarioBridgeAddressFromSubnetDaemon(t *testing.T) {
 	a, ok := bridgeAddress(containerdCfg(nil))
 	require.True(t, ok)
 	require.Equal(t, netip.MustParseAddr("10.63.0.1"), a)
+	require.Equal(t, []string{"10.63.0.1:7075"}, internalAllow(containerdCfg(nil)))
 	_, ok = bridgeAddress(containerdCfg(func(c *config.Config) { c.Runtime.Mode = "process" }))
 	require.False(t, ok, "the process runtime keeps the library's loopback")
 }
