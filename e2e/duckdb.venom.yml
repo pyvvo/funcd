@@ -198,6 +198,59 @@ testcases:
           - result.systemout ShouldContainSubstring "ENGINE_MOVED=yes"              # the engine really came back on a new IP
           - result.systemout ShouldContainSubstring "ENDPOINT_SAME=yes"             # yet the published proxy URL did not change
 
+  # #998: the engine checkpoints its DuckLake catalog after each commit (ADR-0086), so a table committed over Quack
+  # survives a SIGKILL of the engine; before, only a SIGTERM checkpointed and the restarted engine lost the table.
+  - name: issue998-committed-table-survives-a-killed-engine — a table created over Quack is checkpointed within a second and read back after a SIGKILL of the engine
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc 'touch /tmp/issue998-before && echo MARKED'
+        assertions:
+          - result.systemout ShouldContainSubstring MARKED
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/catalog-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"CREATE TABLE lakehouse.issue998 AS SELECT 998 AS n"}}'
+        retry: 30
+        delay: 2
+        info: "create → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            sudo find /var/lib/funcd/data/blob -path "*/_ducklake/catalog.db" -newer /tmp/issue998-before -type f |
+              grep -q . && echo CHECKPOINTED || echo WAITING'
+        retry: 15
+        delay: 1
+        info: "the catalog after the commit → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldEqual CHECKPOINTED
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            sudo /var/lib/funcd/bin/ctr --address /var/lib/funcd/data/containerd/containerd.sock -n funcd-default \
+              task kill -s KILL lake-r0 && echo KILLED'
+        retry: 15
+        delay: 2
+        info: "kill → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring KILLED
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/catalog-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT n FROM lakehouse.issue998"}}'
+        retry: 30
+        delay: 2
+        info: "read after the restart → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring "[[998]]"
+
   # ADR-0152: a Function and a CatalogService share the name `lake`; each reconciler manages only its own kind's workers.
   - name: same-name-function-and-catalog-stay-ready — Function lake deploys and scales beside CatalogService lake, which keeps its engine
     steps:

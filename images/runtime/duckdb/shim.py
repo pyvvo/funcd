@@ -50,6 +50,9 @@ import duckdb  # the native engine (out-of-process in THIS function — no cgo i
 LOCAL_CATALOG = "/var/funcd/ducklake/catalog.db"
 LOCAL_SNAPSHOT = LOCAL_CATALOG + ".snapshot"
 
+# How often the commit watcher reads the catalog's snapshot id: commits within one interval share one checkpoint.
+COMMIT_POLL_SECONDS = 1.0
+
 # The extensions the engine loads — pre-installed OFFLINE into the image's extension dir (the sandbox
 # has no arbitrary egress): httpfs (S3), sqlite (the ducklake catalog backend), ducklake, quack.
 EXTENSIONS = ("httpfs", "sqlite", "ducklake", "quack")
@@ -168,8 +171,8 @@ class _Checkpointer:
     leaves the prior snapshot intact. Ordering is data-before-metadata: DuckLake makes the Parquet
     durable on S3 BEFORE this runs, so the catalog snapshot never names a missing object. The catalog
     is metadata-sized (file-lists + snapshots, not row data), within the gateway's upload cap.
-    Coalesced: callers invoke per committed transaction (debounced by the engine) and once on
-    graceful shutdown; the lock serializes concurrent (txn + shutdown) checkpoints.
+    Coalesced: _CommitWatcher calls it once per poll interval in which a transaction committed, and
+    the SIGTERM handler once on graceful shutdown; the lock serializes the two.
     """
 
     def __init__(self, s3, bucket: str, key: str) -> None:
@@ -197,6 +200,47 @@ class _Checkpointer:
                 self._s3.put_object(Bucket=self._bucket, Key=self._key, Body=fh.read())
 
 
+def _snapshot_id(path: str) -> int | None:
+    """The latest DuckLake snapshot id in the SQLite catalog at path; every committed transaction adds one."""
+    scon = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=30)
+    try:
+        row = scon.execute("SELECT max(snapshot_id) FROM ducklake_snapshot").fetchone()
+    finally:
+        scon.close()
+    return row[0] if row else None
+
+
+class _CommitWatcher(threading.Thread):
+    """Checkpoints the catalog after each committed transaction (ADR-0086), coalesced per poll interval.
+
+    DuckLake adds a row to ducklake_snapshot per commit; the watcher compares the latest id with the one it
+    last checkpointed, starting from the id at start, so a catalog nobody wrote to is not uploaded. A failed
+    read or checkpoint is retried on the next tick, keeping the old id. A SIGKILL then loses at most the
+    commits of one interval, not every commit since the start (#998).
+    """
+
+    def __init__(self, checkpointer: _Checkpointer, path: str, interval: float) -> None:
+        super().__init__(name="commit-watcher", daemon=True)
+        self._checkpointer = checkpointer
+        self._path = path
+        self._interval = interval
+        self._done = threading.Event()
+        self._seen = _snapshot_id(path)
+
+    def run(self) -> None:
+        while not self._done.wait(self._interval):
+            try:
+                latest = _snapshot_id(self._path)
+                if latest != self._seen:
+                    self._checkpointer.checkpoint()
+                    self._seen = latest
+            except Exception as exc:  # noqa: BLE001 — keep watching; the next tick retries.
+                sys.stderr.write(f"funcd duckdb shim: catalog checkpoint failed, retrying: {exc}\n")
+
+    def stop(self) -> None:
+        self._done.set()
+
+
 def main() -> int:
     quack_port = int(_require("FUNCD_QUACK_PORT"))
     catalog_url = _require("FUNCD_DUCKLAKE_CATALOG")
@@ -222,10 +266,12 @@ def main() -> int:
     )
 
     checkpointer = _Checkpointer(s3, bucket, key)
+    watcher = _CommitWatcher(checkpointer, LOCAL_CATALOG, COMMIT_POLL_SECONDS)
+    watcher.start()
 
-    # Graceful shutdown: checkpoint the catalog one final time on SIGTERM/SIGINT (the coalesce point
-    # in addition to the per-committed-transaction checkpoints the engine triggers).
+    # Graceful shutdown: checkpoint the catalog one final time on SIGTERM/SIGINT.
     def _on_term(_signum, _frame):
+        watcher.stop()
         try:
             checkpointer.checkpoint()
         finally:
