@@ -18,6 +18,10 @@ RUN set -eux; \
       -o /out/rqlited ./cmd/rqlited; \
     ! readelf -l /out/rqlited | grep -q 'Requesting program interpreter'
 
+# The engine alone, for funcdctl dev's embedded linux engine (scripts/build-sql-engine.sh, ADR-0237).
+FROM scratch AS engine
+COPY --from=rqlite /out/rqlited /rqlited
+
 FROM gcr.io/distroless/static-debian12@sha256:d75cdd72874d4790092fcb1b058493ecf6bb5bf2b2b897045b00ff01d91843f2
 COPY --from=rqlite /out/rqlited /usr/local/bin/rqlited
 COPY --from=entry funcd-rqlite /usr/local/bin/funcd-rqlite

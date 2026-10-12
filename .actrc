@@ -1,4 +1,5 @@
 -P ubuntu-latest=catthehacker/ubuntu:act-latest
+-P macos-latest=-self-hosted
 --container-daemon-socket -
 --pull=false
 --artifact-server-path .act-artifacts

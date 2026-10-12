@@ -106,6 +106,7 @@ type Bindings struct {
 	Blob     []v1.FunctionBlob    `json:"blob,omitempty"`
 	KV       []v1.FunctionKV      `json:"kv,omitempty"`
 	Catalogs []v1.FunctionCatalog `json:"catalogs,omitempty"`
+	SQL      []v1.FunctionSQL     `json:"sql,omitempty"`
 	Links    []v1.FunctionLink    `json:"links,omitempty"`
 	Config   []v1.ObjectName      `json:"config,omitempty"`
 	Secrets  []v1.ObjectName      `json:"secrets,omitempty"`

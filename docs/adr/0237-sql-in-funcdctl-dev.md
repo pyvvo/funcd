@@ -1,6 +1,6 @@
 # ADR-0237: SQL databases under funcdctl dev
 
-- **Status**: Accepted (2026-10-12, self-accepted under the decider's batch delegation; judged twice: the first round
+- **Status**: Implemented (2026-10-12, review passed). Reviewing (2026-10-12, implementation done). Accepted (2026-10-12, self-accepted under the decider's batch delegation; judged twice: the first round
   replaced the `zig cc` cross-build by a native macOS build, piloted on darwin/arm64, restored the crash reap and bound
   the engine to loopback; the second found one Major, fixed: pruning keeps a database that holds a table)
 - **Date**: 2026-10-12

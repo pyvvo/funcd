@@ -9,9 +9,13 @@ name: Build funcdctl (local)
 #   - the THIN client            → dist/funcdctl-<version>-<os>-<arch>            (~10 MB)
 #   - the FAT `-tags dev` client → dist/funcdctl-dev-<version>-<os>-<arch>        (`funcdctl dev`,
 #     ADR-0125): embeds the process-runtime platform (~60 MB) + the per-arch DuckDB+Quack catalog
-#     engine (~130 MB) fetched by scripts/fetch-catalog-engine.sh. The engine is a subprocess, never
-#     linked, so this stays CGO_ENABLED=0 and the fetch is per-arch from duckdb.org (no docker) — the
-#     whole workflow still runs under act on any host.
+#     engine (~130 MB) fetched by scripts/fetch-catalog-engine.sh, and the per-arch rqlited SQL engine
+#     (~12 MB, ADR-0237) built by the build-sql-engine job. Both engines are subprocesses, never linked,
+#     so the client stays CGO_ENABLED=0.
+#
+# rqlited needs cgo and has no macOS release, so build-sql-engine builds it with scripts/build-sql-engine.sh:
+# linux in the rqlite image's Docker builder stage, darwin natively. It runs on macos-latest, which .actrc maps
+# to the macOS host (self-hosted), where both Docker (colima) and clang are; releases are built locally.
 #
 # Run locally — the flags live in ./.actrc (image, colima socket fix, --pull=false, artifact dir):
 #   docker pull catthehacker/ubuntu:act-latest      # once (act won't pull with --pull=false)
@@ -27,7 +31,38 @@ on:
         default: dev
 
 jobs:
+  build-sql-engine:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+          - os: linux
+            arch: arm64
+          - os: darwin
+            arch: amd64
+          - os: darwin
+            arch: arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Build rqlited for ${{ matrix.os }}/${{ matrix.arch }}
+        run: scripts/build-sql-engine.sh "${{ matrix.os }}" "${{ matrix.arch }}"
+
+      - name: Upload the engine
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sql-engine-${{ matrix.os }}-${{ matrix.arch }}
+          path: internal/sql/embedengine/rqlited.gz
+
   build-funcdctl:
+    needs: build-sql-engine
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -50,6 +85,12 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Download the SQL engine
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: sql-engine-${{ matrix.os }}-${{ matrix.arch }}
+          path: internal/sql/embedengine
+
       - name: Build funcdctl (thin + fat -tags dev) for ${{ matrix.os }}/${{ matrix.arch }}
         run: |
           set -euo pipefail
@@ -62,8 +103,9 @@ jobs:
           CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
             go build -trimpath -ldflags "$LDFLAGS" -o "dist/funcdctl-${VERSION}-${os}-${arch}" ./cmd/funcdctl
 
-          # Fat `-tags dev` client: fetch the per-arch DuckDB+Quack engine into the embed slot, then
-          # bake it in. Engine is a subprocess (no cgo), so CGO_ENABLED=0 still cross-builds cleanly.
+          # Fat `-tags dev` client: fetch the per-arch DuckDB+Quack engine into the embed slot beside the
+          # downloaded rqlited, then bake both in. Engines are subprocesses (no cgo), so CGO_ENABLED=0 still
+          # cross-builds cleanly.
           scripts/fetch-catalog-engine.sh "$os" "$arch"
           CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
             go build -tags dev -trimpath -ldflags "$LDFLAGS" -o "dist/funcdctl-dev-${VERSION}-${os}-${arch}" ./cmd/funcdctl

@@ -5,7 +5,7 @@
 # ---- helpers ----
 _has-packages := `go list ./... 2>/dev/null`
 # the packages with files built only under `-tags dev` (ADR-0125); lint and test them again with the tag
-_dev-packages := "./cmd/funcdctl ./internal/catalog/devengine ./internal/catalog/embedengine"
+_dev-packages := "./cmd/funcdctl ./internal/catalog/devengine ./internal/catalog/embedengine ./internal/sql/devengine ./internal/sql/embedengine"
 
 # ---- recipes ----
 
@@ -212,6 +212,23 @@ catalog-engine-pin:
 [group('runtime')]
 catalog-engine-unpin:
     git update-index --no-skip-worktree internal/catalog/embedengine/engine.tar.gz
+
+# Build rqlited, the SQL engine `funcdctl dev` embeds (ADR-0237 Decision 3), for ONE target os/arch into
+# internal/sql/embedengine/rqlited.gz, over the committed placeholder (skip-worktree'd by the dep), from the source
+# images/runtime/rqlite/rqlite.pin pins: linux in the image's Docker builder stage, darwin natively on macOS. Delegates
+# to scripts/build-sql-engine.sh, shared with the release workflow. NOT run by ci.
+[group('runtime')]
+build-sql-engine os arch: sql-engine-pin
+    scripts/build-sql-engine.sh {{os}} {{arch}}
+
+[group('runtime')]
+sql-engine-pin:
+    git update-index --skip-worktree internal/sql/embedengine/rqlited.gz
+    @echo "sql embedengine placeholder pinned (skip-worktree) — local engine builds won't dirty the tree"
+
+[group('runtime')]
+sql-engine-unpin:
+    git update-index --no-skip-worktree internal/sql/embedengine/rqlited.gz
 
 # Pin/unpin the embedimg placeholders' skip-worktree bit. `build-runtime-images` OVERWRITES the tracked
 # <1 KB placeholders with real 30–100 MB images, which would otherwise leave the working tree permanently
@@ -478,6 +495,11 @@ check-hygiene:
             fail=1
         fi
     done
+    sz=$(git cat-file -s ":internal/sql/embedengine/rqlited.gz" 2>/dev/null || echo 0)
+    if [ "$sz" -gt 4096 ]; then
+        echo "hygiene: internal/sql/embedengine/rqlited.gz is ${sz}B staged — commit the placeholder, not the built engine (just build-sql-engine output)"
+        fail=1
+    fi
     if git ls-files --error-unmatch bench/expr-engine/expr-engine >/dev/null 2>&1; then
         echo "hygiene: bench/expr-engine/expr-engine is tracked — it is a compiled build output; keep it gitignored"
         fail=1
@@ -543,6 +565,12 @@ dev-example project gport="3005" s3port="3006" cport="3007" *args:
       echo "▶ fetching the DuckDB+Quack catalog engine for $(go env GOOS)/$(go env GOARCH) (once) …"
       git update-index --skip-worktree internal/catalog/embedengine/engine.tar.gz 2>/dev/null || true
       scripts/fetch-catalog-engine.sh "$(go env GOOS)" "$(go env GOARCH)"
+    fi
+    # A SQL binding needs the real SQL engine embedded (ADR-0237) — build it once, skip-worktree'd as well.
+    if grep -rqlE '^  sql:' "$dir" --include='*funcdctl.yaml' 2>/dev/null && [ "$(wc -c < internal/sql/embedengine/rqlited.gz)" -lt 4096 ]; then
+      echo "▶ building the SQL engine for $(go env GOOS)/$(go env GOARCH) (once) …"
+      git update-index --skip-worktree internal/sql/embedengine/rqlited.gz 2>/dev/null || true
+      scripts/build-sql-engine.sh "$(go env GOOS)" "$(go env GOARCH)"
     fi
     mkdir -p dist
     echo "▶ building funcdctl (-tags dev) …"

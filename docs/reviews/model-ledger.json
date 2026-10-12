@@ -11398,5 +11398,35 @@
     "dod_total": 10,
     "report": "docs/reviews/adr-0236-implementation-claude-opus-5-5.md",
     "notes": "pass; minors: app-todo suite pushes the stats image (adr), example API owns todo-db without binding it (model), before-serving order proved via the statement log (model); app-todo lane + PR gate pending"
+  },
+  {
+    "date": "2026-10-12",
+    "adr": "0237",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "changes-requested",
+    "blockers": 0,
+    "majors": 1,
+    "minors": 2,
+    "model_attributed": 1,
+    "dod_passed": 10,
+    "dod_total": 11,
+    "report": "docs/reviews/adr-0237-implementation-claude-opus-5-5.md",
+    "notes": "Major(model): cmd/funcdctl/dev.go not gofmt-clean, so just ci's fmt check fails after commit; Minor(adr): ADR names a nonexistent dev-run recipe; Minor(env): linux/amd64 engine build crashed under qemu. All 5 scenarios pass (unavailable via placeholder swap)."
+  },
+  {
+    "date": "2026-10-12",
+    "adr": "0237",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 0,
+    "dod_passed": 11,
+    "dod_total": 11,
+    "report": "docs/reviews/adr-0237-implementation-claude-opus-5-5-2.md",
+    "notes": "Round 2: gofmt fix verified (gofmt -l empty, vet/lint clean, dev-tag tests of cmd/funcdctl and internal/sql pass with the real engine). Minors carried: adr (dev-run recipe name), env (linux/amd64 qemu crash)."
   }
 ]
