@@ -17,7 +17,7 @@ set -euo pipefail
 
 os="${1:?usage: fetch-catalog-engine.sh <os> <arch> [duckdb-version]}"
 arch="${2:?usage: fetch-catalog-engine.sh <os> <arch> [duckdb-version]}"
-ver="${3:-1.5.4}" # pinned DuckDB (ADR-0086: 1.5.4 Variegata, all MIT)
+ver="${3:-1.5.6}" # pinned DuckDB (ADR-0086 chose 1.5.4 Variegata; 1.5.6 is its patch release; all MIT)
 
 # The CLI ships one universal macOS binary; the loadable extensions are per-arch. Map the funcdctl
 # target onto the duckdb.org CLI asset + the extension platform token.

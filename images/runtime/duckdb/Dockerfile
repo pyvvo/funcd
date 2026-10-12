@@ -8,11 +8,11 @@
 # library into THIS function's own process, never into (nor cgo-binds to) the daemon.
 #
 # Pinned versions (verified 2026-06-30, all MIT):
-#   - DuckDB 1.5.4 (Variegata, 2026-06-17) — the engine (the `duckdb` Python wheel @ 1.5.4).
+#   - DuckDB 1.5.6, the patch release of 1.5.4 Variegata — the engine (the `duckdb` Python wheel @ 1.5.6).
 #   - the `ducklake` extension implementing DuckLake spec v1.0 (Apr 2026, production-ready).
 #   - `httpfs` (S3/http filesystem) + the `quack` extension (beta, bundled with this DuckDB build).
 # The whole engine is ONE pinned DuckDB build — Quack is not a separate artifact but the `quack`
-# extension shipped with DuckDB 1.5.4. Every input is pinned: both bases by the digest of their multi-arch
+# extension shipped with DuckDB 1.5.6. Every input is pinned: both bases by the digest of their multi-arch
 # index, every pip package by version and wheel hash (requirements.txt), and every extension by the SHA-256
 # of its file (duckdb.sha256), all resolved 2026-10-11. python:3.14-slim-bookworm stays at the
 # digest images/runtime/python314/Dockerfile and scripts/lanes.yaml use.
@@ -43,7 +43,7 @@ RUN set -eux; \
     # and stays valid at runtime.
     find /opt/funcd-duckdb -exec touch -h -d "@${SOURCE_DATE_EPOCH:-0}" {} +; \
     # Pre-install the pinned DuckDB extensions into a known dir so the shim LOADs them OFFLINE at
-    # runtime (the sandbox has no arbitrary egress). The exact pin set is the DuckDB 1.5.4 bundle.
+    # runtime (the sandbox has no arbitrary egress). The exact pin set is the DuckDB 1.5.6 bundle.
     PYTHONPATH=/opt/funcd-duckdb DUCKDB_EXTENSION_DIRECTORY=/opt/duckdb-ext \
       python3 -c "import os,duckdb; os.makedirs('/opt/duckdb-ext',exist_ok=True); \
         c=duckdb.connect(config={'extension_directory':'/opt/duckdb-ext'}); \
