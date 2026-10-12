@@ -819,7 +819,7 @@ func (h *storeHandlers) DeleteRestore(ctx context.Context, ns v1.NamespaceName, 
 // crudKind lists the namespaced kinds served by the generic CRUD helpers (typedObj, registerNamespacedCRUD, the
 // stub helpers): a new kind joins the union instead of copying the per-kind boilerplate.
 type crudKind interface {
-	v1.App | v1.AppRevision | v1.BackupSchedule | v1.Backup | v1.Restore
+	v1.App | v1.AppRevision | v1.BackupSchedule | v1.Backup | v1.Restore | v1.SQLDatabase
 }
 
 type objectPtr[T crudKind] interface {
@@ -1185,39 +1185,19 @@ func (h *storeHandlers) DeleteCatalogService(ctx context.Context, ns v1.Namespac
 // --- SQLDatabase (namespaced) — ADR-0232 ---
 
 func (h *storeHandlers) GetSQLDatabase(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.SQLDatabase, error) {
-	o, err := h.getObj(ctx, v1.KindSQLDatabase, ns, name)
-	if err != nil {
-		return v1.SQLDatabase{}, err
-	}
-	return *o.(*v1.SQLDatabase), nil
+	return typedObj[v1.SQLDatabase](h.getObj(ctx, v1.KindSQLDatabase, ns, name))
 }
 
-func (h *storeHandlers) CreateSQLDatabase(ctx context.Context, cs v1.SQLDatabase) (v1.SQLDatabase, error) {
-	o, err := h.createObj(ctx, v1.KindSQLDatabase, &cs)
-	if err != nil {
-		return v1.SQLDatabase{}, err
-	}
-	return *o.(*v1.SQLDatabase), nil
+func (h *storeHandlers) CreateSQLDatabase(ctx context.Context, db v1.SQLDatabase) (v1.SQLDatabase, error) {
+	return typedObj[v1.SQLDatabase](h.createObj(ctx, v1.KindSQLDatabase, &db))
 }
 
 func (h *storeHandlers) ListSQLDatabases(ctx context.Context, ns v1.NamespaceName) ([]v1.SQLDatabase, error) {
-	objs, err := h.listObj(ctx, v1.KindSQLDatabase, ns)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]v1.SQLDatabase, len(objs))
-	for i, o := range objs {
-		out[i] = *o.(*v1.SQLDatabase)
-	}
-	return out, nil
+	return typedObjs[v1.SQLDatabase](h.listObj(ctx, v1.KindSQLDatabase, ns))
 }
 
-func (h *storeHandlers) ReplaceSQLDatabase(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, cs v1.SQLDatabase) (v1.SQLDatabase, error) {
-	o, err := h.replaceObj(ctx, v1.KindSQLDatabase, ns, name, &cs)
-	if err != nil {
-		return v1.SQLDatabase{}, err
-	}
-	return *o.(*v1.SQLDatabase), nil
+func (h *storeHandlers) ReplaceSQLDatabase(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, db v1.SQLDatabase) (v1.SQLDatabase, error) {
+	return typedObj[v1.SQLDatabase](h.replaceObj(ctx, v1.KindSQLDatabase, ns, name, &db))
 }
 
 func (h *storeHandlers) DeleteSQLDatabase(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
