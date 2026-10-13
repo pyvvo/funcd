@@ -606,7 +606,7 @@ sql-examples:
   venom: e2e/sql-examples.venom.yml
 
 app-todo:
-  description: The todo App of funcd-functions, deployed from its pushed template on real containerd (ADR-0217/0218), and the App features on it — pinned digests, a TypeScript→Python Workflow, a zoned cron timer, hooks, kept stores, a dry run, drift and pause, a config roll, rollback, liveness and dependency health, a late call, a refused binding, a requirement and a blob upload; then the disaster-recovery drill of FEAT-0009 — a backup to an S3 server in the VM, a lost data directory restored, held boot and release, the App's own backups and restores, a pre-upgrade generation, and the blob store on S3.
+  description: The todo App of funcd-functions, deployed from its pushed template on real containerd (ADR-0217/0218), and the App features on it — pinned digests, a TypeScript→Python Workflow, a zoned cron timer, hooks, kept stores, a dry run, drift and pause, a config roll, rollback, liveness and dependency health, a late call, a refused binding, a requirement and a blob upload; then the disaster-recovery drill of FEAT-0009 — a backup to an S3 server in the VM, a lost data directory restored, held boot and release, the App's own backups and restores, a pre-upgrade generation, and the blob store on S3; then version 1.2.0 on rqlite — its pre-hook moving the todos and uploads from KV into a SQL database, SQL queries and a join, the change feed, and the database's backup, in-place restore and restored copy.
   module: github.com/pyvvo/funcd-functions
   dir: apps/todo
   # The build writes the S3 server into dr/, so the lane builds in a writable copy of the module.
@@ -628,6 +628,10 @@ app-todo:
     - functions/ts/migrate-1.0.0.funcdctl.yaml
     - functions/ts/migrate-1.1.0.mjs
     - functions/ts/migrate-1.1.0.funcdctl.yaml
+    - functions/ts/api-1.2.0.mjs
+    - functions/ts/api-1.2.0.funcdctl.yaml
+    - functions/ts/migrate-1.2.0.mjs
+    - functions/ts/migrate-1.2.0.funcdctl.yaml
     - functions/ts/collect.mjs
     - functions/ts/collect.funcdctl.yaml
     - functions/py/planner.py
@@ -640,6 +644,10 @@ app-todo:
     - functions/py/intake.funcdctl.yaml
     - functions/py/stats.py
     - functions/py/stats.funcdctl.yaml
+    - functions/py/intake_sql.py
+    - functions/py/intake_sql.funcdctl.yaml
+    - functions/py/notify.py
+    - functions/py/notify.funcdctl.yaml
     # Version 1.1.0 is the same resources with the app.yaml of 1.1.0.
     - from: apps/todo/app/resources
       module: github.com/pyvvo/funcd-functions
@@ -647,6 +655,13 @@ app-todo:
     - from: apps/todo/app-1.1.0.yaml
       module: github.com/pyvvo/funcd-functions
       to: app-1.1.0/app.yaml
+    # Version 1.2.0, which keeps its todos and uploads in todo-db: the same resources with the app.yaml of 1.2.0.
+    - from: apps/todo/app/resources
+      module: github.com/pyvvo/funcd-functions
+      to: app-1.2.0/resources
+    - from: apps/todo/app-1.2.0.yaml
+      module: github.com/pyvvo/funcd-functions
+      to: app-1.2.0/app.yaml
     # The App that todo requires when it is deployed with values/shared.yaml (ADR-0219).
     - from: apps/todo-shared/app
       module: github.com/pyvvo/funcd-functions

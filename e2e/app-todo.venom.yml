@@ -40,9 +40,14 @@
 #       outlive it until their ttl (ADR-0208, ADR-0222).
 #   D18 the App's backup copies its DuckLake catalog, empty before its first checkpoint, and a Restore into an empty
 #       prefix gives a catalog a new CatalogService serves (ADR-0222 Decisions 4, 5, 7).
+#   Q1-Q6 version 1.2.0, whose todos and upload records live in SQLDatabase todo-db: its pre-hook migrates the database
+#       and copies them from KV before the SQL API serves; done, a filter, counts and a join; an upload the 1.2.0 intake
+#       records in SQL; a new row that fires the App's sql EventSource, whose Sensor records it in KV; the App's backup
+#       copying todo-db, sealed; an admin's in-place Restore of it; and a restored copy swapped in through ref, while
+#       todo-db stays (ADR-0233-0236).
 # The suite pushes, locks and deploys the App itself; the lane only creates the Secret and the grant beside it. Every
 # file it applies comes from funcd-functions, staged by scripts/lanes.yaml.
-name: app-todo — the todo App from its pushed template on real containerd (ADR-0199/0200/0211-0215/0217-0220/0226/0229), and a disaster-recovery drill (ADR-0202-0209/0222/0223)
+name: app-todo — the todo App from its pushed template on real containerd (ADR-0199/0200/0211-0215/0217-0220/0226/0229), a disaster-recovery drill (ADR-0202-0209/0222/0223), and version 1.2.0 on rqlite (ADR-0233-0236)
 
 vars:
   dp: http://127.0.0.1:8081
@@ -2097,3 +2102,344 @@ testcases:
         info: "catalog todo-lake-r → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.systemout ShouldMatchRegex phase.{1,4}Ready
+
+  # Version 1.2.0 keeps the todos and their upload records in SQLDatabase todo-db (ADR-0233 to ADR-0236). Its pre-hook
+  # migrates the database and copies them from KV before the SQL API serves; the KV records stay for 1.1.0.
+  - name: Q1 the 1.2.0 pre-hook moves the todos and upload records from KV into todo-db before the SQL API serves
+    steps:
+      - type: exec
+        script: |
+          curl -sf -X POST {{.dp}}/api -H 'content-type: application/json' -d '{"data":{"op":"list"}}' |
+            python3 -c 'import json,sys; d=json.load(sys.stdin); print(",".join(sorted(t["id"] for t in d["todos"])))' |
+            limactl shell --workdir / {{.vm}} -- sudo tee /root/todos-kv
+          curl -sf -X POST {{.dp}}/api -H 'content-type: application/json' -d '{"data":{"op":"get","id":"milk"}}' |
+            python3 -c 'import json,sys; print(",".join(u["name"] for u in json.load(sys.stdin)["uploads"]))' |
+            limactl shell --workdir / {{.vm}} -- sudo tee /root/uploads-kv
+        info: "the todos and milk's uploads on 1.0.0 → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring milk
+          - result.systemout ShouldContainSubstring receipt.txt
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            set -e
+            cd /opt/lane
+            for f in api-1.2.0:todo-api:1.2.0 migrate-1.2.0:todo-migrate:1.2.0; do
+              funcdctl push functions/ts/${f%%:*}.mjs {{.reg}}/${f#*:} >/dev/null
+            done
+            for f in intake_sql:todo-intake:1.2.0 notify:todo-notify:1.2.0; do
+              funcdctl push functions/py/${f%%:*}.py {{.reg}}/${f#*:} >/dev/null
+            done
+            funcdctl app lock /opt/lane/app-1.2.0 -f /opt/lane/values/e2e.yaml >/dev/null
+            funcdctl push --template /opt/lane/app-1.2.0 {{.reg}}/todo:1.2.0 >/dev/null
+            funcdctl app deploy {{.reg}}/todo:1.2.0 {{.values}} -f /opt/lane/values/shared.yaml \
+              -f /opt/lane/values/backup.yaml -f /opt/lane/values/catalog.yaml >/tmp/deploy-q1.log 2>&1 ||
+              { cat /tmp/deploy-q1.log; exit 1; }
+            echo DEPLOYED'
+        info: "deploy 1.2.0 → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring DEPLOYED
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"list"}}'
+        retry: 30
+        delay: 2
+        info: "list on 1.2.0 → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.version ShouldEqual 1.2.0
+          - result.bodyjson.migration.by ShouldEqual "todo-migrate 1.2.0"
+          - result.bodyjson.migration.event ShouldEqual upgrade
+          - result.bodyjson.migration.fromVersion ShouldEqual 1.0.0
+          - result.bodyjson.release.version ShouldEqual 1.2.0
+      # The SQL API lists the same todos and the same uploads of milk as the KV API did.
+      - type: exec
+        script: |
+          kv=$(limactl shell --workdir / {{.vm}} -- sudo cat /root/todos-kv)
+          up=$(limactl shell --workdir / {{.vm}} -- sudo cat /root/uploads-kv)
+          sql=$(curl -sf -X POST {{.dp}}/api -H 'content-type: application/json' -d '{"data":{"op":"list"}}' |
+            python3 -c 'import json,sys; d=json.load(sys.stdin); print(",".join(sorted(t["id"] for t in d["todos"])))')
+          sqlup=$(curl -sf -X POST {{.dp}}/api -H 'content-type: application/json' -d '{"data":{"op":"get","id":"milk"}}' |
+            python3 -c 'import json,sys; print(",".join(u["name"] for u in json.load(sys.stdin)["uploads"]))')
+          [ "$kv" = "$sql" ] && echo "TODOS SAME" || echo "todos kv=$kv sql=$sql"
+          [ "$up" = "$sqlup" ] && echo "UPLOADS SAME" || echo "uploads kv=$up sql=$sqlup"
+        info: "KV against SQL → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "TODOS SAME"
+          - result.systemout ShouldContainSubstring "UPLOADS SAME"
+      # The pre-hook's call ended before the API's 1.2.0 Revision was stamped, so the API switched after the copy.
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+          python3 - <<"PY"
+          import json, subprocess
+          def get(kind, name):
+              out = subprocess.run(["funcdctl", "get", kind, name, "-n", "default", "-o", "json"], capture_output=True, text=True)
+              return json.loads(out.stdout) if out.returncode == 0 else {}
+          rev = get("apprevision", get("app", "todo")["status"]["currentRevision"])
+          pre = [h for h in rev["status"].get("hooks", []) if h["point"] == "preApply"][-1]
+          api = get("revision", get("function", "todo-api")["status"]["currentRevision"])
+          order = "hook-first" if pre["endTime"] < api["metadata"]["creationTimestamp"] else "api-first"
+          print("HOOK=" + pre["function"] + "/" + pre["phase"] + ",API=" + api["spec"]["image"].split("/")[-1].split("@")[0] + ",ORDER=" + order)
+          PY
+          '
+        info: "pre-hook and API revision → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual HOOK=todo-migrate/Ready,API=todo-api:1.2.0,ORDER=hook-first
+
+  - name: Q2 the todos are SQL rows - done, a filter and counts, and an upload the 1.2.0 intake records in todo-db, read in one join
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"add","title":"jam","token":"{{.token}}"}}'
+        info: "add jam → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.id ShouldEqual jam
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"done","id":"jam","token":"{{.token}}"}}'
+        info: "done jam → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"list","done":true}}'
+        info: "the done todos → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.todos ShouldHaveLength 1
+          - result.bodyjson.todos.todos0.id ShouldEqual jam
+          - result.bodyjson.todos.todos0.done ShouldBeTrue
+          - result.bodyjson.counts.done ShouldEqual 1
+      - type: exec
+        script: |
+          curl -sf -X POST {{.dp}}/api -H 'content-type: application/json' -d '{"data":{"op":"list","done":false}}' |
+            python3 -c 'import json,sys; print("ids=," + ",".join(sorted(t["id"] for t in json.load(sys.stdin)["todos"])) + ",")'
+        info: "the open todos → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldStartWith ids=
+          - result.systemout ShouldContainSubstring ,milk,
+          - result.systemout ShouldNotContainSubstring ,jam,
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"attach","id":"jam","name":"recipe.txt","content":"fruit, sugar","token":"{{.token}}"}}'
+        info: "attach recipe.txt to jam → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      # The blob EventSource fires for the upload, and the 1.2.0 intake records it in table uploads of todo-db.
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"get","id":"jam"}}'
+        retry: 30
+        delay: 2
+        info: "jam with its uploads → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.todos.todos0.done ShouldBeTrue
+          - result.bodyjson.uploads ShouldHaveLength 1
+          - result.bodyjson.uploads.uploads0.name ShouldEqual recipe.txt
+          - result.bodyjson.uploads.uploads0.size ShouldEqual 12
+
+  - name: Q3 a row inserted into todos fires the App's sql EventSource, and its Sensor's function records the todo in KV
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"list"}}'
+        retry: 30
+        delay: 2
+        info: "the todos the change feed reported → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.notified ShouldContain jam
+
+  - name: Q4 the App's backup schedule copies todo-db with its other stores, sealed
+    steps:
+      # The newest Succeeded Backup of a slot after jam was added: Q5 and Q6 restore it.
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; echo $(( $(date +%s) / 60 )) >/root/jam-minute'
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            m=$(cat /root/jam-minute)
+            for b in $(funcdctl get backups -n default | grep -E "^todo-backup-[0-9]+$" | sort); do
+              [ "${b#todo-backup-}" -gt "$m" ] || continue
+              funcdctl get backup $b -n default -o json | grep -qE "\"phase\": *\"Succeeded\"" && echo $b
+            done | tail -1 | grep . | tee /root/db-backup'
+        retry: 60
+        delay: 3
+        info: "a Backup after jam → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex "^todo-backup-[0-9]+$"
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            b=$(cat /root/db-backup)
+            d=$(ls -d /var/lib/vgw/data/todo-workload/default/$b-*)
+            grep -qE "kind: SQLDatabase$" $d/manifest.yaml && grep -qE "name: todo-db$" $d/manifest.yaml && echo "DATABASE LISTED"
+            ls $d/sql/todo-db
+            echo "sealed=$(head -c 21 $d/sql/todo-db/part-00000)."
+            grep -rlaE "jam|recipe" $d/sql && echo PLAINTEXT || echo SEALED'
+        info: "the Backup on the target → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "DATABASE LISTED"
+          - result.systemout ShouldContainSubstring part-00000
+          - result.systemout ShouldContainSubstring "sealed=age-encryption.org/v1."
+          - result.systemout ShouldContainSubstring SEALED
+
+  - name: Q5 an admin's in-place Restore of todo-db exports it first, then brings back the rows of the Backup
+    steps:
+      # A todo added after the Backup, which the in-place Restore removes.
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"add","title":"late","token":"{{.token}}"}}'
+        info: "add late → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; 
+            sed "s/BACKUP/$(cat /root/db-backup)/" /opt/lane/dr/restore-database-in-place.yaml | funcdctl apply -f - >/dev/null'
+        info: "the admin's in-place Restore of todo-db → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; 
+            funcdctl get restore todo-db-back -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1
+            funcdctl get backup todo-db-back-before -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1 | sed s/phase/export/'
+        retry: 45
+        delay: 2
+        info: "Restore todo-db-back and its export → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex "phase.{1,4}Succeeded"
+          - result.systemout ShouldMatchRegex "export.{1,4}Succeeded"
+      - type: exec
+        script: |
+          curl -sf -X POST {{.dp}}/api -H 'content-type: application/json' -d '{"data":{"op":"list"}}' |
+            python3 -c 'import json,sys; print("ids=," + ",".join(sorted(t["id"] for t in json.load(sys.stdin)["todos"])) + ",")'
+        retry: 30
+        delay: 2
+        info: "the todos after the in-place Restore → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldStartWith ids=
+          - result.systemout ShouldContainSubstring ,jam,
+          - result.systemout ShouldContainSubstring ,milk,
+          - result.systemout ShouldNotContainSubstring ,late,
+
+  - name: Q6 a Restore loads the Backup's todo-db into a new database, and the App swaps that copy in through ref
+    steps:
+      # A todo in todo-db that the copy, restored from the Backup, does not hold.
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"add","title":"tea","token":"{{.token}}"}}'
+        retry: 30
+        delay: 2
+        info: "add tea → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      # A Restore needs its destination Ready (ADR-0234 Decision 3): the new database's engine starts first.
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; funcdctl apply -f /opt/lane/dr/database-copy.yaml'
+        info: "apply todo-db-r → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get sqldatabase todo-db-r -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 30
+        delay: 2
+        info: "todo-db-r → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex "phase.{1,4}Ready"
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            sed "s/BACKUP/$(cat /root/db-backup)/" /opt/lane/dr/restore-database.yaml | funcdctl apply -f -'
+        info: "apply todo-db-copy → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get restore todo-db-copy -n default -o json'
+        retry: 45
+        delay: 2
+        info: "Restore todo-db-copy → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex "phase.{1,4}Succeeded"
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            set -e
+            funcdctl app deploy {{.reg}}/todo:1.2.0 {{.values}} -f /opt/lane/values/shared.yaml \
+              -f /opt/lane/values/backup.yaml -f /opt/lane/values/catalog.yaml \
+              -f /opt/lane/values/restored-database.yaml >/tmp/deploy-q6.log 2>&1 || { cat /tmp/deploy-q6.log; exit 1; }
+            echo DEPLOYED'
+        info: "deploy on todo-db-r → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring DEPLOYED
+      - type: http
+        method: POST
+        url: "{{.dp}}/api"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"get","id":"jam"}}'
+        retry: 30
+        delay: 2
+        info: "jam on the copy → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.todos.todos0.done ShouldBeTrue
+          - result.bodyjson.uploads.uploads0.name ShouldEqual recipe.txt
+      - type: exec
+        script: |
+          curl -sf -X POST {{.dp}}/api -H 'content-type: application/json' -d '{"data":{"op":"list"}}' |
+            python3 -c 'import json,sys; print("ids=," + ",".join(sorted(t["id"] for t in json.load(sys.stdin)["todos"])) + ",")'
+        retry: 30
+        delay: 2
+        info: "the todos on the copy → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldStartWith ids=
+          - result.systemout ShouldContainSubstring ,jam,
+          - result.systemout ShouldContainSubstring ,milk,
+          - result.systemout ShouldNotContainSubstring ,tea,
+      # todo-db, which the App no longer names, stays with its rows: deletion retain.
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get sqldatabase todo-db -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        info: "todo-db after the swap → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex "phase.{1,4}Ready"
