@@ -1054,6 +1054,16 @@ testcases:
         info: "the failing Sensor → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
+      # The Sensor gets only the events published once it is bound, which its Ready says; the upload waits for it.
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            funcdctl get sensor todo-dr-dead-letter -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 30
+        delay: 1
+        info: "the failing Sensor bound → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex "phase.{1,4}Ready"
       - type: http
         method: POST
         url: "{{.dp}}/api"
