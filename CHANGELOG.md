@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.13.0](https://github.com/pyvvo/funcd/compare/v0.12.1...v0.13.0) (2026-10-13)
+
+
+### Features
+
+* the container bridge address, ADR-0238 (FEAT-0011/F136) ([#1005](https://github.com/pyvvo/funcd/issues/1005)) ([ceb2d49](https://github.com/pyvvo/funcd/commit/ceb2d49d0592a2b75fb5c8ba1ebb17a7cf761826))
+* the SQL epoch, SQL databases on rqlite (FEAT-0011, ADR-0231 to ADR-0237) ([#1003](https://github.com/pyvvo/funcd/issues/1003)) ([c804656](https://github.com/pyvvo/funcd/commit/c804656bcbad9954b2cd2022c776b72ec065f5fb))
+
+
+### Bug Fixes
+
+* **sql:** align the SQL epoch's documents and code with its ADRs ([#1011](https://github.com/pyvvo/funcd/issues/1011)) ([6f7bc5d](https://github.com/pyvvo/funcd/commit/6f7bc5d74b4e16eb9e3e6ce2c1e7d1b895454196))
+* **sql:** clear DataMissing for a Restore created in the same millisecond ([#1007](https://github.com/pyvvo/funcd/issues/1007)) ([9bd7c62](https://github.com/pyvvo/funcd/commit/9bd7c6299f6256dc9d95d6c9856249dc7af0156e))
+
 ## [0.12.1](https://github.com/pyvvo/funcd/compare/v0.12.0...v0.12.1) (2026-10-12)
 
 
