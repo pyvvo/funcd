@@ -2,8 +2,9 @@
 
 - **Date**: 2026-10-14
 - **Deciders**: green-0-rabbit
-- **Status**: draft design. One decision is refined with the decider (2026-10-14): the `Job` kind is generic from v1.
-  No feat doc, ADR or roadmap item exists yet, and every new name is a placeholder. Code references point at commit
+- **Status**: draft design, the source of [FEAT-0012](../feat/0012-feat-infrastack.md). One decision is refined with
+  the decider (2026-10-14): the `Job` kind is generic from v1. No ADR or roadmap item exists yet, and every new name is
+  a placeholder. Code references point at commit
   `c448b515`; the Pulumi facts were checked on Pulumi's documentation on 2026-10-14.
 
 ## Summary

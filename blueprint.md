@@ -9,6 +9,8 @@ The platform must allow deploying, running, exposing, monitoring, and administer
 
 The platform will also provide services that augment the basic serverless capabilities, such as KV storage, blob storage, eventing sourcing, and other services that can be used by the functions.
 
+It also keeps the infrastructure an app uses outside the machine applied, such as a cloud queue or an access key, from the app's existing infrastructure programs, previewed and approved before each change ([FEAT-0012](docs/feat/0012-feat-infrastack.md)).
+
 - The design must be:
     - modular;
     - single-binary on the platform side;
@@ -1038,6 +1040,13 @@ The control-plane REST API is the single front door for *all* clients — `funcd
 - a `terraform-provider-funcd` (separate repo/binary) authenticates with a scoped **API key** and CRUD-maps Terraform resources (`funcd_function`, `funcd_service`, `funcd_secret`, `funcd_route`, `funcd_resource_group`, …) onto the same API the CLI uses — no special server surface, the provider is just another OpenAPI client.
 - the declarative model means Terraform's plan/apply lines up with the platform's own apply/reconcile; `status` conditions feed back as resource readiness.
 - this is an outlook deliverable (needs a stabilized API + API-key auth), not a V1 item; it is called out here so the API is designed provider-friendly from the start (stable IDs, list/filter by resource group and tags, idempotent apply).
+
+**The other direction: funcd runs infrastructure-as-code ([FEAT-0012](docs/feat/0012-feat-infrastack.md)).** An
+`InfraStack` keeps a Pulumi program's stack applied, as Crossplane does on Kubernetes but with the whole program as the
+unit. Each change runs as a `JobRun` of a generic run-to-completion `Job`, on a runtime plugin pulled by digest, and
+waits for a person's approval of its preview unless the stack says `bypass`. The stack's outputs reach Functions as a
+ConfigMap and a Secret. The [design report](docs/reports/infrastack-design.md) holds the study; no ADR decides it yet,
+so every name here is a placeholder.
 
 ### Go best practices baked in
 
