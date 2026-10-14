@@ -2,9 +2,9 @@
 
 - **Date**: 2026-10-14
 - **Deciders**: green-0-rabbit
-- **Status**: draft design, not yet refined with the decider. No feat doc, ADR or roadmap item exists yet, and every
-  new name is a placeholder. Code references point at commit `c448b515`; the Pulumi facts were checked on Pulumi's
-  documentation on 2026-10-14.
+- **Status**: draft design. One decision is refined with the decider (2026-10-14): the `Job` kind is generic from v1.
+  No feat doc, ADR or roadmap item exists yet, and every new name is a placeholder. Code references point at commit
+  `c448b515`; the Pulumi facts were checked on Pulumi's documentation on 2026-10-14.
 
 ## Summary
 
@@ -17,7 +17,7 @@ applies exactly what was previewed. The stack's outputs reach Functions through 
 |---|---|
 | Kind | `InfraStack`, with an `engine` field. Pulumi comes first; OpenTofu later is another plugin on the same kind |
 | Engine delivery | A runtime plugin: an OCI image that an admin registers, pulled from the registry the admin chose, never embedded in the funcd binary |
-| Long work | A generic `Job` kind (a definition with default params) and `JobRun` (one execution), as `Workflow` and `WorkflowRun` are |
+| Long work | A generic `Job` kind (a definition with default params) and `JobRun` (one execution), as `Workflow` and `WorkflowRun` are. Generic from v1, though Pulumi is its first runtime |
 | Programs | Pulumi YAML or TypeScript, unchanged, packed into an OCI artifact with their provider plugins |
 | Approval | `approval.mode` is `required` (the default) or `bypass`, with an `expiry`. `funcdctl job run --approve` runs exactly what was previewed |
 | Governance | Six `job::*` Cedar actions decide who may run, override, approve, reject, cancel or set `bypass`, inside what RBAC allows. This needs a `User` principal, which funcd lacks today |
@@ -278,7 +278,8 @@ status:
 ### One Job kind for every runtime
 
 A `Job` is a reusable definition: a fixed envelope plus default `params` that the runtime governs. Each execution is a
-`JobRun`, as a WorkflowRun is for a Workflow.
+`JobRun`, as a WorkflowRun is for a Workflow. The kind is generic from v1 (decided 2026-10-14), so a later runtime,
+such as a Python job or OpenTofu, is a new plugin, not a new kind.
 
 | Part | Defined by | Fields |
 |---|---|---|
@@ -724,7 +725,6 @@ people (a `RolesAssignment` naming a `User`), a funcd-frontend UI, and Jobs in p
 
 | Question | Decided in |
 |---|---|
-| Whether the generic Job is worth it in v1, when Pulumi is its only runtime, or an InfraStack-only run kind comes first | The feat doc |
 | Plugin trust: a digest only, or signatures too | The plugin ADR |
 | Clearing a stale lock and pending operations after an interrupted run | The Pulumi plugin ADR, tested on the S3 gateway |
 | Cancel: what a stopped `up` leaves in the state, and how to recover | The Pulumi plugin ADR |
