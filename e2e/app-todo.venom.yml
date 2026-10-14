@@ -36,7 +36,7 @@
 #       the backup and backup status says why; a config that breaks a backup rule is refused at start and by backup
 #       plan alike; a plain restart keeps the event store, so nothing fires twice (ADR-0201, 0203, 0205, 0223).
 #   D15 a crash-looping funcd starts held, then stops with status 70 naming the restore (ADR-0207 safe mode);
-#   D16 funcd restore blob --at on the S3 store; D17 the App swaps a restored copy in through ref, and its Backups
+#   D16 funcd restore blob --at on the S3 store, to a key's earlier version and to before the key existed; D17 the App swaps a restored copy in through ref, and its Backups
 #       outlive it until their ttl (ADR-0208, ADR-0222).
 #   D18 the App's backup copies its DuckLake catalog, empty before its first checkpoint, and a Restore into an empty
 #       prefix gives a catalog a new CatalogService serves (ADR-0222 Decisions 4, 5, 7).
@@ -1815,10 +1815,10 @@ testcases:
           - result.statuscode ShouldEqual 200
 
   # ADR-0208 Decision 6: on a versioned S3 blob store, funcd restore blob --at puts every key back to its state at a time,
-  # removing no version, and leaves the platform held. versitygw v1.8.0 stamps a version it moves aside with the time it
-  # was replaced, not written (versity/versitygw#2311), so no point brings back an older version there; the case restores
-  # to a time before the object existed, which deletes the key and must keep both of its versions (#994).
-  - name: D16 funcd restore blob --at returns the S3 store to a time before an object existed, deleting its key and keeping its versions
+  # removing no version, and leaves the platform held. A restore to a time between two writes of a key copies its first
+  # version back: versitygw keeps a moved-aside version's write time from v1.9.0 on (versity/versitygw#2311). A restore
+  # to a time before the key existed then deletes it, and every version stays listed (#994).
+  - name: D16 funcd restore blob --at brings back a key's version at a time, deletes a key that did not exist then, and keeps every version
     steps:
       - type: exec
         script: |
@@ -1833,7 +1833,7 @@ testcases:
             systemctl is-active --quiet funcd-demo || { journalctl -u funcd-demo --no-pager -n 60; exit 1; }
             sleep 2; date -u +%Y-%m-%dT%H:%M:%SZ >/root/blob-at; sleep 2
             echo STARTED'
-        info: "the S3 store and the point → {{.result.systemout}} {{.result.systemerr}}"
+        info: "the S3 store and the point before the key → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.systemout ShouldContainSubstring STARTED
       - type: http
@@ -1847,6 +1847,12 @@ testcases:
         info: "attach → status {{.result.statuscode}} body {{.result.body}}"
         assertions:
           - result.statuscode ShouldEqual 200
+      - type: exec
+        script: |
+          {{.vmsh}} 'sleep 2; date -u +%Y-%m-%dT%H:%M:%SZ >/root/blob-at-first; sleep 2; echo MARKED'
+        info: "the point between the two writes → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring MARKED
       - type: http
         method: POST
         url: "{{.dp}}/api"
@@ -1864,28 +1870,34 @@ testcases:
             k=s3/default/todo-files/uploads/milk/at.txt
             s3() { curl -s --aws-sigv4 "aws:amz:us-east-1:s3" --user todo-lane-s3:todo-lane-s3-secret \
               -H "x-amz-content-sha256: $(printf "" | sha256sum | cut -d" " -f1)" "$@"; }
-            echo "before=$(s3 -o /dev/null -w %{http_code} "http://127.0.0.1:7070/todo-blob/$k")."
+            versions() { s3 "http://127.0.0.1:7070/todo-blob?prefix=$(echo $k | sed "s|/|%2F|g")&versions=" | grep -o "<Version>" | grep -c .; }
+            echo "current=$(s3 "http://127.0.0.1:7070/todo-blob/$k")."
             systemctl stop funcd-demo
             systemctl reset-failed funcd-demo 2>/dev/null || true
+            funcd restore blob --at "$(cat /root/blob-at-first)" --config /opt/lane/dr/funcdconfig-blob-s3.yaml
+            echo "first=$(s3 "http://127.0.0.1:7070/todo-blob/$k")."
+            echo "versions-first=$(versions)."
             funcd restore blob --at "$(cat /root/blob-at)" --config /opt/lane/dr/funcdconfig-blob-s3.yaml
             echo "after=$(s3 -o /dev/null -w %{http_code} "http://127.0.0.1:7070/todo-blob/$k")."
-            echo "versions=$(s3 "http://127.0.0.1:7070/todo-blob?prefix=$(echo $k | sed "s|/|%2F|g")&versions=" | grep -o "<Version>" | grep -c .)."
+            echo "versions=$(versions)."
             systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 /usr/local/bin/funcd \
               --config /opt/lane/dr/funcdconfig-blob-s3.yaml
             curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
             FUNCD_TOKEN=todo-lane-admin funcdctl hold release >/dev/null
             echo RELEASED'
-        info: "restore blob --at → {{.result.systemout}} {{.result.systemerr}}"
+        info: "restore blob --at, twice → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "before=200."
+          - result.systemout ShouldContainSubstring "current=after."
           - result.systemout ShouldContainSubstring "restored the blob store to"
+          - result.systemout ShouldContainSubstring "first=before."
+          - result.systemout ShouldContainSubstring "versions-first=3."
           - result.systemout ShouldContainSubstring "no version was removed"
           - result.systemout ShouldContainSubstring "the platform is held"
           - 'result.systemout ShouldContainSubstring "deleted for want of a version at that time:"'
           - result.systemout ShouldContainSubstring uploads/milk/at.txt
           - result.systemout ShouldContainSubstring "after=404."
-          - result.systemout ShouldContainSubstring "versions=2."
+          - result.systemout ShouldContainSubstring "versions=3."
           - result.systemout ShouldContainSubstring RELEASED
 
   # ADR-0222: the owner swaps a restored copy in through ref, and an App's Backups outlive it until their ttl.
