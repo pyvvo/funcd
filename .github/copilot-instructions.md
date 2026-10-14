@@ -72,6 +72,7 @@ downstream-or-sideways obligates an update to the documents that referenced it.
 | plan | [roadmap-planner](../.claude/skills/roadmap-planner/SKILL.md) | sequence ADRs into build waves + critical path (computed) | `docs/roadmap/` + `plan.json` | — (notes missing decisions as items) |
 | decide | [adr](../.claude/skills/adr/SKILL.md) | brainstorm → Accepted ADR | `docs/adr/NNNN-*.md` | **feat row + blueprint** (see below) |
 | judge | [adr-judge](../.claude/skills/adr-judge/SKILL.md) | judge the ADR *document* before acceptance — evidence-cited verdict | a report (no doc edits) | nothing — it never edits what it judges |
+| refine / accept | [brief](../.claude/skills/brief/SKILL.md) | brief the decider: a needs-adr card before its ADR (refine), a Proposed ADR before acceptance | nothing until the decider answers | refine → the answers recorded, then `adr`; on an explicit accept → the `adr` skill's acceptance steps |
 | build | [adr-impl](../.claude/skills/adr-impl/SKILL.md) | ADR → working code (interfaces + drivers + facades + deps + scenario tests **written and passing**, green `just ci`) | code | **ADR `Accepted → Reviewing` + feat row → `reviewing`** |
 | review | [adr-impl-review](../.claude/skills/adr-impl-review/SKILL.md) | review the *work* vs ADR + Definition of Done by **running** build/lint/test; score the model | a verdict + `docs/reviews/` model scorecard | **on a `pass`**: ADR `Reviewing → Implemented` + feat row → `implemented` (sole stamper of `Implemented`); non-pass advances nothing (ADR stays `Reviewing`); still never edits the *work* (code) |
 
@@ -89,7 +90,7 @@ decision takes the fix pipeline**, which starts from a GitHub issue instead of a
 | audit | [bloat-audit](../.claude/skills/bloat-audit/SKILL.md) | once per PR as a `scripts/agent/gate.sh` step (after the reviews in `/fix-batch`): the diff's size, new duplication, complexity growth, masking patterns, comment narration and new dependencies; a hard flag fails the gate unless an `audit-allow:` line justifies it. Full mode at a campaign's end adds a flake run | a report (`.cache/gate/audit.log`) | — (cleanup issues via `/issue-management`) |
 | batch | [fix-batch](../.claude/skills/fix-batch/SKILL.md) | many issues (a tracker's sub-issues, a list, a label): fix → review per issue, one PR per group | a branch + PR per group | — |
 
-An issue labelled `needs-adr`, or a fix that would change an Accepted ADR's decision, leaves the fix
+An issue labelled `needs-adr` goes to `brief` (refine) and then `adr`, as does a fix that would change an Accepted ADR's decision, leaves the fix
 pipeline for `/adr`.
 
 ## ⚠️ Cross-document propagation rules
@@ -225,54 +226,69 @@ docs (they would rot the feat/roadmap with un-decided scope). They go to the pro
   `create` defaults the item to **Backlog** (never "No Status"). Write a rich body — match the depth
   of the existing items (`driver.py show "<substring>"`).
 
-Rule of thumb: **decided + scoped → the docs** (feat row / ADR / roadmap); **idea + un-scoped →
-the board**. (Examples added this way: the v2 microVM-isolation / krun-via-crun item, the
-artifact-contract registry, and distro packaging P-Z.) **And — see below — a *feature* ADR also
-carries a board card** from the moment it's drafted, so the board shows feature work in flight, not
-only un-scoped ideas.
+Rule of thumb: **decided + scoped → the docs** (feat row / ADR / roadmap) **and issues** (one per
+feature, below); **idea + un-scoped → the board**. (Examples added this way: the v2 microVM-isolation /
+krun-via-crun item, the artifact-contract registry, and distro packaging P-Z.) The board also carries **one
+card per epoch**, the umbrella view of its features.
 
-### A feature ADR carries a board card that natively tracks its lifecycle
+### Feature work is tracked in issues: one tracker per epoch, one issue per feature
 
-A **feature ADR** — one that realizes a genuine deliverable feat-row (a user-facing capability, e.g.
-FEAT-0001, FEAT-0003) — **gets a board tracking card created when it is first drafted**, and its
-**Status follows the ADR's lifecycle** (the skill gates move it). The card title references the ADR so
-it's findable (e.g. *"…(data-platform epoch) — ADR-0080 / FEAT-0003 F47"*).
+Since 2026-10-14 (FEAT-0012), features are tracked as **GitHub issues**, not board cards: an issue carries
+labels, groups as a sub-issue, and closes when the PR that implements it merges. When a feat doc defines an
+epoch:
 
-**Pure-infra / process / refactor ADRs skip the card** — a rename (ADR-0078/0079), a tooling/e2e ADR
-(ADR-0077), the process ADR (ADR-0000): no card. (If a feature ADR was *scoped from a pre-existing
-board idea*, **reuse that card — don't create a second**; `driver.py list` first.) When unsure, read
-the ADR's `Realizes:` header: a user-facing feat-row gets a card; an infra/process/refactor row does not.
+- **One tracker issue for the epoch** (`kind/task`: Summary · Details · Done when · References). Its first line
+  links the epoch's board card, and its Details table maps every feature row to its issue. It stands alone, as a
+  campaign's root tracker does (#1028 for FEAT-0012).
+- **One `kind/feature` issue per feature row that is built**, a sub-issue of the tracker, labelled `needs-adr`, a
+  `priority/` and its `area/` labels, its title a plain sentence that ends with the row's code
+  (`… (FEAT-0012 F137)`). A row that lives in another epoch's feat doc but serves this one (FEAT-0008 F147) goes
+  under this tracker too. An `idea` row gets no issue: it stays on the card and in its feat doc.
+- **One board card per epoch**, the umbrella view: a table of every feature row with its epoch and its issue, and
+  a link to the tracker. A card uses full URLs: a draft card belongs to no repo, so a bare `#N` does not link.
+- **A feature ADR cites its feature issue** in its References. The PR that implements it closes the issue
+  (`Fixes #N` in the PR description); when a row takes several ADRs, only the last one's PR closes it, and the
+  others reference it. A feature ADR gets no board card of its own, and a pure-infra / process / refactor ADR
+  (a rename, a tooling/e2e ADR, the process ADR) needs no feature issue. When unsure, read the ADR's `Realizes:`
+  header: a user-facing feat row has a feature issue; an infra/process/refactor row does not.
 
-The board's three Status options — **Backlog · In Progress · Done** — map onto the five ADR statuses:
-
-| ADR status | Board card | Moved by |
+| Moment | Issues | Epoch card |
 |---|---|---|
-| `Draft` | **create the card in `Backlog`** | the `adr` skill, at draft |
-| `Proposed` (+ judge) | stays `Backlog` | — |
-| `Accepted` | `→ In Progress` | the `adr` / `adr-batch` accept step |
-| `Reviewing` | stays `In Progress` | — (no move; `adr-impl` just notes it) |
-| `Implemented` | `→ Done` | the `adr-impl-review` gate (sole stamper of `Implemented`) |
+| Feat doc written | the tracker, and one feature issue per built row | `create` it in `Backlog`, with the table |
+| ADR `Draft` / `Proposed` | the feature issue stays open, with `needs-adr` | — |
+| ADR `Accepted` | — | `→ In Progress` when it is the epoch's first accepted ADR (the `adr` / `adr-batch` accept step) |
+| ADR `Implemented` and its PR merged | the PR closes the feature issue (`Fixes #N`) | — |
+| Every feature issue closed | close the tracker | `→ Done` |
 
-The skill gates carry each move as an explicit step. Create/move the card with the
-[`/project-management`](../.claude/skills/project-management/SKILL.md) skill (it resolves the item by title
-substring — no ids to hand-assemble):
+File the issues with the [`/issue-management`](../.claude/skills/issue-management/SKILL.md) skill, and move the
+card with the [`/project-management`](../.claude/skills/project-management/SKILL.md) skill:
 
 ```bash
-python3 .claude/skills/project-management/driver.py create --title "<…> — ADR-NNNN / FEAT-NNNN Fxx" --body "<…>"  # at Draft
-python3 .claude/skills/project-management/driver.py status "<title substring>" "In Progress"                       # at Accepted
-python3 .claude/skills/project-management/driver.py status "<title substring>" "Done"                              # at Implemented
+python3 .claude/skills/issue-management/driver.py create --kind feature --needs-adr --priority medium \
+  --area <area> --title "<plain sentence> (FEAT-NNNN Fxx)" --body-file <file>
+gh api -X POST repos/pyvvo/funcd/issues/<tracker>/sub_issues -F sub_issue_id=$(gh api repos/pyvvo/funcd/issues/<N> --jq .id)
+python3 .claude/skills/project-management/driver.py status "<epoch card title substring>" "In Progress"
 ```
+
+The per-ADR cards made before 2026-10-14 stay on the board as history.
 
 ## Issues — defects and concrete work live in GitHub Issues
 
-Wrong behavior in what is built (a bug, a flaky test) and concrete work items go to
+Wrong behavior in what is built (a bug, a flaky test), concrete work items and the features of a feat doc go to
 [GitHub Issues](https://github.com/pyvvo/funcd/issues), in one fixed shape per kind and one label taxonomy.
 **Use the [`/issue-management`](../.claude/skills/issue-management/SKILL.md) skill — do not hand-write
 `gh issue`.** Its `driver.py` holds the shapes and the labels, checks every issue before filing it, and
 generates the issue forms in `.github/ISSUE_TEMPLATE/` (computed — never hand-edit them).
 
-- **Where things go**: a defect or a task → an issue; an un-scoped idea → a board card; a decision → an ADR.
+- **Where things go**: a defect, a task or a feature of a feat doc → an issue; an un-scoped idea → a board card;
+  a decision → an ADR.
 - **One defect per issue**, with exactly one `kind/`, exactly one `priority/`, and at least one `area/` label.
+- **No issue without a parent.** Every issue is a sub-issue of a tracker: a campaign files a root tracker,
+  one group tracker per theme under it, and its issues under the group trackers (#232, #732); an epoch files one
+  tracker for its feature issues (#1028). An issue found on its own goes under the closest group tracker. Only a
+  campaign's or an epoch's root tracker stands alone.
+- **Close an issue only when every case it describes is fixed and tested.** A PR that fixes one of its cases
+  leaves it open (#70 was closed on its first case and reopened).
 - **A fix that needs a design decision** gets `needs-adr`: the ADR cites the issue in its References, and the
   PR that implements it closes the issue (`Fixes #N` in the PR description).
 - **Every other fix** goes through [`/fix`](../.claude/skills/fix/SKILL.md) (test-first, one issue per commit) and
@@ -323,9 +339,14 @@ rules that did it:
   integrator cherry-picks a group's passing commits onto the latest main.
 - **Each check runs once, in one place.** Per-item agents run only the regression test (with `-race`) and the
   touched packages' tests, vet and lint. The repo-wide checks — `just ci-full` (e2e included), the Linux
-  build/vet/lint, a clean tree — run once per PR via `scripts/agent/gate.sh`, then CI runs them again. Never run the
-  e2e suite or `go test ./...` inside a per-item fixer or reviewer. The bloat audit (`scripts/agent/audit.py`) is a gate
-  step too: diff-scoped, a few seconds per PR; its full mode, with the `-count=3` flake run, runs once per campaign.
+  build/vet/lint, a clean tree — run once per PR via `scripts/agent/gate.sh`, then CI runs them again. The gate also
+  runs the Linux-specific packages' tests on Linux (`just test-linux`: `funcd-linux-tests`, a long-lived Lima VM booted
+  on first use, runs each test as a non-root user with a supplementary group, like CI's runner) and prints a SKIP line
+  instead when limactl is missing, that VM is not running or the checkout is outside `$HOME`. `just test-linux-e2e`
+  runs the e2e suite on Linux in the same VM, on demand only: CI already runs it on every PR that touches code. Runs
+  in that VM take turns (a second run waits). Never run the e2e suite or `go test ./...` inside a per-item fixer or
+  reviewer. The bloat audit (`scripts/agent/audit.py`) is a gate step too: diff-scoped, a few seconds per PR; its full
+  mode, with the `-count=3` flake run, runs once per campaign.
 - **Toolchain**: `scripts/agent/d` (above), never a `nix develop -c` per command.
 - **Worktrees, not the shared checkout.** Other sessions switch branches in the main checkout; agents work in their
   own worktree under the session scratchpad. Never `git stash` there: `refs/stash` is shared by every worktree of
@@ -376,6 +397,10 @@ tags and reads them through the Go module system:
   (`claude --add-dir ../funcd-typescript --add-dir ../funcd-python`), so a shim change, its release and
   the funcd bump happen in one conversation. Each repo keeps its own CLAUDE.md, PR flow and merge queue.
 - **Design decisions still live here**: a change to the funcd ↔ shim contract needs a funcd ADR first.
+- **The example repo** [pyvvo/funcd-functions](https://github.com/pyvvo/funcd-functions) holds the example
+  functions and Apps of the Lima lanes. funcd pins it the same way (`internal/testkit/langmod` imports it, so
+  `go mod tidy` keeps it), a lane names it as its `module`, and its changes follow the same release and
+  `go get` steps.
 
 ## ⛔ Grounding — never present invention as fact
 
@@ -483,6 +508,22 @@ Startup rejects an invoke socket dir whose socket paths overrun the Unix limit (
 Linux). A `t.TempDir()` holds the test name, and under a nix shell's `TMPDIR` it easily passes that limit, so
 `funcd.New` fails with `socket dir … is too long` on one host and not another. Take the data dir from
 `shortDataDir(t)` (`cmd/funcd/main_test.go`) or a short `os.MkdirTemp("", "funcd")`.
+
+### 5. Keep the e2e suite fast — shorten slow tests, never raise the timeout
+
+The `pkg/funcd` e2e suite ran in 388–405 s on main CI on 2026-10-07. By 2026-10-10 it had grown to 590 s, close to
+`go test`'s 10-minute default, because new App scenarios ran serially and waited real timeouts copied from their ADR
+(a 20 s `app.upgradeTimeout`, a 56 s pause test). The fix is the tests, never `-timeout` (#896 tried that and was
+closed): a higher limit only hides a hung test for longer.
+
+- A new e2e scenario calls `t.Parallel()`. Each one assembles its own platform, with a short data dir (pitfall 4) and
+  free loopback ports.
+- An ADR scenario's duration is the rule, not the test's length. A test proves the rule with short pacing that keeps
+  the startup orderings (for example `app.upgradeTimeout` 3 s > `runtime.bootTimeout` 1 s > activation 500 ms), and
+  it scales its assertion windows to match.
+- Poll the observable condition (`require.Eventually`, a short tick) instead of a fixed `time.Sleep`.
+- A PR that adds scenarios shows their times (`go test -tags e2e -run <names> -v | grep -- '--- PASS'`). A scenario
+  over about 10 s needs a reason.
 
 ## Before you finish any skill run — propagation checklist
 

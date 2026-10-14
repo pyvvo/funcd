@@ -64,10 +64,11 @@ With Blocker/Major findings folded in, **self-accept**:
   it (newest accepted ADR wins); advance the realizing feat row `→ accepted` and link the ADR.
 - Reconcile any roadmap placeholder for this item to its real ADR number (full tier-0 graduation waits
   for Step 6, after `Implemented`).
-- **Move the feature ADR's board card `Backlog → In Progress`** now (a feature ADR carries a card from
-  draft; if this batch also drafted it, ensure the card exists first — `list`, else `create` — see
-  CLAUDE.md → *Backlog* for the `/project-management` commands). The `→ Done` move happens in Step 4 when the
-  review gate stamps `Implemented`. A pure-infra / process / refactor ADR has no card and skips both moves.
+- **Move the epoch's board card `Backlog → In Progress`** when this is the epoch's first accepted ADR (CLAUDE.md
+  → *Feature work is tracked in issues*). A feature ADR has no card of its own: its feature issue, cited in its
+  References since draft (if this batch drafted it, make sure the issue exists — `list`, else `create` it with
+  `/issue-management`), stays open until the PR that implements the ADR closes it (`Fixes #N`). A pure-infra /
+  process / refactor ADR has no feature issue.
 
 ## Step 4 — Per item: implement + review until green (the `adr-impl` / `adr-impl-review` loop)
 
@@ -141,8 +142,9 @@ Once every requested item is `Implemented`:
   uncommitted work piled up from before this rule, commit it as cohesive units now — per-item if the files
   separate cleanly, else one batch commit — rather than fabricating green intermediate states.)
 - Close with a batch report: per item the ADR number/title, the judge findings folded in, the review
-  verdict + scorecard line, the status reached + **its commit**; the roadmap reconcile result + new
-  tiers/critical path + its commit; any items that stopped (Step 5) and why; and the next unblocked move.
+  verdict + scorecard line, the status reached + **its commit** + the feature issue its PR closes; the
+  roadmap reconcile result + new tiers/critical path + its commit; any items that stopped (Step 5) and why;
+  and the next unblocked move.
 
 ## What this skill does NOT do
 

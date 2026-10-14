@@ -73,8 +73,9 @@ Each step is a skill in [.claude/skills/](../../.claude/skills/):
 | Review | `adr-impl-review` | Runs the build, lint and tests against the ADR and stamps it `Implemented` on a pass |
 | Batch | `adr-batch`, `/adr-cycle` | Drives many ADRs, or one, through every step in order |
 
-A feature ADR also gets a card on the GitHub Project board (`project-management`), and its status follows the
-ADR's. [docs/PROJECT-SUMMARY.md](../PROJECT-SUMMARY.md) (`project-summary`) is the one-page map, derived from the
+A feature of a feat doc is tracked as a GitHub issue under its epoch's tracker (`issue-management`): the ADR cites
+it, and the PR that implements the ADR closes it. The GitHub Project board (`project-management`) holds the
+un-scoped ideas and one card per epoch. [docs/PROJECT-SUMMARY.md](../PROJECT-SUMMARY.md) (`project-summary`) is the one-page map, derived from the
 ADRs.
 
 Two rules keep the layers consistent. A change in one layer owes updates to the others in the same session (the

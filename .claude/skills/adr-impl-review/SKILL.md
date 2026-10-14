@@ -124,10 +124,10 @@ stamps `Implemented`. **Only on a `pass`:**
 - Bump the ADR file's status `Reviewing → Implemented` (add the implemented date). That
   `Reviewing → Implemented` bump is the *one* forward edit this gate makes to the ADR — make no
   other change to it. (The `adr-impl` gate already moved the ADR `Accepted → Reviewing`.)
-- **Move the feature ADR's board card `In Progress → Done`** (the card opened at draft and moved to
-  `In Progress` at acceptance; see CLAUDE.md → *Backlog* for the `/project-management` `status` command).
-  This gate is the sole stamper of `Implemented`, so it owns the `→ Done` move. A pure-infra / process /
-  refactor ADR has no card and skips this.
+- **Name the feature issue for the PR.** A feature ADR's issue, cited in its References, is closed by the PR
+  that implements the ADR (`Fixes #N` in its description), not by this gate: name it in the verdict so the PR
+  carries it. This gate moves no board card; the epoch's card moves to `Done` when the epoch's tracker closes
+  (CLAUDE.md → *Feature work is tracked in issues*). A pure-infra / process / refactor ADR has no feature issue.
 
 Find the row via the ADR's `Realizes: FEAT-NNNN/Fxx` header; the move is **forward-only** — never
 walk a status backward. On **changes-requested** or **fail**, advance nothing: the ADR stays

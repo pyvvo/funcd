@@ -60,22 +60,20 @@ and **scope-when-picked-up** (the rough ADR slate or first slice). This keeps th
 rotting before it's scoped into a version. Match the depth of the existing items (run `show`
 on one to see the house style).
 
-## Status follows the ADR lifecycle (every feature ADR carries a card)
+## The board holds ideas and one card per epoch
 
-Per the repo's working agreement (`.claude/CLAUDE.md`), a **feature ADR** — one realizing a genuine
-deliverable feat-row (a user-facing capability, e.g. FEAT-0001, FEAT-0003) — **carries a board card
-created when the ADR is first drafted**, and its Status tracks the ADR's lifecycle (the gates move it):
+Per the repo's working agreement (`.claude/CLAUDE.md` → *Feature work is tracked in issues*), features are
+tracked as GitHub issues (the [`/issue-management`](../issue-management/SKILL.md) skill), not as cards. The board
+holds:
 
-- ADR `Draft` → **`create`** the card (Backlog) — the `adr` skill, at draft. If it was scoped from a
-  pre-existing idea, **reuse that card** (`list` first); don't create a duplicate.
-- through `Draft`/`Proposed` (+ judge) → stays **Backlog**
-- ADR **Accepted** → `status "<item>" "In Progress"` (the `adr` / `adr-batch` accept step)
-- ADR **Reviewing** → stays **In Progress** (no move)
-- ADR **Implemented** → `status "<item>" "Done"` (the `adr-impl-review` gate)
+- **un-scoped ideas**, which stay in **Backlog** until they are scoped into a feat doc;
+- **one card per epoch**, the umbrella view: a table of every feature row with its epoch and its issue, and a link
+  to the epoch's tracker issue. Use full URLs on a card: a draft card belongs to no repo, so a bare `#N` does not
+  link. `create` it in **Backlog** when the feat doc is written, move it **In Progress** when the epoch's first ADR
+  is accepted (the `adr` / `adr-batch` accept step) and **Done** when the tracker closes, and keep its table in step
+  with the tracker (`refine`).
 
-**Pure-infra / process / refactor ADRs skip the card** (a rename, a tooling/e2e ADR, the process ADR) —
-and a free idea that never becomes an ADR just lives in Backlog. When unsure, read the ADR's `Realizes:`
-header: a user-facing feat-row gets a card; an infra/process/refactor row does not.
+A feature ADR gets no card of its own. The per-ADR cards made before 2026-10-14 stay on the board as history.
 
 ## Identity / hygiene
 

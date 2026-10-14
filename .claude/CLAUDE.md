@@ -226,57 +226,67 @@ docs (they would rot the feat/roadmap with un-decided scope). They go to the pro
   `create` defaults the item to **Backlog** (never "No Status"). Write a rich body — match the depth
   of the existing items (`driver.py show "<substring>"`).
 
-Rule of thumb: **decided + scoped → the docs** (feat row / ADR / roadmap); **idea + un-scoped →
-the board**. (Examples added this way: the v2 microVM-isolation / krun-via-crun item, the
-artifact-contract registry, and distro packaging P-Z.) **And — see below — a *feature* ADR also
-carries a board card** from the moment it's drafted, so the board shows feature work in flight, not
-only un-scoped ideas.
+Rule of thumb: **decided + scoped → the docs** (feat row / ADR / roadmap) **and issues** (one per
+feature, below); **idea + un-scoped → the board**. (Examples added this way: the v2 microVM-isolation /
+krun-via-crun item, the artifact-contract registry, and distro packaging P-Z.) The board also carries **one
+card per epoch**, the umbrella view of its features.
 
-### A feature ADR carries a board card that natively tracks its lifecycle
+### Feature work is tracked in issues: one tracker per epoch, one issue per feature
 
-A **feature ADR** — one that realizes a genuine deliverable feat-row (a user-facing capability, e.g.
-FEAT-0001, FEAT-0003) — **gets a board tracking card created when it is first drafted**, and its
-**Status follows the ADR's lifecycle** (the skill gates move it). The card title references the ADR so
-it's findable (e.g. *"…(data-platform epoch) — ADR-0080 / FEAT-0003 F47"*).
+Since 2026-10-14 (FEAT-0012), features are tracked as **GitHub issues**, not board cards: an issue carries
+labels, groups as a sub-issue, and closes when the PR that implements it merges. When a feat doc defines an
+epoch:
 
-**Pure-infra / process / refactor ADRs skip the card** — a rename (ADR-0078/0079), a tooling/e2e ADR
-(ADR-0077), the process ADR (ADR-0000): no card. (If a feature ADR was *scoped from a pre-existing
-board idea*, **reuse that card — don't create a second**; `driver.py list` first.) When unsure, read
-the ADR's `Realizes:` header: a user-facing feat-row gets a card; an infra/process/refactor row does not.
+- **One tracker issue for the epoch** (`kind/task`: Summary · Details · Done when · References). Its first line
+  links the epoch's board card, and its Details table maps every feature row to its issue. It stands alone, as a
+  campaign's root tracker does (#1028 for FEAT-0012).
+- **One `kind/feature` issue per feature row that is built**, a sub-issue of the tracker, labelled `needs-adr`, a
+  `priority/` and its `area/` labels, its title a plain sentence that ends with the row's code
+  (`… (FEAT-0012 F137)`). A row that lives in another epoch's feat doc but serves this one (FEAT-0008 F147) goes
+  under this tracker too. An `idea` row gets no issue: it stays on the card and in its feat doc.
+- **One board card per epoch**, the umbrella view: a table of every feature row with its epoch and its issue, and
+  a link to the tracker. A card uses full URLs: a draft card belongs to no repo, so a bare `#N` does not link.
+- **A feature ADR cites its feature issue** in its References. The PR that implements it closes the issue
+  (`Fixes #N` in the PR description); when a row takes several ADRs, only the last one's PR closes it, and the
+  others reference it. A feature ADR gets no board card of its own, and a pure-infra / process / refactor ADR
+  (a rename, a tooling/e2e ADR, the process ADR) needs no feature issue. When unsure, read the ADR's `Realizes:`
+  header: a user-facing feat row has a feature issue; an infra/process/refactor row does not.
 
-The board's three Status options — **Backlog · In Progress · Done** — map onto the five ADR statuses:
-
-| ADR status | Board card | Moved by |
+| Moment | Issues | Epoch card |
 |---|---|---|
-| `Draft` | **create the card in `Backlog`** | the `adr` skill, at draft |
-| `Proposed` (+ judge) | stays `Backlog` | — |
-| `Accepted` | `→ In Progress` | the `adr` / `adr-batch` accept step |
-| `Reviewing` | stays `In Progress` | — (no move; `adr-impl` just notes it) |
-| `Implemented` | `→ Done` | the `adr-impl-review` gate (sole stamper of `Implemented`) |
+| Feat doc written | the tracker, and one feature issue per built row | `create` it in `Backlog`, with the table |
+| ADR `Draft` / `Proposed` | the feature issue stays open, with `needs-adr` | — |
+| ADR `Accepted` | — | `→ In Progress` when it is the epoch's first accepted ADR (the `adr` / `adr-batch` accept step) |
+| ADR `Implemented` and its PR merged | the PR closes the feature issue (`Fixes #N`) | — |
+| Every feature issue closed | close the tracker | `→ Done` |
 
-The skill gates carry each move as an explicit step. Create/move the card with the
-[`/project-management`](../.claude/skills/project-management/SKILL.md) skill (it resolves the item by title
-substring — no ids to hand-assemble):
+File the issues with the [`/issue-management`](../.claude/skills/issue-management/SKILL.md) skill, and move the
+card with the [`/project-management`](../.claude/skills/project-management/SKILL.md) skill:
 
 ```bash
-python3 .claude/skills/project-management/driver.py create --title "<…> — ADR-NNNN / FEAT-NNNN Fxx" --body "<…>"  # at Draft
-python3 .claude/skills/project-management/driver.py status "<title substring>" "In Progress"                       # at Accepted
-python3 .claude/skills/project-management/driver.py status "<title substring>" "Done"                              # at Implemented
+python3 .claude/skills/issue-management/driver.py create --kind feature --needs-adr --priority medium \
+  --area <area> --title "<plain sentence> (FEAT-NNNN Fxx)" --body-file <file>
+gh api -X POST repos/pyvvo/funcd/issues/<tracker>/sub_issues -F sub_issue_id=$(gh api repos/pyvvo/funcd/issues/<N> --jq .id)
+python3 .claude/skills/project-management/driver.py status "<epoch card title substring>" "In Progress"
 ```
+
+The per-ADR cards made before 2026-10-14 stay on the board as history.
 
 ## Issues — defects and concrete work live in GitHub Issues
 
-Wrong behavior in what is built (a bug, a flaky test) and concrete work items go to
+Wrong behavior in what is built (a bug, a flaky test), concrete work items and the features of a feat doc go to
 [GitHub Issues](https://github.com/pyvvo/funcd/issues), in one fixed shape per kind and one label taxonomy.
 **Use the [`/issue-management`](../.claude/skills/issue-management/SKILL.md) skill — do not hand-write
 `gh issue`.** Its `driver.py` holds the shapes and the labels, checks every issue before filing it, and
 generates the issue forms in `.github/ISSUE_TEMPLATE/` (computed — never hand-edit them).
 
-- **Where things go**: a defect or a task → an issue; an un-scoped idea → a board card; a decision → an ADR.
+- **Where things go**: a defect, a task or a feature of a feat doc → an issue; an un-scoped idea → a board card;
+  a decision → an ADR.
 - **One defect per issue**, with exactly one `kind/`, exactly one `priority/`, and at least one `area/` label.
 - **No issue without a parent.** Every issue is a sub-issue of a tracker: a campaign files a root tracker,
-  one group tracker per theme under it, and its issues under the group trackers (#232, #732). An issue found
-  on its own goes under the closest group tracker. Only a campaign's root tracker stands alone.
+  one group tracker per theme under it, and its issues under the group trackers (#232, #732); an epoch files one
+  tracker for its feature issues (#1028). An issue found on its own goes under the closest group tracker. Only a
+  campaign's or an epoch's root tracker stands alone.
 - **Close an issue only when every case it describes is fixed and tested.** A PR that fixes one of its cases
   leaves it open (#70 was closed on its first case and reopened).
 - **A fix that needs a design decision** gets `needs-adr`: the ADR cites the issue in its References, and the

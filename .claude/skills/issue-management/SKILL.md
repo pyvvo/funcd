@@ -16,6 +16,7 @@ not needed. Paths below are relative to the repo root.
 | You have… | It goes to |
 |---|---|
 | Wrong behavior in what is built, a flaky test, a concrete task | an **issue** — this skill |
+| A feature of a feat doc (a row that is built) | a **`kind/feature` issue** under its epoch's tracker — see [Features](#features-one-tracker-per-epoch-one-issue-per-feature-row) |
 | An un-scoped idea for later | a **board card** — [`/project-management`](../project-management/SKILL.md) |
 | A security vulnerability | a **private draft security advisory** (`gh api -X POST repos/pyvvo/funcd/security-advisories`), never a public issue; fixed with [`/fix`](../fix/SKILL.md)'s advisory flow |
 | A decision on how something works | an **ADR** — [`/adr`](../adr/SKILL.md) |
@@ -110,6 +111,19 @@ issue's `kind/` label:
 python3 .claude/skills/issue-management/driver.py show 13 --body > issue.md   # the body only
 python3 .claude/skills/issue-management/driver.py edit 13 --body-file issue.md [--title "<new title>"]
 ```
+
+## Features: one tracker per epoch, one issue per feature row
+
+A feat doc's built rows are tracked as issues (CLAUDE.md → *Feature work is tracked in issues*):
+
+- one **tracker** per epoch, `kind/task` (Summary · Details · Done when · References). Its first line links the
+  epoch's board card, its Details table maps each row to its issue, and it stands alone, like a campaign's root;
+- one **`kind/feature` + `needs-adr`** issue per built row, a sub-issue of that tracker, its title ending with the
+  row's code: `Jobs: work that runs to completion (FEAT-0012 F137)`. A row of another epoch's feat doc that this
+  epoch needs goes under this tracker too; an `idea` row gets no issue;
+- the ADR cites the issue in its References, and the PR that implements the ADR closes it (`Fixes #N`).
+
+Example: tracker #1028 and its sub-issues #1015 to #1027, for FEAT-0012.
 
 ## Writing a good issue
 

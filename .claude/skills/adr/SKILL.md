@@ -106,14 +106,15 @@ Quality bar per section:
 - **Open questions**: each one names where it gets answered (a future ADR, a milestone,
   the implementation PR).
 
-**Open the board card (feature ADRs only).** If this ADR realizes a genuine deliverable feat-row (a
-user-facing capability, e.g. FEAT-0001/FEAT-0003), **create its board tracking card in `Backlog`
-now**, at draft — native lifecycle tracking starts here, not at acceptance. Use the
-[`/project-management`](../project-management/SKILL.md) skill (`list` first; if the ADR was scoped from a
-pre-existing board idea, **reuse that card** rather than create a second). Title it so it's findable
-(`"<short title> — ADR-NNNN / FEAT-NNNN Fxx"`); give it a rich body (why · chosen shape · deps · scope).
-**Pure-infra / process / refactor ADRs skip the card** (a rename, a tooling/e2e ADR, the process ADR) —
-when unsure, the `Realizes:` header decides: a user-facing feat-row gets a card, an infra/process row does not.
+**Cite the feature's issue (feature ADRs only).** If this ADR realizes a genuine deliverable feat-row (a
+user-facing capability, e.g. FEAT-0012/F137), find that row's `kind/feature` issue under its epoch's tracker —
+its title ends with the row's code, `(FEAT-NNNN Fxx)`
+(`python3 .claude/skills/issue-management/driver.py list --state all`) — and cite it in the ADR's References, so
+the PR that implements the ADR closes it (`Fixes #N`). If the row has no issue yet, file it with the
+[`/issue-management`](../issue-management/SKILL.md) skill (`kind/feature`, `needs-adr`) and attach it to the
+epoch's tracker (CLAUDE.md → *Feature work is tracked in issues*). A feature ADR gets no board card of its own.
+**Pure-infra / process / refactor ADRs skip this** (a rename, a tooling/e2e ADR, the process ADR) — when unsure,
+the `Realizes:` header decides: a user-facing feat-row has a feature issue, an infra/process row does not.
 
 ## Step 3 — Review to acceptance
 
@@ -136,9 +137,9 @@ when unsure, the `Realizes:` header decides: a user-facing feat-row gets a card,
 - Update the feature row in the active `docs/feat/` document: link the ADR in the
   `ADR(s)` column and advance the status (`idea → adr` at draft, `→ accepted` at
   acceptance).
-- **Move the feature ADR's board card `Backlog → In Progress`** (the card opened at draft, Step 2; see
-  CLAUDE.md → *Backlog* for the `/project-management` `status` command). A pure-infra / process / refactor
-  ADR has no card and skips this.
+- **Move the epoch's board card `Backlog → In Progress`** when this is the epoch's first accepted ADR (CLAUDE.md
+  → *Feature work is tracked in issues* has the `/project-management` `status` command). The feature issue stays
+  open: the PR that implements the ADR closes it.
 
 ## Step 5 — Stop
 
