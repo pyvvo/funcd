@@ -2554,7 +2554,7 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring etag=W/
-          - result.systemout ShouldContainSubstring digest=sha256:
+          - result.systemout ShouldMatchRegex "digest=sha256:[0-9a-f]{64}"
       - type: exec
         script: |
           {{.vmsh}} '
