@@ -48,8 +48,9 @@
 #   C1-C5 one Site build of the site-config App of funcd-functions deployed into staging and prod: each serves its own
 #       generated config.json and both the one bundle digest; config.json is revalidated (no-cache, an ETag, 304) and
 #       never the SPA's index; a new value of the App's ConfigMap reaches it with a new ETag and the same digest
-#       (ADR-0239). They run last, with the admin token the DR block installed, since the developer token is scoped to
-#       default.
+#       (ADR-0239). C6 runs the same digest as a Site at the path /preview whose index carries its mount as its base: a
+#       direct deep link loads the app's relative script and config.json under the mount (ADR-0239 Decision 10). They
+#       run last, with the admin token the DR block installed, since the developer token is scoped to default.
 # The suite pushes, locks and deploys the App itself; the lane only creates the Secret and the grant beside it. Every
 # file it applies comes from funcd-functions, staged by scripts/lanes.yaml.
 name: app-todo — the todo App from its pushed template on real containerd (ADR-0199/0200/0211-0215/0217-0220/0226/0229), a disaster-recovery drill (ADR-0202-0209/0222/0223), version 1.2.0 on rqlite (ADR-0233-0236), and runtime configuration of a Site (ADR-0239)
@@ -2575,3 +2576,33 @@ testcases:
           - result.systemout ShouldContainSubstring ETAG-CHANGED
           - result.systemout ShouldContainSubstring DIGEST-SAME
           - result.systemout ShouldContainSubstring PROD-KEPT
+
+  - name: C6 the same digest at the path /preview - a direct deep link gets the index with the mount as its base, and the app's relative script and config.json load under the mount
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; funcdctl apply -f /opt/lane/site-config/sites/preview.yaml'
+        info: "apply → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            export FUNCD_TOKEN=todo-lane-admin
+            digest() { funcdctl get site $1 -n staging -o json | grep -oE "\"digest\": *\"sha256:[0-9a-f]{64}\"" | grep -oE "sha256:[0-9a-f]{64}"; }
+            curl -s http://127.0.0.1:8081/preview/fleet/vehicles/42 | grep -q "<head><base href=\"/preview/\">" && echo BASE-OK
+            app=$(curl -s -o /dev/null -w "%{http_code} %{content_type}" http://127.0.0.1:8081/preview/app.js)
+            echo "app=$app"
+            case "$app" in "200 "*javascript*) echo APP-OK ;; esac
+            [ "$(curl -s http://127.0.0.1:8081/preview/config.json)" = "{\"API_URL\":\"https://api.preview.example\"}" ] && echo CONFIG-OK
+            p=$(digest site-config-preview); s=$(digest site-config-web)
+            echo "digests $p $s"
+            [ -n "$p" ] && [ "$p" = "$s" ] && echo ONE-DIGEST'
+        retry: 15
+        delay: 2
+        info: "preview → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring BASE-OK
+          - result.systemout ShouldContainSubstring APP-OK
+          - result.systemout ShouldContainSubstring CONFIG-OK
+          - result.systemout ShouldContainSubstring ONE-DIGEST

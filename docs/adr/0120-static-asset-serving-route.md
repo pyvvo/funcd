@@ -1,6 +1,7 @@
 # ADR-0120: Static-asset serving — a `Bucket`-prefix backend on the `Route` (F82)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0239](0239-site-runtime-configuration.md) (2026-10-16) — §2 and §3: a nested `index` serves sub-directories and the index cache tier by its file name.
 - **Date**: 2026-07-10
 - **Accepted**: 2026-07-10
 - **Reviewing**: 2026-07-10

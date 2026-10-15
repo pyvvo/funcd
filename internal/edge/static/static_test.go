@@ -177,6 +177,22 @@ func TestCacheControlThreeTiers(t *testing.T) {
 	}
 }
 
+// A nested index, as a Site's base copy is (ADR-0239 Decision 10), serves "/" and the SPA fallback, no-cache, and a
+// sub-directory serves its own index by the nested index's file name.
+func TestNestedIndex(t *testing.T) {
+	h := site(t, map[string][]byte{
+		"bi/_runtime/web/0123456789ab/index.html": []byte(`<base href="/bi/">`),
+		"bi/docs/index.html":                      []byte("docs"),
+	})
+	back := &v1.StaticBackend{Bucket: "reports", Prefix: "bi/", Index: "_runtime/web/0123456789ab/index.html", SPA: true}
+	for rem, want := range map[string]string{"/": `<base href="/bi/">`, "/devices/42": `<base href="/bi/">`, "/docs/": "docs"} {
+		w := serve(h, http.MethodGet, rem, back, nil)
+		require.Equal(t, http.StatusOK, w.Code, rem)
+		require.Equal(t, want, w.Body.String(), rem)
+		require.Equal(t, "no-cache", w.Header().Get("Cache-Control"), rem)
+	}
+}
+
 // a missing / cross-namespace bucket is a 404 (tenancy guard, no existence oracle).
 func TestUnknownBucketNotFound(t *testing.T) {
 	h := site(t, nil)

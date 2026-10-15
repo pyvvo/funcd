@@ -294,8 +294,7 @@ func TestScenarioE2ESiteConfigTemplate(t *testing.T) {
 	waitBody(t, e.dp, "audit.staging.test", "/config.json", `{"NEW_DASHBOARD":"false"}`, configWithin)
 }
 
-// scenarios: site-config-configmap-missing + site-config-configmap-change + site-config-configmap-deleted (e2e,
-// F152/ADR-0239) — a Site that names a missing ConfigMap is Ready=False ConfigMapNotFound while its last file keeps
+// scenarios: site-config-configmap-missing + site-config-configmap-change (e2e, F152/ADR-0239) — a Site that names a missing ConfigMap is Ready=False ConfigMapNotFound while its last file keeps
 // serving; once created, the ConfigMap's keys join config.json, values winning; a changed key reaches config.json with
 // a new ETag and the same bundle digest; the ConfigMap deleted, the Site is ConfigMapNotFound and its last file serves.
 func TestScenarioE2ESiteConfigConfigMap(t *testing.T) {
@@ -471,4 +470,88 @@ func TestScenarioE2ESiteConfigRefused(t *testing.T) {
 		require.Equal(t, http.StatusBadRequest, code, msg)
 		require.Contains(t, msg, tc.want)
 	}
+}
+
+// relIndex is the index of a bundle built with relative URLs (Vite base './') that carries its own base, as an Angular
+// build's does.
+const relIndex = `<!doctype html><html><head><base href="/"><title>fleet</title><script type="module" src="assets/app.js"></script></head><body></body></html>`
+
+func baseHrefSite(name string, ns v1.NamespaceName, ref string, ingress v1.SiteIngress, rc *v1.SiteRuntimeConfig) *v1.Site {
+	return configSite(name, ns, ref, func(s *v1.Site) {
+		ingress.BaseHref, ingress.Public = true, true
+		s.Spec.Ingress, s.Spec.RuntimeConfig = ingress, rc
+	})
+}
+
+// scenarios: site-config-base-href + site-config-one-digest-two-mounts (e2e, F152/ADR-0239 Decision 10) — one bundle
+// digest, built with relative URLs and carrying <base href="/">, on two Sites of one Bucket and prefix, at / and at /bi:
+// a direct deep link on each serves the index with exactly one base, its own, no-cache; the entry script and
+// config.json resolve under the mount; no bundle file changes.
+func TestScenarioE2ESiteConfigBaseHref(t *testing.T) {
+	t.Parallel()
+	ref, digest := pushSiteBundle(t, filepath.Join(t.TempDir(), "layout"), "v1", map[string]string{"index.html": relIndex, "assets/app.js": "export {};"})
+	rc := &v1.SiteRuntimeConfig{Values: map[string]string{"API_URL": "https://api.example"}}
+	e := startConfigPlatform(t, []string{"staging"},
+		baseHrefSite("root", "staging", ref, v1.SiteIngress{Host: "fleet.test"}, rc),
+		baseHrefSite("bi", "staging", ref, v1.SiteIngress{Path: "/bi"}, rc))
+	require.Equal(t, digest, e.waitSite(t, "staging", "root", v1.ConditionTrue, "Materialized", deployWithin).Status.Digest)
+	require.Equal(t, digest, e.waitSite(t, "staging", "bi", v1.ConditionTrue, "Materialized", deployWithin).Status.Digest)
+
+	for _, tc := range []struct{ host, mount string }{{"fleet.test", "/"}, {"", "/bi/"}} {
+		code, body, hdr := edgeGet(t, e.dp, tc.host, tc.mount+"devices/42", nil)
+		require.Equal(t, http.StatusOK, code)
+		require.Contains(t, body, `<head><base href="`+tc.mount+`"><title>fleet</title>`)
+		require.Equal(t, 1, strings.Count(body, "<base "), "exactly one base")
+		require.Equal(t, "no-cache", hdr.Get("Cache-Control"))
+		code, body, hdr = edgeGet(t, e.dp, tc.host, tc.mount+"assets/app.js", nil)
+		require.Equal(t, http.StatusOK, code)
+		require.Equal(t, "export {};", body)
+		require.Contains(t, hdr.Get("Content-Type"), "javascript")
+		waitBody(t, e.dp, tc.host, tc.mount+"config.json", `{"API_URL":"https://api.example"}`, configWithin)
+	}
+	stored, err := e.blob.Get(context.Background(), "s3/staging/web/web/"+strings.ReplaceAll(digest, ":", "-")+"/index.html")
+	require.NoError(t, err)
+	require.Equal(t, relIndex, string(stored), "no bundle file changes")
+}
+
+// scenario: site-config-base-href-paths (e2e, F152/ADR-0239 Decision 10) — with baseHref and no runtimeConfig, a
+// sub-directory and config.json answer the bundle's own files; a new ingress.path moves the base within 5 s.
+func TestScenarioE2ESiteConfigBaseHrefPaths(t *testing.T) {
+	t.Parallel()
+	ref, _ := pushSiteBundle(t, filepath.Join(t.TempDir(), "layout"), "v1", map[string]string{
+		"index.html": relIndex, "docs/index.html": "docs", "config.json": `{"OWN":"1"}`,
+	})
+	e := startConfigPlatform(t, []string{"staging"}, baseHrefSite("bi", "staging", ref, v1.SiteIngress{Path: "/bi"}, nil))
+	e.waitSite(t, "staging", "bi", v1.ConditionTrue, "Materialized", deployWithin)
+	waitBody(t, e.dp, "", "/bi/docs/", "docs", configWithin)
+	waitBody(t, e.dp, "", "/bi/config.json", `{"OWN":"1"}`, configWithin)
+
+	s := e.site(t, "staging", "bi")
+	s.Spec.Ingress.Path = "/b2"
+	e.update(t, s)
+	require.Eventually(t, func() bool {
+		code, body, _ := edgeGet(t, e.dp, "", "/b2/devices/42", nil)
+		return code == http.StatusOK && strings.Contains(body, `<base href="/b2/">`)
+	}, configWithin, 20*time.Millisecond, "the base moves with the mount")
+}
+
+// scenario: site-config-runtime-reserved (e2e, F152/ADR-0239 Decision 10) — a bundle with a root _runtime entry is
+// MaterializeFailed, naming it, and the previous digest keeps serving.
+func TestScenarioE2ESiteConfigRuntimeReserved(t *testing.T) {
+	t.Parallel()
+	layout := filepath.Join(t.TempDir(), "layout")
+	ref1, digest1 := pushSiteBundle(t, layout, "v1", map[string]string{"index.html": fleetIndex})
+	ref2, _ := pushSiteBundle(t, layout, "v2", map[string]string{"index.html": "<title>v2</title>", "_runtime/x.txt": "x"})
+	e := startConfigPlatform(t, []string{"staging"}, configSite("fleet", "staging", ref1, func(s *v1.Site) {
+		s.Spec.Ingress = v1.SiteIngress{Host: "fleet.test", Public: true}
+	}))
+	e.waitSite(t, "staging", "fleet", v1.ConditionTrue, "Materialized", deployWithin)
+	s := e.site(t, "staging", "fleet")
+	s.Spec.Image = ref2
+	e.update(t, s)
+	s = e.waitSite(t, "staging", "fleet", v1.ConditionFalse, "MaterializeFailed", configWithin)
+	c, _ := s.Status.Conditions.Get("Ready")
+	require.Contains(t, c.Message, `"_runtime/x.txt"`)
+	require.Equal(t, digest1, s.Status.Digest)
+	waitBody(t, e.dp, "fleet.test", "/", fleetIndex, configWithin)
 }

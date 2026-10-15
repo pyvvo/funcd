@@ -171,8 +171,8 @@ func TestScenarioSiteConfigConfigMapMissing(t *testing.T) {
 	})
 }
 
-// scenario: site-config-configmap-deleted (the reconciler half) — the deletion maps to the Site, which keeps its last
-// file and reports ConfigMapNotFound.
+// scenario: site-config-configmap-missing (the reconciler half, a deleted ConfigMap) — the deletion maps to the Site,
+// which keeps its last file and reports ConfigMapNotFound.
 func TestScenarioSiteConfigConfigMapDeleted(t *testing.T) {
 	h := newHarness(t)
 	h.push("v1", siteA())

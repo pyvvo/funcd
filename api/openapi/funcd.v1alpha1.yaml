@@ -3636,6 +3636,9 @@ components:
       properties:
         auth:
           $ref: "#/components/schemas/RouteAuth"
+        baseHref:
+          description: Serve a copy of the bundle's index whose <base href> is the Site's mount, so a bundle built with relative URLs runs at any path, deep links included.
+          type: boolean
         host:
           type: string
         path:

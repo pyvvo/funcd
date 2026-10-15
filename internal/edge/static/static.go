@@ -163,11 +163,11 @@ func resolveKey(prefix, index, dec string) (key string, bad bool) {
 	// Root the path at "/" so path.Clean can never ascend above it; then take it relative to the prefix.
 	cleaned := path.Clean("/" + strings.TrimPrefix(dec, "/"))
 	rel := strings.TrimPrefix(cleaned, "/")
-	if rel == "" || isDir {
-		if rel != "" {
-			rel += "/"
-		}
-		rel += index
+	switch {
+	case rel == "":
+		rel = index
+	case isDir:
+		rel += "/" + path.Base(index) // a nested index serves sub-directories by its file name (ADR-0239)
 	}
 	key = prefix + rel
 	// Containment is THIS handler's contract, not the blob driver's — assert it before any read.
@@ -199,7 +199,7 @@ func setContentType(w http.ResponseWriter, key string) {
 //   - everything else ⇒ public, max-age=300, must-revalidate.
 func cacheControl(key, prefix, index string) string {
 	base := path.Base(key)
-	if base == index || isStableName(key, prefix) {
+	if base == path.Base(index) || isStableName(key, prefix) { // an index may be nested, as a Site's base copy is (ADR-0239)
 		return "no-cache"
 	}
 	if hashShaped.MatchString(base) {

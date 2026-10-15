@@ -88,9 +88,10 @@ type SiteIngress struct {
 	// Path is the edge path the bundle is served at (ADR-0140). Empty ⇒ "/" when Host is set, else
 	// "/site/<metadata.name>" — so several host-less Sites share one listener without colliding. It
 	// begins "/" and carries no trailing slash unless it is exactly "/". Mutable: a change re-programs
-	// the Route with no re-upload, but the bundle must be BUILT for the new base path (funcd never
-	// rewrites served content).
+	// the Route with no re-upload; the bundle must be BUILT for the new base path, unless BaseHref is set.
 	Path string `json:"path,omitempty"`
+	// BaseHref makes the Site serve a copy of its index whose <base href> is its mount (ADR-0239 Decision 10).
+	BaseHref bool `json:"baseHref,omitempty" doc:"Serve a copy of the bundle's index whose <base href> is the Site's mount, so a bundle built with relative URLs runs at any path, deep links included."`
 	// Public sets static.public on every compiled backend (ADR-0120 §4 precedence preserved).
 	Public bool `json:"public,omitempty"`
 	// Auth is the edge auth stance copied onto the owned Route; nil ⇒ inherit the namespace default.
