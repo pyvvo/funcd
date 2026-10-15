@@ -4,7 +4,7 @@
   after two judge rounds; the decider chose `config.json`.
 - **Amended before merge** (2026-10-16, at the decider's request): Decision 10, an opt-in `<base href>` for path
   mounts. Judged 2026-10-16; the decider put the flag on `ingress` and kept sub-directory pages. The branch merges
-  after Decision 10's review passes.
+  after Decision 10's review passes. Decision 10 reviewed 2026-10-16, pass.
 - **Date**: 2026-10-15
 - **Deciders**: green-0-rabbit
 - **Tags**: site, edge, static, config, app-templates
