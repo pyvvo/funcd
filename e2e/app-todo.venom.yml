@@ -2590,7 +2590,8 @@ testcases:
           {{.vmsh}} '
             export FUNCD_TOKEN=todo-lane-admin
             digest() { funcdctl get site $1 -n staging -o json | grep -oE "\"digest\": *\"sha256:[0-9a-f]{64}\"" | grep -oE "sha256:[0-9a-f]{64}"; }
-            curl -s http://127.0.0.1:8081/preview/fleet/vehicles/42 | grep -q "<head><base href=\"/preview/\">" && echo BASE-OK
+            page=$(curl -s http://127.0.0.1:8081/preview/fleet/vehicles/42)
+            [ "$(echo "$page" | grep -o "<base " | wc -l | tr -d " ")" = 1 ] && echo "$page" | grep -q "<base href=\"/preview/\">" && echo BASE-OK
             app=$(curl -s -o /dev/null -w "%{http_code} %{content_type}" http://127.0.0.1:8081/preview/app.js)
             echo "app=$app"
             case "$app" in "200 "*javascript*) echo APP-OK ;; esac
