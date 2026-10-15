@@ -158,17 +158,18 @@ request; server-side rendering; changing any bundle file; a script form of the f
 8. **An outside API is called directly**, with its own CORS headers for the Site's origin.
 9. **A `values` edit is a new generation**, which re-resolves a tag image (ADR-0139 Decision 2). Pin the image by digest,
    as App templates do (ADR-0218), or keep values that change often in the ConfigMap, whose change re-resolves nothing.
-10. **A base for path mounts (opt-in).** With `spec.ingress.baseHref: true` the Site serves, at `/` and as its SPA
+10. **A base for path mounts (opt-in).** With `spec.ingress.baseHref: true` the Site serves, as its index and its SPA
     fallback, a copy of the bundle's index carrying its mount as `<base href>`: `<EffectivePath>/` (`/` at the root),
     percent-encoded as a URL path, then HTML-escaped. Every `<base>` element of the index is removed; one `<base>`,
-    keeping the first one's `target`, goes first in `<head>` (after a `<meta charset>` that opens it), else right after
+    keeping the first `target` among them, goes first in `<head>` (after a `<meta charset>` that opens it), else right after
     `<html>`, else before the first element; every other byte stays. The reconciler writes the copy into the digest
     folder at `_runtime/<site>/<h>/<index>`, `<h>` the first 12 hex digits of the mount's SHA-256, when it differs,
     after the bundle is complete and before the Route, and sets the bundle rule's `index` to it, so a new digest or
     mount switches with the Route. A copy the Bucket refuses fails the deploy like a bundle object; `status.objects`
     and `status.bytes` leave `_runtime/` out. No bundle file changes: funcd reserves `_runtime` at the root of every
     bundle and refuses one that holds it (`MaterializeFailed`), checked when a digest is unpacked. A nested index's file
-    name serves the cache tier (`no-cache`) and sub-directories (`docs/` serves `docs/index.html`). The bundle uses
+    name serves the cache tier (`no-cache`), a request for that name at the root (`/index.html`, which a service worker
+    may cache), and sub-directories (`docs/` serves `docs/index.html`). The bundle uses
     relative URLs and reads its base from `document.baseURI`; the example's README shows how.
 
 ## Temporary workarounds

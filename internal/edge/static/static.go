@@ -164,8 +164,8 @@ func resolveKey(prefix, index, dec string) (key string, bad bool) {
 	cleaned := path.Clean("/" + strings.TrimPrefix(dec, "/"))
 	rel := strings.TrimPrefix(cleaned, "/")
 	switch {
-	case rel == "":
-		rel = index
+	case rel == "", rel == path.Base(index) && !isDir:
+		rel = index // the root's index, by "/" or by its file name: a nested index is found both ways (ADR-0239)
 	case isDir:
 		rel += "/" + path.Base(index) // a nested index serves sub-directories by its file name (ADR-0239)
 	}

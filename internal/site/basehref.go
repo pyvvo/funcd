@@ -64,74 +64,28 @@ func writeIndexCopy(ctx context.Context, view blob.Bucket, sp, index, rel, href 
 
 type span struct{ from, to int }
 
+// indexScan is what withBase reads from an index: its <base> elements, the first target among them, and where the one
+// <base> goes.
+type indexScan struct {
+	bases  []span
+	target string
+	insert int
+}
+
 // withBase returns doc with exactly one <base href> (ADR-0239 Decision 10): every <base> is removed, and one, keeping
-// the first one's target, goes first in <head> (after a <meta charset> that opens it), else right after <html>, else
-// before the first element. Every other byte stays.
+// the first target among them, goes first in <head> (after a <meta charset> that opens it), else right after <html>,
+// else before the first element. Every other byte stays.
 func withBase(doc []byte, href string) []byte {
-	var (
-		bases                     []span
-		target                    string
-		afterHead, afterHTML, at0 = -1, -1, -1
-		openHead                  bool
-	)
-	z := html.NewTokenizer(bytes.NewReader(doc))
-	for pos := 0; ; {
-		tt := z.Next()
-		if tt == html.ErrorToken {
-			break
-		}
-		start, end := pos, pos+len(z.Raw())
-		pos = end
-		if tt != html.StartTagToken && tt != html.SelfClosingTagToken {
-			continue
-		}
-		name, hasAttr := z.TagName()
-		attrs := map[string]string{}
-		for hasAttr {
-			var k, v []byte
-			k, v, hasAttr = z.TagAttr()
-			attrs[string(k)] = string(v)
-		}
-		if at0 < 0 {
-			at0 = start
-		}
-		switch tag := string(name); {
-		case tag == "base":
-			if len(bases) == 0 {
-				target = attrs["target"]
-			}
-			bases = append(bases, span{start, end})
-		case tag == "head" && afterHead < 0:
-			afterHead, openHead = end, true
-			continue
-		case tag == "meta" && openHead:
-			if _, ok := attrs["charset"]; ok {
-				afterHead = end
-			}
-		case tag == "html" && afterHTML < 0:
-			afterHTML = end
-		}
-		openHead = false
-	}
+	sc := scanIndex(doc)
 	el := `<base href="` + html.EscapeString(href) + `"`
-	if target != "" {
-		el += ` target="` + html.EscapeString(target) + `"`
+	if sc.target != "" {
+		el += ` target="` + html.EscapeString(sc.target) + `"`
 	}
 	el += ">"
-	insert := at0
-	for _, at := range []int{afterHead, afterHTML} {
-		if at >= 0 {
-			insert = at
-			break
-		}
-	}
-	if insert < 0 {
-		insert = 0
-	}
 	out := make([]byte, 0, len(doc)+len(el))
 	prev := 0
-	emit := func(to int) {
-		for _, b := range bases {
+	copyTo := func(to int) {
+		for _, b := range sc.bases {
 			if b.from >= prev && b.to <= to {
 				out = append(out, doc[prev:b.from]...)
 				prev = b.to
@@ -140,8 +94,64 @@ func withBase(doc []byte, href string) []byte {
 		out = append(out, doc[prev:to]...)
 		prev = to
 	}
-	emit(insert)
+	copyTo(sc.insert)
 	out = append(out, el...)
-	emit(len(doc))
+	copyTo(len(doc))
 	return out
+}
+
+// scanIndex tokenizes doc once, keeping the byte span of every start tag it needs.
+func scanIndex(doc []byte) indexScan {
+	var sc indexScan
+	afterHead, afterHTML, first, openHead := -1, -1, -1, false
+	z := html.NewTokenizer(bytes.NewReader(doc))
+	for pos := 0; ; {
+		tt := z.Next()
+		if tt == html.ErrorToken {
+			break
+		}
+		start := pos
+		pos += len(z.Raw())
+		if tt != html.StartTagToken && tt != html.SelfClosingTagToken {
+			continue
+		}
+		name, attrs := tagOf(z)
+		if first < 0 {
+			first = start
+		}
+		inHead := openHead
+		openHead = false
+		switch {
+		case name == "base":
+			if sc.target == "" {
+				sc.target = attrs["target"]
+			}
+			sc.bases = append(sc.bases, span{start, pos})
+		case name == "head" && afterHead < 0:
+			afterHead, openHead = pos, true
+		case name == "meta" && inHead && attrs["charset"] != "":
+			afterHead = pos
+		case name == "html" && afterHTML < 0:
+			afterHTML = pos
+		}
+	}
+	sc.insert = 0
+	for _, at := range []int{afterHead, afterHTML, first} {
+		if at >= 0 {
+			sc.insert = at
+			break
+		}
+	}
+	return sc
+}
+
+func tagOf(z *html.Tokenizer) (string, map[string]string) {
+	name, more := z.TagName()
+	attrs := map[string]string{}
+	for more {
+		var k, v []byte
+		k, v, more = z.TagAttr()
+		attrs[string(k)] = string(v)
+	}
+	return string(name), attrs
 }

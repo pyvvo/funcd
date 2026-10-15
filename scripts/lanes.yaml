@@ -606,7 +606,7 @@ sql-examples:
   venom: e2e/sql-examples.venom.yml
 
 app-todo:
-  description: The todo App of funcd-functions, deployed from its pushed template on real containerd (ADR-0217/0218), and the App features on it — pinned digests, a TypeScript→Python Workflow, a zoned cron timer, hooks, kept stores, a dry run, drift and pause, a config roll, rollback, liveness and dependency health, a late call, a refused binding, a requirement and a blob upload; then the disaster-recovery drill of FEAT-0009 — a backup to an S3 server in the VM, a lost data directory restored, held boot and release, the App's own backups and restores, a pre-upgrade generation, and the blob store on S3; then version 1.2.0 on rqlite — its pre-hook moving the todos and uploads from KV into a SQL database, SQL queries and a join, the change feed, and the database's backup, in-place restore and restored copy; then one Site build of the site-config App deployed into staging and prod, each serving its own generated config.json.
+  description: The todo App of funcd-functions, deployed from its pushed template on real containerd (ADR-0217/0218), and the App features on it — pinned digests, a TypeScript→Python Workflow, a zoned cron timer, hooks, kept stores, a dry run, drift and pause, a config roll, rollback, liveness and dependency health, a late call, a refused binding, a requirement and a blob upload; then the disaster-recovery drill of FEAT-0009 — a backup to an S3 server in the VM, a lost data directory restored, held boot and release, the App's own backups and restores, a pre-upgrade generation, and the blob store on S3; then version 1.2.0 on rqlite — its pre-hook moving the todos and uploads from KV into a SQL database, SQL queries and a join, the change feed, and the database's backup, in-place restore and restored copy; then one Site build of the site-config App deployed into staging and prod, each serving its own generated config.json, and at the path /preview with its mount as its base.
   module: github.com/pyvvo/funcd-functions
   dir: apps/todo
   # The build writes the S3 server into dr/, so the lane builds in a writable copy of the module.
@@ -671,7 +671,7 @@ app-todo:
     # The reset of the shared lane VM, which the DR block's total loss runs.
     - from: scripts/lane-reset.sh
       to: dr/lane-reset.sh
-    # The site-config App (ADR-0239): one Site build the suite deploys into staging and prod.
+    # The site-config App (ADR-0239): one Site build the suite deploys into staging and prod, and at /preview (C6).
     - from: apps/site-config
       module: github.com/pyvvo/funcd-functions
       to: site-config

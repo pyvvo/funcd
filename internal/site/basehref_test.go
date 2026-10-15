@@ -1,6 +1,7 @@
 package site_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -19,6 +20,7 @@ func TestWithBase(t *testing.T) {
 		{"replaces a base", `<head><base href="/"><title>A</title></head>`, `<head><base href="/bi/"><title>A</title></head>`},
 		{"replaces a self-closing base", `<head><base href="/" /></head>`, `<head><base href="/bi/"></head>`},
 		{"keeps the first base's target", `<head><title>A</title><base target="_top"><base href="/x/"></head>`, `<head><base href="/bi/" target="_top"><title>A</title></head>`},
+		{"keeps the first target among the bases", `<head><base href="/"><base target="_top"></head>`, `<head><base href="/bi/" target="_top"></head>`},
 		{"after html without head", `<html><body>x</body></html>`, `<html><base href="/bi/"><body>x</body></html>`},
 		{"after the doctype, before the first element", `<!doctype html><title>A</title>`, `<!doctype html><base href="/bi/"><title>A</title>`},
 		{"no element", `hello`, `<base href="/bi/">hello`},
@@ -122,4 +124,28 @@ func TestScenarioSiteConfigRuntimeReserved(t *testing.T) {
 	require.Contains(t, c.Message, `"_runtime/x.txt"`)
 	require.Equal(t, v1d, s.Status.Digest, "the previous digest keeps serving")
 	require.False(t, h.exists("bi/"+slug(v2d)+"/index.html"), "nothing materialized")
+}
+
+// Decision 10: a copy the Bucket refuses fails the deploy like a bundle object: MaterializeFailed, and the Route keeps
+// serving the bundle's index.
+func TestSiteConfigBaseHrefCopyOverBucketCap(t *testing.T) {
+	h := newHarness(t)
+	h.push("v1", map[string]string{"index.html": "<head></head>" + strings.Repeat("x", 17)})
+	pre := &v1.Bucket{TypeMeta: v1.TypeMeta{APIVersion: v1.KindBucket.GVK().APIVersion(), Kind: v1.KindBucket}}
+	pre.Name, pre.Namespace, pre.ResourceGroup = bucket, ns, "rg1"
+	pre.Spec.MaxObjectBytes = 35
+	_, err := h.st.Create(h.ctx, pre)
+	require.NoError(t, err)
+	h.seedSite("bi", "v1", func(s *v1.Site) { s.Spec.Ingress.Rules = nil })
+	h.deploy("bi")
+	digest := h.site("bi").Status.Digest
+
+	h.apply("bi", baseHref("/bi"))
+	h.reconcile("bi")
+	s := h.site("bi")
+	c := readyCond(t, s)
+	require.Equal(t, "MaterializeFailed", c.Reason)
+	require.Contains(t, c.Message, "maxObjectBytes (35)")
+	require.Equal(t, digest, s.Status.Digest)
+	require.Equal(t, "index.html", bundleRule(t, h.route("bi")).Index)
 }
