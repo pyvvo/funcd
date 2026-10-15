@@ -2,6 +2,7 @@ package site_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -166,6 +167,7 @@ func TestScenarioSiteConfigConfigMapMissing(t *testing.T) {
 		require.Equal(t, "ConfigMapNotFound", readyCond(t, h.site("bi")).Reason)
 		require.Equal(t, `{"API_URL":"https://api.example"}`, h.body(configKey("bi")), "nothing is rewritten")
 		require.NotNil(t, configRule(h.route("bi"), "bi"), "the last good file keeps serving")
+		bundleRule(t, h.route("bi"))
 	})
 }
 
@@ -198,7 +200,7 @@ func TestSiteRuntimeConfigTooLarge(t *testing.T) {
 		h.reconcile("bi")
 		c := readyCond(t, h.site("bi"))
 		require.Equal(t, "RuntimeConfigTooLarge", c.Reason)
-		require.Contains(t, c.Message, "32768-byte cap")
+		require.Contains(t, c.Message, fmt.Sprintf("%d-byte cap", v1.SiteRuntimeConfigMaxBytes))
 		require.Equal(t, `{"FLAG":"on"}`, h.body(configKey("bi")))
 		require.NotNil(t, configRule(h.route("bi"), "bi"))
 	})

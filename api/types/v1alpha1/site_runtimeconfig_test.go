@@ -2,6 +2,7 @@ package v1alpha1
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -45,7 +46,7 @@ func TestSiteRuntimeConfigValidate(t *testing.T) {
 		}, `"/config.json/"`},
 		{"values over the cap", func(s *Site) {
 			s.Spec.RuntimeConfig.Values["BIG"] = strings.Repeat("x", SiteRuntimeConfigMaxBytes)
-		}, "32768"},
+		}, strconv.Itoa(SiteRuntimeConfigMaxBytes)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := runtimeConfigSite(tc.mutate).Validate()

@@ -2539,26 +2539,38 @@ testcases:
 
   - name: C5 a new value of the App's ConfigMap reaches staging's config.json with a new ETag and the same bundle digest, and prod keeps its own
     steps:
+      # The ETag and the digest before the change, then the deploy that turns the flag on.
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            export FUNCD_TOKEN=todo-lane-admin
+            cd /opt/lane/site-config
+            curl -s -D - -o /dev/null -H "Host: site-config.staging.test" http://127.0.0.1:8081/config.json | tr -d "\r" | grep -i "^etag:" | cut -d" " -f2- >/root/site-config-etag
+            funcdctl get site site-config-web -n staging -o json | grep -oE "\"digest\": *\"sha256:[0-9a-f]{64}\"" | grep -oE "sha256:[0-9a-f]{64}" >/root/site-config-digest
+            funcdctl app deploy {{.reg}}/site-config:1.0.0 -n staging -f values/e2e.yaml -f values/staging.yaml -f values/new-dashboard.yaml >/dev/null
+            echo "etag=$(cat /root/site-config-etag) digest=$(cat /root/site-config-digest)"'
+        info: "flag on → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring etag=W/
+          - result.systemout ShouldContainSubstring digest=sha256:
       - type: exec
         script: |
           {{.vmsh}} '
             export FUNCD_TOKEN=todo-lane-admin
-            cd /opt/lane/site-config
             get() { curl -s -H "Host: site-config.$1.test" http://127.0.0.1:8081/config.json; }
-            etag() { curl -s -D - -o /dev/null -H "Host: site-config.staging.test" http://127.0.0.1:8081/config.json | tr -d "\r" | grep -i "^etag:" | cut -d" " -f2-; }
-            digest() { funcdctl get site site-config-web -n staging -o json | grep -oE "\"digest\": *\"sha256:[0-9a-f]{64}\"" | grep -oE "sha256:[0-9a-f]{64}"; }
-            on="{\"API_URL\":\"https://api.staging.example\",\"NEW_DASHBOARD\":\"true\"}"
-            e1=$(etag); d1=$(digest)
-            funcdctl app deploy {{.reg}}/site-config:1.0.0 -n staging -f values/e2e.yaml -f values/staging.yaml -f values/new-dashboard.yaml >/dev/null && echo DEPLOYED
-            for i in $(seq 1 10); do [ "$(get staging)" = "$on" ] && break; sleep 1; done
+            etag=$(curl -s -D - -o /dev/null -H "Host: site-config.staging.test" http://127.0.0.1:8081/config.json | tr -d "\r" | grep -i "^etag:" | cut -d" " -f2-)
+            digest=$(funcdctl get site site-config-web -n staging -o json | grep -oE "\"digest\": *\"sha256:[0-9a-f]{64}\"" | grep -oE "sha256:[0-9a-f]{64}")
             echo "staging=$(get staging)"
-            [ "$(get staging)" = "$on" ] && echo FLAG-ON
-            [ -n "$e1" ] && [ "$e1" != "$(etag)" ] && echo ETAG-CHANGED
-            [ -n "$d1" ] && [ "$d1" = "$(digest)" ] && echo DIGEST-SAME
+            [ "$(get staging)" = "{\"API_URL\":\"https://api.staging.example\",\"NEW_DASHBOARD\":\"true\"}" ] && echo FLAG-ON
+            [ -n "$etag" ] && [ "$etag" != "$(cat /root/site-config-etag)" ] && echo ETAG-CHANGED
+            [ -n "$digest" ] && [ "$digest" = "$(cat /root/site-config-digest)" ] && echo DIGEST-SAME
             [ "$(get prod)" = "{\"API_URL\":\"https://api.example\",\"NEW_DASHBOARD\":\"false\"}" ] && echo PROD-KEPT'
-        info: "flag on → {{.result.systemout}} {{.result.systemerr}}"
+        retry: 10
+        delay: 1
+        info: "config.json after the change → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
-          - result.systemout ShouldContainSubstring DEPLOYED
           - result.systemout ShouldContainSubstring FLAG-ON
           - result.systemout ShouldContainSubstring ETAG-CHANGED
           - result.systemout ShouldContainSubstring DIGEST-SAME

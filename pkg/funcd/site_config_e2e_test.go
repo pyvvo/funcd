@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -312,6 +313,7 @@ func TestScenarioE2ESiteConfigConfigMap(t *testing.T) {
 	e.update(t, s)
 	e.waitSite(t, "staging", "fleet", v1.ConditionFalse, "ConfigMapNotFound", configWithin)
 	waitBody(t, e.dp, "fleet.test", "/config.json", `{"API_URL":"https://api.example"}`, configWithin)
+	waitBody(t, e.dp, "fleet.test", "/", fleetIndex, configWithin)
 
 	_, err := e.st.Create(ctx, configMapOf("fleet-flags", "staging", map[string]string{"NEW_DASHBOARD": "false", "API_URL": "https://ignored.example"}))
 	require.NoError(t, err)
@@ -333,6 +335,7 @@ func TestScenarioE2ESiteConfigConfigMap(t *testing.T) {
 	require.NoError(t, e.st.Delete(ctx, v1.KindConfigMap.GVK(), "staging", "fleet-flags", ""))
 	e.waitSite(t, "staging", "fleet", v1.ConditionFalse, "ConfigMapNotFound", configWithin)
 	waitBody(t, e.dp, "fleet.test", "/config.json", `{"API_URL":"https://api.example","NEW_DASHBOARD":"true"}`, configWithin)
+	waitBody(t, e.dp, "fleet.test", "/", fleetIndex, configWithin)
 }
 
 // scenario: site-config-path-mounted (e2e, F152/ADR-0239) — a Site mounted at /bi serves /bi/config.json and no
@@ -462,7 +465,7 @@ func TestScenarioE2ESiteConfigRefused(t *testing.T) {
 		{`{` + base + `},"runtimeConfig":{"values":{"api-url":"x"}}}`, "api-url"},
 		{`{` + base + `,"rules":[{"path":"/config.json","prefix":"data"}]},"runtimeConfig":{}}`, `/config.json\"`},
 		{`{` + base + `,"rules":[{"path":"/config.json/","prefix":"data"}]},"runtimeConfig":{}}`, `/config.json/\"`},
-		{`{` + base + `},"runtimeConfig":{"values":{"BIG":"` + strings.Repeat("x", 33<<10) + `"}}}`, "32768"},
+		{`{` + base + `},"runtimeConfig":{"values":{"BIG":"` + strings.Repeat("x", v1.SiteRuntimeConfigMaxBytes) + `"}}}`, strconv.Itoa(v1.SiteRuntimeConfigMaxBytes)},
 	} {
 		code, msg := post(tc.spec)
 		require.Equal(t, http.StatusBadRequest, code, msg)
