@@ -1,6 +1,7 @@
 # ADR-0213: App configuration and secret declarations
 
 - **Status**: Implemented (2026-10-10; accepted 2026-10-10)
+- **Superseded in part by**: [ADR-0239](0239-site-runtime-configuration.md) (2026-10-15) — Decisions 3 and 5: a Site part's `runtimeConfig.configMap` is also repointed to a defined ConfigMap's stored name, and a Site counts as a use of the ConfigMap it names.
 - **Date**: 2026-10-08 (self-accepted 2026-10-10 under adr-batch after drafting, three-lens judging with a skeptic per
   finding, cross-ADR audits and alignment with the disaster-recovery ADRs)
 - **Deciders**: green-0-rabbit
