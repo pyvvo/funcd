@@ -751,8 +751,10 @@ func (a *App) entries() []appEntry {
 			&Route{TypeMeta: typeMetaFor(KindRoute), ObjectMeta: meta(e.Name), Spec: e.RouteSpec}))
 	}
 	for i, e := range s.Sites {
+		spec := e.SiteSpec
+		spec.RuntimeConfig = repointRuntimeConfig(spec.RuntimeConfig, stored)
 		out = append(out, newEntry("sites", i, entryHead{Name: e.Name, Ref: e.Ref}, e.SiteSpec,
-			&Site{TypeMeta: typeMetaFor(KindSite), ObjectMeta: meta(e.Name), Spec: e.SiteSpec}))
+			&Site{TypeMeta: typeMetaFor(KindSite), ObjectMeta: meta(e.Name), Spec: spec}))
 	}
 	for i, e := range s.Catalogs {
 		spec := e.CatalogServiceSpec
@@ -769,6 +771,21 @@ func (a *App) entries() []appEntry {
 			&BackupSchedule{TypeMeta: typeMetaFor(KindBackupSchedule), ObjectMeta: meta(e.Name), Spec: spec}))
 	}
 	return out
+}
+
+// repointRuntimeConfig returns rc with a configMap that names a defined configMaps entry set to that entry's stored
+// name, in a copy, so the App's declared spec and the AppRevision built from it stay as written (ADR-0239 Decision 5).
+func repointRuntimeConfig(rc *SiteRuntimeConfig, stored map[ObjectName]ObjectName) *SiteRuntimeConfig {
+	if rc == nil {
+		return nil
+	}
+	name, ok := stored[rc.ConfigMap]
+	if !ok {
+		return rc
+	}
+	c := *rc
+	c.ConfigMap = name
+	return &c
 }
 
 // repoint returns names with each name of a defined configMaps entry replaced by its stored name, in a new slice when

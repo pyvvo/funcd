@@ -529,7 +529,8 @@ func bucketUsers() []v1.Kind {
 // none), as the deletion protections bind it (ADR-0199 Decision 6): a Function another Function links to (ADR-0064),
 // a KVStore a Function's spec.kv names (ADR-0073), a Bucket a Function's or CatalogService's spec.blob, an
 // EventSource's spec.blob.bucket, a Route's spec.rules[].backend.static.bucket or a Site's spec.bucket.name names
-// (ADR-0080), a ConfigMap a Function's or CatalogService's spec.config names (ADR-0213 Decision 5), a SQLDatabase a
+// (ADR-0080), a ConfigMap a Function's or CatalogService's spec.config or a Site's spec.runtimeConfig.configMap names
+// (ADR-0213 Decision 5, ADR-0239), a SQLDatabase a
 // Function's spec.sql names (ADR-0236). Nothing uses an object of another kind.
 func InUse(ctx context.Context, s store.Store, obj v1.Object, skip func(v1.Object) bool) (v1.ObjectRef, bool, error) {
 	const op = "gc.InUse"
@@ -540,7 +541,7 @@ func InUse(ctx context.Context, s store.Store, obj v1.Object, skip func(v1.Objec
 	case *v1.Bucket:
 		kinds = bucketUsers()
 	case *v1.ConfigMap:
-		kinds = []v1.Kind{v1.KindFunction, v1.KindCatalogService}
+		kinds = []v1.Kind{v1.KindFunction, v1.KindCatalogService, v1.KindSite}
 	default:
 		return v1.ObjectRef{}, false, nil
 	}
@@ -581,6 +582,8 @@ func uses(u, obj v1.Object) bool {
 			return slices.Contains(o.Spec.Config, name)
 		case *v1.CatalogService:
 			return slices.Contains(o.Spec.Config, name)
+		case *v1.Site:
+			return o.Spec.RuntimeConfig != nil && o.Spec.RuntimeConfig.ConfigMap == name
 		}
 	}
 	return false

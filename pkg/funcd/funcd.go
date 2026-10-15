@@ -1043,8 +1043,9 @@ func (p *Platform) buildControlPlane() error {
 	// the Bucket + Route it declares inline; its status is derived from the owned Route.
 	siteReconciler := site.New(site.Deps{Store: c.store, Buckets: s3BucketFor(c.blob, c.store), DefaultIndex: c.siteDefaultIndex, Logger: p.logger, ReferentPollInterval: c.pacing.ReferentPollInterval})
 	ctrl.Register(v1.KindSite.GVK(), siteReconciler)
-	ctrl.Watches(v1.KindRoute.GVK(), site.MapRoute)             // status is derived from the same-named owned Route
-	ctrl.Watches(v1.KindBucket.GVK(), siteReconciler.MapBucket) // a raised maxObjectBytes lets a refused bundle deploy
+	ctrl.Watches(v1.KindRoute.GVK(), site.MapRoute)                   // status is derived from the same-named owned Route
+	ctrl.Watches(v1.KindBucket.GVK(), siteReconciler.MapBucket)       // a raised maxObjectBytes lets a refused bundle deploy
+	ctrl.Watches(v1.KindConfigMap.GVK(), siteReconciler.MapConfigMap) // a changed ConfigMap re-renders config.json (ADR-0239)
 	// KVStore reconciler (ADR-0072/0073): Ready + status.tables/bindings; on delete reclaim the store
 	// prefix and on a table removed from spec.tables[] reclaim its sub-prefix, via the driver's
 	// DropPrefix+List (type-asserted PrefixManager — a driver without it gets a no-op).

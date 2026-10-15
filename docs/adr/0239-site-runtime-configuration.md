@@ -1,6 +1,6 @@
 # ADR-0239: Runtime configuration of a Site
 
-- **Status**: Accepted (2026-10-15, self-accepted under the decider's adr-batch delegation). The decider chose the
+- **Status**: Reviewing (2026-10-15, implementation done). Accepted (2026-10-15, self-accepted under the decider's adr-batch delegation). The decider chose the
   `config.json` format and asked for a new use case in an existing Sites lane on 2026-10-15. Judged twice: round 1 asked for App-defined ConfigMaps, the route claim, the
   failure order and the superseded decisions; round 2 for a per-Site key and a bundler-safe fetch rule. All are folded
   below.

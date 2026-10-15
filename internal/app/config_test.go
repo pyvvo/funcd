@@ -348,6 +348,22 @@ func TestAppConfigChangeRolls(t *testing.T) {
 		h.reconcile()
 		require.Nil(t, h.get(v1.KindConfigMap, storedSettings(paris())))
 	})
+	t.Run("kept while a Site's runtimeConfig names it", func(t *testing.T) {
+		h := newHarness(t, nil)
+		h.putSecret(stripeKey("v1"))
+		h.install(configApp(nil))
+		h.create(&v1.Site{TypeMeta: v1.TypeMeta{APIVersion: v1.KindSite.GVK().APIVersion(), Kind: v1.KindSite},
+			ObjectMeta: v1.ObjectMeta{Name: "web", Namespace: ns, ResourceGroup: "rg1"},
+			Spec: v1.SiteSpec{Image: "oci-layout://web:1", Bucket: v1.SiteBucket{Name: "web-files"}, Prefix: "web",
+				Ingress:       v1.SiteIngress{Host: "web.example"},
+				RuntimeConfig: &v1.SiteRuntimeConfig{ConfigMap: storedSettings(paris())}}})
+		h.edit(setTZ(utc))
+		h.reconcile()
+		h.markReady(v1.KindFunction, "todo-api")
+		h.reconcile()
+		require.Equal(t, v1.AppChild{Kind: v1.KindConfigMap, Name: storedSettings(paris()), State: v1.AppChildPruning, Reason: "InUse: Site/web"},
+			h.child(v1.KindConfigMap, storedSettings(paris())))
+	})
 	t.Run("a ConfigMap the App does not define", func(t *testing.T) {
 		h := newHarness(t, nil)
 		h.putSecret(stripeKey("v1"))

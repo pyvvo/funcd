@@ -99,9 +99,10 @@ func adoptBucket(b *v1.Bucket, s *v1.Site) (changed, prefixOwned bool) {
 
 // compileRoute builds the owned Route's desired spec for a target digest (ADR-0139 §8, path per
 // ADR-0140): one data-mount rule per spec.ingress.rules[] (a static arm with NO index/spa — a miss is
-// 404 by construction) plus the bundle rule at s.EffectivePath() over the digest-scoped prefix.
+// 404 by construction) plus the bundle rule at s.EffectivePath() over the digest-scoped prefix, and, when config
+// is true, the exact GET/HEAD rule that serves the generated config.json as the index of its own prefix (ADR-0239).
 // ingress.public sets static.public on every backend; ingress.auth maps to spec.auth.
-func compileRoute(s *v1.Site, digest, index string) v1.RouteSpec {
+func compileRoute(s *v1.Site, digest, index string, config bool) v1.RouteSpec {
 	ing := &s.Spec.Ingress
 	rules := make([]v1.RouteRule, 0, len(ing.Rules)+1)
 	for _, r := range ing.Rules {
@@ -124,6 +125,19 @@ func compileRoute(s *v1.Site, digest, index string) v1.RouteSpec {
 			Public: ing.Public,
 		}},
 	})
+	if config {
+		rules = append(rules, v1.RouteRule{
+			Path:     s.RuntimeConfigPath(),
+			PathType: v1.PathTypeExact,
+			Methods:  []v1.HTTPMethod{v1.MethodGet, v1.MethodHead},
+			Backend: v1.RouteBackend{Static: &v1.StaticBackend{
+				Bucket: s.Spec.Bucket.Name,
+				Prefix: runtimeConfigPrefix(s),
+				Index:  v1.SiteRuntimeConfigFile,
+				Public: ing.Public,
+			}},
+		})
+	}
 	spec := v1.RouteSpec{Host: ing.Host, Rules: rules}
 	if ing.Auth != nil {
 		auth := *ing.Auth

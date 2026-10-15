@@ -45,9 +45,14 @@
 #       records in SQL; a new row that fires the App's sql EventSource, whose Sensor records it in KV; the App's backup
 #       copying todo-db, sealed; an admin's in-place Restore of it; and a restored copy swapped in through ref, while
 #       todo-db stays (ADR-0233-0236).
+#   C1-C5 one Site build of the site-config App of funcd-functions deployed into staging and prod: each serves its own
+#       generated config.json and both the one bundle digest; config.json is revalidated (no-cache, an ETag, 304) and
+#       never the SPA's index; a new value of the App's ConfigMap reaches it with a new ETag and the same digest
+#       (ADR-0239). They run last, with the admin token the DR block installed, since the developer token is scoped to
+#       default.
 # The suite pushes, locks and deploys the App itself; the lane only creates the Secret and the grant beside it. Every
 # file it applies comes from funcd-functions, staged by scripts/lanes.yaml.
-name: app-todo — the todo App from its pushed template on real containerd (ADR-0199/0200/0211-0215/0217-0220/0226/0229), a disaster-recovery drill (ADR-0202-0209/0222/0223), and version 1.2.0 on rqlite (ADR-0233-0236)
+name: app-todo — the todo App from its pushed template on real containerd (ADR-0199/0200/0211-0215/0217-0220/0226/0229), a disaster-recovery drill (ADR-0202-0209/0222/0223), version 1.2.0 on rqlite (ADR-0233-0236), and runtime configuration of a Site (ADR-0239)
 
 vars:
   dp: http://127.0.0.1:8081
@@ -2455,3 +2460,106 @@ testcases:
         info: "todo-db after the swap → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.systemout ShouldMatchRegex "phase.{1,4}Ready"
+
+  - name: C1 one Site bundle and the site-config template are pushed, its image digest locked, and the App deploys into staging and prod
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            export FUNCD_TOKEN=todo-lane-admin
+            cd /opt/lane/site-config
+            funcdctl push --site web {{.reg}}/site-config-web:1.0.0
+            funcdctl app lock app -f values/e2e.yaml
+            funcdctl push --template app {{.reg}}/site-config:1.0.0
+            for env in staging prod; do
+              funcdctl app deploy {{.reg}}/site-config:1.0.0 -n $env -f values/e2e.yaml -f values/$env.yaml >/dev/null
+              echo deployed-$env
+            done'
+        info: "push, lock, deploy → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldMatchRegex "web 1[.]0[.]0 sha256:[0-9a-f]{64}"
+          - result.systemout ShouldContainSubstring deployed-staging
+          - result.systemout ShouldContainSubstring deployed-prod
+
+  - name: C2 each environment serves its own config.json, and both Sites serve one bundle digest
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            export FUNCD_TOKEN=todo-lane-admin
+            get() { curl -s -H "Host: site-config.$1.test" http://127.0.0.1:8081/config.json; }
+            digest() { funcdctl get site site-config-web -n $1 -o json | grep -oE "\"digest\": *\"sha256:[0-9a-f]{64}\"" | grep -oE "sha256:[0-9a-f]{64}"; }
+            echo "staging=$(get staging) prod=$(get prod)"
+            [ "$(get staging)" = "{\"API_URL\":\"https://api.staging.example\",\"NEW_DASHBOARD\":\"false\"}" ] && echo STAGING-OK
+            [ "$(get prod)" = "{\"API_URL\":\"https://api.example\",\"NEW_DASHBOARD\":\"false\"}" ] && echo PROD-OK
+            s=$(digest staging); p=$(digest prod)
+            echo "digests $s $p"
+            [ -n "$s" ] && [ "$s" = "$p" ] && echo ONE-DIGEST'
+        retry: 15
+        delay: 2
+        info: "config.json → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring STAGING-OK
+          - result.systemout ShouldContainSubstring PROD-OK
+          - result.systemout ShouldContainSubstring ONE-DIGEST
+
+  - name: C3 config.json is always revalidated - no-cache, application/json, an ETag, and 304 on a match
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            h=$(curl -s -D - -o /dev/null -H "Host: site-config.staging.test" http://127.0.0.1:8081/config.json | tr -d "\r")
+            echo "$h" | grep -i "^cache-control:"
+            echo "$h" | grep -i "^content-type:"
+            etag=$(echo "$h" | grep -i "^etag:" | cut -d" " -f2-)
+            echo "etag=$etag"
+            echo "conditional=$(curl -s -o /dev/null -w "%{http_code}" -H "Host: site-config.staging.test" -H "If-None-Match: $etag" http://127.0.0.1:8081/config.json)."'
+        info: "headers → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring no-cache
+          - result.systemout ShouldContainSubstring application/json
+          - result.systemout ShouldContainSubstring etag=W/
+          - result.systemout ShouldContainSubstring conditional=304.
+
+  - name: C4 with spa on, an app path answers the index, while config.json stays the generated file
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            curl -s -H "Host: site-config.staging.test" http://127.0.0.1:8081/fleet/vehicles/42 | grep -o "<title>Site config</title>"
+            curl -s -H "Host: site-config.staging.test" http://127.0.0.1:8081/config.json | grep -o "https://api.staging.example"'
+        info: "app path, config.json → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "<title>Site config</title>"
+          - result.systemout ShouldContainSubstring https://api.staging.example
+
+  - name: C5 a new value of the App's ConfigMap reaches staging's config.json with a new ETag and the same bundle digest, and prod keeps its own
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            export FUNCD_TOKEN=todo-lane-admin
+            cd /opt/lane/site-config
+            get() { curl -s -H "Host: site-config.$1.test" http://127.0.0.1:8081/config.json; }
+            etag() { curl -s -D - -o /dev/null -H "Host: site-config.staging.test" http://127.0.0.1:8081/config.json | tr -d "\r" | grep -i "^etag:" | cut -d" " -f2-; }
+            digest() { funcdctl get site site-config-web -n staging -o json | grep -oE "\"digest\": *\"sha256:[0-9a-f]{64}\"" | grep -oE "sha256:[0-9a-f]{64}"; }
+            on="{\"API_URL\":\"https://api.staging.example\",\"NEW_DASHBOARD\":\"true\"}"
+            e1=$(etag); d1=$(digest)
+            funcdctl app deploy {{.reg}}/site-config:1.0.0 -n staging -f values/e2e.yaml -f values/staging.yaml -f values/new-dashboard.yaml >/dev/null && echo DEPLOYED
+            for i in $(seq 1 10); do [ "$(get staging)" = "$on" ] && break; sleep 1; done
+            echo "staging=$(get staging)"
+            [ "$(get staging)" = "$on" ] && echo FLAG-ON
+            [ -n "$e1" ] && [ "$e1" != "$(etag)" ] && echo ETAG-CHANGED
+            [ -n "$d1" ] && [ "$d1" = "$(digest)" ] && echo DIGEST-SAME
+            [ "$(get prod)" = "{\"API_URL\":\"https://api.example\",\"NEW_DASHBOARD\":\"false\"}" ] && echo PROD-KEPT'
+        info: "flag on → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring DEPLOYED
+          - result.systemout ShouldContainSubstring FLAG-ON
+          - result.systemout ShouldContainSubstring ETAG-CHANGED
+          - result.systemout ShouldContainSubstring DIGEST-SAME
+          - result.systemout ShouldContainSubstring PROD-KEPT

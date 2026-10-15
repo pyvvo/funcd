@@ -167,6 +167,48 @@ func TestAppConfigRepointing(t *testing.T) {
 	}
 }
 
+// ADR-0239 Decision 5: a Site part's runtimeConfig.configMap that names a defined ConfigMap becomes its stored name, in
+// a copy; an undefined name stays as written, and the App's spec stays as declared.
+func TestAppSiteRuntimeConfigRepointing(t *testing.T) {
+	site := func(name, configMap ObjectName) AppSite {
+		return AppSite{Name: name, SiteSpec: SiteSpec{
+			Image: "oci-layout://todo-web:1", Bucket: SiteBucket{Name: name}, Prefix: "web",
+			Ingress:       SiteIngress{Host: string(name) + ".example"},
+			RuntimeConfig: &SiteRuntimeConfig{ConfigMap: configMap},
+		}}
+	}
+	a := configApp(func(a *App) {
+		a.Spec.Sites = []AppSite{site("todo-web", "todo-settings"), site("todo-docs", "elsewhere")}
+	})
+	if err := a.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	before, err := json.Marshal(a.Spec)
+	if err != nil {
+		t.Fatalf("marshal spec: %v", err)
+	}
+	stored := AppConfigMapName("todo-settings", a.Spec.ConfigMaps[0].ConfigMapSpec)
+	sites := map[ObjectName]*Site{}
+	for _, p := range a.Parts() {
+		if s, ok := p.(*Site); ok {
+			sites[s.Name] = s
+		}
+	}
+	if got := sites["todo-web"].Spec.RuntimeConfig.ConfigMap; got != stored {
+		t.Fatalf("todo-web runtimeConfig.configMap = %q, want the stored name %q", got, stored)
+	}
+	if got := sites["todo-docs"].Spec.RuntimeConfig.ConfigMap; got != "elsewhere" {
+		t.Fatalf("todo-docs runtimeConfig.configMap = %q, want it as written", got)
+	}
+	after, err := json.Marshal(a.Spec)
+	if err != nil {
+		t.Fatalf("marshal spec: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("Parts changed the App's spec:\n%s\n%s", before, after)
+	}
+}
+
 // Decision 1: a spec without the new sections marshals as before; the sections round-trip.
 func TestAppConfigJSON(t *testing.T) {
 	plain, err := json.Marshal(todoApp(nil).Spec)

@@ -732,6 +732,11 @@ func TestInUse(t *testing.T) {
 			c.Spec.Config = []v1.ObjectName{"settings"}
 			return c
 		}()},
+		{"a Site's spec.runtimeConfig.configMap", object(t, v1.KindConfigMap, "settings"), func() v1.Object {
+			s := object(t, v1.KindSite, "web").(*v1.Site)
+			s.Spec.RuntimeConfig = &v1.SiteRuntimeConfig{ConfigMap: "settings"}
+			return s
+		}()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st := store.New(memory.New())

@@ -1,6 +1,9 @@
 package v1alpha1
 
 import (
+	"encoding/json"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -34,6 +37,34 @@ type SiteSpec struct {
 	SPA bool `json:"spa,omitempty"`
 	// Ingress declares the Site-owned Route (named after the Site). Required in V1.
 	Ingress SiteIngress `json:"ingress"`
+	// RuntimeConfig makes the Site serve one generated config.json beside its bundle (ADR-0239). Not the function
+	// runtime.
+	RuntimeConfig *SiteRuntimeConfig `json:"runtimeConfig,omitempty" doc:"Values each deployment sets without a rebuild, served as config.json beside the bundle. The file is public: never put a secret in it."`
+}
+
+// SiteRuntimeConfig holds the members of a Site's generated config.json (ADR-0239).
+type SiteRuntimeConfig struct {
+	// Values are keys and their string values; a key here wins over the same key from ConfigMap.
+	Values map[string]string `json:"values,omitempty"`
+	// ConfigMap names a ConfigMap of the Site's namespace whose data adds keys.
+	ConfigMap ObjectName `json:"configMap,omitempty"`
+}
+
+const (
+	// SiteRuntimeConfigFile is the name of the file a Site's runtimeConfig generates (ADR-0239).
+	SiteRuntimeConfigFile = "config.json"
+	// SiteRuntimeConfigMaxBytes caps the generated file, which the app waits for before it starts (ADR-0239).
+	SiteRuntimeConfigMaxBytes = 32 << 10
+)
+
+// RenderSiteRuntimeConfig is the body of a Site's config.json (ADR-0239): one JSON object of the members, in key
+// order, since encoding/json sorts map keys. Admission and the reconciler share it, so both measure the same bytes.
+func RenderSiteRuntimeConfig(members map[string]string) []byte {
+	if members == nil {
+		members = map[string]string{}
+	}
+	b, _ := json.Marshal(members) // a map[string]string always marshals
+	return b
 }
 
 // SiteBucket declares the target Bucket (the WorkflowKVStore pattern): adopted if present, created if
@@ -105,6 +136,15 @@ func (s *Site) EffectivePath() string {
 		return "/"
 	}
 	return "/site/" + string(s.Name)
+}
+
+// RuntimeConfigPath is the edge path of the config.json that spec.runtimeConfig generates: under EffectivePath
+// (ADR-0239), so it moves with the bundle.
+func (s *Site) RuntimeConfigPath() string {
+	if p := s.EffectivePath(); p != "/" {
+		return p + "/" + SiteRuntimeConfigFile
+	}
+	return "/" + SiteRuntimeConfigFile
 }
 
 // GroupVersionKind returns the constant GVK for Site.
@@ -202,6 +242,38 @@ func (s *Site) Validate() error {
 		if !dnsLabel.MatchString(r.Prefix) {
 			return fault.Invalidf(op, "spec.ingress.rules[%d].prefix %q is not a valid DNS-1123 label", i, r.Prefix)
 		}
+	}
+	return s.validateRuntimeConfig()
+}
+
+// validateRuntimeConfig checks spec.runtimeConfig (ADR-0239 Decision 7): its keys follow the ConfigMap key rule, its
+// configMap is an object name, no ingress rule claims the generated file's path (a trailing slash matches the same
+// path), and its values alone render within the cap. A ConfigMap's keys are checked when it is written, and what it
+// adds to the size is the reconciler's to report.
+func (s *Site) validateRuntimeConfig() error {
+	const op = "Site.Validate"
+	rc := s.Spec.RuntimeConfig
+	if rc == nil {
+		return nil
+	}
+	for _, k := range slices.Sorted(maps.Keys(rc.Values)) {
+		if err := validateEnvKey(op, "spec.runtimeConfig.values key", k); err != nil {
+			return err
+		}
+	}
+	if rc.ConfigMap != "" {
+		if err := rc.ConfigMap.Validate(); err != nil {
+			return fault.Invalidf(op, "spec.runtimeConfig.configMap: %v", err)
+		}
+	}
+	file := s.RuntimeConfigPath()
+	for i, r := range s.Spec.Ingress.Rules {
+		if strings.TrimRight(r.Path, "/") == file {
+			return fault.Invalidf(op, "spec.ingress.rules[%d].path %q is where spec.runtimeConfig serves %s (ADR-0239)", i, r.Path, file)
+		}
+	}
+	if n := len(RenderSiteRuntimeConfig(rc.Values)); n > SiteRuntimeConfigMaxBytes {
+		return fault.Invalidf(op, "spec.runtimeConfig.values render %d bytes, over the %d-byte cap of %s (ADR-0239)", n, SiteRuntimeConfigMaxBytes, SiteRuntimeConfigFile)
 	}
 	return nil
 }

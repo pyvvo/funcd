@@ -159,7 +159,29 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		}
 	}
 
-	rt, err = r.ensureRoute(ctx, s, rt, target, index)
+	// ADR-0239 Decision 7: the config step runs once the bundle is complete and before the Route. A config failure
+	// rewrites nothing and never holds the bundle back; the rule is compiled exactly when the object exists. Removal
+	// deletes the object first, while the current Route still carries the rule.
+	config, cfgReason, cfgMsg := false, "", ""
+	switch {
+	case s.Spec.RuntimeConfig != nil:
+		reason, msg, werr := r.writeRuntimeConfig(ctx, s, view)
+		if werr != nil {
+			return controller.Result{}, werr
+		}
+		cfgReason, cfgMsg, config = reason, msg, reason == ""
+		if !config {
+			if config, err = view.Exists(ctx, runtimeConfigKey(s)); err != nil {
+				return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), op, "probe %q", runtimeConfigKey(s))
+			}
+		}
+	case servesRuntimeConfig(rt, s):
+		if derr := dropRuntimeConfig(ctx, s, view); derr != nil {
+			return controller.Result{}, derr
+		}
+	}
+
+	rt, err = r.ensureRoute(ctx, s, rt, target, index, config)
 	if err != nil {
 		return controller.Result{}, err
 	}
@@ -171,6 +193,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		out.result = controller.Result{RequeueAfter: r.routeRequeue}
 	case cnd.Status != v1.ConditionTrue:
 		out.cond = notReady("RouteNotReady", fmt.Sprintf("route %q: %s: %s", rt.Name, cnd.Reason, cnd.Message))
+	case cfgReason != "":
+		out.cond = notReady(cfgReason, cfgMsg)
 	default:
 		out.cond = v1.Condition{Type: condReady, Status: v1.ConditionTrue, Reason: "Materialized"}
 	}
@@ -321,8 +345,8 @@ func (r *Reconciler) unpack(ctx context.Context, view blob.Bucket, s *v1.Site, d
 
 // ensureRoute creates the owned Route (always stamped with the OwnerReference) or updates its spec to
 // the compiled desired state and its group to the Site's when either drifted; an unchanged Route is left alone.
-func (r *Reconciler) ensureRoute(ctx context.Context, s *v1.Site, rt *v1.Route, digest, index string) (*v1.Route, error) {
-	spec := compileRoute(s, digest, index)
+func (r *Reconciler) ensureRoute(ctx context.Context, s *v1.Site, rt *v1.Route, digest, index string, config bool) (*v1.Route, error) {
+	spec := compileRoute(s, digest, index, config)
 	if rt == nil {
 		nr := &v1.Route{TypeMeta: v1.TypeMeta{APIVersion: v1.KindRoute.GVK().APIVersion(), Kind: v1.KindRoute}}
 		nr.Name, nr.Namespace, nr.ResourceGroup = s.Name, s.Namespace, s.ResourceGroup
