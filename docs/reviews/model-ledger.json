@@ -11443,5 +11443,20 @@
     "dod_total": 8,
     "report": "docs/reviews/adr-0238-implementation-claude-opus-5-5.md",
     "notes": "pass as amended (alias removed); m1 model: stale catalog.proxyHost comment in config.go; m2 model: daemon from-subnet test unnamed, allow-list entry untested; m3 adr: Accepted ADR amended before merge at decider's request; sql/sql-examples rerun + gate pending"
+  },
+  {
+    "date": "2026-10-15",
+    "adr": "0239",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 3,
+    "model_attributed": 3,
+    "dod_passed": 11,
+    "dod_total": 13,
+    "report": "docs/reviews/adr-0239-implementation-claude-opus-5-5.md",
+    "notes": "pass; m1 model: e2e refusal test hardcodes the 32 KiB cap instead of v1.SiteRuntimeConfigMaxBytes; m2 model: configmap-missing e2e does not check the bundle keeps serving; m3 model: lane C5 polls in its script instead of Venom retry/delay. Pending (process): funcd-functions release + go get, and the PR gate."
   }
 ]
