@@ -15,6 +15,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
@@ -287,6 +288,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	}
 	objs := make(map[v1.ObjectRef]v1.Object, len(ents))
 	halt, wrote, healed, err := r.apply(ctx, a, ents, writes, objs, halt, healing(revs, stored))
+	if errors.Is(err, errAppGone) {
+		return controller.Result{}, nil // the owner GC collects the tree (Decision 7)
+	}
 	if err != nil {
 		return controller.Result{}, err
 	}
@@ -404,6 +408,11 @@ func (r *Reconciler) apply(ctx context.Context, a *v1.App, ents, writes []entry,
 		written, changed, drift, err := r.write(ctx, desired(a, parts, e), objs[k])
 		switch fault.KindOf(err) {
 		case "":
+			if changed && objs[k] == nil {
+				if err := r.undoIfAppGone(ctx, a, written); err != nil {
+					return nil, nil, nil, err
+				}
+			}
 			objs[k] = written
 			if changed && wrote == nil {
 				wrote = &k
@@ -419,6 +428,28 @@ func (r *Reconciler) apply(ctx context.Context, a *v1.App, ents, writes []entry,
 		}
 	}
 	return nil, wrote, healed, nil
+}
+
+// errAppGone ends a pass whose App was deleted, or replaced under another UID, after the pass read it.
+var errAppGone = errors.New("app deleted during the pass")
+
+// undoIfAppGone deletes a part this pass just created when its App is gone by now, and returns errAppGone. A pass that
+// read the App before its delete would otherwise write back a part the owner GC already collected (ADR-0170), which
+// stays until the GC's next sweep. A delete after this check fires the GC after the create, so it finds the part.
+func (r *Reconciler) undoIfAppGone(ctx context.Context, a *v1.App, created v1.Object) error {
+	cur, err := r.store.Get(ctx, v1.KindApp.GVK(), a.Namespace, a.Name)
+	switch {
+	case err == nil && cur.GetObjectMeta().UID == a.UID:
+		return nil
+	case err != nil && fault.KindOf(err) != fault.NotFound:
+		return fault.Wrapf(err, fault.KindOf(err), op, "get app %s/%s", a.Namespace, a.Name)
+	}
+	m := created.GetObjectMeta()
+	if err := r.store.Delete(ctx, created.GroupVersionKind(), m.Namespace, m.Name, m.ResourceVersion); err != nil && fault.KindOf(err) != fault.NotFound {
+		return fault.Wrapf(err, fault.KindOf(err), op, "delete %s/%s of a deleted app", created.GroupVersionKind().Kind, m.Name)
+	}
+	r.log.InfoContext(ctx, "deleted a part of a deleted app", "kind", created.GroupVersionKind().Kind, "namespace", m.Namespace, "name", m.Name, "app", a.Name)
+	return errAppGone
 }
 
 // readParts reads the stored object of each entry that is not a ref into objs, nil when absent.
