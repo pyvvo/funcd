@@ -11503,5 +11503,20 @@
     "dod_total": 16,
     "report": "docs/reviews/adr-0241-implementation-claude-opus-5-5.md",
     "notes": "pass; minors: MapOwner takes a store (adr), Match.Path not in Contracts (adr), Function IngressReady unnamed by ADR (adr), no unit test of syncRoute failure branches (model), two scenario clauses proven below e2e (model), stale pathPrefix test comment (model); merge waits on the funcd-functions release pin"
+  },
+  {
+    "date": "2026-10-18",
+    "issue": "1049",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 3,
+    "model_attributed": 2,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-1049-fix-claude-opus-5-5.md",
+    "notes": "pass; self-reviewed (no review agent, per the decider); m1 model: pushFromManifest keeps the entryFlag name so it merges cleanly with the ADR-0243 branch; m2 model: pushEntry also runs for a single-file push; m3 adr: funcdctl dev ranks --entry below main, push above it"
   }
 ]
