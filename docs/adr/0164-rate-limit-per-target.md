@@ -1,6 +1,7 @@
 # ADR-0164: Rate limit per resolved target, and a bucket table that never resets a drained bucket
 
 - **Status**: Implemented (2026-10-05)
+- **Superseded in part by**: [ADR-0240](0240-namespace-hosts.md) (2026-10-17) — Decision 2: on the `/function/<name>` form the key's namespace comes from the namespace host, else the header.
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged once)
 - **Deciders**: green-0-rabbit
 - **Tags**: edge, ingress, rate-limit, dos, data-plane

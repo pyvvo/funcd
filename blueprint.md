@@ -681,14 +681,21 @@ sequenceDiagram
 > `spec.defaultExposure` switches the front door: **`explicit`** ⇒ a request must match a Route or it is
 > `404`ed **without waking any sandbox** (default-deny ingress — the one place the blueprint's default-deny
 > posture now reaches the edge, alongside grants/egress/KV); **`implicit`** (the default, empty-normalized) ⇒
-> the `/function/<name>` path above still serves, for back-compat. `host` is the tenant discriminator in
-> `explicit` mode (Routes are never shared across namespaces); the per-route edge policy (TLS, limits, authn,
+> the `/function/<name>` path above still serves, for back-compat. `host` is the tenant discriminator
+> (Routes are never shared across namespaces); the per-route edge policy (TLS, limits, authn,
 > shaping — F74–F78) hangs off the same Route. Internal fn-to-fn invoke (ADR-0064 worker-node local API) is
 > never gated by exposure. **ADR-0176** applies these claim rules to every edge source, catalog ingress included:
 > the edge-route aggregator alone arbitrates one owner per `(host, path, method)` across sources, `HostRequired`
 > covers a catalog ingress in an `explicit` namespace, a host-less claim on `/function` or under `/function/` is
 > refused (`ReservedPath`) for every source so it cannot shadow the by-name form, and the loser is told (a Route
 > turns `NotReady`, a CatalogService reports `IngressReady=False`).
+>
+> **Namespace hosts (ADR-0240).** Every namespace except `default` answers on a host of its own,
+> `<namespace>.<baseDomain>` (`server.baseDomain`, default `localhost`): the aggregator gives each of its
+> host-less entries that host, and on it `/function/<name>` names the namespace (the header still picks it on
+> other hosts). A namespace reserves its host while it serves there: another namespace's claim gets
+> `HostReserved` and `default`'s host-less entries do not answer there. `HostRequired` and `ReservedPath` now
+> apply only to `default`'s host-less entries.
 
 #### Resource state machine
 

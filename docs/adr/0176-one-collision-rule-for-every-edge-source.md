@@ -1,6 +1,7 @@
 # ADR-0176: One collision rule for every edge source
 
 - **Status**: Implemented (2026-10-05)
+- **Superseded in part by**: [ADR-0240](0240-namespace-hosts.md) (2026-10-17) — Decisions 1, 2, 4 and 5: the aggregator gives a host-less entry its namespace host first, HostReserved joins the rule sequence, and HostRequired and ReservedPath apply to `default`'s host-less entries only.
 - **Date**: 2026-10-05 (judged twice by three lenses; held from publication)
 - **Deciders**: green-0-rabbit
 - **Tags**: edge, route, catalog, multi-tenancy

@@ -14,6 +14,7 @@
 - **Superseded in part by**: [ADR-0163](0163-retry-times-in-config.md) (2026-10-05) — Decision 6 RequeueAfter 2 s: now controller.referentPollInterval.
 - **Superseded in part by**: [ADR-0170](0170-owner-garbage-collector.md) (2026-10-05) — §5, rows 293 and 296, checklist, Consequences: the collector reclaims a deleted Site's Route and a Function's Revisions.
 - **Superseded in part by**: [ADR-0239](0239-site-runtime-configuration.md) (2026-10-15, amended 2026-10-16) — Decision 8: a third rule shape, the generated `config.json`; with `ingress.baseHref` the bundle rule's index is a generated copy of the index. Decision 2: a bundle's root `_runtime` entry is refused.
+- **Superseded in part by**: [ADR-0240](0240-namespace-hosts.md) (2026-10-17) — the `SiteIngress.Host` contract comment: an empty host is the namespace host (`default`: every host but reserved ones), and HostRequired applies only to `default`.
 - **Deciders**: green-0-rabbit
 - **Tags**: edge, static, blob, bucket, route, artifact, dx, data-platform
 - **Realizes**: [FEAT-0003/F103](../feat/0003-feat-data-platform.md) — declarative static web app (`Site`): the content half of F82.

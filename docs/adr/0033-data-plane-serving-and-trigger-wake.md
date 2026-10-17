@@ -1,6 +1,7 @@
 # ADR-0033: Data-plane serving + trigger-driven wake wiring (P-X)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0240](0240-namespace-hosts.md) (2026-10-17) — Decision 2 and its V1 note: on a namespace host the host names the namespace of `/function/<name>`, which closes the namespace-addressing workaround and open question.
 - **Date**: 2026-06-15 (**Implemented 2026-06-15** — review pass: the data-plane listener + `internal/dataplane`
   (path/store→activator) + the shared `activator.Wake` + the eventing `Waker` all land; the V1 exit criterion
   is proven end-to-end node-gated (`http-invokes-warm`, `http-wakes-cold`, `timer-wakes-cold`,
