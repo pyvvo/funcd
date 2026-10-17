@@ -1,6 +1,6 @@
 # ADR-0241: One exposure shape for every kind
 
-- **Status**: Reviewing (2026-10-17), implemented; Accepted (2026-10-17), after two judge rounds; the decider confirmed Decisions 4, 6 and the by-name default.
+- **Status**: Implemented (2026-10-17), review passed; Reviewing (2026-10-17); Accepted (2026-10-17), after two judge rounds; the decider confirmed Decisions 4, 6 and the by-name default.
 - **Date**: 2026-10-17
 - **Deciders**: green-0-rabbit
 - **Tags**: edge, routing, exposure, auth, function, site, catalog

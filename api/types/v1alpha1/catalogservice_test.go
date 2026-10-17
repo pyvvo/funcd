@@ -72,7 +72,7 @@ func TestCatalogServiceValidate_ingress(t *testing.T) {
 	goldCatalog := CatalogRef{Bucket: "lakehouse", Prefix: "gold"}
 	gold := FunctionBlob{Alias: "catalog", Bucket: "lakehouse", Prefix: "gold"}
 
-	// valid: a rooted pathPrefix (optionally with a host).
+	// valid: a rooted path (optionally with a host).
 	ok := catalogService("exposed", goldCatalog, gold)
 	ok.Spec.Ingress = &Ingress{Enabled: new(true), Path: "/catalog/lake", Host: "lake.example"}
 	if err := ok.Validate(); err != nil {
