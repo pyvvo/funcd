@@ -197,6 +197,8 @@ type config struct {
 
 	// data plane (ADR-0033): the function-invocation listener address.
 	dataPlaneAddr string
+	// baseDomain is server.baseDomain (ADR-0240); "" ⇒ "localhost".
+	baseDomain string
 
 	// TLS termination (ADR-0111, F74): when set, both listeners serve HTTPS via ServeTLS. nil ⇒
 	// plaintext (the back-compat default). The zero Mode defaults to selfsigned (stdlib, offline).
@@ -984,7 +986,7 @@ func (p *Platform) buildControlPlane() error {
 		func(o router.Owner) {
 			ctrl.Enqueue(controller.Request{GVK: o.Kind.GVK(), Namespace: o.Namespace, Name: o.Name})
 		},
-		p.logger)
+		c.baseDomain, p.logger)
 	ctrl.Register(v1.KindFunction.GVK(), fnReconciler)
 	p.fnReconciler = fnReconciler
 	// a held revision's wake or reclaim is written to its Revision's status (ADR-0190 Decision 5)
@@ -1404,7 +1406,7 @@ func (p *Platform) buildControlPlane() error {
 	// inner-than-RequestID (reads X-Request-Id); shaping is innermost (wraps the real response). The write stall
 	// bound is outermost, so every byte of every listener response passes it. Runtime order:
 	// WriteStall → Recover → RequestID → observ → limit → shape → dataplane.Handler.
-	dpCore := dataplane.Handler(c.store, act, p.edgeRouter, edgeEnforcer, limit.NewTargetLimiter(c.limits), staticHandler,
+	dpCore := dataplane.Handler(c.store, act, p.edgeRouter, c.baseDomain, edgeEnforcer, limit.NewTargetLimiter(c.limits), staticHandler,
 		c.invokeDefaultTimeout, p.logger)
 	edgeObserv, edgeShape := observ.Chain(c.observ, c.telemetry, p.logger), shape.Chain(c.shaping)
 	dpHandler := gateway.Chain(dpCore, gateway.WriteStall(gateway.WriteStallTimeout), gateway.Recover(p.logger),
@@ -1547,6 +1549,9 @@ func (p *Platform) Run(ctx context.Context) error {
 		closeCtx, cancelClose := context.WithTimeout(context.WithoutCancel(ctx), closeTimeout)
 		defer cancelClose()
 		return errors.Join(err, p.Shutdown(closeCtx))
+	}
+	if err := validBaseDomain(p.cfg.baseDomain, p.cfg.tlsSpec); err != nil {
+		return abort(err)
 	}
 
 	// Egress network isolation (ADR-0115, F80): program the default-deny + redirect substrate once, at

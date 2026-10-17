@@ -91,8 +91,8 @@ func limitedFrontDoor(t *testing.T, warm map[v1.ObjectName]string, entries []rou
 	act, err := activator.New(activator.Deps{Store: st, Endpoints: readyEndpoints{warm: warm, upstream: up.URL}, Scaler: scaler})
 	require.NoError(t, err)
 	rtr := router.New()
-	require.NoError(t, rtr.Program(context.Background(), entries))
-	return dataplane.Handler(st, act, rtr, nil, lim, nil, 0, nil), st, scaler, &gotPath
+	require.NoError(t, rtr.Program(context.Background(), entries, nil))
+	return dataplane.Handler(st, act, rtr, "", nil, lim, nil, 0, nil), st, scaler, &gotPath
 }
 
 func do(t *testing.T, h http.Handler, method, host, path string, nsHeader string) *http.Response {

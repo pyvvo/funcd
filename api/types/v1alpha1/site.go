@@ -82,8 +82,8 @@ type SiteBucket struct {
 // SiteIngress declares the Site-owned Route. The bundle is served at EffectivePath; Rules add sibling
 // prefixes.
 type SiteIngress struct {
-	// Host is the exact host match on the owned Route; "" matches any host (ADR-0110 requires a
-	// non-empty host in an `explicit`-mode namespace).
+	// Host is the exact host match on the owned Route. "" is the namespace host <namespace>.<baseDomain>, or for
+	// default any host but reserved ones (ADR-0240); an `explicit` default requires a non-empty host (ADR-0110).
 	Host string `json:"host,omitempty"`
 	// Path is the edge path the bundle is served at (ADR-0140). Empty ⇒ "/" when Host is set, else
 	// "/site/<metadata.name>" — so several host-less Sites share one listener without colliding. It

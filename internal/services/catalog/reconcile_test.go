@@ -675,7 +675,7 @@ type edgeHarness struct {
 func newEdgeHarness(t *testing.T, modes router.ModeFunc) *edgeHarness {
 	t.Helper()
 	h := &edgeHarness{st: store.New(storemem.New()), rtr: router.New()}
-	agg := router.NewAggregator(h.rtr, modes, func(o router.Owner) { h.notified = append(h.notified, o) }, nil)
+	agg := router.NewAggregator(h.rtr, modes, func(o router.Owner) { h.notified = append(h.notified, o) }, "", nil)
 	var err error
 	h.routes, err = route.NewReconciler(route.Deps{Store: h.st, Routes: agg})
 	require.NoError(t, err)

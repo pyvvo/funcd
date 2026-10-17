@@ -388,8 +388,11 @@ func TestScenarioE2EPathMountedSites(t *testing.T) {
 	base := "http://" + p.DataPlaneAddr()
 	get := func(path string) (int, string) {
 		t.Helper()
-		// NO Host header: the mounts are reached by path alone.
-		resp, gerr := http.Get(base + path) //nolint:noctx // test client
+		// The mounts are reached by path alone, on the namespace host (ADR-0240).
+		req, gerr := http.NewRequest(http.MethodGet, base+path, nil) //nolint:noctx // test client
+		require.NoError(t, gerr)
+		req.Host = ns + ".localhost"
+		resp, gerr := http.DefaultClient.Do(req)
 		require.NoError(t, gerr)
 		body, _ := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()

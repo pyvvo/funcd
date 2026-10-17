@@ -32,7 +32,7 @@ func setupAggregator(t *testing.T, notify router.NotifyFunc) (context.Context, s
 			return "", err
 		}
 		return obj.(*v1.Namespace).Spec.DefaultExposure, nil
-	}, notify, nil)
+	}, notify, "", nil)
 	rec, err := route.NewReconciler(route.Deps{Store: st, Routes: agg})
 	require.NoError(t, err)
 	return context.Background(), st, rtr, agg, rec
@@ -197,11 +197,22 @@ func TestScenarioCrossNamespaceHostIsolation(t *testing.T) {
 	mb, _ := rtr.Resolve("b.example.com", "/orders", "GET")
 	require.Equal(t, v1.NamespaceName("team-b"), mb.Namespace, "namespaces cannot shadow each other")
 
-	// HostRequired: an explicit-mode route with empty host is NotReady.
+	// An explicit-mode route with an empty host is served on its namespace host (ADR-0240 Decision 5).
 	seedFunction(t, st, "team-a", "hostless-fn")
 	seedRoute(t, st, "team-a", "hostless", "", "/hostless", "hostless-fn")
 	reconcile(t, rec, "team-a", "hostless")
-	s, reason := readyCond(t, st, "team-a", "hostless")
+	s, _ := readyCond(t, st, "team-a", "hostless")
+	require.Equal(t, v1.ConditionTrue, s)
+	mh, ok := rtr.Resolve("team-a.localhost", "/hostless", "GET")
+	require.True(t, ok)
+	require.Equal(t, v1.NamespaceName("team-a"), mh.Namespace)
+
+	// HostRequired: an explicit default's route with an empty host is NotReady.
+	seedNamespace(t, st, "default", v1.ExposureExplicit)
+	seedFunction(t, st, "default", "hostless-fn")
+	seedRoute(t, st, "default", "hostless", "", "/hostless", "hostless-fn")
+	reconcile(t, rec, "default", "hostless")
+	s, reason := readyCond(t, st, "default", "hostless")
 	require.Equal(t, v1.ConditionFalse, s)
 	require.Equal(t, "HostRequired", reason)
 

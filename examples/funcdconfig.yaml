@@ -19,6 +19,7 @@ kind: FuncdConfig                 # optional
 server:
   listenAddr: 127.0.0.1:8080      # control-plane API. default: 0.0.0.0:8080
   dataPlaneAddr: 127.0.0.1:8081   # function-invoke ingress. default: 127.0.0.1:0 (ephemeral)
+  # baseDomain: localhost         # namespace hosts <namespace>.<baseDomain> (ADR-0240). default: localhost
   # tls:                          # HTTPS on both listeners (ADR-0111)
   #   enabled: false              # default: false (plaintext)
   #   mode: selfsigned            # selfsigned | provided | acme. default: selfsigned

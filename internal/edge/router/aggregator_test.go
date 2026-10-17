@@ -23,7 +23,7 @@ type recordingProgrammer struct {
 	failErr   error
 }
 
-func (p *recordingProgrammer) Program(_ context.Context, entries []router.Entry) error {
+func (p *recordingProgrammer) Program(_ context.Context, entries []router.Entry, _ []string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.failNext > 0 {
@@ -88,7 +88,7 @@ func countRules(entries []router.Entry) int {
 func TestAggregator_RoutesCoexist(t *testing.T) {
 	t.Parallel()
 	p := &recordingProgrammer{}
-	a := router.NewAggregator(p, nil, nil, nil)
+	a := router.NewAggregator(p, nil, nil, "", nil)
 
 	set(t, a, "routes", fnEntry("default", "echo", "/echo"))
 	set(t, a, "catalog/default/lake", upstreamEntry("default", "lake", "/catalog/lake", "http://127.0.0.1:9999"))
@@ -101,7 +101,7 @@ func TestAggregator_RoutesCoexist(t *testing.T) {
 func TestAggregator_SourceIsolation(t *testing.T) {
 	t.Parallel()
 	p := &recordingProgrammer{}
-	a := router.NewAggregator(p, nil, nil, nil)
+	a := router.NewAggregator(p, nil, nil, "", nil)
 
 	set(t, a, "routes", fnEntry("default", "echo", "/echo"))
 	set(t, a, "catalog/default/lake", upstreamEntry("default", "lake", "/catalog/lake", "http://up"))
@@ -115,7 +115,7 @@ func TestAggregator_SourceIsolation(t *testing.T) {
 func TestAggregator_Remove(t *testing.T) {
 	t.Parallel()
 	p := &recordingProgrammer{}
-	a := router.NewAggregator(p, nil, nil, nil)
+	a := router.NewAggregator(p, nil, nil, "", nil)
 
 	set(t, a, "routes", fnEntry("default", "echo", "/echo"))
 	set(t, a, "catalog/default/lake", upstreamEntry("default", "lake", "/catalog/lake", "http://up"))
@@ -133,7 +133,7 @@ func TestAggregator_Remove(t *testing.T) {
 func TestAggregator_ConcurrentSafe(t *testing.T) {
 	t.Parallel()
 	p := &recordingProgrammer{}
-	a := router.NewAggregator(p, nil, nil, nil)
+	a := router.NewAggregator(p, nil, nil, "", nil)
 
 	set(t, a, "routes")
 	const n = 32
@@ -157,7 +157,7 @@ func TestAggregator_ConcurrentSafe(t *testing.T) {
 func TestAggregator_ProgramFailureAtomic(t *testing.T) {
 	t.Parallel()
 	p := &recordingProgrammer{failNext: 1, failErr: fmt.Errorf("router down")}
-	a := router.NewAggregator(p, nil, nil, nil)
+	a := router.NewAggregator(p, nil, nil, "", nil)
 	ctx := context.Background()
 
 	_, err := a.Set(ctx, "routes", []router.Entry{fnEntry("default", "echo", "/echo")})
@@ -174,7 +174,7 @@ func TestAggregator_ProgramFailureAtomic(t *testing.T) {
 func TestAggregator_Deterministic(t *testing.T) {
 	t.Parallel()
 	p := &recordingProgrammer{}
-	a := router.NewAggregator(p, nil, nil, nil)
+	a := router.NewAggregator(p, nil, nil, "", nil)
 
 	set(t, a, "catalog/default/lake", upstreamEntry("default", "lake", "/catalog/lake", "http://up"))
 	set(t, a, "routes", fnEntry("default", "echo", "/echo"))
@@ -189,7 +189,7 @@ func TestAggregator_Deterministic(t *testing.T) {
 // TestAggregator_EmptySourceRejected confirms an empty source key is rejected (a wiring-bug guard).
 func TestAggregator_EmptySourceRejected(t *testing.T) {
 	t.Parallel()
-	a := router.NewAggregator(&recordingProgrammer{}, nil, nil, nil)
+	a := router.NewAggregator(&recordingProgrammer{}, nil, nil, "", nil)
 	_, err := a.Set(context.Background(), "", []router.Entry{fnEntry("default", "echo", "/echo")})
 	require.Error(t, err)
 }
@@ -201,7 +201,7 @@ func TestRouter_ResolvesUpstream(t *testing.T) {
 	rtr := router.New()
 	require.NoError(t, rtr.Program(context.Background(), []router.Entry{
 		upstreamEntry("default", "lake", "/catalog/lake", "http://10.63.0.1:34517"),
-	}))
+	}, nil))
 	m, ok := rtr.Resolve("any", "/catalog/lake/db", "POST")
 	require.True(t, ok, "the upstream entry matches its prefix subtree")
 	require.Equal(t, "http://10.63.0.1:34517", m.Upstream, "the match carries the node-private upstream")
@@ -253,7 +253,7 @@ func TestAggregator_ValidatesBeforeCommit(t *testing.T) {
 	var modeErr error
 	a := router.NewAggregator(p, func(context.Context, v1.NamespaceName) (v1.ExposureMode, error) {
 		return v1.ExposureImplicit, modeErr
-	}, nil, nil)
+	}, nil, "", nil)
 	set(t, a, "routes", fnEntry("default", "echo", "/echo"))
 	calls := p.calls()
 
@@ -286,7 +286,7 @@ func TestScenario_same_name_tie_route_first(t *testing.T) {
 	t.Parallel()
 	rtr := router.New()
 	n := &notified{}
-	a := router.NewAggregator(rtr, nil, n.notify, nil)
+	a := router.NewAggregator(rtr, nil, n.notify, "", nil)
 	cat := withHost(upstreamEntry("a", "x", "/q", "http://cat"), "h")
 	rt := withHost(fnEntry("a", "x", "/q"), "h")
 
@@ -303,36 +303,36 @@ func TestScenario_same_name_tie_route_first(t *testing.T) {
 	require.Empty(t, m.Upstream)
 }
 
-// TestScenario_reserved_prefix_refused covers scenario: reserved-prefix-refused — a host-less claim under
-// /function/ (any source, any mode, any spelling of the path) and a host-less catalog at / are refused; with no
-// host-less / Route, nothing in the edge table matches /function/f, so the data plane serves it by name.
+// TestScenario_reserved_prefix_refused covers scenario: reserved-prefix-refused — a claim of default's that stays
+// host-less, under /function/ (any source, any mode, any spelling of the path), and a host-less catalog at / are
+// refused; with no host-less / Route, nothing in the edge table matches /function/f, so the data plane serves it by
+// name. A non-default namespace's host-less claim is on its namespace host, where /function/ is its own (ADR-0240).
 func TestScenario_reserved_prefix_refused(t *testing.T) {
 	t.Parallel()
-	rtr := router.New()
-	a := router.NewAggregator(rtr, modesOf(map[v1.NamespaceName]v1.ExposureMode{"ex": v1.ExposureExplicit}), nil, nil)
+	for _, mode := range []v1.ExposureMode{v1.ExposureImplicit, v1.ExposureExplicit} {
+		t.Run(string(mode), func(t *testing.T) {
+			t.Parallel()
+			rtr := router.New()
+			a := router.NewAggregator(rtr, modesOf(map[v1.NamespaceName]v1.ExposureMode{"default": mode}), nil, "", nil)
 
-	v := set(t, a, "routes", fnEntry("im", "rf", "/function/f"), withHost(fnEntry("im", "rh", "/function/g"), "h"))
-	require.Equal(t, "ReservedPath", v[0].Reason, "a host-less Route under /function/ is refused")
-	require.Empty(t, v[1].Reason, "with a host it is allowed")
+			v := set(t, a, "routes", fnEntry("default", "rf", "/function/f"), withHost(fnEntry("default", "rh", "/function/g"), "h"),
+				fnEntry("im", "rn", "/function/n"))
+			require.Equal(t, "ReservedPath", v[0].Reason, "a host-less Route of default under /function/ is refused")
+			require.Empty(t, v[1].Reason, "with a host it is allowed")
+			require.Empty(t, v[2].Reason, "im's claim is on im.localhost")
 
-	for i, c := range []struct{ ns, path string }{
-		{"im", "/function/f"},
-		{"im", "/function"},
-		{"im", "/function/"},
-		{"im", "//function/f"},
-		{"im", "/"},
-		{"ex", "/function/f"},
-		{"ex", "/"},
-	} {
-		name := fmt.Sprintf("c%d", i)
-		v := set(t, a, "catalog/"+c.ns+"/"+name, upstreamEntry(c.ns, name, c.path, "http://up"))
-		require.Equal(t, "ReservedPath", v[0].Reason, "host-less catalog at %q in %q", c.path, c.ns)
+			for i, p := range []string{"/function/f", "/function", "/function/", "//function/f", "/"} {
+				name := fmt.Sprintf("c%d", i)
+				v := set(t, a, "catalog/default/"+name, upstreamEntry("default", name, p, "http://up"))
+				require.Equal(t, "ReservedPath", v[0].Reason, "host-less catalog at %q", p)
+			}
+			require.Empty(t, set(t, a, "catalog/default/root", withHost(upstreamEntry("default", "root", "/", "http://up"), "h"))[0].Reason,
+				"a catalog at / with a host is allowed")
+
+			_, ok := rtr.Resolve("any", "/function/f", "POST")
+			require.False(t, ok, "no edge row matches, so POST /function/f reaches Function f by name")
+		})
 	}
-	require.Empty(t, set(t, a, "catalog/im/root", withHost(upstreamEntry("im", "root", "/", "http://up"), "h"))[0].Reason,
-		"a catalog at / with a host is allowed")
-
-	_, ok := rtr.Resolve("any", "/function/f", "POST")
-	require.False(t, ok, "no edge row matches, so POST /function/f reaches Function f by name")
 }
 
 // TestScenario_catalog_vs_catalog_handover covers scenario: catalog-vs-catalog-handover — when the winning
@@ -341,7 +341,7 @@ func TestScenario_catalog_vs_catalog_handover(t *testing.T) {
 	t.Parallel()
 	rtr := router.New()
 	n := &notified{}
-	a := router.NewAggregator(rtr, nil, n.notify, nil)
+	a := router.NewAggregator(rtr, nil, n.notify, "", nil)
 	set(t, a, "routes")
 	ca := withHost(upstreamEntry("a", "c", "/q", "http://a"), "h")
 	cb := withHost(upstreamEntry("b", "c", "/q", "http://b"), "h")
@@ -366,7 +366,7 @@ func restartClaims() map[string][]router.Entry {
 		withHost(fnEntry("a1", "r", "/q"), "h1"),
 		withHost(fnEntry("b2", "r", "/q"), "h2"),
 		withHost(fnEntry("a3", "x", "/q"), "h3"),
-		fnEntry("im", "rf", "/function/f"),
+		fnEntry("default", "rf", "/function/f"),
 	}}
 	for _, e := range []router.Entry{
 		withHost(upstreamEntry("b1", "c", "/q", "http://b1"), "h1"),
@@ -374,9 +374,9 @@ func restartClaims() map[string][]router.Entry {
 		withHost(upstreamEntry("a3", "x", "/q", "http://a3"), "h3"),
 		withHost(upstreamEntry("a4", "c", "/q", "http://a4"), "h4"),
 		withHost(upstreamEntry("b4", "c", "/q", "http://b4"), "h4"),
-		upstreamEntry("ex", "c", "/q", "http://ex"),
-		upstreamEntry("im", "cf", "/function/f", "http://cf"),
-		upstreamEntry("im", "root", "/", "http://root"),
+		upstreamEntry("default", "c", "/q", "http://ex"),
+		upstreamEntry("default", "cf", "/function/f", "http://cf"),
+		upstreamEntry("default", "root", "/", "http://root"),
 	} {
 		src["catalog/"+string(e.Owner.Namespace)+"/"+string(e.Owner.Name)] = []router.Entry{e}
 	}
@@ -389,7 +389,7 @@ func boot(t *testing.T, claims map[string][]router.Entry, order []string) (map[r
 	t.Helper()
 	p := &recordingProgrammer{}
 	n := &notified{}
-	a := router.NewAggregator(p, modesOf(map[v1.NamespaceName]v1.ExposureMode{"ex": v1.ExposureExplicit}), n.notify, nil)
+	a := router.NewAggregator(p, modesOf(map[v1.NamespaceName]v1.ExposureMode{"default": v1.ExposureExplicit}), n.notify, "", nil)
 	routesSet, held := false, false
 	for _, src := range order {
 		v := set(t, a, src, claims[src]...)
@@ -452,22 +452,22 @@ func TestScenario_verdict_restart_stable(t *testing.T) {
 	require.Equal(t, "RouteConflict", reason(v1.KindCatalogService, "a3", "x"))
 	require.Empty(t, reason(v1.KindCatalogService, "a4", "c"))
 	require.Equal(t, "RouteConflict", reason(v1.KindCatalogService, "b4", "c"))
-	require.Equal(t, "HostRequired", reason(v1.KindCatalogService, "ex", "c"))
-	require.Equal(t, "ReservedPath", reason(v1.KindRoute, "im", "rf"))
-	require.Equal(t, "ReservedPath", reason(v1.KindCatalogService, "im", "cf"))
-	require.Equal(t, "ReservedPath", reason(v1.KindCatalogService, "im", "root"))
+	require.Equal(t, "HostRequired", reason(v1.KindCatalogService, "default", "c"))
+	require.Equal(t, "ReservedPath", reason(v1.KindRoute, "default", "rf"))
+	require.Equal(t, "ReservedPath", reason(v1.KindCatalogService, "default", "cf"))
+	require.Equal(t, "ReservedPath", reason(v1.KindCatalogService, "default", "root"))
 }
 
 // "/api" and "/api/" Prefix claims serve the same subtree, so two namespaces claiming them conflict.
 func TestIssue701_TrailingSlashPrefixClaimsSamePath(t *testing.T) {
 	t.Parallel()
 	rtr := router.New()
-	a := router.NewAggregator(rtr, nil, nil, nil)
+	a := router.NewAggregator(rtr, nil, nil, "", nil)
 
-	v := set(t, a, "routes", fnEntry("a", "x", "/api"), fnEntry("b", "y", "/api/"))
+	v := set(t, a, "routes", withHost(fnEntry("a", "x", "/api"), "h"), withHost(fnEntry("b", "y", "/api/"), "h"))
 	require.Empty(t, v[0].Reason, "a/x wins the lexical tie-break")
 	require.Equal(t, "RouteConflict", v[1].Reason, "/api/ claims the same subtree as /api")
-	m, ok := rtr.Resolve("any", "/api/users", "GET")
+	m, ok := rtr.Resolve("h", "/api/users", "GET")
 	require.True(t, ok)
 	require.Equal(t, v1.ObjectName("x"), m.Function)
 }
@@ -480,7 +480,7 @@ func TestAggregator_HostSpellingsAreOneClaim(t *testing.T) {
 		t.Run(spelling, func(t *testing.T) {
 			t.Parallel()
 			rtr := router.New()
-			a := router.NewAggregator(rtr, modesOf(map[v1.NamespaceName]v1.ExposureMode{"a": v1.ExposureExplicit, "b": v1.ExposureExplicit}), nil, nil)
+			a := router.NewAggregator(rtr, modesOf(map[v1.NamespaceName]v1.ExposureMode{"a": v1.ExposureExplicit, "b": v1.ExposureExplicit}), nil, "", nil)
 
 			v := set(t, a, "routes", withHost(fnEntry("a", "shop", "/"), "shop.test"), withHost(fnEntry("b", "evil", "/"), spelling))
 			require.Empty(t, v[0].Reason, "the owner keeps its claim")

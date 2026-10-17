@@ -44,6 +44,9 @@ type Config struct {
 	Server     struct {
 		ListenAddr    string `json:"listenAddr,omitempty" env:"FUNCD_LISTEN_ADDR"`
 		DataPlaneAddr string `json:"dataPlaneAddr,omitempty" env:"FUNCD_DATA_PLANE_ADDR"`
+		// BaseDomain is the domain under which every namespace but default answers, on <namespace>.<baseDomain>
+		// (ADR-0240). funcd validates it at start.
+		BaseDomain string `json:"baseDomain,omitempty" env:"FUNCD_BASE_DOMAIN"`
 		// TLS termination (ADR-0111, F74). When Enabled, both listeners serve HTTPS via ServeTLS.
 		// Mode defaults to selfsigned (stdlib, offline). Empty/Enabled=false ⇒ plaintext (default).
 		TLS struct {
@@ -423,6 +426,7 @@ func defaults() Config {
 	var c Config
 	c.Server.ListenAddr = "0.0.0.0:8080"
 	c.Server.DataPlaneAddr = "127.0.0.1:0"
+	c.Server.BaseDomain = "localhost"
 	c.Server.Limits.MaxKeys = 4096
 	c.Server.ShutdownTimeout = "15s"
 	c.Server.Network.WorkerSyncInterval = "2s"

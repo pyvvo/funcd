@@ -378,6 +378,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 		funcd.WithInvokeSocketDir(filepath.Join(cfg.Storage.DataDir, "invoke")),
 		funcd.WithListenAddr(cfg.Server.ListenAddr),
 		funcd.WithDataPlaneAddr(cfg.Server.DataPlaneAddr),
+		funcd.WithBaseDomain(cfg.Server.BaseDomain),
 		funcd.WithLogger(root),
 		funcd.WithBlobStoreURL(blobStoreURL(cfg)), // ADR-0222: a BackupSchedule's target is compared with it
 	)

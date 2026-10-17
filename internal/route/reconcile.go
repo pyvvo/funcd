@@ -1,7 +1,7 @@
 // Package route reconciles the Route resource (ADR-0110, F79): it validates each Route's
 // backends, Sets every backend-valid Route on the edge aggregator, which applies the claim rules
-// (HostRequired, ReservedPath, RouteConflict) across every edge source (ADR-0176), and sets
-// Ready/NotReady from the aggregator's verdicts.
+// (HostRequired, ReservedPath, HostReserved, RouteConflict) across every edge source (ADR-0176, ADR-0240), and sets
+// Ready/NotReady and status.host from the aggregator's verdicts.
 package route
 
 import (
@@ -89,6 +89,7 @@ type evalResult struct {
 	backendMissing bool
 	reason         string
 	message        string
+	host           string // the claimed host of a Route with a verdict (ADR-0240 Decision 7)
 }
 
 // Reconcile evaluates the whole Route set, Sets the backend-valid Routes on the edge aggregator, and
@@ -104,7 +105,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		return controller.Result{}, fault.Wrapf(err, fault.KindOf(err), op, "program edge router")
 	}
 	for _, v := range verdicts {
-		results[routeKey{v.Owner.Namespace, v.Owner.Name}] = evalResult{ready: v.Reason == "", reason: v.Reason, message: v.Message}
+		results[routeKey{v.Owner.Namespace, v.Owner.Name}] = evalResult{ready: v.Reason == "", reason: v.Reason, message: v.Message, host: v.Host}
 	}
 	for _, rt := range routes {
 		if !applyStatus(rt, results[routeKey{rt.Namespace, rt.Name}]) {
@@ -190,10 +191,11 @@ func (r *Reconciler) firstBackendProblem(ctx context.Context, rt *v1.Route) (rea
 	return "", "", nil
 }
 
-// applyStatus sets rt's Ready condition and phase from res and reports whether they changed.
+// applyStatus sets rt's Ready condition, phase and host from res and reports whether they changed.
 func applyStatus(rt *v1.Route, res evalResult) bool {
 	prev, had := rt.Status.Conditions.Get(condReady)
-	prevPhase := rt.Status.Phase
+	prevPhase, prevHost := rt.Status.Phase, rt.Status.Host
+	rt.Status.Host = res.host
 	if res.ready {
 		rt.Status.Phase = v1.PhaseReady
 		rt.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue, Reason: "Programmed", ObservedGeneration: rt.Generation})
@@ -202,7 +204,7 @@ func applyStatus(rt *v1.Route, res evalResult) bool {
 		rt.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: res.reason, Message: res.message, ObservedGeneration: rt.Generation})
 	}
 	cur, _ := rt.Status.Conditions.Get(condReady)
-	return !had || cur != prev || rt.Status.Phase != prevPhase
+	return !had || cur != prev || rt.Status.Phase != prevPhase || rt.Status.Host != prevHost
 }
 
 // compile turns a backend-valid Route into a router.Entry.

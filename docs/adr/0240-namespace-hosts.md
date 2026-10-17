@@ -1,6 +1,6 @@
 # ADR-0240: Namespace hosts
 
-- **Status**: Accepted (2026-10-17), after two judge rounds; the decider confirmed the rules of Decisions 1, 4 and 6.
+- **Status**: Implemented (2026-10-17, review passed). Accepted (2026-10-17), after two judge rounds; the decider confirmed the rules of Decisions 1, 4 and 6.
 - **Date**: 2026-10-17
 - **Deciders**: green-0-rabbit
 - **Tags**: edge, routing, namespace, multi-tenancy

@@ -52,12 +52,12 @@ func TestScenarioDataPlaneServesUpstreamBackend(t *testing.T) {
 		Namespace: "default",
 		Auth:      v1.AuthOpen,
 		Rules:     []router.CompiledRule{{Path: "/catalog/lake", Upstream: up.URL}},
-	}}))
+	}}, nil))
 
 	st := store.New(memory.New())
 	act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
 	require.NoError(t, err)
-	h := dataplane.Handler(st, act, rtr, nil, nil, nil, 0, nil)
+	h := dataplane.Handler(st, act, rtr, "", nil, nil, nil, 0, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/catalog/lake/db", nil))
@@ -75,11 +75,11 @@ func TestScenarioDataPlaneUpstreamUnreachable(t *testing.T) {
 		Namespace: "default",
 		Auth:      v1.AuthOpen,
 		Rules:     []router.CompiledRule{{Path: "/catalog/lake", Upstream: "http://127.0.0.1:1"}}, // nothing listens
-	}}))
+	}}, nil))
 	st := store.New(memory.New())
 	act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
 	require.NoError(t, err)
-	h := dataplane.Handler(st, act, rtr, nil, nil, nil, 0, nil)
+	h := dataplane.Handler(st, act, rtr, "", nil, nil, nil, 0, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/catalog/lake", nil))
@@ -108,11 +108,11 @@ func TestIssue417_UpstreamRouteKeepsEdgeHeadersAfter1xx(t *testing.T) {
 		Namespace: "default",
 		Auth:      v1.AuthOpen,
 		Rules:     []router.CompiledRule{{Path: "/catalog/lake", Upstream: up.URL}},
-	}}))
+	}}, nil))
 	st := store.New(memory.New())
 	act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
 	require.NoError(t, err)
-	edge := httptest.NewServer(gateway.Chain(dataplane.Handler(st, act, rtr, nil, nil, nil, 0, nil),
+	edge := httptest.NewServer(gateway.Chain(dataplane.Handler(st, act, rtr, "", nil, nil, nil, 0, nil),
 		gateway.RequestID, shape.Chain(shape.Config{CORS: &shape.CORS{AllowOrigins: []string{"*"}}})))
 	t.Cleanup(edge.Close)
 	client := &http.Client{Transport: &http.Transport{}}
@@ -187,12 +187,12 @@ func TestIssue720_EdgeHeadersNotDuplicated(t *testing.T) {
 		Namespace: "default",
 		Auth:      v1.AuthOpen,
 		Rules:     []router.CompiledRule{{Path: "/catalog/lake", Upstream: up.URL}},
-	}}))
+	}}, nil))
 	st := store.New(memory.New())
 	act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: up.URL}, Scaler: noScaler{}})
 	require.NoError(t, err)
 	seedFunction(t, st, "f")
-	edge := httptest.NewServer(gateway.Chain(dataplane.Handler(st, act, rtr, nil, nil, nil, 0, nil),
+	edge := httptest.NewServer(gateway.Chain(dataplane.Handler(st, act, rtr, "", nil, nil, nil, 0, nil),
 		gateway.RequestID, shape.Chain(shape.Config{CORS: &shape.CORS{AllowOrigins: []string{"https://app.test"}}})))
 	t.Cleanup(edge.Close)
 	client := &http.Client{Transport: &http.Transport{}}
@@ -263,12 +263,12 @@ func TestIssue440_UpstreamErrorsLogThroughSlog(t *testing.T) {
 				Namespace: "default",
 				Auth:      v1.AuthOpen,
 				Rules:     []router.CompiledRule{{Path: "/catalog/lake", Upstream: tc.upstream}},
-			}}))
+			}}, nil))
 			st := store.New(memory.New())
 			act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
 			require.NoError(t, err)
 			var logs bytes.Buffer
-			h := dataplane.Handler(st, act, rtr, nil, nil, nil, 0, slog.New(slog.NewTextHandler(&logs, nil)))
+			h := dataplane.Handler(st, act, rtr, "", nil, nil, nil, 0, slog.New(slog.NewTextHandler(&logs, nil)))
 
 			h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/catalog/lake/db", nil))
 
@@ -302,11 +302,11 @@ func TestIssue564_DataPlaneUpstreamSurvivesDefaultTransportCloseIdle(t *testing.
 		Namespace: "default",
 		Auth:      v1.AuthOpen,
 		Rules:     []router.CompiledRule{{Path: "/catalog/lake", Upstream: up.URL}},
-	}}))
+	}}, nil))
 	st := store.New(memory.New())
 	act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
 	require.NoError(t, err)
-	h := dataplane.Handler(st, act, rtr, nil, nil, nil, 0, nil)
+	h := dataplane.Handler(st, act, rtr, "", nil, nil, nil, 0, nil)
 	get := func() {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/catalog/lake/db", nil))
@@ -344,12 +344,12 @@ func TestUpstreamFailureProblemHidesUpstreamAddress(t *testing.T) {
 				Namespace: "default",
 				Auth:      v1.AuthOpen,
 				Rules:     []router.CompiledRule{{Path: "/catalog/lake", Upstream: tc.upstream}},
-			}}))
+			}}, nil))
 			st := store.New(memory.New())
 			act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
 			require.NoError(t, err)
 			var logs bytes.Buffer
-			h := dataplane.Handler(st, act, rtr, nil, nil, nil, 0, slog.New(slog.NewTextHandler(&logs, nil)))
+			h := dataplane.Handler(st, act, rtr, "", nil, nil, nil, 0, slog.New(slog.NewTextHandler(&logs, nil)))
 
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/catalog/lake/db", nil))
@@ -377,12 +377,12 @@ func TestScenarioEdgeChunkedBodyOverCap(t *testing.T) {
 		Namespace: "default",
 		Auth:      v1.AuthOpen,
 		Rules:     []router.CompiledRule{{Path: "/catalog/lake", Upstream: up.URL}},
-	}}))
+	}}, nil))
 	st := store.New(memory.New())
 	seedFunction(t, st, "echo")
 	act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: up.URL}, Scaler: noScaler{}})
 	require.NoError(t, err)
-	h := limit.Chain(limit.Config{MaxBodyBytes: 1024})(dataplane.Handler(st, act, rtr, nil, nil, nil, 0, nil))
+	h := limit.Chain(limit.Config{MaxBodyBytes: 1024})(dataplane.Handler(st, act, rtr, "", nil, nil, nil, 0, nil))
 
 	for _, tc := range []struct {
 		name, path string
@@ -419,11 +419,11 @@ func TestUpstreamRouteNotBoundByInvokeDeadline(t *testing.T) {
 		Namespace: "default",
 		Auth:      v1.AuthOpen,
 		Rules:     []router.CompiledRule{{Path: "/catalog/lake", Upstream: up.URL}},
-	}}))
+	}}, nil))
 	st := store.New(memory.New())
 	act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
 	require.NoError(t, err)
-	h := dataplane.Handler(st, act, rtr, nil, nil, nil, time.Second, nil)
+	h := dataplane.Handler(st, act, rtr, "", nil, nil, nil, time.Second, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/catalog/lake", nil))
@@ -469,11 +469,11 @@ func TestScenarioEdgeUpstreamBurstReusesConnections(t *testing.T) {
 		Namespace: "default",
 		Auth:      v1.AuthOpen,
 		Rules:     []router.CompiledRule{{Path: "/catalog/lake", Upstream: up.URL}},
-	}}))
+	}}, nil))
 	st := store.New(memory.New())
 	act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
 	require.NoError(t, err)
-	h := dataplane.Handler(st, act, rtr, nil, nil, nil, 0, nil)
+	h := dataplane.Handler(st, act, rtr, "", nil, nil, nil, 0, nil)
 
 	for burst := range bursts {
 		var wg sync.WaitGroup

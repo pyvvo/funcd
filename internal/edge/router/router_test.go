@@ -13,7 +13,7 @@ import (
 func prog(t *testing.T, entries ...router.Entry) router.Router {
 	t.Helper()
 	r := router.New()
-	require.NoError(t, r.Program(context.Background(), entries))
+	require.NoError(t, r.Program(context.Background(), entries, nil))
 	return r
 }
 
@@ -125,7 +125,7 @@ func TestScenarioResolveMissAfterReplaceAll(t *testing.T) {
 	r := prog(t, router.Entry{Namespace: "default", Rules: []router.CompiledRule{rule("/x", false, "x-fn")}})
 	_, ok := r.Resolve("any", "/x", "GET")
 	require.True(t, ok)
-	require.NoError(t, r.Program(context.Background(), nil)) // replace-all with empty
+	require.NoError(t, r.Program(context.Background(), nil, nil)) // replace-all with empty
 	_, ok = r.Resolve("any", "/x", "GET")
 	require.False(t, ok, "a replace-all with the route removed must stop resolving it")
 }

@@ -3215,6 +3215,8 @@ components:
           type:
             - array
             - "null"
+        host:
+          type: string
         observedGeneration:
           format: int64
           type: integer

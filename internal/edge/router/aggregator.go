@@ -7,7 +7,6 @@ import (
 	"maps"
 	"path"
 	"sort"
-	"strings"
 	"sync"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -17,7 +16,7 @@ import (
 // Programmer is the replace-all sink the Aggregator drives — the edge Router's Program. Router
 // satisfies it; the aggregator depends only on this narrow method.
 type Programmer interface {
-	Program(ctx context.Context, entries []Entry) error
+	Program(ctx context.Context, entries []Entry, reserved []string) error
 }
 
 // Owner names the object an Entry belongs to (ADR-0176): claims are arbitrated and verdicts reported per owner.
@@ -32,6 +31,8 @@ type Verdict struct {
 	Owner   Owner
 	Reason  string
 	Message string
+	// Host is the host the entry claims, in canonicalHost's spelling; "" is any host but reserved ones (ADR-0240).
+	Host string
 }
 
 // ModeFunc reads a namespace's exposure mode; a NotFound error means implicit.
@@ -55,6 +56,7 @@ const (
 	reasonHostRequired  = "HostRequired"
 	reasonRouteConflict = "RouteConflict"
 	reasonEdgeStarting  = "EdgeStarting"
+	reasonHostReserved  = "HostReserved"
 )
 
 // routeSource is the Route reconciler's source key: until it has Set once, no entry of a later kind rank is
@@ -84,6 +86,7 @@ type Aggregator struct {
 	p      Programmer
 	modes  ModeFunc
 	notify NotifyFunc
+	base   string
 	log    *slog.Logger
 
 	mu        sync.Mutex
@@ -93,8 +96,9 @@ type Aggregator struct {
 }
 
 // NewAggregator builds an Aggregator over the edge Router's replace-all Program. A nil modes treats every
-// namespace as implicit; a nil notify notifies no one; a nil log is slog.Default.
-func NewAggregator(p Programmer, modes ModeFunc, notify NotifyFunc, log *slog.Logger) *Aggregator {
+// namespace as implicit; a nil notify notifies no one; a baseDomain of "" means "localhost" (ADR-0240); a nil
+// log is slog.Default.
+func NewAggregator(p Programmer, modes ModeFunc, notify NotifyFunc, baseDomain string, log *slog.Logger) *Aggregator {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -102,6 +106,7 @@ func NewAggregator(p Programmer, modes ModeFunc, notify NotifyFunc, log *slog.Lo
 		p:        p,
 		modes:    modes,
 		notify:   notify,
+		base:     baseDomain,
 		log:      log.With("component", "edge.router.aggregator"),
 		sources:  make(map[string][]Entry),
 		verdicts: make(map[Owner]Verdict),
@@ -121,7 +126,10 @@ func (a *Aggregator) Set(ctx context.Context, source string, entries []Entry) ([
 		if err := validOwner(e); err != nil {
 			return nil, fault.Invalidf(op, "source %q entry %d: %s", source, i, err)
 		}
-		e.Host = canonicalHost(e.Host)
+		// ADR-0240 Decision 3: a host-less entry of a non-default namespace claims its namespace host.
+		if e.Host = canonicalHost(e.Host); e.Host == "" {
+			e.Host = NamespaceHost(e.Namespace, a.base)
+		}
 		stored[i] = e
 	}
 
@@ -133,13 +141,13 @@ func (a *Aggregator) Set(ctx context.Context, source string, entries []Entry) ([
 		sources[source] = stored
 	}
 	routesSet := a.routesSet || source == routeSource
-	slots, verdicts, programmed, err := a.arbitrate(ctx, sources, routesSet)
+	slots, verdicts, programmed, reserved, err := a.arbitrate(ctx, sources, routesSet)
 	if err != nil {
 		a.mu.Unlock()
 		return nil, fault.Wrapf(err, fault.KindOf(err), op, "read namespace exposure mode (source %q)", source)
 	}
 	a.sources, a.routesSet = sources, routesSet
-	if err := a.p.Program(ctx, programmed); err != nil {
+	if err := a.p.Program(ctx, programmed, reserved); err != nil {
 		a.mu.Unlock()
 		return nil, fault.Wrapf(err, fault.KindOf(err), op, "program aggregated edge table (%d entries, source %q)", len(programmed), source)
 	}
@@ -192,9 +200,10 @@ type heldClaim struct {
 }
 
 // arbitrate rules on every entry of sources in (namespace, name, kind rank) order: ReservedPath, else
-// HostRequired, else EdgeStarting, else RouteConflict, else programmed. It returns the slots in source-key order,
-// each slot's verdict, and the programmed entries in ruling order. The caller must hold a.mu.
-func (a *Aggregator) arbitrate(ctx context.Context, sources map[string][]Entry, routesSet bool) ([]slot, []Verdict, []Entry, error) {
+// HostRequired, else HostReserved, else EdgeStarting, else RouteConflict, else programmed (ADR-0240 Decision 5).
+// It returns the slots in source-key order, each slot's verdict, the programmed entries in ruling order and the
+// reserved namespace hosts. The caller must hold a.mu.
+func (a *Aggregator) arbitrate(ctx context.Context, sources map[string][]Entry, routesSet bool) ([]slot, []Verdict, []Entry, []string, error) {
 	keys := make([]string, 0, len(sources))
 	for k := range sources {
 		keys = append(keys, k)
@@ -222,24 +231,28 @@ func (a *Aggregator) arbitrate(ctx context.Context, sources map[string][]Entry, 
 		return x.rank < y.rank
 	})
 
+	reserving := a.reserving(slots)
 	modes := map[v1.NamespaceName]v1.ExposureMode{}
 	held := map[string][]heldClaim{}
 	verdicts := make([]Verdict, len(slots))
 	programmed := make([]Entry, 0, len(slots))
 	for _, i := range order {
 		s := &slots[i]
-		v := Verdict{Owner: s.entry.Owner}
+		v := Verdict{Owner: s.entry.Owner, Host: s.entry.Host}
 		switch p, reserved := reservedPath(s.entry); {
 		case reserved:
 			v.Reason, v.Message = reasonReservedPath, fmt.Sprintf("path %q is reserved for claims without a host", p)
 		default:
 			mode, err := a.modeOf(ctx, modes, s.entry)
 			if err != nil {
-				return nil, nil, nil, err
+				return nil, nil, nil, nil, err
 			}
+			msg, hostReserved := a.hostReserved(reserving, s.entry)
 			switch winner, conflict := firstConflict(held, s.entry); {
 			case mode == v1.ExposureExplicit:
 				v.Reason, v.Message = reasonHostRequired, "an explicit-mode namespace requires a host"
+			case hostReserved:
+				v.Reason, v.Message = reasonHostReserved, msg
 			case s.rank > 0 && !routesSet:
 				v.Reason, v.Message = reasonEdgeStarting, "held until the Route table loads"
 			case conflict:
@@ -252,7 +265,43 @@ func (a *Aggregator) arbitrate(ctx context.Context, sources map[string][]Entry, 
 		}
 		verdicts[i] = v
 	}
-	return slots, verdicts, programmed, nil
+	reserved := make([]string, 0, len(reserving))
+	for ns := range reserving {
+		reserved = append(reserved, NamespaceHost(ns, a.base))
+	}
+	sort.Strings(reserved)
+	return slots, verdicts, programmed, reserved, nil
+}
+
+// reserving returns the namespaces that reserve their namespace host: those with a stored entry on it or on a
+// name under it (ADR-0240 Decision 4).
+func (a *Aggregator) reserving(slots []slot) map[v1.NamespaceName]bool {
+	out := map[v1.NamespaceName]bool{}
+	for i := range slots {
+		e := &slots[i].entry
+		if ns := NamespaceOfHost(e.Host, a.base); ns != "" && ns == e.Namespace {
+			out[ns] = true
+		}
+	}
+	return out
+}
+
+// hostReserved reports why e may not claim its host: the host names another namespace that reserves it, or e has a
+// rule under /function on a host that names another namespace (ADR-0240 Decisions 4 and 6).
+func (a *Aggregator) hostReserved(reserving map[v1.NamespaceName]bool, e Entry) (string, bool) {
+	ns := NamespaceOfHost(e.Host, a.base)
+	if ns == "" || ns == e.Namespace {
+		return "", false
+	}
+	for _, r := range e.Rules {
+		if IsFunctionPath(r.Path) {
+			return fmt.Sprintf("path %q on host %q belongs to namespace %q", r.Path, e.Host, ns), true
+		}
+	}
+	if reserving[ns] {
+		return fmt.Sprintf("host %q is reserved for namespace %q", e.Host, ns), true
+	}
+	return "", false
 }
 
 // modeOf returns the exposure mode that applies to a host-less entry (implicit for one with a host), reading each
@@ -283,11 +332,10 @@ func reservedPath(e Entry) (string, bool) {
 		return "", false
 	}
 	for _, r := range e.Rules {
-		p := path.Clean(r.Path)
-		if p == functionPath || strings.HasPrefix(p, functionPath+"/") {
+		if IsFunctionPath(r.Path) {
 			return r.Path, true
 		}
-		if p == "/" && e.Owner.Kind == v1.KindCatalogService {
+		if path.Clean(r.Path) == "/" && e.Owner.Kind == v1.KindCatalogService {
 			return r.Path, true
 		}
 	}

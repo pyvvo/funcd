@@ -153,7 +153,7 @@ func edgeChainServer(tb testing.TB, tel *observability.Telemetry, logger *slog.L
 	require.NoError(tb, err)
 	act, err := activator.New(activator.Deps{Store: st, Endpoints: warmEndpoint(up.URL), Scaler: failScaler{}, Logger: logger})
 	require.NoError(tb, err)
-	plane := dataplane.Handler(st, act, router.New(), nil, nil, nil, 0, logger)
+	plane := dataplane.Handler(st, act, router.New(), "", nil, nil, nil, 0, logger)
 
 	terminal := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/function/ws" {

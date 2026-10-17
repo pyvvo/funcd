@@ -20,8 +20,9 @@ import (
 // Concurrency-safe.
 type Router interface {
 	// Program replaces the live table with the compiled Ready-route entries (mirrors the
-	// gateway's replace-all ProgramRoutes).
-	Program(ctx context.Context, entries []Entry) error
+	// gateway's replace-all ProgramRoutes). A host-less row answers on no reserved host nor on a name
+	// under one (ADR-0240 Decision 4).
+	Program(ctx context.Context, entries []Entry, reserved []string) error
 	// Resolve returns the matched target for (host, path, method), or ok=false ⇒ the caller 404s
 	// (no activator wake). The matched entry carries its namespace, so no namespace input is needed.
 	Resolve(host, path, method string) (Match, bool)
@@ -32,7 +33,7 @@ type Router interface {
 // Entry is one Route's compiled contribution: its host + its rules + its auth stance (F77).
 type Entry struct {
 	Namespace v1.NamespaceName
-	Host      string      // exact; "" matches any host
+	Host      string      // exact; "" matches any host but reserved ones (ADR-0240)
 	Auth      v1.AuthMode // the Route's edge auth stance (ADR-0113); "" ⇒ inherit the namespace default
 	Rules     []CompiledRule
 	// Owner is the object the entry belongs to; required by the Aggregator, Owner.Namespace equal to Namespace.
@@ -85,14 +86,15 @@ type compiled struct {
 
 // table is the in-process Router driver.
 type table struct {
-	mu   sync.RWMutex
-	rows []compiled
+	mu       sync.RWMutex
+	rows     []compiled
+	reserved map[string]bool
 }
 
 // New returns an empty edge Router.
 func New() Router { return &table{} }
 
-func (t *table) Program(_ context.Context, entries []Entry) error {
+func (t *table) Program(_ context.Context, entries []Entry, reserved []string) error {
 	rows := make([]compiled, 0, len(entries))
 	for _, e := range entries {
 		for _, r := range e.Rules {
@@ -117,8 +119,12 @@ func (t *table) Program(_ context.Context, entries []Entry) error {
 		}
 		return rows[i].host != "" && rows[j].host == ""
 	})
+	res := make(map[string]bool, len(reserved))
+	for _, h := range reserved {
+		res[canonicalHost(h)] = true
+	}
 	t.mu.Lock()
-	t.rows = rows
+	t.rows, t.reserved = rows, res
 	t.mu.Unlock()
 	return nil
 }
@@ -126,11 +132,12 @@ func (t *table) Program(_ context.Context, entries []Entry) error {
 func (t *table) Resolve(host, path, method string) (Match, bool) {
 	host = canonicalHost(host)
 	t.mu.RLock()
-	rows := t.rows
+	rows, reserved := t.rows, t.reserved
 	t.mu.RUnlock()
+	onReserved := onReservedHost(host, reserved)
 	for i := range rows {
 		row := &rows[i]
-		if row.host != "" && row.host != host {
+		if row.host == "" && onReserved || row.host != "" && row.host != host {
 			continue
 		}
 		if len(row.methods) > 0 && !row.methods[method] {

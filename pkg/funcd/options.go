@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/netip"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -558,6 +559,42 @@ func WithInvokeSocketDir(dir string) Option {
 // Default is 0.0.0.0:8081 (Production); InMemory() uses an ephemeral 127.0.0.1:0.
 func WithDataPlaneAddr(addr string) Option {
 	return func(c *config) error { c.dataPlaneAddr = addr; return nil }
+}
+
+// WithBaseDomain sets server.baseDomain (ADR-0240 Decision 1): every namespace but default answers on
+// <namespace>.<base>. "" means "localhost". Run fails with fault.Invalid on a refused value.
+func WithBaseDomain(base string) Option {
+	return func(c *config) error { c.baseDomain = base; return nil }
+}
+
+// baseDomainLabel is one lowercase DNS label of a base domain.
+var baseDomainLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+// maxBaseDomain keeps <namespace>.<base> within DNS's 253 characters for a 63-character namespace.
+const maxBaseDomain = 189
+
+// validBaseDomain refuses a base domain that is not lowercase DNS labels joined by dots, is an IP address, is over
+// 189 characters, or, with TLS in acme mode, is localhost or a name under it: no ACME CA certifies those.
+func validBaseDomain(base string, tls *edgetls.Spec) error {
+	const op = "funcd.validBaseDomain"
+	if base == "" {
+		base = "localhost"
+	}
+	if len(base) > maxBaseDomain {
+		return fault.Invalidf(op, "server.baseDomain is %d characters, over %d", len(base), maxBaseDomain)
+	}
+	if _, err := netip.ParseAddr(base); err == nil {
+		return fault.Invalidf(op, "server.baseDomain %q is an IP address", base)
+	}
+	for _, l := range strings.Split(base, ".") {
+		if !baseDomainLabel.MatchString(l) {
+			return fault.Invalidf(op, "server.baseDomain %q is not lowercase DNS labels joined by dots", base)
+		}
+	}
+	if tls != nil && tls.Mode == edgetls.ModeACME && (base == "localhost" || strings.HasSuffix(base, ".localhost")) {
+		return fault.Invalidf(op, "server.baseDomain %q cannot be certified in TLS mode acme; set a public base domain", base)
+	}
+	return nil
 }
 
 // WithTLS enables TLS termination (ADR-0111, F74) on BOTH listeners (control-plane + data-plane) via

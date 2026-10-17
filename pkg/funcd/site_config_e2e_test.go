@@ -347,8 +347,8 @@ func TestScenarioE2ESiteConfigPathMounted(t *testing.T) {
 		s.Spec.RuntimeConfig = &v1.SiteRuntimeConfig{Values: map[string]string{"API_URL": "https://api.example"}}
 	}))
 	e.waitSite(t, "openteam", "bi", v1.ConditionTrue, "Materialized", deployWithin)
-	waitBody(t, e.dp, "", "/bi/config.json", `{"API_URL":"https://api.example"}`, configWithin)
-	code, _, _ := edgeGet(t, e.dp, "", "/config.json", nil)
+	waitBody(t, e.dp, "openteam.localhost", "/bi/config.json", `{"API_URL":"https://api.example"}`, configWithin)
+	code, _, _ := edgeGet(t, e.dp, "openteam.localhost", "/config.json", nil)
 	require.Equal(t, http.StatusNotFound, code)
 }
 
@@ -497,7 +497,7 @@ func TestScenarioE2ESiteConfigBaseHref(t *testing.T) {
 	require.Equal(t, digest, e.waitSite(t, "staging", "root", v1.ConditionTrue, "Materialized", deployWithin).Status.Digest)
 	require.Equal(t, digest, e.waitSite(t, "staging", "bi", v1.ConditionTrue, "Materialized", deployWithin).Status.Digest)
 
-	for _, tc := range []struct{ host, mount string }{{"fleet.test", "/"}, {"", "/bi/"}} {
+	for _, tc := range []struct{ host, mount string }{{"fleet.test", "/"}, {"staging.localhost", "/bi/"}} {
 		code, body, hdr := edgeGet(t, e.dp, tc.host, tc.mount+"devices/42", nil)
 		require.Equal(t, http.StatusOK, code)
 		require.Contains(t, body, `<head><base href="`+tc.mount+`"><title>fleet</title>`)
@@ -523,14 +523,14 @@ func TestScenarioE2ESiteConfigBaseHrefPaths(t *testing.T) {
 	})
 	e := startConfigPlatform(t, []string{"staging"}, baseHrefSite("bi", "staging", ref, v1.SiteIngress{Path: "/bi"}, nil))
 	e.waitSite(t, "staging", "bi", v1.ConditionTrue, "Materialized", deployWithin)
-	waitBody(t, e.dp, "", "/bi/docs/", "docs", configWithin)
-	waitBody(t, e.dp, "", "/bi/config.json", `{"OWN":"1"}`, configWithin)
+	waitBody(t, e.dp, "staging.localhost", "/bi/docs/", "docs", configWithin)
+	waitBody(t, e.dp, "staging.localhost", "/bi/config.json", `{"OWN":"1"}`, configWithin)
 
 	s := e.site(t, "staging", "bi")
 	s.Spec.Ingress.Path = "/b2"
 	e.update(t, s)
 	require.Eventually(t, func() bool {
-		code, body, _ := edgeGet(t, e.dp, "", "/b2/devices/42", nil)
+		code, body, _ := edgeGet(t, e.dp, "staging.localhost", "/b2/devices/42", nil)
 		return code == http.StatusOK && strings.Contains(body, `<base href="/b2/">`)
 	}, configWithin, 20*time.Millisecond, "the base moves with the mount")
 }

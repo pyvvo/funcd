@@ -4,9 +4,9 @@
 // Front door (ADR-0110, F79): it first consults the edge Router — a compiled Route matcher —
 // to resolve a request to a (namespace, function). On a hit it runs the existing activator hop
 // (it resolves, it does not proxy — scale-to-zero is preserved). On a miss it falls back to the
-// path form /function/<name> (+ X-Funcd-Namespace, default "default"): if the target namespace
-// is `explicit` the request is 404ed BEFORE any activator call (default-deny ingress, no wake);
-// otherwise it is served by name exactly as before. Internal fn-to-fn invoke (ADR-0064) reuses this
+// path form /function/<name>, in the namespace its host names (ADR-0240), else X-Funcd-Namespace, else
+// "default": if the target namespace is `explicit` the request is 404ed BEFORE any activator call
+// (default-deny ingress, no wake); otherwise it is served by name exactly as before. Internal fn-to-fn invoke (ADR-0064) reuses this
 // same in-process handler but marks its context WithInternal, which bypasses the Route front door and
 // the exposure gate — internal invocation is by name and is never gated (spoof-proof: the marker is a
 // context value set in-process, unreachable from the public listener).
@@ -61,11 +61,14 @@ type Server struct {
 	store     store.Store
 	activator *activator.Activator
 	router    router.Router
-	enforcer  *authn.Enforcer
-	limiter   *limit.TargetLimiter
-	static    *static.Handler
-	logger    *slog.Logger
-	transport *http.Transport // the Upstream routes' connection pool, shared by every request
+	// baseDomain is server.baseDomain: a public /function request on a host under it names that host's namespace
+	// (ADR-0240 Decision 6).
+	baseDomain string
+	enforcer   *authn.Enforcer
+	limiter    *limit.TargetLimiter
+	static     *static.Handler
+	logger     *slog.Logger
+	transport  *http.Transport // the Upstream routes' connection pool, shared by every request
 	// defaultTimeout bounds an external invoke of a Function without spec.timeout (ADR-0151).
 	defaultTimeout time.Duration
 }
@@ -78,8 +81,8 @@ type Server struct {
 // stat is the F82 static-asset handler (may be nil ⇒ a static Route match 404s). defaultTimeout is
 // invoke.defaultTimeout, the response deadline of an external invoke whose Function sets no spec.timeout
 // (≤ 0 ⇒ v1.DefaultInvokeTimeout, ADR-0151).
-func Handler(st store.Store, act *activator.Activator, rtr router.Router, enf *authn.Enforcer, lim *limit.TargetLimiter,
-	stat *static.Handler, defaultTimeout time.Duration, logger *slog.Logger) http.Handler {
+func Handler(st store.Store, act *activator.Activator, rtr router.Router, baseDomain string, enf *authn.Enforcer,
+	lim *limit.TargetLimiter, stat *static.Handler, defaultTimeout time.Duration, logger *slog.Logger) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -87,7 +90,7 @@ func Handler(st store.Store, act *activator.Activator, rtr router.Router, enf *a
 		defaultTimeout = v1.DefaultInvokeTimeout
 	}
 	return &Server{
-		store: st, activator: act, router: rtr, enforcer: enf, limiter: lim, static: stat, logger: logger.With("component", "dataplane"),
+		store: st, activator: act, router: rtr, baseDomain: baseDomain, enforcer: enf, limiter: lim, static: stat, logger: logger.With("component", "dataplane"),
 		transport: httpx.NodeTransport(), defaultTimeout: defaultTimeout,
 	}
 }
@@ -99,10 +102,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Internal fn-to-fn invoke (ADR-0064) is addressed by name and is NEVER gated or re-routed by
 	// exposure (ADR-0110): it skips the Route front door entirely and serves the /function/<name> form.
 	internal := isInternal(r.Context())
+	// ADR-0240 Decision 6: on a public host that names a namespace, /function and every path under it belong to
+	// that namespace, so an edge match of another namespace is ignored there.
+	var hostNS v1.NamespaceName
+	if !internal && router.IsFunctionPath(r.URL.Path) {
+		hostNS = router.NamespaceOfHost(r.Host, s.baseDomain)
+	}
 
 	// Front door: try the Route matcher first (both exposure modes) — public requests only.
 	if s.router != nil && !internal {
-		if m, ok := s.router.Resolve(r.Host, r.URL.Path, r.Method); ok {
+		if m, ok := s.router.Resolve(r.Host, r.URL.Path, r.Method); ok && (hostNS == "" || m.Namespace == hostNS) {
 			if m.Static != nil {
 				// Static backend (ADR-0120, F82): serve the Bucket prefix directly — no activator hop.
 				s.serveStatic(w, r, m, op)
@@ -128,7 +137,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fault.WriteProblem(w, fault.NotFoundf(op, "no route for %q", r.URL.Path))
 		return
 	}
-	ns := v1.NamespaceName(r.Header.Get(namespaceHeader))
+	ns := hostNS
+	if ns == "" {
+		ns = v1.NamespaceName(r.Header.Get(namespaceHeader))
+	}
 	if ns == "" {
 		ns = "default"
 	}

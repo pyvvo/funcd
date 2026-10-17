@@ -45,11 +45,11 @@ func TestIssue108_StaticPathDecodedOnce(t *testing.T) {
 		Namespace: "default",
 		Auth:      v1.AuthOpen,
 		Rules:     []router.CompiledRule{{Path: "/", Static: &v1.StaticBackend{Bucket: "site", Prefix: "web/", Index: "index.html"}}},
-	}}))
+	}}, nil))
 	st := store.New(memory.New())
 	act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
 	require.NoError(t, err)
-	h := dataplane.Handler(st, act, rtr, nil, nil, sh, 0, nil)
+	h := dataplane.Handler(st, act, rtr, "", nil, nil, sh, 0, nil)
 
 	for target, want := range map[string]string{
 		"/100%25.html":  "HUNDRED-PCT",

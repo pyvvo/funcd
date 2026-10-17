@@ -80,8 +80,8 @@ func functionPlane(t *testing.T, up string) (http.Handler, *activator.CallTracke
 	require.NoError(t, rtr.Program(context.Background(), []router.Entry{{
 		Namespace: "default", Auth: v1.AuthOpen, Host: routeHost,
 		Rules: []router.CompiledRule{{Path: "/big", Function: "f"}},
-	}}))
-	return dataplane.Handler(st, act, rtr, nil, nil, nil, 0, nil), calls
+	}}, nil))
+	return dataplane.Handler(st, act, rtr, "", nil, nil, nil, 0, nil), calls
 }
 
 // stalledClient sends a GET on a raw connection with a 64 KiB read buffer and reads nothing. A read buffer below the
@@ -203,11 +203,11 @@ func TestScenarioStalledStaticAssetIsCut(t *testing.T) {
 	require.NoError(t, rtr.Program(context.Background(), []router.Entry{{
 		Namespace: "default", Auth: v1.AuthOpen, Host: routeHost,
 		Rules: []router.CompiledRule{{Path: "/", Static: &v1.StaticBackend{Bucket: "site", Prefix: "web/"}}},
-	}}))
+	}}, nil))
 	st := store.New(memory.New())
 	act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
 	require.NoError(t, err)
-	core := dataplane.Handler(st, act, rtr, nil, nil, sh, 0, nil)
+	core := dataplane.Handler(st, act, rtr, "", nil, nil, sh, 0, nil)
 	srv := serveListener(t, edgeChain(core, limit.Config{MaxInFlight: 1}), false)
 
 	a := stalledClient(t, srv.Listener.Addr().String(), routeHost, "/big.bin")

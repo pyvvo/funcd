@@ -41,8 +41,8 @@ func TestRouteToPooledFunctionStaysUnderItsMember(t *testing.T) {
 		{Path: "/", Function: "api"},
 	}}, {Namespace: "team", Host: "orders.test", Rules: []router.CompiledRule{
 		{Path: "/orders", Function: "api"},
-	}}}))
-	h := dataplane.Handler(st, act, rtr, nil, nil, nil, 0, nil)
+	}}}, nil))
+	h := dataplane.Handler(st, act, rtr, "", nil, nil, nil, 0, nil)
 	seedNS(t, st, "team", v1.ExposureExplicit)
 	seedFn(t, st, "team", "api")
 	seedFn(t, st, "team", "api-admin")

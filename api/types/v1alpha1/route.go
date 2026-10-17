@@ -22,8 +22,8 @@ type Route struct {
 // RouteSpec is the declarative edge exposure. V1 carries matching + backend + the F77 auth stance;
 // the remaining policy fields (tls/limits/observability/cors) are added by F74/F75/F76/F78.
 type RouteSpec struct {
-	// Host is an exact host match; "" matches any host. In an `explicit`-mode namespace the
-	// reconciler requires a non-empty Host (the tenant discriminator, ADR-0110).
+	// Host is an exact host match. "" is the namespace host <namespace>.<baseDomain>, or for default any host but
+	// reserved ones (ADR-0240); an `explicit` default requires a non-empty Host (ADR-0110).
 	Host string `json:"host,omitempty"`
 	// Rules lists the path rules, matched longest-prefix-first. At least one is required.
 	Rules []RouteRule `json:"rules"`
@@ -134,9 +134,12 @@ func (HTTPMethod) Schema(huma.Registry) *huma.Schema {
 }
 
 // RouteStatus holds the observed state (Ready / NotReady with reason BackendNotFound |
-// HostRequired | RouteConflict, set by the reconciler).
+// HostRequired | HostReserved | RouteConflict, set by the reconciler).
 type RouteStatus struct {
 	Status `json:",inline"`
+	// Host is the host the Route claims: spec.host, else its namespace host, else "" (any host but reserved ones)
+	// (ADR-0240).
+	Host string `json:"host,omitempty"`
 }
 
 // GroupVersionKind returns the constant GVK for Route.
