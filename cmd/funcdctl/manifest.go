@@ -98,7 +98,7 @@ func pushEntry(cmd *cobra.Command, entry string, m *sdk.Manifest) string {
 // pushFromManifest packages a push whose contract and runtime come from a funcdctl.yaml (ADR-0122):
 // it gates each schema side against the funcd profile (contract.Check), then bakes the schema-only
 // contract and pushes — recording the runtime annotation, with no language toolchain invoked.
-func (a *cli) pushFromManifest(ctx context.Context, path, ref string, m *sdk.Manifest, entryFlag string, platform v1.OCIPlatform) error {
+func (a *cli) pushFromManifest(ctx context.Context, path, ref string, m *sdk.Manifest, entry string, platform v1.OCIPlatform) error {
 	const op = "funcdctl push"
 	// An http Function has no I/O contract (ADR-0243 Decision 7): its artifact carries none.
 	var input, output []byte
@@ -120,14 +120,14 @@ func (a *cli) pushFromManifest(ctx context.Context, path, ref string, m *sdk.Man
 			if rerr := os.Remove(filepath.Join(path, bundleContractName)); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
 				return fault.Internalf(op, "remove %s: %v", bundleContractName, rerr)
 			}
-			digest, perr = artifact.PushBundleNoContract(ctx, ref, path, entryFlag, runtime, platform)
+			digest, perr = artifact.PushBundleNoContract(ctx, ref, path, entry, runtime, platform)
 		} else {
 			// funcdctl.yaml is primary for the bundle: compile its inline contract into the bundle's
 			// __funcd_contract.json so PushBundle (which re-gates + promotes it) bakes the manifest's schema.
 			if werr := writeBundleContract(op, path, input, output); werr != nil {
 				return werr
 			}
-			digest, perr = artifact.PushBundle(ctx, ref, path, entryFlag, runtime, platform)
+			digest, perr = artifact.PushBundle(ctx, ref, path, entry, runtime, platform)
 		}
 		if perr != nil {
 			return perr
