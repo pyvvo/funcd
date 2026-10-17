@@ -171,11 +171,12 @@ func TestResolveManifest_stem_precedence(t *testing.T) {
 // entry annotation.
 func TestIssue1049_BundlePushTakesEntryFromManifest(t *testing.T) {
 	cases := map[string]struct {
-		runtime, main string // no runtime: no funcdctl.yaml, the bundle carries its own contract
-		files, flags  []string
-		want          string
+		runtime, protocol, main string // no runtime: no funcdctl.yaml, the bundle carries its own contract
+		files, flags            []string
+		want                    string
 	}{
 		"node runtime default":   {runtime: "nodejs22", files: []string{"handler.mjs"}, want: "handler.mjs"},
+		"http function":          {runtime: "nodejs22", protocol: "http", files: []string{"handler.mjs"}, want: "handler.mjs"},
 		"python runtime default": {runtime: "python314", files: []string{"handler.py"}, want: "handler.py"},
 		"main":                   {runtime: "python314", main: "extract.py", files: []string{"extract.py"}, want: "extract.py"},
 		"nested main":            {runtime: "nodejs22", main: "src/front.mjs", files: []string{"src/front.mjs"}, want: "src/front.mjs"},
@@ -197,7 +198,12 @@ func TestIssue1049_BundlePushTakesEntryFromManifest(t *testing.T) {
 				if tc.main != "" {
 					manifest += "main: " + tc.main + "\n"
 				}
-				writeFuncdctl(t, dir, manifest+"contract:\n  input:\n    type: \"null\"\n  output:\n    type: \"null\"\n")
+				if tc.protocol != "" {
+					manifest += "protocol: " + tc.protocol + "\n"
+				} else {
+					manifest += "contract:\n  input:\n    type: \"null\"\n  output:\n    type: \"null\"\n"
+				}
+				writeFuncdctl(t, dir, manifest)
 			}
 			ref := "oci-layout://" + filepath.Join(t.TempDir(), "layout") + ":v1"
 
