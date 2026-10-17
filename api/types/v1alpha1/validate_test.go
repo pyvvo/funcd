@@ -537,3 +537,23 @@ func TestEventSourceSQLValidate(t *testing.T) {
 	es.Normalize()
 	require.Equal(t, []SQLChangeType{SQLInsert, SQLUpdate, SQLDelete}, es.Spec.SQL.Events[0].On)
 }
+
+// TestRouteSiteBackendValidate covers scenario: site-backend-invalid (ADR-0242 Decision 1).
+func TestRouteSiteBackendValidate(t *testing.T) {
+	mk := func(name ObjectName, rule RouteRule) *Route {
+		r := &Route{}
+		r.TypeMeta = TypeMeta{APIVersion: KindRoute.GVK().APIVersion(), Kind: KindRoute}
+		r.Name, r.Namespace, r.ResourceGroup = name, "staging", "rg1"
+		r.Spec = RouteSpec{Rules: []RouteRule{rule}}
+		return r
+	}
+	require.NoError(t, mk("app", RouteRule{Path: "/", Backend: RouteBackend{Site: "fleet"}}).Validate())
+	for name, r := range map[string]*Route{
+		"site and function": mk("app", RouteRule{Path: "/", Backend: RouteBackend{Site: "fleet", Function: "fn"}}),
+		"exact":             mk("app", RouteRule{Path: "/", PathType: PathTypeExact, Backend: RouteBackend{Site: "fleet"}}),
+		"own name":          mk("fleet", RouteRule{Path: "/", Backend: RouteBackend{Site: "fleet"}}),
+		"bad name":          mk("app", RouteRule{Path: "/", Backend: RouteBackend{Site: "Fleet_1"}}),
+	} {
+		require.Equal(t, fault.Invalid, fault.KindOf(r.Validate()), name)
+	}
+}

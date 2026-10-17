@@ -19,14 +19,8 @@ const (
 	reasonRuntimeConfigTooLarge = "RuntimeConfigTooLarge"
 )
 
-// runtimeConfigPrefix is the key prefix of a Site's generated config.json: <prefix>/_runtime/<site>/, one per Site so
-// two Sites on one prefix never share it. "_runtime" is never a digest slug, so servingDigest never takes it for the
-// bundle.
-func runtimeConfigPrefix(s *v1.Site) string {
-	return s.Spec.Prefix + "/_runtime/" + string(s.Name) + "/"
-}
-
-func runtimeConfigKey(s *v1.Site) string { return runtimeConfigPrefix(s) + v1.SiteRuntimeConfigFile }
+// runtimeConfigKey is the key of a Site's generated config.json, under v1.Site.RuntimeConfigPrefix.
+func runtimeConfigKey(s *v1.Site) string { return s.RuntimeConfigPrefix() + v1.SiteRuntimeConfigFile }
 
 // writeRuntimeConfig renders the Site's config.json from its ConfigMap's data and its values, values winning, and writes
 // it when it differs from the stored object. A reason means nothing was written: the ConfigMap is missing, or the file
@@ -82,16 +76,8 @@ func dropRuntimeConfig(ctx context.Context, s *v1.Site, view blob.Bucket) error 
 // servesRuntimeConfig reports whether the owned Route still carries the Site's config.json rule: the durable record
 // that drives removal.
 func servesRuntimeConfig(rt *v1.Route, s *v1.Site) bool {
-	if rt == nil {
-		return false
-	}
-	want := runtimeConfigPrefix(s)
-	for i := range rt.Spec.Rules {
-		if st := rt.Spec.Rules[i].Backend.Static; st != nil && st.Prefix == want {
-			return true
-		}
-	}
-	return false
+	_, config, _ := s.Served(rt)
+	return config != nil
 }
 
 // MapConfigMap is the controller.MapFunc that re-runs the reconcile of every Site whose runtimeConfig names a changed

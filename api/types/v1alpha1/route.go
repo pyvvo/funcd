@@ -75,6 +75,8 @@ type RouteBackend struct {
 	Function ObjectName `json:"function,omitempty"`
 	// Static serves a Bucket-prefix static site directly through the edge (F82); nil ⇒ a function backend.
 	Static *StaticBackend `json:"static,omitempty"`
+	// Site serves the current build of the named Site in this Route's namespace (ADR-0242).
+	Site ObjectName `json:"site,omitempty" doc:"A Site of this Route's namespace: the rule serves the build that Site serves now, and its config.json at <path>/config.json, following each new build. A Prefix rule; the Route may not carry the Site's own name."`
 }
 
 // StaticBackend serves a Bucket prefix as a static site (ADR-0120, F82): index resolution,
@@ -172,7 +174,7 @@ func (r *Route) Validate() error {
 		default:
 			return fault.Invalidf(op, "spec.rules[%d].pathType %q must be Prefix or Exact", i, rule.PathType)
 		}
-		if err := validateBackend(rule, i, op); err != nil {
+		if err := validateBackend(r, rule, i, op); err != nil {
 			return err
 		}
 		if rule.Auth != nil {
@@ -202,12 +204,29 @@ func (r *Route) Validate() error {
 
 // validateBackend enforces the RouteBackend exactly-one-of union (ADR-0120): each rule sets exactly
 // one of backend.function / backend.static. A function arm keeps the DNS-1123 label check; a static
-// arm requires a DNS-1123 bucket, a "/"-terminated prefix and a relative index.
-func validateBackend(rule *RouteRule, i int, op string) error {
+// arm requires a DNS-1123 bucket, a "/"-terminated prefix and a relative index. A site arm (ADR-0242) is a Prefix rule
+// naming a Site other than the Route's own name, which is that Site's own Route (ADR-0241 Decision 5).
+func validateBackend(r *Route, rule *RouteRule, i int, op string) error {
+	arms := 0
+	for _, set := range []bool{rule.Backend.Function != "", rule.Backend.Static != nil, rule.Backend.Site != ""} {
+		if set {
+			arms++
+		}
+	}
+	if arms != 1 {
+		return fault.Invalidf(op, "spec.rules[%d].backend must set exactly one of function, static or site", i)
+	}
 	hasFn := rule.Backend.Function != ""
-	hasStatic := rule.Backend.Static != nil
-	if hasFn == hasStatic {
-		return fault.Invalidf(op, "spec.rules[%d].backend must set exactly one of function or static", i)
+	if site := rule.Backend.Site; site != "" {
+		switch {
+		case !dnsLabel.MatchString(string(site)):
+			return fault.Invalidf(op, "spec.rules[%d].backend.site %q is not a valid DNS-1123 label", i, site)
+		case rule.PathType == PathTypeExact:
+			return fault.Invalidf(op, "spec.rules[%d].backend.site needs a Prefix rule", i)
+		case site == r.Name:
+			return fault.Invalidf(op, "spec.rules[%d].backend.site %q names this Route's own name, which is that Site's own Route; give the Route another name", i, site)
+		}
+		return nil
 	}
 	if hasFn {
 		if !dnsLabel.MatchString(string(rule.Backend.Function)) {

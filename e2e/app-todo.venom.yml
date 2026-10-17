@@ -50,8 +50,9 @@
 #       never the SPA's index; a new value of the App's ConfigMap reaches it with a new ETag and the same digest
 #       (ADR-0239). C6 runs the same digest as a Site at the path /preview on staging.localhost (ADR-0240), its index
 #       carrying its mount as its base: a direct deep link loads the app's relative script and config.json under the
-#       mount (ADR-0239 Decision 10). They run last, with the admin token the DR block installed, since the developer
-#       token is scoped to default.
+#       mount (ADR-0239 Decision 10). C7 serves that build at a host root through a Route of its own, the todo API
+#       beside it, and follows a new build (ADR-0242). They run last, with the admin token the DR block installed,
+#       since the developer token is scoped to default.
 # The suite pushes, locks and deploys the App itself; the lane only creates the Secret and the grant beside it. Every
 # file it applies comes from funcd-functions, staged by scripts/lanes.yaml.
 name: app-todo — the todo App from its pushed template on real containerd (ADR-0199/0200/0211-0215/0217-0220/0226/0229), a disaster-recovery drill (ADR-0202-0209/0222/0223), version 1.2.0 on rqlite (ADR-0233-0236), and runtime configuration of a Site (ADR-0239)
@@ -2608,3 +2609,53 @@ testcases:
           - result.systemout ShouldContainSubstring APP-OK
           - result.systemout ShouldContainSubstring CONFIG-OK
           - result.systemout ShouldContainSubstring ONE-DIGEST
+
+  - name: C7 one Route serves a Site at a host root and the todo API beside it, and follows a new build of the Site
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; funcdctl apply -f /opt/lane/site-config/sites/app-route.yaml'
+        info: "apply → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            get() { curl -s -H "Host: app.site-config.test" http://127.0.0.1:8081$1; }
+            get /vehicles/42 | grep -q "<title>Site config</title>" && echo SITE-OK
+            [ "$(get /config.json)" = "{\"API_URL\":\"https://api.app.example\"}" ] && echo CONFIG-OK
+            curl -s -X POST -H "Host: app.site-config.test" -H "content-type: application/json" -d "{\"data\":{\"op\":\"list\"}}" \
+              http://127.0.0.1:8081/api | grep -q "\"todos\"" && echo API-OK'
+        retry: 15
+        delay: 2
+        info: "route → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring SITE-OK
+          - result.systemout ShouldContainSubstring CONFIG-OK
+          - result.systemout ShouldContainSubstring API-OK
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            export FUNCD_TOKEN=todo-lane-admin
+            rm -rf /tmp/site-config-web-2 && cp -r /opt/lane/site-config/web /tmp/site-config-web-2
+            echo "<!-- build 2 -->" >> /tmp/site-config-web-2/index.html
+            funcdctl push --site /tmp/site-config-web-2 {{.reg}}/site-config-web:1.0.1 >/dev/null
+            funcdctl get site site-config-app -n default -o json \
+              | python3 -c "import sys,json;s=json.load(sys.stdin);s[\"spec\"][\"image\"]=\"oci-layout:///mnt/funcd-deps/registry/site-config-web:1.0.1\";print(json.dumps(s))" \
+              | funcdctl apply -f -'
+        info: "new build → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            curl -s -H "Host: app.site-config.test" http://127.0.0.1:8081/ | grep -q "build 2" && echo NEW-BUILD
+            curl -s -X POST -H "Host: app.site-config.test" -H "content-type: application/json" -d "{\"data\":{\"op\":\"list\"}}" \
+              http://127.0.0.1:8081/api | grep -q "\"todos\"" && echo API-OK'
+        retry: 15
+        delay: 2
+        info: "after the new build → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring NEW-BUILD
+          - result.systemout ShouldContainSubstring API-OK

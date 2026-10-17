@@ -3176,6 +3176,12 @@ components:
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
+        site:
+          description: "A Site of this Route's namespace: the rule serves the build that Site serves now, and its config.json at <path>/config.json, following each new build. A Prefix rule; the Route may not carry the Site's own name."
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
         static:
           $ref: "#/components/schemas/StaticBackend"
       type: object

@@ -3,6 +3,7 @@ package v1alpha1
 import (
 	"encoding/json"
 	"maps"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -130,6 +131,53 @@ func (s *Site) RuntimeConfigPath() string {
 		return p + "/" + SiteRuntimeConfigFile
 	}
 	return "/" + SiteRuntimeConfigFile
+}
+
+// RuntimeConfigPrefix is the key prefix of a Site's generated config.json: <prefix>/_runtime/<site>/, one per Site so
+// two Sites on one prefix never share it (ADR-0239). "_runtime" is never a digest slug, so Served never takes it for
+// the bundle.
+func (s *Site) RuntimeConfigPrefix() string {
+	return s.Spec.Prefix + "/_runtime/" + string(s.Name) + "/"
+}
+
+// digestSlugRE recognizes the digest-scoped key segment the bundle rule is programmed with.
+var digestSlugRE = regexp.MustCompile(`^sha256-[a-f0-9]{64}$`)
+
+// SlugDigest is the digest a digest-scoped key segment names (sha256-<hex> → sha256:<hex>); "" when the segment is
+// not one.
+func SlugDigest(slug string) string {
+	if !digestSlugRE.MatchString(slug) {
+		return ""
+	}
+	return strings.Replace(slug, "-", ":", 1)
+}
+
+// Served returns the bundle backend the Site's own Route serves and its config.json backend (nil when the Site has
+// none); ok is false when the Site does not control rt with its current UID or rt serves no build (ADR-0242 Decision
+// 3). The bundle rule is found by its digest-scoped prefix <prefix>/<slug>/, never by its edge path, so it survives an
+// ingress.path change (ADR-0140 Decision 5). One definition for the Site reconciler and the Route reconciler.
+func (s *Site) Served(rt *Route) (bundle, config *StaticBackend, ok bool) {
+	if rt == nil || !ControlledBy(rt.OwnerReferences, KindSite, s.UID) {
+		return nil, nil, false
+	}
+	cfg := s.RuntimeConfigPrefix()
+	for i := range rt.Spec.Rules {
+		st := rt.Spec.Rules[i].Backend.Static
+		if st == nil {
+			continue
+		}
+		if st.Prefix == cfg && config == nil {
+			c := *st
+			config = &c
+			continue
+		}
+		rest, found := strings.CutPrefix(st.Prefix, s.Spec.Prefix+"/")
+		if found && bundle == nil && SlugDigest(strings.TrimSuffix(rest, "/")) != "" {
+			b := *st
+			bundle = &b
+		}
+	}
+	return bundle, config, bundle != nil
 }
 
 // GroupVersionKind returns the constant GVK for Site.

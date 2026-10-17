@@ -117,7 +117,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	if rt != nil && !v1.ControlledBy(rt.OwnerReferences, v1.KindSite, s.UID) {
 		return r.publish(ctx, s, routeNotOwned(s))
 	}
-	serving := servingDigest(rt, s.Spec.Prefix)
+	serving := servingDigest(rt, s)
 
 	target := serving
 	if target == "" || s.Status.ObservedGeneration != s.Generation {

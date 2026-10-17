@@ -6,8 +6,11 @@ package route
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -154,11 +157,17 @@ func (r *Reconciler) evaluate(ctx context.Context) ([]*v1.Route, map[routeKey]ev
 		if err != nil {
 			return nil, nil, nil, err
 		}
+		var sites map[v1.ObjectName]servedSite
+		if reason == "" {
+			if sites, reason, message, err = r.resolveSites(ctx, rt); err != nil {
+				return nil, nil, nil, err
+			}
+		}
 		if reason != "" {
 			results[routeKey{rt.Namespace, rt.Name}] = evalResult{backendMissing: true, reason: reason, message: message}
 			continue
 		}
-		entries = append(entries, compile(rt))
+		entries = append(entries, compile(rt, sites))
 	}
 	return routes, results, entries, nil
 }
@@ -171,6 +180,9 @@ func (r *Reconciler) evaluate(ctx context.Context) ([]*v1.Route, map[routeKey]ev
 func (r *Reconciler) firstBackendProblem(ctx context.Context, rt *v1.Route) (reason, message string, err error) {
 	for i := range rt.Spec.Rules {
 		b := &rt.Spec.Rules[i].Backend
+		if b.Site != "" {
+			continue // resolveSites
+		}
 		if b.Static != nil {
 			bucket := b.Static.Bucket
 			if _, gerr := r.store.Get(ctx, v1.KindBucket.GVK(), rt.Namespace, bucket); gerr != nil {
@@ -208,18 +220,98 @@ func applyStatus(rt *v1.Route, res evalResult) bool {
 	return !had || cur != prev || rt.Status.Phase != prevPhase || rt.Status.Host != prevHost
 }
 
-// compile turns a backend-valid Route into a router.Entry.
-func compile(rt *v1.Route) router.Entry {
+// The verdicts of a site rule (ADR-0242 Decision 4).
+const (
+	reasonSiteNotFound = "SiteNotFound"
+	reasonSiteNotReady = "SiteNotReady"
+)
+
+// servedSite is what a Site's own Route serves now: its bundle backend and its config.json backend, or nil.
+type servedSite struct{ bundle, config *v1.StaticBackend }
+
+// resolveSites reads each Site a rule names and the Route named after it (ADR-0242 Decision 3): no Site is
+// SiteNotFound; a Site whose own Route is missing, not controlled by it or serving no build is SiteNotReady.
+func (r *Reconciler) resolveSites(ctx context.Context, rt *v1.Route) (map[v1.ObjectName]servedSite, string, string, error) {
+	var out map[v1.ObjectName]servedSite
+	for i := range rt.Spec.Rules {
+		name := rt.Spec.Rules[i].Backend.Site
+		if _, done := out[name]; name == "" || done {
+			continue
+		}
+		obj, err := r.store.Get(ctx, v1.KindSite.GVK(), rt.Namespace, name)
+		if fault.KindOf(err) == fault.NotFound {
+			return nil, reasonSiteNotFound, fmt.Sprintf("backend site %q not found", name), nil
+		}
+		if err != nil {
+			return nil, "", "", fault.Wrapf(err, fault.KindOf(err), op, "get backend site %s/%s", rt.Namespace, name)
+		}
+		site := obj.(*v1.Site)
+		var own *v1.Route
+		switch ro, gerr := r.store.Get(ctx, v1.KindRoute.GVK(), rt.Namespace, name); {
+		case gerr == nil:
+			own = ro.(*v1.Route)
+		case fault.KindOf(gerr) != fault.NotFound:
+			return nil, "", "", fault.Wrapf(gerr, fault.KindOf(gerr), op, "get route %s/%s of backend site", rt.Namespace, name)
+		}
+		bundle, config, ok := site.Served(own)
+		if !ok {
+			return nil, reasonSiteNotReady, fmt.Sprintf("backend site %q serves no build yet", name), nil
+		}
+		if out == nil {
+			out = map[v1.ObjectName]servedSite{}
+		}
+		out[name] = servedSite{bundle: bundle, config: config}
+	}
+	return out, "", "", nil
+}
+
+// siteRules are the rows a site rule compiles into (ADR-0242 Decision 2): the bundle at the rule's path and, when the
+// Site has one, its config.json at <path>/config.json, Exact, for the rule's methods within GET and HEAD.
+func siteRules(rule *v1.RouteRule, served servedSite, auth v1.AuthMode) []router.CompiledRule {
+	out := []router.CompiledRule{{Path: rule.Path, Methods: methodSet(rule.Methods), Auth: auth, Static: served.bundle}}
+	if served.config == nil {
+		return out
+	}
+	methods := map[string]bool{}
+	for _, m := range []v1.HTTPMethod{v1.MethodGet, v1.MethodHead} {
+		if len(rule.Methods) == 0 || slices.Contains(rule.Methods, m) {
+			methods[string(m)] = true
+		}
+	}
+	if len(methods) == 0 {
+		return out
+	}
+	cfg := strings.TrimSuffix(rule.Path, "/") + "/" + v1.SiteRuntimeConfigFile
+	return append(out, router.CompiledRule{Path: cfg, Exact: true, Methods: methods, Auth: auth, Static: served.config})
+}
+
+func methodSet(ms []v1.HTTPMethod) map[string]bool {
+	if len(ms) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(ms))
+	for _, m := range ms {
+		set[string(m)] = true
+	}
+	return set
+}
+
+// compile turns a backend-valid Route into a router.Entry; the rows of its site rules follow its written rules, so a
+// written rule on the same path wins (ADR-0242 Decision 2).
+func compile(rt *v1.Route, sites map[v1.ObjectName]servedSite) router.Entry {
 	rules := make([]router.CompiledRule, 0, len(rt.Spec.Rules))
+	var siteRows []router.CompiledRule
 	for i := range rt.Spec.Rules {
 		rule := &rt.Spec.Rules[i]
-		var mset map[string]bool
-		if len(rule.Methods) > 0 {
-			mset = make(map[string]bool, len(rule.Methods))
-			for _, m := range rule.Methods {
-				mset[string(m)] = true
+		if rule.Backend.Site != "" {
+			var auth v1.AuthMode
+			if rule.Auth != nil {
+				auth = rule.Auth.Mode
 			}
+			siteRows = append(siteRows, siteRules(rule, sites[rule.Backend.Site], auth)...)
+			continue
 		}
+		mset := methodSet(rule.Methods)
 		var ruleAuth v1.AuthMode
 		if rule.Auth != nil {
 			ruleAuth = rule.Auth.Mode
@@ -241,7 +333,7 @@ func compile(rt *v1.Route) router.Entry {
 		Namespace: rt.Namespace,
 		Host:      rt.Spec.Host,
 		Auth:      authMode,
-		Rules:     rules,
+		Rules:     append(rules, siteRows...),
 		Owner:     router.Owner{Kind: v1.KindRoute, Namespace: rt.Namespace, Name: rt.Name},
 		Owned:     owned.IsOwned(rt),
 		Enabled:   rt.Spec.Enabled,
