@@ -254,7 +254,13 @@ func (r *Reconciler) resolveSites(ctx context.Context, rt *v1.Route) (map[v1.Obj
 			return nil, "", "", fault.Wrapf(gerr, fault.KindOf(gerr), op, "get route %s/%s of backend site", rt.Namespace, name)
 		}
 		bundle, config, ok := site.Served(own)
-		if !ok {
+		switch {
+		case ok:
+		case own == nil:
+			return nil, reasonSiteNotReady, fmt.Sprintf("backend site %q has no Route of its own yet", name), nil
+		case !v1.ControlledBy(own.OwnerReferences, v1.KindSite, site.UID):
+			return nil, reasonSiteNotReady, fmt.Sprintf("backend site %q does not control the Route of its name", name), nil
+		default:
 			return nil, reasonSiteNotReady, fmt.Sprintf("backend site %q serves no build yet", name), nil
 		}
 		if out == nil {

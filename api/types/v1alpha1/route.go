@@ -66,9 +66,9 @@ type RouteRule struct {
 	Auth *RouteAuth `json:"auth,omitempty"`
 }
 
-// RouteBackend is an exactly-one-of union (ADR-0120, F82): a Function backend (the activator hop)
-// OR a Static backend (a Bucket prefix served directly through the edge). Validate enforces the
-// one-of. Routes are never shared across namespaces (blueprint.md:467).
+// RouteBackend is an exactly-one-of union (ADR-0120, F82, ADR-0242): a Function backend (the activator hop), a Static
+// backend (a Bucket prefix served directly through the edge) or a Site backend (the Site's current build). Validate
+// enforces the one-of. Routes are never shared across namespaces (blueprint.md:467).
 type RouteBackend struct {
 	// Function is the target Function in this Route's namespace. Optional since F82: a static-only
 	// rule sets no function (the `omitempty` reflects the union — exactly one arm is set).
@@ -137,8 +137,8 @@ func (HTTPMethod) Schema(huma.Registry) *huma.Schema {
 	return enumSchema(s...)
 }
 
-// RouteStatus holds the observed state (Ready / NotReady with reason BackendNotFound |
-// HostRequired | HostReserved | RouteConflict, set by the reconciler).
+// RouteStatus holds the observed state (Ready / NotReady with reason BackendNotFound | BucketNotFound |
+// SiteNotFound | SiteNotReady | Disabled | HostRequired | HostReserved | RouteConflict, set by the reconciler).
 type RouteStatus struct {
 	Status `json:",inline"`
 	// Host is the host the Route claims: spec.host, else its namespace host, else "" (any host but reserved ones)
@@ -202,8 +202,8 @@ func (r *Route) Validate() error {
 	return nil
 }
 
-// validateBackend enforces the RouteBackend exactly-one-of union (ADR-0120): each rule sets exactly
-// one of backend.function / backend.static. A function arm keeps the DNS-1123 label check; a static
+// validateBackend enforces the RouteBackend exactly-one-of union (ADR-0120, ADR-0242): each rule sets exactly
+// one of backend.function / backend.static / backend.site. A function arm keeps the DNS-1123 label check; a static
 // arm requires a DNS-1123 bucket, a "/"-terminated prefix and a relative index. A site arm (ADR-0242) is a Prefix rule
 // naming a Site other than the Route's own name, which is that Site's own Route (ADR-0241 Decision 5).
 func validateBackend(r *Route, rule *RouteRule, i int, op string) error {

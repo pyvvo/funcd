@@ -134,3 +134,46 @@ func TestSiteBackend_ForeignRouteIsNotRead(t *testing.T) {
 	_, reason := readyCond(t, st, "staging", "app")
 	require.Equal(t, "SiteNotReady", reason)
 }
+
+// ADR-0242 Decision 2: a written rule on the path of a site row wins, and a rule whose methods leave nothing of GET and
+// HEAD gets no config row.
+func TestSiteBackend_WrittenRuleWinsAndConfigMethods(t *testing.T) {
+	t.Parallel()
+	_, st, rtr, rec := setup(t)
+	s := seedSite(t, st, "fleet")
+	serveBuild(t, st, s, digestA, true)
+	seedFunction(t, st, "staging", "config-fn")
+	rt := &v1.Route{TypeMeta: v1.TypeMeta{APIVersion: v1.KindRoute.GVK().APIVersion(), Kind: v1.KindRoute}}
+	rt.Name, rt.Namespace, rt.ResourceGroup = "app", "staging", "rg1"
+	rt.Spec = v1.RouteSpec{Host: "fleet.example.com", Rules: []v1.RouteRule{
+		{Path: "/", Backend: v1.RouteBackend{Site: "fleet"}},
+		{Path: "/config.json", PathType: v1.PathTypeExact, Backend: v1.RouteBackend{Function: "config-fn"}},
+		{Path: "/post", Methods: []v1.HTTPMethod{v1.MethodPost}, Backend: v1.RouteBackend{Site: "fleet"}},
+	}}
+	_, err := st.Create(context.Background(), rt)
+	require.NoError(t, err)
+	reconcile(t, rec, "staging", "app")
+
+	m, ok := rtr.Resolve("fleet.example.com", "/config.json", "GET")
+	require.True(t, ok)
+	require.Equal(t, v1.ObjectName("config-fn"), m.Function, "the written rule wins over the site's config row")
+	m, ok = rtr.Resolve("fleet.example.com", "/post/config.json", "POST")
+	require.True(t, ok)
+	require.NotEqual(t, s.RuntimeConfigPrefix(), m.Static.Prefix, "a POST-only site rule gets no config row")
+}
+
+// SiteNotReady names why: no Route of its own, a Route it does not control, or no build.
+func TestSiteBackend_SiteNotReadyMessages(t *testing.T) {
+	t.Parallel()
+	_, st, _, rec := setup(t)
+	s := seedSite(t, st, "fleet")
+	seedSiteRoute(t, st, "fleet", "/")
+	reconcile(t, rec, "staging", "app")
+	require.Contains(t, readyMessage(t, st, "app"), "has no Route of its own yet")
+
+	older := *s
+	older.UID = "an-older-incarnation"
+	serveBuild(t, st, &older, digestA, false)
+	reconcile(t, rec, "staging", "app")
+	require.Contains(t, readyMessage(t, st, "app"), "does not control the Route of its name")
+}
