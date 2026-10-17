@@ -4,6 +4,7 @@
 - **Superseded in part by**: [ADR-0176](0176-one-collision-rule-for-every-edge-source.md) (2026-10-05) — line 108: a host-less claim may no longer shadow /function/.
 - **Superseded in part by**: [ADR-0239](0239-site-runtime-configuration.md) (2026-10-16) — the rejected alternative "Inject a `<base href>`", Scope Out "Rewriting served content", the constraint that funcd never rewrites content, and the matching (−) consequence: opt-in (`ingress.baseHref`), a Site serves a generated copy of its index carrying its mount, and a path change then writes one copy (Decision 6).
 - **Superseded in part by**: [ADR-0240](0240-namespace-hosts.md) (2026-10-17) — Decision 2: host-less Sites of one name in two namespaces answer on two hosts and no longer clash; Decision 7's tenancy sentence and the `SiteIngress.Host` comment, as in ADR-0139.
+- **Superseded in part by**: [ADR-0242](0242-site-route-backend.md) (2026-10-17) — Scope Out "Multi-host / multi-Route exposure of one `Site`": a Route rule naming the Site serves it at any address.
 - **Date**: 2026-09-27 (**Implemented 2026-09-27** — review pass (claude-opus-5): 11/11 scenarios, the
   in-process e2e and the s3 containerd lane (8/8, two sites on one listener) green, with no router,
   data-plane or static-handler change; **Accepted 2026-09-27** — judge pass folded: `Validate` now checks the RESOLVED

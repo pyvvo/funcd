@@ -16,6 +16,7 @@
 - **Superseded in part by**: [ADR-0239](0239-site-runtime-configuration.md) (2026-10-15, amended 2026-10-16) — Decision 8: a third rule shape, the generated `config.json`; with `ingress.baseHref` the bundle rule's index is a generated copy of the index. Decision 2: a bundle's root `_runtime` entry is refused.
 - **Superseded in part by**: [ADR-0240](0240-namespace-hosts.md) (2026-10-17) — the `SiteIngress.Host` contract comment: an empty host is the namespace host (`default`: every host but reserved ones), and HostRequired applies only to `default`.
 - **Superseded in part by**: [ADR-0241](0241-one-exposure-shape.md) (2026-10-17) — Decision 6: a `Disabled` owned Route keeps the Site Ready; Decision 8: `ingress.public` is removed (`ingress.auth` instead); the rejected optional ingress: a Site can be off (`ingress.enabled: false`) and keeps its Route as its record.
+- **Superseded in part by**: [ADR-0242](0242-site-route-backend.md) (2026-10-17) — the Scope Out and rejected alternative `backend.static.site`, the "One `Route` per `Site`" workaround and the open question on hand-written exposure: a Route rule can name a Site (`site: <name>`).
 - **Deciders**: green-0-rabbit
 - **Tags**: edge, static, blob, bucket, route, artifact, dx, data-platform
 - **Realizes**: [FEAT-0003/F103](../feat/0003-feat-data-platform.md) — declarative static web app (`Site`): the content half of F82.
