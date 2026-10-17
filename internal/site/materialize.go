@@ -1,7 +1,6 @@
 package site
 
 import (
-	"regexp"
 	"strings"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -12,19 +11,8 @@ import (
 // ADR-0120 static handler's default so the bundle rule and the index assertion agree.
 const defaultIndex = "index.html"
 
-// digestSlugRE recognizes the digest-scoped key segment the bundle rule is programmed with.
-var digestSlugRE = regexp.MustCompile(`^sha256-[a-f0-9]{64}$`)
-
 // digestSlug is the digest with ':' replaced by '-' — a clean object-key segment (Decision §2).
 func digestSlug(digest string) string { return strings.ReplaceAll(digest, ":", "-") }
-
-// slugDigest is digestSlug's inverse; "" when the segment is not a digest slug.
-func slugDigest(slug string) string {
-	if !digestSlugRE.MatchString(slug) {
-		return ""
-	}
-	return strings.Replace(slug, "-", ":", 1)
-}
 
 // servingPrefix is the digest-scoped key prefix the bundle materializes under: <prefix>/<slug>/.
 func servingPrefix(prefix, digest string) string { return prefix + "/" + digestSlug(digest) + "/" }
@@ -103,7 +91,7 @@ func compileRoute(s *v1.Site, digest, index string, config bool) v1.RouteSpec {
 			Path:     s.RuntimeConfigPath(),
 			PathType: v1.PathTypeExact,
 			Methods:  []v1.HTTPMethod{v1.MethodGet, v1.MethodHead},
-			Backend:  v1.RouteBackend{Static: &v1.StaticBackend{Bucket: s.Spec.Bucket.Name, Prefix: runtimeConfigPrefix(s), Index: v1.SiteRuntimeConfigFile}},
+			Backend:  v1.RouteBackend{Static: &v1.StaticBackend{Bucket: s.Spec.Bucket.Name, Prefix: s.RuntimeConfigPrefix(), Index: v1.SiteRuntimeConfigFile}},
 		})
 	}
 	spec := v1.RouteSpec{Host: ing.Host, Rules: rules, Enabled: ing.Enabled}
@@ -114,26 +102,12 @@ func compileRoute(s *v1.Site, digest, index string, config bool) v1.RouteSpec {
 	return spec
 }
 
-// servingDigest is compileRoute's inverse — the durable record of what is served (ADR-0139 §3). It
-// identifies the bundle rule by its DIGEST-SCOPED KEY PREFIX ("<prefix>/<slug>/" with a well-formed
-// slug), never by its edge path, so the record survives an ingress.path change (ADR-0140 §5). A data
-// mount's prefix is never digest-scoped, so the match is unambiguous.
-func servingDigest(rt *v1.Route, prefix string) string {
-	if rt == nil {
+// servingDigest is compileRoute's inverse — the durable record of what is served (ADR-0139 §3): the digest of the
+// bundle rule v1.Site.Served finds on the Site's own Route, or "".
+func servingDigest(rt *v1.Route, s *v1.Site) string {
+	bundle, _, ok := s.Served(rt)
+	if !ok {
 		return ""
 	}
-	for i := range rt.Spec.Rules {
-		st := rt.Spec.Rules[i].Backend.Static
-		if st == nil {
-			continue
-		}
-		rest, ok := strings.CutPrefix(st.Prefix, prefix+"/")
-		if !ok {
-			continue
-		}
-		if d := slugDigest(strings.TrimSuffix(rest, "/")); d != "" {
-			return d
-		}
-	}
-	return ""
+	return v1.SlugDigest(strings.TrimSuffix(strings.TrimPrefix(bundle.Prefix, s.Spec.Prefix+"/"), "/"))
 }

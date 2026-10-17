@@ -1,6 +1,6 @@
 # ADR-0242: A Route backend that serves a Site
 
-- **Status**: Accepted (2026-10-17), after two judge rounds; the decider confirmed Decisions 2–5 and asked for a lane case.
+- **Status**: Implemented (2026-10-17), review passed; Reviewing (2026-10-17); Accepted (2026-10-17), after two judge rounds; the decider confirmed Decisions 2–5 and asked for a lane case.
 - **Date**: 2026-10-17
 - **Deciders**: green-0-rabbit
 - **Tags**: edge, routing, site, static
