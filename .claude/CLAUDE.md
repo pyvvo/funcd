@@ -282,6 +282,10 @@ generates the issue forms in `.github/ISSUE_TEMPLATE/` (computed — never hand-
 
 - **Where things go**: a defect, a task or a feature of a feat doc → an issue; an un-scoped idea → a board card;
   a decision → an ADR.
+- **Check that it is a defect before filing it.** Read what pins the behavior first: its ADR's Decision and Scenarios,
+  the docs, and the code's own comments and tests. Behavior they intend is no bug: a request to change it is a design
+  change (`needs-adr`, a superseding ADR) or a board card, and the reply to the reporter says which. Reproduce a
+  suspected bug on the current main, and say what ran, before filing it.
 - **One defect per issue**, with exactly one `kind/`, exactly one `priority/`, and at least one `area/` label.
 - **No issue without a parent.** Every issue is a sub-issue of a tracker: a campaign files a root tracker,
   one group tracker per theme under it, and its issues under the group trackers (#232, #732); an epoch files one
