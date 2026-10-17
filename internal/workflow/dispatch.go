@@ -71,6 +71,7 @@ type HTTPDispatcher struct {
 	endpoints activator.Endpoints
 	waker     Waker
 	grant     Granter
+	protocol  activator.ProtocolFunc
 	client    *http.Client
 	log       *slog.Logger
 }
@@ -80,8 +81,10 @@ type DispatchDeps struct {
 	Endpoints activator.Endpoints
 	Waker     Waker
 	Grant     Granter
-	Client    *http.Client
-	Logger    *slog.Logger
+	// Protocol, when set, refuses a step function that serves HTTP before any request (ADR-0243 Decision 5).
+	Protocol activator.ProtocolFunc
+	Client   *http.Client
+	Logger   *slog.Logger
 }
 
 // NewHTTPDispatcher builds the production dispatcher.
@@ -98,7 +101,7 @@ func NewHTTPDispatcher(d DispatchDeps) (*HTTPDispatcher, error) {
 		log = slog.Default()
 	}
 	return &HTTPDispatcher{
-		endpoints: d.Endpoints, waker: d.Waker, grant: d.Grant, client: client,
+		endpoints: d.Endpoints, waker: d.Waker, grant: d.Grant, protocol: d.Protocol, client: client,
 		log: log.With("component", "workflow.dispatch"),
 	}, nil
 }
@@ -121,6 +124,9 @@ func (d *HTTPDispatcher) Dispatch(ctx context.Context, req DispatchRequest) (jso
 	fn := activator.FunctionRef{Namespace: req.Namespace, Name: req.Target}
 	if req.Revision != nil {
 		fn.Revision, fn.UID = req.Revision.Revision, req.Revision.FunctionUID
+	}
+	if err := activator.RefuseHTTP(ctx, d.protocol, fn, op); err != nil {
+		return nil, Permanent(err)
 	}
 	upstream, err := d.upstream(ctx, fn)
 	if err != nil {

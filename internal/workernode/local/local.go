@@ -63,7 +63,8 @@ func traceparentFrom(ctx context.Context) string {
 // Resolver maps (caller, alias) → the link target, applying the link-as-grant rule (default-deny):
 // fault.Forbidden when the caller declares no such link. Same-namespace only (V1.1).
 type Resolver interface {
-	Resolve(ctx context.Context, caller Ref, alias string) (target Ref, timeout time.Duration, err error)
+	// Resolve returns the link's target, how it is called (ADR-0243) and the link's timeout.
+	Resolve(ctx context.Context, caller Ref, alias string) (target Ref, protocol v1.FunctionProtocol, timeout time.Duration, err error)
 }
 
 // Invoker performs the synchronous call to target and returns its output bytes. On a target non-2xx
@@ -72,6 +73,25 @@ type Resolver interface {
 // returns a fault error (e.g. fault.Unavailable → 503).
 type Invoker interface {
 	Invoke(ctx context.Context, target Ref, input []byte, timeout time.Duration) ([]byte, error)
+	// Fetch sends req to target, a Function that serves HTTP, and returns its whole reply (ADR-0243 Decision 6).
+	Fetch(ctx context.Context, target Ref, req FetchRequest, timeout time.Duration) (FetchReply, error)
+}
+
+// FetchRequest is a context.fetch call: the request the caller's shim sent, its path relative to the target.
+type FetchRequest struct {
+	Method string
+	// Path is percent-encoded as the caller sent it, so an escaped space, % or ? reaches the target as sent.
+	Path     string
+	RawQuery string
+	Header   http.Header
+	Body     []byte
+}
+
+// FetchReply is the target's whole reply to a FetchRequest, at most maxInvokeBytes of body.
+type FetchReply struct {
+	Status int
+	Header http.Header
+	Body   []byte
 }
 
 // UpstreamError carries a target's non-2xx response so the local API propagates it verbatim — the
@@ -177,32 +197,20 @@ func NewHandler(caller Ref, res Resolver, inv Invoker, authz auth.Authorizer, kv
 			fault.WriteProblem(w, err)
 			return
 		}
-		target, timeout, err := res.Resolve(r.Context(), caller, alias)
+		target, protocol, timeout, err := res.Resolve(r.Context(), caller, alias)
 		if err != nil {
 			logger.Warn("fn-to-fn invoke denied", "caller", caller.String(), "alias", alias, "reason", err.Error())
 			fault.WriteProblem(w, err) // Forbidden (no link) / NotFound (unknown target)
 			return
 		}
-		// PDP gate (ADR-0075): a declared link is permitted by the built-in unless a forbid Policy
-		// revokes it. The principal is connection-scoped (callerIdentity), the resource is the target.
-		if authz != nil {
-			dec, derr := authz.Authorize(r.Context(), auth.Request{
-				Identity: callerIdentity,
-				Action:   auth.ActionLinkInvoke,
-				Resource: &auth.EntityRef{Type: v1.KindFunction, Namespace: target.Namespace, Name: target.Function},
-			})
-			if derr != nil {
-				logger.Warn("fn-to-fn invoke authz error", "caller", caller.String(), "alias", alias,
-					"target", target.String(), "err", derr.Error())
-				fault.WriteProblem(w, fault.Wrapf(derr, fault.KindOf(derr), op, "authorize link::invoke"))
-				return
-			}
-			if !dec.Allowed {
-				logger.Warn("fn-to-fn invoke denied by policy", "caller", caller.String(), "alias", alias,
-					"target", target.String(), "reason", dec.Reason)
-				fault.WriteProblem(w, fault.Forbiddenf(op, "caller %s is not authorized to invoke %s: %s", caller.String(), target.String(), dec.Reason))
-				return
-			}
+		if protocol == v1.ProtocolHTTP {
+			fault.WriteProblem(w, fault.Conflictf(op, "%s serves HTTP; call it with context.fetch, not invoke", target))
+			return
+		}
+		if err := authorizeLink(r.Context(), authz, callerIdentity, target, op); err != nil {
+			logger.Warn("fn-to-fn invoke refused", "caller", caller.String(), "alias", alias, "target", target.String(), "err", err.Error())
+			fault.WriteProblem(w, err)
+			return
 		}
 		out, err := inv.Invoke(withTraceparent(r.Context(), r.Header.Get(traceparentHeader)), target, input, timeout)
 		durMs := time.Since(start).Milliseconds()
@@ -232,7 +240,91 @@ func NewHandler(caller Ref, res Resolver, inv Invoker, authz auth.Authorizer, kv
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(out)
 	})
-	return opaqueKeys(mux)
+	api := opaqueKeys(mux)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A fetch path is the target's (ADR-0243 Decision 6): it goes around ServeMux, which would clean and decode it.
+		if rest, ok := strings.CutPrefix(r.URL.EscapedPath(), "/fetch/"); ok {
+			serveFetch(w, r, rest, caller, callerIdentity, res, inv, authz, logger)
+			return
+		}
+		api.ServeHTTP(w, r)
+	})
+}
+
+// FetchReplyHeader marks a context.fetch answer that is the target's reply, so the shim tells it from a call the local
+// API refused before it reached the target (ADR-0243 Decision 6).
+const FetchReplyHeader = "X-Funcd-Fetch-Reply"
+
+// serveFetch answers a context.fetch call, /fetch/<alias><path> with rest the escaped path after /fetch/ (ADR-0243
+// Decision 6): the same link, PDP and nested-cap checks as invoke, a target that serves HTTP, and the target's reply
+// written back whole with its status and headers. The path reaches the target percent-encoded as the caller sent it.
+func serveFetch(w http.ResponseWriter, r *http.Request, rest string, caller Ref, identity auth.Identity, res Resolver,
+	inv Invoker, authz auth.Authorizer, logger *slog.Logger) {
+	const op = "workernode.local.fetch"
+	rawAlias, path, found := strings.Cut(rest, "/")
+	alias, aerr := url.PathUnescape(rawAlias)
+	if !found || aerr != nil || alias == "" {
+		fault.WriteProblem(w, fault.NotFoundf(op, "no fetch route %s: want /fetch/<alias>/<path>", r.URL.EscapedPath()))
+		return
+	}
+	body, err := readBody(w, r, op, maxInvokeBytes)
+	if err != nil {
+		fault.WriteProblem(w, err)
+		return
+	}
+	target, protocol, timeout, err := res.Resolve(r.Context(), caller, alias)
+	if err != nil {
+		logger.Warn("fn-to-fn fetch denied", "caller", caller.String(), "alias", alias, "reason", err.Error())
+		fault.WriteProblem(w, err)
+		return
+	}
+	if protocol != v1.ProtocolHTTP {
+		fault.WriteProblem(w, fault.Conflictf(op, "%s does not serve HTTP; call it with context.invoke, not fetch", target))
+		return
+	}
+	if err := authorizeLink(r.Context(), authz, identity, target, op); err != nil {
+		logger.Warn("fn-to-fn fetch refused", "caller", caller.String(), "alias", alias, "target", target.String(), "err", err.Error())
+		fault.WriteProblem(w, err)
+		return
+	}
+	header := r.Header.Clone()
+	header.Del(MemberHeader)
+	reply, err := inv.Fetch(withTraceparent(r.Context(), r.Header.Get(traceparentHeader)), target, FetchRequest{
+		Method: r.Method, Path: "/" + path, RawQuery: r.URL.RawQuery, Header: header, Body: body,
+	}, timeout)
+	if err != nil {
+		logger.Warn("fn-to-fn fetch failed", "caller", caller.String(), "alias", alias, "target", target.String(), "err", err.Error())
+		fault.WriteProblem(w, err)
+		return
+	}
+	for key, values := range reply.Header {
+		for _, v := range values {
+			w.Header().Add(key, v)
+		}
+	}
+	w.Header().Set(FetchReplyHeader, "1")
+	w.WriteHeader(reply.Status)
+	_, _ = w.Write(reply.Body)
+}
+
+// authorizeLink is the PDP gate of a link call (ADR-0075): a declared link is permitted by the built-in unless a
+// forbid Policy revokes it. The principal is connection-scoped, the resource is the target. A nil authz allows it.
+func authorizeLink(ctx context.Context, authz auth.Authorizer, identity auth.Identity, target Ref, op string) error {
+	if authz == nil {
+		return nil
+	}
+	dec, err := authz.Authorize(ctx, auth.Request{
+		Identity: identity,
+		Action:   auth.ActionLinkInvoke,
+		Resource: &auth.EntityRef{Type: v1.KindFunction, Namespace: target.Namespace, Name: target.Function},
+	})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "authorize link::invoke")
+	}
+	if !dec.Allowed {
+		return fault.Forbiddenf(op, "caller %s is not authorized to invoke %s: %s", identity.Subject, target.String(), dec.Reason)
+	}
+	return nil
 }
 
 // serveDependencies answers caller's dependency check within DependencyCheckBudget: 200, or 503 with the report; a

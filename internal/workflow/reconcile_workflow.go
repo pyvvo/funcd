@@ -733,7 +733,8 @@ func (r *WorkflowReconciler) deriveAndCheck(ctx context.Context, wf *v1.Workflow
 }
 
 // stepImage returns the OCI ref whose contract types a step: an owned image directly, or a function-ref's
-// referenced Function image (store lookup). A builtin/workflow step, or a ref not present yet, is untyped.
+// referenced Function image (store lookup). A builtin/workflow step, or a ref not present yet, is untyped, as is a ref
+// to a Function that serves HTTP: it has no contract, and its dispatch fails TargetServesHTTP (ADR-0243 Decision 5).
 func (r *WorkflowReconciler) stepImage(ctx context.Context, wf *v1.Workflow, st *v1.WorkflowStep) (string, bool, error) {
 	if st.Function == nil {
 		return "", false, nil
@@ -749,7 +750,11 @@ func (r *WorkflowReconciler) stepImage(ctx context.Context, wf *v1.Workflow, st 
 		if err != nil {
 			return "", false, err
 		}
-		return obj.(*v1.Function).Spec.Image, true, nil
+		fn := obj.(*v1.Function)
+		if fn.Spec.Protocol.Normalized() == v1.ProtocolHTTP {
+			return "", false, nil
+		}
+		return fn.Spec.Image, true, nil
 	}
 	return "", false, nil
 }

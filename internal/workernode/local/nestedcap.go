@@ -41,19 +41,35 @@ func NewNestedCapInvoker(inner Invoker, maxPerTarget int, meter metric.Meter) In
 }
 
 func (n *nestedCapInvoker) Invoke(ctx context.Context, target Ref, input []byte, timeout time.Duration) ([]byte, error) {
+	if err := n.take(ctx, target); err != nil {
+		return nil, err
+	}
+	defer n.done(target)
+	return n.inner.Invoke(ctx, target, input, timeout)
+}
+
+// Fetch counts a context.fetch call against the same cap as an invoke of its target (ADR-0243 Decision 6).
+func (n *nestedCapInvoker) Fetch(ctx context.Context, target Ref, req FetchRequest, timeout time.Duration) (FetchReply, error) {
+	if err := n.take(ctx, target); err != nil {
+		return FetchReply{}, err
+	}
+	defer n.done(target)
+	return n.inner.Fetch(ctx, target, req, timeout)
+}
+
+// take counts one more nested call to target, or refuses it when the cap is reached.
+func (n *nestedCapInvoker) take(ctx context.Context, target Ref) error {
 	n.mu.Lock()
+	defer n.mu.Unlock()
 	if n.inFlight[target] >= n.max {
-		n.mu.Unlock()
 		n.refused.Add(ctx, 1, metric.WithAttributes(
 			attribute.String("namespace", string(target.Namespace)),
 			attribute.String("function", string(target.Function))))
-		return nil, fault.ResourceExhaustedf(NestedCapOp,
+		return fault.ResourceExhaustedf(NestedCapOp,
 			"%s has %d nested calls in flight, the cap set by invoke.maxNestedInFlight", target, n.max)
 	}
 	n.inFlight[target]++
-	n.mu.Unlock()
-	defer n.done(target)
-	return n.inner.Invoke(ctx, target, input, timeout)
+	return nil
 }
 
 func (n *nestedCapInvoker) done(target Ref) {

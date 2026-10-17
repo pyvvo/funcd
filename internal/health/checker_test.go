@@ -62,6 +62,10 @@ func (n noInvoke) Invoke(context.Context, local.Ref, []byte, time.Duration) ([]b
 	return nil, fault.Internalf("noInvoke", "called")
 }
 
+func (noInvoke) Fetch(context.Context, local.Ref, local.FetchRequest, time.Duration) (local.FetchReply, error) {
+	return local.FetchReply{}, nil
+}
+
 type fixture struct {
 	t     *testing.T
 	st    store.Store

@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
+
 	"github.com/pyvvo/funcd/api/fault"
 )
 
@@ -56,6 +58,9 @@ type FunctionSpec struct {
 	Runtime RuntimeName `json:"runtime,omitempty"`
 	// Handler is the entrypoint the shim resolves at materialization (e.g. "app.handler") — F13.
 	Handler string `json:"handler,omitempty" pattern:"^[A-Za-z_][A-Za-z0-9_.]*$"`
+	// Protocol is how the shim calls the code (ADR-0243): "cloudevent", the default, or "http", an http(app) export
+	// that serves every request and that only the edge calls.
+	Protocol FunctionProtocol `json:"protocol,omitempty"`
 	// Image is the source artifact OCI ref (oci-layout:// · file:// · a bare registry ref; the tag at the
 	// string end), pulled + served by the runtime — F13/ADR-0020, flattened by ADR-0097 (was spec.artifact.uri).
 	Image string `json:"image,omitempty"`
@@ -176,6 +181,29 @@ type FunctionBlob struct {
 	Prefix string `json:"prefix" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"`
 }
 
+// FunctionProtocol is how funcd calls a Function's code (ADR-0243).
+type FunctionProtocol string
+
+const (
+	// ProtocolCloudEvent calls the handler with a CloudEvent, the default.
+	ProtocolCloudEvent FunctionProtocol = "cloudevent"
+	// ProtocolHTTP calls an http(app) export with each request the edge forwards.
+	ProtocolHTTP FunctionProtocol = "http"
+)
+
+// Schema renders the huma enum for FunctionProtocol (empty accepted, normalizes to cloudevent).
+func (FunctionProtocol) Schema(huma.Registry) *huma.Schema {
+	return enumSchema("", string(ProtocolCloudEvent), string(ProtocolHTTP))
+}
+
+// Normalized returns the effective protocol, mapping the empty value to cloudevent.
+func (p FunctionProtocol) Normalized() FunctionProtocol {
+	if p == ProtocolHTTP {
+		return ProtocolHTTP
+	}
+	return ProtocolCloudEvent
+}
+
 // Pooling is the per-function pooling opt-in (ADR-0046, F28). Named "Pooling" (not
 // "Placement") to stay clear of scheduler.Placement (node selection, ADR-0017): pooling
 // answers which shared worker within a node a function joins.
@@ -243,6 +271,9 @@ func (f *Function) Validate() error {
 	if ing := f.Spec.Ingress; ing != nil && (ing.Path == "/function" || strings.HasPrefix(ing.Path, "/function/")) {
 		return fault.Invalidf("Function.Validate", "spec.ingress.path %q must not be /function or under it", ing.Path)
 	}
+	if err := f.Spec.validateProtocol(); err != nil {
+		return err
+	}
 	return f.Spec.Validate()
 }
 
@@ -286,6 +317,26 @@ func (s *FunctionSpec) Validate() error {
 		}
 	}
 	return s.validateBindings(op, "spec")
+}
+
+// validateProtocol refuses a protocol other than cloudevent and http, and an http Function that is pooled or that runs
+// on a runtime outside the node family, the only one whose shim serves HTTP (ADR-0243 Decision 1).
+func (s *FunctionSpec) validateProtocol() error {
+	const op = "Function.Validate"
+	switch s.Protocol {
+	case "", ProtocolCloudEvent:
+		return nil
+	case ProtocolHTTP:
+	default:
+		return fault.Invalidf(op, "spec.protocol %q is neither cloudevent nor http", s.Protocol)
+	}
+	if s.Pooling.Worker != "" {
+		return fault.Invalidf(op, "spec.protocol http: a Function that serves HTTP is never pooled, so spec.pooling.worker %q is refused", s.Pooling.Worker)
+	}
+	if !s.Runtime.IsNode() {
+		return fault.Invalidf(op, "spec.protocol http needs a node runtime, not %q", s.Runtime)
+	}
+	return nil
 }
 
 // validateBindings checks the kv, blob, catalog and config bindings, naming each field under prefix. A Workflow runs

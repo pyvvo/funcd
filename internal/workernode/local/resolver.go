@@ -24,25 +24,48 @@ type storeResolver struct{ store FunctionStore }
 // NewResolver returns the store-backed link Resolver.
 func NewResolver(s FunctionStore) Resolver { return storeResolver{store: s} }
 
-func (r storeResolver) Resolve(ctx context.Context, caller Ref, alias string) (Ref, time.Duration, error) {
+func (r storeResolver) Resolve(ctx context.Context, caller Ref, alias string) (Ref, v1.FunctionProtocol, time.Duration, error) {
 	const op = "workernode.local.resolve"
 	obj, err := r.store.Get(ctx, v1.KindFunction.GVK(), caller.Namespace, caller.Function)
 	if err != nil {
-		return Ref{}, 0, fault.Wrapf(err, fault.Internal, op, "load caller function %s/%s", caller.Namespace, caller.Function)
+		return Ref{}, "", 0, fault.Wrapf(err, fault.Internal, op, "load caller function %s/%s", caller.Namespace, caller.Function)
 	}
 	fn, ok := obj.(*v1.Function)
 	if !ok {
-		return Ref{}, 0, fault.Internalf(op, "caller %s/%s is not a Function", caller.Namespace, caller.Function)
+		return Ref{}, "", 0, fault.Internalf(op, "caller %s/%s is not a Function", caller.Namespace, caller.Function)
 	}
 	for _, l := range fn.Spec.Links {
-		if l.Alias == alias {
-			timeout := time.Duration(l.Timeout)
-			if timeout <= 0 {
-				timeout = defaultTimeout
-			}
-			// Same-namespace target (cross-namespace needs a Grant, V2).
-			return Ref{Namespace: caller.Namespace, Function: l.Target}, timeout, nil
+		if l.Alias != alias {
+			continue
 		}
+		timeout := time.Duration(l.Timeout)
+		if timeout <= 0 {
+			timeout = defaultTimeout
+		}
+		// Same-namespace target (cross-namespace needs a Grant, V2).
+		target := Ref{Namespace: caller.Namespace, Function: l.Target}
+		protocol, err := r.protocolOf(ctx, target)
+		if err != nil {
+			return Ref{}, "", 0, err
+		}
+		return target, protocol, timeout, nil
 	}
-	return Ref{}, 0, fault.Forbiddenf(op, "caller %s/%s declares no link %q (no link is no grant)", caller.Namespace, caller.Function, alias)
+	return Ref{}, "", 0, fault.Forbiddenf(op, "caller %s/%s declares no link %q (no link is no grant)", caller.Namespace, caller.Function, alias)
+}
+
+// protocolOf reads how target is called (ADR-0243), so invoke and fetch each refuse the other kind of target.
+func (r storeResolver) protocolOf(ctx context.Context, target Ref) (v1.FunctionProtocol, error) {
+	const op = "workernode.local.resolve"
+	obj, err := r.store.Get(ctx, v1.KindFunction.GVK(), target.Namespace, target.Function)
+	if fault.KindOf(err) == fault.NotFound {
+		return "", fault.NotFoundf(op, "link target %s does not exist", target)
+	}
+	if err != nil {
+		return "", fault.Wrapf(err, fault.KindOf(err), op, "load link target %s", target)
+	}
+	fn, ok := obj.(*v1.Function)
+	if !ok {
+		return "", fault.Internalf(op, "link target %s is not a Function", target)
+	}
+	return fn.Spec.Protocol.Normalized(), nil
 }

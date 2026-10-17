@@ -17,7 +17,6 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
-	"github.com/pyvvo/funcd/internal/artifact"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
@@ -212,7 +211,7 @@ func reloadChanged(ctx context.Context, op string, c *sdk.Client, hs []*devHandl
 		}
 	}
 	for _, h := range changed {
-		contractBlob, cerr := artifact.ContractBlob(h.pf.m.Contract.Input, h.pf.m.Contract.Output)
+		contractBlob, cerr := devContract(h.pf.m)
 		if cerr != nil {
 			errs = append(errs, fault.Wrapf(cerr, fault.KindOf(cerr), op, "build contract for %s", h.pf.name))
 			continue

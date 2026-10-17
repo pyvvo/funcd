@@ -25,6 +25,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/activator"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/eventing"
 	"github.com/pyvvo/funcd/internal/eventing/deadletter"
@@ -173,7 +174,8 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 }
 
 // Reconcile owns KindSensor: static-check the Sensor, (idempotently) subscribe its dependencies to the
-// Fanout, and set Ready — or NotReady with a reason on a static defect; unsubscribe on delete.
+// Fanout, and set Ready — or NotReady with a reason on a static defect, unsubscribed, or on an action naming a
+// Function that serves HTTP, still subscribed; unsubscribe on delete.
 func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (controller.Result, error) {
 	k := sensorKey{req.Namespace, req.Name}
 	obj, err := r.store.Get(ctx, v1.KindSensor.GVK(), req.Namespace, req.Name)
@@ -216,9 +218,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		r.mu.Unlock()
 	}
 
-	if cur, ok := se.Status.Conditions.Get(condReady); !ok || cur.Status != v1.ConditionTrue || se.Status.Phase != v1.PhaseReady {
-		se.Status.Phase = v1.PhaseReady
-		se.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue, Reason: "Bound", ObservedGeneration: se.Generation})
+	// An action naming a Function that serves HTTP keeps its subscription, so each event it matches fails and is
+	// recorded (ADR-0243 Decision 5).
+	want := v1.Condition{Type: condReady, Status: v1.ConditionTrue, Reason: "Bound", ObservedGeneration: se.Generation}
+	phase := v1.PhaseReady
+	if reason, msg, ok := r.targetCheck(ctx, se); !ok {
+		want.Status, want.Reason, want.Message, phase = v1.ConditionFalse, reason, capMsg(msg), v1.PhasePending
+	}
+	if cur, ok := se.Status.Conditions.Get(condReady); !ok || cur.Status != want.Status || cur.Reason != want.Reason ||
+		cur.Message != want.Message || se.Status.Phase != phase {
+		se.Status.Phase = phase
+		se.Status.Conditions.Set(want)
 		return controller.Result{}, r.updateStatus(ctx, se)
 	}
 	return controller.Result{}, nil
@@ -529,6 +539,50 @@ func (r *Reconciler) updateStatus(ctx context.Context, se *v1.Sensor) error {
 		return fault.Wrapf(err, fault.KindOf(err), op, "update sensor status %q", se.Name)
 	}
 	return nil
+}
+
+// targetCheck refuses an action that names a Function serving HTTP, which only the edge calls (ADR-0243 Decision 5).
+// A target that is missing or cannot be read is left to the delivery, which reports it.
+func (r *Reconciler) targetCheck(ctx context.Context, se *v1.Sensor) (reason, msg string, ok bool) {
+	for i := range se.Spec.Do {
+		a := &se.Spec.Do[i]
+		if a.Function == "" {
+			continue
+		}
+		obj, err := r.store.Get(ctx, v1.KindFunction.GVK(), se.Namespace, a.Function)
+		if err != nil {
+			continue
+		}
+		if fn, isFn := obj.(*v1.Function); isFn && fn.Spec.Protocol.Normalized() == v1.ProtocolHTTP {
+			return activator.ReasonTargetServesHTTP, fmt.Sprintf("action %q: function %q serves HTTP and only the edge calls it; call it through a Function that uses context.fetch", a.Name, a.Function), false
+		}
+	}
+	return "", "", true
+}
+
+// MapFunction maps a Function event to the Sensors of its namespace whose actions name it, so a Function that starts
+// or stops serving HTTP re-checks them (ADR-0243 Decision 5).
+func (r *Reconciler) MapFunction(ctx context.Context, obj v1.Object) []controller.Request {
+	meta := obj.GetObjectMeta()
+	list, err := r.store.List(ctx, v1.KindSensor.GVK(), store.ListOptions{Namespace: meta.Namespace})
+	if err != nil {
+		r.logger.WarnContext(ctx, "list sensors of a changed function", "namespace", string(meta.Namespace), "function", string(meta.Name), "error", err)
+		return nil
+	}
+	var reqs []controller.Request
+	for _, o := range list.Items {
+		se, ok := o.(*v1.Sensor)
+		if !ok {
+			continue
+		}
+		for i := range se.Spec.Do {
+			if se.Spec.Do[i].Function == meta.Name {
+				reqs = append(reqs, controller.Request{GVK: v1.KindSensor.GVK(), Namespace: se.Namespace, Name: se.Name})
+				break
+			}
+		}
+	}
+	return reqs
 }
 
 // staticCheck validates every action's ${{ }} input fields at reconcile (parse + Check against the event

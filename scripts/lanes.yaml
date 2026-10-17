@@ -120,6 +120,29 @@ fn-to-fn:
     tries: 40
   venom: e2e/fn-to-fn.venom.yml
 
+http-api:
+  description: A JS Function that serves HTTP, a Hono REST API behind a Route, with a streamed export (ADR-0243).
+  module: github.com/pyvvo/funcd-typescript
+  dir: examples/http-api
+  stage:
+    - devices.mjs
+    - devices.funcdctl.yaml
+    - devices.yaml
+    - route.yaml
+    - funcdconfig.yaml
+  push:
+    - artifact: devices.mjs
+      ref: devices
+  apply:
+    - devices.yaml
+    - route.yaml
+  ready:
+    kind: function
+    names:
+      - devices-api
+    tries: 40
+  venom: e2e/http-api.venom.yml
+
 duckdb:
   description: The catalog-quack provider + bundle consumer, live SQL round-trip (ADR-0086..0093).
   module: github.com/pyvvo/funcd-python

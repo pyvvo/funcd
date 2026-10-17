@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"unicode/utf8"
 
 	"golang.org/x/net/http/httpguts"
 
@@ -72,6 +73,20 @@ func normalizeInvokeBody(ns v1.NamespaceName, name v1.ObjectName, body []byte, n
 	}
 	// Any other valid JSON value → wrap it as the event data.
 	return wrapEnvelope(ns, name, json.RawMessage(body), newID), true
+}
+
+// HTTPEnvelope returns body as the CloudEvents v1.0 envelope for a call to an http Function (ADR-0243 Decision 3): it
+// wraps every JSON body, even one with a top-level "specversion" or "data" key that ADR-0134 passes through for event
+// callers, so the shim's adapter unwraps it without ambiguity. An empty body carries data:null, and a body that is not
+// JSON, or not UTF-8, which json.Valid lets through and the adapter would not decode, passes unchanged.
+func HTTPEnvelope(ns v1.NamespaceName, name v1.ObjectName, body []byte) []byte {
+	if len(bytes.TrimSpace(body)) == 0 {
+		return wrapEnvelope(ns, name, json.RawMessage("null"), newInvokeID)
+	}
+	if !json.Valid(body) || !utf8.Valid(body) {
+		return body
+	}
+	return wrapEnvelope(ns, name, json.RawMessage(body), newInvokeID)
 }
 
 // InvokeEnvelope returns body as the CloudEvents v1.0 envelope for an invoke of ns/name under the

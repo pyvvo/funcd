@@ -1,6 +1,7 @@
 # ADR-0243: Functions that serve HTTP
 
-- **Status**: Accepted (2026-10-17) under the decider's delegation ("go ahead until you finish"), after two judge rounds.
+- **Status**: Implemented (2026-10-18, review passed on its second round). Accepted (2026-10-17) under the decider's
+  delegation ("go ahead until you finish"), after two judge rounds.
 - **Date**: 2026-10-17
 - **Deciders**: green-0-rabbit
 - **Tags**: function, shim, edge, http, streaming

@@ -10,13 +10,15 @@ import (
 
 	"github.com/stretchr/testify/require"
 	metricnoop "go.opentelemetry.io/otel/metric/noop"
+
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
 // staticResolver resolves every alias to target.
 type staticResolver struct{ target Ref }
 
-func (s staticResolver) Resolve(context.Context, Ref, string) (Ref, time.Duration, error) {
-	return s.target, 5 * time.Second, nil
+func (s staticResolver) Resolve(context.Context, Ref, string) (Ref, v1.FunctionProtocol, time.Duration, error) {
+	return s.target, v1.ProtocolCloudEvent, 5 * time.Second, nil
 }
 
 // recordingDataPlane answers every synthesized POST /function/<target> with body and keeps its headers.

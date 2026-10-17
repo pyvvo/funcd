@@ -58,6 +58,10 @@ func (p poolInvoker) Invoke(_ context.Context, target local.Ref, _ []byte, _ tim
 	return []byte(`{}`), nil
 }
 
+func (poolInvoker) Fetch(context.Context, local.Ref, local.FetchRequest, time.Duration) (local.FetchReply, error) {
+	return local.FetchReply{}, nil
+}
+
 // poolPort is the KV port, and with SignedURL the blob port; port names which one it is in the record.
 type poolPort struct {
 	*poolCalls
@@ -145,7 +149,7 @@ func TestScenarioPoolRefusesOutsider(t *testing.T) {
 		name, method, path string
 		served             []string
 	}{
-		{"invoke", http.MethodPost, "/invoke/x", []string{"store team-a/b", "invoke team-a/t"}},
+		{"invoke", http.MethodPost, "/invoke/x", []string{"store team-a/b", "store team-a/t", "invoke team-a/t"}},
 		{"kv", http.MethodGet, "/kv/k/key", []string{"kv team-a/b"}},
 		{"blob", http.MethodGet, "/blob/k/key", []string{"blob team-a/b"}},
 	} {

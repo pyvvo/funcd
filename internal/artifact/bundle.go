@@ -226,6 +226,22 @@ func PushBundle(ctx context.Context, ref, dir, entry, runtime string, platform v
 	if verr != nil {
 		return "", fault.Wrapf(verr, fault.KindOf(verr), op, "verify bundle contract")
 	}
+	return pushBundle(ctx, op, ref, dir, entry, runtime, platform, contract)
+}
+
+// PushBundleNoContract is PushBundle for a function with no I/O contract, one that serves HTTP (ADR-0243 Decision 7):
+// it pushes no contract layer, and it refuses a bundle that holds __funcd_contract.json, which the worker would take
+// for its contract.
+func PushBundleNoContract(ctx context.Context, ref, dir, entry, runtime string, platform v1.OCIPlatform) (digest string, err error) {
+	const op = "artifact.PushBundleNoContract"
+	if _, serr := os.Stat(filepath.Join(dir, bundleContractFile)); serr == nil {
+		return "", fault.Invalidf(op, "the bundle holds %s, but its function has no I/O contract", bundleContractFile)
+	}
+	return pushBundle(ctx, op, ref, dir, entry, runtime, platform, nil)
+}
+
+// pushBundle pushes dir as a bundle artifact, with contract as its ADR-0059 contract layer when it is set.
+func pushBundle(ctx context.Context, op, ref, dir, entry, runtime string, platform v1.OCIPlatform, contract []byte) (string, error) {
 	data, perr := PackBundle(dir, entry)
 	if perr != nil {
 		return "", fault.Wrapf(perr, fault.KindOf(perr), op, "pack bundle")
