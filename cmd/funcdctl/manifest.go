@@ -61,6 +61,38 @@ func resolveManifest(path string) (*sdk.Manifest, string, error) {
 	return nil, "", nil
 }
 
+// manifestEntry resolves a manifest's bundle root + entry file. With the wrangler-style `main` set (a
+// handler file relative to the manifest dir), the handler's OWN dir is the bundle root — its siblings
+// (SQL, vendored deps under a bundle/) resolve and FUNCD_BUNDLE_DIR points there — so it runs IN PLACE.
+// Without `main`, it's the flat stem/generic convention: defaultEntry co-located with the manifest,
+// isolated per defaultIsolate.
+func manifestEntry(m *sdk.Manifest, dir, defaultEntry string, defaultIsolate bool) (srcDir, entry string, isolate bool) {
+	if strings.TrimSpace(m.Main) != "" {
+		full := filepath.Join(dir, m.Main)
+		return filepath.Dir(full), filepath.Base(full), false
+	}
+	return dir, defaultEntry, defaultIsolate
+}
+
+// defaultEntry is the conventional handler entry file for a runtime family: handler.py for the python
+// family, handler.mjs otherwise. Overridable with --entry.
+func defaultEntry(rt v1.RuntimeName) string {
+	if strings.HasPrefix(string(rt), "python") {
+		return "handler.py"
+	}
+	return "handler.mjs"
+}
+
+// pushEntry is the bundle entry of a push that m governs: --entry when the command line sets it, else the
+// handler funcdctl dev runs for m (its main, else the runtime's default entry), relative to the bundle root.
+func pushEntry(cmd *cobra.Command, entry string, m *sdk.Manifest) string {
+	if cmd.Flags().Changed("entry") {
+		return entry
+	}
+	srcDir, file, _ := manifestEntry(m, ".", defaultEntry(m.Runtime), false)
+	return filepath.ToSlash(filepath.Join(srcDir, file))
+}
+
 // pushFromManifest packages a push whose contract and runtime come from a funcdctl.yaml (ADR-0122):
 // it gates each schema side against the funcd profile (contract.Check), then bakes the schema-only
 // contract and pushes — recording the runtime annotation, with no language toolchain invoked.

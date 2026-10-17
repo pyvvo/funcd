@@ -278,7 +278,7 @@ func (a *cli) pushCmd() *cobra.Command {
 				return merr
 			}
 			if m != nil {
-				return a.pushFromManifest(cmd.Context(), path, ref, m, entry, v1.OCIPlatform(platform))
+				return a.pushFromManifest(cmd.Context(), path, ref, m, pushEntry(cmd, entry, m), v1.OCIPlatform(platform))
 			}
 			// A DIRECTORY is a multi-file bundle (ADR-0089): the mandatory {input, output} contract
 			// travels IN the bundle as __funcd_contract.json (not --schema), and PushBundle gates it
@@ -314,7 +314,7 @@ func (a *cli) pushCmd() *cobra.Command {
 	cmd.Flags().StringVar(&schemaPath, "schema", "",
 		"path to the mandatory I/O contract file — one JSON object {\"input\":…,\"output\":…} (both required; a void side is {\"type\":\"null\"}); each side is gated against the funcd profile, then embedded as OCI metadata (single-file push only; a bundle carries __funcd_contract.json)")
 	cmd.Flags().StringVar(&entry, "entry", "handler.py",
-		"handler entry file relative to the bundle root (directory push only, ADR-0089)")
+		"handler entry file relative to the bundle root (directory push only, ADR-0089); a bundle with a funcdctl.yaml defaults to its main, else handler.py for a python* runtime and handler.mjs otherwise")
 	cmd.Flags().StringVar(&runtime, "runtime", "",
 		"runtime class recorded on the manifest (dev.funcd.runtime.v1, ADR-0094) so the workflow materializer resolves a step image's runtime without pulling the bundle")
 	cmd.Flags().StringVar(&platform, "platform", "",

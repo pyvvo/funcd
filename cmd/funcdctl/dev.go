@@ -1742,19 +1742,6 @@ func isolateSharedMains(pfs []plannedFunc) {
 	}
 }
 
-// manifestEntry resolves a manifest's bundle root + entry file. With the wrangler-style `main` set (a
-// handler file relative to the manifest dir), the handler's OWN dir is the bundle root — its siblings
-// (SQL, vendored deps under a bundle/) resolve and FUNCD_BUNDLE_DIR points there — so it runs IN PLACE.
-// Without `main`, it's the flat stem/generic convention: defaultEntry co-located with the manifest,
-// isolated per defaultIsolate.
-func manifestEntry(m *sdk.Manifest, dir, defaultEntry string, defaultIsolate bool) (srcDir, entry string, isolate bool) {
-	if strings.TrimSpace(m.Main) != "" {
-		full := filepath.Join(dir, m.Main)
-		return filepath.Dir(full), filepath.Base(full), false
-	}
-	return dir, defaultEntry, defaultIsolate
-}
-
 // setMeta stamps the shared namespace/resource-group and the dev ownership tag onto a synthesized resource.
 func setMeta(meta *v1.ObjectMeta, name v1.ObjectName) {
 	meta.Name = name
@@ -1875,15 +1862,6 @@ func devShimOptions(ctx context.Context, op string, dev sdk.Dev, baseDir string,
 		return nil, nil, fault.NotFoundf(op, "no runtime found on PATH (need node or python3; set FUNCD_NODE / FUNCD_PYTHON) — funcdctl dev runs the handler from source")
 	}
 	return opts, cleanup, nil
-}
-
-// defaultEntry is the conventional handler entry file for a runtime family (matching `funcdctl push
-// --entry`): handler.py for the python family, handler.mjs otherwise. Overridable with --entry.
-func defaultEntry(rt v1.RuntimeName) string {
-	if strings.HasPrefix(string(rt), "python") {
-		return "handler.py"
-	}
-	return "handler.mjs"
 }
 
 // dnsInvalid matches characters not allowed in a DNS-1123 label (the resource-name constraint).

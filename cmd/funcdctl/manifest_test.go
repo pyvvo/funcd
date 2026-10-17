@@ -163,6 +163,54 @@ func TestResolveManifest_stem_precedence(t *testing.T) {
 	require.Equal(t, "genericHandle", m.Handler)
 }
 
+// Issue #1049: without --entry, a bundle push governed by a funcdctl.yaml takes its entry from the manifest — its
+// main, else handler.py for a python* runtime and handler.mjs otherwise — and an explicit --entry still wins. A
+// bundle without a funcdctl.yaml keeps the ADR-0089 default. The pulled bundle resolves its handler from the pushed
+// entry annotation.
+func TestIssue1049_BundlePushTakesEntryFromManifest(t *testing.T) {
+	cases := map[string]struct {
+		runtime, main string // no runtime: no funcdctl.yaml, the bundle carries its own contract
+		files, flags  []string
+		want          string
+	}{
+		"node runtime default":   {runtime: "nodejs22", files: []string{"handler.mjs"}, want: "handler.mjs"},
+		"python runtime default": {runtime: "python314", files: []string{"handler.py"}, want: "handler.py"},
+		"main":                   {runtime: "python314", main: "extract.py", files: []string{"extract.py"}, want: "extract.py"},
+		"nested main":            {runtime: "nodejs22", main: "src/front.mjs", files: []string{"src/front.mjs"}, want: "src/front.mjs"},
+		"explicit entry wins":    {runtime: "nodejs22", main: "front.mjs", files: []string{"front.mjs", "other.mjs"}, flags: []string{"--entry", "other.mjs"}, want: "other.mjs"},
+		"no manifest":            {files: []string{"handler.py"}, want: "handler.py"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, f := range tc.files {
+				p := filepath.Join(dir, filepath.FromSlash(f))
+				require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+				require.NoError(t, os.WriteFile(p, []byte("// handler\n"), 0o600))
+			}
+			if tc.runtime == "" {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, bundleContractName), []byte(`{"input":{"type":"null"},"output":{"type":"null"}}`), 0o600))
+			} else {
+				manifest := "runtime: " + tc.runtime + "\nhandler: handle\n"
+				if tc.main != "" {
+					manifest += "main: " + tc.main + "\n"
+				}
+				writeFuncdctl(t, dir, manifest+"contract:\n  input:\n    type: \"null\"\n  output:\n    type: \"null\"\n")
+			}
+			ref := "oci-layout://" + filepath.Join(t.TempDir(), "layout") + ":v1"
+
+			var out bytes.Buffer
+			require.NoError(t, execCLI(&out, nil, append([]string{"push", dir, ref}, tc.flags...)...))
+			digest := strings.TrimPrefix(strings.TrimSpace(out.String()), ref+"@")
+
+			pulled := t.TempDir()
+			out.Reset()
+			require.NoError(t, execCLI(&out, nil, "pull", ref, digest, pulled))
+			require.Equal(t, filepath.Join(pulled, filepath.FromSlash(tc.want)), strings.TrimSpace(out.String()))
+		})
+	}
+}
+
 // scenario: types via the CLI — `funcdctl types -f funcdctl.yaml -o <dir>` writes a .py module.
 func TestScenario_types_command(t *testing.T) {
 	dir := t.TempDir()
