@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.14.0](https://github.com/pyvvo/funcd/compare/v0.13.0...v0.14.0) (2026-10-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **edge:** implement ADR-0241 — one exposure shape for every kind (FEAT-0006/F154) ([#1047](https://github.com/pyvvo/funcd/issues/1047))
+* **edge:** implement ADR-0240 — namespace hosts (FEAT-0006/F153) ([#1042](https://github.com/pyvvo/funcd/issues/1042))
+
+### Features
+
+* **edge:** implement ADR-0240 — namespace hosts (FEAT-0006/F153) ([#1042](https://github.com/pyvvo/funcd/issues/1042)) ([6db4801](https://github.com/pyvvo/funcd/commit/6db4801393b2b802dcd9c06aca995a5c1446c060))
+* **edge:** implement ADR-0241 — one exposure shape for every kind (FEAT-0006/F154) ([#1047](https://github.com/pyvvo/funcd/issues/1047)) ([c47fc1a](https://github.com/pyvvo/funcd/commit/c47fc1a61de72d7ed98484530c512c84b431016e))
+* **function:** implement ADR-0243 — Functions that serve HTTP (FEAT-0006/F156) ([#1050](https://github.com/pyvvo/funcd/issues/1050)) ([5d716f9](https://github.com/pyvvo/funcd/commit/5d716f958ad68466b73f7dd81e7b6c56b7aa5497))
+* **route:** implement ADR-0242 — a Route backend that serves a Site (FEAT-0003/F155) ([#1048](https://github.com/pyvvo/funcd/issues/1048)) ([292df47](https://github.com/pyvvo/funcd/commit/292df472375c1e117465527e63953b099de8c676))
+* runtime configuration of a Site, ADR-0239 (FEAT-0003/F152) ([#1035](https://github.com/pyvvo/funcd/issues/1035)) ([427d707](https://github.com/pyvvo/funcd/commit/427d70794064595ea82ff703be2d049b580a774a))
+
+
+### Bug Fixes
+
+* **app:** a pass that read a deleted App writes back no part ([#1037](https://github.com/pyvvo/funcd/issues/1037)) ([027fef9](https://github.com/pyvvo/funcd/commit/027fef919264fd14939ffe2741c63aad0d7152fb))
+* **funcdctl:** take a bundle push's entry from its funcdctl.yaml when --entry is not given ([#1051](https://github.com/pyvvo/funcd/issues/1051)) ([13996dd](https://github.com/pyvvo/funcd/commit/13996dd231c9308f7b71e263de3ec0b63b2b141f))
+
 ## [0.13.0](https://github.com/pyvvo/funcd/compare/v0.12.1...v0.13.0) (2026-10-13)
 
 
