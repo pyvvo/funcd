@@ -355,7 +355,7 @@ func TestAppConfigChangeRolls(t *testing.T) {
 		h.create(&v1.Site{TypeMeta: v1.TypeMeta{APIVersion: v1.KindSite.GVK().APIVersion(), Kind: v1.KindSite},
 			ObjectMeta: v1.ObjectMeta{Name: "web", Namespace: ns, ResourceGroup: "rg1"},
 			Spec: v1.SiteSpec{Image: "oci-layout://web:1", Bucket: v1.SiteBucket{Name: "web-files"}, Prefix: "web",
-				Ingress:       v1.SiteIngress{Host: "web.example"},
+				Ingress:       v1.SiteIngress{Ingress: v1.Ingress{Host: "web.example"}},
 				RuntimeConfig: &v1.SiteRuntimeConfig{ConfigMap: storedSettings(paris())}}})
 		h.edit(setTZ(utc))
 		h.reconcile()

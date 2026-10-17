@@ -66,16 +66,15 @@ func TestCatalogServiceValidate(t *testing.T) {
 	}
 }
 
-// scenario: spec.ingress validate (ADR-0138) — opt-in external exposure. Structural Validate checks
-// only that the declared edge path is a non-empty rooted prefix; the route (to the PEP proxy) is
-// programmed by the reconciler once Ready.
+// scenario: spec.ingress validate (ADR-0138, ADR-0241) — opt-in external exposure. Structural Validate checks the
+// path shape and refuses auth; the route (to the PEP proxy) is programmed by the reconciler once Ready.
 func TestCatalogServiceValidate_ingress(t *testing.T) {
 	goldCatalog := CatalogRef{Bucket: "lakehouse", Prefix: "gold"}
 	gold := FunctionBlob{Alias: "catalog", Bucket: "lakehouse", Prefix: "gold"}
 
 	// valid: a rooted pathPrefix (optionally with a host).
 	ok := catalogService("exposed", goldCatalog, gold)
-	ok.Spec.Ingress = &CatalogIngress{PathPrefix: "/catalog/lake", Host: "lake.example"}
+	ok.Spec.Ingress = &Ingress{Enabled: new(true), Path: "/catalog/lake", Host: "lake.example"}
 	if err := ok.Validate(); err != nil {
 		t.Errorf("valid spec.ingress rejected: %v", err)
 	}
@@ -85,18 +84,25 @@ func TestCatalogServiceValidate_ingress(t *testing.T) {
 		t.Errorf("nil spec.ingress rejected: %v", err)
 	}
 
-	// invalid: an empty pathPrefix.
+	// valid: no path is the default /catalogservice/<name> (ADR-0241 Decision 3).
 	empty := catalogService("emptypath", goldCatalog, gold)
-	empty.Spec.Ingress = &CatalogIngress{PathPrefix: ""}
-	if err := empty.Validate(); fault.KindOf(err) != fault.Invalid {
-		t.Errorf("empty spec.ingress.pathPrefix: want Invalid, got %v", err)
+	empty.Spec.Ingress = &Ingress{Enabled: new(true)}
+	if err := empty.Validate(); err != nil {
+		t.Errorf("spec.ingress without a path rejected: %v", err)
 	}
 
-	// invalid: a non-rooted pathPrefix (no leading slash).
+	// invalid: an auth, since the PEP proxy authenticates (ADR-0241 Decision 9).
+	authed := catalogService("authed", goldCatalog, gold)
+	authed.Spec.Ingress = &Ingress{Enabled: new(true), Auth: &RouteAuth{Mode: AuthOpen}}
+	if err := authed.Validate(); fault.KindOf(err) != fault.Invalid {
+		t.Errorf("spec.ingress.auth: want Invalid, got %v", err)
+	}
+
+	// invalid: a non-rooted path (no leading slash).
 	unrooted := catalogService("unrooted", goldCatalog, gold)
-	unrooted.Spec.Ingress = &CatalogIngress{PathPrefix: "catalog/lake"}
+	unrooted.Spec.Ingress = &Ingress{Enabled: new(true), Path: "catalog/lake"}
 	if err := unrooted.Validate(); fault.KindOf(err) != fault.Invalid {
-		t.Errorf("non-rooted spec.ingress.pathPrefix: want Invalid, got %v", err)
+		t.Errorf("non-rooted spec.ingress.path: want Invalid, got %v", err)
 	}
 }
 
@@ -160,7 +166,7 @@ func TestCatalogServiceValidate_messages(t *testing.T) {
 		{"valid secrets config ingress", catalogWith(catalogService("ok", gold, bound), func(c *CatalogService) {
 			c.Spec.Secrets = []ObjectName{"lake-token"}
 			c.Spec.Config = []ObjectName{"lake-config", "lake-tuning"}
-			c.Spec.Ingress = &CatalogIngress{PathPrefix: "/catalog/lake"}
+			c.Spec.Ingress = &Ingress{Enabled: new(true), Path: "/catalog/lake"}
 		}), ""},
 		{"bad metadata name", catalogService("Bad_Name", gold, bound),
 			`ObjectMeta.Validate: invalid name: ObjectName.Validate: "Bad_Name" is not a valid DNS label`},
@@ -224,14 +230,11 @@ func TestCatalogServiceValidate_messages(t *testing.T) {
 		}), op + `spec.secrets entry "Bad_Secret" is not a valid DNS-1123 name`},
 		{"config before ingress", catalogWith(catalogService("cs", gold, bound), func(c *CatalogService) {
 			c.Spec.Config = []ObjectName{"Bad_Config"}
-			c.Spec.Ingress = &CatalogIngress{PathPrefix: "lake"}
+			c.Spec.Ingress = &Ingress{Enabled: new(true), Path: "lake"}
 		}), op + `spec.config entry "Bad_Config" is not a valid DNS-1123 name`},
-		{"empty ingress path", catalogWith(catalogService("cs", gold, bound), func(c *CatalogService) {
-			c.Spec.Ingress = &CatalogIngress{}
-		}), op + `spec.ingress.pathPrefix "" must be a non-empty rooted path (leading "/")`},
 		{"unrooted ingress path", catalogWith(catalogService("cs", gold, bound), func(c *CatalogService) {
-			c.Spec.Ingress = &CatalogIngress{PathPrefix: "catalog/lake"}
-		}), op + `spec.ingress.pathPrefix "catalog/lake" must be a non-empty rooted path (leading "/")`},
+			c.Spec.Ingress = &Ingress{Enabled: new(true), Path: "catalog/lake"}
+		}), op + `spec.ingress.path "catalog/lake" must begin with '/'`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

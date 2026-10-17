@@ -86,7 +86,7 @@ func TestReconcile_ExternalRouteTargetsProxy(t *testing.T) {
 	r := ingressReconciler(t, st, routes)
 
 	cs := mkCatalogService("lake")
-	cs.Spec.Ingress = &v1.CatalogIngress{PathPrefix: "/catalog/lake", Host: "lake.example"}
+	cs.Spec.Ingress = &v1.Ingress{Enabled: new(true), Path: "/catalog/lake", Host: "lake.example"}
 	_, err := st.Create(ctx, cs)
 	require.NoError(t, err)
 
@@ -142,7 +142,7 @@ func TestReconcile_ExternalTeardown(t *testing.T) {
 	r := ingressReconciler(t, st, routes)
 
 	cs := mkCatalogService("lake")
-	cs.Spec.Ingress = &v1.CatalogIngress{PathPrefix: "/catalog/lake"}
+	cs.Spec.Ingress = &v1.Ingress{Enabled: new(true), Path: "/catalog/lake"}
 	_, err := st.Create(ctx, cs)
 	require.NoError(t, err)
 	reconcileLake(t, r)
@@ -195,7 +195,7 @@ func TestIssue103_NotReadyRetractsEdgeEntry(t *testing.T) {
 			})
 
 			cs := mkCatalogService("lake")
-			cs.Spec.Ingress = &v1.CatalogIngress{PathPrefix: "/catalog/lake"}
+			cs.Spec.Ingress = &v1.Ingress{Enabled: new(true), Path: "/catalog/lake"}
 			cs.Spec.Secrets = []v1.ObjectName{"quack"}
 			_, err := st.Create(ctx, cs)
 			require.NoError(t, err)

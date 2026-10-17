@@ -132,7 +132,7 @@ func TestScenarioAppSharedWriterRefused(t *testing.T) {
 					Image:   site,
 					Bucket:  v1.SiteBucket{Name: "todo-files"},
 					Prefix:  "web",
-					Ingress: v1.SiteIngress{Host: "web." + todoHost, Public: true},
+					Ingress: v1.SiteIngress{Ingress: v1.Ingress{Host: "web." + todoHost, Auth: &v1.RouteAuth{Mode: v1.AuthOpen}}},
 				}}}
 			},
 			want: []string{"spec.sites[0].bucket.name", "spec.buckets[0]"},

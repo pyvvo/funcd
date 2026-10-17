@@ -292,7 +292,7 @@ func TestScenarioSiteDeleteCollectsRoute(t *testing.T) {
 			Image:   ref,
 			Bucket:  v1.SiteBucket{Name: "web-assets"},
 			Prefix:  "web",
-			Ingress: v1.SiteIngress{Host: "web.example.com", Public: true},
+			Ingress: v1.SiteIngress{Ingress: v1.Ingress{Host: "web.example.com", Auth: &v1.RouteAuth{Mode: v1.AuthOpen}}},
 		},
 	})
 	host := func() int {

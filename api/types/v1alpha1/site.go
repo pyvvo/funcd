@@ -79,23 +79,13 @@ type SiteBucket struct {
 	Prefixes []BucketPrefix `json:"prefixes,omitempty"`
 }
 
-// SiteIngress declares the Site-owned Route. The bundle is served at EffectivePath; Rules add sibling
-// prefixes.
+// SiteIngress declares the Site-owned Route (ADR-0241): the shared Ingress, its path being where the bundle is served
+// (EffectivePath, ADR-0140); a path change re-programs the Route with no re-upload, and the bundle must be built for
+// the new base path unless BaseHref is set. Rules add sibling prefixes.
 type SiteIngress struct {
-	// Host is the exact host match on the owned Route. "" is the namespace host <namespace>.<baseDomain>, or for
-	// default any host but reserved ones (ADR-0240); an `explicit` default requires a non-empty host (ADR-0110).
-	Host string `json:"host,omitempty"`
-	// Path is the edge path the bundle is served at (ADR-0140). Empty ⇒ "/" when Host is set, else
-	// "/site/<metadata.name>" — so several host-less Sites share one listener without colliding. It
-	// begins "/" and carries no trailing slash unless it is exactly "/". Mutable: a change re-programs
-	// the Route with no re-upload; the bundle must be BUILT for the new base path, unless BaseHref is set.
-	Path string `json:"path,omitempty"`
+	Ingress `json:",inline"`
 	// BaseHref makes the Site serve a copy of its index whose <base href> is its mount (ADR-0239 Decision 10).
 	BaseHref bool `json:"baseHref,omitempty" doc:"Serve a copy of the bundle's index whose <base href> is the Site's mount, so a bundle built with relative URLs runs at any path, deep links included."`
-	// Public sets static.public on every compiled backend (ADR-0120 §4 precedence preserved).
-	Public bool `json:"public,omitempty"`
-	// Auth is the edge auth stance copied onto the owned Route; nil ⇒ inherit the namespace default.
-	Auth *RouteAuth `json:"auth,omitempty"`
 	// Rules are additional bucket prefixes served alongside the app (the data the app fetches). A rule
 	// MAY nest under Path (e.g. /bi/data under /bi) — longest-path-first gives the nested rule priority.
 	Rules []SiteRule `json:"rules,omitempty"`
@@ -130,13 +120,7 @@ type SiteStatus struct {
 // spec.ingress.host is set, else "/site/<metadata.name>". It lives HERE, not in internal/site, because
 // Validate must check it too and api/** cannot import internal/** — one definition, two callers.
 func (s *Site) EffectivePath() string {
-	if p := s.Spec.Ingress.Path; p != "" {
-		return p
-	}
-	if s.Spec.Ingress.Host != "" {
-		return "/"
-	}
-	return "/site/" + string(s.Name)
+	return IngressPath(&s.Spec.Ingress.Ingress, KindSite, s.Name)
 }
 
 // RuntimeConfigPath is the edge path of the config.json that spec.runtimeConfig generates: under EffectivePath
@@ -203,21 +187,8 @@ func (s *Site) Validate() error {
 		seenPrefix[p.Name] = true
 	}
 	ing := &s.Spec.Ingress
-	if ing.Auth != nil {
-		if err := validateAuthMode(ing.Auth.Mode, "spec.ingress.auth.mode"); err != nil {
-			return err
-		}
-		if ing.Public && ing.Auth.Mode == AuthAuthenticated {
-			return fault.Invalidf(op, "spec.ingress.public conflicts with spec.ingress.auth.mode=authenticated: public must not override an explicit authenticated stance")
-		}
-	}
-	if ing.Path != "" {
-		if ing.Path[0] != '/' {
-			return fault.Invalidf(op, "spec.ingress.path %q must begin with '/'", ing.Path)
-		}
-		if ing.Path != "/" && strings.HasSuffix(ing.Path, "/") {
-			return fault.Invalidf(op, "spec.ingress.path %q must not end with '/'", ing.Path)
-		}
+	if err := ing.validate(op, "spec.ingress"); err != nil {
+		return err
 	}
 	mount := s.EffectivePath()
 	seenPath := make(map[string]bool, len(ing.Rules))

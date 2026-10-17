@@ -369,7 +369,7 @@ func writers() map[string][]gc.Pair {
 	return map[string][]gc.Pair{
 		"internal/workflow/reconcile_workflow.go": {{Owner: v1.KindWorkflow, Child: v1.KindFunction}, {Owner: v1.KindWorkflow, Child: v1.KindKVStore}},
 		"internal/services/identity/reconcile.go": {{Owner: v1.KindIdentity, Child: v1.KindSecret}},
-		"internal/site/reconcile.go":              {{Owner: v1.KindSite, Child: v1.KindRoute}},
+		"internal/route/owned/owned.go":           {{Owner: v1.KindSite, Child: v1.KindRoute}, {Owner: v1.KindFunction, Child: v1.KindRoute}},
 		"internal/function/function.go":           {{Owner: v1.KindFunction, Child: v1.KindRevision}},
 		"internal/controlplane/kvhandover.go":     nil, // writes only the non-controller KVStore marker (ADR-0178)
 		"internal/app/revision.go":                {{Owner: v1.KindApp, Child: v1.KindAppRevision}},

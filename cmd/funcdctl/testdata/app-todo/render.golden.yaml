@@ -139,8 +139,9 @@ spec:
       name: todo-web
     image: registry.example/todo-web:1.0.0@sha256:e713cc95caa332f701eafb54a0cdaea94c3cdfcbf86e5303c511a3aae3b124e7
     ingress:
+      auth:
+        mode: open
       host: todo.example.com
-      public: true
     name: todo-web
     prefix: web
     spa: true

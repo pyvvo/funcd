@@ -39,7 +39,7 @@ func TestWithBase(t *testing.T) {
 func TestBaseHrefOfAndCopyKey(t *testing.T) {
 	at := func(path string) *v1.Site {
 		s := &v1.Site{}
-		s.Name, s.Spec.Ingress = "web", v1.SiteIngress{Host: "web.example", Path: path}
+		s.Name, s.Spec.Ingress = "web", v1.SiteIngress{Ingress: v1.Ingress{Host: "web.example", Path: path}}
 		return s
 	}
 	require.Equal(t, "/", site.BaseHrefOf(at("")))

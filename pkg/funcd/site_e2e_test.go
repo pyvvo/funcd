@@ -245,7 +245,7 @@ func startSitePlatform(t *testing.T, reserve func(*testing.T) string, image stri
 			Bucket:  v1.SiteBucket{Name: "reports", Prefixes: []v1.BucketPrefix{{Name: "gold", Owner: "etl"}}},
 			Prefix:  "bi",
 			SPA:     true,
-			Ingress: v1.SiteIngress{Host: "bi.example.com", Public: true, Rules: []v1.SiteRule{{Path: "/data", Prefix: "gold"}}},
+			Ingress: v1.SiteIngress{Ingress: v1.Ingress{Host: "bi.example.com", Auth: &v1.RouteAuth{Mode: v1.AuthOpen}}, Rules: []v1.SiteRule{{Path: "/data", Prefix: "gold"}}},
 		}
 		seed(t, st, siteObj)
 		uploader := &v1.Function{TypeMeta: v1.TypeMeta{APIVersion: v1.KindFunction.GVK().APIVersion(), Kind: v1.KindFunction}}
@@ -348,19 +348,17 @@ func TestScenarioE2EPathMountedSites(t *testing.T) {
 	// `bi`: an explicit /bi mount, SPA on, with the gold layer nested at /bi/data.
 	mkSite("bi", refBI, func(s *v1.Site) {
 		s.Spec.SPA = true
-		s.Spec.Ingress = v1.SiteIngress{
-			Path:   "/bi",
-			Public: true,
-			Rules: []v1.SiteRule{
-				{
-					Path:   "/bi/data",
-					Prefix: "gold",
-				},
+		s.Spec.Ingress = v1.SiteIngress{Ingress: v1.Ingress{Path: "/bi", Auth: &v1.RouteAuth{Mode: v1.AuthOpen}}, Rules: []v1.SiteRule{
+			{
+				Path:   "/bi/data",
+				Prefix: "gold",
 			},
-		}
+		}}
 	})
 	// `docs`: no host, no path ⇒ the by-name default /site/docs.
-	mkSite("docs", refDocs, func(s *v1.Site) { s.Spec.Ingress = v1.SiteIngress{Public: true} })
+	mkSite("docs", refDocs, func(s *v1.Site) {
+		s.Spec.Ingress = v1.SiteIngress{Ingress: v1.Ingress{Auth: &v1.RouteAuth{Mode: v1.AuthOpen}}}
+	})
 
 	p, err := funcd.New(
 		funcd.WithBlob(bucket), funcd.WithBus(messaging),

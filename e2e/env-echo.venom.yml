@@ -544,7 +544,7 @@ testcases:
         info: "by-name invoke in the explicit namespace → status {{.result.statuscode}} body {{.result.body}}"
         assertions:
           - result.statuscode ShouldEqual 404
-          - result.body ShouldContainSubstring "namespace is explicit"
+          - result.body ShouldContainSubstring "is not exposed by name"
 
   # ADR-0113 + ADR-0171: the Route sets no auth, so the namespace's edgeDefaults make it authenticated. The developer
   # token is scoped to `default`, so the PDP refuses it here; the admin token spans every namespace.

@@ -1,7 +1,7 @@
 // Package route reconciles the Route resource (ADR-0110, F79): it validates each Route's
 // backends, Sets every backend-valid Route on the edge aggregator, which applies the claim rules
-// (HostRequired, ReservedPath, HostReserved, RouteConflict) across every edge source (ADR-0176, ADR-0240), and sets
-// Ready/NotReady and status.host from the aggregator's verdicts.
+// (Disabled, ReservedPath, HostRequired, HostReserved, RouteConflict) across every edge source (ADR-0176, ADR-0240,
+// ADR-0241), and sets Ready/NotReady and status.host from the aggregator's verdicts.
 package route
 
 import (
@@ -14,6 +14,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/edge/router"
+	"github.com/pyvvo/funcd/internal/route/owned"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -219,11 +220,16 @@ func compile(rt *v1.Route) router.Entry {
 				mset[string(m)] = true
 			}
 		}
+		var ruleAuth v1.AuthMode
+		if rule.Auth != nil {
+			ruleAuth = rule.Auth.Mode
+		}
 		rules = append(rules, router.CompiledRule{
 			Path:     rule.Path,
 			Exact:    rule.PathType == v1.PathTypeExact,
 			Methods:  mset,
 			Function: rule.Backend.Function,
+			Auth:     ruleAuth,
 			Static:   rule.Backend.Static,
 		})
 	}
@@ -237,5 +243,7 @@ func compile(rt *v1.Route) router.Entry {
 		Auth:      authMode,
 		Rules:     rules,
 		Owner:     router.Owner{Kind: v1.KindRoute, Namespace: rt.Namespace, Name: rt.Name},
+		Owned:     owned.IsOwned(rt),
+		Enabled:   rt.Spec.Enabled,
 	}
 }

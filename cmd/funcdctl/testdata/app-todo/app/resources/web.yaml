@@ -7,4 +7,5 @@ sites:
     spa: true
     ingress:
       host: ${{ values.host }}
-      public: true
+      auth:
+        mode: open

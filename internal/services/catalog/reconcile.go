@@ -289,8 +289,9 @@ func (r *Reconciler) holdNotReady(ctx context.Context, cs *v1.CatalogService, re
 	return controller.Result{RequeueAfter: requeue}, nil
 }
 
-// syncIngressRoute reconciles this catalog's OPT-IN external edge entry (ADR-0138). When spec.ingress
-// is set AND a proxy URL is known (Ready + proxy wired), it Sets an edge-router entry whose Upstream is
+// syncIngressRoute reconciles this catalog's OPT-IN external edge entry (ADR-0138, ADR-0241). When spec.ingress
+// is set AND a proxy URL is known (Ready + proxy wired), it Sets an edge-router entry, Disabled unless
+// spec.ingress.enabled is true, at spec.ingress.path or /catalogservice/<name>, whose Upstream is
 // the PEP PROXY (http://<proxyURL>, never the engine) — served as an open reverse-proxy backend, since
 // the proxy does its own catalog::query PEP — and reports the aggregator's verdict as IngressReady
 // (ADR-0176); a refused entry is not programmed while Ready and the engine stay as they are. Otherwise
@@ -314,12 +315,15 @@ func (r *Reconciler) syncIngressRoute(ctx context.Context, cs *v1.CatalogService
 		}
 		return nil
 	}
+	// ADR-0241 Decision 9: on only with enabled: true; otherwise the entry is Set with Enabled false, so it is Disabled.
+	enabled := cs.Spec.Ingress.Enabled != nil && *cs.Spec.Ingress.Enabled
 	entry := router.Entry{
 		Namespace: cs.Namespace,
 		Host:      cs.Spec.Ingress.Host,
 		Auth:      v1.AuthOpen, // the PEP proxy authenticates the caller (Quack token); no funcd bearer at the edge
+		Enabled:   &enabled,
 		Rules: []router.CompiledRule{{
-			Path:     cs.Spec.Ingress.PathPrefix,
+			Path:     v1.IngressPath(cs.Spec.Ingress, v1.KindCatalogService, cs.Name),
 			Upstream: "http://" + proxyURL, // the catalog::query PEP proxy — external query authorized like internal
 		}},
 		Owner: router.Owner{Kind: v1.KindCatalogService, Namespace: cs.Namespace, Name: cs.Name},

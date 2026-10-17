@@ -98,7 +98,7 @@ func (h *harness) seedSite(name, tag string, mutate func(*v1.Site)) *v1.Site {
 		Bucket:  v1.SiteBucket{Name: bucket, Prefixes: []v1.BucketPrefix{{Name: "gold", Owner: "etl"}}},
 		Prefix:  "bi",
 		SPA:     true,
-		Ingress: v1.SiteIngress{Host: "bi.example.com", Public: true, Rules: []v1.SiteRule{{Path: "/data", Prefix: "gold"}}},
+		Ingress: v1.SiteIngress{Ingress: v1.Ingress{Host: "bi.example.com", Auth: &v1.RouteAuth{Mode: v1.AuthOpen}}, Rules: []v1.SiteRule{{Path: "/data", Prefix: "gold"}}},
 	}
 	if mutate != nil {
 		mutate(s)
@@ -233,8 +233,8 @@ func TestScenarioOwnedBucketAndRouteMaterialized(t *testing.T) {
 	require.Equal(t, []v1.OwnerReference{{ObjectRef: v1.ObjectRef{Kind: v1.KindSite, Namespace: ns, Name: "bi"}, UID: s.UID, Controller: true, BlockOwnerDeletion: true}}, rt.OwnerReferences)
 	require.Equal(t, "bi.example.com", rt.Spec.Host)
 	require.Len(t, rt.Spec.Rules, 2)
-	require.Equal(t, v1.RouteRule{Path: "/data", Backend: v1.RouteBackend{Static: &v1.StaticBackend{Bucket: bucket, Prefix: "gold/", Public: true}}}, rt.Spec.Rules[0], "a data mount carries no index/spa")
-	require.Equal(t, &v1.StaticBackend{Bucket: bucket, Prefix: "bi/" + slug(digest) + "/", Index: "index.html", SPA: true, Public: true}, bundleRule(t, rt))
+	require.Equal(t, v1.RouteRule{Path: "/data", Backend: v1.RouteBackend{Static: &v1.StaticBackend{Bucket: bucket, Prefix: "gold/"}}}, rt.Spec.Rules[0], "a data mount carries no index/spa")
+	require.Equal(t, &v1.StaticBackend{Bucket: bucket, Prefix: "bi/" + slug(digest) + "/", Index: "index.html", SPA: true}, bundleRule(t, rt))
 	for name := range siteA() {
 		require.True(t, h.exists("bi/"+slug(digest)+"/"+name), "object %s materialized", name)
 	}
@@ -583,7 +583,7 @@ func TestScenarioExistingHostlessSiteMovesOnUpgrade(t *testing.T) {
 func TestScenarioPathChangeReprogramsWithoutReupload(t *testing.T) {
 	h := newHarness(t)
 	digest := h.push("v1", siteA())
-	h.seedSite("bi", "v1", func(s *v1.Site) { s.Spec.Ingress = v1.SiteIngress{Path: "/bi"} })
+	h.seedSite("bi", "v1", func(s *v1.Site) { s.Spec.Ingress = v1.SiteIngress{Ingress: v1.Ingress{Path: "/bi"}} })
 	h.deploy("bi")
 	_, mount := bundleRuleAt(t, h.route("bi"))
 	require.Equal(t, "/bi", mount)
@@ -603,7 +603,7 @@ func TestScenarioPathChangeReprogramsWithoutReupload(t *testing.T) {
 func TestScenarioExplicitNamespaceStillRequiresHost(t *testing.T) {
 	h := newHarness(t)
 	h.push("v1", siteA())
-	h.seedSite("bi", "v1", func(s *v1.Site) { s.Spec.Ingress = v1.SiteIngress{Path: "/bi"} })
+	h.seedSite("bi", "v1", func(s *v1.Site) { s.Spec.Ingress = v1.SiteIngress{Ingress: v1.Ingress{Path: "/bi"}} })
 	h.reconcile("bi")
 	// ADR-0110 gates this on the Route: the Site propagates whatever its owned Route reports.
 	h.programRoute("bi", false, "HostRequired")

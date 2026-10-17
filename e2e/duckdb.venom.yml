@@ -115,7 +115,7 @@ testcases:
 
   - name: the catalog is exposed at the edge and external catalog::query is PEP'd (ADR-0138)
     steps:
-      # ADR-0138: catalogservice.yaml declares spec.ingress.pathPrefix /catalog/lake, so once `lake` is Ready
+      # ADR-0138/0241: catalogservice.yaml enables spec.ingress at path /catalog/lake, so once `lake` is Ready
       # the CatalogService reconciler programs — THROUGH THE EDGE-ROUTE AGGREGATOR — a Route-v2 edge entry whose
       # node-private Upstream backend is the catalog::query PEP PROXY (never the engine). This proves, on real
       # containerd: (a) the aggregator programmed the catalog entry ALONGSIDE the function route (testcase 3b's

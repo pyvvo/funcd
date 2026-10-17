@@ -38,6 +38,11 @@ type Entry struct {
 	Rules     []CompiledRule
 	// Owner is the object the entry belongs to; required by the Aggregator, Owner.Namespace equal to Namespace.
 	Owner Owner
+	// Owned is a Route a Site or a Function controls (ADR-0241 Decision 6); a non-Route source is ruled as owned but
+	// is never Disabled by its namespace's mode.
+	Owned bool
+	// Enabled is its Route's spec.enabled; nil is Decision 6's default.
+	Enabled *bool
 }
 
 // CompiledRule is one path rule ready to match.
@@ -46,6 +51,8 @@ type CompiledRule struct {
 	Exact    bool            // pathType == Exact
 	Methods  map[string]bool // nil/empty ⇒ all methods
 	Function v1.ObjectName
+	// Auth is the rule's stance; "" uses Entry.Auth (ADR-0241 Decision 8).
+	Auth v1.AuthMode
 	// Static, when non-nil, is a static Bucket-prefix backend (ADR-0120, F82); Function is then unused
 	// and the data-plane serves it via internal/edge/static (no activator hop).
 	Static *v1.StaticBackend
@@ -63,7 +70,9 @@ type Match struct {
 	Namespace   v1.NamespaceName
 	Function    v1.ObjectName
 	StripPrefix string
-	Auth        v1.AuthMode // the matched Route's auth stance (ADR-0113); "" ⇒ namespace default
+	// Path is the matched rule's path, as matched (ADR-0241 Decision 4 reads whether it lies under /function).
+	Path string
+	Auth v1.AuthMode // the matched rule's stance, else its Route's (ADR-0113, ADR-0241); "" ⇒ namespace default
 	// Static is non-nil for a static backend (ADR-0120, F82): serve via internal/edge/static, no wake.
 	Static *v1.StaticBackend
 	// Upstream is non-empty for a node-private reverse-proxy backend (ADR-0138): the data-plane
@@ -98,6 +107,10 @@ func (t *table) Program(_ context.Context, entries []Entry, reserved []string) e
 	rows := make([]compiled, 0, len(entries))
 	for _, e := range entries {
 		for _, r := range e.Rules {
+			auth := r.Auth
+			if auth == "" {
+				auth = e.Auth
+			}
 			rows = append(rows, compiled{
 				host:      e.Host,
 				path:      matchedPath(r),
@@ -107,7 +120,7 @@ func (t *table) Program(_ context.Context, entries []Entry, reserved []string) e
 				function:  r.Function,
 				static:    r.Static,
 				upstream:  r.Upstream,
-				auth:      e.Auth,
+				auth:      auth,
 			})
 		}
 	}
@@ -150,7 +163,7 @@ func (t *table) Resolve(host, path, method string) (Match, bool) {
 		if !row.exact {
 			strip = row.path
 		}
-		return Match{Namespace: row.namespace, Function: row.function, StripPrefix: strip, Auth: row.auth, Static: row.static, Upstream: row.upstream}, true
+		return Match{Namespace: row.namespace, Function: row.function, StripPrefix: strip, Path: row.path, Auth: row.auth, Static: row.static, Upstream: row.upstream}, true
 	}
 	return Match{}, false
 }

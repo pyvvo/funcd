@@ -75,6 +75,7 @@ import (
 	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/restore"
 	"github.com/pyvvo/funcd/internal/route"
+	"github.com/pyvvo/funcd/internal/route/owned"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/process"
 	"github.com/pyvvo/funcd/internal/runtime/workerpipe"
@@ -1045,7 +1046,9 @@ func (p *Platform) buildControlPlane() error {
 	// the Bucket + Route it declares inline; its status is derived from the owned Route.
 	siteReconciler := site.New(site.Deps{Store: c.store, Buckets: s3BucketFor(c.blob, c.store), DefaultIndex: c.siteDefaultIndex, Logger: p.logger, ReferentPollInterval: c.pacing.ReferentPollInterval})
 	ctrl.Register(v1.KindSite.GVK(), siteReconciler)
-	ctrl.Watches(v1.KindRoute.GVK(), site.MapRoute)                   // status is derived from the same-named owned Route
+	ctrl.Watches(v1.KindRoute.GVK(), owned.MapOwner(c.store, v1.KindSite)) // status is derived from the owned Route
+	// ADR-0241 Decision 5: a Function's IngressReady follows the Route of its own address
+	ctrl.Watches(v1.KindRoute.GVK(), owned.MapOwner(c.store, v1.KindFunction))
 	ctrl.Watches(v1.KindBucket.GVK(), siteReconciler.MapBucket)       // a raised maxObjectBytes lets a refused bundle deploy
 	ctrl.Watches(v1.KindConfigMap.GVK(), siteReconciler.MapConfigMap) // a changed ConfigMap re-renders config.json (ADR-0239)
 	// KVStore reconciler (ADR-0072/0073): Ready + status.tables/bindings; on delete reclaim the store

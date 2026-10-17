@@ -40,27 +40,6 @@ func indexOf(s *v1.Site, configured string) string {
 	return defaultIndex
 }
 
-// ownerRef is the OwnerReference stamped on the owned Route (always) — and on the Bucket only under
-// `delete`, which V1 rejects, so a V1 Bucket never carries it (Decision §5).
-func ownerRef(s *v1.Site) v1.OwnerReference {
-	return v1.OwnerReference{
-		ObjectRef:          v1.ObjectRef{Kind: v1.KindSite, Namespace: s.Namespace, Name: s.Name},
-		UID:                s.UID,
-		Controller:         true,
-		BlockOwnerDeletion: true,
-	}
-}
-
-// ownedBy reports whether refs carry an OwnerReference to this Site (kind + name + uid).
-func ownedBy(refs []v1.OwnerReference, s *v1.Site) bool {
-	for _, r := range refs {
-		if r.Kind == v1.KindSite && r.Name == s.Name && r.Namespace == s.Namespace && r.UID == s.UID {
-			return true
-		}
-	}
-	return false
-}
-
 // newBucket compiles the Bucket a Site creates when none exists: the site prefix with NO owner plus every
 // declared prefix verbatim. Never stamped with an OwnerReference in V1 (retain-only).
 func newBucket(s *v1.Site) *v1.Bucket {
@@ -101,7 +80,7 @@ func adoptBucket(b *v1.Bucket, s *v1.Site) (changed, prefixOwned bool) {
 // ADR-0140): one data-mount rule per spec.ingress.rules[] (a static arm with NO index/spa — a miss is
 // 404 by construction) plus the bundle rule at s.EffectivePath() over the digest-scoped prefix, and, when config
 // is true, the exact GET/HEAD rule that serves the generated config.json as the index of its own prefix (ADR-0239).
-// ingress.public sets static.public on every backend; ingress.auth maps to spec.auth.
+// ingress.enabled maps to spec.enabled and ingress.auth to spec.auth (ADR-0241 Decision 5).
 func compileRoute(s *v1.Site, digest, index string, config bool) v1.RouteSpec {
 	ing := &s.Spec.Ingress
 	rules := make([]v1.RouteRule, 0, len(ing.Rules)+1)
@@ -112,33 +91,22 @@ func compileRoute(s *v1.Site, digest, index string, config bool) v1.RouteSpec {
 		}
 		rules = append(rules, v1.RouteRule{
 			Path:    r.Path,
-			Backend: v1.RouteBackend{Static: &v1.StaticBackend{Bucket: bucket, Prefix: r.Prefix + "/", Public: ing.Public}},
+			Backend: v1.RouteBackend{Static: &v1.StaticBackend{Bucket: bucket, Prefix: r.Prefix + "/"}},
 		})
 	}
 	rules = append(rules, v1.RouteRule{
-		Path: s.EffectivePath(),
-		Backend: v1.RouteBackend{Static: &v1.StaticBackend{
-			Bucket: s.Spec.Bucket.Name,
-			Prefix: servingPrefix(s.Spec.Prefix, digest),
-			Index:  index,
-			SPA:    s.Spec.SPA,
-			Public: ing.Public,
-		}},
+		Path:    s.EffectivePath(),
+		Backend: v1.RouteBackend{Static: &v1.StaticBackend{Bucket: s.Spec.Bucket.Name, Prefix: servingPrefix(s.Spec.Prefix, digest), Index: index, SPA: s.Spec.SPA}},
 	})
 	if config {
 		rules = append(rules, v1.RouteRule{
 			Path:     s.RuntimeConfigPath(),
 			PathType: v1.PathTypeExact,
 			Methods:  []v1.HTTPMethod{v1.MethodGet, v1.MethodHead},
-			Backend: v1.RouteBackend{Static: &v1.StaticBackend{
-				Bucket: s.Spec.Bucket.Name,
-				Prefix: runtimeConfigPrefix(s),
-				Index:  v1.SiteRuntimeConfigFile,
-				Public: ing.Public,
-			}},
+			Backend:  v1.RouteBackend{Static: &v1.StaticBackend{Bucket: s.Spec.Bucket.Name, Prefix: runtimeConfigPrefix(s), Index: v1.SiteRuntimeConfigFile}},
 		})
 	}
-	spec := v1.RouteSpec{Host: ing.Host, Rules: rules}
+	spec := v1.RouteSpec{Host: ing.Host, Rules: rules, Enabled: ing.Enabled}
 	if ing.Auth != nil {
 		auth := *ing.Auth
 		spec.Auth = &auth

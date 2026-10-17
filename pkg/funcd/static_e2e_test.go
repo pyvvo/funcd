@@ -70,7 +70,7 @@ func TestScenarioE2EStaticServing(t *testing.T) {
 		r.Name, r.Namespace, r.ResourceGroup = v1.ObjectName(name), ns, "rg1"
 		r.Spec = v1.RouteSpec{Host: host, Rules: []v1.RouteRule{{
 			Path:    "/",
-			Backend: v1.RouteBackend{Static: &v1.StaticBackend{Bucket: "reports", Prefix: "bi/", Index: "index.html", SPA: true, Public: public}},
+			Backend: v1.RouteBackend{Static: &v1.StaticBackend{Bucket: "reports", Prefix: "bi/", Index: "index.html", SPA: true}},
 		}}}
 		return r
 	}

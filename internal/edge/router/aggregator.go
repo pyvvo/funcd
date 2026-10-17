@@ -57,6 +57,7 @@ const (
 	reasonRouteConflict = "RouteConflict"
 	reasonEdgeStarting  = "EdgeStarting"
 	reasonHostReserved  = "HostReserved"
+	reasonDisabled      = "Disabled"
 )
 
 // routeSource is the Route reconciler's source key: until it has Set once, no entry of a later kind rank is
@@ -199,8 +200,9 @@ type heldClaim struct {
 	owner   Owner
 }
 
-// arbitrate rules on every entry of sources in (namespace, name, kind rank) order: ReservedPath, else
-// HostRequired, else HostReserved, else EdgeStarting, else RouteConflict, else programmed (ADR-0240 Decision 5).
+// arbitrate rules on every entry of sources in (namespace, owned, name, kind rank) order, every entry that is not
+// owned first within a namespace (ADR-0241 Decision 7): Disabled, else ReservedPath, else HostRequired, else
+// HostReserved, else EdgeStarting, else RouteConflict, else programmed (ADR-0240 Decision 5, ADR-0241 Decision 6).
 // It returns the slots in source-key order, each slot's verdict, the programmed entries in ruling order and the
 // reserved namespace hosts. The caller must hold a.mu.
 func (a *Aggregator) arbitrate(ctx context.Context, sources map[string][]Entry, routesSet bool) ([]slot, []Verdict, []Entry, []string, error) {
@@ -225,6 +227,9 @@ func (a *Aggregator) arbitrate(ctx context.Context, sources map[string][]Entry, 
 		if x.entry.Owner.Namespace != y.entry.Owner.Namespace {
 			return x.entry.Owner.Namespace < y.entry.Owner.Namespace
 		}
+		if ox, oy := ruledAsOwned(x.entry), ruledAsOwned(y.entry); ox != oy {
+			return oy
+		}
 		if x.entry.Owner.Name != y.entry.Owner.Name {
 			return x.entry.Owner.Name < y.entry.Owner.Name
 		}
@@ -239,17 +244,19 @@ func (a *Aggregator) arbitrate(ctx context.Context, sources map[string][]Entry, 
 	for _, i := range order {
 		s := &slots[i]
 		v := Verdict{Owner: s.entry.Owner, Host: s.entry.Host}
+		mode, err := a.modeOf(ctx, modes, s.entry.Namespace)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
 		switch p, reserved := reservedPath(s.entry); {
+		case disabled(s.entry, mode):
+			v.Reason, v.Message = reasonDisabled, "the entry is disabled"
 		case reserved:
 			v.Reason, v.Message = reasonReservedPath, fmt.Sprintf("path %q is reserved for claims without a host", p)
 		default:
-			mode, err := a.modeOf(ctx, modes, s.entry)
-			if err != nil {
-				return nil, nil, nil, nil, err
-			}
 			msg, hostReserved := a.hostReserved(reserving, s.entry)
 			switch winner, conflict := firstConflict(held, s.entry); {
-			case mode == v1.ExposureExplicit:
+			case s.entry.Host == "" && mode == v1.ExposureExplicit:
 				v.Reason, v.Message = reasonHostRequired, "an explicit-mode namespace requires a host"
 			case hostReserved:
 				v.Reason, v.Message = reasonHostReserved, msg
@@ -304,16 +311,27 @@ func (a *Aggregator) hostReserved(reserving map[v1.NamespaceName]bool, e Entry) 
 	return "", false
 }
 
-// modeOf returns the exposure mode that applies to a host-less entry (implicit for one with a host), reading each
-// namespace at most once per arbitration.
-func (a *Aggregator) modeOf(ctx context.Context, modes map[v1.NamespaceName]v1.ExposureMode, e Entry) (v1.ExposureMode, error) {
-	if e.Host != "" || a.modes == nil {
+// ruledAsOwned is an owned Route or a non-Route source: both are ruled after a namespace's other Routes.
+func ruledAsOwned(e Entry) bool { return e.Owned || e.Owner.Kind != v1.KindRoute }
+
+// disabled is an entry turned off by its Route's spec.enabled, or an owned Route with enabled unset in an explicit
+// namespace (ADR-0241 Decision 6). A non-Route source is never Disabled by the mode.
+func disabled(e Entry, mode v1.ExposureMode) bool {
+	if e.Enabled != nil {
+		return !*e.Enabled
+	}
+	return e.Owned && e.Owner.Kind == v1.KindRoute && mode == v1.ExposureExplicit
+}
+
+// modeOf returns a namespace's exposure mode, reading each namespace at most once per arbitration.
+func (a *Aggregator) modeOf(ctx context.Context, modes map[v1.NamespaceName]v1.ExposureMode, ns v1.NamespaceName) (v1.ExposureMode, error) {
+	if a.modes == nil {
 		return v1.ExposureImplicit, nil
 	}
-	if m, ok := modes[e.Namespace]; ok {
+	if m, ok := modes[ns]; ok {
 		return m, nil
 	}
-	m, err := a.modes(ctx, e.Namespace)
+	m, err := a.modes(ctx, ns)
 	switch {
 	case fault.KindOf(err) == fault.NotFound:
 		m = v1.ExposureImplicit
@@ -321,7 +339,7 @@ func (a *Aggregator) modeOf(ctx context.Context, modes map[v1.NamespaceName]v1.E
 		return "", err
 	}
 	m = m.Normalized()
-	modes[e.Namespace] = m
+	modes[ns] = m
 	return m, nil
 }
 

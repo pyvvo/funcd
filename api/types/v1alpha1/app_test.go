@@ -72,7 +72,7 @@ func fullApp() *App {
 				Image:   "oci-layout://todo-web:1",
 				Bucket:  SiteBucket{Name: "todo-web"},
 				Prefix:  "web",
-				Ingress: SiteIngress{Path: "/todo"},
+				Ingress: SiteIngress{Ingress: Ingress{Path: "/todo"}},
 			}},
 			{Ref: "docs"},
 		}

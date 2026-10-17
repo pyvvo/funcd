@@ -173,7 +173,7 @@ func TestAppSiteRuntimeConfigRepointing(t *testing.T) {
 	site := func(name, configMap ObjectName) AppSite {
 		return AppSite{Name: name, SiteSpec: SiteSpec{
 			Image: "oci-layout://todo-web:1", Bucket: SiteBucket{Name: name}, Prefix: "web",
-			Ingress:       SiteIngress{Host: string(name) + ".example"},
+			Ingress:       SiteIngress{Ingress: Ingress{Host: string(name) + ".example"}},
 			RuntimeConfig: &SiteRuntimeConfig{ConfigMap: configMap},
 		}}
 	}

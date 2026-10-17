@@ -16,7 +16,7 @@ func runtimeConfigSite(mutate func(*Site)) *Site {
 		Image:         "registry.example/web:1",
 		Bucket:        SiteBucket{Name: "web"},
 		Prefix:        "web",
-		Ingress:       SiteIngress{Host: "web.test"},
+		Ingress:       SiteIngress{Ingress: Ingress{Host: "web.test"}},
 		RuntimeConfig: &SiteRuntimeConfig{Values: map[string]string{"API_URL": "https://api.example"}},
 	}
 	if mutate != nil {
@@ -70,8 +70,8 @@ func TestSiteRuntimeConfigPath(t *testing.T) {
 		ingress SiteIngress
 		want    string
 	}{
-		{SiteIngress{Host: "web.test"}, "/config.json"},
-		{SiteIngress{Path: "/bi"}, "/bi/config.json"},
+		{SiteIngress{Ingress: Ingress{Host: "web.test"}}, "/config.json"},
+		{SiteIngress{Ingress: Ingress{Path: "/bi"}}, "/bi/config.json"},
 		{SiteIngress{}, "/site/web/config.json"},
 	} {
 		s := runtimeConfigSite(func(s *Site) { s.Spec.Ingress = tc.ingress })

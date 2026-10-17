@@ -336,8 +336,8 @@ func TestRouteStaticBackendValidate(t *testing.T) {
 		r.Spec = RouteSpec{Rules: []RouteRule{{Path: "/", Backend: b}}, Auth: auth}
 		return r
 	}
-	stat := func(bucket, index string, public bool) *StaticBackend {
-		return &StaticBackend{Bucket: ObjectName(bucket), Prefix: "bi/", Index: index, Public: public}
+	stat := func(bucket, index string) *StaticBackend {
+		return &StaticBackend{Bucket: ObjectName(bucket), Prefix: "bi/", Index: index}
 	}
 
 	// scenario: route-validate-backend-exactly-one
@@ -345,32 +345,29 @@ func TestRouteStaticBackendValidate(t *testing.T) {
 		require.NoError(t, mk(RouteBackend{Function: "fn"}, nil).Validate())
 	})
 	t.Run("exactly-one-static", func(t *testing.T) {
-		require.NoError(t, mk(RouteBackend{Static: stat("reports", "index.html", false)}, nil).Validate())
+		require.NoError(t, mk(RouteBackend{Static: stat("reports", "index.html")}, nil).Validate())
 	})
 	t.Run("neither-arm-rejected", func(t *testing.T) {
 		require.Equal(t, fault.Invalid, fault.KindOf(mk(RouteBackend{}, nil).Validate()))
 	})
 	t.Run("both-arms-rejected", func(t *testing.T) {
-		err := mk(RouteBackend{Function: "fn", Static: stat("reports", "index.html", false)}, nil).Validate()
+		err := mk(RouteBackend{Function: "fn", Static: stat("reports", "index.html")}, nil).Validate()
 		require.Equal(t, fault.Invalid, fault.KindOf(err))
 	})
 	t.Run("static-bucket-must-be-dns-label", func(t *testing.T) {
-		require.Equal(t, fault.Invalid, fault.KindOf(mk(RouteBackend{Static: stat("Bad_Bucket", "index.html", false)}, nil).Validate()))
+		require.Equal(t, fault.Invalid, fault.KindOf(mk(RouteBackend{Static: stat("Bad_Bucket", "index.html")}, nil).Validate()))
 	})
 	t.Run("static-index-must-be-relative", func(t *testing.T) {
-		require.Equal(t, fault.Invalid, fault.KindOf(mk(RouteBackend{Static: stat("reports", "/index.html", false)}, nil).Validate()))
+		require.Equal(t, fault.Invalid, fault.KindOf(mk(RouteBackend{Static: stat("reports", "/index.html")}, nil).Validate()))
 	})
 
-	// scenario: public-vs-explicit-authenticated-conflict — explicit authenticated + public:true ⇒ rejected.
-	t.Run("public-vs-explicit-authenticated-conflict", func(t *testing.T) {
-		err := mk(RouteBackend{Static: stat("reports", "index.html", true)}, &RouteAuth{Mode: AuthAuthenticated}).Validate()
-		require.Equal(t, fault.Invalid, fault.KindOf(err), "public must NOT override an explicit authenticated stance")
-	})
-	t.Run("public-with-open-ok", func(t *testing.T) {
-		require.NoError(t, mk(RouteBackend{Static: stat("reports", "index.html", true)}, &RouteAuth{Mode: AuthOpen}).Validate())
-	})
-	t.Run("public-with-unset-ok", func(t *testing.T) {
-		require.NoError(t, mk(RouteBackend{Static: stat("reports", "index.html", true)}, nil).Validate())
+	// ADR-0241 Decision 8: a rule's stance is validated as the Route's is.
+	t.Run("rule-auth", func(t *testing.T) {
+		r := mk(RouteBackend{Static: stat("reports", "index.html")}, &RouteAuth{Mode: AuthAuthenticated})
+		r.Spec.Rules[0].Auth = &RouteAuth{Mode: AuthOpen}
+		require.NoError(t, r.Validate())
+		r.Spec.Rules[0].Auth = &RouteAuth{Mode: "sometimes"}
+		require.Equal(t, fault.Invalid, fault.KindOf(r.Validate()))
 	})
 }
 

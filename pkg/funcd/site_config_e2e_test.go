@@ -186,7 +186,8 @@ valuesSchema:
     spa: true
     ingress:
       host: ${{ values.host }}
-      public: true
+      auth:
+        mode: open
     runtimeConfig:
       values:
         API_URL: ${{ values.api.url }}
@@ -271,7 +272,7 @@ func TestScenarioE2ESiteConfigTemplate(t *testing.T) {
 
 	audit := configSite("audit", "staging", ref, func(s *v1.Site) {
 		s.Spec.Bucket.Name = "audit"
-		s.Spec.Ingress = v1.SiteIngress{Host: "audit.staging.test", Public: true}
+		s.Spec.Ingress = v1.SiteIngress{Ingress: v1.Ingress{Host: "audit.staging.test", Auth: &v1.RouteAuth{Mode: v1.AuthOpen}}}
 		s.Spec.RuntimeConfig = &v1.SiteRuntimeConfig{ConfigMap: flagsOff}
 	})
 	_, err = e.c.Apply(e.ctx, audit)
@@ -302,7 +303,7 @@ func TestScenarioE2ESiteConfigConfigMap(t *testing.T) {
 	ctx := context.Background()
 	ref, digest := pushSiteBundle(t, filepath.Join(t.TempDir(), "layout"), "v1", map[string]string{"index.html": fleetIndex})
 	e := startConfigPlatform(t, []string{"staging"}, configSite("fleet", "staging", ref, func(s *v1.Site) {
-		s.Spec.Ingress = v1.SiteIngress{Host: "fleet.test", Public: true}
+		s.Spec.Ingress = v1.SiteIngress{Ingress: v1.Ingress{Host: "fleet.test", Auth: &v1.RouteAuth{Mode: v1.AuthOpen}}}
 		s.Spec.RuntimeConfig = &v1.SiteRuntimeConfig{Values: map[string]string{"API_URL": "https://api.example"}}
 	}))
 	e.waitSite(t, "staging", "fleet", v1.ConditionTrue, "Materialized", deployWithin)
@@ -343,7 +344,7 @@ func TestScenarioE2ESiteConfigPathMounted(t *testing.T) {
 	t.Parallel()
 	ref, _ := pushSiteBundle(t, filepath.Join(t.TempDir(), "layout"), "v1", map[string]string{"index.html": fleetIndex})
 	e := startConfigPlatform(t, []string{"openteam"}, configSite("bi", "openteam", ref, func(s *v1.Site) {
-		s.Spec.Ingress = v1.SiteIngress{Path: "/bi", Public: true}
+		s.Spec.Ingress = v1.SiteIngress{Ingress: v1.Ingress{Path: "/bi", Auth: &v1.RouteAuth{Mode: v1.AuthOpen}}}
 		s.Spec.RuntimeConfig = &v1.SiteRuntimeConfig{Values: map[string]string{"API_URL": "https://api.example"}}
 	}))
 	e.waitSite(t, "openteam", "bi", v1.ConditionTrue, "Materialized", deployWithin)
@@ -360,7 +361,7 @@ func TestScenarioE2ESiteConfigShadowsThenRemoved(t *testing.T) {
 	const baked = `{"API_URL":"https://baked-in.example"}`
 	ref, _ := pushSiteBundle(t, filepath.Join(t.TempDir(), "layout"), "v1", map[string]string{"index.html": fleetIndex, "config.json": baked})
 	e := startConfigPlatform(t, []string{"staging"}, configSite("fleet", "staging", ref, func(s *v1.Site) {
-		s.Spec.Ingress = v1.SiteIngress{Host: "fleet.test", Public: true}
+		s.Spec.Ingress = v1.SiteIngress{Ingress: v1.Ingress{Host: "fleet.test", Auth: &v1.RouteAuth{Mode: v1.AuthOpen}}}
 		s.Spec.RuntimeConfig = &v1.SiteRuntimeConfig{Values: map[string]string{"API_URL": "https://api.example"}}
 	}))
 	e.waitSite(t, "staging", "fleet", v1.ConditionTrue, "Materialized", deployWithin)
@@ -375,9 +376,9 @@ func TestScenarioE2ESiteConfigShadowsThenRemoved(t *testing.T) {
 	e.waitSite(t, "staging", "fleet", v1.ConditionTrue, "Materialized", configWithin)
 }
 
-// scenario: site-config-route-conflict (e2e, F152/ADR-0239) — a Route that claims GET /config.json on a Site's host
-// conflicts with the Site's rule: when it sorts first, the Site's Route is RouteConflict and the Site RouteNotReady;
-// when it sorts after, it is that Route that is RouteConflict, and the Site serves its file.
+// scenario: site-config-route-conflict (e2e, F152/ADR-0239, ADR-0241 Decision 7) — a Route you write that claims
+// GET /config.json on a Site's host conflicts with the Site's rule, and wins whatever the names sort: the Site's Route
+// is RouteConflict and the Site RouteNotReady.
 func TestScenarioE2ESiteConfigRouteConflict(t *testing.T) {
 	t.Parallel()
 	ref, _ := pushSiteBundle(t, filepath.Join(t.TempDir(), "layout"), "v1", map[string]string{"index.html": fleetIndex})
@@ -385,12 +386,12 @@ func TestScenarioE2ESiteConfigRouteConflict(t *testing.T) {
 		rt := &v1.Route{TypeMeta: v1.TypeMeta{APIVersion: v1.KindRoute.GVK().APIVersion(), Kind: v1.KindRoute}}
 		rt.Name, rt.Namespace, rt.ResourceGroup = v1.ObjectName(name), ns, "rg1"
 		rt.Spec = v1.RouteSpec{Host: host, Rules: []v1.RouteRule{{Path: "/config.json", Methods: []v1.HTTPMethod{v1.MethodGet},
-			Backend: v1.RouteBackend{Static: &v1.StaticBackend{Bucket: "web", Prefix: "other/", Public: true}}}}}
+			Backend: v1.RouteBackend{Static: &v1.StaticBackend{Bucket: "web", Prefix: "other/"}}}}}
 		return rt
 	}
 	site := func(ns v1.NamespaceName, host string) *v1.Site {
 		return configSite("fleet", ns, ref, func(s *v1.Site) {
-			s.Spec.Ingress = v1.SiteIngress{Host: host, Public: true}
+			s.Spec.Ingress = v1.SiteIngress{Ingress: v1.Ingress{Host: host, Auth: &v1.RouteAuth{Mode: v1.AuthOpen}}}
 			s.Spec.RuntimeConfig = &v1.SiteRuntimeConfig{Values: map[string]string{"API_URL": "https://api.example"}}
 		})
 	}
@@ -398,19 +399,17 @@ func TestScenarioE2ESiteConfigRouteConflict(t *testing.T) {
 		claim("early", "a-config", "fleet.early.test"), site("early", "fleet.early.test"),
 		site("late", "fleet.late.test"), claim("late", "z-config", "fleet.late.test"))
 
-	require.Eventually(t, func() bool {
-		c, ok := e.site(t, "early", "fleet").Status.Conditions.Get("Ready")
-		return ok && c.Reason == "RouteNotReady" && strings.Contains(c.Message, "RouteConflict")
-	}, deployWithin, 20*time.Millisecond, "the Site's Route sorts after a-config")
-
-	e.waitSite(t, "late", "fleet", v1.ConditionTrue, "Materialized", deployWithin)
-	waitBody(t, e.dp, "fleet.late.test", "/config.json", `{"API_URL":"https://api.example"}`, configWithin)
-	require.Eventually(t, func() bool {
-		obj, err := e.st.Get(context.Background(), v1.KindRoute.GVK(), "late", "z-config")
+	for _, c := range []struct{ ns, route string }{{"early", "a-config"}, {"late", "z-config"}} {
+		require.Eventually(t, func() bool {
+			cnd, ok := e.site(t, v1.NamespaceName(c.ns), "fleet").Status.Conditions.Get("Ready")
+			return ok && cnd.Reason == "RouteNotReady" && strings.Contains(cnd.Message, "RouteConflict") &&
+				strings.Contains(cnd.Message, c.ns+"/"+c.route)
+		}, deployWithin, 20*time.Millisecond, "%s: the Site's Route loses to %s", c.ns, c.route)
+		obj, err := e.st.Get(context.Background(), v1.KindRoute.GVK(), v1.NamespaceName(c.ns), v1.ObjectName(c.route))
 		require.NoError(t, err)
-		c, ok := obj.(*v1.Route).Status.Conditions.Get("Ready")
-		return ok && c.Status == v1.ConditionFalse && c.Reason == "RouteConflict"
-	}, configWithin, 20*time.Millisecond, "z-config sorts after the Site's Route")
+		cnd, _ := obj.(*v1.Route).Status.Conditions.Get("Ready")
+		require.Equal(t, v1.ConditionTrue, cnd.Status, "%s/%s is programmed", c.ns, c.route)
+	}
 }
 
 // scenario: site-config-shared-prefix (e2e, F152/ADR-0239) — two Sites on one Bucket and prefix serve their own
@@ -420,7 +419,7 @@ func TestScenarioE2ESiteConfigSharedPrefix(t *testing.T) {
 	ref, _ := pushSiteBundle(t, filepath.Join(t.TempDir(), "layout"), "v1", map[string]string{"index.html": fleetIndex})
 	site := func(name, env string) *v1.Site {
 		return configSite(name, "staging", ref, func(s *v1.Site) {
-			s.Spec.Ingress = v1.SiteIngress{Host: name + ".test", Public: true}
+			s.Spec.Ingress = v1.SiteIngress{Ingress: v1.Ingress{Host: name + ".test", Auth: &v1.RouteAuth{Mode: v1.AuthOpen}}}
 			s.Spec.RuntimeConfig = &v1.SiteRuntimeConfig{Values: map[string]string{"ENV": env}}
 		})
 	}
@@ -478,7 +477,7 @@ const relIndex = `<!doctype html><html><head><base href="/"><title>fleet</title>
 
 func baseHrefSite(name string, ns v1.NamespaceName, ref string, ingress v1.SiteIngress, rc *v1.SiteRuntimeConfig) *v1.Site {
 	return configSite(name, ns, ref, func(s *v1.Site) {
-		ingress.BaseHref, ingress.Public = true, true
+		ingress.BaseHref, ingress.Auth = true, &v1.RouteAuth{Mode: v1.AuthOpen}
 		s.Spec.Ingress, s.Spec.RuntimeConfig = ingress, rc
 	})
 }
@@ -492,8 +491,8 @@ func TestScenarioE2ESiteConfigBaseHref(t *testing.T) {
 	ref, digest := pushSiteBundle(t, filepath.Join(t.TempDir(), "layout"), "v1", map[string]string{"index.html": relIndex, "assets/app.js": "export {};"})
 	rc := &v1.SiteRuntimeConfig{Values: map[string]string{"API_URL": "https://api.example"}}
 	e := startConfigPlatform(t, []string{"staging"},
-		baseHrefSite("root", "staging", ref, v1.SiteIngress{Host: "fleet.test"}, rc),
-		baseHrefSite("bi", "staging", ref, v1.SiteIngress{Path: "/bi"}, rc))
+		baseHrefSite("root", "staging", ref, v1.SiteIngress{Ingress: v1.Ingress{Host: "fleet.test"}}, rc),
+		baseHrefSite("bi", "staging", ref, v1.SiteIngress{Ingress: v1.Ingress{Path: "/bi"}}, rc))
 	require.Equal(t, digest, e.waitSite(t, "staging", "root", v1.ConditionTrue, "Materialized", deployWithin).Status.Digest)
 	require.Equal(t, digest, e.waitSite(t, "staging", "bi", v1.ConditionTrue, "Materialized", deployWithin).Status.Digest)
 
@@ -521,7 +520,7 @@ func TestScenarioE2ESiteConfigBaseHrefPaths(t *testing.T) {
 	ref, _ := pushSiteBundle(t, filepath.Join(t.TempDir(), "layout"), "v1", map[string]string{
 		"index.html": relIndex, "docs/index.html": "docs", "config.json": `{"OWN":"1"}`,
 	})
-	e := startConfigPlatform(t, []string{"staging"}, baseHrefSite("bi", "staging", ref, v1.SiteIngress{Path: "/bi"}, nil))
+	e := startConfigPlatform(t, []string{"staging"}, baseHrefSite("bi", "staging", ref, v1.SiteIngress{Ingress: v1.Ingress{Path: "/bi"}}, nil))
 	e.waitSite(t, "staging", "bi", v1.ConditionTrue, "Materialized", deployWithin)
 	waitBody(t, e.dp, "staging.localhost", "/bi/docs/", "docs", configWithin)
 	waitBody(t, e.dp, "staging.localhost", "/bi/config.json", `{"OWN":"1"}`, configWithin)
@@ -543,7 +542,7 @@ func TestScenarioE2ESiteConfigRuntimeReserved(t *testing.T) {
 	ref1, digest1 := pushSiteBundle(t, layout, "v1", map[string]string{"index.html": fleetIndex})
 	ref2, _ := pushSiteBundle(t, layout, "v2", map[string]string{"index.html": "<title>v2</title>", "_runtime/x.txt": "x"})
 	e := startConfigPlatform(t, []string{"staging"}, configSite("fleet", "staging", ref1, func(s *v1.Site) {
-		s.Spec.Ingress = v1.SiteIngress{Host: "fleet.test", Public: true}
+		s.Spec.Ingress = v1.SiteIngress{Ingress: v1.Ingress{Host: "fleet.test", Auth: &v1.RouteAuth{Mode: v1.AuthOpen}}}
 	}))
 	e.waitSite(t, "staging", "fleet", v1.ConditionTrue, "Materialized", deployWithin)
 	s := e.site(t, "staging", "fleet")

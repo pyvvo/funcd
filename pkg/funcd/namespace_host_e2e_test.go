@@ -35,6 +35,7 @@ type nsHost struct {
 	st   store.Store
 	blob blob.Bucket
 	base string
+	api  string
 }
 
 func nsObject(name string, mutate func(*v1.Namespace)) *v1.Namespace {
@@ -63,13 +64,13 @@ func fnObject(ns v1.NamespaceName, name string) *v1.Function {
 	return fn
 }
 
-// pageRoute is a public static Route at path whose page reads "<ns>/<name>".
+// pageRoute is an open static Route at path whose page reads "<ns>/<name>".
 func pageRoute(ns v1.NamespaceName, name, host, path string) *v1.Route {
 	r := &v1.Route{TypeMeta: v1.TypeMeta{APIVersion: v1.KindRoute.GVK().APIVersion(), Kind: v1.KindRoute}}
 	r.Name, r.Namespace, r.ResourceGroup = v1.ObjectName(name), ns, "rg1"
-	r.Spec = v1.RouteSpec{Host: host, Rules: []v1.RouteRule{{
+	r.Spec = v1.RouteSpec{Host: host, Auth: &v1.RouteAuth{Mode: v1.AuthOpen}, Rules: []v1.RouteRule{{
 		Path:    path,
-		Backend: v1.RouteBackend{Static: &v1.StaticBackend{Bucket: "web", Prefix: name + "/", Index: "index.html", SPA: true, Public: true}},
+		Backend: v1.RouteBackend{Static: &v1.StaticBackend{Bucket: "web", Prefix: name + "/", Index: "index.html", SPA: true}},
 	}}}
 	return r
 }
@@ -111,7 +112,7 @@ func startNSHost(t *testing.T, objs []v1.Object, opts ...funcd.Option) *nsHost {
 	doneCh := make(chan error, 1)
 	go func() { doneCh <- p.Run(runCtx) }()
 	t.Cleanup(func() { cancel(); <-doneCh })
-	return &nsHost{t: t, st: st, blob: bucket, base: "http://" + p.DataPlaneAddr()}
+	return &nsHost{t: t, st: st, blob: bucket, base: "http://" + p.DataPlaneAddr(), api: "http://" + p.Addr()}
 }
 
 func (h *nsHost) route(ns v1.NamespaceName, name string) *v1.Route {
@@ -139,11 +140,20 @@ func (h *nsHost) waitRoute(ns v1.NamespaceName, name, reason string) *v1.Route {
 
 func (h *nsHost) get(method, host, path, nsHeader string) (int, string) {
 	h.t.Helper()
+	return h.call(method, host, path, nsHeader, "")
+}
+
+// call is get with a bearer token ("" sends none).
+func (h *nsHost) call(method, host, path, nsHeader, bearer string) (int, string) {
+	h.t.Helper()
 	req, err := http.NewRequest(method, h.base+path, nil) //nolint:noctx // test client
 	require.NoError(h.t, err)
 	req.Host = host
 	if nsHeader != "" {
 		req.Header.Set("X-Funcd-Namespace", nsHeader)
+	}
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(h.t, err)
@@ -195,7 +205,7 @@ func TestScenario_namespace_host_site(t *testing.T) {
 	ref, _ := pushSiteBundle(t, filepath.Join(t.TempDir(), "layout"), "fleet", map[string]string{"index.html": "<title>fleet</title>"})
 	s := &v1.Site{TypeMeta: v1.TypeMeta{APIVersion: v1.KindSite.GVK().APIVersion(), Kind: v1.KindSite}}
 	s.Name, s.Namespace, s.ResourceGroup = "fleet", "staging", "rg1"
-	s.Spec = v1.SiteSpec{Image: ref, Bucket: v1.SiteBucket{Name: "reports"}, Prefix: "fleet", Ingress: v1.SiteIngress{Public: true}}
+	s.Spec = v1.SiteSpec{Image: ref, Bucket: v1.SiteBucket{Name: "reports"}, Prefix: "fleet", Ingress: v1.SiteIngress{Ingress: v1.Ingress{Auth: &v1.RouteAuth{Mode: v1.AuthOpen}}}}
 	h := startNSHost(t, []v1.Object{s})
 	require.Eventually(t, func() bool {
 		obj, err := h.st.Get(context.Background(), v1.KindSite.GVK(), "staging", "fleet")

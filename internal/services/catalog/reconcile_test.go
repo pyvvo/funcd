@@ -415,7 +415,7 @@ func TestIssue104_ConvergeErrorMarksCatalogNotReady(t *testing.T) {
 		d.Routes = routes
 	})
 	cs := mkCatalogService("lake")
-	cs.Spec.Ingress = &v1.CatalogIngress{PathPrefix: "/catalog/lake"}
+	cs.Spec.Ingress = &v1.Ingress{Enabled: new(true), Path: "/catalog/lake"}
 	_, err := st.Create(ctx, cs)
 	require.NoError(t, err)
 	req := controller.Request{GVK: v1.KindCatalogService.GVK(), Namespace: "default", Name: "lake"}
@@ -753,7 +753,7 @@ func TestScenario_catalog_loses_to_earlier_route(t *testing.T) {
 			_, err = h.st.Create(ctx, rt)
 			require.NoError(t, err)
 			cs := mkCatalogService("lake")
-			cs.Spec.Ingress = &v1.CatalogIngress{Host: "h", PathPrefix: "/q"}
+			cs.Spec.Ingress = &v1.Ingress{Enabled: new(true), Host: "h", Path: "/q"}
 			_, err = h.st.Create(ctx, cs)
 			require.NoError(t, err)
 
@@ -785,7 +785,7 @@ func TestScenario_catalog_host_required_explicit(t *testing.T) {
 	})
 	h.run(t, controller.Request{GVK: v1.KindRoute.GVK()})
 	cs := mkCatalogService("lake")
-	cs.Spec.Ingress = &v1.CatalogIngress{PathPrefix: "/q"}
+	cs.Spec.Ingress = &v1.Ingress{Enabled: new(true), Path: "/q"}
 	_, err := h.st.Create(ctx, cs)
 	require.NoError(t, err)
 
@@ -1070,4 +1070,33 @@ func TestReconcileConvergesBeforeTheBridgeAddressExists(t *testing.T) {
 	require.NoError(t, err)
 	reconcileOnce(t, r, "lake")
 	require.Len(t, prov.converged, 1, "the engine is converged though the proxy could not bind")
+}
+
+// TestScenario_exposure_catalog_default_path covers scenario: exposure-catalog (ADR-0241 Decision 9) — an ingress
+// with enabled: true and no path answers at /catalogservice/<name>; one that is not enabled is Disabled and
+// IngressReady=False while the catalog stays Ready.
+func TestScenario_exposure_catalog_default_path(t *testing.T) {
+	ctx := context.Background()
+	h := newEdgeHarness(t, nil)
+	h.run(t, controller.Request{GVK: v1.KindRoute.GVK()})
+	on, off := mkCatalogService("bi"), mkCatalogService("lake")
+	on.Spec.Ingress = &v1.Ingress{Enabled: new(true)}
+	off.Spec.Ingress = &v1.Ingress{}
+	for _, cs := range []*v1.CatalogService{on, off} {
+		_, err := h.st.Create(ctx, cs)
+		require.NoError(t, err)
+		h.run(t, controller.Request{GVK: v1.KindCatalogService.GVK(), Namespace: "default", Name: cs.Name})
+	}
+
+	m, ok := h.rtr.Resolve("any", "/catalogservice/bi/q", "GET")
+	require.True(t, ok)
+	require.NotEmpty(t, m.Upstream, "the default path reaches the PEP proxy")
+	require.Equal(t, "Programmed", h.condition(t, v1.KindCatalogService.GVK(), "default", "bi", "IngressReady").Reason)
+
+	_, ok = h.rtr.Resolve("any", "/catalogservice/lake", "GET")
+	require.False(t, ok)
+	ing := h.condition(t, v1.KindCatalogService.GVK(), "default", "lake", "IngressReady")
+	require.Equal(t, v1.ConditionFalse, ing.Status)
+	require.Equal(t, "Disabled", ing.Reason)
+	require.Equal(t, v1.ConditionTrue, h.condition(t, v1.KindCatalogService.GVK(), "default", "lake", "Ready").Status)
 }

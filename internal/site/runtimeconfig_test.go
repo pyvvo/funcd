@@ -75,7 +75,7 @@ func TestSiteRuntimeConfigWrittenThenRouted(t *testing.T) {
 	rule := configRule(h.route("bi"), "bi")
 	require.NotNil(t, rule, "the first Route already carries the rule")
 	require.Equal(t, v1.RouteRule{Path: "/config.json", PathType: v1.PathTypeExact, Methods: []v1.HTTPMethod{v1.MethodGet, v1.MethodHead},
-		Backend: v1.RouteBackend{Static: &v1.StaticBackend{Bucket: bucket, Prefix: "bi/_runtime/bi/", Index: "config.json", Public: true}}}, *rule)
+		Backend: v1.RouteBackend{Static: &v1.StaticBackend{Bucket: bucket, Prefix: "bi/_runtime/bi/", Index: "config.json"}}}, *rule)
 	require.Contains(t, bundleRule(t, h.route("bi")).Prefix, slug(digest))
 
 	h.programRoute("bi", true, "Programmed")

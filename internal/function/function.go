@@ -539,9 +539,14 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 			return controller.Result{}, err
 		}
 	}
+	// ADR-0241 Decision 5: the Route of an address of its own; a changed IngressReady needs the pass's status write.
+	ingressChanged, err := r.syncRoute(ctx, fn)
+	if err != nil {
+		return controller.Result{}, err
+	}
 	// ADR-0142: a Ready solo Function whose spec is already processed only needs its replicas checked; if they
 	// all run, the pass writes nothing and comes back after the supervision period.
-	if r.steadyState(ctx, fn) {
+	if !ingressChanged && r.steadyState(ctx, fn) {
 		return controller.Result{RequeueAfter: r.supervisionPeriod}, nil
 	}
 

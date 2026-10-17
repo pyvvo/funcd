@@ -42,7 +42,7 @@ func Pairs() []Pair {
 		{Owner: v1.KindApp, Child: v1.KindKVStore}, {Owner: v1.KindApp, Child: v1.KindSQLDatabase},
 		{Owner: v1.KindApp, Child: v1.KindBucket}, {Owner: v1.KindApp, Child: v1.KindConfigMap},
 		{Owner: v1.KindApp, Child: v1.KindAppRevision}, {Owner: v1.KindAppRevision, Child: v1.KindInvocation},
-		{Owner: v1.KindFunction, Child: v1.KindRevision},
+		{Owner: v1.KindFunction, Child: v1.KindRoute}, {Owner: v1.KindFunction, Child: v1.KindRevision},
 	}
 }
 

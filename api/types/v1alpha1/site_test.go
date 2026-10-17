@@ -16,7 +16,7 @@ func site(mutate func(*Site)) *Site {
 			Image:   "oci-layout:///tmp/layout:bi",
 			Bucket:  SiteBucket{Name: "reports"},
 			Prefix:  "bi",
-			Ingress: SiteIngress{Host: "bi.example.com", Rules: []SiteRule{{Path: "/data", Prefix: "gold"}}},
+			Ingress: SiteIngress{Ingress: Ingress{Host: "bi.example.com"}, Rules: []SiteRule{{Path: "/data", Prefix: "gold"}}},
 		},
 	}
 	if mutate != nil {
@@ -74,10 +74,6 @@ func TestSiteValidate(t *testing.T) {
 	}{
 		{"delete-cascade-rejected", func(s *Site) { s.Spec.Bucket.Deletion = DeletionDelete }, "not implemented in V1"},
 		{"unknown deletion", func(s *Site) { s.Spec.Bucket.Deletion = "purge" }, "spec.bucket.deletion"},
-		{"public-and-authenticated-rejected", func(s *Site) {
-			s.Spec.Ingress.Public = true
-			s.Spec.Ingress.Auth = &RouteAuth{Mode: AuthAuthenticated}
-		}, "public must not override"},
 		{"bad auth mode", func(s *Site) { s.Spec.Ingress.Auth = &RouteAuth{Mode: "sometimes"} }, "auth.mode"},
 		{"missing image", func(s *Site) { s.Spec.Image = "" }, "spec.image"},
 		{"bad prefix", func(s *Site) { s.Spec.Prefix = "Bad_Prefix" }, "spec.prefix"},

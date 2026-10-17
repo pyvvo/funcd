@@ -1,6 +1,7 @@
 package v1alpha1
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -27,9 +28,12 @@ type RouteSpec struct {
 	Host string `json:"host,omitempty"`
 	// Rules lists the path rules, matched longest-prefix-first. At least one is required.
 	Rules []RouteRule `json:"rules"`
-	// Auth is the edge authentication stance for this Route (ADR-0113, F77). nil ⇒ inherit the
-	// namespace default; unset overall ⇒ open (phased). Applies to all Rules (per-rule auth is V2).
+	// Auth is the edge authentication stance for this Route's rules (ADR-0113, F77); a rule's own auth beats it, and
+	// nil inherits the namespace default, else open (ADR-0241 Decision 8).
 	Auth *RouteAuth `json:"auth,omitempty"`
+	// Enabled, false, keeps the Route Disabled: it serves and claims nothing. Unset is true, except for a Route a
+	// Site or a Function owns in an explicit namespace (ADR-0241 Decision 6).
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 // RouteAuth is the F77 auth stance on a Route.
@@ -58,6 +62,8 @@ type RouteRule struct {
 	PathType PathType     `json:"pathType,omitempty"` // Exact | Prefix (default Prefix)
 	Methods  []HTTPMethod `json:"methods,omitempty"`  // empty ⇒ all methods
 	Backend  RouteBackend `json:"backend"`
+	// Auth is this rule's stance; nil is the Route's spec.auth (ADR-0241 Decision 8).
+	Auth *RouteAuth `json:"auth,omitempty"`
 }
 
 // RouteBackend is an exactly-one-of union (ADR-0120, F82): a Function backend (the activator hop)
@@ -87,10 +93,6 @@ type StaticBackend struct {
 	// SPA, when true, serves Index (200) for any un-matched path so a client-side router owns routing;
 	// when false, an un-matched path is 404.
 	SPA bool `json:"spa,omitempty"`
-	// Public, when true, serves this Route openly (stance relaxed to `open`, ADR-0113) when the
-	// resolved stance is unset/default — a declared public site. It NEVER overrides an explicit
-	// `authenticated` stance (that combination is rejected at admission). Default false ⇒ inherit.
-	Public bool `json:"public,omitempty"`
 }
 
 // PathType selects exact vs segment-prefix matching.
@@ -170,8 +172,13 @@ func (r *Route) Validate() error {
 		default:
 			return fault.Invalidf(op, "spec.rules[%d].pathType %q must be Prefix or Exact", i, rule.PathType)
 		}
-		if err := validateBackend(r, rule, i, op); err != nil {
+		if err := validateBackend(rule, i, op); err != nil {
 			return err
+		}
+		if rule.Auth != nil {
+			if err := validateAuthMode(rule.Auth.Mode, fmt.Sprintf("spec.rules[%d].auth.mode", i)); err != nil {
+				return err
+			}
 		}
 		for _, m := range rule.Methods {
 			if !validMethod(m) {
@@ -195,9 +202,8 @@ func (r *Route) Validate() error {
 
 // validateBackend enforces the RouteBackend exactly-one-of union (ADR-0120): each rule sets exactly
 // one of backend.function / backend.static. A function arm keeps the DNS-1123 label check; a static
-// arm requires a DNS-1123 bucket, a "/"-terminated prefix, a relative index, and (M2) rejects public + an explicit
-// `authenticated` Route stance — a contradiction (public must never override an explicit authenticated).
-func validateBackend(r *Route, rule *RouteRule, i int, op string) error {
+// arm requires a DNS-1123 bucket, a "/"-terminated prefix and a relative index.
+func validateBackend(rule *RouteRule, i int, op string) error {
 	hasFn := rule.Backend.Function != ""
 	hasStatic := rule.Backend.Static != nil
 	if hasFn == hasStatic {
@@ -218,9 +224,6 @@ func validateBackend(r *Route, rule *RouteRule, i int, op string) error {
 	}
 	if strings.HasPrefix(st.Index, "/") {
 		return fault.Invalidf(op, "spec.rules[%d].backend.static.index %q must be a relative path (no leading '/')", i, st.Index)
-	}
-	if st.Public && r.Spec.Auth != nil && r.Spec.Auth.Mode == AuthAuthenticated {
-		return fault.Invalidf(op, "spec.rules[%d].backend.static.public conflicts with spec.auth.mode=authenticated: public must not override an explicit authenticated stance", i)
 	}
 	return nil
 }

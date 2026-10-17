@@ -7,12 +7,12 @@ package site
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -22,14 +22,17 @@ import (
 	"github.com/pyvvo/funcd/internal/artifact"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/controller"
+	"github.com/pyvvo/funcd/internal/route/owned"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
 const (
 	op        = "site.Reconcile"
 	condReady = v1.ConditionType("Ready")
+	// reasonDisabled is the owned Route's verdict while the Site's own address is off (ADR-0241 Decision 6).
+	reasonDisabled = "Disabled"
 	// routeRequeue is the poll interval while the owned Route is pending (the ADR-0091 precedent); a
-	// later change to the Route re-runs the Site through MapRoute.
+	// later change to the Route re-runs the Site through owned.MapOwner.
 	routeRequeue = 2 * time.Second
 )
 
@@ -111,8 +114,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	if err != nil {
 		return controller.Result{}, err
 	}
-	if rt != nil && !ownedBy(rt.OwnerReferences, s) {
-		return r.publish(ctx, s, outcome{cond: notReady("RouteNotOwned", fmt.Sprintf("route %q exists and carries no owner reference to this site", s.Name))})
+	if rt != nil && !v1.ControlledBy(rt.OwnerReferences, v1.KindSite, s.UID) {
+		return r.publish(ctx, s, routeNotOwned(s))
 	}
 	serving := servingDigest(rt, s.Spec.Prefix)
 
@@ -196,7 +199,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		}
 	}
 
-	rt, err = r.ensureRoute(ctx, s, rt, target, served, config)
+	rt, err = owned.Ensure(ctx, r.store, s, s.Name, compileRoute(s, target, served, config))
+	if errors.Is(err, owned.ErrNotOwned) {
+		return r.publish(ctx, s, routeNotOwned(s))
+	}
 	if err != nil {
 		return controller.Result{}, err
 	}
@@ -206,7 +212,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	case !ok || cnd.ObservedGeneration < rt.Generation:
 		out.cond = notReady("RouteNotReady", fmt.Sprintf("route %q is pending", rt.Name))
 		out.result = controller.Result{RequeueAfter: r.routeRequeue}
-	case cnd.Status != v1.ConditionTrue:
+	case cnd.Status != v1.ConditionTrue && cnd.Reason != reasonDisabled: // a Disabled Route is off by choice (ADR-0241)
 		out.cond = notReady("RouteNotReady", fmt.Sprintf("route %q: %s: %s", rt.Name, cnd.Reason, cnd.Message))
 	case cfgReason != "":
 		out.cond = notReady(cfgReason, cfgMsg)
@@ -214,13 +220,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		out.cond = v1.Condition{Type: condReady, Status: v1.ConditionTrue, Reason: "Materialized"}
 	}
 	return r.publish(ctx, s, out)
-}
-
-// MapRoute is the controller.MapFunc that re-runs the reconcile of the Site named after a changed Route:
-// the Site's status is derived from that Route (routeOf), and no Site event follows a Route write.
-func MapRoute(_ context.Context, obj v1.Object) []controller.Request {
-	meta := obj.GetObjectMeta()
-	return []controller.Request{{GVK: v1.KindSite.GVK(), Namespace: meta.Namespace, Name: meta.Name}}
 }
 
 // MapBucket is the controller.MapFunc that re-runs the reconcile of every Site declaring a changed Bucket:
@@ -361,30 +360,10 @@ func (r *Reconciler) unpack(ctx context.Context, view blob.Bucket, s *v1.Site, d
 	return "", "", nil
 }
 
-// ensureRoute creates the owned Route (always stamped with the OwnerReference) or updates its spec to
-// the compiled desired state and its group to the Site's when either drifted; an unchanged Route is left alone.
-func (r *Reconciler) ensureRoute(ctx context.Context, s *v1.Site, rt *v1.Route, digest, index string, config bool) (*v1.Route, error) {
-	spec := compileRoute(s, digest, index, config)
-	if rt == nil {
-		nr := &v1.Route{TypeMeta: v1.TypeMeta{APIVersion: v1.KindRoute.GVK().APIVersion(), Kind: v1.KindRoute}}
-		nr.Name, nr.Namespace, nr.ResourceGroup = s.Name, s.Namespace, s.ResourceGroup
-		nr.OwnerReferences = []v1.OwnerReference{ownerRef(s)}
-		nr.Spec = spec
-		created, cerr := r.store.Create(ctx, nr)
-		if cerr != nil {
-			return nil, fault.Wrapf(cerr, fault.KindOf(cerr), op, "create route %q", s.Name)
-		}
-		return created.(*v1.Route), nil
-	}
-	if reflect.DeepEqual(rt.Spec, spec) && rt.ResourceGroup == s.ResourceGroup {
-		return rt, nil
-	}
-	rt.Spec, rt.ResourceGroup = spec, s.ResourceGroup
-	updated, uerr := r.store.Update(ctx, rt)
-	if uerr != nil {
-		return nil, fault.Wrapf(uerr, fault.KindOf(uerr), op, "update route %q", s.Name)
-	}
-	return updated.(*v1.Route), nil
+// routeNotOwned is the outcome while a Route of the Site's name is not controlled by this Site with its current UID:
+// the first writer wins (ADR-0241 Decision 5).
+func routeNotOwned(s *v1.Site) outcome {
+	return outcome{cond: notReady("RouteNotOwned", fmt.Sprintf("route %q exists and is not controlled by this site", s.Name))}
 }
 
 // publish derives the Site's status from the outcome — digest/servingPrefix from what the Route holds,

@@ -102,8 +102,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Internal fn-to-fn invoke (ADR-0064) is addressed by name and is NEVER gated or re-routed by
 	// exposure (ADR-0110): it skips the Route front door entirely and serves the /function/<name> form.
 	internal := isInternal(r.Context())
-	// ADR-0240 Decision 6: on a public host that names a namespace, /function and every path under it belong to
-	// that namespace, so an edge match of another namespace is ignored there.
+	// ADR-0240 Decision 6, ADR-0241 Decision 4: on a public host that names a namespace, a request under /function
+	// goes by name in that namespace unless the rule it matches lies under /function and is that namespace's, so
+	// a / rule, such as an SPA's, never takes it.
 	var hostNS v1.NamespaceName
 	if !internal && router.IsFunctionPath(r.URL.Path) {
 		hostNS = router.NamespaceOfHost(r.Host, s.baseDomain)
@@ -111,7 +112,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Front door: try the Route matcher first (both exposure modes) — public requests only.
 	if s.router != nil && !internal {
-		if m, ok := s.router.Resolve(r.Host, r.URL.Path, r.Method); ok && (hostNS == "" || m.Namespace == hostNS) {
+		if m, ok := s.router.Resolve(r.Host, r.URL.Path, r.Method); ok && (hostNS == "" || m.Namespace == hostNS && router.IsFunctionPath(m.Path)) {
 			if m.Static != nil {
 				// Static backend (ADR-0120, F82): serve the Bucket prefix directly — no activator hop.
 				s.serveStatic(w, r, m, op)
@@ -126,12 +127,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			stance := s.authStance(r, m.Auth, m.Namespace)
-			s.serveFunction(w, r, m.Namespace, m.Function, stripMatched(r.URL.Path, m.StripPrefix), stance, internal, received, op)
+			s.serveFunction(w, r, m.Namespace, m.Function, stripMatched(r.URL.Path, m.StripPrefix), stance, internal, received, op, nil)
 			return
 		}
 	}
 
-	// The /function/<name> path form. Gate on the target namespace's exposure mode (public only).
+	// The /function/<name> path form.
 	name, rest, ok := parseFunctionPath(r.URL.Path)
 	if !ok {
 		fault.WriteProblem(w, fault.NotFoundf(op, "no route for %q", r.URL.Path))
@@ -144,13 +145,60 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if ns == "" {
 		ns = "default"
 	}
-	if s.router != nil && !internal && s.exposureMode(r, ns) == v1.ExposureExplicit {
-		// Default-deny ingress: refuse BEFORE any activator call — no sandbox is woken.
-		fault.WriteProblem(w, fault.NotFoundf(op, "no route exposes %s/%s (namespace is explicit)", ns, name))
+	if internal {
+		s.serveFunction(w, r, ns, v1.ObjectName(name), rest, "", true, received, op, nil)
 		return
 	}
-	stance := s.authStance(r, "", ns)
-	s.serveFunction(w, r, ns, v1.ObjectName(name), rest, stance, internal, received, op)
+	s.serveByName(w, r, ns, v1.ObjectName(name), rest, received, op)
+}
+
+// serveByName serves a public call at a Function's default address (ADR-0241 Decision 4). It reads the Function
+// first: one that is missing, off, or has an address of its own gets the namespace stance's PEP and then 404, so
+// in an authenticated namespace an anonymous caller cannot tell names apart and nothing wakes. One that is on gets
+// the PEP with its ingress.auth, else the namespace default.
+func (s *Server) serveByName(w http.ResponseWriter, r *http.Request, ns v1.NamespaceName, name v1.ObjectName, rest string,
+	received time.Time, op string) {
+	obj, err := s.store.Get(r.Context(), v1.KindFunction.GVK(), ns, name)
+	if err != nil && fault.KindOf(err) != fault.NotFound {
+		fault.WriteProblem(w, fault.Wrapf(err, fault.KindOf(err), op, "function %s/%s", ns, name))
+		return
+	}
+	fn, _ := obj.(*v1.Function)
+	if fn == nil || !s.servedByName(r, fn) {
+		if s.enforce(w, r, activator.FunctionRef{Namespace: ns, Name: name}, s.authStance(r, "", ns), op) {
+			fault.WriteProblem(w, fault.NotFoundf(op, "function %s/%s is not exposed by name", ns, name))
+		}
+		return
+	}
+	stance := fn.Spec.Ingress.AuthMode()
+	if stance == "" {
+		stance = s.authStance(r, "", ns)
+	}
+	s.serveFunction(w, r, ns, name, rest, stance, false, received, op, fn)
+}
+
+// servedByName reports whether a Function answers at its default address: its ingress is on (enabled, else its
+// namespace's mode) and names no host or path, which a Route the Function owns serves instead.
+func (s *Server) servedByName(r *http.Request, fn *v1.Function) bool {
+	if ing := fn.Spec.Ingress; ing != nil && (ing.Host != "" || ing.Path != "") {
+		return false
+	}
+	return fn.Spec.Ingress.EnabledIn(s.exposureMode(r, fn.Namespace))
+}
+
+// enforce runs the F77 edge PEP for stance and writes its refusal; it reports whether the request may go on.
+func (s *Server) enforce(w http.ResponseWriter, r *http.Request, ref activator.FunctionRef, stance v1.AuthMode, op string) bool {
+	if s.enforcer != nil {
+		if err := s.enforcer.Enforce(r.Context(), r, ref, stance); err != nil {
+			fault.WriteProblem(w, err)
+			return false
+		}
+	} else if stance == v1.AuthAuthenticated {
+		// Fail-closed: an authenticated stance with no PEP wired cannot authenticate ⇒ 401.
+		fault.WriteProblem(w, fault.Unauthorizedf(op, "authentication required but no authenticator is configured"))
+		return false
+	}
+	return true
 }
 
 // serveFunction addresses the resolved function and hands off to the activator (the existing
@@ -160,28 +208,22 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // (no wake) — unless the request is internal fn-to-fn (ADR-0064), which is never edge-gated. Under key: function
 // an external call then takes a token from the Function's bucket, so a name that does not resolve creates no
 // bucket and a 429 never wakes a sandbox (ADR-0164). An external invoke gets a response deadline from received:
-// the Function's spec.timeout, else invoke.defaultTimeout (ADR-0151).
+// the Function's spec.timeout, else invoke.defaultTimeout (ADR-0151). fn is the Function already read, or nil.
 func (s *Server) serveFunction(w http.ResponseWriter, r *http.Request, ns v1.NamespaceName, name v1.ObjectName, remainder string,
-	stance v1.AuthMode, internal bool, received time.Time, op string) {
+	stance v1.AuthMode, internal bool, received time.Time, op string, fn *v1.Function) {
 	if remainder == "" {
 		remainder = "/"
 	}
-	if !internal {
-		if s.enforcer != nil {
-			if err := s.enforcer.Enforce(r.Context(), r, activator.FunctionRef{Namespace: ns, Name: name}, stance); err != nil {
-				fault.WriteProblem(w, err)
-				return
-			}
-		} else if stance == v1.AuthAuthenticated {
-			// Fail-closed: an authenticated stance with no PEP wired cannot authenticate ⇒ 401.
-			fault.WriteProblem(w, fault.Unauthorizedf(op, "authentication required but no authenticator is configured"))
+	if !internal && !s.enforce(w, r, activator.FunctionRef{Namespace: ns, Name: name}, stance, op) {
+		return
+	}
+	var obj v1.Object = fn
+	if fn == nil {
+		var err error
+		if obj, err = s.store.Get(r.Context(), v1.KindFunction.GVK(), ns, name); err != nil {
+			fault.WriteProblem(w, fault.Wrapf(err, fault.KindOf(err), op, "function %s/%s", ns, name))
 			return
 		}
-	}
-	obj, err := s.store.Get(r.Context(), v1.KindFunction.GVK(), ns, name)
-	if err != nil {
-		fault.WriteProblem(w, fault.Wrapf(err, fault.KindOf(err), op, "function %s/%s", ns, name))
-		return
 	}
 	// Fill the F76 observability holder (if any) only once the function exists, so the metric/log
 	// label is correct for a Route hit and stays "-" for a 404 or a PEP reject — a client-chosen
@@ -250,9 +292,6 @@ func (s *Server) responseDeadline(obj v1.Object, received time.Time) activator.R
 func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request, m router.Match, op string) {
 	ns := m.Namespace
 	stance := s.authStance(r, m.Auth, ns)
-	if m.Static.Public && stance != v1.AuthAuthenticated {
-		stance = v1.AuthOpen
-	}
 	// Fill the F76 observability holder with (ns, bucket) — the function label is overloaded with the
 	// bucket name for a static route (a distinct backend/kind label is a named follow-on, ADR-0120 §5).
 	if t, ok := observ.TargetFrom(r.Context()); ok {

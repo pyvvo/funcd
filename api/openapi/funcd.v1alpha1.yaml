@@ -413,7 +413,7 @@ components:
                   - array
                   - "null"
               ingress:
-                $ref: "#/components/schemas/CatalogIngress"
+                $ref: "#/components/schemas/Ingress"
               name:
                 description: The part's name. The object takes the App's namespace and resource group.
                 maxLength: 63
@@ -524,6 +524,8 @@ components:
               imageDigest:
                 pattern: ^sha256:[a-f0-9]{64}$
                 type: string
+              ingress:
+                $ref: "#/components/schemas/Ingress"
               kv:
                 items:
                   $ref: "#/components/schemas/FunctionKV"
@@ -644,6 +646,8 @@ components:
             properties:
               auth:
                 $ref: "#/components/schemas/RouteAuth"
+              enabled:
+                type: boolean
               host:
                 type: string
               name:
@@ -1311,16 +1315,6 @@ components:
         wait:
           type: string
       type: object
-    CatalogIngress:
-      additionalProperties: false
-      properties:
-        host:
-          type: string
-        pathPrefix:
-          type: string
-      required:
-        - pathPrefix
-      type: object
     CatalogRef:
       additionalProperties: false
       properties:
@@ -1376,7 +1370,7 @@ components:
             - array
             - "null"
         ingress:
-          $ref: "#/components/schemas/CatalogIngress"
+          $ref: "#/components/schemas/Ingress"
         resources:
           $ref: "#/components/schemas/ResourceSpec"
         secrets:
@@ -1938,6 +1932,8 @@ components:
         imageDigest:
           pattern: ^sha256:[a-f0-9]{64}$
           type: string
+        ingress:
+          $ref: "#/components/schemas/Ingress"
         kv:
           items:
             $ref: "#/components/schemas/FunctionKV"
@@ -2229,6 +2225,18 @@ components:
             - Degraded
             - Failed
             - Terminating
+          type: string
+      type: object
+    Ingress:
+      additionalProperties: false
+      properties:
+        auth:
+          $ref: "#/components/schemas/RouteAuth"
+        enabled:
+          type: boolean
+        host:
+          type: string
+        path:
           type: string
       type: object
     Invocation:
@@ -3162,6 +3170,8 @@ components:
     RouteRule:
       additionalProperties: false
       properties:
+        auth:
+          $ref: "#/components/schemas/RouteAuth"
         backend:
           $ref: "#/components/schemas/RouteBackend"
         methods:
@@ -3195,6 +3205,8 @@ components:
       properties:
         auth:
           $ref: "#/components/schemas/RouteAuth"
+        enabled:
+          type: boolean
         host:
           type: string
         rules:
@@ -3641,12 +3653,12 @@ components:
         baseHref:
           description: Serve a copy of the bundle's index whose <base href> is the Site's mount, so a bundle built with relative URLs runs at any path, deep links included.
           type: boolean
+        enabled:
+          type: boolean
         host:
           type: string
         path:
           type: string
-        public:
-          type: boolean
         rules:
           items:
             $ref: "#/components/schemas/SiteRule"
@@ -3755,8 +3767,6 @@ components:
           type: string
         prefix:
           type: string
-        public:
-          type: boolean
         spa:
           type: boolean
       required:

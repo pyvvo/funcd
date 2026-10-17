@@ -2,6 +2,7 @@ package v1alpha1
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -119,6 +120,9 @@ type FunctionSpec struct {
 	// SQLDatabase in this namespace, reached through context.sql. The binding is the read grant; writes need the
 	// database's owner or a writer role. A missing database holds the Function Pending (SQLDatabaseNotFound).
 	SQL []FunctionSQL `json:"sql,omitempty"`
+	// Ingress is the Function's edge exposure (ADR-0241): unset, it answers by name at /function/<name> while its
+	// namespace is implicit; a host or a path gives it a Route of its own.
+	Ingress *Ingress `json:"ingress,omitempty"`
 }
 
 // FunctionSQL binds this function to a SQLDatabase of its namespace under a local alias (ADR-0233).
@@ -231,6 +235,13 @@ func (f *Function) Validate() error {
 	}
 	if w := f.Spec.Pooling.Worker; w != "" && !dnsLabel.MatchString(w) {
 		return fault.Invalidf("Function.Validate", "spec.pooling.worker %q is not a valid DNS-1123 label", w)
+	}
+	if err := f.Spec.Ingress.validate("Function.Validate", "spec.ingress"); err != nil {
+		return err
+	}
+	// A path under /function/ would shadow a sibling's by-name address (ADR-0241 Decision 3).
+	if ing := f.Spec.Ingress; ing != nil && (ing.Path == "/function" || strings.HasPrefix(ing.Path, "/function/")) {
+		return fault.Invalidf("Function.Validate", "spec.ingress.path %q must not be /function or under it", ing.Path)
 	}
 	return f.Spec.Validate()
 }

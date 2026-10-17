@@ -42,7 +42,7 @@ func startSite(t *testing.T, files map[string]string, objs ...v1.Object) (store.
 
 	s := &v1.Site{TypeMeta: v1.TypeMeta{APIVersion: v1.KindSite.GVK().APIVersion(), Kind: v1.KindSite}}
 	s.Name, s.Namespace, s.ResourceGroup = "bi", "default", "rg1"
-	s.Spec = v1.SiteSpec{Image: ref, Bucket: v1.SiteBucket{Name: "reports"}, Prefix: "bi", Ingress: v1.SiteIngress{Host: "bi.example.com"}}
+	s.Spec = v1.SiteSpec{Image: ref, Bucket: v1.SiteBucket{Name: "reports"}, Prefix: "bi", Ingress: v1.SiteIngress{Ingress: v1.Ingress{Host: "bi.example.com"}}}
 	for _, o := range append(objs, s) {
 		_, err = st.Create(ctx, o)
 		require.NoError(t, err)

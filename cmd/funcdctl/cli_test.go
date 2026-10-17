@@ -381,7 +381,8 @@ spec:
   spa: true
   ingress:
     host: bi.example.com
-    public: true
+    auth:
+      mode: open
     rules:
       - path: /data
         prefix: gold
