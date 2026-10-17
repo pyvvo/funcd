@@ -2,6 +2,7 @@
 
 - **Status**: Implemented (2026-10-17, review passed). Accepted (2026-10-17), after two judge rounds; the decider confirmed the rules of Decisions 1, 4 and 6.
 - **Date**: 2026-10-17
+- **Superseded in part by**: [ADR-0241](0241-one-exposure-shape.md) (2026-10-17) — Decision 5's last sentence: `enabled: true` opens a Function in an `explicit` namespace; Decision 6: on a namespace host, `/function/…` goes by name unless a rule of that namespace under `/function` matches.
 - **Deciders**: green-0-rabbit
 - **Tags**: edge, routing, namespace, multi-tenancy
 - **Realizes**: [FEAT-0006/F153](../feat/0006-feat-ingress-hardening.md) (namespace hosts)

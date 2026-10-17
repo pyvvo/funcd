@@ -3,6 +3,7 @@
 - **Status**: Implemented
 - **Superseded in part by**: [ADR-0176](0176-one-collision-rule-for-every-edge-source.md) (2026-10-05) — Decisions 3, 4 and 6: the edge aggregator applies HostRequired/RouteConflict to every source; no host-less /function/ claim.
 - **Superseded in part by**: [ADR-0240](0240-namespace-hosts.md) (2026-10-17) — Decisions 1 and 5: an empty host answers on the namespace host (`default`: every host but reserved ones); Decision 3: HostRequired only for `default`, and HostReserved beats the (namespace, name) order; Decisions 6.2 and 6.3: `/function` on a namespace host belongs to that namespace.
+- **Superseded in part by**: [ADR-0241](0241-one-exposure-shape.md) (2026-10-17) — Decision 2: `defaultExposure` decides every kind's default address; Decision 6.3: the by-name gate is per Function (`ingress.enabled`).
 - **Date**: 2026-07-08
 - **Implemented**: 2026-07-08
 - **Deciders**: green-0-rabbit

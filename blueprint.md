@@ -696,6 +696,13 @@ sequenceDiagram
 > other hosts). A namespace reserves its host while it serves there: another namespace's claim gets
 > `HostReserved` and `default`'s host-less entries do not answer there. `HostRequired` and `ReservedPath` now
 > apply only to `default`'s host-less entries.
+>
+> **One exposure shape (ADR-0241).** Function, Site and CatalogService declare `spec.ingress` (`enabled`, `host`,
+> `path`, `auth`). A Function or a Site is on as its namespace's `defaultExposure` says, a CatalogService only with
+> `enabled: true`, at `/<kind>/<name>` on the namespace host or at `/` on a host of its own. A Function's default
+> address stays its by-name form; a Site, and a Function with a custom address, own a Route, which
+> `ingress.enabled: false` keeps but turns off (`Route.spec.enabled`). A Route you write wins an equal claim over an
+> owned one, and each Route rule may carry its own `auth`, which replaces `public`.
 
 #### Resource state machine
 

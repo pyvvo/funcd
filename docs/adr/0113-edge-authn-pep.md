@@ -2,6 +2,7 @@
 
 - **Status**: Implemented
 - **Superseded in part by**: [ADR-0171](0171-static-credential-list.md) (2026-10-05) — Scope Out non-namespace-scoped identities as V2: admin token passes in V1.
+- **Superseded in part by**: [ADR-0241](0241-one-exposure-shape.md) (2026-10-17) — Decision 2: the by-name path reads the Function before its PEP, and a missing or closed one meets the namespace stance first; Decision 3: a stance per Route rule (`rules[].auth`).
 - **Date**: 2026-07-08
 - **Implemented**: 2026-07-08
 - **Deciders**: green-0-rabbit

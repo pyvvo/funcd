@@ -4,6 +4,7 @@
 - **Superseded in part by**: [ADR-0148](0148-size-caps-answer-413.md) (2026-10-05) — Contracts data-plane comment: ErrorHandler ⇒ fault.Unavailable for over-cap bodies.
 - **Superseded in part by**: [ADR-0176](0176-one-collision-rule-for-every-edge-source.md) (2026-10-05) — Decisions 3-4 and Temporary workaround: catalog edge claims follow the one collision rule, Routes included.
 - **Superseded in part by**: [ADR-0240](0240-namespace-hosts.md) (2026-10-17) — Decision 4: a catalog ingress without a host answers on its namespace host (`default`: every host but reserved ones).
+- **Superseded in part by**: [ADR-0241](0241-one-exposure-shape.md) (2026-10-17) — Decision 4: a catalog ingress is `{enabled, host, path}`, opt-in, at `/catalogservice/<name>` by default; `pathPrefix` is removed and `auth` refused.
 - **Implemented**: 2026-07-14 — review **pass** ([scorecard](../reviews/adr-0138-implementation-claude-opus-4-8.md)):
   the external `catalog::query` edge is live + green + e2e-proven on real containerd. A node-private **Upstream**
   backend on the Route-v2 edge router + an **edge-route aggregator** (sole-writer, `-race`-clean, failure-atomic)

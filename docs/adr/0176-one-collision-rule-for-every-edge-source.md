@@ -2,6 +2,7 @@
 
 - **Status**: Implemented (2026-10-05)
 - **Superseded in part by**: [ADR-0240](0240-namespace-hosts.md) (2026-10-17) — Decisions 1, 2, 4 and 5: the aggregator gives a host-less entry its namespace host first, HostReserved joins the rule sequence, and HostRequired and ReservedPath apply to `default`'s host-less entries only.
+- **Superseded in part by**: [ADR-0241](0241-one-exposure-shape.md) (2026-10-17) — Decision 2: entries are ruled in `(namespace, owned, name, kind rank)` order, `Disabled` first.
 - **Date**: 2026-10-05 (judged twice by three lenses; held from publication)
 - **Deciders**: green-0-rabbit
 - **Tags**: edge, route, catalog, multi-tenancy

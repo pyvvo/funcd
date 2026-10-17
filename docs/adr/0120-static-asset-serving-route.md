@@ -2,6 +2,7 @@
 
 - **Status**: Implemented
 - **Superseded in part by**: [ADR-0239](0239-site-runtime-configuration.md) (2026-10-16) — §2 and §3: a nested `index` serves sub-directories and the index cache tier by its file name.
+- **Superseded in part by**: [ADR-0241](0241-one-exposure-shape.md) (2026-10-17) — Decision 4: `static.public` is removed; a rule's `auth.mode: open` replaces it.
 - **Date**: 2026-07-10
 - **Accepted**: 2026-07-10
 - **Reviewing**: 2026-07-10
