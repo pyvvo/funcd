@@ -1,6 +1,7 @@
 # ADR-0037: The Node reference shim — TypeScript + Hono, esbuild-bundled (supersedes ADR-0030 §2)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0243](0243-http-functions.md) (2026-10-17) — §2: `POST /` is not the only route; an `http(app)` export serves every request but the shim's `/health/*`.
 - **Date**: 2026-06-16 (**Accepted 2026-06-16**, **Implemented 2026-06-16** — judge folded: reframed the ADR-0030 §2 relationship from "refines"
   to a narrow, contract-preserving **supersession**; clarified the 500 body is `{error}` JSON, not RFC 9457
   problem+json; noted ADR-0032's `FUNCD_PORT` bind is preserved too.)

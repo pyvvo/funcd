@@ -1,6 +1,7 @@
 # ADR-0123: Runtime-compiled I/O validators (schema-only artifact)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0243](0243-http-functions.md) (2026-10-17) — Decisions 1 and 4: an `http` Function carries no contract, and a delivered one makes the shim fail closed.
 - **Date**: 2026-07-11 (**Implemented 2026-07-11**; **Accepted 2026-07-11** — adr-judge: no Blockers. Applied M1 (single-file schema delivered as a
   `.funcd-contract.json` **dotfile sidecar**, isolated from `entries[0]` handler resolution), m1 (`VerifyBundleContract`
   now also **adds** per-side `contract.Check`), m2 (the ADR-0060 supersession scope clarified — the *integrity

@@ -21,6 +21,7 @@
   the compile runs once at init over a `contract.Check`-gated, digest-pinned schema **before** any handler code loads
   (no eval of untrusted or request-time input). The JSON-Schema-canonical contract, the profile, and the 422/500/204
   wire are **kept**.
+- **Superseded in part by**: [ADR-0243](0243-http-functions.md) (2026-10-17) — Decisions 3 and 4: an `http` Function has no FuncInput/FuncOutput contract; push generates none.
 - **Date**: 2026-06-19 (**Accepted 2026-06-19** — judged (no Blockers) + iterated with the decider. Settled: JSON Schema
   canonical, **generated** from code types (typia/pydantic), **eval-free precompiled** validation (AJV-standalone /
   pydantic-core), input→422 + output→500, supersedes ADR-0038's hand-written JTD. Decider refinements folded: the
