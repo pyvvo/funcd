@@ -546,6 +546,12 @@ components:
                 type: string
               pooling:
                 $ref: "#/components/schemas/Pooling"
+              protocol:
+                enum:
+                  - ""
+                  - cloudevent
+                  - http
+                type: string
               ref:
                 description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
                 maxLength: 63
@@ -1948,6 +1954,12 @@ components:
             - "null"
         pooling:
           $ref: "#/components/schemas/Pooling"
+        protocol:
+          enum:
+            - ""
+            - cloudevent
+            - http
+          type: string
         replicas:
           format: int64
           maximum: 15

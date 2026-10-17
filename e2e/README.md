@@ -15,6 +15,9 @@ self-deploys (Lima provisioning), then Venom drives the assertions. It replaced 
   is the capability); a missing name makes greeter's contract reject (422) and that **422 propagates** back
   through front; a bad-typed greeter call hits the **contract gate** (422) before the handler; and only the
   linked caller (front) has an invoke socket.
+- `http-api.venom.yml` — the http-api lane (ADR-0243). Proves: devices-api, a Hono REST API that serves HTTP, answers
+  each method behind the Route `api` with the app's statuses and headers, the prefix named in `Location`; its export
+  reaches the client line by line as it is written; and it answers by name at `/function/devices-api`.
 - `metastore.venom.yml` — the metastore durability lane (ADR-0065). The **exec-shaped** lane: not data-plane
   http but a daemon-lifecycle test — start funcd (containerd + file/Badger metastore), apply a `Config`,
   **restart the daemon**, and prove the `Config` is **recovered** from the durable metastore. Every step is an

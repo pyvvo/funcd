@@ -484,3 +484,22 @@ func TestIssue363_SymlinkedFileRefusedNotDropped(t *testing.T) {
 		require.ErrorContains(t, err, "img/dep.py")
 	})
 }
+
+// A bundle of a function with no I/O contract, one that serves HTTP, pushes with no contract layer and materializes
+// with no contract file; one that still holds __funcd_contract.json is refused (ADR-0243 Decision 7).
+func TestPushBundleNoContract(t *testing.T) {
+	t.Parallel()
+	dir, entry := goodBundle(t)
+	_, err := artifact.PushBundleNoContract(context.Background(), layoutRef(t, "stale"), dir, entry, "", "")
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "a bundle that holds a contract file")
+	require.NoError(t, os.Remove(filepath.Join(dir, "__funcd_contract.json")))
+
+	ref := layoutRef(t, "v1")
+	digest, err := artifact.PushBundleNoContract(context.Background(), ref, dir, entry, "", "")
+	require.NoError(t, err)
+	_, _, err = artifact.InspectContract(context.Background(), ref, digest)
+	require.Equal(t, fault.NotFound, fault.KindOf(err), "no contract layer: %v", err)
+	path, err := artifact.NewOrasMaterializer(t.TempDir(), "").Materialize(context.Background(), mkFunction(t, ref, digest))
+	require.NoError(t, err)
+	require.NoFileExists(t, filepath.Join(filepath.Dir(path), "__funcd_contract.json"), "no contract is delivered")
+}

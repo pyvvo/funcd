@@ -28,15 +28,16 @@ import (
 
 type fakeResolver struct {
 	target    local.Ref
+	protocol  v1.FunctionProtocol
 	timeout   time.Duration
 	err       error
 	gotCaller local.Ref
 	gotAlias  string
 }
 
-func (f *fakeResolver) Resolve(_ context.Context, caller local.Ref, alias string) (local.Ref, time.Duration, error) {
+func (f *fakeResolver) Resolve(_ context.Context, caller local.Ref, alias string) (local.Ref, v1.FunctionProtocol, time.Duration, error) {
 	f.gotCaller, f.gotAlias = caller, alias
-	return f.target, f.timeout, f.err
+	return f.target, f.protocol.Normalized(), f.timeout, f.err
 }
 
 type fakeInvoker struct {
@@ -46,6 +47,10 @@ type fakeInvoker struct {
 
 func (f fakeInvoker) Invoke(_ context.Context, _ local.Ref, _ []byte, _ time.Duration) ([]byte, error) {
 	return f.out, f.err
+}
+
+func (f fakeInvoker) Fetch(context.Context, local.Ref, local.FetchRequest, time.Duration) (local.FetchReply, error) {
+	return local.FetchReply{Status: http.StatusOK, Body: f.out}, f.err
 }
 
 // fakeAuthz records the link::invoke request the handler builds and returns a fixed decision — it
@@ -178,6 +183,10 @@ func (r recordingInvoker) Invoke(ctx context.Context, t local.Ref, in []byte, d 
 	return r.inner.Invoke(ctx, t, in, d)
 }
 
+func (recordingInvoker) Fetch(context.Context, local.Ref, local.FetchRequest, time.Duration) (local.FetchReply, error) {
+	return local.FetchReply{}, nil
+}
+
 type fakeStore struct{ obj v1.Object }
 
 func (f fakeStore) Get(_ context.Context, _ v1.GroupVersionKind, _ v1.NamespaceName, _ v1.ObjectName) (v1.Object, error) {
@@ -190,19 +199,43 @@ func callerFn(links ...v1.FunctionLink) *v1.Function {
 	return f
 }
 
-// resolver — link-as-grant: a matching link resolves the target (default timeout when unset); no
-// matching link is default-deny (fault.Forbidden).
+// resolver — link-as-grant: a matching link resolves the target (default timeout when unset) and how it is called
+// (ADR-0243); no matching link is default-deny (fault.Forbidden), and a missing target is NotFound.
 func TestResolver(t *testing.T) {
-	r := local.NewResolver(fakeStore{obj: callerFn(v1.FunctionLink{Alias: "payments", Target: "checkout"})})
+	api := &v1.Function{Spec: v1.FunctionSpec{Protocol: v1.ProtocolHTTP}}
+	api.Name, api.Namespace = "devices", "team-a"
+	r := local.NewResolver(nameStore{
+		"a":        callerFn(v1.FunctionLink{Alias: "payments", Target: "checkout"}, v1.FunctionLink{Alias: "devices", Target: "devices"}, v1.FunctionLink{Alias: "gone", Target: "gone"}),
+		"checkout": callerFn(),
+		"devices":  api,
+	})
 	caller := local.Ref{Namespace: "team-a", Function: "a"}
 
-	target, timeout, err := r.Resolve(context.Background(), caller, "payments")
+	target, protocol, timeout, err := r.Resolve(context.Background(), caller, "payments")
 	require.NoError(t, err)
 	require.Equal(t, local.Ref{Namespace: "team-a", Function: "checkout"}, target)
+	require.Equal(t, v1.ProtocolCloudEvent, protocol, "an unset protocol is cloudevent")
 	require.Equal(t, 30*time.Second, timeout, "unset link timeout ⇒ platform default")
 
-	_, _, err = r.Resolve(context.Background(), caller, "ghost")
+	_, protocol, _, err = r.Resolve(context.Background(), caller, "devices")
+	require.NoError(t, err)
+	require.Equal(t, v1.ProtocolHTTP, protocol)
+
+	_, _, _, err = r.Resolve(context.Background(), caller, "gone")
+	require.Equal(t, fault.NotFound, fault.KindOf(err), "a link to a missing Function")
+
+	_, _, _, err = r.Resolve(context.Background(), caller, "ghost")
 	require.Equal(t, fault.Forbidden, fault.KindOf(err), "no link is no grant (default-deny)")
+}
+
+// nameStore answers Get by name, NotFound for any other.
+type nameStore map[v1.ObjectName]v1.Object
+
+func (s nameStore) Get(_ context.Context, _ v1.GroupVersionKind, _ v1.NamespaceName, name v1.ObjectName) (v1.Object, error) {
+	if obj, ok := s[name]; ok {
+		return obj, nil
+	}
+	return nil, fault.NotFoundf("nameStore", "%s not found", name)
 }
 
 // invoker — forwards to the in-process data-plane and propagates its status: 2xx → output bytes;

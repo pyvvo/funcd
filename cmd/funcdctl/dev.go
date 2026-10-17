@@ -41,6 +41,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"maps"
 	"net"
@@ -650,7 +651,7 @@ func prepareHandlers(op string, pfs []plannedFunc, stateDirs []string, inst *dev
 	var fnObjs []v1.Object
 	handlers := make([]*devHandler, 0, len(pfs))
 	for _, pf := range pfs {
-		contractBlob, cerr := artifact.ContractBlob(pf.m.Contract.Input, pf.m.Contract.Output)
+		contractBlob, cerr := devContract(pf.m)
 		if cerr != nil {
 			return nil, nil, fault.Wrapf(cerr, fault.KindOf(cerr), op, "build contract for %s", pf.name)
 		}
@@ -1542,6 +1543,7 @@ func synthesizeFunction(pf plannedFunc, imagePath string) *v1.Function {
 	setMeta(&fn.ObjectMeta, pf.name)
 	fn.Spec.Runtime = pf.m.Runtime
 	fn.Spec.Handler = pf.m.Handler
+	fn.Spec.Protocol = pf.m.Protocol
 	fn.Spec.Image = "file://" + imagePath
 	fn.Spec.Replicas = 1
 	fn.Spec.Scaling = v1.Scaling{MinReplicas: 1}
@@ -1611,10 +1613,26 @@ func deliverBundle(op string, pf plannedFunc, bundleDir string, contractBlob []b
 		}
 	}
 	contractPath := filepath.Join(bundleDir, devContractFile)
+	if contractBlob == nil {
+		// An http Function has no contract, and a stale one would stop its shim (ADR-0243 Decision 2).
+		if rerr := os.Remove(contractPath); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+			return fault.Wrapf(rerr, fault.Internal, op, "remove contract %q", contractPath)
+		}
+		return nil
+	}
 	if werr := os.WriteFile(contractPath, contractBlob, 0o600); werr != nil {
 		return fault.Wrapf(werr, fault.Internal, op, "deliver contract to %q", contractPath)
 	}
 	return nil
+}
+
+// devContract is the contract dev delivers to a function's bundle: none for an http Function (ADR-0243), else the
+// ADR-0123 blob of its manifest's sides.
+func devContract(m *sdk.Manifest) ([]byte, error) {
+	if m.Protocol == v1.ProtocolHTTP {
+		return nil, nil
+	}
+	return artifact.ContractBlob(m.Contract.Input, m.Contract.Output)
 }
 
 // linkSources links every file of srcDir but its contract dotfile into bundleDir, by absolute path, since srcDir is

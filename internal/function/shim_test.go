@@ -641,6 +641,7 @@ func TestScenarioShimLaunchesWithArtifactAndHandler(t *testing.T) {
 	require.Equal(t, []string{"node", "/opt/funcd/shim.mjs"}, spec.Command, "launches the shim, not a placeholder")
 	require.Equal(t, h.artifact, spec.Env["FUNCD_ARTIFACT"], "materialized artifact path passed to the shim")
 	require.Equal(t, "handle", spec.Env["FUNCD_HANDLER"], "handler export passed to the shim")
+	require.Equal(t, "cloudevent", spec.Env["FUNCD_PROTOCOL"], "the default protocol passed to the shim (ADR-0243)")
 	// process-driver-unaffected (ADR-0032): no container mounts, no fixed port in process mode.
 	require.Empty(t, spec.Mounts, "process mode uses no bind mounts")
 	require.Empty(t, spec.Env["FUNCD_PORT"], "process mode uses the loopback+portfile handshake, not a fixed port")

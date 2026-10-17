@@ -240,6 +240,16 @@ func (s *Server) serveFunction(w http.ResponseWriter, r *http.Request, ns v1.Nam
 		out.Header.Del("Authorization")
 		out.Header.Del("X-Api-Key")
 	}
+	fn, _ = obj.(*v1.Function)
+	serveHTTP := fn != nil && fn.Spec.Protocol.Normalized() == v1.ProtocolHTTP
+	// ADR-0243 Decision 3: an http Function learns the prefix the edge stripped (a Route's, or /function/<name>), so
+	// its redirects and links point back through the edge.
+	if !internal && serveHTTP {
+		out.Header.Del("X-Forwarded-Prefix")
+		if prefix := strings.TrimSuffix(strings.TrimSuffix(r.URL.Path, remainder), "/"); prefix != "" {
+			out.Header.Set("X-Forwarded-Prefix", prefix)
+		}
+	}
 	// ADR-0134: for an EXTERNAL invoke, build the CloudEvent envelope from the request body so a
 	// caller sends plain data (or nothing) and never hand-writes {"data":…}. Internal producers
 	// (fn-to-fn/workflow/sensor) already emit a v1.0 envelope and bypass this — leave them streamed.
@@ -257,7 +267,11 @@ func (s *Server) serveFunction(w http.ResponseWriter, r *http.Request, ns v1.Nam
 			}
 			return
 		}
-		body = InvokeEnvelope(ns, name, body)
+		if serveHTTP {
+			body = HTTPEnvelope(ns, name, body)
+		} else {
+			body = InvokeEnvelope(ns, name, body)
+		}
 		out.Body = io.NopCloser(bytes.NewReader(body))
 		out.ContentLength = int64(len(body))
 		out.Header.Set("Content-Length", strconv.Itoa(len(body)))

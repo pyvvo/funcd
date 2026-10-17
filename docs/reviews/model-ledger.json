@@ -11503,5 +11503,35 @@
     "dod_total": 16,
     "report": "docs/reviews/adr-0241-implementation-claude-opus-5-5.md",
     "notes": "pass; minors: MapOwner takes a store (adr), Match.Path not in Contracts (adr), Function IngressReady unnamed by ADR (adr), no unit test of syncRoute failure branches (model), two scenario clauses proven below e2e (model), stale pathPrefix test comment (model); merge waits on the funcd-functions release pin"
+  },
+  {
+    "date": "2026-10-17",
+    "adr": "0243",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "changes-requested",
+    "blockers": 1,
+    "majors": 2,
+    "minors": 4,
+    "model_attributed": 7,
+    "dod_passed": 17,
+    "dod_total": 19,
+    "report": "docs/reviews/adr-0243-implementation-claude-opus-5-5.md",
+    "notes": "changes-requested; B1 model funcdctl did not build under -tags dev (missed by this review, found by the builder); M1 model ctx.fetch path with %20/%25 panics the local API, %3F cuts it; M2 model funcdctl push of an http bundle dir fails; m1 model non-UTF-8 JSON reaches the app as the envelope; m2 model Content-Length dropped; m3 model fetch nested cap untested; m4 model Pooling doc comment moved"
+  },
+  {
+    "date": "2026-10-18",
+    "adr": "0243",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 19,
+    "dod_total": 19,
+    "report": "docs/reviews/adr-0243-implementation-claude-opus-5-5-2.md",
+    "notes": "pass, round 2; M1 M2 m1-m4 fixed, each test fails on revert; round 1 missed a model blocker: funcdctl did not compile under -tags dev (the builder found and fixed it)"
   }
 ]

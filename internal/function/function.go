@@ -2949,7 +2949,7 @@ func (r *Reconciler) shimFor(rt v1.RuntimeName) []string {
 	if cmd := r.familyShim(rt); cmd != nil {
 		return cmd
 	}
-	if isNodeFamily(rt) {
+	if rt.IsNode() {
 		return r.shimCommand
 	}
 	return nil
@@ -3052,12 +3052,6 @@ func isPythonFamily(rt v1.RuntimeName) bool {
 	return strings.HasPrefix(string(rt), "python")
 }
 
-// isNodeFamily reports whether rt is a node-family runtime (e.g. "nodejs22"), the only family the default shim and pool
-// host serve (ADR-0149 Decision 1).
-func isNodeFamily(rt v1.RuntimeName) bool {
-	return strings.HasPrefix(string(rt), "node")
-}
-
 // addBundleEnv sets the generic bundle env (ADR-0089) into a worker's env: FUNCD_BUNDLE_DIR names
 // the bundle root (any runtime — a handler resolves its own asset dirs from it, e.g. duckdb-ext),
 // and for the python family PYTHONPATH names the same root so every vendored dependency imports.
@@ -3103,12 +3097,14 @@ func addContractEnv(env map[string]string, hostRoot, workerRoot string) {
 }
 
 // shimEnv is the env a solo shim worker starts from: the artifact path as the worker sees it, the
-// handler export (ADR-0030), and FUNCD_FUNCTION, which the shim names its invocation spans after (ADR-0101).
+// handler export (ADR-0030), FUNCD_FUNCTION, which the shim names its invocation spans after (ADR-0101), and
+// FUNCD_PROTOCOL, which tells it whether the export is an event handler or an http(app) one (ADR-0243).
 func shimEnv(fn *v1.Function, artifact string) map[string]string {
 	return map[string]string{
 		"FUNCD_ARTIFACT": artifact,
 		"FUNCD_HANDLER":  fn.Spec.Handler,
 		"FUNCD_FUNCTION": string(fn.Name),
+		"FUNCD_PROTOCOL": string(fn.Spec.Protocol.Normalized()),
 	}
 }
 

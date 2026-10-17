@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -61,6 +62,42 @@ func (p proxyInvoker) Invoke(ctx context.Context, target Ref, input []byte, time
 	}
 	// Propagate the target's failure (e.g. the shim's 422/500, or the activator's 503) verbatim.
 	return nil, &UpstreamError{Status: res.StatusCode, Body: body}
+}
+
+// Fetch forwards a context.fetch call through the in-process data plane (ADR-0243 Decision 6): the caller's method,
+// headers and body to /function/<target><path>, the body encoded as the edge encodes it for an http Function, and
+// returns the target's whole reply, whatever its status.
+func (p proxyInvoker) Fetch(ctx context.Context, target Ref, f FetchRequest, timeout time.Duration) (FetchReply, error) {
+	const op = "workernode.local.fetch"
+	cctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cctx = dataplane.WithInternal(cctx)
+	body := dataplane.HTTPEnvelope(target.Namespace, target.Function, f.Body)
+	req := httptest.NewRequest(f.Method, "/function/"+string(target.Function)+f.Path, bytes.NewReader(body)).WithContext(cctx)
+	req.URL.RawQuery = f.RawQuery
+	for key, values := range f.Header {
+		for _, v := range values {
+			req.Header.Add(key, v)
+		}
+	}
+	req.Header.Set("Content-Length", strconv.Itoa(len(body)))
+	req.Header.Set(namespaceHeader, string(target.Namespace))
+	if tp := traceparentFrom(cctx); tp != "" {
+		req.Header.Set(traceparentHeader, tp)
+	}
+	rec := &cappedRecorder{ResponseRecorder: httptest.NewRecorder()}
+	if aborted := serve(p.dataPlane, rec, req); aborted {
+		cause := "the upstream failed"
+		if err := cctx.Err(); err != nil {
+			cause = err.Error()
+		}
+		return FetchReply{}, fault.Unavailablef(op, "the response of %s was cut off: %s", target, cause)
+	}
+	if rec.over {
+		return FetchReply{}, fault.PayloadTooLargef(op, "the response of %s exceeds the %d-byte invoke limit", target, maxInvokeBytes)
+	}
+	res := rec.Result()
+	return FetchReply{Status: res.StatusCode, Header: res.Header, Body: rec.Body.Bytes()}, nil
 }
 
 // serve runs the data-plane handler and reports whether it aborted. httputil.ReverseProxy panics

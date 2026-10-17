@@ -30,6 +30,9 @@ type Manifest struct {
 	Runtime v1.RuntimeName `json:"runtime"`
 	// Handler is the entrypoint the shim resolves.
 	Handler string `json:"handler"`
+	// Protocol is how funcd calls the code (ADR-0243): cloudevent, the default, or http for an http(app) export,
+	// which has no I/O contract, so push bakes none and dev serves the app.
+	Protocol v1.FunctionProtocol `json:"protocol,omitempty"`
 	// Main is the handler SOURCE FILE, relative to the manifest dir — the wrangler `main` convention
 	// (wrangler.toml `main = "src/entry.py"`). Empty ⇒ the default entry co-located with the manifest
 	// (handler.py for python*, handler.mjs otherwise, or `<stem>.py`/`<stem>.mjs` for a stem manifest).
@@ -161,14 +164,28 @@ func parseManifest(op, path string, data []byte) (*Manifest, error) {
 }
 
 // structuralValidate enforces the manifest shape rules a push/dev config cannot be useful without: a
-// runtime, a handler, and both contract sides present. There is no name/namespace — those are deploy
-// concerns on the Function CRD, not this client config. The funcd-profile gate is the CLI's contract.Check.
+// runtime, a handler, and both contract sides present, or, for an http Function (ADR-0243), a node runtime and no
+// contract. There is no name/namespace — those are deploy concerns on the Function CRD, not this client config. The
+// funcd-profile gate is the CLI's contract.Check.
 func (m *Manifest) structuralValidate(op, path string) error {
 	if m.Runtime == "" {
 		return fault.Invalidf(op, "manifest %q is missing runtime", path)
 	}
 	if m.Handler == "" {
 		return fault.Invalidf(op, "manifest %q is missing handler", path)
+	}
+	switch m.Protocol {
+	case "", v1.ProtocolCloudEvent:
+	case v1.ProtocolHTTP:
+		if !m.Runtime.IsNode() {
+			return fault.Invalidf(op, "manifest %q: protocol http needs a node runtime, not %q", path, m.Runtime)
+		}
+		if len(bytes.TrimSpace(m.Contract.Input)) > 0 || len(bytes.TrimSpace(m.Contract.Output)) > 0 {
+			return fault.Invalidf(op, "manifest %q: a Function with protocol http has no I/O contract; remove contract", path)
+		}
+		return nil
+	default:
+		return fault.Invalidf(op, "manifest %q: protocol %q is neither cloudevent nor http", path, m.Protocol)
 	}
 	if len(bytes.TrimSpace(m.Contract.Input)) == 0 {
 		return fault.Invalidf(op, "manifest %q contract is missing the input side (a void side is %s)", path, VoidSchema)
@@ -183,6 +200,9 @@ func (m *Manifest) structuralValidate(op, path string) error {
 // artifact.ContractBlob). Both are mandatory (ADR-0090); a void side is VoidSchema, never nil.
 func (m *Manifest) ContractSides() (input, output []byte, err error) {
 	const op = "sdk.Manifest.ContractSides"
+	if m.Protocol == v1.ProtocolHTTP {
+		return nil, nil, fault.Invalidf(op, "a Function with protocol http has no I/O contract, so no contract sides (ADR-0243)")
+	}
 	if len(bytes.TrimSpace(m.Contract.Input)) == 0 {
 		return nil, nil, fault.Invalidf(op, "manifest contract is missing the input side (a void side is %s)", VoidSchema)
 	}

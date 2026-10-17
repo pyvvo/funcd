@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,29 +68,47 @@ func resolveManifest(path string) (*sdk.Manifest, string, error) {
 // contract and pushes — recording the runtime annotation, with no language toolchain invoked.
 func (a *cli) pushFromManifest(ctx context.Context, path, ref string, m *sdk.Manifest, entryFlag string, platform v1.OCIPlatform) error {
 	const op = "funcdctl push"
-	input, output, err := gateManifestContract(op, m)
-	if err != nil {
-		return err
+	// An http Function has no I/O contract (ADR-0243 Decision 7): its artifact carries none.
+	var input, output []byte
+	if m.Protocol != v1.ProtocolHTTP {
+		var err error
+		if input, output, err = gateManifestContract(op, m); err != nil {
+			return err
+		}
 	}
 	runtime := string(m.Runtime)
 
 	info, serr := os.Stat(path)
 	if serr == nil && info.IsDir() {
-		// funcdctl.yaml is primary for the bundle: compile its inline contract into the bundle's
-		// __funcd_contract.json so PushBundle (which re-gates + promotes it) bakes the manifest's schema.
-		if werr := writeBundleContract(op, path, input, output); werr != nil {
-			return werr
+		var digest string
+		var perr error
+		if input == nil {
+			// The bundle's contract file is funcdctl's own: one an earlier push left would stop the shim (ADR-0243
+			// Decision 2).
+			if rerr := os.Remove(filepath.Join(path, bundleContractName)); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+				return fault.Internalf(op, "remove %s: %v", bundleContractName, rerr)
+			}
+			digest, perr = artifact.PushBundleNoContract(ctx, ref, path, entryFlag, runtime, platform)
+		} else {
+			// funcdctl.yaml is primary for the bundle: compile its inline contract into the bundle's
+			// __funcd_contract.json so PushBundle (which re-gates + promotes it) bakes the manifest's schema.
+			if werr := writeBundleContract(op, path, input, output); werr != nil {
+				return werr
+			}
+			digest, perr = artifact.PushBundle(ctx, ref, path, entryFlag, runtime, platform)
 		}
-		digest, perr := artifact.PushBundle(ctx, ref, path, entryFlag, runtime, platform)
 		if perr != nil {
 			return perr
 		}
 		return a.writef("%s@%s\n", ref, digest)
 	}
 
-	blob, berr := artifact.ContractBlob(input, output)
-	if berr != nil {
-		return berr
+	var blob []byte
+	if input != nil {
+		var berr error
+		if blob, berr = artifact.ContractBlob(input, output); berr != nil {
+			return berr
+		}
 	}
 	digest, perr := artifact.Push(ctx, ref, path, blob, runtime, platform)
 	if perr != nil {

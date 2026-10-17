@@ -107,7 +107,7 @@ func (c checker) link(ctx context.Context, caller local.Ref, alias string) *loca
 	if r := timedOut(ctx, local.DependencyLink, alias); r != nil {
 		return r
 	}
-	target, _, err := c.d.Links.Resolve(ctx, caller, alias)
+	target, _, _, err := c.d.Links.Resolve(ctx, caller, alias)
 	if err != nil {
 		return report(err)
 	}

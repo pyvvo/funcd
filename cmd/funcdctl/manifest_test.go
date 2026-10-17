@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/artifact"
 )
 
 // pyFuncdctlYAML is a funcdctl.yaml (ADR-0122): a client push/dev config with an in-profile inline
@@ -217,5 +219,28 @@ contract:
 			require.NoError(t, rerr)
 			require.Empty(t, entries, "no types file is written for a rejected contract")
 		})
+	}
+}
+
+// scenario: http-validate — `funcdctl push` of an http Function bakes no contract, from a single file and from a
+// bundle directory, where it removes the contract file an earlier push left (ADR-0243 Decisions 2 and 7).
+func TestScenarioPushHTTPFunction(t *testing.T) {
+	const manifest = "runtime: nodejs22\nhandler: handle\nprotocol: http\n"
+	layout := filepath.Join(t.TempDir(), "layout")
+	file := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(file, "api.mjs"), []byte("export const handle = {};\n"), 0o600))
+	writeFuncdctl(t, file, manifest)
+	bundle := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(bundle, "index.mjs"), []byte("export const handle = {};\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(bundle, bundleContractName), []byte(`{"input":{},"output":{}}`), 0o600))
+	writeFuncdctl(t, bundle, manifest)
+
+	var out bytes.Buffer
+	require.NoError(t, execCLI(&out, nil, "push", filepath.Join(file, "api.mjs"), "oci-layout://"+layout+":file"))
+	require.NoError(t, execCLI(&out, nil, "push", bundle, "oci-layout://"+layout+":bundle", "--entry", "index.mjs"))
+	require.NoFileExists(t, filepath.Join(bundle, bundleContractName), "the stale contract is removed")
+	for _, tag := range []string{"file", "bundle"} {
+		_, _, err := artifact.InspectContract(context.Background(), "oci-layout://"+layout+":"+tag, "")
+		require.Equal(t, fault.NotFound, fault.KindOf(err), "%s carries no contract: %v", tag, err)
 	}
 }

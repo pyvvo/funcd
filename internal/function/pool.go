@@ -70,7 +70,7 @@ func (r *Reconciler) poolHostFor(rt v1.RuntimeName) []string {
 	if cmd != nil {
 		return cmd
 	}
-	if !isNodeFamily(rt) {
+	if !rt.IsNode() {
 		return nil
 	}
 	for family := range r.shimByFamily {

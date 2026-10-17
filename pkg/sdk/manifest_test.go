@@ -587,3 +587,23 @@ spec:
 		require.Contains(t, err.Error(), key)
 	}
 }
+
+// scenario: http-validate — a funcdctl.yaml with protocol: http needs a node runtime and carries no contract, so push
+// bakes none; any other protocol is refused (ADR-0243 Decision 7).
+func TestManifestProtocolHTTP(t *testing.T) {
+	m, err := sdk.LoadManifest(writeManifest(t, "runtime: nodejs22\nhandler: handle\nprotocol: http\n"))
+	require.NoError(t, err)
+	require.Equal(t, v1.ProtocolHTTP, m.Protocol)
+	_, _, err = m.ContractSides()
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "an http Function has no contract sides")
+
+	for name, body := range map[string]string{
+		"python":   "runtime: python314\nhandler: handle\nprotocol: http\n",
+		"contract": "runtime: nodejs22\nhandler: handle\nprotocol: http\ncontract:\n  input:\n    type: object\n  output:\n    type: object\n",
+		"unknown":  "runtime: nodejs22\nhandler: handle\nprotocol: grpc\ncontract:\n  input:\n    type: object\n  output:\n    type: object\n",
+	} {
+		_, err := sdk.LoadManifest(writeManifest(t, body))
+		require.Equal(t, fault.Invalid, fault.KindOf(err), "%s: %v", name, err)
+		require.Contains(t, err.Error(), "protocol", name)
+	}
+}

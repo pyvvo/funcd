@@ -187,6 +187,34 @@ func TestFunctionLinkValidateMatrix(t *testing.T) {
 	}
 }
 
+// scenario: http-validate — a Function that serves HTTP is never pooled and runs on a node runtime (ADR-0243).
+func TestFunctionProtocolValidateMatrix(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		protocol FunctionProtocol
+		runtime  RuntimeName
+		worker   string
+		valid    bool
+	}{
+		{"unset", "", "python314", "", true},
+		{"cloudevent pooled", ProtocolCloudEvent, "nodejs22", "w1", true},
+		{"http on node", ProtocolHTTP, "nodejs22", "", true},
+		{"http pooled", ProtocolHTTP, "nodejs22", "w1", false},
+		{"http on python", ProtocolHTTP, "python314", "", false},
+		{"http with no runtime", ProtocolHTTP, "", "", false},
+		{"unknown protocol", "grpc", "nodejs22", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := fnWith(FunctionSpec{Protocol: tc.protocol, Runtime: tc.runtime, Pooling: Pooling{Worker: tc.worker}}).Validate()
+			if tc.valid {
+				require.NoError(t, err)
+			} else {
+				require.Equal(t, fault.Invalid, fault.KindOf(err))
+			}
+		})
+	}
+}
+
 // scenario: binding-validity (structural half) — the spec.kv structural matrix (ADR-0073): alias is a
 // DNS-1123 label unique within KV, table is a DNS-1123 label. Cross-resource rules (the store/table
 // exist) are an admission, not here.

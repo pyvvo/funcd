@@ -7,6 +7,7 @@ package v1alpha1
 
 import (
 	"regexp"
+	"strings"
 
 	huma "github.com/danielgtaylor/huma/v2"
 
@@ -91,6 +92,10 @@ func (n FunctionName) Validate() error {
 // RevisionSpec.Runtime) — ADR-0048. Typed so its DNS-1123 constraint reaches both the
 // generated OpenAPI (Schema) and the admission check (Validate) from one declaration.
 type RuntimeName string
+
+// IsNode reports whether n is a node-family runtime (e.g. "nodejs22"): the only family the default shim and pool host
+// serve (ADR-0149 Decision 1), and the only one that serves HTTP (ADR-0243).
+func (n RuntimeName) IsNode() bool { return strings.HasPrefix(string(n), "node") }
 
 // Validate checks the RuntimeName is non-empty and a valid DNS label.
 func (n RuntimeName) Validate() error {

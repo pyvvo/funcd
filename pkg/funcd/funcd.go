@@ -1011,7 +1011,7 @@ func (p *Platform) buildControlPlane() error {
 	sensorReconciler, err := sensor.NewReconciler(sensor.Deps{
 		Store:                 c.store,
 		Subscriber:            fanout,
-		Invoker:               &sensor.HTTPInvoker{Endpoints: fnReconciler.Endpoints(), Waker: act, Client: workerClient(calls, 30*time.Second)},
+		Invoker:               &sensor.HTTPInvoker{Endpoints: fnReconciler.Endpoints(), Waker: act, Protocol: protocolOf(c.store), Client: workerClient(calls, 30*time.Second)},
 		DeadLetters:           dlq,
 		DeliveryAttempts:      c.deliveryAttempts,
 		MaxDeliveriesInFlight: c.sensorMaxDeliveriesInFlight,
@@ -1029,6 +1029,7 @@ func (p *Platform) buildControlPlane() error {
 	}
 	p.sensorReconciler = sensorReconciler
 	ctrl.Register(v1.KindSensor.GVK(), sensorReconciler)
+	ctrl.Watches(v1.KindFunction.GVK(), sensorReconciler.MapFunction) // a Function that serves HTTP fails its Sensors (ADR-0243)
 	// ADR-0110 (F79): the Route reconciler validates backends + multi-tenancy rules and programs the
 	// edge router (replace-all) the data-plane front door consults. p.edgeRouter is created up front so
 	// both the reconciler and the data-plane handler share the one live table.
@@ -1203,6 +1204,7 @@ func (p *Platform) buildControlPlane() error {
 	wfDispatcher, derr := workflow.NewHTTPDispatcher(workflow.DispatchDeps{
 		Endpoints: fnReconciler.Endpoints(),
 		Waker:     act, // wake a scaled-to-zero step function (ADR-0033)
+		Protocol:  protocolOf(c.store),
 		Grant:     storeGranter{store: c.store},
 		// No client Timeout: the engine bounds each attempt with the step's timeout on the request context
 		// (ADR-0094), and a client-wide cap would cut a longer step short.
@@ -1253,7 +1255,7 @@ func (p *Platform) buildControlPlane() error {
 		SupervisionPeriod: c.pacing.SupervisionPeriod, Hold: c.gate(), NamespaceHold: c.nsGate(),
 		// ADR-0214: a second invoker for the hook calls, with no client timeout: the context carries the hook
 		// Function's spec.timeout or invoke.defaultTimeout, as the workflow dispatcher bounds a step.
-		Invoker:       &sensor.HTTPInvoker{Endpoints: fnReconciler.Endpoints(), Waker: act, Client: workerClient(calls, 0)},
+		Invoker:       &sensor.HTTPInvoker{Endpoints: fnReconciler.Endpoints(), Waker: act, Protocol: protocolOf(c.store), Client: workerClient(calls, 0)},
 		InvokeTimeout: c.invokeDefaultTimeout,
 		Enqueue:       ctrl.Enqueue,
 	})
@@ -1936,6 +1938,22 @@ func (r childResolver) ChildWorkflow(ctx context.Context, ns v1.NamespaceName, n
 		return nil, err
 	}
 	return obj.(*v1.Workflow), nil
+}
+
+// protocolOf reads how a Function is called from the store, so a Sensor, an App hook or a workflow step never reaches
+// one that serves HTTP (ADR-0243 Decision 5).
+func protocolOf(st store.Store) activator.ProtocolFunc {
+	return func(ctx context.Context, fn activator.FunctionRef) (v1.FunctionProtocol, error) {
+		obj, err := st.Get(ctx, v1.KindFunction.GVK(), fn.Namespace, fn.Name)
+		if err != nil {
+			return "", err
+		}
+		f, ok := obj.(*v1.Function)
+		if !ok {
+			return "", fault.Internalf("funcd.protocolOf", "%s/%s is not a Function", fn.Namespace, fn.Name)
+		}
+		return f.Spec.Protocol.Normalized(), nil
+	}
 }
 
 // storeGranter is the production workflow.Granter: fail-closed defense-in-depth for step dispatch.

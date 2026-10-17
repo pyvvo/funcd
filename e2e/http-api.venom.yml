@@ -1,0 +1,119 @@
+# Venom e2e suite for the http-api lane (ADR-0243), run host-side by `just lima-example http-api` once the VM is Ready.
+# devices-api is a Hono REST API that serves HTTP, behind the Route api at /api; every step goes to the data plane
+# forwarded at :8081.
+name: http-api — a Function that serves HTTP behind a Route (ADR-0243, containerd lane)
+
+vars:
+  dp: http://127.0.0.1:8081
+
+testcases:
+  - name: the REST API answers each method through the Route
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/api/devices"
+        headers:
+          content-type: application/json
+          x-request-id: lane-1
+        body: '{"name":"truck-7"}'
+        retry: 10
+        delay: 1
+        assertions:
+          - result.statuscode ShouldEqual 201
+          - result.bodyjson.name ShouldEqual truck-7
+          - result.headers.Location ShouldStartWith /api/devices/
+          - result.headers.X-Request-Id ShouldEqual lane-1
+        vars:
+          id:
+            from: result.bodyjson.id
+      - type: http
+        method: GET
+        url: "{{.dp}}/api/devices/{{.id}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.name ShouldEqual truck-7
+      - type: http
+        method: PUT
+        url: "{{.dp}}/api/devices/{{.id}}"
+        headers:
+          content-type: application/json
+        body: '{"name":"van-2"}'
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.name ShouldEqual van-2
+      - type: http
+        method: GET
+        url: "{{.dp}}/api/devices?name=van-2"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '"name":"van-2"'
+      - type: http
+        method: POST
+        url: "{{.dp}}/api/devices"
+        headers:
+          content-type: application/json
+        body: '{"name":""}'
+        assertions:
+          - result.statuscode ShouldEqual 400
+      - type: http
+        method: DELETE
+        url: "{{.dp}}/api/devices/{{.id}}"
+        assertions:
+          - result.statuscode ShouldEqual 204
+      - type: http
+        method: GET
+        url: "{{.dp}}/api/devices/{{.id}}"
+        assertions:
+          - result.statuscode ShouldEqual 404
+
+  - name: the export reaches the client line by line as it is written
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/api/devices"
+        headers:
+          content-type: application/json
+        body: '{"name":"a"}'
+        assertions:
+          - result.statuscode ShouldEqual 201
+      - type: http
+        method: POST
+        url: "{{.dp}}/api/devices"
+        headers:
+          content-type: application/json
+        body: '{"name":"b"}'
+        assertions:
+          - result.statuscode ShouldEqual 201
+      - type: http
+        method: POST
+        url: "{{.dp}}/api/devices"
+        headers:
+          content-type: application/json
+        body: '{"name":"c"}'
+        assertions:
+          - result.statuscode ShouldEqual 201
+      # The app writes a line every 50 ms: streamed, the rest arrives well after the first line; buffered, with it.
+      - type: exec
+        script: |
+          python3 - <<'PY'
+          import time, urllib.request
+          r = urllib.request.urlopen("{{.dp}}/api/devices/export", timeout=30)
+          first = r.readline()
+          t = time.monotonic()
+          rest = r.read().splitlines()
+          gap = time.monotonic() - t
+          print("streamed" if first and len(rest) >= 2 and gap >= 0.08 else "buffered", len(rest), round(gap, 3))
+          PY
+        info: "export → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldStartWith streamed
+
+  - name: the Function answers by name at /function/devices-api
+    steps:
+      - type: http
+        method: GET
+        url: "{{.dp}}/function/devices-api/devices?name=a"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '"name":"a"'

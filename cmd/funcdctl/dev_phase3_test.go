@@ -398,3 +398,18 @@ func TestResolveDevFunctionsGenericDotResolvesToDir(t *testing.T) {
 	require.Len(t, pfs, 1)
 	require.Equal(t, v1.ObjectName("orders"), pfs[0].name, `"." resolves to the real dir name, not "dev"`)
 }
+
+// scenario: http-validate — funcdctl dev serves an http Function's app: the synthesized Function carries protocol:
+// http and its bundle gets no contract, one left from an earlier run removed (ADR-0243 Decision 7).
+func TestDevServesAnHTTPFunction(t *testing.T) {
+	m := &sdk.Manifest{Runtime: "nodejs22", Handler: "handle", Protocol: v1.ProtocolHTTP}
+	pf := plannedFunc{m: m, name: "api"}
+	require.Equal(t, v1.ProtocolHTTP, synthesizeFunction(pf, "/tmp/api.mjs").Spec.Protocol)
+	blob, err := devContract(m)
+	require.NoError(t, err)
+	require.Nil(t, blob)
+	bundle := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(bundle, devContractFile), []byte(`{}`), 0o600))
+	require.NoError(t, deliverBundle("op", pf, bundle, blob))
+	require.NoFileExists(t, filepath.Join(bundle, devContractFile))
+}

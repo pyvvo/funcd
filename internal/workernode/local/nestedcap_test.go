@@ -42,6 +42,10 @@ func (l *loopInvoker) Invoke(ctx context.Context, target local.Ref, input []byte
 	return l.capped.Invoke(ctx, next, input, timeout)
 }
 
+func (*loopInvoker) Fetch(context.Context, local.Ref, local.FetchRequest, time.Duration) (local.FetchReply, error) {
+	return local.FetchReply{}, nil
+}
+
 // blockingInvoker holds every call until release is closed.
 type blockingInvoker struct {
 	started chan struct{}
@@ -58,6 +62,13 @@ func (b *blockingInvoker) Invoke(context.Context, local.Ref, []byte, time.Durati
 	b.started <- struct{}{}
 	<-b.release
 	return []byte(`{}`), nil
+}
+
+func (b *blockingInvoker) Fetch(context.Context, local.Ref, local.FetchRequest, time.Duration) (local.FetchReply, error) {
+	b.ran.Add(1)
+	b.started <- struct{}{}
+	<-b.release
+	return local.FetchReply{Status: http.StatusOK}, nil
 }
 
 // fanOut makes n concurrent calls to target, waits until want of them are held in inner and the other n-want
@@ -183,6 +194,42 @@ func TestNestedCapPerTargetAndReleased(t *testing.T) {
 	close(inner.release)
 	require.NoError(t, <-done)
 	_, err = inv.Invoke(context.Background(), ref("H"), nil, time.Second)
+	require.NoError(t, err, "H's slot freed on return")
+}
+
+// context.fetch takes the per-target slots invoke takes (ADR-0243 Decision 6): with H's one slot held by a fetch, a
+// second fetch and an invoke to H are refused, and the slot frees on return.
+func TestNestedCapCountsFetch(t *testing.T) {
+	inner := newBlocking()
+	inv := local.NewNestedCapInvoker(inner, 1, metricnoop.Meter{})
+	done := make(chan error, 1)
+	go func() {
+		_, err := inv.Fetch(context.Background(), ref("H"), local.FetchRequest{}, time.Second)
+		done <- err
+	}()
+	<-inner.started
+	refused := func(name string, call func() error) {
+		t.Helper()
+		errc := make(chan error, 1)
+		go func() { errc <- call() }()
+		select {
+		case err := <-errc:
+			require.Equal(t, fault.ResourceExhausted, fault.KindOf(err), name)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s reached H past its cap", name)
+		}
+	}
+	refused("a second fetch to H", func() error {
+		_, err := inv.Fetch(context.Background(), ref("H"), local.FetchRequest{}, time.Second)
+		return err
+	})
+	refused("an invoke to H", func() error {
+		_, err := inv.Invoke(context.Background(), ref("H"), nil, time.Second)
+		return err
+	})
+	close(inner.release)
+	require.NoError(t, <-done)
+	_, err := inv.Fetch(context.Background(), ref("H"), local.FetchRequest{}, time.Second)
 	require.NoError(t, err, "H's slot freed on return")
 }
 

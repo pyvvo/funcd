@@ -31,7 +31,9 @@ type Waker interface {
 type HTTPInvoker struct {
 	Endpoints activator.Endpoints
 	Waker     Waker
-	Client    *http.Client // nil: a client of the invoker's own, built on the first call
+	// Protocol, when set, refuses a target that serves HTTP before any request (ADR-0243 Decision 5).
+	Protocol activator.ProtocolFunc
+	Client   *http.Client // nil: a client of the invoker's own, built on the first call
 
 	defaultOnce   sync.Once
 	defaultClient *http.Client
@@ -42,6 +44,9 @@ type HTTPInvoker struct {
 // Invocation (never silently dropped).
 func (i *HTTPInvoker) Invoke(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, ev eventing.CloudEvent) error {
 	ref := activator.FunctionRef{Namespace: ns, Name: fn}
+	if err := activator.RefuseHTTP(ctx, i.Protocol, ref, op); err != nil {
+		return err
+	}
 	var upstream string
 	if i.Waker != nil {
 		// Wake a warm target too: Wake records the call as activity, so idle reclaim never fires while
