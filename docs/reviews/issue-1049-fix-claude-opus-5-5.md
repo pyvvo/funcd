@@ -91,3 +91,12 @@ See docs/reviews/model-scorecard.md.
 ### Recommendation
 
 Ship it. The rename in Minor 1 can follow once the ADR-0243 implementation is merged.
+
+## Follow-up
+
+The ADR-0243 implementation (#1050) reached main first, and the branch merged it; only the ledger and scorecard
+conflicted, and the #1049 row was recorded again on main's ledger. With both on main, Minor 1 is resolved:
+`pushFromManifest`'s parameter is now `entry`. A new case, `http function`, pushes a `protocol: http` Node bundle
+without `--entry`. On the new main it fails through `artifact.PushBundleNoContract` with
+`entry "handler.py" is not a regular file in bundle`; with the fix it passes, beside `TestScenarioPushHTTPFunction`.
+`go test -race` (default and `dev` builds), vet, golangci-lint and the bloat audit pass again.
