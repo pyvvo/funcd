@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.1](https://github.com/pyvvo/funcd/compare/v0.14.0...v0.14.1) (2026-10-18)
+
+
+### Bug Fixes
+
+* **funcdctl:** serve a function isolated in its own bundle again after a --persist restart ([#1054](https://github.com/pyvvo/funcd/issues/1054)) ([e6a71ee](https://github.com/pyvvo/funcd/commit/e6a71eece157cc8107da691d937d4101e9ec86ab))
+
 ## [0.14.0](https://github.com/pyvvo/funcd/compare/v0.13.0...v0.14.0) (2026-10-17)
 
 
