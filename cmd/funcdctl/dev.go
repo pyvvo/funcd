@@ -576,6 +576,12 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, wf *dev
 		}
 	}()
 
+	// The bundles and contracts are delivered before the platform starts: over a durable metastore it starts the stored
+	// Functions' replicas at once, and a replica started without its contract file runs unvalidated (#1053).
+	fnObjs, handlers, herr := prepareHandlers(op, pfs, plan.bundleDir, stateDirs, inst)
+	if herr != nil {
+		return nil, herr
+	}
 	cancelRun, perr := a.startPlatform(ctx, op, pfs, plan, cfg, inst)
 	if perr != nil {
 		return nil, perr
@@ -588,12 +594,6 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, wf *dev
 			<-inst.runErr
 		}
 	}()
-	// The bundles are written once the platform holds the state dir's lock, so a second session over the same
-	// --persist-to never touches the bundles of the one running (#1053).
-	fnObjs, handlers, herr := prepareHandlers(op, pfs, plan.bundleDir, stateDirs, inst)
-	if herr != nil {
-		return nil, herr
-	}
 
 	client, cerr := sdk.New(inst.controlURL, sdk.WithToken(funcd.DevToken))
 	if cerr != nil {
@@ -1593,7 +1593,7 @@ func prepareBundle(op string, pf plannedFunc, bundleRoot string, contractBlob []
 		return src, cleanup, nil
 	}
 
-	tmp, kept, terr := privateBundleDir(op, bundleRoot, pf.name)
+	tmp, kept, terr := privateBundleDir(op, bundleRoot, pf.name, pf.srcDir)
 	if terr != nil {
 		return "", nil, terr
 	}
@@ -1617,15 +1617,22 @@ func prepareBundle(op string, pf plannedFunc, bundleRoot string, contractBlob []
 }
 
 // privateBundleDir returns the dir of an isolated function's bundle: a new temp dir, or under --persist (bundleRoot
-// set) bundleRoot/<name>, kept across runs as state, since a later run's serving Revision still names it (#1053).
-func privateBundleDir(op, bundleRoot string, name v1.ObjectName) (dir string, kept bool, err error) {
+// set) bundleRoot/<name>-<first 8 hex digits of the sha256 of the absolute srcDir>, kept across runs as state, since
+// a later run's serving Revision still names it (#1053). The digest keeps two projects that share a --persist-to
+// apart, so a session that fails on the other's lock never rewrites its bundle.
+func privateBundleDir(op, bundleRoot string, name v1.ObjectName, srcDir string) (dir string, kept bool, err error) {
 	if bundleRoot == "" {
 		if dir, err = os.MkdirTemp("", "funcdctl-dev-fn-"); err != nil {
 			return "", false, fault.Wrapf(err, fault.Internal, op, "create bundle temp dir")
 		}
 		return dir, false, nil
 	}
-	dir = filepath.Join(bundleRoot, string(name))
+	abs, err := filepath.Abs(srcDir)
+	if err != nil {
+		return "", false, fault.Wrapf(err, fault.Internal, op, "resolve %s", srcDir)
+	}
+	sum := sha256.Sum256([]byte(abs))
+	dir = filepath.Join(bundleRoot, string(name)+"-"+hex.EncodeToString(sum[:])[:8])
 	if err = os.MkdirAll(dir, 0o700); err != nil {
 		return "", false, fault.Wrapf(err, fault.Internal, op, "create bundle dir %q", dir)
 	}

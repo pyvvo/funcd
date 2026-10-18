@@ -5,7 +5,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -277,6 +279,53 @@ func TestIssue1053_PersistRestartServesAnIsolatedFunction(t *testing.T) {
 	}
 }
 
+// Issue #1053: an in-place function keeps its ADR-0123 contract across a --persist restart. The platform starts the
+// stored replica as soon as it runs, and the contract that the last stop removed must be back by then: dev delivers
+// it before the platform starts. The files in assets/ make the walk that fingerprints the source long enough to show
+// the order.
+func TestIssue1053_PersistRestartKeepsTheContract(t *testing.T) {
+	requireRuntime(t)
+	root := t.TempDir()
+	dir := devProject(t, map[string]string{
+		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\ncontract:\n" +
+			"  input:\n    type: object\n    additionalProperties: false\n    properties:\n      name:\n        type: string\n" +
+			"    required:\n      - name\n" +
+			"  output:\n    type: object\n    additionalProperties: false\n    properties:\n      ok:\n        type: boolean\n" +
+			"    required:\n      - ok\n",
+		"handler.mjs": "export function handle() { return { ok: true }; }\n",
+	})
+	assets := filepath.Join(dir, "assets")
+	require.NoError(t, os.Mkdir(assets, 0o700))
+	for i := range 2000 {
+		require.NoError(t, os.WriteFile(filepath.Join(assets, fmt.Sprintf("a%d.txt", i)), nil, 0o600))
+	}
+	call := func(inst *devInstance, body string) (int, error) {
+		resp, err := http.Post(inst.gatewayURL+"/function/"+inst.functions[0], "application/json", strings.NewReader(body))
+		if err != nil {
+			return 0, err
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return resp.StatusCode, resp.Body.Close()
+	}
+	a := &cli{out: io.Discard}
+	for boot := 1; boot <= 2; boot++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		inst, err := a.startDev(ctx, dir, "", devConfig{persist: true, persistTo: root})
+		require.NoError(t, err)
+		require.EventuallyWithT(t, func(c *assert.CollectT) {
+			code, cerr := call(inst, `{"name":"truck-7"}`)
+			if assert.NoError(c, cerr) {
+				assert.Equal(c, http.StatusOK, code)
+			}
+		}, 45*time.Second, 200*time.Millisecond, "boot %d serves", boot)
+		code, err := call(inst, `{"name":5}`)
+		require.NoError(t, err)
+		require.Equal(t, http.StatusUnprocessableEntity, code, "boot %d enforces the contract", boot)
+		cancel()
+		require.NoError(t, inst.stop())
+	}
+}
+
 // Issue #1053: a second session over the same --persist-to fails on the state dir's lock without touching the bundle
 // of the session that runs, which keeps serving it and reloading an edit into it.
 func TestIssue1053_FailedSecondSessionKeepsTheBundle(t *testing.T) {
@@ -295,7 +344,9 @@ func TestIssue1053_FailedSecondSessionKeepsTheBundle(t *testing.T) {
 
 	_, err = a.startDev(context.Background(), dir, "", devConfig{persist: true, persistTo: root})
 	require.Error(t, err, "a second session over the same --persist-to")
-	require.FileExists(t, filepath.Join(root, "bundles", "api", "api.mjs"), "the running session's bundle stays")
+	bundles, err := filepath.Glob(filepath.Join(root, "bundles", "api-*", "api.mjs"))
+	require.NoError(t, err)
+	require.Len(t, bundles, 1, "the running session's bundle stays")
 
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "api.mjs"), []byte("export function handle() { return { n: 2, edited: true }; }\n"), 0o600))
 	require.EventuallyWithT(t, func(c *assert.CollectT) {
@@ -307,6 +358,43 @@ func TestIssue1053_FailedSecondSessionKeepsTheBundle(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		assert.Contains(c, string(body), `"n":2`, "the edit is reloaded into the bundle")
 	}, 30*time.Second, 200*time.Millisecond)
+}
+
+// Issue #1053: a kept bundle (--persist) changes between a copied handler and links to its source dir from one run to
+// the next: the links replace the copied file, and the copy replaces the link rather than write through it into the
+// source.
+func TestIssue1053_KeptBundleSwitchesBetweenCopyAndLinks(t *testing.T) {
+	src := devProject(t, map[string]string{"api.mjs": "export function handle() { return { n: 1 }; }\n"})
+	before, err := os.Stat(filepath.Join(src, "api.mjs"))
+	require.NoError(t, err)
+	root := t.TempDir()
+	pf := plannedFunc{name: "api", srcDir: src, entry: "api.mjs", isolate: true}
+	for _, linked := range []bool{false, true, false} {
+		pf.linkSrc = linked
+		image, _, perr := prepareBundle("op", pf, root, nil)
+		require.NoError(t, perr, "linked=%t", linked)
+		fi, lerr := os.Lstat(image)
+		require.NoError(t, lerr)
+		require.Equal(t, linked, fi.Mode()&fs.ModeSymlink != 0, "linked=%t", linked)
+	}
+	after, err := os.Stat(filepath.Join(src, "api.mjs"))
+	require.NoError(t, err)
+	require.Equal(t, before.ModTime(), after.ModTime(), "the copy never writes through a link into the source")
+}
+
+// Issue #1053: a kept bundle has one path per project across runs, and two projects that share a --persist-to never
+// share one.
+func TestIssue1053_KeptBundleDirIsPerProject(t *testing.T) {
+	root, a, b := t.TempDir(), t.TempDir(), t.TempDir()
+	dirA, kept, err := privateBundleDir("op", root, "api", a)
+	require.NoError(t, err)
+	require.True(t, kept)
+	again, _, err := privateBundleDir("op", root, "api", a)
+	require.NoError(t, err)
+	require.Equal(t, dirA, again)
+	dirB, _, err := privateBundleDir("op", root, "api", b)
+	require.NoError(t, err)
+	require.NotEqual(t, dirA, dirB)
 }
 
 // An in-place function whose --persist-to is a dir inside its source dir is never re-applied on its own: the hot-reload
