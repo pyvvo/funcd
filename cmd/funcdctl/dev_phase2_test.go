@@ -326,8 +326,9 @@ func TestIssue1053_PersistRestartKeepsTheContract(t *testing.T) {
 	}
 }
 
-// Issue #1053: a second session over the same --persist-to fails on the state dir's lock without touching the bundle
-// of the session that runs, which keeps serving it and reloading an edit into it.
+// Issue #1053: a second session of the same project over the same --persist-to fails on the state dir's lock, and the
+// bundle of the session that runs, which it rewrote with the same bytes but never removed, keeps serving and takes an
+// edit.
 func TestIssue1053_FailedSecondSessionKeepsTheBundle(t *testing.T) {
 	requireRuntime(t)
 	root := t.TempDir()
