@@ -30,6 +30,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/blob"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
@@ -306,6 +307,38 @@ func TestIssue1053_FailedSecondSessionKeepsTheBundle(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		assert.Contains(c, string(body), `"n":2`, "the edit is reloaded into the bundle")
 	}, 30*time.Second, 200*time.Millisecond)
+}
+
+// An in-place function whose --persist-to is a dir inside its source dir is never re-applied on its own: the hot-reload
+// watcher skips the state the session writes while it runs, the process registry included, which changes as workers
+// start and stop. With the registry walked, each start looked like an edit and reloaded the function again.
+func TestDevPersistRootInsideTheSourceDoesNotReload(t *testing.T) {
+	requireRuntime(t)
+	dir := devProject(t, map[string]string{
+		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
+		"handler.mjs":   "export function handle() { return { n: 1 }; }\n",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	inst, err := (&cli{out: io.Discard}).startDev(ctx, dir, "", devConfig{persist: true, persistTo: filepath.Join(dir, "state")})
+	require.NoError(t, err)
+	t.Cleanup(func() { cancel(); _ = inst.stop() })
+	require.Equal(t, 1, addNote(t, inst))
+	require.True(t, poll.Never(func() bool {
+		obj, gerr := inst.client.Get(context.Background(), v1.KindFunction, devNamespace, v1.ObjectName(inst.functions[0]))
+		return gerr == nil && obj.GetObjectMeta().Generation > 1
+	}, 3*time.Second, 100*time.Millisecond), "the function is re-applied though nothing was edited")
+}
+
+// The hot-reload watcher skips each dir the session writes while it runs, the isolated bundles and the process
+// registry under the persist root included.
+func TestWatchSkipsTheSessionState(t *testing.T) {
+	root := t.TempDir()
+	p, err := resolvePersistPlan(devConfig{persist: true, persistTo: root}, &sdk.Manifest{})
+	require.NoError(t, err)
+	skips := p.watchSkips(filepath.Join(root, "process"))
+	for _, sub := range []string{"metastore", "kv", "blob", "catalog", "sql", "bundles", "process"} {
+		require.Contains(t, skips, filepath.Join(root, sub))
+	}
 }
 
 // failFirstPut answers the first PUT of the Function name with problem for the rest of the test, passing every

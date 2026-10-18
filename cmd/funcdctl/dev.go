@@ -559,8 +559,11 @@ func (a *cli) bootDev(ctx context.Context, op string, pfs []plannedFunc, wf *dev
 	if perr != nil {
 		return nil, perr
 	}
-	// The durable state dirs change while the session runs, so the hot-reload watcher never walks them.
-	stateDirs := []string{plan.storeDir, plan.kvDir, plan.blobDir, plan.catalogDir, plan.sqlDir, plan.bundleDir}
+	processDir, derr := devStateDir(cfg, filepath.Dir(pfs[0].manifestPath))
+	if derr != nil {
+		return nil, derr
+	}
+	stateDirs := plan.watchSkips(processDir)
 
 	inst := &devInstance{runErr: make(chan error, 1), logger: logger}
 	for _, pf := range pfs {
@@ -994,6 +997,12 @@ type persistPlan struct {
 	catalogDir string // durable DuckLake SQLite catalog root (devengine); "" ⇒ ephemeral temp
 	sqlDir     string // durable SQL engines' data root (ADR-0237); "" ⇒ ephemeral temp
 	bundleDir  string // isolated functions' bundles, the same path on every run (#1053); "" ⇒ a temp dir per run
+}
+
+// watchSkips are the dirs the hot-reload watcher never walks, since the session writes them while it runs: the durable
+// state, the isolated bundles and processDir.
+func (p persistPlan) watchSkips(processDir string) []string {
+	return []string{p.storeDir, p.kvDir, p.blobDir, p.catalogDir, p.sqlDir, p.bundleDir, processDir}
 }
 
 // devStateDir is where `funcdctl dev` saves the workers and catalog engines it starts (ADR-0167): <persist-to>/process
