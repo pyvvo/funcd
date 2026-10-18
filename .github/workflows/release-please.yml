@@ -15,6 +15,9 @@ jobs:
     # Only the canonical repo cuts releases; a fork's main never tags.
     if: github.repository == 'pyvvo/funcd'
     runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
       # A PR opened with GITHUB_TOKEN triggers no workflows, so its required checks never run and the
       # merge queue refuses it. A token from the funcd release GitHub App does trigger them. Until the
@@ -35,3 +38,13 @@ jobs:
           token: ${{ steps.app-token.outputs.token || github.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+  # Each release gets the funcdctl binaries of its tag, with their SHA256SUMS.
+  binaries:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag_name }}

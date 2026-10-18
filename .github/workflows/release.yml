@@ -1,12 +1,13 @@
-name: Build funcdctl (local)
+name: Release binaries
 
-# LOCAL-ONLY for now: run under nektos/act to build the funcdctl CLI and collect the binaries as
-# artifacts. No remote GitHub Release publishing yet — that gets added when we ship remotely. Pure-Go
-# (CGO_ENABLED=0), so it runs fully under act on any host.
+# Builds the funcdctl CLI for 4 targets. Given a release tag (by release-please.yml once it cuts a release, or by
+# hand with workflow_dispatch) it checks that tag out, stamps it as the version and attaches the binaries and a
+# SHA256SUMS file to that release. Without one (a dispatch with no tag, or act locally) it only uploads them as
+# artifacts. Pure-Go (CGO_ENABLED=0), so it runs fully under act on any host.
 #
 # A build MATRIX fans the 4 targets (linux/darwin × amd64/arm64) across parallel jobs. Each job builds
 # BOTH:
-#   - the THIN client            → dist/funcdctl-<version>-<os>-<arch>            (~10 MB)
+#   - the THIN client            → dist/funcdctl-<version>-<os>-<arch>            (~40 MB)
 #   - the FAT `-tags dev` client → dist/funcdctl-dev-<version>-<os>-<arch>        (`funcdctl dev`,
 #     ADR-0125): embeds the process-runtime platform (~60 MB) + the per-arch DuckDB+Quack catalog
 #     engine (~130 MB) fetched by scripts/fetch-catalog-engine.sh, and the per-arch rqlited SQL engine
@@ -25,12 +26,21 @@ name: Build funcdctl (local)
 # Each matrix job uploads its own artifact (gitignored) under .act-artifacts/.
 
 on:
+  workflow_call:
+    inputs:
+      tag:
+        description: the release tag to build and attach the binaries to
+        type: string
+        required: true
   workflow_dispatch:
     inputs:
-      version:
-        description: version string to stamp into the binary
+      tag:
+        description: an existing release tag to build and attach the binaries to; empty builds the dispatched ref without publishing
         required: false
-        default: dev
+        default: ''
+
+permissions:
+  contents: read
 
 jobs:
   build-sql-engine:
@@ -53,13 +63,16 @@ jobs:
             runner: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
 
       - name: Build rqlited for ${{ matrix.os }}/${{ matrix.arch }}
-        run: scripts/build-sql-engine.sh "${{ matrix.os }}" "${{ matrix.arch }}"
+        # GOTOOLCHAIN=auto builds a tag from before #1060, whose script left rqlite's newer Go to setup-go's.
+        run: GOTOOLCHAIN=auto scripts/build-sql-engine.sh "${{ matrix.os }}" "${{ matrix.arch }}"
 
       - name: Upload the engine
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -83,9 +96,11 @@ jobs:
           - os: darwin
             arch: arm64
     env:
-      VERSION: ${{ github.event.inputs.version || 'dev' }}
+      VERSION: ${{ inputs.tag || 'dev' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -123,3 +138,27 @@ jobs:
         with:
           name: funcdctl-${{ env.VERSION }}-${{ matrix.os }}-${{ matrix.arch }}
           path: dist/*
+
+  publish:
+    needs: build-funcdctl
+    if: inputs.tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download the binaries
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: funcdctl-*
+          path: dist
+          merge-multiple: true
+
+      - name: Attach them and their SHA256SUMS to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum funcdctl-* > SHA256SUMS
+          gh release upload "$TAG" funcdctl-* SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"
