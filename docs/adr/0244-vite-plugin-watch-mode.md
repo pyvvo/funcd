@@ -1,8 +1,9 @@
 # ADR-0244: Watch mode for the Vite plugin — each rebuilt function reaches its output directory
 
-- **Status**: Accepted (2026-10-18), after two judge rounds; the decider kept Decision 5 for watch mode only and
-  confirmed the rest: a failed rebuild keeps the last good bundle, a new manifest waits for the next rebuild, a
-  manual live check, a release right after the merge.
+- **Status**: Implemented (2026-10-18), review passed (docs/reviews/adr-0244-implementation-claude-opus-5-5.md);
+  Reviewing (2026-10-18), implemented in pyvvo/funcd-typescript#75; Accepted (2026-10-18), after two judge rounds; the
+  decider kept Decision 5 for watch mode only and confirmed the rest: a failed rebuild keeps the last good bundle, a
+  new manifest waits for the next rebuild, a manual live check, a release right after the merge.
 - **Date**: 2026-10-18
 - **Deciders**: green-0-rabbit
 - **Tags**: vite, dx, bundle, typescript, watch
