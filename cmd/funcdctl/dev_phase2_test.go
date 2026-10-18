@@ -5,7 +5,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"io"
 	"log/slog"
 	"net"
@@ -25,6 +24,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	awscreds "github.com/aws/aws-sdk-go-v2/credentials"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -247,44 +247,65 @@ func TestScenarioDevPersistSurvivesRestart(t *testing.T) {
 	require.Equal(t, blobVal, gotBlob)
 }
 
-// Issue #1053: a function that dev runs from its own bundle (a <stem>.funcdctl.yaml) serves again after a --persist
-// restart over the same state, and keeps its KV data. Each boot used to copy the handler into a new temp dir and
-// remove it on stop, so the second boot's rollout failed on the serving Revision's deleted artifact.
+// Issue #1053: a function that dev runs from its own bundle (a <stem>.funcdctl.yaml) serves again after each
+// --persist restart over the same state, and keeps its KV data, also when a restart moves it in place (main set) and
+// the serving Revision still names the bundle. Each run used to copy the handler into a new temp dir and remove it
+// on stop, so the restart's rollout failed on the serving Revision's deleted artifact.
 func TestIssue1053_PersistRestartServesAnIsolatedFunction(t *testing.T) {
 	requireRuntime(t)
 	root := t.TempDir()
+	const manifest = "runtime: nodejs22\nhandler: handle\n" +
+		"bindings:\n  kv:\n    - alias: counts\n      store: counts-kv\n      table: counts\n" + permissiveContract
 	dir := devProject(t, map[string]string{
-		"api.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" +
-			"bindings:\n  kv:\n    - alias: counts\n      store: counts-kv\n      table: counts\n" + permissiveContract,
+		"api.funcdctl.yaml": manifest,
 		"api.mjs": "export async function handle(ctx) {\n" +
 			"  const n = Number((await ctx.kv.getText('counts', 'n')) ?? 0) + 1;\n" +
 			"  await ctx.kv.put('counts', 'n', String(n));\n  return { n };\n}\n",
 	})
 	a := &cli{out: io.Discard}
-	for boot := 1; boot <= 2; boot++ {
+	for boot := 1; boot <= 3; boot++ {
+		if boot == 3 {
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "api.funcdctl.yaml"), []byte("main: api.mjs\n"+manifest), 0o600))
+		}
 		ctx, cancel := context.WithCancel(context.Background())
 		inst, err := a.startDev(ctx, dir, "", devConfig{persist: true, persistTo: root})
 		require.NoError(t, err)
-		var status int
-		var body []byte
-		for deadline := time.Now().Add(45 * time.Second); status != http.StatusOK; time.Sleep(200 * time.Millisecond) {
-			require.True(t, time.Now().Before(deadline), "boot %d never served api; its last answer: %d %s", boot, status, body)
-			resp, perr := http.Post(inst.gatewayURL+"/function/api", "application/json", strings.NewReader(`{}`))
-			if perr != nil {
-				continue
-			}
-			body, _ = io.ReadAll(resp.Body)
-			_ = resp.Body.Close()
-			status = resp.StatusCode
-		}
-		var out struct {
-			N int `json:"n"`
-		}
-		require.NoError(t, json.Unmarshal(body, &out), "boot %d: %d %s", boot, status, body)
-		require.Equal(t, boot, out.N, "boot %d continues the count the first boot left", boot)
+		require.Equal(t, boot, addNote(t, inst), "boot %d continues the count the boots before it left", boot)
 		cancel()
 		require.NoError(t, inst.stop())
 	}
+}
+
+// Issue #1053: a second session over the same --persist-to fails on the state dir's lock without touching the bundle
+// of the session that runs, which keeps serving it and reloading an edit into it.
+func TestIssue1053_FailedSecondSessionKeepsTheBundle(t *testing.T) {
+	requireRuntime(t)
+	root := t.TempDir()
+	dir := devProject(t, map[string]string{
+		"api.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
+		"api.mjs":           "export function handle() { return { n: 1 }; }\n",
+	})
+	a := &cli{out: io.Discard}
+	ctx, cancel := context.WithCancel(context.Background())
+	inst, err := a.startDev(ctx, dir, "", devConfig{persist: true, persistTo: root})
+	require.NoError(t, err)
+	t.Cleanup(func() { cancel(); _ = inst.stop() })
+	require.Equal(t, 1, addNote(t, inst))
+
+	_, err = a.startDev(context.Background(), dir, "", devConfig{persist: true, persistTo: root})
+	require.Error(t, err, "a second session over the same --persist-to")
+	require.FileExists(t, filepath.Join(root, "bundles", "api", "api.mjs"), "the running session's bundle stays")
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "api.mjs"), []byte("export function handle() { return { n: 2, edited: true }; }\n"), 0o600))
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		resp, perr := http.Post(inst.gatewayURL+"/function/api", "application/json", strings.NewReader(`{}`))
+		if !assert.NoError(c, perr) {
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		body, _ := io.ReadAll(resp.Body)
+		assert.Contains(c, string(body), `"n":2`, "the edit is reloaded into the bundle")
+	}, 30*time.Second, 200*time.Millisecond)
 }
 
 // failFirstPut answers the first PUT of the Function name with problem for the rest of the test, passing every
