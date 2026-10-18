@@ -19,7 +19,7 @@ require (
 	github.com/cedar-policy/cedar-go v1.8.0
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/containerd/containerd/api v1.12.0
-	github.com/containerd/containerd/v2 v2.4.1
+	github.com/containerd/containerd/v2 v2.4.2
 	github.com/containerd/errdefs v1.0.0
 	github.com/containerd/go-cni v1.1.14
 	github.com/danielgtaylor/huma/v2 v2.39.1
