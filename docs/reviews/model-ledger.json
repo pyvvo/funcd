@@ -11563,5 +11563,20 @@
     "dod_total": 12,
     "report": "docs/reviews/issue-1049-fix-claude-opus-5-5.md",
     "notes": "pass; self-reviewed (no review agent, per the decider); m1 model: pushFromManifest keeps the entryFlag name so it merges cleanly with the ADR-0243 branch; m2 model: pushEntry also runs for a single-file push; m3 adr: funcdctl dev ranks --entry below main, push above it"
+  },
+  {
+    "date": "2026-10-18",
+    "issue": "1053",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "changes-requested",
+    "blockers": 0,
+    "majors": 2,
+    "minors": 4,
+    "model_attributed": 6,
+    "dod_passed": 9,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-1053-fix-claude-opus-5-5.md",
+    "notes": "Major(model): the bundle is still removed on stop, so a --persist restart that changes the artifact path (isolated to main) still 503s for the #1053 cause; Major(model): a second session refused on the held root now deletes the running session bundle (bundles written before the process.Open lock; regression); Minor(model): the emptying and watcher-exclusion lines are untested (2 mutants survive); Minor(model): hand-written poll loop; Minor(model): stale temp-bundle comment; Minor(model): state from v0.14.0 stays broken, unstated. The regression test fails without the fix for the issue reason; the issue CLI steps are fixed."
   }
 ]
