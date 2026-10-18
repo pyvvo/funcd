@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net"
@@ -13,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -245,6 +247,46 @@ func TestScenarioDevPersistSurvivesRestart(t *testing.T) {
 	require.Equal(t, blobVal, gotBlob)
 }
 
+// Issue #1053: a function that dev runs from its own bundle (a <stem>.funcdctl.yaml) serves again after a --persist
+// restart over the same state, and keeps its KV data. Each boot used to copy the handler into a new temp dir and
+// remove it on stop, so the second boot's rollout failed on the serving Revision's deleted artifact.
+func TestIssue1053_PersistRestartServesAnIsolatedFunction(t *testing.T) {
+	requireRuntime(t)
+	root := t.TempDir()
+	dir := devProject(t, map[string]string{
+		"api.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" +
+			"bindings:\n  kv:\n    - alias: counts\n      store: counts-kv\n      table: counts\n" + permissiveContract,
+		"api.mjs": "export async function handle(ctx) {\n" +
+			"  const n = Number((await ctx.kv.getText('counts', 'n')) ?? 0) + 1;\n" +
+			"  await ctx.kv.put('counts', 'n', String(n));\n  return { n };\n}\n",
+	})
+	a := &cli{out: io.Discard}
+	for boot := 1; boot <= 2; boot++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		inst, err := a.startDev(ctx, dir, "", devConfig{persist: true, persistTo: root})
+		require.NoError(t, err)
+		var status int
+		var body []byte
+		for deadline := time.Now().Add(45 * time.Second); status != http.StatusOK; time.Sleep(200 * time.Millisecond) {
+			require.True(t, time.Now().Before(deadline), "boot %d never served api; its last answer: %d %s", boot, status, body)
+			resp, perr := http.Post(inst.gatewayURL+"/function/api", "application/json", strings.NewReader(`{}`))
+			if perr != nil {
+				continue
+			}
+			body, _ = io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			status = resp.StatusCode
+		}
+		var out struct {
+			N int `json:"n"`
+		}
+		require.NoError(t, json.Unmarshal(body, &out), "boot %d: %d %s", boot, status, body)
+		require.Equal(t, boot, out.N, "boot %d continues the count the first boot left", boot)
+		cancel()
+		require.NoError(t, inst.stop())
+	}
+}
+
 // failFirstPut answers the first PUT of the Function name with problem for the rest of the test, passing every
 // other request through, and returns the URL that PUT went to (nil until it is made). startDev builds its SDK
 // client from http.DefaultClient, so its transport is the only seam on an apply.
@@ -475,6 +517,7 @@ func TestResolvePersistPlanEphemeralDefault(t *testing.T) {
 	require.Empty(t, p.kvDir)
 	require.Empty(t, p.blobDir)
 	require.Empty(t, p.catalogDir, "the DuckLake catalog is ephemeral (temp) without --persist")
+	require.Empty(t, p.bundleDir, "an isolated function's bundle is a temp dir without --persist")
 }
 
 // TestResolvePersistPlanPersistSubdirs — --persist lays metastore/kv/blob out as per-service subdirs of
@@ -487,6 +530,7 @@ func TestResolvePersistPlanPersistSubdirs(t *testing.T) {
 	require.Equal(t, filepath.Join(root, "kv"), p.kvDir)
 	require.Equal(t, filepath.Join(root, "blob"), p.blobDir)
 	require.Equal(t, filepath.Join(root, "catalog"), p.catalogDir, "--persist makes the DuckLake catalog durable")
+	require.Equal(t, filepath.Join(root, "bundles"), p.bundleDir, "--persist keeps isolated bundles at one path (#1053)")
 }
 
 // TestResolvePersistPlanDefaultDir — an empty --persist-to falls back to the gitignored default dir.
