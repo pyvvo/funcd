@@ -28,7 +28,8 @@ case "$os/$arch" in
     git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$RQLITE_VERSION" https://github.com/rqlite/rqlite.git "$work/src"
     [ "$(git -C "$work/src" rev-parse HEAD)" = "$RQLITE_COMMIT" ] ||
       { echo "build-sql-engine: $RQLITE_VERSION is not commit $RQLITE_COMMIT" >&2; exit 1; }
-    (cd "$work/src" && GOFLAGS=-mod=readonly GOOS=darwin GOARCH="$arch" CGO_ENABLED=1 CC="clang -arch $carch" \
+    # rqlite's go.mod can name a newer Go than funcd's: GOTOOLCHAIN=auto fetches the one it names (checksum-verified).
+    (cd "$work/src" && GOTOOLCHAIN=auto GOFLAGS=-mod=readonly GOOS=darwin GOARCH="$arch" CGO_ENABLED=1 CC="clang -arch $carch" \
       go build -trimpath \
         -ldflags "-s -w -X github.com/rqlite/rqlite/v10/cmd.Version=$RQLITE_VERSION -X github.com/rqlite/rqlite/v10/cmd.Commit=$RQLITE_COMMIT" \
         -o "$work/rqlited" ./cmd/rqlited)
