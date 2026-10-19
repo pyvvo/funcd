@@ -160,6 +160,28 @@ func TestScenarioDevConfigInline(t *testing.T) {
 	require.Contains(t, body, `"mode":"prod"`, "the inline dev.config value reaches the handler env: %s", body)
 }
 
+// scenario: ctx-dev — under funcdctl dev, ctx.config and ctx.secret return the dev.config values and the ${ENV}
+// secrets (ADR-0245).
+func TestScenarioCtxDev(t *testing.T) {
+	requireNode(t)
+	t.Setenv("MY_DEV_TOKEN", "s3cr3t-from-env")
+	dir := devProject(t, map[string]string{
+		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" +
+			"bindings:\n  config:\n    - app-config\n  secrets:\n    - app-secret\n" +
+			permissiveContract +
+			"dev:\n  config:\n    app-config:\n      APP_MODE: prod\n" +
+			"  secrets:\n    app-secret:\n      API_KEY: ${MY_DEV_TOKEN}\n",
+		"handler.mjs": "export async function handle(ctx) {\n" +
+			"  return { mode: ctx.config.get('APP_MODE'), key: await ctx.secret.get('API_KEY') };\n}\n",
+	})
+	inst := runDev(t, dir)
+	waitReady(t, inst)
+
+	_, body := post(t, inst.gatewayURL+"/function/"+inst.functions[0], `{"data":{}}`)
+	require.Contains(t, body, `"mode":"prod"`, "ctx.config reads the dev.config value: %s", body)
+	require.Contains(t, body, `"key":"s3cr3t-from-env"`, "ctx.secret reads the ${ENV} secret: %s", body)
+}
+
 // scenario: dev-secret-from-env — dev.secrets ${VAR} resolves from the process env into the handler env;
 // a missing var fails fast (before any platform boot). No secret value is ever read from the file.
 func TestScenarioDevSecretFromEnv(t *testing.T) {
