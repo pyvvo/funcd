@@ -11623,5 +11623,20 @@
     "dod_total": 20,
     "report": "docs/reviews/adr-0244-implementation-claude-opus-5-5.md",
     "notes": "pass: per-environment delivery under --watch, the manifest watch, the rename in watch mode only and the plain rule kept; just ci exit 0 and PR #75 ci green; on main's plugin the six watch tests fail; mutants killed (copy in place, no addWatchFile, plain delivery from writeBundle); 16 concurrent runs green; live check 0.31 s; Minor(model): the error branch of replaceFile (remove the temp file, rethrow) is untested, a mutant without it passes the suite."
+  },
+  {
+    "date": "2026-10-19",
+    "adr": "0245",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 3,
+    "model_attributed": 3,
+    "dod_passed": 18,
+    "dod_total": 18,
+    "report": "docs/reviews/adr-0245-implementation-claude-opus-5-5.md",
+    "notes": "pass: FUNCD_CONFIG_KEYS and FUNCD_SECRET_KEYS set past the guard, only when not empty, in solo workers and poolSharedEnv; ctx.config, ctx.secret (Promises in TS) and ctx.catalog in both shims; 8 scenarios named and passing (shims 8/8 and 9/9 at the release tags, e2e 0.41 s, dev 0.51 s); 3 overlay mutants killed; gate PASS, #1086 ci and e2e green; 3 Minors(model) from the pre-merge review, fixed before merge: the call-time test covered only config, a re-declared NodeJS.ProcessEnv alias, the pool worker's name rebuilt by hand in ctx_env_test.go."
   }
 ]
