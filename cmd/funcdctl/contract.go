@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -11,11 +13,13 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/spf13/cobra"
+	yamlv3 "go.yaml.in/yaml/v3"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/artifact"
 	"github.com/pyvvo/funcd/internal/contract"
+	"github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
@@ -151,13 +155,9 @@ func functionDocument(op, dir, name string) (*v1.Function, string, error) {
 		if _, _, isContract := contractFileName(f); isContract {
 			continue
 		}
-		data, rerr := os.ReadFile(f) //nolint:gosec // a file of the user's project
-		if rerr != nil {
-			return nil, "", fault.Invalidf(op, "read %s: %v", f, rerr)
-		}
-		docs, derr := sdk.DecodeManifests(data)
+		docs, derr := resourceDocuments(op, f)
 		if derr != nil {
-			continue
+			return nil, "", derr
 		}
 		for _, d := range docs {
 			fn, isFn := d.(*v1.Function)
@@ -171,6 +171,52 @@ func functionDocument(op, dir, name string) (*v1.Function, string, error) {
 		}
 	}
 	return found, foundFile, nil
+}
+
+// resourceDocuments decodes the funcd documents of a resource file (ADR-0247 Decision 4): it skips a document whose
+// apiVersion is not funcd's and a FuncdConfig, and fails, naming the file, on YAML that does not parse and on a funcd
+// document that does not decode.
+func resourceDocuments(op, file string) ([]v1.Object, error) {
+	data, err := os.ReadFile(file) //nolint:gosec // a file of the user's project
+	if err != nil {
+		return nil, fault.Invalidf(op, "read %s: %v", file, err)
+	}
+	dec := yamlv3.NewDecoder(bytes.NewReader(data))
+	var out []v1.Object
+	for n := 1; ; n++ {
+		var doc yamlv3.Node
+		if derr := dec.Decode(&doc); errors.Is(derr, io.EOF) {
+			return out, nil
+		} else if derr != nil {
+			return nil, fault.Invalidf(op, "%s: parse document %d: %v", file, n, derr)
+		}
+		if len(doc.Content) == 0 || doc.Content[0].Kind != yamlv3.MappingNode {
+			continue
+		}
+		apiVersion, kind := mappingValue(doc.Content[0], "apiVersion"), mappingValue(doc.Content[0], "kind")
+		if apiVersion != v1.KindFunction.GVK().APIVersion() || kind == config.Kind {
+			continue
+		}
+		raw, merr := yamlv3.Marshal(&doc)
+		if merr != nil {
+			return nil, fault.Invalidf(op, "%s: re-encode document %d: %v", file, n, merr)
+		}
+		obj, oerr := sdk.DecodeManifest(raw)
+		if oerr != nil {
+			return nil, fault.Invalidf(op, "%s: document %d: %v", file, n, oerr)
+		}
+		out = append(out, obj)
+	}
+}
+
+// mappingValue is the scalar value of key in a YAML mapping, or "".
+func mappingValue(m *yamlv3.Node, key string) string {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			return m.Content[i+1].Value
+		}
+	}
+	return ""
 }
 
 // pyprojectFunctions is the [tool.funcd-bundle.functions] table of the pyproject.toml at path (name → entry relative

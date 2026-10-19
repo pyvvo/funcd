@@ -251,6 +251,17 @@ func TestScenarioTypesFromContract(t *testing.T) {
 		require.Contains(t, err.Error(), filepath.Join(dir, "counter.yaml"))
 		require.Contains(t, err.Error(), filepath.Join(dir, "counter.contract.yaml"))
 	})
+	t.Run("broken-function", func(t *testing.T) {
+		t.Parallel()
+		dir := writeTree(t, map[string]string{
+			"counter.contract.yaml": counterContract,
+			"counter.yaml":          strings.Replace(counterFunction("python314"), "spec:", "spec:\n  runtme: python314", 1),
+			"other.yaml":            "kind: NotFuncd\nname: x\n",
+		})
+		_, err := types(t, dir)
+		require.Equal(t, fault.Invalid, fault.KindOf(err), "a Function document that does not decode fails types: %v", err)
+		require.Contains(t, err.Error(), filepath.Join(dir, "counter.yaml"))
+	})
 }
 
 // funcdctl types -o defaults to a python Function's source entry directory (ADR-0247 Decision 3): its

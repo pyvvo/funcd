@@ -3,11 +3,9 @@
 package main
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -15,12 +13,9 @@ import (
 	"sort"
 	"strings"
 
-	yamlv3 "go.yaml.in/yaml/v3"
-
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/artifact"
-	"github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
@@ -128,36 +123,14 @@ func refuseManifests(op, dir string) error {
 // namespace other than default, and a document that does not parse. Each kept object lands in the dev namespace, in
 // group dev when it names none, tagged as dev's (Decision 5).
 func devDocuments(op, file string) ([]v1.Object, error) {
-	data, err := os.ReadFile(file) //nolint:gosec // a file of the folder the user runs
+	objs, err := resourceDocuments(op, file)
 	if err != nil {
-		return nil, fault.Invalidf(op, "read %s: %v", file, err)
+		return nil, err
 	}
-	dec := yamlv3.NewDecoder(bytes.NewReader(data))
-	var out []v1.Object
-	for n := 1; ; n++ {
-		var doc yamlv3.Node
-		if derr := dec.Decode(&doc); errors.Is(derr, io.EOF) {
-			return out, nil
-		} else if derr != nil {
-			return nil, fault.Invalidf(op, "%s: parse document %d: %v", file, n, derr)
-		}
-		if len(doc.Content) == 0 || doc.Content[0].Kind != yamlv3.MappingNode {
-			continue
-		}
-		apiVersion, kind := mappingValue(doc.Content[0], "apiVersion"), mappingValue(doc.Content[0], "kind")
-		if apiVersion != v1.KindFunction.GVK().APIVersion() || kind == config.Kind {
-			continue
-		}
-		if kind == string(v1.KindApp) {
+	for _, obj := range objs {
+		kind := obj.GroupVersionKind().Kind
+		if kind == v1.KindApp {
 			return nil, fault.Invalidf(op, "%s: funcdctl dev does not run an App yet (#1067); deploy it with funcdctl app deploy", file)
-		}
-		raw, merr := yamlv3.Marshal(&doc)
-		if merr != nil {
-			return nil, fault.Invalidf(op, "%s: re-encode document %d: %v", file, n, merr)
-		}
-		obj, oerr := sdk.DecodeManifest(raw)
-		if oerr != nil {
-			return nil, fault.Invalidf(op, "%s: document %d: %v", file, n, oerr)
 		}
 		meta := obj.GetObjectMeta()
 		if meta.Namespace != "" && meta.Namespace != devNamespace {
@@ -172,18 +145,8 @@ func devDocuments(op, file string) ([]v1.Object, error) {
 			meta.Tags = v1.Tags{}
 		}
 		meta.Tags[devManagedTag] = devManagedBy
-		out = append(out, obj)
 	}
-}
-
-// mappingValue is the scalar value of key in a YAML mapping, or "".
-func mappingValue(m *yamlv3.Node, key string) string {
-	for i := 0; i+1 < len(m.Content); i += 2 {
-		if m.Content[i].Value == key {
-			return m.Content[i+1].Value
-		}
-	}
-	return ""
+	return objs, nil
 }
 
 // resolveBuilds finds the build of each Function and of each Workflow image step (Decision 6).
