@@ -9,10 +9,14 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -151,21 +155,66 @@ func revisionWorker(t *testing.T, rt runtime.Runtime, name, rev v1.ObjectName) r
 	return w
 }
 
-// readiness asks w's shim for /health/readiness and returns its status code and the dependency report of a 503.
+// readiness asks w's shim for /health/readiness and returns its status code and the dependency report of a 503. A
+// socket/Timeout report is the shim's own 50 ms budget running out on a loaded host (ADR-0215, #1082), not funcd's
+// answer, so it asks again until it gets one.
 func readiness(t *testing.T, w runtime.Instance) (int, *local.DependencyReport) {
 	t.Helper()
 	c := &http.Client{Timeout: 2 * time.Second}
-	resp, err := c.Get(fmt.Sprintf("http://%s:%d/health/readiness", w.IP, w.Port))
-	require.NoError(t, err)
-	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		return resp.StatusCode, nil
+	var code int
+	var rep *local.DependencyReport
+	require.Eventually(t, func() bool {
+		resp, err := c.Get(fmt.Sprintf("http://%s:%d/health/readiness", w.IP, w.Port))
+		require.NoError(t, err)
+		defer func() { _ = resp.Body.Close() }()
+		body, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		code, rep = resp.StatusCode, nil
+		if code != http.StatusServiceUnavailable {
+			return true
+		}
+		rep = &local.DependencyReport{}
+		require.NoError(t, json.Unmarshal(body, rep), "a 503 carries a dependency report: %s", body)
+		return rep.Kind != "socket" || rep.Reason != "Timeout"
+	}, appWithin, 20*time.Millisecond, "the shim answers with funcd's dependency report")
+	return code, rep
+}
+
+// Issue #1082: under load one readiness call can outlast the shim's 50 ms dependency budget (ADR-0215) and report
+// socket/Timeout; readiness asks again until it gets funcd's own answer, and returns any other report at once.
+func TestIssue1082_ReadinessWaitsOutASocketTimeout(t *testing.T) {
+	t.Parallel()
+	timeout := local.DependencyReport{Kind: "socket", Reason: "Timeout", Message: "late"}
+	denied := local.DependencyReport{Kind: "kv", Binding: "audit", Reason: "Forbidden", Message: "denied"}
+	for name, tc := range map[string]struct {
+		first, want local.DependencyReport
+	}{
+		"socket-timeout-asks-again": {first: timeout, want: denied},
+		"other-socket-reason-kept":  {first: local.DependencyReport{Kind: "socket", Reason: "Unreachable"}, want: local.DependencyReport{Kind: "socket", Reason: "Unreachable"}},
+		"binding-timeout-kept":      {first: local.DependencyReport{Kind: "kv", Binding: "audit", Reason: "Timeout"}, want: local.DependencyReport{Kind: "kv", Binding: "audit", Reason: "Timeout"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var calls atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				rep := denied
+				if calls.Add(1) == 1 {
+					rep = tc.first
+				}
+				w.WriteHeader(http.StatusServiceUnavailable)
+				require.NoError(t, json.NewEncoder(w).Encode(rep))
+			}))
+			t.Cleanup(srv.Close)
+			host, port, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+			require.NoError(t, err)
+			p, err := strconv.Atoi(port)
+			require.NoError(t, err)
+
+			code, rep := readiness(t, runtime.Instance{IP: host, Port: p})
+			require.Equal(t, http.StatusServiceUnavailable, code)
+			require.Equal(t, tc.want, *rep)
+		})
 	}
-	var rep local.DependencyReport
-	require.NoError(t, json.Unmarshal(body, &rep), "a 503 carries a dependency report: %s", body)
-	return resp.StatusCode, &rep
 }
 
 // scenario: app-dependency-check — on the real node shim, whose readiness asks funcd's GET /health/dependencies.
