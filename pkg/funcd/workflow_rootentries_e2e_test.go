@@ -133,6 +133,8 @@ func TestScenarioWorkflowCatalog(t *testing.T) {
 	cs := e.object(t, v1.KindCatalogService, "lake").(*v1.CatalogService)
 	require.True(t, ownedstore.Marked(cs.OwnerReferences, wf), "CatalogService lake carries the Workflow's marker")
 	require.True(t, v1.ControlledBy(cs.OwnerReferences, v1.KindWorkflow, wf.GetObjectMeta().UID), "and goes with it")
+	// The materializer writes the catalogs before the Workflow's buckets, so the bucket can lag the catalog.
+	e.waitExists(t, v1.KindBucket, "marts-files")
 	b := e.object(t, v1.KindBucket, "marts-files").(*v1.Bucket)
 	require.Equal(t, []v1.BucketPrefix{{Name: "lake", Owner: "lake"}}, b.Spec.Prefixes, "a prefix owner naming a declared catalog is kept")
 	e.waitExists(t, v1.KindFunction, "marts-query")
