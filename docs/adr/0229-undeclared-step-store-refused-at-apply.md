@@ -4,6 +4,7 @@
   docs/reviews/adr-0229-implementation-claude-opus-5-5.md; accepted 2026-10-11, decided by the decider, judged twice:
   the first round moved the App case onto `app-parts` and completed the superseded entry, the second found no Blocker or
   Major)
+- **Superseded in part by**: [ADR-0248](0248-stores-at-the-root.md) (2026-10-19) — a step's store is declared at the Workflow's root by `name` or `ref`.
 - **Date**: 2026-10-11
 - **Deciders**: green-0-rabbit
 - **Tags**: workflow, app, kv, admission

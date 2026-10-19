@@ -1,6 +1,7 @@
 # ADR-0087: Add-on provider runtime — deploying curated engine services
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0246](0246-bindings-under-spec.md) (2026-10-19) — where the binding lives: a provider's `spec.blob`, `spec.config` and `spec.secrets` move under `spec.bindings`; what it grants is unchanged.
 - **Date**: 2026-06-30 (accepted + implemented 2026-06-30 — review `pass` ([scorecard](../reviews/adr-0087-implementation-claude-opus-4-8.md)); judge folded: judge folded: M1 reuse `runtime.Runtime` (no invented `ContainerDriver`), M2 supervision = re-convergence; Minors: `status.Function` kept, gateway path-forwarding, optional-ingress; plus decider input folded: optional ingress, Model-B `spec.secrets`/`spec.config`, provider identity = `Ref`, and the exposure correction (`status.Address` is the daemon's handle, in-platform consumption is a follow-up consumer-binding ADR))
 - **Deciders**: green-0-rabbit
 - **Tags**: add-on-provider, provider-runtime, service, curated-runtime, readiness, ingress, lakehouse, quack

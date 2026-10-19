@@ -18,6 +18,7 @@
   `spec.blob`, the Cedar `s3::read`/`s3::write` binding-as-grant PEP, backend-over-`blob.Bucket`, `RangeReader`,
   config) **stands**.
 - **Superseded in part by**: [ADR-0148](0148-size-caps-answer-413.md) (2026-10-05) — Contracts BucketSpec comment: a write past maxObjectBytes ⇒ Forbidden.
+- **Superseded in part by**: [ADR-0246](0246-bindings-under-spec.md) (2026-10-19) — where the binding lives: `spec.blob` moves to `spec.bindings.blob`; what it grants is unchanged.
 - **Relates to**: [ADR-0007](0007-blob-storage-layer-port.md) (the `blob.Bucket` port) ·
   [ADR-0013](0013-gateway-ingress-httputil-primary.md)/[0029](0029-gateway-drop-lura-single-driver.md) (gateway TLS/middleware) ·
   [ADR-0018](0018-api-server-authn-rbac-admission.md) (scoped credentials, PDP port) ·

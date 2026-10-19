@@ -3,6 +3,7 @@
 - **Status**: Implemented (2026-10-12, review passed). Accepted (2026-10-12, self-accepted under the decider's batch delegation; judged twice: the first round
   made `execute` also ask `sql::read`, since `RETURNING` reads, added `sql.callTimeout`, and fixed the Cedar entity
   shape and the Namespace-scope roles; the second found no Blocker or Major)
+- **Superseded in part by**: [ADR-0246](0246-bindings-under-spec.md) (2026-10-19) — where the binding lives: `spec.sql` moves to `spec.bindings.sql`; what it grants is unchanged.
 - **Date**: 2026-10-12
 - **Deciders**: green-0-rabbit
 - **Tags**: sql, authorization, local-api, shim
