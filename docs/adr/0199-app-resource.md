@@ -7,6 +7,7 @@
 - **Superseded in part by**: [ADR-0214](0214-app-hooks.md) (2026-10-10) — Decisions 4-6 for an App with hooks.
 - **Superseded in part by**: [ADR-0215](0215-built-in-health.md) (2026-10-10) — Decision 5: Bucket and Workflow readiness.
 - **Superseded in part by**: [ADR-0219](0219-app-requirements.md) (2026-10-10) — Decisions 4 and 5: the requirement wait.
+- **Superseded in part by**: [ADR-0252](0252-app-scenarios-under-the-new-resource-shape.md) (2026-10-19) — the scenarios `app-prune-dropped-part`, `app-store-in-use-kept` (its first half) and `app-shared-writer-refused` (its Site and two-Workflows cases), under ADR-0248 Decision 2: an App drops a store with its bindings, and a part declares no store of its own.
 - **Amended in place**: 2026-10-11 — **exceptionally edited after `Implemented`** (immutability waived by the decider
   for this ADR only, as for ADR-0089, to fix [#924](https://github.com/pyvvo/funcd/issues/924)): Decision 3 also
   refuses two objects of one kind and name that parts' reconcilers would make, such as the `kv` stores or step
