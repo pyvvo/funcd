@@ -22,7 +22,6 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
 	"github.com/pyvvo/funcd/pkg/funcd"
-	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
 // requireNode skips a test when node is not on PATH — the hermetic dev lane runs the REAL Node shim
@@ -34,30 +33,52 @@ func requireNode(t *testing.T) {
 	}
 }
 
-// devProject writes files into a fresh temp dir (its basename becomes the function name) and returns
-// the dir. Every file's content is written verbatim.
+// devProject writes files, keyed by slash paths, into a fresh temp folder and returns it.
 func devProject(t *testing.T, files map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
-	for name, content := range files {
-		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600))
-	}
+	writeProject(t, dir, files)
 	return dir
 }
 
-// tryStartDev boots funcdctl dev over path (a manifest dir or a workflow.yaml) and returns the instance
-// with the start error; whatever started is torn down (ctx cancelled, platform drained, contract dotfile
-// removed) at test end.
-func tryStartDev(t *testing.T, path string) (*devInstance, error) {
+// writeProject writes files, keyed by slash paths, under dir.
+func writeProject(t *testing.T, dir string, files map[string]string) {
 	t.Helper()
-	return tryStartDevTo(t, path, io.Discard)
+	for name, content := range files {
+		p := filepath.Join(dir, filepath.FromSlash(name))
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte(content), 0o600))
+	}
+}
+
+// fnDoc is the Function document name on runtime, its spec lines (indented two spaces) appended.
+func fnDoc(name, runtime, spec string) string {
+	return "apiVersion: funcd.io/v1alpha1\nkind: Function\nmetadata:\n  name: " + name + "\nspec:\n  runtime: " + runtime +
+		"\n  handler: handle\n  image: registry:" + name + "\n" + spec
+}
+
+// nodeFunction is the files of a node Function name: its resource file (spec lines appended), its build and its
+// permissive contract file.
+func nodeFunction(name, spec, build string) map[string]string {
+	return map[string]string{
+		name + ".yaml":          fnDoc(name, "nodejs22", spec),
+		name + ".mjs":           build,
+		name + ".contract.yaml": permissiveContract,
+	}
+}
+
+// tryStartDev boots funcdctl dev over dir and returns the instance with the start error; whatever started is torn
+// down at test end.
+func tryStartDev(t *testing.T, dir string) (*devInstance, error) {
+	t.Helper()
+	return tryStartDevTo(t, dir, io.Discard)
 }
 
 // tryStartDevTo is tryStartDev with funcdctl's output, where funcdctl dev logs, written to out.
-func tryStartDevTo(t *testing.T, path string, out io.Writer) (*devInstance, error) {
+func tryStartDevTo(t *testing.T, dir string, out io.Writer) (*devInstance, error) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	inst, err := (&cli{out: out}).startDev(ctx, path, "", devConfig{cacheDir: t.TempDir()})
+	inst, err := (&cli{out: out}).startDev(ctx, dir, devConfig{cacheDir: t.TempDir()})
 	t.Cleanup(func() {
 		cancel()
 		if inst != nil {
@@ -67,7 +88,7 @@ func tryStartDevTo(t *testing.T, path string, out io.Writer) (*devInstance, erro
 	return inst, err
 }
 
-// runDev boots funcdctl dev over the project dir and returns the running instance.
+// runDev boots funcdctl dev over dir and returns the running instance.
 func runDev(t *testing.T, dir string) *devInstance {
 	t.Helper()
 	inst, err := tryStartDev(t, dir)
@@ -75,18 +96,26 @@ func runDev(t *testing.T, dir string) *devInstance {
 	return inst
 }
 
-// waitReady blocks until the (single) dev function reports Ready — proving reconcile → materialize →
-// shim boot → readiness probe all passed from the working tree, with no push.
+// waitReady blocks until the first dev function reports Ready — proving reconcile → materialize → shim boot →
+// readiness probe all passed from the local build, with no push.
 func waitReady(t *testing.T, inst *devInstance) {
 	t.Helper()
-	name := inst.functions[0]
+	waitFunction(t, inst, inst.functions[0])
+}
+
+// waitFunction blocks until Function name reports Ready.
+func waitFunction(t *testing.T, inst *devInstance, name string) *v1.Function {
+	t.Helper()
+	var fn *v1.Function
 	require.Eventually(t, func() bool {
 		got, err := inst.client.Get(context.Background(), v1.KindFunction, "default", v1.ObjectName(name))
 		if err != nil {
 			return false
 		}
-		return got.(*v1.Function).Status.Phase == v1.PhaseReady
-	}, 20*time.Second, 50*time.Millisecond, "the from-source function reconciles to Ready")
+		fn = got.(*v1.Function)
+		return fn.Status.Phase == v1.PhaseReady
+	}, 20*time.Second, 50*time.Millisecond, "%s reconciles to Ready", name)
+	return fn
 }
 
 func post(t *testing.T, url, body string) (*http.Response, string) {
@@ -98,256 +127,279 @@ func post(t *testing.T, url, body string) (*http.Response, string) {
 	return resp, string(b)
 }
 
-const strictContract = `contract:
-  input:
-    type: object
-    additionalProperties: false
-    properties:
-      name:
-        type: string
-    required:
-      - name
-  output:
-    type: object
+// eventuallyServes waits until url answers payload with status and a body holding want.
+func eventuallyServes(t *testing.T, url, payload string, status int, want string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		resp, err := http.Post(url, "application/json", strings.NewReader(payload))
+		if err != nil {
+			return false
+		}
+		defer func() { _ = resp.Body.Close() }()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode == status && strings.Contains(string(b), want)
+	}, 20*time.Second, 100*time.Millisecond, "the running dev session serves %d %s", status, want)
+}
+
+const strictContract = `runtime: nodejs22
+input:
+  type: object
+  additionalProperties: false
+  properties:
+    name:
+      type: string
+  required:
+    - name
+output:
+  type: object
 `
 
-const permissiveContract = `contract:
-  input:
-    type: object
-  output:
-    type: object
+const permissiveContract = `runtime: nodejs22
+input:
+  type: object
+output:
+  type: object
 `
 
-// scenario: dev-run-function (THE CRUX) — funcdctl dev runs a handler from the working tree (no push,
-// no OCI artifact), the invoke returns the real handler result, and a payload violating contract.input
-// returns 422 BEFORE the handler (ADR-0123 enforcement via the delivered FUNCD_CONTRACT_PATH).
-func TestScenarioDevRunFunction(t *testing.T) {
+// scenario: dev-runs-resources — given counter.yaml (a Function declaring its KV store), counter.mjs and
+// counter.contract.yaml, `funcdctl dev .` serves counter from the build with its contract enforced (a violating
+// payload is 422 before the handler, ADR-0123), its store exists, and a rebuild rolls a new revision.
+func TestScenarioDevRunsResources(t *testing.T) {
 	requireNode(t)
 	dir := devProject(t, map[string]string{
-		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + strictContract,
-		"handler.mjs":   "export function handle(ctx, event) { return { greeting: `hi ${event.data.name}` }; }\n",
+		"counter.yaml": fnDoc("counter", "nodejs22", "  kv:\n    - name: counters\n      tables:\n        - name: hits\n"+
+			"  bindings:\n    kv:\n      - alias: hits\n        store: counters\n        table: hits\n"),
+		"counter.mjs":           "export function handle(ctx, event) { return { greeting: `hi ${event.data.name}` }; }\n",
+		"counter.contract.yaml": strictContract,
 	})
 	inst := runDev(t, dir)
-	waitReady(t, inst)
+	first := waitFunction(t, inst, "counter")
+	url := inst.gatewayURL + "/function/counter"
 
-	url := inst.gatewayURL + "/function/" + inst.functions[0]
-
-	// The invoke body is a CloudEvent; the input contract validates event.data (ADR-0123).
 	resp, body := post(t, url, `{"data":{"name":"ada"}}`)
-	require.Equal(t, http.StatusOK, resp.StatusCode, "good input runs the from-source handler: %s", body)
-	require.Contains(t, body, "hi ada", "the real handler result comes back")
-
-	// The delivered contract fails a bad payload closed at 422, BEFORE the handler executes.
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	require.Contains(t, body, "hi ada", "the build serves")
 	bad, badBody := post(t, url, `{"data":{"oops":1}}`)
-	require.Equal(t, http.StatusUnprocessableEntity, bad.StatusCode,
-		"a contract.input violation is 422 before the handler (ADR-0123): %s", badBody)
-}
+	require.Equal(t, http.StatusUnprocessableEntity, bad.StatusCode, "the contract file is enforced: %s", badBody)
 
-// scenario: dev-config-inline — dev.config.<name> values reach the handler as env, with no configmap.yaml.
-func TestScenarioDevConfigInline(t *testing.T) {
-	requireNode(t)
-	dir := devProject(t, map[string]string{
-		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" +
-			"bindings:\n  config:\n    - app-config\n" +
-			permissiveContract +
-			"dev:\n  config:\n    app-config:\n      APP_MODE: prod\n",
-		"handler.mjs": "export function handle() { return { mode: process.env.APP_MODE }; }\n",
-	})
-	inst := runDev(t, dir)
-	waitReady(t, inst)
+	ks, err := inst.client.Get(context.Background(), v1.KindKVStore, "default", "counters")
+	require.NoError(t, err, "the store the Function declares exists")
+	require.Equal(t, "hits", ks.(*v1.KVStore).Spec.Tables[0].Name)
 
-	_, body := post(t, inst.gatewayURL+"/function/"+inst.functions[0], `{"data":{}}`)
-	require.Contains(t, body, `"mode":"prod"`, "the inline dev.config value reaches the handler env: %s", body)
-}
-
-// scenario: ctx-dev — under funcdctl dev, ctx.config and ctx.secret return the dev.config values and the ${ENV}
-// secrets (ADR-0245).
-func TestScenarioCtxDev(t *testing.T) {
-	requireNode(t)
-	t.Setenv("MY_DEV_TOKEN", "s3cr3t-from-env")
-	dir := devProject(t, map[string]string{
-		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" +
-			"bindings:\n  config:\n    - app-config\n  secrets:\n    - app-secret\n" +
-			permissiveContract +
-			"dev:\n  config:\n    app-config:\n      APP_MODE: prod\n" +
-			"  secrets:\n    app-secret:\n      API_KEY: ${MY_DEV_TOKEN}\n",
-		"handler.mjs": "export async function handle(ctx) {\n" +
-			"  return { mode: ctx.config.get('APP_MODE'), key: await ctx.secret.get('API_KEY') };\n}\n",
-	})
-	inst := runDev(t, dir)
-	waitReady(t, inst)
-
-	_, body := post(t, inst.gatewayURL+"/function/"+inst.functions[0], `{"data":{}}`)
-	require.Contains(t, body, `"mode":"prod"`, "ctx.config reads the dev.config value: %s", body)
-	require.Contains(t, body, `"key":"s3cr3t-from-env"`, "ctx.secret reads the ${ENV} secret: %s", body)
-}
-
-// scenario: dev-secret-from-env — dev.secrets ${VAR} resolves from the process env into the handler env;
-// a missing var fails fast (before any platform boot). No secret value is ever read from the file.
-func TestScenarioDevSecretFromEnv(t *testing.T) {
-	requireNode(t)
-	t.Setenv("MY_DEV_TOKEN", "s3cr3t-from-env")
-	dir := devProject(t, map[string]string{
-		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" +
-			"bindings:\n  secrets:\n    - app-secret\n" +
-			permissiveContract +
-			"dev:\n  secrets:\n    app-secret:\n      API_KEY: ${MY_DEV_TOKEN}\n",
-		"handler.mjs": "export function handle() { return { key: process.env.API_KEY }; }\n",
-	})
-	inst := runDev(t, dir)
-	waitReady(t, inst)
-
-	_, body := post(t, inst.gatewayURL+"/function/"+inst.functions[0], `{"data":{}}`)
-	require.Contains(t, body, `"key":"s3cr3t-from-env"`, "the ${ENV}-sourced secret reaches the handler env: %s", body)
-}
-
-// scenario: dev-secret-from-env (fail-fast facet) — a ${VAR} referencing an UNSET env var fails at boot,
-// before the platform starts (this facet needs no runtime, so it is not node-gated).
-func TestScenarioDevSecretMissingEnvFailsFast(t *testing.T) {
-	_ = os.Unsetenv("DEFINITELY_UNSET_DEV_VAR")
-	dir := devProject(t, map[string]string{
-		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" +
-			"bindings:\n  secrets:\n    - app-secret\n" +
-			permissiveContract +
-			"dev:\n  secrets:\n    app-secret:\n      API_KEY: ${DEFINITELY_UNSET_DEV_VAR}\n",
-		"handler.mjs": "export function handle() { return {}; }\n",
-	})
-	a := &cli{out: io.Discard}
-	_, err := a.startDev(context.Background(), dir, "", devConfig{cacheDir: t.TempDir()})
-	require.Error(t, err, "a missing env var referenced by a dev.secret fails fast")
-	require.Contains(t, err.Error(), "DEFINITELY_UNSET_DEV_VAR")
-}
-
-// scenario: dev-auto-provisions-backends — kv/blob bindings with NO CRD on disk are synthesized (KVStore
-// + Bucket), so the function's bindings resolve (it reaches Ready) — nothing hand-written.
-func TestScenarioDevAutoProvisionsBackends(t *testing.T) {
-	requireNode(t)
-	dir := devProject(t, map[string]string{
-		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" +
-			"bindings:\n" +
-			"  kv:\n    - alias: cache\n      store: cache-kv\n      table: entries\n" +
-			"  blob:\n    - alias: bronze\n      bucket: releves\n      prefix: bronze\n" +
-			permissiveContract,
-		"handler.mjs": "export function handle() { return { ok: true }; }\n",
-	})
-	inst := runDev(t, dir)
-	// Ready proves the reconcile-time binding-existence gate (ADR-0121) passed against the
-	// auto-provisioned KVStore + Bucket — the bindings resolved with no CRD on disk.
-	waitReady(t, inst)
-
-	ks, err := inst.client.Get(context.Background(), v1.KindKVStore, "default", "cache-kv")
-	require.NoError(t, err, "the kv binding auto-provisioned a KVStore")
-	require.Equal(t, "entries", ks.(*v1.KVStore).Spec.Tables[0].Name)
-
-	bk, err := inst.client.Get(context.Background(), v1.KindBucket, "default", "releves")
-	require.NoError(t, err, "the blob binding auto-provisioned a Bucket")
-	require.Equal(t, "bronze", bk.(*v1.Bucket).Spec.Prefixes[0].Name)
-}
-
-// scenario: dev-grants-blob-writer (ADR-0128 as amended 2026-07-14) — instead of dropping the S3
-// single-writer forbid, `funcdctl dev` auto-provisions a `Blob Data Writer` RolesAssignment (ADR-0136)
-// per function, so the dev principal is a real writer and its seeds/producer-writes pass the REAL forbid.
-// Hermetic: asserts synthesizeResources emits the admission-valid grant (no node/boot needed).
-func TestScenarioDevGrantsBlobWriterRole(t *testing.T) {
-	pfs := []plannedFunc{{
-		name: "ingest",
-		m: &sdk.Manifest{
-			Runtime: "python311",
-			Handler: "handle",
-			Bindings: sdk.Bindings{
-				Blob: []v1.FunctionBlob{{Alias: "landing", Bucket: "releves", Prefix: "landing"}},
-			},
-		},
-	}}
-	objs, err := synthesizeResources("op", pfs)
+	writeProject(t, dir, map[string]string{"counter.mjs": "export function handle() { return { greeting: 'rebuilt' }; }\n"})
+	eventuallyServes(t, url, `{"data":{"name":"ada"}}`, http.StatusOK, "rebuilt")
+	got, err := inst.client.Get(context.Background(), v1.KindFunction, "default", "counter")
 	require.NoError(t, err)
+	require.NotEqual(t, first.Status.CurrentRevision, got.(*v1.Function).Status.CurrentRevision, "a rebuild rolls a new revision")
+}
 
-	var role *v1.Role
-	var ra *v1.RolesAssignment
-	for _, o := range objs {
-		switch v := o.(type) {
-		case *v1.Role:
-			role = v
-		case *v1.RolesAssignment:
-			ra = v
+// scenario: dev-skips-and-refuses and old-manifest-refused (dev half) — dev skips a FuncdConfig file and documents
+// that are not funcd's, and stops on an App (naming #1067), on two Functions named counter (naming both files), on a
+// namespace other than default, on a file that does not parse, and on a funcdctl.yaml (naming what replaces it).
+func TestScenarioDevSkipsAndRefuses(t *testing.T) {
+	t.Parallel()
+	counter := nodeFunction("counter", "", "export function handle() {}\n")
+	const funcdConfig = "apiVersion: funcd.io/v1alpha1\nkind: FuncdConfig\nserver:\n  listen: 127.0.0.1:8080\n"
+	const other = "apiVersion: example.com/v1\nkind: Thing\nmetadata:\n  name: x\n"
+	f, err := loadDevFolder("test", devProject(t, merge(counter, map[string]string{"funcdconfig.yaml": funcdConfig, "other.yaml": other})))
+	require.NoError(t, err)
+	require.Equal(t, []string{"counter"}, f.names(), "the FuncdConfig and foreign documents are skipped")
+
+	for name, tc := range map[string]struct {
+		files map[string]string
+		want  []string
+	}{
+		"app": {files: map[string]string{"app.yaml": "apiVersion: funcd.io/v1alpha1\nkind: App\nmetadata:\n  name: todo\nspec:\n  version: 1.0.0\n"},
+			want: []string{"#1067"}},
+		"duplicate": {files: map[string]string{"again.yaml": fnDoc("counter", "nodejs22", "")},
+			want: []string{"counter.yaml", "again.yaml"}},
+		"namespace": {files: map[string]string{"ns.yaml": "apiVersion: funcd.io/v1alpha1\nkind: ConfigMap\nmetadata:\n  name: c\n  namespace: prod\nspec:\n  data:\n    A: b\n"},
+			want: []string{`namespace "prod"`}},
+		"unparsable":   {files: map[string]string{"bad.yaml": "apiVersion: funcd.io/v1alpha1\nkind: Function\n  bad: [indent\n"}, want: []string{"bad.yaml"}},
+		"old-manifest": {files: map[string]string{"funcdctl.yaml": "runtime: nodejs22\n"}, want: []string{"funcdctl.yaml is read nowhere", ".contract.yaml"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dir := devProject(t, merge(counter, tc.files))
+			_, err := loadDevFolder("test", dir)
+			require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
+			for _, w := range tc.want {
+				require.Contains(t, err.Error(), w)
+			}
+		})
+	}
+	_, err = loadDevFolder("test", filepath.Join(devProject(t, counter), "counter.yaml"))
+	require.ErrorContains(t, err, "is not a folder", "a file target is refused")
+}
+
+// merge returns the union of maps, later ones winning.
+func merge(ms ...map[string]string) map[string]string {
+	out := map[string]string{}
+	for _, m := range ms {
+		for k, v := range m {
+			out[k] = v
 		}
 	}
-	// A WRITE-ONLY custom Role — not the built-in Blob Data Writer (read+write) — so dev reads stay
-	// binding-gated (the "forgot to bind → read Forbidden" fidelity ADR-0125 keeps).
-	require.NotNil(t, role, "dev auto-provisions the write-only dev-blob-writer Role")
-	require.NoError(t, role.Validate())
-	require.Equal(t, []string{"s3::write"}, role.Spec.Actions, "write only — reads NOT widened")
-
-	require.NotNil(t, ra, "dev auto-provisions a RolesAssignment binding the function to that Role (non-bypass path)")
-	require.NoError(t, ra.Validate(), "the provisioned grant is admission-valid")
-	require.Equal(t, v1.ObjectName("dev-blob-writer-ingest"), ra.Name)
-	require.Equal(t, &v1.PrincipalRef{Kind: v1.PrincipalKindFunction, Name: "ingest"}, ra.Spec.Principal)
-	require.Len(t, ra.Spec.Assignments, 1)
-	require.Equal(t, v1.RoleRef{Kind: v1.RoleRefKindRole, Name: "dev-blob-writer"}, ra.Spec.Assignments[0].RoleRef)
-	require.Equal(t, &v1.ScopeRef{Kind: v1.ScopeKindNamespace}, ra.Spec.Assignments[0].Scope)
+	return out
 }
 
-// scenario: dev-egress-not-isolated — `funcdctl dev` does not reproduce egress isolation (process
-// mode has no netns), so an outbound call from a handler is NOT blocked. The ADR requires that this
-// boundary be DOCUMENTED, not hidden: the startup banner tells the author so, alongside the list of
-// every localhost service it exposes. (The live outbound-call is inherently network-dependent — the
-// deferred lane; the banner is the hermetic observable of the documented boundary.)
+// scenario: dev-build-checks — a Function with no build, with builds in both the folder and dist/, or with a runtime
+// its contract file does not share stops dev, naming the paths it looked at or both files.
+func TestScenarioDevBuildChecks(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		files map[string]string
+		want  []string
+	}{
+		"no-build": {files: map[string]string{"counter.yaml": fnDoc("counter", "nodejs22", ""), "counter.contract.yaml": permissiveContract},
+			want: []string{"counter.mjs", filepath.Join("dist", "counter.mjs")}},
+		"two-builds": {files: merge(nodeFunction("counter", "", "x\n"), map[string]string{"dist/counter.mjs": "x\n"}),
+			want: []string{"two builds", filepath.Join("dist", "counter.mjs")}},
+		"runtime-mismatch": {files: map[string]string{"counter.yaml": fnDoc("counter", "nodejs22", ""), "counter.mjs": "x\n",
+			"counter.contract.yaml": strings.Replace(permissiveContract, "nodejs22", "python314", 1)},
+			want: []string{"counter.yaml", "counter.contract.yaml", "disagree"}},
+		"python-no-build": {files: map[string]string{"intake.yaml": fnDoc("intake", "python314", ""),
+			"intake.contract.yaml": strings.Replace(permissiveContract, "nodejs22", "python314", 1)},
+			want: []string{"intake.py", filepath.Join("src", "main.py")}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dir := devProject(t, tc.files)
+			_, err := loadDevFolder("test", dir)
+			require.Error(t, err)
+			for _, w := range tc.want {
+				require.Contains(t, err.Error(), w)
+			}
+		})
+	}
+}
+
+// scenario: dev-secret-from-env — a Function declares Secret api-keys with key STRIPE_KEY and no document defines it:
+// `STRIPE_KEY=sk funcdctl dev .` serves sk through ctx.secret; unset, dev stops before booting, naming STRIPE_KEY.
+func TestScenarioDevSecretFromEnv(t *testing.T) {
+	requireNode(t)
+	files := nodeFunction("counter", "  secrets:\n    - name: api-keys\n      keys:\n        - STRIPE_KEY\n"+
+		"  bindings:\n    secret:\n      - api-keys\n",
+		"export async function handle(ctx) { return { key: await ctx.secret.get('STRIPE_KEY') }; }\n")
+
+	t.Run("unset", func(t *testing.T) {
+		t.Setenv("STRIPE_KEY", "")
+		require.NoError(t, os.Unsetenv("STRIPE_KEY"))
+		_, err := (&cli{out: io.Discard}).startDev(context.Background(), devProject(t, files), devConfig{cacheDir: t.TempDir()})
+		require.Equal(t, fault.Invalid, fault.KindOf(err))
+		require.Contains(t, err.Error(), "STRIPE_KEY")
+	})
+	t.Run("set", func(t *testing.T) {
+		t.Setenv("STRIPE_KEY", "sk")
+		inst := runDev(t, devProject(t, files))
+		waitReady(t, inst)
+		_, body := post(t, inst.gatewayURL+"/function/counter", `{"data":{}}`)
+		require.Contains(t, body, `"key":"sk"`, body)
+	})
+}
+
+// scenario: ctx-dev (ADR-0245) on resource files — ctx.config reads the ConfigMap the Function declares at its root,
+// and ctx.secret the Secret dev creates from the environment.
+func TestScenarioCtxDev(t *testing.T) {
+	requireNode(t)
+	t.Setenv("API_KEY", "s3cr3t-from-env")
+	dir := devProject(t, nodeFunction("counter",
+		"  configMaps:\n    - name: app-config\n      data:\n        APP_MODE: prod\n"+
+			"  secrets:\n    - name: app-secret\n      keys:\n        - API_KEY\n"+
+			"  bindings:\n    config:\n      - app-config\n    secret:\n      - app-secret\n",
+		"export async function handle(ctx) {\n  return { mode: ctx.config.get('APP_MODE'), key: await ctx.secret.get('API_KEY') };\n}\n"))
+	inst := runDev(t, dir)
+	waitReady(t, inst)
+	_, body := post(t, inst.gatewayURL+"/function/counter", `{"data":{}}`)
+	require.Contains(t, body, `"mode":"prod"`, body)
+	require.Contains(t, body, `"key":"s3cr3t-from-env"`, body)
+}
+
+// scenario: dev-reload-resources — with dev running, a table added to counter.yaml is applied, and a removed
+// ConfigMap file prunes the ConfigMap.
+func TestScenarioDevReloadResources(t *testing.T) {
+	requireNode(t)
+	spec := func(tables string) string {
+		return "  kv:\n    - name: counters\n      tables:\n" + tables + "  bindings:\n    kv:\n      - alias: hits\n        store: counters\n        table: hits\n"
+	}
+	const configMap = "apiVersion: funcd.io/v1alpha1\nkind: ConfigMap\nmetadata:\n  name: settings\nspec:\n  data:\n    MODE: one\n"
+	dir := devProject(t, merge(nodeFunction("counter", spec("        - name: hits\n"), "export function handle() { return {}; }\n"),
+		map[string]string{"settings.yaml": configMap}))
+	inst := runDev(t, dir)
+	waitReady(t, inst)
+	ctx := context.Background()
+	_, err := inst.client.Get(ctx, v1.KindConfigMap, "default", "settings")
+	require.NoError(t, err)
+
+	writeProject(t, dir, map[string]string{"counter.yaml": fnDoc("counter", "nodejs22", spec("        - name: hits\n        - name: misses\n"))})
+	require.NoError(t, os.Remove(filepath.Join(dir, "settings.yaml")))
+	require.Eventually(t, func() bool {
+		ks, kerr := inst.client.Get(ctx, v1.KindKVStore, "default", "counters")
+		_, cerr := inst.client.Get(ctx, v1.KindConfigMap, "default", "settings")
+		return kerr == nil && len(ks.(*v1.KVStore).Spec.Tables) == 2 && fault.KindOf(cerr) == fault.NotFound
+	}, 20*time.Second, 100*time.Millisecond, "the added table is applied and the removed ConfigMap pruned")
+}
+
+// scenario: dev-writer-grant — dev provisions the write-only dev-blob-writer Role and one RolesAssignment per Function
+// and step it runs (ADR-0128 Decision 2, as amended), admission-valid, so the developer writes an ownerless prefix
+// through the real forbid (TestScenarioDevInspectBlobViaS3 writes one live), while reads stay binding-gated.
+func TestScenarioDevWriterGrant(t *testing.T) {
+	t.Parallel()
+	objs := writerGrants([]string{"ingest", "orders-score"})
+	require.Len(t, objs, 3)
+	role := objs[0].(*v1.Role)
+	require.NoError(t, role.Validate())
+	require.Equal(t, []string{"s3::write"}, role.Spec.Actions, "write only — reads NOT widened")
+	for i, name := range []v1.ObjectName{"ingest", "orders-score"} {
+		ra := objs[i+1].(*v1.RolesAssignment)
+		require.NoError(t, ra.Validate())
+		require.Equal(t, "dev-blob-writer-"+name, ra.Name)
+		require.Equal(t, &v1.PrincipalRef{Kind: v1.PrincipalKindFunction, Name: name}, ra.Spec.Principal)
+		require.Equal(t, v1.RoleRef{Kind: v1.RoleRefKindRole, Name: "dev-blob-writer"}, ra.Spec.Assignments[0].RoleRef)
+		require.Equal(t, &v1.ScopeRef{Kind: v1.ScopeKindNamespace}, ra.Spec.Assignments[0].Scope)
+	}
+}
+
+// scenario: dev-egress-not-isolated — `funcdctl dev` does not reproduce egress isolation (process mode has no netns),
+// so an outbound call is NOT blocked; the banner documents that boundary beside every localhost service it exposes.
 func TestScenarioDevEgressNotIsolated(t *testing.T) {
 	var out bytes.Buffer
 	a := &cli{out: &out}
 	inst := &devInstance{
 		gatewayURL:  "http://127.0.0.1:8080",
 		functions:   []string{"ingest", "transform"},
-		workflow:    "releve-lakehouse",
+		workflows:   []string{"releve-lakehouse"},
 		catalogs:    []string{"lake"},
 		s3Endpoint:  "http://127.0.0.1:54321",
 		s3AccessKey: "AKIADEV",
 		s3SecretKey: "devsecret",
 		s3Region:    "us-east-1",
 	}
-	if err := a.printBanner(inst); err != nil {
-		t.Fatalf("printBanner: %v", err)
-	}
+	require.NoError(t, a.printBanner(inst))
 	got := out.String()
-	if !strings.Contains(got, "egress is NOT isolated") {
-		t.Errorf("banner does not document the egress fidelity boundary:\n%s", got)
-	}
-	// Every localhost service the ADR exposes is listed (Decision 6).
 	for _, want := range []string{
+		"egress is NOT isolated",
 		"SERVICES", "gateway", "http://127.0.0.1:8080",
 		"s3", "http://127.0.0.1:54321",
-		"catalog", "bound: lake",
+		"catalog", "serves: lake",
 		"POST  http://127.0.0.1:8080/function/ingest",
-		"WORKFLOW", "releve-lakehouse",
+		"WORKFLOWS", "releve-lakehouse",
 		"AWS_ACCESS_KEY_ID=AKIADEV",
 	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("services banner missing %q:\n%s", want, got)
-		}
+		require.Contains(t, got, want)
 	}
 }
 
-// The catalog service line appears only when a catalog is actually bound.
+// The catalog service line appears only when a catalog is served.
 func TestBannerOmitsCatalogWhenUnbound(t *testing.T) {
 	var out bytes.Buffer
-	a := &cli{out: &out}
-	inst := &devInstance{
-		gatewayURL: "http://127.0.0.1:8080",
-		functions:  []string{"hello"},
-		s3Endpoint: "http://127.0.0.1:5555",
-		s3Region:   "us-east-1",
-	}
-	if err := a.printBanner(inst); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(out.String(), "catalog") {
-		t.Errorf("banner shows a catalog line with no catalog bound:\n%s", out.String())
-	}
+	inst := &devInstance{gatewayURL: "http://127.0.0.1:8080", functions: []string{"hello"}, s3Endpoint: "http://127.0.0.1:5555", s3Region: "us-east-1"}
+	require.NoError(t, (&cli{out: &out}).printBanner(inst))
+	require.NotContains(t, out.String(), "catalog")
 }
 
-// the dev log styler renders a streamed line compactly: time · function · severity · body, with
-// structured attrs appended in sorted order (real-time dev log streaming). A non-TTY writer (this
-// buffer) yields plain text — color only shows on a real terminal.
+// the dev log styler renders a streamed line compactly: time · function · severity · body, with structured attrs
+// appended in sorted order. A non-TTY writer (this buffer) yields plain text — color only shows on a real terminal.
 func TestPrintLogFormatsLine(t *testing.T) {
 	var out bytes.Buffer
 	s := newDevLogStyler(&out)
@@ -359,22 +411,14 @@ func TestPrintLogFormatsLine(t *testing.T) {
 		Attrs:    map[string]string{"name": "Ada", "attempt": "1"},
 	})
 	for _, want := range []string{"09:08:07", "ingest", "INFO", "greeting", "attempt=1", "name=Ada"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("log line missing %q:\n%s", want, got)
-		}
+		require.Contains(t, got, want)
 	}
-	// attrs are sorted (attempt before name) for stable output.
-	if strings.Index(got, "attempt=1") > strings.Index(got, "name=Ada") {
-		t.Errorf("attrs not sorted: %s", got)
-	}
-	// A blank severity defaults to INFO.
-	if !strings.Contains(s.format(funcd.LogLine{Function: "f", Body: "x", Time: time.Now()}), "INFO") {
-		t.Error("blank severity should default to INFO")
-	}
+	require.Less(t, strings.Index(got, "attempt=1"), strings.Index(got, "name=Ada"), "attrs are sorted")
+	require.Contains(t, s.format(funcd.LogLine{Function: "f", Body: "x", Time: time.Now()}), "INFO", "a blank severity is INFO")
 }
 
-// A streamed record's fields come from the function, so the dev log tee escapes what a terminal would act
-// on and keeps each record on one line, also for an unknown severity or a name wider than its column.
+// A streamed record's fields come from the function, so the dev log tee escapes what a terminal would act on and keeps
+// each record on one line, also for an unknown severity or a name wider than its column.
 func TestDevLogStylerEscapesControlBytes(t *testing.T) {
 	got := newDevLogStyler(&bytes.Buffer{}).format(funcd.LogLine{
 		Function: "a-function-name-wider-than-its-column",
@@ -393,133 +437,41 @@ func TestDevLogStylerEscapesControlBytes(t *testing.T) {
 	require.Contains(t, got, `k\x1b=a\x1b[31mb\nc`)
 }
 
-// TestPrintDevEnvDerivesDeterministicKeypair — `funcdctl dev --print-env` prints exactly the four AWS
-// export lines with the S3 keypair DERIVED (fixed devS3Master over the resolved first function — the same
-// keypair the banner shows, deterministic across calls), boots no server, and defaults the endpoint port
-// to 3006.
+// `funcdctl dev --print-env` prints exactly the four AWS export lines with the S3 keypair derived over the folder's
+// first Function (the banner's, deterministic across calls), boots no server, and defaults the endpoint port to 3006.
 func TestPrintDevEnvDerivesDeterministicKeypair(t *testing.T) {
-	dir := devProject(t, map[string]string{
-		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + strictContract,
-	})
+	dir := devProject(t, nodeFunction("counter", "", "x\n"))
 	var out bytes.Buffer
-	a := &cli{out: &out}
-	require.NoError(t, a.printDevEnv(dir, "", devConfig{printEnv: true, s3port: 3006}))
+	require.NoError(t, (&cli{out: &out}).printDevEnv(dir, devConfig{printEnv: true, s3port: 3006}))
 	s := out.String()
-
-	pfs, err := resolveDevPlan("test", dir, "", devConfig{})
-	require.NoError(t, err)
-	kp := s3gateway.DeriveKeypair([]byte(devS3Master), v1.KindFunction, devNamespace, string(pfs[0].name))
+	kp := s3gateway.DeriveKeypair([]byte(devS3Master), v1.KindFunction, devNamespace, "counter")
 	require.Contains(t, s, "export AWS_ACCESS_KEY_ID="+kp.AccessKey)
 	require.Contains(t, s, "export AWS_SECRET_ACCESS_KEY="+kp.SecretKey)
 	require.Contains(t, s, "export AWS_REGION="+devS3Region)
 	require.Contains(t, s, "export AWS_ENDPOINT_URL_S3=http://127.0.0.1:3006")
-	require.Equal(t, 4, strings.Count(s, "export "), "exactly the four export lines, nothing else")
+	require.Equal(t, 4, strings.Count(s, "export "))
 
-	// deterministic: a second call yields byte-identical output (fixed dev master).
 	var out2 bytes.Buffer
-	require.NoError(t, (&cli{out: &out2}).printDevEnv(dir, "", devConfig{printEnv: true, s3port: 3006}))
-	require.Equal(t, s, out2.String(), "print-env is deterministic")
-
-	// --s3port defaults to 3006 when unset.
-	var out3 bytes.Buffer
-	require.NoError(t, (&cli{out: &out3}).printDevEnv(dir, "", devConfig{printEnv: true}))
-	require.Contains(t, out3.String(), "http://127.0.0.1:3006", "endpoint port defaults to 3006")
+	require.NoError(t, (&cli{out: &out2}).printDevEnv(dir, devConfig{printEnv: true}))
+	require.Equal(t, s, out2.String(), "deterministic, with the port defaulting to 3006")
 }
 
-// TestIssue135_DevHotReloadsEditedHandler — ADR-0125 Decision 2: an edit to the handler source reaches the
-// running dev session with no restart, for an in-place bundle (generic funcdctl.yaml) and an isolated
-// single-file function (<stem>.funcdctl.yaml, whose bundle is a private copy).
-func TestIssue135_DevHotReloadsEditedHandler(t *testing.T) {
+// TestIssue320_DevReloadsContract — ADR-0247 Decision 8: an edit to a build's contract file reaches the running session
+// with no restart. A python entry's imports are TestScenarioDevPythonInPlace's.
+func TestIssue320_DevReloadsContract(t *testing.T) {
 	requireNode(t)
-	for _, tc := range []struct{ name, manifest, handler string }{
-		{"in-place", "funcdctl.yaml", "handler.mjs"},
-		{"stem", "front.funcdctl.yaml", "front.mjs"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := devProject(t, map[string]string{
-				tc.manifest: "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
-				tc.handler:  "export function handle() { return { v: 1 }; }\n",
-			})
-			inst := runDev(t, dir)
-			waitReady(t, inst)
-			url := inst.gatewayURL + "/function/" + inst.functions[0]
-			_, body := post(t, url, `{"data":{}}`)
-			require.Contains(t, body, `"v":1`)
-
-			edited := "export function handle() { return { v: 999 }; }\n"
-			require.NoError(t, os.WriteFile(filepath.Join(dir, tc.handler), []byte(edited), 0o600))
-			require.Eventually(t, func() bool {
-				resp, err := http.Post(url, "application/json", strings.NewReader(`{"data":{}}`))
-				if err != nil {
-					return false
-				}
-				defer func() { _ = resp.Body.Close() }()
-				b, _ := io.ReadAll(resp.Body)
-				return strings.Contains(string(b), `"v":999`)
-			}, 20*time.Second, 100*time.Millisecond, "the running dev session serves the edited handler")
-		})
-	}
-}
-
-// TestIssue320_DevHotReloadsImportsAndManifest — ADR-0125 boot sequence ("watch files, re-apply on change"): an
-// edit to a module the handler imports, or to the manifest's contract and dev block, reaches the running dev
-// session with no restart.
-func TestIssue320_DevHotReloadsImportsAndManifest(t *testing.T) {
-	requireNode(t)
-	eventuallyServes := func(t *testing.T, url, payload string, status int, want string) {
-		t.Helper()
-		require.Eventually(t, func() bool {
-			resp, err := http.Post(url, "application/json", strings.NewReader(payload))
-			if err != nil {
-				return false
-			}
-			defer func() { _ = resp.Body.Close() }()
-			b, _ := io.ReadAll(resp.Body)
-			return resp.StatusCode == status && strings.Contains(string(b), want)
-		}, 20*time.Second, 100*time.Millisecond, "the running dev session serves the edit: %d %s", status, want)
-	}
-
-	t.Run("imported-module", func(t *testing.T) {
-		dir := devProject(t, map[string]string{
-			"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
-			"handler.mjs":   "import { v } from './lib.mjs';\nexport function handle() { return { v }; }\n",
-			"lib.mjs":       "export const v = 1;\n",
-		})
+	t.Run("contract", func(t *testing.T) {
+		dir := devProject(t, merge(nodeFunction("counter", "", "export function handle() { return { ok: true }; }\n"),
+			map[string]string{"counter.contract.yaml": strictContract}))
 		inst := runDev(t, dir)
 		waitReady(t, inst)
-		url := inst.gatewayURL + "/function/" + inst.functions[0]
-		_, body := post(t, url, `{"data":{}}`)
-		require.Contains(t, body, `"v":1`)
+		url := inst.gatewayURL + "/function/counter"
+		bad, body := post(t, url, `{"data":{"oops":1}}`)
+		require.Equal(t, http.StatusUnprocessableEntity, bad.StatusCode, body)
 
-		require.NoError(t, os.WriteFile(filepath.Join(dir, "lib.mjs"), []byte("export const v = 7;\n"), 0o600))
-		eventuallyServes(t, url, `{"data":{}}`, http.StatusOK, `"v":7`)
+		writeProject(t, dir, map[string]string{"counter.contract.yaml": permissiveContract})
+		eventuallyServes(t, url, `{"data":{"oops":1}}`, http.StatusOK, `"ok":true`)
 	})
-
-	manifest := func(contract, mode string) string {
-		return "runtime: nodejs22\nhandler: handle\nbindings:\n  config:\n    - app-config\n" + contract +
-			"dev:\n  config:\n    app-config:\n      APP_MODE: " + mode + "\n"
-	}
-	for _, tc := range []struct{ name, manifest, handler string }{
-		{"manifest-in-place", "funcdctl.yaml", "handler.mjs"},
-		{"manifest-stem", "front.funcdctl.yaml", "front.mjs"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := devProject(t, map[string]string{
-				tc.manifest: manifest(strictContract, "one"),
-				tc.handler:  "export function handle() { return { mode: process.env.APP_MODE }; }\n",
-			})
-			inst := runDev(t, dir)
-			waitReady(t, inst)
-			url := inst.gatewayURL + "/function/" + inst.functions[0]
-			bad, body := post(t, url, `{"data":{"oops":1}}`)
-			require.Equal(t, http.StatusUnprocessableEntity, bad.StatusCode, body)
-			_, body = post(t, url, `{"data":{"name":"ada"}}`)
-			require.Contains(t, body, `"mode":"one"`)
-
-			require.NoError(t, os.WriteFile(filepath.Join(dir, tc.manifest), []byte(manifest(permissiveContract, "two")), 0o600))
-			eventuallyServes(t, url, `{"data":{"oops":1}}`, http.StatusOK, `"mode":"two"`)
-		})
-	}
 }
 
 // deleteStatus passes every request through and records the response status of a DELETE of one path.
@@ -537,45 +489,48 @@ func (d *deleteStatus) RoundTrip(r *http.Request) (*http.Response, error) {
 	return resp, err
 }
 
-// TestIssue429_DevReloadDeletesRemovedResources — ADR-0125 ("watch files, re-apply on change"): a binding removed
-// from funcdctl.yaml deletes the resource the session synthesized for it, and a KVStore that still holds keys is
-// kept by its deletion protection (ADR-0073), so a reload never drops data.
+// kvStoreDoc is a KVStore document a with table entries, owned by owner.
+func kvStoreDoc(tables ...string) string {
+	s := "apiVersion: funcd.io/v1alpha1\nkind: KVStore\nmetadata:\n  name: a\nspec:\n  tables:\n"
+	for _, tb := range tables {
+		s += "    - name: " + tb + "\n      owner: counter\n"
+	}
+	return s
+}
+
+// TestIssue429_DevReloadDeletesRemovedResources — ADR-0247 Decision 8: a KVStore file removed from the folder deletes
+// the store the session applied, and one that still holds keys is kept by its deletion protection (ADR-0073), so a
+// reload never drops data.
 func TestIssue429_DevReloadDeletesRemovedResources(t *testing.T) {
 	requireNode(t)
-	const handler = "export function handle() { return { ok: true }; }\n"
-	const kvBinding = "bindings:\n  kv:\n    - alias: cache\n      store: a\n      table: entries\n"
-	unbound := "runtime: nodejs22\nhandler: handle\n" + permissiveContract
+	bound := nodeFunction("counter", "  kv:\n    - ref: a\n  bindings:\n    kv:\n      - alias: cache\n        store: a\n        table: entries\n",
+		"export function handle() { return { ok: true }; }\n")
+	unbound := nodeFunction("counter", "", "export function handle() { return { ok: true }; }\n")
 	gone := func(inst *devInstance, kind v1.Kind, name v1.ObjectName) bool {
 		_, err := inst.client.Get(context.Background(), kind, "default", name)
 		return fault.KindOf(err) == fault.NotFound
 	}
+	unbind := func(t *testing.T, dir string) {
+		t.Helper()
+		writeProject(t, dir, unbound)
+		require.NoError(t, os.Remove(filepath.Join(dir, "store.yaml")))
+	}
 
 	t.Run("unused", func(t *testing.T) {
-		dir := devProject(t, map[string]string{
-			"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + kvBinding + "  config:\n    - settings\n" +
-				permissiveContract + "dev:\n  config:\n    settings:\n      MODE: one\n",
-			"handler.mjs": handler,
-		})
+		dir := devProject(t, merge(bound, map[string]string{"store.yaml": kvStoreDoc("entries")}))
 		inst := runDev(t, dir)
 		waitReady(t, inst)
 		require.False(t, gone(inst, v1.KindKVStore, "a"))
-		require.False(t, gone(inst, v1.KindConfigMap, "settings"))
-
-		require.NoError(t, os.WriteFile(filepath.Join(dir, "funcdctl.yaml"), []byte(unbound), 0o600))
-		require.Eventually(t, func() bool {
-			return gone(inst, v1.KindKVStore, "a") && gone(inst, v1.KindConfigMap, "settings")
-		}, 20*time.Second, 100*time.Millisecond, "the reload deletes the KVStore and ConfigMap no manifest names")
+		unbind(t, dir)
+		require.Eventually(t, func() bool { return gone(inst, v1.KindKVStore, "a") }, 20*time.Second, 100*time.Millisecond,
+			"the reload deletes the KVStore the folder no longer holds")
 	})
 
 	t.Run("holds-keys", func(t *testing.T) {
-		dir := devProject(t, map[string]string{
-			"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + kvBinding + permissiveContract,
-			"handler.mjs":   handler,
-		})
+		dir := devProject(t, merge(bound, map[string]string{"store.yaml": kvStoreDoc("entries")}))
 		root, err := os.MkdirTemp("", "funcd")
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = os.RemoveAll(root) })
-
 		// startDev builds its SDK client from http.DefaultClient, so its transport is the seam on the reload's delete.
 		prev := http.DefaultClient.Transport
 		next := prev
@@ -587,15 +542,15 @@ func TestIssue429_DevReloadDeletesRemovedResources(t *testing.T) {
 		t.Cleanup(func() { http.DefaultClient.Transport = prev })
 
 		ctx, cancel := context.WithCancel(context.Background())
-		inst, err := (&cli{out: io.Discard}).startDev(ctx, dir, "", devConfig{persist: true, persistTo: root})
+		inst, err := (&cli{out: io.Discard}).startDev(ctx, dir, devConfig{persist: true, persistTo: root})
 		require.NoError(t, err)
 		t.Cleanup(func() { cancel(); _ = inst.stop() })
 		const key = "default/a/entries/k"
 		require.NoError(t, inst.kv.Put(ctx, key, []byte("v")))
 
-		require.NoError(t, os.WriteFile(filepath.Join(dir, "funcdctl.yaml"), []byte(unbound), 0o600))
+		unbind(t, dir)
 		require.Eventually(t, func() bool { return del.code.Load() != 0 }, 20*time.Second, 100*time.Millisecond,
-			"the reload deletes the KVStore no manifest names")
+			"the reload deletes the KVStore the folder no longer holds")
 		require.Equal(t, int64(http.StatusConflict), del.code.Load(), "deletion protection refuses a store that holds keys")
 		require.False(t, gone(inst, v1.KindKVStore, "a"))
 		_, found, err := inst.kv.Get(ctx, key)
@@ -604,19 +559,27 @@ func TestIssue429_DevReloadDeletesRemovedResources(t *testing.T) {
 	})
 }
 
-// TestIssue490_DevReloadDropsBoundTableAndPrefix — ADR-0125 ("watch files, re-apply on change"): an edit that drops
-// one kv table and renames one blob prefix while the store and bucket keep another reaches the running session, and a
-// --persist restart after it boots. Admission refuses to drop a table or prefix a Function still binds, so the
-// Function must stop binding it first.
+// TestIssue490_DevReloadDropsBoundTableAndPrefix — ADR-0247 Decision 8: an edit that drops one kv table and renames
+// one blob prefix while the store and bucket keep another reaches the running session, and a --persist restart after
+// it boots. Admission refuses to drop a table or prefix a Function still binds, so the Function must stop binding it
+// first.
 func TestIssue490_DevReloadDropsBoundTableAndPrefix(t *testing.T) {
 	requireNode(t)
-	manifest := func(kv, blob string) string {
-		return "runtime: nodejs22\nhandler: handle\nbindings:\n  kv:\n    - alias: hot\n      store: cache\n      table: hot\n" + kv +
-			"  blob:\n    - alias: raw\n      bucket: media\n      prefix: raw\n" + blob + permissiveContract
+	folder := func(tables, prefixes, kv, blob string) map[string]string {
+		return merge(nodeFunction("counter",
+			"  kv:\n    - ref: cache\n  buckets:\n    - ref: media\n  bindings:\n    kv:\n      - alias: hot\n        store: cache\n        table: hot\n"+kv+
+				"    blob:\n      - alias: raw\n        bucket: media\n        prefix: raw\n"+blob,
+			"export function handle() { return { ok: true }; }\n"),
+			map[string]string{
+				"cache.yaml": "apiVersion: funcd.io/v1alpha1\nkind: KVStore\nmetadata:\n  name: cache\nspec:\n  tables:\n" + tables,
+				"media.yaml": "apiVersion: funcd.io/v1alpha1\nkind: Bucket\nmetadata:\n  name: media\nspec:\n  prefixes:\n" + prefixes,
+			})
 	}
-	before := manifest("    - alias: cold\n      store: cache\n      table: cold\n", "    - alias: old\n      bucket: media\n      prefix: old\n")
-	after := manifest("", "    - alias: fresh\n      bucket: media\n      prefix: fresh\n")
-	const handler = "export function handle() { return { ok: true }; }\n"
+	before := folder("    - name: hot\n      owner: counter\n    - name: cold\n      owner: counter\n",
+		"    - name: raw\n      owner: counter\n    - name: old\n      owner: counter\n",
+		"      - alias: cold\n        store: cache\n        table: cold\n", "      - alias: old\n        bucket: media\n        prefix: old\n")
+	after := folder("    - name: hot\n      owner: counter\n", "    - name: raw\n      owner: counter\n    - name: fresh\n      owner: counter\n",
+		"", "      - alias: fresh\n        bucket: media\n        prefix: fresh\n")
 	settled := func(inst *devInstance) bool {
 		ctx := context.Background()
 		var got []string
@@ -634,7 +597,7 @@ func TestIssue490_DevReloadDropsBoundTableAndPrefix(t *testing.T) {
 		for _, p := range bk.(*v1.Bucket).Spec.Prefixes {
 			got = append(got, "prefix "+p.Name)
 		}
-		fn, err := inst.client.Get(ctx, v1.KindFunction, "default", v1.ObjectName(inst.functions[0]))
+		fn, err := inst.client.Get(ctx, v1.KindFunction, "default", "counter")
 		if err != nil {
 			return false
 		}
@@ -644,35 +607,34 @@ func TestIssue490_DevReloadDropsBoundTableAndPrefix(t *testing.T) {
 		for _, b := range fn.(*v1.Function).Spec.Bindings.Blob {
 			got = append(got, "blob "+b.Prefix)
 		}
-		return slices.Equal(got, []string{"table hot", "prefix fresh", "prefix raw", "kv hot", "blob raw", "blob fresh"})
+		return slices.Equal(got, []string{"table hot", "prefix raw", "prefix fresh", "kv hot", "blob raw", "blob fresh"})
 	}
 
 	t.Run("reload", func(t *testing.T) {
-		dir := devProject(t, map[string]string{"funcdctl.yaml": before, "handler.mjs": handler})
+		dir := devProject(t, before)
 		inst := runDev(t, dir)
 		waitReady(t, inst)
-
-		require.NoError(t, os.WriteFile(filepath.Join(dir, "funcdctl.yaml"), []byte(after), 0o600))
+		writeProject(t, dir, after)
 		require.Eventually(t, func() bool { return settled(inst) }, 20*time.Second, 100*time.Millisecond,
 			"the reload drops the table and the prefix from the Function, the KVStore and the Bucket")
 	})
 
 	t.Run("persist-restart", func(t *testing.T) {
-		dir := devProject(t, map[string]string{"funcdctl.yaml": before, "handler.mjs": handler})
+		dir := devProject(t, before)
 		root, err := os.MkdirTemp("", "funcd")
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = os.RemoveAll(root) })
 		cfg := devConfig{persist: true, persistTo: root}
 
 		ctx1, cancel1 := context.WithCancel(context.Background())
-		inst1, err := (&cli{out: io.Discard}).startDev(ctx1, dir, "", cfg)
+		inst1, err := (&cli{out: io.Discard}).startDev(ctx1, dir, cfg)
 		require.NoError(t, err)
 		cancel1()
 		require.NoError(t, inst1.stop())
 
-		require.NoError(t, os.WriteFile(filepath.Join(dir, "funcdctl.yaml"), []byte(after), 0o600))
+		writeProject(t, dir, after)
 		ctx2, cancel2 := context.WithCancel(context.Background())
-		inst2, err := (&cli{out: io.Discard}).startDev(ctx2, dir, "", cfg)
+		inst2, err := (&cli{out: io.Discard}).startDev(ctx2, dir, cfg)
 		require.NoError(t, err, "a restart applies the Function before the KVStore and Bucket drop what it bound")
 		t.Cleanup(func() { cancel2(); _ = inst2.stop() })
 		require.True(t, settled(inst2), "the restart drops the table and the prefix")

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,174 +15,154 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
-	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
-// startDevPath boots funcdctl dev over an explicit path (a workflow.yaml or a manifest dir) and tears it
-// down at test end.
-func startDevPath(t *testing.T, path string) *devInstance {
-	t.Helper()
-	inst, err := tryStartDev(t, path)
-	require.NoError(t, err)
-	return inst
-}
-
-// waitFuncsReady blocks until every named function reports Ready — reconcile → materialize → shim boot →
-// readiness all passed from source.
+// waitFuncsReady blocks until every named function reports Ready — reconcile → materialize → shim boot → readiness
+// all passed from the local builds.
 func waitFuncsReady(t *testing.T, inst *devInstance, names ...string) {
 	t.Helper()
 	for _, n := range names {
-		name := n
-		require.Eventually(t, func() bool {
-			got, err := inst.client.Get(context.Background(), v1.KindFunction, "default", v1.ObjectName(name))
-			if err != nil {
-				return false
-			}
-			return got.(*v1.Function).Status.Phase == v1.PhaseReady
-		}, 20*time.Second, 50*time.Millisecond, "the from-source function %q reconciles to Ready", name)
+		waitFunction(t, inst, n)
 	}
 }
 
-// scenario: dev-workflow — `funcdctl dev workflow.yaml` loads a 2-step DAG whose steps resolve by tag stem
-// to `<stem>.funcdctl.yaml` (+ handler) and run FROM SOURCE. A WorkflowRun drives the DAG; both steps
-// reach Succeeded, proving each step executed from source through the real embedded workflow engine (no
-// OCI pull — the steps were rewritten to dispatch to the synthesized Functions by ref). Node-gated.
-func TestScenarioDevWorkflow(t *testing.T) {
-	requireNode(t)
-	dir := devProject(t, map[string]string{
-		"workflow.yaml": "apiVersion: funcd.io/v1alpha1\nkind: Workflow\n" +
-			"metadata:\n  name: pipeline\n  namespace: default\n" +
-			"spec:\n  steps:\n" +
-			"    - name: a\n      function:\n        image: oci-layout:///deps/registry:stepa\n" +
-			"    - name: b\n      function:\n        image: registry:stepb\n      dependsOn:\n        - a\n",
-		"stepa.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
-		"stepa.mjs":           "export function handle(ctx, event) { return { step: 'a', n: (event.data?.n ?? 0) + 1 }; }\n",
-		"stepb.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
-		"stepb.mjs":           "export function handle(ctx, event) { return { step: 'b', n: (event.data?.n ?? 0) + 1 }; }\n",
-	})
-
-	inst := startDevPath(t, filepath.Join(dir, "workflow.yaml"))
-	require.Equal(t, "pipeline", inst.workflow, "the Workflow CRD is detected + loaded as the DAG")
-	require.ElementsMatch(t, []string{"stepa", "stepb"}, inst.functions,
-		"each step's function.image tag stem resolved to a <stem>.funcdctl.yaml run from source")
-	waitFuncsReady(t, inst, "stepa", "stepb")
-
-	// Trigger a run (the same surface a Sensor / `funcdctl workflow run` uses) and drive the DAG.
-	ctx := context.Background()
-	run := &v1.WorkflowRun{
-		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflowRun.GVK().APIVersion(), Kind: v1.KindWorkflowRun},
-		ObjectMeta: v1.ObjectMeta{Name: "run-01", Namespace: "default", ResourceGroup: "dev"},
-		Spec:       v1.WorkflowRunSpec{Workflow: "pipeline", Input: json.RawMessage(`{"n":1}`)},
+// waitFuncsApplied blocks until each named Function exists; a Workflow step's Function idles until a run needs it.
+func waitFuncsApplied(t *testing.T, inst *devInstance, names ...string) {
+	t.Helper()
+	for _, n := range names {
+		require.Eventually(t, func() bool {
+			_, err := inst.client.Get(context.Background(), v1.KindFunction, "default", v1.ObjectName(n))
+			return err == nil
+		}, 20*time.Second, 50*time.Millisecond, "%s is applied", n)
 	}
-	_, err := inst.client.Apply(ctx, run)
-	require.NoError(t, err)
+}
 
+// workflowDoc is Workflow name with steps (block YAML, indented four spaces).
+func workflowDoc(name, steps string) string {
+	return "apiVersion: funcd.io/v1alpha1\nkind: Workflow\nmetadata:\n  name: " + name + "\nspec:\n  steps:\n" + steps
+}
+
+// imageStep is an image step name tagged stem, depending on dependsOn when it is set.
+func imageStep(name, stem, dependsOn string) string {
+	s := "    - name: " + name + "\n      function:\n        image: oci-layout:///deps/registry:" + stem + "\n"
+	if dependsOn != "" {
+		s += "      dependsOn:\n        - " + dependsOn + "\n"
+	}
+	return s
+}
+
+// stepBuild is the build and contract file of a step stem returning {step: label}.
+func stepBuild(stem, label string) map[string]string {
+	return map[string]string{
+		stem + ".mjs":           "export function handle(ctx, event) { return { step: '" + label + "', n: (event.data?.n ?? 0) + 1 }; }\n",
+		stem + ".contract.yaml": permissiveContract,
+	}
+}
+
+// runWorkflow applies a WorkflowRun of workflow and waits for it to succeed.
+func runWorkflow(t *testing.T, inst *devInstance, workflow, run string) *v1.WorkflowRun {
+	t.Helper()
+	ctx := context.Background()
+	_, err := inst.client.Apply(ctx, &v1.WorkflowRun{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflowRun.GVK().APIVersion(), Kind: v1.KindWorkflowRun},
+		ObjectMeta: v1.ObjectMeta{Name: v1.ObjectName(run), Namespace: "default", ResourceGroup: "dev"},
+		Spec:       v1.WorkflowRunSpec{Workflow: v1.ObjectName(workflow), Input: json.RawMessage(`{"n":1}`)},
+	})
+	require.NoError(t, err)
 	var got *v1.WorkflowRun
 	require.Eventually(t, func() bool {
-		obj, gerr := inst.client.Get(ctx, v1.KindWorkflowRun, "default", "run-01")
+		obj, gerr := inst.client.Get(ctx, v1.KindWorkflowRun, "default", v1.ObjectName(run))
 		if gerr != nil {
 			return false
 		}
 		got = obj.(*v1.WorkflowRun)
 		return got.Status.Phase == "Succeeded"
-	}, 40*time.Second, 100*time.Millisecond, "the DAG runs to Succeeded via real from-source step execution")
-
-	require.Equal(t, v1.StepPhase("Succeeded"), runStepPhase(got, "a"), "step a executed from source")
-	require.Equal(t, v1.StepPhase("Succeeded"), runStepPhase(got, "b"), "step b executed from source (after a)")
+	}, 40*time.Second, 100*time.Millisecond, "run %s succeeds", run)
+	return got
 }
 
-// TestIssue428_DevReloadsEditedWorkflow — ADR-0125 boot sequence ("watch files, re-apply on change"): an edit to
-// the workflow file re-applies the Workflow with no restart, and a step whose function is not running warns
-// that a restart is needed.
+// stepImage is the image step index of Workflow name reads.
+func stepImage(t *testing.T, inst *devInstance, name string, index int) string {
+	t.Helper()
+	obj, err := inst.client.Get(context.Background(), v1.KindWorkflow, "default", v1.ObjectName(name))
+	require.NoError(t, err)
+	return obj.(*v1.Workflow).Spec.Steps[index].Function.Image
+}
+
+// scenario: dev-workflow-steps — a Workflow with an image step tagged ingest and a ref step to a Function of the
+// folder: `<workflow>-<step>` runs ingest.mjs through the workflow materializer, the ref step runs that Function, and a
+// rebuild of ingest.mjs rolls the step to a new copy, the old one going once the new revision serves (Decision 7).
+func TestScenarioDevWorkflowSteps(t *testing.T) {
+	requireNode(t)
+	dir := devProject(t, merge(
+		map[string]string{"workflow.yaml": workflowDoc("pipeline", imageStep("a", "ingest", "")+
+			"    - name: b\n      function:\n        ref: greeter\n      dependsOn:\n        - a\n")},
+		stepBuild("ingest", "a"),
+		nodeFunction("greeter", "", "export function handle(ctx, event) { return { step: 'b', n: (event.data?.n ?? 0) + 1 }; }\n"),
+	))
+	inst := runDev(t, dir)
+	require.Equal(t, []string{"pipeline"}, inst.workflows)
+	require.Equal(t, []string{"greeter", "pipeline-a"}, inst.functions)
+	waitFuncsReady(t, inst, "greeter")
+	waitFuncsApplied(t, inst, "pipeline-a")
+
+	got := runWorkflow(t, inst, "pipeline", "run-01")
+	require.Equal(t, v1.StepPhase("Succeeded"), runStepPhase(got, "a"), "the image step ran its build")
+	require.Equal(t, v1.StepPhase("Succeeded"), runStepPhase(got, "b"), "the ref step ran the folder's Function")
+
+	first := stepImage(t, inst, "pipeline", 0)
+	require.True(t, strings.HasPrefix(first, "file://"), first)
+	writeProject(t, dir, map[string]string{"ingest.mjs": "export function handle() { return { step: 'a2' }; }\n"})
+	require.Eventually(t, func() bool { return stepImage(t, inst, "pipeline", 0) != first }, 20*time.Second, 100*time.Millisecond,
+		"a rebuild rolls the step to a new copy")
+	firstDir := filepath.Dir(strings.TrimPrefix(first, "file://"))
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(firstDir)
+		return os.IsNotExist(err)
+	}, 30*time.Second, 100*time.Millisecond, "the old copy goes once the step serves the new one")
+}
+
+// TestIssue428_DevReloadsEditedWorkflow — ADR-0247 Decision 8: an edit to the workflow file re-applies the Workflow
+// with no restart, and a step added after boot is not started: dev warns that it needs a restart.
 // scenario: funcdctl-dev-logs-like-daemon (ADR-0197) — the warning reaches funcdctl's output in NewLogger's text form.
 func TestIssue428_DevReloadsEditedWorkflow(t *testing.T) {
 	requireNode(t)
 	var logs lockedBuffer
-
-	const head = "apiVersion: funcd.io/v1alpha1\nkind: Workflow\nmetadata:\n  name: pipeline\n  namespace: default\nspec:\n  steps:\n"
-	step := func(name, stem, dependsOn string) string {
-		s := "    - name: " + name + "\n      function:\n        image: registry:" + stem + "\n"
-		if dependsOn != "" {
-			s += "      dependsOn:\n        - " + dependsOn + "\n"
-		}
-		return s
-	}
-	dir := devProject(t, map[string]string{
-		"workflow.yaml":       head + step("a", "stepa", ""),
-		"stepa.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
-		"stepa.mjs":           "export function handle() { return { step: 'a' }; }\n",
-		"stepc.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
-		"stepc.mjs":           "export function handle() { return { step: 'c' }; }\n",
-	})
-	inst, err := tryStartDevTo(t, filepath.Join(dir, "workflow.yaml"), &logs)
+	dir := devProject(t, merge(map[string]string{"workflow.yaml": workflowDoc("pipeline", imageStep("a", "stepa", ""))},
+		stepBuild("stepa", "a"), stepBuild("stepc", "c")))
+	inst, err := tryStartDevTo(t, dir, &logs)
 	require.NoError(t, err)
-	require.Equal(t, []string{"stepa"}, inst.functions)
+	require.Equal(t, []string{"pipeline-a"}, inst.functions)
 
-	edited := head + step("a", "stepa", "") + step("b", "stepa", "a") + step("c", "stepc", "b")
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "workflow.yaml"), []byte(edited), 0o600))
-	ctx := context.Background()
+	writeProject(t, dir, map[string]string{"workflow.yaml": workflowDoc("pipeline", imageStep("a", "stepa", "")+imageStep("c", "stepc", "a"))})
 	require.Eventually(t, func() bool {
-		obj, err := inst.client.Get(ctx, v1.KindWorkflow, "default", "pipeline")
-		if err != nil {
-			return false
-		}
-		steps := obj.(*v1.Workflow).Spec.Steps
-		return len(steps) == 3 && steps[1].Function.Ref == "stepa" && steps[2].Function.Ref == "stepc"
+		obj, err := inst.client.Get(context.Background(), v1.KindWorkflow, "default", "pipeline")
+		return err == nil && len(obj.(*v1.Workflow).Spec.Steps) == 2
 	}, 20*time.Second, 50*time.Millisecond, "the running dev session applies the edited Workflow")
-	require.Regexp(t, `(?m)^time=\S+ level=WARN msg="restart funcdctl dev to run a new workflow step function" function=stepc$`,
-		logs.String(), "a step whose function is not running warns that a restart is needed, in NewLogger's text form")
+	require.Eventually(t, func() bool {
+		return strings.Contains(logs.String(), `level=WARN msg="restart funcdctl dev to run a Workflow step added after it started" function=pipeline-c`)
+	}, 20*time.Second, 50*time.Millisecond, "a step added after boot warns that a restart is needed, in NewLogger's text form: %s", logs.String())
 }
 
-// TestIssue501_DevReloadDeletesRenamedWorkflowAndRemovedStep — ADR-0125 ("watch files, re-apply on change"): a
-// reload that renames the Workflow deletes the Workflow of the old name, and one that removes a step deletes the
-// step's Function, which an edit to its files no longer applies again.
+// TestIssue501_DevReloadDeletesRenamedWorkflowAndRemovedStep — ADR-0247 Decision 8: a reload that renames the Workflow
+// deletes the Workflow of the old name, and one that removes a step leaves no Function of it.
 func TestIssue501_DevReloadDeletesRenamedWorkflowAndRemovedStep(t *testing.T) {
 	requireNode(t)
-	head := func(name string) string {
-		return "apiVersion: funcd.io/v1alpha1\nkind: Workflow\nmetadata:\n  name: " + name + "\n  namespace: default\nspec:\n  steps:\n"
-	}
-	const stepA = "    - name: a\n      function:\n        image: registry:stepa\n"
-	const stepB = "    - name: b\n      function:\n        image: registry:stepb\n      dependsOn:\n        - a\n"
-	dir := devProject(t, map[string]string{
-		"workflow.yaml":       head("pipeline") + stepA + stepB,
-		"stepa.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
-		"stepa.mjs":           "export function handle() { return { step: 'a' }; }\n",
-		"stepb.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
-		"stepb.mjs":           "export function handle() { return { step: 'b' }; }\n",
-	})
-	inst := startDevPath(t, filepath.Join(dir, "workflow.yaml"))
+	dir := devProject(t, merge(map[string]string{"workflow.yaml": workflowDoc("pipeline", imageStep("a", "stepa", "")+imageStep("b", "stepb", "a"))},
+		stepBuild("stepa", "a"), stepBuild("stepb", "b")))
+	inst := runDev(t, dir)
 	ctx := context.Background()
 	gone := func(kind v1.Kind, name v1.ObjectName) bool {
 		_, err := inst.client.Get(ctx, kind, "default", name)
 		return fault.KindOf(err) == fault.NotFound
 	}
-	require.False(t, gone(v1.KindFunction, "stepb"))
+	waitFuncsApplied(t, inst, "pipeline-a", "pipeline-b")
 
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "workflow.yaml"), []byte(head("pipeline2")+stepA), 0o600))
-	require.Eventually(t, func() bool { return !gone(v1.KindWorkflow, "pipeline2") }, 20*time.Second, 50*time.Millisecond,
-		"the running dev session applies the renamed Workflow")
-	require.Eventually(t, func() bool { return gone(v1.KindWorkflow, "pipeline") && gone(v1.KindFunction, "stepb") },
-		20*time.Second, 50*time.Millisecond, "the reload deletes the Workflow of the old name and the Function of the removed step")
-	require.False(t, gone(v1.KindFunction, "stepa"))
-
-	// Each reload pass handles every function in turn, so once a second edit of stepa is applied, the pass that saw
-	// the edit of stepb has finished.
-	digest := func() string {
-		obj, err := inst.client.Get(ctx, v1.KindFunction, "default", "stepa")
-		if err != nil {
-			return ""
-		}
-		return obj.(*v1.Function).Spec.ImageDigest
-	}
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "stepb.mjs"), []byte("export function handle() { return { step: 'b2' }; }\n"), 0o600))
-	for _, src := range []string{"export function handle() { return { step: 'a2' }; }\n", "export function handle() { return { step: 'a33' }; }\n"} {
-		before := digest()
-		require.NotEmpty(t, before)
-		require.NoError(t, os.WriteFile(filepath.Join(dir, "stepa.mjs"), []byte(src), 0o600))
-		require.Eventually(t, func() bool { d := digest(); return d != "" && d != before }, 20*time.Second, 50*time.Millisecond,
-			"the reload applies the edit of stepa")
-	}
-	require.True(t, gone(v1.KindFunction, "stepb"), "an edit to the removed step's handler does not apply its Function again")
+	writeProject(t, dir, map[string]string{"workflow.yaml": workflowDoc("pipeline2", imageStep("a", "stepa", ""))})
+	require.Eventually(t, func() bool { return !gone(v1.KindWorkflow, "pipeline2") && gone(v1.KindWorkflow, "pipeline") },
+		20*time.Second, 50*time.Millisecond, "the reload applies the renamed Workflow and deletes the old one")
+	require.Eventually(t, func() bool { return gone(v1.KindFunction, "pipeline-b") }, 20*time.Second, 50*time.Millisecond,
+		"no Function of the removed step is left")
 }
 
 // runStepPhase returns a run's per-step phase from its mirrored status (or "" if absent).
@@ -194,247 +175,90 @@ func runStepPhase(run *v1.WorkflowRun, step string) v1.StepPhase {
 	return ""
 }
 
-// scenario: dev-workflow (fn-to-fn facet) — a directory of several `<stem>.funcdctl.yaml` single-file
-// functions runs ALL of them (Decision 9), and each carries its `spec.links` (Phase 3): the caller's
-// `context.invoke("<alias>", …)` resolves in-process via the UDS local API for a DECLARED link, while an
-// UNKNOWN alias is Forbidden (the ADR-0064/0075 default-deny, preserved in dev). Node-gated.
+// scenario: dev-runs-resources (fn-to-fn facet) — the folder's Functions run together, and a caller's
+// `context.invoke("<alias>", …)` resolves in-process for a declared link, while an undeclared alias is Forbidden (the
+// ADR-0064/0075 default-deny, preserved in dev).
 func TestScenarioDevFnToFnLinks(t *testing.T) {
 	requireNode(t)
-	dir := devProject(t, map[string]string{
-		"front.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" +
-			"bindings:\n  links:\n    - alias: greeter\n      target: greeter\n" +
-			permissiveContract,
-		// front invokes whichever alias the input names: "greeter" (declared → allowed) or an undeclared
-		// alias (default-deny → the invoke rejects, caught + reported).
-		"front.mjs": "export async function handle(ctx, event) {\n" +
-			"  try {\n" +
-			"    const reply = await ctx.invoke(event.data.target, { data: { name: event.data.name } });\n" +
-			"    return { ok: true, greeting: reply.greeting };\n" +
-			"  } catch (e) { return { ok: false, error: String(e) }; }\n" +
-			"}\n",
-		"greeter.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
-		"greeter.mjs":           "export function handle(ctx, event) { return { greeting: `Hello, ${event.data.name}!` }; }\n",
-	})
-
-	inst := startDevPath(t, dir)
-	require.ElementsMatch(t, []string{"front", "greeter"}, inst.functions,
-		"the dir's <stem>.funcdctl.yaml manifests each loaded as a function (Decision 9)")
+	dir := devProject(t, merge(
+		nodeFunction("front", "  bindings:\n    links:\n      - alias: greeter\n        target: greeter\n",
+			"export async function handle(ctx, event) {\n"+
+				"  try {\n"+
+				"    const reply = await ctx.invoke(event.data.target, { data: { name: event.data.name } });\n"+
+				"    return { ok: true, greeting: reply.greeting };\n"+
+				"  } catch (e) { return { ok: false, error: String(e) }; }\n"+
+				"}\n"),
+		nodeFunction("greeter", "", "export function handle(ctx, event) { return { greeting: `Hello, ${event.data.name}!` }; }\n"),
+	))
+	inst := runDev(t, dir)
+	require.ElementsMatch(t, []string{"front", "greeter"}, inst.functions)
 	waitFuncsReady(t, inst, "front", "greeter")
-
 	url := inst.gatewayURL + "/function/front"
 
-	// Declared link greeter → the in-process invoke succeeds and greeter's reply flows back.
 	resp, body := post(t, url, `{"data":{"target":"greeter","name":"ada"}}`)
-	require.Equal(t, 200, resp.StatusCode, "front invoked the declared link: %s", body)
-	require.Contains(t, body, `"ok":true`, "the declared link resolved: %s", body)
-	require.Contains(t, body, "Hello, ada!", "greeter's reply flowed back through the link")
+	require.Equal(t, 200, resp.StatusCode, body)
+	require.Contains(t, body, `"ok":true`, body)
+	require.Contains(t, body, "Hello, ada!")
 
-	// Undeclared alias → Forbidden (default-deny). The handler catches the rejection and reports it.
 	deny, denyBody := post(t, url, `{"data":{"target":"ghost","name":"ada"}}`)
-	require.Equal(t, 200, deny.StatusCode, "the handler caught the denied invoke: %s", denyBody)
-	require.Contains(t, denyBody, `"ok":false`, "the undeclared alias was denied: %s", denyBody)
+	require.Equal(t, 200, deny.StatusCode, denyBody)
+	require.Contains(t, denyBody, `"ok":false`, denyBody)
 	require.Contains(t, denyBody, "403", "an unknown link alias is Forbidden (default-deny): %s", denyBody)
 }
 
-// --- unit tests (no runtime; deterministic) ---
-
-const unitManifest = "runtime: nodejs22\nhandler: handle\ncontract:\n  input:\n    type: object\n  output:\n    type: object\n"
-
-// TestDetectWorkflow — a Workflow CRD file is detected; a funcdctl.yaml and a directory are not.
-func TestDetectWorkflow(t *testing.T) {
-	dir := t.TempDir()
-	wfPath := filepath.Join(dir, "workflow.yaml")
-	require.NoError(t, os.WriteFile(wfPath, []byte(
-		"apiVersion: funcd.io/v1alpha1\nkind: Workflow\nmetadata:\n  name: wf\nspec:\n  steps:\n    - name: a\n      builtin:\n        pass: \"x\"\n"), 0o600))
-	fnPath := filepath.Join(dir, "funcdctl.yaml")
-	require.NoError(t, os.WriteFile(fnPath, []byte(unitManifest), 0o600))
-
-	wf, isWf, err := detectWorkflow("op", wfPath)
+// Dev decodes each document as `funcdctl apply` does: a bare y/n key stays a string key (#63) and an unknown key is
+// refused, naming it, not dropped (#64, #317).
+func TestIssue317_DevDecodesDocumentsStrictly(t *testing.T) {
+	t.Parallel()
+	const steps = "    - name: a\n      builtin:\n        pass: \"x\"\n      params:\n        y: 1\n        n: 2\n"
+	f, err := loadDevFolder("test", devProject(t, map[string]string{"w.yaml": workflowDoc("w", steps)}))
 	require.NoError(t, err)
-	require.True(t, isWf, "kind: Workflow ⇒ detected as a workflow")
-	require.Equal(t, v1.ObjectName("wf"), wf.Name)
+	require.JSONEq(t, `{"y":1,"n":2}`, string(f.resources[0].obj.(*v1.Workflow).Spec.Steps[0].Params))
 
-	_, isWf, err = detectWorkflow("op", fnPath)
-	require.NoError(t, err)
-	require.False(t, isWf, "a funcdctl.yaml is not a workflow")
-
-	_, isWf, err = detectWorkflow("op", dir)
-	require.NoError(t, err)
-	require.False(t, isWf, "a directory is never a workflow")
-}
-
-// `funcdctl dev workflow.yaml` decodes the Workflow as `funcdctl apply` does: a bare y/n key stays a
-// string key (#63) and an unknown key is rejected, not dropped (#64).
-func TestIssue317_DevDecodesWorkflowStrictly(t *testing.T) {
-	dir := t.TempDir()
-	const head = "apiVersion: funcd.io/v1alpha1\nkind: Workflow\nmetadata:\n  name: w\nspec:\n"
-	okPath := filepath.Join(dir, "ok.yaml")
-	require.NoError(t, os.WriteFile(okPath, []byte(head+
-		"  steps:\n    - name: a\n      builtin:\n        pass: \"x\"\n      params:\n        y: 1\n        n: 2\n"), 0o600))
-	wf, isWf, err := detectWorkflow("op", okPath)
-	require.NoError(t, err)
-	require.True(t, isWf)
-	require.Len(t, wf.Spec.Steps, 1)
-	require.JSONEq(t, `{"y":1,"n":2}`, string(wf.Spec.Steps[0].Params))
-
-	bogusPath := filepath.Join(dir, "bogus.yaml")
-	require.NoError(t, os.WriteFile(bogusPath, []byte(head+
-		"  bogus: 1\n  steps:\n    - name: a\n      builtin:\n        pass: \"x\"\n"), 0o600))
-	_, _, err = detectWorkflow("op", bogusPath)
+	_, err = loadDevFolder("test", devProject(t, map[string]string{"w.yaml": strings.Replace(workflowDoc("w", steps), "spec:\n", "spec:\n  bogus: 1\n", 1)}))
 	require.ErrorContains(t, err, "bogus")
 }
 
-// TestTagStem — the step-image tag stem is the segment after the last ':' (registry:ingest → ingest);
-// a tag-less or digest-pinned ref has no stem.
+// TestTagStem — the step-image tag stem is the segment after the last ':' (registry:ingest → ingest); a tag-less or
+// digest-pinned ref names no build.
 func TestTagStem(t *testing.T) {
-	cases := []struct {
+	for _, c := range []struct {
 		image, want string
 		ok          bool
 	}{
 		{"oci-layout:///mnt/funcd-deps/registry:ingest", "ingest", true},
 		{"registry:score", "score", true},
 		{"ghcr.io/acme/fn:v1", "v1", true},
-		{"registry", "", false},           // no tag
-		{"repo@sha256:abcdef", "", false}, // digest, not a tag stem
-	}
-	for _, c := range cases {
+		{"registry", "", false},
+		{"repo@sha256:abcdef", "", false},
+	} {
 		got, err := tagStem("op", c.image)
 		if c.ok {
 			require.NoError(t, err, "%s", c.image)
 			require.Equal(t, c.want, got, "%s", c.image)
 		} else {
-			require.Error(t, err, "%s should have no resolvable stem", c.image)
+			require.ErrorContains(t, err, "naming a build", "%s", c.image)
 		}
 	}
 }
 
-// TestResolveDevFunctionsEnumeratesAllStems — a dir of <stem>.funcdctl.yaml manifests loads ALL of them
-// (Decision 9), each an isolated single-file function named by its stem.
-func TestResolveDevFunctionsEnumeratesAllStems(t *testing.T) {
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "front.funcdctl.yaml"), []byte(unitManifest), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "greeter.funcdctl.yaml"), []byte(unitManifest), 0o600))
-
-	pfs, err := resolveDevFunctions("op", dir, "", "")
-	require.NoError(t, err)
-	require.Len(t, pfs, 2)
-	names := []string{string(pfs[0].name), string(pfs[1].name)}
-	require.ElementsMatch(t, []string{"front", "greeter"}, names)
-	for _, pf := range pfs {
-		require.True(t, pf.isolate, "a multi-function stem manifest is isolated in its own bundle")
-	}
-	require.Equal(t, "front.mjs", pfs[0].entry, "entry defaults to <stem>.mjs (nodejs)")
-}
-
-// TestResolveDevFunctionsSelectsByStem — `funcdctl dev <stem>` selects the one manifest whose stem matches.
-func TestResolveDevFunctionsSelectsByStem(t *testing.T) {
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "front.funcdctl.yaml"), []byte(unitManifest), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "greeter.funcdctl.yaml"), []byte(unitManifest), 0o600))
-
-	pfs, err := resolveDevFunctions("op", filepath.Join(dir, "front"), "", "") // a non-existent path ⇒ a stem selector
-	require.NoError(t, err)
-	require.Len(t, pfs, 1)
-	require.Equal(t, v1.ObjectName("front"), pfs[0].name)
-	require.True(t, pfs[0].isolate)
-}
-
-// TestResolveDevFunctionsGenericInPlace — a dir with only the generic funcdctl.yaml is the single in-place
-// bundle named after its dir (the Phase-1/2 path, unchanged).
-func TestResolveDevFunctionsGenericInPlace(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "myfunc")
-	require.NoError(t, os.MkdirAll(dir, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "funcdctl.yaml"), []byte(unitManifest), 0o600))
-
-	pfs, err := resolveDevFunctions("op", dir, "", "")
-	require.NoError(t, err)
-	require.Len(t, pfs, 1)
-	require.Equal(t, v1.ObjectName("myfunc"), pfs[0].name, "the generic bundle takes its dir's name")
-	require.False(t, pfs[0].isolate, "the generic bundle runs in place")
-	require.Equal(t, "handler.mjs", pfs[0].entry)
-}
-
-// TestScenario_dev_still_runs covers scenario: dev-still-runs (ADR-0246) — a funcdctl.yaml project's bindings reach
-// the synthesized Function under spec.bindings, links included, so context.invoke resolves (Phase 3 restored what
-// Phase 1 dropped); TestScenarioDevFnToFnLinks runs such a project end to end.
-func TestScenario_dev_still_runs(t *testing.T) {
-	b := sdk.Bindings{
-		KV:       []v1.FunctionKV{{Alias: "counters", Store: "counters", Table: "counts"}},
-		Blob:     []v1.FunctionBlob{{Alias: "files", Bucket: "files", Prefix: "uploads"}},
-		SQL:      []v1.FunctionSQL{{Alias: "db", Database: "todo-db"}},
-		Catalogs: []v1.FunctionCatalog{{Alias: "lake", Catalog: "lake"}},
-		Links:    []v1.FunctionLink{{Alias: "greeter", Target: "greeter"}},
-		Config:   []v1.ObjectName{"settings"},
-		Secrets:  []v1.ObjectName{"api-keys"},
-	}
-	m := &sdk.Manifest{Runtime: "nodejs22", Handler: "handle", Bindings: b}
-	fn := synthesizeFunction(plannedFunc{m: m, name: "front"}, "/tmp/front.mjs")
-	require.Equal(t, v1.FunctionBindings{KV: b.KV, Blob: b.Blob, SQL: b.SQL, Catalog: b.Catalogs, Links: b.Links,
-		Config: b.Config, Secret: b.Secrets}, fn.Spec.Bindings, "every funcdctl.yaml binding lands under spec.bindings")
-	require.Equal(t, "file:///tmp/front.mjs", string(fn.Spec.Image))
-	require.Equal(t, 1, fn.Spec.Scaling.MinReplicas, "MinReplicas=1 so it serves immediately")
-}
-
-// ADR-0248's temporary workaround: dev declares by ref what it creates for a Function's bindings, and each Secret with
-// the keys dev gives it, so binding-declared admits the Function; a Secret dev gives no key stays undeclared.
-func TestDevDeclaresRootEntries(t *testing.T) {
-	m := &sdk.Manifest{Runtime: "nodejs22", Handler: "handle", Bindings: sdk.Bindings{
-		KV:       []v1.FunctionKV{{Alias: "a", Store: "counters", Table: "a"}, {Alias: "b", Store: "counters", Table: "b"}},
-		Blob:     []v1.FunctionBlob{{Alias: "files", Bucket: "files", Prefix: "uploads"}},
-		SQL:      []v1.FunctionSQL{{Alias: "db", Database: "todo-db"}},
-		Catalogs: []v1.FunctionCatalog{{Alias: "lake", Catalog: "lake"}},
-		Config:   []v1.ObjectName{"settings"},
-		Secrets:  []v1.ObjectName{"api-keys", "empty"},
-	}}
-	m.Dev.Secrets = map[string]map[string]string{"api-keys": {"STRIPE_KEY": "${STRIPE_KEY}", "A_KEY": "x"}}
-	s := synthesizeFunction(plannedFunc{m: m, name: "front"}, "/tmp/front.mjs").Spec
-	require.Equal(t, []v1.KVStoreEntry{{Ref: "counters"}}, s.KVStores, "one entry per store")
-	require.Equal(t, []v1.BucketEntry{{Ref: "files"}}, s.Buckets)
-	require.Equal(t, []v1.SQLDatabaseEntry{{Ref: "todo-db"}}, s.SQLDatabases)
-	require.Equal(t, []v1.CatalogEntry{{Ref: "lake"}}, s.CatalogServices)
-	require.Equal(t, []v1.ConfigMapEntry{{Ref: "settings"}}, s.ConfigMaps)
-	require.Equal(t, []v1.SecretDeclaration{{Name: "api-keys", Keys: []string{"A_KEY", "STRIPE_KEY"}}}, s.SecretDeclarations)
-}
-
-// TestResolveDevFunctionsNameFlagOverridesGeneric — --name names the single generic function (the
-// manifest-stem-else-flag rule); a <stem>.funcdctl.yaml still names by stem and ignores --name.
-func TestResolveDevFunctionsNameFlagOverridesGeneric(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "myfunc")
-	require.NoError(t, os.MkdirAll(dir, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "funcdctl.yaml"), []byte(unitManifest), 0o600))
-
-	pfs, err := resolveDevFunctions("op", dir, "", "billing")
-	require.NoError(t, err)
-	require.Len(t, pfs, 1)
-	require.Equal(t, v1.ObjectName("billing"), pfs[0].name, "--name overrides the generic function name")
-}
-
-// TestResolveDevFunctionsGenericDotResolvesToDir — running `funcdctl dev` inside the dir (path ".")
-// names the generic function after the REAL directory, not the degenerate basename of "." (the
-// abs-resolve fix; previously this yielded the fallback "dev").
-func TestResolveDevFunctionsGenericDotResolvesToDir(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "orders")
-	require.NoError(t, os.MkdirAll(dir, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "funcdctl.yaml"), []byte(unitManifest), 0o600))
-	t.Chdir(dir)
-
-	pfs, err := resolveDevFunctions("op", ".", "", "")
-	require.NoError(t, err)
-	require.Len(t, pfs, 1)
-	require.Equal(t, v1.ObjectName("orders"), pfs[0].name, `"." resolves to the real dir name, not "dev"`)
-}
-
-// scenario: http-validate — funcdctl dev serves an http Function's app: the synthesized Function carries protocol:
-// http and its bundle gets no contract, one left from an earlier run removed (ADR-0243 Decision 7).
+// scenario: http-validate — funcdctl dev serves an http Function: its contract file says http, so its bundle gets no
+// contract and one left from an earlier run is removed (ADR-0243 Decision 7).
 func TestDevServesAnHTTPFunction(t *testing.T) {
-	m := &sdk.Manifest{Runtime: "nodejs22", Handler: "handle", Protocol: v1.ProtocolHTTP}
-	pf := plannedFunc{m: m, name: "api"}
-	require.Equal(t, v1.ProtocolHTTP, synthesizeFunction(pf, "/tmp/api.mjs").Spec.Protocol)
-	blob, err := devContract(m)
+	t.Parallel()
+	f, err := loadDevFolder("test", devProject(t, map[string]string{
+		"api.yaml":          fnDoc("api", "nodejs22", "  protocol: http\n"),
+		"api.mjs":           "export const handle = {};\n",
+		"api.contract.yaml": "runtime: nodejs22\nprotocol: http\n",
+	}))
+	require.NoError(t, err)
+	b := f.functions[0].build
+	blob, err := b.contractBlob()
 	require.NoError(t, err)
 	require.Nil(t, blob)
 	bundle := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(bundle, devContractFile), []byte(`{}`), 0o600))
-	require.NoError(t, deliverBundle("op", pf, bundle, blob))
+	require.NoError(t, deliverBuild("op", b, bundle, f.dir))
 	require.NoFileExists(t, filepath.Join(bundle, devContractFile))
+	require.FileExists(t, filepath.Join(bundle, "api.mjs"))
 }

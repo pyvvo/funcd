@@ -3,10 +3,12 @@ package sdk_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/contract"
 	"github.com/pyvvo/funcd/pkg/sdk"
@@ -181,4 +183,20 @@ func TestIssue498_GenerateTypesMapsNullableTypeList(t *testing.T) {
 			require.Contains(t, string(files[tc.file]), w, runtime)
 		}
 	}
+}
+
+// Issues #298, #416 and #699 for the contract file: it decodes as funcdctl.yaml did, so a plain y/on/no key keeps its
+// text (a contract property is user-named), a contract side keeps its numbers, and an unknown key is a fault.Invalid
+// naming it rather than a silent drop.
+func TestContractFileKeepsKeyTextAndRejectsUnknownKeys(t *testing.T) {
+	t.Parallel()
+	const body = "runtime: python314\ninput:\n  type: object\n  properties:\n    y:\n      type: number\n      maximum: 1.10\n" +
+		"output:\n  type: \"null\"\n"
+	c, _, err := sdk.LoadContract(writeFiles(t, map[string]string{"f.contract.yaml": body}), "f")
+	require.NoError(t, err)
+	require.JSONEq(t, `{"type":"object","properties":{"y":{"type":"number","maximum":1.1}}}`, string(c.Input))
+
+	_, _, err = sdk.LoadContract(writeFiles(t, map[string]string{"f.contract.yaml": strings.Replace(body, "runtime:", "runtme:", 1)}), "f")
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	require.Contains(t, err.Error(), "runtme")
 }

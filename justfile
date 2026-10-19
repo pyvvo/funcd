@@ -554,11 +554,11 @@ example-kv:
 # + S3 (+ catalog), zero hand-written CRDs, real contract enforcement. The embedded shims are already
 # built into funcdctl, so no push. <project> is `js/<name>` / `python/<name>` or a bare unique example name
 # from the pinned language modules (run from a writable copy under .modcopy/, ADR-0141), or a path (used
-# as-is, e.g. a sibling clone); a workflow example (has workflow.yaml) runs its DAG.
+# as-is, e.g. a sibling clone); dev runs every resource file of the folder (ADR-0247), a Workflow's DAG included.
 # Extra flags pass through. Examples:
 #   just dev-example catalog-quack            # the DuckLake/Quack catalog example (python)
 #   just dev-example js/kv-counter --persist  # persist KV/blob across runs (qualify the ambiguous name)
-#   just dev-example workflow                 # runs funcd-typescript's examples/workflow/workflow.yaml as a DAG
+#   just dev-example workflow                 # runs funcd-typescript's examples/workflow as a DAG
 # Reproduce any bundled example locally with `funcdctl dev` — build, boot, serve from source.
 # Ports are args (default gateway 3005 / S3 3006 / control-plane 3007) so the URLs are reproducible and the
 # `seed-releves`/`run-releve` recipes reach the control plane out of the box: `just dev-example catalog-quack`
@@ -569,8 +569,7 @@ dev-example project gport="3005" s3port="3006" cport="3007" *args:
     set -euo pipefail
     root="$PWD"
     dir="$(scripts/example-copy.sh "{{project}}")"
-    target="$dir"; [ -f "$dir/workflow.yaml" ] && target="$dir/workflow.yaml"
-    echo "▶ example: $target"
+    echo "▶ example: $dir"
     # A catalog example needs the real engine embedded — fetch once (skip-worktree'd so it never dirties the tree).
     if grep -rql 'catalogs:' "$dir" --include='*.yaml' 2>/dev/null && [ "$(wc -c < internal/catalog/embedengine/engine.tar.gz)" -lt 4096 ]; then
       echo "▶ fetching the DuckDB+Quack catalog engine for $(go env GOOS)/$(go env GOARCH) (once) …"
@@ -578,7 +577,7 @@ dev-example project gport="3005" s3port="3006" cport="3007" *args:
       scripts/fetch-catalog-engine.sh "$(go env GOOS)" "$(go env GOARCH)"
     fi
     # A SQL binding needs the real SQL engine embedded (ADR-0237) — build it once, skip-worktree'd as well.
-    if grep -rqlE '^  sql:' "$dir" --include='*funcdctl.yaml' 2>/dev/null && [ "$(wc -c < internal/sql/embedengine/rqlited.gz)" -lt 4096 ]; then
+    if grep -qlE '^  sql:' "$dir"/*.yaml 2>/dev/null && [ "$(wc -c < internal/sql/embedengine/rqlited.gz)" -lt 4096 ]; then
       echo "▶ building the SQL engine for $(go env GOOS)/$(go env GOARCH) (once) …"
       git update-index --skip-worktree internal/sql/embedengine/rqlited.gz 2>/dev/null || true
       scripts/build-sql-engine.sh "$(go env GOOS)" "$(go env GOARCH)"
@@ -587,14 +586,12 @@ dev-example project gport="3005" s3port="3006" cport="3007" *args:
     echo "▶ building funcdctl (-tags dev) …"
     go build -tags dev -o dist/funcdctl-dev ./cmd/funcdctl
     # Fixed ports (args, default 3005/3006/3007) so the URLs are reproducible run-to-run and the seed/run
-    # recipes reach the control plane without extra flags.
-    # Launch FROM the example dir: the manifest's dev.backends are CWD-relative (file://.funcd-dev/blob),
-    # so running here lands .funcd-dev BESIDE the example copy (co-located with the manifests it belongs
-    # to) instead of at the repo root. Build/fetch above stay repo-root-relative.
-    if [ "$target" = "$dir" ]; then rel="."; else rel="$(basename "$target")"; fi
-    echo "▶ (cd $dir) funcdctl dev $rel --gport {{gport}} --s3port {{s3port}} --cport {{cport}} {{args}}"
+    # recipes reach the control plane without extra flags. Launched from the example dir, so --persist's default
+    # .funcd-dev lands beside the example copy; a python example runs under uv, which puts its virtualenv first.
+    run=(); [ -f "$dir/pyproject.toml" ] && run=(uv run)
+    echo "▶ (cd $dir) ${run[*]} funcdctl dev . --gport {{gport}} --s3port {{s3port}} --cport {{cport}} {{args}}"
     cd "$dir"
-    exec "$root/dist/funcdctl-dev" dev "$rel" --gport {{gport}} --s3port {{s3port}} --cport {{cport}} {{args}}
+    exec ${run[@]+"${run[@]}"} "$root/dist/funcdctl-dev" dev . --gport {{gport}} --s3port {{s3port}} --cport {{cport}} {{args}}
 
 # Flags pass through to landing/generate_synthetic.py; output lands in the example copy's landing/
 # (.modcopy/funcd-python/examples/releve-lakehouse/landing/) as synthetic-releve-*.pdf. Examples:
@@ -620,7 +617,7 @@ seed-releves s3port="3006": (gen-releve "--start" "2025-01" "--end" "2026-01")
     dir="$(scripts/example-copy.sh python/releve-lakehouse)"
     bin=dist/funcdctl-dev
     [ -x "$bin" ] || { echo "build the dev binary first: just dev-example releve-lakehouse" >&2; exit 1; }
-    eval "$("$bin" dev "$dir/workflow.yaml" --s3port {{s3port}} --print-env)"   # load the dev S3 creds (no boot)
+    eval "$("$bin" dev "$dir" --s3port {{s3port}} --print-env)"   # load the dev S3 creds (no boot)
     export FUNCD_SERVER="${FUNCD_SERVER:-http://127.0.0.1:3007}" FUNCD_TOKEN="${FUNCD_TOKEN:-funcd-dev-token}"
     echo "▶ pushing releves → s3://releves/landing/"
     aws s3 sync "$dir/landing/" s3://releves/landing/ --exclude '*' --include 'synthetic-releve-*.pdf'
@@ -645,7 +642,7 @@ run-releve s3port="3006":
     dir="$(scripts/example-copy.sh python/releve-lakehouse)"
     bin=dist/funcdctl-dev
     [ -x "$bin" ] || { echo "build the dev binary first: just dev-example releve-lakehouse" >&2; exit 1; }
-    eval "$("$bin" dev "$dir/workflow.yaml" --s3port {{s3port}} --print-env)"   # load the dev S3 creds (no boot)
+    eval "$("$bin" dev "$dir" --s3port {{s3port}} --print-env)"   # load the dev S3 creds (no boot)
     export FUNCD_SERVER="${FUNCD_SERVER:-http://127.0.0.1:3007}" FUNCD_TOKEN="${FUNCD_TOKEN:-funcd-dev-token}"
     echo "▶ funcdctl workflow run releve-pipeline   (server-generated name; no input — extract processes all of landing/)"
     run=$("$bin" workflow run releve-pipeline | sed -n 's|.*WorkflowRun/||p')   # server assigns releve-pipeline-<id>

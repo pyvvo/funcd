@@ -47,7 +47,7 @@ func runDevChild(t *testing.T) bool {
 		return false
 	}
 	cfg, dir := crashConfig(spec)
-	_, err := (&cli{out: io.Discard}).startDev(context.Background(), dir, "", cfg)
+	_, err := (&cli{out: io.Discard}).startDev(context.Background(), dir, cfg)
 	require.NoError(t, err)
 	select {}
 }
@@ -83,10 +83,7 @@ func reapAtCleanup(t *testing.T, stateDir string) {
 // worker is reaped and the new run's replica serves. It returns the project dir.
 func devRestartReaps(t *testing.T, mode, root string) string {
 	requireRuntime(t)
-	dir := devProject(t, map[string]string{
-		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
-		"handler.mjs":   "export function handle() { return { pid: process.pid }; }\n",
-	})
+	dir := devProject(t, nodeFunction("api", "", "export function handle() { return { pid: process.pid }; }\n"))
 	spec := mode + "\n" + root + "\n" + dir
 	cfg, _ := crashConfig(spec)
 	state, err := devStateDir(cfg, dir)
@@ -104,7 +101,7 @@ func devRestartReaps(t *testing.T, mode, root string) string {
 	require.True(t, procreg.Alive(old[0]), "the killed run left its worker running")
 
 	ctx, cancel := context.WithCancel(context.Background())
-	inst, err := (&cli{out: io.Discard}).startDev(ctx, dir, "", cfg)
+	inst, err := (&cli{out: io.Discard}).startDev(ctx, dir, cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { cancel(); _ = inst.stop() })
 	require.False(t, procreg.Alive(old[0]), "the first run's worker survived the restart")
@@ -188,10 +185,7 @@ func TestIssue700_DevHangupStopsWorkers(t *testing.T) {
 		return
 	}
 	requireRuntime(t)
-	dir := devProject(t, map[string]string{
-		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
-		"handler.mjs":   "export function handle() { return {}; }\n",
-	})
+	dir := devProject(t, nodeFunction("api", "", "export function handle() { return {}; }\n"))
 	persistTo, err := os.MkdirTemp("", "funcd")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(persistTo) })

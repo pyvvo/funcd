@@ -5,10 +5,8 @@ package main
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"io/fs"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -41,12 +39,24 @@ import (
 // handler these lanes declare, so it skips exactly when startup finds no node interpreter.
 func requireRuntime(t *testing.T) {
 	t.Helper()
-	_, cleanup, err := devShimOptions(context.Background(), "requireRuntime", sdk.Dev{}, "", false, true)
+	_, cleanup, err := devShimOptions(context.Background(), "requireRuntime", false, true)
 	if fault.KindOf(err) == fault.NotFound {
 		t.Skipf("funcdctl dev needs a runtime shim to boot: %v", err)
 	}
 	require.NoError(t, err)
 	cleanup()
+}
+
+// okBuild is a build that answers every call.
+const okBuild = "export function handle() { return { ok: true }; }\n"
+
+// bucketDoc is Bucket name with one prefix per name, each owned by owner.
+func bucketDoc(name, owner string, prefixes ...string) string {
+	s := "apiVersion: funcd.io/v1alpha1\nkind: Bucket\nmetadata:\n  name: " + name + "\nspec:\n  prefixes:\n"
+	for _, p := range prefixes {
+		s += "    - name: " + p + "\n      owner: " + owner + "\n"
+	}
+	return s
 }
 
 // Issue #431: on a host with no node and a python3 that cannot load the shim, funcdctl dev finds no
@@ -60,10 +70,7 @@ func TestIssue431_RequireRuntimeSkipsWhenPythonCannotLoadShim(t *testing.T) {
 	t.Setenv("FUNCD_PYTHON", "")
 
 	ctx, cancel := context.WithCancel(context.Background())
-	inst, err := (&cli{out: io.Discard}).startDev(ctx, devProject(t, map[string]string{
-		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
-		"handler.mjs":   "export function handle() { return {}; }\n",
-	}), "", devConfig{cacheDir: t.TempDir()})
+	inst, err := (&cli{out: io.Discard}).startDev(ctx, devProject(t, nodeFunction("api", "", okBuild)), devConfig{cacheDir: t.TempDir()})
 	t.Cleanup(func() {
 		cancel()
 		if inst != nil {
@@ -107,13 +114,10 @@ func TestIssue432_DevFailsWhenS3PortIsTaken(t *testing.T) {
 	taken, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = taken.Close() })
-	dir := devProject(t, map[string]string{
-		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
-		"handler.mjs":   "export function handle() { return { ok: true }; }\n",
-	})
+	dir := devProject(t, nodeFunction("api", "", okBuild))
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	inst, err := (&cli{out: io.Discard}).startDev(ctx, dir, "", devConfig{s3port: taken.Addr().(*net.TCPAddr).Port, cacheDir: t.TempDir()})
+	inst, err := (&cli{out: io.Discard}).startDev(ctx, dir, devConfig{s3port: taken.Addr().(*net.TCPAddr).Port, cacheDir: t.TempDir()})
 	if err == nil {
 		cancel()
 		_ = inst.stop()
@@ -137,13 +141,10 @@ func TestIssue627_DevRepicksTakenS3Port(t *testing.T) {
 		}
 		return freeLocalAddr()
 	}}
-	dir := devProject(t, map[string]string{
-		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
-		"handler.mjs":   "export function handle() { return { ok: true }; }\n",
-	})
+	dir := devProject(t, nodeFunction("api", "", okBuild))
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	inst, err := (&cli{out: io.Discard}).startDev(ctx, dir, "", cfg)
+	inst, err := (&cli{out: io.Discard}).startDev(ctx, dir, cfg)
 	require.NoError(t, err, "the boot starts again when its picked S3 port is taken")
 	t.Cleanup(func() { cancel(); _ = inst.stop() })
 	require.Equal(t, 2, picks, "the boot picked a fresh port once the first was taken")
@@ -157,16 +158,12 @@ func TestIssue627_DevRepicksTakenS3Port(t *testing.T) {
 // the same endpoint (GET + `aws s3 ls`) with the printed dev creds — the same S3 surface prod exposes.
 func TestScenarioDevInspectBlobViaS3(t *testing.T) {
 	requireRuntime(t)
-	dir := devProject(t, map[string]string{
-		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" +
-			"bindings:\n  blob:\n    - alias: bronze\n      bucket: releves\n      prefix: bronze\n" +
-			permissiveContract,
-		"handler.mjs": "export function handle() { return { ok: true }; }\n",
-	})
+	dir := devProject(t, merge(nodeFunction("api", "  buckets:\n    - ref: releves\n"+
+		"  bindings:\n    blob:\n      - alias: bronze\n        bucket: releves\n        prefix: bronze\n", okBuild),
+		map[string]string{"releves.yaml": bucketDoc("releves", "api", "bronze")}))
 	inst := runDev(t, dir)
-	// startDev applied the Function (spec.blob binding = the S3 grant) + the Bucket (prefix owned by the
-	// function) synchronously, so the PEP authorizes the dev keypair immediately — no need to wait for the
-	// worker to reach Ready (this lane never invokes the handler).
+	// startDev applied the Function (its blob binding is the S3 grant) and the Bucket synchronously, so the PEP
+	// authorizes the dev keypair at once; this lane never invokes the handler.
 	require.NotEmpty(t, inst.s3Endpoint, "the S3 frontend endpoint is printed")
 	require.NotEmpty(t, inst.s3AccessKey, "a dev S3 keypair is minted")
 
@@ -205,22 +202,15 @@ func TestScenarioDevInspectBlobViaS3(t *testing.T) {
 func TestScenarioDevPersistSurvivesRestart(t *testing.T) {
 	requireRuntime(t)
 	root := t.TempDir()
-	dir := devProject(t, map[string]string{
-		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" +
-			"bindings:\n" +
-			"  kv:\n    - alias: cache\n      store: cache-kv\n      table: entries\n" +
-			"  blob:\n    - alias: bronze\n      bucket: releves\n      prefix: bronze\n" +
-			permissiveContract,
-		"handler.mjs": "export function handle() { return { ok: true }; }\n",
-	})
+	dir := devProject(t, nodeFunction("api", "  kv:\n    - name: cache-kv\n      tables:\n        - name: entries\n"+
+		"  bindings:\n    kv:\n      - alias: cache\n        store: cache-kv\n        table: entries\n", okBuild))
 	ctx := context.Background()
 	const kvKey, blobKey = "greeting", "persist/probe.bin"
 	kvVal, blobVal := []byte("bonjour"), []byte("durable-rows")
 
-	// Boot 1 — persist, write state, stop.
 	a := &cli{out: io.Discard}
 	ctx1, cancel1 := context.WithCancel(ctx)
-	inst1, err := a.startDev(ctx1, dir, "", devConfig{persist: true, persistTo: root})
+	inst1, err := a.startDev(ctx1, dir, devConfig{persist: true, persistTo: root})
 	require.NoError(t, err)
 	require.NotNil(t, inst1.kv, "--persist composes a durable KV driver")
 	require.NotNil(t, inst1.blob, "--persist composes a durable blob driver")
@@ -229,14 +219,12 @@ func TestScenarioDevPersistSurvivesRestart(t *testing.T) {
 	cancel1()
 	require.NoError(t, inst1.stop())
 
-	// The per-service subdirs are on disk (store-per-service layout, Decision 7).
 	require.DirExists(t, filepath.Join(root, "metastore"))
 	require.DirExists(t, filepath.Join(root, "kv"))
 	require.DirExists(t, filepath.Join(root, "blob"))
 
-	// Boot 2 — same dir; the state must still be there (no re-seed).
 	ctx2, cancel2 := context.WithCancel(ctx)
-	inst2, err := a.startDev(ctx2, dir, "", devConfig{persist: true, persistTo: root})
+	inst2, err := a.startDev(ctx2, dir, devConfig{persist: true, persistTo: root})
 	require.NoError(t, err)
 	t.Cleanup(func() { cancel2(); _ = inst2.stop() })
 
@@ -250,28 +238,21 @@ func TestScenarioDevPersistSurvivesRestart(t *testing.T) {
 	require.Equal(t, blobVal, gotBlob)
 }
 
-// Issue #1053: a function that dev runs from its own bundle (a <stem>.funcdctl.yaml) serves again after each
-// --persist restart over the same state, and keeps its KV data, also when a restart moves it in place (main set) and
-// the serving Revision still names the bundle. Each run used to copy the handler into a new temp dir and remove it
-// on stop, so the restart's rollout failed on the serving Revision's deleted artifact.
-func TestIssue1053_PersistRestartServesAnIsolatedFunction(t *testing.T) {
+// Issue #1053: a function dev runs from its private bundle serves again after each --persist restart over the same
+// state, and keeps its KV data. Each run used to copy the build into a new temp dir and remove it on stop, so the
+// restart's rollout failed on the serving Revision's deleted artifact.
+func TestIssue1053_PersistRestartServesAFunction(t *testing.T) {
 	requireRuntime(t)
 	root := t.TempDir()
-	const manifest = "runtime: nodejs22\nhandler: handle\n" +
-		"bindings:\n  kv:\n    - alias: counts\n      store: counts-kv\n      table: counts\n" + permissiveContract
-	dir := devProject(t, map[string]string{
-		"api.funcdctl.yaml": manifest,
-		"api.mjs": "export async function handle(ctx) {\n" +
-			"  const n = Number((await ctx.kv.getText('counts', 'n')) ?? 0) + 1;\n" +
-			"  await ctx.kv.put('counts', 'n', String(n));\n  return { n };\n}\n",
-	})
+	dir := devProject(t, nodeFunction("api", "  kv:\n    - name: counts-kv\n      tables:\n        - name: counts\n"+
+		"  bindings:\n    kv:\n      - alias: counts\n        store: counts-kv\n        table: counts\n",
+		"export async function handle(ctx) {\n"+
+			"  const n = Number((await ctx.kv.getText('counts', 'n')) ?? 0) + 1;\n"+
+			"  await ctx.kv.put('counts', 'n', String(n));\n  return { n };\n}\n"))
 	a := &cli{out: io.Discard}
-	for boot := 1; boot <= 3; boot++ {
-		if boot == 3 {
-			require.NoError(t, os.WriteFile(filepath.Join(dir, "api.funcdctl.yaml"), []byte("main: api.mjs\n"+manifest), 0o600))
-		}
+	for boot := 1; boot <= 2; boot++ {
 		ctx, cancel := context.WithCancel(context.Background())
-		inst, err := a.startDev(ctx, dir, "", devConfig{persist: true, persistTo: root})
+		inst, err := a.startDev(ctx, dir, devConfig{persist: true, persistTo: root})
 		require.NoError(t, err)
 		require.Equal(t, boot, addNote(t, inst), "boot %d continues the count the boots before it left", boot)
 		cancel()
@@ -279,28 +260,19 @@ func TestIssue1053_PersistRestartServesAnIsolatedFunction(t *testing.T) {
 	}
 }
 
-// Issue #1053: an in-place function keeps its ADR-0123 contract across a --persist restart. The platform starts the
-// stored replica as soon as it runs, and the contract that the last stop removed must be back by then: dev delivers
-// it before the platform starts. The files in assets/ make the walk that fingerprints the source long enough to show
-// the order.
+// Issue #1053: a function keeps its contract across a --persist restart. The platform starts the stored replica as
+// soon as it runs, and the contract that the last stop removed must be back by then: dev delivers it before the
+// platform starts.
 func TestIssue1053_PersistRestartKeepsTheContract(t *testing.T) {
 	requireRuntime(t)
 	root := t.TempDir()
-	dir := devProject(t, map[string]string{
-		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\ncontract:\n" +
-			"  input:\n    type: object\n    additionalProperties: false\n    properties:\n      name:\n        type: string\n" +
-			"    required:\n      - name\n" +
-			"  output:\n    type: object\n    additionalProperties: false\n    properties:\n      ok:\n        type: boolean\n" +
-			"    required:\n      - ok\n",
-		"handler.mjs": "export function handle() { return { ok: true }; }\n",
-	})
-	assets := filepath.Join(dir, "assets")
-	require.NoError(t, os.Mkdir(assets, 0o700))
-	for i := range 2000 {
-		require.NoError(t, os.WriteFile(filepath.Join(assets, fmt.Sprintf("a%d.txt", i)), nil, 0o600))
-	}
+	files := nodeFunction("api", "", okBuild)
+	files["api.contract.yaml"] = "runtime: nodejs22\ninput:\n" +
+		"  type: object\n  additionalProperties: false\n  properties:\n    name:\n      type: string\n  required:\n    - name\n" +
+		"output:\n  type: object\n  additionalProperties: false\n  properties:\n    ok:\n      type: boolean\n  required:\n    - ok\n"
+	dir := devProject(t, files)
 	call := func(inst *devInstance, body string) (int, error) {
-		resp, err := http.Post(inst.gatewayURL+"/function/"+inst.functions[0], "application/json", strings.NewReader(body))
+		resp, err := http.Post(inst.gatewayURL+"/function/api", "application/json", strings.NewReader(body))
 		if err != nil {
 			return 0, err
 		}
@@ -310,7 +282,7 @@ func TestIssue1053_PersistRestartKeepsTheContract(t *testing.T) {
 	a := &cli{out: io.Discard}
 	for boot := 1; boot <= 2; boot++ {
 		ctx, cancel := context.WithCancel(context.Background())
-		inst, err := a.startDev(ctx, dir, "", devConfig{persist: true, persistTo: root})
+		inst, err := a.startDev(ctx, dir, devConfig{persist: true, persistTo: root})
 		require.NoError(t, err)
 		require.EventuallyWithT(t, func(c *assert.CollectT) {
 			code, cerr := call(inst, `{"name":"truck-7"}`)
@@ -326,24 +298,20 @@ func TestIssue1053_PersistRestartKeepsTheContract(t *testing.T) {
 	}
 }
 
-// Issue #1053: a second session of the same project over the same --persist-to fails on the state dir's lock, and the
-// bundle of the session that runs, which it rewrote with the same bytes but never removed, keeps serving and takes an
-// edit.
+// Issue #1053: a second session of the same folder over the same --persist-to fails on the state dir's lock, and the
+// bundle of the session that runs, which it never removed, keeps serving and takes an edit.
 func TestIssue1053_FailedSecondSessionKeepsTheBundle(t *testing.T) {
 	requireRuntime(t)
 	root := t.TempDir()
-	dir := devProject(t, map[string]string{
-		"api.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
-		"api.mjs":           "export function handle() { return { n: 1 }; }\n",
-	})
+	dir := devProject(t, nodeFunction("api", "", "export function handle() { return { n: 1 }; }\n"))
 	a := &cli{out: io.Discard}
 	ctx, cancel := context.WithCancel(context.Background())
-	inst, err := a.startDev(ctx, dir, "", devConfig{persist: true, persistTo: root})
+	inst, err := a.startDev(ctx, dir, devConfig{persist: true, persistTo: root})
 	require.NoError(t, err)
 	t.Cleanup(func() { cancel(); _ = inst.stop() })
 	require.Equal(t, 1, addNote(t, inst))
 
-	_, err = a.startDev(context.Background(), dir, "", devConfig{persist: true, persistTo: root})
+	_, err = a.startDev(context.Background(), dir, devConfig{persist: true, persistTo: root})
 	require.Error(t, err, "a second session over the same --persist-to")
 	bundles, err := filepath.Glob(filepath.Join(root, "bundles", "api-*", "api.mjs"))
 	require.NoError(t, err)
@@ -361,20 +329,19 @@ func TestIssue1053_FailedSecondSessionKeepsTheBundle(t *testing.T) {
 	}, 30*time.Second, 200*time.Millisecond)
 }
 
-// Issue #1053: a kept bundle (--persist) changes between a copied handler and links to its source dir from one run to
+// Issue #1053: a kept bundle (--persist) changes between a copied build and links to its source dir from one run to
 // the next: the links replace the copied file, and the copy replaces the link rather than write through it into the
 // source.
 func TestIssue1053_KeptBundleSwitchesBetweenCopyAndLinks(t *testing.T) {
 	src := devProject(t, map[string]string{"api.mjs": "export function handle() { return { n: 1 }; }\n"})
 	before, err := os.Stat(filepath.Join(src, "api.mjs"))
 	require.NoError(t, err)
-	root := t.TempDir()
-	pf := plannedFunc{name: "api", srcDir: src, entry: "api.mjs", isolate: true}
+	bundle := t.TempDir()
+	b := devBuild{name: "api", contract: &sdk.ContractFile{}, srcDir: src, entry: "api.mjs"}
 	for _, linked := range []bool{false, true, false} {
-		pf.linkSrc = linked
-		image, _, perr := prepareBundle("op", pf, root, nil)
-		require.NoError(t, perr, "linked=%t", linked)
-		fi, lerr := os.Lstat(image)
+		b.inPlace = linked
+		require.NoError(t, deliverBuild("op", b, bundle, src), "linked=%t", linked)
+		fi, lerr := os.Lstat(filepath.Join(bundle, "api.mjs"))
 		require.NoError(t, lerr)
 		require.Equal(t, linked, fi.Mode()&fs.ModeSymlink != 0, "linked=%t", linked)
 	}
@@ -398,31 +365,27 @@ func TestIssue1053_KeptBundleDirIsPerProject(t *testing.T) {
 	require.NotEqual(t, dirA, dirB)
 }
 
-// An in-place function whose --persist-to is a dir inside its source dir is never re-applied on its own: the hot-reload
-// watcher skips the state the session writes while it runs, the process registry included, which changes as workers
-// start and stop. With the registry walked, each start looked like an edit and reloaded the function again.
-func TestDevPersistRootInsideTheSourceDoesNotReload(t *testing.T) {
+// A --persist-to inside the folder never makes dev re-apply a Function on its own: the watcher reads the folder's
+// top-level files, and the state the session writes while it runs, the process registry included, is not among them.
+func TestDevPersistRootInsideTheFolderDoesNotReload(t *testing.T) {
 	requireRuntime(t)
-	dir := devProject(t, map[string]string{
-		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
-		"handler.mjs":   "export function handle() { return { n: 1 }; }\n",
-	})
+	dir := devProject(t, nodeFunction("api", "", "export function handle() { return { n: 1 }; }\n"))
 	ctx, cancel := context.WithCancel(context.Background())
-	inst, err := (&cli{out: io.Discard}).startDev(ctx, dir, "", devConfig{persist: true, persistTo: filepath.Join(dir, "state")})
+	inst, err := (&cli{out: io.Discard}).startDev(ctx, dir, devConfig{persist: true, persistTo: filepath.Join(dir, "state")})
 	require.NoError(t, err)
 	t.Cleanup(func() { cancel(); _ = inst.stop() })
 	require.Equal(t, 1, addNote(t, inst))
 	require.True(t, poll.Never(func() bool {
-		obj, gerr := inst.client.Get(context.Background(), v1.KindFunction, devNamespace, v1.ObjectName(inst.functions[0]))
+		obj, gerr := inst.client.Get(context.Background(), v1.KindFunction, devNamespace, "api")
 		return gerr == nil && obj.GetObjectMeta().Generation > 1
 	}, 3*time.Second, 100*time.Millisecond), "the function is re-applied though nothing was edited")
 }
 
-// The hot-reload watcher skips each dir the session writes while it runs, the isolated bundles and the process
-// registry under the persist root included.
+// The hot-reload watcher skips each dir the session writes while it runs, the bundles and the process registry under
+// the persist root included.
 func TestWatchSkipsTheSessionState(t *testing.T) {
 	root := t.TempDir()
-	p, err := resolvePersistPlan(devConfig{persist: true, persistTo: root}, &sdk.Manifest{})
+	p, err := resolvePersistPlan(devConfig{persist: true, persistTo: root})
 	require.NoError(t, err)
 	skips := p.watchSkips(filepath.Join(root, "process"))
 	for _, sub := range []string{"metastore", "kv", "blob", "catalog", "sql", "bundles", "process"} {
@@ -467,27 +430,23 @@ func (f *firstPutFault) RoundTrip(r *http.Request) (*http.Response, error) {
 // not fail.
 func TestIssue398_DevPersistReapplyRetriesConflict(t *testing.T) {
 	requireRuntime(t)
-	dir := devProject(t, map[string]string{
-		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
-		"handler.mjs":   "export function handle() { return { ok: true }; }\n",
-	})
+	dir := devProject(t, nodeFunction("api", "", okBuild))
 	a := &cli{out: io.Discard}
 	cfg := devConfig{persist: true, persistTo: t.TempDir()}
 
 	ctx1, cancel1 := context.WithCancel(context.Background())
-	inst1, err := a.startDev(ctx1, dir, "", cfg)
+	inst1, err := a.startDev(ctx1, dir, cfg)
 	require.NoError(t, err)
-	name := inst1.functions[0]
 	cancel1()
 	require.NoError(t, inst1.stop())
 
 	// The store conflict the control plane returns when a controller writes the Function's status between the
 	// API's read and its update (ADR-0018 read-RV-then-update).
-	hit := failFirstPut(t, name, fault.Conflictf("store.Update", "Function %q resourceVersion mismatch", name))
+	hit := failFirstPut(t, "api", fault.Conflictf("store.Update", "Function %q resourceVersion mismatch", "api"))
 
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	t.Cleanup(cancel2)
-	inst2, err := a.startDev(ctx2, dir, "", cfg)
+	inst2, err := a.startDev(ctx2, dir, cfg)
 	require.NoError(t, err, "a Conflict on the re-apply is retried, not fatal to the boot")
 	t.Cleanup(func() { cancel2(); _ = inst2.stop() })
 	require.NotNil(t, hit.Load(), "the re-apply met the injected Conflict")
@@ -499,20 +458,17 @@ func TestIssue398_DevPersistReapplyRetriesConflict(t *testing.T) {
 func TestIssue426_DevFailedBootStopsPlatform(t *testing.T) {
 	requireRuntime(t)
 	const name = "issue426"
-	dir := devProject(t, map[string]string{
-		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
-		"handler.mjs":   "export function handle() { return { ok: true }; }\n",
-	})
+	dir := devProject(t, nodeFunction(name, "", okBuild))
 	root, err := os.MkdirTemp("", "funcd")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(root) })
 	a := &cli{out: io.Discard}
-	cfg := devConfig{persist: true, persistTo: root, name: name}
+	cfg := devConfig{persist: true, persistTo: root}
 
 	hit := failFirstPut(t, name, fault.Invalidf("admission", "Function %q rejected", name))
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	_, err = a.startDev(ctx, dir, "", cfg)
+	_, err = a.startDev(ctx, dir, cfg)
 	require.Error(t, err, "a rejected apply fails the boot")
 	rejected := hit.Load()
 	require.NotNil(t, rejected, "the boot failed on the injected apply rejection, after its platform started")
@@ -523,21 +479,23 @@ func TestIssue426_DevFailedBootStopsPlatform(t *testing.T) {
 	}
 	require.Error(t, derr, "a failed boot stops the platform it started")
 
-	inst, err := a.startDev(ctx, dir, "", cfg)
+	inst, err := a.startDev(ctx, dir, cfg)
 	require.NoError(t, err, "the failed boot released the durable drivers")
 	t.Cleanup(func() { cancel(); _ = inst.stop() })
 }
 
 // A hot-reload re-apply that loses its update to a controller's status write (Conflict) is re-applied in
-// place, as the boot apply is (#398), so the poll reports no failure for a reload that took.
+// place, as the boot apply is (#398), so the reload reports no failure for an apply that took.
 func TestIssue427_DevHotReloadRetriesConflict(t *testing.T) {
-	dir := devProject(t, map[string]string{
-		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\nbindings:\n  config:\n    - app-config\n" + permissiveContract +
-			"dev:\n  config:\n    app-config:\n      APP_MODE: one\n",
-		"handler.mjs": "export function handle() { return { ok: true }; }\n",
-	})
-	pfs, err := resolveDevPlan("test", dir, "", devConfig{})
+	dir := devProject(t, merge(nodeFunction("api", "  bindings:\n    config:\n      - app-config\n", okBuild), map[string]string{
+		"app-config.yaml": "apiVersion: funcd.io/v1alpha1\nkind: ConfigMap\nmetadata:\n  name: app-config\nspec:\n  data:\n    APP_MODE: one\n",
+	}))
+	folder, err := loadDevFolder("test", dir)
 	require.NoError(t, err)
+	desired := []v1.Object{folder.functions[0].fn}
+	for _, d := range folder.resources {
+		desired = append(desired, d.obj)
+	}
 
 	var mu sync.Mutex
 	puts := map[string]int{}
@@ -557,63 +515,45 @@ func TestIssue427_DevHotReloadRetriesConflict(t *testing.T) {
 	c, err := sdk.New(srv.URL)
 	require.NoError(t, err)
 
-	h := &devHandler{pf: pfs[0], bundle: filepath.Join(dir, pfs[0].entry)}
-	require.NoError(t, reloadChanged(context.Background(), "test", c, []*devHandler{h}, &[]v1.Object{}, nil, slog.New(slog.DiscardHandler)),
-		"a Conflict on a hot-reload apply is re-applied in place, not reported")
+	require.NoError(t, applyOrdered(context.Background(), "test", c, desired), "a Conflict on a reload apply is re-applied in place, not reported")
 	mu.Lock()
 	defer mu.Unlock()
-	require.Contains(t, puts, "PUT /apis/funcd.io/v1alpha1/namespaces/default/functions/"+string(pfs[0].name))
+	require.Contains(t, puts, "PUT /apis/funcd.io/v1alpha1/namespaces/default/functions/api")
+	require.Contains(t, puts, "PUT /apis/funcd.io/v1alpha1/namespaces/default/configmaps/app-config")
 	for path, n := range puts {
 		require.Equal(t, 2, n, "%s met one Conflict and was re-applied once", path)
 	}
 }
 
-// scenario: dev-persist-survives-restart (secrets facet) — secrets are NEVER served from the durable
-// store: they are re-read from ${ENV} on EVERY boot. Booting --persist with the referenced var UNSET on
-// the second run fails fast (it is not silently recovered from the persisted metastore).
+// scenario: dev-persist-survives-restart (secrets facet) — secret values are never served from the durable store:
+// dev reads them from the environment on every boot, so a --persist boot with the key unset fails naming it.
 func TestScenarioDevPersistSecretsReReadFromEnv(t *testing.T) {
 	requireRuntime(t)
-	const varName = "DEV_PERSIST_SECRET_VAR"
+	const key = "DEV_PERSIST_SECRET_VAR"
 	root := t.TempDir()
-	dir := devProject(t, map[string]string{
-		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" +
-			"bindings:\n  secrets:\n    - app-secret\n" +
-			permissiveContract +
-			"dev:\n  secrets:\n    app-secret:\n      API_KEY: ${" + varName + "}\n",
-		"handler.mjs": "export function handle() { return { key: process.env.API_KEY }; }\n",
-	})
+	dir := devProject(t, nodeFunction("api", "  secrets:\n    - name: app-secret\n      keys:\n        - "+key+"\n"+
+		"  bindings:\n    secret:\n      - app-secret\n", okBuild))
 	a := &cli{out: io.Discard}
 
-	// Boot 1 — the var is set; the secret resolves and the platform boots.
-	t.Setenv(varName, "boot1-secret")
+	t.Setenv(key, "boot1-secret")
 	ctx1, cancel1 := context.WithCancel(context.Background())
-	inst1, err := a.startDev(ctx1, dir, "", devConfig{persist: true, persistTo: root})
-	require.NoError(t, err, "the env-sourced secret resolves on the first persist boot")
+	inst1, err := a.startDev(ctx1, dir, devConfig{persist: true, persistTo: root})
+	require.NoError(t, err, "the secret resolves from the environment on the first persist boot")
 	cancel1()
 	require.NoError(t, inst1.stop())
 
-	// Boot 2 — the var is now UNSET; because secrets are re-read from env (never served from the durable
-	// store), the boot fails fast naming the missing var.
-	require.NoError(t, os.Unsetenv(varName))
-	_, err = a.startDev(context.Background(), dir, "", devConfig{persist: true, persistTo: root})
-	require.Error(t, err, "a missing env var fails fast even under --persist (secret not recovered from disk)")
-	require.Contains(t, err.Error(), varName)
+	require.NoError(t, os.Unsetenv(key))
+	_, err = a.startDev(context.Background(), dir, devConfig{persist: true, persistTo: root})
+	require.Error(t, err, "an unset key fails the boot even under --persist")
+	require.Contains(t, err.Error(), key)
 }
 
-// A --persist restart brings the dev namespace to what the current manifests describe (ADR-0125): the boot deletes
-// what an earlier session synthesized for a removed manifest or binding, and keeps an object the user applied.
+// A --persist restart brings the namespace to what the folder holds (ADR-0247 Decision 8): the boot deletes what an
+// earlier session applied from a removed file or root entry, and keeps an object the user applied.
 func TestIssue502_DevPersistRestartPrunesRemovedResources(t *testing.T) {
 	requireRuntime(t)
-	manifest := func(bindings string) string {
-		return "runtime: nodejs22\nhandler: handle\n" + bindings + permissiveContract
-	}
-	const handler = "export function handle() { return { ok: true }; }\n"
-	dir := devProject(t, map[string]string{
-		"front.funcdctl.yaml": manifest("bindings:\n  config:\n    - settings\n") + "dev:\n  config:\n    settings:\n      MODE: one\n",
-		"front.mjs":           handler,
-		"back.funcdctl.yaml":  manifest(""),
-		"back.mjs":            handler,
-	})
+	const settings = "  configMaps:\n    - name: settings\n      data:\n        MODE: one\n  bindings:\n    config:\n      - settings\n"
+	dir := devProject(t, merge(nodeFunction("front", settings, okBuild), nodeFunction("back", "", okBuild)))
 	root, err := os.MkdirTemp("", "funcd")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(root) })
@@ -621,7 +561,7 @@ func TestIssue502_DevPersistRestartPrunesRemovedResources(t *testing.T) {
 	cfg := devConfig{persist: true, persistTo: root}
 
 	ctx1, cancel1 := context.WithCancel(context.Background())
-	inst1, err := a.startDev(ctx1, dir, "", cfg)
+	inst1, err := a.startDev(ctx1, dir, cfg)
 	require.NoError(t, err)
 	user := &v1.ConfigMap{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindConfigMap.GVK().APIVersion(), Kind: v1.KindConfigMap},
@@ -632,10 +572,12 @@ func TestIssue502_DevPersistRestartPrunesRemovedResources(t *testing.T) {
 	cancel1()
 	require.NoError(t, inst1.stop())
 
-	require.NoError(t, os.Remove(filepath.Join(dir, "back.funcdctl.yaml")))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "front.funcdctl.yaml"), []byte(manifest("")), 0o600))
+	for _, f := range []string{"back.yaml", "back.mjs", "back.contract.yaml"} {
+		require.NoError(t, os.Remove(filepath.Join(dir, f)))
+	}
+	writeProject(t, dir, map[string]string{"front.yaml": fnDoc("front", "nodejs22", "")})
 	ctx2, cancel2 := context.WithCancel(context.Background())
-	inst2, err := a.startDev(ctx2, dir, "", cfg)
+	inst2, err := a.startDev(ctx2, dir, cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { cancel2(); _ = inst2.stop() })
 
@@ -646,7 +588,7 @@ func TestIssue502_DevPersistRestartPrunesRemovedResources(t *testing.T) {
 		require.Eventually(t, func() bool {
 			_, gerr := inst2.client.Get(ctx2, o.kind, devNamespace, o.name)
 			return fault.KindOf(gerr) == fault.NotFound
-		}, 10*time.Second, 50*time.Millisecond, "the boot deletes the %s %q no manifest names", o.kind, o.name)
+		}, 10*time.Second, 50*time.Millisecond, "the boot deletes the %s %q the folder no longer holds", o.kind, o.name)
 	}
 	_, err = inst2.client.Get(ctx2, v1.KindConfigMap, devNamespace, "user-settings")
 	require.NoError(t, err, "the boot keeps an object the user applied")
@@ -654,69 +596,34 @@ func TestIssue502_DevPersistRestartPrunesRemovedResources(t *testing.T) {
 
 // TestResolvePersistPlanEphemeralDefault — the zero devConfig keeps every kind on memory (all dirs empty).
 func TestResolvePersistPlanEphemeralDefault(t *testing.T) {
-	p, err := resolvePersistPlan(devConfig{}, &sdk.Manifest{})
+	p, err := resolvePersistPlan(devConfig{})
 	require.NoError(t, err)
-	require.Empty(t, p.storeDir)
-	require.Empty(t, p.kvDir)
-	require.Empty(t, p.blobDir)
-	require.Empty(t, p.catalogDir, "the DuckLake catalog is ephemeral (temp) without --persist")
-	require.Empty(t, p.bundleDir, "an isolated function's bundle is a temp dir without --persist")
+	require.Equal(t, persistPlan{}, p)
 }
 
-// TestResolvePersistPlanPersistSubdirs — --persist lays metastore/kv/blob out as per-service subdirs of
-// the (absolute) persist root, mirroring the store-per-service design (Decision 7).
+// TestResolvePersistPlanPersistSubdirs — --persist lays each service out as a subdir of the (absolute) persist root,
+// mirroring the store-per-service design (Decision 7).
 func TestResolvePersistPlanPersistSubdirs(t *testing.T) {
 	root := t.TempDir()
-	p, err := resolvePersistPlan(devConfig{persist: true, persistTo: root}, &sdk.Manifest{})
+	p, err := resolvePersistPlan(devConfig{persist: true, persistTo: root})
 	require.NoError(t, err)
 	require.Equal(t, filepath.Join(root, "metastore"), p.storeDir)
 	require.Equal(t, filepath.Join(root, "kv"), p.kvDir)
 	require.Equal(t, filepath.Join(root, "blob"), p.blobDir)
 	require.Equal(t, filepath.Join(root, "catalog"), p.catalogDir, "--persist makes the DuckLake catalog durable")
-	require.Equal(t, filepath.Join(root, "bundles"), p.bundleDir, "--persist keeps isolated bundles at one path (#1053)")
+	require.Equal(t, filepath.Join(root, "sql"), p.sqlDir)
+	require.Equal(t, filepath.Join(root, "bundles"), p.bundleDir, "--persist keeps bundles at one path (#1053)")
 }
 
 // TestResolvePersistPlanDefaultDir — an empty --persist-to falls back to the gitignored default dir.
 func TestResolvePersistPlanDefaultDir(t *testing.T) {
-	p, err := resolvePersistPlan(devConfig{persist: true}, &sdk.Manifest{})
+	p, err := resolvePersistPlan(devConfig{persist: true})
 	require.NoError(t, err)
 	absDefault, err := filepath.Abs(devPersistDir)
 	require.NoError(t, err)
 	require.Equal(t, filepath.Join(absDefault, "metastore"), p.storeDir)
 	require.Equal(t, filepath.Join(absDefault, "kv"), p.kvDir)
 	require.Equal(t, filepath.Join(absDefault, "blob"), p.blobDir)
-}
-
-// TestResolvePersistPlanBackendOverrides — dev.backends is GLOBAL per kind: a file:// override makes a
-// kind durable even WITHOUT --persist (the file:// blob-inspection path), "memory" pins a kind ephemeral
-// even WITH --persist, and the metastore tracks --persist alone (no dev.backends knob).
-func TestResolvePersistPlanBackendOverrides(t *testing.T) {
-	// file:// blob override, no --persist: blob durable, kv+store still memory.
-	m := &sdk.Manifest{Dev: sdk.Dev{Backends: sdk.Backends{Blob: "file://.funcd-dev/blob"}}}
-	p, err := resolvePersistPlan(devConfig{}, m)
-	require.NoError(t, err)
-	require.Empty(t, p.storeDir, "no --persist ⇒ ephemeral metastore")
-	require.Empty(t, p.kvDir, "no kv override + no --persist ⇒ memory KV")
-	absBlob, err := filepath.Abs(".funcd-dev/blob")
-	require.NoError(t, err)
-	require.Equal(t, absBlob, p.blobDir, "the file:// blob override resolves to an absolute dir")
-
-	// A bare-path kv override resolves absolute too.
-	m2 := &sdk.Manifest{Dev: sdk.Dev{Backends: sdk.Backends{KV: "state/kv"}}}
-	p2, err := resolvePersistPlan(devConfig{}, m2)
-	require.NoError(t, err)
-	absKV, err := filepath.Abs("state/kv")
-	require.NoError(t, err)
-	require.Equal(t, absKV, p2.kvDir)
-
-	// "memory" pins a kind ephemeral even under --persist (explicit override wins).
-	m3 := &sdk.Manifest{Dev: sdk.Dev{Backends: sdk.Backends{KV: "memory"}}}
-	root := t.TempDir()
-	p3, err := resolvePersistPlan(devConfig{persist: true, persistTo: root}, m3)
-	require.NoError(t, err)
-	require.Empty(t, p3.kvDir, "an explicit memory override stays ephemeral under --persist")
-	require.Equal(t, filepath.Join(root, "metastore"), p3.storeDir, "metastore is still durable under --persist")
-	require.Equal(t, filepath.Join(root, "blob"), p3.blobDir, "blob defaults to durable under --persist")
 }
 
 // issue 434: a durable blob dir whose path holds URL syntax ('#', '?', '%') opens, and an object written through
@@ -726,8 +633,7 @@ func TestIssue434_DurableBlobDirWithURLSyntaxOpens(t *testing.T) {
 	for _, name := range []string{"a#b", "q?x", "pct%", "p%41q"} {
 		t.Run(name, func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), name, "blob")
-			m := &sdk.Manifest{Dev: sdk.Dev{Backends: sdk.Backends{Blob: dir}}}
-			_, _, bkt, closeAll, err := buildPersistDrivers("t", devConfig{}, m)
+			_, _, bkt, closeAll, err := buildPersistDrivers("t", persistPlan{blobDir: dir})
 			require.NoError(t, err)
 			t.Cleanup(closeAll)
 			require.NoError(t, bkt.Put(ctx, "k", []byte("v"), blob.PutOptions{}))

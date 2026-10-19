@@ -173,10 +173,9 @@ func functionDocument(op, dir, name string) (*v1.Function, string, error) {
 	return found, foundFile, nil
 }
 
-// pythonSourceDir is the directory of a python Function's source entry (ADR-0247 Decision 6), relative to dir: its
-// entry in pyproject.toml's [tool.funcd-bundle.functions], else src when dir is named after it and holds src/main.py,
-// else dir itself, where <name>.py runs.
-func pythonSourceDir(op, dir, name string) (string, error) {
+// pyprojectFunctions is the [tool.funcd-bundle.functions] table of the pyproject.toml at path (name → entry relative
+// to its folder), nil when it has none (ADR-0247 Decisions 6 and 10).
+func pyprojectFunctions(op, path string) (map[string]string, error) {
 	var project struct {
 		Tool struct {
 			FuncdBundle struct {
@@ -184,16 +183,28 @@ func pythonSourceDir(op, dir, name string) (string, error) {
 			} `toml:"funcd-bundle"`
 		} `toml:"tool"`
 	}
-	_, err := toml.DecodeFile(filepath.Join(dir, "pyproject.toml"), &project)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-	case err != nil:
-		return "", fault.Invalidf(op, "parse %s: %v", filepath.Join(dir, "pyproject.toml"), err)
-	case project.Tool.FuncdBundle.Functions != nil:
-		if entry, ok := project.Tool.FuncdBundle.Functions[name]; ok {
-			return filepath.Join(dir, filepath.Dir(entry)), nil
+	if _, err := toml.DecodeFile(path, &project); err != nil {
+		return nil, fault.Invalidf(op, "parse %s: %v", path, err)
+	}
+	return project.Tool.FuncdBundle.Functions, nil
+}
+
+// pythonSourceDir is the directory of a python Function's source entry (ADR-0247 Decision 6), relative to dir: its
+// entry in pyproject.toml's [tool.funcd-bundle.functions], else src when dir is named after it and holds src/main.py,
+// else dir itself, where <name>.py runs.
+func pythonSourceDir(op, dir, name string) (string, error) {
+	path := filepath.Join(dir, "pyproject.toml")
+	if _, err := os.Stat(path); err == nil {
+		entries, perr := pyprojectFunctions(op, path)
+		if perr != nil {
+			return "", perr
 		}
-		return dir, nil
+		if entries != nil {
+			if entry, ok := entries[name]; ok {
+				return filepath.Join(dir, filepath.Dir(filepath.FromSlash(entry))), nil
+			}
+			return dir, nil
+		}
 	}
 	abs, aerr := filepath.Abs(dir)
 	if aerr != nil {

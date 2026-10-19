@@ -34,18 +34,49 @@ func requireSQLEngine(t *testing.T) {
 	}
 }
 
-// sqlProject is a function binding todo-db as app that adds a row to table notes and returns how many there are.
+// sqlFunction is Function name declaring and owning database db at its root and binding it as app.
+func sqlFunction(name, db, build string) map[string]string {
+	return nodeFunction(name, "  sql:\n    - name: "+db+"\n      owner: "+name+"\n"+
+		"  bindings:\n    sql:\n      - alias: app\n        database: "+db+"\n", build)
+}
+
+// sqlProject is a function that owns todo-db, adds a row to table notes and returns how many there are.
 func sqlProject(t *testing.T) string {
-	return devProject(t, map[string]string{
-		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" +
-			"bindings:\n  sql:\n    - alias: app\n      database: todo-db\n" + permissiveContract,
-		"handler.mjs": `export async function handle(ctx) {
+	return devProject(t, sqlFunction("api", "todo-db", `export async function handle(ctx) {
   await ctx.sql.execute('app', ['CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY)', 'INSERT INTO notes DEFAULT VALUES']);
   const [row] = await ctx.sql.query('app', 'SELECT count(*) AS n FROM notes');
   return { n: row.n };
 }
-`,
+`))
+}
+
+// sqlWriterGrant is a RolesAssignment file granting Function fn the SQL Data Writer role on database db.
+func sqlWriterGrant(fn, db string) string {
+	return "apiVersion: funcd.io/v1alpha1\nkind: RolesAssignment\nmetadata:\n  name: " + fn + "-writes-" + db + "\nspec:\n" +
+		"  principal:\n    kind: Function\n    name: " + fn + "\n  assignments:\n    - roleRef:\n        kind: BuiltinRole\n" +
+		"        name: SQL Data Writer\n      scope:\n        kind: SQLDatabase\n        name: " + db + "\n"
+}
+
+// runToEnd runs workflow with input and returns the run once it has ended.
+func runToEnd(t *testing.T, inst *devInstance, workflow v1.ObjectName, input string) *v1.WorkflowRun {
+	t.Helper()
+	ctx := context.Background()
+	_, err := inst.client.Apply(ctx, &v1.WorkflowRun{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflowRun.GVK().APIVersion(), Kind: v1.KindWorkflowRun},
+		ObjectMeta: v1.ObjectMeta{Name: "run-01", Namespace: devNamespace, ResourceGroup: devResourceGroup},
+		Spec:       v1.WorkflowRunSpec{Workflow: workflow, Input: json.RawMessage(input)},
 	})
+	require.NoError(t, err)
+	var run *v1.WorkflowRun
+	require.Eventually(t, func() bool {
+		obj, gerr := inst.client.Get(ctx, v1.KindWorkflowRun, devNamespace, "run-01")
+		if gerr != nil {
+			return false
+		}
+		run = obj.(*v1.WorkflowRun)
+		return run.Status.Phase == "Succeeded" || run.Status.Phase == "Failed"
+	}, 60*time.Second, 100*time.Millisecond, "the run ends")
+	return run
 }
 
 // addNote calls the function once and returns the row count it read.
@@ -71,7 +102,7 @@ func addNote(t *testing.T, inst *devInstance) int {
 func startSQLDev(t *testing.T, dir string, cfg devConfig) (*devInstance, func()) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	inst, err := (&cli{out: io.Discard}).startDev(ctx, dir, "", cfg)
+	inst, err := (&cli{out: io.Discard}).startDev(ctx, dir, cfg)
 	require.NoError(t, err)
 	var stopped bool
 	stop := func() {
@@ -168,81 +199,56 @@ func TestScenarioDevEngineUnavailable(t *testing.T) {
 	if sqlembedengine.Bundled() {
 		t.Skip("this build embeds a SQL engine")
 	}
-	_, err := (&cli{out: io.Discard}).startDev(context.Background(), sqlProject(t), "", devConfig{cacheDir: t.TempDir()})
+	_, err := (&cli{out: io.Discard}).startDev(context.Background(), sqlProject(t), devConfig{cacheDir: t.TempDir()})
 	require.Equal(t, fault.Unavailable, fault.KindOf(err))
 	require.ErrorContains(t, err, "just build-sql-engine")
 }
 
-// scenario: dev-workflow-step-binds-database — step a writes todo-db as a granted writer, step b, its owner, reads
-// the row a wrote, and the run succeeds.
+// scenario: dev-workflow-step-binds-database — step a writes todo-db through a SQL Data Writer grant the folder holds,
+// step b, its owner, reads the row a wrote, and the run succeeds.
 func TestScenarioDevWorkflowStepBindsDatabase(t *testing.T) {
 	requireSQLEngine(t)
-	bind := "bindings:\n  sql:\n    - alias: app\n      database: todo-db\n"
-	dir := devProject(t, map[string]string{
-		"workflow.yaml": "apiVersion: funcd.io/v1alpha1\nkind: Workflow\n" +
-			"metadata:\n  name: notes\n  namespace: default\n" +
-			"spec:\n  steps:\n" +
-			"    - name: a\n      function:\n        ref: write\n" +
-			"    - name: b\n      function:\n        ref: read\n      dependsOn:\n        - a\n",
-		"write.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + bind + permissiveContract,
-		"write.mjs": `export async function handle(ctx) {
+	dir := devProject(t, merge(
+		nodeFunction("write", "  sql:\n    - ref: todo-db\n  bindings:\n    sql:\n      - alias: app\n        database: todo-db\n", `export async function handle(ctx) {
   await ctx.sql.execute('app', ['CREATE TABLE IF NOT EXISTS notes (title TEXT)', ['INSERT INTO notes VALUES (?)', ['milk']]]);
   return {};
 }
-`,
-		"read.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + bind + permissiveContract,
-		"read.mjs": `export async function handle(ctx) {
+`),
+		sqlFunction("read", "todo-db", `export async function handle(ctx) {
   const rows = await ctx.sql.query('app', 'SELECT title FROM notes');
   if (rows.length !== 1 || rows[0].title !== 'milk') throw new Error('read ' + JSON.stringify(rows));
   return {};
 }
-`,
-	})
-	inst := startDevPath(t, filepath.Join(dir, "workflow.yaml"))
+`),
+		map[string]string{
+			"notes.yaml": workflowDoc("notes", "    - name: a\n      function:\n        ref: write\n"+
+				"    - name: b\n      function:\n        ref: read\n      dependsOn:\n        - a\n"),
+			"grant.yaml": sqlWriterGrant("write", "todo-db"),
+		}))
+	inst := runDev(t, dir)
 	waitFuncsReady(t, inst, "write", "read")
-	ctx := context.Background()
-	_, err := inst.client.Apply(ctx, &v1.WorkflowRun{
-		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflowRun.GVK().APIVersion(), Kind: v1.KindWorkflowRun},
-		ObjectMeta: v1.ObjectMeta{Name: "run-01", Namespace: devNamespace, ResourceGroup: devResourceGroup},
-		Spec:       v1.WorkflowRunSpec{Workflow: "notes", Input: json.RawMessage(`{}`)},
-	})
-	require.NoError(t, err)
-	var run *v1.WorkflowRun
-	require.Eventually(t, func() bool {
-		obj, gerr := inst.client.Get(ctx, v1.KindWorkflowRun, devNamespace, "run-01")
-		if gerr != nil {
-			return false
-		}
-		run = obj.(*v1.WorkflowRun)
-		return run.Status.Phase == "Succeeded" || run.Status.Phase == "Failed"
-	}, 60*time.Second, 100*time.Millisecond, "the run ends")
+	run := runToEnd(t, inst, "notes", `{}`)
 	require.Equal(t, v1.RunPhase("Succeeded"), run.Status.Phase, "%+v", run.Status.Steps)
 }
 
-// Two functions whose main files share a directory each run under their own contract: in place they would share the
-// directory's one contract dotfile, and the last one written would judge both. The run names the project as `.`, as
-// `funcdctl dev .` does.
-func TestDevFunctionsSharingAMainDirKeepTheirContracts(t *testing.T) {
+// strictFunction is a node Function whose contract takes and returns objects with only the string field in, and out.
+func strictFunction(name, in, out, build string) map[string]string {
+	field := func(f string) string {
+		return "  type: object\n  additionalProperties: false\n  properties:\n    " + f + ":\n      type: string\n"
+	}
+	files := nodeFunction(name, "", build)
+	files[name+".contract.yaml"] = "runtime: nodejs22\ninput:\n" + field(in) + "output:\n" + field(out)
+	return files
+}
+
+// Two Functions of one folder each run under their own contract: sharing the folder's one contract dotfile, the last
+// one written would judge both. The run names the folder as `.`, as `funcdctl dev .` does.
+func TestDevFunctionsOfOneFolderKeepTheirContracts(t *testing.T) {
 	requireRuntime(t)
-	contract := func(field string) string {
-		return "contract:\n  input:\n    type: object\n    additionalProperties: false\n    properties:\n      " + field +
-			":\n        type: string\n  output:\n    type: object\n    additionalProperties: false\n    properties:\n      " + field +
-			":\n        type: string\n"
-	}
-	dir := devProject(t, map[string]string{
-		"a.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\nmain: src/a.mjs\n" + contract("x"),
-		"b.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\nmain: src/b.mjs\n" + contract("y"),
-	})
-	require.NoError(t, os.Mkdir(filepath.Join(dir, "src"), 0o700))
-	for name, body := range map[string]string{
-		"src/shared.mjs": "export const echo = (d) => d;\n",
-		"src/a.mjs":      "import { echo } from './shared.mjs';\nexport function handle(ctx, e) { return echo(e.data); }\n",
-		"src/b.mjs":      "import { echo } from './shared.mjs';\nexport function handle(ctx, e) { return echo(e.data); }\n",
-	} {
-		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600))
-	}
+	const echo = "export function handle(ctx, e) { return e.data; }\n"
+	dir := devProject(t, merge(strictFunction("a", "x", "x", echo), strictFunction("b", "y", "y", echo)))
 	t.Chdir(dir)
-	inst := startDevPath(t, ".")
+	inst := runDev(t, ".")
 	for fn, body := range map[string]string{"a": `{"data":{"x":"1"}}`, "b": `{"data":{"y":"2"}}`} {
 		require.EventuallyWithT(t, func(c *assert.CollectT) {
 			resp, err := http.Post(inst.gatewayURL+"/function/"+fn, "application/json", strings.NewReader(body))
@@ -256,43 +262,17 @@ func TestDevFunctionsSharingAMainDirKeepTheirContracts(t *testing.T) {
 	}
 }
 
-// The steps of a workflow whose main files share a directory each run under their own contract too.
-func TestDevWorkflowStepsSharingAMainDirKeepTheirContracts(t *testing.T) {
+// The Functions a Workflow of the folder runs each run under their own contract too.
+func TestDevWorkflowFunctionsKeepTheirContracts(t *testing.T) {
 	requireRuntime(t)
-	contract := func(in, out string) string {
-		return "contract:\n  input:\n    type: object\n    additionalProperties: false\n    properties:\n      " + in +
-			":\n        type: string\n  output:\n    type: object\n    additionalProperties: false\n    properties:\n      " + out +
-			":\n        type: string\n"
-	}
-	dir := devProject(t, map[string]string{
-		"workflow.yaml": "apiVersion: funcd.io/v1alpha1\nkind: Workflow\nmetadata:\n  name: pair\n  namespace: default\n" +
-			"spec:\n  steps:\n    - name: a\n      function:\n        ref: a\n    - name: b\n      function:\n        ref: b\n" +
-			"      dependsOn:\n        - a\n",
-		"a.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\nmain: src/a.mjs\n" + contract("x", "y"),
-		"b.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\nmain: src/b.mjs\n" + contract("y", "z"),
-	})
-	require.NoError(t, os.Mkdir(filepath.Join(dir, "src"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "src", "a.mjs"), []byte("export function handle(ctx, e) { return { y: e.data.x }; }\n"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "src", "b.mjs"), []byte("export function handle(ctx, e) { return { z: e.data.y }; }\n"), 0o600))
-	t.Chdir(dir)
-	inst := startDevPath(t, "workflow.yaml")
+	dir := devProject(t, merge(
+		strictFunction("a", "x", "y", "export function handle(ctx, e) { return { y: e.data.x }; }\n"),
+		strictFunction("b", "y", "z", "export function handle(ctx, e) { return { z: e.data.y }; }\n"),
+		map[string]string{"pair.yaml": workflowDoc("pair", "    - name: a\n      function:\n        ref: a\n"+
+			"    - name: b\n      function:\n        ref: b\n      dependsOn:\n        - a\n")}))
+	inst := runDev(t, dir)
 	waitFuncsReady(t, inst, "a", "b")
-	ctx := context.Background()
-	_, err := inst.client.Apply(ctx, &v1.WorkflowRun{
-		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflowRun.GVK().APIVersion(), Kind: v1.KindWorkflowRun},
-		ObjectMeta: v1.ObjectMeta{Name: "run-01", Namespace: devNamespace, ResourceGroup: devResourceGroup},
-		Spec:       v1.WorkflowRunSpec{Workflow: "pair", Input: json.RawMessage(`{"x":"1"}`)},
-	})
-	require.NoError(t, err)
-	var run *v1.WorkflowRun
-	require.Eventually(t, func() bool {
-		obj, gerr := inst.client.Get(ctx, v1.KindWorkflowRun, devNamespace, "run-01")
-		if gerr != nil {
-			return false
-		}
-		run = obj.(*v1.WorkflowRun)
-		return run.Status.Phase == "Succeeded" || run.Status.Phase == "Failed"
-	}, 60*time.Second, 100*time.Millisecond, "the run ends")
+	run := runToEnd(t, inst, "pair", `{"x":"1"}`)
 	require.Equal(t, v1.RunPhase("Succeeded"), run.Status.Phase, "%+v", run.Status.Steps)
 }
 
@@ -303,22 +283,18 @@ func TestDevSQLChangeFeedReachesASensor(t *testing.T) {
 	if l, err := net.Listen("tcp", "127.0.0.1:7075"); err == nil {
 		t.Cleanup(func() { _ = l.Close() })
 	}
-	bind := "bindings:\n  sql:\n    - alias: app\n      database: feed-db\n"
-	dir := devProject(t, map[string]string{
-		"items.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + bind + permissiveContract,
-		"items.mjs": `export async function handle(ctx, e) {
+	dir := devProject(t, merge(sqlFunction("items", "feed-db", `export async function handle(ctx, e) {
   await ctx.sql.execute('app', ['CREATE TABLE IF NOT EXISTS items (name TEXT)', 'CREATE TABLE IF NOT EXISTS seen (name TEXT)']);
   if (e.data.name) await ctx.sql.execute('app', 'INSERT INTO items VALUES (?)', [e.data.name]);
   return { seen: (await ctx.sql.query('app', 'SELECT name FROM seen')).map((r) => r.name) };
 }
-`,
-		"seen.funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + bind + permissiveContract,
-		"seen.mjs": `export async function handle(ctx, e) {
+`), nodeFunction("seen", "  sql:\n    - ref: feed-db\n  bindings:\n    sql:\n      - alias: app\n        database: feed-db\n", `export async function handle(ctx, e) {
   await ctx.sql.execute('app', 'INSERT INTO seen VALUES (?)', [e.data.after.name]);
   return {};
 }
-`,
-	})
+`), map[string]string{
+		"grant.yaml": sqlWriterGrant("seen", "feed-db"),
+	}))
 	inst, _ := startSQLDev(t, dir, devConfig{cacheDir: t.TempDir()})
 	waitFuncsReady(t, inst, "items", "seen")
 	post := func(body string) []string {
@@ -365,21 +341,17 @@ func TestDevSQLChangeFeedReachesASensor(t *testing.T) {
 	}, 30*time.Second, 200*time.Millisecond, "the Sensor recorded the new row")
 }
 
-// A SQL binding added to a manifest while funcdctl dev runs is served after the hot reload, as a KV binding is.
+// A SQL database and its binding added to a Function file while funcdctl dev runs are served after the reload, as a
+// KV binding is.
 func TestDevSQLBindingAddedWhileRunning(t *testing.T) {
 	requireSQLEngine(t)
-	dir := devProject(t, map[string]string{
-		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
-		"handler.mjs":   "export function handle() { return { n: 0 }; }\n",
-	})
+	dir := devProject(t, nodeFunction("api", "", "export function handle() { throw new Error('no database yet'); }\n"))
 	inst, _ := startSQLDev(t, dir, devConfig{cacheDir: t.TempDir()})
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "handler.mjs"), []byte(`export async function handle(ctx) {
+	writeProject(t, dir, sqlFunction("api", "late-db", `export async function handle(ctx) {
   await ctx.sql.execute('app', ['CREATE TABLE IF NOT EXISTS t (x)', 'INSERT INTO t VALUES (1)']);
   const [row] = await ctx.sql.query('app', 'SELECT count(*) AS n FROM t');
   return { n: row.n };
 }
-`), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "funcdctl.yaml"), []byte("runtime: nodejs22\nhandler: handle\n"+
-		"bindings:\n  sql:\n    - alias: app\n      database: late-db\n"+permissiveContract), 0o600))
-	require.GreaterOrEqual(t, addNote(t, inst), 1, "the reloaded function reaches its new database")
+`))
+	require.Equal(t, 1, addNote(t, inst), "the reloaded function reaches its new database")
 }

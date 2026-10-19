@@ -39,7 +39,7 @@ func TestIssue321_DevDocCommentsSitAboveTheirFunctions(t *testing.T) {
 			}
 		}
 	}
-	for _, name := range []string{"bootDev", "catalogAliases", "devShimOptions", "resolveInterpreter"} {
+	for _, name := range []string{"bootDev", "devShimOptions", "devInterpreter"} {
 		require.NotNil(t, docs[name], "%s has no doc comment", name)
 		require.True(t, strings.HasPrefix(docs[name].Text(), name+" "), "the doc comment of %s does not describe it: %q", name, docs[name].Text())
 	}

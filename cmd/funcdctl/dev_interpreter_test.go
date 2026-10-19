@@ -3,6 +3,9 @@
 package main
 
 import (
+	"context"
+	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,32 +16,33 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 )
 
-// pythonHandlerProject and nodeHandlerProject return the minimal one-handler projects the interpreter
-// startup tests boot.
+// pythonHandlerProject and nodeHandlerProject return the minimal one-Function folders the interpreter startup tests
+// boot.
 func pythonHandlerProject() map[string]string {
 	return map[string]string{
-		"funcdctl.yaml": "runtime: python314\nhandler: handle\n" + permissiveContract,
-		"handler.py":    "def handle(event, context):\n    return {}\n",
+		"api.yaml":          fnDoc("api", "python314", ""),
+		"api.py":            "def handle(event, context):\n    return {}\n",
+		"api.contract.yaml": "runtime: python314\ninput:\n  type: object\noutput:\n  type: object\n",
 	}
 }
 
 func nodeHandlerProject() map[string]string {
-	return map[string]string{
-		"funcdctl.yaml": "runtime: nodejs22\nhandler: handle\n" + permissiveContract,
-		"handler.mjs":   "export function handle() { return {}; }\n",
-	}
+	return nodeFunction("api", "", "export function handle() { return {}; }\n")
 }
 
-// scenario: dev-python-from-manifest / dev-interpreter-env-overrides (the resolution half) — a manifest
-// dev.python/dev.node value resolves relative to the manifest dir (or absolute); empty ⇒ "" so the caller
-// falls back to PATH. The env-override precedence is enforced in devShimOptions (env checked before this).
-func TestResolveInterpreter(t *testing.T) {
-	base := filepath.Join("home", "proj")
-	require.Equal(t, "", resolveInterpreter("", base), "empty ⇒ empty (caller falls back to PATH)")
-	require.Equal(t, filepath.Join("/abs", "python"), resolveInterpreter(filepath.Join("/abs", "python"), base),
-		"an absolute interpreter path is used as-is")
-	require.Equal(t, filepath.Join(base, ".venv", "bin", "python"), resolveInterpreter(filepath.Join(".venv", "bin", "python"), base),
-		"a relative path resolves against the manifest dir (the project venv)")
+// scenario: dev-interpreter-env-overrides (the resolution half) — FUNCD_PYTHON / FUNCD_NODE win, else the
+// interpreter on PATH, else none (ADR-0247 Decision 9).
+func TestDevInterpreter(t *testing.T) {
+	bin := t.TempDir()
+	onPath := filepath.Join(bin, "python3")
+	require.NoError(t, os.WriteFile(onPath, []byte("#!/bin/sh\n"), 0o700))
+	t.Setenv("PATH", bin)
+	t.Setenv("FUNCD_PYTHON", "")
+	require.Equal(t, onPath, devInterpreter("FUNCD_PYTHON", "python3"), "the interpreter on PATH")
+	t.Setenv("FUNCD_PYTHON", filepath.Join("venv", "bin", "python"))
+	require.Equal(t, filepath.Join("venv", "bin", "python"), devInterpreter("FUNCD_PYTHON", "python3"), "the override wins")
+	t.Setenv("FUNCD_NODE", "")
+	require.Empty(t, devInterpreter("FUNCD_NODE", "node"), "none found")
 }
 
 // Issue #322: funcdctl dev registered whatever python it found, so one that cannot import the shim (too
@@ -106,5 +110,49 @@ func TestIssue503_MissingNodeFailsAtStartup(t *testing.T) {
 	t.Run("python-handler", func(t *testing.T) {
 		_, err := tryStartDev(t, devProject(t, pythonHandlerProject()))
 		require.NoError(t, err, "a missing node does not block a python handler")
+	})
+}
+
+// requirePython skips a test when funcdctl dev finds no python that loads the shim.
+func requirePython(t *testing.T) {
+	t.Helper()
+	_, cleanup, err := devShimOptions(context.Background(), "requirePython", true, false)
+	if err != nil {
+		t.Skipf("funcdctl dev has no usable python: %v", err)
+	}
+	cleanup()
+}
+
+// pythonBuild is a python handler that returns version v.
+func pythonBuild(v int) string {
+	return fmt.Sprintf("def handle(context, event):\n    return {\"v\": %d}\n", v)
+}
+
+// scenario: dev-python-in-place — with intake = "src/intake/main.py" in [tool.funcd-bundle.functions], intake runs from
+// source and a save rolls a new revision; without the table, src/main.py runs the Function named after the folder.
+func TestScenarioDevPythonInPlace(t *testing.T) {
+	requirePython(t)
+	intake := map[string]string{
+		"intake.yaml":          fnDoc("intake", "python314", ""),
+		"intake.contract.yaml": "runtime: python314\ninput:\n  type: object\noutput:\n  type: object\n",
+	}
+
+	t.Run("listed", func(t *testing.T) {
+		dir := devProject(t, merge(intake, map[string]string{
+			"pyproject.toml":     "[tool.funcd-bundle.functions]\nintake = \"src/intake/main.py\"\n",
+			"src/intake/main.py": pythonBuild(1),
+		}))
+		inst := runDev(t, dir)
+		eventuallyServes(t, inst.gatewayURL+"/function/intake", `{"data":{}}`, http.StatusOK, `"v":1`)
+		// Another size: python reuses its cached bytecode for a source of the same size saved within the same second.
+		writeProject(t, dir, map[string]string{"src/intake/main.py": pythonBuild(22)})
+		eventuallyServes(t, inst.gatewayURL+"/function/intake", `{"data":{}}`, http.StatusOK, `"v":22`)
+	})
+	t.Run("src-main", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "intake")
+		require.NoError(t, os.Mkdir(dir, 0o700))
+		writeProject(t, dir, merge(intake, map[string]string{"src/main.py": pythonBuild(1)}))
+		inst := runDev(t, dir)
+		eventuallyServes(t, inst.gatewayURL+"/function/intake", `{"data":{}}`, http.StatusOK, `"v":1`)
 	})
 }

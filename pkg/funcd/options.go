@@ -491,6 +491,13 @@ func WithWorkflowContractResolver(r workflow.ContractResolver) Option {
 	return func(c *config) error { c.workflowContracts = r; return nil }
 }
 
+// WithWorkflowRuntimeResolver overrides how the workflow materializer resolves a step image's runtime (ADR-0247
+// Decision 7), the twin of WithWorkflowContractResolver: the production resolver reads the OCI manifest's runtime
+// annotation; `funcdctl dev` resolves a step's file:// copy from its build's contract file.
+func WithWorkflowRuntimeResolver(r workflow.RuntimeResolver) Option {
+	return func(c *config) error { c.workflowRuntimes = r; return nil }
+}
+
 // WithLogObserver streams every captured function log line to obs as it happens, in addition to the
 // normal blob-persisted capture — `funcdctl dev` uses it to print logs to the terminal in real time.
 // obs runs on the log-routing goroutine and must not block.

@@ -287,6 +287,8 @@ type config struct {
 	// OCI-metadata resolver. Set by `funcdctl dev` (ADR-0125) where a from-source step has no OCI artifact
 	// to inspect, so the OCI resolver can never resolve a file:// bundle's contract.
 	workflowContracts workflow.ContractResolver
+	// workflowRuntimes overrides the step-image RuntimeResolver (ADR-0247 Decision 7); nil ⇒ the OCI annotation.
+	workflowRuntimes workflow.RuntimeResolver
 
 	// catalogProvider overrides the CatalogService add-on-provider runtime (ADR-0087). Empty ⇒ the
 	// production runtime that supervises the curated duckdb CONTAINER (internal/provider). Set by
@@ -1249,7 +1251,11 @@ func (p *Platform) buildControlPlane() error {
 	}
 	p.workflowRetention = c.workflowRetention
 	p.workflowEngine = wfEngine
-	wfMaterializer := workflow.NewMaterializer(c.store, runtimeResolver{}, p.logger, c.pacing.SupervisionPeriod)
+	var wfRuntimes workflow.RuntimeResolver = runtimeResolver{}
+	if c.workflowRuntimes != nil {
+		wfRuntimes = c.workflowRuntimes
+	}
+	wfMaterializer := workflow.NewMaterializer(c.store, wfRuntimes, p.logger, c.pacing.SupervisionPeriod)
 	wfContracts := workflow.ContractResolver(contractResolver{})
 	if c.workflowContracts != nil {
 		wfContracts = c.workflowContracts

@@ -2,9 +2,6 @@ package sdk_test
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -13,99 +10,6 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
-
-// writeManifest writes body to a funcdctl.yaml in a temp dir and returns its path.
-func writeManifest(t *testing.T, body string) string {
-	t.Helper()
-	p := filepath.Join(t.TempDir(), "funcdctl.yaml")
-	require.NoError(t, os.WriteFile(p, []byte(body), 0o600))
-	return p
-}
-
-const manifestWithoutDev = `runtime: python314
-handler: handle
-bindings:
-  kv:
-    - alias: cache
-      store: cache-kv
-      table: entries
-  config:
-    - project-config
-  secrets:
-    - quack-token
-contract:
-  input:
-    type: object
-    additionalProperties: false
-    properties:
-      file:
-        type: string
-    required:
-      - file
-  output:
-    type: object
-    additionalProperties: false
-    properties:
-      rows:
-        type: integer
-    required:
-      - rows
-`
-
-// dev: block appended to the same four sections above.
-const manifestDevBlock = `
-dev:
-  backends:
-    kv: memory
-    blob: file://.funcd-dev/blob
-    catalog: file://.funcd-dev/lake
-  config:
-    project-config:
-      STOP_KEYWORDS: TOTALDESOPERATIONS,Solde
-      BANK: bank
-  secrets:
-    quack-token:
-      token: ${QUACK_TOKEN}
-`
-
-// scenario: the additive Dev block (ADR-0125) parses off funcdctl.yaml — backends (global per kind),
-// inline config, and env-ref secrets — without disturbing the ADR-0122 four fields.
-func TestLoadManifestParsesDevBlock(t *testing.T) {
-	m, err := sdk.LoadManifest(writeManifest(t, manifestWithoutDev+manifestDevBlock))
-	require.NoError(t, err)
-
-	require.Equal(t, "memory", m.Dev.Backends.KV)
-	require.Equal(t, "file://.funcd-dev/blob", m.Dev.Backends.Blob)
-	require.Equal(t, "file://.funcd-dev/lake", m.Dev.Backends.Catalog)
-	require.Equal(t, "bank", m.Dev.Config["project-config"]["BANK"])
-	require.Equal(t, "TOTALDESOPERATIONS,Solde", m.Dev.Config["project-config"]["STOP_KEYWORDS"])
-	require.Equal(t, "${QUACK_TOKEN}", m.Dev.Secrets["quack-token"]["token"],
-		"the ${ENV} ref is parsed verbatim — resolution happens in funcdctl dev, never here")
-}
-
-// scenario (unit): funcdctl push/types IGNORE the dev: block — a manifest with and without it produces
-// the IDENTICAL four ADR-0122 fields (the push/bake + GenerateTypes inputs), so `dev:` is inert to them.
-func TestDevBlockIgnoredByPushAndTypes(t *testing.T) {
-	base, err := sdk.LoadManifest(writeManifest(t, manifestWithoutDev))
-	require.NoError(t, err)
-	withDev, err := sdk.LoadManifest(writeManifest(t, manifestWithoutDev+manifestDevBlock))
-	require.NoError(t, err)
-
-	// The four fields push + types read are byte-identical regardless of the dev block.
-	require.Equal(t, base.Runtime, withDev.Runtime)
-	require.Equal(t, base.Handler, withDev.Handler)
-	require.Equal(t, base.Bindings, withDev.Bindings)
-	require.Equal(t, base.Contract, withDev.Contract)
-
-	// The push-time contract sides are unchanged by dev.
-	bi, bo, berr := base.ContractSides()
-	require.NoError(t, berr)
-	di, do, derr := withDev.ContractSides()
-	require.NoError(t, derr)
-	require.Equal(t, bi, di)
-	require.Equal(t, bo, do)
-
-}
 
 // DecodeManifest accepts YAML (the kubectl-style `funcdctl apply -f fn.yaml`) AND JSON.
 func TestDecodeManifestAcceptsYAMLAndJSON(t *testing.T) {
@@ -437,112 +341,6 @@ spec:
 	}
 }
 
-// funcdctl.yaml gets the resource-manifest key handling (#63, #64): a plain y/on/no key keeps its text
-// (contract property names and dev.config keys are user-named), and an unknown key is a fault.Invalid
-// naming it instead of a silent drop (a typo in `bindings` dropped every binding).
-func TestIssue298_ManifestKeepsKeyTextAndRejectsUnknownKeys(t *testing.T) {
-	const body = `runtime: python314
-handler: h.py
-bindings:
-  kv:
-    - alias: cache
-      store: cache-kv
-      table: entries
-contract:
-  input:
-    type: object
-    properties:
-      x:
-        type: number
-      y:
-        type: number
-  output:
-    type: "null"
-dev:
-  config:
-    app:
-      on: "1"
-  secrets:
-    creds:
-      no: ${NO_TOKEN}
-`
-	m, err := sdk.LoadManifest(writeManifest(t, body))
-	require.NoError(t, err)
-	require.JSONEq(t, `{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}}}`, string(m.Contract.Input))
-	require.Equal(t, map[string]map[string]string{"app": {"on": "1"}}, m.Dev.Config)
-	require.Equal(t, map[string]map[string]string{"creds": {"no": "${NO_TOKEN}"}}, m.Dev.Secrets)
-	require.Len(t, m.Bindings.KV, 1)
-
-	cases := map[string]struct {
-		from, to, key string
-	}{
-		"misspelled bindings": {from: "bindings:", to: "bindigns:", key: "bindigns"},
-		"nested unknown key":  {from: "      table: entries", to: "      tabel: entries", key: "tabel"},
-	}
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			_, err := sdk.LoadManifest(writeManifest(t, strings.Replace(body, tc.from, tc.to, 1)))
-			require.Error(t, err, "an unknown funcdctl.yaml key must not be dropped silently")
-			require.Equal(t, fault.Invalid, fault.KindOf(err))
-			require.Contains(t, err.Error(), tc.key)
-		})
-	}
-}
-
-// funcdctl.yaml gets the resource-manifest number handling (#416): a plain scalar that YAML reads as a number
-// keeps its text when it lands in a string field, so `funcdctl dev` hands the handler VERSION=1.10, not 1.1.
-// A contract side is a json.RawMessage, so its numbers stay numbers.
-func TestIssue699_ManifestNumberLikeTextInStringFieldKeepsText(t *testing.T) {
-	const body = `runtime: nodejs22
-handler: handle
-bindings:
-  blob:
-    - alias: b
-      bucket: bk
-      prefix: 0755
-contract:
-  input:
-    type: number
-    maximum: 1.10
-  output:
-    type: "null"
-dev:
-  catalog:
-    lake:
-      catalog:
-        bucket: bk
-        prefix: 0x1F
-  config:
-    app:
-      VERSION: 1.10
-      MODE: 0755
-      HEX: 0x1F
-      EXP: 1e3
-      PORT: 8080
-`
-	m, err := sdk.LoadManifest(writeManifest(t, body))
-	require.NoError(t, err)
-
-	t.Run("dev.config", func(t *testing.T) {
-		require.Equal(t, map[string]string{
-			"VERSION": "1.10",
-			"MODE":    "0755",
-			"HEX":     "0x1F",
-			"EXP":     "1e3",
-			"PORT":    "8080",
-		}, m.Dev.Config["app"])
-	})
-	t.Run("bindings.blob prefix", func(t *testing.T) {
-		require.Equal(t, "0755", m.Bindings.Blob[0].Prefix)
-	})
-	t.Run("dev.catalog prefix", func(t *testing.T) {
-		require.Equal(t, "0x1F", m.Dev.Catalog["lake"].Catalog.Prefix)
-	})
-	t.Run("contract keeps numbers", func(t *testing.T) {
-		require.JSONEq(t, `{"type":"number","maximum":1.1}`, string(m.Contract.Input))
-	})
-}
-
 // scenario: app-admission-refuses (the strict-decode half, ADR-0199 Decision 2): an App's sections decode into their
 // typed entries, a ref entry included, and an unknown section or entry key fails the decode naming it.
 func TestDecodeManifestApp(t *testing.T) {
@@ -580,25 +378,5 @@ spec:
 		_, err := sdk.DecodeManifest([]byte(head + body))
 		require.Error(t, err, key)
 		require.Contains(t, err.Error(), key)
-	}
-}
-
-// scenario: http-validate — a funcdctl.yaml with protocol: http needs a node runtime and carries no contract, so push
-// bakes none; any other protocol is refused (ADR-0243 Decision 7).
-func TestManifestProtocolHTTP(t *testing.T) {
-	m, err := sdk.LoadManifest(writeManifest(t, "runtime: nodejs22\nhandler: handle\nprotocol: http\n"))
-	require.NoError(t, err)
-	require.Equal(t, v1.ProtocolHTTP, m.Protocol)
-	_, _, err = m.ContractSides()
-	require.Equal(t, fault.Invalid, fault.KindOf(err), "an http Function has no contract sides")
-
-	for name, body := range map[string]string{
-		"python":   "runtime: python314\nhandler: handle\nprotocol: http\n",
-		"contract": "runtime: nodejs22\nhandler: handle\nprotocol: http\ncontract:\n  input:\n    type: object\n  output:\n    type: object\n",
-		"unknown":  "runtime: nodejs22\nhandler: handle\nprotocol: grpc\ncontract:\n  input:\n    type: object\n  output:\n    type: object\n",
-	} {
-		_, err := sdk.LoadManifest(writeManifest(t, body))
-		require.Equal(t, fault.Invalid, fault.KindOf(err), "%s: %v", name, err)
-		require.Contains(t, err.Error(), "protocol", name)
 	}
 }
