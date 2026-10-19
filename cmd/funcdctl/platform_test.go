@@ -14,32 +14,25 @@ import (
 	"github.com/pyvvo/funcd/internal/artifact"
 )
 
-// pushPlatform pushes a single-file function built "for" platform with a funcdctl.yaml beside it (or, without one,
-// with --schema) and returns the printed <ref>@<digest>.
-func pushPlatform(t *testing.T, layout, tag string, platform v1.OCIPlatform, withManifest bool) string {
+// pushPlatform pushes a single-file function built "for" platform with its contract file beside it and returns the
+// printed <ref>@<digest>.
+func pushPlatform(t *testing.T, layout, tag string, platform v1.OCIPlatform) string {
 	t.Helper()
-	dir := t.TempDir()
-	bundle := filepath.Join(dir, "handler.mjs")
+	bundle := filepath.Join(t.TempDir(), "handler.mjs")
 	require.NoError(t, os.WriteFile(bundle, []byte("export function handle() { return '"+string(platform)+"'; }\n"), 0o600))
-	args := []string{"push", bundle, "oci-layout://" + layout + ":" + tag, "--platform", string(platform)}
-	if withManifest {
-		manifest := "runtime: nodejs22\nhandler: handle\ncontract:\n  input:\n    type: \"null\"\n  output:\n    type: \"null\"\n"
-		require.NoError(t, os.WriteFile(filepath.Join(dir, "funcdctl.yaml"), []byte(manifest), 0o600))
-	} else {
-		args = append(args, "--schema", writeSchemaFile(t, `{"input":{"type":"null"},"output":{"type":"null"}}`), "--runtime", "nodejs22")
-	}
+	writeContractBeside(t, bundle, `{"input":{"type":"null"},"output":{"type":"null"}}`)
 	var out bytes.Buffer
-	require.NoError(t, execCLI(&out, nil, args...))
+	require.NoError(t, execCLI(&out, nil, "push", bundle, "oci-layout://"+layout+":"+tag, "--platform", string(platform)))
 	return strings.TrimSpace(out.String())
 }
 
-// scenario: push-records-platform + index-combines-platforms through the commands (ADR-0145): `push --platform` on
-// the funcdctl.yaml path and the --schema path, then `index` over both prints <ref>@<digest> of a two-platform index,
+// scenario: push-records-platform + index-combines-platforms through the commands (ADR-0145): `push --platform`
+// twice, then `index` over both prints <ref>@<digest> of a two-platform index,
 // and `pull --platform` gets each platform's file.
 func TestCLIPushPlatformAndIndex(t *testing.T) {
 	layout := filepath.Join(t.TempDir(), "layout")
-	amd := pushPlatform(t, layout, "amd", v1.PlatformLinuxAMD64, true)
-	arm := pushPlatform(t, layout, "arm", v1.PlatformLinuxARM64, false)
+	amd := pushPlatform(t, layout, "amd", v1.PlatformLinuxAMD64)
+	arm := pushPlatform(t, layout, "arm", v1.PlatformLinuxARM64)
 	require.Contains(t, amd, "@sha256:")
 	require.Contains(t, arm, "@sha256:")
 
@@ -67,9 +60,9 @@ func TestCLIPushPlatformAndIndex(t *testing.T) {
 func TestCLIPushPlatformRefusals(t *testing.T) {
 	bundle := filepath.Join(t.TempDir(), "handler.mjs")
 	require.NoError(t, os.WriteFile(bundle, []byte("export function handle() {}\n"), 0o600))
-	schema := writeSchemaFile(t, `{"input":{"type":"null"},"output":{"type":"null"}}`)
+	writeContractBeside(t, bundle, `{"input":{"type":"null"},"output":{"type":"null"}}`)
 	ref := "oci-layout://" + filepath.Join(t.TempDir(), "layout") + ":v1"
-	err := execCLI(&bytes.Buffer{}, nil, "push", bundle, ref, "--schema", schema, "--platform", "darwin/arm64")
+	err := execCLI(&bytes.Buffer{}, nil, "push", bundle, ref, "--platform", "darwin/arm64")
 	require.ErrorContains(t, err, "--platform")
 
 	site := t.TempDir()

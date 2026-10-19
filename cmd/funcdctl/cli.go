@@ -19,7 +19,6 @@ import (
 	"github.com/pyvvo/funcd/internal/app/template"
 	"github.com/pyvvo/funcd/internal/artifact"
 	"github.com/pyvvo/funcd/internal/backup/runner"
-	"github.com/pyvvo/funcd/internal/contract"
 	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
@@ -228,9 +227,7 @@ func (a *cli) deleteCmd() *cobra.Command {
 // cmdPush packages a bundle as an OCI artifact and pushes it, printing "<ref>@<digest>" to put
 // in Function.spec.image (ADR-0031/0097). It talks to the registry/layout, not the control plane.
 func (a *cli) pushCmd() *cobra.Command {
-	var schemaPath string
 	var entry string
-	var runtime string
 	var platform string
 	var isSite, isTemplate bool
 	cmd := &cobra.Command{
@@ -241,8 +238,8 @@ func (a *cli) pushCmd() *cobra.Command {
 			path, ref := args[0], args[1]
 			// ADR-0218: an App template is pushed as git holds it, tagged with its version, once its lock is fresh.
 			if isTemplate {
-				if isSite || schemaPath != "" || runtime != "" || platform != "" || cmd.Flags().Changed("entry") {
-					return fault.Invalidf("funcdctl push", "--template is mutually exclusive with --site, --schema, --runtime, --platform and --entry")
+				if isSite || platform != "" || entry != "" {
+					return fault.Invalidf("funcdctl push", "--template is mutually exclusive with --site, --platform and --entry")
 				}
 				t, err := template.CheckPush(path)
 				if err != nil {
@@ -256,8 +253,8 @@ func (a *cli) pushCmd() *cobra.Command {
 			}
 			// ADR-0139: a static-site bundle is its own artifact type — no contract, no runtime, no entry.
 			if isSite {
-				if schemaPath != "" || runtime != "" || platform != "" || cmd.Flags().Changed("entry") {
-					return fault.Invalidf("funcdctl push", "--site is mutually exclusive with --schema, --runtime, --platform and --entry (a site has no contract, runtime, platform, or handler)")
+				if platform != "" || entry != "" {
+					return fault.Invalidf("funcdctl push", "--site is mutually exclusive with --platform and --entry (a site has no contract, runtime, platform, or handler)")
 				}
 				digest, err := artifact.PushSite(cmd.Context(), ref, path)
 				if err != nil {
@@ -270,53 +267,12 @@ func (a *cli) pushCmd() *cobra.Command {
 			if platform != "" && !artifact.IsArtifactPlatform(v1.OCIPlatform(platform)) {
 				return fault.Invalidf("funcdctl push", "--platform %q is not one of %s, %s", platform, v1.PlatformLinuxAMD64, v1.PlatformLinuxARM64)
 			}
-			// ADR-0122: a colocated funcdctl.yaml is the PRIMARY contract source. When present (in the
-			// pushed bundle dir, or beside a single-file push), funcdctl gates + bakes the manifest's
-			// inline schema-only contract and records its runtime — no --schema, no language toolchain.
-			m, _, merr := resolveManifest(path)
-			if merr != nil {
-				return merr
-			}
-			if m != nil {
-				return a.pushFromManifest(cmd.Context(), path, ref, m, pushEntry(cmd, entry, m), v1.OCIPlatform(platform))
-			}
-			// A DIRECTORY is a multi-file bundle (ADR-0089): the mandatory {input, output} contract
-			// travels IN the bundle as __funcd_contract.json (not --schema), and PushBundle gates it
-			// (VerifyBundleContract, ADR-0090) + promotes it to the OCI contract layer. A FILE is the
-			// unchanged single-blob push whose contract comes from --schema.
-			if info, serr := os.Stat(path); serr == nil && info.IsDir() {
-				digest, err := artifact.PushBundle(cmd.Context(), ref, path, entry, runtime, v1.OCIPlatform(platform))
-				if err != nil {
-					return err
-				}
-				return a.writef("%s@%s\n", ref, digest)
-			}
-			// Every single-file function carries a mandatory single I/O contract (ADR-0090): one
-			// --schema file holding {input, output} (both keys required — a void side is {"type":"null"},
-			// never absent). Each side is gated against the funcd profile (the "def", ADR-0058/0060)
-			// BEFORE packaging, then assembled into the {dialect, input, output} contract blob embedded
-			// as OCI metadata (ADR-0059), readable later via `funcdctl inspect` without pulling the bundle.
-			input, output, gerr := gateSchema(schemaPath)
-			if gerr != nil {
-				return gerr
-			}
-			blob, berr := artifact.ContractBlob(input, output)
-			if berr != nil {
-				return berr
-			}
-			digest, err := artifact.Push(cmd.Context(), ref, path, blob, runtime, v1.OCIPlatform(platform))
-			if err != nil {
-				return err
-			}
-			return a.writef("%s@%s\n", ref, digest)
+			// ADR-0247: the build's contract file gives its contract and runtime.
+			return a.pushFromContract(cmd.Context(), path, ref, entry, v1.OCIPlatform(platform))
 		},
 	}
-	cmd.Flags().StringVar(&schemaPath, "schema", "",
-		"path to the mandatory I/O contract file — one JSON object {\"input\":…,\"output\":…} (both required; a void side is {\"type\":\"null\"}); each side is gated against the funcd profile, then embedded as OCI metadata (single-file push only; a bundle carries __funcd_contract.json)")
-	cmd.Flags().StringVar(&entry, "entry", "handler.py",
-		"handler entry file relative to the bundle root (directory push only, ADR-0089); a bundle with a funcdctl.yaml defaults to its main, else handler.py for a python* runtime and handler.mjs otherwise")
-	cmd.Flags().StringVar(&runtime, "runtime", "",
-		"runtime class recorded on the manifest (dev.funcd.runtime.v1, ADR-0094) so the workflow materializer resolves a step image's runtime without pulling the bundle")
+	cmd.Flags().StringVar(&entry, "entry", "",
+		"handler entry file relative to the bundle root (directory push only, ADR-0089); default main.py for a python runtime, else main.mjs (ADR-0247)")
 	cmd.Flags().StringVar(&platform, "platform", "",
 		"the platform the artifact was built for (linux/amd64 or linux/arm64), recorded on the manifest so `funcdctl index` can combine per-platform pushes (ADR-0145)")
 	cmd.Flags().BoolVar(&isSite, "site", false,
@@ -324,41 +280,6 @@ func (a *cli) pushCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&isTemplate, "template", false,
 		"push <path> (an App template directory with a fresh app.lock) as it is, tagged with its version (ADR-0218)")
 	return cmd
-}
-
-// gateSchema reads the single --schema file holding one {input, output} contract document (ADR-0090),
-// requires BOTH keys present, and runs each side through the funcd profile gate (ADR-0058/0060,
-// contract.Check checks one schema at a time). A void side is {"type":"null"}, never absent. Contracts
-// are mandatory: an empty path fails fault.Invalid (no contract-less push).
-func gateSchema(path string) (input, output []byte, err error) {
-	const op = "funcdctl push"
-	if path == "" {
-		return nil, nil, fault.Invalidf(op, "every function must declare an I/O contract (--schema <file> with {input, output})")
-	}
-	data, rerr := os.ReadFile(path) //nolint:gosec // path is a user-supplied CLI argument
-	if rerr != nil {
-		return nil, nil, fault.Invalidf(op, "read --schema %q: %v", path, rerr)
-	}
-	var doc struct {
-		Input  json.RawMessage `json:"input"`
-		Output json.RawMessage `json:"output"`
-	}
-	if jerr := json.Unmarshal(data, &doc); jerr != nil {
-		return nil, nil, fault.Invalidf(op, "--schema %q is not a valid {input, output} JSON document: %v", path, jerr)
-	}
-	if len(doc.Input) == 0 {
-		return nil, nil, fault.Invalidf(op, "--schema %q is missing the \"input\" key (a void side is {\"type\":\"null\"})", path)
-	}
-	if len(doc.Output) == 0 {
-		return nil, nil, fault.Invalidf(op, "--schema %q is missing the \"output\" key (a void side is {\"type\":\"null\"})", path)
-	}
-	if cerr := contract.Check(doc.Input); cerr != nil {
-		return nil, nil, fault.Wrapf(cerr, fault.KindOf(cerr), op, "--schema %q input side is outside the funcd profile", path)
-	}
-	if cerr := contract.Check(doc.Output); cerr != nil {
-		return nil, nil, fault.Wrapf(cerr, fault.KindOf(cerr), op, "--schema %q output side is outside the funcd profile", path)
-	}
-	return doc.Input, doc.Output, nil
 }
 
 // inspectCmd reads a function artifact's I/O contract from its OCI metadata (ADR-0059) — manifest +

@@ -200,7 +200,7 @@ func TestCLIPushTemplate(t *testing.T) {
 	dir, reg, _ := layoutTodo(t, true)
 	appDir := filepath.Join(dir, "app")
 	ref := "oci-layout://" + reg + "/todo-app:1.2.0"
-	for _, flag := range [][]string{{"--site"}, {"--schema", "s.json"}, {"--runtime", "nodejs22"}, {"--platform", "linux/amd64"}, {"--entry", "x"}} {
+	for _, flag := range [][]string{{"--site"}, {"--platform", "linux/amd64"}, {"--entry", "x"}} {
 		err := execCLI(&bytes.Buffer{}, nil, append(append([]string{"push", "--template"}, flag...), appDir, ref)...)
 		require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", flag)
 		require.ErrorContains(t, err, "--template is mutually exclusive")

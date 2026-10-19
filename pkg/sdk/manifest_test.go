@@ -105,12 +105,6 @@ func TestDevBlockIgnoredByPushAndTypes(t *testing.T) {
 	require.Equal(t, bi, di)
 	require.Equal(t, bo, do)
 
-	// The types codegen output is identical (dev never reaches GenerateTypes).
-	baseTypes, err := sdk.GenerateTypes(base)
-	require.NoError(t, err)
-	devTypes, err := sdk.GenerateTypes(withDev)
-	require.NoError(t, err)
-	require.Equal(t, baseTypes, devTypes)
 }
 
 // DecodeManifest accepts YAML (the kubectl-style `funcdctl apply -f fn.yaml`) AND JSON.

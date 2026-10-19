@@ -229,11 +229,11 @@ func TestScenarioCLIPushPullRoundtrip(t *testing.T) {
 	require.NoError(t, os.WriteFile(bundle, []byte("export function handle() {}\n"), 0o600))
 	ref := "oci-layout://" + filepath.Join(t.TempDir(), "layout") + ":v1"
 
-	// contracts are mandatory (ADR-0090): a --schema with a {input, output} document (void here).
-	schema := writeSchemaFile(t, `{"input":{"type":"null"},"output":{"type":"null"}}`)
+	// contracts are mandatory (ADR-0090): the contract file beside the build (void here, ADR-0247).
+	writeContractBeside(t, bundle, `{"input":{"type":"null"},"output":{"type":"null"}}`)
 
 	var out bytes.Buffer
-	require.NoError(t, execCLI(&out, nil, "push", bundle, ref, "--schema", schema))
+	require.NoError(t, execCLI(&out, nil, "push", bundle, ref))
 	printed := strings.TrimSpace(out.String())
 	require.True(t, strings.HasPrefix(printed, ref+"@sha256:"), "push prints <ref>@<digest>, got %q", printed)
 	digest := strings.TrimPrefix(printed, ref+"@")
@@ -247,70 +247,40 @@ func TestScenarioCLIPushPullRoundtrip(t *testing.T) {
 	require.Equal(t, "export function handle() {}\n", string(got))
 }
 
-// writeSchemaFile writes a single {input, output} contract document (ADR-0090) to a temp file and
-// returns its path — the mandatory --schema source for `push`.
-func writeSchemaFile(t *testing.T, body string) string {
+// writeContractBeside writes the contract file of build (ADR-0247): <stem>.contract.json beside it, runtime nodejs22,
+// with the {"input":…,"output":…} sides.
+func writeContractBeside(t *testing.T, build, sides string) {
 	t.Helper()
-	p := filepath.Join(t.TempDir(), "schema.json")
-	require.NoError(t, os.WriteFile(p, []byte(body), 0o600))
-	return p
+	stem := strings.TrimSuffix(filepath.Base(build), filepath.Ext(build))
+	body := `{"runtime":"nodejs22",` + strings.TrimPrefix(sides, "{")
+	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(build), stem+".contract.json"), []byte(body), 0o600))
 }
 
-// scenario: single-schema-surface (ADR-0090) — the single `--schema <file>` (one {input, output}
-// document) is the sole contract surface; the removed `--contract-input`/`--contract-output` flags no
-// longer exist; each side is still gated against the funcd profile (ADR-0058/0060) BEFORE packaging.
-func TestScenario_single_schema_surface(t *testing.T) {
-	dir := t.TempDir()
-	bundle := filepath.Join(dir, "bundle.js")
+// ADR-0247 Decision 2: the contract file is push's only contract and runtime source; --schema, --runtime and the
+// older --contract-input are unknown flags.
+func TestPushHasNoContractFlags(t *testing.T) {
+	bundle := filepath.Join(t.TempDir(), "bundle.js")
 	require.NoError(t, os.WriteFile(bundle, []byte("export function handle() {}\n"), 0o600))
-	ref := "oci-layout://" + filepath.Join(dir, "layout") + ":v1"
-
-	inProfile := writeSchemaFile(t, `{"input":{"type":"object","properties":{"id":{"type":"string"}},`+
-		`"required":["id"],"additionalProperties":false},"output":{"type":"null"}}`)
-	var out bytes.Buffer
-	require.NoError(t, execCLI(&out, nil, "push", bundle, ref, "--schema", inProfile),
-		"an in-profile {input, output} document passes the gate")
-	require.True(t, strings.HasPrefix(strings.TrimSpace(out.String()), ref+"@sha256:"))
-
-	// an out-of-profile side (open record) is rejected — nothing is pushed.
-	outOfProfile := writeSchemaFile(t, `{"input":{"type":"object","properties":{"id":{"type":"string"}},`+
-		`"additionalProperties":true},"output":{"type":"null"}}`)
-	out.Reset()
-	err := execCLI(&out, nil, "push", bundle, ref, "--schema", outOfProfile)
-	require.Error(t, err, "an out-of-profile side is rejected at push")
-	require.Contains(t, err.Error(), "profile", "the error names the profile violation")
-
-	// the removed flags no longer exist (cobra rejects an unknown flag).
-	out.Reset()
-	require.Error(t, execCLI(&out, nil, "push", bundle, ref, "--contract-input", inProfile),
-		"--contract-input is removed (ADR-0090)")
-
-	// contracts are mandatory: a push with no --schema fails fault.Invalid.
-	out.Reset()
-	nerr := execCLI(&out, nil, "push", bundle, ref)
-	require.Error(t, nerr, "a single-file push with no contract is refused (contracts are mandatory)")
-	require.Equal(t, fault.Invalid, fault.KindOf(nerr), "no contract → fault.Invalid")
-
-	// a document missing a key is rejected (both keys required).
-	half := writeSchemaFile(t, `{"input":{"type":"null"}}`)
-	out.Reset()
-	herr := execCLI(&out, nil, "push", bundle, ref, "--schema", half)
-	require.Error(t, herr, "a document missing the output key is rejected")
-	require.Equal(t, fault.Invalid, fault.KindOf(herr))
+	writeContractBeside(t, bundle, `{"input":{"type":"null"},"output":{"type":"null"}}`)
+	ref := "oci-layout://" + filepath.Join(t.TempDir(), "layout") + ":v1"
+	for _, flag := range [][]string{{"--schema", "s.json"}, {"--runtime", "nodejs22"}, {"--contract-input", "s.json"}} {
+		err := execCLI(&bytes.Buffer{}, nil, append([]string{"push", bundle, ref}, flag...)...)
+		require.ErrorContains(t, err, "unknown flag", "%v", flag)
+	}
 }
 
-// scenario: cli-inspect-reads-contract (ADR-0059/0090) — `push --schema` embeds the mandatory I/O
+// scenario: cli-inspect-reads-contract (ADR-0059/0090) — push embeds the mandatory I/O
 // contract as OCI metadata; `inspect <ref>@<digest>` reads BOTH sides back (no bundle pull, no run).
 func TestScenarioCLIInspectReadsContract(t *testing.T) {
 	dir := t.TempDir()
 	bundle := filepath.Join(dir, "bundle.js")
 	require.NoError(t, os.WriteFile(bundle, []byte("export function handle() {}\n"), 0o600))
 	ref := "oci-layout://" + filepath.Join(dir, "layout") + ":v1"
-	schema := writeSchemaFile(t, `{"input":{"type":"object","properties":{"name":{"type":"string"}},`+
+	writeContractBeside(t, bundle, `{"input":{"type":"object","properties":{"name":{"type":"string"}},`+
 		`"required":["name"],"additionalProperties":false},"output":{"type":"null"}}`)
 
 	var out bytes.Buffer
-	require.NoError(t, execCLI(&out, nil, "push", bundle, ref, "--schema", schema))
+	require.NoError(t, execCLI(&out, nil, "push", bundle, ref))
 	digest := strings.TrimPrefix(strings.TrimSpace(out.String()), ref+"@")
 
 	out.Reset()
@@ -326,11 +296,11 @@ func TestIssue325_InspectKeepsAtSignInLayoutPath(t *testing.T) {
 	bundle := filepath.Join(dir, "bundle.js")
 	require.NoError(t, os.WriteFile(bundle, []byte("export function handle() {}\n"), 0o600))
 	ref := "oci-layout://" + filepath.Join(dir, "a@b") + ":tag"
-	schema := writeSchemaFile(t, `{"input":{"type":"object","properties":{"name":{"type":"string"}},`+
+	writeContractBeside(t, bundle, `{"input":{"type":"object","properties":{"name":{"type":"string"}},`+
 		`"additionalProperties":false},"output":{"type":"null"}}`)
 
 	var out bytes.Buffer
-	require.NoError(t, execCLI(&out, nil, "push", bundle, ref, "--schema", schema))
+	require.NoError(t, execCLI(&out, nil, "push", bundle, ref))
 	digest := strings.TrimPrefix(strings.TrimSpace(out.String()), ref+"@")
 
 	for _, arg := range []string{ref, ref + "@" + digest} {
@@ -342,7 +312,7 @@ func TestIssue325_InspectKeepsAtSignInLayoutPath(t *testing.T) {
 }
 
 // scenario: cli-push-site (ADR-0139) — `push --site <dir> <ref>` packs a prebuilt web app as a site
-// artifact (no --schema needed) and prints <ref>@<digest>; the digest resolves as a site; and --site is
+// artifact (no contract file needed) and prints <ref>@<digest>; the digest resolves as a site; and --site is
 // mutually exclusive with the function flags.
 func TestScenarioCLIPushSite(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "dist")
@@ -359,7 +329,7 @@ func TestScenarioCLIPushSite(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, ref+"@"+digest, printed)
 
-	for _, extra := range [][]string{{"--schema", "x.json"}, {"--runtime", "python314"}, {"--entry", "index.html"}} {
+	for _, extra := range [][]string{{"--entry", "index.html"}} {
 		args := append([]string{"push", "--site", dir, ref}, extra...)
 		err := execCLI(&bytes.Buffer{}, nil, args...)
 		require.Equal(t, fault.Invalid, fault.KindOf(err), "--site with %v must be rejected", extra)
