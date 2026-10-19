@@ -84,6 +84,25 @@ func TestScenarioSecretReadFromFuncd(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
 }
 
+// A Function that binds no Secret lists an empty array, never null, and finds no key.
+func TestSecretListWithNoBindingIsEmpty(t *testing.T) {
+	t.Parallel()
+	st := secretStore(t)
+	obj, _ := v1.NewObject(v1.KindFunction)
+	fn := obj.(*v1.Function)
+	fn.Name, fn.Namespace, fn.ResourceGroup = "plain", "team-a", "rg1"
+	fn.Spec.Runtime, fn.Spec.Handler, fn.Spec.Image = "nodejs22", "handle", "file:///unused.mjs"
+	_, err := st.Create(context.Background(), fn)
+	require.NoError(t, err)
+	h := local.NewHandler(local.Ref{Namespace: "team-a", Function: "plain"}, nil, nil, nil, nil, nil, nil, nil,
+		local.WithSecrets(secretFacade(t, st, true)))
+
+	rec := do(t, h, http.MethodGet, "/secret", "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.JSONEq(t, `{"keys":[]}`, rec.Body.String())
+	require.Equal(t, http.StatusNotFound, do(t, h, http.MethodGet, "/secret/STRIPE_KEY", "").Code)
+}
+
 // scenario: secret-denied — an authorizer that denies the namespace's Secret reads to the secret-injector identity
 // makes both routes 403.
 func TestScenarioSecretDenied(t *testing.T) {

@@ -41,13 +41,14 @@ func NewFacade(d Deps) (*Facade, error) {
 	return &Facade{store: d.Store, resolver: d.Resolver}, nil
 }
 
-// List returns the sorted keys of the Secrets fn binds.
+// List returns the sorted keys of the Secrets fn binds, an empty list when none (never nil, so the route answers
+// {"keys": []}).
 func (f *Facade) List(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName) ([]string, error) {
 	values, err := f.values(ctx, ns, fn)
 	if err != nil {
 		return nil, err
 	}
-	return slices.Sorted(maps.Keys(values)), nil
+	return append([]string{}, slices.Sorted(maps.Keys(values))...), nil
 }
 
 // Get returns key's value among the Secrets fn binds, or found false when none holds it.
