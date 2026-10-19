@@ -44,7 +44,9 @@ func seamFunction(t *testing.T, src string) gateway.Gateway {
 	bundle := filepath.Join(t.TempDir(), "handler.mjs")
 	require.NoError(t, os.WriteFile(bundle, []byte(src), 0o600))
 	ref := "oci-layout://" + filepath.Join(t.TempDir(), "layout") + ":v1"
-	digest, err := artifact.Push(context.Background(), ref, bundle, nil, "", "")
+	contract, err := artifact.ContractBlob([]byte(`{}`), []byte(`{}`))
+	require.NoError(t, err)
+	digest, err := artifact.Push(context.Background(), ref, bundle, contract, "", "")
 	require.NoError(t, err)
 	return realshim.Ready(t, artifact.NewOrasMaterializer(t.TempDir(), ""), ref, digest)
 }

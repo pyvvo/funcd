@@ -222,8 +222,7 @@ func TestScenarioHTTPMismatch(t *testing.T) {
 	blob, err := artifact.ContractBlob([]byte(`{}`), []byte(`{}`))
 	require.NoError(t, err)
 	contractRef, contractDigest := e.pushDevices(t, "contract", blob)
-	appRef, appDigest := e.pushDevices(t, "devices", nil)
-	asEvent := devicesFn(t, "app-as-event", appRef, appDigest)
+	asEvent := devicesFn(t, "app-as-event", contractRef, contractDigest)
 	asEvent.Spec.Protocol = ""
 	for _, fn := range []*v1.Function{
 		devicesFn(t, "event-export", eventRef, eventDigest), devicesFn(t, "with-contract", contractRef, contractDigest), asEvent,

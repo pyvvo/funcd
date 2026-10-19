@@ -694,10 +694,10 @@ func (r *Reconciler) poolManifest(ctx context.Context, members []*v1.Function, s
 		path := ""
 		contractPath := ""
 		if r.materializer != nil {
-			p, err := r.materializer.Materialize(ctx, m)
+			p, err := r.materialize(ctx, m)
 			if err != nil && m.Name != self.Name {
 				if s := r.servingMember(ctx, m); s != nil {
-					if sp, serr := r.materializer.Materialize(ctx, s); serr == nil {
+					if sp, serr := r.materialize(ctx, s); serr == nil {
 						m, p, err = s, sp, nil
 					}
 				}

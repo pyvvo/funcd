@@ -141,7 +141,9 @@ func (d *crashDaemon) apply(t *testing.T, c *sdk.Client, name string, replicas i
 	bundle := filepath.Join(t.TempDir(), "handler.mjs")
 	require.NoError(t, os.WriteFile(bundle, []byte("export function handle() { return { pid: process.pid }; }\n"), 0o600))
 	ref := "oci-layout://" + filepath.Join(t.TempDir(), "layout") + ":v1"
-	_, err := artifact.Push(context.Background(), ref, bundle, nil, "", "")
+	contract, err := artifact.ContractBlob([]byte(`{}`), []byte(`{}`))
+	require.NoError(t, err)
+	_, err = artifact.Push(context.Background(), ref, bundle, contract, "", "")
 	require.NoError(t, err)
 	obj, _ := v1.NewObject(v1.KindFunction)
 	fn := obj.(*v1.Function)

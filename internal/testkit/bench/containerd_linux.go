@@ -113,7 +113,12 @@ func RunContainerd(ctx context.Context, cfg ContainerdConfig) (FootprintReport, 
 		return FootprintReport{}, fault.Wrapf(err, fault.Internal, op, "sdk client")
 	}
 	ref := "oci-layout://" + filepath.Join(tmp, "layout") + ":v1"
-	if _, perr := artifact.Push(ctx, ref, bundle, nil, "", ""); perr != nil {
+	// The bench handler takes any event, so it carries an open contract: an OCI cloudevent artifact needs one (#1084).
+	contract, cerr := artifact.ContractBlob([]byte(`{}`), []byte(`{}`))
+	if cerr != nil {
+		return FootprintReport{}, fault.Wrapf(cerr, fault.Internal, op, "contract")
+	}
+	if _, perr := artifact.Push(ctx, ref, bundle, contract, "", ""); perr != nil {
 		return FootprintReport{}, fault.Wrapf(perr, fault.Internal, op, "push artifact")
 	}
 	dataPlane := "http://" + p.DataPlaneAddr()

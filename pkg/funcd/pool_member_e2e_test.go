@@ -403,7 +403,9 @@ func TestScenarioWorkflowStepsSplitBySecrets(t *testing.T) {
 		file := filepath.Join(src, "step"+l.ext)
 		require.NoError(t, os.WriteFile(file, []byte(l.dbEcho), 0o600))
 		ref := "oci-layout://" + h.layout + ":step"
-		_, err := artifact.Push(context.Background(), ref, file, nil, l.runtime, "")
+		contract, err := artifact.ContractBlob([]byte(`{}`), []byte(`{}`))
+		require.NoError(t, err)
+		_, err = artifact.Push(context.Background(), ref, file, contract, l.runtime, "")
 		require.NoError(t, err)
 
 		obj, _ = v1.NewObject(v1.KindWorkflow)

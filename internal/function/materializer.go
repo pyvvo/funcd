@@ -16,6 +16,13 @@ type Materializer interface {
 	Materialize(ctx context.Context, fn *v1.Function) (localPath string, err error)
 }
 
+// ContractRequirer is a Materializer whose artifacts carry their I/O contract (ADR-0090): the oras driver, whose
+// artifacts funcdctl push builds. The file driver is not one: funcdctl dev delivers each contract itself, and a test
+// runs a handler with none.
+type ContractRequirer interface {
+	RequiresContract() bool
+}
+
 // ArtifactResolver resolves an OCI artifact ref (tag) to its digest (ADR-0035), so the
 // reconciler can pin it into the immutable Revision at stamp time instead of the user
 // typing it. The oras driver implements it; the file driver needs none (file:// has no

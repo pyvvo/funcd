@@ -673,6 +673,10 @@ func (m *OrasMaterializer) Materialize(ctx context.Context, fn *v1.Function) (st
 	return path, err
 }
 
+// RequiresContract reports that an OCI artifact carries its I/O contract (ADR-0090): funcdctl push bakes one into
+// every cloudevent artifact, so the reconciler refuses one that has none (issue #1084).
+func (*OrasMaterializer) RequiresContract() bool { return true }
+
 // pulledMarker, appended to a cache dir's path, names the file that marks the dir as filled by a completed pull. It
 // lives beside the dir, so no bundle layer can carry it.
 const pulledMarker = ".pulled"

@@ -173,7 +173,12 @@ func runBackend(ctx context.Context, shimPath, bundle string, backend Backend, c
 		return Report{}, fault.Wrapf(err, fault.Internal, op, "sdk client")
 	}
 	ref := "oci-layout://" + filepath.Join(tmp, "layout") + ":v1"
-	if _, err := artifact.Push(ctx, ref, bundle, nil, "", ""); err != nil {
+	// The bench handler takes any event, so it carries an open contract: an OCI cloudevent artifact needs one (#1084).
+	contract, cerr := artifact.ContractBlob([]byte(`{}`), []byte(`{}`))
+	if cerr != nil {
+		return Report{}, fault.Wrapf(cerr, fault.Internal, op, "contract")
+	}
+	if _, err := artifact.Push(ctx, ref, bundle, contract, "", ""); err != nil {
 		return Report{}, fault.Wrapf(err, fault.Internal, op, "push artifact")
 	}
 	dataPlane := "http://" + p.DataPlaneAddr()

@@ -682,6 +682,11 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 			return afterHeld(res, gerr, herr)
 		}
 	}
+	if cm := (contractMissingError{}); errors.As(err, &cm) {
+		// Issue #1084: only a new artifact, so a new generation, brings the contract; no pass retries this one.
+		res, gerr := r.gateFailed(ctx, fn, gateFailure{reason: reasonContractMissing, message: cm.Error(), readyMessage: cm.Error(), phase: v1.PhaseFailed}, idx, drainAfter)
+		return afterHeld(res, gerr, herr)
+	}
 	if err != nil {
 		return controller.Result{}, convergeError{err}
 	}
@@ -1824,7 +1829,7 @@ func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, re
 	if r.materializer != nil && len(launch) > 0 {
 		mfn := *tmpl
 		mfn.Spec.ImageDigest = pinnedDigest
-		artifactPath, err = r.materializer.Materialize(ctx, &mfn)
+		artifactPath, err = r.materialize(ctx, &mfn)
 		if err != nil {
 			return revisionPass{}, fault.Wrapf(err, fault.KindOf(err), op, "materialize artifact")
 		}
@@ -3074,8 +3079,9 @@ func addBundleEnv(env map[string]string, rt v1.RuntimeName, bundleRoot string) {
 var contractDeliveryNames = []string{"__funcd_contract.json", ".funcd-contract.json"}
 
 // contractFileIn reports the delivered contract file name present in the host bundle root dir, if
-// any (ADR-0123). "" when none — a contract-less legacy artifact, or a dev FileMaterializer path
-// with no delivered schema (the shim then falls back to a module-baked validator).
+// any (ADR-0123). "" when none — an http Function's artifact (ADR-0243), or a dev FileMaterializer path
+// with no delivered schema (the shim then falls back to a module-baked validator); a cloudevent
+// Function's OCI artifact without one never starts (materialize, issue #1084).
 func contractFileIn(dir string) (name string, ok bool) {
 	for _, n := range contractDeliveryNames {
 		if _, err := os.Stat(filepath.Join(dir, n)); err == nil {
@@ -3083,6 +3089,34 @@ func contractFileIn(dir string) (name string, ok bool) {
 		}
 	}
 	return "", false
+}
+
+// reasonContractMissing is the reason of a cloudevent Function whose artifact carries no I/O contract (issue #1084).
+const reasonContractMissing = "ContractMissing"
+
+// contractMissingError is the materialize error of a cloudevent Function whose artifact, from a ContractRequirer,
+// carries no I/O contract (ADR-0090, issue #1084).
+type contractMissingError struct{ digest string }
+
+func (e contractMissingError) Error() string {
+	return "artifact " + e.digest + " carries no I/O contract; a cloudevent Function needs one (ADR-0090)"
+}
+
+// materialize materializes fn's artifact and refuses it when the materializer is a ContractRequirer, fn is a
+// cloudevent Function and the bundle root holds no delivered contract (issue #1084). An http Function carries none by
+// design (ADR-0243).
+func (r *Reconciler) materialize(ctx context.Context, fn *v1.Function) (string, error) {
+	path, err := r.materializer.Materialize(ctx, fn)
+	if err != nil {
+		return "", err
+	}
+	if req, ok := r.materializer.(ContractRequirer); !ok || !req.RequiresContract() || fn.Spec.Protocol.Normalized() != v1.ProtocolCloudEvent {
+		return path, nil
+	}
+	if _, ok := contractFileIn(filepath.Dir(path)); !ok {
+		return "", contractMissingError{digest: fn.Spec.ImageDigest}
+	}
+	return path, nil
 }
 
 // addContractEnv sets FUNCD_CONTRACT_PATH (ADR-0123) so the shim compiles the delivered I/O schema

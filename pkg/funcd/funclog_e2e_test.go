@@ -45,10 +45,12 @@ func TestScenarioE2EFunclogCapturesBurst(t *testing.T) {
 	bucket, err := gocloud.Open(context.Background(), "mem://")
 	require.NoError(t, err)
 
-	// Push the bare bundle (no I/O contract — the example's point is the log burst) to a local OCI layout.
+	// Push the bundle with an open contract (the example's point is the log burst) to a local OCI layout.
 	layout := t.TempDir()
 	ref := "oci-layout://" + layout + ":log-burst"
-	digest, err := artifact.Push(context.Background(), ref, filepath.Join(exDir, "burst.mjs"), nil, "", "")
+	contract, err := artifact.ContractBlob([]byte(`{}`), []byte(`{}`))
+	require.NoError(t, err)
+	digest, err := artifact.Push(context.Background(), ref, filepath.Join(exDir, "burst.mjs"), contract, "", "")
 	require.NoError(t, err)
 
 	messaging, err := nats.Open(context.Background(), nats.Options{Storage: nats.MemoryStorage})
