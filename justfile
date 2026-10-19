@@ -510,6 +510,17 @@ check-hygiene:
         echo "hygiene: a language-module version or module-cache path is hard-coded above — resolve it through go.mod (scripts/moddir.sh)"
         fail=1
     fi
+    # ADR header shape (ADR-0000): every header field is a `- **Key**:` list item, with a Status line and,
+    # except the process ADR, a Realizes line — the form the project-summary reconciler reads.
+    for f in docs/adr/[0-9][0-9][0-9][0-9]-*.md; do
+        if ! awk -v f="$f" 'FNR == 1 { next } /^## / { exit } /^\*\*[A-Za-z]/ { print "hygiene: " f ":" FNR ": header field is not a list item (- **Key**: …)"; bad = 1 }
+            /^- \*\*Status\*\*:/ { s = 1 } /^- \*\*Realizes\*\*:/ { r = 1 }
+            END { if (!s) { print "hygiene: " f ": no - **Status**: line"; bad = 1 }
+                  if (!r && f !~ /\/0000-/) { print "hygiene: " f ": no - **Realizes**: line"; bad = 1 }
+                  exit bad }' "$f"; then
+            fail=1
+        fi
+    done
     if [ "$fail" -eq 0 ]; then echo "hygiene: clean"; fi
     exit "$fail"
 

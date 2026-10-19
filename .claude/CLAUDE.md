@@ -133,6 +133,8 @@ When you change the **row**, you owe the checked **columns** — in the same ses
 ## Invariants (must always hold)
 
 - Every ADR has a `Realizes: FEAT-NNNN/Fxx` header pointing at a real feat row.
+- Every ADR header field is a `- **Key**: value` list item (`- **Status**:`, `- **Realizes**:`, …), never a bare
+  `**Key**:` line: `just check-hygiene` enforces it, and the project-summary reconciler reads that form.
 - Blueprint ⟷ newest Accepted ADR: on conflict the ADR wins and the blueprint is updated.
 - **An `Accepted` ADR is frozen in substance.** Context, Scenarios, Decision, Contracts,
   Alternatives — none of it changes after acceptance. The *only* edits ever allowed are the

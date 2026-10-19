@@ -1,15 +1,15 @@
 # ADR-0121: Declarative referential integrity — reconcile-time cross-resource existence
 
 - **Status**: Implemented (2026-07-10)
-**Superseded in part by**: [ADR-0162](0162-catalog-stable-proxy-url.md) (2026-10-05) — Decision 2: CatalogNotFound reason for missing spec.catalogs referent.
-**Superseded in part by**: [ADR-0163](0163-retry-times-in-config.md) (2026-10-05) — Decision 2 RequeueAfter 2s, no config keys: now controller.referentPollInterval.
-**Superseded in part by**: [ADR-0196](0196-utc-millisecond-timestamps.md) (2026-10-07) — the `time.Time` field type (89): `lastTransitionTime` is stamped in UTC and written with exactly 3 fractional digits.
-**Date**: 2026-07-10
-**Deciders**: green-0-rabbit
-**Acceptance note**: judged with no Blockers — the fail-closed single-writer claim was traced and confirmed in `internal/auth/cedar/capabilities.go` (a missing bucket ⇒ ownerless prefix ⇒ deny; a present bucket with an absent owner ⇒ owner UID no principal holds ⇒ deny until applied). Folded the Major (added ADR-0072/0073 to the refines list + References + feat row) and the Minors (softened the dangling-owner observability note; `catalog.go` deleted entirely; `nameExists` relocated to `kvstore.go:280`; blueprint sync flagged).
-**Tags**: control-plane, admission, reconcile, declarative
-**Realizes**: FEAT-0001/F86
-**Relates to**: [ADR-0063](0063-admission-framework.md) (the admission framework this refines); refines the *admission-timing* of [ADR-0072](0072-kv-as-a-declarative-resource.md), [ADR-0073](0073-kv-bindings-and-subdomains.md), [ADR-0080](0080-s3-protocol-frontend-blob-substrate.md), [ADR-0086](0086-catalog-query-provider-ducklake-duckdb-quack.md), [ADR-0088](0088-add-on-provider-s3-identity.md), [ADR-0091](0091-function-catalog-consumer-binding.md) (not their resource contracts — no supersede)
+- **Superseded in part by**: [ADR-0162](0162-catalog-stable-proxy-url.md) (2026-10-05) — Decision 2: CatalogNotFound reason for missing spec.catalogs referent.
+- **Superseded in part by**: [ADR-0163](0163-retry-times-in-config.md) (2026-10-05) — Decision 2 RequeueAfter 2s, no config keys: now controller.referentPollInterval.
+- **Superseded in part by**: [ADR-0196](0196-utc-millisecond-timestamps.md) (2026-10-07) — the `time.Time` field type (89): `lastTransitionTime` is stamped in UTC and written with exactly 3 fractional digits.
+- **Date**: 2026-07-10
+- **Deciders**: green-0-rabbit
+- **Acceptance note**: judged with no Blockers — the fail-closed single-writer claim was traced and confirmed in `internal/auth/cedar/capabilities.go` (a missing bucket ⇒ ownerless prefix ⇒ deny; a present bucket with an absent owner ⇒ owner UID no principal holds ⇒ deny until applied). Folded the Major (added ADR-0072/0073 to the refines list + References + feat row) and the Minors (softened the dangling-owner observability note; `catalog.go` deleted entirely; `nameExists` relocated to `kvstore.go:280`; blueprint sync flagged).
+- **Tags**: control-plane, admission, reconcile, declarative
+- **Realizes**: FEAT-0001/F86
+- **Relates to**: [ADR-0063](0063-admission-framework.md) (the admission framework this refines); refines the *admission-timing* of [ADR-0072](0072-kv-as-a-declarative-resource.md), [ADR-0073](0073-kv-bindings-and-subdomains.md), [ADR-0080](0080-s3-protocol-frontend-blob-substrate.md), [ADR-0086](0086-catalog-query-provider-ducklake-duckdb-quack.md), [ADR-0088](0088-add-on-provider-s3-identity.md), [ADR-0091](0091-function-catalog-consumer-binding.md) (not their resource contracts — no supersede)
 
 ## Context & Need
 
