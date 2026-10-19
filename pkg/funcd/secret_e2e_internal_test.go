@@ -12,14 +12,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
-	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/testkit/langmod"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
@@ -38,28 +36,6 @@ export async function handle(ctx) {
   };
 }
 `
-
-// envEngine is a CatalogService engine that reports Ready and records the environment it is given.
-type envEngine struct {
-	addr string
-	mu   sync.Mutex
-	env  map[string]string
-}
-
-func (e *envEngine) Converge(_ context.Context, spec provider.ProviderSpec) (provider.ProviderStatus, error) {
-	e.mu.Lock()
-	e.env = spec.Env
-	e.mu.Unlock()
-	return provider.ProviderStatus{Running: 1, Ready: true, Address: e.addr}, nil
-}
-
-func (*envEngine) Teardown(context.Context, provider.ProviderRef) error { return nil }
-
-func (e *envEngine) lastEnv() map[string]string {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.env
-}
 
 // secretRig is a platform on the real node shim with Secret api-keys (STRIPE_KEY sk, MODE prod) and ConfigMap
 // app-settings (LOG_LEVEL debug, MODE dev) in namespace default.
