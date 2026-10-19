@@ -258,7 +258,7 @@ func TestScenarioPooledFunctionsOwnConfig(t *testing.T) {
 	e.waitServes(t, "paris", "tokyo")
 	for name, tz := range map[string]string{"paris": "Europe/Paris", "tokyo": "Asia/Tokyo"} {
 		_, body := e.answer(t, name)
-		require.JSONEq(t, `{"tz":"`+tz+`","stripe":""}`, body, "%s reads its own values", name)
+		require.JSONEq(t, `{"tz":"`+tz+`","stripe":"","envStripe":""}`, body, "%s reads its own values", name)
 	}
 	require.NotEqual(t, e.function(t, "paris").Status.Pool, e.function(t, "tokyo").Status.Pool, "they land in different pools")
 }

@@ -37,7 +37,7 @@ type poolLang struct {
 	creds                string // return {ak, sk} from the S3 env
 	hello, quiet         string // log "hello-a" through Path B; log nothing
 	noHandle             string // export no handle
-	dbEcho               string // return {db} from the env
+	dbEcho               string // return {db} read through ctx.secret (ADR-0249)
 }
 
 func (l poolLang) fn(src string) shimFn { return shimFn{runtime: l.runtime, ext: l.ext, src: src} }
@@ -52,7 +52,7 @@ func nodePoolLang() poolLang {
 		hello:    "export function handle() { console.log('hello-a'); return { ok: true }; }\n",
 		quiet:    "export function handle() { return { ok: true }; }\n",
 		noHandle: "export function other() { return {}; }\n",
-		dbEcho:   "export function handle() { return { db: process.env.DB_PASS ?? '' }; }\n",
+		dbEcho:   "export async function handle(ctx) { return { db: (await ctx.secret.get('DB_PASS')) ?? '' }; }\n",
 	}
 }
 
@@ -66,7 +66,7 @@ func pythonPoolLang() poolLang {
 		hello:    "import logging\n\n\ndef handle(ctx, event):\n    logging.info(\"hello-a\")\n    return {\"ok\": True}\n",
 		quiet:    "def handle(ctx, event):\n    return {\"ok\": True}\n",
 		noHandle: "def other(ctx, event):\n    return {}\n",
-		dbEcho:   "import os\n\n\ndef handle(ctx, event):\n    return {\"db\": os.environ.get(\"DB_PASS\", \"\")}\n",
+		dbEcho:   "def handle(ctx, event):\n    return {\"db\": ctx.secret.get(\"DB_PASS\") or \"\"}\n",
 	}
 }
 
@@ -392,7 +392,7 @@ func (h *shimRig) settledPoolPID(t *testing.T, rt, worker string) int {
 }
 
 // scenario: workflow-steps-split-by-secrets — in a default-shared Workflow, step s1 binds Secret db and s2 none:
-// both are Ready, only s1's env holds db's key, and their status.pool differ.
+// both are Ready, only s1 reads db's key, and their status.pool differ.
 func TestScenarioWorkflowStepsSplitBySecrets(t *testing.T) {
 	forPoolLangs(t, func(t *testing.T, l poolLang) {
 		h := newShimRig(t, l.python)
@@ -432,8 +432,8 @@ func TestScenarioWorkflowStepsSplitBySecrets(t *testing.T) {
 			r := h.post("wf-s1", `{}`)
 			assert.Equal(c, http.StatusOK, r.status, r.body)
 			assert.NoError(c, json.Unmarshal([]byte(r.body), &got))
-			assert.Equal(c, "pw", got.DB, "s1's env holds db's key")
+			assert.Equal(c, "pw", got.DB, "s1 reads db's key")
 		}, 15*time.Second, 200*time.Millisecond)
-		require.Empty(t, h.call(t, "wf-s2").DB, "s2's env does not hold db's key")
+		require.Empty(t, h.call(t, "wf-s2").DB, "s2 does not read db's key")
 	})
 }
