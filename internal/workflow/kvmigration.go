@@ -9,6 +9,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/ownedstore"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -75,9 +76,9 @@ func MarkKVStoresOnce(ctx context.Context, s store.Store, log *slog.Logger) erro
 	return nil
 }
 
-// hasMarker reports whether refs hold a store marker (IsKVMarker).
+// hasMarker reports whether refs hold a store marker (ownedstore.IsMarker).
 func hasMarker(refs []v1.OwnerReference) bool {
-	return slices.ContainsFunc(refs, IsKVMarker)
+	return slices.ContainsFunc(refs, ownedstore.IsMarker)
 }
 
 // upgradeOwner returns the one Workflow of st's namespace that may adopt st at upgrade and declares it in

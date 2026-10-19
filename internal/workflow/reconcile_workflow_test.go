@@ -11,6 +11,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/activator"
+	"github.com/pyvvo/funcd/internal/ownedstore"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
 )
@@ -118,11 +119,11 @@ func TestMaterializeDeletionPolicy(t *testing.T) {
 		t.Fatalf("Materialize: %v", err)
 	}
 	keep, _ := s.Get(ctx, v1.KindKVStore.GVK(), "default", "keep-kv")
-	if refs := keep.(*v1.KVStore).OwnerReferences; controllerRefs(refs) != 0 || !marked(refs, wf) {
+	if refs := keep.(*v1.KVStore).OwnerReferences; controllerRefs(refs) != 0 || !ownedstore.Marked(refs, wf) {
 		t.Fatalf("retain store must have NO controller ref (outlives the workflow) and the marker, got %+v", refs)
 	}
 	drop, _ := s.Get(ctx, v1.KindKVStore.GVK(), "default", "drop-kv")
-	if refs := drop.(*v1.KVStore).OwnerReferences; controllerRefs(refs) != 1 || !marked(refs, wf) {
+	if refs := drop.(*v1.KVStore).OwnerReferences; controllerRefs(refs) != 1 || !ownedstore.Marked(refs, wf) {
 		t.Fatalf("delete store must cascade via one controller ref and carry the marker, got %+v", refs)
 	}
 }
@@ -169,7 +170,7 @@ func TestIssue149_KVDeletionPolicyChangeUpdatesOwnerRef(t *testing.T) {
 			if kv.UID != first.(*v1.KVStore).UID {
 				t.Fatalf("kvstore UID changed across re-materialize: %q -> %q", first.(*v1.KVStore).UID, kv.UID)
 			}
-			if !marked(kv.OwnerReferences, wf) {
+			if !ownedstore.Marked(kv.OwnerReferences, wf) {
 				t.Fatalf("deletion %s -> %s: marker missing: %+v", tc.from, tc.to, kv.OwnerReferences)
 			}
 			if got := controllerRefs(kv.OwnerReferences); got != tc.wantOwners {

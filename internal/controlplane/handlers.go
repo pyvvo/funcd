@@ -976,7 +976,7 @@ func (h *storeHandlers) ListBuckets(ctx context.Context, ns v1.NamespaceName) ([
 }
 
 func (h *storeHandlers) ReplaceBucket(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, b v1.Bucket) (v1.Bucket, error) {
-	return typedObj[v1.Bucket](h.replaceObj(ctx, v1.KindBucket, ns, name, &b))
+	return typedObj[v1.Bucket](h.replaceObjIf(ctx, v1.KindBucket, ns, name, &b, h.refuseLiveMarked))
 }
 
 func (h *storeHandlers) DeleteBucket(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
@@ -1020,7 +1020,7 @@ func (h *storeHandlers) ListSQLDatabases(ctx context.Context, ns v1.NamespaceNam
 }
 
 func (h *storeHandlers) ReplaceSQLDatabase(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, db v1.SQLDatabase) (v1.SQLDatabase, error) {
-	return typedObj[v1.SQLDatabase](h.replaceObj(ctx, v1.KindSQLDatabase, ns, name, &db))
+	return typedObj[v1.SQLDatabase](h.replaceObjIf(ctx, v1.KindSQLDatabase, ns, name, &db, h.refuseLiveMarked))
 }
 
 func (h *storeHandlers) DeleteSQLDatabase(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {

@@ -1,6 +1,7 @@
 # ADR-0086: Catalog/query provider — DuckLake + DuckDB + Quack as a curated add-on
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0246](0246-bindings-under-spec.md) (2026-10-19) — where the binding lives: the CatalogService's `spec.blob`, `spec.config` and `spec.secrets` move under `spec.bindings`; what it grants is unchanged.
 - **Date**: 2026-06-30 (accepted 2026-06-30; implemented 2026-06-30 — review `pass`, [scorecard](../reviews/adr-0086-implementation-claude-opus-4-8.md): 1 Major found+fixed (catalog must be a bound blob binding), live-DuckDB scenarios deferred node-gated. Judge folded: B1 httpfs-SSRF confinement, M1 no-Route seam, M2 catalog-as-local-file, M3 recreate-rollout single-writer; plus pinned SQLite + the empirically-validated `VACUUM INTO`→whole-object-Put checkpoint + data-before-metadata ordering + pinned versions DuckDB 1.5.4/DuckLake v1.0/quack)
 - **Deciders**: green-0-rabbit
 - **Tags**: lakehouse, catalog, query, duckdb, ducklake, quack, add-on-provider, sqlite-catalog, cgo, sql

@@ -2,6 +2,8 @@
 
 - **Status**: Implemented
 - **Superseded in part by**: [ADR-0221](0221-degraded-recovers-under-gate.md) (2026-10-10) — Decision 5 (129) and scenarios `unauthorized-secret-fails-materialization` (54) and `missing-secret-fails` (57): "not Ready" holds only while no worker of the serving revision passes its readiness probe; a `Degraded` Function then serves again with its start-time env. No worker is created or started while the Secret fails.
+- **Superseded in part by**: [ADR-0246](0246-bindings-under-spec.md) (2026-10-19) — where the binding lives: `spec.secrets` moves to `spec.bindings.secret`; what it grants is unchanged.
+- **Superseded in part by**: [ADR-0249](0249-ctx-secret-reads-from-funcd.md) (2026-10-19) — Decisions 3 and 6, for Functions: a bound Secret's values no longer reach the worker's environment; `ctx.secret` reads them through the local API, under the same check.
 - **Date**: 2026-06-19 (**Implemented 2026-06-19** — review pass (0 blockers, 0 majors; DoD 8/8, 5 scenarios race-clean),
   see docs/reviews/adr-0057-implementation-claude-opus-4-8.md. Completes the V1 exit criterion's "reads a secret" clause.
   **Reviewing 2026-06-19** — implemented: `FunctionSpec.Secrets []ObjectName` (+ OpenAPI regen);

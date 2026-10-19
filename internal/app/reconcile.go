@@ -26,6 +26,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/gc"
+	"github.com/pyvvo/funcd/internal/ownedstore"
 	"github.com/pyvvo/funcd/internal/platform/clock"
 	"github.com/pyvvo/funcd/internal/revhold"
 	"github.com/pyvvo/funcd/internal/store"
@@ -603,28 +604,14 @@ func controllerRef(a *v1.App) v1.OwnerReference {
 // ownerRefs re-derives a part's references from its deletion and the App's current UID (Decision 7): a store carries
 // the marker, and the controller reference only on deletion: delete; any other part carries the controller reference.
 func ownerRefs(a *v1.App, kind v1.Kind, deletion v1.DeletionPolicy) []v1.OwnerReference {
-	c := controllerRef(a)
 	if !isStore(kind) {
-		return []v1.OwnerReference{c}
+		return []v1.OwnerReference{controllerRef(a)}
 	}
-	m := c
-	m.Controller, m.BlockOwnerDeletion = false, false
-	if deletion == v1.DeletionDelete {
-		return []v1.OwnerReference{m, c}
-	}
-	return []v1.OwnerReference{m}
+	return ownedstore.Refs(a, deletion)
 }
 
 func isStore(kind v1.Kind) bool {
 	return kind == v1.KindKVStore || kind == v1.KindBucket || kind == v1.KindSQLDatabase
-}
-
-// marked reports whether refs hold the marker of this App incarnation (kind, name and UID): a marker never moves to
-// another UID (ADR-0178 Decision 4).
-func marked(refs []v1.OwnerReference, a *v1.App) bool {
-	return slices.ContainsFunc(refs, func(r v1.OwnerReference) bool {
-		return !r.Controller && r.Kind == v1.KindApp && r.Name == a.Name && r.UID == a.UID
-	})
 }
 
 // owned reports whether the App may write obj (Decision 4): a store needs this incarnation's marker; another part a
@@ -632,7 +619,7 @@ func marked(refs []v1.OwnerReference, a *v1.App) bool {
 func owned(a *v1.App, obj v1.Object) bool {
 	refs := obj.GetObjectMeta().OwnerReferences
 	if isStore(obj.GroupVersionKind().Kind) {
-		return marked(refs, a)
+		return ownedstore.Marked(refs, a)
 	}
 	c, ok := v1.ControllerOf(refs)
 	return ok && c.Kind == v1.KindApp && c.Name == a.Name
@@ -642,7 +629,7 @@ func owned(a *v1.App, obj v1.Object) bool {
 // requires (Decision 7).
 func controls(a *v1.App, obj v1.Object) bool {
 	refs := obj.GetObjectMeta().OwnerReferences
-	return v1.ControlledBy(refs, v1.KindApp, a.UID) && (!isStore(obj.GroupVersionKind().Kind) || marked(refs, a))
+	return v1.ControlledBy(refs, v1.KindApp, a.UID) && (!isStore(obj.GroupVersionKind().Kind) || ownedstore.Marked(refs, a))
 }
 
 // dropped lists the objects this App controls that no entry names, in gc.Pairs' order: users before stores.

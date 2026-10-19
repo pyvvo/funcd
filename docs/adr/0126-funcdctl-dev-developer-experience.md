@@ -1,6 +1,7 @@
 # ADR-0126: funcdctl dev — developer experience (live logs, colored banner, fixed ports, naming)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0247](0247-contract-file-replaces-funcdctl-yaml.md) (2026-10-19) — Decision 4: a Function's name comes from its resource; `--name` goes.
 - **Date**: 2026-07-12 (**Implemented 2026-07-12** — RETROACTIVE documentation ADR: these dev-UX decisions were
   made interactively and shipped as additive dev-tooling *during* the ADR-0125 session, after ADR-0125 was
   stamped Implemented/frozen. The implementation + its unit tests (banner, log-styler, name-resolution, tee-sink)

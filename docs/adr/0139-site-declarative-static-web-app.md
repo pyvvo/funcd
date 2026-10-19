@@ -17,6 +17,7 @@
 - **Superseded in part by**: [ADR-0240](0240-namespace-hosts.md) (2026-10-17) — the `SiteIngress.Host` contract comment: an empty host is the namespace host (`default`: every host but reserved ones), and HostRequired applies only to `default`.
 - **Superseded in part by**: [ADR-0241](0241-one-exposure-shape.md) (2026-10-17) — Decision 6: a `Disabled` owned Route keeps the Site Ready; Decision 8: `ingress.public` is removed (`ingress.auth` instead); the rejected optional ingress: a Site can be off (`ingress.enabled: false`) and keeps its Route as its record.
 - **Superseded in part by**: [ADR-0242](0242-site-route-backend.md) (2026-10-17) — the Scope Out and rejected alternative `backend.static.site`, the "One `Route` per `Site`" workaround and the open question on hand-written exposure: a Route rule can name a Site (`site: <name>`).
+- **Superseded in part by**: [ADR-0248](0248-stores-at-the-root.md) (2026-10-19) — `spec.bucket` becomes `spec.buckets`, `spec.prefix` becomes `spec.bindings.blob`, and §5's take-over is replaced by the marker rule.
 - **Deciders**: green-0-rabbit
 - **Tags**: edge, static, blob, bucket, route, artifact, dx, data-platform
 - **Realizes**: [FEAT-0003/F103](../feat/0003-feat-data-platform.md) — declarative static web app (`Site`): the content half of F82.

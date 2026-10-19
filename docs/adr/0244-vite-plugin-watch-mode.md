@@ -4,6 +4,7 @@
   Reviewing (2026-10-18), implemented in pyvvo/funcd-typescript#75; Accepted (2026-10-18), after two judge rounds; the
   decider kept Decision 5 for watch mode only and confirmed the rest: a failed rebuild keeps the last good bundle, a
   new manifest waits for the next rebuild, a manual live check, a release right after the merge.
+- **Superseded in part by**: [ADR-0247](0247-contract-file-replaces-funcdctl-yaml.md) (2026-10-19) — Decisions 2-4: the plugin delivers and watches the contract file instead of the manifest, and a function with none fails its rebuild.
 - **Date**: 2026-10-18
 - **Deciders**: green-0-rabbit
 - **Tags**: vite, dx, bundle, typescript, watch

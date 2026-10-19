@@ -1,6 +1,7 @@
 # ADR-0090: Mandatory single I/O schema — void as `{"type":"null"}`
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0247](0247-contract-file-replaces-funcdctl-yaml.md) (2026-10-19) — Decision 3 and the contract source order: `--schema` goes; the contract file is a push's only source.
 - **Date**: 2026-07-01 (accepted 2026-07-01 — judge: sound, well-scoped, 0 Blockers; folded 2 Majors [void-input
   author marker `FuncInput = None`; the void validator now compiled from its `{"type":"null"}` schema, removing
   the hand-baked `_VOID_VALIDATOR` so ADR-0060's validator≡schema invariant holds uniformly] + 3 Minors)

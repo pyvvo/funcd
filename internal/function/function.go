@@ -692,8 +692,9 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 // boundEnv is the env fn's current bindings give every revision it boots, its secret and config env and its catalog
 // env, or the binding gate that stopped them.
 type boundEnv struct {
-	secret, catalog map[string]string
-	gate            *gateFailure
+	secret  envresolve.Resolved
+	catalog map[string]string
+	gate    *gateFailure
 }
 
 // bindings resolves fn's current bindings, or returns the first binding gate that fails.
@@ -703,7 +704,7 @@ func (r *Reconciler) bindings(ctx context.Context, fn *v1.Function) (boundEnv, e
 	// resolver fails the function CLOSED (SecretResolveFailed, no worker) — never a worker
 	// started with the secret absent. A pooled member resolves its own, like a solo one. A running
 	// worker of the serving revision keeps its start-time env and serves on (ADR-0221 Decision 3).
-	secretEnv, serr := r.resolveBindingEnv(ctx, fn)
+	bindEnv, serr := r.resolveBindingEnv(ctx, fn)
 	if serr != nil {
 		// Side-attributed reason (ADR-0093 §4): a config-side failure (missing ConfigMap) reports
 		// ConfigResolveFailed; every other case (secret PDP-deny / missing / unconfigured) reports
@@ -746,7 +747,7 @@ func (r *Reconciler) bindings(ctx context.Context, fn *v1.Function) (boundEnv, e
 		const msg = "a bound CatalogService is not Ready yet (no endpoint, token or live proxy); waiting"
 		return boundEnv{gate: &gateFailure{reason: "CatalogNotReady", message: msg, readyMessage: msg, phase: v1.PhasePending, requeue: r.referentPoll}}, nil
 	}
-	return boundEnv{secret: secretEnv, catalog: catalogEnv}, nil
+	return boundEnv{secret: bindEnv, catalog: catalogEnv}, nil
 }
 
 // heldThenGate converges fn's held revisions, then records the gate g that stopped its current revision, so that gate
@@ -1477,7 +1478,7 @@ func (r *Reconciler) desiredReplicas(fn *v1.Function) int {
 // convergeSolo converges a solo Function's revisions and judges them (ADR-0143 Decision 4). With nothing serving, or
 // the current revision serving, it is ADR-0142's per-replica converge of the current revision; otherwise the current
 // revision comes up beside the serving one (switchSolo).
-func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned string, secretEnv, catalogEnv map[string]string) (verdict, error) {
+func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned string, bindEnv envresolve.Resolved, catalogEnv map[string]string) (verdict, error) {
 	c := v1.ObjectName(fn.Status.CurrentRevision)
 	s := v1.ObjectName(fn.Status.ServingRevision)
 	desired := r.desiredReplicas(fn)
@@ -1490,7 +1491,7 @@ func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned s
 		s = ""
 	}
 	if s != "" && s != c {
-		return r.switchSolo(ctx, fn, s, c, pinned, desired, untried, secretEnv, catalogEnv)
+		return r.switchSolo(ctx, fn, s, c, pinned, desired, untried, bindEnv, catalogEnv)
 	}
 	serving := servingPhase(fn.Status.Phase)
 	var hung bool
@@ -1500,7 +1501,7 @@ func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned s
 			return verdict{}, herr
 		}
 	}
-	pass, err := r.convergeRevision(ctx, fn, c, pinned, replicaRange(desired), convergeOpts{serving: serving, untried: untried, scaleDown: true}, secretEnv, catalogEnv)
+	pass, err := r.convergeRevision(ctx, fn, c, pinned, replicaRange(desired), convergeOpts{serving: serving, untried: untried, scaleDown: true}, bindEnv, catalogEnv)
 	if err != nil {
 		return verdict{}, err
 	}
@@ -1629,7 +1630,7 @@ func (r *Reconciler) stopUnlistenedIn(ctx context.Context, insts []runtime.Insta
 // switchSolo brings the current revision c up beside the serving revision s and moves the calls to it once every
 // replica of c is ready and no revision drains (ADR-0143 Decisions 4.3–4.5). s keeps its replica indexes, and a dead s
 // worker is replaced from s's Revision; once that Revision is deleted, s's listening workers serve until the switch.
-func (r *Reconciler) switchSolo(ctx context.Context, fn *v1.Function, s, c v1.ObjectName, pinned string, desired int, untried bool, secretEnv, catalogEnv map[string]string) (verdict, error) {
+func (r *Reconciler) switchSolo(ctx context.Context, fn *v1.Function, s, c v1.ObjectName, pinned string, desired int, untried bool, bindEnv envresolve.Resolved, catalogEnv map[string]string) (verdict, error) {
 	sIdx, err := r.servingIndexes(ctx, fn, s)
 	if err != nil {
 		return verdict{}, err
@@ -1644,12 +1645,12 @@ func (r *Reconciler) switchSolo(ctx context.Context, fn *v1.Function, s, c v1.Ob
 		if hung, err = r.restartHung(ctx, fn, s, maxIndex(sIdx)+1); err != nil {
 			return verdict{}, err
 		}
-		sPass, err = r.convergeRevision(ctx, sfn, s, spinned, sIdx, convergeOpts{serving: true}, secretEnv, catalogEnv)
+		sPass, err = r.convergeRevision(ctx, sfn, s, spinned, sIdx, convergeOpts{serving: true}, bindEnv, catalogEnv)
 	}
 	if err != nil {
 		return verdict{}, err
 	}
-	cPass, err := r.convergeRevision(ctx, fn, c, pinned, replicaRange(desired), convergeOpts{untried: untried, scaleDown: true}, secretEnv, catalogEnv)
+	cPass, err := r.convergeRevision(ctx, fn, c, pinned, replicaRange(desired), convergeOpts{untried: untried, scaleDown: true}, bindEnv, catalogEnv)
 	if err != nil {
 		return verdict{}, err
 	}
@@ -1765,7 +1766,7 @@ type revisionPass struct {
 
 // convergeRevision drives replicas `indexes` of revision rev toward running with ADR-0142's per-replica table
 // (planReplicas). With opts.scaleDown it stops rev's replicas outside indexes. tmpl is fn as rev runs it.
-func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, rev v1.ObjectName, pinnedDigest string, indexes []int, opts convergeOpts, secretEnv, catalogEnv map[string]string) (revisionPass, error) {
+func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, rev v1.ObjectName, pinnedDigest string, indexes []int, opts convergeOpts, bindEnv envresolve.Resolved, catalogEnv map[string]string) (revisionPass, error) {
 	const op = "function.converge"
 	insts, err := r.namedInstances(ctx, tmpl.Namespace, tmpl.Name)
 	if err != nil {
@@ -1841,7 +1842,7 @@ func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, re
 		if _, perr := r.scheduler.Schedule(ctx, scheduler.Request{Namespace: tmpl.Namespace, Name: tmpl.Name, Replica: i, Platforms: platforms}); perr != nil {
 			return revisionPass{}, fault.Wrapf(perr, fault.KindOf(perr), op, "schedule")
 		}
-		spec, serr := r.workerSpec(tmpl, i, artifactPath, secretEnv, catalogEnv)
+		spec, serr := r.workerSpec(tmpl, i, artifactPath, bindEnv, catalogEnv)
 		if serr != nil {
 			r.logger.Warn("could not start worker", "function", tmpl.Name, "replica", i, "err", serr)
 			retryAt = earlier(retryAt, r.boot.startResult(runtime.NewInstanceID(tmpl.Namespace, tmpl.Name, rev, i), now, serr))
@@ -3118,9 +3119,9 @@ func (r *Reconciler) addRecordBound(env map[string]string) {
 // workerSpec builds the runtime spec for one replica. In shim mode (a Materializer is
 // configured, ADR-0030) it launches the runtime shim with the materialized artifact +
 // handler in the env; otherwise it runs the legacy long-lived placeholder (ADR-0020).
-// secretEnv is the already-resolved secret env map (ADR-0057), merged into Env with
-// reserved-FUNCD_-key precedence; nil ⇒ none.
-func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath string, secretEnv, catalogEnv map[string]string) (runtime.WorkerSpec, error) {
+// bindEnv is the already-resolved config and secret env (ADR-0057), merged into Env with
+// reserved-FUNCD_-key precedence, plus its key lists (ADR-0245).
+func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath string, bindEnv envresolve.Resolved, catalogEnv map[string]string) (runtime.WorkerSpec, error) {
 	if r.materializer != nil && r.endpointMode == EndpointNetnsFixedPort {
 		// Container mode (ADR-0032): the shim is the curated image's entrypoint (Command
 		// empty), the artifact is bind-mounted read-only, and it binds a fixed netns port.
@@ -3133,9 +3134,9 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 		// is under the mount target.
 		addContractEnv(env, filepath.Dir(artifactPath), containerArtifactDir)
 		r.addS3Env(env, fn)
-		r.addCatalogEnv(env, catalogEnv)  // FUNCD_CATALOG_<ALIAS>_URL/_TOKEN written DIRECTLY (ADR-0091) — never via mergeSecretEnv
+		r.addCatalogEnv(env, catalogEnv)  // FUNCD_CATALOG_<ALIAS>_URL/_TOKEN written DIRECTLY (ADR-0091) — never via addBindingEnv
 		r.addCatalogExtensionDir(env, fn) // DUCKDB_EXTENSION_DIRECTORY for a catalog consumer (dev; prod uses the bundle's duckdb-ext)
-		r.mergeSecretEnv(env, secretEnv)
+		r.addBindingEnv(env, bindEnv)
 		mounts := []runtime.Mount{{
 			Source: filepath.Dir(artifactPath), Target: containerArtifactDir, ReadOnly: true,
 		}}
@@ -3172,9 +3173,9 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 			return runtime.WorkerSpec{}, err
 		}
 		r.addS3Env(env, fn)               // AWS_* S3 keypair + endpoint for a spec.blob function (ADR-0085)
-		r.addCatalogEnv(env, catalogEnv)  // FUNCD_CATALOG_<ALIAS>_URL/_TOKEN written DIRECTLY (ADR-0091) — never via mergeSecretEnv
+		r.addCatalogEnv(env, catalogEnv)  // FUNCD_CATALOG_<ALIAS>_URL/_TOKEN written DIRECTLY (ADR-0091) — never via addBindingEnv
 		r.addCatalogExtensionDir(env, fn) // DUCKDB_EXTENSION_DIRECTORY for a catalog consumer (dev; prod uses the bundle's duckdb-ext)
-		r.mergeSecretEnv(env, secretEnv)
+		r.addBindingEnv(env, bindEnv)
 		return runtime.WorkerSpec{
 			Namespace: fn.Namespace,
 			Name:      fn.Name,

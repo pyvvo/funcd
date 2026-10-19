@@ -52,7 +52,7 @@ func catalogConsumerFn(alias, catalog string) *v1.Function {
 // node-private catalog PEP proxy URL, ADR-0137) makes the worker env carry FUNCD_CATALOG_LAKE_URL AND
 // _TOKEN, both PRESENT and NON-EMPTY. The _TOKEN is the per-function MAC bearer (ADR-0137), NOT the
 // shared QUACK_TOKEN: it round-trips via CatalogKeys.PrincipalFor to THIS Function principal. This also
-// guards the M1 regression: routing the FUNCD_-prefixed keys through mergeSecretEnv would drop them.
+// guards the M1 regression: routing the FUNCD_-prefixed keys through addBindingEnv would drop them.
 func TestScenarioBindingInjectsEndpointAndToken(t *testing.T) {
 	t.Parallel()
 	master := []byte("catalog-inject-test-node-master")
@@ -68,7 +68,7 @@ func TestScenarioBindingInjectsEndpointAndToken(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, requeue, "a Ready catalog does not requeue")
 
-	// Present AND non-empty — the values survive the DIRECT write (not routed through mergeSecretEnv).
+	// Present AND non-empty — the values survive the DIRECT write (not routed through addBindingEnv).
 	require.Contains(t, env, "FUNCD_CATALOG_LAKE_URL")
 	require.Contains(t, env, "FUNCD_CATALOG_LAKE_TOKEN")
 	require.Equal(t, proxyURL, env["FUNCD_CATALOG_LAKE_URL"], "URL is status.endpoint (the proxy), verbatim")
@@ -88,7 +88,7 @@ func TestScenarioBindingInjectsEndpointAndToken(t *testing.T) {
 	require.Equal(t, fn.Name, ref.Name)
 
 	// End-to-end through workerSpec: the DIRECT write means the FUNCD_-prefixed keys reach Env even
-	// though mergeSecretEnv would have dropped them.
+	// though addBindingEnv would have dropped them.
 	spec := mustWorkerSpec(t, r, fn, "/art/app.mjs", nil, env)
 	require.Equal(t, proxyURL, spec.Env["FUNCD_CATALOG_LAKE_URL"], "the URL reaches the worker env DIRECTLY")
 	require.Equal(t, injected, spec.Env["FUNCD_CATALOG_LAKE_TOKEN"], "the token reaches the worker env DIRECTLY")

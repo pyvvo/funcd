@@ -29,7 +29,7 @@ import (
 // false, nil) when the function declares no catalogs.
 //
 // The returned keys are written DIRECTLY into the worker env by the caller — NEVER through
-// mergeSecretEnv, whose FUNCD_ reserved-key guard would silently drop them. (Mirrors the catalog
+// addBindingEnv, whose FUNCD_ reserved-key guard would silently drop them. (Mirrors the catalog
 // reconciler, which sets its own FUNCD_QUACK_PORT/FUNCD_DUCKLAKE_CATALOG directly.)
 func (r *Reconciler) resolveCatalogEnv(ctx context.Context, fn *v1.Function) (env map[string]string, requeue bool, err error) {
 	const op = "function.resolveCatalogEnv"
@@ -123,8 +123,8 @@ func (r *Reconciler) MapCatalogService(ctx context.Context, obj v1.Object) []con
 }
 
 // addCatalogEnv writes the already-resolved catalog env pairs DIRECTLY into a worker's env (ADR-0091).
-// It bypasses mergeSecretEnv on purpose: the keys are FUNCD_-prefixed, which mergeSecretEnv's reserved-
-// key guard (secrets.go:64) would drop. catalogEnv is nil for a function with no spec.catalogs.
+// It bypasses addBindingEnv on purpose: the keys are FUNCD_-prefixed, which addBindingEnv's reserved-
+// key guard (secrets.MergeEnvGuarded) would drop. catalogEnv is nil for a function with no spec.catalogs.
 func (r *Reconciler) addCatalogEnv(env, catalogEnv map[string]string) {
 	for k, v := range catalogEnv {
 		env[k] = v

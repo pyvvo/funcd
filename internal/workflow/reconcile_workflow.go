@@ -12,6 +12,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controller"
+	"github.com/pyvvo/funcd/internal/ownedstore"
 	"github.com/pyvvo/funcd/internal/revhold"
 	"github.com/pyvvo/funcd/internal/store"
 )
@@ -261,7 +262,7 @@ func (m *Materializer) materialize(ctx context.Context, wf *v1.Workflow) (bool, 
 	// 2. Owned KVStores: every declared and every step-bound store passes the ownership check before any write.
 	stores := make([]*v1.KVStore, len(wf.Spec.KV))
 	for i := range wf.Spec.KV {
-		stores[i] = buildKVStore(wf, &wf.Spec.KV[i], owner)
+		stores[i] = buildKVStore(wf, &wf.Spec.KV[i])
 		if err := m.checkKVStore(ctx, wf, stores[i]); err != nil {
 			return false, err
 		}
@@ -270,8 +271,8 @@ func (m *Materializer) materialize(ctx context.Context, wf *v1.Workflow) (bool, 
 		return false, err
 	}
 	checked := make(map[v1.ObjectName]v1.UID, len(stores))
-	for _, st := range stores {
-		uid, err := m.ensureKVStore(ctx, wf, st)
+	for i, st := range stores {
+		uid, err := m.ensureKVStore(ctx, wf, st, wf.Spec.KV[i].Deletion)
 		if err != nil {
 			return false, err
 		}
@@ -322,7 +323,7 @@ func (v *kvView) ownedBindings(ctx context.Context, wf *v1.Workflow, kv []v1.Fun
 		if err != nil {
 			return nil, err
 		}
-		if st != nil && marked(st.OwnerReferences, wf) {
+		if st != nil && ownedstore.Marked(st.OwnerReferences, wf) {
 			out = append(out, b)
 		}
 	}
@@ -427,30 +428,10 @@ func ownerRef(wf *v1.Workflow) v1.OwnerReference {
 }
 
 // kvMarker is the non-controller reference naming the Workflow incarnation that made a KVStore (ADR-0178).
-func kvMarker(wf *v1.Workflow) v1.OwnerReference {
-	r := ownerRef(wf)
-	r.Controller, r.BlockOwnerDeletion = false, false
-	return r
-}
+func kvMarker(wf *v1.Workflow) v1.OwnerReference { return ownedstore.Refs(wf, v1.DeletionRetain)[0] }
 
 // KVMarker is kvMarker for the control plane's handover, so the marker has one definition.
 func KVMarker(wf *v1.Workflow) v1.OwnerReference { return kvMarker(wf) }
-
-// IsKVMarker reports whether r has the shape of a store marker: a non-controller Workflow or App ref (ADR-0199
-// Decision 8 extends ADR-0178's guards to the stores an App makes).
-func IsKVMarker(r v1.OwnerReference) bool {
-	return !r.Controller && (r.Kind == v1.KindWorkflow || r.Kind == v1.KindApp)
-}
-
-// marked reports whether refs hold a non-controller ref with wf's kind, name and UID.
-func marked(refs []v1.OwnerReference, wf *v1.Workflow) bool {
-	for _, r := range refs {
-		if IsKVMarker(r) && r.Name == wf.Name && r.UID == wf.UID {
-			return true
-		}
-	}
-	return false
-}
 
 // buildFunction constructs an owned Function for a step (without kv — added in the
 // patch phase). Pooling and scaling come from the effective pooling policy.
@@ -496,7 +477,7 @@ func effectivePooling(wf *v1.Workflow, st *v1.WorkflowStep) v1.WorkflowPooling {
 	return wf.Spec.Pooling
 }
 
-func buildKVStore(wf *v1.Workflow, kv *v1.WorkflowKVStore, owner v1.OwnerReference) *v1.KVStore {
+func buildKVStore(wf *v1.Workflow, kv *v1.WorkflowKVStore) *v1.KVStore {
 	tables := make([]v1.KVTable, len(kv.Tables))
 	for i, t := range kv.Tables {
 		tables[i] = t
@@ -507,10 +488,7 @@ func buildKVStore(wf *v1.Workflow, kv *v1.WorkflowKVStore, owner v1.OwnerReferen
 	meta := v1.ObjectMeta{Name: kv.Name, Namespace: wf.Namespace, ResourceGroup: wf.ResourceGroup}
 	// deletion policy (ADR-0094): `delete` adds a cascading controller reference so the store is reclaimed
 	// with the workflow; `retain` (default) carries only the marker, so the store outlives it (ADR-0178).
-	meta.OwnerReferences = []v1.OwnerReference{kvMarker(wf)}
-	if kv.Deletion == v1.DeletionDelete {
-		meta.OwnerReferences = append(meta.OwnerReferences, owner)
-	}
+	meta.OwnerReferences = ownedstore.Refs(wf, kv.Deletion)
 	return &v1.KVStore{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindKVStore.GVK().APIVersion(), Kind: v1.KindKVStore},
 		ObjectMeta: meta,
@@ -563,39 +541,21 @@ func (m *Materializer) checkKVStore(ctx context.Context, wf *v1.Workflow, st *v1
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), materializeOp, "get kvstore %q", st.Name)
 	}
-	if !marked(existing.GetObjectMeta().OwnerReferences, wf) {
+	if !ownedstore.Marked(existing.GetObjectMeta().OwnerReferences, wf) {
 		return kvNotOwned(st.Name, wf)
 	}
 	return nil
 }
 
-// ensureKVStore creates the KVStore, or updates one carrying this incarnation's marker at its read
-// resourceVersion, and returns the UID it wrote. Any other store is refused (ADR-0178 Decision 2).
-func (m *Materializer) ensureKVStore(ctx context.Context, wf *v1.Workflow, st *v1.KVStore) (v1.UID, error) {
-	existing, err := m.store.Get(ctx, v1.KindKVStore.GVK(), st.Namespace, st.Name)
-	if fault.KindOf(err) == fault.NotFound {
-		out, err := m.store.Create(ctx, st)
-		if err != nil {
-			return "", fault.Wrapf(err, fault.KindOf(err), materializeOp, "create kvstore %q", st.Name)
-		}
-		return out.GetObjectMeta().UID, nil
-	}
-	if err != nil {
-		return "", fault.Wrapf(err, fault.KindOf(err), materializeOp, "get kvstore %q", st.Name)
-	}
-	cur := existing.(*v1.KVStore)
-	if !marked(cur.OwnerReferences, wf) {
+// ensureKVStore creates the KVStore, or updates one carrying this incarnation's marker with its references
+// re-derived from the current deletion policy (ADR-0094, #149) and its resource group, so a retain store follows a
+// moved Workflow (#722), and returns the UID it wrote. Any other store is refused (ADR-0178 Decision 2).
+func (m *Materializer) ensureKVStore(ctx context.Context, wf *v1.Workflow, st *v1.KVStore, deletion v1.DeletionPolicy) (v1.UID, error) {
+	uid, err := ownedstore.Ensure(ctx, m.store, wf, st, deletion)
+	if errors.Is(err, ownedstore.ErrNotOwned) {
 		return "", kvNotOwned(st.Name, wf)
 	}
-	owners, group := st.OwnerReferences, st.ResourceGroup
-	st.ObjectMeta = cur.ObjectMeta // preserve UID/RV
-	st.OwnerReferences = owners    // re-derived from the current deletion policy (ADR-0094, #149)
-	st.ResourceGroup = group       // a retain store counts as a member of its group, so it follows a moved Workflow (#722)
-	st.Status = cur.Status         // the KVStore reconciler owns the status (ADR-0073)
-	if _, err := m.store.Update(ctx, st); err != nil {
-		return "", fault.Wrapf(err, fault.KindOf(err), materializeOp, "update kvstore %q", st.Name)
-	}
-	return cur.UID, nil
+	return uid, err
 }
 
 // patchFunctionKV writes a step's kv bindings after re-reading each bound store: one whose UID is not the
@@ -609,7 +569,7 @@ func (m *Materializer) patchFunctionKV(ctx context.Context, wf *v1.Workflow, st 
 		if err != nil {
 			return fault.Wrapf(err, fault.KindOf(err), materializeOp, "re-read kvstore %q", b.Store)
 		}
-		if meta := obj.GetObjectMeta(); meta.UID != checked[b.Store] || !marked(meta.OwnerReferences, wf) {
+		if meta := obj.GetObjectMeta(); meta.UID != checked[b.Store] || !ownedstore.Marked(meta.OwnerReferences, wf) {
 			return kvNotOwned(b.Store, wf)
 		}
 	}

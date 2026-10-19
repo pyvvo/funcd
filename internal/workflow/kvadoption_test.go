@@ -14,6 +14,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/gc"
+	"github.com/pyvvo/funcd/internal/ownedstore"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -98,7 +99,7 @@ func TestScenarioOwnStoreFollowsPolicyAndTables(t *testing.T) {
 		t.Helper()
 		st := getObj(t, s, v1.KindKVStore, "w-kv").(*v1.KVStore)
 		require.Equal(t, uid, st.UID, "the same store")
-		require.True(t, marked(st.OwnerReferences, wf), "the marker stays")
+		require.True(t, ownedstore.Marked(st.OwnerReferences, wf), "the marker stays")
 		require.Equal(t, controllers, controllerRefs(st.OwnerReferences))
 		require.Len(t, st.Spec.Tables, tables)
 	}
@@ -147,8 +148,8 @@ func TestScenarioOtherWorkflowsStoreRefused(t *testing.T) {
 		require.Equal(t, "KVStoreNotOwned", reasonOf(m.Materialize(ctx, b)), policy)
 		got := getObj(t, s, v1.KindKVStore, "shared").(*v1.KVStore)
 		require.Equal(t, rv, got.ResourceVersion, "no write")
-		require.True(t, marked(got.OwnerReferences, a))
-		require.False(t, marked(got.OwnerReferences, b))
+		require.True(t, ownedstore.Marked(got.OwnerReferences, a))
+		require.False(t, ownedstore.Marked(got.OwnerReferences, b))
 	}
 }
 
@@ -177,7 +178,7 @@ func TestScenarioUpgradeMigrationMarksOwnStore(t *testing.T) {
 		require.NoError(t, m.Materialize(ctx, w))
 		got = getObj(t, s, v1.KindKVStore, "w-kv").(*v1.KVStore)
 		require.Equal(t, prev.UID, got.UID)
-		require.True(t, marked(got.OwnerReferences, w))
+		require.True(t, ownedstore.Marked(got.OwnerReferences, w))
 		require.Equal(t, map[bool]int{false: 1, true: 0}[controller], controllerRefs(got.OwnerReferences), "the policy flip applies")
 	}
 }
@@ -311,7 +312,7 @@ func TestRecreatedWorkflowRefusesPredecessorsStore(t *testing.T) {
 	require.NotEqual(t, w1.UID, w2.UID)
 	require.Equal(t, "KVStoreNotOwned", reasonOf(m.Materialize(ctx, w2)))
 	require.Equal(t, rv, rvOf(t, s, v1.KindKVStore, "w-keep"), "no write")
-	require.True(t, marked(getObj(t, s, v1.KindKVStore, "w-keep").GetObjectMeta().OwnerReferences, w1))
+	require.True(t, ownedstore.Marked(getObj(t, s, v1.KindKVStore, "w-keep").GetObjectMeta().OwnerReferences, w1))
 }
 
 // The migration strips a step's binding to a store it leaves unmarked and keeps the one to a store it marks.
@@ -329,7 +330,7 @@ func TestMigrationStripsBindingsToStoresLeftUnmarked(t *testing.T) {
 	setFunctionKV(t, s, "w-s", "w-kv", "shared")
 
 	require.NoError(t, MarkKVStoresOnce(ctx, s, nil))
-	require.True(t, marked(getObj(t, s, v1.KindKVStore, "w-kv").GetObjectMeta().OwnerReferences, w))
+	require.True(t, ownedstore.Marked(getObj(t, s, v1.KindKVStore, "w-kv").GetObjectMeta().OwnerReferences, w))
 	require.Empty(t, getObj(t, s, v1.KindKVStore, "shared").GetObjectMeta().OwnerReferences)
 	require.Equal(t, []v1.ObjectName{"w-kv"}, boundStores(t, s, "w-s"))
 }
@@ -416,10 +417,10 @@ func TestKVMarkerCoversAnApp(t *testing.T) {
 	ref := func(kind v1.Kind, controller bool) v1.OwnerReference {
 		return v1.OwnerReference{ObjectRef: v1.ObjectRef{Kind: kind, Namespace: "default", Name: "todo"}, UID: "u1", Controller: controller}
 	}
-	require.True(t, IsKVMarker(ref(v1.KindWorkflow, false)))
-	require.True(t, IsKVMarker(ref(v1.KindApp, false)))
-	require.False(t, IsKVMarker(ref(v1.KindApp, true)))
-	require.False(t, IsKVMarker(ref(v1.KindSite, false)))
+	require.True(t, ownedstore.IsMarker(ref(v1.KindWorkflow, false)))
+	require.True(t, ownedstore.IsMarker(ref(v1.KindApp, false)))
+	require.False(t, ownedstore.IsMarker(ref(v1.KindApp, true)))
+	require.False(t, ownedstore.IsMarker(ref(v1.KindSite, false)))
 
 	s := newStore(t)
 	ctx := context.Background()

@@ -3,12 +3,14 @@ package controlplane
 import (
 	"context"
 	"slices"
+	"strings"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
 	"github.com/pyvvo/funcd/internal/controlplane/middleware"
+	"github.com/pyvvo/funcd/internal/ownedstore"
 	"github.com/pyvvo/funcd/internal/workflow"
 )
 
@@ -74,9 +76,9 @@ func (h *storeHandlers) HandoverKVStore(ctx context.Context, ns v1.NamespaceName
 	return *out.(*v1.KVStore), nil
 }
 
-// refuseLiveMarked refuses an API write to a store a live Workflow or App made, so a user's apply never lands keys
-// under its maker's lifecycle; a marker naming a deleted maker stays editable (ADR-0178 Decision 6, ADR-0199
-// Decision 8).
+// refuseLiveMarked refuses an API write to a KVStore, Bucket or SQLDatabase a live owner made, so a user's apply never
+// lands under its maker's lifecycle; a marker naming a deleted maker stays editable (ADR-0178 Decision 6, ADR-0199
+// Decision 8, ADR-0248 Decision 3).
 func (h *storeHandlers) refuseLiveMarked(ctx context.Context, cur v1.Object) error {
 	meta := cur.GetObjectMeta()
 	maker, live, err := h.liveMarker(ctx, meta.Namespace, meta.OwnerReferences)
@@ -84,7 +86,8 @@ func (h *storeHandlers) refuseLiveMarked(ctx context.Context, cur v1.Object) err
 		return err
 	}
 	if live {
-		return fault.Conflictf("controlplane.ReplaceKVStore", "kvstore %q is managed by %s/%s, which made it", meta.Name, maker.Kind, maker.Name)
+		return fault.Conflictf("controlplane.Replace"+string(cur.GroupVersionKind().Kind), "%s %q is managed by %s/%s, which made it",
+			strings.ToLower(string(cur.GroupVersionKind().Kind)), meta.Name, maker.Kind, maker.Name)
 	}
 	return nil
 }
@@ -92,7 +95,7 @@ func (h *storeHandlers) refuseLiveMarked(ctx context.Context, cur v1.Object) err
 // liveMarker returns the first marker in refs whose UID is that of an existing object of the marker's own kind.
 func (h *storeHandlers) liveMarker(ctx context.Context, ns v1.NamespaceName, refs []v1.OwnerReference) (v1.OwnerReference, bool, error) {
 	for _, r := range refs {
-		if !workflow.IsKVMarker(r) {
+		if !ownedstore.IsMarker(r) {
 			continue
 		}
 		maker, err := h.store.Get(ctx, r.Kind.GVK(), ns, r.Name)

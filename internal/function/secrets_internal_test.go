@@ -9,6 +9,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/envresolve"
 	"github.com/pyvvo/funcd/internal/gateway/embedded"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/process"
@@ -60,7 +61,7 @@ func sampleFn() *v1.Function {
 // mustWorkerSpec is replica 0's workerSpec, for a test whose spec builds.
 func mustWorkerSpec(t *testing.T, r *Reconciler, fn *v1.Function, artifactPath string, secretEnv, catalogEnv map[string]string) runtime.WorkerSpec {
 	t.Helper()
-	spec, err := r.workerSpec(fn, 0, artifactPath, secretEnv, catalogEnv)
+	spec, err := r.workerSpec(fn, 0, artifactPath, envresolve.Resolved{Env: secretEnv}, catalogEnv)
 	require.NoError(t, err)
 	return spec
 }
@@ -98,7 +99,7 @@ func TestResolveSecretEnvFailClosed(t *testing.T) {
 		r := newShimReconciler(t, fakeResolver{})
 		env, err := r.resolveBindingEnv(context.Background(), sampleFn())
 		require.NoError(t, err)
-		require.Nil(t, env)
+		require.Zero(t, env)
 	})
 	t.Run("not-configured-fails-closed", func(t *testing.T) {
 		r := newShimReconciler(t, nil) // no resolver wired
@@ -113,7 +114,7 @@ func TestResolveSecretEnvFailClosed(t *testing.T) {
 		pooled.Spec.Pooling.Worker = "agents"
 		env, err := r.resolveBindingEnv(context.Background(), pooled)
 		require.NoError(t, err, "a pooled member resolves its secrets like a solo one")
-		require.Equal(t, "x", env["API_KEY"])
+		require.Equal(t, "x", env.Env["API_KEY"])
 	})
 	t.Run("resolver-error-propagates", func(t *testing.T) {
 		r := newShimReconciler(t, fakeResolver{err: fault.Forbiddenf("test", "denied")})
@@ -128,4 +129,22 @@ func TestSecretNames(t *testing.T) {
 	// The reserved-FUNCD_-key guard moved to internal/secrets (ADR-0092, single definition — see
 	// secrets.TestMergeEnvGuarded / secrets.IsReservedKey); only secretNames remains local here.
 	require.Equal(t, []string{"a", "b"}, secretNames([]v1.ObjectName{"a", "b"}))
+}
+
+// A solo worker gets the non-empty key lists directly, past the reserved-key guard (ADR-0245), and no list when empty.
+func TestWorkerSpecWritesBindingKeyLists(t *testing.T) {
+	t.Parallel()
+	r := newShimReconciler(t, fakeResolver{})
+	spec, err := r.workerSpec(sampleFn(), 0, "/art/app.mjs", envresolve.Resolved{
+		Env:        map[string]string{"LOG_LEVEL": "debug", "MODE": "prod", "STRIPE_KEY": "sk"},
+		ConfigKeys: []string{"LOG_LEVEL"},
+		SecretKeys: []string{"MODE", "STRIPE_KEY"},
+	}, nil)
+	require.NoError(t, err)
+	require.Equal(t, "LOG_LEVEL", spec.Env["FUNCD_CONFIG_KEYS"])
+	require.Equal(t, "MODE,STRIPE_KEY", spec.Env["FUNCD_SECRET_KEYS"])
+
+	spec = mustWorkerSpec(t, r, sampleFn(), "/art/app.mjs", nil, nil)
+	require.NotContains(t, spec.Env, "FUNCD_CONFIG_KEYS")
+	require.NotContains(t, spec.Env, "FUNCD_SECRET_KEYS")
 }
