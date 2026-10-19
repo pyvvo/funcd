@@ -21,6 +21,7 @@ import (
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/edge/router"
 	"github.com/pyvvo/funcd/internal/provider"
+	"github.com/pyvvo/funcd/internal/secrets"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -139,7 +140,7 @@ func NewReconciler(d ReconcilerDeps) (*Reconciler, error) {
 	}
 	developerFor := d.DeveloperFor
 	if d.Secrets != nil && developerFor == nil {
-		developerFor = defaultDeveloperFor
+		developerFor = secrets.InjectorIdentity
 	}
 	imageFor := d.ImageFor
 	if imageFor == nil {
@@ -177,14 +178,3 @@ func catalogRouteSource(ns v1.NamespaceName, name v1.ObjectName) string {
 // the engine, not a backing Function): "<cs-name>-duckdb". Deterministic; the provider worker
 // itself is named for the CatalogService (cs.Name), the provider identity.
 func engineName(csName string) string { return csName + "-duckdb" }
-
-// defaultDeveloperFor synthesizes the namespace-scoped developer identity the PDP secret reads use
-// when Deps.DeveloperFor is unset (ADR-0057 Decision 4) — the same posture the Function reconciler
-// uses. V1 is single-tenant per namespace, so the developer may read its own namespace's secrets.
-func defaultDeveloperFor(ns v1.NamespaceName) auth.Identity {
-	return auth.Identity{
-		Subject:    "system:secret-injector:" + string(ns),
-		Role:       auth.RoleDeveloper,
-		Namespaces: []v1.NamespaceName{ns},
-	}
-}

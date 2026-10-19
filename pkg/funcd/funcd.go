@@ -90,6 +90,7 @@ import (
 	identitysvc "github.com/pyvvo/funcd/internal/services/identity"
 	kvsvc "github.com/pyvvo/funcd/internal/services/kv"
 	rolessvc "github.com/pyvvo/funcd/internal/services/roles"
+	secretsvc "github.com/pyvvo/funcd/internal/services/secret"
 	sqlsvc "github.com/pyvvo/funcd/internal/services/sql"
 	"github.com/pyvvo/funcd/internal/site"
 	"github.com/pyvvo/funcd/internal/snapshot"
@@ -775,7 +776,13 @@ func (p *Platform) buildControlPlane() error {
 		nestedCap = defaultNestedInFlightCap
 	}
 	invoker := local.NewNestedCapInvoker(local.NewInvoker(dpHolder), nestedCap, invokeMeter(c.telemetry))
-	p.invokeMgr = local.NewManager(invokeSockDir, c.store, invoker, cedarPDP, kvFacade, blobPort, deps, p.logger, local.WithSQL(sqlFacade))
+	// ADR-0249: ctx.secret reads each secret from funcd through the reconciler's PDP-checked resolver, on every read.
+	secretFacade, err := secretsvc.NewFacade(secretsvc.Deps{Store: c.store, Resolver: secretResolver})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build secret facade")
+	}
+	p.invokeMgr = local.NewManager(invokeSockDir, c.store, invoker, cedarPDP, kvFacade, blobPort, deps, p.logger,
+		local.WithSQL(sqlFacade), local.WithSecrets(secretFacade))
 
 	// Egress gateway + DNS forwarder (ADR-0117, F81): the sole egress PEP + the domain trust anchor.
 	// Wired only when enabled (Linux/containerd only; egress.New is a no-op elsewhere, mirroring F80).

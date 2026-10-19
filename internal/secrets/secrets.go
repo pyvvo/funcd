@@ -78,3 +78,15 @@ func (r *Resolver) ResolveEnv(ctx context.Context, id auth.Identity, ns v1.Names
 	}
 	return env, nil
 }
+
+// InjectorIdentity is the namespace-scoped developer identity a Function's secret reads are authorized as when no
+// other is configured (ADR-0057 Decision 4): V1 is single-tenant per namespace, so the developer owns, and may read,
+// its own namespace's secrets. The Function reconciler, the catalog service and the local API's /secret routes
+// (ADR-0249) share it.
+func InjectorIdentity(ns v1.NamespaceName) auth.Identity {
+	return auth.Identity{
+		Subject:    "system:secret-injector:" + string(ns),
+		Role:       auth.RoleDeveloper,
+		Namespaces: []v1.NamespaceName{ns},
+	}
+}

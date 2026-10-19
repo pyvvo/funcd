@@ -62,15 +62,3 @@ func secretNames(names []v1.ObjectName) []string {
 	}
 	return out
 }
-
-// defaultDeveloperFor synthesizes the namespace-scoped developer identity the PDP read uses
-// when Deps.DeveloperFor is unset (ADR-0057 Decision 4). V1 is single-tenant per namespace,
-// so the developer owns (and may read) its own namespace's secrets; recording the real applier
-// identity on the Function is a V2 refinement, isolated to this provider.
-func defaultDeveloperFor(ns v1.NamespaceName) auth.Identity {
-	return auth.Identity{
-		Subject:    "system:secret-injector:" + string(ns),
-		Role:       auth.RoleDeveloper,
-		Namespaces: []v1.NamespaceName{ns},
-	}
-}

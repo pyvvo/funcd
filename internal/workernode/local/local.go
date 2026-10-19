@@ -143,7 +143,8 @@ const dependenciesPath = "/health/dependencies"
 type Option func(*options)
 
 type options struct {
-	sql SQL
+	sql     SQL
+	secrets Secrets
 }
 
 // WithSQL routes /sql/{binding}/query and /execute to s (ADR-0233); without it there are no /sql routes.
@@ -182,6 +183,9 @@ func NewHandler(caller Ref, res Resolver, inv Invoker, authz auth.Authorizer, kv
 	}
 	if o.sql != nil {
 		registerSQL(mux, caller, o.sql, logger)
+	}
+	if o.secrets != nil {
+		registerSecrets(mux, caller, o.secrets, logger)
 	}
 	if deps != nil {
 		mux.HandleFunc("GET "+dependenciesPath, func(w http.ResponseWriter, r *http.Request) {

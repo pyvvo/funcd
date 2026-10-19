@@ -42,6 +42,7 @@ import (
 	"github.com/pyvvo/funcd/internal/revhold"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/scheduler"
+	"github.com/pyvvo/funcd/internal/secrets"
 	catalogsvc "github.com/pyvvo/funcd/internal/services/catalog"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/workernode/local"
@@ -417,7 +418,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 	// default to the namespace-scoped developer identity (the V1 single-tenant model).
 	developerFor := d.DeveloperFor
 	if d.Secrets != nil && developerFor == nil {
-		developerFor = defaultDeveloperFor
+		developerFor = secrets.InjectorIdentity
 	}
 	period := d.SupervisionPeriod
 	if period <= 0 {
