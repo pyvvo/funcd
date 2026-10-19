@@ -31,14 +31,15 @@ func TestScenarioDeclarativeAdmissionCatalogCycle(t *testing.T) {
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	// Apply the CatalogService FIRST — it binds Bucket `lakehouse` (gold), which does not exist yet. Before
-	// ADR-0121 the catalog-blob-validity admission REJECTED this synchronously; now it is admitted.
+	// Apply the CatalogService FIRST — it binds Bucket `lakehouse` (gold), declared by ref (ADR-0251), which does not
+	// exist yet. Before ADR-0121 the catalog-blob-validity admission REJECTED this synchronously; now it is admitted.
 	cs := &v1.CatalogService{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindCatalogService.GVK().APIVersion(), Kind: v1.KindCatalogService},
 		ObjectMeta: v1.ObjectMeta{Name: "lake", Namespace: "default", ResourceGroup: "rg1"},
 		Spec: v1.CatalogServiceSpec{
 			Catalog:  v1.CatalogRef{Bucket: "lakehouse", Prefix: "gold"},
 			Bindings: v1.CatalogServiceBindings{Blob: []v1.FunctionBlob{{Alias: "gold", Bucket: "lakehouse", Prefix: "gold"}}},
+			Buckets:  []v1.BucketEntry{{Ref: "lakehouse"}},
 		},
 	}
 	_, err = c.Apply(ctx, cs)

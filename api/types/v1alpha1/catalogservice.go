@@ -1,6 +1,8 @@
 package v1alpha1
 
 import (
+	"strings"
+
 	"github.com/pyvvo/funcd/api/fault"
 )
 
@@ -39,6 +41,32 @@ type CatalogServiceSpec struct {
 	// entry to the PEP PROXY (never the engine), so an external caller is PEP'd on catalog::query exactly like an
 	// internal one; auth is refused, since the proxy authenticates. Exposure is a network path, not a grant.
 	Ingress *Ingress `json:"ingress,omitempty"`
+	// Buckets, ConfigMaps and SecretDeclarations are what a standalone CatalogService declares at its root (ADR-0251):
+	// by name it owns the Bucket or ConfigMap, which carries its marker; by ref it binds an existing one. An owner left
+	// out of a prefix is the CatalogService (the catalog-store-owner admission). A catalog nested in a Function or an
+	// App declares nothing here: its declarer's root holds them.
+	Buckets            []BucketEntry       `json:"buckets,omitempty"`
+	ConfigMaps         []ConfigMapEntry    `json:"configMaps,omitempty"`
+	SecretDeclarations []SecretDeclaration `json:"secrets,omitempty"`
+}
+
+// HasRootEntries reports whether the spec declares anything at its root (ADR-0251), which only a standalone
+// CatalogService may.
+func (s *CatalogServiceSpec) HasRootEntries() bool {
+	return len(s.Buckets) > 0 || len(s.ConfigMaps) > 0 || len(s.SecretDeclarations) > 0
+}
+
+// rootField names the first root key the spec sets, for the refusal of a nested catalog's root entries.
+func (s *CatalogServiceSpec) rootField() string {
+	switch {
+	case len(s.Buckets) > 0:
+		return "buckets"
+	case len(s.ConfigMaps) > 0:
+		return "configMaps"
+	case len(s.SecretDeclarations) > 0:
+		return "secrets"
+	}
+	return ""
 }
 
 // CatalogRef names the bound (bucket, prefix) the DuckLake catalog syncs under (ADR-0086). The
@@ -142,7 +170,25 @@ func (c *CatalogService) Validate() error {
 	if c.Spec.Ingress != nil && c.Spec.Ingress.Auth != nil {
 		return fault.Invalidf(op, "spec.ingress.auth is not allowed: the catalog::query PEP proxy authenticates the caller")
 	}
-	return c.Spec.Ingress.validate(op, "spec.ingress")
+	if err := c.Spec.Ingress.validate(op, "spec.ingress"); err != nil {
+		return err
+	}
+	roots := rootSections{ConfigMaps: c.Spec.ConfigMaps, Buckets: c.Spec.Buckets, Secrets: c.Spec.SecretDeclarations}
+	return roots.validate(op, c.ObjectMeta)
+}
+
+// validateNestedCatalogs refuses a catalog entry at path that declares stores, ConfigMaps or Secrets of its own
+// (ADR-0251 Decision 2): a catalog nested in a Function or an App binds what its declarer's root declares. declarer
+// names the declarer's kind with its article ("a Function").
+func validateNestedCatalogs(op, path, declarer string, catalogs []CatalogEntry) error {
+	kind := declarer[strings.Index(declarer, " ")+1:]
+	for i := range catalogs {
+		if f := catalogs[i].rootField(); f != "" {
+			return fault.Invalidf(op, "%s[%d].%s: a catalog nested in %s declares nothing at its root; declare it at the %s's root",
+				path, i, f, declarer, kind)
+		}
+	}
+	return nil
 }
 
 // GetStatus returns the shared Status pointer, implementing StatusObject (the controller's write-back seam).

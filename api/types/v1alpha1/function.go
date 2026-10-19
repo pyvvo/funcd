@@ -241,6 +241,9 @@ func (f *Function) Validate() error {
 		return err
 	}
 	s := &f.Spec
+	if err := validateNestedCatalogs("Function.Validate", "spec.catalogs", "a Function", s.CatalogServices); err != nil {
+		return err
+	}
 	roots := rootSections{ConfigMaps: s.ConfigMaps, KV: s.KVStores, Buckets: s.Buckets, SQL: s.SQLDatabases, Catalogs: s.CatalogServices, Secrets: s.SecretDeclarations}
 	if err := roots.validate("Function.Validate", f.ObjectMeta); err != nil {
 		return err

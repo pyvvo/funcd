@@ -533,6 +533,9 @@ func (a *App) Validate() error {
 	if len(a.Name) > maxAppNameLength {
 		return fault.Invalidf(op, "metadata.name %q is longer than %d characters", a.Name, maxAppNameLength)
 	}
+	if err := validateNestedCatalogs(op, "spec.catalogs", "an App", a.Spec.Catalogs); err != nil {
+		return err
+	}
 	if err := a.validatePartRoots(op); err != nil {
 		return err
 	}

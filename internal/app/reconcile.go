@@ -500,28 +500,20 @@ func desired(a *v1.App, parts map[v1.ObjectRef]v1.Object, e entry) v1.Object {
 	return d
 }
 
-// checkSecrets gets each declared Secret of the App's namespace with platform rights, in declaration order, and
-// returns the stop of the first one that is missing (SecretNotFound) or lacks a declared key in spec.data
-// (SecretKeyMissing, naming the first missing key), nil when every one is complete (ADR-0213 Decision 8). It tests key
-// membership only, so no value enters a stop, a status or a log line. It only reads.
+// checkSecrets returns the stop of the first declared Secret of the App's namespace that is missing (SecretNotFound) or
+// lacks a declared key in spec.data (SecretKeyMissing, naming the first missing key), nil when every one is complete
+// (ADR-0213 Decision 8), through the check every declarer shares (ownedstore.CheckSecrets). It tests key membership
+// only, so no value enters a stop, a status or a log line. It only reads.
 func (r reader) checkSecrets(ctx context.Context, a *v1.App) (*stop, error) {
-	for _, d := range a.Spec.Secrets {
-		k := v1.ObjectRef{Kind: v1.KindSecret, Namespace: a.Namespace, Name: d.Name}
-		obj, err := r.get(ctx, v1.KindSecret, a.Namespace, d.Name)
-		if err != nil {
-			return nil, err
-		}
-		sec, ok := obj.(*v1.Secret)
-		if !ok {
-			return &stop{reason: reasonSecretNotFound, part: k, detail: "no such Secret in the namespace"}, nil
-		}
-		for _, key := range d.Keys {
-			if _, ok := sec.Spec.Data[key]; !ok {
-				return &stop{reason: reasonSecretKeyMissing, part: k, detail: "lacks the declared key " + key}, nil
-			}
-		}
+	gap, err := ownedstore.CheckSecrets(ctx, r.store, a.Namespace, a.Spec.Secrets)
+	if err != nil || gap == nil {
+		return nil, err
 	}
-	return nil, nil
+	k := v1.ObjectRef{Kind: v1.KindSecret, Namespace: a.Namespace, Name: gap.Name}
+	if gap.Key == "" {
+		return &stop{reason: gap.Reason(), part: k, detail: "no such Secret in the namespace"}, nil
+	}
+	return &stop{reason: gap.Reason(), part: k, detail: "lacks the declared key " + gap.Key}, nil
 }
 
 // write creates desired, or updates cur with desired's spec, owner references and resource group when one of them

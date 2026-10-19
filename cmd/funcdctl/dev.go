@@ -1440,6 +1440,13 @@ func synthesizeResources(op string, pfs []plannedFunc) ([]v1.Object, error) {
 		cs.Spec.Bindings.Blob = dc.Blob
 		cs.Spec.Catalog = dc.Catalog
 		cs.Spec.Bindings.Secret = []v1.ObjectName{tokenSecret}
+		// ADR-0251: a standalone CatalogService declares what it binds; dev creates the buckets, so they are refs.
+		for _, b := range dc.Blob {
+			if !slices.ContainsFunc(cs.Spec.Buckets, func(e v1.BucketEntry) bool { return e.Ref == b.Bucket }) {
+				cs.Spec.Buckets = append(cs.Spec.Buckets, v1.BucketEntry{Ref: b.Bucket})
+			}
+		}
+		cs.Spec.SecretDeclarations = []v1.SecretDeclaration{{Name: tokenSecret, Keys: []string{"QUACK_TOKEN"}}}
 		objs = append(objs, cs)
 	}
 

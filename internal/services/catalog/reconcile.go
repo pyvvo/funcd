@@ -68,6 +68,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		}
 	}
 
+	// ADR-0251: the declared Secrets hold their keys, and the Buckets and ConfigMaps defined by name are written with
+	// this catalog's marker, before any binding resolves.
+	reason, msg, rerr := r.ensureRootEntries(ctx, cs)
+	if rerr != nil {
+		return controller.Result{}, rerr
+	}
+	if reason != "" {
+		return r.holdNotReady(ctx, cs, reason, msg, r.referentPoll)
+	}
+
 	// ADR-0121: spec.blob + spec.catalog (bucket, prefix) EXISTENCE is reconcile-time — a CatalogService
 	// naming a not-yet-applied Bucket/prefix is admitted and held not-Ready (BucketNotFound) until it
 	// resolves, then converges (this is the check the removed catalog-blob-validity admission made). Fail-
@@ -179,6 +189,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	}
 	if cerr != nil {
 		return controller.Result{}, fault.Wrapf(cerr, fault.KindOf(cerr), op, "converge provider engine %s/%s", cs.Namespace, cs.Name)
+	}
+	if st.Ready {
+		// ADR-0251 Decision 4: the engine runs on the current ConfigMaps, so the ones it no longer reads go.
+		if perr := r.pruneConfigMaps(ctx, cs); perr != nil {
+			return controller.Result{}, perr
+		}
 	}
 	if !st.Ready {
 		// The engine is still starting (the container is up but its Quack endpoint isn't answering the

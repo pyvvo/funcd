@@ -1324,6 +1324,7 @@ func (p *Platform) buildControlPlane() error {
 			// owner to it and its config bindings name the stored ConfigMaps.
 			admission.NewBindingDeclaredAdmission(r),
 			admission.NewFunctionStoreOwnerAdmission(),
+			admission.NewCatalogStoreOwnerAdmission(),
 			// ADR-0094 WorkflowRun payload cap: spec.input ≤ payloadLimit (larger data by reference).
 			admission.NewWorkflowRunPayloadAdmission(c.workflowPayloadLimit),
 			// ADR-0098 F65: reject a WorkflowRun whose input violates the parent's cached contract (zero registry I/O).

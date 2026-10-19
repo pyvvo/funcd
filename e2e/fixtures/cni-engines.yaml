@@ -29,6 +29,12 @@ metadata:
   namespace: a-b
   resourceGroup: rg1
 spec:
+  buckets:
+    - ref: cni-ab
+  secrets:
+    - name: quack-token
+      keys:
+        - QUACK_TOKEN
   bindings:
     blob:
       - alias: gold
@@ -69,6 +75,12 @@ metadata:
   namespace: a
   resourceGroup: rg1
 spec:
+  buckets:
+    - ref: cni-a
+  secrets:
+    - name: quack-token
+      keys:
+        - QUACK_TOKEN
   bindings:
     blob:
       - alias: gold

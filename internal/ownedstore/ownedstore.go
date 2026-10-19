@@ -7,6 +7,7 @@ package ownedstore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -21,13 +22,13 @@ const op = "ownedstore.Ensure"
 var ErrNotOwned = errors.New("ownedstore: the store exists and is not this owner's")
 
 // IsMarker reports whether r has the shape of a store marker: a non-controller reference naming a kind that stamps one,
-// a Workflow (ADR-0178), an App (ADR-0199 Decision 8), or a Function or Site (ADR-0248).
+// a Workflow (ADR-0178), an App (ADR-0199 Decision 8), a Function or Site (ADR-0248), or a CatalogService (ADR-0251).
 func IsMarker(r v1.OwnerReference) bool {
 	if r.Controller {
 		return false
 	}
 	switch r.Kind {
-	case v1.KindWorkflow, v1.KindApp, v1.KindFunction, v1.KindSite:
+	case v1.KindWorkflow, v1.KindApp, v1.KindFunction, v1.KindSite, v1.KindCatalogService:
 		return true
 	}
 	return false
@@ -112,4 +113,59 @@ func MapOwner(_ store.Store, kind v1.Kind) controller.MapFunc {
 		}
 		return reqs
 	}
+}
+
+// The reasons a declared Secret stops its declarer (ADR-0213 Decision 8).
+const (
+	ReasonSecretNotFound   = "SecretNotFound"
+	ReasonSecretKeyMissing = "SecretKeyMissing"
+)
+
+// SecretGap is the first declared Secret that is not complete: the declaration's index and name, and the first declared
+// key it lacks, or no key when the Secret does not exist. It holds no Secret value.
+type SecretGap struct {
+	Index int
+	Name  v1.ObjectName
+	Key   string
+}
+
+// Reason is SecretNotFound or SecretKeyMissing.
+func (g SecretGap) Reason() string {
+	if g.Key == "" {
+		return ReasonSecretNotFound
+	}
+	return ReasonSecretKeyMissing
+}
+
+// Message is the gap as a resource that declares its Secrets in spec.secrets reports it.
+func (g SecretGap) Message() string {
+	if g.Key == "" {
+		return fmt.Sprintf("spec.secrets[%d]: Secret %q does not exist in the namespace; waiting", g.Index, g.Name)
+	}
+	return fmt.Sprintf("spec.secrets[%d]: Secret %q lacks the declared key %s; waiting", g.Index, g.Name, g.Key)
+}
+
+// CheckSecrets gets each Secret decls declares in ns, in declaration order, and returns the first gap, nil when every
+// one exists with every declared key (ADR-0213 Decision 8). It tests key membership only and only reads.
+func CheckSecrets(ctx context.Context, st store.Store, ns v1.NamespaceName, decls []v1.SecretDeclaration) (*SecretGap, error) {
+	const op = "ownedstore.CheckSecrets"
+	for i, d := range decls {
+		obj, err := st.Get(ctx, v1.KindSecret.GVK(), ns, d.Name)
+		if fault.KindOf(err) == fault.NotFound {
+			return &SecretGap{Index: i, Name: d.Name}, nil
+		}
+		if err != nil {
+			return nil, fault.Wrapf(err, fault.KindOf(err), op, "get secret %q", d.Name)
+		}
+		sec, ok := obj.(*v1.Secret)
+		if !ok {
+			return nil, fault.Internalf(op, "object %s/%s is not a Secret", ns, d.Name)
+		}
+		for _, key := range d.Keys {
+			if _, has := sec.Spec.Data[key]; !has {
+				return &SecretGap{Index: i, Name: d.Name, Key: key}, nil
+			}
+		}
+	}
+	return nil, nil
 }

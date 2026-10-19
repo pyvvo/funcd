@@ -13,12 +13,9 @@ import (
 	"github.com/pyvvo/funcd/internal/store"
 )
 
-// The reasons a Function's root entries stop it (ADR-0248 Decisions 3 and 6).
-const (
-	reasonStoreNotOwned    = "StoreNotOwned"
-	reasonSecretNotFound   = "SecretNotFound"
-	reasonSecretKeyMissing = "SecretKeyMissing"
-)
+// reasonStoreNotOwned stops a Function whose root names a store of another owner (ADR-0248 Decision 3); a declared
+// Secret stops it with ownedstore's reasons (Decision 6).
+const reasonStoreNotOwned = "StoreNotOwned"
 
 // rootObject is one object a Function defines by name at its root, with the deletion policy it is written under.
 type rootObject struct {
@@ -75,25 +72,13 @@ func rootObjects(fn *v1.Function) []rootObject {
 // that is missing or lacks a key, which no value of enters the message, so nothing is written while one is
 // incomplete; or an object of that name without fn's marker (StoreNotOwned, never written).
 func (r *Reconciler) ensureRootEntries(ctx context.Context, fn *v1.Function) (*gateFailure, error) {
-	for i, d := range fn.Spec.SecretDeclarations {
-		obj, err := r.store.Get(ctx, v1.KindSecret.GVK(), fn.Namespace, d.Name)
-		if fault.KindOf(err) == fault.NotFound {
-			msg := fmt.Sprintf("spec.secrets[%d]: Secret %q does not exist in the namespace; waiting", i, d.Name)
-			return &gateFailure{reason: reasonSecretNotFound, message: msg, readyMessage: msg, phase: v1.PhasePending, requeue: r.referentPoll}, nil
-		}
-		if err != nil {
-			return nil, fault.Wrapf(err, fault.KindOf(err), "function.ensureRootEntries", "get secret %q", d.Name)
-		}
-		sec, ok := obj.(*v1.Secret)
-		if !ok {
-			return nil, fault.Internalf("function.ensureRootEntries", "secret %q read as %T", d.Name, obj)
-		}
-		for _, key := range d.Keys {
-			if _, ok := sec.Spec.Data[key]; !ok {
-				msg := fmt.Sprintf("spec.secrets[%d]: Secret %q lacks the declared key %s; waiting", i, d.Name, key)
-				return &gateFailure{reason: reasonSecretKeyMissing, message: msg, readyMessage: msg, phase: v1.PhasePending, requeue: r.referentPoll}, nil
-			}
-		}
+	gap, err := ownedstore.CheckSecrets(ctx, r.store, fn.Namespace, fn.Spec.SecretDeclarations)
+	if err != nil {
+		return nil, err
+	}
+	if gap != nil {
+		msg := gap.Message()
+		return &gateFailure{reason: gap.Reason(), message: msg, readyMessage: msg, phase: v1.PhasePending, requeue: r.referentPoll}, nil
 	}
 	for _, o := range rootObjects(fn) {
 		_, err := ownedstore.Ensure(ctx, r.store, fn, o.obj, o.deletion)

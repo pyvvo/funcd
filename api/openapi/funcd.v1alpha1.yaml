@@ -397,8 +397,68 @@ components:
             properties:
               bindings:
                 $ref: "#/components/schemas/CatalogServiceBindings"
+              buckets:
+                items:
+                  additionalProperties: false
+                  properties:
+                    deletion:
+                      description: retain (the default) keeps the store and its data when the App drops it or is deleted; delete removes them.
+                      enum:
+                        - retain
+                        - delete
+                      type: string
+                    maxObjectBytes:
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    name:
+                      description: The part's name. The object takes the App's namespace and resource group.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                      type: string
+                    prefixes:
+                      items:
+                        $ref: "#/components/schemas/BucketPrefix"
+                      type:
+                        - array
+                        - "null"
+                    ref:
+                      description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                      type: string
+                  type: object
+                type:
+                  - array
+                  - "null"
               catalog:
                 $ref: "#/components/schemas/CatalogRef"
+              configMaps:
+                items:
+                  additionalProperties: false
+                  properties:
+                    data:
+                      additionalProperties:
+                        type: string
+                      type: object
+                    name:
+                      description: The ConfigMap's name, at most 52 characters. It is stored as <name>-<hash of data>, and the config of each part that names it is set to that stored name.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                      type: string
+                    ref:
+                      description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                      type: string
+                  type: object
+                type:
+                  - array
+                  - "null"
               ingress:
                 $ref: "#/components/schemas/Ingress"
               name:
@@ -415,6 +475,33 @@ components:
                 type: string
               resources:
                 $ref: "#/components/schemas/ResourceSpec"
+              secrets:
+                items:
+                  additionalProperties: false
+                  properties:
+                    description:
+                      description: What the Secret is for, for the installer who provides it.
+                      type: string
+                    keys:
+                      description: "The keys the parts read: the Secret's data must hold each of them."
+                      items:
+                        pattern: ^[A-Za-z_][A-Za-z0-9_]*$
+                        type: string
+                      minItems: 1
+                      type: array
+                    name:
+                      description: The name of a Secret in the App's namespace. The platform holds its value; the App never writes it.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                      type: string
+                  required:
+                    - name
+                    - keys
+                  type: object
+                type:
+                  - array
+                  - "null"
             type: object
           type:
             - array
@@ -517,8 +604,68 @@ components:
                   properties:
                     bindings:
                       $ref: "#/components/schemas/CatalogServiceBindings"
+                    buckets:
+                      items:
+                        additionalProperties: false
+                        properties:
+                          deletion:
+                            description: retain (the default) keeps the store and its data when the App drops it or is deleted; delete removes them.
+                            enum:
+                              - retain
+                              - delete
+                            type: string
+                          maxObjectBytes:
+                            format: int64
+                            minimum: 0
+                            type: integer
+                          name:
+                            description: The part's name. The object takes the App's namespace and resource group.
+                            maxLength: 63
+                            minLength: 1
+                            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                            type: string
+                          prefixes:
+                            items:
+                              $ref: "#/components/schemas/BucketPrefix"
+                            type:
+                              - array
+                              - "null"
+                          ref:
+                            description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
+                            maxLength: 63
+                            minLength: 1
+                            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                            type: string
+                        type: object
+                      type:
+                        - array
+                        - "null"
                     catalog:
                       $ref: "#/components/schemas/CatalogRef"
+                    configMaps:
+                      items:
+                        additionalProperties: false
+                        properties:
+                          data:
+                            additionalProperties:
+                              type: string
+                            type: object
+                          name:
+                            description: The ConfigMap's name, at most 52 characters. It is stored as <name>-<hash of data>, and the config of each part that names it is set to that stored name.
+                            maxLength: 63
+                            minLength: 1
+                            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                            type: string
+                          ref:
+                            description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
+                            maxLength: 63
+                            minLength: 1
+                            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                            type: string
+                        type: object
+                      type:
+                        - array
+                        - "null"
                     ingress:
                       $ref: "#/components/schemas/Ingress"
                     name:
@@ -535,6 +682,33 @@ components:
                       type: string
                     resources:
                       $ref: "#/components/schemas/ResourceSpec"
+                    secrets:
+                      items:
+                        additionalProperties: false
+                        properties:
+                          description:
+                            description: What the Secret is for, for the installer who provides it.
+                            type: string
+                          keys:
+                            description: "The keys the parts read: the Secret's data must hold each of them."
+                            items:
+                              pattern: ^[A-Za-z_][A-Za-z0-9_]*$
+                              type: string
+                            minItems: 1
+                            type: array
+                          name:
+                            description: The name of a Secret in the App's namespace. The platform holds its value; the App never writes it.
+                            maxLength: 63
+                            minLength: 1
+                            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                            type: string
+                        required:
+                          - name
+                          - keys
+                        type: object
+                      type:
+                        - array
+                        - "null"
                   type: object
                 type:
                   - array
@@ -1632,12 +1806,99 @@ components:
       properties:
         bindings:
           $ref: "#/components/schemas/CatalogServiceBindings"
+        buckets:
+          items:
+            additionalProperties: false
+            properties:
+              deletion:
+                description: retain (the default) keeps the store and its data when the App drops it or is deleted; delete removes them.
+                enum:
+                  - retain
+                  - delete
+                type: string
+              maxObjectBytes:
+                format: int64
+                minimum: 0
+                type: integer
+              name:
+                description: The part's name. The object takes the App's namespace and resource group.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              prefixes:
+                items:
+                  $ref: "#/components/schemas/BucketPrefix"
+                type:
+                  - array
+                  - "null"
+              ref:
+                description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+            type: object
+          type:
+            - array
+            - "null"
         catalog:
           $ref: "#/components/schemas/CatalogRef"
+        configMaps:
+          items:
+            additionalProperties: false
+            properties:
+              data:
+                additionalProperties:
+                  type: string
+                type: object
+              name:
+                description: The ConfigMap's name, at most 52 characters. It is stored as <name>-<hash of data>, and the config of each part that names it is set to that stored name.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+              ref:
+                description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+            type: object
+          type:
+            - array
+            - "null"
         ingress:
           $ref: "#/components/schemas/Ingress"
         resources:
           $ref: "#/components/schemas/ResourceSpec"
+        secrets:
+          items:
+            additionalProperties: false
+            properties:
+              description:
+                description: What the Secret is for, for the installer who provides it.
+                type: string
+              keys:
+                description: "The keys the parts read: the Secret's data must hold each of them."
+                items:
+                  pattern: ^[A-Za-z_][A-Za-z0-9_]*$
+                  type: string
+                minItems: 1
+                type: array
+              name:
+                description: The name of a Secret in the App's namespace. The platform holds its value; the App never writes it.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                type: string
+            required:
+              - name
+              - keys
+            type: object
+          type:
+            - array
+            - "null"
       required:
         - bindings
         - catalog
@@ -2255,8 +2516,68 @@ components:
             properties:
               bindings:
                 $ref: "#/components/schemas/CatalogServiceBindings"
+              buckets:
+                items:
+                  additionalProperties: false
+                  properties:
+                    deletion:
+                      description: retain (the default) keeps the store and its data when the App drops it or is deleted; delete removes them.
+                      enum:
+                        - retain
+                        - delete
+                      type: string
+                    maxObjectBytes:
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    name:
+                      description: The part's name. The object takes the App's namespace and resource group.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                      type: string
+                    prefixes:
+                      items:
+                        $ref: "#/components/schemas/BucketPrefix"
+                      type:
+                        - array
+                        - "null"
+                    ref:
+                      description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                      type: string
+                  type: object
+                type:
+                  - array
+                  - "null"
               catalog:
                 $ref: "#/components/schemas/CatalogRef"
+              configMaps:
+                items:
+                  additionalProperties: false
+                  properties:
+                    data:
+                      additionalProperties:
+                        type: string
+                      type: object
+                    name:
+                      description: The ConfigMap's name, at most 52 characters. It is stored as <name>-<hash of data>, and the config of each part that names it is set to that stored name.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                      type: string
+                    ref:
+                      description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                      type: string
+                  type: object
+                type:
+                  - array
+                  - "null"
               ingress:
                 $ref: "#/components/schemas/Ingress"
               name:
@@ -2273,6 +2594,33 @@ components:
                 type: string
               resources:
                 $ref: "#/components/schemas/ResourceSpec"
+              secrets:
+                items:
+                  additionalProperties: false
+                  properties:
+                    description:
+                      description: What the Secret is for, for the installer who provides it.
+                      type: string
+                    keys:
+                      description: "The keys the parts read: the Secret's data must hold each of them."
+                      items:
+                        pattern: ^[A-Za-z_][A-Za-z0-9_]*$
+                        type: string
+                      minItems: 1
+                      type: array
+                    name:
+                      description: The name of a Secret in the App's namespace. The platform holds its value; the App never writes it.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                      type: string
+                  required:
+                    - name
+                    - keys
+                  type: object
+                type:
+                  - array
+                  - "null"
             type: object
           type:
             - array
