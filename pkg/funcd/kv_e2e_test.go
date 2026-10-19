@@ -30,7 +30,7 @@ func TestScenarioE2EKVCounterViaContextKV(t *testing.T) {
 	c, dpURL := shimPlatformOCI(t)
 	exDir := tsExample(t, "kv-counter")
 	layout := t.TempDir()
-	// push WITH the I/O contract from the example's funcdctl.yaml (ADR-0144) — the kv-counter function
+	// push WITH the I/O contract from the example's contract file (ADR-0247) — the kv-counter function
 	// is contract-validated exactly like fn-to-fn, so the artifact carries its schemas.
 	ref, digest := pushExampleFn(t, layout, exDir, "counter")
 

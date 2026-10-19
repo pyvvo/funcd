@@ -78,7 +78,7 @@ testcases:
               funcdctl push functions/ts/${f%%:*}.mjs {{.reg}}/${f#*:}
             done
             for f in planner:todo-planner:1.0.0 rank:todo-rank:1.0.0 warm:todo-warm:1.0.0 intake:todo-intake:1.0.0 stats:todo-stats:1.0.0; do
-              funcdctl push functions/py/${f%%:*}.py {{.reg}}/${f#*:}
+              funcdctl push functions/py/dist/${f%%:*} {{.reg}}/${f#*:}
             done
             funcdctl push --site web {{.reg}}/todo-web:1.0.0' | grep -c "@sha256:"
         info: "pushed → {{.result.systemout}} {{.result.systemerr}}"
@@ -2149,7 +2149,7 @@ testcases:
               funcdctl push functions/ts/${f%%:*}.mjs {{.reg}}/${f#*:} >/dev/null
             done
             for f in intake_sql:todo-intake:1.2.0 notify:todo-notify:1.2.0; do
-              funcdctl push functions/py/${f%%:*}.py {{.reg}}/${f#*:} >/dev/null
+              funcdctl push functions/py/dist/${f%%:*} {{.reg}}/${f#*:} >/dev/null
             done
             funcdctl app lock /opt/lane/app-1.2.0 -f /opt/lane/values/e2e.yaml >/dev/null
             funcdctl push --template /opt/lane/app-1.2.0 {{.reg}}/todo:1.2.0 >/dev/null

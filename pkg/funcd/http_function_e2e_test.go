@@ -39,7 +39,7 @@ type device struct {
 func (e *gcEnv) pushDevices(t *testing.T, tag string, blob []byte) (ref, digest string) {
 	t.Helper()
 	ref = "oci-layout://" + e.layout + ":" + tag
-	digest, err := artifact.Push(e.ctx, ref, filepath.Join(tsExample(t, "http-api"), "devices.mjs"), blob, "", "")
+	digest, err := artifact.Push(e.ctx, ref, filepath.Join(tsExample(t, "http-api"), "devices-api.mjs"), blob, "", "")
 	require.NoError(t, err)
 	return ref, digest
 }

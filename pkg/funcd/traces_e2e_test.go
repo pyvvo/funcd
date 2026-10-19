@@ -52,7 +52,7 @@ func TestScenarioE2EFunclogCapturesSpans(t *testing.T) {
 	ref := "oci-layout://" + layout + ":log-burst"
 	contract, err := artifact.ContractBlob([]byte(`{}`), []byte(`{}`))
 	require.NoError(t, err)
-	digest, err := artifact.Push(context.Background(), ref, filepath.Join(exDir, "burst.mjs"), contract, "", "")
+	digest, err := artifact.Push(context.Background(), ref, filepath.Join(exDir, "log-burst.mjs"), contract, "", "")
 	require.NoError(t, err)
 
 	messaging, err := nats.Open(context.Background(), nats.Options{Storage: nats.MemoryStorage})

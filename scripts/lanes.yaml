@@ -19,8 +19,9 @@
 #   stage   — files/dirs (relative to dir) copied into the VM's /opt/lane (the manifests + built artifacts);
 #             or {from, module, to}: a file or a directory from funcd's root (or from `module`'s root) to a tgz path.
 #   push    — OCI pushes done in the guest: artifact + ref (→ oci-layout:///mnt/funcd-deps/registry:<ref>);
-#             optional schema (single-file --schema), entry (bundle --entry), or site: true (a prebuilt
-#             static web app dir pushed with --site, ADR-0139).
+#             optional entry (bundle --entry, default main.py or main.mjs), or site: true (a prebuilt static web app
+#             dir pushed with --site, ADR-0139). funcdctl push reads the artifact's contract file, staged beside a
+#             file or at a bundle's root (ADR-0247), for its contract and runtime.
 #   apply   — `funcdctl apply -f` order in the guest (after the pushes).
 #   ready   — the readiness gate for `limactl start`: kind + names polled until Ready (tries × 2s). Absent = no
 #             gate, for a lane whose suite deploys its resources itself.
@@ -37,7 +38,7 @@ env-echo:
   dir: examples/env-echo
   stage:
     - env-echo.mjs
-    - funcdctl.yaml
+    - env-echo.contract.yaml
     - configmap.yaml
     - secret.yaml
     - function.yaml
@@ -58,6 +59,8 @@ env-echo:
     # ADR-0160: a handler that takes 30 s to load, killed while it boots
     - from: e2e/fixtures/boot-hang.mjs
       to: boot-hang.mjs
+    - from: e2e/fixtures/boot-hang.contract.json
+      to: boot-hang.contract.json
     - from: e2e/fixtures/boot-hang.yaml
       to: boot-hang.yaml
     # ADR-0149: a runtime with no image, applied last by the Venom suite
@@ -99,8 +102,8 @@ fn-to-fn:
   stage:
     - greeter.mjs
     - front.mjs
-    - greeter.funcdctl.yaml
-    - front.funcdctl.yaml
+    - greeter.contract.yaml
+    - front.contract.yaml
     - greeter.yaml
     - front.yaml
     - funcdconfig.yaml
@@ -125,13 +128,13 @@ http-api:
   module: github.com/pyvvo/funcd-typescript
   dir: examples/http-api
   stage:
-    - devices.mjs
-    - devices.funcdctl.yaml
+    - devices-api.mjs
+    - devices-api.contract.yaml
     - devices.yaml
     - route.yaml
     - funcdconfig.yaml
   push:
-    - artifact: devices.mjs
+    - artifact: devices-api.mjs
       ref: devices
   apply:
     - devices.yaml
@@ -152,14 +155,14 @@ duckdb:
   # digest the runtime images pin first. It downloads the DuckDB extensions: check them against their pins after.
   build:
     - uv run --locked funcd-bundle
-    - cd dist/catalog-quack/duckdb-ext && grep -E "/linux_$(go env GOARCH)/(httpfs|quack)\." "$FUNCD_ROOT/images/runtime/duckdb/duckdb.sha256" | sha256sum -c - && test "$(find . -name '*.duckdb_extension' | wc -l)" -eq 2
+    - cd dist/catalog-reader/duckdb-ext && grep -E "/linux_$(go env GOARCH)/(httpfs|quack)\." "$FUNCD_ROOT/images/runtime/duckdb/duckdb.sha256" | sha256sum -c - && test "$(find . -name '*.duckdb_extension' | wc -l)" -eq 2
   stage:
     - configmap.yaml
     - secret.yaml
     - bucket.yaml
     - catalogservice.yaml
     - consumer.yaml
-    - dist/catalog-quack
+    - dist/catalog-reader
     # ADR-0171: the example's daemon config with auth.credentials in place of auth.token
     - from: e2e/fixtures/duckdb-funcdconfig.yaml
       to: funcdconfig.yaml
@@ -170,9 +173,8 @@ duckdb:
     admin: duckdb-lane-admin
     developer: duckdb-lane-developer
   push:
-    - artifact: dist/catalog-quack
+    - artifact: dist/catalog-reader
       ref: catalog-reader
-      entry: handler.py
   # ADR-0121: no two-phase — apply in any order. The CatalogService binds the Bucket BEFORE it exists
   # (admitted, held Ready=False/BucketNotFound), then the Bucket (owner: lake) resolves it and the engine
   # converges — a live apply-any-order proof of the Bucket↔CatalogService cycle on real containerd.
@@ -194,8 +196,8 @@ s3:
   module: github.com/pyvvo/funcd-typescript
   dir: examples/s3-roundtrip
   stage:
-    - roundtrip.mjs
-    - funcdctl.yaml
+    - s3-roundtrip.mjs
+    - s3-roundtrip.contract.yaml
     - bucket.yaml
     - function.yaml
     - funcdconfig.yaml
@@ -216,7 +218,7 @@ s3:
     - docs
     - site-docs.yaml
   push:
-    - artifact: roundtrip.mjs
+    - artifact: s3-roundtrip.mjs
       ref: s3-roundtrip
     - artifact: bi
       ref: bi
@@ -255,28 +257,28 @@ kv:
   description: The kv-counter JS + Python functions increment a per-name counter via context.kv on a durable Badger store (ADR-0069/0073/0076).
   module: github.com/pyvvo/funcd-typescript
   dir: examples/kv-counter
-  # Both sides collide on the manifest and file basenames, so the Python side is staged under a py/ subdir
-  # via the {from,to} form (pulling from a DIFFERENT dir than `dir`); the JS side stages at the layout root.
-  # Each artifact's funcdctl.yaml sits where `funcdctl push` resolves it (ADR-0144): beside the file.
+  # Both sides collide on the resource file's name, so the Python side is staged under a py/ subdir via the
+  # {from,to} form (pulling from a DIFFERENT dir than `dir`); the JS side stages at the layout root. Each artifact's
+  # contract file sits where `funcdctl push` reads it (ADR-0247): beside the file, named after its stem.
   stage:
     - counter.mjs
-    - funcdctl.yaml
+    - counter.contract.yaml
     - counter.yaml
-    - counter-unbound.yaml   # the fail-closed negative applied in-VM by the Venom suite
+    - fixtures/counter-unbound.yaml   # the fail-closed negative applied in-VM by the Venom suite
     - funcdconfig.yaml
-    - from: examples/kv-counter/src/counter.py
+    - from: examples/kv-counter/src/main.py
       module: github.com/pyvvo/funcd-python
-      to: py/counter.py
-    - from: examples/kv-counter/funcdctl.yaml
+      to: py/pycounter.py
+    - from: examples/kv-counter/pycounter.contract.yaml
       module: github.com/pyvvo/funcd-python
-      to: py/counter.funcdctl.yaml
+      to: py/pycounter.contract.yaml
     - from: examples/kv-counter/counter.yaml
       module: github.com/pyvvo/funcd-python
       to: py/counter.yaml
   push:
     - artifact: counter.mjs
       ref: counter
-    - artifact: py/counter.py
+    - artifact: py/pycounter.py
       ref: pycounter
   # ADR-0248: each function declares the store it owns at its root and the reconciler writes it, the function as
   # the table owner (the binding IS the capability — default-deny; ADR-0076: no read Policy needed).
@@ -301,37 +303,32 @@ workflow:
     - hi.mjs
     - lo.mjs
     - report.mjs
-    - ingest.funcdctl.yaml
-    - score.funcdctl.yaml
-    - hi.funcdctl.yaml
-    - lo.funcdctl.yaml
-    - report.funcdctl.yaml
+    - ingest.contract.yaml
+    - score.contract.yaml
+    - hi.contract.yaml
+    - lo.contract.yaml
+    - report.contract.yaml
     - workflow.yaml
     - child.yaml
     - parent.yaml
-    - run-pause.yaml
-    - run-cancel.yaml
-    - schedule-source.yaml
-    - schedule-sensor.yaml
+    - fixtures/run-pause.yaml
+    - fixtures/run-cancel.yaml
+    - fixtures/schedule-source.yaml
+    - fixtures/schedule-sensor.yaml
     - funcdconfig.yaml
-  # Each step image carries --runtime nodejs22 (the dev.funcd.runtime.v1 annotation) so the workflow
-  # materializer resolves its runtime from the manifest alone (ADR-0094).
+  # Each step image carries its contract file's runtime (the dev.funcd.runtime.v1 annotation, ADR-0247) so the
+  # workflow materializer resolves its runtime from the manifest alone (ADR-0094).
   push:
     - artifact: ingest.mjs
       ref: ingest
-      runtime: nodejs22
     - artifact: score.mjs
       ref: score
-      runtime: nodejs22
     - artifact: hi.mjs
       ref: hi
-      runtime: nodejs22
     - artifact: lo.mjs
       ref: lo
-      runtime: nodejs22
     - artifact: report.mjs
       ref: report
-      runtime: nodejs22
   # Apply the Workflows — orders (the main lane), plus the F70 sub-workflow pair: `scorer` (child) and
   # `pipeline` (parent, whose `sub` step runs scorer inline). The engine materializes each's owned step
   # Functions. The run manifests (run-pause/run-cancel) are applied IN-VM by the Venom suite.
@@ -362,25 +359,25 @@ funclog:
   module: github.com/pyvvo/funcd-typescript
   dir: examples/log-burst
   stage:
-    - burst.mjs
-    - funcdctl.yaml
+    - log-burst.mjs
+    - log-burst.contract.yaml
     - burst.yaml
     - funcdconfig.yaml
-    - from: examples/log-burst/src/handler.py
+    - from: examples/log-burst/src/main.py
       module: github.com/pyvvo/funcd-python
-      to: py/handler.py
-    - from: examples/log-burst/funcdctl.yaml
+      to: py/pylog-burst.py
+    - from: examples/log-burst/log-burst.contract.yaml
       module: github.com/pyvvo/funcd-python
-      to: py/handler.funcdctl.yaml
+      to: py/pylog-burst.contract.yaml
     - from: examples/log-burst/handler.yaml
       module: github.com/pyvvo/funcd-python
       to: py/handler.yaml
   # Both examples are named "log-burst"; the Python one deploys as "pylog-burst" (transform rewrites both
   # the metadata.name and the artifact ref) so they coexist on one daemon.
   push:
-    - artifact: burst.mjs
+    - artifact: log-burst.mjs
       ref: log-burst
-    - artifact: py/handler.py
+    - artifact: py/pylog-burst.py
       ref: pylog-burst
   apply:
     - burst.yaml
@@ -399,14 +396,14 @@ egress:
   module: github.com/pyvvo/funcd-typescript
   dir: examples/egress-probe
   stage:
-    - probe.mjs
-    - funcdctl.yaml
+    - egress-probe.mjs
+    - egress-probe.contract.yaml
     - function.yaml
-    - egresspolicy-wildcard.yaml   # applied MID-SUITE by the Venom allow-cases (deny-then-allow ordering)
-    - egresspolicy-cidr.yaml       # applied MID-SUITE by the Venom CIDR allow-case
+    - fixtures/egresspolicy-wildcard.yaml   # applied MID-SUITE by the Venom allow-cases (deny-then-allow ordering)
+    - fixtures/egresspolicy-cidr.yaml       # applied MID-SUITE by the Venom CIDR allow-case
     - funcdconfig.yaml             # the ONLY lane funcdconfig with server.network.egress on (F80+F81 armed)
   push:
-    - artifact: probe.mjs
+    - artifact: egress-probe.mjs
       ref: egress-probe
   # Only the Function is applied at deploy. The EgressPolicies are applied IN-VM by the Venom suite so the
   # default-deny (no policy) case is observable BEFORE any allow-list exists — the deny-then-allow ordering.
@@ -449,7 +446,7 @@ sql:
       module: github.com/pyvvo/funcd-functions
       to: funcdconfig.yaml
     - functions/ts/notes.mjs
-    - functions/ts/notes.funcdctl.yaml
+    - functions/ts/notes.contract.yaml
     - functions/py/dist/notes_report
     # The todo App with its value sql (ADR-0236): its 1.0.0 and 1.1.0 templates, values and site, and every image its
     # lock pins; the suite pushes, locks and deploys it.
@@ -463,15 +460,15 @@ sql:
       module: github.com/pyvvo/funcd-functions
       to: app-1.1.0/app.yaml
     - functions/ts/api-1.0.0.mjs
-    - functions/ts/api-1.0.0.funcdctl.yaml
+    - functions/ts/api-1.0.0.contract.yaml
     - functions/ts/api-1.1.0.mjs
-    - functions/ts/api-1.1.0.funcdctl.yaml
+    - functions/ts/api-1.1.0.contract.yaml
     - functions/ts/migrate-1.0.0.mjs
-    - functions/ts/migrate-1.0.0.funcdctl.yaml
+    - functions/ts/migrate-1.0.0.contract.yaml
     - functions/ts/migrate-1.1.0.mjs
-    - functions/ts/migrate-1.1.0.funcdctl.yaml
+    - functions/ts/migrate-1.1.0.contract.yaml
     - functions/ts/collect.mjs
-    - functions/ts/collect.funcdctl.yaml
+    - functions/ts/collect.contract.yaml
     - functions/py/dist/planner
     - functions/py/dist/rank
     - functions/py/dist/warm
@@ -487,7 +484,6 @@ sql:
       ref: notes
     - artifact: functions/py/dist/notes_report
       ref: notes-report
-      entry: notes_report.py
   apply:
     - sql/notes-db.yaml
     - sql/notes.yaml
@@ -536,15 +532,15 @@ sql-examples:
     - from: examples/sql-notes/notes.mjs
       module: github.com/pyvvo/funcd-typescript
       to: sql-notes/notes.mjs
-    - from: examples/sql-notes/notes.funcdctl.yaml
+    - from: examples/sql-notes/notes.contract.yaml
       module: github.com/pyvvo/funcd-typescript
-      to: sql-notes/notes.funcdctl.yaml
+      to: sql-notes/notes.contract.yaml
     - from: examples/sql-notes/notes-migrate.mjs
       module: github.com/pyvvo/funcd-typescript
       to: sql-notes/notes-migrate.mjs
-    - from: examples/sql-notes/notes-migrate.funcdctl.yaml
+    - from: examples/sql-notes/notes-migrate.contract.yaml
       module: github.com/pyvvo/funcd-typescript
-      to: sql-notes/notes-migrate.funcdctl.yaml
+      to: sql-notes/notes-migrate.contract.yaml
     - from: examples/sql-notes/notes-db.yaml
       module: github.com/pyvvo/funcd-typescript
       to: sql-notes/notes-db.yaml
@@ -560,9 +556,9 @@ sql-examples:
     - from: examples/sql-search/search.mjs
       module: github.com/pyvvo/funcd-typescript
       to: sql-search/search.mjs
-    - from: examples/sql-search/search.funcdctl.yaml
+    - from: examples/sql-search/search.contract.yaml
       module: github.com/pyvvo/funcd-typescript
-      to: sql-search/search.funcdctl.yaml
+      to: sql-search/search.contract.yaml
     - from: examples/sql-search/search.yaml
       module: github.com/pyvvo/funcd-typescript
       to: sql-search/search.yaml
@@ -575,19 +571,14 @@ sql-examples:
       ref: search
     - artifact: sql-orders/dist/orders
       ref: orders
-      entry: orders.py
     - artifact: sql-orders/dist/orders-migrate
       ref: orders-migrate
-      entry: migrate.py
     - artifact: sql-orders/dist/audit
       ref: audit
-      entry: audit.py
     - artifact: sql-readings/dist/ingest
       ref: ingest
-      entry: ingest.py
     - artifact: sql-readings/dist/summarize
       ref: summarize
-      entry: summarize.py
   apply:
     - sql-notes/notes-db.yaml
     - sql-notes/notes.yaml
@@ -618,7 +609,8 @@ app-todo:
   description: The todo App of funcd-functions, deployed from its pushed template on real containerd (ADR-0217/0218), and the App features on it — pinned digests, a TypeScript→Python Workflow, a zoned cron timer, hooks, kept stores, a dry run, drift and pause, a config roll, rollback, liveness and dependency health, a late call, a refused binding, a requirement and a blob upload; then the disaster-recovery drill of FEAT-0009 — a backup to an S3 server in the VM, a lost data directory restored, held boot and release, the App's own backups and restores, a pre-upgrade generation, and the blob store on S3; then version 1.2.0 on rqlite — its pre-hook moving the todos and uploads from KV into a SQL database, SQL queries and a join, the change feed, and the database's backup, in-place restore and restored copy; then one Site build of the site-config App deployed into staging and prod, each serving its own generated config.json, and at the path /preview with its mount as its base.
   module: github.com/pyvvo/funcd-functions
   dir: apps/todo
-  # The build writes the S3 server into dr/, so the lane builds in a writable copy of the module.
+  # The build writes the Python bundles into functions/py/dist/ and the S3 server into dr/, so the lane builds in a
+  # writable copy of the module.
   copy: true
   optional: true
   stage:
@@ -630,33 +622,26 @@ app-todo:
     - secret.yaml
     - funcdconfig.yaml
     - functions/ts/api-1.0.0.mjs
-    - functions/ts/api-1.0.0.funcdctl.yaml
+    - functions/ts/api-1.0.0.contract.yaml
     - functions/ts/api-1.1.0.mjs
-    - functions/ts/api-1.1.0.funcdctl.yaml
+    - functions/ts/api-1.1.0.contract.yaml
     - functions/ts/migrate-1.0.0.mjs
-    - functions/ts/migrate-1.0.0.funcdctl.yaml
+    - functions/ts/migrate-1.0.0.contract.yaml
     - functions/ts/migrate-1.1.0.mjs
-    - functions/ts/migrate-1.1.0.funcdctl.yaml
+    - functions/ts/migrate-1.1.0.contract.yaml
     - functions/ts/api-1.2.0.mjs
-    - functions/ts/api-1.2.0.funcdctl.yaml
+    - functions/ts/api-1.2.0.contract.yaml
     - functions/ts/migrate-1.2.0.mjs
-    - functions/ts/migrate-1.2.0.funcdctl.yaml
+    - functions/ts/migrate-1.2.0.contract.yaml
     - functions/ts/collect.mjs
-    - functions/ts/collect.funcdctl.yaml
-    - functions/py/planner.py
-    - functions/py/planner.funcdctl.yaml
-    - functions/py/rank.py
-    - functions/py/rank.funcdctl.yaml
-    - functions/py/warm.py
-    - functions/py/warm.funcdctl.yaml
-    - functions/py/intake.py
-    - functions/py/intake.funcdctl.yaml
-    - functions/py/stats.py
-    - functions/py/stats.funcdctl.yaml
-    - functions/py/intake_sql.py
-    - functions/py/intake_sql.funcdctl.yaml
-    - functions/py/notify.py
-    - functions/py/notify.funcdctl.yaml
+    - functions/ts/collect.contract.yaml
+    - functions/py/dist/planner
+    - functions/py/dist/rank
+    - functions/py/dist/warm
+    - functions/py/dist/intake
+    - functions/py/dist/stats
+    - functions/py/dist/intake_sql
+    - functions/py/dist/notify
     # Version 1.1.0 is the same resources with the app.yaml of 1.1.0.
     - from: apps/todo/app/resources
       module: github.com/pyvvo/funcd-functions
@@ -684,8 +669,12 @@ app-todo:
     - from: apps/site-config
       module: github.com/pyvvo/funcd-functions
       to: site-config
-  # versitygw (Apache-2.0), the S3 server of the DR block, built for the VM at a pinned version.
+  # funcd-bundle builds each Python part into functions/py/dist/ in the local python:3.14-slim-bookworm image: that tag
+  # first points at the digest the python314 runtime image pins (ADR-0247). versitygw (Apache-2.0), the S3 server of
+  # the DR block, is built for the VM at a pinned version.
   build:
+    - docker pull python:3.14-slim-bookworm@sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83 && docker tag python:3.14-slim-bookworm@sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83 python:3.14-slim-bookworm
+    - cd functions/py && uv run --locked funcd-bundle
     - CGO_ENABLED=0 GOOS=linux GOARCH=$(go env GOARCH) GOBIN= go install github.com/versity/versitygw/cmd/versitygw@v1.9.0 && cp "$(go env GOPATH)/bin/linux_$(go env GOARCH)/versitygw" dr/versitygw
   # The objects the App needs beside it; the Venom suite pushes, locks and deploys the App itself.
   apply:

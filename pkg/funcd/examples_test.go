@@ -23,8 +23,6 @@ type laneSpec struct {
 	Stage  []stageEntry `json:"stage"`
 	Push   []struct {
 		Artifact string `json:"artifact"`
-		Schema   string `json:"schema"`
-		Entry    string `json:"entry"`
 		Site     bool   `json:"site"`
 	} `json:"push"`
 }
@@ -45,9 +43,10 @@ func (e *stageEntry) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, (*plain)(e))
 }
 
-// scenario: examples-build-with-the-tools (ADR-0144) — the pinned language modules' examples carry no build
-// script and no schema file (the contract lives in funcdctl.yaml), and every lane push finds its manifest
-// beside the staged artifact, where `funcdctl push` resolves it.
+// scenario: examples-build-with-the-tools (ADR-0144, ADR-0247) — the pinned language modules' examples carry no build
+// script, no schema file and no funcdctl.yaml (the contract lives in the contract file), and every lane push of a file
+// finds its contract file staged beside it, where `funcdctl push` reads it; a bundle directory is built by
+// funcd-bundle, which puts the contract file at its root.
 func TestScenarioExamplesBuildWithTheTools(t *testing.T) {
 	for _, mod := range []string{langmod.TypeScript, langmod.Python} {
 		root := filepath.Join(langmod.Dir(t, mod), "examples")
@@ -64,7 +63,8 @@ func TestScenarioExamplesBuildWithTheTools(t *testing.T) {
 			}
 			name := d.Name()
 			require.False(t, name == "build.ts" || name == "build.py" || strings.HasSuffix(name, ".schema.json"),
-				"%s/examples/%s: examples build with the toolchain plugins and keep the contract in funcdctl.yaml", mod, rel)
+				"%s/examples/%s: examples build with the toolchain plugins and keep the contract in a contract file", mod, rel)
+			require.False(t, strings.HasSuffix(name, "funcdctl.yaml"), "%s/examples/%s: funcdctl.yaml is read nowhere (ADR-0247)", mod, rel)
 			return nil
 		}))
 	}
@@ -76,26 +76,23 @@ func TestScenarioExamplesBuildWithTheTools(t *testing.T) {
 	for name, lane := range lanes {
 		staged := stagedFiles(t, lane)
 		for _, push := range lane.Push {
-			require.Empty(t, push.Schema, "lane %s pushes %s with --schema; its manifest is the contract", name, push.Artifact)
 			if push.Site {
 				continue
 			}
-			if push.Entry != "" {
-				// a built bundle directory: the lane's build writes it, funcd-bundle puts funcdctl.yaml inside
+			dir, file := path.Split(push.Artifact)
+			ext := path.Ext(file)
+			if ext == "" {
+				// a built bundle directory: the lane's build writes it, funcd-bundle puts its contract file inside
 				require.Contains(t, strings.Join(lane.Build, " "), "funcd-bundle", "lane %s builds %s", name, push.Artifact)
 				continue
 			}
-			dir, file := path.Split(push.Artifact)
-			stem := strings.TrimSuffix(file, path.Ext(file))
-			stemManifest, generic := staged[dir+stem+".funcdctl.yaml"], staged[dir+"funcdctl.yaml"]
-			require.True(t, stemManifest != "" || generic != "",
-				"lane %s stages no manifest beside %s (%s.funcdctl.yaml or funcdctl.yaml)", name, push.Artifact, stem)
-			src := stemManifest
-			if src == "" {
-				src = generic
-			}
+			stem := strings.TrimSuffix(file, ext)
+			yamlSrc, jsonSrc := staged[dir+stem+".contract.yaml"], staged[dir+stem+".contract.json"]
+			require.True(t, (yamlSrc != "") != (jsonSrc != ""),
+				"lane %s stages no single contract file beside %s (%s.contract.yaml or .json)", name, push.Artifact, stem)
+			src := yamlSrc + jsonSrc
 			_, serr := os.Stat(src)
-			require.NoError(t, serr, "lane %s stages %s from %s", name, push.Artifact, src)
+			require.NoError(t, serr, "lane %s stages the contract file of %s from %s", name, push.Artifact, src)
 		}
 	}
 }

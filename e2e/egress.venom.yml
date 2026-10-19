@@ -52,7 +52,7 @@ testcases:
         # collapses the env assignments into one FUNCD_SERVER value (invalid-port parse error), so the
         # apply silently fails and the policy is never applied (the e2e bug that made the allow-cases fail).
         script: |
-          limactl shell {{.vm}} -- sudo bash -c 'FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token funcdctl apply -f /opt/lane/egresspolicy-wildcard.yaml'
+          limactl shell {{.vm}} -- sudo bash -c 'FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token funcdctl apply -f /opt/lane/fixtures/egresspolicy-wildcard.yaml'
         assertions:
           - result.code ShouldEqual 0
       - type: http
@@ -75,7 +75,7 @@ testcases:
     steps:
       - type: exec
         script: |
-          limactl shell {{.vm}} -- sudo bash -c 'FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token funcdctl apply -f /opt/lane/egresspolicy-cidr.yaml'
+          limactl shell {{.vm}} -- sudo bash -c 'FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token funcdctl apply -f /opt/lane/fixtures/egresspolicy-cidr.yaml'
         assertions:
           - result.code ShouldEqual 0
       - type: http

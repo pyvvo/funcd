@@ -33,7 +33,7 @@ func TestScenarioRemoteStoreServes(t *testing.T) {
 	c, dpURL := shimPlatformOCI(t, funcd.WithBlob(blob.NoSign(store)))
 
 	exDir := tsExample(t, "blob-object")
-	ref, digest := pushExampleFn(t, t.TempDir(), exDir, "object")
+	ref, digest := pushExampleFn(t, t.TempDir(), exDir, "blob-object")
 	data, err := os.ReadFile(filepath.Join(exDir, "function.yaml"))
 	require.NoError(t, err)
 	var fn v1.Function

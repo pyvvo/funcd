@@ -70,11 +70,11 @@ func (h *redeployHarness) push(t *testing.T, tag string, edit func(string) strin
 	src := tsExample(t, "fn-to-fn")
 	mjs, err := os.ReadFile(filepath.Join(src, "greeter.mjs"))
 	require.NoError(t, err)
-	manifest, err := os.ReadFile(filepath.Join(src, "greeter.funcdctl.yaml"))
+	contractFile, err := os.ReadFile(filepath.Join(src, "greeter.contract.yaml"))
 	require.NoError(t, err)
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, tag+".mjs"), []byte(edit(string(mjs))), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, tag+".funcdctl.yaml"), manifest, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, tag+".contract.yaml"), contractFile, 0o600))
 	ref, _ := pushExampleFn(t, h.layout, dir, tag)
 	return ref
 }

@@ -26,7 +26,7 @@ func TestScenarioE2EBlobObjectViaContextBlob(t *testing.T) {
 	c, dpURL := shimPlatformOCI(t)
 	exDir := tsExample(t, "blob-object")
 	layout := t.TempDir()
-	ref, digest := pushExampleFn(t, layout, exDir, "object")
+	ref, digest := pushExampleFn(t, layout, exDir, "blob-object")
 
 	data, err := os.ReadFile(filepath.Join(exDir, "function.yaml"))
 	require.NoError(t, err)

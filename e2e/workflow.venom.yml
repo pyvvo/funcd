@@ -241,7 +241,7 @@ testcases:
     steps:
       # applied already-paused (run-pause.yaml, spec.paused: true) → the reconciler marks it Paused.
       - type: exec
-        script: "{{.fctl}} apply -f /opt/lane/run-pause.yaml"
+        script: "{{.fctl}} apply -f /opt/lane/fixtures/run-pause.yaml"
         assertions:
           - result.code ShouldEqual 0
       - type: exec
@@ -269,7 +269,7 @@ testcases:
   - name: cancel — a paused run is cancelled from Paused and ends Cancelled
     steps:
       - type: exec
-        script: "{{.fctl}} apply -f /opt/lane/run-cancel.yaml"
+        script: "{{.fctl}} apply -f /opt/lane/fixtures/run-cancel.yaml"
         assertions:
           - result.code ShouldEqual 0
       - type: exec
@@ -302,7 +302,7 @@ testcases:
       # Applied HERE (not at deploy) and LAST so the timer's per-tick runs don't perturb the earlier
       # status.runs count — the EventSource starts ticking the moment it reconciles.
       - type: exec
-        script: "{{.fctl}} apply -f /opt/lane/schedule-source.yaml && {{.fctl}} apply -f /opt/lane/schedule-sensor.yaml"
+        script: "{{.fctl}} apply -f /opt/lane/fixtures/schedule-source.yaml && {{.fctl}} apply -f /opt/lane/fixtures/schedule-sensor.yaml"
         info: "apply schedule → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0

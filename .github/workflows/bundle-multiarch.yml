@@ -49,8 +49,8 @@ jobs:
           set -euo pipefail
           cd "$EXAMPLE"
           for arch in amd64 arm64; do
-            "$RUNNER_TEMP/funcdctl" push "dist/linux-$arch/catalog-quack" "oci-layout://$LAYOUT:catalog-reader-$arch" \
-              --platform "linux/$arch" --entry handler.py
+            "$RUNNER_TEMP/funcdctl" push "dist/linux-$arch/catalog-reader" "oci-layout://$LAYOUT:catalog-reader-$arch" \
+              --platform "linux/$arch"
           done
           "$RUNNER_TEMP/funcdctl" index "oci-layout://$LAYOUT:catalog-reader" \
             "oci-layout://$LAYOUT:catalog-reader-amd64" "oci-layout://$LAYOUT:catalog-reader-arm64" | tee "$RUNNER_TEMP/index.txt"

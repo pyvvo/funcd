@@ -380,7 +380,7 @@ testcases:
               funcdctl push functions/ts/${f%%:*}.mjs {{.reg}}/${f#*:} > /dev/null
             done
             for f in planner:todo-planner rank:todo-rank warm:todo-warm intake:todo-intake stats:todo-stats; do
-              funcdctl push functions/py/dist/${f%%:*} {{.reg}}/${f#*:}:1.0.0 --entry ${f%%:*}.py > /dev/null
+              funcdctl push functions/py/dist/${f%%:*} {{.reg}}/${f#*:}:1.0.0 > /dev/null
             done
             funcdctl push --site web {{.reg}}/todo-web:1.0.0 > /dev/null
             funcdctl app lock app {{.values}} > /dev/null

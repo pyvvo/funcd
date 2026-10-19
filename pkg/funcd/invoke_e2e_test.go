@@ -55,33 +55,29 @@ func shimPlatformOCI(t *testing.T, opts ...funcd.Option) (*sdk.Client, string) {
 
 // tsExample returns a TypeScript example's dir in the pinned funcd-typescript module (ADR-0141). Its
 // bundles are committed there and kept fresh by that repo's CI, so nothing is built here; each contract
-// lives in its funcdctl.yaml (ADR-0144). Read-only.
+// lives in its contract file beside the build (ADR-0247). Read-only.
 func tsExample(t *testing.T, name string) string {
 	t.Helper()
 	return filepath.Join(langmod.Dir(t, langmod.TypeScript), "examples", name)
 }
 
-// exampleContract reads a function's {input, output} contract from the manifest funcdctl push resolves
-// for <name>.mjs: <name>.funcdctl.yaml, else funcdctl.yaml (ADR-0122/0144), and gates both sides
-// against the funcd profile, as push does.
+// exampleContract reads a function's {input, output} contract from the contract file funcdctl push reads for
+// <name>.mjs, <name>.contract.yaml or .json beside it (ADR-0247), and gates both sides against the funcd profile, as
+// push does.
 func exampleContract(t *testing.T, dir, name string) (input, output []byte) {
 	t.Helper()
-	path := filepath.Join(dir, name+".funcdctl.yaml")
-	if _, err := os.Stat(path); err != nil {
-		path = filepath.Join(dir, "funcdctl.yaml")
-	}
-	m, err := sdk.LoadManifest(path)
-	require.NoError(t, err, "%s has a manifest", name)
-	input, output, err = m.ContractSides()
-	require.NoError(t, err)
+	c, _, err := sdk.LoadContract(dir, name)
+	require.NoError(t, err, "%s has a contract file", name)
+	input, output = c.Sides()
+	require.NotNil(t, input, "%s is a cloudevent function", name)
 	require.NoError(t, contract.Check(input), "%s input schema is in the funcd profile", name)
 	require.NoError(t, contract.Check(output), "%s output schema is in the funcd profile", name)
 	return input, output
 }
 
-// pushExampleFn pushes a built handler + its manifest contract to a local OCI layout — exactly what
-// `funcdctl push <mjs> <ref>` does with the manifest beside the file (gates the schemas against the
-// funcd profile, then embeds them as OCI metadata, ADR-0059/0122). Returns the ref + digest.
+// pushExampleFn pushes a built handler + its contract file's contract to a local OCI layout — exactly what
+// `funcdctl push <mjs> <ref>` does with the contract file beside it (gates the schemas against the funcd profile,
+// then embeds them as OCI metadata, ADR-0059/0247). Returns the ref + digest.
 func pushExampleFn(t *testing.T, layoutDir, exDir, name string) (ref, digest string) {
 	t.Helper()
 	in, out := exampleContract(t, exDir, name)
