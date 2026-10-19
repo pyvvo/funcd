@@ -343,7 +343,7 @@ testcases:
             funcdctl get catalogservice lake -n default >/dev/null 2>&1 && exit 1
             reason=$(funcdctl get function catalog-reader -n default -o json | python3 -c "import sys,json;print(next((c.get(\"reason\",\"\") for c in json.load(sys.stdin)[\"status\"][\"conditions\"] if c[\"type\"]==\"RevisionReady\"),\"\"))")
             [ "$reason" = CatalogNotReady ] || exit 1
-            funcdctl apply -f /opt/lane/catalogservice.yaml >/dev/null
+            funcdctl apply -f /opt/lane/catalog-quack-recreate.yaml >/dev/null
             echo "READER_REASON=$reason"'
         retry: 30
         delay: 2

@@ -168,6 +168,9 @@ duckdb:
     # ADR-0179: the engines in namespaces a-b and a the Venom suite applies with the admin token
     - from: e2e/fixtures/cni-engines.yaml
       to: cni-engines.yaml
+    # ADR-0248/0251: lake re-created with a ref to the Bucket it retained
+    - from: e2e/fixtures/catalog-quack-recreate.yaml
+      to: catalog-quack-recreate.yaml
   tokens:
     admin: duckdb-lane-admin
     developer: duckdb-lane-developer
