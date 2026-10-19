@@ -2,6 +2,7 @@
 
 - **Status**: Implemented (2026-10-18, review passed on its second round). Accepted (2026-10-17) under the decider's
   delegation ("go ahead until you finish"), after two judge rounds.
+- **Superseded in part by**: [ADR-0247](0247-contract-file-replaces-funcdctl-yaml.md) (2026-10-19) — Decision 7: `protocol` moves from `funcdctl.yaml` to the contract file.
 - **Date**: 2026-10-17
 - **Deciders**: green-0-rabbit
 - **Tags**: function, shim, edge, http, streaming

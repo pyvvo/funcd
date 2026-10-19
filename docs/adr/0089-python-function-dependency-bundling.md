@@ -1,6 +1,7 @@
 # ADR-0089: Function dependency bundling — the deployment-package model
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0247](0247-contract-file-replaces-funcdctl-yaml.md) (2026-10-19) — Decision 3 and the Contracts' `--entry` default: a bundle's contract comes from its `<name>.contract.yaml`, and `--entry` defaults to `main.py` or `main.mjs`.
 - **Date**: 2026-07-01 (accepted 2026-07-01 — judge: sound, well-scoped, 0 Blockers; folded 2 Majors [pinned the
   real `--contract-*`/`ContractBlob` push surface; specified `__funcd_contract.json` + `VerifyBundleContract` as
   explicitly new build+push behavior promoting into the existing contract path] + 3 Minors; then re-pointed to

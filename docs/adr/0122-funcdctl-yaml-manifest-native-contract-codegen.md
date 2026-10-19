@@ -5,6 +5,7 @@
   Compile()/apply; green on the four sub-checks, block-style example manifests. Review:
   docs/reviews/adr-0122-implementation-claude-opus-4-8.md.)
 - **Superseded in part by**: [ADR-0243](0243-http-functions.md) (2026-10-17) — Decisions 1 and 2: `funcdctl.yaml` gains `protocol`; push generates no contract for an `http` Function.
+- **Superseded in part by**: [ADR-0247](0247-contract-file-replaces-funcdctl-yaml.md) (2026-10-19) — Decisions 1-3: `funcdctl.yaml` goes; push reads `<name>.contract.yaml`, and `types` reads it with the Function resource.
 - **Date**: 2026-07-11 (**Accepted 2026-07-11** — adr-judge split the runtime-compile half into ADR-0123 (this ADR
   **depends on** it). **Revised 2026-07-11 (same session, by decider direction — override):** re-scoped `funcdctl.yaml`
   from *a manifest that compiles to the `Function` CRD* down to *the client-side push/dev config* — the `wrangler.toml`

@@ -3,6 +3,7 @@
 - **Status**: Implemented (2026-10-12, review passed). Reviewing (2026-10-12, implementation done). Accepted (2026-10-12, self-accepted under the decider's batch delegation; judged twice: the first round
   replaced the `zig cc` cross-build by a native macOS build, piloted on darwin/arm64, restored the crash reap and bound
   the engine to loopback; the second found one Major, fixed: pruning keeps a database that holds a table)
+- **Superseded in part by**: [ADR-0247](0247-contract-file-replaces-funcdctl-yaml.md) (2026-10-19) — Decision 1: dev creates no SQLDatabase from bindings; databases come from the resource files.
 - **Date**: 2026-10-12
 - **Deciders**: green-0-rabbit
 - **Tags**: sql, dev, funcdctl

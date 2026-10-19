@@ -3,6 +3,7 @@
 - **Status**: Implemented (2026-10-02)
 - **Superseded in part by**: [ADR-0244](0244-vite-plugin-watch-mode.md) (2026-10-18) — Decision 1's *Output* rule,
   in watch mode only: there each function is delivered when its own environment's write ends.
+- **Superseded in part by**: [ADR-0247](0247-contract-file-replaces-funcdctl-yaml.md) (2026-10-19) — Decisions 1-4: the bundlers read and copy `<name>.contract.yaml` instead of the manifest; funcd-bundle lists its functions in `[tool.funcd-bundle.functions]`, by default `src/main.py`; the plugin's default entry is `src/main.ts`; the lanes stage contract files.
 - **Date**: 2026-10-02 (revised the same day after the judge: Vite environment names are sanitized; every manifest
   contract is checked against the schema it replaces before that schema goes, and s3-roundtrip's is fixed; the plugin
   never empties a shared output directory per function; the copy rule follows funcdctl's resolver; the runtime-provided

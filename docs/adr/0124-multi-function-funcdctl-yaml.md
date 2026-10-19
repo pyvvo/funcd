@@ -3,6 +3,7 @@
 - **Status**: Implemented (2026-07-11 — stem-first `resolveManifest` + 3 tests; fn-to-fn + workflow migrated to 7
   per-function `<name>.funcdctl.yaml`; `Manifest` unchanged. `s3-lakehouse` deferred — a skeleton example with no
   handler/contract source to migrate. Review: docs/reviews/adr-0124-implementation-claude-opus-4-8.md.)
+- **Superseded in part by**: [ADR-0247](0247-contract-file-replaces-funcdctl-yaml.md) (2026-10-19) — `<name>.funcdctl.yaml` goes; a push reads the `<stem>.contract.yaml` beside the file.
 - **Date**: 2026-07-11 (**Accepted 2026-07-11** — self-accepted via `/adr-batch`; a small refinement of ADR-0122's
   resolver, reusing its `Manifest` unchanged.)
 - **Deciders**: green-0-rabbit

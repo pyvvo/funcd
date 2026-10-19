@@ -1,6 +1,7 @@
 # ADR-0128: funcdctl dev — manifest interpreter config + seedable (relaxed-write) dev blob
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0247](0247-contract-file-replaces-funcdctl-yaml.md) (2026-10-19) — Decision 1: `dev.python` and `dev.node` go; interpreters come from `FUNCD_PYTHON`, `FUNCD_NODE` or `PATH`.
 - **Implemented**: 2026-07-12 — retroactive: the code + its three tests shipped this session and are green (both
   build tags, lint, `go mod verify`); the judge gate verified every Contract against the tree and the
   dev-only/prod-unchanged security claim. Per the ADR-0126 precedent, the judge's code-verification + the shipped

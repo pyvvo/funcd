@@ -1,6 +1,7 @@
 # ADR-0130: funcdctl dev — catalog consumer binding + the dev-catalog-query live lane
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0247](0247-contract-file-replaces-funcdctl-yaml.md) (2026-10-19) — Decision 1: `dev.catalog` goes; a CatalogService comes from the resource files.
 - **Implemented**: 2026-07-12 — retroactive: the code + its unit tests shipped this session and are green
   (both build tags, lint, `go mod verify`), and the full `examples/python/releve-lakehouse` medallion pipeline
   runs end-to-end under `funcdctl dev` (extract → verify → build-silver → **to-gold**, all `Succeeded`, `gold/`
