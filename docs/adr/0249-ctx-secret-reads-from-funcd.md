@@ -1,6 +1,6 @@
 # ADR-0249: `ctx.secret` reads each secret from funcd; secrets leave the worker environment
 
-- **Status**: Accepted (2026-10-19), after two judge rounds, under `adr-batch` with acceptance delegated by the
+- **Status**: Reviewing (2026-10-20), implemented; Accepted (2026-10-19), after two judge rounds, under `adr-batch` with acceptance delegated by the
   decider: the judge kept `envresolve` unchanged for providers, made the denial scenario the namespace-level check
   it is, and stated the pool and the revision limits.
 - **Date**: 2026-10-19

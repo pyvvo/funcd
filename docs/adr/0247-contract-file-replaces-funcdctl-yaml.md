@@ -1,6 +1,6 @@
 # ADR-0247: A function is its resource file and a contract file; `funcdctl.yaml` goes
 
-- **Status**: Accepted (2026-10-19), after two judge rounds, under `adr-batch` with acceptance delegated by the
+- **Status**: Reviewing (2026-10-20), implemented; Accepted (2026-10-19), after two judge rounds, under `adr-batch` with acceptance delegated by the
   decider. The judge added the dev contract (what dev reads, skips, stops on and rewrites; the builds; the Secrets;
   steps through the materializer), the types output rule, the full supersession list and the plan's inventory.
 - **Date**: 2026-10-19
