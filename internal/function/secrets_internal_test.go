@@ -58,35 +58,46 @@ func sampleFn() *v1.Function {
 	return fn
 }
 
-// mustWorkerSpec is replica 0's workerSpec, for a test whose spec builds.
-func mustWorkerSpec(t *testing.T, r *Reconciler, fn *v1.Function, artifactPath string, secretEnv, catalogEnv map[string]string) runtime.WorkerSpec {
+// mustWorkerSpec is replica 0's workerSpec with bindEnv, for a test whose spec builds.
+func mustWorkerSpec(t *testing.T, r *Reconciler, fn *v1.Function, artifactPath string, bindEnv envresolve.Resolved, catalogEnv map[string]string) runtime.WorkerSpec {
 	t.Helper()
-	spec, err := r.workerSpec(fn, 0, artifactPath, envresolve.Resolved{Env: secretEnv}, catalogEnv)
+	spec, err := r.workerSpec(fn, 0, artifactPath, bindEnv, catalogEnv)
 	require.NoError(t, err)
 	return spec
 }
 
-// scenario: handler-reads-injected-secret — the resolved secret reaches WorkerSpec.Env.
-func TestScenarioHandlerReadsInjectedSecret(t *testing.T) {
+// scenario: secret-shadows-config (ADR-0249) — a bound Secret's values never reach the worker env, nor does a config
+// key a bound Secret also holds, nor FUNCD_SECRET_KEYS; the config keys the Secret does not hold do, and
+// FUNCD_CONFIG_KEYS lists them.
+func TestScenarioSecretShadowsConfig(t *testing.T) {
 	t.Parallel()
-	r := newShimReconciler(t, fakeResolver{})
-	spec := mustWorkerSpec(t, r, sampleFn(), "/art/app.mjs", map[string]string{"API_KEY": "s3kr3t", "DB_URL": "postgres://x"}, nil)
+	r := newShimReconciler(t, fakeResolver{env: map[string]string{"STRIPE_KEY": "sk", "MODE": "prod"}})
+	createCM(t, r, "default", "app-settings", map[string]string{"LOG_LEVEL": "debug", "MODE": "dev"})
+	fn := configFn("app-settings")
+	fn.Spec.Bindings.Secret = []v1.ObjectName{"api-keys"}
+	bind, err := r.resolveBindingEnv(context.Background(), fn)
+	require.NoError(t, err)
 
-	require.Equal(t, "s3kr3t", spec.Env["API_KEY"], "the secret value is injected into the worker env")
-	require.Equal(t, "postgres://x", spec.Env["DB_URL"])
-	require.Equal(t, "app.handler", spec.Env["FUNCD_HANDLER"], "reserved keys remain alongside the secrets")
+	spec := mustWorkerSpec(t, r, fn, "/art/app.mjs", bind, nil)
+	require.Equal(t, "debug", spec.Env["LOG_LEVEL"])
+	require.Equal(t, "LOG_LEVEL", spec.Env["FUNCD_CONFIG_KEYS"])
+	for _, k := range []string{"STRIPE_KEY", "MODE", "FUNCD_SECRET_KEYS"} {
+		require.NotContains(t, spec.Env, k)
+	}
 }
 
-// scenario: reserved-env-not-overridable — a FUNCD_-prefixed secret key cannot shadow a reserved key.
+// scenario: reserved-env-not-overridable — a FUNCD_-prefixed bound key cannot shadow a reserved key.
 func TestScenarioReservedEnvNotOverridable(t *testing.T) {
 	t.Parallel()
-	r := newShimReconciler(t, fakeResolver{})
-	spec := mustWorkerSpec(t, r, sampleFn(), "/art/app.mjs",
-		map[string]string{"FUNCD_ARTIFACT": "/evil/override", "FUNCD_PORT": "9999", "SAFE": "ok"}, nil)
+	r := newShimReconciler(t, nil)
+	createCM(t, r, "default", "evil", map[string]string{"FUNCD_ARTIFACT": "/evil/override", "FUNCD_PORT": "9999", "SAFE": "ok"})
+	bind, err := r.resolveBindingEnv(context.Background(), configFn("evil"))
+	require.NoError(t, err)
+	spec := mustWorkerSpec(t, r, configFn("evil"), "/art/app.mjs", bind, nil)
 
-	require.Equal(t, "/art/app.mjs", spec.Env["FUNCD_ARTIFACT"], "the reserved key keeps its real value; the secret cannot override it")
-	require.NotContains(t, spec.Env, "FUNCD_PORT", "a FUNCD_-prefixed secret key is dropped, not injected")
-	require.Equal(t, "ok", spec.Env["SAFE"], "a non-reserved secret key still merges")
+	require.Equal(t, "/art/app.mjs", spec.Env["FUNCD_ARTIFACT"], "the reserved key keeps its real value")
+	require.NotContains(t, spec.Env, "FUNCD_PORT", "a FUNCD_-prefixed bound key is dropped, not injected")
+	require.Equal(t, "ok", spec.Env["SAFE"], "a non-reserved config key still reaches the env")
 }
 
 // resolveBindingEnv is fail-closed on every non-happy path (ADR-0057 Decision 5; ADR-0093 extends the gate to config).
@@ -131,7 +142,8 @@ func TestSecretNames(t *testing.T) {
 	require.Equal(t, []string{"a", "b"}, secretNames([]v1.ObjectName{"a", "b"}))
 }
 
-// A solo worker gets the non-empty key lists directly, past the reserved-key guard (ADR-0245), and no list when empty.
+// A solo worker gets the non-empty FUNCD_CONFIG_KEYS directly, past the reserved-key guard (ADR-0245), and no list when
+// empty; it never gets FUNCD_SECRET_KEYS (ADR-0249).
 func TestWorkerSpecWritesBindingKeyLists(t *testing.T) {
 	t.Parallel()
 	r := newShimReconciler(t, fakeResolver{})
@@ -142,9 +154,8 @@ func TestWorkerSpecWritesBindingKeyLists(t *testing.T) {
 	}, nil)
 	require.NoError(t, err)
 	require.Equal(t, "LOG_LEVEL", spec.Env["FUNCD_CONFIG_KEYS"])
-	require.Equal(t, "MODE,STRIPE_KEY", spec.Env["FUNCD_SECRET_KEYS"])
+	require.NotContains(t, spec.Env, "FUNCD_SECRET_KEYS", "secrets are read from funcd (ADR-0249)")
 
-	spec = mustWorkerSpec(t, r, sampleFn(), "/art/app.mjs", nil, nil)
+	spec = mustWorkerSpec(t, r, sampleFn(), "/art/app.mjs", envresolve.Resolved{}, nil)
 	require.NotContains(t, spec.Env, "FUNCD_CONFIG_KEYS")
-	require.NotContains(t, spec.Env, "FUNCD_SECRET_KEYS")
 }

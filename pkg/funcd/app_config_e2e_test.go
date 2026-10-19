@@ -26,8 +26,11 @@ import (
 // secretWithin is how soon the parts are written once a declared Secret is complete (ADR-0213 app-secret-declared).
 const secretWithin = 5 * time.Second
 
-// envSource answers with the two variables todo-api reads.
-const envSource = `export async function handle() { return { tz: process.env.TZ ?? "", stripe: process.env.STRIPE_API_KEY ?? "" }; }`
+// envSource answers with todo-api's TZ, its STRIPE_API_KEY read through ctx.secret, and the STRIPE_API_KEY its
+// environment holds, which ADR-0249 leaves empty.
+const envSource = `export async function handle(ctx) {
+  return { tz: process.env.TZ ?? "", stripe: (await ctx.secret.get("STRIPE_API_KEY")) ?? "", envStripe: process.env.STRIPE_API_KEY ?? "" };
+}`
 
 // imageEnv pushes an image of envSource under tag.
 func (e *gcEnv) imageEnv(t *testing.T, tag string) string {
@@ -57,10 +60,11 @@ func (e *gcEnv) stripeKey(t *testing.T, data map[string]string) {
 	applySecret(t, e.c, "todo-stripe-key", b)
 }
 
-// apiEnv is what todo-api answers through its Route.
+// apiEnv is what todo-api answers through its Route; EnvStripe is always empty (ADR-0249).
 type apiEnv struct {
-	TZ     string `json:"tz"`
-	Stripe string `json:"stripe"`
+	TZ        string `json:"tz"`
+	Stripe    string `json:"stripe"`
+	EnvStripe string `json:"envStripe"`
 }
 
 func (e *gcEnv) apiEnv(t *testing.T) (apiEnv, bool) {
@@ -128,7 +132,9 @@ func secretPacing() funcd.Option {
 	return funcd.WithPacing(funcd.Pacing{AppUpgradeTimeout: 3 * time.Second, BootTimeout: time.Second, ActivationTimeout: 500 * time.Millisecond})
 }
 
-// scenario: app-secret-declared
+// scenario: app-secret-declared — as ADR-0252 restates it once secrets leave the environment (ADR-0249): todo-api reads
+// STRIPE_API_KEY through ctx.secret and its worker's environment holds no such key; a value changed outside the App is
+// the next read's, and the App gives no object a new resourceVersion.
 func TestScenarioAppSecretDeclared(t *testing.T) {
 	t.Run("held until the Secret is complete", func(t *testing.T) {
 		e := startGC(t, funcd.WithPacing(funcd.Pacing{SupervisionPeriod: secretWatchPeriod}))
@@ -163,12 +169,9 @@ func TestScenarioAppSecretDeclared(t *testing.T) {
 		parts := append(todoParts(), todoPart{v1.KindConfigMap, settingsName("Europe/Paris")})
 		before := e.settled(t, parts)
 		e.stripeKey(t, map[string]string{"STRIPE_API_KEY": "sk-test-2"})
+		e.waitAPIEnv(t, apiEnv{TZ: "Europe/Paris", Stripe: "sk-test-2"})
 		require.True(t, poll.Never(func() bool { return !maps.Equal(before, e.versions(t, parts)) }, 5*secretPeriod, 50*time.Millisecond),
 			"a value changed outside the App writes no object")
-		a.Spec.Functions[0].Image = e.imageEnv(t, "env-restart")
-		e.apply(t, a)
-		e.waitCurrent(t, "todo-2")
-		e.waitAPIEnv(t, apiEnv{TZ: "Europe/Paris", Stripe: "sk-test-2"})
 	})
 	t.Run("provided after the deadline", func(t *testing.T) {
 		e := startGC(t, secretPacing())

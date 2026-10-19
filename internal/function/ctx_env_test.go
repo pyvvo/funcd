@@ -13,8 +13,9 @@ import (
 	"github.com/pyvvo/funcd/internal/function"
 )
 
-// scenario: ctx-pooled-member — two Functions in one pool share its config and secrets with their key lists (ADR-0245),
-// in the pool's shared env, and each member's manifest row carries its own catalog token.
+// scenario: ctx-pooled-member — two Functions in one pool share its config with its key list (ADR-0245) in the pool's
+// shared env, which holds no secret value and no FUNCD_SECRET_KEYS (ADR-0249), and each member's manifest row carries
+// its own catalog token.
 func TestScenarioCtxPooledMember(t *testing.T) {
 	t.Parallel()
 	proxies := cataloggw.NewManager("", cataloggw.NewCatalogKeys(nil, nil), nil, nil)
@@ -42,9 +43,9 @@ func TestScenarioCtxPooledMember(t *testing.T) {
 	spec, ok := h.rt.specFor(h.poolWorkerOf(t, "a"))
 	require.True(t, ok)
 	require.Equal(t, "APP_MODE", spec.Env["FUNCD_CONFIG_KEYS"])
-	require.Equal(t, "STRIPE_KEY", spec.Env["FUNCD_SECRET_KEYS"])
 	require.Equal(t, "test", spec.Env["APP_MODE"])
-	require.Equal(t, "sk", spec.Env["STRIPE_KEY"])
+	require.NotContains(t, spec.Env, "STRIPE_KEY", "secrets are read from funcd (ADR-0249)")
+	require.NotContains(t, spec.Env, "FUNCD_SECRET_KEYS")
 	require.NotEmpty(t, spec.Env["FUNCD_CATALOG_LAKE_URL"])
 	require.NotContains(t, spec.Env, "FUNCD_CATALOG_LAKE_TOKEN", "no member's token is in the shared env")
 

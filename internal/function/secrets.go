@@ -7,15 +7,14 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/envresolve"
-	"github.com/pyvvo/funcd/internal/secrets"
 )
 
-// SecretResolver resolves a function's bound Secret names → an env-var map for worker
-// injection, PDP-authorized for id (ADR-0022/0057). The reconciler depends on this local
-// seam for resolution (ADR-0002 import discipline) — satisfied by *secrets.Resolver, wired in
-// pkg/funcd; it uses internal/secrets only for the pure reserved-key guard (MergeEnvGuarded,
-// no store dep, ADR-0092). A nil resolver on Deps disables secret injection: a function that
-// declares spec.secrets then fails closed (SecretResolveFailed).
+// SecretResolver resolves a function's bound Secret names → a key-value map, PDP-authorized for id
+// (ADR-0022/0057). The reconciler resolves them before it starts a worker, so an unreadable Secret
+// holds the Function (SecretResolveFailed), though the values reach the handler only through ctx.secret
+// (ADR-0249). It depends on this local seam (ADR-0002 import discipline) — satisfied by
+// *secrets.Resolver, wired in pkg/funcd. A nil resolver on Deps disables secrets: a function that
+// declares spec.bindings.secret then fails closed (SecretResolveFailed).
 type SecretResolver interface {
 	ResolveEnv(ctx context.Context, id auth.Identity, ns v1.NamespaceName, names []string) (map[string]string, error)
 }
@@ -39,18 +38,16 @@ func (r *Reconciler) resolveBindingEnv(ctx context.Context, fn *v1.Function) (en
 	}, fn.Namespace, fn.Spec.Bindings.Config, fn.Spec.Bindings.Secret)
 }
 
-// addBindingEnv merges resolved config and secret env vars into a worker's env with reserved-key
-// precedence: a resolved key matching the FUNCD_ prefix guard is dropped (logged) so a secret
-// can never shadow the shim contract (ADR-0057, reserved-env-not-overridable). It then writes the
-// non-empty key lists the shims' ctx.config and ctx.secret read (ADR-0245) directly, past the guard.
-// Pure: it mutates only the passed env map.
+// addBindingEnv writes the values of a worker's bound config keys into its env, with FUNCD_CONFIG_KEYS listing them
+// (ADR-0245). No secret value reaches the worker: a handler reads its secrets from funcd through ctx.secret (ADR-0249
+// Decision 3), so a config key a bound Secret also holds stays out too. ConfigKeys hold no FUNCD_ key (the guard
+// dropped them in envresolve.Resolve). Pure: it mutates only the passed env map.
 func (r *Reconciler) addBindingEnv(env map[string]string, b envresolve.Resolved) {
-	secrets.MergeEnvGuarded(env, b.Env, r.logger)
+	for _, k := range b.ConfigKeys {
+		env[k] = b.Env[k]
+	}
 	if len(b.ConfigKeys) > 0 {
 		env["FUNCD_CONFIG_KEYS"] = strings.Join(b.ConfigKeys, ",")
-	}
-	if len(b.SecretKeys) > 0 {
-		env["FUNCD_SECRET_KEYS"] = strings.Join(b.SecretKeys, ",")
 	}
 }
 

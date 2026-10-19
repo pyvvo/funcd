@@ -45,17 +45,17 @@ func applySecret(t *testing.T, c *sdk.Client, name string, data map[string][]byt
 func writeEnvEchoArtifact(t *testing.T) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "handler.mjs")
-	src := "export function handle(_, e) {" +
-		" return { config: process.env.APP_MODE, secret: process.env.API_KEY, shared: process.env.SHARED }; }\n"
+	src := "export async function handle(ctx) { return { config: process.env.APP_MODE ?? null," +
+		" secret: await ctx.secret.get('API_KEY'), envSecret: process.env.API_KEY ?? null," +
+		" shared: process.env.SHARED ?? null, sharedSecret: await ctx.secret.get('SHARED') }; }\n"
 	require.NoError(t, os.WriteFile(p, []byte(src), 0o600))
 	return "file://" + p
 }
 
-// scenario (e2e): function-config-and-secret-env-injected — a Function binding BOTH spec.config (a
-// ConfigMap, ADR-0093) and spec.secrets (a Secret, ADR-0057) receives BOTH sets of Data as worker env at
-// runtime, proven by invoking a handler that echoes them back. A key present in both is won by the SECRET
-// (config-then-secrets merge order, ADR-0092/0093). This is the end-to-end proof (reconcile → resolve →
-// materialize → process shim → handler) that the injection reaches a running function. Node-gated.
+// scenario (e2e): function-config-and-secret-env-injected — a Function binding BOTH a ConfigMap (ADR-0093) and a
+// Secret (ADR-0057) receives the ConfigMap's Data as worker env and reads the Secret's through ctx.secret, never from
+// its env (ADR-0249). A key present in both is the SECRET's (config-then-secrets, ADR-0092/0093), so it reads only
+// through ctx.secret. The end-to-end proof (reconcile → resolve → materialize → process shim → handler). Node-gated.
 func TestScenarioFunctionConfigAndSecretEnvInjected(t *testing.T) {
 	c, dpURL, _ := shimPlatform(t)
 
@@ -87,12 +87,16 @@ func TestScenarioFunctionConfigAndSecretEnvInjected(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode, "the invocation reaches the function: %s", body)
 
 	var out struct {
-		Config string `json:"config"`
-		Secret string `json:"secret"`
-		Shared string `json:"shared"`
+		Config       *string `json:"config"`
+		Secret       *string `json:"secret"`
+		EnvSecret    *string `json:"envSecret"`
+		Shared       *string `json:"shared"`
+		SharedSecret *string `json:"sharedSecret"`
 	}
 	require.NoError(t, json.Unmarshal(body, &out), "handler body: %s", body)
-	require.Equal(t, "prod", out.Config, "spec.config ConfigMap value reaches the handler as env")
-	require.Equal(t, "s3cr3t", out.Secret, "spec.secrets Secret value reaches the handler as env")
-	require.Equal(t, "from-secret", out.Shared, "a key in both ConfigMap+Secret: the secret wins (config-then-secrets)")
+	require.Equal(t, "prod", *out.Config, "the ConfigMap value reaches the handler as env")
+	require.Equal(t, "s3cr3t", *out.Secret, "the Secret value reaches the handler through ctx.secret")
+	require.Nil(t, out.EnvSecret, "and not through its env (ADR-0249)")
+	require.Nil(t, out.Shared, "a key in both ConfigMap+Secret is the secret's, so it is not in the env")
+	require.Equal(t, "from-secret", *out.SharedSecret, "and ctx.secret reads the secret's value")
 }

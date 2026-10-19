@@ -280,7 +280,7 @@ func TestScenarioDevSecretFromEnv(t *testing.T) {
 	requireNode(t)
 	files := nodeFunction("counter", "  secrets:\n    - name: api-keys\n      keys:\n        - STRIPE_KEY\n"+
 		"  bindings:\n    secret:\n      - api-keys\n",
-		"export async function handle(ctx) { return { key: await ctx.secret.get('STRIPE_KEY') }; }\n")
+		"export async function handle(ctx) { return { key: await ctx.secret.get('STRIPE_KEY'), env: process.env.STRIPE_KEY ?? null }; }\n")
 
 	t.Run("unset", func(t *testing.T) {
 		t.Setenv("STRIPE_KEY", "")
@@ -295,6 +295,7 @@ func TestScenarioDevSecretFromEnv(t *testing.T) {
 		waitReady(t, inst)
 		_, body := post(t, inst.gatewayURL+"/function/counter", `{"data":{}}`)
 		require.Contains(t, body, `"key":"sk"`, body)
+		require.Contains(t, body, `"env":null`, "secrets are read from funcd, never the env (ADR-0249): %s", body)
 	})
 }
 

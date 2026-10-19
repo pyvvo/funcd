@@ -36,9 +36,9 @@ export async function handle(ctx) {
 }
 `
 
-// scenario: ctx-env-unchanged — a real worker's environment holds its bound config and secret keys and its catalog
-// pair as variables, plus FUNCD_CONFIG_KEYS and FUNCD_SECRET_KEYS, and its handler reads the same values through ctx
-// (ADR-0245).
+// scenario: ctx-env-unchanged — a real worker's environment holds its bound config keys and its catalog pair as
+// variables, plus FUNCD_CONFIG_KEYS, and its handler reads the same values through ctx (ADR-0245). Its bound secrets
+// and FUNCD_SECRET_KEYS are not in it: ctx.secret reads them from funcd (ADR-0249).
 func TestScenarioCtxEnvUnchanged(t *testing.T) {
 	t.Parallel()
 	node, err := exec.LookPath("node")
@@ -101,11 +101,11 @@ func TestScenarioCtxEnvUnchanged(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(body, &out), "%s", body)
 	require.Equal(t, "prod", out.Env["APP_MODE"], "a bound config key stays a variable")
-	require.Equal(t, "k", out.Env["API_KEY"], "a bound secret key stays a variable")
+	require.Empty(t, out.Env["API_KEY"], "a bound secret is not a variable (ADR-0249)")
 	require.NotEmpty(t, out.Env["FUNCD_CATALOG_LAKE_URL"])
 	require.NotEmpty(t, out.Env["FUNCD_CATALOG_LAKE_TOKEN"])
 	require.Equal(t, "APP_MODE", out.Env["FUNCD_CONFIG_KEYS"])
-	require.Equal(t, "API_KEY", out.Env["FUNCD_SECRET_KEYS"])
+	require.Empty(t, out.Env["FUNCD_SECRET_KEYS"])
 	require.Equal(t, []string{"APP_MODE"}, out.Config)
 	require.Equal(t, "prod", out.Mode)
 	require.Equal(t, []string{"API_KEY"}, out.Secrets)
