@@ -473,6 +473,20 @@ func (a *App) Parts() []Object {
 	return out
 }
 
+// rootEntryField is the field of the first non-empty root entry list of a part, in the order kv, buckets, sql,
+// catalogs, configMaps, secrets, or "" when the part declares none.
+func rootEntryField(kv, buckets, sql, catalogs, configMaps, secrets int) string {
+	for _, c := range []struct {
+		field string
+		n     int
+	}{{"kv", kv}, {"buckets", buckets}, {"sql", sql}, {"catalogs", catalogs}, {"configMaps", configMaps}, {"secrets", secrets}} {
+		if c.n > 0 {
+			return c.field
+		}
+	}
+	return ""
+}
+
 // validatePartRoots refuses a part that declares stores, catalogs, ConfigMaps or Secrets of its own (ADR-0248 Decision
 // 2): an App's parts bind what the App declares at its root.
 func (a *App) validatePartRoots(op string) error {
@@ -480,27 +494,17 @@ func (a *App) validatePartRoots(op string) error {
 		return fault.Invalidf(op, "%s.%s: an App's part declares nothing at its root; declare it at the App's root", path, field)
 	}
 	for i := range a.Spec.Functions {
-		f, path := &a.Spec.Functions[i], fmt.Sprintf("spec.functions[%d]", i)
-		for _, c := range []struct {
-			field string
-			n     int
-		}{{"kv", len(f.KVStores)}, {"buckets", len(f.Buckets)}, {"sql", len(f.SQLDatabases)},
-			{"catalogs", len(f.CatalogServices)}, {"configMaps", len(f.ConfigMaps)}, {"secrets", len(f.SecretDeclarations)}} {
-			if c.n > 0 {
-				return refuse(path, c.field)
-			}
+		f := &a.Spec.Functions[i]
+		if field := rootEntryField(len(f.KVStores), len(f.Buckets), len(f.SQLDatabases), len(f.CatalogServices),
+			len(f.ConfigMaps), len(f.SecretDeclarations)); field != "" {
+			return refuse(fmt.Sprintf("spec.functions[%d]", i), field)
 		}
 	}
 	for i := range a.Spec.Workflows {
-		w, path := &a.Spec.Workflows[i], fmt.Sprintf("spec.workflows[%d]", i)
-		for _, c := range []struct {
-			field string
-			n     int
-		}{{"kv", len(w.KVStores)}, {"buckets", len(w.Buckets)}, {"sql", len(w.SQLDatabases)},
-			{"catalogs", len(w.CatalogServices)}, {"configMaps", len(w.ConfigMaps)}, {"secrets", len(w.SecretDeclarations)}} {
-			if c.n > 0 {
-				return refuse(path, c.field)
-			}
+		w := &a.Spec.Workflows[i]
+		if field := rootEntryField(len(w.KVStores), len(w.Buckets), len(w.SQLDatabases), len(w.CatalogServices),
+			len(w.ConfigMaps), len(w.SecretDeclarations)); field != "" {
+			return refuse(fmt.Sprintf("spec.workflows[%d]", i), field)
 		}
 	}
 	for i := range a.Spec.Sites {
