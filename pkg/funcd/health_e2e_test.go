@@ -217,6 +217,34 @@ func TestIssue1082_ReadinessWaitsOutASocketTimeout(t *testing.T) {
 	}
 }
 
+// dependencyReport waits until read's condition is False with reason DependencyNotReady and carries funcd's report for
+// one binding, the message starting with report, and returns it. Under load the reconciler's own probe can outlast the
+// shim's 50 ms budget (ADR-0215) and carry the shim's socket timeout under the same reason first (#1102).
+func dependencyReport(t *testing.T, within time.Duration, read func() v1.Condition, report string) v1.Condition {
+	t.Helper()
+	var c v1.Condition
+	require.Eventually(t, func() bool {
+		c = read()
+		return c.Status == v1.ConditionFalse && c.Reason == "DependencyNotReady" && strings.HasPrefix(c.Message, report)
+	}, within, 20*time.Millisecond, "the condition carries funcd's report %q…", report)
+	return c
+}
+
+// Issue #1102: the reconciler's probe can report the shim's socket timeout before funcd's report, under the same
+// reason; dependencyReport waits for funcd's.
+func TestIssue1102_DependencyReportWaitsOutASocketTimeout(t *testing.T) {
+	t.Parallel()
+	seq := []v1.Condition{
+		{Status: v1.ConditionFalse, Reason: "DependencyNotReady", Message: "socket: GET /health/dependencies did not answer within 50 ms"},
+		{Status: v1.ConditionFalse, Reason: "DependencyNotReady", Message: `kv binding "audit": not authorized to kv::read table "audit"`},
+	}
+	var reads atomic.Int32
+	got := dependencyReport(t, 5*time.Second, func() v1.Condition {
+		return seq[min(int(reads.Add(1))-1, len(seq)-1)]
+	}, `kv binding "audit": `)
+	require.Equal(t, seq[1], got)
+}
+
 // scenario: app-dependency-check — on the real node shim, whose readiness asks funcd's GET /health/dependencies.
 // The rollout deadline, app.upgradeTimeout 6s, falls past runtime.bootTimeout 3s.
 func TestScenarioAppDependencyCheck(t *testing.T) {
@@ -253,12 +281,14 @@ func TestScenarioAppDependencyCheck(t *testing.T) {
 	e.apply(t, a)
 
 	var fn *v1.Function
-	var rr v1.Condition
-	require.Eventually(t, func() bool {
+	rr := dependencyReport(t, appWithin, func() v1.Condition {
 		fn = e.object(t, v1.KindFunction, "todo-api").(*v1.Function)
-		rr, _ = fn.Status.Conditions.Get("RevisionReady")
-		return rr.ObservedGeneration == fn.Generation && rr.Status == v1.ConditionFalse && rr.Reason == "DependencyNotReady"
-	}, appWithin, 20*time.Millisecond, "todo-api's new Revision is not ready on a binding")
+		c, _ := fn.Status.Conditions.Get("RevisionReady")
+		if c.ObservedGeneration != fn.Generation {
+			return v1.Condition{}
+		}
+		return c
+	}, `kv binding "audit": `)
 	require.NotEqual(t, serving, fn.Status.CurrentRevision)
 	code, rep := readiness(t, revisionWorker(t, rt, "todo-api", v1.ObjectName(fn.Status.CurrentRevision)))
 	require.Equal(t, http.StatusServiceUnavailable, code, "the new replica's readiness")
@@ -294,13 +324,11 @@ func TestScenarioHealthPoolMemberDependency(t *testing.T) {
 			h.deploy(t, n, l.fn(l.quiet).pooled("deps").with(bindTable))
 		}
 		waitReady(t, h.c, "a")
-		var ready v1.Condition
-		require.Eventually(t, func() bool {
-			ready, _ = h.function(t, "b").Status.Conditions.Get("Ready")
-			return ready.Status == v1.ConditionFalse && ready.Reason == "DependencyNotReady"
-		}, 20*time.Second, 50*time.Millisecond, "b is not ready on its binding")
+		ready := dependencyReport(t, 20*time.Second, func() v1.Condition {
+			c, _ := h.function(t, "b").Status.Conditions.Get("Ready")
+			return c
+		}, `kv binding "t": `)
 		require.NotEqual(t, v1.PhaseReady, h.function(t, "b").Status.Phase)
-		require.True(t, strings.HasPrefix(ready.Message, `kv binding "t": `), ready.Message)
 		require.Contains(t, ready.Message, `not authorized to kv::read table "t"`)
 		h.samePool(t, "a", "b")
 		sibling := h.function(t, "a")
