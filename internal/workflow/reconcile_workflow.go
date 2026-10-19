@@ -323,7 +323,7 @@ func (v *kvView) ownedBindings(ctx context.Context, wf *v1.Workflow, kv []v1.Fun
 		if err != nil {
 			return nil, err
 		}
-		if st != nil && marked(st.OwnerReferences, wf) {
+		if st != nil && ownedstore.Marked(st.OwnerReferences, wf) {
 			out = append(out, b)
 		}
 	}
@@ -433,12 +433,6 @@ func kvMarker(wf *v1.Workflow) v1.OwnerReference { return ownedstore.Refs(wf, v1
 // KVMarker is kvMarker for the control plane's handover, so the marker has one definition.
 func KVMarker(wf *v1.Workflow) v1.OwnerReference { return kvMarker(wf) }
 
-// IsKVMarker is ownedstore.IsMarker, the one marker predicate (ADR-0248 Decision 3).
-func IsKVMarker(r v1.OwnerReference) bool { return ownedstore.IsMarker(r) }
-
-// marked reports whether refs hold this Workflow incarnation's marker.
-func marked(refs []v1.OwnerReference, wf *v1.Workflow) bool { return ownedstore.Marked(refs, wf) }
-
 // buildFunction constructs an owned Function for a step (without kv — added in the
 // patch phase). Pooling and scaling come from the effective pooling policy.
 func buildFunction(wf *v1.Workflow, st *v1.WorkflowStep, rt v1.RuntimeName, owner v1.OwnerReference) *v1.Function {
@@ -547,7 +541,7 @@ func (m *Materializer) checkKVStore(ctx context.Context, wf *v1.Workflow, st *v1
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), materializeOp, "get kvstore %q", st.Name)
 	}
-	if !marked(existing.GetObjectMeta().OwnerReferences, wf) {
+	if !ownedstore.Marked(existing.GetObjectMeta().OwnerReferences, wf) {
 		return kvNotOwned(st.Name, wf)
 	}
 	return nil
@@ -575,7 +569,7 @@ func (m *Materializer) patchFunctionKV(ctx context.Context, wf *v1.Workflow, st 
 		if err != nil {
 			return fault.Wrapf(err, fault.KindOf(err), materializeOp, "re-read kvstore %q", b.Store)
 		}
-		if meta := obj.GetObjectMeta(); meta.UID != checked[b.Store] || !marked(meta.OwnerReferences, wf) {
+		if meta := obj.GetObjectMeta(); meta.UID != checked[b.Store] || !ownedstore.Marked(meta.OwnerReferences, wf) {
 			return kvNotOwned(b.Store, wf)
 		}
 	}
