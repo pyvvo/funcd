@@ -110,9 +110,10 @@ In order to make this platform self-contained, we will need to implement the fol
       **`Function.spec.bindings.kv`** (ADR-0246) (`alias → store + table`, the wrangler/`spec.bindings.links`
       convention), reached as
       `context.kv.*('alias', …)`. **Default-deny**: no `spec.bindings.kv` entry ⇒ Forbidden (the binding is the
-      capability; only config + secrets are implicit). Bound **config, secrets and catalogs** reach a function as
-      environment variables, read through `context.config`, `context.secret` and `context.catalog` (ADR-0245,
-      which adds the `FUNCD_CONFIG_KEYS`/`FUNCD_SECRET_KEYS` key lists). **Writes require `caller == table.owner`**; **reads** are
+      capability; only config + secrets are implicit). Bound **config and catalogs** reach a function as
+      environment variables, read through `context.config` and `context.catalog` (ADR-0245, which adds the
+      `FUNCD_CONFIG_KEYS` key list); its bound **secrets** never enter the environment: `context.secret` reads each
+      one from funcd, checked on every read (ADR-0249). **Writes require `caller == table.owner`**; **reads** are
       coarse within the namespace (the V1.1 trust boundary) — **fine-grained per-function authz is delegated to
       the PDP/Cedar IAM ADR**, where authorization belongs (KV does not hand-roll RBAC; Cedar policies persist as
       resources in the metastore, entities materialized from existing resources). A reconciler does Ready +

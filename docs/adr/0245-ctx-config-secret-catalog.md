@@ -5,6 +5,7 @@
   pyvvo/funcd-python#90 (v0.12.0) and #1086; Accepted (2026-10-19), after two judge rounds, under
   `adr-batch` with acceptance delegated by the decider: the judge made TypeScript's `ctx.secret` return Promises (the
   decider's call), gave each scenario a named test, and set a key list only when it is not empty.
+- **Superseded in part by**: [ADR-0249](0249-ctx-secret-reads-from-funcd.md) (2026-10-19) — Decisions 1 and 3 and the Temporary workaround: `ctx.secret` reads each secret from funcd through `GET /secret`, and neither the values nor `FUNCD_SECRET_KEYS` reach the worker's environment.
 - **Date**: 2026-10-19
 - **Deciders**: green-0-rabbit
 - **Tags**: shim, ctx, config, secrets, catalog, dx
