@@ -11653,5 +11653,20 @@
     "dod_total": 12,
     "report": "docs/reviews/issue-1084-fix-claude-opus-5-5.md",
     "notes": "model: the funcd bench harness sibling was found by the gate, fixed in the same commit; model: a held revision's missing contract reads StartFailed (untested mapping dropped)"
+  },
+  {
+    "date": "2026-10-19",
+    "issue": "1082",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 2,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-1082-fix-claude-opus-5-5.md",
+    "notes": "model: two mutants of readiness's retry condition survived the first test, fixed before the report; model: test(e2e) subject for a test-only flake fix, as #1001"
   }
 ]
