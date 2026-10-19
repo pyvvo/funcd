@@ -12,6 +12,7 @@ import (
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/ownedstore"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 	"github.com/pyvvo/funcd/pkg/funcd"
 )
 
@@ -187,10 +188,10 @@ func TestScenarioWorkflowRefKept(t *testing.T) {
 
 	e.del(t, v1.KindWorkflow, "users")
 	e.waitGone(t, v1.KindFunction, "users-read")
-	require.Never(t, func() bool {
+	require.True(t, poll.Never(func() bool {
 		return !e.exists(t, v1.KindSQLDatabase, "shared-db") || !e.exists(t, v1.KindConfigMap, "shared-settings") ||
 			!e.exists(t, v1.KindCatalogService, "shared-lake")
-	}, 2*time.Second, 100*time.Millisecond, "the ref objects outlive two GC sweeps")
+	}, 2*time.Second, 100*time.Millisecond), "the ref objects outlive two GC sweeps")
 	for kind, obj := range before {
 		got := e.object(t, kind, string(obj.GetObjectMeta().Name))
 		require.Empty(t, got.GetObjectMeta().OwnerReferences, "%s is never marked", kind)
