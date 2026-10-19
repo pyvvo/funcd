@@ -1,7 +1,7 @@
 # ADR-0245: `ctx.config`, `ctx.secret` and `ctx.catalog` read a handler's bound values
 
 - **Status**: Reviewing (2026-10-19), implemented in #1075, pyvvo/funcd-typescript#77 (v0.17.0),
-  pyvvo/funcd-python#90 (v0.12.0) and the funcd pin PR; Accepted (2026-10-19), after two judge rounds, under
+  pyvvo/funcd-python#90 (v0.12.0) and #1086; Accepted (2026-10-19), after two judge rounds, under
   `adr-batch` with acceptance delegated by the decider: the judge made TypeScript's `ctx.secret` return Promises (the
   decider's call), gave each scenario a named test, and set a key list only when it is not empty.
 - **Date**: 2026-10-19
