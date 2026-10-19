@@ -2,6 +2,7 @@ package function
 
 import (
 	"context"
+	"strings"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
@@ -21,33 +22,36 @@ type SecretResolver interface {
 
 // resolveBindingEnv resolves a function's bound ConfigMaps (spec.config, non-sensitive) +
 // Secrets (spec.secrets, sensitive) into one guarded env-var map for worker injection, via the
-// single shared resolver (ADR-0093, envresolve.ResolveEnv — config first, then secrets). It
-// returns (nil, nil) when the function declares neither. Every other path is fail-closed: any
+// single shared resolver (ADR-0093, envresolve.Resolve — config first, then secrets), with the keys of each kind
+// (ADR-0245). It returns an empty Resolved when the function declares neither. Every other path is fail-closed: any
 // resolver error (a missing ConfigMap → ErrConfig,
 // or a PDP-deny / missing Secret / unconfigured resolver → ErrSecret) returns an error so
 // Reconcile holds the function not-Ready (ConfigResolveFailed / SecretResolveFailed) with no worker.
-func (r *Reconciler) resolveBindingEnv(ctx context.Context, fn *v1.Function) (map[string]string, error) {
+func (r *Reconciler) resolveBindingEnv(ctx context.Context, fn *v1.Function) (envresolve.Resolved, error) {
 	if len(fn.Spec.Config) == 0 && len(fn.Spec.Secrets) == 0 {
-		return nil, nil
+		return envresolve.Resolved{}, nil
 	}
-	env, err := envresolve.ResolveEnv(ctx, envresolve.Deps{
+	return envresolve.Resolve(ctx, envresolve.Deps{
 		Secrets:  r.secrets,
 		Store:    r.store,
 		Identity: r.developerFor,
 		Logger:   r.logger,
 	}, fn.Namespace, fn.Spec.Config, fn.Spec.Secrets)
-	if err != nil {
-		return nil, err
-	}
-	return env, nil
 }
 
-// mergeSecretEnv merges resolved secret env vars into a worker's env with reserved-key
+// addBindingEnv merges resolved config and secret env vars into a worker's env with reserved-key
 // precedence: a resolved key matching the FUNCD_ prefix guard is dropped (logged) so a secret
-// can never shadow the shim contract (ADR-0057, reserved-env-not-overridable). Pure: it mutates
-// only the passed env map.
-func (r *Reconciler) mergeSecretEnv(env, secretEnv map[string]string) {
-	secrets.MergeEnvGuarded(env, secretEnv, r.logger)
+// can never shadow the shim contract (ADR-0057, reserved-env-not-overridable). It then writes the
+// non-empty key lists the shims' ctx.config and ctx.secret read (ADR-0245) directly, past the guard.
+// Pure: it mutates only the passed env map.
+func (r *Reconciler) addBindingEnv(env map[string]string, b envresolve.Resolved) {
+	secrets.MergeEnvGuarded(env, b.Env, r.logger)
+	if len(b.ConfigKeys) > 0 {
+		env["FUNCD_CONFIG_KEYS"] = strings.Join(b.ConfigKeys, ",")
+	}
+	if len(b.SecretKeys) > 0 {
+		env["FUNCD_SECRET_KEYS"] = strings.Join(b.SecretKeys, ",")
+	}
 }
 
 // secretNames converts the typed spec field to the []string the Resolver takes.

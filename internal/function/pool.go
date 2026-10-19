@@ -20,6 +20,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	cataloggw "github.com/pyvvo/funcd/internal/catalog/gateway"
+	"github.com/pyvvo/funcd/internal/envresolve"
 	"github.com/pyvvo/funcd/internal/pooling"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/scheduler"
@@ -204,8 +205,8 @@ func (r *Reconciler) servingMember(ctx context.Context, m *v1.Function) *v1.Func
 // member's current revision differs from the one it serves; a Start error takes its place. The pool worker is judged on
 // its own liveness (ensurePool), never on a member's state. It also returns how soon an old pool worker's drain needs
 // the pass back.
-func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pooling.Assignment, secretEnv, catalogEnv map[string]string, idx accessIndex) (verdict, time.Duration, error) {
-	pass, err := r.ensurePool(ctx, a.Key, fn, secretEnv, catalogEnv, idx)
+func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pooling.Assignment, bindEnv envresolve.Resolved, catalogEnv map[string]string, idx accessIndex) (verdict, time.Duration, error) {
+	pass, err := r.ensurePool(ctx, a.Key, fn, bindEnv, catalogEnv, idx)
 	if err != nil {
 		return verdict{}, 0, err
 	}
@@ -378,13 +379,13 @@ type poolPass struct {
 // is silent on /health/liveness for livenessTimeout is restarted at once (#422). Every worker is reclaimed when desired
 // is 0. The pass carries the current worker's running count, its backoff deadline, its Start error and its boot crash,
 // which the pass writes to the member's status, as for a solo worker (issue #73). self is the member being reconciled:
-// its resolved secretEnv and catalogEnv give the pool's shared env.
-func (r *Reconciler) ensurePool(ctx context.Context, key pooling.PoolKey, self *v1.Function, secretEnv, catalogEnv map[string]string, idx accessIndex) (poolPass, error) {
+// its resolved config and secret env and its catalogEnv give the pool's shared env.
+func (r *Reconciler) ensurePool(ctx context.Context, key pooling.PoolKey, self *v1.Function, bindEnv envresolve.Resolved, catalogEnv map[string]string, idx accessIndex) (poolPass, error) {
 	members, err := r.admittedMembers(ctx, key, idx)
 	if err != nil {
 		return poolPass{}, err
 	}
-	shared := r.poolSharedEnv(self, secretEnv, catalogEnv)
+	shared := r.poolSharedEnv(self, bindEnv, catalogEnv)
 	manifest, desired, err := r.poolManifest(ctx, members, self, shared)
 	if err != nil {
 		return poolPass{}, err
@@ -767,7 +768,7 @@ func (r *Reconciler) memberEnv(m *v1.Function, artifact string, shared map[strin
 // poolSharedEnv is the env every member of a pool shares, taken from self, the member being reconciled — members of
 // one key share their access, so their bindings resolve alike: its config and secrets, its catalog URLs, the S3
 // region and endpoint, and the DuckDB extension dir. Never from a manifest member, which may serve an older revision.
-func (r *Reconciler) poolSharedEnv(self *v1.Function, secretEnv, catalogEnv map[string]string) map[string]string {
+func (r *Reconciler) poolSharedEnv(self *v1.Function, bindEnv envresolve.Resolved, catalogEnv map[string]string) map[string]string {
 	env := map[string]string{}
 	s3 := map[string]string{}
 	r.addS3Env(s3, self)
@@ -783,7 +784,7 @@ func (r *Reconciler) poolSharedEnv(self *v1.Function, secretEnv, catalogEnv map[
 	}
 	r.addCatalogExtensionDir(env, self)
 	r.addRecordBound(env)
-	r.mergeSecretEnv(env, secretEnv)
+	r.addBindingEnv(env, bindEnv)
 	return env
 }
 

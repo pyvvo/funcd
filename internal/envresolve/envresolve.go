@@ -11,6 +11,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"maps"
+	"slices"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -44,7 +46,24 @@ var (
 	ErrSecret = errors.New("secret resolution failed") // wraps a Secret resolution failure
 )
 
-// ResolveEnv assembles env from bound ConfigMaps (config, non-sensitive — each read via
+// Resolved is a binding's guarded env plus the keys of each kind that reach it (ADR-0245): the shims tell config from
+// secrets by these lists, which a worker receives as FUNCD_CONFIG_KEYS and FUNCD_SECRET_KEYS.
+type Resolved struct {
+	Env        map[string]string
+	ConfigKeys []string // sorted; minus the keys a secret overrides
+	SecretKeys []string // sorted
+}
+
+// ResolveEnv returns Resolve's Env, for providers, which run no handler.
+func ResolveEnv(ctx context.Context, d Deps, ns v1.NamespaceName, config, secretNames []v1.ObjectName) (map[string]string, error) {
+	res, err := Resolve(ctx, d, ns, config, secretNames)
+	if err != nil {
+		return nil, err
+	}
+	return res.Env, nil
+}
+
+// Resolve assembles env from bound ConfigMaps (config, non-sensitive — each read via
 // store.Get(ctx, v1.KindConfigMap.GVK(), ns, name) → *v1.ConfigMap, merging cm.Spec.Data) +
 // Secrets (sensitive, PDP-resolved via d.Secrets under d.Identity(ns)), guarded against
 // reserved FUNCD_ keys (ADR-0092). Config is merged first, then secrets (so a secret may
@@ -52,39 +71,59 @@ var (
 // nil (unchanged catalog semantics), or if a value cannot be delivered as env (EnvDataProblem). On failure the returned error is joined with ErrConfig or
 // ErrSecret (ADR-0093 §4) so a caller can attribute it via errors.Is while keeping the fault
 // kind. This is the single resolver for Functions AND providers.
-func ResolveEnv(ctx context.Context, d Deps, ns v1.NamespaceName, config, secretNames []v1.ObjectName) (map[string]string, error) {
-	const op = "envresolve.ResolveEnv"
+func Resolve(ctx context.Context, d Deps, ns v1.NamespaceName, config, secretNames []v1.ObjectName) (Resolved, error) {
+	const op = "envresolve.Resolve"
 	env := make(map[string]string)
+	configKeys := map[string]bool{}
+	secretKeys := map[string]bool{}
 
 	// config (ConfigMaps, non-sensitive): merge Data keys into env.
 	for _, name := range config {
 		obj, gerr := d.Store.Get(ctx, v1.KindConfigMap.GVK(), ns, name)
 		if gerr != nil {
-			return nil, errors.Join(fault.Wrapf(gerr, fault.KindOf(gerr), op, "resolve config %q", name), ErrConfig)
+			return Resolved{}, errors.Join(fault.Wrapf(gerr, fault.KindOf(gerr), op, "resolve config %q", name), ErrConfig)
 		}
 		cm, ok := obj.(*v1.ConfigMap)
 		if !ok {
-			return nil, errors.Join(fault.Internalf(op, "object %s/%s is not a ConfigMap", ns, name), ErrConfig)
+			return Resolved{}, errors.Join(fault.Internalf(op, "object %s/%s is not a ConfigMap", ns, name), ErrConfig)
 		}
 		if k, p := secrets.EnvDataProblem(cm.Spec.Data); p != "" {
-			return nil, errors.Join(fault.Invalidf(op, "config %q key %q %s; env delivery cannot carry it", name, k, p), ErrConfig)
+			return Resolved{}, errors.Join(fault.Invalidf(op, "config %q key %q %s; env delivery cannot carry it", name, k, p), ErrConfig)
 		}
 		secrets.MergeEnvGuarded(env, cm.Spec.Data, d.Logger)
+		addKeys(configKeys, cm.Spec.Data)
 	}
 
 	// secrets (Secrets, sensitive): resolve PDP-authorized → merge Data keys (after config).
 	if len(secretNames) > 0 {
 		if d.Secrets == nil {
-			return nil, errors.Join(fault.Invalidf(op, "secret injection is not configured but %s declares %d secret(s)",
+			return Resolved{}, errors.Join(fault.Invalidf(op, "secret injection is not configured but %s declares %d secret(s)",
 				ns, len(secretNames)), ErrSecret)
 		}
 		resolved, serr := d.Secrets.ResolveEnv(ctx, d.Identity(ns), ns, objectNames(secretNames))
 		if serr != nil {
-			return nil, errors.Join(fault.Wrapf(serr, fault.KindOf(serr), op, "resolve secrets"), ErrSecret)
+			return Resolved{}, errors.Join(fault.Wrapf(serr, fault.KindOf(serr), op, "resolve secrets"), ErrSecret)
 		}
 		secrets.MergeEnvGuarded(env, resolved, d.Logger)
+		addKeys(secretKeys, resolved)
 	}
-	return env, nil
+	for k := range secretKeys {
+		delete(configKeys, k)
+	}
+	return Resolved{
+		Env:        env,
+		ConfigKeys: slices.Sorted(maps.Keys(configKeys)),
+		SecretKeys: slices.Sorted(maps.Keys(secretKeys)),
+	}, nil
+}
+
+// addKeys records the keys of data that MergeEnvGuarded lets into the env.
+func addKeys(dst map[string]bool, data map[string]string) {
+	for k := range data {
+		if !secrets.IsReservedKey(k) {
+			dst[k] = true
+		}
+	}
 }
 
 // objectNames converts the typed spec field to the []string the SecretResolver takes.

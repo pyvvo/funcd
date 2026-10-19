@@ -38,9 +38,9 @@ func TestScenarioConfigInjectsEnv(t *testing.T) {
 
 	env, err := r.resolveBindingEnv(context.Background(), configFn("tuning"))
 	require.NoError(t, err)
-	require.Equal(t, "4", env["DUCKDB_THREADS"], "the ConfigMap value is injected as env")
+	require.Equal(t, "4", env.Env["DUCKDB_THREADS"], "the ConfigMap value is injected as env")
 
-	spec := mustWorkerSpec(t, r, configFn("tuning"), "/art/app.mjs", env, nil)
+	spec := mustWorkerSpec(t, r, configFn("tuning"), "/art/app.mjs", env.Env, nil)
 	require.Equal(t, "4", spec.Env["DUCKDB_THREADS"], "and it reaches WorkerSpec.Env")
 }
 
@@ -55,8 +55,8 @@ func TestScenarioConfigThenSecretOrder(t *testing.T) {
 	fn.Spec.Secrets = []v1.ObjectName{"creds"}
 	env, err := r.resolveBindingEnv(context.Background(), fn)
 	require.NoError(t, err)
-	require.Equal(t, "from-secret", env["SHARED"], "the secret overrides the config default (config-then-secret)")
-	require.Equal(t, "c", env["ONLY_CFG"], "a config-only key survives")
+	require.Equal(t, "from-secret", env.Env["SHARED"], "the secret overrides the config default (config-then-secret)")
+	require.Equal(t, "c", env.Env["ONLY_CFG"], "a config-only key survives")
 }
 
 // scenario: config-missing-fails-closed — a spec.config naming an absent ConfigMap fails closed,
@@ -82,15 +82,15 @@ func TestScenarioPooledConfigSoloGated(t *testing.T) {
 	fn.Spec.Secrets = []v1.ObjectName{"creds"}
 	env, err := r.resolveBindingEnv(context.Background(), fn)
 	require.NoError(t, err, "a pooled member resolves its config and secrets")
-	require.Equal(t, "4", env["DUCKDB_THREADS"])
-	require.Equal(t, "s", env["TOKEN"])
+	require.Equal(t, "4", env.Env["DUCKDB_THREADS"])
+	require.Equal(t, "s", env.Env["TOKEN"])
 }
 
-// A config-only function with neither config nor secrets still returns (nil, nil) — no gate trips.
+// A config-only function with neither config nor secrets still returns an empty Resolved — no gate trips.
 func TestBindingEnvEmptyReturnsNil(t *testing.T) {
 	t.Parallel()
 	r := newShimReconciler(t, nil)
 	env, err := r.resolveBindingEnv(context.Background(), sampleFn())
 	require.NoError(t, err)
-	require.Nil(t, env)
+	require.Zero(t, env)
 }

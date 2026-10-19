@@ -226,3 +226,35 @@ func TestIssue449_FirstBadKeyInSortedOrder(t *testing.T) {
 		})
 	}
 }
+
+// scenario: ctx-secret-shadows-config — the key lists keep config and secrets apart, after the reserved-key guard: a
+// key a secret overrides is listed only as a secret, and a ConfigMap whose only key a secret overrides lists none.
+func TestScenarioCtxSecretShadowsConfig(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const ns v1.NamespaceName = "team-a"
+	st := store.New(storemem.New())
+	createConfigMap(t, st, ns, "app-settings", map[string]string{
+		"LOG_LEVEL":         "debug",
+		"MODE":              "dev",
+		"FUNCD_SECRET_KEYS": "forged",
+	})
+	createConfigMap(t, st, ns, "shadowed", map[string]string{"MODE": "dev"})
+	sr := &fakeSecretResolver{env: map[string]string{
+		"STRIPE_KEY":          "sk",
+		"MODE":                "prod",
+		"FUNCD_INVOKE_SOCKET": "forged",
+	}}
+	deps := envresolve.Deps{Secrets: sr, Store: st, Identity: devIdentity}
+
+	res, err := envresolve.Resolve(ctx, deps, ns, []v1.ObjectName{"app-settings"}, []v1.ObjectName{"api-keys"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"LOG_LEVEL"}, res.ConfigKeys)
+	require.Equal(t, []string{"MODE", "STRIPE_KEY"}, res.SecretKeys)
+	require.Equal(t, map[string]string{"LOG_LEVEL": "debug", "MODE": "prod", "STRIPE_KEY": "sk"}, res.Env)
+
+	res, err = envresolve.Resolve(ctx, deps, ns, []v1.ObjectName{"shadowed"}, []v1.ObjectName{"api-keys"})
+	require.NoError(t, err)
+	require.Empty(t, res.ConfigKeys)
+	require.Equal(t, []string{"MODE", "STRIPE_KEY"}, res.SecretKeys)
+}
