@@ -11638,5 +11638,20 @@
     "dod_total": 18,
     "report": "docs/reviews/adr-0245-implementation-claude-opus-5-5.md",
     "notes": "pass: FUNCD_CONFIG_KEYS and FUNCD_SECRET_KEYS set past the guard, only when not empty, in solo workers and poolSharedEnv; ctx.config, ctx.secret (Promises in TS) and ctx.catalog in both shims; 8 scenarios named and passing (shims 8/8 and 9/9 at the release tags, e2e 0.41 s, dev 0.51 s); 3 overlay mutants killed; gate PASS, #1086 ci and e2e green; 3 Minors(model) from the pre-merge review, fixed before merge: the call-time test covered only config, a re-declared NodeJS.ProcessEnv alias, the pool worker's name rebuilt by hand in ctx_env_test.go."
+  },
+  {
+    "date": "2026-10-19",
+    "issue": "1084",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 2,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-1084-fix-claude-opus-5-5.md",
+    "notes": "model: the funcd bench harness sibling was found by the gate, fixed in the same commit; model: a held revision's missing contract reads StartFailed (untested mapping dropped)"
   }
 ]
