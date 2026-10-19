@@ -1,6 +1,6 @@
 # ADR-0250: A Workflow declares at its root the databases, catalogs, ConfigMaps and Secrets its steps bind
 
-- **Status**: Accepted (2026-10-19), after one judge round, under `adr-batch` with acceptance delegated by the
+- **Status**: Reviewing (2026-10-19), implemented; Accepted (2026-10-19), after one judge round, under `adr-batch` with acceptance delegated by the
   decider: the judge gave defined ConfigMaps and catalogs the controller reference and settled prefix owners.
 - **Date**: 2026-10-19
 - **Deciders**: green-0-rabbit

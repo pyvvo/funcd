@@ -74,10 +74,10 @@ type bindingDeclared struct{ r StoreReader }
 
 // NewBindingDeclaredAdmission returns the Validating admission "binding-declared" (ADR-0248 Decision 2): every store,
 // catalog, ConfigMap and Secret a Function binds, its catalog entries' bindings included, is declared at its root, and
-// every KV store and bucket an image step binds is declared at its Workflow's. A part of an App binds what the App
+// every binding of an image step is declared at its Workflow's (ADR-0250 Decision 2). A part of an App binds what the App
 // declares too: Request.Declared under app-parts, else read from r for an object an App controls, so a direct write of
-// a part passes as the App's own did. A step Function binds what its Workflow declares. A step's sql, catalog, config
-// and secret bindings name existing resources, as before (the first exception). A Site's one bucket is Site.Validate's.
+// a part passes as the App's own did. A step Function binds what its Workflow declares. A Site's one bucket is
+// Site.Validate's.
 // A standalone CatalogService's blob, config and secret bindings are declared at its root (ADR-0251 Decision 2); an
 // App's catalog binds buckets the App declares. It replaces ADR-0229's workflow-step-stores.
 func NewBindingDeclaredAdmission(r StoreReader) Admission { return bindingDeclared{r: r} }
@@ -135,7 +135,7 @@ func (a bindingDeclared) controllerDeclared(ctx context.Context, req Request) (a
 			return app, nil, err
 		}
 		wf := obj.(*v1.Workflow)
-		step = RootDeclared(wf.Spec.KVStores, wf.Spec.Buckets, nil, nil, nil, nil)
+		step = workflowDeclared(&wf.Spec)
 		if c, ok = v1.ControllerOf(wf.OwnerReferences); !ok {
 			return app, step, nil
 		}
@@ -165,21 +165,10 @@ func (a bindingDeclared) controller(ctx context.Context, c v1.OwnerReference, ns
 	return nil, nil
 }
 
-// stepFunctionUndeclared checks a step Function as its step: its kv and blob bindings against its Workflow's and its
-// App's declarations; its other bindings are the first exception.
+// stepFunctionUndeclared checks a step Function as its step: every binding against its Workflow's and its App's
+// declarations (ADR-0250 Decision 2).
 func stepFunctionUndeclared(s *v1.FunctionSpec, step, app *Declared) error {
-	u := undeclared{root: step, app: app, keys: map[v1.Kind]string{v1.KindKVStore: "its Workflow's spec.kv", v1.KindBucket: "its Workflow's spec.buckets"}}
-	for i, x := range s.Bindings.KV {
-		if err := u.check(fmt.Sprintf("spec.bindings.kv[%d]", i), v1.KindKVStore, x.Store); err != nil {
-			return err
-		}
-	}
-	for i, x := range s.Bindings.Blob {
-		if err := u.check(fmt.Sprintf("spec.bindings.blob[%d]", i), v1.KindBucket, x.Bucket); err != nil {
-			return err
-		}
-	}
-	return nil
+	return stepUndeclared(undeclared{root: step, app: app, keys: workflowKeys("its Workflow's spec.")}, "spec.bindings", s.Bindings)
 }
 
 // undeclared checks a binding's target against the root's declarations and, for an App's part, the App's; keys names
@@ -278,29 +267,53 @@ func catalogUndeclared(s *v1.CatalogServiceSpec, app *Declared) error {
 }
 
 func workflowUndeclared(s *v1.WorkflowSpec, app *Declared) error {
-	u := undeclared{
-		root: RootDeclared(s.KVStores, s.Buckets, nil, nil, nil, nil),
-		app:  app,
-		keys: map[v1.Kind]string{v1.KindKVStore: "spec.kv", v1.KindBucket: "spec.buckets"},
-	}
+	u := undeclared{root: workflowDeclared(s), app: app, keys: workflowKeys("spec.")}
 	for i := range s.Steps {
 		f := s.Steps[i].Function
 		if f == nil || f.Image == "" {
 			continue
 		}
-		path := fmt.Sprintf("spec.steps[%d].function.bindings", i)
-		for j, x := range f.Bindings.KV {
-			if err := u.check(fmt.Sprintf("%s.kv[%d]", path, j), v1.KindKVStore, x.Store); err != nil {
-				return err
-			}
-		}
-		for j, x := range f.Bindings.Blob {
-			if err := u.check(fmt.Sprintf("%s.blob[%d]", path, j), v1.KindBucket, x.Bucket); err != nil {
-				return err
-			}
+		if err := stepUndeclared(u, fmt.Sprintf("spec.steps[%d].function.bindings", i), f.Bindings.FunctionBindings()); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// workflowDeclared is what a Workflow's root declares (ADR-0248 Decision 1, ADR-0250 Decision 1).
+func workflowDeclared(s *v1.WorkflowSpec) *Declared {
+	return RootDeclared(s.KVStores, s.Buckets, s.SQLDatabases, s.CatalogServices, s.ConfigMaps, s.SecretDeclarations)
+}
+
+// workflowKeys names the Workflow root key that declares each kind, after prefix.
+func workflowKeys(prefix string) map[v1.Kind]string {
+	return map[v1.Kind]string{v1.KindKVStore: prefix + "kv", v1.KindBucket: prefix + "buckets", v1.KindSQLDatabase: prefix + "sql",
+		v1.KindCatalogService: prefix + "catalogs", v1.KindConfigMap: prefix + "configMaps", v1.KindSecret: prefix + "secrets"}
+}
+
+// stepUndeclared checks every binding of a step against its Workflow's root, or the App's (ADR-0250 Decision 2).
+func stepUndeclared(u undeclared, path string, b v1.FunctionBindings) error {
+	for j, x := range b.KV {
+		if err := u.check(fmt.Sprintf("%s.kv[%d]", path, j), v1.KindKVStore, x.Store); err != nil {
+			return err
+		}
+	}
+	for j, x := range b.Blob {
+		if err := u.check(fmt.Sprintf("%s.blob[%d]", path, j), v1.KindBucket, x.Bucket); err != nil {
+			return err
+		}
+	}
+	for j, x := range b.SQL {
+		if err := u.check(fmt.Sprintf("%s.sql[%d]", path, j), v1.KindSQLDatabase, x.Database); err != nil {
+			return err
+		}
+	}
+	for j, x := range b.Catalog {
+		if err := u.check(fmt.Sprintf("%s.catalog[%d]", path, j), v1.KindCatalogService, x.Catalog); err != nil {
+			return err
+		}
+	}
+	return names(u, path, b.Config, b.Secret)
 }
 
 // --- function-store-owner (ADR-0248 Decisions 4 and 5) and catalog-store-owner (ADR-0251 Decision 1) ------------
