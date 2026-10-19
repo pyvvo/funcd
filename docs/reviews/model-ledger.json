@@ -11713,5 +11713,20 @@
     "dod_total": 12,
     "report": "docs/reviews/issue-1100-fix-claude-opus-5-5.md",
     "notes": "pass; test-only, 8 sites to 127.0.0.1:1; reviewer's Linux revert check 38/3000 -> 0/3000"
+  },
+  {
+    "date": "2026-10-20",
+    "issue": "1102",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-1102-fix-claude-opus-5-5.md",
+    "notes": "pass; test-only, the wait requires funcd's report; revert to reason-only fails on the socket message"
   }
 ]
