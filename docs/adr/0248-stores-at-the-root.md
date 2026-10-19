@@ -1,9 +1,11 @@
 # ADR-0248: Every kind declares the stores it owns at its root
 
-- **Status**: Reviewing (2026-10-19), implemented; Accepted (2026-10-19), after two judge rounds, under `adr-batch` with acceptance delegated by the
-  decider, who also chose the narrower scope for the Workflow and the standalone CatalogService. The judge added one
-  ownership check for every owner kind, ADR-0178's supersession for `ref` and App stores, ADR-0213's ConfigMap and
-  Secret rules, the GC pairs and the Site rules.
+- **Status**: Implemented (2026-10-19), review passed (docs/reviews/adr-0248-implementation-claude-opus-5-5.md);
+  Reviewing (2026-10-19), implemented in #1096, pyvvo/funcd-typescript#80 (v0.18.0), pyvvo/funcd-python#93 (v0.13.0) and
+  pyvvo/funcd-functions#20 (v0.18.0); Accepted (2026-10-19), after two judge rounds, under `adr-batch` with acceptance
+  delegated by the decider, who also chose the narrower scope for the Workflow and the standalone CatalogService. The
+  judge added one ownership check for every owner kind, ADR-0178's supersession for `ref` and App stores, ADR-0213's
+  ConfigMap and Secret rules, the GC pairs and the Site rules.
 - **Superseded in part by**: [ADR-0250](0250-workflow-declares-its-step-resources.md) (2026-10-19) — Decision 2's first exception and the Workflow row of Decision 1: a Workflow also declares `sql`, `catalogs`, `configMaps` and `secrets`, and its steps bind only what its root declares.
 - **Superseded in part by**: [ADR-0251](0251-catalogservice-declares-its-stores.md) (2026-10-19) — Decision 2's second exception and its Open questions line: a standalone CatalogService declares `buckets`, `configMaps` and `secrets` at its root.
 - **Date**: 2026-10-19

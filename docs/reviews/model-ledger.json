@@ -11668,5 +11668,35 @@
     "dod_total": 12,
     "report": "docs/reviews/issue-1082-fix-claude-opus-5-5.md",
     "notes": "model: two mutants of readiness's retry condition survived the first test, fixed before the report; model: test(e2e) subject for a test-only flake fix, as #1001"
+  },
+  {
+    "date": "2026-10-19",
+    "adr": "0246",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 17,
+    "dod_total": 17,
+    "report": "docs/reviews/adr-0246-implementation-claude-opus-5-5.md",
+    "notes": "pass; 1 Minor (model: the old-field test pinned 2 of 19 shapes), fixed before merge; 16 shapes probed, siblings decoded through a go.work"
+  },
+  {
+    "date": "2026-10-19",
+    "adr": "0248",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 2,
+    "dod_passed": 17,
+    "dod_total": 17,
+    "report": "docs/reviews/adr-0248-implementation-claude-opus-5-5.md",
+    "notes": "pass; 2 Minors (model: a stale validateWriters comment, an untested ConfigMap prune), fixed before merge; the builder's lane found D17 (two GC causes), fixed with tests"
   }
 ]

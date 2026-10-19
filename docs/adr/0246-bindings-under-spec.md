@@ -1,8 +1,10 @@
 # ADR-0246: Bindings move under `spec.bindings`, typed per kind
 
-- **Status**: Reviewing (2026-10-19), implemented; Accepted (2026-10-19), after two judge rounds, under `adr-batch` with acceptance delegated by the
-  decider: the first round split the store half into ADR-0248 and gave each kind its own binding type; the second
-  moved the Site into ADR-0248 and pinned the grant check to a golden fixture.
+- **Status**: Implemented (2026-10-19), review passed (docs/reviews/adr-0246-implementation-claude-opus-5-5.md);
+  Reviewing (2026-10-19), implemented in #1096, pyvvo/funcd-typescript#80 (v0.18.0), pyvvo/funcd-python#93 (v0.13.0) and
+  pyvvo/funcd-functions#20 (v0.18.0); Accepted (2026-10-19), after two judge rounds, under `adr-batch` with acceptance
+  delegated by the decider: the first round split the store half into ADR-0248 and gave each kind its own binding type;
+  the second moved the Site into ADR-0248 and pinned the grant check to a golden fixture.
 - **Date**: 2026-10-19
 - **Deciders**: green-0-rabbit
 - **Tags**: api, bindings, refactor
