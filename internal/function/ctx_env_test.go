@@ -3,7 +3,6 @@ package function_test
 import (
 	"encoding/json"
 	"net/http"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -12,7 +11,6 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	cataloggw "github.com/pyvvo/funcd/internal/catalog/gateway"
 	"github.com/pyvvo/funcd/internal/function"
-	"github.com/pyvvo/funcd/internal/pooling"
 )
 
 // scenario: ctx-pooled-member — two Functions in one pool share its config and secrets with their key lists (ADR-0245),
@@ -41,9 +39,7 @@ func TestScenarioCtxPooledMember(t *testing.T) {
 	}
 	h.pools(t, "a", "b")
 	require.Equal(t, h.getFn(t, "a").Status.Pool, h.getFn(t, "b").Status.Pool, "both members share one pool")
-	key, ok := pooling.ParsePool("default", h.getFn(t, "a").Status.Pool)
-	require.True(t, ok)
-	spec, ok := h.rt.specFor(v1.ObjectName("__pool__nodejs22__w1__" + key.AccessHash))
+	spec, ok := h.rt.specFor(h.poolWorkerOf(t, "a"))
 	require.True(t, ok)
 	require.Equal(t, "APP_MODE", spec.Env["FUNCD_CONFIG_KEYS"])
 	require.Equal(t, "STRIPE_KEY", spec.Env["FUNCD_SECRET_KEYS"])
@@ -52,13 +48,11 @@ func TestScenarioCtxPooledMember(t *testing.T) {
 	require.NotEmpty(t, spec.Env["FUNCD_CATALOG_LAKE_URL"])
 	require.NotContains(t, spec.Env, "FUNCD_CATALOG_LAKE_TOKEN", "no member's token is in the shared env")
 
-	data, err := os.ReadFile(spec.Env["FUNCD_POOL_MANIFEST"])
-	require.NoError(t, err)
 	var rows []struct {
 		Name string            `json:"name"`
 		Env  map[string]string `json:"env"`
 	}
-	require.NoError(t, json.Unmarshal(data, &rows))
+	require.NoError(t, json.Unmarshal([]byte(h.poolManifest(t, h.poolWorkerOf(t, "a"))), &rows))
 	require.Len(t, rows, 2)
 	tokens := map[string]string{}
 	for _, r := range rows {

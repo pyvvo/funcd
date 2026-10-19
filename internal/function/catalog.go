@@ -124,7 +124,7 @@ func (r *Reconciler) MapCatalogService(ctx context.Context, obj v1.Object) []con
 
 // addCatalogEnv writes the already-resolved catalog env pairs DIRECTLY into a worker's env (ADR-0091).
 // It bypasses addBindingEnv on purpose: the keys are FUNCD_-prefixed, which addBindingEnv's reserved-
-// key guard (secrets.go:64) would drop. catalogEnv is nil for a function with no spec.catalogs.
+// key guard (secrets.MergeEnvGuarded) would drop. catalogEnv is nil for a function with no spec.catalogs.
 func (r *Reconciler) addCatalogEnv(env, catalogEnv map[string]string) {
 	for k, v := range catalogEnv {
 		env[k] = v
