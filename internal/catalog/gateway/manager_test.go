@@ -179,13 +179,12 @@ func TestIssue379_ProxyLogsThroughManagerLogger(t *testing.T) {
 	master := []byte("issue-379-master")
 	keys := NewCatalogKeys(master, st)
 
-	dead := httptest.NewServer((&engineStub{}).handler())
-	dead.Close()
+	deadURL := "http://127.0.0.1:1" // nothing listens there: a closed server's port could be bound again
 
 	var logs bytes.Buffer
 	mgr := NewManager("", keys, pdp, slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(mgr.Shutdown)
-	url, err := mgr.Ensure(auth.EntityRef{Type: v1.KindCatalogService, Namespace: "data", Name: "lake"}, dead.URL, engineToken)
+	url, err := mgr.Ensure(auth.EntityRef{Type: v1.KindCatalogService, Namespace: "data", Name: "lake"}, deadURL, engineToken)
 	require.NoError(t, err)
 	post := func(token string) int {
 		resp, perr := http.Post("http://"+url, "application/octet-stream", bytes.NewReader(makeHandshake(token)))

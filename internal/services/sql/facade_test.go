@@ -126,9 +126,8 @@ func TestFacadeEngineFailures(t *testing.T) {
 	require.NotContains(t, logs.String(), pw)
 	require.Contains(t, logs.String(), "sql engine refused funcd")
 
-	closed := httptest.NewServer(http.NotFoundHandler())
-	addr := strings.TrimPrefix(closed.URL, "http://")
-	closed.Close()
+	closedURL := "http://127.0.0.1:1" // nothing listens there: a closed server's port could be bound again
+	addr := strings.TrimPrefix(closedURL, "http://")
 	var refusedLogs bytes.Buffer
 	refused := query(facade(t, &recordingPDP{}, addr, &refusedLogs, 0))
 	require.Equal(t, fault.Unavailable, fault.KindOf(refused), "a refused connection")

@@ -262,8 +262,7 @@ func TestIssue378_ProxyErrorsAreProblemJSONViaSlog(t *testing.T) {
 	granted, err := DeriveCatalogToken(master, "data", "analytics")
 	require.NoError(t, err)
 
-	stopped := httptest.NewServer(http.NotFoundHandler())
-	stopped.Close()
+	stoppedURL := "http://127.0.0.1:1" // nothing listens there: a closed server's port could be bound again
 	crashing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if conn, _, herr := w.(http.Hijacker).Hijack(); herr == nil {
 			_ = conn.Close()
@@ -282,7 +281,7 @@ func TestIssue378_ProxyErrorsAreProblemJSONViaSlog(t *testing.T) {
 		{
 			name:     "an unreachable engine",
 			pdp:      pdp,
-			upstream: stopped.URL,
+			upstream: stoppedURL,
 			body:     func() io.Reader { return bytes.NewReader(makeHandshake(granted)) },
 			status:   http.StatusServiceUnavailable,
 			problem:  "urn:funcd:problem:unavailable",
@@ -353,11 +352,10 @@ func TestIssue830_CatalogProxyLogsThroughItsLogger(t *testing.T) {
 	master := []byte("proxy-test-node-master")
 	granted, err := DeriveCatalogToken(master, "data", "analytics")
 	require.NoError(t, err)
-	stopped := httptest.NewServer(http.NotFoundHandler())
-	stopped.Close()
+	stoppedURL := "http://127.0.0.1:1" // nothing listens there: a closed server's port could be bound again
 
 	target := auth.EntityRef{Type: v1.KindCatalogService, Namespace: "data", Name: "lake"}
-	h := NewCatalogProxy(NewCatalogKeys(master, st), buildPDP(t, st), EngineTarget{Catalog: target, Upstream: stopped.URL, EngineToken: engineToken},
+	h := NewCatalogProxy(NewCatalogKeys(master, st), buildPDP(t, st), EngineTarget{Catalog: target, Upstream: stoppedURL, EngineToken: engineToken},
 		slog.New(slog.NewTextHandler(&logs, nil)))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/quack", bytes.NewReader(makeHandshake(granted))))

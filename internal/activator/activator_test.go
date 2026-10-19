@@ -869,8 +869,7 @@ func TestIssue417_EdgeHeadersSurviveUpstream1xx(t *testing.T) {
 // to the client.
 func TestWorkerFailureProblemHidesWorkerAddress(t *testing.T) {
 	t.Parallel()
-	backend := httptest.NewServer(http.NotFoundHandler())
-	backend.Close()
+	backendURL := "http://127.0.0.1:1" // nothing listens there: a closed server's port could be bound again
 
 	for _, tc := range []struct {
 		name     string
@@ -878,7 +877,7 @@ func TestWorkerFailureProblemHidesWorkerAddress(t *testing.T) {
 		hidden   string
 		status   int
 	}{
-		{name: "an unreachable worker", upstream: backend.URL, hidden: strings.TrimPrefix(backend.URL, "http://"), status: http.StatusServiceUnavailable},
+		{name: "an unreachable worker", upstream: backendURL, hidden: strings.TrimPrefix(backendURL, "http://"), status: http.StatusServiceUnavailable},
 		{name: "a malformed worker upstream", upstream: "10.63.0.7:8080", hidden: "10.63.0.7", status: http.StatusInternalServerError},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

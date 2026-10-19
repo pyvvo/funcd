@@ -237,8 +237,7 @@ func TestIssue440_UpstreamErrorsLogThroughSlog(t *testing.T) {
 	log.SetOutput(&stdlog)
 	t.Cleanup(func() { log.SetOutput(prevOut) })
 
-	stopped := httptest.NewServer(http.NotFoundHandler())
-	stopped.Close()
+	stoppedURL := "http://127.0.0.1:1" // nothing listens there: a closed server's port could be bound again
 	truncating := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Length", "100")
 		_, _ = io.WriteString(w, "partial")
@@ -253,7 +252,7 @@ func TestIssue440_UpstreamErrorsLogThroughSlog(t *testing.T) {
 		logged   string
 		warns    int
 	}{
-		{name: "an unreachable upstream", upstream: stopped.URL, logged: "connection refused", warns: 1},
+		{name: "an unreachable upstream", upstream: stoppedURL, logged: "connection refused", warns: 1},
 		{name: "an upstream that fails mid-body", upstream: truncating.URL, logged: "read error during body copy", warns: 2},
 	}
 	for _, tc := range cases {
@@ -325,16 +324,15 @@ func TestIssue564_DataPlaneUpstreamSurvivesDefaultTransportCloseIdle(t *testing.
 // and the upstream URL name an in-daemon listener, so they go to the log only, never to the client.
 func TestUpstreamFailureProblemHidesUpstreamAddress(t *testing.T) {
 	t.Parallel()
-	stopped := httptest.NewServer(http.NotFoundHandler())
-	stopped.Close()
-	stoppedHost := strings.TrimPrefix(stopped.URL, "http://")
+	stoppedURL := "http://127.0.0.1:1" // nothing listens there: a closed server's port could be bound again
+	stoppedHost := strings.TrimPrefix(stoppedURL, "http://")
 
 	for _, tc := range []struct {
 		name     string
 		upstream string
 		hidden   string
 	}{
-		{name: "an unreachable upstream", upstream: stopped.URL, hidden: stoppedHost},
+		{name: "an unreachable upstream", upstream: stoppedURL, hidden: stoppedHost},
 		{name: "a malformed upstream", upstream: "10.63.0.7:8080", hidden: "10.63.0.7"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

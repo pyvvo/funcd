@@ -114,9 +114,8 @@ func TestBackupsEngineNotReady(t *testing.T) {
 	_, err = b.HasTables(ctx, "default", "todo-db")
 	require.ErrorIs(t, err, workload.ErrEngineNotReady)
 
-	closed := httptest.NewServer(http.NotFoundHandler())
-	addr := strings.TrimPrefix(closed.URL, "http://")
-	closed.Close()
+	closedURL := "http://127.0.0.1:1" // nothing listens there: a closed server's port could be bound again
+	addr := strings.TrimPrefix(closedURL, "http://")
 	_, err = backups(addr).Source(ctx, "default", "todo-db")
 	require.Equal(t, fault.Unavailable, fault.KindOf(err))
 	require.NotContains(t, err.Error(), addr, "the engine's address never appears in an error")
