@@ -26,6 +26,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/gc"
+	"github.com/pyvvo/funcd/internal/ownedstore"
 	"github.com/pyvvo/funcd/internal/platform/clock"
 	"github.com/pyvvo/funcd/internal/revhold"
 	"github.com/pyvvo/funcd/internal/store"
@@ -603,16 +604,10 @@ func controllerRef(a *v1.App) v1.OwnerReference {
 // ownerRefs re-derives a part's references from its deletion and the App's current UID (Decision 7): a store carries
 // the marker, and the controller reference only on deletion: delete; any other part carries the controller reference.
 func ownerRefs(a *v1.App, kind v1.Kind, deletion v1.DeletionPolicy) []v1.OwnerReference {
-	c := controllerRef(a)
 	if !isStore(kind) {
-		return []v1.OwnerReference{c}
+		return []v1.OwnerReference{controllerRef(a)}
 	}
-	m := c
-	m.Controller, m.BlockOwnerDeletion = false, false
-	if deletion == v1.DeletionDelete {
-		return []v1.OwnerReference{m, c}
-	}
-	return []v1.OwnerReference{m}
+	return ownedstore.Refs(a, deletion)
 }
 
 func isStore(kind v1.Kind) bool {
@@ -621,11 +616,7 @@ func isStore(kind v1.Kind) bool {
 
 // marked reports whether refs hold the marker of this App incarnation (kind, name and UID): a marker never moves to
 // another UID (ADR-0178 Decision 4).
-func marked(refs []v1.OwnerReference, a *v1.App) bool {
-	return slices.ContainsFunc(refs, func(r v1.OwnerReference) bool {
-		return !r.Controller && r.Kind == v1.KindApp && r.Name == a.Name && r.UID == a.UID
-	})
-}
+func marked(refs []v1.OwnerReference, a *v1.App) bool { return ownedstore.Marked(refs, a) }
 
 // owned reports whether the App may write obj (Decision 4): a store needs this incarnation's marker; another part a
 // controller reference naming the App's kind and name, any UID, so a re-created App takes back its parts.
