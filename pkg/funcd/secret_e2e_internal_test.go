@@ -168,6 +168,7 @@ func TestScenarioProviderEnvUnchanged(t *testing.T) {
 	r.bucket(t, "lakehouse", "raw", "lake")
 	cs := lakeCatalogService("default")
 	cs.Spec.Bindings.Secret = []v1.ObjectName{"quack"}
+	cs.Spec.SecretDeclarations = []v1.SecretDeclaration{{Name: "quack", Keys: []string{"QUACK_TOKEN"}}}
 	r.apply(t, cs)
 	require.Eventually(t, func() bool { return r.engine.lastEnv()["QUACK_TOKEN"] == "qt" }, 15*time.Second, 50*time.Millisecond,
 		"the engine's env carries QUACK_TOKEN")
