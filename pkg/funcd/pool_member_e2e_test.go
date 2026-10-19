@@ -415,6 +415,7 @@ func TestScenarioWorkflowStepsSplitBySecrets(t *testing.T) {
 		wf := obj.(*v1.Workflow)
 		wf.Name = "wf"
 		wf.Spec.Pooling.MinReplicas = 1
+		wf.Spec.SecretDeclarations = []v1.SecretDeclaration{{Name: "db", Keys: []string{"DB_PASS"}}}
 		wf.Spec.Steps = []v1.WorkflowStep{
 			{Name: "s1", Function: &v1.FunctionStep{Image: ref, Bindings: v1.StepBindings{Secret: []v1.ObjectName{"db"}}}},
 			{Name: "s2", Function: &v1.FunctionStep{Image: ref}},

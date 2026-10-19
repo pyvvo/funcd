@@ -30,6 +30,13 @@ type WorkflowSpec struct {
 	// table and prefix owners name steps, materialized to the step Functions; by ref it binds an existing one.
 	KVStores []KVStoreEntry `json:"kv,omitempty"`
 	Buckets  []BucketEntry  `json:"buckets,omitempty"`
+	// SQLDatabases, CatalogServices, ConfigMaps and SecretDeclarations are the rest of what the Workflow's steps bind
+	// (ADR-0250): a database's or a prefix's owner names a step, or a catalog the root declares; a defined ConfigMap
+	// or catalog goes with the Workflow; a declared Secret holds its keys before any step is materialized.
+	SQLDatabases       []SQLDatabaseEntry  `json:"sql,omitempty"`
+	CatalogServices    []CatalogEntry      `json:"catalogs,omitempty"`
+	ConfigMaps         []ConfigMapEntry    `json:"configMaps,omitempty"`
+	SecretDeclarations []SecretDeclaration `json:"secrets,omitempty"`
 	// Contract is the optional declared I/O contract (ADR-0090 shape); nil ⇒ the
 	// effective contract is derived (F65). Every optional property must carry a
 	// default (the total-defaults rule).
@@ -478,13 +485,38 @@ func (w *Workflow) validateOnFailure(op string, names map[ObjectName]bool) error
 	return nil
 }
 
-// validateOwnedStores checks the root entries as an App checks its own (ADR-0248 Decision 1), and that each table or
-// prefix owner of a store declared by name names a step.
+// validateOwnedStores checks the root entries as an App checks its own (ADR-0248 Decision 1), that each table owner of
+// a store declared by name names a step, and that each prefix or database owner names a step or a catalog the root
+// declares, which no step may be named like (ADR-0250 Decision 1).
 func (w *Workflow) validateOwnedStores(op string, names map[ObjectName]bool) error {
-	if err := (rootSections{KV: w.Spec.KVStores, Buckets: w.Spec.Buckets}).validate(op, w.ObjectMeta); err != nil {
+	s := &w.Spec
+	if err := validateNestedCatalogs(op, "spec.catalogs", "a Workflow", s.CatalogServices); err != nil {
 		return err
 	}
-	for i := range w.Spec.KVStores {
+	roots := rootSections{KV: s.KVStores, Buckets: s.Buckets, SQL: s.SQLDatabases, Catalogs: s.CatalogServices,
+		ConfigMaps: s.ConfigMaps, Secrets: s.SecretDeclarations}
+	if err := roots.validate(op, w.ObjectMeta); err != nil {
+		return err
+	}
+	owners := make(map[ObjectName]bool, len(names))
+	for n := range names {
+		owners[n] = true
+	}
+	for i, c := range s.CatalogServices {
+		if c.Name == "" {
+			continue
+		}
+		if names[c.Name] {
+			return fault.Invalidf(op, "spec.catalogs[%d].name %q is also a step's name: a store owner would name both", i, c.Name)
+		}
+		owners[c.Name] = true
+	}
+	for i := range s.SQLDatabases {
+		if o := s.SQLDatabases[i].Owner; s.SQLDatabases[i].Name != "" && o != "" && !owners[o] {
+			return fault.Invalidf(op, "spec.sql[%d].owner %q is not a step or a declared catalog", i, o)
+		}
+	}
+	for i := range s.KVStores {
 		for j, t := range w.Spec.KVStores[i].Tables {
 			if t.Owner != "" && !names[t.Owner] {
 				return fault.Invalidf(op, "spec.kv[%d].tables[%d].owner %q is not a step", i, j, t.Owner)
@@ -493,8 +525,8 @@ func (w *Workflow) validateOwnedStores(op string, names map[ObjectName]bool) err
 	}
 	for i := range w.Spec.Buckets {
 		for j, p := range w.Spec.Buckets[i].Prefixes {
-			if p.Owner != "" && !names[p.Owner] {
-				return fault.Invalidf(op, "spec.buckets[%d].prefixes[%d].owner %q is not a step", i, j, p.Owner)
+			if p.Owner != "" && !owners[p.Owner] {
+				return fault.Invalidf(op, "spec.buckets[%d].prefixes[%d].owner %q is not a step or a declared catalog", i, j, p.Owner)
 			}
 		}
 	}

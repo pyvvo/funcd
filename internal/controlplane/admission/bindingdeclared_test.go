@@ -93,8 +93,8 @@ func TestBindingDeclaredFunction(t *testing.T) {
 	require.Error(t, admit(part, nil), "the same Function on its own does not")
 }
 
-// ADR-0248 Decision 2: an image step binds only KV stores and buckets its Workflow declares; a ref step and the
-// first exception's bindings (sql, catalog, config, secret) are not checked.
+// ADR-0248 Decision 2 and ADR-0250 Decision 2: an image step binds only what its Workflow declares, every kind of
+// binding; a ref step is not checked.
 func TestBindingDeclaredWorkflow(t *testing.T) {
 	t.Parallel()
 	a := admission.NewBindingDeclaredAdmission(nil)
@@ -103,14 +103,19 @@ func TestBindingDeclaredWorkflow(t *testing.T) {
 		w.Name, w.Namespace, w.ResourceGroup = "w", "default", "rg1"
 		w.Spec.KVStores = []v1.KVStoreEntry{{Name: "own"}, {Ref: "shared"}}
 		w.Spec.Buckets = []v1.BucketEntry{{Name: "files"}}
+		w.Spec.SQLDatabases = []v1.SQLDatabaseEntry{{Ref: "notes"}}
+		w.Spec.CatalogServices = []v1.CatalogEntry{{Ref: "lake"}}
+		w.Spec.ConfigMaps = []v1.ConfigMapEntry{{Name: "settings"}}
+		w.Spec.SecretDeclarations = []v1.SecretDeclaration{{Name: "api-keys", Keys: []string{"K"}}}
 		w.Spec.Steps = []v1.WorkflowStep{
 			{Name: "r", Function: &v1.FunctionStep{Ref: "f", Bindings: v1.StepBindings{KV: []v1.FunctionKV{{Alias: "e", Store: "elsewhere", Table: "t"}}}}},
 			{Name: "s", Function: &v1.FunctionStep{Image: "oci:s", Bindings: v1.StepBindings{
-				KV:     []v1.FunctionKV{{Alias: "o", Store: "own", Table: "t"}, {Alias: "sh", Store: "shared", Table: "t"}},
-				Blob:   []v1.FunctionBlob{{Alias: "f", Bucket: "files", Prefix: "p"}},
-				SQL:    []v1.FunctionSQL{{Alias: "db", Database: "notes"}},
-				Config: []v1.ObjectName{"settings"},
-				Secret: []v1.ObjectName{"api-keys"},
+				KV:      []v1.FunctionKV{{Alias: "o", Store: "own", Table: "t"}, {Alias: "sh", Store: "shared", Table: "t"}},
+				Blob:    []v1.FunctionBlob{{Alias: "f", Bucket: "files", Prefix: "p"}},
+				SQL:     []v1.FunctionSQL{{Alias: "db", Database: "notes"}},
+				Catalog: []v1.FunctionCatalog{{Alias: "lake", Catalog: "lake"}},
+				Config:  []v1.ObjectName{"settings"},
+				Secret:  []v1.ObjectName{"api-keys"},
 			}}},
 		}
 		if mutate != nil {
@@ -128,6 +133,17 @@ func TestBindingDeclaredWorkflow(t *testing.T) {
 		`admission.binding-declared: spec.steps[1].function.bindings.kv[1]: KVStore "shared" is not declared in spec.kv`)
 	require.EqualError(t, admit(wf(func(s *v1.WorkflowSpec) { s.Buckets = nil })),
 		`admission.binding-declared: spec.steps[1].function.bindings.blob[0]: Bucket "files" is not declared in spec.buckets`)
+	for name, tc := range map[string]struct {
+		mutate func(*v1.WorkflowSpec)
+		want   string
+	}{
+		"sql":     {func(s *v1.WorkflowSpec) { s.SQLDatabases = nil }, `spec.steps[1].function.bindings.sql[0]: SQLDatabase "notes" is not declared in spec.sql`},
+		"catalog": {func(s *v1.WorkflowSpec) { s.CatalogServices = nil }, `spec.steps[1].function.bindings.catalog[0]: CatalogService "lake" is not declared in spec.catalogs`},
+		"config":  {func(s *v1.WorkflowSpec) { s.ConfigMaps = nil }, `spec.steps[1].function.bindings.config[0]: ConfigMap "settings" is not declared in spec.configMaps`},
+		"secret":  {func(s *v1.WorkflowSpec) { s.SecretDeclarations = nil }, `spec.steps[1].function.bindings.secret[0]: Secret "api-keys" is not declared in spec.secrets`},
+	} {
+		require.EqualError(t, admit(wf(tc.mutate)), "admission.binding-declared: "+tc.want, name)
+	}
 }
 
 // ADR-0248 Decisions 4 and 5: function-store-owner writes the Function in as the omitted owner of what it defines, and
@@ -182,6 +198,7 @@ func TestBindingDeclaredReadsTheController(t *testing.T) {
 	wf := &v1.Workflow{TypeMeta: v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow}}
 	wf.Name, wf.Namespace, wf.UID = "plan", "default", "wf-uid"
 	wf.Spec.KVStores = []v1.KVStoreEntry{{Name: "plan-kv"}}
+	wf.Spec.SQLDatabases = []v1.SQLDatabaseEntry{{Ref: "notes"}}
 	wf.OwnerReferences = []v1.OwnerReference{{ObjectRef: v1.ObjectRef{Kind: v1.KindApp, Name: "todo"}, UID: "app-uid", Controller: true}}
 	a := admission.NewBindingDeclaredAdmission(listed{app, wf})
 	controlled := func(kind v1.Kind, name v1.ObjectName, uid v1.UID, b v1.FunctionBindings) *v1.Function {
@@ -202,6 +219,8 @@ func TestBindingDeclaredReadsTheController(t *testing.T) {
 	require.NoError(t, admit(controlled(v1.KindWorkflow, "plan", "wf-uid", step)), "a step binds its Workflow's and its App's stores")
 	require.EqualError(t, admit(controlled(v1.KindWorkflow, "plan", "wf-uid", v1.FunctionBindings{KV: kv("ghost")})),
 		`admission.binding-declared: spec.bindings.kv[0]: KVStore "ghost" is not declared in its Workflow's spec.kv`)
+	require.EqualError(t, admit(controlled(v1.KindWorkflow, "plan", "wf-uid", v1.FunctionBindings{SQL: []v1.FunctionSQL{{Alias: "db", Database: "ghost"}}})),
+		`admission.binding-declared: spec.bindings.sql[0]: SQLDatabase "ghost" is not declared in its Workflow's spec.sql`)
 }
 
 // ADR-0251 Decisions 1 and 4: catalog-store-owner, function-store-owner's twin, writes the CatalogService into an

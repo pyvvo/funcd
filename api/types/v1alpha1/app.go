@@ -493,11 +493,14 @@ func (a *App) validatePartRoots(op string) error {
 	}
 	for i := range a.Spec.Workflows {
 		w, path := &a.Spec.Workflows[i], fmt.Sprintf("spec.workflows[%d]", i)
-		if len(w.KVStores) > 0 {
-			return refuse(path, "kv")
-		}
-		if len(w.Buckets) > 0 {
-			return refuse(path, "buckets")
+		for _, c := range []struct {
+			field string
+			n     int
+		}{{"kv", len(w.KVStores)}, {"buckets", len(w.Buckets)}, {"sql", len(w.SQLDatabases)},
+			{"catalogs", len(w.CatalogServices)}, {"configMaps", len(w.ConfigMaps)}, {"secrets", len(w.SecretDeclarations)}} {
+			if c.n > 0 {
+				return refuse(path, c.field)
+			}
 		}
 	}
 	for i := range a.Spec.Sites {

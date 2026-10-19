@@ -108,6 +108,9 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req controller.Reque
 		if uerr := r.notReady(ctx, wf, no.reason, no.msg); uerr != nil {
 			return controller.Result{}, uerr
 		}
+		if no.poll && r.contractRequeue > 0 {
+			return controller.Result{RequeueAfter: earliest(r.contractRequeue, r.mat.supervisionPeriod)}, nil
+		}
 		return controller.Result{RequeueAfter: r.mat.supervisionPeriod}, nil
 	}
 	var res controller.Result
@@ -218,8 +221,13 @@ func NewMaterializer(s store.Store, r RuntimeResolver, log *slog.Logger, supervi
 }
 
 // notOwnedError refuses a materialization whose child is controlled by another owner, or a step Function a user
-// created (ADR-0170 Decision 4): Ready=False with reason, no write, requeued after the supervision period.
-type notOwnedError struct{ reason, msg string }
+// created (ADR-0170 Decision 4): Ready=False with reason, no write, requeued after the supervision period. poll marks
+// a wait for a declared Secret (ADR-0250 Decision 5), re-checked at the artifact poll, since no Secret event
+// reconciles a Workflow.
+type notOwnedError struct {
+	reason, msg string
+	poll        bool
+}
 
 func (e *notOwnedError) Error() string { return e.msg }
 
@@ -241,6 +249,11 @@ func (m *Materializer) Materialize(ctx context.Context, wf *v1.Workflow) error {
 func (m *Materializer) materialize(ctx context.Context, wf *v1.Workflow) (bool, error) {
 	kvs := kvView{s: m.store, ns: wf.Namespace, seen: map[v1.ObjectName]*v1.KVStore{}}
 	if err := m.stripBindings(ctx, wf, &kvs); err != nil {
+		return false, err
+	}
+	// 0. ADR-0250: the declared Secrets hold their keys, and the databases, catalogs and ConfigMaps defined by name are
+	// written, before any step is materialized.
+	if err := m.checkRoot(ctx, wf); err != nil {
 		return false, err
 	}
 	owner := ownerRef(wf)
@@ -304,6 +317,9 @@ func (m *Materializer) materialize(ctx context.Context, wf *v1.Workflow) (bool, 
 		if err := m.patchFunctionKV(ctx, wf, st, checked); err != nil {
 			return false, err
 		}
+	}
+	if err := m.pruneConfigMaps(ctx, wf); err != nil {
+		return false, err
 	}
 	return m.pruneFunctions(ctx, wf)
 }
@@ -512,7 +528,7 @@ func buildFunction(wf *v1.Workflow, st *v1.WorkflowStep, rt v1.RuntimeName, owne
 			Bindings: v1.FunctionBindings{
 				Blob:    st.Function.Bindings.Blob,
 				Secret:  st.Function.Bindings.Secret,
-				Config:  st.Function.Bindings.Config,
+				Config:  storedConfig(wf, st.Function.Bindings.Config),
 				Catalog: st.Function.Bindings.Catalog,
 				SQL:     st.Function.Bindings.SQL,
 			},
@@ -556,15 +572,13 @@ func buildKVStore(wf *v1.Workflow, kv *v1.KVStoreEntry) *v1.KVStore {
 }
 
 // buildBucket is the Bucket a Workflow declares by name, its prefix owners mapped from step names to the
-// materialized Function names (ADR-0248 Decision 1).
+// materialized Function names (ADR-0248 Decision 1), a declared catalog kept (ADR-0250 Decision 1).
 func buildBucket(wf *v1.Workflow, e *v1.BucketEntry) *v1.Bucket {
 	spec := e.BucketSpec
 	spec.Prefixes = make([]v1.BucketPrefix, len(e.Prefixes))
 	for i, p := range e.Prefixes {
 		spec.Prefixes[i] = p
-		if p.Owner != "" {
-			spec.Prefixes[i].Owner = materializedName(wf, p.Owner)
-		}
+		spec.Prefixes[i].Owner = ownerFor(wf, p.Owner)
 	}
 	return &v1.Bucket{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindBucket.GVK().APIVersion(), Kind: v1.KindBucket},
