@@ -103,8 +103,8 @@ func (a partsAdmission) Admit(ctx context.Context, req admission.Request) (v1.Ob
 	return req.Object, nil
 }
 
-// undeclaredSecret refuses the first name in a declared Function's or CatalogService's spec.secrets, or in a declared
-// Workflow's image step function.secrets, that spec.secrets does not declare (ADR-0213 Decision 7). A ref entry, which
+// undeclaredSecret refuses the first name in a declared Function's or CatalogService's spec.bindings.secret, or in a declared
+// Workflow's image step function.bindings.secret, that spec.secrets does not declare (ADR-0213 Decision 7). A ref entry, which
 // sets no spec field, and a ref step are exempt: the App does not define them. The rule is admission-only, so an App
 // stored before ADR-0213 still writes its status (Decision 9).
 func undeclaredSecret(app *v1.App) error {

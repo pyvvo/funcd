@@ -139,7 +139,7 @@ type Deps struct {
 
 	// Secrets resolves a function's bound Secret names → an env-var map injected into the
 	// worker (ADR-0057, F15 last mile). nil ⇒ secret injection disabled: a function declaring
-	// spec.secrets fails closed (SecretResolveFailed). Satisfied by *secrets.Resolver.
+	// spec.bindings.secret fails closed (SecretResolveFailed). Satisfied by *secrets.Resolver.
 	Secrets SecretResolver
 	// DeveloperFor returns the identity the PDP authorizes for a namespace's secret reads
 	// (ADR-0057 Decision 4). Defaulted to the namespace-scoped developer identity when Secrets
@@ -151,9 +151,9 @@ type Deps struct {
 	InvokeSockets InvokeSocketProvider
 
 	// S3Gateway, when Enabled, injects a per-function SigV4 keypair + endpoint into the worker
-	// env (ADR-0085) for a function that declares spec.blob — AWS_ACCESS_KEY_ID/
+	// env (ADR-0085) for a function that declares spec.bindings.blob — AWS_ACCESS_KEY_ID/
 	// AWS_SECRET_ACCESS_KEY (DeriveKeypair over Master), AWS_REGION, AWS_ENDPOINT_URL_S3
-	// (ListenAddr). A function without spec.blob, or a disabled gateway, gets nothing.
+	// (ListenAddr). A function without spec.bindings.blob, or a disabled gateway, gets nothing.
 	S3Gateway S3GatewayInjection
 
 	// CatalogMaster is the node master secret the per-function catalog token is derived from (ADR-0137):
@@ -169,7 +169,7 @@ type Deps struct {
 	CatalogProxies CatalogProxies
 
 	// CatalogExtensionDir, when non-empty, is injected as DUCKDB_EXTENSION_DIRECTORY into a
-	// catalog-consumer function's worker env (a function declaring spec.catalogs) so its handler's
+	// catalog-consumer function's worker env (a function declaring spec.bindings.catalog) so its handler's
 	// `LOAD quack`/`ducklake` resolves the curated DuckDB extensions from this dir. It is the dev
 	// analogue of the prod bundle's duckdb-ext (ADR-0089): `funcdctl dev` extracts the embedded
 	// catalog engine's extensions once and points consumers at them; prod leaves it empty (the
@@ -272,7 +272,7 @@ type Reconciler struct {
 	httpClient        *http.Client
 
 	// secrets (ADR-0057) resolves a function's bound Secret names → env vars; nil → injection
-	// disabled (a function declaring spec.secrets fails closed). developerFor supplies the PDP
+	// disabled (a function declaring spec.bindings.secret fails closed). developerFor supplies the PDP
 	// identity for the read (defaulted to the namespace-scoped developer when secrets are wired).
 	secrets      SecretResolver
 	developerFor func(ns v1.NamespaceName) auth.Identity
@@ -281,7 +281,7 @@ type Reconciler struct {
 	invokeSockets InvokeSocketProvider
 
 	// s3Gateway injects the per-function S3 keypair env (ADR-0085) when enabled and the function
-	// declares spec.blob. The master secret is never logged.
+	// declares spec.bindings.blob. The master secret is never logged.
 	s3Gateway S3GatewayInjection
 
 	// catalogMaster is the node master the per-function catalog token is derived from (ADR-0137);
@@ -735,7 +735,7 @@ func (r *Reconciler) bindings(ctx context.Context, fn *v1.Function) (boundEnv, e
 		return boundEnv{gate: &gateFailure{reason: reason, message: serr.Error(), readyMessage: serr.Error(), phase: v1.PhaseFailed, requeue: requeue}}, nil
 	}
 
-	// 3c-bis. data-reference gate (ADR-0121): a spec.blob/spec.kv binding naming a not-yet-applied
+	// 3c-bis. data-reference gate (ADR-0121): a spec.bindings.blob/spec.bindings.kv binding naming a not-yet-applied
 	// Bucket/prefix or KVStore/table holds the function not-Ready and requeues (accept-and-requeue) —
 	// fail-closed, since the PDP denies the bound access until the referent exists, so waiting just avoids
 	// booting a worker whose grants can't resolve. This is the existence check the removed blob/kv
@@ -748,7 +748,7 @@ func (r *Reconciler) bindings(ctx context.Context, fn *v1.Function) (boundEnv, e
 		return boundEnv{gate: &gateFailure{reason: refReason, message: refMsg, readyMessage: refMsg, phase: v1.PhasePending, requeue: r.referentPoll}}, nil
 	}
 
-	// 3d. catalog consumer-binding gate (ADR-0091, F61): resolve each spec.catalogs binding into the
+	// 3d. catalog consumer-binding gate (ADR-0091, F61): resolve each spec.bindings.catalog binding into the
 	// FUNCD_CATALOG_<ALIAS>_URL/_TOKEN env pair BEFORE provisioning any worker. A bound catalog that
 	// is not Ready yet (its endpoint is not the PEP proxy yet) requeues fail-closed —
 	// the function is held Ready=False/CatalogNotReady and re-reconciled soon, never booted with an
@@ -3040,9 +3040,9 @@ func (r *Reconciler) invokeSocket(fn *v1.Function) (string, error) {
 }
 
 // addS3Env injects the per-function S3 SigV4 keypair + endpoint (ADR-0085) when the s3gateway
-// is enabled AND the function declares spec.blob — AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY
+// is enabled AND the function declares spec.bindings.blob — AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY
 // (derived from the node master secret over the Ref), AWS_REGION, AWS_ENDPOINT_URL_S3. The
-// function never chooses its secret; it cannot derive a peer's. A function without spec.blob,
+// function never chooses its secret; it cannot derive a peer's. A function without spec.bindings.blob,
 // or a disabled gateway, gets nothing. The secret is set into env but never logged.
 func (r *Reconciler) addS3Env(env map[string]string, fn *v1.Function) {
 	if !r.s3Gateway.Enabled || r.s3Gateway.Derive == nil || len(fn.Spec.Bindings.Blob) == 0 {
@@ -3215,7 +3215,7 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 		if err := r.addInvokeSocket(env, fn); err != nil {
 			return runtime.WorkerSpec{}, err
 		}
-		r.addS3Env(env, fn)               // AWS_* S3 keypair + endpoint for a spec.blob function (ADR-0085)
+		r.addS3Env(env, fn)               // AWS_* S3 keypair + endpoint for a spec.bindings.blob function (ADR-0085)
 		r.addCatalogEnv(env, catalogEnv)  // FUNCD_CATALOG_<ALIAS>_URL/_TOKEN written DIRECTLY (ADR-0091) — never via addBindingEnv
 		r.addCatalogExtensionDir(env, fn) // DUCKDB_EXTENSION_DIRECTORY for a catalog consumer (dev; prod uses the bundle's duckdb-ext)
 		r.addBindingEnv(env, bindEnv)

@@ -305,7 +305,7 @@ func (r *Reconciler) MapRestore(_ context.Context, obj v1.Object) []controller.R
 	return out
 }
 
-// bindings counts the Functions whose spec.sql names db (ADR-0233 Decision 1).
+// bindings counts the Functions whose spec.bindings.sql names db (ADR-0233 Decision 1).
 func (r *Reconciler) bindings(ctx context.Context, db *v1.SQLDatabase) (int, error) {
 	const op = "sql.Reconcile"
 	fns, err := r.d.Store.List(ctx, v1.KindFunction.GVK(), store.ListOptions{Namespace: db.Namespace})

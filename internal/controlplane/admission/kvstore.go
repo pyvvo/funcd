@@ -79,10 +79,10 @@ type kvStoreDeletionProtection struct {
 }
 
 // NewKVStoreDeletionProtectionAdmission returns the Validating admission that protects KVStore data
-// (ADR-0073). On Delete: Conflict if any Function.spec.kv names the store OR it still holds keys. On
-// Update: Conflict if a table removed from spec.tables[] is still named by some Function.spec.kv, or if an
+// (ADR-0073). On Delete: Conflict if any Function.spec.bindings.kv names the store OR it still holds keys. On
+// Update: Conflict if a table removed from spec.tables[] is still named by some Function.spec.bindings.kv, or if an
 // added table still holds the data of its removed namesake (not yet reclaimed by the reconciler, which only
-// diffs the current spec against the live data). (Clone of link-deletion-protection, scanning spec.kv.)
+// diffs the current spec against the live data). (Clone of link-deletion-protection, scanning spec.bindings.kv.)
 func NewKVStoreDeletionProtectionAdmission(r StoreReader, p KVProber) Admission {
 	return kvStoreDeletionProtection{r: r, p: p}
 }
@@ -101,7 +101,7 @@ func (a kvStoreDeletionProtection) Admit(ctx context.Context, req Request) (v1.O
 	return a.admitDelete(ctx, req)
 }
 
-// admitDelete blocks deleting a store still bound by a Function.spec.kv or still holding keys.
+// admitDelete blocks deleting a store still bound by a Function.spec.bindings.kv or still holding keys.
 func (a kvStoreDeletionProtection) admitDelete(ctx context.Context, req Request) (v1.Object, error) {
 	const op = "admission.kvstore-deletion-protection"
 	if req.Old == nil {
@@ -138,7 +138,7 @@ func (a kvStoreDeletionProtection) admitDelete(ctx context.Context, req Request)
 	return req.Old, nil
 }
 
-// admitUpdate blocks removing a table from spec.tables[] while it is still named by some Function.spec.kv,
+// admitUpdate blocks removing a table from spec.tables[] while it is still named by some Function.spec.bindings.kv,
 // and re-adding a table whose removed namesake's data is not yet reclaimed.
 func (a kvStoreDeletionProtection) admitUpdate(ctx context.Context, req Request) (v1.Object, error) {
 	const op = "admission.kvstore-deletion-protection"

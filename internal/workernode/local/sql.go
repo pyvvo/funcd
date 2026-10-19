@@ -17,7 +17,7 @@ const (
 	MaxSQLStatements = 500
 )
 
-// DependencySQL is the dependency-report kind of a spec.sql binding, and ReasonEngineNotReady its reason while the
+// DependencySQL is the dependency-report kind of a spec.bindings.sql binding, and ReasonEngineNotReady its reason while the
 // database's engine is not Ready (ADR-0233 Decision 8).
 const (
 	DependencySQL        = "sql"

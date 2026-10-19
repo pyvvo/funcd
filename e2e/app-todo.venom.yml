@@ -18,7 +18,8 @@
 #   L10 a Python call past its spec.timeout gets 504 and DeadlineExceeded, and its container keeps serving (ADR-0226);
 #   L11 a replica whose handler blocks its event loop is restarted after the liveness timeout, and a binding the
 #       planner may no longer read makes it DependencyNotReady, which the App names (ADR-0215);
-#   L12 an App whose Workflow step binds a store the Workflow does not declare is refused at apply (ADR-0229);
+#   L12 an App whose Workflow step binds a store neither the Workflow nor the App declares is refused at apply
+#       (ADR-0248's binding-declared);
 #   L13 a rollout waits for the App it requires until that App is Ready at a matching version (ADR-0219);
 #   L14 an upload under uploads/ in Bucket todo-files fires the blob EventSource, whose Sensor runs the intake
 #       Function, which records the upload (ADR-0119).

@@ -11,7 +11,7 @@ import (
 	"github.com/pyvvo/funcd/internal/store"
 )
 
-// resolveCatalogEnv resolves each spec.catalogs binding into the FUNCD_CATALOG_<ALIAS>_URL/_TOKEN env
+// resolveCatalogEnv resolves each spec.bindings.catalog binding into the FUNCD_CATALOG_<ALIAS>_URL/_TOKEN env
 // pair for worker injection (ADR-0091 as reworked by ADR-0137). For every binding it Gets the bound
 // CatalogService in the function's namespace, reads its status.endpoint — now the node-private catalog
 // PEP proxy URL (ADR-0137), no longer the engine — and derives the per-function catalog token
@@ -82,7 +82,7 @@ func (r *Reconciler) resolveCatalogEnv(ctx context.Context, fn *v1.Function) (en
 }
 
 // catalogsReady reports whether every CatalogService fn binds exists with phase Ready (ADR-0162 Decision 5): one store
-// Get per binding, no write; true with no spec.catalogs and no read.
+// Get per binding, no write; true with no spec.bindings.catalog and no read.
 func (r *Reconciler) catalogsReady(ctx context.Context, fn *v1.Function) bool {
 	for _, bnd := range fn.Spec.Bindings.Catalog {
 		obj, err := r.store.Get(ctx, v1.KindCatalogService.GVK(), fn.Namespace, bnd.Catalog)
@@ -96,7 +96,7 @@ func (r *Reconciler) catalogsReady(ctx context.Context, fn *v1.Function) bool {
 	return true
 }
 
-// MapCatalogService maps a changed or deleted CatalogService to every Function of its namespace whose spec.catalogs
+// MapCatalogService maps a changed or deleted CatalogService to every Function of its namespace whose spec.bindings.catalog
 // names it, so a consumer's RevisionReady follows its catalog within one pass (ADR-0162 Decision 5). A List error
 // logs and maps nothing.
 func (r *Reconciler) MapCatalogService(ctx context.Context, obj v1.Object) []controller.Request {
@@ -124,7 +124,7 @@ func (r *Reconciler) MapCatalogService(ctx context.Context, obj v1.Object) []con
 
 // addCatalogEnv writes the already-resolved catalog env pairs DIRECTLY into a worker's env (ADR-0091).
 // It bypasses addBindingEnv on purpose: the keys are FUNCD_-prefixed, which the reserved-key guard
-// (secrets.MergeEnvGuarded) drops from bound values. catalogEnv is nil for a function with no spec.catalogs.
+// (secrets.MergeEnvGuarded) drops from bound values. catalogEnv is nil for a function with no spec.bindings.catalog.
 func (r *Reconciler) addCatalogEnv(env, catalogEnv map[string]string) {
 	for k, v := range catalogEnv {
 		env[k] = v
@@ -132,7 +132,7 @@ func (r *Reconciler) addCatalogEnv(env, catalogEnv map[string]string) {
 }
 
 // addCatalogExtensionDir injects DUCKDB_EXTENSION_DIRECTORY for a catalog-consumer function (one
-// declaring spec.catalogs) when a dir is configured — the dev analogue of the prod bundle's
+// declaring spec.bindings.catalog) when a dir is configured — the dev analogue of the prod bundle's
 // duckdb-ext (ADR-0089), letting the handler's `LOAD quack`/`ducklake` resolve the curated DuckDB
 // extensions locally. Empty dir, or a function with no catalog binding, gets nothing (prod path:
 // the bundle carries duckdb-ext under FUNCD_BUNDLE_DIR, so catalogExtensionDir stays empty there).

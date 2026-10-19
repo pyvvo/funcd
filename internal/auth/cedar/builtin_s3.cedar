@@ -1,10 +1,10 @@
 // Always-on binding-as-grant rules the driver ships for the S3 frontend (ADR-0080) — NOT user
-// Policies. Mirrors builtin_kv_read.cedar + builtin_kv.cedar token-for-token: spec.blob is the read
+// Policies. Mirrors builtin_kv_read.cedar + builtin_kv.cedar token-for-token: spec.bindings.blob is the read
 // grant, the Bucket prefix's owner is the single writer.
 //
-// read: a declared spec.blob binding grants s3::read by default — a function may read a (bucket,
+// read: a declared spec.bindings.blob binding grants s3::read by default — a function may read a (bucket,
 // prefix) it BOUND (materialized as the principal's `blobBindings` Set of BlobPrefix entity-refs).
-// The `principal has blobBindings` guard makes a function with no spec.blob inert here; reads on
+// The `principal has blobBindings` guard makes a function with no spec.bindings.blob inert here; reads on
 // prefixes NOT in `blobBindings` have no permitting built-in, so they stay default-deny. Operator
 // Policy `forbid`s revoke a binding's read; the binding grants READ only, never write.
 @id("s3-read-binding")

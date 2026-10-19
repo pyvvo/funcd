@@ -2,7 +2,7 @@
 // <ns>/<store>/<table>/<key> prefixed, results prefix-stripped) over the kvstore.KV port, plus the KV
 // services.TypeHandler the Service dispatcher routes type:kv to, and the KindKVStore reconciler.
 //
-// ADR-0073 makes KV bindings live on the consumer (Function.spec.kv); ADR-0074 makes authorization
+// ADR-0073 makes KV bindings live on the consumer (Function.spec.bindings.kv); ADR-0074 makes authorization
 // the PDP's job: the facade resolves a caller's (function, alias) to a (store, table) — that is
 // NAMING — then asks the PDP (auth.Authorizer) a per-object question: kv::read (get/list) or
 // kv::write (put/del) on the KVTable. Reads are DEFAULT-DENY (need a permitting Policy); writes are

@@ -229,7 +229,7 @@ s3:
     - artifact: docs
       ref: docs
       site: true
-  # ADR-0121: no two-phase — apply in any order. The Function WITH spec.blob is applied BEFORE its Bucket
+  # ADR-0121: no two-phase — apply in any order. The Function WITH spec.bindings.blob is applied BEFORE its Bucket
   # (admitted, held Ready=False/BucketNotFound), then the Bucket (owner: s3-roundtrip) resolves it and the
   # function converges Ready — a live apply-any-order proof of the Bucket↔Function-owner cycle on real
   # containerd. Then the ADR-0119 reactive trio (the ingest Workflow, the blob EventSource, the Sensor).

@@ -26,7 +26,7 @@ type Descriptor struct {
 	Name     string   // stable id, e.g. "kv", "blob", "ingress", "s3", "log-ingest"
 	Kind     Kind     // built-in | add-on
 	Port     string   // the contract: the port/interface name (e.g. "kvstore.KV"); "" for an infra provider with no function-facing port
-	Bindings []string // how a function consumes it (e.g. ["spec.kv"]); nil for infra (ingress/egress)
+	Bindings []string // how a function consumes it (e.g. ["spec.bindings.kv"]); nil for infra (ingress/egress)
 	Summary  string   // one-line human description
 }
 

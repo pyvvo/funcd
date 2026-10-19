@@ -6,7 +6,7 @@ import (
 
 // Bucket is a namespaced blob domain (ADR-0080): the S3 *bucket*, mirroring KVStore — a named domain
 // with a set of sub-domains (prefixes, the medallion layers) each with a single-writer owner, and an
-// optional per-object resource policy. A function reaches a prefix only through a Function.spec.blob
+// optional per-object resource policy. A function reaches a prefix only through a Function.spec.bindings.blob
 // binding (default-deny); the prefix's owner is the single writer. Its status reports the blob storage's health
 // (ADR-0215 Decision 7). Deletion-protected by referencing bindings and by non-empty data.
 type Bucket struct {

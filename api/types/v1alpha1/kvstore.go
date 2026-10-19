@@ -21,7 +21,7 @@ const (
 
 // KVStore is a namespaced, owned KV resource (ADR-0072, reshaped by ADR-0073): a named domain with
 // per-op caps, a set of sub-domains (tables) each with a single-writer owner, and a Ready lifecycle.
-// A function reaches a table only through a Function.spec.kv binding (default-deny); the table's owner
+// A function reaches a table only through a Function.spec.bindings.kv binding (default-deny); the table's owner
 // is the single writer. The store is one Badger prefix <ns>/<store>/; a table is <ns>/<store>/<table>/.
 // Deletion-protected by referencing bindings and by non-empty data.
 type KVStore struct {
@@ -56,14 +56,14 @@ type KVTable struct {
 }
 
 // KVStoreStatus is the observed state of a KVStore (ADR-0072/0073): the reconciler sets Ready and the
-// count of tables + the count of Function.spec.kv bindings referencing it. It embeds the shared Status
+// count of tables + the count of Function.spec.bindings.kv bindings referencing it. It embeds the shared Status
 // (Phase + Conditions) so the controller's generic write-back seam (StatusObject.GetStatus) points at
 // the live status.
 type KVStoreStatus struct {
 	Status `json:",inline"`
 	// Tables is the number of sub-domains declared on the store (computed by the reconciler).
 	Tables int `json:"tables,omitempty"`
-	// Bindings is the number of Function.spec.kv entries referencing this store (computed by the reconciler).
+	// Bindings is the number of Function.spec.bindings.kv entries referencing this store (computed by the reconciler).
 	Bindings int `json:"bindings,omitempty"`
 }
 

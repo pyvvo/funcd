@@ -21,8 +21,8 @@ type Binding struct {
 }
 
 // BindingResolver maps a caller function + alias to its (store, table) + owner + caps (ADR-0073). It
-// reads the caller's Function.spec.kv (the binding IS the capability) and the target KVStore.
-// fault.Forbidden when the caller has no spec.kv entry for the alias (default-deny).
+// reads the caller's Function.spec.bindings.kv (the binding IS the capability) and the target KVStore.
+// fault.Forbidden when the caller has no spec.bindings.kv entry for the alias (default-deny).
 type BindingResolver interface {
 	Resolve(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias string) (Binding, error)
 }
@@ -38,7 +38,7 @@ type MetaReader interface {
 const defaultResolverTTL = 5 * time.Second
 
 // metaResolver is the default BindingResolver over the metastore, with a small TTL cache keyed by
-// (ns, function, alias). Resolution is default-deny: the caller's spec.kv entry for the alias must
+// (ns, function, alias). Resolution is default-deny: the caller's spec.bindings.kv entry for the alias must
 // exist; with none, Forbidden.
 type metaResolver struct {
 	r     MetaReader
@@ -53,7 +53,7 @@ func NewResolver(r MetaReader) (BindingResolver, error) {
 	return &metaResolver{r: r, cache: services.NewBindingCache[Binding](defaultResolverTTL)}, nil
 }
 
-// Resolve maps (ns, fn, alias) → Binding, default-deny. It reads the caller Function's spec.kv for the
+// Resolve maps (ns, fn, alias) → Binding, default-deny. It reads the caller Function's spec.bindings.kv for the
 // alias → (store, table), then reads the target store for the table's owner + caps. A hit is cached for
 // ttl; a miss (Forbidden) is never cached.
 func (m *metaResolver) Resolve(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias string) (Binding, error) {
@@ -62,7 +62,7 @@ func (m *metaResolver) Resolve(ctx context.Context, ns v1.NamespaceName, fn v1.O
 		return b, nil
 	}
 
-	// The caller function's spec.kv is the capability list (default-deny on a miss).
+	// The caller function's spec.bindings.kv is the capability list (default-deny on a miss).
 	fobj, err := m.r.Get(ctx, v1.KindFunction.GVK(), ns, fn)
 	if err != nil {
 		if fault.KindOf(err) == fault.NotFound {

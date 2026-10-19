@@ -1,9 +1,9 @@
 // Package catalog is the CatalogService reconciler (ADR-0086 as reworked by ADR-0087, F48/F57):
 // the ADR-0019 controller half of the DuckLake/DuckDB/Quack add-on provider. Its engine is NO
 // longer a backing Function — it is deployed by the add-on-provider runtime (internal/provider,
-// ADR-0087): the reconciler resolves the service's bindings (spec.blob → the ADR-0085 per-fn S3
+// ADR-0087): the reconciler resolves the service's bindings (spec.bindings.blob → the ADR-0085 per-fn S3
 // keypair derived over the provider identity; spec.catalog → FUNCD_DUCKLAKE_CATALOG;
-// spec.secrets/spec.config → the Quack token + engine config) into a provider.ProviderSpec and
+// spec.bindings.secret/spec.bindings.config → the Quack token + engine config) into a provider.ProviderSpec and
 // calls provider.Runtime.Converge. It reflects the provider's readiness/address into status and
 // tears the engine down on delete. cgo never touches the daemon — DuckDB runs out-of-process in
 // the curated image.
@@ -47,7 +47,7 @@ const condIngressReady = v1.ConditionType("IngressReady")
 // SecretResolver resolves a service's bound Secret names → an env-var map for engine injection,
 // PDP-authorized for id (ADR-0022/0057). The reconciler depends on this local seam (ADR-0002
 // import discipline) — satisfied by *secrets.Resolver, wired in pkg/funcd. A nil resolver disables
-// secret injection: a CatalogService that declares spec.secrets then fails closed (not Ready).
+// secret injection: a CatalogService that declares spec.bindings.secret then fails closed (not Ready).
 type SecretResolver interface {
 	ResolveEnv(ctx context.Context, id auth.Identity, ns v1.NamespaceName, names []string) (map[string]string, error)
 }
@@ -64,8 +64,8 @@ type ReconcilerDeps struct {
 	// over the CatalogService identity (KindCatalogService, ns, cs.Name). nil ⇒ no S3 keypair injected.
 	// Same shape the Function reconciler's S3GatewayInjection.Derive carries.
 	Derive func(kind v1.Kind, ns, name string) (access, secret string)
-	// Secrets resolves spec.secrets → env (the Quack token, ADR-0057). nil ⇒ a service declaring
-	// spec.secrets fails closed.
+	// Secrets resolves spec.bindings.secret → env (the Quack token, ADR-0057). nil ⇒ a service declaring
+	// spec.bindings.secret fails closed.
 	Secrets SecretResolver
 	// DeveloperFor returns the PDP identity the secret reads are authorized as (ADR-0057). Defaulted
 	// to the namespace-scoped developer identity when Secrets is set and this is nil.

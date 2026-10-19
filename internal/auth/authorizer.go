@@ -68,7 +68,7 @@ const (
 	// principal = the caller Function, resource = the target Function.
 	ActionLinkInvoke Action = "link::invoke"
 	// ActionS3Read is the Cedar action for an S3 get/list/head over the blob substrate (ADR-0080):
-	// a declared spec.blob binding grants it (binding-as-read-grant). Resource = a BlobPrefix.
+	// a declared spec.bindings.blob binding grants it (binding-as-read-grant). Resource = a BlobPrefix.
 	ActionS3Read Action = "s3::read"
 	// ActionS3Write is the Cedar action for an S3 put/delete over the blob substrate (ADR-0080):
 	// single-writer — permitted only when the principal IS the prefix owner. Resource = a BlobPrefix.
@@ -78,12 +78,12 @@ const (
 	// a grant comes only from a compiled EgressPolicy; no built-in permit.
 	ActionEgressConnect Action = "egress::connect"
 	// ActionCatalogQuery is the Cedar action for a catalog SQL query over the Quack/DuckLake serving
-	// path (ADR-0137, F102): a declared spec.catalogs binding grants it (binding-as-query-grant), and a
+	// path (ADR-0137, F102): a declared spec.bindings.catalog binding grants it (binding-as-query-grant), and a
 	// Catalog-scoped RolesAssignment grants it to an external Identity. Resource = a CatalogService.
 	// Read-shaped (a Cedar permit, never a writers entry). The catalog PEP proxy is the enforcement point.
 	ActionCatalogQuery Action = "catalog::query"
 	// ActionSQLRead is the Cedar action for a SQL query, and half of an execute, on a SQLDatabase (ADR-0233): a
-	// declared spec.sql binding grants it.
+	// declared spec.bindings.sql binding grants it.
 	ActionSQLRead Action = "sql::read"
 	// ActionSQLWrite is the Cedar action for a SQL execute (ADR-0233): permitted only to the database's writers,
 	// its owner plus writer-role grants.

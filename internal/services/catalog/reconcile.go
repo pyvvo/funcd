@@ -20,14 +20,14 @@ import (
 )
 
 // quackTokenEnvKey is the engine-env key the resolved shared Quack/engine token lives under (ADR-0086,
-// resolved from spec.secrets by engineEnv). On the Ready branch the catalog PEP proxy (ADR-0137) swaps
+// resolved from spec.bindings.secret by engineEnv). On the Ready branch the catalog PEP proxy (ADR-0137) swaps
 // a per-caller token for THIS value before forwarding, so it is never handed to a caller.
 const quackTokenEnvKey = "QUACK_TOKEN"
 
 // Reconcile converges one CatalogService (ADR-0086 as reworked by ADR-0087). A present
 // CatalogService is deployed as an add-on provider: the reconciler assembles a provider.ProviderSpec
-// from its bindings (spec.blob → the ADR-0085 per-fn S3 keypair derived over the provider identity;
-// spec.catalog → FUNCD_DUCKLAKE_CATALOG; spec.secrets/spec.config → the Quack token + engine
+// from its bindings (spec.bindings.blob → the ADR-0085 per-fn S3 keypair derived over the provider identity;
+// spec.catalog → FUNCD_DUCKLAKE_CATALOG; spec.bindings.secret/spec.bindings.config → the Quack token + engine
 // config) and calls the provider-runtime's Converge — NO backing Function is materialized. It
 // reflects the provider's readiness/address into status. A deleted CatalogService (NotFound) tears
 // the engine down via provider.Teardown.
@@ -78,7 +78,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		return r.holdNotReady(ctx, cs, reason, msg, r.referentPoll)
 	}
 
-	// ADR-0121: spec.blob + spec.catalog (bucket, prefix) EXISTENCE is reconcile-time — a CatalogService
+	// ADR-0121: spec.bindings.blob + spec.catalog (bucket, prefix) EXISTENCE is reconcile-time — a CatalogService
 	// naming a not-yet-applied Bucket/prefix is admitted and held not-Ready (BucketNotFound) until it
 	// resolves, then converges (this is the check the removed catalog-blob-validity admission made). Fail-
 	// closed: the engine's S3 reach is denied until the prefix (and its owner == cs.Name) exist.
@@ -239,7 +239,7 @@ func (r *Reconciler) deleted(ctx context.Context, ns v1.NamespaceName, name v1.O
 	return nil
 }
 
-// anyFunctionBinds reports whether a stored Function of ns binds catalog name (ADR-0162 Decision 4): its spec.catalogs
+// anyFunctionBinds reports whether a stored Function of ns binds catalog name (ADR-0162 Decision 4): its spec.bindings.catalog
 // names it, or a worker of an earlier spec may still run, because its spec is unprocessed or it switches revisions.
 // It reads the store on every call, uncached.
 func anyFunctionBinds(ctx context.Context, st store.Store, ns v1.NamespaceName, name v1.ObjectName) (bool, error) {
@@ -361,8 +361,8 @@ func (r *Reconciler) syncIngressRoute(ctx context.Context, cs *v1.CatalogService
 
 // engineEnv assembles the engine's environment (ADR-0087): the ADR-0085 S3 keypair (derived
 // over the CatalogService identity, ADR-0175), AWS_REGION/AWS_ENDPOINT_URL, FUNCD_DUCKLAKE_CATALOG (the
-// catalog's s3:// key), FUNCD_QUACK_PORT, and the resolved spec.secrets (the Quack token) +
-// spec.config (DUCKDB_*) Data keys — merged with reserved-FUNCD_-key precedence. A secret/config
+// catalog's s3:// key), FUNCD_QUACK_PORT, and the resolved spec.bindings.secret (the Quack token) +
+// spec.bindings.config (DUCKDB_*) Data keys — merged with reserved-FUNCD_-key precedence. A secret/config
 // resolution failure is returned (the caller fails the service closed).
 func (r *Reconciler) engineEnv(ctx context.Context, cs *v1.CatalogService) (map[string]string, error) {
 	const op = "services.catalog.engineEnv"
@@ -371,7 +371,7 @@ func (r *Reconciler) engineEnv(ctx context.Context, cs *v1.CatalogService) (map[
 		"FUNCD_QUACK_PORT":       strconv.Itoa(enginePort),
 		"FUNCD_DUCKLAKE_CATALOG": catalogURI(cs.Spec.Catalog),
 	}
-	// The engine signs as CatalogService::"<ns>/<cs.Name>" (ADR-0175): its reads are its own spec.blob
+	// The engine signs as CatalogService::"<ns>/<cs.Name>" (ADR-0175): its reads are its own spec.bindings.blob
 	// bindings, and it writes a prefix only where the S3 PEP resolves it as that prefix's writer.
 	if r.derive != nil && len(cs.Spec.Bindings.Blob) > 0 {
 		access, secret := r.derive(v1.KindCatalogService, string(cs.Namespace), string(cs.Name))
@@ -383,7 +383,7 @@ func (r *Reconciler) engineEnv(ctx context.Context, cs *v1.CatalogService) (map[
 		env["AWS_ENDPOINT_URL"] = r.s3Endpoint
 	}
 
-	// spec.config (ConfigMaps, non-sensitive) + spec.secrets (Secrets, sensitive) → guarded engine
+	// spec.bindings.config (ConfigMaps, non-sensitive) + spec.bindings.secret (Secrets, sensitive) → guarded engine
 	// env, resolved through the shared provider helper (ADR-0092): config first, then secrets, each
 	// dropping any reserved FUNCD_ key. The provider-specific env above (S3 keypair, endpoints,
 	// FUNCD_*) is composed BEFORE and preserved — the helper's result is merged in with the same
@@ -402,7 +402,7 @@ func (r *Reconciler) engineEnv(ctx context.Context, cs *v1.CatalogService) (map[
 }
 
 // resolveBucketRefs enforces ADR-0121's reconcile-time existence for a CatalogService's data references:
-// every spec.blob (bucket, prefix) AND spec.catalog (bucket, prefix) must name a Bucket prefix that exists
+// every spec.bindings.blob (bucket, prefix) AND spec.catalog (bucket, prefix) must name a Bucket prefix that exists
 // in the namespace — the check the removed catalog-blob-validity admission made synchronously. A miss
 // returns requeue=true with a message; the caller holds the service not-Ready and re-reconciles.
 func (r *Reconciler) resolveBucketRefs(ctx context.Context, cs *v1.CatalogService) (requeue bool, message string, err error) {

@@ -6,7 +6,7 @@
 // keypair derived from a node-local master secret over its (kind, namespace, name)
 // (ADR-0175) — funcd injects it into the sandbox env; the worker never chooses its
 // secret and cannot derive a peer's. AuthZ: every backend op is a PEP on the cedar PDP (s3::read / s3::write),
-// exactly the spec.blob binding-as-grant model of slice 2.
+// exactly the spec.bindings.blob binding-as-grant model of slice 2.
 package s3gateway
 
 import (

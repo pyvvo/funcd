@@ -35,7 +35,7 @@ func NewChecker(d CheckerDeps) local.DependencyChecker { return checker{d} }
 
 type checker struct{ d CheckerDeps }
 
-// Check checks caller's spec.kv, then spec.blob, then spec.sql, then spec.links entries in order and returns the first failure. It
+// Check checks caller's spec.bindings.kv, then spec.bindings.blob, then spec.bindings.sql, then spec.bindings.links entries in order and returns the first failure. It
 // calls no worker, activator or storage engine and writes nothing. A binding reached after ctx is done is a Timeout.
 func (c checker) Check(ctx context.Context, caller local.Ref) *local.DependencyReport {
 	obj, err := c.d.Store.Get(ctx, v1.KindFunction.GVK(), caller.Namespace, caller.Function)

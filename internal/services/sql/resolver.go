@@ -9,7 +9,7 @@ import (
 	"github.com/pyvvo/funcd/internal/services"
 )
 
-// Resolver maps a caller's alias to the database its spec.sql binds (ADR-0233 Decision 4). The binding is the read
+// Resolver maps a caller's alias to the database its spec.bindings.sql binds (ADR-0233 Decision 4). The binding is the read
 // grant, so a missing alias is Forbidden.
 type Resolver interface {
 	Resolve(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias string) (v1.ObjectName, error)

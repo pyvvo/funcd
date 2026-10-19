@@ -825,7 +825,7 @@ func repoint(names []ObjectName, stored map[ObjectName]ObjectName) []ObjectName 
 	return out
 }
 
-// repointSteps returns spec with each image step's function.config repointed on copies of its steps, the config that
+// repointSteps returns spec with each image step's function.bindings.config repointed on copies of its steps, the config that
 // the Workflow copies into the step Function (ADR-0213 Decision 3).
 func repointSteps(spec WorkflowSpec, stored map[ObjectName]ObjectName) WorkflowSpec {
 	if len(stored) == 0 {

@@ -9,7 +9,7 @@ import (
 // CatalogService is a namespaced add-on-provider instance (ADR-0086, F48): a governed SQL
 // catalog + query engine (DuckLake + DuckDB + Quack) over the Parquet a tenant already stores
 // on funcd's blob. Modeled on KVStore — a status-bearing namespaced resource whose reconciler
-// materializes a backing min-replica=1 `duckdb` Function (the declared spec.blob bindings, so
+// materializes a backing min-replica=1 `duckdb` Function (the declared spec.bindings.blob bindings, so
 // ADR-0085 injects the per-fn S3 keypair). The engine is the deployed Function, exposed through
 // the EXISTING function→gateway path (ADR-0013) — there is NO Route resource. DuckDB reads/writes
 // Parquet only through the F47 S3 surface under binding-as-grant; its DuckLake catalog lives on
@@ -112,15 +112,15 @@ type CatalogServiceStatus struct {
 func (c *CatalogService) GroupVersionKind() GroupVersionKind { return KindCatalogService.GVK() }
 
 // isPrincipalObject marks *CatalogService as a cedar PrincipalObject (ADR-0116/0088): an add-on provider
-// resolved as an S3 principal (its spec.blob are its blobBindings) when no same-named Function exists.
+// resolved as an S3 principal (its spec.bindings.blob are its blobBindings) when no same-named Function exists.
 // The marker keeps the cedar.PrincipalObject interface closed (only api/types implements it).
 func (c *CatalogService) isPrincipalObject() {}
 
 // Validate performs envelope validation via the shared validateMeta helper, then the
-// CatalogServiceSpec rules JSON Schema can't express (spec.blob and spec.config take the Function binding
-// checks, FunctionSpec.validateBindings): each spec.blob entry's alias + prefix is a DNS-1123 label and the
+// CatalogServiceSpec rules JSON Schema can't express (spec.bindings.blob and spec.bindings.config take the Function binding
+// checks, FunctionSpec.validateBindings): each spec.bindings.blob entry's alias + prefix is a DNS-1123 label and the
 // alias is unique within Blob; Catalog.Prefix is a DNS-1123 label; and the catalog (bucket, prefix) is one of
-// the spec.blob bindings (so the engine gets the per-fn S3 keypair and can write its own catalog — ADR-0086).
+// the spec.bindings.blob bindings (so the engine gets the per-fn S3 keypair and can write its own catalog — ADR-0086).
 // Cross-resource validity (the bucket/prefix actually EXIST in the namespace) is the catalog-blob-validity
 // admission, NOT structural Validate.
 func (c *CatalogService) Validate() error {
@@ -128,7 +128,7 @@ func (c *CatalogService) Validate() error {
 	if err := validateMeta(c.TypeMeta, &c.ObjectMeta, KindCatalogService); err != nil {
 		return err
 	}
-	// spec.blob and spec.config have the shape of a Function's bindings and take their checks. Each runs at its own
+	// spec.bindings.blob and spec.bindings.config have the shape of a Function's bindings and take their checks. Each runs at its own
 	// place in the order, which decides the error an input that breaks several rules gets.
 	if err := (&FunctionSpec{Bindings: FunctionBindings{Blob: c.Spec.Bindings.Blob}}).validateBindings(op, "spec.bindings"); err != nil {
 		return err
@@ -136,12 +136,12 @@ func (c *CatalogService) Validate() error {
 	if !dnsLabel.MatchString(c.Spec.Catalog.Prefix) {
 		return fault.Invalidf(op, "spec.catalog.prefix %q is not a valid DNS-1123 label", c.Spec.Catalog.Prefix)
 	}
-	// The catalog (bucket, prefix) must be one of the spec.blob bindings (ADR-0086: "the bound
+	// The catalog (bucket, prefix) must be one of the spec.bindings.blob bindings (ADR-0086: "the bound
 	// (bucket, prefix) ... OWNED by this service's function"). This is load-bearing for durability:
-	// the backing Function injects the per-fn S3 keypair only when spec.blob is non-empty (ADR-0085),
+	// the backing Function injects the per-fn S3 keypair only when spec.bindings.blob is non-empty (ADR-0085),
 	// and the engine writes its own DuckLake catalog via that keypair — so the catalog prefix must be
 	// a declared, owned blob binding or the VACUUM INTO→whole-object-Put checkpoint is 403-denied.
-	// (This also implies spec.blob is non-empty whenever a Catalog is set.) It is an intra-object
+	// (This also implies spec.bindings.blob is non-empty whenever a Catalog is set.) It is an intra-object
 	// rule (no store needed); cross-resource existence is the catalog-blob-validity admission.
 	catalogBound := false
 	for _, b := range c.Spec.Bindings.Blob {
@@ -154,7 +154,7 @@ func (c *CatalogService) Validate() error {
 		return fault.Invalidf(op, "spec.catalog (%q/%q) must be one of spec.bindings.blob (the catalog prefix must be a bound, owned blob binding so the engine can write it)",
 			c.Spec.Catalog.Bucket, c.Spec.Catalog.Prefix)
 	}
-	// spec.secrets / spec.config each name a Secret / ConfigMap in this namespace whose Data is
+	// spec.bindings.secret / spec.bindings.config each name a Secret / ConfigMap in this namespace whose Data is
 	// injected into the engine env (ADR-0087, the ADR-0057 convention). Structural Validate checks
 	// only that each is a valid DNS-1123 ObjectName; cross-resource existence + read authorization
 	// is the reconciler's resolution step (PDP-authorized, ADR-0057), not Validate.

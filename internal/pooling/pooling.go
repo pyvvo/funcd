@@ -52,7 +52,7 @@ type accessDoc struct {
 	KV       []v1.FunctionKV      `json:"kv"`
 	Blob     []v1.FunctionBlob    `json:"blob"`
 	Catalogs []v1.FunctionCatalog `json:"catalogs"`
-	SQL      []v1.FunctionSQL     `json:"sql,omitempty"` // omitempty: a Function with no spec.sql keeps its key
+	SQL      []v1.FunctionSQL     `json:"sql,omitempty"` // omitempty: a Function with no spec.bindings.sql keeps its key
 	Links    []accessLink         `json:"links"`
 	Secrets  []v1.ObjectName      `json:"secrets"`
 	Config   []v1.ObjectName      `json:"config"`

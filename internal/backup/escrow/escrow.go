@@ -188,7 +188,7 @@ type Derived struct {
 }
 
 // ListChanged reads the loaded store for every credential derived from the master (Decision 5): a Function's
-// spec.blob keypair (addS3Env) and spec.catalogs token (resolveCatalogEnv), a CatalogService's spec.blob keypair
+// spec.bindings.blob keypair (addS3Env) and spec.bindings.catalog token (resolveCatalogEnv), a CatalogService's spec.bindings.blob keypair
 // (engineEnv); keypairs gateway on or off, since a copy may predate the config. nil unless plan.List.
 func ListChanged(ctx context.Context, plan MasterPlan, st store.Store) ([]Derived, error) {
 	if !plan.List {

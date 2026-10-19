@@ -10,7 +10,7 @@ import (
 )
 
 // resolveDataReferences enforces ADR-0121's RECONCILE-TIME cross-resource existence for a function's data
-// bindings: every spec.blob (bucket, prefix), spec.kv (store, table) and spec.sql database must name a resource that
+// bindings: every spec.bindings.blob (bucket, prefix), spec.bindings.kv (store, table) and spec.bindings.sql database must name a resource that
 // exists in the function's namespace. This is the existence check the removed `blob-binding-validity` /
 // `kv-binding-validity` admissions used to make synchronously at apply time — now made here so a function
 // naming a not-yet-applied Bucket/KVStore is ADMITTED and converges when the referent appears.
@@ -79,7 +79,7 @@ func (r *Reconciler) resolveDataReferences(ctx context.Context, fn *v1.Function)
 		}
 	}
 
-	// ADR-0233 Decision 1: every spec.sql binding names a SQLDatabase of the namespace.
+	// ADR-0233 Decision 1: every spec.bindings.sql binding names a SQLDatabase of the namespace.
 	for _, bnd := range fn.Spec.Bindings.SQL {
 		_, gerr := r.store.Get(ctx, v1.KindSQLDatabase.GVK(), ns, bnd.Database)
 		switch {

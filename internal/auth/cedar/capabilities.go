@@ -14,8 +14,8 @@ import (
 // The always-on built-in rules the driver ships (NOT user Policies) are authored as Cedar in the
 // `.cedar` files alongside this one and embedded — far more legible/editable than inline Go strings.
 // Each is owned by its Capability (its Builtin field); the registry concatenates them into the
-// built-in PolicySet (ADR-0116). builtin_kv.cedar: spec.kv binding-as-read-grant + generalized single-writer (ADR-0076/0136). builtin_invoke.cedar (ADR-0075): a declared
-// link grants invoke. builtin_s3.cedar (ADR-0080): spec.blob binding-as-read-grant + prefix-owner write.
+// built-in PolicySet (ADR-0116). builtin_kv.cedar: spec.bindings.kv binding-as-read-grant + generalized single-writer (ADR-0076/0136). builtin_invoke.cedar (ADR-0075): a declared
+// link grants invoke. builtin_s3.cedar (ADR-0080): spec.bindings.blob binding-as-read-grant + prefix-owner write.
 
 //go:embed builtin_kv.cedar
 var builtinKVPolicies string
@@ -82,7 +82,7 @@ func sqlDatabaseUID(ns v1.NamespaceName, name v1.ObjectName) cedartypes.EntityUI
 	return cedartypes.NewEntityUID(entityTypeSQLDatabase, cedartypes.String(string(ns)+"/"+string(name)))
 }
 
-// KVCapability is the kv::read/kv::write capability (ADR-0074/0076): spec.kv → the `kvBindings` Set of
+// KVCapability is the kv::read/kv::write capability (ADR-0074/0076): spec.bindings.kv → the `kvBindings` Set of
 // KVTable entity-refs (read binding-as-grant); the resource is the KVTable + its parent KVStore + the
 // table owner (a Function entity-REFERENCE, so `principal == resource.owner` compares entities). It owns
 // both built-ins: the write single-writer rule and the read binding-grant.
@@ -106,7 +106,7 @@ func kvCapability(writers WriterLister) Capability {
 			Bind: func(ns v1.NamespaceName, src PrincipalObject) []cedartypes.EntityUID {
 				fn, ok := src.(*v1.Function)
 				if !ok {
-					return nil // providers have no spec.kv → contribute nothing (inert)
+					return nil // providers have no spec.bindings.kv → contribute nothing (inert)
 				}
 				out := make([]cedartypes.EntityUID, 0, len(fn.Spec.Bindings.KV))
 				for _, b := range fn.Spec.Bindings.KV {
@@ -184,7 +184,7 @@ func kvResource(ctx context.Context, r MetaReader, resource auth.EntityRef, writ
 	return em, true, nil
 }
 
-// InvokeCapability is the link::invoke capability (ADR-0075): spec.links → the `links` Set of target
+// InvokeCapability is the link::invoke capability (ADR-0075): spec.bindings.links → the `links` Set of target
 // Function entities (link-as-grant); the resource is the target Function (a bare entity — the built-in
 // permit reads principal.links, not the target's attrs, so default-deny holds even if the target is
 // missing). It owns no principal-owned resource beyond the target Function.
@@ -199,7 +199,7 @@ func InvokeCapability() Capability {
 			Bind: func(ns v1.NamespaceName, src PrincipalObject) []cedartypes.EntityUID {
 				fn, ok := src.(*v1.Function)
 				if !ok {
-					return nil // providers have no spec.links → contribute nothing (inert)
+					return nil // providers have no spec.bindings.links → contribute nothing (inert)
 				}
 				out := make([]cedartypes.EntityUID, 0, len(fn.Spec.Bindings.Links))
 				for _, l := range fn.Spec.Bindings.Links {
@@ -225,10 +225,10 @@ func invokeResource(_ context.Context, _ MetaReader, resource auth.EntityRef) (c
 	return em, true, nil
 }
 
-// S3Capability is the s3::read/s3::write capability (ADR-0080): spec.blob → the `blobBindings` Set of
+// S3Capability is the s3::read/s3::write capability (ADR-0080): spec.bindings.blob → the `blobBindings` Set of
 // BlobPrefix entity-refs (read binding-as-grant); the resource is the BlobPrefix + its parent Bucket +
 // the prefix owner (a Function entity-REFERENCE). Its Bind handles BOTH a *v1.Function and a
-// *v1.CatalogService (ADR-0088 — both carry spec.blob). It admits the external S3Identity principal type.
+// *v1.CatalogService (ADR-0088 — both carry spec.bindings.blob). It admits the external S3Identity principal type.
 func S3Capability() Capability { return s3Capability(builtinS3Policies, nil) }
 
 // S3CapabilityWithWriters is S3Capability with a WriterLister so a writer-role RolesAssignment (ADR-0136)
@@ -256,7 +256,7 @@ func s3Capability(builtin string, writers WriterLister) Capability {
 				case *v1.Function:
 					blobs = o.Spec.Bindings.Blob
 				case *v1.CatalogService:
-					blobs = o.Spec.Bindings.Blob // ADR-0088: a provider's spec.blob are its blobBindings
+					blobs = o.Spec.Bindings.Blob // ADR-0088: a provider's spec.bindings.blob are its blobBindings
 				default:
 					return nil
 				}
@@ -342,7 +342,7 @@ func s3Resource(ctx context.Context, r MetaReader, resource auth.EntityRef, writ
 }
 
 // catalogServiceOwnsPrefix reports whether the prefix owner name resolves to a CatalogService writer
-// (ADR-0175 Decision 6): CatalogService owner exists, its spec.blob binds (bucket, prefix), and no Function
+// (ADR-0175 Decision 6): CatalogService owner exists, its spec.bindings.blob binds (bucket, prefix), and no Function
 // owner exists. Every lookup that errors or misses answers false; a Function lookup error other than
 // NotFound counts as "a Function may exist".
 func catalogServiceOwnsPrefix(ctx context.Context, r MetaReader, ns v1.NamespaceName, owner, bucket v1.ObjectName, prefix string) bool {
@@ -365,7 +365,7 @@ func catalogServiceOwnsPrefix(ctx context.Context, r MetaReader, ns v1.Namespace
 	return false
 }
 
-// CatalogCapability is the catalog::query capability (ADR-0137): spec.catalogs → the `catalogBindings`
+// CatalogCapability is the catalog::query capability (ADR-0137): spec.bindings.catalog → the `catalogBindings`
 // Set of CatalogService entity-refs (binding-as-query-grant); the resource is the CatalogService the
 // query targets. It is READ-SHAPED — like invoke it owns no writable resource, so there is NO
 // WriterLister and NO write action; the built-in permit reads principal.catalogBindings, not the
@@ -382,7 +382,7 @@ func CatalogCapability() Capability {
 			Bind: func(ns v1.NamespaceName, src PrincipalObject) []cedartypes.EntityUID {
 				fn, ok := src.(*v1.Function)
 				if !ok {
-					return nil // providers have no spec.catalogs → contribute nothing (inert)
+					return nil // providers have no spec.bindings.catalog → contribute nothing (inert)
 				}
 				out := make([]cedartypes.EntityUID, 0, len(fn.Spec.Bindings.Catalog))
 				for _, b := range fn.Spec.Bindings.Catalog {
@@ -435,7 +435,7 @@ func FunctionPrincipalSource() PrincipalSource {
 }
 
 // CatalogServicePrincipalSource resolves a CatalogService principal's backing *v1.CatalogService (ADR-0088,
-// ADR-0175): an engine is its own principal, never a same-named Function. Its spec.blob are its
+// ADR-0175): an engine is its own principal, never a same-named Function. Its spec.bindings.blob are its
 // blobBindings; it has no links/kv.
 func CatalogServicePrincipalSource() PrincipalSource {
 	return func(ctx context.Context, r MetaReader, p auth.EntityRef) (PrincipalObject, bool, error) {
@@ -512,7 +512,7 @@ func netDestinationResource(_ context.Context, _ MetaReader, resource auth.Entit
 	return cedartypes.EntityMap{uid: {UID: uid, Attributes: cedartypes.NewRecord(attrs)}}, true, nil
 }
 
-// SQLCapability is the sql::read/sql::write capability (ADR-0233): spec.sql → the `sqlBindings` Set of SQLDatabase
+// SQLCapability is the sql::read/sql::write capability (ADR-0233): spec.bindings.sql → the `sqlBindings` Set of SQLDatabase
 // entity-refs (read binding-as-grant); the resource is the SQLDatabase with its owner and `writers`. Owner-only writers.
 func SQLCapability() Capability { return sqlCapability(nil) }
 

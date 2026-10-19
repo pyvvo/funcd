@@ -52,7 +52,7 @@ type sqlDatabaseDeletionProtection struct {
 }
 
 // NewSQLDatabaseDeletionProtectionAdmission returns the Validating admission that refuses deleting a SQLDatabase that
-// a Function's spec.sql binds (ADR-0233 Decision 7), or whose engine holds a user table, or whose data cannot be
+// a Function's spec.bindings.sql binds (ADR-0233 Decision 7), or whose engine holds a user table, or whose data cannot be
 // checked (fail closed). A controller's delete through the store is not checked.
 func NewSQLDatabaseDeletionProtectionAdmission(r StoreReader, p SQLProber) Admission {
 	return sqlDatabaseDeletionProtection{r: r, p: p}

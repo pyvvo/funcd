@@ -34,13 +34,13 @@ const (
 	// Identity-issued keypair. Distinct from S3Identity (the raw-key principal); a RolesAssignment grants it.
 	entityTypeIdentity = "Identity"
 	// ADR-0137 (F102): the catalog serving-layer resource — the CatalogService a catalog::query targets.
-	// A Function's spec.catalogs are its `catalogBindings` (binding-as-query-grant); a Catalog-scoped
+	// A Function's spec.bindings.catalog are its `catalogBindings` (binding-as-query-grant); a Catalog-scoped
 	// RolesAssignment grants an Identity query on it. The catalog PEP proxy is the enforcement point.
 	entityTypeCatalogService = "CatalogService"
 	// ADR-0117 (F81 egress): the ephemeral outbound destination — carries {ip, port, domains} attrs,
 	// materialized from the request EntityRef's Path (no MetaReader read). Its id is the "<ip>:<port>" prefix.
 	entityTypeNetDestination = "NetDestination"
-	// ADR-0233 (F129): a SQL database, the resource of sql::read and sql::write; a Function's spec.sql are its
+	// ADR-0233 (F129): a SQL database, the resource of sql::read and sql::write; a Function's spec.bindings.sql are its
 	// `sqlBindings`.
 	entityTypeSQLDatabase = "SQLDatabase"
 )

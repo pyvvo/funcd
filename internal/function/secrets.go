@@ -19,8 +19,8 @@ type SecretResolver interface {
 	ResolveEnv(ctx context.Context, id auth.Identity, ns v1.NamespaceName, names []string) (map[string]string, error)
 }
 
-// resolveBindingEnv resolves a function's bound ConfigMaps (spec.config, non-sensitive) +
-// Secrets (spec.secrets, sensitive) into one guarded env-var map for worker injection, via the
+// resolveBindingEnv resolves a function's bound ConfigMaps (spec.bindings.config, non-sensitive) +
+// Secrets (spec.bindings.secret, sensitive) into one guarded env-var map for worker injection, via the
 // single shared resolver (ADR-0093, envresolve.Resolve — config first, then secrets), with the keys of each kind
 // (ADR-0245). It returns an empty Resolved when the function declares neither. Every other path is fail-closed: any
 // resolver error (a missing ConfigMap → ErrConfig,

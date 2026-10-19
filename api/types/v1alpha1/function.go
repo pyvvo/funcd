@@ -125,7 +125,7 @@ type FunctionLink struct {
 // FunctionKV declares one KV binding (ADR-0073, F42): a local alias bound to a (store, table)
 // sub-domain in the same namespace. The handler reaches it as context.kv.<verb>(alias, …); reads are
 // coarse-allowed for any bound same-namespace caller, writes require this function to be the table's
-// owner. Mirrors FunctionLink (the wrangler/spec.links convention).
+// owner. Mirrors FunctionLink (the wrangler/spec.bindings.links convention).
 type FunctionKV struct {
 	// Alias is the local handle the handler passes to context.kv; a DNS-1123 label, unique within KV.
 	Alias string `json:"alias" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"`
@@ -137,7 +137,7 @@ type FunctionKV struct {
 
 // FunctionBlob declares one blob (S3) binding (ADR-0080, F47): a local alias bound to a (bucket, prefix)
 // sub-domain in the same namespace. The binding is the read grant; writes require this function to be the
-// prefix's owner. Mirrors FunctionKV (the wrangler/spec.kv convention).
+// prefix's owner. Mirrors FunctionKV (the wrangler/spec.bindings.kv convention).
 type FunctionBlob struct {
 	// Alias is the local handle; a DNS-1123 label, unique within Blob.
 	Alias string `json:"alias" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"`
@@ -208,13 +208,13 @@ type FunctionStatus struct {
 func (f *Function) GroupVersionKind() GroupVersionKind { return KindFunction.GVK() }
 
 // PrincipalObject is a resolved principal-backing object for the cedar capability registry (ADR-0116):
-// a *Function or a *CatalogService whose declared bindings (spec.kv/links/blob) are materialized onto
+// a *Function or a *CatalogService whose declared bindings (spec.bindings.kv/links/blob) are materialized onto
 // the Cedar principal. It is a CLOSED interface — its marker method is unexported, so only types in
 // this package implement it, which lets the registry's Bind funcs type-switch on it without any.
 type PrincipalObject interface{ isPrincipalObject() }
 
 // isPrincipalObject marks *Function as a PrincipalObject (ADR-0116): a resolved principal-backing
-// object whose spec.kv/links/blob bindings the capability registry materializes onto the Cedar
+// object whose spec.bindings.kv/links/blob bindings the capability registry materializes onto the Cedar
 // principal.
 func (f *Function) isPrincipalObject() {}
 
@@ -365,7 +365,7 @@ func (s *FunctionSpec) validateBindings(op, prefix string) error {
 		return err
 	}
 	// Config binding structural rules (ADR-0093): each names a ConfigMap in this namespace and
-	// must be a valid DNS-1123 ObjectName (mirrors CatalogService.spec.config). Cross-resource
+	// must be a valid DNS-1123 ObjectName (mirrors CatalogService.spec.bindings.config). Cross-resource
 	// existence is the reconciler's plain store read (fail-closed, ConfigResolveFailed), not Validate.
 	for _, cm := range s.Bindings.Config {
 		if !dnsLabel.MatchString(string(cm)) {

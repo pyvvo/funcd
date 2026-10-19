@@ -282,7 +282,7 @@ def main() -> int:
 
     # Serve Quack over HTTP on the fixed netns port (a quack:// RPC URI). A Quack client ALWAYS needs a
     # token (a token-less client is refused "Could not find a Quack authentication token"), so the
-    # engine serves WITH one: QUACK_TOKEN, injected from the CatalogService's spec.secrets. disable_ssl:
+    # engine serves WITH one: QUACK_TOKEN, injected from the CatalogService's spec.bindings.secret. disable_ssl:
     # the ingress gateway terminates TLS and is the authoritative OUTER auth gate (ADR-0013) — Quack
     # runs plain HTTP behind it, the token is the inner gate (allow_other_hostname: the gateway proxies
     # a different Host). quack_serve is non-blocking (spawns the server) — we then block on signal.pause().

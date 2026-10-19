@@ -64,7 +64,7 @@ func NewReconciler(d ReconcilerDeps) (*Reconciler, error) {
 }
 
 // Reconcile converges one KVStore. A present store reports status.tables (declared sub-domains) + status.bindings
-// (Function.spec.kv entries referencing it) and is Ready while the KV storage probe passes, else Degraded
+// (Function.spec.bindings.kv entries referencing it) and is Ready while the KV storage probe passes, else Degraded
 // StorageUnreachable (ADR-0215 Decision 7), its status written only when it changed; any table removed from
 // spec.tables[] but still holding data is reclaimed via DropPrefix(<ns>/<store>/<table>/); a deleted
 // store (NotFound) reclaims its whole prefix via DropPrefix(<ns>/<store>/).
@@ -241,7 +241,7 @@ func (r *Reconciler) orphanTables(ctx context.Context, ks *v1.KVStore) ([]string
 	return out, nil
 }
 
-// countBindings counts the Function.spec.kv entries in ns whose store is storeName.
+// countBindings counts the Function.spec.bindings.kv entries in ns whose store is storeName.
 func (r *Reconciler) countBindings(ctx context.Context, ns v1.NamespaceName, storeName v1.ObjectName) (int, error) {
 	const op = "services.kv.countBindings"
 	list, err := r.store.List(ctx, v1.KindFunction.GVK(), store.ListOptions{Namespace: ns})
@@ -264,7 +264,7 @@ func (r *Reconciler) countBindings(ctx context.Context, ns v1.NamespaceName, sto
 }
 
 // MapFunction is the controller.MapFunc that re-runs the reconcile of every KVStore in a changed
-// Function's namespace: the count is of Function.spec.kv entries, and an unbind or a delete no longer
+// Function's namespace: the count is of Function.spec.bindings.kv entries, and an unbind or a delete no longer
 // names the store it referenced.
 func (r *Reconciler) MapFunction(ctx context.Context, obj v1.Object) []controller.Request {
 	ns := obj.GetObjectMeta().Namespace

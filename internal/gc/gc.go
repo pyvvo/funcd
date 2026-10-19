@@ -564,11 +564,11 @@ func bucketUsers() []v1.Kind {
 
 // InUse returns the first object in obj's namespace that still uses obj and that skip does not skip (nil skips
 // none), as the deletion protections bind it (ADR-0199 Decision 6): a Function another Function links to (ADR-0064),
-// a KVStore a Function's spec.kv names (ADR-0073), a Bucket a Function's or CatalogService's spec.blob, an
-// EventSource's spec.blob.bucket, a Route's spec.rules[].backend.static.bucket or a Site's spec.bucket.name names
-// (ADR-0080), a ConfigMap a Function's or CatalogService's spec.config or a Site's spec.runtimeConfig.configMap names
+// a KVStore a Function's spec.bindings.kv names (ADR-0073), a Bucket a Function's or CatalogService's spec.bindings.blob, an
+// EventSource's spec.blob.bucket, a Route's spec.rules[].backend.static.bucket or a Site's spec.bindings.blob[0].bucket names
+// (ADR-0080), a ConfigMap a Function's or CatalogService's spec.bindings.config or a Site's spec.runtimeConfig.configMap names
 // (ADR-0213 Decision 5, ADR-0239), a SQLDatabase a
-// Function's spec.sql names (ADR-0236). Nothing uses an object of another kind.
+// Function's spec.bindings.sql names (ADR-0236). Nothing uses an object of another kind.
 func InUse(ctx context.Context, s store.Store, obj v1.Object, skip func(v1.Object) bool) (v1.ObjectRef, bool, error) {
 	const op = "gc.InUse"
 	var kinds []v1.Kind

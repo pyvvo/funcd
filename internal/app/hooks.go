@@ -133,7 +133,7 @@ func lastPreApply(rev *v1.AppRevision) time.Time {
 }
 
 // preHookParts are the entries a pass writes while the latest revision's pre-hooks are not done (Decision 4): in
-// section order, the configMaps a pre-hook Function's spec.config names and the kv, buckets and catalogs entries it
+// section order, the configMaps a pre-hook Function's spec.bindings.config names and the kv, buckets and catalogs entries it
 // binds, with the configMaps and buckets of such a catalog, then the pre-hook Functions. A ref entry is never written.
 func preHookParts(a *v1.App, ents []entry) []entry {
 	parts := partsOf(a)
@@ -249,7 +249,7 @@ func (r *Reconciler) hooks(ctx context.Context, a *v1.App, latest *v1.AppRevisio
 	return hp, nil
 }
 
-// databasesReady reports whether every SQLDatabase fn's spec.sql names is Ready (ADR-0236 Decision 3, ADR-0214 Decision
+// databasesReady reports whether every SQLDatabase fn's spec.bindings.sql names is Ready (ADR-0236 Decision 3, ADR-0214 Decision
 // 4 superseded in part), with the first one that is not as SQLDatabase/<name>: <its Ready reason>.
 func (r *Reconciler) databasesReady(ctx context.Context, ns v1.NamespaceName, fn *v1.Function, objs map[v1.ObjectRef]v1.Object) (bool, string, error) {
 	for _, b := range fn.Spec.Bindings.SQL {

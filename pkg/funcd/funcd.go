@@ -656,7 +656,7 @@ func (p *Platform) buildControlPlane() error {
 	// KV service (ADR-0069/0072/0073): the durable driver (config-selected, ADR-0066) behind the
 	// binding-gated Facade, reached by functions through the worker-node local API's /kv routes. Defaults
 	// to in-memory. The BindingResolver resolves a caller's (function, alias) to its (store, table) via
-	// the caller's Function.spec.kv over the metastore (default-deny); reads are coarse-allowed for any
+	// the caller's Function.spec.bindings.kv over the metastore (default-deny); reads are coarse-allowed for any
 	// bound caller, writes are owner-only (ADR-0073).
 	if c.kvStore == nil {
 		c.kvStore = kvmemory.New()
@@ -709,7 +709,7 @@ func (p *Platform) buildControlPlane() error {
 	// API asks link::invoke on the resolved target so a forbid Policy can revoke a declared link.
 	// The function-facing blob facade (ADR-0127): context.blob's PEP. Built only when a blob substrate
 	// is present (else the /blob routes stay off, exactly like a nil kv). It reuses the SAME cedar PDP
-	// (the S3Capability already materializes a Function's spec.blob as its blobBindings), the SAME
+	// (the S3Capability already materializes a Function's spec.bindings.blob as its blobBindings), the SAME
 	// s3BucketFor substrate view, and the SAME blobKey keyspace as the ADR-0080 S3 frontend — so objects
 	// written via context.blob are the objects the S3 frontend serves. A nil interface (not a nil
 	// *Facade) keeps the routes off; a typed nil pointer would slip past NewHandler's nil check.
@@ -1076,7 +1076,7 @@ func (p *Platform) buildControlPlane() error {
 	}
 	ctrl.Register(v1.KindKVStore.GVK(), kvReconciler)
 	p.kvReconciler = kvReconciler
-	ctrl.Watches(v1.KindFunction.GVK(), kvReconciler.MapFunction) // status.bindings counts Function.spec.kv
+	ctrl.Watches(v1.KindFunction.GVK(), kvReconciler.MapFunction) // status.bindings counts Function.spec.bindings.kv
 	// ADR-0215 Decision 7: a Bucket's status follows the blob probe; a probe flip re-runs every KVStore or Bucket.
 	bucketReconciler, err := blobsvc.NewReconciler(blobsvc.ReconcilerDeps{Store: c.store, Health: p.prober, Logger: p.logger})
 	if err != nil {
@@ -1093,7 +1093,7 @@ func (p *Platform) buildControlPlane() error {
 	// CatalogService reconciler (ADR-0086 as reworked by ADR-0087/F48/F57): the DuckDB/Quack engine
 	// is deployed by the add-on-provider runtime (NOT a backing Function). The provider-runtime reuses
 	// the EXISTING container port + ingress gateway; the reconciler derives the per-fn S3 keypair over
-	// the provider identity (ADR-0085) and resolves spec.secrets/spec.config (the Quack token + engine
+	// the provider identity (ADR-0085) and resolves spec.bindings.secret/spec.bindings.config (the Quack token + engine
 	// config) into the engine env. DuckDB runs out-of-process in the curated image — no cgo in daemon.
 	// Prod: the add-on-provider runtime supervises the curated duckdb CONTAINER. Dev (ADR-0125)
 	// injects a process-mode driver that runs the embedded engine as a subprocess (no containers).
@@ -1174,7 +1174,7 @@ func (p *Platform) buildControlPlane() error {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build SQLDatabase reconciler")
 	}
 	ctrl.Register(v1.KindSQLDatabase.GVK(), sqlReconciler)
-	ctrl.Watches(v1.KindFunction.GVK(), sqlReconciler.MapFunction) // status.bindings counts Function.spec.sql
+	ctrl.Watches(v1.KindFunction.GVK(), sqlReconciler.MapFunction) // status.bindings counts Function.spec.bindings.sql
 	ctrl.Watches(v1.KindRestore.GVK(), sqlReconciler.MapRestore)   // a Succeeded Restore clears DataMissing (ADR-0234)
 	p.sqlReconciler = sqlReconciler
 
@@ -1303,15 +1303,15 @@ func (p *Platform) buildControlPlane() error {
 			admission.NewLinkValidityAdmission(r),
 			admission.NewLinkDeletionProtectionAdmission(r),
 			// ADR-0072/0073 KV resource rules: store-count quota + KVStore deletion-protection (bound by
-			// spec.kv or non-empty data on Delete; still-bound table removal and unreclaimed table re-add on
-			// Update). Binding/owner EXISTENCE (Function.spec.kv → an existing store/table; KVStore
+			// spec.bindings.kv or non-empty data on Delete; still-bound table removal and unreclaimed table re-add on
+			// Update). Binding/owner EXISTENCE (Function.spec.bindings.kv → an existing store/table; KVStore
 			// tables[].owner → a real Function) is RECONCILE-TIME (ADR-0121): the Function reconciler holds a
 			// binding not-Ready until it resolves, and the owner UID is fail-closed at the PDP until the owner
 			// exists — no write-time existence gate.
 			admission.NewKVStoreQuotaAdmission(r, kvMaxStores),
 			admission.NewKVStoreDeletionProtectionAdmission(r, kvProber{c.kvStore}),
 			// ADR-0080 Bucket resource rules (the KVStore parallel): bucket-count quota + bucket-deletion-
-			// protection (bound by spec.blob or non-empty data on Delete; still-bound prefix removal on Update).
+			// protection (bound by spec.bindings.blob or non-empty data on Delete; still-bound prefix removal on Update).
 			// Binding/owner EXISTENCE is reconcile-time (ADR-0121), as for KV. The data-emptiness prober Lists
 			// the same substrate view the s3gateway writes (s3BucketFor).
 			admission.NewBucketQuotaAdmission(r, bucketMax),
@@ -1321,7 +1321,7 @@ func (p *Platform) buildControlPlane() error {
 			admission.NewSQLDatabaseDeletionProtectionAdmission(r, sqlReconciler.Prober()),
 			// ADR-0086/0091 catalog blob + consumer-binding EXISTENCE were write-time gates; now reconcile-time
 			// (ADR-0121): the CatalogService / Function reconcilers wait for the referent (Waiting condition).
-			// ADR-0139 Site: spec.prefix is immutable on Update (the prefix permanently holds the site's bundles).
+			// ADR-0139 Site: spec.bindings.blob[0].prefix is immutable on Update (the prefix permanently holds the site's bundles).
 			admission.NewSitePrefixImmutableAdmission(),
 			// ADR-0074 Policy validity: spec.cedar parses + references only the curated schema
 			// (kv::read/kv::write; Function/KVStore/KVTable) — so every stored Policy compiles.

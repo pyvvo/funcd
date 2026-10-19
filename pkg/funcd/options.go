@@ -164,9 +164,9 @@ func WithoutLogCompaction() Option {
 
 // WithS3Gateway enables the opt-in S3-protocol frontend over the blob substrate
 // (ADR-0080/0085): a node-private TCP listener serving GET(+range)/PUT(+multipart)/
-// HEAD/DELETE/ListObjectsV2 governed by the cedar spec.blob binding-as-grant PEP, with
+// HEAD/DELETE/ListObjectsV2 governed by the cedar spec.bindings.blob binding-as-grant PEP, with
 // per-function SigV4 keypairs derived from a node master secret and injected into a
-// spec.blob function's worker env. listenAddr is node-private (e.g. 127.0.0.1:9000);
+// spec.bindings.blob function's worker env. listenAddr is node-private (e.g. 127.0.0.1:9000);
 // maxUploadBytes (0 ⇒ 1 GiB) caps a single buffered object; masterSecretFile and dataDir
 // locate the node master as WithMasterLocation does.
 // Without this option no listener, IAM, or keypair injection exists.

@@ -57,9 +57,9 @@ type bucketDeletionProtection struct {
 }
 
 // NewBucketDeletionProtectionAdmission returns the Validating admission that protects Bucket data
-// (ADR-0080). On Delete: Conflict if any Function.spec.blob names the bucket OR any prefix still holds
+// (ADR-0080). On Delete: Conflict if any Function.spec.bindings.blob names the bucket OR any prefix still holds
 // objects. On Update: Conflict if a prefix removed from spec.prefixes[] is still named by some
-// Function.spec.blob OR still holds objects. (Clone of kvstore-deletion-protection, scanning spec.blob.)
+// Function.spec.bindings.blob OR still holds objects. (Clone of kvstore-deletion-protection, scanning spec.bindings.blob.)
 // The prober is optional — a nil prober skips the data-emptiness check (binding-protection still applies).
 func NewBucketDeletionProtectionAdmission(r StoreReader, p BlobProber) Admission {
 	return bucketDeletionProtection{r: r, p: p}
@@ -79,7 +79,7 @@ func (a bucketDeletionProtection) Admit(ctx context.Context, req Request) (v1.Ob
 	return a.admitDelete(ctx, req)
 }
 
-// admitDelete blocks deleting a bucket still bound by a Function.spec.blob or still holding objects.
+// admitDelete blocks deleting a bucket still bound by a Function.spec.bindings.blob or still holding objects.
 func (a bucketDeletionProtection) admitDelete(ctx context.Context, req Request) (v1.Object, error) {
 	const op = "admission.bucket-deletion-protection"
 	if req.Old == nil {
@@ -123,7 +123,7 @@ func (a bucketDeletionProtection) admitDelete(ctx context.Context, req Request) 
 }
 
 // admitUpdate blocks removing a prefix from spec.prefixes[] while it is still named by some
-// Function.spec.blob or still holds objects.
+// Function.spec.bindings.blob or still holds objects.
 func (a bucketDeletionProtection) admitUpdate(ctx context.Context, req Request) (v1.Object, error) {
 	const op = "admission.bucket-deletion-protection"
 	if req.Old == nil {

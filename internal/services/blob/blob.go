@@ -2,16 +2,16 @@
 // blob.Bucket substrate, plus the blob services.TypeHandler the Service dispatcher routes type:blob to.
 //
 // ADR-0127 makes context.blob the blob twin of context.kv (ADR-0069): blob bindings live on the consumer
-// (Function.spec.blob), and authorization is the PDP's job. The facade resolves a caller's (function,
+// (Function.spec.bindings.blob), and authorization is the PDP's job. The facade resolves a caller's (function,
 // alias) to a (bucket, prefix) — that is NAMING (ADR-0073 bind-as-grant, default-deny) — then asks the PDP
 // the SAME per-object question the S3 frontend asks (ADR-0080's S3Capability): s3::read (get/list/sign-GET)
 // or s3::write (put/delete/sign-PUT/DELETE) on the bound BlobPrefix, with the connection-scoped caller
-// Function as the principal (whose spec.blob the capability materializes as its blobBindings). It acts on
+// Function as the principal (whose spec.bindings.blob the capability materializes as its blobBindings). It acts on
 // the SAME s3BucketFor substrate view under the SAME blobKey keyspace as the frontend, so context.blob
 // objects and the S3-frontend objects are one and the same. A PDP deny maps to fault.Forbidden.
 //
 // This supersedes the unused legacy ADR-0021 NewFacade (which authorized Kind:Service with no per-object
-// Action — an RBAC-role question that could not enforce spec.blob bind-as-grant). The live Service-
+// Action — an RBAC-role question that could not enforce spec.bindings.blob bind-as-grant). The live Service-
 // dispatcher TypeHandler is unchanged.
 package blob
 
@@ -81,7 +81,7 @@ func blobKey(prefix, object string) string {
 
 // authorize asks the PDP the SAME per-object question the S3 frontend asks (ADR-0080 S3Capability): the
 // action (s3::read | s3::write) on the bound BlobPrefix (a KindBucket resource with the prefix as its
-// sub-resource Path). The principal is the connection-scoped caller Function, whose spec.blob the
+// sub-resource Path). The principal is the connection-scoped caller Function, whose spec.bindings.blob the
 // capability materializes as its blobBindings — so an unbound alias (or a non-owner write) is denied. A
 // deny maps to fault.Forbidden.
 func (f *Facade) authorize(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, action auth.Action, b Binding) error {

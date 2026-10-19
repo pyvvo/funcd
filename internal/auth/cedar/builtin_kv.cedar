@@ -1,12 +1,12 @@
 // Always-on KV binding-as-grant + single-writer rules the driver ships (ADR-0074/0076/0136) — NOT user
-// Policies. Read and write live in ONE file, mirroring builtin_s3.cedar: spec.kv is the read grant; the
+// Policies. Read and write live in ONE file, mirroring builtin_s3.cedar: spec.bindings.kv is the read grant; the
 // table's `writers` set is the single writer.
 //
-// read: a declared spec.kv binding grants kv::read by default — a function may read a table it BOUND
+// read: a declared spec.bindings.kv binding grants kv::read by default — a function may read a table it BOUND
 // (materialized as the principal's `kvBindings` Set of KVTable entity-refs), the read-side mirror of
 // builtin_invoke.cedar's link-as-grant. NOT default-allow: reads on tables NOT in `kvBindings` have no
 // permitting built-in, so they stay default-deny (a user Policy must permit a cross-binding read). The
-// `principal has kvBindings` guard makes a function with no spec.kv inert here. A binding grants READ
+// `principal has kvBindings` guard makes a function with no spec.bindings.kv inert here. A binding grants READ
 // only, never write.
 @id("kv-read-binding")
 permit(principal, action == Action::"kv::read", resource)

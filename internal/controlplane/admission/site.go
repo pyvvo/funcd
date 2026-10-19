@@ -12,7 +12,7 @@ import (
 type sitePrefixImmutable struct{}
 
 // NewSitePrefixImmutableAdmission returns the Validating admission that rejects any change to
-// spec.prefix on Update. The reconciler only ever adds prefixes to the Bucket, so a changed prefix
+// spec.bindings.blob[0].prefix on Update. The reconciler only ever adds prefixes to the Bucket, so a changed prefix
 // would orphan the old one with its objects (ADR-0139 Decision §7). It needs no dependencies — Old
 // and Object are both on the Request — and it never consults Old.Status, which an apply wipes.
 func NewSitePrefixImmutableAdmission() Admission { return sitePrefixImmutable{} }

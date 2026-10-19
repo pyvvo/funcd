@@ -736,7 +736,7 @@ func (r *Reconciler) poolManifest(ctx context.Context, members []*v1.Function, s
 	return manifest, desired, nil
 }
 
-// memberEnv is the env only member m gets, set in its manifest row: its S3 keypair when it binds spec.blob, its
+// memberEnv is the env only member m gets, set in its manifest row: its S3 keypair when it binds spec.bindings.blob, its
 // catalog token per alias, and its bundle dir. Both credentials derive from the name, so a row is stable across
 // passes. A key the shared env sets is omitted, so the shared env wins as a solo worker's later env does.
 func (r *Reconciler) memberEnv(m *v1.Function, artifact string, shared map[string]string) (map[string]string, error) {
