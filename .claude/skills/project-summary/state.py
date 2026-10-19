@@ -59,7 +59,7 @@ def parse_adrs(root: Path) -> list[dict]:
         if m:
             title = m.group(1).strip()
         status = ""
-        ms = re.search(r"^[-*]\s*\*\*Status\*\*:\s*(.+)$", text, re.MULTILINE)
+        ms = re.search(r"^(?:[-*]\s*)?\*\*Status\*\*:\s*(.+)$", text, re.MULTILINE)
         if ms:
             status = ms.group(1).strip()
         # Supersession is authoritative ONLY on this ADR's own Status line (a title's
