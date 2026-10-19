@@ -159,7 +159,6 @@ duckdb:
   stage:
     - configmap.yaml
     - secret.yaml
-    - bucket.yaml
     - catalogservice.yaml
     - consumer.yaml
     - dist/catalog-reader
@@ -175,14 +174,12 @@ duckdb:
   push:
     - artifact: dist/catalog-reader
       ref: catalog-reader
-  # ADR-0121: no two-phase — apply in any order. The CatalogService binds the Bucket BEFORE it exists
-  # (admitted, held Ready=False/BucketNotFound), then the Bucket (owner: lake) resolves it and the engine
-  # converges — a live apply-any-order proof of the Bucket↔CatalogService cycle on real containerd.
+  # ADR-0251: the CatalogService declares the lakehouse Bucket it owns at its root, so its reconciler writes it; the
+  # consumer applies after it in any order (ADR-0121).
   apply:
     - configmap.yaml
     - secret.yaml
     - catalogservice.yaml
-    - bucket.yaml
     - consumer.yaml
   ready:
     kind: catalogservice
@@ -520,7 +517,6 @@ sql-examples:
     - sql-orders/dist/orders
     - sql-orders/dist/orders-migrate
     - sql-orders/dist/audit
-    - sql-readings/readings-db.yaml
     - sql-readings/workflow.yaml
     - sql-readings/run.yaml
     - sql-readings/dist/ingest
@@ -591,7 +587,6 @@ sql-examples:
     - sql-orders/audit.yaml
     - sql-orders/grant.yaml
     - sql-orders/changes.yaml
-    - sql-readings/readings-db.yaml
     - sql-readings/workflow.yaml
   # The examples scale to zero, so a Function is Idle until its first call: the gate waits for the databases, and the
   # suite's first call to each function wakes it.
