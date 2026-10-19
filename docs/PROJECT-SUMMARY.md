@@ -395,11 +395,11 @@ sequenceDiagram
 
 ## Build status (V1)
 
-The V1 build slate is complete and past it: **ADR-0001…0244** decided, **239 Implemented** (34 accepted as the
-roadmap's tier-0 build items; the rest — incl. ADR-0034…0244 — are follow-ons refining or extending
+The V1 build slate is complete and past it: **ADR-0001…0251** decided, **240 Implemented** (34 accepted as the
+roadmap's tier-0 build items; the rest — incl. ADR-0034…0251 — are follow-ons refining or extending
 existing feature rows), **0 roadmap items remaining**. Not Implemented: ADR-0000 (the process ADR), ADR-0216
-(App tests, Accepted, F119 deferred) and the two DR addenda ADR-0227/0228 (Accepted; they record code already
-on main). The exit-criterion path is proven end-to-end — a
+(App tests, Accepted, F119 deferred) the two DR addenda ADR-0227/0228 (Accepted; they record code already
+on main), and the resource-shape refactor ADR-0246–0251 (Accepted, in progress). The exit-criterion path is proven end-to-end — a
 function deploys from a **source artifact** (no Dockerfile), is **invoked over HTTP and by a timer**,
 **scales to zero and wakes on demand**, and **reads a secret**, all through the public API/CLI — and
 that whole journey is an executable acceptance test (ADR-0034). Post-slate work: the runtime shim is **TypeScript + Hono** with an **embedded JTD
@@ -463,7 +463,10 @@ requirements, a dry-run engine and cron schedules (ADR-0199–0220). **SQL on rq
 engine storage, the `SQLDatabase` kind, SQL from functions, backup, a change feed, SQL in Apps and in
 `funcdctl dev`, and a fixed container bridge address (ADR-0231–0238). The edge then gained Site runtime
 configuration, namespace hosts, one exposure shape for every kind, a Route backend that serves a Site, and
-Functions that serve HTTP (ADR-0239–0243). See
+Functions that serve HTTP (ADR-0239–0243). Handlers then gained `ctx.config`, `ctx.secret` and `ctx.catalog`
+(ADR-0245), and a resource-shape refactor is accepted and under way: bindings under `spec.bindings`, stores
+declared at each resource's root, a contract file replacing `funcdctl.yaml`, and secrets read from funcd instead
+of the worker environment (ADR-0246–0251). See
 [docs/roadmap/v1-delivery-plan.md](roadmap/v1-delivery-plan.md).
 
 **Out of V1 scope** (recorded for later): multi-node workers, north-south egress enforcement, an OIDC
@@ -727,3 +730,10 @@ All are **Implemented** unless the recap says *superseded*.
 | [ADR-0242 — A Route backend that serves a Site](adr/0242-site-route-backend.md) | A Route rule can name a Site and serve its bundle (and `config.json`) at any path. Realizes F155. | <ol><li>`RouteBackend.site`; one of `function`, `static`, `site` per rule; `Prefix` only</li><li>serves the Site's bundle rule and its `config.json` rule at the rule's path</li><li>the rule's `auth` applies; resolved from the Route the Site controls</li></ol> |
 | [ADR-0243 — Functions that serve HTTP](adr/0243-http-functions.md) | A Node Function can serve plain HTTP through an `http(app)` adapter. Realizes F156. | <ol><li>`spec.protocol`: `cloudevent` (default) or `http`; `http` needs a `node*` runtime and no pooling</li><li>a mismatched export fails the start check (`ShapeInvalid`)</li><li>the edge forwards method, path, query and headers with `X-Forwarded-Prefix`</li><li>`@funcd-dev/shim` `http(app)`; outbound calls via `ctx.fetch` over links</li></ol> |
 | [ADR-0244 — Watch mode for the Vite plugin](adr/0244-vite-plugin-watch-mode.md) | Under `vite build --watch` each rebuilt function reaches its output directory. Supersedes ADR-0144 in part. Realizes F157. | <ol><li>watch mode is Vite's own</li><li>each successful rebuild delivers that function's `.mjs` and manifest</li><li>the manifest is a watched file</li><li>a failed rebuild delivers nothing</li></ol> |
+| [ADR-0245 — `ctx.config`, `ctx.secret` and `ctx.catalog`](adr/0245-ctx-config-secret-catalog.md) | A handler reads its bound config, secrets and catalogs through `ctx` accessors instead of raw environment variables. Refines ADR-0093. Realizes F158. | <ol><li>funcd sets `FUNCD_CONFIG_KEYS` and `FUNCD_SECRET_KEYS` on workers that bind config or secrets</li><li>`ctx.config.get`/`list` over the listed keys</li><li>`ctx.secret` the same; Promise-based in TypeScript</li><li>`ctx.catalog.get(alias)` returns `{ url, token }`, or fails naming the alias</li></ol> |
+| [ADR-0246 — Bindings under `spec.bindings`](adr/0246-bindings-under-spec.md) | A resource's bindings move under `spec.bindings`, typed per kind. **Accepted, not yet implemented.** Realizes F159 (with ADR-0248). | <ol><li>`FunctionBindings`, `StepBindings`, `CatalogServiceBindings`; `config`, `secret`, `catalog` singular, `links` kept</li><li>the old fields are deleted; the API refuses them</li><li>grants derived from the new paths with the same rules</li><li>a clean break across the four repos</li></ol> |
+| [ADR-0247 — A function is its resource file and a contract file](adr/0247-contract-file-replaces-funcdctl-yaml.md) | `<name>.contract.yaml` replaces `funcdctl.yaml`. **Accepted, not yet implemented.** Realizes F160. | <ol><li>contract file beside the resource file: `runtime`, `protocol`, `input`/`output`</li><li>push reads it; `--schema` and `--runtime` go</li><li>`funcdctl types -f <name>.contract.yaml`</li><li>`funcdctl dev [dir]` runs a folder of resource files</li></ol> |
+| [ADR-0248 — Every kind declares the stores it owns at its root](adr/0248-stores-at-the-root.md) | Function, Workflow and Site declare at their root the stores, ConfigMaps and Secrets their bindings name. **Accepted, not yet implemented.** Realizes F159 (with ADR-0246). | <ol><li>shared root-entry types taken from the App (`KVStoreEntry`, `BucketEntry`, `SQLDatabaseEntry`, `CatalogEntry`, `ConfigMapEntry`, `SecretDeclaration`)</li><li>the root-entry rule: every binding names a root entry, enforced at apply</li><li>two exceptions (step resources, standalone CatalogService), later closed by ADR-0250/0251</li></ol> |
+| [ADR-0249 — `ctx.secret` reads each secret from funcd](adr/0249-ctx-secret-reads-from-funcd.md) | Secret values leave the worker environment; the shim reads each one from funcd on demand. **Accepted, not yet implemented.** Realizes F161. | <ol><li>local API `GET /secret` and `GET /secret/{key}`, served by a new `Secrets` port</li><li>funcd resolves the caller's bound Secrets on every read; nothing is cached</li><li>the worker environment holds no secret value and no `FUNCD_SECRET_KEYS`</li><li>the shims call the routes</li></ol> |
+| [ADR-0250 — A Workflow declares its step resources](adr/0250-workflow-declares-its-step-resources.md) | A Workflow declares at its root the databases, catalogs, ConfigMaps and Secrets its steps bind. **Accepted, not yet implemented.** Realizes F162. | <ol><li>`WorkflowSpec` gains `sql`, `catalogs`, `configMaps`, `secrets`</li><li>every step binding names a root entry (`binding-declared`)</li><li>the materializer owns `name` entries via `ownedstore.Ensure`</li><li>ConfigMaps and Secrets follow ADR-0213</li></ol> |
+| [ADR-0251 — A standalone CatalogService declares its stores](adr/0251-catalogservice-declares-its-stores.md) | A standalone CatalogService declares at its root the buckets, ConfigMaps and Secrets its engine binds. **Accepted, not yet implemented.** Realizes F163. | <ol><li>`CatalogServiceSpec` gains `buckets`, `configMaps`, `secrets`; a `catalog-store-owner` mutating admission</li><li>every binding names a root entry</li><li>owned entries via `ownedstore.Ensure`; ConfigMaps and Secrets follow ADR-0213</li><li>the GC pairs CatalogService with its Buckets and ConfigMaps</li></ol> |
