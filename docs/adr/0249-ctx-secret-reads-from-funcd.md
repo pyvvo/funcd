@@ -1,8 +1,10 @@
 # ADR-0249: `ctx.secret` reads each secret from funcd; secrets leave the worker environment
 
-- **Status**: Reviewing (2026-10-20), implemented; Accepted (2026-10-19), after two judge rounds, under `adr-batch` with acceptance delegated by the
-  decider: the judge kept `envresolve` unchanged for providers, made the denial scenario the namespace-level check
-  it is, and stated the pool and the revision limits.
+- **Status**: Implemented (2026-10-20), review passed (docs/reviews/adr-0249-implementation-claude-opus-5-5.md);
+  Reviewing (2026-10-20), implemented in #1095, pyvvo/funcd-typescript#81 (v0.19.0), pyvvo/funcd-python#95 (v0.14.0) and
+  #1099; Accepted (2026-10-19), after two judge rounds, under `adr-batch` with acceptance delegated by the decider: the
+  judge kept `envresolve` unchanged for providers, made the denial scenario the namespace-level check it is, and stated
+  the pool and the revision limits.
 - **Date**: 2026-10-19
 - **Deciders**: green-0-rabbit
 - **Tags**: secrets, shim, ctx, local-api, security

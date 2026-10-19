@@ -1,8 +1,11 @@
 # ADR-0247: A function is its resource file and a contract file; `funcdctl.yaml` goes
 
-- **Status**: Reviewing (2026-10-20), implemented; Accepted (2026-10-19), after two judge rounds, under `adr-batch` with acceptance delegated by the
-  decider. The judge added the dev contract (what dev reads, skips, stops on and rewrites; the builds; the Secrets;
-  steps through the materializer), the types output rule, the full supersession list and the plan's inventory.
+- **Status**: Implemented (2026-10-20), review passed (docs/reviews/adr-0247-implementation-claude-opus-5-5.md);
+  Reviewing (2026-10-20), implemented in #1099, pyvvo/funcd-typescript#79 and #86 (v0.19.2), pyvvo/funcd-python#92
+  (v0.14.0) and pyvvo/funcd-functions#19 (v0.19.0); Accepted (2026-10-19), after two judge rounds, under `adr-batch`
+  with acceptance delegated by the decider. The judge added the dev contract (what dev reads, skips, stops on and
+  rewrites; the builds; the Secrets; steps through the materializer), the types output rule, the full supersession list
+  and the plan's inventory.
 - **Date**: 2026-10-19
 - **Deciders**: green-0-rabbit
 - **Tags**: dx, cli, contract, dev, bundle, refactor

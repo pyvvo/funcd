@@ -1,7 +1,9 @@
 # ADR-0252: The scenarios of ADR-0199 and ADR-0213 that the resource-shape refactor changes
 
-- **Status**: Reviewing (2026-10-20), implemented; Accepted (2026-10-19), after two judge rounds, under `adr-batch` with acceptance delegated by the
-  decider: the judge added `app-shared-writer-refused`, `app-config-change-rolls` and `app-secret-declared`.
+- **Status**: Implemented (2026-10-20), review passed (docs/reviews/adr-0252-implementation-claude-opus-5-5.md);
+  Reviewing (2026-10-20), implemented in #1096 and #1099; Accepted (2026-10-19), after two judge rounds, under
+  `adr-batch` with acceptance delegated by the decider: the judge added `app-shared-writer-refused`,
+  `app-config-change-rolls` and `app-secret-declared`.
 - **Date**: 2026-10-19
 - **Deciders**: green-0-rabbit
 - **Tags**: app, stores, config, secrets, prune

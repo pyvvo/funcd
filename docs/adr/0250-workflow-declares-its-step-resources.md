@@ -1,7 +1,9 @@
 # ADR-0250: A Workflow declares at its root the databases, catalogs, ConfigMaps and Secrets its steps bind
 
-- **Status**: Reviewing (2026-10-19), implemented; Accepted (2026-10-19), after one judge round, under `adr-batch` with acceptance delegated by the
-  decider: the judge gave defined ConfigMaps and catalogs the controller reference and settled prefix owners.
+- **Status**: Implemented (2026-10-20), review passed (docs/reviews/adr-0250-implementation-claude-opus-5-5.md);
+  Reviewing (2026-10-19), implemented in #1094, landed by #1099, with pyvvo/funcd-python#94 (v0.14.0); Accepted
+  (2026-10-19), after one judge round, under `adr-batch` with acceptance delegated by the decider: the judge gave
+  defined ConfigMaps and catalogs the controller reference and settled prefix owners.
 - **Date**: 2026-10-19
 - **Deciders**: green-0-rabbit
 - **Tags**: api, workflow, stores, config, secrets

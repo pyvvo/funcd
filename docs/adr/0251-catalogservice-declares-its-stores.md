@@ -1,7 +1,9 @@
 # ADR-0251: A standalone CatalogService declares at its root the buckets, ConfigMaps and Secrets its engine binds
 
-- **Status**: Reviewing (2026-10-19), implemented; Accepted (2026-10-19), after one judge round, under `adr-batch` with acceptance delegated by the
-  decider: the judge gave defined ConfigMaps the controller reference and corrected the supersession.
+- **Status**: Implemented (2026-10-20), review passed (docs/reviews/adr-0251-implementation-claude-opus-5-5.md);
+  Reviewing (2026-10-19), implemented in #1091, landed by #1099, with pyvvo/funcd-python#94 (v0.14.0) and
+  pyvvo/funcd-functions#21 (v0.19.0); Accepted (2026-10-19), after one judge round, under `adr-batch` with acceptance
+  delegated by the decider: the judge gave defined ConfigMaps the controller reference and corrected the supersession.
 - **Date**: 2026-10-19
 - **Deciders**: green-0-rabbit
 - **Tags**: api, catalog, stores, config, secrets
