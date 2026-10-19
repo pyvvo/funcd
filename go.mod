@@ -40,8 +40,8 @@ require (
 	github.com/opencontainers/runtime-spec v1.3.0
 	github.com/parquet-go/parquet-go v0.32.0
 	github.com/pyvvo/funcd-functions v0.17.0
-	github.com/pyvvo/funcd-python v0.11.0
-	github.com/pyvvo/funcd-typescript v0.15.0
+	github.com/pyvvo/funcd-python v0.12.0
+	github.com/pyvvo/funcd-typescript v0.17.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/shirou/gopsutil/v4 v4.26.9
 	github.com/spf13/cobra v1.10.2
