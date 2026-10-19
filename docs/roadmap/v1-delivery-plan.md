@@ -3,7 +3,7 @@
 * **Status**: Active (living — update as ADRs are created/accepted/implemented)
 * **Date**: 2026-06-13 (refreshed 2026-06-19 — **V1 is feature-complete**: the **secret-injection last mile**
   (**ADR-0057**, formerly placeholder P-W) is **Implemented** and graduates to tier-0, closing the final
-  exit-criterion clause — a deployed handler now **reads a secret** (a Function declares `spec.secrets`; the
+  exit-criterion clause — a deployed handler now **reads a secret** (a Function declares `spec.bindings.secret`; the
   reconciler resolves them via ADR-0022's PDP-authorized Resolver into the worker env). → **34 ADRs built**
   (0001–0033 + 0049 + 0057, less the superseded 0004). **The V1 build slate is COMPLETE**: every
   exit-criterion clause is delivered and Implemented; **no build item remains**. **P-Z (.deb/.rpm) deferred
@@ -59,7 +59,7 @@ the Python runtime **ADR-0049** + the secret last-mile **ADR-0057**.
 
 | Plan id | Built as | Realizes | Build-depended on |
 |----|----|----|----|
-| ~~P-W~~ → **ADR-0057** ✓ | **Secret injection last-mile** — a Function declares `spec.secrets`; the reconciler resolves them (PDP-authorized, ADR-0022) into the worker env. | F15 | ADR-0022, ADR-0030 |
+| ~~P-W~~ → **ADR-0057** ✓ | **Secret injection last-mile** — a Function declares `spec.bindings.secret`; the reconciler resolves them (PDP-authorized, ADR-0022) into the worker env. | F15 | ADR-0022, ADR-0030 |
 
 **Deferred to V2 (FEAT-0002):** **P-Z** — distro `.deb`/`.rpm` packaging + a multi-arch release matrix over
 the ADR-0026 `build.sh`/ldflags seam (V1 ships the single binary + systemd unit + install docs).
@@ -145,7 +145,7 @@ e2e — the Linux-lane deferral).
 | handler consumes CloudEvents | ADR-0020 ✓ + ADR-0023 ✓ + ADR-0030 ✓ (shim invokes the handler with the CloudEvent) | — (done) |
 | invoked by a timer | ADR-0023 ✓ (invoker) + ADR-0030 ✓ (the invoke reaches a real handler) | — (done) |
 | invoked over HTTP | ADR-0013 ✓ + ADR-0033 ✓ (gateway data plane → activator → shim) | — (done) |
-| reads a secret | ADR-0022 ✓ + ADR-0057 ✓ (`spec.secrets` → reconciler resolves → worker env) | — (done) |
+| reads a secret | ADR-0022 ✓ + ADR-0057 ✓ (`spec.bindings.secret`, which the handler reads through `ctx.secret` from funcd since ADR-0249) | — (done) |
 | persists KV | ADR-0019 ✓ + ADR-0028 ✓ | in-handler SDK (follow-up; the shim's `context`) |
 | scales to zero / wakes | ADR-0016 ✓ + ADR-0015 ✓ + ADR-0033 ✓ (trigger wakes a zeroed fn) | — (done) |
 | proven on a Linux box | ADR-0025 ✓ (L1–L3) + ADR-0032 ✓ (the L4 containerized crun walk) | — (done) |

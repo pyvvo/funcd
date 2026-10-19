@@ -57,18 +57,18 @@ docs/
 │  │
 │  ├─ providers/
 │  │  ├─ builtin/                   # in-daemon, pure-Go, always-on — one page per descriptor in pkg/funcd/providers.go
-│  │  │  ├─ kv.md                   # KVStore kind, spec.kv, sub-domain tables, Badger engine, DR backup + CDC (ADR-0066–0073)
-│  │  │  ├─ blob.md                 # Bucket kind, spec.blob, gocloud drivers mem/file/S3 (ADR-0007/0021)
+│  │  │  ├─ kv.md                   # KVStore kind, spec.bindings.kv, sub-domain tables, Badger engine, DR backup + CDC (ADR-0066–0073)
+│  │  │  ├─ blob.md                 # Bucket kind, spec.bindings.blob, gocloud drivers mem/file/S3 (ADR-0007/0021)
 │  │  │  ├─ s3.md                   # S3/SigV4 frontend over blob, per-function keypair, provider-as-principal (ADR-0080/0085/0088)
 │  │  │  ├─ secrets.md              # encryptor + PDP-authorized resolver, last-mile injection (ADR-0022/0057)
 │  │  │  ├─ eventing.md             # EventSource v2, Sensor, Invocation record, DLQ, object-store source (ADR-0108/0109/0118/0119)
-│  │  │  ├─ invoke.md               # fn-to-fn links: spec.links, context.invoke, UDS-brokered (ADR-0064)
+│  │  │  ├─ invoke.md               # fn-to-fn links: spec.bindings.links, context.invoke, UDS-brokered (ADR-0064)
 │  │  │  ├─ ingress.md              # gateway.Gateway port, Route v2, static Route backend, limits, edge PEP, shaping (FEAT-0006, ADR-0120)
 │  │  │  ├─ egress.md               # egress gateway PEP, NetDestination/EgressPolicy, default-deny + audit (FEAT-0007)
 │  │  │  └─ log-ingest.md           # function-telemetry side channel → OTLP-JSONL → Parquet, + the in-daemon read path / funcdctl logs (ADR-0081/0083/0084)
 │  │  └─ addon/                     # out-of-daemon managed engines, deployed by the provider runtime
 │  │     ├─ provider-runtime.md     # internal/provider over runtime.Runtime: converge, readiness probe, optional ingress route (ADR-0087)
-│  │     └─ catalog-query.md        # CatalogService, DuckLake/DuckDB/Quack, spec.catalogs binding, catalog proxy + catalog::query PEP, external Route (ADR-0086/0091/0137/0138)
+│  │     └─ catalog-query.md        # CatalogService, DuckLake/DuckDB/Quack, spec.bindings.catalog binding, catalog proxy + catalog::query PEP, external Route (ADR-0086/0091/0137/0138)
 │  │
 │  └─ external/                     # third-party systems funcd integrates with — not platform-offered
 │     ├─ oci-registry.md            # any OCI registry (or oci-layout://); push/pull via oras; digest resolution (ADR-0031/0035)
@@ -84,8 +84,8 @@ docs/
 │  ├─ package-and-push.md           # OCI artifact: push/pull/inspect/login; digest pinning at Revision (ADR-0031/0035/0059)
 │  ├─ deploy-and-expose.md          # Function + Route; TLS, limits, edge authn, shaping (FEAT-0006)
 │  ├─ config-and-secrets.md         # ConfigMap/Secret binding, injection order (config then secret, secret wins), key file (ADR-0022/0057/0093)
-│  ├─ use-kv.md                     # KVStore, spec.kv, tables, typed accessors, binding-as-read-grant, backup + CDC (examples/*/kv-counter)
-│  ├─ use-blob-and-s3.md            # Bucket, spec.blob, injected SigV4 keypair, boto3/DuckDB httpfs from the same env (funcd-typescript examples/s3-roundtrip)
+│  ├─ use-kv.md                     # KVStore, spec.bindings.kv, tables, typed accessors, binding-as-read-grant, backup + CDC (examples/*/kv-counter)
+│  ├─ use-blob-and-s3.md            # Bucket, spec.bindings.blob, injected SigV4 keypair, boto3/DuckDB httpfs from the same env (funcd-typescript examples/s3-roundtrip)
 │  ├─ call-another-function.md      # fn-to-fn links; 422 propagation (ADR-0064, funcd-typescript examples/fn-to-fn)
 │  ├─ triggers.md                   # HTTP, timer, object-store EventSource, Sensor actions (ADR-0108/0109/0119)
 │  ├─ build-a-workflow.md           # Workflow/WorkflowRun; run/describe/cancel/replay --from <step>; run logs (funcd-typescript examples/workflow)
