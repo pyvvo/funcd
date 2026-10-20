@@ -46,6 +46,7 @@ import (
 	shimnode "github.com/pyvvo/funcd-typescript/shim"
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/artifact"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
@@ -72,8 +73,11 @@ func (a *cli) devCmd() *cobra.Command {
 	var cfg devConfig
 	cmd := &cobra.Command{
 		Use:   "dev [dir]",
-		Short: "Run a folder's resource files locally, from their builds, on the embedded in-memory platform",
-		Args:  cobra.MaximumNArgs(1),
+		Short: "Run a folder's resource files, or an App template, locally from their builds on the embedded platform",
+		Long: "funcdctl dev runs a folder's resource files from their local builds (ADR-0247). A directory that holds app.yaml " +
+			"beside resources/ runs as an App template instead (ADR-0253): dev pushes each image's build, renders the " +
+			"template as funcdctl app deploy does and applies the App, then again on each save.",
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir := "."
 			if len(args) == 1 {
@@ -108,6 +112,14 @@ func (a *cli) devCmd() *cobra.Command {
 		"fixed S3-frontend port; 0 ⇒ a random free port")
 	cmd.Flags().IntVar(&cfg.cport, "cport", 0,
 		"fixed control-plane port (for `funcdctl --server`: apply, workflow run); 0 ⇒ a random free port")
+	cmd.Flags().StringArrayVarP(&cfg.values, "values", "f", nil,
+		"an App template's values file; repeat it to merge files in order (App mode)")
+	cmd.Flags().StringArrayVar(&cfg.builds, "build", nil,
+		"an App's builds: a folder each image key is looked up in, or <key>=<path> (App mode; repeatable)")
+	cmd.Flags().BoolVar(&cfg.hooks, "hooks", false,
+		"keep the App's preApply and postApply hooks, called on each new revision (App mode)")
+	cmd.Flags().StringArrayVar(&cfg.apply, "apply", nil,
+		"a file of resource documents applied before the App, again when it changes (App mode; repeatable)")
 	cmd.Flags().BoolVar(&cfg.printEnv, "print-env", false,
 		"print the dev S3 credentials as `export …` lines and exit (no server); pair with a fixed --s3port. "+
 			"Use: eval \"$(funcdctl dev <dir> --s3port 3006 --print-env)\"")
@@ -123,6 +135,12 @@ type devConfig struct {
 	s3port    int    // fixed S3-frontend port; 0 ⇒ a random free port
 	cport     int    // fixed control-plane port (apply / workflow run); 0 ⇒ a random free port
 	printEnv  bool   // print the dev S3 creds as `export …` lines and exit (no server)
+	// App mode (ADR-0253): the template's values files, where its builds are, whether its hooks stay, and the files of
+	// resource documents applied beside it.
+	values []string
+	builds []string
+	hooks  bool
+	apply  []string
 	// pickS3Addr picks the S3-frontend address when s3port is 0; nil ⇒ freeLocalAddr. A test hands out a taken one (#627).
 	pickS3Addr func() (string, error)
 	// cacheDir holds the state dir without --persist (ADR-0167); "" ⇒ os.UserCacheDir. A test passes its own.
@@ -137,6 +155,12 @@ func (a *cli) startDev(ctx context.Context, dir string, cfg devConfig) (*devInst
 	lg, err := observability.NewLogger(observability.Config{Format: observability.FormatText}, a.out)
 	if err != nil {
 		return nil, err
+	}
+	if isAppTemplate(dir) {
+		return a.startDevApp(ctx, dir, cfg, lg.Root())
+	}
+	if len(cfg.values) > 0 || len(cfg.builds) > 0 || cfg.hooks || len(cfg.apply) > 0 {
+		return nil, fault.Invalidf(op, "-f, --build, --hooks and --apply run an App template; %s holds no app.yaml beside resources/", dir)
 	}
 	folder, err := loadDevFolder(op, dir)
 	if err != nil {
@@ -806,6 +830,8 @@ type devInstance struct {
 	workflows  []string // the folder's Workflows
 	catalogs   []string // the CatalogServices the embedded duckdb+quack engine serves; nil if none
 	runtimes   *devRuntimes
+	// artifactDir, when set, runs the parts from the OCI images dev pushed, pulled into it (App mode, #1067).
+	artifactDir string
 	// S3 frontend (ADR-0080/0085, Decision 6): the endpoint + the dev function's derived keypair. The
 	// author (or a test) points an S3 client at s3Endpoint with these creds to inspect blob artifacts.
 	s3Endpoint  string
@@ -923,6 +949,14 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, folder *devFold
 		funcd.WithWorkflowContractResolver(devWorkflowContracts{}),
 		funcd.WithWorkflowRuntimeResolver(inst.runtimes),
 	}
+	if inst.artifactDir != "" {
+		// An App's parts are OCI images in dev's layout, pulled and resolved as a deploy pulls them (#1067).
+		opts = []funcd.Option{
+			funcd.InMemory(),
+			funcd.WithRuntime(rt),
+			funcd.WithMaterializer(artifact.NewOrasMaterializer(inst.artifactDir, v1.HostPlatform())),
+		}
+	}
 	catOpts, caterr := devCatalogOptions(plan, stateDir, folder, inst)
 	if caterr != nil {
 		return nil, caterr
@@ -978,7 +1012,12 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, folder *devFold
 
 	// S3 frontend (ADR-0080/0085, Decision 6): expose the blob substrate over the S3 protocol on a free
 	// node-private port. The printed creds are the FIRST function's derived keypair (representative).
-	s3Cleanup, s3err := devS3Options(op, &opts, inst.functions[0], cfg, inst)
+	// The keypair is derived over the first Function's identity; an App of Sites and stores only has none (#1067).
+	s3Identity := devResourceGroup
+	if len(inst.functions) > 0 {
+		s3Identity = inst.functions[0]
+	}
+	s3Cleanup, s3err := devS3Options(op, &opts, s3Identity, cfg, inst)
 	if s3err != nil {
 		if closeDurable != nil {
 			closeDurable()
