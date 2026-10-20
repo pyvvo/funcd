@@ -11878,5 +11878,20 @@
     "dod_total": 12,
     "report": "docs/reviews/issue-1118-fix-claude-opus-5-5.md",
     "notes": "pass; minor (model): devSettle pending guard untested (mutant survived), closed by TestDevSettleKeepsAConfigReload; minor (model): reload comment past 120 cols; found pre-existing defect fixed in review (reload at every poll for a Function added after start)"
+  },
+  {
+    "date": "2026-10-20",
+    "issue": "1120",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-1120-fix-claude-opus-5-5.md",
+    "notes": "pass; minor(model): lateWatch forwarder blocks after Stop; revert + 2 mutants fail at the issue's assertion"
   }
 ]
