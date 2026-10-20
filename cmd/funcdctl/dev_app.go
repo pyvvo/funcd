@@ -75,6 +75,7 @@ type devAppSession struct {
 	persist string // dev's state dir (the --persist-to dir under --persist), which dev skips inside the template directory
 	images  map[string]*devImage
 	stamp   string      // the stamp of every input at the last reload
+	settle  devSettle   // holds a reload until the inputs stop changing
 	applied []v1.Object // the --apply documents applied last
 	out     io.Writer
 	logger  *slog.Logger
@@ -845,10 +846,10 @@ func (s *devAppSession) follow(ctx context.Context, a *cli, c *sdk.Client, app *
 	}()
 }
 
-// watch polls every input at devReloadPoll (ADR-0247 Decision 8's polling) and redeploys the App when one changed; a
-// failed reload is reported and the last App keeps running. Each new revision is followed in the background, and a
-// newer one cancels that follow: the App reconciler switches only its latest revision, so a fix saved while a broken
-// revision waits rolls at once.
+// watch polls every input at devReloadPoll (ADR-0247 Decision 8's polling) and redeploys the App once one changed and
+// the inputs read the same on two polls in a row (devSettle); a failed reload is reported and the last App keeps
+// running. Each new revision is followed in the background, and a newer one cancels that follow: the App reconciler
+// switches only its latest revision, so a fix saved while a broken revision waits rolls at once.
 func (s *devAppSession) watch(ctx context.Context, op string, a *cli, c *sdk.Client, done chan<- struct{}) {
 	defer close(done)
 	t := time.NewTicker(devReloadPoll)
@@ -871,7 +872,7 @@ func (s *devAppSession) watch(ctx context.Context, op string, a *cli, c *sdk.Cli
 			s.cfg.file.mergeAppKeys(&s.cfg)
 		}
 		stamp, err := s.inputsStamp()
-		if err != nil || (stamp == s.stamp && !forced) {
+		if err != nil || !s.settle.ready(stamp, stamp != s.stamp || forced) {
 			continue
 		}
 		s.stamp = stamp

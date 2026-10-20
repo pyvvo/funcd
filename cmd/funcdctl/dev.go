@@ -492,6 +492,7 @@ type devSession struct {
 	started   map[v1.ObjectName]bool // the Functions and steps the boot started; a later one needs a restart
 	file      *devFileState          // funcdctl.config.yaml, nil without one (ADR-0254 Decision 6)
 	secrets   devSecretSources
+	settle    devSettle
 }
 
 // oldStep is a step copy that goes once its step's Function serves image.

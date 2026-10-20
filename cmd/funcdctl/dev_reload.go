@@ -4,9 +4,11 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -155,11 +157,15 @@ func (s *devSession) changed() bool {
 	return false
 }
 
-// reload re-reads the folder when it changed, re-applies it as the boot did and prunes what *applied holds that the
-// folder no longer does. A folder that does not load is reported once and retried on the next change; an apply that
+// reload re-reads the folder once it changed and reads the same on two polls in a row (devSettle), re-applies it as the
+// boot did and prunes what *applied holds that the folder no longer does. A folder that does not load is reported once and retried on the next change; an apply that
 // lost a race with a status write (Conflict) is retried on the next poll.
 func (s *devSession) reload(ctx context.Context, op string, c *sdk.Client, applied *[]v1.Object, logger *slog.Logger) error {
-	if !s.file.reloadFile(op, &s.secrets, logger.Warn) && !s.changed() {
+	forced := s.file.reloadFile(op, &s.secrets, logger.Warn)
+	if !forced && !s.settle.pending && !s.changed() {
+		return nil
+	}
+	if !s.settle.ready(s.pollStamp(), true) {
 		return nil
 	}
 	folder, err := loadDevFolder(op, s.folder.dir)
@@ -187,6 +193,45 @@ func (s *devSession) reload(ctx context.Context, op string, c *sdk.Client, appli
 	s.folder = folder
 	*applied = pruneRemoved(ctx, c, *applied, desired, true, logger)
 	return nil
+}
+
+// devSettle holds a reload back until dev's inputs stop changing (#1118): a build tool writes its output over time
+// (vite build empties its outDir first), so a change reloads only once the inputs read the same on two polls in a row.
+type devSettle struct {
+	polled  string // the inputs' stamp at the previous poll
+	pending bool   // a change seen at an earlier poll, waiting for the inputs to settle
+}
+
+// ready records stamp, the inputs at this poll, and reports whether the reload runs now: a change was seen, at this
+// poll or an earlier one, and stamp is the previous poll's.
+func (d *devSettle) ready(stamp string, changed bool) bool {
+	same := stamp == d.polled
+	d.polled = stamp
+	d.pending = d.pending || changed
+	if !d.pending || !same {
+		return false
+	}
+	d.pending = false
+	return true
+}
+
+// pollStamp digests what changed compares, as it is now: the files and listings the folder was read from and each
+// build's fingerprint.
+func (s *devSession) pollStamp() string {
+	sum := sha256.New()
+	stamps := s.currentStamps()
+	for _, path := range slices.Sorted(maps.Keys(stamps)) {
+		_, _ = fmt.Fprintf(sum, "%s\x00%s\n", path, stamps[path])
+	}
+	for _, fn := range s.folder.functions {
+		fp, _ := fn.build.fingerprint(s.stateDirs)
+		_, _ = fmt.Fprintf(sum, "%s\x00%s\n", fn.fn.Name, fp)
+	}
+	for _, st := range s.folder.steps {
+		fp, _ := st.build.fingerprint(s.stateDirs)
+		_, _ = fmt.Fprintf(sum, "%s\x00%s\n", st.name, fp)
+	}
+	return fmt.Sprintf("%x", sum.Sum(nil))
 }
 
 // currentStamps re-stamps every file the folder was read from, so a folder that fails to load is reported once.
