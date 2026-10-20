@@ -109,6 +109,27 @@ func TestIssue1118_FolderDevWaitsForABuildToSettle(t *testing.T) {
 	require.NotContains(t, out.String(), "reload failed", "no reload of a bundle in progress")
 }
 
+// TestDevSettleKeepsAConfigReload: a change to the envFile of funcdctl.config.yaml, which no folder stamp covers, still
+// reloads when it waits for the inputs to settle. After a reload that read a new Function, the next poll's stamp
+// differs from the one devSettle holds, so the change reloads one poll later, when reloadFile no longer reports it.
+func TestDevSettleKeepsAConfigReload(t *testing.T) {
+	requireNode(t)
+	const key = "DEVSETTLE_RELOAD_KEY"
+	require.NoError(t, os.Unsetenv(key))
+	start := devProject(t, merge(secretFunction(key), map[string]string{devConfigFile: "dev:\n  envFile: .env\n", ".env": key + "=one\n"}))
+	var logs lockedBuffer
+	inst, err := startDevFrom(t, start, &logs, devConfig{})
+	require.NoError(t, err)
+	url := inst.gatewayURL + "/function/api"
+	eventuallyServes(t, url, `{"data":{}}`, http.StatusOK, `"key":"one"`)
+
+	writeProject(t, start, nodeFunction("more", "", "export function handle() { return {}; }\n"))
+	require.Eventually(t, func() bool { return strings.Contains(logs.String(), addedAfterStart) }, 10*time.Second,
+		50*time.Millisecond, "the reload reads the new Function")
+	writeProject(t, start, map[string]string{".env": key + "=two\n"})
+	eventuallyServes(t, url, `{"data":{}}`, http.StatusOK, `"key":"two"`)
+}
+
 // addedAfterStart is the warning of a Function added after dev started.
 const addedAfterStart = "restart funcdctl dev to run a Function added after it started"
 

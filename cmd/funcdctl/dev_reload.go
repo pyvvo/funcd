@@ -165,9 +165,10 @@ func (s *devSession) changed() bool {
 	return false
 }
 
-// reload re-reads the folder once it changed and reads the same on two polls in a row (devSettle), re-applies it as the
-// boot did and prunes what *applied holds that the folder no longer does. A folder that does not load is reported once and retried on the next change; an apply that
-// lost a race with a status write (Conflict) is retried on the next poll.
+// reload re-reads the folder once it changed and reads the same on two polls in a row (devSettle), re-applies it as
+// the boot did and prunes what *applied holds that the folder no longer does. A folder that does not load is reported
+// once and retried on the next change; an apply that lost a race with a status write (Conflict) is retried on the next
+// poll.
 func (s *devSession) reload(ctx context.Context, op string, c *sdk.Client, applied *[]v1.Object, logger *slog.Logger) error {
 	forced := s.file.reloadFile(op, &s.secrets, logger.Warn)
 	if !forced && !s.settle.pending && !s.changed() {
