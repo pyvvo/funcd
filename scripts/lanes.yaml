@@ -33,7 +33,7 @@
 #             `just lima-example <name>` still runs it.
 
 env-echo:
-  description: A JS function receiving spec.config (ConfigMap) + spec.secrets (Secret) env (ADR-0093/0057).
+  description: A JS function receiving spec.bindings.config (ConfigMap) + spec.bindings.secret (Secret) env (ADR-0093/0057).
   module: github.com/pyvvo/funcd-typescript
   dir: examples/env-echo
   stage:

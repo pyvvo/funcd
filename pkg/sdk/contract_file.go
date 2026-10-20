@@ -68,7 +68,7 @@ func LoadContract(dir, name string) (*ContractFile, string, error) {
 	return c, found[0], nil
 }
 
-// parseContractFile decodes a contract file strictly, as parseManifest decodes funcdctl.yaml: YAML 1.2 text is kept
+// parseContractFile decodes a contract file strictly: YAML 1.2 text is kept
 // (quoteStrings, quoteTextScalars) and an unknown key is refused.
 func parseContractFile(op, path string, data []byte) (*ContractFile, error) {
 	var doc yamlv3.Node
