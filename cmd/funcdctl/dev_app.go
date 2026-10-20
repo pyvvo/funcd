@@ -307,7 +307,7 @@ func refuseSQLWithoutEngine(op string, app *v1.App, folder *devFolder) error {
 }
 
 // earlyChecks runs, before the watch commands start, the checks that need no build (ADR-0255 Decision 2): the --apply
-// files, the template and the values, then on the stand-in App its requires, the SQL engine and the Secrets it declares.
+// files, the template and the values, then on the stand-in App its requires, the SQL engine and its declared Secrets.
 func (s *devAppSession) earlyChecks(op string) error {
 	docs, err := applyDocuments(op, s.cfg.apply)
 	if err != nil {
@@ -358,12 +358,12 @@ func siteHoldsIndex(op, key string, img *devImage) error {
 	entries, err := os.ReadDir(img.site)
 	switch {
 	case err != nil:
-		return buildMiss{fault.Invalidf(op, "images.%s: %v", key, err)}
+		return buildMiss{error: fault.Invalidf(op, "images.%s: %v", key, err)}
 	case len(entries) == 0:
-		return buildMiss{fault.Invalidf(op, "images.%s: %s is empty", key, img.site)}
+		return buildMiss{error: fault.Invalidf(op, "images.%s: %s is empty", key, img.site)}
 	}
 	if _, err := os.Stat(filepath.Join(img.site, filepath.FromSlash(img.index))); err != nil {
-		return buildMiss{fault.Invalidf(op, "images.%s: %s holds no %s", key, img.site, img.index)}
+		return buildMiss{error: fault.Invalidf(op, "images.%s: %s holds no %s", key, img.site, img.index)}
 	}
 	return nil
 }
@@ -557,7 +557,7 @@ func (s *devAppSession) resolveImage(op, key string, img *devImage) error {
 			if fi, err := os.Stat(p); err != nil || !fi.IsDir() {
 				refusal := fault.Invalidf(op, "--build %s=%s: a Site's build is a folder", key, p)
 				if errors.Is(err, fs.ErrNotExist) {
-					return buildMiss{refusal}
+					return buildMiss{error: refusal, wait: fmt.Sprintf("images.%s: %s is absent", key, p)}
 				}
 				return refusal
 			}
@@ -594,8 +594,11 @@ func (s *devAppSession) resolveImage(op, key string, img *devImage) error {
 		img.build = b
 		return nil
 	}
-	return buildMiss{fault.Invalidf(op, "no build of images.%s in the --build folders %s; name it with --build %s=<path>",
-		key, strings.Join(dirs, ", "), key)}
+	folders := strings.Join(dirs, ", ")
+	return buildMiss{
+		error: fault.Invalidf(op, "no build of images.%s in the --build folders %s; name it with --build %s=<path>", key, folders, key),
+		wait:  fmt.Sprintf("images.%s in the --build folders %s (or name it with --build %s=<path>)", key, folders, key),
+	}
 }
 
 // holdsBuild reports whether the folder holds name's build by resolveBuild's rules.
@@ -614,7 +617,7 @@ func buildAt(op, key, path string) (devBuild, error) {
 	if err != nil {
 		refusal := fault.Invalidf(op, "--build %s=%s: %v", key, path, err)
 		if errors.Is(err, fs.ErrNotExist) {
-			return devBuild{}, buildMiss{refusal}
+			return devBuild{}, buildMiss{error: refusal, wait: fmt.Sprintf("images.%s: %s is absent", key, path)}
 		}
 		return devBuild{}, refusal
 	}

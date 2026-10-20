@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -213,10 +214,25 @@ func lastLines(path, name string) string {
 }
 
 // buildMiss is a build a lookup did not find, which a watch command may still write (ADR-0255 Decision 2). It keeps the
-// refusal's message and kind.
-type buildMiss struct{ error }
+// refusal's message and kind for a stop; wait, when set, is what dev prints while it waits, else the refusal's message.
+type buildMiss struct {
+	error
+	wait string
+}
 
 func (m buildMiss) Unwrap() error { return m.error }
+
+// waiting is what dev prints while it waits on m: its wait, else the refusal's message without its op.
+func (m buildMiss) waiting() string {
+	if m.wait != "" {
+		return m.wait
+	}
+	var fe *fault.Error
+	if errors.As(m.error, &fe) && fe.Err == nil {
+		return fe.Msg
+	}
+	return m.Error()
+}
 
 // contractMiss is err, sdk.LoadContract's refusal, marked a miss when dir holds neither contract file of name
 // (sdk's .contract.yaml and .contract.json) yet.
@@ -226,7 +242,7 @@ func contractMiss(dir, name string, err error) error {
 			return err
 		}
 	}
-	return buildMiss{err}
+	return buildMiss{error: err, wait: fmt.Sprintf("the contract file of %s in %s", name, dir)}
 }
 
 // waitForBuilds calls lookup every devReloadPoll until it finds every build and the inputs' stamp it returns reads the
@@ -255,7 +271,7 @@ func waitForBuilds(ctx context.Context, cmds *devCommands, writef func(string, .
 				return err
 			}
 		default:
-			if msg := err.Error(); msg != printed {
+			if msg := miss.waiting(); msg != printed {
 				printed = msg
 				if werr := writef("waiting for %s\n", msg); werr != nil {
 					return werr

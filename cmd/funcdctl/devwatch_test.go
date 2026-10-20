@@ -166,7 +166,7 @@ func TestScenarioDevWatchWaits(t *testing.T) {
 	out := r.out.String()
 	logFile := filepath.Join(loopState(t, root, cfg), "logs", "web.log")
 	require.Contains(t, out, "watch web: "+logFile)
-	require.Contains(t, out, "waiting for funcdctl dev: --build web="+filepath.Join(root, "web"))
+	require.Contains(t, out, "waiting for images.web: "+filepath.Join(root, "web")+" is absent\n")
 	require.Less(t, strings.Index(out, "watch web: "), strings.Index(out, "waiting for "), "the log file is printed first")
 	index, err := os.ReadFile(filepath.Join(root, "web-src", "site", "index.html"))
 	require.NoError(t, err)
@@ -429,7 +429,7 @@ func TestScenarioDevLoopAbsent(t *testing.T) {
 // TestDevWaitForBuilds: a miss is printed once and waited on; a refusal stops the wait only on a settled poll, and so
 // does a miss once every command exited 0.
 func TestDevWaitForBuilds(t *testing.T) {
-	miss, refusal := buildMiss{errors.New("no build of images.web")}, errors.New("bad contract")
+	miss, refusal := buildMiss{error: errors.New("no build of images.web")}, errors.New("bad contract")
 	type poll struct {
 		stamp string
 		err   error
