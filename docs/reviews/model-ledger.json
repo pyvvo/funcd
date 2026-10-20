@@ -11923,5 +11923,20 @@
     "dod_total": 7,
     "report": "docs/reviews/adr-0255-implementation-claude-opus-5-5.md",
     "notes": "round 2 (a87a2048): all round-1 findings closed with tests; 4 review mutants killed; live check 53/53"
+  },
+  {
+    "date": "2026-10-21",
+    "issue": "1126",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 11,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-1126-fix-claude-opus-5-5.md",
+    "notes": "pass; revert + 2 mutants fail deterministically (-4 -> -8); test-only probe budget per function.go:201's rule; gate pending (env); prod probe-semantics note to the decider"
   }
 ]
