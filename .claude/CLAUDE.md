@@ -386,6 +386,21 @@ rules that did it:
 - **Group PRs of one wave conflict with each other.** Before queueing any of them, run
   `scripts/agent/wave-check.sh <branch>...` on all of the wave's group branches, in queue order: it names each branch
   that conflicts with the ones before it (rebase it on them) and, when none conflicts, gates the merged wave once.
+- **One PR for a batch, on request.** When the decider asks for one PR, a batch of fixes or an epoch's ADR work (its
+  docs, implementation and stamp) ships as a single PR instead of one per item. Each item is one commit, with its
+  conventional subject and `Fixes #N`, and is reviewed on that commit. Every review report and ledger row goes in one
+  last commit. Then the PR gets one gate, one CI run and one queue entry, and a failing item's commit is rebased out
+  while the rest go on. The queue squashes, so the PR body ends with one `Fixes #N` line per issue and a release-please
+  block with one conventional line per item, which gives each item its own changelog line:
+
+  ```
+  BEGIN_COMMIT_OVERRIDE
+  fix(funcdctl): <the first item's subject>
+  fix(e2e): <the second item's subject>
+  END_COMMIT_OVERRIDE
+  ```
+
+  Without that request, each item keeps its own PR.
 - **Merging and waiting.** Repo auto-merge is off, so `gh pr merge` fails: enqueue with the GraphQL
   `enqueuePullRequest` mutation after reading every check's conclusion; the queue builds up to 5 PRs together.
   Wait in the background (`scripts/agent/watch-prs.py` exits when a PR turns green, red or conflicted), never in a

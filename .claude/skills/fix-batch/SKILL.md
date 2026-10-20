@@ -72,7 +72,9 @@ When all of a group's jobs are done:
    writes a waiver. A `host` failure means the ports are exhausted: wait and rerun.
 4. Push and open the PR: a Conventional-Commit title naming the group (it becomes the squash commit and the
    release note), typed `fix` when any applied commit changes product behavior (the notes list only fix and feat); a table (issue, cause, regression test, review report); the parked issues; the gate result; one
-   `Fixes #N` line per fixed issue, plus `Fixes #<T>` only when the group closes every open sub-issue; a
+   `Fixes #N` line per fixed issue, plus `Fixes #<T>` only when the group closes every open sub-issue; the
+   `BEGIN_COMMIT_OVERRIDE` block of CLAUDE.md's *One PR for a batch*, one line per applied fix, so each fix gets its own
+   release note; a
    "Lima lane pending" note when a fix touches `internal/runtime/containerd`, `internal/network`, `e2e/` or
    `scripts/lanes.yaml`; the attribution line.
 
