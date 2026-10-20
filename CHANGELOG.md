@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.16.0](https://github.com/pyvvo/funcd/compare/v0.15.0...v0.16.0) (2026-10-20)
+
+
+### Features
+
+* **funcdctl:** funcdctl dev runs a whole App from its template (ADR-0253) ([#1112](https://github.com/pyvvo/funcd/issues/1112)) ([46038aa](https://github.com/pyvvo/funcd/commit/46038aae808127218fd4ac425e45c3e22a45f1b2))
+* **funcdctl:** funcdctl.config.yaml holds what funcdctl dev is run with (ADR-0254) ([#1113](https://github.com/pyvvo/funcd/issues/1113)) ([5a3e321](https://github.com/pyvvo/funcd/commit/5a3e3215fb42f71fa30aba8277b231517eaf91d3))
+
 ## [0.15.0](https://github.com/pyvvo/funcd/compare/v0.14.1...v0.15.0) (2026-10-20)
 
 
