@@ -1,9 +1,10 @@
 # ADR-0253: `funcdctl dev` runs a whole App from its template
 
-- **Status**: Reviewing (2026-10-20), implemented; Accepted (2026-10-20), after two judge rounds, under `adr-batch`
-  with acceptance delegated by the decider. The judge made every scenario run on the todo and site-config Apps with its
-  full command, kept a Secret an `--apply` document defines, applied the Secrets again on a reload, and narrowed what
-  dev skips in a template.
+- **Status**: Implemented (2026-10-20), review passed on its second round
+  (docs/reviews/adr-0253-implementation-claude-opus-5-5-2.md); Reviewing (2026-10-20), implemented in #1112; Accepted
+  (2026-10-20), after two judge rounds, under `adr-batch` with acceptance delegated by the decider. The judge made
+  every scenario run on the todo and site-config Apps with its full command, kept a Secret an `--apply` document
+  defines, applied the Secrets again on a reload, and narrowed what dev skips in a template.
 - **Date**: 2026-10-20
 - **Deciders**: green-0-rabbit
 - **Tags**: dx, cli, dev, app, template
