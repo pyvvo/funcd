@@ -435,7 +435,7 @@ tracked files; a shape the decider reviews is a decision input, and an unmarked 
 Small house-style rules that apply to every file you write or edit:
 
 - **YAML is block style — never flow style.** No inline `{ key: value }` curly braces and no inline
-  `[a, b]` lists, in any `.yaml`/`.yml` file or any embedded YAML (funcdctl.yaml, resource manifests,
+  `[a, b]` lists, in any `.yaml`/`.yml` file or any embedded YAML (contract files, resource manifests,
   `.venom.yml`, YAML inside Go/Python test consts, ADR/doc code fences). Expand every mapping and
   sequence across lines:
 
