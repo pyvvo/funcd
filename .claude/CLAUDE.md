@@ -302,6 +302,15 @@ generates the issue forms in `.github/ISSUE_TEMPLATE/` (computed — never hand-
   works through a tracker issue's sub-issues. A security finding is a private draft security advisory, not a
   public issue, and is fixed in the advisory's private fork.
 
+## Experiments — measured evidence lives in pyvvo/experiment
+
+A spike that measures an approach before (or instead of) a decision is an **experiment**: one folder of the private
+[pyvvo/experiment](https://github.com/pyvvo/experiment) repo, rerunnable with `nix develop -c just run`, with a
+one-page report whose numbers are rendered from its results, never typed. Run it with the
+[`/experiment`](../.claude/skills/experiment/SKILL.md) skill. Everything it runs is pinned (funcd at a commit,
+unmerged code as a patch on it), so no spike branch lands here. An experiment decides nothing: the ADR it informs
+cites it in its References.
+
 ## Dev environment — run everything through Nix
 
 The toolchain is pinned by the flake ([flake.nix](../flake.nix) + `flake.lock`) — Go, `just`, and
