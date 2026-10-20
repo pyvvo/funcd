@@ -121,8 +121,8 @@ controller** runs **one reconcile loop per kind** to drive *actual state → des
   - an `AppRevision` per change, with history and rollback (ADR-0200);
   - hooks (ADR-0214), requirements (ADR-0219), self-heal and pause (ADR-0212);
   - a snapshot before an upgrade, with safe mode (ADR-0207), and backup schedules for its own stores (ADR-0222).
-- The App's dev mode is decided, not built yet: `funcdctl dev <template dir>` will run an App from local builds
-  (ADR-0253, #1067), with what it runs with kept in `funcdctl.config.yaml` (ADR-0254, #1110).
+- `funcdctl dev <template dir>` runs an App from local builds with reload on save (ADR-0253, #1067); what it runs
+  with is to be kept in `funcdctl.config.yaml` (ADR-0254, #1110).
 
 **Deploy lifecycle:**
 

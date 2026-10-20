@@ -9,8 +9,12 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"net"
+	neturl "net/url"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -24,10 +28,10 @@ import (
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
-// App mode (#1067, an experiment without an ADR): `funcdctl dev <template dir>` deploys an App template on the embedded
-// platform from local builds. Dev pushes each image's build to an OCI layout in its state dir, renders the template
-// with that layout as its registry and a lock of those pushes, and applies the App as `app deploy` does. The App
-// reconciler then writes the parts, stores, Routes and Sites, and stamps a revision per change.
+// App mode (ADR-0253): `funcdctl dev <template dir>` deploys an App template on the embedded platform from local builds.
+// Dev pushes each image's build to an OCI layout in its state dir, renders the template with that layout as its
+// registry and a lock of those pushes, and applies the App as `app deploy` does. The App reconciler then writes the
+// parts, stores, Routes and Sites, and stamps a revision per change.
 
 // Part kinds an image serves.
 const (
@@ -35,6 +39,12 @@ const (
 	partStep     = "step"
 	partSite     = "site"
 )
+
+// devFollowPoll paces the follow of each new revision (ADR-0253 Decision 8).
+const devFollowPoll = 100 * time.Millisecond
+
+// devAppKeypairName is the name the S3 keypair is derived over for an App with no function part (Decision 11).
+const devAppKeypairName = "dev"
 
 // isAppTemplate reports whether dir is an App template directory (ADR-0217): an app.yaml beside resources/.
 func isAppTemplate(dir string) bool {
@@ -58,18 +68,22 @@ type devImage struct {
 
 // devAppSession is the state the boot and each reload of an App share.
 type devAppSession struct {
-	dir    string // the template directory
-	cfg    devConfig
-	layout string // the OCI layout each build is pushed to, one repository per image
-	stage  string // where a build directory is copied before its push
-	images map[string]*devImage
-	stamp  string // the stamp of every input at the last reload
-	out    io.Writer
+	dir     string // the template directory
+	cfg     devConfig
+	layout  string // the OCI layout each build is pushed to, one repository per image
+	stage   string // where a build directory or the template is copied before it is read
+	persist string // dev's state dir (the --persist-to dir under --persist), which dev skips inside the template directory
+	images  map[string]*devImage
+	stamp   string      // the stamp of every input at the last reload
+	applied []v1.Object // the --apply documents applied last
+	out     io.Writer
+	logger  *slog.Logger
 	// cancelFollow stops the follow of the revision applied last; the boot sets it first, then only the watcher.
 	cancelFollow context.CancelFunc
 }
 
-// startDevApp boots the embedded platform for the App template at dir and deploys it from local builds.
+// startDevApp boots the embedded platform for the App template at dir and deploys it from local builds: the --apply
+// documents first, then the Secrets the App declares, then the App. A refusal at start stops dev (Decision 8).
 func (a *cli) startDevApp(ctx context.Context, dir string, cfg devConfig, logger *slog.Logger) (_ *devInstance, err error) {
 	const op = "funcdctl dev"
 	plan, err := resolvePersistPlan(cfg)
@@ -82,7 +96,7 @@ func (a *cli) startDevApp(ctx context.Context, dir string, cfg devConfig, logger
 	}
 	root := filepath.Dir(processDir)
 	s := &devAppSession{dir: dir, cfg: cfg, layout: filepath.Join(root, "oci"), stage: filepath.Join(root, "stage"),
-		images: map[string]*devImage{}, out: a.out}
+		images: map[string]*devImage{}, out: a.out, logger: logger, persist: stateRoot(processDir)}
 	for _, d := range []string{s.layout, s.stage} {
 		if merr := os.MkdirAll(d, 0o700); merr != nil {
 			return nil, fault.Wrapf(merr, fault.Internal, op, "create %s", d)
@@ -91,16 +105,18 @@ func (a *cli) startDevApp(ctx context.Context, dir string, cfg devConfig, logger
 	if s.stamp, err = s.inputsStamp(); err != nil {
 		return nil, err
 	}
-	app, secrets, err := s.prepare(ctx, op)
+	d, err := s.prepare(ctx, op)
 	if err != nil {
 		return nil, err
 	}
-	if len(app.Spec.SQL) > 0 && !sqlembedengine.Bundled() {
-		return nil, fault.Unavailablef(op, "App %s declares a SQL database, but this funcdctl has no SQL engine", app.Name)
+	folder := s.platformFolder(d.app, d.docs)
+	if (len(d.app.Spec.SQL) > 0 || folder.bindsSQL()) && !sqlembedengine.Bundled() {
+		return nil, fault.Unavailablef(op, "App %s declares a SQL database, but this funcdctl has no SQL engine: build it with "+
+			"just build-sql-engine %s %s, then go build -tags dev ./cmd/funcdctl", d.app.Name, goruntime.GOOS, goruntime.GOARCH)
 	}
-	folder := s.platformFolder(app)
 	inst := &devInstance{runErr: make(chan error, 1), logger: logger, functions: folder.names(), workflows: folder.workflowNames(),
-		runtimes: &devRuntimes{byImage: map[string]v1.RuntimeName{}}, artifactDir: filepath.Join(root, "artifacts")}
+		runtimes: &devRuntimes{byImage: map[string]v1.RuntimeName{}}, artifactDir: filepath.Join(root, "artifacts"),
+		s3Name: appKeypairName(d.app), app: d.app}
 	defer func() {
 		if err != nil {
 			inst.unwind(0)
@@ -122,40 +138,58 @@ func (a *cli) startDevApp(ctx context.Context, dir string, cfg devConfig, logger
 	}
 	inst.client = client
 	start := time.Now()
-	r, err := applyDevApp(ctx, client, app, secrets)
+	r, err := s.apply(ctx, op, client, d)
 	if err != nil {
 		return nil, err
 	}
+	if plan.storeDir != "" {
+		// a --persist restart deletes what an earlier session applied that the --apply files no longer hold (Decision 7)
+		if _, err = pruneStale(ctx, client, slices.Concat(d.docs, d.secrets), logger); err != nil {
+			return nil, fault.Wrapf(err, fault.KindOf(err), op, "prune the documents an earlier session applied")
+		}
+	}
 	deployed := func() string {
-		return fmt.Sprintf("App %s deployed in %s", app.Name, time.Since(start).Round(time.Millisecond))
+		return fmt.Sprintf("App %s deployed in %s", d.app.Name, time.Since(start).Round(time.Millisecond))
 	}
 	if r.applied {
-		s.follow(ctx, a, client, app, r, deployed, logger)
+		s.follow(ctx, a, client, d.app, r, deployed)
 	} else if err = a.writef("%s\n", deployed()); err != nil {
 		return nil, err
 	}
 	inst.watchDone = make(chan struct{})
-	go s.watch(ctx, op, a, client, logger, inst.watchDone)
+	go s.watch(ctx, op, a, client, inst.watchDone)
 	return inst, nil
 }
 
-// prepare loads the template and the values, pushes each build that changed since its last push, and renders the App
-// with dev's layout as its registry and a lock of those pushes. The App's hooks stay only under --hooks; an App that
-// requires another is refused. It also returns the Secrets the App declares, from the environment.
-func (s *devAppSession) prepare(ctx context.Context, op string) (*v1.App, []v1.Object, error) {
-	t, err := template.Load(s.dir)
+// devAppDesired is what one render asks dev to apply: the App, the --apply documents and the Secrets dev creates.
+type devAppDesired struct {
+	app     *v1.App
+	docs    []v1.Object
+	secrets []v1.Object
+}
+
+// prepare reads the --apply files, loads the template and the values, pushes each build that changed since its last
+// push, and renders the App with dev's layout as its registry and a lock of those pushes. The App's hooks stay only
+// under --hooks; an App that requires another is refused. It also returns the Secrets the App declares that no --apply
+// document defines, from the environment.
+func (s *devAppSession) prepare(ctx context.Context, op string) (devAppDesired, error) {
+	docs, err := applyDocuments(op, s.cfg.apply)
 	if err != nil {
-		return nil, nil, err
+		return devAppDesired{}, err
+	}
+	t, err := s.loadTemplate(op)
+	if err != nil {
+		return devAppDesired{}, err
 	}
 	values, err := readValues(s.cfg.values)
 	if err != nil {
-		return nil, nil, err
+		return devAppDesired{}, err
 	}
 	in := template.RenderInput{Namespace: devNamespace, Values: values}
 	t.Registry = "oci-layout://" + s.layout
-	used, lock, err := probeImages(t, in)
+	used, lock, _, err := probeImages(t, in)
 	if err != nil {
-		return nil, nil, err
+		return devAppDesired{}, err
 	}
 	keys := make([]string, 0, len(used))
 	for key := range used {
@@ -165,11 +199,11 @@ func (s *devAppSession) prepare(ctx context.Context, op string) (*v1.App, []v1.O
 	for _, key := range keys {
 		img := used[key]
 		if err := s.resolveImage(op, key, img); err != nil {
-			return nil, nil, err
+			return devAppDesired{}, err
 		}
 		l := lock[key]
 		if err := s.push(ctx, op, key, t.Parsed[key].Repo, l.Version, img); err != nil {
-			return nil, nil, err
+			return devAppDesired{}, err
 		}
 		l.Digest = img.digest
 		lock[key] = l
@@ -178,26 +212,104 @@ func (s *devAppSession) prepare(ctx context.Context, op string) (*v1.App, []v1.O
 	t.Lock = lock
 	app, err := template.Render(t, in)
 	if err != nil {
-		return nil, nil, err
+		return devAppDesired{}, err
 	}
 	if len(app.Spec.Requires) > 0 {
 		r := app.Spec.Requires[0]
-		return nil, nil, fault.Invalidf(op, "App %s requires App %s %s: funcdctl dev does not run an App that requires another yet",
+		return devAppDesired{}, fault.Invalidf(op, "App %s requires App %s %s: funcdctl dev does not run an App that requires another yet",
 			app.Name, r.App, r.Version)
 	}
 	if !s.cfg.hooks {
 		app.Spec.Hooks = nil
 	}
-	secrets, err := devAppSecrets(op, app)
+	secrets, err := devAppSecrets(op, withoutDefined(app, docs))
 	if err != nil {
-		return nil, nil, err
+		return devAppDesired{}, err
 	}
-	return app, secrets, nil
+	return devAppDesired{app: app, docs: docs, secrets: secrets}, nil
+}
+
+// applyDocuments reads each --apply file's resource documents as folder mode reads a resource file (devDocuments):
+// tagged as dev's, in the dev namespace, and refusing an App or another namespace (Decision 7). Two documents of one
+// kind and name stop it.
+func applyDocuments(op string, files []string) ([]v1.Object, error) {
+	var out []v1.Object
+	seen := map[string]string{}
+	for _, file := range files {
+		docs, err := devDocuments(op, file)
+		if err != nil {
+			return nil, err
+		}
+		for _, obj := range docs {
+			key := string(obj.GroupVersionKind().Kind) + "/" + string(obj.GetName())
+			if prev, dup := seen[key]; dup {
+				return nil, fault.Invalidf(op, "two %s documents named %q: %s and %s", obj.GroupVersionKind().Kind, obj.GetName(), prev, file)
+			}
+			seen[key] = file
+			out = append(out, obj)
+		}
+	}
+	return out, nil
+}
+
+// loadTemplate reads the template directory as template.Load does, skipping only dot-entries and dev's persist dir
+// (Decision 3): it copies app.yaml and resources/ into a snapshot under the stage dir and loads that, and any other
+// entry stops it with Load's refusal. app.lock is neither read nor written.
+func (s *devAppSession) loadTemplate(op string) (*template.Template, error) {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return nil, fault.Invalidf(op, "read %s: %v", s.dir, err)
+	}
+	snap, err := os.MkdirTemp(s.stage, "template-")
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Internal, op, "create a template snapshot")
+	}
+	defer func() { _ = os.RemoveAll(snap) }()
+	for _, e := range entries {
+		src := filepath.Join(s.dir, e.Name())
+		switch {
+		case strings.HasPrefix(e.Name(), ".") || s.skipped(src) || e.Name() == "app.lock":
+		case e.Name() == "app.yaml" || e.Name() == "resources":
+			if err := os.CopyFS(filepath.Join(snap, e.Name()), os.DirFS(src)); err != nil && e.IsDir() {
+				return nil, fault.Wrapf(err, fault.Internal, op, "copy %s", src)
+			} else if !e.IsDir() {
+				data, rerr := os.ReadFile(src) //nolint:gosec // the template directory is the caller's argument
+				if rerr != nil {
+					return nil, fault.Invalidf(op, "read %s: %v", src, rerr)
+				}
+				if werr := os.WriteFile(filepath.Join(snap, e.Name()), data, 0o600); werr != nil {
+					return nil, fault.Wrapf(werr, fault.Internal, op, "copy %s", src)
+				}
+			}
+		default:
+			return nil, fault.Invalidf(op, "%s: a template holds only app.yaml, app.lock and resources/*.yaml", e.Name())
+		}
+	}
+	return template.Load(snap)
+}
+
+// stateRoot is the absolute dir that holds dev's process dir: the --persist-to dir under --persist.
+func stateRoot(processDir string) string {
+	abs, err := filepath.Abs(filepath.Dir(processDir))
+	if err != nil {
+		return filepath.Dir(processDir)
+	}
+	return abs
+}
+
+// skipped reports whether path is dev's persist dir, which dev skips inside the template directory.
+func (s *devAppSession) skipped(path string) bool {
+	if s.persist == "" {
+		return false
+	}
+	abs, err := filepath.Abs(path)
+	return err == nil && abs == s.persist
 }
 
 // probeImages renders t once with a stand-in lock whose digest names each image, and returns the images the App's
-// parts use, each with its part's kind, and that lock (the tag each image is pushed under, and a digest to replace).
-func probeImages(t *template.Template, in template.RenderInput) (map[string]*devImage, map[string]template.LockedImage, error) {
+// parts use, each with its part's kind, that lock (the tag each image is pushed under, and a digest to replace) and the
+// stand-in App.
+func probeImages(t *template.Template, in template.RenderInput) (map[string]*devImage, map[string]template.LockedImage, *v1.App, error) {
 	lock := make(map[string]template.LockedImage, len(t.Images))
 	byDigest := make(map[string]string, len(t.Images))
 	for key, entry := range t.Images {
@@ -213,7 +325,7 @@ func probeImages(t *template.Template, in template.RenderInput) (map[string]*dev
 	t.Lock = lock
 	app, err := template.Render(t, in)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	used := map[string]*devImage{}
 	note := func(image, part string, rt v1.RuntimeName) {
@@ -235,7 +347,7 @@ func probeImages(t *template.Template, in template.RenderInput) (map[string]*dev
 	for _, si := range app.Spec.Sites {
 		note(si.Image, partSite, "")
 	}
-	return used, lock, nil
+	return used, lock, app, nil
 }
 
 // buildFlags splits --build into the folders each image key is looked up in and the key=path entries.
@@ -441,12 +553,17 @@ func copyBuildTree(src, dst string) error {
 
 // treeStamp digests the relative path, size and mtime of every file a build walk keeps under dir.
 func treeStamp(dir string) (string, error) {
+	return (&devAppSession{}).treeStamp(dir)
+}
+
+// treeStamp is the package treeStamp that also leaves out dev's persist dir.
+func (s *devAppSession) treeStamp(dir string) (string, error) {
 	sum := sha256.New()
 	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil //nolint:nilerr // an entry removed mid-walk changes the stamp on the next poll
 		}
-		if p != dir && skipBuildEntry(d.Name()) {
+		if p != dir && (skipBuildEntry(d.Name()) || d.IsDir() && s.skipped(p)) {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
@@ -461,11 +578,11 @@ func treeStamp(dir string) (string, error) {
 	return fmt.Sprintf("%x", sum.Sum(nil)), err
 }
 
-// inputsStamp digests every input a reload reads: the template directory, the values files, and the --build folders
-// and paths.
+// inputsStamp digests every input a reload reads: the template directory, the values and --apply files, and the
+// --build folders and paths. Dev's persist dir is left out, as dev writes it.
 func (s *devAppSession) inputsStamp() (string, error) {
 	sum := sha256.New()
-	roots := append([]string{s.dir}, s.cfg.values...)
+	roots := slices.Concat([]string{s.dir}, s.cfg.values, s.cfg.apply)
 	dirs, paths := s.buildFlags()
 	roots = append(roots, dirs...)
 	keys := make([]string, 0, len(paths))
@@ -482,7 +599,7 @@ func (s *devAppSession) inputsStamp() (string, error) {
 		case err != nil:
 			_, _ = fmt.Fprintf(sum, "%s\x00missing\n", r)
 		case fi.IsDir():
-			st, terr := treeStamp(r)
+			st, terr := s.treeStamp(r)
 			if terr != nil {
 				return "", terr
 			}
@@ -494,9 +611,10 @@ func (s *devAppSession) inputsStamp() (string, error) {
 	return fmt.Sprintf("%x", sum.Sum(nil)), nil
 }
 
-// platformFolder is the devFolder devPlatformOptions reads for app: the template directory and a Function per function
-// part and per step that dev built, which pick the shims, the catalog engine and the S3 keypair.
-func (s *devAppSession) platformFolder(app *v1.App) *devFolder {
+// platformFolder is the devFolder devPlatformOptions reads for app: the template directory, the --apply documents and
+// a CatalogService per catalogs entry (which wire the SQL and catalog engines as in folder mode, Decision 5), and a
+// Function per function part and per step that dev built (which pick the shims).
+func (s *devAppSession) platformFolder(app *v1.App, docs []v1.Object) *devFolder {
 	byDigest := map[string]*devImage{}
 	for _, img := range s.images {
 		byDigest[img.digest] = img
@@ -506,6 +624,16 @@ func (s *devAppSession) platformFolder(app *v1.App) *devFolder {
 		return byDigest[digest]
 	}
 	f := &devFolder{dir: s.dir}
+	for _, obj := range docs {
+		f.resources = append(f.resources, devDoc{obj: obj})
+	}
+	for _, e := range app.Spec.Catalogs {
+		if e.Name != "" {
+			cs := &v1.CatalogService{Spec: e.CatalogServiceSpec}
+			cs.Name = e.Name
+			f.resources = append(f.resources, devDoc{obj: cs})
+		}
+	}
 	for _, part := range app.Spec.Functions {
 		if img := imageOf(part.Image); img != nil && part.Ref == "" {
 			fn := &v1.Function{Spec: part.FunctionSpec}
@@ -527,7 +655,7 @@ func (s *devAppSession) platformFolder(app *v1.App) *devFolder {
 }
 
 // devAppSecrets is each Secret app declares, each key from the environment variable of that name, as standalone dev
-// creates a Function's (ADR-0247 Decision 5). A missing variable stops dev, naming it.
+// creates a Function's (ADR-0247 Decision 5), tagged as dev's. A missing variable stops dev, naming it.
 func devAppSecrets(op string, app *v1.App) ([]v1.Object, error) {
 	var out []v1.Object
 	for _, decl := range app.Spec.Secrets {
@@ -543,10 +671,79 @@ func devAppSecrets(op string, app *v1.App) ([]v1.Object, error) {
 		obj, _ := v1.NewObject(v1.KindSecret)
 		sec := obj.(*v1.Secret)
 		sec.Name, sec.Namespace, sec.ResourceGroup = decl.Name, app.Namespace, app.ResourceGroup
+		sec.Tags = v1.Tags{devManagedTag: devManagedBy}
 		sec.Spec.Data = data
 		out = append(out, sec)
 	}
 	return out, nil
+}
+
+// withoutDefined is app with only the Secret declarations no --apply document defines: dev leaves those to the
+// document (Decision 6).
+func withoutDefined(app *v1.App, docs []v1.Object) *v1.App {
+	out := *app
+	out.Spec.Secrets = slices.DeleteFunc(slices.Clone(app.Spec.Secrets), func(decl v1.SecretDeclaration) bool {
+		return slices.ContainsFunc(docs, func(o v1.Object) bool {
+			return o.GroupVersionKind().Kind == v1.KindSecret && o.GetName() == decl.Name
+		})
+	})
+	return &out
+}
+
+// appKeypairName is the name dev derives the S3 keypair over for app (Decision 11): its first function part, else
+// devAppKeypairName.
+func appKeypairName(app *v1.App) string {
+	for _, part := range app.Spec.Functions {
+		if part.Name != "" {
+			return string(part.Name)
+		}
+	}
+	return devAppKeypairName
+}
+
+// appDevEnvName is the keypair name of the App template at dir (Decision 11), from the stand-in render with cfg's
+// values files: no build is read and no platform starts.
+func appDevEnvName(op, dir string, cfg devConfig) (string, error) {
+	stage, err := os.MkdirTemp("", "funcdctl-dev-")
+	if err != nil {
+		return "", fault.Wrapf(err, fault.Internal, op, "create a template snapshot")
+	}
+	defer func() { _ = os.RemoveAll(stage) }()
+	processDir, err := devStateDir(cfg, dir)
+	if err != nil {
+		return "", err
+	}
+	s := &devAppSession{dir: dir, cfg: cfg, stage: stage, persist: stateRoot(processDir)}
+	t, err := s.loadTemplate(op)
+	if err != nil {
+		return "", err
+	}
+	values, err := readValues(cfg.values)
+	if err != nil {
+		return "", err
+	}
+	t.Registry = "oci-layout://" + filepath.Join(stage, "oci")
+	_, _, app, err := probeImages(t, template.RenderInput{Namespace: devNamespace, Values: values})
+	if err != nil {
+		return "", err
+	}
+	return appKeypairName(app), nil
+}
+
+// apply applies d in order: the --apply documents as folder mode applies a folder, then the Secrets and the App. Once
+// it all applied, it deletes what the last apply held that d no longer does (Decision 7).
+func (s *devAppSession) apply(ctx context.Context, op string, c *sdk.Client, d devAppDesired) (devApply, error) {
+	if len(d.docs) > 0 {
+		if err := applyOrdered(ctx, op, c, d.docs); err != nil {
+			return devApply{}, err
+		}
+	}
+	r, err := applyDevApp(ctx, c, d.app, d.secrets)
+	if err != nil {
+		return devApply{}, err
+	}
+	s.applied = pruneRemoved(ctx, c, s.applied, slices.Concat(d.docs, d.secrets), true, s.logger)
+	return r, nil
 }
 
 // devApply is what applyDevApp did: whether it applied the App, and the revision number and Ready line a follow of
@@ -594,16 +791,16 @@ func applyDevApp(ctx context.Context, c *sdk.Client, app *v1.App, secrets []v1.O
 // follow follows app's new revision in the background and cancels the follow of the one before: the App reconciler
 // switches only its latest revision. A revision that fails is reported and dev keeps running, so its author can save a
 // fix or run funcdctl app retry.
-func (s *devAppSession) follow(ctx context.Context, a *cli, c *sdk.Client, app *v1.App, r devApply, done func() string, logger *slog.Logger) {
+func (s *devAppSession) follow(ctx context.Context, a *cli, c *sdk.Client, app *v1.App, r devApply, done func() string) {
 	if s.cancelFollow != nil {
 		s.cancelFollow()
 	}
 	fctx, cancel := context.WithCancel(ctx)
 	s.cancelFollow = cancel
 	go func() {
-		if err := a.waitDeploy(fctx, c, app, r.n0, r.ready); err != nil {
+		if err := a.waitDeployEvery(fctx, c, app, r.n0, r.ready, devFollowPoll); err != nil {
 			if fctx.Err() == nil {
-				logger.Warn("the new revision did not become current; save a fix, or run funcdctl app retry", "error", err)
+				s.logger.Warn("the new revision did not become current; save a fix, or run funcdctl app retry", "error", err)
 			}
 			return
 		}
@@ -615,7 +812,7 @@ func (s *devAppSession) follow(ctx context.Context, a *cli, c *sdk.Client, app *
 // failed reload is reported and the last App keeps running. Each new revision is followed in the background, and a
 // newer one cancels that follow: the App reconciler switches only its latest revision, so a fix saved while a broken
 // revision waits rolls at once.
-func (s *devAppSession) watch(ctx context.Context, op string, a *cli, c *sdk.Client, logger *slog.Logger, done chan<- struct{}) {
+func (s *devAppSession) watch(ctx context.Context, op string, a *cli, c *sdk.Client, done chan<- struct{}) {
 	defer close(done)
 	t := time.NewTicker(devReloadPoll)
 	defer t.Stop()
@@ -637,21 +834,60 @@ func (s *devAppSession) watch(ctx context.Context, op string, a *cli, c *sdk.Cli
 		s.stamp = stamp
 		start := time.Now()
 		var r devApply
-		app, secrets, err := s.prepare(ctx, op)
+		d, err := s.prepare(ctx, op)
 		if err == nil {
-			r, err = applyDevApp(ctx, c, app, secrets)
+			r, err = s.apply(ctx, op, c, d)
 		}
 		if err != nil {
 			if ctx.Err() == nil {
-				logger.Warn("reload failed; the last App keeps running", "error", err)
+				s.logger.Warn("reload failed; the last App keeps running", "error", err)
 			}
 			continue
 		}
 		if !r.applied {
 			continue
 		}
-		s.follow(ctx, a, c, app, r, func() string { return fmt.Sprintf("reloaded in %s", time.Since(start).Round(time.Millisecond)) }, logger)
+		s.follow(ctx, a, c, d.app, r, func() string { return fmt.Sprintf("reloaded in %s", time.Since(start).Round(time.Millisecond)) })
 	}
+}
+
+// appRevision is the App's latest revision as the control plane stores it, for the banner (Decision 11).
+func (d *devInstance) appRevision() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	stored, err := storedApp(ctx, d.client, d.app.Namespace, d.app.Name)
+	switch {
+	case err != nil || stored == nil:
+		return "no revision yet"
+	case stored.Status.CurrentRevision != "":
+		return "revision " + string(stored.Status.CurrentRevision)
+	case stored.Status.LatestRevision != "":
+		return "revision " + string(stored.Status.LatestRevision) + " (rolling out)"
+	}
+	return "no revision yet"
+}
+
+// appEndpoints are the banner's lines for the App: each Route's paths and each Site's URL on the gateway.
+func (d *devInstance) appEndpoints() [][2]string {
+	url := func(host, path string) string {
+		if u, err := neturl.Parse(d.gatewayURL); err == nil && host != "" {
+			return "http://" + net.JoinHostPort(host, u.Port()) + path
+		}
+		return d.gatewayURL + path
+	}
+	var out [][2]string
+	for _, r := range d.app.Spec.Routes {
+		for _, rule := range r.Rules {
+			out = append(out, [2]string{"route", url(r.Host, rule.Path)})
+		}
+	}
+	for _, si := range d.app.Spec.Sites {
+		if si.Name == "" {
+			continue
+		}
+		out = append(out, [2]string{"site", url(si.Ingress.Host, v1.IngressPath(&si.Ingress.Ingress, v1.KindSite, si.Name))})
+	}
+	return out
 }
 
 // shortDigest is a digest cut to its algorithm and first 12 hex digits, for a log line.

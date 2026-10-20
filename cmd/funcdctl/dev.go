@@ -169,20 +169,31 @@ func (a *cli) startDev(ctx context.Context, dir string, cfg devConfig) (*devInst
 	return a.bootDev(ctx, op, folder, cfg, lg.Root())
 }
 
-// printDevEnv prints the dev S3 credentials of the folder's first Function (or step) as `export …` lines and returns;
+// printDevEnv prints the dev S3 credentials of the folder's first Function (or step), or of an App template's keypair
+// name (appKeypairName), as `export …` lines and returns;
 // NO server is booted. The keypair is the FIXED devS3Master derived over that function's identity (the banner's;
 // deterministic across restarts, ADR-0128 Decision 6). The endpoint port is --s3port (default 3006).
 func (a *cli) printDevEnv(dir string, cfg devConfig) error {
 	const op = "funcdctl dev --print-env"
-	folder, err := loadDevFolder(op, dir)
-	if err != nil {
-		return err
+	var name string
+	if isAppTemplate(dir) {
+		n, err := appDevEnvName(op, dir, cfg)
+		if err != nil {
+			return err
+		}
+		name = n
+	} else {
+		folder, err := loadDevFolder(op, dir)
+		if err != nil {
+			return err
+		}
+		names := folder.names()
+		if len(names) == 0 {
+			return fault.NotFoundf(op, "%s holds no Function or Workflow image step", dir)
+		}
+		name = names[0]
 	}
-	names := folder.names()
-	if len(names) == 0 {
-		return fault.NotFoundf(op, "%s holds no Function or Workflow image step", dir)
-	}
-	kp := s3gateway.DeriveKeypair([]byte(devS3Master), v1.KindFunction, devNamespace, names[0])
+	kp := s3gateway.DeriveKeypair([]byte(devS3Master), v1.KindFunction, devNamespace, name)
 	port := cfg.s3port
 	if port == 0 {
 		port = 3006
@@ -728,9 +739,16 @@ func (a *cli) printBanner(inst *devInstance) error {
 			"serves: "+strings.Join(inst.catalogs, ", ")+" · DuckLake over blob"))
 	}
 
-	lines = append(lines, "", headerS.Render("FUNCTIONS"))
-	for _, fn := range inst.functions {
-		lines = append(lines, descS.Render("POST")+"  "+urlS.Render(inst.gatewayURL+"/function/"+fn))
+	if inst.app != nil {
+		lines = append(lines, "", headerS.Render("APP")+subS.Render("   "+string(inst.app.Name)+" · "+inst.appRevision()))
+		for _, e := range inst.appEndpoints() {
+			lines = append(lines, nameS.Render(e[0])+" "+urlS.Render(e[1]))
+		}
+	} else {
+		lines = append(lines, "", headerS.Render("FUNCTIONS"))
+		for _, fn := range inst.functions {
+			lines = append(lines, descS.Render("POST")+"  "+urlS.Render(inst.gatewayURL+"/function/"+fn))
+		}
 	}
 
 	if len(inst.workflows) > 0 {
@@ -830,8 +848,12 @@ type devInstance struct {
 	workflows  []string // the folder's Workflows
 	catalogs   []string // the CatalogServices the embedded duckdb+quack engine serves; nil if none
 	runtimes   *devRuntimes
-	// artifactDir, when set, runs the parts from the OCI images dev pushed, pulled into it (App mode, #1067).
+	// artifactDir, when set, runs the parts from the OCI images dev pushed, pulled into it (App mode, ADR-0253).
 	artifactDir string
+	// app is the App dev deployed (App mode); the banner names it, its Routes and its Sites instead of the Functions.
+	app *v1.App
+	// s3Name is the name the S3 keypair is derived over; "" derives it over the first Function.
+	s3Name string
 	// S3 frontend (ADR-0080/0085, Decision 6): the endpoint + the dev function's derived keypair. The
 	// author (or a test) points an S3 client at s3Endpoint with these creds to inspect blob artifacts.
 	s3Endpoint  string
@@ -950,7 +972,7 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, folder *devFold
 		funcd.WithWorkflowRuntimeResolver(inst.runtimes),
 	}
 	if inst.artifactDir != "" {
-		// An App's parts are OCI images in dev's layout, pulled and resolved as a deploy pulls them (#1067).
+		// An App's parts are OCI images in dev's layout, pulled and resolved as a deploy pulls them (ADR-0253).
 		opts = []funcd.Option{
 			funcd.InMemory(),
 			funcd.WithRuntime(rt),
@@ -1012,9 +1034,8 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, folder *devFold
 
 	// S3 frontend (ADR-0080/0085, Decision 6): expose the blob substrate over the S3 protocol on a free
 	// node-private port. The printed creds are the FIRST function's derived keypair (representative).
-	// The keypair is derived over the first Function's identity; an App of Sites and stores only has none (#1067).
-	s3Identity := devResourceGroup
-	if len(inst.functions) > 0 {
+	s3Identity := inst.s3Name
+	if s3Identity == "" && len(inst.functions) > 0 {
 		s3Identity = inst.functions[0]
 	}
 	s3Cleanup, s3err := devS3Options(op, &opts, s3Identity, cfg, inst)

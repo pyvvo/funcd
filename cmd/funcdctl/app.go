@@ -658,11 +658,16 @@ func followed(revs []*v1.AppRevision, spec v1.AppSpec, n0, latest int64) (*v1.Ap
 // whenever it changes from ready, the one read before the apply, so a wait for a stamp (a hold, a paused App) is
 // visible too.
 func (a *cli) waitDeploy(ctx context.Context, c *sdk.Client, applied *v1.App, n0 int64, ready string) error {
+	return a.waitDeployEvery(ctx, c, applied, n0, ready, deployPoll)
+}
+
+// waitDeployEvery is waitDeploy reading the App every poll; funcdctl dev follows a revision at a shorter pace.
+func (a *cli) waitDeployEvery(ctx context.Context, c *sdk.Client, applied *v1.App, n0 int64, ready string, poll time.Duration) error {
 	const op = "funcdctl app deploy"
 	w := &deployWatch{children: map[string]string{}, ready: ready}
 	for first := true; ; first = false {
 		if !first {
-			if err := sleepCtx(ctx, deployPoll); err != nil {
+			if err := sleepCtx(ctx, poll); err != nil {
 				return err
 			}
 		}

@@ -62,7 +62,7 @@ type devBuild struct {
 }
 
 // loadDevFolder reads dir as ADR-0247 Decision 4 says: its top-level *.yaml files, skipping contract files, documents
-// that are not funcd's and FuncdConfig documents, and stopping on an App (#1067), on two documents of one kind and
+// that are not funcd's and FuncdConfig documents, and stopping on an App (ADR-0253 runs one from its template), on two documents of one kind and
 // name, on a namespace other than default, and on a file that does not parse. A funcdctl.yaml stops it, naming the
 // files that replace it (Decision 11).
 func loadDevFolder(op, dir string) (*devFolder, error) {
@@ -130,7 +130,7 @@ func devDocuments(op, file string) ([]v1.Object, error) {
 	for _, obj := range objs {
 		kind := obj.GroupVersionKind().Kind
 		if kind == v1.KindApp {
-			return nil, fault.Invalidf(op, "%s: funcdctl dev does not run an App yet (#1067); deploy it with funcdctl app deploy", file)
+			return nil, fault.Invalidf(op, "%s: funcdctl dev runs an App from its template directory (app.yaml beside resources/), not from a resource file", file)
 		}
 		meta := obj.GetObjectMeta()
 		if meta.Namespace != "" && meta.Namespace != devNamespace {

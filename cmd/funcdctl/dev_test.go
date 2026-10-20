@@ -194,7 +194,7 @@ func TestScenarioDevRunsResources(t *testing.T) {
 }
 
 // scenario: dev-skips-and-refuses and old-manifest-refused (dev half) — dev skips a FuncdConfig file and documents
-// that are not funcd's, and stops on an App (naming #1067), on two Functions named counter (naming both files), on a
+// that are not funcd's, and stops on an App (naming the template directory), on two Functions named counter (naming both files), on a
 // namespace other than default, on a file that does not parse, and on a funcdctl.yaml (naming what replaces it).
 func TestScenarioDevSkipsAndRefuses(t *testing.T) {
 	t.Parallel()
@@ -210,7 +210,7 @@ func TestScenarioDevSkipsAndRefuses(t *testing.T) {
 		want  []string
 	}{
 		"app": {files: map[string]string{"app.yaml": "apiVersion: funcd.io/v1alpha1\nkind: App\nmetadata:\n  name: todo\nspec:\n  version: 1.0.0\n"},
-			want: []string{"#1067"}},
+			want: []string{"template directory"}},
 		"duplicate": {files: map[string]string{"again.yaml": fnDoc("counter", "nodejs22", "")},
 			want: []string{"counter.yaml", "again.yaml"}},
 		"namespace": {files: map[string]string{"ns.yaml": "apiVersion: funcd.io/v1alpha1\nkind: ConfigMap\nmetadata:\n  name: c\n  namespace: prod\nspec:\n  data:\n    A: b\n"},
