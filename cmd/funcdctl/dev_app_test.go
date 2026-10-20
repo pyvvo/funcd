@@ -253,7 +253,8 @@ func TestScenarioAppDevRunsTemplate(t *testing.T) {
 		return code == http.StatusOK && body == string(index)
 	}, "the Site serves web/")
 	r.settled(t, "todo")
-	require.Contains(t, r.out.String(), "App todo deployed in ")
+	// the follow prints its line after it saw the revision current, so it can come after settled returns
+	r.eventually(t, func() bool { return strings.Contains(r.out.String(), "App todo deployed in ") }, "dev prints the deploy")
 
 	var banner strings.Builder
 	require.NoError(t, (&cli{out: &banner}).printBanner(r.inst))
