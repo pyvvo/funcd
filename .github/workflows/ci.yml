@@ -20,7 +20,8 @@ jobs:
   # `code`: whether this change touches anything the pkg/funcd e2e scenarios depend on.
   # pkg/funcd imports ~63% of the module, execs the language shims (pinned in go.mod,
   # ADR-0141), and rides the runtime images — so any of these paths changing means the heavy
-  # suite must run. `nondocs`: anything but Markdown or LICENSE. `nonrelease`: anything but
+  # suite must run. `nondocs`: anything but Markdown, LICENSE or a file under docs/ (the review ledger's JSON
+  # included; a push to main still runs the fast lane). `nonrelease`: anything but
   # release-please's own files. The fast lane needs both, so a docs-only PR and a release PR skip
   # it, while a release PR that also touches code still runs it. A skipped required job still
   # reports success, so neither is blocked.
@@ -51,6 +52,7 @@ jobs:
               - '**'
               - '!**/*.md'
               - '!LICENSE'
+              - '!docs/**'
             nonrelease:
               - '**'
               - '!CHANGELOG.md'
