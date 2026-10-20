@@ -105,31 +105,52 @@ func (s lateFunctionEvents) Watch(ctx context.Context, gvk v1.GroupVersionKind, 
 		ev store.Event
 		at time.Time
 	}
+	late := &lateWatch{inner: w, out: make(chan store.Event), done: make(chan struct{})}
 	queued := make(chan arrival, 1024)
 	go func() {
 		defer close(queued)
 		for ev := range w.ResultChan() {
-			queued <- arrival{ev: ev, at: time.Now()}
+			select {
+			case queued <- arrival{ev: ev, at: time.Now()}:
+			case <-late.done:
+				return
+			}
 		}
 	}()
-	late := &lateWatch{inner: w, out: make(chan store.Event)}
 	go func() {
 		defer close(late.out)
 		for a := range queued {
-			time.Sleep(time.Until(a.at.Add(s.delay)))
-			late.out <- a.ev
+			select {
+			case <-time.After(time.Until(a.at.Add(s.delay))):
+			case <-late.done:
+				return
+			}
+			select {
+			case late.out <- a.ev:
+			case <-late.done:
+				return
+			}
 		}
 	}()
 	return late, nil
 }
 
+// lateWatch forwards a watch's events late; Stop ends the watch and its forwarding, so none waits on a gone reader.
 type lateWatch struct {
 	inner store.Watch
 	out   chan store.Event
+	done  chan struct{}
+	once  sync.Once
 }
 
 func (w *lateWatch) ResultChan() <-chan store.Event { return w.out }
-func (w *lateWatch) Stop()                          { w.inner.Stop() }
+
+func (w *lateWatch) Stop() {
+	w.once.Do(func() {
+		close(w.done)
+		w.inner.Stop()
+	})
+}
 
 // hungWorkerRestarted runs app-hung-worker-restarted on a platform over platformStore, watching the writes on st.
 func hungWorkerRestarted(t *testing.T, st, platformStore store.Store) {
