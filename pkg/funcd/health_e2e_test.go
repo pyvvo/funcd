@@ -12,6 +12,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -51,10 +53,13 @@ func (l *lockedLog) String() string {
 }
 
 // imageHangs pushes a handler whose call blocks its event loop for good, so the shim stops answering /health/liveness
-// while its process runs.
-func (e *gcEnv) imageHangs(t *testing.T) string {
+// while its process runs. While the file hold exists its module does not finish loading, so a replica that starts then
+// stays unready until the test removes hold (#1120).
+func (e *gcEnv) imageHangs(t *testing.T, hold string) string {
 	t.Helper()
-	writeStep(t, e.src, "hangs", `export async function handle() { for (;;) {} }`)
+	writeStep(t, e.src, "hangs", fmt.Sprintf(`import { existsSync } from 'node:fs';
+while (existsSync(%q)) { await new Promise((r) => setTimeout(r, 20)); }
+export async function handle() { for (;;) {} }`, hold))
 	return pushStepImage(t, e.layout, e.src, "hangs")
 }
 
@@ -73,15 +78,74 @@ func functionWrites(evs []store.Event, name v1.ObjectName) []appWrite {
 // scenario: app-hung-worker-restarted
 func TestScenarioAppHungWorkerRestarted(t *testing.T) {
 	t.Parallel()
+	st := store.New(memory.New())
+	hungWorkerRestarted(t, st, st)
+}
+
+// Issue #1120: on a loaded host the App reconciler can read todo-api only after its replacement serves, so it never
+// writes Degraded. The platform here sees each Function event 500 ms late, as such a host does.
+func TestIssue1120_AppDegradedWhenItSeesTheRestartLate(t *testing.T) {
+	t.Parallel()
+	st := store.New(memory.New())
+	hungWorkerRestarted(t, st, lateFunctionEvents{Store: st, delay: 500 * time.Millisecond})
+}
+
+// lateFunctionEvents is a store whose Function watch events each reach their watcher delay after they happen, in order.
+type lateFunctionEvents struct {
+	store.Store
+	delay time.Duration
+}
+
+func (s lateFunctionEvents) Watch(ctx context.Context, gvk v1.GroupVersionKind, opts store.WatchOptions) (store.Watch, error) {
+	w, err := s.Store.Watch(ctx, gvk, opts)
+	if err != nil || gvk.Kind != v1.KindFunction {
+		return w, err
+	}
+	type arrival struct {
+		ev store.Event
+		at time.Time
+	}
+	queued := make(chan arrival, 1024)
+	go func() {
+		defer close(queued)
+		for ev := range w.ResultChan() {
+			queued <- arrival{ev: ev, at: time.Now()}
+		}
+	}()
+	late := &lateWatch{inner: w, out: make(chan store.Event)}
+	go func() {
+		defer close(late.out)
+		for a := range queued {
+			time.Sleep(time.Until(a.at.Add(s.delay)))
+			late.out <- a.ev
+		}
+	}()
+	return late, nil
+}
+
+type lateWatch struct {
+	inner store.Watch
+	out   chan store.Event
+}
+
+func (w *lateWatch) ResultChan() <-chan store.Event { return w.out }
+func (w *lateWatch) Stop()                          { w.inner.Stop() }
+
+// hungWorkerRestarted runs app-hung-worker-restarted on a platform over platformStore, watching the writes on st.
+func hungWorkerRestarted(t *testing.T, st, platformStore store.Store) {
 	const restarting = "a replica stopped answering /health/liveness and is being replaced"
-	st, rt, logs := store.New(memory.New()), process.New(nil), &lockedLog{}
-	e := startGC(t, funcd.WithStore(st), funcd.WithRuntime(rt), funcd.WithLogger(slog.New(slog.NewTextHandler(logs, nil))),
+	rt, logs := process.New(nil), &lockedLog{}
+	e := startGC(t, funcd.WithStore(platformStore), funcd.WithRuntime(rt), funcd.WithLogger(slog.New(slog.NewTextHandler(logs, nil))),
 		funcd.WithPacing(funcd.Pacing{SupervisionPeriod: 500 * time.Millisecond, LivenessTimeout: time.Second}))
+	// The replacement is held unready until the App's Degraded write is seen: the App reads its children whenever it
+	// runs, so on a loaded host a restart shorter than that delay would leave no Degraded write to see (#1120).
+	hold := filepath.Join(t.TempDir(), "hold")
 	a := todoApp(t, e)
-	a.Spec.Functions[0].Image = e.imageHangs(t)
+	a.Spec.Functions[0].Image = e.imageHangs(t, hold)
 	e.apply(t, a)
 	e.waitApp(t, "todo", v1.ConditionTrue, "", appWithin)
 	hung := todoWorker(t, rt)
+	require.NoError(t, os.WriteFile(hold, nil, 0o600))
 
 	fw, aw := watchKind(t, st, v1.KindFunction), watchKind(t, st, v1.KindApp)
 	go func() {
@@ -109,6 +173,7 @@ func TestScenarioAppHungWorkerRestarted(t *testing.T) {
 				wr.ready.Message == "Function/todo-api: Restarting: "+restarting
 		})
 	}, appWithin, 20*time.Millisecond, "the App is Degraded, naming Function/todo-api")
+	require.NoError(t, os.Remove(hold))
 	require.Contains(t, logs.String(), `msg="restarting a replica silent on its liveness" component=function namespace=default function=todo-api replica=0`)
 
 	e.waitApp(t, "todo", v1.ConditionTrue, "", appWithin)
