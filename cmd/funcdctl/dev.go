@@ -340,8 +340,9 @@ func (a *cli) bootDev(ctx context.Context, op string, folder *devFolder, cfg dev
 	return inst, nil
 }
 
-// declaredSecrets creates each Secret a Function declares (ADR-0248) that no document defines, each key from the shell's
-// environment, else the envFile, else dev.env (ADR-0254 Decision 5). A key none holds stops dev, naming the three places.
+// declaredSecrets creates each Secret a Function declares (ADR-0248) that no document defines, each key from the
+// shell's environment, else the envFile, else dev.env (ADR-0254 Decision 5). A key none holds stops dev, naming the
+// three places.
 func (f *devFolder) declaredSecrets(op string, src devSecretSources) ([]v1.Object, error) {
 	defined := map[v1.ObjectName]bool{}
 	for _, d := range f.resources {

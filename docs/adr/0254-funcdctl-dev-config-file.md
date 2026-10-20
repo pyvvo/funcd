@@ -1,9 +1,10 @@
 # ADR-0254: `funcdctl.config.yaml` holds what `funcdctl dev` is run with
 
-- **Status**: Reviewing (2026-10-20), implemented; Accepted (2026-10-20), after two judge rounds, under `adr-batch` with acceptance delegated by the
-  decider; Decision 4's defaults (`250ms`, `1s`, `1s`) are the drafting agent's choice, brought back to the decider.
-  The judge added the per-mode rule for a Secret no document defines, a missing `envFile` read as empty, the
-  `envFile` as a reload input in both modes and the corrected reason for the drain default.
+- **Status**: Reviewing (2026-10-20), implemented; Accepted (2026-10-20), after two judge rounds, under `adr-batch`
+  with acceptance delegated by the decider; Decision 4's defaults (`250ms`, `1s`, `1s`) are the drafting agent's
+  choice, brought back to the decider. The judge added the per-mode rule for a Secret no document defines, a missing
+  `envFile` read as empty, the `envFile` as a reload input in both modes and the corrected reason for the drain
+  default.
 - **Date**: 2026-10-20
 - **Deciders**: green-0-rabbit
 - **Tags**: dx, cli, dev, config, secrets

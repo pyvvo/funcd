@@ -46,7 +46,8 @@ func startDevFrom(t *testing.T, start string, out io.Writer, cfg devConfig) (*de
 	return inst, err
 }
 
-// secretFunction is Function api declaring Secret api-keys with key key and returning its value read through ctx.secret.
+// secretFunction is Function api declaring Secret api-keys with key key and returning its value read through
+// ctx.secret.
 func secretFunction(key string) map[string]string {
 	return nodeFunction("api", "  secrets:\n    - name: api-keys\n      keys:\n        - "+key+"\n  bindings:\n    secret:\n      - api-keys\n",
 		"export async function handle(ctx) { return { key: await ctx.secret.get('"+key+"') }; }\n")
@@ -514,15 +515,21 @@ func TestScenarioDevConfigCadencesApp(t *testing.T) {
 	r.serves(t)
 	status, _ := r.call(t, todoRequest{Op: "add", Title: "milk", Token: todoToken})
 	require.Equal(t, http.StatusOK, status)
+	// post returns the answer to body, "" on a transport error or a status other than 200; it runs inside r.eventually's
+	// condition, off the test goroutine, so it must not fail the test.
 	post := func(body string) string {
 		resp, err := http.Post(r.inst.gatewayURL+"/api", "application/json", strings.NewReader(body))
-		require.NoError(t, err)
+		if err != nil {
+			return ""
+		}
 		defer func() { _ = resp.Body.Close() }()
 		b, _ := io.ReadAll(resp.Body)
-		require.Equal(t, http.StatusOK, resp.StatusCode, "%s", b)
+		if resp.StatusCode != http.StatusOK {
+			return ""
+		}
 		return string(b)
 	}
-	post(`{"op":"attach","id":"milk","name":"list.txt","content":"eggs","token":"` + todoToken + `"}`)
+	require.NotEmpty(t, post(`{"op":"attach","id":"milk","name":"list.txt","content":"eggs","token":"`+todoToken+`"}`))
 	attached := time.Now()
 	r.eventually(t, func() bool { return strings.Contains(post(`{"op":"get","id":"milk"}`), "list.txt") }, "the upload reaches intake")
 	require.Less(t, time.Since(attached), 5*time.Second, "the 1s blob poll, not production's 15s")
