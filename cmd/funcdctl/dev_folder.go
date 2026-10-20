@@ -234,7 +234,7 @@ func (f *devFolder) resolveBuild(op, name string, python bool, pyEntries map[str
 		case derr == nil:
 			b.srcDir, b.entry = filepath.Join(f.dir, "dist"), name+".mjs"
 		default:
-			return b, fault.Invalidf(op, "no build of %q: neither %s nor %s exists (build it with vite build)", name, root, dist)
+			return b, buildMiss{fault.Invalidf(op, "no build of %q: neither %s nor %s exists (build it with vite build)", name, root, dist)}
 		}
 		contractDir = b.srcDir
 	} else {
@@ -251,14 +251,14 @@ func (f *devFolder) resolveBuild(op, name string, python bool, pyEntries map[str
 			looked = append(looked, filepath.Join(f.dir, "pyproject.toml [tool.funcd-bundle.functions]"), filepath.Join(f.dir, "src", "main.py"))
 		}
 		if _, err := os.Stat(entry); err != nil {
-			return b, fault.Invalidf(op, "no build of %q: looked at %s", name, strings.Join(append(looked, entry), ", "))
+			return b, buildMiss{fault.Invalidf(op, "no build of %q: looked at %s", name, strings.Join(append(looked, entry), ", "))}
 		}
 		b.srcDir, b.entry, b.inPlace = filepath.Dir(entry), filepath.Base(entry), true
 		contractDir = f.dir
 	}
 	c, path, err := sdk.LoadContract(contractDir, name)
 	if err != nil {
-		return b, err
+		return b, contractMiss(contractDir, name, err)
 	}
 	b.contract, b.contractPath = c, path
 	if err := f.stampFile(path); err != nil {

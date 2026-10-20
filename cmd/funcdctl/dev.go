@@ -81,7 +81,10 @@ func (a *cli) devCmd() *cobra.Command {
 			"flags in camelCase (dir, values, build, hooks, apply, persist, persistTo, gport, s3port, cport), plus env and " +
 			"envFile for the values of a declared Secret no document defines, and platform for runtime.handOutSettle, " +
 			"eventing.blobPollInterval and funclog.segmentMaxAge. A flag given here replaces its key, and a dir argument " +
-			"replaces dev.dir.",
+			"replaces dev.dir.\n\n" +
+			"For an App template the file also takes watch, a list of name, run and dir: dev starts each command, waits " +
+			"for the builds they write and keeps their output in log files; and liveReload: true, which reloads open " +
+			"Site pages after a Site change (ADR-0255).",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir, _, rerr := resolveDevRun("funcdctl dev", ".", args, cmd.Flags(), &cfg)
@@ -153,6 +156,9 @@ type devConfig struct {
 	pace     devPace          // the three cadences (ADR-0254 Decision 4); zero ⇒ dev's defaults
 	secrets  devSecretSources // where a declared Secret no document defines takes its values (ADR-0254 Decision 5)
 	file     *devFileState    // funcdctl.config.yaml as read at start, nil without one; the reload re-reads it
+	// ADR-0255: the watch commands dev supervises, each dir made absolute from the file's, and Site live reload.
+	watch      []devWatchEntry
+	liveReload bool
 }
 
 // startDev is the entry seam tests drive (no signal handling, no blocking): it reads dir (ADR-0247 Decision 4), boots
@@ -752,6 +758,9 @@ func (a *cli) printBanner(inst *devInstance) error {
 		lines = append(lines, svc("catalog", "embedded duckdb+quack",
 			"serves: "+strings.Join(inst.catalogs, ", ")+" · DuckLake over blob"))
 	}
+	if inst.live != nil {
+		lines = append(lines, nameS.Render("reload")+" "+urlS.Render(inst.live.url())+" "+descS.Render("Site pages reload on a Site change"))
+	}
 
 	if inst.app != nil {
 		lines = append(lines, "", headerS.Render("APP")+subS.Render("   "+string(inst.app.Name)+" · "+inst.appRevision()))
@@ -762,6 +771,13 @@ func (a *cli) printBanner(inst *devInstance) error {
 		lines = append(lines, "", headerS.Render("FUNCTIONS"))
 		for _, fn := range inst.functions {
 			lines = append(lines, descS.Render("POST")+"  "+urlS.Render(inst.gatewayURL+"/function/"+fn))
+		}
+	}
+
+	if inst.commands != nil {
+		lines = append(lines, "", headerS.Render("WATCH")+subS.Render("   each command's output goes to its log file"))
+		for _, e := range inst.commands.entries {
+			lines = append(lines, nameS.Render(e.Name)+" "+descS.Render(inst.commands.logs[e.Name]))
 		}
 	}
 
@@ -880,8 +896,12 @@ type devInstance struct {
 	blob      blob.Bucket
 	runErr    chan error
 	watchDone chan struct{} // closed when the hot-reload watcher has returned
-	logger    *slog.Logger  // funcdctl dev's own warnings, in the daemon's text form over the cli's out (ADR-0197)
-	cleanup   []func()
+	// commands are the watch commands dev supervises and live serves Site live reload (ADR-0255), each nil when off;
+	// the banner names them, and the cleanups stop them.
+	commands *devCommands
+	live     *devLiveReload
+	logger   *slog.Logger // funcdctl dev's own warnings, in the daemon's text form over the cli's out (ADR-0197)
+	cleanup  []func()
 }
 
 // stop cancels nothing itself (the caller owns the ctx passed to startDev); it waits for the platform's

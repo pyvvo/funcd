@@ -3,12 +3,15 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"net"
 	neturl "net/url"
 	"os"
@@ -62,6 +65,7 @@ type devImage struct {
 	runtime v1.RuntimeName // a function part's runtime
 	build   devBuild       // a function or step build
 	site    string         // a Site's build folder
+	index   string         // a Site's index file, which live reload tags (ADR-0255)
 	print   string         // the fingerprint of the build last pushed
 	digest  string         // the digest of that push
 }
@@ -74,8 +78,9 @@ type devAppSession struct {
 	stage   string // where a build directory or the template is copied before it is read
 	persist string // dev's state dir (the --persist-to dir under --persist), which dev skips inside the template directory
 	images  map[string]*devImage
-	stamp   string      // the stamp of every input at the last reload
-	settle  devSettle   // holds a reload until the inputs stop changing
+	stamp   string    // the stamp of every input at the last reload
+	settle  devSettle // holds a reload until the inputs stop changing
+	live    *devLiveReload
 	applied []v1.Object // the --apply documents applied last
 	out     io.Writer
 	logger  *slog.Logger
@@ -106,18 +111,54 @@ func (a *cli) startDevApp(ctx context.Context, dir string, cfg devConfig, logger
 	if s.stamp, err = s.inputsStamp(); err != nil {
 		return nil, err
 	}
+	var cmds *devCommands
+	if len(cfg.watch) > 0 {
+		// ADR-0255 Decision 2: the checks that need no build, then the commands, then a wait on what they build.
+		if err = s.earlyChecks(op); err != nil {
+			return nil, err
+		}
+		if cmds, err = startDevCommands(ctx, op, processDir, cfg.watch, a.writef); err != nil {
+			return nil, err
+		}
+		defer func() {
+			if err != nil {
+				err = errors.Join(err, cmds.stop())
+			}
+		}()
+		if err = waitForBuilds(ctx, cmds, a.writef, func() (string, error) { return s.lookupBuilds(op) }); err != nil {
+			return nil, err
+		}
+		if s.stamp, err = s.inputsStamp(); err != nil {
+			return nil, err
+		}
+	}
+	if cfg.liveReload {
+		if s.live, err = startLiveReload(op, processDir); err != nil {
+			return nil, err
+		}
+		defer func() {
+			if err != nil {
+				s.live.stop()
+			}
+		}()
+	}
 	d, err := s.prepare(ctx, op)
 	if err != nil {
 		return nil, err
 	}
 	folder := s.platformFolder(d.app, d.docs)
-	if (len(d.app.Spec.SQL) > 0 || folder.bindsSQL()) && !sqlembedengine.Bundled() {
-		return nil, fault.Unavailablef(op, "App %s declares a SQL database, but this funcdctl has no SQL engine: build it with "+
-			"just build-sql-engine %s %s, then go build -tags dev ./cmd/funcdctl", d.app.Name, goruntime.GOOS, goruntime.GOARCH)
+	if err = refuseSQLWithoutEngine(op, d.app, folder); err != nil {
+		return nil, err
 	}
 	inst := &devInstance{runErr: make(chan error, 1), logger: logger, functions: folder.names(), workflows: folder.workflowNames(),
 		runtimes: &devRuntimes{byImage: map[string]v1.RuntimeName{}}, artifactDir: filepath.Join(root, "artifacts"),
-		s3Name: appKeypairName(d.app), app: d.app}
+		s3Name: appKeypairName(d.app), app: d.app, commands: cmds, live: s.live}
+	if cmds != nil {
+		inst.cleanup = append(inst.cleanup, func() { _ = cmds.stop() })
+	}
+	if s.live != nil {
+		inst.cleanup = append(inst.cleanup, s.live.stop)
+	}
 	defer func() {
 		if err != nil {
 			inst.unwind(0)
@@ -149,6 +190,9 @@ func (a *cli) startDevApp(ctx context.Context, dir string, cfg devConfig, logger
 			return nil, fault.Wrapf(err, fault.KindOf(err), op, "prune the documents an earlier session applied")
 		}
 	}
+	if s.live != nil {
+		s.live.started(d.app)
+	}
 	deployed := func() string {
 		return fmt.Sprintf("App %s deployed in %s", d.app.Name, time.Since(start).Round(time.Millisecond))
 	}
@@ -178,47 +222,30 @@ func (s *devAppSession) prepare(ctx context.Context, op string) (devAppDesired, 
 	if err != nil {
 		return devAppDesired{}, err
 	}
-	t, err := s.loadTemplate(op)
+	p, err := s.probe(op)
 	if err != nil {
 		return devAppDesired{}, err
 	}
-	values, err := readValues(s.cfg.values)
-	if err != nil {
-		return devAppDesired{}, err
-	}
-	in := template.RenderInput{Namespace: devNamespace, Values: values}
-	t.Registry = "oci-layout://" + s.layout
-	used, lock, _, err := probeImages(t, in)
-	if err != nil {
-		return devAppDesired{}, err
-	}
-	keys := make([]string, 0, len(used))
-	for key := range used {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		img := used[key]
+	for _, key := range slices.Sorted(maps.Keys(p.used)) {
+		img := p.used[key]
 		if err := s.resolveImage(op, key, img); err != nil {
 			return devAppDesired{}, err
 		}
-		l := lock[key]
-		if err := s.push(ctx, op, key, t.Parsed[key].Repo, l.Version, img); err != nil {
+		l := p.lock[key]
+		if err := s.push(ctx, op, key, p.t.Parsed[key].Repo, l.Version, img); err != nil {
 			return devAppDesired{}, err
 		}
 		l.Digest = img.digest
-		lock[key] = l
+		p.lock[key] = l
 		s.images[key] = img
 	}
-	t.Lock = lock
-	app, err := template.Render(t, in)
+	p.t.Lock = p.lock
+	app, err := template.Render(p.t, p.in)
 	if err != nil {
 		return devAppDesired{}, err
 	}
-	if len(app.Spec.Requires) > 0 {
-		r := app.Spec.Requires[0]
-		return devAppDesired{}, fault.Invalidf(op, "App %s requires App %s %s: funcdctl dev does not run an App that requires another yet",
-			app.Name, r.App, r.Version)
+	if err := refuseRequires(op, app); err != nil {
+		return devAppDesired{}, err
 	}
 	if !s.cfg.hooks {
 		app.Spec.Hooks = nil
@@ -228,6 +255,117 @@ func (s *devAppSession) prepare(ctx context.Context, op string) (devAppDesired, 
 		return devAppDesired{}, err
 	}
 	return devAppDesired{app: app, docs: docs, secrets: secrets}, nil
+}
+
+// devProbe is one render of the template with probeImages' stand-in lock: the template, its render input, the images
+// the App uses, that lock and the stand-in App.
+type devProbe struct {
+	t    *template.Template
+	in   template.RenderInput
+	used map[string]*devImage
+	lock map[string]template.LockedImage
+	app  *v1.App
+}
+
+// probe loads the template and the values and renders them with the stand-in lock.
+func (s *devAppSession) probe(op string) (devProbe, error) {
+	t, err := s.loadTemplate(op)
+	if err != nil {
+		return devProbe{}, err
+	}
+	values, err := readValues(s.cfg.values)
+	if err != nil {
+		return devProbe{}, err
+	}
+	in := template.RenderInput{Namespace: devNamespace, Values: values}
+	t.Registry = "oci-layout://" + s.layout
+	used, lock, app, err := probeImages(t, in)
+	if err != nil {
+		return devProbe{}, err
+	}
+	return devProbe{t: t, in: in, used: used, lock: lock, app: app}, nil
+}
+
+// refuseRequires refuses an App that requires another (ADR-0253 Decision 10).
+func refuseRequires(op string, app *v1.App) error {
+	if len(app.Spec.Requires) == 0 {
+		return nil
+	}
+	r := app.Spec.Requires[0]
+	return fault.Invalidf(op, "App %s requires App %s %s: funcdctl dev does not run an App that requires another yet",
+		app.Name, r.App, r.Version)
+}
+
+// refuseSQLWithoutEngine refuses an App that declares or binds a SQL database on a build without the SQL engine
+// (ADR-0253 Decision 10).
+func refuseSQLWithoutEngine(op string, app *v1.App, folder *devFolder) error {
+	if (len(app.Spec.SQL) > 0 || folder.bindsSQL()) && !sqlembedengine.Bundled() {
+		return fault.Unavailablef(op, "App %s declares a SQL database, but this funcdctl has no SQL engine: build it with "+
+			"just build-sql-engine %s %s, then go build -tags dev ./cmd/funcdctl", app.Name, goruntime.GOOS, goruntime.GOARCH)
+	}
+	return nil
+}
+
+// earlyChecks runs, before the watch commands start, the checks that need no build (ADR-0255 Decision 2): the --apply
+// files, the template and the values, then on the stand-in App its requires, the SQL engine and the Secrets it declares.
+func (s *devAppSession) earlyChecks(op string) error {
+	docs, err := applyDocuments(op, s.cfg.apply)
+	if err != nil {
+		return err
+	}
+	p, err := s.probe(op)
+	if err != nil {
+		return err
+	}
+	if err := refuseRequires(op, p.app); err != nil {
+		return err
+	}
+	if err := refuseSQLWithoutEngine(op, p.app, s.platformFolder(p.app, docs)); err != nil {
+		return err
+	}
+	_, err = devAppSecrets(op, withoutDefined(p.app, docs), s.cfg.secrets)
+	return err
+}
+
+// lookupBuilds finds the build of every image the render uses, as prepare does but without pushing, and, under watch,
+// whether each Site folder holds its index (ADR-0255 Decision 2). It returns the inputs' stamp with the first miss or
+// refusal, so the wait judges a refusal only on a settled poll.
+func (s *devAppSession) lookupBuilds(op string) (string, error) {
+	stamp, err := s.inputsStamp()
+	if err != nil {
+		return "", err
+	}
+	p, err := s.probe(op)
+	if err != nil {
+		return stamp, err
+	}
+	for _, key := range slices.Sorted(maps.Keys(p.used)) {
+		img := p.used[key]
+		if err := s.resolveImage(op, key, img); err != nil {
+			return stamp, err
+		}
+		if img.part == partSite {
+			if err := siteHoldsIndex(op, key, img); err != nil {
+				return stamp, err
+			}
+		}
+	}
+	return stamp, nil
+}
+
+// siteHoldsIndex is a miss while img's Site folder is empty or holds no index file yet; dev checks it under watch only.
+func siteHoldsIndex(op, key string, img *devImage) error {
+	entries, err := os.ReadDir(img.site)
+	switch {
+	case err != nil:
+		return buildMiss{fault.Invalidf(op, "images.%s: %v", key, err)}
+	case len(entries) == 0:
+		return buildMiss{fault.Invalidf(op, "images.%s: %s is empty", key, img.site)}
+	}
+	if _, err := os.Stat(filepath.Join(img.site, filepath.FromSlash(img.index))); err != nil {
+		return buildMiss{fault.Invalidf(op, "images.%s: %s holds no %s", key, img.site, img.index)}
+	}
+	return nil
 }
 
 // applyDocuments reads each --apply file's resource documents as folder mode reads a resource file (devDocuments):
@@ -367,11 +505,16 @@ func probeImages(t *template.Template, in template.RenderInput) (map[string]*dev
 		return nil, nil, nil, err
 	}
 	used := map[string]*devImage{}
-	note := func(image, part string, rt v1.RuntimeName) {
+	note := func(image, part string, rt v1.RuntimeName) *devImage {
 		_, digest, ok := strings.Cut(image, "@")
-		if key, found := byDigest[digest]; ok && found && used[key] == nil {
+		key, found := byDigest[digest]
+		if !ok || !found {
+			return nil
+		}
+		if used[key] == nil {
 			used[key] = &devImage{part: part, runtime: rt}
 		}
+		return used[key]
 	}
 	for _, f := range app.Spec.Functions {
 		note(f.Image, partFunction, f.Runtime)
@@ -384,7 +527,9 @@ func probeImages(t *template.Template, in template.RenderInput) (map[string]*dev
 		}
 	}
 	for _, si := range app.Spec.Sites {
-		note(si.Image, partSite, "")
+		if img := note(si.Image, partSite, ""); img != nil {
+			img.index = cmp.Or(si.Index, "index.html") // the Site reconciler's default index
+		}
 	}
 	return used, lock, app, nil
 }
@@ -410,7 +555,11 @@ func (s *devAppSession) resolveImage(op, key string, img *devImage) error {
 	if p, ok := paths[key]; ok {
 		if img.part == partSite {
 			if fi, err := os.Stat(p); err != nil || !fi.IsDir() {
-				return fault.Invalidf(op, "--build %s=%s: a Site's build is a folder", key, p)
+				refusal := fault.Invalidf(op, "--build %s=%s: a Site's build is a folder", key, p)
+				if errors.Is(err, fs.ErrNotExist) {
+					return buildMiss{refusal}
+				}
+				return refusal
 			}
 			img.site = p
 			return nil
@@ -445,8 +594,8 @@ func (s *devAppSession) resolveImage(op, key string, img *devImage) error {
 		img.build = b
 		return nil
 	}
-	return fault.Invalidf(op, "no build of images.%s in the --build folders %s; name it with --build %s=<path>",
-		key, strings.Join(dirs, ", "), key)
+	return buildMiss{fault.Invalidf(op, "no build of images.%s in the --build folders %s; name it with --build %s=<path>",
+		key, strings.Join(dirs, ", "), key)}
 }
 
 // holdsBuild reports whether the folder holds name's build by resolveBuild's rules.
@@ -463,15 +612,20 @@ func (f *devFolder) holdsBuild(name string, python bool, pyEntries map[string]st
 func buildAt(op, key, path string) (devBuild, error) {
 	fi, err := os.Stat(path)
 	if err != nil {
-		return devBuild{}, fault.Invalidf(op, "--build %s=%s: %v", key, path, err)
+		refusal := fault.Invalidf(op, "--build %s=%s: %v", key, path, err)
+		if errors.Is(err, fs.ErrNotExist) {
+			return devBuild{}, buildMiss{refusal}
+		}
+		return devBuild{}, refusal
 	}
 	dir := path
 	if !fi.IsDir() {
 		dir = filepath.Dir(path)
 	}
-	c, contractPath, err := sdk.LoadContract(dir, sdk.ContractName(path, fi.IsDir()))
+	name := sdk.ContractName(path, fi.IsDir())
+	c, contractPath, err := sdk.LoadContract(dir, name)
 	if err != nil {
-		return devBuild{}, err
+		return devBuild{}, contractMiss(dir, name, err)
 	}
 	if fi.IsDir() {
 		return devBuild{name: key, contract: c, contractPath: contractPath, srcDir: path, entry: pushEntryFor("", c.Runtime), inPlace: true}, nil
@@ -499,6 +653,12 @@ func (s *devAppSession) push(ctx context.Context, op, key, repo, tag string, img
 	start := time.Now()
 	var digest string
 	switch {
+	case img.part == partSite && s.live != nil:
+		var copied string
+		if copied, err = s.live.siteCopy(op, s.stage, key, img.site, img.index); err == nil {
+			digest, err = artifact.PushSite(ctx, ref, copied)
+			err = errors.Join(err, os.RemoveAll(copied))
+		}
 	case img.part == partSite:
 		digest, err = artifact.PushSite(ctx, ref, img.site)
 	case img.build.inPlace:
@@ -841,6 +1001,9 @@ func (s *devAppSession) follow(ctx context.Context, a *cli, c *sdk.Client, app *
 				s.logger.Warn("the new revision did not become current; save a fix, or run funcdctl app retry", "error", err)
 			}
 			return
+		}
+		if s.live != nil {
+			s.live.current(app)
 		}
 		_ = a.writef("%s\n", done())
 	}()

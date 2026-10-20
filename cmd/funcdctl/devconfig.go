@@ -49,6 +49,16 @@ type devFileKeys struct {
 	Env       map[string]string `yaml:"env"`
 	EnvFile   string            `yaml:"envFile"`
 	Platform  devFilePlatform   `yaml:"platform"`
+	// Watch and LiveReload are App-only keys of the file alone (ADR-0255 Decision 1).
+	Watch      []devWatchEntry `yaml:"watch"`
+	LiveReload bool            `yaml:"liveReload"`
+}
+
+// devWatchEntry is a watch command dev starts and supervises (ADR-0255 Contracts).
+type devWatchEntry struct {
+	Name string `yaml:"name"`
+	Run  string `yaml:"run"`
+	Dir  string `yaml:"dir"`
 }
 
 // devFilePlatform holds the three FuncdConfig keys dev takes, in FuncdConfig's syntax (ADR-0254 Decision 4).
@@ -67,9 +77,13 @@ type devFilePlatform struct {
 // envFileKeyFormat is an envFile line's KEY: an environment variable name.
 var envFileKeyFormat = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// watchNameFormat is a watch command's name, which names its log file (ADR-0255 Contracts).
+var watchNameFormat = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
 // devFileKeyNames are the keys dev takes.
 func devFileKeyNames() []string {
-	return []string{"dir", "values", "build", "hooks", "apply", "persist", "persistTo", "gport", "s3port", "cport", "env", "envFile", "platform"}
+	return []string{"dir", "values", "build", "hooks", "apply", "persist", "persistTo", "gport", "s3port", "cport", "env", "envFile",
+		"platform", "watch", "liveReload"}
 }
 
 // devPlatformKeys are the FuncdConfig keys platform takes (Decision 4).
@@ -192,9 +206,17 @@ func decodeDevFile(op string, data []byte) (devFileKeys, error) {
 				return keys, err
 			}
 		}
+		if k == "watch" {
+			if err := checkWatchKeys(op, dev.Content[i+1]); err != nil {
+				return keys, err
+			}
+		}
 	}
 	if err := dev.Decode(&keys); err != nil {
 		return keys, fault.Invalidf(op, "%s: dev: %v", devConfigFile, err)
+	}
+	if err := checkWatchEntries(op, keys.Watch); err != nil {
+		return keys, err
 	}
 	if _, err := keys.pace(op); err != nil {
 		return keys, err
@@ -222,6 +244,44 @@ func checkPlatformKeys(op string, n *yamlv3.Node, prefix string) error {
 		if err := checkPlatformKeys(op, n.Content[i+1], key+"."); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// checkWatchKeys refuses a watch that is not a list and an entry key other than name, run and dir.
+func checkWatchKeys(op string, n *yamlv3.Node) error {
+	if n.Tag == "!!null" {
+		return nil
+	}
+	if n.Kind != yamlv3.SequenceNode {
+		return fault.Invalidf(op, "%s: dev.watch is not a list", devConfigFile)
+	}
+	for i, entry := range n.Content {
+		if entry.Kind != yamlv3.MappingNode {
+			return fault.Invalidf(op, "%s: dev.watch[%d] is not a mapping", devConfigFile, i)
+		}
+		for j := 0; j+1 < len(entry.Content); j += 2 {
+			if k := entry.Content[j].Value; !slices.Contains([]string{"name", "run", "dir"}, k) {
+				return fault.Invalidf(op, "%s: dev.watch[%d]: unknown key %s", devConfigFile, i, k)
+			}
+		}
+	}
+	return nil
+}
+
+// checkWatchEntries refuses a watch name that does not match watchNameFormat or is used twice, and an empty run.
+func checkWatchEntries(op string, entries []devWatchEntry) error {
+	seen := map[string]bool{}
+	for i, e := range entries {
+		switch {
+		case !watchNameFormat.MatchString(e.Name):
+			return fault.Invalidf(op, "%s: dev.watch[%d].name %s is not [a-z0-9][a-z0-9-]*", devConfigFile, i, e.Name)
+		case seen[e.Name]:
+			return fault.Invalidf(op, "%s: dev.watch[%d].name %s is used twice", devConfigFile, i, e.Name)
+		case strings.TrimSpace(e.Run) == "":
+			return fault.Invalidf(op, "%s: dev.watch[%d].run is empty", devConfigFile, i)
+		}
+		seen[e.Name] = true
 	}
 	return nil
 }
@@ -310,7 +370,8 @@ func (k devFileKeys) appOnlyKeysSet() []string {
 	for _, c := range []struct {
 		key string
 		set bool
-	}{{"values", len(k.Values) > 0}, {"build", len(k.Build) > 0}, {"hooks", k.Hooks}, {"apply", len(k.Apply) > 0}} {
+	}{{"values", len(k.Values) > 0}, {"build", len(k.Build) > 0}, {"hooks", k.Hooks}, {"apply", len(k.Apply) > 0},
+		{"watch", len(k.Watch) > 0}, {"liveReload", k.LiveReload}} {
 		if c.set {
 			out = append(out, c.key)
 		}
@@ -351,6 +412,12 @@ func resolveDevRun(op, start string, args []string, flags *pflag.FlagSet, cfg *d
 		st.flagged[f] = changed(f)
 	}
 	st.mergeAppKeys(cfg)
+	if st.appKeys {
+		if cfg.watch, err = watchDirs(op, start, k.Watch); err != nil {
+			return "", nil, err
+		}
+		cfg.liveReload = k.LiveReload
+	}
 	if !changed("persist") {
 		cfg.persist = k.Persist
 	}
@@ -379,6 +446,20 @@ func resolveDevRun(op, start string, args []string, flags *pflag.FlagSet, cfg *d
 	}
 	cfg.file = st
 	return dir, st, nil
+}
+
+// watchDirs is entries with each dir made relative to start, the file's directory, which it defaults to; a dir that is
+// not a directory is refused.
+func watchDirs(op, start string, entries []devWatchEntry) ([]devWatchEntry, error) {
+	out := make([]devWatchEntry, len(entries))
+	for i, e := range entries {
+		e.Dir = filepath.Join(start, e.Dir)
+		if fi, err := os.Stat(e.Dir); err != nil || !fi.IsDir() {
+			return nil, fault.Invalidf(op, "%s: dev.watch[%d].dir %s is not a directory", devConfigFile, i, e.Dir)
+		}
+		out[i] = e
+	}
+	return out, nil
 }
 
 // mergeAppKeys sets cfg's App-mode inputs from the file's values, build, hooks and apply, each unless its flag was
@@ -476,6 +557,7 @@ func changedDevKeys(a, b devFileKeys) []string {
 		{"platform.runtime.handOutSettle", a.Platform.Runtime.HandOutSettle == b.Platform.Runtime.HandOutSettle},
 		{"platform.eventing.blobPollInterval", a.Platform.Eventing.BlobPollInterval == b.Platform.Eventing.BlobPollInterval},
 		{"platform.funclog.segmentMaxAge", a.Platform.Funclog.SegmentMaxAge == b.Platform.Funclog.SegmentMaxAge},
+		{"watch", slices.Equal(a.Watch, b.Watch)}, {"liveReload", a.LiveReload == b.LiveReload},
 	} {
 		if !c.same {
 			out = append(out, c.key)
