@@ -146,6 +146,10 @@ type config struct {
 	// bucketMaxPerNamespace is the per-namespace Bucket count cap at admission (ADR-0080); 0 ⇒
 	// the default (100); negative disables the quota.
 	bucketMaxPerNamespace int
+	// functionProbeTimeout bounds one readiness, liveness or /health/members probe of a Function's workers
+	// (function.Config.ProbeTimeout); 0 ⇒ its default. It has no public option: tests whose probes a local server
+	// answers raise it, so a loaded host does not read a ready worker as unready (#1126).
+	functionProbeTimeout time.Duration
 	// sqlMaxDatabasesPerNamespace is the per-namespace SQLDatabase count cap at admission (ADR-0232); 0 ⇒ the default
 	// (20); negative disables the quota.
 	sqlMaxDatabasesPerNamespace int
@@ -887,6 +891,7 @@ func (p *Platform) buildControlPlane() error {
 		HandOutSettle:        c.pacing.HandOutSettle,
 		DrainPollInterval:    c.pacing.DrainPollInterval,
 		ReferentPollInterval: c.pacing.ReferentPollInterval,
+		ProbeTimeout:         c.functionProbeTimeout,
 		PoolShimCommand:      c.poolShim,
 		PoolShimsByFamily:    c.poolShimsByFamily,
 		PoolManifestDir:      c.poolManifestDir,

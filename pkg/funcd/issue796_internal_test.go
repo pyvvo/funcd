@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ type poolHost struct {
 	*recordingRuntime
 	port   int
 	states map[string]string
+	slow   atomic.Int64 // nanoseconds each /health/members answer waits, as on a loaded host
 }
 
 // setMember sets the state member's /health/members entry reads.
@@ -57,6 +59,7 @@ func (h *poolHost) serve(w http.ResponseWriter, req *http.Request) {
 	if req.URL.Path != "/health/members" {
 		return
 	}
+	time.Sleep(time.Duration(h.slow.Load()))
 	h.mu.Lock()
 	manifest := ""
 	for _, s := range h.specs {
@@ -122,8 +125,11 @@ func newPooledRig(t *testing.T, referentPoll, activation time.Duration, opts ...
 	host := newPoolHost(t)
 	pacing := asleepPacing(referentPoll)
 	pacing.ActivationTimeout = activation
+	// The pool host is a local server: a probe budget above the 100 ms default keeps a loaded host's slow
+	// /health/members answer from reading a ready member as unready (#1126).
+	probe := func(c *config) error { c.functionProbeTimeout = 500 * time.Millisecond; return nil }
 	r := newAsleepRig(t, referentPoll, append([]Option{WithRuntime(host), WithRuntimeShim("node", "shim.mjs"),
-		WithPoolShim("node", "pool.mjs"), WithPacing(pacing)}, opts...)...)
+		WithPoolShim("node", "pool.mjs"), WithPacing(pacing), probe}, opts...)...)
 	r.rt = host.recordingRuntime
 	return &pooledRig{asleepRig: r, host: host}
 }
@@ -345,6 +351,35 @@ func TestScenarioPooledDependencyReturnsBesideSibling(t *testing.T) {
 
 func noBinding(*v1.Function) {}
 
+// newcomerNotAsleep applies zulu to a pool full with writer, its /health/members answering after slow, and requires
+// zulu Pending/PoolFull once with no Asleep condition and writer untouched.
+func newcomerNotAsleep(t *testing.T, slow time.Duration) {
+	t.Helper()
+	r := newPooledRig(t, 0, 0, WithPoolLimit(1))
+	r.writer(t, noBinding)
+	r.host.slow.Store(int64(slow))
+	wrv := r.get(t, "writer").ResourceVersion
+	r.member(t, "zulu", 0, noBinding)
+	require.Eventually(t, func() bool {
+		fn := r.get(t, "zulu")
+		return fn.Status.Phase == v1.PhasePending && condition(fn, "PoolFull").Status == v1.ConditionTrue
+	}, 5*time.Second, 10*time.Millisecond, "zulu is Pending/PoolFull")
+	fn := r.get(t, "zulu")
+	_, hasAsleep := fn.Status.Conditions.Get("Asleep")
+	require.False(t, hasAsleep, "zulu carries no Asleep condition")
+	held := poll.Never(func() bool { return r.get(t, "zulu").ResourceVersion != fn.ResourceVersion }, time.Second, 20*time.Millisecond)
+	require.True(t, held, "zulu stays quiet")
+	require.Equal(t, wrv, r.get(t, "writer").ResourceVersion, "writer is untouched")
+	require.Equal(t, 1, r.host.poolsRunning(), "the pool worker keeps running")
+}
+
+// Issue #1126: on a loaded host a /health/members answer came after the 100 ms probe timeout, so writer read as not
+// ready and flapped Degraded/Restarting and back while zulu was admitted, and "writer is untouched" failed.
+func TestIssue1126_WriterUntouchedWhenMembersAnswerSlowly(t *testing.T) {
+	t.Parallel()
+	newcomerNotAsleep(t, 150*time.Millisecond)
+}
+
 // scenario: pool-full — a member applied to a full pool writes Pending/PoolFull once with no Asleep condition and stays
 // quiet, the admitted member untouched; an asleep admitted member displaced by a newcomer whose name sorts earlier
 // writes Pending/PoolFull once with Asleep=True.
@@ -352,21 +387,7 @@ func TestScenarioPoolFull(t *testing.T) {
 	t.Parallel()
 	t.Run("newcomer-not-asleep", func(t *testing.T) {
 		t.Parallel()
-		r := newPooledRig(t, 0, 0, WithPoolLimit(1))
-		r.writer(t, noBinding)
-		wrv := r.get(t, "writer").ResourceVersion
-		r.member(t, "zulu", 0, noBinding)
-		require.Eventually(t, func() bool {
-			fn := r.get(t, "zulu")
-			return fn.Status.Phase == v1.PhasePending && condition(fn, "PoolFull").Status == v1.ConditionTrue
-		}, 5*time.Second, 10*time.Millisecond, "zulu is Pending/PoolFull")
-		fn := r.get(t, "zulu")
-		_, hasAsleep := fn.Status.Conditions.Get("Asleep")
-		require.False(t, hasAsleep, "zulu carries no Asleep condition")
-		held := poll.Never(func() bool { return r.get(t, "zulu").ResourceVersion != fn.ResourceVersion }, time.Second, 20*time.Millisecond)
-		require.True(t, held, "zulu stays quiet")
-		require.Equal(t, wrv, r.get(t, "writer").ResourceVersion, "writer is untouched")
-		require.Equal(t, 1, r.host.poolsRunning(), "the pool worker keeps running")
+		newcomerNotAsleep(t, 0)
 	})
 	t.Run("asleep-member-displaced", func(t *testing.T) {
 		t.Parallel()
