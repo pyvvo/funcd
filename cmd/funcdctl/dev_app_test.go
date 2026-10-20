@@ -514,7 +514,7 @@ func TestScenarioAppDevRefusals(t *testing.T) {
 		noToken bool
 		want    string
 	}{
-		{name: "no TODO_API_TOKEN", cfg: todoCfg(nil), noToken: true, want: "set the environment variable TODO_API_TOKEN"},
+		{name: "no TODO_API_TOKEN", cfg: todoCfg(nil), noToken: true, want: "declares Secret todo-api-keys with key TODO_API_TOKEN; set it in the shell or under dev.env in funcdctl.config.yaml"},
 		{name: "no api= entry", cfg: devConfig{builds: without("api=functions/ts/api-1.0.0.mjs")}, want: "no build of images.api"},
 		{name: "no web=web", cfg: devConfig{builds: without("web=web")}, want: "is a Site's image"},
 		{name: "requires", cfg: todoCfg(func(c *devConfig) { c.values = []string{"values/shared.yaml"} }),

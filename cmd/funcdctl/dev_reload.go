@@ -159,7 +159,7 @@ func (s *devSession) changed() bool {
 // folder no longer does. A folder that does not load is reported once and retried on the next change; an apply that
 // lost a race with a status write (Conflict) is retried on the next poll.
 func (s *devSession) reload(ctx context.Context, op string, c *sdk.Client, applied *[]v1.Object, logger *slog.Logger) error {
-	if !s.changed() {
+	if !s.file.reloadFile(op, &s.secrets, logger.Warn) && !s.changed() {
 		return nil
 	}
 	folder, err := loadDevFolder(op, s.folder.dir)
@@ -167,7 +167,7 @@ func (s *devSession) reload(ctx context.Context, op string, c *sdk.Client, appli
 		s.folder.stamps = s.currentStamps()
 		return err
 	}
-	secrets, serr := folder.declaredSecrets(op)
+	secrets, serr := folder.declaredSecrets(op, s.secrets)
 	if serr != nil {
 		s.folder.stamps = folder.stamps
 		return serr

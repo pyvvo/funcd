@@ -76,12 +76,17 @@ func (a *cli) devCmd() *cobra.Command {
 		Short: "Run a folder's resource files, or an App template, locally from their builds on the embedded platform",
 		Long: "funcdctl dev runs a folder's resource files from their local builds (ADR-0247). A directory that holds app.yaml " +
 			"beside resources/ runs as an App template instead (ADR-0253): dev pushes each image's build, renders the " +
-			"template as funcdctl app deploy does and applies the App, then again on each save.",
+			"template as funcdctl app deploy does and applies the App, then again on each save.\n\n" +
+			"A " + devConfigFile + " in the current directory holds what dev is run with (ADR-0254): its dev keys are these " +
+			"flags in camelCase (dir, values, build, hooks, apply, persist, persistTo, gport, s3port, cport), plus env and " +
+			"envFile for the values of a declared Secret no document defines, and platform for runtime.handOutSettle, " +
+			"eventing.blobPollInterval and funclog.segmentMaxAge. A flag given here replaces its key, and a dir argument " +
+			"replaces dev.dir.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			dir := "."
-			if len(args) == 1 {
-				dir = args[0]
+			dir, _, rerr := resolveDevRun("funcdctl dev", ".", args, cmd.Flags(), &cfg)
+			if rerr != nil {
+				return rerr
 			}
 			// --print-env: emit the dev S3 creds as `export …` lines and exit, no server (for
 			// `eval "$(funcdctl dev <dir> --s3port <p> --print-env)"`).
@@ -145,6 +150,9 @@ type devConfig struct {
 	pickS3Addr func() (string, error)
 	// cacheDir holds the state dir without --persist (ADR-0167); "" ⇒ os.UserCacheDir. A test passes its own.
 	cacheDir string
+	pace     devPace          // the three cadences (ADR-0254 Decision 4); zero ⇒ dev's defaults
+	secrets  devSecretSources // where a declared Secret no document defines takes its values (ADR-0254 Decision 5)
+	file     *devFileState    // funcdctl.config.yaml as read at start, nil without one; the reload re-reads it
 }
 
 // startDev is the entry seam tests drive (no signal handling, no blocking): it reads dir (ADR-0247 Decision 4), boots
@@ -155,6 +163,9 @@ func (a *cli) startDev(ctx context.Context, dir string, cfg devConfig) (*devInst
 	lg, err := observability.NewLogger(observability.Config{Format: observability.FormatText}, a.out)
 	if err != nil {
 		return nil, err
+	}
+	if cfg.pace == (devPace{}) {
+		cfg.pace = defaultDevPace()
 	}
 	if isAppTemplate(dir) {
 		return a.startDevApp(ctx, dir, cfg, lg.Root())
@@ -270,7 +281,7 @@ func (a *cli) bootDev(ctx context.Context, op string, folder *devFolder, cfg dev
 	if len(names) == 0 {
 		return nil, fault.NotFoundf(op, "%s holds no Function or Workflow image step to run", folder.dir)
 	}
-	secrets, serr := folder.declaredSecrets(op)
+	secrets, serr := folder.declaredSecrets(op, cfg.secrets)
 	if serr != nil {
 		return nil, serr
 	}
@@ -297,7 +308,7 @@ func (a *cli) bootDev(ctx context.Context, op string, folder *devFolder, cfg dev
 		}
 	}()
 	sess := &devSession{folder: folder, plan: plan, stateDirs: plan.watchSkips(processDir), runtimes: inst.runtimes,
-		bundles: map[v1.ObjectName]string{}, seen: map[v1.ObjectName]string{}}
+		bundles: map[v1.ObjectName]string{}, seen: map[v1.ObjectName]string{}, file: cfg.file, secrets: cfg.secrets}
 	desired, berr := sess.prepare(op, inst, folder, secrets, logger)
 	if berr != nil {
 		return nil, berr
@@ -329,9 +340,9 @@ func (a *cli) bootDev(ctx context.Context, op string, folder *devFolder, cfg dev
 	return inst, nil
 }
 
-// declaredSecrets creates each Secret a Function declares (ADR-0248) that no document defines, each key from the
-// environment variable of that name (ADR-0247 Decision 5). A missing variable stops dev, naming it.
-func (f *devFolder) declaredSecrets(op string) ([]v1.Object, error) {
+// declaredSecrets creates each Secret a Function declares (ADR-0248) that no document defines, each key from the shell's
+// environment, else the envFile, else dev.env (ADR-0254 Decision 5). A key none holds stops dev, naming the three places.
+func (f *devFolder) declaredSecrets(op string, src devSecretSources) ([]v1.Object, error) {
 	defined := map[v1.ObjectName]bool{}
 	for _, d := range f.resources {
 		if d.obj.GroupVersionKind().Kind == v1.KindSecret {
@@ -347,10 +358,9 @@ func (f *devFolder) declaredSecrets(op string) ([]v1.Object, error) {
 			defined[decl.Name] = true
 			data := make(map[string][]byte, len(decl.Keys))
 			for _, k := range decl.Keys {
-				v, ok := os.LookupEnv(k)
+				v, ok := src.lookup(k)
 				if !ok {
-					return nil, fault.Invalidf(op, "Function %q of %s declares Secret %q with key %s; set the environment variable %s",
-						fn.fn.Name, fn.file, decl.Name, k, k)
+					return nil, src.missing(op, fmt.Sprintf("Function %s of %s", fn.fn.Name, fn.file), string(decl.Name), k)
 				}
 				data[k] = []byte(v)
 			}
@@ -479,6 +489,8 @@ type devSession struct {
 	stepDirs  map[v1.ObjectName]string // step → its current copy directory
 	oldSteps  []oldStep
 	started   map[v1.ObjectName]bool // the Functions and steps the boot started; a later one needs a restart
+	file      *devFileState          // funcdctl.config.yaml, nil without one (ADR-0254 Decision 6)
+	secrets   devSecretSources
 }
 
 // oldStep is a step copy that goes once its step's Function serves image.
@@ -970,6 +982,10 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, folder *devFold
 		// contract at the shim, ADR-0123); the runtime comes from the build's contract file (ADR-0247 Decision 7).
 		funcd.WithWorkflowContractResolver(devWorkflowContracts{}),
 		funcd.WithWorkflowRuntimeResolver(inst.runtimes),
+		// Dev's cadences (ADR-0254 Decision 4): a saved build, an upload and a log line show within about a second.
+		funcd.WithPacing(funcd.Pacing{HandOutSettle: cfg.pace.handOutSettle}),
+		funcd.WithBlobPollInterval(cfg.pace.blobPollInterval),
+		funcd.WithFunclog(cfg.pace.segmentMaxAge, 0),
 	}
 	if inst.artifactDir != "" {
 		// An App's parts are OCI images in dev's layout, pulled and resolved as a deploy pulls them (ADR-0253).

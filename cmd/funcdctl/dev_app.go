@@ -222,7 +222,7 @@ func (s *devAppSession) prepare(ctx context.Context, op string) (devAppDesired, 
 	if !s.cfg.hooks {
 		app.Spec.Hooks = nil
 	}
-	secrets, err := devAppSecrets(op, withoutDefined(app, docs))
+	secrets, err := devAppSecrets(op, withoutDefined(app, docs), s.cfg.secrets)
 	if err != nil {
 		return devAppDesired{}, err
 	}
@@ -692,17 +692,16 @@ func (s *devAppSession) platformFolder(app *v1.App, docs []v1.Object) *devFolder
 	return f
 }
 
-// devAppSecrets is each Secret app declares, each key from the environment variable of that name, as standalone dev
-// creates a Function's (ADR-0247 Decision 5), tagged as dev's. A missing variable stops dev, naming it.
-func devAppSecrets(op string, app *v1.App) ([]v1.Object, error) {
+// devAppSecrets is each Secret app declares, each key from the shell, else the envFile, else dev.env, as standalone dev
+// creates a Function's (ADR-0254 Decision 5), tagged as dev's. A key none holds stops dev, naming the three places.
+func devAppSecrets(op string, app *v1.App, src devSecretSources) ([]v1.Object, error) {
 	var out []v1.Object
 	for _, decl := range app.Spec.Secrets {
 		data := make(map[string][]byte, len(decl.Keys))
 		for _, k := range decl.Keys {
-			v, ok := os.LookupEnv(k)
+			v, ok := src.lookup(k)
 			if !ok {
-				return nil, fault.Invalidf(op, "App %s declares Secret %s with key %s; set the environment variable %s",
-					app.Name, decl.Name, k, k)
+				return nil, src.missing(op, "App "+string(app.Name), string(decl.Name), k)
 			}
 			data[k] = []byte(v)
 		}
@@ -865,8 +864,14 @@ func (s *devAppSession) watch(ctx context.Context, op string, a *cli, c *sdk.Cli
 			return
 		case <-t.C:
 		}
+		// The config file is an input too (ADR-0254 Decision 6): its build, values, apply or env, or its envFile's
+		// contents, redeploy; another key asks for a restart.
+		forced := s.cfg.file.reloadFile(op, &s.cfg.secrets, s.logger.Warn)
+		if forced {
+			s.cfg.file.mergeAppKeys(&s.cfg)
+		}
 		stamp, err := s.inputsStamp()
-		if err != nil || stamp == s.stamp {
+		if err != nil || (stamp == s.stamp && !forced) {
 			continue
 		}
 		s.stamp = stamp
