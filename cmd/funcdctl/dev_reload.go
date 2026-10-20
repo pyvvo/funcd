@@ -215,8 +215,7 @@ func (d *devSettle) ready(stamp string, changed bool) bool {
 	return true
 }
 
-// pollStamp digests what changed compares, as it is now: the files and listings the folder was read from and each
-// build's fingerprint.
+// pollStamp digests the folder's inputs as they are now: the stamps currentStamps takes and each build's fingerprint.
 func (s *devSession) pollStamp() string {
 	sum := sha256.New()
 	stamps := s.currentStamps()
@@ -234,13 +233,17 @@ func (s *devSession) pollStamp() string {
 	return fmt.Sprintf("%x", sum.Sum(nil))
 }
 
-// currentStamps re-stamps every file the folder was read from, so a folder that fails to load is reported once.
+// currentStamps re-stamps every file the folder was read from, and every *.yaml file its listings hold now, so a folder
+// that fails to load is reported once and a file added with an error is read again once it is saved.
 func (s *devSession) currentStamps() map[string]string {
 	out := make(map[string]string, len(s.folder.stamps))
 	for path := range s.folder.stamps {
 		if strings.HasSuffix(path, string(filepath.Separator)) {
 			files, _ := filepath.Glob(filepath.Join(path, "*.yaml"))
 			out[path] = listingStamp(slices.Sorted(slices.Values(files)))
+			for _, f := range files {
+				out[f], _ = fileStamp(f)
+			}
 			continue
 		}
 		out[path], _ = fileStamp(path)

@@ -193,6 +193,26 @@ func TestScenarioDevRunsResources(t *testing.T) {
 	require.NotEqual(t, first.Status.CurrentRevision, got.(*v1.Function).Status.CurrentRevision, "a rebuild rolls a new revision")
 }
 
+// TestDevReloadSeesANewFileFixedAfterAFailedLoad: a resource file added with an error fails the reload, and saving
+// it fixed reloads the folder, though the folder was never read with it (the stamps of a failed load cover it).
+func TestDevReloadSeesANewFileFixedAfterAFailedLoad(t *testing.T) {
+	requireNode(t)
+	dir := devProject(t, nodeFunction("a", "", "export function handle() { return {}; }\n"))
+	out := &lockedBuffer{}
+	inst, err := tryStartDevTo(t, dir, out)
+	require.NoError(t, err)
+	waitFunction(t, inst, "a")
+	extra := "apiVersion: funcd.io/v1alpha1\nkind: ConfigMap\nmetadata:\n  name: extra\nspec:\n  data:\n    a: "
+	writeProject(t, dir, map[string]string{"extra.yaml": extra + "[\n"})
+	require.Eventually(t, func() bool { return strings.Contains(out.String(), "reload failed") }, 20*time.Second,
+		50*time.Millisecond, "the new file's error fails the reload")
+	writeProject(t, dir, map[string]string{"extra.yaml": extra + "b\n"})
+	require.Eventually(t, func() bool {
+		_, gerr := inst.client.Get(context.Background(), v1.KindConfigMap, "default", "extra")
+		return gerr == nil
+	}, 20*time.Second, 50*time.Millisecond, "saving the new file fixed reloads the folder; dev printed:\n%s", out)
+}
+
 // scenario: dev-skips-and-refuses and old-manifest-refused (dev half) — dev skips a FuncdConfig file and documents that
 // are not funcd's, and stops on an App (naming the template directory), on two Functions named counter (naming both
 // files), on a namespace other than default, on a file that does not parse, and on a funcdctl.yaml (naming what
