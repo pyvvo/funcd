@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.15.0](https://github.com/pyvvo/funcd/compare/v0.14.1...v0.15.0) (2026-10-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* round 2 of the resource-shape refactor — ADR-0247, ADR-0249 step 3, ADR-0250, ADR-0251 ([#1099](https://github.com/pyvvo/funcd/issues/1099))
+* **api:** ADR-0246 bindings under spec.bindings + ADR-0248 stores at the root (FEAT-0001/F159) ([#1096](https://github.com/pyvvo/funcd/issues/1096))
+
+### Features
+
+* **api:** ADR-0246 bindings under spec.bindings + ADR-0248 stores at the root (FEAT-0001/F159) ([#1096](https://github.com/pyvvo/funcd/issues/1096)) ([fda4363](https://github.com/pyvvo/funcd/commit/fda4363c428050154065ae818811a9420f4fc85f))
+* **function:** set FUNCD_CONFIG_KEYS and FUNCD_SECRET_KEYS on Function workers (ADR-0245) ([#1075](https://github.com/pyvvo/funcd/issues/1075)) ([3a056f6](https://github.com/pyvvo/funcd/commit/3a056f65a137aed6e9b3bad9d10526a93f910325))
+* **local:** GET /secret and GET /secret/{key} read a Function's bound Secrets from funcd (ADR-0249) ([#1095](https://github.com/pyvvo/funcd/issues/1095)) ([f1adb74](https://github.com/pyvvo/funcd/commit/f1adb7434b9b5bac1ce2cc84854af3ef5dc0b29c))
+* round 2 of the resource-shape refactor — ADR-0247, ADR-0249 step 3, ADR-0250, ADR-0251 ([#1099](https://github.com/pyvvo/funcd/issues/1099)) ([cd91442](https://github.com/pyvvo/funcd/commit/cd914428fb1ae8a19b9638e7c51f8c1aeb9df5c3))
+
+
+### Bug Fixes
+
+* **function:** refuse a cloudevent Function whose OCI artifact carries no I/O contract ([#1089](https://github.com/pyvvo/funcd/issues/1089)) ([0fbf791](https://github.com/pyvvo/funcd/commit/0fbf7918312e7bdb44345037454033256421464a))
+* **test:** point tests at a port nothing listens on, not a closed server's ([#1101](https://github.com/pyvvo/funcd/issues/1101)) ([adb2a50](https://github.com/pyvvo/funcd/commit/adb2a507ce8a3e4c30249bfccc7ea8ca7532043e))
+
 ## [0.14.1](https://github.com/pyvvo/funcd/compare/v0.14.0...v0.14.1) (2026-10-18)
 
 
