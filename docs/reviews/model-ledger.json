@@ -11863,5 +11863,20 @@
     "dod_total": 8,
     "report": "docs/reviews/adr-0254-implementation-claude-opus-5-5-2.md",
     "notes": "pass on round 2 (49eed28b): the cadence options appended after the mode switch; TestScenarioDevConfigCadencesApp fails at 14.95 s with the old dev.go; 2 Minors (model: long lines, require inside an Eventually condition), fixed at e6f045be; live check 45/45 at bbe562e5 (upload 0.47 s, back-to-back save 0.28 s, logs line 1.53 s); merged in #1113"
+  },
+  {
+    "date": "2026-10-20",
+    "issue": "1118",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 2,
+    "dod_passed": 11,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-1118-fix-claude-opus-5-5.md",
+    "notes": "pass; minor (model): devSettle pending guard untested (mutant survived), closed by TestDevSettleKeepsAConfigReload; minor (model): reload comment past 120 cols; found pre-existing defect fixed in review (reload at every poll for a Function added after start)"
   }
 ]
