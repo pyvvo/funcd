@@ -6,6 +6,10 @@
   with acceptance delegated by the decider. The judge added the dev contract (what dev reads, skips, stops on and
   rewrites; the builds; the Secrets; steps through the materializer), the types output rule, the full supersession list
   and the plan's inventory.
+- **Superseded in part by**: [ADR-0253](0253-funcdctl-dev-runs-an-app-template.md) (2026-10-20) — Decision 4, for a
+  directory holding `app.yaml` beside `resources/`, which runs in App mode ·
+  [ADR-0254](0254-funcdctl-dev-config-file.md) (2026-10-20) — Decision 5's Secret sources and Decision 4's `[dir]`
+  default.
 - **Date**: 2026-10-19
 - **Deciders**: green-0-rabbit
 - **Tags**: dx, cli, contract, dev, bundle, refactor
