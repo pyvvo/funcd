@@ -122,8 +122,8 @@ controller** runs **one reconcile loop per kind** to drive *actual state → des
   - hooks (ADR-0214), requirements (ADR-0219), self-heal and pause (ADR-0212);
   - a snapshot before an upgrade, with safe mode (ADR-0207), and backup schedules for its own stores (ADR-0222).
 - `funcdctl dev <template dir>` runs an App from local builds with reload on save (ADR-0253, #1067); what it runs
-  with is kept in `funcdctl.config.yaml` (ADR-0254, #1110); ADR-0255 (#1119, accepted) adds running the project's
-  watch builds and reloading its open Site pages.
+  with is kept in `funcdctl.config.yaml` (ADR-0254, #1110), whose `dev.watch` and `dev.liveReload` also run the
+  project's watch builds and reload its open Site pages (ADR-0255, #1119).
 
 **Deploy lifecycle:**
 
@@ -411,7 +411,7 @@ sequenceDiagram
 
 ## Build status (V1)
 
-The V1 build slate is complete and past it: **ADR-0001…0254** decided, **249 Implemented** (34 accepted as the
+The V1 build slate is complete and past it: **ADR-0001…0255** decided, **250 Implemented** (34 accepted as the
 roadmap's tier-0 build items; the rest — incl. ADR-0034…0254 — are follow-ons refining or extending
 existing feature rows), **0 roadmap items remaining**. Not Implemented: ADR-0000 (the process ADR), ADR-0216
 (App tests, Accepted, F119 deferred) and the two DR addenda ADR-0227/0228 (Accepted; they record code already
@@ -756,4 +756,4 @@ All are **Implemented** unless the recap says *superseded*.
 | [ADR-0252 — App scenarios under the new resource shape](adr/0252-app-scenarios-under-the-new-resource-shape.md) | Restates the scenarios of ADR-0199 and ADR-0213 that the resource-shape refactor changes; supersedes both in part. Realizes F159 and F161. | <ol><li>an App drops a store with its bindings; dropping one a part still binds is refused at apply, naming the binding</li><li>a part declares no store of its own: the App declares a Site's bucket and a shared KV store at its root</li><li>a hand-made ConfigMap is declared by `ref` at the App's root, never renamed or written</li><li>a declared Secret reaches a part only through `ctx.secret`, read at call time (ADR-0249)</li></ol> |
 | [ADR-0253 — `funcdctl dev` runs a whole App from its template](adr/0253-funcdctl-dev-runs-an-app-template.md) | **Implemented.** `funcdctl dev <template dir>` deploys an App from local builds on dev's embedded platform as `app deploy` does, then again on each save. Supersedes ADR-0247 Decision 4 in part. Realizes F164. | <ol><li>each build pushed to a local OCI layout; the template rendered against it with an in-memory lock</li><li>hooks only with `--hooks`, then on every new revision</li><li>a Site from its build folder (`--build <key>=<dir>`)</li><li>`--apply` files beside the App; no synthesized grant</li><li>a failed revision or a refused apply leaves the last App serving; the newest revision wins</li><li>`requires` refused for now</li></ol> |
 | [ADR-0254 — `funcdctl.config.yaml` holds what `funcdctl dev` is run with](adr/0254-funcdctl-dev-config-file.md) | **Implemented.** A committed `funcdctl.config.yaml` holds dev's flags as keys, its platform's cadences and where a declared Secret's values come from. Supersedes ADR-0247 Decisions 4 and 5 in part. Realizes F165. | <ol><li>`dev` keys are the flags; a given flag wins</li><li>`dev.platform` takes `runtime.handOutSettle`, `eventing.blobPollInterval`, `funclog.segmentMaxAge`; dev's defaults `250ms`, `1s`, `1s`</li><li>a Secret's value from the shell, then `envFile`, then `env`</li><li>a change reloads, or asks for a restart</li></ol> |
-| [ADR-0255 — `funcdctl dev` runs a project's watch builds and reloads its Site pages](adr/0255-funcdctl-dev-runs-the-dev-loop.md) | **Reviewing.** `funcdctl.config.yaml`'s `dev.watch` names an App project's watch builds, which dev starts, waits for, restarts and keeps quiet; `dev.liveReload` reloads open Site pages after a Site change. Supersedes ADR-0253 Decisions 2 and 3 in part. Realizes F166. | <ol><li>App-only keys `watch` (name, run, dir) and `liveReload`; both opt-in</li><li>commands in their own process groups, reaped after a crash; restart with backoff</li><li>dev waits on a named build miss, stops on any other refusal</li><li>a command's output only in its log file, its last lines when it fails</li><li>a Site copy with one script tag, an event stream on dev's own port</li></ol> |
+| [ADR-0255 — `funcdctl dev` runs a project's watch builds and reloads its Site pages](adr/0255-funcdctl-dev-runs-the-dev-loop.md) | **Implemented.** `funcdctl.config.yaml`'s `dev.watch` names an App project's watch builds, which dev starts, waits for, restarts and keeps quiet; `dev.liveReload` reloads open Site pages after a Site change. Supersedes ADR-0253 Decisions 2 and 3 in part. Realizes F166. | <ol><li>App-only keys `watch` (name, run, dir) and `liveReload`; both opt-in</li><li>commands in their own process groups, reaped after a crash; restart with backoff</li><li>dev waits on a named build miss, stops on any other refusal</li><li>a command's output only in its log file, its last lines when it fails</li><li>a Site copy with one script tag, an event stream on dev's own port</li></ol> |
