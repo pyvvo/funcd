@@ -108,3 +108,22 @@ func TestIssue1118_FolderDevWaitsForABuildToSettle(t *testing.T) {
 	require.Equal(t, before+1, got.(*v1.Function).Generation, "the bundle reloads once, after its last write")
 	require.NotContains(t, out.String(), "reload failed", "no reload of a bundle in progress")
 }
+
+// addedAfterStart is the warning of a Function added after dev started.
+const addedAfterStart = "restart funcdctl dev to run a Function added after it started"
+
+// TestDevReloadLeavesAFunctionAddedAfterStartAlone: a Function added after dev started is read once, with its warning,
+// and does not reload the folder at every poll, though dev never delivers its build.
+func TestDevReloadLeavesAFunctionAddedAfterStartAlone(t *testing.T) {
+	requireNode(t)
+	dir := devProject(t, nodeFunction("a", "", "export function handle() { return {}; }\n"))
+	var logs lockedBuffer
+	inst, err := tryStartDevTo(t, dir, &logs)
+	require.NoError(t, err)
+	waitFunction(t, inst, "a")
+	writeProject(t, dir, nodeFunction("more", "", "export function handle() { return {}; }\n"))
+	require.Eventually(t, func() bool { return strings.Contains(logs.String(), addedAfterStart) }, 10*time.Second,
+		50*time.Millisecond, "the reload reads the new Function")
+	time.Sleep(6 * devReloadPoll)
+	require.Equal(t, 1, strings.Count(logs.String(), addedAfterStart), "the folder reloads once; dev printed:\n%s", &logs)
+}

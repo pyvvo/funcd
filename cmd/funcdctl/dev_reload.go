@@ -129,7 +129,9 @@ func watchFolder(ctx context.Context, op string, c *sdk.Client, s *devSession, a
 	}
 }
 
-// changed reports whether a file the folder was read from, its listing, or a build changed since it was read.
+// changed reports whether a file the folder was read from, its listing, or a build changed since it was read. The
+// build of a Function or step added after boot is left out: dev runs none (prepare), so it never holds a delivery to
+// compare with.
 func (s *devSession) changed() bool {
 	for path, stamp := range s.folder.stamps {
 		if strings.HasSuffix(path, string(filepath.Separator)) {
@@ -144,11 +146,17 @@ func (s *devSession) changed() bool {
 		}
 	}
 	for _, fn := range s.folder.functions {
+		if !s.started[fn.fn.Name] {
+			continue
+		}
 		if fp, err := fn.build.fingerprint(s.stateDirs); err == nil && fp != s.seen[fn.fn.Name] {
 			return true
 		}
 	}
 	for _, st := range s.folder.steps {
+		if !s.started[st.name] {
+			continue
+		}
 		if fp, err := st.build.fingerprint(s.stateDirs); err == nil &&
 			filepath.Base(s.stepDirs[st.name]) != string(st.name)+"-"+strings.TrimPrefix(fp, "sha256:")[:16] {
 			return true
