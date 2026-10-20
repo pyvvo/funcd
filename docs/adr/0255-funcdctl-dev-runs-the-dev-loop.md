@@ -1,9 +1,9 @@
 # ADR-0255: `funcdctl dev` runs a project's watch builds and reloads its Site pages
 
-- **Status**: Accepted (2026-10-20), after two judge rounds, under the decider's "refine and ship it" (#1119); the
-  restart backoff, the 20 last lines, a taken port's replacement and reading answer 4's "one line per build" as
-  ADR-0253's `pushed` line are the drafting agent's choices, brought back to the decider. The judge drew the
-  wait/stop line, kept ADR-0253's output, added the crash reap and moved folder mode out.
+- **Status**: Reviewing (2026-10-21), implemented; Accepted (2026-10-20), after two judge rounds, under the decider's
+  "refine and ship it" (#1119); the restart backoff, the 20 last lines, a taken port's replacement and reading answer
+  4's "one line per build" as ADR-0253's `pushed` line are the drafting agent's choices, brought back to the decider.
+  The judge drew the wait/stop line, kept ADR-0253's output, added the crash reap and moved folder mode out.
 - **Date**: 2026-10-20
 - **Deciders**: green-0-rabbit
 - **Tags**: dx, cli, dev, app, site
