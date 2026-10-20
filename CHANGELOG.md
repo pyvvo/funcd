@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.17.0](https://github.com/pyvvo/funcd/compare/v0.16.0...v0.17.0) (2026-10-20)
+
+
+### Features
+
+* **funcdctl:** funcdctl dev runs an App project's watch builds and reloads its Site pages (ADR-0255) ([#1124](https://github.com/pyvvo/funcd/issues/1124)) ([c03e165](https://github.com/pyvvo/funcd/commit/c03e1650cb64083ca7308a73be5b3826a12657ed))
+
+
+### Bug Fixes
+
+* **e2e:** app-hung-worker-restarted holds the replacement until the App's Degraded write is seen ([#1123](https://github.com/pyvvo/funcd/issues/1123)) ([1381575](https://github.com/pyvvo/funcd/commit/1381575cb188c2cf13451400425cd3d7d585204a))
+* **funcdctl:** dev reloads a build only once its tool stops writing it ([#1122](https://github.com/pyvvo/funcd/issues/1122)) ([e34dada](https://github.com/pyvvo/funcd/commit/e34dadada266302b327519e2c2968e082cc30176))
+* **funcd:** pooled-rig tests give their local pool host a 500 ms probe budget ([#1129](https://github.com/pyvvo/funcd/issues/1129)) ([0513539](https://github.com/pyvvo/funcd/commit/05135390fdd26a0e06df0b2f53d38b677085bb3f))
+
 ## [0.16.0](https://github.com/pyvvo/funcd/compare/v0.15.0...v0.16.0) (2026-10-20)
 
 
