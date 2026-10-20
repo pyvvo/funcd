@@ -5,6 +5,9 @@
   (2026-10-20), after two judge rounds, under `adr-batch` with acceptance delegated by the decider. The judge made
   every scenario run on the todo and site-config Apps with its full command, kept a Secret an `--apply` document
   defines, applied the Secrets again on a reload, and narrowed what dev skips in a template.
+- **Superseded in part by**: [ADR-0255](0255-funcdctl-dev-runs-the-dev-loop.md) (2026-10-20) — Decision 2, under
+  `watch`, where a build missing at start makes dev wait; Decision 3, under `liveReload`, where a Site's build is
+  pushed from a copy carrying one script tag.
 - **Date**: 2026-10-20
 - **Deciders**: green-0-rabbit
 - **Tags**: dx, cli, dev, app, template
