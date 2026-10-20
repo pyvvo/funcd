@@ -193,9 +193,10 @@ func TestScenarioDevRunsResources(t *testing.T) {
 	require.NotEqual(t, first.Status.CurrentRevision, got.(*v1.Function).Status.CurrentRevision, "a rebuild rolls a new revision")
 }
 
-// scenario: dev-skips-and-refuses and old-manifest-refused (dev half) — dev skips a FuncdConfig file and documents
-// that are not funcd's, and stops on an App (naming the template directory), on two Functions named counter (naming both files), on a
-// namespace other than default, on a file that does not parse, and on a funcdctl.yaml (naming what replaces it).
+// scenario: dev-skips-and-refuses and old-manifest-refused (dev half) — dev skips a FuncdConfig file and documents that
+// are not funcd's, and stops on an App (naming the template directory), on two Functions named counter (naming both
+// files), on a namespace other than default, on a file that does not parse, and on a funcdctl.yaml (naming what
+// replaces it).
 func TestScenarioDevSkipsAndRefuses(t *testing.T) {
 	t.Parallel()
 	counter := nodeFunction("counter", "", "export function handle() {}\n")

@@ -62,9 +62,9 @@ type devBuild struct {
 }
 
 // loadDevFolder reads dir as ADR-0247 Decision 4 says: its top-level *.yaml files, skipping contract files, documents
-// that are not funcd's and FuncdConfig documents, and stopping on an App (ADR-0253 runs one from its template), on two documents of one kind and
-// name, on a namespace other than default, and on a file that does not parse. A funcdctl.yaml stops it, naming the
-// files that replace it (Decision 11).
+// that are not funcd's and FuncdConfig documents, and stopping on an App (ADR-0253 runs one from its template), on two
+// documents of one kind and name, on a namespace other than default, and on a file that does not parse. A funcdctl.yaml
+// stops it, naming the files that replace it (Decision 11).
 func loadDevFolder(op, dir string) (*devFolder, error) {
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 		return nil, fault.Invalidf(op, "%s is not a folder: funcdctl dev runs a folder of resource files and contract files (ADR-0247)", dir)

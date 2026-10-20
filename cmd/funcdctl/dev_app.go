@@ -28,8 +28,8 @@ import (
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
-// App mode (ADR-0253): `funcdctl dev <template dir>` deploys an App template on the embedded platform from local builds.
-// Dev pushes each image's build to an OCI layout in its state dir, renders the template with that layout as its
+// App mode (ADR-0253): `funcdctl dev <template dir>` deploys an App template on the embedded platform from local
+// builds. Dev pushes each image's build to an OCI layout in its state dir, renders the template with that layout as its
 // registry and a lock of those pushes, and applies the App as `app deploy` does. The App reconciler then writes the
 // parts, stores, Routes and Sites, and stamps a revision per change.
 
@@ -252,9 +252,9 @@ func applyDocuments(op string, files []string) ([]v1.Object, error) {
 	return out, nil
 }
 
-// loadTemplate reads the template directory as template.Load does, skipping only dot-entries and dev's persist dir
-// (Decision 3): it copies app.yaml and resources/ into a snapshot under the stage dir and loads that, and any other
-// entry stops it with Load's refusal. app.lock is neither read nor written.
+// loadTemplate reads the template directory as template.Load does, skipping only dot-entries (in resources/ too) and
+// dev's persist dir (Decision 3): it copies app.yaml and resources/ into a snapshot under the stage dir and loads that,
+// so any other entry stops it with Load's refusal. app.lock is neither read nor written.
 func (s *devAppSession) loadTemplate(op string) (*template.Template, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
@@ -269,23 +269,61 @@ func (s *devAppSession) loadTemplate(op string) (*template.Template, error) {
 		src := filepath.Join(s.dir, e.Name())
 		switch {
 		case strings.HasPrefix(e.Name(), ".") || s.skipped(src) || e.Name() == "app.lock":
-		case e.Name() == "app.yaml" || e.Name() == "resources":
-			if err := os.CopyFS(filepath.Join(snap, e.Name()), os.DirFS(src)); err != nil && e.IsDir() {
-				return nil, fault.Wrapf(err, fault.Internal, op, "copy %s", src)
-			} else if !e.IsDir() {
-				data, rerr := os.ReadFile(src) //nolint:gosec // the template directory is the caller's argument
-				if rerr != nil {
-					return nil, fault.Invalidf(op, "read %s: %v", src, rerr)
-				}
-				if werr := os.WriteFile(filepath.Join(snap, e.Name()), data, 0o600); werr != nil {
-					return nil, fault.Wrapf(werr, fault.Internal, op, "copy %s", src)
-				}
+		case e.Name() == "app.yaml" && !e.IsDir():
+			if err := copyFile(src, filepath.Join(snap, e.Name())); err != nil {
+				return nil, fault.Invalidf(op, "copy %s: %v", src, err)
+			}
+		case e.Name() == "resources" && e.IsDir():
+			if err := copyResources(src, filepath.Join(snap, e.Name())); err != nil {
+				return nil, fault.Invalidf(op, "copy %s: %v", src, err)
 			}
 		default:
 			return nil, fault.Invalidf(op, "%s: a template holds only app.yaml, app.lock and resources/*.yaml", e.Name())
 		}
 	}
 	return template.Load(snap)
+}
+
+// copyResources copies each entry of resources/ but its dot-entries (an editor's swap file, a .DS_Store): a file as is,
+// a directory as an empty one, which template.Load then refuses.
+func copyResources(src, dst string) error {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dst, 0o700); err != nil {
+		return err
+	}
+	for _, e := range entries {
+		switch {
+		case strings.HasPrefix(e.Name(), "."):
+		case e.IsDir():
+			if err := os.MkdirAll(filepath.Join(dst, e.Name()), 0o700); err != nil {
+				return err
+			}
+		default:
+			if err := copyFile(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// copyFile copies the file at src to dst, a symlink as a symlink, so template.Load sees what the template holds.
+func copyFile(src, dst string) error {
+	if fi, err := os.Lstat(src); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
+		target, err := os.Readlink(src)
+		if err != nil {
+			return err
+		}
+		return os.Symlink(target, dst)
+	}
+	data, err := os.ReadFile(src) //nolint:gosec // a file of the template directory the caller names
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, 0o600)
 }
 
 // stateRoot is the absolute dir that holds dev's process dir: the --persist-to dir under --persist.

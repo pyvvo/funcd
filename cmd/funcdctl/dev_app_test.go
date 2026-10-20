@@ -548,7 +548,8 @@ func TestScenarioAppDevRefusals(t *testing.T) {
 	})
 }
 
-// scenario: dev-folder-unchanged — a folder of resource files runs as ADR-0247 says, and still stops on an App document.
+// scenario: dev-folder-unchanged — a folder of resource files runs as ADR-0247 says, and still stops on an App
+// document.
 func TestScenarioDevFolderUnchanged(t *testing.T) {
 	requireNode(t)
 	t.Parallel()
@@ -622,11 +623,47 @@ func TestAppDevTemplateEntries(t *testing.T) {
 	root := appCopy(t, "todo")
 	dir := filepath.Join(root, "app")
 	persist := filepath.Join(dir, "state")
-	writeProject(t, dir, map[string]string{".editorconfig": "root = true\n", "state/process/x": "", "app.lock": "garbage"})
+	writeProject(t, dir, map[string]string{
+		".editorconfig": "root = true\n", "state/process/x": "", "app.lock": "garbage",
+		"resources/.api.yaml.swp": "x", "resources/.DS_Store": "x",
+	})
 	s := &devAppSession{dir: dir, stage: t.TempDir(), persist: persist}
 	_, err := s.loadTemplate("test")
-	require.NoError(t, err, "dot-entries, the persist dir and app.lock are skipped")
-	writeProject(t, dir, map[string]string{"notes.txt": "x"})
-	_, err = s.loadTemplate("test")
-	require.ErrorContains(t, err, "notes.txt: a template holds only app.yaml, app.lock and resources/*.yaml")
+	require.NoError(t, err, "dot-entries, in resources/ too, the persist dir and app.lock are skipped")
+
+	for name, add := range map[string]func(t *testing.T, dir string){
+		"notes.txt: a template holds only app.yaml, app.lock and resources/*.yaml": func(t *testing.T, dir string) {
+			writeProject(t, dir, map[string]string{"notes.txt": "x"})
+		},
+		"resources/nested: resources/ holds only .yaml files, one level": func(t *testing.T, dir string) {
+			writeProject(t, dir, map[string]string{"resources/nested/a.yaml": "x"})
+		},
+		"resources/link.yaml: resources/ holds only .yaml files, one level": func(t *testing.T, dir string) {
+			require.NoError(t, os.Symlink(filepath.Join(dir, "resources", "api.yaml"), filepath.Join(dir, "resources", "link.yaml")))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := filepath.Join(appCopy(t, "todo"), "app")
+			add(t, dir)
+			_, err := (&devAppSession{dir: dir, stage: t.TempDir()}).loadTemplate("test")
+			require.ErrorContains(t, err, name)
+		})
+	}
+}
+
+// A reload that fails to render (not an admission refusal) is reported, and the last App keeps serving until a fix.
+func TestAppDevFailedReloadKeepsServing(t *testing.T) {
+	requireApp(t)
+	t.Setenv("TODO_API_TOKEN", todoToken)
+	root := appCopy(t, "todo")
+	r := startApp(t, root, todoCfg(nil))
+	r.serves(t)
+	n := r.settled(t, "todo")
+	appYAML := filepath.Join(root, "app/app.yaml")
+	replaceIn(t, appYAML, "default: hello from the todo App", "default: ${{ values.nowhere.at.all }}")
+	r.eventually(t, func() bool { return strings.Contains(r.out.String(), "reload failed") }, "dev reports the failed render")
+	require.Equal(t, "hello from the todo App", r.listing(t).Greeting, "the last App keeps serving")
+	require.Equal(t, n, r.revision(t, "todo"), "the failed render stamps no revision")
+	replaceIn(t, appYAML, "default: ${{ values.nowhere.at.all }}", "default: fixed")
+	r.eventually(t, func() bool { return r.listing(t).Greeting == "fixed" }, "the fix rolls")
 }
