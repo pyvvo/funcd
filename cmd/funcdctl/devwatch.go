@@ -17,13 +17,14 @@ import (
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/runtime/process"
 	"github.com/pyvvo/funcd/internal/runtime/procreg"
 )
 
 // The watch commands' timing (ADR-0255 Decision 3): dev's own stop grace (ADR-0167), the lines a failed command
 // prints, and the cap of its restart delay, which a run at least that long resets to a second.
 const (
-	devWatchGrace     = 3 * time.Second
+	devWatchGrace     = process.DefaultStopGrace
 	devWatchLastLines = 20
 	devWatchMaxDelay  = 30 * time.Second
 )
@@ -109,17 +110,26 @@ func (c *devCommands) supervise(ctx context.Context, e devWatchEntry, log *os.Fi
 			_ = c.writef("%s finished\n", e.Name)
 			return
 		}
-		if time.Since(began) >= devWatchMaxDelay {
-			delay = time.Second
-		}
-		_ = c.writef("%s exited %d; restarting in %s\n%s", e.Name, commandExitCode(err), delay, lastLines(log.Name(), e.Name))
+		wait, next := restartDelay(delay, time.Since(began))
+		_ = c.writef("%s exited %d; restarting in %s\n%s", e.Name, commandExitCode(err), wait, lastLines(log.Name(), e.Name))
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(delay):
+		case <-time.After(wait):
 		}
-		delay = min(2*delay, devWatchMaxDelay)
+		delay = next
 	}
+}
+
+// restartDelay is how long a command that failed after running for ran waits before it starts again, given the delay
+// its last restart used, and the delay for the restart after: a second after a run of devWatchMaxDelay or more, else
+// the last delay, doubling up to devWatchMaxDelay (ADR-0255 Decision 3).
+func restartDelay(last, ran time.Duration) (wait, next time.Duration) {
+	wait = last
+	if ran >= devWatchMaxDelay {
+		wait = time.Second
+	}
+	return wait, min(2*wait, devWatchMaxDelay)
 }
 
 // errDevStopped refuses a command's start once stop began.

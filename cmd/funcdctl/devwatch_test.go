@@ -380,7 +380,7 @@ func TestScenarioDevWatchRefusals(t *testing.T) {
 		"name":             {files: map[string]string{devConfigFile: "dev:\n  dir: app\n  watch:\n    - name: Web\n      run: x\n"}, wantErr: "dev.watch[0].name Web is not [a-z0-9][a-z0-9-]*"},
 		"name twice":       {files: map[string]string{devConfigFile: "dev:\n  dir: app\n  watch:\n    - name: web\n      run: x\n    - name: web\n      run: y\n"}, wantErr: "dev.watch[1].name web is used twice"},
 		"empty run":        {files: map[string]string{devConfigFile: "dev:\n  dir: app\n  watch:\n    - name: web\n      run: \" \"\n"}, wantErr: "dev.watch[0].run is empty"},
-		"dir":              {files: map[string]string{devConfigFile: "dev:\n  dir: app\n  watch:\n    - name: web\n      run: x\n      dir: nowhere\n"}, wantErr: "dev.watch[0].dir "},
+		"dir":              {files: map[string]string{devConfigFile: "dev:\n  dir: app\n  watch:\n    - name: web\n      run: x\n      dir: nowhere\n"}, wantErr: "/nowhere is not a directory"},
 		"watch on folder":  {files: map[string]string{devConfigFile: "dev:\n  watch:\n    - name: web\n      run: x\n"}, wantErr: "dev.watch needs dev.dir to be an App template"},
 		"reload on folder": {files: map[string]string{devConfigFile: "dev:\n  liveReload: true\n"}, wantErr: "dev.liveReload needs dev.dir to be an App template"},
 	} {
@@ -424,6 +424,71 @@ func TestScenarioDevLoopAbsent(t *testing.T) {
 	index, err := os.ReadFile(filepath.Join(root, "web", "index.html"))
 	require.NoError(t, err)
 	require.Equal(t, string(index), siteIndex(t, r), "the Site's bytes are the build's")
+}
+
+// TestDevWatchEarlyChecks: a refusal that needs no build, such as a Secret key the shell does not hold, stops dev before
+// it starts any command (ADR-0255 Decision 2).
+func TestDevWatchEarlyChecks(t *testing.T) {
+	requireApp(t)
+	t.Setenv("TODO_API_TOKEN", "")
+	require.NoError(t, os.Unsetenv("TODO_API_TOKEN"))
+	root := loopTodo(t, loopConfig(pidWatch, ""))
+	r, _, err := startLoop(t, root, t.TempDir())
+	require.ErrorContains(t, err, "TODO_API_TOKEN")
+	require.NotContains(t, r.out.String(), "watch web:", "no command started")
+	require.NoFileExists(t, filepath.Join(root, "watch.pid"))
+}
+
+// TestDevRestartDelay: a failed command's delay doubles up to 30 s, and a run of 30 s or more brings it back to 1 s.
+func TestDevRestartDelay(t *testing.T) {
+	for _, tc := range []struct{ last, ran, wait, next time.Duration }{
+		{time.Second, 0, time.Second, 2 * time.Second},
+		{16 * time.Second, time.Second, 16 * time.Second, 30 * time.Second},
+		{30 * time.Second, time.Second, 30 * time.Second, 30 * time.Second},
+		{30 * time.Second, 30 * time.Second, time.Second, 2 * time.Second},
+	} {
+		wait, next := restartDelay(tc.last, tc.ran)
+		require.Equal(t, [2]time.Duration{tc.wait, tc.next}, [2]time.Duration{wait, next}, "last %s, ran %s", tc.last, tc.ran)
+	}
+}
+
+// TestDevSiteHoldsIndex: under watch, a Site folder that is empty or holds no index yet is a miss.
+func TestDevSiteHoldsIndex(t *testing.T) {
+	dir := t.TempDir()
+	img := &devImage{part: partSite, site: dir, index: "index.html"}
+	var miss buildMiss
+	err := siteHoldsIndex("test", "web", img)
+	require.ErrorAs(t, err, &miss)
+	require.ErrorContains(t, err, dir+" is empty")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "app.js"), nil, 0o600))
+	err = siteHoldsIndex("test", "web", img)
+	require.ErrorAs(t, err, &miss)
+	require.ErrorContains(t, err, dir+" holds no index.html")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "index.html"), nil, 0o600))
+	require.NoError(t, siteHoldsIndex("test", "web", img))
+}
+
+// TestDevSiteCopy: the Site copy resolves a symlinked build folder, as packDir does, tags the root index only, and
+// refuses a symlink inside the build, as packDir refuses it.
+func TestDevSiteCopy(t *testing.T) {
+	root := t.TempDir()
+	dist := filepath.Join(root, "dist")
+	writeProject(t, dist, map[string]string{"index.html": "<html><head></head></html>", "app.js": "x", ".well-known/a": "y"})
+	web := filepath.Join(root, "web")
+	require.NoError(t, os.Symlink(dist, web))
+	l := &devLiveReload{port: 4321}
+	stage := t.TempDir()
+	copied, err := l.siteCopy("test", stage, "web", web, "index.html")
+	require.NoError(t, err)
+	index, err := os.ReadFile(filepath.Join(copied, "index.html")) //nolint:gosec // the test's own copy
+	require.NoError(t, err)
+	require.Equal(t, "<html><head>"+l.tag()+"</head></html>", string(index))
+	for _, f := range []string{"app.js", ".well-known/a"} {
+		require.FileExists(t, filepath.Join(copied, f))
+	}
+	require.NoError(t, os.Symlink(filepath.Join(dist, "app.js"), filepath.Join(dist, "link.js")))
+	_, err = l.siteCopy("test", stage, "web", web, "index.html")
+	require.ErrorContains(t, err, "link.js is not a regular file or directory")
 }
 
 // TestDevWaitForBuilds: a miss is printed once and waited on; a refusal stops the wait only on a settled poll, and so

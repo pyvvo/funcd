@@ -177,13 +177,17 @@ func (l *devLiveReload) siteCopy(op, stage, key, dir, index string) (string, err
 }
 
 // copySite copies every entry of src into dst, dot-entries included; an entry that is neither a directory nor a regular
-// file is refused, as packDir refuses it.
+// file is refused, as packDir refuses it. A symlinked src is resolved first, as packDir resolves its root.
 func copySite(src, dst string) error {
-	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
+	root, err := filepath.EvalSymlinks(src)
+	if err != nil {
+		return err
+	}
+	return filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		rel, err := filepath.Rel(src, p)
+		rel, err := filepath.Rel(root, p)
 		if err != nil {
 			return err
 		}

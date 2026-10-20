@@ -28,9 +28,9 @@ import (
 // outputWait bounds how long an ended run waits for its last output before it reports a terminal state (ADR-0168).
 const outputWait = time.Second
 
-// defaultStopGrace is how long Stop waits after SIGTERM before sending SIGKILL unless runtime.process.stopGrace sets
+// DefaultStopGrace is how long Stop waits after SIGTERM before sending SIGKILL unless runtime.process.stopGrace sets
 // it (ADR-0167).
-const defaultStopGrace = 3 * time.Second
+const DefaultStopGrace = 3 * time.Second
 
 // instanceFlag prefixes the identity token appended to a worker's argv, which the reap matches (ADR-0167).
 const instanceFlag = "--funcd-instance="
@@ -68,7 +68,7 @@ type driver struct {
 // New returns a process-backed runtime.Runtime (cross-platform; dev/e2e/CI) that saves nothing and logs through logger
 // (nil means slog.Default()).
 func New(logger *slog.Logger) runtime.Runtime {
-	return &driver{instances: map[runtime.InstanceID]*instance{}, grace: defaultStopGrace, log: cmp.Or(logger, slog.Default())}
+	return &driver{instances: map[runtime.InstanceID]*instance{}, grace: DefaultStopGrace, log: cmp.Or(logger, slog.Default())}
 }
 
 // Open returns a process driver that saves its workers in <stateDir>/workers.json (ADR-0167). Before it returns it
@@ -77,7 +77,7 @@ func New(logger *slog.Logger) runtime.Runtime {
 func Open(ctx context.Context, stateDir string, stopGrace time.Duration, logger *slog.Logger) (runtime.Runtime, error) {
 	const op = "runtime.process.Open"
 	if stopGrace <= 0 {
-		stopGrace = defaultStopGrace
+		stopGrace = DefaultStopGrace
 	}
 	reg, err := procreg.Open(stateDir, "workers")
 	if err != nil {

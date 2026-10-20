@@ -38,5 +38,5 @@ func TestIssue143_CloseStopsInstancesInParallel(t *testing.T) {
 	start := time.Now()
 	require.NoError(t, d.Close())
 	elapsed := time.Since(start)
-	require.Less(t, elapsed, 2*defaultStopGrace, "Close took %s for %d workers that ignore SIGTERM: it stops them one at a time", elapsed, workers)
+	require.Less(t, elapsed, 2*DefaultStopGrace, "Close took %s for %d workers that ignore SIGTERM: it stops them one at a time", elapsed, workers)
 }
