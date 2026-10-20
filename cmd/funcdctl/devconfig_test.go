@@ -504,3 +504,26 @@ func TestScenarioDevConfigReloadApp(t *testing.T) {
 		return status == http.StatusOK
 	}, "the changed env reaches the App's Secret")
 }
+
+// scenario: dev-config-cadences (App mode) — with no platform section, a todo's upload reaches the App's intake
+// Function, through its blob EventSource and Sensor, within a few seconds, not after production's 15s poll.
+func TestScenarioDevConfigCadencesApp(t *testing.T) {
+	requireApp(t)
+	t.Setenv("TODO_API_TOKEN", todoToken)
+	r, _ := startTodoFrom(t, "--hooks=false")
+	r.serves(t)
+	status, _ := r.call(t, todoRequest{Op: "add", Title: "milk", Token: todoToken})
+	require.Equal(t, http.StatusOK, status)
+	post := func(body string) string {
+		resp, err := http.Post(r.inst.gatewayURL+"/api", "application/json", strings.NewReader(body))
+		require.NoError(t, err)
+		defer func() { _ = resp.Body.Close() }()
+		b, _ := io.ReadAll(resp.Body)
+		require.Equal(t, http.StatusOK, resp.StatusCode, "%s", b)
+		return string(b)
+	}
+	post(`{"op":"attach","id":"milk","name":"list.txt","content":"eggs","token":"` + todoToken + `"}`)
+	attached := time.Now()
+	r.eventually(t, func() bool { return strings.Contains(post(`{"op":"get","id":"milk"}`), "list.txt") }, "the upload reaches intake")
+	require.Less(t, time.Since(attached), 5*time.Second, "the 1s blob poll, not production's 15s")
+}

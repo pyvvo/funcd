@@ -982,10 +982,6 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, folder *devFold
 		// contract at the shim, ADR-0123); the runtime comes from the build's contract file (ADR-0247 Decision 7).
 		funcd.WithWorkflowContractResolver(devWorkflowContracts{}),
 		funcd.WithWorkflowRuntimeResolver(inst.runtimes),
-		// Dev's cadences (ADR-0254 Decision 4): a saved build, an upload and a log line show within about a second.
-		funcd.WithPacing(funcd.Pacing{HandOutSettle: cfg.pace.handOutSettle}),
-		funcd.WithBlobPollInterval(cfg.pace.blobPollInterval),
-		funcd.WithFunclog(cfg.pace.segmentMaxAge, 0),
 	}
 	if inst.artifactDir != "" {
 		// An App's parts are OCI images in dev's layout, pulled and resolved as a deploy pulls them (ADR-0253).
@@ -995,6 +991,13 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, folder *devFold
 			funcd.WithMaterializer(artifact.NewOrasMaterializer(inst.artifactDir, v1.HostPlatform())),
 		}
 	}
+	// Dev's cadences in both modes (ADR-0254 Decision 4): a saved build, an upload and a log line show within about a
+	// second.
+	opts = append(opts,
+		funcd.WithPacing(funcd.Pacing{HandOutSettle: cfg.pace.handOutSettle}),
+		funcd.WithBlobPollInterval(cfg.pace.blobPollInterval),
+		funcd.WithFunclog(cfg.pace.segmentMaxAge, 0),
+	)
 	catOpts, caterr := devCatalogOptions(plan, stateDir, folder, inst)
 	if caterr != nil {
 		return nil, caterr
