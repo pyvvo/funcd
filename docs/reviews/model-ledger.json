@@ -12043,5 +12043,20 @@
     "dod_total": 12,
     "report": "docs/reviews/issue-1143-fix-claude-opus-5-5.md",
     "notes": "pass; minor(model): TestIssue1143's no-worker loop holds 0 workers; revert fails with context canceled; banner wait follows startLoopChild"
+  },
+  {
+    "date": "2026-10-21",
+    "issue": "1144",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "changes-requested",
+    "blockers": 0,
+    "majors": 1,
+    "minors": 2,
+    "model_attributed": 3,
+    "dod_passed": 10,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-1144-fix-claude-opus-5-5.md",
+    "notes": "task review: major (model) renamed+changed test file never listed (--diff-filter=AM drops R); minors (model) later-run failure untested (S4 survives), gate.sh header 181 cols; CLAUDE.md + PR evidence open"
   }
 ]
