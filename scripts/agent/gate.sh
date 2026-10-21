@@ -5,7 +5,8 @@
 # against origin/main (scripts/agent/audit.py, report in .cache/gate/audit.log), `just ci-full` (the canonical CI
 # set, e2e included), the Linux build/vet/lint, the Linux-specific tests in the funcd-linux-tests Lima VM (`just
 # test-linux`; a SKIP line instead when limactl is missing, the VM is not running or the checkout is outside $HOME),
-# and that the run changed no file (tidy/generate/fmt had nothing to do). One PASS/FAIL line per step; full logs in
+# a stress run of the Test functions the branch adds or changes (scripts/agent/stress.py: -race, up to 20 runs each
+# within about 5 min; a SKIP line when the branch changes no test), and that the run changed no file (tidy/generate/fmt had nothing to do). One PASS/FAIL line per step; full logs in
 # .cache/gate/. Run it once per PR, not per change.
 #
 #   scripts/agent/gate.sh
@@ -45,6 +46,14 @@ if why=$("$d" scripts/linux-exec.sh --check 2>&1); then
   step linux-tests "$d" just test-linux
 else
   echo "SKIP linux-tests (${why#linux-exec: })"
+fi
+if ! stressed=$("$d" python3 scripts/agent/stress.py --list 2>&1); then
+  echo "FAIL stress (no test list: $stressed)"
+  fail=1
+elif [ -n "$stressed" ]; then
+  step stress "$d" python3 scripts/agent/stress.py
+else
+  echo "SKIP stress (the branch adds or changes no test)"
 fi
 step tree-unchanged unchanged
 [ "$fail" = 0 ] && echo "GATE PASS" || echo "GATE FAIL"
