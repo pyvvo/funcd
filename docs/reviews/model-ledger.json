@@ -11968,5 +11968,20 @@
     "dod_total": 7,
     "report": "docs/reviews/adr-0256-implementation-claude-opus-5-5.md",
     "notes": "round 2 (2f04e057): written-file verdict, round-1 minor closed, 5/5 mutants killed; live check 62/62"
+  },
+  {
+    "date": "2026-10-21",
+    "issue": "1134",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-1134-fix-claude-opus-5-5.md",
+    "notes": "pass; formatting and default-zone mutants fail the regression test; funcdctl logs sibling normalizes via v1.Timestamp; gate by the fixer"
   }
 ]
