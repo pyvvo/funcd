@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.18.0](https://github.com/pyvvo/funcd/compare/v0.17.0...v0.18.0) (2026-10-21)
+
+
+### Features
+
+* **funcdctl:** funcdctl dev prints a watch command's output that led to no build (ADR-0256) ([e3c858d](https://github.com/pyvvo/funcd/commit/e3c858dba3ffcbbec59537180b4bf5bf2d0a628e))
+
+
+### Bug Fixes
+
+* **ci:** a PR that changes only docs/ skips the fast lane ([2830300](https://github.com/pyvvo/funcd/commit/2830300895072a8933b413ba8b4ca8cdc8a44958))
+
 ## [0.17.0](https://github.com/pyvvo/funcd/compare/v0.16.0...v0.17.0) (2026-10-20)
 
 
