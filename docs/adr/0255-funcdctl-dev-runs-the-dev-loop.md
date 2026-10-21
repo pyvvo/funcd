@@ -6,6 +6,9 @@
   last lines, a taken port's replacement and reading answer 4's "one line per build" as ADR-0253's `pushed` line are the
   drafting agent's choices, brought back to the decider. The judge drew the wait/stop line, kept ADR-0253's output,
   added the crash reap and moved folder mode out.
+- **Superseded in part by**: [ADR-0256](0256-funcdctl-dev-prints-output-that-led-to-no-build.md) (2026-10-21) —
+  Decision 4, its checklist line and its Negative consequence: a burst of a command's output that led to no build of
+  its own shows in the terminal; and the scenarios' fixture layout, whose command now owns its build.
 - **Date**: 2026-10-20
 - **Deciders**: green-0-rabbit
 - **Tags**: dx, cli, dev, app, site
