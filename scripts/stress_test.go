@@ -35,9 +35,9 @@ func helper() int { return 1 }
 
 // The stress run (scripts/agent/stress.py, #1144) on a throwaway repository: it lists the Test functions a branch
 // adds or changes, a doc comment's line, a deletion-only hunk and an edit in a renamed file included, with the build
-// tag their file needs, and not an unchanged test or a changed helper; a branch that changes no test lists none and
-// runs nothing; a test whose timing races fails the run within its budget, and so does one that fails only after its
-// first run.
+// tag their file needs, and not an unchanged test, a changed helper or a Test function in a raw string's Go source;
+// a branch that changes no test lists none and runs nothing; a test whose timing races fails the run within its
+// budget, and so does one that fails only after its first run.
 func TestStressRun(t *testing.T) {
 	t.Parallel()
 	script, err := filepath.Abs(filepath.Join("agent", "stress.py"))
@@ -56,6 +56,8 @@ func TestStressRun(t *testing.T) {
 		"a/a_test.go": changed,
 		"a/e2e_test.go": "//go:build e2e\n\npackage a\n\nimport \"testing\"\n\n" +
 			"func TestE(t *testing.T) {\n\tt.Log(\"e2e!\")\n}\n",
+		"a/raw_test.go": "package a\n\nimport \"testing\"\n\nconst src = `\nfunc TestFake(t *testing.T) {\n}\n`\n\n" +
+			"func TestRaw(t *testing.T) {\n\tif src == \"\" {\n\t\tt.Fatal(\"src\")\n\t}\n}\n",
 	})
 	for _, step := range [][]string{
 		{"git", "checkout", "-q", "-b", "renamed", "main"},
@@ -115,7 +117,8 @@ func TestLater(t *testing.T) {
 
 	out, code := stress("changed", "--list")
 	require.Zero(t, code, out)
-	require.Equal(t, "./a - TestA\n./a - TestB\n./a e2e TestE\n", out, "TestC and the helper are unchanged or no test")
+	require.Equal(t, "./a - TestA\n./a - TestB\n./a e2e TestE\n./a - TestRaw\n", out,
+		"TestC and the helper are unchanged or no test, and TestFake is a raw string's source")
 
 	out, code = stress("renamed", "--list")
 	require.Zero(t, code, out)

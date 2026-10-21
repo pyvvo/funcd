@@ -45,15 +45,42 @@ def changed_lines(base, head):
     return out
 
 
+def in_raw_string(lines):
+    """For each line, whether it starts inside a raw string literal: a test fixture may hold Go source whose lines
+    read as top-level functions."""
+    out, raw = [], False
+    for line in lines:
+        out.append(raw)
+        i, quote = 0, None
+        while i < len(line):
+            c = line[i]
+            if raw:
+                raw = c != "`"
+            elif quote:
+                if c == "\\":
+                    i += 1
+                elif c == quote:
+                    quote = None
+            elif c == "`":
+                raw = True
+            elif c in "\"'":
+                quote = c
+            elif line.startswith("//", i):
+                break
+            i += 1
+    return out
+
+
 def tests_in(source):
     """The top-level Test functions of a gofmt'd file, each with its first line (its doc comment's) and last."""
     lines, out = source.splitlines(), []
+    raw = in_raw_string(lines)
     for i, line in enumerate(lines):
-        if m := TEST_FUNC.match(line):
+        if not raw[i] and (m := TEST_FUNC.match(line)):
             first = i
             while first > 0 and lines[first - 1].startswith("//"):
                 first -= 1
-            last = next((j for j in range(i + 1, len(lines)) if lines[j] == "}"), len(lines) - 1)
+            last = next((j for j in range(i + 1, len(lines)) if lines[j] == "}" and not raw[j]), len(lines) - 1)
             out.append((m.group(1), first + 1, last + 1))
     return out
 
@@ -109,7 +136,7 @@ def stress(tests, budget, count):
         ok, runs, out, code = go_test(pkg, tags, name, 1, max(60, budget))
         if not runs:
             if code == 0:
-                print(f"{label}: not run here (its build constraint excludes this platform)")
+                print(f"{label}: not run here (no such test builds on this platform)")
                 continue
             print(f"{label}: does not build or run: FAIL\n" + "\n".join("    " + x for x in out.splitlines()[-40:]))
             failed.append(label)
