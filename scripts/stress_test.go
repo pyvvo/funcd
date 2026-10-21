@@ -30,6 +30,13 @@ func TestB(t *testing.T) {
 
 func TestC(t *testing.T) {}
 
+func TestSpan(t *testing.T) {
+	const s = ` + "`" + `
+}
+` + "`" + `
+	t.Log(s, "one")
+}
+
 func helper() int { return 1 }
 `
 
@@ -51,12 +58,13 @@ func TestStressRun(t *testing.T) {
 			"func TestE(t *testing.T) {\n\tt.Log(\"e2e\")\n}\n",
 	})
 	changed := strings.NewReplacer("// TestA checks Sum.", "// TestA checks Sum of two ints.", "\tx++\n", "",
-		"func helper() int { return 1 }", "func helper() int { return 2 }").Replace(stressBase)
+		"func helper() int { return 1 }", "func helper() int { return 2 }", `"one"`, `"two"`).Replace(stressBase)
 	commit("changed", "test: change tests", map[string]string{
 		"a/a_test.go": changed,
 		"a/e2e_test.go": "//go:build e2e\n\npackage a\n\nimport \"testing\"\n\n" +
 			"func TestE(t *testing.T) {\n\tt.Log(\"e2e!\")\n}\n",
 		"a/raw_test.go": "package a\n\nimport \"testing\"\n\nconst src = `\nfunc TestFake(t *testing.T) {\n}\n`\n\n" +
+			"var tick = \"`\"\n\nfunc TestQuote(t *testing.T) {\n\tt.Log(tick)\n}\n\n// a ` in a comment\n\n" +
 			"func TestRaw(t *testing.T) {\n\tif src == \"\" {\n\t\tt.Fatal(\"src\")\n\t}\n}\n",
 	})
 	for _, step := range [][]string{
@@ -117,8 +125,9 @@ func TestLater(t *testing.T) {
 
 	out, code := stress("changed", "--list")
 	require.Zero(t, code, out)
-	require.Equal(t, "./a - TestA\n./a - TestB\n./a e2e TestE\n./a - TestRaw\n", out,
-		"TestC and the helper are unchanged or no test, and TestFake is a raw string's source")
+	require.Equal(t, "./a - TestA\n./a - TestB\n./a - TestSpan\n./a e2e TestE\n./a - TestQuote\n./a - TestRaw\n", out,
+		"TestC and the helper are unchanged or no test, TestFake is a raw string's source, and a raw string's `}`, "+
+			"a quoted or a commented backtick ends no test")
 
 	out, code = stress("renamed", "--list")
 	require.Zero(t, code, out)
