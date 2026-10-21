@@ -8,6 +8,9 @@
 - **Superseded in part by**: [ADR-0255](0255-funcdctl-dev-runs-the-dev-loop.md) (2026-10-20) — Decision 2, under
   `watch`, where a build missing at start makes dev wait; Decision 3, under `liveReload`, where a Site's build is
   pushed from a copy carrying one script tag.
+- **Superseded in part by**: [ADR-0257](0257-funcdctl-dev-serves-a-sites-last-build.md) (2026-10-21) — Decisions 3
+  and 9, in a reload: a Site build that cannot be pushed (absent, empty, index-less or refused) keeps the Site's last
+  pushed image, and the App's other parts still reload.
 - **Date**: 2026-10-20
 - **Deciders**: green-0-rabbit
 - **Tags**: dx, cli, dev, app, template
