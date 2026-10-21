@@ -1,11 +1,12 @@
 # ADR-0258: TypeScript ships `@funcd-dev/drizzle`, the Drizzle adapter over `context.sql`
 
-- **Status**: Reviewing (2026-10-21), implemented in pyvvo/funcd-typescript#88 (v0.20.0) and pyvvo/funcd-functions#24
-  (v0.20.0), taken here by the PR that closes #1140; Accepted (2026-10-21), after one judge round, on the decider's
-  choice A recorded on #1140; the `drizzle-orm` peer range, the structural `SQLContext` type and the `source` export
-  condition the examples' tests resolve the package by are the drafting agent's choices. The judge moved ADR-0233 to
-  Relates to, asked for the reverse compatibility test, and named the out-of-order migration risk and the batch's
-  writes-only rule.
+- **Status**: Implemented (2026-10-21), review passed on its second round
+  (docs/reviews/adr-0258-implementation-claude-opus-5-5.md); Reviewing (2026-10-21), implemented in
+  pyvvo/funcd-typescript#88 (v0.20.0) and pyvvo/funcd-functions#24 (v0.20.0), taken here by the PR that closes #1140;
+  Accepted (2026-10-21), after one judge round, on the decider's choice A recorded on #1140; the `drizzle-orm` peer
+  range, the structural `SQLContext` type and the `source` export condition the examples' tests resolve the package by
+  are the drafting agent's choices. The judge moved ADR-0233 to Relates to, asked for the reverse compatibility test,
+  and named the out-of-order migration risk and the batch's writes-only rule.
 - **Date**: 2026-10-21
 - **Deciders**: green-0-rabbit
 - **Tags**: sql, typescript, dx
