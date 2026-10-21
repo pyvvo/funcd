@@ -915,3 +915,12 @@ func TestDevWatchOwnership(t *testing.T) {
 	require.Empty(t, ownedPaths(at("we"), builds), "a dir that only shares a prefix")
 	require.Empty(t, ownedPaths(at("functions/ts/src"), builds), "a dir beside the builds")
 }
+
+// TestDevLiveReloadWithoutWatch: live reload starts before anything created dev's process dir, as when the file names no
+// watch command.
+func TestDevLiveReloadWithoutWatch(t *testing.T) {
+	l, err := startLiveReload("test", filepath.Join(t.TempDir(), "process"))
+	require.NoError(t, err)
+	t.Cleanup(l.stop)
+	require.NotZero(t, l.port)
+}

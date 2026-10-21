@@ -37,6 +37,10 @@ type devLiveReload struct {
 // startLiveReload serves the stream on the port processDir's livereload.port keeps, or on a free one it then keeps
 // there, so a restart inserts the same tag and pushes the same bytes.
 func startLiveReload(op, processDir string) (*devLiveReload, error) {
+	// Without a watch command, nothing created processDir yet.
+	if err := os.MkdirAll(processDir, 0o700); err != nil {
+		return nil, fault.Wrapf(err, fault.Internal, op, "create %s", processDir)
+	}
 	portFile := filepath.Join(processDir, "livereload.port")
 	ln, err := listenKept(portFile)
 	if err != nil {
