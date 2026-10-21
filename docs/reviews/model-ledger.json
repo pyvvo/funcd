@@ -12028,5 +12028,20 @@
     "dod_total": 8,
     "report": "docs/reviews/adr-0258-implementation-claude-opus-5-5.md",
     "notes": "final: #88 merged with fixes (5/5 mutants killed at v0.20.0), funcd-functions#24, funcd bumps; sql lane 9/9; npm 0.20.0"
+  },
+  {
+    "date": "2026-10-21",
+    "issue": "1143",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-1143-fix-claude-opus-5-5.md",
+    "notes": "pass; minor(model): TestIssue1143's no-worker loop holds 0 workers; revert fails with context canceled; banner wait follows startLoopChild"
   }
 ]
