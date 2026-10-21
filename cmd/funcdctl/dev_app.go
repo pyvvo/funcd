@@ -114,10 +114,11 @@ func (a *cli) startDevApp(ctx context.Context, dir string, cfg devConfig, logger
 	var cmds *devCommands
 	if len(cfg.watch) > 0 {
 		// ADR-0255 Decision 2: the checks that need no build, then the commands, then a wait on what they build.
-		if err = s.earlyChecks(op); err != nil {
+		var used map[string]*devImage
+		if used, err = s.earlyChecks(op); err != nil {
 			return nil, err
 		}
-		if cmds, err = startDevCommands(ctx, op, processDir, cfg.watch, a.writef); err != nil {
+		if cmds, err = startDevCommands(ctx, op, processDir, cfg.watch, s.watchFiles(used), a.writef); err != nil {
 			return nil, err
 		}
 		defer func() {
@@ -308,23 +309,84 @@ func refuseSQLWithoutEngine(op string, app *v1.App, folder *devFolder) error {
 
 // earlyChecks runs, before the watch commands start, the checks that need no build (ADR-0255 Decision 2): the --apply
 // files, the template and the values, then on the stand-in App its requires, the SQL engine and its declared Secrets.
-func (s *devAppSession) earlyChecks(op string) error {
+// It returns the images the render uses.
+func (s *devAppSession) earlyChecks(op string) (map[string]*devImage, error) {
 	docs, err := applyDocuments(op, s.cfg.apply)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	p, err := s.probe(op)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := refuseRequires(op, p.app); err != nil {
-		return err
+		return nil, err
 	}
 	if err := refuseSQLWithoutEngine(op, p.app, s.platformFolder(p.app, docs)); err != nil {
-		return err
+		return nil, err
 	}
-	_, err = devAppSecrets(op, withoutDefined(p.app, docs), s.cfg.secrets)
-	return err
+	if _, err := devAppSecrets(op, withoutDefined(p.app, docs), s.cfg.secrets); err != nil {
+		return nil, err
+	}
+	return p.used, nil
+}
+
+// watchFiles reads, for each watch command that owns a build, the files of the builds it owns (ADR-0256 Decision 2):
+// the build paths of the images used, taken at start, that lie inside its dir.
+func (s *devAppSession) watchFiles(used map[string]*devImage) map[string]ownedFiles {
+	dirs, paths := s.buildFlags()
+	builds := watchBuilds(dirs, paths, used)
+	files := map[string]ownedFiles{}
+	for _, e := range s.cfg.watch {
+		owned := ownedPaths(e.Dir, builds)
+		if len(owned) == 0 {
+			continue
+		}
+		files[e.Name] = func() map[string]string {
+			stamps := map[string]string{}
+			for _, p := range owned {
+				_ = s.walkBuild(p, func(f string, fi fs.FileInfo) { stamps[f] = infoStamp(fi) })
+			}
+			return stamps
+		}
+	}
+	return files
+}
+
+// watchBuilds is every path the used images' builds are read at: the path each --build key=path names and, for an
+// image no key=path names, the two where a --build folder holds a JavaScript build (ADR-0247 Decision 6). A Site is
+// named by key=path only, and a Python build runs from its sources, so neither has a folder path.
+func watchBuilds(dirs []string, paths map[string]string, used map[string]*devImage) []string {
+	builds := slices.Collect(maps.Values(paths))
+	for key, img := range used {
+		if _, named := paths[key]; named || img.part == partSite || strings.HasPrefix(string(img.runtime), "python") {
+			continue
+		}
+		for _, d := range dirs {
+			builds = append(builds, filepath.Join(d, key+".mjs"), filepath.Join(d, "dist", key+".mjs"))
+		}
+	}
+	slices.Sort(builds)
+	return slices.Compact(builds)
+}
+
+// ownedPaths is the builds that lie inside dir, or are dir, compared as absolute, cleaned paths.
+func ownedPaths(dir string, builds []string) []string {
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return nil
+	}
+	var owned []string
+	for _, b := range builds {
+		p, err := filepath.Abs(b)
+		if err != nil {
+			continue
+		}
+		if rel, err := filepath.Rel(dir, p); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			owned = append(owned, p)
+		}
+	}
+	return owned
 }
 
 // lookupBuilds finds the build of every image the render uses, as prepare does but without pushing, and, under watch,
@@ -761,7 +823,17 @@ func treeStamp(dir string) (string, error) {
 // treeStamp is the package treeStamp that also leaves out dev's persist dir.
 func (s *devAppSession) treeStamp(dir string) (string, error) {
 	sum := sha256.New()
-	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+	err := s.walkBuild(dir, func(p string, fi fs.FileInfo) {
+		rel, _ := filepath.Rel(dir, p)
+		_, _ = fmt.Fprintf(sum, "%s\x00%s\n", rel, infoStamp(fi))
+	})
+	return fmt.Sprintf("%x", sum.Sum(nil)), err
+}
+
+// walkBuild calls fn with each regular file a build walk keeps under dir, which leaves out dot-entries, __pycache__,
+// node_modules, a bundle's contract file and dev's persist dir.
+func (s *devAppSession) walkBuild(dir string, fn func(p string, fi fs.FileInfo)) error {
+	return filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil //nolint:nilerr // an entry removed mid-walk changes the stamp on the next poll
 		}
@@ -772,12 +844,10 @@ func (s *devAppSession) treeStamp(dir string) (string, error) {
 			return nil
 		}
 		if fi, ierr := d.Info(); ierr == nil && fi.Mode().IsRegular() {
-			rel, _ := filepath.Rel(dir, p)
-			_, _ = fmt.Fprintf(sum, "%s\x00%s\n", rel, infoStamp(fi))
+			fn(p, fi)
 		}
 		return nil
 	})
-	return fmt.Sprintf("%x", sum.Sum(nil)), err
 }
 
 // inputsStamp digests every input a reload reads: the template directory, the values and --apply files, and the

@@ -1,11 +1,11 @@
 # ADR-0256: `funcdctl dev` prints a watch command's output that led to no build
 
-- **Status**: Accepted (2026-10-21), after six judge rounds and a live pilot, under the decider's "go ahead with the
-  recommended approach" (#1131); the 3 s and 1 s windows and the ownership rules are the drafting agent's choices,
-  brought back to the decider. The judge moved the verdict from pushes to the owned builds' files, narrowed a folder to
-  its two JavaScript build paths, moved ADR-0255's fixture to a layout whose command owns its build and set the 1 s
-  window that splits a build's burst from a failing save after it; the pilot, with real `vite build --watch`, showed
-  that removed files must not count as a write.
+- **Status**: Reviewing (2026-10-21), implemented in the PR that closes #1131; Accepted (2026-10-21), after six judge
+  rounds and a live pilot, under the decider's "go ahead with the recommended approach" (#1131); the 3 s and 1 s windows
+  and the ownership rules are the drafting agent's choices, brought back to the decider. The judge moved the verdict
+  from pushes to the owned builds' files, narrowed a folder to its two JavaScript build paths, moved ADR-0255's fixture
+  to a layout whose command owns its build and set the 1 s window that splits a build's burst from a failing save after
+  it; the pilot, with real `vite build --watch`, showed that removed files must not count as a write.
 - **Date**: 2026-10-21
 - **Deciders**: green-0-rabbit
 - **Tags**: dx, cli, dev

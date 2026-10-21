@@ -22,12 +22,20 @@ import (
 )
 
 // The watch commands' timing (ADR-0255 Decision 3): dev's own stop grace (ADR-0167), the lines a failed command
-// prints, and the cap of its restart delay, which a run at least that long resets to a second.
+// prints, and the cap of its restart delay, which a run at least that long resets to a second. Their output (ADR-0256):
+// the most of it dev keeps to print, and how long the log file stays still before a burst ends, devWatchBuiltQuiet
+// once a build the command owns was written, so a failing save soon after a build gets a burst of its own.
 const (
-	devWatchGrace     = process.DefaultStopGrace
-	devWatchLastLines = 20
-	devWatchMaxDelay  = 30 * time.Second
+	devWatchGrace      = process.DefaultStopGrace
+	devWatchLastLines  = 20
+	devWatchMaxDelay   = 30 * time.Second
+	devWatchTail       = 64 << 10
+	devWatchQuiet      = 3 * time.Second
+	devWatchBuiltQuiet = time.Second
 )
+
+// ownedFiles reads the size and mtime of each file of the builds a watch command owns, by path (ADR-0256 Decision 2).
+type ownedFiles func() map[string]string
 
 // devCommands supervises the watch commands of ADR-0255: each runs as `sh -c <run>` in its own process group, recorded
 // in the process dir's "commands" registry (ADR-0167), so a run that did not stop is reaped at the next start.
@@ -45,8 +53,8 @@ type devCommands struct {
 }
 
 // startDevCommands reaps the commands a run that did not stop left behind, empties each command's log file and starts
-// every command.
-func startDevCommands(ctx context.Context, op, processDir string, entries []devWatchEntry, writef func(string, ...any) error) (*devCommands, error) {
+// every command, each followed by its burst of output; owned reads the builds of each command that owns one.
+func startDevCommands(ctx context.Context, op, processDir string, entries []devWatchEntry, owned map[string]ownedFiles, writef func(string, ...any) error) (*devCommands, error) {
 	reg, err := procreg.Open(processDir, "commands")
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.KindOf(err), op, "open the watch commands' registry")
@@ -67,19 +75,26 @@ func startDevCommands(ctx context.Context, op, processDir string, entries []devW
 			return nil, errors.Join(fault.Wrapf(err, fault.Internal, op, "create %s", path), c.stop())
 		}
 		c.logs[e.Name] = path
-		if err := writef("watch %s: %s\n", e.Name, path); err != nil {
+		r, err := os.Open(path) //nolint:gosec // the log file dev just created
+		if err != nil {
 			_ = log.Close()
+			return nil, errors.Join(fault.Wrapf(err, fault.Internal, op, "open %s", path), c.stop())
+		}
+		b := &devBurst{name: e.Name, log: r, files: owned[e.Name], quiet: devWatchQuiet, builtQuiet: devWatchBuiltQuiet}
+		if err := writef("watch %s: %s\n", e.Name, path); err != nil {
+			_, _ = log.Close(), r.Close()
 			return nil, errors.Join(err, c.stop())
 		}
-		c.wg.Add(1)
-		go c.supervise(cctx, e, log)
+		c.wg.Add(2)
+		go c.follow(cctx, b)
+		go c.supervise(cctx, e, log, b)
 	}
 	return c, nil
 }
 
 // supervise runs e until ctx ends: a command that exits non-zero is printed with its last lines and started again after
-// a delay doubling up to devWatchMaxDelay, one that exits 0 is done.
-func (c *devCommands) supervise(ctx context.Context, e devWatchEntry, log *os.File) {
+// a delay doubling up to devWatchMaxDelay, one that exits 0 is done. Each exit ends b's burst (ADR-0256 Decision 5).
+func (c *devCommands) supervise(ctx context.Context, e devWatchEntry, log *os.File, b *devBurst) {
 	defer c.wg.Done()
 	defer func() { _ = log.Close() }()
 	delay := time.Second
@@ -88,6 +103,7 @@ func (c *devCommands) supervise(ctx context.Context, e devWatchEntry, log *os.Fi
 		cmd := exec.Command("sh", "-c", e.Run) //nolint:gosec // the command funcdctl.config.yaml names (ADR-0255)
 		cmd.Dir, cmd.Stdout, cmd.Stderr = e.Dir, log, log
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		b.started()
 		if err := c.start(e.Name, cmd); err != nil {
 			if !errors.Is(err, errDevStopped) {
 				_ = c.writef("watch %s did not start: %v\n", e.Name, err)
@@ -107,9 +123,10 @@ func (c *devCommands) supervise(ctx context.Context, e devWatchEntry, log *os.Fi
 			c.mu.Lock()
 			c.finished[e.Name] = true
 			c.mu.Unlock()
-			_ = c.writef("%s finished\n", e.Name)
+			_ = c.writef("%s%s finished\n", b.exited(true), e.Name)
 			return
 		}
+		b.exited(false)
 		wait, next := restartDelay(delay, time.Since(began))
 		_ = c.writef("%s exited %d; restarting in %s\n%s", e.Name, commandExitCode(err), wait, lastLines(log.Name(), e.Name))
 		select {
@@ -199,17 +216,22 @@ func commandExitCode(err error) int {
 }
 
 // lastLines is the last devWatchLastLines lines of the log file at path, each prefixed with name, read from at most its
-// last 64 KiB.
+// last devWatchTail bytes.
 func lastLines(path, name string) string {
 	f, err := os.Open(path) //nolint:gosec // dev's own log file
 	if err != nil {
 		return ""
 	}
 	defer func() { _ = f.Close() }()
-	if fi, err := f.Stat(); err == nil && fi.Size() > 64<<10 {
-		_, _ = f.Seek(-64<<10, io.SeekEnd)
+	if fi, err := f.Stat(); err == nil && fi.Size() > devWatchTail {
+		_, _ = f.Seek(-devWatchTail, io.SeekEnd)
 	}
 	data, _ := io.ReadAll(f)
+	return prefixLines(data, name)
+}
+
+// prefixLines is the last devWatchLastLines lines of data, each prefixed with name.
+func prefixLines(data []byte, name string) string {
 	lines := strings.Split(strings.TrimRight(string(bytes.ToValidUTF8(data, nil)), "\n"), "\n")
 	if len(lines) > devWatchLastLines {
 		lines = lines[len(lines)-devWatchLastLines:]
@@ -221,6 +243,150 @@ func lastLines(path, name string) string {
 		}
 	}
 	return b.String()
+}
+
+// follow polls b every devReloadPoll until ctx ends, printing each burst that led to no build (ADR-0256).
+func (c *devCommands) follow(ctx context.Context, b *devBurst) {
+	defer c.wg.Done()
+	defer b.close()
+	t := time.NewTicker(devReloadPoll)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if lines := b.poll(time.Now()); lines != "" {
+				_ = c.writef("%s", lines)
+			}
+		}
+	}
+}
+
+// devBurst follows a watch command's log file as it grows (ADR-0256): the output since the command last went quiet,
+// judged when it ends by whether a build the command owns was written meanwhile. The follow loop and the supervisor's
+// starts and exits share it.
+type devBurst struct {
+	name              string
+	log               *os.File      // read from where the last read stopped
+	files             ownedFiles    // nil when the command owns no build
+	quiet, builtQuiet time.Duration // devWatchQuiet and devWatchBuiltQuiet, which a test shortens
+	mu                sync.Mutex    // guards the fields below and log
+	off               int64         // how far log was read
+	buf               []byte        // the open burst, its last devWatchTail bytes
+	open              bool
+	grew              time.Time         // when log last grew
+	last              map[string]string // the owned files at the last poll or the command's start, whichever came later
+	base              map[string]string // last, when the open burst's first line was read
+}
+
+// started reads the owned files as the command starts.
+func (b *devBurst) started() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.last = b.ownedNow()
+}
+
+// poll reads what the log file gained and ends the open burst once the log file stayed still long enough; it returns
+// the lines to print.
+func (b *devBurst) poll(now time.Time) string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	files := b.ownedNow()
+	if b.read() {
+		b.grew = now
+	}
+	b.last = files
+	if !b.open {
+		return ""
+	}
+	quiet := b.quiet
+	if b.wrote(files) {
+		quiet = b.builtQuiet
+	}
+	if now.Sub(b.grew) < quiet {
+		return ""
+	}
+	return b.end(files)
+}
+
+// wrote reports whether, since the open burst began, a file of a build the command owns was added or rewritten:
+// removing files writes nothing (ADR-0256 Decision 3).
+func (b *devBurst) wrote(files map[string]string) bool {
+	for p, stamp := range files {
+		if b.base[p] != stamp {
+			return true
+		}
+	}
+	return false
+}
+
+// exited ends the open burst as its command exits (ADR-0256 Decision 5): an exit 0 judges it, another drops it, as
+// the exit prints the log file's last lines.
+func (b *devBurst) exited(ok bool) string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.read()
+	if !b.open {
+		return ""
+	}
+	if !ok {
+		b.open, b.buf = false, nil
+		return ""
+	}
+	return b.end(b.ownedNow())
+}
+
+// read appends what the log file gained since the last read to the burst, which it opens against the owned files the
+// last poll or start read, and reports whether it gained any.
+func (b *devBurst) read() bool {
+	fi, err := b.log.Stat()
+	if err != nil || fi.Size() <= b.off {
+		return false
+	}
+	if fi.Size()-b.off > devWatchTail {
+		b.off, b.buf = fi.Size()-devWatchTail, b.buf[:0]
+	}
+	data := make([]byte, fi.Size()-b.off)
+	n, _ := b.log.ReadAt(data, b.off)
+	if n == 0 {
+		return false
+	}
+	b.off += int64(n)
+	if !b.open {
+		b.open, b.base = true, b.last
+	}
+	b.buf = append(b.buf, data[:n]...)
+	if len(b.buf) > devWatchTail {
+		b.buf = b.buf[len(b.buf)-devWatchTail:]
+	}
+	return true
+}
+
+// end closes the open burst: its last lines when no build the command owns was written since the burst began, else
+// none.
+func (b *devBurst) end(files map[string]string) string {
+	data := b.buf
+	b.open, b.buf = false, nil
+	if b.wrote(files) {
+		return ""
+	}
+	return prefixLines(data, b.name)
+}
+
+// ownedNow is the owned builds' files as they are now, none when the command owns no build.
+func (b *devBurst) ownedNow() map[string]string {
+	if b.files == nil {
+		return nil
+	}
+	return b.files()
+}
+
+// close closes the log file's read handle once the follow loop ends.
+func (b *devBurst) close() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	_ = b.log.Close()
 }
 
 // buildMiss is a build a lookup did not find, which a watch command may still write (ADR-0255 Decision 2). It keeps the
