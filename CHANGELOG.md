@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.0](https://github.com/pyvvo/funcd/compare/v0.19.0...v0.20.0) (2026-10-21)
+
+
+### Features
+
+* **deps:** funcd-typescript and funcd-functions v0.20.0, with the @funcd-dev/drizzle package (ADR-0258) ([242a9e0](https://github.com/pyvvo/funcd/commit/242a9e035264ebd176da08bdd3fac6818513e777))
+
 ## [0.19.0](https://github.com/pyvvo/funcd/compare/v0.18.0...v0.19.0) (2026-10-21)
 
 
