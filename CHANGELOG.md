@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.19.0](https://github.com/pyvvo/funcd/compare/v0.18.0...v0.19.0) (2026-10-21)
+
+
+### Features
+
+* **funcdctl:** funcdctl dev keeps a Site's last build while its build cannot be pushed (ADR-0257) ([8f966e6](https://github.com/pyvvo/funcd/commit/8f966e65d579b2948426c529c083bea5d3f67901))
+
+
+### Bug Fixes
+
+* **funcdctl:** funcdctl dev prints every log line's time in the host's time zone ([#1135](https://github.com/pyvvo/funcd/issues/1135)) ([980a849](https://github.com/pyvvo/funcd/commit/980a849c0344d05dc3f2fe184aabb952c3fc7db9))
+* **funcdctl:** funcdctl dev starts live reload when the file names no watch command ([8f966e6](https://github.com/pyvvo/funcd/commit/8f966e65d579b2948426c529c083bea5d3f67901))
+
 ## [0.18.0](https://github.com/pyvvo/funcd/compare/v0.17.0...v0.18.0) (2026-10-21)
 
 
