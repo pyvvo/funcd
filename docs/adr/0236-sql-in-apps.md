@@ -4,6 +4,9 @@
   added the migration hook's writer role, made the ADR-0214 change an explicit partial supersession, kept a bound
   database from being pruned, pinned the migration tools and the expand-then-contract rule, and kept the app-todo lane
   unchanged; the second found no Blocker or Major)
+- **Superseded in part by**: [ADR-0258](0258-typescript-drizzle-package.md) (2026-10-21) — Decision 5's TypeScript
+  sentence: TypeScript Apps apply their migrations with `@funcd-dev/drizzle`'s `applyMigrations`, which reads
+  drizzle-kit's folder from memory and keeps the table as Drizzle's `sqlite-proxy` migrator does.
 - **Date**: 2026-10-12
 - **Deciders**: green-0-rabbit
 - **Tags**: sql, app, hooks, migrations
