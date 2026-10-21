@@ -6,8 +6,9 @@
 # set, e2e included), the Linux build/vet/lint, the Linux-specific tests in the funcd-linux-tests Lima VM (`just
 # test-linux`; a SKIP line instead when limactl is missing, the VM is not running or the checkout is outside $HOME),
 # a stress run of the Test functions the branch adds or changes (scripts/agent/stress.py: -race, up to 20 runs each
-# within about 5 min; a SKIP line when the branch changes no test), and that the run changed no file (tidy/generate/fmt had nothing to do). One PASS/FAIL line per step; full logs in
-# .cache/gate/. Run it once per PR, not per change.
+# within about 5 min; a SKIP line when the branch changes no test), and that the run changed no file
+# (tidy/generate/fmt had nothing to do). One PASS/FAIL line per step; full logs in .cache/gate/. Run it once per PR,
+# not per change.
 #
 #   scripts/agent/gate.sh
 set -uo pipefail

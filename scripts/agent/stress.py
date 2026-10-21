@@ -34,7 +34,8 @@ def git(*args):
 def changed_lines(base, head):
     """Maps each *_test.go the branch adds or modifies to the head-side lines its hunks touch."""
     out, path = {}, None
-    for line in git("diff", "-U0", "--diff-filter=AM", f"{base}...{head}", "--", "*_test.go").splitlines():
+    # R too: a renamed test file's edited lines are changes; a pure rename has no hunk and lists nothing
+    for line in git("diff", "-U0", "--diff-filter=AMR", f"{base}...{head}", "--", "*_test.go").splitlines():
         if line.startswith("+++ "):
             path = line[6:] if line.startswith("+++ b/") else None
         elif path and (m := HUNK.match(line)):
