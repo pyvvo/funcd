@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.21.0](https://github.com/pyvvo/funcd/compare/v0.20.0...v0.21.0) (2026-10-21)
+
+
+### Features
+
+* **gate:** stress-run the tests a branch adds or changes ([#1147](https://github.com/pyvvo/funcd/issues/1147)) ([f8d8f5e](https://github.com/pyvvo/funcd/commit/f8d8f5e738e12ebd4c820582722736ddaae16f0e))
+
+
+### Bug Fixes
+
+* **e2e:** TestIssue700_DevHangupStopsWorkers signals dev once it serves; a stop during dev's start ends it cleanly ([#1146](https://github.com/pyvvo/funcd/issues/1146)) ([60b3e5a](https://github.com/pyvvo/funcd/commit/60b3e5a822fe4edf989e54ed6dc1f21b7dd8e2f6))
+
 ## [0.20.0](https://github.com/pyvvo/funcd/compare/v0.19.0...v0.20.0) (2026-10-21)
 
 
