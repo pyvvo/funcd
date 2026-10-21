@@ -727,7 +727,8 @@ func TestScenarioDevSiteLastBuild(t *testing.T) {
 }
 
 // TestDevSiteKeepsLastImage: in a reload, a Site whose build cannot be pushed keeps the image dev last pushed for it,
-// which stays its last, and the reload fails without one; the first deploy never keeps (ADR-0257 Decisions 2 and 3).
+// which stays its last, and the reload fails without one; the first deploy never keeps, and a function's build that
+// cannot be pushed still fails the reload (ADR-0257 Decisions 1 to 3).
 func TestDevSiteKeepsLastImage(t *testing.T) {
 	requireApp(t)
 	t.Setenv("TODO_API_TOKEN", todoToken)
@@ -761,4 +762,19 @@ func TestDevSiteKeepsLastImage(t *testing.T) {
 		images = append(images, site.Image)
 	}
 	require.Contains(t, strings.Join(images, " "), "@"+last.digest, "the render locks the kept digest")
+
+	file := filepath.Join(t.TempDir(), "web.txt")
+	require.NoError(t, os.WriteFile(file, nil, 0o600))
+	s.cfg.builds[2] = "web=" + file
+	_, err = s.prepare(ctx, "test", true)
+	require.NoError(t, err)
+	require.Contains(t, out.String(), "images.web: --build web="+file+": a Site's build is a folder; keeping its last build\n",
+		"a refusal words the line with its message")
+
+	api := filepath.Join(ts, "api-1.0.0.mjs")
+	require.NoError(t, os.Rename(api, api+".gone"))
+	s.images["api"].digest = "sha256:" + strings.Repeat("b", 64)
+	_, err = s.prepare(ctx, "test", true)
+	require.ErrorContains(t, err, api, "a function's build that cannot be pushed still fails the reload")
+	require.NotContains(t, out.String(), "images.api:", "only a Site keeps its last build")
 }
