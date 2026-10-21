@@ -11983,5 +11983,20 @@
     "dod_total": 12,
     "report": "docs/reviews/issue-1134-fix-claude-opus-5-5.md",
     "notes": "pass; formatting and default-zone mutants fail the regression test; funcdctl logs sibling normalizes via v1.Timestamp; gate by the fixer"
+  },
+  {
+    "date": "2026-10-21",
+    "adr": "0257",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 2,
+    "dod_passed": 5,
+    "dod_total": 5,
+    "report": "docs/reviews/adr-0257-implementation-claude-opus-5-5.md",
+    "notes": "pass; minors (model): keepLine refusal branch untested (K2), Site-only keep scope untested (K3); found defect af0f9db4 (liveReload without watch) revert-checked"
   }
 ]
