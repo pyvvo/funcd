@@ -816,6 +816,8 @@ func (a *cli) printBanner(inst *devInstance) error {
 type devLogStyler struct {
 	timeS, funcS, bodyS, attrS, defS lipgloss.Style
 	sev                              map[string]lipgloss.Style
+	// loc is the zone every line's time shows in: a structured record's time is UTC and a plain line's local (#1134).
+	loc *time.Location
 }
 
 func newDevLogStyler(w io.Writer) *devLogStyler {
@@ -835,6 +837,7 @@ func newDevLogStyler(w io.Writer) *devLogStyler {
 			"ERROR": c("9").Width(5),  // red
 			"FATAL": c("9").Bold(true).Width(5),
 		},
+		loc: time.Local,
 	}
 }
 
@@ -860,7 +863,7 @@ func (s *devLogStyler) format(l funcd.LogLine) string {
 		}
 	}
 	return fmt.Sprintf("  %s  %s %s  %s%s",
-		s.timeS.Render(l.Time.Format("15:04:05")),
+		s.timeS.Render(l.Time.In(s.loc).Format("15:04:05")),
 		s.funcS.Render(l.Function),
 		sevS.Render(sev),
 		s.bodyS.Render(termSafe(l.Body)),

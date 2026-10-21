@@ -425,6 +425,7 @@ func TestBannerOmitsCatalogWhenUnbound(t *testing.T) {
 func TestPrintLogFormatsLine(t *testing.T) {
 	var out bytes.Buffer
 	s := newDevLogStyler(&out)
+	s.loc = time.UTC
 	got := s.format(funcd.LogLine{
 		Function: "ingest",
 		Severity: "INFO",
@@ -437,6 +438,19 @@ func TestPrintLogFormatsLine(t *testing.T) {
 	}
 	require.Less(t, strings.Index(got, "attempt=1"), strings.Index(got, "name=Ada"), "attrs are sorted")
 	require.Contains(t, s.format(funcd.LogLine{Function: "f", Body: "x", Time: time.Now()}), "INFO", "a blank severity is INFO")
+}
+
+// Issue #1134: a structured record's time is UTC and a plain line's local, and the dev log tee printed each in its own
+// zone, so two lines of the same moment read 01:40:55 and 03:40:55 on a UTC+2 host. Both now show in the host's zone.
+func TestIssue1134_DevLogTimesShowInOneZone(t *testing.T) {
+	at := time.Date(2026, 10, 21, 1, 40, 55, 0, time.UTC)
+	s := newDevLogStyler(&bytes.Buffer{})
+	s.loc = time.FixedZone("UTC+2", 2*60*60)
+	structured := s.format(funcd.LogLine{Function: "fleet-migrate", Body: "x", Time: at})
+	plain := s.format(funcd.LogLine{Function: "fleet-api", Body: "y", Time: at.In(s.loc)})
+	require.Contains(t, structured, "03:40:55", "a structured record's UTC time shows in the host's zone")
+	require.Contains(t, plain, "03:40:55", "a plain line's local time too")
+	require.Equal(t, time.Local, newDevLogStyler(&bytes.Buffer{}).loc, "the host's zone is the default")
 }
 
 // A streamed record's fields come from the function, so the dev log tee escapes what a terminal would act on and keeps
