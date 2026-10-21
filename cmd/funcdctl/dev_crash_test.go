@@ -244,3 +244,16 @@ func TestIssue700_DevHangupStopsWorkers(t *testing.T) {
 	assert.NoError(t, waitErr, "dev did not stop gracefully on a hangup")
 	assert.NoDirExists(t, shimDir, "the hangup left the dev shim temp dir")
 }
+
+// Issue #1143: a stop asked for while `funcdctl dev` was still starting ended it with "context canceled" and exit 1,
+// where a stop once it serves ends it cleanly. A stop during the start now ends it cleanly too.
+func TestIssue1143_DevStopsCleanlyWhenStoppedDuringItsStart(t *testing.T) {
+	requireRuntime(t)
+	dir := devProject(t, nodeFunction("api", "", "export function handle() { return {}; }\n"))
+	persistTo := t.TempDir()
+	ctx, stop := context.WithCancel(context.Background())
+	stop()
+	root := newRootCmd(io.Discard)
+	root.SetArgs([]string{"dev", dir, "--persist", "--persist-to", persistTo})
+	require.NoError(t, root.ExecuteContext(ctx), "a stop during the start is a clean stop")
+}

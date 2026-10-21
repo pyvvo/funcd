@@ -101,6 +101,10 @@ func (a *cli) devCmd() *cobra.Command {
 
 			inst, err := a.startDev(ctx, dir, cfg)
 			if err != nil {
+				// A stop asked for during the start ends dev as one after it does (#1143); startDev has undone the start.
+				if ctx.Err() != nil {
+					return nil
+				}
 				return err
 			}
 			if werr := a.printBanner(inst); werr != nil {
