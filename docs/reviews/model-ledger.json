@@ -11938,5 +11938,35 @@
     "dod_total": 12,
     "report": "docs/reviews/issue-1126-fix-claude-opus-5-5.md",
     "notes": "pass; revert + 2 mutants fail deterministically (-4 -> -8); test-only probe budget per function.go:201's rule; gate pending (env); prod probe-semantics note to the decider"
+  },
+  {
+    "date": "2026-10-21",
+    "adr": "0256",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "changes-requested",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 6,
+    "dod_total": 7,
+    "report": "docs/reviews/adr-0256-implementation-claude-opus-5-5.md",
+    "notes": "round 1 (602e31d4): minor (model) untested exit wiring in supervise; live check not yet recorded; the live check then found the rule's emptied-outDir defect (adr), fixed by the sixth draft"
+  },
+  {
+    "date": "2026-10-21",
+    "adr": "0256",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 7,
+    "dod_total": 7,
+    "report": "docs/reviews/adr-0256-implementation-claude-opus-5-5.md",
+    "notes": "round 2 (2f04e057): written-file verdict, round-1 minor closed, 5/5 mutants killed; live check 62/62"
   }
 ]
