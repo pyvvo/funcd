@@ -179,7 +179,7 @@ const devHangupEnv = "FUNCDCTL_TEST_DEV_HANGUP"
 func TestIssue700_DevHangupStopsWorkers(t *testing.T) {
 	if spec := os.Getenv(devHangupEnv); spec != "" {
 		persistTo, dir, _ := strings.Cut(spec, "\n")
-		root := newRootCmd(io.Discard)
+		root := newRootCmd(os.Stdout)
 		root.SetArgs([]string{"dev", dir, "--persist", "--persist-to", persistTo})
 		require.NoError(t, root.Execute())
 		return
@@ -227,6 +227,12 @@ func TestIssue700_DevHangupStopsWorkers(t *testing.T) {
 	shimDir := filepath.Dir(args[i])
 	t.Cleanup(func() { _ = os.RemoveAll(shimDir) })
 
+	// dev registers its worker before it finishes starting; a hangup is the stop of a dev that serves, its banner out
+	// (#1143).
+	require.Eventually(t, func() bool {
+		logs, _ := os.ReadFile(out.Name())
+		return strings.Contains(string(logs), "● funcd dev")
+	}, 60*time.Second, 10*time.Millisecond, "dev prints its banner once it serves")
 	require.NoError(t, child.Process.Signal(syscall.SIGHUP))
 	select {
 	case <-exited:
