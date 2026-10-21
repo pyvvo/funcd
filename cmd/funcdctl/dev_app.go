@@ -143,7 +143,7 @@ func (a *cli) startDevApp(ctx context.Context, dir string, cfg devConfig, logger
 			}
 		}()
 	}
-	d, err := s.prepare(ctx, op)
+	d, err := s.prepare(ctx, op, false)
 	if err != nil {
 		return nil, err
 	}
@@ -217,8 +217,9 @@ type devAppDesired struct {
 // prepare reads the --apply files, loads the template and the values, pushes each build that changed since its last
 // push, and renders the App with dev's layout as its registry and a lock of those pushes. The App's hooks stay only
 // under --hooks; an App that requires another is refused. It also returns the Secrets the App declares that no --apply
-// document defines, from the environment.
-func (s *devAppSession) prepare(ctx context.Context, op string) (devAppDesired, error) {
+// document defines, from the environment. In a reload, a Site whose build cannot be pushed keeps the image dev last
+// pushed for it (ADR-0257).
+func (s *devAppSession) prepare(ctx context.Context, op string, reload bool) (devAppDesired, error) {
 	docs, err := applyDocuments(op, s.cfg.apply)
 	if err != nil {
 		return devAppDesired{}, err
@@ -229,12 +230,23 @@ func (s *devAppSession) prepare(ctx context.Context, op string) (devAppDesired, 
 	}
 	for _, key := range slices.Sorted(maps.Keys(p.used)) {
 		img := p.used[key]
-		if err := s.resolveImage(op, key, img); err != nil {
-			return devAppDesired{}, err
-		}
 		l := p.lock[key]
-		if err := s.push(ctx, op, key, p.t.Parsed[key].Repo, l.Version, img); err != nil {
-			return devAppDesired{}, err
+		err := s.resolveImage(op, key, img)
+		if err == nil && reload && img.part == partSite {
+			err = siteHoldsIndex(op, key, img)
+		}
+		if err == nil {
+			err = s.push(ctx, op, key, p.t.Parsed[key].Repo, l.Version, img)
+		}
+		if err != nil {
+			last := s.images[key]
+			if !reload || img.part != partSite || last == nil || last.digest == "" {
+				return devAppDesired{}, err
+			}
+			if _, werr := fmt.Fprint(s.out, keepLine(key, err)); werr != nil {
+				return devAppDesired{}, werr
+			}
+			img = last
 		}
 		l.Digest = img.digest
 		p.lock[key] = l
@@ -415,7 +427,26 @@ func (s *devAppSession) lookupBuilds(op string) (string, error) {
 	return stamp, nil
 }
 
-// siteHoldsIndex is a miss while img's Site folder is empty or holds no index file yet; dev checks it under watch only.
+// keepLine is the line of a Site that keeps its last build (ADR-0257): the miss as the start's waiting line words it,
+// else the refusal's innermost message.
+func keepLine(key string, err error) string {
+	var miss buildMiss
+	if errors.As(err, &miss) {
+		return miss.waiting() + "; keeping its last build\n"
+	}
+	for next := errors.Unwrap(err); next != nil; next = errors.Unwrap(err) {
+		err = next
+	}
+	msg := err.Error()
+	var fe *fault.Error
+	if errors.As(err, &fe) {
+		msg = fe.Msg
+	}
+	return fmt.Sprintf("images.%s: %s; keeping its last build\n", key, msg)
+}
+
+// siteHoldsIndex is a miss while img's Site folder is empty or holds no index file yet; dev checks it at start under
+// watch and in each reload.
 func siteHoldsIndex(op, key string, img *devImage) error {
 	entries, err := os.ReadDir(img.site)
 	switch {
@@ -1114,7 +1145,7 @@ func (s *devAppSession) watch(ctx context.Context, op string, a *cli, c *sdk.Cli
 		s.stamp = stamp
 		start := time.Now()
 		var r devApply
-		d, err := s.prepare(ctx, op)
+		d, err := s.prepare(ctx, op, true)
 		if err == nil {
 			r, err = s.apply(ctx, op, c, d)
 		}

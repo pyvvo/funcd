@@ -667,3 +667,98 @@ func TestAppDevFailedReloadKeepsServing(t *testing.T) {
 	replaceIn(t, appYAML, "default: ${{ values.nowhere.at.all }}", "default: fixed")
 	r.eventually(t, func() bool { return r.listing(t).Greeting == "fixed" }, "the fix rolls")
 }
+
+// TestScenarioDevSiteLastBuild runs ADR-0257's scenarios on one dev run without watch and with live reload, each a
+// subtest named after its scenario: in a reload, a Site whose build cannot be pushed keeps its last build while the
+// App's other parts reload.
+func TestScenarioDevSiteLastBuild(t *testing.T) {
+	requireApp(t)
+	t.Setenv("TODO_API_TOKEN", todoToken)
+	root := loopTodo(t, strings.Replace(loopConfig("", "  liveReload: true\n"), "  watch:\n", "", 1))
+	site, dist := filepath.Join(root, "web", "site"), filepath.Join(root, "web", "dist")
+	require.NoError(t, copyBuildTree(site, dist))
+	r, _, err := startLoop(t, root, t.TempDir())
+	require.NoError(t, err)
+	r.serves(t)
+	index := siteIndex(t, r)
+	events := reloadEvents(t, r.inst.live.url())
+	r.settled(t, "todo")
+	keeps := func(mark int, reason string) {
+		line := "images.web: " + dist + " " + reason + "; keeping its last build\n"
+		r.eventually(t, func() bool { return strings.Contains(r.out.String()[mark:], line) }, line)
+	}
+
+	// scenario: dev-site-keeps-last-build — an emptied Site folder keeps its last build, a function's change serves,
+	// and open pages get no reload event.
+	t.Run("dev-site-keeps-last-build", func(t *testing.T) {
+		mark := len(r.out.String())
+		require.NoError(t, os.RemoveAll(dist))
+		require.NoError(t, os.Mkdir(dist, 0o755))
+		replaceIn(t, filepath.Join(root, "functions/ts/api-1.0.0.mjs"), `var version = "1.0.0";`, `var version = "1.0.0-saved";`)
+		r.eventually(t, func() bool { return r.listing(t).Version == "1.0.0-saved" }, "the function's change serves")
+		keeps(mark, "is empty")
+		require.Equal(t, index, siteIndex(t, r), "the Site serves its last build")
+		select {
+		case <-events:
+			t.Fatal("a kept Site sent a reload event")
+		case <-time.After(time.Second):
+		}
+	})
+
+	// scenario: dev-site-no-index — a Site folder that holds files but no index keeps its last build.
+	t.Run("dev-site-no-index", func(t *testing.T) {
+		noIndex := t.TempDir()
+		require.NoError(t, copyBuildTree(site, noIndex))
+		require.NoError(t, os.Remove(filepath.Join(noIndex, "index.html")))
+		mark := len(r.out.String())
+		require.NoError(t, copyBuildTree(noIndex, dist))
+		keeps(mark, "holds no index.html")
+		require.Equal(t, index, siteIndex(t, r), "the Site serves its last build")
+	})
+
+	// scenario: dev-site-builds-again — a Site folder that holds a build again pushes it, and the new build serves.
+	t.Run("dev-site-builds-again", func(t *testing.T) {
+		appendTo(t, filepath.Join(site, "index.html"), "<!-- again -->\n")
+		mark := len(r.out.String())
+		require.NoError(t, copyBuildTree(site, dist))
+		r.eventually(t, func() bool { return strings.Contains(r.out.String()[mark:], "pushed images.web ") }, "the Site pushes")
+		r.eventually(t, func() bool { return strings.Contains(siteIndex(t, r), "<!-- again -->") }, "the new build serves")
+	})
+}
+
+// TestDevSiteKeepsLastImage: in a reload, a Site whose build cannot be pushed keeps the image dev last pushed for it,
+// which stays its last, and the reload fails without one; the first deploy never keeps (ADR-0257 Decisions 2 and 3).
+func TestDevSiteKeepsLastImage(t *testing.T) {
+	requireApp(t)
+	t.Setenv("TODO_API_TOKEN", todoToken)
+	root := loopTodo(t, "")
+	dist := filepath.Join(root, "web", "dist")
+	require.NoError(t, os.MkdirAll(dist, 0o755))
+	ts := filepath.Join(root, "functions", "ts")
+	var out strings.Builder
+	s := &devAppSession{dir: filepath.Join(root, "app"), layout: t.TempDir(), stage: t.TempDir(), images: map[string]*devImage{}, out: &out,
+		cfg: devConfig{builds: []string{ts, filepath.Join(root, "functions", "py"), "web=" + dist,
+			"api=" + filepath.Join(ts, "api-1.0.0.mjs"), "migrate=" + filepath.Join(ts, "migrate-1.0.0.mjs")}}}
+	ctx := context.Background()
+
+	require.NoError(t, os.WriteFile(filepath.Join(dist, "app.js"), []byte("x"), 0o600))
+	_, err := s.prepare(ctx, "test", false)
+	require.NoError(t, err, "the first deploy pushes an index-less Site folder, as ADR-0253 does")
+	s.images = map[string]*devImage{}
+	require.NoError(t, os.Remove(filepath.Join(dist, "app.js")))
+	_, err = s.prepare(ctx, "test", true)
+	require.ErrorContains(t, err, dist+" is empty", "no earlier image: the reload fails")
+	last := &devImage{part: partSite, print: "earlier", digest: "sha256:" + strings.Repeat("a", 64)}
+	s.images["web"] = last
+	_, err = s.prepare(ctx, "test", false)
+	require.ErrorContains(t, err, "is empty", "the first deploy never keeps")
+	d, err := s.prepare(ctx, "test", true)
+	require.NoError(t, err)
+	require.Contains(t, out.String(), "images.web: "+dist+" is empty; keeping its last build\n")
+	require.Same(t, last, s.images["web"], "the kept image stays the last")
+	var images []string
+	for _, site := range d.app.Spec.Sites {
+		images = append(images, site.Image)
+	}
+	require.Contains(t, strings.Join(images, " "), "@"+last.digest, "the render locks the kept digest")
+}

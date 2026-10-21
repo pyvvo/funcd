@@ -1,9 +1,10 @@
 # ADR-0257: `funcdctl dev` serves a Site's last build while its build cannot be pushed
 
-- **Status**: Accepted (2026-10-21), after two judge rounds, under the decider's "just file it, then ADR, and ship it"
-  and choice A recorded on #1137; the line's wording and the index check in reloads without `watch` are the drafting
-  agent's choices, briefed before acceptance. The judge kept the first deploy out, declared the change for runs without
-  `watch`, and kept the Site's last pushed image as its last.
+- **Status**: Reviewing (2026-10-21), implemented in the PR that closes #1137; Accepted (2026-10-21), after two judge
+  rounds, under the decider's "just file it, then ADR, and ship it" and choice A recorded on #1137; the line's wording
+  and the index check in reloads without `watch` are the drafting agent's choices, briefed before acceptance. The judge
+  kept the first deploy out, declared the change for runs without `watch`, and kept the Site's last pushed image as its
+  last.
 - **Date**: 2026-10-21
 - **Deciders**: green-0-rabbit
 - **Tags**: dx, cli, dev, site
