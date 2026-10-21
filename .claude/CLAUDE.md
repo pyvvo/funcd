@@ -361,7 +361,9 @@ rules that did it:
   runs the e2e suite on Linux in the same VM, on demand only: CI already runs it on every PR that touches code. Runs
   in that VM take turns (a second run waits). Never run the e2e suite or `go test ./...` inside a per-item fixer or
   reviewer. The bloat audit (`scripts/agent/audit.py`) is a gate step too: diff-scoped, a few seconds per PR; its full
-  mode, with the `-count=3` flake run, runs once per campaign.
+  mode, with the `-count=3` flake run, runs once per campaign. The gate also stress-runs the Test functions the branch
+  adds or changes (`scripts/agent/stress.py`: each alone under `-race`, up to 20 runs, within about 5 min; SKIP when no
+  test changed; the per-test runs in `.cache/gate/stress.log`).
 - **Toolchain**: `scripts/agent/d` (above), never a `nix develop -c` per command.
 - **Worktrees, not the shared checkout.** Other sessions switch branches in the main checkout; agents work in their
   own worktree under the session scratchpad. Never `git stash` there: `refs/stash` is shared by every worktree of
