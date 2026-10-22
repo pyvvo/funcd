@@ -203,8 +203,9 @@ func TestScenarioChangesWaitForRelease(t *testing.T) {
 // scenario: changes-wait-for-sources-at-boot — the feed reads the EventSources from the metastore on each delivery,
 // so after a restart a redelivery meets the loaded sources and the stored watermark: what fired before fires no
 // more, and the next commit fires once.
+//
+// Serial: it reopens Badger directories it closed, which a parallel test's forked child can hold locked (#1178).
 func TestScenarioChangesWaitForSourcesAtBoot(t *testing.T) {
-	t.Parallel()
 	dir, err := os.MkdirTemp("", "funcd")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })

@@ -99,8 +99,9 @@ func watchDrops(t *testing.T, p *Platform, want string) []string {
 
 // scenario: restart-keeps-eventing-state — with file storage and the default KV engine, a restart keeps the seen
 // list (drop/a does not fire again, a new drop/b fires once) and the dead letter, listed with the same id.
+//
+// Serial: it reopens Badger directories it closed, which a parallel test's forked child can hold locked (#1178).
 func TestScenarioRestartKeepsEventingState(t *testing.T) {
-	t.Parallel()
 	ctx := context.Background()
 	dir := eventingDir(t)
 	const id = "01JZ0000000000000000000000"

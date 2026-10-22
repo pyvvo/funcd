@@ -3,13 +3,11 @@ package main
 import (
 	"embed"
 	"go/ast"
-	"go/parser"
-	"go/token"
-	"regexp"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/pyvvo/funcd/internal/testkit/testsrc"
 )
 
 // testSources is this package's tests as compiled, so a `go test -overlay` revert check reads the overlaid source.
@@ -23,50 +21,60 @@ var testSources embed.FS
 // therefore runs serially: no parallel test forks while it runs.
 func TestIssue1149_TestsThatReopenBadgerRunSerially(t *testing.T) {
 	t.Parallel()
-	reopens := regexp.MustCompile(`\brestoredKV\(|\bkvbadger\.Open\(|\bbadgerstore\.Open\(`)
-	require.Empty(t, parallelTests(t, reopens.MatchString),
+	opens := func(body *ast.BlockStmt) bool {
+		return testsrc.Calls(body, "restoredKV", "kvbadger.Open", "badgerstore.Open") > 0
+	}
+	require.Empty(t, testsrc.ParallelTests(t, testSources, opens),
 		"tests that reopen a Badger directory must not run in parallel with tests that fork")
 }
 
-// Issue #1178: a node's restore opens and closes its Badger directories in this process and its start opens them again,
-// as a second start does, so a test that opens one node's stores twice runs serially for the reason of #1149. Opens are
-// counted per node, from one newNode to the next.
+// Issue #1178: a node's `restore run` opens and closes its Badger directories in this process, and its start opens them
+// again, as a second start or a serve of its config does, so a test that opens one node's stores twice runs serially for
+// the reason of #1149. Opens are counted per node variable, from the newNode it holds.
 func TestIssue1178_TestsThatReopenANodeRunSerially(t *testing.T) {
 	t.Parallel()
-	opens := regexp.MustCompile(`\b\w+\.restore\(|\b\w+\.start\(t\)|\bserve\([^,]+, \w+\.cfgPath`)
-	reopens := func(body string) bool {
-		for _, node := range strings.Split(body, "newNode(") {
-			if len(opens.FindAllString(node, -1)) > 1 {
-				return true
-			}
-		}
-		return false
-	}
-	require.Empty(t, parallelTests(t, reopens),
+	require.Empty(t, testsrc.ParallelTests(t, testSources, reopensANode),
 		"tests that open a node's Badger directories twice must not run in parallel with tests that fork")
 }
 
-// parallelTests names this package's tests that call t.Parallel() and whose body matches.
-func parallelTests(t *testing.T, matches func(body string) bool) []string {
-	t.Helper()
-	files, err := testSources.ReadDir(".")
-	require.NoError(t, err)
-	var parallel []string
-	for _, f := range files {
-		src, err := testSources.ReadFile(f.Name())
-		require.NoError(t, err)
-		file, err := parser.ParseFile(token.NewFileSet(), f.Name(), src, 0)
-		require.NoError(t, err)
-		for _, d := range file.Decls {
-			fn, ok := d.(*ast.FuncDecl)
-			if !ok || fn.Body == nil || !strings.HasPrefix(fn.Name.Name, "Test") {
-				continue
+// reopensANode reports whether body opens one node's stores twice, through n.restore("run", …), n.start(t) or
+// serve(ctx, n.cfgPath, …).
+func reopensANode(body *ast.BlockStmt) bool {
+	opens := map[string]int{}
+	reopened := false
+	ast.Inspect(body, func(x ast.Node) bool {
+		switch x := x.(type) {
+		case *ast.AssignStmt:
+			if c, ok := x.Rhs[0].(*ast.CallExpr); ok && testsrc.Callee(c) == "newNode" {
+				if n, ok := x.Lhs[0].(*ast.Ident); ok {
+					opens[n.Name] = 0
+				}
 			}
-			body := string(src[fn.Body.Pos()-file.FileStart : fn.Body.End()-file.FileStart])
-			if matches(body) && strings.Contains(body, "t.Parallel()") {
-				parallel = append(parallel, fn.Name.Name)
+		case *ast.CallExpr:
+			if n := nodeOpened(x); n != "" {
+				opens[n]++
+				reopened = reopened || opens[n] > 1
+			}
+		}
+		return true
+	})
+	return reopened
+}
+
+// nodeOpened names the node whose stores call opens, or "".
+func nodeOpened(call *ast.CallExpr) string {
+	if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+		n, ok := sel.X.(*ast.Ident)
+		if ok && (sel.Sel.Name == "start" || sel.Sel.Name == "restore" && len(call.Args) > 0 && testsrc.IsString(call.Args[0], "run")) {
+			return n.Name
+		}
+	}
+	if testsrc.Callee(call) == "serve" && len(call.Args) > 1 {
+		if cfg, ok := call.Args[1].(*ast.SelectorExpr); ok && cfg.Sel.Name == "cfgPath" {
+			if n, ok := cfg.X.(*ast.Ident); ok {
+				return n.Name
 			}
 		}
 	}
-	return parallel
+	return ""
 }

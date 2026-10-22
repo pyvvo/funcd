@@ -423,8 +423,9 @@ func TestIssue446_DeadLetterDefaultsWithoutWithDeadLetterQueue(t *testing.T) {
 
 // Issue #94: a failed New releases what the options and the build acquired (ADR-0014: never a partial
 // platform), so the caller can fix the cause and call New again with the same data dirs.
+//
+// Serial: it reopens Badger directories it closed, which a parallel test's forked child can hold locked (#1178).
 func TestIssue94_FailedNewReleasesResources(t *testing.T) {
-	t.Parallel()
 	busy, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = busy.Close() })
