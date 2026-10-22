@@ -16,6 +16,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
+	"github.com/pyvvo/funcd/internal/health"
 	"github.com/pyvvo/funcd/internal/kvstore"
 	kvmemory "github.com/pyvvo/funcd/internal/kvstore/memory"
 	"github.com/pyvvo/funcd/internal/runtime"
@@ -159,10 +160,19 @@ func TestScenarioHealthStorageDown(t *testing.T) {
 		require.NoError(t, err)
 		return obj.(*v1.KVStore).Status.Bindings == 1
 	}, wait, tick)
-	_, _, rv := storeReady(t, p, v1.KindKVStore, "todo-store")
-	time.Sleep(100 * time.Millisecond)
-	_, _, again := storeReady(t, p, v1.KindKVStore, "todo-store")
-	require.Equal(t, rv, again, "five probes with the same result write no status")
+	// A probe that misses its 10 ms budget on a loaded host flips the result, and the store must write a flip (#1156):
+	// the claim holds over a window in which the KV probe's result stayed the same, measured again otherwise.
+	for attempt := 1; ; attempt++ {
+		before := p.prober.Result(health.TargetKV)
+		_, _, rv := storeReady(t, p, v1.KindKVStore, "todo-store")
+		time.Sleep(100 * time.Millisecond)
+		_, _, again := storeReady(t, p, v1.KindKVStore, "todo-store")
+		if after := p.prober.Result(health.TargetKV); after.Healthy == before.Healthy && after.Since.Equal(before.Since) {
+			require.Equal(t, rv, again, "five probes with the same result write no status")
+			break
+		}
+		require.Less(t, attempt, 20, "the KV probe's result kept changing")
+	}
 
 	kv.down.Store(true)
 	require.Eventually(t, readyIs(v1.KindKVStore, "todo-store", v1.PhaseDegraded, v1.ConditionFalse, "StorageUnreachable",
