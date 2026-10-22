@@ -33,7 +33,6 @@ import (
 	goruntime "runtime"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -1060,16 +1059,6 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, folder *devFold
 	if cfg.cport != 0 {
 		opts = append(opts, funcd.WithListenAddr(fmt.Sprintf("127.0.0.1:%d", cfg.cport)))
 	}
-	// The SQL engines' change feed (ADR-0235) on a free loopback port, so dev runs side by side never contend for the
-	// daemon's fixed default.
-	feed, ferr := freeLocalAddr()
-	if ferr != nil {
-		return nil, fault.Wrapf(ferr, fault.Internal, op, "reserve the SQL change feed port")
-	}
-	_, feedPort, _ := net.SplitHostPort(feed)
-	port, _ := strconv.Atoi(feedPort)
-	opts = append(opts, funcd.WithSQLChangeFeedPort(port))
-
 	// Durable-local drivers (ADR-0125 Decision 7): under --persist the memory store/KV/blob are swapped for Badger +
 	// fileblob under per-service subdirs. The platform takes ownership + Closes them on Shutdown; they are closed here
 	// only if the options fail BEFORE funcd.New takes ownership.

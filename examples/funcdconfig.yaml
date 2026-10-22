@@ -244,7 +244,7 @@ log:
 # sql:
 #   maxDatabasesPerNamespace: 20  # SQLDatabase count cap per namespace; negative ⇒ no cap. default: 20
 #   callTimeout: 30s              # bound of one context.sql call (ADR-0233), also the engine's db_timeout. default: 30s
-#   changeFeedPort: 7075          # where the engines post their changes (ADR-0235), on the bridge address or loopback. default: 7075
+#   changeFeedPort: 7075          # where the engines post their changes (ADR-0235). default: 7075 on the bridge address, a free port on loopback (ADR-0260)
 
 # --- site: declarative static web apps (ADR-0139) ----------------------------------------------
 # site:

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -301,4 +302,28 @@ func TestFeedBrokenGroupResendFiresOnce(t *testing.T) {
 	evs := r.pub.all()
 	require.Len(t, evs, 2, "the resend fires the second change only")
 	require.Equal(t, "default/todo-db/e/1/any/1", evs[1].ID)
+}
+
+// Listen binds port 0 to a free port, and ServeListener serves the feed there until ctx ends; a listener closed under
+// it, as the platform's Shutdown does, is a clean stop too (ADR-0260).
+func TestFeedServesTheListenerItBound(t *testing.T) {
+	f := newFeedRig(t).feed
+	ln, err := f.Listen(context.Background(), "127.0.0.1", 0)
+	require.NoError(t, err)
+	require.NotZero(t, ln.Addr().(*net.TCPAddr).Port)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- f.ServeListener(ctx, ln) }()
+	resp, err := http.Post("http://"+ln.Addr().String()+"/v1/changes/forged", "application/json", strings.NewReader("{}"))
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusNotFound, resp.StatusCode, "the feed answers on the listener")
+	cancel()
+	require.NoError(t, <-done)
+
+	closed, err := f.Listen(context.Background(), "127.0.0.1", 0)
+	require.NoError(t, err)
+	go func() { done <- f.ServeListener(context.Background(), closed) }()
+	require.NoError(t, closed.Close())
+	require.NoError(t, <-done)
 }

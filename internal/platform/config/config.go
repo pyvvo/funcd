@@ -394,7 +394,7 @@ type Config struct {
 		MaxDatabasesPerNamespace int    `json:"maxDatabasesPerNamespace,omitempty" env:"FUNCD_SQL_MAX_DATABASES_PER_NAMESPACE"`
 		CallTimeout              string `json:"callTimeout,omitempty" env:"FUNCD_SQL_CALL_TIMEOUT"`
 		// ChangeFeedPort is the port the engines post their changes to (ADR-0235), on the bridge address (ADR-0238);
-		// 0 ⇒ 7075.
+		// 0 ⇒ 7075 with a bridge address, else a free loopback port chosen at start (ADR-0260).
 		ChangeFeedPort int `json:"changeFeedPort,omitempty" env:"FUNCD_SQL_CHANGE_FEED_PORT" validate:"min=0,max=65535"`
 	} `json:"sql,omitempty"`
 

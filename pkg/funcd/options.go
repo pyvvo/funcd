@@ -61,7 +61,8 @@ func WithSQLCallTimeout(d time.Duration) Option {
 	return func(c *config) error { c.sqlCallTimeout = d; return nil }
 }
 
-// WithSQLChangeFeedPort sets the port the engines post their changes to (ADR-0235, sql.changeFeedPort); 0 ⇒ 7075.
+// WithSQLChangeFeedPort sets the port the engines post their changes to (ADR-0235, sql.changeFeedPort); 0 ⇒ 7075 with
+// a bridge address, else a free loopback port (ADR-0260).
 func WithSQLChangeFeedPort(port int) Option {
 	return func(c *config) error { c.sqlChangeFeedPort = port; return nil }
 }

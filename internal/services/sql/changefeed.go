@@ -113,18 +113,28 @@ func (f *Feed) URL(host string, port int) func(ns v1.NamespaceName, name v1.Obje
 	}
 }
 
+// Listen binds the feed's listener on host:port once; port 0 takes a free port, which the caller reads from the
+// listener (ADR-0260 Decision 1).
+func (f *Feed) Listen(ctx context.Context, host string, port int) (net.Listener, error) {
+	addr := net.JoinHostPort(host, fmt.Sprint(port))
+	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", addr)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Unavailable, "sql.Feed", "listen on %s", addr)
+	}
+	return ln, nil
+}
+
 // Serve listens on host:port, retrying each second until the address exists (the bridge appears with the first
 // worker), and serves the feed until ctx is done.
 func (f *Feed) Serve(ctx context.Context, host string, port int) error {
-	addr := net.JoinHostPort(host, fmt.Sprint(port))
 	var ln net.Listener
 	for warned := false; ; {
 		var err error
-		if ln, err = (&net.ListenConfig{}).Listen(ctx, "tcp", addr); err == nil {
+		if ln, err = f.Listen(ctx, host, port); err == nil {
 			break
 		}
 		if !warned {
-			f.log.WarnContext(ctx, "the sql change feed cannot listen yet; retrying each second", "addr", addr, "err", err)
+			f.log.WarnContext(ctx, "the sql change feed cannot listen yet; retrying each second", "addr", net.JoinHostPort(host, fmt.Sprint(port)), "err", err)
 			warned = true
 		}
 		select {
@@ -133,9 +143,15 @@ func (f *Feed) Serve(ctx context.Context, host string, port int) error {
 		case <-time.After(time.Second):
 		}
 	}
+	return f.ServeListener(ctx, ln)
+}
+
+// ServeListener serves the feed on ln until ctx is done. A listener closed under it, as the platform's Shutdown does,
+// is a clean stop.
+func (f *Feed) ServeListener(ctx context.Context, ln net.Listener) error {
 	srv := &http.Server{Handler: f.Handler(), ReadHeaderTimeout: 5 * time.Second, ErrorLog: slog.NewLogLogger(f.log.Handler(), slog.LevelWarn)}
 	context.AfterFunc(ctx, func() { _ = srv.Close() })
-	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
 		return fault.Wrapf(err, fault.Unavailable, "sql.Feed", "serve the change feed")
 	}
 	return nil

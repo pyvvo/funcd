@@ -303,7 +303,8 @@ type config struct {
 	sqlProvider provider.Runtime
 	// sqlCallTimeout bounds one context.sql call (ADR-0233, sql.callTimeout); 0 ⇒ 30 s.
 	sqlCallTimeout time.Duration
-	// sqlChangeFeedPort is the port the engines post their changes to (ADR-0235, sql.changeFeedPort); 0 ⇒ 7075.
+	// sqlChangeFeedPort is the port the engines post their changes to (ADR-0235, sql.changeFeedPort); 0 ⇒ 7075 with a
+	// bridge address, else a free loopback port bound by New (ADR-0260).
 	sqlChangeFeedPort int
 
 	// providerStorage is the root of the add-on engines' durable directories (ADR-0231); "" ⇒ none.
@@ -404,9 +405,6 @@ func (p *Platform) openSQLFeed(ctx context.Context) {
 	}
 }
 
-// sqlChangeFeedPortOrDefault is sql.changeFeedPort, 7075 when unset (ADR-0235 Decision 2).
-func (c *config) sqlChangeFeedPortOrDefault() int { return cmp.Or(c.sqlChangeFeedPort, 7075) }
-
 // gate is the hold every side-effect runner asks (ADR-0206 Decision 6): hold.Never without WithHold.
 func (c *config) gate() hold.Gate {
 	if c.hold == nil {
@@ -481,6 +479,8 @@ type Platform struct {
 	sqlReconciler   *sqlsvc.Reconciler     // reclaims deleted databases' directories before the controller runs (ADR-0232)
 	sqlFeed         *sqlsvc.Feed           // the engines' change feed, served from Run (ADR-0235)
 	sqlFeedHost     string
+	sqlFeedPort     int
+	sqlFeedListener net.Listener   // bound by New on loopback with the port unset (ADR-0260); nil ⇒ Run binds the port
 	prober          *health.Prober // the storage probes (ADR-0215), started before the controller runs
 
 	dataPlaneServer   *http.Server // function-invocation listener (ADR-0033)
@@ -1170,11 +1170,20 @@ func (p *Platform) buildControlPlane() error {
 			"address (WithBridgeAddress), else no EventSource of kind sql fires")
 	}
 	p.logger.Info("bridge address", "address", p.sqlFeedHost)
+	p.sqlFeedPort = c.sqlChangeFeedPort
+	if c.bridgeAddress == "" && p.sqlFeedPort == 0 {
+		// ADR-0260 Decision 1: on loopback an unset port is the one a bind of port 0 gets, held from here to Shutdown.
+		if p.sqlFeedListener, err = p.sqlFeed.Listen(context.Background(), p.sqlFeedHost, 0); err != nil {
+			return fault.Wrapf(err, fault.KindOf(err), op, "bind the SQL change feed")
+		}
+		p.sqlFeedPort = p.sqlFeedListener.Addr().(*net.TCPAddr).Port
+	}
+	p.sqlFeedPort = cmp.Or(p.sqlFeedPort, 7075)
 	sqlReconciler, err := sqlsvc.NewReconciler(sqlsvc.ReconcilerDeps{
 		Store: c.store, Provider: sqlRuntime, Engines: sqlEngines, Master: master, ImageFor: c.imageFor,
 		Hold: c.gate(), Logger: p.logger, SupervisionPeriod: c.pacing.SupervisionPeriod,
 		DurableStorage: c.providerStorage != "" && !c.providerStorageEphemeral,
-		ChangeFeedURL:  p.sqlFeed.URL(p.sqlFeedHost, c.sqlChangeFeedPortOrDefault()), Watermarks: feedWatermarks,
+		ChangeFeedURL:  p.sqlFeed.URL(p.sqlFeedHost, p.sqlFeedPort), Watermarks: feedWatermarks,
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build SQLDatabase reconciler")
@@ -1674,7 +1683,13 @@ func (p *Platform) Run(ctx context.Context) error {
 		}()
 		go func() {
 			defer wg.Done()
-			if err := p.sqlFeed.Serve(ctx, p.sqlFeedHost, p.cfg.sqlChangeFeedPortOrDefault()); err != nil && !errors.Is(err, context.Canceled) {
+			var err error
+			if p.sqlFeedListener != nil {
+				err = p.sqlFeed.ServeListener(ctx, p.sqlFeedListener)
+			} else {
+				err = p.sqlFeed.Serve(ctx, p.sqlFeedHost, p.sqlFeedPort)
+			}
+			if err != nil && !errors.Is(err, context.Canceled) {
 				p.logger.ErrorContext(ctx, "sql change feed stopped", "error", err)
 			}
 		}()
@@ -1828,6 +1843,9 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 		}
 		if p.dataPlaneListener != nil {
 			_ = p.dataPlaneListener.Close() // best-effort; may already be closed by dataPlaneServer.Shutdown
+		}
+		if p.sqlFeedListener != nil {
+			_ = p.sqlFeedListener.Close() // best-effort; New's loopback feed port, served or not (ADR-0260)
 		}
 		if p.invokeMgr != nil {
 			p.invokeMgr.Close() // stop all per-function local API listeners (ADR-0064)
