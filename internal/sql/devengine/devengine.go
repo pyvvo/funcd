@@ -40,7 +40,13 @@ const (
 	reapGrace = 3 * time.Second
 	// readyTimeout bounds an engine's start, a fresh one or one replaying its log.
 	readyTimeout = 30 * time.Second
+	// engineStarts bounds the starts of an engine whose port another process took before it bound it (ADR-0260
+	// Decision 3), as dev's S3 port (cmd/funcdctl/dev.go, #627).
+	engineStarts = 3
 )
+
+// errPortTaken is a start whose engine reported that a port it was given was taken.
+var errPortTaken = errors.New("a port of the engine was taken")
 
 // Runtime runs at most one rqlited per database.
 type Runtime struct {
@@ -54,6 +60,8 @@ type Runtime struct {
 	// bundled and extract reach the embedded engine; a test swaps them for a fake engine.
 	bundled func() bool
 	extract func(dir string) (string, error)
+	// pickPort chooses each port the engine binds; a test swaps it to hand out a taken one.
+	pickPort func() (int, error)
 }
 
 // Option configures the runtime.
@@ -74,10 +82,11 @@ func New(logger *slog.Logger, opts ...Option) (*Runtime, error) {
 		logger = slog.Default()
 	}
 	r := &Runtime{
-		logger:  logger.With("component", "sql-devengine"),
-		procs:   make(map[provider.ProviderRef]*engineProc),
-		bundled: embedengine.Bundled,
-		extract: embedengine.Extract,
+		logger:   logger.With("component", "sql-devengine"),
+		procs:    make(map[provider.ProviderRef]*engineProc),
+		bundled:  embedengine.Bundled,
+		extract:  embedengine.Extract,
+		pickPort: freePort,
 	}
 	for _, o := range opts {
 		o(r)
@@ -228,7 +237,8 @@ type engineProc struct {
 	cmd  *exec.Cmd
 	dir  string // the engine binary and its auth file
 	addr string
-	done chan struct{} // closed once the engine has exited and been reaped
+	out  *engineOutput
+	done chan struct{} // closed once the engine has exited and been reaped, after its output was read
 }
 
 func (p *engineProc) alive() bool {
@@ -255,9 +265,22 @@ func (p *engineProc) stop() {
 	_ = os.RemoveAll(p.dir)
 }
 
-// launch extracts the engine into a temporary directory with its auth file, starts it on two free loopback ports
-// with its data under the root, and waits until it is ready.
+// launch starts the engine and waits until it is ready. A start whose engine reported a taken port is made again at
+// once with new ports, engineStarts starts in all; any other failure ends it (ADR-0260 Decision 3).
 func (r *Runtime) launch(ctx context.Context, spec provider.ProviderSpec) (*engineProc, error) {
+	for n := 1; ; n++ {
+		p, err := r.launchOnce(ctx, spec)
+		if err == nil || !errors.Is(err, errPortTaken) || n == engineStarts {
+			return p, err
+		}
+		r.logger.WarnContext(ctx, "a port of the sql engine was taken before it bound it; starting it again with new ports",
+			"database", string(spec.Ref.Name), "start", n, "err", err)
+	}
+}
+
+// launchOnce extracts the engine into a temporary directory with its auth file, starts it on two free loopback ports
+// with its data under the root, and waits until it is ready.
+func (r *Runtime) launchOnce(ctx context.Context, spec provider.ProviderSpec) (*engineProc, error) {
 	const op = "devengine.launch"
 	var raw [8]byte
 	_, _ = rand.Read(raw[:])
@@ -302,11 +325,11 @@ func (r *Runtime) start(ctx context.Context, spec provider.ProviderSpec, id, dir
 	if err := os.MkdirAll(filepath.Join(data, "db"), 0o700); err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "make the data directory")
 	}
-	httpPort, err := freePort()
+	httpPort, err := r.pickPort()
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "reserve the HTTP port")
 	}
-	raftPort, err := freePort()
+	raftPort, err := r.pickPort()
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "reserve the Raft port")
 	}
@@ -321,16 +344,18 @@ func (r *Runtime) start(ctx context.Context, spec provider.ProviderSpec, id, dir
 		}
 	}
 	cmd := exec.CommandContext(context.WithoutCancel(ctx), bin, args.Argv()...) //nolint:gosec // our own embedded engine
-	cmd.Stdout = &lineLogger{logger: r.logger, database: string(spec.Ref.Name)}
-	cmd.Stderr = cmd.Stdout
+	out := newEngineOutput(r.logger, string(spec.Ref.Name), addr)
+	cmd.Stdout = out
+	cmd.Stderr = out
 	// Its own process group, so a stop and the reap after a crash reach everything it started (ADR-0167).
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "start rqlited")
 	}
-	p := &engineProc{id: id, cmd: cmd, dir: dir, addr: addr, done: make(chan struct{})}
+	p := &engineProc{id: id, cmd: cmd, dir: dir, addr: addr, out: out, done: make(chan struct{})}
 	go func() {
 		_ = cmd.Wait()
+		out.flush()
 		close(p.done)
 	}()
 	return p, nil
@@ -368,10 +393,19 @@ func (r *Runtime) save(p *engineProc, token string) error {
 	return r.reg.Put(procreg.Entry{ID: p.id, PID: pid, PGID: pid, StartTime: st, BootID: boot, Token: token, Files: []string{p.dir}})
 }
 
-// waitReady polls the engine's /readyz, which its auth file opens to anonymous callers, until it answers 200.
+// waitReady waits until the engine said it listens on its own HTTP address, then polls its /readyz, which its auth
+// file opens to anonymous callers, until it answers 200. A /readyz answer alone proves nothing: another process can
+// hold the port (ADR-0260 Decision 3).
 func waitReady(ctx context.Context, p *engineProc, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	select {
+	case <-p.out.listening:
+	case <-p.done:
+		return p.ended()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	url := "http://" + p.addr + "/readyz"
 	client := httpx.NodeClient(time.Second)
 	for {
@@ -387,7 +421,7 @@ func waitReady(ctx context.Context, p *engineProc, timeout time.Duration) error 
 		}
 		select {
 		case <-p.done:
-			return fmt.Errorf("rqlited exited")
+			return p.ended()
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(100 * time.Millisecond):
@@ -395,7 +429,18 @@ func waitReady(ctx context.Context, p *engineProc, timeout time.Duration) error 
 	}
 }
 
-// freePort reserves a loopback port; the small race until the engine binds it is acceptable on a dev host.
+// ended is the error of an engine that exited during its start, with its last lines; errPortTaken when one of them
+// says a port it was given was taken. done is closed, so the output is read to its end.
+func (p *engineProc) ended() error {
+	last := strings.Join(p.out.last, " | ")
+	if p.out.taken {
+		return fmt.Errorf("%w: %s", errPortTaken, last)
+	}
+	return fmt.Errorf("rqlited exited: %s", last)
+}
+
+// freePort chooses a free loopback port and releases it: rqlited binds the ports on its command line itself, and a
+// start whose port was taken in between is made again (ADR-0260 Decision 3).
 func freePort() (int, error) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -405,17 +450,57 @@ func freePort() (int, error) {
 	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
-// lineLogger forwards the engine's output to the logger at debug level.
-type lineLogger struct {
-	logger   *slog.Logger
-	database string
+// engineOutput forwards the engine's output to the logger at debug level and reads the two lines a start waits on
+// (ADR-0260 Decision 3): rqlited's `[http] … service listening on <addr>` once it bound its HTTP address (its cluster
+// service logs the same words with the Raft address), and Go's `address already in use` when a port it was given was
+// taken. The engine's stdout and stderr share it, so os/exec calls Write
+// from one goroutine at a time.
+type engineOutput struct {
+	logger    *slog.Logger
+	database  string
+	listen    string
+	listening chan struct{} // closed at the listen line
+	taken     bool          // read once the engine has exited
+	last      []string      // the engine's last lines, for the start's error
+	partial   string        // a line not ended yet
 }
 
-func (w *lineLogger) Write(b []byte) (int, error) {
-	for _, line := range strings.Split(strings.TrimRight(string(b), "\n"), "\n") {
-		if strings.TrimSpace(line) != "" {
-			w.logger.Debug("sql engine", "database", w.database, "line", line)
-		}
+func newEngineOutput(logger *slog.Logger, database, addr string) *engineOutput {
+	return &engineOutput{logger: logger, database: database, listen: "service listening on " + addr, listening: make(chan struct{})}
+}
+
+func (o *engineOutput) Write(b []byte) (int, error) {
+	lines := strings.Split(o.partial+string(b), "\n")
+	o.partial = lines[len(lines)-1]
+	for _, line := range lines[:len(lines)-1] {
+		o.line(line)
 	}
 	return len(b), nil
+}
+
+// flush reads a last line the engine did not end; the reaper calls it once the engine's output is closed.
+func (o *engineOutput) flush() {
+	o.line(o.partial)
+	o.partial = ""
+}
+
+func (o *engineOutput) line(line string) {
+	if strings.TrimSpace(line) == "" {
+		return
+	}
+	o.logger.Debug("sql engine", "database", o.database, "line", line)
+	switch {
+	case strings.HasPrefix(line, "[http] ") && strings.HasSuffix(strings.TrimSpace(line), o.listen):
+		select {
+		case <-o.listening:
+		default:
+			close(o.listening)
+		}
+	case strings.Contains(line, "address already in use"):
+		o.taken = true
+	}
+	o.last = append(o.last, line)
+	if len(o.last) > 3 {
+		o.last = o.last[1:]
+	}
 }

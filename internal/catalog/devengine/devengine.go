@@ -28,11 +28,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/catalog/embedengine"
@@ -40,9 +42,13 @@ import (
 	"github.com/pyvvo/funcd/internal/runtime/procreg"
 )
 
-// reapGrace is how long the reap at New waits after SIGTERM before SIGKILL: the process driver's default stop grace,
-// which `funcdctl dev` uses (ADR-0167).
-const reapGrace = 3 * time.Second
+const (
+	// reapGrace is how long the reap at New waits after SIGTERM before SIGKILL: the process driver's default stop
+	// grace, which `funcdctl dev` uses (ADR-0167).
+	reapGrace = 3 * time.Second
+	// serveTimeout bounds an engine's start, until its quack_serve row.
+	serveTimeout = 20 * time.Second
+)
 
 // DevQuackToken is the fixed local Quack auth token the dev engine serves with when spec.Env carries
 // none. `funcdctl dev` writes it into the synthesized catalog's QUACK_TOKEN Secret so the consumer
@@ -66,6 +72,8 @@ type Runtime struct {
 	// bundled and extract reach the embedded engine; a test swaps them for a fake engine.
 	bundled func() bool
 	extract func(dir string) (embedengine.Paths, error)
+	// holdPort binds the port an engine is given, before it starts; a test swaps it.
+	holdPort func() (net.Listener, error)
 }
 
 // Option configures the dev catalog engine runtime.
@@ -87,10 +95,11 @@ func New(logger *slog.Logger, opts ...Option) (*Runtime, error) {
 		logger = slog.Default()
 	}
 	r := &Runtime{
-		logger:  logger.With("component", "devengine"),
-		procs:   make(map[provider.ProviderRef]*engineProc),
-		bundled: embedengine.Bundled,
-		extract: embedengine.Extract,
+		logger:   logger.With("component", "devengine"),
+		procs:    make(map[provider.ProviderRef]*engineProc),
+		bundled:  embedengine.Bundled,
+		extract:  embedengine.Extract,
+		holdPort: holdLoopbackPort,
 	}
 	for _, o := range opts {
 		o(r)
@@ -202,12 +211,14 @@ func (r *Runtime) save(p *engineProc, token string) error {
 
 // engineProc is one running duckdb+quack subprocess.
 type engineProc struct {
-	id    string // the instance ID drawn per engine start; its dir name and -init argv carry it (ADR-0167)
-	cmd   *exec.Cmd
-	stdin io.WriteCloser
-	dir   string
-	addr  string
-	done  chan struct{} // closed once the engine has exited and been reaped
+	id      string // the instance ID drawn per engine start; its dir name and -init argv carry it (ADR-0167)
+	cmd     *exec.Cmd
+	stdin   io.WriteCloser
+	dir     string
+	addr    string
+	serving chan struct{}    // closed when the engine's stdout names addr, the row of its quack_serve call
+	stderr  *prefixLogWriter // the engine's error output, whose last lines a failed start reports
+	done    chan struct{}    // closed once the engine has exited and been reaped
 }
 
 // alive reads done, not cmd.ProcessState: only cmd.Wait fills ProcessState, and launch's reaper
@@ -242,8 +253,9 @@ func (p *engineProc) stop() {
 	}
 }
 
-// launch extracts the engine, writes the init SQL, starts duckdb serving Quack on a free 127.0.0.1
-// port, and blocks until the port accepts (or times out).
+// launch extracts the engine, writes the init SQL, starts duckdb serving Quack on a 127.0.0.1 port it holds, and
+// blocks until the engine names that address on its stdout (or ends, or times out). The held port closes when launch
+// returns, before Converge reports Ready, so no other process can take it in between (ADR-0260 Decision 3).
 func (r *Runtime) launch(ctx context.Context, spec provider.ProviderSpec) (*engineProc, error) {
 	const op = "devengine.launch"
 	var raw [8]byte
@@ -259,12 +271,13 @@ func (r *Runtime) launch(ctx context.Context, spec provider.ProviderSpec) (*engi
 		_ = os.RemoveAll(dir)
 		return nil, err
 	}
-	port, err := freePort()
+	held, err := r.holdPort()
 	if err != nil {
 		_ = os.RemoveAll(dir)
-		return nil, fault.Wrapf(err, fault.Internal, op, "reserve engine port")
+		return nil, fault.Wrapf(err, fault.Internal, op, "hold the engine port")
 	}
-	addr := "127.0.0.1:" + strconv.Itoa(port)
+	defer func() { _ = held.Close() }()
+	addr := held.Addr().String()
 
 	// The SQLite catalog lives in the ephemeral engine dir by default (fresh each boot); under
 	// --persist (catalogDir set) it lives in a durable per-provider subdir OUTSIDE the temp dir, so
@@ -289,8 +302,10 @@ func (r *Runtime) launch(ctx context.Context, spec provider.ProviderSpec) (*engi
 	// `-init` runs the SQL (LOADs + quack_serve, which serves on a background thread), then duckdb
 	// drops into the REPL reading stdin — held open below so the process stays alive serving Quack.
 	cmd := exec.CommandContext(ctx, paths.DuckDB, "-init", initFile, ":memory:") //nolint:gosec // paths from our own embedded engine
-	cmd.Stdout = io.Discard
-	cmd.Stderr = &prefixLogWriter{logger: r.logger, provider: string(spec.Ref.Name)}
+	serving := make(chan struct{})
+	stderr := &prefixLogWriter{logger: r.logger, provider: string(spec.Ref.Name)}
+	cmd.Stdout = &rowWatcher{want: "http://" + addr, seen: serving}
+	cmd.Stderr = stderr
 	// Its own process group, so the reap after a crash reaches everything the engine started (ADR-0167).
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdin, perr := cmd.StdinPipe()
@@ -304,20 +319,76 @@ func (r *Runtime) launch(ctx context.Context, spec provider.ProviderSpec) (*engi
 		return nil, fault.Wrapf(serr, fault.Internal, op, "start duckdb engine")
 	}
 
-	p := &engineProc{id: id, cmd: cmd, stdin: stdin, dir: dir, addr: addr, done: make(chan struct{})}
+	p := &engineProc{id: id, cmd: cmd, stdin: stdin, dir: dir, addr: addr, serving: serving, stderr: stderr, done: make(chan struct{})}
 	go func() {
 		_ = cmd.Wait()
+		stderr.flush()
 		close(p.done)
 	}()
 	if serr := r.save(p, token); serr != nil {
 		p.stop()
 		return nil, fault.Wrapf(serr, fault.KindOf(serr), op, "save engine %s", id)
 	}
-	if rerr := waitReady(ctx, addr, 20*time.Second); rerr != nil {
+	if rerr := waitServing(ctx, p, serveTimeout); rerr != nil {
 		r.stopLocked(p)
 		return nil, fault.Wrapf(rerr, fault.Unavailable, op, "engine did not become ready at %s", addr)
 	}
 	return p, nil
+}
+
+// holdLoopbackPort binds a free 127.0.0.1 port with SO_REUSEPORT: the Quack server, which sets it too, binds beside
+// it, and a plain bind of the port fails while it is held (ADR-0260 Decision 3).
+func holdLoopbackPort() (net.Listener, error) { return listenReusePort("127.0.0.1:0") }
+
+// listenReusePort listens on addr with SO_REUSEPORT. net.ListenConfig keeps the socket close-on-exec, so the engine
+// does not inherit it.
+func listenReusePort(addr string) (net.Listener, error) {
+	lc := net.ListenConfig{Control: func(_, _ string, c syscall.RawConn) error {
+		var serr error
+		if err := c.Control(func(fd uintptr) { serr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEPORT, 1) }); err != nil {
+			return err
+		}
+		return serr
+	}}
+	return lc.Listen(context.Background(), "tcp", addr)
+}
+
+// waitServing waits until the engine's own stdout names its address. A connection accepted on the port proves
+// nothing: another Quack server can share it (ADR-0260 Decision 3). An engine that ends first fails the start with
+// its error output.
+func waitServing(ctx context.Context, p *engineProc, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	select {
+	case <-p.serving:
+		return nil
+	case <-p.done:
+		return fmt.Errorf("the engine ended before it served: %s", strings.Join(p.stderr.last, " | "))
+	case <-ctx.Done():
+		return fmt.Errorf("waiting for %s: %w", p.addr, ctx.Err())
+	}
+}
+
+// rowWatcher reads the engine's stdout for want, the address its quack_serve row names, and closes seen there. Only
+// the stdout copier calls Write.
+type rowWatcher struct {
+	want    string
+	seen    chan struct{}
+	matched bool
+	tail    string // the end of the output so far, for a row split across writes
+}
+
+func (w *rowWatcher) Write(b []byte) (int, error) {
+	if !w.matched {
+		buf := w.tail + string(b)
+		if strings.Contains(buf, w.want) {
+			w.matched = true
+			close(w.seen)
+		} else {
+			w.tail = buf[max(0, len(buf)-len(w.want)):]
+		}
+	}
+	return len(b), nil
 }
 
 // buildInitSQL assembles the duckdb init script: pin the extension dir, LOAD the engine extensions,
@@ -372,53 +443,43 @@ func dataPathFor(catalogURL string) string {
 	return catalogURL
 }
 
-// prefixLogWriter forwards duckdb stderr lines to the driver's logger at debug level.
+// ansiColor is a terminal color code, which the duckdb CLI writes around its messages.
+var ansiColor = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+// prefixLogWriter forwards duckdb stderr lines to the driver's logger at debug level and keeps the last ones, which a
+// failed start reports. Only the stderr copier calls Write; last is read once the engine has exited.
 type prefixLogWriter struct {
 	logger   *slog.Logger
 	provider string
+	last     []string
+	partial  string // a line not ended yet
 }
 
 func (w *prefixLogWriter) Write(p []byte) (int, error) {
-	for _, line := range strings.Split(strings.TrimRight(string(p), "\n"), "\n") {
-		if strings.TrimSpace(line) != "" {
-			w.logger.Debug("catalog engine", "provider", w.provider, "line", line)
-		}
+	lines := strings.Split(w.partial+string(p), "\n")
+	w.partial = lines[len(lines)-1]
+	for _, line := range lines[:len(lines)-1] {
+		w.line(line)
 	}
 	return len(p), nil
 }
 
-// waitReady polls until addr accepts a TCP connection (the Quack server is listening) or ctx/timeout.
-func waitReady(ctx context.Context, addr string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
-		if err == nil {
-			_ = conn.Close()
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("timed out after %s waiting for %s", timeout, addr)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(150 * time.Millisecond):
-		}
-	}
+// flush reads a last line the engine did not end; the reaper calls it once the engine's output is closed.
+func (w *prefixLogWriter) flush() {
+	w.line(w.partial)
+	w.partial = ""
 }
 
-// freePort reserves an ephemeral 127.0.0.1 port and returns it (the listener is closed immediately;
-// the small reuse race is acceptable for a local dev engine).
-func freePort() (int, error) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return 0, err
+func (w *prefixLogWriter) line(line string) {
+	line = strings.TrimSpace(ansiColor.ReplaceAllString(line, ""))
+	if line == "" {
+		return
 	}
-	defer func() { _ = l.Close() }()
-	return l.Addr().(*net.TCPAddr).Port, nil
+	w.logger.Debug("catalog engine", "provider", w.provider, "line", line)
+	w.last = append(w.last, line)
+	if len(w.last) > 3 {
+		w.last = w.last[1:]
+	}
 }
 
 // sqlStr renders s as a single-quoted DuckDB string literal (doubling embedded quotes).

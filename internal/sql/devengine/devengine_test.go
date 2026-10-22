@@ -5,12 +5,16 @@ package devengine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -26,6 +30,8 @@ import (
 const (
 	// fakeEngineEnv makes the test binary act as rqlited: it serves /readyz on its -http-addr until SIGTERM.
 	fakeEngineEnv = "SQL_DEVENGINE_TEST_FAKE_ENGINE"
+	// fakeModeEnv changes the fake engine: "silent" serves without saying it listens, "fail" ends on another error.
+	fakeModeEnv = "SQL_DEVENGINE_TEST_FAKE_MODE"
 	// crashedRunEnv makes the test binary converge one fake engine under the state dir it names, until killed.
 	crashedRunEnv = "SQL_DEVENGINE_TEST_CRASHED_RUN"
 )
@@ -41,13 +47,37 @@ func TestMain(m *testing.M) {
 }
 
 func fakeEngine(args []string) int {
-	var addr string
+	var addr, raft string
 	for i := 0; i+1 < len(args); i++ {
-		if args[i] == "-http-addr" {
+		switch args[i] {
+		case "-http-addr":
 			addr = args[i+1]
+		case "-raft-addr":
+			raft = args[i+1]
 		}
 	}
-	srv := &http.Server{Addr: addr, ReadHeaderTimeout: time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	if os.Getenv(fakeModeEnv) == "fail" {
+		fmt.Fprintln(os.Stderr, "failed to create store: the data directory is locked")
+		return 1
+	}
+	// As rqlited v10.5.3: a plain net.Listen of the Raft address, then of the HTTP address, log.Fatalf on a taken port,
+	// and once each is bound "service listening on <addr>" from its service's logger.
+	rl, err := net.Listen("tcp", raft)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[rqlited] 2026/10/22 16:21:06 failed to listen on %s: %s\n", raft, err)
+		return 1
+	}
+	defer func() { _ = rl.Close() }()
+	fmt.Fprintf(os.Stderr, "[cluster] 2026/10/22 16:21:01 service listening on %s\n", rl.Addr())
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[rqlited] 2026/10/22 16:21:06 failed to start HTTP server: %s\n", err)
+		return 1
+	}
+	if os.Getenv(fakeModeEnv) != "silent" {
+		fmt.Fprintf(os.Stderr, "[http] 2026/10/22 16:21:01 service listening on %s\n", ln.Addr())
+	}
+	srv := &http.Server{ReadHeaderTimeout: time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/readyz" {
 			http.NotFound(w, r)
 		}
@@ -55,7 +85,7 @@ func fakeEngine(args []string) int {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGTERM)
 	go func() { <-stop; _ = srv.Close() }()
-	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
+	if err := srv.Serve(ln); err != http.ErrServerClosed {
 		return 1
 	}
 	return 0
@@ -173,6 +203,65 @@ func TestConvergeRestartsExitedEngine(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, st.Ready)
 	require.NotEqual(t, first.cmd.Process.Pid, r.procs[spec().Ref].cmd.Process.Pid)
+}
+
+// scenario: sql-engine-port-taken — a port another process takes before the engine binds it starts the engine again
+// with new ports, even when that process answers /readyz, and the database is Ready at an address its own engine
+// serves; three starts in all; an engine that ends for another reason fails the start at once with its output
+// (ADR-0260 Decision 3).
+func TestScenarioSQLEnginePortTaken(t *testing.T) {
+	stranger := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	t.Cleanup(stranger.Close)
+	taken := stranger.Listener.Addr().(*net.TCPAddr).Port
+	run := func(t *testing.T, pick func(n int) (int, error)) (provider.ProviderStatus, int, error) {
+		t.Helper()
+		r := mustNew(t)
+		t.Cleanup(r.StopAll)
+		fake(t, r)
+		picks := 0
+		r.pickPort = func() (int, error) { picks++; return pick(picks) }
+		st, err := r.Converge(context.Background(), spec())
+		return st, picks, err
+	}
+
+	t.Run("a taken port starts it again", func(t *testing.T) {
+		st, picks, err := run(t, func(n int) (int, error) {
+			if n == 1 {
+				return taken, nil
+			}
+			return freePort()
+		})
+		require.NoError(t, err)
+		require.True(t, st.Ready)
+		require.NotEqual(t, "127.0.0.1:"+strconv.Itoa(taken), st.Address, "the server on the taken port does not count")
+		require.Equal(t, 4, picks, "a second start with two new ports")
+	})
+	t.Run("three starts in all", func(t *testing.T) {
+		_, picks, err := run(t, func(int) (int, error) { return taken, nil })
+		require.ErrorIs(t, err, errPortTaken)
+		require.Equal(t, 6, picks)
+	})
+	t.Run("another end fails at once", func(t *testing.T) {
+		t.Setenv(fakeModeEnv, "fail")
+		_, picks, err := run(t, func(int) (int, error) { return freePort() })
+		require.ErrorContains(t, err, "the data directory is locked")
+		require.NotErrorIs(t, err, errPortTaken)
+		require.Equal(t, 2, picks, "one start")
+	})
+}
+
+// An engine that answers /readyz but never said it listens on its address is not Ready: the answer could come from
+// another process (ADR-0260 Decision 3).
+func TestEngineIsReadyOnlyOnItsOwnListenLine(t *testing.T) {
+	t.Setenv(fakeModeEnv, "silent")
+	r := mustNew(t)
+	t.Cleanup(r.StopAll)
+	fake(t, r)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := r.Converge(ctx, spec())
+	require.Error(t, err)
+	require.Empty(t, r.procs, "the engine of the failed start is stopped")
 }
 
 // Without a data dir the data lives in a temporary root that StopAll removes.

@@ -4,6 +4,8 @@ package devengine
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -17,9 +19,14 @@ import (
 	"github.com/pyvvo/funcd/internal/provider"
 )
 
-// fakeEngineEnv makes the test binary act as the duckdb engine (TestMain): it serves the address its
-// -init script passes to quack_serve until stdin closes, as the real REPL does.
-const fakeEngineEnv = "DEVENGINE_TEST_FAKE_ENGINE"
+const (
+	// fakeEngineEnv makes the test binary act as the duckdb engine (TestMain): it serves the address its -init script
+	// passes to quack_serve until stdin closes, as the real REPL does.
+	fakeEngineEnv = "DEVENGINE_TEST_FAKE_ENGINE"
+	// fakeModeEnv changes the fake engine: "norow" serves without printing its quack_serve row, "fail" ends on an init
+	// error before quack_serve, as the real CLI does.
+	fakeModeEnv = "DEVENGINE_TEST_FAKE_MODE"
+)
 
 var quackServeAddr = regexp.MustCompile(`quack_serve\('quack:([^']+)'`)
 
@@ -45,9 +52,17 @@ func runFakeEngine(args []string) int {
 	if addr == nil {
 		return 2
 	}
-	l, err := net.Listen("tcp", string(addr[1]))
+	if os.Getenv(fakeModeEnv) == "fail" {
+		fmt.Fprintln(os.Stderr, "Catalog Error: Table with name no_such_table does not exist!")
+		fmt.Fprintf(os.Stderr, "Encountered errors while executing init file %q. Exiting.\n", args[1])
+		return 1
+	}
+	// The Quack server binds with SO_REUSEPORT (probed on DuckDB 1.5.6, ADR-0260): beside a held socket that set it,
+	// but not on a port a plain socket holds.
+	l, err := listenReusePort(string(addr[1]))
 	if err != nil {
-		return 2
+		fmt.Fprintf(os.Stderr, "IO Error: Failed to bind DuckDB Quack RPC server to http://%s\n", addr[1])
+		return 1
 	}
 	go func() {
 		for {
@@ -58,8 +73,90 @@ func runFakeEngine(args []string) int {
 			_ = c.Close()
 		}
 	}()
+	if os.Getenv(fakeModeEnv) != "norow" {
+		_, _ = fmt.Fprintf(os.Stdout, "http://%s\n", addr[1])
+	}
 	_, _ = io.Copy(io.Discard, os.Stdin)
 	return 0
+}
+
+// fakeRuntime is a runtime whose engine is this test binary (TestMain).
+func fakeRuntime(t *testing.T) *Runtime {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("test binary path: %v", err)
+	}
+	t.Setenv(fakeEngineEnv, "1")
+	r := mustNew(t)
+	r.bundled = func() bool { return true }
+	r.extract = func(dir string) (embedengine.Paths, error) {
+		return embedengine.Paths{DuckDB: exe, ExtensionDir: dir}, nil
+	}
+	t.Cleanup(r.StopAll)
+	return r
+}
+
+// requireTaken fails unless a plain bind of addr fails.
+func requireTaken(t *testing.T, addr string) {
+	t.Helper()
+	if l, err := net.Listen("tcp", addr); err == nil {
+		_ = l.Close()
+		t.Fatalf("a plain bind took %s", addr)
+	}
+}
+
+// scenario: catalog-engine-holds-its-port — a Go net.Listen of the engine's port fails from the moment the start
+// chooses it, and the catalog is Ready only once its own engine printed its address; an engine that ends first fails
+// the start at once with its error output (ADR-0260 Decision 3).
+func TestScenarioCatalogEngineHoldsItsPort(t *testing.T) {
+	t.Run("held until the engine serves it", func(t *testing.T) {
+		r := fakeRuntime(t)
+		var held net.Listener
+		r.holdPort = func() (net.Listener, error) {
+			ln, err := holdLoopbackPort()
+			if err == nil {
+				held = ln
+				requireTaken(t, ln.Addr().String())
+			}
+			return ln, err
+		}
+		st, err := r.Converge(context.Background(), testSpec())
+		if err != nil || !st.Ready {
+			t.Fatalf("Converge: Ready=%v err=%v", st.Ready, err)
+		}
+		if st.Address != held.Addr().String() {
+			t.Fatalf("Address %s, want the held port %s", st.Address, held.Addr())
+		}
+		if _, aerr := held.Accept(); !errors.Is(aerr, net.ErrClosed) {
+			t.Fatalf("the held port is still open after Ready: %v", aerr)
+		}
+		requireTaken(t, st.Address)
+	})
+	t.Run("a listening engine without its row is not Ready", func(t *testing.T) {
+		t.Setenv(fakeModeEnv, "norow")
+		r := fakeRuntime(t)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if st, err := r.Converge(ctx, testSpec()); err == nil || st.Ready {
+			t.Fatalf("Converge: Ready=%v err=%v, want a failed start", st.Ready, err)
+		}
+		if len(r.procs) != 0 {
+			t.Fatalf("the engine of the failed start still runs: %v", r.procs)
+		}
+	})
+	t.Run("an engine that ends fails the start at once", func(t *testing.T) {
+		t.Setenv(fakeModeEnv, "fail")
+		r := fakeRuntime(t)
+		start := time.Now()
+		_, err := r.Converge(context.Background(), testSpec())
+		if err == nil || !strings.Contains(err.Error(), "no_such_table") {
+			t.Fatalf("Converge: %v, want the engine's error output", err)
+		}
+		if took := time.Since(start); took >= serveTimeout {
+			t.Fatalf("the failed start took %s, the whole timeout", took)
+		}
+	})
 }
 
 func testSpec() provider.ProviderSpec {
@@ -118,6 +215,8 @@ func TestConvergeLaunchesEngineWhenBundled(t *testing.T) {
 		t.Fatalf("Quack engine not reachable at %s: %v", st.Address, derr)
 	}
 	_ = conn.Close()
+	// Ready came from the engine's quack_serve row (ADR-0260), and the engine holds its port after the start's hold.
+	requireTaken(t, st.Address)
 
 	// Idempotent: a second Converge returns the same running engine, not a new one.
 	st2, err2 := r.Converge(ctx, spec)
