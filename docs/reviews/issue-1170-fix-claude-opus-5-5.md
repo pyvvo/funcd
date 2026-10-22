@@ -1,12 +1,60 @@
-## Verdict: pass — 0 blockers, 0 majors open, 1 minor  (issue #1170 fix, model: claude-opus-5-5)
+## Verdict: pass — 0 blockers, 0 majors, 0 minors open  (issue #1170 fix, model: claude-opus-5-5)
 
-The branch is `fix/stress-flakes-1` (main f7e40c89). The work is in two commits:
-- 130977e4 removes the 500 ms wall-clock bound from `TestConditionCheckDecodesEachDocumentOnce`
+The branch is `fix/stress-flakes-1`, now on main 8b1ba127. The rebase changed two hashes: round 1's 130977e4 is now
+361eb4f5, and round 2's d20c84cd is now c41eef17. The work is in four commits:
+- 361eb4f5 removes the 500 ms wall-clock bound from `TestConditionCheckDecodesEachDocumentOnce`
   (`internal/workflow/engine_test.go`) and keeps its 16 MiB allocation bound.
-- d20c84cd, round 2, moves the schema's padding into a field that the check decodes. It also removes the same bound
+- c41eef17, round 2, moves the schema's padding into a field that the check decodes. It also removes the same bound
   from `TestDefaultIsBoundOncePerPath` (`internal/expr/expr_test.go`).
+- 8544f2b1, round 3, sets `x.timeout = time.Minute` in `TestDefaultIsBoundOncePerPath`, the fix that round 2's Minor
+  asked for.
+- 286999a5, round 3, measures the check alone, without the evaluation that follows it in `evalWhen`.
 
-## Round 2 (d20c84cd): pass
+## Round 3 (8544f2b1, 286999a5): pass
+
+The coordinator ran the round-2 test with 2% of a CPU. It failed 5 runs out of 5 with "evaluation exceeded its time
+limit". `evalWhen` evaluates the condition under the evaluator's 100 ms deadline (`internal/expr/eval.go:181`), and only
+package expr's tests can lift that deadline. The test now runs `runtimeResolver`, `expr.Parse` and `ex.Check`. These are
+the first three statements of `evalWhen` (`internal/workflow/condition.go:69-77`).
+
+### Dropping the evaluation does not weaken the test
+- **The property belongs to the check.** The test's name and comment say "the check", and #643 put both caches in the
+  check's resolvers (`docResolver.decoded` and `schemaResolver.decoded`). Both mutants still fail the test:
+  - with the schema cache off, it fails at 201 MiB (`input.m`);
+  - with the document cache off, it fails at 1,199 MiB (both references).
+- **Package expr covers the decoding during evaluation.** `EvalBool` binds each root once (`docValue`,
+  `internal/expr/eval.go:540-553`). Check's `ctx.defaulted` deduplicates the defaults for each path, and
+  `TestDefaultIsBoundOncePerPath` bounds that by allocations alone since 8544f2b1.
+- **What the test gives up.**
+  - It no longer asserts the condition's result. Other tests cover the evaluation.
+  - It repeats `evalWhen`'s first three statements instead of calling `evalWhen`. A change in how `evalWhen` builds its
+    resolver would therefore not reach the test.
+
+  That is the price of removing the deadline, and it is acceptable.
+
+### ✅ Verified correct (keep it)
+- **No wall clock is left.** With a 600 ms sleep injected before the check's document decode, by overlay, the test
+  passes.
+- **Round 2's Minor is fixed** in 8544f2b1. The coordinator reports that the sibling passes 5 runs out of 5 with 1% of a
+  CPU. I did not run `internal/expr` in this round.
+- **Checks.**
+  - `go test -race -count=1 ./internal/workflow/` passes (20.4 s).
+  - The test passes 3 runs out of 3 under `-race` (0.05 s).
+  - `go vet` passes on darwin and Linux.
+  - `golangci-lint` reports 0 issues on darwin and Linux.
+- **Shape.** 8544f2b1 and 286999a5 are test-only commits with the trailer.
+
+### Definition of Done
+11 / 11. Item 1, a committed `TestIssue1170_` test, does not apply. No finding is open.
+
+### Model scorecard
+Recorded: claude-opus-5-5 on issue #1170 (fix, round 3) → pass, 0/0/0, 0 model-attributed, DoD 11/11.
+See docs/reviews/model-scorecard.md.
+
+### Recommendation
+Pass.
+
+## Round 2 (d20c84cd, now c41eef17): pass; its Minor is fixed in round 3
 
 ### Minor 1 — the sibling still runs under the evaluator's 100 ms deadline  ·  attribution: model
 - **What the test still depends on.** `TestDefaultIsBoundOncePerPath` calls `EvalBool` with the default deadline,
