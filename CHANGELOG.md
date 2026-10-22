@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.22.1](https://github.com/pyvvo/funcd/compare/v0.22.0...v0.22.1) (2026-10-22)
+
+
+### Bug Fixes
+
+* **dev:** a dev SQL or catalog engine counts as ready only on its own output, and an SQL engine whose port was taken starts again ([8b1ba12](https://github.com/pyvvo/funcd/commit/8b1ba1279275ba67d88ef6780ad9d8bdedcf3f24))
+* **dev:** funcdctl dev waits for a Site's build again when it vanishes before dev's start pushes it ([6cafcc3](https://github.com/pyvvo/funcd/commit/6cafcc3879b858206aa3fb2f89482268ac48b44f))
+* **sql:** on loopback the change feed binds its own port, so two platforms in one process no longer share 7075 ([8b1ba12](https://github.com/pyvvo/funcd/commit/8b1ba1279275ba67d88ef6780ad9d8bdedcf3f24))
+
 ## [0.22.0](https://github.com/pyvvo/funcd/compare/v0.21.0...v0.22.0) (2026-10-22)
 
 
