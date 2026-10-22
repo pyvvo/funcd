@@ -12268,5 +12268,20 @@
     "dod_total": 12,
     "report": "docs/reviews/issue-1171-fix-claude-opus-5-5.md",
     "notes": "pass; main + seam fails after 90 s with the PushSite empty-dir start error; no-loop and no-conversion mutants fail; minor (model): a build rewritten during the push still stops the start"
+  },
+  {
+    "date": "2026-10-22",
+    "issue": "1170",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 11,
+    "dod_total": 11,
+    "report": "docs/reviews/issue-1170-fix-claude-opus-5-5.md",
+    "notes": "round 2 on d20c84cd; schema padding in a decoded default: schema-cache mutant 203 MiB, doc-cache mutant 1,199 MiB, 600 ms delay passes; twin drops its bound, dedup mutant fails (201 MiB with a long deadline); minor (model): twin still runs under the 100 ms evalTimeout"
   }
 ]
