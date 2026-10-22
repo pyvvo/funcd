@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.23.0](https://github.com/pyvvo/funcd/compare/v0.22.1...v0.23.0) (2026-10-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** `CatalogService` is now `Lake`, with the renamed fields, environment, Cedar names, roles, access-key code, default path and daemon config section of ADR-0261. Nothing stored is converted; an Identity issued before this release gets its `lakeToken` at its next rotation.
+
+### Features
+
+* **api:** CatalogService is renamed Lake (ADR-0261) ([#1181](https://github.com/pyvvo/funcd/issues/1181)) ([bd64119](https://github.com/pyvvo/funcd/commit/bd64119d6fc9adbd5ea604e39b41e8153fa0d6fe))
+
 ## [0.22.1](https://github.com/pyvvo/funcd/compare/v0.22.0...v0.22.1) (2026-10-22)
 
 
