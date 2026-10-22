@@ -12208,5 +12208,20 @@
     "dod_total": 11,
     "report": "docs/reviews/issue-1159-fix-claude-opus-5-5.md",
     "notes": "round 2 on a46f6181; three tests on a manual clock, siblings included; injected delay: old 2/2 fail, new 2/2 pass"
+  },
+  {
+    "date": "2026-10-22",
+    "adr": "0260",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 2,
+    "dod_passed": 6,
+    "dod_total": 6,
+    "report": "docs/reviews/adr-0260-implementation-claude-opus-5-5.md",
+    "notes": "pass; Minor (model): the catalog hold test hangs in held.Accept instead of failing when the hold stays open; Minor (model): the two dev-engine drivers duplicate the line buffering and last-lines ring; revert + 4 mutants fail their tests; Linux VM green"
   }
 ]
