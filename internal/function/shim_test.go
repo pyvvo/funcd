@@ -74,7 +74,8 @@ type fakeRuntime struct {
 	// grace, while the task still runs.
 	onStop      func(runtime.InstanceID)
 	memberDeps  map[string]*local.DependencyReport // a member's dependency report (ADR-0215 Decision 4)
-	membersDown bool                               // GET /health/members answers 503, as a pool host too slow for the probe's timeout
+	membersDown bool                               // GET /health/members answers 503: no member list, judged at once (ADR-0259)
+	membersLate bool                               // GET /health/members answers only after the probe has timed out
 	// ADR-0224: each pool worker's members as its manifest held them at its Create, and its own entries (setWorkerMember),
 	// which a worker with its own endpoint (servePoolWorker) answers.
 	manifests     map[runtime.InstanceID][]string
@@ -118,6 +119,19 @@ func (f *fakeRuntime) setMembersDown(down bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.membersDown = down
+}
+
+// setMembersLate makes the harness's GET /health/members answer only after the probe has timed out while late is set.
+func (f *fakeRuntime) setMembersLate(late bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.membersLate = late
+}
+
+func (f *fakeRuntime) isMembersLate() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.membersLate
 }
 
 // setWorkerMember sets member name's /health/members entry on pool worker id alone, before setMember's.
@@ -549,6 +563,9 @@ func newShimHarness(t *testing.T, readyStatus int, runtimeFailed bool, opts ...f
 	var rt *fakeRuntime
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health/members" {
+			if rt.isMembersLate() {
+				stallPastProbe(r)
+			}
 			rt.serveMembers(w)
 			return
 		}

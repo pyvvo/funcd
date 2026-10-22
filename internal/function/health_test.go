@@ -33,15 +33,23 @@ const (
 )
 
 // healthShim is a fake shim whose /health/liveness and /health/readiness answers a test sets; a readiness report is
-// sent as a new shim passes funcd's 503 through (Decision 4). It counts the probes it serves.
+// sent as a new shim passes funcd's 503 through (Decision 4), and a silent shim answers readiness only after the probe
+// has timed out (ADR-0259). It counts the probes it serves.
 type healthShim struct {
 	mu             sync.Mutex
 	live, ready    int
 	report         *local.DependencyReport
+	silent         bool
 	lives, readies int
 }
 
 func (s *healthShim) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	silent := s.silent && r.URL.Path == "/health/readiness"
+	s.mu.Unlock()
+	if silent {
+		stallPastProbe(r)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch r.URL.Path {
@@ -78,6 +86,12 @@ func (s *healthShim) setReport(rep *local.DependencyReport) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.report = rep
+}
+
+func (s *healthShim) setSilent(silent bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.silent = silent
 }
 
 func (s *healthShim) probes() (lives, readies int) {

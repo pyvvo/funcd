@@ -201,6 +201,9 @@ type Deps struct {
 	// ProbeTimeout bounds one readiness, liveness or /health/members probe; 0 ⇒ half the readiness poll. Tests that answer
 	// probes from local servers raise it, so a loaded host does not read a ready worker as unready.
 	ProbeTimeout time.Duration
+	// ReadinessTimeout is the window in which a worker whose readiness reads run late keeps its last answer
+	// (runtime.readinessTimeout, ADR-0259); 0 ⇒ 5 s.
+	ReadinessTimeout time.Duration
 	// ReferentPollInterval re-checks a function waiting for a referent (controller.referentPollInterval, ADR-0163),
 	// bounded by the supervision period (ADR-0142 Decision 9); 0 ⇒ 2 s.
 	ReferentPollInterval time.Duration
@@ -312,6 +315,9 @@ type Reconciler struct {
 	// live is each probed worker's liveness, a solo replica's or a pool host's (ADR-0215 Decision 1), guarded by liveMu.
 	liveMu sync.Mutex
 	live   map[runtime.InstanceID]liveness
+	// reads is each read worker's readiness record (ADR-0259 Decision 2), guarded by readMu.
+	readMu sync.Mutex
+	reads  map[runtime.InstanceID]readRecord
 	// stopping counts the Stops under way per worker, guarded by stopMu: a worker being stopped gets no calls.
 	stopMu   sync.Mutex
 	stopping map[runtime.InstanceID]int
@@ -336,6 +342,8 @@ type Reconciler struct {
 	bootTimeout     time.Duration
 	referentPoll    time.Duration
 	livenessTimeout time.Duration
+	// readinessTimeout is the window in which a worker whose readiness reads run late keeps its last answer (ADR-0259).
+	readinessTimeout time.Duration
 
 	// spared names, by Function, the UID of each Function whose last retire pass kept workers of a revision an open
 	// workflow run holds (ADR-0190 Decision 7): its passes skip the steady state until a pass retires them.
@@ -390,6 +398,8 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		return nil, fault.Invalidf(op, "the liveness timeout must not be negative")
 	case d.ProbeTimeout < 0:
 		return nil, fault.Invalidf(op, "the probe timeout must not be negative")
+	case d.ReadinessTimeout < 0:
+		return nil, fault.Invalidf(op, "the readiness timeout must not be negative")
 	}
 	bootInitial := d.BootBackoffInitial
 	if bootInitial == 0 {
@@ -478,6 +488,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		poolHolds:           map[pooling.PoolKey]poolHold{},
 		poolSets:            map[string][]v1.ObjectName{},
 		live:                map[runtime.InstanceID]liveness{},
+		reads:               map[runtime.InstanceID]readRecord{},
 		stopping:            map[runtime.InstanceID]int{},
 		poolManifestDir:     manifestDir,
 		ownManifestDir:      ownManifestDir,
@@ -491,6 +502,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		bootTimeout:         bootTO,
 		referentPoll:        min(referentPoll, period),
 		livenessTimeout:     livenessTO,
+		readinessTimeout:    cmp.Or(d.ReadinessTimeout, defaultReadinessTimeout),
 		spared:              map[fnKey]v1.UID{},
 		held:                map[fnKey]bool{},
 	}, nil
@@ -547,8 +559,10 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 	}
 	// ADR-0142: a Ready solo Function whose spec is already processed only needs its replicas checked; if they
 	// all run, the pass writes nothing and comes back after the supervision period.
-	if !ingressChanged && r.steadyState(ctx, fn) {
-		return controller.Result{RequeueAfter: r.supervisionPeriod}, nil
+	if !ingressChanged {
+		if steady, until := r.steadyState(ctx, fn); steady {
+			return controller.Result{RequeueAfter: r.pollBy(until, r.supervisionPeriod)}, nil
+		}
 	}
 
 	// status.pool names the pool fn's access puts it in, before any gate; a key that moved leaves its old pool to
@@ -1046,6 +1060,10 @@ type verdict struct {
 	settled       int
 	currentReport *local.DependencyReport
 	hungRestarted bool
+	// readUntil is the earliest end of a kept readiness read's window, silent the window when every judged worker runs
+	// and is late past it (ADR-0259 Decisions 3 and 4).
+	readUntil time.Time
+	silent    time.Duration
 }
 
 // holdsFailed reports whether a pass that started Failed leaves the status as read (ADR-0169): no worker of the judged
@@ -1111,6 +1129,8 @@ func (r *Reconciler) finish(ctx context.Context, fn *v1.Function, v verdict, dra
 			msg = livenessRestartMessage
 		case v.report != nil:
 			reason, msg = reasonDependencyNotReady, reportMessage(v.report)
+		case v.silent > 0:
+			reason, msg = reasonNotAnswering, notAnswering(v.pooled, v.silent)
 		}
 		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: msg})
 	case v.startErr != nil && v.running == 0:
@@ -1171,7 +1191,7 @@ func (r *Reconciler) record(ctx context.Context, fn *v1.Function, v verdict, dra
 	if perr := r.programAllRoutes(ctx); perr != nil {
 		return controller.Result{}, routeError{perr}
 	}
-	requeue := r.requeueFor(fn.Status.Phase, v)
+	requeue := r.pollBy(v.readUntil, r.requeueFor(fn.Status.Phase, v))
 	if v.switched {
 		requeue = earliest(requeue, r.handOutSettle) // come back for the drain
 	}
@@ -1276,49 +1296,52 @@ func servingPhase(p v1.Phase) bool { return p == v1.PhaseReady || p == v1.PhaseD
 // steadyState reports whether fn is a solo Function at desired state: Ready with no reason (a crash loop beside a ready
 // replica runs the full pass, ADR-0160), its generation processed, its current revision serving with nothing draining
 // (ADR-0143), status.replicas at desired, every bound catalog Ready (ADR-0162), every replica listening (ADR-0161),
-// none hung on its liveness and none answering its readiness with a dependency report (ADR-0215 Decisions 1 and 5).
-// It calls runtime.Status once per replica (ADR-0142), sends each replica its liveness and readiness probes and, for a
-// catalog consumer, one store Get per binding; it writes nothing.
-func (r *Reconciler) steadyState(ctx context.Context, fn *v1.Function) bool {
+// none hung on its liveness, none answering its readiness with a dependency report (ADR-0215 Decisions 1 and 5) and
+// none unanswered past its readiness window (ADR-0259 Decision 4). It calls runtime.Status once per replica
+// (ADR-0142), sends each replica its liveness and readiness probes and, for a catalog consumer, one store Get per
+// binding; it writes nothing. until is the earliest end of a kept read's window, zero if none.
+func (r *Reconciler) steadyState(ctx context.Context, fn *v1.Function) (steady bool, until time.Time) {
 	if fn.Status.Phase != v1.PhaseReady || fn.Status.ObservedGeneration != fn.Generation {
-		return false
+		return false, time.Time{}
 	}
 	if rc, ok := fn.Status.Conditions.Get(condReady); ok && rc.Reason != "" {
-		return false
+		return false, time.Time{}
 	}
 	if r.pooled(fn) {
-		return false
+		return false, time.Time{}
 	}
 	c := fn.Status.CurrentRevision
 	if c == "" || fn.Status.ServingRevision != c || fn.Status.DrainingRevision != "" || r.isSpared(fn) || r.heldPending(fn) {
-		return false
+		return false, time.Time{}
 	}
 	if rr, ok := fn.Status.Conditions.Get(condRevisionReady); !ok || rr.Status != v1.ConditionTrue {
-		return false
+		return false, time.Time{}
 	}
 	desired := r.desiredReplicas(fn)
 	if fn.Status.Replicas != desired {
-		return false
+		return false, time.Time{}
 	}
 	if !r.catalogsReady(ctx, fn) {
-		return false
+		return false, time.Time{}
 	}
 	for i := range desired {
 		in, err := r.runtime.Status(ctx, runtime.NewInstanceID(fn.Namespace, fn.Name, v1.ObjectName(c), i))
 		if err != nil || !r.listening(in) {
-			return false
+			return false, time.Time{}
 		}
 		if r.materializer == nil {
 			continue
 		}
 		if r.probeLiveness(ctx, in) {
-			return false
+			return false, time.Time{}
 		}
-		if ok, rep := r.probeReadiness(ctx, in.IP, in.Port); !ok && rep != nil {
-			return false
+		ok, rep, w := r.readReadiness(ctx, in)
+		if (!ok && rep != nil) || w.silent > 0 {
+			return false, time.Time{}
 		}
+		until = earlier(until, w.until)
 	}
-	return true
+	return true, until
 }
 
 // listening reports whether worker in gets calls (ADR-0161 Decision 2): it runs and wrote its port (ADR-0160), at an
@@ -1400,7 +1423,7 @@ func (r *Reconciler) servingReady(ctx context.Context, fn *v1.Function) (running
 			ready++
 			continue
 		}
-		if ok, rep := r.probeReadiness(ctx, in.IP, in.Port); ok || (rep != nil && !judgesReports(fn)) {
+		if ok, rep, _ := r.readReadiness(ctx, in); ok || (rep != nil && !judgesReports(fn)) {
 			ready++
 		}
 	}
@@ -1409,9 +1432,9 @@ func (r *Reconciler) servingReady(ctx context.Context, fn *v1.Function) (running
 
 // countWorkers counts the running and the listening workers of fn's revision rev or, for a pooled member, of the pool
 // worker the resolver hands out (servingPool, else the newest running one), which runs for fn only while its
-// /health/members lists fn and listens for it only while that entry reads ready (ADR-0158). A pool worker that does not
-// answer is an error, as a List error is, so no pass judges a member it could not read; one that has no port to ask yet
-// runs and does not listen, as a solo replica before its port (ADR-0161 Decision 2, issue #838).
+// /health/members lists fn and listens for it only while that entry reads ready (ADR-0158). A pool worker unanswered past
+// its readiness window (ADR-0259) is an error, as a List error is, so no pass judges a member it could not read; one that
+// has no port to ask yet runs and does not listen, as a solo replica before its port (ADR-0161 Decision 2, issue #838).
 func (r *Reconciler) countWorkers(ctx context.Context, fn *v1.Function, rev v1.ObjectName) (running, listening int, err error) {
 	name := fn.Name
 	key, pooled := pooling.PoolKey{}, r.pooled(fn)
@@ -1446,16 +1469,16 @@ func (r *Reconciler) countWorkers(ctx context.Context, fn *v1.Function, rev v1.O
 		}
 	}
 	if pooled && running > 0 && r.materializer != nil {
-		w, m, ok, perr := r.memberIn(ctx, key, insts, fn.Name)
+		mr, perr := r.memberIn(ctx, key, insts, fn.Name)
 		switch {
 		case perr != nil:
 			return 0, 0, perr
-		case w.ID == "":
+		case mr.in.ID == "":
 			return running, 0, nil
-		case !ok:
+		case !mr.ok:
 			return 0, 0, nil
 		}
-		if m.State != memberReady || (m.Dependency != nil && judgesReports(fn)) {
+		if mr.m.State != memberReady || (mr.m.Dependency != nil && judgesReports(fn)) {
 			listening = 0
 		}
 	}
@@ -1554,7 +1577,7 @@ func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned s
 		running: running, ready: ready, shapeFailed: failed != "", loadErr: r.loadError(ctx, failed),
 		serving: serving, retryAt: earlier(earlier(pass.retryAt, rd.retryAt), ul.retryAt), booting: running > ready+rd.settled, startErr: pass.startErr,
 		repairErr: repairErr, crashLoop: crashLoop, desired: desired, pollAt: ul.pollAt,
-		report: rd.report, settled: rd.settled, hungRestarted: hung,
+		report: rd.report, settled: rd.settled, hungRestarted: hung, readUntil: rd.readUntil, silent: rd.silent,
 	}, nil
 }
 
@@ -1704,7 +1727,7 @@ func (r *Reconciler) switchSolo(ctx context.Context, fn *v1.Function, s, c v1.Ob
 		running: sPass.running, ready: readyS, serving: true, retryAt: retryAt,
 		booting: cPass.running > readyC+rdC.settled, switching: true, currentFailed: failedC != "", loadErr: r.loadError(ctx, failedC), startErr: cPass.startErr,
 		crashLoop: sCrash, currentCrashLoop: cCrash, desired: len(sIdx), pollAt: cUl.pollAt,
-		currentReport: rdC.report, hungRestarted: hung,
+		currentReport: rdC.report, hungRestarted: hung, readUntil: earlier(rdS.readUntil, rdC.readUntil), silent: rdS.silent,
 	}, nil
 }
 
@@ -1873,6 +1896,7 @@ func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, re
 		if cerr != nil {
 			return revisionPass{}, fault.Wrapf(cerr, fault.KindOf(cerr), op, "create worker")
 		}
+		r.forgetRead(inst.ID)
 		start = append(start, inst.ID)
 	}
 	for _, id := range start {
@@ -2230,6 +2254,10 @@ func (r *Reconciler) convergeHeldRevision(ctx context.Context, fn *v1.Function, 
 	if err != nil {
 		return 0, err
 	}
+	degraded := v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "Restarting", Message: "a replica exited and is being replaced"}
+	if rd.silent > 0 {
+		degraded.Reason, degraded.Message = reasonNotAnswering, notAnswering(false, rd.silent)
+	}
 	ready, failed, readyRetry, crashLoop := rd.ready, rd.failed, rd.retryAt, rd.crashLoop
 	ul, err := r.stopUnlistened(ctx, fn, rev.Name, 1)
 	if err != nil {
@@ -2248,13 +2276,13 @@ func (r *Reconciler) convergeHeldRevision(ctx context.Context, fn *v1.Function, 
 	case failed != "" && !serving:
 		return r.writeHeld(ctx, rev, v1.PhaseFailed, v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "ShapeInvalid", Message: r.loadError(ctx, failed)}, 0)
 	case ready >= 1:
-		return r.writeHeld(ctx, rev, v1.PhaseReady, v1.Condition{Type: condReady, Status: v1.ConditionTrue}, r.supervisionPeriod)
+		return r.writeHeld(ctx, rev, v1.PhaseReady, v1.Condition{Type: condReady, Status: v1.ConditionTrue}, r.pollBy(rd.readUntil, r.supervisionPeriod))
 	case pass.startErr != nil && running == 0:
 		return r.writeHeld(ctx, rev, phase, v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "StartFailed", Message: pass.startErr.Error()}, poll)
 	case crashLoop != "":
 		return r.writeHeld(ctx, rev, phase, v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reasonCrashLoop, Message: crashLoop}, poll)
 	case serving:
-		return r.writeHeld(ctx, rev, v1.PhaseDegraded, v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "Restarting", Message: "a replica exited and is being replaced"}, poll)
+		return r.writeHeld(ctx, rev, v1.PhaseDegraded, degraded, poll)
 	}
 	return r.writeHeld(ctx, rev, v1.PhaseDeploying, v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "ShimNotReady"}, poll)
 }
@@ -2710,8 +2738,10 @@ func instanceURL(ns v1.NamespaceName, name v1.ObjectName, in runtime.Instance) s
 }
 
 // readiness is what readyReplicas found of a revision's replicas: how many are ready, a failed instance ("" if none),
-// the earliest boot-crash retry, the crash-loop message, and the dependency report of the lowest replica not ready on
-// one (ADR-0215 Decision 5) with how many such replicas have run past the boot limit since their last start.
+// the earliest boot-crash retry, the crash-loop message, the dependency report of the lowest replica not ready on
+// one (ADR-0215 Decision 5) with how many such replicas have run past the boot limit since their last start, and the
+// replicas' readiness windows (ADR-0259): the earliest end of a kept read's window, and the window when every judged
+// replica runs and is late past it.
 type readiness struct {
 	ready     int
 	failed    runtime.InstanceID
@@ -2719,6 +2749,8 @@ type readiness struct {
 	crashLoop string
 	report    *local.DependencyReport
 	settled   int
+	readUntil time.Time
+	silent    time.Duration
 }
 
 // readyReplicas reports how many replicas of revision rev are serving and, for a shape failure, a failed instance
@@ -2745,10 +2777,12 @@ func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, nam
 	var rd readiness
 	now := r.clock.Now()
 	lowest, lowestReport := -1, -1
+	judged, silent, window := 0, 0, time.Duration(0)
 	for _, in := range insts {
 		if in.Revision != rev || in.Replica >= below {
 			continue
 		}
+		judged++
 		var crash bootCrash
 		switch {
 		case in.State == runtime.StateRunning:
@@ -2761,7 +2795,12 @@ func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, nam
 			var ok bool
 			var rep *local.DependencyReport
 			if listening {
-				ok, rep = r.probeReadiness(ctx, in.IP, in.Port)
+				var w readWindow
+				ok, rep, w = r.readReadiness(ctx, in)
+				rd.readUntil = earlier(rd.readUntil, w.until)
+				if w.silent > 0 {
+					silent, window = silent+1, w.silent
+				}
 			}
 			switch {
 			case ok || (rep != nil && !judge):
@@ -2794,6 +2833,9 @@ func (r *Reconciler) readyReplicas(ctx context.Context, ns v1.NamespaceName, nam
 		if crash.count > 0 && crash.message != "" && (lowest < 0 || in.Replica < lowest) {
 			lowest, rd.crashLoop = in.Replica, crash.message
 		}
+	}
+	if silent > 0 && silent == judged {
+		rd.silent = window // every judged replica runs and is late past its window (ADR-0259 Decision 3)
 	}
 	return rd, nil
 }
@@ -2845,8 +2887,9 @@ const (
 	membersPath   = "/health/members"
 )
 
-// probeMembers issues GET /health/members against a pool host and decodes its 200 answer.
-func (r *Reconciler) probeMembers(ctx context.Context, ip string, port int) ([]memberHealth, bool) {
+// probeMembers issues GET /health/members against a pool host and decodes its 200 answer; late is set when the read ran
+// past probeTimeout (ADR-0259 Decision 1).
+func (r *Reconciler) probeMembers(ctx context.Context, ip string, port int) (members []memberHealth, ok, late bool) {
 	host := ip
 	if host == "" {
 		host = "127.0.0.1"
@@ -2855,18 +2898,17 @@ func (r *Reconciler) probeMembers(ctx context.Context, ip string, port int) ([]m
 	defer cancel()
 	req, err := http.NewRequestWithContext(pctx, http.MethodGet, fmt.Sprintf("http://%s:%d%s", host, port, membersPath), nil)
 	if err != nil {
-		return nil, false
+		return nil, false, false
 	}
 	resp, err := r.httpClient.Do(req)
 	if err != nil {
-		return nil, false
+		return nil, false, lateRead(err)
 	}
 	defer httpx.CloseBody(resp.Body)
-	var members []memberHealth
 	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&members) != nil {
-		return nil, false
+		return nil, false, lateRead(pctx.Err())
 	}
-	return members, true
+	return members, true, false
 }
 
 // Endpoints returns the production activator.Endpoints (the seam ADR-0016 deferred to P-M):

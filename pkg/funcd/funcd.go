@@ -887,6 +887,7 @@ func (p *Platform) buildControlPlane() error {
 		SupervisionPeriod:    c.pacing.SupervisionPeriod,
 		BootTimeout:          c.pacing.BootTimeout,
 		LivenessTimeout:      c.pacing.livenessTimeout(),
+		ReadinessTimeout:     c.pacing.ReadinessTimeout,
 		DrainGrace:           c.pacing.DrainGrace,
 		HandOutSettle:        c.pacing.HandOutSettle,
 		DrainPollInterval:    c.pacing.DrainPollInterval,

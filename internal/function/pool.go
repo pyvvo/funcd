@@ -232,10 +232,11 @@ func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pool
 		case handedOut && servesCurrent:
 			judge = []runtime.Instance{w}
 		case oldOut && v.serving:
-			_, m, ok, _ := r.memberIn(ctx, a.Key, []runtime.Instance{w}, fn.Name)
-			if ok && m.State == memberReady {
+			mr, _ := r.memberIn(ctx, a.Key, []runtime.Instance{w}, fn.Name)
+			if mr.ok && mr.m.State == memberReady {
 				v.ready = 1
 			}
+			v.readUntil, v.silent = mr.until, mr.silent
 			v.running, v.switching, v.booting, v.currentCrashLoop = 1, true, pass.running > 0, crash
 			return v, pass.drainAfter, nil
 		default:
@@ -247,9 +248,11 @@ func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pool
 		if v.running == 0 {
 			return v, pass.drainAfter, nil
 		}
-		in, m, ok, _ := r.memberIn(ctx, a.Key, judge, fn.Name)
+		mr, _ := r.memberIn(ctx, a.Key, judge, fn.Name)
+		in, m := mr.in, mr.m
+		v.readUntil, v.silent = mr.until, mr.silent
 		switch {
-		case !ok:
+		case !mr.ok:
 		case m.State == memberReady && m.Dependency != nil:
 			// judged by its own entry alone: its siblings and the pool host are unaffected (ADR-0215 Decision 5)
 			v.report = m.Dependency
@@ -315,25 +318,46 @@ type memberHealth struct {
 	Dependency *local.DependencyReport `json:"dependency,omitempty"`
 }
 
-// memberIn reads member's entry from the newest running pool worker among insts, key's pool workers; ok is false when
-// there is none, it does not answer or it has no entry for member, and err is set only when it does not answer. The
-// returned Instance is zero exactly when no running pool worker has a port to ask. An answer counts as that pool
-// worker's liveness.
-func (r *Reconciler) memberIn(ctx context.Context, key pooling.PoolKey, insts []runtime.Instance, member v1.ObjectName) (runtime.Instance, memberHealth, bool, error) {
-	if in, ok := newestPool(insts, func(in runtime.Instance) bool { return in.State == runtime.StateRunning && in.Port > 0 }); ok {
-		members, ok := r.probeMembers(ctx, in.IP, in.Port)
-		if !ok {
-			return in, memberHealth{}, false, fault.Unavailablef("function.memberIn", "pool worker %s did not answer %s", in.ID, membersPath)
-		}
-		r.markLive(in.ID, r.clock.Now())
-		for _, m := range members {
-			if m.Name == string(member) {
-				return in, m, true, nil
-			}
-		}
-		return in, memberHealth{}, false, nil
+// memberRead is member's entry as memberIn read it: the pool worker asked, zero exactly when no running pool worker has
+// a port to ask; the entry, with ok when there is one; and where the read stands in the worker's readiness window
+// (ADR-0259).
+type memberRead struct {
+	in runtime.Instance
+	m  memberHealth
+	ok bool
+	readWindow
+}
+
+// memberIn reads member's entry from the newest running pool worker among insts, key's pool workers, through the
+// worker's read record: a read that runs past probeTimeout counts by the worker's last answer while its window lasts
+// (ADR-0259 Decisions 1 and 2). ok is false when there is no worker, it has no entry for member, or the answer it counts
+// by is no member list; err is set only in that last case. Only a member list counts as that pool worker's liveness.
+func (r *Reconciler) memberIn(ctx context.Context, key pooling.PoolKey, insts []runtime.Instance, member v1.ObjectName) (memberRead, error) {
+	in, ok := newestPool(insts, func(in runtime.Instance) bool { return in.State == runtime.StateRunning && in.Port > 0 })
+	if !ok {
+		return memberRead{}, nil
 	}
-	return runtime.Instance{}, memberHealth{}, false, nil
+	now := r.clock.Now()
+	members, listed, late := r.probeMembers(ctx, in.IP, in.Port)
+	var got *readAnswer
+	if !late {
+		got = &readAnswer{members: members, listed: listed}
+	}
+	if listed {
+		r.markLive(in.ID, now)
+	}
+	a, w := r.settleRead(in, now, got)
+	mr := memberRead{in: in, readWindow: w}
+	if a == nil || !a.listed {
+		return mr, fault.Unavailablef("function.memberIn", "pool worker %s did not answer %s", in.ID, membersPath)
+	}
+	for _, m := range a.members {
+		if m.Name == string(member) {
+			mr.m, mr.ok = m, true
+			break
+		}
+	}
+	return mr, nil
 }
 
 // poolListened reports whether pool worker in has listened. A listened worker the runtime lists without an address is
@@ -837,6 +861,7 @@ func (r *Reconciler) createPool(ctx context.Context, key pooling.PoolKey, sig st
 	if cerr != nil {
 		return nil, fault.Wrapf(cerr, fault.KindOf(cerr), op, "create pool worker")
 	}
+	r.forgetRead(inst.ID)
 	return r.startPoolInstance(ctx, []runtime.Instance{inst}), nil
 }
 
@@ -1102,7 +1127,11 @@ func (r *Reconciler) switchDue(ctx context.Context, d poolDrain, next runtime.In
 	if len(awaited) == 0 || r.materializer == nil {
 		return true
 	}
-	members, ok := r.probeMembers(ctx, next.IP, next.Port)
+	members, ok, late := r.probeMembers(ctx, next.IP, next.Port)
+	if !late {
+		// a real answer, recorded for next's later reads; the switch itself never counts by a kept one (ADR-0259)
+		r.settleRead(next, now, &readAnswer{members: members, listed: ok})
+	}
 	if !ok {
 		return false
 	}
@@ -1133,8 +1162,8 @@ func (r *Reconciler) endPoolDrain(key pooling.PoolKey) {
 	delete(r.poolDrains, key)
 }
 
-// forgetPool drops all r keeps for the reclaimed pool worker named name in ns: its drain, liveness, boot counts,
-// manifest and member set.
+// forgetPool drops all r keeps for the reclaimed pool worker named name in ns: its drain, liveness and read records,
+// boot counts, manifest and member set.
 func (r *Reconciler) forgetPool(ns v1.NamespaceName, name v1.ObjectName) {
 	r.boot.forget(backoffPrefix(ns, name))
 	ofPool := func(key pooling.PoolKey) bool { return key.Namespace == ns && poolInstanceName(key) == name }

@@ -83,23 +83,31 @@ func (r *Reconciler) hung(id runtime.InstanceID, now time.Time) bool {
 	return now.Sub(latest) >= r.livenessTimeout
 }
 
-// forgetLive drops the liveness of every worker named name in ns.
+// forgetLive drops the liveness and the read record of every worker named name in ns.
 func (r *Reconciler) forgetLive(ns v1.NamespaceName, name v1.ObjectName) {
 	prefix := string(ns) + "/" + string(name) + "/"
 	r.liveMu.Lock()
-	defer r.liveMu.Unlock()
 	for id := range r.live {
 		if strings.HasPrefix(string(id), prefix) {
 			delete(r.live, id)
 		}
 	}
+	r.liveMu.Unlock()
+	r.readMu.Lock()
+	defer r.readMu.Unlock()
+	for id := range r.reads {
+		if strings.HasPrefix(string(id), prefix) {
+			delete(r.reads, id)
+		}
+	}
 }
 
-// forgetWorker drops worker id's liveness.
+// forgetWorker drops worker id's liveness and read record.
 func (r *Reconciler) forgetWorker(id runtime.InstanceID) {
 	r.liveMu.Lock()
-	defer r.liveMu.Unlock()
 	delete(r.live, id)
+	r.liveMu.Unlock()
+	r.forgetRead(id)
 }
 
 // restartHung retires each running, listening replica of revision rev below `below` that is hung on its liveness,
@@ -145,23 +153,24 @@ func (r *Reconciler) probeOK(ctx context.Context, ip string, port int, path stri
 }
 
 // probeReadiness issues GET /health/readiness against a shim (ADR-0030 §4b): ready on a 200; a 503 whose JSON body
-// names a kind is a dependency report (ADR-0215 Decision 5); any other answer is not ready with no report.
-func (r *Reconciler) probeReadiness(ctx context.Context, ip string, port int) (bool, *local.DependencyReport) {
+// names a kind is a dependency report (ADR-0215 Decision 5); any other answer or failed connection is not ready with no
+// report. late is set when the read ran past probeTimeout (ADR-0259 Decision 1).
+func (r *Reconciler) probeReadiness(ctx context.Context, ip string, port int) (ready bool, report *local.DependencyReport, late bool) {
 	resp, err := r.probe(ctx, ip, port, readinessPath)
 	if err != nil {
-		return false, nil
+		return false, nil, lateRead(err)
 	}
 	defer httpx.CloseBody(resp.Body)
 	switch resp.StatusCode {
 	case http.StatusOK:
-		return true, nil
+		return true, nil, false
 	case http.StatusServiceUnavailable:
 		var rep local.DependencyReport
 		if json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&rep) == nil && rep.Kind != "" {
-			return false, &rep
+			return false, &rep, false
 		}
 	}
-	return false, nil
+	return false, nil, false
 }
 
 func (r *Reconciler) probe(ctx context.Context, ip string, port int, path string) (*http.Response, error) {

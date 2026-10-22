@@ -98,6 +98,7 @@ func TestScenarioDefaultsEqualTodaysValues(t *testing.T) {
 		LivenessTimeout:        30 * time.Second,
 		StorageProbeInterval:   10 * time.Second,
 		StorageProbeTimeout:    2 * time.Second,
+		ReadinessTimeout:       5 * time.Second,
 	}, p)
 }
 
@@ -223,6 +224,7 @@ func TestPacingMapsEveryKey(t *testing.T) {
 		LivenessTimeout:        30 * time.Second,
 		StorageProbeInterval:   10 * time.Second,
 		StorageProbeTimeout:    2 * time.Second,
+		ReadinessTimeout:       5 * time.Second,
 	}, p)
 }
 
@@ -359,4 +361,27 @@ func TestScenarioHealthLivenessConfig(t *testing.T) {
 	opts, closeExec, _, _, err := buildOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
 	require.NoError(t, err, "exactly twice the period starts")
 	release(t, opts, closeExec)
+}
+
+// scenario: readiness-timeout-config — runtime.readinessTimeout defaults to 5s and is read from the file or
+// FUNCD_RUNTIME_READINESS_TIMEOUT as a positive duration; 0s, -1s or a malformed value refuses to start, naming the key.
+func TestScenarioReadinessTimeoutConfig(t *testing.T) {
+	for body, want := range map[string]time.Duration{"": 5 * time.Second, pacingYAML("runtime.readinessTimeout", "2s"): 2 * time.Second} {
+		p, err := pacing(loadPacing(t, body))
+		require.NoError(t, err)
+		require.Equal(t, want, p.ReadinessTimeout)
+	}
+	t.Run("env", func(t *testing.T) {
+		t.Setenv("FUNCD_RUNTIME_READINESS_TIMEOUT", "3s")
+		p, err := pacing(loadPacing(t, ""))
+		require.NoError(t, err)
+		require.Equal(t, 3*time.Second, p.ReadinessTimeout)
+	})
+	for _, v := range []string{"0s", "-1s", "abc"} {
+		t.Run(v, func(t *testing.T) {
+			_, err := pacing(loadPacing(t, pacingYAML("runtime.readinessTimeout", v)))
+			require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
+			require.ErrorContains(t, err, `"runtime.readinessTimeout"`)
+		})
+	}
 }

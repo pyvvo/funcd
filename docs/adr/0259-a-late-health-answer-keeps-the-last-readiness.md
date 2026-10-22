@@ -1,9 +1,10 @@
 # ADR-0259: A late health answer keeps a worker's last readiness for `runtime.readinessTimeout`
 
-- **Status**: Accepted (2026-10-22). The decider chose option A on #1127 with the window as a config key, 5 s by
-  default, and accepted this text ("accept, ship it"), confirming the drafting agent's four choices: the rule on the
-  solo steady path too, only a timeout as late, the names, and no window for a worker with no recorded answer. Judged
-  twice: round 1's three Majors and six Minors and round 2's four Minors are folded in; round 2's verdict: accept.
+- **Status**: Reviewing (2026-10-22), implemented in the PR that closes #1127; Accepted (2026-10-22). The decider chose
+  option A on #1127 with the window as a config key, 5 s by default, and accepted this text ("accept, ship it"),
+  confirming the drafting agent's four choices: the rule on the solo steady path too, only a timeout as late, the names,
+  and no window for a worker with no recorded answer. Judged twice: round 1's three Majors and six Minors and round 2's
+  four Minors are folded in; round 2's verdict: accept.
 - **Date**: 2026-10-22
 - **Deciders**: green-0-rabbit
 - **Tags**: function, health, readiness, pooling, status, config
@@ -89,15 +90,15 @@ Fixture: a Ready Function, either pooled (one pool host) or solo (one replica, o
    `/health/members`, a body that is no member list (`memberIn` then fails, as today).
 2. **The window.** For each worker, funcd keeps in memory, beside its liveness record (ADR-0215 Decision 1), the
    worker's last answer and the time of the first late read after it. The record is keyed by the worker's id and
-   `CreatedAt`, and dropped whenever funcd creates a worker under that id, retires it or forgets its pool. For less
-   than `runtime.readinessTimeout` after that first late read, every readiness read of the worker counts by its last
-   answer: a solo replica by its verdict (ready, a dependency report, or not ready), a pool member by its entry in the
-   host's last member list. A kept answer is judged as it was when it arrived, so a kept non-200 or a body with no
-   member list makes `memberIn` fail. Any answer closes the window. A worker with no recorded answer counts as not
-   ready, as today, with today's reason and message. A kept answer never counts as liveness. The pool switch (ADR-0224 Decision
-   3), a placement step, keeps its own read of `next` and records that answer, but never counts by a kept one; a
-   revision switch, solo or pooled, counts a kept answer as every readiness judgment does, since a kept "ready" exists
-   only after a real one.
+   `CreatedAt`, and dropped whenever funcd creates a worker under that id, retires it or forgets its pool. For less than
+   `runtime.readinessTimeout` after that first late read, every readiness read of the worker counts by its last answer:
+   a solo replica by its verdict (ready, a dependency report, or not ready), a pool member by its entry in the host's
+   last member list. A kept answer is judged as it was when it arrived, so a kept non-200 or a body with no member list
+   makes `memberIn` fail. Any answer closes the window. A worker with no recorded answer counts as not ready, as today,
+   with today's reason and message. A kept answer never counts as liveness. The pool switch (ADR-0224 Decision 3), a
+   placement step, keeps its own read of `next` and records that answer, but never counts by a kept one; a revision
+   switch, solo or pooled, counts a kept answer as every readiness judgment does, since a kept "ready" exists only after
+   a real one.
 3. **Past the window.** The read counts as not ready, as today, with one change to the status: where a serving
    Function or held revision has no ready worker and every worker it judges runs and is late past its window, the
    phase is `Degraded`, with `Ready=False`, reason `NotAnswering` and the placement's message (table below), instead of
@@ -152,12 +153,12 @@ const reasonNotAnswering = "NotAnswering" // Ready's reason past the window (ADR
     returns the answer it counts by and its window: the end of a kept read's window, or the window when late past it),
     `readReadiness` for solo replicas, and `lateRead` (a deadline passed: `context.DeadlineExceeded` or a `net.Error`
     whose `Timeout()` is true).
-  - Seams: `probeReadiness` and `probeMembers` also return whether the read was late; `memberIn` returns a
-    `memberRead` (worker, entry, ok, window); `steadyState` returns `(steady, until)`; `verdict` and `readiness` gain
-    `readUntil` and `silent`. `readyReplicas` sets `silent` only when every replica it judges, an exited one waiting
-    to be created again included, runs and is late past its window. `finish`, `writeHeld`, `record` and the steady return in `Reconcile` follow Decisions 3 and 4.
-    `switchDue` records its answer. `forgetRead` runs at each worker `Create`; `forgetWorker` and `forgetLive` also
-    drop records.
+  - Seams: `probeReadiness` and `probeMembers` also return whether the read was late; `memberIn` returns a `memberRead`
+    (worker, entry, ok, window); `steadyState` returns `(steady, until)`; `verdict` and `readiness` gain `readUntil` and
+    `silent`. `readyReplicas` sets `silent` only when every replica it judges, an exited one waiting to be created again
+    included, runs and is late past its window. `finish`, `writeHeld`, `record` and the steady return in `Reconcile`
+    follow Decisions 3 and 4. `switchDue` records its answer. `forgetRead` runs at each worker `Create`; `forgetWorker`
+    and `forgetLive` also drop records.
   - Tests on the fake clock, with workers that answer only after `probeTimeout`: one per scenario, named after it,
     for both placements; `TestIssue1127_LateMembersAnswerKeepsReady` (no status write for one late answer); a solo
     full pass in the window; an exit beside a replica late past its window, which keeps `Restarting`; a reset
@@ -190,8 +191,9 @@ const reasonNotAnswering = "NotAnswering" // Ready's reason past the window (ADR
   operator sets the window.
 - **Negative**: a worker that hangs while it still runs keeps its last readiness for up to the window, so calls can
   reach it meanwhile and wait out their own timeout. A steady solo Function whose readiness stays late for the window
-  turns `Degraded`, where today it stays Ready while its liveness answers; an answered non-200 with no report still
-  does not end its steady state. Each window costs one extra pass, at its end. funcd keeps one more record per worker in memory.
+  turns `Degraded`, where today it stays Ready while its liveness answers; an answered non-200 with no report still does
+  not end its steady state. Each window costs one extra pass, at its end. funcd keeps one more record per worker in
+  memory.
 - **Risks accepted**: a worker with no recorded answer, none since it was created or since funcd started, keeps
   today's judgment for as long as its reads stay late: a pooled member reads `Degraded` with today's message "a
   replica exited and is being replaced", and a steady solo replica stays Ready. This is no worse than today.

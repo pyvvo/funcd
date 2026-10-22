@@ -243,6 +243,9 @@ type Config struct {
 		// (ADR-0215): a positive duration, when set at least twice supervisionPeriod; empty ⇒ max(30s, three
 		// supervisionPeriod), derived in cmd/funcd.
 		LivenessTimeout string `json:"livenessTimeout,omitempty" env:"FUNCD_RUNTIME_LIVENESS_TIMEOUT"`
+		// ReadinessTimeout is the window in which a worker whose readiness reads run late keeps its last answer, not the
+		// bound of one probe (ADR-0259): a positive duration; empty ⇒ 5s.
+		ReadinessTimeout string `json:"readinessTimeout,omitempty" env:"FUNCD_RUNTIME_READINESS_TIMEOUT"`
 		// Process tunes the process driver (ADR-0167): StopGrace is the wait after SIGTERM before SIGKILL for a stop,
 		// the shutdown close and the boot reap, a duration with 0 < d <= 10s.
 		Process struct {

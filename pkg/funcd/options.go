@@ -805,6 +805,9 @@ type Pacing struct {
 	// and StorageProbeTimeout pace the storage probes: zero ⇒ 10s and 2s; the effective timeout is less than the
 	// effective interval.
 	LivenessTimeout, StorageProbeInterval, StorageProbeTimeout time.Duration
+	// ReadinessTimeout is the window in which a worker whose readiness reads run late keeps its last answer (ADR-0259):
+	// zero ⇒ 5s.
+	ReadinessTimeout time.Duration
 }
 
 // The defaults WithPacing checks its orderings against: the components' own zero defaults.

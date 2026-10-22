@@ -181,6 +181,7 @@ runtime:
   # handOutSettle: 2s             # idle-after-hand-out wait; at most drainGrace. default: 2s
   # drainPollInterval: 1s         # longest gap between drain passes. default: 1s
   # livenessTimeout: 30s          # a listening replica silent on /health/liveness this long is restarted (ADR-0215); when set, at least twice supervisionPeriod. default: 30s, or three supervisionPeriod when larger
+  # readinessTimeout: 5s          # window, not a probe's bound: a worker whose readiness reads run late keeps its last answer this long, then counts as not ready (ADR-0259). default: 5s
   process:
     stopGrace: 3s                 # SIGTERM-to-SIGKILL wait for stop, shutdown and the boot reap (ADR-0167); 0 < d <= 10s. default: 3s; server.shutdownTimeout + stopGrace + 5s must fit TimeoutStopSec
   # containerd:                   # used only when mode: containerd

@@ -841,7 +841,7 @@ type pacingKey struct {
 }
 
 // pacing parses the ADR-0163 keys, app.upgradeTimeout (ADR-0200), runtime.livenessTimeout and the health keys
-// (ADR-0215) with parseDuration and their bounds (ADR-0194), then checks ADR-0163 Decision 5's orderings, that a set
+// (ADR-0215) and runtime.readinessTimeout (ADR-0259) with parseDuration and their bounds (ADR-0194), then checks ADR-0163 Decision 5's orderings, that a set
 // app.upgradeTimeout is more than runtime.bootTimeout, that a set runtime.livenessTimeout is at least twice
 // runtime.supervisionPeriod and that health.storageProbeTimeout is less than health.storageProbeInterval, each failure a
 // fault.Invalid naming the first key with the other bound. An unset app.upgradeTimeout is max(5m, twice
@@ -871,6 +871,7 @@ func pacing(cfg config.Config) (funcd.Pacing, error) {
 		{"server.network.workerSyncInterval", cfg.Server.Network.WorkerSyncInterval, 2 * time.Second, &p.WorkerSyncInterval, minPositive, v1.MaxDuration},
 		{"app.upgradeTimeout", cfg.App.UpgradeTimeout, 0, &p.AppUpgradeTimeout, minPositive, v1.MaxDuration},
 		{"runtime.livenessTimeout", cfg.Runtime.LivenessTimeout, 0, &p.LivenessTimeout, minPositive, v1.MaxDuration},
+		{"runtime.readinessTimeout", cfg.Runtime.ReadinessTimeout, 5 * time.Second, &p.ReadinessTimeout, minPositive, v1.MaxDuration},
 		{"health.storageProbeInterval", cfg.Health.StorageProbeInterval, 10 * time.Second, &p.StorageProbeInterval, minPositive, v1.MaxDuration},
 		{"health.storageProbeTimeout", cfg.Health.StorageProbeTimeout, 2 * time.Second, &p.StorageProbeTimeout, minPositive, v1.MaxDuration},
 	}

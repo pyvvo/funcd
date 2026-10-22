@@ -91,6 +91,14 @@ func (h *shimHarness) requireGateCleared(t *testing.T, name string) {
 	h.requireCondition(t, name, "Ready", v1.ConditionTrue, "")
 }
 
+// stallPastProbe holds request r until its client gives up, at most a second: past the harness's probe timeout.
+func stallPastProbe(r *http.Request) {
+	select {
+	case <-r.Context().Done():
+	case <-time.After(time.Second):
+	}
+}
+
 // serveStalling gives revision rev a readiness endpoint that answers 200 until stall is called, then answers only
 // after the probe has timed out.
 func (f *fakeRuntime) serveStalling(t *testing.T, rev v1.ObjectName) (stall func()) {
@@ -98,10 +106,7 @@ func (f *fakeRuntime) serveStalling(t *testing.T, rev v1.ObjectName) (stall func
 	var stalled atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if stalled.Load() && r.URL.Path == "/health/readiness" {
-			select {
-			case <-r.Context().Done():
-			case <-time.After(time.Second):
-			}
+			stallPastProbe(r)
 		}
 		w.WriteHeader(http.StatusOK)
 	}))

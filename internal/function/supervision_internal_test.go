@@ -50,7 +50,7 @@ func TestIssue236_ReadinessProbeReusesConnection(t *testing.T) {
 
 	r := newShimReconciler(t, fakeResolver{})
 	for range 50 {
-		ok, _ := r.probeReadiness(context.Background(), addr.IP.String(), addr.Port)
+		ok, _, _ := r.probeReadiness(context.Background(), addr.IP.String(), addr.Port)
 		require.True(t, ok)
 	}
 	require.EqualValues(t, 1, conns.Load(), "50 probes must share one keep-alive connection")
