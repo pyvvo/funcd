@@ -627,22 +627,21 @@ func TestBudgetTimeCoversDocumentBinding(t *testing.T) {
 }
 
 // A defaulted field is bound once per evaluation, however many references read it: Check records each
-// defaulted path once, so binding the documents decodes each default once.
+// defaulted path once, so binding the documents decodes each default once. The bound is on allocations, which a binding
+// per reference multiplies by 800; a wall-clock bound fails under -race on a loaded host (#1170).
 func TestDefaultIsBoundOncePerPath(t *testing.T) {
 	def := json.RawMessage(`{"s":"` + strings.Repeat("z", 250<<10) + `"}`)
 	r := fakeResolver{roots: []string{"input"}, fields: map[string]Field{"input|big": {Type: "object", HasDefault: true, Default: def}}}
 	x := mustCheck(t, "${{ "+strings.Repeat("input.big !== undefined && ", 800)+"true }}", Condition, r)
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
-	start := time.Now()
 	ok, err := x.EvalBool(docs("input", `{}`))
-	took := time.Since(start)
 	runtime.ReadMemStats(&after)
 	if err != nil || !ok {
 		t.Fatalf("800 references to a defaulted field: ok=%v err=%v, want true", ok, err)
 	}
-	if n := after.TotalAlloc - before.TotalAlloc; n > 16<<20 || took > 500*time.Millisecond {
-		t.Errorf("800 references to a 250 KiB default: allocated %d MiB in %v, want one decoding of it", n>>20, took)
+	if n := after.TotalAlloc - before.TotalAlloc; n > 16<<20 {
+		t.Errorf("800 references to a 250 KiB default: allocated %d MiB, want one decoding of it", n>>20)
 	}
 }
 

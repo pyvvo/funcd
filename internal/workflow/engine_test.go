@@ -341,13 +341,14 @@ func TestIssue308_GuardOnAbsentFieldIsFalse(t *testing.T) {
 // A condition is checked against the run's documents and their run-pinned schemas before it is
 // evaluated: each document and schema is decoded once per check, however many references the condition
 // makes, so a long condition over a large document costs about one decoding of it. The bound is on what the check
-// allocates, which a decoding per reference multiplies by 800; a wall-clock bound failed under -race on a loaded host
-// while the allocations held (#1170).
+// allocates, which a decoding per reference multiplies by 800: the schema's padding is a property's default, which the
+// check decodes, so a schema decoded per reference allocates it 800 times too. A wall-clock bound failed under -race
+// on a loaded host while the allocations held (#1170).
 func TestConditionCheckDecodesEachDocumentOnce(t *testing.T) {
 	e := newTestEngine(t, newFake(), Config{})
 	in := json.RawMessage(`{"pad":"` + strings.Repeat("z", 250<<10) + `","n":1}`)
-	schema := json.RawMessage(`{"type":"object","description":"` + strings.Repeat("d", 250<<10) +
-		`","properties":{"n":{"type":"number"},"m":{"type":"number","default":2}}}`)
+	schema := json.RawMessage(`{"type":"object","properties":{"pad":{"type":"string","default":"` + strings.Repeat("d", 250<<10) +
+		`"},"n":{"type":"number"},"m":{"type":"number","default":2}}}`)
 	rec := &runstate.Record{Contract: &v1.WorkflowContract{Input: schema}}
 	for _, ref := range []string{"input.n === 1", "input.m === 2"} {
 		cond := "${{ " + strings.Repeat(ref+" && ", 800) + "true }}"
