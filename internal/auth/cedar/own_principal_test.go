@@ -10,15 +10,15 @@ import (
 	"github.com/pyvvo/funcd/internal/auth"
 )
 
-// lakeS3Meta is one namespace where CatalogService "lake" binds lakehouse/raw and, when withFn, Function "lake"
+// lakeS3Meta is one namespace where Lake "lake" binds lakehouse/raw and, when withFn, Function "lake"
 // binds fnBlob. The raw prefix's owner is the name "lake".
 func lakeS3Meta(withFn bool, fnBlob ...v1.FunctionBlob) s3Meta {
 	m := s3Meta{
 		fns: map[string]*v1.Function{},
-		css: map[string]*v1.CatalogService{
+		css: map[string]*v1.Lake{
 			"default/lake": {
 				ObjectMeta: v1.ObjectMeta{Name: "lake", Namespace: "default", ResourceGroup: "rg1"},
-				Spec:       v1.CatalogServiceSpec{Bindings: v1.CatalogServiceBindings{Blob: []v1.FunctionBlob{{Alias: "raw", Bucket: "lakehouse", Prefix: "raw"}}}},
+				Spec:       v1.LakeSpec{Bindings: v1.LakeBindings{Blob: []v1.FunctionBlob{{Alias: "raw", Bucket: "lakehouse", Prefix: "raw"}}}},
 			},
 		},
 		buckets: map[string]*v1.Bucket{
@@ -40,7 +40,7 @@ func lakeS3Meta(withFn bool, fnBlob ...v1.FunctionBlob) s3Meta {
 	return m
 }
 
-// scenario: engine-s3-bindings-are-its-own — with Function lake (no spec.blob) beside CatalogService lake bound to
+// scenario: engine-s3-bindings-are-its-own — with Function lake (no spec.blob) beside Lake lake bound to
 // raw/, the engine reads raw/ and the Function does not.
 func TestScenarioEngineS3BindingsAreItsOwn(t *testing.T) {
 	t.Parallel()
@@ -52,7 +52,7 @@ func TestScenarioEngineS3BindingsAreItsOwn(t *testing.T) {
 	require.False(t, fn.Allowed, "the Function does not read with the engine's bindings")
 }
 
-// scenario: function-s3-bindings-are-its-own — with Function lake bound to a/ and CatalogService lake bound only
+// scenario: function-s3-bindings-are-its-own — with Function lake bound to a/ and Lake lake bound only
 // to raw/, the engine does not read a/ and the Function does.
 func TestScenarioFunctionS3BindingsAreItsOwn(t *testing.T) {
 	t.Parallel()

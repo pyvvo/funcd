@@ -388,7 +388,7 @@ func TestWatchSkipsTheSessionState(t *testing.T) {
 	p, err := resolvePersistPlan(devConfig{persist: true, persistTo: root})
 	require.NoError(t, err)
 	skips := p.watchSkips(filepath.Join(root, "process"))
-	for _, sub := range []string{"metastore", "kv", "blob", "catalog", "sql", "bundles", "process"} {
+	for _, sub := range []string{"metastore", "kv", "blob", "lake", "sql", "bundles", "process"} {
 		require.Contains(t, skips, filepath.Join(root, sub))
 	}
 }
@@ -610,7 +610,7 @@ func TestResolvePersistPlanPersistSubdirs(t *testing.T) {
 	require.Equal(t, filepath.Join(root, "metastore"), p.storeDir)
 	require.Equal(t, filepath.Join(root, "kv"), p.kvDir)
 	require.Equal(t, filepath.Join(root, "blob"), p.blobDir)
-	require.Equal(t, filepath.Join(root, "catalog"), p.catalogDir, "--persist makes the DuckLake catalog durable")
+	require.Equal(t, filepath.Join(root, "lake"), p.lakeDir, "--persist makes the DuckLake catalog durable")
 	require.Equal(t, filepath.Join(root, "sql"), p.sqlDir)
 	require.Equal(t, filepath.Join(root, "bundles"), p.bundleDir, "--persist keeps bundles at one path (#1053)")
 }

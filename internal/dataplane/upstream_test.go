@@ -33,7 +33,7 @@ import (
 )
 
 // TestScenarioDataPlaneServesUpstreamBackend covers ADR-0138: a matched Upstream (node-private
-// reverse-proxy) edge entry is reverse-proxied to the in-daemon target — the catalog::query PEP proxy
+// reverse-proxy) edge entry is reverse-proxied to the in-daemon target — the lake::query PEP proxy
 // path — with the matched prefix stripped so the upstream is addressed at its own root, and NO
 // activator hop / Function resolve.
 func TestScenarioDataPlaneServesUpstreamBackend(t *testing.T) {
@@ -51,7 +51,7 @@ func TestScenarioDataPlaneServesUpstreamBackend(t *testing.T) {
 	require.NoError(t, rtr.Program(context.Background(), []router.Entry{{
 		Namespace: "default",
 		Auth:      v1.AuthOpen,
-		Rules:     []router.CompiledRule{{Path: "/catalog/lake", Upstream: up.URL}},
+		Rules:     []router.CompiledRule{{Path: "/lake/lake", Upstream: up.URL}},
 	}}, nil))
 
 	st := store.New(memory.New())
@@ -60,10 +60,10 @@ func TestScenarioDataPlaneServesUpstreamBackend(t *testing.T) {
 	h := dataplane.Handler(st, act, rtr, "", nil, nil, nil, 0, nil)
 
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/catalog/lake/db", nil))
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/lake/lake/db", nil))
 
 	require.Equal(t, http.StatusForbidden, rec.Code, "the upstream's own response (fail-closed 403) is proxied back verbatim")
-	require.Equal(t, "/db", gotPath, "the matched prefix /catalog/lake is stripped — the upstream is addressed at its root")
+	require.Equal(t, "/db", gotPath, "the matched prefix /lake/lake is stripped — the upstream is addressed at its root")
 }
 
 // TestScenarioDataPlaneUpstreamUnreachable covers the 502 path: a programmed Upstream that can't be
@@ -74,7 +74,7 @@ func TestScenarioDataPlaneUpstreamUnreachable(t *testing.T) {
 	require.NoError(t, rtr.Program(context.Background(), []router.Entry{{
 		Namespace: "default",
 		Auth:      v1.AuthOpen,
-		Rules:     []router.CompiledRule{{Path: "/catalog/lake", Upstream: "http://127.0.0.1:1"}}, // nothing listens
+		Rules:     []router.CompiledRule{{Path: "/lake/lake", Upstream: "http://127.0.0.1:1"}}, // nothing listens
 	}}, nil))
 	st := store.New(memory.New())
 	act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
@@ -82,7 +82,7 @@ func TestScenarioDataPlaneUpstreamUnreachable(t *testing.T) {
 	h := dataplane.Handler(st, act, rtr, "", nil, nil, nil, 0, nil)
 
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/catalog/lake", nil))
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/lake/lake", nil))
 	require.GreaterOrEqual(t, rec.Code, 500, "an unreachable upstream is a 5xx, not a panic")
 }
 
@@ -107,7 +107,7 @@ func TestIssue417_UpstreamRouteKeepsEdgeHeadersAfter1xx(t *testing.T) {
 	require.NoError(t, rtr.Program(t.Context(), []router.Entry{{
 		Namespace: "default",
 		Auth:      v1.AuthOpen,
-		Rules:     []router.CompiledRule{{Path: "/catalog/lake", Upstream: up.URL}},
+		Rules:     []router.CompiledRule{{Path: "/lake/lake", Upstream: up.URL}},
 	}}, nil))
 	st := store.New(memory.New())
 	act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
@@ -139,7 +139,7 @@ func TestIssue417_UpstreamRouteKeepsEdgeHeadersAfter1xx(t *testing.T) {
 			if tc.body != nil {
 				method = http.MethodPost
 			}
-			req, err := http.NewRequestWithContext(httptrace.WithClientTrace(t.Context(), trace), method, edge.URL+"/catalog/lake"+tc.path, tc.body)
+			req, err := http.NewRequestWithContext(httptrace.WithClientTrace(t.Context(), trace), method, edge.URL+"/lake/lake"+tc.path, tc.body)
 			require.NoError(t, err)
 			req.Header.Set("Origin", "https://app.example")
 			if tc.body != nil {
@@ -186,7 +186,7 @@ func TestIssue720_EdgeHeadersNotDuplicated(t *testing.T) {
 	require.NoError(t, rtr.Program(t.Context(), []router.Entry{{
 		Namespace: "default",
 		Auth:      v1.AuthOpen,
-		Rules:     []router.CompiledRule{{Path: "/catalog/lake", Upstream: up.URL}},
+		Rules:     []router.CompiledRule{{Path: "/lake/lake", Upstream: up.URL}},
 	}}, nil))
 	st := store.New(memory.New())
 	act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: up.URL}, Scaler: noScaler{}})
@@ -198,7 +198,7 @@ func TestIssue720_EdgeHeadersNotDuplicated(t *testing.T) {
 	client := &http.Client{Transport: &http.Transport{}}
 	t.Cleanup(client.CloseIdleConnections)
 
-	for _, route := range []string{"/function/f", "/catalog/lake"} {
+	for _, route := range []string{"/function/f", "/lake/lake"} {
 		for _, fn := range []string{"both", "wildcard", "nothing", "upgrade"} {
 			t.Run(strings.TrimPrefix(route, "/")+"/"+fn, func(t *testing.T) {
 				req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, edge.URL+route+"?fn="+fn, nil)
@@ -261,7 +261,7 @@ func TestIssue440_UpstreamErrorsLogThroughSlog(t *testing.T) {
 			require.NoError(t, rtr.Program(context.Background(), []router.Entry{{
 				Namespace: "default",
 				Auth:      v1.AuthOpen,
-				Rules:     []router.CompiledRule{{Path: "/catalog/lake", Upstream: tc.upstream}},
+				Rules:     []router.CompiledRule{{Path: "/lake/lake", Upstream: tc.upstream}},
 			}}, nil))
 			st := store.New(memory.New())
 			act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
@@ -269,7 +269,7 @@ func TestIssue440_UpstreamErrorsLogThroughSlog(t *testing.T) {
 			var logs bytes.Buffer
 			h := dataplane.Handler(st, act, rtr, "", nil, nil, nil, 0, slog.New(slog.NewTextHandler(&logs, nil)))
 
-			h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/catalog/lake/db", nil))
+			h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/lake/lake/db", nil))
 
 			require.Contains(t, logs.String(), tc.logged)
 			require.Equal(t, tc.warns, strings.Count(logs.String(), "level=WARN"), logs.String())
@@ -300,7 +300,7 @@ func TestIssue564_DataPlaneUpstreamSurvivesDefaultTransportCloseIdle(t *testing.
 	require.NoError(t, rtr.Program(context.Background(), []router.Entry{{
 		Namespace: "default",
 		Auth:      v1.AuthOpen,
-		Rules:     []router.CompiledRule{{Path: "/catalog/lake", Upstream: up.URL}},
+		Rules:     []router.CompiledRule{{Path: "/lake/lake", Upstream: up.URL}},
 	}}, nil))
 	st := store.New(memory.New())
 	act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
@@ -308,7 +308,7 @@ func TestIssue564_DataPlaneUpstreamSurvivesDefaultTransportCloseIdle(t *testing.
 	h := dataplane.Handler(st, act, rtr, "", nil, nil, nil, 0, nil)
 	get := func() {
 		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/catalog/lake/db", nil))
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/lake/lake/db", nil))
 		require.Equal(t, http.StatusOK, rec.Code)
 	}
 
@@ -341,7 +341,7 @@ func TestUpstreamFailureProblemHidesUpstreamAddress(t *testing.T) {
 			require.NoError(t, rtr.Program(t.Context(), []router.Entry{{
 				Namespace: "default",
 				Auth:      v1.AuthOpen,
-				Rules:     []router.CompiledRule{{Path: "/catalog/lake", Upstream: tc.upstream}},
+				Rules:     []router.CompiledRule{{Path: "/lake/lake", Upstream: tc.upstream}},
 			}}, nil))
 			st := store.New(memory.New())
 			act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
@@ -350,7 +350,7 @@ func TestUpstreamFailureProblemHidesUpstreamAddress(t *testing.T) {
 			h := dataplane.Handler(st, act, rtr, "", nil, nil, nil, 0, slog.New(slog.NewTextHandler(&logs, nil)))
 
 			rec := httptest.NewRecorder()
-			h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/catalog/lake/db", nil))
+			h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/lake/lake/db", nil))
 
 			require.Equal(t, http.StatusServiceUnavailable, rec.Code)
 			require.Contains(t, rec.Body.String(), "urn:funcd:problem:unavailable")
@@ -374,7 +374,7 @@ func TestScenarioEdgeChunkedBodyOverCap(t *testing.T) {
 	require.NoError(t, rtr.Program(context.Background(), []router.Entry{{
 		Namespace: "default",
 		Auth:      v1.AuthOpen,
-		Rules:     []router.CompiledRule{{Path: "/catalog/lake", Upstream: up.URL}},
+		Rules:     []router.CompiledRule{{Path: "/lake/lake", Upstream: up.URL}},
 	}}, nil))
 	st := store.New(memory.New())
 	seedFunction(t, st, "echo")
@@ -386,7 +386,7 @@ func TestScenarioEdgeChunkedBodyOverCap(t *testing.T) {
 		name, path string
 		size       int
 	}{
-		{"upstream", "/catalog/lake/q", 64 << 10},
+		{"upstream", "/lake/lake/q", 64 << 10},
 		{"function", "/function/echo", 2 << 10},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -416,7 +416,7 @@ func TestUpstreamRouteNotBoundByInvokeDeadline(t *testing.T) {
 	require.NoError(t, rtr.Program(context.Background(), []router.Entry{{
 		Namespace: "default",
 		Auth:      v1.AuthOpen,
-		Rules:     []router.CompiledRule{{Path: "/catalog/lake", Upstream: up.URL}},
+		Rules:     []router.CompiledRule{{Path: "/lake/lake", Upstream: up.URL}},
 	}}, nil))
 	st := store.New(memory.New())
 	act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
@@ -424,7 +424,7 @@ func TestUpstreamRouteNotBoundByInvokeDeadline(t *testing.T) {
 	h := dataplane.Handler(st, act, rtr, "", nil, nil, nil, time.Second, nil)
 
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/catalog/lake", nil))
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/lake/lake", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, "late", rec.Body.String())
 }
@@ -466,7 +466,7 @@ func TestScenarioEdgeUpstreamBurstReusesConnections(t *testing.T) {
 	require.NoError(t, rtr.Program(context.Background(), []router.Entry{{
 		Namespace: "default",
 		Auth:      v1.AuthOpen,
-		Rules:     []router.CompiledRule{{Path: "/catalog/lake", Upstream: up.URL}},
+		Rules:     []router.CompiledRule{{Path: "/lake/lake", Upstream: up.URL}},
 	}}, nil))
 	st := store.New(memory.New())
 	act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
@@ -478,7 +478,7 @@ func TestScenarioEdgeUpstreamBurstReusesConnections(t *testing.T) {
 		for range wide {
 			wg.Go(func() {
 				rec := httptest.NewRecorder()
-				h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/catalog/lake/db", nil))
+				h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/lake/lake/db", nil))
 				if rec.Code != http.StatusOK {
 					t.Errorf("status %d, want 200", rec.Code)
 				}

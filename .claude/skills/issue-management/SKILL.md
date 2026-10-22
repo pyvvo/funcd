@@ -42,7 +42,7 @@ Every issue carries **exactly one `kind/`**, **exactly one `priority/`** and **a
 | `area/runtime` | Worker drivers, runtime shims and images, isolation — `internal/runtime`, `workernode` |
 | `area/control-plane` | API server, admission, controller engine, store — `internal/controlplane`, `controller`, `store`, `platform`, `pkg/funcd` |
 | `area/data-plane` | Invoke path — `internal/dataplane`, `edge`, `gateway`, `activator`, `route` |
-| `area/services` | Platform services and their providers — `internal/blob`, `kvstore`, `catalog`, `services`, `provider`, `site` |
+| `area/services` | Platform services and their providers — `internal/blob`, `kvstore`, `lake`, `services`, `provider`, `site` |
 | `area/eventing` | Bus, event sources, sensors, workflows — `internal/bus`, `eventing`, `sensor`, `workflow`, `expr` |
 | `area/security` | Authentication, authorization policies, secrets, egress — `internal/auth`, `secrets`, `network`, `envresolve` |
 | `area/observability` | Logs, traces, metrics — `internal/funclog` |

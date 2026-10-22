@@ -127,7 +127,7 @@ func TestScenarioBindingGrantStillSelfEnforces(t *testing.T) {
 	t.Parallel()
 	reg, err := NewRegistry(
 		[]Capability{KVCapability(), InvokeCapability(), S3Capability()},
-		[]PrincipalSource{FunctionPrincipalSource(), CatalogServicePrincipalSource()},
+		[]PrincipalSource{FunctionPrincipalSource(), LakePrincipalSource()},
 	)
 	require.NoError(t, err)
 
@@ -166,7 +166,7 @@ func TestScenarioAssembledSchemaCoversAll(t *testing.T) {
 	t.Parallel()
 	reg, err := NewRegistry(
 		[]Capability{KVCapability(), InvokeCapability(), S3Capability()},
-		[]PrincipalSource{FunctionPrincipalSource(), CatalogServicePrincipalSource()},
+		[]PrincipalSource{FunctionPrincipalSource(), LakePrincipalSource()},
 	)
 	require.NoError(t, err)
 
@@ -198,7 +198,7 @@ func TestScenarioUnmodeledPrincipalOrResourceFaults(t *testing.T) {
 	t.Parallel()
 	reg, err := NewRegistry(
 		[]Capability{KVCapability(), InvokeCapability(), S3Capability()},
-		[]PrincipalSource{FunctionPrincipalSource(), CatalogServicePrincipalSource()},
+		[]PrincipalSource{FunctionPrincipalSource(), LakePrincipalSource()},
 	)
 	require.NoError(t, err)
 	ep, err := reg.EntityProvider(regMeta{})

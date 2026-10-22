@@ -26,7 +26,7 @@ type MetaReader interface {
 }
 
 // NewEntityProvider builds the default metastore-backed EntityProvider (ADR-0074): the composite
-// provider assembled from the default capability registry (kv, invoke, s3 + the Function/CatalogService
+// provider assembled from the default capability registry (kv, invoke, s3 + the Function/Lake
 // sources). r is required. Consumers that register additional capabilities build their own Registry and
 // call (*Registry).EntityProvider directly (ADR-0116).
 func NewEntityProvider(r MetaReader) (EntityProvider, error) {
@@ -87,7 +87,7 @@ func (p registryProvider) EntitiesFor(ctx context.Context, principal, resource a
 			"resourceGroup": cedartypes.String(rg),
 		}
 		// Attach every capability's binding Set. A capability whose Bind returns nil for this source type
-		// contributes nothing (attr absent — e.g. kv/invoke for a CatalogService); a non-nil (possibly
+		// contributes nothing (attr absent — e.g. kv/invoke for a Lake); a non-nil (possibly
 		// empty) slice sets the attr (a Function always carries links/kvBindings/blobBindings, matching
 		// today's EntitiesFor — the built-ins `has`-guard, so empty ≡ absent).
 		for _, c := range p.reg.caps {
@@ -134,7 +134,7 @@ func principalMeta(obj PrincipalObject) (v1.NamespaceName, v1.ResourceGroupName)
 	switch o := obj.(type) {
 	case *v1.Function:
 		return o.Namespace, o.ResourceGroup
-	case *v1.CatalogService:
+	case *v1.Lake:
 		return o.Namespace, o.ResourceGroup
 	default:
 		return "", ""
@@ -144,7 +144,7 @@ func principalMeta(obj PrincipalObject) (v1.NamespaceName, v1.ResourceGroupName)
 // --- The driver request-path UID mappers (cedar.go builds the cedar Request from these) ------------
 
 // principalUID maps a principal EntityRef to its Cedar UID. A Function is the in-platform,
-// connection-scoped principal (KV/invoke/blob); a CatalogService is its engine's principal (ADR-0175);
+// connection-scoped principal (KV/invoke/blob); a Lake is its engine's principal (ADR-0175);
 // an S3Identity is the external SigV4 principal (ADR-0080). Any other type is an Internal fault (a
 // wiring bug).
 func principalUID(p auth.EntityRef) (cedartypes.EntityUID, error) {
@@ -155,10 +155,10 @@ func principalUID(p auth.EntityRef) (cedartypes.EntityUID, error) {
 		return s3IdentityUID(p.Namespace, p.Name), nil
 	case v1.KindIdentity:
 		return identityUID(p.Namespace, p.Name), nil
-	case v1.KindCatalogService:
-		return catalogServiceUID(p.Namespace, p.Name), nil
+	case v1.KindLake:
+		return lakeUID(p.Namespace, p.Name), nil
 	default:
-		return cedartypes.EntityUID{}, fault.Internalf("cedar.principalUID", "principal kind %q is not modeled (only Function, CatalogService, S3Identity, Identity)", p.Type)
+		return cedartypes.EntityUID{}, fault.Internalf("cedar.principalUID", "principal kind %q is not modeled (only Function, Lake, S3Identity, Identity)", p.Type)
 	}
 }
 
@@ -191,10 +191,10 @@ func resourceUID(res auth.EntityRef) (cedartypes.EntityUID, error) {
 		return functionUID(res.Namespace, res.Name), nil
 	case v1.KindBucket:
 		return resourceBlobPrefixUID(res)
-	case v1.KindCatalogService:
-		// ADR-0137 (F102): the catalog::query resource — CatalogService::"<ns>/<catalog>", byte-matching
-		// what CatalogCapability.Resource emits and a Function's catalogBindings members.
-		return catalogServiceUID(res.Namespace, res.Name), nil
+	case v1.KindLake:
+		// ADR-0137 (F102): the lake::query resource — Lake::"<ns>/<lake>", byte-matching
+		// what LakeCapability.Resource emits and a Function's lakeBindings members.
+		return lakeUID(res.Namespace, res.Name), nil
 	case v1.KindSQLDatabase:
 		return sqlDatabaseUID(res.Namespace, res.Name), nil
 	case v1.KindNetDestination:

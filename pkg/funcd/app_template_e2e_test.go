@@ -34,7 +34,7 @@ var (
 
 // todoTemplate is the to-do template installed against e in namespace team-a: a copy of the fixture the test edits,
 // values/e2e.yaml naming a short oci-layout registry that holds the to-do images, and the CLI. values/e2e.yaml turns
-// analytics off: its CatalogService needs the duckdb provider container, which this platform does not run. The test
+// analytics off: its Lake needs the duckdb provider container, which this platform does not run. The test
 // creates Secret todo-stripe-key, which the App declares and never creates (ADR-0213).
 type todoTemplate struct {
 	e   *gcEnv

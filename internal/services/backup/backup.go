@@ -35,7 +35,7 @@ const (
 	ReasonMemberNotFound      = "MemberNotFound"
 	ReasonScheduleNotFound    = "ScheduleNotFound"
 	ReasonTargetUnconditional = "TargetUnconditional"
-	ReasonCatalogUnstable     = "CatalogUnstable"
+	ReasonLakeUnstable        = "LakeUnstable"
 	ReasonInterrupted         = "Interrupted"
 	ReasonNotEmpty            = "NotEmpty"
 	ReasonIntegrity           = "Integrity"
@@ -238,7 +238,7 @@ func (b *base) heldIn(ns v1.NamespaceName) bool { return b.d.Hold != nil && b.d.
 
 func (b *base) held() bool { return b.d.Hold != nil && b.d.Hold.Held() }
 
-// developerFor is the namespace-scoped identity the Secret reads use, as the catalog's injector: a developer of ns
+// developerFor is the namespace-scoped identity the Secret reads use, as the lake's injector: a developer of ns
 // reads its own namespace's Secrets only (Decision 6).
 func developerFor(ns v1.NamespaceName) auth.Identity {
 	return auth.Identity{Subject: "system:backup:" + string(ns), Role: auth.RoleDeveloper, Namespaces: []v1.NamespaceName{ns}}

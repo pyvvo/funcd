@@ -250,15 +250,15 @@ func TestScenario_exposure_rule_auth(t *testing.T) {
 	}
 }
 
-// The default path of an enabled catalog ingress is proven against the edge in
-// internal/services/catalog (TestScenario_exposure_catalog_default_path): this e2e has no catalog engine.
-func TestScenario_exposure_catalog(t *testing.T) {
+// The default path of an enabled lake ingress is proven against the edge in
+// internal/services/lake (TestScenario_exposure_lake_default_path): this e2e has no lake engine.
+func TestScenario_exposure_lake(t *testing.T) {
 	t.Parallel()
 	h := startNSHost(t, nil)
-	body := `{"apiVersion":"funcd.io/v1alpha1","kind":"CatalogService","metadata":{"name":"bi","namespace":"default","resourceGroup":"rg1"},` +
-		`"spec":{"catalog":{"bucket":"lakehouse","prefix":"gold"},"bindings":{"blob":[{"alias":"catalog","bucket":"lakehouse","prefix":"gold"}]},` +
+	body := `{"apiVersion":"funcd.io/v1alpha1","kind":"Lake","metadata":{"name":"bi","namespace":"default","resourceGroup":"rg1"},` +
+		`"spec":{"location":{"bucket":"lakehouse","prefix":"gold"},"bindings":{"blob":[{"alias":"lake","bucket":"lakehouse","prefix":"gold"}]},` +
 		`"ingress":{"enabled":true,"auth":{"mode":"open"}}}}`
-	code, msg := h.post("catalogservices", body)
+	code, msg := h.post("lakes", body)
 	require.Equal(t, http.StatusBadRequest, code, msg)
 	require.Contains(t, msg, "spec.ingress.auth")
 }
@@ -268,9 +268,9 @@ func TestScenario_exposure_removed_keys(t *testing.T) {
 	h := startNSHost(t, nil)
 	meta := `"metadata":{"name":"x","namespace":"default","resourceGroup":"rg1"}`
 	for plural, body := range map[string]string{
-		"sites":           `{"apiVersion":"funcd.io/v1alpha1","kind":"Site",` + meta + `,"spec":{"image":"oci-layout:///x:v1","bucket":{"name":"web"},"prefix":"web","ingress":{"public":true}}}`,
-		"routes":          `{"apiVersion":"funcd.io/v1alpha1","kind":"Route",` + meta + `,"spec":{"rules":[{"path":"/","backend":{"static":{"bucket":"web","public":true}}}]}}`,
-		"catalogservices": `{"apiVersion":"funcd.io/v1alpha1","kind":"CatalogService",` + meta + `,"spec":{"catalog":{"bucket":"lakehouse","prefix":"gold"},"bindings":{"blob":[{"alias":"catalog","bucket":"lakehouse","prefix":"gold"}]},"ingress":{"pathPrefix":"/catalog/lake"}}}`,
+		"sites":  `{"apiVersion":"funcd.io/v1alpha1","kind":"Site",` + meta + `,"spec":{"image":"oci-layout:///x:v1","bucket":{"name":"web"},"prefix":"web","ingress":{"public":true}}}`,
+		"routes": `{"apiVersion":"funcd.io/v1alpha1","kind":"Route",` + meta + `,"spec":{"rules":[{"path":"/","backend":{"static":{"bucket":"web","public":true}}}]}}`,
+		"lakes":  `{"apiVersion":"funcd.io/v1alpha1","kind":"Lake",` + meta + `,"spec":{"location":{"bucket":"lakehouse","prefix":"gold"},"bindings":{"blob":[{"alias":"lake","bucket":"lakehouse","prefix":"gold"}]},"ingress":{"pathPrefix":"/lake/lake"}}}`,
 	} {
 		code, msg := h.post(plural, body)
 		require.Equal(t, http.StatusUnprocessableEntity, code, "%s: %s", plural, msg)

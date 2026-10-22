@@ -14,12 +14,12 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/backup/envelope"
-	cataloggw "github.com/pyvvo/funcd/internal/catalog/gateway"
+	lakegw "github.com/pyvvo/funcd/internal/lake/gateway"
 	"github.com/pyvvo/funcd/internal/platform/config"
 )
 
 // scenario: master-key-migrates — at the daemon's start: a gateway-off node's working-directory master is copied
-// under storage.dataDir with a warning naming both paths and its catalog tokens stay; two different keys refuse
+// under storage.dataDir with a warning naming both paths and its lake tokens stay; two different keys refuse
 // naming both paths; a gateway-on node keeps its storage.dataDir key and warns naming the ignored one; a working
 // directory equal to storage.dataDir is one key.
 func TestScenarioMasterKeyMigrates(t *testing.T) {
@@ -54,11 +54,11 @@ func TestScenarioMasterKeyMigrates(t *testing.T) {
 		require.Equal(t, fs.FileMode(0o600), info.Mode().Perm())
 		require.Contains(t, logs, legacy)
 		require.Contains(t, logs, target)
-		want, err := cataloggw.DeriveCatalogToken(old, "team", "fn")
+		want, err := lakegw.DeriveLakeToken(old, "team", "fn")
 		require.NoError(t, err)
-		got, err := cataloggw.DeriveCatalogToken(master, "team", "fn")
+		got, err := lakegw.DeriveLakeToken(master, "team", "fn")
 		require.NoError(t, err)
-		require.Equal(t, want, got, "the catalog tokens stay")
+		require.Equal(t, want, got, "the lake tokens stay")
 	})
 	t.Run("two different keys refuse", func(t *testing.T) {
 		cwd, dataDir := t.TempDir(), shortDataDir(t)

@@ -4,9 +4,9 @@ functions:
     handler: handle
     image: ${{ images.stats }}
     bindings:
-      catalog:
+      lake:
         - alias: lake
-          catalog: ${{ app.name + "-lake" }}
+          lake: ${{ app.name + "-lake" }}
 routes:
   - name: ${{ app.name + "-stats" }}
     host: ${{ values.host }}

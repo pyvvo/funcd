@@ -229,7 +229,7 @@ func WithHold(h *hold.Hold) Option {
 	}
 }
 
-// WithBridgeAddress sets funcd's address on its container bridge (ADR-0238): the catalog proxies and the SQL change feed
+// WithBridgeAddress sets funcd's address on its container bridge (ADR-0238): the lake proxies and the SQL change feed
 // bind and publish it, so a worker or an engine in its own netns reaches them. Unset ⇒ 127.0.0.1, where the daemon and
 // the workers share the loopback (the process runtime, funcdctl dev).
 func WithBridgeAddress(addr netip.Addr) Option {
@@ -517,21 +517,21 @@ func WithEphemeralProviderStorage() Option {
 	return func(c *config) error { c.providerStorageEphemeral = true; return nil }
 }
 
-// WithCatalogProviderRuntime overrides the CatalogService add-on-provider runtime (ADR-0087). The
+// WithLakeProviderRuntime overrides the Lake add-on-provider runtime (ADR-0087). The
 // production runtime supervises the curated duckdb CONTAINER image; `funcdctl dev` (ADR-0125) injects
 // a process-mode driver that runs the embedded DuckDB+Quack engine as a host subprocess, since
 // process-dev runs no containers.
-func WithCatalogProviderRuntime(r provider.Runtime) Option {
-	return func(c *config) error { c.catalogProvider = r; return nil }
+func WithLakeProviderRuntime(r provider.Runtime) Option {
+	return func(c *config) error { c.lakeProvider = r; return nil }
 }
 
-// WithCatalogExtensionDir points catalog-consumer functions at a local DuckDB extension directory,
+// WithLakeExtensionDir points lake-consumer functions at a local DuckDB extension directory,
 // injected into their worker env as DUCKDB_EXTENSION_DIRECTORY so a handler's `LOAD quack`/`ducklake`
 // resolves the curated extensions. It is the `funcdctl dev` (ADR-0125) analogue of the prod bundle's
-// duckdb-ext (ADR-0089): dev extracts the embedded catalog engine's extensions once and points
+// duckdb-ext (ADR-0089): dev extracts the embedded lake engine's extensions once and points
 // consumers at them, since a dev handler runs from source with no bundle. Empty ⇒ no injection (prod).
-func WithCatalogExtensionDir(dir string) Option {
-	return func(c *config) error { c.catalogExtensionDir = dir; return nil }
+func WithLakeExtensionDir(dir string) Option {
+	return func(c *config) error { c.lakeExtensionDir = dir; return nil }
 }
 
 // WithArtifactStore enables the OCI artifact Materializer (ADR-0031): functions are

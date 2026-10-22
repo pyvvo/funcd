@@ -68,7 +68,7 @@ docs/
 │  │  │  └─ log-ingest.md           # function-telemetry side channel → OTLP-JSONL → Parquet, + the in-daemon read path / funcdctl logs (ADR-0081/0083/0084)
 │  │  └─ addon/                     # out-of-daemon managed engines, deployed by the provider runtime
 │  │     ├─ provider-runtime.md     # internal/provider over runtime.Runtime: converge, readiness probe, optional ingress route (ADR-0087)
-│  │     └─ catalog-query.md        # CatalogService, DuckLake/DuckDB/Quack, spec.bindings.catalog binding, catalog proxy + catalog::query PEP, external Route (ADR-0086/0091/0137/0138)
+│  │     └─ lake-query.md        # Lake, DuckLake/DuckDB/Quack, spec.bindings.lake binding, lake proxy + lake::query PEP, external Route (ADR-0086/0091/0137/0138)
 │  │
 │  └─ external/                     # third-party systems funcd integrates with — not platform-offered
 │     ├─ oci-registry.md            # any OCI registry (or oci-layout://); push/pull via oras; digest resolution (ADR-0031/0035)
@@ -89,7 +89,7 @@ docs/
 │  ├─ call-another-function.md      # fn-to-fn links; 422 propagation (ADR-0064, funcd-typescript examples/fn-to-fn)
 │  ├─ triggers.md                   # HTTP, timer, object-store EventSource, Sensor actions (ADR-0108/0109/0119)
 │  ├─ build-a-workflow.md           # Workflow/WorkflowRun; run/describe/cancel/replay --from <step>; run logs (funcd-typescript examples/workflow)
-│  ├─ query-the-catalog.md          # CatalogService, consumer binding, per-caller catalog::query RBAC (ADR-0086/0091/0137, funcd-python examples/catalog-quack)
+│  ├─ query-the-lake.md          # Lake, consumer binding, per-caller lake::query RBAC (ADR-0086/0091/0137, funcd-python examples/lake-quack)
 │  ├─ logs-and-traces.md            # `funcdctl logs <function>` / `<run>`, OTLP endpoint, cross-sub-workflow trace linking (ADR-0084/0104/0106)
 │  ├─ serve-a-static-site.md        # static Route backend (ADR-0120); `Site` = ADR-0139 Proposed → marked unbuilt until Implemented
 │  ├─ lock-down-egress.md           # NetDestination / EgressPolicy, default-deny (FEAT-0007, funcd-typescript examples/egress-probe)
@@ -165,7 +165,7 @@ docs/
 
 ## Open questions
 
-- [ ] `egress` sits under `providers/builtin` (it is in the ADR-0082 catalog) while the netns wiring sits
+- [ ] `egress` sits under `providers/builtin` (it is in the ADR-0082 lake) while the netns wiring sits
       under `core/network-manager` — one page or two?
 - [ ] Generator for `3-reference/kinds/` and `adr-index.md`: a script under `scripts/`, or a docs-site
       build step?

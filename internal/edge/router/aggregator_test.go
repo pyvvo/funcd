@@ -64,7 +64,7 @@ func upstreamEntry(ns, name, path, upstream string) router.Entry {
 		Namespace: v1.NamespaceName(ns),
 		Auth:      v1.AuthOpen,
 		Rules:     []router.CompiledRule{{Path: path, Upstream: upstream}},
-		Owner:     router.Owner{Kind: v1.KindCatalogService, Namespace: v1.NamespaceName(ns), Name: v1.ObjectName(name)},
+		Owner:     router.Owner{Kind: v1.KindLake, Namespace: v1.NamespaceName(ns), Name: v1.ObjectName(name)},
 	}
 }
 
@@ -84,31 +84,31 @@ func countRules(entries []router.Entry) int {
 }
 
 // TestAggregator_RoutesCoexist covers scenario: routes-coexist — the user-Route source and the
-// catalog source are both present in the programmed union (the replace-all clobber is gone).
+// lake source are both present in the programmed union (the replace-all clobber is gone).
 func TestAggregator_RoutesCoexist(t *testing.T) {
 	t.Parallel()
 	p := &recordingProgrammer{}
 	a := router.NewAggregator(p, nil, nil, "", nil)
 
 	set(t, a, "routes", fnEntry("default", "echo", "/echo"))
-	set(t, a, "catalog/default/lake", upstreamEntry("default", "lake", "/catalog/lake", "http://127.0.0.1:9999"))
+	set(t, a, "lake/default/lake", upstreamEntry("default", "lake", "/lake/lake", "http://127.0.0.1:9999"))
 
 	require.Equal(t, 2, countRules(p.last()), "both sources coexist in the union — no clobber")
 }
 
 // TestAggregator_SourceIsolation covers scenario: aggregator-source-isolation — re-Setting the routes
-// source leaves the catalog source's entry intact.
+// source leaves the lake source's entry intact.
 func TestAggregator_SourceIsolation(t *testing.T) {
 	t.Parallel()
 	p := &recordingProgrammer{}
 	a := router.NewAggregator(p, nil, nil, "", nil)
 
 	set(t, a, "routes", fnEntry("default", "echo", "/echo"))
-	set(t, a, "catalog/default/lake", upstreamEntry("default", "lake", "/catalog/lake", "http://up"))
+	set(t, a, "lake/default/lake", upstreamEntry("default", "lake", "/lake/lake", "http://up"))
 	// the Route reconciler re-evaluates (a new Route) and re-Sets its whole slice.
 	set(t, a, "routes", fnEntry("default", "echo", "/echo"), fnEntry("default", "api", "/api"))
 
-	require.Equal(t, 3, countRules(p.last()), "the catalog entry SURVIVES a routes re-Set — its partition is untouched")
+	require.Equal(t, 3, countRules(p.last()), "the lake entry SURVIVES a routes re-Set — its partition is untouched")
 }
 
 // TestAggregator_Remove covers scenario: aggregator-remove — Set(nil) drops exactly that source.
@@ -118,13 +118,13 @@ func TestAggregator_Remove(t *testing.T) {
 	a := router.NewAggregator(p, nil, nil, "", nil)
 
 	set(t, a, "routes", fnEntry("default", "echo", "/echo"))
-	set(t, a, "catalog/default/lake", upstreamEntry("default", "lake", "/catalog/lake", "http://up"))
-	set(t, a, "catalog/default/lake") // teardown
+	set(t, a, "lake/default/lake", upstreamEntry("default", "lake", "/lake/lake", "http://up"))
+	set(t, a, "lake/default/lake") // teardown
 
-	require.Equal(t, 1, countRules(p.last()), "only the catalog source's entry is removed")
+	require.Equal(t, 1, countRules(p.last()), "only the lake source's entry is removed")
 
 	// removing an unknown source is a harmless no-op that re-programs the same table.
-	set(t, a, "catalog/never/existed")
+	set(t, a, "lake/never/existed")
 	require.Equal(t, 1, countRules(p.last()))
 }
 
@@ -142,7 +142,7 @@ func TestAggregator_ConcurrentSafe(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			src := fmt.Sprintf("catalog/ns/c%02d", i)
+			src := fmt.Sprintf("lake/ns/c%02d", i)
 			_, err := a.Set(context.Background(), src, []router.Entry{upstreamEntry("ns", fmt.Sprintf("c%02d", i), fmt.Sprintf("/c%02d", i), "http://up")})
 			require.NoError(t, err)
 		}(i)
@@ -165,7 +165,7 @@ func TestAggregator_ProgramFailureAtomic(t *testing.T) {
 	require.Equal(t, 0, p.calls(), "nothing was programmed on the failed call")
 
 	// a subsequent Set from ANOTHER source re-programs the full union — the earlier source heals.
-	set(t, a, "catalog/default/lake", upstreamEntry("default", "lake", "/catalog/lake", "http://up"))
+	set(t, a, "lake/default/lake", upstreamEntry("default", "lake", "/lake/lake", "http://up"))
 	require.Equal(t, 2, countRules(p.last()), "the failed source's entry is re-programmed by the next Set (self-healing)")
 }
 
@@ -176,7 +176,7 @@ func TestAggregator_Deterministic(t *testing.T) {
 	p := &recordingProgrammer{}
 	a := router.NewAggregator(p, nil, nil, "", nil)
 
-	set(t, a, "catalog/default/lake", upstreamEntry("default", "lake", "/catalog/lake", "http://up"))
+	set(t, a, "lake/default/lake", upstreamEntry("default", "lake", "/lake/lake", "http://up"))
 	set(t, a, "routes", fnEntry("default", "echo", "/echo"))
 	first := p.last()
 	// re-Set both with identical content; the union must be byte-identical order (sorted keys).
@@ -200,13 +200,13 @@ func TestRouter_ResolvesUpstream(t *testing.T) {
 	t.Parallel()
 	rtr := router.New()
 	require.NoError(t, rtr.Program(context.Background(), []router.Entry{
-		upstreamEntry("default", "lake", "/catalog/lake", "http://10.63.0.1:34517"),
+		upstreamEntry("default", "lake", "/lake/lake", "http://10.63.0.1:34517"),
 	}, nil))
-	m, ok := rtr.Resolve("any", "/catalog/lake/db", "POST")
+	m, ok := rtr.Resolve("any", "/lake/lake/db", "POST")
 	require.True(t, ok, "the upstream entry matches its prefix subtree")
 	require.Equal(t, "http://10.63.0.1:34517", m.Upstream, "the match carries the node-private upstream")
 	require.Empty(t, m.Function, "an upstream backend has no Function")
-	require.Equal(t, "/catalog/lake", m.StripPrefix, "the matched prefix is stripped to address the upstream at its root")
+	require.Equal(t, "/lake/lake", m.StripPrefix, "the matched prefix is stripped to address the upstream at its root")
 }
 
 func withHost(e router.Entry, host string) router.Entry {
@@ -276,12 +276,12 @@ func TestAggregator_ValidatesBeforeCommit(t *testing.T) {
 	require.Equal(t, calls, p.calls(), "a ModeFunc error programs nothing")
 
 	modeErr = nil
-	set(t, a, "catalog/default/lake", withHost(upstreamEntry("default", "lake", "/catalog/lake", "http://up"), "lake.example"))
+	set(t, a, "lake/default/lake", withHost(upstreamEntry("default", "lake", "/lake/lake", "http://up"), "lake.example"))
 	require.Equal(t, 2, countRules(p.last()), "the refused Sets left the routes source as it was")
 }
 
 // TestScenario_same_name_tie_route_first covers scenario: same-name-tie-route-first — Route a/x and
-// CatalogService a/x on one claim: the Route wins whatever the Set order, and the catalog reports RouteConflict.
+// Lake a/x on one claim: the Route wins whatever the Set order, and the lake reports RouteConflict.
 func TestScenario_same_name_tie_route_first(t *testing.T) {
 	t.Parallel()
 	rtr := router.New()
@@ -290,11 +290,11 @@ func TestScenario_same_name_tie_route_first(t *testing.T) {
 	cat := withHost(upstreamEntry("a", "x", "/q", "http://cat"), "h")
 	rt := withHost(fnEntry("a", "x", "/q"), "h")
 
-	require.Equal(t, "EdgeStarting", set(t, a, "catalog/a/x", cat)[0].Reason, "no catalog entry before the Route table loads")
+	require.Equal(t, "EdgeStarting", set(t, a, "lake/a/x", cat)[0].Reason, "no lake entry before the Route table loads")
 	require.Empty(t, set(t, a, "routes", rt)[0].Reason, "the Route is programmed")
-	require.Equal(t, []router.Owner{cat.Owner}, n.take(), "the catalog's verdict changed, so it is re-run")
+	require.Equal(t, []router.Owner{cat.Owner}, n.take(), "the lake's verdict changed, so it is re-run")
 
-	v := set(t, a, "catalog/a/x", cat)[0]
+	v := set(t, a, "lake/a/x", cat)[0]
 	require.Equal(t, "RouteConflict", v.Reason)
 	require.Contains(t, v.Message, "Route a/x")
 	m, ok := rtr.Resolve("h", "/q", "GET")
@@ -304,7 +304,7 @@ func TestScenario_same_name_tie_route_first(t *testing.T) {
 }
 
 // TestScenario_reserved_prefix_refused covers scenario: reserved-prefix-refused — a claim of default's that stays
-// host-less, under /function/ (any source, any mode, any spelling of the path), and a host-less catalog at / are
+// host-less, under /function/ (any source, any mode, any spelling of the path), and a host-less lake at / are
 // refused; with no host-less / Route, nothing in the edge table matches /function/f, so the data plane serves it by
 // name. A non-default namespace's host-less claim is on its namespace host, where /function/ is its own (ADR-0240).
 func TestScenario_reserved_prefix_refused(t *testing.T) {
@@ -323,11 +323,11 @@ func TestScenario_reserved_prefix_refused(t *testing.T) {
 
 			for i, p := range []string{"/function/f", "/function", "/function/", "//function/f", "/"} {
 				name := fmt.Sprintf("c%d", i)
-				v := set(t, a, "catalog/default/"+name, upstreamEntry("default", name, p, "http://up"))
-				require.Equal(t, "ReservedPath", v[0].Reason, "host-less catalog at %q", p)
+				v := set(t, a, "lake/default/"+name, upstreamEntry("default", name, p, "http://up"))
+				require.Equal(t, "ReservedPath", v[0].Reason, "host-less lake at %q", p)
 			}
-			require.Empty(t, set(t, a, "catalog/default/root", withHost(upstreamEntry("default", "root", "/", "http://up"), "h"))[0].Reason,
-				"a catalog at / with a host is allowed")
+			require.Empty(t, set(t, a, "lake/default/root", withHost(upstreamEntry("default", "root", "/", "http://up"), "h"))[0].Reason,
+				"a lake at / with a host is allowed")
 
 			_, ok := rtr.Resolve("any", "/function/f", "POST")
 			require.False(t, ok, "no edge row matches, so POST /function/f reaches Function f by name")
@@ -335,9 +335,9 @@ func TestScenario_reserved_prefix_refused(t *testing.T) {
 	}
 }
 
-// TestScenario_catalog_vs_catalog_handover covers scenario: catalog-vs-catalog-handover — when the winning
-// catalog is deleted, the loser's entry is programmed and its reconciler is re-run with no change to it.
-func TestScenario_catalog_vs_catalog_handover(t *testing.T) {
+// TestScenario_lake_vs_lake_handover covers scenario: lake-vs-lake-handover — when the winning
+// lake is deleted, the loser's entry is programmed and its reconciler is re-run with no change to it.
+func TestScenario_lake_vs_lake_handover(t *testing.T) {
 	t.Parallel()
 	rtr := router.New()
 	n := &notified{}
@@ -346,18 +346,18 @@ func TestScenario_catalog_vs_catalog_handover(t *testing.T) {
 	ca := withHost(upstreamEntry("a", "c", "/q", "http://a"), "h")
 	cb := withHost(upstreamEntry("b", "c", "/q", "http://b"), "h")
 
-	require.Empty(t, set(t, a, "catalog/a/c", ca)[0].Reason)
-	v := set(t, a, "catalog/b/c", cb)[0]
+	require.Empty(t, set(t, a, "lake/a/c", ca)[0].Reason)
+	v := set(t, a, "lake/b/c", cb)[0]
 	require.Equal(t, "RouteConflict", v.Reason)
-	require.Contains(t, v.Message, "CatalogService a/c")
+	require.Contains(t, v.Message, "Lake a/c")
 	n.take()
 
-	set(t, a, "catalog/a/c")
+	set(t, a, "lake/a/c")
 	require.Equal(t, []router.Owner{cb.Owner}, n.take(), "b/c is re-run without another change to it")
 	m, ok := rtr.Resolve("h", "/q", "GET")
 	require.True(t, ok)
 	require.Equal(t, "http://b", m.Upstream, "b/c's entry is programmed")
-	require.Empty(t, set(t, a, "catalog/b/c", cb)[0].Reason, "the re-run reports IngressReady=True")
+	require.Empty(t, set(t, a, "lake/b/c", cb)[0].Reason, "the re-run reports IngressReady=True")
 }
 
 // restartClaims are the claims of the ADR-0176 scenarios, one namespace pair per scenario.
@@ -378,12 +378,12 @@ func restartClaims() map[string][]router.Entry {
 		upstreamEntry("default", "cf", "/function/f", "http://cf"),
 		upstreamEntry("default", "root", "/", "http://root"),
 	} {
-		src["catalog/"+string(e.Owner.Namespace)+"/"+string(e.Owner.Name)] = []router.Entry{e}
+		src["lake/"+string(e.Owner.Namespace)+"/"+string(e.Owner.Name)] = []router.Entry{e}
 	}
 	return src
 }
 
-// boot Sets every source in order, checking that no catalog entry is programmed before "routes" has Set, then
+// boot Sets every source in order, checking that no lake entry is programmed before "routes" has Set, then
 // re-runs every source once, as NotifyFunc would, and returns the settled verdicts and the programmed table.
 func boot(t *testing.T, claims map[string][]router.Entry, order []string) (map[router.Owner]router.Verdict, []router.Entry) {
 	t.Helper()
@@ -396,7 +396,7 @@ func boot(t *testing.T, claims map[string][]router.Entry, order []string) (map[r
 		if src == "routes" {
 			routesSet = true
 			if held {
-				require.NotEmpty(t, n.take(), "the held catalogs are re-run once the Route table loads")
+				require.NotEmpty(t, n.take(), "the held lakes are re-run once the Route table loads")
 			}
 			continue
 		}
@@ -404,7 +404,7 @@ func boot(t *testing.T, claims map[string][]router.Entry, order []string) (map[r
 		if !routesSet {
 			require.Contains(t, []string{"EdgeStarting", "HostRequired", "ReservedPath"}, v[0].Reason)
 			for _, e := range p.last() {
-				require.NotEqual(t, v1.KindCatalogService, e.Owner.Kind, "no catalog entry is programmed before the Route table loads")
+				require.NotEqual(t, v1.KindLake, e.Owner.Kind, "no lake entry is programmed before the Route table loads")
 			}
 		}
 	}
@@ -445,17 +445,17 @@ func TestScenario_verdict_restart_stable(t *testing.T) {
 		return before[router.Owner{Kind: kind, Namespace: v1.NamespaceName(ns), Name: v1.ObjectName(name)}].Reason
 	}
 	require.Empty(t, reason(v1.KindRoute, "a1", "r"))
-	require.Equal(t, "RouteConflict", reason(v1.KindCatalogService, "b1", "c"))
-	require.Empty(t, reason(v1.KindCatalogService, "a2", "c"))
+	require.Equal(t, "RouteConflict", reason(v1.KindLake, "b1", "c"))
+	require.Empty(t, reason(v1.KindLake, "a2", "c"))
 	require.Equal(t, "RouteConflict", reason(v1.KindRoute, "b2", "r"))
 	require.Empty(t, reason(v1.KindRoute, "a3", "x"))
-	require.Equal(t, "RouteConflict", reason(v1.KindCatalogService, "a3", "x"))
-	require.Empty(t, reason(v1.KindCatalogService, "a4", "c"))
-	require.Equal(t, "RouteConflict", reason(v1.KindCatalogService, "b4", "c"))
-	require.Equal(t, "HostRequired", reason(v1.KindCatalogService, "default", "c"))
+	require.Equal(t, "RouteConflict", reason(v1.KindLake, "a3", "x"))
+	require.Empty(t, reason(v1.KindLake, "a4", "c"))
+	require.Equal(t, "RouteConflict", reason(v1.KindLake, "b4", "c"))
+	require.Equal(t, "HostRequired", reason(v1.KindLake, "default", "c"))
 	require.Equal(t, "ReservedPath", reason(v1.KindRoute, "default", "rf"))
-	require.Equal(t, "ReservedPath", reason(v1.KindCatalogService, "default", "cf"))
-	require.Equal(t, "ReservedPath", reason(v1.KindCatalogService, "default", "root"))
+	require.Equal(t, "ReservedPath", reason(v1.KindLake, "default", "cf"))
+	require.Equal(t, "ReservedPath", reason(v1.KindLake, "default", "root"))
 }
 
 // "/api" and "/api/" Prefix claims serve the same subtree, so two namespaces claiming them conflict.

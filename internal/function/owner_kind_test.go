@@ -19,10 +19,10 @@ import (
 	"github.com/pyvvo/funcd/internal/runtime"
 )
 
-// engineID is the instance ID of CatalogService lake's engine (ADR-0152 Contracts).
+// engineID is the instance ID of Lake lake's engine (ADR-0152 Contracts).
 const engineID runtime.InstanceID = "default/lake/r0"
 
-// kindGuard records every Start, Stop and Remove the Function reconciler sends to the CatalogService engine.
+// kindGuard records every Start, Stop and Remove the Function reconciler sends to the Lake engine.
 type kindGuard struct {
 	*fakeRuntime
 	mu      sync.Mutex
@@ -59,7 +59,7 @@ func (g *kindGuard) engineCalls() []string {
 	return append([]string(nil), g.touched...)
 }
 
-// ownerKindPair is a Function reconciler and a CatalogService provider runtime over one fake runtime, as funcd wires
+// ownerKindPair is a Function reconciler and a Lake provider runtime over one fake runtime, as funcd wires
 // them (pkg/funcd), with the engine answering its readiness probe.
 type ownerKindPair struct {
 	*shimHarness
@@ -81,7 +81,7 @@ func newOwnerKindPair(t *testing.T) *ownerKindPair {
 	require.NoError(t, err)
 	port, err := strconv.Atoi(portStr)
 	require.NoError(t, err)
-	pr, err := provider.NewRuntime(provider.Deps{Runtime: h.rt, OwnerKind: v1.KindCatalogService})
+	pr, err := provider.NewRuntime(provider.Deps{Runtime: h.rt, OwnerKind: v1.KindLake})
 	require.NoError(t, err)
 	return &ownerKindPair{shimHarness: h, guard: g, pr: pr, engine: provider.ProviderSpec{
 		Ref:       provider.ProviderRef{Namespace: "default", Name: "lake"},
@@ -92,7 +92,7 @@ func newOwnerKindPair(t *testing.T) *ownerKindPair {
 	}}
 }
 
-// convergeReady converges the CatalogService until its engine is Ready: a fresh engine is Created on the pass that
+// convergeReady converges the Lake until its engine is Ready: a fresh engine is Created on the pass that
 // starts it, so it is first counted on the next one.
 func (p *ownerKindPair) convergeReady(t *testing.T) provider.ProviderStatus {
 	t.Helper()
@@ -103,7 +103,7 @@ func (p *ownerKindPair) convergeReady(t *testing.T) provider.ProviderStatus {
 			return st
 		}
 	}
-	t.Fatal("the CatalogService engine did not become Ready")
+	t.Fatal("the Lake engine did not become Ready")
 	return provider.ProviderStatus{}
 }
 
@@ -154,10 +154,10 @@ func servesLatest(fn *v1.Function) bool {
 		fn.Status.DrainingRevision == ""
 }
 
-// scenario: same-name-function-and-catalog-stay-ready (ADR-0152) — a Function and a CatalogService both named lake: the
-// Function's redeploy and scaling never move the CatalogService off its engine, and the Function serves its latest
+// scenario: same-name-function-and-lake-stay-ready (ADR-0152) — a Function and a Lake both named lake: the
+// Function's redeploy and scaling never move the Lake off its engine, and the Function serves its latest
 // revision after each redeploy.
-func TestScenarioSameNameFunctionAndCatalogStayReady(t *testing.T) {
+func TestScenarioSameNameFunctionAndLakeStayReady(t *testing.T) {
 	t.Parallel()
 	p := newOwnerKindPair(t)
 	ctx := context.Background()
@@ -168,13 +168,13 @@ func TestScenarioSameNameFunctionAndCatalogStayReady(t *testing.T) {
 		t.Helper()
 		st, cerr := p.pr.Converge(ctx, p.engine)
 		require.NoError(t, cerr)
-		require.True(t, st.Ready, "%s: the CatalogService stays Ready", step)
+		require.True(t, st.Ready, "%s: the Lake stays Ready", step)
 		require.Equal(t, 1, st.Running, step)
 		got, serr := p.rt.Status(ctx, engineID)
 		require.NoError(t, serr)
 		require.Equal(t, runtime.StateRunning, got.State, step)
-		require.Equal(t, engine.CreatedAt, got.CreatedAt, "%s: the CatalogService runs on the same engine worker", step)
-		require.Equal(t, v1.KindCatalogService, got.OwnerKind, step)
+		require.Equal(t, engine.CreatedAt, got.CreatedAt, "%s: the Lake runs on the same engine worker", step)
+		require.Equal(t, v1.KindLake, got.OwnerKind, step)
 	}
 	urls := map[string]string{}
 	for _, rev := range []v1.ObjectName{"lake-1", "lake-2", "lake-3", "lake-4"} {
@@ -279,14 +279,14 @@ func TestScenarioOwnerKindAcrossDaemonRestart(t *testing.T) {
 		return servesLatest(fn) && running == 1
 	})
 	st := p.convergeReady(t)
-	require.Equal(t, p.rt.ip+":"+strconv.Itoa(p.engine.Port), st.Address, "the CatalogService publishes its own engine")
+	require.Equal(t, p.rt.ip+":"+strconv.Itoa(p.engine.Port), st.Address, "the Lake publishes its own engine")
 	_, ready := p.upstream(t, "lake")
 	require.True(t, ready, "the Function serves again")
 
 	byKind := p.workers(t, "lake")
-	require.Len(t, byKind, 2, "only Function and CatalogService workers are listed")
-	require.Len(t, byKind[v1.KindCatalogService], 1, "the provider created only its engine")
-	require.Equal(t, engineID, byKind[v1.KindCatalogService][0].ID)
+	require.Len(t, byKind, 2, "only Function and Lake workers are listed")
+	require.Len(t, byKind[v1.KindLake], 1, "the provider created only its engine")
+	require.Equal(t, engineID, byKind[v1.KindLake][0].ID)
 	for _, in := range byKind[v1.KindFunction] {
 		require.NotEmpty(t, in.Revision, "a Function worker (%s) carries its revision", in.ID)
 	}
@@ -295,7 +295,7 @@ func TestScenarioOwnerKindAcrossDaemonRestart(t *testing.T) {
 	for id, spec := range p.rt.specs {
 		want := v1.KindFunction
 		if id == engineID {
-			want = v1.KindCatalogService
+			want = v1.KindLake
 		}
 		require.Equal(t, want, spec.OwnerKind, "worker %s was created by its own kind", id)
 	}

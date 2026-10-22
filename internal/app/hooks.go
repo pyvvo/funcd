@@ -133,8 +133,8 @@ func lastPreApply(rev *v1.AppRevision) time.Time {
 }
 
 // preHookParts are the entries a pass writes while the latest revision's pre-hooks are not done (Decision 4): in
-// section order, the configMaps a pre-hook Function's spec.bindings.config names and the kv, buckets and catalogs entries it
-// binds, with the configMaps and buckets of such a catalog, then the pre-hook Functions. A ref entry is never written.
+// section order, the configMaps a pre-hook Function's spec.bindings.config names and the kv, buckets and lakes entries it
+// binds, with the configMaps and buckets of such a lake, then the pre-hook Functions. A ref entry is never written.
 func preHookParts(a *v1.App, ents []entry) []entry {
 	parts := partsOf(a)
 	need := make(map[v1.ObjectRef]bool)
@@ -160,9 +160,9 @@ func preHookParts(a *v1.App, ents []entry) []entry {
 		for _, b := range fn.Spec.Bindings.SQL {
 			add(v1.KindSQLDatabase, b.Database)
 		}
-		for _, b := range fn.Spec.Bindings.Catalog {
-			add(v1.KindCatalogService, b.Catalog)
-			cs, ok := parts[v1.ObjectRef{Kind: v1.KindCatalogService, Namespace: a.Namespace, Name: b.Catalog}].(*v1.CatalogService)
+		for _, b := range fn.Spec.Bindings.Lake {
+			add(v1.KindLake, b.Lake)
+			cs, ok := parts[v1.ObjectRef{Kind: v1.KindLake, Namespace: a.Namespace, Name: b.Lake}].(*v1.Lake)
 			if !ok {
 				continue
 			}
@@ -172,7 +172,7 @@ func preHookParts(a *v1.App, ents []entry) []entry {
 			for _, cb := range cs.Spec.Bindings.Blob {
 				add(v1.KindBucket, cb.Bucket)
 			}
-			add(v1.KindBucket, cs.Spec.Catalog.Bucket)
+			add(v1.KindBucket, cs.Spec.Location.Bucket)
 		}
 	}
 	var out, fns []entry

@@ -16,12 +16,12 @@ func TestScenario_step_bindings(t *testing.T) {
 	m := NewMaterializer(s, fakeRuntimes{rt: "nodejs22"}, nil, 0)
 	ctx := context.Background()
 	bindings := v1.StepBindings{
-		KV:      []v1.FunctionKV{{Alias: "c", Store: "counters-kv", Table: "t"}},
-		Blob:    []v1.FunctionBlob{{Alias: "in", Bucket: "files", Prefix: "uploads"}},
-		SQL:     []v1.FunctionSQL{{Alias: "db", Database: "todo-db"}},
-		Catalog: []v1.FunctionCatalog{{Alias: "lake", Catalog: "lake"}},
-		Config:  []v1.ObjectName{"settings"},
-		Secret:  []v1.ObjectName{"api-keys"},
+		KV:     []v1.FunctionKV{{Alias: "c", Store: "counters-kv", Table: "t"}},
+		Blob:   []v1.FunctionBlob{{Alias: "in", Bucket: "files", Prefix: "uploads"}},
+		SQL:    []v1.FunctionSQL{{Alias: "db", Database: "todo-db"}},
+		Lake:   []v1.FunctionLake{{Alias: "lake", Lake: "lake"}},
+		Config: []v1.ObjectName{"settings"},
+		Secret: []v1.ObjectName{"api-keys"},
 	}
 	wf := &v1.Workflow{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},

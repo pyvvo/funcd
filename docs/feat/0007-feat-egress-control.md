@@ -29,7 +29,7 @@ concrete drivers make it due now:
 - **The data-platform confidentiality invariant.** A real single-host lakehouse on funcd (FEAT-0003) has
   a cardinal rule — *a `confidential` byte never leaves the box.* Without enforced egress, funcd cannot
   make that guarantee: a transform function could ship confidential data to an external API.
-- **The catalog `egress::connect` grant.** FEAT-0003/F61 explicitly parks the function→catalog egress
+- **The lake `egress::connect` grant.** FEAT-0003/F61 explicitly parks the function→lake egress
   grant for *"the V2 egress ADR"* — this epoch is that ADR's home.
 
 This feat scopes **building the network manager** the blueprint already designed: the wiring that isolates
@@ -77,7 +77,7 @@ The outbound edge refuses what it should and accounts for what it serves:
   **nothing else**, and each permitted call is audited (F81);
 - a **`confidential`-classified** workload's outbound is **provably empty** — the data-platform
   *"a confidential byte never leaves the box"* invariant becomes an enforced property, not a convention;
-- the function→catalog **`egress::connect`** grant ([FEAT-0003](0003-feat-data-platform.md)/F61's parked
+- the function→lake **`egress::connect`** grant ([FEAT-0003](0003-feat-data-platform.md)/F61's parked
   V2 hook) is expressible as an `EgressPolicy` and enforced.
 
 ## Out of scope (tracked elsewhere)

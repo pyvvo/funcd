@@ -81,14 +81,14 @@ type FunctionSpec struct {
 	// Bindings are what the Function's code uses (ADR-0246): each binding is its grant, named like the ctx accessor
 	// that reaches it.
 	Bindings FunctionBindings `json:"bindings,omitzero"`
-	// KVStores, Buckets, SQLDatabases, CatalogServices and ConfigMaps are what the Function declares at its root
+	// KVStores, Buckets, SQLDatabases, Lakes and ConfigMaps are what the Function declares at its root
 	// (ADR-0248): by name it owns the resource, which carries its marker; by ref it binds an existing one. An owner
 	// left out of a store's tables, prefixes or database is the Function (the function-store-owner admission).
-	KVStores        []KVStoreEntry     `json:"kv,omitempty"`
-	Buckets         []BucketEntry      `json:"buckets,omitempty"`
-	SQLDatabases    []SQLDatabaseEntry `json:"sql,omitempty"`
-	CatalogServices []CatalogEntry     `json:"catalogs,omitempty"`
-	ConfigMaps      []ConfigMapEntry   `json:"configMaps,omitempty"`
+	KVStores     []KVStoreEntry     `json:"kv,omitempty"`
+	Buckets      []BucketEntry      `json:"buckets,omitempty"`
+	SQLDatabases []SQLDatabaseEntry `json:"sql,omitempty"`
+	Lakes        []LakeEntry        `json:"lakes,omitempty"`
+	ConfigMaps   []ConfigMapEntry   `json:"configMaps,omitempty"`
 	// SecretDeclarations are the Secrets the Function's bindings name, with the keys it reads (ADR-0213 Decision 8).
 	SecretDeclarations []SecretDeclaration `json:"secrets,omitempty"`
 	// Ingress is the Function's edge exposure (ADR-0241): unset, it answers by name at /function/<name> while its
@@ -102,13 +102,13 @@ type FunctionSQL struct {
 	Database ObjectName `json:"database"`
 }
 
-// FunctionCatalog binds this function to a CatalogService it consumes (ADR-0091, F61). Declaring the
-// binding is the grant: funcd injects FUNCD_CATALOG_<ALIAS>_URL/_TOKEN, and (V2) grants egress.
-type FunctionCatalog struct {
-	// Alias names the FUNCD_CATALOG_<ALIAS>_* env pair; a DNS-1123 label, unique within Catalogs.
+// FunctionLake binds this function to a Lake it consumes (ADR-0091, F61). Declaring the
+// binding is the grant: funcd injects FUNCD_LAKE_<ALIAS>_URL/_TOKEN, and (V2) grants egress.
+type FunctionLake struct {
+	// Alias names the FUNCD_LAKE_<ALIAS>_* env pair; a DNS-1123 label, unique within Lakes.
 	Alias string `json:"alias" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"`
-	// Catalog is the name of a CatalogService in this function's namespace.
-	Catalog ObjectName `json:"catalog"`
+	// Lake is the name of a Lake in this function's namespace.
+	Lake ObjectName `json:"lake"`
 }
 
 // FunctionLink declares one synchronous RPC dependency: a local alias bound to a target Function
@@ -208,7 +208,7 @@ type FunctionStatus struct {
 func (f *Function) GroupVersionKind() GroupVersionKind { return KindFunction.GVK() }
 
 // PrincipalObject is a resolved principal-backing object for the cedar capability registry (ADR-0116):
-// a *Function or a *CatalogService whose declared bindings (spec.bindings.kv/links/blob) are materialized onto
+// a *Function or a *Lake whose declared bindings (spec.bindings.kv/links/blob) are materialized onto
 // the Cedar principal. It is a CLOSED interface — its marker method is unexported, so only types in
 // this package implement it, which lets the registry's Bind funcs type-switch on it without any.
 type PrincipalObject interface{ isPrincipalObject() }
@@ -241,10 +241,10 @@ func (f *Function) Validate() error {
 		return err
 	}
 	s := &f.Spec
-	if err := validateNestedCatalogs("Function.Validate", "spec.catalogs", "a Function", s.CatalogServices); err != nil {
+	if err := validateNestedLakes("Function.Validate", "spec.lakes", "a Function", s.Lakes); err != nil {
 		return err
 	}
-	roots := rootSections{ConfigMaps: s.ConfigMaps, KV: s.KVStores, Buckets: s.Buckets, SQL: s.SQLDatabases, Catalogs: s.CatalogServices, Secrets: s.SecretDeclarations}
+	roots := rootSections{ConfigMaps: s.ConfigMaps, KV: s.KVStores, Buckets: s.Buckets, SQL: s.SQLDatabases, Lakes: s.Lakes, Secrets: s.SecretDeclarations}
 	if err := roots.validate("Function.Validate", f.ObjectMeta); err != nil {
 		return err
 	}
@@ -313,7 +313,7 @@ func (s *FunctionSpec) validateProtocol() error {
 	return nil
 }
 
-// validateBindings checks the kv, blob, catalog and config bindings, naming each field under prefix. A Workflow runs
+// validateBindings checks the kv, blob, lake and config bindings, naming each field under prefix. A Workflow runs
 // it on each image step's bindings, which the materializer copies into the step's Function (#927).
 func (s *FunctionSpec) validateBindings(op, prefix string) error {
 	// KV binding structural rules (ADR-0073): alias is a DNS-1123 label, unique within KV; table is a
@@ -346,13 +346,13 @@ func (s *FunctionSpec) validateBindings(op, prefix string) error {
 			return fault.Invalidf(op, "%s.blob[%s].prefix %q is not a valid DNS-1123 label", prefix, b.Alias, b.Prefix)
 		}
 	}
-	// Catalog binding structural rules (ADR-0091): alias is a DNS-1123 label, unique within Catalogs;
-	// catalog is a DNS-1123 label. Cross-resource validity (the CatalogService exists) is an admission.
-	cats := make([][2]string, 0, len(s.Bindings.Catalog))
-	for _, c := range s.Bindings.Catalog {
-		cats = append(cats, [2]string{c.Alias, string(c.Catalog)})
+	// Lake binding structural rules (ADR-0091): alias is a DNS-1123 label, unique within Lakes;
+	// lake is a DNS-1123 label. Cross-resource validity (the Lake exists) is an admission.
+	cats := make([][2]string, 0, len(s.Bindings.Lake))
+	for _, c := range s.Bindings.Lake {
+		cats = append(cats, [2]string{c.Alias, string(c.Lake)})
 	}
-	if err := checkAliasTargets(op, prefix, "catalog", "catalog", "CatalogService", cats); err != nil {
+	if err := checkAliasTargets(op, prefix, "lake", "lake", "Lake", cats); err != nil {
 		return err
 	}
 	// SQL binding structural rules (ADR-0233): alias is a DNS-1123 label, unique within SQL; database is a
@@ -365,7 +365,7 @@ func (s *FunctionSpec) validateBindings(op, prefix string) error {
 		return err
 	}
 	// Config binding structural rules (ADR-0093): each names a ConfigMap in this namespace and
-	// must be a valid DNS-1123 ObjectName (mirrors CatalogService.spec.bindings.config). Cross-resource
+	// must be a valid DNS-1123 ObjectName (mirrors Lake.spec.bindings.config). Cross-resource
 	// existence is the reconciler's plain store read (fail-closed, ConfigResolveFailed), not Validate.
 	for _, cm := range s.Bindings.Config {
 		if !dnsLabel.MatchString(string(cm)) {

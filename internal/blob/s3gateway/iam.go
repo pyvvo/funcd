@@ -2,7 +2,7 @@
 // substrate (ADR-0080), with in-platform identity via funcd-managed per-principal
 // SigV4 keypairs resolved by an in-process versitygw auth.IAMService (ADR-0085).
 //
-// AuthN: every in-platform Function and CatalogService engine gets a DETERMINISTIC
+// AuthN: every in-platform Function and Lake engine gets a DETERMINISTIC
 // keypair derived from a node-local master secret over its (kind, namespace, name)
 // (ADR-0175) — funcd injects it into the sandbox env; the worker never chooses its
 // secret and cannot derive a peer's. AuthZ: every backend op is a PEP on the cedar PDP (s3::read / s3::write),
@@ -42,8 +42,8 @@ type Keypair struct{ AccessKey, SecretKey string }
 
 // Owner-kind codes an in-platform access key carries (ADR-0175).
 const (
-	kindCodeFunction       = "F"
-	kindCodeCatalogService = "C"
+	kindCodeFunction = "F"
+	kindCodeLake     = "L"
 )
 
 // kindCode returns the access-key code of kind; "" for a kind that holds no in-platform key, which
@@ -52,8 +52,8 @@ func kindCode(kind v1.Kind) string {
 	switch kind {
 	case v1.KindFunction:
 		return kindCodeFunction
-	case v1.KindCatalogService:
-		return kindCodeCatalogService
+	case v1.KindLake:
+		return kindCodeLake
 	default:
 		return ""
 	}
@@ -61,9 +61,9 @@ func kindCode(kind v1.Kind) string {
 
 // DeriveKeypair returns the stable per-(kind, namespace, name) keypair (ADR-0085, ADR-0175):
 //   - AccessKey = "FUNCD" + base32-noPad-upper(code + "\x00" + ns + "\x00" + name), code "F" for a Function and
-//     "C" for a CatalogService — decodable via decodeAccess; not secret (knowing it grants nothing).
+//     "C" for a Lake — decodable via decodeAccess; not secret (knowing it grants nothing).
 //   - SecretKey = base64( HMAC-SHA256(master, "s3:" + kind + ":" + ns + "/" + name) ) — the full kind is in the
-//     MAC input, so a Function cannot compute the secret of a same-named CatalogService.
+//     MAC input, so a Function cannot compute the secret of a same-named Lake.
 //
 // Pure and deterministic: the same (master, kind, ns, name) always yields the same keypair, across daemon
 // restarts. No storage, no rotation.
@@ -122,8 +122,8 @@ func decodeAccess(access string) (kind v1.Kind, ns, name string, ok bool) {
 	switch parts[0] {
 	case kindCodeFunction:
 		return v1.KindFunction, parts[1], parts[2], true
-	case kindCodeCatalogService:
-		return v1.KindCatalogService, parts[1], parts[2], true
+	case kindCodeLake:
+		return v1.KindLake, parts[1], parts[2], true
 	default:
 		return "", "", "", false
 	}

@@ -17,8 +17,8 @@ import (
 type s3Meta struct {
 	fns     map[string]*v1.Function
 	buckets map[string]*v1.Bucket
-	css     map[string]*v1.CatalogService // add-on providers (ADR-0088)
-	fnErr   error                         // when set, every Function read fails with it
+	css     map[string]*v1.Lake // add-on providers (ADR-0088)
+	fnErr   error               // when set, every Function read fails with it
 }
 
 func (m s3Meta) Get(_ context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName) (v1.Object, error) {
@@ -34,7 +34,7 @@ func (m s3Meta) Get(_ context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceN
 		if b, ok := m.buckets[key(ns, name)]; ok {
 			return b, nil
 		}
-	case v1.KindCatalogService:
+	case v1.KindLake:
 		if c, ok := m.css[key(ns, name)]; ok {
 			return c, nil
 		}

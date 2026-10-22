@@ -18,17 +18,17 @@ import (
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
 )
 
-// lakeMeta seeds Function "lake" (no spec.blob) and CatalogService "lake" bound to lakehouse/raw, in one
+// lakeMeta seeds Function "lake" (no spec.blob) and Lake "lake" bound to lakehouse/raw, in one
 // namespace: the shared name the engine and the Function must not merge.
 func lakeMeta() fakeMeta {
 	return fakeMeta{
 		fns: map[string]*v1.Function{
 			"default/lake": {ObjectMeta: v1.ObjectMeta{Name: "lake", Namespace: "default", ResourceGroup: "rg1"}},
 		},
-		css: map[string]*v1.CatalogService{
+		css: map[string]*v1.Lake{
 			"default/lake": {
 				ObjectMeta: v1.ObjectMeta{Name: "lake", Namespace: "default", ResourceGroup: "rg1"},
-				Spec:       v1.CatalogServiceSpec{Bindings: v1.CatalogServiceBindings{Blob: []v1.FunctionBlob{{Alias: "raw", Bucket: "lakehouse", Prefix: "raw"}}}},
+				Spec:       v1.LakeSpec{Bindings: v1.LakeBindings{Blob: []v1.FunctionBlob{{Alias: "raw", Bucket: "lakehouse", Prefix: "raw"}}}},
 			},
 		},
 		buckets: map[string]*v1.Bucket{
@@ -51,7 +51,7 @@ func getRaw(t *testing.T, c *awss3.Client) ([]byte, error) {
 }
 
 // scenario: function-key-cannot-sign-as-engine — Function lake's injected keypair cannot sign with the access
-// key derived for CatalogService lake: the gateway re-derives the engine's secret from the kind the key carries,
+// key derived for Lake lake: the gateway re-derives the engine's secret from the kind the key carries,
 // so the signature fails (403) and nothing is read. The engine's own keypair reads the same object.
 func TestScenarioFunctionKeyCannotSignAsEngine(t *testing.T) {
 	t.Parallel()
@@ -59,7 +59,7 @@ func TestScenarioFunctionKeyCannotSignAsEngine(t *testing.T) {
 	g.seed(t, "default", "lakehouse", "raw/x.parquet", []byte("engine data"))
 
 	fnKey := s3gateway.DeriveKeypair(testMaster, v1.KindFunction, "default", "lake")
-	engineKey := s3gateway.DeriveKeypair(testMaster, v1.KindCatalogService, "default", "lake")
+	engineKey := s3gateway.DeriveKeypair(testMaster, v1.KindLake, "default", "lake")
 	require.NotEqual(t, fnKey.SecretKey, engineKey.SecretKey)
 
 	body, err := getRaw(t, g.clientWithKeys(t, engineKey.AccessKey, fnKey.SecretKey))
@@ -67,7 +67,7 @@ func TestScenarioFunctionKeyCannotSignAsEngine(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, statusCode(err))
 	require.Empty(t, body)
 
-	body, err = getRaw(t, g.clientAs(t, v1.KindCatalogService, "default", "lake"))
+	body, err = getRaw(t, g.clientAs(t, v1.KindLake, "default", "lake"))
 	require.NoError(t, err)
 	require.Equal(t, "engine data", string(body))
 }

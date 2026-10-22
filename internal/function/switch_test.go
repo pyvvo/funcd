@@ -272,8 +272,8 @@ func TestFailedGateKeepsOldServing(t *testing.T) {
 		{"data-reference", "KVStoreNotFound", func(fn *v1.Function) {
 			fn.Spec.Bindings.KV = []v1.FunctionKV{{Alias: "cache", Store: "nostore", Table: "t"}}
 		}},
-		{"catalog", "CatalogNotReady", func(fn *v1.Function) {
-			fn.Spec.Bindings.Catalog = []v1.FunctionCatalog{{Alias: "lake", Catalog: "nolake"}}
+		{"lake", "LakeNotReady", func(fn *v1.Function) {
+			fn.Spec.Bindings.Lake = []v1.FunctionLake{{Alias: "lake", Lake: "nolake"}}
 		}},
 	}
 	for _, tc := range cases {

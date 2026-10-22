@@ -1,6 +1,6 @@
 # Workload backups: an app owner's schedule, records and restores
 
-An app owner backs up its own KVStores, Buckets and catalogs with three namespaced kinds (ADR-0222): a
+An app owner backs up its own KVStores, Buckets and lakes with three namespaced kinds (ADR-0222): a
 `BackupSchedule` defines the scope, the cron slots, the S3 target and the recipients; each slot, a hook or a
 developer creates a `Backup`, one full copy; a `Restore` loads a `Backup`'s members back. funcd runs them with the
 platform's rights; RBAC at admission is the boundary (developers and admins write them, viewers read them).
@@ -55,7 +55,7 @@ spec:
       - age1recovery…
 ```
 
-The scope is one form: names (`kvStores`, `buckets`, `catalogs`), `app` (the App's stores) or `resourceGroup`. Every
+The scope is one form: names (`kvStores`, `buckets`, `lakes`), `app` (the App's stores) or `resourceGroup`. Every
 file is sealed to the recipients, two or more of one family; keep the recovery identity outside the platform. An App
 declares the same under `spec.backupSchedules`; an entry without a scope backs up the App itself.
 
@@ -105,7 +105,7 @@ spec:
 ```
 
 `owner-key` holds the owner's age identity under `AGE_IDENTITY`. Each member names one target: `as` (an empty KVStore
-or Bucket), `asCatalog` (an empty bucket prefix, then point a CatalogService at it) or `inPlace: true`. An in-place
+or Bucket), `asLocation` (an empty bucket prefix, then point a Lake at it) or `inPlace: true`. An in-place
 Restore needs `update` on the Namespace (an admin), and one runs per namespace at a time: a second is refused while
 the first is `Pending` or `Running`, and so is a delete of the first. It first runs Backup `<restore>-before`, then holds the namespace while it
 empties and loads the store; only a completed load lifts that hold. One whose load fails, or that funcd stopped

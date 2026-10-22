@@ -85,9 +85,9 @@ func object(t testing.TB, kind v1.Kind, name v1.ObjectName) v1.Object {
 	case *v1.Sensor:
 		o.Spec.On = []v1.Dependency{{Name: "tick", Source: "tick", Event: "hourly"}}
 		o.Spec.Do = []v1.Action{{Name: "plan", On: "tick", Workflow: "wf"}}
-	case *v1.CatalogService:
+	case *v1.Lake:
 		o.Spec.Bindings.Blob = []v1.FunctionBlob{{Alias: "lake", Bucket: "lake", Prefix: "lake"}}
-		o.Spec.Catalog = v1.CatalogRef{Bucket: "lake", Prefix: "lake"}
+		o.Spec.Location = v1.LakeLocation{Bucket: "lake", Prefix: "lake"}
 	case *v1.AppRevision:
 		o.Spec.App, o.Spec.Number = v1.ObjectRef{Kind: v1.KindApp, Namespace: ns, Name: "app"}, 1
 	case *v1.BackupSchedule:
@@ -383,7 +383,7 @@ func appPairs() []gc.Pair {
 	var out []gc.Pair
 	for _, k := range []v1.Kind{
 		v1.KindFunction, v1.KindWorkflow, v1.KindEventSource, v1.KindSensor, v1.KindRoute, v1.KindSite,
-		v1.KindCatalogService, v1.KindBackupSchedule, v1.KindKVStore, v1.KindSQLDatabase, v1.KindBucket, v1.KindConfigMap,
+		v1.KindLake, v1.KindBackupSchedule, v1.KindKVStore, v1.KindSQLDatabase, v1.KindBucket, v1.KindConfigMap,
 	} {
 		out = append(out, gc.Pair{Owner: v1.KindApp, Child: k})
 	}
@@ -391,15 +391,15 @@ func appPairs() []gc.Pair {
 }
 
 // rootEntryPairs is the pairs ownedstore.Refs stamps under deletion: delete for what a Function, Site or Workflow
-// declares at its root (ADR-0248 Decision 8), a standalone CatalogService (ADR-0251 Decision 6), and the rest of a Workflow's (ADR-0250 Decision 6).
+// declares at its root (ADR-0248 Decision 8), a standalone Lake (ADR-0251 Decision 6), and the rest of a Workflow's (ADR-0250 Decision 6).
 func rootEntryPairs() []gc.Pair {
 	return []gc.Pair{
-		{Owner: v1.KindFunction, Child: v1.KindCatalogService}, {Owner: v1.KindFunction, Child: v1.KindKVStore},
+		{Owner: v1.KindFunction, Child: v1.KindLake}, {Owner: v1.KindFunction, Child: v1.KindKVStore},
 		{Owner: v1.KindFunction, Child: v1.KindSQLDatabase}, {Owner: v1.KindFunction, Child: v1.KindBucket},
 		{Owner: v1.KindFunction, Child: v1.KindConfigMap}, {Owner: v1.KindSite, Child: v1.KindBucket},
 		{Owner: v1.KindWorkflow, Child: v1.KindBucket},
-		{Owner: v1.KindCatalogService, Child: v1.KindBucket}, {Owner: v1.KindCatalogService, Child: v1.KindConfigMap},
-		{Owner: v1.KindWorkflow, Child: v1.KindSQLDatabase}, {Owner: v1.KindWorkflow, Child: v1.KindCatalogService},
+		{Owner: v1.KindLake, Child: v1.KindBucket}, {Owner: v1.KindLake, Child: v1.KindConfigMap},
+		{Owner: v1.KindWorkflow, Child: v1.KindSQLDatabase}, {Owner: v1.KindWorkflow, Child: v1.KindLake},
 		{Owner: v1.KindWorkflow, Child: v1.KindConfigMap},
 	}
 }
@@ -726,7 +726,7 @@ func TestInUse(t *testing.T) {
 		{"a Function's spec.blob", object(t, v1.KindBucket, "lake"), fn("api", func(s *v1.FunctionSpec) {
 			s.Bindings.Blob = []v1.FunctionBlob{{Alias: "lake", Bucket: "lake", Prefix: "raw"}}
 		})},
-		{"a CatalogService's spec.blob", object(t, v1.KindBucket, "lake"), object(t, v1.KindCatalogService, "catalog")},
+		{"a Lake's spec.blob", object(t, v1.KindBucket, "lake"), object(t, v1.KindLake, "lake")},
 		{"an EventSource's spec.blob.bucket", object(t, v1.KindBucket, "lake"), func() v1.Object {
 			es := object(t, v1.KindEventSource, "drops").(*v1.EventSource)
 			es.Spec.Timer = nil
@@ -742,8 +742,8 @@ func TestInUse(t *testing.T) {
 		{"a Function's spec.config", object(t, v1.KindConfigMap, "settings"), fn("api", func(s *v1.FunctionSpec) {
 			s.Bindings.Config = []v1.ObjectName{"settings"}
 		})},
-		{"a CatalogService's spec.config", object(t, v1.KindConfigMap, "settings"), func() v1.Object {
-			c := object(t, v1.KindCatalogService, "catalog").(*v1.CatalogService)
+		{"a Lake's spec.config", object(t, v1.KindConfigMap, "settings"), func() v1.Object {
+			c := object(t, v1.KindLake, "lake").(*v1.Lake)
 			c.Spec.Bindings.Config = []v1.ObjectName{"settings"}
 			return c
 		}()},

@@ -62,7 +62,7 @@ var kindDescriptors = map[v1.Kind]kindDescriptor{
 	v1.KindGateway:         {"gateways", false},
 	v1.KindKVStore:         {"kvstores", true},
 	v1.KindBucket:          {"buckets", true},
-	v1.KindCatalogService:  {"catalogservices", true},
+	v1.KindLake:            {"lakes", true},
 	v1.KindSQLDatabase:     {"sqldatabases", true},
 	v1.KindPolicy:          {"policies", true},
 	v1.KindWorkflow:        {"workflows", true},

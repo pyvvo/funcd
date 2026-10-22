@@ -1,4 +1,4 @@
-catalogs:
+lakes:
   - name: ${{ app.name + "-lake" }}
     bindings:
       blob:
@@ -8,6 +8,6 @@ catalogs:
         - alias: lake
           bucket: ${{ app.name + "-files" }}
           prefix: lake
-    catalog:
+    location:
       bucket: ${{ app.name + "-files" }}
       prefix: lake

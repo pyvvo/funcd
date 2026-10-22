@@ -69,7 +69,7 @@ func TestIssue850_GatewayOffMasterMigrates(t *testing.T) {
 
 	master, err := s3gateway.LoadOrCreateMaster("", s.dataDir)
 	require.NoError(t, err)
-	require.Equal(t, []byte("old-key"), master, "the catalog tokens and keypairs stay")
+	require.Equal(t, []byte("old-key"), master, "the lake tokens and keypairs stay")
 }
 
 // Two different keys: the gateway-off node refuses, naming both paths and s3gateway.masterSecretFile; it never picks.

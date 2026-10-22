@@ -24,7 +24,7 @@ func buildPDP(t *testing.T, st store.Store) auth.Authorizer {
 	t.Helper()
 	reg, err := cedar.NewRegistry(
 		[]cedar.Capability{cedar.S3CapabilityWithWriters(NewLister(st)), cedar.KVCapabilityWithWriters(NewLister(st))},
-		[]cedar.PrincipalSource{cedar.FunctionPrincipalSource(), cedar.CatalogServicePrincipalSource()},
+		[]cedar.PrincipalSource{cedar.FunctionPrincipalSource(), cedar.LakePrincipalSource()},
 	)
 	require.NoError(t, err)
 	ep, err := reg.EntityProvider(st)

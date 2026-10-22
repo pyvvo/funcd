@@ -34,15 +34,15 @@ const (
 )
 
 // routeEntrySource is this reconciler's edge-aggregator source key (ADR-0138): the user-Route set is
-// one partition of the shared edge table, alongside the CatalogService reconciler's catalog partition.
+// one partition of the shared edge table, alongside the Lake reconciler's lake partition.
 const routeEntrySource = "routes"
 
 // Deps are the reconciler's dependencies.
 type Deps struct {
 	Store store.Store
 	// Routes contributes the user-Route entry set (source "routes") to the shared edge aggregator
-	// (ADR-0138) — replacing a direct router.Program so user Routes coexist with the CatalogService's
-	// node-private catalog route without clobbering the replace-all edge table.
+	// (ADR-0138) — replacing a direct router.Program so user Routes coexist with the Lake's
+	// node-private lake route without clobbering the replace-all edge table.
 	Routes router.EntrySetter
 	Logger *slog.Logger
 	// ReferentPollInterval and ResyncInterval are controller.referentPollInterval and controller.routeResyncInterval

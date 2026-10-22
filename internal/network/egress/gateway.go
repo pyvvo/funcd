@@ -3,7 +3,7 @@
 // driver recovers the pre-DNAT destination (SO_ORIGINAL_DST), authenticates the caller by source IP via
 // the WorkerIndex, builds the FORWARDER-ATTESTED destination (the B1 invariant — client SNI/Host is never
 // the authorization basis), asks the auth.Authorizer PDP whether that worker's principal (its Function or
-// CatalogService) may egress::connect to that NetDestination, and splices on ALLOW / refuses on DENY —
+// Lake) may egress::connect to that NetDestination, and splices on ALLOW / refuses on DENY —
 // auditing every connection. It is default-deny,
 // fail-closed, opt-in (server.network.egress), and Linux/containerd only. Disabled or on a non-Linux host
 // New returns a no-op Gateway and worker egress stays open exactly as before. The SNI/Host parsers, the
@@ -38,7 +38,7 @@ type Deps struct {
 }
 
 // WorkerIndex resolves a worker's funcd0 source IP to the principal Ref of its owner kind (a Function or a
-// CatalogService).
+// Lake).
 type WorkerIndex interface {
 	Lookup(ip netip.Addr) (ref auth.EntityRef, ok bool)
 }

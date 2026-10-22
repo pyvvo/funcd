@@ -11,7 +11,7 @@ import (
 )
 
 // condIngressReady reports the Route a Function owns for an address of its own (ADR-0241 Decision 5), as a
-// CatalogService reports its edge entry.
+// Lake reports its edge entry.
 const condIngressReady v1.ConditionType = "IngressReady"
 
 // syncRoute writes the Route of a Function whose ingress names a host or a path, deletes it when that address goes,

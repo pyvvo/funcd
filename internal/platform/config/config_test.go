@@ -429,6 +429,16 @@ func TestScenarioUnknownKeyRejected(t *testing.T) {
 	require.Equal(t, fault.Invalid, fault.KindOf(err), "an unknown key is rejected, not ignored")
 }
 
+// scenario: old-config-key-refused (ADR-0261) — the daemon config's catalog section is gone: a file that still has it is
+// refused at load, and its lake successor loads.
+func TestScenarioOldConfigKeyRefused(t *testing.T) {
+	_, err := config.Load(writeCfg(t, "catalog:\n  enginePollInterval: 3s\n"), config.Flags{})
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "the old catalog section is refused, not ignored")
+	c, err := config.Load(writeCfg(t, "lake:\n  enginePollInterval: 3s\n"), config.Flags{})
+	require.NoError(t, err)
+	require.Equal(t, "3s", c.Lake.EnginePollInterval)
+}
+
 type vc struct {
 	value string
 	valid bool

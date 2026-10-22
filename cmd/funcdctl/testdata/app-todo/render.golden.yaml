@@ -18,20 +18,6 @@ spec:
   - name: todo-web
     prefixes:
     - name: web
-  catalogs:
-  - bindings:
-      blob:
-      - alias: events
-        bucket: todo-files
-        prefix: events
-      - alias: lake
-        bucket: todo-files
-        prefix: lake
-    catalog:
-      bucket: todo-files
-      prefix: lake
-    name: todo-lake
-    resources: {}
   configMaps:
   - data:
       TZ: Europe/Paris
@@ -82,9 +68,9 @@ spec:
     runtime: nodejs22
     scaling: {}
   - bindings:
-      catalog:
+      lake:
       - alias: lake
-        catalog: todo-lake
+        lake: todo-lake
     handler: handle
     image: registry.example/todo-stats:1.0.3@sha256:d540eb0bc37f1f6393e5c08593d78bb5e491b2413e0c773daac7795b459f9d81
     name: todo-stats
@@ -111,6 +97,20 @@ spec:
       owner: todo-api
     - name: runs
       owner: todo-planner
+  lakes:
+  - bindings:
+      blob:
+      - alias: events
+        bucket: todo-files
+        prefix: events
+      - alias: lake
+        bucket: todo-files
+        prefix: lake
+    location:
+      bucket: todo-files
+      prefix: lake
+    name: todo-lake
+    resources: {}
   routes:
   - host: todo.example.com
     name: todo-api

@@ -469,7 +469,7 @@ func TestIssue850_GatewayOffMasterUnderDataDir(t *testing.T) {
 }
 
 // Issue #850, ADR-0204 scenario master-key-migrates: a gateway-off node whose master is only in the working
-// directory copies it under storage.dataDir when it starts, so the catalog tokens it issued stay valid.
+// directory copies it under storage.dataDir when it starts, so the lake tokens it issued stay valid.
 func TestIssue850_StartMigratesWorkingDirMaster(t *testing.T) {
 	cwd := t.TempDir()
 	t.Chdir(cwd)

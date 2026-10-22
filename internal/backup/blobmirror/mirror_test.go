@@ -78,8 +78,8 @@ const (
 
 func parquet(name string) string { return lake + "data/" + name + ".parquet" }
 
-// requireCatalogConsistent checks the generation's checkpoint names only files the generation holds.
-func requireCatalogConsistent(t *testing.T, got map[string]string) {
+// requireLakeConsistent checks the generation's checkpoint names only files the generation holds.
+func requireLakeConsistent(t *testing.T, got map[string]string) {
 	t.Helper()
 	cp, ok := got[ck]
 	require.True(t, ok, "the generation holds the checkpoint")
@@ -88,9 +88,9 @@ func requireCatalogConsistent(t *testing.T, got map[string]string) {
 	}
 }
 
-// scenario: catalog-checkpoint-first — mid-freeze the engine writes f2 and a checkpoint listing both, or a
+// scenario: lake-checkpoint-first — mid-freeze the engine writes f2 and a checkpoint listing both, or a
 // checkpoint without f1 and deletes f1: each checkpoint's files are in the generation.
-func TestScenarioCatalogCheckpointFirst(t *testing.T) {
+func TestScenarioLakeCheckpointFirst(t *testing.T) {
 	t.Parallel()
 	for name, change := range map[string]func(f *fixture){
 		"f2 added": func(f *fixture) {
@@ -116,7 +116,7 @@ func TestScenarioCatalogCheckpointFirst(t *testing.T) {
 				}
 			}})
 			m := f.run()
-			requireCatalogConsistent(t, f.restored(m.Generation, nil))
+			requireLakeConsistent(t, f.restored(m.Generation, nil))
 		})
 	}
 }

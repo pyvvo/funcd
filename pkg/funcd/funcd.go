@@ -43,7 +43,6 @@ import (
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
 	"github.com/pyvvo/funcd/internal/bus"
-	cataloggw "github.com/pyvvo/funcd/internal/catalog/gateway"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/controlplane"
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
@@ -68,6 +67,7 @@ import (
 	"github.com/pyvvo/funcd/internal/health"
 	"github.com/pyvvo/funcd/internal/kvstore"
 	kvmemory "github.com/pyvvo/funcd/internal/kvstore/memory"
+	lakegw "github.com/pyvvo/funcd/internal/lake/gateway"
 	"github.com/pyvvo/funcd/internal/network"
 	"github.com/pyvvo/funcd/internal/network/egress"
 	"github.com/pyvvo/funcd/internal/platform/clock"
@@ -86,9 +86,9 @@ import (
 	"github.com/pyvvo/funcd/internal/services"
 	backupsvc "github.com/pyvvo/funcd/internal/services/backup"
 	blobsvc "github.com/pyvvo/funcd/internal/services/blob"
-	catalogsvc "github.com/pyvvo/funcd/internal/services/catalog"
 	identitysvc "github.com/pyvvo/funcd/internal/services/identity"
 	kvsvc "github.com/pyvvo/funcd/internal/services/kv"
+	lakesvc "github.com/pyvvo/funcd/internal/services/lake"
 	rolessvc "github.com/pyvvo/funcd/internal/services/roles"
 	secretsvc "github.com/pyvvo/funcd/internal/services/secret"
 	sqlsvc "github.com/pyvvo/funcd/internal/services/sql"
@@ -271,7 +271,7 @@ type config struct {
 	backupClock clock.Clock
 	backupMeter metric.Meter
 
-	// bridgeAddress is funcd's address on its container bridge (ADR-0238), bound and published by the catalog proxies and
+	// bridgeAddress is funcd's address on its container bridge (ADR-0238), bound and published by the lake proxies and
 	// the SQL change feed; "" ⇒ 127.0.0.1.
 	bridgeAddress string
 
@@ -294,11 +294,11 @@ type config struct {
 	// workflowRuntimes overrides the step-image RuntimeResolver (ADR-0247 Decision 7); nil ⇒ the OCI annotation.
 	workflowRuntimes workflow.RuntimeResolver
 
-	// catalogProvider overrides the CatalogService add-on-provider runtime (ADR-0087). Empty ⇒ the
+	// lakeProvider overrides the Lake add-on-provider runtime (ADR-0087). Empty ⇒ the
 	// production runtime that supervises the curated duckdb CONTAINER (internal/provider). Set by
 	// `funcdctl dev` (ADR-0125) to a process-mode driver that runs the embedded DuckDB+Quack engine
 	// as a host subprocess — there are no containers in process-dev.
-	catalogProvider provider.Runtime
+	lakeProvider provider.Runtime
 	// sqlProvider overrides the SQLDatabase engine runtime (ADR-0232); nil ⇒ the production runtime.
 	sqlProvider provider.Runtime
 	// sqlCallTimeout bounds one context.sql call (ADR-0233, sql.callTimeout); 0 ⇒ 30 s.
@@ -313,9 +313,9 @@ type config struct {
 	// directory is no lost data (ADR-0234 Decision 6).
 	providerStorageEphemeral bool
 
-	// catalogExtensionDir is injected as DUCKDB_EXTENSION_DIRECTORY into catalog-consumer functions
+	// lakeExtensionDir is injected as DUCKDB_EXTENSION_DIRECTORY into lake-consumer functions
 	// (dev analogue of the prod bundle's duckdb-ext, ADR-0089). Set by `funcdctl dev`; empty in prod.
-	catalogExtensionDir string
+	lakeExtensionDir string
 
 	// logObserver, when set, streams every captured function log line live (in addition to the normal
 	// blob-persisted capture) — `funcdctl dev` uses it to print logs to the terminal in real time. nil ⇒
@@ -504,7 +504,7 @@ type Platform struct {
 	logRoutes            logRoutes                 // the live capture Routes feeding logSink/traceSink, drained by Shutdown
 	compactor            *compact.Compactor        // funclog compacted compaction pipeline (ADR-0083); nil if unwired
 	s3gw                 *s3gateway.Server         // S3-protocol frontend (ADR-0080/0085); nil unless s3gwEnabled
-	catalogProxy         *cataloggw.Manager        // per-CatalogService node-private catalog PEP proxies (ADR-0137); Shutdown-closed
+	lakeProxy            *lakegw.Manager           // per-Lake node-private lake PEP proxies (ADR-0137); Shutdown-closed
 	egressGateway        egress.Gateway            // transparent egress PEP (ADR-0117, F81); nil unless egress enabled
 	egressForwarder      egress.Forwarder          // DNS forwarder / domain trust anchor (ADR-0117); nil unless enabled
 	egressWorkers        *egress.MemoryWorkerIndex // src-IP → Ref, populated by the containerd runtime (ADR-0117 §5)
@@ -675,7 +675,7 @@ func (p *Platform) buildControlPlane() error {
 	// (recompiled on a store-revision change). DEFAULT-DENY — a read needs a permitting Policy; the
 	// owner-write forbid is built in. rbac still decides control-plane CRUD (c.authorizer, unchanged).
 	// The capability registry (ADR-0116): the three migrated capabilities (kv, invoke, s3) + the two
-	// principal sources (Function, CatalogService; each resolves its own type) registered here at the composition
+	// principal sources (Function, Lake; each resolves its own type) registered here at the composition
 	// root. The schema vocabulary, the built-in PolicySet, and this composite EntityProvider are all
 	// assembled from the registered set — a new capability (egress next) registers with no shared edit.
 	// ADR-0136: a store-backed WriterLister feeds writer-role RolesAssignment grants into the s3/kv
@@ -683,11 +683,11 @@ func (p *Platform) buildControlPlane() error {
 	writerLister := rolessvc.NewLister(c.store)
 	s3Cap := cedarauth.S3CapabilityWithWriters(writerLister)
 	cedarRegistry, err := cedarauth.NewRegistry(
-		// ADR-0137 (F102): CatalogCapability makes the live PDP understand catalog::query; the per-CatalogService
-		// PEP proxy that calls it is not yet wired here — see TODO(ADR-0137) in internal/services/catalog/reconcile.go.
-		[]cedarauth.Capability{cedarauth.KVCapabilityWithWriters(writerLister), cedarauth.InvokeCapability(), s3Cap, cedarauth.EgressCapability(), cedarauth.CatalogCapability(),
+		// ADR-0137 (F102): LakeCapability makes the live PDP understand lake::query; the per-Lake
+		// PEP proxy that calls it is not yet wired here — see TODO(ADR-0137) in internal/services/lake/reconcile.go.
+		[]cedarauth.Capability{cedarauth.KVCapabilityWithWriters(writerLister), cedarauth.InvokeCapability(), s3Cap, cedarauth.EgressCapability(), cedarauth.LakeCapability(),
 			cedarauth.SQLCapabilityWithWriters(writerLister)},
-		[]cedarauth.PrincipalSource{cedarauth.FunctionPrincipalSource(), cedarauth.CatalogServicePrincipalSource()},
+		[]cedarauth.PrincipalSource{cedarauth.FunctionPrincipalSource(), cedarauth.LakePrincipalSource()},
 	)
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build cedar capability registry")
@@ -747,9 +747,9 @@ func (p *Platform) buildControlPlane() error {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build storage prober")
 	}
 	// The node master secret (ADR-0085): the SAME 32-byte key the S3 gateway derives per-function
-	// SigV4 keypairs from, the catalog PEP proxy derives/verifies per-function catalog tokens with
+	// SigV4 keypairs from, the lake PEP proxy derives/verifies per-function lake tokens with
 	// (ADR-0137) and the SQL engines' passwords come from (ADR-0232). Loaded ONCE here — before the SQL
-	// facade, the s3gw and the catalog wiring — so they share one master (LoadOrCreateMaster is
+	// facade, the s3gw and the lake wiring — so they share one master (LoadOrCreateMaster is
 	// deterministic per file/dir, but loading twice risks generating two different keys on a first run).
 	// Never logged.
 	master := c.masterSecret
@@ -849,18 +849,18 @@ func (p *Platform) buildControlPlane() error {
 		}
 	}
 
-	// Catalog PEP proxy manager (ADR-0137): the node-private per-CatalogService proxies that bring
-	// internal function→catalog queries under the same per-caller, per-query Cedar PEP as blob/kv/S3.
-	// It resolves a presented catalog token (a per-function MAC bearer or a minted per-Identity token)
-	// to its principal via catalogKeys, PEPs catalog::query on the endpoint's CatalogService, and swaps
-	// the caller token for the shared engine token only after an allow. The catalog reconciler binds a
-	// listener per catalog on its recorded port and Ensures it fronts the Ready engine (publishing its url as
-	// Status.Endpoint); a deleted catalog's listener closes once no Function binds it (ADR-0162).
+	// Lake PEP proxy manager (ADR-0137): the node-private per-Lake proxies that bring
+	// internal function→lake queries under the same per-caller, per-query Cedar PEP as blob/kv/S3.
+	// It resolves a presented lake token (a per-function MAC bearer or a minted per-Identity token)
+	// to its principal via lakeKeys, PEPs lake::query on the endpoint's Lake, and swaps
+	// the caller token for the shared engine token only after an allow. The lake reconciler binds a
+	// listener per lake on its recorded port and Ensures it fronts the Ready engine (publishing its url as
+	// Status.Endpoint); a deleted lake's listener closes once no Function binds it (ADR-0162).
 	// The proxies bind and publish the bridge address, node-private, or the shared loopback (ADR-0238).
 	catHost := cmp.Or(c.bridgeAddress, "127.0.0.1")
-	catalogKeys := cataloggw.NewCatalogKeys(master, c.store)
-	catalogMgr := cataloggw.NewManager(catHost, catalogKeys, cedarPDP, p.logger)
-	p.catalogProxy = catalogMgr
+	lakeKeys := lakegw.NewLakeKeys(master, c.store)
+	lakeMgr := lakegw.NewManager(catHost, lakeKeys, cedarPDP, p.logger)
+	p.lakeProxy = lakeMgr
 
 	// ADR-0143: one tracker counts every call to a worker — the activator's proxy, the Sensor invoker and the workflow
 	// dispatcher send through it — so the reconciler can tell when a demoted revision's worker is drained.
@@ -898,9 +898,9 @@ func (p *Platform) buildControlPlane() error {
 		PoolManifestDir:      c.poolManifestDir,
 		PoolLimit:            c.poolLimit,
 		S3Gateway:            s3Injection,
-		CatalogMaster:        master, // ADR-0137: per-function catalog token derivation (same master as S3)
-		CatalogExtensionDir:  c.catalogExtensionDir,
-		CatalogProxies:       catalogMgr,
+		LakeMaster:           master, // ADR-0137: per-function lake token derivation (same master as S3)
+		LakeExtensionDir:     c.lakeExtensionDir,
+		LakeProxies:          lakeMgr,
 		Secrets:              secretResolver,
 	})
 	if err != nil {
@@ -982,9 +982,9 @@ func (p *Platform) buildControlPlane() error {
 	}
 	p.edgeRouter = router.New() // ADR-0110 (F79): shared by the Route reconciler + the data-plane handler
 	// Edge-route aggregator (ADR-0138): the SINGLE sole-writer of p.edgeRouter's replace-all table. The
-	// Route reconciler (user Routes) and the CatalogService reconciler (its node-private catalog::query
+	// Route reconciler (user Routes) and the Lake reconciler (its node-private lake::query
 	// PEP proxy entry) each Set only their own source partition; the aggregator unions all sources into
-	// one Program call — so an exposed catalog coexists with user Routes instead of clobbering them. The
+	// one Program call — so an exposed lake coexists with user Routes instead of clobbering them. The
 	// data-plane still reads p.edgeRouter directly (Resolve); only writes go through the aggregator.
 	// ADR-0176: it arbitrates every source's claims against the namespace exposure modes and re-runs the
 	// reconciler of each owner whose verdict another source's Set changed.
@@ -1014,7 +1014,7 @@ func (p *Platform) buildControlPlane() error {
 	}
 	ctrl.Watches(v1.KindFunction.GVK(), fnReconciler.MapPoolDisplaced) // an asleep member a newcomer displaces (ADR-0193)
 	// ADR-0248 Decision 3: a change to what a Function defines at its root re-runs that Function, which writes it back
-	for _, k := range []v1.Kind{v1.KindKVStore, v1.KindBucket, v1.KindSQLDatabase, v1.KindCatalogService, v1.KindConfigMap} {
+	for _, k := range []v1.Kind{v1.KindKVStore, v1.KindBucket, v1.KindSQLDatabase, v1.KindLake, v1.KindConfigMap} {
 		ctrl.Watches(k.GVK(), ownedstore.MapOwner(c.store, v1.KindFunction))
 	}
 	ctrl.Register(v1.KindService.GVK(), dispatcher)
@@ -1096,54 +1096,54 @@ func (p *Platform) buildControlPlane() error {
 		}
 		enqueueAll(context.Background(), c.store, ctrl, kind, p.logger)
 	})
-	// CatalogService reconciler (ADR-0086 as reworked by ADR-0087/F48/F57): the DuckDB/Quack engine
+	// Lake reconciler (ADR-0086 as reworked by ADR-0087/F48/F57): the DuckDB/Quack engine
 	// is deployed by the add-on-provider runtime (NOT a backing Function). The provider-runtime reuses
 	// the EXISTING container port + ingress gateway; the reconciler derives the per-fn S3 keypair over
 	// the provider identity (ADR-0085) and resolves spec.bindings.secret/spec.bindings.config (the Quack token + engine
 	// config) into the engine env. DuckDB runs out-of-process in the curated image — no cgo in daemon.
 	// Prod: the add-on-provider runtime supervises the curated duckdb CONTAINER. Dev (ADR-0125)
 	// injects a process-mode driver that runs the embedded engine as a subprocess (no containers).
-	providerRuntime := c.catalogProvider
+	providerRuntime := c.lakeProvider
 	if providerRuntime == nil {
 		var perr error
 		providerRuntime, perr = provider.NewRuntime(provider.Deps{
-			Runtime: c.runtime, OwnerKind: v1.KindCatalogService, Gateway: c.gateway, Logger: p.logger,
+			Runtime: c.runtime, OwnerKind: v1.KindLake, Gateway: c.gateway, Logger: p.logger,
 			ProbeTimeout: c.pacing.EngineProbeTimeout, StorageRoot: c.providerStorage,
 		})
 		if perr != nil {
 			return fault.Wrapf(perr, fault.KindOf(perr), op, "build provider runtime")
 		}
 	}
-	catalogDeps := catalogsvc.ReconcilerDeps{
+	lakeDeps := lakesvc.ReconcilerDeps{
 		Store:      c.store,
 		Provider:   providerRuntime,
 		Secrets:    secretResolver,
 		S3Endpoint: c.s3gwEndpoint,
 		ImageFor:   c.imageFor,
 		Logger:     p.logger,
-		Proxy:      catalogMgr, // ADR-0137: Ensure a node-private catalog PEP proxy per Ready catalog
-		Routes:     edgeAgg,    // ADR-0138: program the opt-in external edge entry to the proxy
+		Proxy:      lakeMgr, // ADR-0137: Ensure a node-private lake PEP proxy per Ready lake
+		Routes:     edgeAgg, // ADR-0138: program the opt-in external edge entry to the proxy
 
 		SupervisionPeriod:    c.pacing.SupervisionPeriod,
 		ReferentPollInterval: c.pacing.ReferentPollInterval,
 		EnginePollInterval:   c.pacing.EnginePollInterval,
 	}
-	// The engine's S3 keypair is derived over its CatalogService identity (ADR-0085, ADR-0175) by the same
+	// The engine's S3 keypair is derived over its Lake identity (ADR-0085, ADR-0175) by the same
 	// deriver the Function reconciler uses — present only when the S3 gateway is enabled.
 	if s3Injection.Enabled {
-		catalogDeps.Derive = s3Injection.Derive
-		if catalogDeps.S3Endpoint == "" {
-			catalogDeps.S3Endpoint = "http://" + s3Injection.ListenAddr
+		lakeDeps.Derive = s3Injection.Derive
+		if lakeDeps.S3Endpoint == "" {
+			lakeDeps.S3Endpoint = "http://" + s3Injection.ListenAddr
 		}
 	}
-	catalogReconciler, err := catalogsvc.NewReconciler(catalogDeps)
+	lakeReconciler, err := lakesvc.NewReconciler(lakeDeps)
 	if err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), op, "build CatalogService reconciler")
+		return fault.Wrapf(err, fault.KindOf(err), op, "build Lake reconciler")
 	}
-	ctrl.Register(v1.KindCatalogService.GVK(), catalogReconciler)
-	// ADR-0162: a consumer's status follows its catalog, and a released listener closes once no Function binds it.
-	ctrl.Watches(v1.KindCatalogService.GVK(), fnReconciler.MapCatalogService)
-	ctrl.Watches(v1.KindFunction.GVK(), catalogReconciler.MapFunction)
+	ctrl.Register(v1.KindLake.GVK(), lakeReconciler)
+	// ADR-0162: a consumer's status follows its lake, and a released listener closes once no Function binds it.
+	ctrl.Watches(v1.KindLake.GVK(), fnReconciler.MapLake)
+	ctrl.Watches(v1.KindFunction.GVK(), lakeReconciler.MapFunction)
 
 	// ADR-0232: one rqlite engine per SQLDatabase, run by its own add-on runtime with durable storage (ADR-0231).
 	sqlRuntime := c.sqlProvider
@@ -1157,7 +1157,7 @@ func (p *Platform) buildControlPlane() error {
 			return fault.Wrapf(perr, fault.KindOf(perr), op, "build the SQL provider runtime")
 		}
 	}
-	// ADR-0235: every engine posts its changes to the feed, on the catalog proxies' host, which workers reach.
+	// ADR-0235: every engine posts its changes to the feed, on the lake proxies' host, which workers reach.
 	feedWatermarks := p.eventStore.ChangeWatermarks()
 	p.sqlFeed, err = sqlsvc.NewFeed(sqlsvc.FeedDeps{Store: c.store, Publisher: p.eventFanout, Watermarks: feedWatermarks, Master: master,
 		Hold: c.gate(), NamespaceHold: c.nsGate(), Logger: p.logger})
@@ -1334,8 +1334,8 @@ func (p *Platform) buildControlPlane() error {
 			// ADR-0232 SQLDatabase rules: the count quota, and no API delete while the engine holds a table.
 			admission.NewSQLDatabaseQuotaAdmission(r, sqlMax),
 			admission.NewSQLDatabaseDeletionProtectionAdmission(r, sqlReconciler.Prober()),
-			// ADR-0086/0091 catalog blob + consumer-binding EXISTENCE were write-time gates; now reconcile-time
-			// (ADR-0121): the CatalogService / Function reconcilers wait for the referent (Waiting condition).
+			// ADR-0086/0091 lake blob + consumer-binding EXISTENCE were write-time gates; now reconcile-time
+			// (ADR-0121): the Lake / Function reconcilers wait for the referent (Waiting condition).
 			// ADR-0139 Site: spec.bindings.blob[0].prefix is immutable on Update (the prefix permanently holds the site's bundles).
 			admission.NewSitePrefixImmutableAdmission(),
 			// ADR-0074 Policy validity: spec.cedar parses + references only the curated schema
@@ -1345,7 +1345,7 @@ func (p *Platform) buildControlPlane() error {
 			// owner to it and its config bindings name the stored ConfigMaps.
 			admission.NewBindingDeclaredAdmission(r),
 			admission.NewFunctionStoreOwnerAdmission(),
-			admission.NewCatalogStoreOwnerAdmission(),
+			admission.NewLakeStoreOwnerAdmission(),
 			// ADR-0094 WorkflowRun payload cap: spec.input ≤ payloadLimit (larger data by reference).
 			admission.NewWorkflowRunPayloadAdmission(c.workflowPayloadLimit),
 			// ADR-0098 F65: reject a WorkflowRun whose input violates the parent's cached contract (zero registry I/O).
@@ -1646,7 +1646,7 @@ func (p *Platform) Run(ctx context.Context) error {
 		}
 	}
 
-	// ADR-0176 Decision 6: the edge aggregator holds every catalog entry until "routes" has Set once, and no
+	// ADR-0176 Decision 6: the edge aggregator holds every lake entry until "routes" has Set once, and no
 	// Route event follows when no Route exists, so the full Route set is Set here, before the controller runs.
 	if _, err := p.routeReconciler.Reconcile(ctx, controller.Request{GVK: v1.KindRoute.GVK()}); err != nil && ctx.Err() == nil {
 		return abort(fault.Wrapf(err, fault.KindOf(err), "funcd.Run", "load the Route table"))
@@ -1856,10 +1856,10 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 		if cl, ok := p.cfg.kvStore.(io.Closer); ok { // the durable KV driver (ADR-0066/0069)
 			_ = cl.Close()
 		}
-		// Stop the per-CatalogService catalog PEP proxies (ADR-0137) — node-private http.Servers that
+		// Stop the per-Lake lake PEP proxies (ADR-0137) — node-private http.Servers that
 		// front the engines; closed before the runtime tears the engines down.
-		if p.catalogProxy != nil {
-			p.catalogProxy.Shutdown()
+		if p.lakeProxy != nil {
+			p.lakeProxy.Shutdown()
 		}
 		// Stop the S3 gateway (ADR-0080/0085) before blob.Close — it serves from the blob substrate.
 		var s3gwErr error
@@ -2256,15 +2256,15 @@ func (p *Platform) syncEgressWorkers(ctx context.Context) {
 }
 
 // reconcileEgressWorkers computes the current running-worker IP→Ref set from the runtime (over the
-// namespaces that have a Function or a CatalogService) and applies the diff against prev to the WorkerIndex,
+// namespaces that have a Function or a Lake) and applies the diff against prev to the WorkerIndex,
 // returning the new snapshot. Each worker is indexed as the principal of its owner kind (ADR-0175): a Function
-// worker as its Function, an engine as its CatalogService; a worker of any other kind is not indexed (an
+// worker as its Function, an engine as its Lake; a worker of any other kind is not indexed (an
 // unknown source, denied). A worker's funcd0 IP is the source IP the F80 REDIRECT preserves, so it keys both
 // the gateway lookup and the DNS-forwarder correlation. A transient store error keeps the current index
 // (returns prev).
 func (p *Platform) reconcileEgressWorkers(ctx context.Context, prev map[netip.Addr]auth.EntityRef) map[netip.Addr]auth.EntityRef {
 	namespaces := map[v1.NamespaceName]struct{}{}
-	for _, kind := range []v1.Kind{v1.KindFunction, v1.KindCatalogService} {
+	for _, kind := range []v1.Kind{v1.KindFunction, v1.KindLake} {
 		res, err := p.cfg.store.List(ctx, kind.GVK(), store.ListOptions{})
 		if err != nil {
 			return prev
@@ -2283,7 +2283,7 @@ func (p *Platform) reconcileEgressWorkers(ctx context.Context, prev map[netip.Ad
 			if in.State != runtime.StateRunning || in.IP == "" {
 				continue
 			}
-			if in.OwnerKind != v1.KindFunction && in.OwnerKind != v1.KindCatalogService {
+			if in.OwnerKind != v1.KindFunction && in.OwnerKind != v1.KindLake {
 				continue
 			}
 			ip, perr := netip.ParseAddr(in.IP)

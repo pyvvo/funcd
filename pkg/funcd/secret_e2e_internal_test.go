@@ -54,7 +54,7 @@ func newSecretRig(t *testing.T) *secretRig {
 	t.Cleanup(srv.Close)
 	engine := &envEngine{addr: strings.TrimPrefix(srv.URL, "http://")}
 	p, err := New(InMemory(), WithoutLogCompaction(), WithRuntimeShim(node, langmod.NodeShim(t)),
-		WithCatalogProviderRuntime(engine), WithPacing(asleepPacing(50*time.Millisecond)))
+		WithLakeProviderRuntime(engine), WithPacing(asleepPacing(50*time.Millisecond)))
 	require.NoError(t, err)
 	runCtx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -159,14 +159,14 @@ func TestScenarioSecretReadLive(t *testing.T) {
 	require.Equal(t, before.PID, after.PID, "the same worker serves the new value")
 }
 
-// scenario: provider-env-unchanged — a CatalogService engine, which runs no handler, still receives its bound Secret's
+// scenario: provider-env-unchanged — a Lake engine, which runs no handler, still receives its bound Secret's
 // QUACK_TOKEN in its environment (ADR-0249 Decision 3: envresolve is unchanged for providers).
 func TestScenarioProviderEnvUnchanged(t *testing.T) {
 	t.Parallel()
 	r := newSecretRig(t)
 	r.applySecret(t, "quack", map[string][]byte{"QUACK_TOKEN": []byte("qt")})
 	r.bucket(t, "lakehouse", "raw", "lake")
-	cs := lakeCatalogService("default")
+	cs := lakeResource("default")
 	cs.Spec.Bindings.Secret = []v1.ObjectName{"quack"}
 	cs.Spec.SecretDeclarations = []v1.SecretDeclaration{{Name: "quack", Keys: []string{"QUACK_TOKEN"}}}
 	r.apply(t, cs)

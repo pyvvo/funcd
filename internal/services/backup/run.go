@@ -151,8 +151,8 @@ func (r *BackupReconciler) copy(ctx context.Context, b *v1.Backup) (string, erro
 	switch {
 	case errors.Is(err, workload.ErrTargetUnconditional):
 		return ReasonTargetUnconditional, err
-	case errors.Is(err, workload.ErrCatalogUnstable):
-		return ReasonCatalogUnstable, err
+	case errors.Is(err, workload.ErrLakeUnstable):
+		return ReasonLakeUnstable, err
 	case errors.Is(err, workload.ErrEngineNotReady):
 		return ReasonEngineNotReady, err
 	case err != nil:

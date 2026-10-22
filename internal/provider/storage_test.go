@@ -24,12 +24,12 @@ func storageSpec(ip string, port int) provider.ProviderSpec {
 
 func newStorageRuntime(t *testing.T, rt *fakeRuntime, root string) provider.Runtime {
 	t.Helper()
-	pr, err := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindCatalogService, StorageRoot: root})
+	pr, err := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindLake, StorageRoot: root})
 	require.NoError(t, err)
 	return pr
 }
 
-func engineDir(root string) string { return filepath.Join(root, "catalogservice", "default", "lake") }
+func engineDir(root string) string { return filepath.Join(root, "lake", "default", "lake") }
 
 // scenario: engine-data-survives-recreation — a recreated engine mounts the same directory, and what was written
 // there is still there.

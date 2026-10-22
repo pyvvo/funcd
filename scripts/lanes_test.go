@@ -271,7 +271,7 @@ var (
 	imageInReference = regexp.MustCompile(`[:/]`)
 )
 
-// A fresh clone builds the runtime images, fetches the catalog engine and runs the lanes the same way on any host on
+// A fresh clone builds the runtime images, fetches the lake engine and runs the lanes the same way on any host on
 // any day only when every external input is read at a pinned value: an image is named by its digest, pip installs
 // hashed requirements, a download is checked against a recorded checksum, a VM image is a dated build with its digest,
 // apt installs named versions from the Debian snapshot archive at one fixed time, a VM does not take the host's time
@@ -468,7 +468,7 @@ func (g *guard) vmTemplates(t *testing.T) {
 	}
 	// Each checked once: the scripts a lane VM runs or a template reads in with file:, and the scripts that download.
 	scripts := map[string]bool{"lane-provision.sh": true, "lane-ready.sh": true, "lane-reset.sh": true,
-		"lane-leakcheck.sh": true, "linux-exec.sh": true, "fetch-catalog-engine.sh": true}
+		"lane-leakcheck.sh": true, "linux-exec.sh": true, "fetch-lake-engine.sh": true}
 	for name, tmpl := range templates {
 		for _, img := range tmpl.Images {
 			if !digestForm.MatchString(img.Digest) || movingLocation.MatchString(img.Location) {

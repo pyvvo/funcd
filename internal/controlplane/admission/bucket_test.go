@@ -15,7 +15,7 @@ import (
 type blobReader struct {
 	buckets []*v1.Bucket
 	fns     []*v1.Function
-	css     []*v1.CatalogService // add-on providers (ADR-0088): a valid prefix owner too
+	css     []*v1.Lake // add-on providers (ADR-0088): a valid prefix owner too
 }
 
 func (r blobReader) List(_ context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName) ([]v1.Object, error) {
@@ -33,7 +33,7 @@ func (r blobReader) List(_ context.Context, gvk v1.GroupVersionKind, ns v1.Names
 				out = append(out, f)
 			}
 		}
-	case v1.KindCatalogService:
+	case v1.KindLake:
 		for _, c := range r.css {
 			if c.Namespace == ns {
 				out = append(out, c)

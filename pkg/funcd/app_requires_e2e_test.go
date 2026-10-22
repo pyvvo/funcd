@@ -40,7 +40,7 @@ func requiresApp(name v1.ObjectName, version string, reqs ...v1.AppRequirement) 
 }
 
 // lakehouseApp is the shared App of ADR-0219's fixture. It declares the Bucket lake where the fixture declares the
-// catalog lake: a CatalogService needs the duckdb provider container, which this platform does not run.
+// lake lake: a Lake needs the duckdb provider container, which this platform does not run.
 func lakehouseApp(version string, reqs ...v1.AppRequirement) *v1.App {
 	a := requiresApp("lakehouse", version, reqs...)
 	a.Spec.Buckets = []v1.BucketEntry{{Name: "lake"}}

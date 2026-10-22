@@ -18,8 +18,8 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
-	cataloggw "github.com/pyvvo/funcd/internal/catalog/gateway"
 	"github.com/pyvvo/funcd/internal/controller"
+	lakegw "github.com/pyvvo/funcd/internal/lake/gateway"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -32,10 +32,10 @@ const condReady = "Ready"
 const (
 	secretKeyAccessKeyID     = "accessKeyId"
 	secretKeySecretAccessKey = "secretAccessKey"
-	// secretKeyCatalogToken is the minted per-Identity catalog bearer token (ADR-0137, ADR-0153): the
-	// access key id, ".", and a random, rotatable part; the catalog PEP proxy resolves it to this Identity
+	// secretKeyLakeToken is the minted per-Identity lake bearer token (ADR-0137, ADR-0153): the
+	// access key id, ".", and a random, rotatable part; the lake PEP proxy resolves it to this Identity
 	// by its owner prefix in two store reads. Rotated on the same trigger as the keypair secret.
-	secretKeyCatalogToken = "catalogToken"
+	secretKeyLakeToken = "lakeToken"
 )
 
 // ReconcilerDeps configures the Identity reconciler. Store is required.
@@ -153,11 +153,11 @@ func (r *Reconciler) ensureSecret(ctx context.Context, id *v1.Identity, access s
 	if err != nil {
 		return err
 	}
-	catalogToken := cataloggw.IdentityCatalogToken(id.Namespace, id.Name, random)
+	lakeToken := lakegw.IdentityLakeToken(id.Namespace, id.Name, random)
 	data := map[string][]byte{
 		secretKeyAccessKeyID:     []byte(access),
 		secretKeySecretAccessKey: []byte(secret),
-		secretKeyCatalogToken:    []byte(catalogToken),
+		secretKeyLakeToken:       []byte(lakeToken),
 	}
 	if gerr != nil { // NotFound → create
 		sobj, _ := v1.NewObject(v1.KindSecret)

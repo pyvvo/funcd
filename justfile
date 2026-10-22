@@ -5,7 +5,7 @@
 # ---- helpers ----
 _has-packages := `go list ./... 2>/dev/null`
 # the packages with files built only under `-tags dev` (ADR-0125); lint and test them again with the tag
-_dev-packages := "./cmd/funcdctl ./internal/catalog/devengine ./internal/catalog/embedengine ./internal/sql/devengine ./internal/sql/embedengine"
+_dev-packages := "./cmd/funcdctl ./internal/lake/devengine ./internal/lake/embedengine ./internal/sql/devengine ./internal/sql/embedengine"
 
 # ---- recipes ----
 
@@ -109,7 +109,7 @@ act-build version="dev":
     ls -lh dist
 
 # run the local multi-arch bundle workflow via nektos/act (.github/workflows/bundle-multiarch.yml, ADR-0145): the
-# catalog-quack bundle for linux/amd64 + linux/arm64, pushed per platform and combined into one OCI image index, left
+# lake-quack bundle for linux/amd64 + linux/arm64, pushed per platform and combined into one OCI image index, left
 # under .act-artifacts/. Needs a docker daemon (colima on macOS). The job drives the VM's Docker socket (QEMU, the
 # hermetic installs), so this recipe overrides .actrc's `--container-daemon-socket -` for this workflow only.
 [group('go')]
@@ -193,25 +193,25 @@ smoke-rqlite-image:
     curl -fs -u funcd:smoke-pass -G 127.0.0.1:$port/db/query --data-urlencode 'q=SELECT v FROM t' | grep -q kept
     echo "smoke-rqlite-image: ok"
 
-# Fetch + bundle the DuckDB+Quack CATALOG ENGINE for ONE target os/arch into
-# internal/catalog/embedengine/engine.tar.gz — the process-mode engine `funcdctl dev` embeds
+# Fetch + bundle the DuckDB+Quack LAKE ENGINE for ONE target os/arch into
+# internal/lake/embedengine/engine.tar.gz — the process-mode engine `funcdctl dev` embeds
 # (ADR-0125 Decision 5, -tags dev). Overwrites the tiny committed placeholder (skip-worktree'd via
-# the dep). Delegates to scripts/fetch-catalog-engine.sh (shared with the CI build step so they
+# the dep). Delegates to scripts/fetch-lake-engine.sh (shared with the CI build step so they
 # never drift). Fetches per-arch from duckdb.org (no docker) — works for darwin too. NOT run by ci.
 [group('runtime')]
-build-catalog-engine os arch: catalog-engine-pin
-    scripts/fetch-catalog-engine.sh {{os}} {{arch}}
+build-lake-engine os arch: lake-engine-pin
+    scripts/fetch-lake-engine.sh {{os}} {{arch}}
 
 # Pin/unpin the embedengine placeholder's skip-worktree bit (same rationale as embedimg-pin: the real
 # ~130 MB engine overwrites the <1 KB placeholder and must never dirty the tree or get committed).
 [group('runtime')]
-catalog-engine-pin:
-    git update-index --skip-worktree internal/catalog/embedengine/engine.tar.gz
+lake-engine-pin:
+    git update-index --skip-worktree internal/lake/embedengine/engine.tar.gz
     @echo "embedengine placeholder pinned (skip-worktree) — local engine builds won't dirty the tree"
 
 [group('runtime')]
-catalog-engine-unpin:
-    git update-index --no-skip-worktree internal/catalog/embedengine/engine.tar.gz
+lake-engine-unpin:
+    git update-index --no-skip-worktree internal/lake/embedengine/engine.tar.gz
 
 # Build rqlited, the SQL engine `funcdctl dev` embeds (ADR-0237 Decision 3), for ONE target os/arch into
 # internal/sql/embedengine/rqlited.gz, over the committed placeholder (skip-worktree'd by the dep), from the source
@@ -549,19 +549,19 @@ example-kv:
     go test -tags e2e ./pkg/funcd/ -run TestScenarioE2EKVCounterViaContextKV -v
 
 # Run a bundled example under `funcdctl dev` (ADR-0125) in ONE command, so you can reproduce it easily:
-# builds the fat -tags dev funcdctl (embedding the host-arch DuckDB+Quack catalog engine ONLY when the
-# example binds a catalog — fetched once, ~63 MB) and runs the example FROM SOURCE — a localhost gateway
-# + S3 (+ catalog), zero hand-written CRDs, real contract enforcement. The embedded shims are already
+# builds the fat -tags dev funcdctl (embedding the host-arch DuckDB+Quack lake engine ONLY when the
+# example binds a lake — fetched once, ~63 MB) and runs the example FROM SOURCE — a localhost gateway
+# + S3 (+ lake), zero hand-written CRDs, real contract enforcement. The embedded shims are already
 # built into funcdctl, so no push. <project> is `js/<name>` / `python/<name>` or a bare unique example name
 # from the pinned language modules (run from a writable copy under .modcopy/, ADR-0141), or a path (used
 # as-is, e.g. a sibling clone); dev runs every resource file of the folder (ADR-0247), a Workflow's DAG included.
 # Extra flags pass through. Examples:
-#   just dev-example catalog-quack            # the DuckLake/Quack catalog example (python)
+#   just dev-example lake-quack            # the DuckLake/Quack lake example (python)
 #   just dev-example js/kv-counter --persist  # persist KV/blob across runs (qualify the ambiguous name)
 #   just dev-example workflow                 # runs funcd-typescript's examples/workflow as a DAG
 # Reproduce any bundled example locally with `funcdctl dev` — build, boot, serve from source.
 # Ports are args (default gateway 3005 / S3 3006 / control-plane 3007) so the URLs are reproducible and the
-# `seed-releves`/`run-releve` recipes reach the control plane out of the box: `just dev-example catalog-quack`
+# `seed-releves`/`run-releve` recipes reach the control plane out of the box: `just dev-example lake-quack`
 # (or pass different ports: `just dev-example <p> 3005 3006 3007`). Extra flags still pass through after them.
 [group('example')]
 dev-example project gport="3005" s3port="3006" cport="3007" *args:
@@ -570,11 +570,11 @@ dev-example project gport="3005" s3port="3006" cport="3007" *args:
     root="$PWD"
     dir="$(scripts/example-copy.sh "{{project}}")"
     echo "▶ example: $dir"
-    # A catalog example needs the real engine embedded — fetch once (skip-worktree'd so it never dirties the tree).
-    if grep -rql 'catalogs:' "$dir" --include='*.yaml' 2>/dev/null && [ "$(wc -c < internal/catalog/embedengine/engine.tar.gz)" -lt 4096 ]; then
-      echo "▶ fetching the DuckDB+Quack catalog engine for $(go env GOOS)/$(go env GOARCH) (once) …"
-      git update-index --skip-worktree internal/catalog/embedengine/engine.tar.gz 2>/dev/null || true
-      scripts/fetch-catalog-engine.sh "$(go env GOOS)" "$(go env GOARCH)"
+    # A lake example needs the real engine embedded — fetch once (skip-worktree'd so it never dirties the tree).
+    if grep -rql 'lakes:' "$dir" --include='*.yaml' 2>/dev/null && [ "$(wc -c < internal/lake/embedengine/engine.tar.gz)" -lt 4096 ]; then
+      echo "▶ fetching the DuckDB+Quack lake engine for $(go env GOOS)/$(go env GOARCH) (once) …"
+      git update-index --skip-worktree internal/lake/embedengine/engine.tar.gz 2>/dev/null || true
+      scripts/fetch-lake-engine.sh "$(go env GOOS)" "$(go env GOARCH)"
     fi
     # A SQL binding needs the real SQL engine embedded (ADR-0237) — build it once, skip-worktree'd as well.
     if grep -qlE '^  sql:' "$dir"/*.yaml 2>/dev/null && [ "$(wc -c < internal/sql/embedengine/rqlited.gz)" -lt 4096 ]; then
@@ -627,7 +627,7 @@ seed-releves s3port="3006": (gen-releve "--start" "2025-01" "--end" "2026-01")
     sleep 12
     "$bin" workflow describe "$run"
     echo "▶ done — one run processed every statement; the gold DuckLake mart spans every month."
-    echo "  (S3 reads are binding-gated in dev; query the gold mart through the lakehouse catalog.)"
+    echo "  (S3 reads are binding-gated in dev; query the gold mart through the lakehouse lake.)"
 
 # Run the releve-lakehouse medallion workflow ONCE via `funcdctl workflow run` against the running dev
 # daemon — extract processes EVERY PDF in landing/ (NO input), then verify → build-silver → to-gold, then

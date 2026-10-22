@@ -83,7 +83,7 @@ func (a partsAdmission) Admit(ctx context.Context, req admission.Request) (v1.Ob
 		}
 	}
 	s := &app.Spec
-	declared := admission.RootDeclared(s.KV, s.Buckets, s.SQL, s.Catalogs, s.ConfigMaps, s.Secrets)
+	declared := admission.RootDeclared(s.KV, s.Buckets, s.SQL, s.Lakes, s.ConfigMaps, s.Secrets)
 	parts := app.Parts()
 	for i, p := range parts {
 		k := keyOf(p)
@@ -103,7 +103,7 @@ func (a partsAdmission) Admit(ctx context.Context, req admission.Request) (v1.Ob
 	return req.Object, nil
 }
 
-// undeclaredSecret refuses the first name in a declared Function's or CatalogService's spec.bindings.secret, or in a declared
+// undeclaredSecret refuses the first name in a declared Function's or Lake's spec.bindings.secret, or in a declared
 // Workflow's image step function.bindings.secret, that spec.secrets does not declare (ADR-0213 Decision 7). A ref entry, which
 // sets no spec field, and a ref step are exempt: the App does not define them. The rule is admission-only, so an App
 // stored before ADR-0213 still writes its status (Decision 9).
@@ -136,8 +136,8 @@ func undeclaredSecret(app *v1.App) error {
 			}
 		}
 	}
-	for i, c := range s.Catalogs {
-		if err := check(fmt.Sprintf("spec.catalogs[%d]", i), v1.KindCatalogService, c.Name, c.Bindings.Secret); err != nil {
+	for i, c := range s.Lakes {
+		if err := check(fmt.Sprintf("spec.lakes[%d]", i), v1.KindLake, c.Name, c.Bindings.Secret); err != nil {
 			return err
 		}
 	}

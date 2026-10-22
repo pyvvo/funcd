@@ -68,7 +68,7 @@ func ResolveEnv(ctx context.Context, d Deps, ns v1.NamespaceName, config, secret
 // Secrets (sensitive, PDP-resolved via d.Secrets under d.Identity(ns)), guarded against
 // reserved FUNCD_ keys (ADR-0092). Config is merged first, then secrets (so a secret may
 // override a config default). Returns fault.Invalid if secrets are declared but d.Secrets is
-// nil (unchanged catalog semantics), or if a value cannot be delivered as env (EnvDataProblem). On failure the returned error is joined with ErrConfig or
+// nil (unchanged lake semantics), or if a value cannot be delivered as env (EnvDataProblem). On failure the returned error is joined with ErrConfig or
 // ErrSecret (ADR-0093 §4) so a caller can attribute it via errors.Is while keeping the fault
 // kind. This is the single resolver for Functions AND providers.
 func Resolve(ctx context.Context, d Deps, ns v1.NamespaceName, config, secretNames []v1.ObjectName) (Resolved, error) {

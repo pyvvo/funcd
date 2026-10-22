@@ -78,8 +78,8 @@ func TestBackupScheduleValidate(t *testing.T) {
 		"negative ttl":     {func(s *BackupSchedule) { s.Spec.TTL = -1 }, "spec.ttl"},
 		"resource group":   {func(s *BackupSchedule) { s.Spec.Scope = BackupScope{ResourceGroup: "rg"} }, ""},
 		"app scope":        {func(s *BackupSchedule) { s.Spec.Scope = BackupScope{App: "orders"} }, ""},
-		"catalog by name":  {func(s *BackupSchedule) { s.Spec.Scope = BackupScope{Catalogs: []ObjectName{"lake"}} }, ""},
-		"bad catalog name": {func(s *BackupSchedule) { s.Spec.Scope = BackupScope{Catalogs: []ObjectName{"Lake"}} }, "catalogs[0]"},
+		"lake by name":     {func(s *BackupSchedule) { s.Spec.Scope = BackupScope{Lakes: []ObjectName{"lake"}} }, ""},
+		"bad lake name":    {func(s *BackupSchedule) { s.Spec.Scope = BackupScope{Lakes: []ObjectName{"Lake"}} }, "lakes[0]"},
 		"database by name": {func(s *BackupSchedule) { s.Spec.Scope = BackupScope{Databases: []ObjectName{"todo-db"}} }, ""},
 		"repeated database": {func(s *BackupSchedule) {
 			s.Spec.Scope = BackupScope{Databases: []ObjectName{"todo-db", "todo-db"}}
@@ -117,16 +117,16 @@ func TestRestoreValidate(t *testing.T) {
 		want string
 	}{
 		"as":                {base(RestoreMember{Kind: KindKVStore, Name: "s", As: "s-r"}), ""},
-		"asCatalog":         {base(RestoreMember{Kind: KindCatalogService, Name: "lake", AsCatalog: &CatalogRef{Bucket: "b", Prefix: "p"}}), ""},
+		"asLocation":        {base(RestoreMember{Kind: KindLake, Name: "lake", AsLocation: &LakeLocation{Bucket: "b", Prefix: "p"}}), ""},
 		"no member":         {base(), "spec.members is empty"},
 		"two targets":       {base(RestoreMember{Kind: KindBucket, Name: "b", As: "c", InPlace: true}), "sets 2 targets"},
 		"no target":         {base(RestoreMember{Kind: KindBucket, Name: "b"}), "sets 0 targets"},
-		"catalog as":        {base(RestoreMember{Kind: KindCatalogService, Name: "lake", As: "x"}), "takes asCatalog or inPlace"},
-		"store asCatalog":   {base(RestoreMember{Kind: KindKVStore, Name: "s", AsCatalog: &CatalogRef{Bucket: "b", Prefix: "p"}}), "takes as or inPlace"},
-		"other kind":        {base(RestoreMember{Kind: KindFunction, Name: "f", InPlace: true}), "want KVStore, Bucket, CatalogService or SQLDatabase"},
+		"lake as":           {base(RestoreMember{Kind: KindLake, Name: "lake", As: "x"}), "takes asLocation or inPlace"},
+		"store asLocation":  {base(RestoreMember{Kind: KindKVStore, Name: "s", AsLocation: &LakeLocation{Bucket: "b", Prefix: "p"}}), "takes as or inPlace"},
+		"other kind":        {base(RestoreMember{Kind: KindFunction, Name: "f", InPlace: true}), "want KVStore, Bucket, Lake or SQLDatabase"},
 		"database as":       {base(RestoreMember{Kind: KindSQLDatabase, Name: "todo-db", As: "todo-db-r"}), ""},
 		"database in place": {base(RestoreMember{Kind: KindSQLDatabase, Name: "todo-db", InPlace: true}), ""},
-		"database asCatalog": {base(RestoreMember{Kind: KindSQLDatabase, Name: "todo-db", AsCatalog: &CatalogRef{Bucket: "b", Prefix: "p"}}),
+		"database asLocation": {base(RestoreMember{Kind: KindSQLDatabase, Name: "todo-db", AsLocation: &LakeLocation{Bucket: "b", Prefix: "p"}}),
 			"takes as or inPlace"},
 		"repeated member": {base(RestoreMember{Kind: KindKVStore, Name: "s", InPlace: true}, RestoreMember{Kind: KindKVStore, Name: "s", As: "t"}), "repeats"},
 		"no identity": {func() *Restore {

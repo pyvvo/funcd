@@ -12,13 +12,13 @@ import (
 	"github.com/pyvvo/funcd/internal/store"
 )
 
-// ownerFor maps a prefix's or a database's owner as ADR-0250 Decision 1 does: a catalog the root declares by name is
+// ownerFor maps a prefix's or a database's owner as ADR-0250 Decision 1 does: a lake the root declares by name is
 // kept as written, a step becomes its Function, <workflow>-<step>.
 func ownerFor(wf *v1.Workflow, owner v1.ObjectName) v1.ObjectName {
 	if owner == "" {
 		return ""
 	}
-	for _, c := range wf.Spec.CatalogServices {
+	for _, c := range wf.Spec.Lakes {
 		if c.Name == owner {
 			return owner
 		}
@@ -34,8 +34,8 @@ type rootObject struct {
 	deletion v1.DeletionPolicy
 }
 
-// rootObjects are the databases, catalogs and ConfigMaps wf defines by name. A database's owner is mapped by ownerFor;
-// a catalog and a ConfigMap go with the Workflow (ADR-0213 Decision 2), a ConfigMap stored as v1.AppConfigMapName.
+// rootObjects are the databases, lakes and ConfigMaps wf defines by name. A database's owner is mapped by ownerFor;
+// a lake and a ConfigMap go with the Workflow (ADR-0213 Decision 2), a ConfigMap stored as v1.AppConfigMapName.
 func rootObjects(wf *v1.Workflow) []rootObject {
 	meta := func(name v1.ObjectName) v1.ObjectMeta {
 		return v1.ObjectMeta{Name: name, Namespace: wf.Namespace, ResourceGroup: wf.ResourceGroup}
@@ -51,10 +51,10 @@ func rootObjects(wf *v1.Workflow) []rootObject {
 				&v1.SQLDatabase{TypeMeta: tm(v1.KindSQLDatabase), ObjectMeta: meta(e.Name), Spec: spec}, e.Deletion})
 		}
 	}
-	for i, e := range s.CatalogServices {
+	for i, e := range s.Lakes {
 		if e.Name != "" {
-			out = append(out, rootObject{fmt.Sprintf("spec.catalogs[%d]", i),
-				&v1.CatalogService{TypeMeta: tm(v1.KindCatalogService), ObjectMeta: meta(e.Name), Spec: e.CatalogServiceSpec}, v1.DeletionDelete})
+			out = append(out, rootObject{fmt.Sprintf("spec.lakes[%d]", i),
+				&v1.Lake{TypeMeta: tm(v1.KindLake), ObjectMeta: meta(e.Name), Spec: e.LakeSpec}, v1.DeletionDelete})
 		}
 	}
 	for i, e := range s.ConfigMaps {

@@ -17,7 +17,7 @@ import (
 //
 // Two orthogonal axes are kept separate (judge B1): a Capability is an {action + resource + built-in}
 // on a PRINCIPAL; *where a principal's binding attributes come from* is a PrincipalSource (below), so the
-// ADR-0088 provider principal (a CatalogService, ADR-0175) is NOT a fourth capability — s3 is one
+// ADR-0088 provider principal (a Lake, ADR-0175) is NOT a fourth capability — s3 is one
 // capability with two principal sources.
 type Capability struct {
 	// Name is the capability's short id (e.g. "kv", "invoke", "s3", "egress") — for diagnostics/dedup.
@@ -47,7 +47,7 @@ type Capability struct {
 	// principal object (see PrincipalSource). The provider sets Attr whenever Bind returns a non-nil slice
 	// (possibly empty), matching today's EntitiesFor (a Function always carries links/kvBindings/blobBindings;
 	// the built-ins also `has`-guard, so empty ≡ absent). A Bind that returns nil for a source type
-	// contributes nothing (attr absent) — e.g. kv/invoke for a CatalogService. Zero value ⇒ no binding.
+	// contributes nothing (attr absent) — e.g. kv/invoke for a Lake. Zero value ⇒ no binding.
 	PrincipalBinding PrincipalBinding
 	// Builtin is this capability's built-in permit policy text (the .cedar granting the capability when
 	// principal.<attr>.contains(resource)); "" ⇒ no built-in (Policy-only). Each policy carries a unique
@@ -60,13 +60,13 @@ type PrincipalBinding struct {
 	// Attr is the Cedar principal attribute (e.g. "kvBindings", "links", "blobBindings").
 	Attr string
 	// Bind materializes the attribute's Set members from a resolved principal object. src is whatever a
-	// PrincipalSource resolved (a *v1.Function or a *v1.CatalogService); a capability that doesn't apply to
-	// that source type returns nil (e.g. kv/invoke return nil for a CatalogService — providers have no
+	// PrincipalSource resolved (a *v1.Function or a *v1.Lake); a capability that doesn't apply to
+	// that source type returns nil (e.g. kv/invoke return nil for a Lake — providers have no
 	// links/kv). ns is the principal namespace (for building same-namespace resource UIDs).
 	Bind func(ns v1.NamespaceName, src PrincipalObject) []cedartypes.EntityUID
 }
 
-// PrincipalObject is a resolved principal-backing object (a *v1.Function or *v1.CatalogService); a
+// PrincipalObject is a resolved principal-backing object (a *v1.Function or *v1.Lake); a
 // closed interface (only api/types implements it, via an unexported marker) so PrincipalBinding.Bind
 // type-switches without any. It aliases v1.PrincipalObject: the marker method must live in the same
 // package as the implementing types, so the sealed interface is declared in api/types/v1alpha1 and
@@ -74,7 +74,7 @@ type PrincipalBinding struct {
 type PrincipalObject = v1.PrincipalObject
 
 // PrincipalSource resolves the principal's backing object for a principal EntityRef, in order. The
-// default sources are Function and CatalogService (ADR-0088), each resolving only a principal of its own
+// default sources are Function and Lake (ADR-0088), each resolving only a principal of its own
 // type (ADR-0175) — the provider case is a principal SOURCE, not a capability. A source returns ok==false
 // to defer to the next.
 type PrincipalSource func(ctx context.Context, r MetaReader, p auth.EntityRef) (obj PrincipalObject, ok bool, err error)

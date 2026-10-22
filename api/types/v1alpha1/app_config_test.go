@@ -110,7 +110,7 @@ func TestAppConfigValidate(t *testing.T) {
 }
 
 // Decisions 3 and 4: the ConfigMap is the first part, under its stored name; a defined name in a Function's, a
-// CatalogService's and an image step's config becomes the stored name, and the App's spec stays as declared.
+// Lake's and an image step's config becomes the stored name, and the App's spec stays as declared.
 func TestAppConfigRepointing(t *testing.T) {
 	a := configApp(func(a *App) {
 		a.Spec.ConfigMaps = append(a.Spec.ConfigMaps, ConfigMapEntry{Ref: "shared"})
@@ -119,9 +119,9 @@ func TestAppConfigRepointing(t *testing.T) {
 		wf := &a.Spec.Workflows[0]
 		wf.Steps[0].Function.Bindings.Config = []ObjectName{"todo-settings"}
 		wf.Steps = append(wf.Steps, WorkflowStep{Name: "notify", Function: &FunctionStep{Ref: "todo-api", Bindings: StepBindings{Config: []ObjectName{"todo-settings"}}}})
-		a.Spec.Catalogs = []CatalogEntry{{Name: "todo-lake", CatalogServiceSpec: CatalogServiceSpec{
-			Catalog:  CatalogRef{Bucket: "todo-files", Prefix: "lake"},
-			Bindings: CatalogServiceBindings{Blob: []FunctionBlob{{Alias: "lake", Bucket: "todo-files", Prefix: "lake"}}, Config: []ObjectName{"todo-settings"}},
+		a.Spec.Lakes = []LakeEntry{{Name: "todo-lake", LakeSpec: LakeSpec{
+			Location: LakeLocation{Bucket: "todo-files", Prefix: "lake"},
+			Bindings: LakeBindings{Blob: []FunctionBlob{{Alias: "lake", Bucket: "todo-files", Prefix: "lake"}}, Config: []ObjectName{"todo-settings"}},
 		}}}
 	})
 	if err := a.Validate(); err != nil {
@@ -144,7 +144,7 @@ func TestAppConfigRepointing(t *testing.T) {
 	if got := byName["Function/todo-api"].(*Function).Spec.Bindings.Config; !slices.Equal(got, []ObjectName{stored, "shared", "elsewhere"}) {
 		t.Fatalf("todo-api config = %v: the defined name is repointed, a ref entry and an undefined name are not", got)
 	}
-	if got := byName["CatalogService/todo-lake"].(*CatalogService).Spec.Bindings.Config; !slices.Equal(got, []ObjectName{stored}) {
+	if got := byName["Lake/todo-lake"].(*Lake).Spec.Bindings.Config; !slices.Equal(got, []ObjectName{stored}) {
 		t.Fatalf("todo-lake config = %v", got)
 	}
 	steps := byName["Workflow/todo-plan"].(*Workflow).Spec.Steps

@@ -24,7 +24,7 @@ func TestDeriveKeypairDeterministic(t *testing.T) {
 // (kind, ns, name); an external access key is rejected.
 func TestDecodeAccessRoundTrip(t *testing.T) {
 	t.Parallel()
-	for _, kind := range []v1.Kind{v1.KindFunction, v1.KindCatalogService} {
+	for _, kind := range []v1.Kind{v1.KindFunction, v1.KindLake} {
 		kp := DeriveKeypair([]byte("m"), kind, "default", "analytics")
 		gotKind, ns, name, ok := decodeAccess(kp.AccessKey)
 		require.True(t, ok)
@@ -37,13 +37,13 @@ func TestDecodeAccessRoundTrip(t *testing.T) {
 	require.False(t, ok, "a non-FUNCD access key is external")
 }
 
-// TestDeriveKeypairKindsDiffer (ADR-0175) — a Function and a CatalogService of one name hold different keys, and
+// TestDeriveKeypairKindsDiffer (ADR-0175) — a Function and a Lake of one name hold different keys, and
 // each key decodes to its own kind.
 func TestDeriveKeypairKindsDiffer(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct{ ns, name string }{{"default", "lake"}, {"data", "a"}, {"ns-with-long-name", "catalog-engine"}} {
+	for _, tc := range []struct{ ns, name string }{{"default", "lake"}, {"data", "a"}, {"ns-with-long-name", "lake-engine"}} {
 		fn := DeriveKeypair([]byte("m"), v1.KindFunction, tc.ns, tc.name)
-		cs := DeriveKeypair([]byte("m"), v1.KindCatalogService, tc.ns, tc.name)
+		cs := DeriveKeypair([]byte("m"), v1.KindLake, tc.ns, tc.name)
 		require.NotEqual(t, fn.AccessKey, cs.AccessKey, "%s/%s", tc.ns, tc.name)
 		require.NotEqual(t, fn.SecretKey, cs.SecretKey, "%s/%s", tc.ns, tc.name)
 		fnKind, _, _, ok := decodeAccess(fn.AccessKey)
@@ -51,7 +51,7 @@ func TestDeriveKeypairKindsDiffer(t *testing.T) {
 		require.Equal(t, v1.KindFunction, fnKind)
 		csKind, _, _, ok := decodeAccess(cs.AccessKey)
 		require.True(t, ok)
-		require.Equal(t, v1.KindCatalogService, csKind)
+		require.Equal(t, v1.KindLake, csKind)
 	}
 	_, _, _, ok := decodeAccess(DeriveKeypair([]byte("m"), v1.KindIdentity, "default", "lake").AccessKey)
 	require.False(t, ok, "a kind with no key code yields an undecodable key")

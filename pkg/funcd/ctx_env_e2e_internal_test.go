@@ -25,18 +25,18 @@ import (
 // ctxEnvHandler returns the bound variables as the worker's environment holds them, and what the handler reads
 // through ctx.
 const ctxEnvHandler = `const vars = ['APP_MODE', 'API_KEY', 'FUNCD_CONFIG_KEYS', 'FUNCD_SECRET_KEYS',
-  'FUNCD_CATALOG_LAKE_URL', 'FUNCD_CATALOG_LAKE_TOKEN'];
+  'FUNCD_LAKE_LAKE_URL', 'FUNCD_LAKE_LAKE_TOKEN'];
 export async function handle(ctx) {
   return {
     env: Object.fromEntries(vars.map((k) => [k, process.env[k]])),
     config: ctx.config.list(), mode: ctx.config.get('APP_MODE'),
     secrets: await ctx.secret.list(), key: await ctx.secret.get('API_KEY'),
-    lake: ctx.catalog.get('lake'),
+    lake: ctx.lake.get('lake'),
   };
 }
 `
 
-// scenario: ctx-env-unchanged — a real worker's environment holds its bound config keys and its catalog pair as
+// scenario: ctx-env-unchanged — a real worker's environment holds its bound config keys and its lake pair as
 // variables, plus FUNCD_CONFIG_KEYS, and its handler reads the same values through ctx (ADR-0245). Its bound secrets
 // and FUNCD_SECRET_KEYS are not in it: ctx.secret reads them from funcd (ADR-0249).
 func TestScenarioCtxEnvUnchanged(t *testing.T) {
@@ -49,7 +49,7 @@ func TestScenarioCtxEnvUnchanged(t *testing.T) {
 	t.Cleanup(srv.Close)
 	engine := &toggleEngine{addr: strings.TrimPrefix(srv.URL, "http://")}
 	p, err := New(InMemory(), WithoutLogCompaction(), WithRuntimeShim(node, langmod.NodeShim(t)),
-		WithCatalogProviderRuntime(engine), WithPacing(asleepPacing(50*time.Millisecond)))
+		WithLakeProviderRuntime(engine), WithPacing(asleepPacing(50*time.Millisecond)))
 	require.NoError(t, err)
 	runCtx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -58,7 +58,7 @@ func TestScenarioCtxEnvUnchanged(t *testing.T) {
 	c, err := sdk.New("http://"+p.Addr(), sdk.WithToken(DevToken))
 	require.NoError(t, err)
 	r := &asleepRig{p: p, c: c, engine: engine}
-	r.catalog(t)
+	r.lake(t)
 	r.secret(t)
 	obj, _ := v1.NewObject(v1.KindConfigMap)
 	cm := obj.(*v1.ConfigMap)
@@ -76,10 +76,10 @@ func TestScenarioCtxEnvUnchanged(t *testing.T) {
 	fn.Spec.Scaling = v1.Scaling{MinReplicas: 1}
 	fn.Spec.Bindings.Config = []v1.ObjectName{"settings"}
 	fn.Spec.Bindings.Secret = []v1.ObjectName{"creds"}
-	fn.Spec.Bindings.Catalog = []v1.FunctionCatalog{{Alias: "lake", Catalog: "lake"}}
+	fn.Spec.Bindings.Lake = []v1.FunctionLake{{Alias: "lake", Lake: "lake"}}
 	fn.Spec.ConfigMaps = []v1.ConfigMapEntry{{Ref: "settings"}}
 	fn.Spec.SecretDeclarations = []v1.SecretDeclaration{{Name: "creds", Keys: []string{"API_KEY"}}}
-	fn.Spec.CatalogServices = []v1.CatalogEntry{{Ref: "lake"}}
+	fn.Spec.Lakes = []v1.LakeEntry{{Ref: "lake"}}
 	r.apply(t, fn)
 	require.Eventually(t, func() bool {
 		obj, err := p.cfg.store.Get(context.Background(), v1.KindFunction.GVK(), "default", "reader")
@@ -102,15 +102,15 @@ func TestScenarioCtxEnvUnchanged(t *testing.T) {
 	require.NoError(t, json.Unmarshal(body, &out), "%s", body)
 	require.Equal(t, "prod", out.Env["APP_MODE"], "a bound config key stays a variable")
 	require.Empty(t, out.Env["API_KEY"], "a bound secret is not a variable (ADR-0249)")
-	require.NotEmpty(t, out.Env["FUNCD_CATALOG_LAKE_URL"])
-	require.NotEmpty(t, out.Env["FUNCD_CATALOG_LAKE_TOKEN"])
+	require.NotEmpty(t, out.Env["FUNCD_LAKE_LAKE_URL"])
+	require.NotEmpty(t, out.Env["FUNCD_LAKE_LAKE_TOKEN"])
 	require.Equal(t, "APP_MODE", out.Env["FUNCD_CONFIG_KEYS"])
 	require.Empty(t, out.Env["FUNCD_SECRET_KEYS"])
 	require.Equal(t, []string{"APP_MODE"}, out.Config)
 	require.Equal(t, "prod", out.Mode)
 	require.Equal(t, []string{"API_KEY"}, out.Secrets)
 	require.Equal(t, "k", out.Key)
-	require.Equal(t, map[string]string{"url": out.Env["FUNCD_CATALOG_LAKE_URL"], "token": out.Env["FUNCD_CATALOG_LAKE_TOKEN"]}, out.Lake)
+	require.Equal(t, map[string]string{"url": out.Env["FUNCD_LAKE_LAKE_URL"], "token": out.Env["FUNCD_LAKE_LAKE_TOKEN"]}, out.Lake)
 }
 
 // secret applies Secret creds, holding API_KEY.

@@ -52,7 +52,7 @@ func (s BackupScheduleSpec) EffectiveTTL() Duration {
 type BackupScope struct {
 	KVStores      []ObjectName      `json:"kvStores,omitempty"`
 	Buckets       []ObjectName      `json:"buckets,omitempty"`
-	Catalogs      []ObjectName      `json:"catalogs,omitempty"`
+	Lakes         []ObjectName      `json:"lakes,omitempty"`
 	Databases     []ObjectName      `json:"databases,omitempty"`
 	App           ObjectName        `json:"app,omitempty"`
 	ResourceGroup ResourceGroupName `json:"resourceGroup,omitempty"`
@@ -141,13 +141,13 @@ type RestoreSource struct {
 }
 
 // RestoreMember is one member of the Backup and exactly one target: as (an empty KVStore, Bucket or SQLDatabase),
-// asCatalog (an empty bucket prefix) or inPlace.
+// asLocation (an empty bucket prefix) or inPlace.
 type RestoreMember struct {
-	Kind      Kind        `json:"kind"`
-	Name      ObjectName  `json:"name"`
-	As        ObjectName  `json:"as,omitempty"`
-	AsCatalog *CatalogRef `json:"asCatalog,omitempty"`
-	InPlace   bool        `json:"inPlace,omitempty"`
+	Kind       Kind          `json:"kind"`
+	Name       ObjectName    `json:"name"`
+	As         ObjectName    `json:"as,omitempty"`
+	AsLocation *LakeLocation `json:"asLocation,omitempty"`
+	InPlace    bool          `json:"inPlace,omitempty"`
 }
 
 // RestoreStatus is the request's run: its phase, times and, in place, the export Backup.
@@ -229,7 +229,7 @@ func (s BackupScheduleSpec) validate(op string) error {
 
 // validate refuses a scope in no form or in two, and a name that is not a DNS label or repeats another.
 func (s BackupScope) validate(op string) error {
-	names := len(s.KVStores) + len(s.Buckets) + len(s.Catalogs) + len(s.Databases)
+	names := len(s.KVStores) + len(s.Buckets) + len(s.Lakes) + len(s.Databases)
 	forms := 0
 	for _, set := range []bool{names > 0, s.App != "", s.ResourceGroup != ""} {
 		if set {
@@ -237,12 +237,12 @@ func (s BackupScope) validate(op string) error {
 		}
 	}
 	if forms != 1 {
-		return fault.Invalidf(op, "spec.scope sets %d forms: want one of kvStores, buckets, catalogs and databases, app, or resourceGroup", forms)
+		return fault.Invalidf(op, "spec.scope sets %d forms: want one of kvStores, buckets, lakes and databases, app, or resourceGroup", forms)
 	}
 	for _, l := range []struct {
 		field string
 		names []ObjectName
-	}{{"kvStores", s.KVStores}, {"buckets", s.Buckets}, {"catalogs", s.Catalogs}, {"databases", s.Databases}} {
+	}{{"kvStores", s.KVStores}, {"buckets", s.Buckets}, {"lakes", s.Lakes}, {"databases", s.Databases}} {
 		seen := make(map[ObjectName]bool, len(l.names))
 		for i, n := range l.names {
 			if !dnsLabel.MatchString(string(n)) {
@@ -321,7 +321,7 @@ func (r *Restore) InPlace() bool {
 func (r *Restore) Ended() bool { return r.Status.Phase == RunSucceeded || r.Status.Phase == RunFailed }
 
 // Validate enforces Decision 7's shape: a name of at most 56 characters, the Backup and the two Secrets named, and
-// each member a KVStore, Bucket or CatalogService, once, with exactly one target of its kind.
+// each member a KVStore, Bucket or Lake, once, with exactly one target of its kind.
 func (r *Restore) Validate() error {
 	const op = "Restore.Validate"
 	if err := validateMeta(r.TypeMeta, &r.ObjectMeta, KindRestore); err != nil {
@@ -362,31 +362,31 @@ func (m RestoreMember) validate(op, path string) error {
 		return fault.Invalidf(op, "%s.name %q is not a valid DNS-1123 label", path, m.Name)
 	}
 	targets := 0
-	for _, set := range []bool{m.As != "", m.AsCatalog != nil, m.InPlace} {
+	for _, set := range []bool{m.As != "", m.AsLocation != nil, m.InPlace} {
 		if set {
 			targets++
 		}
 	}
 	if targets != 1 {
-		return fault.Invalidf(op, "%s sets %d targets: want exactly one of as, asCatalog and inPlace", path, targets)
+		return fault.Invalidf(op, "%s sets %d targets: want exactly one of as, asLocation and inPlace", path, targets)
 	}
 	switch m.Kind {
 	case KindKVStore, KindBucket, KindSQLDatabase:
-		if m.AsCatalog != nil {
-			return fault.Invalidf(op, "%s.asCatalog applies to a CatalogService: a %s takes as or inPlace", path, m.Kind)
+		if m.AsLocation != nil {
+			return fault.Invalidf(op, "%s.asLocation applies to a Lake: a %s takes as or inPlace", path, m.Kind)
 		}
 		if m.As != "" && !dnsLabel.MatchString(string(m.As)) {
 			return fault.Invalidf(op, "%s.as %q is not a valid DNS-1123 label", path, m.As)
 		}
-	case KindCatalogService:
+	case KindLake:
 		if m.As != "" {
-			return fault.Invalidf(op, "%s.as applies to a KVStore, Bucket or SQLDatabase: a CatalogService takes asCatalog or inPlace", path)
+			return fault.Invalidf(op, "%s.as applies to a KVStore, Bucket or SQLDatabase: a Lake takes asLocation or inPlace", path)
 		}
-		if c := m.AsCatalog; c != nil && (!dnsLabel.MatchString(string(c.Bucket)) || !dnsLabel.MatchString(c.Prefix)) {
-			return fault.Invalidf(op, "%s.asCatalog %q/%q: bucket and prefix must be DNS-1123 labels", path, c.Bucket, c.Prefix)
+		if c := m.AsLocation; c != nil && (!dnsLabel.MatchString(string(c.Bucket)) || !dnsLabel.MatchString(c.Prefix)) {
+			return fault.Invalidf(op, "%s.asLocation %q/%q: bucket and prefix must be DNS-1123 labels", path, c.Bucket, c.Prefix)
 		}
 	default:
-		return fault.Invalidf(op, "%s.kind %q: want KVStore, Bucket, CatalogService or SQLDatabase", path, m.Kind)
+		return fault.Invalidf(op, "%s.kind %q: want KVStore, Bucket, Lake or SQLDatabase", path, m.Kind)
 	}
 	return nil
 }

@@ -21,7 +21,7 @@ import (
 	"github.com/pyvvo/funcd/internal/backup"
 )
 
-// fingerprintLabel keeps Fingerprint apart from SHA-256(master), the catalog-token HMAC key (Decision 3).
+// fingerprintLabel keeps Fingerprint apart from SHA-256(master), the lake-token HMAC key (Decision 3).
 const fingerprintLabel = "funcd-key-fingerprint-v1"
 
 // ageIntro opens every age file; Opener refuses a store file whose seal disagrees with its manifest.

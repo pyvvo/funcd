@@ -43,7 +43,7 @@ import (
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/scheduler"
 	"github.com/pyvvo/funcd/internal/secrets"
-	catalogsvc "github.com/pyvvo/funcd/internal/services/catalog"
+	lakesvc "github.com/pyvvo/funcd/internal/services/lake"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/workernode/local"
 )
@@ -156,25 +156,25 @@ type Deps struct {
 	// (ListenAddr). A function without spec.bindings.blob, or a disabled gateway, gets nothing.
 	S3Gateway S3GatewayInjection
 
-	// CatalogMaster is the node master secret the per-function catalog token is derived from (ADR-0137):
-	// resolveCatalogEnv injects FUNCD_CATALOG_<ALIAS>_TOKEN = DeriveCatalogToken(master, ns, fn), a
-	// MAC-authenticated bearer the catalog PEP proxy verifies (was the shared QUACK_TOKEN). It is the
+	// LakeMaster is the node master secret the per-function lake token is derived from (ADR-0137):
+	// resolveLakeEnv injects FUNCD_LAKE_<ALIAS>_TOKEN = DeriveLakeToken(master, ns, fn), a
+	// MAC-authenticated bearer the lake PEP proxy verifies (was the shared QUACK_TOKEN). It is the
 	// SAME master the S3 gateway derives keypairs from (loaded once at the compose root). nil/empty ⇒ a
 	// still-derivable but unverifiable token (the proxy holds the real master); the master is never logged.
-	CatalogMaster []byte
+	LakeMaster []byte
 
-	// CatalogProxies reports the catalog listeners bound in this daemon run (ADR-0137, ADR-0162): a consumer is
-	// injected its catalog's bound listener URL, and waits while none is bound. nil ⇒ the catalog's status.endpoint,
+	// LakeProxies reports the lake listeners bound in this daemon run (ADR-0137, ADR-0162): a consumer is
+	// injected its lake's bound listener URL, and waits while none is bound. nil ⇒ the lake's status.endpoint,
 	// for harnesses without a Manager.
-	CatalogProxies CatalogProxies
+	LakeProxies LakeProxies
 
-	// CatalogExtensionDir, when non-empty, is injected as DUCKDB_EXTENSION_DIRECTORY into a
-	// catalog-consumer function's worker env (a function declaring spec.bindings.catalog) so its handler's
+	// LakeExtensionDir, when non-empty, is injected as DUCKDB_EXTENSION_DIRECTORY into a
+	// lake-consumer function's worker env (a function declaring spec.bindings.lake) so its handler's
 	// `LOAD quack`/`ducklake` resolves the curated DuckDB extensions from this dir. It is the dev
 	// analogue of the prod bundle's duckdb-ext (ADR-0089): `funcdctl dev` extracts the embedded
-	// catalog engine's extensions once and points consumers at them; prod leaves it empty (the
+	// lake engine's extensions once and points consumers at them; prod leaves it empty (the
 	// bundle carries duckdb-ext under FUNCD_BUNDLE_DIR instead). Empty ⇒ no injection.
-	CatalogExtensionDir string
+	LakeExtensionDir string
 
 	// SupervisionPeriod is the requeue of a Ready function (ADR-0142); 0 ⇒ controller.SupervisionPeriod.
 	SupervisionPeriod time.Duration
@@ -211,9 +211,9 @@ type Deps struct {
 	Clock clock.Clock
 }
 
-// CatalogProxies reports the URL of a CatalogService's PEP proxy listener bound in this daemon run (ADR-0137,
-// ADR-0162), false when none is bound. Satisfied by *cataloggw.Manager.
-type CatalogProxies interface {
+// LakeProxies reports the URL of a Lake's PEP proxy listener bound in this daemon run (ADR-0137,
+// ADR-0162), false when none is bound. Satisfied by *lakegw.Manager.
+type LakeProxies interface {
 	ProxyURL(ns v1.NamespaceName, name v1.ObjectName) (string, bool)
 }
 
@@ -287,16 +287,16 @@ type Reconciler struct {
 	// declares spec.bindings.blob. The master secret is never logged.
 	s3Gateway S3GatewayInjection
 
-	// catalogMaster is the node master the per-function catalog token is derived from (ADR-0137);
-	// nil/empty ⇒ catalog injection derives a token the proxy cannot verify. Never logged.
-	catalogMaster []byte
+	// lakeMaster is the node master the per-function lake token is derived from (ADR-0137);
+	// nil/empty ⇒ lake injection derives a token the proxy cannot verify. Never logged.
+	lakeMaster []byte
 
-	// catalogProxies reports the catalog listeners bound in this daemon run (ADR-0137, ADR-0162); nil ⇒ status.endpoint.
-	catalogProxies CatalogProxies
+	// lakeProxies reports the lake listeners bound in this daemon run (ADR-0137, ADR-0162); nil ⇒ status.endpoint.
+	lakeProxies LakeProxies
 
-	// catalogExtensionDir, when non-empty, is injected as DUCKDB_EXTENSION_DIRECTORY into a
-	// catalog-consumer function's worker env (dev analogue of the prod bundle's duckdb-ext, ADR-0089).
-	catalogExtensionDir string
+	// lakeExtensionDir, when non-empty, is injected as DUCKDB_EXTENSION_DIRECTORY into a
+	// lake-consumer function's worker env (dev analogue of the prod bundle's duckdb-ext, ADR-0089).
+	lakeExtensionDir string
 
 	// pooling (ADR-0046/0050): the pure placement policy + per-family pool-host launch commands + cap.
 	// A function pools iff a pool host exists for its runtime family (poolKeyFor); none ⇒ solo.
@@ -471,40 +471,40 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		logMaxRecordBytes: d.LogMaxRecordBytes,
 		materializer:      d.Materializer, shimCommand: d.ShimCommand, shimByFamily: d.ShimCommandsByFamily,
 		endpointMode: d.EndpointMode, imageFor: d.ImageFor, resolver: d.Resolver, platformsOf: d.Platforms,
-		httpClient:          httpx.NodeClient(cmp.Or(d.ProbeTimeout, probeTimeout)),
-		probeTimeout:        cmp.Or(d.ProbeTimeout, probeTimeout),
-		secrets:             d.Secrets,
-		developerFor:        developerFor,
-		invokeSockets:       d.InvokeSockets,
-		s3Gateway:           d.S3Gateway,
-		catalogMaster:       d.CatalogMaster,
-		catalogExtensionDir: d.CatalogExtensionDir,
-		catalogProxies:      d.CatalogProxies,
-		assigner:            pooling.NewAssigner(),
-		poolShimCommand:     d.PoolShimCommand,
-		poolShimsByFamily:   d.PoolShimsByFamily,
-		poolLimit:           limit,
-		poolDrains:          map[pooling.PoolKey]poolDrain{},
-		poolHolds:           map[pooling.PoolKey]poolHold{},
-		poolSets:            map[string][]v1.ObjectName{},
-		live:                map[runtime.InstanceID]liveness{},
-		reads:               map[runtime.InstanceID]readRecord{},
-		stopping:            map[runtime.InstanceID]int{},
-		poolManifestDir:     manifestDir,
-		ownManifestDir:      ownManifestDir,
-		supervisionPeriod:   period,
-		boot:                newBootBackoff(bootInitial, bootMax, bootTO, logger.With("component", "function")),
-		calls:               d.Calls,
-		drainGrace:          drainGrace,
-		handOutSettle:       settle,
-		drainPoll:           drainPoll,
-		clock:               clk,
-		bootTimeout:         bootTO,
-		referentPoll:        min(referentPoll, period),
-		livenessTimeout:     livenessTO,
-		readinessTimeout:    cmp.Or(d.ReadinessTimeout, defaultReadinessTimeout),
-		spared:              map[fnKey]v1.UID{},
-		held:                map[fnKey]bool{},
+		httpClient:        httpx.NodeClient(cmp.Or(d.ProbeTimeout, probeTimeout)),
+		probeTimeout:      cmp.Or(d.ProbeTimeout, probeTimeout),
+		secrets:           d.Secrets,
+		developerFor:      developerFor,
+		invokeSockets:     d.InvokeSockets,
+		s3Gateway:         d.S3Gateway,
+		lakeMaster:        d.LakeMaster,
+		lakeExtensionDir:  d.LakeExtensionDir,
+		lakeProxies:       d.LakeProxies,
+		assigner:          pooling.NewAssigner(),
+		poolShimCommand:   d.PoolShimCommand,
+		poolShimsByFamily: d.PoolShimsByFamily,
+		poolLimit:         limit,
+		poolDrains:        map[pooling.PoolKey]poolDrain{},
+		poolHolds:         map[pooling.PoolKey]poolHold{},
+		poolSets:          map[string][]v1.ObjectName{},
+		live:              map[runtime.InstanceID]liveness{},
+		reads:             map[runtime.InstanceID]readRecord{},
+		stopping:          map[runtime.InstanceID]int{},
+		poolManifestDir:   manifestDir,
+		ownManifestDir:    ownManifestDir,
+		supervisionPeriod: period,
+		boot:              newBootBackoff(bootInitial, bootMax, bootTO, logger.With("component", "function")),
+		calls:             d.Calls,
+		drainGrace:        drainGrace,
+		handOutSettle:     settle,
+		drainPoll:         drainPoll,
+		clock:             clk,
+		bootTimeout:       bootTO,
+		referentPoll:      min(referentPoll, period),
+		livenessTimeout:   livenessTO,
+		readinessTimeout:  cmp.Or(d.ReadinessTimeout, defaultReadinessTimeout),
+		spared:            map[fnKey]v1.UID{},
+		held:              map[fnKey]bool{},
 	}, nil
 }
 
@@ -641,7 +641,7 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 		return r.heldThenGate(ctx, fn, gateFailure{reason: "ShapeInvalid", message: verr.Error(), phase: v1.PhaseFailed, shapeInvalid: true}, idx, drainAfter, nil)
 	}
 
-	// 3a. runtime gate (issue #371, ADR-0149 Decision 2): a runtime that no shim on this node runs, or the CatalogService
+	// 3a. runtime gate (issue #371, ADR-0149 Decision 2): a runtime that no shim on this node runs, or the Lake
 	// engine image, fails here, before pooling's assign. An absent containerd image fails at Create instead (step 4).
 	if msg, missing := r.runtimeUnavailable(fn); missing {
 		return r.heldThenGate(ctx, fn, gateFailure{reason: reasonRuntimeUnavailable, message: msg, readyMessage: msg, phase: v1.PhaseFailed}, idx, drainAfter, nil)
@@ -685,10 +685,10 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 	var v verdict
 	if assign.Pooled {
 		var poolAfter time.Duration
-		v, poolAfter, err = r.convergePooled(ctx, fn, assign, env.secret, env.catalog, idx)
+		v, poolAfter, err = r.convergePooled(ctx, fn, assign, env.secret, env.lake, idx)
 		drainAfter = earliest(drainAfter, poolAfter)
 	} else {
-		v, err = r.convergeSolo(ctx, fn, pinned, env.secret, env.catalog)
+		v, err = r.convergeSolo(ctx, fn, pinned, env.secret, env.lake)
 		if errors.Is(err, runtime.ErrImageUnavailable) {
 			// ADR-0149 Decisions 4 and 5: an absent image fails the latest generation as a gate does, and a later
 			// periodic pass tries the Create again, so an image that appears recovers the Function.
@@ -712,12 +712,12 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 	return afterHeld(res, err, herr)
 }
 
-// boundEnv is the env fn's current bindings give every revision it boots, its secret and config env and its catalog
+// boundEnv is the env fn's current bindings give every revision it boots, its secret and config env and its lake
 // env, or the binding gate that stopped them.
 type boundEnv struct {
-	secret  envresolve.Resolved
-	catalog map[string]string
-	gate    *gateFailure
+	secret envresolve.Resolved
+	lake   map[string]string
+	gate   *gateFailure
 }
 
 // bindings resolves fn's current bindings, or returns the first binding gate that fails.
@@ -762,20 +762,20 @@ func (r *Reconciler) bindings(ctx context.Context, fn *v1.Function) (boundEnv, e
 		return boundEnv{gate: &gateFailure{reason: refReason, message: refMsg, readyMessage: refMsg, phase: v1.PhasePending, requeue: r.referentPoll}}, nil
 	}
 
-	// 3d. catalog consumer-binding gate (ADR-0091, F61): resolve each spec.bindings.catalog binding into the
-	// FUNCD_CATALOG_<ALIAS>_URL/_TOKEN env pair BEFORE provisioning any worker. A bound catalog that
+	// 3d. lake consumer-binding gate (ADR-0091, F61): resolve each spec.bindings.lake binding into the
+	// FUNCD_LAKE_<ALIAS>_URL/_TOKEN env pair BEFORE provisioning any worker. A bound lake that
 	// is not Ready yet (its endpoint is not the PEP proxy yet) requeues fail-closed —
-	// the function is held Ready=False/CatalogNotReady and re-reconciled soon, never booted with an
-	// empty URL/token (mirrors the ADR-0088 catalog-wait). A hard resolution error fails it closed.
-	catalogEnv, requeue, cerr := r.resolveCatalogEnv(ctx, fn)
+	// the function is held Ready=False/LakeNotReady and re-reconciled soon, never booted with an
+	// empty URL/token (mirrors the ADR-0088 lake-wait). A hard resolution error fails it closed.
+	lakeEnv, requeue, cerr := r.resolveLakeEnv(ctx, fn)
 	if cerr != nil {
-		return boundEnv{gate: &gateFailure{reason: "CatalogResolveFailed", message: cerr.Error(), readyMessage: cerr.Error(), phase: v1.PhaseFailed}}, nil
+		return boundEnv{gate: &gateFailure{reason: "LakeResolveFailed", message: cerr.Error(), readyMessage: cerr.Error(), phase: v1.PhaseFailed}}, nil
 	}
 	if requeue {
-		const msg = "a bound CatalogService is not Ready yet (no endpoint, token or live proxy); waiting"
-		return boundEnv{gate: &gateFailure{reason: "CatalogNotReady", message: msg, readyMessage: msg, phase: v1.PhasePending, requeue: r.referentPoll}}, nil
+		const msg = "a bound Lake is not Ready yet (no endpoint, token or live proxy); waiting"
+		return boundEnv{gate: &gateFailure{reason: "LakeNotReady", message: msg, readyMessage: msg, phase: v1.PhasePending, requeue: r.referentPoll}}, nil
 	}
-	return boundEnv{secret: bindEnv, catalog: catalogEnv}, nil
+	return boundEnv{secret: bindEnv, lake: lakeEnv}, nil
 }
 
 // heldThenGate converges fn's held revisions, then records the gate g that stopped its current revision, so that gate
@@ -1295,10 +1295,10 @@ func servingPhase(p v1.Phase) bool { return p == v1.PhaseReady || p == v1.PhaseD
 
 // steadyState reports whether fn is a solo Function at desired state: Ready with no reason (a crash loop beside a ready
 // replica runs the full pass, ADR-0160), its generation processed, its current revision serving with nothing draining
-// (ADR-0143), status.replicas at desired, every bound catalog Ready (ADR-0162), every replica listening (ADR-0161),
+// (ADR-0143), status.replicas at desired, every bound lake Ready (ADR-0162), every replica listening (ADR-0161),
 // none hung on its liveness, none answering its readiness with a dependency report (ADR-0215 Decisions 1 and 5) and
 // none unanswered past its readiness window (ADR-0259 Decision 4). It calls runtime.Status once per replica
-// (ADR-0142), sends each replica its liveness and readiness probes and, for a catalog consumer, one store Get per
+// (ADR-0142), sends each replica its liveness and readiness probes and, for a lake consumer, one store Get per
 // binding; it writes nothing. until is the earliest end of a kept read's window, zero if none.
 func (r *Reconciler) steadyState(ctx context.Context, fn *v1.Function) (steady bool, until time.Time) {
 	if fn.Status.Phase != v1.PhaseReady || fn.Status.ObservedGeneration != fn.Generation {
@@ -1321,7 +1321,7 @@ func (r *Reconciler) steadyState(ctx context.Context, fn *v1.Function) (steady b
 	if fn.Status.Replicas != desired {
 		return false, time.Time{}
 	}
-	if !r.catalogsReady(ctx, fn) {
+	if !r.lakesReady(ctx, fn) {
 		return false, time.Time{}
 	}
 	for i := range desired {
@@ -1515,7 +1515,7 @@ func (r *Reconciler) desiredReplicas(fn *v1.Function) int {
 // convergeSolo converges a solo Function's revisions and judges them (ADR-0143 Decision 4). With nothing serving, or
 // the current revision serving, it is ADR-0142's per-replica converge of the current revision; otherwise the current
 // revision comes up beside the serving one (switchSolo).
-func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned string, bindEnv envresolve.Resolved, catalogEnv map[string]string) (verdict, error) {
+func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned string, bindEnv envresolve.Resolved, lakeEnv map[string]string) (verdict, error) {
 	c := v1.ObjectName(fn.Status.CurrentRevision)
 	s := v1.ObjectName(fn.Status.ServingRevision)
 	desired := r.desiredReplicas(fn)
@@ -1528,7 +1528,7 @@ func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned s
 		s = ""
 	}
 	if s != "" && s != c {
-		return r.switchSolo(ctx, fn, s, c, pinned, desired, untried, bindEnv, catalogEnv)
+		return r.switchSolo(ctx, fn, s, c, pinned, desired, untried, bindEnv, lakeEnv)
 	}
 	serving := servingPhase(fn.Status.Phase)
 	var hung bool
@@ -1538,7 +1538,7 @@ func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned s
 			return verdict{}, herr
 		}
 	}
-	pass, err := r.convergeRevision(ctx, fn, c, pinned, replicaRange(desired), convergeOpts{serving: serving, untried: untried, scaleDown: true}, bindEnv, catalogEnv)
+	pass, err := r.convergeRevision(ctx, fn, c, pinned, replicaRange(desired), convergeOpts{serving: serving, untried: untried, scaleDown: true}, bindEnv, lakeEnv)
 	if err != nil {
 		return verdict{}, err
 	}
@@ -1667,7 +1667,7 @@ func (r *Reconciler) stopUnlistenedIn(ctx context.Context, insts []runtime.Insta
 // switchSolo brings the current revision c up beside the serving revision s and moves the calls to it once every
 // replica of c is ready and no revision drains (ADR-0143 Decisions 4.3–4.5). s keeps its replica indexes, and a dead s
 // worker is replaced from s's Revision; once that Revision is deleted, s's listening workers serve until the switch.
-func (r *Reconciler) switchSolo(ctx context.Context, fn *v1.Function, s, c v1.ObjectName, pinned string, desired int, untried bool, bindEnv envresolve.Resolved, catalogEnv map[string]string) (verdict, error) {
+func (r *Reconciler) switchSolo(ctx context.Context, fn *v1.Function, s, c v1.ObjectName, pinned string, desired int, untried bool, bindEnv envresolve.Resolved, lakeEnv map[string]string) (verdict, error) {
 	sIdx, err := r.servingIndexes(ctx, fn, s)
 	if err != nil {
 		return verdict{}, err
@@ -1682,12 +1682,12 @@ func (r *Reconciler) switchSolo(ctx context.Context, fn *v1.Function, s, c v1.Ob
 		if hung, err = r.restartHung(ctx, fn, s, maxIndex(sIdx)+1); err != nil {
 			return verdict{}, err
 		}
-		sPass, err = r.convergeRevision(ctx, sfn, s, spinned, sIdx, convergeOpts{serving: true}, bindEnv, catalogEnv)
+		sPass, err = r.convergeRevision(ctx, sfn, s, spinned, sIdx, convergeOpts{serving: true}, bindEnv, lakeEnv)
 	}
 	if err != nil {
 		return verdict{}, err
 	}
-	cPass, err := r.convergeRevision(ctx, fn, c, pinned, replicaRange(desired), convergeOpts{untried: untried, scaleDown: true}, bindEnv, catalogEnv)
+	cPass, err := r.convergeRevision(ctx, fn, c, pinned, replicaRange(desired), convergeOpts{untried: untried, scaleDown: true}, bindEnv, lakeEnv)
 	if err != nil {
 		return verdict{}, err
 	}
@@ -1803,7 +1803,7 @@ type revisionPass struct {
 
 // convergeRevision drives replicas `indexes` of revision rev toward running with ADR-0142's per-replica table
 // (planReplicas). With opts.scaleDown it stops rev's replicas outside indexes. tmpl is fn as rev runs it.
-func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, rev v1.ObjectName, pinnedDigest string, indexes []int, opts convergeOpts, bindEnv envresolve.Resolved, catalogEnv map[string]string) (revisionPass, error) {
+func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, rev v1.ObjectName, pinnedDigest string, indexes []int, opts convergeOpts, bindEnv envresolve.Resolved, lakeEnv map[string]string) (revisionPass, error) {
 	const op = "function.converge"
 	insts, err := r.namedInstances(ctx, tmpl.Namespace, tmpl.Name)
 	if err != nil {
@@ -1879,7 +1879,7 @@ func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, re
 		if _, perr := r.scheduler.Schedule(ctx, scheduler.Request{Namespace: tmpl.Namespace, Name: tmpl.Name, Replica: i, Platforms: platforms}); perr != nil {
 			return revisionPass{}, fault.Wrapf(perr, fault.KindOf(perr), op, "schedule")
 		}
-		spec, serr := r.workerSpec(tmpl, i, artifactPath, bindEnv, catalogEnv)
+		spec, serr := r.workerSpec(tmpl, i, artifactPath, bindEnv, lakeEnv)
 		if serr != nil {
 			r.logger.Warn("could not start worker", "function", tmpl.Name, "replica", i, "err", serr)
 			retryAt = earlier(retryAt, r.boot.startResult(runtime.NewInstanceID(tmpl.Namespace, tmpl.Name, rev, i), now, serr))
@@ -2246,7 +2246,7 @@ func (r *Reconciler) convergeHeldRevision(ctx context.Context, fn *v1.Function, 
 		return r.heldBootFailed(ctx, rev, err)
 	}
 	serving := phase != v1.PhaseDeploying
-	pass, err := r.convergeRevision(ctx, tmpl, rev.Name, digest, replicaRange(1), convergeOpts{serving: serving, scaleDown: true}, env.secret, env.catalog)
+	pass, err := r.convergeRevision(ctx, tmpl, rev.Name, digest, replicaRange(1), convergeOpts{serving: serving, scaleDown: true}, env.secret, env.lake)
 	if err != nil {
 		return r.heldBootFailed(ctx, rev, err)
 	}
@@ -2352,7 +2352,7 @@ func (r *Reconciler) stopRevision(ctx context.Context, fn *v1.Function, rev v1.O
 // function this is its replicas; for a pool worker `name` is the synthetic pool name
 // (poolInstanceName) — the shared worker has its own instance identity, distinct from any
 // member's, so a member's solo lookups never collide with the pool (ADR-0046). Another kind's
-// worker of the same name, a CatalogService engine, is never one of them (ADR-0152).
+// worker of the same name, a Lake engine, is never one of them (ADR-0152).
 func (r *Reconciler) namedInstances(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) ([]runtime.Instance, error) {
 	all, err := r.runtime.List(ctx, ns)
 	if err != nil {
@@ -3027,7 +3027,7 @@ func (r *Reconciler) familyShim(rt v1.RuntimeName) []string {
 const reasonRuntimeUnavailable = "RuntimeUnavailable"
 
 // runtimeUnavailable is the runtime gate (ADR-0149 Decision 2). In process mode a runtime is unavailable when no shim
-// runs it and the Function does not pool on a host of its own (issue #371); in containerd mode the CatalogService
+// runs it and the Function does not pool on a host of its own (issue #371); in containerd mode the Lake
 // engine image is not a function runtime. The legacy mode without a Materializer is never gated.
 func (r *Reconciler) runtimeUnavailable(fn *v1.Function) (string, bool) {
 	rt := fn.Spec.Runtime
@@ -3043,8 +3043,8 @@ func (r *Reconciler) runtimeUnavailable(fn *v1.Function) (string, bool) {
 			return "", false
 		}
 		cause = "no shim is registered for it"
-	case r.endpointMode == EndpointNetnsFixedPort && rt == catalogsvc.DuckDBRuntime:
-		cause = "it is the CatalogService engine image, not a function runtime"
+	case r.endpointMode == EndpointNetnsFixedPort && rt == lakesvc.DuckDBRuntime:
+		cause = "it is the Lake engine image, not a function runtime"
 	default:
 		return "", false
 	}
@@ -3206,7 +3206,7 @@ func (r *Reconciler) addRecordBound(env map[string]string) {
 // handler in the env; otherwise it runs the legacy long-lived placeholder (ADR-0020).
 // bindEnv is the already-resolved config and secret env (ADR-0057), merged into Env with
 // reserved-FUNCD_-key precedence, plus its key lists (ADR-0245).
-func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath string, bindEnv envresolve.Resolved, catalogEnv map[string]string) (runtime.WorkerSpec, error) {
+func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath string, bindEnv envresolve.Resolved, lakeEnv map[string]string) (runtime.WorkerSpec, error) {
 	if r.materializer != nil && r.endpointMode == EndpointNetnsFixedPort {
 		// Container mode (ADR-0032): the shim is the curated image's entrypoint (Command
 		// empty), the artifact is bind-mounted read-only, and it binds a fixed netns port.
@@ -3219,8 +3219,8 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 		// is under the mount target.
 		addContractEnv(env, filepath.Dir(artifactPath), containerArtifactDir)
 		r.addS3Env(env, fn)
-		r.addCatalogEnv(env, catalogEnv)  // FUNCD_CATALOG_<ALIAS>_URL/_TOKEN written DIRECTLY (ADR-0091) — never via addBindingEnv
-		r.addCatalogExtensionDir(env, fn) // DUCKDB_EXTENSION_DIRECTORY for a catalog consumer (dev; prod uses the bundle's duckdb-ext)
+		r.addLakeEnv(env, lakeEnv)     // FUNCD_LAKE_<ALIAS>_URL/_TOKEN written DIRECTLY (ADR-0091) — never via addBindingEnv
+		r.addLakeExtensionDir(env, fn) // DUCKDB_EXTENSION_DIRECTORY for a lake consumer (dev; prod uses the bundle's duckdb-ext)
 		r.addBindingEnv(env, bindEnv)
 		mounts := []runtime.Mount{{
 			Source: filepath.Dir(artifactPath), Target: containerArtifactDir, ReadOnly: true,
@@ -3257,9 +3257,9 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 		if err := r.addInvokeSocket(env, fn); err != nil {
 			return runtime.WorkerSpec{}, err
 		}
-		r.addS3Env(env, fn)               // AWS_* S3 keypair + endpoint for a spec.bindings.blob function (ADR-0085)
-		r.addCatalogEnv(env, catalogEnv)  // FUNCD_CATALOG_<ALIAS>_URL/_TOKEN written DIRECTLY (ADR-0091) — never via addBindingEnv
-		r.addCatalogExtensionDir(env, fn) // DUCKDB_EXTENSION_DIRECTORY for a catalog consumer (dev; prod uses the bundle's duckdb-ext)
+		r.addS3Env(env, fn)            // AWS_* S3 keypair + endpoint for a spec.bindings.blob function (ADR-0085)
+		r.addLakeEnv(env, lakeEnv)     // FUNCD_LAKE_<ALIAS>_URL/_TOKEN written DIRECTLY (ADR-0091) — never via addBindingEnv
+		r.addLakeExtensionDir(env, fn) // DUCKDB_EXTENSION_DIRECTORY for a lake consumer (dev; prod uses the bundle's duckdb-ext)
 		r.addBindingEnv(env, bindEnv)
 		return runtime.WorkerSpec{
 			Namespace: fn.Namespace,

@@ -1,25 +1,25 @@
-# Venom e2e for the catalog-quack lane (ADR-0086 + ADR-0087 + ADR-0088, F48/F57/F58) — the assert phase
+# Venom e2e for the lake-quack lane (ADR-0086 + ADR-0087 + ADR-0088, F48/F57/F58) — the assert phase
 # of `just lima-example-duckdb`, run host-side after the self-deploying Lima VM is Ready.
 #
-# It proves the whole add-on-provider loop on REAL containerd: a CatalogService is deployed as an
+# It proves the whole add-on-provider loop on REAL containerd: a Lake is deployed as an
 # add-on PROVIDER (no backing Function), the provider-runtime (ADR-0087) brings up the curated `duckdb`
 # engine, the engine gets its F47/Cedar identity (ADR-0088 — its spec.bindings.blob are its blobBindings, it owns
-# its catalog prefix) so its keypair reads/writes S3 through the F47 PEP, and it reaches Ready on its own
+# its lake prefix) so its keypair reads/writes S3 through the F47 PEP, and it reaches Ready on its own
 # HTTP readiness probe.
 #
-# The CONSUMER is a funcd FUNCTION (pyvvo/funcd-python examples/catalog-quack/src/handler.py + consumer.yaml) — the
+# The CONSUMER is a funcd FUNCTION (pyvvo/funcd-python examples/lake-quack/src/handler.py + consumer.yaml) — the
 # funcd-native shape. It runs on the STOCK `python314` runtime: its duckdb dep travels IN the artifact as
 # an ADR-0089 dependency BUNDLE (vendored duckdb wheel + duckdb-ext/). Testcase 3 deploys it, asserts it
 # reaches Ready (bundle materialized + `import duckdb` at module load), and then does a LIVE SQL round-trip:
-# it POSTs to the function's data-plane route, the handler reads the `spec.bindings.catalog` consumer binding
-# (ADR-0091 — FUNCD_CATALOG_LAKE_URL/_TOKEN injected from the `lake` catalog's status.endpoint + QUACK_TOKEN),
+# it POSTs to the function's data-plane route, the handler reads the `spec.bindings.lake` consumer binding
+# (ADR-0091 — FUNCD_LAKE_LAKE_URL/_TOKEN injected from the `lake` lake's status.endpoint + QUACK_TOKEN),
 # runs the SQL on `lake` over Quack, and returns the rows. Ready alone proves the binding injected the
 # endpoint/token and `lake` is reachable; the invoke proves the whole consumer loop end-to-end on containerd.
 #
 # Last, the ADR-0179 cases: the boot sweep releases a CNI attachment planted under the ID form used before ADR-0179
 # (<ns>-<name>-r<replica>), and engines c in namespace a-b and b-c in namespace a, whose IDs collided under that
 # form, each hold their own attachment.
-name: catalog-quack add-on provider — deploy + Ready + live SQL round-trip on real containerd (ADR-0086/0087/0088/0091)
+name: lake-quack add-on provider — deploy + Ready + live SQL round-trip on real containerd (ADR-0086/0087/0088/0091)
 
 vars:
   # the lane's `tokens` in scripts/lanes.yaml, listed in auth.credentials (e2e/fixtures/duckdb-funcdconfig.yaml)
@@ -27,42 +27,42 @@ vars:
   admintoken: duckdb-lane-admin
 
 testcases:
-  - name: the CatalogService deploys as a provider (no backing Function) and reaches Ready
+  - name: the Lake deploys as a provider (no backing Function) and reaches Ready
     steps:
       - type: exec
         # The provider-runtime brings up the duckdb engine; with its F47/Cedar identity (ADR-0088) the
         # engine reads/writes S3 (HEAD 404 fresh, not 403), serves Quack, and the readiness probe passes
-        # — the CatalogService auto-progresses to Ready (the reconciler requeues while it boots). Assert
+        # — the Lake auto-progresses to Ready (the reconciler requeues while it boots). Assert
         # Ready + the published status.endpoint, and that NO backing Function exists (it's a provider).
-        # Under ADR-0137 status.endpoint is the per-CatalogService catalog::query PEP PROXY (published on
+        # Under ADR-0137 status.endpoint is the per-Lake lake::query PEP PROXY (published on
         # the CNI bridge host so a consumer's netns can reach it — its ephemeral port), NOT the engine's
         # internal :8080 (which the proxy now fronts as its upstream).
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
             export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
-            cs=$(funcdctl get catalogservice lake -n default -o json)
+            cs=$(funcdctl get lake lake -n default -o json)
             phase=$(echo "$cs" | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"phase\"])")
             ep=$(echo "$cs" | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"].get(\"endpoint\",\"\"))")
             fns=$(funcdctl get function -n default -o json 2>/dev/null | python3 -c "import sys,json;print(len(json.load(sys.stdin).get(\"items\",[])))" 2>/dev/null || echo 0)
             echo "PHASE=$phase ENDPOINT=$ep FUNCTIONS=$fns"'
         retry: 30
         delay: 2
-        info: "catalogservice lake → {{.result.systemout}}"
+        info: "lake lake → {{.result.systemout}}"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "PHASE=Ready"
-          - result.systemout ShouldContainSubstring "ENDPOINT=10.63.0.1:"  # the netns-reachable catalog::query PEP proxy (ADR-0137), not the engine's :8080
+          - result.systemout ShouldContainSubstring "ENDPOINT=10.63.0.1:"  # the netns-reachable lake::query PEP proxy (ADR-0137), not the engine's :8080
           - result.systemout ShouldContainSubstring "FUNCTIONS=0"     # a provider, NOT a Function
 
   - name: the engine serves Quack and its S3 access is authorized (ADR-0088, not 403)
     steps:
       - type: exec
         # Directly hit the engine: GET / is the Quack RPC endpoint (200), and the daemon's S3 vgw log
-        # shows the catalog HEAD authorized as 404 (fresh) — proving the provider's F47/Cedar identity.
+        # shows the lake HEAD authorized as 404 (fresh) — proving the provider's F47/Cedar identity.
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
             export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
-            addr=$(funcdctl get catalogservice lake -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"endpoint\"])")
+            addr=$(funcdctl get lake lake -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"endpoint\"])")
             code=$(curl -s -m 5 -o /dev/null -w "%{http_code}" "http://$addr/")
             denied=$(sudo journalctl -u funcd-demo --no-pager 2>/dev/null | grep -c " 403 .* /lakehouse/gold/" || echo 0)
             echo "QUACK_HTTP=$code S3_403_COUNT=$denied"'
@@ -74,34 +74,34 @@ testcases:
           - result.systemout ShouldContainSubstring "QUACK_HTTP=200"  # the engine serves Quack
           - result.systemout ShouldContainSubstring "S3_403_COUNT=0"  # no S3 denial — ADR-0088 authorized it
 
-  - name: the catalog-reader CONSUMER Function reaches Ready and round-trips SQL over the spec.bindings.catalog binding
+  - name: the lake-reader CONSUMER Function reaches Ready and round-trips SQL over the spec.bindings.lake binding
     steps:
       # (a) Ready. The consumer is a funcd Function whose artifact is an ADR-0089 dependency BUNDLE carrying
       # the vendored duckdb wheel + duckdb-ext/. It runs on the STOCK `python314` runtime (no python-duckdb
       # image). handler.py does `import duckdb` at module load, so Ready ⇒ the bundle materialized and the
-      # vendored native dep loaded on the stock runtime. Ready ALSO proves the ADR-0091 spec.bindings.catalog binding
-      # resolved: the reconcile requeues catalog-reader until `lake` is Ready and injects FUNCD_CATALOG_LAKE_URL
-      # (= lake's status.endpoint) + FUNCD_CATALOG_LAKE_TOKEN (= its QUACK_TOKEN).
+      # vendored native dep loaded on the stock runtime. Ready ALSO proves the ADR-0091 spec.bindings.lake binding
+      # resolved: the reconcile requeues lake-reader until `lake` is Ready and injects FUNCD_LAKE_LAKE_URL
+      # (= lake's status.endpoint) + FUNCD_LAKE_LAKE_TOKEN (= its QUACK_TOKEN).
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
             export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
-            fn=$(funcdctl get function catalog-reader -n default -o json)
+            fn=$(funcdctl get function lake-reader -n default -o json)
             phase=$(echo "$fn" | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"phase\"])")
             echo "PHASE=$phase"'
         retry: 60
         delay: 2
-        info: "function catalog-reader → {{.result.systemout}}"
+        info: "function lake-reader → {{.result.systemout}}"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "PHASE=Ready"     # bundle materialized + import duckdb OK + binding resolved
       # (b) LIVE SQL round-trip. POST to the function's data-plane route (127.0.0.1:8081, forwarded from the
-      # guest like the kv/fn-to-fn lanes). The handler reads the injected FUNCD_CATALOG_LAKE_URL/_TOKEN, loads
+      # guest like the kv/fn-to-fn lanes). The handler reads the injected FUNCD_LAKE_LAKE_URL/_TOKEN, loads
       # the offline quack extension from FUNCD_BUNDLE_DIR/duckdb-ext, and runs the SQL on `lake` over Quack —
       # returning {"rows": [...]}. `SELECT 42 AS answer` ⇒ [[42]]. retry/delay absorbs first-invoke warm-up.
       - type: http
         method: POST
-        url: "http://127.0.0.1:8081/function/catalog-reader"
+        url: "http://127.0.0.1:8081/function/lake-reader"
         headers:
           content-type: application/json
         body: '{"data":{"sql":"SELECT 42 AS answer"}}'
@@ -113,54 +113,54 @@ testcases:
           - result.body ShouldContainSubstring "rows"                 # the handler's FuncOutput shape
           - result.body ShouldContainSubstring "[[42]]"               # rows == [[42]] — real Quack round-trip on lake
 
-  - name: the catalog is exposed at the edge and external catalog::query is PEP'd (ADR-0138)
+  - name: the lake is exposed at the edge and external lake::query is PEP'd (ADR-0138)
     steps:
-      # ADR-0138/0241: catalogservice.yaml enables spec.ingress at path /catalog/lake, so once `lake` is Ready
-      # the CatalogService reconciler programs — THROUGH THE EDGE-ROUTE AGGREGATOR — a Route-v2 edge entry whose
-      # node-private Upstream backend is the catalog::query PEP PROXY (never the engine). This proves, on real
-      # containerd: (a) the aggregator programmed the catalog entry ALONGSIDE the function route (testcase 3b's
-      # /function/catalog-reader still 200'd — no replace-all clobber); (b) the data-plane reverse-proxies the
+      # ADR-0138/0241: lake.yaml enables spec.ingress at path /lake/lake, so once `lake` is Ready
+      # the Lake reconciler programs — THROUGH THE EDGE-ROUTE AGGREGATOR — a Route-v2 edge entry whose
+      # node-private Upstream backend is the lake::query PEP PROXY (never the engine). This proves, on real
+      # containerd: (a) the aggregator programmed the lake entry ALONGSIDE the function route (testcase 3b's
+      # /function/lake-reader still 200'd — no replace-all clobber); (b) the data-plane reverse-proxies the
       # edge path to the PROXY, which forwards a non-handshake request to the ready engine (⇒ 200 REACHABILITY).
       - type: http
         method: GET
-        url: "http://127.0.0.1:8081/catalog/lake"
+        url: "http://127.0.0.1:8081/lake/lake"
         retry: 20
         delay: 2
-        info: "edge /catalog/lake → status {{.result.statuscode}} (200 = edge reaches the PEP proxy → engine)"
+        info: "edge /lake/lake → status {{.result.statuscode}} (200 = edge reaches the PEP proxy → engine)"
         assertions:
           - result.statuscode ShouldEqual 200          # the edge routes external traffic through the aggregator's Upstream entry to the proxy
-      # control: an unexposed edge path has NO programmed entry ⇒ 404. This distinguishes "the catalog entry is
+      # control: an unexposed edge path has NO programmed entry ⇒ 404. This distinguishes "the lake entry is
       # programmed and reachable" (200 above) from "no route at all", proving the 200 is ADR-0138's edge entry.
       - type: http
         method: GET
-        url: "http://127.0.0.1:8081/catalog/not-a-catalog"
-        info: "control edge /catalog/not-a-catalog → status {{.result.statuscode}} (404 = no route)"
+        url: "http://127.0.0.1:8081/lake/not-a-lake"
+        info: "control edge /lake/not-a-lake → status {{.result.statuscode}} (404 = no route)"
         assertions:
           - result.statuscode ShouldEqual 404          # no edge entry for an unexposed path
       # PEP ENFORCEMENT at the edge: POST a real Quack handshake frame carrying a GARBAGE token (8-byte preamble
       # + token TLV field 0x01,0x00 + LEB128 length 0x1a + 26-byte token + trailing field — the makeHandshake
       # shape). The proxy resolves the caller token to a principal, fails (unresolvable), and FAIL-CLOSES 403 —
-      # the engine never sees it. This proves the external catalog::query path is default-deny at the edge.
+      # the engine never sees it. This proves the external lake::query path is default-deny at the edge.
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
             code=$(printf "\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x1agarbage-unresolvable-token\x02\x00\x03end" \
-              | curl -s -m 5 -o /dev/null -w "%{http_code}" -X POST --data-binary @- http://127.0.0.1:8081/catalog/lake)
+              | curl -s -m 5 -o /dev/null -w "%{http_code}" -X POST --data-binary @- http://127.0.0.1:8081/lake/lake)
             echo "PEP=$code"'
         info: "edge PEP (garbage token) → {{.result.systemout}} (PEP=403 = default-deny enforced at the edge)"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "PEP=403"   # unresolvable caller token ⇒ fail-closed, engine never reached
 
-  # ADR-0142: nothing writes the CatalogService after the kill — the catalog's periodic pass recreates the engine.
-  - name: crashed-catalog-engine-restarts — a killed engine comes back on a new IP behind the same proxy URL with no write, and the consumer keeps working
+  # ADR-0142: nothing writes the Lake after the kill — the lake's periodic pass recreates the engine.
+  - name: crashed-lake-engine-restarts — a killed engine comes back on a new IP behind the same proxy URL with no write, and the consumer keeps working
     steps:
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
             export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
             sock=/var/lib/funcd/data/containerd/containerd.sock
-            funcdctl get catalogservice lake -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"endpoint\"])" > /tmp/lake-endpoint-before
+            funcdctl get lake lake -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"endpoint\"])" > /tmp/lake-endpoint-before
             pid=$(sudo /var/lib/funcd/bin/ctr --address $sock -n funcd-default task ls | awk "\$1==\"lake-r0\"{print \$2}")
             sudo nsenter -t "$pid" -n ip -4 -o addr show scope global | awk "{print \$4}" > /tmp/lake-ip-before
             sudo /var/lib/funcd/bin/ctr --address $sock -n funcd-default task kill -s KILL lake-r0
@@ -171,7 +171,7 @@ testcases:
           - result.systemout ShouldContainSubstring "BEFORE=10.63.0.1:"
       - type: http
         method: POST
-        url: "http://127.0.0.1:8081/function/catalog-reader"
+        url: "http://127.0.0.1:8081/function/lake-reader"
         headers:
           content-type: application/json
         body: '{"data":{"sql":"SELECT 42 AS answer"}}'
@@ -186,7 +186,7 @@ testcases:
           limactl shell --workdir / {{.vm}} bash -lc '
             export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
             sock=/var/lib/funcd/data/containerd/containerd.sock
-            now=$(funcdctl get catalogservice lake -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"endpoint\"])")
+            now=$(funcdctl get lake lake -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"endpoint\"])")
             pid=$(sudo /var/lib/funcd/bin/ctr --address $sock -n funcd-default task ls | awk "\$1==\"lake-r0\"{print \$2}")
             ip=$(sudo nsenter -t "$pid" -n ip -4 -o addr show scope global | awk "{print \$4}")
             [ "$now" = "$(cat /tmp/lake-endpoint-before)" ] && same=yes || same=no
@@ -209,7 +209,7 @@ testcases:
           - result.systemout ShouldContainSubstring MARKED
       - type: http
         method: POST
-        url: "http://127.0.0.1:8081/function/catalog-reader"
+        url: "http://127.0.0.1:8081/function/lake-reader"
         headers:
           content-type: application/json
         body: '{"data":{"sql":"CREATE TABLE lakehouse.issue998 AS SELECT 998 AS n"}}'
@@ -225,7 +225,7 @@ testcases:
               grep -q . && echo CHECKPOINTED || echo WAITING'
         retry: 15
         delay: 1
-        info: "the catalog after the commit → {{.result.systemout}} {{.result.systemerr}}"
+        info: "the lake after the commit → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.systemout ShouldEqual CHECKPOINTED
       - type: exec
@@ -240,7 +240,7 @@ testcases:
           - result.systemout ShouldContainSubstring KILLED
       - type: http
         method: POST
-        url: "http://127.0.0.1:8081/function/catalog-reader"
+        url: "http://127.0.0.1:8081/function/lake-reader"
         headers:
           content-type: application/json
         body: '{"data":{"sql":"SELECT n FROM lakehouse.issue998"}}'
@@ -251,8 +251,8 @@ testcases:
           - result.statuscode ShouldEqual 200
           - result.body ShouldContainSubstring "[[998]]"
 
-  # ADR-0152: a Function and a CatalogService share the name `lake`; each reconciler manages only its own kind's workers.
-  - name: same-name-function-and-catalog-stay-ready — Function lake deploys and scales beside CatalogService lake, which keeps its engine
+  # ADR-0152: a Function and a Lake share the name `lake`; each reconciler manages only its own kind's workers.
+  - name: same-name-function-and-lake-stay-ready — Function lake deploys and scales beside Lake lake, which keeps its engine
     steps:
       - type: exec
         script: |
@@ -262,7 +262,7 @@ testcases:
             pid=$(sudo /var/lib/funcd/bin/ctr --address $sock -n funcd-default task ls | awk "\$1==\"lake-r0\"{print \$2}")
             [ -n "$pid" ] || exit 1
             echo "$pid" > /tmp/lake-engine-pid
-            sed -e "s/^  name: catalog-reader/  name: lake/" /opt/lane/consumer.yaml > /tmp/lake-function.yaml
+            sed -e "s/^  name: lake-reader/  name: lake/" /opt/lane/consumer.yaml > /tmp/lake-function.yaml
             printf "    blob:\n      - alias: gold\n        bucket: lakehouse\n        prefix: gold\n  buckets:\n    - ref: lakehouse\n" >> /tmp/lake-function.yaml
             funcdctl apply -f /tmp/lake-function.yaml >/dev/null
             echo "ENGINE_PID=$(cat /tmp/lake-engine-pid)"'
@@ -294,45 +294,45 @@ testcases:
             fn=$(funcdctl get function lake -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin)[\"status\"];print(s[\"phase\"],s.get(\"replicas\",0))")
             pid=$(sudo /var/lib/funcd/bin/ctr --address $sock -n funcd-default task ls | awk "\$1==\"lake-r0\"{print \$2}")
             [ "$pid" = "$(cat /tmp/lake-engine-pid)" ] && same=yes || same=no
-            echo "FUNCTION=$fn CATALOG=$(phase catalogservice lake) ENGINE_SAME=$same ENGINE_LABEL=$(label lake-r0) FUNCTION_LABEL=$(label lake-2.r0)"'
+            echo "FUNCTION=$fn LAKE=$(phase lake lake) ENGINE_SAME=$same ENGINE_LABEL=$(label lake-r0) FUNCTION_LABEL=$(label lake-2.r0)"'
         retry: 60
         delay: 2
         info: "after scaling Function lake → {{.result.systemout}}"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "FUNCTION=Ready 2"
-          - result.systemout ShouldContainSubstring "CATALOG=Ready"
+          - result.systemout ShouldContainSubstring "LAKE=Ready"
           - result.systemout ShouldContainSubstring "ENGINE_SAME=yes"
-          - result.systemout ShouldContainSubstring "ENGINE_LABEL=CatalogService"
+          - result.systemout ShouldContainSubstring "ENGINE_LABEL=Lake"
           - result.systemout ShouldContainSubstring "FUNCTION_LABEL=Function"
       - type: http
         method: POST
-        url: "http://127.0.0.1:8081/function/catalog-reader"
+        url: "http://127.0.0.1:8081/function/lake-reader"
         headers:
           content-type: application/json
         body: '{"data":{"sql":"SELECT 42 AS answer"}}'
         retry: 20
         delay: 2
-        info: "catalog-reader beside Function lake → status {{.result.statuscode}} body {{.result.body}}"
+        info: "lake-reader beside Function lake → status {{.result.statuscode}} body {{.result.body}}"
         assertions:
           - result.statuscode ShouldEqual 200
           - result.body ShouldContainSubstring "[[42]]"
 
-  # ADR-0162: a deleted catalog's proxy listener stays bound while catalog-reader binds it, so the re-applied catalog
+  # ADR-0162: a deleted lake's proxy listener stays bound while lake-reader binds it, so the re-applied lake
   # serves on the same URL and the consumer's worker is not re-created.
-  - name: catalog-recreate-keeps-url — a deleted and re-applied CatalogService keeps its endpoint, and catalog-reader keeps its worker
+  - name: lake-recreate-keeps-url — a deleted and re-applied Lake keeps its endpoint, and lake-reader keeps its worker
     steps:
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
             export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
             sock=/var/lib/funcd/data/containerd/containerd.sock
-            funcdctl get catalogservice lake -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"endpoint\"])" > /tmp/lake-endpoint-recreate
-            sudo /var/lib/funcd/bin/ctr --address $sock -n funcd-default task ls | awk "index(\$1,\"catalog-reader\")==1{print \$1, \$2}" | sort > /tmp/reader-tasks-before
+            funcdctl get lake lake -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"endpoint\"])" > /tmp/lake-endpoint-recreate
+            sudo /var/lib/funcd/bin/ctr --address $sock -n funcd-default task ls | awk "index(\$1,\"lake-reader\")==1{print \$1, \$2}" | sort > /tmp/reader-tasks-before
             [ -s /tmp/reader-tasks-before ] || exit 1
-            funcdctl delete catalogservice lake -n default >/dev/null
+            funcdctl delete lake lake -n default >/dev/null
             echo "ENDPOINT=$(cat /tmp/lake-endpoint-recreate)"'
-        info: "deleted CatalogService lake → {{.result.systemout}}"
+        info: "deleted Lake lake → {{.result.systemout}}"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "ENDPOINT=10.63.0.1:"
@@ -340,59 +340,59 @@ testcases:
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
             export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
-            funcdctl get catalogservice lake -n default >/dev/null 2>&1 && exit 1
-            reason=$(funcdctl get function catalog-reader -n default -o json | python3 -c "import sys,json;print(next((c.get(\"reason\",\"\") for c in json.load(sys.stdin)[\"status\"][\"conditions\"] if c[\"type\"]==\"RevisionReady\"),\"\"))")
-            [ "$reason" = CatalogNotReady ] || exit 1
-            funcdctl apply -f /opt/lane/catalog-quack-recreate.yaml >/dev/null
+            funcdctl get lake lake -n default >/dev/null 2>&1 && exit 1
+            reason=$(funcdctl get function lake-reader -n default -o json | python3 -c "import sys,json;print(next((c.get(\"reason\",\"\") for c in json.load(sys.stdin)[\"status\"][\"conditions\"] if c[\"type\"]==\"RevisionReady\"),\"\"))")
+            [ "$reason" = LakeNotReady ] || exit 1
+            funcdctl apply -f /opt/lane/lake-quack-recreate.yaml >/dev/null
             echo "READER_REASON=$reason"'
         retry: 30
         delay: 2
         info: "lake gone, re-applied → {{.result.systemout}}"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "READER_REASON=CatalogNotReady"
+          - result.systemout ShouldContainSubstring "READER_REASON=LakeNotReady"
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
             export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
             sock=/var/lib/funcd/data/containerd/containerd.sock
-            cs=$(funcdctl get catalogservice lake -n default -o json)
+            cs=$(funcdctl get lake lake -n default -o json)
             phase=$(echo "$cs" | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"phase\"])")
             [ "$phase" = Ready ] || exit 1
             ep=$(echo "$cs" | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"endpoint\"])")
-            sudo /var/lib/funcd/bin/ctr --address $sock -n funcd-default task ls | awk "index(\$1,\"catalog-reader\")==1{print \$1, \$2}" | sort > /tmp/reader-tasks-after
+            sudo /var/lib/funcd/bin/ctr --address $sock -n funcd-default task ls | awk "index(\$1,\"lake-reader\")==1{print \$1, \$2}" | sort > /tmp/reader-tasks-after
             [ "$ep" = "$(cat /tmp/lake-endpoint-recreate)" ] && same=yes || same=no
             cmp -s /tmp/reader-tasks-before /tmp/reader-tasks-after && kept=yes || kept=no
-            echo "CATALOG=$phase ENDPOINT_SAME=$same READER_WORKER_KEPT=$kept ($(cat /tmp/lake-endpoint-recreate) -> $ep)"'
+            echo "LAKE=$phase ENDPOINT_SAME=$same READER_WORKER_KEPT=$kept ($(cat /tmp/lake-endpoint-recreate) -> $ep)"'
         retry: 60
         delay: 2
         info: "after the re-apply → {{.result.systemout}}"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "CATALOG=Ready"
+          - result.systemout ShouldContainSubstring "LAKE=Ready"
           - result.systemout ShouldContainSubstring "ENDPOINT_SAME=yes"
           - result.systemout ShouldContainSubstring "READER_WORKER_KEPT=yes"
       - type: http
         method: POST
-        url: "http://127.0.0.1:8081/function/catalog-reader"
+        url: "http://127.0.0.1:8081/function/lake-reader"
         headers:
           content-type: application/json
         body: '{"data":{"sql":"SELECT 42 AS answer"}}'
         retry: 20
         delay: 2
-        info: "catalog-reader after the re-apply → status {{.result.statuscode}} body {{.result.body}}"
+        info: "lake-reader after the re-apply → status {{.result.statuscode}} body {{.result.body}}"
         assertions:
           - result.statuscode ShouldEqual 200
           - result.body ShouldContainSubstring "[[42]]"
 
-  # ADR-0162 restart-keeps-catalog-port: the hard restart below also checks that lake keeps its proxy port and endpoint.
+  # ADR-0162 restart-keeps-lake-port: the hard restart below also checks that lake keeps its proxy port and endpoint.
   - name: owner-kind-across-daemon-restart — after a hard daemon restart both lakes return, each on workers labelled with its own kind
     steps:
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
             export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
-            funcdctl get catalogservice lake -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin)[\"status\"];print(s[\"endpoint\"], s[\"proxyPort\"])" > /tmp/lake-port-before
+            funcdctl get lake lake -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin)[\"status\"];print(s[\"endpoint\"], s[\"proxyPort\"])" > /tmp/lake-port-before
             sudo kill -KILL "$(systemctl show -p MainPID --value funcd-demo)"
             echo "BEFORE=$(cat /tmp/lake-port-before)"'
         assertions:
@@ -415,28 +415,28 @@ testcases:
             sock=/var/lib/funcd/data/containerd/containerd.sock
             label() { sudo /var/lib/funcd/bin/ctr --address $sock -n funcd-default containers info "$1" | python3 -c "import sys,json;print(json.load(sys.stdin)[\"Labels\"].get(\"funcd/owner-kind\",\"\"))"; }
             phase() { funcdctl get "$1" "$2" -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"phase\"])"; }
-            port=$(funcdctl get catalogservice lake -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin)[\"status\"];print(s[\"endpoint\"], s[\"proxyPort\"])")
+            port=$(funcdctl get lake lake -n default -o json | python3 -c "import sys,json;s=json.load(sys.stdin)[\"status\"];print(s[\"endpoint\"], s[\"proxyPort\"])")
             [ "$port" = "$(cat /tmp/lake-port-before)" ] && same=yes || same=no
-            echo "FUNCTION=$(phase function lake) CATALOG=$(phase catalogservice lake) ENGINE_LABEL=$(label lake-r0) FUNCTION_LABEL=$(label lake-2.r0) PORT_SAME=$same ($(cat /tmp/lake-port-before) -> $port)"'
+            echo "FUNCTION=$(phase function lake) LAKE=$(phase lake lake) ENGINE_LABEL=$(label lake-r0) FUNCTION_LABEL=$(label lake-2.r0) PORT_SAME=$same ($(cat /tmp/lake-port-before) -> $port)"'
         retry: 60
         delay: 2
         info: "after the daemon restart → {{.result.systemout}}"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "FUNCTION=Ready"
-          - result.systemout ShouldContainSubstring "CATALOG=Ready"
+          - result.systemout ShouldContainSubstring "LAKE=Ready"
           - result.systemout ShouldContainSubstring "PORT_SAME=yes"
-          - result.systemout ShouldContainSubstring "ENGINE_LABEL=CatalogService"
+          - result.systemout ShouldContainSubstring "ENGINE_LABEL=Lake"
           - result.systemout ShouldContainSubstring "FUNCTION_LABEL=Function"
       - type: http
         method: POST
-        url: "http://127.0.0.1:8081/function/catalog-reader"
+        url: "http://127.0.0.1:8081/function/lake-reader"
         headers:
           content-type: application/json
         body: '{"data":{"sql":"SELECT 42 AS answer"}}'
         retry: 30
         delay: 2
-        info: "catalog-reader after the daemon restart → status {{.result.statuscode}} body {{.result.body}}"
+        info: "lake-reader after the daemon restart → status {{.result.statuscode}} body {{.result.body}}"
         assertions:
           - result.statuscode ShouldEqual 200
           - result.body ShouldContainSubstring "[[42]]"
@@ -482,7 +482,7 @@ testcases:
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
-            FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} funcdctl get catalogservice lake -n default >/dev/null || exit 1
+            FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}} funcdctl get lake lake -n default >/dev/null || exit 1
             sock=/var/lib/funcd/data/containerd/containerd.sock
             ctr=$(sudo /var/lib/funcd/bin/ctr --address $sock -n funcd-a-b containers ls -q | grep -cx c-r0)
             echo "CONTAINER=$ctr LEASES=$(sudo grep -rlF a-b-c-r0 /var/lib/cni/networks/funcd | wc -l) RESULTS=$(sudo ls /var/lib/cni/results | grep -cF -- -a-b-c-r0-)"'
@@ -511,7 +511,7 @@ testcases:
             export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.admintoken}}
             sock=/var/lib/funcd/data/containerd/containerd.sock
             engine() {
-              read -r phase ep < <(funcdctl get catalogservice $2 -n $1 -o json | python3 -c "import sys,json;s=json.load(sys.stdin)[\"status\"];print(s[\"phase\"],s.get(\"endpoint\",\"-\"))")
+              read -r phase ep < <(funcdctl get lake $2 -n $1 -o json | python3 -c "import sys,json;s=json.load(sys.stdin)[\"status\"];print(s[\"phase\"],s.get(\"endpoint\",\"-\"))")
               code=$(curl -s -m 5 -o /dev/null -w "%{http_code}" "http://$ep/")
               pid=$(sudo /var/lib/funcd/bin/ctr --address $sock -n funcd-$1 task ls | awk "\$1==\"$2-r0\"{print \$2}")
               ip=$(sudo nsenter -t "$pid" -n ip -4 -o addr show scope global | awk "{print \$4}" | cut -d/ -f1)
@@ -531,7 +531,7 @@ testcases:
       - type: exec
         script: |
           limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.admintoken}} \
-            funcdctl delete catalogservice c -n a-b
+            funcdctl delete lake c -n a-b
         assertions:
           - result.code ShouldEqual 0
       - type: exec
@@ -540,7 +540,7 @@ testcases:
             export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.admintoken}}
             sock=/var/lib/funcd/data/containerd/containerd.sock
             engine() {
-              read -r phase ep < <(funcdctl get catalogservice $2 -n $1 -o json | python3 -c "import sys,json;s=json.load(sys.stdin)[\"status\"];print(s[\"phase\"],s.get(\"endpoint\",\"-\"))")
+              read -r phase ep < <(funcdctl get lake $2 -n $1 -o json | python3 -c "import sys,json;s=json.load(sys.stdin)[\"status\"];print(s[\"phase\"],s.get(\"endpoint\",\"-\"))")
               code=$(curl -s -m 5 -o /dev/null -w "%{http_code}" "http://$ep/")
               pid=$(sudo /var/lib/funcd/bin/ctr --address $sock -n funcd-$1 task ls | awk "\$1==\"$2-r0\"{print \$2}")
               ip=$(sudo nsenter -t "$pid" -n ip -4 -o addr show scope global | awk "{print \$4}" | cut -d/ -f1)

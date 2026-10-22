@@ -249,7 +249,7 @@ func TestFunctionKVValidateMatrix(t *testing.T) {
 }
 
 // scenario: function-config-validate (ADR-0093) — each spec.bindings.config entry names a ConfigMap and must
-// be a valid DNS-1123 name (mirrors spec.secrets / CatalogService.spec.config). Cross-resource
+// be a valid DNS-1123 name (mirrors spec.secrets / Lake.spec.config). Cross-resource
 // existence is the reconciler's fail-closed read, not Validate.
 func TestFunctionConfigValidateMatrix(t *testing.T) {
 	for _, tc := range []struct {

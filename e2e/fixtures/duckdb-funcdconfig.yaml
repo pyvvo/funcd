@@ -1,7 +1,7 @@
-# The duckdb lane's daemon config: the catalog-quack example's funcdconfig.yaml (pyvvo/funcd-python) with auth.token
+# The duckdb lane's daemon config: the lake-quack example's funcdconfig.yaml (pyvvo/funcd-python) with auth.token
 # replaced by an ADR-0171 credential list, so the suite applies the ADR-0179 engines in namespaces a-b and a with an
 # admin token. The provisioning writes both token files (root, 0600) from the lane's `tokens` in scripts/lanes.yaml.
-# It sets no s3gateway.endpoint: the S3 URL and the catalog proxies derive from the bridge address (ADR-0238).
+# It sets no s3gateway.endpoint: the S3 URL and the lake proxies derive from the bridge address (ADR-0238).
 apiVersion: funcd.io/v1alpha1
 kind: FuncdConfig
 server:

@@ -59,9 +59,9 @@ func sampleFn() *v1.Function {
 }
 
 // mustWorkerSpec is replica 0's workerSpec with bindEnv, for a test whose spec builds.
-func mustWorkerSpec(t *testing.T, r *Reconciler, fn *v1.Function, artifactPath string, bindEnv envresolve.Resolved, catalogEnv map[string]string) runtime.WorkerSpec {
+func mustWorkerSpec(t *testing.T, r *Reconciler, fn *v1.Function, artifactPath string, bindEnv envresolve.Resolved, lakeEnv map[string]string) runtime.WorkerSpec {
 	t.Helper()
-	spec, err := r.workerSpec(fn, 0, artifactPath, bindEnv, catalogEnv)
+	spec, err := r.workerSpec(fn, 0, artifactPath, bindEnv, lakeEnv)
 	require.NoError(t, err)
 	return spec
 }

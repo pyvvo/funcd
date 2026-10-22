@@ -14,7 +14,7 @@ type rootSections struct {
 	KV         []KVStoreEntry
 	Buckets    []BucketEntry
 	SQL        []SQLDatabaseEntry
-	Catalogs   []CatalogEntry
+	Lakes      []LakeEntry
 	Secrets    []SecretDeclaration
 }
 
@@ -44,9 +44,9 @@ func (r rootSections) entries(meta ObjectMeta) []appEntry {
 		out = append(out, newEntry("sql", i, entryHead{e.Name, e.Ref, e.Deletion}, e.SQLDatabaseSpec,
 			&SQLDatabase{TypeMeta: typeMetaFor(KindSQLDatabase), ObjectMeta: at(e.Name), Spec: e.SQLDatabaseSpec}))
 	}
-	for i, e := range r.Catalogs {
-		out = append(out, newEntry("catalogs", i, entryHead{Name: e.Name, Ref: e.Ref}, e.CatalogServiceSpec,
-			&CatalogService{TypeMeta: typeMetaFor(KindCatalogService), ObjectMeta: at(e.Name), Spec: e.CatalogServiceSpec}))
+	for i, e := range r.Lakes {
+		out = append(out, newEntry("lakes", i, entryHead{Name: e.Name, Ref: e.Ref}, e.LakeSpec,
+			&Lake{TypeMeta: typeMetaFor(KindLake), ObjectMeta: at(e.Name), Spec: e.LakeSpec}))
 	}
 	return out
 }

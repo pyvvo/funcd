@@ -935,7 +935,7 @@ func (s *devAppSession) inputsStamp() (string, error) {
 }
 
 // platformFolder is the devFolder devPlatformOptions reads for app: the template directory, the --apply documents and
-// a CatalogService per catalogs entry (which wire the SQL and catalog engines as in folder mode, Decision 5), and a
+// a Lake per lakes entry (which wire the SQL and lake engines as in folder mode, Decision 5), and a
 // Function per function part and per step that dev built (which pick the shims).
 func (s *devAppSession) platformFolder(app *v1.App, docs []v1.Object) *devFolder {
 	byDigest := map[string]*devImage{}
@@ -950,9 +950,9 @@ func (s *devAppSession) platformFolder(app *v1.App, docs []v1.Object) *devFolder
 	for _, obj := range docs {
 		f.resources = append(f.resources, devDoc{obj: obj})
 	}
-	for _, e := range app.Spec.Catalogs {
+	for _, e := range app.Spec.Lakes {
 		if e.Name != "" {
-			cs := &v1.CatalogService{Spec: e.CatalogServiceSpec}
+			cs := &v1.Lake{Spec: e.LakeSpec}
 			cs.Name = e.Name
 			f.resources = append(f.resources, devDoc{obj: cs})
 		}

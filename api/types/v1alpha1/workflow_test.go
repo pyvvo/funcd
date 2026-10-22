@@ -132,7 +132,7 @@ func TestIssue927_ValidateRefusesWhatItsObjectsRefuse(t *testing.T) {
 		return WorkflowSpec{
 			Steps: []WorkflowStep{{Name: "s", Function: &FunctionStep{
 				Image:    "oci:img",
-				Bindings: StepBindings{KV: []FunctionKV{{Alias: "c", Store: "cache", Table: "a"}, {Alias: "d", Store: "cache", Table: "b"}}, Blob: []FunctionBlob{{Alias: "in", Bucket: "data", Prefix: "in"}, {Alias: "out", Bucket: "data", Prefix: "out"}}, Catalog: []FunctionCatalog{{Alias: "q", Catalog: "lake"}, {Alias: "r", Catalog: "lake"}}, Config: []ObjectName{"settings"}},
+				Bindings: StepBindings{KV: []FunctionKV{{Alias: "c", Store: "cache", Table: "a"}, {Alias: "d", Store: "cache", Table: "b"}}, Blob: []FunctionBlob{{Alias: "in", Bucket: "data", Prefix: "in"}, {Alias: "out", Bucket: "data", Prefix: "out"}}, Lake: []FunctionLake{{Alias: "q", Lake: "lake"}, {Alias: "r", Lake: "lake"}}, Config: []ObjectName{"settings"}},
 			}}},
 			KVStores: []KVStoreEntry{{Name: "cache", KVStoreSpec: KVStoreSpec{Tables: []KVTable{{Name: "a", Owner: "s"}, {Name: "b", Owner: "s"}}}}},
 		}
@@ -147,7 +147,7 @@ func TestIssue927_ValidateRefusesWhatItsObjectsRefuse(t *testing.T) {
 		"table named twice":       {func(s *WorkflowSpec) { s.KVStores[0].Tables[1].Name = "a" }, `spec.kv[0].tables[1].name "a" is duplicated`},
 		"kv alias repeated":       {func(s *WorkflowSpec) { s.Steps[0].Function.Bindings.KV[1].Alias = "c" }, `spec.steps[0].function.bindings.kv alias "c" is duplicated`},
 		"blob alias repeated":     {func(s *WorkflowSpec) { s.Steps[0].Function.Bindings.Blob[1].Alias = "in" }, `spec.steps[0].function.bindings.blob alias "in" is duplicated`},
-		"catalog alias repeated":  {func(s *WorkflowSpec) { s.Steps[0].Function.Bindings.Catalog[1].Alias = "q" }, `spec.steps[0].function.bindings.catalog alias "q" is duplicated`},
+		"lake alias repeated":     {func(s *WorkflowSpec) { s.Steps[0].Function.Bindings.Lake[1].Alias = "q" }, `spec.steps[0].function.bindings.lake alias "q" is duplicated`},
 		"config entry not a name": {func(s *WorkflowSpec) { s.Steps[0].Function.Bindings.Config[0] = "Settings" }, `spec.steps[0].function.bindings.config entry "Settings" is not a valid DNS-1123 name`},
 	}
 	for name, c := range cases {

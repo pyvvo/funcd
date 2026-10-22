@@ -168,7 +168,7 @@ func stampTypeMeta(obj v1.Object, kind v1.Kind) {
 		o.TypeMeta = tm
 	case *v1.Bucket:
 		o.TypeMeta = tm
-	case *v1.CatalogService:
+	case *v1.Lake:
 		o.TypeMeta = tm
 	case *v1.SQLDatabase:
 		o.TypeMeta = tm
@@ -800,7 +800,7 @@ func (h *storeHandlers) DeleteRestore(ctx context.Context, ns v1.NamespaceName, 
 // the stub helpers): a new kind joins the union instead of copying the per-kind boilerplate.
 type crudKind interface {
 	v1.Service | v1.EventSource | v1.ConfigMap | v1.Secret | v1.Grant | v1.Identity | v1.Role | v1.RolesAssignment |
-		v1.KVStore | v1.Bucket | v1.CatalogService | v1.SQLDatabase | v1.Policy | v1.EgressPolicy | v1.Invocation |
+		v1.KVStore | v1.Bucket | v1.Lake | v1.SQLDatabase | v1.Policy | v1.EgressPolicy | v1.Invocation |
 		v1.RuntimeClass | v1.WorkerNode | v1.Gateway | v1.Workflow | v1.WorkflowRun | v1.Sensor | v1.Site |
 		v1.App | v1.AppRevision | v1.BackupSchedule | v1.Backup | v1.Restore
 }
@@ -983,26 +983,26 @@ func (h *storeHandlers) DeleteBucket(ctx context.Context, ns v1.NamespaceName, n
 	return h.deleteObjIf(ctx, v1.KindBucket, ns, name, rv)
 }
 
-// --- CatalogService (namespaced) — ADR-0086 ---
+// --- Lake (namespaced) — ADR-0086 ---
 
-func (h *storeHandlers) GetCatalogService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.CatalogService, error) {
-	return typedObj[v1.CatalogService](h.getObj(ctx, v1.KindCatalogService, ns, name))
+func (h *storeHandlers) GetLake(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Lake, error) {
+	return typedObj[v1.Lake](h.getObj(ctx, v1.KindLake, ns, name))
 }
 
-func (h *storeHandlers) CreateCatalogService(ctx context.Context, cs v1.CatalogService) (v1.CatalogService, error) {
-	return typedObj[v1.CatalogService](h.createObj(ctx, v1.KindCatalogService, &cs))
+func (h *storeHandlers) CreateLake(ctx context.Context, cs v1.Lake) (v1.Lake, error) {
+	return typedObj[v1.Lake](h.createObj(ctx, v1.KindLake, &cs))
 }
 
-func (h *storeHandlers) ListCatalogServices(ctx context.Context, ns v1.NamespaceName) ([]v1.CatalogService, error) {
-	return typedObjs[v1.CatalogService](h.listObj(ctx, v1.KindCatalogService, ns))
+func (h *storeHandlers) ListLakes(ctx context.Context, ns v1.NamespaceName) ([]v1.Lake, error) {
+	return typedObjs[v1.Lake](h.listObj(ctx, v1.KindLake, ns))
 }
 
-func (h *storeHandlers) ReplaceCatalogService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, cs v1.CatalogService) (v1.CatalogService, error) {
-	return typedObj[v1.CatalogService](h.replaceObj(ctx, v1.KindCatalogService, ns, name, &cs))
+func (h *storeHandlers) ReplaceLake(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, cs v1.Lake) (v1.Lake, error) {
+	return typedObj[v1.Lake](h.replaceObj(ctx, v1.KindLake, ns, name, &cs))
 }
 
-func (h *storeHandlers) DeleteCatalogService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
-	return h.deleteObjIf(ctx, v1.KindCatalogService, ns, name, rv)
+func (h *storeHandlers) DeleteLake(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error {
+	return h.deleteObjIf(ctx, v1.KindLake, ns, name, rv)
 }
 
 // --- SQLDatabase (namespaced) — ADR-0232 ---

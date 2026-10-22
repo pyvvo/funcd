@@ -49,15 +49,15 @@ func ParsePool(ns v1.NamespaceName, s string) (key PoolKey, ok bool) {
 // accessDoc is the canonical document AccessHashOf digests: every binding a member reaches data or a peer through,
 // the data it owns, and the grants it holds outside its spec.
 type accessDoc struct {
-	KV       []v1.FunctionKV      `json:"kv"`
-	Blob     []v1.FunctionBlob    `json:"blob"`
-	Catalogs []v1.FunctionCatalog `json:"catalogs"`
-	SQL      []v1.FunctionSQL     `json:"sql,omitempty"` // omitempty: a Function with no spec.bindings.sql keeps its key
-	Links    []accessLink         `json:"links"`
-	Secrets  []v1.ObjectName      `json:"secrets"`
-	Config   []v1.ObjectName      `json:"config"`
-	Owned    []string             `json:"owned"`  // "kv/<store>/<table>" and "sql/<database>" owned and bound; "blob/<bucket>/<prefix>" owned
-	Grants   []string             `json:"grants"` // "group/<rg>", "<kind>/<object>[#<j>]@<sha256>", by what is granted
+	KV      []v1.FunctionKV   `json:"kv"`
+	Blob    []v1.FunctionBlob `json:"blob"`
+	Lakes   []v1.FunctionLake `json:"lakes"`
+	SQL     []v1.FunctionSQL  `json:"sql,omitempty"` // omitempty: a Function with no spec.bindings.sql keeps its key
+	Links   []accessLink      `json:"links"`
+	Secrets []v1.ObjectName   `json:"secrets"`
+	Config  []v1.ObjectName   `json:"config"`
+	Owned   []string          `json:"owned"`  // "kv/<store>/<table>" and "sql/<database>" owned and bound; "blob/<bucket>/<prefix>" owned
+	Grants  []string          `json:"grants"` // "group/<rg>", "<kind>/<object>[#<j>]@<sha256>", by what is granted
 }
 
 // accessLink is a link as access counts it: its timeout grants nothing.
@@ -69,27 +69,27 @@ type accessLink struct {
 // accessHashLen is how many hex digits of the SHA-256 a key keeps.
 const accessHashLen = 16
 
-// AccessHashOf is the first 16 hex digits of the SHA-256 of spec's canonical access document: KV, Blob, Catalogs,
+// AccessHashOf is the first 16 hex digits of the SHA-256 of spec's canonical access document: KV, Blob, Lakes,
 // SQL and Links sorted by alias, Secrets and Config in declared order, owned and grants sorted. nil counts as empty, so
 // a Function with no access has one fixed hash. Pure.
 func AccessHashOf(spec v1.FunctionSpec, owned, grants []string) string {
 	doc := accessDoc{
-		KV:       append([]v1.FunctionKV{}, spec.Bindings.KV...),
-		Blob:     append([]v1.FunctionBlob{}, spec.Bindings.Blob...),
-		Catalogs: append([]v1.FunctionCatalog{}, spec.Bindings.Catalog...),
-		SQL:      append([]v1.FunctionSQL(nil), spec.Bindings.SQL...),
-		Links:    make([]accessLink, 0, len(spec.Bindings.Links)),
-		Secrets:  append([]v1.ObjectName{}, spec.Bindings.Secret...),
-		Config:   append([]v1.ObjectName{}, spec.Bindings.Config...),
-		Owned:    sortedCopy(owned),
-		Grants:   sortedCopy(grants),
+		KV:      append([]v1.FunctionKV{}, spec.Bindings.KV...),
+		Blob:    append([]v1.FunctionBlob{}, spec.Bindings.Blob...),
+		Lakes:   append([]v1.FunctionLake{}, spec.Bindings.Lake...),
+		SQL:     append([]v1.FunctionSQL(nil), spec.Bindings.SQL...),
+		Links:   make([]accessLink, 0, len(spec.Bindings.Links)),
+		Secrets: append([]v1.ObjectName{}, spec.Bindings.Secret...),
+		Config:  append([]v1.ObjectName{}, spec.Bindings.Config...),
+		Owned:   sortedCopy(owned),
+		Grants:  sortedCopy(grants),
 	}
 	for _, l := range spec.Bindings.Links {
 		doc.Links = append(doc.Links, accessLink{Alias: l.Alias, Target: l.Target})
 	}
 	sort.SliceStable(doc.KV, func(i, j int) bool { return doc.KV[i].Alias < doc.KV[j].Alias })
 	sort.SliceStable(doc.Blob, func(i, j int) bool { return doc.Blob[i].Alias < doc.Blob[j].Alias })
-	sort.SliceStable(doc.Catalogs, func(i, j int) bool { return doc.Catalogs[i].Alias < doc.Catalogs[j].Alias })
+	sort.SliceStable(doc.Lakes, func(i, j int) bool { return doc.Lakes[i].Alias < doc.Lakes[j].Alias })
 	sort.SliceStable(doc.SQL, func(i, j int) bool { return doc.SQL[i].Alias < doc.SQL[j].Alias })
 	sort.SliceStable(doc.Links, func(i, j int) bool { return doc.Links[i].Alias < doc.Links[j].Alias })
 	data, err := json.Marshal(doc)

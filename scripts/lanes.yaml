@@ -147,21 +147,21 @@ http-api:
   venom: e2e/http-api.venom.yml
 
 duckdb:
-  description: The catalog-quack provider + bundle consumer, live SQL round-trip (ADR-0086..0093).
+  description: The lake-quack provider + bundle consumer, live SQL round-trip (ADR-0086..0093).
   module: github.com/pyvvo/funcd-python
-  dir: examples/catalog-quack
+  dir: examples/lake-quack
   copy: true
   # funcd-bundle (funcd-python) installs the bundle in the local python:3.14-slim-bookworm image: point that tag at the
   # digest the runtime images pin first. It downloads the DuckDB extensions: check them against their pins after.
   build:
     - uv run --locked funcd-bundle
-    - cd dist/catalog-reader/duckdb-ext && grep -E "/linux_$(go env GOARCH)/(httpfs|quack)\." "$FUNCD_ROOT/images/runtime/duckdb/duckdb.sha256" | sha256sum -c - && test "$(find . -name '*.duckdb_extension' | wc -l)" -eq 2
+    - cd dist/lake-reader/duckdb-ext && grep -E "/linux_$(go env GOARCH)/(httpfs|quack)\." "$FUNCD_ROOT/images/runtime/duckdb/duckdb.sha256" | sha256sum -c - && test "$(find . -name '*.duckdb_extension' | wc -l)" -eq 2
   stage:
     - configmap.yaml
     - secret.yaml
-    - catalogservice.yaml
+    - lake.yaml
     - consumer.yaml
-    - dist/catalog-reader
+    - dist/lake-reader
     # ADR-0171: the example's daemon config with auth.credentials in place of auth.token
     - from: e2e/fixtures/duckdb-funcdconfig.yaml
       to: funcdconfig.yaml
@@ -169,23 +169,23 @@ duckdb:
     - from: e2e/fixtures/cni-engines.yaml
       to: cni-engines.yaml
     # ADR-0248/0251: lake re-created with a ref to the Bucket it retained
-    - from: e2e/fixtures/catalog-quack-recreate.yaml
-      to: catalog-quack-recreate.yaml
+    - from: e2e/fixtures/lake-quack-recreate.yaml
+      to: lake-quack-recreate.yaml
   tokens:
     admin: duckdb-lane-admin
     developer: duckdb-lane-developer
   push:
-    - artifact: dist/catalog-reader
-      ref: catalog-reader
-  # ADR-0251: the CatalogService declares the lakehouse Bucket it owns at its root, so its reconciler writes it; the
+    - artifact: dist/lake-reader
+      ref: lake-reader
+  # ADR-0251: the Lake declares the lakehouse Bucket it owns at its root, so its reconciler writes it; the
   # consumer applies after it in any order (ADR-0121).
   apply:
     - configmap.yaml
     - secret.yaml
-    - catalogservice.yaml
+    - lake.yaml
     - consumer.yaml
   ready:
-    kind: catalogservice
+    kind: lake
     names:
       - lake
     tries: 90

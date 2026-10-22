@@ -391,7 +391,7 @@ func TestScenarioDevEgressNotIsolated(t *testing.T) {
 		gatewayURL:  "http://127.0.0.1:8080",
 		functions:   []string{"ingest", "transform"},
 		workflows:   []string{"releve-lakehouse"},
-		catalogs:    []string{"lake"},
+		lakes:       []string{"lake"},
 		s3Endpoint:  "http://127.0.0.1:54321",
 		s3AccessKey: "AKIADEV",
 		s3SecretKey: "devsecret",
@@ -403,7 +403,7 @@ func TestScenarioDevEgressNotIsolated(t *testing.T) {
 		"egress is NOT isolated",
 		"SERVICES", "gateway", "http://127.0.0.1:8080",
 		"s3", "http://127.0.0.1:54321",
-		"catalog", "serves: lake",
+		"lake", "serves: lake",
 		"POST  http://127.0.0.1:8080/function/ingest",
 		"WORKFLOWS", "releve-lakehouse",
 		"AWS_ACCESS_KEY_ID=AKIADEV",
@@ -412,12 +412,12 @@ func TestScenarioDevEgressNotIsolated(t *testing.T) {
 	}
 }
 
-// The catalog service line appears only when a catalog is served.
-func TestBannerOmitsCatalogWhenUnbound(t *testing.T) {
+// The lake service line appears only when a lake is served.
+func TestBannerOmitsLakeWhenUnbound(t *testing.T) {
 	var out bytes.Buffer
 	inst := &devInstance{gatewayURL: "http://127.0.0.1:8080", functions: []string{"hello"}, s3Endpoint: "http://127.0.0.1:5555", s3Region: "us-east-1"}
 	require.NoError(t, (&cli{out: &out}).printBanner(inst))
-	require.NotContains(t, out.String(), "catalog")
+	require.NotContains(t, out.String(), "lake")
 }
 
 // the dev log styler renders a streamed line compactly: time · function · severity · body, with structured attrs

@@ -271,12 +271,12 @@ func newCNIIDFixture(t *testing.T) *cniIDFixture {
 	}
 }
 
-// engine is the spec of an unrevisioned CatalogService engine.
+// engine is the spec of an unrevisioned Lake engine.
 func (f *cniIDFixture) engine(t *testing.T, ns v1alpha1.NamespaceName, name v1alpha1.ObjectName) runtime.WorkerSpec {
 	return runtime.WorkerSpec{
 		Namespace: ns,
 		Name:      name,
-		OwnerKind: v1alpha1.KindCatalogService,
+		OwnerKind: v1alpha1.KindLake,
 		Image:     f.image,
 	}
 }

@@ -843,23 +843,23 @@ func TestAppHookCallBounds(t *testing.T) {
 }
 
 // Decision 4: an install writes, before its pre-hook, the ConfigMap its config names and the stores it binds, directly
-// or through a catalog, and no other part; an upgrade adding a table it binds writes the store and the hook first.
+// or through a lake, and no other part; an upgrade adding a table it binds writes the store and the hook first.
 func TestAppPreHookPartsFirst(t *testing.T) {
 	h := newHooked(t, nil)
 	h.create(hookedTodo("3.0.0", func(a *v1.App) {
 		a.Spec.ConfigMaps = []v1.ConfigMapEntry{{Name: "todo-settings", ConfigMapSpec: paris()}}
-		a.Spec.Catalogs = []v1.CatalogEntry{{Name: "todo-lake", CatalogServiceSpec: v1.CatalogServiceSpec{
-			Catalog:  v1.CatalogRef{Bucket: "todo-files", Prefix: "lake"},
-			Bindings: v1.CatalogServiceBindings{Blob: []v1.FunctionBlob{{Alias: "lake", Bucket: "todo-files", Prefix: "lake"}}},
+		a.Spec.Lakes = []v1.LakeEntry{{Name: "todo-lake", LakeSpec: v1.LakeSpec{
+			Location: v1.LakeLocation{Bucket: "todo-files", Prefix: "lake"},
+			Bindings: v1.LakeBindings{Blob: []v1.FunctionBlob{{Alias: "lake", Bucket: "todo-files", Prefix: "lake"}}},
 		}}}
 		m := &a.Spec.Functions[1]
 		m.Bindings.Config = []v1.ObjectName{"todo-settings"}
-		m.Bindings.Catalog = []v1.FunctionCatalog{{Alias: "lake", Catalog: "todo-lake"}}
+		m.Bindings.Lake = []v1.FunctionLake{{Alias: "lake", Lake: "todo-lake"}}
 	}))
 	h.reconcile()
 	for _, k := range []v1.ObjectRef{
 		{Kind: v1.KindConfigMap, Name: storedSettings(paris())}, {Kind: v1.KindKVStore, Name: "todo-store"},
-		{Kind: v1.KindBucket, Name: "todo-files"}, {Kind: v1.KindCatalogService, Name: "todo-lake"}, {Kind: v1.KindFunction, Name: "todo-migrate"},
+		{Kind: v1.KindBucket, Name: "todo-files"}, {Kind: v1.KindLake, Name: "todo-lake"}, {Kind: v1.KindFunction, Name: "todo-migrate"},
 	} {
 		require.NotNil(t, h.get(k.Kind, k.Name), "%s/%s is written before the pre-hook", k.Kind, k.Name)
 	}

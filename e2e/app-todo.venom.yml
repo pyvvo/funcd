@@ -40,7 +40,7 @@
 #   D16 funcd restore blob --at on the S3 store, to a key's earlier version and to before the key existed; D17 the App swaps a restored copy in through ref, and its Backups
 #       outlive it until their ttl (ADR-0208, ADR-0222).
 #   D18 the App's backup copies its DuckLake catalog, empty before its first checkpoint, and a Restore into an empty
-#       prefix gives a catalog a new CatalogService serves (ADR-0222 Decisions 4, 5, 7).
+#       prefix gives a lake a new Lake serves (ADR-0222 Decisions 4, 5, 7).
 #   Q1-Q6 version 1.2.0, whose todos and upload records live in SQLDatabase todo-db: its pre-hook migrates the database
 #       and copies them from KV before the SQL API serves; done, a filter, counts and a join; an upload the 1.2.0 intake
 #       records in SQL; a new row that fires the App's sql EventSource, whose Sensor records it in KV; the App's backup
@@ -1990,12 +1990,12 @@ testcases:
           - result.systemout ShouldContainSubstring "long kept"
 
   # ADR-0222 Decisions 4, 5 and 7: the App's backups copy a DuckLake catalog it owns (files first, catalog.db last),
-  # and a Restore puts the catalog into an empty bucket prefix, which a new CatalogService then serves. The engine
-  # checkpoints catalog.db only at shutdown (the per-commit checkpoint of ADR-0086 is #998), so a new catalog is an
+  # and a Restore puts the lake into an empty bucket prefix, which a new Lake then serves. The engine
+  # checkpoints catalog.db only at shutdown (the per-commit checkpoint of ADR-0086 is #998), so a new lake is an
   # empty member until then, and the stores beside it are still backed up (#996). The case writes no table: a write
-  # needs a Quack client in the lane, so the catalog it copies holds no data file. It restarts funcd on the local
-  # blob store with the S3 gateway and the catalog proxy, and deploys the App again, which D17 deleted.
-  - name: D18 the App's backup copies its DuckLake catalog, empty before its first checkpoint, and a Restore into an empty prefix gives a catalog a new CatalogService serves
+  # needs a Quack client in the lane, so the lake it copies holds no data file. It restarts funcd on the local
+  # blob store with the S3 gateway and the lake proxy, and deploys the App again, which D17 deleted.
+  - name: D18 the App's backup copies its DuckLake catalog, empty before its first checkpoint, and a Restore into an empty prefix gives a lake a new Lake serves
     steps:
       - type: exec
         script: |
@@ -2005,34 +2005,34 @@ testcases:
             systemctl stop funcd-demo
             systemctl reset-failed funcd-demo 2>/dev/null || true
             systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 /usr/local/bin/funcd \
-              --config /opt/lane/dr/funcdconfig-catalog.yaml
+              --config /opt/lane/dr/funcdconfig-lake.yaml
             curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
             systemctl is-active --quiet funcd-demo || { journalctl -u funcd-demo --no-pager -n 60; exit 1; }
             export FUNCD_TOKEN=todo-lane-developer
-            funcdctl apply -f /opt/lane/dr/catalog-fixtures.yaml >/dev/null
+            funcdctl apply -f /opt/lane/dr/lake-fixtures.yaml >/dev/null
             funcdctl app deploy {{.reg}}/todo:1.0.0 {{.values}} -f /opt/lane/values/shared.yaml \
-              -f /opt/lane/values/backup.yaml -f /opt/lane/values/catalog.yaml >/tmp/deploy-d18.log 2>&1 ||
+              -f /opt/lane/values/backup.yaml -f /opt/lane/values/lake.yaml >/tmp/deploy-d18.log 2>&1 ||
               { cat /tmp/deploy-d18.log; exit 1; }
-            echo $(( $(date +%s) / 60 )) >/root/catalog-minute
+            echo $(( $(date +%s) / 60 )) >/root/lake-minute
             echo DEPLOYED'
-        info: "the App with its catalog → {{.result.systemout}} {{.result.systemerr}}"
+        info: "the App with its lake → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.systemout ShouldContainSubstring DEPLOYED
       - type: exec
         script: |
           {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
-            funcdctl get catalogservice todo-lake -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+            funcdctl get lake todo-lake -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
         retry: 60
         delay: 3
-        info: "catalog todo-lake → {{.result.systemout}} {{.result.systemerr}}"
+        info: "lake todo-lake → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.systemout ShouldMatchRegex phase.{1,4}Ready
-      # Before any checkpoint: a Backup succeeds, with the stores' parts and no part of the catalog.
+      # Before any checkpoint: a Backup succeeds, with the stores' parts and no part of the lake.
       - type: exec
         script: |
           {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
             find /var/lib/funcd/data/blob -path "*/todo-lakehouse/lake/_ducklake/catalog.db" -type f | grep -q . && echo "CHECKPOINTED"
-            m=$(cat /root/catalog-minute)
+            m=$(cat /root/lake-minute)
             b=$(for b in $(funcdctl get backups -n default | grep -E "^todo-backup-[0-9]+$" | sort); do
               [ "${b#todo-backup-}" -gt "$m" ] || continue
               funcdctl get backup $b -n default -o json | grep -qE "\"phase\": *\"Succeeded\"" && echo $b
@@ -2040,17 +2040,17 @@ testcases:
             [ -n "$b" ] || exit 0
             d=$(ls -d /var/lib/vgw/data/todo-workload/default/$b-*)
             ls -d $d/kv/todo-store $d/blob/todo-files >/dev/null && echo "STORES COPIED"
-            grep -qE "^ *name: todo-lake$" $d/manifest.yaml && echo "CATALOG LISTED"
-            ls $d/catalog 2>/dev/null | grep -q . && echo "CATALOG FILES" || echo "CATALOG EMPTY"'
+            grep -qE "^ *name: todo-lake$" $d/manifest.yaml && echo "LAKE LISTED"
+            ls $d/lake 2>/dev/null | grep -q . && echo "LAKE FILES" || echo "LAKE EMPTY"'
         retry: 60
         delay: 3
         info: "a Backup before the first checkpoint → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.systemout ShouldNotContainSubstring CHECKPOINTED
           - result.systemout ShouldContainSubstring "STORES COPIED"
-          - result.systemout ShouldContainSubstring "CATALOG LISTED"
-          - result.systemout ShouldContainSubstring "CATALOG EMPTY"
-      # A SIGTERM to the engine alone, as a sandbox stop sends it, makes it checkpoint its catalog while funcd serves.
+          - result.systemout ShouldContainSubstring "LAKE LISTED"
+          - result.systemout ShouldContainSubstring "LAKE EMPTY"
+      # A SIGTERM to the engine alone, as a sandbox stop sends it, makes it checkpoint its catalog file while funcd serves.
       - type: exec
         script: |
           {{.vmsh}} '
@@ -2062,18 +2062,18 @@ testcases:
               sleep 1
             done
             find /var/lib/funcd/data/blob -path "*/todo-lakehouse/lake/_ducklake/catalog.db" -type f | grep -q . && echo CHECKPOINTED
-            echo $(( $(date +%s) / 60 )) >/root/catalog-minute'
+            echo $(( $(date +%s) / 60 )) >/root/lake-minute'
         info: "the engine's checkpoint → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.systemout ShouldContainSubstring CHECKPOINTED
       - type: exec
         script: |
           {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
-            m=$(cat /root/catalog-minute)
+            m=$(cat /root/lake-minute)
             for b in $(funcdctl get backups -n default | grep -E "^todo-backup-[0-9]+$" | sort); do
               [ "${b#todo-backup-}" -gt "$m" ] || continue
               funcdctl get backup $b -n default -o json | grep -qE "\"phase\": *\"Succeeded\"" && echo $b
-            done | tail -1 | grep . | tee /root/catalog-backup'
+            done | tail -1 | grep . | tee /root/lake-backup'
         retry: 60
         delay: 3
         info: "a Backup after the checkpoint → {{.result.systemout}} {{.result.systemerr}}"
@@ -2082,17 +2082,17 @@ testcases:
       - type: exec
         script: |
           {{.vmsh}} '
-            d=$(ls -d /var/lib/vgw/data/todo-workload/default/$(cat /root/catalog-backup)-*)
-            ls -d $d/catalog/todo-lake/*/catalog.db >/dev/null && echo "CATALOG COPIED"
-            echo "sealed=$(find $d/catalog/todo-lake -path "*catalog.db*" -type f | head -1 | xargs head -c 21)."'
-        info: "the catalog on the target → {{.result.systemout}} {{.result.systemerr}}"
+            d=$(ls -d /var/lib/vgw/data/todo-workload/default/$(cat /root/lake-backup)-*)
+            ls -d $d/lake/todo-lake/*/catalog.db >/dev/null && echo "LAKE COPIED"
+            echo "sealed=$(find $d/lake/todo-lake -path "*catalog.db*" -type f | head -1 | xargs head -c 21)."'
+        info: "the lake on the target → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
-          - result.systemout ShouldContainSubstring "CATALOG COPIED"
+          - result.systemout ShouldContainSubstring "LAKE COPIED"
           - result.systemout ShouldContainSubstring "sealed=age-encryption.org/v1."
       - type: exec
         script: |
           {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
-            sed "s/BACKUP/$(cat /root/catalog-backup)/" /opt/lane/dr/restore-catalog.yaml | funcdctl apply -f -'
+            sed "s/BACKUP/$(cat /root/lake-backup)/" /opt/lane/dr/restore-lake.yaml | funcdctl apply -f -'
         info: "apply todo-lake-back → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
@@ -2101,26 +2101,26 @@ testcases:
           {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
             funcdctl get restore todo-lake-back -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1
             find /var/lib/funcd/data/blob -path "*/todo-lakehouse-r/lake/_ducklake/catalog.db" -type f | grep -q . &&
-              echo "CATALOG RESTORED"'
+              echo "LAKE RESTORED"'
         retry: 30
         delay: 2
         info: "Restore todo-lake-back → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.systemout ShouldMatchRegex phase.{1,4}Succeeded
-          - result.systemout ShouldContainSubstring "CATALOG RESTORED"
+          - result.systemout ShouldContainSubstring "LAKE RESTORED"
       - type: exec
         script: |
-          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl apply -f /opt/lane/dr/catalog-copy.yaml'
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl apply -f /opt/lane/dr/lake-copy.yaml'
         info: "apply todo-lake-r → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
       - type: exec
         script: |
           {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
-            funcdctl get catalogservice todo-lake-r -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+            funcdctl get lake todo-lake-r -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
         retry: 60
         delay: 3
-        info: "catalog todo-lake-r → {{.result.systemout}} {{.result.systemerr}}"
+        info: "lake todo-lake-r → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.systemout ShouldMatchRegex phase.{1,4}Ready
 
@@ -2155,7 +2155,7 @@ testcases:
             funcdctl app lock /opt/lane/app-1.2.0 -f /opt/lane/values/e2e.yaml >/dev/null
             funcdctl push --template /opt/lane/app-1.2.0 {{.reg}}/todo:1.2.0 >/dev/null
             funcdctl app deploy {{.reg}}/todo:1.2.0 {{.values}} -f /opt/lane/values/shared.yaml \
-              -f /opt/lane/values/backup.yaml -f /opt/lane/values/catalog.yaml >/tmp/deploy-q1.log 2>&1 ||
+              -f /opt/lane/values/backup.yaml -f /opt/lane/values/lake.yaml >/tmp/deploy-q1.log 2>&1 ||
               { cat /tmp/deploy-q1.log; exit 1; }
             echo DEPLOYED'
         info: "deploy 1.2.0 → {{.result.systemout}} {{.result.systemerr}}"
@@ -2426,7 +2426,7 @@ testcases:
           {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
             set -e
             funcdctl app deploy {{.reg}}/todo:1.2.0 {{.values}} -f /opt/lane/values/shared.yaml \
-              -f /opt/lane/values/backup.yaml -f /opt/lane/values/catalog.yaml \
+              -f /opt/lane/values/backup.yaml -f /opt/lane/values/lake.yaml \
               -f /opt/lane/values/restored-database.yaml >/tmp/deploy-q6.log 2>&1 || { cat /tmp/deploy-q6.log; exit 1; }
             echo DEPLOYED'
         info: "deploy on todo-db-r → {{.result.systemout}} {{.result.systemerr}}"

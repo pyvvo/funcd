@@ -190,8 +190,8 @@ func entries(a *v1.App) []entry {
 	for i, e := range s.Sites {
 		add("sites", v1.KindSite, i, e.Name, e.Ref, "")
 	}
-	for i, e := range s.Catalogs {
-		add("catalogs", v1.KindCatalogService, i, e.Name, e.Ref, "")
+	for i, e := range s.Lakes {
+		add("lakes", v1.KindLake, i, e.Name, e.Ref, "")
 	}
 	for i, e := range s.BackupSchedules {
 		add("backupSchedules", v1.KindBackupSchedule, i, e.Name, e.Ref, "")

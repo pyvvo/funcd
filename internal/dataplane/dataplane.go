@@ -120,9 +120,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			if m.Upstream != "" {
 				// Node-private upstream backend (ADR-0138): reverse-proxy to an in-daemon target (the
-				// CatalogService's catalog::query PEP proxy). No activator hop, no Function resolve. The
-				// upstream does its OWN authz (the proxy PEPs catalog::query on the Quack handshake token),
-				// so the edge honors the entry's own stance (open for a catalog) rather than gating here.
+				// Lake's lake::query PEP proxy). No activator hop, no Function resolve. The
+				// upstream does its OWN authz (the proxy PEPs lake::query on the Quack handshake token),
+				// so the edge honors the entry's own stance (open for a lake) rather than gating here.
 				s.serveUpstream(w, r, m, op)
 				return
 			}
@@ -330,7 +330,7 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request, m router.Ma
 }
 
 // serveUpstream reverse-proxies a matched request to a node-private in-daemon upstream (ADR-0138) —
-// the CatalogService's catalog::query PEP proxy. The matched rule prefix is stripped so the upstream
+// the Lake's lake::query PEP proxy. The matched rule prefix is stripped so the upstream
 // is addressed at its own root, mirroring the gateway's PathPrefix strip. Streaming-native
 // (httputil.ReverseProxy). The upstream is trusted (set only by an in-daemon reconciler, never a user
 // Route) and does its own authz, so no edge PEP runs here. A malformed or failed upstream is a 503

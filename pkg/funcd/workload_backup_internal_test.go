@@ -822,7 +822,7 @@ func TestScenarioRestoreInPlace(t *testing.T) {
 }
 
 // cleanupBucket is the shared blob store with a DuckLake cleanup that runs once, the first time f1 is read after
-// the listing: it deletes f1 and checkpoints a catalog naming f2 instead.
+// the listing: it deletes f1 and checkpoints a lake naming f2 instead.
 type cleanupBucket struct {
 	blob.Bucket
 	f1, checkpoint string
@@ -872,10 +872,10 @@ func lakeCheckpoint(t *testing.T, prefix string, files ...string) []byte {
 	return data
 }
 
-// scenario: catalog-checkpoint-verified — catalog lake whose checkpoint C1 names f1: a cleanup deleting f1 mid-copy
+// scenario: lake-checkpoint-verified — lake lake whose checkpoint C1 names f1: a cleanup deleting f1 mid-copy
 // makes attempt 2 run, whose catalog.db is written after its files; a checkpoint naming a file no attempt finds
-// fails the Backup CatalogUnstable after three attempts.
-func TestScenarioCatalogCheckpointVerified(t *testing.T) {
+// fails the Backup LakeUnstable after three attempts.
+func TestScenarioLakeCheckpointVerified(t *testing.T) {
 	t.Parallel()
 	mem, err := gocloud.Open(context.Background(), "mem://")
 	require.NoError(t, err)
@@ -885,9 +885,9 @@ func TestScenarioCatalogCheckpointVerified(t *testing.T) {
 	r := newWBRig(t, wbOptions{opts: []Option{WithBlob(shared)}, setup: func(r *wbRig) {
 		r.seed(&v1.Bucket{TypeMeta: tmeta(v1.KindBucket), ObjectMeta: ordersMeta("lake-files")})
 		for _, c := range []struct{ name, prefix string }{{"lake", "lake"}, {"lake-two", "lake-two"}} {
-			r.seed(&v1.CatalogService{TypeMeta: tmeta(v1.KindCatalogService), ObjectMeta: ordersMeta(c.name), Spec: v1.CatalogServiceSpec{
-				Catalog:  v1.CatalogRef{Bucket: "lake-files", Prefix: c.prefix},
-				Bindings: v1.CatalogServiceBindings{Blob: []v1.FunctionBlob{{Alias: "lake", Bucket: "lake-files", Prefix: c.prefix}}},
+			r.seed(&v1.Lake{TypeMeta: tmeta(v1.KindLake), ObjectMeta: ordersMeta(c.name), Spec: v1.LakeSpec{
+				Location: v1.LakeLocation{Bucket: "lake-files", Prefix: c.prefix},
+				Bindings: v1.LakeBindings{Blob: []v1.FunctionBlob{{Alias: "lake", Bucket: "lake-files", Prefix: c.prefix}}},
 			}})
 		}
 		for key, data := range map[string][]byte{
@@ -901,19 +901,19 @@ func TestScenarioCatalogCheckpointVerified(t *testing.T) {
 	}})
 	for _, c := range []string{"lake", "lake-two"} {
 		r.create(r.dev, r.schedule(c+"-nightly", "0 3 * * *", func(s *v1.BackupScheduleSpec) {
-			s.Scope = v1.BackupScope{Catalogs: []v1.ObjectName{v1.ObjectName(c)}}
+			s.Scope = v1.BackupScope{Lakes: []v1.ObjectName{v1.ObjectName(c)}}
 		}))
 		r.create(r.dev, r.backupObj(c+"-now", v1.ObjectName(c+"-nightly")))
 	}
 	b := r.waitBackup("lake-now", v1.RunSucceeded)
 	p := b.Status.Path
-	require.Equal(t, []string{p + "catalog/lake/1/files/part-00000", p + "catalog/lake/2/files/part-00000",
-		p + "catalog/lake/2/catalog.db/part-00000", p + "manifest.yaml"}, r.stub.PutKeys(p), "attempt 2: its files, then catalog.db")
-	files := r.records(p, v1.KindCatalogService, "lake", r.owner)
+	require.Equal(t, []string{p + "lake/lake/1/files/part-00000", p + "lake/lake/2/files/part-00000",
+		p + "lake/lake/2/catalog.db/part-00000", p + "manifest.yaml"}, r.stub.PutKeys(p), "attempt 2: its files, then catalog.db")
+	files := r.records(p, v1.KindLake, "lake", r.owner)
 	require.Contains(t, files, "main/t/f2.parquet")
 	require.NotContains(t, files, "main/t/f1.parquet")
 
 	b = r.waitBackup("lake-two-now", v1.RunFailed)
-	require.Equal(t, "CatalogUnstable", reason(b.Status.Status))
+	require.Equal(t, "LakeUnstable", reason(b.Status.Status))
 	require.Len(t, r.stub.PutKeys(b.Status.Path), 3, "three attempts' files, no catalog.db and no manifest")
 }

@@ -6,15 +6,15 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 )
 
-// Ingress is the edge exposure of every exposable kind: Function, Site and CatalogService (ADR-0241).
+// Ingress is the edge exposure of every exposable kind: Function, Site and Lake (ADR-0241).
 type Ingress struct {
 	// Enabled turns the resource's own address on or off. Unset: a Function or a Site follows its namespace's
-	// defaultExposure (implicit on, explicit off) and a CatalogService is off.
+	// defaultExposure (implicit on, explicit off) and a Lake is off.
 	Enabled *bool `json:"enabled,omitempty"`
 	// Host is the exact host of the resource's own address; "" is the namespace host (ADR-0240).
 	Host string `json:"host,omitempty"`
 	// Path is the edge path of the resource's own address; "" is "/" when Host is set, else
-	// /function/<name>, /site/<name> or /catalogservice/<name>.
+	// /function/<name>, /site/<name> or /lake/<name>.
 	Path string `json:"path,omitempty"`
 	// Auth is the edge stance of the resource's own address; nil is the namespace default.
 	Auth *RouteAuth `json:"auth,omitempty"`

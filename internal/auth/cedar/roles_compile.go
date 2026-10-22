@@ -15,24 +15,24 @@ import (
 // The funcd data-plane action strings a Role may grant. Write actions gate the single-writer forbid via
 // the `writers` set (WriterGrants); the rest compile to Cedar permits (CompileRolesAssignment).
 const (
-	actionS3Read       = "s3::read"
-	actionS3Write      = "s3::write"
-	actionKVRead       = "kv::read"
-	actionKVWrite      = "kv::write"
-	actionLinkInvoke   = "link::invoke"
-	actionCatalogQuery = "catalog::query" // == string(auth.ActionCatalogQuery); read-shaped (a permit, ADR-0137)
-	actionSQLRead      = "sql::read"
-	actionSQLWrite     = "sql::write"
+	actionS3Read     = "s3::read"
+	actionS3Write    = "s3::write"
+	actionKVRead     = "kv::read"
+	actionKVWrite    = "kv::write"
+	actionLinkInvoke = "link::invoke"
+	actionLakeQuery  = "lake::query" // == string(auth.ActionLakeQuery); read-shaped (a permit, ADR-0137)
+	actionSQLRead    = "sql::read"
+	actionSQLWrite   = "sql::write"
 )
 
 func isWriteAction(a string) bool {
 	return a == actionS3Write || a == actionKVWrite || a == actionSQLWrite
 }
 
-// builtinRoles is the fixed DATA-PLANE role catalog (ADR-0136). Managing assignments is control-plane
+// builtinRoles is the fixed DATA-PLANE role lake (ADR-0136). Managing assignments is control-plane
 // RBAC (ADR-0018), a separate plane — so `Owner` here is full data read+write, not assignment management.
 //
-//nolint:gochecknoglobals // an effectively-const catalog
+//nolint:gochecknoglobals // an effectively-const lake
 var builtinRoles = map[string][]string{
 	"Blob Data Reader": {actionS3Read},
 	"Blob Data Writer": {actionS3Read, actionS3Write},
@@ -42,13 +42,13 @@ var builtinRoles = map[string][]string{
 	// ADR-0233: Reader, Contributor and Owner stay without SQL, so an existing namespace grant gains no database.
 	"SQL Data Reader": {actionSQLRead},
 	"SQL Data Writer": {actionSQLRead, actionSQLWrite},
-	// ADR-0137 (F102): catalog::query is read-shaped. "Catalog Contributor" is a forward-compat alias —
-	// byte-identical to the reader today, reserved to gain catalog::write when the deferred DDL grant lands.
-	"Catalog Query Reader": {actionCatalogQuery},
-	"Catalog Contributor":  {actionCatalogQuery},
-	"Reader":               {actionS3Read, actionKVRead},
-	"Contributor":          {actionS3Read, actionS3Write, actionKVRead, actionKVWrite},
-	"Owner":                {actionS3Read, actionS3Write, actionKVRead, actionKVWrite},
+	// ADR-0137 (F102): lake::query is read-shaped. "Lake Contributor" is a forward-compat alias —
+	// byte-identical to the reader today, reserved to gain lake::write when the deferred DDL grant lands.
+	"Lake Query Reader": {actionLakeQuery},
+	"Lake Contributor":  {actionLakeQuery},
+	"Reader":            {actionS3Read, actionKVRead},
+	"Contributor":       {actionS3Read, actionS3Write, actionKVRead, actionKVWrite},
+	"Owner":             {actionS3Read, actionS3Write, actionKVRead, actionKVWrite},
 }
 
 // RoleResolver resolves a RoleRef (a built-in name or a custom Role resource) to its action set.
@@ -65,7 +65,7 @@ type WriterLister interface {
 	SQLWriters(ctx context.Context, ns v1.NamespaceName, database string) []cedartypes.EntityUID
 }
 
-// storeRoleResolver resolves built-in roles from the catalog and custom Roles from the metastore.
+// storeRoleResolver resolves built-in roles from the lake and custom Roles from the metastore.
 type storeRoleResolver struct{ r MetaReader }
 
 // NewRoleResolver builds the production role resolver over a MetaReader.
@@ -190,11 +190,11 @@ func scopeHead(ns v1.NamespaceName, s v1.ScopeRef) (resHead estNode, whenBody es
 		// name is "<bucket>/<prefix>" → BlobPrefix::"<ns>/<bucket>/<prefix>".
 		id := string(ns) + "/" + s.Name
 		return map[string]estNode{"op": "==", "entity": map[string]estNode{"type": entityTypeBlobPrefix, "id": id}}, nil, true
-	case v1.ScopeKindCatalog:
-		// name is "<catalog>" → CatalogService::"<ns>/<catalog>" (ADR-0137). The grant bounds to that one
-		// catalog (it does not leak past its scope).
+	case v1.ScopeKindLake:
+		// name is "<lake>" → Lake::"<ns>/<lake>" (ADR-0137). The grant bounds to that one
+		// lake (it does not leak past its scope).
 		id := string(ns) + "/" + s.Name
-		return map[string]estNode{"op": "==", "entity": map[string]estNode{"type": entityTypeCatalogService, "id": id}}, nil, true
+		return map[string]estNode{"op": "==", "entity": map[string]estNode{"type": entityTypeLake, "id": id}}, nil, true
 	case v1.ScopeKindSQLDatabase:
 		// name is "<database>" → SQLDatabase::"<ns>/<database>" (ADR-0233).
 		id := string(ns) + "/" + s.Name

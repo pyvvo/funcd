@@ -29,7 +29,7 @@ func providerCatalog() (*provider.Catalog, error) {
 		provider.Descriptor{Name: "s3", Kind: provider.Builtin, Port: "blob.Bucket", Bindings: []string{"spec.bindings.blob"}, Summary: "S3-protocol frontend over blob (ADR-0080)"},
 		provider.Descriptor{Name: "log-ingest", Kind: provider.Builtin, Summary: "function-telemetry side channel + funclog read path (ADR-0081/0084)"},
 		// add-on providers — out-of-daemon managed engines (ADR-0087)
-		provider.Descriptor{Name: "catalog-query", Kind: provider.Addon, Bindings: []string{"spec.bindings.catalog"}, Summary: "DuckLake catalog/query service (F48, ADR-0086)"},
+		provider.Descriptor{Name: "lake", Kind: provider.Addon, Bindings: []string{"spec.bindings.lake"}, Summary: "the lake service: DuckLake over DuckDB and Quack (F48, ADR-0086)"},
 		provider.Descriptor{Name: "sql", Kind: provider.Addon, Summary: "one rqlite SQL engine per SQLDatabase (ADR-0232)"},
 	)
 }
@@ -37,7 +37,7 @@ func providerCatalog() (*provider.Catalog, error) {
 // Providers returns the platform's provider catalog (ADR-0082), available after New.
 func (p *Platform) Providers() *provider.Catalog { return p.providers }
 
-// logProviders emits the provider catalog once at startup — the first consumer of the catalog's
+// logProviders emits the provider catalog once at startup — the first consumer of the provider catalog's
 // legibility (ADR-0082): built-in vs add-on provider names.
 func (p *Platform) logProviders(ctx context.Context) {
 	p.logger.InfoContext(ctx, "platform providers",

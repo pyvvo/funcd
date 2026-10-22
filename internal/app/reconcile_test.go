@@ -497,10 +497,10 @@ func TestAppReadiness(t *testing.T) {
 			Timer: &v1.TimerSource{Events: []v1.TimerEvent{{Name: "hourly", Interval: v1.Duration(time.Hour)}}},
 		}}}
 	}
-	catalog := func(a *v1.App) {
-		a.Spec.Catalogs = []v1.CatalogEntry{{Name: "todo-lake", CatalogServiceSpec: v1.CatalogServiceSpec{
-			Catalog:  v1.CatalogRef{Bucket: "lake", Prefix: "lake"},
-			Bindings: v1.CatalogServiceBindings{Blob: []v1.FunctionBlob{{Alias: "lake", Bucket: "lake", Prefix: "lake"}}},
+	lake := func(a *v1.App) {
+		a.Spec.Lakes = []v1.LakeEntry{{Name: "todo-lake", LakeSpec: v1.LakeSpec{
+			Location: v1.LakeLocation{Bucket: "lake", Prefix: "lake"},
+			Bindings: v1.LakeBindings{Blob: []v1.FunctionBlob{{Alias: "lake", Bucket: "lake", Prefix: "lake"}}},
 		}}}
 	}
 	bucket := func(a *v1.App) { a.Spec.Buckets = []v1.BucketEntry{{Name: "todo-files"}} }
@@ -558,8 +558,8 @@ func TestAppReadiness(t *testing.T) {
 		{"a ready timer EventSource", timer, v1.KindEventSource, "todo-tick", func(g int64) (v1.Phase, []v1.Condition) {
 			return v1.PhaseReady, []v1.Condition{cond("Ready", yes, "", g)}
 		}, v1.AppChildReady, "", yes, ""},
-		{"a CatalogService with no condition", catalog, v1.KindCatalogService, "todo-lake", nil, v1.AppChildPending, "Progressing", no, "Progressing"},
-		{"a ready CatalogService", catalog, v1.KindCatalogService, "todo-lake", func(g int64) (v1.Phase, []v1.Condition) {
+		{"a Lake with no condition", lake, v1.KindLake, "todo-lake", nil, v1.AppChildPending, "Progressing", no, "Progressing"},
+		{"a ready Lake", lake, v1.KindLake, "todo-lake", func(g int64) (v1.Phase, []v1.Condition) {
 			return v1.PhaseReady, []v1.Condition{cond("Ready", yes, "", g)}
 		}, v1.AppChildReady, "", yes, ""},
 		{"a Bucket before its first pass", bucket, v1.KindBucket, "todo-files", nil, v1.AppChildPending, "Progressing", no, "Progressing"},

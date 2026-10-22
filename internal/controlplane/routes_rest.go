@@ -118,13 +118,13 @@ func registerBucket(api huma.API, h Handlers) {
 	})
 }
 
-// ===== CatalogService (namespaced) — ADR-0086 =====
+// ===== Lake (namespaced) — ADR-0086 =====
 
-func registerCatalogService(api huma.API, h Handlers) {
-	registerNamespacedCRUD(api, crudRoutes[v1.CatalogService]{
-		kind: "CatalogService", kinds: "CatalogServices", path: "catalogservices",
-		list: h.ListCatalogServices, create: h.CreateCatalogService, get: h.GetCatalogService,
-		replace: h.ReplaceCatalogService, remove: h.DeleteCatalogService,
+func registerLake(api huma.API, h Handlers) {
+	registerNamespacedCRUD(api, crudRoutes[v1.Lake]{
+		kind: "Lake", kinds: "Lakes", path: "lakes",
+		list: h.ListLakes, create: h.CreateLake, get: h.GetLake,
+		replace: h.ReplaceLake, remove: h.DeleteLake,
 	})
 }
 

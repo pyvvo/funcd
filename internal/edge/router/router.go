@@ -58,7 +58,7 @@ type CompiledRule struct {
 	Static *v1.StaticBackend
 	// Upstream, when non-empty, is a NODE-PRIVATE in-daemon reverse-proxy target (ADR-0138): the
 	// data-plane reverse-proxies a match here instead of resolving a Function/Static. It is set ONLY
-	// by trusted in-daemon reconcilers (the CatalogService reconciler → its catalog::query PEP proxy),
+	// by trusted in-daemon reconcilers (the Lake reconciler → its lake::query PEP proxy),
 	// never from a user-authored Route — a user backend has no Upstream arm, so the edge cannot be
 	// pointed at an arbitrary in-daemon address (no SSRF). Function/Static are then unused.
 	Upstream string

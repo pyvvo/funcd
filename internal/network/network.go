@@ -33,7 +33,7 @@ type Policy struct {
 	// when enabled — the redirect must have a target.
 	GatewayPort uint16
 	// InternalAllow are funcd node-private services a worker may reach directly (S3 frontend,
-	// ingress/catalog) — passed, never redirected. These are the WORKER-REACHABLE endpoint addresses
+	// ingress/lake) — passed, never redirected. These are the WORKER-REACHABLE endpoint addresses
 	// (the funcd0-gateway-IP:port a service's injected Endpoint resolves to), NOT the service's 127.0.0.1
 	// listen address (which is the worker's own netns loopback and unreachable).
 	InternalAllow []netip.AddrPort

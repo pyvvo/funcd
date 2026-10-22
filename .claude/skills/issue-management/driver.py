@@ -39,7 +39,7 @@ LABELS = {
     "area/runtime": ("1d76db", "Worker drivers (process, containerd), runtime shims and images, isolation"),
     "area/control-plane": ("1d76db", "API server, admission, controller engine, store"),
     "area/data-plane": ("1d76db", "Invoke path: gateway, edge router, activator, routes"),
-    "area/services": ("1d76db", "Platform services and their providers: blob, KV, catalog, site, config"),
+    "area/services": ("1d76db", "Platform services and their providers: blob, KV, lake, site, config"),
     "area/eventing": ("1d76db", "Bus, event sources, sensors, workflows"),
     "area/security": ("1d76db", "Authentication, authorization policies, secrets, egress"),
     "area/observability": ("1d76db", "Logs, traces, metrics"),

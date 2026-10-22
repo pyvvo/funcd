@@ -36,7 +36,7 @@ func (d *Declared) Has(kind v1.Kind, name v1.ObjectName) bool {
 }
 
 // RootDeclared is what these root entries declare.
-func RootDeclared(kv []v1.KVStoreEntry, buckets []v1.BucketEntry, sql []v1.SQLDatabaseEntry, catalogs []v1.CatalogEntry,
+func RootDeclared(kv []v1.KVStoreEntry, buckets []v1.BucketEntry, sql []v1.SQLDatabaseEntry, lakes []v1.LakeEntry,
 	configMaps []v1.ConfigMapEntry, secrets []v1.SecretDeclaration) *Declared {
 	d := &Declared{}
 	for _, e := range kv {
@@ -51,9 +51,9 @@ func RootDeclared(kv []v1.KVStoreEntry, buckets []v1.BucketEntry, sql []v1.SQLDa
 		d.Add(v1.KindSQLDatabase, e.Name)
 		d.Add(v1.KindSQLDatabase, e.Ref)
 	}
-	for _, e := range catalogs {
-		d.Add(v1.KindCatalogService, e.Name)
-		d.Add(v1.KindCatalogService, e.Ref)
+	for _, e := range lakes {
+		d.Add(v1.KindLake, e.Name)
+		d.Add(v1.KindLake, e.Ref)
 	}
 	for _, e := range configMaps {
 		d.Add(v1.KindConfigMap, e.Ref)
@@ -68,18 +68,18 @@ func RootDeclared(kv []v1.KVStoreEntry, buckets []v1.BucketEntry, sql []v1.SQLDa
 	return d
 }
 
-// --- binding-declared (ADR-0248 Decision 2, ADR-0251 Decision 2): Create/Update on Function, Workflow, CatalogService
+// --- binding-declared (ADR-0248 Decision 2, ADR-0251 Decision 2): Create/Update on Function, Workflow, Lake
 
 type bindingDeclared struct{ r StoreReader }
 
 // NewBindingDeclaredAdmission returns the Validating admission "binding-declared" (ADR-0248 Decision 2): every store,
-// catalog, ConfigMap and Secret a Function binds, its catalog entries' bindings included, is declared at its root, and
+// lake, ConfigMap and Secret a Function binds, its lake entries' bindings included, is declared at its root, and
 // every binding of an image step is declared at its Workflow's (ADR-0250 Decision 2). A part of an App binds what the App
 // declares too: Request.Declared under app-parts, else read from r for an object an App controls, so a direct write of
 // a part passes as the App's own did. A step Function binds what its Workflow declares. A Site's one bucket is
 // Site.Validate's.
-// A standalone CatalogService's blob, config and secret bindings are declared at its root (ADR-0251 Decision 2); an
-// App's catalog binds buckets the App declares. It replaces ADR-0229's workflow-step-stores.
+// A standalone Lake's blob, config and secret bindings are declared at its root (ADR-0251 Decision 2); an
+// App's lake binds buckets the App declares. It replaces ADR-0229's workflow-step-stores.
 func NewBindingDeclaredAdmission(r StoreReader) Admission { return bindingDeclared{r: r} }
 
 func (bindingDeclared) Name() string { return "binding-declared" }
@@ -89,7 +89,7 @@ func (bindingDeclared) Phase() Phase { return Validating }
 func (bindingDeclared) ReadsNamespace() bool { return true }
 
 func (bindingDeclared) Handles(gvk v1.GroupVersionKind, op Operation) bool {
-	return (gvk == v1.KindFunction.GVK() || gvk == v1.KindWorkflow.GVK() || gvk == v1.KindCatalogService.GVK()) &&
+	return (gvk == v1.KindFunction.GVK() || gvk == v1.KindWorkflow.GVK() || gvk == v1.KindLake.GVK()) &&
 		(op == Create || op == Update)
 }
 
@@ -111,8 +111,8 @@ func (a bindingDeclared) Admit(ctx context.Context, req Request) (v1.Object, err
 		}
 	case *v1.Workflow:
 		err = workflowUndeclared(&o.Spec, app)
-	case *v1.CatalogService:
-		err = catalogUndeclared(&o.Spec, app)
+	case *v1.Lake:
+		err = lakeUndeclared(&o.Spec, app)
 	}
 	if err != nil {
 		return nil, fault.Invalidf(op, "%s", err.Error())
@@ -148,7 +148,7 @@ func (a bindingDeclared) controllerDeclared(ctx context.Context, req Request) (a
 		return nil, step, err
 	}
 	s := &obj.(*v1.App).Spec
-	return RootDeclared(s.KV, s.Buckets, s.SQL, s.Catalogs, s.ConfigMaps, s.Secrets), step, nil
+	return RootDeclared(s.KV, s.Buckets, s.SQL, s.Lakes, s.ConfigMaps, s.Secrets), step, nil
 }
 
 // controller is the object c names in ns at c's UID, or nil.
@@ -187,10 +187,10 @@ func (u undeclared) check(path string, kind v1.Kind, name v1.ObjectName) error {
 
 func functionUndeclared(s *v1.FunctionSpec, app *Declared) error {
 	u := undeclared{
-		root: RootDeclared(s.KVStores, s.Buckets, s.SQLDatabases, s.CatalogServices, s.ConfigMaps, s.SecretDeclarations),
+		root: RootDeclared(s.KVStores, s.Buckets, s.SQLDatabases, s.Lakes, s.ConfigMaps, s.SecretDeclarations),
 		app:  app,
 		keys: map[v1.Kind]string{v1.KindKVStore: "spec.kv", v1.KindBucket: "spec.buckets", v1.KindSQLDatabase: "spec.sql",
-			v1.KindCatalogService: "spec.catalogs", v1.KindConfigMap: "spec.configMaps", v1.KindSecret: "spec.secrets"},
+			v1.KindLake: "spec.lakes", v1.KindConfigMap: "spec.configMaps", v1.KindSecret: "spec.secrets"},
 	}
 	b := &s.Bindings
 	for i, x := range b.KV {
@@ -208,19 +208,19 @@ func functionUndeclared(s *v1.FunctionSpec, app *Declared) error {
 			return err
 		}
 	}
-	for i, x := range b.Catalog {
-		if err := u.check(fmt.Sprintf("spec.bindings.catalog[%d]", i), v1.KindCatalogService, x.Catalog); err != nil {
+	for i, x := range b.Lake {
+		if err := u.check(fmt.Sprintf("spec.bindings.lake[%d]", i), v1.KindLake, x.Lake); err != nil {
 			return err
 		}
 	}
 	if err := names(u, "spec.bindings", b.Config, b.Secret); err != nil {
 		return err
 	}
-	for i, c := range s.CatalogServices {
+	for i, c := range s.Lakes {
 		if c.Name == "" {
 			continue
 		}
-		path := fmt.Sprintf("spec.catalogs[%d].bindings", i)
+		path := fmt.Sprintf("spec.lakes[%d].bindings", i)
 		for j, x := range c.Bindings.Blob {
 			if err := u.check(fmt.Sprintf("%s.blob[%d]", path, j), v1.KindBucket, x.Bucket); err != nil {
 				return err
@@ -247,9 +247,9 @@ func names(u undeclared, path string, config, secret []v1.ObjectName) error {
 	return nil
 }
 
-// catalogUndeclared checks a CatalogService's bindings: a standalone one's blob, config and secret against its root
-// (ADR-0251 Decision 2), an App's catalog's blob against the App's root.
-func catalogUndeclared(s *v1.CatalogServiceSpec, app *Declared) error {
+// lakeUndeclared checks a Lake's bindings: a standalone one's blob, config and secret against its root
+// (ADR-0251 Decision 2), an App's lake's blob against the App's root.
+func lakeUndeclared(s *v1.LakeSpec, app *Declared) error {
 	u := undeclared{
 		root: RootDeclared(nil, s.Buckets, nil, nil, s.ConfigMaps, s.SecretDeclarations),
 		app:  app,
@@ -261,7 +261,7 @@ func catalogUndeclared(s *v1.CatalogServiceSpec, app *Declared) error {
 		}
 	}
 	if app != nil {
-		return nil // an App's catalog: only its stores are the App's to declare (ADR-0248 Decision 2)
+		return nil // an App's lake: only its stores are the App's to declare (ADR-0248 Decision 2)
 	}
 	return names(u, "spec.bindings", s.Bindings.Config, s.Bindings.Secret)
 }
@@ -282,13 +282,13 @@ func workflowUndeclared(s *v1.WorkflowSpec, app *Declared) error {
 
 // workflowDeclared is what a Workflow's root declares (ADR-0248 Decision 1, ADR-0250 Decision 1).
 func workflowDeclared(s *v1.WorkflowSpec) *Declared {
-	return RootDeclared(s.KVStores, s.Buckets, s.SQLDatabases, s.CatalogServices, s.ConfigMaps, s.SecretDeclarations)
+	return RootDeclared(s.KVStores, s.Buckets, s.SQLDatabases, s.Lakes, s.ConfigMaps, s.SecretDeclarations)
 }
 
 // workflowKeys names the Workflow root key that declares each kind, after prefix.
 func workflowKeys(prefix string) map[v1.Kind]string {
 	return map[v1.Kind]string{v1.KindKVStore: prefix + "kv", v1.KindBucket: prefix + "buckets", v1.KindSQLDatabase: prefix + "sql",
-		v1.KindCatalogService: prefix + "catalogs", v1.KindConfigMap: prefix + "configMaps", v1.KindSecret: prefix + "secrets"}
+		v1.KindLake: prefix + "lakes", v1.KindConfigMap: prefix + "configMaps", v1.KindSecret: prefix + "secrets"}
 }
 
 // stepUndeclared checks every binding of a step against its Workflow's root, or the App's (ADR-0250 Decision 2).
@@ -308,15 +308,15 @@ func stepUndeclared(u undeclared, path string, b v1.FunctionBindings) error {
 			return err
 		}
 	}
-	for j, x := range b.Catalog {
-		if err := u.check(fmt.Sprintf("%s.catalog[%d]", path, j), v1.KindCatalogService, x.Catalog); err != nil {
+	for j, x := range b.Lake {
+		if err := u.check(fmt.Sprintf("%s.lake[%d]", path, j), v1.KindLake, x.Lake); err != nil {
 			return err
 		}
 	}
 	return names(u, path, b.Config, b.Secret)
 }
 
-// --- function-store-owner (ADR-0248 Decisions 4 and 5) and catalog-store-owner (ADR-0251 Decision 1) ------------
+// --- function-store-owner (ADR-0248 Decisions 4 and 5) and lake-store-owner (ADR-0251 Decision 1) ------------
 
 type functionStoreOwner struct{}
 
@@ -358,22 +358,22 @@ func (functionStoreOwner) Admit(_ context.Context, req Request) (v1.Object, erro
 	return fn, nil
 }
 
-type catalogStoreOwner struct{}
+type lakeStoreOwner struct{}
 
-// NewCatalogStoreOwnerAdmission returns the Mutating admission "catalog-store-owner" (ADR-0251 Decisions 1 and 4), the
-// twin of function-store-owner: an omitted owner of a prefix a standalone CatalogService defines at its root becomes
-// the CatalogService, and a bindings.config entry naming a ConfigMap it defines becomes that ConfigMap's stored name.
-func NewCatalogStoreOwnerAdmission() Admission { return catalogStoreOwner{} }
+// NewLakeStoreOwnerAdmission returns the Mutating admission "lake-store-owner" (ADR-0251 Decisions 1 and 4), the
+// twin of function-store-owner: an omitted owner of a prefix a standalone Lake defines at its root becomes
+// the Lake, and a bindings.config entry naming a ConfigMap it defines becomes that ConfigMap's stored name.
+func NewLakeStoreOwnerAdmission() Admission { return lakeStoreOwner{} }
 
-func (catalogStoreOwner) Name() string { return "catalog-store-owner" }
-func (catalogStoreOwner) Phase() Phase { return Mutating }
+func (lakeStoreOwner) Name() string { return "lake-store-owner" }
+func (lakeStoreOwner) Phase() Phase { return Mutating }
 
-func (catalogStoreOwner) Handles(gvk v1.GroupVersionKind, op Operation) bool {
-	return gvk == v1.KindCatalogService.GVK() && (op == Create || op == Update)
+func (lakeStoreOwner) Handles(gvk v1.GroupVersionKind, op Operation) bool {
+	return gvk == v1.KindLake.GVK() && (op == Create || op == Update)
 }
 
-func (catalogStoreOwner) Admit(_ context.Context, req Request) (v1.Object, error) {
-	cs, ok := req.Object.(*v1.CatalogService)
+func (lakeStoreOwner) Admit(_ context.Context, req Request) (v1.Object, error) {
+	cs, ok := req.Object.(*v1.Lake)
 	if !ok {
 		return req.Object, nil
 	}

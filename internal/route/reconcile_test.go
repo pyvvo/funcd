@@ -331,18 +331,18 @@ func TestIssue102_StaticRouteNotReadyAfterBucketDeleted(t *testing.T) {
 	require.False(t, ok, "a static Route whose Bucket is gone is not programmed")
 }
 
-// scenario: route-loses-to-earlier-catalog (ADR-0176) — CatalogService a/c and Route b/r on one claim: the
-// catalog serves it and the Route is NotReady (RouteConflict) naming the catalog.
-func TestScenario_route_loses_to_earlier_catalog(t *testing.T) {
+// scenario: route-loses-to-earlier-lake (ADR-0176) — Lake a/c and Route b/r on one claim: the
+// lake serves it and the Route is NotReady (RouteConflict) naming the lake.
+func TestScenario_route_loses_to_earlier_lake(t *testing.T) {
 	var notified []router.Owner
 	ctx, st, rtr, agg, rec := setupAggregator(t, func(o router.Owner) { notified = append(notified, o) })
 	cat := router.Entry{
 		Namespace: "a",
 		Host:      "h",
-		Rules:     []router.CompiledRule{{Path: "/q", Upstream: "http://catalog-proxy"}},
-		Owner:     router.Owner{Kind: v1.KindCatalogService, Namespace: "a", Name: "c"},
+		Rules:     []router.CompiledRule{{Path: "/q", Upstream: "http://lake-proxy"}},
+		Owner:     router.Owner{Kind: v1.KindLake, Namespace: "a", Name: "c"},
 	}
-	_, err := agg.Set(ctx, "catalog/a/c", []router.Entry{cat})
+	_, err := agg.Set(ctx, "lake/a/c", []router.Entry{cat})
 	require.NoError(t, err)
 
 	seedFunction(t, st, "b", "fn")
@@ -355,9 +355,9 @@ func TestScenario_route_loses_to_earlier_catalog(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, v1.ConditionFalse, cond.Status)
 	require.Equal(t, "RouteConflict", cond.Reason)
-	require.Contains(t, cond.Message, "CatalogService a/c")
+	require.Contains(t, cond.Message, "Lake a/c")
 	m, ok := rtr.Resolve("h", "/q", "GET")
 	require.True(t, ok)
-	require.Equal(t, "http://catalog-proxy", m.Upstream, "the catalog serves the claim")
-	require.Equal(t, []router.Owner{cat.Owner}, notified, "the catalog, held until the Route table loaded, is re-run")
+	require.Equal(t, "http://lake-proxy", m.Upstream, "the lake serves the claim")
+	require.Equal(t, []router.Owner{cat.Owner}, notified, "the lake, held until the Route table loaded, is re-run")
 }

@@ -33,7 +33,7 @@ ADR-0210 (issue #844) was added after the report. The rqlite backup parts (W5) b
 (F131, [sql-delivery-plan.md](sql-delivery-plan.md)), and the step idempotency keys (L2) to the workflow epoch; neither realizes FEAT-0009. Three merges are
 deliberate: ADR-0202 joins the snapshot capability and the version timeline (both change the store), ADR-0206 joins restore
 and the held boot (a restore without the hold repeats side effects), and ADR-0222 joins the workload resources and the
-catalog scope. Split ADR-0206 again if its ADR passes 250 lines.
+lake scope. Split ADR-0206 again if its ADR passes 250 lines.
 
 Each dependency is grounded in one line:
 
@@ -50,7 +50,7 @@ Each dependency is grounded in one line:
 - ADR-0209 builds on the delete records of ADR-0195, on ADR-0203 and ADR-0204, and joins the operation (ADR-0205) and restore
   (ADR-0206).
 - ADR-0210 changes the API's replace and delete (ADR-0018) to honor the client's version, which ADR-0202 defines.
-- ADR-0222 stores its backups with ADR-0203 and ADR-0204, copies catalog data through ADR-0208's blob target, exports KV through ADR-0209
+- ADR-0222 stores its backups with ADR-0203 and ADR-0204, copies lake data through ADR-0208's blob target, exports KV through ADR-0209
   and takes its `schedule` syntax from X-CRON.
 - ADR-0223 reuses the validation of ADR-0205 and writes the resources of ADR-0222.
 
@@ -146,7 +146,7 @@ Critical path (1 items, the longest build chain):
 | F109: a client that holds a version from before the restore gets a conflict | ADR-0202, ADR-0210, ADR-0206 |
 | F109: the release turns the held parts on | ADR-0206 |
 | F109: an upgrade first snapshots the platform, and a platform that keeps crashing starts held, then stops and names the restore of the last good copy | ADR-0207 |
-| F111: an app owner backs up a KV store, a bucket and a catalog on a schedule, restores into a new name and swaps it in | ADR-0222 (with ADR-0208, ADR-0209, X-CRON) |
+| F111: an app owner backs up a KV store, a bucket and a lake on a schedule, restores into a new name and swaps it in | ADR-0222 (with ADR-0208, ADR-0209, X-CRON) |
 | F111: the backups of a deleted App stay until their time to live | ADR-0222 |
 | F111: the blob store runs on an S3-compatible target and a backup of it restores | ADR-0208 |
 | F111: the KV backup follows the same rules as the platform backup | ADR-0209 |

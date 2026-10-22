@@ -26,8 +26,8 @@ const SecretsDir, MasterDir = "secrets", "master"
 
 // The credentials a new master secret changes (Decision 5).
 const (
-	s3Keypair    = "s3-keypair"
-	catalogToken = "catalog-token"
+	s3Keypair = "s3-keypair"
+	lakeToken = "lake-token"
 )
 
 // Find returns the file under dir/sub whose envelope.Fingerprint is fp; none ⇒ fault.NotFound naming fp, the
@@ -180,7 +180,7 @@ func PlanMaster(m backup.Manifest, masterFile, dataDir, dir string, acceptNew bo
 	return plan, nil
 }
 
-// Derived is one credential a new master secret changes: Credential is "s3-keypair" or "catalog-token".
+// Derived is one credential a new master secret changes: Credential is "s3-keypair" or "lake-token".
 type Derived struct {
 	Kind            v1.Kind
 	Namespace, Name string
@@ -188,7 +188,7 @@ type Derived struct {
 }
 
 // ListChanged reads the loaded store for every credential derived from the master (Decision 5): a Function's
-// spec.bindings.blob keypair (addS3Env) and spec.bindings.catalog token (resolveCatalogEnv), a CatalogService's spec.bindings.blob keypair
+// spec.bindings.blob keypair (addS3Env) and spec.bindings.lake token (resolveLakeEnv), a Lake's spec.bindings.blob keypair
 // (engineEnv); keypairs gateway on or off, since a copy may predate the config. nil unless plan.List.
 func ListChanged(ctx context.Context, plan MasterPlan, st store.Store) ([]Derived, error) {
 	if !plan.List {
@@ -198,7 +198,7 @@ func ListChanged(ctx context.Context, plan MasterPlan, st store.Store) ([]Derive
 	if err != nil {
 		return nil, err
 	}
-	css, err := st.List(ctx, v1.KindCatalogService.GVK(), store.ListOptions{})
+	css, err := st.List(ctx, v1.KindLake.GVK(), store.ListOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -211,13 +211,13 @@ func ListChanged(ctx context.Context, plan MasterPlan, st store.Store) ([]Derive
 		if len(fn.Spec.Bindings.Blob) > 0 {
 			out = append(out, Derived{v1.KindFunction, string(fn.Namespace), string(fn.Name), s3Keypair})
 		}
-		if len(fn.Spec.Bindings.Catalog) > 0 {
-			out = append(out, Derived{v1.KindFunction, string(fn.Namespace), string(fn.Name), catalogToken})
+		if len(fn.Spec.Bindings.Lake) > 0 {
+			out = append(out, Derived{v1.KindFunction, string(fn.Namespace), string(fn.Name), lakeToken})
 		}
 	}
 	for _, o := range css.Items {
-		if cs, ok := o.(*v1.CatalogService); ok && len(cs.Spec.Bindings.Blob) > 0 {
-			out = append(out, Derived{v1.KindCatalogService, string(cs.Namespace), string(cs.Name), s3Keypair})
+		if cs, ok := o.(*v1.Lake); ok && len(cs.Spec.Bindings.Blob) > 0 {
+			out = append(out, Derived{v1.KindLake, string(cs.Namespace), string(cs.Name), s3Keypair})
 		}
 	}
 	slices.SortFunc(out, func(a, b Derived) int {

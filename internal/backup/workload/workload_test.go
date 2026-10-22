@@ -34,38 +34,38 @@ func meta(name, rg string) v1.ObjectMeta {
 
 func tm(k v1.Kind) v1.TypeMeta { return v1.TypeMeta{APIVersion: k.GVK().APIVersion(), Kind: k} }
 
-// TestResolveScopes (Decision 2): names, an App's kv, buckets and catalogs entries (name or ref) and a ResourceGroup's
-// stores resolve to members, KVStores, Buckets then CatalogServices, a catalog with its spec.catalog; a named member
+// TestResolveScopes (Decision 2): names, an App's kv, buckets and lakes entries (name or ref) and a ResourceGroup's
+// stores resolve to members, KVStores, Buckets then Lakes, a lake with its spec.location; a named member
 // or App that is missing is NotFound.
 func TestResolveScopes(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := store.New(storemem.New())
-	lake := v1.CatalogRef{Bucket: "lake-files", Prefix: "lake"}
+	lake := v1.LakeLocation{Bucket: "lake-files", Prefix: "lake"}
 	for _, o := range []v1.Object{
 		&v1.KVStore{TypeMeta: tm(v1.KindKVStore), ObjectMeta: meta("orders-state", "app")},
 		&v1.KVStore{TypeMeta: tm(v1.KindKVStore), ObjectMeta: meta("shared-state", "other")},
 		&v1.Bucket{TypeMeta: tm(v1.KindBucket), ObjectMeta: meta("orders-files", "app")},
-		&v1.CatalogService{TypeMeta: tm(v1.KindCatalogService), ObjectMeta: meta("lake", "app"), Spec: v1.CatalogServiceSpec{
-			Catalog:  lake,
-			Bindings: v1.CatalogServiceBindings{Blob: []v1.FunctionBlob{{Alias: "lake", Bucket: "lake-files", Prefix: "lake"}}},
+		&v1.Lake{TypeMeta: tm(v1.KindLake), ObjectMeta: meta("lake", "app"), Spec: v1.LakeSpec{
+			Location: lake,
+			Bindings: v1.LakeBindings{Blob: []v1.FunctionBlob{{Alias: "lake", Bucket: "lake-files", Prefix: "lake"}}},
 		}},
 		&v1.App{TypeMeta: tm(v1.KindApp), ObjectMeta: meta("orders", "app"), Spec: v1.AppSpec{
-			KV: []v1.KVStoreEntry{{Name: "orders-state"}, {Ref: "shared-state"}}, Catalogs: []v1.CatalogEntry{{Ref: "lake"}}}},
+			KV: []v1.KVStoreEntry{{Name: "orders-state"}, {Ref: "shared-state"}}, Lakes: []v1.LakeEntry{{Ref: "lake"}}}},
 	} {
 		_, err := st.Create(ctx, o)
 		require.NoError(t, err)
 	}
 	kv := func(n string) workload.Member { return workload.Member{Kind: v1.KindKVStore, Name: v1.ObjectName(n)} }
 	bucket := workload.Member{Kind: v1.KindBucket, Name: "orders-files"}
-	catalog := workload.Member{Kind: v1.KindCatalogService, Name: "lake", Catalog: lake}
+	lakeMember := workload.Member{Kind: v1.KindLake, Name: "lake", Location: lake}
 	for name, c := range map[string]struct {
 		scope v1.BackupScope
 		want  []workload.Member
 	}{
-		"names":          {v1.BackupScope{Catalogs: []v1.ObjectName{"lake"}, KVStores: []v1.ObjectName{"orders-state"}}, []workload.Member{kv("orders-state"), catalog}},
-		"app":            {v1.BackupScope{App: "orders"}, []workload.Member{kv("orders-state"), kv("shared-state"), catalog}},
-		"resource group": {v1.BackupScope{ResourceGroup: "app"}, []workload.Member{kv("orders-state"), bucket, catalog}},
+		"names":          {v1.BackupScope{Lakes: []v1.ObjectName{"lake"}, KVStores: []v1.ObjectName{"orders-state"}}, []workload.Member{kv("orders-state"), lakeMember}},
+		"app":            {v1.BackupScope{App: "orders"}, []workload.Member{kv("orders-state"), kv("shared-state"), lakeMember}},
+		"resource group": {v1.BackupScope{ResourceGroup: "app"}, []workload.Member{kv("orders-state"), bucket, lakeMember}},
 	} {
 		got, err := workload.Resolve(ctx, st, "orders", c.scope)
 		require.NoError(t, err, name)
@@ -134,20 +134,20 @@ func lakeDB(t *testing.T, dataPath string, files ...[2]string) []byte {
 	return data
 }
 
-// TestCatalogFilesRelative (Decision 5): a relative file resolves through its table, schema and the data path, an
+// TestLakeFilesRelative (Decision 5): a relative file resolves through its table, schema and the data path, an
 // absolute one under the data path is kept, both as keys relative to the data path, once each though the table has
 // two versions; an absolute path outside the data path is fault.Invalid.
-func TestCatalogFilesRelative(t *testing.T) {
+func TestLakeFilesRelative(t *testing.T) {
 	t.Parallel()
 	const dataPath = "s3://lake-files/lake/"
 	db := lakeDB(t, dataPath, [2]string{"f1.parquet", "true"}, [2]string{dataPath + "main/t/f2.parquet", "false"},
 		[2]string{"f1.delete", "true"})
-	got, err := workload.CatalogFiles(db)
+	got, err := workload.LakeFiles(db)
 	require.NoError(t, err)
 	require.Equal(t, []string{"main/t/f1.delete", "main/t/f1.parquet", "main/t/f2.parquet"}, got)
-	_, err = workload.CatalogFiles(lakeDB(t, dataPath, [2]string{"s3://elsewhere/f.parquet", "false"}))
+	_, err = workload.LakeFiles(lakeDB(t, dataPath, [2]string{"s3://elsewhere/f.parquet", "false"}))
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
-	_, err = workload.CatalogFiles([]byte("not a database"))
+	_, err = workload.LakeFiles([]byte("not a database"))
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
 }
 
@@ -233,10 +233,10 @@ func TestWriteWithoutKVExport(t *testing.T) {
 	require.Empty(t, s.PutKeys(path), "nothing is written")
 }
 
-// A catalog that has no checkpoint yet (a new DuckLake catalog its engine has not checkpointed) is an empty member, so
+// A lake that has no checkpoint yet (a new DuckLake catalog its engine has not checkpointed) is an empty member, so
 // it does not fail the backup of the stores beside it; an orphan object under its prefix, which no checkpoint names,
 // is not copied.
-func TestWriteCatalogWithoutCheckpoint(t *testing.T) {
+func TestWriteLakeWithoutCheckpoint(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	shared, err := gocloud.Open(ctx, "mem://")
@@ -251,14 +251,14 @@ func TestWriteCatalogWithoutCheckpoint(t *testing.T) {
 	require.NoError(t, err)
 	members := []workload.Member{
 		{Kind: v1.KindBucket, Name: "orders-files"},
-		{Kind: v1.KindCatalogService, Name: "lake", Catalog: v1.CatalogRef{Bucket: "lakehouse", Prefix: "gold"}},
+		{Kind: v1.KindLake, Name: "lake", Location: v1.LakeLocation{Bucket: "lakehouse", Prefix: "gold"}},
 	}
 	const path = "orders/nightly-1-uid/"
 	m, err := workload.Write(ctx, "orders", members, src, workload.Options{Target: target, Path: path})
 	require.NoError(t, err)
 	require.Equal(t, []string{path + "blob/orders-files/part-00000", path + "manifest.yaml"}, s.PutKeys(path))
 	require.Len(t, m.Members, 2)
-	require.Equal(t, workload.MemberFile{Kind: v1.KindCatalogService, Name: "lake"}, m.Members[1])
+	require.Equal(t, workload.MemberFile{Kind: v1.KindLake, Name: "lake"}, m.Members[1])
 	got, err := workload.ReadManifest(ctx, target, path)
 	require.NoError(t, err)
 	require.NoError(t, workload.Integrity(ctx, target, path, got))

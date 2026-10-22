@@ -61,11 +61,11 @@ func TestScenarioBridgeAddressOutsideSubnetRefused(t *testing.T) {
 	refused(t, containerd+"  containerd:\n    bridgeAddress: funcd0\n", "runtime.containerd.bridgeAddress")
 }
 
-// scenario: proxy-host-refused — catalog.proxyHost, the field this replaces, is no longer read: a config that sets it
+// scenario: proxy-host-refused — lake.proxyHost, the field this replaces, is no longer read: a config that sets it
 // is refused at start, naming it.
 func TestScenarioProxyHostRefused(t *testing.T) {
 	t.Parallel()
-	refused(t, containerd+"catalog:\n  proxyHost: 10.63.0.1\n", "proxyHost")
+	refused(t, containerd+"lake:\n  proxyHost: 10.63.0.1\n", "proxyHost")
 }
 
 // scenario: process-runtime-loopback

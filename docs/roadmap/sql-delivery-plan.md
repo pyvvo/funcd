@@ -33,7 +33,7 @@ one wave ahead of the build track.
 | ADR-0234 | SQL backup and restore: the workload member, its copy and its load | F131 | ADR-0232, ADR-0203, ADR-0206, ADR-0209, ADR-0222 |
 | ADR-0235 | SQL change feed: row changes as named events | F132 | ADR-0232, ADR-0108 |
 | ADR-0237 | SQL in funcdctl dev: the engine as a local process | F133 | ADR-0232, ADR-0233, ADR-0125 |
-| ADR-0238 | The container bridge address: one setting, derived from the containerd subnet, read by the change feed, the catalog proxies and the S3 endpoint | F136 | ADR-0235 |
+| ADR-0238 | The container bridge address: one setting, derived from the containerd subnet, read by the change feed, the lake proxies and the S3 endpoint | F136 | ADR-0235 |
 
 Two merges are deliberate. ADR-0232 joins the kind, its engine image and its lifecycle, since an engine is never deployed
 without its resource. ADR-0233 joins the binding, the PEP, Cedar, the roles and the shim helpers, since they form one access
@@ -143,7 +143,7 @@ Why each tier:
 ### Cross-cutting sequencing notes
 
 - **The test harness.** The in-process platform (`funcd.InMemory()`) runs no containers, so a SQL engine never starts
-  there, as the catalog engine never reaches Ready in-process. Either ADR-0232 ships a process-mode engine driver for its
+  there, as the lake engine never reaches Ready in-process. Either ADR-0232 ships a process-mode engine driver for its
   tests, which ADR-0237 then embeds for `funcdctl dev`, or ADR-0232 and ADR-0233 prove themselves on the Lima lanes. The ADR-0232 ADR
   decides; the first option moves part of ADR-0237 earlier without changing the tiers.
 - **The language repos.** ADR-0233's helpers ship in funcd-typescript and funcd-python as a release each, then `go get`

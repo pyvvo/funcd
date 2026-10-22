@@ -263,13 +263,13 @@ func (r *RestoreReconciler) plan(ctx context.Context, rs *v1.Restore, m workload
 		case mb.Kind == v1.KindSQLDatabase:
 			_, err = r.d.Store.Get(ctx, v1.KindSQLDatabase.GVK(), ns, dest)
 			t.sql = dest
-		case mb.AsCatalog != nil:
-			_, err = r.d.Store.Get(ctx, v1.KindBucket.GVK(), ns, mb.AsCatalog.Bucket)
-			t.view = blob.Prefixed(r.d.Sources.Blob, r.d.Sources.BucketPrefix(ns, mb.AsCatalog.Bucket)+mb.AsCatalog.Prefix+"/")
+		case mb.AsLocation != nil:
+			_, err = r.d.Store.Get(ctx, v1.KindBucket.GVK(), ns, mb.AsLocation.Bucket)
+			t.view = blob.Prefixed(r.d.Sources.Blob, r.d.Sources.BucketPrefix(ns, mb.AsLocation.Bucket)+mb.AsLocation.Prefix+"/")
 		default:
 			var obj v1.Object
-			if obj, err = r.d.Store.Get(ctx, v1.KindCatalogService.GVK(), ns, mb.Name); err == nil {
-				c := obj.(*v1.CatalogService).Spec.Catalog
+			if obj, err = r.d.Store.Get(ctx, v1.KindLake.GVK(), ns, mb.Name); err == nil {
+				c := obj.(*v1.Lake).Spec.Location
 				t.view = blob.Prefixed(r.d.Sources.Blob, r.d.Sources.BucketPrefix(ns, c.Bucket)+c.Prefix+"/")
 			}
 		}
@@ -324,7 +324,7 @@ func (r *RestoreReconciler) isEmpty(ctx context.Context, ns v1.NamespaceName, t 
 }
 
 // fill empties an in-place target, then loads its member: a KVStore by LoadPrefix, a SQLDatabase by streaming its
-// file's records to the engine's load, which replaces all its data, objects by Put, a catalog's files before its
+// file's records to the engine's load, which replaces all its data, objects by Put, a lake's files before its
 // catalog.db.
 func (r *RestoreReconciler) fill(ctx context.Context, ns v1.NamespaceName, t *target, src blob.Bucket, path string, unseal backup.Unseal) (string, error) {
 	if t.sql != "" {
@@ -388,7 +388,7 @@ func (r *RestoreReconciler) empty(ctx context.Context, ns v1.NamespaceName, targ
 }
 
 // emptyOne empties a target: a KVStore by DropPrefix, a SQLDatabase by its engine, a Bucket by BucketPurger.Purge, a
-// catalog prefix key by key.
+// lake prefix key by key.
 func (r *RestoreReconciler) emptyOne(ctx context.Context, ns v1.NamespaceName, t *target) error {
 	switch {
 	case t.sql != "":

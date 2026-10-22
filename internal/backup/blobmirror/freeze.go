@@ -75,7 +75,7 @@ type freezer struct {
 	src      blob.Bucket
 	img      map[string]*frozen
 	refrozen map[string]int
-	catalogs []string
+	lakes    []string
 	warned   bool
 }
 
@@ -84,7 +84,7 @@ func (f *freezer) close() { _ = f.src.Close() }
 // walked is a key of a walk and its data file.
 type walked struct{ key, path string }
 
-// freeze empties the image, walks the store, links every key outside a catalog, then each catalog: its checkpoint
+// freeze empties the image, walks the store, links every key outside a lake, then each lake: its checkpoint
 // first, then a new walk of its prefix.
 func (m *mirror) freeze(ctx context.Context) (*freezer, error) {
 	const op = "blobmirror.Run"
@@ -106,7 +106,7 @@ func (m *mirror) freeze(ctx context.Context) (*freezer, error) {
 	}
 	for _, w := range all {
 		if p, ok := strings.CutSuffix(w.key, checkpointName); ok && strings.HasSuffix(p, "/") {
-			f.catalogs = append(f.catalogs, p)
+			f.lakes = append(f.lakes, p)
 		}
 	}
 	for _, w := range all {
@@ -118,7 +118,7 @@ func (m *mirror) freeze(ctx context.Context) (*freezer, error) {
 			return nil, err
 		}
 	}
-	for _, p := range f.catalogs {
+	for _, p := range f.lakes {
 		if err := f.freezePrefix(ctx, p, filepath.Join(m.cfg.Dir, filepath.FromSlash(p+checkpointName))); err != nil {
 			f.close()
 			return nil, err
@@ -127,10 +127,10 @@ func (m *mirror) freeze(ctx context.Context) (*freezer, error) {
 	return f, nil
 }
 
-// owner is the longest catalog prefix holding key, "" when none.
+// owner is the longest lake prefix holding key, "" when none.
 func (f *freezer) owner(key string) string {
 	best := ""
-	for _, p := range f.catalogs {
+	for _, p := range f.lakes {
 		if strings.HasPrefix(key, p) && len(p) > len(best) {
 			best = p
 		}
@@ -153,7 +153,7 @@ func (f *freezer) walk(ctx context.Context, prefix string) ([]walked, error) {
 	return out, nil
 }
 
-// freezePrefix freezes the catalog at p: its checkpoint (MD5 checked at once), then each key of a new walk of p. A
+// freezePrefix freezes the lake at p: its checkpoint (MD5 checked at once), then each key of a new walk of p. A
 // walked key gone at its link, or the live checkpoint's MD5 changed by the end of the walk, freezes p again. Without
 // a checkpoint, p's keys freeze as any other.
 func (f *freezer) freezePrefix(ctx context.Context, p, checkpointPath string) error {

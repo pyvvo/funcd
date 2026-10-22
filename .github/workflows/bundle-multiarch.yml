@@ -1,6 +1,6 @@
 name: Build a multi-arch function bundle (local)
 
-# LOCAL-ONLY for now (ADR-0145): run under nektos/act with `just act-bundle`. It builds the catalog-quack bundle for
+# LOCAL-ONLY for now (ADR-0145): run under nektos/act with `just act-bundle`. It builds the lake-quack bundle for
 # linux/amd64 and linux/arm64 with funcd-bundle (ADR-0144), pushes each with `funcdctl push --platform` into one OCI
 # layout, combines them with `funcdctl index`, checks each platform's native files, and uploads the layout under
 # .act-artifacts/. No release workflow refers to it; moving it into the release phase is a board card.
@@ -36,10 +36,10 @@ jobs:
       - name: Build funcdctl
         run: go build -o "$RUNNER_TEMP/funcdctl" ./cmd/funcdctl
 
-      - name: Bundle catalog-quack for linux/amd64 and linux/arm64
+      - name: Bundle lake-quack for linux/amd64 and linux/arm64
         run: |
           set -euo pipefail
-          ex="$(scripts/example-copy.sh python/catalog-quack)"
+          ex="$(scripts/example-copy.sh python/lake-quack)"
           echo "EXAMPLE=$ex" >> "$GITHUB_ENV"
           cd "$ex"
           "$HOME/.local/bin/uv" run --locked --python 3.14 funcd-bundle --platform linux/amd64 --platform linux/arm64
@@ -49,11 +49,11 @@ jobs:
           set -euo pipefail
           cd "$EXAMPLE"
           for arch in amd64 arm64; do
-            "$RUNNER_TEMP/funcdctl" push "dist/linux-$arch/catalog-reader" "oci-layout://$LAYOUT:catalog-reader-$arch" \
+            "$RUNNER_TEMP/funcdctl" push "dist/linux-$arch/lake-reader" "oci-layout://$LAYOUT:lake-reader-$arch" \
               --platform "linux/$arch"
           done
-          "$RUNNER_TEMP/funcdctl" index "oci-layout://$LAYOUT:catalog-reader" \
-            "oci-layout://$LAYOUT:catalog-reader-amd64" "oci-layout://$LAYOUT:catalog-reader-arm64" | tee "$RUNNER_TEMP/index.txt"
+          "$RUNNER_TEMP/funcdctl" index "oci-layout://$LAYOUT:lake-reader" \
+            "oci-layout://$LAYOUT:lake-reader-amd64" "oci-layout://$LAYOUT:lake-reader-arm64" | tee "$RUNNER_TEMP/index.txt"
 
       - name: Check each platform's native files
         run: |
@@ -71,5 +71,5 @@ jobs:
       - name: Upload the layout
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: catalog-reader-multiarch
+          name: lake-reader-multiarch
           path: ${{ runner.temp }}/layout

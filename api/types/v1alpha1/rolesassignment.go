@@ -34,8 +34,8 @@ const (
 	ScopeKindBucketPrefix ScopeKind = "BucketPrefix"
 	// ScopeKindKVStore scopes a grant to one KV store (or "<store>/<table>").
 	ScopeKindKVStore ScopeKind = "KVStore"
-	// ScopeKindCatalog scopes a grant to one catalog serving layer ("<catalog>") — ADR-0137, F102.
-	ScopeKindCatalog ScopeKind = "Catalog"
+	// ScopeKindLake scopes a grant to one lake serving layer ("<lake>") — ADR-0137, F102.
+	ScopeKindLake ScopeKind = "Lake"
 	// ScopeKindSQLDatabase scopes a grant to one SQL database ("<database>") — ADR-0233, F129.
 	ScopeKindSQLDatabase ScopeKind = "SQLDatabase"
 )
@@ -56,7 +56,7 @@ type RoleRef struct {
 // ScopeRef names the scope: a namespace, a bucket prefix, or a kv store. Name is the scope-relative name
 // ("<bucket>/<prefix>" for BucketPrefix; the namespace is the assignment's own namespace).
 type ScopeRef struct {
-	Kind ScopeKind `json:"kind" enum:"Namespace,BucketPrefix,KVStore,Catalog,SQLDatabase"`
+	Kind ScopeKind `json:"kind" enum:"Namespace,BucketPrefix,KVStore,Lake,SQLDatabase"`
 	Name string    `json:"name,omitempty"`
 }
 
@@ -123,7 +123,7 @@ func (ra *RolesAssignment) Validate() error {
 			return fault.Invalidf(op, "spec.assignments[%d] has no scope (and no top-level default)", i)
 		}
 		switch s.Kind {
-		case ScopeKindNamespace, ScopeKindBucketPrefix, ScopeKindKVStore, ScopeKindCatalog, ScopeKindSQLDatabase:
+		case ScopeKindNamespace, ScopeKindBucketPrefix, ScopeKindKVStore, ScopeKindLake, ScopeKindSQLDatabase:
 		default:
 			return fault.Invalidf(op, "spec.assignments[%d].scope.kind %q is invalid", i, s.Kind)
 		}

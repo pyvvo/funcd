@@ -174,7 +174,7 @@ func TestConverge_provider_deploys(t *testing.T) {
 	host, port, closeFn := engineServer(t, 200)
 	defer closeFn()
 	rt := newFakeRuntime(host, port)
-	pr, err := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindCatalogService})
+	pr, err := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindLake})
 	require.NoError(t, err)
 
 	_, err = pr.Converge(context.Background(), specFor(host, port, nil))
@@ -195,7 +195,7 @@ func TestConverge_ready_on_http_probe(t *testing.T) {
 		host, port, closeFn := engineServer(t, 200)
 		defer closeFn()
 		rt := newFakeRuntime(host, port)
-		pr, _ := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindCatalogService})
+		pr, _ := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindLake})
 		st, err := pr.Converge(context.Background(), specFor(host, port, nil))
 		require.NoError(t, err)
 		require.True(t, st.Ready, "the engine answered 200 on the probe path")
@@ -205,7 +205,7 @@ func TestConverge_ready_on_http_probe(t *testing.T) {
 		host, port, closeFn := engineServer(t, 503)
 		defer closeFn()
 		rt := newFakeRuntime(host, port)
-		pr, _ := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindCatalogService})
+		pr, _ := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindLake})
 		st, err := pr.Converge(context.Background(), specFor(host, port, nil))
 		require.NoError(t, err)
 		require.False(t, st.Ready, "a 503 ⇒ not Ready")
@@ -220,19 +220,19 @@ func TestConverge_exposed_via_gateway(t *testing.T) {
 	defer closeFn()
 	rt := newFakeRuntime(host, port)
 	gw := &stubGateway{}
-	pr, _ := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindCatalogService, Gateway: gw})
+	pr, _ := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindLake, Gateway: gw})
 
-	route := &provider.RouteSpec{ID: "default/lake", PathPrefix: "/catalog/lake"}
+	route := &provider.RouteSpec{ID: "default/lake", PathPrefix: "/lake/lake"}
 	st, err := pr.Converge(context.Background(), specFor(host, port, route))
 	require.NoError(t, err)
 	require.True(t, st.Ready)
-	require.Equal(t, "/catalog/lake", st.Endpoint)
+	require.Equal(t, "/lake/lake", st.Endpoint)
 
 	require.Len(t, gw.programs, 1, "the gateway is programmed once the engine is Ready")
 	require.Len(t, gw.programs[0], 1)
 	got := gw.programs[0][0]
 	require.Equal(t, gateway.RouteID("default/lake"), got.ID)
-	require.Equal(t, "/catalog/lake", got.PathPrefix)
+	require.Equal(t, "/lake/lake", got.PathPrefix)
 	require.Equal(t, "http://"+host+":"+strconv.Itoa(port), got.Upstream, "the upstream is the engine's netns IP:Port")
 }
 
@@ -243,7 +243,7 @@ func TestConverge_internal_only(t *testing.T) {
 	defer closeFn()
 	rt := newFakeRuntime(host, port)
 	gw := &stubGateway{}
-	pr, _ := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindCatalogService, Gateway: gw})
+	pr, _ := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindLake, Gateway: gw})
 
 	st, err := pr.Converge(context.Background(), specFor(host, port, nil))
 	require.NoError(t, err)
@@ -258,7 +258,7 @@ func TestConverge_pinned_single_writer(t *testing.T) {
 	host, port, closeFn := engineServer(t, 200)
 	defer closeFn()
 	rt := newFakeRuntime(host, port)
-	pr, _ := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindCatalogService})
+	pr, _ := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindLake})
 
 	_, err := pr.Converge(context.Background(), specFor(host, port, nil))
 	require.NoError(t, err)
@@ -278,7 +278,7 @@ func TestConverge_not_a_function(t *testing.T) {
 	host, port, closeFn := engineServer(t, 200)
 	defer closeFn()
 	rt := newFakeRuntime(host, port)
-	pr, _ := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindCatalogService})
+	pr, _ := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindLake})
 
 	_, err := pr.Converge(context.Background(), specFor(host, port, nil))
 	require.NoError(t, err)
@@ -294,7 +294,7 @@ func TestConverge_supervision_recreates_and_adopts(t *testing.T) {
 	host, port, closeFn := engineServer(t, 200)
 	defer closeFn()
 	rt := newFakeRuntime(host, port)
-	pr, _ := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindCatalogService})
+	pr, _ := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindLake})
 	ctx := context.Background()
 	spec := specFor(host, port, nil)
 
@@ -326,10 +326,10 @@ func TestTeardown_stops_engine_and_removes_route(t *testing.T) {
 	defer closeFn()
 	rt := newFakeRuntime(host, port)
 	gw := &stubGateway{}
-	pr, _ := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindCatalogService, Gateway: gw})
+	pr, _ := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindLake, Gateway: gw})
 	ctx := context.Background()
 
-	route := &provider.RouteSpec{ID: "default/lake", PathPrefix: "/catalog/lake"}
+	route := &provider.RouteSpec{ID: "default/lake", PathPrefix: "/lake/lake"}
 	_, err := pr.Converge(ctx, specFor(host, port, route))
 	require.NoError(t, err)
 	require.Len(t, gw.programs, 1)
@@ -353,7 +353,7 @@ func TestConverge_uses_spec_port_not_instance_port(t *testing.T) {
 	host, port, closeFn := engineServer(t, 200)
 	defer closeFn()
 	rt := newFakeRuntime(host, 0) // Instance.Port = 0 (portfile unresolved, like a real image engine)
-	pr, err := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindCatalogService})
+	pr, err := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindLake})
 	require.NoError(t, err)
 
 	st, err := pr.Converge(context.Background(), specFor(host, port, nil)) // spec.Port = the actual engine port
@@ -370,7 +370,7 @@ func TestIssue106_StartsEngineLeftInCreated(t *testing.T) {
 	rt := newFakeRuntime(host, port)
 	rt.state = containerrt.StateCreated
 	rt.startErr = fault.Unavailablef("fakeRuntime.Start", "transient start failure")
-	pr, err := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindCatalogService})
+	pr, err := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindLake})
 	require.NoError(t, err)
 	ctx := context.Background()
 	spec := specFor(host, port, nil)
@@ -425,7 +425,7 @@ func TestIssue373_RemovesStoppedEngine(t *testing.T) {
 		t.Helper()
 		rt := &processEngine{Runtime: process.New(nil)}
 		t.Cleanup(func() { _ = rt.Close() })
-		pr, err := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindCatalogService})
+		pr, err := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindLake})
 		require.NoError(t, err)
 		_, err = pr.Converge(ctx, spec)
 		require.NoError(t, err)
@@ -477,7 +477,7 @@ func TestIssue376_ReadinessProbeReusesConnection(t *testing.T) {
 	require.True(t, ok)
 	host := addr.IP.String()
 
-	pr, err := provider.NewRuntime(provider.Deps{Runtime: newFakeRuntime(host, addr.Port), OwnerKind: v1.KindCatalogService})
+	pr, err := provider.NewRuntime(provider.Deps{Runtime: newFakeRuntime(host, addr.Port), OwnerKind: v1.KindLake})
 	require.NoError(t, err)
 	spec := specFor(host, addr.Port, nil)
 	for range 10 {
@@ -506,7 +506,7 @@ func TestIssue460_ProbeSurvivesDefaultTransportCloseIdle(t *testing.T) {
 	require.True(t, ok)
 	host := addr.IP.String()
 
-	pr, err := provider.NewRuntime(provider.Deps{Runtime: newFakeRuntime(host, addr.Port), OwnerKind: v1.KindCatalogService})
+	pr, err := provider.NewRuntime(provider.Deps{Runtime: newFakeRuntime(host, addr.Port), OwnerKind: v1.KindLake})
 	require.NoError(t, err)
 	spec := specFor(host, addr.Port, nil)
 	ctx := context.Background()
@@ -536,7 +536,7 @@ func TestScenarioProviderNeverTouchesFunctionWorker(t *testing.T) {
 			Replica: replica, State: st, IP: "192.0.2.1", Port: 9,
 		}
 	}
-	pr, err := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindCatalogService})
+	pr, err := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindLake})
 	require.NoError(t, err)
 	ctx := context.Background()
 	spec := specFor(host, port, nil)
@@ -547,7 +547,7 @@ func TestScenarioProviderNeverTouchesFunctionWorker(t *testing.T) {
 	require.True(t, st.Ready, "the provider's own engine is Ready")
 	require.Equal(t, host+":"+strconv.Itoa(port), st.Address, "only the engine's address is published")
 	require.Len(t, rt.created, 1, "the provider creates its own engine")
-	require.Equal(t, v1.KindCatalogService, rt.created[0].OwnerKind)
+	require.Equal(t, v1.KindLake, rt.created[0].OwnerKind)
 	require.Empty(t, rt.created[0].Revision)
 	require.Equal(t, []containerrt.InstanceID{engine}, rt.started, "only the engine is started")
 

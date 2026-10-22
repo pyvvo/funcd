@@ -9,8 +9,8 @@ name: Release binaries
 # BOTH:
 #   - the THIN client            → dist/funcdctl-<version>-<os>-<arch>            (~40 MB)
 #   - the FAT `-tags dev` client → dist/funcdctl-dev-<version>-<os>-<arch>        (`funcdctl dev`,
-#     ADR-0125): embeds the process-runtime platform (~60 MB) + the per-arch DuckDB+Quack catalog
-#     engine (~130 MB) fetched by scripts/fetch-catalog-engine.sh, and the per-arch rqlited SQL engine
+#     ADR-0125): embeds the process-runtime platform (~60 MB) + the per-arch DuckDB+Quack lake
+#     engine (~130 MB) fetched by scripts/fetch-lake-engine.sh, and the per-arch rqlited SQL engine
 #     (~12 MB, ADR-0237) built by the build-sql-engine job. Both engines are subprocesses, never linked,
 #     so the client stays CGO_ENABLED=0.
 #
@@ -127,7 +127,7 @@ jobs:
           # Fat `-tags dev` client: fetch the per-arch DuckDB+Quack engine into the embed slot beside the
           # downloaded rqlited, then bake both in. Engines are subprocesses (no cgo), so CGO_ENABLED=0 still
           # cross-builds cleanly.
-          scripts/fetch-catalog-engine.sh "$os" "$arch"
+          scripts/fetch-lake-engine.sh "$os" "$arch"
           CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
             go build -tags dev -trimpath -ldflags "$LDFLAGS" -o "dist/funcdctl-dev-${VERSION}-${os}-${arch}" ./cmd/funcdctl
 

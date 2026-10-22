@@ -26,7 +26,7 @@ import (
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
-// toggleEngine is a CatalogService engine that reports Ready unless the test takes it down.
+// toggleEngine is a Lake engine that reports Ready unless the test takes it down.
 type toggleEngine struct {
 	addr string
 	down atomic.Bool
@@ -39,7 +39,7 @@ func (e *toggleEngine) Converge(context.Context, provider.ProviderSpec) (provide
 func (*toggleEngine) Teardown(context.Context, provider.ProviderRef) error { return nil }
 
 // asleepRig is an assembled in-memory platform on a recording runtime, reclaiming idle Functions every 50 ms and
-// re-converging a Ready catalog engine every 100 ms, with objects applied and deleted through the sdk so admission runs
+// re-converging a Ready lake engine every 100 ms, with objects applied and deleted through the sdk so admission runs
 // (issue #769).
 type asleepRig struct {
 	p      *Platform
@@ -67,7 +67,7 @@ func newAsleepRig(t *testing.T, referentPoll time.Duration, opts ...Option) *asl
 		rt:     &recordingRuntime{insts: map[runtime.InstanceID]runtime.Instance{}},
 		engine: &toggleEngine{addr: strings.TrimPrefix(srv.URL, "http://")},
 	}
-	p, err := New(append([]Option{InMemory(), WithoutLogCompaction(), WithRuntime(r.rt), WithCatalogProviderRuntime(r.engine),
+	p, err := New(append([]Option{InMemory(), WithoutLogCompaction(), WithRuntime(r.rt), WithLakeProviderRuntime(r.engine),
 		WithPacing(asleepPacing(referentPoll))}, opts...)...)
 	require.NoError(t, err)
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -109,20 +109,20 @@ func (r *asleepRig) bucket(t *testing.T, name, prefix, owner v1.ObjectName) {
 	r.apply(t, b)
 }
 
-// catalog applies Bucket lakehouse and CatalogService lake and waits for lake to be Ready.
-func (r *asleepRig) catalog(t *testing.T) {
+// lake applies Bucket lakehouse and Lake lake and waits for lake to be Ready.
+func (r *asleepRig) lake(t *testing.T) {
 	t.Helper()
 	r.bucket(t, "lakehouse", "raw", "lake")
-	r.applyCatalog(t)
+	r.applyLake(t)
 }
 
-func (r *asleepRig) applyCatalog(t *testing.T) {
+func (r *asleepRig) applyLake(t *testing.T) {
 	t.Helper()
-	r.apply(t, lakeCatalogService("default"))
+	r.apply(t, lakeResource("default"))
 	require.Eventually(t, func() bool {
-		obj, err := r.p.cfg.store.Get(context.Background(), v1.KindCatalogService.GVK(), "default", "lake")
-		return err == nil && obj.(*v1.CatalogService).Status.Phase == v1.PhaseReady
-	}, 5*time.Second, 10*time.Millisecond, "catalog lake is Ready")
+		obj, err := r.p.cfg.store.Get(context.Background(), v1.KindLake.GVK(), "default", "lake")
+		return err == nil && obj.(*v1.Lake).Status.Phase == v1.PhaseReady
+	}, 5*time.Second, 10*time.Millisecond, "lake lake is Ready")
 }
 
 // reader applies Function reader, minReplicas 0 with a 400 ms idle timeout unless bind changes it.
@@ -227,7 +227,7 @@ func (r *asleepRig) requireAsleep(t *testing.T, start time.Time, writes func() [
 }
 
 func bindLake(fn *v1.Function) {
-	fn.Spec.Bindings.Catalog = []v1.FunctionCatalog{{Alias: "lake", Catalog: "lake"}}
+	fn.Spec.Bindings.Lake = []v1.FunctionLake{{Alias: "lake", Lake: "lake"}}
 }
 
 // settings applies ConfigMap settings, which bindSettings binds by ref: deleting it fails a bound Function closed
@@ -243,24 +243,24 @@ func (r *asleepRig) settings(t *testing.T) {
 
 func bindSettings(fn *v1.Function) { fn.Spec.Bindings.Config = []v1.ObjectName{"settings"} }
 
-// scenario: catalog-gate-while-asleep-goes-pending (ADR-0192, issue #769) — a woken scale-to-zero catalog consumer whose
-// catalog goes away is reclaimed, then held Pending/CatalogNotReady with Asleep=True and no worker, and stays quiet.
-func TestIssue769_CatalogGateWhileAsleepGoesPending(t *testing.T) {
+// scenario: lake-gate-while-asleep-goes-pending (ADR-0192, issue #769) — a woken scale-to-zero lake consumer whose
+// lake goes away is reclaimed, then held Pending/LakeNotReady with Asleep=True and no worker, and stays quiet.
+func TestIssue769_LakeGateWhileAsleepGoesPending(t *testing.T) {
 	t.Parallel()
 	for name, trigger := range map[string]func(*testing.T, *asleepRig){
-		"deleted-via-api": func(t *testing.T, r *asleepRig) { r.del(t, v1.KindCatalogService, "lake") },
+		"deleted-via-api": func(t *testing.T, r *asleepRig) { r.del(t, v1.KindLake, "lake") },
 		"engine-down":     func(_ *testing.T, r *asleepRig) { r.engine.down.Store(true) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			r := newAsleepRig(t, 0)
-			r.catalog(t)
+			r.lake(t)
 			r.reader(t, bindLake)
 			r.wakeReady(t)
 			writes := r.phases(t)
 			start := time.Now()
 			trigger(t, r)
-			r.requireAsleep(t, start, writes, v1.PhasePending, "CatalogNotReady")
+			r.requireAsleep(t, start, writes, v1.PhasePending, "LakeNotReady")
 		})
 	}
 }
@@ -316,15 +316,15 @@ func TestScenarioDependencyReturnsStaysAsleep(t *testing.T) {
 	t.Run("pending", func(t *testing.T) {
 		t.Parallel()
 		r := newAsleepRig(t, 100*time.Millisecond)
-		r.catalog(t)
+		r.lake(t)
 		r.reader(t, replicas1(bindLake))
 		r.wakeReady(t)
 		writes := r.phases(t)
 		start := time.Now()
-		r.del(t, v1.KindCatalogService, "lake")
-		r.requireAsleep(t, start, writes, v1.PhasePending, "CatalogNotReady")
+		r.del(t, v1.KindLake, "lake")
+		r.requireAsleep(t, start, writes, v1.PhasePending, "LakeNotReady")
 		created := r.creates()
-		r.applyCatalog(t)
+		r.applyLake(t)
 		stayAsleep(t, r, created)
 	})
 	t.Run("failed", func(t *testing.T) {
@@ -362,30 +362,30 @@ func TestScenarioDependencyReturnsStaysAsleep(t *testing.T) {
 	})
 }
 
-// scenario: min-replicas-one-unaffected (ADR-0192) — an always-on catalog consumer whose catalog is deleted stays Ready
-// with its worker listening and RevisionReady=False/CatalogNotReady; reclaim never puts it to sleep.
+// scenario: min-replicas-one-unaffected (ADR-0192) — an always-on lake consumer whose lake is deleted stays Ready
+// with its worker listening and RevisionReady=False/LakeNotReady; reclaim never puts it to sleep.
 func TestScenarioMinReplicasOneUnaffected(t *testing.T) {
 	t.Parallel()
 	r := newAsleepRig(t, 0)
-	r.catalog(t)
+	r.lake(t)
 	r.reader(t, func(fn *v1.Function) {
 		bindLake(fn)
 		fn.Spec.Scaling.MinReplicas = 1
 	})
 	require.Eventually(t, func() bool { return r.fn(t).Status.Phase == v1.PhaseReady }, 5*time.Second, 10*time.Millisecond, "reader is Ready")
 	writes := r.phases(t)
-	r.del(t, v1.KindCatalogService, "lake")
+	r.del(t, v1.KindLake, "lake")
 	require.Eventually(t, func() bool {
 		rr := condition(r.fn(t), "RevisionReady")
-		return rr.Status == v1.ConditionFalse && rr.Reason == "CatalogNotReady"
-	}, 3*time.Second, 10*time.Millisecond, "reader shows CatalogNotReady")
+		return rr.Status == v1.ConditionFalse && rr.Reason == "LakeNotReady"
+	}, 3*time.Second, 10*time.Millisecond, "reader shows LakeNotReady")
 	stayed := poll.Never(func() bool { return r.fn(t).Status.Phase != v1.PhaseReady || r.running() != 1 }, 3*time.Second, 20*time.Millisecond)
 	require.True(t, stayed, "reader stays Ready with its worker listening; writes %v", writes())
 	fn := r.fn(t)
 	require.Equal(t, v1.PhaseReady, fn.Status.Phase)
 	require.Equal(t, 1, r.running(), "its worker still listens")
 	require.Equal(t, v1.ConditionFalse, condition(fn, "RevisionReady").Status)
-	require.Equal(t, "CatalogNotReady", condition(fn, "RevisionReady").Reason)
+	require.Equal(t, "LakeNotReady", condition(fn, "RevisionReady").Reason)
 	for _, ph := range writes() {
 		require.Equal(t, v1.PhaseReady, ph, "no Idle, Degraded or Pending write")
 	}

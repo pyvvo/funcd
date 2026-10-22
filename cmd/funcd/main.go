@@ -469,7 +469,7 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 			cfg.S3Gateway.MasterSecretFile, cfg.Storage.DataDir))
 	}
 
-	// The catalog proxies and the SQL change feed bind and publish the bridge address, where a worker or an engine in
+	// The lake proxies and the SQL change feed bind and publish the bridge address, where a worker or an engine in
 	// its own netns reaches them (ADR-0238); without one (the process runtime) they keep the shared loopback.
 	if bridge, ok := bridgeAddress(cfg); ok {
 		opts = append(opts, funcd.WithBridgeAddress(bridge))
@@ -858,8 +858,8 @@ func pacing(cfg config.Config) (funcd.Pacing, error) {
 		{"runtime.drainGrace", cfg.Runtime.DrainGrace, 30 * time.Second, &p.DrainGrace, minPositive, v1.MaxDuration},
 		{"runtime.handOutSettle", cfg.Runtime.HandOutSettle, 2 * time.Second, &p.HandOutSettle, minPositive, v1.MaxDuration},
 		{"runtime.drainPollInterval", cfg.Runtime.DrainPollInterval, time.Second, &p.DrainPollInterval, minPositive, v1.MaxDuration},
-		{"catalog.enginePollInterval", cfg.Catalog.EnginePollInterval, 2 * time.Second, &p.EnginePollInterval, minPositive, v1.MaxDuration},
-		{"catalog.engineProbeTimeout", cfg.Catalog.EngineProbeTimeout, 2 * time.Second, &p.EngineProbeTimeout, minPositive, v1.MaxDuration},
+		{"lake.enginePollInterval", cfg.Lake.EnginePollInterval, 2 * time.Second, &p.EnginePollInterval, minPositive, v1.MaxDuration},
+		{"lake.engineProbeTimeout", cfg.Lake.EngineProbeTimeout, 2 * time.Second, &p.EngineProbeTimeout, minPositive, v1.MaxDuration},
 		{"workflow.artifactPollInterval", cfg.Workflow.ArtifactPollInterval, 5 * time.Second, &p.ArtifactPollInterval, minPositive, v1.MaxDuration},
 		{"workflow.defaultRetryBackoff", cfg.Workflow.DefaultRetryBackoff, 0, &p.DefaultRetryBackoff, 0, v1.MaxRetryBackoff},
 		{"eventing.bucketRecheckInterval", cfg.Eventing.BucketRecheckInterval, 15 * time.Second, &p.BucketRecheckInterval, minPositive, v1.MaxDuration},
@@ -1021,7 +1021,7 @@ func logBackupFindings(cfg config.Config, log *slog.Logger) {
 	}
 }
 
-// bridgeAddress is the address the catalog proxies, the SQL change feed and a derived S3 endpoint use (ADR-0238): the
+// bridgeAddress is the address the lake proxies, the SQL change feed and a derived S3 endpoint use (ADR-0238): the
 // config's bridge address under containerd; false for the process runtime, which keeps the shared loopback.
 func bridgeAddress(cfg config.Config) (netip.Addr, bool) {
 	if cfg.Runtime.Mode != "containerd" {

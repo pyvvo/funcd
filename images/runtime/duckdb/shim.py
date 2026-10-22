@@ -258,7 +258,7 @@ def main() -> int:
     # Recover: GetObject the catalog from blob → local file → ATTACH (fresh on first deploy). The
     # Parquet DATA_PATH is the owned prefix on S3 (the F47 surface); the catalog is the local SQLite.
     _recover_catalog(s3, bucket, key)
-    # OVERRIDE_DATA_PATH: a catalog restored under another prefix (ADR-0222 asCatalog) records its old
+    # OVERRIDE_DATA_PATH: a catalog restored under another prefix (ADR-0222 asLocation) records its old
     # DATA_PATH, which DuckLake refuses to replace otherwise; the data files are relative to it.
     con.execute(
         "ATTACH 'ducklake:sqlite:" + LOCAL_CATALOG + "' AS lakehouse (DATA_PATH ?, OVERRIDE_DATA_PATH TRUE)",
@@ -282,7 +282,7 @@ def main() -> int:
 
     # Serve Quack over HTTP on the fixed netns port (a quack:// RPC URI). A Quack client ALWAYS needs a
     # token (a token-less client is refused "Could not find a Quack authentication token"), so the
-    # engine serves WITH one: QUACK_TOKEN, injected from the CatalogService's spec.bindings.secret. disable_ssl:
+    # engine serves WITH one: QUACK_TOKEN, injected from the Lake's spec.bindings.secret. disable_ssl:
     # the ingress gateway terminates TLS and is the authoritative OUTER auth gate (ADR-0013) — Quack
     # runs plain HTTP behind it, the token is the inner gate (allow_other_hostname: the gateway proxies
     # a different Host). quack_serve is non-blocking (spawns the server) — we then block on signal.pause().

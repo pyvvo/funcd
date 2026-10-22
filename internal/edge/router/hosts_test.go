@@ -115,15 +115,15 @@ func TestAggregator_ReservationAcrossSources(t *testing.T) {
 	a := router.NewAggregator(router.New(), nil, n.notify, "", nil)
 	cat := withHost(upstreamEntry("prod", "c", "/q", "http://c"), "staging.localhost")
 	set(t, a, "routes")
-	require.Empty(t, set(t, a, "catalog/prod/c", cat)[0].Reason)
+	require.Empty(t, set(t, a, "lake/prod/c", cat)[0].Reason)
 
 	set(t, a, "routes", fnEntry("staging", "s", "/api"))
 	require.Equal(t, []router.Owner{cat.Owner}, n.take())
-	require.Equal(t, "HostReserved", set(t, a, "catalog/prod/c", cat)[0].Reason)
+	require.Equal(t, "HostReserved", set(t, a, "lake/prod/c", cat)[0].Reason)
 
 	set(t, a, "routes")
 	require.Equal(t, []router.Owner{cat.Owner}, n.take())
-	require.Empty(t, set(t, a, "catalog/prod/c", cat)[0].Reason)
+	require.Empty(t, set(t, a, "lake/prod/c", cat)[0].Reason)
 }
 
 // Decision 6: on a host that names a namespace, another namespace's rule under /function is HostReserved, reserved

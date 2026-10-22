@@ -125,8 +125,8 @@ func TestScenarioMasterSecretRequired(t *testing.T) {
 	require.Nil(t, plan.Install)
 }
 
-// scenario: new-master-secret-lists-changes — with --new-master-secret, Functions a (spec.blob) and b (spec.catalogs)
-// and CatalogService c (spec.blob) are listed, not Function d or CatalogService e; the store holds the same either
+// scenario: new-master-secret-lists-changes — with --new-master-secret, Functions a (spec.blob) and b (spec.lakes)
+// and Lake c (spec.blob) are listed, not Function d or Lake e; the store holds the same either
 // way, so the list does not depend on the gateway.
 func TestScenarioNewMasterSecretListsChanges(t *testing.T) {
 	t.Parallel()
@@ -134,9 +134,9 @@ func TestScenarioNewMasterSecretListsChanges(t *testing.T) {
 	eng := memory.New()
 	st := store.New(eng)
 	blobs := []v1.FunctionBlob{{Alias: "data", Bucket: "lake", Prefix: "raw"}}
-	catalog := func(o v1.Object) {
-		cs := o.(*v1.CatalogService)
-		cs.Spec.Bindings.Blob, cs.Spec.Catalog = blobs, v1.CatalogRef{Bucket: "lake", Prefix: "raw"}
+	lake := func(o v1.Object) {
+		cs := o.(*v1.Lake)
+		cs.Spec.Bindings.Blob, cs.Spec.Location = blobs, v1.LakeLocation{Bucket: "lake", Prefix: "raw"}
 	}
 	create := func(kind v1.Kind, ns, name string, set func(v1.Object)) {
 		obj, ok := v1.NewObject(kind)
@@ -149,11 +149,11 @@ func TestScenarioNewMasterSecretListsChanges(t *testing.T) {
 	}
 	create(v1.KindFunction, "team", "a", func(o v1.Object) { o.(*v1.Function).Spec.Bindings.Blob = blobs })
 	create(v1.KindFunction, "team", "b", func(o v1.Object) {
-		o.(*v1.Function).Spec.Bindings.Catalog = []v1.FunctionCatalog{{Alias: "lake", Catalog: "c"}}
+		o.(*v1.Function).Spec.Bindings.Lake = []v1.FunctionLake{{Alias: "lake", Lake: "c"}}
 	})
 	create(v1.KindFunction, "team", "d", func(v1.Object) {})
-	create(v1.KindCatalogService, "team", "c", catalog)
-	create(v1.KindCatalogService, "team", "e", catalog)
+	create(v1.KindLake, "team", "c", lake)
+	create(v1.KindLake, "team", "e", lake)
 	dropBlob(t, eng, "e")
 
 	plan, err := escrow.PlanMaster(manifest(nil, randomKey(t)), "", t.TempDir(), "", true)
@@ -161,9 +161,9 @@ func TestScenarioNewMasterSecretListsChanges(t *testing.T) {
 	got, err := escrow.ListChanged(ctx, plan, st)
 	require.NoError(t, err)
 	require.Equal(t, []escrow.Derived{
-		{Kind: v1.KindCatalogService, Namespace: "team", Name: "c", Credential: "s3-keypair"},
 		{Kind: v1.KindFunction, Namespace: "team", Name: "a", Credential: "s3-keypair"},
-		{Kind: v1.KindFunction, Namespace: "team", Name: "b", Credential: "catalog-token"},
+		{Kind: v1.KindFunction, Namespace: "team", Name: "b", Credential: "lake-token"},
+		{Kind: v1.KindLake, Namespace: "team", Name: "c", Credential: "s3-keypair"},
 	}, got)
 
 	none, err := escrow.ListChanged(ctx, escrow.MasterPlan{}, st)
@@ -171,14 +171,14 @@ func TestScenarioNewMasterSecretListsChanges(t *testing.T) {
 	require.Nil(t, none, "nothing to list when the master is kept")
 }
 
-// dropBlob rewrites the stored CatalogService name without spec.blob, which admission no longer accepts but an
+// dropBlob rewrites the stored Lake name without spec.blob, which admission no longer accepts but an
 // older store may hold.
 func dropBlob(t *testing.T, eng store.Engine, name string) {
 	t.Helper()
 	ctx := context.Background()
 	var key, val []byte
 	_, err := eng.Snapshot(ctx, func(r snapshot.Record) error {
-		if bytes.Contains(r.Value, []byte(`"kind":"CatalogService"`)) && bytes.Contains(r.Value, []byte(`"name":"`+name+`"`)) {
+		if bytes.Contains(r.Value, []byte(`"kind":"Lake"`)) && bytes.Contains(r.Value, []byte(`"name":"`+name+`"`)) {
 			key, val = r.Key, r.Value
 		}
 		return nil

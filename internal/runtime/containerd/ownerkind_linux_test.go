@@ -27,7 +27,7 @@ func TestOwnerKindLabelAndConflicts(t *testing.T) {
 	engine := runtime.WorkerSpec{
 		Namespace: "default",
 		Name:      "lake",
-		OwnerKind: v1alpha1.KindCatalogService,
+		OwnerKind: v1alpha1.KindLake,
 		Image:     "funcd/ownerkind:latest",
 	}
 	ctrID, _ := workerNames(string(engine.Namespace), string(engine.Name), "", "0")
@@ -39,8 +39,8 @@ func TestOwnerKindLabelAndConflicts(t *testing.T) {
 
 	inst, err := d.Create(ctx, engine)
 	require.NoError(t, err)
-	require.Equal(t, v1alpha1.KindCatalogService, inst.OwnerKind)
-	require.Equal(t, "CatalogService", ctrs.records[ctrID].Labels[ownerKindLabel])
+	require.Equal(t, v1alpha1.KindLake, inst.OwnerKind)
+	require.Equal(t, "Lake", ctrs.records[ctrID].Labels[ownerKindLabel])
 
 	ownerless := engine
 	ownerless.OwnerKind = ""
@@ -50,13 +50,13 @@ func TestOwnerKindLabelAndConflicts(t *testing.T) {
 	fn := engine
 	fn.OwnerKind = v1alpha1.KindFunction
 	_, err = d.Create(ctx, fn)
-	require.Equal(t, fault.Conflict, fault.KindOf(err), "this driver holds the ID for a CatalogService worker")
+	require.Equal(t, fault.Conflict, fault.KindOf(err), "this driver holds the ID for a Lake worker")
 
 	restarted := &driver{cfg: Config{Logger: slog.Default()}, client: client, cni: attachedCNI{}, bootRoot: t.TempDir(), fifoDir: t.TempDir(), instances: map[runtime.InstanceID]*worker{}}
 	_, err = restarted.Create(ctx, fn)
-	require.Equal(t, fault.Conflict, fault.KindOf(err), "a leftover labelled CatalogService is not reclaimed for a Function")
+	require.Equal(t, fault.Conflict, fault.KindOf(err), "a leftover labelled Lake is not reclaimed for a Function")
 	require.Contains(t, ctrs.records, ctrID, "the other kind's leftover is kept")
-	require.Equal(t, "CatalogService", ctrs.records[ctrID].Labels[ownerKindLabel])
+	require.Equal(t, "Lake", ctrs.records[ctrID].Labels[ownerKindLabel])
 }
 
 // ADR-0152: the container IDs of the three worker shapes never meet: a solo Function worker's contains '.', a pool

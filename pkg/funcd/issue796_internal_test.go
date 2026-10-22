@@ -188,17 +188,17 @@ type gateCase struct {
 	reason  string
 }
 
-func catalogDeleted() gateCase {
+func lakeDeleted() gateCase {
 	return gateCase{
-		setup:   func(t *testing.T, r *asleepRig) { r.catalog(t) },
+		setup:   func(t *testing.T, r *asleepRig) { r.lake(t) },
 		bind:    bindLake,
-		trigger: func(t *testing.T, r *asleepRig) { r.del(t, v1.KindCatalogService, "lake") },
-		phase:   v1.PhasePending, reason: "CatalogNotReady",
+		trigger: func(t *testing.T, r *asleepRig) { r.del(t, v1.KindLake, "lake") },
+		phase:   v1.PhasePending, reason: "LakeNotReady",
 	}
 }
 
 func engineDown() gateCase {
-	g := catalogDeleted()
+	g := lakeDeleted()
 	g.trigger = func(_ *testing.T, r *asleepRig) { r.engine.down.Store(true) }
 	return g
 }
@@ -252,7 +252,7 @@ func TestIssue796(t *testing.T) {
 	t.Parallel()
 	t.Run("alone", func(t *testing.T) {
 		t.Parallel()
-		for name, g := range map[string]gateCase{"catalog-deleted": catalogDeleted(), "engine-down": engineDown(), "config-deleted": configDeleted()} {
+		for name, g := range map[string]gateCase{"lake-deleted": lakeDeleted(), "engine-down": engineDown(), "config-deleted": configDeleted()} {
 			t.Run(name, func(t *testing.T) {
 				t.Parallel()
 				newPooledRig(t, 0, 0).asleepAlone(t, g)
@@ -261,7 +261,7 @@ func TestIssue796(t *testing.T) {
 	})
 	t.Run("sibling", func(t *testing.T) {
 		t.Parallel()
-		for name, g := range map[string]gateCase{"catalog-deleted": catalogDeleted(), "config-deleted": configDeleted()} {
+		for name, g := range map[string]gateCase{"lake-deleted": lakeDeleted(), "config-deleted": configDeleted()} {
 			t.Run(name, func(t *testing.T) {
 				t.Parallel()
 				newPooledRig(t, 0, 0).asleepBesideWriter(t, g)
@@ -270,13 +270,13 @@ func TestIssue796(t *testing.T) {
 	})
 }
 
-// scenario: pooled-call-while-gated-goes-pending — a call that wakes an asleep pooled member while its catalog is
+// scenario: pooled-call-while-gated-goes-pending — a call that wakes an asleep pooled member while its lake is
 // still missing writes Deploying, then Pending with Asleep=False, never Degraded; the call is held, then refused.
 func TestScenarioPooledCallWhileGatedGoesPending(t *testing.T) {
 	t.Parallel()
 	const hold = 2 * time.Second
 	r := newPooledRig(t, 0, hold)
-	r.asleepBesideWriter(t, catalogDeleted())
+	r.asleepBesideWriter(t, lakeDeleted())
 	writes := r.phases(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -287,7 +287,7 @@ func TestScenarioPooledCallWhileGatedGoesPending(t *testing.T) {
 	require.GreaterOrEqual(t, time.Since(called), hold, "the call is held first")
 	fn := r.fn(t)
 	require.Equal(t, v1.PhasePending, fn.Status.Phase)
-	require.Equal(t, "CatalogNotReady", condition(fn, "Ready").Reason)
+	require.Equal(t, "LakeNotReady", condition(fn, "Ready").Reason)
 	require.Equal(t, v1.ConditionFalse, condition(fn, "Asleep").Status)
 	got := writes()
 	require.NotContains(t, got, v1.PhaseDegraded, "reader is never Degraded")
@@ -316,29 +316,29 @@ func (r *pooledRig) requireIdleAsleepCleared(t *testing.T) {
 	require.Zero(t, r.fn(t).Status.Replicas)
 }
 
-// scenario: pooled-dependency-returns-stays-asleep — once the catalog of an asleep pooled member alone in its pool
+// scenario: pooled-dependency-returns-stays-asleep — once the lake of an asleep pooled member alone in its pool
 // returns, it goes Idle/NoReplicas with Asleep=False and no pool worker is created until a call wakes it to Ready.
 func TestScenarioPooledDependencyReturnsStaysAsleep(t *testing.T) {
 	t.Parallel()
 	r := newPooledRig(t, 100*time.Millisecond, 0)
-	r.asleepAlone(t, catalogDeleted())
+	r.asleepAlone(t, lakeDeleted())
 	creates := r.host.poolCreates()
-	r.applyCatalog(t)
+	r.applyLake(t)
 	r.requireIdleAsleepCleared(t)
 	require.True(t, poll.Never(func() bool { return r.host.poolCreates() != creates || r.host.poolsRunning() != 0 }, time.Second,
 		20*time.Millisecond), "no pool worker is created before a call")
 	r.wakeReady(t)
 }
 
-// scenario: pooled-dependency-returns-beside-sibling — once the catalog returns, an asleep pooled member beside an
+// scenario: pooled-dependency-returns-beside-sibling — once the lake returns, an asleep pooled member beside an
 // always-on sibling goes Idle/NoReplicas with Asleep=False, is never Ready without a call and stays quiet; the sibling
 // stays Ready in the running pool worker, and a call wakes the member to Ready.
 func TestScenarioPooledDependencyReturnsBesideSibling(t *testing.T) {
 	t.Parallel()
 	r := newPooledRig(t, 100*time.Millisecond, 0)
-	r.asleepBesideWriter(t, catalogDeleted())
+	r.asleepBesideWriter(t, lakeDeleted())
 	writes := r.phases(t)
-	r.applyCatalog(t)
+	r.applyLake(t)
 	r.requireIdleAsleepCleared(t)
 	rv := r.fn(t).ResourceVersion
 	held := poll.Never(func() bool { return r.fn(t).ResourceVersion != rv }, 3*time.Second, 20*time.Millisecond)

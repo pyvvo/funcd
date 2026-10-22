@@ -12,7 +12,7 @@
 // write-only Role and one RolesAssignment per Function and step (ADR-0128 Decision 2). It synthesizes nothing else.
 //
 // Around that core: the ADR-0080/0085 S3 frontend over the blob substrate, `--persist` durable drivers (ADR-0125
-// Decision 7), the embedded process-mode DuckDB+Quack catalog engine and rqlite SQL engine, a services banner,
+// Decision 7), the embedded process-mode DuckDB+Quack lake engine and rqlite SQL engine, a services banner,
 // colorized function log streaming, fixed ports, and a polling reload (ADR-0247 Decision 8).
 package main
 
@@ -49,11 +49,11 @@ import (
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
-	"github.com/pyvvo/funcd/internal/catalog/devengine"
-	"github.com/pyvvo/funcd/internal/catalog/embedengine"
 	"github.com/pyvvo/funcd/internal/function"
 	"github.com/pyvvo/funcd/internal/kvstore"
 	kvbadger "github.com/pyvvo/funcd/internal/kvstore/badger"
+	"github.com/pyvvo/funcd/internal/lake/devengine"
+	"github.com/pyvvo/funcd/internal/lake/embedengine"
 	"github.com/pyvvo/funcd/internal/platform/observability"
 	"github.com/pyvvo/funcd/internal/platform/stopsignal"
 	"github.com/pyvvo/funcd/internal/runtime/process"
@@ -250,11 +250,11 @@ func (f *devFolder) workflowNames() []string {
 	return out
 }
 
-// catalogNames are the folder's CatalogServices, which the embedded duckdb+quack engine serves (ADR-0125 Decision 5).
-func (f *devFolder) catalogNames() []string {
+// lakeNames are the folder's Lakes, which the embedded duckdb+quack engine serves (ADR-0125 Decision 5).
+func (f *devFolder) lakeNames() []string {
 	var out []string
 	for _, d := range f.resources {
-		if d.obj.GroupVersionKind().Kind == v1.KindCatalogService {
+		if d.obj.GroupVersionKind().Kind == v1.KindLake {
 			out = append(out, string(d.obj.GetName()))
 		}
 	}
@@ -725,7 +725,7 @@ const (
 
 // printBanner prints a formatted list of every localhost service `funcdctl dev` exposes (Decision 6):
 // the gateway (invoke functions), the S3 endpoint (inspect blob) + the dev keypair, the embedded
-// catalog engine when a catalog is bound, and the loaded workflow — closing with the honest fidelity
+// lake engine when a lake is bound, and the loaded workflow — closing with the honest fidelity
 // note that egress is NOT isolated in dev (scenario: dev-egress-not-isolated).
 func (a *cli) printBanner(inst *devInstance) error {
 	// The renderer is bound to a.out, so lipgloss auto-disables color when output is piped or captured
@@ -760,9 +760,9 @@ func (a *cli) printBanner(inst *devInstance) error {
 		svc("control", inst.controlURL, "apply · workflow run — funcdctl --server <url> --token "+funcd.DevToken),
 		svc("s3", inst.s3Endpoint, "inspect blob · aws s3 ls s3://<bucket>/"),
 	}
-	if len(inst.catalogs) > 0 {
-		lines = append(lines, svc("catalog", "embedded duckdb+quack",
-			"serves: "+strings.Join(inst.catalogs, ", ")+" · DuckLake over blob"))
+	if len(inst.lakes) > 0 {
+		lines = append(lines, svc("lake", "embedded duckdb+quack",
+			"serves: "+strings.Join(inst.lakes, ", ")+" · DuckLake over blob"))
 	}
 	if inst.live != nil {
 		lines = append(lines, nameS.Render("reload")+" "+urlS.Render(inst.live.url())+" "+descS.Render("Site pages reload on a Site change"))
@@ -885,7 +885,7 @@ type devInstance struct {
 	controlURL string   // the control-plane base URL (funcdctl --server: apply, workflow run)
 	functions  []string // the Functions dev runs: each Function, then each Workflow image step's
 	workflows  []string // the folder's Workflows
-	catalogs   []string // the CatalogServices the embedded duckdb+quack engine serves; nil if none
+	lakes      []string // the Lakes the embedded duckdb+quack engine serves; nil if none
 	runtimes   *devRuntimes
 	// artifactDir, when set, runs the parts from the OCI images dev pushed, pulled into it (App mode, ADR-0253).
 	artifactDir string
@@ -973,7 +973,7 @@ func (a *cli) startPlatform(ctx context.Context, op string, folder *devFolder, p
 	}
 }
 
-// devPlatformOptions builds the embedded platform's options: the extracted shims, the catalog dev engine, the
+// devPlatformOptions builds the embedded platform's options: the extracted shims, the lake dev engine, the
 // function log stream, the fixed listen ports, the durable/ephemeral drivers and the S3 frontend. It registers
 // each cleanup on inst and closes the durable drivers itself when it fails after opening them; funcd.New owns them
 // once it is called.
@@ -992,7 +992,7 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, folder *devFold
 	}
 	inst.cleanup = append(inst.cleanup, shimCleanup)
 
-	// The process driver and the catalog engine save what they start in the state dir and reap what a crashed run
+	// The process driver and the lake engine save what they start in the state dir and reap what a crashed run
 	// left there before anything starts (ADR-0167).
 	stateDir, sderr := devStateDir(cfg, folder.dir)
 	if sderr != nil {
@@ -1029,7 +1029,7 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, folder *devFold
 		funcd.WithBlobPollInterval(cfg.pace.blobPollInterval),
 		funcd.WithFunclog(cfg.pace.segmentMaxAge, 0),
 	)
-	catOpts, caterr := devCatalogOptions(plan, stateDir, folder, inst)
+	catOpts, caterr := devLakeOptions(plan, stateDir, folder, inst)
 	if caterr != nil {
 		return nil, caterr
 	}
@@ -1089,43 +1089,43 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, folder *devFold
 	return append(opts, shimOpts...), nil
 }
 
-// devCatalogOptions wires the catalog dev engine (ADR-0125 Decision 5) when the folder holds a CatalogService or a
-// Function binds one: the process-mode DuckDB+Quack engine driver (internal/catalog/devengine) becomes the
-// CatalogService add-on-provider runtime, running the go:embed'd engine as a host subprocess (no container, no cgo). A
-// dev binary built WITHOUT the engine reports catalog-unavailable at reconcile time, not here, so `funcdctl dev` still
-// boots. It records the served catalogs and registers each cleanup on inst; no catalog ⇒ no options.
-func devCatalogOptions(plan persistPlan, stateDir string, folder *devFolder, inst *devInstance) ([]funcd.Option, error) {
-	names := folder.catalogNames()
-	if len(names) == 0 && !slices.ContainsFunc(folder.functions, func(f *devFunction) bool { return len(f.fn.Spec.Bindings.Catalog) > 0 }) {
+// devLakeOptions wires the lake dev engine (ADR-0125 Decision 5) when the folder holds a Lake or a
+// Function binds one: the process-mode DuckDB+Quack engine driver (internal/lake/devengine) becomes the
+// Lake add-on-provider runtime, running the go:embed'd engine as a host subprocess (no container, no cgo). A
+// dev binary built WITHOUT the engine reports lake-unavailable at reconcile time, not here, so `funcdctl dev` still
+// boots. It records the served lakes and registers each cleanup on inst; no lake ⇒ no options.
+func devLakeOptions(plan persistPlan, stateDir string, folder *devFolder, inst *devInstance) ([]funcd.Option, error) {
+	names := folder.lakeNames()
+	if len(names) == 0 && !slices.ContainsFunc(folder.functions, func(f *devFunction) bool { return len(f.fn.Spec.Bindings.Lake) > 0 }) {
 		return nil, nil
 	}
-	inst.catalogs = names
+	inst.lakes = names
 	// Under --persist, the DuckLake SQLite catalog lives in a durable per-provider dir (mirroring the
 	// metastore) so a dev restart reopens it; ephemeral otherwise.
 	catOpts := []devengine.Option{devengine.WithStateDir(stateDir)}
-	if plan.catalogDir != "" {
-		catOpts = append(catOpts, devengine.WithCatalogDir(plan.catalogDir))
+	if plan.lakeDir != "" {
+		catOpts = append(catOpts, devengine.WithLakeDir(plan.lakeDir))
 	}
 	catEngine, err := devengine.New(inst.logger, catOpts...)
 	if err != nil {
-		return nil, fault.Wrapf(err, fault.KindOf(err), "funcdctl dev", "start the catalog engine runtime in %s", stateDir)
+		return nil, fault.Wrapf(err, fault.KindOf(err), "funcdctl dev", "start the lake engine runtime in %s", stateDir)
 	}
-	opts := []funcd.Option{funcd.WithCatalogProviderRuntime(catEngine)}
+	opts := []funcd.Option{funcd.WithLakeProviderRuntime(catEngine)}
 	inst.cleanup = append(inst.cleanup, catEngine.StopAll)
 
-	// A catalog CONSUMER handler runs its own duckdb (from the dev venv) and must LOAD the curated
+	// A lake CONSUMER handler runs its own duckdb (from the dev venv) and must LOAD the curated
 	// quack/ducklake extensions — in prod those ride the bundle's duckdb-ext (ADR-0089), absent when
 	// running from source. Extract the embedded engine's extensions once and point consumers at them
-	// via DUCKDB_EXTENSION_DIRECTORY (ADR-0125 dev-catalog-query). A placeholder build (no engine)
+	// via DUCKDB_EXTENSION_DIRECTORY (ADR-0125 dev-lake-query). A placeholder build (no engine)
 	// skips it — the same not-bundled path the provider engine reports at reconcile time.
 	if embedengine.Bundled() {
 		if extRoot, xerr := os.MkdirTemp("", "funcd-dev-duckdb-ext-*"); xerr == nil {
 			if paths, perr := embedengine.Extract(extRoot); perr == nil {
-				opts = append(opts, funcd.WithCatalogExtensionDir(paths.ExtensionDir))
+				opts = append(opts, funcd.WithLakeExtensionDir(paths.ExtensionDir))
 				inst.cleanup = append(inst.cleanup, func() { _ = os.RemoveAll(extRoot) })
 			} else {
 				_ = os.RemoveAll(extRoot)
-				inst.logger.Warn("could not extract catalog extensions for consumers", "err", perr)
+				inst.logger.Warn("could not extract lake extensions for consumers", "err", perr)
 			}
 		}
 	}
@@ -1175,7 +1175,7 @@ func checkFixedPorts(op string, cfg devConfig) error {
 func pruneStale(ctx context.Context, c *sdk.Client, desired []v1.Object, logger *slog.Logger) ([]v1.Object, error) {
 	var prev []v1.Object
 	for _, kind := range []v1.Kind{
-		v1.KindKVStore, v1.KindBucket, v1.KindSQLDatabase, v1.KindSecret, v1.KindCatalogService, v1.KindConfigMap,
+		v1.KindKVStore, v1.KindBucket, v1.KindSQLDatabase, v1.KindSecret, v1.KindLake, v1.KindConfigMap,
 		v1.KindRole, v1.KindRolesAssignment, v1.KindPolicy, v1.KindEgressPolicy, v1.KindFunction, v1.KindWorkflow,
 		v1.KindRoute, v1.KindEventSource, v1.KindSensor, v1.KindSite,
 	} {
@@ -1253,21 +1253,21 @@ func freeLocalAddr() (string, error) {
 // persistPlan is the resolved durable-driver layout (ADR-0125 Decision 7): an empty dir for a kind means
 // "keep the ephemeral memory driver". Dirs are absolute, per-service subdirs of the persist root.
 type persistPlan struct {
-	storeDir   string // durable metastore (Badger); "" ⇒ memory
-	kvDir      string // durable function KV (Badger); "" ⇒ memory
-	blobDir    string // durable blob (fileblob); "" ⇒ mem://
-	catalogDir string // durable DuckLake SQLite catalog root (devengine); "" ⇒ ephemeral temp
-	sqlDir     string // durable SQL engines' data root (ADR-0237); "" ⇒ ephemeral temp
-	bundleDir  string // isolated functions' bundles, the same path on every run (#1053); "" ⇒ a temp dir per run
+	storeDir  string // durable metastore (Badger); "" ⇒ memory
+	kvDir     string // durable function KV (Badger); "" ⇒ memory
+	blobDir   string // durable blob (fileblob); "" ⇒ mem://
+	lakeDir   string // durable DuckLake SQLite catalog root (devengine); "" ⇒ ephemeral temp
+	sqlDir    string // durable SQL engines' data root (ADR-0237); "" ⇒ ephemeral temp
+	bundleDir string // isolated functions' bundles, the same path on every run (#1053); "" ⇒ a temp dir per run
 }
 
 // watchSkips are the dirs the hot-reload watcher never walks, since the session writes them while it runs: the durable
 // state, the isolated bundles and processDir.
 func (p persistPlan) watchSkips(processDir string) []string {
-	return []string{p.storeDir, p.kvDir, p.blobDir, p.catalogDir, p.sqlDir, p.bundleDir, processDir}
+	return []string{p.storeDir, p.kvDir, p.blobDir, p.lakeDir, p.sqlDir, p.bundleDir, processDir}
 }
 
-// devStateDir is where `funcdctl dev` saves the workers and catalog engines it starts (ADR-0167): <persist-to>/process
+// devStateDir is where `funcdctl dev` saves the workers and lake engines it starts (ADR-0167): <persist-to>/process
 // under --persist; otherwise there is no data dir, so a per-project dir in the user cache dir, named by the first 16
 // hex digits of the sha256 of the absolute project dir.
 func devStateDir(cfg devConfig, projectDir string) (string, error) {
@@ -1315,12 +1315,12 @@ func resolvePersistPlan(cfg devConfig) (persistPlan, error) {
 		return persistPlan{}, fault.Wrapf(err, fault.Internal, op, "resolve persist dir %q", root)
 	}
 	return persistPlan{
-		storeDir:   filepath.Join(absRoot, "metastore"),
-		kvDir:      filepath.Join(absRoot, "kv"),
-		blobDir:    filepath.Join(absRoot, "blob"),
-		catalogDir: filepath.Join(absRoot, "catalog"),
-		sqlDir:     filepath.Join(absRoot, "sql"),
-		bundleDir:  filepath.Join(absRoot, "bundles"),
+		storeDir:  filepath.Join(absRoot, "metastore"),
+		kvDir:     filepath.Join(absRoot, "kv"),
+		blobDir:   filepath.Join(absRoot, "blob"),
+		lakeDir:   filepath.Join(absRoot, "lake"),
+		sqlDir:    filepath.Join(absRoot, "sql"),
+		bundleDir: filepath.Join(absRoot, "bundles"),
 	}, nil
 }
 

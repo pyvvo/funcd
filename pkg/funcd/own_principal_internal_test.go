@@ -48,11 +48,11 @@ func lakeFunction(ns v1.NamespaceName, blob ...v1.FunctionBlob) *v1.Function {
 	return fn
 }
 
-// lakeCatalogService is CatalogService lake bound to lakehouse/raw, its catalog prefix.
-func lakeCatalogService(ns v1.NamespaceName) *v1.CatalogService {
-	cs := &v1.CatalogService{TypeMeta: v1.TypeMeta{APIVersion: v1.KindCatalogService.GVK().APIVersion(), Kind: v1.KindCatalogService}}
+// lakeResource is Lake lake bound to lakehouse/raw, its lake prefix.
+func lakeResource(ns v1.NamespaceName) *v1.Lake {
+	cs := &v1.Lake{TypeMeta: v1.TypeMeta{APIVersion: v1.KindLake.GVK().APIVersion(), Kind: v1.KindLake}}
 	cs.Name, cs.Namespace, cs.ResourceGroup = "lake", ns, "rg1"
-	cs.Spec = v1.CatalogServiceSpec{Catalog: v1.CatalogRef{Bucket: "lakehouse", Prefix: "raw"}, Bindings: v1.CatalogServiceBindings{Blob: []v1.FunctionBlob{{Alias: "raw", Bucket: "lakehouse", Prefix: "raw"}}},
+	cs.Spec = v1.LakeSpec{Location: v1.LakeLocation{Bucket: "lakehouse", Prefix: "raw"}, Bindings: v1.LakeBindings{Blob: []v1.FunctionBlob{{Alias: "raw", Bucket: "lakehouse", Prefix: "raw"}}},
 		Buckets: []v1.BucketEntry{{Ref: "lakehouse"}}}
 	return cs
 }
@@ -96,11 +96,11 @@ func egressPlatform(t *testing.T, st store.Store, rt runtime.Runtime) (*Platform
 	return p, pdp
 }
 
-// scenario: engine-egress-is-catalogservice — the egress index maps each worker to the principal of its owner
-// kind: with Function and CatalogService lake in one namespace, an EgressPolicy (whole-namespace, or appliesTo
+// scenario: engine-egress-is-lake — the egress index maps each worker to the principal of its owner
+// kind: with Function and Lake lake in one namespace, an EgressPolicy (whole-namespace, or appliesTo
 // [lake]) allows the Function and denies the engine, audited under its name; in a namespace with only
-// CatalogService lake the engine is indexed, denied and audited, not an unknown source.
-func TestScenarioEngineEgressIsCatalogService(t *testing.T) {
+// Lake lake the engine is indexed, denied and audited, not an unknown source.
+func TestScenarioEngineEgressIsLake(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name      string
@@ -109,10 +109,10 @@ func TestScenarioEngineEgressIsCatalogService(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			st := store.New(memory.New())
-			seedObjects(t, st, lakeFunction("acme"), lakeCatalogService("acme"), egressToExample("acme", tc.appliesTo...))
+			seedObjects(t, st, lakeFunction("acme"), lakeResource("acme"), egressToExample("acme", tc.appliesTo...))
 			rt := &recordingRuntime{insts: map[runtime.InstanceID]runtime.Instance{}}
 			runningWorker(rt, "acme", "lake", v1.KindFunction, "10.63.0.2")
-			runningWorker(rt, "acme", "lake", v1.KindCatalogService, "10.63.0.3")
+			runningWorker(rt, "acme", "lake", v1.KindLake, "10.63.0.3")
 			p, pdp := egressPlatform(t, st, rt)
 
 			fnRef, _ := p.egressWorkers.Lookup(netip.MustParseAddr("10.63.0.2"))
@@ -120,18 +120,18 @@ func TestScenarioEngineEgressIsCatalogService(t *testing.T) {
 			require.True(t, egressConnect(t, p, pdp, "10.63.0.2").Allowed, "the Function egresses with its grant")
 
 			engineRef, _ := p.egressWorkers.Lookup(netip.MustParseAddr("10.63.0.3"))
-			require.Equal(t, auth.EntityRef{Type: v1.KindCatalogService, Namespace: "acme", Name: "lake"}, engineRef)
+			require.Equal(t, auth.EntityRef{Type: v1.KindLake, Namespace: "acme", Name: "lake"}, engineRef)
 			rec := egressConnect(t, p, pdp, "10.63.0.3")
 			require.False(t, rec.Allowed, "no EgressPolicy grant reaches the engine")
 			require.Equal(t, "lake", rec.Function)
 		})
 	}
-	t.Run("only a CatalogService in the namespace", func(t *testing.T) {
+	t.Run("only a Lake in the namespace", func(t *testing.T) {
 		t.Parallel()
 		st := store.New(memory.New())
-		seedObjects(t, st, lakeCatalogService("solo"), egressToExample("solo"))
+		seedObjects(t, st, lakeResource("solo"), egressToExample("solo"))
 		rt := &recordingRuntime{insts: map[runtime.InstanceID]runtime.Instance{}}
-		runningWorker(rt, "solo", "lake", v1.KindCatalogService, "10.63.0.4")
+		runningWorker(rt, "solo", "lake", v1.KindLake, "10.63.0.4")
 		runningWorker(rt, "solo", "stray", v1.KindIdentity, "10.63.0.5")
 		p, pdp := egressPlatform(t, st, rt)
 
@@ -142,28 +142,28 @@ func TestScenarioEngineEgressIsCatalogService(t *testing.T) {
 		_, ok := p.egressWorkers.Lookup(netip.MustParseAddr("10.63.0.5"))
 		require.False(t, ok, "a worker of another owner kind is not indexed")
 	})
-	t.Run("a failed CatalogService list keeps the index", func(t *testing.T) {
+	t.Run("a failed Lake list keeps the index", func(t *testing.T) {
 		t.Parallel()
 		st := store.New(memory.New())
-		seedObjects(t, st, lakeCatalogService("solo"))
+		seedObjects(t, st, lakeResource("solo"))
 		rt := &recordingRuntime{insts: map[runtime.InstanceID]runtime.Instance{}}
-		runningWorker(rt, "solo", "lake", v1.KindCatalogService, "10.63.0.4")
+		runningWorker(rt, "solo", "lake", v1.KindLake, "10.63.0.4")
 		p := &Platform{cfg: &config{store: st, runtime: rt}, egressWorkers: egress.NewMemoryWorkerIndex()}
 		prev := p.reconcileEgressWorkers(context.Background(), map[netip.Addr]auth.EntityRef{})
 
-		p.cfg.store = catalogListFails{st}
+		p.cfg.store = lakeListFails{st}
 		require.Equal(t, prev, p.reconcileEgressWorkers(context.Background(), prev))
 		ref, ok := p.egressWorkers.Lookup(netip.MustParseAddr("10.63.0.4"))
 		require.True(t, ok, "the engine stays indexed")
-		require.Equal(t, v1.KindCatalogService, ref.Type)
+		require.Equal(t, v1.KindLake, ref.Type)
 	})
 }
 
-type catalogListFails struct{ store.Store }
+type lakeListFails struct{ store.Store }
 
-func (s catalogListFails) List(ctx context.Context, gvk v1.GroupVersionKind, opts store.ListOptions) (store.List, error) {
-	if gvk.Kind == v1.KindCatalogService {
-		return store.List{}, fault.Unavailablef("catalogListFails", "list %s", gvk.Kind)
+func (s lakeListFails) List(ctx context.Context, gvk v1.GroupVersionKind, opts store.ListOptions) (store.List, error) {
+	if gvk.Kind == v1.KindLake {
+		return store.List{}, fault.Unavailablef("lakeListFails", "list %s", gvk.Kind)
 	}
 	return s.Store.List(ctx, gvk, opts)
 }
@@ -174,7 +174,7 @@ func (fixedMaterializer) Materialize(context.Context, *v1.Function) (string, err
 	return "/art/app.mjs", nil
 }
 
-// scenario: keys-reissued-on-upgrade — on a fresh runtime the Function and catalog reconcilers re-create Function
+// scenario: keys-reissued-on-upgrade — on a fresh runtime the Function and lake reconcilers re-create Function
 // lake and engine lake; each worker's env key is the keypair derived for its own kind and authenticates at the
 // gateway.
 func TestScenarioKeysReissuedOnUpgrade(t *testing.T) {
@@ -194,7 +194,7 @@ func TestScenarioKeysReissuedOnUpgrade(t *testing.T) {
 	fn.Spec.Image = "file:///art/app.mjs"
 	fn.Spec.Handler = "app.handler"
 	fn.Spec.Scaling.MinReplicas = 1
-	seedObjects(t, p.cfg.store, bucket, fn, lakeCatalogService("default"))
+	seedObjects(t, p.cfg.store, bucket, fn, lakeResource("default"))
 
 	view, ok := s3BucketFor(p.cfg.blob, p.cfg.store)("default", "lakehouse")
 	require.True(t, ok)
@@ -207,7 +207,7 @@ func TestScenarioKeysReissuedOnUpgrade(t *testing.T) {
 		kind v1.Kind
 		key  string
 		want string
-	}{{v1.KindFunction, "a/x", "fn"}, {v1.KindCatalogService, "raw/x", "engine"}} {
+	}{{v1.KindFunction, "a/x", "fn"}, {v1.KindLake, "raw/x", "engine"}} {
 		var spec runtime.WorkerSpec
 		require.Eventually(t, func() bool {
 			for _, ws := range rt.created()["lake"] {

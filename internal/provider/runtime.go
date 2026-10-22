@@ -43,7 +43,7 @@ type Deps struct {
 	Logger  *slog.Logger
 	// HTTPClient probes ReadinessProbe; nil ⇒ a node client bounded by ProbeTimeout.
 	HTTPClient *http.Client
-	// ProbeTimeout bounds one readiness probe (catalog.engineProbeTimeout, ADR-0163); 0 ⇒ defaultProbeTimeout. Ignored
+	// ProbeTimeout bounds one readiness probe (lake.engineProbeTimeout, ADR-0163); 0 ⇒ defaultProbeTimeout. Ignored
 	// when HTTPClient is set.
 	ProbeTimeout time.Duration
 	// StorageRoot is the root of the engines' durable directories (ADR-0231); "" ⇒ no durable storage, so a spec with
@@ -263,7 +263,7 @@ func (r *engineRuntime) namedInstances(ctx context.Context, ref ProviderRef) ([]
 // replaces the WHOLE live route table. A per-provider Converge that programs only ITS own route
 // would clobber every other provider's (and every function's) route. The clean fix is that the
 // CALLER aggregates the full provider-route set and programs it once; for ADR-0087 the live lane
-// runs exactly one provider (the F48 CatalogService, which today programs no Route at all — it is
+// runs exactly one provider (the F48 Lake, which today programs no Route at all — it is
 // internal-only), so this is not yet exercised. TODO(ADR-0087 follow-up): an aggregation seam (or a
 // non-replace-all gateway op) so multiple ingress-exposed providers + functions coexist. This is
 // NOT solved here — it is documented and deferred.

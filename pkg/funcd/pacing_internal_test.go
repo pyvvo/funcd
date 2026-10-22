@@ -180,7 +180,7 @@ func TestScenarioControllerKeysPaceTheControlPlane(t *testing.T) {
 		require.Equal(t, 100*time.Millisecond, res.RequeueAfter, "a WorkflowRun whose Workflow is missing")
 
 		require.Equal(t, 100*time.Millisecond, durationAt(reconcilerOf(p, v1.KindFunction), "referentPoll"))
-		require.Equal(t, 100*time.Millisecond, durationAt(reconcilerOf(p, v1.KindCatalogService), "referentPoll"))
+		require.Equal(t, 100*time.Millisecond, durationAt(reconcilerOf(p, v1.KindLake), "referentPoll"))
 		require.Equal(t, 100*time.Millisecond, durationAt(reconcilerOf(p, v1.KindSite), "routeRequeue"))
 	})
 	t.Run("routeResyncInterval", func(t *testing.T) {
@@ -240,7 +240,7 @@ func TestScenarioRuntimeKeysPaceSupervisionBootAndDrain(t *testing.T) {
 			p := pacedPlatform(t, k.p)
 			require.Equal(t, k.want, durationAt(reconcilerOf(p, v1.KindFunction), k.field))
 			if k.name == "supervisionPeriod" {
-				require.Equal(t, k.want, durationAt(reconcilerOf(p, v1.KindCatalogService), "period"))
+				require.Equal(t, k.want, durationAt(reconcilerOf(p, v1.KindLake), "period"))
 				require.Equal(t, k.want, durationAt(reconcilerOf(p, v1.KindIdentity), "period"))
 				require.Equal(t, k.want, durationAt(reconcilerOf(p, v1.KindWorkflow), "mat", "supervisionPeriod"))
 				require.Equal(t, k.want, durationAt(reconcilerOf(p, v1.KindFunction), "referentPoll"), "the referent wait stays within the period")
@@ -249,17 +249,17 @@ func TestScenarioRuntimeKeysPaceSupervisionBootAndDrain(t *testing.T) {
 	}
 }
 
-// scenario: catalog-keys-pace-the-engine-wait.
-func TestScenarioCatalogKeysPaceTheEngineWait(t *testing.T) {
+// scenario: lake-keys-pace-the-engine-wait.
+func TestScenarioLakeKeysPaceTheEngineWait(t *testing.T) {
 	t.Run("enginePollInterval", func(t *testing.T) {
 		p := pacedPlatform(t, Pacing{EnginePollInterval: 200 * time.Millisecond})
-		require.Equal(t, 200*time.Millisecond, durationAt(reconcilerOf(p, v1.KindCatalogService), "enginePoll"))
+		require.Equal(t, 200*time.Millisecond, durationAt(reconcilerOf(p, v1.KindLake), "enginePoll"))
 		q := pacedPlatform(t, Pacing{EnginePollInterval: 20 * time.Second})
-		require.Equal(t, 10*time.Second, durationAt(reconcilerOf(q, v1.KindCatalogService), "enginePoll"), "bounded by the supervision period")
+		require.Equal(t, 10*time.Second, durationAt(reconcilerOf(q, v1.KindLake), "enginePoll"), "bounded by the supervision period")
 	})
 	t.Run("engineProbeTimeout", func(t *testing.T) {
 		p := pacedPlatform(t, Pacing{EngineProbeTimeout: 100 * time.Millisecond})
-		require.Equal(t, 100*time.Millisecond, durationAt(reconcilerOf(p, v1.KindCatalogService), "prov", "httpClient", "Timeout"))
+		require.Equal(t, 100*time.Millisecond, durationAt(reconcilerOf(p, v1.KindLake), "prov", "httpClient", "Timeout"))
 	})
 }
 

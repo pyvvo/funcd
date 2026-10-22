@@ -83,6 +83,8 @@ func TestKindFromToken(t *testing.T) {
 		"namespaces":     v1.KindNamespace,
 		"egresspolicies": v1.KindEgressPolicy,
 		"runtimeclasses": v1.KindRuntimeClass,
+		"lakes":          v1.KindLake,
+		"lake":           v1.KindLake,
 	}
 	for token, want := range cases {
 		got, ok := KindFromToken(token)
@@ -92,6 +94,10 @@ func TestKindFromToken(t *testing.T) {
 	}
 	if _, ok := KindFromToken("frobnicate"); ok {
 		t.Errorf("KindFromToken(unknown) should be !ok")
+	}
+	// ADR-0261: the kind before the rename is no token any more.
+	if _, ok := KindFromToken("catalogservice"); ok {
+		t.Errorf("KindFromToken(catalogservice) should be !ok")
 	}
 }
 

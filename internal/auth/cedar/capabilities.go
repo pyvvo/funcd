@@ -26,8 +26,8 @@ var builtinInvokePolicies string
 //go:embed builtin_s3.cedar
 var builtinS3Policies string
 
-//go:embed builtin_catalog.cedar
-var builtinCatalogPolicies string
+//go:embed builtin_lake.cedar
+var builtinLakePolicies string
 
 //go:embed builtin_sql.cedar
 var builtinSQLPolicies string
@@ -68,12 +68,12 @@ func identityUID(ns v1.NamespaceName, name v1.ObjectName) cedartypes.EntityUID {
 	return cedartypes.NewEntityUID(entityTypeIdentity, cedartypes.String(string(ns)+"/"+string(name)))
 }
 
-// catalogServiceUID is the CatalogService UID for a (namespace, catalog) serving-layer resource
-// (ADR-0137): CatalogService::"<ns>/<catalog>". It mirrors bucketUID's shape so a `catalogBindings`
-// member and the request resource UID are byte-identical and `principal.catalogBindings.contains(resource)`
+// lakeUID is the Lake UID for a (namespace, lake) serving-layer resource
+// (ADR-0137): Lake::"<ns>/<lake>". It mirrors bucketUID's shape so a `lakeBindings`
+// member and the request resource UID are byte-identical and `principal.lakeBindings.contains(resource)`
 // matches.
-func catalogServiceUID(ns v1.NamespaceName, name v1.ObjectName) cedartypes.EntityUID {
-	return cedartypes.NewEntityUID(entityTypeCatalogService, cedartypes.String(string(ns)+"/"+string(name)))
+func lakeUID(ns v1.NamespaceName, name v1.ObjectName) cedartypes.EntityUID {
+	return cedartypes.NewEntityUID(entityTypeLake, cedartypes.String(string(ns)+"/"+string(name)))
 }
 
 // sqlDatabaseUID is the SQLDatabase UID (ADR-0233): SQLDatabase::"<ns>/<database>", byte-identical to a
@@ -228,7 +228,7 @@ func invokeResource(_ context.Context, _ MetaReader, resource auth.EntityRef) (c
 // S3Capability is the s3::read/s3::write capability (ADR-0080): spec.bindings.blob → the `blobBindings` Set of
 // BlobPrefix entity-refs (read binding-as-grant); the resource is the BlobPrefix + its parent Bucket +
 // the prefix owner (a Function entity-REFERENCE). Its Bind handles BOTH a *v1.Function and a
-// *v1.CatalogService (ADR-0088 — both carry spec.bindings.blob). It admits the external S3Identity principal type.
+// *v1.Lake (ADR-0088 — both carry spec.bindings.blob). It admits the external S3Identity principal type.
 func S3Capability() Capability { return s3Capability(builtinS3Policies, nil) }
 
 // S3CapabilityWithWriters is S3Capability with a WriterLister so a writer-role RolesAssignment (ADR-0136)
@@ -255,7 +255,7 @@ func s3Capability(builtin string, writers WriterLister) Capability {
 				switch o := src.(type) {
 				case *v1.Function:
 					blobs = o.Spec.Bindings.Blob
-				case *v1.CatalogService:
+				case *v1.Lake:
 					blobs = o.Spec.Bindings.Blob // ADR-0088: a provider's spec.bindings.blob are its blobBindings
 				default:
 					return nil
@@ -307,7 +307,7 @@ func s3Resource(ctx context.Context, r MetaReader, resource auth.EntityRef, writ
 		"resourceGroup": cedartypes.String(bkt.ResourceGroup),
 	}
 	// writers is the set of principals authorized to WRITE this prefix (ADR-0136 generalized single-writer):
-	// the legacy owner (a Function ref — back-compat), the same-named CatalogService when it binds the prefix and
+	// the legacy owner (a Function ref — back-compat), the same-named Lake when it binds the prefix and
 	// no Function holds the name (ADR-0175), PLUS any writer-role RolesAssignment grants. An empty
 	// writers ⇒ the forbid fires (owner-less/unassigned ⇒ unwritable, default-deny). Type-agnostic: a role
 	// grant can make an external Identity a writer.
@@ -319,8 +319,8 @@ func s3Resource(ctx context.Context, r MetaReader, resource auth.EntityRef, writ
 			ownerUID := functionUID(bkt.Namespace, pfx.Owner)
 			prefixAttrs["owner"] = ownerUID
 			writerVals = append(writerVals, ownerUID)
-			if catalogServiceOwnsPrefix(ctx, r, bkt.Namespace, pfx.Owner, resource.Name, resource.Path) {
-				writerVals = append(writerVals, catalogServiceUID(bkt.Namespace, pfx.Owner))
+			if lakeOwnsPrefix(ctx, r, bkt.Namespace, pfx.Owner, resource.Name, resource.Path) {
+				writerVals = append(writerVals, lakeUID(bkt.Namespace, pfx.Owner))
 			}
 			break
 		}
@@ -341,19 +341,19 @@ func s3Resource(ctx context.Context, r MetaReader, resource auth.EntityRef, writ
 	return em, true, nil
 }
 
-// catalogServiceOwnsPrefix reports whether the prefix owner name resolves to a CatalogService writer
-// (ADR-0175 Decision 6): CatalogService owner exists, its spec.bindings.blob binds (bucket, prefix), and no Function
+// lakeOwnsPrefix reports whether the prefix owner name resolves to a Lake writer
+// (ADR-0175 Decision 6): Lake owner exists, its spec.bindings.blob binds (bucket, prefix), and no Function
 // owner exists. Every lookup that errors or misses answers false; a Function lookup error other than
 // NotFound counts as "a Function may exist".
-func catalogServiceOwnsPrefix(ctx context.Context, r MetaReader, ns v1.NamespaceName, owner, bucket v1.ObjectName, prefix string) bool {
+func lakeOwnsPrefix(ctx context.Context, r MetaReader, ns v1.NamespaceName, owner, bucket v1.ObjectName, prefix string) bool {
 	if _, err := r.Get(ctx, v1.KindFunction.GVK(), ns, owner); fault.KindOf(err) != fault.NotFound {
 		return false
 	}
-	obj, err := r.Get(ctx, v1.KindCatalogService.GVK(), ns, owner)
+	obj, err := r.Get(ctx, v1.KindLake.GVK(), ns, owner)
 	if err != nil {
 		return false
 	}
-	cs, ok := obj.(*v1.CatalogService)
+	cs, ok := obj.(*v1.Lake)
 	if !ok {
 		return false
 	}
@@ -365,46 +365,46 @@ func catalogServiceOwnsPrefix(ctx context.Context, r MetaReader, ns v1.Namespace
 	return false
 }
 
-// CatalogCapability is the catalog::query capability (ADR-0137): spec.bindings.catalog → the `catalogBindings`
-// Set of CatalogService entity-refs (binding-as-query-grant); the resource is the CatalogService the
+// LakeCapability is the lake::query capability (ADR-0137): spec.bindings.lake → the `lakeBindings`
+// Set of Lake entity-refs (binding-as-query-grant); the resource is the Lake the
 // query targets. It is READ-SHAPED — like invoke it owns no writable resource, so there is NO
-// WriterLister and NO write action; the built-in permit reads principal.catalogBindings, not the
+// WriterLister and NO write action; the built-in permit reads principal.lakeBindings, not the
 // resource's attrs, so default-deny holds even if the target is missing. External Identities are
-// granted via a Catalog-scoped RolesAssignment (compiled to a permit), not this built-in.
-func CatalogCapability() Capability {
+// granted via a Lake-scoped RolesAssignment (compiled to a permit), not this built-in.
+func LakeCapability() Capability {
 	return Capability{
-		Name:            "catalog",
-		Actions:         []auth.Action{auth.ActionCatalogQuery},
-		EmitsEntityType: entityTypeCatalogService,
-		Resource:        catalogResource,
+		Name:            "lake",
+		Actions:         []auth.Action{auth.ActionLakeQuery},
+		EmitsEntityType: entityTypeLake,
+		Resource:        lakeResource,
 		PrincipalBinding: PrincipalBinding{
-			Attr: "catalogBindings",
+			Attr: "lakeBindings",
 			Bind: func(ns v1.NamespaceName, src PrincipalObject) []cedartypes.EntityUID {
 				fn, ok := src.(*v1.Function)
 				if !ok {
-					return nil // providers have no spec.bindings.catalog → contribute nothing (inert)
+					return nil // providers have no spec.bindings.lake → contribute nothing (inert)
 				}
-				out := make([]cedartypes.EntityUID, 0, len(fn.Spec.Bindings.Catalog))
-				for _, b := range fn.Spec.Bindings.Catalog {
-					out = append(out, catalogServiceUID(ns, b.Catalog))
+				out := make([]cedartypes.EntityUID, 0, len(fn.Spec.Bindings.Lake))
+				for _, b := range fn.Spec.Bindings.Lake {
+					out = append(out, lakeUID(ns, b.Lake))
 				}
 				return out
 			},
 		},
-		Builtin: builtinCatalogPolicies,
+		Builtin: builtinLakePolicies,
 	}
 }
 
-// catalogResource materializes the target CatalogService as a bare entity carrying its namespace attr
+// lakeResource materializes the target Lake as a bare entity carrying its namespace attr
 // (ADR-0137) — the exact invokeResource mirror. The namespace attr backs a Namespace-scoped
 // RolesAssignment grant (resource.namespace == "<ns>"); the built-in binding permit needs only the UID.
-// ok==false for a non-CatalogService resource (defer to the next capability); no MetaReader read — a
-// missing CatalogService still yields an evaluable bare entity (default-deny).
-func catalogResource(_ context.Context, _ MetaReader, resource auth.EntityRef) (cedartypes.EntityMap, bool, error) {
-	if resource.Type != v1.KindCatalogService {
+// ok==false for a non-Lake resource (defer to the next capability); no MetaReader read — a
+// missing Lake still yields an evaluable bare entity (default-deny).
+func lakeResource(_ context.Context, _ MetaReader, resource auth.EntityRef) (cedartypes.EntityMap, bool, error) {
+	if resource.Type != v1.KindLake {
 		return nil, false, nil
 	}
-	rUID := catalogServiceUID(resource.Namespace, resource.Name)
+	rUID := lakeUID(resource.Namespace, resource.Name)
 	em := cedartypes.EntityMap{
 		rUID: {UID: rUID, Attributes: cedartypes.NewRecord(cedartypes.RecordMap{"namespace": cedartypes.String(resource.Namespace)})},
 	}
@@ -434,23 +434,23 @@ func FunctionPrincipalSource() PrincipalSource {
 	}
 }
 
-// CatalogServicePrincipalSource resolves a CatalogService principal's backing *v1.CatalogService (ADR-0088,
+// LakePrincipalSource resolves a Lake principal's backing *v1.Lake (ADR-0088,
 // ADR-0175): an engine is its own principal, never a same-named Function. Its spec.bindings.blob are its
 // blobBindings; it has no links/kv.
-func CatalogServicePrincipalSource() PrincipalSource {
+func LakePrincipalSource() PrincipalSource {
 	return func(ctx context.Context, r MetaReader, p auth.EntityRef) (PrincipalObject, bool, error) {
-		const op = "cedar.CatalogServicePrincipalSource"
-		if p.Type != v1.KindCatalogService {
+		const op = "cedar.LakePrincipalSource"
+		if p.Type != v1.KindLake {
 			return nil, false, nil
 		}
-		obj, err := r.Get(ctx, v1.KindCatalogService.GVK(), p.Namespace, p.Name)
+		obj, err := r.Get(ctx, v1.KindLake.GVK(), p.Namespace, p.Name)
 		if err != nil {
 			if fault.KindOf(err) == fault.NotFound {
 				return nil, false, nil
 			}
-			return nil, false, fault.Wrapf(err, fault.Internal, op, "get catalogservice %q", p.Name)
+			return nil, false, fault.Wrapf(err, fault.Internal, op, "get lake %q", p.Name)
 		}
-		cs, ok := obj.(*v1.CatalogService)
+		cs, ok := obj.(*v1.Lake)
 		if !ok {
 			return nil, false, nil
 		}
@@ -522,7 +522,7 @@ func SQLCapabilityWithWriters(w WriterLister) Capability { return sqlCapability(
 
 // bindFunction is a PrincipalBinding.Bind over a Function's bindings, one entity per binding; a principal that is not a
 // Function contributes nothing.
-func bindFunction[B v1.FunctionSQL | v1.FunctionCatalog | v1.FunctionLink](bindings func(*v1.Function) []B, uid func(v1.NamespaceName, B) cedartypes.EntityUID) func(v1.NamespaceName, PrincipalObject) []cedartypes.EntityUID {
+func bindFunction[B v1.FunctionSQL | v1.FunctionLake | v1.FunctionLink](bindings func(*v1.Function) []B, uid func(v1.NamespaceName, B) cedartypes.EntityUID) func(v1.NamespaceName, PrincipalObject) []cedartypes.EntityUID {
 	return func(ns v1.NamespaceName, src PrincipalObject) []cedartypes.EntityUID {
 		fn, ok := src.(*v1.Function)
 		if !ok {

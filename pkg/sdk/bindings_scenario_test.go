@@ -11,7 +11,7 @@ import (
 
 // TestScenario_bindings_under_spec covers scenario: bindings-under-spec (ADR-0246) — every binding kind is read from
 // spec.bindings, named like its ctx accessor. The e2e suite proves each one reaches ctx: kv (kv_e2e_test.go), blob
-// (blob_e2e_test.go), sql (sql e2e tests), links (invoke_e2e_test.go), catalog, config and secret (the env tests).
+// (blob_e2e_test.go), sql (sql e2e tests), links (invoke_e2e_test.go), lake, config and secret (the env tests).
 func TestScenario_bindings_under_spec(t *testing.T) {
 	t.Parallel()
 	obj, err := sdk.DecodeManifest([]byte(`apiVersion: funcd.io/v1alpha1
@@ -35,9 +35,9 @@ spec:
     sql:
       - alias: db
         database: todo-db
-    catalog:
+    lake:
       - alias: lake
-        catalog: lake
+        lake: lake
     links:
       - alias: greeter
         target: greeter
@@ -48,12 +48,12 @@ spec:
 `))
 	require.NoError(t, err)
 	require.Equal(t, v1.FunctionBindings{
-		KV:      []v1.FunctionKV{{Alias: "counters", Store: "counters", Table: "counts"}},
-		Blob:    []v1.FunctionBlob{{Alias: "files", Bucket: "files", Prefix: "uploads"}},
-		SQL:     []v1.FunctionSQL{{Alias: "db", Database: "todo-db"}},
-		Catalog: []v1.FunctionCatalog{{Alias: "lake", Catalog: "lake"}},
-		Links:   []v1.FunctionLink{{Alias: "greeter", Target: "greeter"}},
-		Config:  []v1.ObjectName{"settings"},
-		Secret:  []v1.ObjectName{"api-keys"},
+		KV:     []v1.FunctionKV{{Alias: "counters", Store: "counters", Table: "counts"}},
+		Blob:   []v1.FunctionBlob{{Alias: "files", Bucket: "files", Prefix: "uploads"}},
+		SQL:    []v1.FunctionSQL{{Alias: "db", Database: "todo-db"}},
+		Lake:   []v1.FunctionLake{{Alias: "lake", Lake: "lake"}},
+		Links:  []v1.FunctionLink{{Alias: "greeter", Target: "greeter"}},
+		Config: []v1.ObjectName{"settings"},
+		Secret: []v1.ObjectName{"api-keys"},
 	}, obj.(*v1.Function).Spec.Bindings)
 }

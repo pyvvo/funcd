@@ -206,7 +206,7 @@ func TestAccessHashOfCountsSQL(t *testing.T) {
 	withSQL := plain
 	withSQL.Bindings.SQL = []v1.FunctionSQL{{Alias: "app", Database: "todo-db"}}
 	require.NotEqual(t, pooling.AccessHashOf(plain, nil, nil), pooling.AccessHashOf(withSQL, nil, nil))
-	before := sha256.Sum256([]byte(`{"kv":[],"blob":[],"catalogs":[],"links":[],"secrets":[],"config":[],"owned":[],"grants":[]}`))
+	before := sha256.Sum256([]byte(`{"kv":[],"blob":[],"lakes":[],"links":[],"secrets":[],"config":[],"owned":[],"grants":[]}`))
 	require.Equal(t, hex.EncodeToString(before[:])[:16], pooling.AccessHashOf(v1.FunctionSpec{}, nil, nil),
 		"the document of a Function with no spec.sql is the one before spec.sql existed")
 }

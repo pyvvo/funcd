@@ -142,12 +142,12 @@ type Handlers interface {
 	ReplaceBucket(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, b v1.Bucket) (v1.Bucket, error)
 	DeleteBucket(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error
 
-	// CatalogService (namespaced) — ADR-0086
-	GetCatalogService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.CatalogService, error)
-	CreateCatalogService(ctx context.Context, cs v1.CatalogService) (v1.CatalogService, error)
-	ListCatalogServices(ctx context.Context, ns v1.NamespaceName) ([]v1.CatalogService, error)
-	ReplaceCatalogService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, cs v1.CatalogService) (v1.CatalogService, error)
-	DeleteCatalogService(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error
+	// Lake (namespaced) — ADR-0086
+	GetLake(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Lake, error)
+	CreateLake(ctx context.Context, cs v1.Lake) (v1.Lake, error)
+	ListLakes(ctx context.Context, ns v1.NamespaceName) ([]v1.Lake, error)
+	ReplaceLake(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, cs v1.Lake) (v1.Lake, error)
+	DeleteLake(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, rv string) error
 	// SQLDatabase (namespaced) — ADR-0232
 	GetSQLDatabase(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.SQLDatabase, error)
 	CreateSQLDatabase(ctx context.Context, cs v1.SQLDatabase) (v1.SQLDatabase, error)

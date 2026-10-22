@@ -274,22 +274,22 @@ func RunContract(t *testing.T, newRuntime func(t *testing.T) runtime.Runtime) {
 		t.Cleanup(func() { _ = rt.Close() })
 
 		spec := specOf(t, "owner", []string{"sleep", "30"})
-		spec.OwnerKind = v1alpha1.KindCatalogService
+		spec.OwnerKind = v1alpha1.KindLake
 		inst, err := rt.Create(ctx, spec)
 		require.NoError(t, err)
-		require.Equal(t, v1alpha1.KindCatalogService, inst.OwnerKind)
+		require.Equal(t, v1alpha1.KindLake, inst.OwnerKind)
 		require.NoError(t, rt.Start(ctx, inst.ID))
 
 		got, err := rt.Status(ctx, inst.ID)
 		require.NoError(t, err)
-		require.Equal(t, v1alpha1.KindCatalogService, got.OwnerKind)
+		require.Equal(t, v1alpha1.KindLake, got.OwnerKind)
 		list, err := rt.List(ctx, "default")
 		require.NoError(t, err)
 		found := false
 		for _, in := range list {
 			if in.ID == inst.ID {
 				found = true
-				require.Equal(t, v1alpha1.KindCatalogService, in.OwnerKind)
+				require.Equal(t, v1alpha1.KindLake, in.OwnerKind)
 			}
 		}
 		require.True(t, found, "List reports the instance")
@@ -321,7 +321,7 @@ func RunContract(t *testing.T, newRuntime func(t *testing.T) runtime.Runtime) {
 		require.NoError(t, err)
 		require.NoError(t, rt.Start(ctx, inst.ID))
 		other := specOf(t, "shared", []string{"sleep", "30"})
-		other.OwnerKind = v1alpha1.KindCatalogService
+		other.OwnerKind = v1alpha1.KindLake
 		_, err = rt.Create(ctx, other)
 		require.Equal(t, fault.Conflict, fault.KindOf(err), "a live worker of another kind holds the ID")
 		got, err := rt.Status(ctx, inst.ID)

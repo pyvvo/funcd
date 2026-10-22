@@ -73,7 +73,7 @@ func kindRank(k v1.Kind) (int, bool) {
 	switch k {
 	case v1.KindRoute:
 		return 0, true
-	case v1.KindCatalogService:
+	case v1.KindLake:
 		return 1, true
 	default:
 		return 0, false
@@ -344,7 +344,7 @@ func (a *Aggregator) modeOf(ctx context.Context, modes map[v1.NamespaceName]v1.E
 }
 
 // reservedPath reports the first rule of a host-less entry that would shadow the by-name /function/<name> form,
-// or a host-less CatalogService rule at "/" (ADR-0176 Decision 5). The cleaned path is checked.
+// or a host-less Lake rule at "/" (ADR-0176 Decision 5). The cleaned path is checked.
 func reservedPath(e Entry) (string, bool) {
 	if e.Host != "" {
 		return "", false
@@ -353,7 +353,7 @@ func reservedPath(e Entry) (string, bool) {
 		if IsFunctionPath(r.Path) {
 			return r.Path, true
 		}
-		if path.Clean(r.Path) == "/" && e.Owner.Kind == v1.KindCatalogService {
+		if path.Clean(r.Path) == "/" && e.Owner.Kind == v1.KindLake {
 			return r.Path, true
 		}
 	}

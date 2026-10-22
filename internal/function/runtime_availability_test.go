@@ -95,7 +95,7 @@ func TestADR0149_UnknownRuntimeProcessPool(t *testing.T) {
 	require.Zero(t, h.rt.createAttempts(), "no pool worker is created")
 }
 
-// scenario: engine-image-not-a-runtime — in containerd mode duckdb is the CatalogService engine image, so a Function
+// scenario: engine-image-not-a-runtime — in containerd mode duckdb is the Lake engine image, so a Function
 // naming it fails at the gate, before any Create.
 func TestADR0149_EngineImageNotARuntime(t *testing.T) {
 	t.Parallel()
@@ -103,7 +103,7 @@ func TestADR0149_EngineImageNotARuntime(t *testing.T) {
 	h.create(t, "db", func(fn *v1.Function) { fn.Spec.Runtime = "duckdb" })
 	res := h.reconcile(t, "db")
 
-	h.requireUnavailable(t, "db", `runtime "duckdb" is not available on this node: it is the CatalogService engine image, not a function runtime`)
+	h.requireUnavailable(t, "db", `runtime "duckdb" is not available on this node: it is the Lake engine image, not a function runtime`)
 	require.Equal(t, "RuntimeUnavailable", h.condition(t, "db", "RevisionReady").Reason)
 	require.Zero(t, h.rt.createAttempts(), "no worker is created")
 	require.Zero(t, res.RequeueAfter, "the duckdb rule is fixed at daemon start")

@@ -26,7 +26,7 @@ const (
 )
 
 // errArtifactNotReady signals a step image not yet in the registry — the reconciler requeues (the
-// CatalogNotReady pattern) rather than declaring a mismatch (ADR-0098; no apply-order trap).
+// LakeNotReady pattern) rather than declaring a mismatch (ADR-0098; no apply-order trap).
 var errArtifactNotReady = errors.New("workflow: a step artifact is not yet pushed")
 
 // contractRequeue backs off the not-ready requeue so a missing artifact doesn't hot-loop the reconciler
@@ -251,7 +251,7 @@ func (m *Materializer) materialize(ctx context.Context, wf *v1.Workflow) (bool, 
 	if err := m.stripBindings(ctx, wf, &kvs); err != nil {
 		return false, err
 	}
-	// 0. ADR-0250: the declared Secrets hold their keys, and the databases, catalogs and ConfigMaps defined by name are
+	// 0. ADR-0250: the declared Secrets hold their keys, and the databases, lakes and ConfigMaps defined by name are
 	// written, before any step is materialized.
 	if err := m.checkRoot(ctx, wf); err != nil {
 		return false, err
@@ -526,11 +526,11 @@ func buildFunction(wf *v1.Workflow, st *v1.WorkflowStep, rt v1.RuntimeName, owne
 			Image:   st.Function.Image,
 			Scaling: v1.Scaling{MinReplicas: pool.MinReplicas, IdleTimeout: v1.Duration(stepIdleTimeout)},
 			Bindings: v1.FunctionBindings{
-				Blob:    st.Function.Bindings.Blob,
-				Secret:  st.Function.Bindings.Secret,
-				Config:  storedConfig(wf, st.Function.Bindings.Config),
-				Catalog: st.Function.Bindings.Catalog,
-				SQL:     st.Function.Bindings.SQL,
+				Blob:   st.Function.Bindings.Blob,
+				Secret: st.Function.Bindings.Secret,
+				Config: storedConfig(wf, st.Function.Bindings.Config),
+				Lake:   st.Function.Bindings.Lake,
+				SQL:    st.Function.Bindings.SQL,
 			},
 		},
 	}
@@ -572,7 +572,7 @@ func buildKVStore(wf *v1.Workflow, kv *v1.KVStoreEntry) *v1.KVStore {
 }
 
 // buildBucket is the Bucket a Workflow declares by name, its prefix owners mapped from step names to the
-// materialized Function names (ADR-0248 Decision 1), a declared catalog kept (ADR-0250 Decision 1).
+// materialized Function names (ADR-0248 Decision 1), a declared lake kept (ADR-0250 Decision 1).
 func buildBucket(wf *v1.Workflow, e *v1.BucketEntry) *v1.Bucket {
 	spec := e.BucketSpec
 	spec.Prefixes = make([]v1.BucketPrefix, len(e.Prefixes))
@@ -817,7 +817,7 @@ func (r *WorkflowReconciler) stepImage(ctx context.Context, wf *v1.Workflow, st 
 
 // childContract returns a sub-workflow step's contract — the referenced child Workflow's cached
 // status.contract, read from the store (ADR-0099; the ChildResolver is the engine's execution seam, not
-// reconcile's). An absent or not-yet-Ready child ⇒ errArtifactNotReady (requeue, the CatalogNotReady
+// reconcile's). An absent or not-yet-Ready child ⇒ errArtifactNotReady (requeue, the LakeNotReady
 // pattern), so a sub-workflow that hasn't been type-checked yet defers, it isn't a mismatch.
 func (r *WorkflowReconciler) childContract(ctx context.Context, ns v1.NamespaceName, child v1.ObjectName) (v1.WorkflowContract, error) {
 	obj, err := r.store.Get(ctx, v1.KindWorkflow.GVK(), ns, child)

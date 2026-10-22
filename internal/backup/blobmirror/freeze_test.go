@@ -77,7 +77,7 @@ func TestAttrsMismatchRefrozen(t *testing.T) {
 		})
 		m := f.run()
 		require.Equal(t, []string{"walk ", "link " + ck, "link " + ck, "walk " + lake, "link " + parquet("f1")}, events[:5])
-		requireCatalogConsistent(t, f.restored(m.Generation, nil))
+		requireLakeConsistent(t, f.restored(m.Generation, nil))
 	})
 	t.Run("fourth fails", func(t *testing.T) {
 		t.Parallel()
@@ -115,12 +115,12 @@ func TestCheckpointChangedAfterListingRelistsPrefix(t *testing.T) {
 	require.Equal(t, []string{"", lake, lake}, walks)
 	got := f.restored(m.Generation, nil)
 	require.Equal(t, "f1,f2", got[ck])
-	requireCatalogConsistent(t, got)
+	requireLakeConsistent(t, got)
 }
 
 // A Parquet file gone at its link (walked, then cleaned up after a new checkpoint) freezes the prefix again; a key
-// gone outside a catalog is left out.
-func TestMissingCatalogKeyRefreezesPrefix(t *testing.T) {
+// gone outside a lake is left out.
+func TestMissingLakeKeyRefreezesPrefix(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, nil)
 	f.put(parquet("f1"), "rows 1")
@@ -143,7 +143,7 @@ func TestMissingCatalogKeyRefreezesPrefix(t *testing.T) {
 	got := f.restored(m.Generation, nil)
 	require.NotContains(t, got, "other")
 	require.Equal(t, "f2", got[ck])
-	requireCatalogConsistent(t, got)
+	requireLakeConsistent(t, got)
 	require.False(t, slices.Contains(keysOf(got), parquet("f1")))
 }
 

@@ -77,10 +77,10 @@ func fullApp() *App {
 			}},
 			{Ref: "docs"},
 		}
-		a.Spec.Catalogs = []CatalogEntry{
-			{Name: "todo-lake", CatalogServiceSpec: CatalogServiceSpec{
-				Catalog:  CatalogRef{Bucket: "todo-files", Prefix: "lake"},
-				Bindings: CatalogServiceBindings{Blob: []FunctionBlob{{Alias: "lake", Bucket: "todo-files", Prefix: "lake"}}},
+		a.Spec.Lakes = []LakeEntry{
+			{Name: "todo-lake", LakeSpec: LakeSpec{
+				Location: LakeLocation{Bucket: "todo-files", Prefix: "lake"},
+				Bindings: LakeBindings{Blob: []FunctionBlob{{Alias: "lake", Bucket: "todo-files", Prefix: "lake"}}},
 			}},
 			{Ref: "lake"},
 		}
@@ -235,7 +235,7 @@ func TestAppParts(t *testing.T) {
 	want := []string{
 		"KVStore/todo-store", "KVStore/todo-cache", "Bucket/todo-files", "Bucket/todo-tmp", "Function/todo-api",
 		"Workflow/todo-plan", "EventSource/todo-tick", "Sensor/todo-on-tick", "Route/todo-api", "Site/todo-web",
-		"CatalogService/todo-lake",
+		"Lake/todo-lake",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("Parts = %v, want %v", got, want)
@@ -254,7 +254,7 @@ func TestAppRefs(t *testing.T) {
 		{Kind: KindKVStore, Namespace: "default", Name: "shared-store"},
 		{Kind: KindFunction, Namespace: "default", Name: "mailer"},
 		{Kind: KindSite, Namespace: "default", Name: "docs"},
-		{Kind: KindCatalogService, Namespace: "default", Name: "lake"},
+		{Kind: KindLake, Namespace: "default", Name: "lake"},
 	}
 	if got := fullApp().Refs(); !slices.Equal(got, want) {
 		t.Fatalf("Refs = %v, want %v", got, want)
@@ -294,7 +294,7 @@ func TestAppEntrySchemas(t *testing.T) {
 	spec := r.Schema(reflect.TypeFor[AppSpec](), false, "")
 	for section, field := range map[string]string{
 		"kv": "tables", "buckets": "prefixes", "functions": "image", "workflows": "steps", "eventSources": "timer",
-		"sensors": "do", "routes": "rules", "sites": "ingress", "catalogs": "catalog",
+		"sensors": "do", "routes": "rules", "sites": "ingress", "lakes": "location",
 	} {
 		sec := spec.Properties[section]
 		if sec == nil || sec.Items == nil {
@@ -313,7 +313,7 @@ func TestAppEntrySchemas(t *testing.T) {
 	refs, err := json.Marshal(AppSpec{
 		KV: []KVStoreEntry{{Ref: "a"}}, Buckets: []BucketEntry{{Ref: "a"}}, Functions: []AppFunction{{Ref: "a"}},
 		Workflows: []AppWorkflow{{Ref: "a"}}, EventSources: []AppEventSource{{Ref: "a"}}, Sensors: []AppSensor{{Ref: "a"}},
-		Routes: []AppRoute{{Ref: "a"}}, Sites: []AppSite{{Ref: "a"}}, Catalogs: []CatalogEntry{{Ref: "a"}},
+		Routes: []AppRoute{{Ref: "a"}}, Sites: []AppSite{{Ref: "a"}}, Lakes: []LakeEntry{{Ref: "a"}},
 	})
 	if err != nil {
 		t.Fatalf("marshal ref entries: %v", err)

@@ -175,7 +175,7 @@ runtime:
   mode: process                   # process | containerd. default: process (embedded shim; containerd = prod lane)
   bootBackoffInitial: 10s         # wait before a worker that crashed while booting is created again (ADR-0160). default: 10s
   bootBackoffMax: 5m              # the wait doubles per crash in a row up to this. default: 5m (or the initial wait when larger)
-  # supervisionPeriod: 10s        # steady re-check of a Ready Function or CatalogService; crash replacement (ADR-0163). default: 10s
+  # supervisionPeriod: 10s        # steady re-check of a Ready Function or Lake; crash replacement (ADR-0163). default: 10s
   # bootTimeout: 1m               # a replica not ready this long after creation is stopped; above invoke.activationTimeout. default: 1m
   # drainGrace: 30s               # longest drain of a demoted revision. default: 30s
   # handOutSettle: 2s             # idle-after-hand-out wait; at most drainGrace. default: 2s
@@ -228,8 +228,8 @@ log:
 #   maxUploadBytes: 1073741824    # buffered-object cap; multipart buffers ≤ 3× it daemon-wide, ≤ 1× per principal. default: 1073741824 (1 GiB)
 #   masterSecretFile: ""          # node master secret, used gateway on or off. default: "" ⇒ generated under <dataDir>/s3gateway
 
-# --- catalog: the per-CatalogService query proxies (ADR-0137) ----------------------------------
-# catalog:
+# --- lake: the per-Lake query proxies (ADR-0137) ----------------------------------
+# lake:
 #   enginePollInterval: 2s        # re-check of an engine not answering its probe yet (ADR-0163). default: 2s
 #   engineProbeTimeout: 2s        # bound of one engine probe. default: 2s
 

@@ -52,7 +52,7 @@ type AppSpec struct {
 	Sensors      []AppSensor        `json:"sensors,omitempty"`
 	Routes       []AppRoute         `json:"routes,omitempty"`
 	Sites        []AppSite          `json:"sites,omitempty"`
-	Catalogs     []CatalogEntry     `json:"catalogs,omitempty"`
+	Lakes        []LakeEntry        `json:"lakes,omitempty"`
 	ConfigMaps   []ConfigMapEntry   `json:"configMaps,omitempty"`
 	// BackupSchedules backs up the App's stores (ADR-0222 Decision 2); an entry with an empty scope backs up this App.
 	BackupSchedules []AppBackupSchedule `json:"backupSchedules,omitempty"`
@@ -185,12 +185,12 @@ type AppSite struct {
 	SiteSpec `json:",inline"`
 }
 
-// CatalogEntry is a catalogs entry: a CatalogService a resource declares by name at its root, or only the ref of an
+// LakeEntry is a lakes entry: a Lake a resource declares by name at its root, or only the ref of an
 // existing one (ADR-0248).
-type CatalogEntry struct {
-	Name               ObjectName `json:"name,omitempty"`
-	Ref                ObjectName `json:"ref,omitempty"`
-	CatalogServiceSpec `json:",inline"`
+type LakeEntry struct {
+	Name     ObjectName `json:"name,omitempty"`
+	Ref      ObjectName `json:"ref,omitempty"`
+	LakeSpec `json:",inline"`
 }
 
 // ConfigMapEntry is a configMaps entry: a ConfigMap a resource defines, stored as AppConfigMapName(name, spec), or only the
@@ -293,9 +293,9 @@ func (AppSite) Schema(r huma.Registry) *huma.Schema {
 	return entrySchema(r, reflect.TypeFor[SiteSpec](), false)
 }
 
-// Schema is CatalogServiceSpec's schema plus name and ref (see entrySchema).
-func (CatalogEntry) Schema(r huma.Registry) *huma.Schema {
-	return entrySchema(r, reflect.TypeFor[CatalogServiceSpec](), false)
+// Schema is LakeSpec's schema plus name and ref (see entrySchema).
+func (LakeEntry) Schema(r huma.Registry) *huma.Schema {
+	return entrySchema(r, reflect.TypeFor[LakeSpec](), false)
 }
 
 // Schema is BackupScheduleSpec's schema plus name and ref (see entrySchema).
@@ -359,8 +359,8 @@ func (e AppSite) MarshalJSON() ([]byte, error) {
 }
 
 // MarshalJSON writes a ref entry as its ref alone (see marshalEntry).
-func (e CatalogEntry) MarshalJSON() ([]byte, error) {
-	return marshalEntry(entryHead{Name: e.Name, Ref: e.Ref}, e.CatalogServiceSpec)
+func (e LakeEntry) MarshalJSON() ([]byte, error) {
+	return marshalEntry(entryHead{Name: e.Name, Ref: e.Ref}, e.LakeSpec)
 }
 
 // AppStatus is the observed state (ADR-0199 Decision 5): phase Deploying, Ready, Degraded or Failed (ADR-0200
@@ -474,12 +474,12 @@ func (a *App) Parts() []Object {
 }
 
 // rootEntryField is the field of the first non-empty root entry list of a part, in the order kv, buckets, sql,
-// catalogs, configMaps, secrets, or "" when the part declares none.
-func rootEntryField(kv, buckets, sql, catalogs, configMaps, secrets int) string {
+// lakes, configMaps, secrets, or "" when the part declares none.
+func rootEntryField(kv, buckets, sql, lakes, configMaps, secrets int) string {
 	for _, c := range []struct {
 		field string
 		n     int
-	}{{"kv", kv}, {"buckets", buckets}, {"sql", sql}, {"catalogs", catalogs}, {"configMaps", configMaps}, {"secrets", secrets}} {
+	}{{"kv", kv}, {"buckets", buckets}, {"sql", sql}, {"lakes", lakes}, {"configMaps", configMaps}, {"secrets", secrets}} {
 		if c.n > 0 {
 			return c.field
 		}
@@ -487,7 +487,7 @@ func rootEntryField(kv, buckets, sql, catalogs, configMaps, secrets int) string 
 	return ""
 }
 
-// validatePartRoots refuses a part that declares stores, catalogs, ConfigMaps or Secrets of its own (ADR-0248 Decision
+// validatePartRoots refuses a part that declares stores, lakes, ConfigMaps or Secrets of its own (ADR-0248 Decision
 // 2): an App's parts bind what the App declares at its root.
 func (a *App) validatePartRoots(op string) error {
 	refuse := func(path, field string) error {
@@ -495,14 +495,14 @@ func (a *App) validatePartRoots(op string) error {
 	}
 	for i := range a.Spec.Functions {
 		f := &a.Spec.Functions[i]
-		if field := rootEntryField(len(f.KVStores), len(f.Buckets), len(f.SQLDatabases), len(f.CatalogServices),
+		if field := rootEntryField(len(f.KVStores), len(f.Buckets), len(f.SQLDatabases), len(f.Lakes),
 			len(f.ConfigMaps), len(f.SecretDeclarations)); field != "" {
 			return refuse(fmt.Sprintf("spec.functions[%d]", i), field)
 		}
 	}
 	for i := range a.Spec.Workflows {
 		w := &a.Spec.Workflows[i]
-		if field := rootEntryField(len(w.KVStores), len(w.Buckets), len(w.SQLDatabases), len(w.CatalogServices),
+		if field := rootEntryField(len(w.KVStores), len(w.Buckets), len(w.SQLDatabases), len(w.Lakes),
 			len(w.ConfigMaps), len(w.SecretDeclarations)); field != "" {
 			return refuse(fmt.Sprintf("spec.workflows[%d]", i), field)
 		}
@@ -540,7 +540,7 @@ func (a *App) Validate() error {
 	if len(a.Name) > maxAppNameLength {
 		return fault.Invalidf(op, "metadata.name %q is longer than %d characters", a.Name, maxAppNameLength)
 	}
-	if err := validateNestedCatalogs(op, "spec.catalogs", "an App", a.Spec.Catalogs); err != nil {
+	if err := validateNestedLakes(op, "spec.lakes", "an App", a.Spec.Lakes); err != nil {
 		return err
 	}
 	if err := a.validatePartRoots(op); err != nil {
@@ -775,11 +775,11 @@ func (a *App) entries() []appEntry {
 		out = append(out, newEntry("sites", i, entryHead{Name: e.Name, Ref: e.Ref}, e.SiteSpec,
 			&Site{TypeMeta: typeMetaFor(KindSite), ObjectMeta: meta(e.Name), Spec: spec}))
 	}
-	for i, e := range s.Catalogs {
-		spec := e.CatalogServiceSpec
+	for i, e := range s.Lakes {
+		spec := e.LakeSpec
 		spec.Bindings.Config = repoint(spec.Bindings.Config, stored)
-		out = append(out, newEntry("catalogs", i, entryHead{Name: e.Name, Ref: e.Ref}, e.CatalogServiceSpec,
-			&CatalogService{TypeMeta: typeMetaFor(KindCatalogService), ObjectMeta: meta(e.Name), Spec: spec}))
+		out = append(out, newEntry("lakes", i, entryHead{Name: e.Name, Ref: e.Ref}, e.LakeSpec,
+			&Lake{TypeMeta: typeMetaFor(KindLake), ObjectMeta: meta(e.Name), Spec: spec}))
 	}
 	for i, e := range s.BackupSchedules {
 		spec := e.BackupScheduleSpec
@@ -913,7 +913,7 @@ type entryHead struct {
 // partSpec is the spec of a kind that has a section.
 type partSpec interface {
 	ConfigMapSpec | KVStoreSpec | BucketSpec | FunctionSpec | WorkflowSpec | EventSourceSpec | SensorSpec | RouteSpec |
-		SiteSpec | CatalogServiceSpec | BackupScheduleSpec | SQLDatabaseSpec
+		SiteSpec | LakeSpec | BackupScheduleSpec | SQLDatabaseSpec
 }
 
 // marshalEntry writes an entry's head, then its spec's fields only when the spec is set: a ref entry goes out as

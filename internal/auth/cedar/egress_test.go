@@ -20,7 +20,7 @@ func egressReg(t *testing.T) *Registry {
 	t.Helper()
 	reg, err := NewRegistry(
 		[]Capability{KVCapability(), InvokeCapability(), S3Capability(), EgressCapability()},
-		[]PrincipalSource{FunctionPrincipalSource(), CatalogServicePrincipalSource()},
+		[]PrincipalSource{FunctionPrincipalSource(), LakePrincipalSource()},
 	)
 	require.NoError(t, err)
 	return reg

@@ -30,7 +30,7 @@ type StubHandlers struct {
 	gateways         map[string]v1.Gateway
 	kvstores         map[string]v1.KVStore
 	buckets          map[string]v1.Bucket
-	catalogServices  map[string]v1.CatalogService
+	lakes            map[string]v1.Lake
 	sqlDatabases     map[string]v1.SQLDatabase
 	identities       map[string]v1.Identity
 	roles            map[string]v1.Role
@@ -67,7 +67,7 @@ func NewStubHandlers() *StubHandlers {
 		gateways:         make(map[string]v1.Gateway),
 		kvstores:         make(map[string]v1.KVStore),
 		buckets:          make(map[string]v1.Bucket),
-		catalogServices:  make(map[string]v1.CatalogService),
+		lakes:            make(map[string]v1.Lake),
 		sqlDatabases:     make(map[string]v1.SQLDatabase),
 		identities:       make(map[string]v1.Identity),
 		roles:            make(map[string]v1.Role),
@@ -638,22 +638,22 @@ func stubDelete[T crudKind](s *StubHandlers, m map[string]T, kind, key string) e
 	return nil
 }
 
-// ---- CatalogService (ADR-0086) ----
+// ---- Lake (ADR-0086) ----
 
-func (s *StubHandlers) GetCatalogService(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.CatalogService, error) {
-	return stubGet(s, s.catalogServices, "CatalogService", nsKey(ns, name))
+func (s *StubHandlers) GetLake(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Lake, error) {
+	return stubGet(s, s.lakes, "Lake", nsKey(ns, name))
 }
 
-func (s *StubHandlers) CreateCatalogService(_ context.Context, cs v1.CatalogService) (v1.CatalogService, error) {
-	return stubPut(s, s.catalogServices, "CatalogService", nsKey(cs.Namespace, cs.Name), cs, false)
+func (s *StubHandlers) CreateLake(_ context.Context, cs v1.Lake) (v1.Lake, error) {
+	return stubPut(s, s.lakes, "Lake", nsKey(cs.Namespace, cs.Name), cs, false)
 }
 
-func (s *StubHandlers) ListCatalogServices(_ context.Context, ns v1.NamespaceName) ([]v1.CatalogService, error) {
-	return stubList(s, s.catalogServices, ns)
+func (s *StubHandlers) ListLakes(_ context.Context, ns v1.NamespaceName) ([]v1.Lake, error) {
+	return stubList(s, s.lakes, ns)
 }
 
-func (s *StubHandlers) ReplaceCatalogService(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, cs v1.CatalogService) (v1.CatalogService, error) {
-	return stubPut(s, s.catalogServices, "CatalogService", nsKey(ns, name), cs, true)
+func (s *StubHandlers) ReplaceLake(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, cs v1.Lake) (v1.Lake, error) {
+	return stubPut(s, s.lakes, "Lake", nsKey(ns, name), cs, true)
 }
 
 func (s *StubHandlers) GetIdentity(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (v1.Identity, error) {
@@ -716,8 +716,8 @@ func (s *StubHandlers) DeleteRolesAssignment(_ context.Context, ns v1.NamespaceN
 	return stubDelete(s, s.rolesAssignments, "RolesAssignment", nsKey(ns, name))
 }
 
-func (s *StubHandlers) DeleteCatalogService(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
-	return stubDelete(s, s.catalogServices, "CatalogService", nsKey(ns, name))
+func (s *StubHandlers) DeleteLake(_ context.Context, ns v1.NamespaceName, name v1.ObjectName, _ string) error {
+	return stubDelete(s, s.lakes, "Lake", nsKey(ns, name))
 }
 
 // ---- SQLDatabase (ADR-0232) ----

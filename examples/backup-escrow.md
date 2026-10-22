@@ -57,7 +57,7 @@ The lookup follows symlinks, so a key file or the `secrets/` or `master/` direct
 not resolve is named in the refusal.
 The node master secret is `s3gateway.masterSecretFile` when set, else `<storage.dataDir>/s3gateway/master.key`,
 with the S3 gateway on or off. A restore (ADR-0206) without the master a generation names refuses, unless
-`--new-master-secret`, which prints every S3 keypair and catalog token that changes.
+`--new-master-secret`, which prints every S3 keypair and lake token that changes.
 
 Keep a key or an identity until no retained generation names it: an ADR-0203 class or pin, an ADR-0208 blob mirror
 generation, or an ADR-0209 KV chain.

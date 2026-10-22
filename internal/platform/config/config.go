@@ -308,13 +308,13 @@ type Config struct {
 		MasterSecretFile string `json:"masterSecretFile,omitempty" env:"FUNCD_S3GATEWAY_MASTER_SECRET_FILE"`
 	} `json:"s3gateway,omitempty"`
 
-	// Catalog tunes the per-CatalogService catalog::query PEP proxies (ADR-0137); they bind the bridge address
+	// Lake tunes the per-Lake lake::query PEP proxies (ADR-0137); they bind the bridge address
 	// (runtime.containerd.bridgeAddress, ADR-0238).
-	Catalog struct {
+	Lake struct {
 		// EnginePollInterval and EngineProbeTimeout pace the wait for an engine's readiness probe (ADR-0163).
-		EnginePollInterval string `json:"enginePollInterval,omitempty" env:"FUNCD_CATALOG_ENGINE_POLL_INTERVAL"`
-		EngineProbeTimeout string `json:"engineProbeTimeout,omitempty" env:"FUNCD_CATALOG_ENGINE_PROBE_TIMEOUT"`
-	} `json:"catalog,omitempty"`
+		EnginePollInterval string `json:"enginePollInterval,omitempty" env:"FUNCD_LAKE_ENGINE_POLL_INTERVAL"`
+		EngineProbeTimeout string `json:"engineProbeTimeout,omitempty" env:"FUNCD_LAKE_ENGINE_PROBE_TIMEOUT"`
+	} `json:"lake,omitempty"`
 
 	// Workflow tunes the workflow engine (ADR-0094). Durable run state lives in its own dedicated Badger
 	// instance at Workflow.DataDir (default <Storage.DataDir>/workflow; in-memory when Storage.Mode is
@@ -449,8 +449,8 @@ func defaults() Config {
 	c.Controller.RetryBackoffMax = "1s"
 	c.Controller.ReferentPollInterval = "2s"
 	c.Controller.RouteResyncInterval = "10s"
-	c.Catalog.EnginePollInterval = "2s"
-	c.Catalog.EngineProbeTimeout = "2s"
+	c.Lake.EnginePollInterval = "2s"
+	c.Lake.EngineProbeTimeout = "2s"
 	c.Invoke.ActivationTimeout = "30s"
 	c.Invoke.ReclaimInterval = "30s"
 	c.Runtime.Containerd.CNIBinDir = "/opt/cni/bin"

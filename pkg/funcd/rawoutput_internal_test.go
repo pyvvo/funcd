@@ -70,7 +70,7 @@ func TestEngineWorkerRawOutputIsNotStored(t *testing.T) {
 		out.Close()
 		return out
 	}
-	engine := run(v1.KindCatalogService, "engine")
+	engine := run(v1.KindLake, "engine")
 	run(v1.KindFunction, "fn")
 	runThenCancel(t, p)
 

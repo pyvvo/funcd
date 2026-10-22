@@ -22,7 +22,7 @@ bytes (one substrate), persists OTel-native signals to `blob.Bucket`, and serves
 to an external stack remains a possible swap, not a dependency. Crucially, this epoch is **independent of the
 FEAT-0003 lakehouse**: a platform substrate must not depend on an application feature. It **reuses the *pattern***
 (raw → time-windowed compaction → DuckDB-over-Parquet query, served by a function) but takes **no dependency** on
-the S3 gateway (ADR-0080) or the Quack/DuckLake catalog (F48) — those are the lakehouse's *services*, not ours.
+the S3 gateway (ADR-0080) or the lake service (F48) — those are the lakehouse's *services*, not ours.
 
 ## How this document works
 
@@ -82,11 +82,11 @@ flowchart TB
 A **public, ecosystem-standard observability endpoint** carrying **logs, traces, and metrics**, with both an
 **operator** (platform-wide) and **tenant-scoped** query view, served entirely over funcd's **own primitives**
 (`blob.Bucket` + functions) — **no** dependency on the FEAT-0003 lakehouse services (S3 gateway, Quack/DuckLake
-catalog). Capture is loss-safe across freeze/teardown; signals are OTel-native end to end.
+lake). Capture is loss-safe across freeze/teardown; signals are OTel-native end to end.
 
 ## Out of scope (tracked elsewhere)
 
-- **The FEAT-0003 lakehouse services** (S3 gateway ADR-0080, Quack/DuckLake catalog F48) — this epoch reuses the
+- **The FEAT-0003 lakehouse services** (S3 gateway ADR-0080, the lake service F48) — this epoch reuses the
   *pattern* (compaction, DuckDB-over-Parquet-in-a-function), never those services. They evolve independently.
 - **Platform self-telemetry** (`source=platform`) — already built by ADR-0009/ADR-0010; this epoch is the
   tenant/function lane that complements it, not a replacement.

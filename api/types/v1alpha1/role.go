@@ -6,7 +6,7 @@ import (
 
 // Role is a named, reusable permission set (ADR-0136, FEAT-0008/F101): a set of funcd data-plane action
 // strings a RolesAssignment grants to a principal at a scope. Custom roles complement the fixed built-in
-// catalog (Blob Data Reader/Writer, KV Data Reader/Writer, Function Invoker, Reader/Contributor/Owner).
+// lake (Blob Data Reader/Writer, KV Data Reader/Writer, Function Invoker, Reader/Contributor/Owner).
 // A pure value-type (no status), like Grant — the PDP compiles it, the reconciler does not touch it.
 type Role struct {
 	TypeMeta   `json:",inline"`

@@ -15,7 +15,7 @@ func TestScenarioIdentityDefaultDeny(t *testing.T) {
 	t.Parallel()
 	reg, err := NewRegistry(
 		[]Capability{S3Capability()},
-		[]PrincipalSource{FunctionPrincipalSource(), CatalogServicePrincipalSource()},
+		[]PrincipalSource{FunctionPrincipalSource(), LakePrincipalSource()},
 	)
 	require.NoError(t, err)
 	m := s3Meta{

@@ -18,24 +18,24 @@ const (
 type Kind string
 
 const (
-	KindNamespace      Kind = "Namespace"
-	KindResourceGroup  Kind = "ResourceGroup"
-	KindFunction       Kind = "Function"
-	KindRevision       Kind = "Revision"
-	KindRoute          Kind = "Route"
-	KindService        Kind = "Service"
-	KindEventSource    Kind = "EventSource"
-	KindConfigMap      Kind = "ConfigMap"
-	KindSecret         Kind = "Secret"
-	KindGrant          Kind = "Grant"
-	KindEgressPolicy   Kind = "EgressPolicy"
-	KindInvocation     Kind = "Invocation"
-	KindRuntimeClass   Kind = "RuntimeClass"
-	KindWorkerNode     Kind = "WorkerNode"
-	KindGateway        Kind = "Gateway"
-	KindKVStore        Kind = "KVStore"
-	KindBucket         Kind = "Bucket"
-	KindCatalogService Kind = "CatalogService"
+	KindNamespace     Kind = "Namespace"
+	KindResourceGroup Kind = "ResourceGroup"
+	KindFunction      Kind = "Function"
+	KindRevision      Kind = "Revision"
+	KindRoute         Kind = "Route"
+	KindService       Kind = "Service"
+	KindEventSource   Kind = "EventSource"
+	KindConfigMap     Kind = "ConfigMap"
+	KindSecret        Kind = "Secret"
+	KindGrant         Kind = "Grant"
+	KindEgressPolicy  Kind = "EgressPolicy"
+	KindInvocation    Kind = "Invocation"
+	KindRuntimeClass  Kind = "RuntimeClass"
+	KindWorkerNode    Kind = "WorkerNode"
+	KindGateway       Kind = "Gateway"
+	KindKVStore       Kind = "KVStore"
+	KindBucket        Kind = "Bucket"
+	KindLake          Kind = "Lake"
 	// KindSQLDatabase is a SQL database served by its own rqlite engine (ADR-0232).
 	KindSQLDatabase Kind = "SQLDatabase"
 	KindPolicy      Kind = "Policy"
@@ -87,7 +87,7 @@ func (k Kind) Validate() error {
 		KindRoute, KindService, KindEventSource, KindConfigMap,
 		KindSecret, KindGrant, KindEgressPolicy, KindInvocation,
 		KindRuntimeClass, KindWorkerNode, KindGateway, KindKVStore, KindBucket,
-		KindCatalogService, KindPolicy, KindWorkflow, KindWorkflowRun, KindSensor,
+		KindLake, KindPolicy, KindWorkflow, KindWorkflowRun, KindSensor,
 		KindIdentity, KindRole, KindRolesAssignment, KindSite, KindApp, KindAppRevision,
 		KindBackupSchedule, KindBackup, KindRestore, KindSQLDatabase:
 		return nil
@@ -371,8 +371,8 @@ func NewObject(k Kind) (Object, bool) {
 		b := &Bucket{}
 		b.TypeMeta = typeMetaFor(k)
 		return b, true
-	case KindCatalogService:
-		cs := &CatalogService{}
+	case KindLake:
+		cs := &Lake{}
 		cs.TypeMeta = typeMetaFor(k)
 		return cs, true
 	case KindSQLDatabase:
@@ -456,7 +456,7 @@ func AllKinds() []Kind {
 		KindGateway,
 		KindKVStore,
 		KindBucket,
-		KindCatalogService,
+		KindLake,
 		KindPolicy,
 		KindWorkflow,
 		KindWorkflowRun,

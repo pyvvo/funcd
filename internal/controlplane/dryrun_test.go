@@ -137,8 +137,8 @@ func sample(k v1.Kind, name v1.ObjectName) v1.Object {
 		m.Namespace, m.ResourceGroup = "team-a", "rg1"
 	}
 	switch x := o.(type) {
-	case *v1.CatalogService:
-		x.Spec.Catalog = v1.CatalogRef{Bucket: "b", Prefix: "p"}
+	case *v1.Lake:
+		x.Spec.Location = v1.LakeLocation{Bucket: "b", Prefix: "p"}
 	case *v1.WorkflowRun:
 		x.Spec.Workflow = "w"
 	case *v1.Site:

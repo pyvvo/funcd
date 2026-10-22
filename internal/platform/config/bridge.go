@@ -6,7 +6,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 )
 
-// BridgeAddress is funcd's address on its container bridge (ADR-0238), where the catalog proxies, the SQL change feed
+// BridgeAddress is funcd's address on its container bridge (ADR-0238), where the lake proxies, the SQL change feed
 // and a derived S3 endpoint are reached from a container: under containerd runtime.containerd.bridgeAddress or the
 // subnet's network address + 1, else 127.0.0.1. Validate refuses a value CheckBridge refuses, so the error is only for
 // a Config built by hand.

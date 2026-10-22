@@ -104,7 +104,7 @@ func TestResolveEnv_reserved_key_dropped(t *testing.T) {
 	require.NotContains(t, env, "FUNCD_ARTIFACT", "a reserved FUNCD_ config key is dropped by the shared guard")
 }
 
-// declared secrets with no resolver wired → fault.Invalid (unchanged catalog fail-closed semantics),
+// declared secrets with no resolver wired → fault.Invalid (unchanged lake fail-closed semantics),
 // attributed to the secret side (ErrSecret).
 func TestResolveEnv_secrets_without_resolver_is_invalid(t *testing.T) {
 	t.Parallel()

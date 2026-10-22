@@ -24,7 +24,7 @@ type rootObject struct {
 	deletion v1.DeletionPolicy
 }
 
-// rootObjects are the stores, catalogs and ConfigMaps fn defines by name (ADR-0248 Decision 1). A catalog and a
+// rootObjects are the stores, lakes and ConfigMaps fn defines by name (ADR-0248 Decision 1). A lake and a
 // ConfigMap go with the Function, as an App's do (ADR-0213 Decision 2); a defined ConfigMap is stored under
 // v1.AppConfigMapName (Decision 5). A ref entry names an object the Function never writes.
 func rootObjects(fn *v1.Function) []rootObject {
@@ -52,10 +52,10 @@ func rootObjects(fn *v1.Function) []rootObject {
 				&v1.SQLDatabase{TypeMeta: tm(v1.KindSQLDatabase), ObjectMeta: meta(e.Name), Spec: e.SQLDatabaseSpec}, e.Deletion})
 		}
 	}
-	for i, e := range s.CatalogServices {
+	for i, e := range s.Lakes {
 		if e.Name != "" {
-			out = append(out, rootObject{fmt.Sprintf("spec.catalogs[%d]", i),
-				&v1.CatalogService{TypeMeta: tm(v1.KindCatalogService), ObjectMeta: meta(e.Name), Spec: e.CatalogServiceSpec}, v1.DeletionDelete})
+			out = append(out, rootObject{fmt.Sprintf("spec.lakes[%d]", i),
+				&v1.Lake{TypeMeta: tm(v1.KindLake), ObjectMeta: meta(e.Name), Spec: e.LakeSpec}, v1.DeletionDelete})
 		}
 	}
 	for i, e := range s.ConfigMaps {

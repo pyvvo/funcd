@@ -23,7 +23,7 @@ spec:
       owner: c
 ---
 apiVersion: funcd.io/v1alpha1
-kind: CatalogService
+kind: Lake
 metadata:
   name: c
   namespace: a-b
@@ -42,7 +42,7 @@ spec:
         prefix: gold
     secret:
       - quack-token
-  catalog:
+  location:
     bucket: cni-ab
     prefix: gold
 ---
@@ -69,7 +69,7 @@ spec:
       owner: b-c
 ---
 apiVersion: funcd.io/v1alpha1
-kind: CatalogService
+kind: Lake
 metadata:
   name: b-c
   namespace: a
@@ -88,6 +88,6 @@ spec:
         prefix: gold
     secret:
       - quack-token
-  catalog:
+  location:
     bucket: cni-a
     prefix: gold

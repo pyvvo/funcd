@@ -11,11 +11,11 @@ import (
 	authz "github.com/pyvvo/funcd/internal/auth"
 )
 
-// principal is the resolved S3 caller (ADR-0085): an in-platform Function or CatalogService Ref or an
+// principal is the resolved S3 caller (ADR-0085): an in-platform Function or Lake Ref or an
 // external S3Identity, plus its namespace. It is mapped to a Cedar principal for the
 // ADR-0080 PEP.
 type principal struct {
-	ref       authz.EntityRef // the Cedar principal (Function, CatalogService, Identity or S3Identity)
+	ref       authz.EntityRef // the Cedar principal (Function, Lake, Identity or S3Identity)
 	namespace v1.NamespaceName
 }
 
@@ -34,7 +34,7 @@ func accountFromCtx(ctx context.Context) (auth.Account, bool) {
 }
 
 // principalFor maps an authenticated account to its funcd principal (ADR-0085): an
-// in-platform access decodes to a Function or CatalogService Ref of the kind the key
+// in-platform access decodes to a Function or Lake Ref of the kind the key
 // carries (ADR-0175); any other (external) access becomes an S3Identity scoped to the
 // namespace the ExternalKeys store recorded. external may be nil ⇒ only in-platform.
 func principalFor(acct auth.Account, external ExternalKeys) (principal, error) {

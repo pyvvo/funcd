@@ -30,8 +30,8 @@ type Pair struct{ Owner, Child v1.Kind }
 // Pairs is every pair a reconciler stamps. Revision is last: one sweep collects a Function, then its Revisions.
 // The App pairs are one per App section kind (ADR-0199 Decision 7, ADR-0222 Decision 2), users before stores, with (App, ConfigMap) after
 // (App, Bucket) (ADR-0213 Decision 5), then (App, AppRevision) (ADR-0200 Decision 8) and the hook calls of an
-// AppRevision (ADR-0214). The Function's, Site's and Workflow's root entries follow, catalogs before stores (ADR-0248
-// Decision 8), then a standalone CatalogService's (ADR-0251 Decision 6) and the rest of a Workflow's (ADR-0250 Decision 6).
+// AppRevision (ADR-0214). The Function's, Site's and Workflow's root entries follow, lakes before stores (ADR-0248
+// Decision 8), then a standalone Lake's (ADR-0251 Decision 6) and the rest of a Workflow's (ADR-0250 Decision 6).
 func Pairs() []Pair {
 	return []Pair{
 		{Owner: v1.KindWorkflow, Child: v1.KindFunction}, {Owner: v1.KindWorkflow, Child: v1.KindKVStore},
@@ -39,17 +39,17 @@ func Pairs() []Pair {
 		{Owner: v1.KindApp, Child: v1.KindFunction}, {Owner: v1.KindApp, Child: v1.KindWorkflow},
 		{Owner: v1.KindApp, Child: v1.KindEventSource}, {Owner: v1.KindApp, Child: v1.KindSensor},
 		{Owner: v1.KindApp, Child: v1.KindRoute}, {Owner: v1.KindApp, Child: v1.KindSite},
-		{Owner: v1.KindApp, Child: v1.KindCatalogService}, {Owner: v1.KindApp, Child: v1.KindBackupSchedule},
+		{Owner: v1.KindApp, Child: v1.KindLake}, {Owner: v1.KindApp, Child: v1.KindBackupSchedule},
 		{Owner: v1.KindApp, Child: v1.KindKVStore}, {Owner: v1.KindApp, Child: v1.KindSQLDatabase},
 		{Owner: v1.KindApp, Child: v1.KindBucket}, {Owner: v1.KindApp, Child: v1.KindConfigMap},
 		{Owner: v1.KindApp, Child: v1.KindAppRevision}, {Owner: v1.KindAppRevision, Child: v1.KindInvocation},
-		{Owner: v1.KindFunction, Child: v1.KindCatalogService}, {Owner: v1.KindFunction, Child: v1.KindKVStore},
+		{Owner: v1.KindFunction, Child: v1.KindLake}, {Owner: v1.KindFunction, Child: v1.KindKVStore},
 		{Owner: v1.KindFunction, Child: v1.KindSQLDatabase}, {Owner: v1.KindFunction, Child: v1.KindBucket},
 		{Owner: v1.KindFunction, Child: v1.KindConfigMap}, {Owner: v1.KindSite, Child: v1.KindBucket},
 		{Owner: v1.KindWorkflow, Child: v1.KindBucket},
-		{Owner: v1.KindWorkflow, Child: v1.KindSQLDatabase}, {Owner: v1.KindWorkflow, Child: v1.KindCatalogService},
+		{Owner: v1.KindWorkflow, Child: v1.KindSQLDatabase}, {Owner: v1.KindWorkflow, Child: v1.KindLake},
 		{Owner: v1.KindWorkflow, Child: v1.KindConfigMap},
-		{Owner: v1.KindCatalogService, Child: v1.KindBucket}, {Owner: v1.KindCatalogService, Child: v1.KindConfigMap},
+		{Owner: v1.KindLake, Child: v1.KindBucket}, {Owner: v1.KindLake, Child: v1.KindConfigMap},
 		{Owner: v1.KindFunction, Child: v1.KindRoute}, {Owner: v1.KindFunction, Child: v1.KindRevision},
 	}
 }
@@ -559,14 +559,14 @@ func DeleteBucket(ctx context.Context, s store.Store, p BucketPurger, b *v1.Buck
 
 // bucketUsers is the kinds whose specs can name a Bucket, in the order InUse reads them.
 func bucketUsers() []v1.Kind {
-	return []v1.Kind{v1.KindFunction, v1.KindCatalogService, v1.KindEventSource, v1.KindRoute, v1.KindSite}
+	return []v1.Kind{v1.KindFunction, v1.KindLake, v1.KindEventSource, v1.KindRoute, v1.KindSite}
 }
 
 // InUse returns the first object in obj's namespace that still uses obj and that skip does not skip (nil skips
 // none), as the deletion protections bind it (ADR-0199 Decision 6): a Function another Function links to (ADR-0064),
-// a KVStore a Function's spec.bindings.kv names (ADR-0073), a Bucket a Function's or CatalogService's spec.bindings.blob, an
+// a KVStore a Function's spec.bindings.kv names (ADR-0073), a Bucket a Function's or Lake's spec.bindings.blob, an
 // EventSource's spec.blob.bucket, a Route's spec.rules[].backend.static.bucket or a Site's spec.bindings.blob[0].bucket names
-// (ADR-0080), a ConfigMap a Function's or CatalogService's spec.bindings.config or a Site's spec.runtimeConfig.configMap names
+// (ADR-0080), a ConfigMap a Function's or Lake's spec.bindings.config or a Site's spec.runtimeConfig.configMap names
 // (ADR-0213 Decision 5, ADR-0239), a SQLDatabase a
 // Function's spec.bindings.sql names (ADR-0236). Nothing uses an object of another kind.
 func InUse(ctx context.Context, s store.Store, obj v1.Object, skip func(v1.Object) bool) (v1.ObjectRef, bool, error) {
@@ -578,7 +578,7 @@ func InUse(ctx context.Context, s store.Store, obj v1.Object, skip func(v1.Objec
 	case *v1.Bucket:
 		kinds = bucketUsers()
 	case *v1.ConfigMap:
-		kinds = []v1.Kind{v1.KindFunction, v1.KindCatalogService, v1.KindSite}
+		kinds = []v1.Kind{v1.KindFunction, v1.KindLake, v1.KindSite}
 	default:
 		return v1.ObjectRef{}, false, nil
 	}
@@ -617,7 +617,7 @@ func uses(u, obj v1.Object) bool {
 		switch o := u.(type) {
 		case *v1.Function:
 			return slices.Contains(o.Spec.Bindings.Config, name)
-		case *v1.CatalogService:
+		case *v1.Lake:
 			return slices.Contains(o.Spec.Bindings.Config, name)
 		case *v1.Site:
 			return o.Spec.RuntimeConfig != nil && o.Spec.RuntimeConfig.ConfigMap == name
@@ -632,7 +632,7 @@ func usesBucket(u v1.Object, name v1.ObjectName) bool {
 	switch o := u.(type) {
 	case *v1.Function:
 		return slices.ContainsFunc(o.Spec.Bindings.Blob, bound)
-	case *v1.CatalogService:
+	case *v1.Lake:
 		return slices.ContainsFunc(o.Spec.Bindings.Blob, bound)
 	case *v1.EventSource:
 		return o.Spec.Blob != nil && o.Spec.Blob.Bucket == name

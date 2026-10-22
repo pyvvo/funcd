@@ -73,7 +73,7 @@ func TestScenarioIdentityNeverTakesAnothersSecret(t *testing.T) {
 }
 
 // scenario: recreated-identity-gets-fresh-credential — ext deleted and re-applied before collection gets a new UID,
-// and its reconciler re-issues the Secret: a new secretAccessKey and catalogToken; the old key no longer authenticates.
+// and its reconciler re-issues the Secret: a new secretAccessKey and lakeToken; the old key no longer authenticates.
 func TestScenarioRecreatedIdentityGetsFreshCredential(t *testing.T) {
 	st, r := setup(t)
 	old := newIdentity(t, st, "ns1", "ext")
@@ -93,7 +93,7 @@ func TestScenarioRecreatedIdentityGetsFreshCredential(t *testing.T) {
 	require.Equal(t, oldSec.UID, sec.UID, "re-issued in place")
 	require.Equal(t, cur.UID, sec.OwnerReferences[0].UID, "the Secret now names the re-created Identity")
 	require.NotEqual(t, oldSec.Spec.Data[secretKeySecretAccessKey], sec.Spec.Data[secretKeySecretAccessKey])
-	require.NotEqual(t, oldSec.Spec.Data[secretKeyCatalogToken], sec.Spec.Data[secretKeyCatalogToken])
+	require.NotEqual(t, oldSec.Spec.Data[secretKeyLakeToken], sec.Spec.Data[secretKeyLakeToken])
 	newKey, _, ok := keys.Lookup(access)
 	require.True(t, ok)
 	require.NotEqual(t, oldKey, newKey, "the old secret no longer authenticates")

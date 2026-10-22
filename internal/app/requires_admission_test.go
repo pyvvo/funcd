@@ -191,6 +191,6 @@ func TestRequiresAdmissionRefusesCycle(t *testing.T) {
 	e.put(bareApp("audit", "1.0.0", needs("billing", "")), v1.AppStatus{})
 	requireRefused(t, e.admit(admission.Update, bareApp("lakehouse", "2.1.0", needs("audit", "")), lake), fault.Invalid,
 		"(lakehouse → audit → billing → lakehouse)")
-	require.NoError(t, e.admit(admission.Update, bareApp("lakehouse", "2.1.0", needs("catalog", "")), lake),
+	require.NoError(t, e.admit(admission.Update, bareApp("lakehouse", "2.1.0", needs("lake", "")), lake),
 		"a requirement outside every cycle")
 }

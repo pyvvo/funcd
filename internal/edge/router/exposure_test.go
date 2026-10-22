@@ -49,7 +49,7 @@ func TestAggregator_OwnedRouteFollowsTheMode(t *testing.T) {
 	require.Empty(t, v[1].Reason)
 	require.Empty(t, v[2].Reason, "a Route that is not owned is not Disabled by the mode")
 	set(t, a, "routes")
-	require.Empty(t, set(t, a, "catalog/ex/c", upstreamEntry("ex", "c", "/q", "http://up"))[0].Reason)
+	require.Empty(t, set(t, a, "lake/ex/c", upstreamEntry("ex", "c", "/q", "http://up"))[0].Reason)
 }
 
 // ADR-0241 Decision 7: within a namespace every entry that is not owned wins an equal claim over an owned one and a
@@ -69,7 +69,7 @@ func TestAggregator_YourRoutesWin(t *testing.T) {
 
 	cat := withHost(upstreamEntry("staging", "aaa", "/q", "http://up"), "fleet.test")
 	set(t, a, "routes", withHost(fnEntry("staging", "zzz", "/q"), "fleet.test"))
-	require.Equal(t, "RouteConflict", set(t, a, "catalog/staging/aaa", cat)[0].Reason, "a non-Route source is ruled as owned")
+	require.Equal(t, "RouteConflict", set(t, a, "lake/staging/aaa", cat)[0].Reason, "a non-Route source is ruled as owned")
 }
 
 // ADR-0241 Decision 8: a rule's stance beats its Route's.

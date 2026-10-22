@@ -9,26 +9,26 @@ import (
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
-	cataloggw "github.com/pyvvo/funcd/internal/catalog/gateway"
 	"github.com/pyvvo/funcd/internal/function"
+	lakegw "github.com/pyvvo/funcd/internal/lake/gateway"
 )
 
 // scenario: ctx-pooled-member — two Functions in one pool share its config with its key list (ADR-0245) in the pool's
 // shared env, which holds no secret value and no FUNCD_SECRET_KEYS (ADR-0249), and each member's manifest row carries
-// its own catalog token.
+// its own lake token.
 func TestScenarioCtxPooledMember(t *testing.T) {
 	t.Parallel()
-	proxies := cataloggw.NewManager("", cataloggw.NewCatalogKeys(nil, nil), nil, nil)
+	proxies := lakegw.NewManager("", lakegw.NewLakeKeys(nil, nil), nil, nil)
 	t.Cleanup(proxies.Shutdown)
 	_, _, err := proxies.Listen("default", "lake", 0)
 	require.NoError(t, err)
 	h := newShimHarness(t, http.StatusOK, false, withNodePool, func(d *function.Deps) {
-		d.CatalogProxies = proxies
-		d.CatalogMaster = []byte("ctx-pooled-member-master-secret!")
+		d.LakeProxies = proxies
+		d.LakeMaster = []byte("ctx-pooled-member-master-secret!")
 		d.PoolManifestDir = filepath.Join(t.TempDir(), "pool")
 		d.Secrets = blackboxResolver{env: map[string]string{"STRIPE_KEY": "sk"}}
 	})
-	storeReadyCatalog(t, h.st)
+	storeReadyLake(t, h.st)
 	h.configMap(t, "app")
 	for _, n := range []string{"a", "b"} {
 		h.create(t, n, func(fn *v1.Function) {
@@ -46,8 +46,8 @@ func TestScenarioCtxPooledMember(t *testing.T) {
 	require.Equal(t, "test", spec.Env["APP_MODE"])
 	require.NotContains(t, spec.Env, "STRIPE_KEY", "secrets are read from funcd (ADR-0249)")
 	require.NotContains(t, spec.Env, "FUNCD_SECRET_KEYS")
-	require.NotEmpty(t, spec.Env["FUNCD_CATALOG_LAKE_URL"])
-	require.NotContains(t, spec.Env, "FUNCD_CATALOG_LAKE_TOKEN", "no member's token is in the shared env")
+	require.NotEmpty(t, spec.Env["FUNCD_LAKE_LAKE_URL"])
+	require.NotContains(t, spec.Env, "FUNCD_LAKE_LAKE_TOKEN", "no member's token is in the shared env")
 
 	var rows []struct {
 		Name string            `json:"name"`
@@ -57,8 +57,8 @@ func TestScenarioCtxPooledMember(t *testing.T) {
 	require.Len(t, rows, 2)
 	tokens := map[string]string{}
 	for _, r := range rows {
-		require.NotEmpty(t, r.Env["FUNCD_CATALOG_LAKE_TOKEN"], r.Name)
-		tokens[r.Name] = r.Env["FUNCD_CATALOG_LAKE_TOKEN"]
+		require.NotEmpty(t, r.Env["FUNCD_LAKE_LAKE_TOKEN"], r.Name)
+		tokens[r.Name] = r.Env["FUNCD_LAKE_LAKE_TOKEN"]
 	}
-	require.NotEqual(t, tokens["a"], tokens["b"], "each member gets its own catalog token")
+	require.NotEqual(t, tokens["a"], tokens["b"], "each member gets its own lake token")
 }

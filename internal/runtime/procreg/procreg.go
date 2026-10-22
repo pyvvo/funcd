@@ -1,4 +1,4 @@
-// Package procreg is the saved worker registry (ADR-0167): the process driver and the dev catalog engine record every
+// Package procreg is the saved worker registry (ADR-0167): the process driver and the dev lake engine record every
 // process they start, so the next open reaps what a crashed run left behind. An entry is reaped only when the live
 // pid's start time and boot match it (ADR-0187), so a reused pid is never signalled.
 package procreg

@@ -380,16 +380,16 @@ func TestAppConfigChangeRolls(t *testing.T) {
 	})
 }
 
-// Decisions 7 and 9: app-parts refuses a Secret a Function, a CatalogService or an image step names and spec.secrets
+// Decisions 7 and 9: app-parts refuses a Secret a Function, a Lake or an image step names and spec.secrets
 // does not declare, on create and on update; a ref step is exempt.
 func TestAdmissionRefusesUndeclaredSecret(t *testing.T) {
 	st := store.New(memory.New())
 	billing := []v1.ObjectName{"todo-billing"}
 	lake := func(secrets []v1.ObjectName) func(*v1.App) {
 		return func(a *v1.App) {
-			a.Spec.Catalogs = []v1.CatalogEntry{{Name: "todo-lake", CatalogServiceSpec: v1.CatalogServiceSpec{
-				Catalog:  v1.CatalogRef{Bucket: "todo-files", Prefix: "lake"},
-				Bindings: v1.CatalogServiceBindings{Blob: []v1.FunctionBlob{{Alias: "lake", Bucket: "todo-files", Prefix: "lake"}}, Secret: secrets},
+			a.Spec.Lakes = []v1.LakeEntry{{Name: "todo-lake", LakeSpec: v1.LakeSpec{
+				Location: v1.LakeLocation{Bucket: "todo-files", Prefix: "lake"},
+				Bindings: v1.LakeBindings{Blob: []v1.FunctionBlob{{Alias: "lake", Bucket: "todo-files", Prefix: "lake"}}, Secret: secrets},
 			}}}
 		}
 	}
@@ -404,8 +404,8 @@ func TestAdmissionRefusesUndeclaredSecret(t *testing.T) {
 			`spec.functions[0].bindings.secret[1]: Function/todo-api names Secret "todo-billing", which spec.secrets does not declare`},
 		{"an image step", func(a *v1.App) { a.Spec.Workflows[0].Steps[0].Function.Bindings.Secret = billing },
 			`spec.workflows[0].steps[0].function.bindings.secret[0]: Workflow/todo-plan names Secret "todo-billing", which spec.secrets does not declare`},
-		{"a CatalogService", lake(billing),
-			`spec.catalogs[0].bindings.secret[0]: CatalogService/todo-lake names Secret "todo-billing", which spec.secrets does not declare`},
+		{"a Lake", lake(billing),
+			`spec.lakes[0].bindings.secret[0]: Lake/todo-lake names Secret "todo-billing", which spec.secrets does not declare`},
 		{"an App without the section", func(a *v1.App) { a.Spec.Secrets = nil },
 			`spec.functions[0].bindings.secret[0]: Function/todo-api names Secret "todo-stripe-key", which spec.secrets does not declare`},
 	} {
@@ -424,7 +424,7 @@ func TestAdmissionRefusesUndeclaredSecret(t *testing.T) {
 			a.Spec.Workflows[0].Steps = append(a.Spec.Workflows[0].Steps, v1.WorkflowStep{Name: "notify",
 				Function: &v1.FunctionStep{Ref: "todo-api", Bindings: v1.StepBindings{Secret: billing}}})
 		},
-		"a declared CatalogService Secret": lake([]v1.ObjectName{"todo-stripe-key"}),
+		"a declared Lake Secret": lake([]v1.ObjectName{"todo-stripe-key"}),
 	} {
 		require.NoError(t, admit(t, st, partAdmissions(0), configApp(mutate), nil), name)
 	}

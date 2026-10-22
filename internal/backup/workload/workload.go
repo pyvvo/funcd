@@ -1,6 +1,6 @@
 // Package workload is an app owner's backup (ADR-0222): the members a BackupSchedule's scope names, one full copy of
 // them under <target>/<ns>/<backup>-<uid>/ (Decision 4) and the reads a Restore makes of it. Each member's file is
-// ADR-0203's framed records in one Seal stream, put in 8 MiB parts IfNotExist; a catalog's objects go before its
+// ADR-0203's framed records in one Seal stream, put in 8 MiB parts IfNotExist; a lake's objects go before its
 // catalog.db, checked against it (Decision 5); the plain manifest.yaml goes last.
 package workload
 
@@ -40,14 +40,14 @@ const (
 	manifestName = "manifest.yaml"
 	// checkpointName is a DuckLake catalog's checkpoint under its prefix (ADR-0086).
 	checkpointName = "_ducklake/catalog.db"
-	// catalogAttempts is the copies of one catalog a run makes before CatalogUnstable (Decision 5).
-	catalogAttempts = 3
-	listPage        = 1000
+	// lakeAttempts is the copies of one lake a run makes before LakeUnstable (Decision 5).
+	lakeAttempts = 3
+	listPage     = 1000
 )
 
 // The failures a run's record names by reason (Decisions 4, 5; ADR-0234 Decision 2).
 var (
-	ErrCatalogUnstable     = errors.New("the catalog changed under every copy")
+	ErrLakeUnstable        = errors.New("the lake changed under every copy")
 	ErrTargetUnconditional = errors.New("the target refuses a create-if-absent put")
 	ErrEngineNotReady      = errors.New("the database's engine is not ready")
 )
@@ -55,11 +55,11 @@ var (
 // sqlRecordBytes is the size of one record of a database's file (ADR-0234 Decision 2).
 const sqlRecordBytes = 8 << 20
 
-// Member is one store of a scope. Catalog is a CatalogService member's spec.catalog, which Write copies.
+// Member is one store of a scope. Location is a Lake member's spec.location, which Write copies.
 type Member struct {
-	Kind    v1.Kind
-	Name    v1.ObjectName
-	Catalog v1.CatalogRef
+	Kind     v1.Kind
+	Name     v1.ObjectName
+	Location v1.LakeLocation
 }
 
 // Sources are what Write reads: the KV driver's per-store export (ADR-0209 SnapshotPrefix; nil when the driver offers
@@ -82,7 +82,7 @@ type Options struct {
 	Recipients []string
 }
 
-// MemberFile is one member's files in the manifest: a store's one, a catalog's files then catalog.db, of Attempt.
+// MemberFile is one member's files in the manifest: a store's one, a lake's files then catalog.db, of Attempt.
 type MemberFile struct {
 	Kind    v1.Kind            `json:"kind"`
 	Name    v1.ObjectName      `json:"name"`
@@ -102,13 +102,13 @@ type Manifest struct {
 	Recipients []string     `json:"recipients,omitempty"`
 }
 
-// Resolve lists the members s names in ns (Decision 2), KVStores, Buckets, CatalogServices then SQLDatabases: by name, the
-// stores of the App's kv, buckets, catalogs and sql entries, or the stores of the ResourceGroup. A named member or App that
+// Resolve lists the members s names in ns (Decision 2), KVStores, Buckets, Lakes then SQLDatabases: by name, the
+// stores of the App's kv, buckets, lakes and sql entries, or the stores of the ResourceGroup. A named member or App that
 // does not exist is fault.NotFound naming it.
 func Resolve(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1.BackupScope) ([]Member, error) {
 	const op = "workload.Resolve"
 	names := map[v1.Kind][]v1.ObjectName{
-		v1.KindKVStore: s.KVStores, v1.KindBucket: s.Buckets, v1.KindCatalogService: s.Catalogs, v1.KindSQLDatabase: s.Databases,
+		v1.KindKVStore: s.KVStores, v1.KindBucket: s.Buckets, v1.KindLake: s.Lakes, v1.KindSQLDatabase: s.Databases,
 	}
 	switch {
 	case s.App != "":
@@ -124,8 +124,8 @@ func Resolve(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1.Back
 		for _, e := range a.Spec.Buckets {
 			names[v1.KindBucket] = append(names[v1.KindBucket], cmp.Or(e.Name, e.Ref))
 		}
-		for _, e := range a.Spec.Catalogs {
-			names[v1.KindCatalogService] = append(names[v1.KindCatalogService], cmp.Or(e.Name, e.Ref))
+		for _, e := range a.Spec.Lakes {
+			names[v1.KindLake] = append(names[v1.KindLake], cmp.Or(e.Name, e.Ref))
 		}
 		for _, e := range a.Spec.SQL {
 			names[v1.KindSQLDatabase] = append(names[v1.KindSQLDatabase], cmp.Or(e.Name, e.Ref))
@@ -153,8 +153,8 @@ func Resolve(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1.Back
 				return nil, fault.Wrapf(err, fault.KindOf(err), op, "member %s/%s", k, n)
 			}
 			m := Member{Kind: k, Name: n}
-			if cs, ok := obj.(*v1.CatalogService); ok {
-				m.Catalog = cs.Spec.Catalog
+			if cs, ok := obj.(*v1.Lake); ok {
+				m.Location = cs.Spec.Location
 			}
 			out = append(out, m)
 		}
@@ -163,7 +163,7 @@ func Resolve(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1.Back
 }
 
 func memberKinds() []v1.Kind {
-	return []v1.Kind{v1.KindKVStore, v1.KindBucket, v1.KindCatalogService, v1.KindSQLDatabase}
+	return []v1.Kind{v1.KindKVStore, v1.KindBucket, v1.KindLake, v1.KindSQLDatabase}
 }
 
 // KVPrefix is a KVStore's key prefix in the KV substrate, <ns>/<store>/ (ADR-0072).
@@ -172,10 +172,10 @@ func KVPrefix(ns v1.NamespaceName, name v1.ObjectName) string {
 }
 
 // Write copies ms under o.Path, then puts the manifest (Decisions 4, 5): a KVStore to kv/<store>/, a Bucket's
-// objects to blob/<bucket>/, a catalog's objects but catalog.db to catalog/<name>/<attempt>/files/ and then its
-// catalog.db to catalog/<name>/<attempt>/catalog.db/, and a SQLDatabase's SQLite file to sql/<name>/ in records of
-// 8 MiB keyed 000001, 000002, … (ADR-0234 Decision 2). A refused IfNotExist is ErrTargetUnconditional; a catalog whose
-// checkpoint names an object no attempt copied is ErrCatalogUnstable.
+// objects to blob/<bucket>/, a lake's objects but catalog.db to lake/<name>/<attempt>/files/ and then its
+// catalog.db to lake/<name>/<attempt>/catalog.db/, and a SQLDatabase's SQLite file to sql/<name>/ in records of
+// 8 MiB keyed 000001, 000002, … (ADR-0234 Decision 2). A refused IfNotExist is ErrTargetUnconditional; a lake whose
+// checkpoint names an object no attempt copied is ErrLakeUnstable.
 func Write(ctx context.Context, ns v1.NamespaceName, ms []Member, src Sources, o Options) (Manifest, error) {
 	const op = "workload.Write"
 	m := Manifest{
@@ -202,8 +202,8 @@ func Write(ctx context.Context, ns v1.NamespaceName, ms []Member, src Sources, o
 				return objects(ctx, src.Blob, src.BucketPrefix(ns, mb.Name), nil, emit)
 			})
 			mf.Files = []backup.StoreFile{f}
-		case v1.KindCatalogService:
-			mf, err = w.catalog(ctx, ns, mb, src)
+		case v1.KindLake:
+			mf, err = w.lake(ctx, ns, mb, src)
 		case v1.KindSQLDatabase:
 			if src.SQL == nil {
 				return Manifest{}, fault.Unavailablef(op, "member %s/%s: no SQL engine is wired", mb.Kind, mb.Name)
@@ -213,7 +213,7 @@ func Write(ctx context.Context, ns v1.NamespaceName, ms []Member, src Sources, o
 			})
 			mf.Files = []backup.StoreFile{f}
 		default:
-			err = fault.Invalidf(op, "member %s/%s: want a KVStore, Bucket, CatalogService or SQLDatabase", mb.Kind, mb.Name)
+			err = fault.Invalidf(op, "member %s/%s: want a KVStore, Bucket, Lake or SQLDatabase", mb.Kind, mb.Name)
 		}
 		if err != nil {
 			return Manifest{}, err
@@ -230,27 +230,27 @@ func Write(ctx context.Context, ns v1.NamespaceName, ms []Member, src Sources, o
 	return m, nil
 }
 
-// catalog copies one catalog in at most catalogAttempts attempts (Decision 5): the checkpoint C1, every other object
+// lake copies one lake in at most lakeAttempts attempts (Decision 5): the checkpoint C1, every other object
 // of the prefix, the check that each file C1 names was copied, then C1.
-// A catalog without a checkpoint is an empty member.
-func (w *writer) catalog(ctx context.Context, ns v1.NamespaceName, mb Member, src Sources) (MemberFile, error) {
+// A lake without a checkpoint is an empty member.
+func (w *writer) lake(ctx context.Context, ns v1.NamespaceName, mb Member, src Sources) (MemberFile, error) {
 	const op = "workload.Write"
-	root := src.BucketPrefix(ns, mb.Catalog.Bucket) + mb.Catalog.Prefix + "/"
+	root := src.BucketPrefix(ns, mb.Location.Bucket) + mb.Location.Prefix + "/"
 	var last string
-	for attempt := 1; attempt <= catalogAttempts; attempt++ {
+	for attempt := 1; attempt <= lakeAttempts; attempt++ {
 		c1, err := src.Blob.Get(ctx, root+checkpointName)
 		if fault.KindOf(err) == fault.NotFound {
-			// DuckLake opens a missing catalog.db as a new, empty catalog: no object under the prefix is part of one
+			// DuckLake opens a missing catalog.db as a new, empty lake: no object under the prefix is part of one
 			return MemberFile{Kind: mb.Kind, Name: mb.Name}, nil
 		}
 		if err != nil {
-			return MemberFile{}, fault.Wrapf(err, fault.KindOf(err), op, "catalog %s: read its checkpoint", mb.Name)
+			return MemberFile{}, fault.Wrapf(err, fault.KindOf(err), op, "lake %s: read its checkpoint", mb.Name)
 		}
 		attrs, err := src.Blob.Attributes(ctx, root+checkpointName)
 		if err != nil {
-			return MemberFile{}, fault.Wrapf(err, fault.KindOf(err), op, "catalog %s: read its checkpoint", mb.Name)
+			return MemberFile{}, fault.Wrapf(err, fault.KindOf(err), op, "lake %s: read its checkpoint", mb.Name)
 		}
-		dir := fmt.Sprintf("catalog/%s/%d/", mb.Name, attempt)
+		dir := fmt.Sprintf("lake/%s/%d/", mb.Name, attempt)
 		copied := map[string]bool{}
 		files, err := w.file(ctx, dir+"files", func(emit func(snapshot.Record) error) error {
 			return objects(ctx, src.Blob, root, func(key string) bool { return key == checkpointName }, func(r snapshot.Record) error {
@@ -261,9 +261,9 @@ func (w *writer) catalog(ctx context.Context, ns v1.NamespaceName, mb Member, sr
 		if err != nil {
 			return MemberFile{}, err
 		}
-		listed, err := CatalogFiles(c1)
+		listed, err := LakeFiles(c1)
 		if err != nil {
-			return MemberFile{}, fault.Wrapf(err, fault.KindOf(err), op, "catalog %s", mb.Name)
+			return MemberFile{}, fault.Wrapf(err, fault.KindOf(err), op, "lake %s", mb.Name)
 		}
 		if i := slices.IndexFunc(listed, func(k string) bool { return !copied[k] }); i >= 0 {
 			last = listed[i]
@@ -277,8 +277,8 @@ func (w *writer) catalog(ctx context.Context, ns v1.NamespaceName, mb Member, sr
 		}
 		return MemberFile{Kind: mb.Kind, Name: mb.Name, Attempt: attempt, Files: []backup.StoreFile{files, db}}, nil
 	}
-	return MemberFile{}, fault.Wrapf(ErrCatalogUnstable, fault.Conflict, op, "catalog %s: %d copies missed %q, which its checkpoint names",
-		mb.Name, catalogAttempts, last)
+	return MemberFile{}, fault.Wrapf(ErrLakeUnstable, fault.Conflict, op, "lake %s: %d copies missed %q, which its checkpoint names",
+		mb.Name, lakeAttempts, last)
 }
 
 // sqlFile emits a database's SQLite file from its engine as records of sqlRecordBytes, keyed by their 1-based index in

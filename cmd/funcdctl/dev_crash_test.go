@@ -121,8 +121,8 @@ func devRestartReaps(t *testing.T, mode, root string) string {
 }
 
 // scenario: dev-persist-restart-reaps — `funcdctl dev --persist` killed with SIGKILL and started again on the same
-// --persist-to dir reaps the first run's workers, and the new run's replicas serve. (The dev catalog engine's reap is
-// TestStateDirReapsEnginesOfACrashedRun in internal/catalog/devengine.)
+// --persist-to dir reaps the first run's workers, and the new run's replicas serve. (The dev lake engine's reap is
+// TestStateDirReapsEnginesOfACrashedRun in internal/lake/devengine.)
 func TestScenarioDevPersistRestartReaps(t *testing.T) {
 	if runDevChild(t) {
 		return

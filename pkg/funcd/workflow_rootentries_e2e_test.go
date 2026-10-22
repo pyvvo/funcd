@@ -115,36 +115,36 @@ func TestScenarioWorkflowSecretCheck(t *testing.T) {
 	e.waitExists(t, v1.KindFunction, "billing-charge")
 }
 
-// scenario: workflow-catalog
-func TestScenarioWorkflowCatalog(t *testing.T) {
+// scenario: workflow-lake
+func TestScenarioWorkflowLake(t *testing.T) {
 	t.Parallel()
 	e := startGC(t, funcd.WithGCSweepInterval(time.Second))
 	e.apply(t, rootWorkflow("marts", "query", e.image(t), func(s *v1.WorkflowSpec) {
 		s.Buckets = []v1.BucketEntry{{Name: "marts-files", BucketSpec: v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "lake", Owner: "lake"}}}}}
-		s.CatalogServices = []v1.CatalogEntry{{Name: "lake", CatalogServiceSpec: v1.CatalogServiceSpec{
-			Catalog:  v1.CatalogRef{Bucket: "marts-files", Prefix: "lake"},
-			Bindings: v1.CatalogServiceBindings{Blob: []v1.FunctionBlob{{Alias: "lake", Bucket: "marts-files", Prefix: "lake"}}},
+		s.Lakes = []v1.LakeEntry{{Name: "lake", LakeSpec: v1.LakeSpec{
+			Location: v1.LakeLocation{Bucket: "marts-files", Prefix: "lake"},
+			Bindings: v1.LakeBindings{Blob: []v1.FunctionBlob{{Alias: "lake", Bucket: "marts-files", Prefix: "lake"}}},
 		}}}
 		s.ConfigMaps = []v1.ConfigMapEntry{{Name: "tuning", ConfigMapSpec: v1.ConfigMapSpec{Data: map[string]string{"THREADS": "1"}}}}
-		s.Steps[0].Function.Bindings.Catalog = []v1.FunctionCatalog{{Alias: "lake", Catalog: "lake"}}
+		s.Steps[0].Function.Bindings.Lake = []v1.FunctionLake{{Alias: "lake", Lake: "lake"}}
 		s.Steps[0].Function.Bindings.Config = []v1.ObjectName{"tuning"}
 	}))
-	e.waitExists(t, v1.KindCatalogService, "lake")
+	e.waitExists(t, v1.KindLake, "lake")
 	wf := e.object(t, v1.KindWorkflow, "marts")
-	cs := e.object(t, v1.KindCatalogService, "lake").(*v1.CatalogService)
-	require.True(t, ownedstore.Marked(cs.OwnerReferences, wf), "CatalogService lake carries the Workflow's marker")
+	cs := e.object(t, v1.KindLake, "lake").(*v1.Lake)
+	require.True(t, ownedstore.Marked(cs.OwnerReferences, wf), "Lake lake carries the Workflow's marker")
 	require.True(t, v1.ControlledBy(cs.OwnerReferences, v1.KindWorkflow, wf.GetObjectMeta().UID), "and goes with it")
-	// The materializer writes the catalogs before the Workflow's buckets, so the bucket can lag the catalog.
+	// The materializer writes the lakes before the Workflow's buckets, so the bucket can lag the lake.
 	e.waitExists(t, v1.KindBucket, "marts-files")
 	b := e.object(t, v1.KindBucket, "marts-files").(*v1.Bucket)
-	require.Equal(t, []v1.BucketPrefix{{Name: "lake", Owner: "lake"}}, b.Spec.Prefixes, "a prefix owner naming a declared catalog is kept")
+	require.Equal(t, []v1.BucketPrefix{{Name: "lake", Owner: "lake"}}, b.Spec.Prefixes, "a prefix owner naming a declared lake is kept")
 	e.waitExists(t, v1.KindFunction, "marts-query")
-	require.Equal(t, []v1.FunctionCatalog{{Alias: "lake", Catalog: "lake"}}, e.function(t, "marts-query").Spec.Bindings.Catalog)
+	require.Equal(t, []v1.FunctionLake{{Alias: "lake", Lake: "lake"}}, e.function(t, "marts-query").Spec.Bindings.Lake)
 
 	tuning := v1.AppConfigMapName("tuning", v1.ConfigMapSpec{Data: map[string]string{"THREADS": "1"}})
 	e.waitExists(t, v1.KindConfigMap, string(tuning))
 	e.del(t, v1.KindWorkflow, "marts")
-	e.waitGone(t, v1.KindCatalogService, "lake")
+	e.waitGone(t, v1.KindLake, "lake")
 	e.waitGone(t, v1.KindConfigMap, string(tuning))
 }
 
@@ -157,40 +157,40 @@ func TestScenarioWorkflowRefKept(t *testing.T) {
 	cm := &v1.ConfigMap{TypeMeta: v1.TypeMeta{APIVersion: v1.KindConfigMap.GVK().APIVersion(), Kind: v1.KindConfigMap}}
 	cm.Name, cm.Namespace, cm.ResourceGroup = "shared-settings", "default", "rg1"
 	cm.Spec.Data = map[string]string{"TZ": "UTC"}
-	cat := &v1.CatalogService{TypeMeta: v1.TypeMeta{APIVersion: v1.KindCatalogService.GVK().APIVersion(), Kind: v1.KindCatalogService}}
+	cat := &v1.Lake{TypeMeta: v1.TypeMeta{APIVersion: v1.KindLake.GVK().APIVersion(), Kind: v1.KindLake}}
 	cat.Name, cat.Namespace, cat.ResourceGroup = "shared-lake", "default", "rg1"
 	cat.Spec.Buckets = []v1.BucketEntry{{Name: "shared-files", BucketSpec: v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "lake"}}}}}
-	cat.Spec.Catalog = v1.CatalogRef{Bucket: "shared-files", Prefix: "lake"}
+	cat.Spec.Location = v1.LakeLocation{Bucket: "shared-files", Prefix: "lake"}
 	cat.Spec.Bindings.Blob = []v1.FunctionBlob{{Alias: "lake", Bucket: "shared-files", Prefix: "lake"}}
 	for _, o := range []v1.Object{db, cm, cat} {
 		e.apply(t, o)
 	}
 	before := map[v1.Kind]v1.Object{
 		v1.KindSQLDatabase: e.object(t, v1.KindSQLDatabase, "shared-db"), v1.KindConfigMap: e.object(t, v1.KindConfigMap, "shared-settings"),
-		v1.KindCatalogService: e.object(t, v1.KindCatalogService, "shared-lake"),
+		v1.KindLake: e.object(t, v1.KindLake, "shared-lake"),
 	}
 
 	e.apply(t, rootWorkflow("users", "read", e.image(t), func(s *v1.WorkflowSpec) {
 		s.SQLDatabases = []v1.SQLDatabaseEntry{{Ref: "shared-db"}}
-		s.CatalogServices = []v1.CatalogEntry{{Ref: "shared-lake"}}
+		s.Lakes = []v1.LakeEntry{{Ref: "shared-lake"}}
 		s.ConfigMaps = []v1.ConfigMapEntry{{Ref: "shared-settings"}}
 		s.Steps[0].Function.Bindings = v1.StepBindings{
-			SQL:     []v1.FunctionSQL{{Alias: "db", Database: "shared-db"}},
-			Catalog: []v1.FunctionCatalog{{Alias: "lake", Catalog: "shared-lake"}},
-			Config:  []v1.ObjectName{"shared-settings"},
+			SQL:    []v1.FunctionSQL{{Alias: "db", Database: "shared-db"}},
+			Lake:   []v1.FunctionLake{{Alias: "lake", Lake: "shared-lake"}},
+			Config: []v1.ObjectName{"shared-settings"},
 		}
 	}))
 	e.waitExists(t, v1.KindFunction, "users-read")
 	step := e.function(t, "users-read")
 	require.Equal(t, []v1.ObjectName{"shared-settings"}, step.Spec.Bindings.Config, "a ref ConfigMap is bound by its own name")
 	require.Len(t, step.Spec.Bindings.SQL, 1)
-	require.Len(t, step.Spec.Bindings.Catalog, 1)
+	require.Len(t, step.Spec.Bindings.Lake, 1)
 
 	e.del(t, v1.KindWorkflow, "users")
 	e.waitGone(t, v1.KindFunction, "users-read")
 	require.True(t, poll.Never(func() bool {
 		return !e.exists(t, v1.KindSQLDatabase, "shared-db") || !e.exists(t, v1.KindConfigMap, "shared-settings") ||
-			!e.exists(t, v1.KindCatalogService, "shared-lake")
+			!e.exists(t, v1.KindLake, "shared-lake")
 	}, 2*time.Second, 100*time.Millisecond), "the ref objects outlive two GC sweeps")
 	for kind, obj := range before {
 		got := e.object(t, kind, string(obj.GetObjectMeta().Name))

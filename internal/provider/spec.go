@@ -1,11 +1,11 @@
 // Package provider holds the platform provider catalog (ADR-0082) and the add-on-provider
 // management runtime (ADR-0087, FEAT-0003/F57).
 //
-// The catalog is the blueprint provider model in code. A provider is a shared platform capability
+// The lake is the blueprint provider model in code. A provider is a shared platform capability
 // endpoint — funcd's wasmCloud-style capability provider (a binding is the link, a port + ≥2
 // drivers the contract) — in two tiers: built-in (in-daemon, pure-Go, trusted core) and add-on (an
 // out-of-daemon deployed service function). A Descriptor names a provider's existing ADR-0019
-// four-part shape (CRD + facade + controller + port + drivers); the catalog only classifies and
+// four-part shape (CRD + facade + controller + port + drivers); the lake only classifies and
 // replaces no facade, port or driver.
 //
 // The runtime is the mechanism funcd uses to deploy and supervise a curated engine image
@@ -17,7 +17,7 @@
 // engine — and serves its own protocol with its own HTTP readiness probe, not the funcd shim's
 // /health/readiness.
 //
-// A per-provider reconciler (the F48 CatalogService first) assembles a ProviderSpec and calls
+// A per-provider reconciler (the F48 Lake first) assembles a ProviderSpec and calls
 // Converge on every reconcile; Converge is re-entrant + idempotent and a crashed engine is
 // recreated on the next pass (supervision = re-convergence, no separate watchdog). Teardown stops
 // and removes every engine replica and removes any programmed route.

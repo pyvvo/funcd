@@ -1,5 +1,5 @@
 // Package bound declares at a test Function's root what its bindings name, for tests whose fixtures create the
-// stores, catalogs, ConfigMaps and Secrets themselves (ADR-0248 Decision 2).
+// stores, lakes, ConfigMaps and Secrets themselves (ADR-0248 Decision 2).
 package bound
 
 import (
@@ -8,7 +8,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
-// Declare adds a ref entry for each store, bucket, database, catalog and ConfigMap fn binds that its root does not
+// Declare adds a ref entry for each store, bucket, database, lake and ConfigMap fn binds that its root does not
 // declare yet, and the secrets declarations, which name the keys the fixture's Secrets hold.
 func Declare(fn *v1.Function, secrets ...v1.SecretDeclaration) {
 	s := &fn.Spec
@@ -27,9 +27,9 @@ func Declare(fn *v1.Function, secrets ...v1.SecretDeclaration) {
 			s.SQLDatabases = append(s.SQLDatabases, v1.SQLDatabaseEntry{Ref: b.Database})
 		}
 	}
-	for _, b := range s.Bindings.Catalog {
-		if !slices.ContainsFunc(s.CatalogServices, func(e v1.CatalogEntry) bool { return e.Name == b.Catalog || e.Ref == b.Catalog }) {
-			s.CatalogServices = append(s.CatalogServices, v1.CatalogEntry{Ref: b.Catalog})
+	for _, b := range s.Bindings.Lake {
+		if !slices.ContainsFunc(s.Lakes, func(e v1.LakeEntry) bool { return e.Name == b.Lake || e.Ref == b.Lake }) {
+			s.Lakes = append(s.Lakes, v1.LakeEntry{Ref: b.Lake})
 		}
 	}
 	for _, n := range s.Bindings.Config {

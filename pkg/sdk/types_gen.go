@@ -296,11 +296,11 @@ func bindingRows(b v1.FunctionBindings) []bindingRow {
 		blob = append(blob, x.Alias)
 	}
 	add("blob", blob)
-	cat := make([]string, 0, len(b.Catalog))
-	for _, x := range b.Catalog {
+	cat := make([]string, 0, len(b.Lake))
+	for _, x := range b.Lake {
 		cat = append(cat, x.Alias)
 	}
-	add("catalogs", cat)
+	add("lakes", cat)
 	links := make([]string, 0, len(b.Links))
 	for _, x := range b.Links {
 		links = append(links, x.Alias)

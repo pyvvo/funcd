@@ -329,7 +329,7 @@ func TestScenarioRecipientsChange(t *testing.T) {
 	}
 }
 
-// The fingerprint is labelled: neither a SHA-256 prefix of the bytes nor of the catalog-token HMAC key.
+// The fingerprint is labelled: neither a SHA-256 prefix of the bytes nor of the lake-token HMAC key.
 func TestFingerprintIsLabelled(t *testing.T) {
 	b := randomKey(t)
 	got := envelope.Fingerprint(b)

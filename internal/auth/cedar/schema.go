@@ -33,10 +33,10 @@ const (
 	// ADR-0135 (F100): a user-assigned managed identity — an external caller principal resolved from an
 	// Identity-issued keypair. Distinct from S3Identity (the raw-key principal); a RolesAssignment grants it.
 	entityTypeIdentity = "Identity"
-	// ADR-0137 (F102): the catalog serving-layer resource — the CatalogService a catalog::query targets.
-	// A Function's spec.bindings.catalog are its `catalogBindings` (binding-as-query-grant); a Catalog-scoped
-	// RolesAssignment grants an Identity query on it. The catalog PEP proxy is the enforcement point.
-	entityTypeCatalogService = "CatalogService"
+	// ADR-0137 (F102): the lake serving-layer resource — the Lake a lake::query targets.
+	// A Function's spec.bindings.lake are its `lakeBindings` (binding-as-query-grant); a Lake-scoped
+	// RolesAssignment grants an Identity query on it. The lake PEP proxy is the enforcement point.
+	entityTypeLake = "Lake"
 	// ADR-0117 (F81 egress): the ephemeral outbound destination — carries {ip, port, domains} attrs,
 	// materialized from the request EntityRef's Path (no MetaReader read). Its id is the "<ip>:<port>" prefix.
 	entityTypeNetDestination = "NetDestination"
@@ -46,7 +46,7 @@ const (
 )
 
 // defaultRegistry is the assembled capability registry (ADR-0116): the three migrated capabilities
-// (kv, invoke, s3) + the two default principal sources (Function, CatalogService; each resolves only its
+// (kv, invoke, s3) + the two default principal sources (Function, Lake; each resolves only its
 // own principal type, ADR-0175). The
 // schema vocabulary (KnownAction/KnownEntityType), the built-in PolicySet (Builtins), and the default
 // EntityProvider are all assembled from it — replacing the hand-listed curatedActions/curatedEntityTypes
@@ -56,8 +56,8 @@ const (
 //
 //nolint:gochecknoglobals // the assembled default capability registry (ADR-0116)
 var defaultRegistry, _ = NewRegistry(
-	[]Capability{KVCapability(), InvokeCapability(), S3Capability(), EgressCapability(), CatalogCapability(), SQLCapability()},
-	[]PrincipalSource{FunctionPrincipalSource(), CatalogServicePrincipalSource()},
+	[]Capability{KVCapability(), InvokeCapability(), S3Capability(), EgressCapability(), LakeCapability(), SQLCapability()},
+	[]PrincipalSource{FunctionPrincipalSource(), LakePrincipalSource()},
 )
 
 // KnownAction reports whether action is in the assembled schema vocabulary (ADR-0116).
@@ -109,7 +109,7 @@ func (e scopeEntity) named() []scopeUID {
 func namespacedEntityType(t string) bool {
 	switch t {
 	case entityTypeFunction, entityTypeKVStore, entityTypeKVTable, entityTypeBucket, entityTypeBlobPrefix,
-		entityTypeS3Identity, entityTypeIdentity, entityTypeCatalogService, entityTypeSQLDatabase:
+		entityTypeS3Identity, entityTypeIdentity, entityTypeLake, entityTypeSQLDatabase:
 		return true
 	}
 	return false

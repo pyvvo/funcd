@@ -25,7 +25,7 @@ func TestIssue565_TrackedArchivesCarryNoOwnerNames(t *testing.T) {
 	var leaks []string
 	for _, f := range trackedFiles(t, root, "*.tar", "*.tar.gz", "*.tgz") {
 		// The staged blob, not the working tree: a local build overwrites these with real archives
-		// (build-runtime-images, build-catalog-engine) under skip-worktree, and those are never committed.
+		// (build-runtime-images, build-lake-engine) under skip-worktree, and those are never committed.
 		cmd := exec.Command("git", "cat-file", "blob", ":"+f)
 		cmd.Dir = root
 		data, err := cmd.Output()
@@ -46,7 +46,7 @@ func TestIssue565_TrackedArchivesCarryNoOwnerNames(t *testing.T) {
 		}
 	}
 	require.Empty(t, leaks, "owner names or macOS metadata in a committed archive; "+
-		"repack it with --numeric-owner and no xattrs or macOS metadata, as scripts/fetch-catalog-engine.sh does")
+		"repack it with --numeric-owner and no xattrs or macOS metadata, as scripts/fetch-lake-engine.sh does")
 }
 
 func TestIssue565_TarLeaksReportsEachLeak(t *testing.T) {

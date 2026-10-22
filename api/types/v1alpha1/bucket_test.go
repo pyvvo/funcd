@@ -87,30 +87,30 @@ func TestFunctionBlobValidate(t *testing.T) {
 	}
 }
 
-// scenario: alias-unique-dns1123 — spec.catalogs structural rules (ADR-0091): each alias is a unique
-// DNS-1123 label and catalog is a DNS-1123 label; a resolvable shape validates, a duplicate alias /
-// bad alias / bad catalog name is rejected.
-func TestFunctionCatalogValidate(t *testing.T) {
-	mk := func(cats ...FunctionCatalog) *Function {
+// scenario: alias-unique-dns1123 — spec.lakes structural rules (ADR-0091): each alias is a unique
+// DNS-1123 label and lake is a DNS-1123 label; a resolvable shape validates, a duplicate alias /
+// bad alias / bad lake name is rejected.
+func TestFunctionLakeValidate(t *testing.T) {
+	mk := func(cats ...FunctionLake) *Function {
 		return &Function{
 			TypeMeta:   TypeMeta{APIVersion: KindFunction.GVK().APIVersion(), Kind: KindFunction},
 			ObjectMeta: ObjectMeta{Name: "f", Namespace: "default", ResourceGroup: "rg1"},
-			Spec:       FunctionSpec{Bindings: FunctionBindings{Catalog: cats}},
+			Spec:       FunctionSpec{Bindings: FunctionBindings{Lake: cats}},
 		}
 	}
-	if err := mk(FunctionCatalog{Alias: "lake", Catalog: "lake"}).Validate(); err != nil {
-		t.Errorf("valid spec.catalogs rejected: %v", err)
+	if err := mk(FunctionLake{Alias: "lake", Lake: "lake"}).Validate(); err != nil {
+		t.Errorf("valid spec.lakes rejected: %v", err)
 	}
 	if err := mk(
-		FunctionCatalog{Alias: "a", Catalog: "lake"},
-		FunctionCatalog{Alias: "a", Catalog: "warehouse"},
+		FunctionLake{Alias: "a", Lake: "lake"},
+		FunctionLake{Alias: "a", Lake: "warehouse"},
 	).Validate(); fault.KindOf(err) != fault.Invalid {
-		t.Errorf("duplicate spec.bindings.catalog alias: want Invalid, got %v", err)
+		t.Errorf("duplicate spec.bindings.lake alias: want Invalid, got %v", err)
 	}
-	if err := mk(FunctionCatalog{Alias: "Bad Alias", Catalog: "lake"}).Validate(); fault.KindOf(err) != fault.Invalid {
-		t.Errorf("bad spec.bindings.catalog alias: want Invalid, got %v", err)
+	if err := mk(FunctionLake{Alias: "Bad Alias", Lake: "lake"}).Validate(); fault.KindOf(err) != fault.Invalid {
+		t.Errorf("bad spec.bindings.lake alias: want Invalid, got %v", err)
 	}
-	if err := mk(FunctionCatalog{Alias: "lake", Catalog: "Bad_Catalog"}).Validate(); fault.KindOf(err) != fault.Invalid {
-		t.Errorf("bad spec.catalogs catalog name: want Invalid, got %v", err)
+	if err := mk(FunctionLake{Alias: "lake", Lake: "Bad_Lake"}).Validate(); fault.KindOf(err) != fault.Invalid {
+		t.Errorf("bad spec.lakes lake name: want Invalid, got %v", err)
 	}
 }

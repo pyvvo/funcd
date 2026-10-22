@@ -121,7 +121,7 @@ func CompileEgressPolicy(ns v1.NamespaceName, ep *v1.EgressPolicy, funcs []v1.Ob
 }
 
 // namespaceScope is the whole-namespace principal guard: principal is Function && principal.namespace ==
-// "<ns>". The type test keeps every other principal of the namespace, such as a CatalogService engine,
+// "<ns>". The type test keeps every other principal of the namespace, such as a Lake engine,
 // out of the grant (ADR-0175).
 func namespaceScope(ns v1.NamespaceName) estNode {
 	return estAnd(estIs(estVar("principal"), entityTypeFunction), estEq(estAccess(estVar("principal"), "namespace"), estVal(string(ns))))

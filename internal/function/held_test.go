@@ -162,8 +162,8 @@ func TestHeldWakeUnderCurrentRevisionGate(t *testing.T) {
 		{"data-reference", v1.PhaseDeploying, "KVStoreNotFound", func(fn *v1.Function) {
 			fn.Spec.Bindings.KV = []v1.FunctionKV{{Alias: "cache", Store: "nostore", Table: "t"}}
 		}},
-		{"catalog", v1.PhaseDeploying, "CatalogNotReady", func(fn *v1.Function) {
-			fn.Spec.Bindings.Catalog = []v1.FunctionCatalog{{Alias: "lake", Catalog: "nolake"}}
+		{"lake", v1.PhaseDeploying, "LakeNotReady", func(fn *v1.Function) {
+			fn.Spec.Bindings.Lake = []v1.FunctionLake{{Alias: "lake", Lake: "nolake"}}
 		}},
 	}
 	for _, tc := range cases {

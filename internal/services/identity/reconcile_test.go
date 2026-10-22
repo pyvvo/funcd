@@ -10,8 +10,8 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
-	cataloggw "github.com/pyvvo/funcd/internal/catalog/gateway"
 	"github.com/pyvvo/funcd/internal/controller"
+	lakegw "github.com/pyvvo/funcd/internal/lake/gateway"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
 )
@@ -76,8 +76,8 @@ func TestScenarioIdentityIssuesCredential(t *testing.T) {
 	id := getIdentity(t, st, "data", "releve-dropper")
 	require.Equal(t, v1.PhaseReady, id.Status.Phase)
 	require.Equal(t, s3gateway.IdentityAccessKey("data", "releve-dropper"), id.Status.AccessKeyID)
-	require.True(t, strings.HasPrefix(string(sec.Spec.Data[secretKeyCatalogToken]), id.Status.AccessKeyID+"."),
-		"the catalog token carries the Identity's access key id as its owner prefix")
+	require.True(t, strings.HasPrefix(string(sec.Spec.Data[secretKeyLakeToken]), id.Status.AccessKeyID+"."),
+		"the lake token carries the Identity's access key id as its owner prefix")
 
 	ext := NewExternalKeys(st)
 	secret, ns, ok := ext.Lookup(id.Status.AccessKeyID)
@@ -128,20 +128,20 @@ func TestScenarioIdentityDeletedRevokes(t *testing.T) {
 	require.False(t, ok, "a deleted Identity's key stops authenticating")
 }
 
-func catalogToken(t *testing.T, st store.Store, ns, name string) string {
+func lakeToken(t *testing.T, st store.Store, ns, name string) string {
 	t.Helper()
-	return string(getSecret(t, st, ns, name).Spec.Data[secretKeyCatalogToken])
+	return string(getSecret(t, st, ns, name).Spec.Data[secretKeyLakeToken])
 }
 
-// scenario: identity-token-resolves — the catalogToken the reconciler mints into the owned Secret resolves
-// to the Identity at the catalog PEP proxy.
+// scenario: identity-token-resolves — the lakeToken the reconciler mints into the owned Secret resolves
+// to the Identity at the lake PEP proxy.
 func TestScenarioIdentityTokenResolves(t *testing.T) {
 	t.Parallel()
 	st, r := setup(t)
 	newIdentity(t, st, "data", "analyst")
 	reconcile(t, r, "data", "analyst")
 
-	ref, ok := cataloggw.NewCatalogKeys([]byte("node-master"), st).PrincipalFor(catalogToken(t, st, "data", "analyst"))
+	ref, ok := lakegw.NewLakeKeys([]byte("node-master"), st).PrincipalFor(lakeToken(t, st, "data", "analyst"))
 	require.True(t, ok)
 	require.Equal(t, auth.EntityRef{Type: v1.KindIdentity, Namespace: "data", Name: "analyst"}, ref)
 }
@@ -153,14 +153,14 @@ func TestScenarioIdentityTokenRotation(t *testing.T) {
 	st, r := setup(t)
 	newIdentity(t, st, "data", "rot")
 	reconcile(t, r, "data", "rot")
-	t1 := catalogToken(t, st, "data", "rot")
+	t1 := lakeToken(t, st, "data", "rot")
 
 	id := getIdentity(t, st, "data", "rot")
 	id.Spec.Rotate = 1
 	_, err := st.Update(context.Background(), id)
 	require.NoError(t, err)
 	reconcile(t, r, "data", "rot")
-	t2 := catalogToken(t, st, "data", "rot")
+	t2 := lakeToken(t, st, "data", "rot")
 
 	prefix1, random1, found1 := strings.Cut(t1, ".")
 	prefix2, random2, found2 := strings.Cut(t2, ".")
@@ -170,7 +170,7 @@ func TestScenarioIdentityTokenRotation(t *testing.T) {
 	require.Equal(t, getIdentity(t, st, "data", "rot").Status.AccessKeyID, prefix2)
 	require.NotEqual(t, random1, random2, "rotation mints a new random part")
 
-	keys := cataloggw.NewCatalogKeys([]byte("node-master"), st)
+	keys := lakegw.NewLakeKeys([]byte("node-master"), st)
 	ref, ok := keys.PrincipalFor(t2)
 	require.True(t, ok, "the re-issued token resolves")
 	require.Equal(t, auth.EntityRef{Type: v1.KindIdentity, Namespace: "data", Name: "rot"}, ref)

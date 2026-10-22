@@ -13,13 +13,13 @@ import (
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
-// scenario: catalog-cycle-any-order (ADR-0121) — the Bucket↔CatalogService owner/binding cycle applies in
-// the "wrong" order (the CatalogService, which binds the Bucket AND is its prefix owner, applied BEFORE the
+// scenario: lake-cycle-any-order (ADR-0121) — the Bucket↔Lake owner/binding cycle applies in
+// the "wrong" order (the Lake, which binds the Bucket AND is its prefix owner, applied BEFORE the
 // Bucket) with NO two-phase workaround. Both Apply calls SUCCEED over the real control plane (the removed
-// catalog-blob-validity / bucket-prefix-owner-exists admissions would have rejected them synchronously); the
-// CatalogService is held not-Ready with a BucketNotFound Waiting condition, and once the Bucket is applied it
+// lake-blob-validity / bucket-prefix-owner-exists admissions would have rejected them synchronously); the
+// Lake is held not-Ready with a BucketNotFound Waiting condition, and once the Bucket is applied it
 // converges PAST the gate. This is the end-to-end proof of apply-all-and-converge.
-func TestScenarioDeclarativeAdmissionCatalogCycle(t *testing.T) {
+func TestScenarioDeclarativeAdmissionLakeCycle(t *testing.T) {
 	p, err := New(InMemory())
 	require.NoError(t, err)
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -31,31 +31,31 @@ func TestScenarioDeclarativeAdmissionCatalogCycle(t *testing.T) {
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	// Apply the CatalogService FIRST — it binds Bucket `lakehouse` (gold), declared by ref (ADR-0251), which does not
-	// exist yet. Before ADR-0121 the catalog-blob-validity admission REJECTED this synchronously; now it is admitted.
-	cs := &v1.CatalogService{
-		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindCatalogService.GVK().APIVersion(), Kind: v1.KindCatalogService},
+	// Apply the Lake FIRST — it binds Bucket `lakehouse` (gold), declared by ref (ADR-0251), which does not
+	// exist yet. Before ADR-0121 the lake-blob-validity admission REJECTED this synchronously; now it is admitted.
+	cs := &v1.Lake{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindLake.GVK().APIVersion(), Kind: v1.KindLake},
 		ObjectMeta: v1.ObjectMeta{Name: "lake", Namespace: "default", ResourceGroup: "rg1"},
-		Spec: v1.CatalogServiceSpec{
-			Catalog:  v1.CatalogRef{Bucket: "lakehouse", Prefix: "gold"},
-			Bindings: v1.CatalogServiceBindings{Blob: []v1.FunctionBlob{{Alias: "gold", Bucket: "lakehouse", Prefix: "gold"}}},
+		Spec: v1.LakeSpec{
+			Location: v1.LakeLocation{Bucket: "lakehouse", Prefix: "gold"},
+			Bindings: v1.LakeBindings{Blob: []v1.FunctionBlob{{Alias: "gold", Bucket: "lakehouse", Prefix: "gold"}}},
 			Buckets:  []v1.BucketEntry{{Ref: "lakehouse"}},
 		},
 	}
 	_, err = c.Apply(ctx, cs)
-	require.NoError(t, err, "the CatalogService is ADMITTED though its bound Bucket does not exist yet (no synchronous reject)")
+	require.NoError(t, err, "the Lake is ADMITTED though its bound Bucket does not exist yet (no synchronous reject)")
 
 	// It is held not-Ready with a BucketNotFound Waiting condition (the reconcile-time existence gate).
 	require.Eventually(t, func() bool {
-		obj, gerr := c.Get(ctx, v1.KindCatalogService, "default", "lake")
+		obj, gerr := c.Get(ctx, v1.KindLake, "default", "lake")
 		if gerr != nil {
 			return false
 		}
-		cond, ok := obj.(*v1.CatalogService).Status.Conditions.Get("Ready")
+		cond, ok := obj.(*v1.Lake).Status.Conditions.Get("Ready")
 		return ok && cond.Status == v1.ConditionFalse && cond.Reason == "BucketNotFound"
-	}, 10*time.Second, 50*time.Millisecond, "CatalogService waits Ready=False/BucketNotFound until its Bucket exists")
+	}, 10*time.Second, 50*time.Millisecond, "Lake waits Ready=False/BucketNotFound until its Bucket exists")
 
-	// Apply the Bucket WITH the prefix owner referencing the CatalogService — the removed
+	// Apply the Bucket WITH the prefix owner referencing the Lake — the removed
 	// bucket-prefix-owner-exists admission is now reconcile-time, so this is admitted in any order.
 	bkt := &v1.Bucket{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindBucket.GVK().APIVersion(), Kind: v1.KindBucket},
@@ -63,7 +63,7 @@ func TestScenarioDeclarativeAdmissionCatalogCycle(t *testing.T) {
 		Spec:       v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "gold", Owner: "lake"}}},
 	}
 	_, err = c.Apply(ctx, bkt)
-	require.NoError(t, err, "the Bucket is ADMITTED though its prefix owner is a CatalogService (owner existence is reconcile-time)")
+	require.NoError(t, err, "the Bucket is ADMITTED though its prefix owner is a Lake (owner existence is reconcile-time)")
 
 	// Both resources are admitted in the "wrong" order (the cycle is broken) and the consumer surfaces an
 	// observable Waiting condition — the ADMISSION change this ADR makes. Convergence PAST the bucket gate
