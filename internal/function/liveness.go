@@ -166,8 +166,12 @@ func (r *Reconciler) probeReadiness(ctx context.Context, ip string, port int) (r
 		return true, nil, false
 	case http.StatusServiceUnavailable:
 		var rep local.DependencyReport
-		if json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&rep) == nil && rep.Kind != "" {
+		err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&rep)
+		switch {
+		case err == nil && rep.Kind != "":
 			return false, &rep, false
+		case err != nil && lateRead(err):
+			return false, nil, true
 		}
 	}
 	return false, nil, false

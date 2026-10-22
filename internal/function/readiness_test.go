@@ -189,6 +189,45 @@ func TestLateAnswerKeepsSoloReadyInAFullPass(t *testing.T) {
 	require.Equal(t, 1, fn.Status.Replicas)
 }
 
+// A kept answer is never the pool host's liveness (ADR-0259 Decision 2): a host that stops answering both checks is
+// restarted runtime.livenessTimeout after its last liveness answer, while its member reads still count by its last
+// answer.
+func TestKeptAnswerIsNotLiveness(t *testing.T) {
+	t.Parallel()
+	p := deployPlaced(t, true, withReadinessTimeout(time.Hour))
+	host := p.h.rt.servePoolWorker(t, p.h.poolID(t, "w1"))
+	p.h.reconcile(t, p.name)
+	creates := p.h.creates()
+
+	host.setLive(http.StatusServiceUnavailable)
+	p.silence(true)
+	for range 3 {
+		p.clk.Advance(healthPeriod)
+		p.h.reconcile(t, p.name)
+	}
+	require.Equal(t, creates+1, p.h.creates(), "restarted, though every member read in between was kept")
+}
+
+// A held revision follows the window too (ADR-0259 Decision 3): late past it, its Revision reads Degraded,
+// NotAnswering, not "a replica exited".
+func TestHeldRevisionLatePastWindowIsNotAnswering(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withSwitch, withReadinessTimeout(time.Nanosecond))
+	ref := heldAtZero(t, h)
+	stall := h.rt.serveStalling(t, "echo-1")
+	require.Equal(t, v1.PhaseReady, h.wakeHeld(t, ref).Status.Phase)
+
+	stall()
+	h.reconcile(t, "echo")
+	h.reconcile(t, "echo")
+	rev := h.revisionEvent(t, "echo-1")
+	require.Equal(t, v1.PhaseDegraded, rev.Status.Phase)
+	c, ok := rev.Status.Conditions.Get("Ready")
+	require.True(t, ok)
+	require.Equal(t, "NotAnswering", c.Reason)
+	require.Equal(t, "a replica has not answered /health/readiness for 1ns", c.Message)
+}
+
 // serveReset gives worker id an endpoint that closes every connection with no answer.
 func (f *fakeRuntime) serveReset(t *testing.T, id runtime.InstanceID) {
 	t.Helper()

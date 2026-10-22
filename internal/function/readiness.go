@@ -13,8 +13,8 @@ import (
 // defaultReadinessTimeout is runtime.readinessTimeout's default (ADR-0259 Decision 5).
 const defaultReadinessTimeout = 5 * time.Second
 
-// reasonNotAnswering is Ready's reason while a serving Function has no ready worker and a worker of it is unanswered
-// past runtime.readinessTimeout (ADR-0259 Decision 3).
+// reasonNotAnswering is Ready's reason while a serving Function has no ready worker and every worker it judges runs
+// and is late past runtime.readinessTimeout (ADR-0259 Decision 3).
 const reasonNotAnswering = "NotAnswering"
 
 // readAnswer is a worker's answer to a readiness read: a solo replica's verdict and dependency report, or a pool

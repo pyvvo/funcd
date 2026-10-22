@@ -106,6 +106,9 @@ func (f *fakeRuntime) servePoolWorker(t *testing.T, id runtime.InstanceID) *pool
 		switch r.URL.Path {
 		case "/health/members":
 			s.members.Add(1)
+			if f.isMembersLate() {
+				stallPastProbe(r)
+			}
 			f.serveMembersOf(w, id)
 		case "/health/liveness":
 			w.WriteHeader(int(s.live.Load()))
