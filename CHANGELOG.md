@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.0](https://github.com/pyvvo/funcd/compare/v0.21.0...v0.22.0) (2026-10-22)
+
+
+### Features
+
+* **function:** a late health answer keeps a worker's last readiness for runtime.readinessTimeout (ADR-0259) ([d6814ef](https://github.com/pyvvo/funcd/commit/d6814efb041e2701ebe469b3389c1bfe7306d731))
+
 ## [0.21.0](https://github.com/pyvvo/funcd/compare/v0.20.0...v0.21.0) (2026-10-21)
 
 
