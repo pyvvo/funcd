@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"syscall"
 	"testing"
 	"time"
@@ -26,18 +27,13 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
+	"github.com/pyvvo/funcd/internal/testkit/freeport"
 )
 
-// freeLoopbackAddr returns an unused 127.0.0.1:port for the gateway listener.
+// freeLoopbackAddr returns an unused 127.0.0.1:port for the gateway listener, outside the ephemeral range (#1155).
 func freeLoopbackAddr(t *testing.T) string {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("reserve port: %v", err)
-	}
-	addr := l.Addr().String()
-	_ = l.Close()
-	return addr
+	return net.JoinHostPort("127.0.0.1", strconv.Itoa(freeport.Port(t)))
 }
 
 // testSources is read through the embed so a `go test -overlay` revert check sees the overlaid source.
@@ -359,5 +355,17 @@ func TestIssue109_BucketMaxObjectBytesRejectsOversizeWrite(t *testing.T) {
 	}
 	if perr := view.Put(ctx, "raw/direct.parquet", make([]byte, 17), blob.PutOptions{}); fault.KindOf(perr) != fault.PayloadTooLarge {
 		t.Fatalf("the Bucket view must refuse an over-cap Put as PayloadTooLarge, got %v", perr)
+	}
+}
+
+// Issue #1155: an address reserved for a later bind lies below the ephemeral range, which every :0 bind draws from, so
+// no other test's :0 bind can take it before the gateway binds it (#758).
+func TestIssue1155_FreeLoopbackAddrAvoidsTheEphemeralRange(t *testing.T) {
+	_, port, err := net.SplitHostPort(freeLoopbackAddr(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := strconv.Atoi(port); p >= 32768 {
+		t.Fatalf("freeLoopbackAddr reserved ephemeral port %d", p)
 	}
 }

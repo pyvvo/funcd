@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strconv"
 	"syscall"
 	"testing"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
+	"github.com/pyvvo/funcd/internal/testkit/freeport"
 )
 
 // testMaster is a fixed node master secret for the gateway tests (deterministic keypairs).
@@ -206,11 +208,7 @@ func (g *gw) seed(t *testing.T, ns, bucket, key string, data []byte) {
 
 func freeAddr(t *testing.T) string {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	addr := l.Addr().String()
-	require.NoError(t, l.Close())
-	return addr
+	return net.JoinHostPort("127.0.0.1", strconv.Itoa(freeport.Port(t)))
 }
 
 // statusCode extracts an HTTP status from an aws-sdk error (403 etc.), or 0.
@@ -224,3 +222,13 @@ func statusCode(err error) int {
 
 // ensure authz import is used (the EntityRef type underlies the PEP).
 var _ = authz.ActionS3Read
+
+// Issue #1155: an address reserved for a later bind lies below the ephemeral range, which every :0 bind draws from, so
+// no other test's :0 bind can take it before the gateway binds it (#758).
+func TestIssue1155_FreeAddrAvoidsTheEphemeralRange(t *testing.T) {
+	_, port, err := net.SplitHostPort(freeAddr(t))
+	require.NoError(t, err)
+	p, err := strconv.Atoi(port)
+	require.NoError(t, err)
+	require.Less(t, p, 32768)
+}
