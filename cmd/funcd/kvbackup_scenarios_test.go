@@ -297,8 +297,9 @@ func restoredKV(t *testing.T, cfg config.Config, key string) bool {
 // scenario: restore-any-point — chain n with segments 1 to 5 and victim deleted in 3: `funcd restore kv n/2` and
 // `n/5` into empty kvstore.dataDirs hold and lack victim, each leaving the platform held; a non-empty one is
 // fault.Conflict; once base n expires both are listed not restorable and a restore is fault.NotFound, writing nothing.
+//
+// Serial: it reopens restored Badger directories, which a parallel test's forked child can hold locked (#1149).
 func TestScenarioRestoreAnyPoint(t *testing.T) {
-	t.Parallel()
 	target := t.TempDir()
 	kvChain(t, target)
 	kvYAMLFor := "  backup:\n    enabled: true\n    target: \"" + gocloud.FileURL(target) + "\"\n    encryption:\n      none: true\n"

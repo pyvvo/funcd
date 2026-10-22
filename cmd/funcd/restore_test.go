@@ -260,8 +260,9 @@ func TestScenarioRestoreRefusesNonEmpty(t *testing.T) {
 
 // scenario: restore-crash-refuses-start — what a restore run killed after its metastore Load leaves (restore.inprogress,
 // the marker, a partial metastore) refuses the start with a Conflict naming it; once emptied, a new run boots held.
+//
+// Serial: it reopens a Badger directory it closed, which a parallel test's forked child can hold locked (#1149).
 func TestScenarioRestoreCrashRefusesStart(t *testing.T) {
-	t.Parallel()
 	s := newGSource(t, nil)
 	s.cut(t)
 	n := newNode(t, nil, "")
