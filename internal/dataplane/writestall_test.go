@@ -34,6 +34,11 @@ import (
 // stall is the write stall limit S of these tests; production uses gateway.WriteStallTimeout.
 const stall = 300 * time.Millisecond
 
+// cutStall is S where a stalled client is cut while client B reads the whole 32 MiB body through the fixed 64 KiB send
+// buffer: under -race on a loaded host, B could take no data for 300 ms and was cut too (#1169). Two seconds keep B
+// whole there, and A is still cut.
+const cutStall = 2 * time.Second
+
 const (
 	bigBody   = 32 << 20
 	routeHost = "app.example.com"
@@ -46,8 +51,8 @@ func listenerChain(core http.Handler, lim limit.Config, outer ...gateway.Middlew
 	return gateway.Chain(core, mw...)
 }
 
-func edgeChain(core http.Handler, lim limit.Config) http.Handler {
-	return listenerChain(core, lim, gateway.WriteStall(stall))
+func edgeChain(core http.Handler, lim limit.Config, s time.Duration) http.Handler {
+	return listenerChain(core, lim, gateway.WriteStall(s))
 }
 
 // serveListener serves h with the data-plane listener's read timeouts and a fixed send buffer, over TLS with HTTP/2
@@ -156,7 +161,7 @@ func TestScenarioStalledReaderIsCut(t *testing.T) {
 			}))
 			t.Cleanup(up.Close)
 			core, calls := functionPlane(t, up.URL)
-			srv := serveListener(t, edgeChain(core, limit.Config{MaxInFlight: 1}), tc.h2)
+			srv := serveListener(t, edgeChain(core, limit.Config{MaxInFlight: 1}, cutStall), tc.h2)
 
 			var drainA func()
 			if tc.h2 {
@@ -176,7 +181,7 @@ func TestScenarioStalledReaderIsCut(t *testing.T) {
 				drainA = func() { requireCut(t, a, bigBody) }
 			}
 
-			time.Sleep(stall + 2*time.Second)
+			time.Sleep(cutStall + 2*time.Second)
 			status, b := getBody(t, srv.Client(), srv.URL+tc.path, tc.host)
 			requireWhole(t, status, b, bigBody)
 			drainA()
@@ -208,10 +213,10 @@ func TestScenarioStalledStaticAssetIsCut(t *testing.T) {
 	act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
 	require.NoError(t, err)
 	core := dataplane.Handler(st, act, rtr, "", nil, nil, sh, 0, nil)
-	srv := serveListener(t, edgeChain(core, limit.Config{MaxInFlight: 1}), false)
+	srv := serveListener(t, edgeChain(core, limit.Config{MaxInFlight: 1}, cutStall), false)
 
 	a := stalledClient(t, srv.Listener.Addr().String(), routeHost, "/big.bin")
-	time.Sleep(stall + 2*time.Second)
+	time.Sleep(cutStall + 2*time.Second)
 	status, body := getBody(t, srv.Client(), srv.URL+"/big.bin", routeHost)
 	requireWhole(t, status, body, asset)
 	requireCut(t, a, asset)
@@ -224,7 +229,7 @@ func streamPlane(t *testing.T, handle http.HandlerFunc, h2 bool) *httptest.Serve
 	up := httptest.NewServer(handle)
 	t.Cleanup(up.Close)
 	core, _ := functionPlane(t, up.URL)
-	return serveListener(t, edgeChain(core, limit.Config{}), h2)
+	return serveListener(t, edgeChain(core, limit.Config{}, stall), h2)
 }
 
 func sendEvent(w http.ResponseWriter, i int) {
