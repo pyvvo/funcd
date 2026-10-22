@@ -12313,5 +12313,20 @@
     "dod_total": 12,
     "report": "docs/reviews/issue-1175-fix-claude-opus-5-5.md",
     "notes": "0 findings. Test-only: TestOwn's reference dir takes the user's primary group; revert fails in a wheel-group TMPDIR and under nix develop, fix passes 3/3 -race and on Linux non-root and root; 2 hold.Own mutants killed; sibling owner helpers pick the user's own groups, none left"
+  },
+  {
+    "date": "2026-10-22",
+    "issue": "1178",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "changes-requested",
+    "blockers": 0,
+    "majors": 1,
+    "minors": 1,
+    "model_attributed": 2,
+    "dod_passed": 11,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-1178-fix-claude-opus-5-5.md",
+    "notes": "guard fails on main naming the nine, passes on the branch; Major(model): three pkg/funcd parallel tests reopen Badger dirs in the e2e binary (siblings left); Minor(model): guard counts per text segment, not per node"
   }
 ]
