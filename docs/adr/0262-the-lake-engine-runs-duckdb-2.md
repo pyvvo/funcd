@@ -1,16 +1,16 @@
-# ADR-0262: The Lake engine runs DuckDB 2.0, with its catalogs kept at DuckLake 1.0
+# ADR-0262: The Lake engine runs DuckDB 2.0, and its new catalogs use DuckLake 1.1
 
-- **Status**: Proposed; judged three times, every finding folded; round 3: accept after three one-line fixes, applied.
+- **Status**: Proposed; judged three times; revised on 2026-10-23 for DuckLake 1.1 and no consumers (the decider).
 - **Date**: 2026-10-22
 - **Deciders**: green-0-rabbit
-- **Tags**: lake, duckdb, ducklake, quack, dev, dependency, breaking-change
+- **Tags**: lake, duckdb, ducklake, quack, dev, dependency
 - **Realizes**: [FEAT-0003/F181](../feat/0003-feat-data-platform.md)
-- **Supersedes (in part)**: [ADR-0086](0086-catalog-query-provider-ducklake-duckdb-quack.md), only its DuckDB pin
-  (lines 60, 90-92, 113-117, 233, 246, 281), its "Quack is beta" workaround (170-172, now the version-coupled wire
-  workaround below, without its HTTP-server fallback) and its shim's sandbox statements (219-221), which Decision 8
-  extends · [ADR-0260](0260-a-loopback-listener-owns-its-port.md), only the Lake half of Decision 3 (the held port), the
-  scenario `catalog-engine-holds-its-port` (60-62), lines 130-132 and the Lake half of 135, and the checklist line 164-165.
-  The rest of both ADRs stands.
+- **Supersedes (in part)**: [ADR-0086](0086-catalog-query-provider-ducklake-duckdb-quack.md), only its DuckDB and
+  DuckLake pins (lines 60, 90-92, 113-117, 233, 246, 281), its "Quack is beta" workaround (170-172, now the
+  version-coupled wire workaround below, without its HTTP-server fallback) and its shim's sandbox statements (219-221),
+  which Decision 8 extends · [ADR-0260](0260-a-loopback-listener-owns-its-port.md), only the Lake half of Decision 3 (the
+  held port), the scenario `catalog-engine-holds-its-port` (60-62), lines 130-132 and the Lake half of 135, and the
+  checklist line 164-165. The rest of both ADRs stands.
 - **Relates to**: [ADR-0261](0261-rename-catalogservice-to-lake.md) (the names) · [ADR-0087](0087-add-on-provider-runtime.md)
   (readiness) · [ADR-0137](0137-per-caller-catalog-query-rbac.md), [ADR-0138](0138-external-catalog-ingress-and-route-aggregation.md)
   (the PEP proxy, the edge) · [ADR-0141](0141-repo-split-pyvvo-pinned-language-modules.md) (language-repo releases) ·
@@ -20,24 +20,21 @@
 
 A Lake (ADR-0086, named by ADR-0261) is a DuckDB engine with the ducklake, quack, httpfs and sqlite extensions. It runs
 in the curated `duckdb` image (the Python wheel, driven by `images/runtime/duckdb/shim.py`) and in `funcdctl dev` (the CLI,
-driven by `internal/lake/devengine`).
-
-Consumers are functions that bundle their own duckdb and reach a Lake over Quack. They go through the PEP proxy, which
-rewrites the token in their handshake (ADR-0137). All of these pin DuckDB 1.5.6.
+driven by `internal/lake/devengine`). A consumer is a function that bundles its own duckdb and reaches a Lake over Quack
+through the PEP proxy, which rewrites the token in its handshake (ADR-0137). All of these pin DuckDB 1.5.6.
 
 DuckDB 2.0.0 shipped on 2026-10-21 as a long-term-support release, supported until at least October 2027, together with
-DuckLake 1.1. Experiment 0006 ran 56 checks of what funcd relies on, and 53 pass. Three things do not carry over: the
-Quack wire fails between 1.5.6 and 2.0.0 in both directions; 2.0.0 creates a new catalog at DuckLake 1.1 unless told
-otherwise; and a catalog migrated to 1.1 no longer opens in 1.5.6.
+DuckLake 1.1. Experiment 0006 ran 59 checks of what funcd relies on, and 56 pass. Two facts shape the move: the Quack
+wire fails between 1.5.6 and 2.0.0 in both directions, and 1.5.6 does not open a DuckLake 1.1 catalog, which 2.0.0
+creates by default. No Lake catalog exists yet, and the funcd-python examples are the only consumers (the decider,
+2026-10-23).
 
 ## Scenarios
 
 - `scenario: lake-on-duckdb-2`: Given a Lake deployed from the 2.0.0 image, and a consumer bound to it whose bundle
   holds duckdb 2.0.0, When the consumer runs `quack_query` through the PEP proxy, Then it gets the rows.
-- `scenario: new-lake-is-1-0`: Given no catalog, When the 2.0.0 engine attaches one and commits, Then the catalog's
-  DuckLake version is 1.0, and a 1.5.6 engine opens it.
-- `scenario: catalog-stays-1-0`: Given a catalog that a 1.5.6 engine wrote, When the 2.0.0 engine attaches it and
-  commits, Then its version is still 1.0.
+- `scenario: new-lake-is-1-1`: Given no catalog, When the 2.0.0 engine attaches one and commits, Then the catalog's
+  DuckLake version is 1.1, and the Lake's workload backup copies it and the files it names.
 - `scenario: dev-engine-port-zero`: Given `funcdctl dev` starting a Lake engine, Then the engine's init asks for port 0,
   and the start reports the port that the engine's `listen_url` row names.
 - `scenario: dev-engine-early-exit`: Given an engine that ends before its row (an error in its init), Then the start
@@ -51,18 +48,18 @@ otherwise; and a catalog migrated to 1.1 no longer opens in 1.5.6.
 
 ## Scope
 
-**In**: the DuckDB pins of the image and the dev engine; both engines' ATTACH; the shim's sandbox; the extension setting; the dev engine's
-port, row and environment; the PEP proxy's handshake fixture (`internal/lake/gateway`); the funcd-python consumer
-examples, released in step; the duckdb lane's new steps; the release notes.
+**In**: the DuckDB pins of the image and the dev engine; both engines' ATTACH; the shim's sandbox; the extension
+setting; the dev engine's port, row and environment; the PEP proxy's handshake fixture (`internal/lake/gateway`); the
+funcd-python examples, released in step; the duckdb lane's new steps.
 
-**Out**: migrating a catalog to DuckLake 1.1 and the features that need it; consumers on `ATTACH 'quack:…'`; the SQL dev
-engine (ADR-0260's other half); DuckDB 2.1, which drops macOS on amd64.
+**Out**: catalog migrations (no catalog exists); consumers on `ATTACH 'quack:…'`; the SQL dev engine (ADR-0260's other
+half); DuckDB 2.1, which drops macOS on amd64.
 
 ## Constraints & Decision drivers
 
 - One DuckDB version serves a Lake and its consumers: the Quack wire is not compatible across 1.5 and 2.0.
-- A rollback of funcd, a restore into an older funcd (ADR-0222), a pre-upgrade generation (ADR-0207) and the daemon's
-  own catalog reader for workload backups (`internal/backup/workload/lake.go`) must all still open every catalog.
+- A catalog's format changes only by an ADR, never by a DuckDB default. The daemon's own catalog reader for workload
+  backups (`internal/backup/workload/lake.go`) must read every catalog a Lake writes.
 - DuckDB stays out of the daemon (ADR-0086). Every input that is downloaded is pinned by SHA-256. DuckDB is MIT-licensed.
 
 ## Alternatives considered
@@ -70,8 +67,8 @@ engine (ADR-0260's other half); DuckDB 2.1, which drops macOS on amd64.
 | Option | For | Against | Outcome |
 |---|---|---|---|
 | Stay on 1.5.6 | no work now | no support after March 2027; the move gets bigger later | rejected by the decider |
-| Upgrade the engine, keep consumers on 1.5.6 | consumers untouched | the wire fails in both directions (experiment 0006) | not possible |
-| Migrate catalogs to DuckLake 1.1, after a backup | exact string statistics, row-group counts, nested schemas, the NULL type, epoch transforms, multi-snapshot deletion vectors | one-way: a rollback or an older funcd cannot open the catalog | rejected by the decider |
+| New catalogs at DuckLake 1.0 (`DUCKLAKE_VERSION '1.0'`) | a funcd older than this release still opens them | no catalog exists to keep readable; the 1.1 features would wait for a migration of every Lake | rejected by the decider |
+| DuckDB's default catalog version (no `DUCKLAKE_VERSION`) | one option less | a later DuckDB would change the format of new catalogs on its own | rejected |
 | Keep ADR-0260's held port | works on 2.0.0 unchanged | SO_REUSEPORT code that port 0 makes unnecessary | rejected |
 | Wait for 2.0.1 | patch fixes | delay; experiment 0006 is the trial run DuckDB advises | rejected by the decider |
 
@@ -79,13 +76,11 @@ engine (ADR-0260's other half); DuckDB 2.1, which drops macOS on amd64.
 
 1. **DuckDB 2.0.0 everywhere funcd runs it.** The image takes the `duckdb==2.0.0` `cp312-abi3` wheels. The dev engine
    bundle takes the 2.0.0 CLI of its target and the four extensions. Every file is pinned.
-2. **Consumers move with the engine, in one breaking release.** The funcd-python examples move to duckdb 2.0.0 and are
-   released first (ADR-0141), and funcd then pins that release. Both repos mark the change with a `BREAKING CHANGE:`
-   footer naming who must move: in-cluster consumer functions; external Quack clients through the ADR-0138 edge; and SQL
-   on a Lake, which now runs on 2.0, where single-arrow lambdas are off and the shim's `lock_configuration` keeps them off.
-3. **Catalogs stay at DuckLake 1.0.** Both engines' ATTACH passes `DUCKLAKE_VERSION '1.0'`. It is an ATTACH option, so it
-   applies to that catalog alone. A new catalog is then created at 1.0, and an existing one
-   stays at 1.0. Nothing passes `AUTOMATIC_MIGRATION`.
+2. **The examples move with the engine.** The funcd-python examples move to duckdb 2.0.0 and are released first
+   (ADR-0141), and funcd then pins that release. No other consumer exists, so neither repo marks a breaking change.
+3. **New catalogs are DuckLake 1.1.** Both engines' ATTACH passes `DUCKLAKE_VERSION '1.1'`, so a later DuckDB cannot
+   change the format of a new catalog. Nothing passes `AUTOMATIC_MIGRATION`: a 1.0 catalog fails the ATTACH with
+   DuckLake's version mismatch and stays at 1.0 (experiment 0006).
 4. **The dev Lake engine serves on port 0.** Its init calls `quack_serve('quack:127.0.0.1:0', …)`. The start reads the
    first complete line of standard output that names `http://127.0.0.1:<port>`, and reports that address. No port is
    held first. An engine that ends before its row fails the start at once with its error output, and so does a timeout.
@@ -104,13 +99,10 @@ engine (ADR-0260's other half); DuckDB 2.1, which drops macOS on amd64.
 
 ## Temporary workarounds
 
-- **Catalogs stay at DuckLake 1.0**, without the 1.1 features. *Exit*: a per-Lake migration ADR, with a backup first,
-  when a Lake needs one of them.
 - **Quack's wire is version-coupled**: a Lake and its consumers move together, and the examples stay within
   `>=2.0.0,<2.1`. *Exit*: DuckDB states a wire guarantee across versions.
 - **DuckDB 2.0.0 before its first patch.** *Exit*: 2.0.1, in three steps: experiment 0006's cross-version Quack checks
-  run between 2.0.0 and 2.0.1 (they decide whether it breaks consumers again), a funcd-python release moves the examples,
-  and funcd pins 2.0.1.
+  run between 2.0.0 and 2.0.1, a funcd-python release moves the examples, and funcd pins 2.0.1.
 
 ## Contracts
 
@@ -131,7 +123,7 @@ The bundle's layout is unchanged.
 **`internal/lake/devengine`**:
 
 ```go
-// buildInitSQL serves on 127.0.0.1:0 and attaches the lake with DUCKLAKE_VERSION '1.0'.
+// buildInitSQL serves on 127.0.0.1:0 and attaches the lake with DUCKLAKE_VERSION '1.1'.
 func buildInitSQL(extDir, catalogFile string, env map[string]string) string
 
 // serveRow matches the address on a complete line of the engine's listen_url row.
@@ -158,7 +150,7 @@ func waitServing(ctx context.Context, p *engineProc, timeout time.Duration) (str
 `/var/funcd/ducklake/tmp`, and runs its statements in this order, which `shim_test.py` asserts: the S3 pins,
 `s3_enable_deprecated_url_parameters=false`, `disabled_filesystems='HTTPFileSystem'`,
 `temp_directory='/var/funcd/ducklake/tmp'`, `allow_persistent_secrets=false`; the catalog's recovery and its ATTACH, which
-adds `DUCKLAKE_VERSION '1.0'` and keeps `OVERRIDE_DATA_PATH TRUE`; `allowed_directories=['s3://',
+adds `DUCKLAKE_VERSION '1.1'` and keeps `OVERRIDE_DATA_PATH TRUE`; `allowed_directories=['s3://',
 '/var/funcd/ducklake/tmp/']`, `enable_external_access=false`, `lock_configuration=true`; then `quack_serve`, which keeps
 `allow_other_hostname := true` (2.0 refuses a host other than localhost without it). The `Dockerfile` sets
 `extension_directories` too.
@@ -177,12 +169,12 @@ linux_amd64 and linux_arm64 hashes of httpfs and quack.
 |---|---|
 | the pins above; GitHub releases, extensions.duckdb.org and PyPI, at build time only | the same Lake endpoint, on DuckDB 2.0's Quack wire |
 | `DUCKDB_EXTENSION_DIRECTORY` (funcd's own variable, unchanged) | `GET /` → 200 for the readiness probe, unchanged |
-| the 1.0 catalog tables that `internal/backup/workload/lake.go` reads | the dev engine's address, taken from its row |
+| the catalog tables that `internal/backup/workload/lake.go` reads, unchanged in 1.1 (experiment 0006) | the dev engine's address, taken from its row |
 
 ## Implementation plan
 
-1. **funcd-python**: the two examples' `pyproject.toml`, `uv.lock`, the five setting sites and `PINS`. One PR with the
-   `BREAKING CHANGE:` footer, then a release.
+1. **funcd-python**: the two examples' `pyproject.toml`, `uv.lock`, the five setting sites and `PINS`. One PR, then a
+   release.
 2. **funcd**: `go get github.com/pyvvo/funcd-python@<tag>`; `images/runtime/duckdb/{duckdb.sha256, requirements.txt,
    Dockerfile, shim.py, shim_test.py}`; `scripts/fetch-lake-engine.sh`; `internal/lake/devengine/{devengine.go,
    devengine_test.go}`; `internal/lake/gateway/testdata/handshake_golden.bin`; the 1.5 mentions in
@@ -195,8 +187,7 @@ linux_amd64 and linux_arm64 hashes of httpfs and quack.
 | Scenario | Test |
 |---|---|
 | `lake-on-duckdb-2` | the duckdb Lima lane, on the 2.0.0 image with a 2.0.0 consumer bundle |
-| `new-lake-is-1-0` | `TestBuildInitSQL` and `shim_test.py` find `DUCKLAKE_VERSION '1.0'`; the lane reads its new catalog's version, 1.0; experiment 0006's check that 1.5.6 opens such a catalog |
-| `catalog-stays-1-0` | the same funcd tests for the option, and experiment 0006's check that a catalog 1.5.6 made stays at 1.0 under it |
+| `new-lake-is-1-1` | `TestBuildInitSQLAttachesDuckLake` and `shim_test.py` find `DUCKLAKE_VERSION '1.1'`; the duckdb lane reads its new catalog's version, 1.1; the app-todo lane's D18 backs up a 1.1 catalog, and a new Lake serves its restore |
 | `dev-engine-port-zero` | `TestScenarioDevEnginePortZero`: the init names port 0, and a fake engine prints a row for a port it bound, which the start reports; plus `TestRowWatcherSplitRow`, a row split inside its port |
 | `dev-engine-early-exit` | `TestScenarioDevEngineEarlyExit`; the existing no-row timeout subtest stays |
 | `agent-environment-same-output` | `TestScenarioAgentEnvironmentSameOutput`: the engine's environment holds `DUCKDB_AGENT_MODE=0` |
@@ -207,31 +198,34 @@ linux_amd64 and linux_arm64 hashes of httpfs and quack.
 `TestSwapHandshakeToken` passes on the new golden frame.
 
 **Definition of done**: `scripts/agent/gate.sh` passes; the duckdb lane passes with its new steps (its spill step on a
-256Mi Lake fixture, with experiment 0006's window query scaled past it) and records the engine's idle RSS once; the app-todo lane's Lake restore case (D18, `OVERRIDE_DATA_PATH`) passes; on the real 2.0.0 engine
-bundle, `just dev-example lake-quack` serves lake-reader's rows and releve-lakehouse's pipeline runs (`just dev-example
-releve-lakehouse`, then `just seed-releves`); a `release.yml` run with no tag builds all four targets; the funcd-python
-release is pinned in `go.mod`.
+256Mi Lake fixture, with experiment 0006's window query scaled past it) and records the engine's idle RSS once; the
+app-todo lane's Lake restore case (D18, `OVERRIDE_DATA_PATH`) passes; on the real 2.0.0 engine bundle, `just dev-example
+lake-quack` serves lake-reader's rows and releve-lakehouse's pipeline runs (`just dev-example releve-lakehouse`, then
+`just seed-releves`); a `release.yml` run with no tag builds all four targets; the funcd-python release is pinned in
+`go.mod`.
 
 ## Review checklist
 
 - [ ] Every DuckDB pin is 2.0.0 and matches its SHA-256. A repo-wide grep outside `docs/` finds no DuckDB 1.5 version.
-- [ ] Every ATTACH carries `DUCKLAKE_VERSION '1.0'`, nothing passes `AUTOMATIC_MIGRATION`, and the lane's new catalog
-  reads 1.0.
+- [ ] Every ATTACH carries `DUCKLAKE_VERSION '1.1'`, nothing passes `AUTOMATIC_MIGRATION`, and the lane's new catalog
+  reads 1.1.
 - [ ] No `extension_directory` setting remains in funcd or the examples, `DUCKDB_EXTENSION_DIRECTORY` is unchanged, and
   the examples' `PINS` equal funcd's 2.0.0 lines.
 - [ ] `holdLoopbackPort`, `listenReusePort` and `holdPort` are gone; the init asks for port 0; the watcher reads whole
   lines and never blocks; an early end and a timeout still fail the start; the environment holds `DUCKDB_AGENT_MODE=0`.
 - [ ] The golden handshake comes from a 2.0.0 client and `TestSwapHandshakeToken` passes on it; readiness is unchanged.
 - [ ] The shim runs its statements in Contracts' order; the lane's new steps pass: the catalog version,
-  `only-allowed-paths`, the spill and the idle RSS.
-- [ ] Both repos' `BREAKING CHANGE:` footers name the consumers who must move; each scenario's test or check passes.
+  `only-allowed-paths`, the spill and the idle RSS; each scenario's test or check passes.
 
 ## Consequences
 
-- **(+)** A long-term-support DuckDB until at least October 2027; the engine's sandbox is an allow-list; the dev engine
-  loses its port hold; 2.0's Quack client offers `ATTACH` and `CONNECT`, unverified through the PEP proxy.
-- **(−)** Every consumer's duckdb moves to 2.0 at the same release; the image and the Linux dev bundle grow (experiment
-  0006); the DuckLake 1.1 features wait.
+- **(+)** A long-term-support DuckDB until at least October 2027; DuckLake 1.1's features from the first catalog (exact
+  string statistics, row-group counts, nested schemas, the NULL type, epoch transforms, multi-snapshot deletion vectors);
+  the engine's sandbox is an allow-list; the dev engine loses its port hold; 2.0's Quack client offers `ATTACH` and
+  `CONNECT`, unverified through the PEP proxy.
+- **(−)** A funcd older than this release cannot open a catalog that this release creates, so a rollback across it, or a
+  restore of its backups into such a funcd, cannot serve those Lakes. The image's extensions grow by about 71 MiB and
+  the Linux dev bundle by 19 MiB gzipped (experiment 0006).
 - **Risk**: 2.0.0 is a first major release; experiment 0006 ran on arm64, and the release build only fetches and checks the
   amd64 pins.
 
@@ -244,7 +238,7 @@ release is pinned in `go.mod`.
 ## References
 
 - Issue #1184 (FEAT-0003 F181), under tracker #1032.
-- Experiment 0006, `0006-duckdb-2-upgrade` in pyvvo/experiment: the 56 checks this ADR rests on, among them the new
-  catalogs, the proxy's token swap and the allow-list sandbox on 2.0.0.
+- Experiment 0006, `0006-duckdb-2-upgrade` in pyvvo/experiment: the 59 checks this ADR rests on, among them the new
+  catalogs at 1.0 and 1.1, the backup reader on 1.1, the proxy's token swap and the allow-list sandbox on 2.0.0.
 - [Announcing DuckDB 2.0.0](https://duckdb.org/2026/10/21/announcing-duckdb-200) ·
   [DuckLake 1.1](https://ducklake.select/2026/10/21/ducklake-11/) · DuckLake's ATTACH documentation (`DUCKLAKE_VERSION`).
