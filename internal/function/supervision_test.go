@@ -248,7 +248,8 @@ func TestScenarioReadyFunctionStaysQuiescent(t *testing.T) {
 // and a wake before the backoff ends waits in Deploying instead of dropping back to Idle (ADR-0142).
 func TestReclaimDuringRepairBackoffIsNotAShapeFailure(t *testing.T) {
 	t.Parallel()
-	h := newShimHarness(t, http.StatusOK, false, withPeriod)
+	clk := clock.NewManual(time.Now()) // the backoff is judged on it, not on a loaded host's wall time (#1159)
+	h := newShimHarness(t, http.StatusOK, false, withPeriod, func(d *function.Deps) { d.Clock = clk })
 	h.createFn(t, "nap")
 	fn := h.getFn(t, "nap")
 	fn.Spec.Replicas = 0
@@ -276,7 +277,7 @@ func TestReclaimDuringRepairBackoffIsNotAShapeFailure(t *testing.T) {
 	require.Positive(t, res.RequeueAfter)
 	require.LessOrEqual(t, res.RequeueAfter, testPeriod, "it comes back when the backoff ends")
 
-	time.Sleep(testPeriod)
+	clk.Advance(testPeriod)
 	h.reconcile(t, "nap")
 	require.Equal(t, v1.PhaseReady, h.getFn(t, "nap").Status.Phase, "the wake serves once the backoff has passed")
 }

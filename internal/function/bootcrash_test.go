@@ -12,6 +12,7 @@ import (
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/function"
+	"github.com/pyvvo/funcd/internal/platform/clock"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/process"
 )
@@ -65,7 +66,8 @@ func TestScenarioKilledWhileBootingIsRetried(t *testing.T) {
 	t.Parallel()
 	t.Run("fake", func(t *testing.T) {
 		t.Parallel()
-		h := newShimHarness(t, http.StatusOK, false, withPeriod)
+		clk := clock.NewManual(time.Now()) // the wait is judged on it, not on a loaded host's wall time (#1159)
+		h := newShimHarness(t, http.StatusOK, false, withPeriod, func(d *function.Deps) { d.Clock = clk })
 		id := replicaID("killed", 1, 0)
 		h.rt.endStarts(id, sigkill(), true)
 		h.createFn(t, "killed")
@@ -88,7 +90,7 @@ func TestScenarioKilledWhileBootingIsRetried(t *testing.T) {
 		require.Equal(t, creates, again, "not re-created inside the wait")
 
 		h.rt.endStarts(id, runtime.Exit{}, false)
-		time.Sleep(testPeriod)
+		clk.Advance(testPeriod)
 		h.reconcile(t, "killed")
 		after, _ := h.rt.counts()
 		require.Equal(t, creates+1, after, "re-created after the initial wait")
@@ -141,10 +143,12 @@ func TestScenarioBootCrashAtStartIsCounted(t *testing.T) {
 
 // scenario: boot-crash-beside-ready-replica (ADR-0160) — with replicas: 2, replica 1 SIGKILLed before it listens while
 // replica 0 serves leaves the Function Ready with Ready=True/CrashLoopBackOff; replica 1 is re-created at the first pass
-// after its wait, and once it listens Ready=True carries no reason.
+// after its wait, and once it listens Ready=True carries no reason. The wait runs on a manual clock, so a loaded host's
+// delay between two passes does not end it (#1159).
 func TestScenarioBootCrashBesideReadyReplica(t *testing.T) {
 	t.Parallel()
-	h := newShimHarness(t, http.StatusOK, false, withPeriod)
+	clk := clock.NewManual(time.Now())
+	h := newShimHarness(t, http.StatusOK, false, withPeriod, func(d *function.Deps) { d.Clock = clk })
 	h.createFn(t, "pair")
 	fn := h.getFn(t, "pair")
 	fn.Spec.Replicas = 2
@@ -167,7 +171,7 @@ func TestScenarioBootCrashBesideReadyReplica(t *testing.T) {
 	require.Equal(t, creates, again, "a pass inside the wait runs in full but does not re-create")
 
 	h.rt.endStarts(id, runtime.Exit{}, false)
-	time.Sleep(testPeriod)
+	clk.Advance(testPeriod)
 	h.reconcile(t, "pair")
 	after, _ := h.rt.counts()
 	require.Equal(t, creates+1, after, "re-created at the first pass after its wait")
