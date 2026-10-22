@@ -633,6 +633,7 @@ func TestDefaultIsBoundOncePerPath(t *testing.T) {
 	def := json.RawMessage(`{"s":"` + strings.Repeat("z", 250<<10) + `"}`)
 	r := fakeResolver{roots: []string{"input"}, fields: map[string]Field{"input|big": {Type: "object", HasDefault: true, Default: def}}}
 	x := mustCheck(t, "${{ "+strings.Repeat("input.big !== undefined && ", 800)+"true }}", Condition, r)
+	x.timeout = time.Minute // the bound is on allocations: the evaluator's 100 ms deadline is a wall clock too
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
 	ok, err := x.EvalBool(docs("input", `{}`))
