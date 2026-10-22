@@ -12223,5 +12223,50 @@
     "dod_total": 6,
     "report": "docs/reviews/adr-0260-implementation-claude-opus-5-5.md",
     "notes": "pass; Minor (model): the catalog hold test hangs in held.Accept instead of failing when the hold stays open; Minor (model): the two dev-engine drivers duplicate the line buffering and last-lines ring; revert + 4 mutants fail their tests; Linux VM green"
+  },
+  {
+    "date": "2026-10-22",
+    "issue": "1170",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "changes-requested",
+    "blockers": 1,
+    "majors": 1,
+    "minors": 0,
+    "model_attributed": 2,
+    "dod_passed": 8,
+    "dod_total": 11,
+    "report": "docs/reviews/issue-1170-fix-claude-opus-5-5.md",
+    "notes": "round 1 on 130977e4; blocker (model): a schema-cache-only mutant survives once the 500 ms bound is gone (main's -race run caught it at 5.1 s); major (model): twin TestDefaultIsBoundOncePerPath keeps the same bound; injected 600 ms: main fails, new passes"
+  },
+  {
+    "date": "2026-10-22",
+    "issue": "1169",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 1,
+    "dod_passed": 11,
+    "dod_total": 11,
+    "report": "docs/reviews/issue-1169-fix-claude-opus-5-5.md",
+    "notes": "pass; B paused 400 ms: main 4/4 fail with unexpected EOF, new 4/4 pass; guard-off mutant fails 4/4; minor (adr): ADR-0191 states S as 300 ms for these tests; minor (model): gateway TestWriteStallLiveClientNotCut has the same construct, unmentioned"
+  },
+  {
+    "date": "2026-10-22",
+    "issue": "1171",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-1171-fix-claude-opus-5-5.md",
+    "notes": "pass; main + seam fails after 90 s with the PushSite empty-dir start error; no-loop and no-conversion mutants fail; minor (model): a build rewritten during the push still stops the start"
   }
 ]
