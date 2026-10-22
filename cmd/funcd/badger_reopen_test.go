@@ -24,6 +24,31 @@ var testSources embed.FS
 func TestIssue1149_TestsThatReopenBadgerRunSerially(t *testing.T) {
 	t.Parallel()
 	reopens := regexp.MustCompile(`\brestoredKV\(|\bkvbadger\.Open\(|\bbadgerstore\.Open\(`)
+	require.Empty(t, parallelTests(t, reopens.MatchString),
+		"tests that reopen a Badger directory must not run in parallel with tests that fork")
+}
+
+// Issue #1178: a node's restore opens and closes its Badger directories in this process and its start opens them again,
+// as a second start does, so a test that opens one node's stores twice runs serially for the reason of #1149. Opens are
+// counted per node, from one newNode to the next.
+func TestIssue1178_TestsThatReopenANodeRunSerially(t *testing.T) {
+	t.Parallel()
+	opens := regexp.MustCompile(`\b\w+\.restore\(|\b\w+\.start\(t\)|\bserve\([^,]+, \w+\.cfgPath`)
+	reopens := func(body string) bool {
+		for _, node := range strings.Split(body, "newNode(") {
+			if len(opens.FindAllString(node, -1)) > 1 {
+				return true
+			}
+		}
+		return false
+	}
+	require.Empty(t, parallelTests(t, reopens),
+		"tests that open a node's Badger directories twice must not run in parallel with tests that fork")
+}
+
+// parallelTests names this package's tests that call t.Parallel() and whose body matches.
+func parallelTests(t *testing.T, matches func(body string) bool) []string {
+	t.Helper()
 	files, err := testSources.ReadDir(".")
 	require.NoError(t, err)
 	var parallel []string
@@ -38,10 +63,10 @@ func TestIssue1149_TestsThatReopenBadgerRunSerially(t *testing.T) {
 				continue
 			}
 			body := string(src[fn.Body.Pos()-file.FileStart : fn.Body.End()-file.FileStart])
-			if reopens.MatchString(body) && strings.Contains(body, "t.Parallel()") {
+			if matches(body) && strings.Contains(body, "t.Parallel()") {
 				parallel = append(parallel, fn.Name.Name)
 			}
 		}
 	}
-	require.Empty(t, parallel, "tests that reopen a Badger directory must not run in parallel with tests that fork")
+	return parallel
 }

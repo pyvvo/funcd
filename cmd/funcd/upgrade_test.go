@@ -433,8 +433,9 @@ func writeKey(t *testing.T) string {
 
 // scenario: stable-run-resets-count — after two unclean starts, a third that runs stableAfter, or one stopped by a
 // signal before it, sets the count to 0, so two more unclean starts stay normal.
+//
+// Serial: it reopens the node's Badger directories, which a parallel test's forked child can hold locked (#1178).
 func TestScenarioStableRunResetsCount(t *testing.T) {
-	t.Parallel()
 	n := newNode(t, nil, "recovery:\n  safeMode:\n    stableAfter: 200ms\n")
 	beginStarts(t, n.dataDir, 2, 3)
 	_, stop := n.start(t)
@@ -501,8 +502,9 @@ func TestScenarioSafeModeStopsLoop(t *testing.T) {
 
 // scenario: leave-safe-mode — held by safe mode, `hold release` and a run of stableAfter leave no marker and a count
 // of 0; after a stopped start (exit status 70), `funcd safe-mode reset` makes the next start held.
+//
+// Serial: it reopens the node's Badger directories, which a parallel test's forked child can hold locked (#1178).
 func TestScenarioLeaveSafeMode(t *testing.T) {
-	t.Parallel()
 	ctx := context.Background()
 	n := newNode(t, nil, "recovery:\n  safeMode:\n    stableAfter: 300ms\n")
 	marker := filepath.Join(n.dataDir, hold.MarkerFile)
@@ -537,8 +539,9 @@ func TestScenarioLeaveSafeMode(t *testing.T) {
 
 // The platform backup's parent is the generation a restore loaded (ADR-0205 Inputs.Parent from restore.Parent, the
 // obligation ADR-0205 left to the later of ADR-0206 and ADR-0207): after the release, the first generation names it.
+//
+// Serial: it reopens the node's Badger directories, which a parallel test's forked child can hold locked (#1178).
 func TestBackupParentWired(t *testing.T) {
-	t.Parallel()
 	ctx := context.Background()
 	s := newGSource(t, upgradeKey())
 	m := s.cut(t)

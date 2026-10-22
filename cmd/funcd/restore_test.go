@@ -292,8 +292,9 @@ func TestScenarioRestoreCrashRefusesStart(t *testing.T) {
 // scenario: restore-keeps-data-owner — every entry a restore creates gets the data directory's owner (ADR-0026 §4).
 // As root on Linux a second uid owns the data; otherwise the data directory gets another of this user's groups,
 // which a process may set, and the case holds for the group.
+//
+// Serial: it reopens the node's Badger directories, which a parallel test's forked child can hold locked (#1178).
 func TestScenarioRestoreKeepsDataOwner(t *testing.T) {
-	t.Parallel()
 	s := newGSource(t, nil)
 	s.cut(t)
 	n := newNode(t, nil, "")
@@ -441,8 +442,9 @@ func ownerOf(t *testing.T, p string) [2]uint32 {
 // objects and reports held, and across a restart nothing fires or dispatches: no Invocation, no new run, no dead
 // letter, the run untouched, the blob key pending. The ADR's 1 s timer and 5 s run here as a 100 ms timer, 100 ms
 // requeues and blob polls, and 500 ms on each side of the restart.
+//
+// Serial: it reopens the node's Badger directories, which a parallel test's forked child can hold locked (#1178).
 func TestScenarioRestoreBootsHeld(t *testing.T) {
-	t.Parallel()
 	ctx := context.Background()
 	s := newGSource(t, nil)
 	s.create(t,
@@ -618,8 +620,9 @@ func TestScenarioRestorePoints(t *testing.T) {
 
 // scenario: single-secret-restore — inspect --object prints a deleted Secret by key with no value; with
 // --secrets-key and --reveal-secrets its values, and `funcdctl apply -f` of that output brings it back.
+//
+// Serial: it reopens the node's Badger directories, which a parallel test's forked child can hold locked (#1178).
 func TestScenarioSingleSecretRestore(t *testing.T) {
-	t.Parallel()
 	ctx := context.Background()
 	key := bytes.Repeat([]byte{3}, 32)
 	s := newGSource(t, key)
@@ -664,8 +667,9 @@ func TestScenarioSingleSecretRestore(t *testing.T) {
 
 // scenario: dead-letters-held — a restored dead letter lists by its id; its replay is Unavailable while held, nothing
 // redelivers it after the release, and then its replay works.
+//
+// Serial: it reopens the node's Badger directories, which a parallel test's forked child can hold locked (#1178).
 func TestScenarioDeadLettersHeld(t *testing.T) {
-	t.Parallel()
 	ctx := context.Background()
 	s := newGSource(t, nil)
 	s.create(t, &v1.Sensor{TypeMeta: tmeta(v1.KindSensor), ObjectMeta: om("s"), Spec: v1.SensorSpec{
@@ -711,8 +715,9 @@ func TestScenarioDeadLettersHeld(t *testing.T) {
 // scenario: first-drill — a seeded platform, its generation sealed to two age recipients with its keys escrowed, is
 // restored into a scratch directory: the integrity checks pass, the counts per kind equal the source's, a read of
 // each object works on the node booted held (never released), and the time is logged.
+//
+// Serial: it reopens the node's Badger directories, which a parallel test's forked child can hold locked (#1178).
 func TestScenarioFirstDrill(t *testing.T) {
-	t.Parallel()
 	ctx := context.Background()
 	start := time.Now()
 	key, master := bytes.Repeat([]byte{4}, 32), bytes.Repeat([]byte{5}, 32)

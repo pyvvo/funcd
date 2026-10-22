@@ -26,8 +26,9 @@ func nsObj(ns v1.NamespaceName, name string) v1.ObjectMeta {
 // scenario: platform-restore-holds-namespace — G holds schedules in orders and none in web: restore run holds orders
 // alone; once G is released web's timers fire while orders' timers and slots wait for `funcdctl hold release
 // --namespace orders`, and a Backup by API in orders runs meanwhile.
+//
+// Serial: it reopens the node's Badger directories, which a parallel test's forked child can hold locked (#1178).
 func TestScenarioPlatformRestoreHoldsNamespace(t *testing.T) {
-	t.Parallel()
 	ctx := context.Background()
 	stub := s3stub.New(t, nil)
 	var recipients []string
