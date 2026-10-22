@@ -1,7 +1,8 @@
 # ADR-0262: The Lake engine runs DuckDB 2.0, and its new catalogs use DuckLake 1.1
 
-- **Status**: Accepted (2026-10-23), under the decider's standing go of that day. Revised that day for DuckLake 1.1 and
-  no consumers (the decider); judged four times, the last: accept after one Major (a 1.1 catalog with files), folded.
+- **Status**: Reviewing (2026-10-23), implemented for #1184. Accepted (2026-10-23), under the decider's standing go of
+  that day. Revised that day for DuckLake 1.1 and no consumers (the decider); judged four times, the last: accept after
+  one Major (a 1.1 catalog with files), folded.
 - **Date**: 2026-10-22
 - **Deciders**: green-0-rabbit
 - **Tags**: lake, duckdb, ducklake, quack, dev, dependency

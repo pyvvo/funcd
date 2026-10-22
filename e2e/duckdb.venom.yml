@@ -22,7 +22,8 @@
 #
 # The ADR-0262 cases (DuckDB 2.0): the checkpointed catalog is DuckLake 1.1; a query reaches no path but s3:// and the
 # engine's temp directory; a non-gating probe records whether lake-reader can ATTACH its Lake through the PEP proxy;
-# and, last, Lake lake re-created at 256Mi records its idle engine's RSS and spills a query larger than its memory.
+# and, last, Lake lake re-created at 256Mi records its idle engine's RSS, and in its container the image's DuckDB,
+# confined by the image's shim, spills a query larger than its memory.
 name: lake-quack add-on provider — deploy + Ready + live SQL round-trip on real containerd (ADR-0086/0087/0088/0091)
 
 vars:
@@ -289,10 +290,10 @@ testcases:
         url: "http://127.0.0.1:8081/function/lake-reader"
         headers:
           content-type: application/json
-        body: '{"data":{"sql":"SELECT size FROM read_blob(''/var/funcd/ducklake/catalog.db'')"}}'
+        body: '{"data":{"sql":"SELECT content FROM read_text(''/etc/passwd'')"}}'
         retry: 10
         delay: 2
-        info: "a read of the engine's own catalog file → status {{.result.statuscode}} body {{.result.body}}"
+        info: "a read of a local file outside the temp directory → status {{.result.statuscode}} body {{.result.body}}"
         assertions:
           - result.statuscode ShouldEqual 500
           - result.body ShouldContainSubstring "disabled"
@@ -616,9 +617,10 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "C_LEASES=0 ENGINE_BC=Ready/200/a_b-c-r0/"
 
-  # ADR-0262 Decision 8: the engine spills to its temp directory under the allow-list. DuckDB takes its memory limit
-  # from the container's cgroup (204.7 MiB at 256Mi), and the window query needs over 800 MB (experiment 0006's, scaled).
-  - name: spill-under-256mi — Lake lake re-created at 256Mi records its idle engine's RSS and spills a query larger than its memory
+  # ADR-0262 Decision 8: DuckDB spills to an allowed temp directory under the shim's allow-list. The engine has no
+  # cgroup view, so it reports the VM's memory (recorded below); the probe sets 64MB, and the window query needs over
+  # 800 MB (experiment 0006's, scaled).
+  - name: spill-under-256mi — Lake lake re-created at 256Mi records its idle engine's RSS, and the image's confined DuckDB spills there
     steps:
       - type: exec
         script: |
@@ -670,13 +672,13 @@ testcases:
         info: "the engine's memory_limit and threads → {{.result.body}}"
         assertions:
           - result.statuscode ShouldEqual 200
-      - type: http
-        method: POST
-        url: "http://127.0.0.1:8081/function/lake-reader"
-        headers:
-          content-type: application/json
-        body: '{"data":{"sql":"SELECT max(x) FROM (SELECT i, lead(i) OVER (ORDER BY hash(i)) AS x FROM range(20000000) t(i))"}}'
-        info: "a query larger than the engine's memory → status {{.result.statuscode}} body {{.result.body}}"
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            sock=/var/lib/funcd/data/containerd/containerd.sock
+            sudo timeout 300 /var/lib/funcd/bin/ctr --address $sock -n funcd-default task exec --exec-id spill-probe lake-r0 \
+              /usr/local/bin/python3.14 -c "$(cat /opt/lane/spill-probe.py)" 2>&1 | tail -3'
+        info: "a query larger than its memory, in the 256Mi engine's container → {{.result.systemout}}"
         assertions:
-          - result.statuscode ShouldEqual 200
-          - result.body ShouldContainSubstring "[[19999999]]"
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SPILLED=19999999"
