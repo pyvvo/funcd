@@ -1,0 +1,87 @@
+name: Stress
+
+# The whole test suite, run many times on Linux each week, so a flaky test shows up before a PR trips over it (#1167).
+# The gate's stress step repeats only the tests a branch adds or changes; this run covers the rest. A failing test is
+# listed in the run's summary and on the flake tracker, #1142.
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+# actions:write: cache-nix-action lists, saves and purges its store caches. issues:write: the comment on #1142.
+permissions:
+  contents: read
+  actions: write
+  issues: write
+
+jobs:
+  stress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: default
+            title: Default-tag suite, 5 runs under -race
+            command: go test -race -count=5 -timeout 240m -json ./...
+          - suite: dev
+            title: The -tags dev packages, 5 runs under -race
+            command: go test -race -count=5 -timeout 240m -json -tags dev $(just --evaluate _dev-packages)
+          - suite: e2e
+            title: The e2e suite, 3 runs
+            command: go test -count=3 -timeout 240m -json -tags e2e ./pkg/funcd/...
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@448cde739abec1eaf0646249e3d25bb8d9bc7702 # v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Cache Nix store
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 5G
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-created: 0
+          purge-last-accessed: 0
+          purge-primary-key: never
+
+      - name: Cache Go modules & build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ runner.os }}-${{ hashFiles('go.sum') }}
+          restore-keys: go-${{ runner.os }}-
+
+      - name: Run the suite
+        run: nix develop --command bash -c '${{ matrix.command }} > stress.json'
+
+      - name: Summarize the failing tests
+        if: always()
+        run: python3 scripts/stress-summary.py "${{ matrix.title }}" stress.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the go test log
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: stress-${{ matrix.suite }}
+          path: stress.json
+          retention-days: 30
+
+      - name: Report the failing tests on the flake tracker
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/stress-summary.py "${{ matrix.title }}" stress.json > comment.md
+          echo "" >> comment.md
+          echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> comment.md
+          gh issue comment 1142 --repo "${{ github.repository }}" --body-file comment.md
