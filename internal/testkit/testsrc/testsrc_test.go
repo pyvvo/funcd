@@ -3,6 +3,8 @@ package testsrc_test
 import (
 	"go/ast"
 	"go/parser"
+	"maps"
+	"slices"
 	"testing"
 	"testing/fstest"
 
@@ -23,6 +25,10 @@ func TestParallelTests(t *testing.T) {
 	require.Equal(t, []string{"TestParallel"}, testsrc.ParallelTests(t, sources, opens))
 	both := func(body *ast.BlockStmt) bool { return testsrc.Calls(body, "open", "x.open") == 2 }
 	require.Equal(t, []string{"TestParallel"}, testsrc.ParallelTests(t, sources, both))
+
+	funcs := testsrc.Funcs(t, sources)
+	require.ElementsMatch(t, []string{"TestSerial", "TestParallel", "TestQuiet", "helper"}, slices.Collect(maps.Keys(funcs)))
+	require.Equal(t, 1, testsrc.Calls(funcs["helper"].Body, "open"))
 }
 
 func TestCalleeAndIsString(t *testing.T) {

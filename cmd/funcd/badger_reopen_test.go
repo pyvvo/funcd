@@ -4,6 +4,7 @@ import (
 	"embed"
 	"go/ast"
 	"testing"
+	"testing/fstest"
 
 	"github.com/stretchr/testify/require"
 
@@ -77,4 +78,24 @@ func nodeOpened(call *ast.CallExpr) string {
 		}
 	}
 	return ""
+}
+
+// The node shapes reopensANode tells apart.
+func TestReopensANode(t *testing.T) {
+	t.Parallel()
+	shapes := fstest.MapFS{"shapes_test.go": {Data: []byte(`package main
+
+func restoreThenStart() { n := newNode(t, nil, ""); n.restore("run", "latest"); n.start(t) }
+func startTwice() { n := newNode(t, nil, ""); n.start(t); n.start(t) }
+func restoreThenServe() { n := newNode(t, nil, ""); n.restore("run", "latest"); serve(ctx, n.cfgPath, nil, nil) }
+func reopenAcrossANode() { a := newNode(t, nil, ""); a.restore("run", "latest"); b := newNode(t, nil, ""); b.start(t); a.start(t) }
+func twoNodesOnce() { a := newNode(t, nil, ""); a.start(t); b := newNode(t, nil, ""); b.start(t) }
+func listThenRun() { n := newNode(t, nil, ""); n.restore("list"); n.restore("run", "latest") }
+func newNodeBetween() { n := newNode(t, nil, ""); n.restore("run", "latest"); n = newNode(t, nil, ""); n.start(t) }
+`)}}
+	funcs := testsrc.Funcs(t, shapes)
+	for name, want := range map[string]bool{"restoreThenStart": true, "startTwice": true, "restoreThenServe": true,
+		"reopenAcrossANode": true, "twoNodesOnce": false, "listThenRun": false, "newNodeBetween": false} {
+		require.Equal(t, want, reopensANode(funcs[name].Body), name)
+	}
 }

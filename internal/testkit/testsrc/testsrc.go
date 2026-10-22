@@ -16,20 +16,8 @@ import (
 // match reports true for.
 func ParallelTests(t testing.TB, sources fs.FS, match func(body *ast.BlockStmt) bool) []string {
 	t.Helper()
-	names, err := fs.Glob(sources, "*_test.go")
-	if err != nil {
-		t.Fatal(err)
-	}
 	var parallel []string
-	for _, name := range names {
-		src, err := fs.ReadFile(sources, name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		file, err := parser.ParseFile(token.NewFileSet(), name, src, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
+	for _, file := range parse(t, sources) {
 		for _, d := range file.Decls {
 			fn, ok := d.(*ast.FuncDecl)
 			if ok && fn.Body != nil && strings.HasPrefix(fn.Name.Name, "Test") && Calls(fn.Body, "t.Parallel") > 0 &&
@@ -39,6 +27,41 @@ func ParallelTests(t testing.TB, sources fs.FS, match func(body *ast.BlockStmt) 
 		}
 	}
 	return parallel
+}
+
+// Funcs indexes the top-level functions of sources, a package's embedded *_test.go files, by name.
+func Funcs(t testing.TB, sources fs.FS) map[string]*ast.FuncDecl {
+	t.Helper()
+	funcs := map[string]*ast.FuncDecl{}
+	for _, file := range parse(t, sources) {
+		for _, d := range file.Decls {
+			if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Body != nil {
+				funcs[fn.Name.Name] = fn
+			}
+		}
+	}
+	return funcs
+}
+
+func parse(t testing.TB, sources fs.FS) []*ast.File {
+	t.Helper()
+	names, err := fs.Glob(sources, "*_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := make([]*ast.File, 0, len(names))
+	for _, name := range names {
+		src, err := fs.ReadFile(sources, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), name, src, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, file)
+	}
+	return files
 }
 
 // Callee names the function that call calls: "f" for f(…), "x.f" for x.f(…), and "" for any other form.
