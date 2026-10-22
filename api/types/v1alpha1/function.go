@@ -91,6 +91,9 @@ type FunctionSpec struct {
 	ConfigMaps   []ConfigMapEntry   `json:"configMaps,omitempty"`
 	// SecretDeclarations are the Secrets the Function's bindings name, with the keys it reads (ADR-0213 Decision 8).
 	SecretDeclarations []SecretDeclaration `json:"secrets,omitempty"`
+	// Volumes are the directories the Function owns (ADR-0262): emptyDir per worker, local durable; its code reads each
+	// one's path from FUNCD_VOLUME_<NAME>.
+	Volumes []VolumeEntry `json:"volumes,omitempty"`
 	// Ingress is the Function's edge exposure (ADR-0241): unset, it answers by name at /function/<name> while its
 	// namespace is implicit; a host or a path gives it a Route of its own.
 	Ingress *Ingress `json:"ingress,omitempty"`
@@ -260,6 +263,9 @@ func (f *Function) Validate() error {
 // at the edge.
 func (s *FunctionSpec) Validate() error {
 	const op = "FunctionSpec.Validate"
+	if err := s.validateVolumes(op); err != nil {
+		return err
+	}
 	if err := CheckDuration(op, "spec.timeout", s.Timeout, 0, Duration(MaxInvokeTimeout)); err != nil {
 		return err
 	}

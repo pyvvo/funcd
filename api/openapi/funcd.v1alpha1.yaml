@@ -771,6 +771,12 @@ components:
                 pattern: ^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$
                 patternDescription: "a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms)"
                 type: string
+              volumes:
+                items:
+                  $ref: "#/components/schemas/VolumeEntry"
+                type:
+                  - array
+                  - "null"
             type: object
           type:
             - array
@@ -1712,6 +1718,12 @@ components:
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
+        volumes:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
       type: object
     BackupSpec:
       additionalProperties: false
@@ -2786,6 +2798,12 @@ components:
           pattern: ^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$
           patternDescription: "a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms)"
           type: string
+        volumes:
+          items:
+            $ref: "#/components/schemas/VolumeEntry"
+          type:
+            - array
+            - "null"
       type: object
     FunctionStatus:
       additionalProperties: false
@@ -3491,6 +3509,10 @@ components:
           type: string
         edgeDefaults:
           $ref: "#/components/schemas/EdgeDefaults"
+        volumeBudgetBytes:
+          format: int64
+          minimum: 0
+          type: integer
       type: object
     NamespaceStatus:
       additionalProperties: false
@@ -3844,6 +3866,11 @@ components:
         kind:
           type: string
         name:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        volume:
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -4876,6 +4903,37 @@ components:
             - "null"
       required:
         - events
+      type: object
+    VolumeEntry:
+      additionalProperties: false
+      properties:
+        deletion:
+          enum:
+            - retain
+            - delete
+          type: string
+        name:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        ref:
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
+        sizeBytes:
+          format: int64
+          minimum: 1
+          type: integer
+        type:
+          enum:
+            - emptyDir
+            - local
+          type: string
+      required:
+        - type
+        - sizeBytes
       type: object
     WorkerNode:
       additionalProperties: false

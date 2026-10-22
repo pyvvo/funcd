@@ -24,6 +24,9 @@ type NamespaceSpec struct {
 	// EdgeDefaults carries the namespace-wide edge policy defaults merged under each Route
 	// (F74–F78 add fields; empty in F79).
 	EdgeDefaults *EdgeDefaults `json:"edgeDefaults,omitempty"`
+	// VolumeBudgetBytes caps the volume space the namespace's Functions reserve (ADR-0262 Decision 5); 0 ⇒ only
+	// volumes.capacityBytes limits it.
+	VolumeBudgetBytes int64 `json:"volumeBudgetBytes,omitempty" minimum:"0"`
 }
 
 // ExposureMode selects whether an unrouted Function is reachable at the public edge.

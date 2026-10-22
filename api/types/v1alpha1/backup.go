@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -50,10 +51,12 @@ func (s BackupScheduleSpec) EffectiveTTL() Duration {
 
 // BackupScope names the members in one form (Decision 2): names, an App, or a ResourceGroup.
 type BackupScope struct {
-	KVStores      []ObjectName      `json:"kvStores,omitempty"`
-	Buckets       []ObjectName      `json:"buckets,omitempty"`
-	Lakes         []ObjectName      `json:"lakes,omitempty"`
-	Databases     []ObjectName      `json:"databases,omitempty"`
+	KVStores  []ObjectName `json:"kvStores,omitempty"`
+	Buckets   []ObjectName `json:"buckets,omitempty"`
+	Lakes     []ObjectName `json:"lakes,omitempty"`
+	Databases []ObjectName `json:"databases,omitempty"`
+	// Volumes are local Function volumes, each "<function>/<name>" (ADR-0262 Decision 11).
+	Volumes       []string          `json:"volumes,omitempty"`
 	App           ObjectName        `json:"app,omitempty"`
 	ResourceGroup ResourceGroupName `json:"resourceGroup,omitempty"`
 }
@@ -148,6 +151,9 @@ type RestoreMember struct {
 	As         ObjectName    `json:"as,omitempty"`
 	AsLocation *LakeLocation `json:"asLocation,omitempty"`
 	InPlace    bool          `json:"inPlace,omitempty"`
+	// Volume, with Kind Function, makes the member that Function's local volume; as names another Function whose
+	// empty volume of that name receives it (ADR-0262 Decision 11).
+	Volume ObjectName `json:"volume,omitempty"`
 }
 
 // RestoreStatus is the request's run: its phase, times and, in place, the export Backup.
@@ -229,7 +235,7 @@ func (s BackupScheduleSpec) validate(op string) error {
 
 // validate refuses a scope in no form or in two, and a name that is not a DNS label or repeats another.
 func (s BackupScope) validate(op string) error {
-	names := len(s.KVStores) + len(s.Buckets) + len(s.Lakes) + len(s.Databases)
+	names := len(s.KVStores) + len(s.Buckets) + len(s.Lakes) + len(s.Databases) + len(s.Volumes)
 	forms := 0
 	for _, set := range []bool{names > 0, s.App != "", s.ResourceGroup != ""} {
 		if set {
@@ -237,7 +243,7 @@ func (s BackupScope) validate(op string) error {
 		}
 	}
 	if forms != 1 {
-		return fault.Invalidf(op, "spec.scope sets %d forms: want one of kvStores, buckets, lakes and databases, app, or resourceGroup", forms)
+		return fault.Invalidf(op, "spec.scope sets %d forms: want one of kvStores, buckets, lakes, databases and volumes, app, or resourceGroup", forms)
 	}
 	for _, l := range []struct {
 		field string
@@ -253,6 +259,17 @@ func (s BackupScope) validate(op string) error {
 			}
 			seen[n] = true
 		}
+	}
+	seenVol := make(map[string]bool, len(s.Volumes))
+	for i, v := range s.Volumes {
+		fn, name, ok := strings.Cut(v, "/")
+		if !ok || !dnsLabel.MatchString(fn) || !dnsLabel.MatchString(name) {
+			return fault.Invalidf(op, "spec.scope.volumes[%d] %q: want <function>/<name>, both DNS-1123 labels", i, v)
+		}
+		if seenVol[v] {
+			return fault.Invalidf(op, "spec.scope.volumes[%d] repeats %q", i, v)
+		}
+		seenVol[v] = true
 	}
 	if s.App != "" && !dnsLabel.MatchString(string(s.App)) {
 		return fault.Invalidf(op, "spec.scope.app %q is not a valid DNS-1123 label", s.App)
@@ -342,19 +359,25 @@ func (r *Restore) Validate() error {
 	if len(r.Spec.Members) == 0 {
 		return fault.Invalidf(op, "spec.members is empty: name at least one member of the Backup")
 	}
-	seen := make(map[ObjectRef]string, len(r.Spec.Members))
+	seen := make(map[restoreKey]string, len(r.Spec.Members))
 	for i, m := range r.Spec.Members {
 		path := fmt.Sprintf("spec.members[%d]", i)
 		if err := m.validate(op, path); err != nil {
 			return err
 		}
-		k := ObjectRef{Kind: m.Kind, Name: m.Name}
+		k := restoreKey{ObjectRef{Kind: m.Kind, Name: m.Name}, m.Volume}
 		if prev, dup := seen[k]; dup {
 			return fault.Invalidf(op, "%s repeats %s/%s of %s", path, m.Kind, m.Name, prev)
 		}
 		seen[k] = path
 	}
 	return nil
+}
+
+// restoreKey is a member's identity: its object, and for a Function its volume.
+type restoreKey struct {
+	ObjectRef
+	volume ObjectName
 }
 
 func (m RestoreMember) validate(op, path string) error {
@@ -370,7 +393,20 @@ func (m RestoreMember) validate(op, path string) error {
 	if targets != 1 {
 		return fault.Invalidf(op, "%s sets %d targets: want exactly one of as, asLocation and inPlace", path, targets)
 	}
+	if m.Volume != "" && m.Kind != KindFunction {
+		return fault.Invalidf(op, "%s.volume applies to kind Function: a %s takes no volume", path, m.Kind)
+	}
 	switch m.Kind {
+	case KindFunction:
+		if m.Volume == "" || !dnsLabel.MatchString(string(m.Volume)) {
+			return fault.Invalidf(op, "%s.volume %q: a Function member names its local volume, a DNS-1123 label", path, m.Volume)
+		}
+		if m.AsLocation != nil {
+			return fault.Invalidf(op, "%s.asLocation applies to a Lake: a Function volume takes as or inPlace", path)
+		}
+		if m.As != "" && !dnsLabel.MatchString(string(m.As)) {
+			return fault.Invalidf(op, "%s.as %q is not a valid DNS-1123 label", path, m.As)
+		}
 	case KindKVStore, KindBucket, KindSQLDatabase:
 		if m.AsLocation != nil {
 			return fault.Invalidf(op, "%s.asLocation applies to a Lake: a %s takes as or inPlace", path, m.Kind)
@@ -386,7 +422,7 @@ func (m RestoreMember) validate(op, path string) error {
 			return fault.Invalidf(op, "%s.asLocation %q/%q: bucket and prefix must be DNS-1123 labels", path, c.Bucket, c.Prefix)
 		}
 	default:
-		return fault.Invalidf(op, "%s.kind %q: want KVStore, Bucket, Lake or SQLDatabase", path, m.Kind)
+		return fault.Invalidf(op, "%s.kind %q: want KVStore, Bucket, Lake, SQLDatabase or Function", path, m.Kind)
 	}
 	return nil
 }
