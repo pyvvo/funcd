@@ -144,6 +144,16 @@ func (a *cli) startDevApp(ctx context.Context, dir string, cfg devConfig, logger
 		}()
 	}
 	d, err := s.prepare(ctx, op, false)
+	for cmds != nil && errors.As(err, new(buildMiss)) {
+		// A build the wait found went away before its push (#1171): wait for it again, as for a build not written yet.
+		if err = waitForBuilds(ctx, cmds, a.writef, func() (string, error) { return s.lookupBuilds(op) }); err != nil {
+			return nil, err
+		}
+		if s.stamp, err = s.inputsStamp(); err != nil {
+			return nil, err
+		}
+		d, err = s.prepare(ctx, op, false)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -236,7 +246,17 @@ func (s *devAppSession) prepare(ctx context.Context, op string, reload bool) (de
 			err = siteHoldsIndex(op, key, img)
 		}
 		if err == nil {
+			if img.part == partSite && s.cfg.beforeSitePush != nil {
+				s.cfg.beforeSitePush(key)
+			}
 			err = s.push(ctx, op, key, p.t.Parsed[key].Repo, l.Version, img)
+			if err != nil && img.part == partSite {
+				// A watch build can empty the folder between the lookup and this push, as Vite does before it builds
+				// (#1171): that is the lookup's miss, which a start waits on and a reload keeps its last build for.
+				if miss := siteHoldsIndex(op, key, img); miss != nil {
+					err = miss
+				}
+			}
 		}
 		if err != nil {
 			last := s.images[key]

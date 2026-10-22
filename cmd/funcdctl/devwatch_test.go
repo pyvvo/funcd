@@ -82,13 +82,17 @@ func startLoop(t *testing.T, root, cache string) (*appRun, devConfig, error) {
 	return r, cfg, started()
 }
 
-// startLoopAsync is startLoop that returns while dev starts: started waits for it, and r.inst is set once it did.
-func startLoopAsync(t *testing.T, root, cache string) (*appRun, devConfig, func() error) {
+// startLoopAsync is startLoop that returns while dev starts: started waits for it, and r.inst is set once it did. Each
+// of opts changes the run's config first.
+func startLoopAsync(t *testing.T, root, cache string, opts ...func(*devConfig)) (*appRun, devConfig, func() error) {
 	t.Helper()
 	var cfg devConfig
 	dir, _, err := resolveDevRun("test", root, nil, nil, &cfg)
 	require.NoError(t, err)
 	cfg.cacheDir = cache
+	for _, o := range opts {
+		o(&cfg)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	r := &appRun{out: &lockedBuffer{}}
 	done := make(chan error, 1)
@@ -733,6 +737,38 @@ func TestScenarioDevWatchStartFailure(t *testing.T) {
 			r.serves(t)
 		})
 	}
+}
+
+// Issue #1171: the watch command's first build emptied a Site's folder after dev's start found the folder's earlier
+// build and before dev pushed it, as Vite empties dist before a build, and the start failed on the push, so the
+// build's own error never showed (a slow host, as -race on Linux, hit it every time). The start now waits for the
+// build again.
+func TestIssue1171_StartWaitsWhenASitesBuildVanishesBeforeItsPush(t *testing.T) {
+	requireApp(t)
+	t.Setenv("TODO_API_TOKEN", todoToken)
+	root := loopTodo(t, loopConfig(webWatch, ""))
+	web := filepath.Join(root, "web")
+	dist := filepath.Join(web, "dist")
+	require.NoError(t, copyBuildTree(filepath.Join(web, "site"), dist))
+	require.NoError(t, os.WriteFile(filepath.Join(web, "BROKEN"), nil, 0o600))
+	var once sync.Once
+	r, _, started := startLoopAsync(t, root, t.TempDir(), func(cfg *devConfig) {
+		cfg.beforeSitePush = func(string) {
+			once.Do(func() {
+				for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+					if entries, err := os.ReadDir(dist); err == nil && len(entries) == 0 {
+						return
+					}
+				}
+			})
+		}
+	})
+	r.eventually(t, func() bool { return strings.Contains(r.out.String(), "web | build error: broken\n") }, "the error shows")
+	require.Contains(t, r.out.String(), "waiting for images.web: ", "the start waits for the build")
+	require.NoError(t, os.Remove(filepath.Join(web, "BROKEN")))
+	appendTo(t, filepath.Join(web, "site", "app.js"), "\n// fixed\n")
+	require.NoError(t, started())
+	r.serves(t)
 }
 
 // TestDevWatchExits: an exit 0 judges its command's open burst before the finished line, and a non-zero exit drops it,

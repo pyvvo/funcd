@@ -154,6 +154,9 @@ type devConfig struct {
 	apply  []string
 	// pickS3Addr picks the S3-frontend address when s3port is 0; nil ⇒ freeLocalAddr. A test hands out a taken one (#627).
 	pickS3Addr func() (string, error)
+	// beforeSitePush runs as dev is about to push a Site's build; a test empties the folder there, as a watch build can
+	// (#1171).
+	beforeSitePush func(key string)
 	// cacheDir holds the state dir without --persist (ADR-0167); "" ⇒ os.UserCacheDir. A test passes its own.
 	cacheDir string
 	pace     devPace          // the three cadences (ADR-0254 Decision 4); zero ⇒ dev's defaults
