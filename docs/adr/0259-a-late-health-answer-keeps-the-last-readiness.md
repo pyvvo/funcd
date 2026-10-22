@@ -1,10 +1,11 @@
 # ADR-0259: A late health answer keeps a worker's last readiness for `runtime.readinessTimeout`
 
-- **Status**: Reviewing (2026-10-22), implemented in the PR that closes #1127; Accepted (2026-10-22). The decider chose
-  option A on #1127 with the window as a config key, 5 s by default, and accepted this text ("accept, ship it"),
-  confirming the drafting agent's four choices: the rule on the solo steady path too, only a timeout as late, the names,
-  and no window for a worker with no recorded answer. Judged twice: round 1's three Majors and six Minors and round 2's
-  four Minors are folded in; round 2's verdict: accept.
+- **Status**: Implemented (2026-10-22), review passed on its first round, its five Minors fixed before the stamp
+  (docs/reviews/adr-0259-implementation-claude-opus-5-5.md); Reviewing (2026-10-22), implemented in the PR that closes
+  #1127; Accepted (2026-10-22). The decider chose option A on #1127 with the window as a config key, 5 s by default,
+  and accepted this text ("accept, ship it"), confirming the drafting agent's four choices: the rule on the solo steady
+  path too, only a timeout as late, the names, and no window for a worker with no recorded answer. Judged twice: round
+  1's three Majors and six Minors and round 2's four Minors are folded in; round 2's verdict: accept.
 - **Date**: 2026-10-22
 - **Deciders**: green-0-rabbit
 - **Tags**: function, health, readiness, pooling, status, config

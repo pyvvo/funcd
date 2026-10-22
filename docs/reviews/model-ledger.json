@@ -12088,5 +12088,20 @@
     "dod_total": 12,
     "report": "docs/reviews/issue-1144-fix-claude-opus-5-5-3.md",
     "notes": "third review (498f132c raw-string finder fix + CLAUDE.md line): minor (model) three scanner guards untested (raw close brace, comment, quote)"
+  },
+  {
+    "date": "2026-10-22",
+    "adr": "0259",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 5,
+    "model_attributed": 5,
+    "dod_passed": 9,
+    "dod_total": 9,
+    "report": "docs/reviews/adr-0259-implementation-claude-opus-5-5.md",
+    "notes": "5 minor (model) found on ab90e645: 503 body past the deadline judged as an answer; untested: kept answer not liveness (M4), switchDue records (M5), held revision path (M7, M7b); NotAnswering comment. All fixed in 2980fe1a and 4e63d147, each held by a test that fails without its fix. env: TestScenarioRestoreAnyPoint Badger lock flake, passed on rerun"
   }
 ]
