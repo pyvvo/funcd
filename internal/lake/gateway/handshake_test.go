@@ -11,7 +11,8 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
-// goldenToken is the token embedded in testdata/handshake_golden.bin (a captured Quack handshake frame).
+// goldenToken is the token embedded in testdata/handshake_golden.bin, a Quack handshake frame captured from a DuckDB
+// 2.0.0 client (ADR-0262 Decision 7).
 const goldenToken = "GOLDENTOKEN013"
 
 // TestSwapHandshakeToken round-trips the captured Quack handshake frame (ADR-0137 spike fixture): it

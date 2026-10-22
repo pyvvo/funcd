@@ -16,9 +16,13 @@
 # runs the SQL on `lake` over Quack, and returns the rows. Ready alone proves the binding injected the
 # endpoint/token and `lake` is reachable; the invoke proves the whole consumer loop end-to-end on containerd.
 #
-# Last, the ADR-0179 cases: the boot sweep releases a CNI attachment planted under the ID form used before ADR-0179
+# Then the ADR-0179 cases: the boot sweep releases a CNI attachment planted under the ID form used before ADR-0179
 # (<ns>-<name>-r<replica>), and engines c in namespace a-b and b-c in namespace a, whose IDs collided under that
 # form, each hold their own attachment.
+#
+# The ADR-0262 cases (DuckDB 2.0): the checkpointed catalog is DuckLake 1.1; a query reaches no path but s3:// and the
+# engine's temp directory; a non-gating probe records whether lake-reader can ATTACH its Lake through the PEP proxy;
+# and, last, Lake lake re-created at 256Mi records its idle engine's RSS and spills a query larger than its memory.
 name: lake-quack add-on provider — deploy + Ready + live SQL round-trip on real containerd (ADR-0086/0087/0088/0091)
 
 vars:
@@ -250,6 +254,63 @@ testcases:
         assertions:
           - result.statuscode ShouldEqual 200
           - result.body ShouldContainSubstring "[[998]]"
+
+  - name: new-lake-is-1-1 — the Lake's catalog, checkpointed to blob, is DuckLake 1.1 (ADR-0262 Decision 3)
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            cat=$(sudo find /var/lib/funcd/data/blob -path "*/lakehouse/gold/_ducklake/catalog.db" -type f | head -1)
+            [ -n "$cat" ] || exit 1
+            echo "VERSION=$(sudo python3 -c "import sqlite3,sys;print(sqlite3.connect(\"file:\"+sys.argv[1]+\"?mode=ro\",uri=True).execute(\"SELECT value FROM ducklake_metadata WHERE key=?\",(\"version\",)).fetchone()[0])" "$cat")"'
+        retry: 15
+        delay: 2
+        info: "the checkpointed catalog → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual VERSION=1.1
+
+  - name: only-allowed-paths — a query reaches no path but s3:// and the engine's temp directory (ADR-0262 Decision 8)
+    steps:
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT content FROM read_text(''http://example.invalid/x'')"}}'
+        retry: 10
+        delay: 2
+        info: "an http read → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 500
+          - result.body ShouldContainSubstring "disabled"
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT size FROM read_blob(''/var/funcd/ducklake/catalog.db'')"}}'
+        retry: 10
+        delay: 2
+        info: "a read of the engine's own catalog file → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 500
+          - result.body ShouldContainSubstring "disabled"
+
+  # Non-gating (ADR-0262 Open questions): only quack_query's handshake is verified through the PEP proxy.
+  - name: quack-attach-probe — records, never failing, whether lake-reader's DuckDB 2.0 can ATTACH its Lake through the PEP proxy
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            sock=/var/lib/funcd/data/containerd/containerd.sock
+            task=$(sudo /var/lib/funcd/bin/ctr --address $sock -n funcd-default task ls | awk "index(\$1,\"lake-reader\")==1{print \$1; exit}")
+            sudo timeout 60 /var/lib/funcd/bin/ctr --address $sock -n funcd-default task exec --exec-id quack-attach-probe "$task" \
+              /usr/local/bin/python3.14 -c "$(cat /opt/lane/quack-attach-probe.py)" 2>&1 | tail -2
+            true'
+        info: "ATTACH through the PEP proxy → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
 
   # ADR-0152: a Function and a Lake share the name `lake`; each reconciler manages only its own kind's workers.
   - name: same-name-function-and-lake-stay-ready — Function lake deploys and scales beside Lake lake, which keeps its engine
@@ -554,3 +615,68 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "C_LEASES=0 ENGINE_BC=Ready/200/a_b-c-r0/"
+
+  # ADR-0262 Decision 8: the engine spills to its temp directory under the allow-list. DuckDB takes its memory limit
+  # from the container's cgroup (204.7 MiB at 256Mi), and the window query needs over 800 MB (experiment 0006's, scaled).
+  - name: spill-under-256mi — Lake lake re-created at 256Mi records its idle engine's RSS and spills a query larger than its memory
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            funcdctl delete lake lake -n default >/dev/null && echo DELETED'
+        info: "delete Lake lake → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual DELETED
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            funcdctl get lake lake -n default >/dev/null 2>&1 && exit 1
+            funcdctl apply -f /opt/lane/lake-256mi.yaml >/dev/null && echo APPLIED'
+        retry: 30
+        delay: 2
+        info: "re-apply at 256Mi → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual APPLIED
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            sock=/var/lib/funcd/data/containerd/containerd.sock
+            phase=$(funcdctl get lake lake -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"phase\"])")
+            [ "$phase" = Ready ] || exit 1
+            pid=$(sudo /var/lib/funcd/bin/ctr --address $sock -n funcd-default task ls | awk "\$1==\"lake-r0\"{print \$2}")
+            [ -n "$pid" ] || exit 1
+            cg=/sys/fs/cgroup$(sudo awk -F: "\$1==\"0\"{print \$3}" /proc/$pid/cgroup)
+            echo "LAKE=$phase IDLE_RSS_KB=$(ps -o rss= -p $pid | tr -d " ") MEMORY_CURRENT=$(sudo cat $cg/memory.current) MEMORY_MAX=$(sudo cat $cg/memory.max)"'
+        retry: 60
+        delay: 2
+        info: "the idle 256Mi engine → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "LAKE=Ready"
+          - result.systemout ShouldContainSubstring "MEMORY_MAX=268435456"
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT current_setting(''memory_limit''), current_setting(''threads'')"}}'
+        retry: 20
+        delay: 2
+        info: "the engine's memory_limit and threads → {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT max(x) FROM (SELECT i, lead(i) OVER (ORDER BY hash(i)) AS x FROM range(20000000) t(i))"}}'
+        info: "a query larger than the engine's memory → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring "[[19999999]]"

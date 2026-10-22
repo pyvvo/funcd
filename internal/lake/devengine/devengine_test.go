@@ -4,11 +4,11 @@ package devengine
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -20,11 +20,11 @@ import (
 )
 
 const (
-	// fakeEngineEnv makes the test binary act as the duckdb engine (TestMain): it serves the address its -init script
-	// passes to quack_serve until stdin closes, as the real REPL does.
+	// fakeEngineEnv makes the test binary act as the duckdb engine (TestMain): it serves on the port its -init script
+	// passes to quack_serve, port 0 taking a free one that its row names, until stdin closes, as the real REPL does.
 	fakeEngineEnv = "DEVENGINE_TEST_FAKE_ENGINE"
 	// fakeModeEnv changes the fake engine: "norow" serves without printing its quack_serve row, "fail" ends on an init
-	// error before quack_serve, as the real CLI does.
+	// error before quack_serve, as the real CLI does, and "agent" fails unless DUCKDB_AGENT_MODE=0 turns agent mode off.
 	fakeModeEnv = "DEVENGINE_TEST_FAKE_MODE"
 )
 
@@ -49,17 +49,22 @@ func runFakeEngine(args []string) int {
 		return 2
 	}
 	addr := quackServeAddr.FindSubmatch(sql)
-	if addr == nil {
+	if addr == nil || string(addr[1]) != "127.0.0.1:0" {
+		fmt.Fprintln(os.Stderr, "the init does not serve on 127.0.0.1:0")
 		return 2
 	}
-	if os.Getenv(fakeModeEnv) == "fail" {
+	switch os.Getenv(fakeModeEnv) {
+	case "fail":
 		fmt.Fprintln(os.Stderr, "Lake Error: Table with name no_such_table does not exist!")
 		fmt.Fprintf(os.Stderr, "Encountered errors while executing init file %q. Exiting.\n", args[1])
 		return 1
+	case "agent":
+		if os.Getenv("DUCKDB_AGENT_MODE") != "0" {
+			fmt.Fprintln(os.Stderr, `{"type":"error","message":"rendered for an AI agent"}`)
+			return 1
+		}
 	}
-	// The Quack server binds with SO_REUSEPORT (probed on DuckDB 1.5.6, ADR-0260): beside a held socket that set it,
-	// but not on a port a plain socket holds.
-	l, err := listenReusePort(string(addr[1]))
+	l, err := net.Listen("tcp", string(addr[1]))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "IO Error: Failed to bind DuckDB Quack RPC server to http://%s\n", addr[1])
 		return 1
@@ -74,7 +79,7 @@ func runFakeEngine(args []string) int {
 		}
 	}()
 	if os.Getenv(fakeModeEnv) != "norow" {
-		if _, err := fmt.Fprintf(os.Stdout, "http://%s\n", addr[1]); err != nil {
+		if _, err := fmt.Fprintf(os.Stdout, "│ listen_url │\n│ http://%s │\n", l.Addr()); err != nil {
 			return 1
 		}
 	}
@@ -108,35 +113,55 @@ func requireTaken(t *testing.T, addr string) {
 	}
 }
 
-// scenario: lake-engine-holds-its-port — a Go net.Listen of the engine's port fails from the moment the start
-// chooses it, and the lake is Ready only once its own engine printed its address; an engine that ends first fails
-// the start at once with its error output (ADR-0260 Decision 3).
-func TestScenarioLakeEngineHoldsItsPort(t *testing.T) {
-	t.Run("held until the engine serves it", func(t *testing.T) {
-		r := fakeRuntime(t)
-		var held net.Listener
-		r.holdPort = func() (net.Listener, error) {
-			ln, err := holdLoopbackPort()
-			if err == nil {
-				held = ln
-				requireTaken(t, ln.Addr().String())
-			}
-			return ln, err
+// scenario: dev-engine-port-zero — the engine's init asks for port 0, and the start reports the port the engine's
+// listen_url row names, which the engine holds (ADR-0262 Decision 4).
+func TestScenarioDevEnginePortZero(t *testing.T) {
+	if sql := buildInitSQL("/ext", "/tmp/catalog.db", nil); !strings.Contains(sql, "quack_serve('quack:127.0.0.1:0'") {
+		t.Fatalf("the init does not ask for port 0:\n%s", sql)
+	}
+	r := fakeRuntime(t)
+	st, err := r.Converge(context.Background(), testSpec())
+	if err != nil || !st.Ready {
+		t.Fatalf("Converge: Ready=%v err=%v", st.Ready, err)
+	}
+	if _, port, _ := net.SplitHostPort(st.Address); port == "" || port == "0" {
+		t.Fatalf("Address %q names no port the engine took", st.Address)
+	}
+	conn, err := net.DialTimeout("tcp", st.Address, 2*time.Second)
+	if err != nil {
+		t.Fatalf("the engine does not serve the reported %s: %v", st.Address, err)
+	}
+	_ = conn.Close()
+	requireTaken(t, st.Address)
+}
+
+// TestRowWatcherSplitRow: the watcher reads whole lines, so a row split inside its port gives the whole port, and a
+// line before the row matches nothing.
+func TestRowWatcherSplitRow(t *testing.T) {
+	w := &rowWatcher{seen: make(chan struct{})}
+	for _, part := range []string{"WARNING:\nsome", " text\n│ http://127.0.0.1:12", "345 │\n│ http://127.0.0.1:1 │\n"} {
+		select {
+		case <-w.seen:
+			t.Fatalf("matched before the row ended, at %q", w.addr)
+		default:
 		}
-		st, err := r.Converge(context.Background(), testSpec())
-		if err != nil || !st.Ready {
-			t.Fatalf("Converge: Ready=%v err=%v", st.Ready, err)
+		if n, err := w.Write([]byte(part)); n != len(part) || err != nil {
+			t.Fatalf("Write(%q) = %d, %v", part, n, err)
 		}
-		if st.Address != held.Addr().String() {
-			t.Fatalf("Address %s, want the held port %s", st.Address, held.Addr())
-		}
-		// A deadline in the past makes Accept on a held port that is still open fail at once instead of blocking.
-		_ = held.(*net.TCPListener).SetDeadline(time.Now())
-		if _, aerr := held.Accept(); !errors.Is(aerr, net.ErrClosed) {
-			t.Fatalf("the held port is still open after Ready: %v", aerr)
-		}
-		requireTaken(t, st.Address)
-	})
+	}
+	select {
+	case <-w.seen:
+	default:
+		t.Fatal("the row was not seen")
+	}
+	if w.addr != "127.0.0.1:12345" {
+		t.Fatalf("addr %q, want 127.0.0.1:12345", w.addr)
+	}
+}
+
+// scenario: dev-engine-early-exit — an engine that ends before its row fails the start at once with its error output;
+// one that never prints its row fails at the timeout.
+func TestScenarioDevEngineEarlyExit(t *testing.T) {
 	t.Run("a listening engine without its row is not Ready", func(t *testing.T) {
 		t.Setenv(fakeModeEnv, "norow")
 		r := fakeRuntime(t)
@@ -161,6 +186,18 @@ func TestScenarioLakeEngineHoldsItsPort(t *testing.T) {
 			t.Fatalf("the failed start took %s, the whole timeout", took)
 		}
 	})
+}
+
+// scenario: agent-environment-same-output — with an AI agent's variable set, and agent mode asked for, the engine still
+// runs with DUCKDB_AGENT_MODE=0, so its row and its errors are rendered as without them (ADR-0262 Decision 6).
+func TestScenarioAgentEnvironmentSameOutput(t *testing.T) {
+	t.Setenv("AI_AGENT", "1")
+	t.Setenv("DUCKDB_AGENT_MODE", "1")
+	t.Setenv(fakeModeEnv, "agent")
+	r := fakeRuntime(t)
+	if st, err := r.Converge(context.Background(), testSpec()); err != nil || !st.Ready {
+		t.Fatalf("Converge: Ready=%v err=%v, want the engine run with agent mode off", st.Ready, err)
+	}
 }
 
 func testSpec() provider.ProviderSpec {
@@ -219,8 +256,9 @@ func TestConvergeLaunchesEngineWhenBundled(t *testing.T) {
 		t.Fatalf("Quack engine not reachable at %s: %v", st.Address, derr)
 	}
 	_ = conn.Close()
-	// Ready came from the engine's quack_serve row (ADR-0260), and the engine holds its port after the start's hold.
+	// Ready came from the engine's quack_serve row, and the engine holds the port that row named (ADR-0262).
 	requireTaken(t, st.Address)
+	requireNoDeprecation(t, ctx)
 
 	// Idempotent: a second Converge returns the same running engine, not a new one.
 	st2, err2 := r.Converge(ctx, spec)
@@ -235,6 +273,34 @@ func TestConvergeLaunchesEngineWhenBundled(t *testing.T) {
 	if c, e := net.DialTimeout("tcp", st.Address, 500*time.Millisecond); e == nil {
 		_ = c.Close()
 		t.Fatalf("engine still reachable at %s after Teardown", st.Address)
+	}
+}
+
+// requireNoDeprecation is scenario no-deprecated-extension-setting on the real CLI: it runs the embedded engine on
+// buildInitSQL's script once, with stdin at EOF so the REPL ends, and fails on a deprecation line in its output,
+// which 2.0 prints to stdout (ADR-0262 Decision 5).
+func requireNoDeprecation(t *testing.T, ctx context.Context) {
+	t.Helper()
+	dir := t.TempDir()
+	paths, err := embedengine.Extract(dir)
+	if err != nil {
+		t.Fatalf("extract the engine: %v", err)
+	}
+	init := filepath.Join(dir, "init.sql")
+	if err := os.WriteFile(init, []byte(buildInitSQL(paths.ExtensionDir, filepath.Join(dir, "catalog.db"), testSpec().Env)), 0o600); err != nil {
+		t.Fatalf("write the init: %v", err)
+	}
+	cmd := exec.CommandContext(ctx, paths.DuckDB, "-init", init, ":memory:")
+	cmd.Env = append(os.Environ(), "DUCKDB_AGENT_MODE=0")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("the engine on its init: %v\n%s", err, out)
+	}
+	if !serveRow.Match(out) {
+		t.Fatalf("the engine printed no listen_url row:\n%s", out)
+	}
+	if strings.Contains(strings.ToLower(string(out)), "deprecated") {
+		t.Fatalf("the engine printed a deprecation line:\n%s", out)
 	}
 }
 
@@ -340,9 +406,10 @@ func TestBuildInitSQLAttachesDuckLake(t *testing.T) {
 		"FUNCD_DUCKLAKE_CATALOG": "s3://releves/gold/_ducklake/catalog.db",
 		"QUACK_TOKEN":            "tok",
 	}
-	sql := buildInitSQL("/ext", "/tmp/catalog.db", "127.0.0.1:5555", env)
+	sql := buildInitSQL("/ext", "/tmp/catalog.db", env)
 	for _, want := range []string{
-		"ATTACH 'ducklake:sqlite:/tmp/catalog.db' AS lakehouse (DATA_PATH 's3://releves/gold/', OVERRIDE_DATA_PATH TRUE)",
+		"SET extension_directories=['/ext'];",
+		"ATTACH 'ducklake:sqlite:/tmp/catalog.db' AS lakehouse (DATA_PATH 's3://releves/gold/', OVERRIDE_DATA_PATH TRUE, DUCKLAKE_VERSION '1.1')",
 		"CREATE OR REPLACE SECRET funcd_dev_s3",
 		"quack_serve",
 	} {
@@ -350,8 +417,11 @@ func TestBuildInitSQLAttachesDuckLake(t *testing.T) {
 			t.Errorf("buildInitSQL missing %q in:\n%s", want, sql)
 		}
 	}
+	if strings.Contains(sql, "AUTOMATIC_MIGRATION") || strings.Contains(sql, "extension_directory=") {
+		t.Errorf("buildInitSQL migrates the catalog or sets the deprecated extension_directory:\n%s", sql)
+	}
 	// No lake env ⇒ no ATTACH (a non-DuckLake engine still serves quack).
-	noCat := buildInitSQL("/ext", "/tmp/catalog.db", "127.0.0.1:5555", map[string]string{"QUACK_TOKEN": "t"})
+	noCat := buildInitSQL("/ext", "/tmp/catalog.db", map[string]string{"QUACK_TOKEN": "t"})
 	if strings.Contains(noCat, "ATTACH") {
 		t.Errorf("buildInitSQL emitted ATTACH with no FUNCD_DUCKLAKE_CATALOG:\n%s", noCat)
 	}

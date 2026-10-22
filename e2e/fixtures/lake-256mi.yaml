@@ -1,0 +1,36 @@
+# The duckdb lane's spill-under-256mi (ADR-0262) re-applies Lake lake at 256Mi from this copy of
+# lake-quack-recreate.yaml: DuckDB takes its memory limit from the engine container's cgroup, so a query larger
+# than that spills to the engine's temp directory.
+apiVersion: funcd.io/v1alpha1
+kind: Lake
+metadata:
+  name: lake
+  namespace: default
+  resourceGroup: rg1
+spec:
+  buckets:
+    - ref: lakehouse
+  configMaps:
+    - ref: lake-engine-config
+  secrets:
+    - name: lake-quack-token
+      keys:
+        - QUACK_TOKEN
+  bindings:
+    blob:
+      - alias: gold
+        bucket: lakehouse
+        prefix: gold
+    secret:
+      - lake-quack-token
+    config:
+      - lake-engine-config
+  location:
+    bucket: lakehouse
+    prefix: gold
+  resources:
+    cpu: "2"
+    memory: "256Mi"
+  ingress:
+    enabled: true
+    path: /lake/lake

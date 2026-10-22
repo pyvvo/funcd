@@ -5,7 +5,8 @@ import (
 )
 
 // tokenFieldID is the Quack handshake TLV field id of the token: the FIRST field, at offset 8 (after the
-// 8-byte preamble), framed <id:1=0x01><0x00><uvarint len><value> (ADR-0137 feasibility spike, DuckDB 1.5.4).
+// 8-byte preamble), framed <id:1=0x01><0x00><uvarint len><value> (ADR-0137 feasibility spike; unchanged in
+// DuckDB 2.0.0, ADR-0262).
 const tokenFieldID = 0x01
 
 // preambleLen is the fixed 8-byte handshake preamble before the first TLV field.

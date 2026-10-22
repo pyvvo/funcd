@@ -26,7 +26,7 @@ import (
 )
 
 // DuckDBRuntime is the curated runtime name whose image the reconciler deploys the engine from
-// (ADR-0086/0087 / ADR-0054 embedded-image set). ImageFor(DuckDBRuntime) → the real DuckDB 1.5.4 +
+// (ADR-0086/0087 / ADR-0054 embedded-image set). ImageFor(DuckDBRuntime) → the real DuckDB 2.0.0 +
 // ducklake/httpfs/quack image ref (node-built out-of-band; in-process the engine never reaches
 // Ready, which is expected — the live engine comes up only on the node-gated lane).
 const DuckDBRuntime = "duckdb"

@@ -18,13 +18,13 @@
 package devengine
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,8 +33,6 @@ import (
 	"sync"
 	"syscall"
 	"time"
-
-	"golang.org/x/sys/unix"
 
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/lake/embedengine"
@@ -72,8 +70,6 @@ type Runtime struct {
 	// bundled and extract reach the embedded engine; a test swaps them for a fake engine.
 	bundled func() bool
 	extract func(dir string) (embedengine.Paths, error)
-	// holdPort binds the port an engine is given, before it starts; a test swaps it.
-	holdPort func() (net.Listener, error)
 }
 
 // Option configures the dev lake engine runtime.
@@ -95,11 +91,10 @@ func New(logger *slog.Logger, opts ...Option) (*Runtime, error) {
 		logger = slog.Default()
 	}
 	r := &Runtime{
-		logger:   logger.With("component", "devengine"),
-		procs:    make(map[provider.ProviderRef]*engineProc),
-		bundled:  embedengine.Bundled,
-		extract:  embedengine.Extract,
-		holdPort: holdLoopbackPort,
+		logger:  logger.With("component", "devengine"),
+		procs:   make(map[provider.ProviderRef]*engineProc),
+		bundled: embedengine.Bundled,
+		extract: embedengine.Extract,
 	}
 	for _, o := range opts {
 		o(r)
@@ -215,8 +210,8 @@ type engineProc struct {
 	cmd     *exec.Cmd
 	stdin   io.WriteCloser
 	dir     string
-	addr    string
-	serving chan struct{}    // closed when the engine's stdout names addr, the row of its quack_serve call
+	addr    string           // the address the engine's quack_serve row named
+	watcher *rowWatcher      // reads that row from the engine's stdout
 	stderr  *prefixLogWriter // the engine's error output, whose last lines a failed start reports
 	done    chan struct{}    // closed once the engine has exited and been reaped
 }
@@ -253,9 +248,9 @@ func (p *engineProc) stop() {
 	}
 }
 
-// launch extracts the engine, writes the init SQL, starts duckdb serving Quack on a 127.0.0.1 port it holds, and
-// blocks until the engine names that address on its stdout (or ends, or times out). The held port closes when launch
-// returns, before Converge reports Ready, so no other process can take it in between (ADR-0260 Decision 3).
+// launch extracts the engine, writes the init SQL, starts duckdb serving Quack on a 127.0.0.1 port it chooses, and
+// blocks until the engine names that address on its stdout (or ends, or times out): the port is the engine's own from
+// the moment it binds, so no other process can take it (ADR-0262 Decision 4).
 func (r *Runtime) launch(ctx context.Context, spec provider.ProviderSpec) (*engineProc, error) {
 	const op = "devengine.launch"
 	var raw [8]byte
@@ -271,13 +266,6 @@ func (r *Runtime) launch(ctx context.Context, spec provider.ProviderSpec) (*engi
 		_ = os.RemoveAll(dir)
 		return nil, err
 	}
-	held, err := r.holdPort()
-	if err != nil {
-		_ = os.RemoveAll(dir)
-		return nil, fault.Wrapf(err, fault.Internal, op, "hold the engine port")
-	}
-	defer func() { _ = held.Close() }()
-	addr := held.Addr().String()
 
 	// The SQLite catalog lives in the ephemeral engine dir by default (fresh each boot); under
 	// --persist (lakeDir set) it lives in a durable per-provider subdir OUTSIDE the temp dir, so
@@ -294,7 +282,7 @@ func (r *Runtime) launch(ctx context.Context, spec provider.ProviderSpec) (*engi
 	}
 
 	initFile := filepath.Join(dir, "init.sql")
-	if werr := os.WriteFile(initFile, []byte(buildInitSQL(paths.ExtensionDir, catalogFile, addr, spec.Env)), 0o600); werr != nil {
+	if werr := os.WriteFile(initFile, []byte(buildInitSQL(paths.ExtensionDir, catalogFile, spec.Env)), 0o600); werr != nil {
 		_ = os.RemoveAll(dir)
 		return nil, fault.Wrapf(werr, fault.Internal, op, "write init.sql")
 	}
@@ -302,9 +290,12 @@ func (r *Runtime) launch(ctx context.Context, spec provider.ProviderSpec) (*engi
 	// `-init` runs the SQL (LOADs + quack_serve, which serves on a background thread), then duckdb
 	// drops into the REPL reading stdin — held open below so the process stays alive serving Quack.
 	cmd := exec.CommandContext(ctx, paths.DuckDB, "-init", initFile, ":memory:") //nolint:gosec // paths from our own embedded engine
-	serving := make(chan struct{})
+	// DuckDB 2.0's CLI renders for an AI agent when an agent's variable is set and stdout is no terminal (ADR-0262
+	// Decision 6).
+	cmd.Env = append(os.Environ(), "DUCKDB_AGENT_MODE=0")
+	watcher := &rowWatcher{seen: make(chan struct{})}
 	stderr := &prefixLogWriter{logger: r.logger, provider: string(spec.Ref.Name)}
-	cmd.Stdout = &rowWatcher{want: "http://" + addr, seen: serving}
+	cmd.Stdout = watcher
 	cmd.Stderr = stderr
 	// Its own process group, so the reap after a crash reaches everything the engine started (ADR-0167).
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -319,7 +310,7 @@ func (r *Runtime) launch(ctx context.Context, spec provider.ProviderSpec) (*engi
 		return nil, fault.Wrapf(serr, fault.Internal, op, "start duckdb engine")
 	}
 
-	p := &engineProc{id: id, cmd: cmd, stdin: stdin, dir: dir, addr: addr, serving: serving, stderr: stderr, done: make(chan struct{})}
+	p := &engineProc{id: id, cmd: cmd, stdin: stdin, dir: dir, watcher: watcher, stderr: stderr, done: make(chan struct{})}
 	go func() {
 		_ = cmd.Wait()
 		stderr.flush()
@@ -329,66 +320,67 @@ func (r *Runtime) launch(ctx context.Context, spec provider.ProviderSpec) (*engi
 		p.stop()
 		return nil, fault.Wrapf(serr, fault.KindOf(serr), op, "save engine %s", id)
 	}
-	if rerr := waitServing(ctx, p, serveTimeout); rerr != nil {
+	addr, rerr := waitServing(ctx, p, serveTimeout)
+	if rerr != nil {
 		r.stopLocked(p)
-		return nil, fault.Wrapf(rerr, fault.Unavailable, op, "engine did not become ready at %s", addr)
+		return nil, fault.Wrapf(rerr, fault.Unavailable, op, "engine did not become ready")
 	}
+	p.addr = addr
 	return p, nil
 }
 
-// holdLoopbackPort binds a free 127.0.0.1 port with SO_REUSEPORT: the Quack server, which sets it too, binds beside
-// it, and a plain bind of the port fails while it is held (ADR-0260 Decision 3).
-func holdLoopbackPort() (net.Listener, error) { return listenReusePort("127.0.0.1:0") }
-
-// listenReusePort listens on addr with SO_REUSEPORT. net.ListenConfig keeps the socket close-on-exec, so the engine
-// does not inherit it.
-func listenReusePort(addr string) (net.Listener, error) {
-	lc := net.ListenConfig{Control: func(_, _ string, c syscall.RawConn) error {
-		var serr error
-		if err := c.Control(func(fd uintptr) { serr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEPORT, 1) }); err != nil {
-			return err
-		}
-		return serr
-	}}
-	return lc.Listen(context.Background(), "tcp", addr)
-}
-
-// waitServing waits until the engine's own stdout names its address. A connection accepted on the port proves
-// nothing: another Quack server can share it (ADR-0260 Decision 3). An engine that ends first fails the start with
-// its error output.
-func waitServing(ctx context.Context, p *engineProc, timeout time.Duration) error {
+// waitServing returns the address the watcher stored, or the engine's error output when it ends first. The engine's
+// own row names the port it took, so a start reports no address the engine does not serve (ADR-0262 Decision 4).
+func waitServing(ctx context.Context, p *engineProc, timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	select {
-	case <-p.serving:
-		return nil
+	case <-p.watcher.seen:
+		return p.watcher.addr, nil
 	case <-p.done:
-		return fmt.Errorf("the engine ended before it served: %s", strings.Join(p.stderr.last, " | "))
+		return "", fmt.Errorf("the engine ended before it served: %s", strings.Join(p.stderr.last, " | "))
 	case <-ctx.Done():
-		return fmt.Errorf("waiting for %s: %w", p.addr, ctx.Err())
+		return "", fmt.Errorf("waiting for the engine's quack_serve row: %w", ctx.Err())
 	}
 }
 
-// rowWatcher reads the engine's stdout for want, the address its quack_serve row names, and closes seen there. Only
-// the stdout copier calls Write.
+// serveRow matches the address on a complete line of the engine's listen_url row.
+var serveRow = regexp.MustCompile(`http://(127\.0\.0\.1:[1-9][0-9]*)`)
+
+// maxLine bounds the unended line the watcher keeps; the listen_url row is far shorter.
+const maxLine = 4096
+
+// rowWatcher buffers the engine's standard output to whole lines. On the first line that serveRow matches, it stores
+// the address and closes seen; it never blocks the stdout copier. Only that copier calls Write, and addr is read once
+// seen is closed.
 type rowWatcher struct {
-	want    string
 	seen    chan struct{}
+	addr    string
 	matched bool
-	tail    string // the end of the output so far, for a row split across writes
+	line    []byte
 }
 
 func (w *rowWatcher) Write(b []byte) (int, error) {
-	if !w.matched {
-		buf := w.tail + string(b)
-		if strings.Contains(buf, w.want) {
+	n := len(b)
+	for !w.matched && len(b) > 0 {
+		i := bytes.IndexByte(b, '\n')
+		if i < 0 {
+			w.line = append(w.line, b...)
+			if len(w.line) > maxLine {
+				w.line = append(w.line[:0], w.line[len(w.line)-maxLine:]...)
+			}
+			break
+		}
+		w.line = append(w.line, b[:i]...)
+		if m := serveRow.FindSubmatch(w.line); m != nil {
+			w.addr = string(m[1])
 			w.matched = true
 			close(w.seen)
-		} else {
-			w.tail = buf[max(0, len(buf)-len(w.want)):]
 		}
+		w.line = w.line[:0]
+		b = b[i+1:]
 	}
-	return len(b), nil
+	return n, nil
 }
 
 // buildInitSQL assembles the duckdb init script: pin the extension dir, LOAD the engine extensions,
@@ -398,9 +390,10 @@ func (w *rowWatcher) Write(b []byte) (int, error) {
 // Quack server. This mirrors the prod duckdb runtime shim (images/runtime/duckdb/shim.py) minus the
 // boto3 lake recovery/checkpoint — dev starts a fresh local lake each boot (the Parquet DATA
 // persists in blob under --persist); durable lake metadata across dev restarts is out of scope.
-func buildInitSQL(extDir, catalogFile, addr string, env map[string]string) string {
+// It serves on 127.0.0.1:0 and attaches the lake with DUCKLAKE_VERSION '1.1' (ADR-0262).
+func buildInitSQL(extDir, catalogFile string, env map[string]string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "SET extension_directory=%s;\n", sqlStr(extDir))
+	fmt.Fprintf(&b, "SET extension_directories=[%s];\n", sqlStr(extDir))
 	b.WriteString("LOAD httpfs;\nLOAD ducklake;\nLOAD quack;\nLOAD sqlite_scanner;\n")
 
 	if key := env["AWS_ACCESS_KEY_ID"]; key != "" {
@@ -419,13 +412,12 @@ func buildInitSQL(extDir, catalogFile, addr string, env map[string]string) strin
 	// init-time `USE` here (it wouldn't carry to served queries). Needs the S3 secret to exist first.
 	if cat := env["FUNCD_DUCKLAKE_CATALOG"]; cat != "" {
 		// OVERRIDE_DATA_PATH: a lake restored under another prefix (ADR-0222 asLocation) records its old one
-		fmt.Fprintf(&b, "ATTACH %s AS lakehouse (DATA_PATH %s, OVERRIDE_DATA_PATH TRUE);\n",
+		fmt.Fprintf(&b, "ATTACH %s AS lakehouse (DATA_PATH %s, OVERRIDE_DATA_PATH TRUE, DUCKLAKE_VERSION '1.1');\n",
 			sqlStr("ducklake:sqlite:"+catalogFile), sqlStr(dataPathFor(cat)))
 	}
 
-	host, port, _ := net.SplitHostPort(addr)
 	token := firstNonEmpty(env["FUNCD_QUACK_TOKEN"], env["QUACK_TOKEN"], DevQuackToken)
-	fmt.Fprintf(&b, "SELECT listen_url FROM quack_serve(%s, token := %s);\n", sqlStr("quack:"+host+":"+port), sqlStr(token))
+	fmt.Fprintf(&b, "SELECT listen_url FROM quack_serve('quack:127.0.0.1:0', token := %s);\n", sqlStr(token))
 	return b.String()
 }
 

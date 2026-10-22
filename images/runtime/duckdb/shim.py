@@ -6,8 +6,8 @@ daemon (which stays pure-Go / no-cgo, ADR-0065). The native DuckDB engine is rea
 the ``duckdb`` Python package — that is fine: it runs OUT-OF-PROCESS in this function's own
 process, so no cgo is ever linked into the daemon. It is node-gated — exercised only on the
 real-DuckDB lane (FUNCD_IT=1 / ``just lima-example-duckdb``) on real containerd, never by
-``just ci``. Every API call below was verified against DuckDB 1.5.4 + the ducklake/httpfs/quack/
-sqlite extensions before it was written here.
+``just ci``. Every API call below was verified against DuckDB 2.0.0 + the ducklake/httpfs/quack/
+sqlite extensions (ADR-0262, experiment 0006).
 
 Injected environment (ADR-0085 keypair + ADR-0032 fixed port):
     AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY  — the function's per-fn S3 keypair.
@@ -18,13 +18,13 @@ Injected environment (ADR-0085 keypair + ADR-0032 fixed port):
                                                  derived from it (``s3://<bucket>/<prefix>/``).
     FUNCD_QUACK_PORT                           — the fixed netns port the Quack server binds.
 
-Engine confinement (the "Confine the SQL engine's reach" constraint, ADR-0086 B1 fix): pin the S3
-client to the INJECTED funcd endpoint, disable the arbitrary ``HTTPFileSystem`` (so a query can't
-read a non-S3 ``http(s)`` URL — the S3FileSystem stays enabled for the data path), then
-``SET lock_configuration=true`` LAST so a subsequent query cannot re-point S3 or re-enable the
-disabled filesystem. After that the engine can physically reach only the injected funcd S3 endpoint
-— isolation is the F47 keypair (cryptographic), not a query filter; remaining outbound is bounded by
-the egress policy.
+Engine confinement (the "Confine the SQL engine's reach" constraint, ADR-0086 B1 fix, an allow-list
+since ADR-0262 Decision 8): pin the S3 client to the INJECTED funcd endpoint, turn S3 URL parameters
+and the arbitrary ``HTTPFileSystem`` off, keep spills and secrets inside the engine; after the
+catalog's ATTACH, allow only ``s3://`` paths and the temp directory, turn external access off, then
+``SET lock_configuration=true`` LAST so no later query can change any of it. A query then reaches no
+other path — isolation is the F47 keypair (cryptographic), not a query filter; remaining outbound is
+bounded by the egress policy.
 
 Durability (ADR-0086, the empirically-validated mechanism): DuckLake keeps its catalog in a LOCAL
 SQLite file; Parquet data is written to S3 (the F47 surface) durably as part of each commit
@@ -49,6 +49,8 @@ import duckdb  # the native engine (out-of-process in THIS function — no cgo i
 # Where the local SQLite catalog lives during the engine's lifetime (sandbox ephemeral storage).
 LOCAL_CATALOG = "/var/funcd/ducklake/catalog.db"
 LOCAL_SNAPSHOT = LOCAL_CATALOG + ".snapshot"
+# Where the engine spills: the only local directory its queries may reach (ADR-0262 Decision 8).
+LOCAL_TMP = "/var/funcd/ducklake/tmp"
 
 # How often the commit watcher reads the catalog's snapshot id: commits within one interval share one checkpoint.
 COMMIT_POLL_SECONDS = 1.0
@@ -111,7 +113,7 @@ def _connect() -> "duckdb.DuckDBPyConnection":
     never reaches the network (the sandbox is confined).
     """
     ext_dir = os.environ.get("DUCKDB_EXTENSION_DIRECTORY")
-    config = {"extension_directory": ext_dir} if ext_dir else {}
+    config = {"extension_directories": [ext_dir]} if ext_dir else {}
     con = duckdb.connect(config=config)
     con.execute("SET autoinstall_known_extensions=false")
     con.execute("SET autoload_known_extensions=false")
@@ -120,13 +122,12 @@ def _connect() -> "duckdb.DuckDBPyConnection":
     return con
 
 
-def _configure_and_confine(con: "duckdb.DuckDBPyConnection", endpoint: str, region: str) -> None:
-    """Pin the S3 client to the injected endpoint, then confine + lock the engine.
+def _configure(con: "duckdb.DuckDBPyConnection", endpoint: str, region: str) -> None:
+    """Pin the S3 client to the injected endpoint and keep spills and secrets inside the engine, before the ATTACH.
 
-    Confinement order matters: pin s3_* and disable the arbitrary http(s) filesystem FIRST, then
-    ``lock_configuration=true`` LAST so no later query can re-point S3 or re-enable the filesystem.
     Disabling ``HTTPFileSystem`` blocks arbitrary ``http(s)://`` reads while leaving the S3FileSystem
-    (the funcd data path) enabled.
+    (the funcd data path) enabled. ``allow_persistent_secrets`` must be set before anything uses the
+    secret manager.
     """
     host = endpoint.split("://", 1)[-1]  # DuckDB's s3_endpoint is host[:port], no scheme.
     use_ssl = endpoint.lower().startswith("https://")
@@ -136,13 +137,19 @@ def _configure_and_confine(con: "duckdb.DuckDBPyConnection", endpoint: str, regi
     con.execute("SET s3_secret_access_key=?", [os.environ["AWS_SECRET_ACCESS_KEY"]])
     con.execute("SET s3_url_style='path'")
     con.execute(f"SET s3_use_ssl={'true' if use_ssl else 'false'}")
-
-    # Confine: disable the arbitrary http(s) filesystem so no query can read a non-S3 URL (e.g.
-    # SELECT … FROM 'https://elsewhere/x'). S3FileSystem stays enabled — the F47 PEP is the data path.
+    con.execute("SET s3_enable_deprecated_url_parameters=false")
     con.execute("SET disabled_filesystems='HTTPFileSystem'")
+    os.makedirs(LOCAL_TMP, exist_ok=True)
+    con.execute(f"SET temp_directory='{LOCAL_TMP}'")
+    con.execute("SET allow_persistent_secrets=false")
 
-    # Lock LAST — a query can no longer re-point s3_endpoint or re-enable the disabled filesystem.
-    # Remaining outbound is bounded by funcd's egress policy.
+
+def _confine(con: "duckdb.DuckDBPyConnection") -> None:
+    """After the catalog's ATTACH: allow only ``s3://`` paths and the temp directory, turn external access off, and
+    lock the configuration LAST so no query can change any of it (ADR-0262 Decision 8). The attached catalog stays
+    writable; remaining outbound is bounded by funcd's egress policy."""
+    con.execute(f"SET allowed_directories=['s3://', '{LOCAL_TMP}/']")
+    con.execute("SET enable_external_access=false")
     con.execute("SET lock_configuration=true")
 
 
@@ -253,17 +260,20 @@ def main() -> int:
 
     s3 = _s3_client(endpoint, region)
     con = _connect()
-    _configure_and_confine(con, endpoint, region)
+    _configure(con, endpoint, region)
 
     # Recover: GetObject the catalog from blob → local file → ATTACH (fresh on first deploy). The
     # Parquet DATA_PATH is the owned prefix on S3 (the F47 surface); the catalog is the local SQLite.
     _recover_catalog(s3, bucket, key)
     # OVERRIDE_DATA_PATH: a catalog restored under another prefix (ADR-0222 asLocation) records its old
     # DATA_PATH, which DuckLake refuses to replace otherwise; the data files are relative to it.
+    # DUCKLAKE_VERSION: a new catalog is DuckLake 1.1 whatever DuckDB's default; a 1.0 catalog fails here (ADR-0262).
     con.execute(
-        "ATTACH 'ducklake:sqlite:" + LOCAL_CATALOG + "' AS lakehouse (DATA_PATH ?, OVERRIDE_DATA_PATH TRUE)",
+        "ATTACH 'ducklake:sqlite:" + LOCAL_CATALOG + "' AS lakehouse "
+        "(DATA_PATH ?, OVERRIDE_DATA_PATH TRUE, DUCKLAKE_VERSION '1.1')",
         [data_path],
     )
+    _confine(con)
 
     checkpointer = _Checkpointer(s3, bucket, key)
     watcher = _CommitWatcher(checkpointer, LOCAL_CATALOG, COMMIT_POLL_SECONDS)

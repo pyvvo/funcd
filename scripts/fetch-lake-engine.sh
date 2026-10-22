@@ -8,7 +8,7 @@
 # CI build step and the local recipe never drift. Fetches PER-ARCH (no docker): the CLI from DuckDB's
 # GitHub release and the extensions from extensions.duckdb.org, so it works for darwin as well as
 # linux. Each file must match its SHA-256 in images/runtime/duckdb/duckdb.sha256 before it is used;
-# a DuckDB version with no pins there stops the script. Needs: curl, unzip, gunzip, tar, awk,
+# a DuckDB version with no pins there stops the script. Needs: curl, gunzip, tar, awk,
 # sha256sum (all standard on the CI runner and in the dev shell). NOT run by `just ci` — ci stays
 # green on the committed placeholder.
 #
@@ -17,15 +17,15 @@ set -euo pipefail
 
 os="${1:?usage: fetch-lake-engine.sh <os> <arch> [duckdb-version]}"
 arch="${2:?usage: fetch-lake-engine.sh <os> <arch> [duckdb-version]}"
-ver="${3:-1.5.6}" # pinned DuckDB (ADR-0086 chose 1.5.4 Variegata; 1.5.6 is its patch release; all MIT)
+ver="${3:-2.0.0}" # pinned DuckDB, the long-term-support release (ADR-0262; MIT)
 
-# The CLI ships one universal macOS binary; the loadable extensions are per-arch. Map the funcdctl
-# target onto the duckdb.org CLI asset + the extension platform token.
+# The CLI and the loadable extensions are per-arch. Map the funcdctl target onto the duckdb.org CLI
+# asset + the extension platform token.
 case "${os}/${arch}" in
   linux/amd64)  cli="linux-amd64"   ; extplat="linux_amd64"  ;;
   linux/arm64)  cli="linux-arm64"   ; extplat="linux_arm64"  ;;
-  darwin/amd64) cli="osx-universal" ; extplat="osx_amd64"    ;;
-  darwin/arm64) cli="osx-universal" ; extplat="osx_arm64"    ;;
+  darwin/amd64) cli="osx-amd64"     ; extplat="osx_amd64"    ;;
+  darwin/arm64) cli="osx-arm64"     ; extplat="osx_arm64"    ;;
   *) echo "fetch-lake-engine: unsupported target ${os}/${arch}" >&2; exit 1 ;;
 esac
 
@@ -33,8 +33,8 @@ out="internal/lake/embedengine/engine.tar.gz"
 sums="$(cd "$(dirname "$0")/.." && pwd)/images/runtime/duckdb/duckdb.sha256"
 work="$(mktemp -d)"
 trap 'rm -rf "${work}"' EXIT
-# DuckDB resolves an extension_directory as <dir>/v<ver>/<platform>/<ext>.duckdb_extension, so the
-# bundle mirrors that nested layout — the dev driver just points extension_directory at extensions/.
+# DuckDB resolves an extension directory as <dir>/v<ver>/<platform>/<ext>.duckdb_extension, so the
+# bundle mirrors that nested layout — the dev driver just points extension_directories at extensions/.
 extdir="${work}/extensions/v${ver}/${extplat}"
 mkdir -p "${extdir}" "${work}/v${ver}"
 
@@ -45,10 +45,10 @@ pinned() {
 }
 
 echo "fetch-lake-engine: duckdb ${ver} CLI (${cli}) + extensions (${extplat}) for ${os}/${arch}"
-zip="v${ver}/duckdb_cli-${cli}.zip"
-curl -fsSL -o "${work}/${zip}" "https://github.com/duckdb/duckdb/releases/download/v${ver}/duckdb_cli-${cli}.zip"
-pinned "${zip}" | (cd "${work}" && sha256sum -c -)
-unzip -qo "${work}/${zip}" -d "${work}"
+tgz="v${ver}/duckdb-cli-${cli}.tar.gz"
+curl -fsSL -o "${work}/${tgz}" "https://github.com/duckdb/duckdb/releases/download/v${ver}/duckdb-cli-${cli}.tar.gz"
+pinned "${tgz}" | (cd "${work}" && sha256sum -c -)
+tar -xzf "${work}/${tgz}" -C "${work}" duckdb
 
 # The DuckLake catalog can persist its metadata in SQLite; the artifact is `sqlite_scanner`
 # (DuckDB's `INSTALL sqlite` is an alias for it). httpfs = S3/HTTP fs, quack = the client-server

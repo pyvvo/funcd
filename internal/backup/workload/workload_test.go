@@ -151,6 +151,31 @@ func TestLakeFilesRelative(t *testing.T) {
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
 }
 
+// TestLakeFilesDuckLake11Catalog (ADR-0262, scenario new-lake-is-1-1): on a real DuckLake 1.1 catalog, whose nested
+// schema's path is relative to the data path, LakeFiles lists every data and delete file the catalog names.
+func TestLakeFilesDuckLake11Catalog(t *testing.T) {
+	t.Parallel()
+	dump, err := os.ReadFile(filepath.Join("testdata", "ducklake-1.1.sql"))
+	require.NoError(t, err)
+	file := filepath.Join(t.TempDir(), "catalog.db")
+	db, err := sql.Open("sqlite", file)
+	require.NoError(t, err)
+	_, err = db.Exec(string(dump))
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+	data, err := os.ReadFile(file)
+	require.NoError(t, err)
+	got, err := workload.LakeFiles(data)
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"01a165d1-e106-7ee0-bd66-1ba8d6b7745a/orders/ducklake-01a165d1-e110-7c4c-9aef-70e974ee7193.parquet",
+		"01a165d1-e106-7ee0-bd66-1ba8d6b7745a/orders/ducklake-01a165d1-e123-759c-9f9e-c43550072ca6.parquet",
+		"01a165d1-e106-7ee0-bd66-1ba8d6b7745a/orders/ducklake-01a165d1-e130-79d5-9192-58346e4b7ce5-delete.parquet",
+		"main/t/ducklake-01a165d1-e0e7-7090-9981-758743caa803.parquet",
+		"main/t/ducklake-01a165d1-e12a-7fc8-a943-69bc3a1bed3a-delete.parquet",
+	}, got)
+}
+
 // A Write puts each member's parts and the manifest last, IfNotExist, sealed to two recipients; the manifest reads
 // back, Integrity passes and the records open with one recipient's identity; a damaged part fails Integrity; a target
 // that refuses the condition is ErrTargetUnconditional.
