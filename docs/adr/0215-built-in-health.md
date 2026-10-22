@@ -2,6 +2,7 @@
 
 - **Status**: Implemented (2026-10-10; the implementation review passed on its second round, docs/reviews/adr-0215-implementation-claude-opus-5-5-2.md; accepted 2026-10-10)
 - **Superseded in part by**: [ADR-0225](0225-pool-worker-boot-crash-loop.md) (2026-10-10) — Decision 1's "a pool host that does not listen yet keeps runtime.bootTimeout since creation": since its last successful Start, as a counted boot crash.
+- **Superseded in part by**: [ADR-0259](0259-a-late-health-answer-keeps-the-last-readiness.md) (2026-10-22) — Decision 4 (line 124) "past which `memberIn` fails every member": a late `/health/members` read counts by the host's last answer for `runtime.readinessTimeout`.
 - **Date**: 2026-10-08 (self-accepted 2026-10-10 under adr-batch after drafting, three-lens judging with a skeptic per
   finding, cross-ADR audits and alignment with the disaster-recovery ADRs)
 - **Deciders**: green-0-rabbit

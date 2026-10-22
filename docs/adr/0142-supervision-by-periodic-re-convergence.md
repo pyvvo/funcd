@@ -8,6 +8,7 @@
 - **Superseded in part by**: [ADR-0169](0169-failed-stays-failed.md) (2026-10-05) — Decision 4 rows "none -> create" and "Created -> start": failed Start restarts.
 - **Superseded in part by**: [ADR-0183](0183-boot-timeout-from-start.md) (2026-10-05) — Decision 4 Stopped/Failed replace row (line 141): the period counts from the last successful Start.
 - **Superseded in part by**: [ADR-0215](0215-built-in-health.md) (2026-10-10) — Decision 3: the supervision pass also probes liveness and readiness.
+- **Superseded in part by**: [ADR-0259](0259-a-late-health-answer-keeps-the-last-readiness.md) (2026-10-22) — Decision 3 (lines 128, 130-131): while a worker's readiness read is late within its window, the steady pass and a full pass that ends `Ready` come back by the window's end instead of after the period.
 - **Date**: 2026-09-30 (redrafted the same day: an independent re-judge found that the first draft's replacement
   could not work on containerd and that a steady-state requeue would multiply in the engine; the self-acceptance
   was withdrawn before any commit or code, at the decider's choice. The second re-judge found no Blocker and asked

@@ -1,6 +1,7 @@
 # ADR-0221: A Degraded Function recovers while a gate fails — a worker of the serving revision that passes its readiness probe makes it Ready
 
 - **Status**: Implemented (2026-10-10; the implementation review passed on its first round, docs/reviews/adr-0221-implementation-claude-opus-5-5.md; accepted 2026-10-10; judged five rounds, last verdict accept; the decider answered at acceptance on #849)
+- **Superseded in part by**: [ADR-0259](0259-a-late-health-answer-keeps-the-last-readiness.md) (2026-10-22) — Constraints (lines 95-96), Decision 2 (line 128) and Decision 4 (lines 137-138): a probe that times out, solo or pooled, counts by the worker's last answer for `runtime.readinessTimeout`; past that window each clause holds.
 - **Date**: 2026-10-08
 - **Deciders**: green-0-rabbit
 - **Tags**: function, supervision, readiness, status, gate, pooling, secrets
