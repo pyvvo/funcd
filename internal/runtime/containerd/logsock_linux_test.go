@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sync/atomic"
 	"syscall"
@@ -115,8 +116,21 @@ func checkLogConnBound(t *testing.T, spec runtime.WorkerSpec, minLive, maxLive i
 	}
 }
 
+// fdPressureChildEnv marks the child process in which TestLogSocketKeepsAcceptingAfterTransientAcceptError runs.
+const fdPressureChildEnv = "FUNCD_TEST_FD_PRESSURE_CHILD"
+
 // One failed Accept (EMFILE while the daemon is out of file descriptors) must not end log capture for the instance.
+// The fd limit and the fd table are the whole process's, so a goroutine that another test left running could take the
+// one free fd the client dials with (#1157): the test runs in a child of this test binary, where it runs alone.
 func TestLogSocketKeepsAcceptingAfterTransientAcceptError(t *testing.T) {
+	if os.Getenv(fdPressureChildEnv) == "" {
+		cmd := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$", "-test.count=1")
+		cmd.Env = append(os.Environ(), fdPressureChildEnv+"=1")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("the test in its own process: %v\n%s", err, out)
+		}
+		return
+	}
 	var calls atomic.Int64
 	sock := openLogSocket(t, runtime.WorkerSpec{Namespace: "n", Name: "f"}, func(_ runtime.WorkerSpec, r io.ReadCloser) {
 		calls.Add(1)
