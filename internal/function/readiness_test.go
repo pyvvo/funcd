@@ -228,6 +228,23 @@ func TestHeldRevisionLatePastWindowIsNotAnswering(t *testing.T) {
 	require.Equal(t, "a replica has not answered /health/readiness for 1ns", c.Message)
 }
 
+// A held revision's pass comes back by its window's end (ADR-0259 Decision 4): within the window its Revision stays
+// Ready, and the pass returns no later than the window's end, before the supervision period.
+func TestHeldRevisionComesBackByTheWindowsEnd(t *testing.T) {
+	t.Parallel()
+	const window = 20 * time.Millisecond
+	h := newShimHarness(t, http.StatusOK, false, withSwitch, withReadinessTimeout(window))
+	ref := heldAtZero(t, h)
+	stall := h.rt.serveStalling(t, "echo-1")
+	require.Equal(t, v1.PhaseReady, h.wakeHeld(t, ref).Status.Phase)
+
+	stall()
+	res := h.reconcile(t, "echo")
+	require.Equal(t, v1.PhaseReady, h.revisionEvent(t, "echo-1").Status.Phase, "kept within the window")
+	require.Positive(t, res.RequeueAfter)
+	require.LessOrEqual(t, res.RequeueAfter, window, "back by the window's end, not after the %s period", testPeriod)
+}
+
 // serveReset gives worker id an endpoint that closes every connection with no answer.
 func (f *fakeRuntime) serveReset(t *testing.T, id runtime.InstanceID) {
 	t.Helper()
