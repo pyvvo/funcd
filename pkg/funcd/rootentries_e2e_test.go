@@ -46,6 +46,14 @@ func countersStore(s *v1.FunctionSpec, deletion v1.DeletionPolicy) {
 	s.Bindings.KV = append(s.Bindings.KV, v1.FunctionKV{Alias: "c", Store: "counters", Table: "counts"})
 }
 
+// unowned is obj as a user sends it to take it over: no owner and no resourceVersion. With no version the write carries
+// no precondition, so the ownership check answers it whatever wrote the object since it was read (ADR-0210, #1158).
+func unowned(obj v1.Object) v1.Object {
+	obj.GetObjectMeta().OwnerReferences = nil
+	obj.GetObjectMeta().ResourceVersion = ""
+	return obj
+}
+
 func (e *gcEnv) function(t *testing.T, name string) *v1.Function {
 	t.Helper()
 	return e.object(t, v1.KindFunction, name).(*v1.Function)
@@ -158,11 +166,31 @@ func TestScenarioUserCannotReplaceOwnedStore(t *testing.T) {
 	e.waitExists(t, v1.KindBucket, "files")
 	for _, kind := range []v1.Kind{v1.KindKVStore, v1.KindBucket} {
 		obj := e.object(t, kind, map[v1.Kind]string{v1.KindKVStore: "counters", v1.KindBucket: "files"}[kind])
-		obj.GetObjectMeta().OwnerReferences = nil
-		_, err := e.c.Apply(context.Background(), obj)
+		_, err := e.c.Apply(context.Background(), unowned(obj))
 		require.Equal(t, fault.Conflict, fault.KindOf(err), "%s: %v", kind, err)
 		require.ErrorContains(t, err, "is managed by Function/counter, which made it")
 	}
+}
+
+// Issue #1158: the owner rewrites its store between the user's read and the user's apply, as a reconciler's write did;
+// the apply is still refused for ownership, not for a stale resourceVersion.
+func TestIssue1158_OwnedStoreRefusedAfterTheOwnerWritesIt(t *testing.T) {
+	t.Parallel()
+	e := startGC(t)
+	e.apply(t, rootFn("counter", e.image(t), func(s *v1.FunctionSpec) { countersStore(s, "") }))
+	e.waitExists(t, v1.KindKVStore, "counters")
+	read := e.object(t, v1.KindKVStore, "counters")
+	e.apply(t, rootFn("counter", e.image(t), func(s *v1.FunctionSpec) {
+		countersStore(s, "")
+		s.KVStores[0].Tables = append(s.KVStores[0].Tables, v1.KVTable{Name: "totals"})
+	}))
+	require.Eventually(t, func() bool {
+		return e.object(t, v1.KindKVStore, "counters").GetObjectMeta().ResourceVersion != read.GetObjectMeta().ResourceVersion
+	}, 30*time.Second, 20*time.Millisecond, "the owner rewrites its store")
+
+	_, err := e.c.Apply(context.Background(), unowned(read))
+	require.Equal(t, fault.Conflict, fault.KindOf(err), "%v", err)
+	require.ErrorContains(t, err, "is managed by Function/counter, which made it")
 }
 
 // scenario: store-deletion
