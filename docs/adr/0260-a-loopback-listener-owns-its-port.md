@@ -1,6 +1,6 @@
 # ADR-0260: A loopback listener owns its port
 
-- **Status**: Accepted (2026-10-22). The decider accepted this text ("accept ADR-0260"), confirming the drafting
+- **Status**: Reviewing (2026-10-22), implemented for #1154. Accepted (2026-10-22). The decider accepted this text ("accept ADR-0260"), confirming the drafting
   agent's three choices: the catalog engine's held port, the SQL engine started again only on `address already in
   use`, and port 0 for containerd without a bridge address. Judged three times: round 1's two Majors and five Minors
   and round 2's Major (settled by a probe on linux and darwin) and three Minors are folded in; round 3's verdict:
