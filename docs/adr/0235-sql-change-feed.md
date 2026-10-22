@@ -4,6 +4,7 @@
   round keyed the watermark by engine epoch, added the namespace hold, the boot gate, per-database serialization and the
   token's protections; the second made the boot gate answer every valid token and removed the size refusal; the third
   found no Blocker or Major)
+- **Superseded in part by**: [ADR-0260](0260-a-loopback-listener-owns-its-port.md) (2026-10-22) — Decision 2: on loopback, an unset `sql.changeFeedPort` is the port a bind of `127.0.0.1:0` gets.
 - **Date**: 2026-10-12
 - **Deciders**: green-0-rabbit
 - **Tags**: sql, eventing, cdc
