@@ -95,7 +95,7 @@ flowchart TB
 
 - **OCR** (Tesseract/ghostscript) — needs arbitrary/custom system runtimes (curated distroless can't carry
   them); tracked on the GitHub **project board** backlog, not a feature here.
-- **Vector DB service** (LanceDB/RAG) — integrate the blueprint's planned vector service when RAG is picked up.
+- **Vector DB service** (LanceDB/RAG) — picked up as its own epoch: [FEAT-0013](0013-feat-vector.md), vector stores behind a fixed `context.vector` over a swappable engine.
 - **The Observable *build* step / data-loaders** — build-time concern; funcd serves the **prebuilt** static
   bundle (F82's static serving), it does not run the build.
 - **DuckLake table versioning** — native to DuckLake; no funcd work.
