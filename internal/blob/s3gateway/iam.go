@@ -61,7 +61,7 @@ func kindCode(kind v1.Kind) string {
 
 // DeriveKeypair returns the stable per-(kind, namespace, name) keypair (ADR-0085, ADR-0175):
 //   - AccessKey = "FUNCD" + base32-noPad-upper(code + "\x00" + ns + "\x00" + name), code "F" for a Function and
-//     "C" for a Lake — decodable via decodeAccess; not secret (knowing it grants nothing).
+//     "L" for a Lake — decodable via decodeAccess; not secret (knowing it grants nothing).
 //   - SecretKey = base64( HMAC-SHA256(master, "s3:" + kind + ":" + ns + "/" + name) ) — the full kind is in the
 //     MAC input, so a Function cannot compute the secret of a same-named Lake.
 //

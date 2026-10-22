@@ -165,7 +165,7 @@ docs/
 
 ## Open questions
 
-- [ ] `egress` sits under `providers/builtin` (it is in the ADR-0082 lake) while the netns wiring sits
+- [ ] `egress` sits under `providers/builtin` (it is in ADR-0082's provider catalog) while the netns wiring sits
       under `core/network-manager` — one page or two?
 - [ ] Generator for `3-reference/kinds/` and `adr-index.md`: a script under `scripts/`, or a docs-site
       build step?
