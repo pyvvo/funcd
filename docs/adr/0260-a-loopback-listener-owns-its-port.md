@@ -7,6 +7,8 @@
   use`, and port 0 for containerd without a bridge address. Judged three times: round 1's two Majors and five Minors
   and round 2's Major (settled by a probe on linux and darwin) and three Minors are folded in; round 3's verdict:
   accept.
+- **Superseded in part by**: [ADR-0262](0262-the-lake-engine-runs-duckdb-2.md) (2026-10-23) — the Lake half of Decision 3: the dev Lake
+  engine serves on port 0 and reports the port its `listen_url` row names, with no port held first.
 - **Date**: 2026-10-22
 - **Deciders**: green-0-rabbit
 - **Tags**: sql, catalog, dev, testing, network
