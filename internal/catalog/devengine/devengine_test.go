@@ -74,7 +74,9 @@ func runFakeEngine(args []string) int {
 		}
 	}()
 	if os.Getenv(fakeModeEnv) != "norow" {
-		_, _ = fmt.Fprintf(os.Stdout, "http://%s\n", addr[1])
+		if _, err := fmt.Fprintf(os.Stdout, "http://%s\n", addr[1]); err != nil {
+			return 1
+		}
 	}
 	_, _ = io.Copy(io.Discard, os.Stdin)
 	return 0
@@ -128,6 +130,8 @@ func TestScenarioCatalogEngineHoldsItsPort(t *testing.T) {
 		if st.Address != held.Addr().String() {
 			t.Fatalf("Address %s, want the held port %s", st.Address, held.Addr())
 		}
+		// A deadline in the past makes Accept on a held port that is still open fail at once instead of blocking.
+		_ = held.(*net.TCPListener).SetDeadline(time.Now())
 		if _, aerr := held.Accept(); !errors.Is(aerr, net.ErrClosed) {
 			t.Fatalf("the held port is still open after Ready: %v", aerr)
 		}
