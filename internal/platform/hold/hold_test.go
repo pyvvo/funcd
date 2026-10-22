@@ -67,6 +67,9 @@ func TestHoldMarkerRoundTrip(t *testing.T) {
 // already matches. Without root a process can move a file only between its own groups, which is the case tested.
 func TestOwn(t *testing.T) {
 	ref := t.TempDir()
+	// The reference takes this user's own group: under /tmp on macOS, as in the nix dev shell, t.TempDir's group is
+	// wheel, which a user outside it cannot give a file back (#1175).
+	require.NoError(t, os.Chown(ref, -1, os.Getgid()))
 	root := filepath.Join(ref, "store")
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "sub"), 0o700))
 	file := filepath.Join(root, "sub", "000001.vlog")
