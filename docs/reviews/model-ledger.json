@@ -12298,5 +12298,20 @@
     "dod_total": 11,
     "report": "docs/reviews/issue-1170-fix-claude-opus-5-5.md",
     "notes": "round 3 on 286999a5 (+8544f2b1): the check measured alone, without evalWhen's 100 ms evaluation deadline; schema-cache mutant 201 MiB, doc-cache mutant 1,199 MiB, 600 ms sleep in the check passes; round 2's minor fixed"
+  },
+  {
+    "date": "2026-10-22",
+    "issue": "1175",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-1175-fix-claude-opus-5-5.md",
+    "notes": "0 findings. Test-only: TestOwn's reference dir takes the user's primary group; revert fails in a wheel-group TMPDIR and under nix develop, fix passes 3/3 -race and on Linux non-root and root; 2 hold.Own mutants killed; sibling owner helpers pick the user's own groups, none left"
   }
 ]
