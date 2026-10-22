@@ -103,9 +103,11 @@ table format or the engine is a later ADR's.
 4. **No alias, no converter, no compatibility**: no deployed funcd uses a lake, only the examples do (the decider,
    2026-10-22). The API refuses the old kind and fields (its schemas set `additionalProperties: false`: 422); a
    daemon config file with `catalog:` fails at start (`yaml.UnmarshalStrict`); an old `FUNCD_CATALOG_ENGINE_*`
-   variable is ignored (the defaults are 2 s). Nothing stored is converted: an object stored with an old field (an
-   AppRevision's `catalogs`) loses it, a backup holding a `CatalogService` no longer restores, and an Identity issued
-   before the release gets its `lakeToken` at its next rotation (`spec.rotate`).
+   variable is ignored (the defaults are 2 s). Nothing stored is converted, as experiment 0005 measured on the
+   upgrade path: an older backup stays readable and its other members restore, but not its `CatalogService` member;
+   an object stored with an old field loses it on read, so a BackupSchedule or App that named only `catalogs` then
+   backs up no member and reports Succeeded; a stored `CatalogService` stays as an ignored orphan; and an Identity
+   issued before the release gets its `lakeToken` at its next rotation (`spec.rotate`).
 5. **Order (ADR-0141)**: the funcd branch is cut first (step 2 generates the Python examples' types with its
    funcdctl) and merges last; funcd-typescript, funcd-python and funcd-functions each merge a `feat!` PR and release
    in between.
@@ -288,6 +290,7 @@ None. A switch of table format or engine gets its own ADR when one is wanted.
 ## References
 
 - ADR-0079 and [ADR-0045](0045-rename-sandbox-to-worker.md) (kind renames), ADR-0141, ADR-0000 (process).
+- Experiment 0005-lake-rename (pyvvo/experiment): the rename run through every check, two lanes and upgrade probes.
 - The inventory: `git grep -i catalog` over the gates' file set of funcd `8b1ba127`, funcd-typescript `82aa819`,
   funcd-python `cb5757f` and funcd-functions `4c0317b` (2026-10-22), every distinct token classified as renamed, kept
   (Decision 2) or history.
