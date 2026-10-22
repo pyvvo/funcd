@@ -41,7 +41,7 @@ require (
 	github.com/opencontainers/runtime-spec v1.3.0
 	github.com/parquet-go/parquet-go v0.32.0
 	github.com/pyvvo/funcd-functions v0.21.0
-	github.com/pyvvo/funcd-python v0.15.0
+	github.com/pyvvo/funcd-python v0.16.0
 	github.com/pyvvo/funcd-typescript v0.21.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/shirou/gopsutil/v4 v4.26.9
