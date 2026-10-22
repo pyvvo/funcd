@@ -44,7 +44,8 @@ func helper() int { return 1 }
 // adds or changes, a doc comment's line, a deletion-only hunk and an edit in a renamed file included, with the build
 // tag their file needs, and not an unchanged test, a changed helper or a Test function in a raw string's Go source;
 // a branch that changes no test lists none and runs nothing; a test whose timing races fails the run within its
-// budget, and so does one that fails only after its first run.
+// budget, and so does one that fails only after its first run; a test whose subtests run in parallel is timed by its
+// longest subtest, which its own time leaves out.
 func TestStressRun(t *testing.T) {
 	t.Parallel()
 	script, err := filepath.Abs(filepath.Join("agent", "stress.py"))
@@ -114,6 +115,23 @@ func TestLater(t *testing.T) {
 	}
 }
 `})
+	commit("parallel", "test: parallel subtests", map[string]string{"a/par_test.go": `package a
+
+import (
+	"testing"
+	"time"
+)
+
+// TestPar's parallel subtests take 300 ms, which go test does not count in TestPar's own time.
+func TestPar(t *testing.T) {
+	for _, name := range []string{"one", "two"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			time.Sleep(300 * time.Millisecond)
+		})
+	}
+}
+`})
 	stress := func(head string, args ...string) (string, int) {
 		// the run tests the checkout, as the gate's does; --list reads the head's commits only
 		out, code := run("git", "checkout", "-q", head)
@@ -151,4 +169,9 @@ func TestLater(t *testing.T) {
 	require.Equal(t, 1, code, out)
 	require.Regexp(t, `TestLater \./a: \d+ runs, 1 failed, .*: FAIL`, out)
 	require.Contains(t, out, "the third run failed")
+
+	out, code = stress("parallel", "--budget", "10")
+	require.Zero(t, code, out)
+	require.Regexp(t, `TestPar \./a: \d+ runs, 0 failed, one run 0\.[3-9]\d s, longest 0\.[3-9]\d s`, out,
+		"timed by its subtests, not by its own 0 s")
 }

@@ -110,16 +110,22 @@ def go_test(pkg, tags, name, count, timeout):
     if tags:
         cmd.append(f"-tags={tags}")
     proc = subprocess.run([*cmd, pkg], capture_output=True, text=True)
-    runs, text = [], []
+    runs, text, sub = [], [], 0.0
     for line in proc.stdout.splitlines():
         try:
             ev = json.loads(line)
         except ValueError:
             text.append(line)
             continue
-        if ev.get("Test") == name and ev.get("Action") in ("pass", "fail"):
-            runs.append((ev["Action"], ev.get("Elapsed", 0.0)))
-        if ev.get("Action") == "output":
+        test, action = ev.get("Test", ""), ev.get("Action")
+        if action in ("pass", "fail") and test.startswith(name + "/"):
+            sub = max(sub, ev.get("Elapsed", 0.0))
+        elif action in ("pass", "fail") and test == name:
+            # A test whose subtests run in parallel reports little of their time, so a run lasts its longest subtest:
+            # the repeat run's count and timeout are sized from it.
+            runs.append((action, max(ev.get("Elapsed", 0.0), sub)))
+            sub = 0.0
+        if action == "output":
             text.append(ev.get("Output", "").rstrip("\n"))
     ok = proc.returncode == 0 and bool(runs) and all(a == "pass" for a, _ in runs)
     return ok, runs, "\n".join(text + proc.stderr.splitlines()), proc.returncode
