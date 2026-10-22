@@ -20,7 +20,7 @@
 # (<ns>-<name>-r<replica>), and engines c in namespace a-b and b-c in namespace a, whose IDs collided under that
 # form, each hold their own attachment.
 #
-# The ADR-0262 cases (DuckDB 2.0): the checkpointed catalog is DuckLake 1.1; a query reaches no path but s3:// and the
+# The ADR-0263 cases (DuckDB 2.0): the checkpointed catalog is DuckLake 1.1; a query reaches no path but s3:// and the
 # engine's temp directory; a non-gating probe records whether lake-reader can ATTACH its Lake through the PEP proxy;
 # and, last, Lake lake re-created at 256Mi records its idle engine's RSS, and in its container the image's DuckDB,
 # confined by the image's shim, spills a query larger than its memory.
@@ -256,7 +256,7 @@ testcases:
           - result.statuscode ShouldEqual 200
           - result.body ShouldContainSubstring "[[998]]"
 
-  - name: new-lake-is-1-1 — the Lake's catalog, checkpointed to blob, is DuckLake 1.1 (ADR-0262 Decision 3)
+  - name: new-lake-is-1-1 — the Lake's catalog, checkpointed to blob, is DuckLake 1.1 (ADR-0263 Decision 3)
     steps:
       - type: exec
         script: |
@@ -271,7 +271,7 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldEqual VERSION=1.1
 
-  - name: only-allowed-paths — a query reaches no path but s3:// and the engine's temp directory (ADR-0262 Decision 8)
+  - name: only-allowed-paths — a query reaches no path but s3:// and the engine's temp directory (ADR-0263 Decision 8)
     steps:
       - type: http
         method: POST
@@ -298,7 +298,7 @@ testcases:
           - result.statuscode ShouldEqual 500
           - result.body ShouldContainSubstring "disabled"
 
-  # Non-gating (ADR-0262 Open questions): only quack_query's handshake is verified through the PEP proxy.
+  # Non-gating (ADR-0263 Open questions): only quack_query's handshake is verified through the PEP proxy.
   - name: quack-attach-probe — records, never failing, whether lake-reader's DuckDB 2.0 can ATTACH its Lake through the PEP proxy
     steps:
       - type: exec
@@ -617,7 +617,7 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "C_LEASES=0 ENGINE_BC=Ready/200/a_b-c-r0/"
 
-  # ADR-0262 Decision 8: DuckDB spills to an allowed temp directory under the shim's allow-list. The engine has no
+  # ADR-0263 Decision 8: DuckDB spills to an allowed temp directory under the shim's allow-list. The engine has no
   # cgroup view, so it reports the VM's memory (recorded below); the probe sets 64MB, and the window query needs over
   # 800 MB (experiment 0006's, scaled).
   - name: spill-under-256mi — Lake lake re-created at 256Mi records its idle engine's RSS, and the image's confined DuckDB spills there

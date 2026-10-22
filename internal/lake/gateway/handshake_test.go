@@ -12,7 +12,7 @@ import (
 )
 
 // goldenToken is the token embedded in testdata/handshake_golden.bin, a Quack handshake frame captured from a DuckDB
-// 2.0.0 client (ADR-0262 Decision 7).
+// 2.0.0 client (ADR-0263 Decision 7).
 const goldenToken = "GOLDENTOKEN013"
 
 // TestSwapHandshakeToken round-trips the captured Quack handshake frame (ADR-0137 spike fixture): it

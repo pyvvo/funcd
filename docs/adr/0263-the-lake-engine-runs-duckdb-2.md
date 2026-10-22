@@ -1,12 +1,13 @@
-# ADR-0262: The Lake engine runs DuckDB 2.0, and its new catalogs use DuckLake 1.1
+# ADR-0263: The Lake engine runs DuckDB 2.0, and its new catalogs use DuckLake 1.1
 
 - **Status**: Reviewing (2026-10-23), implemented for #1184. Accepted (2026-10-23), under the decider's standing go of
   that day. Revised that day for DuckLake 1.1 and no consumers (the decider); judged four times, the last: accept after
-  one Major (a 1.1 catalog with files), folded.
+  one Major (a 1.1 catalog with files), folded. Numbered 0263: 0262 went to the function-owned volumes ADR, merged
+  first (#1189); the judge rounds, experiment PRs #11–#15 and funcd-python #100 name it ADR-0262.
 - **Date**: 2026-10-22
 - **Deciders**: green-0-rabbit
 - **Tags**: lake, duckdb, ducklake, quack, dev, dependency
-- **Realizes**: [FEAT-0003/F181](../feat/0003-feat-data-platform.md)
+- **Realizes**: [FEAT-0003/F183](../feat/0003-feat-data-platform.md)
 - **Supersedes (in part)**: [ADR-0086](0086-catalog-query-provider-ducklake-duckdb-quack.md), only its DuckDB and
   DuckLake pins (lines 60, 90-92, 113-117, 233, 246, 281), its "Quack is beta" workaround (170-172, now the
   version-coupled wire workaround below, without its HTTP-server fallback) and its shim's sandbox statements (219-221),
@@ -181,8 +182,8 @@ linux_amd64 and linux_arm64 hashes of httpfs and quack.
    Dockerfile, shim.py, shim_test.py}`; `scripts/fetch-lake-engine.sh`; `internal/lake/devengine/{devengine.go,
    devengine_test.go}`; `internal/backup/workload/{workload_test.go, testdata/ducklake-1.1.sql}`;
    `internal/lake/gateway/testdata/handshake_golden.bin`; the 1.5 mentions in
-   `internal/services/lake/lake.go`, `handshake.go` and the embedded placeholder; the duckdb lane's new steps; the F181
-   row and `docs/PROJECT-SUMMARY.md`; at acceptance, the `Superseded in part by ADR-0262` back-links on ADR-0086 and
+   `internal/services/lake/lake.go`, `handshake.go` and the embedded placeholder; the duckdb lane's new steps; the F183
+   row and `docs/PROJECT-SUMMARY.md`; at acceptance, the `Superseded in part by ADR-0263` back-links on ADR-0086 and
    ADR-0260.
 
 **Test plan** (one test per scenario):
@@ -241,7 +242,7 @@ lake-quack` serves lake-reader's rows and releve-lakehouse's pipeline runs (`jus
 
 ## References
 
-- Issue #1184 (FEAT-0003 F181), under tracker #1032.
+- Issue #1184 (FEAT-0003 F183), under tracker #1032.
 - Experiment 0006, `0006-duckdb-2-upgrade` in pyvvo/experiment: the 62 checks this ADR rests on, among them the new
   catalogs at 1.0 and 1.1, a 1.1 catalog with files under the backup reader, a restore and a snapshot, the proxy's
   token swap and the allow-list sandbox on 2.0.0.

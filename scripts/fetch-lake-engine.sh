@@ -17,7 +17,7 @@ set -euo pipefail
 
 os="${1:?usage: fetch-lake-engine.sh <os> <arch> [duckdb-version]}"
 arch="${2:?usage: fetch-lake-engine.sh <os> <arch> [duckdb-version]}"
-ver="${3:-2.0.0}" # pinned DuckDB, the long-term-support release (ADR-0262; MIT)
+ver="${3:-2.0.0}" # pinned DuckDB, the long-term-support release (ADR-0263; MIT)
 
 # The CLI and the loadable extensions are per-arch. Map the funcdctl target onto the duckdb.org CLI
 # asset + the extension platform token.

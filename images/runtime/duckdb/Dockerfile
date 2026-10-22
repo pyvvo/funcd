@@ -7,7 +7,7 @@
 # function. The engine is driven from the `duckdb` PYTHON package: that's fine — it loads the native
 # library into THIS function's own process, never into (nor cgo-binds to) the daemon.
 #
-# Pinned versions (all MIT; ADR-0262):
+# Pinned versions (all MIT; ADR-0263):
 #   - DuckDB 2.0.0, the long-term-support release — the engine (the `duckdb` Python wheel @ 2.0.0).
 #   - the `ducklake` extension; the shim creates new catalogs at DuckLake 1.1.
 #   - `httpfs` (S3/http filesystem) + the `quack` extension, bundled with this DuckDB build.

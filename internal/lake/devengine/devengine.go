@@ -250,7 +250,7 @@ func (p *engineProc) stop() {
 
 // launch extracts the engine, writes the init SQL, starts duckdb serving Quack on a 127.0.0.1 port it chooses, and
 // blocks until the engine names that address on its stdout (or ends, or times out): the port is the engine's own from
-// the moment it binds, so no other process can take it (ADR-0262 Decision 4).
+// the moment it binds, so no other process can take it (ADR-0263 Decision 4).
 func (r *Runtime) launch(ctx context.Context, spec provider.ProviderSpec) (*engineProc, error) {
 	const op = "devengine.launch"
 	var raw [8]byte
@@ -290,7 +290,7 @@ func (r *Runtime) launch(ctx context.Context, spec provider.ProviderSpec) (*engi
 	// `-init` runs the SQL (LOADs + quack_serve, which serves on a background thread), then duckdb
 	// drops into the REPL reading stdin — held open below so the process stays alive serving Quack.
 	cmd := exec.CommandContext(ctx, paths.DuckDB, "-init", initFile, ":memory:") //nolint:gosec // paths from our own embedded engine
-	// DuckDB 2.0's CLI renders for an AI agent when an agent's variable is set and stdout is no terminal (ADR-0262
+	// DuckDB 2.0's CLI renders for an AI agent when an agent's variable is set and stdout is no terminal (ADR-0263
 	// Decision 6).
 	cmd.Env = append(os.Environ(), "DUCKDB_AGENT_MODE=0")
 	watcher := &rowWatcher{seen: make(chan struct{})}
@@ -330,7 +330,7 @@ func (r *Runtime) launch(ctx context.Context, spec provider.ProviderSpec) (*engi
 }
 
 // waitServing returns the address the watcher stored, or the engine's error output when it ends first. The engine's
-// own row names the port it took, so a start reports no address the engine does not serve (ADR-0262 Decision 4).
+// own row names the port it took, so a start reports no address the engine does not serve (ADR-0263 Decision 4).
 func waitServing(ctx context.Context, p *engineProc, timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -390,7 +390,7 @@ func (w *rowWatcher) Write(b []byte) (int, error) {
 // Quack server. This mirrors the prod duckdb runtime shim (images/runtime/duckdb/shim.py) minus the
 // boto3 lake recovery/checkpoint — dev starts a fresh local lake each boot (the Parquet DATA
 // persists in blob under --persist); durable lake metadata across dev restarts is out of scope.
-// It serves on 127.0.0.1:0 and attaches the lake with DUCKLAKE_VERSION '1.1' (ADR-0262).
+// It serves on 127.0.0.1:0 and attaches the lake with DUCKLAKE_VERSION '1.1' (ADR-0263).
 func buildInitSQL(extDir, catalogFile string, env map[string]string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "SET extension_directories=[%s];\n", sqlStr(extDir))

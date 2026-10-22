@@ -7,7 +7,7 @@ the ``duckdb`` Python package — that is fine: it runs OUT-OF-PROCESS in this f
 process, so no cgo is ever linked into the daemon. It is node-gated — exercised only on the
 real-DuckDB lane (FUNCD_IT=1 / ``just lima-example-duckdb``) on real containerd, never by
 ``just ci``. Every API call below was verified against DuckDB 2.0.0 + the ducklake/httpfs/quack/
-sqlite extensions (ADR-0262, experiment 0006).
+sqlite extensions (ADR-0263, experiment 0006).
 
 Injected environment (ADR-0085 keypair + ADR-0032 fixed port):
     AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY  — the function's per-fn S3 keypair.
@@ -19,7 +19,7 @@ Injected environment (ADR-0085 keypair + ADR-0032 fixed port):
     FUNCD_QUACK_PORT                           — the fixed netns port the Quack server binds.
 
 Engine confinement (the "Confine the SQL engine's reach" constraint, ADR-0086 B1 fix, an allow-list
-since ADR-0262 Decision 8): pin the S3 client to the INJECTED funcd endpoint, turn S3 URL parameters
+since ADR-0263 Decision 8): pin the S3 client to the INJECTED funcd endpoint, turn S3 URL parameters
 and the arbitrary ``HTTPFileSystem`` off, keep spills and secrets inside the engine; after the
 catalog's ATTACH, allow only ``s3://`` paths and the temp directory, turn external access off, then
 ``SET lock_configuration=true`` LAST so no later query can change any of it. A query then reaches no
@@ -49,7 +49,7 @@ import duckdb  # the native engine (out-of-process in THIS function — no cgo i
 # Where the local SQLite catalog lives during the engine's lifetime (sandbox ephemeral storage).
 LOCAL_CATALOG = "/var/funcd/ducklake/catalog.db"
 LOCAL_SNAPSHOT = LOCAL_CATALOG + ".snapshot"
-# Where the engine spills: the only local directory its queries may reach (ADR-0262 Decision 8).
+# Where the engine spills: the only local directory its queries may reach (ADR-0263 Decision 8).
 LOCAL_TMP = "/var/funcd/ducklake/tmp"
 
 # How often the commit watcher reads the catalog's snapshot id: commits within one interval share one checkpoint.
@@ -146,7 +146,7 @@ def _configure(con: "duckdb.DuckDBPyConnection", endpoint: str, region: str) -> 
 
 def _confine(con: "duckdb.DuckDBPyConnection") -> None:
     """After the catalog's ATTACH: allow only ``s3://`` paths and the temp directory, turn external access off, and
-    lock the configuration LAST so no query can change any of it (ADR-0262 Decision 8). The attached catalog stays
+    lock the configuration LAST so no query can change any of it (ADR-0263 Decision 8). The attached catalog stays
     writable; remaining outbound is bounded by funcd's egress policy."""
     con.execute(f"SET allowed_directories=['s3://', '{LOCAL_TMP}/']")
     con.execute("SET enable_external_access=false")
@@ -267,7 +267,7 @@ def main() -> int:
     _recover_catalog(s3, bucket, key)
     # OVERRIDE_DATA_PATH: a catalog restored under another prefix (ADR-0222 asLocation) records its old
     # DATA_PATH, which DuckLake refuses to replace otherwise; the data files are relative to it.
-    # DUCKLAKE_VERSION: a new catalog is DuckLake 1.1 whatever DuckDB's default; a 1.0 catalog fails here (ADR-0262).
+    # DUCKLAKE_VERSION: a new catalog is DuckLake 1.1 whatever DuckDB's default; a 1.0 catalog fails here (ADR-0263).
     con.execute(
         "ATTACH 'ducklake:sqlite:" + LOCAL_CATALOG + "' AS lakehouse "
         "(DATA_PATH ?, OVERRIDE_DATA_PATH TRUE, DUCKLAKE_VERSION '1.1')",

@@ -1,5 +1,5 @@
 """Tests of the duckdb runtime shim: its per-commit checkpoint (ADR-0086, #998) and the order of its engine statements
-(ADR-0262), run by internal/runtime/embedimg's TestIssue998_ShimCheckpointsPerCommit with the host's python3. The
+(ADR-0263), run by internal/runtime/embedimg's TestIssue998_ShimCheckpointsPerCommit with the host's python3. The
 image's boto3 and duckdb are stubbed: the commit watcher reads the catalog through sqlite3 alone, and the engine is a
 connection that records its statements."""
 
@@ -102,7 +102,7 @@ class _Recording:
 
 
 class TestScenarioOnlyAllowedPaths(unittest.TestCase):
-    """scenario: only-allowed-paths (ADR-0262 Decision 8): the S3 pins, the temp directory and the secrets setting
+    """scenario: only-allowed-paths (ADR-0263 Decision 8): the S3 pins, the temp directory and the secrets setting
     before the catalog's ATTACH; then the allow-list, external access off and the lock; then quack_serve."""
 
     def test_the_shim_runs_its_statements_in_order(self) -> None:
@@ -158,7 +158,7 @@ class TestScenarioOnlyAllowedPaths(unittest.TestCase):
 
 
 class TestScenarioNoDeprecatedExtensionSetting(unittest.TestCase):
-    """scenario: no-deprecated-extension-setting (ADR-0262 Decision 5): the engine finds its extensions through
+    """scenario: no-deprecated-extension-setting (ADR-0263 Decision 5): the engine finds its extensions through
     extension_directories, a list, not the deprecated extension_directory."""
 
     def test_the_extension_directory_is_a_list(self) -> None:

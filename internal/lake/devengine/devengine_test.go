@@ -114,7 +114,7 @@ func requireTaken(t *testing.T, addr string) {
 }
 
 // scenario: dev-engine-port-zero — the engine's init asks for port 0, and the start reports the port the engine's
-// listen_url row names, which the engine holds (ADR-0262 Decision 4).
+// listen_url row names, which the engine holds (ADR-0263 Decision 4).
 func TestScenarioDevEnginePortZero(t *testing.T) {
 	if sql := buildInitSQL("/ext", "/tmp/catalog.db", nil); !strings.Contains(sql, "quack_serve('quack:127.0.0.1:0'") {
 		t.Fatalf("the init does not ask for port 0:\n%s", sql)
@@ -189,7 +189,7 @@ func TestScenarioDevEngineEarlyExit(t *testing.T) {
 }
 
 // scenario: agent-environment-same-output — with an AI agent's variable set, and agent mode asked for, the engine still
-// runs with DUCKDB_AGENT_MODE=0, so its row and its errors are rendered as without them (ADR-0262 Decision 6).
+// runs with DUCKDB_AGENT_MODE=0, so its row and its errors are rendered as without them (ADR-0263 Decision 6).
 func TestScenarioAgentEnvironmentSameOutput(t *testing.T) {
 	t.Setenv("AI_AGENT", "1")
 	t.Setenv("DUCKDB_AGENT_MODE", "1")
@@ -256,7 +256,7 @@ func TestConvergeLaunchesEngineWhenBundled(t *testing.T) {
 		t.Fatalf("Quack engine not reachable at %s: %v", st.Address, derr)
 	}
 	_ = conn.Close()
-	// Ready came from the engine's quack_serve row, and the engine holds the port that row named (ADR-0262).
+	// Ready came from the engine's quack_serve row, and the engine holds the port that row named (ADR-0263).
 	requireTaken(t, st.Address)
 	requireNoDeprecation(t, ctx)
 
@@ -278,7 +278,7 @@ func TestConvergeLaunchesEngineWhenBundled(t *testing.T) {
 
 // requireNoDeprecation is scenario no-deprecated-extension-setting on the real CLI: it runs the embedded engine on
 // buildInitSQL's script once, with stdin at EOF so the REPL ends, and fails on a deprecation line in its output,
-// which 2.0 prints to stdout (ADR-0262 Decision 5).
+// which 2.0 prints to stdout (ADR-0263 Decision 5).
 func requireNoDeprecation(t *testing.T, ctx context.Context) {
 	t.Helper()
 	dir := t.TempDir()

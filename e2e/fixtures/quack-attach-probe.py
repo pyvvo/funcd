@@ -1,4 +1,4 @@
-"""Run in lake-reader's container by the duckdb lane, never failing it (ADR-0262): records whether the consumer's
+"""Run in lake-reader's container by the duckdb lane, never failing it (ADR-0263): records whether the consumer's
 DuckDB 2.0 can ATTACH its bound Lake over Quack through the PEP proxy, with its own token, and query it."""
 
 import os

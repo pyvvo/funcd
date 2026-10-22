@@ -151,7 +151,7 @@ func TestLakeFilesRelative(t *testing.T) {
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
 }
 
-// TestLakeFilesDuckLake11Catalog (ADR-0262, scenario new-lake-is-1-1): on a real DuckLake 1.1 catalog, whose nested
+// TestLakeFilesDuckLake11Catalog (ADR-0263, scenario new-lake-is-1-1): on a real DuckLake 1.1 catalog, whose nested
 // schema's path is relative to the data path, LakeFiles lists every data and delete file the catalog names.
 func TestLakeFilesDuckLake11Catalog(t *testing.T) {
 	t.Parallel()

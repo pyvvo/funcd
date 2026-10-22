@@ -1,4 +1,4 @@
-"""Run in the 256Mi engine's container by the duckdb lane (ADR-0262 Decision 8): the image's DuckDB, configured and
+"""Run in the 256Mi engine's container by the duckdb lane (ADR-0263 Decision 8): the image's DuckDB, configured and
 confined by the image's own shim, spills a query larger than its memory to an allowed temp directory. memory_limit is
 set here because the engine cannot see its container's limit: it has no cgroup view."""
 
