@@ -668,3 +668,13 @@ logs-parquet path out="funcd-logs.parquet":
     set -euo pipefail
     uv run --no-project --with duckdb --python 3.12 python scripts/otlp-logs.py "{{path}}" --parquet "{{out}}"
     echo "▶ open in Parquet Explorer: {{out}}"
+
+# run the volume image's quota tests as root in funcd-linux-tests (ADR-0262): the image, its loop mount and its project
+# quotas need root, which `just test-linux` (a non-root runner) does not have. Needs a checkout under $HOME.
+[group('test')]
+test-volumes-root:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p .cache
+    GOOS=linux GOARCH={{ARCH}} go test -c -o .cache/quotafs.test ./internal/volume/quotafs/
+    scripts/linux-exec.sh --run sh -c 'limactl shell funcd-linux-tests -- sudo sh -c "cat > /tmp/quotafs.test && chmod +x /tmp/quotafs.test && cd /tmp && /tmp/quotafs.test -test.v -test.count=1" < .cache/quotafs.test'
