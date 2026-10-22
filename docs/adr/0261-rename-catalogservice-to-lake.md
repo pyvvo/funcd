@@ -1,6 +1,6 @@
 # ADR-0261: Resource rename — `CatalogService` → `Lake`, and every name derived from it
 
-- **Status**: Reviewing (2026-10-22, implemented from experiment 0005's patches); Accepted 2026-10-22, by the decider once experiment 0005 had run the rename through every check; judged in three rounds, the last verdict accept
+- **Status**: Implemented (2026-10-22), review passed on its second round; Reviewing 2026-10-22, implemented from experiment 0005's patches; Accepted 2026-10-22, by the decider once experiment 0005 had run the rename through every check; judged in three rounds, the last verdict accept
 - **Date**: 2026-10-22
 - **Deciders**: green-0-rabbit
 - **Tags**: resource, rename, api, lake, cedar, shim, breaking-change
