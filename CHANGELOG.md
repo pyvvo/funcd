@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.25.0](https://github.com/pyvvo/funcd/compare/v0.24.0...v0.25.0) (2026-10-23)
+
+
+### Features
+
+* **s3gateway:** derived S3 key pairs rotate every period and at every start (ADR-0270) ([fa8cdce](https://github.com/pyvvo/funcd/commit/fa8cdce226e090b009e9469560594515a2115ac7))
+
+
+### Bug Fixes
+
+* **lake:** a Lake or SQL engine reaches only its one internal endpoint (ADR-0269) ([fa8cdce](https://github.com/pyvvo/funcd/commit/fa8cdce226e090b009e9469560594515a2115ac7))
+* **lake:** the Lake engine's S3 key pair stays out of queries, and bound data cannot redirect the engine ([fa8cdce](https://github.com/pyvvo/funcd/commit/fa8cdce226e090b009e9469560594515a2115ac7))
+* **provider:** an engine created from another spec is replaced, not adopted ([#1196](https://github.com/pyvvo/funcd/issues/1196)) ([380d0a5](https://github.com/pyvvo/funcd/commit/380d0a5f0217645fdaaca6f11e916fb14c37a398))
+* **runtime:** a containerd worker runs under containerd's default seccomp profile (ADR-0267) ([fa8cdce](https://github.com/pyvvo/funcd/commit/fa8cdce226e090b009e9469560594515a2115ac7))
+
 ## [0.24.0](https://github.com/pyvvo/funcd/compare/v0.23.0...v0.24.0) (2026-10-23)
 
 
