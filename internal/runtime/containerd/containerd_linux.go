@@ -18,6 +18,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -1186,6 +1187,7 @@ func ociOpts(spec runtime.WorkerSpec, image containerd.Image, bootDir string) []
 		oci.WithEnv(envSlice(spec.Env)),
 		oci.WithNoNewPrivileges,
 		withAbsoluteCwd, // crun rejects a non-absolute cwd; WithImageConfig leaves it "" for a WORKDIR-less image
+		withProjectIDFilter,
 	}
 	if len(spec.Command) > 0 {
 		opts = append(opts, oci.WithProcessArgs(spec.Command...))
@@ -1204,6 +1206,48 @@ func ociOpts(spec runtime.WorkerSpec, image containerd.Image, bootDir string) []
 		opts = append(opts, oci.WithCPUCFS(int64(spec.Limits.CPUs*period), period))
 	}
 	return opts
+}
+
+// The ioctls that set a file's project id or flags (ADR-0268): FS_IOC_FSSETXATTR, _IOW('X', 32, struct fsxattr), and
+// FS_IOC_SETFLAGS in its 64-bit and 32-bit forms.
+const (
+	fsIOCSetXattr   = 0x401C5820
+	fsIOCSetFlags   = 0x40086602
+	fsIOCSetFlags32 = 0x40046602
+)
+
+// withProjectIDFilter is the seccomp filter of ADR-0268: allow by default, EPERM for the ioctls that set a file's
+// project id or flags and for file_setattr, so only the platform sets a volume's. The kernel reads an ioctl command's
+// low 32 bits only, so each rule compares under that mask: Value is the mask and ValueTwo the command, as crun passes
+// them to libseccomp. The native and compat architectures are listed, so a compat call meets the same rules.
+func withProjectIDFilter(_ context.Context, _ oci.Client, _ *containers.Container, s *specs.Spec) error {
+	if s.Linux == nil {
+		s.Linux = &specs.Linux{}
+	}
+	eperm := uint(syscall.EPERM)
+	rules := make([]specs.LinuxSyscall, 0, 4)
+	for _, cmd := range []uint64{fsIOCSetXattr, fsIOCSetFlags, fsIOCSetFlags32} {
+		rules = append(rules, specs.LinuxSyscall{
+			Names:    []string{"ioctl"},
+			Action:   specs.ActErrno,
+			ErrnoRet: &eperm,
+			Args:     []specs.LinuxSeccompArg{{Index: 1, Value: 0xFFFFFFFF, ValueTwo: cmd, Op: specs.OpMaskedEqual}},
+		})
+	}
+	rules = append(rules, specs.LinuxSyscall{Names: []string{"file_setattr"}, Action: specs.ActErrno, ErrnoRet: &eperm})
+	s.Linux.Seccomp = &specs.LinuxSeccomp{DefaultAction: specs.ActAllow, Architectures: seccompArches(), Syscalls: rules}
+	return nil
+}
+
+// seccompArches is the host's native architecture and its compat ones.
+func seccompArches() []specs.Arch {
+	switch goruntime.GOARCH {
+	case "amd64":
+		return []specs.Arch{specs.ArchX86_64, specs.ArchX86, specs.ArchX32}
+	case "arm64":
+		return []specs.Arch{specs.ArchAARCH64, specs.ArchARM}
+	}
+	return nil
 }
 
 // withAbsoluteCwd defaults the OCI process cwd to "/" when the image declares no WORKDIR.

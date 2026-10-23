@@ -5,6 +5,7 @@ package quotafs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -72,6 +73,9 @@ func Open(ctx context.Context, cfg Config) (*FS, error) {
 	}
 	if os.Geteuid() != 0 {
 		return nil, fault.Invalidf(op, "the volume image needs root")
+	}
+	if err := kernelSupported(); err != nil {
+		return nil, err
 	}
 	if dev, ok := mountedAt(cfg.Mount); ok {
 		if err := mount.UnmountAll(cfg.Mount, 0); err != nil {
@@ -234,6 +238,24 @@ func run(ctx context.Context, name string, args ...string) error {
 	out, err := exec.CommandContext(ctx, path, args...).CombinedOutput()
 	if err != nil {
 		return fault.Wrapf(err, fault.Internal, "quotafs.run", "%s %s: %s", name, strings.Join(args, " "), strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// kernelSupported refuses a kernel from 6.17 (ADR-0268 Temporary workarounds): its file_setattr call sets a project id
+// too, and the workers' seccomp rule for it is not yet verified on such a kernel.
+func kernelSupported() error {
+	var u unix.Utsname
+	if err := unix.Uname(&u); err != nil {
+		return fault.Wrapf(err, fault.Internal, "quotafs.Open", "read the kernel release")
+	}
+	release := unix.ByteSliceToString(u.Release[:])
+	var major, minor int
+	if _, err := fmt.Sscanf(release, "%d.%d", &major, &minor); err != nil {
+		return fault.Invalidf("quotafs.Open", "kernel release %q is not <major>.<minor>", release)
+	}
+	if major > 6 || major == 6 && minor >= 17 {
+		return fault.Invalidf("quotafs.Open", "volumes refuse kernel %s: from 6.17 a worker's file_setattr rule is not yet verified (ADR-0268)", release)
 	}
 	return nil
 }
