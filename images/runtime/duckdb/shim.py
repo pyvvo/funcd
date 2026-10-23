@@ -6,8 +6,8 @@ daemon (which stays pure-Go / no-cgo, ADR-0065). The native DuckDB engine is rea
 the ``duckdb`` Python package — that is fine: it runs OUT-OF-PROCESS in this function's own
 process, so no cgo is ever linked into the daemon. It is node-gated — exercised only on the
 real-DuckDB lane (FUNCD_IT=1 / ``just lima-example-duckdb``) on real containerd, never by
-``just ci``. Every API call below was verified against DuckDB 2.0.0 + the ducklake/httpfs/quack/
-sqlite extensions (ADR-0263, experiment 0006).
+``just ci``. Every API call below was verified against DuckDB 2.0.0 + the ducklake/httpfs/quack
+extensions (ADR-0263, experiment 0006); engine_test.py runs this module against them.
 
 Injected environment (ADR-0085 keypair + ADR-0032 fixed port):
     AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY  — the function's per-fn S3 keypair.
@@ -26,39 +26,48 @@ catalog's ATTACH, allow only ``s3://`` paths and the temp directory, turn extern
 other path — isolation is the F47 keypair (cryptographic), not a query filter; remaining outbound is
 bounded by the egress policy.
 
-Durability (ADR-0086, the empirically-validated mechanism): DuckLake keeps its catalog in a LOCAL
-SQLite file; Parquet data is written to S3 (the F47 surface) durably as part of each commit
-(data-before-metadata). The checkpoint snapshots the catalog with SQLite's ``VACUUM INTO`` (a
-consistent, WAL-folded single file — run through Python's ``sqlite3``, since ``VACUUM INTO`` is a
-SQLite statement, NOT a DuckDB one) and uploads it whole-object to the catalog blob key. A torn Put
-leaves the prior snapshot intact; recovery is GetObject → local file → ATTACH.
+Durability (ADR-0086, #1198): DuckLake keeps its catalog in a LOCAL DuckDB file; Parquet data is
+written to S3 (the F47 surface) durably as part of each commit (data-before-metadata). A checkpoint
+copies the catalog's metadata database with ``COPY FROM DATABASE`` (one transaction of the engine's
+own DuckDB, so the copy is consistent while commits land) into a fresh file and uploads it
+whole-object to the catalog blob key. A torn Put leaves the prior checkpoint intact; recovery is
+GetObject → local file → ATTACH.
 """
 
 from __future__ import annotations
 
 import os
 import signal
-import sqlite3
 import sys
 import threading
+import time
 import urllib.parse
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
-import boto3  # SQLite-catalog blob sync against the injected funcd S3 endpoint.
+import boto3  # the catalog's blob sync against the injected funcd S3 endpoint.
 import duckdb  # the native engine (out-of-process in THIS function — no cgo in the daemon).
 
-# Where the local SQLite catalog lives during the engine's lifetime (sandbox ephemeral storage).
-LOCAL_CATALOG = "/var/funcd/ducklake/catalog.db"
-LOCAL_SNAPSHOT = LOCAL_CATALOG + ".snapshot"
+# Where the local DuckDB catalog lives during the engine's lifetime (sandbox ephemeral storage).
+LOCAL_CATALOG = "/var/funcd/ducklake/catalog.ducklake"
 # Where the engine spills: the only local directory its queries may reach (ADR-0263 Decision 8).
 LOCAL_TMP = "/var/funcd/ducklake/tmp"
+# Where a checkpoint is copied before its upload: under the temp directory, the one local directory the engine may
+# still attach after the confinement.
+LOCAL_CHECKPOINT = LOCAL_TMP + "/checkpoint.ducklake"
+# DuckLake's metadata database of the catalog attached as lakehouse.
+METADATA = "__ducklake_metadata_lakehouse"
+# The catalog's latest snapshot id: every committed transaction adds one.
+LATEST_SNAPSHOT = f"SELECT max(snapshot_id) FROM {METADATA}.ducklake_snapshot"
 
 # How often the commit watcher reads the catalog's snapshot id: commits within one interval share one checkpoint.
 COMMIT_POLL_SECONDS = 1.0
+# How long a stop waits for the last transaction that uses the catalog to end, well inside the runtime's 10 s SIGTERM
+# grace (#1198).
+STOP_WAIT_SECONDS = 5.0
 
 # The extensions the engine loads — pre-installed OFFLINE into the image's extension dir (the sandbox
-# has no arbitrary egress): httpfs (S3), sqlite (the ducklake catalog backend), ducklake, quack.
-EXTENSIONS = ("httpfs", "sqlite", "ducklake", "quack")
+# has no arbitrary egress): httpfs (S3), ducklake, quack.
+EXTENSIONS = ("httpfs", "ducklake", "quack")
 
 # The DUCKDB_* keys a Lake may set, and the DuckDB setting each one sets (ADR-0265). Any other DUCKDB_* key but the
 # image's DUCKDB_EXTENSION_DIRECTORY ends the start: the sandbox's settings stay the shim's (ADR-0263 Decision 8).
@@ -186,7 +195,7 @@ def _confine(con: "duckdb.DuckDBPyConnection") -> None:
 
 
 def _recover_catalog(s3, bucket: str, key: str) -> None:
-    """boto3 GetObject the SQLite catalog → the local file, before ATTACH.
+    """boto3 GetObject the catalog → the local file, before ATTACH.
 
     On first deploy the object does not exist yet — skip (DuckLake creates a fresh catalog on
     ATTACH). The min-replica=1 replica owns the prefix, so this is the only writer.
@@ -201,20 +210,18 @@ def _recover_catalog(s3, bucket: str, key: str) -> None:
 
 
 class _Checkpointer:
-    """Checkpoints the catalog to blob: SQLite ``VACUUM INTO`` snapshot → whole-object PutObject.
+    """Checkpoints the catalog to blob: a copy of its metadata database → whole-object PutObject.
 
-    ``VACUUM INTO`` is a SQLite statement — run through Python's ``sqlite3`` against the catalog
-    FILE, NOT the DuckDB connection (DuckDB has no VACUUM INTO). It works while DuckDB holds the
-    catalog attached (verified), folding the WAL into one consistent, integrity-complete file (a
-    naive copy would lose un-checkpointed WAL pages). The whole-object Put is atomic — a torn Put
-    leaves the prior snapshot intact. Ordering is data-before-metadata: DuckLake makes the Parquet
-    durable on S3 BEFORE this runs, so the catalog snapshot never names a missing object. The catalog
-    is metadata-sized (file-lists + snapshots, not row data), within the gateway's upload cap.
-    Coalesced: _CommitWatcher calls it once per poll interval in which a transaction committed, and
-    the SIGTERM handler once on graceful shutdown; the lock serializes the two.
+    The copy is one transaction of the engine's own DuckDB, so it is consistent while commits land. The
+    whole-object Put is atomic — a torn Put leaves the prior checkpoint intact. Ordering is data-before-metadata:
+    DuckLake makes the Parquet durable on S3 BEFORE a commit lands, so a checkpoint never names a missing object.
+    The catalog is metadata-sized (file-lists + snapshots, not row data), within the gateway's upload cap.
+    Coalesced: _CommitWatcher calls checkpoint once per poll interval in which a transaction committed, and the
+    SIGTERM handler calls stop once; the lock serializes them.
     """
 
-    def __init__(self, s3, bucket: str, key: str) -> None:
+    def __init__(self, cur: "duckdb.DuckDBPyConnection", s3, bucket: str, key: str) -> None:
+        self._cur = cur
         self._s3 = s3
         self._bucket = bucket
         self._key = key
@@ -222,31 +229,57 @@ class _Checkpointer:
 
     def checkpoint(self) -> None:
         with self._lock:
-            try:
-                os.remove(LOCAL_SNAPSHOT)
-            except FileNotFoundError:
-                pass
-            # VACUUM INTO a fresh consistent snapshot via SQLite (not DuckDB).
-            scon = sqlite3.connect(LOCAL_CATALOG, timeout=30)
-            try:
-                scon.execute("VACUUM INTO ?", [LOCAL_SNAPSHOT])
-            finally:
-                son_close = getattr(scon, "close", None)
-                if son_close:
-                    son_close()
-            # whole-object PutObject — atomic; never a partial/multipart commit of the catalog.
-            with open(LOCAL_SNAPSHOT, "rb") as fh:
-                self._s3.put_object(Bucket=self._bucket, Key=self._key, Body=fh.read())
+            self._copy(METADATA)
+            self._upload()
+
+    def stop(self, serving: list[str]) -> None:
+        """Ends the engine's commits and uploads its last checkpoint (#1198). quack_stop refuses new requests, but a
+        request in flight still commits and answers its client; after DETACH, DuckDB closes the catalog file only
+        once the last transaction that used it ends, so the copy of the closed file holds every commit a client saw
+        acknowledged. If the file is still open after STOP_WAIT_SECONDS, the copy taken at quack_stop is uploaded."""
+        with self._lock:
+            for uri in serving:
+                self._cur.execute("CALL quack_stop(?)", [uri]).fetchall()
+            self._copy(METADATA)
+            self._cur.execute("DETACH lakehouse")
+            if _await_close(self._cur):
+                try:
+                    self._copy("funcd_closed")
+                finally:
+                    self._cur.execute("DETACH funcd_closed")
+            self._upload()
+
+    def _copy(self, source: str) -> None:
+        for path in (LOCAL_CHECKPOINT, LOCAL_CHECKPOINT + ".wal"):
+            if os.path.exists(path):
+                os.remove(path)
+        self._cur.execute(f"ATTACH '{LOCAL_CHECKPOINT}' AS funcd_checkpoint")
+        try:
+            self._cur.execute(f"COPY FROM DATABASE {source} TO funcd_checkpoint")
+        finally:
+            self._cur.execute("DETACH funcd_checkpoint")
+
+    def _upload(self) -> None:
+        # whole-object PutObject — atomic; never a partial/multipart commit of the catalog.
+        with open(LOCAL_CHECKPOINT, "rb") as fh:
+            self._s3.put_object(Bucket=self._bucket, Key=self._key, Body=fh.read())
 
 
-def _snapshot_id(path: str) -> int | None:
-    """The latest DuckLake snapshot id in the SQLite catalog at path; every committed transaction adds one."""
-    scon = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=30)
-    try:
-        row = scon.execute("SELECT max(snapshot_id) FROM ducklake_snapshot").fetchone()
-    finally:
-        scon.close()
-    return row[0] if row else None
+def _await_close(cur: "duckdb.DuckDBPyConnection") -> bool:
+    """Waits up to STOP_WAIT_SECONDS for DuckDB to close the detached catalog file, then attaches it read-only as
+    funcd_closed. DuckDB refuses to attach the file again while a transaction that used it still runs."""
+    deadline = time.monotonic() + STOP_WAIT_SECONDS
+    while True:
+        try:
+            cur.execute(f"ATTACH '{LOCAL_CATALOG}' AS funcd_closed (READ_ONLY)")
+            return True
+        except Exception as exc:  # noqa: BLE001 — only the conflict of an open file is waited out.
+            if "Unique file handle conflict" not in str(exc):
+                raise
+            if time.monotonic() > deadline:
+                sys.stderr.write("funcd duckdb shim: a transaction outlived the stop; uploading the catalog as of quack_stop\n")
+                return False
+        time.sleep(0.05)
 
 
 class _CommitWatcher(threading.Thread):
@@ -258,22 +291,24 @@ class _CommitWatcher(threading.Thread):
     commits of one interval, not every commit since the start (#998).
     """
 
-    def __init__(self, checkpointer: _Checkpointer, path: str, interval: float) -> None:
+    def __init__(self, checkpointer: _Checkpointer, latest: Callable[[], int | None], interval: float) -> None:
         super().__init__(name="commit-watcher", daemon=True)
         self._checkpointer = checkpointer
-        self._path = path
+        self._latest = latest
         self._interval = interval
         self._done = threading.Event()
-        self._seen = _snapshot_id(path)
+        self._seen = latest()
 
     def run(self) -> None:
         while not self._done.wait(self._interval):
             try:
-                latest = _snapshot_id(self._path)
+                latest = self._latest()
                 if latest != self._seen:
                     self._checkpointer.checkpoint()
                     self._seen = latest
             except Exception as exc:  # noqa: BLE001 — keep watching; the next tick retries.
+                if self._done.is_set():
+                    return
                 sys.stderr.write(f"funcd duckdb shim: catalog checkpoint failed, retrying: {exc}\n")
 
     def stop(self) -> None:
@@ -299,27 +334,32 @@ def main() -> int:
     _configure(con, endpoint, region, access, secret)
 
     # Recover: GetObject the catalog from blob → local file → ATTACH (fresh on first deploy). The
-    # Parquet DATA_PATH is the owned prefix on S3 (the F47 surface); the catalog is the local SQLite.
+    # Parquet DATA_PATH is the owned prefix on S3 (the F47 surface); the catalog is the local DuckDB file.
     _recover_catalog(s3, bucket, key)
     # OVERRIDE_DATA_PATH: a catalog restored under another prefix (ADR-0222 asLocation) records its old
     # DATA_PATH, which DuckLake refuses to replace otherwise; the data files are relative to it.
     # DUCKLAKE_VERSION: a new catalog is DuckLake 1.1 whatever DuckDB's default; a 1.0 catalog fails here (ADR-0263).
     con.execute(
-        "ATTACH 'ducklake:sqlite:" + LOCAL_CATALOG + "' AS lakehouse "
+        "ATTACH 'ducklake:" + LOCAL_CATALOG + "' AS lakehouse "
         "(DATA_PATH ?, OVERRIDE_DATA_PATH TRUE, DUCKLAKE_VERSION '1.1')",
         [data_path],
     )
     _confine(con)
 
-    checkpointer = _Checkpointer(s3, bucket, key)
-    watcher = _CommitWatcher(checkpointer, LOCAL_CATALOG, COMMIT_POLL_SECONDS)
+    checkpointer = _Checkpointer(con.cursor(), s3, bucket, key)
+    watch = con.cursor()
+    watcher = _CommitWatcher(checkpointer, lambda: watch.execute(LATEST_SNAPSHOT).fetchone()[0], COMMIT_POLL_SECONDS)
     watcher.start()
+    serving: list[str] = []
 
-    # Graceful shutdown: checkpoint the catalog one final time on SIGTERM/SIGINT.
+    # Graceful shutdown on SIGTERM/SIGINT: end the commits and checkpoint the catalog one final time (#1198).
     def _on_term(_signum, _frame):
         watcher.stop()
         try:
-            checkpointer.checkpoint()
+            # The watcher's cursor holds the catalog open, which the stop waits out: close it first.
+            watcher.join()
+            watch.close()
+            checkpointer.stop(serving)
         finally:
             raise SystemExit(0)
 
@@ -338,6 +378,7 @@ def main() -> int:
         "CALL quack_serve(?, token := ?, disable_ssl := true, allow_other_hostname := true)",
         [serve_uri, quack_token],
     ).fetchall()
+    serving.append(serve_uri)
 
     signal.pause()  # block; the SIGTERM handler checkpoints + exits when the sandbox stops us.
     return 0

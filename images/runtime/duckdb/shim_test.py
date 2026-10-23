@@ -1,12 +1,11 @@
-"""Tests of the duckdb runtime shim: its per-commit checkpoint (ADR-0086, #998) and the order of its engine statements
-(ADR-0263), run by internal/runtime/embedimg's TestIssue998_ShimCheckpointsPerCommit with the host's python3. The
-image's boto3 and duckdb are stubbed: the commit watcher reads the catalog through sqlite3 alone, and the engine is a
-connection that records its statements."""
+"""Tests of the duckdb runtime shim: its per-commit checkpoint (ADR-0086, #998), its stop (#1198) and the order of its
+engine statements (ADR-0263), run by internal/runtime/embedimg's TestIssue998_ShimCheckpointsPerCommit with the host's
+python3. The image's boto3 and duckdb are stubbed: the engine is a connection that records its statements.
+engine_test.py runs the shim against the real engine."""
 
 import contextlib
 import io
 import os
-import sqlite3
 import sys
 import tempfile
 import threading
@@ -41,25 +40,13 @@ class _Recorder:
 
 class TestIssue998ShimCheckpointsPerCommit(unittest.TestCase):
     def setUp(self) -> None:
-        self.dir = tempfile.TemporaryDirectory()
-        self.path = os.path.join(self.dir.name, "catalog.db")
-        con = sqlite3.connect(self.path)
-        con.execute("CREATE TABLE ducklake_snapshot (snapshot_id BIGINT PRIMARY KEY)")
-        con.execute("INSERT INTO ducklake_snapshot VALUES (0)")
-        con.commit()
-        con.close()
-
-    def tearDown(self) -> None:
-        self.dir.cleanup()
+        self.snapshot = 0
 
     def commit(self) -> None:
-        con = sqlite3.connect(self.path)
-        con.execute("INSERT INTO ducklake_snapshot SELECT max(snapshot_id) + 1 FROM ducklake_snapshot")
-        con.commit()
-        con.close()
+        self.snapshot += 1
 
     def watch(self, recorder: _Recorder) -> "shim._CommitWatcher":
-        watcher = shim._CommitWatcher(recorder, self.path, INTERVAL)
+        watcher = shim._CommitWatcher(recorder, lambda: self.snapshot, INTERVAL)
         watcher.start()
         self.addCleanup(watcher.join, WAIT)
         self.addCleanup(watcher.stop)
@@ -100,6 +87,9 @@ class _Recording:
 
     def fetchall(self) -> list:
         return []
+
+    def cursor(self) -> "_Recording":
+        return self
 
 
 # The environment main needs to reach quack_serve.
@@ -165,7 +155,7 @@ class TestScenarioOnlyAllowedPaths(unittest.TestCase):
             "SET allow_persistent_secrets=false",
             "CREATE TEMPORARY SECRET funcd_lake_s3 (TYPE s3, KEY_ID ?, SECRET ?,",
             "recover",
-            "ATTACH 'ducklake:sqlite:/var/funcd/ducklake/catalog.db' AS lakehouse "
+            "ATTACH 'ducklake:/var/funcd/ducklake/catalog.ducklake' AS lakehouse "
             "(DATA_PATH ?, OVERRIDE_DATA_PATH TRUE, DUCKLAKE_VERSION '1.1')",
             f"SET allowed_directories=['s3://', '{local_tmp}/']",
             "SET enable_external_access=false",
@@ -304,6 +294,92 @@ class TestScenarioNoDeprecatedExtensionSetting(unittest.TestCase):
             with mock.patch.object(shim.duckdb, "connect", connect, create=True):
                 shim._connect()
         self.assertEqual(configs, [{"extension_directories": ["/opt/duckdb-ext"]}])
+
+
+class TestIssue1198TheEngineLoadsNoSQLiteExtension(unittest.TestCase):
+    """The catalog is a DuckDB file (#1198): the engine loads httpfs, ducklake and quack, and no sqlite extension."""
+
+    def test_the_loaded_extensions(self) -> None:
+        log: list = []
+        with mock.patch.object(shim.duckdb, "connect", lambda config: _Recording(log), create=True):
+            shim._connect()
+        self.assertEqual([s for s in log if s.startswith("LOAD")], ["LOAD httpfs", "LOAD ducklake", "LOAD quack"])
+
+
+class _StopEngine:
+    """The engine's checkpoint cursor at a stop: it records each statement, writes a COPY's source name as the copy
+    file's content, and refuses to attach the detached catalog file while busy is above 0, as DuckDB does while a
+    transaction still uses it."""
+
+    def __init__(self, busy: int, fail: str = "") -> None:
+        self.log: list = []
+        self.busy = busy
+        self.fail = fail
+
+    def execute(self, sql: str, params: object = None) -> "_StopEngine":
+        self.log.append(sql)
+        if sql.startswith("ATTACH") and "funcd_closed" in sql:
+            if self.fail:
+                raise RuntimeError(self.fail)
+            if self.busy > 0:
+                self.busy -= 1
+                raise RuntimeError('Unique file handle conflict: Cannot attach "funcd_closed" - the file is already attached')
+        if sql.startswith("COPY FROM DATABASE"):
+            with open(shim.LOCAL_CHECKPOINT, "w") as fh:
+                fh.write(sql.split()[3])
+        return self
+
+    def fetchall(self) -> list:
+        return []
+
+
+class _Bucket:
+    """The S3 client: it keeps each uploaded body."""
+
+    def __init__(self) -> None:
+        self.bodies: list = []
+
+    def put_object(self, Bucket: str, Key: str, Body: bytes) -> None:  # noqa: N803 — boto3's keyword names.
+        self.bodies.append(Body)
+
+
+class TestIssue1198AStopUploadsTheClosedCatalog(unittest.TestCase):
+    """#1198: a stop ends Quack, copies the catalog, detaches it, waits until DuckDB has closed its file (the last
+    transaction that used it has ended), then uploads a copy of the closed file; after STOP_WAIT_SECONDS it uploads
+    the copy taken at quack_stop instead."""
+
+    def stop(self, engine: _StopEngine, wait: float = 5.0) -> _Bucket:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        bucket = _Bucket()
+        with contextlib.ExitStack() as stack:
+            self.path = os.path.join(tmp.name, "checkpoint.ducklake")
+            stack.enter_context(mock.patch.object(shim, "LOCAL_CHECKPOINT", self.path))
+            stack.enter_context(mock.patch.object(shim, "STOP_WAIT_SECONDS", wait))
+            stack.enter_context(mock.patch.object(shim.sys, "stderr", io.StringIO()))
+            shim._Checkpointer(engine, bucket, "lake", "gold/_ducklake/catalog.db").stop(["quack://0.0.0.0:8080"])
+        return bucket
+
+    def test_the_closed_catalog_is_uploaded_once_its_last_transaction_ends(self) -> None:
+        engine = _StopEngine(busy=2)
+        bucket = self.stop(engine)
+        self.assertEqual(bucket.bodies, [b"funcd_closed"])
+        order = [s.split(" (")[0].split(" AS ")[0] for s in engine.log]
+        self.assertEqual(order[:5], ["CALL quack_stop(?)", f"ATTACH '{self.path}'",
+                                     "COPY FROM DATABASE __ducklake_metadata_lakehouse TO funcd_checkpoint",
+                                     "DETACH funcd_checkpoint", "DETACH lakehouse"])
+        self.assertEqual(sum("funcd_closed" in s and s.startswith("ATTACH") for s in engine.log), 3)
+        self.assertEqual(engine.log[-1], "DETACH funcd_closed")
+
+    def test_a_transaction_that_outlives_the_wait_leaves_the_copy_at_quack_stop(self) -> None:
+        engine = _StopEngine(busy=10**9)
+        bucket = self.stop(engine, wait=0.1)
+        self.assertEqual(bucket.bodies, [b"__ducklake_metadata_lakehouse"])
+        self.assertNotIn("DETACH funcd_closed", engine.log)
+
+    def test_another_attach_error_ends_the_stop(self) -> None:
+        with self.assertRaises(RuntimeError):
+            self.stop(_StopEngine(busy=0, fail="IO Error: disk full"))
 
 
 class TestS3ClientIgnoresEnvironmentProxies(unittest.TestCase):

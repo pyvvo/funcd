@@ -149,6 +149,16 @@ build-runtime-images: embedimg-pin
     docker save funcd/runtime-rqlite:latest | gzip -9n > internal/runtime/embedimg/rqlite.tar
     @echo "embedded OCI tars written to internal/runtime/embedimg/ for {{ARCH}} (replaces the placeholders)"
 
+# Run the duckdb shim's real-engine tests (images/runtime/duckdb/engine_test.py) in funcd/runtime-duckdb, as uid 1000:
+# the shim's main() against real DuckDB, DuckLake and Quack (ADR-0271). Needs docker and the image (just
+# build-runtime-images); on macOS a checkout under $HOME (colima mounts only $HOME). shim_test.py's stub cases run in
+# `just ci`.
+[group('runtime')]
+test-duckdb-engine:
+    docker run --rm --network none --user 1000:1000 --tmpfs /work:rw,exec,size=4g,mode=1777 -e ENGINE_TEST_ROOT=/work \
+      -v "{{justfile_directory()}}/images/runtime/duckdb:/shim:ro" --entrypoint python3.14 funcd/runtime-duckdb:latest \
+      -W ignore::ResourceWarning /shim/engine_test.py -v
+
 # Build the rqlite engine image for one arch (ADR-0232): the pure-Go entrypoint on the host, then rqlited statically
 # from the source pinned in images/runtime/rqlite/rqlite.pin, on distroless static.
 [private]

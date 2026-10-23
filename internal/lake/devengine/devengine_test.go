@@ -116,7 +116,7 @@ func requireTaken(t *testing.T, addr string) {
 // scenario: dev-engine-port-zero — the engine's init asks for port 0, and the start reports the port the engine's
 // listen_url row names, which the engine holds (ADR-0263 Decision 4).
 func TestScenarioDevEnginePortZero(t *testing.T) {
-	if sql := buildInitSQL("/ext", "/tmp/catalog.db", nil); !strings.Contains(sql, "quack_serve('quack:127.0.0.1:0'") {
+	if sql := buildInitSQL("/ext", "/tmp/catalog.ducklake", nil); !strings.Contains(sql, "quack_serve('quack:127.0.0.1:0'") {
 		t.Fatalf("the init does not ask for port 0:\n%s", sql)
 	}
 	r := fakeRuntime(t)
@@ -287,7 +287,7 @@ func requireNoDeprecation(t *testing.T, ctx context.Context) {
 		t.Fatalf("extract the engine: %v", err)
 	}
 	init := filepath.Join(dir, "init.sql")
-	if err := os.WriteFile(init, []byte(buildInitSQL(paths.ExtensionDir, filepath.Join(dir, "catalog.db"), testSpec().Env)), 0o600); err != nil {
+	if err := os.WriteFile(init, []byte(buildInitSQL(paths.ExtensionDir, filepath.Join(dir, "catalog.ducklake"), testSpec().Env)), 0o600); err != nil {
 		t.Fatalf("write the init: %v", err)
 	}
 	cmd := exec.CommandContext(ctx, paths.DuckDB, "-init", init, ":memory:")
@@ -354,7 +354,7 @@ func TestIssue105_ConvergeRelaunchesCrashedEngine(t *testing.T) {
 }
 
 // scenario: dev-lake-persists-across-restart — with WithLakeDir (funcdctl dev --persist), the
-// DuckLake SQLite catalog is written under the durable dir (not the ephemeral temp) and SURVIVES
+// DuckLake catalog is written under the durable dir (not the ephemeral temp) and SURVIVES
 // Teardown, so the next boot reopens it (its Parquet DATA persists in blob).
 func TestWithLakeDirPersistsLake(t *testing.T) {
 	if !embedengine.Bundled() {
@@ -369,7 +369,7 @@ func TestWithLakeDirPersistsLake(t *testing.T) {
 	if _, err := r.Converge(ctx, spec); err != nil {
 		t.Fatalf("Converge: %v", err)
 	}
-	lake := filepath.Join(durable, string(spec.Ref.Name), "catalog.db")
+	lake := filepath.Join(durable, string(spec.Ref.Name), "catalog.ducklake")
 	if _, err := os.Stat(lake); err != nil {
 		t.Fatalf("durable lake not created at %s: %v", lake, err)
 	}
@@ -406,10 +406,10 @@ func TestBuildInitSQLAttachesDuckLake(t *testing.T) {
 		"FUNCD_DUCKLAKE_CATALOG": "s3://releves/gold/_ducklake/catalog.db",
 		"QUACK_TOKEN":            "tok",
 	}
-	sql := buildInitSQL("/ext", "/tmp/catalog.db", env)
+	sql := buildInitSQL("/ext", "/tmp/catalog.ducklake", env)
 	for _, want := range []string{
 		"SET extension_directories=['/ext'];",
-		"ATTACH 'ducklake:sqlite:/tmp/catalog.db' AS lakehouse (DATA_PATH 's3://releves/gold/', OVERRIDE_DATA_PATH TRUE, DUCKLAKE_VERSION '1.1')",
+		"ATTACH 'ducklake:/tmp/catalog.ducklake' AS lakehouse (DATA_PATH 's3://releves/gold/', OVERRIDE_DATA_PATH TRUE, DUCKLAKE_VERSION '1.1')",
 		"CREATE OR REPLACE SECRET funcd_dev_s3",
 		"quack_serve",
 	} {
@@ -421,7 +421,7 @@ func TestBuildInitSQLAttachesDuckLake(t *testing.T) {
 		t.Errorf("buildInitSQL migrates the catalog or sets the deprecated extension_directory:\n%s", sql)
 	}
 	// No lake env ⇒ no ATTACH (a non-DuckLake engine still serves quack).
-	noCat := buildInitSQL("/ext", "/tmp/catalog.db", map[string]string{"QUACK_TOKEN": "t"})
+	noCat := buildInitSQL("/ext", "/tmp/catalog.ducklake", map[string]string{"QUACK_TOKEN": "t"})
 	if strings.Contains(noCat, "ATTACH") {
 		t.Errorf("buildInitSQL emitted ATTACH with no FUNCD_DUCKLAKE_CATALOG:\n%s", noCat)
 	}

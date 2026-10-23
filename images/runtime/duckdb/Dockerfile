@@ -19,9 +19,9 @@
 #
 # The shim entrypoint is Python (images/runtime/duckdb/shim.py): it reads the injected AWS_* keypair
 # (ADR-0085) + FUNCD_DUCKLAKE_CATALOG + FUNCD_QUACK_PORT, configures the engine (s3_endpoint pinned,
-# http(s) filesystem disabled), syncs the SQLite catalog down from blob via boto3, ATTACHes DuckLake,
+# http(s) filesystem disabled), syncs the catalog (a DuckDB file) down from blob via boto3, ATTACHes DuckLake,
 # CONFINES the engine (only s3:// and its temp directory allowed, lock_configuration), starts the Quack
-# server, and checkpoints the catalog back (VACUUM INTO → whole-object PutObject, data-before-metadata)
+# server, and checkpoints the catalog back (COPY FROM DATABASE → whole-object PutObject, data-before-metadata)
 # per-commit + on shutdown.
 #
 # This image is EMBEDDED into funcd (go:embed; see internal/runtime/embedimg) and imported into the
@@ -48,7 +48,7 @@ RUN set -eux; \
     PYTHONPATH=/opt/funcd-duckdb DUCKDB_EXTENSION_DIRECTORY=/opt/duckdb-ext \
       python3 -c "import os,duckdb; os.makedirs('/opt/duckdb-ext',exist_ok=True); \
         c=duckdb.connect(config={'extension_directories':['/opt/duckdb-ext']}); \
-        [c.execute(f'INSTALL {e}') for e in ('httpfs','ducklake','quack','sqlite')]"; \
+        [c.execute(f'INSTALL {e}') for e in ('httpfs','ducklake','quack')]"; \
     # extensions.duckdb.org can replace an extension of a released DuckDB, so each installed file must
     # match its pin, and every installed file must have one.
     cd /opt/duckdb-ext; \

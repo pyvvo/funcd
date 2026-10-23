@@ -1,7 +1,7 @@
 //go:build dev
 
 // Package embedengine carries the DuckDB + Quack lake ENGINE — the standalone `duckdb` CLI
-// plus the pinned `httpfs`/`ducklake`/`quack`/`sqlite` extensions — baked into the `-tags dev`
+// plus the pinned `httpfs`/`ducklake`/`quack` extensions — baked into the `-tags dev`
 // funcdctl (ADR-0125 Decision 5, FEAT-0001/F90). `funcdctl dev` extracts it to a temp dir and
 // runs `duckdb`+`quack` as a host SUBPROCESS serving the Quack endpoint: a process-mode lake
 // engine, no container and no cgo (a subprocess, not linked). It is the dev analogue of the prod
