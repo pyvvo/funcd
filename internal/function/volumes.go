@@ -45,6 +45,7 @@ func localID(fn *v1.Function, name v1.ObjectName) volume.ID {
 // stops fn.
 func (r *Reconciler) ensureVolumes(ctx context.Context, fn *v1.Function) (*gateFailure, error) {
 	if len(fn.Spec.Volumes) == 0 {
+		r.markVolumesSeen(fn) // a volume a later generation adds is new, not lost (#1200)
 		return nil, nil
 	}
 	if r.volumes == nil {
@@ -357,9 +358,16 @@ func (r *Reconciler) VolumeOrphans(ctx context.Context) ([]v1.ObjectRef, error) 
 	return out, nil
 }
 
+// markVolumesSeen records this process's first pass over fn, the only pass that may find a lost volume.
+func (r *Reconciler) markVolumesSeen(fn *v1.Function) {
+	r.volMu.Lock()
+	r.volumesSeen[fnKey{fn.Namespace, fn.Name}] = true
+	r.volMu.Unlock()
+}
+
 // dataMissing sets DataMissing on fn (ADR-0262 Decision 12, as ADR-0234 Decision 6): on this process's first pass,
-// with durable volumes, a Function whose stored Ready is True and whose local volume has no leaf lost its data; a
-// Succeeded Restore into that volume since then clears it.
+// with durable volumes, a Function whose stored Ready is True for its current generation and whose local volume has no
+// leaf lost its data; a Succeeded Restore into that volume since then clears it.
 func (r *Reconciler) dataMissing(ctx context.Context, fn *v1.Function) error {
 	key := fnKey{fn.Namespace, fn.Name}
 	r.volMu.Lock()
@@ -388,11 +396,11 @@ func (r *Reconciler) dataMissing(ctx context.Context, fn *v1.Function) error {
 	if !first {
 		return nil
 	}
-	r.volMu.Lock()
-	r.volumesSeen[key] = true
-	r.volMu.Unlock()
+	r.markVolumesSeen(fn)
 	ready, ok := fn.Status.Conditions.Get(condReady)
-	if !r.volumesDurable || !ok || ready.Status != v1.ConditionTrue || !fn.Spec.HasLocalVolume() {
+	// The stored Ready vouches only for the volumes its pass reserved: those of the current generation when no pass
+	// was left to run on an update (#1200).
+	if !r.volumesDurable || !ok || ready.Status != v1.ConditionTrue || fn.Status.ObservedGeneration != fn.Generation || !fn.Spec.HasLocalVolume() {
 		return nil
 	}
 	infos, err := r.volumes.List(ctx)

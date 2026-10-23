@@ -242,3 +242,42 @@ func TestDeleteVolume(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, infos)
 }
+
+// TestIssue1200_AddedVolumeIsNotDataMissing: a local volume a spec update adds starts empty by design. Neither the same
+// process's next pass nor a restarted daemon's first pass over a generation no pass has seen takes it for lost data; a
+// volume of the generation the stored Ready describes, gone at the first pass, still is (#1200).
+func TestIssue1200_AddedVolumeIsNotDataMissing(t *testing.T) {
+	t.Parallel()
+	ready := func(fn *v1.Function, generation, observed int64) *v1.Function {
+		fn.Generation, fn.Status.ObservedGeneration = generation, observed
+		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue})
+		return fn
+	}
+	pass := func(t *testing.T, r *Reconciler, fn *v1.Function) (v1.Condition, bool) {
+		t.Helper()
+		_, err := r.ensureVolumes(t.Context(), fn)
+		require.NoError(t, err)
+		return fn.Status.Conditions.Get(condDataMissing)
+	}
+	t.Run("added in this process", func(t *testing.T) {
+		r := newShimReconciler(t, nil)
+		withVolumes(t, r)
+		fn := ready(volumeFn("cart"), 1, 1)
+		pass(t, r, fn)
+		fn.Spec.Volumes, fn.Generation = []v1.VolumeEntry{stateVolume()}, 2
+		_, missing := pass(t, r, fn)
+		require.False(t, missing, "a volume the spec adds is not lost data")
+	})
+	t.Run("added before a restart", func(t *testing.T) {
+		r := newShimReconciler(t, nil)
+		withVolumes(t, r)
+		_, missing := pass(t, r, ready(volumeFn("cart", stateVolume()), 2, 1)) // the update's pass did not run before the restart
+		require.False(t, missing, "the stored Ready describes a generation without this volume")
+	})
+	t.Run("lost", func(t *testing.T) {
+		r := newShimReconciler(t, nil)
+		withVolumes(t, r)
+		c, _ := pass(t, r, ready(volumeFn("cart", stateVolume()), 2, 2))
+		require.Equal(t, v1.ConditionTrue, c.Status, "a volume of the generation the stored Ready describes is lost")
+	})
+}
