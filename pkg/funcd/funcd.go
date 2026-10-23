@@ -2431,7 +2431,7 @@ func (p *Platform) registerWorkloadBackups(ctrl *controller.Controller, secrets 
 		d.Hold = c.hold
 	}
 	if p.volumes != nil { // ADR-0262 Decision 11: a Function's local volume is a workload backup member
-		vl := volumeLoader{p.volumes}
+		vl := volumeLoader{m: p.volumes, lost: p.fnReconciler.VolumeLost}
 		d.Sources.Volume, d.Volumes = vl.Source, vl
 	}
 	rs, err := backupsvc.New(d)
@@ -2698,8 +2698,12 @@ func (b volumeBooker) Fits(ctx context.Context, ns v1.NamespaceName, fn, name v1
 	return b.m.Fits(ctx, volume.ID{Namespace: ns, Function: fn, Name: name}, sizeBytes)
 }
 
-// volumeLoader adapts the volume manager to the workload backups (ADR-0262 Decision 11).
-type volumeLoader struct{ m volume.Manager }
+// volumeLoader adapts the volume manager to the workload backups (ADR-0262 Decision 11), and the Function reconciler's
+// DataMissing to a Restore's lost volume (#1206).
+type volumeLoader struct {
+	m    volume.Manager
+	lost func(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName) (bool, error)
+}
 
 func vid(ns v1.NamespaceName, fn, name v1.ObjectName) volume.ID {
 	return volume.ID{Namespace: ns, Function: fn, Name: name}
@@ -2719,6 +2723,10 @@ func (l volumeLoader) IsEmpty(ctx context.Context, ns v1.NamespaceName, fn, name
 
 func (l volumeLoader) Clear(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName) error {
 	return l.m.Clear(ctx, vid(ns, fn, name))
+}
+
+func (l volumeLoader) Lost(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName) (bool, error) {
+	return l.lost(ctx, ns, fn, name)
 }
 
 // volumeDeleter is the volume route's deleter: nil (no route) while volumes are off.

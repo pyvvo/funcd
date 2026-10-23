@@ -383,6 +383,41 @@ func (r *Reconciler) VolumeOrphans(ctx context.Context) ([]v1.ObjectRef, error) 
 	return out, nil
 }
 
+// retireWorkers retires every worker of fn that has not ended; the pass creates them again.
+func (r *Reconciler) retireWorkers(ctx context.Context, fn *v1.Function) error {
+	insts, err := r.namedInstances(ctx, fn.Namespace, fn.Name)
+	if err != nil {
+		return err
+	}
+	for _, in := range insts {
+		if in.State.Terminal() {
+			continue
+		}
+		if err := r.retire(ctx, in); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// VolumeLost reports whether the stored Function's DataMissing names its local volume name as lost: what the volume
+// holds dates from after the loss, so a Restore into it replaces that (ADR-0262 Decision 12, #1206).
+func (r *Reconciler) VolumeLost(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName) (bool, error) {
+	obj, err := r.store.Get(ctx, v1.KindFunction.GVK(), ns, fn)
+	if fault.KindOf(err) == fault.NotFound {
+		return false, nil
+	}
+	if err != nil {
+		return false, fault.Wrapf(err, fault.KindOf(err), "function.VolumeLost", "get function %s/%s", ns, fn)
+	}
+	f, _ := obj.(*v1.Function)
+	if f == nil {
+		return false, nil
+	}
+	c, ok := f.Status.Conditions.Get(condDataMissing)
+	return ok && c.Status == v1.ConditionTrue && slices.Contains(lostVolumes(c.Message), string(name)), nil
+}
+
 // markVolumesSeen records this process's first pass over fn, the only pass that may find a lost volume.
 func (r *Reconciler) markVolumesSeen(fn *v1.Function) {
 	r.volMu.Lock()
@@ -416,7 +451,9 @@ func (r *Reconciler) dataMissing(ctx context.Context, fn *v1.Function) error {
 			return err
 		}
 		fn.Status.Conditions.Set(v1.Condition{Type: condDataMissing, Status: v1.ConditionFalse, Reason: reasonVolumesRestored, ObservedGeneration: fn.Generation})
-		return nil
+		// the workers ran on the empty volume and keep the files they opened there: the next ones open the restored
+		// files (#1206)
+		return r.retireWorkers(ctx, fn)
 	}
 	if !first {
 		return nil

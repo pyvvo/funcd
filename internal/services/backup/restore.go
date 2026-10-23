@@ -35,6 +35,7 @@ type target struct {
 	bucket  v1.ObjectName
 	volFn   v1.ObjectName // with volume: the Function whose local volume volume is loaded (ADR-0262)
 	volume  v1.ObjectName
+	lost    bool // with volume: its Function's DataMissing names it, so what it holds dates from after the loss (#1206)
 	written bool
 }
 
@@ -276,6 +277,9 @@ func (r *RestoreReconciler) plan(ctx context.Context, rs *v1.Restore, m workload
 					err = fault.NotFoundf(op, "function %s declares no local volume %s", dest, mb.Volume)
 				}
 			}
+			if err == nil && r.d.Volumes != nil {
+				t.lost, err = r.d.Volumes.Lost(ctx, ns, dest, mb.Volume)
+			}
 			t.volFn, t.volume = dest, mb.Volume
 		case mb.AsLocation != nil:
 			_, err = r.d.Store.Get(ctx, v1.KindBucket.GVK(), ns, mb.AsLocation.Bucket)
@@ -314,6 +318,9 @@ func (r *RestoreReconciler) isEmpty(ctx context.Context, ns v1.NamespaceName, t 
 		if r.d.Volumes == nil {
 			return false, fault.Unavailablef("backup.Restore", "volumes are off: no volume loads")
 		}
+		if t.lost {
+			return true, nil
+		}
 		return r.d.Volumes.IsEmpty(ctx, ns, t.volFn, t.volume)
 	}
 	if t.sql != "" {
@@ -348,18 +355,7 @@ func (r *RestoreReconciler) isEmpty(ctx context.Context, ns v1.NamespaceName, t 
 // catalog.db.
 func (r *RestoreReconciler) fill(ctx context.Context, ns v1.NamespaceName, t *target, src blob.Bucket, path string, unseal backup.Unseal) (string, error) {
 	if t.volume != "" {
-		// A volume loads only into an empty one, in place too (ADR-0262 Decision 11): it is never emptied first.
-		if r.d.Volumes == nil {
-			return reasonFailed, fault.Unavailablef("backup.Restore", "volumes are off: no volume loads")
-		}
-		err := r.d.Volumes.Load(ctx, ns, t.volFn, t.volume, &recordReader{next: workload.Records(ctx, src, path, t.file.Files[0], unseal)})
-		if fault.KindOf(err) == fault.Conflict {
-			return ReasonNotEmpty, err
-		}
-		if err != nil {
-			return reasonFailed, err
-		}
-		return "", nil
+		return r.fillVolume(ctx, ns, t, src, path, unseal)
 	}
 	if t.sql != "" {
 		if r.d.SQL == nil {
@@ -406,6 +402,27 @@ func (r *RestoreReconciler) fill(ctx context.Context, ns v1.NamespaceName, t *ta
 				return reasonFailed, err
 			}
 		}
+	}
+	return "", nil
+}
+
+// fillVolume loads a Function's local volume: only into an empty one, in place too (ADR-0262 Decision 11), but for a
+// lost one, which is emptied first, since what it holds dates from after the loss (#1206).
+func (r *RestoreReconciler) fillVolume(ctx context.Context, ns v1.NamespaceName, t *target, src blob.Bucket, path string, unseal backup.Unseal) (string, error) {
+	if r.d.Volumes == nil {
+		return reasonFailed, fault.Unavailablef("backup.Restore", "volumes are off: no volume loads")
+	}
+	if t.lost {
+		if err := r.d.Volumes.Clear(ctx, ns, t.volFn, t.volume); err != nil {
+			return reasonFailed, err
+		}
+	}
+	err := r.d.Volumes.Load(ctx, ns, t.volFn, t.volume, &recordReader{next: workload.Records(ctx, src, path, t.file.Files[0], unseal)})
+	if fault.KindOf(err) == fault.Conflict {
+		return ReasonNotEmpty, err
+	}
+	if err != nil {
+		return reasonFailed, err
 	}
 	return "", nil
 }

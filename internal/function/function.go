@@ -1357,6 +1357,10 @@ func (r *Reconciler) steadyState(ctx context.Context, fn *v1.Function) (steady b
 	if rc, ok := fn.Status.Conditions.Get(condReady); ok && rc.Reason != "" {
 		return false, time.Time{}
 	}
+	// a Function waiting for a Restore into a lost volume reads the Restores on each pass (ADR-0262 Decision 12, #1206)
+	if dm, ok := fn.Status.Conditions.Get(condDataMissing); ok && dm.Status == v1.ConditionTrue {
+		return false, time.Time{}
+	}
 	if r.pooled(fn) {
 		return false, time.Time{}
 	}
