@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.24.0](https://github.com/pyvvo/funcd/compare/v0.23.0...v0.24.0) (2026-10-23)
+
+
+### Features
+
+* **dev:** the dev Lake engine serves on a port it chooses and reports it from its listen_url row (ADR-0263) ([621f7f2](https://github.com/pyvvo/funcd/commit/621f7f2501c246ed12be25ea0e80567f323bc5b0))
+* **function:** Function-owned volumes, sizes with units and the project-id filter (ADR-0262, ADR-0266, ADR-0268) ([#1192](https://github.com/pyvvo/funcd/issues/1192)) ([50439ed](https://github.com/pyvvo/funcd/commit/50439ed67a6c4d350f64af1a9b3d140019fd5c94))
+* **lake:** the Lake engine runs DuckDB 2.0.0, and new Lake catalogs are DuckLake 1.1, which a funcd older than this release cannot open (ADR-0263) ([621f7f2](https://github.com/pyvvo/funcd/commit/621f7f2501c246ed12be25ea0e80567f323bc5b0))
+* **lake:** the Lake engine takes its tuning keys from an allow-list (ADR-0265) ([#1193](https://github.com/pyvvo/funcd/issues/1193)) ([33e044c](https://github.com/pyvvo/funcd/commit/33e044cd32ef5e873e7f5781cc624d937c9eddeb))
+* **lake:** the Lake engine's sandbox allows only s3:// paths and its temp directory (ADR-0263) ([621f7f2](https://github.com/pyvvo/funcd/commit/621f7f2501c246ed12be25ea0e80567f323bc5b0))
+* **runtime:** a containerd worker sees its own cgroup (ADR-0264) ([#1194](https://github.com/pyvvo/funcd/issues/1194)) ([8b7c434](https://github.com/pyvvo/funcd/commit/8b7c4347a62eb042b66cd9e03558b5e76246f9da))
+
 ## [0.23.0](https://github.com/pyvvo/funcd/compare/v0.22.1...v0.23.0) (2026-10-22)
 
 
