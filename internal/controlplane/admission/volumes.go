@@ -8,9 +8,10 @@ import (
 )
 
 // VolumeBooker books a local volume's size at apply (ADR-0262 Decision 5); its error carries the reason
-// (VolumeCapacity, VolumeBudget, a changed size).
+// (VolumeCapacity, VolumeBudget, a changed size). Fits answers what Book would and books nothing: a dry run's (#1205).
 type VolumeBooker interface {
 	Book(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName, sizeBytes int64) error
+	Fits(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName, sizeBytes int64) error
 }
 
 // --- function-volumes (ADR-0262 Decisions 5 and 10): Create and Update on Function -------------------------
@@ -37,11 +38,15 @@ func (a functionVolumes) Admit(ctx context.Context, req Request) (v1.Object, err
 	if a.b == nil {
 		return nil, fault.Invalidf(op, "VolumesOff: spec.volumes: volumes are off on this daemon (set volumes.capacityBytes on the containerd runtime)")
 	}
+	book := a.b.Book
+	if req.DryRun {
+		book = a.b.Fits
+	}
 	for _, v := range fn.Spec.Volumes {
 		if v.Type != v1.VolumeLocal {
 			continue
 		}
-		if err := a.b.Book(ctx, fn.Namespace, fn.Name, v.VolumeName(), v.Bytes()); err != nil {
+		if err := book(ctx, fn.Namespace, fn.Name, v.VolumeName(), v.Bytes()); err != nil {
 			return nil, err
 		}
 	}

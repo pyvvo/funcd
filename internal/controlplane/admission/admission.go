@@ -44,6 +44,9 @@ type Request struct {
 	Old       v1.Object
 	Identity  auth.Identity
 	Declared  *Declared
+	// DryRun is a write that stores nothing (ADR-0220): an admission whose answer has an effect, the volume booking,
+	// answers without it.
+	DryRun bool
 }
 
 // Admission reviews a write before it is persisted. Deterministic and side-effect-free.

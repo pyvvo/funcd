@@ -53,6 +53,8 @@ type Manager interface {
 	// (fault.Conflict) when it does not fit, Invalid when id is booked or stored with another size. Idempotent for
 	// the same id and size.
 	Book(ctx context.Context, id ID, sizeBytes int64) error
+	// Fits answers what Book would and records nothing: the booking of a dry run (ADR-0220, #1205).
+	Fits(ctx context.Context, id ID, sizeBytes int64) error
 	// Reserve creates or checks id's leaf and sets its quota against its booking (booking it first when it has
 	// none); StoreNotOwned when the meta names another UID. deletion is recorded for the delete path.
 	Reserve(ctx context.Context, id ID, owner v1.UID, sizeBytes int64, deletion v1.DeletionPolicy) (hostPath string, err error)
@@ -294,21 +296,35 @@ func (m *manager) dropStale() {
 	}
 }
 
-// book checks and records a booking; the caller holds m.mu.
+// book checks and records a booking, and renews an unbacked one's time; the caller holds m.mu.
 func (m *manager) book(ctx context.Context, op string, id ID, size int64) error {
+	booked, err := m.check(ctx, op, id, size)
+	if err != nil {
+		return err
+	}
+	b := m.bookings[id]
+	switch {
+	case !booked:
+		b = booking{size: size, at: m.o.Clock()}
+	case !b.backed:
+		b.at = m.o.Clock()
+	}
+	m.bookings[id] = b
+	return nil
+}
+
+// check reports whether id is booked already, or refuses what does not fit; it records nothing. The caller holds
+// m.mu.
+func (m *manager) check(ctx context.Context, op string, id ID, size int64) (booked bool, err error) {
 	if size <= 0 {
-		return fault.Invalidf(op, "volume %s: size %d must be above 0", id, size)
+		return false, fault.Invalidf(op, "volume %s: size %d must be above 0", id, size)
 	}
 	m.dropStale()
 	if b, ok := m.bookings[id]; ok {
 		if b.size != size {
-			return fault.Invalidf(op, "volume %s: sizeBytes %d differs from its %d; a volume is not resized", id, size, b.size)
+			return true, fault.Invalidf(op, "volume %s: sizeBytes %d differs from its %d; a volume is not resized", id, size, b.size)
 		}
-		if !b.backed {
-			b.at = m.o.Clock()
-			m.bookings[id] = b
-		}
-		return nil
+		return true, nil
 	}
 	var total, inNS int64
 	for bid, b := range m.bookings {
@@ -318,22 +334,18 @@ func (m *manager) book(ctx context.Context, op string, id ID, size int64) error 
 		}
 	}
 	if c := m.o.CapacityBytes; c > 0 && total+size > c {
-		return fault.Wrapf(ErrCapacity, fault.Conflict, op, "volume %s: %d bytes do not fit, %d of volumes.capacityBytes %d are reserved", id, size, total, c)
+		return false, fault.Wrapf(ErrCapacity, fault.Conflict, op, "volume %s: %d bytes do not fit, %d of volumes.capacityBytes %d are reserved", id, size, total, c)
 	}
 	if m.o.Budget != nil {
 		budget, err := m.o.Budget(ctx, id.Namespace)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if budget > 0 && inNS+size > budget {
-			return fault.Wrapf(ErrBudget, fault.Conflict, op, "volume %s: %d bytes do not fit, %d of namespace %s's volumeBudgetBytes %d are reserved", id, size, inNS, id.Namespace, budget)
+			return false, fault.Wrapf(ErrBudget, fault.Conflict, op, "volume %s: %d bytes do not fit, %d of namespace %s's volumeBudgetBytes %d are reserved", id, size, inNS, id.Namespace, budget)
 		}
 	}
-	if err := m.fitsFree(op, id, size); err != nil {
-		return err
-	}
-	m.bookings[id] = booking{size: size, at: m.o.Clock()}
-	return nil
+	return false, m.fitsFree(op, id, size)
 }
 
 // fitsFree refuses a booking the filesystem cannot hold beside what the booked volumes may still write: its metadata
@@ -372,6 +384,17 @@ func (m *manager) Book(ctx context.Context, id ID, size int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.book(ctx, op, id, size)
+}
+
+func (m *manager) Fits(ctx context.Context, id ID, size int64) error {
+	const op = "volume.Fits"
+	if err := m.validID(op, id); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, err := m.check(ctx, op, id, size)
+	return err
 }
 
 func (m *manager) Reserve(ctx context.Context, id ID, owner v1.UID, size int64, deletion v1.DeletionPolicy) (string, error) {

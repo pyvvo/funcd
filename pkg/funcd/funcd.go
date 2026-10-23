@@ -2694,6 +2694,10 @@ func (b volumeBooker) Book(ctx context.Context, ns v1.NamespaceName, fn, name v1
 	return b.m.Book(ctx, volume.ID{Namespace: ns, Function: fn, Name: name}, sizeBytes)
 }
 
+func (b volumeBooker) Fits(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName, sizeBytes int64) error {
+	return b.m.Fits(ctx, volume.ID{Namespace: ns, Function: fn, Name: name}, sizeBytes)
+}
+
 // volumeLoader adapts the volume manager to the workload backups (ADR-0262 Decision 11).
 type volumeLoader struct{ m volume.Manager }
 

@@ -114,7 +114,7 @@ func (h *storeHandlers) createObj(ctx context.Context, kind v1.Kind, obj v1.Obje
 	defer unlock()
 	id, _ := middleware.IdentityFrom(ctx)
 	admitted, err := h.admit.Admit(ctx, admission.Request{ // admit step (ADR-0063 pipeline)
-		Operation: admission.Create, GVK: kind.GVK(), Object: obj, Identity: id,
+		Operation: admission.Create, GVK: kind.GVK(), Object: obj, Identity: id, DryRun: dryRunFrom(ctx),
 	})
 	if err != nil {
 		return nil, err
@@ -245,7 +245,7 @@ func (h *storeHandlers) replaceObjIf(ctx context.Context, kind v1.Kind, ns v1.Na
 		}
 		id, _ := middleware.IdentityFrom(ctx)
 		admitted, err := h.admit.Admit(ctx, admission.Request{ // admit step (ADR-0063 pipeline) — sees Old
-			Operation: admission.Update, GVK: kind.GVK(), Object: obj, Old: cur, Identity: id,
+			Operation: admission.Update, GVK: kind.GVK(), Object: obj, Old: cur, Identity: id, DryRun: dryRunFrom(ctx),
 		})
 		if err != nil {
 			return nil, false, err

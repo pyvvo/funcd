@@ -91,7 +91,7 @@ func (a partsAdmission) Admit(ctx context.Context, req admission.Request) (v1.Ob
 		if err != nil {
 			return nil, err
 		}
-		r := admission.Request{Operation: admission.Create, GVK: p.GroupVersionKind(), Object: p, Identity: req.Identity, Declared: declared}
+		r := admission.Request{Operation: admission.Create, GVK: p.GroupVersionKind(), Object: p, Identity: req.Identity, Declared: declared, DryRun: req.DryRun}
 		if old != nil {
 			r.Operation, r.Old = admission.Update, old
 		}

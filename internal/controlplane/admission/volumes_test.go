@@ -12,12 +12,17 @@ import (
 )
 
 type booker struct {
-	booked []string
-	err    error
+	booked, checked []string
+	err             error
 }
 
 func (b *booker) Book(_ context.Context, ns v1.NamespaceName, fn, name v1.ObjectName, size int64) error {
 	b.booked = append(b.booked, string(ns)+"/"+string(fn)+"/"+string(name))
+	return b.err
+}
+
+func (b *booker) Fits(_ context.Context, ns v1.NamespaceName, fn, name v1.ObjectName, size int64) error {
+	b.checked = append(b.checked, string(ns)+"/"+string(fn)+"/"+string(name))
 	return b.err
 }
 
@@ -56,4 +61,19 @@ func TestFunctionVolumesBooksLocal(t *testing.T) {
 	b.err = fault.Conflictf("volume.Book", "VolumeCapacity")
 	_, err = a.Admit(t.Context(), admission.Request{Operation: admission.Update, Object: fn})
 	require.Equal(t, fault.Conflict, fault.KindOf(err))
+}
+
+// TestIssue1205_DryRunChecksWithoutBooking: on a dry run (ADR-0220) the admission asks whether each local volume
+// fits, and answers the refusal, but books nothing (#1205).
+func TestIssue1205_DryRunChecksWithoutBooking(t *testing.T) {
+	b := &booker{}
+	a := admission.NewFunctionVolumesAdmission(b)
+	fn := volumeFn(v1.VolumeEntry{Name: "state", Type: v1.VolumeLocal, SizeBytes: 1})
+	_, err := a.Admit(t.Context(), admission.Request{Operation: admission.Create, Object: fn, DryRun: true})
+	require.NoError(t, err)
+	require.Empty(t, b.booked, "a dry run books nothing")
+	require.Equal(t, []string{"shop/cart/state"}, b.checked)
+	b.err = fault.Wrapf(fault.Conflictf("volume.Fits", "full"), fault.Conflict, "volume.Fits", "VolumeCapacity")
+	_, err = a.Admit(t.Context(), admission.Request{Operation: admission.Create, Object: fn, DryRun: true})
+	require.Equal(t, fault.Conflict, fault.KindOf(err), "a dry run answers the real write's refusal")
 }
