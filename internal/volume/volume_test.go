@@ -506,6 +506,39 @@ func TestIssue1203_DamagedMetaStopsOnlyItsVolume(t *testing.T) {
 	}
 }
 
+// TestIssue1203_DamagedMetaKeepsItsProject: the leaf of a volume whose meta cannot be read stays charged to its project
+// id, so a new volume gets another one and never shares that quota (#1203).
+func TestIssue1203_DamagedMetaKeepsItsProject(t *testing.T) {
+	ctx := t.Context()
+	root := t.TempDir()
+	fs := &spaceLimiter{free: 1 << 30, used: map[uint32]int64{}}
+	m := newManager(t, Options{Root: root, Limiter: fs})
+	cart := local("cart", "state")
+	if _, err := m.Reserve(ctx, cart, "u-cart", 1<<20, v1.DeletionRetain); err != nil {
+		t.Fatal(err)
+	}
+	damaged, _, err := m.readMeta(cart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs.used[damaged.Project] = 4 << 10 // its leaf's directory
+	if err := os.WriteFile(filepath.Join(root, "shop", "cart", "state.meta"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reopened := newManager(t, Options{Root: root, Limiter: fs})
+	thumbs := local("thumbs", "state")
+	if _, err := reopened.Reserve(ctx, thumbs, "u-thumbs", 1<<20, v1.DeletionRetain); err != nil {
+		t.Fatal(err)
+	}
+	md, _, err := reopened.readMeta(thumbs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if md.Project == damaged.Project {
+		t.Fatalf("the new volume got project %d, which the damaged volume's leaf is charged to", md.Project)
+	}
+}
+
 // TestRenewHandsTheSpaceOver: Renew releases an emptyDir and reserves its successor under one lock, so with the
 // capacity full a booking that runs meanwhile never takes the space in between (#1207).
 func TestRenewHandsTheSpaceOver(t *testing.T) {

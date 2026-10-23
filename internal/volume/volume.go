@@ -457,8 +457,11 @@ func (m *manager) reserve(ctx context.Context, op string, id ID, owner v1.UID, s
 		return "", err
 	}
 	if !found {
-		md = meta{Owner: owner, SizeBytes: size, Deletion: deletion, Project: m.next}
-		m.next++
+		project, err := m.freeProject()
+		if err != nil {
+			return "", err
+		}
+		md = meta{Owner: owner, SizeBytes: size, Deletion: deletion, Project: project}
 	} else if md.Deletion != deletion {
 		md.Deletion = deletion
 	}
@@ -472,6 +475,23 @@ func (m *manager) reserve(ctx context.Context, op string, id ID, owner v1.UID, s
 	b.backed, b.project = true, md.Project
 	m.bookings[id] = b
 	return dir, nil
+}
+
+// freeProject takes the next project id no file is charged to: the leaf of a volume whose meta cannot be read keeps its
+// id, which the scan could not count (#1203). The caller holds m.mu.
+func (m *manager) freeProject() (uint32, error) {
+	for m.o.Limiter.Enforced() {
+		used, err := m.o.Limiter.Used(m.next)
+		if err != nil {
+			return 0, err
+		}
+		if used == 0 {
+			break
+		}
+		m.next++
+	}
+	m.next++
+	return m.next - 1, nil
 }
 
 // ensureLeaf creates the leaf and its parents 0700, refuses a symlink or a non-directory, and sets the owner of the

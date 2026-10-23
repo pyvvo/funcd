@@ -153,3 +153,39 @@ func TestIssue1201_EveryBookedVolumeWritesItsSize(t *testing.T) {
 		t.Fatalf("second writing %d KiB of its %d after first filled its quota: %v: %s", blocks*64, size>>10, err, out)
 	}
 }
+
+// TestIssue1203_NewVolumeBesideADamagedMetaWritesItsSize: a volume whose meta a crash damaged keeps its leaf and the
+// use charged to its project; a volume reserved after the restart gets a project of its own and writes its whole size
+// (#1203).
+func TestIssue1203_NewVolumeBesideADamagedMetaWritesItsSize(t *testing.T) {
+	needRoot(t)
+	f, _ := openFS(t, 64<<20)
+	opts := volume.Options{Root: f.Root(), Limiter: f, CapacityBytes: 64 << 20, UID: nobody, GID: nobody}
+	m, err := volume.New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	cart, err := m.Reserve(ctx, volume.ID{Namespace: "shop", Function: "cart", Name: "state"}, "uid-a", 16<<20, v1.DeletionRetain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := asNobody("dd if=/dev/zero of=fill bs=64k count=128 conv=fsync", cart); err != nil {
+		t.Fatalf("cart writing 8 MiB: %v: %s", err, out)
+	}
+	if err := os.WriteFile(cart+".meta", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := volume.New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := reopened.Reserve(ctx, volume.ID{Namespace: "shop", Function: "thumbs", Name: "state"}, "uid-b", 16<<20, v1.DeletionRetain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocks := (16<<20 - 64<<10) / (64 << 10) // its size, but for the blocks its own directory and file metadata take
+	if out, err := asNobody(fmt.Sprintf("dd if=/dev/zero of=fill bs=64k count=%d conv=fsync", blocks), dir); err != nil {
+		t.Fatalf("thumbs writing %d KiB of its 16 MiB beside cart's 8 MiB: %v: %s", blocks*64, err, out)
+	}
+}
