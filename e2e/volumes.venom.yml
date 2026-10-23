@@ -11,6 +11,9 @@
 #   V6 a redeploy to a new revision: data is kept, scratch is empty again.
 #   V7 apply refuses a volume that does not fit the image (VolumeCapacity) and two replicas with a local volume.
 #   V8 deleting the App keeps the local volumes (retain); funcdctl volume delete removes one.
+# Scenarios (ADR-0262, ADR-0266, ADR-0268): V1-V2 volume-path-in-env, size-with-units; V3 only-its-own-volume,
+# worker-cannot-set-project-id, high-bits-do-not-pass, other-ioctls-pass; V4 write-past-size-fails; V5 local-survives,
+# emptydir-goes-with-worker; V6 local-survives; V7 capacity-not-overcommitted, one-replica; V8 retained-not-taken-over.
 name: volumes — Function volumes on real containerd, local and emptyDir (ADR-0262, ADR-0266, ADR-0268)
 
 vars:

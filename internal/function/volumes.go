@@ -277,7 +277,13 @@ func (r *Reconciler) platformHeld() bool { return r.hold != nil && r.hold.Held()
 // emptyDir left goes, and the local volumes of Functions no longer stored, or stored under another UID, follow their
 // deletion policy. A no-op while the platform is held, whose hold status lists them (VolumeOrphans).
 func (r *Reconciler) ReclaimVolumes(ctx context.Context) error {
-	if r.volumes == nil || r.platformHeld() {
+	if r.volumes == nil {
+		return nil
+	}
+	if err := r.bookStoredVolumes(ctx); err != nil {
+		return err
+	}
+	if r.platformHeld() {
 		return nil
 	}
 	infos, err := r.volumes.List(ctx)
@@ -357,7 +363,8 @@ func (r *Reconciler) VolumeOrphans(ctx context.Context) ([]v1.ObjectRef, error) 
 func (r *Reconciler) dataMissing(ctx context.Context, fn *v1.Function) error {
 	key := fnKey{fn.Namespace, fn.Name}
 	r.volMu.Lock()
-	first, pending := !r.volumesSeen[key], r.volumesMissing[key]
+	first, lost := !r.volumesSeen[key], r.volumesMissing[key]
+	pending := len(lost) > 0
 	r.volMu.Unlock()
 	cur, has := fn.Status.Conditions.Get(condDataMissing)
 	if pending && has && cur.Status == v1.ConditionTrue {
@@ -367,11 +374,11 @@ func (r *Reconciler) dataMissing(ctx context.Context, fn *v1.Function) error {
 		pending = false
 	}
 	if pending {
-		r.setDataMissing(fn, pending)
+		r.setDataMissing(fn, lost)
 		return nil
 	}
 	if has && cur.Status == v1.ConditionTrue {
-		restored, err := r.volumesRestoredSince(ctx, fn, time.Time(cur.LastTransitionTime))
+		restored, err := r.volumesRestoredSince(ctx, fn, lostVolumes(cur.Message), time.Time(cur.LastTransitionTime))
 		if err != nil || !restored {
 			return err
 		}
@@ -392,38 +399,51 @@ func (r *Reconciler) dataMissing(ctx context.Context, fn *v1.Function) error {
 	if err != nil {
 		return err
 	}
+	var gone []string
 	for _, v := range fn.Spec.Volumes {
 		if v.Type != v1.VolumeLocal {
 			continue
 		}
 		id := localID(fn, v.VolumeName())
 		if !slices.ContainsFunc(infos, func(in volume.Info) bool { return in.ID == id }) {
-			r.volMu.Lock()
-			r.volumesMissing[key] = true
-			r.volMu.Unlock()
+			gone = append(gone, string(v.VolumeName()))
 			r.logger.WarnContext(ctx, "function volume lost its data", "namespace", fn.Namespace, "function", fn.Name, "volume", v.VolumeName())
-			r.setDataMissing(fn, true)
-			return nil
 		}
+	}
+	if len(gone) > 0 {
+		r.volMu.Lock()
+		r.volumesMissing[key] = gone
+		r.volMu.Unlock()
+		r.setDataMissing(fn, gone)
 	}
 	return nil
 }
 
-func (r *Reconciler) setDataMissing(fn *v1.Function, missing bool) {
-	if !missing {
-		return
+// dataMissingVolumes prefixes the lost volumes' names in DataMissing's message, which a later pass reads back.
+const dataMissingVolumes = "lost volumes: "
+
+// lostVolumes reads the volumes a DataMissing message names.
+func lostVolumes(msg string) []string {
+	rest, ok := strings.CutPrefix(msg, dataMissingVolumes)
+	if !ok {
+		return nil
 	}
-	fn.Status.Conditions.Set(v1.Condition{Type: condDataMissing, Status: v1.ConditionTrue, Reason: reasonNoVolume, ObservedGeneration: fn.Generation,
-		Message: "the Function was Ready before and a local volume is gone, so it starts empty: run a workload Restore into it"})
+	names, _, _ := strings.Cut(rest, ";")
+	return strings.Split(names, ",")
 }
 
-// volumesRestoredSince reports a Succeeded Restore created at or after since whose member is one of fn's local
-// volumes, restored into fn.
-func (r *Reconciler) volumesRestoredSince(ctx context.Context, fn *v1.Function, since time.Time) (bool, error) {
+func (r *Reconciler) setDataMissing(fn *v1.Function, lost []string) {
+	fn.Status.Conditions.Set(v1.Condition{Type: condDataMissing, Status: v1.ConditionTrue, Reason: reasonNoVolume, ObservedGeneration: fn.Generation,
+		Message: dataMissingVolumes + strings.Join(lost, ",") + "; the Function was Ready before and these local volumes are gone, so they start empty: run a workload Restore into each"})
+}
+
+// volumesRestoredSince reports that Succeeded Restores created at or after since loaded every lost volume into fn.
+func (r *Reconciler) volumesRestoredSince(ctx context.Context, fn *v1.Function, lost []string, since time.Time) (bool, error) {
 	l, err := r.store.List(ctx, v1.KindRestore.GVK(), store.ListOptions{Namespace: fn.Namespace})
 	if err != nil {
 		return false, fault.Wrapf(err, fault.KindOf(err), "function.dataMissing", "list restores in %q", fn.Namespace)
 	}
+	restored := map[string]bool{}
 	for _, o := range l.Items {
 		rs, ok := o.(*v1.Restore)
 		if !ok || rs.Status.Phase != v1.RunSucceeded || time.Time(rs.CreationTime).Before(since) {
@@ -431,11 +451,16 @@ func (r *Reconciler) volumesRestoredSince(ctx context.Context, fn *v1.Function, 
 		}
 		for _, m := range rs.Spec.Members {
 			if m.Kind == v1.KindFunction && m.Volume != "" && cmp.Or(m.As, m.Name) == fn.Name {
-				return true, nil
+				restored[string(m.Volume)] = true
 			}
 		}
 	}
-	return false, nil
+	for _, name := range lost {
+		if !restored[name] {
+			return false, nil
+		}
+	}
+	return len(lost) > 0, nil
 }
 
 // MapRestore maps a Restore to the Functions whose volumes it loads, whose DataMissing it may clear.
@@ -479,4 +504,40 @@ func (r *Reconciler) DeleteVolume(ctx context.Context, ns v1.NamespaceName, fn, 
 		}
 	}
 	return r.volumes.Release(ctx, id)
+}
+
+// startReason is a failed start's Ready reason: an emptyDir that does not fit names its volume reason (ADR-0262
+// Decision 5), any other failure StartFailed.
+func startReason(err error) string {
+	switch {
+	case errors.Is(err, volume.ErrCapacity):
+		return reasonVolumeCapacity
+	case errors.Is(err, volume.ErrBudget):
+		return reasonVolumeBudget
+	}
+	return "StartFailed"
+}
+
+// bookStoredVolumes books every stored Function's local volumes at boot (ADR-0262 Decision 5), so an applied volume
+// whose leaf no pass created yet keeps its space; one that no longer fits is logged, and its reconcile pass gates it.
+func (r *Reconciler) bookStoredVolumes(ctx context.Context) error {
+	l, err := r.store.List(ctx, v1.KindFunction.GVK(), store.ListOptions{})
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), "function.ReclaimVolumes", "list functions")
+	}
+	for _, o := range l.Items {
+		fn, ok := o.(*v1.Function)
+		if !ok {
+			continue
+		}
+		for _, v := range fn.Spec.Volumes {
+			if v.Type != v1.VolumeLocal {
+				continue
+			}
+			if err := r.volumes.Book(ctx, localID(fn, v.VolumeName()), v.Bytes()); err != nil {
+				r.logger.WarnContext(ctx, "a stored volume does not fit at boot", "namespace", fn.Namespace, "function", fn.Name, "volume", v.VolumeName(), "err", err)
+			}
+		}
+	}
+	return nil
 }

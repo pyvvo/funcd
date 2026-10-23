@@ -372,7 +372,7 @@ type Reconciler struct {
 	volMu          sync.Mutex
 	emptyDirs      map[runtime.InstanceID][]volume.ID
 	volumesSeen    map[fnKey]bool
-	volumesMissing map[fnKey]bool
+	volumesMissing map[fnKey][]string
 }
 
 // fnKey names a Function in the spared set.
@@ -530,7 +530,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		hold:              d.Hold,
 		emptyDirs:         map[runtime.InstanceID][]volume.ID{},
 		volumesSeen:       map[fnKey]bool{},
-		volumesMissing:    map[fnKey]bool{},
+		volumesMissing:    map[fnKey][]string{},
 	}, nil
 }
 
@@ -1169,7 +1169,7 @@ func (r *Reconciler) finish(ctx context.Context, fn *v1.Function, v verdict, dra
 	case v.startErr != nil && v.running == 0:
 		// the blueprint's Deploying → Failed on a worker error; requeueFor retries it after its growing wait (ADR-0169)
 		fn.Status.Phase = v1.PhaseFailed
-		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: "StartFailed", Message: v.startErr.Error()})
+		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: startReason(v.startErr), Message: v.startErr.Error()})
 	case v.crashLoop != "":
 		// a replica crashed while booting and waits out its backoff (ADR-0160): never Idle, never Failed
 		fn.Status.Phase = v1.PhaseDeploying

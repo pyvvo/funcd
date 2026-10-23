@@ -204,7 +204,15 @@ func TestDataMissingAfterLoss(t *testing.T) {
 		Spec:       v1.RestoreSpec{Backup: "b1", Source: v1.RestoreSource{CredentialsSecret: "reader", IdentitySecret: "owner-key"}, Members: []v1.RestoreMember{{Kind: v1.KindFunction, Name: "cart", Volume: "state", InPlace: true}}},
 		Status:     v1.RestoreStatus{Phase: v1.RunSucceeded}}
 	time.Sleep(2 * time.Millisecond) // the Restore's creation follows the condition's transition by at least a millisecond
-	_, err := r.store.Create(t.Context(), rs)
+	other := *rs
+	other.Name = "other"
+	other.Spec.Members = []v1.RestoreMember{{Kind: v1.KindFunction, Name: "cart", Volume: "cache", InPlace: true}}
+	_, err := r.store.Create(t.Context(), &other)
+	require.NoError(t, err)
+	require.NoError(t, r.dataMissing(t.Context(), fn))
+	c, _ = fn.Status.Conditions.Get(condDataMissing)
+	require.Equal(t, v1.ConditionTrue, c.Status, "a Restore of another volume leaves DataMissing")
+	_, err = r.store.Create(t.Context(), rs)
 	require.NoError(t, err)
 	reqs := r.MapRestore(t.Context(), rs)
 	require.Len(t, reqs, 1)
