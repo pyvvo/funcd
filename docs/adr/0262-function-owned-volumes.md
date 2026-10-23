@@ -1,6 +1,6 @@
 # ADR-0262: Function-owned volumes — a size-limited directory only its Function can reach
 
-- **Status**: Reviewing (2026-10-23), implemented; Accepted 2026-10-23, by the decider with the agent choices as proposed; Proposed 2026-10-23 from the
+- **Status**: Implemented (2026-10-23), review passed in round 2; Reviewing 2026-10-23; Accepted 2026-10-23, by the decider with the agent choices as proposed; Proposed 2026-10-23 from the
   decider's six refine cards, judged twice: round 1 found three Majors (the booking at apply, `ref` and ADR-0248, the
   restore member), round 2 one (the booking's lifecycle), all folded
 - **Superseded in part by**: [ADR-0266](0266-volume-sizes-with-units.md) (2026-10-23) — the size fields of Decisions 1, 3
