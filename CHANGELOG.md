@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.26.0](https://github.com/pyvvo/funcd/compare/v0.25.0...v0.26.0) (2026-10-23)
+
+
+### ⚠ BREAKING CHANGES
+
+* **lake:** a Lake keeps its DuckLake catalog in a DuckDB file, and a stop keeps every acknowledged commit (ADR-0271)
+
+### Bug Fixes
+
+* **backup:** an App backup copies a Lake's catalog without opening it (ADR-0271) ([7dd5f7e](https://github.com/pyvvo/funcd/commit/7dd5f7e853b3447fc63a84f27bafc1012802887e))
+* **lake:** a Lake keeps its DuckLake catalog in a DuckDB file, and a stop keeps every acknowledged commit (ADR-0271) ([7dd5f7e](https://github.com/pyvvo/funcd/commit/7dd5f7e853b3447fc63a84f27bafc1012802887e))
+
 ## [0.25.0](https://github.com/pyvvo/funcd/compare/v0.24.0...v0.25.0) (2026-10-23)
 
 
