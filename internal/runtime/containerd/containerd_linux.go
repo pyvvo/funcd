@@ -19,12 +19,14 @@ import (
 	"os"
 	"path/filepath"
 	goruntime "runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/containerd/cgroups/v3"
 	runcoptions "github.com/containerd/containerd/api/types/runc/options"
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/containers"
@@ -1189,6 +1191,10 @@ func ociOpts(spec runtime.WorkerSpec, image containerd.Image, bootDir string) []
 		withAbsoluteCwd, // crun rejects a non-absolute cwd; WithImageConfig leaves it "" for a WORKDIR-less image
 		withProjectIDFilter,
 	}
+	if cgroups.Mode() == cgroups.Unified {
+		// as containerd's CRI does, the view is given on cgroup v2 only (ADR-0264)
+		opts = append(opts, withCgroupView)
+	}
 	if len(spec.Command) > 0 {
 		opts = append(opts, oci.WithProcessArgs(spec.Command...))
 	}
@@ -1253,6 +1259,29 @@ func seccompArches() []specs.Arch {
 	}
 	return nil
 }
+
+// withCgroupView gives a worker a cgroup namespace and its own cgroup, read-only, at /sys/fs/cgroup, so a runtime in it
+// reads its memory and CPU limits (ADR-0264). It adds each entry once.
+func withCgroupView(_ context.Context, _ oci.Client, _ *containers.Container, s *specs.Spec) error {
+	if s.Linux == nil {
+		s.Linux = &specs.Linux{}
+	}
+	if !slices.ContainsFunc(s.Linux.Namespaces, func(ns specs.LinuxNamespace) bool { return ns.Type == specs.CgroupNamespace }) {
+		s.Linux.Namespaces = append(s.Linux.Namespaces, specs.LinuxNamespace{Type: specs.CgroupNamespace})
+	}
+	if !slices.ContainsFunc(s.Mounts, func(m specs.Mount) bool { return m.Destination == cgroupMount }) {
+		s.Mounts = append(s.Mounts, specs.Mount{
+			Destination: cgroupMount,
+			Type:        "cgroup",
+			Source:      "cgroup",
+			Options:     []string{"ro", "nosuid", "noexec", "nodev", "relatime"},
+		})
+	}
+	return nil
+}
+
+// cgroupMount is where a worker sees its own cgroup (ADR-0264).
+const cgroupMount = "/sys/fs/cgroup"
 
 // withAbsoluteCwd defaults the OCI process cwd to "/" when the image declares no WORKDIR.
 // containerd's WithImageConfig copies the image's (possibly empty) WorkingDir over the spec's

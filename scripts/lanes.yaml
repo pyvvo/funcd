@@ -171,13 +171,14 @@ duckdb:
     # ADR-0248/0251: lake re-created with a ref to the Bucket it retained
     - from: e2e/fixtures/lake-quack-recreate.yaml
       to: lake-quack-recreate.yaml
-    # ADR-0263: lake re-created at 256Mi, the non-gating ATTACH probe run in lake-reader and the spill probe run in lake
-    - from: e2e/fixtures/lake-256mi.yaml
-      to: lake-256mi.yaml
+    # ADR-0263: the non-gating ATTACH probe run in lake-reader; ADR-0264: lake re-created at 1Gi and the probe of a
+    # worker's cgroup view
+    - from: e2e/fixtures/lake-1gi.yaml
+      to: lake-1gi.yaml
     - from: e2e/fixtures/quack-attach-probe.py
       to: quack-attach-probe.py
-    - from: e2e/fixtures/spill-probe.py
-      to: spill-probe.py
+    - from: e2e/fixtures/cgroup-view.py
+      to: cgroup-view.py
   tokens:
     admin: duckdb-lane-admin
     developer: duckdb-lane-developer

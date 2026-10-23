@@ -1,8 +1,9 @@
 # ADR-0264: A worker sees its own cgroup
 
-- **Status**: Accepted (2026-10-23), under the decider's "don't wait for me" and "go ahead" of that day, on option A of
-  #1185. Judged twice: round 1 found one Blocker (nothing proved the spill at 256Mi), cleared by measuring the spike in
-  the duckdb lane, which moved the fixture to 1Gi (References), and three Minors, folded; round 2: accept.
+- **Status**: Reviewing (2026-10-23), implemented in the PR that closes #1185; Accepted (2026-10-23), under the
+  decider's "don't wait for me" and "go ahead" of that day, on option A of #1185. Judged twice: round 1 found one
+  Blocker (nothing proved the spill at 256Mi), cleared by measuring the spike in the duckdb lane, which moved the
+  fixture to 1Gi (References), and three Minors, folded; round 2: accept.
 - **Date**: 2026-10-23
 - **Deciders**: green-0-rabbit
 - **Tags**: runtime, containerd, isolation, cgroups, lake

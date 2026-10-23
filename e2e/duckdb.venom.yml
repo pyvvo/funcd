@@ -22,8 +22,8 @@
 #
 # The ADR-0263 cases (DuckDB 2.0): the checkpointed catalog is DuckLake 1.1; a query reaches no path but s3:// and the
 # engine's temp directory; a non-gating probe records whether lake-reader can ATTACH its Lake through the PEP proxy;
-# and, last, Lake lake re-created at 256Mi records its idle engine's RSS, and in its container the image's DuckDB,
-# confined by the image's shim, spills a query larger than its memory.
+# and, last (ADR-0264), Lake lake re-created at 1Gi records its idle engine's RSS: the engine sees its own cgroup, so
+# DuckDB sizes itself to its limit and spills a query larger than its memory, and lake-reader, with no limit, reads max.
 name: lake-quack add-on provider — deploy + Ready + live SQL round-trip on real containerd (ADR-0086/0087/0088/0091)
 
 vars:
@@ -617,10 +617,9 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "C_LEASES=0 ENGINE_BC=Ready/200/a_b-c-r0/"
 
-  # ADR-0263 Decision 8: DuckDB spills to an allowed temp directory under the shim's allow-list. The engine has no
-  # cgroup view, so it reports the VM's memory (recorded below); the probe sets 64MB, and the window query needs over
-  # 800 MB (experiment 0006's, scaled).
-  - name: spill-under-256mi — Lake lake re-created at 256Mi records its idle engine's RSS, and the image's confined DuckDB spills there
+  # ADR-0264: the engine sees its own cgroup, so DuckDB sizes itself to its spec.resources (80% of 1 GiB, 2 threads);
+  # lake-1gi.yaml binds no ConfigMap, so no tuning key sets it.
+  - name: engine-sizes-to-its-limit — Lake lake re-created at 1Gi sizes DuckDB to its limit
     steps:
       - type: exec
         script: |
@@ -636,10 +635,10 @@ testcases:
           limactl shell --workdir / {{.vm}} bash -lc '
             export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
             funcdctl get lake lake -n default >/dev/null 2>&1 && exit 1
-            funcdctl apply -f /opt/lane/lake-256mi.yaml >/dev/null && echo APPLIED'
+            funcdctl apply -f /opt/lane/lake-1gi.yaml >/dev/null && echo APPLIED'
         retry: 30
         delay: 2
-        info: "re-apply at 256Mi → {{.result.systemout}}"
+        info: "re-apply at 1Gi → {{.result.systemout}}"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldEqual APPLIED
@@ -656,11 +655,11 @@ testcases:
             echo "LAKE=$phase IDLE_RSS_KB=$(ps -o rss= -p $pid | tr -d " ") MEMORY_CURRENT=$(sudo cat $cg/memory.current) MEMORY_MAX=$(sudo cat $cg/memory.max)"'
         retry: 60
         delay: 2
-        info: "the idle 256Mi engine → {{.result.systemout}}"
+        info: "the idle 1Gi engine → {{.result.systemout}}"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "LAKE=Ready"
-          - result.systemout ShouldContainSubstring "MEMORY_MAX=268435456"
+          - result.systemout ShouldContainSubstring "MEMORY_MAX=1073741824"
       - type: http
         method: POST
         url: "http://127.0.0.1:8081/function/lake-reader"
@@ -672,13 +671,60 @@ testcases:
         info: "the engine's memory_limit and threads → {{.result.body}}"
         assertions:
           - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring "819.1 MiB"
+          - result.body ShouldContainSubstring "2]]"
+
+  # ADR-0264: a query larger than the engine's memory (experiment 0006's window query, scaled past 819 MiB) spills to
+  # its temp directory and returns its rows; the Lake stays Ready and its cgroup records no OOM kill.
+  - name: engine-spills-under-its-limit — the 1Gi engine spills a query larger than its memory and keeps serving
+    steps:
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT max(x) FROM (SELECT i, lead(i) OVER (ORDER BY hash(i)) AS x FROM range(40000000) t(i))"}}'
+        info: "a query larger than its memory, on the 1Gi engine → {{.result.statuscode}} {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring "[[39999999]]"
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            sock=/var/lib/funcd/data/containerd/containerd.sock
+            phase=$(funcdctl get lake lake -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"phase\"])")
+            pid=$(sudo /var/lib/funcd/bin/ctr --address $sock -n funcd-default task ls | awk "\$1==\"lake-r0\"{print \$2}")
+            cg=/sys/fs/cgroup$(sudo awk -F: "\$1==\"0\"{print \$3}" /proc/$pid/cgroup)
+            echo "LAKE=$phase OOM_KILL=$(sudo awk "\$1==\"oom_kill\"{print \$2}" $cg/memory.events) MEMORY_PEAK=$(sudo cat $cg/memory.peak 2>/dev/null) KERNEL_OOM=$(sudo dmesg | grep -c oom-kill:)"
+            sudo dmesg | grep oom-kill: | tail -1 | cut -c1-240'
+        info: "the engine after the query → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "LAKE=Ready OOM_KILL=0"
+
+  # ADR-0264: inside a worker, /proc/self/cgroup is its cgroup namespace's root, /sys/fs/cgroup holds its own limits
+  # (max without one) and refuses a write.
+  - name: worker-sees-only-its-cgroup — the engine reads its limits and lake-reader reads max, read-only
+    steps:
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
             sock=/var/lib/funcd/data/containerd/containerd.sock
-            sudo timeout 300 /var/lib/funcd/bin/ctr --address $sock -n funcd-default task exec --exec-id spill-probe lake-r0 \
-              /usr/local/bin/python3.14 -c "$(cat /opt/lane/spill-probe.py)" 2>&1 | tail -3'
-        info: "a query larger than its memory, in the 256Mi engine's container → {{.result.systemout}}"
+            sudo timeout 60 /var/lib/funcd/bin/ctr --address $sock -n funcd-default task exec --exec-id cgroup-view lake-r0 \
+              /usr/local/bin/python3.14 -c "$(cat /opt/lane/cgroup-view.py)" 2>&1 | tail -1'
+        info: "the 1Gi engine's cgroup view → {{.result.systemout}}"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "SPILLED=19999999"
+          - result.systemout ShouldContainSubstring "CGROUP=0::/ MEMORY_MAX=1073741824 CPU_MAX=200000/100000 WRITE=refused"
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            sock=/var/lib/funcd/data/containerd/containerd.sock
+            task=$(sudo /var/lib/funcd/bin/ctr --address $sock -n funcd-default task ls | awk "index(\$1,\"lake-reader\")==1{print \$1; exit}")
+            sudo timeout 60 /var/lib/funcd/bin/ctr --address $sock -n funcd-default task exec --exec-id cgroup-view "$task" \
+              /usr/local/bin/python3.14 -c "$(cat /opt/lane/cgroup-view.py)" 2>&1 | tail -1'
+        info: "lake-reader's cgroup view, with no limit → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "CGROUP=0::/ MEMORY_MAX=max CPU_MAX=max/100000 WRITE=refused"
