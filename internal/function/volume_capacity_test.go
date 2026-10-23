@@ -1,6 +1,7 @@
 package function_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -8,6 +9,7 @@ import (
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/function"
+	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/volume"
 )
 
@@ -61,4 +63,47 @@ func TestIssue1206_RestoredVolumeReplacesItsWorkers(t *testing.T) {
 	h.reconcile(t, "cart")
 	h.requireCondition(t, "cart", "DataMissing", v1.ConditionFalse, "Restored")
 	require.Equal(t, before+1, h.creates(), "the worker that ran on the empty volume is replaced")
+}
+
+// stealingVolumes books another volume right after each Release, as a Function waiting for capacity can on its pass.
+type stealingVolumes struct {
+	volume.Manager
+	steal func()
+}
+
+func (s *stealingVolumes) Release(ctx context.Context, id volume.ID) error {
+	err := s.Manager.Release(ctx, id)
+	if s.steal != nil {
+		s.steal()
+	}
+	return err
+}
+
+// TestIssue1207_CrashedWorkerKeepsItsEmptyDirSpace: a pass that replaces a crashed worker hands the space of its
+// emptyDir to the new worker; a volume waiting for capacity cannot take it while the pass runs (#1207).
+func TestIssue1207_CrashedWorkerKeepsItsEmptyDirSpace(t *testing.T) {
+	t.Parallel()
+	var inner volume.Manager
+	s := &stealingVolumes{}
+	h := newShimHarness(t, 200, false, func(d *function.Deps) {
+		m, err := volume.New(volume.Options{Root: t.TempDir(), CapacityBytes: 2 << 20})
+		require.NoError(t, err)
+		inner, s.Manager = m, m
+		d.Volumes = s
+	})
+	h.create(t, "thumbs", func(fn *v1.Function) {
+		fn.Spec.Volumes = []v1.VolumeEntry{{Name: "cache", Type: v1.VolumeEmptyDir, SizeBytes: 1 << 20}}
+	})
+	h.reconcile(t, "thumbs")
+	h.reconcile(t, "thumbs")
+	before := h.creates()
+	require.NotZero(t, before, "thumbs runs a worker")
+	waiting := volume.ID{Namespace: "default", Function: "big", Name: "state"}
+	require.ErrorIs(t, inner.Book(context.Background(), waiting, 2<<20), volume.ErrCapacity)
+	s.steal = func() { _ = inner.Book(context.Background(), waiting, 2<<20) }
+	h.rt.exit("thumbs", runtime.StateFailed, time.Hour)
+	require.Eventually(t, func() bool {
+		h.reconcile(t, "thumbs")
+		return h.creates() > before
+	}, 5*time.Second, 10*time.Millisecond, "the crashed worker is replaced with its emptyDir")
 }

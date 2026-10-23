@@ -135,9 +135,9 @@ func (r *Reconciler) dropVolume(ctx context.Context, in volume.Info) error {
 	return r.volumes.Adopt(ctx, in.ID, "")
 }
 
-// workerVolumes reserves a new emptyDir of each emptyDir volume for the worker replica of fn is about to create,
-// releasing the ones the worker it replaces held, and returns every volume's mount and env value (ADR-0262 Decisions 2
-// and 3). A local volume is reserved again, idempotently, for its path.
+// workerVolumes reserves a new emptyDir of each emptyDir volume for the worker replica of fn is about to create, each
+// taking over the space of the one the worker it replaces held (#1207), and returns every volume's mount and env value
+// (ADR-0262 Decisions 2 and 3). A local volume is reserved again, idempotently, for its path.
 func (r *Reconciler) workerVolumes(ctx context.Context, fn *v1.Function, id runtime.InstanceID) ([]runtime.Mount, map[string]string, error) {
 	if len(fn.Spec.Volumes) == 0 {
 		return nil, nil, nil
@@ -145,11 +145,13 @@ func (r *Reconciler) workerVolumes(ctx context.Context, fn *v1.Function, id runt
 	if r.volumes == nil {
 		return nil, nil, fault.Invalidf("function.workerVolumes", "spec.volumes: volumes are off on this daemon")
 	}
-	if err := r.releaseEmptyDirs(ctx, id); err != nil {
-		return nil, nil, err
-	}
+	r.volMu.Lock()
+	old := r.emptyDirs[id]
+	delete(r.emptyDirs, id)
+	r.volMu.Unlock()
 	token, err := workerToken()
 	if err != nil {
+		r.dropEmptyDirs(ctx, old)
 		return nil, nil, err
 	}
 	var mounts []runtime.Mount
@@ -160,7 +162,12 @@ func (r *Reconciler) workerVolumes(ctx context.Context, fn *v1.Function, id runt
 		var host string
 		if v.Type == v1.VolumeEmptyDir {
 			vid.Worker = token
-			host, err = r.volumes.Reserve(ctx, vid, "", v.Bytes(), "")
+			if i := slices.IndexFunc(old, func(o volume.ID) bool { return o.Name == vid.Name }); i >= 0 {
+				host, err = r.volumes.Renew(ctx, old[i], vid, v.Bytes())
+				old = slices.Delete(old, i, i+1)
+			} else {
+				host, err = r.volumes.Reserve(ctx, vid, "", v.Bytes(), "")
+			}
 			if err == nil {
 				empty = append(empty, vid)
 			}
@@ -168,7 +175,7 @@ func (r *Reconciler) workerVolumes(ctx context.Context, fn *v1.Function, id runt
 			host, err = r.volumes.Reserve(ctx, vid, fn.UID, v.Bytes(), cmp.Or(v.Deletion, v1.DeletionRetain))
 		}
 		if err != nil {
-			r.dropEmptyDirs(ctx, empty)
+			r.dropEmptyDirs(ctx, append(empty, old...))
 			return nil, nil, err
 		}
 		if r.endpointMode == EndpointNetnsFixedPort {
@@ -179,6 +186,7 @@ func (r *Reconciler) workerVolumes(ctx context.Context, fn *v1.Function, id runt
 			env[v1.VolumeEnv(v.VolumeName())] = host
 		}
 	}
+	r.dropEmptyDirs(ctx, old) // the emptyDirs of volumes the spec no longer declares
 	if len(empty) > 0 {
 		r.volMu.Lock()
 		r.emptyDirs[id] = empty
@@ -218,8 +226,9 @@ func (r *Reconciler) dropEmptyDirs(ctx context.Context, ids []volume.ID) {
 }
 
 // sweepEmptyDirs releases the emptyDirs of fn's workers that ended or are gone: an ended worker is replaced, never
-// started again, so its emptyDir is never read again (ADR-0262 Decision 1).
-func (r *Reconciler) sweepEmptyDirs(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, insts []runtime.Instance) error {
+// started again, so its emptyDir is never read again (ADR-0262 Decision 1). A worker keep names is left to the worker
+// that replaces it in the same pass, which takes over that space (#1207).
+func (r *Reconciler) sweepEmptyDirs(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, insts []runtime.Instance, keep func(runtime.InstanceID) bool) error {
 	if r.volumes == nil {
 		return nil
 	}
@@ -232,7 +241,7 @@ func (r *Reconciler) sweepEmptyDirs(ctx context.Context, ns v1.NamespaceName, na
 	r.volMu.Lock()
 	var gone []runtime.InstanceID
 	for id := range r.emptyDirs {
-		if strings.HasPrefix(string(id), string(ns)+"/"+string(name)+"/") && !live[id] {
+		if strings.HasPrefix(string(id), string(ns)+"/"+string(name)+"/") && !live[id] && !keep(id) {
 			gone = append(gone, id)
 		}
 	}

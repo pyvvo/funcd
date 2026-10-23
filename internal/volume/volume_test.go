@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -437,5 +438,55 @@ func TestIssue1203_DamagedMetaStopsOnlyItsVolume(t *testing.T) {
 	}
 	if _, err := reopened.Reserve(ctx, damaged, "u-cart", 1<<20, v1.DeletionRetain); fault.KindOf(err) != fault.Invalid {
 		t.Fatalf("Reserve of the damaged volume = %v, want Invalid", err)
+	}
+}
+
+// TestRenewHandsTheSpaceOver: Renew releases an emptyDir and reserves its successor under one lock, so with the
+// capacity full a booking that runs meanwhile never takes the space in between (#1207).
+func TestRenewHandsTheSpaceOver(t *testing.T) {
+	ctx := t.Context()
+	m := newManager(t, Options{CapacityBytes: 2 << 20})
+	if _, err := m.Reserve(ctx, local("other", "state"), "u1", 1<<20, v1.DeletionRetain); err != nil {
+		t.Fatal(err)
+	}
+	cur := ID{Namespace: "shop", Function: "thumbs", Name: "cache", Worker: "w0"}
+	if _, err := m.Reserve(ctx, cur, "", 1<<20, ""); err != nil {
+		t.Fatal(err)
+	}
+	stop := make(chan struct{})
+	var took atomic.Bool
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if m.Book(context.Background(), local("big", "state"), 1<<20) == nil {
+				took.Store(true)
+				return
+			}
+		}
+	})
+	for i := 1; i <= 200; i++ {
+		next := cur
+		next.Worker = fmt.Sprintf("w%d", i)
+		dir, err := m.Renew(ctx, cur, next, 1<<20)
+		if err != nil {
+			t.Fatalf("Renew %d: %v", i, err)
+		}
+		if _, err := os.Stat(m.leaf(cur)); !os.IsNotExist(err) {
+			t.Fatalf("Renew %d left the old leaf: %v", i, err)
+		}
+		if dir != m.leaf(next) {
+			t.Fatalf("Renew %d = %q, want %q", i, dir, m.leaf(next))
+		}
+		cur = next
+	}
+	close(stop)
+	wg.Wait()
+	if took.Load() {
+		t.Fatal("a booking took the space a Renew handed over")
 	}
 }

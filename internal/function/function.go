@@ -1897,12 +1897,14 @@ func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, re
 	if err != nil {
 		return revisionPass{}, err
 	}
-	if err := r.sweepEmptyDirs(ctx, tmpl.Namespace, tmpl.Name, insts); err != nil {
-		return revisionPass{}, err
-	}
 	want := make(map[int]bool, len(indexes))
+	replaced := make(map[runtime.InstanceID]bool, len(indexes))
 	for _, i := range indexes {
 		want[i] = true
+		replaced[runtime.NewInstanceID(tmpl.Namespace, tmpl.Name, rev, i)] = true
+	}
+	if err := r.sweepEmptyDirs(ctx, tmpl.Namespace, tmpl.Name, insts, func(id runtime.InstanceID) bool { return replaced[id] }); err != nil {
+		return revisionPass{}, err
 	}
 	byReplica := make(map[int]runtime.Instance, len(indexes))
 	for _, in := range insts {

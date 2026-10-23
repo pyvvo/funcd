@@ -1,6 +1,7 @@
 package function
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -301,4 +302,37 @@ func TestIssue1203_DamagedMetaIsNotDataMissing(t *testing.T) {
 	require.NoError(t, r.dataMissing(t.Context(), fn))
 	_, missing := fn.Status.Conditions.Get(condDataMissing)
 	require.False(t, missing, "the leaf holds the data")
+}
+
+// stealing books another volume right after each Release, as a Function waiting for capacity can on its next pass.
+type stealing struct {
+	volume.Manager
+	steal func()
+}
+
+func (s *stealing) Release(ctx context.Context, id volume.ID) error {
+	err := s.Manager.Release(ctx, id)
+	if s.steal != nil {
+		s.steal()
+	}
+	return err
+}
+
+// TestIssue1207_ReplacedWorkerKeepsItsEmptyDirSpace: the worker that replaces another of the same replica gets the
+// space its predecessor's emptyDir held; a volume waiting for capacity cannot take it in between (#1207).
+func TestIssue1207_ReplacedWorkerKeepsItsEmptyDirSpace(t *testing.T) {
+	t.Parallel()
+	r := newShimReconciler(t, nil)
+	inner, err := volume.New(volume.Options{Root: t.TempDir(), CapacityBytes: 2 << 20, Holder: r.FunctionUID})
+	require.NoError(t, err)
+	waiting := volume.ID{Namespace: "shop", Function: "big", Name: "state"}
+	s := &stealing{Manager: inner}
+	r.volumes, r.volumesDurable = s, true
+	fn := volumeFn("thumbs", cacheVolume()) // a 1 MiB emptyDir
+	_ = mustWorkerSpec(t, r, fn, "/art/app.mjs", envresolve.Resolved{}, nil)
+	require.ErrorIs(t, inner.Book(t.Context(), waiting, 2<<20), volume.ErrCapacity, "the capacity holds no 2 MiB beside the worker")
+	s.steal = func() { _ = inner.Book(context.Background(), waiting, 2<<20) }
+	_, err = r.workerSpec(t.Context(), fn, "", 0, "/art/app.mjs", envresolve.Resolved{}, nil)
+	require.NoError(t, err, "the replacement worker gets its emptyDir")
+	require.ErrorIs(t, inner.Book(t.Context(), waiting, 2<<20), volume.ErrCapacity, "the waiting volume took no space of the replaced worker")
 }

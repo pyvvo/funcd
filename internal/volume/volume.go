@@ -60,7 +60,10 @@ type Manager interface {
 	Reserve(ctx context.Context, id ID, owner v1.UID, sizeBytes int64, deletion v1.DeletionPolicy) (hostPath string, err error)
 	// Adopt stamps owner on a retained local volume; "" retains it; Conflict while another live Function holds it.
 	Adopt(ctx context.Context, id ID, owner v1.UID) error
-	Release(ctx context.Context, id ID) error              // removes the leaf and frees its booking
+	Release(ctx context.Context, id ID) error // removes the leaf and frees its booking
+	// Renew releases emptyDir old and reserves emptyDir id of sizeBytes under one lock: the worker that replaces old's
+	// gets its space, which nothing can book in between (#1207).
+	Renew(ctx context.Context, old, id ID, sizeBytes int64) (hostPath string, err error)
 	Retained(ctx context.Context) ([]ID, error)            // local volumes with no owner
 	List(ctx context.Context) ([]Info, error)              // every volume with a leaf, local and emptyDir
 	Tar(ctx context.Context, id ID) (io.ReadCloser, error) // the backup member stream
@@ -404,6 +407,24 @@ func (m *manager) Reserve(ctx context.Context, id ID, owner v1.UID, size int64, 
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.reserve(ctx, op, id, owner, size, deletion)
+}
+
+func (m *manager) Renew(ctx context.Context, old, id ID, size int64) (string, error) {
+	const op = "volume.Renew"
+	if err := errors.Join(m.validID(op, old), m.validID(op, id)); err != nil {
+		return "", err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.release(op, old); err != nil {
+		return "", err
+	}
+	return m.reserve(ctx, op, id, "", size, "")
+}
+
+// reserve is Reserve; the caller holds m.mu.
+func (m *manager) reserve(ctx context.Context, op string, id ID, owner v1.UID, size int64, deletion v1.DeletionPolicy) (string, error) {
 	md, found, err := m.readMeta(id)
 	if err != nil {
 		return "", err
@@ -516,6 +537,11 @@ func (m *manager) Release(_ context.Context, id ID) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.release(op, id)
+}
+
+// release is Release; the caller holds m.mu.
+func (m *manager) release(op string, id ID) error {
 	if err := os.RemoveAll(m.leaf(id)); err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "remove volume %s", id)
 	}
