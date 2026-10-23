@@ -692,21 +692,36 @@ app-todo:
   venom: e2e/app-todo.venom.yml
 
 volumes:
-  description: The volumes App of funcd-functions on real containerd with a 64 MiB volume image (ADR-0262, ADR-0266, ADR-0268) — a local volume kept across a crash and a redeploy, an emptyDir empty in every new worker, a write past a volume's size refused by its quota, each worker seeing only its own volumes and unable to change a project id or its leaf's flags, the capacity and replica refusals, and a retained volume deleted with funcdctl volume delete.
+  description: The volumes App of funcd-functions on real containerd with a 64 MiB volume image (ADR-0262, ADR-0266, ADR-0268) — a local volume kept across a crash and a redeploy, an emptyDir empty in every new worker, a write past a volume's size refused by its quota, each worker seeing only its own volumes and unable to change a project id or its leaf's flags, the capacity and replica refusals, a local volume lost while funcd was down reported by DataMissing and restored in place from a Backup on an S3 server in the VM, and a retained volume deleted with funcdctl volume delete.
   module: github.com/pyvvo/funcd-functions
   dir: apps/volumes
   # The probe that runs inside a worker is built from funcd's root into the lane's dir, so the lane builds in a writable
-  # copy of the module.
+  # copy of the module. versitygw (Apache-2.0), the S3 server of the backup step, is built for the VM at the app-todo
+  # lane's pinned version.
   copy: true
   build:
     - CGO_ENABLED=0 GOOS=linux GOARCH=$(go env GOARCH) go -C "$FUNCD_ROOT" build -o "$PWD/projid-probe" ./e2e/fixtures/projid-probe
+    - CGO_ENABLED=0 GOOS=linux GOARCH=$(go env GOARCH) GOBIN= go install github.com/versity/versitygw/cmd/versitygw@v1.9.0 && cp "$(go env GOPATH)/bin/linux_$(go env GOARCH)/versitygw" versitygw
   stage:
     - app
     - values
     - fixtures
+    - backup
     - funcdconfig.yaml
     - functions/ts/files.mjs
     - functions/ts/files.contract.yaml
     - projid-probe
+    - versitygw
+    # The S3 server's key, the workload Secrets and the admin token of the todo App's test fixtures, which the backup
+    # step uses.
+    - from: apps/todo/dr/versitygw.env
+      module: github.com/pyvvo/funcd-functions
+      to: dr/versitygw.env
+    - from: apps/todo/dr/admin.token
+      module: github.com/pyvvo/funcd-functions
+      to: dr/admin.token
+    - from: apps/todo/dr/workload-secrets.yaml
+      module: github.com/pyvvo/funcd-functions
+      to: dr/workload-secrets.yaml
   # The suite pushes and deploys the App itself.
   venom: e2e/volumes.venom.yml

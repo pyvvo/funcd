@@ -10,10 +10,14 @@
 #   V5 a crash: the new worker keeps data and gets an empty scratch.
 #   V6 a redeploy to a new revision: data is kept, scratch is empty again.
 #   V7 apply refuses a volume that does not fit the image (VolumeCapacity) and two replicas with a local volume.
-#   V8 deleting the App keeps the local volumes (retain); funcdctl volume delete removes one.
+#   V8 data is backed up to an S3 server in the VM, then lost while funcd is down: funcd comes back with DataMissing on
+#      volumes-files, whose new worker writes; a Restore in place stops that worker, replaces what the volume got since
+#      the loss with the Backup, lets a new worker start and clears DataMissing (ADR-0262 Decisions 11 and 12).
+#   V9 deleting the App keeps the local volumes (retain); funcdctl volume delete removes one.
 # Scenarios (ADR-0262, ADR-0266, ADR-0268): V1-V2 volume-path-in-env, size-with-units; V3 only-its-own-volume,
 # worker-cannot-set-project-id, high-bits-do-not-pass, other-ioctls-pass; V4 write-past-size-fails; V5 local-survives,
-# emptydir-goes-with-worker; V6 local-survives; V7 capacity-not-overcommitted, one-replica; V8 retained-not-taken-over.
+# emptydir-goes-with-worker; V6 local-survives; V7 capacity-not-overcommitted, one-replica; V8 volume-backup-restore;
+# V9 retained-not-taken-over.
 name: volumes — Function volumes on real containerd, local and emptyDir (ADR-0262, ADR-0266, ADR-0268)
 
 vars:
@@ -21,6 +25,9 @@ vars:
   reg: oci-layout:///mnt/funcd-deps/registry
   fctl: "limactl shell --workdir / {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token funcdctl"
   vmsh: "limactl shell --workdir / {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token bash -c"
+  # From V8's restart on, funcd takes the admin token of the todo App's test fixtures only (an in-place Restore needs it).
+  afctl: "limactl shell --workdir / {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=todo-lane-admin funcdctl"
+  avmsh: "limactl shell --workdir / {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=todo-lane-admin bash -c"
   vols: /var/lib/funcd/data/volumes/default
   ctr: "/var/lib/funcd/bin/ctr --address /var/lib/funcd/data/containerd/containerd.sock -n funcd-default"
 
@@ -270,10 +277,149 @@ testcases:
           - result.systemerr ShouldContainSubstring spec.replicas
           - result.systemerr ShouldContainSubstring spec.volumes[0]
 
-  - name: V8 deleting the App keeps the local volumes; funcdctl volume delete removes one
+  - name: V8 a volume lost while funcd is down comes back from a Backup restored in place
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/files"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"write","volume":"data","name":"backed","text":"before"}}'
+        assertions:
+          - result.statuscode ShouldEqual 200
+      # versitygw serves s3://todo-workload with the todo App's test key; the schedule backs data up there, sealed.
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            install -d /var/lib/vgw/data/todo-workload /var/lib/vgw/versions
+            systemd-run --unit volumes-s3 -p EnvironmentFile=/opt/lane/dr/versitygw.env /opt/lane/versitygw \
+              --port 127.0.0.1:7070 posix --versioning-dir /var/lib/vgw/versions /var/lib/vgw/data
+            for i in $(seq 30); do curl -s -o /dev/null http://127.0.0.1:7070 && break; sleep 1; done
+            funcdctl apply -f /opt/lane/dr/workload-secrets.yaml >/dev/null
+            funcdctl apply -f /opt/lane/backup/backup.yaml >/dev/null
+            funcdctl apply -f /opt/lane/backup/backup-b1.yaml >/dev/null
+            for i in $(seq 90); do
+              p=$(funcdctl get backup files-b1 -n default -o json | python3 -c "import json,sys;print(json.load(sys.stdin)[\"status\"].get(\"phase\",\"\"))")
+              [ "$p" = Succeeded ] && break; [ "$p" = Failed ] && { funcdctl get backup files-b1 -n default -o json; exit 1; }; sleep 2
+            done
+            funcdctl get backup files-b1 -n default -o json | python3 -c "import json,sys;s=json.load(sys.stdin)[\"status\"];m=s[\"members\"][0];print(s[\"phase\"],m[\"kind\"],m[\"name\"],m.get(\"volume\",\"\"))"'
+        info: "the backup → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "Succeeded Function volumes-files data"
+      # The host loses data while funcd is down: a stop unmounts the image, so the step mounts it to remove the leaf.
+      # funcd comes back with an admin token instead of the developer one, since only an admin restores in place.
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            systemctl stop funcd-demo
+            systemctl reset-failed funcd-demo 2>/dev/null || true
+            m=/var/lib/funcd/data/volumes
+            mountpoint -q $m || mount -o loop /var/lib/funcd/data/volumes.img $m
+            rm -rf $m/default/volumes-files/data
+            umount $m
+            install -d -m 700 /etc/funcd/tokens
+            install -m 600 /opt/lane/dr/admin.token /etc/funcd/tokens/admin
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 /usr/local/bin/funcd \
+              --config /opt/lane/backup/funcdconfig.yaml
+            curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
+            systemctl is-active --quiet funcd-demo || { journalctl -u funcd-demo --no-pager -n 60; exit 1; }
+            echo RESTARTED'
+        info: "the loss → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring RESTARTED
+      - type: exec
+        script: "{{.afctl}} hold status"
+        info: "hold status → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - 'result.systemout ShouldContainSubstring "held: false"'
+      - type: exec
+        script: |
+          {{.afctl}} get function volumes-files -n default -o json | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["status"].get("conditions",[]) if x["type"]=="DataMissing"];print((c[0]["status"]+","+c[0].get("reason","")) if c else "none")'
+        retry: 30
+        delay: 2
+        assertions:
+          - result.systemout ShouldEqual True,NoVolume
+      # The new worker starts on the empty volume and writes there before anyone restores it.
+      - type: http
+        method: POST
+        url: "{{.dp}}/files"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"write","volume":"data","name":"since","text":"after the loss"}}'
+        retry: 30
+        delay: 2
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "{{.dp}}/files"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"info"}}'
+        vars:
+          lostboot:
+            from: result.bodyjson.boot
+      - type: exec
+        script: |
+          {{.avmsh}} '
+            set -e
+            sed "s/BACKUP/files-b1/" /opt/lane/backup/restore-in-place.yaml | funcdctl apply -f - >/dev/null
+            for i in $(seq 90); do
+              p=$(funcdctl get restore files-back -n default -o json | python3 -c "import json,sys;print(json.load(sys.stdin)[\"status\"].get(\"phase\",\"\"))")
+              [ "$p" = Succeeded ] && break; [ "$p" = Failed ] && { funcdctl get restore files-back -n default -o json; exit 1; }; sleep 2
+            done
+            echo "$p"'
+        info: "the restore → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual Succeeded
+      # The worker that wrote since the loss was stopped for the load: a new one serves the restored files.
+      - type: http
+        method: POST
+        url: "{{.dp}}/files"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"info"}}'
+        retry: 30
+        delay: 2
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.boot ShouldNotEqual {{.lostboot}}
+      - type: http
+        method: POST
+        url: "{{.dp}}/files"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"read","volume":"data","name":"backed"}}'
+        assertions:
+          - result.bodyjson.text ShouldEqual before
+      - type: http
+        method: POST
+        url: "{{.dp}}/files"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"list","volume":"data"}}'
+        info: "data after the restore → {{.result.body}}"
+        assertions:
+          - result.body ShouldContainSubstring note
+          - result.body ShouldNotContainSubstring since
+      - type: exec
+        script: |
+          {{.afctl}} get function volumes-files -n default -o json | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["status"].get("conditions",[]) if x["type"]=="DataMissing"];print((c[0]["status"]+","+c[0].get("reason","")) if c else "none")'
+        retry: 30
+        delay: 2
+        assertions:
+          - result.systemout ShouldEqual False,Restored
+
+  - name: V9 deleting the App keeps the local volumes; funcdctl volume delete removes one
     steps:
       - type: exec
-        script: "{{.fctl}} delete app volumes -n default"
+        script: "{{.afctl}} delete app volumes -n default"
         assertions:
           - result.code ShouldEqual 0
       - type: exec
@@ -284,7 +430,7 @@ testcases:
         assertions:
           - result.systemout ShouldEqual kept
       - type: exec
-        script: "{{.fctl}} volume delete default/volumes-files/data"
+        script: "{{.afctl}} volume delete default/volumes-files/data"
         info: "volume delete → {{.result.systemout}} {{.result.systemerr}}"
         retry: 10
         delay: 1
