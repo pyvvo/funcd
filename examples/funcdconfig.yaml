@@ -227,7 +227,7 @@ log:
 #   endpoint: ""                  # S3 URL given to spec.bindings.blob workers. default: "" ⇒ http://<bridge address>:<port> under containerd when listenAddr binds the bridge or all hosts, else http://<listenAddr>
 #   maxUploadBytes: 1073741824    # buffered-object cap; multipart buffers ≤ 3× it daemon-wide, ≤ 1× per principal. default: 1073741824 (1 GiB)
 #   masterSecretFile: ""          # node master secret, used gateway on or off. default: "" ⇒ generated under <dataDir>/s3gateway
-#   keyRotationPeriod: 24h        # a derived S3 key pair is valid for one to two periods and never past a restart (ADR-0270). default: 24h, at least 1h and more than 20 × (runtime.supervisionPeriod + runtime.drainGrace + 2 × runtime.drainPollInterval + 10s)
+#   keyRotationPeriod: 24h        # a derived S3 key pair is valid for one to two periods and never past a restart (ADR-0270); the workers that carry one (Lake engines, Functions with blob bindings) are replaced at least once per period, which empties a Function's emptyDir volumes (ADR-0262). default: 24h, at least 1h and more than 20 × (runtime.supervisionPeriod + runtime.drainGrace + 2 × runtime.drainPollInterval + 10s)
 
 # --- lake: the per-Lake query proxies (ADR-0137) ----------------------------------
 # lake:
