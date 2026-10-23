@@ -382,6 +382,54 @@ class TestIssue1198AStopUploadsTheClosedCatalog(unittest.TestCase):
             self.stop(_StopEngine(busy=0, fail="IO Error: disk full"))
 
 
+class _Cursors(_Recording):
+    """An engine connection whose cursors are distinct mocks, in the order main asks for them."""
+
+    def __init__(self, log: list) -> None:
+        super().__init__(log)
+        self.cursors: list = []
+
+    def cursor(self) -> mock.MagicMock:
+        self.cursors.append(mock.MagicMock(name=f"cursor{len(self.cursors)}"))
+        return self.cursors[-1]
+
+
+class TestIssue1198TheStopClosesTheWatcherFirst(unittest.TestCase):
+    """#1198: SIGTERM stops and joins the commit watcher and closes its cursor, which holds the catalog open, before
+    the checkpointer's stop, with the URI Quack serves, and the process then exits 0."""
+
+    def test_the_shutdown_order(self) -> None:
+        handlers: dict = {}
+        con = _Cursors([])
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        order = mock.MagicMock()
+        with contextlib.ExitStack() as stack:
+            for patch in (
+                mock.patch.dict(os.environ, ENGINE_ENV, clear=True),
+                mock.patch.object(shim, "LOCAL_TMP", os.path.join(tmp.name, "tmp")),
+                mock.patch.object(shim, "_s3_client", lambda *_: object()),
+                mock.patch.object(shim, "_connect", lambda: con),
+                mock.patch.object(shim, "_recover_catalog", lambda *_: None),
+                mock.patch.object(shim.signal, "signal", lambda sig, fn: handlers.__setitem__(sig, fn)),
+                mock.patch.object(shim.signal, "pause", side_effect=_Stop),
+            ):
+                stack.enter_context(patch)
+            watcher = stack.enter_context(mock.patch.object(shim, "_CommitWatcher")).return_value
+            checkpointer = stack.enter_context(mock.patch.object(shim, "_Checkpointer")).return_value
+            with self.assertRaises(_Stop):
+                shim.main()
+        order.attach_mock(watcher.stop, "watcher_stop")
+        order.attach_mock(watcher.join, "watcher_join")
+        order.attach_mock(con.cursors[1].close, "watch_close")
+        order.attach_mock(checkpointer.stop, "checkpointer_stop")
+        with self.assertRaises(SystemExit) as stop:
+            handlers[shim.signal.SIGTERM](shim.signal.SIGTERM, None)
+        self.assertEqual(stop.exception.code, 0)
+        self.assertEqual(order.mock_calls, [mock.call.watcher_stop(), mock.call.watcher_join(), mock.call.watch_close(),
+                                            mock.call.checkpointer_stop(["quack://0.0.0.0:8080"])])
+
+
 class TestS3ClientIgnoresEnvironmentProxies(unittest.TestCase):
     def test_no_proxy_from_the_environment(self):
         calls = {}
