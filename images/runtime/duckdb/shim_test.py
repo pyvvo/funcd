@@ -113,9 +113,11 @@ ENGINE_ENV = {
 }
 
 
-def _run_main(env: dict, con: "_Recording", log: list, local_tmp: str, pause: object = None) -> None:
+def _run_main(
+    env: dict, con: "_Recording", log: list, local_tmp: str, pause: object = None, handlers: "dict | None" = None
+) -> None:
     """Runs main on exactly env (no other variable), with con as the engine, until it would block on signal.pause()
-    (pause, if given, runs there) or it exits."""
+    (pause, if given, runs there) or it exits. handlers, if given, receives the signal handlers main installs."""
     with contextlib.ExitStack() as stack:
         for patch in (
             mock.patch.dict(os.environ, env, clear=True),
@@ -124,7 +126,7 @@ def _run_main(env: dict, con: "_Recording", log: list, local_tmp: str, pause: ob
             mock.patch.object(shim, "_connect", lambda: con),
             mock.patch.object(shim, "_recover_catalog", lambda *_: log.append("recover")),
             mock.patch.object(shim, "_CommitWatcher"),
-            mock.patch.object(shim.signal, "signal"),
+            mock.patch.object(shim.signal, "signal", side_effect=(handlers if handlers is not None else {}).__setitem__),
             mock.patch.object(shim.signal, "pause", side_effect=pause or _Stop),
         ):
             stack.enter_context(patch)
@@ -316,6 +318,78 @@ class TestS3ClientIgnoresEnvironmentProxies(unittest.TestCase):
         with mock.patch.object(shim, "boto3", fake):
             shim._s3_client("http://10.63.0.1:9000", "us-east-1", "access", "secret")
         self.assertEqual(calls["config"]["proxies"], {})
+
+
+class _Catalog:
+    """Stands for the catalog's snapshot id: from the read after `late`, a commit already under way at the stop has
+    landed."""
+
+    def __init__(self, late: int = 0) -> None:
+        self.reads = 0
+        self.late = late
+        self.latest = 1
+
+    def snapshot_id(self, _path: str) -> int:
+        self.reads += 1
+        self.latest = 2 if self.late and self.reads > self.late else 1
+        return self.latest
+
+
+class _Checkpoints:
+    """Stands for _Checkpointer: logs each checkpoint and fails the first `fail` of them."""
+
+    def __init__(self, log: list, fail: int = 0) -> None:
+        self.log = log
+        self.fail = fail
+
+    def __call__(self, *_: object) -> "_Checkpoints":
+        return self
+
+    def checkpoint(self) -> None:
+        self.log.append("checkpoint")
+        if self.fail:
+            self.fail -= 1
+            raise OSError("disk I/O error")
+
+
+class TestIssue1198ShutdownStopsServingFirst(unittest.TestCase):
+    """#1198: on SIGTERM the shim stops serving Quack and detaches the catalog before its last checkpoint, so a commit
+    a client gets acknowledged is never missing from the catalog the next engine recovers."""
+
+    def shut_down(self, checkpoints: "_Checkpoints", log: list, catalog: "_Catalog") -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        handlers: dict = {}
+        with mock.patch.object(shim, "_Checkpointer", checkpoints), self.assertRaises(_Stop):
+            _run_main(dict(ENGINE_ENV), _Recording(log), log, os.path.join(tmp.name, "tmp"), handlers=handlers)
+        with (
+            mock.patch.object(shim, "_snapshot_id", catalog.snapshot_id),
+            mock.patch.object(shim, "SHUTDOWN_QUIET_SECONDS", 0.02, create=True),
+            mock.patch.object(shim, "FINAL_CHECKPOINT_ATTEMPTS", 2, create=True),
+            self.assertRaises(SystemExit) as stop,
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            handlers[shim.signal.SIGTERM](shim.signal.SIGTERM, None)
+        self.assertEqual(stop.exception.code, 0)
+
+    def test_sigterm_stops_serving_and_detaches_before_the_last_checkpoint(self) -> None:
+        log: list = []
+        self.shut_down(_Checkpoints(log), log, _Catalog())
+        served = next(i for i, sql in enumerate(log) if sql.startswith("CALL quack_serve("))
+        self.assertEqual(log[served + 1 :], ["CALL quack_stop(?)", "DETACH lakehouse", "checkpoint"])
+
+    def test_a_commit_under_way_at_the_stop_is_in_the_last_checkpoint(self) -> None:
+        log: list = []
+        catalog = _Catalog(late=1)
+        checkpoints = _Checkpoints(log)
+        checkpoints.checkpoint = lambda: log.append(f"checkpoint at snapshot {catalog.latest}")
+        self.shut_down(checkpoints, log, catalog)
+        self.assertEqual(log[-1], "checkpoint at snapshot 2")
+
+    def test_a_failed_last_checkpoint_is_tried_again(self) -> None:
+        log: list = []
+        self.shut_down(_Checkpoints(log, fail=1), log, _Catalog())
+        self.assertEqual(log[-2:], ["checkpoint", "checkpoint"])
 
 
 if __name__ == "__main__":

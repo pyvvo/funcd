@@ -41,6 +41,7 @@ import signal
 import sqlite3
 import sys
 import threading
+import time
 import urllib.parse
 from collections.abc import Mapping
 
@@ -55,6 +56,13 @@ LOCAL_TMP = "/var/funcd/ducklake/tmp"
 
 # How often the commit watcher reads the catalog's snapshot id: commits within one interval share one checkpoint.
 COMMIT_POLL_SECONDS = 1.0
+
+# The shutdown's last checkpoint (#1198): a statement already running when Quack stops can still commit, so it waits
+# until the catalog took no commit for SHUTDOWN_QUIET_SECONDS, at most SHUTDOWN_WAIT_SECONDS; a catalog just detached
+# can refuse the first read, so it tries FINAL_CHECKPOINT_ATTEMPTS times.
+SHUTDOWN_QUIET_SECONDS = 0.25
+SHUTDOWN_WAIT_SECONDS = 2.0
+FINAL_CHECKPOINT_ATTEMPTS = 3
 
 # The extensions the engine loads — pre-installed OFFLINE into the image's extension dir (the sandbox
 # has no arbitrary egress): httpfs (S3), sqlite (the ducklake catalog backend), ducklake, quack.
@@ -280,6 +288,42 @@ class _CommitWatcher(threading.Thread):
         self._done.set()
 
 
+def _settle(path: str) -> None:
+    """Waits until the catalog at path took no commit for SHUTDOWN_QUIET_SECONDS, at most SHUTDOWN_WAIT_SECONDS."""
+    deadline = time.monotonic() + SHUTDOWN_WAIT_SECONDS
+    last, since = None, time.monotonic()
+    while time.monotonic() < deadline:
+        try:
+            latest = _snapshot_id(path)
+        except Exception:  # noqa: BLE001 — an unreadable catalog has no commit to wait for; the checkpoint reports it.
+            return
+        now = time.monotonic()
+        if latest != last:
+            last, since = latest, now
+        elif now - since >= SHUTDOWN_QUIET_SECONDS:
+            return
+        time.sleep(0.05)
+
+
+def _shut_down(con: "duckdb.DuckDBPyConnection", serve_uri: str, checkpointer: _Checkpointer) -> None:
+    """Stops serving Quack and detaches the catalog, waits for the commits already under way, then checkpoints the
+    catalog one last time (#1198), so no acknowledged commit is missing from the uploaded catalog. A step that fails is
+    reported, and the checkpoint is tried all the same."""
+    for sql, params in (("CALL quack_stop(?)", [serve_uri]), ("DETACH lakehouse", None)):
+        try:
+            con.execute(sql, params).fetchall()
+        except Exception as exc:  # noqa: BLE001 — the checkpoint below must still run.
+            sys.stderr.write(f"funcd duckdb shim: {sql} failed at shutdown: {exc}\n")
+    _settle(LOCAL_CATALOG)
+    for attempt in range(1, FINAL_CHECKPOINT_ATTEMPTS + 1):
+        try:
+            checkpointer.checkpoint()
+            return
+        except Exception as exc:  # noqa: BLE001 — tried again; the last failure is reported.
+            sys.stderr.write(f"funcd duckdb shim: last catalog checkpoint failed (attempt {attempt}): {exc}\n")
+            time.sleep(0.1)
+
+
 def main() -> int:
     quack_port = int(_require("FUNCD_QUACK_PORT"))
     catalog_url = _require("FUNCD_DUCKLAKE_CATALOG")
@@ -315,11 +359,13 @@ def main() -> int:
     watcher = _CommitWatcher(checkpointer, LOCAL_CATALOG, COMMIT_POLL_SECONDS)
     watcher.start()
 
-    # Graceful shutdown: checkpoint the catalog one final time on SIGTERM/SIGINT.
+    serve_uri = f"quack://0.0.0.0:{quack_port}"
+
+    # Graceful shutdown on SIGTERM/SIGINT: stop serving, then checkpoint the catalog one final time.
     def _on_term(_signum, _frame):
         watcher.stop()
         try:
-            checkpointer.checkpoint()
+            _shut_down(con, serve_uri, checkpointer)
         finally:
             raise SystemExit(0)
 
@@ -333,7 +379,6 @@ def main() -> int:
     # runs plain HTTP behind it, the token is the inner gate (allow_other_hostname: the gateway proxies
     # a different Host). quack_serve is non-blocking (spawns the server) — we then block on signal.pause().
     quack_token = _require("QUACK_TOKEN")  # >= 4 chars; consumers present the same token
-    serve_uri = f"quack://0.0.0.0:{quack_port}"
     con.execute(
         "CALL quack_serve(?, token := ?, disable_ssl := true, allow_other_hostname := true)",
         [serve_uri, quack_token],
