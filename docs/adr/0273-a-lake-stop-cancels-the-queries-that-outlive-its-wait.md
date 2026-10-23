@@ -63,7 +63,7 @@ no more than a crash does (the decider, 2026-10-24).
 
 | Option | For | Against | Outcome |
 |---|---|---|---|
-| Drain while the watcher saves, then detach, cancel what still holds the file, copy the closed file | every acknowledged commit in the copy; a kill loses no more than a crash | under steady traffic the stop takes the full 5 s, and the next engine waits | chosen |
+| Drain while the watcher saves, then detach, cancel what still holds the file, copy the closed file | every acknowledged commit in the copy; a kill during the drain loses no more than a crash | under steady traffic the stop takes the full 5 s, and the next engine waits | chosen |
 | Stop saving at SIGTERM, detach at once (ADR-0271, and this ADR's first drafts) | the stop ends as soon as the queries in flight end | a kill during the stop loses every commit since SIGTERM | rejected by the decider |
 | Abort with `FORCE CHECKPOINT` (experiment 0007's candidate) | one statement | aborts nothing in DuckDB 2.0 (probed) | rejected |
 | Refuse new queries and wait until none runs, without detaching | no detach | a query accepted before the refusal binds the catalog after it (the spec's `no-detach` mutant); the locked configuration refuses the switch | rejected |
@@ -74,16 +74,16 @@ no more than a crash does (the decider, 2026-10-24).
 
 3. **Stop.** At SIGTERM the engine keeps serving, and the commit watcher keeps saving the catalog, while the running
    queries drain: up to `STOP_WAIT_SECONDS` (5 s), until `quack_active_connections()` shows no `active` connection.
-   Then the stop joins the watcher and closes its cursor, saves the catalog once more, and runs `DETACH lakehouse`,
-   after which no new transaction can use the catalog. If the file is still open, it cancels each `active` connection with `quack_cancel`, through a
+   Then the stop joins the watcher and closes its cursor, saves the catalog once more (a failed save is logged; the
+   stop's own upload covers the same commits), and runs `DETACH lakehouse`, after which no new transaction can use the
+   catalog. If the file is still open, it cancels each `active` connection with `quack_cancel`, through a
    Quack client attachment that a separate DuckDB instance of the shim's process makes with the served port and token,
    and waits for the file to close. It copies the closed file, uploads it, then runs `quack_stop`. A failed cancel is
    logged and the stop keeps waiting. ADR-0263 Decision 8 governs the serving instance; the control instance is its one
    exception: opened only when a query still holds the file after `DETACH`, it attaches only the engine's own port on
    loopback (which ADR-0269's fence accepts), runs only `quack_cancel`, serves nothing, and is closed before the copy.
    A kill during the drain loses at most what a crash loses, the commits of one save interval; a kill later in the
-   stop loses only the commits that complete after its last save, those of queries still running when the drain
-   ended.
+   stop loses only the commits that complete after its last save, those of queries running after the drain ended.
 
 ## Design model
 

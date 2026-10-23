@@ -397,7 +397,10 @@ def main() -> int:
             watcher.stop()
             watcher.join()
             watch.close()
-            checkpointer.checkpoint()
+            try:
+                checkpointer.checkpoint()
+            except Exception as exc:  # noqa: BLE001 — the stop's own upload covers the same commits.
+                sys.stderr.write(f"funcd duckdb shim: the save after the drain failed: {exc}\n")
             checkpointer.stop(serving, quack_token)
         finally:
             raise SystemExit(0)

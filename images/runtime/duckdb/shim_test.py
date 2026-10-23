@@ -479,12 +479,13 @@ class TestIssue1198TheStopClosesTheWatcherFirst(unittest.TestCase):
     commit watcher and closes its cursor, which holds the catalog open, saves once more, then runs the checkpointer's
     stop with the URI Quack serves and its token, and the process then exits 0."""
 
-    def test_the_shutdown_order(self) -> None:
+    def start(self) -> tuple:
+        """Runs main() up to its pause; returns the SIGTERM handler, the connection, the watcher, the checkpointer and
+        the patched _drain."""
         handlers: dict = {}
         con = _Cursors([])
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        order = mock.MagicMock()
         with contextlib.ExitStack() as stack:
             for patch in (
                 mock.patch.dict(os.environ, ENGINE_ENV, clear=True),
@@ -504,6 +505,21 @@ class TestIssue1198TheStopClosesTheWatcherFirst(unittest.TestCase):
         patch = mock.patch.object(shim, "_drain")
         drain = patch.start()
         self.addCleanup(patch.stop)
+        return handlers[shim.signal.SIGTERM], con, watcher, checkpointer, drain
+
+    def test_a_failed_save_after_the_drain_still_runs_the_stop(self) -> None:
+        handler, _, _, checkpointer, _ = self.start()
+        checkpointer.checkpoint.side_effect = RuntimeError("S3 unavailable")
+        err = io.StringIO()
+        with mock.patch.object(shim.sys, "stderr", err), self.assertRaises(SystemExit) as stop:
+            handler(shim.signal.SIGTERM, None)
+        self.assertEqual(stop.exception.code, 0)
+        checkpointer.stop.assert_called_once_with(["quack://0.0.0.0:8080"], "token")
+        self.assertIn("the save after the drain failed: S3 unavailable", err.getvalue())
+
+    def test_the_shutdown_order(self) -> None:
+        handler, con, watcher, checkpointer, drain = self.start()
+        order = mock.MagicMock()
         order.attach_mock(drain, "drain")
         order.attach_mock(con.cursors[2].close, "drain_close")
         order.attach_mock(watcher.stop, "watcher_stop")
@@ -512,7 +528,7 @@ class TestIssue1198TheStopClosesTheWatcherFirst(unittest.TestCase):
         order.attach_mock(checkpointer.checkpoint, "checkpointer_checkpoint")
         order.attach_mock(checkpointer.stop, "checkpointer_stop")
         with self.assertRaises(SystemExit) as stop:
-            handlers[shim.signal.SIGTERM](shim.signal.SIGTERM, None)
+            handler(shim.signal.SIGTERM, None)
         self.assertEqual(stop.exception.code, 0)
         self.assertEqual(order.mock_calls, [mock.call.drain(con.cursors[2], shim.STOP_WAIT_SECONDS),
                                             mock.call.drain_close(), mock.call.watcher_stop(),
