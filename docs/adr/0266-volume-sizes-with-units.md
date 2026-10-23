@@ -1,6 +1,6 @@
 # ADR-0266: Volume sizes with binary units — `size: 2GiB` beside `sizeBytes`
 
-- **Status**: Reviewing (2026-10-23), implemented, the volumes lane green; Accepted 2026-10-23, under the decider's "don't wait for me … go ahead until completion" of 2026-10-23;
+- **Status**: Implemented (2026-10-23), review passed; Reviewing 2026-10-23, the volumes lane green; Accepted 2026-10-23, under the decider's "don't wait for me … go ahead until completion" of 2026-10-23;
   Proposed 2026-10-23 from the decider's card 7, judged twice: round 1 two Majors (float exactness, the partial
   supersession of a Reviewing ADR), round 2 accept
 - **Date**: 2026-10-23

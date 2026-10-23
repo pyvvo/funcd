@@ -1,6 +1,6 @@
 # ADR-0268: Only the platform sets a volume's project id — a seccomp filter on every worker
 
-- **Status**: Reviewing (2026-10-23), implemented, the volumes lane green; Accepted 2026-10-23, under the decider's "go ahead until completion" of 2026-10-23; Proposed
+- **Status**: Implemented (2026-10-23), review passed; Reviewing 2026-10-23, the volumes lane green; Accepted 2026-10-23, under the decider's "go ahead until completion" of 2026-10-23; Proposed
   2026-10-23 for a private finding, judged twice: round 1 one Blocker (a second ioctl) and three Majors, round 2 accept
 - **Date**: 2026-10-23
 - **Deciders**: green-0-rabbit
