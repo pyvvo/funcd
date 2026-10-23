@@ -1,6 +1,7 @@
 # ADR-0273: A Lake stop cancels the queries that outlive its wait (amends ADR-0271)
 
-- **Status**: Reviewing (2026-10-24); Accepted 2026-10-24, the acceptance delegated by the decider; Proposed
+- **Status**: Implemented (2026-10-24), review passed ([report](../reviews/adr-0273-implementation-claude-opus-5-5.md));
+  Reviewing 2026-10-24; Accepted 2026-10-24, the acceptance delegated by the decider; Proposed
   2026-10-24, judged five rounds with no Blocker or Major left, redesigned in between to keep the Lake's recovery
   point, on the decider's call
 - **Date**: 2026-10-24

@@ -12598,5 +12598,20 @@
     "dod_total": 6,
     "report": "docs/reviews/adr-0272-implementation-claude-opus-5-5.md",
     "notes": "pass: FizzBee design models in the ADR process; tooling, first spec, skills; gate PASS; 1 adr Minor (Linux FizzBee build first exercised by CI)"
+  },
+  {
+    "date": "2026-10-24",
+    "adr": "0273",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 8,
+    "dod_total": 8,
+    "report": "docs/reviews/adr-0273-implementation-claude-opus-5-5.md",
+    "notes": "pass: a Lake stop drains while the watcher saves, then cancels what outlives it (#1217); revert checks on v0.26.0 and the pre-drain shim; gate, engine tests, duckdb lane and specs PASS"
   }
 ]
