@@ -160,7 +160,7 @@ func (r *BackupReconciler) copy(ctx context.Context, b *v1.Backup) (string, erro
 	}
 	b.Status.Members = nil
 	for _, mf := range m.Members {
-		bm := v1.BackupMember{Kind: mf.Kind, Name: mf.Name}
+		bm := v1.BackupMember{Kind: mf.Kind, Name: mf.Name, Volume: mf.Volume}
 		for _, f := range mf.Files {
 			bm.Bytes += f.Bytes
 		}

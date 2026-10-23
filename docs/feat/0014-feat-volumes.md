@@ -33,7 +33,7 @@ by card, before the first ADR was drafted.
 
 | # | Feature | Builds on | ADR(s) | Status |
 |---|---|---|---|---|
-| F181 | **Function-owned volumes**: a Function declares `emptyDir` (one per worker, gone with it) and `local` (durable, owned like a store) volumes with a required size; its code finds each one through an env var; the size is a hard limit, the platform never overcommits its volume capacity, and a namespace can carry a budget; no Function reaches another's volume; a `local` volume can be backed up and restored | — | [ADR-0262](../adr/0262-function-owned-volumes.md) | accepted |
+| F181 | **Function-owned volumes**: a Function declares `emptyDir` (one per worker, gone with it) and `local` (durable, owned like a store) volumes with a required size; its code finds each one through an env var; the size is a hard limit, the platform never overcommits its volume capacity, and a namespace can carry a budget; no Function reaches another's volume; a `local` volume can be backed up and restored | — | [ADR-0262](../adr/0262-function-owned-volumes.md) | reviewing |
 | F182 | **A Bucket prefix as a directory**: a blob binding mounted read-only for every binder and read-write for the prefix owner, first as a snapshot taken at worker start, later live | F181 | — | idea |
 
 ## Exit criterion

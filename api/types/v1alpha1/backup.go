@@ -119,6 +119,8 @@ type BackupMember struct {
 	Kind  Kind       `json:"kind"`
 	Name  ObjectName `json:"name"`
 	Bytes int64      `json:"bytes,omitempty"`
+	// Volume, with Kind Function, names the Function's local volume the member is (ADR-0262 Decision 11).
+	Volume ObjectName `json:"volume,omitempty"`
 }
 
 // Restore is a namespaced, status-bearing request (ADR-0222 Decision 7): load members of a Succeeded Backup into

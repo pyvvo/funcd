@@ -5,11 +5,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -295,5 +297,30 @@ func TestScenarioDevMeasures(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("log %q lacks %q", got, want)
 		}
+	}
+}
+
+// TestConcurrentBookingsNeverOvercommit (review checklist): twenty concurrent one-unit bookings against ten units of
+// capacity leave exactly ten booked.
+func TestConcurrentBookingsNeverOvercommit(t *testing.T) {
+	ctx := t.Context()
+	m := newManager(t, Options{CapacityBytes: 10})
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	ok := 0
+	for i := range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if m.Book(ctx, ID{Namespace: "shop", Function: v1.ObjectName(fmt.Sprintf("f%d", i)), Name: "state"}, 1) == nil {
+				mu.Lock()
+				ok++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if ok != 10 {
+		t.Fatalf("%d bookings succeeded, want 10", ok)
 	}
 }
