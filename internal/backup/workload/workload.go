@@ -208,8 +208,8 @@ func KVPrefix(ns v1.NamespaceName, name v1.ObjectName) string {
 // Write copies ms under o.Path, then puts the manifest (Decisions 4, 5): a KVStore to kv/<store>/, a Bucket's
 // objects to blob/<bucket>/, a lake's objects but catalog.db to lake/<name>/<attempt>/files/ and then its
 // catalog.db to lake/<name>/<attempt>/catalog.db/, and a SQLDatabase's SQLite file to sql/<name>/ in records of
-// 8 MiB keyed 000001, 000002, … (ADR-0234 Decision 2). A refused IfNotExist is ErrTargetUnconditional; a lake whose
-// checkpoint names an object no attempt copied is ErrLakeUnstable.
+// 8 MiB keyed 000001, 000002, … (ADR-0234 Decision 2). A refused IfNotExist is ErrTargetUnconditional; a lake that
+// loses a listed object under every copy is ErrLakeUnstable.
 func Write(ctx context.Context, ns v1.NamespaceName, ms []Member, src Sources, o Options) (Manifest, error) {
 	const op = "workload.Write"
 	m := Manifest{
@@ -280,14 +280,19 @@ func Write(ctx context.Context, ns v1.NamespaceName, ms []Member, src Sources, o
 	return m, nil
 }
 
-// lake copies one lake in at most lakeAttempts attempts (Decision 5): the checkpoint C1, every other object
-// of the prefix, the check that each file C1 names was copied, then C1.
+// lake copies one lake in at most lakeAttempts attempts (Decision 5): a listing of the prefix, the checkpoint C1,
+// every other object of the prefix, then C1. C1 is copied as it is, never opened: a file it names was written
+// before it, so it is in the listing, and an attempt whose copy misses a listed key, deleted meanwhile, runs again.
 // A lake without a checkpoint is an empty member.
 func (w *writer) lake(ctx context.Context, ns v1.NamespaceName, mb Member, src Sources) (MemberFile, error) {
 	const op = "workload.Write"
 	root := src.BucketPrefix(ns, mb.Location.Bucket) + mb.Location.Prefix + "/"
 	var last string
 	for attempt := 1; attempt <= lakeAttempts; attempt++ {
+		listed, err := keys(ctx, src.Blob, root)
+		if err != nil {
+			return MemberFile{}, err
+		}
 		c1, err := src.Blob.Get(ctx, root+checkpointName)
 		if fault.KindOf(err) == fault.NotFound {
 			// DuckLake opens a missing catalog.db as a new, empty lake: no object under the prefix is part of one
@@ -311,11 +316,7 @@ func (w *writer) lake(ctx context.Context, ns v1.NamespaceName, mb Member, src S
 		if err != nil {
 			return MemberFile{}, err
 		}
-		listed, err := LakeFiles(c1)
-		if err != nil {
-			return MemberFile{}, fault.Wrapf(err, fault.KindOf(err), op, "lake %s", mb.Name)
-		}
-		if i := slices.IndexFunc(listed, func(k string) bool { return !copied[k] }); i >= 0 {
+		if i := slices.IndexFunc(listed, func(k string) bool { return k != checkpointName && !copied[k] }); i >= 0 {
 			last = listed[i]
 			continue
 		}
@@ -327,8 +328,28 @@ func (w *writer) lake(ctx context.Context, ns v1.NamespaceName, mb Member, src S
 		}
 		return MemberFile{Kind: mb.Kind, Name: mb.Name, Attempt: attempt, Files: []backup.StoreFile{files, db}}, nil
 	}
-	return MemberFile{}, fault.Wrapf(ErrLakeUnstable, fault.Conflict, op, "lake %s: %d copies missed %q, which its checkpoint names",
+	return MemberFile{}, fault.Wrapf(ErrLakeUnstable, fault.Conflict, op, "lake %s: %d copies missed %q, deleted while it was copied",
 		mb.Name, lakeAttempts, last)
+}
+
+// keys lists the keys under prefix, relative to it.
+func keys(ctx context.Context, b blob.Bucket, prefix string) ([]string, error) {
+	const op = "workload.Write"
+	var out []string
+	after := ""
+	for {
+		items, more, err := b.ListAfter(ctx, prefix, after, listPage)
+		if err != nil {
+			return nil, fault.Wrapf(err, fault.KindOf(err), op, "list %q", prefix)
+		}
+		for _, it := range items {
+			out = append(out, strings.TrimPrefix(it.Key, prefix))
+		}
+		if !more || len(items) == 0 {
+			return out, nil
+		}
+		after = items[len(items)-1].Key
+	}
 }
 
 // streamFile emits a stream (a database's SQLite file from its engine, a volume's tar) as records of sqlRecordBytes,

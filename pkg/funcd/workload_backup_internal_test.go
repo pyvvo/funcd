@@ -3,7 +3,6 @@ package funcd
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"errors"
 	"io"
 	"log/slog"
@@ -20,7 +19,6 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
-	_ "modernc.org/sqlite"
 
 	"github.com/pyvvo/funcd/api/cron"
 	"github.com/pyvvo/funcd/api/fault"
@@ -822,15 +820,18 @@ func TestScenarioRestoreInPlace(t *testing.T) {
 }
 
 // cleanupBucket is the shared blob store with a DuckLake cleanup that runs once, the first time f1 is read after
-// the listing: it deletes f1 and checkpoints a lake naming f2 instead.
+// the listing: it deletes f1 and checkpoints the lake again; and gone, a listed key that vanishes at every read.
 type cleanupBucket struct {
 	blob.Bucket
-	f1, checkpoint string
-	next           []byte
-	once           sync.Once
+	f1, checkpoint, gone string
+	next                 []byte
+	once                 sync.Once
 }
 
 func (b *cleanupBucket) Get(ctx context.Context, key string) ([]byte, error) {
+	if key == b.gone {
+		return nil, fault.NotFoundf("cleanupBucket.Get", "%s was deleted", key)
+	}
 	if key == b.f1 {
 		var err error
 		b.once.Do(func() {
@@ -843,45 +844,16 @@ func (b *cleanupBucket) Get(ctx context.Context, key string) ([]byte, error) {
 	return b.Bucket.Get(ctx, key)
 }
 
-// lakeCheckpoint is a DuckLake catalog.db over data path s3://lake-files/<prefix>/ naming files under main/t/.
-func lakeCheckpoint(t *testing.T, prefix string, files ...string) []byte {
-	t.Helper()
-	file := t.TempDir() + "/catalog.db"
-	db, err := sql.Open("sqlite", file)
-	require.NoError(t, err)
-	stmts := []string{
-		`CREATE TABLE ducklake_metadata (key VARCHAR, value VARCHAR)`,
-		`CREATE TABLE ducklake_schema (schema_id BIGINT, path VARCHAR, path_is_relative BOOLEAN)`,
-		`CREATE TABLE ducklake_table (table_id BIGINT, schema_id BIGINT, path VARCHAR, path_is_relative BOOLEAN)`,
-		`CREATE TABLE ducklake_data_file (table_id BIGINT, path VARCHAR, path_is_relative BOOLEAN)`,
-		`CREATE TABLE ducklake_delete_file (table_id BIGINT, path VARCHAR, path_is_relative BOOLEAN)`,
-		`INSERT INTO ducklake_metadata VALUES ('data_path', 's3://lake-files/` + prefix + `/')`,
-		`INSERT INTO ducklake_schema VALUES (0, 'main/', true)`,
-		`INSERT INTO ducklake_table VALUES (1, 0, 't/', true)`,
-	}
-	for _, f := range files {
-		stmts = append(stmts, `INSERT INTO ducklake_data_file VALUES (1, '`+f+`', true)`)
-	}
-	for _, s := range stmts {
-		_, err := db.Exec(s)
-		require.NoError(t, err, s)
-	}
-	require.NoError(t, db.Close())
-	data, err := os.ReadFile(file)
-	require.NoError(t, err)
-	return data
-}
-
-// scenario: lake-checkpoint-verified — lake lake whose checkpoint C1 names f1: a cleanup deleting f1 mid-copy
-// makes attempt 2 run, whose catalog.db is written after its files; a checkpoint naming a file no attempt finds
-// fails the Backup LakeUnstable after three attempts.
-func TestScenarioLakeCheckpointVerified(t *testing.T) {
+// scenario: lake-copy-unopened (ADR-0271) — the backup copies a lake's checkpoint as it is, never opening it: lake
+// lake loses f1 to a cleanup mid-copy, so attempt 2 runs, its files then its new catalog.db; lake lake-two lists a
+// key that vanishes at every read, which fails the Backup LakeUnstable after three attempts.
+func TestScenarioLakeCopyUnopened(t *testing.T) {
 	t.Parallel()
 	mem, err := gocloud.Open(context.Background(), "mem://")
 	require.NoError(t, err)
 	root := bucketPrefix("orders", "lake-files")
 	shared := &cleanupBucket{Bucket: mem, f1: root + "lake/main/t/f1.parquet", checkpoint: root + "lake/_ducklake/catalog.db",
-		next: lakeCheckpoint(t, "lake", "f2.parquet")}
+		gone: root + "lake-two/main/t/gone.parquet", next: []byte("a DuckDB catalog, opaque to the backup: C2")}
 	r := newWBRig(t, wbOptions{opts: []Option{WithBlob(shared)}, setup: func(r *wbRig) {
 		r.seed(&v1.Bucket{TypeMeta: tmeta(v1.KindBucket), ObjectMeta: ordersMeta("lake-files")})
 		for _, c := range []struct{ name, prefix string }{{"lake", "lake"}, {"lake-two", "lake-two"}} {
@@ -891,10 +863,11 @@ func TestScenarioLakeCheckpointVerified(t *testing.T) {
 			}})
 		}
 		for key, data := range map[string][]byte{
-			root + "lake/_ducklake/catalog.db":     lakeCheckpoint(t, "lake", "f1.parquet"),
+			root + "lake/_ducklake/catalog.db":     []byte("a DuckDB catalog, opaque to the backup: C1"),
 			root + "lake/main/t/f1.parquet":        []byte("f1"),
 			root + "lake/main/t/f2.parquet":        []byte("f2"),
-			root + "lake-two/_ducklake/catalog.db": lakeCheckpoint(t, "lake-two", "missing.parquet"),
+			root + "lake-two/_ducklake/catalog.db": []byte("a DuckDB catalog, opaque to the backup"),
+			root + "lake-two/main/t/gone.parquet":  []byte("gone"),
 		} {
 			require.NoError(t, mem.Put(r.ctx, key, data, blob.PutOptions{}))
 		}

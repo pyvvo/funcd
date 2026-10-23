@@ -2,12 +2,8 @@ package workload_test
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"io"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 
 	"filippo.io/age"
@@ -98,82 +94,6 @@ func TestObjectFrame(t *testing.T) {
 		_, _, _, err := workload.DecodeObject(bad)
 		require.Equal(t, fault.Invalid, fault.KindOf(err))
 	}
-}
-
-// lakeDB builds a DuckLake checkpoint: data path dataPath, schema main/ and table t/ relative, files as given.
-func lakeDB(t *testing.T, dataPath string, files ...[2]string) []byte {
-	t.Helper()
-	file := filepath.Join(t.TempDir(), "catalog.db")
-	db, err := sql.Open("sqlite", file)
-	require.NoError(t, err)
-	stmts := []string{
-		`CREATE TABLE ducklake_metadata (key VARCHAR, value VARCHAR, scope VARCHAR, scope_id BIGINT)`,
-		`CREATE TABLE ducklake_schema (schema_id BIGINT, schema_name VARCHAR, path VARCHAR, path_is_relative BOOLEAN)`,
-		`CREATE TABLE ducklake_table (table_id BIGINT, schema_id BIGINT, table_name VARCHAR, path VARCHAR, path_is_relative BOOLEAN)`,
-		`CREATE TABLE ducklake_data_file (data_file_id BIGINT, table_id BIGINT, path VARCHAR, path_is_relative BOOLEAN)`,
-		`CREATE TABLE ducklake_delete_file (delete_file_id BIGINT, table_id BIGINT, path VARCHAR, path_is_relative BOOLEAN)`,
-		`INSERT INTO ducklake_metadata VALUES ('data_path', '` + dataPath + `', NULL, NULL)`,
-		`INSERT INTO ducklake_schema VALUES (0, 'main', 'main/', true)`,
-		`INSERT INTO ducklake_table VALUES (1, 0, 't', 't/', true)`,
-		`INSERT INTO ducklake_table VALUES (1, 0, 't', 't/', true)`,
-	}
-	for i, f := range files {
-		table := "ducklake_data_file"
-		if strings.HasSuffix(f[0], ".delete") {
-			table = "ducklake_delete_file"
-		}
-		stmts = append(stmts, `INSERT INTO `+table+` VALUES (`+string(rune('0'+i))+`, 1, '`+f[0]+`', `+f[1]+`)`)
-	}
-	for _, s := range stmts {
-		_, err := db.Exec(s)
-		require.NoError(t, err, s)
-	}
-	require.NoError(t, db.Close())
-	data, err := os.ReadFile(file)
-	require.NoError(t, err)
-	return data
-}
-
-// TestLakeFilesRelative (Decision 5): a relative file resolves through its table, schema and the data path, an
-// absolute one under the data path is kept, both as keys relative to the data path, once each though the table has
-// two versions; an absolute path outside the data path is fault.Invalid.
-func TestLakeFilesRelative(t *testing.T) {
-	t.Parallel()
-	const dataPath = "s3://lake-files/lake/"
-	db := lakeDB(t, dataPath, [2]string{"f1.parquet", "true"}, [2]string{dataPath + "main/t/f2.parquet", "false"},
-		[2]string{"f1.delete", "true"})
-	got, err := workload.LakeFiles(db)
-	require.NoError(t, err)
-	require.Equal(t, []string{"main/t/f1.delete", "main/t/f1.parquet", "main/t/f2.parquet"}, got)
-	_, err = workload.LakeFiles(lakeDB(t, dataPath, [2]string{"s3://elsewhere/f.parquet", "false"}))
-	require.Equal(t, fault.Invalid, fault.KindOf(err))
-	_, err = workload.LakeFiles([]byte("not a database"))
-	require.Equal(t, fault.Invalid, fault.KindOf(err))
-}
-
-// TestLakeFilesDuckLake11Catalog (ADR-0263, scenario new-lake-is-1-1): on a real DuckLake 1.1 catalog, whose nested
-// schema's path is relative to the data path, LakeFiles lists every data and delete file the catalog names.
-func TestLakeFilesDuckLake11Catalog(t *testing.T) {
-	t.Parallel()
-	dump, err := os.ReadFile(filepath.Join("testdata", "ducklake-1.1.sql"))
-	require.NoError(t, err)
-	file := filepath.Join(t.TempDir(), "catalog.db")
-	db, err := sql.Open("sqlite", file)
-	require.NoError(t, err)
-	_, err = db.Exec(string(dump))
-	require.NoError(t, err)
-	require.NoError(t, db.Close())
-	data, err := os.ReadFile(file)
-	require.NoError(t, err)
-	got, err := workload.LakeFiles(data)
-	require.NoError(t, err)
-	require.Equal(t, []string{
-		"01a165d1-e106-7ee0-bd66-1ba8d6b7745a/orders/ducklake-01a165d1-e110-7c4c-9aef-70e974ee7193.parquet",
-		"01a165d1-e106-7ee0-bd66-1ba8d6b7745a/orders/ducklake-01a165d1-e123-759c-9f9e-c43550072ca6.parquet",
-		"01a165d1-e106-7ee0-bd66-1ba8d6b7745a/orders/ducklake-01a165d1-e130-79d5-9192-58346e4b7ce5-delete.parquet",
-		"main/t/ducklake-01a165d1-e0e7-7090-9981-758743caa803.parquet",
-		"main/t/ducklake-01a165d1-e12a-7fc8-a943-69bc3a1bed3a-delete.parquet",
-	}, got)
 }
 
 // A Write puts each member's parts and the manifest last, IfNotExist, sealed to two recipients; the manifest reads
