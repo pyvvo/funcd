@@ -84,6 +84,14 @@ type SQLLoader interface {
 	HasTables(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (bool, error)
 }
 
+// VolumeLoader loads, checks and clears a Function's local volume (ADR-0262 Decision 11); Load refuses Conflict when
+// the volume is not empty.
+type VolumeLoader interface {
+	Load(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName, archive io.Reader) error
+	IsEmpty(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName) (bool, error)
+	Clear(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName) error
+}
+
 // Hold is the daemon's hold (ADR-0206): the platform gate the runs wait on, the namespace gate the slots ask, and the
 // namespace hold an in-place Restore takes.
 type Hold interface {
@@ -103,6 +111,8 @@ type Deps struct {
 	KV      KVLoader
 	Purger  gc.BucketPurger
 	SQL     SQLLoader
+	// Volumes loads a Function's local volume (nil ⇒ a Restore of one fails).
+	Volumes VolumeLoader
 	// Hold nil is a platform never held, whose in-place Restore holds nothing.
 	Hold Hold
 	// StoreURL is the blob store's URL, blob.target or the file:// URL of blob.dir: a schedule on its provider is

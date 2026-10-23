@@ -2285,6 +2285,12 @@ components:
           type:
             - array
             - "null"
+        volumeOrphans:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
       required:
         - held
       type: object
@@ -10797,6 +10803,45 @@ paths:
           description: Error
       tags:
         - SQLDatabase
+  /apis/funcd.io/v1alpha1/namespaces/{namespace}/volumes/{function}/{name}:
+    delete:
+      operationId: deleteVolume
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: function
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+        - in: path
+          name: name
+          required: true
+          schema:
+            maxLength: 63
+            minLength: 1
+            pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/FaultError"
+          description: Error
+      tags:
+        - Function
   /apis/funcd.io/v1alpha1/namespaces/{namespace}/workflowruns:
     get:
       operationId: listWorkflowRuns

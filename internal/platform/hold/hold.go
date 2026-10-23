@@ -83,6 +83,7 @@ type Evidence struct {
 	Orphans           []string                  `json:"orphans,omitempty"`
 	BucketOrphans     []string                  `json:"bucketOrphans,omitempty"`
 	SQLOrphans        []string                  `json:"sqlOrphans,omitempty"`
+	VolumeOrphans     []string                  `json:"volumeOrphans,omitempty"` // "<ns>/<function>/<volume>" (ADR-0262)
 	FunctionsNotReady []string                  `json:"functionsNotReady,omitempty"`
 	Namespaces        []NamespaceHold           `json:"namespaces,omitempty"`
 }

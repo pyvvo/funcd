@@ -29,6 +29,7 @@ func (quietPlatform) Counts(context.Context) (map[v1.Kind]int, error)       { re
 func (quietPlatform) Orphans(context.Context) ([]string, error)             { return nil, nil }
 func (quietPlatform) BucketOrphans(context.Context) ([]v1.ObjectRef, error) { return nil, nil }
 func (quietPlatform) SQLOrphans(context.Context) ([]v1.ObjectRef, error)    { return nil, nil }
+func (quietPlatform) VolumeOrphans(context.Context) ([]v1.ObjectRef, error) { return nil, nil }
 func (quietPlatform) Advance(context.Context, v1.NamespaceName, v1.ObjectName) error {
 	return nil
 }

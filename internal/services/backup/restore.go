@@ -33,6 +33,8 @@ type target struct {
 	sql     v1.ObjectName
 	view    blob.Bucket
 	bucket  v1.ObjectName
+	volFn   v1.ObjectName // with volume: the Function whose local volume volume is loaded (ADR-0262)
+	volume  v1.ObjectName
 	written bool
 }
 
@@ -240,12 +242,12 @@ func (r *RestoreReconciler) plan(ctx context.Context, rs *v1.Restore, m workload
 		t := &target{member: mb}
 		i := -1
 		for j, mf := range m.Members {
-			if mf.Kind == mb.Kind && mf.Name == mb.Name {
+			if mf.Kind == mb.Kind && mf.Name == mb.Name && mf.Volume == mb.Volume {
 				i = j
 			}
 		}
 		if i < 0 {
-			return nil, ReasonMemberNotFound, fault.NotFoundf(op, "the Backup holds no %s/%s", mb.Kind, mb.Name)
+			return nil, ReasonMemberNotFound, fault.NotFoundf(op, "the Backup holds no %s/%s%s", mb.Kind, mb.Name, volumeSuffix(mb.Volume))
 		}
 		t.file = m.Members[i]
 		dest := mb.Name
@@ -263,6 +265,15 @@ func (r *RestoreReconciler) plan(ctx context.Context, rs *v1.Restore, m workload
 		case mb.Kind == v1.KindSQLDatabase:
 			_, err = r.d.Store.Get(ctx, v1.KindSQLDatabase.GVK(), ns, dest)
 			t.sql = dest
+		case mb.Kind == v1.KindFunction:
+			var obj v1.Object
+			if obj, err = r.d.Store.Get(ctx, v1.KindFunction.GVK(), ns, dest); err == nil {
+				f, _ := obj.(*v1.Function)
+				if f == nil || !slices.ContainsFunc(f.Spec.Volumes, func(v v1.VolumeEntry) bool { return v.Type == v1.VolumeLocal && v.VolumeName() == mb.Volume }) {
+					err = fault.NotFoundf(op, "function %s declares no local volume %s", dest, mb.Volume)
+				}
+			}
+			t.volFn, t.volume = dest, mb.Volume
 		case mb.AsLocation != nil:
 			_, err = r.d.Store.Get(ctx, v1.KindBucket.GVK(), ns, mb.AsLocation.Bucket)
 			t.view = blob.Prefixed(r.d.Sources.Blob, r.d.Sources.BucketPrefix(ns, mb.AsLocation.Bucket)+mb.AsLocation.Prefix+"/")
@@ -296,6 +307,12 @@ func (r *RestoreReconciler) plan(ctx context.Context, rs *v1.Restore, m workload
 // isEmpty reports a target with no data; a SQLDatabase also needs no Function binding it, which closes the race
 // between the check and the load (ADR-0234 Decision 3), and a Ready engine to answer.
 func (r *RestoreReconciler) isEmpty(ctx context.Context, ns v1.NamespaceName, t *target) (bool, error) {
+	if t.volume != "" {
+		if r.d.Volumes == nil {
+			return false, fault.Unavailablef("backup.Restore", "volumes are off: no volume loads")
+		}
+		return r.d.Volumes.IsEmpty(ctx, ns, t.volFn, t.volume)
+	}
 	if t.sql != "" {
 		if r.d.SQL == nil {
 			return false, fault.Unavailablef("backup.Restore", "no SQL engine loads a database")
@@ -327,6 +344,20 @@ func (r *RestoreReconciler) isEmpty(ctx context.Context, ns v1.NamespaceName, t 
 // file's records to the engine's load, which replaces all its data, objects by Put, a lake's files before its
 // catalog.db.
 func (r *RestoreReconciler) fill(ctx context.Context, ns v1.NamespaceName, t *target, src blob.Bucket, path string, unseal backup.Unseal) (string, error) {
+	if t.volume != "" {
+		// A volume loads only into an empty one, in place too (ADR-0262 Decision 11): it is never emptied first.
+		if r.d.Volumes == nil {
+			return reasonFailed, fault.Unavailablef("backup.Restore", "volumes are off: no volume loads")
+		}
+		err := r.d.Volumes.Load(ctx, ns, t.volFn, t.volume, &recordReader{next: workload.Records(ctx, src, path, t.file.Files[0], unseal)})
+		if fault.KindOf(err) == fault.Conflict {
+			return ReasonNotEmpty, err
+		}
+		if err != nil {
+			return reasonFailed, err
+		}
+		return "", nil
+	}
 	if t.sql != "" {
 		if r.d.SQL == nil {
 			return reasonFailed, fault.Unavailablef("backup.Restore", "no SQL engine loads a database")
@@ -391,6 +422,11 @@ func (r *RestoreReconciler) empty(ctx context.Context, ns v1.NamespaceName, targ
 // lake prefix key by key.
 func (r *RestoreReconciler) emptyOne(ctx context.Context, ns v1.NamespaceName, t *target) error {
 	switch {
+	case t.volume != "":
+		if r.d.Volumes == nil {
+			return nil
+		}
+		return r.d.Volumes.Clear(ctx, ns, t.volFn, t.volume)
 	case t.sql != "":
 		if r.d.SQL == nil {
 			return nil
@@ -467,4 +503,12 @@ func (r *RestoreReconciler) write(ctx context.Context, rs *v1.Restore) error {
 	return writeStatus(ctx, r.d.Store, v1.KindRestore, rs.Namespace, rs.Name, rs.UID, func(cur v1.Object) {
 		cur.(*v1.Restore).Status = rs.Status
 	})
+}
+
+// volumeSuffix names a Function member's volume in a message.
+func volumeSuffix(v v1.ObjectName) string {
+	if v == "" {
+		return ""
+	}
+	return " volume " + string(v)
 }

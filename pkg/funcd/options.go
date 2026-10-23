@@ -32,6 +32,7 @@ import (
 	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/volume"
 	"github.com/pyvvo/funcd/internal/workflow"
 )
 
@@ -504,6 +505,16 @@ func WithWorkflowRuntimeResolver(r workflow.RuntimeResolver) Option {
 // obs runs on the log-routing goroutine and must not block.
 func WithLogObserver(obs LogObserver) Option {
 	return func(c *config) error { c.logObserver = obs; return nil }
+}
+
+// WithFunctionVolumes turns the Functions' volumes on (ADR-0262) with the manager's root, Limiter, capacity and pacing;
+// the platform adds the namespace budget, the holder and the logger. Without it a Function with a volume is refused
+// VolumesOff. ephemeral marks a root that does not outlive the daemon (storage.mode memory): DataMissing is never set.
+func WithFunctionVolumes(o volume.Options, ephemeral bool) Option {
+	return func(c *config) error {
+		c.functionVolumes, c.functionVolumesEphemeral = &o, ephemeral
+		return nil
+	}
 }
 
 // WithProviderStorage sets the add-on engines' storage root (ADR-0231); "" keeps durable storage off.

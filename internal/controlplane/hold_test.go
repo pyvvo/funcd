@@ -37,6 +37,9 @@ func (*holdPlatform) BucketOrphans(context.Context) ([]v1.ObjectRef, error) { re
 func (*holdPlatform) SQLOrphans(context.Context) ([]v1.ObjectRef, error) {
 	return []v1.ObjectRef{{Kind: v1.KindSQLDatabase, Namespace: "default", Name: "gone-db"}}, nil
 }
+func (*holdPlatform) VolumeOrphans(context.Context) ([]v1.ObjectRef, error) {
+	return []v1.ObjectRef{{Kind: v1.KindFunction, Namespace: "default", Name: "gone/state"}}, nil
+}
 
 func (p *holdPlatform) Advance(_ context.Context, ns v1.NamespaceName, source v1.ObjectName) error {
 	if p.failAdvance {
@@ -106,6 +109,7 @@ func TestReleaseRefuses(t *testing.T) {
 	require.Equal(t, map[string]int{"new": 2}, ev.Pending["team-a/files"])
 	require.Equal(t, []string{"default/gone/"}, ev.Orphans)
 	require.Equal(t, []string{"default/gone-db"}, ev.SQLOrphans, "ADR-0232: a held database directory with no object")
+	require.Equal(t, []string{"default/gone/state"}, ev.VolumeOrphans, "ADR-0262: a held local volume with no Function")
 
 	p.failAdvance = true
 	require.Equal(t, http.StatusServiceUnavailable, do(t, srv, http.MethodPost, release, adminToken, releaseBody(t, "team-a/files")).Code)

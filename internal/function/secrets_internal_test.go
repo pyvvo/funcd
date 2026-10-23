@@ -61,7 +61,7 @@ func sampleFn() *v1.Function {
 // mustWorkerSpec is replica 0's workerSpec with bindEnv, for a test whose spec builds.
 func mustWorkerSpec(t *testing.T, r *Reconciler, fn *v1.Function, artifactPath string, bindEnv envresolve.Resolved, lakeEnv map[string]string) runtime.WorkerSpec {
 	t.Helper()
-	spec, err := r.workerSpec(fn, 0, artifactPath, bindEnv, lakeEnv)
+	spec, err := r.workerSpec(t.Context(), fn, "", 0, artifactPath, bindEnv, lakeEnv)
 	require.NoError(t, err)
 	return spec
 }
@@ -147,7 +147,7 @@ func TestSecretNames(t *testing.T) {
 func TestWorkerSpecWritesBindingKeyLists(t *testing.T) {
 	t.Parallel()
 	r := newShimReconciler(t, fakeResolver{})
-	spec, err := r.workerSpec(sampleFn(), 0, "/art/app.mjs", envresolve.Resolved{
+	spec, err := r.workerSpec(t.Context(), sampleFn(), "", 0, "/art/app.mjs", envresolve.Resolved{
 		Env:        map[string]string{"LOG_LEVEL": "debug", "MODE": "prod", "STRIPE_KEY": "sk"},
 		ConfigKeys: []string{"LOG_LEVEL"},
 		SecretKeys: []string{"MODE", "STRIPE_KEY"},

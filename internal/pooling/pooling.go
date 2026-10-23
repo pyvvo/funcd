@@ -13,6 +13,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -87,6 +88,7 @@ func AccessHashOf(spec v1.FunctionSpec, owned, grants []string) string {
 	for _, l := range spec.Bindings.Links {
 		doc.Links = append(doc.Links, accessLink{Alias: l.Alias, Target: l.Target})
 	}
+
 	sort.SliceStable(doc.KV, func(i, j int) bool { return doc.KV[i].Alias < doc.KV[j].Alias })
 	sort.SliceStable(doc.Blob, func(i, j int) bool { return doc.Blob[i].Alias < doc.Blob[j].Alias })
 	sort.SliceStable(doc.Lakes, func(i, j int) bool { return doc.Lakes[i].Alias < doc.Lakes[j].Alias })
@@ -132,6 +134,10 @@ func KeyOf(fn *v1.Function, owned, grants []string) (PoolKey, bool) {
 	w := fn.Spec.Pooling.Worker
 	if w == "" {
 		return PoolKey{}, false
+	}
+	// A Function's own volumes are owned data no other Function has (ADR-0262 Decision 9), so it shares no process.
+	for _, v := range fn.Spec.Volumes {
+		owned = append(slices.Clip(owned), "volume/"+string(fn.Name)+"/"+string(v.VolumeName()))
 	}
 	return PoolKey{Namespace: fn.Namespace, Runtime: string(fn.Spec.Runtime), Worker: w, AccessHash: AccessHashOf(fn.Spec, owned, grants)}, true
 }

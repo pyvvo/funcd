@@ -95,6 +95,7 @@ import (
 	"github.com/pyvvo/funcd/internal/site"
 	"github.com/pyvvo/funcd/internal/snapshot"
 	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/volume"
 	"github.com/pyvvo/funcd/internal/workernode/local"
 	"github.com/pyvvo/funcd/internal/workflow"
 	"github.com/pyvvo/funcd/internal/workflow/runstate"
@@ -307,6 +308,10 @@ type config struct {
 	// bridge address, else a free loopback port bound by New (ADR-0260).
 	sqlChangeFeedPort int
 
+	// functionVolumes turns the Functions' volumes on (ADR-0262); nil ⇒ off. functionVolumesEphemeral marks a root that
+	// does not outlive the daemon (storage.mode memory), where DataMissing is never set.
+	functionVolumes          *volume.Options
+	functionVolumesEphemeral bool
 	// providerStorage is the root of the add-on engines' durable directories (ADR-0231); "" ⇒ none.
 	providerStorage string
 	// providerStorageEphemeral is a root that does not outlive the daemon (storage.mode memory), so a missing engine
@@ -458,6 +463,7 @@ func (c *config) validate() error {
 type Platform struct {
 	cfg          *config
 	fnReconciler *function.Reconciler // the Function reconciler; Shutdown removes its private pool manifest dir
+	volumes      volume.Manager       // the Functions' volumes (ADR-0262); nil ⇒ off
 	logger       *slog.Logger
 	providers    *provider.Catalog // the platform provider catalog (ADR-0082)
 
@@ -865,6 +871,9 @@ func (p *Platform) buildControlPlane() error {
 	// ADR-0143: one tracker counts every call to a worker — the activator's proxy, the Sensor invoker and the workflow
 	// dispatcher send through it — so the reconciler can tell when a demoted revision's worker is drained.
 	calls := activator.NewCallTracker(clock.System())
+	if err := p.openVolumes(); err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "open the Function volumes")
+	}
 	fnReconciler, err := function.NewReconciler(function.Deps{
 		Store:                c.store,
 		LogMaxRecordBytes:    cmp.Or(c.funclogMaxRecordBytes, funclog.DefaultMaxRecordBytes),
@@ -902,6 +911,9 @@ func (p *Platform) buildControlPlane() error {
 		LakeExtensionDir:     c.lakeExtensionDir,
 		LakeProxies:          lakeMgr,
 		Secrets:              secretResolver,
+		Volumes:              p.volumes,
+		VolumesDurable:       p.volumes != nil && !c.functionVolumesEphemeral,
+		Hold:                 c.gate(),
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build function reconciler")
@@ -1008,6 +1020,7 @@ func (p *Platform) buildControlPlane() error {
 	p.fnReconciler = fnReconciler
 	// a held revision's wake or reclaim is written to its Revision's status (ADR-0190 Decision 5)
 	ctrl.Watches(v1.KindRevision.GVK(), fnReconciler.MapRevision)
+	ctrl.Watches(v1.KindRestore.GVK(), fnReconciler.MapRestore) // a Restore into a volume clears DataMissing (ADR-0262)
 	// a change to what a namespace grants its Functions can move a pooled one to another pool
 	for _, k := range []v1.Kind{v1.KindKVStore, v1.KindBucket, v1.KindSQLDatabase, v1.KindRolesAssignment, v1.KindEgressPolicy, v1.KindPolicy} {
 		ctrl.Watches(k.GVK(), fnReconciler.MapAccess)
@@ -1345,6 +1358,8 @@ func (p *Platform) buildControlPlane() error {
 			// owner to it and its config bindings name the stored ConfigMaps.
 			admission.NewBindingDeclaredAdmission(r),
 			admission.NewFunctionStoreOwnerAdmission(),
+			// ADR-0262: volumes off refuse a Function with one; on, its local volumes are booked at apply.
+			admission.NewFunctionVolumesAdmission(p.volumeBooker()),
 			admission.NewLakeStoreOwnerAdmission(),
 			// ADR-0094 WorkflowRun payload cap: spec.input ≤ payloadLimit (larger data by reference).
 			admission.NewWorkflowRunPayloadAdmission(c.workflowPayloadLimit),
@@ -1395,6 +1410,7 @@ func (p *Platform) buildControlPlane() error {
 		Collector:   p.collector,             // ADR-0170: a forced ResourceGroup delete collects the members' children
 		AppRetrier:  appReconciler,           // ADR-0214: retry an App's failed hook
 		Planner:     app.NewPlanner(c.store), // ADR-0220: a dry-run App write's plan
+		Volumes:     p.volumeDeleter(),       // ADR-0262: delete a retained Function volume
 		Hold: controlplane.NewHoldService(controlplane.HoldDeps{ // ADR-0206: the hold's evidence and release
 			Hold: c.hold, Store: c.store, DeadLetters: dlq, Platform: holdPlatform{p},
 		}),
@@ -1644,6 +1660,11 @@ func (p *Platform) Run(ctx context.Context) error {
 		if err := p.sqlReconciler.ReclaimOrphans(ctx); err != nil && ctx.Err() == nil {
 			p.logger.WarnContext(ctx, "reclaim of deleted SQL databases incomplete", "error", err)
 		}
+		// ADR-0262 Decision 8: no worker survives a restart, so emptyDirs go; volumes of deleted Functions follow their
+		// deletion policy.
+		if err := p.fnReconciler.ReclaimVolumes(ctx); err != nil && ctx.Err() == nil {
+			p.logger.WarnContext(ctx, "reclaim of Function volumes incomplete", "error", err)
+		}
 	}
 
 	// ADR-0176 Decision 6: the edge aggregator holds every lake entry until "routes" has Set once, and no
@@ -1675,6 +1696,13 @@ func (p *Platform) Run(ctx context.Context) error {
 			p.logger.ErrorContext(ctx, "eventing stopped", "error", err)
 		}
 	}()
+	if p.volumes != nil { // ADR-0262 Decision 10: funcdctl dev measures the volumes it cannot limit
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			volume.Run(ctx, p.volumes)
+		}()
+	}
 	if p.sqlFeed != nil { // ADR-0235: the engines' change feed (closes on ctx cancel)
 		wg.Add(2)
 		go func() {
@@ -2375,6 +2403,10 @@ func (p *Platform) registerWorkloadBackups(ctrl *controller.Controller, secrets 
 	if c.hold != nil {
 		d.Hold = c.hold
 	}
+	if p.volumes != nil { // ADR-0262 Decision 11: a Function's local volume is a workload backup member
+		vl := volumeLoader{p.volumes}
+		d.Sources.Volume, d.Volumes = vl.Source, vl
+	}
 	rs, err := backupsvc.New(d)
 	if err != nil {
 		return err
@@ -2504,6 +2536,10 @@ func (h holdPlatform) SQLOrphans(ctx context.Context) ([]v1.ObjectRef, error) {
 	return h.p.sqlReconciler.Orphans(ctx)
 }
 
+func (h holdPlatform) VolumeOrphans(ctx context.Context) ([]v1.ObjectRef, error) {
+	return h.p.fnReconciler.VolumeOrphans(ctx)
+}
+
 func (h holdPlatform) Advance(ctx context.Context, ns v1.NamespaceName, source v1.ObjectName) error {
 	return h.p.blobWatcher.Advance(ctx, ns, source)
 }
@@ -2575,4 +2611,89 @@ func (p kvProber) HasAny(ctx context.Context, prefix string) (bool, error) {
 // X-Funcd-Timeout-Ms so a pool's timer follows it (ADR-0151).
 func workerClient(calls *activator.CallTracker, timeout time.Duration) *http.Client {
 	return &http.Client{Transport: activator.DeadlineTransport(calls.Wrap(nil)), Timeout: timeout}
+}
+
+// openVolumes opens the Functions' volume manager when WithFunctionVolumes turned volumes on (ADR-0262), with the
+// namespace budget read from each Namespace and the holder read from each Function.
+func (p *Platform) openVolumes() error {
+	c := p.cfg
+	if c.functionVolumes == nil {
+		return nil
+	}
+	o := *c.functionVolumes
+	o.Logger = p.logger.With("component", "volume")
+	o.Budget = func(ctx context.Context, ns v1.NamespaceName) (int64, error) {
+		obj, err := c.store.Get(ctx, v1.KindNamespace.GVK(), "", v1.ObjectName(ns))
+		if fault.KindOf(err) == fault.NotFound {
+			return 0, nil
+		}
+		if err != nil {
+			return 0, fault.Wrapf(err, fault.KindOf(err), "funcd.volumeBudget", "get namespace %q", ns)
+		}
+		if n, ok := obj.(*v1.Namespace); ok {
+			return n.Spec.VolumeBudgetBytes, nil
+		}
+		return 0, nil
+	}
+	o.Holder = func(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName) (v1.UID, bool, error) {
+		obj, err := c.store.Get(ctx, v1.KindFunction.GVK(), ns, fn)
+		if fault.KindOf(err) == fault.NotFound {
+			return "", false, nil
+		}
+		if err != nil {
+			return "", false, fault.Wrapf(err, fault.KindOf(err), "funcd.volumeHolder", "get function %s/%s", ns, fn)
+		}
+		return obj.GetObjectMeta().UID, true, nil
+	}
+	m, err := volume.New(o)
+	if err != nil {
+		return err
+	}
+	p.volumes = m
+	return nil
+}
+
+// volumeBooker is the function-volumes admission's booker: nil (volumes off) without a manager.
+func (p *Platform) volumeBooker() admission.VolumeBooker {
+	if p.volumes == nil {
+		return nil
+	}
+	return volumeBooker{p.volumes}
+}
+
+type volumeBooker struct{ m volume.Manager }
+
+func (b volumeBooker) Book(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName, sizeBytes int64) error {
+	return b.m.Book(ctx, volume.ID{Namespace: ns, Function: fn, Name: name}, sizeBytes)
+}
+
+// volumeLoader adapts the volume manager to the workload backups (ADR-0262 Decision 11).
+type volumeLoader struct{ m volume.Manager }
+
+func vid(ns v1.NamespaceName, fn, name v1.ObjectName) volume.ID {
+	return volume.ID{Namespace: ns, Function: fn, Name: name}
+}
+
+func (l volumeLoader) Source(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName) (io.ReadCloser, error) {
+	return l.m.Tar(ctx, vid(ns, fn, name))
+}
+
+func (l volumeLoader) Load(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName, archive io.Reader) error {
+	return l.m.Untar(ctx, vid(ns, fn, name), archive)
+}
+
+func (l volumeLoader) IsEmpty(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName) (bool, error) {
+	return l.m.Empty(ctx, vid(ns, fn, name))
+}
+
+func (l volumeLoader) Clear(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName) error {
+	return l.m.Clear(ctx, vid(ns, fn, name))
+}
+
+// volumeDeleter is the volume route's deleter: nil (no route) while volumes are off.
+func (p *Platform) volumeDeleter() controlplane.VolumeDeleter {
+	if p.volumes == nil {
+		return nil
+	}
+	return p.fnReconciler
 }

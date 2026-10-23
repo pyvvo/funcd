@@ -61,6 +61,7 @@ import (
 	sqlembedengine "github.com/pyvvo/funcd/internal/sql/embedengine"
 	"github.com/pyvvo/funcd/internal/store"
 	badgerstore "github.com/pyvvo/funcd/internal/store/badger"
+	"github.com/pyvvo/funcd/internal/volume"
 	"github.com/pyvvo/funcd/pkg/funcd"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
@@ -1039,6 +1040,11 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, folder *devFold
 		return nil, sqlerr
 	}
 	opts = append(opts, sqlOpts...)
+	volOpts, volerr := devVolumeOptions(plan, cfg.pace.volumeMeasure, inst)
+	if volerr != nil {
+		return nil, volerr
+	}
+	opts = append(opts, volOpts...)
 
 	// Stream function logs to the terminal in real time (Decision 6, dev UX): tee every captured log
 	// line to the printer. A mutex keeps concurrent functions' lines from interleaving.
@@ -1146,6 +1152,22 @@ func devSQLOptions(plan persistPlan, stateDir string, inst *devInstance) ([]func
 	}
 	inst.cleanup = append(inst.cleanup, eng.StopAll)
 	return []funcd.Option{funcd.WithSQLProviderRuntime(eng)}, nil
+}
+
+// devVolumeOptions turns the Functions' volumes on in dev (ADR-0262 Decision 10): each volume is a plain directory, under
+// --persist's root or a temporary one removed on exit, measured every interval and warned about past its size, since
+// dev runs as the developer and mounts nothing.
+func devVolumeOptions(plan persistPlan, interval time.Duration, inst *devInstance) ([]funcd.Option, error) {
+	root, ephemeral := plan.volumeDir, plan.volumeDir == ""
+	if ephemeral {
+		dir, err := os.MkdirTemp("", "funcd-dev-volumes-")
+		if err != nil {
+			return nil, fault.Wrapf(err, fault.Internal, "funcdctl dev", "create the temporary volume root")
+		}
+		inst.cleanup = append(inst.cleanup, func() { _ = os.RemoveAll(dir) })
+		root = dir
+	}
+	return []funcd.Option{funcd.WithFunctionVolumes(volume.Options{Root: root, Limiter: volume.MeasureOnly(), MeasureInterval: interval}, ephemeral)}, nil
 }
 
 // checkFixedPorts refuses two equal fixed listen ports (--gport / --s3port / --cport; 0 is the ephemeral free
@@ -1258,6 +1280,7 @@ type persistPlan struct {
 	blobDir   string // durable blob (fileblob); "" ⇒ mem://
 	lakeDir   string // durable DuckLake SQLite catalog root (devengine); "" ⇒ ephemeral temp
 	sqlDir    string // durable SQL engines' data root (ADR-0237); "" ⇒ ephemeral temp
+	volumeDir string // durable Function volumes' root (ADR-0262); "" ⇒ ephemeral temp
 	bundleDir string // isolated functions' bundles, the same path on every run (#1053); "" ⇒ a temp dir per run
 }
 
@@ -1320,6 +1343,7 @@ func resolvePersistPlan(cfg devConfig) (persistPlan, error) {
 		blobDir:   filepath.Join(absRoot, "blob"),
 		lakeDir:   filepath.Join(absRoot, "lake"),
 		sqlDir:    filepath.Join(absRoot, "sql"),
+		volumeDir: filepath.Join(absRoot, "volumes"),
 		bundleDir: filepath.Join(absRoot, "bundles"),
 	}, nil
 }

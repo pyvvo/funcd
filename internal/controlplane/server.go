@@ -50,6 +50,9 @@ type Deps struct {
 	// Planner plans a dry-run App write (ADR-0220). Optional; nil ⇒ a dry-run App create or replace answers
 	// fault.Unavailable.
 	Planner AppPlanner
+	// Volumes removes a retained Function volume (ADR-0262). Optional; when set, NewServer registers DELETE
+	// …/volumes/{function}/{name}.
+	Volumes VolumeDeleter
 }
 
 // OwnerCollector collects the dead-owned children of a namespace (internal/gc.Collector, ADR-0170).
@@ -98,6 +101,9 @@ func NewServer(d Deps) (http.Handler, error) {
 	// ADR-0206: the hold's evidence and its release, admin-only.
 	if d.Hold != nil {
 		RegisterHold(api, d.Hold, d.Authorizer)
+	}
+	if d.Volumes != nil {
+		RegisterVolumes(api, d.Volumes, d.Authorizer)
 	}
 	logger.Info("control-plane API server constructed", "component", "controlplane")
 	return r, nil

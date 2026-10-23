@@ -32,6 +32,9 @@ const (
 	devHandOutSettle    = 250 * time.Millisecond
 	devBlobPollInterval = time.Second
 	devSegmentMaxAge    = time.Second
+	// devVolumeMeasureInterval paces dev's volume measurement (ADR-0262 Decision 10): dev cannot limit a volume, so it
+	// warns within this long of a volume passing its size.
+	devVolumeMeasureInterval = 30 * time.Second
 )
 
 // devFileKeys are the keys under dev (ADR-0254 Contracts), dev's flags in camelCase.
@@ -72,6 +75,10 @@ type devFilePlatform struct {
 	Funclog struct {
 		SegmentMaxAge string `yaml:"segmentMaxAge"`
 	} `yaml:"funclog"`
+	// Volumes paces dev's measurement of each Function volume against its size (ADR-0262 Decision 10).
+	Volumes struct {
+		MeasureInterval string `yaml:"measureInterval"`
+	} `yaml:"volumes"`
 }
 
 // envFileKeyFormat is an envFile line's KEY: an environment variable name.
@@ -88,20 +95,21 @@ func devFileKeyNames() []string {
 
 // devPlatformKeys are the FuncdConfig keys platform takes (Decision 4).
 func devPlatformKeys() []string {
-	return []string{"runtime.handOutSettle", "eventing.blobPollInterval", "funclog.segmentMaxAge"}
+	return []string{"runtime.handOutSettle", "eventing.blobPollInterval", "funclog.segmentMaxAge", "volumes.measureInterval"}
 }
 
 // devReloadKeys are the keys whose change reloads; any other needs a restart (Decision 6).
 func devReloadKeys() []string { return []string{"build", "values", "apply", "env"} }
 
-// devPace is the three cadences dev's platform runs with.
+// devPace is the cadences dev's platform runs with.
 type devPace struct {
-	handOutSettle, blobPollInterval, segmentMaxAge time.Duration
+	handOutSettle, blobPollInterval, segmentMaxAge, volumeMeasure time.Duration
 }
 
 // defaultDevPace is Decision 4's defaults.
 func defaultDevPace() devPace {
-	return devPace{handOutSettle: devHandOutSettle, blobPollInterval: devBlobPollInterval, segmentMaxAge: devSegmentMaxAge}
+	return devPace{handOutSettle: devHandOutSettle, blobPollInterval: devBlobPollInterval, segmentMaxAge: devSegmentMaxAge,
+		volumeMeasure: devVolumeMeasureInterval}
 }
 
 // devSecretSources are where a declared Secret that no document defines takes each key's value (ADR-0254 Decision 5):
@@ -227,7 +235,7 @@ func decodeDevFile(op string, data []byte) (devFileKeys, error) {
 // checkPlatformKeys refuses any leaf under platform that is not one of Decision 4's three keys.
 func checkPlatformKeys(op string, n *yamlv3.Node, prefix string) error {
 	refuse := func(key string) error {
-		return fault.Invalidf(op, "%s: platform takes runtime.handOutSettle, eventing.blobPollInterval and funclog.segmentMaxAge, not %s",
+		return fault.Invalidf(op, "%s: platform takes runtime.handOutSettle, eventing.blobPollInterval, funclog.segmentMaxAge and volumes.measureInterval, not %s",
 			devConfigFile, key)
 	}
 	if n.Kind != yamlv3.MappingNode {
@@ -297,6 +305,7 @@ func (k devFileKeys) pace(op string) (devPace, error) {
 		{"runtime.handOutSettle", k.Platform.Runtime.HandOutSettle, &p.handOutSettle},
 		{"eventing.blobPollInterval", k.Platform.Eventing.BlobPollInterval, &p.blobPollInterval},
 		{"funclog.segmentMaxAge", k.Platform.Funclog.SegmentMaxAge, &p.segmentMaxAge},
+		{"volumes.measureInterval", k.Platform.Volumes.MeasureInterval, &p.volumeMeasure},
 	} {
 		if d.val == "" {
 			continue
@@ -557,6 +566,7 @@ func changedDevKeys(a, b devFileKeys) []string {
 		{"platform.runtime.handOutSettle", a.Platform.Runtime.HandOutSettle == b.Platform.Runtime.HandOutSettle},
 		{"platform.eventing.blobPollInterval", a.Platform.Eventing.BlobPollInterval == b.Platform.Eventing.BlobPollInterval},
 		{"platform.funclog.segmentMaxAge", a.Platform.Funclog.SegmentMaxAge == b.Platform.Funclog.SegmentMaxAge},
+		{"platform.volumes.measureInterval", a.Platform.Volumes.MeasureInterval == b.Platform.Volumes.MeasureInterval},
 		{"watch", slices.Equal(a.Watch, b.Watch)}, {"liveReload", a.LiveReload == b.LiveReload},
 	} {
 		if !c.same {

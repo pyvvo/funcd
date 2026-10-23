@@ -246,6 +246,10 @@ log:
 #   callTimeout: 30s              # bound of one context.sql call (ADR-0233), also the engine's db_timeout. default: 30s
 #   changeFeedPort: 7075          # where the engines post their changes (ADR-0235). default: 7075 on the bridge address, a free port on loopback (ADR-0260)
 
+# --- volumes: Function volumes (ADR-0262) -------------------------------------------------------
+# volumes:
+#   capacityBytes: 10737418240    # the one volume image on containerd, preallocated at <dataDir>/volumes.img. default: 0, volumes off
+
 # --- site: declarative static web apps (ADR-0139) ----------------------------------------------
 # site:
 #   defaultIndex: index.html      # document served for "/" when a Site sets no spec.index. default: index.html

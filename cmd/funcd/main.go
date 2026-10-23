@@ -65,6 +65,8 @@ import (
 	"github.com/pyvvo/funcd/internal/store"
 	badgerstore "github.com/pyvvo/funcd/internal/store/badger"
 	"github.com/pyvvo/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/internal/volume"
+	"github.com/pyvvo/funcd/internal/volume/quotafs"
 	"github.com/pyvvo/funcd/pkg/funcd"
 )
 
@@ -1455,13 +1457,45 @@ func containerdOptions(ctx context.Context, cfg config.Config, logger *slog.Logg
 		_ = mgr.Close()
 		return nil, noopClose, err
 	}
-	closer := func() error { return errors.Join(mgr.Close(), closeRoot()) }
+	volOpts, closeVolumes, err := functionVolumes(ctx, cfg)
+	if err != nil {
+		_ = mgr.Close()
+		_ = closeRoot()
+		return nil, noopClose, err
+	}
+	closer := func() error { return errors.Join(mgr.Close(), closeVolumes(), closeRoot()) }
 	opts := []funcd.Option{funcd.WithRuntime(cd), funcd.WithContainerExecution(mgrCfg.ImageFor(c.ImagePrefix)),
 		funcd.WithProviderStorage(root)}
 	if cfg.Storage.Mode == "memory" {
 		opts = append(opts, funcd.WithEphemeralProviderStorage())
 	}
-	return opts, closer, nil
+	return append(opts, volOpts...), closer, nil
+}
+
+// functionVolumes opens the volume image on the containerd runtime when volumes.capacityBytes is set (ADR-0262 Decision
+// 3): <dataDir>/volumes.img mounted at <dataDir>/volumes, or under storage.mode memory in a temporary directory the
+// closer removes. Without the key volumes stay off; the process runtime never calls it, so a daemon there refuses them.
+func functionVolumes(ctx context.Context, cfg config.Config) ([]funcd.Option, func() error, error) {
+	capacity := cfg.Volumes.CapacityBytes
+	if capacity == 0 {
+		return nil, noopClose, nil
+	}
+	dir, cleanup := cfg.Storage.DataDir, noopClose
+	ephemeral := cfg.Storage.Mode == "memory"
+	if ephemeral {
+		tmp, err := os.MkdirTemp("", "funcd-volumes-")
+		if err != nil {
+			return nil, noopClose, fmt.Errorf("create the temporary volume directory: %w", err)
+		}
+		dir, cleanup = tmp, func() error { return os.RemoveAll(tmp) }
+	}
+	fs, err := quotafs.Open(ctx, quotafs.Config{Image: filepath.Join(dir, "volumes.img"), Mount: filepath.Join(dir, "volumes"), CapacityBytes: capacity})
+	if err != nil {
+		_ = cleanup()
+		return nil, noopClose, fmt.Errorf("open the volume image (volumes.capacityBytes): %w", err)
+	}
+	opt := funcd.WithFunctionVolumes(volume.Options{Root: fs.Root(), Limiter: fs, CapacityBytes: capacity}, ephemeral)
+	return []funcd.Option{opt}, func() error { return errors.Join(fs.Close(), cleanup()) }, nil
 }
 
 // providerStorageRoot is the add-on engines' storage root on the containerd runtime (ADR-0231 Decision 5):

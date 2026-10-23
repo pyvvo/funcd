@@ -131,10 +131,11 @@ func TestSpecGeneratedFromGo(t *testing.T) {
 	api := controlplane.NewAPI(r, h)
 	controlplane.RegisterStubLogs(api)            // ADR-0084: the logs route is part of the committed spec
 	controlplane.RegisterStubWorkflowRunLogs(api) // ADR-0106: the run-scoped logs route is part of the committed spec
-	controlplane.RegisterStubDeadLetters(api)     // ADR-0118: the DLQ read + replay/discard routes are part of the committed spec
-	controlplane.RegisterStubAppRetry(api)        // ADR-0214: the App retry route is part of the committed spec
-	controlplane.RegisterStubPlatformBackup(api)  // ADR-0205: the platform backup status route
-	controlplane.RegisterStubHold(api)            // ADR-0206: the hold status + release routes are part of the committed spec
+	controlplane.RegisterStubVolumes(api)
+	controlplane.RegisterStubDeadLetters(api)    // ADR-0118: the DLQ read + replay/discard routes are part of the committed spec
+	controlplane.RegisterStubAppRetry(api)       // ADR-0214: the App retry route is part of the committed spec
+	controlplane.RegisterStubPlatformBackup(api) // ADR-0205: the platform backup status route
+	controlplane.RegisterStubHold(api)           // ADR-0206: the hold status + release routes are part of the committed spec
 
 	raw, err := api.OpenAPI().YAML()
 	if err != nil {

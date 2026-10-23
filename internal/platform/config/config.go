@@ -398,6 +398,12 @@ type Config struct {
 		ChangeFeedPort int `json:"changeFeedPort,omitempty" env:"FUNCD_SQL_CHANGE_FEED_PORT" validate:"min=0,max=65535"`
 	} `json:"sql,omitempty"`
 
+	// Volumes turns the Functions' volumes on (ADR-0262 Decision 3): CapacityBytes is the size of the one volume image
+	// on the containerd runtime, preallocated at <storage.dataDir>/volumes.img; 0 ⇒ volumes off.
+	Volumes struct {
+		CapacityBytes int64 `json:"capacityBytes,omitempty" env:"FUNCD_VOLUMES_CAPACITY_BYTES" validate:"min=0"`
+	} `json:"volumes,omitempty"`
+
 	// App tunes the App reconciler (ADR-0200). UpgradeTimeout bounds an upgrade, a duration more than
 	// runtime.bootTimeout; empty ⇒ max(5m, twice runtime.bootTimeout), derived in cmd/funcd. RevisionHistory is the
 	// number of AppRevisions an App keeps besides its current one.

@@ -62,6 +62,8 @@ type Manager interface {
 	List(ctx context.Context) ([]Info, error)              // every volume with a leaf, local and emptyDir
 	Tar(ctx context.Context, id ID) (io.ReadCloser, error) // the backup member stream
 	Untar(ctx context.Context, id ID, r io.Reader) error   // Conflict when the leaf is not empty
+	Empty(ctx context.Context, id ID) (bool, error)        // the leaf holds no entry; NotFound with no leaf
+	Clear(ctx context.Context, id ID) error                // removes the leaf's entries, after a failed load
 }
 
 // Sentinels the reconciler maps to reasons (ADR-0262 Decisions 5 and 7).
@@ -460,6 +462,36 @@ func (m *manager) Release(_ context.Context, id ID) error {
 		return fault.Wrapf(err, fault.Internal, op, "remove the meta of volume %s", id)
 	}
 	delete(m.bookings, id)
+	return nil
+}
+
+func (m *manager) Empty(_ context.Context, id ID) (bool, error) {
+	const op = "volume.Empty"
+	if err := m.validID(op, id); err != nil {
+		return false, err
+	}
+	ents, err := os.ReadDir(m.leaf(id))
+	if err != nil {
+		return false, fault.Wrapf(err, openKind(err), op, "open volume %s", id)
+	}
+	return len(ents) == 0, nil
+}
+
+func (m *manager) Clear(_ context.Context, id ID) error {
+	const op = "volume.Clear"
+	if err := m.validID(op, id); err != nil {
+		return err
+	}
+	dir := m.leaf(id)
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return fault.Wrapf(err, openKind(err), op, "open volume %s", id)
+	}
+	for _, e := range ents {
+		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+			return fault.Wrapf(err, fault.Internal, op, "clear volume %s", id)
+		}
+	}
 	return nil
 }
 

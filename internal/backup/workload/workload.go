@@ -60,6 +60,7 @@ type Member struct {
 	Kind     v1.Kind
 	Name     v1.ObjectName
 	Location v1.LakeLocation
+	Volume   v1.ObjectName // with Kind Function: the Function's local volume (ADR-0262 Decision 11)
 }
 
 // Sources are what Write reads: the KV driver's per-store export (ADR-0209 SnapshotPrefix; nil when the driver offers
@@ -71,6 +72,8 @@ type Sources struct {
 	Blob         blob.Bucket
 	BucketPrefix func(ns v1.NamespaceName, b v1.ObjectName) string
 	SQL          func(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (io.ReadCloser, error)
+	// Volume is a Function's local volume as a tar, read live (ADR-0262 Decision 11); nil ⇒ no volume members.
+	Volume func(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName) (io.ReadCloser, error)
 }
 
 // Options are where Write puts the copy and to whom it seals it: Path is <ns>/<backup>-<uid>/ on Target, Recipients
@@ -87,6 +90,7 @@ type MemberFile struct {
 	Kind    v1.Kind            `json:"kind"`
 	Name    v1.ObjectName      `json:"name"`
 	Attempt int                `json:"attempt,omitempty"`
+	Volume  v1.ObjectName      `json:"volume,omitempty"`
 	Files   []backup.StoreFile `json:"files"`
 }
 
@@ -130,6 +134,13 @@ func Resolve(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1.Back
 		for _, e := range a.Spec.SQL {
 			names[v1.KindSQLDatabase] = append(names[v1.KindSQLDatabase], cmp.Or(e.Name, e.Ref))
 		}
+		for _, f := range a.Spec.Functions {
+			for _, v := range f.Volumes {
+				if f.Name != "" && v.Type == v1.VolumeLocal {
+					s.Volumes = append(s.Volumes, string(f.Name)+"/"+string(v.VolumeName()))
+				}
+			}
+		}
 	case s.ResourceGroup != "":
 		names = map[v1.Kind][]v1.ObjectName{}
 		for _, k := range memberKinds() {
@@ -159,6 +170,29 @@ func Resolve(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1.Back
 			out = append(out, m)
 		}
 	}
+	vols, err := volumeMembers(ctx, st, ns, s.Volumes)
+	if err != nil {
+		return nil, err
+	}
+	return append(out, vols...), nil
+}
+
+// volumeMembers resolves "<function>/<name>" scope entries: the Function exists and declares that local volume.
+func volumeMembers(ctx context.Context, st store.Store, ns v1.NamespaceName, refs []string) ([]Member, error) {
+	const op = "workload.Resolve"
+	var out []Member
+	for _, ref := range refs {
+		fn, name, _ := strings.Cut(ref, "/")
+		obj, err := st.Get(ctx, v1.KindFunction.GVK(), ns, v1.ObjectName(fn))
+		if err != nil {
+			return nil, fault.Wrapf(err, fault.KindOf(err), op, "member volume %s", ref)
+		}
+		f, _ := obj.(*v1.Function)
+		if f == nil || !slices.ContainsFunc(f.Spec.Volumes, func(v v1.VolumeEntry) bool { return v.Type == v1.VolumeLocal && string(v.VolumeName()) == name }) {
+			return nil, fault.NotFoundf(op, "member volume %s: function %s declares no local volume %s", ref, fn, name)
+		}
+		out = append(out, Member{Kind: v1.KindFunction, Name: v1.ObjectName(fn), Volume: v1.ObjectName(name)})
+	}
 	return out, nil
 }
 
@@ -184,7 +218,7 @@ func Write(ctx context.Context, ns v1.NamespaceName, ms []Member, src Sources, o
 	}
 	w := &writer{o: o, buf: make([]byte, 0, backup.PartBytes)}
 	for _, mb := range ms {
-		mf := MemberFile{Kind: mb.Kind, Name: mb.Name}
+		mf := MemberFile{Kind: mb.Kind, Name: mb.Name, Volume: mb.Volume}
 		var f backup.StoreFile
 		var err error
 		switch mb.Kind {
@@ -209,11 +243,27 @@ func Write(ctx context.Context, ns v1.NamespaceName, ms []Member, src Sources, o
 				return Manifest{}, fault.Unavailablef(op, "member %s/%s: no SQL engine is wired", mb.Kind, mb.Name)
 			}
 			f, err = w.file(ctx, "sql/"+string(mb.Name), func(emit func(snapshot.Record) error) error {
-				return sqlFile(ctx, src, ns, mb.Name, emit)
+				rc, err := src.SQL(ctx, ns, mb.Name)
+				if err != nil {
+					return fault.Wrapf(err, fault.KindOf(err), op, "database %s", mb.Name)
+				}
+				return streamFile(op, "database "+string(mb.Name), rc, emit)
+			})
+			mf.Files = []backup.StoreFile{f}
+		case v1.KindFunction:
+			if src.Volume == nil {
+				return Manifest{}, fault.Unavailablef(op, "member volume %s/%s: volumes are off", mb.Name, mb.Volume)
+			}
+			f, err = w.file(ctx, "volume/"+string(mb.Name)+"/"+string(mb.Volume), func(emit func(snapshot.Record) error) error {
+				rc, err := src.Volume(ctx, ns, mb.Name, mb.Volume)
+				if err != nil {
+					return fault.Wrapf(err, fault.KindOf(err), op, "volume %s/%s", mb.Name, mb.Volume)
+				}
+				return streamFile(op, "volume "+string(mb.Name)+"/"+string(mb.Volume), rc, emit)
 			})
 			mf.Files = []backup.StoreFile{f}
 		default:
-			err = fault.Invalidf(op, "member %s/%s: want a KVStore, Bucket, Lake or SQLDatabase", mb.Kind, mb.Name)
+			err = fault.Invalidf(op, "member %s/%s: want a KVStore, Bucket, Lake, SQLDatabase or Function volume", mb.Kind, mb.Name)
 		}
 		if err != nil {
 			return Manifest{}, err
@@ -281,14 +331,9 @@ func (w *writer) lake(ctx context.Context, ns v1.NamespaceName, mb Member, src S
 		mb.Name, lakeAttempts, last)
 }
 
-// sqlFile emits a database's SQLite file from its engine as records of sqlRecordBytes, keyed by their 1-based index in
-// six digits; it never holds more than one record in memory.
-func sqlFile(ctx context.Context, src Sources, ns v1.NamespaceName, name v1.ObjectName, emit func(snapshot.Record) error) error {
-	const op = "workload.Write"
-	rc, err := src.SQL(ctx, ns, name)
-	if err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), op, "database %s", name)
-	}
+// streamFile emits a stream (a database's SQLite file from its engine, a volume's tar) as records of sqlRecordBytes,
+// keyed by their 1-based index in six digits; it never holds more than one record in memory.
+func streamFile(op, what string, rc io.ReadCloser, emit func(snapshot.Record) error) error {
 	defer func() { _ = rc.Close() }()
 	buf := make([]byte, sqlRecordBytes)
 	for i := 1; ; i++ {
@@ -302,7 +347,7 @@ func sqlFile(ctx context.Context, src Sources, ns v1.NamespaceName, name v1.Obje
 		case errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF):
 			return nil
 		case err != nil:
-			return fault.Wrapf(err, fault.KindOf(err), op, "database %s: read its file", name)
+			return fault.Wrapf(err, fault.KindOf(err), op, "%s: read its file", what)
 		}
 	}
 }

@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"math"
 	"net/http"
 	"os"
@@ -37,6 +38,7 @@ import (
 	"github.com/pyvvo/funcd/internal/envresolve"
 	"github.com/pyvvo/funcd/internal/gateway"
 	"github.com/pyvvo/funcd/internal/platform/clock"
+	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/platform/httpx"
 	"github.com/pyvvo/funcd/internal/pooling"
 	"github.com/pyvvo/funcd/internal/revhold"
@@ -45,6 +47,7 @@ import (
 	"github.com/pyvvo/funcd/internal/secrets"
 	lakesvc "github.com/pyvvo/funcd/internal/services/lake"
 	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/volume"
 	"github.com/pyvvo/funcd/internal/workernode/local"
 )
 
@@ -209,6 +212,12 @@ type Deps struct {
 	ReferentPollInterval time.Duration
 	// Clock times the drain from drainingSince; nil ⇒ clock.System().
 	Clock clock.Clock
+	// Volumes keeps the Functions' volumes (ADR-0262); nil ⇒ volumes off, a Function with one is VolumesOff.
+	Volumes volume.Manager
+	// VolumesDurable is false under storage.mode memory, where DataMissing is never set (ADR-0262 Decision 12).
+	VolumesDurable bool
+	// Hold skips the volume reclaims while the platform is held (ADR-0206); nil ⇒ never held.
+	Hold hold.Gate
 }
 
 // LakeProxies reports the URL of a Lake's PEP proxy listener bound in this daemon run (ADR-0137,
@@ -353,6 +362,17 @@ type Reconciler struct {
 	// Revision event moved to Deploying or Idle, or one with a held revision still active. It is a hint from the
 	// Revision watch, guarded by sparedMu; the store's Revision.status stays the truth.
 	held map[fnKey]bool
+
+	// volumes keeps the Functions' volumes (ADR-0262); emptyDirs names each worker's emptyDirs, volumesSeen the
+	// Functions this process passed over and volumesMissing those whose DataMissing awaits a status write; volMu
+	// guards the three.
+	volumes        volume.Manager
+	volumesDurable bool
+	hold           hold.Gate
+	volMu          sync.Mutex
+	emptyDirs      map[runtime.InstanceID][]volume.ID
+	volumesSeen    map[fnKey]bool
+	volumesMissing map[fnKey]bool
 }
 
 // fnKey names a Function in the spared set.
@@ -505,6 +525,12 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		readinessTimeout:  cmp.Or(d.ReadinessTimeout, defaultReadinessTimeout),
 		spared:            map[fnKey]v1.UID{},
 		held:              map[fnKey]bool{},
+		volumes:           d.Volumes,
+		volumesDurable:    d.VolumesDurable,
+		hold:              d.Hold,
+		emptyDirs:         map[runtime.InstanceID][]volume.ID{},
+		volumesSeen:       map[fnKey]bool{},
+		volumesMissing:    map[fnKey]bool{},
 	}, nil
 }
 
@@ -516,6 +542,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		if fault.KindOf(err) == fault.NotFound {
 			// delete path: stop the function's workers, then re-program routes without it.
 			if derr := r.teardown(ctx, req.Namespace, req.Name); derr != nil {
+				return controller.Result{}, derr
+			}
+			if derr := r.volumesGone(ctx, req.Namespace, req.Name); derr != nil {
 				return controller.Result{}, derr
 			}
 			gone := &v1.Function{ObjectMeta: v1.ObjectMeta{Namespace: req.Namespace, Name: req.Name}}
@@ -724,6 +753,10 @@ type boundEnv struct {
 func (r *Reconciler) bindings(ctx context.Context, fn *v1.Function) (boundEnv, error) {
 	// 3b-bis. root entries (ADR-0248): what fn defines at its root exists, as fn's, before a binding resolves to it.
 	if g, err := r.ensureRootEntries(ctx, fn); err != nil || g != nil {
+		return boundEnv{gate: g}, err
+	}
+	// ADR-0262: fn's local volumes are reserved, as fn's, before any worker mounts them.
+	if g, err := r.ensureVolumes(ctx, fn); err != nil || g != nil {
 		return boundEnv{gate: g}, err
 	}
 
@@ -1809,6 +1842,9 @@ func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, re
 	if err != nil {
 		return revisionPass{}, err
 	}
+	if err := r.sweepEmptyDirs(ctx, tmpl.Namespace, tmpl.Name, insts); err != nil {
+		return revisionPass{}, err
+	}
 	want := make(map[int]bool, len(indexes))
 	for _, i := range indexes {
 		want[i] = true
@@ -1879,7 +1915,7 @@ func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, re
 		if _, perr := r.scheduler.Schedule(ctx, scheduler.Request{Namespace: tmpl.Namespace, Name: tmpl.Name, Replica: i, Platforms: platforms}); perr != nil {
 			return revisionPass{}, fault.Wrapf(perr, fault.KindOf(perr), op, "schedule")
 		}
-		spec, serr := r.workerSpec(tmpl, i, artifactPath, bindEnv, lakeEnv)
+		spec, serr := r.workerSpec(ctx, tmpl, rev, i, artifactPath, bindEnv, lakeEnv)
 		if serr != nil {
 			r.logger.Warn("could not start worker", "function", tmpl.Name, "replica", i, "err", serr)
 			retryAt = earlier(retryAt, r.boot.startResult(runtime.NewInstanceID(tmpl.Namespace, tmpl.Name, rev, i), now, serr))
@@ -1890,6 +1926,11 @@ func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, re
 		}
 		spec.Revision = rev
 		inst, cerr := r.runtime.Create(ctx, spec)
+		if cerr != nil {
+			if rerr := r.releaseEmptyDirs(ctx, runtime.NewInstanceID(tmpl.Namespace, tmpl.Name, rev, i)); rerr != nil {
+				r.logger.Warn("could not release a failed worker's emptyDirs", "function", tmpl.Name, "replica", i, "err", rerr)
+			}
+		}
 		if errors.Is(cerr, runtime.ErrImageUnavailable) {
 			return revisionPass{}, fault.Wrapf(cerr, fault.KindOf(cerr), op, "%s", unavailablePrefix(tmpl.Spec.Runtime))
 		}
@@ -3206,7 +3247,15 @@ func (r *Reconciler) addRecordBound(env map[string]string) {
 // handler in the env; otherwise it runs the legacy long-lived placeholder (ADR-0020).
 // bindEnv is the already-resolved config and secret env (ADR-0057), merged into Env with
 // reserved-FUNCD_-key precedence, plus its key lists (ADR-0245).
-func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath string, bindEnv envresolve.Resolved, lakeEnv map[string]string) (runtime.WorkerSpec, error) {
+func (r *Reconciler) workerSpec(ctx context.Context, fn *v1.Function, rev v1.ObjectName, replica int, artifactPath string, bindEnv envresolve.Resolved, lakeEnv map[string]string) (runtime.WorkerSpec, error) {
+	var volMounts []runtime.Mount
+	var volEnv map[string]string
+	if r.materializer != nil {
+		var err error
+		if volMounts, volEnv, err = r.workerVolumes(ctx, fn, runtime.NewInstanceID(fn.Namespace, fn.Name, rev, replica)); err != nil {
+			return runtime.WorkerSpec{}, err
+		}
+	}
 	if r.materializer != nil && r.endpointMode == EndpointNetnsFixedPort {
 		// Container mode (ADR-0032): the shim is the curated image's entrypoint (Command
 		// empty), the artifact is bind-mounted read-only, and it binds a fixed netns port.
@@ -3222,9 +3271,10 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 		r.addLakeEnv(env, lakeEnv)     // FUNCD_LAKE_<ALIAS>_URL/_TOKEN written DIRECTLY (ADR-0091) — never via addBindingEnv
 		r.addLakeExtensionDir(env, fn) // DUCKDB_EXTENSION_DIRECTORY for a lake consumer (dev; prod uses the bundle's duckdb-ext)
 		r.addBindingEnv(env, bindEnv)
-		mounts := []runtime.Mount{{
+		maps.Copy(env, volEnv) // FUNCD_VOLUME_<NAME>, each a bind of its leaf alone (ADR-0262)
+		mounts := append([]runtime.Mount{{
 			Source: filepath.Dir(artifactPath), Target: containerArtifactDir, ReadOnly: true,
-		}}
+		}}, volMounts...)
 		// Bind-mount the per-function local API socket into the sandbox so the shim can dial
 		// context.invoke (ADR-0064) + context.kv (ADR-0069) at the in-container path. Every function gets one.
 		sock, err := r.invokeSocket(fn)
@@ -3261,6 +3311,7 @@ func (r *Reconciler) workerSpec(fn *v1.Function, replica int, artifactPath strin
 		r.addLakeEnv(env, lakeEnv)     // FUNCD_LAKE_<ALIAS>_URL/_TOKEN written DIRECTLY (ADR-0091) — never via addBindingEnv
 		r.addLakeExtensionDir(env, fn) // DUCKDB_EXTENSION_DIRECTORY for a lake consumer (dev; prod uses the bundle's duckdb-ext)
 		r.addBindingEnv(env, bindEnv)
+		maps.Copy(env, volEnv) // FUNCD_VOLUME_<NAME>: the host directory, no mount in process mode (ADR-0262)
 		return runtime.WorkerSpec{
 			Namespace: fn.Namespace,
 			Name:      fn.Name,
