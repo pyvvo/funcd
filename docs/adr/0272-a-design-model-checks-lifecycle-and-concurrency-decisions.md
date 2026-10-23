@@ -1,6 +1,7 @@
 # ADR-0272: A design model checks every lifecycle and concurrency decision
 
-- **Status**: Reviewing 2026-10-23; Accepted 2026-10-23 by the decider, with the triggers, the state budget, `just ci` running every spec and
+- **Status**: Implemented (2026-10-24), review passed with one non-blocking Minor ([report](../reviews/adr-0272-implementation-claude-opus-5-5.md)); Reviewing 2026-10-23;
+  Accepted 2026-10-23 by the decider, with the triggers, the state budget, `just ci` running every spec and
   FizzBee's own skills left out; Proposed 2026-10-23, judged three rounds, every Major folded
 - **Date**: 2026-10-23
 - **Deciders**: green-0-rabbit
