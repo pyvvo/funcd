@@ -30,8 +30,8 @@ type LakeSpec struct {
 	// Bindings are what the engine uses (ADR-0246): the lakehouse buckets, its ConfigMaps and its Secrets.
 	Bindings LakeBindings `json:"bindings"`
 	// Location names the bound (bucket, prefix) the DuckLake catalog syncs under (a `_ducklake/` key);
-	// the prefix must be OWNED by this service's function (single-writer). The SQLite catalog file
-	// lives at <prefix>/_ducklake/catalog.db.
+	// the prefix must be OWNED by this service's function (single-writer). The catalog, a DuckDB file
+	// (ADR-0271), lives at <prefix>/_ducklake/catalog.db.
 	Location LakeLocation `json:"location"`
 	// Resources sizes the engine (cpu/mem); DuckDB is memory-hungry. The provider-runtime maps it
 	// onto runtime.Limits when numerically parseable (ADR-0087), else it is recorded forward-compat.
@@ -70,13 +70,13 @@ func (s *LakeSpec) rootField() string {
 }
 
 // LakeLocation names the bound (bucket, prefix) the DuckLake catalog syncs under (ADR-0086). The
-// prefix must be OWNED by this service's function (single-writer); the SQLite catalog file lives at
+// prefix must be OWNED by this service's function (single-writer); the catalog, a DuckDB file (ADR-0271), lives at
 // <prefix>/_ducklake/catalog.db. Cross-resource validity (the bucket/prefix exist, owner is this
 // service's function) is the lake-blob-validity admission's job, NOT Validate.
 type LakeLocation struct {
 	// Bucket is the name of a Bucket in this service's namespace.
 	Bucket ObjectName `json:"bucket"`
-	// Prefix is a sub-domain (BucketPrefix.name) of that bucket; a DNS-1123 label. The SQLite catalog
+	// Prefix is a sub-domain (BucketPrefix.name) of that bucket; a DNS-1123 label. The catalog
 	// lives at <prefix>/_ducklake/catalog.db.
 	Prefix string `json:"prefix" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"`
 }
@@ -140,7 +140,7 @@ func (c *Lake) Validate() error {
 	// (bucket, prefix) ... OWNED by this service's function"). This is load-bearing for durability:
 	// the backing Function injects the per-fn S3 keypair only when spec.bindings.blob is non-empty (ADR-0085),
 	// and the engine writes its own DuckLake catalog via that keypair — so the lake prefix must be
-	// a declared, owned blob binding or the VACUUM INTO→whole-object-Put checkpoint is 403-denied.
+	// a declared, owned blob binding or the whole-object-Put checkpoint is 403-denied.
 	// (This also implies spec.bindings.blob is non-empty whenever a Lake is set.) It is an intra-object
 	// rule (no store needed); cross-resource existence is the lake-blob-validity admission.
 	lakeBound := false

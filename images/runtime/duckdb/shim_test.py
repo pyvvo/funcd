@@ -1,12 +1,11 @@
-"""Tests of the duckdb runtime shim: its per-commit checkpoint (ADR-0086, #998) and the order of its engine statements
-(ADR-0263), run by internal/runtime/embedimg's TestIssue998_ShimCheckpointsPerCommit with the host's python3. The
-image's boto3 and duckdb are stubbed: the commit watcher reads the catalog through sqlite3 alone, and the engine is a
-connection that records its statements."""
+"""Tests of the duckdb runtime shim: its per-commit checkpoint (ADR-0086, #998), its stop (#1198) and the order of its
+engine statements (ADR-0263), run by internal/runtime/embedimg's TestIssue998_ShimCheckpointsPerCommit with the host's
+python3. The image's boto3 and duckdb are stubbed: the engine is a connection that records its statements.
+engine_test.py runs the shim against the real engine."""
 
 import contextlib
 import io
 import os
-import sqlite3
 import sys
 import tempfile
 import threading
@@ -41,25 +40,13 @@ class _Recorder:
 
 class TestIssue998ShimCheckpointsPerCommit(unittest.TestCase):
     def setUp(self) -> None:
-        self.dir = tempfile.TemporaryDirectory()
-        self.path = os.path.join(self.dir.name, "catalog.db")
-        con = sqlite3.connect(self.path)
-        con.execute("CREATE TABLE ducklake_snapshot (snapshot_id BIGINT PRIMARY KEY)")
-        con.execute("INSERT INTO ducklake_snapshot VALUES (0)")
-        con.commit()
-        con.close()
-
-    def tearDown(self) -> None:
-        self.dir.cleanup()
+        self.snapshot = 0
 
     def commit(self) -> None:
-        con = sqlite3.connect(self.path)
-        con.execute("INSERT INTO ducklake_snapshot SELECT max(snapshot_id) + 1 FROM ducklake_snapshot")
-        con.commit()
-        con.close()
+        self.snapshot += 1
 
     def watch(self, recorder: _Recorder) -> "shim._CommitWatcher":
-        watcher = shim._CommitWatcher(recorder, self.path, INTERVAL)
+        watcher = shim._CommitWatcher(recorder, lambda: self.snapshot, INTERVAL)
         watcher.start()
         self.addCleanup(watcher.join, WAIT)
         self.addCleanup(watcher.stop)
@@ -101,6 +88,9 @@ class _Recording:
     def fetchall(self) -> list:
         return []
 
+    def cursor(self) -> "_Recording":
+        return self
+
 
 # The environment main needs to reach quack_serve.
 ENGINE_ENV = {
@@ -113,11 +103,9 @@ ENGINE_ENV = {
 }
 
 
-def _run_main(
-    env: dict, con: "_Recording", log: list, local_tmp: str, pause: object = None, handlers: "dict | None" = None
-) -> None:
+def _run_main(env: dict, con: "_Recording", log: list, local_tmp: str, pause: object = None) -> None:
     """Runs main on exactly env (no other variable), with con as the engine, until it would block on signal.pause()
-    (pause, if given, runs there) or it exits. handlers, if given, receives the signal handlers main installs."""
+    (pause, if given, runs there) or it exits."""
     with contextlib.ExitStack() as stack:
         for patch in (
             mock.patch.dict(os.environ, env, clear=True),
@@ -126,7 +114,7 @@ def _run_main(
             mock.patch.object(shim, "_connect", lambda: con),
             mock.patch.object(shim, "_recover_catalog", lambda *_: log.append("recover")),
             mock.patch.object(shim, "_CommitWatcher"),
-            mock.patch.object(shim.signal, "signal", side_effect=(handlers if handlers is not None else {}).__setitem__),
+            mock.patch.object(shim.signal, "signal"),
             mock.patch.object(shim.signal, "pause", side_effect=pause or _Stop),
         ):
             stack.enter_context(patch)
@@ -167,7 +155,7 @@ class TestScenarioOnlyAllowedPaths(unittest.TestCase):
             "SET allow_persistent_secrets=false",
             "CREATE TEMPORARY SECRET funcd_lake_s3 (TYPE s3, KEY_ID ?, SECRET ?,",
             "recover",
-            "ATTACH 'ducklake:sqlite:/var/funcd/ducklake/catalog.db' AS lakehouse "
+            "ATTACH 'ducklake:/var/funcd/ducklake/catalog.ducklake' AS lakehouse "
             "(DATA_PATH ?, OVERRIDE_DATA_PATH TRUE, DUCKLAKE_VERSION '1.1')",
             f"SET allowed_directories=['s3://', '{local_tmp}/']",
             "SET enable_external_access=false",
@@ -308,6 +296,140 @@ class TestScenarioNoDeprecatedExtensionSetting(unittest.TestCase):
         self.assertEqual(configs, [{"extension_directories": ["/opt/duckdb-ext"]}])
 
 
+class TestIssue1198TheEngineLoadsNoSQLiteExtension(unittest.TestCase):
+    """The catalog is a DuckDB file (#1198): the engine loads httpfs, ducklake and quack, and no sqlite extension."""
+
+    def test_the_loaded_extensions(self) -> None:
+        log: list = []
+        with mock.patch.object(shim.duckdb, "connect", lambda config: _Recording(log), create=True):
+            shim._connect()
+        self.assertEqual([s for s in log if s.startswith("LOAD")], ["LOAD httpfs", "LOAD ducklake", "LOAD quack"])
+
+
+class _StopEngine:
+    """The engine's checkpoint cursor at a stop: it records each statement, writes a COPY's source name as the copy
+    file's content, and refuses to attach the detached catalog file while busy is above 0, as DuckDB does while a
+    transaction still uses it."""
+
+    def __init__(self, busy: int, fail: str = "") -> None:
+        self.log: list = []
+        self.busy = busy
+        self.fail = fail
+
+    def execute(self, sql: str, params: object = None) -> "_StopEngine":
+        self.log.append(sql)
+        if sql.startswith("ATTACH") and "funcd_closed" in sql:
+            if self.fail:
+                raise RuntimeError(self.fail)
+            if self.busy > 0:
+                self.busy -= 1
+                raise RuntimeError('Unique file handle conflict: Cannot attach "funcd_closed" - the file is already attached')
+        if sql.startswith("COPY FROM DATABASE"):
+            with open(shim.LOCAL_CHECKPOINT, "w") as fh:
+                fh.write(sql.split()[3])
+        return self
+
+    def fetchall(self) -> list:
+        return []
+
+
+class _Bucket:
+    """The S3 client: it keeps each uploaded body."""
+
+    def __init__(self) -> None:
+        self.bodies: list = []
+
+    def put_object(self, Bucket: str, Key: str, Body: bytes) -> None:  # noqa: N803 — boto3's keyword names.
+        self.bodies.append(Body)
+
+
+class TestIssue1198AStopUploadsTheClosedCatalog(unittest.TestCase):
+    """#1198: a stop ends Quack, copies the catalog, detaches it, waits until DuckDB has closed its file (the last
+    transaction that used it has ended), then uploads a copy of the closed file; after STOP_WAIT_SECONDS it uploads
+    the copy taken at quack_stop instead."""
+
+    def stop(self, engine: _StopEngine, wait: float = 5.0) -> _Bucket:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        bucket = _Bucket()
+        with contextlib.ExitStack() as stack:
+            self.path = os.path.join(tmp.name, "checkpoint.ducklake")
+            stack.enter_context(mock.patch.object(shim, "LOCAL_CHECKPOINT", self.path))
+            stack.enter_context(mock.patch.object(shim, "STOP_WAIT_SECONDS", wait))
+            stack.enter_context(mock.patch.object(shim.sys, "stderr", io.StringIO()))
+            shim._Checkpointer(engine, bucket, "lake", "gold/_ducklake/catalog.db").stop(["quack://0.0.0.0:8080"])
+        return bucket
+
+    def test_the_closed_catalog_is_uploaded_once_its_last_transaction_ends(self) -> None:
+        engine = _StopEngine(busy=2)
+        bucket = self.stop(engine)
+        self.assertEqual(bucket.bodies, [b"funcd_closed"])
+        order = [s.split(" (")[0].split(" AS ")[0] for s in engine.log]
+        self.assertEqual(order[:5], ["CALL quack_stop(?)", f"ATTACH '{self.path}'",
+                                     "COPY FROM DATABASE __ducklake_metadata_lakehouse TO funcd_checkpoint",
+                                     "DETACH funcd_checkpoint", "DETACH lakehouse"])
+        self.assertEqual(sum("funcd_closed" in s and s.startswith("ATTACH") for s in engine.log), 3)
+        self.assertEqual(engine.log[-1], "DETACH funcd_closed")
+
+    def test_a_transaction_that_outlives_the_wait_leaves_the_copy_at_quack_stop(self) -> None:
+        engine = _StopEngine(busy=10**9)
+        bucket = self.stop(engine, wait=0.1)
+        self.assertEqual(bucket.bodies, [b"__ducklake_metadata_lakehouse"])
+        self.assertNotIn("DETACH funcd_closed", engine.log)
+
+    def test_another_attach_error_ends_the_stop(self) -> None:
+        with self.assertRaises(RuntimeError):
+            self.stop(_StopEngine(busy=0, fail="IO Error: disk full"))
+
+
+class _Cursors(_Recording):
+    """An engine connection whose cursors are distinct mocks, in the order main asks for them."""
+
+    def __init__(self, log: list) -> None:
+        super().__init__(log)
+        self.cursors: list = []
+
+    def cursor(self) -> mock.MagicMock:
+        self.cursors.append(mock.MagicMock(name=f"cursor{len(self.cursors)}"))
+        return self.cursors[-1]
+
+
+class TestIssue1198TheStopClosesTheWatcherFirst(unittest.TestCase):
+    """#1198: SIGTERM stops and joins the commit watcher and closes its cursor, which holds the catalog open, before
+    the checkpointer's stop, with the URI Quack serves, and the process then exits 0."""
+
+    def test_the_shutdown_order(self) -> None:
+        handlers: dict = {}
+        con = _Cursors([])
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        order = mock.MagicMock()
+        with contextlib.ExitStack() as stack:
+            for patch in (
+                mock.patch.dict(os.environ, ENGINE_ENV, clear=True),
+                mock.patch.object(shim, "LOCAL_TMP", os.path.join(tmp.name, "tmp")),
+                mock.patch.object(shim, "_s3_client", lambda *_: object()),
+                mock.patch.object(shim, "_connect", lambda: con),
+                mock.patch.object(shim, "_recover_catalog", lambda *_: None),
+                mock.patch.object(shim.signal, "signal", lambda sig, fn: handlers.__setitem__(sig, fn)),
+                mock.patch.object(shim.signal, "pause", side_effect=_Stop),
+            ):
+                stack.enter_context(patch)
+            watcher = stack.enter_context(mock.patch.object(shim, "_CommitWatcher")).return_value
+            checkpointer = stack.enter_context(mock.patch.object(shim, "_Checkpointer")).return_value
+            with self.assertRaises(_Stop):
+                shim.main()
+        order.attach_mock(watcher.stop, "watcher_stop")
+        order.attach_mock(watcher.join, "watcher_join")
+        order.attach_mock(con.cursors[1].close, "watch_close")
+        order.attach_mock(checkpointer.stop, "checkpointer_stop")
+        with self.assertRaises(SystemExit) as stop:
+            handlers[shim.signal.SIGTERM](shim.signal.SIGTERM, None)
+        self.assertEqual(stop.exception.code, 0)
+        self.assertEqual(order.mock_calls, [mock.call.watcher_stop(), mock.call.watcher_join(), mock.call.watch_close(),
+                                            mock.call.checkpointer_stop(["quack://0.0.0.0:8080"])])
+
+
 class TestS3ClientIgnoresEnvironmentProxies(unittest.TestCase):
     def test_no_proxy_from_the_environment(self):
         calls = {}
@@ -318,78 +440,6 @@ class TestS3ClientIgnoresEnvironmentProxies(unittest.TestCase):
         with mock.patch.object(shim, "boto3", fake):
             shim._s3_client("http://10.63.0.1:9000", "us-east-1", "access", "secret")
         self.assertEqual(calls["config"]["proxies"], {})
-
-
-class _Catalog:
-    """Stands for the catalog's snapshot id: from the read after `late`, a commit already under way at the stop has
-    landed."""
-
-    def __init__(self, late: int = 0) -> None:
-        self.reads = 0
-        self.late = late
-        self.latest = 1
-
-    def snapshot_id(self, _path: str) -> int:
-        self.reads += 1
-        self.latest = 2 if self.late and self.reads > self.late else 1
-        return self.latest
-
-
-class _Checkpoints:
-    """Stands for _Checkpointer: logs each checkpoint and fails the first `fail` of them."""
-
-    def __init__(self, log: list, fail: int = 0) -> None:
-        self.log = log
-        self.fail = fail
-
-    def __call__(self, *_: object) -> "_Checkpoints":
-        return self
-
-    def checkpoint(self) -> None:
-        self.log.append("checkpoint")
-        if self.fail:
-            self.fail -= 1
-            raise OSError("disk I/O error")
-
-
-class TestIssue1198ShutdownStopsServingFirst(unittest.TestCase):
-    """#1198: on SIGTERM the shim stops serving Quack and detaches the catalog before its last checkpoint, so a commit
-    a client gets acknowledged is never missing from the catalog the next engine recovers."""
-
-    def shut_down(self, checkpoints: "_Checkpoints", log: list, catalog: "_Catalog") -> None:
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        handlers: dict = {}
-        with mock.patch.object(shim, "_Checkpointer", checkpoints), self.assertRaises(_Stop):
-            _run_main(dict(ENGINE_ENV), _Recording(log), log, os.path.join(tmp.name, "tmp"), handlers=handlers)
-        with (
-            mock.patch.object(shim, "_snapshot_id", catalog.snapshot_id),
-            mock.patch.object(shim, "SHUTDOWN_QUIET_SECONDS", 0.02, create=True),
-            mock.patch.object(shim, "FINAL_CHECKPOINT_ATTEMPTS", 2, create=True),
-            self.assertRaises(SystemExit) as stop,
-            contextlib.redirect_stderr(io.StringIO()),
-        ):
-            handlers[shim.signal.SIGTERM](shim.signal.SIGTERM, None)
-        self.assertEqual(stop.exception.code, 0)
-
-    def test_sigterm_stops_serving_and_detaches_before_the_last_checkpoint(self) -> None:
-        log: list = []
-        self.shut_down(_Checkpoints(log), log, _Catalog())
-        served = next(i for i, sql in enumerate(log) if sql.startswith("CALL quack_serve("))
-        self.assertEqual(log[served + 1 :], ["CALL quack_stop(?)", "DETACH lakehouse", "checkpoint"])
-
-    def test_a_commit_under_way_at_the_stop_is_in_the_last_checkpoint(self) -> None:
-        log: list = []
-        catalog = _Catalog(late=1)
-        checkpoints = _Checkpoints(log)
-        checkpoints.checkpoint = lambda: log.append(f"checkpoint at snapshot {catalog.latest}")
-        self.shut_down(checkpoints, log, catalog)
-        self.assertEqual(log[-1], "checkpoint at snapshot 2")
-
-    def test_a_failed_last_checkpoint_is_tried_again(self) -> None:
-        log: list = []
-        self.shut_down(_Checkpoints(log, fail=1), log, _Catalog())
-        self.assertEqual(log[-2:], ["checkpoint", "checkpoint"])
 
 
 if __name__ == "__main__":

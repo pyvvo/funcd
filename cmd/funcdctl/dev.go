@@ -1106,7 +1106,7 @@ func devLakeOptions(plan persistPlan, stateDir string, folder *devFolder, inst *
 		return nil, nil
 	}
 	inst.lakes = names
-	// Under --persist, the DuckLake SQLite catalog lives in a durable per-provider dir (mirroring the
+	// Under --persist, the DuckLake catalog lives in a durable per-provider dir (mirroring the
 	// metastore) so a dev restart reopens it; ephemeral otherwise.
 	catOpts := []devengine.Option{devengine.WithStateDir(stateDir)}
 	if plan.lakeDir != "" {
@@ -1278,7 +1278,7 @@ type persistPlan struct {
 	storeDir  string // durable metastore (Badger); "" ⇒ memory
 	kvDir     string // durable function KV (Badger); "" ⇒ memory
 	blobDir   string // durable blob (fileblob); "" ⇒ mem://
-	lakeDir   string // durable DuckLake SQLite catalog root (devengine); "" ⇒ ephemeral temp
+	lakeDir   string // durable DuckLake catalog root (devengine); "" ⇒ ephemeral temp
 	sqlDir    string // durable SQL engines' data root (ADR-0237); "" ⇒ ephemeral temp
 	volumeDir string // durable Function volumes' root (ADR-0262); "" ⇒ ephemeral temp
 	bundleDir string // isolated functions' bundles, the same path on every run (#1053); "" ⇒ a temp dir per run

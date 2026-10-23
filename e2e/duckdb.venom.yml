@@ -274,20 +274,32 @@ testcases:
           - result.statuscode ShouldEqual 200
           - result.body ShouldContainSubstring "[[998]]"
 
-  - name: new-lake-is-1-1 — the Lake's catalog, checkpointed to blob, is DuckLake 1.1 (ADR-0263 Decision 3)
+  - name: new-lake-is-1-1 — the Lake's catalog, checkpointed to blob as a DuckDB file (ADR-0271), is DuckLake 1.1 (ADR-0263 Decision 3)
     steps:
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
             cat=$(sudo find /var/lib/funcd/data/blob -path "*/lakehouse/gold/_ducklake/catalog.db" -type f | head -1)
             [ -n "$cat" ] || exit 1
-            echo "VERSION=$(sudo python3 -c "import sqlite3,sys;print(sqlite3.connect(\"file:\"+sys.argv[1]+\"?mode=ro\",uri=True).execute(\"SELECT value FROM ducklake_metadata WHERE key=?\",(\"version\",)).fetchone()[0])" "$cat")"'
+            echo "MAGIC=$(sudo head -c 12 "$cat" | tail -c 4)"'
         retry: 15
         delay: 2
         info: "the checkpointed catalog → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldEqual VERSION=1.1
+          - result.systemout ShouldEqual MAGIC=DUCK
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT value FROM __ducklake_metadata_lakehouse.ducklake_metadata WHERE key = ''version''"}}'
+        retry: 10
+        delay: 2
+        info: "the catalog's DuckLake version → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '[["1.1"]]'
 
   - name: only-allowed-paths — a query reaches no path but s3:// and the engine's temp directory (ADR-0263 Decision 8)
     steps:

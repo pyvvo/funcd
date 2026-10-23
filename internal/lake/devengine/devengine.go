@@ -58,8 +58,8 @@ type Runtime struct {
 	logger *slog.Logger
 	mu     sync.Mutex
 	procs  map[provider.ProviderRef]*engineProc
-	// lakeDir, when non-empty, is the DURABLE root under which each provider's DuckLake SQLite
-	// catalog file lives (<lakeDir>/<provider>/catalog.db) — set by `funcdctl dev` under --persist so the
+	// lakeDir, when non-empty, is the DURABLE root under which each provider's DuckLake catalog,
+	// a DuckDB file, lives (<lakeDir>/<provider>/catalog.ducklake) — set by `funcdctl dev` under --persist so the
 	// lake metadata survives a restart (the Parquet DATA already persists in blob). Empty ⇒ the
 	// catalog file lives in the engine's ephemeral temp dir (fresh each boot), the default.
 	lakeDir string
@@ -75,7 +75,7 @@ type Runtime struct {
 // Option configures the dev lake engine runtime.
 type Option func(*Runtime)
 
-// WithLakeDir persists each provider's DuckLake SQLite catalog under dir (durable across restarts)
+// WithLakeDir persists each provider's DuckLake catalog under dir (durable across restarts)
 // instead of the engine's ephemeral temp dir. Empty dir ⇒ ephemeral (the default). Set by `funcdctl
 // dev` under --persist, mirroring the durable metastore.
 func WithLakeDir(dir string) Option { return func(r *Runtime) { r.lakeDir = dir } }
@@ -267,18 +267,18 @@ func (r *Runtime) launch(ctx context.Context, spec provider.ProviderSpec) (*engi
 		return nil, err
 	}
 
-	// The SQLite catalog lives in the ephemeral engine dir by default (fresh each boot); under
+	// The DuckDB catalog file lives in the ephemeral engine dir by default (fresh each boot); under
 	// --persist (lakeDir set) it lives in a durable per-provider subdir OUTSIDE the temp dir, so
 	// stop()'s temp-dir cleanup never removes it and the DuckLake reopens it next boot (its Parquet
-	// DATA persists in blob). SQLite recovers its own WAL on reopen.
-	catalogFile := filepath.Join(dir, "catalog.db")
+	// DATA persists in blob). DuckDB replays its own WAL on reopen.
+	catalogFile := filepath.Join(dir, "catalog.ducklake")
 	if r.lakeDir != "" {
 		catDir := filepath.Join(r.lakeDir, string(spec.Ref.Name))
 		if merr := os.MkdirAll(catDir, 0o755); merr != nil {
 			_ = os.RemoveAll(dir)
 			return nil, fault.Wrapf(merr, fault.Internal, op, "durable lake dir")
 		}
-		catalogFile = filepath.Join(catDir, "catalog.db")
+		catalogFile = filepath.Join(catDir, "catalog.ducklake")
 	}
 
 	initFile := filepath.Join(dir, "init.sql")
@@ -385,7 +385,7 @@ func (w *rowWatcher) Write(b []byte) (int, error) {
 
 // buildInitSQL assembles the duckdb init script: pin the extension dir, LOAD the engine extensions,
 // wire an S3 secret from the injected dev keypair (so httpfs reaches the dev S3 gateway), ATTACH the
-// DuckLake (a LOCAL SQLite catalog file + the S3 DATA_PATH derived from FUNCD_DUCKLAKE_CATALOG) as the
+// DuckLake (a LOCAL DuckDB catalog file + the S3 DATA_PATH derived from FUNCD_DUCKLAKE_CATALOG) as the
 // default lake so a consumer's server-side `quack_query` DDL writes gold Parquet, then start the
 // Quack server. This mirrors the prod duckdb runtime shim (images/runtime/duckdb/shim.py) minus the
 // boto3 lake recovery/checkpoint — dev starts a fresh local lake each boot (the Parquet DATA
@@ -394,7 +394,7 @@ func (w *rowWatcher) Write(b []byte) (int, error) {
 func buildInitSQL(extDir, catalogFile string, env map[string]string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "SET extension_directories=[%s];\n", sqlStr(extDir))
-	b.WriteString("LOAD httpfs;\nLOAD ducklake;\nLOAD quack;\nLOAD sqlite_scanner;\n")
+	b.WriteString("LOAD httpfs;\nLOAD ducklake;\nLOAD quack;\n")
 
 	if key := env["AWS_ACCESS_KEY_ID"]; key != "" {
 		endpoint := firstNonEmpty(env["AWS_ENDPOINT_URL_S3"], env["AWS_ENDPOINT_URL"])
@@ -413,7 +413,7 @@ func buildInitSQL(extDir, catalogFile string, env map[string]string) string {
 	if cat := env["FUNCD_DUCKLAKE_CATALOG"]; cat != "" {
 		// OVERRIDE_DATA_PATH: a lake restored under another prefix (ADR-0222 asLocation) records its old one
 		fmt.Fprintf(&b, "ATTACH %s AS lakehouse (DATA_PATH %s, OVERRIDE_DATA_PATH TRUE, DUCKLAKE_VERSION '1.1');\n",
-			sqlStr("ducklake:sqlite:"+catalogFile), sqlStr(dataPathFor(cat)))
+			sqlStr("ducklake:"+catalogFile), sqlStr(dataPathFor(cat)))
 	}
 
 	token := firstNonEmpty(env["FUNCD_QUACK_TOKEN"], env["QUACK_TOKEN"], DevQuackToken)

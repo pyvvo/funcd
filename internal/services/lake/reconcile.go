@@ -473,7 +473,7 @@ func (r *Reconciler) resolveBucketRefs(ctx context.Context, cs *v1.Lake) (requeu
 	return false, "", nil
 }
 
-// lakeURI is the s3:// key the DuckLake SQLite catalog lives at (ADR-0086): the bound
+// lakeURI is the s3:// key the DuckLake catalog lives at (ADR-0086, a DuckDB file since ADR-0271): the bound
 // (bucket, prefix) under the reserved _ducklake/catalog.db key.
 func lakeURI(c v1.LakeLocation) string {
 	return fmt.Sprintf("s3://%s/%s/_ducklake/catalog.db", c.Bucket, c.Prefix)

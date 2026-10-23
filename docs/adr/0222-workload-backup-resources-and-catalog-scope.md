@@ -2,6 +2,7 @@
 
 - **Status**: Implemented (2026-10-10; accepted 2026-10-10 by an `adr-batch` run after a clean `adr-judge` gate; the defaults below were not confirmed one by one)
 - **Superseded in part by**: [ADR-0228](0228-dr-implementation-addenda-two.md) (2026-10-11) — the namespace hold around an in-place Restore, the Restore admission rules, the status reasons, the manifest and member shapes, the hold API and the options the implementation added.
+- **Superseded in part by**: [ADR-0271](0271-the-lake-catalog-is-a-duckdb-file.md) (2026-10-23) — Decision 5's check of the copy against the files the checkpoint names: the checkpoint is copied unopened, and a copy that misses a listed key runs again
 - **Date**: 2026-10-10
 - **Deciders**: green-0-rabbit
 - **Tags**: backup, restore, disaster-recovery, kvstore, blob, catalog, rbac, app

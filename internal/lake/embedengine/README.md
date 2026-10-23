@@ -2,7 +2,7 @@
 
 `funcdctl dev` (the `-tags dev` fat client, ADR-0125 / FEAT-0001 F90) serves a **lake** with no
 container: it `go:embed`s the DuckDB **engine** — the standalone `duckdb` CLI plus the pinned
-`httpfs`/`ducklake`/`quack`/`sqlite` extensions — and runs it as a host **subprocess** exposing the
+`httpfs`/`ducklake`/`quack` extensions — and runs it as a host **subprocess** exposing the
 Quack endpoint. This is the dev analogue of the prod `Lake`, which supervises the curated
 `funcd/runtime-duckdb` **container** (ADR-0086); process-dev runs no containers, so it needs the
 engine as native binaries.
@@ -33,7 +33,6 @@ duckdb                              # the executable CLI
 extensions/httpfs.duckdb_extension
 extensions/ducklake.duckdb_extension
 extensions/quack.duckdb_extension
-extensions/sqlite.duckdb_extension
 VERSION                            # "duckdb <ver>\nplatform <os>/<arch>"
 ```
 

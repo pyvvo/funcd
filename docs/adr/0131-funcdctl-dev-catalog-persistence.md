@@ -1,6 +1,7 @@
 # ADR-0131: funcdctl dev — durable DuckLake catalog under --persist
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0271](0271-the-lake-catalog-is-a-duckdb-file.md) (2026-10-23) — the persisted dev catalog: `<lakeDir>/<provider>/catalog.ducklake`, a DuckDB file
 - **Implemented**: 2026-07-12 — retroactive: the code + its tests shipped this session and are green (both
   build tags, lint, `go mod verify`), and persistence is proven live — under `--persist` the releve `to-gold`
   step writes a DuckLake mart, and after a full `funcdctl dev` restart the `lakehouse` catalog reopens with the

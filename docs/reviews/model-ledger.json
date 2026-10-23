@@ -12568,5 +12568,20 @@
     "dod_total": 0,
     "report": "docs/reviews/ghsa-vcf2-hc48-w9jp-fix-claude-opus-5-5.md",
     "notes": "pass on round 2 (model major: bound keys beyond AWS_ reached the engine); private advisory review"
+  },
+  {
+    "date": "2026-10-23",
+    "adr": "0271",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 0,
+    "dod_passed": 5,
+    "dod_total": 5,
+    "report": "docs/reviews/adr-0271-implementation-claude-opus-5-5.md",
+    "notes": "pass: DuckDB catalog, COPY checkpoint, close-wait stop, unopened backup copy; 6 real-engine tests x10, 13 lanes + app-todo, 10 mutants killed; 1 minor (adr): stop bound excludes uploads"
   }
 ]

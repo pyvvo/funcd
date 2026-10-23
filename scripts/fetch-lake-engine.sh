@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fetch + bundle the DuckDB+Quack LAKE ENGINE (the standalone duckdb CLI + the pinned
-# httpfs/ducklake/quack/sqlite extensions) for ONE target os/arch into
+# httpfs/ducklake/quack extensions) for ONE target os/arch into
 # internal/lake/embedengine/engine.tar.gz — the process-mode engine `funcdctl dev` embeds
 # (ADR-0125 Decision 5, FEAT-0001/F90, -tags dev).
 #
@@ -50,10 +50,9 @@ curl -fsSL -o "${work}/${tgz}" "https://github.com/duckdb/duckdb/releases/downlo
 pinned "${tgz}" | (cd "${work}" && sha256sum -c -)
 tar -xzf "${work}/${tgz}" -C "${work}" duckdb
 
-# The DuckLake catalog can persist its metadata in SQLite; the artifact is `sqlite_scanner`
-# (DuckDB's `INSTALL sqlite` is an alias for it). httpfs = S3/HTTP fs, quack = the client-server
-# protocol, ducklake = the lakehouse format.
-for ext in httpfs ducklake quack sqlite_scanner; do
+# httpfs = S3/HTTP fs, quack = the client-server protocol, ducklake = the lakehouse format, whose catalog is a DuckDB
+# file (#1198).
+for ext in httpfs ducklake quack; do
   curl -fsSL "http://extensions.duckdb.org/v${ver}/${extplat}/${ext}.duckdb_extension.gz" \
     | gunzip > "${extdir}/${ext}.duckdb_extension"
   pinned "v${ver}/${extplat}/${ext}.duckdb_extension" | (cd "${work}/extensions" && sha256sum -c -)

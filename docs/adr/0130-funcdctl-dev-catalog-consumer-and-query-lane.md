@@ -2,6 +2,7 @@
 
 - **Status**: Implemented
 - **Superseded in part by**: [ADR-0247](0247-contract-file-replaces-funcdctl-yaml.md) (2026-10-19) — Decision 1: `dev.catalog` goes; a CatalogService comes from the resource files.
+- **Superseded in part by**: [ADR-0271](0271-the-lake-catalog-is-a-duckdb-file.md) (2026-10-23) — the dev engine's `ducklake:sqlite:` catalog: a DuckDB file
 - **Implemented**: 2026-07-12 — retroactive: the code + its unit tests shipped this session and are green
   (both build tags, lint, `go mod verify`), and the full `examples/python/releve-lakehouse` medallion pipeline
   runs end-to-end under `funcdctl dev` (extract → verify → build-silver → **to-gold**, all `Succeeded`, `gold/`
