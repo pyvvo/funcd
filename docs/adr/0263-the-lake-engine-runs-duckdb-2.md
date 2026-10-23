@@ -6,6 +6,7 @@
   that day. Revised that day for DuckLake 1.1 and no consumers (the decider); judged four times, the last: accept after
   one Major (a 1.1 catalog with files), folded. Numbered 0263: 0262 went to the function-owned volumes ADR, merged
   first (#1189); the judge rounds, experiment PRs #11–#15 and funcd-python #100 name it ADR-0262.
+- **Superseded in part by**: [ADR-0265](0265-the-lake-engine-takes-tuning-keys-from-an-allow-list.md) (2026-10-23) — the shim statement order now opens with the Lake's tuning keys.
 - **Date**: 2026-10-22
 - **Deciders**: green-0-rabbit
 - **Tags**: lake, duckdb, ducklake, quack, dev, dependency
