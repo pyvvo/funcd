@@ -407,3 +407,35 @@ func TestIssue1202_SpecialFilesStayOutOfABackup(t *testing.T) {
 		t.Fatalf("the restored volume holds %v (%v), want the file alone", ents, err)
 	}
 }
+
+// TestIssue1203_DamagedMetaStopsOnlyItsVolume: a meta a crash left empty no longer stops the manager from opening. The
+// damage is logged, the other volumes are listed, and the damaged volume's Reserve reports it Invalid (#1203).
+func TestIssue1203_DamagedMetaStopsOnlyItsVolume(t *testing.T) {
+	ctx := t.Context()
+	root := t.TempDir()
+	m := newManager(t, Options{Root: root})
+	damaged, intact := local("cart", "state"), local("thumbs", "state")
+	for _, id := range []ID{damaged, intact} {
+		if _, err := m.Reserve(ctx, id, v1.UID("u-"+id.Function), 1<<20, v1.DeletionRetain); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "shop", "cart", "state.meta"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	reopened, err := New(Options{Root: root, Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+	if err != nil {
+		t.Fatalf("New with one damaged meta = %v, want the manager open", err)
+	}
+	infos, err := reopened.List(ctx)
+	if err != nil || len(infos) != 1 || infos[0].ID != intact {
+		t.Fatalf("List = %v, %v, want the intact volume alone", infos, err)
+	}
+	if !strings.Contains(logs.String(), "shop/cart/state") {
+		t.Fatalf("the log does not name the damaged volume:\n%s", logs.String())
+	}
+	if _, err := reopened.Reserve(ctx, damaged, "u-cart", 1<<20, v1.DeletionRetain); fault.KindOf(err) != fault.Invalid {
+		t.Fatalf("Reserve of the damaged volume = %v, want Invalid", err)
+	}
+}

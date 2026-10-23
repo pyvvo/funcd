@@ -281,3 +281,24 @@ func TestIssue1200_AddedVolumeIsNotDataMissing(t *testing.T) {
 		require.Equal(t, v1.ConditionTrue, c.Status, "a volume of the generation the stored Ready describes is lost")
 	})
 }
+
+// TestIssue1203_DamagedMetaIsNotDataMissing: a volume whose leaf holds its data while its meta was left damaged by a
+// crash is not lost: the manager opens, and the first pass sets no DataMissing (#1203).
+func TestIssue1203_DamagedMetaIsNotDataMissing(t *testing.T) {
+	t.Parallel()
+	r := newShimReconciler(t, nil)
+	root := t.TempDir()
+	before, err := volume.New(volume.Options{Root: root})
+	require.NoError(t, err)
+	fn := volumeFn("cart", stateVolume())
+	_, err = before.Reserve(t.Context(), localID(fn, "state"), fn.UID, 1<<20, v1.DeletionRetain)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "shop", "cart", "state.meta"), nil, 0o600))
+	m, err := volume.New(volume.Options{Root: root, Holder: r.FunctionUID})
+	require.NoError(t, err, "a damaged meta stops the volume manager from opening")
+	r.volumes, r.volumesDurable = m, true
+	fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue})
+	require.NoError(t, r.dataMissing(t.Context(), fn))
+	_, missing := fn.Status.Conditions.Get(condDataMissing)
+	require.False(t, missing, "the leaf holds the data")
+}

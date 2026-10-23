@@ -403,20 +403,21 @@ func (r *Reconciler) dataMissing(ctx context.Context, fn *v1.Function) error {
 	if !r.volumesDurable || !ok || ready.Status != v1.ConditionTrue || fn.Status.ObservedGeneration != fn.Generation || !fn.Spec.HasLocalVolume() {
 		return nil
 	}
-	infos, err := r.volumes.List(ctx)
-	if err != nil {
-		return err
-	}
 	var gone []string
 	for _, v := range fn.Spec.Volumes {
 		if v.Type != v1.VolumeLocal {
 			continue
 		}
-		id := localID(fn, v.VolumeName())
-		if !slices.ContainsFunc(infos, func(in volume.Info) bool { return in.ID == id }) {
-			gone = append(gone, string(v.VolumeName()))
-			r.logger.WarnContext(ctx, "function volume lost its data", "namespace", fn.Namespace, "function", fn.Name, "volume", v.VolumeName())
+		// the leaf holds the data, not the meta beside it: a meta a crash damaged is no loss (#1203)
+		_, err := r.volumes.Empty(ctx, localID(fn, v.VolumeName()))
+		if fault.KindOf(err) != fault.NotFound {
+			if err != nil {
+				return err
+			}
+			continue
 		}
+		gone = append(gone, string(v.VolumeName()))
+		r.logger.WarnContext(ctx, "function volume lost its data", "namespace", fn.Namespace, "function", fn.Name, "volume", v.VolumeName())
 	}
 	if len(gone) > 0 {
 		r.volMu.Lock()

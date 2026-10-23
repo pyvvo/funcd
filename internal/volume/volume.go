@@ -20,6 +20,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/platform/hold"
 )
 
 // ID names one volume: a Function's local volume, or with Worker set one worker's emptyDir.
@@ -268,24 +269,19 @@ func (m *manager) readMeta(id ID) (meta, bool, error) {
 	}
 	var md meta
 	if err := json.Unmarshal(b, &md); err != nil {
-		return meta{}, false, fault.Wrapf(err, fault.Internal, "volume.meta", "decode the meta of %s", id)
+		return meta{}, false, fault.Wrapf(err, fault.Invalid, "volume.meta", "decode the meta of %s, which names its owner and size", id)
 	}
 	return md, true, nil
 }
 
+// writeMeta replaces id's meta durably, so a crash leaves the old meta or the new one, never an empty file (#1203).
 func (m *manager) writeMeta(id ID, md meta) error {
 	b, err := json.Marshal(md)
 	if err != nil {
 		return fault.Wrapf(err, fault.Internal, "volume.meta", "encode the meta of %s", id)
 	}
-	tmp := m.metaPath(id) + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return fault.Wrapf(err, fault.Internal, "volume.meta", "write the meta of %s", id)
-	}
-	if err := os.Rename(tmp, m.metaPath(id)); err != nil {
-		return fault.Wrapf(err, fault.Internal, "volume.meta", "write the meta of %s", id)
-	}
-	return nil
+	path := m.metaPath(id)
+	return hold.WriteFile("volume.meta", filepath.Dir(path), filepath.Base(path), b)
 }
 
 // dropStale removes bookings no Reserve backed within BookingTTL (an apply refused after its admission).
@@ -596,7 +592,9 @@ func (m *manager) scan() ([]scanned, error) {
 			for _, id := range ids {
 				md, found, err := m.readMeta(id)
 				if err != nil {
-					return nil, err
+					// one damaged meta leaves its own volume unused, not the others or the daemon's start (#1203)
+					m.o.Logger.Warn("a volume's meta cannot be read: the volume stays unused until it is repaired or removed", "volume", id.String(), "err", err)
+					continue
 				}
 				if found {
 					out = append(out, scanned{ID: id, meta: md})
