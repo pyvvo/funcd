@@ -1665,6 +1665,11 @@ func (p *Platform) Run(ctx context.Context) error {
 		// reclaims wait for the first start after the release; `funcdctl hold status` lists that data.
 		p.logger.WarnContext(ctx, "platform held: no timer, blob source, Sensor, run, App rollout, retention sweep or "+
 			"reclaim acts until `funcdctl hold release`", "reason", m.Reason, "since", m.Since)
+		// held, it reclaims nothing: it books the stored volumes and keeps the last run's emptyDirs, which go once
+		// the hold lifts (#1204)
+		if err := p.fnReconciler.ReclaimVolumes(ctx); err != nil && ctx.Err() == nil {
+			p.logger.WarnContext(ctx, "booking of Function volumes incomplete", "error", err)
+		}
 	} else {
 		// Issue #708 (ADR-0170 "also across a crash"): reclaim the data of each KVStore deleted before its reconcile
 		// ran, before the controller or the control plane can create a store of the same name.

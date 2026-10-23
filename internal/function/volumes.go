@@ -276,7 +276,8 @@ func (r *Reconciler) platformHeld() bool { return r.hold != nil && r.hold.Held()
 
 // ReclaimVolumes runs at boot before the controller (ADR-0262 Decision 8): no worker survives a restart, so every
 // emptyDir left goes, and the local volumes of Functions no longer stored, or stored under another UID, follow their
-// deletion policy. A no-op while the platform is held, whose hold status lists them (VolumeOrphans).
+// deletion policy. While the platform is held it reclaims nothing: hold status lists the local volumes
+// (VolumeOrphans), and the emptyDirs go once the hold lifts (releaseHeldLeftovers, #1204).
 func (r *Reconciler) ReclaimVolumes(ctx context.Context) error {
 	if r.volumes == nil {
 		return nil
@@ -284,12 +285,19 @@ func (r *Reconciler) ReclaimVolumes(ctx context.Context) error {
 	if err := r.bookStoredVolumes(ctx); err != nil {
 		return err
 	}
-	if r.platformHeld() {
-		return nil
-	}
 	infos, err := r.volumes.List(ctx)
 	if err != nil {
 		return err
+	}
+	if r.platformHeld() {
+		r.volMu.Lock()
+		for _, in := range infos {
+			if in.ID.Worker != "" {
+				r.heldLeftovers = append(r.heldLeftovers, in.ID)
+			}
+		}
+		r.volMu.Unlock()
+		return nil
 	}
 	for _, in := range infos {
 		if in.ID.Worker != "" {
@@ -312,6 +320,23 @@ func (r *Reconciler) ReclaimVolumes(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// releaseHeldLeftovers releases, once the hold lifts, the emptyDirs a held boot kept: their workers ended with the last
+// run, and an emptyDir is never restore evidence, so they hold no capacity until the next start (#1204).
+func (r *Reconciler) releaseHeldLeftovers(ctx context.Context) {
+	if r.platformHeld() {
+		return
+	}
+	r.volMu.Lock()
+	ids := r.heldLeftovers
+	r.heldLeftovers = nil
+	r.volMu.Unlock()
+	for _, id := range ids {
+		if err := r.volumes.Release(ctx, id); err != nil {
+			r.logger.WarnContext(ctx, "could not release an emptyDir the held boot kept", "volume", id.String(), "err", err)
+		}
+	}
 }
 
 // holds reports whether the stored Function a local volume's path names holds it.

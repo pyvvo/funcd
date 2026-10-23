@@ -373,8 +373,8 @@ type Reconciler struct {
 	held map[fnKey]bool
 
 	// volumes keeps the Functions' volumes (ADR-0262); emptyDirs names each worker's emptyDirs, volumesSeen the
-	// Functions this process passed over and volumesMissing those whose DataMissing awaits a status write; volMu
-	// guards the three.
+	// Functions this process passed over, volumesMissing those whose DataMissing awaits a status write and
+	// heldLeftovers the last run's emptyDirs a held boot kept (#1204); volMu guards the four.
 	volumes        volume.Manager
 	volumesDurable bool
 	hold           hold.Gate
@@ -382,6 +382,7 @@ type Reconciler struct {
 	emptyDirs      map[runtime.InstanceID][]volume.ID
 	volumesSeen    map[fnKey]bool
 	volumesMissing map[fnKey][]string
+	heldLeftovers  []volume.ID
 }
 
 // fnKey names a Function in the spared set.
@@ -548,6 +549,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 // Reconcile converges one Function to its desired state.
 func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (controller.Result, error) {
 	const op = "function.Reconcile"
+	r.releaseHeldLeftovers(ctx)
 	obj, err := r.store.Get(ctx, req.GVK, req.Namespace, req.Name)
 	if err != nil {
 		if fault.KindOf(err) == fault.NotFound {
