@@ -58,7 +58,8 @@ open. Otherwise say what is missing and recommend running `adr-judge` first.
    defaults), new status reasons — one line each, with one example when the change is visible.
 4. **Choices:** the decider's own choices (to recall) and any choice an agent made that the decider has not
    confirmed (to confirm). The second group must be empty before acceptance.
-5. **Deferred / debt:** workarounds (exit criterion), open questions, new deps (license; not Apache/MIT/BSD needs
+5. **Deferred / debt:** the judge's routed findings and where each goes, workarounds (exit criterion), open
+   questions, new deps (license; not Apache/MIT/BSD needs
    the decider's approval), the losing alternatives in a few words, or none.
 6. **Cost and risks:** one to three bullets, from the ADR's Consequences.
 7. **Replaces:** the Accepted or Implemented ADRs it supersedes or refines (header links), in a few words each.

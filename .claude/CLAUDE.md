@@ -206,7 +206,10 @@ weigh options; edit `Draft`/`Proposed` ADRs as much as you like (they freeze onl
 acceptance); draft independent ADRs in parallel; choose any Apache-2.0/MIT-compatible library
 on its merits; reorder or parallelize work within a build tier; and restructure the prose of
 living docs (blueprint, feat, roadmap) freely — as long as their *facts* stay consistent with
-the rules above. The judge advises; it never blocks a sound decision on taste.
+the rules above. The judge advises; it never blocks a sound decision on taste, nor on a problem that belongs to
+another feature or to a concept the platform has not decided yet (a recovery objective, a tenancy model): those it
+routes to their owner (a feat row, a board card, an issue, a follow-up ADR), and only findings this ADR must fix can
+block it.
 
 ## Backlog — un-scoped ideas live on the GitHub Project, not in the docs
 

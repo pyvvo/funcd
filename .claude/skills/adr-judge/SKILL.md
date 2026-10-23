@@ -121,10 +121,25 @@ modeled time and no progress assertion; an assertion with no named oracle test.
 
 Apply these rules to the findings so the verdict is trustworthy, not just long:
 
-- **Severity is about blast radius, not confidence.** Tier every finding:
+- **Place every finding before you tier it.** A real problem is not always this ADR's problem. Give each finding a
+  home:
+  - **here**: this ADR's own decision, contracts, scenarios or text must change. Only these get a severity tier and
+    can block the ADR.
+  - **elsewhere**: another feature or ADR owns it (an Accepted ADR, a feat row, an open issue); name it.
+  - **above**: the ADR runs into a concept the platform has not decided yet, a cross-cutting policy or objective (a
+    recovery objective such as an RPO, a tenancy model, a security model); name the layer that should decide it (the
+    blueprint, a feat row, a new ADR).
+
+  The test: would fixing it inside this ADR decide something outside its Scope? Then it is elsewhere or above, and
+  it is routed, not tiered. One part stays here: the ADR must state plainly how it behaves against today's platform
+  (an honest consequence, a named open question), and hiding or overstating that is a finding here. Example
+  (ADR-0273, 2026-10-24): "a kill during the stop loses commits" was tiered Major; its home was partly here (the ADR
+  had to state the loss honestly, and keep the Lake's existing one-second save interval) and partly above (how much
+  loss a Lake may take is a recovery objective, FEAT-0009 F112), which went to its own ADR.
+- **Severity is about blast radius, not confidence.** Tier every finding placed here:
   - **Blocker** — a contradiction, contract bug, goal/Accepted-ADR conflict, or
-    security-model violation that will break the implementation or the platform. Must fix before
-    the ADR advances (Draft→Proposed, Proposed→Accepted).
+    security-model violation within this ADR's scope that will break the implementation or the platform. Must fix
+    before the ADR advances (Draft→Proposed, Proposed→Accepted).
   - **Major** — a real weakness (biased/empty alternative analysis, scope creep, missing
     scenario, reversibility risk) that materially weakens the ADR without strictly blocking.
   - **Minor** — clarity/quality improvement.
@@ -167,8 +182,14 @@ Produce the report in this shape (sections with nothing to say still appear, mar
 ### Major
 ### Minor
 ### Nits
-<each finding: **evidence** (section/line) → **goal impact** → **direction to fix**.
+<each finding placed here: **evidence** (section/line) → **goal impact** → **direction to fix**.
  Omit a tier with the line "None." if it is empty.>
+
+## Routed (not this ADR's)
+<each finding placed elsewhere or above: **evidence** → **home** (the ADR, feat row or issue that owns it, or the
+ concept not yet decided) → **proposed destination** (a feat row, a board card, an issue, a follow-up ADR) → what this
+ ADR should say about it meanwhile (an open question, a consequence). Routed findings never change the verdict.
+ "None." if empty.>
 
 ## Template & scenario conformance
 <which ADR-0000 sections are missing/thin; whether every Scenario is observable and has a
@@ -176,7 +197,7 @@ Produce the report in this shape (sections with nothing to say still appear, mar
 
 ## Recommendation
 <advance as-is / advance after fixing Blockers / needs another draft / supersede — and the
- single most important thing to do next>
+ single most important thing to do next; list the routed findings' destinations separately>
 ```
 
 Keep the prose terse and concrete (match the repo's voice). Cite the file with real links so
