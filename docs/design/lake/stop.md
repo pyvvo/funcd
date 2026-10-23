@@ -10,23 +10,30 @@ stateDiagram-v2
     state "cancelling" as s0
     state "draining" as s1
     state "exited" as s2
-    state "killed" as s3
-    state "running" as s4
-    state "uploading" as s5
-    state "waiting" as s6
-    [*] --> s4
-    s0 --> s3 : Kill
-    s0 --> s5 : StopClosed
+    state "joined" as s3
+    state "killed" as s4
+    state "running" as s5
+    state "uploading" as s6
+    state "waiting" as s7
+    [*] --> s5
+    s0 --> s0 : Tick
+    s0 --> s4 : Kill
+    s0 --> s6 : StopClosed
     s1 --> s1 : Tick
-    s1 --> s3 : Kill
-    s1 --> s6 : StopDetach
-    s4 --> s1 : StopBegin
-    s4 --> s4 : Tick
-    s5 --> s2 : StopUploaded
-    s5 --> s3 : Kill
-    s6 --> s0 : StopCancel
-    s6 --> s3 : Kill
-    s6 --> s5 : StopClosed
+    s1 --> s3 : StopJoin
+    s1 --> s4 : Kill
+    s3 --> s3 : Tick
+    s3 --> s4 : Kill
+    s3 --> s7 : StopDetach
+    s5 --> s1 : StopBegin
+    s5 --> s5 : Tick
+    s6 --> s2 : StopUploaded
+    s6 --> s4 : Kill
+    s6 --> s6 : Tick
+    s7 --> s0 : StopCancel
+    s7 --> s4 : Kill
+    s7 --> s6 : StopClosed
+    s7 --> s7 : Tick
     s2 --> [*]
-    s3 --> [*]
+    s4 --> [*]
 ```

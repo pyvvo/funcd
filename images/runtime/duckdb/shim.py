@@ -270,7 +270,7 @@ class _Checkpointer:
 
 def _drain(cur: "duckdb.DuckDBPyConnection", seconds: float) -> None:
     """Waits up to seconds for Quack to run no query: the commit watcher keeps saving the catalog meanwhile, so a kill
-    during the stop loses no more than a crash does (ADR-0273)."""
+    during the drain loses no more than a crash does (ADR-0273)."""
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         if not cur.execute("SELECT count(*) FROM quack_active_connections() WHERE state = 'active'").fetchone()[0]:
@@ -390,12 +390,14 @@ def main() -> int:
     def _on_term(_signum, _frame):
         try:
             # The watcher keeps saving while the running queries drain; its cursor holds the catalog open, which the
-            # stop waits out, so it stops and closes before the stop detaches the catalog.
+            # stop waits out, so it stops and closes before the stop detaches the catalog. One more save then covers
+            # the commits of its last interval: a kill later in the stop loses only what completes after this save.
             _drain(drain, STOP_WAIT_SECONDS)
             drain.close()
             watcher.stop()
             watcher.join()
             watch.close()
+            checkpointer.checkpoint()
             checkpointer.stop(serving, quack_token)
         finally:
             raise SystemExit(0)

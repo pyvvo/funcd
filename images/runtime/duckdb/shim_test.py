@@ -476,8 +476,8 @@ class _Cursors(_Recording):
 
 class TestIssue1198TheStopClosesTheWatcherFirst(unittest.TestCase):
     """#1198, ADR-0273: SIGTERM lets the running queries drain while the watcher keeps saving, then stops and joins the
-    commit watcher and closes its cursor, which holds the catalog open, before the checkpointer's stop, with the URI
-    Quack serves and its token, and the process then exits 0."""
+    commit watcher and closes its cursor, which holds the catalog open, saves once more, then runs the checkpointer's
+    stop with the URI Quack serves and its token, and the process then exits 0."""
 
     def test_the_shutdown_order(self) -> None:
         handlers: dict = {}
@@ -509,6 +509,7 @@ class TestIssue1198TheStopClosesTheWatcherFirst(unittest.TestCase):
         order.attach_mock(watcher.stop, "watcher_stop")
         order.attach_mock(watcher.join, "watcher_join")
         order.attach_mock(con.cursors[1].close, "watch_close")
+        order.attach_mock(checkpointer.checkpoint, "checkpointer_checkpoint")
         order.attach_mock(checkpointer.stop, "checkpointer_stop")
         with self.assertRaises(SystemExit) as stop:
             handlers[shim.signal.SIGTERM](shim.signal.SIGTERM, None)
@@ -516,6 +517,7 @@ class TestIssue1198TheStopClosesTheWatcherFirst(unittest.TestCase):
         self.assertEqual(order.mock_calls, [mock.call.drain(con.cursors[2], shim.STOP_WAIT_SECONDS),
                                             mock.call.drain_close(), mock.call.watcher_stop(),
                                             mock.call.watcher_join(), mock.call.watch_close(),
+                                            mock.call.checkpointer_checkpoint(),
                                             mock.call.checkpointer_stop(["quack://0.0.0.0:8080"], "token")])
 
 
