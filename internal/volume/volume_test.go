@@ -434,6 +434,46 @@ func TestIssue1202_SpecialFilesStayOutOfABackup(t *testing.T) {
 	}
 }
 
+// TestIssue1202_EarlierBackupWithAFIFORestores: a backup an earlier release took of a volume holding a FIFO or a device
+// node holds that entry; the restore leaves it out and restores the rest (#1202).
+func TestIssue1202_EarlierBackupWithAFIFORestores(t *testing.T) {
+	ctx := t.Context()
+	m := newManager(t, Options{Root: t.TempDir()})
+	var archive bytes.Buffer
+	tw := tar.NewWriter(&archive)
+	for _, e := range []struct {
+		h    tar.Header
+		body string
+	}{
+		{tar.Header{Name: "pipe", Typeflag: tar.TypeFifo, Mode: 0o600}, ""},
+		{tar.Header{Name: "tty", Typeflag: tar.TypeChar, Mode: 0o600, Devmajor: 5}, ""},
+		{tar.Header{Name: "disk", Typeflag: tar.TypeBlock, Mode: 0o600, Devmajor: 8}, ""},
+		{tar.Header{Name: "data", Typeflag: tar.TypeReg, Mode: 0o600, Size: 4}, "kept"},
+	} {
+		if err := tw.WriteHeader(&e.h); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.WriteString(tw, e.body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dst := local("copy", "state")
+	restored, err := m.Reserve(ctx, dst, "u2", 1<<20, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Untar(ctx, dst, &archive); err != nil {
+		t.Fatalf("the restore of a backup holding a FIFO and device nodes: %v", err)
+	}
+	ents, err := os.ReadDir(restored)
+	if err != nil || len(ents) != 1 || ents[0].Name() != "data" {
+		t.Fatalf("the restored volume holds %v (%v), want the file alone", ents, err)
+	}
+}
+
 // TestIssue1203_DamagedMetaStopsOnlyItsVolume: a meta a crash left empty no longer stops the manager from opening. The
 // damage is logged, the other volumes are listed, and the damaged volume's Reserve reports it Invalid (#1203).
 func TestIssue1203_DamagedMetaStopsOnlyItsVolume(t *testing.T) {

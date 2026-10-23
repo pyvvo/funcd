@@ -157,6 +157,8 @@ func extract(root *os.Root, r io.Reader, h *tar.Header, name string) error {
 			return err
 		}
 		return f.Close()
+	case tar.TypeFifo, tar.TypeChar, tar.TypeBlock:
+		return nil // a backup an earlier release took may hold one: a running process's state, which no restore takes (#1202)
 	default:
 		return fault.Invalidf("volume.Untar", "entry %q of type %c is neither a file, a directory nor a link", h.Name, h.Typeflag)
 	}
