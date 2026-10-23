@@ -1,6 +1,6 @@
 # ADR-0273: A Lake stop cancels the queries that outlive its wait (amends ADR-0271)
 
-- **Status**: Proposed (2026-10-24; judged twice, redesigned on round 1's Blocker)
+- **Status**: Proposed (2026-10-24; judged three rounds, redesigned on round 1's Blocker; last verdict: accept)
 - **Date**: 2026-10-24
 - **Deciders**: green-0-rabbit
 - **Tags**: lake, duckdb, quack, durability, stop, amendment
@@ -11,8 +11,7 @@
   [ADR-0263](0263-the-lake-engine-runs-duckdb-2.md) Decision 8 — it now governs the serving instance, beside the
   bounded control instance a stop may open
 - **Relates to**: [ADR-0272](0272-a-design-model-checks-lifecycle-and-concurrency-decisions.md) (the amendment form
-  and the design model) · [ADR-0270](0270-derived-s3-key-pairs-rotate.md) (a Lake engine replaced once per key period) ·
-  [ADR-0263](0263-the-lake-engine-runs-duckdb-2.md) Decision 8 (the engine's confinement)
+  and the design model) · [ADR-0270](0270-derived-s3-key-pairs-rotate.md) (a Lake engine replaced once per key period)
 
 ## Context & Need
 
@@ -151,8 +150,8 @@ def _cancel(cur, serving: list[str], token: str) -> None: ...     # cancels the 
   3 runs of #1217's reproduction kept the commit; the stop ended in 5.23 to 5.30 s, the long query cancelled at 5.13 to
   5.19 s, which leaves about 4.7 s of the grace for the uploads (milliseconds on one node, ADR-0271's review).
 - **(−)** A kill during the stop loses the commits acknowledged since the last checkpoint before SIGTERM, not only
-  #998's one interval: the stop joins the watcher first. Only a stalled commit or an upload that overruns the grace
-  leads there.
+  #998's one interval: the stop joins the watcher first. A stalled commit, a query that ignores the interrupt, a failed
+  cancel or an upload that overruns the grace leads there.
 - **(−)** A query running 5 s after SIGTERM is cancelled; its client gets an error and retries against the next
   engine. ADR-0270 replaces each Lake engine once per key period, so this can happen daily for a long query.
 - **(−)** A query sent during the stop fails on the detached catalog instead of failing to connect.

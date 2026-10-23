@@ -264,6 +264,7 @@ class TestIssue1217ATimedOutStopKeepsEveryAcknowledgedCommit(unittest.TestCase):
     MARK = "INSERT INTO lakehouse.t SELECT 42 WHERE (SELECT sum(hash(range)) FROM range(0, 1000000000)) IS NOT NULL"
 
     # oracle: docs/design/lake/stop.fizz#AckedCommitsAreStored
+    # oracle: docs/design/lake/stop.fizz#StopEnds
     def test_a_commit_acknowledged_during_the_wait_survives_and_the_long_query_is_cancelled(self) -> None:
         lake = _Lake(self)
         engine = lake.start()
