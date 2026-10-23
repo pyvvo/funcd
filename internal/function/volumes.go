@@ -226,12 +226,45 @@ func (r *Reconciler) dropEmptyDirs(ctx context.Context, ids []volume.ID) {
 	}
 }
 
-// sweepEmptyDirs releases the emptyDirs of fn's workers that ended or are gone: an ended worker is replaced, never
-// started again, so its emptyDir is never read again (ADR-0262 Decision 1). A worker keep names is left to the worker
-// that replaces it in the same pass, which takes over that space (#1207).
-func (r *Reconciler) sweepEmptyDirs(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, insts []runtime.Instance, keep func(runtime.InstanceID) bool) error {
+// keepSlots records the replica slots indexes of revision rev as ones fn's pass creates again or waits to: the pass's
+// sweep leaves their emptyDirs to the workers that replace them (#1207).
+func (r *Reconciler) keepSlots(fn *v1.Function, rev v1.ObjectName, indexes []int) {
+	key := fnKey{fn.Namespace, fn.Name}
+	r.volMu.Lock()
+	defer r.volMu.Unlock()
+	if r.passSlots[key] == nil {
+		r.passSlots[key] = map[runtime.InstanceID]bool{}
+	}
+	for _, i := range indexes {
+		r.passSlots[key][runtime.NewInstanceID(fn.Namespace, fn.Name, rev, i)] = true
+	}
+}
+
+// sweepEmptyDirs releases, at the end of a pass that converged fn's revisions, the emptyDirs of fn's workers that ended
+// or are gone: an ended worker is replaced, never started again, so its emptyDir is never read again (ADR-0262 Decision
+// 1). It sweeps once every revision's step kept its slots, so a step never releases the emptyDir of a slot another
+// revision's step creates again in the same pass; that worker takes the space over (#1207).
+func (r *Reconciler) sweepEmptyDirs(ctx context.Context, fn *v1.Function) error {
 	if r.volumes == nil {
 		return nil
+	}
+	key, prefix := fnKey{fn.Namespace, fn.Name}, string(fn.Namespace)+"/"+string(fn.Name)+"/"
+	r.volMu.Lock()
+	kept, converged := r.passSlots[key]
+	delete(r.passSlots, key)
+	var ended []runtime.InstanceID
+	for id := range r.emptyDirs {
+		if strings.HasPrefix(string(id), prefix) && !kept[id] {
+			ended = append(ended, id)
+		}
+	}
+	r.volMu.Unlock()
+	if !converged || len(ended) == 0 {
+		return nil
+	}
+	insts, err := r.namedInstances(ctx, fn.Namespace, fn.Name)
+	if err != nil {
+		return err
 	}
 	live := make(map[runtime.InstanceID]bool, len(insts))
 	for _, in := range insts {
@@ -239,14 +272,12 @@ func (r *Reconciler) sweepEmptyDirs(ctx context.Context, ns v1.NamespaceName, na
 			live[in.ID] = true
 		}
 	}
-	r.volMu.Lock()
 	var gone []runtime.InstanceID
-	for id := range r.emptyDirs {
-		if strings.HasPrefix(string(id), string(ns)+"/"+string(name)+"/") && !live[id] && !keep(id) {
+	for _, id := range ended {
+		if !live[id] {
 			gone = append(gone, id)
 		}
 	}
-	r.volMu.Unlock()
 	for _, id := range gone {
 		if err := r.releaseEmptyDirs(ctx, id); err != nil {
 			return err
@@ -278,6 +309,7 @@ func (r *Reconciler) volumesGone(ctx context.Context, ns v1.NamespaceName, name 
 			delete(r.emptyDirs, id)
 		}
 	}
+	delete(r.passSlots, fnKey{ns, name})
 	r.volMu.Unlock()
 	return nil
 }

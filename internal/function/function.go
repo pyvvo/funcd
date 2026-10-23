@@ -375,8 +375,9 @@ type Reconciler struct {
 	// volumes keeps the Functions' volumes (ADR-0262); emptyDirs names each worker's emptyDirs, volumesSeen the
 	// Functions this process passed over, volumesMissing those whose DataMissing awaits a status write,
 	// heldLeftovers the last run's emptyDirs a held boot kept (#1204), restoring the Functions a Restore keeps
-	// workerless and launching the passes creating their workers (#1206); volMu guards the six, and launched tells
-	// StopWorkers that a pass is done creating.
+	// workerless and launching the passes creating their workers (#1206), and passSlots the replica slots the steps of
+	// a pass keep for its sweep (#1207); volMu guards the seven, and launched tells StopWorkers that a pass is done
+	// creating.
 	volumes        volume.Manager
 	volumesDurable bool
 	hold           hold.Gate
@@ -388,6 +389,7 @@ type Reconciler struct {
 	restoring      map[fnKey]int
 	launching      map[fnKey]int
 	launched       *sync.Cond
+	passSlots      map[fnKey]map[runtime.InstanceID]bool
 }
 
 // fnKey names a Function in the spared set.
@@ -550,6 +552,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		volumesMissing:    map[fnKey][]string{},
 		restoring:         map[fnKey]int{},
 		launching:         map[fnKey]int{},
+		passSlots:         map[fnKey]map[runtime.InstanceID]bool{},
 	}
 	r.launched = sync.NewCond(&r.volMu)
 	return r, nil
@@ -755,6 +758,13 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 	}
 	if err != nil {
 		return controller.Result{}, convergeError{err}
+	}
+	// one sweep per pass, after every revision's step kept its replica slots (#1207); a held revision that failed may
+	// not have kept its own
+	if herr == nil {
+		if err := r.sweepEmptyDirs(ctx, fn); err != nil {
+			return controller.Result{}, convergeError{err}
+		}
 	}
 	res, err := r.finish(ctx, fn, v, drainAfter)
 	if err == nil && fn.Status.Phase == v1.PhaseReady {
@@ -1907,14 +1917,10 @@ func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, re
 		return revisionPass{}, err
 	}
 	want := make(map[int]bool, len(indexes))
-	replaced := make(map[runtime.InstanceID]bool, len(indexes))
 	for _, i := range indexes {
 		want[i] = true
-		replaced[runtime.NewInstanceID(tmpl.Namespace, tmpl.Name, rev, i)] = true
 	}
-	if err := r.sweepEmptyDirs(ctx, tmpl.Namespace, tmpl.Name, insts, func(id runtime.InstanceID) bool { return replaced[id] }); err != nil {
-		return revisionPass{}, err
-	}
+	r.keepSlots(tmpl, rev, indexes)
 	byReplica := make(map[int]runtime.Instance, len(indexes))
 	for _, in := range insts {
 		if in.Revision != rev {
