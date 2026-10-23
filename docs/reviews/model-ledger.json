@@ -12403,5 +12403,50 @@
     "dod_total": 7,
     "report": "docs/reviews/adr-0263-implementation-claude-opus-5-5.md",
     "notes": "pass: DuckDB 2.0.0 everywhere (pins, examples, dev bundle), DuckLake 1.1 ATTACH no migration, extension_directories, shim allow-list in order, dev engine on port 0 with whole-line watcher + DUCKDB_AGENT_MODE=0, re-captured 2.0.0 handshake; all 7 scenarios pass, both lanes PASS (evidence). minor (model): Implementation-plan docs/PROJECT-SUMMARY.md update not made (non-blocking, derived doc). #1185/#1186 out of scope, not worsened"
+  },
+  {
+    "date": "2026-10-23",
+    "adr": "0262",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "changes-requested",
+    "blockers": 0,
+    "majors": 1,
+    "minors": 4,
+    "model_attributed": 5,
+    "dod_passed": 11,
+    "dod_total": 12,
+    "report": "docs/reviews/adr-0262-implementation-claude-opus-5-5.md",
+    "notes": "changes-requested: major (model) an emptyDir that does not fit sets Ready=False StartFailed, not VolumeCapacity (Decision 5, scenario capacity-not-overcommitted); minors (model): DataMissing clears on any volume Restore, allocator rebuilt from metas only, emptyDir leaf named by a token, lane steps untagged; 12/12 scenario tests, quota tests as root and lint green"
+  },
+  {
+    "date": "2026-10-23",
+    "adr": "0266",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 8,
+    "dod_total": 8,
+    "report": "docs/reviews/adr-0266-implementation-claude-opus-5-5.md",
+    "notes": "pass: pattern then go-humanize, exact to 15 digits, refused past 2^63-1; one-form rules on volume, Namespace and daemon config; every reader uses Bytes(); 4/4 scenario tests"
+  },
+  {
+    "date": "2026-10-23",
+    "adr": "0268",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 8,
+    "dod_total": 8,
+    "report": "docs/reviews/adr-0268-implementation-claude-opus-5-5.md",
+    "notes": "pass: filter on every worker, masked compare, compat arches, file_setattr, 6.17 refusal; HighBitsDoNotPass on Linux, lane probe; minor (model): F181 row does not link ADR-0268"
   }
 ]
