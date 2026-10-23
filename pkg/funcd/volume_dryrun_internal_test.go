@@ -70,6 +70,16 @@ func (a volumeAPI) function(name, size string, dryRun bool) (int, string) {
 	}, dryRun)
 }
 
+// app posts App shop with one part, Function part.
+func (a volumeAPI) app(part, size string, dryRun bool) (int, string) {
+	a.t.Helper()
+	return a.post("apps", &v1.App{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindApp.GVK().APIVersion(), Kind: v1.KindApp},
+		ObjectMeta: v1.ObjectMeta{Name: "shop", Namespace: "default", ResourceGroup: "rg1"},
+		Spec:       v1.AppSpec{Functions: []v1.AppFunction{{Name: v1.ObjectName(part), FunctionSpec: stateVolumeSpec(size)}}},
+	}, dryRun)
+}
+
 // TestIssue1205_DryRunBooksNoVolume: a dry run (ADR-0220) answers what the real write would and books nothing, so a
 // real apply right after it, whatever size it sets, finds the capacity the dry run found (#1205).
 func TestIssue1205_DryRunBooksNoVolume(t *testing.T) {
@@ -77,11 +87,7 @@ func TestIssue1205_DryRunBooksNoVolume(t *testing.T) {
 	api := newVolumeAPI(t, volume.Options{CapacityBytes: 4 << 30})
 
 	// an App's parts pass the same admission: its dry run books none of its Functions' volumes
-	code, out := api.post("apps", &v1.App{
-		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindApp.GVK().APIVersion(), Kind: v1.KindApp},
-		ObjectMeta: v1.ObjectMeta{Name: "shop", Namespace: "default", ResourceGroup: "rg1"},
-		Spec:       v1.AppSpec{Functions: []v1.AppFunction{{Name: "app-cart", FunctionSpec: stateVolumeSpec("1GiB")}}},
-	}, true)
+	code, out := api.app("app-cart", "1GiB", true)
 	require.Less(t, code, 300, "dry run of an App with a 1GiB volume: %s", out)
 	code, out = api.function("app-cart", "2GiB", false)
 	require.Less(t, code, 300, "app-cart applied with 2GiB right after the App's dry run with 1GiB: %s", out)
@@ -117,4 +123,24 @@ func TestIssue1208_AppliedVolumeKeepsItsBooking(t *testing.T) {
 	require.Contains(t, out, "VolumeCapacity")
 	code, out = api.function("small", "1Mi", false)
 	require.Less(t, code, 300, "the space of the refused apply's booking is free again: %s", out)
+}
+
+// TestIssue1208_AppPartVolumeKeepsItsBooking: an App's admission books its parts' local volumes before the App writes
+// the part Functions; the booking stays while the stored App declares the part, however long its rollout waits, as
+// during a hold (#1208).
+func TestIssue1208_AppPartVolumeKeepsItsBooking(t *testing.T) {
+	t.Parallel()
+	var now atomic.Int64
+	now.Store(time.Now().UnixNano())
+	api := newVolumeAPI(t, volume.Options{CapacityBytes: 4 << 20, Clock: func() time.Time { return time.Unix(0, now.Load()) }})
+	code, out := api.app("app-cart", "3Mi", false)
+	require.Less(t, code, 300, "shop applied with a 3Mi part volume: %s", out)
+	require.NoError(t, api.p.volumes.Book(context.Background(), volume.ID{Namespace: "default", Function: "refused", Name: "state"}, 1<<20))
+	now.Add(int64(2 * time.Minute)) // past BookingTTL, and the App wrote no part Function
+
+	code, out = api.function("thumbs", "3Mi", false)
+	require.Equal(t, http.StatusConflict, code, "thumbs took the space shop's part booked: %s", out)
+	require.Contains(t, out, "VolumeCapacity")
+	code, out = api.function("small", "1Mi", false)
+	require.Less(t, code, 300, "a volume of the same name no stored App part declares still lapses: %s", out)
 }

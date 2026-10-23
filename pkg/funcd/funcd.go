@@ -2672,18 +2672,32 @@ func (p *Platform) openVolumes() error {
 		}
 		return obj.GetObjectMeta().UID, true, nil
 	}
+	// a stored Function declares the volume, or a stored App's part the App has not written that way yet (#1208)
 	o.Declared = func(ctx context.Context, id volume.ID) (bool, error) {
+		const op = "funcd.volumeDeclared"
+		declares := func(obj v1.Object) bool {
+			f, _ := obj.(*v1.Function)
+			return f != nil && f.Name == id.Function && slices.ContainsFunc(f.Spec.Volumes, func(v v1.VolumeEntry) bool {
+				return v.Type == v1.VolumeLocal && v.VolumeName() == id.Name
+			})
+		}
 		obj, err := c.store.Get(ctx, v1.KindFunction.GVK(), id.Namespace, id.Function)
-		if fault.KindOf(err) == fault.NotFound {
-			return false, nil
+		switch {
+		case err == nil && declares(obj):
+			return true, nil
+		case err != nil && fault.KindOf(err) != fault.NotFound:
+			return false, fault.Wrapf(err, fault.KindOf(err), op, "get function %s/%s", id.Namespace, id.Function)
 		}
+		apps, err := c.store.List(ctx, v1.KindApp.GVK(), store.ListOptions{Namespace: id.Namespace})
 		if err != nil {
-			return false, fault.Wrapf(err, fault.KindOf(err), "funcd.volumeDeclared", "get function %s/%s", id.Namespace, id.Function)
+			return false, fault.Wrapf(err, fault.KindOf(err), op, "list apps in %q", id.Namespace)
 		}
-		f, _ := obj.(*v1.Function)
-		return f != nil && slices.ContainsFunc(f.Spec.Volumes, func(v v1.VolumeEntry) bool {
-			return v.Type == v1.VolumeLocal && v.VolumeName() == id.Name
-		}), nil
+		for _, item := range apps.Items {
+			if a, ok := item.(*v1.App); ok && slices.ContainsFunc(a.Parts(), declares) {
+				return true, nil
+			}
+		}
+		return false, nil
 	}
 	m, err := volume.New(o)
 	if err != nil {
