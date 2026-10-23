@@ -2672,6 +2672,19 @@ func (p *Platform) openVolumes() error {
 		}
 		return obj.GetObjectMeta().UID, true, nil
 	}
+	o.Declared = func(ctx context.Context, id volume.ID) (bool, error) {
+		obj, err := c.store.Get(ctx, v1.KindFunction.GVK(), id.Namespace, id.Function)
+		if fault.KindOf(err) == fault.NotFound {
+			return false, nil
+		}
+		if err != nil {
+			return false, fault.Wrapf(err, fault.KindOf(err), "funcd.volumeDeclared", "get function %s/%s", id.Namespace, id.Function)
+		}
+		f, _ := obj.(*v1.Function)
+		return f != nil && slices.ContainsFunc(f.Spec.Volumes, func(v v1.VolumeEntry) bool {
+			return v.Type == v1.VolumeLocal && v.VolumeName() == id.Name
+		}), nil
+	}
 	m, err := volume.New(o)
 	if err != nil {
 		return err

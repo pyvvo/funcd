@@ -115,6 +115,9 @@ type Options struct {
 	UID, GID int
 	// BookingTTL drops a booking no Reserve backed (an apply refused after its admission); default 1 minute.
 	BookingTTL time.Duration
+	// Declared reports whether a stored Function declares id's local volume, whose booking BookingTTL never drops: its
+	// pass reserves it, however long an earlier gate holds that pass (#1208). nil ⇒ none is kept.
+	Declared func(ctx context.Context, id ID) (bool, error)
 	// MeasureInterval paces the measurement of an unenforced Limiter; default 30 s.
 	MeasureInterval time.Duration
 	Logger          *slog.Logger
@@ -289,13 +292,22 @@ func (m *manager) writeMeta(id ID, md meta) error {
 	return hold.WriteFile("volume.meta", filepath.Dir(path), filepath.Base(path), b)
 }
 
-// dropStale removes bookings no Reserve backed within BookingTTL (an apply refused after its admission).
-func (m *manager) dropStale() {
+// dropStale removes bookings no Reserve backed within BookingTTL and no stored Function declares (an apply refused
+// after its admission). One a stored Function declares, or that cannot be checked, is kept for another BookingTTL.
+func (m *manager) dropStale(ctx context.Context) {
 	now := m.o.Clock()
 	for id, b := range m.bookings {
-		if !b.backed && now.Sub(b.at) > m.o.BookingTTL {
-			delete(m.bookings, id)
+		if b.backed || now.Sub(b.at) <= m.o.BookingTTL {
+			continue
 		}
+		if m.o.Declared != nil {
+			if declared, err := m.o.Declared(ctx, id); err != nil || declared {
+				b.at = now
+				m.bookings[id] = b
+				continue
+			}
+		}
+		delete(m.bookings, id)
 	}
 }
 
@@ -322,7 +334,7 @@ func (m *manager) check(ctx context.Context, op string, id ID, size int64) (book
 	if size <= 0 {
 		return false, fault.Invalidf(op, "volume %s: size %d must be above 0", id, size)
 	}
-	m.dropStale()
+	m.dropStale(ctx)
 	if b, ok := m.bookings[id]; ok {
 		if b.size != size {
 			return true, fault.Invalidf(op, "volume %s: sizeBytes %d differs from its %d; a volume is not resized", id, size, b.size)

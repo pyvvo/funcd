@@ -113,6 +113,31 @@ func TestStaleBookingDropped(t *testing.T) {
 	}
 }
 
+// TestDeclaredBookingOutlivesTheTTL: past BookingTTL an unbacked booking a stored Function declares stays, as does one
+// whose check fails; one no Function declares goes (#1208).
+func TestDeclaredBookingOutlivesTheTTL(t *testing.T) {
+	ctx := t.Context()
+	now := time.Unix(1000, 0)
+	declared := map[v1.ObjectName]error{"cart": nil, "flaky": errors.New("store down")}
+	m := newManager(t, Options{CapacityBytes: 10, BookingTTL: time.Minute, Clock: func() time.Time { return now },
+		Declared: func(_ context.Context, id ID) (bool, error) {
+			err, ok := declared[id.Function]
+			return ok && err == nil, err
+		}})
+	for fn, size := range map[v1.ObjectName]int64{"cart": 4, "flaky": 3, "ghost": 3} {
+		if err := m.Book(ctx, local(fn, "state"), size); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now = now.Add(2 * time.Minute)
+	if err := m.Book(ctx, local("thumbs", "state"), 4); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("a booking beside the declared and the unchecked ones = %v, want VolumeCapacity", err)
+	}
+	if err := m.Book(ctx, local("thumbs", "state"), 3); err != nil {
+		t.Fatalf("a booking in the space of the undeclared one = %v, want nil", err)
+	}
+}
+
 // TestScenarioRetainedNotTakenOver: a retained volume refuses Reserve by another UID (StoreNotOwned); Adopt by the
 // re-created Function stamps its UID, and Reserve then succeeds with the old data.
 // scenario: retained-not-taken-over
