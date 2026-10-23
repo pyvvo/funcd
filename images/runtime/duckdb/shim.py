@@ -42,6 +42,7 @@ import sqlite3
 import sys
 import threading
 import urllib.parse
+from collections.abc import Mapping
 
 import boto3  # SQLite-catalog blob sync against the injected funcd S3 endpoint.
 import duckdb  # the native engine (out-of-process in THIS function — no cgo in the daemon).
@@ -58,6 +59,14 @@ COMMIT_POLL_SECONDS = 1.0
 # The extensions the engine loads — pre-installed OFFLINE into the image's extension dir (the sandbox
 # has no arbitrary egress): httpfs (S3), sqlite (the ducklake catalog backend), ducklake, quack.
 EXTENSIONS = ("httpfs", "sqlite", "ducklake", "quack")
+
+# The DUCKDB_* keys a Lake may set, and the DuckDB setting each one sets (ADR-0265). Any other DUCKDB_* key but the
+# image's DUCKDB_EXTENSION_DIRECTORY ends the start: the sandbox's settings stay the shim's (ADR-0263 Decision 8).
+TUNING = {
+    "DUCKDB_MAX_TEMP_DIRECTORY_SIZE": "max_temp_directory_size",
+    "DUCKDB_MEMORY_LIMIT": "memory_limit",
+    "DUCKDB_THREADS": "threads",
+}
 
 
 def _require(name: str) -> str:
@@ -120,6 +129,25 @@ def _connect() -> "duckdb.DuckDBPyConnection":
     for ext in EXTENSIONS:
         con.execute(f"LOAD {ext}")  # offline LOAD from the pre-installed extension dir.
     return con
+
+
+def _tune(con: "duckdb.DuckDBPyConnection", environ: Mapping[str, str]) -> None:
+    """Applies the allowed DUCKDB_* keys of environ; any other DUCKDB_* key but DUCKDB_EXTENSION_DIRECTORY, or a value
+    DuckDB refuses, ends the start (exit 2) with a message naming the key (ADR-0265)."""
+    for name in sorted(environ):
+        if name.startswith("DUCKDB_") and name not in TUNING and name != "DUCKDB_EXTENSION_DIRECTORY":
+            allowed = ", ".join(sorted(TUNING))
+            sys.stderr.write(f"funcd duckdb shim: {name} is not an engine setting a Lake may set; allowed: {allowed}\n")
+            raise SystemExit(2)
+    for name in sorted(TUNING):
+        if name not in environ:
+            continue
+        value = environ[name]
+        try:
+            con.execute(f"SET {TUNING[name]} = ?", [value])
+        except Exception as exc:  # noqa: BLE001 — DuckDB's error names no key, so the message adds it.
+            sys.stderr.write(f"funcd duckdb shim: {name}={value} is not a valid {TUNING[name]}: {exc}\n")
+            raise SystemExit(2) from exc
 
 
 def _configure(con: "duckdb.DuckDBPyConnection", endpoint: str, region: str) -> None:
@@ -260,6 +288,7 @@ def main() -> int:
 
     s3 = _s3_client(endpoint, region)
     con = _connect()
+    _tune(con, os.environ)
     _configure(con, endpoint, region)
 
     # Recover: GetObject the catalog from blob → local file → ATTACH (fresh on first deploy). The

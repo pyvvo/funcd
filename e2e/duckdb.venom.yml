@@ -118,6 +118,23 @@ testcases:
           - result.body ShouldContainSubstring "rows"                 # the handler's FuncOutput shape
           - result.body ShouldContainSubstring "[[42]]"               # rows == [[42]] — real Quack round-trip on lake
 
+  - name: tuning-keys-apply — Lake lake's engine runs with its ConfigMap's DUCKDB_MEMORY_LIMIT (ADR-0265)
+    steps:
+      # The example's ConfigMap sets DUCKDB_MEMORY_LIMIT "3GB", which DuckDB reads back as 2.7 GiB; without it the
+      # engine's default on this Lake is 3.2 GiB. The SQL runs on the engine over Quack, so it reads the engine's setting.
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: "{\"data\":{\"sql\":\"SELECT current_setting('memory_limit') AS m\"}}"
+        retry: 10
+        delay: 2
+        info: "memory_limit → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring "2.7 GiB"
+
   - name: the lake is exposed at the edge and external lake::query is PEP'd (ADR-0138)
     steps:
       # ADR-0138/0241: lake.yaml enables spec.ingress at path /lake/lake, so once `lake` is Ready
