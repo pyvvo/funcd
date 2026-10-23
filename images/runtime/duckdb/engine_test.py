@@ -256,6 +256,97 @@ class TestIssue1198AStopKeepsEveryAcknowledgedCommit(unittest.TestCase):
             self.assertEqual(rows, [(1,)], "the acknowledged long commit is missing")
 
 
+class TestIssue1217ATimedOutStopKeepsEveryAcknowledgedCommit(unittest.TestCase):
+    """#1217: a query still running STOP_WAIT_SECONDS after SIGTERM is cancelled, so the catalog the stop uploads holds
+    a commit acknowledged during the wait (#1217's reproduction)."""
+
+    LONG = "INSERT INTO lakehouse.slow SELECT sum(hash(range)) FROM range(0, 6000000000)"
+    MARK = "INSERT INTO lakehouse.t SELECT 42 WHERE (SELECT sum(hash(range)) FROM range(0, 1000000000)) IS NOT NULL"
+
+    # oracle: docs/design/lake/stop.fizz#AckedCommitsAreStored
+    def test_a_commit_acknowledged_during_the_wait_survives_and_the_long_query_is_cancelled(self) -> None:
+        lake = _Lake(self)
+        engine = lake.start()
+        lake.client.query(engine, "CREATE TABLE lakehouse.slow (n HUGEINT)")
+        lake.client.query(engine, "CREATE TABLE lakehouse.t (i BIGINT)")
+        result: dict[str, str] = {}
+
+        def run(key: str, sql: str) -> None:
+            try:
+                lake.client.query(engine, sql, lake.client.con.cursor())
+                result[key] = "acked"
+            except Exception as exc:  # noqa: BLE001 — the query's error is what the test reads.
+                result[key] = str(exc).splitlines()[0][:200]
+
+        long_query = threading.Thread(target=run, args=("long", self.LONG))
+        long_query.start()
+        time.sleep(0.3)
+        mark = threading.Thread(target=run, args=("mark", self.MARK))
+        mark.start()
+        time.sleep(0.3)
+        started = time.monotonic()
+        code = engine.stop()
+        stopped = time.monotonic() - started
+        mark.join()
+        long_query.join()
+        self.assertEqual(code, 0, engine.tail())
+        self.assertLess(stopped, 9.0, "the stop outlasted the runtime's SIGTERM grace")
+        self.assertEqual(result["mark"], "acked", "the marker commit was not acknowledged during the wait")
+        restarted = lake.start()
+        self.assertEqual(lake.client.query(restarted, "SELECT i FROM lakehouse.t"), [(42,)],
+                         f"the commit acknowledged during the wait is missing\n{engine.tail()}")
+        self.assertRegex(result["long"].lower(), "cancel|interrupt", "the long query was not cancelled")
+        self.assertIn("cancelling 1 queries that outlived the stop", engine.tail())
+        self.assertEqual(lake.client.query(restarted, "SELECT count(*) FROM lakehouse.slow"), [(0,)])
+
+
+class TestIssue1217NoTransactionAfterDetach(unittest.TestCase):
+    """ADR-0273: a write sent while the engine stops fails, and the next engine does not hold it. A transaction holds the
+    catalog only while its request runs: Quack ends it with the request, so the stop's cancel sees every holder."""
+
+    def test_a_write_during_the_stop_fails(self) -> None:
+        lake = _Lake(self)
+        engine = lake.start()
+        lake.client.query(engine, "CREATE TABLE lakehouse.slow (n HUGEINT)")
+        lake.client.query(engine, "CREATE TABLE lakehouse.t (i BIGINT)")
+        holder = threading.Thread(target=lambda: self._ignore(lake, engine, TestIssue1217ATimedOutStopKeepsEveryAcknowledgedCommit.LONG))
+        holder.start()
+        time.sleep(0.3)
+        engine.proc.send_signal(signal.SIGTERM)
+        time.sleep(1.0)
+        with self.assertRaises(Exception):
+            lake.client.query(engine, "INSERT INTO lakehouse.t VALUES (9)", lake.client.con.cursor())
+        self.assertEqual(engine.proc.wait(timeout=30), 0, engine.tail())
+        holder.join()
+        self.assertEqual(lake.client.query(lake.start(), "SELECT count(*) FROM lakehouse.t"), [(0,)])
+
+    def test_a_transaction_ends_with_its_request(self) -> None:
+        lake = _Lake(self)
+        engine = lake.start()
+        lake.client.query(engine, "CREATE TABLE lakehouse.t (i BIGINT)")
+        cur = lake.client.con.cursor()
+
+        def session(sql: str) -> list:
+            quoted = sql.replace("'", "''")
+            return cur.execute(f"SELECT * FROM quack_query('{engine.uri}', '{quoted}', token := '{TOKEN}', "
+                               "disable_ssl := true, client_id := 'session-1')").fetchall()
+
+        session("BEGIN TRANSACTION; INSERT INTO lakehouse.t VALUES (7)")
+        with self.assertRaisesRegex(Exception, "no transaction is active"):
+            session("COMMIT")
+        started = time.monotonic()
+        self.assertEqual(engine.stop(), 0, engine.tail())
+        self.assertLess(time.monotonic() - started, 2.0, "an open transaction held the stopping engine's catalog")
+        self.assertEqual(lake.client.query(lake.start(), "SELECT count(*) FROM lakehouse.t"), [(0,)])
+
+    @staticmethod
+    def _ignore(lake: _Lake, engine: _Engine, sql: str) -> None:
+        try:
+            lake.client.query(engine, sql, lake.client.con.cursor())
+        except Exception:  # noqa: BLE001 — cancelled by the stop: the test reads the other write.
+            pass
+
+
 class TestIssue1198CheckpointsUnderLoadKeepTheCatalogWhole(unittest.TestCase):
     """Checkpoints taken while commits land never fail a commit and never upload a damaged catalog."""
 

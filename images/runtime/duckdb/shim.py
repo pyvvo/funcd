@@ -61,8 +61,8 @@ LATEST_SNAPSHOT = f"SELECT max(snapshot_id) FROM {METADATA}.ducklake_snapshot"
 
 # How often the commit watcher reads the catalog's snapshot id: commits within one interval share one checkpoint.
 COMMIT_POLL_SECONDS = 1.0
-# How long a stop waits for the last transaction that uses the catalog to end, well inside the runtime's 10 s SIGTERM
-# grace (#1198).
+# How long a stop waits for the last transaction that uses the catalog to end before it cancels the queries still
+# running, well inside the runtime's 10 s SIGTERM grace (#1198, #1217).
 STOP_WAIT_SECONDS = 5.0
 
 # The extensions the engine loads — pre-installed OFFLINE into the image's extension dir (the sandbox
@@ -232,22 +232,27 @@ class _Checkpointer:
             self._copy(METADATA)
             self._upload()
 
-    def stop(self, serving: list[str]) -> None:
-        """Ends the engine's commits and uploads its last checkpoint (#1198). quack_stop refuses new requests, but a
-        request in flight still commits and answers its client; after DETACH, DuckDB closes the catalog file only
-        once the last transaction that used it ends, so the copy of the closed file holds every commit a client saw
-        acknowledged. If the file is still open after STOP_WAIT_SECONDS, the copy taken at quack_stop is uploaded."""
+    def stop(self, serving: list[str], token: str) -> None:
+        """Ends the engine's commits and uploads its last checkpoint (ADR-0273). After DETACH no new transaction can use
+        the catalog, and DuckDB closes its file once the last transaction that used it ends, so the copy of the closed
+        file holds every commit a client saw acknowledged. A query that still holds it after STOP_WAIT_SECONDS is
+        cancelled (#1217). A file that never closes is left to the runtime's kill, which keeps the last checkpoint, as
+        any SIGKILL does (#998)."""
         with self._lock:
+            self._cur.execute("DETACH lakehouse")
+            deadline = time.monotonic() + STOP_WAIT_SECONDS
+            while not _closed(self._cur):
+                if deadline and time.monotonic() > deadline:
+                    deadline = 0.0
+                    _cancel(self._cur, serving, token)
+                time.sleep(0.05)
+            try:
+                self._copy("funcd_closed")
+            finally:
+                self._cur.execute("DETACH funcd_closed")
+            self._upload()
             for uri in serving:
                 self._cur.execute("CALL quack_stop(?)", [uri]).fetchall()
-            self._copy(METADATA)
-            self._cur.execute("DETACH lakehouse")
-            if _await_close(self._cur):
-                try:
-                    self._copy("funcd_closed")
-                finally:
-                    self._cur.execute("DETACH funcd_closed")
-            self._upload()
 
     def _copy(self, source: str) -> None:
         for path in (LOCAL_CHECKPOINT, LOCAL_CHECKPOINT + ".wal"):
@@ -265,21 +270,40 @@ class _Checkpointer:
             self._s3.put_object(Bucket=self._bucket, Key=self._key, Body=fh.read())
 
 
-def _await_close(cur: "duckdb.DuckDBPyConnection") -> bool:
-    """Waits up to STOP_WAIT_SECONDS for DuckDB to close the detached catalog file, then attaches it read-only as
-    funcd_closed. DuckDB refuses to attach the file again while a transaction that used it still runs."""
-    deadline = time.monotonic() + STOP_WAIT_SECONDS
-    while True:
-        try:
-            cur.execute(f"ATTACH '{LOCAL_CATALOG}' AS funcd_closed (READ_ONLY)")
-            return True
-        except Exception as exc:  # noqa: BLE001 — only the conflict of an open file is waited out.
-            if "Unique file handle conflict" not in str(exc):
-                raise
-            if time.monotonic() > deadline:
-                sys.stderr.write("funcd duckdb shim: a transaction outlived the stop; uploading the catalog as of quack_stop\n")
-                return False
-        time.sleep(0.05)
+def _closed(cur: "duckdb.DuckDBPyConnection") -> bool:
+    """Whether DuckDB closed the detached catalog file, which it then attaches read-only as funcd_closed. DuckDB refuses
+    to attach the file again while a transaction that used it still runs."""
+    try:
+        cur.execute(f"ATTACH '{LOCAL_CATALOG}' AS funcd_closed (READ_ONLY)")
+        return True
+    except Exception as exc:  # noqa: BLE001 — only the conflict of an open file is waited out.
+        if "Unique file handle conflict" not in str(exc):
+            raise
+        return False
+
+
+def _cancel(cur: "duckdb.DuckDBPyConnection", serving: list[str], token: str) -> None:
+    """Cancels each query Quack still runs (#1217). quack_cancel needs a Quack client attachment, which the engine's own
+    DuckDB cannot make once confined (external access off), so a separate instance of this process makes it; no client
+    reaches that instance. A failed cancel leaves the stop waiting, to the runtime's kill."""
+    active = [row[0] for row in cur.execute(
+        "SELECT connection_id FROM quack_active_connections() WHERE state = 'active'").fetchall()]
+    sys.stderr.write(f"funcd duckdb shim: cancelling {len(active)} queries that outlived the stop\n")
+    if not active:
+        return
+    control = _connect()
+    try:
+        for i, uri in enumerate(serving):
+            port = uri.rsplit(":", 1)[1]
+            quoted = token.replace("'", "''")
+            control.execute(f"ATTACH 'quack://127.0.0.1:{port}' AS funcd_engine{i} "
+                            f"(TYPE quack, TOKEN '{quoted}', DISABLE_SSL true)")
+            for connection in active:
+                control.execute(f"SELECT * FROM quack_cancel('funcd_engine{i}', ?)", [connection]).fetchall()
+    except Exception as exc:  # noqa: BLE001 — the stop still waits for the file to close.
+        sys.stderr.write(f"funcd duckdb shim: the cancel failed: {exc}\n")
+    finally:
+        control.close()
 
 
 class _CommitWatcher(threading.Thread):
@@ -318,6 +342,7 @@ class _CommitWatcher(threading.Thread):
 def main() -> int:
     quack_port = int(_require("FUNCD_QUACK_PORT"))
     catalog_url = _require("FUNCD_DUCKLAKE_CATALOG")
+    quack_token = _require("QUACK_TOKEN")  # >= 4 chars; consumers present the same token
     endpoint = os.environ.get("FUNCD_S3_ENDPOINT") or _require("AWS_ENDPOINT_URL")
     region = os.environ.get("AWS_REGION", "us-east-1")
     _require("AWS_ACCESS_KEY_ID")
@@ -359,7 +384,7 @@ def main() -> int:
             # The watcher's cursor holds the catalog open, which the stop waits out: close it first.
             watcher.join()
             watch.close()
-            checkpointer.stop(serving)
+            checkpointer.stop(serving, quack_token)
         finally:
             raise SystemExit(0)
 
@@ -372,7 +397,6 @@ def main() -> int:
     # the ingress gateway terminates TLS and is the authoritative OUTER auth gate (ADR-0013) — Quack
     # runs plain HTTP behind it, the token is the inner gate (allow_other_hostname: the gateway proxies
     # a different Host). quack_serve is non-blocking (spawns the server) — we then block on signal.pause().
-    quack_token = _require("QUACK_TOKEN")  # >= 4 chars; consumers present the same token
     serve_uri = f"quack://0.0.0.0:{quack_port}"
     con.execute(
         "CALL quack_serve(?, token := ?, disable_ssl := true, allow_other_hostname := true)",
