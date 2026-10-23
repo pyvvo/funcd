@@ -220,6 +220,35 @@ func TestScenario_lake_service_bindings(t *testing.T) {
 	require.Equal(t, "2", env["DUCKDB_THREADS"])
 }
 
+// scenario: save-interval-from-configmap (ADR-0274) — the LAKE_SAVE_INTERVAL of a ConfigMap the Lake binds reaches its
+// engine's environment, where the shim reads it.
+func TestScenarioSaveIntervalFromConfigMap(t *testing.T) {
+	ctx := context.Background()
+	st := store.New(storemem.New())
+	seedLakeBucket(t, st)
+	prov := &fakeProvider{}
+
+	cm := &v1.ConfigMap{}
+	cm.TypeMeta = v1.TypeMeta{APIVersion: v1.KindConfigMap.GVK().APIVersion(), Kind: v1.KindConfigMap}
+	cm.Name, cm.Namespace, cm.ResourceGroup = "lake-engine-config", "default", "rg1"
+	cm.Spec.Data = map[string]string{"LAKE_SAVE_INTERVAL": "5s"}
+	_, err := st.Create(ctx, cm)
+	require.NoError(t, err)
+
+	r := newReconciler(t, st, prov, func(d *lakesvc.ReconcilerDeps) {
+		d.Secrets = fakeSecrets{env: map[string]string{"QUACK_TOKEN": "change-me"}}
+	})
+	cs := mkLake("lake", v1.FunctionBlob{Alias: "gold", Bucket: "lakehouse", Prefix: "gold"})
+	cs.Spec.Bindings.Secret = []v1.ObjectName{"lake-quack-token"}
+	cs.Spec.Bindings.Config = []v1.ObjectName{"lake-engine-config"}
+	_, err = st.Create(ctx, cs)
+	require.NoError(t, err)
+
+	reconcileOnce(t, r, "lake")
+
+	require.Equal(t, "5s", prov.lastSpec(t).Env["LAKE_SAVE_INTERVAL"])
+}
+
 // TestEngineEnvOwnKeysWinOverBoundData: a bound ConfigMap or Secret cannot replace the engine's own S3 endpoint,
 // region or key pair, and only the keys the engine reads (QUACK_TOKEN, DUCKDB_*) come through.
 func TestEngineEnvOwnKeysWinOverBoundData(t *testing.T) {

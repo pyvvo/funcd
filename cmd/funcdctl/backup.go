@@ -103,17 +103,18 @@ type planFlags struct {
 	write                                     bool
 }
 
-// backupPlanCmd turns recovery objectives into settings, offline (ADR-0223): it builds no SDK client.
+// backupPlanCmd turns recovery objectives into settings, offline (ADR-0223, ADR-0274): it builds no SDK client.
 func (a *cli) backupPlanCmd() *cobra.Command {
 	var f planFlags
 	cmd := &cobra.Command{
-		Use:   "plan <platform|kv|blob|schedule>",
+		Use:   "plan <platform|kv|blob|schedule|lake>",
 		Short: "Turn recovery objectives into backup settings the daemon accepts (offline)",
 		Long: "Turn recovery objectives into backup settings: --rpo (the most data a loss may take) and --keep (how far " +
 			"back a restore point must reach) set the platform, kv or blob keys of funcdconfig.yaml, or the schedule and " +
-			"ttl of a BackupSchedule (-f). The result passes the daemon's own loader, then is printed, or written in " +
-			"place with --write. --rto with --size and --speed checks the download time, a lower bound: only a " +
-			"restore drill proves an RTO. Exit 1: refused, nothing written; 3: the RTO is below the download time.",
+			"ttl of a BackupSchedule (-f); --rpo sets the catalog save interval of a Lake's ConfigMap (-f). The result " +
+			"passes the daemon's own loader or apply's pre-flight, then is printed, or written in place with --write. " +
+			"--rto with --size and --speed checks the download time, a lower bound: only a restore drill proves an RTO. " +
+			"Exit 1: refused, nothing written; 3: the RTO is below the download time.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c := plan.Component(args[0])
@@ -121,8 +122,11 @@ func (a *cli) backupPlanCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if c == plan.Schedule {
-				return a.planSchedule(cmd.ErrOrStderr(), o, f)
+			switch c {
+			case plan.Schedule:
+				return a.planManifest(cmd.ErrOrStderr(), c, v1.KindBackupSchedule, o, f)
+			case plan.Lake:
+				return a.planManifest(cmd.ErrOrStderr(), c, v1.KindConfigMap, o, f)
 			}
 			return a.planConfig(cmd.ErrOrStderr(), c, o, f)
 		},
@@ -135,30 +139,41 @@ func (a *cli) backupPlanCmd() *cobra.Command {
 	fl.StringVar(&f.speed, "speed", "", "the link's bytes per second, in the grammar of --size")
 	fl.StringVar(&f.config, "config", "", "platform, kv, blob: path to funcdconfig.yaml (else $FUNCD_CONFIG, "+
 		"./funcdconfig.yaml, /etc/funcd/funcdconfig.yaml)")
-	fl.StringVarP(&f.file, "file", "f", "", "schedule: a manifest holding one BackupSchedule; - for stdin")
+	fl.StringVarP(&f.file, "file", "f", "", "schedule: a manifest holding one BackupSchedule; lake: one ConfigMap; - for stdin")
 	fl.BoolVar(&f.write, "write", false, "edit the file in place instead of printing")
 	return cmd
 }
 
-// objectives applies Decision 1's flag rules and parses the given values.
+// objectives applies Decision 1's flag rules, and ADR-0274's for lake, and parses the given values.
 func (f planFlags) objectives(c plan.Component, changed func(string) bool) (plan.Objectives, error) {
 	var o plan.Objectives
 	switch c {
 	case plan.Platform, plan.KV, plan.Blob:
 		if changed("file") {
-			return o, fault.Invalidf(planOp, "-f applies to schedule; %s reads --config", c)
+			return o, fault.Invalidf(planOp, "-f applies to schedule and lake; %s reads --config", c)
 		}
-	case plan.Schedule:
+	case plan.Schedule, plan.Lake:
 		switch {
 		case changed("config"):
-			return o, fault.Invalidf(planOp, "--config applies to platform, kv and blob; schedule reads -f")
+			return o, fault.Invalidf(planOp, "--config applies to platform, kv and blob; %s reads -f", c)
 		case f.file == "":
-			return o, fault.Invalidf(planOp, "schedule needs -f <manifest>")
+			return o, fault.Invalidf(planOp, "%s needs -f <manifest>", c)
 		case f.write && f.file == "-":
 			return o, fault.Invalidf(planOp, "--write needs a file: -f - reads stdin")
 		}
 	default:
-		return o, fault.Invalidf(planOp, "component %q: want platform, kv, blob or schedule", c)
+		return o, fault.Invalidf(planOp, "component %q: want platform, kv, blob, schedule or lake", c)
+	}
+	if c == plan.Lake {
+		for _, name := range []string{"keep", "rto", "size", "speed"} {
+			if changed(name) {
+				return o, fault.Invalidf(planOp, "--%s does not apply to lake: --rpo sets its one setting, the catalog "+
+					"save interval; its restore points are the App backup's", name)
+			}
+		}
+		if !changed("rpo") {
+			return o, fault.Invalidf(planOp, "lake needs --rpo")
+		}
 	}
 	if !changed("rpo") && !changed("keep") {
 		return o, fault.Invalidf(planOp, "give --rpo, --keep or both")
@@ -247,9 +262,9 @@ func (a *cli) planConfig(stderr io.Writer, c plan.Component, o plan.Objectives, 
 		write: f.write, next: "restart funcd to apply"})
 }
 
-// planSchedule plans the schedule and ttl of the manifest's one BackupSchedule, checked by apply's pre-flight before
-// and after the edit (Decision 3).
-func (a *cli) planSchedule(stderr io.Writer, o plan.Objectives, f planFlags) error {
+// planManifest plans the keys of the manifest's one document of kind, the schedule and ttl of a BackupSchedule
+// (Decision 3) or a Lake ConfigMap's save interval (ADR-0274), checked by apply's pre-flight before and after the edit.
+func (a *cli) planManifest(stderr io.Writer, c plan.Component, kind v1.Kind, o plan.Objectives, f planFlags) error {
 	data, err := readManifest(f.file)
 	if err != nil {
 		return err
@@ -263,18 +278,18 @@ func (a *cli) planSchedule(stderr io.Writer, o plan.Objectives, f planFlags) err
 	}
 	n := 0
 	for _, d := range docs {
-		if d.Object.GroupVersionKind().Kind == v1.KindBackupSchedule {
+		if d.Object.GroupVersionKind().Kind == kind {
 			n++
 		}
 	}
 	if n != 1 {
-		return fault.Invalidf(planOp, "-f %s holds %d BackupSchedule documents: want one", f.file, n)
+		return fault.Invalidf(planOp, "-f %s holds %d %s documents: want one", f.file, n, kind)
 	}
-	settings, err := plan.Derive(plan.Schedule, o, config.Config{})
+	settings, err := plan.Derive(c, o, config.Config{})
 	if err != nil {
 		return err
 	}
-	edited, changes, err := plan.Apply(data, v1.KindBackupSchedule, settings)
+	edited, changes, err := plan.Apply(data, kind, settings)
 	if err != nil {
 		return err
 	}

@@ -2,6 +2,7 @@ package plan
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -61,6 +62,10 @@ func TestDeriveTable(t *testing.T) {
 		{"blob rpo only", Blob, Objectives{RPO: 30 * time.Minute}, defaults, []Setting{{"blob.backup.interval", "15m"}}},
 		{"schedule", Schedule, Objectives{RPO: 2 * time.Hour, Keep: 336 * time.Hour}, config.Config{},
 			[]Setting{{"spec.schedule", "0 * * * *"}, {"spec.ttl", "336h"}}},
+		{"lake", Lake, Objectives{RPO: 10 * time.Second}, config.Config{}, []Setting{{"spec.data.LAKE_SAVE_INTERVAL", "5s"}}},
+		{"lake compound", Lake, Objectives{RPO: 3 * time.Second}, config.Config{}, []Setting{{"spec.data.LAKE_SAVE_INTERVAL", "1s500ms"}}},
+		{"lake at the floor", Lake, Objectives{RPO: time.Second}, config.Config{}, []Setting{{"spec.data.LAKE_SAVE_INTERVAL", "500ms"}}},
+		{"lake capped at an hour", Lake, Objectives{RPO: 24 * time.Hour}, config.Config{}, []Setting{{"spec.data.LAKE_SAVE_INTERVAL", "1h"}}},
 		{"no objective sets no key", Platform, Objectives{RTO: time.Hour, Size: 1, Speed: 1}, defaults, nil},
 	} {
 		got, err := Derive(tc.c, tc.o, tc.cur)
@@ -79,6 +84,23 @@ func TestDeriveTable(t *testing.T) {
 	require.ErrorContains(t, err, "--keep")
 	_, err = Derive(Schedule, Objectives{RPO: 90 * time.Second}, config.Config{})
 	require.ErrorContains(t, err, "--rpo")
+	_, err = Derive(Lake, Objectives{RPO: 999 * time.Millisecond}, config.Config{})
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	require.ErrorContains(t, err, "--rpo 999ms: a Lake saves its catalog at most every 500ms, so want at least 1s")
+}
+
+// TestShimReadsWhatPlanWrites (ADR-0274): the duckdb shim reads the key lake's plan writes, in ADR-0194's grammar and
+// within plan's bounds.
+func TestShimReadsWhatPlanWrites(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "..", "..", "images", "runtime", "duckdb", "shim.py"))
+	require.NoError(t, err)
+	for _, want := range []string{
+		`SAVE_INTERVAL_KEY = "` + LakeSaveIntervalKey + `"`,
+		`DURATION = re.compile(r"` + v1.DurationPattern + `")`,
+		fmt.Sprintf("not %g <= seconds <= %g", MinLakeSaveInterval.Seconds(), MaxLakeSaveInterval.Seconds()),
+	} {
+		require.Contains(t, string(src), want)
+	}
 }
 
 // TestLadder (ADR-0223 Decision 2): the class bounds at 48h and 720h.

@@ -403,8 +403,9 @@ func (r *Reconciler) engineEnv(ctx context.Context, cs *v1.Lake) (map[string]str
 
 	// spec.bindings.config (ConfigMaps, non-sensitive) + spec.bindings.secret (Secrets, sensitive) → guarded engine
 	// env, resolved through the shared provider helper (ADR-0092): config first, then secrets, each
-	// dropping any reserved FUNCD_ key. Only the keys the engine reads pass (ADR-0087: QUACK_TOKEN, DUCKDB_*), so a
-	// bound key cannot change how the engine's process starts or where it connects (HTTP_PROXY, PYTHONPATH, AWS_*);
+	// dropping any reserved FUNCD_ key. Only the keys the engine reads pass (ADR-0087: QUACK_TOKEN, DUCKDB_*; ADR-0274:
+	// LAKE_SAVE_INTERVAL), so a bound key cannot change how the engine's process starts or where it connects (HTTP_PROXY,
+	// PYTHONPATH, AWS_*);
 	// DUCKDB_EXTENSION_DIRECTORY is the image's, so a binding cannot point the engine's LOAD elsewhere.
 	// The engine's own keys above are laid over the result; its key pair is issued with the engine
 	// (ProviderSpec.IssueEnv, ADR-0270).
@@ -418,7 +419,7 @@ func (r *Reconciler) engineEnv(ctx context.Context, cs *v1.Lake) (map[string]str
 		return nil, fault.Wrapf(rerr, fault.KindOf(rerr), op, "resolve provider env")
 	}
 	maps.DeleteFunc(resolved, func(k, _ string) bool {
-		if k == "QUACK_TOKEN" || strings.HasPrefix(k, "DUCKDB_") && k != "DUCKDB_EXTENSION_DIRECTORY" {
+		if k == "QUACK_TOKEN" || k == "LAKE_SAVE_INTERVAL" || strings.HasPrefix(k, "DUCKDB_") && k != "DUCKDB_EXTENSION_DIRECTORY" {
 			return false
 		}
 		r.logger.Warn("dropping a bound key the Lake engine does not read", "lake", cs.Name, "key", k)

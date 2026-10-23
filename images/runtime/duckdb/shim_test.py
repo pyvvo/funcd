@@ -260,6 +260,42 @@ class _Calls:
         return self
 
 
+class TestSaveIntervalFromTheEnvironment(unittest.TestCase):
+    """ADR-0274: LAKE_SAVE_INTERVAL, an ADR-0194 duration from 500ms to 1h, is the watcher's interval; one second
+    without it."""
+
+    def test_the_interval(self) -> None:
+        for value, seconds in ((None, 1.0), ("500ms", 0.5), ("3s", 3.0), ("1s500ms", 1.5), ("1m30s", 90.0), ("1h", 3600.0)):
+            with self.subTest(value=value):
+                env = {} if value is None else {shim.SAVE_INTERVAL_KEY: value}
+                self.assertEqual(shim._save_interval(env), seconds)
+
+
+class TestScenarioBadSaveIntervalRefused(unittest.TestCase):
+    """scenario: bad-save-interval-refused — a value that is no ADR-0194 duration, or outside 500ms to 1h, ends the
+    start with status 2 and a message naming the key, before the engine connects."""
+
+    def test_a_bad_value_ends_the_start(self) -> None:
+        for value in ("400ms", "1h1s", "soon", "1.5s", "5", "", "30s1m"):
+            with self.subTest(value=value):
+                err = io.StringIO()
+                with mock.patch.object(shim.sys, "stderr", err), self.assertRaises(SystemExit) as stop:
+                    shim._save_interval({shim.SAVE_INTERVAL_KEY: value})
+                self.assertEqual(stop.exception.code, 2)
+                self.assertIn(f"LAKE_SAVE_INTERVAL {value}: want a duration from 500ms to 1h", err.getvalue())
+
+    def test_main_stops_before_it_connects(self) -> None:
+        connect = mock.Mock()
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.dict(os.environ, dict(ENGINE_ENV, LAKE_SAVE_INTERVAL="10ms"), clear=True))
+            stack.enter_context(mock.patch.object(shim, "_connect", connect))
+            stack.enter_context(mock.patch.object(shim.sys, "stderr", io.StringIO()))
+            with self.assertRaises(SystemExit) as stop:
+                shim.main()
+        self.assertEqual(stop.exception.code, 2)
+        connect.assert_not_called()
+
+
 class TestKeyPairOnlyInATemporarySecret(unittest.TestCase):
     """The engine's S3 key pair reaches DuckDB only as bound values of a temporary secret, never as a setting."""
 

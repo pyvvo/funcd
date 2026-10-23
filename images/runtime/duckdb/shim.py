@@ -37,6 +37,7 @@ GetObject → local file → ATTACH.
 from __future__ import annotations
 
 import os
+import re
 import signal
 import sys
 import threading
@@ -59,8 +60,14 @@ METADATA = "__ducklake_metadata_lakehouse"
 # The catalog's latest snapshot id: every committed transaction adds one.
 LATEST_SNAPSHOT = f"SELECT max(snapshot_id) FROM {METADATA}.ducklake_snapshot"
 
-# How often the commit watcher reads the catalog's snapshot id: commits within one interval share one checkpoint.
+# How often the commit watcher reads the catalog's snapshot id: commits within one interval share one checkpoint. A Lake
+# sets it with LAKE_SAVE_INTERVAL in its ConfigMap, from its recovery objective (ADR-0274); one second without it.
 COMMIT_POLL_SECONDS = 1.0
+SAVE_INTERVAL_KEY = "LAKE_SAVE_INTERVAL"
+# ADR-0194's duration grammar (api/types/v1alpha1/duration.go): whole numbers with the units h, m, s and ms, largest
+# unit first, as funcdctl backup plan writes them.
+DURATION = re.compile(r"^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$")
+UNIT_SECONDS = {"h": 3600.0, "m": 60.0, "s": 1.0, "ms": 0.001}
 # How long a stop lets the running queries drain, while the commit watcher keeps saving the catalog, before it detaches
 # the catalog and cancels what still runs: well inside the runtime's 10 s SIGTERM grace (#1198, #1217, ADR-0273).
 STOP_WAIT_SECONDS = 5.0
@@ -138,6 +145,19 @@ def _connect() -> "duckdb.DuckDBPyConnection":
     for ext in EXTENSIONS:
         con.execute(f"LOAD {ext}")  # offline LOAD from the pre-installed extension dir.
     return con
+
+
+def _save_interval(environ: Mapping[str, str]) -> float:
+    """The catalog save interval in seconds (ADR-0274): LAKE_SAVE_INTERVAL, an ADR-0194 duration from 500ms to 1h,
+    or COMMIT_POLL_SECONDS without it; another value ends the start (exit 2) with a message naming the key."""
+    value = environ.get(SAVE_INTERVAL_KEY)
+    if value is None:
+        return COMMIT_POLL_SECONDS
+    seconds = sum(int(n) * UNIT_SECONDS[u] for n, u in re.findall(r"([0-9]+)(ms|h|m|s)", value))
+    if not DURATION.match(value) or not 0.5 <= seconds <= 3600:
+        sys.stderr.write(f"funcd duckdb shim: {SAVE_INTERVAL_KEY} {value}: want a duration from 500ms to 1h\n")
+        raise SystemExit(2)
+    return seconds
 
 
 def _tune(con: "duckdb.DuckDBPyConnection", environ: Mapping[str, str]) -> None:
@@ -320,7 +340,8 @@ class _CommitWatcher(threading.Thread):
     DuckLake adds a row to ducklake_snapshot per commit; the watcher compares the latest id with the one it
     last checkpointed, starting from the id at start, so a catalog nobody wrote to is not uploaded. A failed
     read or checkpoint is retried on the next tick, keeping the old id. A SIGKILL then loses at most the
-    commits of one interval, not every commit since the start (#998).
+    commits acknowledged within one interval plus the two saves around it, the one in progress and the next
+    (ADR-0274), not every commit since the start (#998).
     """
 
     def __init__(self, checkpointer: _Checkpointer, latest: Callable[[], int | None], interval: float) -> None:
@@ -359,6 +380,7 @@ def main() -> int:
     # environment before DuckDB starts, and pass them on only explicitly.
     access, secret = os.environ.pop("AWS_ACCESS_KEY_ID"), os.environ.pop("AWS_SECRET_ACCESS_KEY")
     bucket, key = _split_s3_url(catalog_url)
+    save_interval = _save_interval(os.environ)
     data_path = _data_path(catalog_url)
 
     s3 = _s3_client(endpoint, region, access, secret)
@@ -381,7 +403,7 @@ def main() -> int:
 
     checkpointer = _Checkpointer(con.cursor(), s3, bucket, key)
     watch = con.cursor()
-    watcher = _CommitWatcher(checkpointer, lambda: watch.execute(LATEST_SNAPSHOT).fetchone()[0], COMMIT_POLL_SECONDS)
+    watcher = _CommitWatcher(checkpointer, lambda: watch.execute(LATEST_SNAPSHOT).fetchone()[0], save_interval)
     watcher.start()
     drain = con.cursor()
     serving: list[str] = []

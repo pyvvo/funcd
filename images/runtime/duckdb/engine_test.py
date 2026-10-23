@@ -127,7 +127,7 @@ class _Lake:
         shutil.move(self.data, moved)
         self.data = moved
 
-    def start(self, put_delay: float = 0.0, poll: float | None = None) -> _Engine:
+    def start(self, put_delay: float = 0.0, poll: float | None = None, env: dict | None = None) -> _Engine:
         for name in os.listdir(self.work):
             if name != "tmp":
                 self._remove(os.path.join(self.work, name))
@@ -135,12 +135,14 @@ class _Lake:
             if not name.startswith("data"):
                 self._remove(os.path.join(self.work, "tmp", name))
         port = _free_port()
+        extra = env
         env = dict(os.environ, WORK=self.work, S3DIR=self.s3, DATA=self.data, PUT_DELAY=str(put_delay),
                    FUNCD_QUACK_PORT=str(port), FUNCD_DUCKLAKE_CATALOG=CATALOG_URL,
                    FUNCD_S3_ENDPOINT="http://127.0.0.1:9", AWS_ACCESS_KEY_ID="AK", AWS_SECRET_ACCESS_KEY="SK",
                    QUACK_TOKEN=TOKEN)
         if poll is not None:
             env["POLL"] = str(poll)
+        env.update(extra or {})
         self.engines += 1
         log = os.path.join(self.root, f"engine-{self.engines}.log")
         with open(log, "w") as out:
@@ -419,6 +421,26 @@ class TestIssue1198CheckpointsUnderLoadKeepTheCatalogWhole(unittest.TestCase):
         union = " UNION ALL ".join(f"SELECT i FROM lakehouse.t{w}" for w in range(writers))
         rows = {r[0] for r in lake.client.query(lake.start(), union)}
         self.assertEqual(sorted(set(acked) - rows)[:10], [], "acknowledged commits are missing after a restart")
+
+
+class TestScenarioSaveIntervalFromConfigMap(unittest.TestCase):
+    """scenario: save-interval-from-configmap — a Lake's LAKE_SAVE_INTERVAL sets how often its engine saves the
+    catalog (ADR-0274)."""
+
+    def test_a_three_second_interval(self) -> None:
+        lake = _Lake(self)
+        engine = lake.start(env={"LAKE_SAVE_INTERVAL": "3s"})
+        lake.client.query(engine, "CREATE TABLE lakehouse.t (i BIGINT)")
+        time.sleep(3.5)
+        before = len(lake.uploads())
+        for i in range(8):
+            lake.client.query(engine, f"INSERT INTO lakehouse.t VALUES ({i})")
+            time.sleep(0.5)
+        saves = len(lake.uploads()) - before
+        self.assertIn(saves, (1, 2), f"{saves} saves of 8 commits over 4 s at a 3 s interval")
+        time.sleep(3.0 + 1.0)  # one interval, then the save, which takes milliseconds here (no PUT_DELAY)
+        self.assertEqual(_rows(lake.uploads()[-1], lake.data, "SELECT count(*) FROM stored.t"), [(8,)],
+                         "the last commit was not stored by the first save after one interval")
 
 
 class TestTheServingEngineLoadsNoSQLiteExtension(unittest.TestCase):
