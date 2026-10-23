@@ -250,6 +250,7 @@ log:
 # --- volumes: Function volumes (ADR-0262) -------------------------------------------------------
 # volumes:
 #   capacity: 10Gi                # the one volume image on containerd, preallocated at <dataDir>/volumes.img; Ki/Mi/Gi/Ti (ADR-0266). default: 0, volumes off
+#                                 # volumes book its filesystem's free space, a few percent less: ext4 keeps the rest for its metadata
 #   capacityBytes: 10737418240    # the same size in bytes; set at most one of capacity and capacityBytes. default: 0
 
 # --- site: declarative static web apps (ADR-0139) ----------------------------------------------

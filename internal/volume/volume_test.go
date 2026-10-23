@@ -324,3 +324,34 @@ func TestConcurrentBookingsNeverOvercommit(t *testing.T) {
 		t.Fatalf("%d bookings succeeded, want 10", ok)
 	}
 }
+
+// spaceLimiter enforces like the volume image and reports its free space and each project's use.
+type spaceLimiter struct {
+	free int64
+	used map[uint32]int64
+}
+
+func (*spaceLimiter) Limit(string, uint32, int64) error    { return nil }
+func (*spaceLimiter) Enforced() bool                       { return true }
+func (l *spaceLimiter) Free() (int64, error)               { return l.free, nil }
+func (l *spaceLimiter) Used(project uint32) (int64, error) { return l.used[project], nil }
+
+// TestIssue1201_BookingsFitTheFilesystem: the volume image's filesystem keeps part of the image for its metadata, so a
+// booking fits only when the free space holds it beside what the booked volumes may still write, not only under
+// capacityBytes (#1201).
+func TestIssue1201_BookingsFitTheFilesystem(t *testing.T) {
+	ctx := t.Context()
+	const mib = 1 << 20
+	fs := &spaceLimiter{free: 54 * mib, used: map[uint32]int64{}}
+	m := newManager(t, Options{CapacityBytes: 64 * mib, Limiter: fs})
+	if _, err := m.Reserve(ctx, local("first", "state"), "u1", 32*mib, v1.DeletionRetain); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Book(ctx, local("second", "state"), 32*mib); fault.KindOf(err) != fault.Conflict || !errors.Is(err, ErrCapacity) {
+		t.Fatalf("Book of 32 MiB beside 32 MiB promised, on 54 MiB free = %v, want Conflict VolumeCapacity", err)
+	}
+	fs.used[1], fs.free = 30*mib, 24*mib // first wrote 30 MiB of its 32
+	if err := m.Book(ctx, local("second", "state"), 20*mib); err != nil {
+		t.Fatalf("Book of 20 MiB beside 2 MiB promised, on 24 MiB free = %v, want nil", err)
+	}
+}

@@ -37,6 +37,7 @@ const (
 	fsIOCGetXattr      = 0x801c581f // _IOR('X', 31, struct fsxattr)
 	fsIOCSetXattr      = 0x401c5820 // _IOW('X', 32, struct fsxattr)
 	fsXflagProjInherit = 0x200
+	qGetQuota          = 0x800007
 	qSetQuota          = 0x800008
 	prjQuota           = 2
 	qifBLimits         = 1
@@ -190,6 +191,31 @@ func (f *FS) Limit(dir string, project uint32, sizeBytes int64) error {
 
 // Enforced: the kernel refuses a write past the limit.
 func (*FS) Enforced() bool { return true }
+
+// Free is the bytes the image's filesystem can still allocate: less than its size, since ext4 keeps part for its
+// metadata (#1201).
+func (f *FS) Free() (int64, error) {
+	var st unix.Statfs_t
+	if err := unix.Statfs(f.cfg.Mount, &st); err != nil {
+		return 0, fault.Wrapf(err, fault.Internal, "quotafs.Free", "read the free space of %s", f.cfg.Mount)
+	}
+	return int64(st.Bavail) * st.Bsize, nil
+}
+
+// Used is the bytes charged to project, its files and directories.
+func (f *FS) Used(project uint32) (int64, error) {
+	const op = "quotafs.Used"
+	dev, err := unix.BytePtrFromString(f.dev)
+	if err != nil {
+		return 0, fault.Wrapf(err, fault.Internal, op, "the volume device")
+	}
+	var q ifDqblk
+	cmd := uintptr(qGetQuota<<8 | prjQuota)
+	if _, _, e := unix.Syscall6(unix.SYS_QUOTACTL, cmd, uintptr(unsafe.Pointer(dev)), uintptr(project), uintptr(unsafe.Pointer(&q)), 0, 0); e != 0 {
+		return 0, fault.Wrapf(e, fault.Internal, op, "read the use of project %d", project)
+	}
+	return int64(q.curspace), nil
+}
 
 // Root is where the volumes live.
 func (f *FS) Root() string { return f.cfg.Mount }

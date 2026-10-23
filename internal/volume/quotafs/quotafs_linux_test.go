@@ -3,6 +3,8 @@ package quotafs
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -112,5 +114,42 @@ func TestImageGrowsAndRefusesShrink(t *testing.T) {
 	cfg.CapacityBytes = 16 << 20
 	if _, err := Open(context.Background(), cfg); err == nil {
 		t.Fatal("Open with a smaller capacity succeeded, want Invalid")
+	}
+}
+
+// TestIssue1201_EveryBookedVolumeWritesItsSize: ext4 keeps part of the image for its metadata, so a booking past the
+// filesystem's free space is refused even under volumes.capacityBytes; and with the volumes booked up to that free
+// space, one volume filling its quota leaves another able to write up to its own (#1201).
+func TestIssue1201_EveryBookedVolumeWritesItsSize(t *testing.T) {
+	needRoot(t)
+	f, _ := openFS(t, 64<<20)
+	m, err := volume.New(volume.Options{Root: f.Root(), Limiter: f, CapacityBytes: 64 << 20, UID: nobody, GID: nobody})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	first, err := m.Reserve(ctx, volume.ID{Namespace: "shop", Function: "first", Name: "state"}, "uid-a", 32<<20, v1.DeletionRetain)
+	if err != nil {
+		t.Fatalf("Reserve first: %v", err)
+	}
+	second := volume.ID{Namespace: "shop", Function: "second", Name: "state"}
+	if _, err := m.Reserve(ctx, second, "uid-b", 32<<20, v1.DeletionRetain); !errors.Is(err, volume.ErrCapacity) {
+		t.Fatalf("Reserve of 32 MiB beside 32 MiB on a 64 MiB image = %v, want VolumeCapacity", err)
+	}
+	free, err := f.Free()
+	if err != nil {
+		t.Fatal(err)
+	}
+	size := (free - 32<<20 - 64<<10) &^ (1<<20 - 1) // the largest whole MiB that fits beside first
+	dir, err := m.Reserve(ctx, second, "uid-b", size, v1.DeletionRetain)
+	if err != nil {
+		t.Fatalf("Reserve of %d bytes beside 32 MiB on %d free: %v", size, free, err)
+	}
+	if out, err := asNobody("dd if=/dev/zero of=fill bs=64k count=512 conv=fsync", first); err == nil || !bytes.Contains(out, []byte("quota")) {
+		t.Fatalf("first writing past its quota = %v: %s, want a quota failure", err, out)
+	}
+	blocks := (size - 64<<10) / (64 << 10) // its size, but for the blocks its own directory and file metadata take
+	if out, err := asNobody(fmt.Sprintf("dd if=/dev/zero of=fill bs=64k count=%d conv=fsync", blocks), dir); err != nil {
+		t.Fatalf("second writing %d KiB of its %d after first filled its quota: %v: %s", blocks*64, size>>10, err, out)
 	}
 }

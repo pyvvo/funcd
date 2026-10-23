@@ -79,6 +79,10 @@ type Limiter interface {
 	Limit(dir string, project uint32, sizeBytes int64) error
 	// Enforced reports whether Limit is a kernel limit.
 	Enforced() bool
+	// Free is the bytes the volumes' filesystem can still allocate, and Used those charged to project; the manager
+	// asks them only of a Limiter that enforces.
+	Free() (int64, error)
+	Used(project uint32) (int64, error)
 }
 
 // measureOnly is the Limiter of funcdctl dev (ADR-0262 Decision 10): no limit, a measurement every interval.
@@ -86,6 +90,8 @@ type measureOnly struct{}
 
 func (measureOnly) Limit(string, uint32, int64) error { return nil }
 func (measureOnly) Enforced() bool                    { return false }
+func (measureOnly) Free() (int64, error)              { return 0, nil }
+func (measureOnly) Used(uint32) (int64, error)        { return 0, nil }
 
 // MeasureOnly returns the Limiter that only measures.
 func MeasureOnly() Limiter { return measureOnly{} }
@@ -110,10 +116,15 @@ type Options struct {
 }
 
 type booking struct {
-	size   int64
-	backed bool // a leaf exists for it
-	at     time.Time
+	size    int64
+	backed  bool   // a leaf exists for it
+	project uint32 // its leaf's project id, when backed
+	at      time.Time
 }
+
+// volumeOverhead is what a volume takes outside its quota: its meta file, the temporary one beside it, and the
+// directories above its leaf.
+const volumeOverhead = 16 << 10
 
 type meta struct {
 	Owner     v1.UID            `json:"owner,omitempty"`
@@ -161,7 +172,7 @@ func New(o Options) (Manager, error) {
 		return nil, err
 	}
 	for _, in := range infos {
-		m.bookings[in.ID] = booking{size: in.meta.SizeBytes, backed: true}
+		m.bookings[in.ID] = booking{size: in.meta.SizeBytes, backed: true, project: in.meta.Project}
 		m.next = max(m.next, in.meta.Project+1)
 	}
 	return m, nil
@@ -322,7 +333,38 @@ func (m *manager) book(ctx context.Context, op string, id ID, size int64) error 
 			return fault.Wrapf(ErrBudget, fault.Conflict, op, "volume %s: %d bytes do not fit, %d of namespace %s's volumeBudgetBytes %d are reserved", id, size, inNS, id.Namespace, budget)
 		}
 	}
+	if err := m.fitsFree(op, id, size); err != nil {
+		return err
+	}
 	m.bookings[id] = booking{size: size, at: m.o.Clock()}
+	return nil
+}
+
+// fitsFree refuses a booking the filesystem cannot hold beside what the booked volumes may still write: its metadata
+// takes part of the image, so capacityBytes alone overcommits it (#1201). Each booking's use is read before the free
+// space, so a write between the two reads makes the check stricter, never looser. The caller holds m.mu.
+func (m *manager) fitsFree(op string, id ID, size int64) error {
+	if !m.o.Limiter.Enforced() {
+		return nil
+	}
+	promised := int64(volumeOverhead)
+	for _, b := range m.bookings {
+		var used int64
+		if b.backed {
+			var err error
+			if used, err = m.o.Limiter.Used(b.project); err != nil {
+				return err
+			}
+		}
+		promised += max(b.size-used, 0) + volumeOverhead
+	}
+	free, err := m.o.Limiter.Free()
+	if err != nil {
+		return err
+	}
+	if promised+size > free {
+		return fault.Wrapf(ErrCapacity, fault.Conflict, op, "volume %s: %d bytes do not fit, the volumes' filesystem has %d bytes free and its volumes may still take %d", id, size, free, promised)
+	}
 	return nil
 }
 
@@ -375,7 +417,7 @@ func (m *manager) Reserve(ctx context.Context, id ID, owner v1.UID, size int64, 
 		return "", err
 	}
 	b := m.bookings[id]
-	b.backed = true
+	b.backed, b.project = true, md.Project
 	m.bookings[id] = b
 	return dir, nil
 }

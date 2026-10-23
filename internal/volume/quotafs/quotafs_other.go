@@ -32,6 +32,16 @@ func (*FS) Limit(string, uint32, int64) error {
 // Enforced reports a kernel limit.
 func (*FS) Enforced() bool { return true }
 
+// Free is never reached off Linux.
+func (*FS) Free() (int64, error) {
+	return 0, fault.Unavailablef("quotafs.Free", "the volume image needs Linux")
+}
+
+// Used is never reached off Linux.
+func (*FS) Used(uint32) (int64, error) {
+	return 0, fault.Unavailablef("quotafs.Used", "the volume image needs Linux")
+}
+
 // Root is where the volumes live.
 func (*FS) Root() string { return "" }
 
