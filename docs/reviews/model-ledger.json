@@ -12478,5 +12478,20 @@
     "dod_total": 4,
     "report": "docs/reviews/adr-0264-implementation-claude-opus-5-5.md",
     "notes": "pass: cgroup view on v2 only, matches containerd CRI; spec test + 3 lane cases; all lanes passed"
+  },
+  {
+    "date": "2026-10-23",
+    "adr": "0265",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 5,
+    "dod_total": 5,
+    "report": "docs/reviews/adr-0265-implementation-claude-opus-5-5.md",
+    "notes": "pass, no findings: TUNING/_tune per Contracts, applied before _configure; 3 scenario tests + duckdb lane 2.7 GiB; revert + 3 mutants each fail tests; app-todo lane 50/0"
   }
 ]
