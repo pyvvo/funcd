@@ -112,9 +112,10 @@ accidentally undone later, say "keep as-is" explicitly and why.
 **H. Design model (ADR-0272).** If the Decision adds or changes a trigger of the
 [`fizzbee`](../fizzbee/SKILL.md) skill and the section reads `None`, that is a Blocker. Otherwise rerun the spec
 (`scripts/agent/d python3 scripts/specs.py check <spec>`) and read the trace of at least one mutant yourself. Major:
-an assertion that protects no Scenario at risk; a guard the Decision adds with no mutant; bounds not justified (fewer
-concurrent actions than actors in the race, no item beyond what the race needs); a wait, timeout or retry with no
-progress assertion; an assertion with no named oracle test.
+an assertion that protects no Scenario at risk; a guard the Decision adds with no mutant; bounds not justified as
+ADR-0272 Decision 2 asks (the smallest scenario in which every mutant fails, as many concurrent actions as actors
+racing through yield points, the wider run with one more item recorded in the ADR); a wait or retry with no bound in
+modeled time and no progress assertion; an assertion with no named oracle test.
 
 ## Step 3 — Calibrate before writing
 

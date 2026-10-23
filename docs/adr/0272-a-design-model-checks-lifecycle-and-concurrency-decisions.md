@@ -118,8 +118,8 @@ testing of Go code against a spec (FizzBee's MBT; a later ADR); performance mode
 5. **The gates.** The four ADR gates and the fix pipeline each gain one step:
    - draft (`adr`): check the triggers; write or update the part's spec; run `just check-specs`; fill the section;
    - judge (`adr-judge`): rerun the spec; a trigger with no model is a Blocker; an assertion that protects no
-     Scenario at risk, a guard the Decision adds with no mutant, bounds not justified as in Decision 2, or a wait
-     with no progress assertion is a Major;
+     Scenario at risk, a guard the Decision adds with no mutant, bounds not justified as in Decision 2, or a wait or
+     retry with no bound in modeled time and no progress assertion is a Major;
    - implement (`adr-impl`): each assertion's oracle test, named in the section, carries the comment
      `oracle: docs/design/<part>/<topic>.fizz#<Assertion>`;
    - review (`adr-impl-review`): each assertion of a spec the ADR changed has an oracle marker, and `just check-specs`
