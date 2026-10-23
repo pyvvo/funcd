@@ -30,6 +30,7 @@ type fakeRuntime struct {
 	port      int
 	state     containerrt.State // the state newly-created instances report
 	startErr  error             // returned by the next Start, once
+	stopErr   error             // returned by the next Stop, once
 	created   []containerrt.WorkerSpec
 	started   []containerrt.InstanceID
 	stopped   []containerrt.InstanceID
@@ -78,6 +79,10 @@ func (f *fakeRuntime) Start(_ context.Context, id containerrt.InstanceID) error 
 func (f *fakeRuntime) Stop(_ context.Context, id containerrt.InstanceID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.stopErr; err != nil {
+		f.stopErr = nil
+		return err
+	}
 	f.stopped = append(f.stopped, id)
 	delete(f.instances, id)
 	return nil
@@ -352,6 +357,31 @@ func TestIssue1195_ConvergeReplacesAnEngineOfAnotherSpec(t *testing.T) {
 	_, err = pr.Converge(ctx, next)
 	require.NoError(t, err)
 	require.Len(t, rt.created, 2, "an engine of the same spec is adopted")
+}
+
+// Issue #1195: a retire that fails leaves the old engine's spec known, so the next Converge retries the replacement
+// rather than adopting the old engine.
+func TestIssue1195_AFailedRetireIsTriedAgain(t *testing.T) {
+	host, port, closeFn := engineServer(t, 200)
+	defer closeFn()
+	rt := newFakeRuntime(host, port)
+	pr, err := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindLake})
+	require.NoError(t, err)
+	ctx := context.Background()
+	_, err = pr.Converge(ctx, specFor(host, port, nil))
+	require.NoError(t, err)
+
+	next := specFor(host, port, nil)
+	next.Env["DUCKDB_MEMORY_LIMIT"] = "512MB"
+	rt.stopErr = fault.Unavailablef("fakeRuntime.Stop", "containerd is restarting")
+	_, err = pr.Converge(ctx, next)
+	require.Error(t, err, "the failed retire fails the pass")
+	require.Len(t, rt.created, 1, "no engine is created beside the old one")
+
+	_, err = pr.Converge(ctx, next)
+	require.NoError(t, err)
+	require.Len(t, rt.created, 2, "the next pass replaces the old engine")
+	require.Equal(t, "512MB", rt.created[1].Env["DUCKDB_MEMORY_LIMIT"])
 }
 
 // scenario: provider-torn-down — Teardown Stops the engine and removes its programmed route.
