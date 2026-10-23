@@ -9,6 +9,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 import types
 import unittest
 from unittest import mock
@@ -372,12 +373,11 @@ class _Bucket:
 
 
 class TestIssue1217AStopUploadsTheClosedCatalog(unittest.TestCase):
-    """ADR-0273: a stop detaches the catalog, waits until DuckDB has closed its file (the last transaction that used it
-    has ended), cancels the queries still running after STOP_WAIT_SECONDS from a separate DuckDB instance, uploads a
-    copy of the closed file, then ends Quack."""
+    """ADR-0273: once the queries drained and the watcher stopped, a stop detaches the catalog, cancels the queries that
+    still hold its file from a separate DuckDB instance, waits until DuckDB has closed the file (the last transaction
+    that used it has ended), uploads a copy of the closed file, then ends Quack."""
 
-    def stop(self, engine: _StopEngine, wait: float = 5.0, control: "_Control | None" = None,
-             token: str = "token") -> tuple:
+    def stop(self, engine: _StopEngine, control: "_Control | None" = None, token: str = "token") -> tuple:
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         bucket = _Bucket()
@@ -385,7 +385,6 @@ class TestIssue1217AStopUploadsTheClosedCatalog(unittest.TestCase):
         with contextlib.ExitStack() as stack:
             self.path = os.path.join(tmp.name, "checkpoint.ducklake")
             stack.enter_context(mock.patch.object(shim, "LOCAL_CHECKPOINT", self.path))
-            stack.enter_context(mock.patch.object(shim, "STOP_WAIT_SECONDS", wait))
             stack.enter_context(mock.patch.object(shim.sys, "stderr", err))
             stack.enter_context(mock.patch.object(shim, "_connect", lambda: control))
             shim._Checkpointer(engine, bucket, "lake", "gold/_ducklake/catalog.db").stop(["quack://0.0.0.0:8080"], token)
@@ -397,15 +396,16 @@ class TestIssue1217AStopUploadsTheClosedCatalog(unittest.TestCase):
         self.assertEqual(bucket.bodies, [b"funcd_closed"])
         order = [s.split(" (")[0].split(" AS ")[0] for s in engine.log]
         closed = f"ATTACH '{shim.LOCAL_CATALOG}'"
-        self.assertEqual(order, ["DETACH lakehouse", closed, closed, closed, f"ATTACH '{self.path}'",
+        active = "SELECT connection_id FROM quack_active_connections() WHERE state = 'active'"
+        self.assertEqual(order, ["DETACH lakehouse", closed, active, closed, closed, f"ATTACH '{self.path}'",
                                  "COPY FROM DATABASE funcd_closed TO funcd_checkpoint", "DETACH funcd_checkpoint",
                                  "DETACH funcd_closed", "CALL quack_stop(?)"])
         self.assertEqual(err, "")
 
-    def test_a_query_that_outlives_the_wait_is_cancelled(self) -> None:
+    def test_a_query_that_still_holds_the_catalog_is_cancelled(self) -> None:
         engine = _StopEngine(active=("c1",), stuck=True)
         control = _Control(engine)
-        bucket, err = self.stop(engine, wait=0.05, control=control, token="to'ken")
+        bucket, err = self.stop(engine, control=control, token="to'ken")
         self.assertEqual(bucket.bodies, [b"funcd_closed"])
         self.assertEqual(control.log, [
             ("ATTACH 'quack://127.0.0.1:8080' AS funcd_engine0 (TYPE quack, TOKEN 'to''ken', DISABLE_SSL true)", None),
@@ -417,7 +417,7 @@ class TestIssue1217AStopUploadsTheClosedCatalog(unittest.TestCase):
     def test_a_failed_cancel_keeps_waiting_for_the_file_to_close(self) -> None:
         engine = _StopEngine(busy=3, active=("c1",))
         control = _Control(engine, fail="Connection Error: refused")
-        bucket, err = self.stop(engine, wait=0.0, control=control)
+        bucket, err = self.stop(engine, control=control)
         self.assertEqual(bucket.bodies, [b"funcd_closed"])
         self.assertIn("the cancel failed: Connection Error: refused", err)
         self.assertTrue(control.closed)
@@ -425,6 +425,41 @@ class TestIssue1217AStopUploadsTheClosedCatalog(unittest.TestCase):
     def test_another_attach_error_ends_the_stop(self) -> None:
         with self.assertRaises(RuntimeError):
             self.stop(_StopEngine(fail="IO Error: disk full"))
+
+
+class _Counts:
+    """A cursor whose count of active Quack connections is each value of counts in turn, then the last one."""
+
+    def __init__(self, counts: list) -> None:
+        self.counts = counts
+        self.reads = 0
+
+    def execute(self, sql: str) -> "_Counts":
+        self.reads += 1
+        return self
+
+    def fetchone(self) -> tuple:
+        return (self.counts.pop(0) if len(self.counts) > 1 else self.counts[0],)
+
+
+class TestADrainLetsTheRunningQueriesEnd(unittest.TestCase):
+    """ADR-0273: at SIGTERM the stop waits up to STOP_WAIT_SECONDS for Quack to run no query, while the watcher keeps
+    saving the catalog."""
+
+    def test_an_idle_engine_drains_at_once(self) -> None:
+        cur = _Counts([0])
+        shim._drain(cur, 5.0)
+        self.assertEqual(cur.reads, 1)
+
+    def test_the_drain_ends_when_the_last_query_ends(self) -> None:
+        cur = _Counts([2, 1, 0])
+        shim._drain(cur, 5.0)
+        self.assertEqual(cur.reads, 3)
+
+    def test_the_drain_gives_up_at_its_deadline(self) -> None:
+        started = time.monotonic()
+        shim._drain(_Counts([1]), 0.2)
+        self.assertLess(time.monotonic() - started, 1.0)
 
 
 class _Cursors(_Recording):
@@ -440,8 +475,9 @@ class _Cursors(_Recording):
 
 
 class TestIssue1198TheStopClosesTheWatcherFirst(unittest.TestCase):
-    """#1198: SIGTERM stops and joins the commit watcher and closes its cursor, which holds the catalog open, before
-    the checkpointer's stop, with the URI Quack serves and its token, and the process then exits 0."""
+    """#1198, ADR-0273: SIGTERM lets the running queries drain while the watcher keeps saving, then stops and joins the
+    commit watcher and closes its cursor, which holds the catalog open, before the checkpointer's stop, with the URI
+    Quack serves and its token, and the process then exits 0."""
 
     def test_the_shutdown_order(self) -> None:
         handlers: dict = {}
@@ -464,6 +500,12 @@ class TestIssue1198TheStopClosesTheWatcherFirst(unittest.TestCase):
             checkpointer = stack.enter_context(mock.patch.object(shim, "_Checkpointer")).return_value
             with self.assertRaises(_Stop):
                 shim.main()
+        # The handler reads _drain when it runs, after the patches above are gone.
+        patch = mock.patch.object(shim, "_drain")
+        drain = patch.start()
+        self.addCleanup(patch.stop)
+        order.attach_mock(drain, "drain")
+        order.attach_mock(con.cursors[2].close, "drain_close")
         order.attach_mock(watcher.stop, "watcher_stop")
         order.attach_mock(watcher.join, "watcher_join")
         order.attach_mock(con.cursors[1].close, "watch_close")
@@ -471,7 +513,9 @@ class TestIssue1198TheStopClosesTheWatcherFirst(unittest.TestCase):
         with self.assertRaises(SystemExit) as stop:
             handlers[shim.signal.SIGTERM](shim.signal.SIGTERM, None)
         self.assertEqual(stop.exception.code, 0)
-        self.assertEqual(order.mock_calls, [mock.call.watcher_stop(), mock.call.watcher_join(), mock.call.watch_close(),
+        self.assertEqual(order.mock_calls, [mock.call.drain(con.cursors[2], shim.STOP_WAIT_SECONDS),
+                                            mock.call.drain_close(), mock.call.watcher_stop(),
+                                            mock.call.watcher_join(), mock.call.watch_close(),
                                             mock.call.checkpointer_stop(["quack://0.0.0.0:8080"], "token")])
 
 

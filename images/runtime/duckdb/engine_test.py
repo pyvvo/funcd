@@ -173,6 +173,25 @@ class _Lake:
             os.remove(path)
 
 
+def _rows(path: str, data: str, sql: str) -> list:
+    """The rows sql reads from a copy of a stored catalog, attached as stored in a fresh DuckDB instance."""
+    copy = path + ".rows"
+    shutil.copyfile(path, copy)
+    con = duckdb.connect(config={"extension_directories": [os.environ["DUCKDB_EXTENSION_DIRECTORY"]]})
+    try:
+        con.execute("SET autoinstall_known_extensions=false")
+        con.execute("LOAD ducklake")
+        con.execute(f"ATTACH 'ducklake:{copy}' AS stored (DATA_PATH '{data}', OVERRIDE_DATA_PATH TRUE)")
+        return con.execute(sql).fetchall()
+    except Exception:  # noqa: BLE001 — a copy without the table holds no rows.
+        return []
+    finally:
+        con.close()
+        for leftover in (copy, copy + ".wal"):
+            if os.path.exists(leftover):
+                os.remove(leftover)
+
+
 def _open_stored(path: str, data: str) -> tuple[str | None, str | None]:
     """Opens a copy of a stored catalog as the next engine does, in a fresh DuckDB instance: its DuckLake version, or
     the error that stopped the open."""
@@ -300,26 +319,51 @@ class TestIssue1217ATimedOutStopKeepsEveryAcknowledgedCommit(unittest.TestCase):
         self.assertIn("cancelling 1 queries that outlived the stop", engine.tail())
         self.assertEqual(lake.client.query(restarted, "SELECT count(*) FROM lakehouse.slow"), [(0,)])
 
-
-class TestIssue1217NoTransactionAfterDetach(unittest.TestCase):
-    """ADR-0273: a write sent while the engine stops fails, and the next engine does not hold it. A transaction holds the
-    catalog only while its request runs: Quack ends it with the request, so the stop's cancel sees every holder."""
-
-    def test_a_write_during_the_stop_fails(self) -> None:
+    # oracle: docs/design/lake/stop.fizz#KillLosesAtMostOneInterval
+    def test_the_watcher_keeps_saving_while_the_queries_drain(self) -> None:
         lake = _Lake(self)
         engine = lake.start()
         lake.client.query(engine, "CREATE TABLE lakehouse.slow (n HUGEINT)")
         lake.client.query(engine, "CREATE TABLE lakehouse.t (i BIGINT)")
-        holder = threading.Thread(target=lambda: self._ignore(lake, engine, TestIssue1217ATimedOutStopKeepsEveryAcknowledgedCommit.LONG))
+        threads = [threading.Thread(target=self._quietly, args=(lake, engine, sql)) for sql in (self.LONG, self.MARK)]
+        threads[0].start()
+        time.sleep(0.3)
+        threads[1].start()
+        time.sleep(0.3)
+        self.assertEqual(engine.stop(), 0, engine.tail())
+        for thread in threads:
+            thread.join()
+        saved = [u for u in lake.uploads()[:-1] if _rows(u, lake.data, "SELECT i FROM stored.t") == [(42,)]]
+        self.assertTrue(saved, "no checkpoint before the stop's own upload held the commit acknowledged during the "
+                               "drain: a kill then would have lost it")
+
+    @staticmethod
+    def _quietly(lake: "_Lake", engine: "_Engine", sql: str) -> None:
+        try:
+            lake.client.query(engine, sql, lake.client.con.cursor())
+        except Exception:  # noqa: BLE001 — the long query is cancelled by the stop.
+            pass
+
+
+class TestIssue1217TheDrain(unittest.TestCase):
+    """ADR-0273: while the running queries drain, the engine still serves and keeps writes; a transaction holds the
+    catalog only while its request runs, since Quack ends it with the request, so the stop's cancel sees every holder."""
+
+    def test_a_write_during_the_drain_is_kept(self) -> None:
+        lake = _Lake(self)
+        engine = lake.start()
+        lake.client.query(engine, "CREATE TABLE lakehouse.slow (n HUGEINT)")
+        lake.client.query(engine, "CREATE TABLE lakehouse.t (i BIGINT)")
+        holder = threading.Thread(target=TestIssue1217ATimedOutStopKeepsEveryAcknowledgedCommit._quietly,
+                                  args=(lake, engine, TestIssue1217ATimedOutStopKeepsEveryAcknowledgedCommit.LONG))
         holder.start()
         time.sleep(0.3)
         engine.proc.send_signal(signal.SIGTERM)
         time.sleep(1.0)
-        with self.assertRaises(Exception):
-            lake.client.query(engine, "INSERT INTO lakehouse.t VALUES (9)", lake.client.con.cursor())
+        lake.client.query(engine, "INSERT INTO lakehouse.t VALUES (9)", lake.client.con.cursor())
         self.assertEqual(engine.proc.wait(timeout=30), 0, engine.tail())
         holder.join()
-        self.assertEqual(lake.client.query(lake.start(), "SELECT count(*) FROM lakehouse.t"), [(0,)])
+        self.assertEqual(lake.client.query(lake.start(), "SELECT i FROM lakehouse.t"), [(9,)], engine.tail())
 
     def test_a_transaction_ends_with_its_request(self) -> None:
         lake = _Lake(self)
@@ -339,13 +383,6 @@ class TestIssue1217NoTransactionAfterDetach(unittest.TestCase):
         self.assertEqual(engine.stop(), 0, engine.tail())
         self.assertLess(time.monotonic() - started, 2.0, "an open transaction held the stopping engine's catalog")
         self.assertEqual(lake.client.query(lake.start(), "SELECT count(*) FROM lakehouse.t"), [(0,)])
-
-    @staticmethod
-    def _ignore(lake: _Lake, engine: _Engine, sql: str) -> None:
-        try:
-            lake.client.query(engine, sql, lake.client.con.cursor())
-        except Exception:  # noqa: BLE001 — cancelled by the stop: the test reads the other write.
-            pass
 
 
 class TestIssue1198CheckpointsUnderLoadKeepTheCatalogWhole(unittest.TestCase):

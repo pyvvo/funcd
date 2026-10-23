@@ -61,8 +61,8 @@ LATEST_SNAPSHOT = f"SELECT max(snapshot_id) FROM {METADATA}.ducklake_snapshot"
 
 # How often the commit watcher reads the catalog's snapshot id: commits within one interval share one checkpoint.
 COMMIT_POLL_SECONDS = 1.0
-# How long a stop waits for the last transaction that uses the catalog to end before it cancels the queries still
-# running, well inside the runtime's 10 s SIGTERM grace (#1198, #1217).
+# How long a stop lets the running queries drain, while the commit watcher keeps saving the catalog, before it detaches
+# the catalog and cancels what still runs: well inside the runtime's 10 s SIGTERM grace (#1198, #1217, ADR-0273).
 STOP_WAIT_SECONDS = 5.0
 
 # The extensions the engine loads — pre-installed OFFLINE into the image's extension dir (the sandbox
@@ -233,19 +233,17 @@ class _Checkpointer:
             self._upload()
 
     def stop(self, serving: list[str], token: str) -> None:
-        """Ends the engine's commits and uploads its last checkpoint (ADR-0273). After DETACH no new transaction can use
-        the catalog, and DuckDB closes its file once the last transaction that used it ends, so the copy of the closed
-        file holds every commit a client saw acknowledged. A query that still holds it after STOP_WAIT_SECONDS is
-        cancelled (#1217). A file that never closes is left to the runtime's kill, which keeps the last checkpoint, as
-        any SIGKILL does (#998)."""
+        """Ends the engine's commits and uploads its last checkpoint, once the running queries drained and the watcher
+        stopped (ADR-0273). After DETACH no new transaction can use the catalog, and DuckDB closes its file once the
+        last transaction that used it ends, so the copy of the closed file holds every commit a client saw
+        acknowledged. A query that still holds the file is cancelled (#1217). A file that never closes is left to the
+        runtime's kill, which keeps the watcher's last checkpoint, as any SIGKILL does (#998)."""
         with self._lock:
             self._cur.execute("DETACH lakehouse")
-            deadline = time.monotonic() + STOP_WAIT_SECONDS
-            while not _closed(self._cur):
-                if deadline and time.monotonic() > deadline:
-                    deadline = 0.0
-                    _cancel(self._cur, serving, token)
-                time.sleep(0.05)
+            if not _closed(self._cur):
+                _cancel(self._cur, serving, token)
+                while not _closed(self._cur):
+                    time.sleep(0.05)
             try:
                 self._copy("funcd_closed")
             finally:
@@ -270,6 +268,16 @@ class _Checkpointer:
             self._s3.put_object(Bucket=self._bucket, Key=self._key, Body=fh.read())
 
 
+def _drain(cur: "duckdb.DuckDBPyConnection", seconds: float) -> None:
+    """Waits up to seconds for Quack to run no query: the commit watcher keeps saving the catalog meanwhile, so a kill
+    during the stop loses no more than a crash does (ADR-0273)."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if not cur.execute("SELECT count(*) FROM quack_active_connections() WHERE state = 'active'").fetchone()[0]:
+            return
+        time.sleep(0.05)
+
+
 def _closed(cur: "duckdb.DuckDBPyConnection") -> bool:
     """Whether DuckDB closed the detached catalog file, which it then attaches read-only as funcd_closed. DuckDB refuses
     to attach the file again while a transaction that used it still runs."""
@@ -288,9 +296,9 @@ def _cancel(cur: "duckdb.DuckDBPyConnection", serving: list[str], token: str) ->
     reaches that instance. A failed cancel leaves the stop waiting, to the runtime's kill."""
     active = [row[0] for row in cur.execute(
         "SELECT connection_id FROM quack_active_connections() WHERE state = 'active'").fetchall()]
-    sys.stderr.write(f"funcd duckdb shim: cancelling {len(active)} queries that outlived the stop\n")
     if not active:
         return
+    sys.stderr.write(f"funcd duckdb shim: cancelling {len(active)} queries that outlived the stop\n")
     control = _connect()
     try:
         for i, uri in enumerate(serving):
@@ -375,13 +383,17 @@ def main() -> int:
     watch = con.cursor()
     watcher = _CommitWatcher(checkpointer, lambda: watch.execute(LATEST_SNAPSHOT).fetchone()[0], COMMIT_POLL_SECONDS)
     watcher.start()
+    drain = con.cursor()
     serving: list[str] = []
 
     # Graceful shutdown on SIGTERM/SIGINT: end the commits and checkpoint the catalog one final time (#1198).
     def _on_term(_signum, _frame):
-        watcher.stop()
         try:
-            # The watcher's cursor holds the catalog open, which the stop waits out: close it first.
+            # The watcher keeps saving while the running queries drain; its cursor holds the catalog open, which the
+            # stop waits out, so it stops and closes before the stop detaches the catalog.
+            _drain(drain, STOP_WAIT_SECONDS)
+            drain.close()
+            watcher.stop()
             watcher.join()
             watch.close()
             checkpointer.stop(serving, quack_token)
