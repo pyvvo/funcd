@@ -59,6 +59,8 @@ Write the regression test **before** touching the code:
   advisory, and a defect whose fix needs a design decision goes to `/adr` (an issue with `needs-adr`).
 - Change nothing else: only what this issue and the defects found on the way need.
 - Keep living docs true (blueprint, feat, READMEs, CLI help) if the fix changes what they describe.
+- A fix that changes a behavior a design spec models (`docs/design/**`; an `oracle:` marker on a touched test) updates
+  that spec and its diagram (`just spec-diagrams`) in the same commit, and `just check-specs` passes (ADR-0272).
 - House style holds (ADR-0002, `CLAUDE.md`): block-style YAML, top-level imports, no comment bloat.
 
 ## Step 5 — Prove it

@@ -51,6 +51,8 @@ file:line, command transcripts). At minimum:
 - **Behavior rule**: real business logic conforming to the Contracts (no `not implemented` stubs in
   the shipped path); every Scenario has a named test that is **un-skipped and passing**, none
   weakened or deleted; `just ci` exits 0.
+- **Design model** (ADR-0272): `just check-specs` passes, and each assertion of a spec the ADR changed has an oracle
+  marker on a passing test (`git grep -n 'oracle: docs/design/<part>/<topic>.fizz#<Assertion>'`).
 - **Tracking**: the realized feat row at `reviewing`, the ADR at `Reviewing`, and the **ADR's substance
   unchanged** — the builder's *only* permitted ADR edit is the `Accepted → Reviewing` status bump, so any
   change to Context/Scenarios/Decision/Contracts is itself a Blocker.

@@ -1,0 +1,28 @@
+---
+deadlock_detection: false
+options:
+  max_actions: 4
+  max_concurrent_actions: 2
+---
+# diagram: phase
+# mutant skip-guard: AtMostOneOpen
+
+MUTANT = ""
+
+action Init:
+    phase = "closed"
+    opened = 0
+
+atomic action Open:
+    require phase == "closed"
+    if MUTANT != "skip-guard":
+        require opened == 0
+    opened = opened + 1
+    phase = "open"
+
+atomic action Close:
+    require phase == "open"
+    phase = "closed"
+
+always assertion AtMostOneOpen:
+    return opened <= 1

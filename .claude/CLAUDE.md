@@ -71,6 +71,7 @@ downstream-or-sideways obligates an update to the documents that referenced it.
 |---|---|---|---|---|
 | plan | [roadmap-planner](../.claude/skills/roadmap-planner/SKILL.md) | sequence ADRs into build waves + critical path (computed) | `docs/roadmap/` + `plan.json` | — (notes missing decisions as items) |
 | decide | [adr](../.claude/skills/adr/SKILL.md) | brainstorm → Accepted ADR | `docs/adr/NNNN-*.md` | **feat row + blueprint** (see below) |
+| model | [fizzbee](../.claude/skills/fizzbee/SKILL.md) | when a decision adds or changes a lifecycle, a race, a timer or another ADR-0272 trigger: a FizzBee design model checked before acceptance | `docs/design/<part>/<topic>.fizz` + its generated `.md` state machine | the ADR's *Design model* section |
 | judge | [adr-judge](../.claude/skills/adr-judge/SKILL.md) | judge the ADR *document* before acceptance — evidence-cited verdict | a report (no doc edits) | nothing — it never edits what it judges |
 | refine / accept | [brief](../.claude/skills/brief/SKILL.md) | brief the decider: a needs-adr card before its ADR (refine), a Proposed ADR before acceptance | nothing until the decider answers | refine → the answers recorded, then `adr`; on an explicit accept → the `adr` skill's acceptance steps |
 | build | [adr-impl](../.claude/skills/adr-impl/SKILL.md) | ADR → working code (interfaces + drivers + facades + deps + scenario tests **written and passing**, green `just ci`) | code | **ADR `Accepted → Reviewing` + feat row → `reviewing`** |
@@ -139,13 +140,15 @@ When you change the **row**, you owe the checked **columns** — in the same ses
 - **An `Accepted` ADR is frozen in substance.** Context, Scenarios, Decision, Contracts,
   Alternatives — none of it changes after acceptance. The *only* edits ever allowed are the
   forward status bumps (`Accepted → Reviewing` by `adr-impl`, then `Reviewing → Implemented`
-  by the review gate) and the single `Superseded by ADR-XXXX` back-link. To change the
+  by the review gate) and the single `Superseded by ADR-XXXX` back-link (or, for a partial supersession, a
+  `- **Superseded in part by**: [ADR-XXXX](…) (<date>) — <parts>` header line; ADR-0272 Decision 7). To change the
   decision, write a new superseding ADR — never rewrite history.
 - **An `Implemented` ADR is fully frozen — never updated.** Once its status reads
   `Implemented`, the file is closed: no substance, contract, or status edit ever again. The
-  one and only permitted touch is adding the `Superseded by ADR-XXXX` back-link. A correction
-  to an implemented decision is *always* a new superseding ADR (carrying its own feat row and
-  roadmap follow-through), never an in-place edit.
+  one and only permitted touch is adding the `Superseded by ADR-XXXX` back-link (or a `Superseded in part by`
+  header line). A correction to an implemented decision is *always* a new superseding ADR (carrying its own
+  feat row and roadmap follow-through), never an in-place edit; one that replaces only some decision items is an
+  amendment, a short partial supersession (ADR-0272 Decision 7).
 - Roadmap computed sections ≡ `plan.json` (analyzer output, not hand-drawn); the slate
   table and `plan.json` stay mirrored.
 - Roadmap `P-x` placeholders reconcile to real ADR numbers as ADRs land (track by the
@@ -187,7 +190,8 @@ stays free (see below).
    a defect.
 5. **Never hand-edit a computed artifact.** The roadmap's graph, waves, and critical path are
    `plan_waves.py` output; the slate table mirrors `plan.json`. Change `plan.json`, re-run the
-   analyzer, repaste — never edit the computed sections by hand (they silently drift otherwise).
+   analyzer, repaste — never edit the computed sections by hand (they silently drift otherwise). The state
+   machine beside a design spec (`docs/design/**/*.md`) is `just spec-diagrams` output, checked by `just check-specs`.
 6. **No orphans, no ghosts.** Every ADR's `Realizes: FEAT-NNNN/Fxx` points at a real row, and
    every feat row's status equals its ADR's status. One without the other is a defect to fix
    in the same session.

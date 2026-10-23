@@ -45,6 +45,9 @@ __pycache__
 
 # writable copies of the pinned language-repo examples (ADR-0141: scripts/example-copy.sh, lane `copy: true`)
 .modcopy/
+# what `fizz` writes beside a design spec run in place (scripts/specs.py runs specs in a scratch directory)
+docs/design/**/*.json
+docs/design/**/out/
 
 # a local go.work overriding the language-module pins for cross-repo work (ADR-0141) — never committed
 go.work

@@ -79,6 +79,8 @@ Count the items that apply (`--dod-total`) and those that hold (`--dod-passed`):
     an existing one, or the standard library, does the job.
 11. The commit and PR shape: `fix(<scope>):`, `Fixes #N`, trailers.
 12. Every case the issue describes is fixed and tested, and no sibling with the same cause is left.
+13. A fix that changes a modeled behavior updated its design spec and diagram, and `just check-specs` passes
+    (ADR-0272; applies only when such a spec exists).
 
 ## Step 3 — Attribute
 

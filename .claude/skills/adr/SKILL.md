@@ -65,8 +65,8 @@ from ADR-0000, in order — a section that does not apply says "None" but still 
 
 Header (status, date, deciders, tags, realizes, relates-to/supersedes) · Context & Need ·
 Scenarios · Scope (in/out) · Constraints & Decision drivers · Alternatives considered ·
-Decision · Temporary workarounds · Contracts · Implementation plan · Review checklist ·
-Consequences · Open questions · References.
+Decision · Design model · Temporary workarounds · Contracts · Implementation plan · Review checklist ·
+Consequences · Open questions · References. (*Design model* is ADR-0272's addition to ADR-0000's template.)
 
 **Be concise — the overriding style rule.** An ADR records a *decision* and the contracts to
 implement it, not an essay. Every sentence must change what gets built or how it's judged; if it
@@ -105,6 +105,17 @@ Quality bar per section:
   mechanically against the implementation.
 - **Open questions**: each one names where it gets answered (a future ADR, a milestone,
   the implementation PR).
+- **Design model** (ADR-0272): when the Decision adds or changes a trigger of the
+  [`fizzbee`](../fizzbee/SKILL.md) skill (a stop, crash or timeout cut, racing actors, a timer, a reservation, a
+  delivery, a conditional write, two rules that must agree), write or update `docs/design/<part>/<topic>.fizz`, run
+  `scripts/agent/d just check-specs` and `just spec-diagrams`, and fill the section as that skill shows: the spec,
+  each assertion with its kind, Scenario and oracle test, the bounds and why, the faults, the mutants, the result,
+  what is left to tests. Otherwise write `None` and why.
+- **Partial supersession** (ADR-0272 Decision 7): an ADR that replaces named parts of one Accepted or Implemented
+  ADR lists them in `Supersedes (in part)` (its title may say `(amends ADR-XXXX)`), carries Context, Scenarios (new
+  or changed), Alternatives, Decision (numbered as in the parent), Design model, Contracts (the delta),
+  Implementation plan, Review checklist, Consequences and References, and may write `Unchanged (ADR-XXXX)` for Scope
+  and Constraints. It has its own feat row.
 
 **Cite the feature's issue (feature ADRs only).** If this ADR realizes a genuine deliverable feat-row (a
 user-facing capability, e.g. FEAT-0012/F137), find that row's `kind/feature` issue under its epoch's tracker —
@@ -127,7 +138,9 @@ the `Realizes:` header decides: a user-facing feat-row has a feature issue, an i
    date on their explicit go-ahead. Acceptance is the user's call — never self-accept; the
    judge advises but never accepts.
 4. An Accepted ADR is immutable in substance: later changes happen by writing a new ADR
-   that supersedes it (link both ways), never by editing history.
+   that supersedes it (link both ways), never by editing history. At acceptance, each ADR this one supersedes in
+   part gains, below its Status line, `- **Superseded in part by**: [ADR-NNNN](<file>) (<date>) — <parts>`, the only
+   touch it takes.
 
 ## Step 4 — Sync the blueprint and the feat tracking
 

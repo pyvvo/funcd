@@ -21,8 +21,8 @@ Judge against the project's reality, never from memory or generic Go-style prior
 
 1. Read the target ADR in full.
 2. Read `docs/adr/0000-adr-process.md` — the canonical template, section order, status
-   lifecycle, and workflow gates. The ADR is measured against *this* structure, not an
-   improvised one.
+   lifecycle, and workflow gates — with ADR-0272, which adds the *Design model* section and the written form of a
+   partial supersession. The ADR is measured against *this* structure, not an improvised one.
 3. Read the active feature-version document (`docs/feat/`, highest-numbered Active file)
    and find the row the ADR claims to realize (`Realizes: FEAT-NNNN/Fxx`). The feat doc is
    the **what/why**; confirm the ADR actually serves it and stays inside the active
@@ -108,6 +108,13 @@ especially deliberate, correctly-justified deviations from idiom (the kind a fut
 might "fix" by mistake), sharp alternative analysis, scenarios that will make good tests,
 and decisions that buy reversibility cheaply. If a strength is the kind of thing that gets
 accidentally undone later, say "keep as-is" explicitly and why.
+
+**H. Design model (ADR-0272).** If the Decision adds or changes a trigger of the
+[`fizzbee`](../fizzbee/SKILL.md) skill and the section reads `None`, that is a Blocker. Otherwise rerun the spec
+(`scripts/agent/d python3 scripts/specs.py check <spec>`) and read the trace of at least one mutant yourself. Major:
+an assertion that protects no Scenario at risk; a guard the Decision adds with no mutant; bounds not justified (fewer
+concurrent actions than actors in the race, no item beyond what the race needs); a wait, timeout or retry with no
+progress assertion; an assertion with no named oracle test.
 
 ## Step 3 — Calibrate before writing
 

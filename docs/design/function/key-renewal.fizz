@@ -1,0 +1,68 @@
+---
+# ADR-0270: a worker's derived S3 key pair is valid for E ticks. At its renewal age R the reconciler replaces the
+# worker; the replacement boots with a fresh pair, and may be broken and never listen. Left to tests: a reconcile pass
+# renews a due worker before its pair's time moves on (the Tick guard below assumes it).
+deadlock_detection: false
+options:
+  # Two workers, each renewing; every action is atomic, so two concurrent actions cover every interleaving.
+  max_concurrent_actions: 2
+  # Enough for both workers to renew twice and the clock to reach E.
+  max_actions: 30
+  crash_on_yield: false
+---
+# diagram: Worker.phase
+# mutant unbounded-hold: NoWorkerServesAnExpiredPair
+
+E = 6
+R = 4
+# A worker at its renewal age waits while the other boots after its own renewal, but only until HOLD_END, halfway
+# from R to E, so a replacement that never listens cannot hold it until its pair expires.
+HOLD_END = R + (E - R) // 2
+# Review round 5's design held the worker with no bound.
+MUTANT = ""
+
+role Worker:
+    action Init:
+        self.phase = "serving"
+
+    # The reconciler replaces the worker; the replacement may be broken. (FizzBee v0.5.4 ignores a oneof assigned
+    # straight to a field, so the choice goes through a local.)
+    atomic action Renew:
+        held = workers[1 - self.id].phase != "serving"
+        require age[self.id] >= R
+        if MUTANT == "unbounded-hold":
+            require not held
+        else:
+            require not held or age[self.id] >= HOLD_END
+        age[self.id] = 0
+        p = oneof ["booting", "broken"]
+        self.phase = p
+
+    # A replacement that is not broken starts listening.
+    atomic action Listen:
+        require self.phase == "booting"
+        self.phase = "serving"
+
+action Init:
+    b0 = oneof [0, 1, 2, 3]
+    age = {0: 0, 1: b0}
+    workers = []
+    for i in range(2):
+        workers.append(Worker(id=i))
+
+# Time passes only once no worker may renew: the reconciler renews a worker that may before time moves on.
+atomic fair action Tick:
+    for w in workers:
+        held = workers[1 - w.id].phase != "serving"
+        may = age[w.id] >= R and not held
+        if MUTANT != "unbounded-hold":
+            may = age[w.id] >= R and (not held or age[w.id] >= HOLD_END)
+        require age[w.id] < E and not may
+    for i in range(2):
+        age[i] = age[i] + 1
+
+always assertion NoWorkerServesAnExpiredPair:
+    for w in workers:
+        if w.phase == "serving" and age[w.id] >= E:
+            return False
+    return True

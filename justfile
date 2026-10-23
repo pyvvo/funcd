@@ -534,6 +534,17 @@ check-hygiene:
     if [ "$fail" -eq 0 ]; then echo "hygiene: clean"; fi
     exit "$fail"
 
+# check the design specs under docs/design (ADR-0272): each passes within its bounds and 20 s, each mutant fails the
+# assertion it names, each diagram is current. FizzBee comes from the dev shell (flake.nix, pinned by digest).
+[group('design')]
+check-specs:
+    python3 scripts/specs.py check
+
+# rewrite the Mermaid state machine beside each design spec, computed from the states FizzBee explores (ADR-0272).
+[group('design')]
+spec-diagrams:
+    python3 scripts/specs.py diagrams
+
 # CI pipeline — the FAST lane (generate staleness + fmt check + lint + fast test + build +
 # tidy-diff check). The heavy pkg/funcd e2e suite is build-tagged out; run it via `test-e2e`
 # (CI does, in a path-gated job). `ci-full` runs both for full local confidence.
@@ -541,7 +552,7 @@ check-hygiene:
 ci-full: ci test-e2e
 
 [group('go')]
-ci: tidy generate check-hygiene
+ci: tidy generate check-hygiene check-specs
     go fmt ./...
     @if [ -n "$(git diff --name-only -- '*.go')" ]; then echo "Run just fmt and commit the result" && exit 1; fi
     @if [ -n "{{_has-packages}}" ]; then go tool golangci-lint run ./...; fi

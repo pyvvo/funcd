@@ -449,6 +449,7 @@ func TestScenarioStaleRenewalMarkSparesTheNextWorker(t *testing.T) {
 
 // scenario: workers-renewed (ADR-0270) — a replica that never comes back holds the other replica's early renewal, but
 // not its renewal at its renewal age: the healthy replica renews then, so its pair never expires beside a broken one.
+// oracle: docs/design/function/key-renewal.fizz#NoWorkerServesAnExpiredPair
 func TestScenarioBrokenReplicaDoesNotBlockRenewal(t *testing.T) {
 	t.Parallel()
 	clk := clock.NewManual(time.Now())

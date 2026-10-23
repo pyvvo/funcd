@@ -75,7 +75,9 @@ Read, in this order, and do not skip:
 
 From the ADR's Implementation plan, list exactly: every file to create (path + one-line purpose),
 every `go.mod` dependency/tool to add, and the **Scenario → test** map (one named test per Scenario,
-the test name echoing the `scenario: <name>`). Confirm the list matches the ADR — if the ADR's plan
+the test name echoing the `scenario: <name>`), plus, when the ADR has a Design model (ADR-0272), the
+**assertion → oracle test** map from that section: each oracle test carries the comment
+`oracle: docs/design/<part>/<topic>.fizz#<Assertion>` above it. Confirm the list matches the ADR — if the ADR's plan
 is thin or ambiguous, that is a gap to flag, not to silently invent around. Present the plan
 briefly, then proceed.
 

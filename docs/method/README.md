@@ -67,7 +67,8 @@ Each step is a skill in [.claude/skills/](../../.claude/skills/):
 |---|---|---|
 | Plan | `roadmap-planner` | Sequences a version's ADRs into build waves and a critical path, computed from `plan.json` |
 | Decide | `adr` | Brainstorms a topic with the person and drafts the ADR: context, scenarios, alternatives, decision, contracts, implementation plan, review checklist |
-| Judge | `adr-judge` | Judges the ADR document against the blueprint, its feature row and the related ADRs, and gives an evidence-cited verdict |
+| Model | `fizzbee` | For a decision with a lifecycle, a race, a timer or another trigger of ADR-0272: a FizzBee spec of the design under `docs/design/`, which a model checker explores in every interleaving, with mutant controls and a generated state machine |
+| Judge | `adr-judge` | Judges the ADR document against the blueprint, its feature row and the related ADRs, reruns its design model, and gives an evidence-cited verdict |
 | Accept | the person | Accepts the ADR; the blueprint, the feature row and the roadmap are synced in the same session |
 | Build | `adr-impl` | Turns the ADR's contracts into working code, with one passing test per scenario |
 | Review | `adr-impl-review` | Runs the build, lint and tests against the ADR and stamps it `Implemented` on a pass |
@@ -77,6 +78,11 @@ A feature of a feat doc is tracked as a GitHub issue under its epoch's tracker (
 it, and the PR that implements the ADR closes it. The GitHub Project board (`project-management`) holds the
 un-scoped ideas and one card per epoch. [docs/PROJECT-SUMMARY.md](../PROJECT-SUMMARY.md) (`project-summary`) is the one-page map, derived from the
 ADRs.
+
+A design model catches the defects a review of the text misses: an order of steps a stop can cut, a timer that
+drops what is still in use, two rules that disagree. Experiment 0007 found four known defects of that kind and one
+new one (#1217) from specs of 10 to 63 lines, each in under a second. Each assertion of a model becomes the oracle
+of a named test (`// oracle: docs/design/<part>/<topic>.fizz#<Assertion>`), and `just ci` reruns every model.
 
 Two rules keep the layers consistent. A change in one layer owes updates to the others in the same session (the
 propagation table in CLAUDE.md). And every element of a design is either grounded in something that exists, with
