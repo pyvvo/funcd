@@ -8,8 +8,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/function"
 	"github.com/pyvvo/funcd/internal/runtime"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 	"github.com/pyvvo/funcd/internal/volume"
 )
 
@@ -31,11 +33,9 @@ func TestScenarioEmptyDirOverCapacityIsNotReady(t *testing.T) {
 	require.False(t, created, "no worker is created without its emptyDir")
 }
 
-// TestIssue1206_RestoredVolumeReplacesItsWorkers: a Succeeded Restore into a lost volume clears DataMissing and replaces
-// the worker that ran on the empty volume, which keeps the files it opened there, so the next one opens the restored
-// files (#1206).
-func TestIssue1206_RestoredVolumeReplacesItsWorkers(t *testing.T) {
-	t.Parallel()
+// cartWithState is a harness with durable volumes and Function cart, which declares local volume state.
+func cartWithState(t *testing.T) *shimHarness {
+	t.Helper()
 	h := newShimHarness(t, 200, false, func(d *function.Deps) {
 		m, err := volume.New(volume.Options{Root: t.TempDir()})
 		require.NoError(t, err)
@@ -44,6 +44,28 @@ func TestIssue1206_RestoredVolumeReplacesItsWorkers(t *testing.T) {
 	h.create(t, "cart", func(fn *v1.Function) {
 		fn.Spec.Volumes = []v1.VolumeEntry{{Name: "state", Type: v1.VolumeLocal, SizeBytes: 1 << 20}}
 	})
+	return h
+}
+
+// liveWorkers counts name's workers that have not ended.
+func liveWorkers(h *shimHarness, name v1.ObjectName) int {
+	n := 0
+	for _, replicas := range h.rt.revisionStates(name) {
+		for _, st := range replicas {
+			if !st.Terminal() {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// TestIssue1206_RestoredVolumeClearsDataMissing: a Succeeded Restore into a lost volume clears DataMissing on the next
+// pass, though the Function was steady; it replaces no worker, since the Restore loaded the volume while none ran
+// (#1206).
+func TestIssue1206_RestoredVolumeClearsDataMissing(t *testing.T) {
+	t.Parallel()
+	h := cartWithState(t)
 	h.reconcile(t, "cart")
 	h.reconcile(t, "cart")
 	before := h.creates()
@@ -62,7 +84,71 @@ func TestIssue1206_RestoredVolumeReplacesItsWorkers(t *testing.T) {
 	require.NoError(t, err)
 	h.reconcile(t, "cart")
 	h.requireCondition(t, "cart", "DataMissing", v1.ConditionFalse, "Restored")
-	require.Equal(t, before+1, h.creates(), "the worker that ran on the empty volume is replaced")
+	require.Equal(t, before, h.creates(), "clearing DataMissing replaces no worker")
+}
+
+// TestIssue1206_StopWorkersKeepsTheFunctionWorkerless: while a Restore loads a Function's volume no worker of the
+// Function runs and no pass creates one; once the Restore releases it, the next pass starts its worker again (#1206).
+func TestIssue1206_StopWorkersKeepsTheFunctionWorkerless(t *testing.T) {
+	t.Parallel()
+	h := cartWithState(t)
+	h.reconcile(t, "cart")
+	h.reconcile(t, "cart")
+	require.Equal(t, 1, liveWorkers(h, "cart"), "cart runs a worker")
+	release, err := h.r.StopWorkers(t.Context(), "default", "cart")
+	require.NoError(t, err)
+	require.Zero(t, liveWorkers(h, "cart"), "StopWorkers returns once no worker runs")
+	before := h.creates()
+	h.reconcile(t, "cart")
+	require.Equal(t, before, h.creates(), "no pass creates a worker while the volume loads")
+	require.Zero(t, liveWorkers(h, "cart"))
+	release()
+	h.reconcile(t, "cart")
+	require.Equal(t, 1, liveWorkers(h, "cart"), "the next pass starts the worker again")
+}
+
+// TestIssue1206_StopWorkersWaitsForAPassCreatingWorkers: a pass that began creating the Function's worker before the
+// Restore asked ends first, and StopWorkers stops the worker it created too (#1206).
+func TestIssue1206_StopWorkersWaitsForAPassCreatingWorkers(t *testing.T) {
+	t.Parallel()
+	h := cartWithState(t)
+	creating, proceed := make(chan struct{}), make(chan struct{})
+	h.rt.mu.Lock()
+	h.rt.onCreate = func(runtime.WorkerSpec) {
+		close(creating)
+		<-proceed
+	}
+	h.rt.mu.Unlock()
+	passed := make(chan error, 1)
+	go func() {
+		_, err := h.r.Reconcile(context.Background(), controller.Request{GVK: v1.KindFunction.GVK(), Namespace: "default", Name: "cart"})
+		passed <- err
+	}()
+	select {
+	case <-creating:
+	case err := <-passed:
+		t.Fatalf("the pass ended without creating a worker: %v", err)
+	}
+	h.rt.mu.Lock()
+	h.rt.onCreate = nil
+	h.rt.mu.Unlock()
+	type stop struct {
+		release func()
+		err     error
+	}
+	stopped := make(chan stop, 1)
+	go func() {
+		release, err := h.r.StopWorkers(context.Background(), "default", "cart")
+		stopped <- stop{release, err}
+	}()
+	require.True(t, poll.Never(func() bool { return len(stopped) > 0 }, 100*time.Millisecond, 5*time.Millisecond),
+		"StopWorkers returned while a pass was creating a worker")
+	close(proceed)
+	require.NoError(t, <-passed)
+	s := <-stopped
+	require.NoError(t, s.err)
+	require.Zero(t, liveWorkers(h, "cart"), "the worker that pass created is stopped too")
+	s.release()
 }
 
 // stealingVolumes books another volume right after each Release, as a Function waiting for capacity can on its pass.

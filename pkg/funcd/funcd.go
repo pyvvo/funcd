@@ -2431,7 +2431,7 @@ func (p *Platform) registerWorkloadBackups(ctrl *controller.Controller, secrets 
 		d.Hold = c.hold
 	}
 	if p.volumes != nil { // ADR-0262 Decision 11: a Function's local volume is a workload backup member
-		vl := volumeLoader{m: p.volumes, lost: p.fnReconciler.VolumeLost}
+		vl := volumeLoader{m: p.volumes, lost: p.fnReconciler.VolumeLost, stop: p.fnReconciler.StopWorkers}
 		d.Sources.Volume, d.Volumes = vl.Source, vl
 	}
 	rs, err := backupsvc.New(d)
@@ -2712,10 +2712,11 @@ func (b volumeBooker) Fits(ctx context.Context, ns v1.NamespaceName, fn, name v1
 }
 
 // volumeLoader adapts the volume manager to the workload backups (ADR-0262 Decision 11), and the Function reconciler's
-// DataMissing to a Restore's lost volume (#1206).
+// DataMissing and worker stop to a Restore's load (#1206).
 type volumeLoader struct {
 	m    volume.Manager
 	lost func(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName) (bool, error)
+	stop func(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName) (func(), error)
 }
 
 func vid(ns v1.NamespaceName, fn, name v1.ObjectName) volume.ID {
@@ -2740,6 +2741,10 @@ func (l volumeLoader) Clear(ctx context.Context, ns v1.NamespaceName, fn, name v
 
 func (l volumeLoader) Lost(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName) (bool, error) {
 	return l.lost(ctx, ns, fn, name)
+}
+
+func (l volumeLoader) StopWorkers(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName) (func(), error) {
+	return l.stop(ctx, ns, fn)
 }
 
 // volumeDeleter is the volume route's deleter: nil (no route) while volumes are off.

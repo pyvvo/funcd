@@ -72,7 +72,9 @@ type fakeRuntime struct {
 	memberStates map[string][2]string
 	// onStop runs at the start of each Stop, before the instance reads Stopped: the time the drivers spend in a Stop's
 	// grace, while the task still runs.
-	onStop      func(runtime.InstanceID)
+	onStop func(runtime.InstanceID)
+	// onCreate runs at the start of each Create, as a pass begins creating a worker.
+	onCreate    func(runtime.WorkerSpec)
 	memberDeps  map[string]*local.DependencyReport // a member's dependency report (ADR-0215 Decision 4)
 	membersDown bool                               // GET /health/members answers 503: no member list, judged at once (ADR-0259)
 	membersLate bool                               // GET /health/members answers only after the probe has timed out
@@ -212,6 +214,12 @@ func manifestMembers(path string) []string {
 func (f *fakeRuntime) Create(_ context.Context, spec runtime.WorkerSpec) (runtime.Instance, error) {
 	if spec.OwnerKind == "" {
 		return runtime.Instance{}, fault.Invalidf("fake.Create", "spec.OwnerKind must not be empty")
+	}
+	f.mu.Lock()
+	onCreate := f.onCreate
+	f.mu.Unlock()
+	if onCreate != nil {
+		onCreate(spec)
 	}
 	id := runtime.NewInstanceID(spec.Namespace, spec.Name, spec.Revision, spec.Replica)
 	f.mu.Lock()

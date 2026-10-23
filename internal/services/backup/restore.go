@@ -217,6 +217,11 @@ func (r *RestoreReconciler) load(ctx context.Context, rs *v1.Restore, b *v1.Back
 		}
 		held = &m
 	}
+	release, err := r.stopVolumeWorkers(ctx, rs.Namespace, targets)
+	if err != nil {
+		return reasonFailed, err
+	}
+	defer release()
 	for _, t := range targets {
 		t.written = true
 		if reason, err := r.fill(ctx, rs.Namespace, t, src, b.Status.Path, unseal); err != nil {
@@ -234,6 +239,31 @@ func (r *RestoreReconciler) load(ctx context.Context, rs *v1.Restore, b *v1.Back
 		}
 	}
 	return "", nil
+}
+
+// stopVolumeWorkers stops the workers of each Function whose volume the load fills until release, so none runs while
+// its volume is emptied and loaded (ADR-0262 Decisions 11 and 12, #1206).
+func (r *RestoreReconciler) stopVolumeWorkers(ctx context.Context, ns v1.NamespaceName, targets []*target) (release func(), err error) {
+	var releases []func()
+	release = func() {
+		for _, f := range releases {
+			f()
+		}
+	}
+	stopped := map[v1.ObjectName]bool{}
+	for _, t := range targets {
+		if t.volume == "" || r.d.Volumes == nil || stopped[t.volFn] {
+			continue
+		}
+		stopped[t.volFn] = true
+		f, err := r.d.Volumes.StopWorkers(ctx, ns, t.volFn)
+		if err != nil {
+			release()
+			return nil, err
+		}
+		releases = append(releases, f)
+	}
+	return release, nil
 }
 
 // plan resolves each member's file in m and its destination; a missing member or destination is MemberNotFound and a

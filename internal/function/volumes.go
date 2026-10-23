@@ -10,6 +10,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -392,9 +393,58 @@ func (r *Reconciler) VolumeOrphans(ctx context.Context) ([]v1.ObjectRef, error) 
 	return out, nil
 }
 
-// retireWorkers retires every worker of fn that has not ended; the pass creates them again.
-func (r *Reconciler) retireWorkers(ctx context.Context, fn *v1.Function) error {
-	insts, err := r.namedInstances(ctx, fn.Namespace, fn.Name)
+// StopWorkers stops every worker of Function ns/name and keeps its passes from creating or starting one until release
+// is called: a Restore loads the Function's volume while none runs, so no worker writes there during the load or
+// keeps a file the load replaced (ADR-0262 Decisions 11 and 12, #1206). A pass already creating workers ends first,
+// and those are stopped too.
+func (r *Reconciler) StopWorkers(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (release func(), err error) {
+	key := fnKey{ns, name}
+	r.volMu.Lock()
+	r.restoring[key]++
+	for r.launching[key] > 0 {
+		r.launched.Wait()
+	}
+	r.volMu.Unlock()
+	release = sync.OnceFunc(func() {
+		r.volMu.Lock()
+		if r.restoring[key]--; r.restoring[key] == 0 {
+			delete(r.restoring, key)
+		}
+		r.volMu.Unlock()
+	})
+	if err := r.retireWorkers(ctx, ns, name); err != nil {
+		release()
+		return nil, err
+	}
+	return release, nil
+}
+
+// beginLaunch reports whether fn's pass may create or start workers, which StopWorkers forbids; a true answer is paired
+// with endLaunch.
+func (r *Reconciler) beginLaunch(fn *v1.Function) bool {
+	key := fnKey{fn.Namespace, fn.Name}
+	r.volMu.Lock()
+	defer r.volMu.Unlock()
+	if r.restoring[key] > 0 {
+		return false
+	}
+	r.launching[key]++
+	return true
+}
+
+func (r *Reconciler) endLaunch(fn *v1.Function) {
+	key := fnKey{fn.Namespace, fn.Name}
+	r.volMu.Lock()
+	if r.launching[key]--; r.launching[key] == 0 {
+		delete(r.launching, key)
+	}
+	r.volMu.Unlock()
+	r.launched.Broadcast()
+}
+
+// retireWorkers retires every worker of Function ns/name that has not ended.
+func (r *Reconciler) retireWorkers(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	insts, err := r.namedInstances(ctx, ns, name)
 	if err != nil {
 		return err
 	}
@@ -460,9 +510,7 @@ func (r *Reconciler) dataMissing(ctx context.Context, fn *v1.Function) error {
 			return err
 		}
 		fn.Status.Conditions.Set(v1.Condition{Type: condDataMissing, Status: v1.ConditionFalse, Reason: reasonVolumesRestored, ObservedGeneration: fn.Generation})
-		// the workers ran on the empty volume and keep the files they opened there: the next ones open the restored
-		// files (#1206)
-		return r.retireWorkers(ctx, fn)
+		return nil
 	}
 	if !first {
 		return nil

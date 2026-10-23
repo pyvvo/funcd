@@ -373,8 +373,10 @@ type Reconciler struct {
 	held map[fnKey]bool
 
 	// volumes keeps the Functions' volumes (ADR-0262); emptyDirs names each worker's emptyDirs, volumesSeen the
-	// Functions this process passed over, volumesMissing those whose DataMissing awaits a status write and
-	// heldLeftovers the last run's emptyDirs a held boot kept (#1204); volMu guards the four.
+	// Functions this process passed over, volumesMissing those whose DataMissing awaits a status write,
+	// heldLeftovers the last run's emptyDirs a held boot kept (#1204), restoring the Functions a Restore keeps
+	// workerless and launching the passes creating their workers (#1206); volMu guards the six, and launched tells
+	// StopWorkers that a pass is done creating.
 	volumes        volume.Manager
 	volumesDurable bool
 	hold           hold.Gate
@@ -383,6 +385,9 @@ type Reconciler struct {
 	volumesSeen    map[fnKey]bool
 	volumesMissing map[fnKey][]string
 	heldLeftovers  []volume.ID
+	restoring      map[fnKey]int
+	launching      map[fnKey]int
+	launched       *sync.Cond
 }
 
 // fnKey names a Function in the spared set.
@@ -495,7 +500,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 			livenessTO = math.MaxInt64
 		}
 	}
-	return &Reconciler{
+	r := &Reconciler{
 		store: d.Store, runtime: d.Runtime, scheduler: d.Scheduler,
 		gateway: d.Gateway, validator: d.Validator, logger: logger.With("component", "function"),
 		logMaxRecordBytes: d.LogMaxRecordBytes,
@@ -543,7 +548,11 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		emptyDirs:         map[runtime.InstanceID][]volume.ID{},
 		volumesSeen:       map[fnKey]bool{},
 		volumesMissing:    map[fnKey][]string{},
-	}, nil
+		restoring:         map[fnKey]int{},
+		launching:         map[fnKey]int{},
+	}
+	r.launched = sync.NewCond(&r.volMu)
+	return r, nil
 }
 
 // Reconcile converges one Function to its desired state.
@@ -1946,6 +1955,14 @@ func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, re
 	replace = slices.DeleteFunc(replace, func(in runtime.Instance) bool { return held(in.ID) })
 	launch = slices.DeleteFunc(launch, func(i int) bool { return held(runtime.NewInstanceID(tmpl.Namespace, tmpl.Name, rev, i)) })
 	start = slices.DeleteFunc(start, held)
+	// a Restore loading one of the Function's volumes keeps it workerless until the load ends (#1206)
+	if len(launch)+len(replace)+len(start) > 0 {
+		if !r.beginLaunch(tmpl) {
+			launch, replace, start = nil, nil, nil
+		} else {
+			defer r.endLaunch(tmpl)
+		}
+	}
 
 	// materialize the artifact once (shim mode) before launching any replica. The Revision's
 	// pinned digest (ADR-0035) is applied to an in-memory copy — never written back to the

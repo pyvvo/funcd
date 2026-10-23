@@ -86,12 +86,13 @@ type SQLLoader interface {
 
 // VolumeLoader loads, checks and clears a Function's local volume (ADR-0262 Decision 11); Load refuses Conflict when
 // the volume is not empty. Lost reports a volume its Function's DataMissing names (Decision 12), whose content a
-// Restore replaces (#1206).
+// Restore replaces, and StopWorkers keeps the Function workerless until release, while its volume loads (#1206).
 type VolumeLoader interface {
 	Load(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName, archive io.Reader) error
 	IsEmpty(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName) (bool, error)
 	Clear(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName) error
 	Lost(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName) (bool, error)
+	StopWorkers(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName) (release func(), err error)
 }
 
 // Hold is the daemon's hold (ADR-0206): the platform gate the runs wait on, the namespace gate the slots ask, and the

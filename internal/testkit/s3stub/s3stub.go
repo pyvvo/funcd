@@ -48,8 +48,9 @@ const (
 
 // Stub is the endpoint. Set its fields through Set. Box refuses every object read and delete and every put under
 // gen/verified/, as ADR-0203's box policy does; FailPut refuses chosen puts and copies; OnPut runs after each stored
-// put, under the stub's lock (use PutLocked there). Versioning is the bucket's status ("", "Enabled",
-// "Suspended"); VersioningStatus and LockStatus, when set, answer that read with the HTTP status (or Drop).
+// put, under the stub's lock (use PutLocked there); OnGet runs before each object read, outside it. Versioning is the
+// bucket's status ("", "Enabled", "Suspended"); VersioningStatus and LockStatus, when set, answer that read with the
+// HTTP status (or Drop).
 type Stub struct {
 	Clock *clock.Manual
 	srv   *httptest.Server
@@ -59,6 +60,7 @@ type Stub struct {
 	Box              bool
 	FailPut          func(key string) bool
 	OnPut            func(s *Stub, key string)
+	OnGet            func(key string)
 	Versioning       string
 	VersioningStatus int
 	ObjectLock       bool
@@ -234,9 +236,15 @@ func (s *Stub) store(key string, v version) {
 
 func (s *Stub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
+	key := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/"+Bucket), "/")
+	s.mu.Lock()
+	onGet := s.OnGet
+	s.mu.Unlock()
+	if onGet != nil && r.Method == http.MethodGet && key != "" {
+		onGet(key)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/"+Bucket), "/")
 	q := r.URL.Query()
 	sub := ""
 	for _, name := range []string{"versioning", "object-lock", "versions"} {
