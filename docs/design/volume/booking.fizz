@@ -1,0 +1,81 @@
+---
+# A local volume's space from apply to its first pass (ADR-0262 Decision 5, #1208's fix). Admission books the space; the
+# write then stores the Function, or a later check refuses the apply and nothing is stored. A pass of the reconciler
+# reserves the stored Function's volume. A booking no pass reserved expires after BookingTTL, and the manager drops
+# it only when no stored Function or App part declares it.
+deadlock_detection: false
+options:
+  # Two Functions racing for space that fits one; every action is atomic.
+  max_concurrent_actions: 2
+  max_actions: 10
+  crash_on_yield: false
+---
+# diagram: Function.phase
+# mutant drop-stored: StoredFunctionsGetTheirVolume
+# mutant never-drop: liveness
+
+CAPACITY = 4
+SIZE = 3
+# drop-stored: the manager drops an expired booking even when a stored Function declares it (#1208).
+# never-drop: it never drops a booking (an over-correction: a refused apply holds its space for good).
+MUTANT = ""
+
+role Function:
+    action Init:
+        self.phase = "new"
+
+    atomic action Apply:
+        require self.phase == "new"
+        if CAPACITY - SIZE * (len(booked) + len(reserved)) < SIZE:
+            self.phase = "rejected"
+            return
+        booked.append(self.id)
+        p = oneof ["stored", "orphan"]
+        self.phase = p
+
+    # BookingTTL passes with no pass to reserve the volume.
+    atomic fair action Expire:
+        require self.id in booked and self.id not in expired
+        expired.append(self.id)
+
+    # The manager drops an expired booking that no stored Function declares: its apply was refused after admission.
+    atomic fair action DropStale:
+        require self.id in expired
+        require MUTANT != "never-drop"
+        if MUTANT != "drop-stored":
+            require self.phase != "stored"
+        booked.remove(self.id)
+        expired.remove(self.id)
+        if self.phase == "orphan":
+            self.phase = "dropped"
+
+    # A pass reserves the stored Function's volume: from its booking, or from free space.
+    atomic action Pass:
+        require self.phase == "stored"
+        if self.id in booked:
+            booked.remove(self.id)
+            if self.id in expired:
+                expired.remove(self.id)
+            reserved.append(self.id)
+            self.phase = "reserved"
+        elif CAPACITY - SIZE * (len(booked) + len(reserved)) >= SIZE:
+            reserved.append(self.id)
+            self.phase = "reserved"
+        else:
+            self.phase = "refused"
+
+action Init:
+    booked = []
+    expired = []
+    reserved = []
+    functions = []
+    for i in range(2):
+        functions.append(Function(id=i))
+
+# A stored Function always gets the volume its apply booked.
+always assertion StoredFunctionsGetTheirVolume:
+    return all([f.phase != "refused" for f in functions])
+
+# A booking no stored Function declares is eventually dropped, freeing its space.
+eventually always assertion RefusedAppliesFreeTheirSpace:
+    return all([f.phase != "orphan" for f in functions])

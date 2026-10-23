@@ -200,12 +200,21 @@ def machine(variables: list[str], run: Run) -> tuple[set, dict, set]:
                     (frontier if running(run.nodes[link["dest"]], action) else found).append(link["dest"])
         return found
 
-    initial = set(views(variables, run.nodes[0]).values())
+    # The states where Init ends are the initial ones: an Init that chooses (oneof) starts before its choices.
+    initial = set()
+    for link in run.links:
+        src, dest = run.nodes[link["src"]], run.nodes[link["dest"]]
+        if action_of(link, src, dest) == "Init" and not running(dest, "Init"):
+            initial.update(views(variables, dest).values())
+    if not initial:
+        initial = set(views(variables, run.nodes[0]).values())
     edges: dict[tuple, set] = defaultdict(set)
     final = set()
     for link in run.links:
         src, dest = run.nodes[link["src"]], run.nodes[link["dest"]]
         before, after = views(variables, src), views(variables, dest)
+        if action_of(link, src, dest) == "Init":
+            continue
         if link["name"] == "end":
             # FizzBee ends both a state where no action is enabled and one at the max_actions bound; only the first is
             # an end of the design.

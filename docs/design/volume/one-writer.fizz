@@ -1,0 +1,59 @@
+---
+# One writer per local volume (ADR-0262 Decision 6, #1199's fix). Admission refuses a Function with a local volume whose
+# spec.replicas or spec.scaling.minReplicas is above 1, since the reconciler runs max(replicas, minReplicas) workers
+# (spec.scaling.maxReplicas is only recorded: 1→N autoscaling is V3). During a redeploy the old and the new revision
+# hold the volume at once until the old one stops; the code locks its files.
+deadlock_detection: false
+options:
+  # The reconcile and the switch race through one Function's workers; every action is atomic.
+  max_concurrent_actions: 2
+  max_actions: 8
+  crash_on_yield: false
+---
+# diagram: phase
+# mutant replicas-only: AtMostOneWriterOutsideASwitch
+# mutant old-never-stops: liveness
+
+# replicas-only: admission checks spec.replicas alone (#1199). old-never-stops: a switch never retires the old revision.
+MUTANT = ""
+
+action Init:
+    replicas = oneof [0, 1, 2]
+    min_replicas = oneof [0, 1, 3]
+    if MUTANT == "replicas-only":
+        admitted = replicas <= 1
+    else:
+        admitted = replicas <= 1 and min_replicas <= 1
+    phase = "applied" if admitted else "refused"
+    old = 0
+    new = 0
+
+# The reconciler runs the revision's workers.
+atomic action Reconcile:
+    require phase == "applied"
+    old = max(replicas, min_replicas, 1)
+    phase = "serving"
+
+# A redeploy: the new revision's worker boots beside the old one.
+atomic action Redeploy:
+    require phase == "serving"
+    new = 1
+    phase = "switching"
+
+# The new revision serves; the old one stops.
+atomic fair action Retire:
+    require phase == "switching"
+    require MUTANT != "old-never-stops"
+    old = new
+    new = 0
+    phase = "serving"
+
+# Outside a switch, a local volume has one writer; during one, the old and the new revision each hold it once.
+always assertion AtMostOneWriterOutsideASwitch:
+    if phase == "switching":
+        return old <= 1 and new <= 1
+    return old + new <= 1
+
+# A switch always ends.
+always eventually assertion SwitchesEnd:
+    return phase != "switching"

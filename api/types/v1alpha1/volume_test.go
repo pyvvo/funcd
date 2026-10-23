@@ -80,6 +80,7 @@ func TestBackupScopeVolumes(t *testing.T) {
 
 // TestIssue1199_LocalVolumeRefusesMinReplicasAboveOne: the reconciler runs max(spec.replicas,
 // spec.scaling.minReplicas) workers, so a local volume refuses a minReplicas above 1 as it refuses replicas 2 (#1199).
+// oracle: docs/design/volume/one-writer.fizz#AtMostOneWriterOutsideASwitch
 func TestIssue1199_LocalVolumeRefusesMinReplicasAboveOne(t *testing.T) {
 	local := VolumeEntry{Name: "state", Type: VolumeLocal, SizeBytes: 1}
 	cache := VolumeEntry{Name: "cache", Type: VolumeEmptyDir, SizeBytes: 1}

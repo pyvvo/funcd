@@ -97,6 +97,18 @@ func TestSpecDiagramStatesAndTransitions(t *testing.T) {
 		"    [*] --> s0\n    s0 --> s1 : Open\n    s1 --> s0 : Close\n    s0 --> [*]\n```\n", string(md))
 }
 
+// An Init that chooses starts the diagram where it ends: its choices are the initial states, and its steps no edges.
+func TestSpecDiagramStartsWhereInitEnds(t *testing.T) {
+	spec := gateSpec(t, `    phase = "closed"`, `    phase = oneof ["closed", "open"]`)
+	code, out := specs(t, "diagrams", spec)
+	require.Equal(t, 0, code, out)
+	md, err := os.ReadFile(strings.TrimSuffix(spec, ".fizz") + ".md")
+	require.NoError(t, err)
+	require.NotContains(t, string(md), "null")
+	require.NotContains(t, string(md), ": Init")
+	require.Contains(t, string(md), "    [*] --> s0\n    [*] --> s1\n")
+}
+
 // A spec names its bounds: FizzBee's default of two concurrent actions hid #1217.
 func TestSpecWithoutBoundsIsRefused(t *testing.T) {
 	spec := gateSpec(t, "  max_concurrent_actions: 2\n", "")

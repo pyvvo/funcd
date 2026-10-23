@@ -108,6 +108,8 @@ func TestIssue1205_DryRunBooksNoVolume(t *testing.T) {
 // TestIssue1208_AppliedVolumeKeepsItsBooking: an applied Function's local volume keeps the space its apply booked until
 // a pass reserves it, however long its passes wait; a booking no stored Function declares, an apply refused after its
 // admission, still lapses after BookingTTL (#1208).
+// oracle: docs/design/volume/booking.fizz#StoredFunctionsGetTheirVolume
+// oracle: docs/design/volume/booking.fizz#RefusedAppliesFreeTheirSpace
 func TestIssue1208_AppliedVolumeKeepsItsBooking(t *testing.T) {
 	t.Parallel()
 	var now atomic.Int64
@@ -128,6 +130,7 @@ func TestIssue1208_AppliedVolumeKeepsItsBooking(t *testing.T) {
 // TestIssue1208_AppPartVolumeKeepsItsBooking: an App's admission books its parts' local volumes before the App writes
 // the part Functions; the booking stays while the stored App declares the part, however long its rollout waits, as
 // during a hold (#1208).
+// oracle: docs/design/volume/booking.fizz#StoredFunctionsGetTheirVolume
 func TestIssue1208_AppPartVolumeKeepsItsBooking(t *testing.T) {
 	t.Parallel()
 	var now atomic.Int64
