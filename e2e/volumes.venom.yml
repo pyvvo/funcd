@@ -1,0 +1,293 @@
+# Venom e2e suite for the volumes lane (ADR-0262): the volumes App of funcd-functions on real containerd, with a 64 MiB
+# volume image at /var/lib/funcd/data/volumes.img. volumes-files owns a local volume data and an emptyDir scratch of
+# 1 MiB each; volumes-peer owns its own local data.
+#   V1 the App deploys from its pushed template, and both Functions answer.
+#   V2 each volume takes a file, at the path FUNCD_VOLUME_<NAME> names.
+#   V3 a worker sees only its own volumes above its volume path, and each leaf is a directory of the image on the host;
+#      inside the worker, setting a file's project id (also with the command's upper bits set) or the leaf's flags
+#      answers EPERM, and other ioctls pass (ADR-0268).
+#   V4 a write past a volume's size fails with a quota error, and the earlier file is intact.
+#   V5 a crash: the new worker keeps data and gets an empty scratch.
+#   V6 a redeploy to a new revision: data is kept, scratch is empty again.
+#   V7 apply refuses a volume that does not fit the image (VolumeCapacity) and two replicas with a local volume.
+#   V8 deleting the App keeps the local volumes (retain); funcdctl volume delete removes one.
+name: volumes — Function volumes on real containerd, local and emptyDir (ADR-0262, ADR-0266, ADR-0268)
+
+vars:
+  dp: http://127.0.0.1:8081
+  reg: oci-layout:///mnt/funcd-deps/registry
+  fctl: "limactl shell --workdir / {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token funcdctl"
+  vmsh: "limactl shell --workdir / {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token bash -c"
+  vols: /var/lib/funcd/data/volumes/default
+  ctr: "/var/lib/funcd/bin/ctr --address /var/lib/funcd/data/containerd/containerd.sock -n funcd-default"
+
+testcases:
+  - name: V1 the App deploys from its pushed template
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            cd /opt/lane
+            funcdctl push functions/ts/files.mjs {{.reg}}/volumes-files:1.0.0 > /dev/null
+            funcdctl app lock /opt/lane/app -f /opt/lane/values/e2e.yaml > /dev/null
+            funcdctl push --template /opt/lane/app {{.reg}}/volumes:1.0.0 > /dev/null
+            funcdctl app deploy {{.reg}}/volumes:1.0.0 -f /opt/lane/values/e2e.yaml'
+        info: "deploy → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldStartWith volumes-1
+      - type: http
+        method: POST
+        url: "{{.dp}}/files"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"info"}}'
+        retry: 30
+        delay: 2
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.pid ShouldBeGreaterThan 0
+      - type: http
+        method: POST
+        url: "{{.dp}}/peer"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"write","name":"peer-only","text":"theirs"}}'
+        retry: 30
+        delay: 2
+        assertions:
+          - result.statuscode ShouldEqual 200
+
+  - name: V2 each volume takes a file
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/files"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"write","volume":"data","name":"note","text":"kept"}}'
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "{{.dp}}/files"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"write","volume":"scratch","name":"tmp","text":"gone"}}'
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "{{.dp}}/files"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"read","volume":"data","name":"note"}}'
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.text ShouldEqual kept
+
+  - name: V3 a worker sees only its own volumes
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/files"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"peek"}}'
+        info: "peek → {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '"names":["data","scratch"]'
+      - type: http
+        method: POST
+        url: "{{.dp}}/peer"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"peek"}}'
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '"names":["data"]'
+      - type: http
+        method: POST
+        url: "{{.dp}}/files"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"list","volume":"data"}}'
+        assertions:
+          - result.body ShouldContainSubstring '"names":["note"]'
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            findmnt -n -o FSTYPE,OPTIONS /var/lib/funcd/data/volumes | grep -q prjquota
+            test -f {{.vols}}/volumes-files/data/note
+            test -f {{.vols}}/volumes-peer/data/peer-only
+            test -f {{.vols}}/volumes-files/data.meta
+            ls {{.vols}}/volumes-files/scratch.empty | wc -l'
+        info: "host → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual 2
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            cp /opt/lane/projid-probe {{.vols}}/volumes-files/data/projid-probe
+            t=$({{.ctr}} task ls | awk "\$1 ~ /^volumes-files-.*r0\$/ && \$3 == \"RUNNING\" {print \$1}" | head -1)
+            {{.ctr}} task exec --exec-id probe-$$ "$t" /var/funcd/volumes/data/projid-probe /var/funcd/volumes/data
+            rm -f {{.vols}}/volumes-files/data/projid-probe {{.vols}}/volumes-files/data/probe-file'
+        info: "probe → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "getxattr ok"
+          - result.systemout ShouldContainSubstring "setxattr EPERM"
+          - result.systemout ShouldContainSubstring "setxattr-high EPERM"
+          - result.systemout ShouldContainSubstring "getflags ok"
+          - result.systemout ShouldContainSubstring "setflags EPERM"
+
+  - name: V4 a write past the size fails with a quota error
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/files"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"fill","volume":"data","bytes":2097152}}'
+        info: "fill → {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.code ShouldBeIn EDQUOT ENOSPC
+          - result.bodyjson.written ShouldBeLessThan 1048577
+      - type: http
+        method: POST
+        url: "{{.dp}}/files"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"read","volume":"data","name":"note"}}'
+        assertions:
+          - result.bodyjson.text ShouldEqual kept
+
+  - name: V5 a crash keeps data and gives the new worker an empty scratch
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/files"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"crash"}}'
+        vars:
+          oldboot:
+            from: result.bodyjson.boot
+      - type: http
+        method: POST
+        url: "{{.dp}}/files"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"info"}}'
+        retry: 40
+        delay: 1
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.boot ShouldNotEqual {{.oldboot}}
+      - type: http
+        method: POST
+        url: "{{.dp}}/files"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"read","volume":"data","name":"note"}}'
+        assertions:
+          - result.bodyjson.text ShouldEqual kept
+      - type: http
+        method: POST
+        url: "{{.dp}}/files"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"list","volume":"scratch"}}'
+        info: "scratch after the crash → {{.result.body}}"
+        assertions:
+          - result.body ShouldContainSubstring '"names":[]'
+
+  - name: V6 a redeploy keeps data, and scratch is empty again
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/files"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"write","volume":"scratch","name":"tmp","text":"gone"}}'
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: exec
+        script: "{{.fctl}} app deploy {{.reg}}/volumes:1.0.0 -f /opt/lane/values/e2e.yaml -f /opt/lane/values/redeploy.yaml"
+        info: "redeploy → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldStartWith volumes-2
+      - type: exec
+        script: |
+          {{.fctl}} get function volumes-files -n default -o json | python3 -c 'import sys,json;d=json.load(sys.stdin);print("TIMEOUT="+d["spec"].get("timeout","")+",PHASE="+d["status"].get("phase",""))'
+        retry: 30
+        delay: 2
+        assertions:
+          - result.systemout ShouldEqual TIMEOUT=31s,PHASE=Ready
+      - type: http
+        method: POST
+        url: "{{.dp}}/files"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"list","volume":"scratch"}}'
+        retry: 20
+        delay: 1
+        assertions:
+          - result.body ShouldContainSubstring '"names":[]'
+      - type: http
+        method: POST
+        url: "{{.dp}}/files"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"read","volume":"data","name":"note"}}'
+        assertions:
+          - result.bodyjson.text ShouldEqual kept
+
+  - name: V7 apply refuses a volume over the capacity and two replicas with a local volume
+    steps:
+      - type: exec
+        script: "{{.fctl}} apply -f /opt/lane/fixtures/too-big.yaml"
+        info: "too-big → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldNotEqual 0
+          - result.systemerr ShouldContainSubstring VolumeCapacity
+      - type: exec
+        script: "{{.fctl}} apply -f /opt/lane/fixtures/two-replicas.yaml"
+        info: "two-replicas → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldNotEqual 0
+          - result.systemerr ShouldContainSubstring spec.replicas
+          - result.systemerr ShouldContainSubstring spec.volumes[0]
+
+  - name: V8 deleting the App keeps the local volumes; funcdctl volume delete removes one
+    steps:
+      - type: exec
+        script: "{{.fctl}} delete app volumes -n default"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: "{{.vmsh}} 'test ! -e {{.vols}}/volumes-files/scratch.empty/* && test -f {{.vols}}/volumes-files/data/note && echo kept'"
+        retry: 30
+        delay: 1
+        info: "after delete → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldEqual kept
+      - type: exec
+        script: "{{.fctl}} volume delete default/volumes-files/data"
+        info: "volume delete → {{.result.systemout}} {{.result.systemerr}}"
+        retry: 10
+        delay: 1
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "deleted volume default/volumes-files/data"
+      - type: exec
+        script: "{{.vmsh}} 'test ! -e {{.vols}}/volumes-files/data && test -d {{.vols}}/volumes-peer/data && echo ok'"
+        assertions:
+          - result.systemout ShouldEqual ok
