@@ -14,6 +14,7 @@
   ADR-0045 for the names; "sandbox" in this frozen text ≡ "worker").
 - **Superseded in part by**: [ADR-0167](0167-process-worker-crash-recovery.md) (2026-10-05) — Decision 2: Status/List read an in-memory registry only (now also saved).
 - **Superseded in part by**: [ADR-0168](0168-raw-output-pipes-and-record-bound.md) (2026-10-05) — sandbox-logs-captured, Scope, Decisions 1-3, Contracts LogPath, plan, checklist: worker log file.
+- **Superseded in part by**: [ADR-0264](0264-a-worker-sees-its-own-cgroup.md) (2026-10-23) — the conservative OCI list: on a cgroup v2 host, a worker also gets a cgroup namespace and a read-only cgroup mount.
 - **Deciders**: green-0-rabbit
 - **Tags**: runtime, sandbox, containerd, crun, runc, process, netns, port, data-plane
 - **Realizes**: [FEAT-0000/F12](../feat/0000-feat-v1.md) (function runtime behind the `runtime.Runtime` port)
