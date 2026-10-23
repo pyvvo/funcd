@@ -1,0 +1,125 @@
+---
+# The Lake engine's stop (ADR-0271 Decision 3 as amended by ADR-0273): at SIGTERM the engine detaches the catalog, so
+# no new transaction can use it; it waits up to STOP_WAIT_SECONDS for the catalog file to close, cancels the queries
+# that still hold it, and uploads a copy of the closed file. Graceful stop only: a SIGKILL's loss of one checkpoint
+# interval is #998's trade-off, and a commit that never ends is left to the runtime's kill.
+deadlock_detection: false
+options:
+  # Two commits (one of them #1217's long query) and the stop in flight together; Checkpoint and StopBegin exclude
+  # each other through the lock.
+  max_concurrent_actions: 3
+  # The smallest at which every mutant fails; a wider run (3 commits, 4 concurrent actions, 16 actions) is in ADR-0273.
+  max_actions: 8
+  crash_on_yield: false
+---
+# diagram: phase
+# mutant upload-pre-copy: AckedCommitsAreStored
+# mutant no-detach: AckedCommitsAreStored
+# mutant copy-before-close: AckedCommitsAreStored
+# mutant no-cancel: liveness
+
+COMMITS = [1, 2]
+# Commit 2 is #1217's long query: once the stop has begun, it ends only when the stop cancels it.
+LONG = 2
+# upload-pre-copy: ADR-0271 as released, whose timeout uploads the copy taken before DETACH. no-detach: the stop
+# waits for no query to run instead of detaching. copy-before-close: it copies without waiting for the file to close.
+# no-cancel: it never cancels.
+MUTANT = ""
+
+action Init:
+    phase = "running"
+    attached = True
+    lock = False
+    authorized = []
+    open = []
+    committing = []
+    cancelled = []
+    local = []
+    acked = []
+    pre = []
+    copy = []
+    stored = []
+
+# A client's commit through Quack: one request, whose transaction holds the catalog only while it runs (Quack ends a
+# transaction with its request; engine_test.py pins it). Accepting the query and binding the catalog are two steps,
+# so a query accepted before the stop can bind after DETACH, and then fails. A cancel that arrives before the commit starts interrupts
+# the query, and its client gets an error; a commit that started runs to its end. (A step that only reads makes no
+# interleaving point in FizzBee, so each step records what it did.)
+fair action Commit:
+    c = oneof COMMITS
+    require c not in authorized
+    atomic:
+        authorized.append(c)
+    atomic:
+        if not attached:
+            return
+        open.append(c)
+    atomic:
+        require c != LONG or phase == "running" or c in cancelled
+        if c in cancelled:
+            open.remove(c)
+            return
+        committing.append(c)
+    atomic:
+        local.append(c)
+        committing.remove(c)
+        open.remove(c)
+    if phase == "exited":
+        return
+    acked.append(c)
+
+# The commit watcher's checkpoint, until the stop joins it.
+action Checkpoint:
+    require phase == "running"
+    atomic:
+        require not lock
+        lock = True
+    snapshot = list(local)
+    stored = snapshot
+    lock = False
+
+# SIGTERM: join the watcher, then DETACH the catalog.
+action StopBegin:
+    require phase == "running"
+    atomic:
+        require not lock
+        lock = True
+    pre = list(local)
+    if MUTANT != "no-detach":
+        attached = False
+    phase = "waiting"
+
+# The catalog file closed: no transaction holds it, so its copy holds every commit.
+atomic fair action StopClosed:
+    require phase in ["waiting", "cancelling"]
+    if MUTANT != "copy-before-close":
+        require len(open) == 0
+    copy = list(local)
+    phase = "uploading"
+
+# STOP_WAIT_SECONDS passed with the file still open: cancel each query that holds it.
+atomic fair action StopTimeout:
+    require phase == "waiting" and len(open) > 0
+    if MUTANT == "upload-pre-copy":
+        copy = list(pre)
+        phase = "uploading"
+        return
+    if MUTANT != "no-cancel":
+        for c in open:
+            cancelled.append(c)
+    phase = "cancelling"
+
+# The upload ends the stop; the process exits and sends no further answer.
+atomic fair action StopUploaded:
+    require phase == "uploading"
+    stored = list(copy)
+    phase = "exited"
+
+always assertion AckedCommitsAreStored:
+    if phase != "exited":
+        return True
+    return all([c in stored for c in acked])
+
+# A stop that began always ends.
+always eventually assertion StopEnds:
+    return phase in ["running", "exited"]
