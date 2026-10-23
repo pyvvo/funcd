@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.26.1](https://github.com/pyvvo/funcd/compare/v0.26.0...v0.26.1) (2026-10-23)
+
+
+### Bug Fixes
+
+* **backup:** a Restore refused as not empty leaves its target as it was ([d21f7b4](https://github.com/pyvvo/funcd/commit/d21f7b4cb654081bc3fa0ffbf045654070435614))
+* **function:** a damaged volume meta no longer stops funcd from starting, nor gives its quota to another volume ([d21f7b4](https://github.com/pyvvo/funcd/commit/d21f7b4cb654081bc3fa0ffbf045654070435614))
+* **function:** a dry-run apply books no volume capacity ([d21f7b4](https://github.com/pyvvo/funcd/commit/d21f7b4cb654081bc3fa0ffbf045654070435614))
+* **function:** a local volume added to a Ready Function is not taken for lost data ([d21f7b4](https://github.com/pyvvo/funcd/commit/d21f7b4cb654081bc3fa0ffbf045654070435614))
+* **function:** a local volume refuses scaling.minReplicas above 1 ([d21f7b4](https://github.com/pyvvo/funcd/commit/d21f7b4cb654081bc3fa0ffbf045654070435614))
+* **function:** a lost local volume can be restored after its Function wrote to it, with no worker running during the load ([d21f7b4](https://github.com/pyvvo/funcd/commit/d21f7b4cb654081bc3fa0ffbf045654070435614))
+* **function:** a replaced worker's emptyDir space goes to the worker that replaces it, also in a revision switch ([d21f7b4](https://github.com/pyvvo/funcd/commit/d21f7b4cb654081bc3fa0ffbf045654070435614))
+* **function:** a volume holding a FIFO or a socket backs up and restores, and an earlier backup holding one restores ([d21f7b4](https://github.com/pyvvo/funcd/commit/d21f7b4cb654081bc3fa0ffbf045654070435614))
+* **function:** a volume keeps its booking while the Function or App part that declares it waits at an earlier gate ([d21f7b4](https://github.com/pyvvo/funcd/commit/d21f7b4cb654081bc3fa0ffbf045654070435614))
+* **function:** the emptyDirs a held boot keeps are released once the hold lifts ([d21f7b4](https://github.com/pyvvo/funcd/commit/d21f7b4cb654081bc3fa0ffbf045654070435614))
+* **function:** volume bookings fit the filesystem's free space, not only the image's size ([d21f7b4](https://github.com/pyvvo/funcd/commit/d21f7b4cb654081bc3fa0ffbf045654070435614))
+
 ## [0.26.0](https://github.com/pyvvo/funcd/compare/v0.25.0...v0.26.0) (2026-10-23)
 
 
