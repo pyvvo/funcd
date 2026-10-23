@@ -1216,14 +1216,20 @@ const (
 	fsIOCSetFlags32 = 0x40046602
 )
 
-// withProjectIDFilter is the seccomp filter of ADR-0268: allow by default, EPERM for the ioctls that set a file's
-// project id or flags and for file_setattr, so only the platform sets a volume's. The kernel reads an ioctl command's
-// low 32 bits only, so each rule compares under that mask: Value is the mask and ValueTwo the command, as crun passes
-// them to libseccomp. The native and compat architectures are listed, so a compat call meets the same rules.
+// withProjectIDFilter is the seccomp filter of ADR-0268: allow by default, the native and compat architectures, and
+// projectIDRules, so only the platform sets a volume's project id.
 func withProjectIDFilter(_ context.Context, _ oci.Client, _ *containers.Container, s *specs.Spec) error {
 	if s.Linux == nil {
 		s.Linux = &specs.Linux{}
 	}
+	s.Linux.Seccomp = &specs.LinuxSeccomp{DefaultAction: specs.ActAllow, Architectures: seccompArches(), Syscalls: projectIDRules()}
+	return nil
+}
+
+// projectIDRules answer EPERM to the ioctls that set a file's project id or flags and to file_setattr; another
+// profile appends them. The kernel reads an ioctl command's low 32 bits only, so each rule compares under that mask:
+// Value is the mask and ValueTwo the command, as crun passes them to libseccomp.
+func projectIDRules() []specs.LinuxSyscall {
 	eperm := uint(syscall.EPERM)
 	rules := make([]specs.LinuxSyscall, 0, 4)
 	for _, cmd := range []uint64{fsIOCSetXattr, fsIOCSetFlags, fsIOCSetFlags32} {
@@ -1234,9 +1240,7 @@ func withProjectIDFilter(_ context.Context, _ oci.Client, _ *containers.Containe
 			Args:     []specs.LinuxSeccompArg{{Index: 1, Value: 0xFFFFFFFF, ValueTwo: cmd, Op: specs.OpMaskedEqual}},
 		})
 	}
-	rules = append(rules, specs.LinuxSyscall{Names: []string{"file_setattr"}, Action: specs.ActErrno, ErrnoRet: &eperm})
-	s.Linux.Seccomp = &specs.LinuxSeccomp{DefaultAction: specs.ActAllow, Architectures: seccompArches(), Syscalls: rules}
-	return nil
+	return append(rules, specs.LinuxSyscall{Names: []string{"file_setattr"}, Action: specs.ActErrno, ErrnoRet: &eperm})
 }
 
 // seccompArches is the host's native architecture and its compat ones.
