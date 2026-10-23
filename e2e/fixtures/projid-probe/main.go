@@ -1,3 +1,5 @@
+//go:build linux
+
 // projid-probe runs inside a volumes-lane worker (ADR-0268): in the volume directory it is given, it asks the kernel to
 // set a file's project id, the same with the command's upper bits set, the directory's flags, and makes an ioctl the
 // filter allows, then prints one line per call: its name and the errno, or ok.
@@ -36,11 +38,11 @@ func result(name string, err error) {
 	var errno unix.Errno
 	switch {
 	case err == nil:
-		fmt.Println(name, "ok")
+		_, _ = fmt.Fprintln(os.Stdout, name, "ok")
 	case errors.As(err, &errno):
-		fmt.Println(name, unix.ErrnoName(errno))
+		_, _ = fmt.Fprintln(os.Stdout, name, unix.ErrnoName(errno))
 	default:
-		fmt.Println(name, err)
+		_, _ = fmt.Fprintln(os.Stdout, name, err)
 	}
 }
 
@@ -48,7 +50,7 @@ func main() {
 	dir := os.Args[1]
 	f, err := os.Create(filepath.Join(dir, "probe-file"))
 	if err != nil {
-		fmt.Println("create", err)
+		_, _ = fmt.Fprintln(os.Stdout, "create", err)
 		os.Exit(1)
 	}
 	var x fsxattr
@@ -58,7 +60,7 @@ func main() {
 	result("setxattr-high", ioctl(f.Fd(), 0xFFFFFFFF00000000|fsIOCSetXattr, unsafe.Pointer(&x)))
 	d, err := os.Open(dir)
 	if err != nil {
-		fmt.Println("open", err)
+		_, _ = fmt.Fprintln(os.Stdout, "open", err)
 		os.Exit(1)
 	}
 	var flags uint64
