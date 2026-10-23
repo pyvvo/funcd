@@ -1,6 +1,7 @@
 # ADR-0271: The Lake keeps its catalog in a DuckDB file, and a backup copies it unopened
 
-- **Status**: Reviewing (2026-10-23); Accepted 2026-10-23 by the decider; Proposed 2026-10-23
+- **Status**: Implemented (2026-10-23), review passed with one non-blocking Minor ([report](../reviews/adr-0271-implementation-claude-opus-5-5.md)); Reviewing 2026-10-23; Accepted 2026-10-23
+  by the decider; Proposed 2026-10-23
 - **Date**: 2026-10-23
 - **Deciders**: green-0-rabbit
 - **Tags**: lake, ducklake, duckdb, catalog, backup, durability
