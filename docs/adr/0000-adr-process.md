@@ -1,6 +1,9 @@
 # ADR-0000: ADR process, template, and workflow gates
 
 - **Status**: Accepted
+- **Superseded in part by**: [ADR-0272](0272-a-design-model-checks-lifecycle-and-concurrency-decisions.md) (2026-10-23) — the
+  *Template* gains a *Design model* section, *Workflow gates* 2 to 5 a design-model step, and partial supersession a
+  written form
 - **Date**: 2026-06-13 (amended 2026-06-13: added the feature-version layer `docs/feat/`;
   added the *Scenarios* template section; added the ADR-judge gate that reviews the
   decision itself before acceptance — see the `adr-judge` skill; named the skill that runs

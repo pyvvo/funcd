@@ -1,6 +1,7 @@
 # ADR-0272: A design model checks every lifecycle and concurrency decision
 
-- **Status**: Proposed (2026-10-23; judged twice, its Majors folded)
+- **Status**: Accepted 2026-10-23 by the decider, with the triggers, the state budget, `just ci` running every spec and
+  FizzBee's own skills left out; Proposed 2026-10-23, judged three rounds, every Major folded
 - **Date**: 2026-10-23
 - **Deciders**: green-0-rabbit
 - **Tags**: meta, process, design-model, fizzbee, model-checking
