@@ -57,6 +57,9 @@ func writeTar(ctx context.Context, root *os.Root, w io.Writer) error {
 		if err != nil {
 			return err
 		}
+		if !fi.Mode().IsRegular() && !fi.IsDir() && fi.Mode()&fs.ModeSymlink == 0 {
+			return nil // a FIFO, a socket or a device node is a running process's state, which no restore takes (#1202)
+		}
 		link := ""
 		if fi.Mode()&fs.ModeSymlink != 0 {
 			if link, err = root.Readlink(p); err != nil {

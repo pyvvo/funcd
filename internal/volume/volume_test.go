@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -353,5 +355,55 @@ func TestIssue1201_BookingsFitTheFilesystem(t *testing.T) {
 	fs.used[1], fs.free = 30*mib, 24*mib // first wrote 30 MiB of its 32
 	if err := m.Book(ctx, local("second", "state"), 20*mib); err != nil {
 		t.Fatalf("Book of 20 MiB beside 2 MiB promised, on 24 MiB free = %v, want nil", err)
+	}
+}
+
+// TestIssue1202_SpecialFilesStayOutOfABackup: a FIFO and a unix socket are a running process's state; a volume holding
+// them backs up its files and directories alone, and the backup restores (#1202).
+func TestIssue1202_SpecialFilesStayOutOfABackup(t *testing.T) {
+	ctx := t.Context()
+	root, err := os.MkdirTemp("", "vol") // short: a socket's path holds at most 104 bytes on darwin
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	m := newManager(t, Options{Root: root})
+	src, dst := local("cart", "state"), local("copy", "state")
+	dir, err := m.Reserve(ctx, src, "u1", 1<<20, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "data"), []byte("kept"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(dir, "pipe"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	l, err := net.Listen("unix", filepath.Join(dir, "app.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	rc, err := m.Tar(ctx, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("the backup of a volume holding a FIFO and a socket: %v", err)
+	}
+	restored, err := m.Reserve(ctx, dst, "u2", 1<<20, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Untar(ctx, dst, bytes.NewReader(archive)); err != nil {
+		t.Fatalf("the restore of that backup: %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(restored, "data")); err != nil || string(b) != "kept" {
+		t.Fatalf("the restored file = %q, %v", b, err)
+	}
+	ents, err := os.ReadDir(restored)
+	if err != nil || len(ents) != 1 {
+		t.Fatalf("the restored volume holds %v (%v), want the file alone", ents, err)
 	}
 }
