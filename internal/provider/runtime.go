@@ -2,10 +2,14 @@ package provider
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -61,6 +65,11 @@ type engineRuntime struct {
 	logger      *slog.Logger
 	httpClient  *http.Client
 	storageRoot string
+	// specs is the fingerprint of the spec each provider's engine was created from: a running engine of another spec
+	// is replaced, since a provider re-created or changed between two reconciler passes reaches Converge with its new
+	// spec while the old engine runs (#1195). After a restart a running engine is adopted, as it was before.
+	specsMu sync.Mutex
+	specs   map[ProviderRef]string
 }
 
 // NewRuntime builds the add-on-provider runtime. Deps.Runtime is required; Gateway is optional
@@ -92,6 +101,7 @@ func NewRuntime(d Deps) (Runtime, error) {
 		logger:      logger.With("component", "provider.runtime"),
 		httpClient:  client,
 		storageRoot: d.StorageRoot,
+		specs:       map[ProviderRef]string{},
 	}, nil
 }
 
@@ -122,6 +132,21 @@ func (r *engineRuntime) Converge(ctx context.Context, spec ProviderSpec) (Provid
 	if err != nil {
 		return ProviderStatus{}, err
 	}
+	want := specFingerprint(r.workerSpec(spec, 0))
+	r.specsMu.Lock()
+	had, known := r.specs[spec.Ref]
+	r.specsMu.Unlock()
+	if known && had != want {
+		for _, in := range existing {
+			if rerr := r.retire(ctx, in.ID); rerr != nil {
+				return ProviderStatus{}, fault.Wrapf(rerr, fault.KindOf(rerr), op, "retire the engine of an earlier spec")
+			}
+		}
+		existing = nil
+	}
+	r.specsMu.Lock()
+	r.specs[spec.Ref] = want
+	r.specsMu.Unlock()
 	byReplica := make(map[int]containerrt.Instance, len(existing))
 	for _, in := range existing {
 		byReplica[in.Replica] = in
@@ -201,12 +226,22 @@ func (r *engineRuntime) Teardown(ctx context.Context, ref ProviderRef) error {
 			return fault.Wrapf(rerr, fault.KindOf(rerr), op, "retire engine %s", in.ID)
 		}
 	}
+	r.specsMu.Lock()
+	delete(r.specs, ref)
+	r.specsMu.Unlock()
 	if r.gateway != nil {
 		if rerr := r.removeRoute(ctx, ref); rerr != nil {
 			return rerr
 		}
 	}
 	return nil
+}
+
+// specFingerprint is a digest of what a worker is created from, but its replica index.
+func specFingerprint(w containerrt.WorkerSpec) string {
+	w.Replica = 0
+	b, _ := json.Marshal(w)
+	return fmt.Sprintf("%x", sha256.Sum256(b))
 }
 
 // retire stops an engine worker and removes it with its per-instance files (ADR-0143).

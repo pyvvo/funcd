@@ -320,6 +320,40 @@ func TestConverge_supervision_recreates_and_adopts(t *testing.T) {
 	require.Len(t, rt.created, 2, "a crashed engine is recreated on the next Converge")
 }
 
+// Issue #1195: a Lake deleted and applied again before its reconciler runs, or changed in place, reaches Converge with
+// a new spec while the old engine still runs. Converge adopted any running engine, so the Lake ran the old engine's
+// memory, env and bindings. It now replaces an engine created from another spec, and still adopts one of the same spec.
+func TestIssue1195_ConvergeReplacesAnEngineOfAnotherSpec(t *testing.T) {
+	host, port, closeFn := engineServer(t, 200)
+	defer closeFn()
+	rt := newFakeRuntime(host, port)
+	pr, err := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindLake})
+	require.NoError(t, err)
+	ctx := context.Background()
+	old := specFor(host, port, nil)
+	_, err = pr.Converge(ctx, old)
+	require.NoError(t, err)
+	require.Len(t, rt.created, 1)
+	first := rt.created[0]
+
+	next := specFor(host, port, nil)
+	next.Env["DUCKDB_MEMORY_LIMIT"] = "512MB"
+	next.Resources = provider.ResourceSpec{Memory: "1Gi"}
+	_, err = pr.Converge(ctx, next)
+	require.NoError(t, err)
+	require.Len(t, rt.created, 2, "an engine of another spec is replaced")
+	require.Equal(t, "512MB", rt.created[1].Env["DUCKDB_MEMORY_LIMIT"], "the new engine runs the new spec")
+	require.Contains(t, rt.stopped, containerrt.NewInstanceID(first.Namespace, first.Name, first.Revision, first.Replica),
+		"the old engine is stopped")
+	live, err := rt.List(ctx, "default")
+	require.NoError(t, err)
+	require.Len(t, live, 1, "one engine runs")
+
+	_, err = pr.Converge(ctx, next)
+	require.NoError(t, err)
+	require.Len(t, rt.created, 2, "an engine of the same spec is adopted")
+}
+
 // scenario: provider-torn-down — Teardown Stops the engine and removes its programmed route.
 func TestTeardown_stops_engine_and_removes_route(t *testing.T) {
 	host, port, closeFn := engineServer(t, 200)
