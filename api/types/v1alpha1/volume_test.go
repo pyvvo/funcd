@@ -77,3 +77,32 @@ func TestBackupScopeVolumes(t *testing.T) {
 		t.Fatalf("a repeat = %v, want repeats", err)
 	}
 }
+
+// TestIssue1199_LocalVolumeRefusesMinReplicasAboveOne: the reconciler runs max(spec.replicas,
+// spec.scaling.minReplicas) workers, so a local volume refuses a minReplicas above 1 as it refuses replicas 2 (#1199).
+func TestIssue1199_LocalVolumeRefusesMinReplicasAboveOne(t *testing.T) {
+	local := VolumeEntry{Name: "state", Type: VolumeLocal, SizeBytes: 1}
+	cache := VolumeEntry{Name: "cache", Type: VolumeEmptyDir, SizeBytes: 1}
+	refused := map[string]struct {
+		spec FunctionSpec
+		want string
+	}{
+		"replicas 1, minReplicas 3": {FunctionSpec{Replicas: 1, Scaling: Scaling{MinReplicas: 3}, Volumes: []VolumeEntry{local}}, "spec.scaling.minReplicas 3 with spec.volumes[0]"},
+		"minReplicas 2 alone":       {FunctionSpec{Scaling: Scaling{MinReplicas: 2}, Volumes: []VolumeEntry{cache, local}}, "spec.scaling.minReplicas 2 with spec.volumes[1]"},
+	}
+	for name, c := range refused {
+		t.Run(name, func(t *testing.T) {
+			if err := c.spec.Validate(); fault.KindOf(err) != fault.Invalid || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("Validate = %v, want Invalid naming %q", err, c.want)
+			}
+		})
+	}
+	for name, s := range map[string]FunctionSpec{
+		"minReplicas 1":           {Scaling: Scaling{MinReplicas: 1}, Volumes: []VolumeEntry{local}},
+		"emptyDir, minReplicas 3": {Scaling: Scaling{MinReplicas: 3}, Volumes: []VolumeEntry{cache}},
+	} {
+		if err := s.Validate(); err != nil {
+			t.Fatalf("%s: Validate = %v, want nil", name, err)
+		}
+	}
+}

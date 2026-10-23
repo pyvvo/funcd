@@ -2,6 +2,7 @@ package v1alpha1
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -117,11 +118,13 @@ func (s *FunctionSpec) validateVolumes(op string) error {
 			return fault.Invalidf(op, "%s.sizeBytes %d: want a size above 0", path, v.SizeBytes)
 		}
 	}
-	if s.Replicas > 1 {
-		for i, v := range s.Volumes {
-			if v.Type == VolumeLocal {
-				return fault.Invalidf(op, "spec.replicas %d with spec.volumes[%d], a local volume: a local volume allows at most 1 replica", s.Replicas, i)
-			}
+	// The reconciler runs max(spec.replicas, spec.scaling.minReplicas) workers, so both are held to one.
+	if i := slices.IndexFunc(s.Volumes, func(v VolumeEntry) bool { return v.Type == VolumeLocal }); i >= 0 {
+		switch {
+		case s.Replicas > 1:
+			return fault.Invalidf(op, "spec.replicas %d with spec.volumes[%d], a local volume: a local volume allows at most 1 replica", s.Replicas, i)
+		case s.Scaling.MinReplicas > 1:
+			return fault.Invalidf(op, "spec.scaling.minReplicas %d with spec.volumes[%d], a local volume: a local volume allows at most 1 replica", s.Scaling.MinReplicas, i)
 		}
 	}
 	return nil
