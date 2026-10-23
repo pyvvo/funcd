@@ -24,7 +24,7 @@ func TestVolumesValidate(t *testing.T) {
 		"neither":         {FunctionSpec{Volumes: []VolumeEntry{local(VolumeEntry{})}}, "neither name nor ref"},
 		"bad name":        {FunctionSpec{Volumes: []VolumeEntry{local(VolumeEntry{Name: "Bad_Name"})}}, "DNS-1123"},
 		"repeat":          {FunctionSpec{Volumes: []VolumeEntry{local(VolumeEntry{Name: "a"}), local(VolumeEntry{Ref: "a"})}}, "repeats volume"},
-		"no size":         {FunctionSpec{Volumes: []VolumeEntry{{Name: "a", Type: VolumeLocal}}}, "sizeBytes 0"},
+		"no size":         {FunctionSpec{Volumes: []VolumeEntry{{Name: "a", Type: VolumeLocal}}}, "neither size nor sizeBytes"},
 		"bad type":        {FunctionSpec{Volumes: []VolumeEntry{{Name: "a", Type: "nfs", SizeBytes: 1}}}, "neither emptyDir nor local"},
 		"emptyDir ref":    {FunctionSpec{Volumes: []VolumeEntry{{Ref: "a", Type: VolumeEmptyDir, SizeBytes: 1}}}, "declared by name"},
 		"emptyDir delete": {FunctionSpec{Volumes: []VolumeEntry{{Name: "a", Type: VolumeEmptyDir, SizeBytes: 1, Deletion: DeletionDelete}}}, "goes with its worker"},

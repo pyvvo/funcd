@@ -399,9 +399,11 @@ type Config struct {
 	} `json:"sql,omitempty"`
 
 	// Volumes turns the Functions' volumes on (ADR-0262 Decision 3): CapacityBytes is the size of the one volume image
-	// on the containerd runtime, preallocated at <storage.dataDir>/volumes.img; 0 ⇒ volumes off.
+	// on the containerd runtime, preallocated at <storage.dataDir>/volumes.img; 0 ⇒ volumes off. Capacity is the same
+	// size with a binary unit, "64Gi" (ADR-0266); at most one of the two is set.
 	Volumes struct {
-		CapacityBytes int64 `json:"capacityBytes,omitempty" env:"FUNCD_VOLUMES_CAPACITY_BYTES" validate:"min=0"`
+		CapacityBytes int64  `json:"capacityBytes,omitempty" env:"FUNCD_VOLUMES_CAPACITY_BYTES" validate:"min=0"`
+		Capacity      string `json:"capacity,omitempty" env:"FUNCD_VOLUMES_CAPACITY"`
 	} `json:"volumes,omitempty"`
 
 	// App tunes the App reconciler (ADR-0200). UpgradeTimeout bounds an upgrade, a duration more than

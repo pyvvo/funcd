@@ -27,6 +27,17 @@ type NamespaceSpec struct {
 	// VolumeBudgetBytes caps the volume space the namespace's Functions reserve (ADR-0262 Decision 5); 0 ⇒ only
 	// volumes.capacityBytes limits it.
 	VolumeBudgetBytes int64 `json:"volumeBudgetBytes,omitempty" minimum:"0"`
+	// VolumeBudget is the same budget with a binary unit, "4Gi" (ADR-0266); at most one of the two is set.
+	VolumeBudget ByteSize `json:"volumeBudget,omitempty" pattern:"^[0-9]{1,15}((Ki|Mi|Gi|Ti)B?)?$"`
+}
+
+// VolumeBudgetOf is the namespace's volume budget in bytes, from whichever form is set; 0 is none.
+func (s NamespaceSpec) VolumeBudgetOf() int64 {
+	if s.VolumeBudget != "" {
+		n, _ := s.VolumeBudget.Bytes()
+		return n
+	}
+	return s.VolumeBudgetBytes
 }
 
 // ExposureMode selects whether an unrouted Function is reachable at the public edge.
@@ -85,6 +96,15 @@ func (n *Namespace) Validate() error {
 	if n.Spec.EdgeDefaults != nil && n.Spec.EdgeDefaults.Auth != nil {
 		if err := validateAuthMode(n.Spec.EdgeDefaults.Auth.Mode, "spec.edgeDefaults.auth.mode"); err != nil {
 			return err
+		}
+	}
+	// ADR-0266 Decision 3: at most one form of the volume budget.
+	if n.Spec.VolumeBudget != "" {
+		if n.Spec.VolumeBudgetBytes != 0 {
+			return fault.Invalidf("Namespace.Validate", "spec.volumeBudget and spec.volumeBudgetBytes are both set: want at most one")
+		}
+		if _, err := n.Spec.VolumeBudget.Bytes(); err != nil {
+			return fault.Wrapf(err, fault.Invalid, "Namespace.Validate", "spec.volumeBudget")
 		}
 	}
 	return nil

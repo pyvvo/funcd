@@ -71,7 +71,7 @@ func (r *Reconciler) ensureVolumes(ctx context.Context, fn *v1.Function) (*gateF
 				return volumeGate(field, err)
 			}
 		}
-		if _, err := r.volumes.Reserve(ctx, id, fn.UID, v.SizeBytes, deletion); err != nil {
+		if _, err := r.volumes.Reserve(ctx, id, fn.UID, v.Bytes(), deletion); err != nil {
 			return volumeGate(field, err)
 		}
 	}
@@ -159,12 +159,12 @@ func (r *Reconciler) workerVolumes(ctx context.Context, fn *v1.Function, id runt
 		var host string
 		if v.Type == v1.VolumeEmptyDir {
 			vid.Worker = token
-			host, err = r.volumes.Reserve(ctx, vid, "", v.SizeBytes, "")
+			host, err = r.volumes.Reserve(ctx, vid, "", v.Bytes(), "")
 			if err == nil {
 				empty = append(empty, vid)
 			}
 		} else {
-			host, err = r.volumes.Reserve(ctx, vid, fn.UID, v.SizeBytes, cmp.Or(v.Deletion, v1.DeletionRetain))
+			host, err = r.volumes.Reserve(ctx, vid, fn.UID, v.Bytes(), cmp.Or(v.Deletion, v1.DeletionRetain))
 		}
 		if err != nil {
 			r.dropEmptyDirs(ctx, empty)

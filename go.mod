@@ -27,6 +27,7 @@ require (
 	github.com/dgraph-io/badger/v4 v4.9.6
 	github.com/distribution/reference v0.6.0
 	github.com/dop251/goja v0.0.0-20260701091749-b07b74453ea9
+	github.com/dustin/go-humanize v1.0.1
 	github.com/go-chi/chi/v5 v5.5.0
 	github.com/go-jose/go-jose/v4 v4.1.6
 	github.com/go-playground/validator/v10 v10.30.5
@@ -178,7 +179,6 @@ require (
 	github.com/dgraph-io/ristretto/v2 v2.2.0 // indirect
 	github.com/dlclark/regexp2 v1.12.0 // indirect
 	github.com/dlclark/regexp2/v2 v2.2.1 // indirect
-	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/ebitengine/purego v0.11.1 // indirect
 	github.com/ettle/strcase v0.2.0 // indirect
 	github.com/fatih/color v1.19.0 // indirect

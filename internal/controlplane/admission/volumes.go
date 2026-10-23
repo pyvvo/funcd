@@ -41,7 +41,7 @@ func (a functionVolumes) Admit(ctx context.Context, req Request) (v1.Object, err
 		if v.Type != v1.VolumeLocal {
 			continue
 		}
-		if err := a.b.Book(ctx, fn.Namespace, fn.Name, v.VolumeName(), v.SizeBytes); err != nil {
+		if err := a.b.Book(ctx, fn.Namespace, fn.Name, v.VolumeName(), v.Bytes()); err != nil {
 			return nil, err
 		}
 	}

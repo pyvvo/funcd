@@ -2631,7 +2631,7 @@ func (p *Platform) openVolumes() error {
 			return 0, fault.Wrapf(err, fault.KindOf(err), "funcd.volumeBudget", "get namespace %q", ns)
 		}
 		if n, ok := obj.(*v1.Namespace); ok {
-			return n.Spec.VolumeBudgetBytes, nil
+			return n.Spec.VolumeBudgetOf(), nil
 		}
 		return 0, nil
 	}

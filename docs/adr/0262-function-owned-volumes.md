@@ -3,6 +3,8 @@
 - **Status**: Reviewing (2026-10-23), implemented; Accepted 2026-10-23, by the decider with the agent choices as proposed; Proposed 2026-10-23 from the
   decider's six refine cards, judged twice: round 1 found three Majors (the booking at apply, `ref` and ADR-0248, the
   restore member), round 2 one (the booking's lifecycle), all folded
+- **Superseded in part by**: [ADR-0266](0266-volume-sizes-with-units.md) (2026-10-23) — the size fields of Decisions 1, 3
+  and 5: `size`, `volumeBudget` and `volumes.capacity` beside their byte forms.
 - **Date**: 2026-10-23
 - **Deciders**: green-0-rabbit
 - **Tags**: function, storage, volume, runtime, quota, backup

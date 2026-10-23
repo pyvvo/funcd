@@ -27,11 +27,22 @@ func (VolumeType) Schema(huma.Registry) *huma.Schema {
 // VolumeEntry is one volume a Function declares at its root (ADR-0262 Decision 1): by name it owns the volume, by ref
 // it adopts a retained local volume no live Function holds.
 type VolumeEntry struct {
-	Name      ObjectName     `json:"name,omitempty"`
-	Ref       ObjectName     `json:"ref,omitempty"`
-	Type      VolumeType     `json:"type"`
-	SizeBytes int64          `json:"sizeBytes" minimum:"1"`
+	Name ObjectName `json:"name,omitempty"`
+	Ref  ObjectName `json:"ref,omitempty"`
+	Type VolumeType `json:"type"`
+	// Size and SizeBytes are the volume's size, exactly one of them set (ADR-0266): "2GiB", or a byte count.
+	Size      ByteSize       `json:"size,omitempty" pattern:"^[0-9]{1,15}((Ki|Mi|Gi|Ti)B?)?$"`
+	SizeBytes int64          `json:"sizeBytes,omitempty" minimum:"1"`
 	Deletion  DeletionPolicy `json:"deletion,omitempty"`
+}
+
+// Bytes is the entry's size in bytes, from whichever form is set (0 when neither is valid).
+func (e VolumeEntry) Bytes() int64 {
+	if e.Size != "" {
+		n, _ := e.Size.Bytes()
+		return n
+	}
+	return e.SizeBytes
 }
 
 // VolumeName is the entry's volume, by name or by ref.
@@ -91,7 +102,18 @@ func (s *FunctionSpec) validateVolumes(op string) error {
 		default:
 			return fault.Invalidf(op, "%s.type %q is neither emptyDir nor local", path, v.Type)
 		}
-		if v.SizeBytes <= 0 {
+		switch {
+		case (v.Size == "") == (v.SizeBytes == 0):
+			return fault.Invalidf(op, "%s sets %s: want exactly one of size and sizeBytes", path, sizeForms(v))
+		case v.Size != "":
+			n, err := v.Size.Bytes()
+			if err != nil {
+				return fault.Wrapf(err, fault.Invalid, op, "%s.size", path)
+			}
+			if n == 0 {
+				return fault.Invalidf(op, "%s.size %q: want a size above 0", path, v.Size)
+			}
+		case v.SizeBytes < 0:
 			return fault.Invalidf(op, "%s.sizeBytes %d: want a size above 0", path, v.SizeBytes)
 		}
 	}
@@ -103,6 +125,13 @@ func (s *FunctionSpec) validateVolumes(op string) error {
 		}
 	}
 	return nil
+}
+
+func sizeForms(v VolumeEntry) string {
+	if v.Size != "" {
+		return "both size and sizeBytes"
+	}
+	return "neither size nor sizeBytes"
 }
 
 func setNames(name, ref bool) string {

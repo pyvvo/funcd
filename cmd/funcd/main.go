@@ -1477,6 +1477,16 @@ func containerdOptions(ctx context.Context, cfg config.Config, logger *slog.Logg
 // closer removes. Without the key volumes stay off; the process runtime never calls it, so a daemon there refuses them.
 func functionVolumes(ctx context.Context, cfg config.Config) ([]funcd.Option, func() error, error) {
 	capacity := cfg.Volumes.CapacityBytes
+	if c := cfg.Volumes.Capacity; c != "" {
+		if capacity != 0 {
+			return nil, noopClose, errors.New("volumes.capacity and volumes.capacityBytes are both set: want at most one (ADR-0266)")
+		}
+		n, err := v1.ByteSize(c).Bytes()
+		if err != nil {
+			return nil, noopClose, fmt.Errorf("volumes.capacity: %w", err)
+		}
+		capacity = n
+	}
 	if capacity == 0 {
 		return nil, noopClose, nil
 	}

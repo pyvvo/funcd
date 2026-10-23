@@ -248,7 +248,8 @@ log:
 
 # --- volumes: Function volumes (ADR-0262) -------------------------------------------------------
 # volumes:
-#   capacityBytes: 10737418240    # the one volume image on containerd, preallocated at <dataDir>/volumes.img. default: 0, volumes off
+#   capacity: 10Gi                # the one volume image on containerd, preallocated at <dataDir>/volumes.img; Ki/Mi/Gi/Ti (ADR-0266). default: 0, volumes off
+#   capacityBytes: 10737418240    # the same size in bytes; set at most one of capacity and capacityBytes. default: 0
 
 # --- site: declarative static web apps (ADR-0139) ----------------------------------------------
 # site:
