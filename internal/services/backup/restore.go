@@ -219,6 +219,9 @@ func (r *RestoreReconciler) load(ctx context.Context, rs *v1.Restore, b *v1.Back
 	for _, t := range targets {
 		t.written = true
 		if reason, err := r.fill(ctx, rs.Namespace, t, src, b.Status.Path, unseal); err != nil {
+			// a load that refused its target as not empty wrote nothing there: what the target holds is not the
+			// Restore's to empty
+			t.written = reason != ReasonNotEmpty
 			return reason, errors.Join(err, r.empty(ctx, rs.Namespace, targets))
 		}
 	}

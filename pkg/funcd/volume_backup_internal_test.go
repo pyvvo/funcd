@@ -52,3 +52,40 @@ func TestScenarioVolumeBackupRestore(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "rows", string(got))
 }
+
+// TestRefusedVolumeRestoreKeepsItsData: an in-place Restore into a volume that holds data is refused NotEmpty (ADR-0262
+// Decision 11), and the refusal leaves the volume as it was: the cleanup after a failed load empties only a target the
+// load wrote.
+func TestRefusedVolumeRestoreKeepsItsData(t *testing.T) {
+	t.Parallel()
+	cart := &v1.Function{TypeMeta: tmeta(v1.KindFunction), ObjectMeta: ordersMeta("cart"), Spec: v1.FunctionSpec{
+		Runtime: "nodejs22", Handler: "handle", Image: "file:///nonexistent.mjs",
+		Volumes: []v1.VolumeEntry{{Name: "state", Type: v1.VolumeLocal, SizeBytes: 1 << 20}},
+	}}
+	r := newWBRig(t, wbOptions{
+		opts:  []Option{WithFunctionVolumes(volume.Options{Root: t.TempDir()}, false)},
+		setup: func(r *wbRig) { r.seed(cart) },
+	})
+	stored, err := r.st.Get(r.ctx, v1.KindFunction.GVK(), "orders", "cart")
+	require.NoError(t, err)
+	dir, err := r.p.volumes.Reserve(r.ctx, volume.ID{Namespace: "orders", Function: "cart", Name: "state"}, stored.GetObjectMeta().UID, 1<<20, v1.DeletionRetain)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "orders.sqlite"), []byte("rows"), 0o600))
+	r.create(r.dev, r.schedule("orders-vol", "0 3 * * *", func(s *v1.BackupScheduleSpec) {
+		s.Scope = v1.BackupScope{Volumes: []string{"cart/state"}}
+	}))
+	r.create(r.dev, r.backupObj("b1", "orders-vol"))
+	r.waitBackup("b1", v1.RunSucceeded)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "newer.txt"), []byte("written after the backup"), 0o600))
+
+	r.create(r.admin, r.restoreObj("back", "b1", v1.RestoreMember{Kind: v1.KindFunction, Name: "cart", Volume: "state", InPlace: true}))
+	rs := r.waitRestore("back", v1.RunFailed)
+	c, ok := rs.Status.Conditions.Get("Ready")
+	require.True(t, ok)
+	require.Equal(t, "NotEmpty", c.Reason)
+	for name, want := range map[string]string{"orders.sqlite": "rows", "newer.txt": "written after the backup"} {
+		got, err := os.ReadFile(filepath.Join(dir, name))
+		require.NoError(t, err, "the refused Restore removed %s", name)
+		require.Equal(t, want, string(got))
+	}
+}
