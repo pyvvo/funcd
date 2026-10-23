@@ -1,7 +1,7 @@
 # ADR-0265: The Lake engine takes its tuning keys from an allow-list
 
-- **Status**: Accepted (2026-10-23), after one judge round whose Major (a refused value had no scenario) and Minors
-  are folded, under the decider's standing go of that day
+- **Status**: Reviewing (2026-10-23), implemented for #1186; Accepted (2026-10-23), after one judge round whose Major
+  (a refused value had no scenario) and Minors are folded, under the decider's standing go of that day
 - **Date**: 2026-10-23
 - **Deciders**: green-0-rabbit
 - **Tags**: lake, duckdb, configuration, sandbox
