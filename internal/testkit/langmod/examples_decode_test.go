@@ -25,6 +25,11 @@ var backupPlaceholder = regexp.MustCompile(`\bBACKUP\b`)
 // renders, so they are left to the template tests.
 func TestExampleResourcesDecode(t *testing.T) {
 	t.Parallel()
+	// The fixtures a lane applies to see them refused, with the error each must fail with: they still decode, and their
+	// Validate keeps failing for that reason.
+	refusedByDesign := map[string]string{
+		"apps/volumes/fixtures/two-replicas.yaml": "a local volume allows at most 1 replica",
+	}
 	for _, mod := range []string{TypeScript, Python, Functions} {
 		root := Dir(t, mod)
 		decoded := 0
@@ -49,7 +54,11 @@ func TestExampleResourcesDecode(t *testing.T) {
 			for _, doc := range resourceDocs(t, rel, data) {
 				obj, derr := sdk.DecodeManifest(backupPlaceholder.ReplaceAll(doc, []byte("backup-0")))
 				require.NoError(t, derr, "%s %s", mod, rel)
-				require.NoError(t, obj.Validate(), "%s %s", mod, rel)
+				if want, ok := refusedByDesign[filepath.ToSlash(rel)]; ok && mod == Functions {
+					require.ErrorContains(t, obj.Validate(), want, "%s %s is refused by design", mod, rel)
+				} else {
+					require.NoError(t, obj.Validate(), "%s %s", mod, rel)
+				}
 				decoded++
 			}
 			return nil
