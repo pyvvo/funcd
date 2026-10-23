@@ -8,6 +8,7 @@
   first (#1189); the judge rounds, experiment PRs #11–#15 and funcd-python #100 name it ADR-0262.
 - **Superseded in part by**: [ADR-0265](0265-the-lake-engine-takes-tuning-keys-from-an-allow-list.md) (2026-10-23) — the shim statement order now opens with the Lake's tuning keys.
 - **Superseded in part by**: [ADR-0271](0271-the-lake-catalog-is-a-duckdb-file.md) (2026-10-23) — the `sqlite_scanner` extension and its pins: the engine loads httpfs, ducklake and quack
+- **Superseded in part by**: [ADR-0273](0273-a-lake-stop-cancels-the-queries-that-outlive-its-wait.md) (2026-10-24) — Decision 8 governs the serving instance, beside the bounded control instance a stop may open
 - **Date**: 2026-10-22
 - **Deciders**: green-0-rabbit
 - **Tags**: lake, duckdb, ducklake, quack, dev, dependency

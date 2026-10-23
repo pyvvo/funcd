@@ -1,7 +1,8 @@
 # ADR-0273: A Lake stop cancels the queries that outlive its wait (amends ADR-0271)
 
-- **Status**: Proposed (2026-10-24; judged four rounds, redesigned in between to keep the Lake's recovery point, on
-  the decider's call)
+- **Status**: Reviewing (2026-10-24); Accepted 2026-10-24, the acceptance delegated by the decider; Proposed
+  2026-10-24, judged five rounds with no Blocker or Major left, redesigned in between to keep the Lake's recovery
+  point, on the decider's call
 - **Date**: 2026-10-24
 - **Deciders**: green-0-rabbit
 - **Tags**: lake, duckdb, quack, durability, stop, amendment

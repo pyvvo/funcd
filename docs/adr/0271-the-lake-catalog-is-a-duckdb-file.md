@@ -2,6 +2,7 @@
 
 - **Status**: Implemented (2026-10-23), review passed with one non-blocking Minor ([report](../reviews/adr-0271-implementation-claude-opus-5-5.md)); Reviewing 2026-10-23; Accepted 2026-10-23
   by the decider; Proposed 2026-10-23
+- **Superseded in part by**: [ADR-0273](0273-a-lake-stop-cancels-the-queries-that-outlive-its-wait.md) (2026-10-24) — Decision 3, the `stop` contract and Review checklist item 3: the stop drains while the watcher saves, then cancels the queries that still hold the catalog
 - **Date**: 2026-10-23
 - **Deciders**: green-0-rabbit
 - **Tags**: lake, ducklake, duckdb, catalog, backup, durability
