@@ -106,7 +106,8 @@ no more than a crash does (the decider, 2026-10-24).
 - **Mutants**: `upload-pre-copy` (ADR-0271's timeout), `no-detach` and `copy-before-close` fail
   `AckedCommitsAreStored`; `join-at-sigterm` (the watcher stops at SIGTERM) and `no-final-save` (no save at the join)
   fail `KillLosesAtMostOneInterval`; `no-cancel` fails liveness: the stop never ends.
-- **Result**: pass, 10,453 states, 2.7 s, FizzBee v0.5.4; wider (3 commits, 4 concurrent actions, 11 actions): <wide>.
+- **Result**: pass, 10,453 states, 2.7 s, FizzBee v0.5.4; wider (3 commits, 3 concurrent actions, 10 actions): pass,
+  402,463 states, 103 s and 34 GB of memory (4 concurrent actions ran out of memory).
 - **Left to tests**: that `quack_cancel` interrupts a DuckLake write and that a transaction ends with its request (the
   engine tests); a commit that stalls (the runtime's kill, not tested).
 

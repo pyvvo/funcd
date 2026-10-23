@@ -85,7 +85,9 @@ means `deadlock_detection: false` is missing.
 
 Keep a run within the 100,000-state budget: fewer items, fewer actions, atomic steps where the design has no yield.
 Run the wider bound, one more item than the race needs, once on a copy (edit its front matter) and record it in the
-ADR's result line, not in `just ci`.
+ADR's result line, not in `just ci`. Memory grows with the states, more with liveness and a modeled clock: the Lake
+stop's wider run took 34 GB for 402,463 states, and one more concurrent action ran out of memory. Too small a bound
+can also fail liveness on the spec itself, by cutting runs before they can end.
 
 ## The ADR's Design model section
 
