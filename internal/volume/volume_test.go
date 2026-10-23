@@ -539,6 +539,41 @@ func TestIssue1203_DamagedMetaKeepsItsProject(t *testing.T) {
 	}
 }
 
+// TestIssue1203_ReserveRewritesTheMetaOnlyWhenItChanges: a meta is replaced durably, so a Reserve rewrites it only for
+// a new volume or a changed deletion policy, not on every pass that reserves the volume again (#1203).
+func TestIssue1203_ReserveRewritesTheMetaOnlyWhenItChanges(t *testing.T) {
+	ctx := t.Context()
+	root := t.TempDir()
+	m := newManager(t, Options{Root: root})
+	id := local("cart", "state")
+	inode := func() uint64 {
+		t.Helper()
+		fi, err := os.Stat(filepath.Join(root, "shop", "cart", "state.meta"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fi.Sys().(*syscall.Stat_t).Ino
+	}
+	for range 2 {
+		if _, err := m.Reserve(ctx, id, "u1", 1<<20, v1.DeletionRetain); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first := inode()
+	if _, err := m.Reserve(ctx, id, "u1", 1<<20, v1.DeletionRetain); err != nil {
+		t.Fatal(err)
+	}
+	if got := inode(); got != first {
+		t.Fatalf("an unchanged Reserve rewrote the meta: inode %d, then %d", first, got)
+	}
+	if _, err := m.Reserve(ctx, id, "u1", 1<<20, v1.DeletionDelete); err != nil {
+		t.Fatal(err)
+	}
+	if md, _, err := m.readMeta(id); err != nil || md.Deletion != v1.DeletionDelete || inode() == first {
+		t.Fatalf("a Reserve with a new deletion policy left meta %+v (%v), want it rewritten with %q", md, err, v1.DeletionDelete)
+	}
+}
+
 // TestRenewHandsTheSpaceOver: Renew releases an emptyDir and reserves its successor under one lock, so with the
 // capacity full a booking that runs meanwhile never takes the space in between (#1207).
 func TestRenewHandsTheSpaceOver(t *testing.T) {

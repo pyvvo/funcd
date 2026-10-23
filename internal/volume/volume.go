@@ -456,6 +456,7 @@ func (m *manager) reserve(ctx context.Context, op string, id ID, owner v1.UID, s
 	if err := m.ensureLeaf(op, id, dir); err != nil {
 		return "", err
 	}
+	changed := !found
 	if !found {
 		project, err := m.freeProject()
 		if err != nil {
@@ -463,13 +464,16 @@ func (m *manager) reserve(ctx context.Context, op string, id ID, owner v1.UID, s
 		}
 		md = meta{Owner: owner, SizeBytes: size, Deletion: deletion, Project: project}
 	} else if md.Deletion != deletion {
-		md.Deletion = deletion
+		md.Deletion, changed = deletion, true
 	}
 	if err := m.o.Limiter.Limit(dir, md.Project, size); err != nil {
 		return "", err
 	}
-	if err := m.writeMeta(id, md); err != nil {
-		return "", err
+	// a durable write costs two fsyncs, and most passes reserve a volume whose meta stands (#1203)
+	if changed {
+		if err := m.writeMeta(id, md); err != nil {
+			return "", err
+		}
 	}
 	b := m.bookings[id]
 	b.backed, b.project = true, md.Project
