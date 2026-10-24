@@ -142,7 +142,8 @@ Apply these rules to the findings so the verdict is trustworthy, not just long:
     before the ADR advances (Draft→Proposed, Proposed→Accepted).
   - **Major** — a real weakness (biased/empty alternative analysis, scope creep, missing
     scenario, reversibility risk) that materially weakens the ADR without strictly blocking.
-  - **Minor** — clarity/quality improvement.
+  - **Minor** — clarity/quality improvement, also a correct decision whose fix is one sentence of text (ADR-0091
+    and ADR-0128 had such findings tiered Major).
   - **Nit** — cosmetic or taste. Label taste *as* taste.
 - **Separate "wrong" from "I'd have chosen differently."** Only defects (inconsistency,
   contradiction, unjustified claim, goal miss) are Blocker/Major. Pure preference goes to

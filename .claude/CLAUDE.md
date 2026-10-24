@@ -292,8 +292,9 @@ generates the issue forms in `.github/ISSUE_TEMPLATE/` (computed — never hand-
 - **Where things go**: a defect, a task or a feature of a feat doc → an issue; an un-scoped idea → a board card;
   a decision → an ADR.
 - **Check that it is a defect before filing it.** Read what pins the behavior first: its ADR's Decision and Scenarios,
-  the docs, and the code's own comments and tests. Behavior they intend is no bug: a request to change it is a design
-  change (`needs-adr`, a superseding ADR) or a board card, and the reply to the reporter says which. Reproduce a
+  the docs, and the code's own comments and tests; a bug names the clause it breaks, or says that none covers it.
+  Behavior they intend is no bug: a request to change it is a design change (`kind/feature` with `needs-adr`, a
+  superseding ADR) or a board card, and the reply to the reporter says which. Reproduce a
   suspected bug on the current main, and say what ran, before filing it.
 - **One defect per issue**, with exactly one `kind/`, exactly one `priority/`, and at least one `area/` label.
 - **No issue without a parent.** Every issue is a sub-issue of a tracker: a campaign files a root tracker,
@@ -303,7 +304,8 @@ generates the issue forms in `.github/ISSUE_TEMPLATE/` (computed — never hand-
 - **Close an issue only when every case it describes is fixed and tested.** A PR that fixes one of its cases
   leaves it open (#70 was closed on its first case and reopened).
 - **A fix that needs a design decision** gets `needs-adr`: the ADR cites the issue in its References, and the
-  PR that implements it closes the issue (`Fixes #N` in the PR description).
+  PR that implements it closes the issue (`Fixes #N` in the PR description). A fix that adds a policy, such as a
+  limit, a timeout, a tolerance window, a retry or a durability mechanism, needs one.
 - **Every other fix** goes through [`/fix`](../.claude/skills/fix/SKILL.md) (test-first, one issue per commit) and
   the independent [`/fix-review`](../.claude/skills/fix-review/SKILL.md) gate; [`/fix-batch`](../.claude/skills/fix-batch/SKILL.md)
   works through a tracker issue's sub-issues. A security finding is a private draft security advisory, not a

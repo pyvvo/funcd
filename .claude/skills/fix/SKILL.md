@@ -13,9 +13,12 @@ independent [`/fix-review`](../fix-review/SKILL.md) gate is the sign-off. Paths 
 
 1. **Read the issue**: `python3 .claude/skills/issue-management/driver.py show <N> --body`. It must be
    open and `kind/bug` or `kind/flake`. A `kind/feature` goes to `/adr`; a `kind/task` is not a fix.
-2. **No design decision.** Stop and hand to `/adr` if the issue carries `needs-adr`, or if the only sound
-   fix changes the Decision or Contracts of an Accepted/Implemented ADR (label it first:
-   `driver.py relabel <N> --add needs-adr`). Never edit an Accepted or Implemented ADR.
+2. **No design decision.** Stop and hand to `/adr` if the issue carries `needs-adr`, if the only sound
+   fix changes the Decision or Contracts of an Accepted/Implemented ADR, if the reported behavior is what such
+   an ADR decided, or if the fix would add a policy: a limit, a timeout, a tolerance window, a retry or a
+   durability mechanism (#731, #1127, #928 and #998 each added one inside a fix). Label it first:
+   `driver.py relabel <N> --add needs-adr`, and relabel a decided behavior `kind/feature`. Never edit an
+   Accepted or Implemented ADR.
 3. **Rework?** If `docs/reviews/issue-<N>-fix-*.md` exists with `changes-requested`, its `model`
    findings are the work list; don't regress what it marked verified.
 4. **Security advisory** (a `GHSA-…` id instead of an issue number): follow *Advisory fixes* below.

@@ -27,6 +27,9 @@ not the model's error — see §3.
 
 ## 2. Severity tiers
 
+Tier only the findings placed here (SKILL.md Step 3): a finding the builder cannot fix inside the ADR's Scope is
+routed, with its destination, and does not change the verdict.
+
 - **🔴 Blocker** — the work does not meet the DoD and cannot ship: doesn't compile/lint, a Scenario
   test is missing or fails, a required file is missing, the ADR's substance was mutated, an identity
   leak, a weakened/deleted scenario assertion.
@@ -73,6 +76,10 @@ The `--notes` line is the at-a-glance summary; this doc is the full record. Use 
 
 ### 🟡 Major / Minor
 - <finding · attribution · evidence · fix>
+
+### Routed (not this work's)
+- <finding · home: elsewhere|above · destination: the decider, a superseding ADR, the integration step, another
+  repository · what stays here, if anything>
 
 ### ✅ Verified correct (keep it)
 - <what was checked and passed — tree, conventions, specific scenarios>

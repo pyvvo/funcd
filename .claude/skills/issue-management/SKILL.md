@@ -133,6 +133,11 @@ Example: tracker #1028 and its sub-issues #1015 to #1027, for FEAT-0012.
   the runtime driver. Never claim a result you did not observe; mark what is inferred ("not run on containerd").
 - **Grounded references.** Cite `file:line`, ADR numbers and commits; read them, don't recall them.
 - **Expected behavior is the observable outcome**, not the fix design — that belongs in the ADR.
+- **Name the rule a bug breaks.** Its Expected behavior or Root cause cites the ADR clause, doc or contract the
+  behavior contradicts, or says that none covers it. Behavior an ADR decided is a `kind/feature` with
+  `needs-adr`, never a `kind/bug`: its fix is a superseding ADR.
+- **A defect of agent tooling or of a test environment** (`scripts/agent`, a dev-shell quirk) is a `kind/task`;
+  `kind/bug` is the platform doing something wrong.
 - **Say whether a workaround was tested.**
 - **No local paths, usernames or emails** — issues are public. Paths are project-root-relative; the driver
   rejects the common absolute prefixes, and the rest is on you.

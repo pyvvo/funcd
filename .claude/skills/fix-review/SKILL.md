@@ -58,9 +58,12 @@ Through `scripts/agent/d <cmd>` (the cached pinned dev shell); capture real outp
 11. **Shape**: a conventional `fix(<scope>):` subject, `Fixes #N`, the attribution trailer, one issue per commit.
 12. **No dev-machine references** — a silent check, as in `adr-impl-review` Step 2: never write a hygiene
     section, never transcribe a path, username or grep pattern; a leak is a Blocker described generically.
-13. **Siblings and coverage**: grep for the same faulty construct in the code paths that do the same job; a
-    sibling with the same cause left unfixed and unreported → Major. Every case the issue describes has a
-    test: a fix that covers one of them and closes the issue → Major.
+13. **Siblings and coverage**: grep for the same faulty construct in this repository's code paths that do the
+    same job; a sibling with the same cause left unfixed and unreported → Major. A sibling in another repository
+    (a language repo) is routed: an issue or a note in that repository, never a Major on a correct diff. Every
+    case the issue describes has a test, or the PR leaves the issue open: a fix that covers one case and closes
+    the issue → Major when the other cases share its cause, and a Minor on the closing keyword when they have
+    other causes (they go to a new issue).
 
 ## The fix checklist (the Definition of Done)
 
@@ -82,7 +85,11 @@ Count the items that apply (`--dod-total`) and those that hold (`--dod-passed`):
 13. A fix that changes a modeled behavior updated its design spec and diagram, and `just check-specs` passes
     (ADR-0272; applies only when such a spec exists).
 
-## Step 3 — Attribute
+## Step 3 — Place, then attribute
+
+Place each finding first, as `adr-impl-review` Step 3 says: only a finding this fix must change is tiered and
+decides the verdict; one the fixer cannot fix within the issue (the issue's own text, a needed decision, the
+environment, another repository) is routed under *Routed (not this work's)* with its destination.
 
 - **`model`** — the fixer got it wrong. Counts against the model.
 - **`issue`** — the issue itself was wrong (a wrong cause, a step that never reproduced). Recorded, not scored.

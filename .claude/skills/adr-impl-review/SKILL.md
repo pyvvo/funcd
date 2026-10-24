@@ -18,7 +18,8 @@ asserting "looks good" is how defects ship. The high-value findings come from ac
 
 You **review and record; you do not fix.** A reviewer that also rewrites the work loses
 independence. Hand Blocker/Major findings back to the builder (the `adr-impl` skill); offer to
-apply fixes only as a separate, explicit step the user asks for.
+apply fixes only as a separate, explicit step the user asks for. Only findings the builder can fix are tiered
+and sent back; the rest are routed to where they belong (Step 3).
 
 ## Step 0 — Inputs
 
@@ -63,9 +64,29 @@ file:line, command transcripts). At minimum:
   username has leaked into tracked review docs. If a leak exists, raise it as a Blocker described generically
   ("an absolute path / the local username leaked in `<file:line>`"); if not, say nothing.
 
-## Step 3 — Attribute every finding (this is what makes the model score fair)
+## Step 3 — Place every finding, then attribute it
 
-For each finding decide **whose fault it is** — this is the crux:
+**Place it first.** A real problem is not always this work's problem. Give each finding a home:
+- **here**: this implementation must change to meet its ADR. Only these are tiered, decide the verdict and go back
+  to the builder.
+- **elsewhere**: the ADR's own text (the decider, or a superseding ADR), another ADR or feat row that owns the
+  capability, the integration of this branch with main, or another repository (a language repo); name it.
+- **above**: a platform concept no ADR has decided yet; name the layer that should decide it (the blueprint, a feat
+  row, a new ADR).
+
+The test: can the builder fix it inside this ADR's Scope? If not, it is routed, not tiered, and it sends nothing
+back. The verdict lists it under *Routed (not this work's)* with its destination. Three cases come up:
+- **An ADR defect that makes a Definition-of-done item impossible** (`adr`): the work passes on what it can meet,
+  and the `Implemented` stamp waits for the decider's ruling or the superseding ADR; say so in the verdict.
+  ADR-0005 spent three of its four review rounds on such findings, and ADR-0137 passed with an open Major.
+- **Drift on main**: a failure that appears only once main's newer commits are merged, caused by another ADR's
+  change, goes to the integration step (rebase, then `scripts/agent/gate.sh` or `scripts/agent/wave-check.sh`).
+  It stays here only when the merge exposes a defect of this change itself. ADR-0217 spent a full round on drift.
+- **A deliverable that cannot be built as the ADR says**: check feasibility before charging the model; an
+  impossible item is an `adr` finding (ADR-0005's first round charged the model for a client the generator
+  could not produce).
+
+**Then attribute it**: decide whose fault it is, which is what keeps the model score fair:
 - **`model`** — the implementer got it wrong (missed a file, broke a convention, left a stub that
   fails, skipped a scenario). Counts against the model's score.
 - **`adr`** — the ADR itself is wrong or self-contradictory (e.g. a Definition of done that can't be
@@ -92,8 +113,8 @@ The one-line `--notes` in the ledger is the at-a-glance summary; this doc is the
 record, and Step 5 links it from the scorecard via `--report`. Keep the path unique (append `-2`,
 `-3`, … if the same model re-reviews the same ADR/phase).
 
-A verdict is one of: **pass** (DoD met, no Blockers/Majors), **changes-requested** (Blockers or
-Majors — loop back), **fail** (fundamentally off the ADR).
+A verdict is one of: **pass** (DoD met, no Blockers/Majors placed here), **changes-requested** (Blockers or
+Majors placed here — loop back), **fail** (fundamentally off the ADR). Routed findings never change the verdict.
 
 ## Step 5 — Record the model scorecard
 
@@ -130,6 +151,8 @@ stamps `Implemented`. **Only on a `pass`:**
   that implements the ADR (`Fixes #N` in its description), not by this gate: name it in the verdict so the PR
   carries it. This gate moves no board card; the epoch's card moves to `Done` when the epoch's tracker closes
   (CLAUDE.md → *Feature work is tracked in issues*). A pure-infra / process / refactor ADR has no feature issue.
+
+When a routed `adr` finding made a Definition-of-done item impossible, stamp nothing until the decider rules.
 
 Find the row via the ADR's `Realizes: FEAT-NNNN/Fxx` header; the move is **forward-only** — never
 walk a status backward. On **changes-requested** or **fail**, advance nothing: the ADR stays
