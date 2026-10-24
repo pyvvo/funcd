@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.2](https://github.com/pyvvo/funcd/compare/v0.26.1...v0.26.2) (2026-10-24)
+
+
+### Bug Fixes
+
+* **lake:** a Lake stop drains its queries while the catalog keeps saving, then cancels the queries that outlive the wait (ADR-0273) ([155fe20](https://github.com/pyvvo/funcd/commit/155fe20a0ab48b5ef389abdfabd3d331041d2852))
+
 ## [0.26.1](https://github.com/pyvvo/funcd/compare/v0.26.0...v0.26.1) (2026-10-23)
 
 
