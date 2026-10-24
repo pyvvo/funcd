@@ -550,6 +550,12 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 		return nil, noopClose, nil, "", err
 	}
 	opts = append(opts, funcd.WithBlobPollInterval(blobPoll))
+	// The Lake engines' catalog save interval (ADR-0274), checked by the config loader.
+	saveInterval, err := cfg.LakeSaveInterval()
+	if err != nil {
+		return nil, noopClose, nil, "", err
+	}
+	opts = append(opts, funcd.WithLakeSaveInterval(saveInterval))
 	// Site default index document (ADR-0139, F103).
 	opts = append(opts, funcd.WithSiteDefaultIndex(cfg.Site.DefaultIndex))
 

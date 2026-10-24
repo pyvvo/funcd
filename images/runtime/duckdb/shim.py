@@ -60,10 +60,10 @@ METADATA = "__ducklake_metadata_lakehouse"
 # The catalog's latest snapshot id: every committed transaction adds one.
 LATEST_SNAPSHOT = f"SELECT max(snapshot_id) FROM {METADATA}.ducklake_snapshot"
 
-# How often the commit watcher reads the catalog's snapshot id: commits within one interval share one checkpoint. A Lake
-# sets it with LAKE_SAVE_INTERVAL in its ConfigMap, from its recovery objective (ADR-0274); one second without it.
+# How often the commit watcher reads the catalog's snapshot id: commits within one interval share one checkpoint. The
+# platform sets it for every Lake from lake.saveInterval, as FUNCD_LAKE_SAVE_INTERVAL (ADR-0274); one second without it.
 COMMIT_POLL_SECONDS = 1.0
-SAVE_INTERVAL_KEY = "LAKE_SAVE_INTERVAL"
+SAVE_INTERVAL_KEY = "FUNCD_LAKE_SAVE_INTERVAL"
 # ADR-0194's duration grammar (api/types/v1alpha1/duration.go): whole numbers with the units h, m, s and ms, largest
 # unit first, as funcdctl backup plan writes them.
 DURATION = re.compile(r"^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$")
@@ -148,7 +148,7 @@ def _connect() -> "duckdb.DuckDBPyConnection":
 
 
 def _save_interval(environ: Mapping[str, str]) -> float:
-    """The catalog save interval in seconds (ADR-0274): LAKE_SAVE_INTERVAL, an ADR-0194 duration from 500ms to 1h,
+    """The catalog save interval in seconds (ADR-0274): FUNCD_LAKE_SAVE_INTERVAL, an ADR-0194 duration from 500ms to 1h,
     or COMMIT_POLL_SECONDS without it; another value ends the start (exit 2) with a message naming the key."""
     value = environ.get(SAVE_INTERVAL_KEY)
     if value is None:

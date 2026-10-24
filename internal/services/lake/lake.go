@@ -97,6 +97,9 @@ type ReconcilerDeps struct {
 	// bounded by SupervisionPeriod. 0 ⇒ 2s.
 	ReferentPollInterval time.Duration
 	EnginePollInterval   time.Duration
+	// SaveInterval is how often every engine saves its catalog after a commit (lake.saveInterval, ADR-0274), set as
+	// the engine's FUNCD_LAKE_SAVE_INTERVAL; 0 ⇒ none set, and the engine saves every second.
+	SaveInterval time.Duration
 }
 
 const defaultPollInterval = 2 * time.Second
@@ -126,6 +129,7 @@ type Reconciler struct {
 	period       time.Duration // steady-state requeue (ADR-0142)
 	referentPoll time.Duration
 	enginePoll   time.Duration
+	saveInterval time.Duration
 }
 
 // NewReconciler builds the Lake reconciler. Store + Provider are required.
@@ -168,6 +172,7 @@ func NewReconciler(d ReconcilerDeps) (*Reconciler, error) {
 		period:       period,
 		referentPoll: orDefault(d.ReferentPollInterval, defaultPollInterval),
 		enginePoll:   min(orDefault(d.EnginePollInterval, defaultPollInterval), period),
+		saveInterval: d.SaveInterval,
 	}, nil
 }
 

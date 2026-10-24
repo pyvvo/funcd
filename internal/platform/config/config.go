@@ -311,9 +311,12 @@ type Config struct {
 		KeyRotationPeriod string `json:"keyRotationPeriod,omitempty" env:"FUNCD_S3GATEWAY_KEY_ROTATION_PERIOD"`
 	} `json:"s3gateway,omitempty"`
 
-	// Lake tunes the per-Lake lake::query PEP proxies (ADR-0137); they bind the bridge address
-	// (runtime.containerd.bridgeAddress, ADR-0238).
+	// Lake tunes the Lake engines (ADR-0274) and the per-Lake lake::query PEP proxies (ADR-0137), which bind the
+	// bridge address (runtime.containerd.bridgeAddress, ADR-0238).
 	Lake struct {
+		// SaveInterval is how often a Lake engine saves its catalog after a commit, the Lake's recovery point
+		// (ADR-0274): an ADR-0194 duration from 500ms to 1h, 1s when empty; funcdctl backup plan lake derives it.
+		SaveInterval string `json:"saveInterval,omitempty" env:"FUNCD_LAKE_SAVE_INTERVAL"`
 		// EnginePollInterval and EngineProbeTimeout pace the wait for an engine's readiness probe (ADR-0163).
 		EnginePollInterval string `json:"enginePollInterval,omitempty" env:"FUNCD_LAKE_ENGINE_POLL_INTERVAL"`
 		EngineProbeTimeout string `json:"engineProbeTimeout,omitempty" env:"FUNCD_LAKE_ENGINE_PROBE_TIMEOUT"`
@@ -670,7 +673,7 @@ func (c Config) Validate() error {
 		if err := c.validateCredentials(op); err != nil {
 			return err
 		}
-		for _, fs := range [][]Finding{c.CheckBackup(), c.CheckBlob(), c.CheckBridge()} {
+		for _, fs := range [][]Finding{c.CheckBackup(), c.CheckBlob(), c.CheckBridge(), c.CheckLake()} {
 			if len(fs) > 0 && fs[0].Error {
 				return fault.Invalidf(op, "%s", fs[0].Message)
 			}

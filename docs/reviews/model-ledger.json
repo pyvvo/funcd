@@ -12627,6 +12627,6 @@
     "dod_passed": 7,
     "dod_total": 7,
     "report": "docs/reviews/adr-0274-implementation-claude-opus-5-5.md",
-    "notes": "pass: LAKE_SAVE_INTERVAL from a bound ConfigMap and funcdctl backup plan lake --rpo; revert checks on the reconciler and the engine; gate, engine tests and duckdb lane PASS"
+    "notes": "pass: lake.saveInterval in funcdconfig.yaml (the decider's platform key, reworked before the merge) and funcdctl backup plan lake --rpo; revert checks on the reconciler and the engine; gate, engine tests and duckdb lane PASS"
   }
 ]

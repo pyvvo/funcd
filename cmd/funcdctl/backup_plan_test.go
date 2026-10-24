@@ -87,44 +87,6 @@ spec:
       - %s
 `
 
-const lakeManifest = `# The Lake and its engine's settings (ADR-0265, ADR-0274).
-apiVersion: funcd.io/v1alpha1
-kind: ConfigMap
-metadata:
-  name: lake-engine-config
-  namespace: default
-  resourceGroup: rg1
-spec:
-  data:
-    DUCKDB_THREADS: "2"   # half the engine's CPUs
----
-apiVersion: funcd.io/v1alpha1
-kind: Lake
-metadata:
-  name: lake
-  namespace: default
-  resourceGroup: rg1
-spec:
-  buckets:
-    - ref: lakehouse
-  bindings:
-    blob:
-      - alias: gold
-        bucket: lakehouse
-        prefix: gold
-    config:
-      - lake-engine-config
-  location:
-    bucket: lakehouse
-    prefix: gold
-`
-
-// lakeWithInterval is lakeManifest with the ConfigMap's LAKE_SAVE_INTERVAL set to v, every other byte kept.
-func lakeWithInterval(v string) string {
-	threads := "    DUCKDB_THREADS: \"2\"   # half the engine's CPUs\n"
-	return strings.Replace(lakeManifest, threads, threads+"    LAKE_SAVE_INTERVAL: "+v+"\n", 1)
-}
-
 const (
 	verifyEvery15m = "run funcdctl backup verify every 15m: (backup.objectives.rpo − backup.interval) / 2 (ADR-0205)\n"
 	recipientsWarn = "warning: backup.encryption.recipients: backup.encryption.recipients without " +
@@ -262,70 +224,49 @@ func TestScenarioScheduleFromObjectives(t *testing.T) {
 	require.Empty(t, stdout)
 }
 
-// scenario: plan-lake-rpo (ADR-0274) — the manifest with only the ConfigMap's LAKE_SAVE_INTERVAL added, min(R ÷ 2, 1h)
-// in ADR-0194's form, which apply's pre-flight accepts; --write edits the file, and a second plan replaces the value.
+// scenario: plan-lake-rpo (ADR-0274) — lake.saveInterval at min(R ÷ 2, 1h) in ADR-0194's form, printed with no config
+// file; with --write it is inserted into a commented file, every other byte kept, and a second plan replaces it.
 func TestScenarioPlanLakeRPO(t *testing.T) {
 	dir := planEnv(t)
-	file := filepath.Join(dir, "lake.yaml")
-	writePlanFile(t, file, lakeManifest, 0o600)
 	for _, tc := range []struct{ rpo, want string }{{"10s", "5s"}, {"3s", "1s500ms"}, {"1s", "500ms"}, {"24h", "1h"}} {
-		stdout, stderr, err := runPlan("lake", "-f", file, "--rpo", tc.rpo)
+		stdout, stderr, err := runPlan("lake", "--rpo", tc.rpo)
 		require.NoError(t, err, tc.rpo)
-		require.Equal(t, lakeWithInterval(tc.want), stdout, tc.rpo)
+		require.Equal(t, "lake:\n  saveInterval: "+tc.want+"\n", stdout, tc.rpo)
 		require.Empty(t, stderr, tc.rpo)
 	}
-	requireFile(t, file, lakeManifest)
 
-	stdout, stderr, err := runPlan("lake", "-f", file, "--rpo", "10s", "--write")
+	file := filepath.Join(dir, "funcdconfig.yaml")
+	writePlanFile(t, file, commentedConfig, 0o640)
+	stdout, stderr, err := runPlan("lake", "--rpo", "10s", "--write")
 	require.NoError(t, err)
-	require.Equal(t, "spec.data.LAKE_SAVE_INTERVAL: (absent) → 5s\n", stdout)
-	require.Equal(t, "apply it live: funcdctl apply -f "+file+"\n", stderr)
-	requireFile(t, file, lakeWithInterval("5s"))
+	require.Equal(t, "lake.saveInterval: (absent) → 5s\n", stdout)
+	require.Equal(t, recipientsWarn+"restart funcd to apply\n", stderr)
+	requireFile(t, file, commentedConfig+"lake:\n  saveInterval: 5s\n")
 
-	stdout, _, err = runPlan("lake", "-f", file, "--rpo", "3s", "--write")
+	stdout, _, err = runPlan("lake", "--rpo", "3s", "--write")
 	require.NoError(t, err)
-	require.Equal(t, "spec.data.LAKE_SAVE_INTERVAL: 5s → 1s500ms\n", stdout)
-	requireFile(t, file, lakeWithInterval("1s500ms"))
-	docs, err := sdk.DecodeManifestDocuments([]byte(lakeWithInterval("1s500ms")))
+	require.Equal(t, "lake.saveInterval: 5s → 1s500ms\n", stdout)
+	requireFile(t, file, commentedConfig+"lake:\n  saveInterval: 1s500ms\n")
+	cfg, err := config.Load(file, config.Flags{})
 	require.NoError(t, err)
-	require.Equal(t, "1s500ms", docs[0].Object.(*v1.ConfigMap).Spec.Data["LAKE_SAVE_INTERVAL"])
+	d, err := cfg.LakeSaveInterval()
+	require.NoError(t, err)
+	require.Equal(t, 1500*time.Millisecond, d)
 }
 
 // scenario: plan-lake-rpo-too-small (ADR-0274) — --rpo 800ms: half of it is under the 500ms floor, so exit 1 naming
 // --rpo, nothing printed or written.
 func TestScenarioPlanLakeRPOTooSmall(t *testing.T) {
 	dir := planEnv(t)
-	file := filepath.Join(dir, "lake.yaml")
-	writePlanFile(t, file, lakeManifest, 0o600)
-	stdout, stderr, err := runPlan("lake", "-f", file, "--rpo", "800ms", "--write")
+	file := filepath.Join(dir, "funcdconfig.yaml")
+	writePlanFile(t, file, commentedConfig, 0o600)
+	stdout, stderr, err := runPlan("lake", "--rpo", "800ms", "--write")
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
 	require.Contains(t, errorLine(err), "--rpo 800ms: a Lake saves its catalog at most every 500ms, so want at least 1s")
 	require.Equal(t, 1, exitCode(err))
 	require.Empty(t, stdout)
 	require.Empty(t, stderr)
-	requireFile(t, file, lakeManifest)
-}
-
-// TestPlanLakeEditsOneConfigMapDocument (ADR-0274 Decision 3): plan edits a manifest's one ConfigMap document; two, or
-// none (a ConfigMap declared inside the Lake, ADR-0251), are refused with nothing written.
-func TestPlanLakeEditsOneConfigMapDocument(t *testing.T) {
-	dir := planEnv(t)
-	cm, lake, ok := strings.Cut(lakeManifest, "---\n")
-	require.True(t, ok)
-	inline := strings.Replace(lake, "  location:\n", "  configMaps:\n    - name: lake-engine-config\n      data:\n"+
-		"        DUCKDB_THREADS: \"2\"\n  location:\n", 1)
-	for _, tc := range []struct{ body, want string }{
-		{cm + "---\n" + strings.Replace(cm, "lake-engine-config", "lake-more-config", 1) + "---\n" + lake, "holds 2 ConfigMap documents: want one"},
-		{inline, "holds 0 ConfigMap documents: want one"},
-	} {
-		file := filepath.Join(dir, "lake.yaml")
-		writePlanFile(t, file, tc.body, 0o600)
-		stdout, _, err := runPlan("lake", "-f", file, "--rpo", "10s", "--write")
-		require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
-		require.ErrorContains(t, err, tc.want)
-		require.Empty(t, stdout)
-		requireFile(t, file, tc.body)
-	}
+	requireFile(t, file, commentedConfig)
 }
 
 // scenario: write-keeps-the-rest (ADR-0223) — --write edits interval and inserts objectives.rpo in a commented file;
@@ -456,14 +397,11 @@ func TestFlagRules(t *testing.T) {
 		{[]string{"platform", "--rpo", "1h", "--rto", "1h", "--size", "16777216Ti", "--speed", "1"}, fault.Invalid, `--size "16777216Ti"`},
 		{[]string{"schedule", "-f", "-", "--rpo", "1h", "--write"}, fault.Invalid, "--write needs a file: -f - reads stdin"},
 		{[]string{"schedule", "--rpo", "1h"}, fault.Invalid, "schedule needs -f"},
-		{[]string{"schedule", "-f", manifest, "--config", manifest, "--rpo", "1h"}, fault.Invalid, "--config applies to platform, kv and blob"},
+		{[]string{"schedule", "-f", manifest, "--config", manifest, "--rpo", "1h"}, fault.Invalid, "--config applies to platform, kv, blob and lake"},
 		{[]string{"platform", "-f", manifest, "--rpo", "1h"}, fault.Invalid, "-f applies to schedule"},
-		{[]string{"lake", "--rpo", "10s"}, fault.Invalid, "lake needs -f"},
-		{[]string{"lake", "-f", manifest}, fault.Invalid, "lake needs --rpo"},
-		{[]string{"lake", "-f", "-", "--rpo", "10s", "--write"}, fault.Invalid, "--write needs a file: -f - reads stdin"},
-		{[]string{"lake", "-f", manifest, "--config", manifest, "--rpo", "10s"}, fault.Invalid, "--config applies to platform, kv and blob; lake reads -f"},
-		{[]string{"lake", "-f", manifest, "--rpo", "10s", "--keep", "720h"}, fault.Invalid, "--keep does not apply to lake"},
-		{[]string{"lake", "-f", manifest, "--rpo", "10s", "--rto", "1h", "--size", "1Gi", "--speed", "1Mi"}, fault.Invalid, "--rto does not apply to lake"},
+		{[]string{"lake"}, fault.Invalid, "lake needs --rpo"},
+		{[]string{"lake", "--rpo", "10s", "--keep", "720h"}, fault.Invalid, "--keep does not apply to lake"},
+		{[]string{"lake", "-f", manifest, "--rpo", "10s"}, fault.Invalid, "-f applies to schedule; lake reads --config"},
 		{[]string{"rqlite", "--rpo", "1h"}, fault.Invalid, `component "rqlite"`},
 		{[]string{"platform", "--rpo", "1h", "--write"}, fault.NotFound, "--write: no config file found: give --config"},
 		{[]string{"platform", "--config", "missing.yaml", "--rpo", "1h"}, fault.NotFound, `"missing.yaml" does not exist`},

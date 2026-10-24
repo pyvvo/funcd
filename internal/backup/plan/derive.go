@@ -12,8 +12,8 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/config"
 )
 
-// Component is what a plan sets: the platform backup, the KV export or the blob mirror keys of funcdconfig.yaml, a
-// BackupSchedule, or a Lake's ConfigMap.
+// Component is what a plan sets: the platform backup, the KV export, the blob mirror or the Lake keys of
+// funcdconfig.yaml, or a BackupSchedule.
 type Component string
 
 // The components of ADR-0223 Decision 1, and the Lake of ADR-0274.
@@ -23,16 +23,6 @@ const (
 	Blob     Component = "blob"
 	Schedule Component = "schedule"
 	Lake     Component = "lake"
-)
-
-// LakeSaveIntervalKey is the Lake engine's catalog save interval (ADR-0274): the duckdb shim reads it from the
-// ConfigMaps the Lake binds, between MinLakeSaveInterval and MaxLakeSaveInterval.
-const LakeSaveIntervalKey = "LAKE_SAVE_INTERVAL"
-
-// The bounds of LakeSaveIntervalKey, both included (ADR-0274 Decision 1).
-const (
-	MinLakeSaveInterval = 500 * time.Millisecond
-	MaxLakeSaveInterval = time.Hour
 )
 
 // Objectives are the operator's targets; a zero field was not given (Decision 1). Size and Speed are bytes and bytes
@@ -107,14 +97,15 @@ func Derive(c Component, o Objectives, cur config.Config) ([]Setting, error) {
 		}
 	case Lake:
 		if o.RPO > 0 {
-			if o.RPO/2 < MinLakeSaveInterval {
+			if o.RPO/2 < config.MinLakeSaveInterval {
 				return nil, fault.Invalidf(op, "--rpo %s: a Lake saves its catalog at most every %s, so want at least %s",
-					v1.Duration(o.RPO.Truncate(time.Millisecond)), v1.Duration(MinLakeSaveInterval), v1.Duration(2*MinLakeSaveInterval))
+					v1.Duration(o.RPO.Truncate(time.Millisecond)), v1.Duration(config.MinLakeSaveInterval),
+					v1.Duration(2*config.MinLakeSaveInterval))
 			}
-			s = append(s, Setting{"spec.data." + LakeSaveIntervalKey, duration(min(o.RPO/2, MaxLakeSaveInterval))})
+			s = append(s, Setting{"lake.saveInterval", duration(min(o.RPO/2, config.MaxLakeSaveInterval))})
 		}
 	default:
-		return nil, fault.Invalidf(op, "component %q: want platform, kv, blob, schedule or lake", c)
+		return nil, fault.Invalidf(op, "component %q: want platform, kv, blob, lake or schedule", c)
 	}
 	return s, nil
 }

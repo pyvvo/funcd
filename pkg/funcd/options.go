@@ -557,6 +557,19 @@ func WithLakeExtensionDir(dir string) Option {
 	return func(c *config) error { c.lakeExtensionDir = dir; return nil }
 }
 
+// WithLakeSaveInterval sets how often every Lake engine saves its catalog after a commit, the Lake's recovery point
+// (ADR-0274, config lake.saveInterval), as the engine's FUNCD_LAKE_SAVE_INTERVAL. 0 ⇒ none set: the engine saves
+// every second.
+func WithLakeSaveInterval(d time.Duration) Option {
+	return func(c *config) error {
+		if d < 0 {
+			return fault.Invalidf("funcd.WithLakeSaveInterval", "lake save interval %s must not be negative", d)
+		}
+		c.lakeSaveInterval = d
+		return nil
+	}
+}
+
 // WithArtifactStore enables the OCI artifact Materializer (ADR-0031): functions are
 // pulled by digest from their `spec.image` into a per-digest cache under dir. When a
 // runtime shim is configured and no explicit Materializer is set, this selects the oras

@@ -229,8 +229,10 @@ log:
 #   masterSecretFile: ""          # node master secret, used gateway on or off. default: "" ⇒ generated under <dataDir>/s3gateway
 #   keyRotationPeriod: 24h        # a derived S3 key pair is valid for one to two periods and never past a restart (ADR-0270); the workers that carry one (Lake engines, Functions with blob bindings) are replaced at least once per period, which empties a Function's emptyDir volumes (ADR-0262). default: 24h, at least 1h and more than 20 × (runtime.supervisionPeriod + runtime.drainGrace + 2 × runtime.drainPollInterval + 10s)
 
-# --- lake: the per-Lake query proxies (ADR-0137) ----------------------------------
+# --- lake: the Lake engines and their query proxies (ADR-0137, ADR-0274) ----------
 # lake:
+#   saveInterval: 1s              # the Lake's recovery point: how often an engine saves its catalog. default: 1s
+#                                 # 500ms to 1h; funcdctl backup plan lake --rpo sets it (ADR-0274)
 #   enginePollInterval: 2s        # re-check of an engine not answering its probe yet (ADR-0163). default: 2s
 #   engineProbeTimeout: 2s        # bound of one engine probe. default: 2s
 

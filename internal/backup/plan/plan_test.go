@@ -62,10 +62,10 @@ func TestDeriveTable(t *testing.T) {
 		{"blob rpo only", Blob, Objectives{RPO: 30 * time.Minute}, defaults, []Setting{{"blob.backup.interval", "15m"}}},
 		{"schedule", Schedule, Objectives{RPO: 2 * time.Hour, Keep: 336 * time.Hour}, config.Config{},
 			[]Setting{{"spec.schedule", "0 * * * *"}, {"spec.ttl", "336h"}}},
-		{"lake", Lake, Objectives{RPO: 10 * time.Second}, config.Config{}, []Setting{{"spec.data.LAKE_SAVE_INTERVAL", "5s"}}},
-		{"lake compound", Lake, Objectives{RPO: 3 * time.Second}, config.Config{}, []Setting{{"spec.data.LAKE_SAVE_INTERVAL", "1s500ms"}}},
-		{"lake at the floor", Lake, Objectives{RPO: time.Second}, config.Config{}, []Setting{{"spec.data.LAKE_SAVE_INTERVAL", "500ms"}}},
-		{"lake capped at an hour", Lake, Objectives{RPO: 24 * time.Hour}, config.Config{}, []Setting{{"spec.data.LAKE_SAVE_INTERVAL", "1h"}}},
+		{"lake", Lake, Objectives{RPO: 10 * time.Second}, defaults, []Setting{{"lake.saveInterval", "5s"}}},
+		{"lake compound", Lake, Objectives{RPO: 3 * time.Second}, defaults, []Setting{{"lake.saveInterval", "1s500ms"}}},
+		{"lake at the floor", Lake, Objectives{RPO: time.Second}, defaults, []Setting{{"lake.saveInterval", "500ms"}}},
+		{"lake capped at an hour", Lake, Objectives{RPO: 24 * time.Hour}, defaults, []Setting{{"lake.saveInterval", "1h"}}},
 		{"no objective sets no key", Platform, Objectives{RTO: time.Hour, Size: 1, Speed: 1}, defaults, nil},
 	} {
 		got, err := Derive(tc.c, tc.o, tc.cur)
@@ -89,15 +89,16 @@ func TestDeriveTable(t *testing.T) {
 	require.ErrorContains(t, err, "--rpo 999ms: a Lake saves its catalog at most every 500ms, so want at least 1s")
 }
 
-// TestEngineReadsWhatPlanWrites (ADR-0274): the Lake reconciler passes the key lake's plan writes, and the duckdb shim
-// reads it in ADR-0194's grammar and within plan's bounds.
+// TestEngineReadsWhatPlanWrites (ADR-0274): the Lake reconciler hands lake.saveInterval to every engine under the key
+// the duckdb shim reads, and the shim parses it in ADR-0194's grammar within the config's bounds.
 func TestEngineReadsWhatPlanWrites(t *testing.T) {
+	const key = "FUNCD_LAKE_SAVE_INTERVAL"
 	for file, wants := range map[string][]string{
-		filepath.Join("..", "..", "services", "lake", "reconcile.go"): {`k == "` + LakeSaveIntervalKey + `"`},
+		filepath.Join("..", "..", "services", "lake", "reconcile.go"): {`own["` + key + `"]`},
 		filepath.Join("..", "..", "..", "images", "runtime", "duckdb", "shim.py"): {
-			`SAVE_INTERVAL_KEY = "` + LakeSaveIntervalKey + `"`,
+			`SAVE_INTERVAL_KEY = "` + key + `"`,
 			`DURATION = re.compile(r"` + v1.DurationPattern + `")`,
-			fmt.Sprintf("not %g <= seconds <= %g", MinLakeSaveInterval.Seconds(), MaxLakeSaveInterval.Seconds()),
+			fmt.Sprintf("not %g <= seconds <= %g", config.MinLakeSaveInterval.Seconds(), config.MaxLakeSaveInterval.Seconds()),
 		},
 	} {
 		src, err := os.ReadFile(file)

@@ -423,13 +423,13 @@ class TestIssue1198CheckpointsUnderLoadKeepTheCatalogWhole(unittest.TestCase):
         self.assertEqual(sorted(set(acked) - rows)[:10], [], "acknowledged commits are missing after a restart")
 
 
-class TestScenarioSaveIntervalFromConfigMap(unittest.TestCase):
-    """scenario: save-interval-from-configmap — a Lake's LAKE_SAVE_INTERVAL sets how often its engine saves the
-    catalog (ADR-0274)."""
+class TestScenarioSaveIntervalFromConfig(unittest.TestCase):
+    """scenario: save-interval-from-config — the engine's FUNCD_LAKE_SAVE_INTERVAL, from lake.saveInterval, sets how
+    often it saves the catalog (ADR-0274)."""
 
     def test_a_three_second_interval(self) -> None:
         lake = _Lake(self)
-        engine = lake.start(env={"LAKE_SAVE_INTERVAL": "3s"})
+        engine = lake.start(env={"FUNCD_LAKE_SAVE_INTERVAL": "3s"})
         lake.client.query(engine, "CREATE TABLE lakehouse.t (i BIGINT)")
         time.sleep(3.5)
         before = len(lake.uploads())
