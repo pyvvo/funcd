@@ -544,7 +544,8 @@ func WithEphemeralProviderStorage() Option {
 // WithLakeProviderRuntime overrides the Lake add-on-provider runtime (ADR-0087). The
 // production runtime supervises the curated duckdb CONTAINER image; `funcdctl dev` (ADR-0125) injects
 // a process-mode driver that runs the embedded DuckDB+Quack engine as a host subprocess, since
-// process-dev runs no containers.
+// process-dev runs no containers. Such an engine keeps a local catalog and serves no save endpoint, so the
+// Lakes answer without the save barrier (ADR-0279 Scope).
 func WithLakeProviderRuntime(r provider.Runtime) Option {
 	return func(c *config) error { c.lakeProvider = r; return nil }
 }

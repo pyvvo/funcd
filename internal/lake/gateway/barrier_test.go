@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -214,4 +215,65 @@ func TestBarrierSaveCallEndsWithTheRequest(t *testing.T) {
 	cancel()
 	require.Error(t, <-done)
 	require.Eventually(t, save.canceled.Load, 10*time.Second, 10*time.Millisecond, "the save call outlived the client's request")
+}
+
+// scriptedBody hands out reads one per call: each chunk with its error.
+type scriptedBody struct {
+	reads []scriptedRead
+}
+
+type scriptedRead struct {
+	data string
+	err  error
+}
+
+func (b *scriptedBody) Read(p []byte) (int, error) {
+	if len(b.reads) == 0 {
+		return 0, io.EOF
+	}
+	r := b.reads[0]
+	b.reads = b.reads[1:]
+	return copy(p, r.data), r.err
+}
+
+func (*scriptedBody) Close() error { return nil }
+
+// ADR-0279 Decision 3: heldTail gives an answer's last byte only once the release succeeded, whether the body's last
+// bytes come with io.EOF or on a read before it; a failed release ends the body with its error, the last byte unsent.
+func TestHeldTailGivesTheLastByteAfterTheRelease(t *testing.T) {
+	t.Parallel()
+	for name, reads := range map[string][]scriptedRead{
+		"the last bytes with EOF":   {{"0123", nil}, {"4567", io.EOF}},
+		"the last bytes before EOF": {{"0123", nil}, {"4567", nil}, {"", io.EOF}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			for _, fail := range []bool{false, true} {
+				released := false
+				h := &heldTail{body: &scriptedBody{reads: slices.Clone(reads)}, release: func() error {
+					released = true
+					if fail {
+						return errNotSaved
+					}
+					return nil
+				}}
+				var got []byte
+				var err error
+				for err == nil {
+					buf := make([]byte, 16)
+					var n int
+					n, err = h.Read(buf)
+					got = append(got, buf[:n]...)
+					require.True(t, released || len(got) < 8, "the last byte went out before the release")
+				}
+				if fail {
+					require.ErrorIs(t, err, errNotSaved)
+					require.Equal(t, "0123456", string(got), "a failed release keeps the last byte")
+					continue
+				}
+				require.ErrorIs(t, err, io.EOF)
+				require.Equal(t, "01234567", string(got))
+			}
+		})
+	}
 }
