@@ -12733,5 +12733,20 @@
     "dod_total": 12,
     "report": "docs/reviews/issue-1244-fix-claude-opus-5-5.md",
     "notes": "pass; four commits (the cache, platforms.json, the master secret, install's binaries), each test failing on its seam-only baseline, nine mutants killed; the blob Put routed to #1247 (needs-adr); reviewed in the producing session (decider, 2026-10-11)"
+  },
+  {
+    "date": "2026-10-24",
+    "issue": "1246",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-1246-fix-claude-opus-5-5.md",
+    "notes": "pass; with the boot reclaim delayed 1 s both tests fail 3/3 on main and pass with the fix; a sibling (the pooled-S3 test) fixed in the same commit; the reclaim's guard routed to the DR track; reviewed in the producing session (decider, 2026-10-11)"
   }
 ]
