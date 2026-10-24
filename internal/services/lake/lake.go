@@ -113,6 +113,9 @@ type ReconcilerDeps struct {
 	// the engine's FUNCD_LAKE_SAVE_INTERVAL; 0 ⇒ none set: the engine serves its save endpoint on savePort, and the
 	// PEP proxy holds each answer until a save covers it (ADR-0279).
 	SaveInterval time.Duration
+	// LocalCatalog: the engines keep their catalog in a local file and serve no save endpoint (funcdctl dev's process
+	// engine, ADR-0125), so answers go out at once, with no barrier, whatever SaveInterval is (ADR-0279 Scope).
+	LocalCatalog bool
 }
 
 const defaultPollInterval = 2 * time.Second
@@ -143,6 +146,7 @@ type Reconciler struct {
 	referentPoll time.Duration
 	enginePoll   time.Duration
 	saveInterval time.Duration
+	localCatalog bool
 }
 
 // NewReconciler builds the Lake reconciler. Store + Provider are required.
@@ -186,6 +190,7 @@ func NewReconciler(d ReconcilerDeps) (*Reconciler, error) {
 		referentPoll: orDefault(d.ReferentPollInterval, defaultPollInterval),
 		enginePoll:   min(orDefault(d.EnginePollInterval, defaultPollInterval), period),
 		saveInterval: d.SaveInterval,
+		localCatalog: d.LocalCatalog,
 	}, nil
 }
 

@@ -168,9 +168,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		}
 		var proxyURL string
 		if r.proxy != nil && st.Address != "" {
+			saveURL, serr := r.saveURL(st.Address)
+			if serr != nil {
+				return controller.Result{}, serr
+			}
 			purl, perr := r.proxy.Ensure(
 				auth.EntityRef{Type: v1.KindLake, Namespace: cs.Namespace, Name: cs.Name},
-				"http://"+st.Address, env[quackTokenEnvKey], r.saveURL(st.Address))
+				"http://"+st.Address, env[quackTokenEnvKey], saveURL)
 			if perr != nil {
 				return controller.Result{}, fault.Wrapf(perr, fault.KindOf(perr), op, "ensure lake proxy %s/%s", cs.Namespace, cs.Name)
 			}
@@ -385,14 +389,21 @@ func (r *Reconciler) syncIngressRoute(ctx context.Context, cs *v1.Lake, proxyURL
 	return nil
 }
 
-// saveURL is the save endpoint of the engine at address, a netns "host:port", which the PEP proxy calls before it
-// answers (ADR-0279); "" with lake.saveInterval set, where the engine answers at once.
-func (r *Reconciler) saveURL(address string) string {
-	host, _, err := net.SplitHostPort(address)
-	if r.saveInterval > 0 || err != nil {
-		return ""
+// saves reports whether the engines serve the save endpoint the PEP proxy calls before it answers (ADR-0279): not
+// with lake.saveInterval set, and not for engines with a local catalog.
+func (r *Reconciler) saves() bool { return r.saveInterval == 0 && !r.localCatalog }
+
+// saveURL is the save endpoint of the engine at address, a netns "host:port" (ADR-0279); "" when the engines serve
+// none. An address it cannot read is fault.Internal: an engine without a watcher must not answer without a barrier.
+func (r *Reconciler) saveURL(address string) (string, error) {
+	if !r.saves() {
+		return "", nil
 	}
-	return "http://" + net.JoinHostPort(host, strconv.Itoa(savePort)) + "/save"
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return "", fault.Wrapf(err, fault.Internal, "services.lake.saveURL", "the engine address %q", address)
+	}
+	return "http://" + net.JoinHostPort(host, strconv.Itoa(savePort)) + "/save", nil
 }
 
 // engineEnv assembles the engine's environment (ADR-0087), but for its S3 key pair, issued with the engine
@@ -416,7 +427,8 @@ func (r *Reconciler) engineEnv(ctx context.Context, cs *v1.Lake) (map[string]str
 	}
 	if r.saveInterval > 0 {
 		own["FUNCD_LAKE_SAVE_INTERVAL"] = v1.Duration(r.saveInterval).String()
-	} else {
+	}
+	if r.saves() {
 		own["FUNCD_LAKE_SAVE_PORT"] = strconv.Itoa(savePort)
 	}
 

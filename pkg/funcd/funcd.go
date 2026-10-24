@@ -1165,6 +1165,8 @@ func (p *Platform) buildControlPlane() error {
 		ReferentPollInterval: c.pacing.ReferentPollInterval,
 		EnginePollInterval:   c.pacing.EnginePollInterval,
 		SaveInterval:         c.lakeSaveInterval,
+		// Only funcdctl dev overrides the Lake runtime: its process engine keeps a local catalog (ADR-0125, ADR-0279).
+		LocalCatalog: c.lakeProvider != nil,
 	}
 	// The engine's S3 keypair is derived over its Lake identity (ADR-0085, ADR-0175) by the same
 	// deriver the Function reconciler uses — present only when the S3 gateway is enabled.

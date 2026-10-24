@@ -68,7 +68,8 @@ LATEST_SNAPSHOT = f"SELECT max(snapshot_id) FROM {METADATA}.ducklake_snapshot"
 CLOSED_SNAPSHOT = "SELECT max(snapshot_id) FROM funcd_closed.ducklake_snapshot"
 
 # How often the commit watcher reads the catalog's snapshot id: commits within one interval share one checkpoint. The
-# platform sets it for every Lake from lake.saveInterval, as FUNCD_LAKE_SAVE_INTERVAL (ADR-0274); one second without it.
+# platform sets it from lake.saveInterval, as FUNCD_LAKE_SAVE_INTERVAL (ADR-0274); one second for an engine started by
+# hand with neither it nor FUNCD_LAKE_SAVE_PORT, which runs the save endpoint instead (ADR-0279).
 COMMIT_POLL_SECONDS = 1.0
 SAVE_INTERVAL_KEY = "FUNCD_LAKE_SAVE_INTERVAL"
 # The port of the save endpoint the Lake PEP proxy calls before it answers, set when lake.saveInterval is not
@@ -304,8 +305,9 @@ class _Checkpointer:
     whole-object Put is atomic — a torn Put leaves the prior checkpoint intact. Ordering is data-before-metadata:
     DuckLake makes the Parquet durable on S3 BEFORE a commit lands, so a checkpoint never names a missing object.
     The catalog is metadata-sized (file-lists + snapshots, not row data), within the gateway's upload cap.
-    Coalesced: _CommitWatcher calls checkpoint once per poll interval in which a transaction committed, and the
-    SIGTERM handler calls stop once; the lock serializes them.
+    Coalesced: _CommitWatcher calls checkpoint once per poll interval in which a transaction committed, or, with the
+    save endpoint, each call that no save covers calls save_covering (ADR-0279); the SIGTERM handler calls stop once;
+    the lock serializes them.
     """
 
     def __init__(self, cur: "duckdb.DuckDBPyConnection", s3, bucket: str, key: str, report: str | None = None,
@@ -581,7 +583,8 @@ def _stop(drain, watcher: _CommitWatcher, watch, checkpointer: _Checkpointer, se
     """The graceful stop (#1198, ADR-0273). The watcher keeps saving while the running queries drain; its cursor holds
     the catalog open, which the stop waits out, so it stops and closes before the stop detaches the catalog. One more
     save then covers the commits of its last interval: a kill later in the stop loses only what completes after this
-    save. The stop's own error is logged, as the engine then exits 0 whatever happened (ADR-0276)."""
+    save. With the save endpoint (ADR-0279) the watcher is the start-up save, and the save calls answer the stop's
+    upload. The stop's own error is logged, as the engine then exits 0 whatever happened (ADR-0276)."""
     try:
         _drain(drain, STOP_WAIT_SECONDS)
         drain.close()

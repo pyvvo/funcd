@@ -31,7 +31,8 @@ ENGINE_DIR = "/var/funcd/ducklake"
 
 class _Gateway:
     """The S3 gateway as the shim's boto3 client sees it: whole objects in files under root, every upload also kept
-    under root/uploads, each PutObject delayed by put_delay seconds like a slow gateway."""
+    under root/uploads, each PutObject delayed by put_delay seconds like a slow gateway, and refused while the file
+    root/refuse exists."""
 
     def __init__(self, root: str, put_delay: float) -> None:
         self.root = root
@@ -39,6 +40,8 @@ class _Gateway:
 
     def put_object(self, Bucket: str, Key: str, Body: bytes) -> None:  # noqa: N803 — boto3's keyword names.
         time.sleep(self.put_delay)
+        if os.path.exists(os.path.join(self.root, "refuse")):
+            raise RuntimeError("An error occurred (AccessDenied) when calling the PutObject operation: Access Denied.")
         path = os.path.join(self.root, Bucket, Key)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path + ".part", "wb") as fh:
@@ -597,6 +600,67 @@ class TestScenarioReadWaitsForNothingSaved(unittest.TestCase):
         before = len(lake.uploads())
         self.assertEqual(lake.client.query(via, "SELECT count(*) FROM lakehouse.t"), [(1,)])
         self.assertEqual(len(lake.uploads()), before, "a read with nothing unsaved uploaded a catalog")
+
+
+class TestTheSaveEndpointOnARealEngine(unittest.TestCase):
+    """ADR-0279 Decision 2 on a real engine: commits that wait for saves when the engine stops are kept once acknowledged;
+    while S3 refuses, every commit's answer fails, and once it accepts again the next call's save keeps them."""
+
+    def test_stop_answers_waiting_saves(self) -> None:
+        lake = _Lake(self)
+        save_port = _free_port()
+        engine = lake.start(put_delay=0.5, env={"FUNCD_LAKE_SAVE_PORT": str(save_port)})
+        via = _Via(_BarrierProxy(self, int(engine.uri.rsplit(":", 1)[1]), save_port).uri)
+        writers = 4
+        for w in range(writers):
+            lake.client.query(via, f"CREATE TABLE lakehouse.s{w} (i BIGINT)")
+        acked: list[tuple] = []
+
+        def write(w: int) -> None:
+            cur = lake.client.con.cursor()
+            for i in range(10):
+                try:
+                    lake.client.query(via, f"INSERT INTO lakehouse.s{w} VALUES ({i})", cur)
+                    acked.append((w, i))
+                except Exception:  # noqa: BLE001 — refused while the engine stops: not acknowledged.
+                    return
+
+        threads = [threading.Thread(target=write, args=(w,)) for w in range(writers)]
+        for t in threads:
+            t.start()
+        time.sleep(1.0)
+        code = engine.stop()
+        for t in threads:
+            t.join(60)
+        self.assertEqual(code, 0, engine.tail())
+        union = " UNION ALL ".join(f"SELECT {w}, i FROM lakehouse.s{w}" for w in range(writers))
+        rows = {tuple(r) for r in lake.client.query(lake.start(), union)}
+        self.assertEqual(sorted(set(acked) - rows), [], "a commit acknowledged around the stop was lost")
+
+    def test_calls_behind_a_refused_save_fail_and_the_next_save_keeps_them(self) -> None:
+        lake = _Lake(self)
+        _, _, via = _barrier(self, lake)
+        lake.client.query(via, "CREATE TABLE lakehouse.r (i BIGINT)")
+        refuse = os.path.join(lake.s3, "refuse")
+        open(refuse, "w").close()
+        errors: list = []
+
+        def commit(i: int) -> None:
+            try:
+                lake.client.query(via, f"INSERT INTO lakehouse.r VALUES ({i})", lake.client.con.cursor())
+            except Exception as exc:  # noqa: BLE001 — the answer of a refused save.
+                errors.append(exc)
+
+        threads = [threading.Thread(target=commit, args=(i,)) for i in range(3)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(60)
+        self.assertEqual(len(errors), 3, "a commit was acknowledged while S3 refused its save")
+        os.remove(refuse)
+        self.assertEqual(lake.client.query(via, "SELECT count(*) FROM lakehouse.r"), [(3,)])
+        self.assertEqual(_rows(lake.stored(), lake.data, "SELECT count(*) FROM stored.r"), [(3,)],
+                         "the read's save did not keep the commits whose answers failed")
 
 
 class TestScenarioSaveIntervalFromConfig(unittest.TestCase):

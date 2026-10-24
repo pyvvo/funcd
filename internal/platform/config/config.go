@@ -318,7 +318,8 @@ type Config struct {
 	// bridge address (runtime.containerd.bridgeAddress, ADR-0238).
 	Lake struct {
 		// SaveInterval is how often a Lake engine saves its catalog after a commit, the Lake's recovery point
-		// (ADR-0274): an ADR-0194 duration from 500ms to 1h, 1s when empty; funcdctl backup plan lake derives it.
+		// (ADR-0274): an ADR-0194 duration from 500ms to 1h, an opt-in; empty, every answer waits for a save that
+		// covers it (ADR-0279). funcdctl backup plan lake derives it.
 		SaveInterval string `json:"saveInterval,omitempty" env:"FUNCD_LAKE_SAVE_INTERVAL"`
 		// EnginePollInterval and EngineProbeTimeout pace the wait for an engine's readiness probe (ADR-0163).
 		EnginePollInterval string `json:"enginePollInterval,omitempty" env:"FUNCD_LAKE_ENGINE_POLL_INTERVAL"`

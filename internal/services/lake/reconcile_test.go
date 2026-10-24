@@ -15,6 +15,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/auth/rbac"
@@ -257,37 +258,59 @@ func TestScenarioSaveIntervalFromConfig(t *testing.T) {
 }
 
 // scenario: interval-is-the-opt-in (ADR-0279) — with lake.saveInterval set, an engine gets its interval and no save
-// port, and the proxy no save URL, so answers go out at once; without it, the engine gets the save port and the proxy
-// the engine's save endpoint.
+// port, and Reconcile hands the proxy no save URL, so answers go out at once; without it, the engine gets the save port
+// and the proxy the engine's save endpoint; an engine with a local catalog (funcdctl dev) gets neither.
 func TestScenarioIntervalIsTheOptIn(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {
+		name                string
 		interval            time.Duration
+		local               bool
 		wantPort, wantSaves string
-	}{{3 * time.Second, "", ""}, {0, "8081", "http://10.88.0.5:8081/save"}} {
-		st := store.New(storemem.New())
-		seedLakeBucket(t, st)
-		prov := &fakeProvider{}
-		r := newReconciler(t, st, prov, func(d *lakesvc.ReconcilerDeps) {
-			d.Secrets = fakeSecrets{env: map[string]string{"QUACK_TOKEN": "change-me"}}
-			d.SaveInterval = tc.interval
+	}{
+		{"interval", 3 * time.Second, false, "", ""},
+		{"save before answering", 0, false, "8081", "http://10.88.0.5:8081/save"},
+		{"local catalog", 0, true, "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := store.New(storemem.New())
+			seedLakeBucket(t, st)
+			mgr := lakegw.NewManager("", lakegw.NewLakeKeys(nil, st), nil, nil)
+			t.Cleanup(mgr.Shutdown)
+			prov := &fakeProvider{status: provider.ProviderStatus{Running: 1, Ready: true, Address: "10.88.0.5:8080"}}
+			r := newReconciler(t, st, prov, func(d *lakesvc.ReconcilerDeps) {
+				d.Secrets = fakeSecrets{env: map[string]string{"QUACK_TOKEN": "change-me"}}
+				d.SaveInterval = tc.interval
+				d.LocalCatalog = tc.local
+				d.Proxy = mgr
+			})
+			cs := mkLake("lake", v1.FunctionBlob{Alias: "gold", Bucket: "lakehouse", Prefix: "gold"})
+			cs.Spec.Bindings.Secret = []v1.ObjectName{"lake-quack-token"}
+			_, err := st.Create(ctx, cs)
+			require.NoError(t, err)
+
+			reconcileOnce(t, r, "lake")
+
+			env := prov.lastSpec(t).Env
+			require.Equal(t, tc.wantPort, env["FUNCD_LAKE_SAVE_PORT"])
+			saves, ok := mgr.SaveURL("default", "lake")
+			require.True(t, ok, "the Lake has a proxy")
+			require.Equal(t, tc.wantSaves, saves, "the save URL Reconcile handed the proxy")
+			if tc.interval > 0 {
+				require.NotEmpty(t, env["FUNCD_LAKE_SAVE_INTERVAL"])
+			} else {
+				require.NotContains(t, env, "FUNCD_LAKE_SAVE_INTERVAL")
+			}
 		})
-		cs := mkLake("lake", v1.FunctionBlob{Alias: "gold", Bucket: "lakehouse", Prefix: "gold"})
-		cs.Spec.Bindings.Secret = []v1.ObjectName{"lake-quack-token"}
-		_, err := st.Create(ctx, cs)
-		require.NoError(t, err)
-
-		reconcileOnce(t, r, "lake")
-
-		env := prov.lastSpec(t).Env
-		require.Equal(t, tc.wantPort, env["FUNCD_LAKE_SAVE_PORT"], tc.interval)
-		require.Equal(t, tc.wantSaves, lakesvc.SaveURL(r, "10.88.0.5:8080"), tc.interval)
-		if tc.interval > 0 {
-			require.NotEmpty(t, env["FUNCD_LAKE_SAVE_INTERVAL"])
-		} else {
-			require.NotContains(t, env, "FUNCD_LAKE_SAVE_INTERVAL")
-		}
 	}
+}
+
+// ADR-0279 review: an engine address the reconciler cannot read fails the pass rather than leave an engine with no
+// watcher answering without a barrier.
+func TestSaveURLFailsClosed(t *testing.T) {
+	r := newReconciler(t, store.New(storemem.New()), &fakeProvider{}, nil)
+	_, err := lakesvc.SaveURL(r, "no-port")
+	require.Equal(t, fault.Internal, fault.KindOf(err))
 }
 
 // TestEngineEnvOwnKeysWinOverBoundData: a bound ConfigMap or Secret cannot replace the engine's own S3 endpoint,

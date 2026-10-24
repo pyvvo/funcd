@@ -233,6 +233,18 @@ func (m *Manager) ProxyURL(ns v1.NamespaceName, name v1.ObjectName) (string, boo
 	return m.publishURL(mp.listener.Addr()), true
 }
 
+// SaveURL is the save endpoint the lake's proxy calls before it answers (ADR-0279), "" for none; false when the
+// lake has no proxy.
+func (m *Manager) SaveURL(ns v1.NamespaceName, name v1.ObjectName) (string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	mp, ok := m.servers[managerKey(ns, name)]
+	if !ok {
+		return "", false
+	}
+	return mp.saveURL, true
+}
+
 // Remove stops and forgets the proxy for a lake (ADR-0137 teardown path). Idempotent: removing an
 // unknown lake is a no-op.
 func (m *Manager) Remove(ns v1.NamespaceName, name v1.ObjectName) {

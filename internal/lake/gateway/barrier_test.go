@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -21,25 +22,35 @@ import (
 // saveStub is an engine's save endpoint: each call answers the instance engines[call] (the last one past the end),
 // 200 unless refuse is set; calls from the hold-th on wait for release.
 type saveStub struct {
-	mu      sync.Mutex
-	engines []string
-	refuse  bool
-	hold    int32
-	calls   atomic.Int32
-	called  chan struct{}
-	release chan struct{}
+	mu       sync.Mutex
+	engines  []string
+	refuse   bool
+	hold     int32
+	calls    atomic.Int32
+	canceled atomic.Bool
+	called   chan struct{}
+	release  chan struct{}
+	freed    sync.Once
 }
 
 func newSaveStub(engines ...string) *saveStub {
 	return &saveStub{engines: engines, called: make(chan struct{}, 16), release: make(chan struct{})}
 }
 
+// free lets every held save call answer; barrierFront runs it before the servers close, so no call outlives a test.
+func (s *saveStub) free() { s.freed.Do(func() { close(s.release) }) }
+
 func (s *saveStub) handler() http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
 		n := s.calls.Add(1)
 		s.called <- struct{}{}
 		if s.hold > 0 && n >= s.hold {
-			<-s.release
+			select {
+			case <-s.release:
+			case <-r.Context().Done():
+				s.canceled.Store(true)
+				return
+			}
 		}
 		s.mu.Lock()
 		engine := s.engines[min(int(n)-1, len(s.engines)-1)]
@@ -69,6 +80,7 @@ func barrierFront(t *testing.T, body string, save *saveStub) string {
 		EngineToken: engineToken, SaveURL: saves.URL + "/save"}
 	front := httptest.NewServer(NewLakeProxy(nil, nil, target, nil))
 	t.Cleanup(front.Close)
+	t.Cleanup(save.free)
 	return front.URL
 }
 
@@ -91,10 +103,10 @@ func query(url string) answer {
 }
 
 // ADR-0279 Decision 3: no answer completes before the save call that follows it answers; an answer with no body
-// waits with its headers.
+// waits with its headers. The answer is larger than the proxy's write buffer, so bytes sent early would arrive.
 func TestBarrierHoldsTheLastBytes(t *testing.T) {
 	t.Parallel()
-	for name, body := range map[string]string{"an answer": "012345678", "an empty answer": ""} {
+	for name, body := range map[string]string{"an answer": strings.Repeat("0123456789", 20<<10), "an empty answer": ""} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			save := newSaveStub("A")
@@ -116,7 +128,7 @@ func TestBarrierHoldsTheLastBytes(t *testing.T) {
 				t.Fatalf("the answer completed before its save call answered: %+v", a)
 			case <-time.After(100 * time.Millisecond):
 			}
-			close(save.release)
+			save.free()
 			a := <-done
 			require.NoError(t, a.err)
 			require.Equal(t, http.StatusOK, a.status)
@@ -139,10 +151,12 @@ func TestScenarioRefusedSaveIsAnError(t *testing.T) {
 			save.refuse = true
 			save.mu.Unlock()
 			a := query(url)
-			if a.err == nil {
+			if body == "" || a.err == nil {
+				require.NoError(t, a.err, "an empty answer's headers wait, so its 503 goes out whole")
 				require.Equal(t, http.StatusServiceUnavailable, a.status, "%+v", a)
 				require.Contains(t, a.body, "lake catalog not saved")
 			}
+			require.Equal(t, int32(3), save.calls.Load(), "the refused save call was not retried")
 		})
 	}
 }
@@ -169,4 +183,35 @@ func TestBarrierFirstRequestFailsWhenTheInstanceIsUnknown(t *testing.T) {
 	require.NoError(t, a.err)
 	require.Equal(t, http.StatusServiceUnavailable, a.status)
 	require.Contains(t, a.body, "lake catalog not saved")
+}
+
+// ADR-0279 Decision 3: the save call ends with the client's request.
+func TestBarrierSaveCallEndsWithTheRequest(t *testing.T) {
+	t.Parallel()
+	save := newSaveStub("A")
+	save.hold = 2
+	url := barrierFront(t, "rows", save)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader("query"))
+		if err == nil {
+			var resp *http.Response
+			if resp, err = http.DefaultClient.Do(req); err == nil {
+				_, err = io.ReadAll(resp.Body)
+				_ = resp.Body.Close()
+			}
+		}
+		done <- err
+	}()
+	for range 2 {
+		select {
+		case <-save.called:
+		case <-time.After(10 * time.Second):
+			t.Fatal("no save call")
+		}
+	}
+	cancel()
+	require.Error(t, <-done)
+	require.Eventually(t, save.canceled.Load, 10*time.Second, 10*time.Millisecond, "the save call outlived the client's request")
 }
