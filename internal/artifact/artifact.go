@@ -638,8 +638,8 @@ func (m *OrasMaterializer) Platforms(ctx context.Context, uri, digest string) ([
 		if ps, err = Platforms(ctx, uri, digest); err != nil {
 			return nil, err
 		}
-		if data, err = json.Marshal(ps); err == nil && os.MkdirAll(m.artifactDir, 0o755) == nil {
-			_ = os.WriteFile(file, data, 0o600) // best-effort: a miss asks the source again
+		if data, err = json.Marshal(ps); err == nil && m.disk.MkdirAll(m.artifactDir, 0o755) == nil {
+			_ = m.disk.WriteFile(m.artifactDir, filepath.Base(file), data, 0o600) // best-effort: a miss asks the source again
 		}
 	}
 	m.mu.Lock()

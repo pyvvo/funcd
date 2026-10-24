@@ -86,6 +86,26 @@ func TestIssue1244_CacheFillReachesTheDiskBeforeItsMarker(t *testing.T) {
 	require.Equal(t, diskStep{durable.SyncDir, cache}, (*steps)[len(*steps)-1], "the marker's dir sync is the fill's last step")
 }
 
+// Issue #1244: <digest>.platforms.json lets a restarted daemon start a cached artifact without its source (ADR-0145),
+// so a power loss must not leave it empty: it is synced, renamed into place, and its dir synced.
+func TestIssue1244_PlatformsCacheIsWrittenDurably(t *testing.T) {
+	t.Parallel()
+	_, ref, digest := multiArch(t)
+	cache := t.TempDir()
+	m := artifact.NewOrasMaterializer(cache, "")
+	steps := traceDisk(m)
+	_, err := m.Platforms(context.Background(), ref, digest)
+	require.NoError(t, err)
+
+	file := filepath.Join(cache, strings.ReplaceAll(digest, ":", "-")+".platforms.json")
+	require.FileExists(t, file)
+	require.Len(t, *steps, 3, "%v", *steps)
+	require.Equal(t, durable.SyncFile, (*steps)[0].op)
+	require.True(t, strings.HasPrefix((*steps)[0].path, file+".tmp-"), (*steps)[0].path)
+	require.Equal(t, diskStep{durable.Rename, file}, (*steps)[1])
+	require.Equal(t, diskStep{durable.SyncDir, cache}, (*steps)[2])
+}
+
 // layerBlob returns the file that holds the layer of media type mt of the artifact ref@digest in its local layout,
 // made writable so a test can corrupt or remove it.
 func layerBlob(t *testing.T, ref, digest, mt string) string {
