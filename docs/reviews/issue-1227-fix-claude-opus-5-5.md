@@ -1,21 +1,28 @@
-## Verdict: pass — 0 blockers, 0 majors, 0 minors  (pyvvo/funcd issue #1227 fix, model: claude-opus-5-5)
+## Verdict: pass — 0 blockers, 0 majors, 1 minor  (pyvvo/funcd issue #1227 fix, model: claude-opus-5-5)
 
 Branch `fix/1227-stop-network-after-exit`, commit 8b687361 `fix(runtime): a containerd stop keeps the worker's network
 until its task exits`, on `origin/main` cd9ee0c9 (`git diff origin/main...HEAD`:
 `internal/runtime/containerd/containerd_linux.go`, `internal/runtime/containerd/cniid_linux_test.go`,
-`e2e/duckdb.venom.yml`, `e2e/fixtures/lake-redeploy.yaml`, `scripts/lanes.yaml`). Issue: "On containerd, Stop
-removes a worker's network before SIGTERM, so a Lake engine's stop saves nothing".
+`e2e/duckdb.venom.yml`, `e2e/fixtures/lake-redeploy.yaml`, `scripts/lanes.yaml`). Issue: "A Lake stop on containerd saves nothing: its network is removed before SIGTERM".
+
+### Minor
+- **The issue's delete case keeps a second cause** · attribution: model · evidence: the debug lane run deleted Lake
+  `c` in namespace `a-b`, where no Function `c` exists, and both saves of its engine's stop got 403. The S3 gateway
+  reads the store on each request (`lakeOwnsPrefix`), and the reconciler stops the engine only after the Lake is gone,
+  so a delete still loses the commits since the last save, although the network now stays up. The fix is right for
+  the cause the issue names, which every listed stop shared; the second cause needs a decision and is now
+  [#1231](https://github.com/pyvvo/funcd/issues/1231) (needs-adr), filed before the merge, so `Fixes #1227` stands.
 
 ### Routed (not this work's)
 - **A Function named like a Lake's prefix owner takes the prefix's write, and the Lake keeps acknowledging commits
-  it cannot save** · destination: the stop-path search report (a decision; ADR-0175 accepted the risk until a typed
+  it cannot save** · destination: #1231, with the delete case (a decision; ADR-0175 accepted the risk until a typed
   owner lands) · evidence: the first lane run of the new case, placed after `same-name-function-and-lake-stay-ready`,
   failed with "Table with name issue1227_a does not exist". A debug build that copied the engine's output into the
-  journal showed both of the stop's catalog PUTs answered 403 from the moment Function `lake` existed:
+  journal showed both of the stop's catalog PUTs answered 403 while Function `lake` existed:
   `lakeOwnsPrefix` (`internal/auth/cedar/capabilities.go:349`) makes a Lake the writer only while no Function holds
   the owner name. The Lake stayed Ready, and the three tables were inlined in the catalog, so nothing else was written.
   The case now runs before Function `lake` is created and says why.
-- **A failed final save leaves no trace** · destination: the same report · evidence: `_on_term`
+- **A failed final save leaves no trace** · destination: the stop-path search report · evidence: `_on_term`
   (`images/runtime/duckdb/shim.py`) ends in `finally: raise SystemExit(0)`, so the stop's upload error is dropped
   and the engine exits 0; an engine's output is kept only as the worker's tail (ADR-0168), which goes with the worker
   at `Remove`.
@@ -49,8 +56,9 @@ removes a worker's network before SIGTERM, so a Lake engine's stop saves nothing
 - **Siblings.** `Close` stops every worker through the same `stop()`, so the daemon's stop of the engines gets the
   fix. The boot sweep's `discard` kills first and releases the attachment after. A failed `Create` releases a network
   no task ever used.
-- **Every case of the issue.** A redeploy, a spec change, a delete and the key renewal all stop the engine through
-  `provider.retire` → `Runtime.Stop`, one cause and one fix.
+- **Every case of the issue, for its cause.** A redeploy, a spec change, a delete and the key renewal all stop the
+  engine through `provider.retire` → `Runtime.Stop`, so all four keep the network now; the delete's second cause is
+  the Minor above.
 - **ADRs.** The change restores ADR-0011's stop order and the environment ADR-0271 and ADR-0273 assume; no ADR file
   was edited.
 - **Conventions.** A why-comment naming #1227 and #706, block-style YAML, the lane's mutations in the VM, `retry` as
@@ -60,10 +68,12 @@ removes a worker's network before SIGTERM, so a Lake engine's stop saves nothing
   non-root user (no `-race`: the Linux build is cross-compiled without cgo). `scripts/agent/gate.sh` at 8b687361: PASS (audit, ci-full in 687 s, the Linux build, vet and lint, the Linux tests, stress, a clean tree).
 
 ### Definition of Done
-12 / 12 items hold (item 13 does not apply: the fix restores the environment `docs/design/lake/stop.fizz` assumes and changes no modeled behavior).
+11 / 12 items hold. Item 12 holds only for the issue's own cause: the delete case's second cause is #1231 (Minor
+above). Item 13 does not apply: the fix restores the environment `docs/design/lake/stop.fizz` assumes and changes no
+modeled behavior.
 
 ### Model scorecard
-Recorded: claude-opus-5-5 on #1227 (fix) → pass, 0/0/0, 0 model-attributed, DoD 12/12.
+Recorded: claude-opus-5-5 on #1227 (fix) → pass, 0/0/1, 1 model-attributed, DoD 11/12.
 
 ### Recommendation
-Ready for the PR. The three routed findings go to the stop-path search report for the decider.
+Ready for the PR. #1231 takes the delete case's second cause and the same-name case; the other two routed findings go to the stop-path search report for the decider.

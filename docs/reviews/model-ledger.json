@@ -12637,11 +12637,11 @@
     "verdict": "pass",
     "blockers": 0,
     "majors": 0,
-    "minors": 0,
-    "model_attributed": 0,
-    "dod_passed": 12,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 11,
     "dod_total": 12,
     "report": "docs/reviews/issue-1227-fix-claude-opus-5-5.md",
-    "notes": "pass; regression test fails on main and two mutants fail; duckdb lane 20/20; three findings routed to the stop-path search report (ADR-0175 same-name write, silent failed save, daemon stop order)"
+    "notes": "pass; regression test fails on main and two mutants fail; duckdb lane 20/20; Minor (model): the issue's delete case has a second cause, routed to #1231 (needs-adr); two findings routed to the stop-path search report (silent failed save, daemon stop order)"
   }
 ]
