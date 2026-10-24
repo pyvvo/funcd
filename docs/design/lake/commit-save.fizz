@@ -1,17 +1,18 @@
 ---
 # A Lake that saves before it answers (ADR-0279). A commit lands in the engine's local catalog and the engine answers;
-# the Lake PEP proxy holds the answer's last bytes until the shim's save endpoint reports a save that covers the
-# commit. Saves run one at a time: a save reads the catalog's latest snapshot id, copies the catalog, then uploads the
-# copy whole, and S3 may refuse the upload once. The engine may crash once; it restarts from the uploaded catalog, and
-# the answers it held fail.
+# the Lake PEP proxy holds the answer's last bytes and makes one call to the save endpoint of the engine instance it
+# knows, which reports a save that covers the catalog's latest snapshot. Saves run one at a time: a save reads the
+# latest snapshot id, copies the catalog, then uploads the copy whole, and S3 may refuse the upload once. The engine may
+# crash once; it restarts as a new instance from the uploaded catalog, whose snapshot ids it then hands out again, and
+# the answers the old instance gave fail.
 # Environment: an upload that returns is durable (ADR-0278); a copy holds every commit made before it (COPY FROM
-# DATABASE is one transaction, ADR-0271); every answer passes the proxy (ADR-0137, lateral drop). Left out: the
-# interval save, the mode with lake.saveInterval (ADR-0274), and the stop (ADR-0273), which this design leaves as
-# they are.
+# DATABASE is one transaction, ADR-0271); an engine's answer ends only after its commit is visible to the save; every
+# answer passes the proxy (ADR-0137, lateral drop). Each commit carries a number of its own, so that a snapshot id handed
+# out again is told apart. Left out: the interval save, the mode with lake.saveInterval (ADR-0274), and the stop (ADR-0273).
 deadlock_detection: false
 options:
+  # Every action is atomic, so three concurrent actions cover two answers and a save racing.
   max_concurrent_actions: 3
-  # The whole state space: 16 and 20 actions reach the same states; below 15 a run is cut before its save ends.
   max_actions: 15
   crash_on_yield: false
 ---
@@ -20,27 +21,31 @@ options:
 # mutant id-after-copy: AckedCommitsAreSaved
 # mutant no-save-lock: AckedCommitsAreSaved
 # mutant refused-marks-saved: AckedCommitsAreSaved
+# mutant release-across-restart: AckedCommitsAreSaved
 # mutant no-save-call: liveness
 
 SAVERS = [0, 1]
+CRASHES = 1
 # answer-first: the engine's answer goes out at once (the interval mode). id-after-copy: a save reads the snapshot id
 # after its copy. no-save-lock: two saves may run at once. refused-marks-saved: a refused upload still counts as a
-# save. no-save-call: the proxy holds the answer but asks for no save.
+# save. release-across-restart: the proxy accepts a save report from another engine instance. no-save-call: the proxy
+# holds the answer but asks for no save.
 MUTANT = ""
 
 action Init:
-    catalog = 0
-    blob = 0
+    catalog = []
+    blob = []
     saved = 0
+    commits = 0
     locked = False
     up = True
-    epoch = 0
+    engine = 0
     crashes = 0
     refusals = 0
     acked = []
     save_phase = ["idle", "idle"]
     save_id = [0, 0]
-    save_copy = [0, 0]
+    save_copy = [[], []]
     writers = []
     for i in range(2):
         writers.append(Writer(id=i))
@@ -49,29 +54,34 @@ role Writer:
     action Init:
         self.phase = "idle"
         self.c = 0
-        self.epoch = 0
+        self.s = 0
+        self.engine = 0
 
     # A commit through Quack: the engine adds a snapshot to its local catalog and answers.
     atomic action Commit:
         require self.phase == "idle" and up
-        catalog = catalog + 1
-        self.c = catalog
-        self.epoch = epoch
+        commits = commits + 1
+        catalog.append(commits)
+        self.s = commits
+        self.c = len(catalog)
+        self.engine = engine
         if MUTANT == "answer-first":
-            acked.append(self.c)
+            acked.append(self.s)
             self.phase = "answered"
         else:
             self.phase = "held"
 
-    # The proxy sends the answer's last bytes once a save covers the commit.
+    # The proxy sends the answer's last bytes once the instance that answered reports a save that covers the commit.
     atomic fair action Release:
-        require self.phase == "held" and self.epoch == epoch and saved >= self.c
-        acked.append(self.c)
+        require self.phase == "held" and up and saved >= self.c
+        if MUTANT != "release-across-restart":
+            require self.engine == engine
+        acked.append(self.s)
         self.phase = "answered"
 
-    # A crash breaks the held answer's connection: the client gets an error.
+    # The instance that answered is gone: the save call fails, and so does the answer.
     atomic fair action Broken:
-        require self.phase == "held" and self.epoch != epoch
+        require self.phase == "held" and self.engine != engine
         self.phase = "failed"
 
     # A refused save's 503, or the client giving up: an error, never an acknowledgement.
@@ -79,23 +89,23 @@ role Writer:
         require self.phase == "held"
         self.phase = "failed"
 
-# A save endpoint call for a held answer that no save covers: it takes the save lock and reads the latest snapshot id.
+# A save call for a held answer that no save covers: it takes the save lock and reads the latest snapshot id.
 atomic fair action SaveStart:
     require MUTANT != "no-save-call"
     i = oneof SAVERS
     require up and save_phase[i] == "idle"
-    require any([w.phase == "held" and w.epoch == epoch and w.c > saved for w in writers])
+    require any([w.phase == "held" and w.engine == engine and w.c > saved for w in writers])
     if MUTANT != "no-save-lock":
         require not locked
     locked = True
     if MUTANT != "id-after-copy":
-        save_id[i] = catalog
+        save_id[i] = len(catalog)
     save_phase[i] = "copying"
 
 atomic fair action SaveCopy:
     i = oneof SAVERS
     require up and save_phase[i] == "copying"
-    save_copy[i] = catalog
+    save_copy[i] = list(catalog)
     save_phase[i] = "uploading"
 
 # The whole-object upload: S3 stores it durably, or refuses it.
@@ -103,13 +113,13 @@ atomic fair action SaveUpload:
     i = oneof SAVERS
     require up and save_phase[i] == "uploading"
     if MUTANT == "id-after-copy":
-        save_id[i] = catalog
+        save_id[i] = len(catalog)
     ok = True
     if refusals == 0:
         r = oneof [True, False]
         ok = r
     if ok:
-        blob = save_copy[i]
+        blob = list(save_copy[i])
         saved = save_id[i]
     else:
         refusals = 1
@@ -118,24 +128,25 @@ atomic fair action SaveUpload:
     locked = False
     save_phase[i] = "idle"
 
+# The engine dies; the instance that answered is gone.
 atomic action Crash:
-    require up and crashes == 0
-    crashes = 1
+    require up and crashes < CRASHES
+    crashes = crashes + 1
     up = False
-    epoch = epoch + 1
+    engine = engine + 1
 
-# The engine restarts from the catalog it uploaded last.
+# A new instance starts from the catalog uploaded last; its saved id starts at that catalog's latest snapshot.
 atomic fair action Restart:
     require not up
-    catalog = blob
-    saved = blob
+    catalog = list(blob)
+    saved = len(blob)
     locked = False
     save_phase = ["idle", "idle"]
     up = True
 
 # Every commit a client saw acknowledged is in the uploaded catalog, so a crash keeps it.
 always assertion AckedCommitsAreSaved:
-    return all([c <= blob for c in acked])
+    return all([s in blob for s in acked])
 
 # No answer stays held: a save covers it, or it fails.
 always eventually assertion NoAnswerStaysHeld:
