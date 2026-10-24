@@ -29,6 +29,25 @@ func TestProcessDriverContract(t *testing.T) {
 	})
 }
 
+// The process driver reports the grace it stops with, which Run's Shutdown bound counts (ADR-0277): the one Open is
+// given, and DefaultStopGrace from New or a zero grace.
+func TestStopGraceReported(t *testing.T) {
+	t.Parallel()
+	grace := func(rt runtime.Runtime) time.Duration {
+		t.Helper()
+		g, ok := rt.(runtime.StopGracer)
+		require.True(t, ok, "the process driver is a runtime.StopGracer")
+		return g.StopGrace()
+	}
+	require.Equal(t, process.DefaultStopGrace, grace(process.New(nil)))
+	for want, given := range map[time.Duration]time.Duration{1500 * time.Millisecond: 1500 * time.Millisecond, process.DefaultStopGrace: 0} {
+		rt, err := process.Open(context.Background(), filepath.Join(t.TempDir(), "state"), given, nil)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = rt.Close() })
+		require.Equal(t, want, grace(rt), "Open with a grace of %s", given)
+	}
+}
+
 // Create keeps rejecting an ID whose instance is live (Created or Running); only an exited one is replaced
 // (ADR-0142).
 func TestCreateRejectsLiveInstance(t *testing.T) {
