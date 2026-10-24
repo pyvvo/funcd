@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/pyvvo/funcd/internal/platform/durable"
 )
 
 // conflistName is the funcd CNI conflist file the driver self-provisions (ADR-0056). It
@@ -66,12 +68,13 @@ func renderConflist(subnetCIDR string) []byte {
 }
 
 // ensureConflist writes funcd's conflist into confDir as 10-funcd.conflist ONLY if absent — it
-// never clobbers an operator's existing conflist (left byte-for-byte untouched). Idempotent.
-func ensureConflist(confDir, subnetCIDR string) error {
+// never clobbers an operator's existing conflist (left byte-for-byte untouched). Idempotent. As every start keeps the
+// file it finds, the write is durable: a power loss leaves no conflist or a whole one (#1257).
+func ensureConflist(d durable.Disk, confDir, subnetCIDR string) error {
 	if confDir == "" {
 		return fmt.Errorf("ensureConflist: empty CNI conf dir")
 	}
-	if err := os.MkdirAll(confDir, 0o755); err != nil { //nolint:gosec // CNI conf dir is read by the CNI plugins
+	if err := d.MkdirAll(confDir, 0o755); err != nil {
 		return fmt.Errorf("create cni conf dir %q: %w", confDir, err)
 	}
 	path := filepath.Join(confDir, conflistName)
@@ -80,7 +83,7 @@ func ensureConflist(confDir, subnetCIDR string) error {
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("stat %q: %w", path, err)
 	}
-	if err := os.WriteFile(path, renderConflist(subnetCIDR), 0o644); err != nil { //nolint:gosec // a CNI conflist is non-secret config
+	if err := d.WriteFile(confDir, conflistName, renderConflist(subnetCIDR), 0o644); err != nil {
 		return fmt.Errorf("write conflist %q: %w", path, err)
 	}
 	return nil

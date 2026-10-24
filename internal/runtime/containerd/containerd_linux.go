@@ -41,6 +41,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/network"
+	"github.com/pyvvo/funcd/internal/platform/durable"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/embedimg"
 	"github.com/pyvvo/funcd/internal/runtime/workerpipe"
@@ -276,7 +277,7 @@ func New(cfg Config) (runtime.Runtime, error) {
 	}
 	// Self-provision the CNI (ADR-0056): write the funcd conflist if absent, enable ip_forward —
 	// BEFORE cni.Load reads the conflist.
-	if err := ensureConflist(cfg.CNIConfDir, cfg.SubnetCIDR); err != nil {
+	if err := ensureConflist(durable.Disk{}, cfg.CNIConfDir, cfg.SubnetCIDR); err != nil {
 		_ = client.Close()
 		return nil, fault.Wrapf(err, fault.Internal, op, "write funcd cni conflist")
 	}

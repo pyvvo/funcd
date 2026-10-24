@@ -4,7 +4,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
+
+	"github.com/pyvvo/funcd/internal/platform/durable"
 )
 
 // scenario: funcd-writes-conflist-and-ipforward (renderer facet) — renderConflist emits valid
@@ -53,7 +57,7 @@ func TestEnsureConflistWritesIfAbsentLeavesExistingUntouched(t *testing.T) {
 	path := filepath.Join(dir, conflistName)
 
 	// Absent → written.
-	if err := ensureConflist(dir, "10.63.0.0/16"); err != nil {
+	if err := ensureConflist(durable.Disk{}, dir, "10.63.0.0/16"); err != nil {
 		t.Fatalf("ensureConflist (absent): %v", err)
 	}
 	written, err := os.ReadFile(path)
@@ -69,7 +73,7 @@ func TestEnsureConflistWritesIfAbsentLeavesExistingUntouched(t *testing.T) {
 	if err := os.WriteFile(path, []byte(operator), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureConflist(dir, "192.168.0.0/16"); err != nil {
+	if err := ensureConflist(durable.Disk{}, dir, "192.168.0.0/16"); err != nil {
 		t.Fatalf("ensureConflist (present): %v", err)
 	}
 	after, err := os.ReadFile(path)
@@ -78,6 +82,45 @@ func TestEnsureConflistWritesIfAbsentLeavesExistingUntouched(t *testing.T) {
 	}
 	if string(after) != operator {
 		t.Errorf("existing conflist was clobbered:\ngot:  %s\nwant: %s", after, operator)
+	}
+}
+
+// Issue #1257: every start keeps the conflist it finds and loads it, so a power loss must leave no conflist or a whole
+// one. The conf dir ensureConflist makes reaches the disk, then the conflist is synced and renamed into place and the
+// conf dir is synced, before New loads it.
+func TestIssue1257_ConflistReachesTheDiskBeforeItIsLoaded(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "cni")
+	path := filepath.Join(dir, conflistName)
+	type step struct {
+		op   durable.Op
+		path string
+	}
+	var steps []step
+	d := durable.Disk{Trace: func(op durable.Op, p string) {
+		if strings.HasPrefix(filepath.Base(p), conflistName+".tmp-") {
+			p = filepath.Join(dir, "<temp>")
+		}
+		steps = append(steps, step{op, p})
+	}}
+	if err := ensureConflist(d, dir, "10.63.0.0/16"); err != nil {
+		t.Fatalf("ensureConflist: %v", err)
+	}
+	want := []step{
+		{durable.SyncDir, root},
+		{durable.SyncFile, filepath.Join(dir, "<temp>")},
+		{durable.Rename, path},
+		{durable.SyncDir, dir},
+	}
+	if !slices.Equal(steps, want) {
+		t.Fatalf("durable steps:\ngot  %v\nwant %v", steps, want)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(renderConflist("10.63.0.0/16")) {
+		t.Errorf("conflist = %q, want the rendered one", got)
 	}
 }
 
