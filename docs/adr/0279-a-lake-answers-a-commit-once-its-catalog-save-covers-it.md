@@ -1,6 +1,6 @@
 # ADR-0279: A Lake answers a commit once its catalog save covers it
 
-- **Status**: Proposed (2026-10-24); judged once (round 1: five Majors, six Minors folded)
+- **Status**: Accepted (2026-10-24, under the decider's delegation of that day); judged twice, every finding folded
 - **Date**: 2026-10-24
 - **Deciders**: green-0-rabbit
 - **Tags**: lake, duckdb, durability, disaster-recovery
@@ -68,8 +68,8 @@ store's own durability (ADR-0278); an interval Lake while saves fail, unchanged;
 | D. The catalog in a database server | no whole-file copy per commit | DuckLake's server catalogs are PostgreSQL and MySQL; funcd runs neither, PostgreSQL is ruled out, and rqlite is not one | rejected |
 | E. The proxy buffers each whole answer, then saves (experiment 0010's prototype) | simplest | Quack sends batches of up to 32 MiB per message: daemon memory grows with a result | rejected for the held last bytes |
 | F. Reads pass while saves fail | reads keep working | the proxy cannot tell reads from commits, and a read could show a commit a crash takes back | rejected |
-| A mode key of its own beside `lake.saveInterval` | names the mode | one more key, while the interval key and `plan lake --rpo` already say "accept a loss" | rejected |
-| The save endpoint as a socket in the engine's boot dir | no port | the boot dir is worker-writable, so the daemon would connect where a worker points it | rejected |
+| G. A mode key of its own beside `lake.saveInterval` | names the mode | one more key, while the interval key and `plan lake --rpo` already say "accept a loss" | rejected |
+| H. The save endpoint as a socket in the engine's boot dir | no port | the boot dir is worker-writable, so the daemon would connect where a worker points it | rejected |
 
 ## Decision
 
@@ -90,13 +90,13 @@ store's own durability (ADR-0278); an interval Lake while saves fail, unchanged;
      and updates the engine's report (ADR-0276). The S3 client's own timeouts bound a save (`_s3_client`, botocore's);
    - at a stop, the stop records the id of its last upload: the waiting calls it covers answer 200 before
      `quack_stop`, the others 503.
-3. **The barrier.** For a Lake whose engine serves `/save`, the PEP proxy learns the engine's instance id with a
-   `/save` call before it forwards its first request. It forwards each engine answer but its last bytes; once the
-   answer's body ends, it makes one `/save` call to that engine, never retried, and sends the last bytes only when the
-   call answers 200 with the instance it knew when it forwarded the request. An answer with no body waits with its
-   headers. Any other outcome fails the answer, with 503 "lake catalog not saved" before its headers went out and a
-   broken connection after; another instance id also teaches the proxy the new one. The wait ends with the client's
-   request.
+3. **The barrier.** For a Lake whose engine serves `/save`, the PEP proxy learns the engine's instance id with a `/save`
+   call before it forwards its first request, which gets 503 when that call fails. It forwards each engine answer but
+   its last bytes; once the answer's body ends, it makes one `/save` call to that engine, never retried, and sends the
+   last bytes only when the call answers 200 with the instance it knew when it forwarded the request. An answer with no
+   body waits with its headers. Any other outcome fails the answer, with 503 "lake catalog not saved" before its headers
+   went out and a broken connection after; another instance id also teaches the proxy the new one. The wait ends with
+   the client's request.
 4. **A failed save.** A commit answered with an error is in the engine's local catalog: the next good save keeps it,
    unless the engine dies first. Its outcome is unknown to the client, who retries an idempotent write or reads back.
    While saves fail, every answer that follows an unsaved commit is an error, reads included.
@@ -201,7 +201,8 @@ func (m *Manager) Ensure(lake auth.EntityRef, upstream, engineToken, saveURL str
 - **(−)** A busy Lake rewrites its whole catalog on the blob store's disk up to once per save, back to back: ADR-0274's
   500 ms floor no longer bounds those uploads.
 - **(−)** While saves fail, the Lake answers errors to every request that follows an unsaved commit, and its phase
-  stays Ready (ADR-0276).
+  stays Ready (ADR-0276). A hung upload holds every answer until the S3 client's timeouts (botocore's: 60 s to connect
+  and to read, with retries) or the client's own deadline end it.
 - **(−)** `lake.saveInterval` now chooses the mode too: `funcdctl backup plan lake --rpo` writes it, so it opts into
   interval saves.
 

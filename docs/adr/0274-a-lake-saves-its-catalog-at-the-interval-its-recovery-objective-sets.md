@@ -4,6 +4,7 @@
   Reviewing 2026-10-24; Accepted 2026-10-24 by the decider, before its merge: a platform key like the KV and blob intervals,
   which replaced the first draft's per-Lake ConfigMap key; judged twice on the first draft and once on this design,
   whose Major (engines adopted across a restart keep the old value) did not hold: the boot sweep removes them
+- **Superseded in part by**: [ADR-0279](0279-a-lake-answers-a-commit-once-its-catalog-save-covers-it.md) (2026-10-24) — Decision 1's "without it the interval is 1 s" and its empty-key contract: without `lake.saveInterval` a Lake saves before it answers; Decisions 3 and 5 hold only with the key set.
 - **Date**: 2026-10-24
 - **Deciders**: green-0-rabbit
 - **Tags**: lake, duckdb, backup, recovery-objectives, configuration
