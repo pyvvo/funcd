@@ -944,6 +944,109 @@ class TestASaveCallAfterTheDetach(unittest.TestCase):
         self.assertIn("Catalog Error", body["error"])
 
 
+class _GatedBucket(_Bucket):
+    """The S3 client: each upload waits for release, then is stored, or refused when refuse is set."""
+
+    def __init__(self, refuse: bool) -> None:
+        super().__init__()
+        self.refuse = refuse
+        self.release = threading.Event()
+
+    def put_object(self, Bucket: str, Key: str, Body: bytes) -> None:  # noqa: N803 — boto3's keyword names.
+        self.release.wait(WAIT)
+        if self.refuse:
+            raise OSError("An error occurred (AccessDenied) when calling the PutObject operation: Access Denied.")
+        super().put_object(Bucket=Bucket, Key=Key, Body=Body)
+
+
+class _DetachingEngine(_StopEngine):
+    """A stop's engine whose catalog query fails once the stop detached it, and whose closed catalog holds snapshot
+    `closed`; it is also the connection the save endpoint takes its cursors from. asked: a save call queried the
+    detached catalog."""
+
+    def __init__(self, closed: int) -> None:
+        super().__init__()
+        self.closed = closed
+        self.detached = threading.Event()
+        self.asked = threading.Event()
+        self._last = ""
+
+    def cursor(self) -> "_DetachingEngine":
+        return self
+
+    def close(self) -> None:
+        pass
+
+    def execute(self, sql: str, params: object = None) -> "_DetachingEngine":
+        if sql == shim.LATEST_SNAPSHOT and self.detached.is_set():
+            self.asked.set()
+            raise RuntimeError("Catalog Error: schema __ducklake_metadata_lakehouse does not exist")
+        self._last = sql
+        super().execute(sql, params)
+        if sql == "DETACH lakehouse":
+            self.detached.set()
+        return self
+
+    def fetchone(self) -> tuple:
+        return (self.closed,) if self._last == shim.CLOSED_SNAPSHOT else (5,)
+
+
+class TestTheStopAnswersACallAfterItsDetach(unittest.TestCase):
+    """ADR-0279 Decision 2: a save call that arrives after the stop detached the catalog waits for the stop's upload of
+    the closed catalog and answers its snapshot, or the upload's failure."""
+
+    def stop_with_a_call(self, refuse: bool) -> tuple:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        engine, bucket = _DetachingEngine(9), _GatedBucket(refuse)
+        errors: list = []
+        answers: list = []
+        with mock.patch.object(shim, "LOCAL_CHECKPOINT", os.path.join(tmp.name, "checkpoint.ducklake")), \
+                mock.patch.object(shim.sys, "stderr", io.StringIO()):
+            checkpointer = shim._Checkpointer(engine, bucket, "lake", "gold/_ducklake/catalog.db", saved=shim._Saved(5))
+            server = shim._serve_saves(0, checkpointer, engine)
+            self.addCleanup(server.shutdown)
+            url = f"http://127.0.0.1:{server.server_address[1]}/save"
+
+            def stop() -> None:
+                try:
+                    checkpointer.stop(["quack://0.0.0.0:8080"], "token")
+                except OSError as exc:
+                    errors.append(exc)
+
+            def call() -> None:
+                request = urllib.request.Request(url, method="POST", data=b"")
+                try:
+                    with urllib.request.urlopen(request, timeout=WAIT) as resp:
+                        answers.append((resp.status, json.load(resp)))
+                except urllib.error.HTTPError as err:
+                    answers.append((err.code, json.load(err)))
+
+            stopping = threading.Thread(target=stop)
+            stopping.start()
+            self.assertTrue(engine.detached.wait(WAIT))
+            calling = threading.Thread(target=call)
+            calling.start()
+            self.assertTrue(engine.asked.wait(WAIT), "the call did not reach the endpoint during the stop")
+            bucket.release.set()
+            stopping.join(WAIT)
+            calling.join(WAIT)
+        return checkpointer, answers, errors
+
+    def test_the_upload_answers_the_call(self) -> None:
+        checkpointer, answers, errors = self.stop_with_a_call(refuse=False)
+        self.assertEqual(errors, [])
+        self.assertEqual(answers, [(200, {"engine": checkpointer.saved.instance, "saved": 9})])
+
+    def test_a_refused_upload_fails_the_call(self) -> None:
+        _, answers, errors = self.stop_with_a_call(refuse=True)
+        self.assertEqual(len(errors), 1, "the stop's failed upload")
+        self.assertEqual(len(answers), 1)
+        code, body = answers[0]
+        self.assertEqual(code, 503)
+        self.assertIn("AccessDenied", body["error"])
+
+
 class TestTheStartUpSaveWithoutAWatcher(unittest.TestCase):
     """ADR-0279 Decision 2 with ADR-0276 Decision 2: a recovered catalog is saved once at start and retried until a
     save succeeds; a fresh one is not saved."""
