@@ -79,6 +79,9 @@ SAVE_PORT_KEY = "FUNCD_LAKE_SAVE_PORT"
 START_UP_RETRY_SECONDS = 1.0
 # How long a stop lets the save calls it covered send their answers before Quack stops (ADR-0279 Decision 2).
 SAVE_ANSWER_WAIT_SECONDS = 1.0
+# How long a stop lets the clients of the queries it cancelled read their interrupt error before Quack stops: a client
+# reads it on its next poll, tens of milliseconds after the cancel (ADR-0273).
+CANCEL_ANSWER_WAIT_SECONDS = 1.0
 # ADR-0194's duration grammar (api/types/v1alpha1/duration.go): whole numbers with the units h, m, s and ms, largest
 # unit first, as funcdctl backup plan writes them.
 DURATION = re.compile(r"^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$")
@@ -394,8 +397,9 @@ class _Checkpointer:
             if self.saved is not None:
                 self.saved.stopping = True
             self._cur.execute("DETACH lakehouse")
+            cancelled: list[str] = []
             if not _closed(self._cur):
-                _cancel(self._cur, serving, token)
+                cancelled = _cancel(self._cur, serving, token)
                 while not _closed(self._cur):
                     time.sleep(0.05)
             covers: list = []
@@ -421,6 +425,7 @@ class _Checkpointer:
         # The save calls this upload covers answer before Quack stops; the others failed or fail (ADR-0279).
         if self.saved is not None:
             self.saved.drain(SAVE_ANSWER_WAIT_SECONDS)
+        _await_cancelled(self._cur, cancelled, CANCEL_ANSWER_WAIT_SECONDS)
         for uri in serving:
             self._cur.execute("CALL quack_stop(?)", [uri]).fetchall()
 
@@ -462,15 +467,17 @@ def _closed(cur: "duckdb.DuckDBPyConnection") -> bool:
         return False
 
 
-def _cancel(cur: "duckdb.DuckDBPyConnection", serving: list[str], token: str) -> None:
-    """Cancels each query Quack still runs (#1217). quack_cancel needs a Quack client attachment, which the engine's own
-    DuckDB cannot make once confined (external access off), so a separate instance of this process makes it; no client
-    reaches that instance. A failed cancel leaves the stop waiting, to the runtime's kill."""
+def _cancel(cur: "duckdb.DuckDBPyConnection", serving: list[str], token: str) -> list[str]:
+    """Cancels each query Quack still runs (#1217) and returns the connections it cancelled. quack_cancel needs a Quack
+    client attachment, which the engine's own DuckDB cannot make once confined (external access off), so a separate
+    instance of this process makes it; no client reaches that instance. A failed cancel leaves the stop waiting, to the
+    runtime's kill."""
     active = [row[0] for row in cur.execute(
         "SELECT connection_id FROM quack_active_connections() WHERE state = 'active'").fetchall()]
     if not active:
-        return
+        return []
     sys.stderr.write(f"funcd duckdb shim: cancelling {len(active)} queries that outlived the stop\n")
+    cancelled: list[str] = []
     control = _connect()
     try:
         for i, uri in enumerate(serving):
@@ -480,10 +487,24 @@ def _cancel(cur: "duckdb.DuckDBPyConnection", serving: list[str], token: str) ->
                             f"(TYPE quack, TOKEN '{quoted}', DISABLE_SSL true)")
             for connection in active:
                 control.execute(f"SELECT * FROM quack_cancel('funcd_engine{i}', ?)", [connection]).fetchall()
+                cancelled.append(connection)
     except Exception as exc:  # noqa: BLE001 — the stop still waits for the file to close.
         sys.stderr.write(f"funcd duckdb shim: the cancel failed: {exc}\n")
     finally:
         control.close()
+    return cancelled
+
+
+def _await_cancelled(cur: "duckdb.DuckDBPyConnection", cancelled: list[str], seconds: float) -> None:
+    """Waits up to seconds until Quack lists none of the cancelled connections. Quack lists a cancelled query until its
+    client has read the interrupt error; a client that polls once Quack stopped gets a connection error instead
+    (ADR-0273)."""
+    deadline = time.monotonic() + seconds
+    while cancelled and time.monotonic() < deadline:
+        listed = {row[0] for row in cur.execute("SELECT connection_id FROM quack_active_connections()").fetchall()}
+        if listed.isdisjoint(cancelled):
+            return
+        time.sleep(0.01)
 
 
 class _CommitWatcher(threading.Thread):

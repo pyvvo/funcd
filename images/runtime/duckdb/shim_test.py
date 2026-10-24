@@ -350,19 +350,34 @@ class TestIssue1198TheEngineLoadsNoSQLiteExtension(unittest.TestCase):
 class _StopEngine:
     """The engine's checkpoint cursor at a stop: it records each statement, writes a COPY's source name as the copy
     file's content, lists the active Quack connections, and refuses to attach the detached catalog file while busy is
-    above 0, as DuckDB does while a transaction still uses it; a stuck engine stays busy until a query is cancelled."""
+    above 0, as DuckDB does while a transaction still uses it; a stuck engine stays busy until a query is cancelled.
+    Once cancelled, the connections stay listed for unread more reads, as Quack lists a cancelled query until its client
+    has read the interrupt error; unread_at_stop is what was left of unread when Quack stopped."""
 
-    def __init__(self, busy: int = 0, fail: str = "", active: tuple = (), stuck: bool = False) -> None:
+    def __init__(self, busy: int = 0, fail: str = "", active: tuple = (), stuck: bool = False, unread: int = 0) -> None:
         self.log: list = []
         self.busy = busy
         self.fail = fail
         self.active = list(active)
         self.stuck = stuck
+        self.unread = unread
+        self.cancelled = False
+        self.unread_at_stop: int | None = None
         self.rows: list = []
+
+    def _listed(self) -> bool:
+        if not self.cancelled:
+            return True
+        if self.unread > 0:
+            self.unread -= 1
+            return True
+        return False
 
     def execute(self, sql: str, params: object = None) -> "_StopEngine":
         self.log.append(sql)
-        self.rows = [(c,) for c in self.active] if "quack_active_connections()" in sql else []
+        self.rows = [(c,) for c in self.active] if "quack_active_connections()" in sql and self._listed() else []
+        if sql == "CALL quack_stop(?)":
+            self.unread_at_stop = self.unread
         if sql.startswith("ATTACH") and "funcd_closed" in sql:
             if self.fail:
                 raise RuntimeError(self.fail)
@@ -393,6 +408,7 @@ class _Control(_Recording):
             raise RuntimeError(self.fail)
         if "quack_cancel" in sql:
             self.engine.stuck = False
+            self.engine.cancelled = True
         return self
 
     def fetchall(self) -> list:
@@ -453,6 +469,23 @@ class TestIssue1217AStopUploadsTheClosedCatalog(unittest.TestCase):
         self.assertTrue(control.closed)
         self.assertIn("cancelling 1 queries that outlived the stop", err)
         self.assertNotIn("DETACH lakehouse", engine.log[1:])
+
+    def test_quack_stops_once_the_clients_of_the_cancelled_queries_read_their_error(self) -> None:
+        engine = _StopEngine(active=("c1",), stuck=True, unread=3)
+        bucket, _ = self.stop(engine, control=_Control(engine))
+        self.assertEqual(bucket.bodies, [b"funcd_closed"])
+        self.assertEqual(engine.unread_at_stop, 0, "Quack stopped before the cancelled query's client read its error")
+        listing = "SELECT connection_id FROM quack_active_connections()"
+        self.assertEqual(engine.log[-5:], [listing] * 4 + ["CALL quack_stop(?)"])
+
+    def test_a_client_that_never_reads_its_error_does_not_hold_the_stop(self) -> None:
+        engine = _StopEngine(active=("c1",), stuck=True, unread=10**9)
+        started = time.monotonic()
+        with mock.patch.object(shim, "CANCEL_ANSWER_WAIT_SECONDS", 0.05):
+            bucket, _ = self.stop(engine, control=_Control(engine))
+        self.assertLess(time.monotonic() - started, 1.0)
+        self.assertEqual(bucket.bodies, [b"funcd_closed"])
+        self.assertEqual(engine.log[-1], "CALL quack_stop(?)")
 
     def test_a_failed_cancel_keeps_waiting_for_the_file_to_close(self) -> None:
         engine = _StopEngine(busy=3, active=("c1",))
