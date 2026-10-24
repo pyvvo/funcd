@@ -118,6 +118,7 @@ flowchart TB
 | Limits | tokens and requests per fixed window; a spent cap refuses the next call with a 429; a running call stops at the cap plus its tolerance | F196 |
 | Usage | one row per call in the gateway's database; the cost when the vendor reports it | F196 |
 | Logs | prompts and answers never enter logs, telemetry or audit | F195, F196 |
+| Monitoring | each call's metrics and spans, and the engine's spans and logs, go through funcd's own OpenTelemetry pipeline; no Bifrost plugin | F195, F196 |
 | State | resources in the metastore, keys in Secrets, usage in the gateway's SQL database; an engine keeps no state | F194, F196 |
 
 ## Exit criterion
@@ -165,5 +166,4 @@ its function, `funcdctl dev` runs one of its functions against the real engine, 
 | Question | Decided in |
 |---|---|
 | How agents' skills are stored and loaded | later, with the decider |
-| The AI gateway's monitoring: what the engine reports to funcd's telemetry; Bifrost offers a tracer interface and plugins | later, with the decider |
 | The licenses of the modules Bifrost brings; Bifrost's own module is Apache-2.0 | the F193 ADR |

@@ -180,6 +180,7 @@ All rows were decided with the decider on 2026-10-24 and 2026-10-25.
 | Size | `ai.maxRequestBytes` in `funcdconfig.yaml`, 32 MiB by default, which fits one 20 MB image sent inline |
 | Errors | funcd writes its own refusals in OpenAI's error shape with funcd's statuses (`api/fault/problem.go`); vendor errors pass through unchanged, as the local API does for `ctx.invoke` and `ctx.fetch` (`UpstreamError`) |
 | Logs | prompts and answers never enter logs, telemetry or audit; the engine drops the raw request that Bifrost attaches to some errors |
+| Monitoring | funcd's own OpenTelemetry pipeline ([ADR-0010](../adr/0010-observability-telemetry-and-audit.md)), with no Bifrost plugin: the daemon emits a span and the metrics `funcd.ai.requests`, `funcd.ai.duration_ms`, `funcd.ai.tokens`, `funcd.ai.time_to_first_token_ms`, `funcd.ai.cost` and `funcd.ai.refused`, labeled by namespace, gateway, model, function and outcome; the engine fills Bifrost core's `Tracer` and `Logger` and hands their spans and logs to the daemon, which exports them; Bifrost's content attributes are dropped |
 | Readiness | Ready when the engine runs and the keys resolve; no vendor call |
 | Delete | refused while a Function binds the gateway, as for SQL |
 | Apps | an App declares gateways under `spec.aiGateways`, next to its stores; a gateway's `sql` entry references the App's database, and a gateway entry has no deletion policy |
@@ -410,7 +411,6 @@ time      function  gateway    model  tokens_in  tokens_out  duration_ms  outcom
 | Question | Decided in |
 |---|---|
 | How agents' skills are stored and loaded | later, with the decider |
-| The AI gateway's monitoring: what the engine reports to funcd's telemetry; Bifrost offers a `Tracer` interface and plugins (`otel`, `telemetry`, `logging`, `maxim`) that depend on its `framework` module | later, with the decider |
 | The licenses of the modules Bifrost brings; Bifrost's own module is Apache-2.0 | the engine ADR |
 
 ## Sources
