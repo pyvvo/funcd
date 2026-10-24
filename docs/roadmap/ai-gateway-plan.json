@@ -2,50 +2,62 @@
   "version": "ai-gateway",
   "accepted": [
     "ADR-0010",
+    "ADR-0054",
     "ADR-0057",
     "ADR-0065",
     "ADR-0069",
     "ADR-0074",
     "ADR-0082",
+    "ADR-0087",
     "ADR-0116",
+    "ADR-0117",
     "ADR-0125",
     "ADR-0141",
-    "ADR-0164",
+    "ADR-0175",
     "ADR-0199",
     "ADR-0213",
+    "ADR-0226",
     "ADR-0232",
+    "ADR-0236",
     "ADR-0246",
     "ADR-0248",
-    "ADR-0249"
+    "ADR-0254",
+    "ADR-0269"
   ],
   "items": [
     {
       "id": "P-A",
-      "title": "Model engine port, its two engines and the Go bump",
+      "title": "AI engine on Bifrost's Go library",
       "features": [
-        "F188"
+        "F193"
       ],
       "depends_on": []
     },
     {
       "id": "P-B",
-      "title": "ModelEndpoint resource",
+      "title": "AIGateway resource and its engine",
       "features": [
-        "F189"
+        "F194"
       ],
       "depends_on": [
         "P-A",
+        "ADR-0054",
         "ADR-0057",
         "ADR-0065",
         "ADR-0082",
-        "ADR-0249"
+        "ADR-0087",
+        "ADR-0117",
+        "ADR-0175",
+        "ADR-0232",
+        "ADR-0248",
+        "ADR-0269"
       ]
     },
     {
       "id": "P-C",
-      "title": "Model access from functions",
+      "title": "OpenAI's API from functions",
       "features": [
-        "F190"
+        "F195"
       ],
       "depends_on": [
         "P-B",
@@ -53,48 +65,50 @@
         "ADR-0074",
         "ADR-0116",
         "ADR-0141",
+        "ADR-0226",
         "ADR-0246"
       ]
     },
     {
       "id": "P-D",
-      "title": "Model limits and usage",
+      "title": "AI limits and usage",
       "features": [
-        "F191"
+        "F196"
       ],
       "depends_on": [
         "P-B",
         "P-C",
         "ADR-0010",
-        "ADR-0164",
         "ADR-0232"
       ]
     },
     {
       "id": "P-E",
-      "title": "Model endpoints in Apps",
+      "title": "AI gateways in Apps",
       "features": [
-        "F192"
+        "F197"
       ],
       "depends_on": [
         "P-B",
         "P-C",
         "ADR-0199",
         "ADR-0213",
+        "ADR-0236",
         "ADR-0248"
       ]
     },
     {
       "id": "P-F",
-      "title": "Models in funcdctl dev",
+      "title": "AI gateways in funcdctl dev",
       "features": [
-        "F193"
+        "F198"
       ],
       "depends_on": [
         "P-A",
         "P-B",
         "P-C",
-        "ADR-0125"
+        "ADR-0125",
+        "ADR-0254"
       ]
     }
   ],
