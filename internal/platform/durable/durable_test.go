@@ -86,3 +86,26 @@ func TestMkdirAllSyncsTheParentOfEachDirectoryItMakes(t *testing.T) {
 	require.NoError(t, d.MkdirAll(filepath.Join(root, "a"), 0o750))
 	require.Empty(t, *steps, "an existing directory needs no sync")
 }
+
+// SyncFile reports the open file's name once it is synced; Link makes a second name and refuses a taken one.
+func TestSyncFileAndLink(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	d, steps := traced()
+	f, err := os.Create(filepath.Join(dir, "a.tmp")) //nolint:gosec // the test's own temp dir
+	require.NoError(t, err)
+	_, err = f.WriteString("data")
+	require.NoError(t, err)
+	require.NoError(t, d.SyncFile(f))
+	require.NoError(t, f.Close())
+	require.NoError(t, d.Link(filepath.Join(dir, "a.tmp"), filepath.Join(dir, "a")))
+	require.ErrorIs(t, d.Link(filepath.Join(dir, "a.tmp"), filepath.Join(dir, "a")), os.ErrExist)
+
+	require.Equal(t, []step{
+		{durable.SyncFile, filepath.Join(dir, "a.tmp")},
+		{durable.Link, filepath.Join(dir, "a")},
+	}, *steps)
+	got, err := os.ReadFile(filepath.Join(dir, "a")) //nolint:gosec // the test's own temp dir
+	require.NoError(t, err)
+	require.Equal(t, "data", string(got))
+}

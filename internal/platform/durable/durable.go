@@ -17,6 +17,7 @@ const (
 	SyncFile Op = "sync-file" // a file's data
 	SyncDir  Op = "sync-dir"  // a directory's entries
 	Rename   Op = "rename"    // an entry moved into place; the path is its new one
+	Link     Op = "link"      // an entry made by link(2); the path is its new one
 )
 
 // Disk does durable writes. Its zero value acts on the file system; Trace, when set, gets each step once it is done,
@@ -85,6 +86,25 @@ func (d Disk) sync(op Op, path string) error {
 		return err
 	}
 	d.done(op, path)
+	return nil
+}
+
+// SyncFile syncs the open file f's data.
+func (d Disk) SyncFile(f *os.File) error {
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	d.done(SyncFile, f.Name())
+	return nil
+}
+
+// Link makes newpath a second name of oldpath, failing when newpath exists; the caller syncs newpath's directory
+// before it relies on the link.
+func (d Disk) Link(oldpath, newpath string) error {
+	if err := os.Link(oldpath, newpath); err != nil {
+		return err
+	}
+	d.done(Link, newpath)
 	return nil
 }
 

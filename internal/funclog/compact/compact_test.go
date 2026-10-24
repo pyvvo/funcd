@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 
+	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/funclog/compact"
@@ -474,5 +475,80 @@ func TestIssue84_UndecodableRawObjectDoesNotBlockCompaction(t *testing.T) {
 	}
 	if !bytes.Contains(logs.Bytes(), []byte(badKey)) {
 		t.Fatalf("the skipped key must be named in the log, got:\n%s", logs.String())
+	}
+}
+
+// refusing is a bucket whose driver refuses some objects, as a file bucket refuses one that lost its bytes (ADR-0278).
+type refusing struct {
+	blob.Bucket
+	keys map[string]bool
+}
+
+func (r refusing) Get(ctx context.Context, key string) ([]byte, error) {
+	if r.keys[key] {
+		return nil, fault.Wrapf(blob.ErrCorrupt, fault.Internal, "test.Get", "%q is refused", key)
+	}
+	return r.Bucket.Get(ctx, key)
+}
+
+// scenario: corrupt-object-refused (ADR-0278 Decision 3) — a window whose raw or compacted object is refused stays as
+// it is and names the key in a WARN; the windows after it still compact, retention still prunes, and an old refused
+// compacted object is deleted by its key, unread.
+func TestScenarioCorruptObjectRefused(t *testing.T) {
+	ctx := context.Background()
+	mem := memBucket(t)
+	sealNano := baseTime().UnixNano()
+	for _, fn := range []string{"aaa", "kkk", "mmm", "zzz"} {
+		seedRaw(t, mem, "default", fn, "0", sealNano, []logRec{{ts: sealNano, sev: "INFO", sevNum: 9, body: fn, source: "console"}})
+	}
+	windowStart := (sealNano / int64(testWindow)) * int64(testWindow)
+	wdate := time.Unix(0, windowStart).UTC().Format("2006-01-02")
+	date := time.Unix(0, sealNano).UTC().Format("2006-01-02")
+	refusedCompacted := fmt.Sprintf("logs/default/kkk/%s/%d.parquet", wdate, windowStart)
+	refusedRaw := fmt.Sprintf("logs/default/mmm/%s/%d-0.otlp.jsonl", date, sealNano)
+	oldStart := baseTime().Add(-48 * time.Hour).UnixNano()
+	oldDate := time.Unix(0, oldStart).UTC().Format("2006-01-02")
+	oldCompacted := fmt.Sprintf("logs/default/aaa/%s/%d.parquet", oldDate, oldStart)
+	oldRefused := fmt.Sprintf("logs/default/kkk/%s/%d.parquet", oldDate, oldStart)
+	for _, key := range []string{refusedCompacted, oldCompacted, oldRefused} {
+		if err := mem.Put(ctx, key, []byte("compacted"), blob.PutOptions{}); err != nil {
+			t.Fatalf("seed compacted: %v", err)
+		}
+	}
+	b := refusing{Bucket: mem, keys: map[string]bool{refusedCompacted: true, refusedRaw: true, oldRefused: true}}
+
+	var logs bytes.Buffer
+	c, err := compact.New(compact.Deps{
+		Bucket: b, Clock: clock.Fake(baseTime().Add(testWindow + time.Minute)), Window: testWindow,
+		Retention: 24 * time.Hour, Logger: slog.New(slog.NewTextHandler(&logs, nil)),
+	})
+	if err != nil {
+		t.Fatalf("compact.New: %v", err)
+	}
+	st, err := c.CompactOnce(ctx)
+	if err != nil {
+		t.Fatalf("pass 1: %v", err)
+	}
+	if st.Windows != 2 || st.RawDeleted != 2 || st.CompactedPruned != 2 {
+		t.Fatalf("pass 1 stats = %+v, want Windows=2 RawDeleted=2 CompactedPruned=2", st)
+	}
+	if st, err = c.CompactOnce(ctx); err != nil || st.Windows != 0 {
+		t.Fatalf("pass 2 = %+v, %v; want no work and no error", st, err)
+	}
+	want := []string{
+		fmt.Sprintf("logs/default/aaa/%s/%d.parquet", wdate, windowStart),
+		refusedCompacted,
+		fmt.Sprintf("logs/default/zzz/%s/%d.parquet", wdate, windowStart),
+	}
+	if got := listSuffix(t, mem, ".parquet"); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("compacted = %v, want %v", got, want)
+	}
+	if raw := listSuffix(t, mem, ".otlp.jsonl"); len(raw) != 2 {
+		t.Fatalf("raw = %v, want kkk's and mmm's left in place", raw)
+	}
+	for _, key := range []string{refusedCompacted, refusedRaw} {
+		if !bytes.Contains(logs.Bytes(), []byte(key)) {
+			t.Fatalf("the skipped %q must be named in the log, got:\n%s", key, logs.String())
+		}
 	}
 }

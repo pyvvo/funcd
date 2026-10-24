@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 
+	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/funclog/compact"
@@ -262,5 +263,38 @@ func TestIssue84_UndecodableRawObjectDoesNotFailReads(t *testing.T) {
 	}
 	if got := bodies(lines); len(got) != 1 || got[0] != "run-A line" {
 		t.Fatalf("namespace-wide run read = %v, want [run-A line]", got)
+	}
+}
+
+// refusing is a bucket whose driver refuses some objects, as a file bucket refuses one that lost its bytes (ADR-0278).
+type refusing struct {
+	blob.Bucket
+	keys map[string]bool
+}
+
+func (r refusing) Get(ctx context.Context, key string) ([]byte, error) {
+	if r.keys[key] {
+		return nil, fault.Wrapf(blob.ErrCorrupt, fault.Internal, "test.Get", "%q is refused", key)
+	}
+	return r.Bucket.Get(ctx, key)
+}
+
+// ADR-0278 Decision 3: a log read leaves a refused object out, as it leaves out an undecodable one.
+func TestRefusedObjectLeftOut(t *testing.T) {
+	b := memBucket(t)
+	base := baseTime().UnixNano()
+	seedRaw(t, b, "default", "fn", "0", base, []compact.Row{row(base, "INFO", 9, "good")})
+	seedRaw(t, b, "default", "fn", "1", base+1, []compact.Row{row(base+1, "INFO", 9, "refused")})
+	items, err := b.List(context.Background(), "logs/default/fn/")
+	if err != nil || len(items) != 2 {
+		t.Fatalf("List = %v, %v; want two raw objects", items, err)
+	}
+	r := logread.NewBlobReader(refusing{Bucket: b, keys: map[string]bool{items[1].Key: true}})
+	lines, err := r.Read(context.Background(), logread.Query{Namespace: "default", Function: "fn"})
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if got := bodies(lines); len(got) != 1 || got[0] != "good" {
+		t.Fatalf("got %v, want [good]", got)
 	}
 }

@@ -212,8 +212,9 @@ func (f *freezer) refreeze(name string) error {
 	return nil
 }
 
-// freezeKey links key's data file into the image and reads its attributes, again while the attributes do not
-// decode or, with checkNow, the linked bytes do not match the recorded MD5. found is false when the key is gone.
+// freezeKey links key's data file into the image and pairs its attributes with it (ADR-0278 Decision 2), again while
+// they name another data file, a write in flight, or, with checkNow, the linked bytes do not match the recorded MD5.
+// A pair that stays torn past the re-freezes freezes unchecked, with no MD5. found is false when the key is gone.
 func (f *freezer) freezeKey(ctx context.Context, key, path string, checkNow bool) (found bool, err error) {
 	for {
 		e, err := f.linkOnce(ctx, key, path, checkNow)
@@ -221,7 +222,10 @@ func (f *freezer) freezeKey(ctx context.Context, key, path string, checkNow bool
 		case errors.Is(err, errGone):
 			delete(f.img, key)
 			return false, nil
-		case errors.Is(err, errMismatch):
+		case errors.Is(err, errOther) && f.refrozen[key] >= maxRefreezes:
+			f.img[key] = e
+			return true, nil
+		case errors.Is(err, errMismatch), errors.Is(err, errOther):
 			if err := f.refreeze(key); err != nil {
 				return false, err
 			}
@@ -237,6 +241,7 @@ func (f *freezer) freezeKey(ctx context.Context, key, path string, checkNow bool
 var (
 	errGone     = errors.New("the key is gone")
 	errMismatch = errors.New("the attributes do not match the linked bytes")
+	errOther    = errors.New("the attributes name another data file")
 )
 
 func (f *freezer) linkOnce(ctx context.Context, key, path string, checkNow bool) (*frozen, error) {
@@ -276,14 +281,17 @@ func (f *freezer) linkOnce(ctx context.Context, key, path string, checkNow bool)
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "stat the image of %q", key)
 	}
-	a, err := f.src.Attributes(ctx, key)
-	switch {
-	case fault.KindOf(err) == fault.NotFound:
+	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
 		return nil, errGone
-	case err != nil:
-		return nil, errMismatch
+	}
+	a, other, err := gocloud.FilePair(f.m.cfg.Dir, key, info)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.KindOf(err), op, "freeze %q: no generation this run", key)
 	}
 	e.size, e.mod, e.md5, e.contentType, e.meta = info.Size(), info.ModTime(), a.MD5, a.ContentType, a.Metadata
+	if other {
+		return e, errOther
+	}
 	if checkNow && len(e.md5) > 0 {
 		file, err := os.Open(e.path)
 		if err != nil {

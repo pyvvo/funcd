@@ -6,8 +6,6 @@ package gocloud
 import (
 	"cmp"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -32,6 +30,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/blob"
+	"github.com/pyvvo/funcd/internal/platform/durable"
 
 	gcaws "gocloud.dev/aws"
 	gcblob "gocloud.dev/blob"
@@ -49,7 +48,7 @@ const (
 	fileAttrsSuffix = ".attrs"
 	// fileEscapePrefix opens fileblob's "__0x<hex>__" rune escape, which it decodes on List.
 	fileEscapePrefix = "__0x"
-	// fileTempSuffix ends the temp file of a file:// create-if-absent Put; keys ending in it are reserved (ADR-0203).
+	// fileTempSuffix ends the temp files of a file:// Put; keys ending in it are reserved (ADR-0203, ADR-0278).
 	fileTempSuffix = ".funcd-tmp"
 	// conflictRetries bounds the retries of an s3:// create-if-absent Put answered 409 ConditionalRequestConflict.
 	conflictRetries = 3
@@ -108,6 +107,7 @@ func OpenWith(ctx context.Context, url string, opts OpenOptions) (blob.Bucket, e
 			_ = b.Close()
 			return nil, fault.Wrapf(err, fault.Internal, op, "resolve the directory of %q", url)
 		}
+		k.passes = newPassSet()
 	}
 	return k, nil
 }
@@ -252,8 +252,14 @@ type bucket struct {
 	file bool
 	// dir is the file:// bucket's root, which the funcd-owned file walk reads (ADR-0184 Decision 5).
 	dir string
-	// dirMode creates the directories of a file:// create-if-absent Put, as fileblob does for its own.
+	// dirMode creates the directories of a file:// Put, as fileblob does for its own.
 	dirMode os.FileMode
+	// disk does the file:// writer's durable steps; the package's tests set its Trace (ADR-0278).
+	disk durable.Disk
+	// clock sets the mtimes of the file:// writer's data files (ADR-0278 Decision 1).
+	clock fileClock
+	// passes remembers the file:// files a ranged read checked whole (ADR-0278 Decision 2).
+	passes *passSet
 	// s3 leaves MD5 nil: s3blob decodes an SSE-KMS/SSE-C ETag that is not the content's MD5 (ADR-0159).
 	s3 bool
 }
@@ -292,6 +298,9 @@ func (k *bucket) Get(ctx context.Context, key string) ([]byte, error) {
 	if err := k.checkKey("blob.Get", key); err != nil {
 		return nil, err
 	}
+	if k.file {
+		return k.fileGet("blob.Get", key)
+	}
 	data, err := k.b.ReadAll(ctx, key)
 	if err != nil {
 		return nil, mapErr("blob.Get", key, err)
@@ -299,9 +308,9 @@ func (k *bucket) Get(ctx context.Context, key string) ([]byte, error) {
 	return data, nil
 }
 
-// Put stays on WriteAll: memblob's Upload never feeds the MD5 Attributes reports (ADR-0159). gocloud
-// returns a ParseMediaType error unwrapped, so the content type is checked here first. IfNotExist is
-// gocloud's on mem:// and s3://; fileblob's is not atomic, so file:// creates its own (ADR-0203 Decision 1).
+// Put stores data at key. A file:// Put goes through funcd's writer, which syncs the object before it returns
+// (ADR-0278); mem:// and s3:// stay on WriteAll, as memblob's Upload never feeds the MD5 Attributes reports
+// (ADR-0159). gocloud returns a ParseMediaType error unwrapped, so the content type is checked here first.
 func (k *bucket) Put(ctx context.Context, key string, data []byte, opts blob.PutOptions) error {
 	const op = "blob.Put"
 	if err := k.checkKey(op, key); err != nil {
@@ -312,8 +321,8 @@ func (k *bucket) Put(ctx context.Context, key string, data []byte, opts blob.Put
 			return fault.Wrapf(err, fault.Invalid, op, "content type %q of %q", opts.ContentType, key)
 		}
 	}
-	if opts.IfNotExist && k.file {
-		return k.fileCreate(op, key, data, opts)
+	if k.file {
+		return k.fileWrite(ctx, op, key, data, opts)
 	}
 	wo := &gcblob.WriterOptions{ContentType: opts.ContentType, Metadata: opts.Metadata, IfNotExist: opts.IfNotExist}
 	for attempt := 0; ; attempt++ {
@@ -340,54 +349,13 @@ func conditionalConflict(err error) bool {
 	return errors.As(err, &ae) && ae.ErrorCode() == "ConditionalRequestConflict"
 }
 
-// fileCreate creates a file:// object only when its key is absent: a temp file beside it, fsync, then link(2) onto
-// the key, which fails with EEXIST when the key is taken. The temp file goes on every path; the walk and checkKey
-// hide a crash's.
-func (k *bucket) fileCreate(op, key string, data []byte, opts blob.PutOptions) error {
-	if opts.ContentType != "" || len(opts.Metadata) > 0 {
-		return fault.Invalidf(op, "%q: a create-if-absent put on the file backend stores no content type or metadata", key)
-	}
-	if fileWalkPrefix(key) != key {
-		return fault.Invalidf(op, "%q: the file backend stores this key under another path", key)
-	}
-	path := filepath.Join(k.dir, filepath.FromSlash(key))
-	if !strings.HasPrefix(path+string(os.PathSeparator), k.dir+string(os.PathSeparator)) {
-		return fault.Invalidf(op, "%q escapes the bucket root", key)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), k.dirMode); err != nil {
-		return mapErr(op, key, err)
-	}
-	suffix := make([]byte, 8)
-	_, _ = rand.Read(suffix)
-	tmp := path + "." + hex.EncodeToString(suffix) + fileTempSuffix
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // the path is the bucket's own, checked above
-	if err != nil {
-		return mapErr(op, key, err)
-	}
-	defer func() { _ = os.Remove(tmp) }()
-	_, err = f.Write(data)
-	if err == nil {
-		err = f.Sync()
-	}
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		return mapErr(op, key, err)
-	}
-	if err := os.Link(tmp, path); err != nil {
-		if info, serr := os.Lstat(path); errors.Is(err, fs.ErrExist) && serr == nil && !info.IsDir() {
-			return fault.Wrapf(err, fault.Conflict, op, "%q already exists", key)
-		}
-		return mapErr(op, key, err)
-	}
-	return nil
-}
-
 func (k *bucket) Attributes(ctx context.Context, key string) (blob.Attributes, error) {
 	const op = "blob.Attributes"
 	if err := k.checkKey(op, key); err != nil {
 		return blob.Attributes{}, err
+	}
+	if k.file {
+		return k.fileAttributes(op, key)
 	}
 	a, err := k.b.Attributes(ctx, key)
 	if err != nil {
@@ -574,6 +542,22 @@ func s3EscapeKey(key string) string {
 	return b.String()
 }
 
+// fileEscapeKey is fileblob's unexported escapeKey (fileblob.go:323-355) on a "/" separator: a rune below 0x20, a "/"
+// after ".." or "/", and a key's trailing "/" become "__0x<hex>__", so funcd's writer stores a key where fileblob does
+// (ADR-0278 Decision 1).
+func fileEscapeKey(key string) string {
+	r := []rune(key)
+	var b strings.Builder
+	for i, c := range r {
+		if c < ' ' || c == '/' && (i == len(r)-1 || i > 0 && r[i-1] == '/' || i > 1 && r[i-1] == '.' && r[i-2] == '.') {
+			b.WriteString("__0x" + strconv.FormatInt(int64(c), 16) + "__")
+			continue
+		}
+		b.WriteRune(c)
+	}
+	return b.String()
+}
+
 // fileUnescapeKey is fileblob's unexported unescapeKey (fileblob.go:352) on a "/" separator: it decodes each
 // "__0x<hex>__" rune escape.
 func fileUnescapeKey(name string) string {
@@ -612,8 +596,8 @@ func hexEscapeAt(s string) (rune, int, bool) {
 
 // fileEntry is an object the file walk found; only returned ones have their attributes read.
 type fileEntry struct {
-	key string
-	de  fs.DirEntry
+	key, path string
+	de        fs.DirEntry
 }
 
 // fileWalk lists file:// keys under prefix after `after` in key order; limit < 0 means no limit (List).
@@ -637,8 +621,9 @@ func (k *bucket) fileWalk(ctx context.Context, prefix, after string, limit int) 
 			continue
 		}
 		a := blob.Attributes{Key: e.key, Size: info.Size(), ModTime: info.ModTime()}
-		if attrs, err := k.b.Attributes(ctx, e.key); err == nil {
-			a.MD5 = attrs.MD5
+		raw, rerr := os.ReadFile(e.path + fileAttrsSuffix) //nolint:gosec // the bucket's own attributes
+		if paired, _, err := pairFileAttrs(e.key, info, raw, rerr); err == nil {
+			a.MD5 = paired.MD5
 		}
 		out = append(out, a)
 	}
@@ -705,7 +690,7 @@ func (w *fileWalker) walk(ctx context.Context, dir, dirKey string) error {
 				}
 				continue
 			}
-			w.found = append(w.found, fileEntry{key: c.key, de: c.de})
+			w.found = append(w.found, fileEntry{key: c.key, path: filepath.Join(dir, c.de.Name()), de: c.de})
 			continue
 		}
 		d := c.sortKey
@@ -770,10 +755,10 @@ func (k *bucket) SignedURL(ctx context.Context, key string, opts blob.SignOption
 	return u, nil
 }
 
-// GetRange implements the optional blob.RangeReader capability (ADR-0080) via
-// gocloud's NewRangeReader: it reads only bytes [offset, offset+length) of the
-// object, so DuckDB's ranged Parquet reads do not pull the whole object. A
-// negative length means "to end" (the gocloud convention, identical to the port's).
+// GetRange implements the optional blob.RangeReader capability (ADR-0080): it serves only bytes
+// [offset, offset+length) of the object, so DuckDB's ranged Parquet reads do not pull the whole object; a file://
+// object is checked whole once per daemon run first (ADR-0278). A negative length means "to end" (the gocloud
+// convention, identical to the port's).
 func (k *bucket) GetRange(ctx context.Context, key string, offset, length int64) ([]byte, error) {
 	const op = "blob.GetRange"
 	if offset < 0 {
@@ -781,6 +766,9 @@ func (k *bucket) GetRange(ctx context.Context, key string, offset, length int64)
 	}
 	if err := k.checkKey(op, key); err != nil {
 		return nil, err
+	}
+	if k.file {
+		return k.fileGetRange(op, key, offset, length)
 	}
 	r, err := k.b.NewRangeReader(ctx, key, offset, length, nil)
 	if err != nil {

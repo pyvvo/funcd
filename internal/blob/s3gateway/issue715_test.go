@@ -13,6 +13,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
+	"github.com/pyvvo/funcd/internal/testkit/blobseed"
 )
 
 // countingBucket counts the listing entries storage returns to the gateway and records each ListAfter seek.
@@ -49,18 +50,32 @@ func (c *countingBucket) counts() (entries int, afters []string) {
 	return c.entries, append([]string(nil), c.afters...)
 }
 
-func fileBucket(t *testing.T) blob.Bucket {
+// seededMem is an in-memory bucket holding objects.
+func seededMem(t *testing.T, objects map[string][]byte) blob.Bucket {
 	t.Helper()
-	b, err := gocloud.Open(context.Background(), gocloud.FileURL(t.TempDir()))
+	b := memBucket(t)
+	for key, data := range objects {
+		require.NoError(t, b.Put(context.Background(), key, data, blob.PutOptions{}))
+	}
+	return b
+}
+
+// seededFile is a file bucket holding objects, seeded through blobseed: thousands of synced Puts would pass go test's
+// limit (ADR-0278 Decision 4).
+func seededFile(t *testing.T, objects map[string][]byte) blob.Bucket {
+	t.Helper()
+	dir := t.TempDir()
+	blobseed.Objects(t, dir, objects)
+	b, err := gocloud.Open(context.Background(), gocloud.FileURL(dir))
 	require.NoError(t, err)
 	return b
 }
 
-// eachSubstrate runs fn on the mem and file drivers, in parallel: seeding thousands of file keys is slow.
-func eachSubstrate(t *testing.T, fn func(t *testing.T, open func(t *testing.T) blob.Bucket)) {
+// eachSubstrate runs fn on the mem and file drivers, in parallel; open gives a bucket holding objects.
+func eachSubstrate(t *testing.T, fn func(t *testing.T, open func(t *testing.T, objects map[string][]byte) blob.Bucket)) {
 	t.Helper()
 	t.Parallel()
-	for name, open := range map[string]func(t *testing.T) blob.Bucket{"mem": memBucket, "file": fileBucket} {
+	for name, open := range map[string]func(t *testing.T, objects map[string][]byte) blob.Bucket{"mem": seededMem, "file": seededFile} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			fn(t, open)
@@ -106,15 +121,16 @@ func TestScenarioPagedListingLinear(t *testing.T) {
 	eachSubstrate(t, testPagedListingLinear)
 }
 
-func testPagedListingLinear(t *testing.T, open func(t *testing.T) blob.Bucket) {
+func testPagedListingLinear(t *testing.T, open func(t *testing.T, objects map[string][]byte) blob.Bucket) {
 	const n = 10_000
-	g, cb := countedGateway(t, lakehouseMeta(), open)
 	want := make([]string, 0, n)
+	objects := make(map[string][]byte, n)
 	for i := range n {
 		k := fmt.Sprintf("gold/p%06d.parquet", i)
 		want = append(want, k)
-		g.seed(t, "default", "lakehouse", k, []byte("x"))
+		objects[k] = []byte("x")
 	}
+	g, cb := countedGateway(t, lakehouseMeta(), func(t *testing.T) blob.Bucket { return open(t, objects) })
 	in := awss3.ListObjectsV2Input{Bucket: ptrS("lakehouse"), Prefix: ptrS("gold/")}
 	keys, _ := listAllV2(t, g.client(t, "default", "analytics"), in, nil)
 	require.Equal(t, want, keys, "every key once, in key order")
@@ -186,12 +202,12 @@ func TestScenarioContinuationIsStateless(t *testing.T) {
 
 // scenario: rollup-skips-subtree (ADR-0184) — the seek past a common prefix skips the keys it rolls up.
 func TestScenarioRollupSkipsSubtree(t *testing.T) {
-	eachSubstrate(t, func(t *testing.T, open func(t *testing.T) blob.Bucket) {
-		g, cb := countedGateway(t, lakehouseMeta(), open)
+	eachSubstrate(t, func(t *testing.T, open func(t *testing.T, objects map[string][]byte) blob.Bucket) {
+		objects := map[string][]byte{"gold/b.parquet": []byte("x")}
 		for i := range 5000 {
-			g.seed(t, "default", "lakehouse", fmt.Sprintf("gold/a/k%04d", i), []byte("x"))
+			objects[fmt.Sprintf("gold/a/k%04d", i)] = []byte("x")
 		}
-		g.seed(t, "default", "lakehouse", "gold/b.parquet", []byte("x"))
+		g, cb := countedGateway(t, lakehouseMeta(), func(t *testing.T) blob.Bucket { return open(t, objects) })
 		out, err := g.client(t, "default", "analytics").ListObjectsV2(context.Background(), &awss3.ListObjectsV2Input{
 			Bucket: ptrS("lakehouse"), Prefix: ptrS("gold/"), Delimiter: ptrS("/"),
 		})
@@ -208,16 +224,17 @@ func TestScenarioRollupSkipsSubtree(t *testing.T) {
 // and each page after a common-prefix token T seeks storage past T+U+10FFFF.
 func TestScenarioDelimiterPagesManyPartitions(t *testing.T) {
 	const parts, perPart = 3000, 10
-	eachSubstrate(t, func(t *testing.T, open func(t *testing.T) blob.Bucket) {
-		g, cb := countedGateway(t, lakehouseMeta(), open)
+	eachSubstrate(t, func(t *testing.T, open func(t *testing.T, objects map[string][]byte) blob.Bucket) {
 		want := make([]string, 0, parts)
+		objects := make(map[string][]byte, parts*perPart)
 		for p := range parts {
 			cp := fmt.Sprintf("gold/d=%04d/", p)
 			want = append(want, cp)
 			for k := range perPart {
-				g.seed(t, "default", "lakehouse", fmt.Sprintf("%sk%02d", cp, k), []byte("x"))
+				objects[fmt.Sprintf("%sk%02d", cp, k)] = []byte("x")
 			}
 		}
+		g, cb := countedGateway(t, lakehouseMeta(), func(t *testing.T) blob.Bucket { return open(t, objects) })
 		calls := 0
 		var token string
 		onPage := func(out *awss3.ListObjectsV2Output) {

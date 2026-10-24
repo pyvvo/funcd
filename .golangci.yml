@@ -82,6 +82,16 @@ linters:
               desc: "fortio is bench-only (ADR-0051); must not reach the shipped platform"
             - pkg: "fortio.org/log"
               desc: "fortio/log is bench-only (ADR-0051); must not reach the shipped platform"
+        # ADR-0278 Decision 4: blobseed writes file:// objects without syncs; only tests may seed with it.
+        blobseed-tests-only:
+          list-mode: original
+          files:
+            - $all
+            - "!**/*_test.go"
+            - "!**/internal/testkit/blobseed/**"
+          deny:
+            - pkg: "github.com/pyvvo/funcd/internal/testkit/blobseed"
+              desc: "blobseed writes without syncs; only tests may import it (ADR-0278)"
     forbidigo:
       forbid:
         - pattern: "^\\s*panic\\("

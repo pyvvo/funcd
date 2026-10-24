@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"sort"
 	"strings"
 	"time"
@@ -174,6 +175,9 @@ func (r *BlobReader) readObjects(ctx context.Context, objs []blob.Attributes, wa
 		if fault.KindOf(gerr) == fault.NotFound {
 			vanished = true
 			continue
+		}
+		if errors.Is(gerr, blob.ErrCorrupt) {
+			continue // a refused object is left out as an undecodable one is (ADR-0278 Decision 3)
 		}
 		if gerr != nil {
 			return nil, false, fault.Wrapf(gerr, fault.KindOf(gerr), op, "get %q", o.Key)

@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"maps"
 	"slices"
@@ -225,6 +226,12 @@ func (c *Compactor) compactWindow(ctx context.Context, w *window) (rows, rawDele
 	const op = "compact.Compactor.compactWindow"
 	key := compactedKey(w.ns, w.fn, w.start)
 	kept, folded, err := c.readCompacted(ctx, key)
+	if errors.Is(err, blob.ErrCorrupt) {
+		// A refused object never heals on retry either (ADR-0278 Decision 3): the window stays as it is, the pass
+		// goes on, and retention deletes the object by its key, unread.
+		c.log.WarnContext(ctx, "funclog compaction skipped a window whose compacted object is refused", "error", err)
+		return 0, 0, nil
+	}
 	if err != nil {
 		return 0, 0, err
 	}
@@ -236,10 +243,10 @@ func (c *Compactor) compactWindow(ctx context.Context, w *window) (rows, rawDele
 		}
 	}
 	fresh, err := c.readRaw(ctx, pending)
-	if fault.KindOf(err) == fault.Invalid {
-		// An undecodable object never heals on retry, so it must not stall the pass. The whole window stays
-		// raw: compacting only its good objects would later be overwritten at the same deterministic key.
-		c.log.WarnContext(ctx, "funclog compaction skipped a window with an undecodable raw object", "error", err)
+	if fault.KindOf(err) == fault.Invalid || errors.Is(err, blob.ErrCorrupt) {
+		// An undecodable or refused object (ADR-0278) never heals on retry, so it must not stall the pass. The whole
+		// window stays raw: compacting only its good objects would later be overwritten at the same deterministic key.
+		c.log.WarnContext(ctx, "funclog compaction skipped a window with an undecodable or refused raw object", "error", err)
 		return 0, 0, nil
 	}
 	if err != nil {

@@ -8,8 +8,13 @@ package blob
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+// ErrCorrupt reports an object whose bytes do not match the MD5 its attributes record, or whose attributes do not
+// decode; a driver wraps it in fault.Internal and serves none of the object (ADR-0278).
+var ErrCorrupt = errors.New("the object does not match its attributes")
 
 // Bucket is the storage-layer port: opaque byte objects keyed by a path string.
 // Errors are api/fault kinds; every method is ctx-first.
