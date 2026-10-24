@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.28.1](https://github.com/pyvvo/funcd/compare/v0.28.0...v0.28.1) (2026-10-24)
+
+
+### Bug Fixes
+
+* **artifact:** a pulled artifact reaches the disk before its cache dir is marked pulled ([647381d](https://github.com/pyvvo/funcd/commit/647381d6e84cb1ce277fca0ce0dd8ba43c7ef54a))
+* **artifact:** the cached platforms of an artifact survive a power loss ([647381d](https://github.com/pyvvo/funcd/commit/647381d6e84cb1ce277fca0ce0dd8ba43c7ef54a))
+* **provision:** funcd install writes each runtime binary durably ([647381d](https://github.com/pyvvo/funcd/commit/647381d6e84cb1ce277fca0ce0dd8ba43c7ef54a))
+* **s3gateway:** the node master secret survives a power loss after it is written or restored ([647381d](https://github.com/pyvvo/funcd/commit/647381d6e84cb1ce277fca0ce0dd8ba43c7ef54a))
+
 ## [0.28.0](https://github.com/pyvvo/funcd/compare/v0.27.0...v0.28.0) (2026-10-24)
 
 
