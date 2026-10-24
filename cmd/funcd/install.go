@@ -7,12 +7,14 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"text/template"
 
 	"github.com/spf13/cobra"
 
+	"github.com/pyvvo/funcd/internal/platform/durable"
 	"github.com/pyvvo/funcd/internal/platform/version"
 	"github.com/pyvvo/funcd/internal/runtime/ctrmanager"
 	"github.com/pyvvo/funcd/internal/runtime/provision"
@@ -170,6 +172,12 @@ func printPlan(out io.Writer, unit string) error {
 	return nil
 }
 
+// writeUnit writes the funcd.service unit at path, world-readable as a systemd unit is by design. systemd reads it at
+// every boot and nothing rewrites it before the next install, so the write is durable (#1257).
+func writeUnit(d durable.Disk, path, unit string) error {
+	return d.WriteFile(filepath.Dir(path), filepath.Base(path), []byte(unit), 0o644)
+}
+
 // runInstall writes the funcd.service unit, lays down the runtime binaries (crun + containerd +
 // the CNI plugins, SHA-256-verified — ADR-0056), then enables + (re)starts the unit via systemd.
 // funcd then starts its own private containerd as a child (no separate unit). Idempotent: writing
@@ -180,7 +188,7 @@ func runInstall(ctx context.Context, out io.Writer, unit string) error {
 	if err := requireLinuxRoot(op, true); err != nil {
 		return err
 	}
-	if err := os.WriteFile(unitPath, []byte(unit), 0o644); err != nil { //nolint:gosec // a systemd unit is world-readable by design
+	if err := writeUnit(durable.Disk{}, unitPath, unit); err != nil {
 		return fmt.Errorf("%s: write %s: %w", op, unitPath, err)
 	}
 	if err := os.MkdirAll(dataRoot, 0o700); err != nil {

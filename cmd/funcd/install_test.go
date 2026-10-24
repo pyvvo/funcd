@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pyvvo/funcd/internal/platform/durable"
 	"github.com/pyvvo/funcd/internal/safemode"
 )
 
@@ -120,5 +121,42 @@ func TestUnitGateHint(t *testing.T) {
 		if got := strings.Contains(err.Error(), "--print"); got != tc.hint {
 			t.Fatalf("%v: names --print = %v, want %v: %v", tc.args, got, tc.hint, err)
 		}
+	}
+}
+
+// Issue #1257 (a sibling): systemd reads the unit at every boot and nothing rewrites it before the next install, so
+// a power loss soon after an install must leave no unit or a whole one: it is synced, renamed into place and its
+// directory synced.
+func TestIssue1257_InstallWritesItsUnitDurably(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "funcd.service")
+	type step struct {
+		op   durable.Op
+		path string
+	}
+	var steps []step
+	d := durable.Disk{Trace: func(op durable.Op, p string) {
+		if strings.HasPrefix(filepath.Base(p), "funcd.service.tmp-") {
+			p = filepath.Join(dir, "<temp>")
+		}
+		steps = append(steps, step{op, p})
+	}}
+	if err := writeUnit(d, path, "[Unit]\n"); err != nil {
+		t.Fatalf("writeUnit: %v", err)
+	}
+	want := []step{{durable.SyncFile, filepath.Join(dir, "<temp>")}, {durable.Rename, path}, {durable.SyncDir, dir}}
+	if fmt.Sprint(steps) != fmt.Sprint(want) {
+		t.Fatalf("durable steps:\ngot  %v\nwant %v", steps, want)
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "[Unit]\n" || st.Mode().Perm() != 0o644 {
+		t.Errorf("unit = %q at %v, want %q at -rw-r--r--", got, st.Mode().Perm(), "[Unit]\n")
 	}
 }
