@@ -92,6 +92,7 @@ type wbRig struct {
 
 type wbOptions struct {
 	held  bool
+	now   time.Time // the backup clock's start; the real time when zero
 	setup func(r *wbRig)
 	opts  []Option
 }
@@ -107,7 +108,11 @@ func newWBRig(t *testing.T, o wbOptions) *wbRig {
 	}
 	h, err := hold.Open(dir)
 	require.NoError(t, err)
-	r := &wbRig{t: t, ctx: ctx, clk: clock.NewManual(time.Now().UTC().Truncate(time.Second)), stub: s3stub.New(t, nil),
+	start := o.now
+	if start.IsZero() {
+		start = time.Now()
+	}
+	r := &wbRig{t: t, ctx: ctx, clk: clock.NewManual(start.UTC().Truncate(time.Second)), stub: s3stub.New(t, nil),
 		logs: &syncBuffer{}, metrics: sdkmetric.NewManualReader(), dir: dir, opts: o.opts}
 	r.owner, err = age.GenerateX25519Identity()
 	require.NoError(t, err)
@@ -408,37 +413,60 @@ func TestScenarioScheduleAppliesLive(t *testing.T) {
 // Running at the next slot makes that slot create none.
 func TestScenarioCatchUpOnceNoOverlap(t *testing.T) {
 	t.Parallel()
-	var created time.Time
+	catchUpOnceNoOverlap(t, time.Time{})
+}
+
+// Issue #1259: on the night Europe/Paris repeats 02:00, the hourly cron fires that hour once, so an hour added to a slot
+// can miss the next slot. The scenario, pinned to that night in 2025, steps from slot to slot as the cron does.
+func TestIssue1259_CatchUpFollowsTheCronOnTheNightTheClocksGoBack(t *testing.T) {
+	t.Parallel()
+	catchUpOnceNoOverlap(t, time.Date(2025, 10, 25, 19, 10, 0, 0, time.UTC))
+}
+
+// catchUpOnceNoOverlap runs the scenario from now, the real time when zero. Each slot comes from the cron (#1259). A
+// set now is also the schedule's last slot, since the store dates the schedule's creation by the real clock.
+func catchUpOnceNoOverlap(t *testing.T, now time.Time) {
+	var first time.Time
 	release := make(chan struct{})
 	var blocking, released sync.Once
 	unblock := func() { released.Do(func() { close(release) }) }
 	t.Cleanup(unblock)
-	r := newWBRig(t, wbOptions{setup: func(r *wbRig) {
+	r := newWBRig(t, wbOptions{now: now, setup: func(r *wbRig) {
 		s := r.schedule("hourly", "0 * * * *", nil)
+		first = now
+		if !now.IsZero() {
+			last := v1.NewTimestamp(now)
+			s.Status.LastScheduleTime = &last
+		}
 		r.seed(s)
-		got, err := r.st.Get(r.ctx, v1.KindBackupSchedule.GVK(), "orders", "hourly")
-		require.NoError(t, err)
-		created = time.Time(got.GetObjectMeta().CreationTime)
-		r.advanceTo(nextSlot(t, "0 * * * *", created).Add(2 * time.Hour))
+		if first.IsZero() {
+			got, err := r.st.Get(r.ctx, v1.KindBackupSchedule.GVK(), "orders", "hourly")
+			require.NoError(t, err)
+			first = time.Time(got.GetObjectMeta().CreationTime)
+		}
+		for range 3 {
+			first = nextSlot(t, "0 * * * *", first)
+		}
+		r.advanceTo(first)
 	}})
-	first := nextSlot(t, "0 * * * *", created).Add(2 * time.Hour)
 	b := r.waitBackup(v1.BackupSlotName("hourly", first), v1.RunSucceeded)
 	require.Equal(t, []string{string(b.Name)}, r.backups(), "three missed slots, one Backup")
 
 	r.stub.Set(func(s *s3stub.Stub) {
 		s.FailPut = func(string) bool { blocking.Do(func() { <-release }); return false }
 	})
-	second := first.Add(time.Hour)
+	second := nextSlot(t, "0 * * * *", first)
 	r.advanceTo(second)
 	r.waitBackup(v1.BackupSlotName("hourly", second), v1.RunRunning)
-	third := second.Add(time.Hour)
+	third := nextSlot(t, "0 * * * *", second)
 	r.advanceTo(third)
 	r.still(func() bool { return len(r.backups()) == 2 }, "a slot while a Backup runs creates none")
 	unblock()
 	r.waitBackup(v1.BackupSlotName("hourly", second), v1.RunSucceeded)
 	r.still(func() bool { return len(r.backups()) == 2 }, "the skipped slot is not caught up")
-	r.advanceTo(third.Add(time.Hour))
-	r.waitBackup(v1.BackupSlotName("hourly", third.Add(time.Hour)), v1.RunSucceeded)
+	fourth := nextSlot(t, "0 * * * *", third)
+	r.advanceTo(fourth)
+	r.waitBackup(v1.BackupSlotName("hourly", fourth), v1.RunSucceeded)
 }
 
 // scenario: backup-outlives-app — an App with a backupSchedules entry and two Succeeded Backups: deleting the App
