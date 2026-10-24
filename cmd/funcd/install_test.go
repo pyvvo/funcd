@@ -39,6 +39,9 @@ func TestOneServiceInstallPrint(t *testing.T) {
 	if !strings.Contains(unit, "KillMode=mixed") {
 		t.Fatalf("printed unit must stop funcd before its managed containerd child (KillMode=mixed)\n---\n%s", unit)
 	}
+	if !strings.Contains(unit, "\nTimeoutStopSec=45\n") {
+		t.Fatalf("printed unit must leave a stop 45 s, its longest 37 s with the defaults (ADR-0277)\n---\n%s", unit)
+	}
 	if strings.Count(unit, "ExecStart=") != 1 {
 		t.Fatalf("want exactly one service (one ExecStart), got %d\n---\n%s", strings.Count(unit, "ExecStart="), unit)
 	}

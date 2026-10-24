@@ -1039,7 +1039,7 @@ testcases:
             install -m 600 /opt/lane/dr/developer.token /etc/funcd/tokens/developer
             systemctl stop funcd-demo
             systemctl reset-failed funcd-demo 2>/dev/null || true
-            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 /usr/local/bin/funcd \
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=45 /usr/local/bin/funcd \
               --config /opt/lane/dr/funcdconfig.yaml
             curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
             systemctl is-active --quiet funcd-demo || { journalctl -u funcd-demo --no-pager -n 60; exit 1; }
@@ -1220,7 +1220,7 @@ testcases:
             funcd restore run "$p" $r --escrow /root/escrow
             funcd restore kv $r
             funcd restore blob $r
-            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 /usr/local/bin/funcd \
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=45 /usr/local/bin/funcd \
               --config /opt/lane/dr/funcdconfig.yaml
             curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
             systemctl is-active --quiet funcd-demo || { journalctl -u funcd-demo --no-pager -n 60; exit 1; }
@@ -1518,7 +1518,7 @@ testcases:
             /usr/local/bin/funcd upgrade /root/funcd-next --config /opt/lane/dr/funcdconfig.yaml --unit ""
             test -x /usr/local/bin/funcd.previous && echo PREVIOUS
             echo "pins=$(find /var/lib/vgw/data/todo-backup/gen/pre-upgrade -name manifest.yaml | grep -c .)."
-            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 /usr/local/bin/funcd \
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=45 /usr/local/bin/funcd \
               --config /opt/lane/dr/funcdconfig.yaml
             curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
             systemctl is-active --quiet funcd-demo || { journalctl -u funcd-demo --no-pager -n 60; exit 1; }
@@ -1582,7 +1582,7 @@ testcases:
             curl -sf -X PUT --aws-sigv4 "aws:amz:us-east-1:s3" --user todo-lane-s3:todo-lane-s3-secret \
               -H "x-amz-content-sha256: $(printf %s "$v" | sha256sum | cut -d" " -f1)" \
               -H "content-type: application/xml" --data "$v" "http://127.0.0.1:7070/todo-blob?versioning="
-            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 /usr/local/bin/funcd \
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=45 /usr/local/bin/funcd \
               --config /opt/lane/dr/funcdconfig-blob-s3.yaml
             curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
             systemctl is-active --quiet funcd-demo || { journalctl -u funcd-demo --no-pager -n 60; exit 1; }
@@ -1657,7 +1657,7 @@ testcases:
             grep -q todo-missing /root/missing-target.yaml
             systemctl stop funcd-demo
             systemctl reset-failed funcd-demo 2>/dev/null || true
-            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 /usr/local/bin/funcd \
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=45 /usr/local/bin/funcd \
               --config /root/missing-target.yaml
             curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
             systemctl is-active --quiet funcd-demo || { journalctl -u funcd-demo --no-pager -n 60; exit 1; }
@@ -1713,7 +1713,7 @@ testcases:
             funcdctl logs todo-intake -n default | grep -c "intake uploads/" >/root/intake-before-restart
             systemctl stop funcd-demo
             systemctl reset-failed funcd-demo 2>/dev/null || true
-            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 /usr/local/bin/funcd \
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=45 /usr/local/bin/funcd \
               --config /opt/lane/dr/funcdconfig-blob-s3.yaml
             curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
             systemctl is-active --quiet funcd-demo || { journalctl -u funcd-demo --no-pager -n 60; exit 1; }
@@ -1759,7 +1759,7 @@ testcases:
             run() {
               systemctl stop funcd-demo 2>/dev/null
               systemctl reset-failed funcd-demo 2>/dev/null || true
-              systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 "$@" /usr/local/bin/funcd \
+              systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=45 "$@" /usr/local/bin/funcd \
                 --config /opt/lane/dr/funcdconfig.yaml
             }
             ready() { curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz; }
@@ -1778,7 +1778,7 @@ testcases:
             systemctl kill -s KILL funcd-demo; sleep 2
             systemctl stop funcd-demo 2>/dev/null
             systemctl reset-failed funcd-demo 2>/dev/null || true
-            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 \
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=45 \
               -p Environment=FUNCD_RECOVERY_SAFE_MODE_AFTER_CRASHES=1 \
               -p Environment=FUNCD_RECOVERY_SAFE_MODE_STABLE_AFTER=1h /usr/local/bin/funcd --config /opt/lane/dr/funcdconfig.yaml
             for i in $(seq 30); do systemctl is-active --quiet funcd-demo || break; sleep 1; done
@@ -1797,7 +1797,7 @@ testcases:
             unset FUNCD_TOKEN
             funcd safe-mode reset --config /opt/lane/dr/funcdconfig.yaml
             systemctl reset-failed funcd-demo 2>/dev/null || true
-            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 /usr/local/bin/funcd \
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=45 /usr/local/bin/funcd \
               --config /opt/lane/dr/funcdconfig.yaml
             curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
             FUNCD_TOKEN=todo-lane-admin funcdctl hold status | grep -E "held|reason"
@@ -1836,7 +1836,7 @@ testcases:
             unset FUNCD_TOKEN
             systemctl stop funcd-demo
             systemctl reset-failed funcd-demo 2>/dev/null || true
-            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 /usr/local/bin/funcd \
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=45 /usr/local/bin/funcd \
               --config /opt/lane/dr/funcdconfig-blob-s3.yaml
             curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
             systemctl is-active --quiet funcd-demo || { journalctl -u funcd-demo --no-pager -n 60; exit 1; }
@@ -1889,7 +1889,7 @@ testcases:
             funcd restore blob --at "$(cat /root/blob-at)" --config /opt/lane/dr/funcdconfig-blob-s3.yaml
             echo "after=$(s3 -o /dev/null -w %{http_code} "http://127.0.0.1:7070/todo-blob/$k")."
             echo "versions=$(versions)."
-            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 /usr/local/bin/funcd \
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=45 /usr/local/bin/funcd \
               --config /opt/lane/dr/funcdconfig-blob-s3.yaml
             curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
             FUNCD_TOKEN=todo-lane-admin funcdctl hold release >/dev/null
@@ -2004,7 +2004,7 @@ testcases:
             unset FUNCD_TOKEN
             systemctl stop funcd-demo
             systemctl reset-failed funcd-demo 2>/dev/null || true
-            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 /usr/local/bin/funcd \
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=45 /usr/local/bin/funcd \
               --config /opt/lane/dr/funcdconfig-lake.yaml
             curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
             systemctl is-active --quiet funcd-demo || { journalctl -u funcd-demo --no-pager -n 60; exit 1; }

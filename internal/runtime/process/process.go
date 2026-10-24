@@ -107,6 +107,9 @@ func (d *driver) SetOutputCapture(fn runtime.OutputCaptureFunc) {
 	d.mu.Unlock()
 }
 
+// StopGrace reports the grace Stop and Close wait after SIGTERM (runtime.StopGracer, ADR-0277).
+func (d *driver) StopGrace() time.Duration { return d.grace }
+
 func (d *driver) Create(_ context.Context, spec runtime.WorkerSpec) (runtime.Instance, error) {
 	const op = "runtime.process.Create"
 	if len(spec.Command) == 0 {

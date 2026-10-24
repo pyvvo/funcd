@@ -180,6 +180,11 @@ type OutputCapturer interface {
 	SetOutputCapture(OutputCaptureFunc)
 }
 
+// StopGracer is a Runtime that reports its SIGTERM-to-SIGKILL grace, which Run's Shutdown bound counts (ADR-0277).
+type StopGracer interface {
+	StopGrace() time.Duration
+}
+
 // NewInstanceID builds the canonical id "<ns>/<name>/r<replica>", or "<ns>/<name>/<revision>/r<replica>" for a worker
 // of a Revision, so two revisions of one replica can run at once (ADR-0143).
 func NewInstanceID(ns v1alpha1.NamespaceName, name, revision v1alpha1.ObjectName, replica int) InstanceID {

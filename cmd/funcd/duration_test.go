@@ -44,6 +44,10 @@ func TestConfigDurationBoundsPerKey(t *testing.T) {
 			_, err := processStopGrace(cfg)
 			return err
 		}
+		if key == "runtime.containerd.stopGrace" {
+			_, err := containerdStopGrace(cfg)
+			return err
+		}
 		if key == "s3gateway.keyRotationPeriod" {
 			_, err := s3KeyRotationPeriod(cfg)
 			return err
@@ -72,6 +76,10 @@ func TestConfigDurationBoundsPerKey(t *testing.T) {
 	ok("runtime.process.stopGrace", "10s")
 	refused("runtime.process.stopGrace", "0s")
 	refused("runtime.process.stopGrace", "10s1ms")
+	ok("runtime.containerd.stopGrace", "1ms")
+	ok("runtime.containerd.stopGrace", "10s")
+	refused("runtime.containerd.stopGrace", "0s")
+	refused("runtime.containerd.stopGrace", "10s1ms")
 	ok("server.shutdownTimeout", "1ms")
 	refused("server.shutdownTimeout", "0s")
 	for _, bad := range []string{"0", "1.5s", "500us", "10ns", "-1s", "2562047h47m16s855ms"} {

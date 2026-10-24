@@ -936,7 +936,7 @@ func pacing(cfg config.Config) (funcd.Pacing, error) {
 }
 
 // The config duration bounds (ADR-0194): minPositive for a key that must be positive, maxStopGrace for
-// runtime.process.stopGrace (the containerd driver's stop grace, ADR-0167) and minRetryBackoffMax for
+// runtime.process.stopGrace and runtime.containerd.stopGrace (ADR-0167, ADR-0277) and minRetryBackoffMax for
 // controller.retryBackoffMax (ADR-0163, as funcd.WithPacing checks it).
 const (
 	minPositive        = v1.Duration(time.Millisecond)
@@ -967,6 +967,11 @@ func renewalFits(period time.Duration, p funcd.Pacing) error {
 // processStopGrace parses runtime.process.stopGrace (ADR-0167): 1ms to 10s, default 3s.
 func processStopGrace(cfg config.Config) (time.Duration, error) {
 	return parseDuration("runtime.process.stopGrace", cfg.Runtime.Process.StopGrace, 3*time.Second, minPositive, maxStopGrace)
+}
+
+// containerdStopGrace parses runtime.containerd.stopGrace (ADR-0277): 1ms to 10s, default 10s.
+func containerdStopGrace(cfg config.Config) (time.Duration, error) {
+	return parseDuration("runtime.containerd.stopGrace", cfg.Runtime.Containerd.StopGrace, containerd.DefaultStopGrace, minPositive, maxStopGrace)
 }
 
 // parseDuration parses the optional duration at config key with the API grammar and bounds it to [lo, hi]
@@ -1421,8 +1426,12 @@ func executionOptions(ctx context.Context, cfg config.Config, logger *slog.Logge
 	if err != nil {
 		return nil, noopClose, err
 	}
+	ctrGrace, err := containerdStopGrace(cfg)
+	if err != nil {
+		return nil, noopClose, err
+	}
 	if cfg.Runtime.Mode == "containerd" {
-		return containerdOptions(ctx, cfg, logger, ctrmanager.New, containerd.New)
+		return containerdOptions(ctx, cfg, ctrGrace, logger, ctrmanager.New, containerd.New)
 	}
 
 	// process mode (default, cross-platform): run the embedded Node shim and pool host on the process driver, which
@@ -1441,9 +1450,9 @@ func executionOptions(ctx context.Context, cfg config.Config, logger *slog.Logge
 }
 
 // containerdOptions brings the container runtime up through newManager (ctrmanager.New) and the containerd driver
-// through newRuntime (containerd.New), where a test passes fakes, and sweeps the funcd namespaces before any
-// controller starts.
-func containerdOptions(ctx context.Context, cfg config.Config, logger *slog.Logger,
+// through newRuntime (containerd.New), where a test passes fakes, with stopGrace as its stop grace, and sweeps the
+// funcd namespaces before any controller starts.
+func containerdOptions(ctx context.Context, cfg config.Config, stopGrace time.Duration, logger *slog.Logger,
 	newManager func(ctrmanager.Config) (ctrmanager.Manager, error),
 	newRuntime func(containerd.Config) (fnruntime.Runtime, error),
 ) ([]funcd.Option, func() error, error) {
@@ -1473,6 +1482,7 @@ func containerdOptions(ctx context.Context, cfg config.Config, logger *slog.Logg
 		StateDir:    c.StateDir,
 		SubnetCIDR:  c.SubnetCIDR,
 		Logger:      logger,
+		StopGrace:   stopGrace,
 		Pullable:    mgrCfg.Pullable(c.ImagePrefix),
 		Private:     c.Socket == "",
 		Exited:      mgr.Exited(),

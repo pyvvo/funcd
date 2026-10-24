@@ -46,12 +46,13 @@ import (
 	"github.com/pyvvo/funcd/internal/runtime/workerpipe"
 )
 
-// stopGrace is how long Stop waits after SIGTERM before sending SIGKILL.
-const stopGrace = 10 * time.Second
+// DefaultStopGrace is how long a single stop and the daemon stop wait after SIGTERM before sending SIGKILL unless
+// runtime.containerd.stopGrace sets it (ADR-0277).
+const DefaultStopGrace = 10 * time.Second
 
-// closeGrace is Close's SIGTERM grace: shorter than stopGrace so the stop fits Shutdown's closeTimeout and the log
-// Routes and telemetry still flush after it (issue #453).
-const closeGrace = 3 * time.Second
+// killWait bounds how long the boot sweep and reclaim wait for a task to exit after the SIGKILL they send with no
+// SIGTERM first, so no stop grace applies (ADR-0277).
+const killWait = 10 * time.Second
 
 // nsPrefix prefixes a funcd namespace's containerd namespace.
 const nsPrefix = "funcd-"
@@ -79,6 +80,10 @@ type Config struct {
 	StateDir    string       // funcd-owned dir for runtime-generated worker files (e.g. resolv.conf); dataDir-relative
 	SubnetCIDR  string       // lateral bridge subnet
 	Logger      *slog.Logger // nil ⇒ slog.Default()
+
+	// StopGrace is the wait after SIGTERM before SIGKILL at a single stop and at the daemon stop (ADR-0277);
+	// 0 ⇒ DefaultStopGrace.
+	StopGrace time.Duration
 
 	// Pullable reports whether an image ref that is not embedded may be pulled (ctrmanager.Config.Pullable);
 	// nil ⇒ none may.
@@ -644,7 +649,15 @@ func (d *driver) Start(ctx context.Context, id runtime.InstanceID) error {
 }
 
 func (d *driver) Stop(ctx context.Context, id runtime.InstanceID) error {
-	return d.stop(ctx, id, stopGrace)
+	return d.stop(ctx, id, d.StopGrace())
+}
+
+// StopGrace reports the grace Stop and Close wait after SIGTERM (runtime.StopGracer, ADR-0277).
+func (d *driver) StopGrace() time.Duration {
+	if d.cfg.StopGrace > 0 {
+		return d.cfg.StopGrace
+	}
+	return DefaultStopGrace
 }
 
 // stop sends the worker's task SIGTERM, then SIGKILL after grace, and releases the worker once its container is gone.
@@ -790,7 +803,7 @@ func (d *driver) discard(nctx context.Context, c containerd.Container) error {
 		_ = task.Kill(nctx, syscall.SIGKILL)
 		select {
 		case <-waitTask(nctx, task):
-		case <-time.After(stopGrace):
+		case <-time.After(killWait):
 		}
 		_, _ = task.Delete(nctx)
 	case !errdefs.IsNotFound(err):
@@ -966,9 +979,10 @@ func (d *driver) List(ctx context.Context, ns v1alpha1.NamespaceName) ([]runtime
 	return out, nil
 }
 
-// Close stops every worker Stop has not released, all at once so shutdown takes one closeGrace however many ignore
-// SIGTERM, and releases the client. On the private containerd it also sweeps every funcd namespace, which catches the
-// workers an earlier hard-killed run left behind: no driver tracks them and the private containerd keeps them running.
+// Close stops every worker Stop has not released, with Stop's grace and all at once so shutdown takes one grace however
+// many ignore SIGTERM (ADR-0277), and releases the client. On the private containerd it also sweeps every funcd
+// namespace, which catches the workers an earlier hard-killed run left behind: no driver tracks them and the private
+// containerd keeps them running.
 // A worker left running would serve on after the daemon stops, outside the egress fence (ADR-0115), so Close reports
 // every worker it could not stop and Shutdown then keeps the fence. Once containerd has exited, before Close or during
 // it, Close closes the client so that every call fails at once, and reports the exit: a call would otherwise redial the
@@ -995,7 +1009,7 @@ func (d *driver) Close() error {
 	errs := make([]error, len(live), len(live)+3)
 	var wg sync.WaitGroup
 	for i, id := range live {
-		wg.Go(func() { errs[i] = d.stop(context.Background(), id, closeGrace) })
+		wg.Go(func() { errs[i] = d.stop(context.Background(), id, d.StopGrace()) })
 	}
 	wg.Wait()
 	if d.cfg.Private {

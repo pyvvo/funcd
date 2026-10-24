@@ -32,7 +32,7 @@ func TestScenarioMemoryModeStorageIsEphemeral(t *testing.T) {
 	mem.Storage.Mode = "memory"
 	mem.Runtime.Mode = "containerd"
 	mem.Runtime.Containerd.Socket = filepath.Join(t.TempDir(), "containerd.sock")
-	_, closeExec, err := containerdOptions(context.Background(), mem, slog.New(slog.DiscardHandler),
+	_, closeExec, err := containerdOptions(context.Background(), mem, containerd.DefaultStopGrace, slog.New(slog.DiscardHandler),
 		func(ctrmanager.Config) (ctrmanager.Manager, error) {
 			return exitingManager{exited: make(chan struct{})}, nil
 		},

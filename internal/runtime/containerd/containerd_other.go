@@ -8,10 +8,15 @@ package containerd
 
 import (
 	"log/slog"
+	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/runtime"
 )
+
+// DefaultStopGrace is how long a single stop and the daemon stop wait after SIGTERM before sending SIGKILL unless
+// runtime.containerd.stopGrace sets it (ADR-0277).
+const DefaultStopGrace = 10 * time.Second
 
 // Config configures the containerd driver (the composition root supplies it).
 type Config struct {
@@ -22,6 +27,10 @@ type Config struct {
 	StateDir    string       // funcd-owned dir for runtime-generated worker files (e.g. resolv.conf); dataDir-relative
 	SubnetCIDR  string       // lateral bridge subnet
 	Logger      *slog.Logger // nil ⇒ slog.Default()
+
+	// StopGrace is the wait after SIGTERM before SIGKILL at a single stop and at the daemon stop (ADR-0277);
+	// 0 ⇒ DefaultStopGrace.
+	StopGrace time.Duration
 
 	// Pullable reports whether an image ref that is not embedded may be pulled (ctrmanager.Config.Pullable);
 	// nil ⇒ none may.

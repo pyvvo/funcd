@@ -56,7 +56,9 @@ LimitNOFILE=1048576
 # containerd is a managed CHILD of this process: stop signals funcd alone, so it stops its workers and then
 # containerd, and systemd then kills whatever is left in the control group.
 KillMode=mixed
-TimeoutStopSec=30
+# The longest stop is server.shutdownTimeout + the stop grace + 2 s + the private containerd's stop, 37 s with the
+# defaults (ADR-0277).
+TimeoutStopSec=45
 
 [Install]
 WantedBy=multi-user.target

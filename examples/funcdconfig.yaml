@@ -58,7 +58,7 @@ server:
   #   dnsResolver: ""             # upstream resolver host:port; required when egress is on. default: ""
   #   internalAllow:              # node-service host:port addresses workers may reach. default: none
   #   workerSyncInterval: 2s      # egress WorkerIndex sync cadence (ADR-0163). default: 2s
-  # shutdownTimeout: 15s          # HTTP, Sensor and workflow-run drain at shutdown. default: 15s; it + runtime.process.stopGrace (or containerd's 10s) + the 5s close must fit the unit's TimeoutStopSec (30s)
+  # shutdownTimeout: 15s          # HTTP, Sensor and workflow-run drain at shutdown. default: 15s; it + the runtime's stopGrace + 2s + the private containerd's 10s stop must fit the unit's TimeoutStopSec (45s, ADR-0277)
 
 # --- storage: the blob+bus substrate (ADR-0043) + the data root --------------------------------
 storage:
@@ -183,8 +183,9 @@ runtime:
   # livenessTimeout: 30s          # a listening replica silent on /health/liveness this long is restarted (ADR-0215); when set, at least twice supervisionPeriod. default: 30s, or three supervisionPeriod when larger
   # readinessTimeout: 5s          # window, not a probe's bound: a worker whose readiness reads run late keeps its last answer this long, then counts as not ready (ADR-0259). default: 5s
   process:
-    stopGrace: 3s                 # SIGTERM-to-SIGKILL wait for stop, shutdown and the boot reap (ADR-0167); 0 < d <= 10s. default: 3s; server.shutdownTimeout + stopGrace + 5s must fit TimeoutStopSec
+    stopGrace: 3s                 # SIGTERM-to-SIGKILL wait for stop, shutdown and the boot reap (ADR-0167); 0 < d <= 10s. default: 3s; the stop budget is on server.shutdownTimeout
   # containerd:                   # used only when mode: containerd
+  #   stopGrace: 10s              # SIGTERM-to-SIGKILL wait for a single stop and the daemon stop (ADR-0277); 0 < d <= 10s. default: 10s; below about 6s a Lake stop with a query running is cut at every stop (ADR-0273)
   #   socket: ""                  # external containerd socket. default: "" (funcd manages a private one, ADR-0054)
   #   root: ""                    # containerd state root. default: <dataDir>/containerd
   #   snapshotter: overlayfs      # default: overlayfs

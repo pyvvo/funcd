@@ -3,6 +3,7 @@ package funcd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -86,12 +87,42 @@ func (b *closeOrderBucket) counts() (before, after int) {
 	return b.before, b.after
 }
 
-// shutdownCtxProbe is a network.Manager that records whether the context Shutdown hands its Remove is already done:
-// the log drain and the telemetry flush run on that same context.
-type shutdownCtxProbe struct{ doneErr error }
+// shutdownCtxProbe is a network.Manager that records the context Shutdown hands its Remove: whether it is already done,
+// and its deadline, the bound Run gave Shutdown. The log drain and the telemetry flush run on that same context.
+type shutdownCtxProbe struct {
+	applyErr  error
+	doneErr   error
+	deadline  time.Time
+	removedAt time.Time
+}
 
-func (*shutdownCtxProbe) Apply(context.Context, network.Policy) error { return nil }
-func (s *shutdownCtxProbe) Remove(ctx context.Context) error          { s.doneErr = ctx.Err(); return nil }
+func (s *shutdownCtxProbe) Apply(context.Context, network.Policy) error { return s.applyErr }
+
+func (s *shutdownCtxProbe) Remove(ctx context.Context) error {
+	s.doneErr, s.removedAt = ctx.Err(), time.Now()
+	s.deadline, _ = ctx.Deadline()
+	return nil
+}
+
+// graceRuntime reports a stop grace and its Close takes all of it, as the containerd driver's does when a worker ignores
+// SIGTERM. It passes the capture hook on to the runtime it wraps.
+type graceRuntime struct {
+	runtime.Runtime
+	grace      time.Duration
+	closeStart time.Time
+}
+
+func (g *graceRuntime) StopGrace() time.Duration { return g.grace }
+
+func (g *graceRuntime) SetLogCapture(fn runtime.LogCaptureFunc) {
+	g.Runtime.(runtime.LogCapturer).SetLogCapture(fn)
+}
+
+func (g *graceRuntime) Close() error {
+	g.closeStart = time.Now()
+	time.Sleep(g.grace)
+	return g.Runtime.Close()
+}
 
 // heldLogPlatform builds a platform whose one capture Route reads a held channel of lines records, and the bucket
 // that counts the records Put before and after its Close.
@@ -156,4 +187,36 @@ func TestIssue453_ShutdownDrainsLogsAfterHTTPDrainTimeout(t *testing.T) {
 	require.NoError(t, probe.doneErr, "Shutdown runs on a live context of its own, not the one the HTTP drain used up")
 	before, after := bucket.counts()
 	require.Equal(t, lines, before, "every record written before shutdown is persisted before the blob closes (%d were Put after it)", after)
+}
+
+// scenario: daemon-stop-keeps-its-flush — Run bounds Shutdown by the runtime's stop grace plus closeMargin, when it
+// stops and when a setup error aborts it, so a runtime Close that takes the whole grace still leaves the log Routes
+// time to drain after it (ADR-0277).
+func TestScenarioDaemonStopKeepsItsFlush(t *testing.T) {
+	const lines, grace = 200, 200 * time.Millisecond
+	for name, abort := range map[string]bool{"stop": false, "abort": true} {
+		t.Run(name, func(t *testing.T) {
+			probe := &shutdownCtxProbe{}
+			if abort {
+				probe.applyErr = errors.New("program nftables: permission denied")
+			}
+			var rt *graceRuntime
+			p, bucket := heldLogPlatform(t, lines, WithEgressIsolation(probe, network.Policy{}), func(c *config) error {
+				rt = &graceRuntime{Runtime: c.runtime, grace: grace}
+				c.runtime = rt
+				return nil
+			})
+			if abort {
+				require.ErrorContains(t, p.Run(context.Background()), "apply worker egress isolation")
+			} else {
+				runThenCancel(t, p)
+			}
+
+			require.GreaterOrEqual(t, probe.removedAt.Sub(rt.closeStart), grace, "Shutdown waits out the runtime's grace")
+			require.InDelta(t, float64(grace+closeMargin), float64(probe.deadline.Sub(rt.closeStart)), float64(250*time.Millisecond),
+				"Shutdown's bound is the runtime's grace plus closeMargin")
+			before, after := bucket.counts()
+			require.Equal(t, lines, before, "the log Routes drain after the grace, within the bound (%d records were Put after the blob closed)", after)
+		})
+	}
 }

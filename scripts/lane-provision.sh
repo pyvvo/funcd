@@ -45,7 +45,7 @@ PY
 export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN="$token"
 # The installed funcd.service's KillMode and stop timeout: a stop signals funcd alone, so it stops its workers
 # before its private containerd.
-systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 /usr/local/bin/funcd --config "$d/funcdconfig.yaml"
+systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=45 /usr/local/bin/funcd --config "$d/funcdconfig.yaml"
 curl -s --retry-connrefused --retry 30 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz || true
 # DATA-DRIVEN deploy: read this lane's section and run its push(es) then its apply order.
 python3 - <<'PY'

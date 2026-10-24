@@ -144,7 +144,7 @@ testcases:
             set -e
             systemctl stop funcd-demo
             systemctl reset-failed funcd-demo 2>/dev/null || true
-            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 /usr/local/bin/funcd --config /opt/lane/funcdconfig.yaml
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=45 /usr/local/bin/funcd --config /opt/lane/funcdconfig.yaml
             curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
             systemctl is-active --quiet funcd-demo || { journalctl -u funcd-demo --no-pager -n 60; exit 1; }
             echo RESTARTED'
@@ -253,7 +253,7 @@ testcases:
             systemctl stop funcd-demo
             systemctl reset-failed funcd-demo 2>/dev/null || true
             rm -rf /var/lib/funcd/data/providers/sqldatabase/default/notes-db
-            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 /usr/local/bin/funcd --config /opt/lane/funcdconfig.yaml
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=45 /usr/local/bin/funcd --config /opt/lane/funcdconfig.yaml
             curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
             for i in $(seq 60); do
               funcdctl get sqldatabase notes-db -n default -o json | python3 -c "

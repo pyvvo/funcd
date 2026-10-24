@@ -280,6 +280,30 @@ func TestScenarioStopGraceFromConfig(t *testing.T) {
 	}
 }
 
+// scenario: bad-grace-refused — runtime.containerd.stopGrace is 10s without the key; a value that is no ADR-0194
+// duration, or is outside 1ms to 10s, stops funcd before it serves in either runtime mode, naming the key (ADR-0277).
+func TestScenarioBadGraceRefused(t *testing.T) {
+	cfg := cfgProcess(shortDataDir(t))
+	cfg.Runtime.Containerd.StopGrace = ""
+	grace, err := containerdStopGrace(cfg)
+	require.NoError(t, err)
+	require.Equal(t, 10*time.Second, grace, "the default")
+
+	for _, mode := range []string{"process", "containerd"} {
+		for _, bad := range []string{"0s", "-1s", "soon", "1.5s", "11s"} {
+			t.Run(mode+"/"+bad, func(t *testing.T) {
+				dir := shortDataDir(t)
+				path := filepath.Join(dir, "funcdconfig.yaml")
+				require.NoError(t, os.WriteFile(path, fmt.Appendf(nil,
+					"server:\n  listenAddr: \"127.0.0.1:0\"\n  dataPlaneAddr: \"127.0.0.1:0\"\n"+
+						"storage:\n  mode: memory\n  dataDir: %q\nruntime:\n  mode: %s\n  containerd:\n    stopGrace: %q\n", dir, mode, bad), 0o600))
+				err := serve(context.Background(), path, nil, io.Discard)
+				require.ErrorContains(t, err, "runtime.containerd.stopGrace")
+			})
+		}
+	}
+}
+
 // sweptRuntime is a containerd driver that counts the boot sweeps.
 type sweptRuntime struct {
 	fnruntime.Runtime
@@ -307,7 +331,7 @@ func TestContainerdModeGivesTheDriverContainerdsExit(t *testing.T) {
 	cfg.Runtime.Mode = "containerd"
 	mgr := exitingManager{exited: make(chan struct{})}
 	var got containerd.Config
-	_, closeExec, err := containerdOptions(context.Background(), cfg, slog.New(slog.DiscardHandler),
+	_, closeExec, err := containerdOptions(context.Background(), cfg, 6*time.Second, slog.New(slog.DiscardHandler),
 		func(ctrmanager.Config) (ctrmanager.Manager, error) { return mgr, nil },
 		func(c containerd.Config) (fnruntime.Runtime, error) {
 			got = c
@@ -317,6 +341,7 @@ func TestContainerdModeGivesTheDriverContainerdsExit(t *testing.T) {
 	t.Cleanup(func() { _ = closeExec() })
 	require.True(t, got.Private, "with no socket set the driver runs on the private containerd")
 	require.True(t, got.Exited == mgr.Exited(), "the driver must get the manager's exit channel")
+	require.Equal(t, 6*time.Second, got.StopGrace, "the driver must get runtime.containerd.stopGrace (ADR-0277)")
 }
 
 // Containerd mode sweeps every funcd namespace once before it hands the driver to the controllers; a failed sweep is
@@ -329,7 +354,7 @@ func TestContainerdModeSweepsLeftoversAtBoot(t *testing.T) {
 			cfg.Runtime.Containerd.Socket = filepath.Join(t.TempDir(), "containerd.sock")
 			rt := &sweptRuntime{err: sweepErr}
 			var logs bytes.Buffer
-			opts, closeExec, err := containerdOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(&logs, nil)),
+			opts, closeExec, err := containerdOptions(context.Background(), cfg, containerd.DefaultStopGrace, slog.New(slog.NewTextHandler(&logs, nil)),
 				ctrmanager.New, func(containerd.Config) (fnruntime.Runtime, error) { return rt, nil })
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = closeExec() })

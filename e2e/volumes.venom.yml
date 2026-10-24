@@ -322,7 +322,7 @@ testcases:
             umount $m
             install -d -m 700 /etc/funcd/tokens
             install -m 600 /opt/lane/dr/admin.token /etc/funcd/tokens/admin
-            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 /usr/local/bin/funcd \
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=45 /usr/local/bin/funcd \
               --config /opt/lane/backup/funcdconfig.yaml
             curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
             systemctl is-active --quiet funcd-demo || { journalctl -u funcd-demo --no-pager -n 60; exit 1; }

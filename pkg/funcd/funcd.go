@@ -113,9 +113,11 @@ const (
 	defaultDataPlaneAddr = "0.0.0.0:8081" // function-traffic ingress (ADR-0033); intentionally public (auth is V2)
 	defaultLocalNode     = "local"
 	shutdownTimeout      = 15 * time.Second
-	// closeTimeout is Shutdown's own bound when Run stops, so an HTTP drain that used all of shutdownTimeout still
-	// leaves the log Routes and telemetry time to flush (issue #453); 15 s + 5 s fits the unit's TimeoutStopSec=30.
-	closeTimeout = 5 * time.Second
+	// closeMargin is what Shutdown's bound leaves after the runtime's stop grace: the log Routes and telemetry flush
+	// (issue #453), the stop's output wait and the private containerd's sweep (ADR-0277).
+	closeMargin = 2 * time.Second
+	// defaultCloseGrace stands in for the stop grace of a runtime that reports none (runtime.StopGracer).
+	defaultCloseGrace = 3 * time.Second
 	// defaultKVStoresPerNamespace is the per-namespace KVStore count cap when unset (ADR-0072).
 	defaultKVStoresPerNamespace = 100
 	// defaultBucketsPerNamespace is the per-namespace Bucket count cap when unset (ADR-0080).
@@ -1632,7 +1634,7 @@ func (p *Platform) Run(ctx context.Context) error {
 	abort := func(err error) error {
 		cancelLoops()
 		wg.Wait()
-		closeCtx, cancelClose := context.WithTimeout(context.WithoutCancel(ctx), closeTimeout)
+		closeCtx, cancelClose := context.WithTimeout(context.WithoutCancel(ctx), p.closeTimeout())
 		defer cancelClose()
 		return errors.Join(err, p.Shutdown(closeCtx))
 	}
@@ -1883,9 +1885,20 @@ func (p *Platform) Run(ctx context.Context) error {
 	_ = p.dataPlaneServer.Shutdown(stopCtx)
 	_ = p.httpServer.Shutdown(stopCtx)
 	wg.Wait() // drain controller + eventing + activator before closing ports
-	closeCtx, cancelClose := context.WithTimeout(context.WithoutCancel(ctx), closeTimeout)
+	closeCtx, cancelClose := context.WithTimeout(context.WithoutCancel(ctx), p.closeTimeout())
 	defer cancelClose()
 	return p.Shutdown(closeCtx)
+}
+
+// closeTimeout is Shutdown's own bound when Run stops or aborts (ADR-0277): the runtime's stop grace plus closeMargin, so
+// an HTTP drain that used all of shutdownTimeout still leaves the workers their grace and the log Routes and telemetry
+// time to flush after it (issue #453).
+func (p *Platform) closeTimeout() time.Duration {
+	grace := defaultCloseGrace
+	if g, ok := p.cfg.runtime.(runtime.StopGracer); ok {
+		grace = g.StopGrace()
+	}
+	return grace + closeMargin
 }
 
 // Shutdown closes the platform's components (the control-plane listener, the five

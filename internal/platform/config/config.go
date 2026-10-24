@@ -251,7 +251,10 @@ type Config struct {
 		Process struct {
 			StopGrace string `json:"stopGrace,omitempty" env:"FUNCD_PROCESS_STOP_GRACE"`
 		} `json:"process,omitempty"`
+		// Containerd tunes the containerd driver; StopGrace is the wait after SIGTERM before SIGKILL for a single stop
+		// and the daemon stop (ADR-0277), a duration with 0 < d <= 10s.
 		Containerd struct {
+			StopGrace   string `json:"stopGrace,omitempty" env:"FUNCD_CONTAINERD_STOP_GRACE"`
 			Socket      string `json:"socket,omitempty" env:"FUNCD_CONTAINERD_SOCKET"`
 			Root        string `json:"root,omitempty" env:"FUNCD_CONTAINERD_ROOT"`
 			Snapshotter string `json:"snapshotter,omitempty" env:"FUNCD_SNAPSHOTTER"`
@@ -458,6 +461,7 @@ func defaults() Config {
 	c.Runtime.HandOutSettle = "2s"
 	c.Runtime.DrainPollInterval = "1s"
 	c.Runtime.Process.StopGrace = "3s"
+	c.Runtime.Containerd.StopGrace = "10s"
 	c.Runtime.Containerd.Snapshotter = "overlayfs"
 	c.Controller.GCSweepInterval = "5m"
 	c.Controller.RetryBackoffMax = "1s"
