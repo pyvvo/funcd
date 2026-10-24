@@ -278,6 +278,9 @@ class _Saved:
         self.covered = covered
         self.attempts = 0
         self.error: Exception | None = None
+        # stopping: the stop detaches the catalog; stopped: its upload of the closed catalog succeeded.
+        self.stopping = False
+        self.stopped = False
         self._calls = 0
         self._calls_lock = threading.Lock()
 
@@ -343,6 +346,15 @@ class _Checkpointer:
         self.saved.error = None
         self.saved.covered = covers
 
+    def stop_covered(self) -> int | None:
+        """A save call that found the catalog detached by the stop: every commit made before the detach is in the closed
+        catalog the stop uploads, so it answers that upload's snapshot once the stop's save ended, or its error
+        (ADR-0279 Decision 2)."""
+        with self._lock:
+            if not self.saved.stopped:
+                raise self.saved.error or RuntimeError("the stop's save of the closed catalog did not succeed")
+            return self.saved.covered
+
     def save_covering(self, target: int | None) -> int | None:
         """Returns the saved snapshot id once a good save covers snapshot target: at once when the last one does,
         else after the save that ends while the call waits for the lock, or its own. Raises the error of a save that
@@ -379,6 +391,8 @@ class _Checkpointer:
         acknowledged. A query that still holds the file is cancelled (#1217). A file that never closes is left to the
         runtime's kill, which keeps the watcher's last checkpoint, as any SIGKILL does (#998)."""
         with self._lock:
+            if self.saved is not None:
+                self.saved.stopping = True
             self._cur.execute("DETACH lakehouse")
             if not _closed(self._cur):
                 _cancel(self._cur, serving, token)
@@ -395,9 +409,15 @@ class _Checkpointer:
                     self._cur.execute("DETACH funcd_closed")
                 self._upload()
 
-            self._saved(save_closed)
+            try:
+                self._saved(save_closed)
+            except Exception as exc:
+                if self.saved is not None:
+                    self.saved.error = exc
+                raise
             if self.saved is not None:
                 self.saved.covered = covers[0]
+                self.saved.stopped = True
         # The save calls this upload covers answer before Quack stops; the others failed or fail (ADR-0279).
         if self.saved is not None:
             self.saved.drain(SAVE_ANSWER_WAIT_SECONDS)
@@ -554,7 +574,13 @@ def _serve_saves(port: int, checkpointer: _Checkpointer, con: "duckdb.DuckDBPyCo
             cur = None
             try:
                 cur = con.cursor()
-                target = cur.execute(LATEST_SNAPSHOT).fetchone()[0]
+                try:
+                    target = cur.execute(LATEST_SNAPSHOT).fetchone()[0]
+                except Exception:
+                    if not saved.stopping:
+                        raise
+                    self._send(200, {"engine": saved.instance, "saved": checkpointer.stop_covered()})
+                    return
                 self._send(200, {"engine": saved.instance, "saved": checkpointer.save_covering(target)})
             except Exception as exc:  # noqa: BLE001 — the proxy fails the answer with this error.
                 self._send(503, {"engine": saved.instance, "error": str(exc).replace(chr(10), " ")[:500]})

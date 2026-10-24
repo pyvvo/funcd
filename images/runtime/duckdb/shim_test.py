@@ -898,6 +898,52 @@ class TestTheStopAnswersWaitingSaves(unittest.TestCase):
         self.assertEqual(engine.log[-1], "CALL quack_stop(?)")
 
 
+class _DetachedEngine(_SaveEngine):
+    """The engine once a stop detached the catalog: the snapshot query fails."""
+
+    def execute(self, sql: str, params: object = None) -> "_DetachedEngine":
+        if sql == shim.LATEST_SNAPSHOT:
+            raise RuntimeError("Catalog Error: schema __ducklake_metadata_lakehouse does not exist")
+        return self
+
+
+class TestASaveCallAfterTheDetach(unittest.TestCase):
+    """ADR-0279 Decision 2: a save call that finds the catalog detached by the stop answers the snapshot of the closed
+    catalog the stop uploaded, which holds every commit made before the detach, or the stop's failure."""
+
+    def post(self, checkpointer: "shim._Checkpointer", engine: object) -> tuple:
+        server = shim._serve_saves(0, checkpointer, engine)
+        self.addCleanup(server.shutdown)
+        request = urllib.request.Request(f"http://127.0.0.1:{server.server_address[1]}/save", method="POST", data=b"")
+        try:
+            with urllib.request.urlopen(request, timeout=WAIT) as resp:
+                return resp.status, json.load(resp)
+        except urllib.error.HTTPError as err:
+            return err.code, json.load(err)
+
+    def checkpointer(self) -> "shim._Checkpointer":
+        return shim._Checkpointer(_DetachedEngine(0), _Bucket(), "lake", "gold/_ducklake/catalog.db", saved=shim._Saved(5))
+
+    def test_the_stop_s_upload_answers_it(self) -> None:
+        checkpointer = self.checkpointer()
+        saved = checkpointer.saved
+        saved.stopping, saved.stopped, saved.covered = True, True, 9
+        self.assertEqual(self.post(checkpointer, _DetachedEngine(0)), (200, {"engine": saved.instance, "saved": 9}))
+
+    def test_a_failed_stop_answers_its_error(self) -> None:
+        checkpointer = self.checkpointer()
+        saved = checkpointer.saved
+        saved.stopping, saved.error = True, OSError("AccessDenied")
+        code, body = self.post(checkpointer, _DetachedEngine(0))
+        self.assertEqual(code, 503)
+        self.assertIn("AccessDenied", body["error"])
+
+    def test_without_a_stop_the_query_error_is_the_answer(self) -> None:
+        code, body = self.post(self.checkpointer(), _DetachedEngine(0))
+        self.assertEqual(code, 503)
+        self.assertIn("Catalog Error", body["error"])
+
+
 class TestTheStartUpSaveWithoutAWatcher(unittest.TestCase):
     """ADR-0279 Decision 2 with ADR-0276 Decision 2: a recovered catalog is saved once at start and retried until a
     save succeeds; a fresh one is not saved."""
