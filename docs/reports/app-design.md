@@ -1143,11 +1143,17 @@ spec:
       deletion: retain
       prefixes:
         - name: attachments
-          owner: todo-api
+          owner:
+            kind: Function
+            name: todo-api
         - name: events
-          owner: todo-planner
+          owner:
+            kind: Function
+            name: todo-planner
         - name: lake
-          owner: todo-lake
+          owner:
+            kind: Lake
+            name: todo-lake
   functions:
     - name: todo-api
       runtime: nodejs22
