@@ -1,6 +1,6 @@
 # ADR-0278: A file blob Put returns once its object is on disk, and a read refuses an object that lost its bytes
 
-- **Status**: Proposed (2026-10-24); judged twice, every Blocker, Major and Minor folded
+- **Status**: Accepted (2026-10-24, under the decider's delegation of that day); judged three times, every finding folded
 - **Date**: 2026-10-24
 - **Deciders**: green-0-rabbit
 - **Tags**: blob, storage, durability, disaster-recovery
@@ -46,8 +46,8 @@ rename fails and so does every Put (#1251). An S3 200, to every caller, means th
 
 **In**: every Put on a `file://` bucket, plain and create-if-absent, with the directories it creates; one pairing rule
 for `Get`, `GetRange`, `Attributes`, the file walk and the blob mirror's freeze; what a refused object does to its
-callers; a test helper that seeds many objects. **Out**: `s3://` and memory buckets (the remote store and the process
-own their durability); Delete (Open questions); the Lake's save interval (ADR-0274).
+callers; a test helper that seeds many objects. **Out**: `s3://` and memory buckets; Delete (Open questions); the
+Lake's save interval (ADR-0274).
 
 ## Constraints & Decision drivers
 
@@ -82,7 +82,7 @@ own their durability); Delete (Open questions); the Lake's save interval (ADR-02
       `durable.Disk.MkdirAll` at the bucket's `dir_file_mode` (default 0777, as fileblob; `gocloud.go:221`);
    2. the data goes to `<path>.<16 hex>.funcd-tmp`, beside the key (ADR-0203's reserved suffix, which the walk skips;
       this fixes #1251), at fileblob's mode (0666 before the umask; a create-if-absent Put keeps 0600). It is written,
-      its mtime set to the wall clock in nanoseconds above the last mtime this daemon set, and fsynced; its identity is
+      its mtime set to the wall clock in nanoseconds above the last mtime its bucket set, and fsynced; its identity is
       read back with `fstat`: inode, size and mtime. The set mtime keeps an identity to one write when the file system
       reuses an inode;
    3. the attributes go to `<path>.attrs.<16 hex>.funcd-tmp` at 0666 before the umask: fileblob's JSON
@@ -107,19 +107,20 @@ own their durability); Delete (Open questions); the Lake's save interval (ADR-02
    - attributes missing or naming another file: served unchecked with no MD5, so no ETag and no precondition holds
      (ADR-0159's no-digest case); the attributes' content type and metadata are served when they decode.
    `Get` and `GetRange` pair with the descriptor they read; `Attributes` and the file walk pair with a `stat` and hash
-   nothing, so HEAD, LIST and a precondition report the MD5 a GET checks. `GetRange` hashes the whole file, streaming
+   nothing, so HEAD, LIST and a precondition report the MD5 a GET checks; the walk lists a key whose attributes do not
+   decode with no MD5, as today (`gocloud.go:640-642`). `GetRange` hashes the whole file, streaming
    from the same descriptor, the first time this daemon reads it, and keeps passes in a set of 65,536 entries keyed by
    device, identity and MD5, least recently used out first; concurrent first reads of one file hash once, and a
    failure is not remembered; the set grants nothing (the gateway authorizes first). The mirror (ADR-0208 Decision 5)
    pairs with its linked copy's `stat`; it re-freezes a key whose attributes name another file, as it does a write in
    flight, and after its re-freezes copies those bytes unchecked with no MD5, where it used to fail the run.
 3. **Callers of a refused object.** The mirror fails its run on it, naming the key, until the key is written again, as
-   a mismatch fails it today (`mirror.go:322`). The log compactor leaves the window of a refused raw object raw, as
-   for one that does not decode (`compact.go:238-245`); a refused compacted object ends the pass, as an unreadable one
-   does today (`compact.go:290-296`). A log read leaves a refused object out, as an undecodable one
-   (`logread.go:191`). A Site serves 500 for it; a restore fails on it, naming the key.
-4. **Seeding in tests.** `internal/testkit/blobseed` writes objects in the same format, through the same attributes
-   encoder, without syncs; a depguard rule lets only `_test.go` files import it.
+   a mismatch fails it today (`mirror.go:322`). The log compactor leaves a window with a refused raw or compacted
+   object as it is and goes on with the pass, as for a raw object that does not decode (`compact.go:238-245`);
+   retention deletes a refused compacted object by its key, unread (`:266-283`). A log read leaves a refused object
+   out, as an undecodable one (`logread.go:191`). A Site serves 500 for it; a restore fails on it, naming the key.
+4. **Seeding in tests.** `internal/testkit/blobseed` writes objects through gocloud's fileblob, without syncs, so they
+   read as objects written before this ADR; a depguard rule lets only `_test.go` files import it.
 
 ## Design model
 
@@ -157,8 +158,8 @@ None.
 var ErrCorrupt = errors.New("the object does not match its attributes") // wrapped in fault.Internal (ADR-0278)
 
 // internal/blob/gocloud — file backend; the blob.Bucket port is unchanged.
-// FilePair pairs key's attributes in the file:// bucket at dir with info, a stat of a data file of key (Decision
-// 2): a.MD5 is set when the bytes must match it, other reports attributes naming another file; undecodable is ErrCorrupt.
+// FilePair pairs key's attributes in the file:// bucket at dir with info, a stat of a data file of key (Decision 2):
+// a.MD5 is set when the bytes must match it; other: they name another file; undecodable ones are ErrCorrupt.
 func FilePair(dir, key string, info fs.FileInfo) (a blob.Attributes, other bool, err error)
 
 func (k *bucket) fileWrite(ctx context.Context, op, key string, data []byte, opts blob.PutOptions) error
@@ -187,9 +188,8 @@ func Objects(t testing.TB, dir string, objects map[string][]byte) // dir: a file
 ## Implementation plan
 
 1. `internal/platform/durable`: `SyncFile`, `Link`. `internal/blob/gocloud`: `fileEscapeKey`, `fileWrite` for every
-   `file://` Put (`fileCreate` becomes its create-if-absent path), the attributes codec, `FilePair`, the check in `Get`
-   and `GetRange`, `Attributes` and the walk on `FilePair`, the pass set; a `durable.Disk` field the package's tests
-   set; `memblob` and `s3blob` unchanged.
+   `file://` Put (`fileCreate` becomes its create-if-absent path), the attributes codec, `FilePair` under `Get`,
+   `GetRange`, `Attributes` and the walk, the pass set; a `durable.Disk` field the package's tests set.
 2. `internal/backup/blobmirror`: the freeze pairs with `FilePair`. `internal/funclog/compact` and `logread`: Decision
    3. `internal/blob`: `ErrCorrupt`.
 3. `internal/testkit/blobseed` and its depguard rule; the s3gateway paging tests seed with it.
@@ -200,7 +200,8 @@ func Objects(t testing.TB, dir string, objects map[string][]byte) // dir: a file
      HEAD and LIST give no ETag;
    - `TestScenarioConcurrentWritesReadWhole`: a step hook interleaves two Puts' renames and a read between them;
    - `TestScenarioCorruptObjectRefused`: paired, pre-ADR and undecodable attributes with damaged bytes fail `Get` and
-     `GetRange` with `ErrCorrupt`; the gateway answers 500 with no body byte; the compactor leaves the window raw;
+     `GetRange` with `ErrCorrupt`; the gateway answers 500 with no body byte; the compactor leaves such windows as
+     they are, compacts the later ones and prunes;
    - `TestScenarioCreateIfAbsentSurvivesPowerLoss`: sync-file, link, sync-dir before it returns;
    - `TestScenarioMirrorAfterTornPair`: a torn pair still yields a generation; a refused object fails the run;
    - `TestFileWriteMatchesGocloud`: gocloud's `WriteAll` and `fileWrite` give the same paths, bytes, content type,
@@ -228,8 +229,7 @@ func Objects(t testing.TB, dir string, objects map[string][]byte) // dir: a file
 - **(−)** Every full read hashes the object, a Site's assets included; a ranged reader such as DuckDB reads each file
   once in full per daemon run, again after 65,536 other files evicted it.
 - **(−)** After a power loss between the two renames, or two Puts of one key at once (one's data, the other's
-  attributes), an object serves its bytes with another Put's content type and metadata and no ETag until it is written
-  again.
+  attributes), an object serves its bytes with another Put's content type and metadata, no ETag, until rewritten.
 - **(−)** A file-level copy of the store gives every file a new inode, so every object is served unchecked, with no
   ETag, until it is written again; a restore goes through `Put` and is not affected.
 - **(−)** The temp names shorten the longest last key segment from 234 bytes to 222.

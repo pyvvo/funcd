@@ -64,8 +64,9 @@ In order to make this platform self-contained, we will need to implement the fol
       (Apache-2.0) for object storage, with its `memblob` / `fileblob` / `s3blob` drivers.
     - **Two shared substrate layers**, consumed by the higher services so the recurring
       backends (memory, file, S3) are implemented once, not per service:
-      - **Storage layer** (`blob` port) — opaque object bytes; drivers: memory, filesystem,
-        S3-compatible (via `gocloud.dev/blob`). This is the bytes substrate.
+      - **Storage layer** (`blob` port) — opaque object bytes; drivers: memory, filesystem (a Put returns once its
+        object is on disk, a read refuses an object that lost its bytes: ADR-0278), S3-compatible (via
+        `gocloud.dev/blob`). This is the bytes substrate.
       - **Database layer** (`store`/`kvstore` port) — structured/keyed records with watch +
         atomic ops; engine: **Badger** (pure-Go embedded LSM; local file store) + a pure-Go
         **memory** engine for tests (ADR-0065, which replaced ADR-0006's slatedb/cgo engine —
