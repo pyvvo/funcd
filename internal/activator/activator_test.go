@@ -503,6 +503,8 @@ func TestScenarioIdleReclaim(t *testing.T) {
 
 // Issue #49: a boot that outlasts idleTimeout must not be reclaimed while its wake is in flight, and the idle
 // window restarts when the wake ends, so the woken function is not reclaimed before it serves the call.
+// oracle: docs/design/function/scale-to-zero.fizz#NoCallFails
+// oracle: docs/design/function/scale-to-zero.fizz#CallsEnd
 func TestIssue49_ReclaimSkipsWakeInProgress(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -643,6 +645,7 @@ func TestScenarioWakeColdScalesAndReturns(t *testing.T) {
 
 // Issue #47: idle reclaim spares a function while a call to it is in flight, and a call that arrives while a reclaim
 // writes its scale-to-zero finds the function cold instead of the worker about to stop.
+// oracle: docs/design/function/scale-to-zero.fizz#NoCallFails
 func TestIssue47_ReclaimSparesInFlightCall(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

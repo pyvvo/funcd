@@ -1,0 +1,110 @@
+---
+# A redeploy switches a Function to its new revision and drains the old one (ADR-0143 Decisions 4.1 and 6). After the
+# switch the resolver hands out only the new revision's worker; the old worker keeps the calls that resolved it before.
+# The drain retires the old worker once handOutSettle has passed since the switch and the worker is idle (no call in
+# flight, none handed out within handOutSettle), and once drainGrace has passed whatever it serves. Timing assumption: a
+# caller calls the worker it resolved within handOutSettle, one tick; drainGrace is three ticks.
+deadlock_detection: false
+options:
+  # Two calls race the switch and the drain through yield points; the switch, the drain and the clock are atomic.
+  max_concurrent_actions: 3
+  # Above the longest run, which the clock's cap bounds.
+  max_actions: 12
+  crash_on_yield: false
+---
+# diagram: phase
+# mutant no-settle: NoCallReachesARetiredWorker
+# mutant no-idle-check: NoCallCutBeforeTheGrace
+# mutant no-grace: liveness
+
+CALLS = [1, 2]
+# Call 2 is a long call, a stream: it ends only when its worker is retired under it.
+LONG = 2
+SETTLE = 1
+GRACE = 3
+# The switch comes by tick 1, so the grace ends before the clock's cap.
+TICKS = 5
+# no-settle: the drain waits out neither the switch's settle nor a recent hand-out. no-idle-check: it retires the old
+# worker once the settle passed, calls in flight or not. no-grace: it waits for the old worker to be idle, however long.
+MUTANT = ""
+
+action Init:
+    phase = "serving"
+    serving = 1
+    old = 0
+    since = 0
+    now = 0
+    handed = {}
+    resolved = {}
+    in_flight = {}
+    done = []
+    unreachable = []
+    cut = []
+    cut_early = False
+
+# A call resolves the serving worker, a hand-out, then calls it and ends; the long call ends only when it is cut.
+fair action Call:
+    c = oneof CALLS
+    require c not in resolved
+    atomic:
+        resolved[c] = serving
+        handed[serving] = now
+    atomic:
+        if resolved[c] != serving and resolved[c] != old:
+            unreachable.append(c)
+            return
+        in_flight[c] = resolved[c]
+    atomic:
+        require c in in_flight and c != LONG
+        in_flight.pop(c)
+        done.append(c)
+
+# The new revision serves; the old one drains.
+atomic action Switch:
+    require phase == "serving" and serving == 1 and now <= 1
+    old = serving
+    serving = 2
+    since = now
+    phase = "draining"
+
+# The drain retires the old worker, cutting the calls still in flight on it.
+atomic fair action Drain:
+    require phase == "draining"
+    elapsed = now - since
+    busy = len([c for c in in_flight if in_flight[c] == old]) > 0
+    recent = old in handed and now - handed[old] < SETTLE
+    if MUTANT == "no-settle":
+        keep = elapsed < GRACE and busy
+    elif MUTANT == "no-idle-check":
+        keep = elapsed < SETTLE
+    elif MUTANT == "no-grace":
+        keep = elapsed < SETTLE or busy or recent
+    else:
+        keep = elapsed < SETTLE or (elapsed < GRACE and (busy or recent))
+    require not keep
+    for c in list(in_flight.keys()):
+        if in_flight[c] == old:
+            in_flight.pop(c)
+            cut.append(c)
+            if elapsed < GRACE:
+                cut_early = True
+    old = 0
+    phase = "serving"
+
+# One tick of the clock, once every call that resolved a worker has called it.
+atomic fair action Tick:
+    require now < TICKS
+    require all([c in in_flight or c in done or c in unreachable or c in cut for c in resolved])
+    now += 1
+
+# No call reaches a retired worker.
+always assertion NoCallReachesARetiredWorker:
+    return len(unreachable) == 0
+
+# The drain cuts a call only once drainGrace has passed.
+always assertion NoCallCutBeforeTheGrace:
+    return not cut_early
+
+# A drain always ends.
+always eventually assertion DrainEnds:
+    return phase == "serving"

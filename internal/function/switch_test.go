@@ -302,6 +302,7 @@ func TestFailedGateKeepsOldServing(t *testing.T) {
 
 // scenario: in-flight-call-finishes-on-old-revision (ADR-0143) — a call in flight on revision 1 completes after the
 // switch, and holds revision 1's worker until it ends.
+// oracle: docs/design/function/revision-drain.fizz#NoCallCutBeforeTheGrace
 func TestScenarioInFlightCallFinishesOnOldRevision(t *testing.T) {
 	t.Parallel()
 	calls := activator.NewCallTracker(nil)
@@ -351,6 +352,7 @@ func startHungDrain(t *testing.T) (*shimHarness, *clock.Manual) {
 }
 
 // A call that never ends holds the drain only until DrainGrace has passed since the switch (ADR-0143 Decision 4.1).
+// oracle: docs/design/function/revision-drain.fizz#DrainEnds
 func TestDrainGraceBoundsAHungCall(t *testing.T) {
 	t.Parallel()
 	h, clk := startHungDrain(t)
@@ -610,6 +612,7 @@ func TestSwitchWaitsForEveryReplica(t *testing.T) {
 
 // A demoted revision's idle workers outlive the switch by HandOutSettle, and a pass comes back within a second while
 // one drains (ADR-0143 Decisions 4.1, 4.7).
+// oracle: docs/design/function/revision-drain.fizz#NoCallReachesARetiredWorker
 func TestDrainWaitsOutTheHandOutSettle(t *testing.T) {
 	t.Parallel()
 	h := newShimHarness(t, http.StatusOK, false, func(d *function.Deps) {

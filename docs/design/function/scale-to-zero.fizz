@@ -1,0 +1,134 @@
+---
+# Scale to zero (ADR-0016 C2 and C3, ADR-0033; issues #47 and #49). The activator's idle reclaim scales a Function
+# with no recent activity to zero, and a call wakes it. A call records its activity (touch), takes the ready worker or
+# wakes the Function and waits for the wake, then calls the worker. A reclaim pass claims the Function only when no
+# wake runs, its last activity is older than its idle timeout and no call to it is in flight; it then writes the
+# scale-to-zero (Phase Idle), after which the reconciler stops the worker. A call that touches during that write waits
+# it out and finds the Function cold, and a wake that ends restarts the idle window. Timing assumption: a call reaches
+# its worker before the clock moves on, unless it waits for a wake in progress; the idle timeout is one tick.
+deadlock_detection: false
+options:
+  # Two calls and a reclaim pass race through yield points; the reconciler, the wake's end and the clock are atomic.
+  max_concurrent_actions: 3
+  # Above the longest run, which the clock's cap bounds, so no run is cut before its calls end.
+  max_actions: 24
+  crash_on_yield: false
+---
+# diagram: phase
+# mutant no-touch-wait: NoCallFails
+# mutant no-busy-check: NoCallFails
+# mutant no-wake-check: NoCallFails
+# mutant no-restart: NoCallFails
+
+CALLS = [1, 2]
+IDLE = 1
+# Enough for a reclaim, a wake, and a second reclaim right after it.
+TICKS = 4
+# no-touch-wait: a call does not wait out a reclaim writing the scale-to-zero (#47). no-busy-check: the reclaim ignores
+# a call in flight (#47). no-wake-check: the reclaim ignores a wake in progress (#49). no-restart: the end of a wake
+# does not restart the idle window (#49).
+MUTANT = ""
+
+action Init:
+    phase = "ready"
+    worker = 1
+    workers = 1
+    now = 0
+    last_active = 0
+    reclaiming = False
+    waking = False
+    woke = 0
+    touched = {}
+    waiting = []
+    upstream = {}
+    in_flight = {}
+    done = []
+    failed = []
+
+# A call: touch, take the ready worker or wake the Function and wait for the wake, call the worker, end. A call that
+# reaches a stopped worker, or whose worker stops under it, fails.
+fair action Call:
+    c = oneof CALLS
+    require c not in touched
+    atomic:
+        if MUTANT != "no-touch-wait":
+            require not reclaiming
+        last_active = now
+        touched[c] = now
+    atomic:
+        if phase == "ready":
+            upstream[c] = worker
+        else:
+            if not waking:
+                waking = True
+                phase = "deploying"
+            waiting.append(c)
+    if c in waiting:
+        atomic:
+            require not waking
+            waiting.remove(c)
+            upstream[c] = woke
+    atomic:
+        if upstream[c] != worker:
+            failed.append(c)
+            return
+        in_flight[c] = upstream[c]
+    atomic:
+        if c in in_flight:
+            in_flight.pop(c)
+            done.append(c)
+
+# The wake ends once the reconciler made the Function ready: its waiters get the worker, and the idle window restarts.
+atomic fair action WakeEnds:
+    require waking and phase == "ready"
+    woke = worker
+    waking = False
+    if MUTANT != "no-restart":
+        last_active = now
+
+# The reconciler stops the worker of a Function scaled to zero, cutting the calls it serves, and starts one for a
+# Function being woken; a worker that still runs when the wake comes is kept.
+atomic fair action Reconcile:
+    require (phase == "idle" and worker != 0) or phase == "deploying"
+    if phase == "idle":
+        for c in list(in_flight.keys()):
+            if in_flight[c] == worker:
+                in_flight.pop(c)
+                failed.append(c)
+        worker = 0
+    else:
+        if worker == 0:
+            workers += 1
+            worker = workers
+        phase = "ready"
+
+# An idle reclaim pass: it claims the Function, writes its scale-to-zero, then releases the calls that wait it out. A
+# wake in progress counts as activity.
+action Reclaim:
+    atomic:
+        require phase == "ready" and not reclaiming
+        if waking and MUTANT != "no-wake-check":
+            last_active = now
+            return
+        require now - last_active > IDLE
+        if MUTANT != "no-busy-check":
+            require len(in_flight) == 0
+        reclaiming = True
+    atomic:
+        phase = "idle"
+    atomic:
+        reclaiming = False
+
+# One tick of the clock, once every call that touched has reached its worker or waits for a wake in progress.
+atomic action Tick:
+    require now < TICKS
+    require all([c in in_flight or c in done or c in failed or (c in waiting and waking) for c in touched])
+    now += 1
+
+# No call fails: none reaches a stopped worker, and no stop cuts one in flight.
+always assertion NoCallFails:
+    return len(failed) == 0
+
+# Every call that touched ends.
+always eventually assertion CallsEnd:
+    return all([c in done or c in failed for c in touched])
