@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.29.0](https://github.com/pyvvo/funcd/compare/v0.28.0...v0.29.0) (2026-10-24)
+
+
+### Features
+
+* **blob:** a file blob Put returns once its object is on disk, and a read refuses one that lost its bytes (ADR-0278) ([#1258](https://github.com/pyvvo/funcd/issues/1258)) ([25dc0e3](https://github.com/pyvvo/funcd/commit/25dc0e3fea06c7d96d43e133fd99fa8f4605055e))
+* **lake:** a Lake answers a commit once its catalog save covers it (ADR-0279) ([#1263](https://github.com/pyvvo/funcd/issues/1263)) ([87acfb7](https://github.com/pyvvo/funcd/commit/87acfb7678d4262212cca64b0c681c15a5fbe8d5))
+
+
+### Bug Fixes
+
+* **artifact:** a pulled artifact reaches the disk before its cache dir is marked pulled ([647381d](https://github.com/pyvvo/funcd/commit/647381d6e84cb1ce277fca0ce0dd8ba43c7ef54a))
+* **artifact:** the cached platforms of an artifact survive a power loss ([647381d](https://github.com/pyvvo/funcd/commit/647381d6e84cb1ce277fca0ce0dd8ba43c7ef54a))
+* **containerd:** the CNI conflist survives a power loss after funcd's first start ([d9a78a5](https://github.com/pyvvo/funcd/commit/d9a78a55588dd6f23f8c2190f8e6bce70d390220))
+* **install:** funcd install writes its systemd unit durably ([d9a78a5](https://github.com/pyvvo/funcd/commit/d9a78a55588dd6f23f8c2190f8e6bce70d390220))
+* **lake:** a Lake stop lets the clients of the queries it cancelled read their interrupt error (ADR-0273) ([#1265](https://github.com/pyvvo/funcd/issues/1265)) ([1aac5f6](https://github.com/pyvvo/funcd/commit/1aac5f68c7d5488586bc5d9e09a928969cd10c2d))
+* **provision:** funcd install writes each runtime binary durably ([647381d](https://github.com/pyvvo/funcd/commit/647381d6e84cb1ce277fca0ce0dd8ba43c7ef54a))
+* **s3gateway:** the node master secret survives a power loss after it is written or restored ([647381d](https://github.com/pyvvo/funcd/commit/647381d6e84cb1ce277fca0ce0dd8ba43c7ef54a))
+
 ## [0.28.0](https://github.com/pyvvo/funcd/compare/v0.27.0...v0.28.0) (2026-10-24)
 
 
