@@ -12763,5 +12763,20 @@
     "dod_total": 12,
     "report": "docs/reviews/issue-1259-fix-claude-opus-5-5.md",
     "notes": "the catch-up scenario stepped by an added hour; the cron fires a repeated DST hour once; slots from nextSlot, a 2025 DST night pinned"
+  },
+  {
+    "date": "2026-10-24",
+    "adr": "0278",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "changes-requested",
+    "blockers": 0,
+    "majors": 1,
+    "minors": 3,
+    "model_attributed": 4,
+    "dod_passed": 11,
+    "dod_total": 15,
+    "report": "docs/reviews/adr-0278-implementation-claude-opus-5-5.md",
+    "notes": "changes-requested; M1 model: file:// reads drop gocloud's UTF-8 key check and fileEscapeKey maps bad bytes to U+FFFD, so GET bronze/x%FF serves bronze/x<U+FFFD> (base 404), and create-if-absent takes a non-UTF-8 key; m1 model: no test of the ctx check or LRU order (mutants survive); m2 model: gocloud listing tests pay synced Puts (pkg 17.9 s to 65.9 s -race); m3 model: stale ranged-GET comment backend.go:156; routed: 0159/0203/0208 back-links (acceptance), whole-second mtimes untested (adr); 20/24 mutants killed; gate, lanes, exp 0009 pending"
   }
 ]
