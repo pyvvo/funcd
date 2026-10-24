@@ -195,7 +195,8 @@ func (w *lakeWorld) run(t *testing.T, engineNotReadyFirst bool) *lakeRun {
 	engine := &lakeEngine{addr: w.engine, notReadyFirst: engineNotReadyFirst}
 	cat, err := lakesvc.NewReconciler(lakesvc.ReconcilerDeps{
 		Store: w.st, Provider: engine, Proxy: mgr, SupervisionPeriod: testPeriod,
-		ImageFor: func(rt string) string { return "funcd/runtime-" + rt },
+		ImageFor:     func(rt string) string { return "funcd/runtime-" + rt },
+		LocalCatalog: true, // the fake engine serves no save endpoint (ADR-0279)
 	})
 	require.NoError(t, err)
 	return &lakeRun{w: w, mgr: mgr, fn: fn, cat: cat, rt: rt, engine: engine}

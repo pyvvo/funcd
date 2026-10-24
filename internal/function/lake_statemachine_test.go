@@ -119,10 +119,11 @@ func newLakeWorld(t *testing.T) *lakeWorld {
 	engine.start()
 	proxies := lakegw.NewManager("", lakegw.NewLakeKeys(master, fn.store), allowAll{}, nil)
 	lake, err := lakesvc.NewReconciler(lakesvc.ReconcilerDeps{
-		Store:    fn.store,
-		Provider: engine,
-		Secrets:  fakeResolver{env: map[string]string{"QUACK_TOKEN": sharedQuackToken}},
-		Proxy:    proxies,
+		Store:        fn.store,
+		Provider:     engine,
+		Secrets:      fakeResolver{env: map[string]string{"QUACK_TOKEN": sharedQuackToken}},
+		Proxy:        proxies,
+		LocalCatalog: true, // the fake engine serves no save endpoint (ADR-0279)
 	})
 	require.NoError(t, err)
 	return &lakeWorld{
