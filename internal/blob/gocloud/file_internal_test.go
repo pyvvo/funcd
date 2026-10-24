@@ -294,18 +294,22 @@ func TestRangeCheckOncePerFile(t *testing.T) {
 		require.ErrorIs(t, p.check(passKey{id: fileIdentity{Ino: 2}}, fail), blob.ErrCorrupt)
 		require.Equal(t, 2, calls)
 	})
-	t.Run("bounded", func(t *testing.T) {
+	t.Run("bounded, the least recently used out first", func(t *testing.T) {
 		t.Parallel()
 		p := newPassSet()
-		for i := range passSetSize + 1 {
+		for i := range passSetSize {
 			p.pass(passKey{id: fileIdentity{Ino: uint64(i)}})
 		}
-		hashed := false
-		hash := func() error { hashed = true; return nil }
-		require.NoError(t, p.check(passKey{id: fileIdentity{Ino: passSetSize}}, hash))
-		require.False(t, hashed, "the newest file stays")
-		require.NoError(t, p.check(passKey{id: fileIdentity{Ino: 0}}, hash))
-		require.True(t, hashed, "the oldest file was evicted")
+		hashes := map[uint64]int{}
+		check := func(ino uint64) {
+			require.NoError(t, p.check(passKey{id: fileIdentity{Ino: ino}}, func() error { hashes[ino]++; return nil }))
+		}
+		check(0)
+		p.pass(passKey{id: fileIdentity{Ino: passSetSize}})
+		check(passSetSize)
+		check(0)
+		check(1)
+		require.Equal(t, map[uint64]int{1: 1}, hashes, "file 0, used last, stays; file 1, used least recently, went")
 	})
 	t.Run("a ranged read hashes a file once", func(t *testing.T) {
 		t.Parallel()
@@ -322,4 +326,48 @@ func TestRangeCheckOncePerFile(t *testing.T) {
 		_, err = k.Get(ctx, "obj")
 		require.True(t, errors.Is(err, blob.ErrCorrupt), "a full read hashes every time")
 	})
+}
+
+// ADR-0278 Decision 1: a Put whose context is cancelled before its renames publishes nothing: the old object stays,
+// and no temp file is left.
+func TestFileWriteCancelledPublishesNothing(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	k := fileBucketAt(t, dir, nil)
+	require.NoError(t, k.Put(context.Background(), "obj", []byte("old"), blob.PutOptions{}))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, opts := range []blob.PutOptions{{}, {IfNotExist: true}} {
+		key := "obj"
+		if opts.IfNotExist {
+			key = "new"
+		}
+		require.ErrorIs(t, k.Put(ctx, key, []byte("new bytes"), opts), context.Canceled)
+	}
+	got, err := k.Get(context.Background(), "obj")
+	require.NoError(t, err)
+	require.Equal(t, "old", string(got))
+	_, err = k.Get(context.Background(), "new")
+	require.Equal(t, fault.NotFound, fault.KindOf(err))
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Len(t, entries, 2, "obj and its attributes, no temp file")
+}
+
+// A key that is not valid UTF-8 is refused on the file backend, as gocloud refuses it: fileEscapeKey would map it
+// onto the path of another key (ADR-0278 review).
+func TestFileNonUTF8KeyRefused(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	k := fileBucketAt(t, t.TempDir(), nil)
+	require.NoError(t, k.Put(ctx, "y\uFFFD", []byte("replacement"), blob.PutOptions{}))
+	for name, call := range map[string]func() error{
+		"Put":        func() error { return k.Put(ctx, "y\xff", []byte("x"), blob.PutOptions{}) },
+		"create":     func() error { return k.Put(ctx, "y\xfe", []byte("x"), blob.PutOptions{IfNotExist: true}) },
+		"Get":        func() error { _, err := k.Get(ctx, "y\xff"); return err },
+		"GetRange":   func() error { _, err := k.GetRange(ctx, "y\xff", 0, 1); return err },
+		"Attributes": func() error { _, err := k.Attributes(ctx, "y\xff"); return err },
+	} {
+		require.Equal(t, fault.Invalid, fault.KindOf(call()), name)
+	}
 }

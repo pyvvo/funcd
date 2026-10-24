@@ -3,6 +3,7 @@
 - **Status**: Implemented (2026-10-05)
 - **Superseded in part by**: [ADR-0184](0184-stateless-listing-pushdown.md) (2026-10-05) — Contracts Bucket (lines 146-157) gains ListAfter; Temporary workarounds (lines 140-141) no longer apply on file://.
 - **Superseded in part by**: [ADR-0203](0203-backup-format-targets-and-fencing.md) (2026-10-10) — Contracts `PutOptions` gains `IfNotExist`.
+- **Superseded in part by**: [ADR-0278](0278-a-file-blob-put-returns-once-its-object-is-on-disk.md) (2026-10-24) — Decision 2's "`Put` stays on `WriteAll`" for `file://`: a file Put goes through funcd's synced writer; Decision 4's "a ranged GET still reads only its range": a file object is first checked whole once per daemon run.
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged twice)
 - **Deciders**: green-0-rabbit
 - **Tags**: blob, s3, etag, conditional-requests, port

@@ -153,9 +153,9 @@ func mapBlobErr(err error) error {
 
 // GetObject serves a GET (ADR-0080), honoring a byte-range via GetObjectInput.Range.
 // Last-Modified, the ETag, Content-Type and the user metadata come from blob.Stat, the values HEAD and the
-// listing report (ADR-0159): the ETag is the stored digest, so a ranged GET carries the object's ETag and
-// still reads only its range. A driver implementing blob.RangeReader serves the range directly; otherwise
-// the gateway falls back to a full Get + slice (rangereader-fallback scenario).
+// listing report (ADR-0159): the ETag is the stored digest, so a ranged GET carries the object's ETag. A driver
+// implementing blob.RangeReader serves the range directly, a file:// one after checking the object whole once per
+// daemon run (ADR-0278); otherwise the gateway falls back to a full Get + slice (rangereader-fallback scenario).
 func (b *be) GetObject(ctx context.Context, in *awss3.GetObjectInput) (*awss3.GetObjectOutput, error) {
 	ctx, end := b.opContext(ctx)
 	defer end()

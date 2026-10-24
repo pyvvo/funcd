@@ -20,6 +20,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -265,7 +266,8 @@ type bucket struct {
 }
 
 // checkKey rejects a key the file backend cannot keep as its own object: an empty key
-// names the bucket root, not an object; fileblob reserves the ".attrs" suffix and its
+// names the bucket root, not an object; a key that is not valid UTF-8 would escape onto
+// another key's path, as gocloud refuses it (ADR-0278); fileblob reserves the ".attrs" suffix and its
 // "__0x<hex>__" escape (a raw one shares the path of the key it encodes and lists
 // decoded), funcd the ".funcd-tmp" suffix of its create-if-absent temp files, and
 // fileblob's filepath.Join cleans a "." segment, a trailing ".." and a leading "/",
@@ -276,6 +278,9 @@ func (k *bucket) checkKey(op, key string) error {
 	}
 	if key == "" {
 		return fault.Invalidf(op, "an empty key names the bucket root, not an object, on the file backend")
+	}
+	if !utf8.ValidString(key) {
+		return fault.Invalidf(op, "%q: a key must be valid UTF-8 on the file backend", key)
 	}
 	for _, suffix := range []string{fileAttrsSuffix, fileTempSuffix} {
 		if strings.HasSuffix(key, suffix) {

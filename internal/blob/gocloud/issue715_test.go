@@ -8,8 +8,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
+	"github.com/pyvvo/funcd/internal/testkit/blobseed"
 )
 
 // Issue 715 / 768: fileblob pages by key while it walks in file-name order, so t/events.json, which sorts
@@ -29,19 +29,23 @@ func TestScenarioListAfterContract(t *testing.T) {
 	runContract(t)
 }
 
+// The keys are seeded through blobseed: the test checks the walk, and 1001 synced Puts are slow (ADR-0278 Decision 4).
 func testFileListKeepsEveryKey(t *testing.T) {
 	ctx := context.Background()
-	b, err := gocloud.Open(ctx, gocloud.FileURL(t.TempDir()))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = b.Close() })
+	dir := t.TempDir()
 	want := make([]string, 0, 1001)
+	objects := make(map[string][]byte, 1001)
 	for i := range 1000 {
 		want = append(want, fmt.Sprintf("t/events/x%04d", i))
 	}
 	want = append(want, "t/events.json")
 	for _, k := range want {
-		require.NoError(t, b.Put(ctx, k, []byte("x"), blob.PutOptions{}))
+		objects[k] = []byte("x")
 	}
+	blobseed.Objects(t, dir, objects)
+	b, err := gocloud.Open(ctx, gocloud.FileURL(dir))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = b.Close() })
 	slices.Sort(want)
 
 	items, err := b.List(ctx, "t/")

@@ -1,6 +1,7 @@
 # ADR-0203: Backup format, targets and fencing
 
 - **Status**: Implemented (2026-10-10; accepted 2026-10-10 by an `adr-batch` run after a clean `adr-judge` gate; the defaults below were not confirmed one by one)
+- **Superseded in part by**: [ADR-0278](0278-a-file-blob-put-returns-once-its-object-is-on-disk.md) (2026-10-24) — Decision 1's `file://` create-if-absent also syncs its directory before it returns, and its workaround's exit (a Go CDK `fileblob` passing `TestCreateIfAbsentIsAtomic`) no longer brings it back.
 - **Date**: 2026-10-08
 - **Deciders**: green-0-rabbit
 - **Tags**: backup, disaster-recovery, blob, s3, fencing, retention

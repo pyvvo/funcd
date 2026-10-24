@@ -78,12 +78,9 @@ func (c *fileClock) next() time.Time {
 	}
 }
 
-// newFileAttrs is what gocloud's writer records for data (blob.go:1144-1230): a valid UTF-8 key, metadata keys
-// lowercased with no empty, duplicate or non-UTF-8 one, the content type re-formatted or detected, and the MD5.
-func newFileAttrs(key string, data []byte, opts blob.PutOptions) (*fileAttrs, error) {
-	if !utf8.ValidString(key) {
-		return nil, errors.New("the key is not valid UTF-8")
-	}
+// newFileAttrs is what gocloud's writer records for data (blob.go:1162-1230): metadata keys lowercased with no empty,
+// duplicate or non-UTF-8 one, the content type re-formatted or detected, and the MD5. checkKey refuses a non-UTF-8 key.
+func newFileAttrs(data []byte, opts blob.PutOptions) (*fileAttrs, error) {
 	xa := &fileAttrs{ContentType: http.DetectContentType(data)}
 	if opts.ContentType != "" {
 		t, p, err := mime.ParseMediaType(opts.ContentType)
@@ -142,7 +139,7 @@ func (k *bucket) fileWrite(ctx context.Context, op, key string, data []byte, opt
 		perm = 0o600
 	} else {
 		var err error
-		if xa, err = newFileAttrs(key, data, opts); err != nil {
+		if xa, err = newFileAttrs(data, opts); err != nil {
 			return fault.Wrapf(err, fault.Invalid, op, "put %q", key)
 		}
 	}

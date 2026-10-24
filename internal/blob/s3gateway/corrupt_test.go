@@ -38,3 +38,19 @@ func TestScenarioCorruptObjectRefused(t *testing.T) {
 	}
 	require.FileExists(t, path)
 }
+
+// A GET of a key that is not valid UTF-8 finds no object on a file store, not the object whose key replaces the
+// invalid byte (ADR-0278 review).
+func TestFileGetOfNonUTF8KeyIsNoSuchKey(t *testing.T) {
+	t.Parallel()
+	g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, fileBucketIn(t.TempDir()))
+	ctx := context.Background()
+	_, err := g.client(t, "default", "etl-svc").PutObject(ctx, &awss3.PutObjectInput{
+		Bucket: ptrS("lakehouse"), Key: ptrS("bronze/x\uFFFD"), Body: bytes.NewReader([]byte("other")),
+	})
+	require.NoError(t, err)
+	_, err = g.client(t, "default", "analytics").GetObject(ctx, &awss3.GetObjectInput{
+		Bucket: ptrS("lakehouse"), Key: ptrS("bronze/x\xff"),
+	}, oneAttempt)
+	require.Equal(t, "NoSuchKey", errorCode(err), "%v", err)
+}
