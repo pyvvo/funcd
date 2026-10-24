@@ -12628,5 +12628,20 @@
     "dod_total": 7,
     "report": "docs/reviews/adr-0274-implementation-claude-opus-5-5.md",
     "notes": "pass: lake.saveInterval in funcdconfig.yaml (the decider's platform key, reworked before the merge) and funcdctl backup plan lake --rpo; revert checks on the reconciler and the engine; gate, engine tests and duckdb lane PASS"
+  },
+  {
+    "date": "2026-10-24",
+    "issue": "1227",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-1227-fix-claude-opus-5-5.md",
+    "notes": "pass; regression test fails on main and two mutants fail; duckdb lane 20/20; three findings routed to the stop-path search report (ADR-0175 same-name write, silent failed save, daemon stop order)"
   }
 ]
