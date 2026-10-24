@@ -12688,5 +12688,20 @@
     "dod_total": 8,
     "report": "docs/reviews/adr-0276-implementation-claude-opus-5-5.md",
     "notes": "pass; 2 Minors (model), both fixed: the late Reviewing move, go.mod untidy after the typeurl test import; 4 mutants caught; duckdb lane PASS incl. the issue1233 case"
+  },
+  {
+    "date": "2026-10-24",
+    "adr": "0277",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 2,
+    "dod_passed": 8,
+    "dod_total": 8,
+    "report": "docs/reviews/adr-0277-implementation-claude-opus-5-5.md",
+    "notes": "pass; built by the cowork session; 2 Minors (model), both fixed: no test of the process driver's StopGrace (mutant survived), an overstated budget note; 5 mutants killed; wave gate PASS, duckdb lane PASS"
   }
 ]
