@@ -12703,5 +12703,20 @@
     "dod_total": 8,
     "report": "docs/reviews/adr-0277-implementation-claude-opus-5-5.md",
     "notes": "pass; built by the cowork session; 2 Minors (model), both fixed: no test of the process driver's StopGrace (mutant survived), an overstated budget note; 5 mutants killed; wave gate PASS, duckdb lane PASS"
+  },
+  {
+    "date": "2026-10-24",
+    "issue": "1241",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-1241-fix-claude-opus-5-5.md",
+    "notes": "pass; the flake reproduces 3 of 3 with a 300 ms delayed probe on main and not with the fix; 400 runs pass; the #1232 mutants still fail it; reviewed in the producing session (decider, 2026-10-11)"
   }
 ]
