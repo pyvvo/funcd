@@ -1,6 +1,7 @@
 # ADR-0080: S3-protocol frontend on the blob substrate
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0275](0275-a-bucket-prefix-owner-names-its-kind.md) (2026-10-24) — `BucketPrefix.owner` becomes `{kind, name}`.
 - **Date**: 2026-06-24 (Accepted 2026-06-29 after judge pass — folded M1 new-Bucket-kind plumbing, M2 schema.go
   curated-vocabulary edits + S3Identity principal, M3 connection→identity trust anchor, m4 s3::write base-permit;
   reframed as a **built-in provider** per the blueprint provider model. **Reviewing → Implemented 2026-06-30** —
