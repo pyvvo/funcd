@@ -1,6 +1,6 @@
 # ADR-0277: A containerd worker gets one stop grace, set in funcdconfig.yaml, at a daemon stop too
 
-- **Status**: Accepted (2026-10-24) by an `adr-batch` run the decider delegated ("you have batch"); judged twice:
+- **Status**: Reviewing (2026-10-24); Accepted 2026-10-24 by an `adr-batch` run the decider delegated ("you have batch"); judged twice:
   round 1's four Majors (the grace read from the runtime, the boot sweep left out, ADR-0167 superseded, the private
   containerd's stop counted) and round 2's (ADR-0163 superseded) folded, with the unit raised to 45 s
 - **Date**: 2026-10-24
