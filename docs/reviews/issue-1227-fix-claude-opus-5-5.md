@@ -42,7 +42,9 @@ until its task exits`, on `origin/main` cd9ee0c9 (`git diff origin/main...HEAD`:
 - **The behavior is fixed on the real platform.** The duckdb lane passes 20 of 20 cases. Its new case,
   `issue1227-redeploy-keeps-commits`, commits three tables, applies Lake `lake` at 3Gi (a spec change that replaces
   the engine, #1195), waits for a new engine pid and a Ready Lake, and reads `[[3]]` from the new engine, in 3.9 s.
-  The debug run showed the stop end to end: SIGTERM, drain, the save after the drain (PUT 200) and the stop's own
+  On unfixed `origin/main` cd9ee0c9, with only the case and its fixture copied in, the same case fails: the
+  replacement takes 12 tries of 1 s (the old engine runs to its 10 s grace), and the new engine answers "Table with
+  name issue1227_a does not exist" on all 21 tries. The debug run showed the stop end to end: SIGTERM, drain, the save after the drain (PUT 200) and the stop's own
   upload (PUT 200) within 80 ms, then the new engine's GET of that catalog.
 - **The fix addresses the cause.** `stop()` sent the CNI DEL before `task.Kill(SIGTERM)`, which #748 had put there so
   that the bridge plugin frees the masquerade rules while the netns exists. The netns is pinned at `Create` since
