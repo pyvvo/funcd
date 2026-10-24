@@ -29,6 +29,7 @@ import (
 	"runtime"
 
 	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/platform/durable"
 	"github.com/pyvvo/funcd/internal/platform/httpx"
 )
 
@@ -67,7 +68,7 @@ type Asset struct {
 	Version string                   // pinned, e.g. "1.28"
 	URLFor  func(arch string) string // arch ∈ {"amd64","arm64"}
 	SHA256  map[string]string        // arch → hex digest (verified before Install)
-	Install func(data []byte, binDir, cniDir string) error
+	Install func(d durable.Disk, data []byte, binDir, cniDir string) error
 
 	// present reports whether this asset is already laid down at its pinned version (idempotency).
 	present func(binDir, cniDir string) bool
@@ -147,15 +148,20 @@ const (
 // skipped. A checksum mismatch returns fault.Invalid and installs NOTHING (no partial state, no
 // chmod, no exec). binDir/cniDir are the destinations.
 func LayDown(ctx context.Context, binDir, cniDir string) error {
+	return layDown(ctx, durable.Disk{}, binDir, cniDir)
+}
+
+// layDown is LayDown writing through d, which a test traces (#1244).
+func layDown(ctx context.Context, d durable.Disk, binDir, cniDir string) error {
 	const op = "provision.LayDown"
 	arch := hostArch()
 	if arch == "" {
 		return fault.Invalidf(op, "unsupported architecture %q (want amd64 or arm64)", runtime.GOARCH)
 	}
-	if err := os.MkdirAll(binDir, 0o755); err != nil { //nolint:gosec // bin dir holds world-execed runtime binaries
+	if err := d.MkdirAll(binDir, 0o755); err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "create bin dir %q", binDir)
 	}
-	if err := os.MkdirAll(cniDir, 0o755); err != nil { //nolint:gosec // CNI bin dir is the OS-standard /opt/cni/bin
+	if err := d.MkdirAll(cniDir, 0o755); err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "create cni dir %q", cniDir)
 	}
 
@@ -180,7 +186,7 @@ func LayDown(ctx context.Context, binDir, cniDir string) error {
 				"%s %s checksum mismatch: got %s, want %s — refusing to install unverified bytes",
 				a.Name, a.Version, got, want)
 		}
-		if err := a.Install(data, binDir, cniDir); err != nil {
+		if err := a.Install(d, data, binDir, cniDir); err != nil {
 			return fault.Wrapf(err, fault.Internal, op, "install %s %s", a.Name, a.Version)
 		}
 	}
@@ -232,17 +238,18 @@ func download(ctx context.Context, client *http.Client, url string) ([]byte, err
 	return data, nil
 }
 
-// installBinary writes a lone static binary (the verified data) to binDir/name with mode 0755.
-func installBinary(name string) func(data []byte, binDir, cniDir string) error {
-	return func(data []byte, binDir, _ string) error {
-		return os.WriteFile(filepath.Join(binDir, name), data, 0o755) //nolint:gosec // a runtime binary must be world-executable
+// installBinary writes a lone static binary (the verified data) to binDir/name with mode 0755, durably: a binary left
+// empty by a power loss would count as present and never be laid down again (#1244).
+func installBinary(name string) func(d durable.Disk, data []byte, binDir, cniDir string) error {
+	return func(d durable.Disk, data []byte, binDir, _ string) error {
+		return d.WriteFile(binDir, name, data, 0o755)
 	}
 }
 
 // installTarGz gunzips+untars the verified data and extracts the named members (tar path →
-// dest filename) to either binDir or cniDir (per dest), each with mode 0755.
-func installTarGz(members map[string]string, dest destKind) func(data []byte, binDir, cniDir string) error {
-	return func(data []byte, binDir, cniDir string) error {
+// dest filename) to either binDir or cniDir (per dest), each with mode 0755 and durably, as installBinary.
+func installTarGz(members map[string]string, dest destKind) func(d durable.Disk, data []byte, binDir, cniDir string) error {
+	return func(d durable.Disk, data []byte, binDir, cniDir string) error {
 		gz, err := gzip.NewReader(bytes.NewReader(data))
 		if err != nil {
 			return fmt.Errorf("gunzip: %w", err)
@@ -270,7 +277,7 @@ func installTarGz(members map[string]string, dest destKind) func(data []byte, bi
 			if err != nil {
 				return fmt.Errorf("read %s: %w", hdr.Name, err)
 			}
-			if err := os.WriteFile(filepath.Join(dir, out), buf, 0o755); err != nil { //nolint:gosec // runtime binaries must be world-executable
+			if err := d.WriteFile(dir, out, buf, 0o755); err != nil {
 				return fmt.Errorf("write %s: %w", out, err)
 			}
 			found[hdr.Name] = true

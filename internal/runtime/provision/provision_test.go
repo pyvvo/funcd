@@ -12,10 +12,12 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/platform/durable"
 )
 
 func sum(b []byte) string {
@@ -63,13 +65,10 @@ func dirEmpty(t *testing.T, dir string) bool {
 	return len(es) == 0
 }
 
-// scenario: install-lays-down-runtime — matching SHA-256 installs each asset shape (a lone
-// binary into binDir, an untar selecting members into binDir/cniDir) to the temp dirs.
-func TestLayDownInstallsVerifiedAssets(t *testing.T) {
-	arch := hostArch()
-	if arch == "" {
-		t.Skipf("unsupported test arch %q", runtime.GOARCH)
-	}
+// verifiedAssets serves one asset of each shape (a lone binary, a containerd and a CNI archive with members it must
+// skip) and installs it as the package's table: each pinned to its digest.
+func verifiedAssets(t *testing.T, arch string) {
+	t.Helper()
 	crunBytes := []byte("fake-crun-static-binary")
 	ctrTar := tarGz(t, map[string][]byte{
 		"bin/containerd":              []byte("containerd-bin"),
@@ -120,6 +119,16 @@ func TestLayDownInstallsVerifiedAssets(t *testing.T) {
 			}, destCNI),
 		},
 	})
+}
+
+// scenario: install-lays-down-runtime — matching SHA-256 installs each asset shape (a lone
+// binary into binDir, an untar selecting members into binDir/cniDir) to the temp dirs.
+func TestLayDownInstallsVerifiedAssets(t *testing.T) {
+	arch := hostArch()
+	if arch == "" {
+		t.Skipf("unsupported test arch %q", runtime.GOARCH)
+	}
+	verifiedAssets(t, arch)
 
 	binDir, cniDir := filepath.Join(t.TempDir(), "bin"), filepath.Join(t.TempDir(), "cni")
 	if err := LayDown(context.Background(), binDir, cniDir); err != nil {
@@ -144,6 +153,49 @@ func TestLayDownInstallsVerifiedAssets(t *testing.T) {
 	fi, _ := os.Stat(filepath.Join(binDir, "crun"))
 	if fi.Mode().Perm() != 0o755 {
 		t.Errorf("crun mode = %v, want 0755", fi.Mode().Perm())
+	}
+}
+
+// Issue #1244: funcd install skips an asset whose files exist, and every later start execs them, so a power loss that
+// left a binary empty would never be repaired. Each binary is synced, renamed into place and its dir synced, and the
+// dirs LayDown makes are synced into their parent.
+func TestIssue1244_LayDownWritesEachBinaryDurably(t *testing.T) {
+	arch := hostArch()
+	if arch == "" {
+		t.Skipf("unsupported test arch %q", runtime.GOARCH)
+	}
+	verifiedAssets(t, arch)
+	type step struct {
+		op   durable.Op
+		path string
+	}
+	var steps []step
+	root := t.TempDir()
+	binDir, cniDir := filepath.Join(root, "bin"), filepath.Join(root, "cni")
+	d := durable.Disk{Trace: func(op durable.Op, p string) { steps = append(steps, step{op, p}) }}
+	if err := layDown(context.Background(), d, binDir, cniDir); err != nil {
+		t.Fatalf("layDown: %v", err)
+	}
+
+	if len(steps) < 2 || steps[0] != (step{durable.SyncDir, root}) || steps[1] != (step{durable.SyncDir, root}) {
+		t.Fatalf("the bin and cni dirs are not made durably: %v", steps)
+	}
+	for dir, names := range map[string][]string{
+		binDir: {"crun", "containerd", "containerd-shim-runc-v2", "ctr"},
+		cniDir: {"bridge", "firewall", "host-local", "loopback", "portmap"},
+	} {
+		for _, name := range names {
+			path := filepath.Join(dir, name)
+			i := slices.Index(steps, step{durable.Rename, path})
+			switch {
+			case i < 1:
+				t.Errorf("%s is not renamed into place: %v", name, steps)
+			case steps[i-1].op != durable.SyncFile || !strings.HasPrefix(steps[i-1].path, path+".tmp-"):
+				t.Errorf("%s is renamed before its data is synced: %v", name, steps[i-1])
+			case i+1 >= len(steps) || steps[i+1] != (step{durable.SyncDir, dir}):
+				t.Errorf("%s's dir is not synced after its rename", name)
+			}
+		}
 	}
 }
 
