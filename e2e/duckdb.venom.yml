@@ -27,6 +27,7 @@
 # The ADR-0269 case: a query that points an S3 secret at the VM's own address opens no connection there.
 # The #1227 case: tables committed just before a spec change replaces the engine are read back from the new engine.
 # The #1232 case: tables committed just before a graceful daemon stop are read back after the daemon starts again.
+# The #1233 case: a Lake whose catalog saves are refused reports it in CatalogSaved and the daemon's journal.
 # ADR-0275: Lake lake keeps its prefix's write beside Function lake and through its own delete (#1231).
 name: lake-quack add-on provider — deploy + Ready + live SQL round-trip on real containerd (ADR-0086/0087/0088/0091)
 
@@ -496,6 +497,84 @@ testcases:
         assertions:
           - result.statuscode ShouldEqual 200
           - result.body ShouldContainSubstring "[[3]]"
+
+  # ADR-0276 (#1233): a Lake whose catalog saves fail shows it. Its gold prefix given to Function other, which does not
+  # exist, makes the S3 gateway refuse the engine's saves; a one-row table is inlined in the catalog, so the commit
+  # itself lands. CatalogSaved turns False with the engine's error while the Lake stays Ready and serves queries, and
+  # the engine's line reaches the daemon's journal. Given back, the next save turns it True. It runs before Function
+  # lake exists, as the cases before it do.
+  - name: issue1233-failing-saves-show — a Lake whose catalog saves are refused reports it, and reports the next good save
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            funcdctl apply -f /opt/lane/lake-saves-refused.yaml >/dev/null && echo APPLIED'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual APPLIED
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"CREATE TABLE IF NOT EXISTS lakehouse.issue1233_refused AS SELECT 1233 AS n"}}'
+        retry: 30
+        delay: 2
+        info: "a commit while the saves are refused → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            funcdctl get lake lake -n default -o json | python3 -c "import sys,json
+          s=json.load(sys.stdin)[\"status\"]
+          c=next((c for c in s.get(\"conditions\",[]) if c[\"type\"]==\"CatalogSaved\"),{})
+          print(c.get(\"status\",\"\"),c.get(\"reason\",\"\"),s.get(\"phase\",\"\"),c.get(\"message\",\"\"))"'
+        retry: 30
+        delay: 2
+        info: "CatalogSaved while the saves are refused → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldMatchRegex "^False SavesFailing Ready failing since [0-9]"
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT n FROM lakehouse.issue1233_refused"}}'
+        info: "a query while the saves are refused → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring "[[1233]]"
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            sudo journalctl -u funcd-demo --no-pager | grep "msg=\"engine output\"" | grep -q "catalog checkpoint failed" && echo LOGGED'
+        info: "the engine's failed save in the daemon's journal → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldEqual LOGGED
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            funcdctl apply -f /opt/lane/lake-redeploy.yaml >/dev/null && echo APPLIED'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual APPLIED
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            funcdctl get lake lake -n default -o json | python3 -c "import sys,json
+          s=json.load(sys.stdin)[\"status\"]
+          c=next((c for c in s.get(\"conditions\",[]) if c[\"type\"]==\"CatalogSaved\"),{})
+          print(c.get(\"status\",\"\"),c.get(\"reason\",\"\"),s.get(\"phase\",\"\"),c.get(\"message\",\"\"))"'
+        retry: 60
+        delay: 2
+        info: "CatalogSaved once the prefix is the Lake's again → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldMatchRegex "^True Saved Ready saved [0-9]"
 
   # ADR-0152: a Function and a Lake share the name `lake`; each reconciler manages only its own kind's workers.
   - name: same-name-function-and-lake-stay-ready — Function lake deploys and scales beside Lake lake, which keeps its engine

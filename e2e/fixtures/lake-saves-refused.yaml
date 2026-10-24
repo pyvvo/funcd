@@ -1,0 +1,42 @@
+# The duckdb lane's issue1233 case re-applies Lake lake as lake-redeploy.yaml has it, with its gold prefix owned by
+# Function other, which does not exist: the S3 gateway refuses the engine's catalog saves, so the Lake reports them
+# failing (ADR-0276).
+apiVersion: funcd.io/v1alpha1
+kind: Lake
+metadata:
+  name: lake
+  namespace: default
+  resourceGroup: rg1
+spec:
+  buckets:
+    - name: lakehouse
+      prefixes:
+        - name: gold
+          owner:
+            kind: Function
+            name: other
+      maxObjectBytes: 1073741824
+  configMaps:
+    - ref: lake-engine-config
+  secrets:
+    - name: lake-quack-token
+      keys:
+        - QUACK_TOKEN
+  bindings:
+    blob:
+      - alias: gold
+        bucket: lakehouse
+        prefix: gold
+    secret:
+      - lake-quack-token
+    config:
+      - lake-engine-config
+  location:
+    bucket: lakehouse
+    prefix: gold
+  resources:
+    cpu: "2"
+    memory: "3Gi"
+  ingress:
+    enabled: true
+    path: /lake/lake

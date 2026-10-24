@@ -178,6 +178,8 @@ duckdb:
     # Issue #1227: lake re-applied at 3Gi, so a spec change replaces its engine through a graceful stop
     - from: e2e/fixtures/lake-redeploy.yaml
       to: lake-redeploy.yaml
+    - from: e2e/fixtures/lake-saves-refused.yaml
+      to: lake-saves-refused.yaml
     - from: e2e/fixtures/quack-attach-probe.py
       to: quack-attach-probe.py
     - from: e2e/fixtures/cgroup-view.py
