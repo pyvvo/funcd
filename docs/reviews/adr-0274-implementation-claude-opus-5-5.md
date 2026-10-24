@@ -31,7 +31,10 @@ Blocker (a `FUNCD_` key never reaches the engine) was found in the code by the b
   #1222 sits under the data-platform tracker #1032. The ADR's substance is unchanged since its acceptance.
 
 ### Checks
-- `scripts/agent/gate.sh`: GATE_RESULT
+- `scripts/agent/gate.sh` at e627a033, the same code as after the rebase onto 155fe20a: audit, `ci-full` 672 s,
+  Linux build, stress (7 tests, 20 runs each) and tree-unchanged PASS; linux-tests failed for the environment (the
+  test VM's disk was full: "no space left on device" in two `cmd/funcd` upgrade tests) and passed when rerun after
+  trimming the VM's Go build cache.
 - `just test-duckdb-engine`: 11 tests, OK, 73.7 s.
 - `shim_test.py`: 24 tests, OK.
 - `just lima-example duckdb`: PASS, 19 of 19 cases.
