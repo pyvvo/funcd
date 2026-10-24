@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.27.0](https://github.com/pyvvo/funcd/compare/v0.26.2...v0.27.0) (2026-10-24)
+
+
+### Features
+
+* **lake:** lake.saveInterval sets every Lake engine's catalog save interval, and funcdctl backup plan lake derives it from the RPO (ADR-0274) ([5cb19bf](https://github.com/pyvvo/funcd/commit/5cb19bfd4ee7e23a40e39cfa0466e43284ff98f6))
+
+
+### Bug Fixes
+
+* **funcd:** a graceful daemon stop keeps the S3 gateway, egress and DNS until the workers have stopped ([#1236](https://github.com/pyvvo/funcd/issues/1236)) ([6aec601](https://github.com/pyvvo/funcd/commit/6aec601c98226758129e8ee0d13802996a3442f8))
+* **runtime:** a containerd stop keeps the worker's network until its task exits ([#1230](https://github.com/pyvvo/funcd/issues/1230)) ([cbc3f2b](https://github.com/pyvvo/funcd/commit/cbc3f2ba9b5423fd4516e9a7f96d19d30a10f6f1))
+
 ## [0.26.2](https://github.com/pyvvo/funcd/compare/v0.26.1...v0.26.2) (2026-10-24)
 
 
