@@ -1,6 +1,7 @@
 # ADR-0274: A Lake saves its catalog at the interval its recovery objective sets
 
-- **Status**: Reviewing (2026-10-24); Accepted 2026-10-24, the acceptance delegated by the decider; Proposed
+- **Status**: Implemented (2026-10-24), review passed ([report](../reviews/adr-0274-implementation-claude-opus-5-5.md));
+  Reviewing 2026-10-24; Accepted 2026-10-24, the acceptance delegated by the decider; Proposed
   2026-10-24, judged twice: round 1's Blocker and two Majors folded, round 2 accept after one Minor, folded
 - **Date**: 2026-10-24
 - **Deciders**: green-0-rabbit
