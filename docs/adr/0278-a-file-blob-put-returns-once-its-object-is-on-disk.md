@@ -55,7 +55,7 @@ Lake's save interval (ADR-0274).
   format (the data file at fileblob's stored path, and a JSON `.attrs` beside it), so gocloud's reads keep working.
 - An object is two files. A read must pair them by the data file itself, not by time: on ext4, files written within a
   clock tick share an mtime, and two writers or a read can interleave the two files with no power loss at all.
-- Cost on the target box (8-core Ubuntu, ext4 on LVM on an NVMe SSD whose volatile write cache each sync flushes;
+- Cost on the target box (4-core, 8-thread Ubuntu, ext4 on LVM on an NVMe SSD whose volatile write cache each sync flushes;
   #1247): one Put at a time, 1 KiB objects, median per Put 95 µs today, 8.51 ms with the data, its attributes and the
   directory synced once (Decision 1's count), 14.6 ms with a second directory sync. A 10,000-object load takes 1.0 s
   today, 83.9 s synced.
