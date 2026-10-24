@@ -154,7 +154,7 @@ def _save_interval(environ: Mapping[str, str]) -> float:
     if value is None:
         return COMMIT_POLL_SECONDS
     seconds = sum(int(n) * UNIT_SECONDS[u] for n, u in re.findall(r"([0-9]+)(ms|h|m|s)", value))
-    if not DURATION.match(value) or not 0.5 <= seconds <= 3600:
+    if not DURATION.fullmatch(value) or not 0.5 <= seconds <= 3600:
         sys.stderr.write(f"funcd duckdb shim: {SAVE_INTERVAL_KEY} {value}: want a duration from 500ms to 1h\n")
         raise SystemExit(2)
     return seconds

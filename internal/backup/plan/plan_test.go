@@ -89,17 +89,22 @@ func TestDeriveTable(t *testing.T) {
 	require.ErrorContains(t, err, "--rpo 999ms: a Lake saves its catalog at most every 500ms, so want at least 1s")
 }
 
-// TestShimReadsWhatPlanWrites (ADR-0274): the duckdb shim reads the key lake's plan writes, in ADR-0194's grammar and
-// within plan's bounds.
-func TestShimReadsWhatPlanWrites(t *testing.T) {
-	src, err := os.ReadFile(filepath.Join("..", "..", "..", "images", "runtime", "duckdb", "shim.py"))
-	require.NoError(t, err)
-	for _, want := range []string{
-		`SAVE_INTERVAL_KEY = "` + LakeSaveIntervalKey + `"`,
-		`DURATION = re.compile(r"` + v1.DurationPattern + `")`,
-		fmt.Sprintf("not %g <= seconds <= %g", MinLakeSaveInterval.Seconds(), MaxLakeSaveInterval.Seconds()),
+// TestEngineReadsWhatPlanWrites (ADR-0274): the Lake reconciler passes the key lake's plan writes, and the duckdb shim
+// reads it in ADR-0194's grammar and within plan's bounds.
+func TestEngineReadsWhatPlanWrites(t *testing.T) {
+	for file, wants := range map[string][]string{
+		filepath.Join("..", "..", "services", "lake", "reconcile.go"): {`k == "` + LakeSaveIntervalKey + `"`},
+		filepath.Join("..", "..", "..", "images", "runtime", "duckdb", "shim.py"): {
+			`SAVE_INTERVAL_KEY = "` + LakeSaveIntervalKey + `"`,
+			`DURATION = re.compile(r"` + v1.DurationPattern + `")`,
+			fmt.Sprintf("not %g <= seconds <= %g", MinLakeSaveInterval.Seconds(), MaxLakeSaveInterval.Seconds()),
+		},
 	} {
-		require.Contains(t, string(src), want)
+		src, err := os.ReadFile(file)
+		require.NoError(t, err)
+		for _, want := range wants {
+			require.Contains(t, string(src), want, file)
+		}
 	}
 }
 

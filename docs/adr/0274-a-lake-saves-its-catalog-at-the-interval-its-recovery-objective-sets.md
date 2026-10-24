@@ -1,6 +1,7 @@
 # ADR-0274: A Lake saves its catalog at the interval its recovery objective sets
 
-- **Status**: Proposed (2026-10-24; judged once: one Blocker and two Majors folded)
+- **Status**: Reviewing (2026-10-24); Accepted 2026-10-24, the acceptance delegated by the decider; Proposed
+  2026-10-24, judged twice: round 1's Blocker and two Majors folded, round 2 accept after one Minor, folded
 - **Date**: 2026-10-24
 - **Deciders**: green-0-rabbit
 - **Tags**: lake, duckdb, backup, recovery-objectives, configuration
@@ -9,9 +10,10 @@
   the `lake` component and its row of the derivation table · [ADR-0087](0087-add-on-provider-runtime.md) — the bound
   keys a Lake engine receives (`QUACK_TOKEN`, `DUCKDB_*`) gain `LAKE_SAVE_INTERVAL`
 - **Relates to**: [ADR-0273](0273-a-lake-stop-cancels-the-queries-that-outlive-its-wait.md) (the stop keeps the save
-  interval; two questions it left to this objective) · [ADR-0265](0265-the-lake-engine-takes-tuning-keys-from-an-allow-list.md)
-  (engine keys from the Lake's ConfigMaps) · [ADR-0057](0057-secret-injection-last-mile.md) (reserved `FUNCD_` keys) ·
-  #998 (a save after each commit, at most once per interval)
+  interval; two questions it left to this objective) ·
+  [ADR-0265](0265-the-lake-engine-takes-tuning-keys-from-an-allow-list.md) (engine keys from the Lake's ConfigMaps) ·
+  [ADR-0057](0057-secret-injection-last-mile.md) (reserved `FUNCD_` keys) · #998 (a save after each commit, at most once
+  per interval)
 
 ## Context & Need
 
@@ -68,7 +70,8 @@ status condition for failing saves (open questions).
    duration (`v1alpha1.DurationPattern`: whole numbers in h, m, s and ms, the largest unit first) from 500 ms to 1 h,
    both included; without it the interval is 1 s, as today. 500 ms bounds the uploads of a busy Lake; past an hour, a
    longer interval saves few uploads while its loss keeps growing. When several bound ConfigMaps set it, the last in
-   `spec.bindings.config` wins, as for every bound key. The shim reads it at start, before it connects; another value
+   `spec.bindings.config` wins, and a bound Secret that sets it wins over them, as for every bound key. The shim reads
+   it at start, before it connects; another value
    ends the start with status 2 and `funcd duckdb shim: LAKE_SAVE_INTERVAL <value>: want a duration from 500ms to 1h`.
 2. **The reconciler** passes `LAKE_SAVE_INTERVAL` to the engine beside `QUACK_TOKEN` and the `DUCKDB_*` keys, and
    drops every other bound key, as today. A changed value replaces the engine at the Lake's next reconcile, as a
@@ -126,7 +129,8 @@ const (
 
 1. `images/runtime/duckdb/shim.py`: `_save_interval`, read in `main` before `_connect`; the watcher's interval; the
    watcher's docstring states Decision 5's bound.
-2. `internal/services/lake/reconcile.go`: `LAKE_SAVE_INTERVAL` in `engineEnv`'s list of the keys the engine reads.
+2. `internal/services/lake/reconcile.go`: `LAKE_SAVE_INTERVAL` in `engineEnv`'s list of the keys the engine reads;
+   a guard test ties that literal to plan's constant.
 3. `internal/backup/plan/derive.go`: `Lake`, its key, bounds and row; `cmd/funcdctl/backup.go`: `lake` in `Use`, the
    flag checks, and `planSchedule` generalized to `planManifest`, which takes the document's kind.
 4. Tests:
@@ -138,8 +142,8 @@ const (
    - `internal/services/lake` `TestScenarioSaveIntervalFromConfigMap` (the bound key reaches the engine's environment);
    - `cmd/funcdctl` `TestScenarioPlanLakeRPO`, `TestScenarioPlanLakeRPOTooSmall`,
      `TestPlanLakeEditsOneConfigMapDocument` and the `lake` rows of `TestFlagRules`;
-   - `internal/backup/plan` the `lake` rows of `TestDeriveTable`, and `TestShimReadsWhatPlanWrites` (the shim's key,
-     grammar and bounds are plan's).
+   - `internal/backup/plan` the `lake` rows of `TestDeriveTable`, and `TestEngineReadsWhatPlanWrites` (the
+     reconciler's key, and the shim's key, grammar and bounds, are plan's).
 5. At acceptance, ADR-0223 and ADR-0087 gain their `Superseded in part by` back-links.
 6. Done when `just test-duckdb-engine`, the duckdb lane and `just ci-full` pass.
 

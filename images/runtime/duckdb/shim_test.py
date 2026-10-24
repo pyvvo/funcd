@@ -276,7 +276,7 @@ class TestScenarioBadSaveIntervalRefused(unittest.TestCase):
     start with status 2 and a message naming the key, before the engine connects."""
 
     def test_a_bad_value_ends_the_start(self) -> None:
-        for value in ("400ms", "1h1s", "soon", "1.5s", "5", "", "30s1m"):
+        for value in ("400ms", "1h1s", "soon", "1.5s", "5", "", "30s1m", "5s\n"):
             with self.subTest(value=value):
                 err = io.StringIO()
                 with mock.patch.object(shim.sys, "stderr", err), self.assertRaises(SystemExit) as stop:

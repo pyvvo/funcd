@@ -168,7 +168,7 @@ func (f planFlags) objectives(c plan.Component, changed func(string) bool) (plan
 		for _, name := range []string{"keep", "rto", "size", "speed"} {
 			if changed(name) {
 				return o, fault.Invalidf(planOp, "--%s does not apply to lake: --rpo sets its one setting, the catalog "+
-					"save interval; its restore points are the App backup's", name)
+					"save interval; its restore points and restore time are the App backup's", name)
 			}
 		}
 		if !changed("rpo") {

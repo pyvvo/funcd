@@ -2,6 +2,7 @@
 
 - **Status**: Implemented (2026-10-11; the implementation review passed on its second round, docs/reviews/adr-0223-implementation-claude-opus-5-5-2.md; accepted 2026-10-10 by an `adr-batch` run after a clean `adr-judge` gate; the defaults below were not confirmed one by one)
 - **Superseded in part by**: [ADR-0228](0228-dr-implementation-addenda-two.md) (2026-10-11) — the plan command's refusals and output details the implementation settled.
+- **Superseded in part by**: [ADR-0274](0274-a-lake-saves-its-catalog-at-the-interval-its-recovery-objective-sets.md) (2026-10-24) — Decisions 1 and 2: the `lake` component and its row, a Lake ConfigMap's `LAKE_SAVE_INTERVAL` from `--rpo`
 - **Date**: 2026-10-10
 - **Deciders**: green-0-rabbit
 - **Tags**: backup, disaster-recovery, funcdctl, config, cli
