@@ -422,10 +422,12 @@ class _Checkpointer:
             if self.saved is not None:
                 self.saved.covered = covers[0]
                 self.saved.stopped = True
-        # The save calls this upload covers answer before Quack stops; the others failed or fail (ADR-0279).
+        # The clients of the cancelled queries read their interrupt error first (ADR-0273). Behind the Lake PEP proxy
+        # each such read starts a save call, which the drain then waits for with the other save calls this upload
+        # covers, before Quack stops; the others failed or fail (ADR-0279).
+        _await_cancelled(self._cur, cancelled, CANCEL_ANSWER_WAIT_SECONDS)
         if self.saved is not None:
             self.saved.drain(SAVE_ANSWER_WAIT_SECONDS)
-        _await_cancelled(self._cur, cancelled, CANCEL_ANSWER_WAIT_SECONDS)
         for uri in serving:
             self._cur.execute("CALL quack_stop(?)", [uri]).fetchall()
 

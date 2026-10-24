@@ -328,6 +328,30 @@ class TestIssue1217ATimedOutStopKeepsEveryAcknowledgedCommit(unittest.TestCase):
         self.assertIn("cancelling 1 queries that outlived the stop", engine.tail())
         self.assertEqual(lake.client.query(restarted, "SELECT count(*) FROM lakehouse.slow"), [(0,)])
 
+    def test_behind_the_barrier_the_cancelled_query_gets_its_interrupt_error(self) -> None:
+        """ADR-0279 mode: the client's poll reaches the engine through the barrier proxy, which reads the cancelled
+        query's error and then makes its save call; the stop lets both happen before Quack stops, so the client gets
+        the interrupt error, not a broken connection."""
+        lake = _Lake(self)
+        engine, _, via = _barrier(self, lake)
+        lake.client.query(via, "CREATE TABLE lakehouse.slow (n HUGEINT)")
+        result: dict[str, str] = {}
+
+        def run() -> None:
+            try:
+                lake.client.query(via, self.LONG, lake.client.con.cursor())
+                result["long"] = "acked"
+            except Exception as exc:  # noqa: BLE001 — the query's error is what the test reads.
+                result["long"] = str(exc).splitlines()[0][:200]
+
+        long_query = threading.Thread(target=run)
+        long_query.start()
+        time.sleep(0.3)
+        code = engine.stop()
+        long_query.join()
+        self.assertEqual(code, 0, engine.tail())
+        self.assertRegex(result["long"].lower(), "cancel|interrupt", "the client got no interrupt error")
+
     # oracle: docs/design/lake/stop.fizz#KillLosesAtMostOneInterval
     def test_the_watcher_keeps_saving_while_the_queries_drain(self) -> None:
         lake = _Lake(self)

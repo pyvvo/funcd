@@ -15,6 +15,7 @@ import types
 import unittest
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from unittest import mock
 
 sys.modules.setdefault("boto3", types.ModuleType("boto3"))
@@ -352,7 +353,8 @@ class _StopEngine:
     file's content, lists the active Quack connections, and refuses to attach the detached catalog file while busy is
     above 0, as DuckDB does while a transaction still uses it; a stuck engine stays busy until a query is cancelled.
     Once cancelled, the connections stay listed for unread more reads, as Quack lists a cancelled query until its client
-    has read the interrupt error; unread_at_stop is what was left of unread when Quack stopped."""
+    has read the interrupt error; unread_at_stop is what was left of unread when Quack stopped. on_read runs when the
+    cancelled connections leave the list, on_stop when Quack stops."""
 
     def __init__(self, busy: int = 0, fail: str = "", active: tuple = (), stuck: bool = False, unread: int = 0) -> None:
         self.log: list = []
@@ -363,6 +365,8 @@ class _StopEngine:
         self.unread = unread
         self.cancelled = False
         self.unread_at_stop: int | None = None
+        self.on_read: Callable[[], None] | None = None
+        self.on_stop: Callable[[], None] | None = None
         self.rows: list = []
 
     def _listed(self) -> bool:
@@ -371,6 +375,9 @@ class _StopEngine:
         if self.unread > 0:
             self.unread -= 1
             return True
+        if self.on_read is not None:
+            self.on_read()
+            self.on_read = None
         return False
 
     def execute(self, sql: str, params: object = None) -> "_StopEngine":
@@ -378,6 +385,8 @@ class _StopEngine:
         self.rows = [(c,) for c in self.active] if "quack_active_connections()" in sql and self._listed() else []
         if sql == "CALL quack_stop(?)":
             self.unread_at_stop = self.unread
+            if self.on_stop is not None:
+                self.on_stop()
         if sql.startswith("ATTACH") and "funcd_closed" in sql:
             if self.fail:
                 raise RuntimeError(self.fail)
@@ -995,13 +1004,14 @@ class _GatedBucket(_Bucket):
 class _DetachingEngine(_StopEngine):
     """A stop's engine whose catalog query fails once the stop detached it, and whose closed catalog holds snapshot
     `closed`; it is also the connection the save endpoint takes its cursors from. asked: a save call queried the
-    detached catalog."""
+    detached catalog; with hold, that query waits until hold is set."""
 
-    def __init__(self, closed: int) -> None:
-        super().__init__()
+    def __init__(self, closed: int, **stop: object) -> None:
+        super().__init__(**stop)
         self.closed = closed
         self.detached = threading.Event()
         self.asked = threading.Event()
+        self.hold: threading.Event | None = None
         self._last = ""
 
     def cursor(self) -> "_DetachingEngine":
@@ -1013,6 +1023,8 @@ class _DetachingEngine(_StopEngine):
     def execute(self, sql: str, params: object = None) -> "_DetachingEngine":
         if sql == shim.LATEST_SNAPSHOT and self.detached.is_set():
             self.asked.set()
+            if self.hold is not None:
+                self.hold.wait(WAIT)
             raise RuntimeError("Catalog Error: schema __ducklake_metadata_lakehouse does not exist")
         self._last = sql
         super().execute(sql, params)
@@ -1022,6 +1034,16 @@ class _DetachingEngine(_StopEngine):
 
     def fetchone(self) -> tuple:
         return (self.closed,) if self._last == shim.CLOSED_SNAPSHOT else (5,)
+
+
+def _post_save(url: str) -> tuple:
+    """One save call, as the Lake PEP proxy makes it: the status and the decoded answer."""
+    request = urllib.request.Request(url, method="POST", data=b"")
+    try:
+        with urllib.request.urlopen(request, timeout=WAIT) as resp:
+            return resp.status, json.load(resp)
+    except urllib.error.HTTPError as err:
+        return err.code, json.load(err)
 
 
 class TestTheStopAnswersACallAfterItsDetach(unittest.TestCase):
@@ -1047,18 +1069,10 @@ class TestTheStopAnswersACallAfterItsDetach(unittest.TestCase):
                 except OSError as exc:
                     errors.append(exc)
 
-            def call() -> None:
-                request = urllib.request.Request(url, method="POST", data=b"")
-                try:
-                    with urllib.request.urlopen(request, timeout=WAIT) as resp:
-                        answers.append((resp.status, json.load(resp)))
-                except urllib.error.HTTPError as err:
-                    answers.append((err.code, json.load(err)))
-
             stopping = threading.Thread(target=stop)
             stopping.start()
             self.assertTrue(engine.detached.wait(WAIT))
-            calling = threading.Thread(target=call)
+            calling = threading.Thread(target=lambda: answers.append(_post_save(url)))
             calling.start()
             self.assertTrue(engine.asked.wait(WAIT), "the call did not reach the endpoint during the stop")
             bucket.release.set()
@@ -1078,6 +1092,38 @@ class TestTheStopAnswersACallAfterItsDetach(unittest.TestCase):
         code, body = answers[0]
         self.assertEqual(code, 503)
         self.assertIn("AccessDenied", body["error"])
+
+    def test_the_save_call_of_a_cancelled_answer_is_answered_before_quack_stops(self) -> None:
+        """Behind the Lake PEP proxy, the client of a cancelled query is the proxy, which makes its save call once it
+        read the interrupt error (ADR-0273, ADR-0279 Decision 3): the stop drains the save calls after that read."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        engine = _DetachingEngine(9, active=("c1",), stuck=True, unread=1)
+        engine.hold = threading.Event()
+        answers: list = []
+        calls_at_stop: list = []
+        with mock.patch.object(shim, "LOCAL_CHECKPOINT", os.path.join(tmp.name, "checkpoint.ducklake")), \
+                mock.patch.object(shim, "_connect", lambda: _Control(engine)), \
+                mock.patch.object(shim.sys, "stderr", io.StringIO()):
+            checkpointer = shim._Checkpointer(engine, _Bucket(), "lake", "gold/_ducklake/catalog.db",
+                                              saved=shim._Saved(5))
+            server = shim._serve_saves(0, checkpointer, engine)
+            self.addCleanup(server.shutdown)
+            url = f"http://127.0.0.1:{server.server_address[1]}/save"
+            proxy = threading.Thread(target=lambda: answers.append(_post_save(url)))
+
+            def proxy_reads_the_error() -> None:
+                proxy.start()
+                self.assertTrue(engine.asked.wait(WAIT))
+                threading.Timer(0.1, engine.hold.set).start()
+
+            engine.on_read = proxy_reads_the_error
+            engine.on_stop = lambda: calls_at_stop.append(checkpointer.saved._calls)
+            checkpointer.stop(["quack://0.0.0.0:8080"], "token")
+            if proxy.ident is not None:
+                proxy.join(WAIT)
+        self.assertEqual(calls_at_stop, [0], "Quack stopped before the save call of the cancelled answer was answered")
+        self.assertEqual(answers, [(200, {"engine": checkpointer.saved.instance, "saved": 9})])
 
 
 class TestTheStartUpSaveWithoutAWatcher(unittest.TestCase):
