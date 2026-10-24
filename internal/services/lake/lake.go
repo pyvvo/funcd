@@ -44,6 +44,14 @@ const condReady = "Ready"
 // the aggregator's reason, or LakeNotReady while the lake has no proxy to expose.
 const condIngressReady = v1.ConditionType("IngressReady")
 
+// condCatalogSaved follows the engine's report of its catalog saves (ADR-0276): True with reasonSaved after a save,
+// False with reasonSavesFailing while they fail. It never changes the phase, the proxy or the edge entry.
+const (
+	condCatalogSaved   = v1.ConditionType("CatalogSaved")
+	reasonSaved        = "Saved"
+	reasonSavesFailing = "SavesFailing"
+)
+
 // SecretResolver resolves a service's bound Secret names → an env-var map for engine injection,
 // PDP-authorized for id (ADR-0022/0057). The reconciler depends on this local seam (ADR-0002
 // import discipline) — satisfied by *secrets.Resolver, wired in pkg/funcd. A nil resolver disables

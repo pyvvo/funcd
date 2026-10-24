@@ -107,6 +107,7 @@ type ProviderStatus struct {
 	Address  string // the engine's in-platform netns endpoint "host:port" — set when running (in-platform clients dial this)
 	Endpoint string // the ingress path clients reach when a Route is programmed; "" if internal-only
 	Reason   string // when not Ready, why (e.g. "EngineNotReady")
+	Report   string // the ready replica's report (runtime.Instance.Report, ADR-0276); only the Lake reads it
 }
 
 // EgressTo is the fence of an engine that dials only rawURL (ADR-0269): its address and port, with the scheme's port

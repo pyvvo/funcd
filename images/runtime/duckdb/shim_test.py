@@ -586,5 +586,139 @@ class TestS3ClientIgnoresEnvironmentProxies(unittest.TestCase):
         self.assertEqual(calls["config"]["proxies"], {})
 
 
+class TestScenarioStartUpSave(unittest.TestCase):
+    """ADR-0276: a recovered catalog is saved once at start, and retried each tick until a save succeeds; a fresh
+    catalog is first saved at its first commit, so a misread 404 never overwrites the stored one."""
+
+    def watch(self, recorder: _Recorder, save_at_start: bool) -> None:
+        watcher = shim._CommitWatcher(recorder, lambda: 7, INTERVAL, save_at_start=save_at_start)
+        watcher.start()
+        self.addCleanup(watcher.join, WAIT)
+        self.addCleanup(watcher.stop)
+
+    def test_a_recovered_catalog_is_saved_at_start(self) -> None:
+        recorder = _Recorder()
+        self.watch(recorder, save_at_start=True)
+        self.assertTrue(recorder.done.wait(WAIT), "a recovered catalog was not saved at start")
+
+    def test_a_fresh_catalog_is_not_saved_at_start(self) -> None:
+        recorder = _Recorder()
+        self.watch(recorder, save_at_start=False)
+        self.assertFalse(recorder.done.wait(20 * INTERVAL), "a fresh catalog was saved with no commit")
+
+    def test_a_failed_start_up_save_is_retried(self) -> None:
+        recorder = _Recorder(fail=2)
+        self.watch(recorder, save_at_start=True)
+        self.assertTrue(recorder.done.wait(WAIT), "the start-up save was not retried")
+        self.assertEqual(recorder.calls, 3)
+
+
+class _FailingBucket(_Bucket):
+    """The S3 client: it refuses the first `fail` uploads."""
+
+    def __init__(self, fail: int) -> None:
+        super().__init__()
+        self.fail = fail
+
+    def put_object(self, Bucket: str, Key: str, Body: bytes) -> None:  # noqa: N803 — boto3's keyword names.
+        if self.fail > 0:
+            self.fail -= 1
+            raise OSError("An error occurred (AccessDenied) when calling the PutObject operation: Access Denied.")
+        super().put_object(Bucket=Bucket, Key=Key, Body=Body)
+
+
+class TestScenarioEachSaveIsReported(unittest.TestCase):
+    """ADR-0276: after each save the engine replaces its report whole: `saved <time>`, or `failing since <time>: <error>`
+    with the first failure's time kept while saves fail."""
+
+    def test_the_report_follows_the_saves(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        report = os.path.join(tmp.name, "report")
+        bucket = _FailingBucket(fail=2)
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(shim, "LOCAL_CHECKPOINT", os.path.join(tmp.name, "checkpoint.ducklake")))
+            checkpointer = shim._Checkpointer(_StopEngine(), bucket, "lake", "gold/_ducklake/catalog.db", report)
+            with self.assertRaises(OSError):
+                checkpointer.checkpoint()
+            first = open(report).read()
+            self.assertTrue(first.startswith("failing since "), first)
+            self.assertIn("AccessDenied", first)
+            with self.assertRaises(OSError):
+                checkpointer.checkpoint()
+            self.assertEqual(open(report).read().split(": ")[0], first.split(": ")[0], "the first failure's time is kept")
+            checkpointer.checkpoint()
+        self.assertTrue(open(report).read().startswith("saved "))
+        self.assertEqual(len(bucket.bodies), 1)
+        self.assertFalse(os.path.exists(report + ".tmp"), "the report is replaced by a rename")
+
+    def test_no_path_writes_no_report(self) -> None:
+        shim._report(None, None, None)
+
+
+class _Download:
+    """The S3 client's download: it raises error, or writes the object."""
+
+    def __init__(self, error: "Exception | None") -> None:
+        self.error = error
+
+    def download_file(self, bucket: str, key: str, path: str) -> None:
+        if self.error:
+            raise self.error
+        with open(path, "w") as fh:
+            fh.write("catalog")
+
+
+class TestRecoverCatalogSaysWhetherThereWasOne(unittest.TestCase):
+    def test_the_result(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        with mock.patch.object(shim, "LOCAL_CATALOG", os.path.join(tmp.name, "catalog.ducklake")):
+            self.assertTrue(shim._recover_catalog(_Download(None), "lake", "k"))
+            self.assertFalse(shim._recover_catalog(_Download(RuntimeError("An error occurred (404): Not Found")), "lake", "k"))
+            with self.assertRaises(RuntimeError):
+                shim._recover_catalog(_Download(RuntimeError("connection refused")), "lake", "k")
+
+
+class _Idle:
+    """A drain cursor with no active query, and the watcher and its cursor, which the stop ends."""
+
+    def execute(self, sql: str, params: object = None) -> "_Idle":
+        return self
+
+    def fetchone(self) -> tuple:
+        return (0,)
+
+    def close(self) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
+
+    def join(self) -> None:
+        pass
+
+
+class _BrokenStop:
+    """A checkpointer whose stop fails."""
+
+    def checkpoint(self) -> None:
+        pass
+
+    def stop(self, serving: list, token: str) -> None:
+        raise OSError("An error occurred (AccessDenied) when calling the PutObject operation: Access Denied.")
+
+
+class TestScenarioFailedStopLogged(unittest.TestCase):
+    """ADR-0276: the error that ended a stop is logged before the engine exits 0."""
+
+    def test_the_stop_error_is_written(self) -> None:
+        err = io.StringIO()
+        idle = _Idle()
+        with mock.patch.object(shim.sys, "stderr", err):
+            shim._stop(idle, idle, idle, _BrokenStop(), ["quack://0.0.0.0:8080"], "token")
+        self.assertIn("funcd duckdb shim: the stop failed: An error occurred (AccessDenied)", err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,7 @@ package funcd
 import (
 	"context"
 	"io"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -79,4 +80,41 @@ func TestEngineWorkerRawOutputIsNotStored(t *testing.T) {
 	tail, err := io.ReadAll(engine.Tail())
 	require.NoError(t, err)
 	require.Equal(t, "out\nerr\n", string(tail), "an engine keeps its tail")
+}
+
+// scenario: engine-output-in-the-daemon-log (ADR-0276) — each line an engine worker writes reaches the daemon's log with
+// its stream and owner, with funclog on or off, and the engine still keeps its tail.
+func TestScenarioEngineOutputInTheDaemonLog(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts []Option
+	}{{"funclog on", nil}, {"funclog off", []Option{WithoutFunclog()}}} {
+		t.Run(tc.name, func(t *testing.T) {
+			mem, err := gocloud.Open(context.Background(), "mem://")
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = mem.Close() })
+			logs := &syncBuffer{}
+			rt := &outputRuntime{captureRuntime: captureRuntime{Runtime: process.New(nil)}}
+			p, err := New(append([]Option{InMemory(), WithRuntime(rt), WithBlob(&logKeysBucket{Bucket: mem}), WithoutLogCompaction(),
+				WithLogger(slog.New(slog.NewJSONHandler(logs, nil)))}, tc.opts...)...)
+			require.NoError(t, err)
+			require.NotNil(t, rt.outputs, "the platform installs its raw-output hook whatever funclog's setting")
+
+			out := workerpipe.New(workerpipe.Options{})
+			rt.outputs(runtime.WorkerSpec{Namespace: "default", Name: "lake", OwnerKind: v1.KindLake, Replica: 0}, out)
+			_, _ = out.Writer(workerpipe.Stderr).Write([]byte("funcd duckdb shim: the stop failed: Access Denied\n"))
+			_, _ = out.Writer(workerpipe.Stdout).Write([]byte("serving\n"))
+			out.Close()
+			runThenCancel(t, p)
+
+			got := logs.String()
+			for _, want := range []string{`"msg":"engine output","stream":"stderr","kind":"Lake","namespace":"default","name":"lake","replica":"0","line":"funcd duckdb shim: the stop failed: Access Denied"`,
+				`"stream":"stdout","kind":"Lake","namespace":"default","name":"lake","replica":"0","line":"serving"`} {
+				require.Contains(t, got, want)
+			}
+			tail, err := io.ReadAll(out.Tail())
+			require.NoError(t, err)
+			require.Equal(t, "serving\nfuncd duckdb shim: the stop failed: Access Denied\n", string(tail), "the engine keeps its tail")
+		})
+	}
 }

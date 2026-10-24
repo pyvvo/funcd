@@ -179,6 +179,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		cs.Status.Endpoint = endpoint
 		cs.Status.Phase = v1.PhaseReady
 		cs.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue, ObservedGeneration: cs.Generation})
+		r.setCatalogSaved(ctx, cs, st.Report)
 		// ADR-0138: OPT-IN external edge exposure — program an edge entry to the PEP PROXY (proxyURL,
 		// never the raw engine) when spec.ingress is set; clear it otherwise. Requires the proxy (the
 		// entry's upstream); with no proxy wired (in-memory/dev) there is nothing external to expose.
@@ -489,4 +490,30 @@ func retryOnConflict(err error, op string) error {
 		return nil
 	}
 	return fault.Wrapf(err, fault.KindOf(err), op, "status write-back")
+}
+
+// setCatalogSaved sets the CatalogSaved condition from the engine's report (ADR-0276): True on "saved …", False on
+// "failing since …". With no report, while an engine starts, or any other content, it keeps the value it had, so no
+// replacement of the engine reads as a recovery. Each change is logged.
+func (r *Reconciler) setCatalogSaved(ctx context.Context, cs *v1.Lake, report string) {
+	c := v1.Condition{Type: condCatalogSaved, Message: report, ObservedGeneration: cs.Generation}
+	switch {
+	case strings.HasPrefix(report, "saved "):
+		c.Status, c.Reason = v1.ConditionTrue, reasonSaved
+	case strings.HasPrefix(report, "failing since "):
+		c.Status, c.Reason = v1.ConditionFalse, reasonSavesFailing
+	default:
+		return
+	}
+	prev, had := cs.Status.Conditions.Get(condCatalogSaved)
+	cs.Status.Conditions.Set(c)
+	if had && prev.Status == c.Status {
+		return
+	}
+	lake := string(cs.Namespace) + "/" + string(cs.Name)
+	if c.Status == v1.ConditionFalse {
+		r.logger.WarnContext(ctx, "lake catalog saves are failing", "lake", lake, "report", report)
+		return
+	}
+	r.logger.InfoContext(ctx, "lake catalog saved", "lake", lake, "report", report)
 }

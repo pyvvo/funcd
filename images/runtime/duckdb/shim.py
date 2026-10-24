@@ -44,6 +44,7 @@ import threading
 import time
 import urllib.parse
 from collections.abc import Callable, Mapping
+from datetime import datetime, timezone
 
 import boto3  # the catalog's blob sync against the injected funcd S3 endpoint.
 import duckdb  # the native engine (out-of-process in THIS function — no cgo in the daemon).
@@ -71,6 +72,10 @@ UNIT_SECONDS = {"h": 3600.0, "m": 60.0, "s": 1.0, "ms": 0.001}
 # How long a stop lets the running queries drain, while the commit watcher keeps saving the catalog, before it detaches
 # the catalog and cancels what still runs: well inside the runtime's 10 s SIGTERM grace (#1198, #1217, ADR-0273).
 STOP_WAIT_SECONDS = 5.0
+# The engine's report file in its boot dir, which the runtime reads into the Lake's CatalogSaved condition, and the
+# runtime's bound on what it reads (ADR-0276).
+REPORT_KEY = "FUNCD_REPORTFILE"
+REPORT_MAX_BYTES = 1024
 
 # The extensions the engine loads — pre-installed OFFLINE into the image's extension dir (the sandbox
 # has no arbitrary egress): httpfs (S3), ducklake, quack.
@@ -214,8 +219,8 @@ def _confine(con: "duckdb.DuckDBPyConnection") -> None:
     con.execute("SET lock_configuration=true")
 
 
-def _recover_catalog(s3, bucket: str, key: str) -> None:
-    """boto3 GetObject the catalog → the local file, before ATTACH.
+def _recover_catalog(s3, bucket: str, key: str) -> bool:
+    """boto3 GetObject the catalog → the local file, before ATTACH, and returns whether there was one.
 
     On first deploy the object does not exist yet — skip (DuckLake creates a fresh catalog on
     ATTACH). The min-replica=1 replica owns the prefix, so this is the only writer.
@@ -225,8 +230,28 @@ def _recover_catalog(s3, bucket: str, key: str) -> None:
         s3.download_file(bucket, key, LOCAL_CATALOG)
     except Exception as exc:  # noqa: BLE001 — a 404-shaped error means "no catalog yet" (fresh deploy).
         if "404" in str(exc) or "NoSuchKey" in str(exc) or "Not Found" in str(exc):
-            return
+            return False
         raise
+    return True
+
+
+def _report(path: str | None, failing_since: datetime | None, error: BaseException | None) -> None:
+    """Replaces the engine's report whole, so the daemon never reads half of one (ADR-0276): ``saved <time>`` after a
+    save, ``failing since <time of the first failure>: <error>`` while saves fail. No path, no report; a write that
+    fails is only logged."""
+    if not path:
+        return
+    if error is None:
+        line = "saved " + datetime.now(timezone.utc).isoformat(timespec="seconds")
+    else:
+        line = f"failing since {failing_since.isoformat(timespec='seconds')}: {str(error).replace(chr(10), ' ')}"
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w") as fh:
+            fh.write(line[:REPORT_MAX_BYTES])
+        os.replace(tmp, path)
+    except OSError as exc:
+        sys.stderr.write(f"funcd duckdb shim: the report could not be written: {exc}\n")
 
 
 class _Checkpointer:
@@ -240,17 +265,31 @@ class _Checkpointer:
     SIGTERM handler calls stop once; the lock serializes them.
     """
 
-    def __init__(self, cur: "duckdb.DuckDBPyConnection", s3, bucket: str, key: str) -> None:
+    def __init__(self, cur: "duckdb.DuckDBPyConnection", s3, bucket: str, key: str, report: str | None = None) -> None:
         self._cur = cur
         self._s3 = s3
         self._bucket = bucket
         self._key = key
         self._lock = threading.Lock()
+        self._report = report
+        self._failing_since: datetime | None = None
 
     def checkpoint(self) -> None:
         with self._lock:
-            self._copy(METADATA)
-            self._upload()
+            self._saved(lambda: (self._copy(METADATA), self._upload()))
+
+    def _saved(self, save: Callable[[], object]) -> None:
+        """Runs one save and replaces the report with its outcome, keeping the first failure's time while saves fail
+        (ADR-0276)."""
+        try:
+            save()
+        except Exception as exc:
+            if self._failing_since is None:
+                self._failing_since = datetime.now(timezone.utc)
+            _report(self._report, self._failing_since, exc)
+            raise
+        self._failing_since = None
+        _report(self._report, None, None)
 
     def stop(self, serving: list[str], token: str) -> None:
         """Ends the engine's commits and uploads its last checkpoint, once the running queries drained and the watcher
@@ -264,11 +303,14 @@ class _Checkpointer:
                 _cancel(self._cur, serving, token)
                 while not _closed(self._cur):
                     time.sleep(0.05)
-            try:
-                self._copy("funcd_closed")
-            finally:
-                self._cur.execute("DETACH funcd_closed")
-            self._upload()
+            def save_closed() -> None:
+                try:
+                    self._copy("funcd_closed")
+                finally:
+                    self._cur.execute("DETACH funcd_closed")
+                self._upload()
+
+            self._saved(save_closed)
             for uri in serving:
                 self._cur.execute("CALL quack_stop(?)", [uri]).fetchall()
 
@@ -338,34 +380,65 @@ class _CommitWatcher(threading.Thread):
     """Checkpoints the catalog after each committed transaction (ADR-0086), coalesced per poll interval.
 
     DuckLake adds a row to ducklake_snapshot per commit; the watcher compares the latest id with the one it
-    last checkpointed, starting from the id at start, so a catalog nobody wrote to is not uploaded. A failed
-    read or checkpoint is retried on the next tick, keeping the old id. A SIGKILL then loses at most the
+    last checkpointed, starting from the id at start, so a fresh catalog nobody wrote to is not uploaded. A recovered
+    catalog is saved once at start instead, so the engine's report holds a save before a commit does (ADR-0276); a
+    misread 404 or a read before a restore wrote the catalog leaves a fresh one, never saved over the real one. A
+    failed read or checkpoint is retried on the next tick, keeping the old id. A SIGKILL then loses at most the
     commits acknowledged within one interval plus the two saves around it, the one in progress and the next
     (ADR-0274), not every commit since the start (#998).
     """
 
-    def __init__(self, checkpointer: _Checkpointer, latest: Callable[[], int | None], interval: float) -> None:
+    def __init__(self, checkpointer: _Checkpointer, latest: Callable[[], int | None], interval: float,
+                 save_at_start: bool = False) -> None:
         super().__init__(name="commit-watcher", daemon=True)
         self._checkpointer = checkpointer
         self._latest = latest
         self._interval = interval
         self._done = threading.Event()
-        self._seen = latest()
+        self._seen = None if save_at_start else latest()
 
     def run(self) -> None:
+        if self._seen is None:
+            self._tick()
         while not self._done.wait(self._interval):
-            try:
-                latest = self._latest()
-                if latest != self._seen:
-                    self._checkpointer.checkpoint()
-                    self._seen = latest
-            except Exception as exc:  # noqa: BLE001 — keep watching; the next tick retries.
-                if self._done.is_set():
-                    return
-                sys.stderr.write(f"funcd duckdb shim: catalog checkpoint failed, retrying: {exc}\n")
+            if not self._tick():
+                return
+
+    def _tick(self) -> bool:
+        """Saves when a commit landed since the last save, or a start-up save is pending; False once stopped."""
+        try:
+            latest = self._latest()
+            if latest != self._seen:
+                self._checkpointer.checkpoint()
+                self._seen = latest
+        except Exception as exc:  # noqa: BLE001 — keep watching; the next tick retries.
+            if self._done.is_set():
+                return False
+            sys.stderr.write(f"funcd duckdb shim: catalog checkpoint failed, retrying: {exc}\n")
+        return True
 
     def stop(self) -> None:
         self._done.set()
+
+
+def _stop(drain, watcher: _CommitWatcher, watch, checkpointer: _Checkpointer, serving: list[str], token: str) -> None:
+    """The graceful stop (#1198, ADR-0273). The watcher keeps saving while the running queries drain; its cursor holds
+    the catalog open, which the stop waits out, so it stops and closes before the stop detaches the catalog. One more
+    save then covers the commits of its last interval: a kill later in the stop loses only what completes after this
+    save. The stop's own error is logged, as the engine then exits 0 whatever happened (ADR-0276)."""
+    try:
+        _drain(drain, STOP_WAIT_SECONDS)
+        drain.close()
+        watcher.stop()
+        watcher.join()
+        watch.close()
+        try:
+            checkpointer.checkpoint()
+        except Exception as exc:  # noqa: BLE001 — the stop's own upload covers the same commits.
+            sys.stderr.write(f"funcd duckdb shim: the save after the drain failed: {exc}\n")
+        checkpointer.stop(serving, token)
+    except Exception as exc:  # noqa: BLE001 — logged, then the exit the runtime expects.
+        sys.stderr.write(f"funcd duckdb shim: the stop failed: {exc}\n")
 
 
 def main() -> int:
@@ -390,7 +463,7 @@ def main() -> int:
 
     # Recover: GetObject the catalog from blob → local file → ATTACH (fresh on first deploy). The
     # Parquet DATA_PATH is the owned prefix on S3 (the F47 surface); the catalog is the local DuckDB file.
-    _recover_catalog(s3, bucket, key)
+    recovered = _recover_catalog(s3, bucket, key)
     # OVERRIDE_DATA_PATH: a catalog restored under another prefix (ADR-0222 asLocation) records its old
     # DATA_PATH, which DuckLake refuses to replace otherwise; the data files are relative to it.
     # DUCKLAKE_VERSION: a new catalog is DuckLake 1.1 whatever DuckDB's default; a 1.0 catalog fails here (ADR-0263).
@@ -401,9 +474,10 @@ def main() -> int:
     )
     _confine(con)
 
-    checkpointer = _Checkpointer(con.cursor(), s3, bucket, key)
+    checkpointer = _Checkpointer(con.cursor(), s3, bucket, key, os.environ.get(REPORT_KEY))
     watch = con.cursor()
-    watcher = _CommitWatcher(checkpointer, lambda: watch.execute(LATEST_SNAPSHOT).fetchone()[0], save_interval)
+    watcher = _CommitWatcher(checkpointer, lambda: watch.execute(LATEST_SNAPSHOT).fetchone()[0], save_interval,
+                             save_at_start=recovered)
     watcher.start()
     drain = con.cursor()
     serving: list[str] = []
@@ -411,19 +485,7 @@ def main() -> int:
     # Graceful shutdown on SIGTERM/SIGINT: end the commits and checkpoint the catalog one final time (#1198).
     def _on_term(_signum, _frame):
         try:
-            # The watcher keeps saving while the running queries drain; its cursor holds the catalog open, which the
-            # stop waits out, so it stops and closes before the stop detaches the catalog. One more save then covers
-            # the commits of its last interval: a kill later in the stop loses only what completes after this save.
-            _drain(drain, STOP_WAIT_SECONDS)
-            drain.close()
-            watcher.stop()
-            watcher.join()
-            watch.close()
-            try:
-                checkpointer.checkpoint()
-            except Exception as exc:  # noqa: BLE001 — the stop's own upload covers the same commits.
-                sys.stderr.write(f"funcd duckdb shim: the save after the drain failed: {exc}\n")
-            checkpointer.stop(serving, quack_token)
+            _stop(drain, watcher, watch, checkpointer, serving, quack_token)
         finally:
             raise SystemExit(0)
 

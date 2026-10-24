@@ -115,8 +115,16 @@ type Instance struct {
 	CreatedAt time.Time
 	StartedAt time.Time // the last successful Start; zero before the first (ADR-0183)
 	Listened  bool      // wrote its port to FUNCD_PORTFILE since its last Start; stays true after it ends (ADR-0160)
+	Report    string    // an engine's report file, read as untrusted, at most MaxReportBytes; "" for none (ADR-0276)
 	Exit      Exit
 }
+
+// ReportFileEnv names the file in its boot dir to which an engine worker, of any owner kind but Function, writes its
+// report; the containerd driver reads it into Instance.Report (ADR-0276).
+const ReportFileEnv = "FUNCD_REPORTFILE"
+
+// MaxReportBytes bounds how much of a report the runtime reads.
+const MaxReportBytes = 1024
 
 // Runtime is the worker port: create/start/stop/observe one function replica.
 // Errors are api/fault; every method is ctx-first; the port imports no container

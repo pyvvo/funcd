@@ -4,13 +4,16 @@ package containerd
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/errdefs"
 
 	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/runtime"
 )
 
@@ -69,6 +72,36 @@ func portWritten(dir string) bool {
 	}
 	fi, err := os.Lstat(filepath.Join(dir, "port"))
 	return err == nil && fi.Mode().IsRegular()
+}
+
+// reportFile is the name of an engine's report in its boot dir (ADR-0276).
+const reportFile = "report"
+
+// report returns the report an engine worker wrote in its boot dir, or "" for a Function or for none (ADR-0276).
+func report(sb *worker) string {
+	if sb.ownerKind == v1alpha1.KindFunction {
+		return ""
+	}
+	return readReport(sb.bootDir)
+}
+
+// readReport returns the first runtime.MaxReportBytes of the report in boot dir dir, or "". The sandbox writes the dir,
+// so the file is untrusted: no symlink is followed, opening a FIFO does not block, and only a regular file is read.
+func readReport(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	f, err := os.OpenFile(filepath.Join(dir, reportFile), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = f.Close() }()
+	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
+		return ""
+	}
+	b := make([]byte, runtime.MaxReportBytes)
+	n, _ := io.ReadFull(f, b)
+	return string(b[:n])
 }
 
 // waitTask returns a channel that receives the task's exit code once it exits.

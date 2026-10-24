@@ -485,6 +485,9 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 	env := make(map[string]string, len(spec.Env)+1)
 	maps.Copy(env, spec.Env)
 	env["FUNCD_PORTFILE"] = containerBootDir + "/port"
+	if spec.OwnerKind != v1alpha1.KindFunction {
+		env[runtime.ReportFileEnv] = containerBootDir + "/" + reportFile
+	}
 	spec.Env = env
 	container, err := d.client.NewContainer(nctx, ctrID,
 		containerd.WithImage(image),
@@ -837,6 +840,7 @@ func (d *driver) Status(ctx context.Context, id runtime.InstanceID) (runtime.Ins
 		}
 	}
 	inst.Listened = d.listened(sb)
+	inst.Report = report(sb)
 	return inst, nil
 }
 
@@ -956,6 +960,7 @@ func (d *driver) List(ctx context.Context, ns v1alpha1.NamespaceName) ([]runtime
 			}
 		}
 		inst.Listened = d.listened(sb)
+		inst.Report = report(sb)
 		out = append(out, inst)
 	}
 	return out, nil

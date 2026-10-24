@@ -1509,8 +1509,9 @@ func (p *Platform) buildControlPlane() error {
 
 	// ADR-0081: structured function-log capture (Path B). If the runtime driver implements the
 	// LogCapturer capability and a blob substrate is present, build the funclog sink and install the
-	// per-instance capture hook — a Pump per channel that drains the shim's NDJSON into the sink. Path A, the raw
-	// stdout/stderr, is installed beside it on the same gate (ADR-0168).
+	// per-instance capture hook — a Pump per channel that drains the shim's NDJSON into the sink. logs stays nil
+	// without it, and Path A below then keeps only a Function's tail (ADR-0168).
+	var logs funclog.Sink
 	if lc, ok := c.runtime.(runtime.LogCapturer); ok && c.blob != nil && !c.funclogDisabled {
 		sink, serr := funclog.NewBlobSink(funclog.Deps{
 			Bucket: c.blob, Clock: clock.System(), Logger: p.logger,
@@ -1525,7 +1526,7 @@ func (p *Platform) buildControlPlane() error {
 		// span-tagged lines to it and untagged lines to the logs sink. nil ⇒ span lines are dropped.
 		// Dev streams logs live by tee'ing an observer onto the logs sink (production leaves it nil, so
 		// logs are only persisted).
-		var logs funclog.Sink = sink
+		logs = sink
 		if c.logObserver != nil {
 			logs = &teeLogSink{inner: sink, observe: c.logObserver}
 		}
@@ -1545,31 +1546,36 @@ func (p *Platform) buildControlPlane() error {
 			_, isMember, _ := fnReconciler.PoolMembers(spec.Namespace, spec.Name)
 			p.logRoutes.start(r, func() { _ = funclog.RoutePool(context.Background(), r, sinks, res, isMember, p.logger) })
 		})
-		// ADR-0168 Path A: a Function worker's raw stdout (INFO) and stderr (ERROR) go to the same logs sink, dev's tee
-		// included. An engine's worker keeps only its tail.
-		if oc, ok := c.runtime.(runtime.OutputCapturer); ok {
-			oc.SetOutputCapture(func(spec runtime.WorkerSpec, out *workerpipe.Output) {
-				if spec.OwnerKind != v1.KindFunction {
-					return
-				}
-				res := funclog.Resource{Namespace: string(spec.Namespace), Function: string(spec.Name), Replica: strconv.Itoa(spec.Replica)}
-				dst := logs
-				if strings.HasPrefix(string(spec.Name), "__pool__") {
-					// A raw line names no member, so it is stored under each member the pool runs now.
-					members, _, _ := fnReconciler.PoolMembers(spec.Namespace, spec.Name)
-					dst = newMemberSink(logs, res, members)
-				}
-				for _, src := range []struct {
-					stream workerpipe.Stream
-					source funclog.Source
-				}{{workerpipe.Stdout, funclog.SourceStdout}, {workerpipe.Stderr, funclog.SourceStderr}} {
-					r := out.Reader(src.stream)
-					p.logRoutes.start(r, func() {
-						_ = funclog.Pump(context.Background(), funclog.NewRawReader(r, src.source), dst, res, p.logger)
-					})
-				}
-			})
-		}
+	}
+	// ADR-0168 Path A: a Function worker's raw stdout (INFO) and stderr (ERROR) go to the funclog logs sink, dev's tee
+	// included, and only its tail stays without funclog. An engine's lines go to the daemon's log whatever funclog's
+	// setting (ADR-0276).
+	if oc, ok := c.runtime.(runtime.OutputCapturer); ok {
+		oc.SetOutputCapture(func(spec runtime.WorkerSpec, out *workerpipe.Output) {
+			if spec.OwnerKind != v1.KindFunction {
+				p.logEngineOutput(spec, out)
+				return
+			}
+			if logs == nil {
+				return
+			}
+			res := funclog.Resource{Namespace: string(spec.Namespace), Function: string(spec.Name), Replica: strconv.Itoa(spec.Replica)}
+			dst := logs
+			if strings.HasPrefix(string(spec.Name), "__pool__") {
+				// A raw line names no member, so it is stored under each member the pool runs now.
+				members, _, _ := fnReconciler.PoolMembers(spec.Namespace, spec.Name)
+				dst = newMemberSink(logs, res, members)
+			}
+			for _, src := range []struct {
+				stream workerpipe.Stream
+				source funclog.Source
+			}{{workerpipe.Stdout, funclog.SourceStdout}, {workerpipe.Stderr, funclog.SourceStderr}} {
+				r := out.Reader(src.stream)
+				p.logRoutes.start(r, func() {
+					_ = funclog.Pump(context.Background(), funclog.NewRawReader(r, src.source), dst, res, p.logger)
+				})
+			}
+		})
 	}
 
 	// ADR-0083: funclog compacted compaction. When a blob substrate is present and compaction is not disabled,

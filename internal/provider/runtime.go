@@ -221,7 +221,7 @@ func (r *engineRuntime) Converge(ctx context.Context, spec ProviderSpec) (Provid
 		}
 	}
 
-	status := ProviderStatus{Running: running}
+	status := ProviderStatus{Running: running, Report: ready.Report}
 	if !haveReady {
 		status.Reason = "EngineNotReady"
 		return status, nil
