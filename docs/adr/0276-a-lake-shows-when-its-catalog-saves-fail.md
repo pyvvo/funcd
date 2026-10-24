@@ -1,6 +1,6 @@
 # ADR-0276: A Lake shows when its catalog saves fail, and an engine's output reaches the daemon log
 
-- **Status**: Reviewing (2026-10-24); Accepted 2026-10-24 by an `adr-batch` run the decider delegated ("you have batch"); judged twice:
+- **Status**: Implemented (2026-10-24), review passed with two Minors, both fixed ([report](../reviews/adr-0276-implementation-claude-opus-5-5.md)); Reviewing 2026-10-24; Accepted 2026-10-24 by an `adr-batch` run the decider delegated ("you have batch"); judged twice:
   round 1's Blocker (the report read as untrusted data, engines only) and two Majors (no false recovery across an
   engine replacement; engine output whatever funclog's setting) and round 2's (no start-up save of a fresh catalog)
   folded
