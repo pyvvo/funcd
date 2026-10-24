@@ -27,6 +27,7 @@ import (
 	"github.com/pyvvo/funcd/internal/gateway"
 	"github.com/pyvvo/funcd/internal/kvstore"
 	"github.com/pyvvo/funcd/internal/network"
+	platformconfig "github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/platform/observability"
 	"github.com/pyvvo/funcd/internal/provider"
@@ -558,12 +559,13 @@ func WithLakeExtensionDir(dir string) Option {
 }
 
 // WithLakeSaveInterval sets how often every Lake engine saves its catalog after a commit, the Lake's recovery point
-// (ADR-0274, config lake.saveInterval), as the engine's FUNCD_LAKE_SAVE_INTERVAL. 0 ⇒ none set: the engine saves
-// every second.
+// (ADR-0274, config lake.saveInterval), as the engine's FUNCD_LAKE_SAVE_INTERVAL: a whole number of milliseconds within
+// lake.saveInterval's bounds, 500ms to 1h. 0 ⇒ none set: the engine saves every second.
 func WithLakeSaveInterval(d time.Duration) Option {
 	return func(c *config) error {
-		if d < 0 {
-			return fault.Invalidf("funcd.WithLakeSaveInterval", "lake save interval %s must not be negative", d)
+		if d != 0 && (d < platformconfig.MinLakeSaveInterval || d > platformconfig.MaxLakeSaveInterval || d%time.Millisecond != 0) {
+			return fault.Invalidf("funcd.WithLakeSaveInterval", "lake save interval %s: want 0 or whole milliseconds from %s to %s",
+				d, v1.Duration(platformconfig.MinLakeSaveInterval), v1.Duration(platformconfig.MaxLakeSaveInterval))
 		}
 		c.lakeSaveInterval = d
 		return nil

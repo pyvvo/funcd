@@ -1,7 +1,8 @@
 # ADR-0274: A Lake saves its catalog at the interval its recovery objective sets
 
 - **Status**: Accepted (2026-10-24) by the decider, before its merge: a platform key like the KV and blob intervals,
-  which replaced the first draft's per-Lake ConfigMap key; judged twice on the first draft
+  which replaced the first draft's per-Lake ConfigMap key; judged twice on the first draft, and once on this design
+  (accept after one Major, folded)
 - **Date**: 2026-10-24
 - **Deciders**: green-0-rabbit
 - **Tags**: lake, duckdb, backup, recovery-objectives, configuration
@@ -27,6 +28,9 @@ with the two questions ADR-0273 left to the objective.
 - `scenario: save-interval-from-config`: Given `funcdconfig.yaml` sets `lake.saveInterval: 3s`, When clients commit to
   a Lake, Then its engine's environment holds `FUNCD_LAKE_SAVE_INTERVAL=3s`, the engine saves the catalog at most once
   per 3 s, and the stored catalog holds a commit once the first save after one interval has ended.
+- `scenario: save-interval-change`: Given a Lake whose engine runs, When the operator changes `lake.saveInterval` and
+  restarts funcd, Then the running engine keeps its interval until it is re-created, and the engine that replaces it
+  saves at the new one.
 - `scenario: bad-save-interval-refused`: Given `lake.saveInterval` is not an ADR-0194 duration, or outside 500 ms to
   1 h, When funcd starts, Then it refuses to start, naming the key.
 - `scenario: plan-lake-rpo`: Given a `funcdconfig.yaml`, When the operator runs `funcdctl backup plan lake --rpo 10s`,
@@ -65,8 +69,10 @@ status condition for failing saves (open question).
    Lake; past an hour, a longer interval saves few uploads while its loss keeps growing. The daemon's config loader
    refuses another value, naming the key, so funcd does not start and plan's check refuses it.
 2. **The engine.** The Lake reconciler sets `FUNCD_LAKE_SAVE_INTERVAL`, in ADR-0194's normalized form, among the
-   engine's own keys, which no bound key replaces (ADR-0057). A changed value takes effect when funcd restarts: each
-   engine's spec changes, so it is replaced at its Lake's next reconcile (#1195). The shim reads the key at start,
+   engine's own keys, which no bound key replaces (ADR-0057). A changed value reaches an engine when the engine is
+   created: one that runs across the restart that applies the value is adopted as it is (#1195) and keeps its interval
+   until it is re-created, at its key renewal (ADR-0270, at 80 to 90 % of `s3gateway.keyRotationPeriod`, 24 h by
+   default), after a crash, or when its Lake changes. The shim reads the key at start,
    before it connects; a value outside the bounds ends the start with status 2 and `funcd duckdb shim:
    FUNCD_LAKE_SAVE_INTERVAL <value>: want a duration from 500ms to 1h` (an engine started by hand).
 3. **The watcher** reads the catalog's latest snapshot once per interval and saves after a commit, at most once per
@@ -112,7 +118,7 @@ func (c Config) LakeSaveInterval() (time.Duration, error) // the default when em
 const Lake Component = "lake" // Derive(Lake, o, _) = lake.saveInterval: min(o.RPO ÷ 2, 1h)
 
 // pkg/funcd
-func WithLakeSaveInterval(d time.Duration) Option // every Lake engine's FUNCD_LAKE_SAVE_INTERVAL; 0 ⇒ none set
+func WithLakeSaveInterval(d time.Duration) Option // every engine's FUNCD_LAKE_SAVE_INTERVAL; 0 ⇒ none; else the bounds
 ```
 
 ```python
@@ -139,7 +145,9 @@ def _save_interval(environ: Mapping[str, str]) -> float: ...  # seconds; SystemE
 5. Tests:
    - `internal/platform/config`: the default, the bounds and a refused value naming the key;
    - `internal/services/lake` `TestScenarioSaveIntervalFromConfig`: every engine's environment holds the key, and a
-     bound key cannot replace it;
+     bound key cannot replace it; `internal/provider` `TestScenarioSaveIntervalChange`: a restarted daemon adopts a
+     running engine with its interval, and the engine re-created at its key renewal carries the new one;
+   - `pkg/funcd` `TestWithLakeSaveIntervalBounds`: the option takes the config's bounds;
    - `shim_test.py` `TestSaveIntervalFromTheEnvironment` and `TestScenarioBadSaveIntervalRefused`;
    - `engine_test.py` `TestScenarioSaveIntervalFromConfig` (a 3 s interval: one or two saves of 8 commits over
      4 s, and the last commit stored after one interval and a save);
@@ -153,7 +161,8 @@ def _save_interval(environ: Mapping[str, str]) -> float: ...  # seconds; SystemE
 
 - [ ] Without the key the interval is 1 s; a value outside 500 ms to 1 h, both included, or no ADR-0194 duration,
   stops funcd at start naming the key.
-- [ ] Every Lake engine's environment holds `FUNCD_LAKE_SAVE_INTERVAL`, and no bound ConfigMap or Secret replaces it.
+- [ ] Every Lake engine's environment holds `FUNCD_LAKE_SAVE_INTERVAL`, and no bound ConfigMap or Secret replaces it;
+  a changed value reaches a running engine when it is re-created.
 - [ ] `plan lake --rpo R` writes min(R ÷ 2, 1h) into `lake.saveInterval`, refuses half of R under 500 ms, and refuses
   `--keep` and `-f`.
 - [ ] The scenario tests pass, and the engine test fails with the interval fixed at 1 s.
@@ -162,9 +171,12 @@ def _save_interval(environ: Mapping[str, str]) -> float: ...  # seconds; SystemE
 
 - **(+)** A Lake's recovery point follows the platform's objective, set by the same `funcdctl backup plan` and in the
   same file as the KV and blob intervals.
-- **(−)** One interval for every Lake: an App that needs more makes its own backups with a `BackupSchedule`.
+- **(−)** One interval for every Lake. A `BackupSchedule` adds an App's own restore points, at most once a minute;
+  it cannot make a crash lose less than the platform's interval, so an App that needs that asks the operator for a
+  smaller `lake.saveInterval`.
 - **(−)** A short interval multiplies whole-catalog uploads on a busy Lake; the 500 ms floor bounds it.
-- **(−)** A changed value replaces every Lake engine once, at the restart that applies it.
+- **(−)** A changed value reaches a running engine only when the engine is re-created, within one key renewal (about
+  a day by default), sooner after a crash or a change of its Lake.
 
 ## Open questions
 
