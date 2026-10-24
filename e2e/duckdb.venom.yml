@@ -25,6 +25,7 @@
 # and, last (ADR-0264), Lake lake re-created at 1Gi records its idle engine's RSS: the engine sees its own cgroup, so
 # DuckDB sizes itself to its limit and spills a query larger than its memory, and lake-reader, with no limit, reads max.
 # The ADR-0269 case: a query that points an S3 secret at the VM's own address opens no connection there.
+# The #1227 case: tables committed just before a spec change replaces the engine are read back from the new engine.
 name: lake-quack add-on provider — deploy + Ready + live SQL round-trip on real containerd (ADR-0086/0087/0088/0091)
 
 vars:
@@ -355,6 +356,66 @@ testcases:
         info: "ATTACH through the PEP proxy → {{.result.systemout}}"
         assertions:
           - result.code ShouldEqual 0
+
+  # Issue #1227: a graceful stop keeps every commit acknowledged before it. A spec change replaces the engine (#1195);
+  # the containerd driver removed the engine's network before SIGTERM, so the stop could not save its catalog and the
+  # tables committed since the last save were lost. It runs before Function lake exists: a Function named like the
+  # prefix owner takes the prefix's write from the Lake (ADR-0175, an accepted risk).
+  - name: issue1227-redeploy-keeps-commits — tables committed just before a spec change are read back from the new engine
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            sudo /var/lib/funcd/bin/ctr --address /var/lib/funcd/data/containerd/containerd.sock -n funcd-default \
+              task ls | awk "\$1==\"lake-r0\" && \$3==\"RUNNING\" {print \$2}"'
+        info: "the running engine → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldNotBeEmpty
+        vars:
+          oldpid:
+            from: result.systemout
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            set -e
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            for t in a b c; do
+              curl -sf -m 30 -X POST -H "content-type: application/json" \
+                --data "{\"data\":{\"sql\":\"CREATE TABLE lakehouse.issue1227_$t AS SELECT 1227 AS n\"}}" \
+                http://127.0.0.1:8081/function/lake-reader >/dev/null
+            done
+            funcdctl apply -f /opt/lane/lake-redeploy.yaml >/dev/null && echo COMMITTED_AND_APPLIED'
+        info: "three commits, then the redeploy → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual COMMITTED_AND_APPLIED
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            pid=$(sudo /var/lib/funcd/bin/ctr --address /var/lib/funcd/data/containerd/containerd.sock -n funcd-default \
+              task ls | awk "\$1==\"lake-r0\" && \$3==\"RUNNING\" {print \$2}")
+            phase=$(funcdctl get lake lake -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"phase\"])")
+            old=$(printf %s "{{.oldpid}}" | tr -d "[:space:]")
+            [ -n "$old" ] && [ -n "$pid" ] && [ "$pid" != "$old" ] && [ "$phase" = Ready ] && echo "REPLACED $old -> $pid"'
+        retry: 60
+        delay: 1
+        info: "the engine after the redeploy → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring REPLACED
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT count(*) FROM (SELECT n FROM lakehouse.issue1227_a UNION ALL SELECT n FROM lakehouse.issue1227_b UNION ALL SELECT n FROM lakehouse.issue1227_c)"}}'
+        retry: 20
+        delay: 2
+        info: "the three tables from the new engine → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring "[[3]]"
 
   # ADR-0152: a Function and a Lake share the name `lake`; each reconciler manages only its own kind's workers.
   - name: same-name-function-and-lake-stay-ready — Function lake deploys and scales beside Lake lake, which keeps its engine

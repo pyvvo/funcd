@@ -673,10 +673,6 @@ func (d *driver) stop(ctx context.Context, id runtime.InstanceID, grace time.Dur
 	if err != nil && !errdefs.IsNotFound(err) {
 		return mapErr(err, op, "load task %q", sb.ctrID)
 	}
-	// Without the worker's netns the bridge plugin's DEL frees the IP but not the masquerade rules. A /proc netns goes
-	// when the task exits; the pin keeps it for a task that already exited until the DEL is sent.
-	_ = d.cni.Remove(nctx, sb.cniID, sb.netnsPath)
-	d.netns.unpin(sb.netnsPath)
 	if err == nil {
 		_ = task.Kill(nctx, syscall.SIGTERM)
 		select {
@@ -693,6 +689,11 @@ func (d *driver) stop(ctx context.Context, id runtime.InstanceID, grace time.Dur
 		}
 		_, _ = task.Delete(nctx)
 	}
+	// The DEL waits for the task to go, so the worker keeps its network through its SIGTERM grace: a Lake engine's stop
+	// saves its catalog over it (#1227). Without the worker's netns the bridge plugin's DEL frees the IP but not the
+	// masquerade rules, and a /proc netns goes with the task; the pin taken at Create keeps it until the DEL (#706).
+	_ = d.cni.Remove(nctx, sb.cniID, sb.netnsPath)
+	d.netns.unpin(sb.netnsPath)
 	if err := container.Delete(nctx, containerd.WithSnapshotCleanup); err != nil && !errdefs.IsNotFound(err) {
 		return mapErr(err, op, "delete container %q", sb.ctrID)
 	}

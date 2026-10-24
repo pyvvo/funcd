@@ -1,0 +1,39 @@
+# The duckdb lane's issue1227 case re-applies Lake lake as the lane deploys it (funcd-python examples/lake-quack/lake.yaml)
+# at 3Gi: a spec change, so the running engine is replaced (#1195) and its graceful stop must keep every acknowledged
+# commit.
+apiVersion: funcd.io/v1alpha1
+kind: Lake
+metadata:
+  name: lake
+  namespace: default
+  resourceGroup: rg1
+spec:
+  buckets:
+    - name: lakehouse
+      prefixes:
+        - name: gold
+      maxObjectBytes: 1073741824
+  configMaps:
+    - ref: lake-engine-config
+  secrets:
+    - name: lake-quack-token
+      keys:
+        - QUACK_TOKEN
+  bindings:
+    blob:
+      - alias: gold
+        bucket: lakehouse
+        prefix: gold
+    secret:
+      - lake-quack-token
+    config:
+      - lake-engine-config
+  location:
+    bucket: lakehouse
+    prefix: gold
+  resources:
+    cpu: "2"
+    memory: "3Gi"
+  ingress:
+    enabled: true
+    path: /lake/lake

@@ -42,20 +42,25 @@ func TestScenario_UnrevisionedCNIIDsDistinctAcrossNamespaces(t *testing.T) {
 	require.Equal(t, [][2]string{{abc, "/proc/1/ns/net"}}, f.cni.removed, "Stop must remove only the stopped worker's attachment")
 }
 
-// Issue 706: the bridge plugin frees a worker's masquerade rules only in a live netns, and the netns goes with the task.
-func TestIssue706_StopSendsCNIDelBeforeTaskStops(t *testing.T) {
+// Issue 1227: Stop leaves a worker its network until its task is gone, so a Lake engine's stop can still save its
+// catalog over the bridge. The DEL then runs in the netns pinned at Create, which outlives the task, so the bridge
+// plugin still frees the masquerade rules (#706).
+func TestIssue1227_StopSendsCNIDelAfterTheTaskIsGone(t *testing.T) {
 	f := newCNIIDFixture(t)
+	mounts := fakePins(t, f.d)
 	tasks, ok := f.d.client.TaskService().(*createdTasks)
 	require.True(t, ok)
 	cni := &taskStateCNI{recordingCNI: f.cni, tasks: tasks}
 	f.d.cni = cni
-	ctx := leases.WithLease(context.Background(), "issue706")
+	ctx := leases.WithLease(context.Background(), "issue1227")
 	inst, err := f.d.Create(ctx, f.engine(t, "a", "b"))
 	require.NoError(t, err)
 
 	require.NoError(t, f.d.Stop(ctx, inst.ID))
-	require.Equal(t, [][2]string{{"a_b-r0", "/proc/1/ns/net"}}, f.cni.removed)
-	require.Equal(t, [][2]bool{{false, false}}, cni.killedDeleted, "Stop must send the CNI DEL before it kills and deletes the task")
+	pin := filepath.Join(f.d.netns.dir, "a_b-r0")
+	require.Equal(t, [][2]bool{{true, true}}, cni.killedDeleted, "Stop must kill and delete the task before the CNI DEL")
+	require.Equal(t, [][2]string{{"a_b-r0", pin}}, f.cni.removed, "the DEL names the netns pinned at Create")
+	require.Equal(t, "unmount "+pin, (*mounts)[len(*mounts)-1], "the pin goes after the DEL")
 	require.Equal(t, []string{"b-r0"}, tasks.deleted)
 }
 
