@@ -24,6 +24,7 @@ require (
 	github.com/containerd/containerd/v2 v2.4.2
 	github.com/containerd/errdefs v1.0.0
 	github.com/containerd/go-cni v1.1.14
+	github.com/containerd/typeurl/v2 v2.3.0
 	github.com/danielgtaylor/huma/v2 v2.39.1
 	github.com/dgraph-io/badger/v4 v4.9.6
 	github.com/distribution/reference v0.6.0
@@ -168,7 +169,6 @@ require (
 	github.com/containerd/platforms v1.0.0-rc.5 // indirect
 	github.com/containerd/plugin v1.1.0 // indirect
 	github.com/containerd/ttrpc v1.2.9 // indirect
-	github.com/containerd/typeurl/v2 v2.3.0 // indirect
 	github.com/containernetworking/cni v1.3.1 // indirect
 	github.com/curioswitch/go-reassign v0.3.0 // indirect
 	github.com/daixiang0/gci v0.13.7 // indirect
