@@ -35,8 +35,8 @@ func providerS3Meta() s3Meta {
 			"default/lakehouse": {
 				ObjectMeta: v1.ObjectMeta{Name: "lakehouse", Namespace: "default", ResourceGroup: "rg1"},
 				Spec: v1.BucketSpec{Prefixes: []v1.BucketPrefix{
-					{Name: "gold", Owner: "lake"}, // owned by the provider "lake"
-					{Name: "silver"},              // unbound, unowned
+					{Name: "gold", Owner: v1.LakeOwner("lake")}, // owned by the provider "lake"
+					{Name: "silver"}, // unbound, unowned
 				}},
 			},
 		},
@@ -53,8 +53,8 @@ func TestScenarioS3ProviderReadsBoundPrefix(t *testing.T) {
 	require.True(t, read.Allowed, "provider lake reads lakehouse/gold via its Lake spec.blob (ADR-0088): %s", read.Reason)
 }
 
-// scenario: provider-writes-owned-prefix — the prefix owner names the provider, which binds the prefix and
-// shares its name with no Function, so the Lake is a writer ⇒ s3::write is granted.
+// scenario: provider-writes-owned-prefix — the prefix owner is the provider Lake (ADR-0275), so the Lake is a writer
+// ⇒ s3::write is granted.
 func TestScenarioS3ProviderWritesOwnedPrefix(t *testing.T) {
 	t.Parallel()
 	d := s3Driver(t, providerS3Meta(), fixedPolicies{rev: "0"})

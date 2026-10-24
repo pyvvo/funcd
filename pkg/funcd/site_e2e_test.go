@@ -88,7 +88,7 @@ func TestScenarioE2ESite(t *testing.T) {
 	bobj, err := st.Get(ctx, v1.KindBucket.GVK(), siteNS, "reports")
 	require.NoError(t, err)
 	b := bobj.(*v1.Bucket)
-	require.Equal(t, []v1.BucketPrefix{{Name: "bi"}, {Name: "gold", Owner: "etl"}}, b.Spec.Prefixes)
+	require.Equal(t, []v1.BucketPrefix{{Name: "bi"}, {Name: "gold", Owner: v1.FunctionOwner("etl")}}, b.Spec.Prefixes)
 	require.Len(t, b.OwnerReferences, 1)
 	require.Equal(t, v1.KindSite, b.OwnerReferences[0].Kind)
 	require.False(t, b.OwnerReferences[0].Controller, "retain: the marker only")
@@ -244,7 +244,7 @@ func startSitePlatform(t *testing.T, reserve func(*testing.T) string, image stri
 		siteObj.Name, siteObj.Namespace, siteObj.ResourceGroup = "bi", siteNS, "rg1"
 		siteObj.Spec = v1.SiteSpec{
 			Image:    image,
-			Buckets:  []v1.BucketEntry{{Name: "reports", BucketSpec: v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "gold", Owner: "etl"}}}}},
+			Buckets:  []v1.BucketEntry{{Name: "reports", BucketSpec: v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "gold", Owner: v1.FunctionOwner("etl")}}}}},
 			Bindings: v1.SiteBindings{Blob: []v1.BlobRef{{Bucket: "reports", Prefix: "bi"}}},
 			SPA:      true,
 			Ingress:  v1.SiteIngress{Ingress: v1.Ingress{Host: "bi.example.com", Auth: &v1.RouteAuth{Mode: v1.AuthOpen}}, Rules: []v1.SiteRule{{Path: "/data", Prefix: "gold"}}},

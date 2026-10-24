@@ -105,7 +105,7 @@ func (r *asleepRig) bucket(t *testing.T, name, prefix, owner v1.ObjectName) {
 	obj, _ := v1.NewObject(v1.KindBucket)
 	b := obj.(*v1.Bucket)
 	b.Name, b.Namespace, b.ResourceGroup = name, "default", "rg1"
-	b.Spec = v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: string(prefix), Owner: owner}}}
+	b.Spec = v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: string(prefix), Owner: v1.FunctionOwner(owner)}}}
 	r.apply(t, b)
 }
 

@@ -49,7 +49,7 @@ func fillOwnBucket(b *v1.Bucket, s *v1.Site) (changed, prefixOwned bool) {
 		have[p.Name] = p
 	}
 	if p, ok := have[s.Spec.ServedPrefix()]; ok {
-		if p.Owner != "" {
+		if !p.Owner.IsZero() {
 			return false, true
 		}
 	} else {

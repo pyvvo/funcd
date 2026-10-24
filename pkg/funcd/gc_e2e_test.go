@@ -459,7 +459,7 @@ func TestScenarioResourcegroupForceStopsAtProtectedMember(t *testing.T) {
 	e.apply(t, &v1.Bucket{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindBucket.GVK().APIVersion(), Kind: v1.KindBucket},
 		ObjectMeta: v1.ObjectMeta{Name: "lake", Namespace: "default", ResourceGroup: "team"},
-		Spec:       v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "raw", Owner: "writer"}}},
+		Spec:       v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "raw", Owner: v1.FunctionOwner("writer")}}},
 	})
 	require.NoError(t, e.blob.Put(context.Background(), "s3/default/lake/raw/part-0", []byte("rows"), blob.PutOptions{}))
 	err := e.c.Delete(e.ctx, v1.KindResourceGroup, "default", "team", sdk.Force())

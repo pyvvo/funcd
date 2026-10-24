@@ -486,8 +486,9 @@ func (w *Workflow) validateOnFailure(op string, names map[ObjectName]bool) error
 }
 
 // validateOwnedStores checks the root entries as an App checks its own (ADR-0248 Decision 1), that each table owner of
-// a store declared by name names a step, and that each prefix or database owner names a step or a lake the root
-// declares, which no step may be named like (ADR-0250 Decision 1).
+// a store declared by name names a step, that each database owner names a step or a lake the root declares, which no
+// step may be named like (ADR-0250 Decision 1), and that a prefix's Function owner names a step and its Lake owner a
+// declared lake (ADR-0275).
 func (w *Workflow) validateOwnedStores(op string, names map[ObjectName]bool) error {
 	s := &w.Spec
 	if err := validateNestedLakes(op, "spec.lakes", "a Workflow", s.Lakes); err != nil {
@@ -502,6 +503,7 @@ func (w *Workflow) validateOwnedStores(op string, names map[ObjectName]bool) err
 	for n := range names {
 		owners[n] = true
 	}
+	lakes := make(map[ObjectName]bool, len(s.Lakes))
 	for i, c := range s.Lakes {
 		if c.Name == "" {
 			continue
@@ -510,6 +512,7 @@ func (w *Workflow) validateOwnedStores(op string, names map[ObjectName]bool) err
 			return fault.Invalidf(op, "spec.lakes[%d].name %q is also a step's name: a store owner would name both", i, c.Name)
 		}
 		owners[c.Name] = true
+		lakes[c.Name] = true
 	}
 	for i := range s.SQLDatabases {
 		if o := s.SQLDatabases[i].Owner; s.SQLDatabases[i].Name != "" && o != "" && !owners[o] {
@@ -525,8 +528,11 @@ func (w *Workflow) validateOwnedStores(op string, names map[ObjectName]bool) err
 	}
 	for i := range w.Spec.Buckets {
 		for j, p := range w.Spec.Buckets[i].Prefixes {
-			if p.Owner != "" && !owners[p.Owner] {
-				return fault.Invalidf(op, "spec.buckets[%d].prefixes[%d].owner %q is not a step or a declared lake", i, j, p.Owner)
+			switch {
+			case p.Owner.Kind == KindFunction && !names[p.Owner.Name]:
+				return fault.Invalidf(op, "spec.buckets[%d].prefixes[%d].owner %q is not a step", i, j, p.Owner.Name)
+			case p.Owner.Kind == KindLake && !lakes[p.Owner.Name]:
+				return fault.Invalidf(op, "spec.buckets[%d].prefixes[%d].owner %q is not a declared lake", i, j, p.Owner.Name)
 			}
 		}
 	}

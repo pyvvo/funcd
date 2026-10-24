@@ -33,7 +33,7 @@ func TestIssue58_BucketWithObjectsIsDeletionProtected(t *testing.T) {
 			ObjectMeta: v1.ObjectMeta{Name: "lake", Namespace: "default", ResourceGroup: "rg1"},
 		}
 		for _, name := range prefixes {
-			b.Spec.Prefixes = append(b.Spec.Prefixes, v1.BucketPrefix{Name: name, Owner: "writer"})
+			b.Spec.Prefixes = append(b.Spec.Prefixes, v1.BucketPrefix{Name: name, Owner: v1.FunctionOwner("writer")})
 		}
 		return b
 	}

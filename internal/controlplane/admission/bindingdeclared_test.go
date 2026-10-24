@@ -169,7 +169,7 @@ func TestFunctionStoreOwner(t *testing.T) {
 	require.NoError(t, err)
 	s := out.(*v1.Function).Spec
 	require.Equal(t, []v1.KVTable{{Name: "counts", Owner: "counter"}, {Name: "audit", Owner: "auditor"}}, s.KVStores[0].Tables, "an explicit owner is kept")
-	require.Equal(t, v1.ObjectName("counter"), s.Buckets[0].Prefixes[0].Owner)
+	require.Equal(t, v1.FunctionOwner("counter"), s.Buckets[0].Prefixes[0].Owner)
 	require.Equal(t, v1.ObjectName("counter"), s.SQLDatabases[0].Owner)
 	require.Equal(t, []v1.ObjectName{stored, "flags", stored, "settings-other"}, s.Bindings.Config)
 }
@@ -237,7 +237,7 @@ func TestLakeStoreOwner(t *testing.T) {
 	cs := &v1.Lake{TypeMeta: v1.TypeMeta{APIVersion: v1.KindLake.GVK().APIVersion(), Kind: v1.KindLake}}
 	cs.Name, cs.Namespace = "lake", "default"
 	cs.Spec.Buckets = []v1.BucketEntry{
-		{Name: "lakehouse", BucketSpec: v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "lake"}, {Name: "raw", Owner: "ingest"}}}},
+		{Name: "lakehouse", BucketSpec: v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "lake"}, {Name: "raw", Owner: v1.FunctionOwner("ingest")}}}},
 		{Ref: "landing"},
 	}
 	cs.Spec.ConfigMaps = []v1.ConfigMapEntry{{Name: "tuning", ConfigMapSpec: data}}
@@ -245,7 +245,7 @@ func TestLakeStoreOwner(t *testing.T) {
 	out, err := a.Admit(context.Background(), admission.Request{Operation: admission.Create, GVK: v1.KindLake.GVK(), Object: cs})
 	require.NoError(t, err)
 	s := out.(*v1.Lake).Spec
-	require.Equal(t, []v1.BucketPrefix{{Name: "lake", Owner: "lake"}, {Name: "raw", Owner: "ingest"}}, s.Buckets[0].Prefixes)
+	require.Equal(t, []v1.BucketPrefix{{Name: "lake", Owner: v1.LakeOwner("lake")}, {Name: "raw", Owner: v1.FunctionOwner("ingest")}}, s.Buckets[0].Prefixes)
 	require.Equal(t, []v1.ObjectName{v1.AppConfigMapName("tuning", data)}, s.Bindings.Config)
 }
 
@@ -277,4 +277,30 @@ func TestBindingDeclaredLake(t *testing.T) {
 	app := admission.RootDeclared(nil, []v1.BucketEntry{{Name: "lakehouse"}}, nil, nil, nil, nil)
 	require.NoError(t, admit(bound, app), "an App's lake: its config and secret are not the App's root's to declare")
 	require.ErrorContains(t, admit(bound, admission.RootDeclared(nil, nil, nil, nil, nil, nil)), `Bucket "lakehouse" is not declared`)
+}
+
+// scenario: definer-fills-the-owner (ADR-0275) — a Function or a Lake that defines a bucket fills each prefix with no
+// owner with its own kind and name, and keeps a named one.
+func TestScenarioDefinerFillsTheOwner(t *testing.T) {
+	t.Parallel()
+	prefixes := func() []v1.BucketPrefix {
+		return []v1.BucketPrefix{{Name: "mine"}, {Name: "kept", Owner: v1.LakeOwner("other")}}
+	}
+	fn := rootFunction(func(s *v1.FunctionSpec) {
+		s.Buckets = []v1.BucketEntry{{Name: "files", BucketSpec: v1.BucketSpec{Prefixes: prefixes()}}}
+	})
+	out, err := admission.NewFunctionStoreOwnerAdmission().Admit(context.Background(),
+		admission.Request{Operation: admission.Create, GVK: v1.KindFunction.GVK(), Object: fn})
+	require.NoError(t, err)
+	require.Equal(t, []v1.BucketPrefix{{Name: "mine", Owner: v1.FunctionOwner(fn.Name)}, {Name: "kept", Owner: v1.LakeOwner("other")}},
+		out.(*v1.Function).Spec.Buckets[0].Prefixes)
+
+	cs := &v1.Lake{TypeMeta: v1.TypeMeta{APIVersion: v1.KindLake.GVK().APIVersion(), Kind: v1.KindLake}}
+	cs.Name, cs.Namespace = "lake", "default"
+	cs.Spec.Buckets = []v1.BucketEntry{{Name: "lakehouse", BucketSpec: v1.BucketSpec{Prefixes: prefixes()}}}
+	out, err = admission.NewLakeStoreOwnerAdmission().Admit(context.Background(),
+		admission.Request{Operation: admission.Create, GVK: v1.KindLake.GVK(), Object: cs})
+	require.NoError(t, err)
+	require.Equal(t, []v1.BucketPrefix{{Name: "mine", Owner: v1.LakeOwner("lake")}, {Name: "kept", Owner: v1.LakeOwner("other")}},
+		out.(*v1.Lake).Spec.Buckets[0].Prefixes)
 }

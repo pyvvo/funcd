@@ -96,7 +96,7 @@ func (h *harness) seedSite(name, tag string, mutate func(*v1.Site)) *v1.Site {
 	s.Name, s.Namespace, s.ResourceGroup = v1.ObjectName(name), ns, "rg1"
 	s.Spec = v1.SiteSpec{
 		Image:    h.ref(tag),
-		Buckets:  []v1.BucketEntry{{Name: bucket, BucketSpec: v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "gold", Owner: "etl"}}}}},
+		Buckets:  []v1.BucketEntry{{Name: bucket, BucketSpec: v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "gold", Owner: v1.FunctionOwner("etl")}}}}},
 		Bindings: v1.SiteBindings{Blob: []v1.BlobRef{{Bucket: bucket, Prefix: "bi"}}},
 		SPA:      true,
 		Ingress:  v1.SiteIngress{Ingress: v1.Ingress{Host: "bi.example.com", Auth: &v1.RouteAuth{Mode: v1.AuthOpen}}, Rules: []v1.SiteRule{{Path: "/data", Prefix: "gold"}}},
@@ -254,7 +254,7 @@ func TestScenarioOwnedBucketAndRouteMaterialized(t *testing.T) {
 	h.reconcile("bi")
 
 	b := h.bucket()
-	require.Equal(t, []v1.BucketPrefix{{Name: "bi"}, {Name: "gold", Owner: "etl"}}, b.Spec.Prefixes)
+	require.Equal(t, []v1.BucketPrefix{{Name: "bi"}, {Name: "gold", Owner: v1.FunctionOwner("etl")}}, b.Spec.Prefixes)
 	rt := h.route("bi")
 	require.Equal(t, []v1.OwnerReference{{ObjectRef: v1.ObjectRef{Kind: v1.KindSite, Namespace: ns, Name: "bi"}, UID: s.UID, Controller: true, BlockOwnerDeletion: true}}, rt.OwnerReferences)
 	require.Equal(t, "bi.example.com", rt.Spec.Host)
@@ -294,7 +294,7 @@ func TestScenarioSiteFollowsTheRule(t *testing.T) {
 	pre := &v1.Bucket{TypeMeta: v1.TypeMeta{APIVersion: v1.KindBucket.GVK().APIVersion(), Kind: v1.KindBucket}}
 	pre.Name, pre.Namespace, pre.ResourceGroup = bucket, ns, "rg1"
 	pre.OwnerReferences = []v1.OwnerReference{{ObjectRef: v1.ObjectRef{Kind: v1.KindApp, Namespace: ns, Name: "todo"}, UID: "app-uid"}}
-	pre.Spec = v1.BucketSpec{MaxObjectBytes: 4096, Prefixes: []v1.BucketPrefix{{Name: "bi"}, {Name: "bronze", Owner: "ingest"}}}
+	pre.Spec = v1.BucketSpec{MaxObjectBytes: 4096, Prefixes: []v1.BucketPrefix{{Name: "bi"}, {Name: "bronze", Owner: v1.FunctionOwner("ingest")}}}
 	_, err := h.st.Create(h.ctx, pre)
 	require.NoError(t, err)
 	before := h.bucket().Spec
@@ -329,7 +329,7 @@ func TestScenarioAdoptedPrefixWithOwnerRejected(t *testing.T) {
 	digest := h.push("v1", siteA())
 	pre := &v1.Bucket{TypeMeta: v1.TypeMeta{APIVersion: v1.KindBucket.GVK().APIVersion(), Kind: v1.KindBucket}}
 	pre.Name, pre.Namespace, pre.ResourceGroup = bucket, ns, "rg1"
-	pre.Spec.Prefixes = []v1.BucketPrefix{{Name: "bi", Owner: "publisher"}}
+	pre.Spec.Prefixes = []v1.BucketPrefix{{Name: "bi", Owner: v1.FunctionOwner("publisher")}}
 	_, err := h.st.Create(h.ctx, pre)
 	require.NoError(t, err)
 
@@ -338,7 +338,7 @@ func TestScenarioAdoptedPrefixWithOwnerRejected(t *testing.T) {
 	s := h.site("bi")
 	require.Equal(t, "PrefixOwned", readyCond(t, s).Reason)
 	require.Empty(t, s.Status.Digest)
-	require.Equal(t, []v1.BucketPrefix{{Name: "bi", Owner: "publisher"}}, h.bucket().Spec.Prefixes)
+	require.Equal(t, []v1.BucketPrefix{{Name: "bi", Owner: v1.FunctionOwner("publisher")}}, h.bucket().Spec.Prefixes)
 	require.False(t, h.exists("bi/"+slug(digest)+"/index.html"))
 	require.Empty(t, h.shared.puts)
 	_, gerr := h.st.Get(h.ctx, v1.KindRoute.GVK(), ns, "bi")

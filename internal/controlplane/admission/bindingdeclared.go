@@ -354,7 +354,7 @@ func (functionStoreOwner) Admit(_ context.Context, req Request) (v1.Object, erro
 			d.Owner = fn.Name
 		}
 	}
-	ownDefined(fn.Name, s.Buckets, s.ConfigMaps, s.Bindings.Config)
+	ownDefined(v1.FunctionOwner(fn.Name), s.Buckets, s.ConfigMaps, s.Bindings.Config)
 	return fn, nil
 }
 
@@ -377,19 +377,20 @@ func (lakeStoreOwner) Admit(_ context.Context, req Request) (v1.Object, error) {
 	if !ok {
 		return req.Object, nil
 	}
-	ownDefined(cs.Name, cs.Spec.Buckets, cs.Spec.ConfigMaps, cs.Spec.Bindings.Config)
+	ownDefined(v1.LakeOwner(cs.Name), cs.Spec.Buckets, cs.Spec.ConfigMaps, cs.Spec.Bindings.Config)
 	return cs, nil
 }
 
-// ownDefined writes owner into each omitted owner of a prefix of a bucket defined by name, and repoints each config
-// binding that names a defined ConfigMap, or an earlier stored name of it, at its current stored name.
-func ownDefined(owner v1.ObjectName, buckets []v1.BucketEntry, configMaps []v1.ConfigMapEntry, config []v1.ObjectName) {
+// ownDefined writes owner, the definer with its kind (ADR-0275), into each omitted owner of a prefix of a bucket
+// defined by name, and repoints each config binding that names a defined ConfigMap, or an earlier stored name of it, at
+// its current stored name.
+func ownDefined(owner v1.PrefixOwner, buckets []v1.BucketEntry, configMaps []v1.ConfigMapEntry, config []v1.ObjectName) {
 	for i := range buckets {
 		if buckets[i].Name == "" {
 			continue
 		}
 		for j := range buckets[i].Prefixes {
-			if p := &buckets[i].Prefixes[j]; p.Owner == "" {
+			if p := &buckets[i].Prefixes[j]; p.Owner.IsZero() {
 				p.Owner = owner
 			}
 		}

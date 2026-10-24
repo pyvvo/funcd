@@ -571,14 +571,16 @@ func buildKVStore(wf *v1.Workflow, kv *v1.KVStoreEntry) *v1.KVStore {
 	}
 }
 
-// buildBucket is the Bucket a Workflow declares by name, its prefix owners mapped from step names to the
-// materialized Function names (ADR-0248 Decision 1), a declared lake kept (ADR-0250 Decision 1).
+// buildBucket is the Bucket a Workflow declares by name, a step's prefix owner mapped to its materialized Function
+// (ADR-0248 Decision 1) and a declared lake's kept (ADR-0250 Decision 1), each with its kind (ADR-0275).
 func buildBucket(wf *v1.Workflow, e *v1.BucketEntry) *v1.Bucket {
 	spec := e.BucketSpec
 	spec.Prefixes = make([]v1.BucketPrefix, len(e.Prefixes))
 	for i, p := range e.Prefixes {
 		spec.Prefixes[i] = p
-		spec.Prefixes[i].Owner = ownerFor(wf, p.Owner)
+		if p.Owner.Kind == v1.KindFunction {
+			spec.Prefixes[i].Owner = v1.FunctionOwner(materializedName(wf, p.Owner.Name))
+		}
 	}
 	return &v1.Bucket{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindBucket.GVK().APIVersion(), Kind: v1.KindBucket},

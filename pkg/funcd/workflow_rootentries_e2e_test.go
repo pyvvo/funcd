@@ -120,7 +120,7 @@ func TestScenarioWorkflowLake(t *testing.T) {
 	t.Parallel()
 	e := startGC(t, funcd.WithGCSweepInterval(time.Second))
 	e.apply(t, rootWorkflow("marts", "query", e.image(t), func(s *v1.WorkflowSpec) {
-		s.Buckets = []v1.BucketEntry{{Name: "marts-files", BucketSpec: v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "lake", Owner: "lake"}}}}}
+		s.Buckets = []v1.BucketEntry{{Name: "marts-files", BucketSpec: v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "lake", Owner: v1.LakeOwner("lake")}}}}}
 		s.Lakes = []v1.LakeEntry{{Name: "lake", LakeSpec: v1.LakeSpec{
 			Location: v1.LakeLocation{Bucket: "marts-files", Prefix: "lake"},
 			Bindings: v1.LakeBindings{Blob: []v1.FunctionBlob{{Alias: "lake", Bucket: "marts-files", Prefix: "lake"}}},
@@ -137,7 +137,7 @@ func TestScenarioWorkflowLake(t *testing.T) {
 	// The materializer writes the lakes before the Workflow's buckets, so the bucket can lag the lake.
 	e.waitExists(t, v1.KindBucket, "marts-files")
 	b := e.object(t, v1.KindBucket, "marts-files").(*v1.Bucket)
-	require.Equal(t, []v1.BucketPrefix{{Name: "lake", Owner: "lake"}}, b.Spec.Prefixes, "a prefix owner naming a declared lake is kept")
+	require.Equal(t, []v1.BucketPrefix{{Name: "lake", Owner: v1.LakeOwner("lake")}}, b.Spec.Prefixes, "a prefix owner naming a declared lake is kept")
 	e.waitExists(t, v1.KindFunction, "marts-query")
 	require.Equal(t, []v1.FunctionLake{{Alias: "lake", Lake: "lake"}}, e.function(t, "marts-query").Spec.Bindings.Lake)
 

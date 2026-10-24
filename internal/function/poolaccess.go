@@ -64,8 +64,8 @@ func (r *Reconciler) accessIn(ctx context.Context, ns v1.NamespaceName) (accessI
 	for _, o := range buckets {
 		if b, ok := o.(*v1.Bucket); ok {
 			for _, p := range b.Spec.Prefixes {
-				if p.Owner != "" {
-					idx.owned[p.Owner] = append(idx.owned[p.Owner], "blob/"+string(b.Name)+"/"+p.Name)
+				if p.Owner.Kind == v1.KindFunction { // a Lake's prefix is no Function's, whatever its name (ADR-0275)
+					idx.owned[p.Owner.Name] = append(idx.owned[p.Owner.Name], "blob/"+string(b.Name)+"/"+p.Name)
 				}
 			}
 		}

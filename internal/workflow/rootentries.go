@@ -12,8 +12,8 @@ import (
 	"github.com/pyvvo/funcd/internal/store"
 )
 
-// ownerFor maps a prefix's or a database's owner as ADR-0250 Decision 1 does: a lake the root declares by name is
-// kept as written, a step becomes its Function, <workflow>-<step>.
+// ownerFor maps a database's owner as ADR-0250 Decision 1 does: a lake the root declares by name is kept as written, a
+// step becomes its Function, <workflow>-<step>. A prefix's owner names its kind, so buildBucket maps it (ADR-0275).
 func ownerFor(wf *v1.Workflow, owner v1.ObjectName) v1.ObjectName {
 	if owner == "" {
 		return ""

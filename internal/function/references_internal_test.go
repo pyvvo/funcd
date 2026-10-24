@@ -15,7 +15,7 @@ func seedBucket(t *testing.T, r *Reconciler, name string, prefixes ...string) {
 	b := obj.(*v1.Bucket)
 	b.Name, b.Namespace, b.ResourceGroup = v1.ObjectName(name), "default", "rg1"
 	for _, p := range prefixes {
-		b.Spec.Prefixes = append(b.Spec.Prefixes, v1.BucketPrefix{Name: p, Owner: "some-owner"})
+		b.Spec.Prefixes = append(b.Spec.Prefixes, v1.BucketPrefix{Name: p, Owner: v1.FunctionOwner("some-owner")})
 	}
 	_, err := r.store.Create(context.Background(), b)
 	require.NoError(t, err)

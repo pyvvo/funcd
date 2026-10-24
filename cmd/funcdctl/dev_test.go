@@ -612,9 +612,9 @@ func TestIssue490_DevReloadDropsBoundTableAndPrefix(t *testing.T) {
 			})
 	}
 	before := folder("    - name: hot\n      owner: counter\n    - name: cold\n      owner: counter\n",
-		"    - name: raw\n      owner: counter\n    - name: old\n      owner: counter\n",
+		"    - name: raw\n      owner:\n        kind: Function\n        name: counter\n    - name: old\n      owner:\n        kind: Function\n        name: counter\n",
 		"      - alias: cold\n        store: cache\n        table: cold\n", "      - alias: old\n        bucket: media\n        prefix: old\n")
-	after := folder("    - name: hot\n      owner: counter\n", "    - name: raw\n      owner: counter\n    - name: fresh\n      owner: counter\n",
+	after := folder("    - name: hot\n      owner: counter\n", "    - name: raw\n      owner:\n        kind: Function\n        name: counter\n    - name: fresh\n      owner:\n        kind: Function\n        name: counter\n",
 		"", "      - alias: fresh\n        bucket: media\n        prefix: fresh\n")
 	settled := func(inst *devInstance) bool {
 		ctx := context.Background()

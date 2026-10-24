@@ -99,7 +99,7 @@ func todoParts(t *testing.T, p *Platform) {
 	create(t, p.cfg.store, ks)
 	b := &v1.Bucket{TypeMeta: v1.TypeMeta{APIVersion: v1.KindBucket.GVK().APIVersion(), Kind: v1.KindBucket}}
 	b.Name, b.Namespace, b.ResourceGroup = "todo-files", "default", "rg1"
-	b.Spec.Prefixes = []v1.BucketPrefix{{Name: "attachments", Owner: "todo-api"}}
+	b.Spec.Prefixes = []v1.BucketPrefix{{Name: "attachments", Owner: v1.FunctionOwner("todo-api")}}
 	create(t, p.cfg.store, b)
 	fn := &v1.Function{TypeMeta: v1.TypeMeta{APIVersion: v1.KindFunction.GVK().APIVersion(), Kind: v1.KindFunction}}
 	fn.Name, fn.Namespace, fn.ResourceGroup = "todo-api", "default", "rg1"

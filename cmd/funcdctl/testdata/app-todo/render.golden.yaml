@@ -10,11 +10,17 @@ spec:
     name: todo-files
     prefixes:
     - name: attachments
-      owner: todo-api
+      owner:
+        kind: Function
+        name: todo-api
     - name: events
-      owner: todo-planner
+      owner:
+        kind: Function
+        name: todo-planner
     - name: lake
-      owner: todo-lake
+      owner:
+        kind: Lake
+        name: todo-lake
   - name: todo-web
     prefixes:
     - name: web

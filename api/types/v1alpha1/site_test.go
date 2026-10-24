@@ -31,7 +31,7 @@ func TestSiteRoundtrip(t *testing.T) {
 	s := site(func(s *Site) {
 		s.Spec.SPA = true
 		s.Spec.Ingress.Auth = &RouteAuth{Mode: AuthOpen}
-		s.Spec.Buckets[0].Prefixes = []BucketPrefix{{Name: "gold", Owner: "etl"}}
+		s.Spec.Buckets[0].Prefixes = []BucketPrefix{{Name: "gold", Owner: FunctionOwner("etl")}}
 		s.Status.Digest = "sha256:" + strings.Repeat("a", 64)
 		s.Status.ServingPrefix = "bi/sha256-" + strings.Repeat("a", 64) + "/"
 	})

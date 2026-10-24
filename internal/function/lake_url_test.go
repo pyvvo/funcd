@@ -113,7 +113,7 @@ func newLakeWorld(t *testing.T) *lakeWorld {
 	b := &v1.Bucket{}
 	b.TypeMeta = v1.TypeMeta{APIVersion: v1.KindBucket.GVK().APIVersion(), Kind: v1.KindBucket}
 	b.Name, b.Namespace, b.ResourceGroup = "lakehouse", "default", "rg1"
-	b.Spec.Prefixes = []v1.BucketPrefix{{Name: "gold", Owner: "lake"}}
+	b.Spec.Prefixes = []v1.BucketPrefix{{Name: "gold", Owner: v1.LakeOwner("lake")}}
 	_, err := w.st.Create(context.Background(), b)
 	require.NoError(t, err)
 	return w

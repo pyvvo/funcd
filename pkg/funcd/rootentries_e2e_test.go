@@ -306,7 +306,7 @@ func TestScenarioWorkflowStepsBind(t *testing.T) {
 		ObjectMeta: v1.ObjectMeta{Name: "etl", Namespace: "default", ResourceGroup: "rg1"},
 		Spec: v1.WorkflowSpec{
 			KVStores: []v1.KVStoreEntry{{Name: "etl-kv", KVStoreSpec: v1.KVStoreSpec{Tables: []v1.KVTable{{Name: "rows", Owner: "load"}}}}, {Ref: "shared"}},
-			Buckets:  []v1.BucketEntry{{Name: "etl-files", BucketSpec: v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "raw", Owner: "load"}}}}},
+			Buckets:  []v1.BucketEntry{{Name: "etl-files", BucketSpec: v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "raw", Owner: v1.FunctionOwner("load")}}}}},
 			Steps: []v1.WorkflowStep{{Name: "load", Function: &v1.FunctionStep{Image: e.image(t), Bindings: v1.StepBindings{
 				KV:   []v1.FunctionKV{{Alias: "rows", Store: "etl-kv", Table: "rows"}, {Alias: "shared", Store: "shared", Table: "t"}},
 				Blob: []v1.FunctionBlob{{Alias: "raw", Bucket: "etl-files", Prefix: "raw"}},
@@ -321,7 +321,7 @@ func TestScenarioWorkflowStepsBind(t *testing.T) {
 	require.Equal(t, v1.ObjectName("etl-load"), kv.Spec.Tables[0].Owner, "a table owner names a step")
 	b := e.object(t, v1.KindBucket, "etl-files").(*v1.Bucket)
 	require.True(t, ownedstore.Marked(b.OwnerReferences, stored))
-	require.Equal(t, []v1.BucketPrefix{{Name: "raw", Owner: "etl-load"}}, b.Spec.Prefixes, "a prefix owner names a step")
+	require.Equal(t, []v1.BucketPrefix{{Name: "raw", Owner: v1.FunctionOwner("etl-load")}}, b.Spec.Prefixes, "a prefix owner names a step")
 	step := e.function(t, "etl-load")
 	require.Equal(t, wf.Spec.Steps[0].Function.Bindings.KV, step.Spec.Bindings.KV, "the step keeps its binding to the ref store")
 	require.Equal(t, wf.Spec.Steps[0].Function.Bindings.Blob, step.Spec.Bindings.Blob)

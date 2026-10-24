@@ -424,7 +424,9 @@ spec:
     - name: todo-files
       prefixes:
         - name: attachments
-          owner: todo-api
+          owner:
+            kind: Function
+            name: todo-api
     - name: todo-tmp
       deletion: delete
   functions:

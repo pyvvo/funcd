@@ -175,7 +175,7 @@ func TestScenario_cross_namespace_built_ins_only(t *testing.T) {
 		buckets: map[string]*v1.Bucket{
 			"team-b/lake": {
 				ObjectMeta: v1.ObjectMeta{Name: "lake", Namespace: "team-b", ResourceGroup: "rg1"},
-				Spec:       v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "gold", Owner: "g"}}},
+				Spec:       v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "gold", Owner: v1.FunctionOwner("g")}}},
 			},
 		},
 	}

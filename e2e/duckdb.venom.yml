@@ -27,6 +27,7 @@
 # The ADR-0269 case: a query that points an S3 secret at the VM's own address opens no connection there.
 # The #1227 case: tables committed just before a spec change replaces the engine are read back from the new engine.
 # The #1232 case: tables committed just before a graceful daemon stop are read back after the daemon starts again.
+# ADR-0275: Lake lake keeps its prefix's write beside Function lake and through its own delete (#1231).
 name: lake-quack add-on provider — deploy + Ready + live SQL round-trip on real containerd (ADR-0086/0087/0088/0091)
 
 vars:
@@ -562,6 +563,59 @@ testcases:
         assertions:
           - result.statuscode ShouldEqual 200
           - result.body ShouldContainSubstring "[[42]]"
+      # ADR-0275: the prefix's owner is Lake lake by kind, so Function lake does not take its write: a commit made beside
+      # it survives the engine's replacement (a spec change back to lake.yaml's 4Gi).
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            sudo /var/lib/funcd/bin/ctr --address /var/lib/funcd/data/containerd/containerd.sock -n funcd-default \
+              task ls | awk "\$1==\"lake-r0\" && \$3==\"RUNNING\" {print \$2}"'
+        info: "the engine beside Function lake → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldNotBeEmpty
+        vars:
+          samenamepid:
+            from: result.systemout
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            set -e
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            curl -sf -m 30 -X POST -H "content-type: application/json" \
+              --data "{\"data\":{\"sql\":\"CREATE TABLE lakehouse.issue1231_samename AS SELECT 1231 AS n\"}}" \
+              http://127.0.0.1:8081/function/lake-reader >/dev/null
+            funcdctl apply -f /opt/lane/lake.yaml >/dev/null && echo COMMITTED_AND_APPLIED'
+        info: "a commit beside Function lake, then the redeploy → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual COMMITTED_AND_APPLIED
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            pid=$(sudo /var/lib/funcd/bin/ctr --address /var/lib/funcd/data/containerd/containerd.sock -n funcd-default \
+              task ls | awk "\$1==\"lake-r0\" && \$3==\"RUNNING\" {print \$2}")
+            phase=$(funcdctl get lake lake -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"phase\"])")
+            old=$(printf %s "{{.samenamepid}}" | tr -d "[:space:]")
+            [ -n "$old" ] && [ -n "$pid" ] && [ "$pid" != "$old" ] && [ "$phase" = Ready ] && echo "REPLACED $old -> $pid"'
+        retry: 60
+        delay: 1
+        info: "the engine after the redeploy → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring REPLACED
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT n FROM lakehouse.issue1231_samename"}}'
+        retry: 20
+        delay: 2
+        info: "the commit made beside Function lake, from the new engine → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring "[[1231]]"
 
   # ADR-0162: a deleted lake's proxy listener stays bound while lake-reader binds it, so the re-applied lake
   # serves on the same URL and the consumer's worker is not re-created.
@@ -575,6 +629,9 @@ testcases:
             funcdctl get lake lake -n default -o json | python3 -c "import sys,json;print(json.load(sys.stdin)[\"status\"][\"endpoint\"])" > /tmp/lake-endpoint-recreate
             sudo /var/lib/funcd/bin/ctr --address $sock -n funcd-default task ls | awk "index(\$1,\"lake-reader\")==1{print \$1, \$2}" | sort > /tmp/reader-tasks-before
             [ -s /tmp/reader-tasks-before ] || exit 1
+            curl -sf -m 30 -X POST -H "content-type: application/json" \
+              --data "{\"data\":{\"sql\":\"CREATE TABLE lakehouse.issue1231_deleted AS SELECT 1231 AS n\"}}" \
+              http://127.0.0.1:8081/function/lake-reader >/dev/null || exit 1
             funcdctl delete lake lake -n default >/dev/null
             echo "ENDPOINT=$(cat /tmp/lake-endpoint-recreate)"'
         info: "deleted Lake lake → {{.result.systemout}}"
@@ -629,6 +686,20 @@ testcases:
         assertions:
           - result.statuscode ShouldEqual 200
           - result.body ShouldContainSubstring "[[42]]"
+      # ADR-0275: the deleted Lake's engine still writes its retained prefix, so a commit made just before the delete
+      # is in the catalog the Lake applied again by ref reads.
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT n FROM lakehouse.issue1231_deleted"}}'
+        retry: 20
+        delay: 2
+        info: "the commit made just before the delete, after the re-apply → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring "[[1231]]"
 
   # ADR-0162 restart-keeps-lake-port: the hard restart below also checks that lake keeps its proxy port and endpoint.
   - name: owner-kind-across-daemon-restart — after a hard daemon restart both lakes return, each on workers labelled with its own kind

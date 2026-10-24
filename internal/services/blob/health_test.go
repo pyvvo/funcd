@@ -76,7 +76,7 @@ func mkBucket(name v1.ObjectName) *v1.Bucket {
 	b := &v1.Bucket{}
 	b.TypeMeta = v1.TypeMeta{APIVersion: v1.KindBucket.GVK().APIVersion(), Kind: v1.KindBucket}
 	b.Name, b.Namespace, b.ResourceGroup = name, "default", "rg1"
-	b.Spec.Prefixes = []v1.BucketPrefix{{Name: "attachments", Owner: "todo-api"}}
+	b.Spec.Prefixes = []v1.BucketPrefix{{Name: "attachments", Owner: v1.FunctionOwner("todo-api")}}
 	return b
 }
 
@@ -118,7 +118,7 @@ func TestBucketStatusFollowsTheBlobProbe(t *testing.T) {
 	requireReady(b, v1.PhaseReady, v1.ConditionTrue, "", "")
 	require.Equal(t, b.ResourceVersion, pass("todo-files").ResourceVersion, "an unchanged result writes no status")
 
-	b.Spec.Prefixes = append(b.Spec.Prefixes, v1.BucketPrefix{Name: "exports", Owner: "todo-api"})
+	b.Spec.Prefixes = append(b.Spec.Prefixes, v1.BucketPrefix{Name: "exports", Owner: v1.FunctionOwner("todo-api")})
 	_, err = st.Update(ctx, b)
 	require.NoError(t, err)
 	b = pass("todo-files")

@@ -208,3 +208,19 @@ func TestPruneFunctionsLeavesAnotherUIDsFunction(t *testing.T) {
 	require.NoError(t, m.Materialize(ctx, wf))
 	require.Equal(t, old.UID, controllerUID(getObj(t, s, v1.KindFunction, "gcwf-s2")), "the collector, not the prune, reclaims a deleted namesake's step")
 }
+
+// scenario: workflow-owner (ADR-0275, its mapping) — a step's prefix owner becomes the step's materialized Function, and a
+// declared lake's stays the Lake.
+func TestScenarioWorkflowOwner(t *testing.T) {
+	t.Parallel()
+	wf := &v1.Workflow{ObjectMeta: v1.ObjectMeta{Name: "marts", Namespace: "default"}}
+	wf.Spec.Lakes = []v1.LakeEntry{{Name: "lake"}}
+	b := buildBucket(wf, &v1.BucketEntry{Name: "files", BucketSpec: v1.BucketSpec{Prefixes: []v1.BucketPrefix{
+		{Name: "out", Owner: v1.FunctionOwner("query")}, {Name: "lake", Owner: v1.LakeOwner("lake")}, {Name: "free"},
+	}}})
+	require.Equal(t, []v1.BucketPrefix{
+		{Name: "out", Owner: v1.FunctionOwner(v1.StepFunctionName("marts", "query"))},
+		{Name: "lake", Owner: v1.LakeOwner("lake")},
+		{Name: "free"},
+	}, b.Spec.Prefixes)
+}

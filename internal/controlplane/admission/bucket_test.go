@@ -120,10 +120,10 @@ func TestScenarioBucketPrefixRemovalProtected(t *testing.T) {
 	adm := admission.NewBucketDeletionProtectionAdmission(rBound, blobFakeProber{has: false})
 
 	old := mkBucket("lakehouse",
-		v1.BucketPrefix{Name: "gold", Owner: "svc"},
-		v1.BucketPrefix{Name: "bronze", Owner: "svc"})
+		v1.BucketPrefix{Name: "gold", Owner: v1.FunctionOwner("svc")},
+		v1.BucketPrefix{Name: "bronze", Owner: v1.FunctionOwner("svc")})
 	// the update drops "bronze", which is still bound ⇒ Conflict
-	newB := mkBucket("lakehouse", v1.BucketPrefix{Name: "gold", Owner: "svc"})
+	newB := mkBucket("lakehouse", v1.BucketPrefix{Name: "gold", Owner: v1.FunctionOwner("svc")})
 	_, err := adm.Admit(context.Background(), admission.Request{Operation: admission.Update, GVK: gvk, Old: old, Object: newB})
 	require.Equal(t, fault.Conflict, fault.KindOf(err), "removing a still-bound prefix ⇒ Conflict")
 

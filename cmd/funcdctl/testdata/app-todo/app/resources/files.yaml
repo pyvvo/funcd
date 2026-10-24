@@ -3,8 +3,14 @@ buckets:
     deletion: ${{ values.data.deletion }}
     prefixes:
       - name: attachments
-        owner: ${{ app.name + "-api" }}
+        owner:
+          kind: Function
+          name: ${{ app.name + "-api" }}
       - name: events
-        owner: ${{ app.name + "-planner" }}
+        owner:
+          kind: Function
+          name: ${{ app.name + "-planner" }}
       - name: lake
-        owner: ${{ app.name + "-lake" }}
+        owner:
+          kind: Lake
+          name: ${{ app.name + "-lake" }}

@@ -46,9 +46,9 @@ func seedBucket(t *testing.T, st store.Store) {
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindBucket.GVK().APIVersion(), Kind: v1.KindBucket},
 		ObjectMeta: v1.ObjectMeta{Name: "releves", Namespace: "data", ResourceGroup: "rg1"},
 		Spec: v1.BucketSpec{Prefixes: []v1.BucketPrefix{
-			{Name: "landing"},                   // no owner (the external drop zone)
-			{Name: "silver", Owner: "producer"}, // owned by a Function (back-compat)
-			{Name: "gold"},                      // no owner
+			{Name: "landing"}, // no owner (the external drop zone)
+			{Name: "silver", Owner: v1.FunctionOwner("producer")}, // owned by a Function (back-compat)
+			{Name: "gold"}, // no owner
 		}},
 	})
 }

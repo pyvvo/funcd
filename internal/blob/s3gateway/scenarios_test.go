@@ -51,7 +51,7 @@ func lakehouseMeta() fakeMeta {
 			"default/lakehouse": {
 				ObjectMeta: v1.ObjectMeta{Name: "lakehouse", Namespace: "default", ResourceGroup: "rg1"},
 				Spec: v1.BucketSpec{Prefixes: []v1.BucketPrefix{
-					{Name: "bronze", Owner: "etl-svc"},
+					{Name: "bronze", Owner: v1.FunctionOwner("etl-svc")},
 					{Name: "gold"},
 				}},
 			},
@@ -523,7 +523,7 @@ func TestMultipartUploadIsBoundToItsNamespaceBucketAndKey(t *testing.T) {
 	}
 	meta.buckets["evil/lakehouse"] = &v1.Bucket{
 		ObjectMeta: v1.ObjectMeta{Name: "lakehouse", Namespace: "evil", ResourceGroup: "rg1"},
-		Spec:       v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "bronze", Owner: "attacker"}}},
+		Spec:       v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "bronze", Owner: v1.FunctionOwner("attacker")}}},
 	}
 	g := newGateway(t, meta, fixedPolicies{rev: "0"}, nil, memBucket)
 	ctx := context.Background()

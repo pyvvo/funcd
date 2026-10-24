@@ -22,7 +22,7 @@ func TestScenarioIdentityDefaultDeny(t *testing.T) {
 		buckets: map[string]*v1.Bucket{
 			"default/lake": {
 				ObjectMeta: v1.ObjectMeta{Name: "lake", Namespace: "default", ResourceGroup: "rg1"},
-				Spec:       v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "gold", Owner: "producer"}}},
+				Spec:       v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "gold", Owner: v1.FunctionOwner("producer")}}},
 			},
 		},
 	}

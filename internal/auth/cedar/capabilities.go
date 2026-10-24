@@ -227,7 +227,7 @@ func invokeResource(_ context.Context, _ MetaReader, resource auth.EntityRef) (c
 
 // S3Capability is the s3::read/s3::write capability (ADR-0080): spec.bindings.blob → the `blobBindings` Set of
 // BlobPrefix entity-refs (read binding-as-grant); the resource is the BlobPrefix + its parent Bucket +
-// the prefix owner (a Function entity-REFERENCE). Its Bind handles BOTH a *v1.Function and a
+// the prefix owner (a Function or a Lake entity, by the owner's kind, ADR-0275). Its Bind handles BOTH a *v1.Function and a
 // *v1.Lake (ADR-0088 — both carry spec.bindings.blob). It admits the external S3Identity principal type.
 func S3Capability() Capability { return s3Capability(builtinS3Policies, nil) }
 
@@ -307,21 +307,20 @@ func s3Resource(ctx context.Context, r MetaReader, resource auth.EntityRef, writ
 		"resourceGroup": cedartypes.String(bkt.ResourceGroup),
 	}
 	// writers is the set of principals authorized to WRITE this prefix (ADR-0136 generalized single-writer):
-	// the legacy owner (a Function ref — back-compat), the same-named Lake when it binds the prefix and
-	// no Function holds the name (ADR-0175), PLUS any writer-role RolesAssignment grants. An empty
-	// writers ⇒ the forbid fires (owner-less/unassigned ⇒ unwritable, default-deny). Type-agnostic: a role
-	// grant can make an external Identity a writer.
-	// The single `owner` attr is kept (back-compat for user policies that compare `principal ==
-	// resource.owner`); `writers` is the set the generalized forbid consults (owner + role grants).
+	// the owner the Bucket names, a Function or a Lake by its kind with no other lookup (ADR-0275), PLUS any
+	// writer-role RolesAssignment grants. An empty writers ⇒ the forbid fires (owner-less/unassigned ⇒ unwritable,
+	// default-deny). Type-agnostic: a role grant can make an external Identity a writer.
+	// The single `owner` attr is kept for user policies that compare `principal == resource.owner`; `writers` is the
+	// set the generalized forbid consults (owner + role grants).
 	var writerVals []cedartypes.Value
 	for _, pfx := range bkt.Spec.Prefixes {
-		if pfx.Name == resource.Path && pfx.Owner != "" {
-			ownerUID := functionUID(bkt.Namespace, pfx.Owner)
+		if pfx.Name == resource.Path && !pfx.Owner.IsZero() {
+			ownerUID := functionUID(bkt.Namespace, pfx.Owner.Name)
+			if pfx.Owner.Kind == v1.KindLake {
+				ownerUID = lakeUID(bkt.Namespace, pfx.Owner.Name)
+			}
 			prefixAttrs["owner"] = ownerUID
 			writerVals = append(writerVals, ownerUID)
-			if lakeOwnsPrefix(ctx, r, bkt.Namespace, pfx.Owner, resource.Name, resource.Path) {
-				writerVals = append(writerVals, lakeUID(bkt.Namespace, pfx.Owner))
-			}
 			break
 		}
 	}
@@ -339,30 +338,6 @@ func s3Resource(ctx context.Context, r MetaReader, resource auth.EntityRef, writ
 		Attributes: cedartypes.NewRecord(prefixAttrs),
 	}
 	return em, true, nil
-}
-
-// lakeOwnsPrefix reports whether the prefix owner name resolves to a Lake writer
-// (ADR-0175 Decision 6): Lake owner exists, its spec.bindings.blob binds (bucket, prefix), and no Function
-// owner exists. Every lookup that errors or misses answers false; a Function lookup error other than
-// NotFound counts as "a Function may exist".
-func lakeOwnsPrefix(ctx context.Context, r MetaReader, ns v1.NamespaceName, owner, bucket v1.ObjectName, prefix string) bool {
-	if _, err := r.Get(ctx, v1.KindFunction.GVK(), ns, owner); fault.KindOf(err) != fault.NotFound {
-		return false
-	}
-	obj, err := r.Get(ctx, v1.KindLake.GVK(), ns, owner)
-	if err != nil {
-		return false
-	}
-	cs, ok := obj.(*v1.Lake)
-	if !ok {
-		return false
-	}
-	for _, b := range cs.Spec.Bindings.Blob {
-		if b.Bucket == bucket && b.Prefix == prefix {
-			return true
-		}
-	}
-	return false
 }
 
 // LakeCapability is the lake::query capability (ADR-0137): spec.bindings.lake → the `lakeBindings`

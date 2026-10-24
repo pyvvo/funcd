@@ -360,7 +360,7 @@ func TestScenarioAppPruneAfterCurrent(t *testing.T) {
 		h.install(todoApp(nil))
 		h.edit(func(a *v1.App) {
 			a.Spec.Routes = nil
-			a.Spec.Buckets[0].Prefixes = append(a.Spec.Buckets[0].Prefixes, v1.BucketPrefix{Name: "exports", Owner: "todo-api"})
+			a.Spec.Buckets[0].Prefixes = append(a.Spec.Buckets[0].Prefixes, v1.BucketPrefix{Name: "exports", Owner: v1.FunctionOwner("todo-api")})
 		})
 		h.reconcile()
 		require.Len(t, h.get(v1.KindBucket, "todo-files").(*v1.Bucket).Spec.Prefixes, 2)

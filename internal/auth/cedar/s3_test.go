@@ -67,7 +67,7 @@ func newS3Meta() s3Meta {
 			"default/lakehouse": {
 				ObjectMeta: v1.ObjectMeta{Name: "lakehouse", Namespace: "default", ResourceGroup: "rg1"},
 				Spec: v1.BucketSpec{Prefixes: []v1.BucketPrefix{
-					{Name: "bronze", Owner: "etl-svc"},
+					{Name: "bronze", Owner: v1.FunctionOwner("etl-svc")},
 					{Name: "gold"},
 				}},
 			},

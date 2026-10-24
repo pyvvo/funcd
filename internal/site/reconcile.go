@@ -282,7 +282,7 @@ func (r *Reconciler) ensureBucket(ctx context.Context, s *v1.Site) (reason, mess
 		switch {
 		case !ok:
 			return reasonBucketNotFound, fmt.Sprintf("bucket %q, which spec.buckets refers to, has no prefix %q", name, s.Spec.ServedPrefix()), nil
-		case p.Owner != "":
+		case !p.Owner.IsZero():
 			return reasonPrefixOwned, prefixOwnedMessage(s), nil
 		}
 		return "", "", nil

@@ -54,7 +54,7 @@ const okBuild = "export function handle() { return { ok: true }; }\n"
 func bucketDoc(name, owner string, prefixes ...string) string {
 	s := "apiVersion: funcd.io/v1alpha1\nkind: Bucket\nmetadata:\n  name: " + name + "\nspec:\n  prefixes:\n"
 	for _, p := range prefixes {
-		s += "    - name: " + p + "\n      owner: " + owner + "\n"
+		s += "    - name: " + p + "\n      owner:\n        kind: Function\n        name: " + owner + "\n"
 	}
 	return s
 }

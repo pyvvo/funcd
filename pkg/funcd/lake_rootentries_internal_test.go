@@ -126,10 +126,10 @@ func TestScenarioLakeOwnsItsBucket(t *testing.T) {
 	require.NoError(t, r.apply(t, lakeOn("lakehouse", ownLakehouse)))
 
 	cs := r.waitLake(t, v1.PhaseReady, "")
-	require.Equal(t, v1.ObjectName("lake"), cs.Spec.Buckets[0].Prefixes[0].Owner, "lake-store-owner writes the lake in")
+	require.Equal(t, v1.LakeOwner("lake"), cs.Spec.Buckets[0].Prefixes[0].Owner, "lake-store-owner writes the lake in")
 	b := r.get(t, v1.KindBucket, "lakehouse").(*v1.Bucket)
 	require.True(t, ownedstore.Marked(b.OwnerReferences, cs), "Bucket lakehouse carries lake's marker")
-	require.Equal(t, []v1.BucketPrefix{{Name: "lake", Owner: "lake"}}, b.Spec.Prefixes, "prefix lake is owned by lake")
+	require.Equal(t, []v1.BucketPrefix{{Name: "lake", Owner: v1.LakeOwner("lake")}}, b.Spec.Prefixes, "prefix lake is owned by lake")
 }
 
 // scenario: lake-ref-bucket
@@ -138,7 +138,7 @@ func TestScenarioLakeLocationBucket(t *testing.T) {
 	r := startLakeRig(t)
 	landing := &v1.Bucket{TypeMeta: v1.TypeMeta{APIVersion: v1.KindBucket.GVK().APIVersion(), Kind: v1.KindBucket}}
 	landing.Name, landing.Namespace, landing.ResourceGroup = "landing", "default", "rg1"
-	landing.Spec.Prefixes = []v1.BucketPrefix{{Name: "lake", Owner: "lake"}}
+	landing.Spec.Prefixes = []v1.BucketPrefix{{Name: "lake", Owner: v1.LakeOwner("lake")}}
 	require.NoError(t, r.apply(t, landing))
 	before := r.get(t, v1.KindBucket, "landing").(*v1.Bucket)
 
@@ -220,7 +220,7 @@ func TestScenarioNestedLakeHasNoRoot(t *testing.T) {
 
 	fn := lakeFunction("default")
 	fn.Name = "reader"
-	fn.Spec.Buckets = []v1.BucketEntry{{Name: "lakehouse", BucketSpec: v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "lake", Owner: "lake"}}}}}
+	fn.Spec.Buckets = []v1.BucketEntry{{Name: "lakehouse", BucketSpec: v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "lake", Owner: v1.LakeOwner("lake")}}}}}
 	fn.Spec.Lakes = []v1.LakeEntry{{Name: "lake", LakeSpec: nested}}
 	require.ErrorContains(t, r.apply(t, fn),
 		"spec.lakes[0].buckets: a lake nested in a Function declares nothing at its root; declare it at the Function's root")

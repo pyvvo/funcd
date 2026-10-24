@@ -130,7 +130,7 @@ func seedLakeBucket(t *testing.T, st store.Store) {
 	b := &v1.Bucket{}
 	b.TypeMeta = v1.TypeMeta{APIVersion: v1.KindBucket.GVK().APIVersion(), Kind: v1.KindBucket}
 	b.Name, b.Namespace, b.ResourceGroup = "lakehouse", "default", "rg1"
-	b.Spec.Prefixes = []v1.BucketPrefix{{Name: "gold", Owner: "lake"}}
+	b.Spec.Prefixes = []v1.BucketPrefix{{Name: "gold", Owner: v1.FunctionOwner("lake")}}
 	_, err := st.Create(context.Background(), b)
 	require.NoError(t, err)
 }

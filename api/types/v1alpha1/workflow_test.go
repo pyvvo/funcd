@@ -252,3 +252,22 @@ func TestIssue927_ValidateRefusesRepeatedKVName(t *testing.T) {
 		t.Fatalf("two stores of distinct names rejected: %v", err)
 	}
 }
+
+// scenario: workflow-owner (ADR-0275, its refusals) — a Workflow prefix's Function owner must be a step, and its Lake
+// owner a declared lake.
+func TestScenarioWorkflowOwner(t *testing.T) {
+	owned := func(o PrefixOwner) *Workflow {
+		w := newWorkflow(WorkflowSpec{Steps: []WorkflowStep{imgStep("a")}})
+		w.Spec.Buckets = []BucketEntry{{Name: "files", BucketSpec: BucketSpec{Prefixes: []BucketPrefix{{Name: "p", Owner: o}}}}}
+		return w
+	}
+	if err := owned(FunctionOwner("a")).Validate(); err != nil {
+		t.Fatalf("a step's prefix rejected: %v", err)
+	}
+	if err := owned(FunctionOwner("b")).Validate(); err == nil || !strings.Contains(err.Error(), "is not a step") {
+		t.Errorf("a Function owner that is no step: want refused, got %v", err)
+	}
+	if err := owned(LakeOwner("a")).Validate(); err == nil || !strings.Contains(err.Error(), "is not a declared lake") {
+		t.Errorf("a Lake owner the Workflow does not declare: want refused, got %v", err)
+	}
+}

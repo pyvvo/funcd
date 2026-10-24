@@ -32,7 +32,7 @@ func todoApp(mutate func(*v1.App)) *v1.App {
 				{Name: "todo-cache", Deletion: v1.DeletionDelete, KVStoreSpec: v1.KVStoreSpec{Tables: []v1.KVTable{{Name: "entries", Owner: "todo-api"}}}},
 			},
 			Buckets: []v1.BucketEntry{
-				{Name: "todo-files", BucketSpec: v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "attachments", Owner: "todo-api"}}}},
+				{Name: "todo-files", BucketSpec: v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "attachments", Owner: v1.FunctionOwner("todo-api")}}}},
 				{Name: "todo-tmp", Deletion: v1.DeletionDelete},
 			},
 			Functions: []v1.AppFunction{{Name: "todo-api", FunctionSpec: apiSpec(

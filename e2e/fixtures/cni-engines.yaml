@@ -20,7 +20,9 @@ metadata:
 spec:
   prefixes:
     - name: gold
-      owner: c
+      owner:
+        kind: Lake
+        name: c
 ---
 apiVersion: funcd.io/v1alpha1
 kind: Lake
@@ -66,7 +68,9 @@ metadata:
 spec:
   prefixes:
     - name: gold
-      owner: b-c
+      owner:
+        kind: Lake
+        name: b-c
 ---
 apiVersion: funcd.io/v1alpha1
 kind: Lake

@@ -60,7 +60,7 @@ func TestScenarioDeclarativeAdmissionLakeCycle(t *testing.T) {
 	bkt := &v1.Bucket{
 		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindBucket.GVK().APIVersion(), Kind: v1.KindBucket},
 		ObjectMeta: v1.ObjectMeta{Name: "lakehouse", Namespace: "default", ResourceGroup: "rg1"},
-		Spec:       v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "gold", Owner: "lake"}}},
+		Spec:       v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "gold", Owner: v1.LakeOwner("lake")}}},
 	}
 	_, err = c.Apply(ctx, bkt)
 	require.NoError(t, err, "the Bucket is ADMITTED though its prefix owner is a Lake (owner existence is reconcile-time)")

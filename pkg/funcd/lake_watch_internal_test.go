@@ -54,7 +54,7 @@ func TestLakeWatchesFollowLakeAndBinders(t *testing.T) {
 
 	bucket := &v1.Bucket{TypeMeta: v1.TypeMeta{APIVersion: v1.KindBucket.GVK().APIVersion(), Kind: v1.KindBucket}}
 	bucket.Name, bucket.Namespace, bucket.ResourceGroup = "lakehouse", "default", "rg1"
-	bucket.Spec = v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "raw", Owner: "lake"}}}
+	bucket.Spec = v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "raw", Owner: v1.FunctionOwner("lake")}}}
 	seedObjects(t, st, bucket, lakeResource("default"))
 	var url string
 	require.Eventually(t, func() bool {
