@@ -1,88 +1,142 @@
 # ADR-0278: A file blob Put returns once its object is on disk, and a read refuses an object that lost its bytes
 
-- **Status**: Proposed (2026-10-24)
+- **Status**: Proposed (2026-10-24); judged once (round 1: three Blockers, four Majors and nine Minors folded)
 - **Date**: 2026-10-24
 - **Deciders**: green-0-rabbit
 - **Tags**: blob, storage, durability, disaster-recovery
 - **Realizes**: [FEAT-0003/F191](../feat/0003-feat-data-platform.md) (a blob Put that returns is on disk)
 - **Answers**: #1247 (the decider's choices, 2026-10-24, are recorded on it: A, a read check, the cost measured on the
-  target box)
+  target box) · #1251 (a temp directory on another file system fails every file Put)
+- **Supersedes (in part)**: [ADR-0159](0159-blob-content-digest-and-metadata.md) Decision 2's "`Put` stays on
+  `WriteAll`" for `file://` (Decision 1 keeps what it relied on) and Decision 4's "a ranged GET still reads only its
+  range" (a ranged read hashes a file once per run) · [ADR-0203](0203-backup-format-targets-and-fencing.md) Decision 1's
+  `file://` create-if-absent, which gains a directory sync, and its workaround's exit (a Go CDK `fileblob` passing
+  `TestCreateIfAbsentIsAtomic` no longer brings it back) · [ADR-0208](0208-blob-store-backend-and-backup-target.md)
+  Decision 5's MD5 rule and its premise that `fileblob` writes `.attrs` before its rename (the mirror uses Decision 2)
 - **Relates to**: [ADR-0080](0080-s3-protocol-frontend-blob-substrate.md) (the S3 gateway on the blob port) ·
-  [ADR-0159](0159-blob-content-digest-and-metadata.md) (the MD5 a file object's attributes record) ·
-  [ADR-0203](0203-backup-format-targets-and-fencing.md) (`fileCreate`, the create-if-absent write that syncs its file) ·
-  [ADR-0208](0208-blob-store-backend-and-backup-target.md) (the blob mirror's MD5 check, Decision 5)
+  [ADR-0272](0272-a-design-model-checks-lifecycle-and-concurrency-decisions.md) (the design model)
 
 ## Context & Need
 
 With `storage.mode: file`, the blob store holds every Function's S3 objects, Lake catalogs and data files, Sites,
 Function logs, and backups on a `file://` target. A Put returns before its bytes reach the disk: gocloud's fileblob
-writes a temp file and renames it into place with no fsync, and rewrites the object's `.attrs` in place before the
-rename (gocloud.dev v0.47.0 `blob/fileblob/fileblob.go:864`, `:892`). A power loss then loses objects acknowledged in
+rewrites the object's `.attrs` in place, then renames the data's temp file onto the key, with no sync
+(gocloud.dev v0.47.0 `blob/fileblob/fileblob.go:837`, `:864`, `:868`). A power loss then loses objects acknowledged in
 the seconds before it and leaves others as empty or wrong files that a read returns as the object (#1247, reproduced
-on the s3 lane; experiment 0009). An S3 200, to every caller, means the object is stored.
+on the s3 lane; experiment 0009). Its temp file also lives in `os.TempDir()`, so where that is another file system the
+rename fails and so does every Put (#1251). An S3 200, to every caller, means the object is stored.
 
 ## Scenarios
 
 - `scenario: acknowledged-put-survives-power-loss` — Given objects put through the S3 gateway on a file store, When the
   host loses power right after a Put returns, Then after the reboot every acknowledged object reads back whole.
 - `scenario: interrupted-overwrite-reads-whole` — Given an object being overwritten, When the host loses power before
-  the Put returns, Then a read returns the old bytes or the new bytes, never an error and never a mix.
+  the Put returns, Then a read returns the old bytes or the new bytes, never an error.
+- `scenario: concurrent-writes-read-whole` — Given two Puts of one key at once and reads racing them, Then every read
+  returns the bytes of one of the objects, never an error.
 - `scenario: corrupt-object-refused` — Given an object whose bytes do not match the MD5 its attributes record (written
   before this ADR, or damaged on disk), When it is read in full or by range, Then the read fails and no byte of it is
   served; the S3 gateway answers 500 InternalError.
 - `scenario: create-if-absent-survives-power-loss` — Given a create-if-absent Put (backups, the blob mirror), When the
   host loses power after it returns, Then the object is there after the reboot.
+- `scenario: mirror-after-torn-pair` — Given a key whose data and attributes a power loss left from two different Puts,
+  When the blob mirror runs, Then it makes a generation.
 
 ## Scope
 
-**In**: every Put on a `file://` bucket, plain and create-if-absent, with the directories it creates; the MD5 check on
-`Get` and `GetRange` of a `file://` object; a test helper that seeds many objects. **Out**: `s3://` and memory buckets
-(the remote store and the process own their durability); Delete (Open questions); the Lake's save interval (ADR-0274).
+**In**: every Put on a `file://` bucket, plain and create-if-absent, with the directories it creates; one read check
+for `Get`, `GetRange` and the blob mirror's freeze; what a refused object does to the log compactor and log reads; a
+test helper that seeds many objects. **Out**: `s3://` and memory buckets (the remote store and the process own their
+durability); Delete (Open questions); the Lake's save interval (ADR-0274).
 
 ## Constraints & Decision drivers
 
-- The writer is a third-party one that cannot sync, so funcd writes `file://` objects itself in fileblob's on-disk
-  format (the data file and its JSON `.attrs`), as `fileCreate` already does for create-if-absent (ADR-0203).
-- An object is two files. Their order must leave a power cut either a whole object or one whose `.attrs` is older than
-  its data, so the MD5 check never refuses whole bytes.
-- Cost, measured on #1247 (Linux VM, 1 KiB objects): 29 µs per Put today, 497 µs with the object, its attributes and
-  the directory synced once. Decision 1 syncs the directory twice; its cost on the target box is recorded on #1247
-  before acceptance.
-- Tests seed up to 10,000 objects; with a sync per Put that passes `go test`'s limit, so tests need a seeding path that
-  production never takes.
+- The writer is a third-party one that cannot sync, so funcd writes `file://` objects itself, in fileblob's on-disk
+  format (the data file at fileblob's stored path, and a JSON `.attrs` beside it), so gocloud's reads keep working.
+- An object is two files. A read must pair them by the data file itself, not by time: on ext4, files written within a
+  clock tick share an mtime, and two writers or a read can interleave the two files with no power loss at all.
+- Cost on the target box (8-core Ubuntu, ext4 on an NVMe SSD whose volatile write cache each sync flushes; #1247): one
+  Put at a time, 1 KiB objects, median per Put 95 µs today, 8.51 ms with the data, its attributes and the directory
+  synced once (Decision 1's count), 14.6 ms with a second directory sync. A 10,000-object load takes 1.0 s today,
+  83.9 s synced.
+- Tests seed up to 10,000 objects; synced, that passes `go test`'s limit, so tests need a seeding path production never
+  takes.
 
 ## Alternatives considered
 
 | Option | For | Against | Outcome |
 |---|---|---|---|
-| A. Sync the data, the attributes and the directory before the Put returns | nothing acknowledged is lost | an fsync cost on every Put | chosen by the decider |
-| B. Group commit: acknowledge after a batch is synced | A's guarantee at close to today's speed | not built or measured; batching state | rejected for now (Open questions) |
-| C. Batched sync, acknowledge at once | 31 µs per Put | narrows the loss window, does not close it | rejected |
+| A. Sync the data, the attributes and the directory before the Put returns | nothing acknowledged is lost | 8.5 ms per Put on the target box | chosen by the decider |
+| B. Group commit: acknowledge after a batch is synced | A's guarantee at close to today's throughput | not built or measured; one Put still waits for a flush | rejected for now (Open questions) |
+| C. Batched sync, acknowledge at once | 98 µs per Put | narrows the loss window, does not close it | rejected |
 | D. Sync only platform data, Functions' objects best-effort | cheaper | a Function's 200 would mean less than the platform's | rejected |
-| Sync after gocloud's WriteAll returns | small change | a cut before the sync exposes a renamed file with lost bytes, and fileblob's in-place `.attrs` can pair new MD5 with old bytes | rejected |
-| A read check against the recorded MD5 | a damaged object is an error, never wrong data | a hash per full read, one per file per run for ranged reads | chosen by the decider |
+| A per-Bucket opt-out, or no syncs under `funcdctl dev` | today's speed where a loss is acceptable | a knob no measured workload needs; a dev store that loses an author's data on a crash | not now (Open questions) |
+| Sync after gocloud's `WriteAll` returns | small change | a cut before the sync exposes a renamed file with lost bytes; fileblob's in-place `.attrs` can pair a new MD5 with old bytes | rejected |
+| Pair the files by mtime order, with a second directory sync | no new attribute | fails on ext4's timestamp granularity, on two writers and on a racing read; 14.6 ms | rejected (the judge's round 1) |
+| A read check against the recorded MD5 | a damaged object is an error, never wrong data | a hash per full read, and once per file per run for ranged reads | chosen by the decider |
 
 ## Decision
 
-1. **The file writer.** Every `Put` on a `file://` bucket goes through funcd's writer, not gocloud's; a Put returns
-   only after these steps, in this order:
-   1. the key's directory exists, every directory made for it synced in its parent (`durable.Disk.MkdirAll`);
-   2. the data goes to a temp file beside the key (today's `fileTempSuffix`, hidden from walks), written and fsynced;
-   3. it is renamed onto the key, or for create-if-absent linked (`link(2)`; `EEXIST` is `fault.Conflict`,
-      ADR-0203), and the directory is fsynced;
-   4. the attributes (fileblob's `.attrs` JSON: content type, metadata, and the data's MD5) go to a temp file, fsynced,
-      renamed onto `<key>.attrs`, and the directory is fsynced again. A create-if-absent Put keeps writing no
-      attributes (ADR-0203).
-   A power cut before step 3's sync leaves the old object; after it, the new data with the old or new attributes.
-2. **The read check.** When a `file://` object's `.attrs` records an MD5 and is not older than its data file, a read
-   hashes the bytes and refuses a mismatch with `fault.Internal` ("object %q does not match its recorded MD5"), which
-   the S3 gateway answers as 500 InternalError; the object stays on disk. `Get` checks every read. `GetRange` checks the
-   whole object the first time this daemon reads that file (its device, inode, size and mtime) and remembers a pass in
-   a bounded set of 65,536 entries, least recently used out first; a failure is not remembered. An object with no MD5
-   (create-if-absent writes, files placed by other tools) or with an `.attrs` older than its data (an interrupted
-   overwrite, whose bytes are whole) is served unchecked.
-3. **Seeding in tests.** `internal/testkit/blobseed` writes objects into a `file://` bucket's directory in the same
-   format, without syncs; only tests import it.
+1. **The file writer.** Every `Put` on a `file://` bucket goes through funcd's writer, `fileWrite`, not gocloud's:
+   1. the path is fileblob's stored path for the key (a port of its `escapeKey`, beside the existing ports), so every
+      key fileblob stores today, `a//b` and `f/` included, keeps its path; its directories are made with
+      `durable.Disk.MkdirAll` at the bucket's `dir_file_mode` (default 0777, as fileblob; `gocloud.go:221`);
+   2. the data goes to `<path>.<16 hex>.funcd-tmp`, beside the key (ADR-0203's reserved suffix, which the walk skips;
+      this fixes #1251), at fileblob's mode (0666 before the umask; a create-if-absent Put keeps 0600), written and
+      fsynced; its identity is taken from `fstat`: device, inode, size and mtime in nanoseconds;
+   3. the attributes go to `<path>.attrs.<16 hex>.funcd-tmp`: fileblob's JSON (`user.content_type`, `user.metadata`,
+      `md5`) plus `funcd.file`, the data's identity, which fileblob's decoder ignores; written and fsynced. A
+      create-if-absent Put writes none (ADR-0203);
+   4. the data is renamed onto the key (create-if-absent: `link(2)`, `EEXIST` is `fault.Conflict`), then the attributes
+      onto `<path>.attrs`;
+   5. the directory is fsynced, and the Put returns.
+   It keeps what gocloud's writer does: an empty content type is detected from the bytes and a given one re-formatted
+   (`blob.go:1208-1230`); metadata keys are lowercased and an empty, duplicate or non-UTF-8 one refused
+   (`:1162-1183`); a non-UTF-8 key is refused (`:1144`); a context cancelled before step 4 publishes nothing. A temp
+   file is removed on every path. A failure after the data's rename returns an error with the new data in place and
+   the old attributes, which Decision 2 serves unchecked. No option skips a sync: not per Bucket, not under
+   `funcdctl dev`.
+2. **The read check**, one function for `Get`, `GetRange` and the mirror's freeze: read the attributes, open the data,
+   `fstat` it, and:
+   - attributes naming this file: hash the bytes from this descriptor; a mismatch is refused with `blob.ErrCorrupt`
+     (NEW) wrapped in `fault.Internal`, which the S3 gateway answers as 500 InternalError; nothing is served and the
+     object stays on disk;
+   - attributes naming no file (written before this ADR) with an MD5: the same check against the MD5. Accepted: the
+     first overwrite of such an object can make a racing read, or one after a power loss between its two renames,
+     fail until the object is written again;
+   - attributes naming another file, missing, or not decoding: serve unchecked, with no MD5, so no ETag and no
+     precondition holds (ADR-0159's no-digest case) and the attributes' content type is the one served.
+   `GetRange` hashes the whole file, streaming from the same descriptor, the first time this daemon reads that
+   identity, and keeps passes in a set of 65,536 identities, least recently used out first; concurrent first reads of
+   one identity hash once, and a failure is not remembered. The set holds file identities only and grants nothing (the
+   gateway authorizes first), so it needs no ownership check. The mirror (ADR-0208 Decision 5) re-freezes a key whose
+   attributes name another file, as it does a write in flight; after its re-freezes it copies those bytes unchecked
+   with no MD5, where it used to fail the run.
+3. **Callers of a refused object.** The log compactor skips a refused chunk as it skips one that does not decode, and
+   a log read leaves it out with a warning; a Site serves 500 for it; a restore fails on it, naming the key.
+4. **Seeding in tests.** `internal/testkit/blobseed` writes objects in the same format, through the same attributes
+   encoder, without syncs; a depguard rule lets only `_test.go` files import it.
+
+## Design model
+
+- **Spec**: [`docs/design/blob/file-put.fizz`](../design/blob/file-put.fizz) · state machine
+  [`file-put.md`](../design/blob/file-put.md)
+- **Assertions**:
+  | Assertion | Kind | Protects | Oracle test |
+  |---|---|---|---|
+  | `AckedPutSurvives` | always | `acknowledged-put-survives-power-loss` | `TestScenarioAcknowledgedPutSurvivesPowerLoss` |
+  | `WholeNeverRefused` | always | `interrupted-overwrite-reads-whole`, `concurrent-writes-read-whole` | `TestScenarioConcurrentWritesReadWhole` |
+  | `MirrorAgrees` | always | `mirror-after-torn-pair` | `TestScenarioMirrorAfterTornPair` |
+- **Bounds**: two writers overwriting one key, a reader, the mirror, one power loss; 3 concurrent actions, 12 actions.
+- **Faults**: one power loss at any step; crash on yield off.
+- **Environment**: the page cache and the disk as two directories; a directory sync stores every name the directory
+  holds at that moment (fsync(2) on a directory); a file's bytes survive only once it was synced.
+- **Mutants**: `no-data-sync` and `no-dir-sync` fail `AckedPutSurvives`; `pair-by-order` (round 1's mtime rule) fails
+  `WholeNeverRefused`; `mirror-old-rule` (ADR-0208 Decision 5) fails `MirrorAgrees`.
+- **Result**: pass, 3,006 states, 1.8 s, FizzBee v0.5.4; wider (16 actions): pass, 10,410 states, 5.1 s.
+- **Left to tests**: the order a file system writes names back without a directory sync (the model's tears are those a
+  sync allows); objects written before this ADR and their MD5-only check (`TestScenarioCorruptObjectRefused`);
+  fileblob's stored paths (`TestFileWriteMatchesGocloud`); the real power loss (experiment 0009's s3 case).
 
 ## Temporary workarounds
 
@@ -91,16 +145,25 @@ None.
 ## Contracts
 
 ```go
+// internal/blob
+var ErrCorrupt = errors.New("the object does not match its recorded MD5") // wrapped in fault.Internal (ADR-0278)
+
 // internal/blob/gocloud — file backend; the blob.Bucket port is unchanged.
-func (k *bucket) Put(ctx context.Context, key string, data []byte, opts blob.PutOptions) error // Decision 1 on file://
-func (k *bucket) Get(ctx context.Context, key string) ([]byte, error)                           // Decision 2
-func (k *bucket) GetRange(ctx context.Context, key string, offset, length int64) ([]byte, error)
+func (k *bucket) fileWrite(ctx context.Context, op, key string, data []byte, opts blob.PutOptions) error
+func (k *bucket) fileOpen(op, key string) (*fileObject, error) // the attributes, then the data's descriptor
+func (o *fileObject) verify(op string) error                    // Decision 2; ErrCorrupt on a paired mismatch
+func escapeKey(key string) string                              // fileblob's, gocloud.dev v0.47.0 fileblob.go:323-355
 
-// fileWrite is Decision 1, for plain and create-if-absent Puts; fileCreate becomes its create-if-absent path.
-func (k *bucket) fileWrite(op, key string, data []byte, opts blob.PutOptions) error
+type fileIdentity struct {
+	Dev, Ino uint64
+	Size     int64
+	MtimeNs  int64
+}
 
-// fileVerify is Decision 2: fault.Internal when key's bytes do not match the MD5 its attributes record.
-func (k *bucket) fileVerify(op, key string, data []byte) error
+// internal/platform/durable (NEW: Link and the two methods)
+const Link Op = "link"                            // an entry made by link(2); the path is its new one
+func (d Disk) SyncFile(f *os.File) error          // syncs an open file; Trace(SyncFile, f.Name())
+func (d Disk) Link(oldpath, newpath string) error // link(2); Trace(Link, newpath)
 
 // internal/testkit/blobseed
 func Objects(t testing.TB, dir string, objects map[string][]byte) // dir: a file:// bucket's root
@@ -108,49 +171,68 @@ func Objects(t testing.TB, dir string, objects map[string][]byte) // dir: a file
 
 | Consumes | Exposes |
 |---|---|
-| `storage.mode: file`, the bucket root | `blob.Bucket`, unchanged |
-| `internal/platform/durable` (`Disk.MkdirAll`, `Rename`, `SyncDir`, `Trace`) | the S3 gateway's 500 InternalError for a refused object |
-| fileblob's `.attrs` JSON fields, read back by gocloud (`Attributes`, `List`) | |
+| `storage.mode: file`, the bucket root; `internal/platform/durable` (`MkdirAll`, `SyncFile`, `Rename`, `Link`, `SyncDir`, `Trace`) | `blob.Bucket`, unchanged; `blob.ErrCorrupt` |
+| fileblob's `.attrs` fields, read back by gocloud (`Attributes`, `List`) | the S3 gateway's 500 InternalError for a refused object; no ETag for an unchecked one |
 
 ## Implementation plan
 
-1. `internal/blob/gocloud/gocloud.go`: `fileWrite` for every `file://` Put (generalizing `fileCreate`), the attributes
-   writer, `fileVerify` in `Get` and `GetRange`, the bounded pass set; `memblob` and `s3blob` unchanged.
-2. `internal/testkit/blobseed`; the tests that seed thousands of objects (the s3gateway paging tests) seed with it.
-3. Tests:
-   - `TestScenarioAcknowledgedPutSurvivesPowerLoss`: through `durable.Disk.Trace`, the data is synced before its
-     rename, the directory before the attributes, the attributes and the directory again before Put returns;
-   - `TestScenarioInterruptedOverwriteReadsWhole`: new data with the previous, older `.attrs` reads the new bytes;
-   - `TestScenarioCorruptObjectRefused`: bytes unlike a newer `.attrs`' MD5 fail `Get` and `GetRange` with
-     `fault.Internal`, and the gateway answers 500 with no body bytes of the object;
-   - `TestScenarioCreateIfAbsentSurvivesPowerLoss`: the same step order for a create-if-absent Put;
-   - a compatibility test: gocloud's `Attributes` reads the content type, metadata and MD5 funcd wrote.
-4. The power cut on the real platform: experiment 0009's s3 power-loss case on the branch loses nothing.
-5. Done when `just ci-full`, `just test-linux`, the s3 and duckdb lanes and step 4 pass.
+1. `internal/platform/durable`: `SyncFile`, `Link`. `internal/blob/gocloud/gocloud.go`: `escapeKey`, `fileWrite` for
+   every `file://` Put (`fileCreate` becomes its create-if-absent path), the attributes encoder, `fileOpen` and
+   `verify` in `Get` and `GetRange`, the pass set; a `durable.Disk` field the package's tests set; `memblob` and
+   `s3blob` unchanged.
+2. `internal/backup/blobmirror`: the freeze uses `verify`. `internal/funclog/compact` and `logread`: skip a refused
+   chunk. `internal/blob`: `ErrCorrupt`.
+3. `internal/testkit/blobseed` and its depguard rule; the s3gateway paging tests seed with it.
+4. Tests:
+   - `TestScenarioAcknowledgedPutSurvivesPowerLoss`: through `Disk.Trace`, sync-file of the data and the attributes,
+     the two renames, then sync-dir, all before `Put` returns;
+   - `TestScenarioInterruptedOverwriteReadsWhole`: new data with the previous attributes reads the new bytes, no ETag;
+   - `TestScenarioConcurrentWritesReadWhole`: a step hook interleaves two Puts' renames and a read between them;
+   - `TestScenarioCorruptObjectRefused`: paired and pre-ADR attributes with damaged bytes fail `Get` and `GetRange`
+     with `ErrCorrupt`; the gateway answers 500 with no body byte; the compactor skips the chunk;
+   - `TestScenarioCreateIfAbsentSurvivesPowerLoss`: sync-file, link, sync-dir before it returns;
+   - `TestScenarioMirrorAfterTornPair`: a torn pair still yields a generation;
+   - `TestFileWriteMatchesGocloud`: gocloud's `WriteAll` and `fileWrite` give the same paths, bytes, content type,
+     metadata and MD5, escaped keys and an empty content type included;
+   - `TestRangeCheckOncePerFile`: one hash per identity under concurrent reads, the bound, a failure not remembered.
+5. Experiment 0009's s3 case on the branch: three power losses, objects read back from disk and through the gateway,
+   none acknowledged lost.
+6. Done when `just ci-full`, `just test-linux`, `just check-specs`, the s3 and duckdb lanes and step 5 pass.
 
 ## Review checklist
 
-- [ ] No `file://` Put returns before its data, its directory and its attributes are synced, in Decision 1's order.
-- [ ] A refused read serves no byte, answers 500 at the gateway, and leaves the object in place.
-- [ ] A ranged read hashes each file once per run; the pass set is bounded.
+- [ ] No `file://` Put returns before its data and attributes are synced, renamed in Decision 1's order, and the
+  directory synced; its paths equal fileblob's.
+- [ ] A read pairs the attributes with the open file's identity; a refused read serves no byte and leaves the object.
+- [ ] A ranged read hashes each identity once per run; the pass set is bounded.
+- [ ] The mirror, the compactor and log reads follow Decisions 2 and 3.
 - [ ] Only tests import `blobseed`; no production option skips a sync.
-- [ ] The scenario tests pass, and step 4 shows no acknowledged object lost.
+- [ ] The scenario tests carry their oracle markers and pass; step 5 shows no acknowledged object lost.
 
 ## Consequences
 
-- **(+)** An S3 200 on a file store means the object survives a power loss; a damaged object is an error.
-- **(−)** Every `file://` Put pays two file fsyncs and two directory fsyncs: S3 PutObject, Function logs, catalog
-  saves, Sites and file backups alike.
-- **(−)** A ranged reader such as DuckDB reads each file once in full per daemon run for the check.
+- **(+)** An S3 200 on a file store means the object survives a power loss; a damaged object is an error; #1251 goes.
+- **(−)** Every `file://` Put pays two file syncs and a directory sync: about 8.5 ms on the target box, so one writer
+  makes about 117 Puts a second. S3 PutObject, Function logs, catalog saves, Sites, file backups and blob restores
+  (one Put per object) pay it, and so does `funcdctl dev` on macOS (about 10 ms per Put on APFS, #1247), where a Site
+  reload writes every file.
+- **(−)** Every full read hashes the object, a Site's assets included; a ranged reader such as DuckDB reads each file
+  once in full per daemon run.
+- **(−)** After a power loss between the two renames, an object serves its new bytes with the previous content type
+  and no ETag until it is written again.
 
 ## Open questions
 
-- Delete: an acknowledged delete that a power cut undoes brings the object back. The decider, as the track's next
-  step for this store.
-- Group commit (B): if a measured workload needs today's speed back, a later ADR.
+- Delete: an acknowledged delete that a power loss undoes brings the object back. The decider, in the reliability
+  track's next ADR for this store.
+- Group commit (B), a per-Bucket opt-out, or a dev store without syncs: a later ADR, if a measured workload needs
+  today's throughput back.
 
 ## References
 
-#1247 · #1243, #1245 · experiment 0009 (pyvvo/experiment#19) · gocloud.dev v0.47.0 `blob/fileblob/fileblob.go:864`,
-`:892` · `internal/blob/gocloud/gocloud.go:305`, `:346` · `internal/platform/durable` (#1248) ·
-`internal/backup/blobmirror/freeze.go:65` · ADR-0007 · ADR-0080 · ADR-0159 · ADR-0203 · ADR-0208
+#1247 · #1251 · #1243, #1245 · experiment 0009 (pyvvo/experiment#19) · gocloud.dev v0.47.0
+`blob/fileblob/fileblob.go:323-355`, `:837`, `:864`, `:868`, `attrs.go:69-70`, `blob/blob.go:1144`, `:1162-1183`,
+`:1208-1230` · `internal/blob/gocloud/gocloud.go:291`, `:305`, `:346`, `:678`, `:777` ·
+`internal/blob/s3gateway/backend.go:198`, `:269`, `:334` · `internal/backup/blobmirror/freeze.go:41-62` ·
+`internal/funclog/compact/compact.go:168-172`, `:238-245` · `internal/platform/durable/durable.go` · ADR-0007 ·
+ADR-0080 · ADR-0159 · ADR-0203 · ADR-0208 · ADR-0272

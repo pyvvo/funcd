@@ -1,0 +1,159 @@
+---
+# A Put on a file:// bucket (ADR-0278 Decision 1) and the reads that check an object against its attributes (Decision
+# 2). Two writers overwrite one key whose first object is whole; a reader and the blob mirror read it; the host may lose
+# power once. A file is a data inode or an attributes inode; a name points at an inode. A power loss keeps a name only
+# as the last directory sync left it, and a file's bytes only once that file was synced: an unsynced data file reads
+# back damaged (version 0), an unsynced attributes file does not decode.
+# Environment: the page cache and the disk are the two directories below; one directory sync stores every name the
+# directory holds at that moment, as fsync(2) on a directory does. Left out: the order in which a file system writes
+# names back on its own, and timestamp granularity (the design uses neither); objects written before ADR-0278, whose
+# attributes name no file and are checked against their MD5 alone (left to TestScenarioCorruptObjectRefused).
+options:
+  max_concurrent_actions: 3
+  max_actions: 12
+  crash_on_yield: false
+---
+# diagram: Writer.phase
+# mutant no-data-sync: AckedPutSurvives
+# mutant no-dir-sync: AckedPutSurvives
+# mutant pair-by-order: WholeNeverRefused
+# mutant mirror-old-rule: MirrorAgrees
+
+FIRST = 10
+# no-data-sync: the data file is renamed without its own sync (fileblob's writer, #1247).
+# no-dir-sync: the Put returns before its directory is synced.
+# pair-by-order: a read checks the MD5 whenever the attributes decode, without the data file's identity.
+# mirror-old-rule: the mirror checks the MD5 whenever the attributes decode (ADR-0208 Decision 5 before this ADR).
+MUTANT = ""
+
+role Writer:
+    action Init:
+        self.phase = "new"
+        self.dino = -1
+        self.aino = -1
+
+    atomic action WriteData:
+        require self.phase == "new" and cuts == 0
+        ino = len(data_ver)
+        data_ver[ino] = self.v
+        data_synced[ino] = False
+        self.dino = ino
+        self.phase = "data written"
+
+    atomic action SyncData:
+        require self.phase == "data written" and cuts == 0
+        if MUTANT != "no-data-sync":
+            data_synced[self.dino] = True
+        self.phase = "data synced"
+
+    # The attributes record the data's MD5 and the data file's identity (its inode).
+    atomic action WriteAttrs:
+        require self.phase == "data synced" and cuts == 0
+        ino = len(attrs_md5)
+        attrs_md5[ino] = self.v
+        attrs_ident[ino] = self.dino
+        attrs_synced[ino] = False
+        attrs_ok[ino] = True
+        self.aino = ino
+        self.phase = "attrs written"
+
+    atomic action SyncAttrs:
+        require self.phase == "attrs written" and cuts == 0
+        attrs_synced[self.aino] = True
+        self.phase = "attrs synced"
+
+    # The data first: a read racing the first overwrite of an object written before ADR-0278, whose attributes name no
+    # file, then meets old attributes with new whole bytes (refused once), never new attributes with old damaged ones.
+    atomic action RenameData:
+        require self.phase == "attrs synced" and cuts == 0
+        cache["d"] = self.dino
+        self.phase = "data renamed"
+
+    atomic action RenameAttrs:
+        require self.phase == "data renamed" and cuts == 0
+        cache["a"] = self.aino
+        self.phase = "attrs renamed"
+
+    # One directory sync, then the Put returns.
+    atomic action SyncDirAndReturn:
+        require self.phase == "attrs renamed" and cuts == 0
+        if MUTANT != "no-dir-sync":
+            disk["d"] = cache["d"]
+            disk["a"] = cache["a"]
+        acked.append(self.v)
+        self.phase = "acknowledged"
+
+# A read takes the attributes, then opens the data; it checks the MD5 only when the open file is the one the
+# attributes name (Decision 2). mirror is the blob mirror's freeze, which must judge as a read does.
+role Reader:
+    action Init:
+        self.phase = "idle"
+        self.aino = -1
+
+    atomic action ReadAttrs:
+        require self.phase == "idle"
+        self.aino = cache["a"]
+        self.phase = "attrs read"
+
+    atomic action OpenData:
+        require self.phase == "attrs read"
+        d = cache["d"]
+        a = self.aino
+        self.phase = "idle"
+        decodes = a >= 0 and attrs_ok[a]
+        paired = decodes and attrs_ident[a] == d
+        if self.mirror and MUTANT == "mirror-old-rule":
+            paired = decodes
+        if not self.mirror and MUTANT == "pair-by-order":
+            paired = decodes
+        if paired and attrs_md5[a] != data_ver[d] and data_ver[d] != 0:
+            if self.mirror:
+                mirror_refused_whole.append(d)
+            else:
+                refused_whole.append(d)
+
+atomic action PowerCut:
+    require cuts == 0
+    cuts = 1
+    cache["d"] = disk["d"]
+    cache["a"] = disk["a"]
+    for ino in data_synced:
+        if not data_synced[ino]:
+            data_ver[ino] = 0
+    for ino in attrs_synced:
+        if not attrs_synced[ino]:
+            attrs_ok[ino] = False
+
+action Init:
+    data_ver = {0: FIRST}
+    data_synced = {0: True}
+    attrs_md5 = {0: FIRST}
+    attrs_ident = {0: 0}
+    attrs_synced = {0: True}
+    attrs_ok = {0: True}
+    cache = {"d": 0, "a": 0}
+    disk = {"d": 0, "a": 0}
+    cuts = 0
+    acked = []
+    refused_whole = []
+    mirror_refused_whole = []
+    writers = []
+    for i in range(2):
+        writers.append(Writer(id=i, v=i + 1))
+    readers = []
+    for i in range(2):
+        readers.append(Reader(id=i, mirror=(i == 1)))
+
+# Once a Put is acknowledged, a power loss leaves a whole object written by one of the two Puts, never the first one.
+always assertion AckedPutSurvives:
+    if len(acked) == 0:
+        return True
+    return data_ver[disk["d"]] in [1, 2]
+
+# A read never refuses whole bytes.
+always assertion WholeNeverRefused:
+    return len(refused_whole) == 0
+
+# The mirror refuses what a read refuses, so it never refuses whole bytes either.
+always assertion MirrorAgrees:
+    return len(mirror_refused_whole) == 0
