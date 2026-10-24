@@ -305,11 +305,14 @@ func TestRangeCheckOncePerFile(t *testing.T) {
 			require.NoError(t, p.check(passKey{id: fileIdentity{Ino: ino}}, func() error { hashes[ino]++; return nil }))
 		}
 		check(0)
+		p.pass(passKey{id: fileIdentity{Ino: 1}})
 		p.pass(passKey{id: fileIdentity{Ino: passSetSize}})
 		check(passSetSize)
 		check(0)
 		check(1)
-		require.Equal(t, map[uint64]int{1: 1}, hashes, "file 0, used last, stays; file 1, used least recently, went")
+		check(2)
+		require.Equal(t, map[uint64]int{2: 1}, hashes,
+			"files 0 (checked) and 1 (passed again by a full read) were used last and stay; file 2 went")
 	})
 	t.Run("a ranged read hashes a file once", func(t *testing.T) {
 		t.Parallel()
