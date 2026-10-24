@@ -77,7 +77,7 @@ JSON answer with vectors is several times its Arrow size.
 
 ## Decisions
 
-Refined with the decider on 2026-10-22.
+Refined with the decider on 2026-10-22; the last three rows on 2026-10-25.
 
 | Topic | Decision |
 |---|---|
@@ -95,6 +95,9 @@ Refined with the decider on 2026-10-22.
 | Admin | only from the spec: functions cannot create indexes, optimize or restore |
 | Wire | JSON; 8 MiB per request and per answer, 1,000 rows per call, 30 s per call |
 | Engine language | Python first, as the duckdb engine (to confirm in the ADR) |
+| Hybrid fusion | RRF only; the other rerankers are left out |
+| Scalar indexes | the engine indexes every filterable field; no choice per field |
+| Left out | the LanceDB features that [FEAT-0013](../feat/0013-feat-vector.md#lancedb-features-not-implemented-in-this-epoch) lists as not implemented, each with its reason |
 
 ## Illustrative shapes
 

@@ -137,6 +137,32 @@ with its store, and each feature passes its checks:
 - **Stores across namespaces**: a binding names a store of its own namespace, as for KV and SQL.
 - **High availability and multi-node engines**: a V2 topic (FEAT-0002).
 
+## LanceDB features not implemented in this epoch
+
+The epoch implements LanceDB's search by vector, by text or both, its counts, upserts and deletes, and the indexes and
+maintenance that a store's spec declares. It does not implement the features below, which the decider set aside on
+2026-10-25. All of them but a table's own embedding function also work through an engine, as the design report's
+experiments showed. In the **Later** column, *no* means left out by design, *possible* means it can come later without
+changing the API's shape, and a feature code names the idea row that holds it.
+
+| LanceDB feature | Why it is left out | Later |
+|---|---|---|
+| Filtering after the search | The filter always narrows the search first, so a search returns as many matching rows as it asks for, when that many exist. | no |
+| Fast search, which skips the rows not yet indexed | A search must find a row written just before it; the platform's optimization adds new rows to the indexes instead. | no |
+| Pages of results | A larger limit returns the same rows, up to the rows allowed per call; Vectorize has no offset. | possible |
+| A distance range | The function drops the rows past its own threshold, which gives the same rows for a maximum distance; Vectorize has no threshold. | possible |
+| Several query vectors in one call | The function runs one search per vector; Vectorize takes one vector per query. | possible |
+| Rerankers other than RRF, such as the linear combination and MRR | Hybrid search fuses its results with RRF, which needs no weights and no score scaling; a function can merge a vector search and a text search itself. | possible |
+| Phrase and boolean text queries | A text query language would bind every later engine; exact conditions on fields go in the filter. | possible |
+| A choice of scalar index per field, and list indexes (LABEL_LIST) | The engine indexes every filterable field itself, and the core has no list type. | possible |
+| Renaming or removing a field, and binary fields | A field may only be added, and the core types have no binary type. | possible |
+| Table statistics in the store's status | As for SQL, the delete check asks the engine at delete time. | possible |
+| Versions with tags and restore, multivectors and binary vectors | No other engine of this epoch has them. | F178 |
+| Arrow answers | The epoch's wire format is JSON. | F179 |
+| Updates and filters written in SQL | The portable filter replaces SQL. | no |
+| Row ids, reads by row offset and query plans | They are the engine's internals, which no other engine shares. | no |
+| A table's own embedding function, and a reranker that the function writes | The engine does not run a function's own code: the function embeds its text, for example through the AI gateway of [FEAT-0015](0015-feat-ai-gateway.md), and reranks the rows it gets back. | no |
+
 ## Open questions
 
 | Question | Decided in |
