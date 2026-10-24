@@ -99,8 +99,12 @@ Quality bar per section:
   test per *Scenario*, each written to pass — the implement gate ends green on `just ci`), and a
   checkable definition of done. The tests are the executable form of the ADR; the plan lists
   them so the implementer builds them against the Contracts, never from scratch. No business
-  logic ever belongs in the plan itself. (ADRs predating the rename title this section *Scaffold
-  plan* — same section.)
+  logic ever belongs in the plan itself. When the decision relies on how the runtime treats a
+  worker during a stop, a crash or a restart (its network, the grace, signals, the boot sweep),
+  the definition of done names a real-platform lane case that exercises it on containerd: unit and
+  engine tests run without funcd's runtime and network (ADR-0273's stop passed them and saved
+  nothing on containerd). (ADRs predating the rename title this section *Scaffold plan* — same
+  section.)
 - **Review checklist**: objective, checkbox-form items the review-gate model can verify
   mechanically against the implementation.
 - **Open questions**: each one names where it gets answered (a future ADR, a milestone,

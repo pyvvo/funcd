@@ -61,6 +61,14 @@ MUTANT = ""                        # check-specs runs each mutant with --preinit
   role's function is an RPC that FizzBee may lose on the way in or out. Read another role's fields directly when the
   design shares state, and call functions only to model real messages. Crash and message-loss recipes are FizzBee's
   (references 14-01 to 14-04); no funcd spec uses them yet: try them on a copy first.
+- **Environment**: list in the spec's header what the design takes from its environment: the runtime's stop
+  sequence (network teardown, SIGTERM, grace, SIGKILL), the network and storage a step needs, the clock. Model each one
+  a property depends on, as an actor or a guard: a save that needs the network is guarded by it, and the runtime's stop
+  is an action with its own order, not a kill the spec may skip. When the grace's SIGKILL is the expected end of a
+  stuck stop, assert that a run with no fault ends gracefully, or every run may end killed and still pass. Name each
+  assumption left out under *Left to tests*, with the real-platform test that holds it. The Lake stop (ADR-0273)
+  assumed its saves land during the stop; the containerd driver removes the worker's network before SIGTERM, and only
+  a lane run showed that no stop saved anything.
 - **Assertions**: `always`, `transition`, `exists`; progress as `always eventually` or `eventually always`, with the
   actions it relies on marked `fair` (there is no bare `eventually`). A wait or retry with no bound in modeled time
   gets a progress assertion: it catches the over-correction that never lets go (#1208's control). A wait a modeled
@@ -101,6 +109,8 @@ can also fail liveness on the spec itself, by cutting runs before they can end.
   | `AckedCommitsAreStored` | always | `scenario: stop-keeps-acknowledged-commits` | `TestScenario…` |
 - **Bounds**: 2 commits, 3 concurrent actions, 14 actions: the smallest race that broke ADR-0271 (2 hid it).
 - **Faults**: graceful stop; crash on yield off (a SIGKILL's loss is #998's trade-off).
+- **Environment**: <what the design takes from the runtime, the network, storage and the clock; modeled, or left to
+  the named real-platform test>.
 - **Mutants**: `upload-pre-copy` (ADR-0271's timeout) fails `AckedCommitsAreStored`.
 - **Result**: pass, <n> states, <s> s, FizzBee v0.5.4; wider (<bounds>): pass, <s> s.
 - **Left to tests**: <facts of the code or platform the model cannot hold, and the test that holds each>.
@@ -137,4 +147,6 @@ unpinned main branch into the global skills.
 ## What a model cannot catch
 
 Facts of the code or the platform the spec does not encode: two SQLite libraries blind to each other's locks, ext4's
-overhead, a FIFO in a backup. Those stay with real-engine and e2e tests; the section's *Left to tests* names them.
+overhead, a FIFO in a backup, the order in which the runtime tears a worker down. Those stay with real-engine and e2e
+tests; the section's *Left to tests* names them. An environment assumption a property rests on is not one of them:
+model it (*Environment* above), or the spec passes on a platform that breaks the property.

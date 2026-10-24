@@ -115,7 +115,11 @@ accidentally undone later, say "keep as-is" explicitly and why.
 an assertion that protects no Scenario at risk; a guard the Decision adds with no mutant; bounds not justified as
 ADR-0272 Decision 2 asks (the smallest scenario in which every mutant fails, as many concurrent actions as actors
 racing through yield points, the wider run with one more item recorded in the ADR); a wait or retry with no bound in
-modeled time and no progress assertion; an assertion with no named oracle test.
+modeled time and no progress assertion; an assertion with no named oracle test; an environment assumption a property
+rests on (the runtime's stop order, the network or storage a step needs) neither modeled nor named under *Left to
+tests* with its real-platform test.
+A decision that relies on how the runtime treats a worker during a stop, a crash or a restart, with no real-platform
+lane case in its definition of done, is a Major (axis F): tests without funcd's runtime cannot show it.
 
 ## Step 3 — Calibrate before writing
 

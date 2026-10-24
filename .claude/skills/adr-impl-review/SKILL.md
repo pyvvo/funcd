@@ -54,6 +54,8 @@ file:line, command transcripts). At minimum:
   weakened or deleted; `just ci` exits 0.
 - **Design model** (ADR-0272): `just check-specs` passes, and each assertion of a spec the ADR changed has an oracle
   marker on a passing test (`git grep -n 'oracle: docs/design/<part>/<topic>.fizz#<Assertion>'`).
+- **Real platform**: when the ADR relies on how the runtime treats a worker during a stop, a crash or a restart, its
+  lane case ran on containerd and passed; engine or unit tests alone are no evidence for it.
 - **Tracking**: the realized feat row at `reviewing`, the ADR at `Reviewing`, and the **ADR's substance
   unchanged** — the builder's *only* permitted ADR edit is the `Accepted → Reviewing` status bump, so any
   change to Context/Scenarios/Decision/Contracts is itself a Blocker.
