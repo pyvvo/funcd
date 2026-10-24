@@ -130,8 +130,8 @@ with its store, and each feature passes its checks:
 
 ## Out of scope (tracked elsewhere)
 
-- **Embedding models in the platform**: a function embeds its text itself, or calls a model elsewhere; heavy compute
-  is offloaded.
+- **Embedding models in the platform**: a function embeds its text itself, or calls a model elsewhere, such as
+  through the AI gateway of [FEAT-0015](0015-feat-ai-gateway.md); heavy compute is offloaded.
 - **Engines other than LanceDB**: kept as references, F176 and F177.
 - **A store on a Bucket**: the engine keeps its tables in its own directory.
 - **Stores across namespaces**: a binding names a store of its own namespace, as for KV and SQL.
