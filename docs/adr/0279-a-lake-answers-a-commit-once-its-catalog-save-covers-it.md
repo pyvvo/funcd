@@ -1,6 +1,6 @@
 # ADR-0279: A Lake answers a commit once its catalog save covers it
 
-- **Status**: Accepted (2026-10-24, under the decider's delegation of that day); judged twice, every finding folded
+- **Status**: Reviewing (2026-10-24; accepted that day under the decider's delegation; judged twice)
 - **Date**: 2026-10-24
 - **Deciders**: green-0-rabbit
 - **Tags**: lake, duckdb, durability, disaster-recovery

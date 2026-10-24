@@ -8,20 +8,20 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
-// The bounds of lake.saveInterval, both included, and its value when empty (ADR-0274 Decision 1).
+// The bounds of lake.saveInterval, both included (ADR-0274 Decision 1).
 const (
-	DefaultLakeSaveInterval = time.Second
-	MinLakeSaveInterval     = 500 * time.Millisecond
-	MaxLakeSaveInterval     = time.Hour
+	MinLakeSaveInterval = 500 * time.Millisecond
+	MaxLakeSaveInterval = time.Hour
 )
 
-// LakeSaveInterval is lake.saveInterval parsed: DefaultLakeSaveInterval when empty, fault.Invalid naming the key for
-// a value that is no ADR-0194 duration or lies outside [MinLakeSaveInterval, MaxLakeSaveInterval].
+// LakeSaveInterval is lake.saveInterval parsed: 0 when empty, where every Lake saves its catalog before it answers
+// (ADR-0279); fault.Invalid naming the key for a value that is no ADR-0194 duration or lies outside
+// [MinLakeSaveInterval, MaxLakeSaveInterval].
 func (c Config) LakeSaveInterval() (time.Duration, error) {
 	const op = "config.LakeSaveInterval"
 	v := c.Lake.SaveInterval
 	if v == "" {
-		return DefaultLakeSaveInterval, nil
+		return 0, nil
 	}
 	d, err := v1.ParseDuration(v)
 	if err != nil {

@@ -325,7 +325,8 @@ type config struct {
 	// lakeExtensionDir is injected as DUCKDB_EXTENSION_DIRECTORY into lake-consumer functions
 	// (dev analogue of the prod bundle's duckdb-ext, ADR-0089). Set by `funcdctl dev`; empty in prod.
 	lakeExtensionDir string
-	// lakeSaveInterval is every Lake engine's catalog save interval (lake.saveInterval, ADR-0274); 0 ⇒ none set.
+	// lakeSaveInterval is every Lake engine's catalog save interval (lake.saveInterval, ADR-0274); 0 ⇒ none set: every
+	// Lake saves before it answers (ADR-0279).
 	lakeSaveInterval time.Duration
 
 	// logObserver, when set, streams every captured function log line live (in addition to the normal

@@ -4,6 +4,8 @@ real DuckDB, DuckLake and Quack, against a file-backed stand-in for the S3 gatew
 recovers. They need the runtime image: `just test-duckdb-engine` runs them in funcd/runtime-duckdb. shim_test.py holds
 the stub-based cases, which run everywhere."""
 
+import http.client
+import json
 import os
 import shutil
 import signal
@@ -14,6 +16,8 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import duckdb
 
@@ -421,6 +425,178 @@ class TestIssue1198CheckpointsUnderLoadKeepTheCatalogWhole(unittest.TestCase):
         union = " UNION ALL ".join(f"SELECT i FROM lakehouse.t{w}" for w in range(writers))
         rows = {r[0] for r in lake.client.query(lake.start(), union)}
         self.assertEqual(sorted(set(acked) - rows)[:10], [], "acknowledged commits are missing after a restart")
+
+
+class _BarrierProxy:
+    """The Lake PEP proxy's barrier as a test stand-in (ADR-0279 Decision 3): it forwards each request to the engine,
+    sends the answer but its last byte, makes one POST /save to the engine's save endpoint and sends the last byte
+    only on a 200, else breaks the connection. With cut, it never sends the last byte; with refuse, it answers 503."""
+
+    HOP = {"connection", "transfer-encoding", "content-length", "keep-alive", "host"}
+
+    def __init__(self, test: unittest.TestCase, engine_port: int, save_port: int, cut: bool = False,
+                 refuse: bool = False) -> None:
+        proxy = self
+        self.saves: list[dict] = []
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def do_POST(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler's name.
+                body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                upstream = http.client.HTTPConnection("127.0.0.1", engine_port, timeout=60)
+                headers = {k: v for k, v in self.headers.items() if k.lower() not in proxy.HOP}
+                upstream.request("POST", self.path, body, headers)
+                resp = upstream.getresponse()
+                data = resp.read()
+                upstream.close()
+                if refuse:
+                    self.send_response(503)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                self.send_response(resp.status)
+                for k, v in resp.getheaders():
+                    if k.lower() not in proxy.HOP:
+                        self.send_header(k, v)
+                self.send_header("Content-Length", str(len(data)))
+                if not data:
+                    if not proxy.save(save_port):
+                        self.close_connection = True
+                        return
+                    self.end_headers()
+                    return
+                self.end_headers()
+                self.wfile.write(data[:-1])
+                self.wfile.flush()
+                if cut or not proxy.save(save_port):
+                    self.close_connection = True
+                    self.connection.shutdown(socket.SHUT_RDWR)
+                    return
+                self.wfile.write(data[-1:])
+
+            def log_message(self, *_args: object) -> None:
+                pass
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        test.addCleanup(self.server.shutdown)
+        self.uri = f"quack://127.0.0.1:{self.server.server_address[1]}"
+
+    def save(self, save_port: int) -> bool:
+        request = urllib.request.Request(f"http://127.0.0.1:{save_port}/save", method="POST", data=b"")
+        try:
+            with urllib.request.urlopen(request, timeout=60) as resp:
+                self.saves.append(json.load(resp))
+                return True
+        except Exception:  # noqa: BLE001 — a failed save fails the answer.
+            return False
+
+
+class _Via:
+    """What the client sees as an engine: the barrier proxy's URI."""
+
+    def __init__(self, uri: str) -> None:
+        self.uri = uri
+
+
+def _barrier(test: unittest.TestCase, lake: "_Lake", **kw: bool) -> tuple:
+    """Starts an engine that saves before it answers (FUNCD_LAKE_SAVE_PORT) and a barrier proxy in front of it."""
+    save_port = _free_port()
+    engine = lake.start(env={"FUNCD_LAKE_SAVE_PORT": str(save_port)})
+    proxy = _BarrierProxy(test, int(engine.uri.rsplit(":", 1)[1]), save_port, **kw)
+    return engine, proxy, _Via(proxy.uri)
+
+
+class TestScenarioAcknowledgedCommitSurvivesCrash(unittest.TestCase):
+    """scenario: acknowledged-commit-survives-crash (ADR-0279) — with the engine saving before it answers, a SIGKILL
+    right after acknowledged commits loses none of them: the next engine recovers each one."""
+
+    # oracle: docs/design/lake/commit-save.fizz#AckedCommitsAreSaved
+    def test_scenario_acknowledged_commit_survives_crash(self) -> None:
+        lake = _Lake(self)
+        engine, _, via = _barrier(self, lake)
+        lake.client.query(via, "CREATE TABLE lakehouse.t (i BIGINT)")
+        acked = []
+        for i in range(1, 41):
+            lake.client.query(via, f"INSERT INTO lakehouse.t VALUES ({i})")
+            acked.append(i)
+        engine.proc.kill()
+        engine.proc.wait(timeout=30)
+        rows = {r[0] for r in lake.client.query(lake.start(), "SELECT i FROM lakehouse.t")}
+        self.assertEqual(sorted(set(acked) - rows), [], "an acknowledged commit was lost to a SIGKILL")
+
+
+class TestScenarioWaitingCommitsShareASave(unittest.TestCase):
+    """scenario: waiting-commits-share-a-save (ADR-0279) — commits that wait together share saves, and every answer
+    completes."""
+
+    # oracle: docs/design/lake/commit-save.fizz#NoAnswerStaysHeld
+    def test_scenario_waiting_commits_share_a_save(self) -> None:
+        lake = _Lake(self)
+        save_port = _free_port()
+        engine = lake.start(put_delay=0.2, env={"FUNCD_LAKE_SAVE_PORT": str(save_port)})
+        via = _Via(_BarrierProxy(self, int(engine.uri.rsplit(":", 1)[1]), save_port).uri)
+        writers = 4
+        for w in range(writers):
+            lake.client.query(via, f"CREATE TABLE lakehouse.t{w} (i BIGINT)")
+        before = len(lake.uploads())
+        done: list[int] = []
+
+        def write(w: int) -> None:
+            cur = lake.client.con.cursor()
+            for i in range(5):
+                lake.client.query(via, f"INSERT INTO lakehouse.t{w} VALUES ({i})", cur)
+                done.append(w)
+
+        threads = [threading.Thread(target=write, args=(w,)) for w in range(writers)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(120)
+        self.assertEqual(len(done), writers * 5, "an answer stayed held")
+        saves = len(lake.uploads()) - before
+        self.assertLess(saves, writers * 5, f"{saves} saves for {writers * 5} commits: no commit shared a save")
+
+
+class TestTheBarrierRestsOnTwoQuackFacts(unittest.TestCase):
+    """ADR-0279 Design model, Left to tests: an engine's answer ends only after its commit is visible to another
+    connection, so the save made when it ends stores it; and a Quack client completes no answer before its last byte,
+    so one held byte holds the answer."""
+
+    def test_answer_ends_after_its_commit_is_visible(self) -> None:
+        lake = _Lake(self)
+        _, _, via = _barrier(self, lake)
+        lake.client.query(via, "CREATE TABLE lakehouse.t (i BIGINT)")
+        for i in range(1, 11):
+            lake.client.query(via, f"INSERT INTO lakehouse.t VALUES ({i})")
+            self.assertEqual(_rows(lake.stored(), lake.data, "SELECT count(*) FROM stored.t"), [(i,)],
+                             f"the save at the end of commit {i}'s answer did not store it")
+
+    def test_client_needs_the_last_bytes(self) -> None:
+        lake = _Lake(self)
+        save_port = _free_port()
+        engine = lake.start(env={"FUNCD_LAKE_SAVE_PORT": str(save_port)})
+        lake.client.query(engine, "CREATE TABLE lakehouse.t (i BIGINT)")
+        port = int(engine.uri.rsplit(":", 1)[1])
+        for kw in ({"cut": True}, {"refuse": True}):
+            via = _Via(_BarrierProxy(self, port, save_port, **kw).uri)
+            with self.assertRaises(Exception, msg=f"{kw}: the client completed an answer without its last byte"):
+                lake.client.query(via, "INSERT INTO lakehouse.t VALUES (1)")
+
+
+class TestScenarioReadWaitsForNothingSaved(unittest.TestCase):
+    """scenario: read-waits-for-nothing-saved (ADR-0279) — with every commit saved, a read's answer waits for one
+    check: its save call stores nothing."""
+
+    def test_scenario_read_waits_for_nothing_saved(self) -> None:
+        lake = _Lake(self)
+        _, proxy, via = _barrier(self, lake)
+        lake.client.query(via, "CREATE TABLE lakehouse.t (i BIGINT)")
+        lake.client.query(via, "INSERT INTO lakehouse.t VALUES (1)")
+        before = len(lake.uploads())
+        self.assertEqual(lake.client.query(via, "SELECT count(*) FROM lakehouse.t"), [(1,)])
+        self.assertEqual(len(lake.uploads()), before, "a read with nothing unsaved uploaded a catalog")
 
 
 class TestScenarioSaveIntervalFromConfig(unittest.TestCase):

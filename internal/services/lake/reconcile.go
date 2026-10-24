@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net"
 	"slices"
 	"strconv"
 	"strings"
@@ -169,7 +170,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		if r.proxy != nil && st.Address != "" {
 			purl, perr := r.proxy.Ensure(
 				auth.EntityRef{Type: v1.KindLake, Namespace: cs.Namespace, Name: cs.Name},
-				"http://"+st.Address, env[quackTokenEnvKey])
+				"http://"+st.Address, env[quackTokenEnvKey], r.saveURL(st.Address))
 			if perr != nil {
 				return controller.Result{}, fault.Wrapf(perr, fault.KindOf(perr), op, "ensure lake proxy %s/%s", cs.Namespace, cs.Name)
 			}
@@ -384,9 +385,20 @@ func (r *Reconciler) syncIngressRoute(ctx context.Context, cs *v1.Lake, proxyURL
 	return nil
 }
 
+// saveURL is the save endpoint of the engine at address, a netns "host:port", which the PEP proxy calls before it
+// answers (ADR-0279); "" with lake.saveInterval set, where the engine answers at once.
+func (r *Reconciler) saveURL(address string) string {
+	host, _, err := net.SplitHostPort(address)
+	if r.saveInterval > 0 || err != nil {
+		return ""
+	}
+	return "http://" + net.JoinHostPort(host, strconv.Itoa(savePort)) + "/save"
+}
+
 // engineEnv assembles the engine's environment (ADR-0087), but for its S3 key pair, issued with the engine
 // (ProviderSpec.IssueEnv, ADR-0270): AWS_REGION/AWS_ENDPOINT_URL, FUNCD_DUCKLAKE_CATALOG (the
-// lake's s3:// key), FUNCD_QUACK_PORT, FUNCD_LAKE_SAVE_INTERVAL (lake.saveInterval, ADR-0274), and the resolved
+// lake's s3:// key), FUNCD_QUACK_PORT, FUNCD_LAKE_SAVE_INTERVAL (lake.saveInterval, ADR-0274) or, without it,
+// FUNCD_LAKE_SAVE_PORT (ADR-0279), and the resolved
 // spec.bindings.secret (the Quack token) +
 // spec.bindings.config (DUCKDB_*) Data keys. funcd's own keys win over bound data, so a bound ConfigMap or Secret
 // cannot point the engine's S3 traffic or key pair elsewhere. A secret/config resolution failure is returned (the
@@ -404,6 +416,8 @@ func (r *Reconciler) engineEnv(ctx context.Context, cs *v1.Lake) (map[string]str
 	}
 	if r.saveInterval > 0 {
 		own["FUNCD_LAKE_SAVE_INTERVAL"] = v1.Duration(r.saveInterval).String()
+	} else {
+		own["FUNCD_LAKE_SAVE_PORT"] = strconv.Itoa(savePort)
 	}
 
 	// spec.bindings.config (ConfigMaps, non-sensitive) + spec.bindings.secret (Secrets, sensitive) → guarded engine

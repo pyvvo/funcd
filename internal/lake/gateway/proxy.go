@@ -3,7 +3,9 @@ package gateway
 import (
 	"bytes"
 	"cmp"
+	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -27,6 +29,7 @@ type EngineTarget struct {
 	Lake        auth.EntityRef // Type=KindLake, Namespace/Name = the fronted Lake
 	Upstream    string         // the netns engine endpoint (an http URL)
 	EngineToken string         // the shared engine token, never exposed to callers
+	SaveURL     string         // the engine's save endpoint; "" when lake.saveInterval is set: no barrier (ADR-0279)
 }
 
 // handshakeHeadMax is how much of a request body the proxy reads before it decides: the handshake
@@ -45,6 +48,7 @@ type lakeProxy struct {
 	engine EngineTarget
 	rp     *httputil.ReverseProxy // nil ⇒ a malformed Upstream (every request is an Internal problem)
 	log    *slog.Logger
+	saves  *saveBarrier // nil ⇒ no SaveURL: answers go out as the engine sends them
 }
 
 // NewLakeProxy builds the lake PEP proxy handler fronting one Lake engine (ADR-0137).
@@ -62,6 +66,10 @@ func newLakeProxy(keys LakeKeys, pdp auth.Authorizer, engine EngineTarget, trans
 		p.rp.Transport = transport
 		p.rp.ErrorLog = slog.NewLogLogger(log.Handler(), slog.LevelWarn)
 		p.rp.ErrorHandler = p.engineFailed
+		if engine.SaveURL != "" {
+			p.saves = &saveBarrier{url: engine.SaveURL, client: &http.Client{Transport: transport}}
+			p.rp.ModifyResponse = p.saves.hold
+		}
 	}
 	return p
 }
@@ -70,6 +78,11 @@ func newLakeProxy(keys LakeKeys, pdp auth.Authorizer, engine EngineTarget, trans
 // (ADR-0002), not the ReverseProxy default (a bare 502 logged through the stdlib log package). The
 // cause stays in the log: it names the engine's netns endpoint.
 func (p *lakeProxy) engineFailed(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, errNotSaved) {
+		p.log.WarnContext(r.Context(), "lake catalog not saved", "lake", p.engine.Lake.Name, "err", err)
+		fault.WriteProblem(w, fault.Unavailablef(proxyOp, "lake catalog not saved"))
+		return
+	}
 	p.log.WarnContext(r.Context(), "lake engine call failed", "lake", p.engine.Lake.Name, "err", err)
 	fault.WriteProblem(w, fault.Unavailablef(proxyOp, "lake engine unavailable"))
 }
@@ -145,6 +158,14 @@ func (p *lakeProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Header.Set("Content-Length", strconv.FormatInt(length, 10))
 	} else {
 		r.Header.Del("Content-Length")
+	}
+	if p.saves != nil {
+		engine, err := p.saves.instance(r.Context())
+		if err != nil {
+			p.engineFailed(w, r, err)
+			return
+		}
+		r = r.WithContext(context.WithValue(r.Context(), instanceKey{}, engine))
 	}
 	p.rp.ServeHTTP(w, r)
 }

@@ -35,6 +35,10 @@ const DuckDBRuntime = "duckdb"
 // HTTP server. FUNCD_QUACK_PORT carries it to the shim.
 const enginePort = 8080
 
+// savePort is the port of the engine's save endpoint in its netns, which the PEP proxy calls before it answers
+// (ADR-0279); FUNCD_LAKE_SAVE_PORT carries it to the shim when lake.saveInterval is unset.
+const savePort = 8081
+
 // condReady is the readiness condition the Lake reconciler raises (ADR-0086): True once
 // the provider-runtime reports the engine Ready on its Quack HTTP probe. Every write stamps the generation it
 // observed (ADR-0199 Decision 5).
@@ -106,7 +110,8 @@ type ReconcilerDeps struct {
 	ReferentPollInterval time.Duration
 	EnginePollInterval   time.Duration
 	// SaveInterval is how often every engine saves its catalog after a commit (lake.saveInterval, ADR-0274), set as
-	// the engine's FUNCD_LAKE_SAVE_INTERVAL; 0 ⇒ none set, and the engine saves every second.
+	// the engine's FUNCD_LAKE_SAVE_INTERVAL; 0 ⇒ none set: the engine serves its save endpoint on savePort, and the
+	// PEP proxy holds each answer until a save covers it (ADR-0279).
 	SaveInterval time.Duration
 }
 

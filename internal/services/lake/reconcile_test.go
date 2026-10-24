@@ -256,6 +256,40 @@ func TestScenarioSaveIntervalFromConfig(t *testing.T) {
 	}
 }
 
+// scenario: interval-is-the-opt-in (ADR-0279) — with lake.saveInterval set, an engine gets its interval and no save
+// port, and the proxy no save URL, so answers go out at once; without it, the engine gets the save port and the proxy
+// the engine's save endpoint.
+func TestScenarioIntervalIsTheOptIn(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		interval            time.Duration
+		wantPort, wantSaves string
+	}{{3 * time.Second, "", ""}, {0, "8081", "http://10.88.0.5:8081/save"}} {
+		st := store.New(storemem.New())
+		seedLakeBucket(t, st)
+		prov := &fakeProvider{}
+		r := newReconciler(t, st, prov, func(d *lakesvc.ReconcilerDeps) {
+			d.Secrets = fakeSecrets{env: map[string]string{"QUACK_TOKEN": "change-me"}}
+			d.SaveInterval = tc.interval
+		})
+		cs := mkLake("lake", v1.FunctionBlob{Alias: "gold", Bucket: "lakehouse", Prefix: "gold"})
+		cs.Spec.Bindings.Secret = []v1.ObjectName{"lake-quack-token"}
+		_, err := st.Create(ctx, cs)
+		require.NoError(t, err)
+
+		reconcileOnce(t, r, "lake")
+
+		env := prov.lastSpec(t).Env
+		require.Equal(t, tc.wantPort, env["FUNCD_LAKE_SAVE_PORT"], tc.interval)
+		require.Equal(t, tc.wantSaves, lakesvc.SaveURL(r, "10.88.0.5:8080"), tc.interval)
+		if tc.interval > 0 {
+			require.NotEmpty(t, env["FUNCD_LAKE_SAVE_INTERVAL"])
+		} else {
+			require.NotContains(t, env, "FUNCD_LAKE_SAVE_INTERVAL")
+		}
+	}
+}
+
 // TestEngineEnvOwnKeysWinOverBoundData: a bound ConfigMap or Secret cannot replace the engine's own S3 endpoint,
 // region or key pair, and only the keys the engine reads (QUACK_TOKEN, DUCKDB_*) come through.
 func TestEngineEnvOwnKeysWinOverBoundData(t *testing.T) {
@@ -465,6 +499,7 @@ func TestScenarioCrashedLakeEngineRestarts(t *testing.T) {
 	t.Cleanup(mgr.Shutdown)
 	r := newReconciler(t, st, prov, func(d *lakesvc.ReconcilerDeps) {
 		d.Proxy = mgr
+		d.SaveInterval = time.Second // the fake engine serves no save endpoint (ADR-0279)
 		d.SupervisionPeriod = period
 	})
 	_, err := st.Create(ctx, mkLake("lake"))
@@ -509,6 +544,7 @@ func TestIssue104_ConvergeErrorMarksLakeNotReady(t *testing.T) {
 	routes := newRecordingRoutes()
 	r := newReconciler(t, st, prov, func(d *lakesvc.ReconcilerDeps) {
 		d.Proxy = mgr
+		d.SaveInterval = time.Second // the fake engine serves no save endpoint (ADR-0279)
 		d.Routes = routes
 	})
 	cs := mkLake("lake")
@@ -589,6 +625,7 @@ func TestIssue372_NotReadyGateStopsServing(t *testing.T) {
 			r := newReconciler(t, st, prov, func(d *lakesvc.ReconcilerDeps) {
 				d.Secrets = secrets
 				d.Proxy = mgr
+				d.SaveInterval = time.Second // the fake engine serves no save endpoint (ADR-0279)
 			})
 			cs := mkLake("lake")
 			cs.Spec.Bindings.Secret = []v1.ObjectName{"quack"}
@@ -781,6 +818,7 @@ func newEdgeHarness(t *testing.T, modes router.ModeFunc) *edgeHarness {
 	h.prov = &fakeProvider{status: provider.ProviderStatus{Running: 1, Ready: true, Address: "10.63.0.7:8080"}}
 	h.lakes = newReconciler(t, h.st, h.prov, func(d *lakesvc.ReconcilerDeps) {
 		d.Proxy = mgr
+		d.SaveInterval = time.Second // the fake engine serves no save endpoint (ADR-0279)
 		d.Routes = agg
 	})
 	seedLakeBucket(t, h.st)
@@ -1111,6 +1149,7 @@ func TestIssue716_NotReadyEngineStopsServing(t *testing.T) {
 			r := newReconciler(t, st, prov, func(d *lakesvc.ReconcilerDeps) {
 				d.Secrets = &fakeSecrets{env: map[string]string{"QUACK_TOKEN": "shared-engine-token"}}
 				d.Proxy = mgr
+				d.SaveInterval = time.Second // the fake engine serves no save endpoint (ADR-0279)
 			})
 			cs := mkLake("lake")
 			cs.Spec.Bindings.Secret = []v1.ObjectName{"quack"}

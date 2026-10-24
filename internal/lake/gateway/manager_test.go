@@ -46,7 +46,7 @@ func TestManager_EnsureProxiesThroughToEngine(t *testing.T) {
 	t.Cleanup(mgr.Shutdown)
 
 	lake := auth.EntityRef{Type: v1.KindLake, Namespace: "data", Name: "lake"}
-	url, err := mgr.Ensure(lake, up.URL, engineToken)
+	url, err := mgr.Ensure(lake, up.URL, engineToken, "")
 	require.NoError(t, err)
 	require.True(t, strings.HasPrefix(url, "127.0.0.1:"), "Ensure returns a bare node-private host:port, got %q", url)
 
@@ -65,7 +65,7 @@ func TestManager_EnsureProxiesThroughToEngine(t *testing.T) {
 	require.Equal(t, engineToken, forwarded, "the engine sees the SHARED engine token, not the caller token")
 
 	// idempotent: Ensure with the same (upstream, engineToken) reuses the same listener (same URL).
-	url2, err := mgr.Ensure(lake, up.URL, engineToken)
+	url2, err := mgr.Ensure(lake, up.URL, engineToken, "")
 	require.NoError(t, err)
 	require.Equal(t, url, url2, "an unchanged Ensure reuses the running proxy (same URL)")
 
@@ -104,9 +104,9 @@ func TestManager_EnsureKeepsURLWhenEngineMoves(t *testing.T) {
 	t.Cleanup(mgr.Shutdown)
 	lake := auth.EntityRef{Type: v1.KindLake, Namespace: "data", Name: "lake"}
 
-	url1, err := mgr.Ensure(lake, up1.URL, "token-a")
+	url1, err := mgr.Ensure(lake, up1.URL, "token-a", "")
 	require.NoError(t, err)
-	url2, err := mgr.Ensure(lake, up2.URL, "token-b")
+	url2, err := mgr.Ensure(lake, up2.URL, "token-b", "")
 	require.NoError(t, err)
 	require.Equal(t, url1, url2, "the engine moved, but the proxy URL consumers hold is unchanged")
 
@@ -132,7 +132,7 @@ func TestIssue312_ProxyBoundsStalledAndIdleConns(t *testing.T) {
 	st := store.New(memory.New())
 	mgr := NewManager("", NewLakeKeys([]byte("i312-master"), st), buildPDP(t, st), nil)
 	t.Cleanup(mgr.Shutdown)
-	_, err := mgr.Ensure(auth.EntityRef{Type: v1.KindLake, Namespace: "data", Name: "lake"}, "http://127.0.0.1:1", engineToken)
+	_, err := mgr.Ensure(auth.EntityRef{Type: v1.KindLake, Namespace: "data", Name: "lake"}, "http://127.0.0.1:1", engineToken, "")
 	require.NoError(t, err)
 
 	mgr.mu.Lock()
@@ -153,7 +153,7 @@ func TestIssue454_ProxyServerErrorsUseTheManagerLogger(t *testing.T) {
 	st := store.New(memory.New())
 	mgr := NewManager("", NewLakeKeys([]byte("i454-master"), st), buildPDP(t, st), slog.New(slog.NewJSONHandler(&logs, nil)))
 	t.Cleanup(mgr.Shutdown)
-	_, err := mgr.Ensure(auth.EntityRef{Type: v1.KindLake, Namespace: "data", Name: "lake"}, "http://127.0.0.1:1", engineToken)
+	_, err := mgr.Ensure(auth.EntityRef{Type: v1.KindLake, Namespace: "data", Name: "lake"}, "http://127.0.0.1:1", engineToken, "")
 	require.NoError(t, err)
 
 	mgr.mu.Lock()
@@ -184,7 +184,7 @@ func TestIssue379_ProxyLogsThroughManagerLogger(t *testing.T) {
 	var logs bytes.Buffer
 	mgr := NewManager("", keys, pdp, slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(mgr.Shutdown)
-	url, err := mgr.Ensure(auth.EntityRef{Type: v1.KindLake, Namespace: "data", Name: "lake"}, deadURL, engineToken)
+	url, err := mgr.Ensure(auth.EntityRef{Type: v1.KindLake, Namespace: "data", Name: "lake"}, deadURL, engineToken, "")
 	require.NoError(t, err)
 	post := func(token string) int {
 		resp, perr := http.Post("http://"+url, "application/octet-stream", bytes.NewReader(makeHandshake(token)))
@@ -226,7 +226,7 @@ func TestIssue531_EngineCallsSurviveDefaultTransportCloseIdle(t *testing.T) {
 
 	mgr := NewManager("", keys, buildPDP(t, st), nil)
 	t.Cleanup(mgr.Shutdown)
-	url, err := mgr.Ensure(auth.EntityRef{Type: v1.KindLake, Namespace: "data", Name: "lake"}, up.URL, engineToken)
+	url, err := mgr.Ensure(auth.EntityRef{Type: v1.KindLake, Namespace: "data", Name: "lake"}, up.URL, engineToken, "")
 	require.NoError(t, err)
 	granted, err := DeriveLakeToken(master, "data", "analytics")
 	require.NoError(t, err)
@@ -313,7 +313,7 @@ func TestManagerReleaseKeepsURL(t *testing.T) {
 	require.Empty(t, mgr.Released("data"), "releasing an unknown lake is a no-op")
 
 	lake := auth.EntityRef{Type: v1.KindLake, Namespace: "data", Name: "lake"}
-	url, err := mgr.Ensure(lake, up.URL, engineToken)
+	url, err := mgr.Ensure(lake, up.URL, engineToken, "")
 	require.NoError(t, err)
 	_, _, err = mgr.Listen("data", "other", 0)
 	require.NoError(t, err)
@@ -333,7 +333,7 @@ func TestManagerReleaseKeepsURL(t *testing.T) {
 	require.Empty(t, mgr.Released("data"), "Listen takes a released listener back")
 
 	mgr.Release("data", "lake")
-	again, err := mgr.Ensure(lake, up.URL, engineToken)
+	again, err := mgr.Ensure(lake, up.URL, engineToken, "")
 	require.NoError(t, err)
 	require.Equal(t, url, again)
 	require.Empty(t, mgr.Released("data"), "Ensure takes a released listener back")

@@ -51,6 +51,7 @@ type managedProxy struct {
 	handler     *retargetable
 	upstream    string
 	engineToken string
+	saveURL     string
 	released    bool // the Lake is deleted; the listener is kept for the Functions that bind it (ADR-0162)
 }
 
@@ -108,7 +109,7 @@ func managerKey(ns v1.NamespaceName, name v1.ObjectName) string {
 // proxy already runs for the lake it is reused (idempotent — a re-reconcile does not rebind); if the
 // upstream or engineToken differs, the running proxy is retargeted in place and its URL stays the same.
 // Thread-safe.
-func (m *Manager) Ensure(lake auth.EntityRef, upstream, engineToken string) (string, error) {
+func (m *Manager) Ensure(lake auth.EntityRef, upstream, engineToken, saveURL string) (string, error) {
 	const op = "lake.gateway.Manager.Ensure"
 	key := managerKey(lake.Namespace, lake.Name)
 
@@ -116,15 +117,15 @@ func (m *Manager) Ensure(lake auth.EntityRef, upstream, engineToken string) (str
 	defer m.mu.Unlock()
 
 	target := func() http.Handler {
-		return newLakeProxy(m.keys, m.pdp, EngineTarget{Lake: lake, Upstream: upstream, EngineToken: engineToken}, m.engines, m.proxyLog)
+		return newLakeProxy(m.keys, m.pdp, EngineTarget{Lake: lake, Upstream: upstream, EngineToken: engineToken, SaveURL: saveURL}, m.engines, m.proxyLog)
 	}
 	if existing, ok := m.servers[key]; ok {
 		existing.released = false
-		if existing.upstream != upstream || existing.engineToken != engineToken {
-			// The engine moved or its shared token rotated: retarget the SAME listener, so the URL
-			// consumers already hold keeps working.
+		if existing.upstream != upstream || existing.engineToken != engineToken || existing.saveURL != saveURL {
+			// The engine moved, its shared token rotated or its save endpoint changed: retarget the SAME listener,
+			// so the URL consumers already hold keeps working.
 			existing.handler.set(target())
-			existing.upstream, existing.engineToken = upstream, engineToken
+			existing.upstream, existing.engineToken, existing.saveURL = upstream, engineToken, saveURL
 			m.log.Debug("lake proxy retargeted", "lake", key, "upstream", upstream)
 		}
 		return m.publishURL(existing.listener.Addr()), nil
@@ -135,7 +136,7 @@ func (m *Manager) Ensure(lake auth.EntityRef, upstream, engineToken string) (str
 		return "", fault.Unavailablef(op, "bind node-private lake proxy listener for %s: %v", key, err)
 	}
 	mp := m.serve(lake.Namespace, lake.Name, ln, target())
-	mp.upstream, mp.engineToken = upstream, engineToken
+	mp.upstream, mp.engineToken, mp.saveURL = upstream, engineToken, saveURL
 
 	url := m.publishURL(ln.Addr())
 	m.log.Debug("lake proxy ensured", "lake", key, "url", url, "upstream", upstream)

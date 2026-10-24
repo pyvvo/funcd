@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -191,6 +192,7 @@ func TestIssue103_NotReadyRetractsEdgeEntry(t *testing.T) {
 			r := newReconciler(t, st, prov, func(d *lakesvc.ReconcilerDeps) {
 				d.Secrets = secrets
 				d.Proxy = mgr
+				d.SaveInterval = time.Second // the fake engine serves no save endpoint (ADR-0279)
 				d.Routes = routes
 			})
 

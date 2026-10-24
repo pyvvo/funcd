@@ -31,13 +31,16 @@ written to S3 (the F47 surface) durably as part of each commit (data-before-meta
 copies the catalog's metadata database with ``COPY FROM DATABASE`` (one transaction of the engine's
 own DuckDB, so the copy is consistent while commits land) into a fresh file and uploads it
 whole-object to the catalog blob key. A torn Put leaves the prior checkpoint intact; recovery is
-GetObject → local file → ATTACH.
+GetObject → local file → ATTACH. With FUNCD_LAKE_SAVE_PORT (no lake.saveInterval, ADR-0279) the shim saves when the
+Lake PEP proxy asks, before it answers a client, instead of at an interval.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import secrets
 import signal
 import sys
 import threading
@@ -45,6 +48,7 @@ import time
 import urllib.parse
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import boto3  # the catalog's blob sync against the injected funcd S3 endpoint.
 import duckdb  # the native engine (out-of-process in THIS function — no cgo in the daemon).
@@ -60,11 +64,20 @@ LOCAL_CHECKPOINT = LOCAL_TMP + "/checkpoint.ducklake"
 METADATA = "__ducklake_metadata_lakehouse"
 # The catalog's latest snapshot id: every committed transaction adds one.
 LATEST_SNAPSHOT = f"SELECT max(snapshot_id) FROM {METADATA}.ducklake_snapshot"
+# The same, in the closed catalog file a stop uploads (attached as funcd_closed).
+CLOSED_SNAPSHOT = "SELECT max(snapshot_id) FROM funcd_closed.ducklake_snapshot"
 
 # How often the commit watcher reads the catalog's snapshot id: commits within one interval share one checkpoint. The
 # platform sets it for every Lake from lake.saveInterval, as FUNCD_LAKE_SAVE_INTERVAL (ADR-0274); one second without it.
 COMMIT_POLL_SECONDS = 1.0
 SAVE_INTERVAL_KEY = "FUNCD_LAKE_SAVE_INTERVAL"
+# The port of the save endpoint the Lake PEP proxy calls before it answers, set when lake.saveInterval is not
+# (ADR-0279); without it the engine saves at its interval.
+SAVE_PORT_KEY = "FUNCD_LAKE_SAVE_PORT"
+# How often a recovered catalog's start-up save is retried while it fails, in that mode (ADR-0276 Decision 2).
+START_UP_RETRY_SECONDS = 1.0
+# How long a stop lets the save calls it covered send their answers before Quack stops (ADR-0279 Decision 2).
+SAVE_ANSWER_WAIT_SECONDS = 1.0
 # ADR-0194's duration grammar (api/types/v1alpha1/duration.go): whole numbers with the units h, m, s and ms, largest
 # unit first, as funcdctl backup plan writes them.
 DURATION = re.compile(r"^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$")
@@ -254,6 +267,36 @@ def _report(path: str | None, failing_since: datetime | None, error: BaseExcepti
         sys.stderr.write(f"funcd duckdb shim: the report could not be written: {exc}\n")
 
 
+class _Saved:
+    """What the save endpoint knows (ADR-0279 Decision 2): this engine's instance id, drawn at start; the latest
+    snapshot id the last good save covers, which starts at the catalog's; the outcome of the last save attempt, so a
+    call that waited behind a failed save answers its error; and the calls in flight, which a stop lets answer."""
+
+    def __init__(self, covered: int | None) -> None:
+        self.instance = secrets.token_hex(8)
+        self.covered = covered
+        self.attempts = 0
+        self.error: Exception | None = None
+        self._calls = 0
+        self._calls_lock = threading.Lock()
+
+    def begin(self) -> None:
+        with self._calls_lock:
+            self._calls += 1
+
+    def end(self) -> None:
+        with self._calls_lock:
+            self._calls -= 1
+
+    def drain(self, seconds: float) -> None:
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            with self._calls_lock:
+                if self._calls == 0:
+                    return
+            time.sleep(0.01)
+
+
 class _Checkpointer:
     """Checkpoints the catalog to blob: a copy of its metadata database → whole-object PutObject.
 
@@ -265,7 +308,8 @@ class _Checkpointer:
     SIGTERM handler calls stop once; the lock serializes them.
     """
 
-    def __init__(self, cur: "duckdb.DuckDBPyConnection", s3, bucket: str, key: str, report: str | None = None) -> None:
+    def __init__(self, cur: "duckdb.DuckDBPyConnection", s3, bucket: str, key: str, report: str | None = None,
+                 saved: _Saved | None = None) -> None:
         self._cur = cur
         self._s3 = s3
         self._bucket = bucket
@@ -273,10 +317,45 @@ class _Checkpointer:
         self._lock = threading.Lock()
         self._report = report
         self._failing_since: datetime | None = None
+        self.saved = saved
 
     def checkpoint(self) -> None:
         with self._lock:
+            self._checkpoint()
+
+    def _checkpoint(self) -> None:
+        """One save, under the lock. With the save endpoint it reads the latest snapshot id before the copy, which the
+        copy therefore covers, and records it once the upload succeeded; a failure records nothing (ADR-0279)."""
+        if self.saved is None:
             self._saved(lambda: (self._copy(METADATA), self._upload()))
+            return
+        covers = self._cur.execute(LATEST_SNAPSHOT).fetchone()[0]
+        try:
+            self._saved(lambda: (self._copy(METADATA), self._upload()))
+        except Exception as exc:
+            self.saved.attempts += 1
+            self.saved.error = exc
+            sys.stderr.write(f"funcd duckdb shim: catalog checkpoint failed: {exc}\n")
+            raise
+        self.saved.attempts += 1
+        self.saved.error = None
+        self.saved.covered = covers
+
+    def save_covering(self, target: int | None) -> int | None:
+        """Returns the saved snapshot id once a good save covers snapshot target: at once when the last one does,
+        else after the save that ends while the call waits for the lock, or its own. Raises the error of a save that
+        failed, its own or one that ended while it waited (ADR-0279 Decision 2)."""
+        saved = self.saved
+        if target is None or (saved.covered is not None and saved.covered >= target):
+            return saved.covered
+        attempts = saved.attempts
+        with self._lock:
+            if saved.covered is not None and saved.covered >= target:
+                return saved.covered
+            if saved.attempts != attempts and saved.error is not None:
+                raise saved.error
+            self._checkpoint()
+            return saved.covered
 
     def _saved(self, save: Callable[[], object]) -> None:
         """Runs one save and replaces the report with its outcome, keeping the first failure's time while saves fail
@@ -303,16 +382,25 @@ class _Checkpointer:
                 _cancel(self._cur, serving, token)
                 while not _closed(self._cur):
                     time.sleep(0.05)
+            covers: list = []
+
             def save_closed() -> None:
                 try:
+                    if self.saved is not None:
+                        covers.append(self._cur.execute(CLOSED_SNAPSHOT).fetchone()[0])
                     self._copy("funcd_closed")
                 finally:
                     self._cur.execute("DETACH funcd_closed")
                 self._upload()
 
             self._saved(save_closed)
-            for uri in serving:
-                self._cur.execute("CALL quack_stop(?)", [uri]).fetchall()
+            if self.saved is not None:
+                self.saved.covered = covers[0]
+        # The save calls this upload covers answer before Quack stops; the others failed or fail (ADR-0279).
+        if self.saved is not None:
+            self.saved.drain(SAVE_ANSWER_WAIT_SECONDS)
+        for uri in serving:
+            self._cur.execute("CALL quack_stop(?)", [uri]).fetchall()
 
     def _copy(self, source: str) -> None:
         for path in (LOCAL_CHECKPOINT, LOCAL_CHECKPOINT + ".wal"):
@@ -421,6 +509,74 @@ class _CommitWatcher(threading.Thread):
         self._done.set()
 
 
+class _StartUpSave(threading.Thread):
+    """ADR-0276 Decision 2 without the watcher (ADR-0279): a recovered catalog is saved once at start, retried every
+    START_UP_RETRY_SECONDS until a save succeeds or the stop begins; a fresh one waits for its first commit's save."""
+
+    def __init__(self, checkpointer: _Checkpointer, recovered: bool) -> None:
+        super().__init__(name="start-up-save", daemon=True)
+        self._checkpointer = checkpointer
+        self._pending = recovered
+        self._done = threading.Event()
+
+    def run(self) -> None:
+        while self._pending and not self._done.is_set():
+            try:
+                self._checkpointer.checkpoint()
+                return
+            except Exception as exc:  # noqa: BLE001 — retried; the report shows the failure.
+                sys.stderr.write(f"funcd duckdb shim: the start-up save failed, retrying: {exc}\n")
+            self._done.wait(START_UP_RETRY_SECONDS)
+
+    def stop(self) -> None:
+        self._done.set()
+
+
+def _serve_saves(port: int, checkpointer: _Checkpointer, con: "duckdb.DuckDBPyConnection") -> ThreadingHTTPServer:
+    """The save endpoint (ADR-0279 Decision 2), which only the daemon reaches (lateral drop): POST /save answers 200
+    once a good save covers the catalog's latest snapshot when the call came, 503 with the error of a failed save;
+    both name this engine's instance. Each call reads on its own cursor."""
+    saved = checkpointer.saved
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+        # The headers and the body are two writes on a kept-alive connection: without TCP_NODELAY the body waits for
+        # the client's delayed ACK of the headers.
+        disable_nagle_algorithm = True
+
+        def do_POST(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler's name.
+            if self.path != "/save":
+                self._send(404, {"engine": saved.instance, "error": "not found"})
+                return
+            saved.begin()
+            cur = None
+            try:
+                cur = con.cursor()
+                target = cur.execute(LATEST_SNAPSHOT).fetchone()[0]
+                self._send(200, {"engine": saved.instance, "saved": checkpointer.save_covering(target)})
+            except Exception as exc:  # noqa: BLE001 — the proxy fails the answer with this error.
+                self._send(503, {"engine": saved.instance, "error": str(exc).replace(chr(10), " ")[:500]})
+            finally:
+                if cur is not None:
+                    cur.close()
+                saved.end()
+
+        def _send(self, code: int, body: dict) -> None:
+            data = json.dumps(body).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *_args: object) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+    threading.Thread(target=server.serve_forever, name="save-endpoint", daemon=True).start()
+    return server
+
+
 def _stop(drain, watcher: _CommitWatcher, watch, checkpointer: _Checkpointer, serving: list[str], token: str) -> None:
     """The graceful stop (#1198, ADR-0273). The watcher keeps saving while the running queries drain; its cursor holds
     the catalog open, which the stop waits out, so it stops and closes before the stop detaches the catalog. One more
@@ -474,10 +630,19 @@ def main() -> int:
     )
     _confine(con)
 
-    checkpointer = _Checkpointer(con.cursor(), s3, bucket, key, os.environ.get(REPORT_KEY))
+    saves = con.cursor()
     watch = con.cursor()
-    watcher = _CommitWatcher(checkpointer, lambda: watch.execute(LATEST_SNAPSHOT).fetchone()[0], save_interval,
-                             save_at_start=recovered)
+    save_port = os.environ.get(SAVE_PORT_KEY)
+    if save_port:
+        # Save before answering (ADR-0279): the endpoint listens before Quack serves, and no watcher runs.
+        saved = _Saved(watch.execute(LATEST_SNAPSHOT).fetchone()[0])
+        checkpointer = _Checkpointer(saves, s3, bucket, key, os.environ.get(REPORT_KEY), saved)
+        _serve_saves(int(save_port), checkpointer, con)
+        watcher = _StartUpSave(checkpointer, recovered)
+    else:
+        checkpointer = _Checkpointer(saves, s3, bucket, key, os.environ.get(REPORT_KEY))
+        watcher = _CommitWatcher(checkpointer, lambda: watch.execute(LATEST_SNAPSHOT).fetchone()[0], save_interval,
+                                 save_at_start=recovered)
     watcher.start()
     drain = con.cursor()
     serving: list[str] = []

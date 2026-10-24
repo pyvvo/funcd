@@ -278,6 +278,51 @@ testcases:
           - result.statuscode ShouldEqual 200
           - result.body ShouldContainSubstring "[[998]]"
 
+  # ADR-0279: without lake.saveInterval, as this lane runs, the Lake saves before it answers, so a SIGKILL right after a
+  # commit's answer keeps it, with no wait for a save as above.
+  - name: acknowledged-commit-survives-crash — rows committed over Quack are read back after a SIGKILL right after their answer (ADR-0279)
+    steps:
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"CREATE TABLE lakehouse.adr0279 AS SELECT 279 AS n"}}'
+        retry: 30
+        delay: 2
+        info: "create → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"INSERT INTO lakehouse.adr0279 VALUES (2790)"}}'
+        info: "insert → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            sudo /var/lib/funcd/bin/ctr --address /var/lib/funcd/data/containerd/containerd.sock -n funcd-default \
+              task kill -s KILL lake-r0 && echo KILLED'
+        info: "kill → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring KILLED
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT sum(n) FROM lakehouse.adr0279"}}'
+        retry: 30
+        delay: 2
+        info: "read after the restart → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring "[[3069]]"
+
   - name: new-lake-is-1-1 — the Lake's catalog, checkpointed to blob as a DuckDB file (ADR-0271), is DuckLake 1.1 (ADR-0263 Decision 3)
     steps:
       - type: exec
@@ -500,9 +545,9 @@ testcases:
 
   # ADR-0276 (#1233): a Lake whose catalog saves fail shows it. Its gold prefix given to Function other, which does not
   # exist, makes the S3 gateway refuse the engine's saves; a one-row table is inlined in the catalog, so the commit
-  # itself lands. CatalogSaved turns False with the engine's error while the Lake stays Ready and serves queries, and
-  # the engine's line reaches the daemon's journal. Given back, the next save turns it True. It runs before Function
-  # lake exists, as the cases before it do.
+  # itself lands in the engine, but its answer, and every answer after it, is an error (ADR-0279). CatalogSaved turns
+  # False with the engine's error while the Lake stays Ready, and the engine's line reaches the daemon's journal. Given
+  # back, the next save turns it True. It runs before Function lake exists, as the cases before it do.
   - name: issue1233-failing-saves-show — a Lake whose catalog saves are refused reports it, and reports the next good save
     steps:
       - type: exec
@@ -521,9 +566,9 @@ testcases:
         body: '{"data":{"sql":"CREATE TABLE IF NOT EXISTS lakehouse.issue1233_refused AS SELECT 1233 AS n"}}'
         retry: 30
         delay: 2
-        info: "a commit while the saves are refused → status {{.result.statuscode}} body {{.result.body}}"
+        info: "a commit while the saves are refused is an error (ADR-0279) → status {{.result.statuscode}} body {{.result.body}}"
         assertions:
-          - result.statuscode ShouldEqual 200
+          - result.statuscode ShouldNotEqual 200
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
@@ -543,10 +588,9 @@ testcases:
         headers:
           content-type: application/json
         body: '{"data":{"sql":"SELECT n FROM lakehouse.issue1233_refused"}}'
-        info: "a query while the saves are refused → status {{.result.statuscode}} body {{.result.body}}"
+        info: "a query after the unsaved commit is an error too (ADR-0279) → status {{.result.statuscode}} body {{.result.body}}"
         assertions:
-          - result.statuscode ShouldEqual 200
-          - result.body ShouldContainSubstring "[[1233]]"
+          - result.statuscode ShouldNotEqual 200
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '

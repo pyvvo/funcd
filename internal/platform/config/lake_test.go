@@ -10,11 +10,12 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/config"
 )
 
-// ADR-0274 Decision 1: lake.saveInterval is 1s when empty and an ADR-0194 duration from 500ms to 1h, both included.
+// ADR-0274 Decision 1, ADR-0279 Decision 1: lake.saveInterval is 0 when empty (save before answering) and an
+// ADR-0194 duration from 500ms to 1h, both included.
 func TestLakeSaveInterval(t *testing.T) {
 	t.Parallel()
 	for value, want := range map[string]time.Duration{
-		"":        time.Second,
+		"":        0,
 		"500ms":   500 * time.Millisecond,
 		"1s500ms": 1500 * time.Millisecond,
 		"1m30s":   90 * time.Second,

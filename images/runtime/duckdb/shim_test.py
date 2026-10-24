@@ -5,6 +5,7 @@ engine_test.py runs the shim against the real engine."""
 
 import contextlib
 import io
+import json
 import os
 import sys
 import tempfile
@@ -12,6 +13,8 @@ import threading
 import time
 import types
 import unittest
+import urllib.error
+import urllib.request
 from unittest import mock
 
 sys.modules.setdefault("boto3", types.ModuleType("boto3"))
@@ -718,6 +721,237 @@ class TestScenarioFailedStopLogged(unittest.TestCase):
         with mock.patch.object(shim.sys, "stderr", err):
             shim._stop(idle, idle, idle, _BrokenStop(), ["quack://0.0.0.0:8080"], "token")
         self.assertIn("funcd duckdb shim: the stop failed: An error occurred (AccessDenied)", err.getvalue())
+
+
+class _SaveEngine:
+    """The engine of the save endpoint: its latest snapshot id is `latest`, which a test moves as commits land. A COPY
+    snapshots the catalog when it begins, as DuckDB's one-transaction copy does, and writes that id as the checkpoint;
+    `during_copy` runs inside the copy (a commit landing, or a test holding the save)."""
+
+    def __init__(self, latest: int) -> None:
+        self.latest = latest
+        self.copies = 0
+        self.during_copy = None
+        self._row: tuple = ()
+
+    def cursor(self) -> "_SaveEngine":
+        return self
+
+    def close(self) -> None:
+        pass
+
+    def execute(self, sql: str, params: object = None) -> "_SaveEngine":
+        if sql == shim.LATEST_SNAPSHOT:
+            self._row = (self.latest,)
+        elif sql.startswith("COPY FROM DATABASE"):
+            self.copies += 1
+            copied = self.latest
+            if self.during_copy:
+                self.during_copy()
+            with open(shim.LOCAL_CHECKPOINT, "w") as fh:
+                fh.write(str(copied))
+        return self
+
+    def fetchone(self) -> tuple:
+        return self._row
+
+
+class TestTheSaveEndpoint(unittest.TestCase):
+    """ADR-0279 Decision 2: a covered call saves nothing; a save records the snapshot id it read before its copy, so a
+    commit landing during the copy is not counted as saved; calls that wait behind a save it covers share it; a call
+    behind a failed save answers its error; the endpoint names the engine's instance."""
+
+    def checkpointer(self, engine: _SaveEngine, bucket: "_Bucket", covered: int) -> "shim._Checkpointer":
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        patch = mock.patch.object(shim, "LOCAL_CHECKPOINT", os.path.join(tmp.name, "checkpoint.ducklake"))
+        patch.start()
+        self.addCleanup(patch.stop)
+        return shim._Checkpointer(engine, bucket, "lake", "gold/_ducklake/catalog.db", saved=shim._Saved(covered))
+
+    def test_a_covered_call_saves_nothing(self) -> None:
+        engine, bucket = _SaveEngine(5), _Bucket()
+        self.assertEqual(self.checkpointer(engine, bucket, 5).save_covering(5), 5)
+        self.assertEqual(engine.copies, 0)
+
+    def test_a_save_covers_the_id_read_before_its_copy(self) -> None:
+        engine, bucket = _SaveEngine(6), _Bucket()
+        checkpointer = self.checkpointer(engine, bucket, 5)
+        engine.during_copy = lambda: setattr(engine, "latest", 7)
+        self.assertEqual(checkpointer.save_covering(6), 6)
+        engine.during_copy = None
+        self.assertEqual(checkpointer.save_covering(7), 7, "the commit that landed during the copy needs a save")
+        self.assertEqual(bucket.bodies, [b"6", b"7"])
+
+    def test_waiting_calls_share_a_save(self) -> None:
+        engine, bucket = _SaveEngine(6), _Bucket()
+        checkpointer = self.checkpointer(engine, bucket, 5)
+        copying, release = threading.Event(), threading.Event()
+
+        def hold() -> None:
+            copying.set()
+            release.wait(WAIT)
+
+        engine.during_copy = hold
+        results: list = []
+        first = threading.Thread(target=lambda: results.append(checkpointer.save_covering(6)))
+        first.start()
+        self.assertTrue(copying.wait(WAIT))
+        waiting = [threading.Thread(target=lambda: results.append(checkpointer.save_covering(6))) for _ in range(3)]
+        for t in waiting:
+            t.start()
+        release.set()
+        for t in [first, *waiting]:
+            t.join(WAIT)
+        self.assertEqual(results, [6, 6, 6, 6])
+        self.assertEqual(engine.copies, 1, "one save answered every call that waited for it")
+
+    def test_a_call_behind_a_failed_save_answers_its_error(self) -> None:
+        engine, bucket = _SaveEngine(6), _FailingBucket(fail=1)
+        checkpointer = self.checkpointer(engine, bucket, 5)
+        copying, release = threading.Event(), threading.Event()
+
+        def hold() -> None:
+            copying.set()
+            release.wait(WAIT)
+
+        engine.during_copy = hold
+        errors: list = []
+
+        def call() -> None:
+            try:
+                checkpointer.save_covering(6)
+            except OSError as exc:
+                errors.append(exc)
+
+        first = threading.Thread(target=call)
+        first.start()
+        self.assertTrue(copying.wait(WAIT))
+        second = threading.Thread(target=call)
+        second.start()
+        release.set()
+        first.join(WAIT)
+        second.join(WAIT)
+        self.assertEqual(len(errors), 2, "both calls answer the failed save's error")
+        self.assertEqual(engine.copies, 1, "the waiting call started no save of its own")
+        self.assertEqual(checkpointer.saved.covered, 5, "a failed save records nothing")
+
+    def test_the_endpoint_names_its_instance(self) -> None:
+        engine, bucket = _SaveEngine(6), _FailingBucket(fail=1)
+        checkpointer = self.checkpointer(engine, bucket, 5)
+        server = shim._serve_saves(0, checkpointer, engine)
+        self.addCleanup(server.shutdown)
+        url = f"http://127.0.0.1:{server.server_address[1]}"
+
+        def post(path: str) -> tuple:
+            request = urllib.request.Request(url + path, method="POST", data=b"")
+            try:
+                with urllib.request.urlopen(request, timeout=WAIT) as resp:
+                    return resp.status, json.load(resp)
+            except urllib.error.HTTPError as err:
+                return err.code, json.load(err)
+
+        instance = checkpointer.saved.instance
+        code, body = post("/save")
+        self.assertEqual(code, 503)
+        self.assertEqual(body["engine"], instance)
+        self.assertIn("AccessDenied", body["error"])
+        self.assertEqual(post("/save"), (200, {"engine": instance, "saved": 6}))
+        self.assertEqual(post("/other")[0], 404)
+
+
+class _ClosedStopEngine(_StopEngine):
+    """A stop's engine whose closed catalog holds snapshot `closed`."""
+
+    def __init__(self, closed: int) -> None:
+        super().__init__()
+        self.closed = closed
+
+    def fetchone(self) -> tuple:
+        return (self.closed,)
+
+
+class TestTheStopAnswersWaitingSaves(unittest.TestCase):
+    """ADR-0279 Decision 2: with the save endpoint, the stop records the snapshot id of the closed catalog it uploads,
+    which answers the calls that waited for it, and lets them answer before Quack stops."""
+
+    def test_stop_answers_waiting_saves(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        engine = _ClosedStopEngine(9)
+        with mock.patch.object(shim, "LOCAL_CHECKPOINT", os.path.join(tmp.name, "checkpoint.ducklake")):
+            checkpointer = shim._Checkpointer(engine, _Bucket(), "lake", "gold/_ducklake/catalog.db", saved=shim._Saved(5))
+            checkpointer.saved.begin()
+            answered = threading.Event()
+
+            def answer() -> None:
+                time.sleep(5 * INTERVAL)
+                checkpointer.saved.end()
+                answered.set()
+
+            threading.Thread(target=answer).start()
+            checkpointer.stop(["quack://0.0.0.0:8080"], "token")
+        self.assertEqual(checkpointer.saved.covered, 9)
+        self.assertTrue(answered.is_set(), "Quack stopped before the waiting call answered")
+        self.assertIn(shim.CLOSED_SNAPSHOT, engine.log)
+        self.assertLess(engine.log.index(shim.CLOSED_SNAPSHOT), engine.log.index("COPY FROM DATABASE funcd_closed TO funcd_checkpoint"))
+        self.assertEqual(engine.log[-1], "CALL quack_stop(?)")
+
+
+class TestTheStartUpSaveWithoutAWatcher(unittest.TestCase):
+    """ADR-0279 Decision 2 with ADR-0276 Decision 2: a recovered catalog is saved once at start and retried until a
+    save succeeds; a fresh one is not saved."""
+
+    def test_a_recovered_catalog_is_saved_and_retried(self) -> None:
+        recorder = _Recorder(fail=2)
+        with mock.patch.object(shim, "START_UP_RETRY_SECONDS", INTERVAL):
+            saver = shim._StartUpSave(recorder, recovered=True)
+            saver.start()
+            self.assertTrue(recorder.done.wait(WAIT))
+            saver.join(WAIT)
+        self.assertEqual(recorder.calls, 3)
+
+    def test_a_fresh_catalog_is_not_saved(self) -> None:
+        recorder = _Recorder()
+        saver = shim._StartUpSave(recorder, recovered=False)
+        saver.start()
+        saver.join(WAIT)
+        self.assertEqual(recorder.calls, 0)
+
+
+class _SnapshotRecording(_Recording):
+    """A recording engine whose queries read snapshot 3."""
+
+    def fetchone(self) -> tuple:
+        return (3,)
+
+
+class TestMainServesSavesBeforeQuack(unittest.TestCase):
+    """ADR-0279 Decision 2: with FUNCD_LAKE_SAVE_PORT the endpoint listens before quack_serve, starting at the
+    catalog's snapshot, and no interval watcher runs."""
+
+    def test_the_endpoint_then_quack(self) -> None:
+        log: list = []
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        served: list = []
+
+        def serve(port: int, checkpointer: "shim._Checkpointer", con: object) -> None:
+            served.append((port, checkpointer.saved.covered))
+            log.append("serve saves")
+
+        watchers: list = []
+
+        def pause() -> None:
+            watchers.append(shim._CommitWatcher.called)
+            raise _Stop
+
+        with mock.patch.object(shim, "_serve_saves", serve), self.assertRaises(_Stop):
+            _run_main(dict(ENGINE_ENV, FUNCD_LAKE_SAVE_PORT="8081"), _SnapshotRecording(log), log,
+                      os.path.join(tmp.name, "tmp"), pause)
+        self.assertEqual(served, [(8081, 3)])
+        self.assertLess(log.index("serve saves"), next(i for i, s in enumerate(log) if s.startswith("CALL quack_serve(")))
+        self.assertEqual(watchers, [False], "no watcher runs")
 
 
 if __name__ == "__main__":

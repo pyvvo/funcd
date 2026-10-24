@@ -11,3 +11,6 @@ import (
 func AnyFunctionBinds(ctx context.Context, st store.Store, ns v1.NamespaceName, name v1.ObjectName) (bool, error) {
 	return anyFunctionBinds(ctx, st, ns, name)
 }
+
+// SaveURL exposes saveURL to the package's black-box tests.
+func SaveURL(r *Reconciler, address string) string { return r.saveURL(address) }

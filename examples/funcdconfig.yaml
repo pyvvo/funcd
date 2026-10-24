@@ -232,8 +232,8 @@ log:
 
 # --- lake: the Lake engines and their query proxies (ADR-0137, ADR-0274) ----------
 # lake:
-#   saveInterval: 1s              # the Lake's recovery point: how often an engine saves its catalog. default: 1s
-#                                 # 500ms to 1h; funcdctl backup plan lake --rpo sets it (ADR-0274)
+#   saveInterval: 1s              # opt-in: save the catalog at this interval and answer commits at once; a crash loses up to it (ADR-0274). default: unset ⇒ every answer waits for a save that covers it (ADR-0279)
+#                                 # 500ms to 1h; funcdctl backup plan lake --rpo sets it
 #   enginePollInterval: 2s        # re-check of an engine not answering its probe yet (ADR-0163). default: 2s
 #   engineProbeTimeout: 2s        # bound of one engine probe. default: 2s
 
