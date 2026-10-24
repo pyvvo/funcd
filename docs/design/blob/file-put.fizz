@@ -1,28 +1,35 @@
 ---
 # A Put on a file:// bucket (ADR-0278 Decision 1) and the reads that check an object against its attributes (Decision
 # 2). Two writers overwrite one key whose first object is whole; a reader and the blob mirror read it; the host may lose
-# power once. A file is a data inode or an attributes inode; a name points at an inode. A power loss keeps a name only
-# as the last directory sync left it, and a file's bytes only once that file was synced: an unsynced data file reads
-# back damaged (version 0), an unsynced attributes file does not decode.
+# power once. A file is a data inode or an attributes inode; a name points at an inode. A power loss keeps each name as
+# the last directory sync left it or, as a file system may persist one rename on its own, as it was at the cut; a file's
+# bytes survive only once that file was synced: an unsynced data file reads back damaged (version 0), an unsynced
+# attributes file does not decode.
 # Environment: the page cache and the disk are the two directories below; one directory sync stores every name the
-# directory holds at that moment, as fsync(2) on a directory does. Left out: the order in which a file system writes
-# names back on its own, and timestamp granularity (the design uses neither); objects written before ADR-0278, whose
-# attributes name no file and are checked against their MD5 alone (left to TestScenarioCorruptObjectRefused).
+# directory holds at that moment, as fsync(2) on a directory does. An identity names one write's data file only: the
+# writer sets its mtime above the last one it set, so a reused inode does not repeat an identity. Left out: objects
+# written before ADR-0278, whose attributes name no file and are checked against their MD5 alone, and damage after a
+# write (both left to TestScenarioCorruptObjectRefused).
 options:
   max_concurrent_actions: 3
-  max_actions: 12
+  max_actions: 13
   crash_on_yield: false
 ---
 # diagram: Writer.phase
 # mutant no-data-sync: AckedPutSurvives
 # mutant no-dir-sync: AckedPutSurvives
+# mutant no-attrs-sync: WholeNeverRefused
+# mutant ident-by-key: WholeNeverRefused
 # mutant pair-by-order: WholeNeverRefused
 # mutant mirror-old-rule: MirrorAgrees
 
 FIRST = 10
 # no-data-sync: the data file is renamed without its own sync (fileblob's writer, #1247).
 # no-dir-sync: the Put returns before its directory is synced.
-# pair-by-order: a read checks the MD5 whenever the attributes decode, without the data file's identity.
+# no-attrs-sync: the attributes file is renamed without its own sync.
+# ident-by-key: the attributes take the identity of the file at the key just before their rename, not the writer's own.
+# pair-by-order: a read checks the MD5 whenever the attributes decode, without the data file's identity (round 1's mtime
+#   rule, or an identity two writes can share).
 # mirror-old-rule: the mirror checks the MD5 whenever the attributes decode (ADR-0208 Decision 5 before this ADR).
 MUTANT = ""
 
@@ -46,7 +53,7 @@ role Writer:
             data_synced[self.dino] = True
         self.phase = "data synced"
 
-    # The attributes record the data's MD5 and the data file's identity (its inode).
+    # The attributes record the data's MD5 and the data file's identity, taken from the writer's own descriptor.
     atomic action WriteAttrs:
         require self.phase == "data synced" and cuts == 0
         ino = len(attrs_md5)
@@ -59,7 +66,8 @@ role Writer:
 
     atomic action SyncAttrs:
         require self.phase == "attrs written" and cuts == 0
-        attrs_synced[self.aino] = True
+        if MUTANT != "no-attrs-sync":
+            attrs_synced[self.aino] = True
         self.phase = "attrs synced"
 
     # The data first: a read racing the first overwrite of an object written before ADR-0278, whose attributes name no
@@ -71,6 +79,8 @@ role Writer:
 
     atomic action RenameAttrs:
         require self.phase == "data renamed" and cuts == 0
+        if MUTANT == "ident-by-key":
+            attrs_ident[self.aino] = cache["d"]
         cache["a"] = self.aino
         self.phase = "attrs renamed"
 
@@ -83,8 +93,9 @@ role Writer:
         acked.append(self.v)
         self.phase = "acknowledged"
 
-# A read takes the attributes, then opens the data; it checks the MD5 only when the open file is the one the
-# attributes name (Decision 2). mirror is the blob mirror's freeze, which must judge as a read does.
+# A read takes the attributes, then opens the data. Attributes that do not decode are refused; attributes naming the
+# open file are checked against its MD5; attributes naming another file are served unchecked (Decision 2). mirror is
+# the blob mirror's freeze, which must judge as a read does.
 role Reader:
     action Init:
         self.phase = "idle"
@@ -100,13 +111,14 @@ role Reader:
         d = cache["d"]
         a = self.aino
         self.phase = "idle"
-        decodes = a >= 0 and attrs_ok[a]
+        decodes = attrs_ok[a]
         paired = decodes and attrs_ident[a] == d
         if self.mirror and MUTANT == "mirror-old-rule":
             paired = decodes
         if not self.mirror and MUTANT == "pair-by-order":
             paired = decodes
-        if paired and attrs_md5[a] != data_ver[d] and data_ver[d] != 0:
+        refused = not decodes or (paired and attrs_md5[a] != data_ver[d])
+        if refused and data_ver[d] != 0:
             if self.mirror:
                 mirror_refused_whole.append(d)
             else:
@@ -115,8 +127,12 @@ role Reader:
 atomic action PowerCut:
     require cuts == 0
     cuts = 1
-    cache["d"] = disk["d"]
-    cache["a"] = disk["a"]
+    d = oneof [disk["d"], cache["d"]]
+    a = oneof [disk["a"], cache["a"]]
+    cache["d"] = d
+    cache["a"] = a
+    disk["d"] = d
+    disk["a"] = a
     for ino in data_synced:
         if not data_synced[ino]:
             data_ver[ino] = 0
