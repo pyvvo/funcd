@@ -53,7 +53,7 @@ func TestIssue662_ConsumerWaitsForTheLiveLakeProxy(t *testing.T) {
 	require.Zero(t, h.rt.creates, "no worker starts with the URL of a proxy this daemon does not run")
 	require.Equal(t, "LakeNotReady", h.condition(t, "reader", "Ready").Reason)
 
-	url, err := proxies.Ensure(auth.EntityRef{Type: v1.KindLake, Namespace: "default", Name: "lake"}, "http://127.0.0.1:9", "engine-token")
+	url, err := proxies.Ensure(auth.EntityRef{Type: v1.KindLake, Namespace: "default", Name: "lake"}, "http://127.0.0.1:9", "engine-token", "")
 	require.NoError(t, err)
 	require.NotEqual(t, cs.Status.Endpoint, url)
 	h.reconcile(t, "reader")
