@@ -667,45 +667,6 @@ func TestScenarioEngineReplacedAtMaxAge(t *testing.T) {
 	require.Contains(t, logs.String(), `msg="replacing an engine for a fresh key pair"`)
 }
 
-// scenario: save-interval-change (ADR-0274) — after a restart that changes lake.saveInterval, the restarted daemon
-// adopts the running engine with its interval (#1195), and the engine re-created at its key renewal carries the new one.
-func TestScenarioSaveIntervalChange(t *testing.T) {
-	host, port, closeFn := engineServer(t, 200)
-	defer closeFn()
-	rt := newFakeRuntime(host, port)
-	now := time.Unix(1_000_000, 0)
-	clock := func() time.Time { return now }
-	ctx := context.Background()
-	withInterval := func(v string) provider.ProviderSpec {
-		spec := specFor(host, port, nil)
-		spec.MaxAge = time.Hour
-		spec.Env["FUNCD_LAKE_SAVE_INTERVAL"] = v
-		return spec
-	}
-
-	before, _ := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindLake, Now: clock})
-	_, err := before.Converge(ctx, withInterval("1s"))
-	require.NoError(t, err)
-	rt.mu.Lock()
-	for id, in := range rt.instances {
-		in.CreatedAt = now
-		rt.instances[id] = in
-	}
-	rt.mu.Unlock()
-
-	after, _ := provider.NewRuntime(provider.Deps{Runtime: rt, OwnerKind: v1.KindLake, Now: clock})
-	_, err = after.Converge(ctx, withInterval("5s"))
-	require.NoError(t, err)
-	require.Len(t, rt.created, 1, "the restarted daemon adopts the running engine")
-	require.Equal(t, "1s", rt.created[0].Env["FUNCD_LAKE_SAVE_INTERVAL"], "which keeps its interval")
-
-	now = now.Add(time.Hour)
-	_, err = after.Converge(ctx, withInterval("5s"))
-	require.NoError(t, err)
-	require.Len(t, rt.created, 2, "the engine is re-created at its key renewal")
-	require.Equal(t, "5s", rt.created[1].Env["FUNCD_LAKE_SAVE_INTERVAL"], "and carries the new interval")
-}
-
 // scenario: workers-renewed (ADR-0270 Decision 5) — IssueEnv's pair reaches the engine Converge creates, and a pair of
 // a later key window replaces no running engine, since it is not part of the spec an engine is compared by (#1195).
 func TestScenarioIssuedEnvReplacesNoEngine(t *testing.T) {

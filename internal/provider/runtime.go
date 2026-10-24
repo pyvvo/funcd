@@ -70,7 +70,8 @@ type engineRuntime struct {
 	storageRoot string
 	// specs is the fingerprint of the spec each provider's engine was created from: a running engine of another spec
 	// is replaced, since a provider re-created or changed between two reconciler passes reaches Converge with its new
-	// spec while the old engine runs (#1195). After a restart a running engine is adopted, as it was before.
+	// spec while the old engine runs (#1195). The map starts empty, so a running engine this process did not create is
+	// adopted; after a daemon restart there is none, since the boot sweep removed the earlier run's (ADR-0167, ADR-0186).
 	specsMu sync.Mutex
 	specs   map[ProviderRef]string
 	now     func() time.Time
