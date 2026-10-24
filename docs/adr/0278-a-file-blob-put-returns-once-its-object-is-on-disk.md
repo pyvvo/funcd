@@ -1,6 +1,6 @@
 # ADR-0278: A file blob Put returns once its object is on disk, and a read refuses an object that lost its bytes
 
-- **Status**: Reviewing (2026-10-24; accepted that day under the decider's delegation; judged three times)
+- **Status**: Implemented (2026-10-24), review passed on its second round ([report](../reviews/adr-0278-implementation-claude-opus-5-5-2.md)); Reviewing 2026-10-24; accepted 2026-10-24 under the decider's delegation; judged three times
 - **Date**: 2026-10-24
 - **Deciders**: green-0-rabbit
 - **Tags**: blob, storage, durability, disaster-recovery
