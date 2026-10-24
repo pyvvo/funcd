@@ -3,6 +3,8 @@
 - **Status**: Implemented (2026-10-05)
 - **Superseded in part by**: [ADR-0183](0183-boot-timeout-from-start.md) (2026-10-05) — Contracts row runtime.bootTimeout (line 155): counted from the last successful Start.
 - **Superseded in part by**: [ADR-0194](0194-api-duration-strings.md) (2026-10-07) — the config value as any Go duration (124): it follows the duration grammar.
+- **Superseded in part by**: [ADR-0277](0277-a-containerd-worker-gets-one-stop-grace.md) (2026-10-24) — Decision 5's last sentence and its `TimeoutStopSec=30` invariant: `funcd install` writes
+  `TimeoutStopSec=45`, and the bound counts the grace plus 2 s and the private containerd's stop.
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged twice)
 - **Deciders**: green-0-rabbit
 - **Tags**: config, operability, controller, supervision, runtime, eventing, workflow

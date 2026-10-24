@@ -4,6 +4,8 @@
 - **Superseded in part by**: [ADR-0186](0186-containerd-clean-slate-at-boot.md) (2026-10-05) — Decision 8 (lines 133-135), on the private containerd only: the boot sweep also deletes each funcd-<ns> namespace's images, then the namespace.
 - **Superseded in part by**: [ADR-0187](0187-worker-identity-pid-start-boot.md) (2026-10-05) — Decisions 1 and 4, Contracts Entry/argvContains/Owned, scenario reused-pid-never-killed, plan step 1 and checklist line 208: identity is pid + start time + Linux boot ID.
 - **Superseded in part by**: [ADR-0194](0194-api-duration-strings.md) (2026-10-07) — the config values as any Go duration (121–122): they follow the duration grammar.
+- **Superseded in part by**: [ADR-0277](0277-a-containerd-worker-gets-one-stop-grace.md) (2026-10-24) — Decision 6's shutdown sentence: `Shutdown`'s bound is the runtime's grace plus 2 s, so a longer grace no longer
+  starves the flush.
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged once)
 - **Deciders**: green-0-rabbit
 - **Tags**: runtime, process-driver, containerd, crash-only, config
