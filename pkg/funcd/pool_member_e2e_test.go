@@ -185,12 +185,13 @@ func TestScenarioPooledMemberS3Identity(t *testing.T) {
 	forPoolLangs(t, func(t *testing.T, l poolLang) {
 		h, s3Addr := newS3ShimRig(t, l.python, master)
 		ctx := context.Background()
-		require.NoError(t, h.bucket.Put(ctx, "s3/default/lake/raw/x", []byte("raw-x"), blob.PutOptions{}))
 		obj, _ := v1.NewObject(v1.KindBucket)
 		b := obj.(*v1.Bucket)
 		b.Name = "lake"
 		b.Spec.Prefixes = []v1.BucketPrefix{{Name: "raw"}}
 		h.applyObj(t, b)
+		// Only once its Bucket exists: the boot reclaim purges an object of a Bucket it cannot find (ADR-0199, #1246).
+		require.NoError(t, h.bucket.Put(ctx, "s3/default/lake/raw/x", []byte("raw-x"), blob.PutOptions{}))
 		for _, n := range []string{"a", "b"} {
 			h.deploy(t, n, l.fn(l.creds).pooled("s3").with(func(fn *v1.Function) {
 				fn.Spec.Bindings.Blob = []v1.FunctionBlob{{Alias: "raw", Bucket: "lake", Prefix: "raw"}}
