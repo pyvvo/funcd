@@ -12658,5 +12658,20 @@
     "dod_total": 12,
     "report": "docs/reviews/issue-1232-fix-claude-opus-5-5.md",
     "notes": "pass; regression test fails on main and six mutants fail; duckdb lane 21/21 and its new case fails on main; reviewed in the producing session (decider, 2026-10-11); two findings routed to ADR-0276 (#1233) and ADR-0277 (#1234)"
+  },
+  {
+    "date": "2026-10-24",
+    "adr": "0275",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 2,
+    "dod_passed": 9,
+    "dod_total": 9,
+    "report": "docs/reviews/adr-0275-implementation-claude-opus-5-5.md",
+    "notes": "pass; 2 Minors (model), both fixed: the App design note's string prefix owners, the late Reviewing move; 5 mutants caught; gate PASS, duckdb lane PASS"
   }
 ]

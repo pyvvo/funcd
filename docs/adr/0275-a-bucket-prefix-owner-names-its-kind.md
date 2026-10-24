@@ -1,6 +1,6 @@
 # ADR-0275: A Bucket prefix's owner names its kind
 
-- **Status**: Reviewing (2026-10-24); Accepted 2026-10-24 by an `adr-batch` run the decider delegated ("you have batch"); judged twice:
+- **Status**: Implemented (2026-10-24), review passed with two Minors, both fixed ([report](../reviews/adr-0275-implementation-claude-opus-5-5.md)); Reviewing 2026-10-24; Accepted 2026-10-24 by an `adr-batch` run the decider delegated ("you have batch"); judged twice:
   round 1's two Majors (a Lake applied again binds its retained bucket by `ref`; SQLDatabase owners are not
   Function-only, now #1235) and its Minors folded, round 2 accepted
 - **Date**: 2026-10-24
