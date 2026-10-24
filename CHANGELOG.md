@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.28.0](https://github.com/pyvvo/funcd/compare/v0.27.0...v0.28.0) (2026-10-24)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** a Bucket prefix's owner names its kind (ADR-0275) ([#1237](https://github.com/pyvvo/funcd/issues/1237))
+
+### Features
+
+* **api:** a Bucket prefix's owner names its kind (ADR-0275) ([#1237](https://github.com/pyvvo/funcd/issues/1237)) ([5606318](https://github.com/pyvvo/funcd/commit/5606318f6a2c1a09f7e0c82205b88a98539a9333))
+* **lake:** a Lake shows when its catalog saves fail (ADR-0276) ([#1238](https://github.com/pyvvo/funcd/issues/1238)) ([bf26ced](https://github.com/pyvvo/funcd/commit/bf26cedff70c7fc85494cf576a09756da2fbad40))
+* **runtime:** a containerd worker gets one stop grace, set in funcdconfig.yaml (ADR-0277) ([#1239](https://github.com/pyvvo/funcd/issues/1239)) ([f3c7dfb](https://github.com/pyvvo/funcd/commit/f3c7dfbbabf0054155a4169cd0dde25e36dee2b2))
+
 ## [0.27.0](https://github.com/pyvvo/funcd/compare/v0.26.2...v0.27.0) (2026-10-24)
 
 
