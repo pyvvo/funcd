@@ -136,12 +136,13 @@ flowchart TB
 
 ## Design track — what to create + accept ahead
 
-- **Now**: draft, judge and accept P-A. It decides the engine's module, its OpenAI handler and the review of Bifrost's
-  modules, and it measures an engine's idle memory.
+- **Now**: draft, judge and accept P-A. It decides the engine's module and its OpenAI handler, reviews the licenses of
+  Bifrost's dependencies, and measures an idle engine's memory with an experiment, which sets the engine's default
+  memory limit.
 - **With P-A's build**: draft P-B. It carries the egress grant and the engine image.
 - **With P-B's build**: draft P-C. P-C is the riskiest ADR of the epoch: the route, the streaming, the errors and the
   helpers are hard to change once functions use them.
-- **With P-C's build**: draft P-D, P-E and P-F. P-D carries how an abandoned stream's tokens are estimated.
+- **With P-C's build**: draft P-D, P-E and P-F.
 
 ## Critical path & the exit-criterion spine
 

@@ -166,7 +166,4 @@ its function, `funcdctl dev` runs one of its functions against the real engine, 
 |---|---|
 | How agents' skills are stored and loaded | later, with the decider |
 | The AI gateway's monitoring: what the engine reports to funcd's telemetry; Bifrost offers a tracer interface and plugins | later, with the decider |
-| The license review of the modules Bifrost brings, and an engine's idle memory | the F193 ADR |
-| The exact names of the cap header and the cap's error type | the F195 ADR |
-| How the Python helper builds the socket transport for an OpenAI client | the F195 ADR |
-| How an abandoned stream's tokens are estimated when neither Bifrost nor the vendor reports them | the F196 ADR |
+| The licenses of the modules Bifrost brings; Bifrost's own module is Apache-2.0 | the F193 ADR |

@@ -155,13 +155,13 @@ caps instead, keyed on its gateways and bindings.
 
 ## Decisions
 
-All rows were decided with the decider on 2026-10-24.
+All rows were decided with the decider on 2026-10-24 and 2026-10-25.
 
 | Topic | Decision |
 |---|---|
 | Placement | one add-on engine per `AIGateway`, started when the gateway is applied, as for a Lake or a SQL database; the daemon keeps the binding checks, Cedar, the caps and the usage, and calls the engine |
 | Engine | funcd's own binary on Bifrost's core library, in the nested module `engines/ai/`; no fake engine anywhere: tests run the real engine against a local OpenAI-compatible server |
-| API | OpenAI's API only; `ctx.ai.openai()` returns an OpenAI client's settings (base URL, a transport over the function's socket, a placeholder key, a timeout of the time the function has left, no retries) and no SDK is bundled; the alias is the `model` field; the daemon talks to the engine in OpenAI's format too |
+| API | OpenAI's API only; the helper returns an OpenAI client's settings (base URL, a transport over the function's socket, a placeholder key, a timeout of the time the function has left, no retries) and no SDK is bundled: `ctx.ai.openai()` in TypeScript, and `openai_settings(context)` from a separate module, `funcd_shim.ai`, in Python, so that only the functions that use it load httpx (the shim is stdlib-only, ADR-0049); the alias is the `model` field; the daemon talks to the engine in OpenAI's format too |
 | Resource | `AIGateway`: its models, its usage database, its limits, timeout, idle limit and retries |
 | Models | a short `name`, a `type` (`chat` or `embedding`), a `vendor`, the vendor's `id`, a `url` for a self-hosted server, the `secret` entry of its key, a default `system` prompt and default `params` |
 | Keys | the gateway binds its Secrets (`bindings.secret`); each model names its entry; the entries reach the engine's environment at start; a changed Secret recreates the engine; two bound Secrets may not share an entry name |
@@ -172,10 +172,10 @@ All rows were decided with the decider on 2026-10-24.
 | Grants | Cedar `ai::call` on `AIGateway::"<ns>/<name>"`, granted by the binding; the model travels in the request context, so a Policy can forbid one model |
 | Egress | with egress control on, funcd registers the engine with the egress gateway and grants it the hosts its models name; nothing changes with egress control off |
 | Usage database | exactly one root `sql` entry on the gateway, declared by name or referenced with `ref`; no binding and no alias |
-| Caps | `limits.tokens` and `limits.requests`, each with a `max`, a fixed `window` in UTC (`minute`, `hour`, `day`, `week`, `month`) and a `tolerance`, a decimal fraction of `max` (0.05 when unset); a spent cap refuses new calls with OpenAI's 429 shape and a `Retry-After`; a running call is cut at `max` × (1 + `tolerance`) by lowering its token limit, and its answer reads `finish_reason: "length"` with a funcd response header; no cap in money |
+| Caps | `limits.tokens` and `limits.requests`, each with a `max`, a fixed `window` in UTC (`minute`, `hour`, `day`, `week`, `month`) and a `tolerance`, a decimal fraction of `max` (0.05 when unset); a spent cap refuses new calls with OpenAI's 429 shape and a `Retry-After`; a running call is cut at `max` × (1 + `tolerance`) by lowering its token limit, and its answer reads `finish_reason: "length"` with the header `X-Funcd-Cap: tokens` or `X-Funcd-Cap: requests`; a spent cap's error has `type: "funcd_cap"` and `code: "resource_exhausted"`; no cap in money |
 | Counting | the caps count from the usage rows: the daemon keeps them in memory and rebuilds them at start; a call waits for the database at boot; after a restore, the caps rewind with the database |
 | Usage rows | namespace, function, gateway, model, tokens in and out, duration, outcome, and the cost when the vendor reports it, empty otherwise |
-| Abandoned streams | Bifrost's billed usage first, then OpenRouter's generation lookup, then an estimate marked as estimated |
+| Abandoned streams | Bifrost's billed usage first, then OpenRouter's generation lookup, then an estimate of about 4 characters per token, for the prompt and for what was streamed, marked as estimated |
 | Streaming | the daemon passes OpenAI's events through as they arrive; it keeps the final usage for itself and passes it on only to a call that asked for `include_usage` |
 | Size | `ai.maxRequestBytes` in `funcdconfig.yaml`, 32 MiB by default, which fits one 20 MB image sent inline |
 | Errors | funcd writes its own refusals in OpenAI's error shape with funcd's statuses (`api/fault/problem.go`); vendor errors pass through unchanged, as the local API does for `ctx.invoke` and `ctx.fetch` (`UpstreamError`) |
@@ -184,6 +184,8 @@ All rows were decided with the decider on 2026-10-24.
 | Delete | refused while a Function binds the gateway, as for SQL |
 | Apps | an App declares gateways under `spec.aiGateways`, next to its stores; a gateway's `sql` entry references the App's database, and a gateway entry has no deletion policy |
 | Dev | `funcdctl dev` runs the real engine as a host process, with keys from the shell, `.env` or `env:` ([ADR-0254](../adr/0254-funcdctl-dev-config-file.md)) |
+| License | Bifrost's own module is plain Apache-2.0, checked on 2026-10-25; the licenses of its dependencies are reviewed in the engine ADR |
+| Engine memory | an experiment during the engine ADR measures an idle engine's memory, which sets the engine's default memory limit |
 
 ## Shapes
 
@@ -336,10 +338,12 @@ export async function handle(ctx: FunctionContext, event: CloudEvent<FuncInput>)
 ```
 
 ```python
+from funcd_shim import CloudEvent, FunctionContext
+from funcd_shim.ai import openai_settings
 from openai import OpenAI
 
 def handle(context: FunctionContext, event: CloudEvent[FuncInput]):
-    client = OpenAI(**context.ai.openai())
+    client = OpenAI(**openai_settings(context))
 
     answer = client.chat.completions.create(
         model="chat",
@@ -407,10 +411,7 @@ time      function  gateway    model  tokens_in  tokens_out  duration_ms  outcom
 |---|---|
 | How agents' skills are stored and loaded | later, with the decider |
 | The AI gateway's monitoring: what the engine reports to funcd's telemetry; Bifrost offers a `Tracer` interface and plugins (`otel`, `telemetry`, `logging`, `maxim`) that depend on its `framework` module | later, with the decider |
-| The license review of the modules Bifrost brings, and an engine's idle memory | the engine ADR |
-| The exact names of the cap header and the cap's error type | the access ADR |
-| How the Python helper builds the socket transport for an OpenAI client | the access ADR |
-| How an abandoned stream's tokens are estimated when neither Bifrost nor the vendor reports them | the limits ADR |
+| The licenses of the modules Bifrost brings; Bifrost's own module is Apache-2.0 | the engine ADR |
 
 ## Sources
 
