@@ -547,7 +547,8 @@ testcases:
   # exist, makes the S3 gateway refuse the engine's saves; a one-row table is inlined in the catalog, so the commit
   # itself lands in the engine, but its answer, and every answer after it, is an error (ADR-0279). CatalogSaved turns
   # False with the engine's error while the Lake stays Ready, and the engine's line reaches the daemon's journal. Given
-  # back, the next save turns it True. It runs before Function lake exists, as the cases before it do.
+  # back, the next query's save keeps the commit and turns it True. It runs before Function lake exists, as the cases
+  # before it do.
   - name: issue1233-failing-saves-show — a Lake whose catalog saves are refused reports it, and reports the next good save
     steps:
       - type: exec
@@ -606,6 +607,18 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldEqual APPLIED
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT n FROM lakehouse.issue1233_refused"}}'
+        retry: 30
+        delay: 2
+        info: "a query once the prefix is the Lake's again saves the waiting commit (ADR-0279) → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring "[[1233]]"
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
