@@ -96,3 +96,56 @@ Recorded: claude-opus-5-5 on ADR-0279 (implementation, round 2) → pass, 0/0/3,
 Pass. ADR-0279 is stamped `Implemented` and F192 `implemented`. The three Minors are a `heldTail` unit test, a real
 stop test with a call waiting, and one line of option doc; they can follow in this PR or later. The PR that implements
 the ADR closes #1255.
+
+## Round 3 addendum: pass stands — 0 blockers, 0 majors, 2 new minors  (e84c5883)
+
+This addendum reviews the commits after round 2 on the rebased branch: e84c5883 (a save call after the stop's detach
+answers the stop's upload), d900b311, 551250ba and 5ffc3dbe (tests), and 5e5fcd72 (the project summary). The checks
+ran in a worktree detached at e84c5883.
+
+### The fix is within Decision 2
+After `DETACH lakehouse`, no new transaction can use the catalog. A transaction that was already running ends before
+DuckDB closes the file, so its commit is in the closed catalog that the stop uploads. The stop's upload therefore
+covers the latest snapshot of any save call made after the detach. Such a call is one that the stop's upload covers,
+and it answers 200 with that upload's snapshot, as Decision 2 and the `POST /save` contract say. When the upload
+fails, the call answers 503, or its connection breaks because the engine exits first; the proxy fails the answer in
+both cases. The stop sets `stopping` in its own thread before the detach, so a call that fails on the detached catalog
+sees it; `stopped`, `covered` and `error` are written and read under the save lock. The calls that wait count toward the
+drain before `quack_stop`. Interval mode is unchanged: every new line is guarded by `saved`. No defect found.
+
+A probe on a real engine confirms it. During a stop with a 1 s upload, 20 save calls sent 100 ms apart all answered
+200, 10 of them after the detach, and the committed table was there after the restart. With the round-2 shim, those 10
+calls answered 503 `Catalog Error`. When S3 refused the stop's upload, no call answered 200: 10 got the refused save's
+503 and the others a broken connection.
+
+### Minor (new)
+- **The fix's trigger in `stop()` has no test** (`model`): `TestASaveCallAfterTheDetach` sets `stopping`, `stopped`
+  and `error` by hand. Removing `saved.stopping = True` from `stop()` restores the 503s after the detach, and setting
+  `stopped` before the upload would let a failed stop answer 200. Both mutants pass the 43 stub tests and the 13
+  real-engine tests listed under Checks. A test that runs `stop()` while a call that finds the catalog detached waits, once with a good
+  upload (200 with the closed catalog's snapshot) and once with a refused one (never 200), would pin both. Run on a
+  real engine, the same test would also close round 2's Minor 2.
+- **A rapid fail file is committed** (`model`): 551250ba adds
+  `internal/function/testdata/rapid/TestLakePathStateMachine/TestLakePathStateMachine-20261024220619-68757.fail`, which
+  rapid wrote when the state-machine test failed with 503s before 5ffc3dbe. rapid 1.3.0 replays every such file on each
+  run, so it now runs as a fixed case. It is the only fail file in the repository, and the commit does not mention it.
+  Remove it, or keep it on purpose and say so.
+
+### The round-2 findings
+- Minor 1 (the release order) and Minor 3 (the option doc) are fixed in d900b311. The
+  `TestHeldTailGivesTheLastByteAfterTheRelease` test fails a `heldTail` that holds no byte and the release-order mutant
+  in 3 of 3 runs each.
+- Minor 2 (the real-engine stop test) stands; see the first new Minor.
+- The routed project-summary item is done in 5e5fcd72.
+- The builder's gate found that 5aca61c8 broke the build of `internal/function`'s tests (the new `Ensure` parameter),
+  and that those tests' fake engines serve no save endpoint. 551250ba and 5ffc3dbe fix both. Rounds 1 and 2 vetted only
+  the touched packages and missed it; this round ran `go vet ./...`.
+
+### Checks
+- `go vet ./...` on the host and with `GOOS=linux`, which builds every package with its tests: exit 0.
+- `go test -race -count=1 ./internal/function/ ./internal/lake/gateway/ ./internal/services/lake/`: ok.
+- `shim_test.py`: 43 tests, OK.
+- `engine_test.py` in `funcd/runtime-duckdb`: the five ADR-0279 classes, the #1198 stop class and the two #1217
+  classes, 13 tests, OK, 54.3 s.
+- The ADR's substance is unchanged since its acceptance, with only the status line moved. ADR-0279 stays `Implemented`
+  and F192 `implemented`. The verdict does not change, so this round adds no ledger row.
