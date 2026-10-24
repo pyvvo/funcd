@@ -20,6 +20,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	authz "github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/blob"
+	"github.com/pyvvo/funcd/internal/platform/durable"
 )
 
 // defaultMaxUpload is the fail-closed buffer cap on a single buffered object when a
@@ -346,7 +347,7 @@ func LoadOrCreateMaster(masterSecretFile, dataDir string) ([]byte, error) {
 	if _, err := rand.Read(secret); err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "generate master secret")
 	}
-	if err := writeMaster(path, secret); err != nil {
+	if err := writeMaster(durable.Disk{}, path, secret); err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "persist master secret")
 	}
 	return secret, nil
@@ -395,7 +396,7 @@ func MigrateMaster(masterSecretFile, dataDir string, gatewayOn bool, logger *slo
 	case err != nil && !errors.Is(err, fs.ErrNotExist):
 		return fault.Wrapf(err, fault.Internal, op, "read master secret %q", target)
 	}
-	if err := writeMaster(target, old); err != nil {
+	if err := writeMaster(durable.Disk{}, target, old); err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "copy master secret to %q", target)
 	}
 	logger.Warn("s3gateway: copied the working-directory master secret under the data dir; remove the old file",
@@ -403,11 +404,17 @@ func MigrateMaster(masterSecretFile, dataDir string, gatewayOn bool, logger *slo
 	return nil
 }
 
-func writeMaster(path string, secret []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+// WriteMaster replaces the node master secret at path, as a restore installs it or rolls it back (ADR-0204).
+func WriteMaster(path string, secret []byte) error { return writeMaster(durable.Disk{}, path, secret) }
+
+// writeMaster writes the master durably: LoadOrCreateMaster makes a new one when the file is empty, which a power loss
+// after a plain write could leave, and every derived key pair and catalog token would change with it (#1244).
+func writeMaster(d durable.Disk, path string, secret []byte) error {
+	dir := filepath.Dir(path)
+	if err := d.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(path, secret, 0o600)
+	return d.WriteFile(dir, filepath.Base(path), secret, 0o600)
 }
 
 // sameFile reports whether a and b name one file after filepath.Abs and filepath.EvalSymlinks (ADR-0204 Decision 7).

@@ -23,6 +23,7 @@ import (
 	"github.com/pyvvo/funcd/internal/backup/envelope"
 	"github.com/pyvvo/funcd/internal/backup/escrow"
 	"github.com/pyvvo/funcd/internal/blob"
+	"github.com/pyvvo/funcd/internal/blob/s3gateway"
 	"github.com/pyvvo/funcd/internal/eventing/eventstore"
 	"github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/platform/hold"
@@ -348,7 +349,7 @@ func (r *restoring) undo() error {
 	}
 	if m := r.master; m != nil {
 		if m.existed {
-			errs = append(errs, os.WriteFile(m.path, m.old, 0o600))
+			errs = append(errs, s3gateway.WriteMaster(m.path, m.old))
 		} else {
 			errs = append(errs, removeFile(m.path))
 		}
@@ -492,7 +493,7 @@ func (r *restoring) installMaster(ctx context.Context, plan escrow.MasterPlan, m
 		if err := os.MkdirAll(filepath.Dir(plan.Path), 0o700); err != nil {
 			return fault.Wrapf(err, fault.Internal, op, "create the directory of %s", plan.Path)
 		}
-		if err := os.WriteFile(plan.Path, plan.Install, 0o600); err != nil {
+		if err := s3gateway.WriteMaster(plan.Path, plan.Install); err != nil {
 			return fault.Wrapf(err, fault.Internal, op, "write the master secret to %s", plan.Path)
 		}
 	}
