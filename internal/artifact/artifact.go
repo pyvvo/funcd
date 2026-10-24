@@ -41,6 +41,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/function"
+	"github.com/pyvvo/funcd/internal/platform/durable"
 	"github.com/pyvvo/funcd/internal/platform/httpx"
 )
 
@@ -605,6 +606,7 @@ func IsDigest(reference string) bool {
 type OrasMaterializer struct {
 	artifactDir string         // root for the per-digest artifact cache
 	node        v1.OCIPlatform // the platform this node runs: selects an index's manifest (ADR-0145)
+	disk        durable.Disk   // the cache's writes that a later start trusts (#1244)
 
 	mu        sync.Mutex
 	platforms map[string][]v1.OCIPlatform // per digest; an artifact digest is immutable
@@ -663,7 +665,7 @@ func (m *OrasMaterializer) Materialize(ctx context.Context, fn *v1.Function) (st
 	if path, ok, err := cachedArtifact(op, cacheDir); ok {
 		return path, err
 	}
-	if err := fillCache(ctx, op, ref, digest, cacheDir, m.node); err != nil {
+	if err := m.fillCache(ctx, op, ref, digest, cacheDir); err != nil {
 		return "", fault.Wrapf(err, fault.KindOf(err), op, "materialize %s/%s", fn.Namespace, fn.Name)
 	}
 	path, ok, err := cachedArtifact(op, cacheDir)
@@ -714,12 +716,14 @@ func cachedArtifact(op, cacheDir string) (path string, ok bool, err error) {
 
 // fillCache pulls the artifact into a temporary dir beside cacheDir and moves it into place only once the pull has
 // verified the digest and delivered the contract, then marks it pulled. A failed or corrupted pull therefore leaves
-// nothing a later call serves, and a dir no completed pull marked (one an older daemon left) is replaced.
-func fillCache(ctx context.Context, op, ref, digest, cacheDir string, node v1.OCIPlatform) error {
-	if err := os.MkdirAll(filepath.Dir(cacheDir), 0o755); err != nil {
+// nothing a later call serves, and a dir no completed pull marked (one an older daemon left) is replaced. The tree is
+// synced before the move, the move before the marker, so a power loss leaves no marker beside lost files (#1244).
+func (m *OrasMaterializer) fillCache(ctx context.Context, op, ref, digest, cacheDir string) error {
+	parent := filepath.Dir(cacheDir)
+	if err := m.disk.MkdirAll(parent, 0o755); err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "create artifact cache")
 	}
-	tmp, err := os.MkdirTemp(filepath.Dir(cacheDir), filepath.Base(cacheDir)+".pull-*")
+	tmp, err := os.MkdirTemp(parent, filepath.Base(cacheDir)+".pull-*")
 	if err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "create pull dir")
 	}
@@ -728,8 +732,11 @@ func fillCache(ctx context.Context, op, ref, digest, cacheDir string, node v1.OC
 	if err := os.Chmod(tmp, 0o755); err != nil { //nolint:gosec // non-secret RO code; the container user must traverse it
 		return fault.Wrapf(err, fault.Internal, op, "open pull dir")
 	}
-	if _, err := Pull(ctx, ref, digest, tmp, node); err != nil {
+	if _, err := Pull(ctx, ref, digest, tmp, m.node); err != nil {
 		return err
+	}
+	if err := m.disk.SyncTree(tmp); err != nil {
+		return fault.Wrapf(err, fault.Internal, op, "sync pull dir")
 	}
 	if _, ok, _ := cachedArtifact(op, cacheDir); ok {
 		return nil // a concurrent call filled it first; keep the dir a worker may already use
@@ -737,10 +744,13 @@ func fillCache(ctx context.Context, op, ref, digest, cacheDir string, node v1.OC
 	if err := os.RemoveAll(cacheDir); err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "remove unmarked cache dir")
 	}
-	if err := os.Rename(tmp, cacheDir); err != nil {
+	if err := m.disk.Rename(tmp, cacheDir); err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "move pull into cache")
 	}
-	if err := os.WriteFile(cacheDir+pulledMarker, nil, 0o600); err != nil {
+	if err := m.disk.SyncDir(parent); err != nil {
+		return fault.Wrapf(err, fault.Internal, op, "sync artifact cache")
+	}
+	if err := m.disk.WriteFile(parent, filepath.Base(cacheDir)+pulledMarker, nil, 0o600); err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "mark cache dir pulled")
 	}
 	return nil

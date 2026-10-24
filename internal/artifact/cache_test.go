@@ -5,15 +5,86 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/pyvvo/funcd/internal/artifact"
+	"github.com/pyvvo/funcd/internal/platform/durable"
 )
+
+// diskStep is one traced step of a durable write.
+type diskStep struct {
+	op   durable.Op
+	path string
+}
+
+// traceDisk records m's durable steps in order.
+func traceDisk(m *artifact.OrasMaterializer) *[]diskStep {
+	var steps []diskStep
+	artifact.TraceDisk(m, func(op durable.Op, path string) { steps = append(steps, diskStep{op, path}) })
+	return &steps
+}
+
+// Issue #1244: a power loss soon after a pull must not leave the pulled marker beside a cache dir whose files never
+// reached the disk, or the Function never starts again. Every file and dir of the pulled tree is synced before the
+// rename that publishes it, the artifact dir is synced after that rename, and the marker is written durably last.
+func TestIssue1244_CacheFillReachesTheDiskBeforeItsMarker(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	ref := layoutRef(t, "v1")
+	dir, entry := goodBundle(t)
+	digest, err := artifact.PushBundle(ctx, ref, dir, entry, "", "")
+	require.NoError(t, err)
+	cache := t.TempDir()
+	m := artifact.NewOrasMaterializer(cache, "")
+	steps := traceDisk(m)
+	_, err = m.Materialize(ctx, mkFunction(t, ref, digest))
+	require.NoError(t, err)
+
+	moved := slices.IndexFunc(*steps, func(s diskStep) bool {
+		return s.op == durable.Rename && filepath.Dir(s.path) == cache && !strings.HasSuffix(s.path, ".pulled")
+	})
+	require.GreaterOrEqual(t, moved, 0, "the pulled tree is renamed into the cache: %v", *steps)
+	cacheDir := (*steps)[moved].path
+	marked := slices.Index(*steps, diskStep{durable.Rename, cacheDir + ".pulled"})
+	require.Greater(t, marked, moved, "the marker is published after the tree: %v", *steps)
+
+	pullDir := slices.IndexFunc((*steps)[:moved], func(s diskStep) bool {
+		return s.op == durable.SyncDir && filepath.Dir(s.path) == cache && strings.HasPrefix(s.path, cacheDir+".pull-")
+	})
+	require.GreaterOrEqual(t, pullDir, 0, "the pull dir is synced before the rename: %v", *steps)
+	tmp := (*steps)[pullDir].path
+	synced := map[string]durable.Op{}
+	for _, s := range (*steps)[:moved] {
+		if rel, rerr := filepath.Rel(tmp, s.path); rerr == nil && !strings.HasPrefix(rel, "..") {
+			synced[rel] = s.op
+		}
+	}
+	require.NoError(t, filepath.WalkDir(cacheDir, func(path string, e fs.DirEntry, werr error) error {
+		require.NoError(t, werr)
+		rel, rerr := filepath.Rel(cacheDir, path)
+		require.NoError(t, rerr)
+		want := durable.SyncFile
+		if e.IsDir() {
+			want = durable.SyncDir
+		}
+		require.Equal(t, want, synced[rel], "%q of the pulled tree was not synced before the rename", rel)
+		return nil
+	}))
+
+	require.Contains(t, (*steps)[moved+1:marked], diskStep{durable.SyncDir, cache},
+		"the artifact dir is synced between the tree's rename and the marker's")
+	require.True(t, slices.ContainsFunc((*steps)[moved+1:marked], func(s diskStep) bool {
+		return s.op == durable.SyncFile && strings.HasPrefix(s.path, cacheDir+".pulled.tmp-")
+	}), "the marker is synced before its rename: %v", *steps)
+	require.Equal(t, diskStep{durable.SyncDir, cache}, (*steps)[len(*steps)-1], "the marker's dir sync is the fill's last step")
+}
 
 // layerBlob returns the file that holds the layer of media type mt of the artifact ref@digest in its local layout,
 // made writable so a test can corrupt or remove it.
