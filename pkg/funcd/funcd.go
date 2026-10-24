@@ -519,6 +519,7 @@ type Platform struct {
 	egressGateway        egress.Gateway            // transparent egress PEP (ADR-0117, F81); nil unless egress enabled
 	egressForwarder      egress.Forwarder          // DNS forwarder / domain trust anchor (ADR-0117); nil unless enabled
 	egressWorkers        *egress.MemoryWorkerIndex // src-IP → Ref, populated by the containerd runtime (ADR-0117 §5)
+	workerServices       workerServices            // runs s3gw, egressGateway and egressForwarder until Shutdown stops them
 
 	drainTimeout time.Duration // server.shutdownTimeout: bounds the HTTP, workflow-run and Sensor drains and a failed New's cleanup
 	shutdownOnce sync.Once
@@ -1648,14 +1649,12 @@ func (p *Platform) Run(ctx context.Context) error {
 		return abort(fault.Wrapf(err, fault.KindOf(err), "funcd.Run", "mark workflow kv stores"))
 	}
 
-	if p.s3gw != nil { // ADR-0080/0085: the S3-protocol frontend listener (opt-in; stops on ctx cancel)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	if p.s3gw != nil { // ADR-0080/0085: the S3-protocol frontend listener (opt-in; serves until Shutdown stops it)
+		p.workerServices.start(ctx, func(ctx context.Context) {
 			if err := p.s3gw.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 				p.logger.ErrorContext(ctx, "s3 gateway stopped", "error", err)
 			}
-		}()
+		})
 		// versitygw binds the address only once Run serves it, so a taken port fails Run here, before anything
 		// else starts, as a taken control-plane port fails New (#497, ADR-0028).
 		if err := p.s3gw.Wait(ctx); err != nil && ctx.Err() == nil {
@@ -1808,23 +1807,19 @@ func (p *Platform) Run(ctx context.Context) error {
 			p.runDeadLetterRetention(ctx)
 		}()
 	}
-	if p.egressForwarder != nil { // ADR-0117 (F81): the DNS forwarder / domain trust anchor (stops on ctx cancel)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	if p.egressForwarder != nil { // ADR-0117 (F81): the DNS forwarder / domain trust anchor (serves until Shutdown stops it)
+		p.workerServices.start(ctx, func(ctx context.Context) {
 			if err := p.egressForwarder.Serve(ctx); err != nil && !errors.Is(err, context.Canceled) {
 				p.logger.ErrorContext(ctx, "egress dns forwarder stopped", "error", err)
 			}
-		}()
+		})
 	}
-	if p.egressGateway != nil { // ADR-0117 (F81): the transparent egress PEP (no-op on non-Linux; stops on ctx cancel)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	if p.egressGateway != nil { // ADR-0117 (F81): the transparent egress PEP (no-op on non-Linux; serves until Shutdown stops it)
+		p.workerServices.start(ctx, func(ctx context.Context) {
 			if err := p.egressGateway.Serve(ctx); err != nil && !errors.Is(err, context.Canceled) {
 				p.logger.ErrorContext(ctx, "egress gateway stopped", "error", err)
 			}
-		}()
+		})
 	}
 	if p.egressWorkers != nil { // ADR-0117 §5: keep the src-IP→worker index synced from the running worker set
 		wg.Add(1)
@@ -1916,11 +1911,6 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 		if p.lakeProxy != nil {
 			p.lakeProxy.Shutdown()
 		}
-		// Stop the S3 gateway (ADR-0080/0085) before blob.Close — it serves from the blob substrate.
-		var s3gwErr error
-		if p.s3gw != nil {
-			s3gwErr = p.s3gw.Close()
-		}
 		// Close the runtime first (stops instances → log channels EOF), let every capture Route read its
 		// channel to the end and flush, then seal any remaining funclog segments, all before blob.Close()
 		// (the sink writes to blob) — ADR-0081.
@@ -1930,8 +1920,16 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 		if p.cfg.netManager != nil && runtimeErr == nil {
 			_ = p.cfg.netManager.Remove(ctx) // tear down the egress nftables tables (ADR-0115, F80)
 		}
+		// The S3 gateway, the egress gateway and the DNS forwarder stop only once the runtime has stopped the workers
+		// that use them (#1232). Their Serve ends first, so Close cannot fail a Serve that still runs; the S3 gateway
+		// serves from the blob substrate, so it closes before blob.Close (ADR-0080/0085).
+		p.workerServices.stop(ctx)
 		if p.egressGateway != nil {
 			_ = p.egressGateway.Close() // stop the transparent egress PEP (ADR-0117, F81)
+		}
+		var s3gwErr error
+		if p.s3gw != nil {
+			s3gwErr = p.s3gw.Close()
 		}
 		if p.fnReconciler != nil {
 			_ = p.fnReconciler.Close() // the pool workers are stopped, so their manifests can go

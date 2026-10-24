@@ -26,6 +26,7 @@
 # DuckDB sizes itself to its limit and spills a query larger than its memory, and lake-reader, with no limit, reads max.
 # The ADR-0269 case: a query that points an S3 secret at the VM's own address opens no connection there.
 # The #1227 case: tables committed just before a spec change replaces the engine are read back from the new engine.
+# The #1232 case: tables committed just before a graceful daemon stop are read back after the daemon starts again.
 name: lake-quack add-on provider — deploy + Ready + live SQL round-trip on real containerd (ADR-0086/0087/0088/0091)
 
 vars:
@@ -413,6 +414,84 @@ testcases:
         retry: 20
         delay: 2
         info: "the three tables from the new engine → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring "[[3]]"
+
+  # Issue #1232: a graceful daemon stop keeps every commit acknowledged before it. The daemon stopped the S3 gateway at
+  # SIGTERM, before it stopped the engine, so the engine's stop could not save its catalog. A daemon started with
+  # lake.saveInterval: 1h leaves the stop's own saves as the only ones; the file gets its own interval back once that
+  # daemon has read it. It runs before Function lake exists, as issue1227-redeploy-keeps-commits does.
+  - name: issue1232-daemon-stop-keeps-commits — tables committed just before a graceful daemon stop are read back after the start
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            set -e
+            sudo cp /opt/lane/funcdconfig.yaml /opt/lane/funcdconfig.yaml.issue1232
+            printf "\nlake:\n  saveInterval: 1h\n" | sudo tee -a /opt/lane/funcdconfig.yaml >/dev/null
+            sudo systemctl stop funcd-demo
+            echo STOPPED'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual STOPPED
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            systemctl is-active -q funcd-demo && exit 1
+            sudo systemctl reset-failed funcd-demo 2>/dev/null
+            sudo systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 /usr/local/bin/funcd --config /opt/lane/funcdconfig.yaml'
+        retry: 15
+        delay: 2
+        assertions:
+          - result.code ShouldEqual 0
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT 42 AS answer"}}'
+        retry: 60
+        delay: 2
+        info: "the daemon with a 1h save interval → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring "[[42]]"
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            set -e
+            sudo mv /opt/lane/funcdconfig.yaml.issue1232 /opt/lane/funcdconfig.yaml
+            for t in a b c; do
+              curl -sf -m 30 -X POST -H "content-type: application/json" \
+                --data "{\"data\":{\"sql\":\"CREATE TABLE lakehouse.issue1232_$t AS SELECT 1232 AS n\"}}" \
+                http://127.0.0.1:8081/function/lake-reader >/dev/null
+            done
+            sudo systemctl stop funcd-demo
+            echo COMMITTED_AND_STOPPED'
+        info: "three commits, then a graceful daemon stop → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual COMMITTED_AND_STOPPED
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            systemctl is-active -q funcd-demo && exit 1
+            sudo systemctl reset-failed funcd-demo 2>/dev/null
+            sudo systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=30 /usr/local/bin/funcd --config /opt/lane/funcdconfig.yaml'
+        retry: 15
+        delay: 2
+        assertions:
+          - result.code ShouldEqual 0
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT count(*) FROM (SELECT n FROM lakehouse.issue1232_a UNION ALL SELECT n FROM lakehouse.issue1232_b UNION ALL SELECT n FROM lakehouse.issue1232_c)"}}'
+        retry: 30
+        delay: 2
+        info: "the three tables after the start → status {{.result.statuscode}} body {{.result.body}}"
         assertions:
           - result.statuscode ShouldEqual 200
           - result.body ShouldContainSubstring "[[3]]"

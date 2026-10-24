@@ -245,6 +245,126 @@ func (r *fenceAtClose) Close() error {
 	return errors.Join(r.Runtime.Close(), r.err)
 }
 
+// Issue #1232: when Run's context ends, the S3 gateway, the egress gateway and the DNS forwarder keep serving while
+// the runtime stops the workers that use them (a stopping Lake engine saves its catalog through the gateway,
+// ADR-0273), and Shutdown stops them after that.
+func TestIssue1232_DaemonStopKeepsWorkerServicesUntilTheWorkersStop(t *testing.T) {
+	var (
+		rt      *servicesAtClose
+		gw, fwd *serveProbe
+		mu      sync.Mutex
+		stop    context.CancelFunc
+		ran     chan struct{}
+	)
+	logger, run := platformRun()
+	_, addr := startS3Gateway(t, freeLoopbackAddr, func(addr string) (*Platform, error) {
+		gw, fwd = newServeProbe(), newServeProbe()
+		rt = &servicesAtClose{addr: addr, gw: gw, fwd: fwd}
+		p, err := New(InMemory(), WithoutLogCompaction(), logger, WithS3Gateway(addr, "", 0, "", t.TempDir()), func(c *config) error {
+			rt.Runtime, c.runtime = process.New(c.logger), rt
+			return nil
+		})
+		if err == nil {
+			p.egressGateway, p.egressForwarder = gw, fwd
+		}
+		return p, err
+	}, func(ctx context.Context, p *Platform) error {
+		ctx, cancel := context.WithCancel(ctx)
+		done := make(chan struct{})
+		mu.Lock()
+		stop, ran = cancel, done
+		mu.Unlock()
+		defer close(done)
+		return run(ctx, p)
+	})
+	mu.Lock()
+	stopRun, runReturned := stop, ran
+	mu.Unlock()
+	stopRun()
+	select {
+	case <-runReturned:
+	case <-time.After(30 * time.Second):
+		t.Fatal("Run did not return after its context ended")
+	}
+	require.True(t, rt.closed, "Shutdown must close the runtime")
+	require.NoError(t, rt.s3Err, "the S3 gateway stopped serving before the runtime stopped the workers")
+	require.True(t, rt.gwLive, "the egress gateway stopped before the runtime stopped the workers")
+	require.True(t, rt.fwdLive, "the DNS forwarder stopped before the runtime stopped the workers")
+	for name, s := range map[string]*serveProbe{"egress gateway": gw, "DNS forwarder": fwd} {
+		select {
+		case <-s.exited:
+		default:
+			t.Fatalf("Shutdown returned while the %s still served", name)
+		}
+	}
+	require.False(t, gw.closedServing, "Shutdown closed the egress gateway before its Serve returned")
+	_, err := net.DialTimeout("tcp", addr, time.Second)
+	require.Error(t, err, "the S3 gateway still serves after Shutdown")
+}
+
+// servicesAtClose is a runtime that records, when Close runs, whether the S3 gateway still answers and whether the
+// egress gateway and the DNS forwarder still serve.
+type servicesAtClose struct {
+	runtime.Runtime
+	addr            string
+	gw, fwd         *serveProbe
+	closed          bool
+	s3Err           error
+	gwLive, fwdLive bool
+}
+
+func (r *servicesAtClose) Close() error {
+	r.closed, r.gwLive, r.fwdLive = true, r.gw.live(), r.fwd.live()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://"+r.addr+"/", nil)
+	if err == nil {
+		var resp *http.Response
+		if resp, err = (&http.Client{Timeout: 2 * time.Second}).Do(req); err == nil {
+			_ = resp.Body.Close()
+		}
+	}
+	r.s3Err = err
+	return r.Runtime.Close()
+}
+
+// serveProbe is an egress gateway or a DNS forwarder whose Serve runs until its context ends.
+type serveProbe struct {
+	egress.DomainResolver
+	mu            sync.Mutex
+	ctx           context.Context
+	closedServing bool // Close ran before Serve returned
+	exited        chan struct{}
+}
+
+func newServeProbe() *serveProbe { return &serveProbe{exited: make(chan struct{})} }
+
+func (s *serveProbe) Serve(ctx context.Context) error {
+	defer close(s.exited)
+	s.mu.Lock()
+	s.ctx = ctx
+	s.mu.Unlock()
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (s *serveProbe) Close() error {
+	s.mu.Lock()
+	started := s.ctx != nil
+	s.mu.Unlock()
+	select {
+	case <-s.exited:
+	default:
+		s.closedServing = started
+	}
+	return nil
+}
+
+// live reports whether Serve runs on a context that has not ended.
+func (s *serveProbe) live() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ctx != nil && s.ctx.Err() == nil
+}
+
 // Issue #489: a setup error in Run (egress isolation, TLS) stops the loops Run started and shuts the platform down
 // before Run returns it, so the daemon does not exit with its stores, listeners and runtime still open (ADR-0028).
 func TestIssue489_RunShutsDownOnSetupError(t *testing.T) {
