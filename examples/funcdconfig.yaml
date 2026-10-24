@@ -185,7 +185,7 @@ runtime:
   process:
     stopGrace: 3s                 # SIGTERM-to-SIGKILL wait for stop, shutdown and the boot reap (ADR-0167); 0 < d <= 10s. default: 3s; the stop budget is on server.shutdownTimeout
   # containerd:                   # used only when mode: containerd
-  #   stopGrace: 10s              # SIGTERM-to-SIGKILL wait for a single stop and the daemon stop (ADR-0277); 0 < d <= 10s. default: 10s; below about 6s a Lake stop with a query running is cut at every stop (ADR-0273)
+  #   stopGrace: 10s              # SIGTERM-to-SIGKILL wait for a single stop and the daemon stop (ADR-0277); 0 < d <= 10s. default: 10s; below about 6s, a Lake stop that waits out a running query is killed before its last save (ADR-0273)
   #   socket: ""                  # external containerd socket. default: "" (funcd manages a private one, ADR-0054)
   #   root: ""                    # containerd state root. default: <dataDir>/containerd
   #   snapshotter: overlayfs      # default: overlayfs
