@@ -29,13 +29,18 @@ first design's review is replaced.
   `TestScenarioPlanLakeRPO` and `TestScenarioPlanLakeRPOTooSmall`.
 - **Revert and mutant checks:** the reconciler scenario fails on main's reconciler (expected `3s`, actual empty), and
   the engine scenario fails against a shim whose interval is fixed at 1 s ("4 not found in (1, 2)").
+- **Restarts:** a changed value takes effect at the restart that loads it, since the boot sweep removes every engine
+  of the earlier run (ADR-0167, ADR-0186); the third judge round's contrary Major did not hold, and the provider
+  runtime's comment now says why its fingerprint map starts empty.
 - **Tracking:** ADR-0223 carries its `Superseded in part by` back-link; F187 moved with the ADR; issue #1222 states
   the platform key.
 
 ### Checks
-- `scripts/agent/gate.sh`: GATE_RESULT
-- `just test-duckdb-engine`: ENGINE_RESULT
+- `scripts/agent/gate.sh` at 9c248ce1: PASS (audit, `ci-full` 633 s, Linux build, Linux tests, stress 9 tests × 20
+  runs, tree-unchanged).
+- `just test-duckdb-engine`: 11 tests, OK, 73.8 s (the shim is unchanged since).
 - `shim_test.py`: 24 tests, OK.
-- `just lima-example duckdb`: LANE_RESULT
+- `just lima-example duckdb`: PASS, 19 of 19 cases (the shim is unchanged since).
 - `go test -race`, `go vet` and `golangci-lint` on `internal/platform/config`, `internal/services/lake`,
-  `internal/backup/plan`, `cmd/funcdctl` (also with `-tags dev`), `cmd/funcd` and `pkg/funcd`: PKG_RESULT
+  `internal/backup/plan`, `internal/provider`, `cmd/funcdctl` (also with `-tags dev`), `cmd/funcd` and `pkg/funcd`:
+  clean.

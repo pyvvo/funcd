@@ -1,6 +1,7 @@
 # ADR-0274: A Lake saves its catalog at the interval its recovery objective sets
 
-- **Status**: Accepted (2026-10-24) by the decider, before its merge: a platform key like the KV and blob intervals,
+- **Status**: Implemented (2026-10-24), review passed ([report](../reviews/adr-0274-implementation-claude-opus-5-5.md));
+  Reviewing 2026-10-24; Accepted 2026-10-24 by the decider, before its merge: a platform key like the KV and blob intervals,
   which replaced the first draft's per-Lake ConfigMap key; judged twice on the first draft and once on this design,
   whose Major (engines adopted across a restart keep the old value) did not hold: the boot sweep removes them
 - **Date**: 2026-10-24
