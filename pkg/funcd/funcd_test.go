@@ -280,6 +280,10 @@ func TestIssue1232_DaemonStopKeepsWorkerServicesUntilTheWorkersStop(t *testing.T
 	mu.Lock()
 	stopRun, runReturned := stop, ran
 	mu.Unlock()
+	// Run starts the egress gateway and the DNS forwarder after the S3 gateway answers, so the stop waits until they serve
+	// (#1241).
+	require.Eventually(t, func() bool { return gw.live() && fwd.live() }, 10*time.Second, 5*time.Millisecond,
+		"the egress gateway and the DNS forwarder serve before the daemon stops")
 	stopRun()
 	select {
 	case <-runReturned:
