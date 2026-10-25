@@ -1,6 +1,6 @@
 # ADR-0289: A Lake retries a failed catalog save until one succeeds
 
-- **Status**: Reviewing 2026-10-25; Accepted (2026-10-25) under the decider's delegation; judged once, six Minors folded
+- **Status**: Implemented (2026-10-25), review passed in its second round (cowork, no finding left); Reviewing 2026-10-25; Accepted (2026-10-25) under the decider's delegation; judged once, six Minors folded
 - **Date**: 2026-10-25
 - **Deciders**: green-0-rabbit
 - **Tags**: lake, duckdb, durability, disaster-recovery
