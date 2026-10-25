@@ -4,7 +4,8 @@
 # knows, which reports a save that covers the catalog's latest snapshot. Saves run one at a time: a save reads the
 # latest snapshot id, copies the catalog, then uploads the copy whole, and S3 may refuse the upload once. The engine may
 # crash once; it restarts as a new instance from the uploaded catalog, whose snapshot ids it then hands out again, and
-# the answers the old instance gave fail.
+# the answers the old instance gave fail. While the last save failed, a retry in the background saves again with no
+# answer waiting (ADR-0289).
 # Environment: an upload that returns is durable (ADR-0278); a copy holds every commit made before it (COPY FROM
 # DATABASE is one transaction, ADR-0271); an engine's answer ends only after its commit is visible to the save; every
 # answer passes the proxy (ADR-0137, lateral drop). Each commit carries a number of its own, so that a snapshot id handed
@@ -23,13 +24,14 @@ options:
 # mutant refused-marks-saved: AckedCommitsAreSaved
 # mutant release-across-restart: AckedCommitsAreSaved
 # mutant no-save-call: liveness
+# mutant no-retry: liveness
 
 SAVERS = [0, 1]
 CRASHES = 1
 # answer-first: the engine's answer goes out at once (the interval mode). id-after-copy: a save reads the snapshot id
 # after its copy. no-save-lock: two saves may run at once. refused-marks-saved: a refused upload still counts as a
 # save. release-across-restart: the proxy accepts a save report from another engine instance. no-save-call: the proxy
-# holds the answer but asks for no save.
+# holds the answer but asks for no save. no-retry: nothing saves again after a failed save until an answer waits.
 MUTANT = ""
 
 action Init:
@@ -42,6 +44,7 @@ action Init:
     engine = 0
     crashes = 0
     refusals = 0
+    failing = False
     acked = []
     save_phase = ["idle", "idle"]
     save_id = [0, 0]
@@ -102,6 +105,18 @@ atomic fair action SaveStart:
         save_id[i] = len(catalog)
     save_phase[i] = "copying"
 
+# The retry of a failed save, which no answer waits for (ADR-0289): it takes the save lock as a save call does.
+atomic fair action Retry:
+    require MUTANT != "no-retry"
+    i = oneof SAVERS
+    require up and failing and save_phase[i] == "idle"
+    if MUTANT != "no-save-lock":
+        require not locked
+    locked = True
+    if MUTANT != "id-after-copy":
+        save_id[i] = len(catalog)
+    save_phase[i] = "copying"
+
 atomic fair action SaveCopy:
     i = oneof SAVERS
     require up and save_phase[i] == "copying"
@@ -121,8 +136,10 @@ atomic fair action SaveUpload:
     if ok:
         blob = list(save_copy[i])
         saved = save_id[i]
+        failing = False
     else:
         refusals = 1
+        failing = True
         if MUTANT == "refused-marks-saved":
             saved = save_id[i]
     locked = False
@@ -142,6 +159,7 @@ atomic fair action Restart:
     saved = len(blob)
     locked = False
     save_phase = ["idle", "idle"]
+    failing = False
     up = True
 
 # Every commit a client saw acknowledged is in the uploaded catalog, so a crash keeps it.
@@ -151,3 +169,8 @@ always assertion AckedCommitsAreSaved:
 # No answer stays held: a save covers it, or it fails.
 always eventually assertion NoAnswerStaysHeld:
     return all([w.phase != "held" for w in writers])
+
+# A failed save does not stay the last one: once S3 accepts again a save succeeds, with or without an answer waiting,
+# so the engine reports saved again (ADR-0289).
+always eventually assertion SavesRecover:
+    return not failing
