@@ -1,6 +1,6 @@
 # ADR-0288: A boot reclaim quarantines the data no object names instead of deleting it
 
-- **Status**: Reviewing 2026-10-25; Accepted (2026-10-25, under the decider's delegation; judged twice)
+- **Status**: Implemented (2026-10-25), review passed ([report](../reviews/adr-0288-implementation-claude-opus-5-5.md)); Reviewing 2026-10-25; Accepted (2026-10-25, under the decider's delegation; judged twice)
 - **Date**: 2026-10-25
 - **Deciders**: green-0-rabbit
 - **Tags**: disaster-recovery, restore, storage, kv, blob, sql, volumes
