@@ -112,7 +112,8 @@ C2 was measured at commit `4810249` of `maximhq/bifrost` (2026-10-24). What the 
   (`internal/controlplane/admission/sqldatabase.go`).
 - **The add-on provider runtime** (ADR-0087, `internal/provider`): one engine container per resource, with the
   resolved Secret entries in the engine's environment, a readiness probe and one pinned replica. Engine images sit
-  under `images/runtime/`, and every engine so far builds another project's pinned code.
+  under `images/runtime/`; the rqlite image adds funcd's own entrypoint (`cmd/funcd-rqlite`), and the duckdb image
+  runs funcd's own engine code (`images/runtime/duckdb/shim.py`) on a pinned wheel.
 - **Store entries at the root** (ADR-0236, ADR-0248): an entry declares a store by name or references one with `ref`
   (`SQLDatabaseEntry`, `api/types/v1alpha1/app.go`); a Site binds its one bucket with an entry that has no alias
   (`BlobRef`, `api/types/v1alpha1/bindings.go`).
@@ -403,7 +404,8 @@ time      function  gateway    model  tokens_in  tokens_out  duration_ms  outcom
   `internal`, `pkg`, `cmd` and `docs`, 2026-10-24).
 - No streaming to a function: every local API route answers a whole body of at most 1 MiB.
 - No way out for an engine that calls a hosted vendor with egress control on.
-- No engine of funcd's own source, no AI engine image, and no funcd module depends on Bifrost's Go library.
+- No AI engine image, no engine binary built from funcd's own Go source in a module of its own, and no funcd module
+  depends on Bifrost's Go library.
 - No policy reads the Cedar request context.
 
 ## Open questions
@@ -411,7 +413,7 @@ time      function  gateway    model  tokens_in  tokens_out  duration_ms  outcom
 | Question | Decided in |
 |---|---|
 | How agents' skills are stored and loaded | later, with the decider |
-| The licenses of the modules Bifrost brings; Bifrost's own module is Apache-2.0 | the engine ADR |
+| The licenses of the modules Bifrost brings | decided in ADR-0280: all 80 are Apache-2.0, MIT, BSD or ISC |
 
 ## Sources
 

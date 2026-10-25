@@ -137,6 +137,7 @@ unpinned main branch into the global skills.
 | a call inside a larger expression is refused | `x = fn()` as its own statement first |
 | `self.x = other.fn()` crashes | assign to a local, then to the field |
 | `x.field = oneof [...]` assigns nothing; `oneof` inside a literal does not parse | choose into a local first |
+| a branch that writes nothing after a `oneof` ends in the choice point's state and is never explored (a retry's miss) | make the choice the action's first write |
 | one step creating several roles panics | append them one per step in a loop |
 | an unknown front-matter key is refused | checker directives are comments |
 | no tuple unpacking in `for` | index the tuple |
