@@ -254,19 +254,29 @@ func TestScenarioPlanLakeSetsNothing(t *testing.T) {
 	requireFile(t, file, commentedConfig)
 }
 
-// scenario: plan-lake-names-the-opt-in (ADR-0286) — lake.saveInterval set in the file: the first comment names it and
-// its loss bound (ADR-0274), the rest as without it.
+// scenario: plan-lake-names-the-opt-in (ADR-0286) — lake.saveInterval set in the file, or by the loader's
+// FUNCD_LAKE_SAVE_INTERVAL overlay: the first comment names it and its loss bound (ADR-0274), the rest as without it.
 func TestScenarioPlanLakeNamesTheOptIn(t *testing.T) {
 	dir := planEnv(t)
+	keySet := func(v string) string {
+		return "# lake: lake.saveInterval " + v + " answers a commit before its save: a crash can lose up to " + v +
+			" and the two saves around\n# it (ADR-0274). Without the key a Lake saves its catalog before it answers a " +
+			"commit (ADR-0279).\n"
+	}
 	file := filepath.Join(dir, "funcdconfig.yaml")
 	body := commentedConfig + "lake:\n  saveInterval: 1s\n"
 	writePlanFile(t, file, body, 0o600)
 	stdout, _, err := runPlan("lake", "--rpo", "10s")
 	require.NoError(t, err)
-	require.Equal(t, "# lake: lake.saveInterval 1s answers a commit before its save: a crash can lose up to 1s and the two "+
-		"saves around\n# it (ADR-0274). Without the key a Lake saves its catalog before it answers a commit (ADR-0279).\n"+
-		lakeWayBack("10s"), stdout)
+	require.Equal(t, keySet("1s")+lakeWayBack("10s"), stdout)
 	requireFile(t, file, body)
+
+	writePlanFile(t, file, commentedConfig, 0o600)
+	t.Setenv("FUNCD_LAKE_SAVE_INTERVAL", "2s")
+	stdout, _, err = runPlan("lake", "--rpo", "10s")
+	require.NoError(t, err)
+	require.Equal(t, keySet("2s")+lakeWayBack("10s"), stdout, "the key set by the environment, none in the file")
+	requireFile(t, file, commentedConfig)
 }
 
 // scenario: plan-edits-nothing (ADR-0286) — a commented config: the keys and the verify job on stdout, the file
