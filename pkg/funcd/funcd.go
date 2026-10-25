@@ -905,6 +905,7 @@ func (p *Platform) buildControlPlane() error {
 	}
 	fnReconciler, err := function.NewReconciler(function.Deps{
 		Store:                c.store,
+		QuarantinePeriod:     c.quarantinePeriodOrDefault(),
 		LogMaxRecordBytes:    cmp.Or(c.funclogMaxRecordBytes, funclog.DefaultMaxRecordBytes),
 		Calls:                calls,
 		InvokeSockets:        p.invokeMgr,
@@ -1231,6 +1232,7 @@ func (p *Platform) buildControlPlane() error {
 		Hold: c.gate(), Logger: p.logger, SupervisionPeriod: c.pacing.SupervisionPeriod,
 		DurableStorage: c.providerStorage != "" && !c.providerStorageEphemeral,
 		ChangeFeedURL:  p.sqlFeed.URL(p.sqlFeedHost, p.sqlFeedPort), Watermarks: feedWatermarks,
+		QuarantinePeriod: c.quarantinePeriodOrDefault(),
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build SQLDatabase reconciler")

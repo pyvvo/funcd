@@ -13,6 +13,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/platform/quarantine"
 	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/volume"
@@ -154,14 +155,15 @@ func TestScenarioQuarantineReturnedVolume(t *testing.T) {
 	require.Equal(t, fault.Conflict, fault.KindOf(ret.Return(r.ctx, cartStateRef(), time.Time{})), "the volume holds a file")
 	require.NoError(t, os.Remove(filepath.Join(dir, "new.db")))
 
-	require.NoError(t, ret.Return(r.ctx, cartStateRef(), time.Time{}))
+	api := hold.QuarantineReturn{Kind: v1.KindFunction, Namespace: "orders", Name: "cart", Volume: "state"}
+	require.NoError(t, r.admin.ReturnQuarantined(r.ctx, api), "through the admin API")
 	b, err := os.ReadFile(filepath.Join(dir, "orders.db"))
 	require.NoError(t, err)
 	require.Equal(t, "rows", string(b), "the data is back in the Function's volume")
 	entries, err := r.p.fnReconciler.Quarantine().List(r.ctx)
 	require.NoError(t, err)
 	require.Empty(t, entries)
-	require.Equal(t, fault.NotFound, fault.KindOf(ret.Return(r.ctx, cartStateRef(), time.Time{})), "run again: no entry")
+	require.Equal(t, fault.NotFound, fault.KindOf(r.admin.ReturnQuarantined(r.ctx, api)), "run again: no entry")
 }
 
 func (r *wbRig) getFunctionUID(name v1.ObjectName) v1.UID {

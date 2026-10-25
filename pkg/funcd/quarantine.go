@@ -273,6 +273,14 @@ func (p *Platform) quarantineStores() []quarantine.Store {
 	if p.kvReconciler != nil {
 		stores = append(stores, p.kvReconciler.Quarantine())
 	}
+	if p.sqlReconciler != nil {
+		stores = append(stores, p.sqlReconciler.Quarantine())
+	}
+	if p.fnReconciler != nil {
+		if s := p.fnReconciler.Quarantine(); s != nil { // nil while volumes are off
+			stores = append(stores, s)
+		}
+	}
 	return stores
 }
 
@@ -376,10 +384,17 @@ func (h holdPlatform) ReturnQuarantined(ctx context.Context, r hold.QuarantineRe
 		}
 	case v1.KindBucket:
 		ret = bucketQuarantine{shared: h.p.cfg.blob, store: h.p.cfg.store}
+	case v1.KindFunction:
+		if err := r.Volume.Validate(); err != nil {
+			return fault.Wrapf(err, fault.Invalid, op, "a Function's quarantine returns a volume: volume")
+		}
+		if h.p.fnReconciler != nil {
+			ret, _ = h.p.fnReconciler.Quarantine().(quarantine.Returner)
+		}
 	default:
-		return fault.Invalidf(op, "kind %q: the quarantine returns KVStore and Bucket data", r.Kind)
+		return fault.Invalidf(op, "kind %q: the quarantine returns KVStore, Bucket and Function volume data", r.Kind)
 	}
-	if r.Volume != "" {
+	if r.Kind != v1.KindFunction && r.Volume != "" {
 		return fault.Invalidf(op, "volume %q applies to kind Function", r.Volume)
 	}
 	if ret == nil {
@@ -395,6 +410,6 @@ func (h holdPlatform) ReturnQuarantined(ctx context.Context, r hold.QuarantineRe
 	if r.Since != nil {
 		since = time.Time(*r.Since)
 	}
-	ref := quarantine.Ref{ObjectRef: v1.ObjectRef{Kind: r.Kind, Namespace: r.Namespace, Name: r.Name}}
+	ref := quarantine.Ref{ObjectRef: v1.ObjectRef{Kind: r.Kind, Namespace: r.Namespace, Name: r.Name}, Volume: r.Volume}
 	return ret.Return(ctx, ref, since)
 }
