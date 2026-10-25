@@ -1,0 +1,135 @@
+---
+# A stream its function abandons (ADR-0283 Decision 7, ADR-0280 Decision 5). The daemon posts the call's cancel to
+# the engine and reads the stream on, up to a bound. The engine cancels the vendor's request, drains Bifrost's stream
+# for the billed usage, else looks the usage up at OpenRouter (three tries, one tick apart), and ends the stream with
+# an event carrying what it found. The daemon writes the engine's usage when that event arrives within its bound,
+# else an estimate. An engine restart breaks the stream.
+# Environment: the clock ticks one try at a time; the vendor bills or not; OpenRouter's record shows on any try or
+# never; reading an event or a stream's end takes no time; the engine may restart or hang once.
+deadlock_detection: false
+options:
+  # The daemon and the engine; every action is atomic.
+  max_concurrent_actions: 2
+  max_actions: 16
+  crash_on_yield: false
+---
+# diagram: daemon
+# diagram: engine
+# mutant close-instead-of-cancel: EngineUsageIsRecorded
+# mutant bound-below-lookup: EngineUsageIsRecorded
+# mutant no-final-event: EngineUsageIsRecorded
+# mutant no-timeout: liveness
+
+TRIES = 3
+# The daemon's bound on its read after the cancel, in ticks; above the lookup's three tries.
+BOUND = 4
+END = 8
+# close-instead-of-cancel: the daemon closes its connection instead of posting the cancel, so no event reaches it.
+# bound-below-lookup: the daemon's bound is shorter than the engine's lookup.
+# no-final-event: the engine ends the stream without the usage event.
+# no-timeout: the daemon waits for the engine with no bound.
+MUTANT = ""
+
+action Init:
+    daemon = "forwarding"
+    engine = "streaming"
+    found = "none"
+    cancelled = False
+    sent = False
+    restarts = 0
+    hangs = 0
+    now = 0
+    posted_at = 0
+    last_try = -1
+    tries = 0
+
+atomic action Abandon:
+    require daemon == "forwarding"
+    cancelled = True
+    posted_at = now
+    if MUTANT == "close-instead-of-cancel":
+        daemon = "estimate"
+    else:
+        daemon = "waiting"
+
+atomic fair action Cancel:
+    require engine == "streaming" and cancelled
+    billed = oneof [True, False]
+    if billed:
+        found = "billed"
+        engine = "ending"
+    else:
+        engine = "looking"
+
+# The choice comes first: in FizzBee v0.5.4 a branch that writes nothing after a choice is not explored.
+atomic fair action Lookup:
+    require engine == "looking" and now > last_try
+    hit = oneof [True, False]
+    last_try = now
+    tries = tries + 1
+    if hit:
+        found = "lookup"
+        engine = "ending"
+    elif tries == TRIES:
+        engine = "ending"
+
+atomic fair action End:
+    require engine == "ending"
+    if MUTANT != "no-final-event":
+        sent = True
+    engine = "ended"
+
+atomic fair action Read:
+    require daemon == "waiting" and sent
+    if found != "none":
+        daemon = "usage"
+    else:
+        daemon = "estimate"
+
+atomic fair action Timeout:
+    require daemon == "waiting" and not sent
+    require MUTANT != "no-timeout"
+    bound = BOUND
+    if MUTANT == "bound-below-lookup":
+        bound = 2
+    require now - posted_at >= bound
+    daemon = "estimate"
+
+# The stream ends without a usage event: the daemon estimates at once.
+atomic fair action Ended:
+    require daemon == "waiting" and engine == "ended" and not sent
+    daemon = "estimate"
+
+# The engine hangs before it ends the stream: only the daemon's bound ends the wait.
+atomic action Hang:
+    require hangs < 1 and engine in ["looking", "ending"]
+    hangs = hangs + 1
+    engine = "stuck"
+
+# The key changes or the engine crashes: the stream breaks, and the daemon estimates.
+atomic action Restart:
+    require restarts < 1 and engine in ["streaming", "looking", "ending"]
+    restarts = restarts + 1
+    engine = "gone"
+
+atomic fair action Broken:
+    require daemon == "waiting" and engine == "gone"
+    daemon = "estimate"
+
+# Time passes only after the abandon, and only when no step is due now.
+atomic fair action Tick:
+    require now < END
+    require daemon != "forwarding"
+    require not (engine == "streaming" and cancelled)
+    require not (engine == "looking" and now > last_try)
+    require not (engine == "ending")
+    require not (daemon == "waiting" and (sent or engine == "gone"))
+    now = now + 1
+
+# Usage the engine found is never replaced by an estimate, unless the engine is gone or stuck.
+always assertion EngineUsageIsRecorded:
+    return not (daemon == "estimate" and found != "none" and engine not in ["gone", "stuck"])
+
+# The daemon always decides an abandoned call's row: the engine's usage or an estimate.
+eventually always assertion RowIsDecided:
+    return daemon in ["forwarding", "usage", "estimate"]

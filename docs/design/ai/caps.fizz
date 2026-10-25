@@ -1,0 +1,130 @@
+---
+# The token cap of an AIGateway over one window (ADR-0283 Decisions 3 to 6). The daemon admits a call while the cap is
+# not spent, grants it the completion tokens the room still holds, and counts the call's tokens when it ends; the
+# call's usage row is queued and written later. A daemon crash loses the counters, the queue and the calls in flight;
+# at start the counters are rebuilt from the written rows, and calls wait until they are loaded.
+# Environment: one window (a rollover starts new counters, left to tests); the usage database answers once loaded;
+# the vendor ends a call with no completion tokens or with all it was granted, the two ends of the range.
+deadlock_detection: false
+options:
+  # Two calls racing for one room; every action is atomic.
+  max_concurrent_actions: 2
+  max_actions: 12
+  crash_on_yield: false
+---
+# diagram: Call.phase
+# mutant no-hold: CompletionWithinCeiling
+# mutant admit-before-load: CompletionWithinCeiling
+# mutant admit-when-spent: AdmittedOnlyBelowMax
+# mutant leak-hold: CompletionWithinCeiling
+# mutant never-load: liveness
+# mutant never-write: liveness
+
+MAX = 4
+# MAX × (1 + tolerance), rounded down.
+CEILING = 5
+# Each call's prompt tokens, counted when it ends, and its own completion limit.
+PROMPT = 1
+LIMIT = 3
+# no-hold: the room ignores the grants of the calls in flight.
+# admit-before-load: a call is admitted before the counters are rebuilt.
+# admit-when-spent: a call is admitted although the cap is spent.
+# leak-hold: an ended call keeps its grant.
+# never-load: the counters are never rebuilt after a crash, so calls wait for good.
+# never-write: a queued row is never written.
+MUTANT = ""
+
+role Call:
+    action Init:
+        self.phase = "new"
+        self.grant = 0
+        self.used_at_admit = 0
+
+    atomic action Admit:
+        require self.phase == "new"
+        if MUTANT != "admit-before-load":
+            require loaded
+        if MUTANT != "admit-when-spent":
+            if used_in + used_out >= MAX:
+                self.phase = "refused"
+                return
+        room = CEILING - used_in - used_out - held
+        if MUTANT == "no-hold":
+            room = CEILING - used_in - used_out
+        if room < 1:
+            self.phase = "refused"
+            return
+        g = min(room, LIMIT)
+        self.grant = g
+        self.used_at_admit = used_in + used_out
+        held = held + g
+        self.phase = "running"
+
+    atomic fair action End:
+        require self.phase == "running"
+        out = oneof [0, self.grant]
+        if MUTANT != "leak-hold":
+            held = held - self.grant
+        used_in = used_in + PROMPT
+        used_out = used_out + out
+        queue.append([PROMPT, out])
+        self.phase = "ended"
+
+atomic fair action Write:
+    require len(queue) > 0
+    require MUTANT != "never-write"
+    rows.append(queue[0])
+    queue = queue[1:]
+
+# The daemon stops without its counters or queue; the calls in flight end with it, unrecorded.
+atomic action Crash:
+    require crashes < 1
+    crashes = crashes + 1
+    queue = []
+    loaded = False
+    used_in = 0
+    used_out = 0
+    held = 0
+    for c in calls:
+        if c.phase == "running":
+            c.phase = "lost"
+
+atomic fair action Load:
+    require not loaded
+    require MUTANT != "never-load"
+    total_in = 0
+    total_out = 0
+    for r in rows:
+        total_in = total_in + r[0]
+        total_out = total_out + r[1]
+    used_in = total_in
+    used_out = total_out
+    loaded = True
+
+action Init:
+    used_in = 0
+    used_out = 0
+    held = 0
+    loaded = True
+    crashes = 0
+    queue = []
+    rows = []
+    calls = []
+    for i in range(2):
+        calls.append(Call(id=i))
+
+# The completion tokens counted and granted never pass the ceiling.
+always assertion CompletionWithinCeiling:
+    return used_out + held <= CEILING
+
+# A call is admitted only while the cap is below its max.
+always assertion AdmittedOnlyBelowMax:
+    return all([c.used_at_admit < MAX for c in calls if c.phase in ["running", "ended", "lost"]])
+
+# The wait at start ends: the counters are rebuilt, so waiting calls go on.
+eventually always assertion CountersLoad:
+    return loaded
+
+# Every queued usage row is written, or lost with a crash: the queue drains.
+eventually always assertion RowsAreWritten:
+    return len(queue) == 0
