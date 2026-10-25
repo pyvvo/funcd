@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.30.0](https://github.com/pyvvo/funcd/compare/v0.29.0...v0.30.0) (2026-10-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* **funcdctl:** backup plan prints an example and edits no file (ADR-0286)
+
+### Features
+
+* **backup:** a platform restore finds the Backups its schedules made after the restored point (ADR-0287) ([9fac108](https://github.com/pyvvo/funcd/commit/9fac108838fd653671ae354c1a9abfbc7f011217))
+* **funcdctl:** backup plan prints an example and edits no file (ADR-0286) ([9fac108](https://github.com/pyvvo/funcd/commit/9fac108838fd653671ae354c1a9abfbc7f011217))
+* **lake:** a Lake retries a failed catalog save until one succeeds (ADR-0289) ([9fac108](https://github.com/pyvvo/funcd/commit/9fac108838fd653671ae354c1a9abfbc7f011217))
+* **storage:** a boot reclaim quarantines the data no object names instead of deleting it (ADR-0288) ([9fac108](https://github.com/pyvvo/funcd/commit/9fac108838fd653671ae354c1a9abfbc7f011217))
+
 ## [0.29.0](https://github.com/pyvvo/funcd/compare/v0.28.0...v0.29.0) (2026-10-24)
 
 
