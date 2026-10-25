@@ -319,7 +319,7 @@ type Config struct {
 	Lake struct {
 		// SaveInterval is how often a Lake engine saves its catalog after a commit, the Lake's recovery point
 		// (ADR-0274): an ADR-0194 duration from 500ms to 1h, an opt-in; empty, every answer waits for a save that
-		// covers it (ADR-0279). funcdctl backup plan lake derives it.
+		// covers it (ADR-0279). It is set by hand: funcdctl backup plan sets no Lake key (ADR-0286).
 		SaveInterval string `json:"saveInterval,omitempty" env:"FUNCD_LAKE_SAVE_INTERVAL"`
 		// EnginePollInterval and EngineProbeTimeout pace the wait for an engine's readiness probe (ADR-0163).
 		EnginePollInterval string `json:"enginePollInterval,omitempty" env:"FUNCD_LAKE_ENGINE_POLL_INTERVAL"`

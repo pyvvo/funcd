@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -97,24 +95,24 @@ func (a *cli) backupVerifyCmd() *cobra.Command {
 
 const planOp = "funcdctl backup plan"
 
-// planFlags are backup plan's flags (ADR-0223 Decision 1).
+// planFlags are backup plan's flags (ADR-0223 Decision 1, ADR-0286).
 type planFlags struct {
 	rpo, keep, rto, size, speed, config, file string
-	write                                     bool
 }
 
-// backupPlanCmd turns recovery objectives into settings, offline (ADR-0223, ADR-0274): it builds no SDK client.
+// backupPlanCmd prints the settings recovery objectives give, offline (ADR-0223, ADR-0286): it builds no SDK client
+// and writes no file.
 func (a *cli) backupPlanCmd() *cobra.Command {
 	var f planFlags
 	cmd := &cobra.Command{
 		Use:   "plan <platform|kv|blob|lake|schedule>",
-		Short: "Turn recovery objectives into backup settings the daemon accepts (offline)",
-		Long: "Turn recovery objectives into backup settings: --rpo (the most data a loss may take) and --keep (how far " +
-			"back a restore point must reach) set the platform, kv, blob or lake keys of funcdconfig.yaml, or the " +
-			"schedule and ttl of a BackupSchedule (-f). The result passes the daemon's own loader, then is printed, " +
-			"or written in place with --write. --rto with --size and --speed checks the download time, a lower " +
-			"bound: only a restore drill proves an RTO. Exit 1: refused, nothing written; 3: the RTO is below the " +
-			"download time.",
+		Short: "Print the backup settings recovery objectives give, as an example the daemon accepts (offline)",
+		Long: "Print the backup settings recovery objectives give, as an example: --rpo (the most data a loss may take) " +
+			"and --keep (how far back a restore point must reach) give the platform, kv or blob keys of " +
+			"funcdconfig.yaml, or the schedule and ttl of a BackupSchedule (-f); lake says why a Lake needs no key. " +
+			"The example passes the daemon's own loader merged into the located file, then is printed; no file is " +
+			"written. --rto with --size and --speed checks the download time, a lower bound: only a restore drill " +
+			"proves an RTO. Exit 1: refused, nothing printed; 3: the RTO is below the download time.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c := plan.Component(args[0])
@@ -137,7 +135,6 @@ func (a *cli) backupPlanCmd() *cobra.Command {
 	fl.StringVar(&f.config, "config", "", "platform, kv, blob, lake: path to funcdconfig.yaml (else $FUNCD_CONFIG, "+
 		"./funcdconfig.yaml, /etc/funcd/funcdconfig.yaml)")
 	fl.StringVarP(&f.file, "file", "f", "", "schedule: a manifest holding one BackupSchedule; - for stdin")
-	fl.BoolVar(&f.write, "write", false, "edit the file in place instead of printing")
 	return cmd
 }
 
@@ -155,8 +152,6 @@ func (f planFlags) objectives(c plan.Component, changed func(string) bool) (plan
 			return o, fault.Invalidf(planOp, "--config applies to platform, kv, blob and lake; schedule reads -f")
 		case f.file == "":
 			return o, fault.Invalidf(planOp, "schedule needs -f <manifest>")
-		case f.write && f.file == "-":
-			return o, fault.Invalidf(planOp, "--write needs a file: -f - reads stdin")
 		}
 	default:
 		return o, fault.Invalidf(planOp, "component %q: want platform, kv, blob, lake or schedule", c)
@@ -209,14 +204,12 @@ func (f planFlags) objectives(c plan.Component, changed func(string) bool) (plan
 	return o, nil
 }
 
-// planConfig plans the platform, kv or blob keys of the located config file (Decisions 2-4).
+// planConfig plans the platform, kv, blob or lake keys of the located config file (Decisions 2-4, ADR-0286): the
+// keys are checked merged into the file's bytes in memory, then printed as an example.
 func (a *cli) planConfig(stderr io.Writer, c plan.Component, o plan.Objectives, f planFlags) error {
 	path, err := config.Locate(f.config)
 	if err != nil {
 		return err
-	}
-	if f.write && path == "" {
-		return fault.NotFoundf(planOp, "--write: no config file found: give --config or set $FUNCD_CONFIG")
 	}
 	var data []byte
 	if path != "" {
@@ -232,7 +225,7 @@ func (a *cli) planConfig(stderr io.Writer, c plan.Component, o plan.Objectives, 
 	if err != nil {
 		return err
 	}
-	merged, changes, err := plan.Apply(data, "", settings)
+	merged, err := plan.Apply(data, "", settings)
 	if err != nil {
 		return err
 	}
@@ -240,25 +233,48 @@ func (a *cli) planConfig(stderr io.Writer, c plan.Component, o plan.Objectives, 
 	if err != nil {
 		return err
 	}
-	notes := make([]string, 0, len(warns)+1)
+	notes := make([]string, 0, len(warns))
 	for _, w := range warns {
 		notes = append(notes, "warning: "+w.Key+": "+w.Message)
 	}
-	if c == plan.Platform && o.RPO > 0 {
-		interval := (o.RPO / 2).Truncate(time.Millisecond)
-		notes = append(notes, fmt.Sprintf("run funcdctl backup verify every %s: (backup.objectives.rpo − "+
-			"backup.interval) / 2 (ADR-0205)", v1.Duration(((o.RPO-interval)/2).Truncate(time.Millisecond))))
-	}
-	printed, _, err := plan.Apply(nil, "", settings)
+	printed, err := plan.Apply(nil, "", settings)
 	if err != nil {
 		return err
 	}
-	return a.planFinish(stderr, o, notes, planResult{path: path, edited: merged, printed: printed, changes: changes,
-		write: f.write, next: "restart funcd to apply"})
+	switch {
+	case c == plan.Platform && o.RPO > 0:
+		printed = append(printed, verifyJob(o.RPO)...)
+	case c == plan.Lake:
+		printed = append(printed, lakeNote(o.RPO, cur.Lake.SaveInterval)...)
+	}
+	return a.planFinish(stderr, o, notes, printed)
+}
+
+// verifyJob is the example's comment naming ADR-0205 Decision 6's verify job, run every (rpo − interval) ÷ 2 for
+// Derive's interval of rpo ÷ 2 (ADR-0286 Decision 2).
+func verifyJob(rpo time.Duration) string {
+	interval := (rpo / 2).Truncate(time.Millisecond)
+	return fmt.Sprintf("# run funcdctl backup verify every %s, off the funcd host: (backup.objectives.rpo − "+
+		"backup.interval) / 2 (ADR-0205)\n", v1.Duration(((rpo - interval) / 2).Truncate(time.Millisecond)))
+}
+
+// lakeNote is the lake example, comments only (ADR-0286 Decision 3); set is lake.saveInterval as the loaded config
+// holds it, "" when unset.
+func lakeNote(rpo time.Duration, set string) string {
+	first := "# lake: no key to set: a Lake saves its catalog before it answers a commit (ADR-0279).\n"
+	if set != "" {
+		first = fmt.Sprintf("# lake: lake.saveInterval %s answers a commit before its save: a crash can lose up to %s "+
+			"and the two saves around\n# it (ADR-0274). Without the key a Lake saves its catalog before it answers a "+
+			"commit (ADR-0279).\n", set, set)
+	}
+	r := v1.Duration(rpo.Truncate(time.Millisecond))
+	return first + fmt.Sprintf("# If the blob store is lost, a Lake comes back from the blob mirror: funcdctl backup "+
+		"plan blob --rpo %s\n# An App's own backups of its Lakes are a BackupSchedule's (scope.lakes): funcdctl "+
+		"backup plan schedule -f <manifest> --rpo %s\n", r, r)
 }
 
 // planSchedule plans the schedule and ttl of the manifest's one BackupSchedule, checked by apply's pre-flight before
-// and after the edit (Decision 3).
+// and after the edit (Decision 3), and prints the edited manifest for `funcdctl apply -f -`.
 func (a *cli) planSchedule(stderr io.Writer, o plan.Objectives, f planFlags) error {
 	data, err := readManifest(f.file)
 	if err != nil {
@@ -284,7 +300,7 @@ func (a *cli) planSchedule(stderr io.Writer, o plan.Objectives, f planFlags) err
 	if err != nil {
 		return err
 	}
-	edited, changes, err := plan.Apply(data, v1.KindBackupSchedule, settings)
+	edited, err := plan.Apply(data, v1.KindBackupSchedule, settings)
 	if err != nil {
 		return err
 	}
@@ -294,21 +310,11 @@ func (a *cli) planSchedule(stderr io.Writer, o plan.Objectives, f planFlags) err
 	if err := preflight(docs); err != nil {
 		return err
 	}
-	return a.planFinish(stderr, o, nil, planResult{path: f.file, edited: edited, printed: edited, changes: changes,
-		write: f.write, next: "apply it live: funcdctl apply -f " + f.file})
+	return a.planFinish(stderr, o, nil, edited)
 }
 
-// planResult is what a checked plan prints, or writes to path.
-type planResult struct {
-	path, next      string
-	edited, printed []byte
-	changes         []plan.Change
-	write           bool
-}
-
-// planFinish writes the notes to stderr, checks the RTO (Decision 5), then prints the result or commits the file and
-// lists its changes (Decision 4).
-func (a *cli) planFinish(stderr io.Writer, o plan.Objectives, notes []string, r planResult) error {
+// planFinish writes the notes to stderr, checks the RTO (Decision 5), then prints the example (ADR-0286 Decision 1).
+func (a *cli) planFinish(stderr io.Writer, o plan.Objectives, notes []string, printed []byte) error {
 	for _, n := range notes {
 		if err := fprintf(stderr, "%s\n", n); err != nil {
 			return err
@@ -324,60 +330,5 @@ func (a *cli) planFinish(stderr io.Writer, o plan.Objectives, notes []string, r 
 			return err
 		}
 	}
-	if !r.write {
-		return a.writef("%s", r.printed)
-	}
-	if len(r.changes) > 0 {
-		if err := commitFile(r.path, r.edited); err != nil {
-			return err
-		}
-	}
-	for _, ch := range r.changes {
-		old := ch.Old
-		if old == "" {
-			old = "(absent)"
-		}
-		if err := a.writef("%s: %s → %s\n", ch.Key, old, ch.New); err != nil {
-			return err
-		}
-	}
-	return fprintf(stderr, "%s\n", r.next)
-}
-
-// commitFile replaces the file at path with data (Decision 4): through its symlinks, a temp file beside the resolved
-// file, fsync, then a rename over it; its mode kept, and its owner and group where chown is allowed.
-func commitFile(path string, data []byte) error {
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return fault.Invalidf(planOp, "write %s: %v", path, err)
-	}
-	info, err := os.Stat(resolved)
-	if err != nil {
-		return fault.Invalidf(planOp, "write %s: %v", resolved, err)
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(resolved), "."+filepath.Base(resolved)+".plan-*")
-	if err != nil {
-		return fault.Invalidf(planOp, "write %s: %v", resolved, err)
-	}
-	defer func() { _ = os.Remove(tmp.Name()) }()
-	if st, ok := info.Sys().(*syscall.Stat_t); ok {
-		_ = tmp.Chown(int(st.Uid), int(st.Gid)) // refused unless privileged: the file is then the operator's own
-	}
-	_, err = tmp.Write(data)
-	if err == nil {
-		err = tmp.Chmod(info.Mode().Perm())
-	}
-	if err == nil {
-		err = tmp.Sync()
-	}
-	if cerr := tmp.Close(); err == nil {
-		err = cerr
-	}
-	if err == nil {
-		err = os.Rename(tmp.Name(), resolved)
-	}
-	if err != nil {
-		return fault.Invalidf(planOp, "write %s: %v", resolved, err)
-	}
-	return nil
+	return a.writef("%s", printed)
 }

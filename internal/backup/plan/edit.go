@@ -21,39 +21,34 @@ const editOp = "plan.Apply"
 // child (top level: at the end of the document, before the next document marker). kind "" ⇒ doc is a config file of
 // at most one document; else the key is set in the one document of that kind. A key under an alias, an anchor, a
 // block scalar or a flow collection, or a config file of several documents, is fault.Invalid naming the key. A key
-// already at its value is no Change.
-func Apply(doc []byte, kind v1.Kind, s []Setting) ([]byte, []Change, error) {
+// already at its value is left as it is. The bytes are only ever held in memory (ADR-0286): plan writes no file.
+func Apply(doc []byte, kind v1.Kind, s []Setting) ([]byte, error) {
 	out := bytes.Clone(doc)
-	var changes []Change
 	for _, st := range s {
-		next, ch, err := set(out, kind, st)
+		next, err := set(out, kind, st)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
-		if ch != nil {
-			out = next
-			changes = append(changes, *ch)
-		}
+		out = next
 	}
-	return out, changes, nil
+	return out, nil
 }
 
 // set applies one Setting to src, re-parsed each time so every edit sees the bytes the previous one left.
-func set(src []byte, kind v1.Kind, st Setting) ([]byte, *Change, error) {
+func set(src []byte, kind v1.Kind, st Setting) ([]byte, error) {
 	root, err := documentRoot(src, kind, st.Key)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	path := strings.Split(st.Key, ".")
 	value := render(st.Value)
-	added := &Change{Key: st.Key, New: st.Value}
 	if root == nil {
-		return insert(src, len(src), block(path, 0, defaultStep, value)), added, nil
+		return insert(src, len(src), block(path, 0, defaultStep, value)), nil
 	}
 	m, keyIndent := root, -1
 	for i, k := range path {
 		if err := editableMapping(m, st.Key); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		key, v := lookup(m, k)
 		if v == nil {
@@ -62,10 +57,10 @@ func set(src []byte, kind v1.Kind, st Setting) ([]byte, *Change, error) {
 			if m != root {
 				at = lineEnd(src, lastLine(src, m.Content[0].Line, c))
 			}
-			return insert(src, at, block(path[i:], c, step, value)), added, nil
+			return insert(src, at, block(path[i:], c, step, value)), nil
 		}
 		if v.Kind == yamlv3.AliasNode || v.Anchor != "" || key.Anchor != "" {
-			return nil, nil, refuse(st.Key, "it sits under an alias or an anchor")
+			return nil, refuse(st.Key, "it sits under an alias or an anchor")
 		}
 		if i == len(path)-1 {
 			return replace(src, v, st)
@@ -76,12 +71,12 @@ func set(src []byte, kind v1.Kind, st Setting) ([]byte, *Change, error) {
 		case v.Kind == yamlv3.ScalarNode && v.ShortTag() == "!!null" && v.Value == "":
 			step := stepUnder(m, keyIndent, root)
 			at := lineEnd(src, key.Line)
-			return insert(src, at, block(path[i+1:], key.Column-1+step, step, value)), added, nil
+			return insert(src, at, block(path[i+1:], key.Column-1+step, step, value)), nil
 		default:
-			return nil, nil, refuse(st.Key, strings.Join(path[:i+1], ".")+" is not a mapping")
+			return nil, refuse(st.Key, strings.Join(path[:i+1], ".")+" is not a mapping")
 		}
 	}
-	return nil, nil, refuse(st.Key, "an empty key")
+	return nil, refuse(st.Key, "an empty key")
 }
 
 // documentRoot is the root mapping the key is set in: the config file's only document (nil when it holds none), or
@@ -139,18 +134,18 @@ func editableMapping(m *yamlv3.Node, key string) error {
 }
 
 // replace swaps a present scalar's text for st's value.
-func replace(src []byte, v *yamlv3.Node, st Setting) ([]byte, *Change, error) {
+func replace(src []byte, v *yamlv3.Node, st Setting) ([]byte, error) {
 	switch {
 	case v.Kind != yamlv3.ScalarNode:
-		return nil, nil, refuse(st.Key, "it is not a scalar")
+		return nil, refuse(st.Key, "it is not a scalar")
 	case v.Style&(yamlv3.LiteralStyle|yamlv3.FoldedStyle) != 0:
-		return nil, nil, refuse(st.Key, "it is a block scalar")
+		return nil, refuse(st.Key, "it is a block scalar")
 	case v.Style&yamlv3.TaggedStyle != 0:
-		return nil, nil, refuse(st.Key, "it carries a tag")
+		return nil, refuse(st.Key, "it carries a tag")
 	case v.ShortTag() == "!!null" && v.Value == "":
-		return nil, nil, refuse(st.Key, "it has no value")
+		return nil, refuse(st.Key, "it has no value")
 	case v.Value == st.Value:
-		return src, nil, nil
+		return src, nil
 	}
 	start, ok := offset(src, v.Line, v.Column)
 	n := -1
@@ -158,11 +153,11 @@ func replace(src []byte, v *yamlv3.Node, st Setting) ([]byte, *Change, error) {
 		n = tokenLen(src[start:lineEnd(src, v.Line)], v)
 	}
 	if n <= 0 {
-		return nil, nil, refuse(st.Key, "its value spans several lines")
+		return nil, refuse(st.Key, "its value spans several lines")
 	}
 	out := make([]byte, 0, len(src)+len(st.Value)+2)
 	out = append(append(append(out, src[:start]...), render(st.Value)...), src[start+n:]...)
-	return out, &Change{Key: st.Key, Old: v.Value, New: st.Value}, nil
+	return out, nil
 }
 
 // tokenLen is the byte length of v's token at the start of line, or -1 when it does not end on that line.

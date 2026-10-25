@@ -1,6 +1,6 @@
 # ADR-0286: funcdctl backup plan prints an example and edits no file
 
-- **Status**: Accepted (2026-10-25, under the decider's delegation; judged once)
+- **Status**: Reviewing 2026-10-25; Accepted (2026-10-25, under the decider's delegation; judged once)
 - **Date**: 2026-10-25
 - **Deciders**: green-0-rabbit
 - **Tags**: backup, disaster-recovery, funcdctl, config, lake

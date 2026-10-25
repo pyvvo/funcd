@@ -33,14 +33,18 @@ class term; a rule that expires a base early breaks the points of its chain.
 
 ## From recovery objectives to settings
 
-`funcdctl backup plan` (ADR-0223) turns recovery objectives into these keys, offline: `--rpo` (the most data a loss may
-take) sets the interval to half of it, and `--keep` (how far back a restore point must reach) sets the retention. The
-result passes the daemon's own loader before it is printed, or written in place with `--write`, which keeps every
-other byte of the file. A value the start would refuse exits 1 with the start's error, and nothing is written.
+`funcdctl backup plan` (ADR-0223, ADR-0286) prints the keys that recovery objectives give, offline, as an example to
+copy into `funcdconfig.yaml`: `--rpo` (the most data a loss may take) sets the interval to half of it, and `--keep` (how
+far back a restore point must reach) sets the retention. The keys pass the daemon's own loader, merged into the located
+file in memory, before they are printed; the plan writes no file. A value the start would refuse exits 1 with the
+start's error, and nothing is printed. For `platform` with `--rpo`, the example ends with the verify job as a comment:
+run `funcdctl backup verify` every (rpo − interval) / 2, off the funcd host. `plan lake` sets no key: a Lake saves its
+catalog before it answers a commit (ADR-0279), and after a loss of the blob store it comes back from the blob mirror,
+whose keys `plan blob` gives.
 
 ```sh
 funcdctl backup plan platform --rpo 1h --keep 720h
-funcdctl backup plan kv --rpo 1m --keep 168h --write
+funcdctl backup plan kv --rpo 1m --keep 168h
 funcdctl backup plan blob --rpo 2h --keep 720h
 funcdctl backup plan schedule -f orders-nightly.yaml --rpo 2h --keep 336h | funcdctl apply -f -
 funcdctl backup plan platform --rpo 1h --rto 4h --size 2Gi --speed 50Mi

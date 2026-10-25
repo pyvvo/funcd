@@ -12,8 +12,8 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/config"
 )
 
-// Component is what a plan sets: the platform backup, the KV export, the blob mirror or the Lake keys of
-// funcdconfig.yaml, or a BackupSchedule.
+// Component is what a plan sets: the platform backup, the KV export or the blob mirror keys of funcdconfig.yaml, or a
+// BackupSchedule; a Lake needs no key (ADR-0286).
 type Component string
 
 // The components of ADR-0223 Decision 1, and the Lake of ADR-0274.
@@ -34,9 +34,6 @@ type Objectives struct {
 
 // Setting is one derived key: Key the dotted path from the document root, Value the scalar's text.
 type Setting struct{ Key, Value string }
-
-// Change is one key Apply edited; Old "" ⇒ the key was absent.
-type Change struct{ Key, Old, New string }
 
 // defaultKVRebaseline is kvstore.backup.rebaseline when empty, as cmd/funcd's kvBackup reads it (ADR-0209).
 const defaultKVRebaseline = 24 * time.Hour
@@ -96,14 +93,8 @@ func Derive(c Component, o Objectives, cur config.Config) ([]Setting, error) {
 			s = append(s, Setting{"spec.ttl", duration(o.Keep)})
 		}
 	case Lake:
-		if o.RPO > 0 {
-			if o.RPO/2 < config.MinLakeSaveInterval {
-				return nil, fault.Invalidf(op, "--rpo %s: a Lake saves its catalog at most every %s, so want at least %s",
-					v1.Duration(o.RPO.Truncate(time.Millisecond)), v1.Duration(config.MinLakeSaveInterval),
-					v1.Duration(2*config.MinLakeSaveInterval))
-			}
-			s = append(s, Setting{"lake.saveInterval", duration(min(o.RPO/2, config.MaxLakeSaveInterval))})
-		}
+		// Without lake.saveInterval a Lake saves before it answers (ADR-0279); the key opts into answering first, so
+		// no objective sets it (ADR-0286 Decision 3).
 	default:
 		return nil, fault.Invalidf(op, "component %q: want platform, kv, blob, lake or schedule", c)
 	}

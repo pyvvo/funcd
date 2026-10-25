@@ -88,10 +88,19 @@ spec:
 `
 
 const (
-	verifyEvery15m = "run funcdctl backup verify every 15m: (backup.objectives.rpo − backup.interval) / 2 (ADR-0205)\n"
+	verifyJob15m = "# run funcdctl backup verify every 15m, off the funcd host: (backup.objectives.rpo − backup.interval) " +
+		"/ 2 (ADR-0205)\n"
 	recipientsWarn = "warning: backup.encryption.recipients: backup.encryption.recipients without " +
 		"secrets.encryptionKeyFile: the backup envelope alone protects Secret values\n"
+	lakeNoKey = "# lake: no key to set: a Lake saves its catalog before it answers a commit (ADR-0279).\n"
 )
+
+// lakeWayBack is the end of the lake example for --rpo rpo (ADR-0286 Decision 3).
+func lakeWayBack(rpo string) string {
+	return "# If the blob store is lost, a Lake comes back from the blob mirror: funcdctl backup plan blob --rpo " + rpo +
+		"\n# An App's own backups of its Lakes are a BackupSchedule's (scope.lakes): funcdctl backup plan schedule -f " +
+		"<manifest> --rpo " + rpo + "\n"
+}
 
 // planEnv is a scenario's world: no $FUNCD_CONFIG and a fresh working directory, so config.Locate finds only what the
 // test writes there as ./funcdconfig.yaml.
@@ -137,21 +146,22 @@ func ageRecipients(t *testing.T) [2]string {
 	return r
 }
 
-// scenario: platform-from-objectives (ADR-0223) — no config file and no server: the platform keys in block style, the
-// daemon's no-target warning on stderr, exit 0.
-func TestScenarioPlatformFromObjectives(t *testing.T) {
+// scenario: plan-shows-verify-job (ADR-0286), with platform-from-objectives (ADR-0223) — no config file and no
+// server: the platform keys in block style, then the verify job as a comment; only the daemon's no-target warning on
+// stderr, exit 0.
+func TestScenarioPlanShowsVerifyJob(t *testing.T) {
 	planEnv(t)
 	stdout, stderr, err := runPlan("platform", "--rpo", "1h", "--keep", "720h")
 	require.NoError(t, err)
 	require.Equal(t, "backup:\n  interval: 30m\n  objectives:\n    rpo: 1h\n  retention:\n    hourly: 48\n    daily: 30\n"+
-		"    weekly: 0\n", stdout)
+		"    weekly: 0\n"+verifyJob15m, stdout)
 	cfg, err := config.Parse("", []byte(stdout), config.Flags{})
 	require.NoError(t, err)
 	daemon := cfg.CheckBackup()
 	require.Len(t, daemon, 1)
 	require.Equal(t, "backup.retention.weekly, backup.interval, backup.objectives.rpo set without backup.target: ignored, "+
 		"no platform backup runs", daemon[0].Message)
-	require.Equal(t, "warning: backup.retention.weekly: "+daemon[0].Message+"\n"+verifyEvery15m, stderr)
+	require.Equal(t, "warning: backup.retention.weekly: "+daemon[0].Message+"\n", stderr)
 }
 
 // scenario: workload-keys-from-objectives (ADR-0223) — a config with the KV backup on: the KV interval and ladder, the
@@ -224,69 +234,62 @@ func TestScenarioScheduleFromObjectives(t *testing.T) {
 	require.Empty(t, stdout)
 }
 
-// scenario: plan-lake-rpo (ADR-0274) — lake.saveInterval at min(R ÷ 2, 1h) in ADR-0194's form, printed with no config
-// file; with --write it is inserted into a commented file, every other byte kept, and a second plan replaces it.
-func TestScenarioPlanLakeRPO(t *testing.T) {
+// scenario: plan-lake-sets-nothing (ADR-0286) — no lake.saveInterval: comments only, with --rpo in the blob mirror's
+// and the BackupSchedule's plans, no floor; a config file is read and left unchanged.
+func TestScenarioPlanLakeSetsNothing(t *testing.T) {
 	dir := planEnv(t)
-	for _, tc := range []struct{ rpo, want string }{{"10s", "5s"}, {"3s", "1s500ms"}, {"1s", "500ms"}, {"24h", "1h"}} {
-		stdout, stderr, err := runPlan("lake", "--rpo", tc.rpo)
-		require.NoError(t, err, tc.rpo)
-		require.Equal(t, "lake:\n  saveInterval: "+tc.want+"\n", stdout, tc.rpo)
-		require.Empty(t, stderr, tc.rpo)
+	for _, rpo := range []string{"10s", "800ms"} {
+		stdout, stderr, err := runPlan("lake", "--rpo", rpo)
+		require.NoError(t, err, rpo)
+		require.Equal(t, lakeNoKey+lakeWayBack(rpo), stdout, rpo)
+		require.Empty(t, stderr, rpo)
 	}
 
 	file := filepath.Join(dir, "funcdconfig.yaml")
 	writePlanFile(t, file, commentedConfig, 0o640)
-	stdout, stderr, err := runPlan("lake", "--rpo", "10s", "--write")
+	stdout, stderr, err := runPlan("lake", "--rpo", "10s")
 	require.NoError(t, err)
-	require.Equal(t, "lake.saveInterval: (absent) → 5s\n", stdout)
-	require.Equal(t, recipientsWarn+"restart funcd to apply\n", stderr)
-	requireFile(t, file, commentedConfig+"lake:\n  saveInterval: 5s\n")
-
-	stdout, _, err = runPlan("lake", "--rpo", "3s", "--write")
-	require.NoError(t, err)
-	require.Equal(t, "lake.saveInterval: 5s → 1s500ms\n", stdout)
-	requireFile(t, file, commentedConfig+"lake:\n  saveInterval: 1s500ms\n")
-	cfg, err := config.Load(file, config.Flags{})
-	require.NoError(t, err)
-	d, err := cfg.LakeSaveInterval()
-	require.NoError(t, err)
-	require.Equal(t, 1500*time.Millisecond, d)
-}
-
-// scenario: plan-lake-rpo-too-small (ADR-0274) — --rpo 800ms: half of it is under the 500ms floor, so exit 1 naming
-// --rpo, nothing printed or written.
-func TestScenarioPlanLakeRPOTooSmall(t *testing.T) {
-	dir := planEnv(t)
-	file := filepath.Join(dir, "funcdconfig.yaml")
-	writePlanFile(t, file, commentedConfig, 0o600)
-	stdout, stderr, err := runPlan("lake", "--rpo", "800ms", "--write")
-	require.Equal(t, fault.Invalid, fault.KindOf(err))
-	require.Contains(t, errorLine(err), "--rpo 800ms: a Lake saves its catalog at most every 500ms, so want at least 1s")
-	require.Equal(t, 1, exitCode(err))
-	require.Empty(t, stdout)
-	require.Empty(t, stderr)
+	require.Equal(t, lakeNoKey+lakeWayBack("10s"), stdout)
+	require.Equal(t, recipientsWarn, stderr)
 	requireFile(t, file, commentedConfig)
 }
 
-// scenario: write-keeps-the-rest (ADR-0223) — --write edits interval and inserts objectives.rpo in a commented file;
-// every other byte, the comments and blank lines, and the file's mode stay; stdout lists both changes.
-func TestScenarioWriteKeepsTheRest(t *testing.T) {
+// scenario: plan-lake-names-the-opt-in (ADR-0286) — lake.saveInterval set in the file: the first comment names it and
+// its loss bound (ADR-0274), the rest as without it.
+func TestScenarioPlanLakeNamesTheOptIn(t *testing.T) {
+	dir := planEnv(t)
+	file := filepath.Join(dir, "funcdconfig.yaml")
+	body := commentedConfig + "lake:\n  saveInterval: 1s\n"
+	writePlanFile(t, file, body, 0o600)
+	stdout, _, err := runPlan("lake", "--rpo", "10s")
+	require.NoError(t, err)
+	require.Equal(t, "# lake: lake.saveInterval 1s answers a commit before its save: a crash can lose up to 1s and the two "+
+		"saves around\n# it (ADR-0274). Without the key a Lake saves its catalog before it answers a commit (ADR-0279).\n"+
+		lakeWayBack("10s"), stdout)
+	requireFile(t, file, body)
+}
+
+// scenario: plan-edits-nothing (ADR-0286) — a commented config: the keys and the verify job on stdout, the file
+// unchanged byte for byte and nothing beside it; --write is an unknown flag, exit 1, nothing printed.
+func TestScenarioPlanEditsNothing(t *testing.T) {
 	dir := planEnv(t)
 	file := filepath.Join(dir, "funcdconfig.yaml")
 	writePlanFile(t, file, commentedConfig, 0o640)
-	stdout, stderr, err := runPlan("platform", "--rpo", "30m", "--write")
+	stdout, stderr, err := runPlan("platform", "--rpo", "30m")
 	require.NoError(t, err)
-	requireFile(t, file, strings.Replace(commentedConfig, "  interval: 1h\n", "  interval: 15m\n  objectives:\n    rpo: 30m\n", 1))
-	require.Equal(t, "backup.interval: 1h → 15m\nbackup.objectives.rpo: (absent) → 30m\n", stdout)
-	require.Equal(t, recipientsWarn+"run funcdctl backup verify every 7m30s: (backup.objectives.rpo − backup.interval) / 2 "+
-		"(ADR-0205)\nrestart funcd to apply\n", stderr)
-	info, err := os.Stat(file)
-	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0o640), info.Mode().Perm())
+	require.Equal(t, "backup:\n  interval: 15m\n  objectives:\n    rpo: 30m\n# run funcdctl backup verify every 7m30s, off the "+
+		"funcd host: (backup.objectives.rpo − backup.interval) / 2 (ADR-0205)\n", stdout)
+	require.Equal(t, recipientsWarn, stderr)
+	requireFile(t, file, commentedConfig)
+
+	stdout, _, err = runPlan("platform", "--rpo", "30m", "--write")
+	require.ErrorContains(t, err, "unknown flag: --write")
+	require.Equal(t, 1, exitCode(err))
+	require.Empty(t, stdout)
+	requireFile(t, file, commentedConfig)
 	entries, err := os.ReadDir(dir)
 	require.NoError(t, err)
-	require.Len(t, entries, 1, "no temp file left beside it")
+	require.Len(t, entries, 1, "no file beside it")
 }
 
 // scenario: refused-as-the-daemon-refuses (ADR-0223) — derived values the start refuses, and a file hand-edited into a
@@ -303,7 +306,7 @@ func TestScenarioRefusedAsTheDaemonRefuses(t *testing.T) {
 	}
 
 	writePlanFile(t, file, commentedConfig, 0o600)
-	stdout, _, err := runPlan("platform", "--rpo", "4h", "--keep", "1h", "--write")
+	stdout, _, err := runPlan("platform", "--rpo", "4h", "--keep", "1h")
 	require.Error(t, err)
 	merged := strings.Replace(commentedConfig, "  interval: 1h\n", "  interval: 2h\n  objectives:\n    rpo: 4h\n"+
 		"  retention:\n    hourly: 1\n    daily: 0\n    weekly: 0\n", 1)
@@ -315,7 +318,7 @@ func TestScenarioRefusedAsTheDaemonRefuses(t *testing.T) {
 
 	edited := strings.Replace(commentedConfig, "  interval: 1h\n", "  interval: 1h\n  objectives:\n    rpo: 30m\n", 1)
 	writePlanFile(t, file, edited, 0o600)
-	stdout, _, err = runPlan("platform", "--keep", "720h", "--write")
+	stdout, _, err = runPlan("platform", "--keep", "720h")
 	require.Error(t, err)
 	require.Equal(t, startError(edited), errorLine(err))
 	require.Contains(t, err.Error(), "backup.objectives.rpo 30m is below backup.interval 1h")
@@ -330,7 +333,7 @@ func TestScenarioRTOImpossible(t *testing.T) {
 	dir := planEnv(t)
 	file := filepath.Join(dir, "funcdconfig.yaml")
 	writePlanFile(t, file, kvConfig, 0o600)
-	stdout, stderr, err := runPlan("kv", "--rpo", "1m", "--rto", "15m", "--size", "200Gi", "--speed", "100Mi", "--write")
+	stdout, stderr, err := runPlan("kv", "--rpo", "1m", "--rto", "15m", "--size", "200Gi", "--speed", "100Mi")
 	require.Error(t, err)
 	require.Equal(t, "funcdctl: RTO 15m is impossible: the download alone takes 34m8s. Knobs: a faster or closer target "+
 		"(--speed), a smaller scope (--size).", errorLine(err))
@@ -346,9 +349,9 @@ func TestScenarioRTOLowerBoundOnly(t *testing.T) {
 	planEnv(t)
 	stdout, stderr, err := runPlan("platform", "--rpo", "1h", "--rto", "4h", "--size", "2Gi", "--speed", "50Mi")
 	require.NoError(t, err)
-	require.Equal(t, "backup:\n  interval: 30m\n  objectives:\n    rpo: 1h\n", stdout)
+	require.Equal(t, "backup:\n  interval: 30m\n  objectives:\n    rpo: 1h\n"+verifyJob15m, stdout)
 	require.Equal(t, "warning: backup.interval: backup.interval, backup.objectives.rpo set without backup.target: ignored, "+
-		"no platform backup runs\n"+verifyEvery15m+
+		"no platform backup runs\n"+
 		"RTO 4h: the download takes 41s; only a restore drill (ADR-0206) proves the target.\n", stderr)
 }
 
@@ -364,7 +367,7 @@ func TestPlanReadsTheFileAndPreflights(t *testing.T) {
 	manifest := fmt.Sprintf(ordersNightly, r[0], r[0])
 	file := filepath.Join(dir, "orders-nightly.yaml")
 	writePlanFile(t, file, manifest, 0o600)
-	stdout, _, err = runPlan("schedule", "-f", file, "--rpo", "2h", "--write")
+	stdout, _, err = runPlan("schedule", "-f", file, "--rpo", "2h")
 	require.Error(t, err)
 	require.Contains(t, errorLine(err), `manifest is invalid (BackupSchedule "orders-nightly")`)
 	require.Equal(t, 1, exitCode(err))
@@ -372,7 +375,7 @@ func TestPlanReadsTheFileAndPreflights(t *testing.T) {
 	requireFile(t, file, manifest)
 }
 
-// TestFlagRules (ADR-0223 Decisions 1, 4): each refusal names its flag, exits 1 and prints nothing.
+// TestFlagRules (ADR-0223 Decision 1): each refusal names its flag, exits 1 and prints nothing.
 func TestFlagRules(t *testing.T) {
 	dir := planEnv(t)
 	manifest := filepath.Join(dir, "m.yaml")
@@ -395,7 +398,6 @@ func TestFlagRules(t *testing.T) {
 		{[]string{"platform", "--keep", "30d"}, fault.Invalid, "--keep"},
 		{[]string{"platform", "--rpo", "1h", "--rto", "1h", "--size", "1GB", "--speed", "1"}, fault.Invalid, `--size "1GB"`},
 		{[]string{"platform", "--rpo", "1h", "--rto", "1h", "--size", "16777216Ti", "--speed", "1"}, fault.Invalid, `--size "16777216Ti"`},
-		{[]string{"schedule", "-f", "-", "--rpo", "1h", "--write"}, fault.Invalid, "--write needs a file: -f - reads stdin"},
 		{[]string{"schedule", "--rpo", "1h"}, fault.Invalid, "schedule needs -f"},
 		{[]string{"schedule", "-f", manifest, "--config", manifest, "--rpo", "1h"}, fault.Invalid, "--config applies to platform, kv, blob and lake"},
 		{[]string{"platform", "-f", manifest, "--rpo", "1h"}, fault.Invalid, "-f applies to schedule"},
@@ -403,7 +405,6 @@ func TestFlagRules(t *testing.T) {
 		{[]string{"lake", "--rpo", "10s", "--keep", "720h"}, fault.Invalid, "--keep does not apply to lake"},
 		{[]string{"lake", "-f", manifest, "--rpo", "10s"}, fault.Invalid, "-f applies to schedule; lake reads --config"},
 		{[]string{"rqlite", "--rpo", "1h"}, fault.Invalid, `component "rqlite"`},
-		{[]string{"platform", "--rpo", "1h", "--write"}, fault.NotFound, "--write: no config file found: give --config"},
 		{[]string{"platform", "--config", "missing.yaml", "--rpo", "1h"}, fault.NotFound, `"missing.yaml" does not exist`},
 	} {
 		stdout, stderr, err := runPlan(tc.args...)
@@ -417,24 +418,22 @@ func TestFlagRules(t *testing.T) {
 }
 
 // TestApplyKeepsBytes (ADR-0223 Decision 4): only the derived keys' bytes change — comments, blank lines, a missing
-// parent, quoted crons, the right document of a stream — Decision 4's forms are refused, and --write goes through a
-// symlink to the file it names.
+// parent, quoted crons, the right document of a stream — and Decision 4's forms are refused.
 func TestApplyKeepsBytes(t *testing.T) {
 	t.Parallel()
-	apply := func(t *testing.T, kind v1.Kind, in string, s ...plan.Setting) (string, []plan.Change) {
+	apply := func(t *testing.T, kind v1.Kind, in string, s ...plan.Setting) string {
 		t.Helper()
-		out, changes, err := plan.Apply([]byte(in), kind, s)
+		out, err := plan.Apply([]byte(in), kind, s)
 		require.NoError(t, err)
-		return string(out), changes
+		return string(out)
 	}
 
 	t.Run("comments and blank lines", func(t *testing.T) {
 		t.Parallel()
-		out, changes := apply(t, "", commentedConfig, plan.Setting{Key: "backup.interval", Value: "15m"},
+		out := apply(t, "", commentedConfig, plan.Setting{Key: "backup.interval", Value: "15m"},
 			plan.Setting{Key: "backup.objectives.rpo", Value: "30m"}, plan.Setting{Key: "log.level", Value: "info"})
-		require.Equal(t, strings.Replace(commentedConfig, "  interval: 1h\n", "  interval: 15m\n  objectives:\n    rpo: 30m\n", 1), out)
-		require.Equal(t, []plan.Change{{Key: "backup.interval", Old: "1h", New: "15m"}, {Key: "backup.objectives.rpo", New: "30m"}},
-			changes, "a key already at its value is no change")
+		require.Equal(t, strings.Replace(commentedConfig, "  interval: 1h\n", "  interval: 15m\n  objectives:\n    rpo: 30m\n", 1), out,
+			"a key already at its value is left as it is")
 	})
 
 	t.Run("a missing parent", func(t *testing.T) {
@@ -464,7 +463,7 @@ func TestApplyKeepsBytes(t *testing.T) {
 			{"", "backup:\n  interval: 30m\n", []plan.Setting{{Key: "backup.interval", Value: "30m"}}},
 			{"# only a comment\n", "# only a comment\nbackup:\n  interval: 30m\n", []plan.Setting{{Key: "backup.interval", Value: "30m"}}},
 		} {
-			out, _ := apply(t, "", tc.in, tc.s...)
+			out := apply(t, "", tc.in, tc.s...)
 			require.Equal(t, tc.want, out, tc.in)
 		}
 	})
@@ -478,16 +477,15 @@ func TestApplyKeepsBytes(t *testing.T) {
 			{"'0 3 * * *'", "0 */2 * * *", "0 */2 * * *"},
 			{`"0 3 * * *"`, "0 3 * * *", `"0 3 * * *"`},
 		} {
-			out, _ := apply(t, v1.KindBackupSchedule, fmt.Sprintf(doc, tc.in), plan.Setting{Key: "spec.schedule", Value: tc.value})
+			out := apply(t, v1.KindBackupSchedule, fmt.Sprintf(doc, tc.in), plan.Setting{Key: "spec.schedule", Value: tc.value})
 			require.Equal(t, fmt.Sprintf(doc, tc.want), out)
 		}
 		const stream = "kind: Namespace\nmetadata:\n  name: team-a\n---\n" + "kind: BackupSchedule\nspec:\n  schedule: 0 3 * * *\n" +
 			"  scope:\n    app: orders\n---\nkind: KVStore\nspec:\n  schedule: keep\n"
-		out, changes := apply(t, v1.KindBackupSchedule, stream, plan.Setting{Key: "spec.schedule", Value: "0 * * * *"},
+		out := apply(t, v1.KindBackupSchedule, stream, plan.Setting{Key: "spec.schedule", Value: "0 * * * *"},
 			plan.Setting{Key: "spec.ttl", Value: "48h"})
 		require.Equal(t, strings.Replace(stream, "  schedule: 0 3 * * *\n  scope:\n    app: orders\n",
 			"  schedule: 0 * * * *\n  scope:\n    app: orders\n  ttl: 48h\n", 1), out)
-		require.Len(t, changes, 2)
 	})
 
 	t.Run("refused forms", func(t *testing.T) {
@@ -512,28 +510,11 @@ func TestApplyKeepsBytes(t *testing.T) {
 			{"", "backup:\n  interval: 1h\n---\nlog:\n  level: info\n", "backup.interval", "2 documents"},
 			{v1.KindBackupSchedule, "kind: BackupSchedule\nspec: {}\n---\nkind: BackupSchedule\nspec: {}\n", "spec.ttl", "2 BackupSchedule"},
 		} {
-			_, _, err := plan.Apply([]byte(tc.in), tc.kind, []plan.Setting{{Key: tc.key, Value: "30m"}})
+			_, err := plan.Apply([]byte(tc.in), tc.kind, []plan.Setting{{Key: tc.key, Value: "30m"}})
 			require.Equal(t, fault.Invalid, fault.KindOf(err), tc.in)
 			require.ErrorContains(t, err, "cannot edit "+tc.key, tc.in)
 			require.ErrorContains(t, err, tc.contains, tc.in)
 		}
 	})
 
-	t.Run("a symlinked file", func(t *testing.T) {
-		t.Parallel()
-		dir := t.TempDir()
-		target, link := filepath.Join(dir, "real.yaml"), filepath.Join(dir, "funcdconfig.yaml")
-		writePlanFile(t, target, commentedConfig, 0o640)
-		require.NoError(t, os.Symlink("real.yaml", link))
-		stdout, _, err := runPlan("platform", "--config", link, "--rpo", "30m", "--write")
-		require.NoError(t, err)
-		require.Equal(t, "backup.interval: 1h → 15m\nbackup.objectives.rpo: (absent) → 30m\n", stdout)
-		info, err := os.Lstat(link)
-		require.NoError(t, err)
-		require.Equal(t, os.ModeSymlink, info.Mode().Type(), "the link stays a link")
-		requireFile(t, target, strings.Replace(commentedConfig, "  interval: 1h\n", "  interval: 15m\n  objectives:\n    rpo: 30m\n", 1))
-		info, err = os.Stat(target)
-		require.NoError(t, err)
-		require.Equal(t, os.FileMode(0o640), info.Mode().Perm())
-	})
 }

@@ -62,10 +62,8 @@ func TestDeriveTable(t *testing.T) {
 		{"blob rpo only", Blob, Objectives{RPO: 30 * time.Minute}, defaults, []Setting{{"blob.backup.interval", "15m"}}},
 		{"schedule", Schedule, Objectives{RPO: 2 * time.Hour, Keep: 336 * time.Hour}, config.Config{},
 			[]Setting{{"spec.schedule", "0 * * * *"}, {"spec.ttl", "336h"}}},
-		{"lake", Lake, Objectives{RPO: 10 * time.Second}, defaults, []Setting{{"lake.saveInterval", "5s"}}},
-		{"lake compound", Lake, Objectives{RPO: 3 * time.Second}, defaults, []Setting{{"lake.saveInterval", "1s500ms"}}},
-		{"lake at the floor", Lake, Objectives{RPO: time.Second}, defaults, []Setting{{"lake.saveInterval", "500ms"}}},
-		{"lake capped at an hour", Lake, Objectives{RPO: 24 * time.Hour}, defaults, []Setting{{"lake.saveInterval", "1h"}}},
+		{"lake sets no key (ADR-0286)", Lake, Objectives{RPO: 10 * time.Second}, defaults, nil},
+		{"lake has no floor", Lake, Objectives{RPO: 800 * time.Millisecond}, defaults, nil},
 		{"no objective sets no key", Platform, Objectives{RTO: time.Hour, Size: 1, Speed: 1}, defaults, nil},
 	} {
 		got, err := Derive(tc.c, tc.o, tc.cur)
@@ -84,14 +82,12 @@ func TestDeriveTable(t *testing.T) {
 	require.ErrorContains(t, err, "--keep")
 	_, err = Derive(Schedule, Objectives{RPO: 90 * time.Second}, config.Config{})
 	require.ErrorContains(t, err, "--rpo")
-	_, err = Derive(Lake, Objectives{RPO: 999 * time.Millisecond}, config.Config{})
-	require.Equal(t, fault.Invalid, fault.KindOf(err))
-	require.ErrorContains(t, err, "--rpo 999ms: a Lake saves its catalog at most every 500ms, so want at least 1s")
 }
 
-// TestEngineReadsWhatPlanWrites (ADR-0274): the Lake reconciler hands lake.saveInterval to every engine under the key
-// the duckdb shim reads, and the shim parses it in ADR-0194's grammar within the config's bounds.
-func TestEngineReadsWhatPlanWrites(t *testing.T) {
+// TestEngineReadsTheLakeKey (ADR-0274): the Lake reconciler hands lake.saveInterval, an opt-in set by hand
+// (ADR-0286), to every engine under the key the duckdb shim reads, and the shim parses it in ADR-0194's grammar within
+// the config's bounds.
+func TestEngineReadsTheLakeKey(t *testing.T) {
 	const key = "FUNCD_LAKE_SAVE_INTERVAL"
 	for file, wants := range map[string][]string{
 		filepath.Join("..", "..", "services", "lake", "reconcile.go"): {`own["` + key + `"]`},
