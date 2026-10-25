@@ -431,9 +431,9 @@ func (r *Reconciler) Orphans(ctx context.Context) ([]v1.ObjectRef, error) {
 }
 
 // ReclaimOrphans moves into the quarantine, before the controller runs, the directory of every engine with no
-// SQLDatabase left, instead of removing it (ADR-0288 Decision 1); a no-op while the platform is held, whose hold
-// status lists them instead.
-func (r *Reconciler) ReclaimOrphans(ctx context.Context) error {
+// SQLDatabase left, instead of removing it (ADR-0288 Decision 1), each entry dated now, the start's quarantine clock;
+// a no-op while the platform is held, whose hold status lists them instead.
+func (r *Reconciler) ReclaimOrphans(ctx context.Context, now time.Time) error {
 	const op = "sql.ReclaimOrphans"
 	if r.held() {
 		return nil
@@ -446,7 +446,7 @@ func (r *Reconciler) ReclaimOrphans(ctx context.Context) error {
 		if err := r.forget(ctx, provider.ProviderRef{Namespace: o.Namespace, Name: o.Name}); err != nil {
 			return err
 		}
-		e, err := r.volumes.Quarantine().Move(ctx, quarantine.Ref{ObjectRef: o}, time.Now())
+		e, err := r.volumes.Quarantine().Move(ctx, quarantine.Ref{ObjectRef: o}, now)
 		if err != nil {
 			return fault.Wrapf(err, fault.KindOf(err), op, "quarantine the storage of %s/%s", o.Namespace, o.Name)
 		}

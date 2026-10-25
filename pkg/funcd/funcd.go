@@ -1703,7 +1703,7 @@ func (p *Platform) Run(ctx context.Context) error {
 			p.logger.WarnContext(ctx, "reclaim of deleted Buckets incomplete", "error", err)
 		}
 		// ADR-0232 Decision 7: the same for the directory of each SQLDatabase deleted before its reconcile ran.
-		if err := p.sqlReconciler.ReclaimOrphans(ctx); err != nil && ctx.Err() == nil {
+		if err := p.sqlReconciler.ReclaimOrphans(ctx, now); err != nil && ctx.Err() == nil {
 			p.logger.WarnContext(ctx, "reclaim of deleted SQL databases incomplete", "error", err)
 		}
 		// ADR-0262 Decision 8: no worker survives a restart, so emptyDirs go; volumes of deleted Functions follow their
