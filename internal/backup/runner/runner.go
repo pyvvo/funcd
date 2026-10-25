@@ -161,6 +161,12 @@ func (r *Runner) Run(ctx context.Context) {
 		r.log.ErrorContext(ctx, "backup runner has no stores bound: no platform backup runs")
 		return
 	}
+	watched := make(chan struct{})
+	go func() {
+		defer close(watched)
+		r.watch(ctx)
+	}()
+	defer func() { <-watched }()
 	due, ok := r.start(ctx)
 	for ok && r.waitUntil(ctx, due) {
 		now := r.cfg.Clock.Now()
@@ -210,6 +216,32 @@ func (r *Runner) waitUntil(ctx context.Context, due time.Time) bool {
 		case <-ctx.Done():
 			return false
 		case <-r.cfg.After(wake.Sub(now)):
+		}
+	}
+}
+
+// watch makes an rpo check the loop has not made within min(retryInterval, interval) of its time, on the last listing:
+// a call to the target that never returns holds the loop, and would hold the alert with it (#1286). The bound is
+// failed's, and lets a loop that can still list make the check itself. It waits on real time, so a test's After paces
+// the loop only.
+func (r *Runner) watch(ctx context.Context) {
+	grace := min(r.cfg.Times.RetryInterval, r.cfg.Times.Interval)
+	start := r.cfg.Clock.Now()
+	for {
+		check := r.nextCheck()
+		if check.Before(start) {
+			check = start
+		}
+		now := r.cfg.Clock.Now()
+		wait := check.Add(grace).Sub(now)
+		if wait <= 0 {
+			r.evaluate(ctx, now)
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
 		}
 	}
 }

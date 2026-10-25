@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -633,4 +634,62 @@ func TestRPOWarnOncePerRPO(t *testing.T) {
 	require.Equal(t, 3, h.logs.count("backup rpo at risk"), "on turning on, then once per rpo")
 	require.Equal(t, int64(1), rpoRisk(t, h.reader))
 	require.Equal(t, 2, h.target.count(), "no run was due")
+}
+
+// holding is a target that stops answering: each Write, and each List after the first answered, calls onHold and
+// waits until the runner's context ends, as a target that holds the connection does.
+type holding struct {
+	backup.Target
+	answered int32
+	onHold   func()
+	lists    atomic.Int32
+}
+
+func (h *holding) Write(ctx context.Context, _, _, _ snapshot.Source, _ backup.WriteOptions) (backup.Manifest, error) {
+	h.hold(ctx)
+	return backup.Manifest{}, ctx.Err()
+}
+
+func (h *holding) List(ctx context.Context) ([]backup.Entry, error) {
+	if h.lists.Add(1) <= h.answered {
+		return h.Target.List(ctx)
+	}
+	h.hold(ctx)
+	return nil, ctx.Err()
+}
+
+func (h *holding) hold(ctx context.Context) {
+	h.onHold()
+	<-ctx.Done()
+}
+
+// Issue #1286: generation 1, verified, turns objectives.rpo old while the runner waits on a target that does not
+// answer, in a run's Write or in the relist at the rpo check: the warning comes all the same, on the last listing. Real
+// time, in milliseconds: the check that a waiting call misses has its own timer, not the loop's After.
+func TestIssue1286_WarnsWhileTheTargetDoesNotAnswer(t *testing.T) {
+	t.Parallel()
+	for name, interval := range map[string]time.Duration{
+		"a run waits on its write":      100 * time.Millisecond,
+		"a relist waits on its listing": time.Hour,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			h.write(t, "")
+			h.verifyGen(t, 1)
+			warnedBefore := atomic.Int32{}
+			warnedBefore.Store(-1)
+			h.cfg.Target = &holding{Target: h.target, answered: 1, onHold: func() {
+				warnedBefore.CompareAndSwap(-1, int32(h.logs.count("backup rpo at risk")))
+			}}
+			h.cfg.Clock, h.cfg.After = clock.System(), nil
+			h.cfg.Times = config.BackupTimes{Interval: interval, RPO: 500 * time.Millisecond,
+				RetryInterval: 100 * time.Millisecond}
+			require.NoError(t, stampGeneration(h.dir, 1, time.Now()), "1 turns rpo old only once the runner waits")
+			h.run(t)
+			require.Eventually(t, func() bool { return h.logs.count("backup rpo at risk") > 0 }, 10*time.Second,
+				10*time.Millisecond, "no rpoRisk warning while the target does not answer")
+			require.Equal(t, int32(0), warnedBefore.Load(), "the warning came while the target held, not before")
+		})
+	}
 }
