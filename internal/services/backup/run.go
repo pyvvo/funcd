@@ -18,8 +18,9 @@ type BackupReconciler struct{ *base }
 
 // Reconcile drives a Backup Pending → Running → Succeeded | Failed, one attempt. A new Backup gets its expireTime
 // (creation + its ttl or its schedule's); a Pending one waits while the platform is held, but for a Restore's export;
-// a Running one this process does not run was interrupted (Interrupted); a finished one is deleted at its expireTime.
-// The run itself, with the platform's rights, is a goroutine whose end writes the record.
+// a Running one this process does not run was interrupted (Interrupted), unless its copy is whole on the target
+// (ADR-0287 Decision 5); a finished one is deleted at its expireTime. The run itself, with the platform's rights, is a
+// goroutine whose end writes the record.
 func (r *BackupReconciler) Reconcile(ctx context.Context, req controller.Request) (controller.Result, error) {
 	const op = "backup.BackupReconcile"
 	obj, err := r.d.Store.Get(ctx, req.GVK, req.Namespace, req.Name)
@@ -38,10 +39,12 @@ func (r *BackupReconciler) Reconcile(ctx context.Context, req controller.Request
 	case v1.RunSucceeded, v1.RunFailed:
 		return r.expire(ctx, b, now)
 	case v1.RunRunning:
-		if r.isActive(refOf(b)) {
-			return controller.Result{}, nil
+		// a pass while this process looks at the record: a settle that leaves it Running writes nothing
+		if r.isActive(refOf(b)) || !r.claim(refOf(b)) {
+			return controller.Result{RequeueAfter: r.d.Period}, nil
 		}
-		return controller.Result{}, r.finish(ctx, b, now, errors.New("funcd stopped during the run"), ReasonInterrupted)
+		r.spawn(func() { r.settle(ctx, b) })
+		return controller.Result{RequeueAfter: r.d.Period}, nil
 	case "":
 		ttl, err := r.ttl(ctx, b)
 		if err != nil {
@@ -56,13 +59,34 @@ func (r *BackupReconciler) Reconcile(ctx context.Context, req controller.Request
 	if !r.claim(refOf(b)) {
 		return controller.Result{}, nil
 	}
+	before := b.Status.StartTime
 	b.Status.Phase, b.Status.StartTime = v1.RunRunning, ts(now)
 	if err := r.write(ctx, b); err != nil {
 		r.release(refOf(b))
 		return controller.Result{}, err
 	}
-	r.spawn(func() { r.run(ctx, b, now) })
+	r.spawn(func() { r.run(ctx, b, now, before) })
 	return controller.Result{}, nil
+}
+
+// settle ends a Running record this process does not run (ADR-0287 Decision 5): its copy whole on the target makes it
+// Succeeded; a failed listing while its schedule's sync is pending leaves it Running for the next pass; else funcd
+// stopped during the run (Interrupted).
+func (r *BackupReconciler) settle(ctx context.Context, b *v1.Backup) {
+	defer r.release(refOf(b))
+	rec, err := r.recoverCopy(ctx, b, b.Status.StartTime)
+	switch {
+	case ctx.Err() != nil, rec == unlisted:
+		return
+	case err != nil:
+		r.log.WarnContext(ctx, "workload backup: record the end", "namespace", b.Namespace, "backup", b.Name, "error", err)
+		return
+	case rec == recovered:
+		return
+	}
+	if err := r.finish(ctx, b, r.d.Clock.Now(), errors.New("funcd stopped during the run"), ReasonInterrupted); err != nil {
+		r.log.WarnContext(ctx, "workload backup: record the end", "namespace", b.Namespace, "backup", b.Name, "error", err)
+	}
 }
 
 // ttl is the Backup's spec.ttl, else its schedule's, else DefaultBackupTTL without the schedule.
@@ -100,9 +124,16 @@ func (r *BackupReconciler) isExport(ctx context.Context, b *v1.Backup) bool {
 }
 
 // run copies the schedule's members (Decisions 4 to 6) and records the end, unless funcd's shutdown ended it: that
-// Backup stays Running, and the next start fails it Interrupted.
-func (r *BackupReconciler) run(ctx context.Context, b *v1.Backup, start time.Time) {
+// Backup stays Running, and the next start fails it Interrupted. A copy already whole on the target, which another
+// process finished, is recorded as it is (ADR-0287 Decision 5); before is the record's startTime while it was Pending.
+func (r *BackupReconciler) run(ctx context.Context, b *v1.Backup, start time.Time, before *v1.Timestamp) {
 	defer r.release(refOf(b))
+	if rec, err := r.recoverCopy(ctx, b, before); rec == recovered || err != nil || ctx.Err() != nil {
+		if err != nil {
+			r.log.WarnContext(ctx, "workload backup: record the end", "namespace", b.Namespace, "backup", b.Name, "error", err)
+		}
+		return
+	}
 	reason, err := r.copy(ctx, b)
 	if ctx.Err() != nil {
 		return
@@ -143,7 +174,7 @@ func (r *BackupReconciler) copy(ctx context.Context, b *v1.Backup) (string, erro
 		return reasonFailed, err
 	}
 	defer func() { _ = target.Close() }()
-	path := string(b.Namespace) + "/" + string(b.Name) + "-" + string(b.UID) + "/"
+	path := copyPath(b)
 	b.Status.Target, b.Status.Path, b.Status.Recipients = s.Spec.Target.URL, path, sealer.Keys().Recipients
 	m, err := workload.Write(ctx, b.Namespace, members, r.d.Sources, workload.Options{
 		Target: target, Path: path, Seal: sealer.Seal(), Recipients: sealer.Keys().Recipients,

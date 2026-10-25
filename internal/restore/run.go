@@ -232,14 +232,25 @@ func Run(ctx context.Context, p Point, o Options) (_ Report, err error) {
 }
 
 // holdNamespaces writes a data marker for each namespace holding a BackupSchedule (ADR-0222 Decision 8): its stores
-// return without their data, so its runners wait for `funcdctl hold release --namespace`. It prints them.
+// return without their data, so its runners wait for `funcdctl hold release --namespace`. It prints them. Each
+// schedule gets TargetSynced False, PlatformRestored: its target may hold copies made after the restored point, which
+// its reconciler records before it takes a slot (ADR-0287 Decision 1).
 func (r *restoring) holdNamespaces(ctx context.Context) error {
+	const op = "restore.Run"
 	l, err := r.st.List(ctx, v1.KindBackupSchedule.GVK(), store.ListOptions{})
 	if err != nil {
 		return err
 	}
 	seen := map[v1.NamespaceName]bool{}
 	for _, o := range l.Items {
+		if s, ok := o.(*v1.BackupSchedule); ok {
+			s.Status.Conditions.Set(v1.Condition{Type: v1.ConditionTargetSynced, Status: v1.ConditionFalse,
+				ObservedGeneration: s.Generation, Reason: v1.ReasonPlatformRestored,
+				Message: "a platform restore: the copies on the target made after the restored point have no record yet"})
+			if _, err := r.st.Update(ctx, s); err != nil {
+				return fault.Wrapf(err, fault.KindOf(err), op, "mark BackupSchedule %s/%s", s.Namespace, s.Name)
+			}
+		}
 		if ns := o.GetNamespace(); !seen[ns] {
 			seen[ns] = true
 			r.nsHeld = append(r.nsHeld, ns)

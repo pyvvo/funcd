@@ -144,9 +144,10 @@ type base struct {
 	duration metric.Float64Histogram
 
 	mu      sync.Mutex
-	active  map[v1.ObjectRef]bool // the Backups and Restores this process runs
-	risk    map[v1.ObjectRef]bool // each schedule's rpoRisk as last seen
-	warned  map[v1.ObjectRef]bool // the schedules whose SameProvider Warn this process logged
+	active  map[v1.ObjectRef]bool      // the Backups and Restores this process runs
+	risk    map[v1.ObjectRef]bool      // each schedule's rpoRisk as last seen
+	warned  map[v1.ObjectRef]bool      // the schedules whose SameProvider Warn this process logged
+	synced  map[v1.ObjectRef]time.Time // when this process last started each schedule's sync (ADR-0287)
 	running sync.WaitGroup
 }
 
@@ -172,7 +173,7 @@ func New(d Deps) (*Reconcilers, error) {
 		log = slog.Default()
 	}
 	b := &base{d: d, log: log.With("component", "backup.workload"), active: map[v1.ObjectRef]bool{}, risk: map[v1.ObjectRef]bool{},
-		warned: map[v1.ObjectRef]bool{}}
+		warned: map[v1.ObjectRef]bool{}, synced: map[v1.ObjectRef]time.Time{}}
 	var err error
 	if b.runs, err = d.Meter.Int64Counter("funcd.backup.runs"); err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "register funcd.backup.runs")

@@ -374,6 +374,27 @@ func nestedWorkflowDir(t *testing.T) (extra, parent string) {
 	return fmt.Sprintf("workflow:\n  dataDir: %q\n", filepath.Join(parent, "workflow")), parent
 }
 
+// TestRestoreRun_MarksBackupSchedules (ADR-0287 Decision 1): restore run sets each restored BackupSchedule's
+// TargetSynced False, reason PlatformRestored, so its reconciler records the newer copies before it takes a slot.
+//
+// Serial: it reopens the Badger directory the restore closed, which a parallel test's forked child can hold locked
+// (#1149).
+func TestRestoreRun_MarksBackupSchedules(t *testing.T) {
+	target, escrowDir := dirsGeneration(t)
+	n := newNode(t, nil, "")
+	_, err := n.restore("run", "latest", "--from", target, "--escrow", escrowDir)
+	require.NoError(t, err)
+	eng, err := badgerstore.Open(filepath.Join(n.dataDir, "store"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = eng.Close() })
+	obj, err := store.New(eng).Get(context.Background(), v1.KindBackupSchedule.GVK(), "orders", "nightly")
+	require.NoError(t, err)
+	c, ok := obj.(*v1.BackupSchedule).Status.Conditions.Get(v1.ConditionTargetSynced)
+	require.True(t, ok, "the restored schedule carries TargetSynced")
+	require.Equal(t, v1.ConditionFalse, c.Status)
+	require.Equal(t, v1.ReasonPlatformRestored, c.Reason)
+}
+
 // A restore gives every directory it creates the data directory's owner (ADR-0206 Decision 2 step 5): the escrowed
 // master's, the namespace markers' and a store directory's parent. Run as root, the master's and the parent were root's,
 // so a daemon running as the data directory's owner could not read its master or reach its store.

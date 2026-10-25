@@ -762,13 +762,26 @@ func (r *wbRig) gauge() int64 {
 // run would, for a platform that is held from the start.
 func (r *wbRig) sealedCopy(name v1.ObjectName, schedule v1.ObjectName) *v1.Backup {
 	r.t.Helper()
-	sealer, err := envelope.Parse([]string{r.owner.Recipient().String(), r.recovery.Recipient().String()})
-	require.NoError(r.t, err)
 	b := r.backupObj(string(name), schedule)
 	created, err := r.st.Create(r.ctx, b)
 	require.NoError(r.t, err)
 	b = created.(*v1.Backup)
-	path := "orders/" + string(name) + "-" + string(b.UID) + "/"
+	path, recipients := r.copyOn(name, string(b.UID))
+	now := v1.NewTimestamp(r.clk.Now())
+	b.Status = v1.BackupStatus{Phase: v1.RunSucceeded, StartTime: &now, CompletionTime: &now, Target: r.stub.URL(), Path: path,
+		Recipients: recipients}
+	_, err = r.st.Update(r.ctx, b)
+	require.NoError(r.t, err)
+	return b
+}
+
+// copyOn writes a copy of orders-state onto the stub at orders/<name>-<uid>/ with workload.Write, as a run makes it,
+// and returns its path and the recipients' fingerprints.
+func (r *wbRig) copyOn(name v1.ObjectName, uid string) (string, []string) {
+	r.t.Helper()
+	sealer, err := envelope.Parse([]string{r.owner.Recipient().String(), r.recovery.Recipient().String()})
+	require.NoError(r.t, err)
+	path := "orders/" + string(name) + "-" + uid + "/"
 	tg, err := gocloud.OpenWith(r.ctx, r.stub.URL(), gocloud.OpenOptions{Static: &gocloud.StaticKey{ID: "AKIDWRITER", Secret: "w"}})
 	require.NoError(r.t, err)
 	defer func() { _ = tg.Close() }()
@@ -778,12 +791,7 @@ func (r *wbRig) sealedCopy(name v1.ObjectName, schedule v1.ObjectName) *v1.Backu
 	_, err = workload.Write(r.ctx, "orders", []workload.Member{{Kind: v1.KindKVStore, Name: "orders-state"}}, src,
 		workload.Options{Target: tg, Path: path, Seal: sealer.Seal(), Recipients: sealer.Keys().Recipients})
 	require.NoError(r.t, err)
-	now := v1.NewTimestamp(r.clk.Now())
-	b.Status = v1.BackupStatus{Phase: v1.RunSucceeded, StartTime: &now, CompletionTime: &now, Target: r.stub.URL(), Path: path,
-		Recipients: sealer.Keys().Recipients}
-	_, err = r.st.Update(r.ctx, b)
-	require.NoError(r.t, err)
-	return b
+	return path, sealer.Keys().Recipients
 }
 
 func (r *wbRig) restoreObj(name, backup string, m v1.RestoreMember) *v1.Restore {

@@ -1,6 +1,6 @@
 # ADR-0287: A platform restore finds the Backups its schedules made after the restored point
 
-- **Status**: Accepted (2026-10-25) under the decider's delegation, after two judge rounds (cowork); Proposed 2026-10-25
+- **Status**: Reviewing (2026-10-25); Accepted 2026-10-25 under the decider's delegation, after two judge rounds (cowork); Proposed 2026-10-25
 - **Date**: 2026-10-25
 - **Deciders**: green-0-rabbit
 - **Tags**: backup, restore, disaster-recovery, workload

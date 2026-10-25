@@ -55,6 +55,11 @@ operator reads the evidence and releases the hold.
    Each restored run that was not finished stays paused: `funcdctl workflow resume` runs it from its record,
    `funcdctl workflow cancel` ends it. Dead letters stay parked until replayed. The boot reclaims of KV and Bucket
    data with no object run at the next start after the release: apply, while held, the objects whose data stays.
+8. **Hand each app namespace to its owner.** A namespace with a BackupSchedule stays held (reason `data`) after
+   `hold release`, and its schedules take no slot, until its owner restores its data and runs
+   `funcdctl hold release --namespace <ns>` ([workload-backup.md](workload-backup.md#after-a-platform-restore)). Each
+   schedule first records the copies its target holds from after the restored point (ADR-0287): the owner waits for
+   its `TargetSynced` condition to read `True` before choosing the Backup to restore.
 
 To bring back one object, `funcd restore inspect <point> --object Secret/<ns>/<name> --secrets-key <key>
 --reveal-secrets > s.yaml`, then `funcdctl apply -f s.yaml`. Without `--reveal-secrets` Secret values print as

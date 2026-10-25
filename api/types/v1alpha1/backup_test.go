@@ -60,6 +60,24 @@ func TestBackupNameFromSlot(t *testing.T) {
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
 
+// TestParseBackupSlotName (ADR-0287 Decision 3): the inverse of BackupSlotName, and a name is its own schedule's only:
+// a-1-<n> is a-1's slot, not a's.
+func TestParseBackupSlotName(t *testing.T) {
+	slot := time.Date(2026, 10, 25, 9, 41, 0, 0, time.UTC)
+	if got, ok := ParseBackupSlotName("a", BackupSlotName("a", slot)); !ok || !got.Equal(slot) {
+		t.Fatalf("round trip: %s %v", got, ok)
+	}
+	n := itoa(slot.Unix() / 60)
+	if got, ok := ParseBackupSlotName("a-1", ObjectName("a-1-"+n)); !ok || !got.Equal(slot) {
+		t.Fatalf("a-1's slot: %s %v", got, ok)
+	}
+	for _, name := range []string{"a-1-" + n, "a-", "a-0" + n, "a-+" + n, "a--" + n, "a-" + n + "x", "ab-" + n, "b-" + n, "a-before"} {
+		if _, ok := ParseBackupSlotName("a", ObjectName(name)); ok {
+			t.Errorf("%q parsed as a slot of a", name)
+		}
+	}
+}
+
 func TestBackupScheduleValidate(t *testing.T) {
 	cases := map[string]struct {
 		mutate func(*BackupSchedule)

@@ -175,9 +175,37 @@ type AppBackupSchedule struct {
 	BackupScheduleSpec `json:",inline"`
 }
 
+// ConditionTargetSynced is a BackupSchedule's condition after a platform restore (ADR-0287): False with
+// ReasonPlatformRestored from funcd restore run, True once a sync recorded the whole copies its target holds after the
+// restored point, False with ReasonListFailed while the target refuses the listing. While it is False the schedule
+// takes no slot.
+const ConditionTargetSynced = ConditionType("TargetSynced")
+
+// The reasons of ADR-0287: restore run's mark on a restored schedule, a sync whose listing failed, and a Backup whose
+// record a listing of its whole copy on the target made or completed.
+const (
+	ReasonPlatformRestored = "PlatformRestored"
+	ReasonListFailed       = "ListFailed"
+	ReasonFoundOnTarget    = "FoundOnTarget"
+)
+
 // BackupSlotName is the Backup a schedule creates for slot: <schedule>-<slot in Unix minutes> (Decision 3).
 func BackupSlotName(schedule ObjectName, slot time.Time) ObjectName {
 	return ObjectName(string(schedule) + "-" + strconv.FormatInt(slot.Unix()/60, 10))
+}
+
+// ParseBackupSlotName is BackupSlotName's inverse: the slot of name when it is <schedule>-<Unix minutes>, written as
+// BackupSlotName writes it (ADR-0287).
+func ParseBackupSlotName(schedule, name ObjectName) (time.Time, bool) {
+	rest, ok := strings.CutPrefix(string(name), string(schedule)+"-")
+	if !ok {
+		return time.Time{}, false
+	}
+	minutes, err := strconv.ParseInt(rest, 10, 64)
+	if err != nil || minutes < 0 || strconv.FormatInt(minutes, 10) != rest {
+		return time.Time{}, false
+	}
+	return time.Unix(minutes*60, 0).UTC(), true
 }
 
 // RestoreExportName is the Backup an in-place Restore runs first: <restore>-before (Decision 7).

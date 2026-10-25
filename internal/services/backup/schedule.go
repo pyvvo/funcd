@@ -21,7 +21,8 @@ type ScheduleReconciler struct{ *base }
 // lastScheduleTime kept, while the schedule is paused or its namespace held, so the missed slots collapse into one
 // catch-up; while one of its Backups is Pending or Running, S creates none and is taken, so no run overlaps another.
 // Else S creates Backup <schedule>-<S in Unix minutes>, a Conflict counting as done, and lastScheduleTime becomes S.
-// A deleted schedule leaves its Backups (they outlive it).
+// A deleted schedule leaves its Backups (they outlive it). After a platform restore, until a sync of its target has
+// recorded the copies made after the restored point, the schedule takes no slot (ADR-0287 Decision 2).
 func (r *ScheduleReconciler) Reconcile(ctx context.Context, req controller.Request) (controller.Result, error) {
 	const op = "backup.ScheduleReconcile"
 	key := v1.ObjectRef{Kind: v1.KindBackupSchedule, Namespace: req.Namespace, Name: req.Name}
@@ -48,11 +49,15 @@ func (r *ScheduleReconciler) Reconcile(ctx context.Context, req controller.Reque
 	now := r.d.Clock.Now()
 	next := s.Status
 	next.Conditions = slices.Clone(s.Status.Conditions) // Set writes in place: keep the stored status to compare
+	pending := syncPending(s.Status)
+	if pending {
+		r.startSync(ctx, s, now)
+	}
 	last := time.Time(s.CreationTime)
 	if t := s.Status.LastScheduleTime; t != nil {
 		last = time.Time(*t)
 	}
-	if slot, due := newestDue(table, last, now); due {
+	if slot, due := newestDue(table, last, now); due && !pending {
 		switch active := activeOf(backups); {
 		case s.Spec.Paused, r.heldIn(s.Namespace):
 		case active != nil:
@@ -267,6 +272,7 @@ func (r *ScheduleReconciler) forget(key v1.ObjectRef) {
 	defer r.mu.Unlock()
 	delete(r.risk, key)
 	delete(r.warned, key)
+	delete(r.synced, key)
 }
 
 // wake is when the schedule needs its next pass: its next slot, or the slot that would turn rpoRisk on, at the latest

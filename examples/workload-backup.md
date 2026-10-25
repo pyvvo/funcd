@@ -118,3 +118,19 @@ names it, and no in-place Restore of the namespace is admitted until the release
 `funcd restore run` holds each namespace that has a BackupSchedule: its stores return without their data, so its
 timers, blob sources, Sensors, runs, App and slots wait (Backups by hand and Restores still run). Restore the data,
 then `funcdctl hold release --namespace orders`.
+
+The restored records stop at the platform backup's point, while the schedule kept backing up on the lost host. So
+`restore run` marks each schedule `TargetSynced` `False` (reason `PlatformRestored`). Its reconciler then lists the
+target, with the schedule's own put-and-list credential, and records each whole copy of a slot after the restored
+`lastScheduleTime` as a `Succeeded` Backup with reason `FoundOnTarget` (ADR-0287). The schedule takes no slot until
+that sync has succeeded, released or not:
+
+```sh
+funcdctl get backupschedules orders-nightly -n orders -o json  # wait for TargetSynced True: "found 3 Backups, newest …"
+funcdctl get backups -n orders                                 # then restore the newest
+```
+
+While the target refuses the listing, `TargetSynced` reads `False`, reason `ListFailed`, and the sync retries; point
+`spec.target.url` at a target that answers, or delete the schedule, to let it go on. Copies of Backups by hand, of
+exports and of schedules the restored platform does not hold get no record. Delete no Backup before `TargetSynced`
+reads `True`: a crash during the sync can bring a record deleted in the meantime back once.
