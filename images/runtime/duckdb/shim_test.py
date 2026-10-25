@@ -1126,25 +1126,151 @@ class TestTheStopAnswersACallAfterItsDetach(unittest.TestCase):
         self.assertEqual(answers, [(200, {"engine": checkpointer.saved.instance, "saved": 9})])
 
 
-class TestTheStartUpSaveWithoutAWatcher(unittest.TestCase):
-    """ADR-0279 Decision 2 with ADR-0276 Decision 2: a recovered catalog is saved once at start and retried until a
-    save succeeds; a fresh one is not saved."""
+class _TimedBucket(_FailingBucket):
+    """The S3 client of the retry tests: it refuses the first `fail` uploads, and records when each upload came and
+    the report it found then."""
 
-    def test_a_recovered_catalog_is_saved_and_retried(self) -> None:
-        recorder = _Recorder(fail=2)
-        with mock.patch.object(shim, "START_UP_RETRY_SECONDS", INTERVAL):
-            saver = shim._StartUpSave(recorder, recovered=True)
-            saver.start()
-            self.assertTrue(recorder.done.wait(WAIT))
-            saver.join(WAIT)
-        self.assertEqual(recorder.calls, 3)
+    def __init__(self, fail: int, report: str) -> None:
+        super().__init__(fail)
+        self.report = report
+        self.puts: list = []
+
+    def put_object(self, Bucket: str, Key: str, Body: bytes) -> None:  # noqa: N803 — boto3's keyword names.
+        found = open(self.report).read() if os.path.exists(self.report) else ""
+        self.puts.append((time.monotonic(), found))
+        super().put_object(Bucket=Bucket, Key=Key, Body=Body)
+
+
+def _eventually(condition: Callable[[], bool]) -> bool:
+    deadline = time.monotonic() + WAIT
+    while time.monotonic() < deadline:
+        if condition():
+            return True
+        time.sleep(INTERVAL / 4)
+    return condition()
+
+
+class _RetryCase(unittest.TestCase):
+    """A checkpointer with the save endpoint's outcome and a report, and its _SaveRetry, retrying every INTERVAL."""
+
+    def checkpointer(self, engine: _SaveEngine, fail: int, covered: int) -> tuple:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        for patch in (mock.patch.object(shim, "LOCAL_CHECKPOINT", os.path.join(tmp.name, "checkpoint.ducklake")),
+                      mock.patch.object(shim, "SAVE_RETRY_SECONDS", INTERVAL),
+                      mock.patch.object(shim.sys, "stderr", io.StringIO())):
+            patch.start()
+            self.addCleanup(patch.stop)
+        bucket = _TimedBucket(fail, os.path.join(tmp.name, "report"))
+        checkpointer = shim._Checkpointer(engine, bucket, "lake", "gold/_ducklake/catalog.db", bucket.report,
+                                          shim._Saved(covered))
+        return checkpointer, bucket
+
+    def retry(self, checkpointer: "shim._Checkpointer", recovered: bool = False) -> "shim._SaveRetry":
+        saver = shim._SaveRetry(checkpointer, recovered)
+        saver.start()
+        self.addCleanup(saver.join, WAIT)
+        self.addCleanup(saver.stop)
+        return saver
+
+    def refused_call(self, checkpointer: "shim._Checkpointer", target: int) -> None:
+        with self.assertRaises(OSError):
+            checkpointer.save_covering(target)
+
+
+class TestScenarioIdleLakeRecovers(_RetryCase):
+    """ADR-0289 scenario idle-lake-recovers: a call's refused save is made again with no other call once S3 accepts,
+    and the report reads saved."""
+
+    def test_a_refused_call_save_is_made_again_with_no_call(self) -> None:
+        engine = _SaveEngine(6)
+        checkpointer, bucket = self.checkpointer(engine, fail=1, covered=5)
+        self.refused_call(checkpointer, 6)
+        self.retry(checkpointer)
+        self.assertTrue(_eventually(lambda: bucket.bodies == [b"6"]), "the refused save was not made again")
+        self.assertEqual(checkpointer.saved.covered, 6)
+        self.assertIsNone(checkpointer.saved.error)
+        self.assertTrue(open(bucket.report).read().startswith("saved "))
+
+
+class TestScenarioRetriesWhileRefused(_RetryCase):
+    """ADR-0289 scenario retries-while-refused: while S3 refuses, the engine saves again once per retry period, and its
+    report keeps the first failure's time."""
+
+    def test_one_attempt_per_period_with_the_first_failure_kept(self) -> None:
+        engine = _SaveEngine(6)
+        checkpointer, bucket = self.checkpointer(engine, fail=4, covered=5)
+        self.refused_call(checkpointer, 6)
+        first = open(bucket.report).read()
+        self.retry(checkpointer)
+        self.assertTrue(_eventually(lambda: bucket.bodies == [b"6"]))
+        times = [t for t, _ in bucket.puts]
+        self.assertEqual(len(times), 5, "one refused call, three refused retries, one good retry")
+        self.assertTrue(all(b - a >= INTERVAL * 0.9 for a, b in zip(times[1:], times[2:])), times)
+        kept = {found.split(": ")[0] for _, found in bucket.puts[1:]}
+        self.assertEqual(kept, {first.split(": ")[0]}, "a retry replaced the first failure's time")
+
+
+class TestScenarioNoRetryAfterAGoodSave(_RetryCase):
+    """ADR-0289 scenario no-retry-after-a-good-save: while the last save succeeded nothing is uploaded, at start for a
+    fresh catalog and after a good retry."""
 
     def test_a_fresh_catalog_is_not_saved(self) -> None:
-        recorder = _Recorder()
-        saver = shim._StartUpSave(recorder, recovered=False)
-        saver.start()
+        engine = _SaveEngine(6)
+        checkpointer, bucket = self.checkpointer(engine, fail=0, covered=6)
+        self.retry(checkpointer)
+        time.sleep(20 * INTERVAL)
+        self.assertEqual((engine.copies, bucket.bodies), (0, []))
+
+    def test_nothing_after_a_good_retry(self) -> None:
+        engine = _SaveEngine(6)
+        checkpointer, bucket = self.checkpointer(engine, fail=1, covered=5)
+        self.refused_call(checkpointer, 6)
+        self.retry(checkpointer)
+        self.assertTrue(_eventually(lambda: bucket.bodies == [b"6"]))
+        time.sleep(20 * INTERVAL)
+        self.assertEqual(engine.copies, 2, "a save after the good retry")
+
+
+class TestScenarioStopEndsRetries(_RetryCase):
+    """ADR-0289 scenario stop-ends-retries: once the stop joined the retry, no save is attempted."""
+
+    def test_no_attempt_after_the_join(self) -> None:
+        engine = _SaveEngine(6)
+        checkpointer, bucket = self.checkpointer(engine, fail=10**6, covered=5)
+        self.refused_call(checkpointer, 6)
+        saver = self.retry(checkpointer)
+        self.assertTrue(_eventually(lambda: len(bucket.puts) >= 3))
+        saver.stop()
         saver.join(WAIT)
-        self.assertEqual(recorder.calls, 0)
+        self.assertFalse(saver.is_alive())
+        attempts = len(bucket.puts)
+        time.sleep(10 * INTERVAL)
+        self.assertEqual(len(bucket.puts), attempts)
+
+    def test_a_retry_that_waited_for_the_lock_saves_nothing(self) -> None:
+        engine = _SaveEngine(6)
+        checkpointer, bucket = self.checkpointer(engine, fail=1, covered=5)
+        self.refused_call(checkpointer, 6)
+        with checkpointer._lock:
+            saver = self.retry(checkpointer)
+            time.sleep(5 * INTERVAL)
+            saver.stop()
+        saver.join(WAIT)
+        self.assertFalse(saver.is_alive())
+        self.assertEqual(len(bucket.puts), 1, "a retry saved after the stop began")
+
+
+class TestTheStartUpSaveWithoutAWatcher(_RetryCase):
+    """ADR-0279 Decision 2 with ADR-0276 Decision 2: a recovered catalog is saved once at start, and the retry makes a
+    failed start-up save again until one succeeds."""
+
+    def test_a_recovered_catalog_is_saved_and_retried(self) -> None:
+        engine = _SaveEngine(6)
+        checkpointer, bucket = self.checkpointer(engine, fail=2, covered=6)
+        self.retry(checkpointer, recovered=True)
+        self.assertTrue(_eventually(lambda: bucket.bodies == [b"6"]))
+        self.assertEqual(engine.copies, 3)
 
 
 class _SnapshotRecording(_Recording):

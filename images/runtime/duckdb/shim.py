@@ -32,7 +32,8 @@ copies the catalog's metadata database with ``COPY FROM DATABASE`` (one transact
 own DuckDB, so the copy is consistent while commits land) into a fresh file and uploads it
 whole-object to the catalog blob key. A torn Put leaves the prior checkpoint intact; recovery is
 GetObject → local file → ATTACH. With FUNCD_LAKE_SAVE_PORT (no lake.saveInterval, ADR-0279) the shim saves when the
-Lake PEP proxy asks, before it answers a client, instead of at an interval.
+Lake PEP proxy asks, before it answers a client, instead of at an interval, and saves again every second while the
+last save failed (ADR-0289).
 """
 
 from __future__ import annotations
@@ -75,8 +76,8 @@ SAVE_INTERVAL_KEY = "FUNCD_LAKE_SAVE_INTERVAL"
 # The port of the save endpoint the Lake PEP proxy calls before it answers, set when lake.saveInterval is not
 # (ADR-0279); without it the engine saves at its interval.
 SAVE_PORT_KEY = "FUNCD_LAKE_SAVE_PORT"
-# How often a recovered catalog's start-up save is retried while it fails, in that mode (ADR-0276 Decision 2).
-START_UP_RETRY_SECONDS = 1.0
+# How often a failed save is retried in that mode, the start-up save's (ADR-0276 Decision 2) or any other (ADR-0289).
+SAVE_RETRY_SECONDS = 1.0
 # How long a stop lets the save calls it covered send their answers before Quack stops (ADR-0279 Decision 2).
 SAVE_ANSWER_WAIT_SECONDS = 1.0
 # How long a stop lets the clients of the queries it cancelled read their interrupt error before Quack stops: a client
@@ -312,8 +313,8 @@ class _Checkpointer:
     DuckLake makes the Parquet durable on S3 BEFORE a commit lands, so a checkpoint never names a missing object.
     The catalog is metadata-sized (file-lists + snapshots, not row data), within the gateway's upload cap.
     Coalesced: _CommitWatcher calls checkpoint once per poll interval in which a transaction committed, or, with the
-    save endpoint, each call that no save covers calls save_covering (ADR-0279); the SIGTERM handler calls stop once;
-    the lock serializes them.
+    save endpoint, each call that no save covers calls save_covering (ADR-0279) and _SaveRetry calls retry (ADR-0289);
+    the SIGTERM handler calls stop once; the lock serializes them.
     """
 
     def __init__(self, cur: "duckdb.DuckDBPyConnection", s3, bucket: str, key: str, report: str | None = None,
@@ -373,6 +374,13 @@ class _Checkpointer:
                 raise saved.error
             self._checkpoint()
             return saved.covered
+
+    def retry(self, stop: threading.Event) -> None:
+        """Saves when the last save failed and stop is not set, else returns: a good save that ended while it waited for
+        the lock leaves nothing to retry, and a stop that began meanwhile makes its own save (ADR-0289)."""
+        with self._lock:
+            if self.saved.error is not None and not stop.is_set():
+                self._checkpoint()
 
     def _saved(self, save: Callable[[], object]) -> None:
         """Runs one save and replaces the report with its outcome, keeping the first failure's time while saves fail
@@ -554,24 +562,29 @@ class _CommitWatcher(threading.Thread):
         self._done.set()
 
 
-class _StartUpSave(threading.Thread):
-    """ADR-0276 Decision 2 without the watcher (ADR-0279): a recovered catalog is saved once at start, retried every
-    START_UP_RETRY_SECONDS until a save succeeds or the stop begins; a fresh one waits for its first commit's save."""
+class _SaveRetry(threading.Thread):
+    """ADR-0289 without the watcher (ADR-0279): a recovered catalog is saved once at start (ADR-0276 Decision 2), and
+    every SAVE_RETRY_SECONDS a failed save, its own or a save call's, is made again, until the stop joins this thread.
+    While the last save succeeded it saves nothing; a fresh catalog waits for its first commit's save."""
 
     def __init__(self, checkpointer: _Checkpointer, recovered: bool) -> None:
-        super().__init__(name="start-up-save", daemon=True)
+        super().__init__(name="save-retry", daemon=True)
         self._checkpointer = checkpointer
-        self._pending = recovered
+        self._recovered = recovered
         self._done = threading.Event()
 
     def run(self) -> None:
-        while self._pending and not self._done.is_set():
-            try:
-                self._checkpointer.checkpoint()
-                return
-            except Exception as exc:  # noqa: BLE001 — retried; the report shows the failure.
-                sys.stderr.write(f"funcd duckdb shim: the start-up save failed, retrying: {exc}\n")
-            self._done.wait(START_UP_RETRY_SECONDS)
+        if self._recovered:
+            self._attempt(self._checkpointer.checkpoint)
+        while not self._done.wait(SAVE_RETRY_SECONDS):
+            self._attempt(lambda: self._checkpointer.retry(self._done))
+
+    @staticmethod
+    def _attempt(save: Callable[[], None]) -> None:
+        try:
+            save()
+        except Exception:  # noqa: BLE001 — retried; _checkpoint logged the failure and the report shows it.
+            return
 
     def stop(self) -> None:
         self._done.set()
@@ -632,8 +645,8 @@ def _stop(drain, watcher: _CommitWatcher, watch, checkpointer: _Checkpointer, se
     """The graceful stop (#1198, ADR-0273). The watcher keeps saving while the running queries drain; its cursor holds
     the catalog open, which the stop waits out, so it stops and closes before the stop detaches the catalog. One more
     save then covers the commits of its last interval: a kill later in the stop loses only what completes after this
-    save. With the save endpoint (ADR-0279) the watcher is the start-up save, and the save calls answer the stop's
-    upload. The stop's own error is logged, as the engine then exits 0 whatever happened (ADR-0276)."""
+    save. With the save endpoint (ADR-0279) the watcher is the save retry (ADR-0289), and the save calls answer the
+    stop's upload. The stop's own error is logged, as the engine then exits 0 whatever happened (ADR-0276)."""
     try:
         _drain(drain, STOP_WAIT_SECONDS)
         drain.close()
@@ -690,7 +703,7 @@ def main() -> int:
         saved = _Saved(watch.execute(LATEST_SNAPSHOT).fetchone()[0])
         checkpointer = _Checkpointer(saves, s3, bucket, key, os.environ.get(REPORT_KEY), saved)
         _serve_saves(int(save_port), checkpointer, con)
-        watcher = _StartUpSave(checkpointer, recovered)
+        watcher = _SaveRetry(checkpointer, recovered)
     else:
         checkpointer = _Checkpointer(saves, s3, bucket, key, os.environ.get(REPORT_KEY))
         watcher = _CommitWatcher(checkpointer, lambda: watch.execute(LATEST_SNAPSHOT).fetchone()[0], save_interval,

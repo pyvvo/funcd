@@ -607,18 +607,6 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldEqual APPLIED
-      - type: http
-        method: POST
-        url: "http://127.0.0.1:8081/function/lake-reader"
-        headers:
-          content-type: application/json
-        body: '{"data":{"sql":"SELECT n FROM lakehouse.issue1233_refused"}}'
-        retry: 30
-        delay: 2
-        info: "a query once the prefix is the Lake's again saves the waiting commit (ADR-0279) → status {{.result.statuscode}} body {{.result.body}}"
-        assertions:
-          - result.statuscode ShouldEqual 200
-          - result.body ShouldContainSubstring "[[1233]]"
       - type: exec
         script: |
           limactl shell --workdir / {{.vm}} bash -lc '
@@ -629,9 +617,21 @@ testcases:
           print(c.get(\"status\",\"\"),c.get(\"reason\",\"\"),s.get(\"phase\",\"\"),c.get(\"message\",\"\"))"'
         retry: 60
         delay: 2
-        info: "CatalogSaved once the prefix is the Lake's again → {{.result.systemout}}"
+        info: "CatalogSaved once the prefix is the Lake's again, with no query: the engine retried its save (ADR-0289) → {{.result.systemout}}"
         assertions:
           - result.systemout ShouldMatchRegex "^True Saved Ready saved [0-9]"
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT n FROM lakehouse.issue1233_refused"}}'
+        retry: 10
+        delay: 2
+        info: "the commit the retried save kept reads back (ADR-0289) → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring "[[1233]]"
 
   # ADR-0152: a Function and a Lake share the name `lake`; each reconciler manages only its own kind's workers.
   - name: same-name-function-and-lake-stay-ready — Function lake deploys and scales beside Lake lake, which keeps its engine

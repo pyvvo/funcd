@@ -527,10 +527,10 @@ class _Via:
         self.uri = uri
 
 
-def _barrier(test: unittest.TestCase, lake: "_Lake", **kw: bool) -> tuple:
+def _barrier(test: unittest.TestCase, lake: "_Lake", env: dict | None = None, **kw: bool) -> tuple:
     """Starts an engine that saves before it answers (FUNCD_LAKE_SAVE_PORT) and a barrier proxy in front of it."""
     save_port = _free_port()
-    engine = lake.start(env={"FUNCD_LAKE_SAVE_PORT": str(save_port)})
+    engine = lake.start(env={"FUNCD_LAKE_SAVE_PORT": str(save_port), **(env or {})})
     proxy = _BarrierProxy(test, int(engine.uri.rsplit(":", 1)[1]), save_port, **kw)
     return engine, proxy, _Via(proxy.uri)
 
@@ -628,7 +628,7 @@ class TestScenarioReadWaitsForNothingSaved(unittest.TestCase):
 
 class TestTheSaveEndpointOnARealEngine(unittest.TestCase):
     """ADR-0279 Decision 2 on a real engine: commits that wait for saves when the engine stops are kept once acknowledged;
-    while S3 refuses, every commit's answer fails, and once it accepts again the next call's save keeps them."""
+    while S3 refuses, every commit's answer fails, and once it accepts again the next save keeps them."""
 
     def test_stop_answers_waiting_saves(self) -> None:
         lake = _Lake(self)
@@ -684,7 +684,33 @@ class TestTheSaveEndpointOnARealEngine(unittest.TestCase):
         os.remove(refuse)
         self.assertEqual(lake.client.query(via, "SELECT count(*) FROM lakehouse.r"), [(3,)])
         self.assertEqual(_rows(lake.stored(), lake.data, "SELECT count(*) FROM stored.r"), [(3,)],
-                         "the read's save did not keep the commits whose answers failed")
+                         "the next save did not keep the commits whose answers failed")
+
+
+class TestScenarioIdleLakeRecovers(unittest.TestCase):
+    """scenario: idle-lake-recovers (ADR-0289) — after a refused save, with no request since, the engine saves again once
+    S3 accepts: the stored catalog holds the commit, the report reads saved, and a SIGKILL then loses nothing."""
+
+    # oracle: docs/design/lake/commit-save.fizz#SavesRecover
+    def test_scenario_idle_lake_recovers(self) -> None:
+        lake = _Lake(self)
+        report = os.path.join(lake.root, "report")
+        engine, _, via = _barrier(self, lake, env={"FUNCD_REPORTFILE": report})
+        lake.client.query(via, "CREATE TABLE lakehouse.t (i BIGINT)")
+        refuse = os.path.join(lake.s3, "refuse")
+        open(refuse, "w").close()
+        with self.assertRaises(Exception, msg="a commit was acknowledged while S3 refused its save"):
+            lake.client.query(via, "INSERT INTO lakehouse.t VALUES (1)")
+        self.assertTrue(open(report).read().startswith("failing since "), open(report).read())
+        os.remove(refuse)
+        deadline = time.monotonic() + 3
+        while not open(report).read().startswith("saved ") and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(open(report).read().startswith("saved "), "no save followed S3's return without a request")
+        self.assertEqual(_rows(lake.stored(), lake.data, "SELECT count(*) FROM stored.t"), [(1,)])
+        engine.proc.kill()
+        engine.proc.wait(timeout=30)
+        self.assertEqual(lake.client.query(lake.start(), "SELECT i FROM lakehouse.t"), [(1,)])
 
 
 class TestScenarioSaveIntervalFromConfig(unittest.TestCase):
