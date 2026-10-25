@@ -23,7 +23,7 @@
 # Pinned to the BOOKWORM variant (glibc 2.36) so the interpreter + its C-ext libs link against the SAME
 # glibc the distroless/cc-debian12 final stage ships — the default `:3.14-slim` drifted to trixie
 # (glibc 2.41), whose libpython won't load on cc-debian12 (ADR-0071: a working, reproducible rebuild).
-FROM python:3.14-slim-bookworm@sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83 AS py
+FROM python:3.15-slim-bookworm@sha256:575f8bc12ec26542e0678bc6b60e385218248019d433157ec327264a78c3a853 AS py
 
 # The funcd Python shim package (stdlib-only — ADR-0049/0050). Laid into the site path the
 # embedded 3.14 will see. `shim` is a named build context: the pinned funcd-python module's shim/ dir
