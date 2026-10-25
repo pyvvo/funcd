@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.30.1](https://github.com/pyvvo/funcd/compare/v0.30.0...v0.30.1) (2026-10-25)
+
+
+### Bug Fixes
+
+* **backup:** warn of rpoRisk while a call to the backup target waits ([#1294](https://github.com/pyvvo/funcd/issues/1294)) ([bccade5](https://github.com/pyvvo/funcd/commit/bccade5854c3d558cc36be1fa3110f3d5d953746))
+* **ci:** the lanes' simulated host loss removes crun's state under /run ([#1296](https://github.com/pyvvo/funcd/issues/1296)) ([7fb7c74](https://github.com/pyvvo/funcd/commit/7fb7c74ad2e1dcedce47a75054b22511a41683a1))
+
 ## [0.30.0](https://github.com/pyvvo/funcd/compare/v0.29.0...v0.30.0) (2026-10-25)
 
 
