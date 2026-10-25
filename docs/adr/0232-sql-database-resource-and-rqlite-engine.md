@@ -4,6 +4,7 @@
   added `-http-adv-addr` without which rqlited refuses to start, let a database with no directory be deleted, applied a
   resources change by a single teardown, and pinned the upgrade rule; the second found one Major, fixed: the teardown
   pass records the observed generation)
+- **Superseded in part by**: [ADR-0288](0288-a-boot-reclaim-quarantines-data-no-object-names.md) (2026-10-25) — Decision 7's boot reclaim of every engine directory with no `SQLDatabase`: the start moves it into the quarantine
 - **Date**: 2026-10-12
 - **Deciders**: green-0-rabbit
 - **Tags**: sql, provider, rqlite, image

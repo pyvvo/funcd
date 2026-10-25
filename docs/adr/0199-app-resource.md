@@ -13,6 +13,7 @@
   refuses two objects of one kind and name that parts' reconcilers would make, such as the `kv` stores or step
   Functions of two Workflows, and the scenario `app-shared-writer-refused` gains that case. The normal rule (correct a
   frozen ADR through a superseding ADR) is preserved for every other ADR.
+- **Superseded in part by**: [ADR-0288](0288-a-boot-reclaim-quarantines-data-no-object-names.md) (2026-10-25) — Decision 7's boot purge of every Bucket prefix whose Bucket no longer exists: the start moves those objects into the quarantine
 - **Date**: 2026-10-08 (judged in three rounds: five lenses, then three, then one, each finding checked by a skeptic)
 - **Deciders**: green-0-rabbit
 - **Tags**: app, lifecycle, controller, admission, gc, ownership

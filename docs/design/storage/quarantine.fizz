@@ -1,0 +1,210 @@
+---
+# The quarantine of data no object names (ADR-0288), for a kind whose move is a copy: a KVStore's keys or, on S3, a Bucket's
+# objects. The orphan holds keys k1 and k2 and no object names it. An unheld start moves them into one entry: it writes
+# the entry moving, copies a key, deletes it from the source, and writes the entry kept once the source is empty; a
+# move whose store fails leaves the entry moving and the start goes on. A start resumes a moving entry while no object
+# names it, and else writes it kept as it stands (split: the keys not moved stay with the new object). The sweep
+# deletes a kept entry once the period passed, while serving and not held. The owner may apply an object of that name
+# and write a key n; an admin may return the entry into it. funcd may crash once, at any step; the next start resumes.
+# Environment: nothing writes the source during a start; the verb's guards read the store as it is.
+# Left out: the SQL rename and the volume's retain (one step each), the layouts and the period's arithmetic (left to
+# TestScenarioSQLAndVolumeKept and the drivers' tests).
+deadlock_detection: false
+options:
+  max_concurrent_actions: 1
+  max_actions: 19
+  crash_on_yield: false
+---
+# diagram: phase, entry
+# mutant delete-at-start: NothingLost
+# mutant delete-before-copy: NothingLost
+# mutant no-resume: NothingLost
+# mutant kept-early: KeptIsWhole
+# mutant expire-moving: NothingLost
+# mutant return-on-apply: NoReturnUnasked
+# mutant return-into-full: ReturnsIntoEmpty
+
+KEYS = ["k1", "k2"]
+# delete-at-start: the start drops the orphan's data (before ADR-0288).
+# delete-before-copy: the move deletes a key from the source before the entry holds it.
+# no-resume: a start begins a new entry instead of resuming a moving one.
+# kept-early: the move writes the entry kept before the source is empty.
+# expire-moving: the sweep expires a moving entry too.
+# return-on-apply: applying an object of the name returns a kept entry into it.
+# return-into-full: the verb returns into an object whose data is not empty.
+MUTANT = ""
+
+action Init:
+    h = oneof [True, False]
+    held = h
+    src = {"k1": "old", "k2": "old"}
+    obj = False
+    entry = ""
+    kept = []
+    phase = "start"
+    crashes = 0
+    failed = False
+    period = False
+    expired = False
+    split = False
+    moved = []
+    returned = []
+    running = False
+    full_at_return = False
+
+# The start's reclaim, while unheld and no object names the orphan.
+atomic fair action MoveBegin:
+    require phase == "start" and not held and not obj and entry == "" and len(src) > 0 and not expired
+    if MUTANT == "delete-at-start":
+        for k in KEYS:
+            if k in src:
+                src.pop(k)
+                moved.append(k)
+        return
+    entry = "moving"
+
+atomic fair action MoveCopy:
+    require phase == "start" and entry == "moving" and not obj
+    todo = []
+    for k in src:
+        if k not in kept:
+            todo.append(k)
+    require len(todo) > 0
+    k = oneof todo
+    kept.append(k)
+
+atomic fair action MoveDelete:
+    require phase == "start" and entry == "moving" and not obj
+    todo = []
+    for k in src:
+        if k in kept or MUTANT == "delete-before-copy":
+            todo.append(k)
+    require len(todo) > 0
+    k = oneof todo
+    src.pop(k)
+    moved.append(k)
+
+atomic fair action MoveEnd:
+    require phase == "start" and entry == "moving" and not obj
+    require len(src) == 0 or MUTANT == "kept-early"
+    entry = "kept"
+
+# A moving entry whose name an object took meanwhile ends as it stands.
+atomic fair action MoveSettle:
+    require phase == "start" and entry == "moving" and obj
+    entry = "kept"
+    split = True
+
+# A store error: the start logs the reclaim incomplete and goes on, the entry still moving.
+atomic action MoveFails:
+    require phase == "start" and entry == "moving" and not failed
+    failed = True
+    phase = "serving"
+
+atomic fair action StartEnds:
+    require phase == "start"
+    require entry != "moving"
+    require held or obj or entry != "" or len(src) == 0 or expired
+    phase = "serving"
+
+atomic action Crash:
+    require crashes == 0
+    crashes = 1
+    phase = "start"
+    failed = False
+    running = False
+    if MUTANT == "no-resume" and entry == "moving":
+        kept.clear()
+
+atomic fair action Release:
+    require held
+    held = False
+
+atomic action Apply:
+    require phase == "serving" and not obj
+    obj = True
+    if MUTANT == "return-on-apply" and entry == "kept":
+        for k in kept:
+            src[k] = "old"
+
+atomic action Write:
+    require phase == "serving" and obj and "n" not in src
+    src["n"] = "new"
+
+# `funcdctl quarantine return`: a kept entry into an existing, empty object; a returning entry resumes.
+atomic action ReturnBegin:
+    require phase == "serving" and obj and not running
+    require entry == "kept" or entry == "returning"
+    if entry == "kept":
+        require len(src) == 0 or MUTANT == "return-into-full"
+        if len(src) > 0:
+            full_at_return = True
+    entry = "returning"
+    running = True
+
+atomic action ReturnCopy:
+    require running and entry == "returning"
+    todo = []
+    for k in kept:
+        if src.get(k) != "old":
+            todo.append(k)
+    require len(todo) > 0
+    k = oneof todo
+    src[k] = "old"
+    returned.append(k)
+
+atomic action ReturnEnd:
+    require running and entry == "returning"
+    done = True
+    for k in kept:
+        if src.get(k) != "old":
+            done = False
+    require done
+    kept.clear()
+    entry = ""
+    running = False
+
+atomic action PeriodPasses:
+    require not period
+    period = True
+
+atomic action Sweep:
+    require phase == "serving" and not held and period
+    require entry == "kept" or (MUTANT == "expire-moving" and entry == "moving")
+    if entry == "kept":
+        expired = True
+    kept.clear()
+    entry = ""
+
+# Until a kept entry expires, every key of the orphan is in its source or in its entry.
+always assertion NothingLost:
+    if expired:
+        return True
+    for k in KEYS:
+        if src.get(k) != "old" and k not in kept:
+            return False
+    return True
+
+# A kept entry holds every key of the orphan, but for one an object's name split.
+always assertion KeptIsWhole:
+    if entry != "kept" or split:
+        return True
+    for k in KEYS:
+        if k not in kept:
+            return False
+    return True
+
+# A key the move took out of the source is back in it only by the verb.
+always assertion NoReturnUnasked:
+    for k in moved:
+        if src.get(k) == "old" and k not in returned:
+            return False
+    return True
+
+# The verb never begins a return into an object that holds data.
+always assertion ReturnsIntoEmpty:
+    return not full_at_return
+
+# A start that does not fail ends with no moving entry.
+eventually always assertion MoveEnds:
+    return phase == "serving" and (entry != "moving" or failed)
