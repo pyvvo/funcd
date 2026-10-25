@@ -1,6 +1,7 @@
 # ADR-0228: Disaster recovery implementation addenda, part two: contracts settled while implementing ADR-0222 and ADR-0223
 
 - **Status**: Accepted (2026-10-11, by an `adr-batch` run after a clean `adr-judge` gate; it records decisions already in the code) (2026-10-11; it records only decisions already on main at ae8869a9, each cited to the code)
+- **Superseded in part by**: [ADR-0286](0286-funcdctl-backup-plan-prints-an-example-and-edits-no-file.md) (2026-10-25) — Decision 7.1: the verify cadence is a comment in the printed example, not a stderr line
 - **Date**: 2026-10-11
 - **Deciders**: green-0-rabbit
 - **Tags**: disaster-recovery, backup, restore, hold, funcdctl, contracts

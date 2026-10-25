@@ -5,6 +5,7 @@
   which replaced the first draft's per-Lake ConfigMap key; judged twice on the first draft and once on this design,
   whose Major (engines adopted across a restart keep the old value) did not hold: the boot sweep removes them
 - **Superseded in part by**: [ADR-0279](0279-a-lake-answers-a-commit-once-its-catalog-save-covers-it.md) (2026-10-24) — Decision 1's "without it the interval is 1 s" and its empty-key contract: without `lake.saveInterval` a Lake saves before it answers; Decisions 3 and 5 hold only with the key set.
+- **Superseded in part by**: [ADR-0286](0286-funcdctl-backup-plan-prints-an-example-and-edits-no-file.md) (2026-10-25) — Decision 4's derivation of `lake.saveInterval` from `--rpo` and its 500 ms refusal: `plan lake` sets no key
 - **Date**: 2026-10-24
 - **Deciders**: green-0-rabbit
 - **Tags**: lake, duckdb, backup, recovery-objectives, configuration
