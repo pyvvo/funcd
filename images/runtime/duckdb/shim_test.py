@@ -1156,9 +1156,10 @@ class _RetryCase(unittest.TestCase):
     def checkpointer(self, engine: _SaveEngine, fail: int, covered: int) -> tuple:
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
+        self.stderr = io.StringIO()
         for patch in (mock.patch.object(shim, "LOCAL_CHECKPOINT", os.path.join(tmp.name, "checkpoint.ducklake")),
                       mock.patch.object(shim, "SAVE_RETRY_SECONDS", INTERVAL),
-                      mock.patch.object(shim.sys, "stderr", io.StringIO())):
+                      mock.patch.object(shim.sys, "stderr", self.stderr)):
             patch.start()
             self.addCleanup(patch.stop)
         bucket = _TimedBucket(fail, os.path.join(tmp.name, "report"))
@@ -1187,10 +1188,35 @@ class TestScenarioIdleLakeRecovers(_RetryCase):
         checkpointer, bucket = self.checkpointer(engine, fail=1, covered=5)
         self.refused_call(checkpointer, 6)
         self.retry(checkpointer)
-        self.assertTrue(_eventually(lambda: bucket.bodies == [b"6"]), "the refused save was not made again")
-        self.assertEqual(checkpointer.saved.covered, 6)
+        self.assertTrue(_eventually(lambda: checkpointer.saved.covered == 6), "the refused save was not made again")
+        self.assertEqual(bucket.bodies, [b"6"])
         self.assertIsNone(checkpointer.saved.error)
         self.assertTrue(open(bucket.report).read().startswith("saved "))
+
+
+class _UnreadableEngine(_SaveEngine):
+    """A save endpoint's engine whose snapshot reads fail once `broken` is set, before any save begins."""
+
+    broken = False
+
+    def execute(self, sql: str, params: object = None) -> "_SaveEngine":
+        if self.broken and sql == shim.LATEST_SNAPSHOT:
+            raise RuntimeError("the catalog is not attached")
+        return super().execute(sql, params)
+
+
+class TestARetryLogsAnErrorItsSaveDidNot(_RetryCase):
+    """A retry that fails before its save, which _checkpoint would have logged, writes the error itself."""
+
+    def test_a_failed_snapshot_read_is_logged(self) -> None:
+        engine = _UnreadableEngine(6)
+        checkpointer, _ = self.checkpointer(engine, fail=1, covered=5)
+        self.refused_call(checkpointer, 6)
+        engine.broken = True
+        self.retry(checkpointer)
+        logged = "the save retry failed: the catalog is not attached"
+        self.assertTrue(_eventually(lambda: logged in self.stderr.getvalue()), self.stderr.getvalue())
+        self.assertEqual(self.stderr.getvalue().count("catalog checkpoint failed"), 1, "a failed save logged twice")
 
 
 class TestScenarioRetriesWhileRefused(_RetryCase):

@@ -579,12 +579,12 @@ class _SaveRetry(threading.Thread):
         while not self._done.wait(SAVE_RETRY_SECONDS):
             self._attempt(lambda: self._checkpointer.retry(self._done))
 
-    @staticmethod
-    def _attempt(save: Callable[[], None]) -> None:
+    def _attempt(self, save: Callable[[], None]) -> None:
         try:
             save()
-        except Exception:  # noqa: BLE001 — retried; _checkpoint logged the failure and the report shows it.
-            return
+        except Exception as exc:  # noqa: BLE001 — retried; _checkpoint logged a failed save and the report shows it.
+            if exc is not self._checkpointer.saved.error:
+                sys.stderr.write(f"funcd duckdb shim: the save retry failed: {exc}\n")
 
     def stop(self) -> None:
         self._done.set()
