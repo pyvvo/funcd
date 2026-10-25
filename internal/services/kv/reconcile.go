@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -17,12 +18,14 @@ import (
 
 // PrefixManager is the narrow KV-driver view the reconciler needs (ADR-0072/0073): DropPrefix reclaims a
 // store/table prefix, and List(prefix) enumerates the live keys used to discover orphaned table
-// sub-prefixes on a table-removal. DropPrefix is a concrete driver method beyond the kvstore.KV port,
-// type-asserted at wiring; declared here so the kv package depends on no driver. A driver without it ⇒
-// reclamation is a no-op.
+// sub-prefixes on a table-removal; Get and Put copy a store into the quarantine and back (ADR-0288). DropPrefix
+// is a concrete driver method beyond the kvstore.KV port, type-asserted at wiring; declared here so the kv package
+// depends on no driver. A driver without it ⇒ reclamation is a no-op.
 type PrefixManager interface {
 	DropPrefix(prefix string) error
 	List(ctx context.Context, prefix string) (keys []string, err error)
+	Get(ctx context.Context, key string) (value []byte, found bool, err error)
+	Put(ctx context.Context, key string, value []byte) error
 }
 
 // ReconcilerDeps configures the KindKVStore reconciler (ADR-0072/0073).
@@ -34,6 +37,9 @@ type ReconcilerDeps struct {
 	Health *health.Prober
 	// Hold is the platform hold (ADR-0206): while held no removed table is reclaimed; nil ⇒ never held.
 	Hold hold.Gate
+	// QuarantinePeriod is how long the quarantine keeps a moved store (storage.quarantineRetention, ADR-0288), for
+	// the until of its log line; 0 ⇒ until is not logged.
+	QuarantinePeriod time.Duration
 }
 
 // Reconciler is the controller.Reconciler for KindKVStore (ADR-0072/0073): present ⇒ Ready +
@@ -45,6 +51,7 @@ type Reconciler struct {
 	health *health.Prober
 	logger *slog.Logger
 	hold   hold.Gate
+	period time.Duration
 }
 
 // NewReconciler builds the KVStore reconciler. Store is required; KV (the PrefixManager) is optional.
@@ -60,7 +67,8 @@ func NewReconciler(d ReconcilerDeps) (*Reconciler, error) {
 	if gate == nil {
 		gate = hold.Never
 	}
-	return &Reconciler{store: d.Store, kv: d.KV, health: d.Health, logger: logger.With("component", "services.kv.reconciler"), hold: gate}, nil
+	return &Reconciler{store: d.Store, kv: d.KV, health: d.Health, logger: logger.With("component", "services.kv.reconciler"), hold: gate,
+		period: d.QuarantinePeriod}, nil
 }
 
 // Reconcile converges one KVStore. A present store reports status.tables (declared sub-domains) + status.bindings
@@ -115,22 +123,33 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	return controller.Result{}, nil
 }
 
-// ReclaimDeleted drops the data of every <ns>/<store>/ prefix whose KVStore no longer exists. Reconcile reclaims
-// a store only when it sees the store NotFound, which a delete committed before a crash or a stop never reaches
-// (issue #708, ADR-0170 "also across a crash"). Run it before the controller and the control plane start, so no
-// store of the same name is created meanwhile. A key whose first two segments are not DNS labels belongs to
-// another user of the KV substrate (the eventing watermarks) and is left alone.
-func (r *Reconciler) ReclaimDeleted(ctx context.Context) error {
-	const op = "services.kv.ReclaimDeleted"
+// ReclaimDeleted moves into the quarantine the data of every <ns>/<store>/ prefix whose KVStore no longer exists
+// (ADR-0288): a delete committed before a crash or a stop never reaches Reconcile's NotFound (issue #708, ADR-0170
+// "also across a crash"), and a restore may bring back data its metastore names no object for. Run it before the
+// controller and the control plane start, so no store of the same name is created meanwhile. It then writes kept
+// each moving entry with nothing left to move. A key whose first two segments are not DNS labels belongs to another
+// user of the KV substrate (the eventing watermarks, the quarantine) and is left alone.
+func (r *Reconciler) ReclaimDeleted(ctx context.Context, now time.Time) error {
+	if r.kv == nil {
+		return nil
+	}
 	deleted, err := r.deletedStores(ctx)
 	errs := []error{err}
+	q := r.Quarantine()
 	for _, d := range deleted {
-		if derr := r.kv.DropPrefix(storePrefix(d.Namespace, d.Name)); derr != nil {
-			errs = append(errs, fault.Wrapf(derr, fault.KindOf(derr), op, "drop prefix for %s/%s", d.Namespace, d.Name))
+		ref := storeRef(d.Namespace, d.Name)
+		e, merr := q.Move(ctx, ref, now)
+		if merr != nil {
+			errs = append(errs, merr)
 			continue
 		}
-		r.logger.InfoContext(ctx, "reclaimed the data of a deleted KV store", "namespace", d.Namespace, "store", d.Name)
+		attrs := []slog.Attr{slog.String("namespace", string(d.Namespace)), slog.String("name", string(d.Name))}
+		if r.period > 0 {
+			attrs = append(attrs, slog.String("until", e.Until(r.period).Format(time.RFC3339)))
+		}
+		r.logger.LogAttrs(ctx, slog.LevelWarn, "moved the data of a KVStore with no object into the quarantine", attrs...)
 	}
+	errs = append(errs, q.settle(ctx))
 	return errors.Join(errs...)
 }
 

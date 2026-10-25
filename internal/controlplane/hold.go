@@ -27,6 +27,9 @@ type HoldPlatform interface {
 	BucketOrphans(ctx context.Context) ([]v1.ObjectRef, error)
 	SQLOrphans(ctx context.Context) ([]v1.ObjectRef, error)
 	VolumeOrphans(ctx context.Context) ([]v1.ObjectRef, error)
+	// Quarantine lists the quarantined data and ReturnQuarantined returns an entry into its object (ADR-0288).
+	Quarantine(ctx context.Context) ([]hold.QuarantineEntry, error)
+	ReturnQuarantined(ctx context.Context, r hold.QuarantineReturn) error
 	Advance(ctx context.Context, ns v1.NamespaceName, source v1.ObjectName) error
 	Pending(ctx context.Context, ns v1.NamespaceName, source v1.ObjectName) (map[string]int, error)
 }
@@ -45,6 +48,7 @@ type Holder interface {
 	Status(ctx context.Context) (hold.Evidence, error)
 	Release(ctx context.Context, advance []string) error
 	ReleaseNamespaces(ctx context.Context, nss []v1.NamespaceName) error
+	ReturnQuarantined(ctx context.Context, r hold.QuarantineReturn) error
 }
 
 // HoldService reads the hold's evidence and releases it (ADR-0206 Decision 8).
@@ -117,10 +121,18 @@ func (s *HoldService) Status(ctx context.Context) (hold.Evidence, error) {
 	for _, v := range vols {
 		st.VolumeOrphans = append(st.VolumeOrphans, string(v.Namespace)+"/"+string(v.Name))
 	}
+	if st.Quarantine, err = p.Quarantine(ctx); err != nil {
+		return hold.Evidence{}, err
+	}
 	if st.FunctionsNotReady, err = s.functionsNotReady(ctx); err != nil {
 		return hold.Evidence{}, err
 	}
 	return st, nil
+}
+
+// ReturnQuarantined returns a quarantined entry into its object (ADR-0288 Decision 6).
+func (s *HoldService) ReturnQuarantined(ctx context.Context, r hold.QuarantineReturn) error {
+	return s.d.Platform.ReturnQuarantined(ctx, r)
 }
 
 // namespaceHolds lists the per-namespace markers, each restore marker with the phase of the Restore it names.
@@ -323,6 +335,10 @@ type holdStatusOutput struct {
 	Body hold.Evidence
 }
 
+type quarantineReturnInput struct {
+	Body hold.QuarantineReturn
+}
+
 type holdReleaseInput struct {
 	Body struct {
 		Advance    []string           `json:"advance,omitempty" doc:"blob EventSources, <namespace>/<name>, whose listed keys are marked seen instead of replayed"`
@@ -364,6 +380,16 @@ func RegisterHold(api huma.API, h Holder, authz auth.Authorizer) {
 		}
 		return nil, wrapFaultError(h.Release(ctx, in.Body.Advance))
 	})
+	// ADR-0288 Decision 6: an admin returns a quarantined entry into its object, authorized as a platform release.
+	huma.Register(api, huma.Operation{
+		OperationID: "returnQuarantined", Method: http.MethodPost, Path: "/apis/funcd.io/v1alpha1/quarantine/return",
+		Tags: []string{"Hold"},
+	}, func(ctx context.Context, in *quarantineReturnInput) (*struct{}, error) {
+		if err := authorizeHold(ctx, authz, auth.VerbUpdate, v1.KindWorkerNode); err != nil {
+			return nil, wrapFaultError(err)
+		}
+		return nil, wrapFaultError(h.ReturnQuarantined(ctx, in.Body))
+	})
 }
 
 func authorizeHold(ctx context.Context, authz auth.Authorizer, verb auth.Verb, kind v1.Kind) error {
@@ -385,9 +411,10 @@ func authorizeHold(ctx context.Context, authz auth.Authorizer, verb auth.Verb, k
 // stubHolder backs RegisterStubHold (spec generation): inert, shape only.
 type stubHolder struct{}
 
-func (stubHolder) Status(context.Context) (hold.Evidence, error)               { return hold.Evidence{}, nil }
-func (stubHolder) Release(context.Context, []string) error                     { return nil }
-func (stubHolder) ReleaseNamespaces(context.Context, []v1.NamespaceName) error { return nil }
+func (stubHolder) Status(context.Context) (hold.Evidence, error)                  { return hold.Evidence{}, nil }
+func (stubHolder) Release(context.Context, []string) error                        { return nil }
+func (stubHolder) ReleaseNamespaces(context.Context, []v1.NamespaceName) error    { return nil }
+func (stubHolder) ReturnQuarantined(context.Context, hold.QuarantineReturn) error { return nil }
 
 // RegisterStubHold registers the hold routes with inert deps for spec generation.
 func RegisterStubHold(api huma.API) { RegisterHold(api, stubHolder{}, stubLogAuthorizer{}) }

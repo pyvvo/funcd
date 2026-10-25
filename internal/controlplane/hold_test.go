@@ -27,6 +27,7 @@ import (
 type holdPlatform struct {
 	advanced    []string
 	failAdvance bool
+	returned    []hold.QuarantineReturn
 }
 
 func (*holdPlatform) Counts(context.Context) (map[v1.Kind]int, error) { return map[v1.Kind]int{}, nil }
@@ -39,6 +40,13 @@ func (*holdPlatform) SQLOrphans(context.Context) ([]v1.ObjectRef, error) {
 }
 func (*holdPlatform) VolumeOrphans(context.Context) ([]v1.ObjectRef, error) {
 	return []v1.ObjectRef{{Kind: v1.KindFunction, Namespace: "default", Name: "gone/state"}}, nil
+}
+func (*holdPlatform) Quarantine(context.Context) ([]hold.QuarantineEntry, error) {
+	return []hold.QuarantineEntry{{Kind: v1.KindBucket, Namespace: "default", Name: "gone-bucket", State: "kept"}}, nil
+}
+func (p *holdPlatform) ReturnQuarantined(_ context.Context, r hold.QuarantineReturn) error {
+	p.returned = append(p.returned, r)
+	return nil
 }
 
 func (p *holdPlatform) Advance(_ context.Context, ns v1.NamespaceName, source v1.ObjectName) error {
@@ -110,6 +118,8 @@ func TestReleaseRefuses(t *testing.T) {
 	require.Equal(t, []string{"default/gone/"}, ev.Orphans)
 	require.Equal(t, []string{"default/gone-db"}, ev.SQLOrphans, "ADR-0232: a held database directory with no object")
 	require.Equal(t, []string{"default/gone/state"}, ev.VolumeOrphans, "ADR-0262: a held local volume with no Function")
+	require.Equal(t, []hold.QuarantineEntry{{Kind: v1.KindBucket, Namespace: "default", Name: "gone-bucket", State: "kept"}},
+		ev.Quarantine, "ADR-0288: the quarantine, held or not")
 
 	p.failAdvance = true
 	require.Equal(t, http.StatusServiceUnavailable, do(t, srv, http.MethodPost, release, adminToken, releaseBody(t, "team-a/files")).Code)
@@ -125,6 +135,30 @@ func TestReleaseRefuses(t *testing.T) {
 
 	rec = do(t, srv, http.MethodPost, release, adminToken, releaseBody(t))
 	require.Equal(t, http.StatusConflict, rec.Code, "not held")
+}
+
+// TestQuarantineReturnRoute (ADR-0288 Decision 6): POST …/quarantine/return reaches the platform for an admin, with
+// the request as sent, and is Forbidden for a developer.
+func TestQuarantineReturnRoute(t *testing.T) {
+	st := store.New(memory.New())
+	p := &holdPlatform{}
+	srv, err := controlplane.NewServer(controlplane.Deps{
+		Store: st, Authorizer: rbac.New(),
+		Credentials: middleware.NewStaticCredentials(map[string]auth.Identity{
+			devToken:   {Subject: "dev", Role: auth.RoleDeveloper, Namespaces: []v1.NamespaceName{"team-a"}},
+			adminToken: {Subject: "ops", Role: auth.RoleAdmin},
+		}),
+		Hold: controlplane.NewHoldService(controlplane.HoldDeps{Store: st, Platform: p}),
+	})
+	require.NoError(t, err)
+	const path = "/apis/funcd.io/v1alpha1/quarantine/return"
+	body, err := json.Marshal(hold.QuarantineReturn{Kind: v1.KindBucket, Namespace: "team-a", Name: "uploads"})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusForbidden, do(t, srv, http.MethodPost, path, devToken, body).Code)
+	require.Empty(t, p.returned)
+	rec := do(t, srv, http.MethodPost, path, adminToken, body)
+	require.Less(t, rec.Code, 300, rec.Body.String())
+	require.Equal(t, []hold.QuarantineReturn{{Kind: v1.KindBucket, Namespace: "team-a", Name: "uploads"}}, p.returned)
 }
 
 // TestReleaseNamespaceWaitsForRestore (ADR-0222 Decision 8): hold status lists a namespace's markers, the restore

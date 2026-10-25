@@ -25,11 +25,15 @@ import (
 // quietPlatform is a HoldPlatform with nothing to report.
 type quietPlatform struct{}
 
-func (quietPlatform) Counts(context.Context) (map[v1.Kind]int, error)       { return nil, nil }
-func (quietPlatform) Orphans(context.Context) ([]string, error)             { return nil, nil }
-func (quietPlatform) BucketOrphans(context.Context) ([]v1.ObjectRef, error) { return nil, nil }
-func (quietPlatform) SQLOrphans(context.Context) ([]v1.ObjectRef, error)    { return nil, nil }
-func (quietPlatform) VolumeOrphans(context.Context) ([]v1.ObjectRef, error) { return nil, nil }
+func (quietPlatform) Counts(context.Context) (map[v1.Kind]int, error)            { return nil, nil }
+func (quietPlatform) Orphans(context.Context) ([]string, error)                  { return nil, nil }
+func (quietPlatform) BucketOrphans(context.Context) ([]v1.ObjectRef, error)      { return nil, nil }
+func (quietPlatform) SQLOrphans(context.Context) ([]v1.ObjectRef, error)         { return nil, nil }
+func (quietPlatform) VolumeOrphans(context.Context) ([]v1.ObjectRef, error)      { return nil, nil }
+func (quietPlatform) Quarantine(context.Context) ([]hold.QuarantineEntry, error) { return nil, nil }
+func (quietPlatform) ReturnQuarantined(context.Context, hold.QuarantineReturn) error {
+	return nil
+}
 func (quietPlatform) Advance(context.Context, v1.NamespaceName, v1.ObjectName) error {
 	return nil
 }

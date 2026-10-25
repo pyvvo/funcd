@@ -2,7 +2,10 @@ package kv_test
 
 import (
 	"context"
+	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -18,10 +21,37 @@ import (
 type recPrefixManager struct {
 	keys    []string
 	dropped []string
+	values  map[string][]byte
 }
 
 func (d *recPrefixManager) DropPrefix(prefix string) error {
 	d.dropped = append(d.dropped, prefix)
+	kept := d.keys[:0]
+	for _, k := range d.keys {
+		if !strings.HasPrefix(k, prefix) {
+			kept = append(kept, k)
+		}
+	}
+	d.keys = kept
+	return nil
+}
+
+// Get serves a key's value, the key itself when none was put.
+func (d *recPrefixManager) Get(_ context.Context, key string) ([]byte, bool, error) {
+	if v, ok := d.values[key]; ok {
+		return v, true, nil
+	}
+	return []byte(key), slices.Contains(d.keys, key), nil
+}
+
+func (d *recPrefixManager) Put(_ context.Context, key string, value []byte) error {
+	if d.values == nil {
+		d.values = map[string][]byte{}
+	}
+	if !slices.Contains(d.keys, key) {
+		d.keys = append(d.keys, key)
+	}
+	d.values[key] = value
 	return nil
 }
 
@@ -150,8 +180,8 @@ func TestIssue708_ReclaimDeletedDropsOnlyDeletedStores(t *testing.T) {
 	r, err := kvsvc.NewReconciler(kvsvc.ReconcilerDeps{Store: st, KV: d})
 	require.NoError(t, err)
 
-	require.NoError(t, r.ReclaimDeleted(ctx))
-	require.Equal(t, []string{"default/gone/"}, d.dropped)
+	require.NoError(t, r.ReclaimDeleted(ctx, time.Now()))
+	require.Equal(t, []string{"default/gone/"}, d.dropped, "the start drops the store's prefix once its keys are quarantined")
 }
 
 // scenario: table-removal-protected-and-reclaimed (reclaim half) — a table removed from spec.tables[]

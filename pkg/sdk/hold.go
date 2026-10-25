@@ -36,6 +36,17 @@ func (c *Client) ReleaseHold(ctx context.Context, advance []string) error {
 	return err
 }
 
+// ReturnQuarantined returns an object's quarantined data into it (ADR-0288 Decision 6); admin-only. The object must
+// exist and its data be empty (fault.Conflict otherwise); no such entry ⇒ fault.NotFound.
+func (c *Client) ReturnQuarantined(ctx context.Context, r hold.QuarantineReturn) error {
+	body, err := json.Marshal(r)
+	if err != nil {
+		return fault.Internalf("sdk.ReturnQuarantined", "encode the return: %v", err)
+	}
+	_, err = c.do(ctx, http.MethodPost, c.baseURL+apiPrefix+"/quarantine/return", body)
+	return err
+}
+
 // ReleaseNamespaceHold removes the hold a restore left on each namespace (ADR-0222 Decision 8): restore run's data
 // marker and an ended in-place Restore's marker. POST …/hold/release with namespaces, which needs update on each
 // Namespace; an in-place Restore still Pending or Running ⇒ fault.Conflict naming it.

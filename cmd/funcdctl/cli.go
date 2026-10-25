@@ -58,7 +58,7 @@ func newRootCmdFor(out io.Writer, client *sdk.Client, images template.ImageResol
 	root.PersistentFlags().StringVar(&a.token, "token", os.Getenv("FUNCD_TOKEN"),
 		"bearer token for the authenticated control plane ($FUNCD_TOKEN)")
 	root.AddCommand(
-		a.getCmd(), a.describeCmd(), a.applyCmd(), a.deleteCmd(), a.logsCmd(), a.workflowCmd(), a.kvstoreCmd(), a.eventingCmd(), a.appCmd(), a.backupCmd(), a.holdCmd(), a.volumeCmd(), // control-plane verbs (need the SDK client)
+		a.getCmd(), a.describeCmd(), a.applyCmd(), a.deleteCmd(), a.logsCmd(), a.workflowCmd(), a.kvstoreCmd(), a.eventingCmd(), a.appCmd(), a.backupCmd(), a.holdCmd(), a.quarantineCmd(), a.volumeCmd(), // control-plane verbs (need the SDK client)
 		a.pushCmd(), a.indexCmd(), a.pullCmd(), a.inspectCmd(), a.loginCmd(), a.logoutCmd(), a.typesCmd(), // artifact verbs (internal/artifact; no server) + contract-file type codegen (ADR-0247)
 		a.benchCmd(), // data-plane load/latency probe (ADR-0053; stdlib internal/testkit/loadgen, no SDK)
 		a.devCmd(),   // ADR-0125: run a function locally from source (real under -tags dev; a rebuild-hint stub otherwise)

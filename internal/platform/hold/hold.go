@@ -86,6 +86,29 @@ type Evidence struct {
 	VolumeOrphans     []string                  `json:"volumeOrphans,omitempty"` // "<ns>/<function>/<volume>" (ADR-0262)
 	FunctionsNotReady []string                  `json:"functionsNotReady,omitempty"`
 	Namespaces        []NamespaceHold           `json:"namespaces,omitempty"`
+	// Quarantine is the data the start-up reclaims moved aside instead of deleting it, held or not (ADR-0288).
+	Quarantine []QuarantineEntry `json:"quarantine,omitempty"`
+}
+
+// QuarantineEntry is one object's quarantined data (ADR-0288 Decision 4): a volume's Name is its Function. State is
+// moving, kept or returning; Until is when the sweep may delete a kept entry.
+type QuarantineEntry struct {
+	Kind      v1.Kind          `json:"kind"`
+	Namespace v1.NamespaceName `json:"namespace"`
+	Name      v1.ObjectName    `json:"name"`
+	Volume    v1.ObjectName    `json:"volume,omitempty"`
+	Since     v1.Timestamp     `json:"since"`
+	Until     v1.Timestamp     `json:"until"`
+	State     string           `json:"state"`
+}
+
+// QuarantineReturn asks for an object's quarantined data back (ADR-0288 Decision 6).
+type QuarantineReturn struct {
+	Kind      v1.Kind          `json:"kind" doc:"KVStore, Bucket, or Function for a Function's volume"`
+	Namespace v1.NamespaceName `json:"namespace"`
+	Name      v1.ObjectName    `json:"name"`
+	Volume    v1.ObjectName    `json:"volume,omitempty" doc:"the volume, with kind Function"`
+	Since     *v1.Timestamp    `json:"since,omitempty" doc:"the entry's since, as hold status lists it; the newest entry when absent"`
 }
 
 // NamespaceHold is one per-namespace marker (ADR-0222 Decision 8); Phase is the phase of the in-place Restore a

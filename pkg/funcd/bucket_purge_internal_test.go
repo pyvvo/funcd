@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/gc"
+	"github.com/pyvvo/funcd/internal/platform/quarantine"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
 )
@@ -93,7 +95,8 @@ func TestDeleteBucketPurgesTheSubstratePrefix(t *testing.T) {
 	})
 }
 
-// ADR-0199 Decision 7: the boot reclaim purges the prefix of every Bucket that no longer exists and keeps the rest.
+// ADR-0199 Decision 7, ADR-0288 Decision 2: the boot reclaim moves into the quarantine the objects of every Bucket that
+// no longer exists, each entry kept, and leaves the rest.
 func TestReclaimDeletedBuckets(t *testing.T) {
 	onEachSubstrate(t, func(t *testing.T, ctx context.Context, shared blob.Bucket, st store.Store) {
 		createBucket(t, st, "default", "live")
@@ -103,9 +106,15 @@ func TestReclaimDeletedBuckets(t *testing.T) {
 		} {
 			require.NoError(t, shared.Put(ctx, k, []byte("x"), blob.PutOptions{}))
 		}
-		require.NoError(t, reclaimDeletedBuckets(ctx, shared, st, slog.New(slog.DiscardHandler)))
+		now := time.Date(2026, 10, 25, 1, 0, 0, 0, time.UTC)
+		require.NoError(t, reclaimDeletedBuckets(ctx, shared, st, slog.New(slog.DiscardHandler), now, time.Hour))
+		q := "quarantine/bucket/%s/" + quarantine.Stamp(now) + "/"
+		entry := func(nsName string) string { return fmt.Sprintf(q, nsName) }
 		require.ElementsMatch(t, []string{
 			"s3/default/live/a", "s3/default/live/b", "s3/default/Not_A_Name/a", "s3/stray", "other/default/gone/a",
+			entry("default/gone") + "state", entry("default/gone") + "data/a", entry("default/gone") + "data/b/c",
+			entry("default/livelier") + "state", entry("default/livelier") + "data/a",
+			entry("other/gone") + "state", entry("other/gone") + "data/a",
 		}, keys(t, shared))
 	})
 }

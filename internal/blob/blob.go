@@ -34,6 +34,14 @@ type Bucket interface {
 	Close() error
 }
 
+// PrefixMover is an optional capability of a Bucket (ADR-0288 Decision 2): MovePrefix moves each object under src to
+// dst plus its suffix, both prefixes ending in "/". A file store does it in one rename of the directory, both parents
+// synced; another store copies each object server side, then deletes it, so a cut move run again moves what src still
+// holds. A src with no object is no error.
+type PrefixMover interface {
+	MovePrefix(ctx context.Context, src, dst string) error
+}
+
 // Attributes describes one object. List fills Key, Size, ModTime and MD5; Bucket.Attributes fills all.
 type Attributes struct {
 	Key     string

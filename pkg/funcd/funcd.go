@@ -325,6 +325,11 @@ type config struct {
 	// lakeExtensionDir is injected as DUCKDB_EXTENSION_DIRECTORY into lake-consumer functions
 	// (dev analogue of the prod bundle's duckdb-ext, ADR-0089). Set by `funcdctl dev`; empty in prod.
 	lakeExtensionDir string
+	// quarantinePeriod is how long the start-up reclaims keep the data no object names (storage.quarantineRetention,
+	// ADR-0288); 0 ⇒ platformconfig.DefaultQuarantineRetention. quarantineClock dates the entries and the sweep's
+	// cutoff; nil ⇒ the system clock.
+	quarantinePeriod time.Duration
+	quarantineClock  clock.Clock
 	// lakeSaveInterval is every Lake engine's catalog save interval (lake.saveInterval, ADR-0274); 0 ⇒ none set: every
 	// Lake saves before it answers (ADR-0279).
 	lakeSaveInterval time.Duration
@@ -1113,7 +1118,8 @@ func (p *Platform) buildControlPlane() error {
 	// prefix and on a table removed from spec.tables[] reclaim its sub-prefix, via the driver's
 	// DropPrefix+List (type-asserted PrefixManager — a driver without it gets a no-op).
 	prefixMgr, _ := c.kvStore.(kvsvc.PrefixManager)
-	kvReconciler, err := kvsvc.NewReconciler(kvsvc.ReconcilerDeps{Store: c.store, KV: prefixMgr, Logger: p.logger, Health: p.prober, Hold: c.gate()})
+	kvReconciler, err := kvsvc.NewReconciler(kvsvc.ReconcilerDeps{Store: c.store, KV: prefixMgr, Logger: p.logger, Health: p.prober, Hold: c.gate(),
+		QuarantinePeriod: c.quarantinePeriodOrDefault()})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build KVStore reconciler")
 	}
@@ -1686,11 +1692,12 @@ func (p *Platform) Run(ctx context.Context) error {
 	} else {
 		// Issue #708 (ADR-0170 "also across a crash"): reclaim the data of each KVStore deleted before its reconcile
 		// ran, before the controller or the control plane can create a store of the same name.
-		if err := p.kvReconciler.ReclaimDeleted(ctx); err != nil && ctx.Err() == nil {
+		now := p.cfg.quarantineNow()
+		if err := p.kvReconciler.ReclaimDeleted(ctx, now); err != nil && ctx.Err() == nil {
 			p.logger.WarnContext(ctx, "reclaim of deleted KV stores incomplete", "error", err)
 		}
 		// ADR-0199 Decision 7: the same for the objects of each Bucket deleted before its second purge ran.
-		if err := reclaimDeletedBuckets(ctx, p.cfg.blob, p.cfg.store, p.logger); err != nil && ctx.Err() == nil {
+		if err := reclaimDeletedBuckets(ctx, p.cfg.blob, p.cfg.store, p.logger, now, p.cfg.quarantinePeriodOrDefault()); err != nil && ctx.Err() == nil {
 			p.logger.WarnContext(ctx, "reclaim of deleted Buckets incomplete", "error", err)
 		}
 		// ADR-0232 Decision 7: the same for the directory of each SQLDatabase deleted before its reconcile ran.
@@ -1783,6 +1790,11 @@ func (p *Platform) Run(ctx context.Context) error {
 			}
 		}()
 	}
+	wg.Add(1)
+	go func() { // ADR-0288 Decision 5: the quarantine's sweep, never inside the start
+		defer wg.Done()
+		p.runQuarantineSweep(ctx)
+	}()
 	if p.workflowSweeper != nil && p.workflowRetention > 0 { // ADR-0094: periodic terminal-run retention sweep
 		wg.Add(1)
 		go func() {
@@ -2504,22 +2516,6 @@ func (p bucketPurger) Purge(ctx context.Context, ns v1.NamespaceName, bucket v1.
 		}
 		after = items[len(items)-1].Key
 	}
-}
-
-// reclaimDeletedBuckets purges the prefix of every Bucket that no longer exists, which a crash between a Bucket's
-// delete and its second purge leaves behind (ADR-0199 Decision 7).
-func reclaimDeletedBuckets(ctx context.Context, shared blob.Bucket, st store.Store, logger *slog.Logger) error {
-	purger := bucketPurger{shared: shared}
-	orphans, err := bucketOrphans(ctx, shared, st)
-	errs := []error{err}
-	for _, b := range orphans {
-		if perr := purger.Purge(ctx, b.Namespace, b.Name); perr != nil {
-			errs = append(errs, perr)
-			continue
-		}
-		logger.InfoContext(ctx, "reclaimed the objects of a deleted Bucket", "namespace", b.Namespace, "bucket", b.Name)
-	}
-	return errors.Join(errs...)
 }
 
 // bucketOrphans lists each <ns>/<bucket> with objects under bucketPrefix and no Bucket (ADR-0206 Decision 6), with

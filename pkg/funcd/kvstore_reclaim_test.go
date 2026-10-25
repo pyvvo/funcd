@@ -24,8 +24,8 @@ import (
 )
 
 // A KVStore whose delete committed before its NotFound reconcile ran (a crash, or a stop that drops that
-// reconcile) keeps its <ns>/<store>/ data in the KV engine; the next start reclaims it (ADR-0170 "also
-// across a crash"), so a store re-created under the same name starts empty.
+// reconcile) keeps its <ns>/<store>/ data in the KV engine; the next start moves it into the quarantine (ADR-0170
+// "also across a crash", ADR-0288), so a store re-created under the same name starts empty.
 func TestIssue708_DeletedKVStoreDataReclaimedOnRestart(t *testing.T) {
 	t.Run("crash after the collector deletes the store", func(t *testing.T) {
 		dir := kvRestartDir(t)

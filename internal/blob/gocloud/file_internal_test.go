@@ -374,3 +374,32 @@ func TestFileNonUTF8KeyRefused(t *testing.T) {
 		require.Equal(t, fault.Invalid, fault.KindOf(call()), name)
 	}
 }
+
+// ADR-0288 Decision 2: on a file store MovePrefix is one rename of the prefix's directory, then a sync of both parents,
+// and a destination that exists already is Conflict.
+func TestFileMovePrefixRenamesAndSyncs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dir := t.TempDir()
+	var steps []step
+	k := fileBucketAt(t, dir, nil)
+	require.NoError(t, k.Put(ctx, "s3/ns/b/x", []byte("1"), blob.PutOptions{}))
+	k.disk = durable.Disk{Trace: func(op durable.Op, path string) { steps = append(steps, step{op, path}) }}
+	const dst = "quarantine/bucket/ns/b/20261025T010000.000Z/data/"
+	require.NoError(t, k.MovePrefix(ctx, "s3/ns/b/", dst))
+	to := filepath.Join(dir, "quarantine", "bucket", "ns", "b", "20261025T010000.000Z", "data")
+	require.Contains(t, steps, step{durable.Rename, to})
+	tail := steps[len(steps)-2:]
+	require.Equal(t, []step{{durable.SyncDir, filepath.Dir(to)}, {durable.SyncDir, filepath.Join(dir, "s3", "ns")}}, tail,
+		"both parents are synced after the rename")
+
+	require.NoError(t, k.Put(ctx, "s3/ns/b/x", []byte("again"), blob.PutOptions{}))
+	require.Equal(t, fault.Conflict, fault.KindOf(k.MovePrefix(ctx, "s3/ns/b/", dst)), "a destination with files")
+
+	require.NoError(t, k.MovePrefix(ctx, dst, "s3/ns/c/"), "an absent destination")
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "s3", "ns", "d"), 0o755))
+	require.NoError(t, k.MovePrefix(ctx, "s3/ns/c/", "s3/ns/d/"), "an empty destination directory is replaced")
+	got, err := k.Get(ctx, "s3/ns/d/x")
+	require.NoError(t, err)
+	require.Equal(t, "1", string(got))
+}

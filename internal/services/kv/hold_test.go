@@ -42,7 +42,7 @@ func TestOrphans(t *testing.T) {
 
 	r, err = kvsvc.NewReconciler(kvsvc.ReconcilerDeps{Store: st, KV: pm})
 	require.NoError(t, err)
-	require.NoError(t, r.ReclaimDeleted(ctx))
+	require.NoError(t, r.ReclaimDeleted(ctx, time.Now()))
 	_, err = r.Reconcile(ctx, controller.Request{GVK: v1.KindKVStore.GVK(), Namespace: "default", Name: "orders"})
 	require.NoError(t, err)
 	require.Equal(t, []string{"default/gone/", "default/orders/archive/"}, pm.dropped)

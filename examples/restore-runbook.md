@@ -53,8 +53,15 @@ operator reads the evidence and releases the hold.
    ```
 
    Each restored run that was not finished stays paused: `funcdctl workflow resume` runs it from its record,
-   `funcdctl workflow cancel` ends it. Dead letters stay parked until replayed. The boot reclaims of KV and Bucket
-   data with no object run at the next start after the release: apply, while held, the objects whose data stays.
+   `funcdctl workflow cancel` ends it. Dead letters stay parked until replayed. At the next start after the release,
+   the data no object names (a KV store, a Bucket, a SQL database, a `deletion: delete` Function volume) moves into
+   the quarantine for `storage.quarantineRetention` (168h by default) instead of being deleted, and `funcdctl hold
+   status` lists it with its until (ADR-0288). Apply, while held, the objects whose data stays: then nothing moves.
+   To bring a quarantined KV store, Bucket or volume back, apply its object again, then
+   `funcdctl quarantine return <kvstore|bucket|volume> <ns>/<name>[/<volume>]`, which returns it only into an empty
+   object. A SQL database comes back by hand: apply the SQLDatabase and wait for Ready, stop funcd, replace its
+   directory, `<dataDir>/providers/sqldatabase/<ns>/<name>`, with the entry's
+   `<dataDir>/providers/.quarantine/sqldatabase/<ns>/<name>/<since>`, then start funcd.
 8. **Hand each app namespace to its owner.** A namespace with a BackupSchedule stays held (reason `data`) after
    `hold release`, and its schedules take no slot, until its owner restores its data and runs
    `funcdctl hold release --namespace <ns>` ([workload-backup.md](workload-backup.md#after-a-platform-restore)). Each

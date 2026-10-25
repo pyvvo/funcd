@@ -65,6 +65,7 @@ storage:
   mode: memory                    # file | memory. default: file (memory = ephemeral, nothing on disk)
   dataDir: /tmp/funcd-demo        # data root (process shim + file-mode blob/nats). default: /var/lib/funcd
   # metastoreDir: ""              # control-plane metastore Badger dir (ADR-0065). default: <dataDir>/store
+  # quarantineRetention: 168h     # how long a start keeps the data no object names (a KV store, a Bucket, a SQL database, a Function volume), moved into a quarantine instead of deleted (ADR-0288); at least 1h. default: 168h
 
 # --- per-service stores: each service owns its OWN dedicated Badger instance (restore-class +
 #     service-ownership — never merged). Each store dir defaults under <dataDir>; uncomment to

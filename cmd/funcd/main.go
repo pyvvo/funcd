@@ -556,6 +556,12 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 		return nil, noopClose, nil, "", err
 	}
 	opts = append(opts, funcd.WithLakeSaveInterval(saveInterval))
+	// How long the start-up reclaims keep the data no object names (ADR-0288), checked by the config loader.
+	quarantinePeriod, err := cfg.QuarantineRetention()
+	if err != nil {
+		return nil, noopClose, nil, "", err
+	}
+	opts = append(opts, funcd.WithQuarantinePeriod(quarantinePeriod))
 	// Site default index document (ADR-0139, F103).
 	opts = append(opts, funcd.WithSiteDefaultIndex(cfg.Site.DefaultIndex))
 

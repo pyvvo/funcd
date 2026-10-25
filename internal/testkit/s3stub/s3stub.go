@@ -434,9 +434,10 @@ func (s *Stub) put(w http.ResponseWriter, r *http.Request, key string, body []by
 	w.Header().Set("ETag", etag(body))
 }
 
-// copy is CopyObject from "<bucket>/<key>?versionId=<id>" (URL-encoded) onto key.
+// copy is CopyObject from "<bucket>/<key>?versionId=<id>" (URL-encoded) onto key; without a versionId, from the
+// key's latest version, as S3 copies it.
 func (s *Stub) copy(w http.ResponseWriter, key, source string) {
-	src, id, _ := strings.Cut(source, "?versionId=")
+	src, id, versioned := strings.Cut(source, "?versionId=")
 	src, err := url.PathUnescape(strings.TrimPrefix(src, "/"))
 	if err != nil || !strings.HasPrefix(src, Bucket+"/") {
 		s3Error(w, http.StatusBadRequest, "InvalidArgument")
@@ -447,9 +448,20 @@ func (s *Stub) copy(w http.ResponseWriter, key, source string) {
 		return
 	}
 	srcKey := strings.TrimPrefix(src, Bucket+"/")
-	i := slices.IndexFunc(s.objects[srcKey], func(v version) bool { return v.id == id && !v.marker })
+	vs := s.objects[srcKey]
+	i := slices.IndexFunc(vs, func(v version) bool { return v.id == id && !v.marker })
+	if !versioned {
+		i = len(vs) - 1
+		if i >= 0 && vs[i].marker {
+			i = -1
+		}
+	}
 	if i < 0 {
-		s3Error(w, http.StatusNotFound, "NoSuchVersion")
+		code := "NoSuchVersion"
+		if !versioned {
+			code = "NoSuchKey"
+		}
+		s3Error(w, http.StatusNotFound, code)
 		return
 	}
 	v := s.objects[srcKey][i]

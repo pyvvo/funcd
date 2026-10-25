@@ -559,6 +559,19 @@ func WithLakeExtensionDir(dir string) Option {
 	return func(c *config) error { c.lakeExtensionDir = dir; return nil }
 }
 
+// WithQuarantinePeriod sets how long the start-up reclaims keep the data no object names before the sweep deletes it
+// (storage.quarantineRetention, ADR-0288); at least an hour, 168h when unset.
+func WithQuarantinePeriod(d time.Duration) Option {
+	return func(c *config) error {
+		if d < platformconfig.MinQuarantineRetention {
+			return fault.Invalidf("funcd.WithQuarantinePeriod", "quarantine period %s: want at least %s", d,
+				v1.Duration(platformconfig.MinQuarantineRetention))
+		}
+		c.quarantinePeriod = d
+		return nil
+	}
+}
+
 // WithLakeSaveInterval sets how often every Lake engine saves its catalog after a commit, the Lake's recovery point
 // (ADR-0274, config lake.saveInterval), as the engine's FUNCD_LAKE_SAVE_INTERVAL: a whole number of milliseconds within
 // lake.saveInterval's bounds, 500ms to 1h. 0 ⇒ none set: every Lake saves its catalog before it answers (ADR-0279).

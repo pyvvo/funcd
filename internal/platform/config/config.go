@@ -120,6 +120,9 @@ type Config struct {
 		// derived as <DataDir>/store in Load(); ignored (in-memory engine) when Mode is memory. Its own
 		// instance, never shared — see the store-per-service rule (restore class + service ownership).
 		MetastoreDir string `json:"metastoreDir,omitempty" env:"FUNCD_METASTORE_DIR"`
+		// QuarantineRetention is how long the start-up reclaims keep the data no object names before the sweep deletes
+		// it (ADR-0288): an ADR-0194 duration of at least 1h; empty ⇒ 168h.
+		QuarantineRetention string `json:"quarantineRetention,omitempty" env:"FUNCD_STORAGE_QUARANTINE_RETENTION"`
 	} `json:"storage,omitempty"`
 	Kvstore struct {
 		// Engine for the function-facing KV service (ADR-0066/0069): memory (default, ephemeral) or
@@ -678,7 +681,7 @@ func (c Config) Validate() error {
 		if err := c.validateCredentials(op); err != nil {
 			return err
 		}
-		for _, fs := range [][]Finding{c.CheckBackup(), c.CheckBlob(), c.CheckBridge(), c.CheckLake()} {
+		for _, fs := range [][]Finding{c.CheckBackup(), c.CheckBlob(), c.CheckBridge(), c.CheckLake(), c.CheckQuarantine()} {
 			if len(fs) > 0 && fs[0].Error {
 				return fault.Invalidf(op, "%s", fs[0].Message)
 			}
