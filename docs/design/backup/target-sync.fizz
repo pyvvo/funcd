@@ -1,0 +1,172 @@
+---
+# A BackupSchedule's sync after a platform restore (ADR-0287). The target holds a copy directory per slot, whole (its
+# manifest.yaml is there), partial (the lost host died mid-copy) or absent. The restored metastore holds the
+# schedule's lastScheduleTime L = 1, slot 1's record Running (the cut fell during its run) and no record of slot 0,
+# which the owner deleted before the cut; restore run marked the schedule (TargetSynced False, PlatformRestored).
+# While marked, each pass lists the slots after L, creates a record per whole copy, then writes L and TargetSynced True
+# in one status write; no slot is taken before. The Backup reconciler lists the interrupted run's directory. The
+# operator may release the namespace at any time; the daemon may crash once, losing the pass in progress.
+# Environment: the owner deletes a record only once TargetSynced is True; a listing shows every key written before it;
+# the lost host writes nothing after the restore. Left out: the expireTime rule, the slot name's parse, and the slot
+# logic's catch-up from L, which the advanced L keeps off the copies' slots (left to TestScenarioGoneBackupStaysGone
+# and TestParseBackupSlotName).
+deadlock_detection: false
+options:
+  max_concurrent_actions: 2
+  max_actions: 13
+  crash_on_yield: false
+---
+# diagram: phase
+# mutant no-manifest-check: NoRecordWithoutCopy
+# mutant no-after-guard: GoneStaysGone
+# mutant slots-while-pending: SlotsAfterSync
+# mutant advance-first: SlotsAfterSync
+# mutant interrupted-always: FinishedRunKept
+# mutant interrupted-on-fail: FinishedRunKept
+
+SLOTS = [0, 1, 2, 3]
+NEWER = [2, 3]
+# no-manifest-check: a partial directory counts as a copy.
+# no-after-guard: the listing takes every slot, not only those after L.
+# slots-while-pending: the slot logic runs before the sync succeeded (round 1's marker, released early).
+# advance-first: L and TargetSynced are written when the listing ends, before the records.
+# interrupted-always: a Running record not run here is Interrupted whatever its directory holds (ADR-0222 before).
+# interrupted-on-fail: a failed listing of that record fails it Interrupted while the sync is pending.
+MUTANT = ""
+
+action Init:
+    dirs = {0: "whole"}
+    d1 = oneof ["whole", "partial"]
+    dirs[1] = d1
+    for s in NEWER:
+        d = oneof ["whole", "partial", "none"]
+        dirs[s] = d
+    r = oneof [True, False]
+    reachable = r
+    last = 1
+    records = {1: "Running"}
+    deleted = [0]
+    pending = True
+    released = False
+    slot_taken = False
+    crashes = 0
+    phase = "idle"
+    found = []
+    newest = 1
+
+atomic fair action List:
+    require pending and phase == "idle"
+    if not reachable:
+        return
+    found = []
+    newest = last
+    for s in SLOTS:
+        counts = dirs[s] == "whole"
+        if MUTANT == "no-manifest-check":
+            counts = dirs[s] != "none"
+        if MUTANT != "no-after-guard" and s <= last:
+            counts = False
+        if counts:
+            found.append(s)
+            if s > newest:
+                newest = s
+    if MUTANT == "advance-first":
+        last = newest
+        pending = False
+    phase = "listed"
+
+atomic fair action Create:
+    require phase == "listed" and len(found) > 0
+    s = found[0]
+    found = found[1:]
+    if s not in records:
+        records[s] = "Succeeded"
+
+atomic fair action WriteStatus:
+    require phase == "listed" and len(found) == 0
+    last = newest
+    pending = False
+    phase = "idle"
+
+# The slot logic takes a slot after every copy, once the namespace is released and the sync succeeded.
+atomic fair action Slot:
+    require released and not slot_taken
+    if MUTANT != "slots-while-pending":
+        require not pending
+    slot_taken = True
+    last = 4
+
+# The Backup reconciler meets slot 1's record Running, not run by this process, and lists its directory first.
+atomic fair action CheckRun:
+    require records[1] == "Running"
+    if not reachable:
+        if MUTANT != "interrupted-on-fail":
+            require not pending
+        records[1] = "Interrupted"
+        return
+    if MUTANT == "interrupted-always" or dirs[1] != "whole":
+        records[1] = "Interrupted"
+    else:
+        records[1] = "Succeeded"
+
+atomic fair action TargetBack:
+    require not reachable
+    reachable = True
+
+atomic action Crash:
+    require crashes == 0
+    crashes = 1
+    phase = "idle"
+    found = []
+
+# The operator's `funcdctl hold release --namespace`, at any time.
+atomic fair action Release:
+    require not released
+    released = True
+
+atomic action OwnerDelete:
+    require not pending and len(deleted) == 1
+    mine = []
+    for s in NEWER:
+        if s in records:
+            mine.append(s)
+    require len(mine) > 0
+    s = oneof mine
+    records.pop(s)
+    deleted.append(s)
+
+# No record is Succeeded without its whole copy on the target.
+always assertion NoRecordWithoutCopy:
+    for s in records:
+        if records[s] == "Succeeded" and dirs[s] != "whole":
+            return False
+    return True
+
+# A record deleted before the cut, or by the owner after the sync, never comes back.
+always assertion GoneStaysGone:
+    for s in deleted:
+        if s in records:
+            return False
+    return True
+
+# No slot is taken while a whole newer copy the owner kept has no record: L never passes an unseen copy.
+always assertion SlotsAfterSync:
+    if not slot_taken:
+        return True
+    for s in NEWER:
+        if dirs[s] == "whole" and s not in deleted and records.get(s) != "Succeeded":
+            return False
+    return True
+
+# A run whose whole copy is on the target is not reported Interrupted.
+always assertion FinishedRunKept:
+    return records[1] != "Interrupted" or dirs[1] != "whole"
+
+# In the end the sync succeeded, every whole newer copy the owner kept has a Succeeded record, and the cut run ended.
+eventually always assertion NewerCopiesFound:
+    if pending or records[1] == "Running":
+        return False
+    for s in NEWER:
+        if dirs[s] == "whole" and s not in deleted and records.get(s) != "Succeeded":
+            return False
+    return True
