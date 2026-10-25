@@ -15,6 +15,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/platform/quarantine"
 	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/testkit/fakesql"
 	"github.com/pyvvo/funcd/internal/workernode/local"
@@ -51,6 +52,7 @@ func (f *fakeEngines) Converge(_ context.Context, spec provider.ProviderSpec) (p
 func (*fakeEngines) Teardown(context.Context, provider.ProviderRef) error { return nil }
 func (*fakeEngines) Reclaim(context.Context, provider.ProviderRef) error  { return nil }
 func (*fakeEngines) List(context.Context) ([]provider.ProviderRef, error) { return nil, nil }
+func (*fakeEngines) Quarantine() quarantine.Store                         { return noQuarantine() }
 
 func (f *fakeEngines) engine(name string) *fakesql.Engine {
 	f.mu.Lock()

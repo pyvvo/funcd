@@ -21,7 +21,12 @@ func (m *manager) Tar(ctx context.Context, id ID) (io.ReadCloser, error) {
 	if err := m.validID(op, id); err != nil {
 		return nil, err
 	}
-	root, err := os.OpenRoot(m.leaf(id))
+	return tarDir(ctx, op, m.leaf(id), id)
+}
+
+// tarDir streams dir, volume id's leaf or its quarantined data, as Tar does.
+func tarDir(ctx context.Context, op, dir string, id ID) (io.ReadCloser, error) {
+	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return nil, fault.Wrapf(err, openKind(err), op, "open volume %s", id)
 	}

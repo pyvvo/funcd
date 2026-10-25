@@ -218,6 +218,9 @@ type Deps struct {
 	VolumesDurable bool
 	// Hold skips the volume reclaims while the platform is held (ADR-0206); nil ⇒ never held.
 	Hold hold.Gate
+	// QuarantinePeriod is how long a quarantined volume is kept (storage.quarantineRetention, ADR-0288): the until a
+	// move logs.
+	QuarantinePeriod time.Duration
 }
 
 // LakeProxies reports the URL of a Lake's PEP proxy listener bound in this daemon run (ADR-0137,
@@ -378,18 +381,19 @@ type Reconciler struct {
 	// workerless and launching the passes creating their workers (#1206), and passSlots the replica slots the steps of
 	// a pass keep for its sweep (#1207); volMu guards the seven, and launched tells StopWorkers that a pass is done
 	// creating.
-	volumes        volume.Manager
-	volumesDurable bool
-	hold           hold.Gate
-	volMu          sync.Mutex
-	emptyDirs      map[runtime.InstanceID][]volume.ID
-	volumesSeen    map[fnKey]bool
-	volumesMissing map[fnKey][]string
-	heldLeftovers  []volume.ID
-	restoring      map[fnKey]int
-	launching      map[fnKey]int
-	launched       *sync.Cond
-	passSlots      map[fnKey]map[runtime.InstanceID]bool
+	volumes          volume.Manager
+	volumesDurable   bool
+	hold             hold.Gate
+	quarantinePeriod time.Duration
+	volMu            sync.Mutex
+	emptyDirs        map[runtime.InstanceID][]volume.ID
+	volumesSeen      map[fnKey]bool
+	volumesMissing   map[fnKey][]string
+	heldLeftovers    []volume.ID
+	restoring        map[fnKey]int
+	launching        map[fnKey]int
+	launched         *sync.Cond
+	passSlots        map[fnKey]map[runtime.InstanceID]bool
 }
 
 // fnKey names a Function in the spared set.
@@ -547,6 +551,7 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 		volumes:           d.Volumes,
 		volumesDurable:    d.VolumesDurable,
 		hold:              d.Hold,
+		quarantinePeriod:  d.QuarantinePeriod,
 		emptyDirs:         map[runtime.InstanceID][]volume.ID{},
 		volumesSeen:       map[fnKey]bool{},
 		volumesMissing:    map[fnKey][]string{},

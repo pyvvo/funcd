@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/platform/quarantine"
 	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
@@ -51,6 +52,9 @@ func (s *strictEngines) Converge(_ context.Context, spec provider.ProviderSpec) 
 func (*strictEngines) Teardown(context.Context, provider.ProviderRef) error { return nil }
 func (*strictEngines) Reclaim(context.Context, provider.ProviderRef) error  { return nil }
 func (*strictEngines) List(context.Context) ([]provider.ProviderRef, error) { return nil, nil }
+func (*strictEngines) Quarantine() quarantine.Store {
+	return provider.NewDirQuarantine("", v1.KindSQLDatabase, nil, nil)
+}
 
 func (s *strictEngines) engine(t *testing.T, name v1.ObjectName) *fakesql.Engine {
 	t.Helper()

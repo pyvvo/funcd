@@ -15,6 +15,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/platform/hold"
+	"github.com/pyvvo/funcd/internal/platform/quarantine"
 	"github.com/pyvvo/funcd/internal/provider"
 	sqlsvc "github.com/pyvvo/funcd/internal/services/sql"
 	"github.com/pyvvo/funcd/pkg/sdk"
@@ -30,6 +31,7 @@ type sqlRuntime struct {
 	teardowns map[provider.ProviderRef]int
 	dirs      map[provider.ProviderRef]bool
 	tables    map[string]int // by password
+	moved     []quarantine.Entry
 }
 
 func newSQLRuntime(t *testing.T, dirs ...provider.ProviderRef) *sqlRuntime {
@@ -82,6 +84,8 @@ func (r *sqlRuntime) Reclaim(_ context.Context, ref provider.ProviderRef) error 
 	delete(r.dirs, ref)
 	return nil
 }
+
+func (r *sqlRuntime) Quarantine() quarantine.Store { return mapQuarantine{&r.mu, r.dirs, &r.moved} }
 
 func (r *sqlRuntime) List(context.Context) ([]provider.ProviderRef, error) {
 	r.mu.Lock()
@@ -251,6 +255,7 @@ func (n *neverStarts) Teardown(context.Context, provider.ProviderRef) error {
 }
 func (*neverStarts) Reclaim(context.Context, provider.ProviderRef) error  { return nil }
 func (*neverStarts) List(context.Context) ([]provider.ProviderRef, error) { return nil, nil }
+func (*neverStarts) Quarantine() quarantine.Store                         { return noQuarantine() }
 
 // scenario: delete-of-never-started-database — a database whose engine never started deletes through the API.
 func TestScenarioDeleteOfNeverStartedDatabase(t *testing.T) {

@@ -29,6 +29,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/platform/httpx"
+	"github.com/pyvvo/funcd/internal/platform/quarantine"
 	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/runtime/procreg"
 	"github.com/pyvvo/funcd/internal/services/sql/engineargs"
@@ -166,7 +167,19 @@ func (r *Runtime) Reclaim(_ context.Context, ref provider.ProviderRef) error {
 	return os.RemoveAll(r.dataPath(ref))
 }
 
-// List returns the databases that have data under the root, sorted.
+// Quarantine keeps the data a start-up reclaim moves aside, under <root>/.quarantine/sqldatabase (ADR-0288).
+func (r *Runtime) Quarantine() quarantine.Store {
+	return provider.NewDirQuarantine(filepath.Join(r.dataDir, provider.QuarantineDir, "sqldatabase"), v1.KindSQLDatabase,
+		r.dataPath, func(_ context.Context, ref provider.ProviderRef) (bool, error) {
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			p, ok := r.procs[ref]
+			return ok && p.alive(), nil
+		})
+}
+
+// List returns the databases that have data under the root, sorted; a name that is no DNS label, the quarantine's, is
+// no namespace.
 func (r *Runtime) List(context.Context) ([]provider.ProviderRef, error) {
 	nss, err := os.ReadDir(r.dataDir)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -177,7 +190,7 @@ func (r *Runtime) List(context.Context) ([]provider.ProviderRef, error) {
 	}
 	var out []provider.ProviderRef
 	for _, ns := range nss {
-		if !ns.IsDir() {
+		if !ns.IsDir() || v1.NamespaceName(ns.Name()).Validate() != nil {
 			continue
 		}
 		dbs, err := os.ReadDir(filepath.Join(r.dataDir, ns.Name()))

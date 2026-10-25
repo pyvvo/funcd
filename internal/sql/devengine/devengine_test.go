@@ -23,6 +23,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/platform/quarantine"
 	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/runtime/procreg"
 )
@@ -330,4 +332,27 @@ func TestStateDirReapsEngineOfAKilledRun(t *testing.T) {
 	require.DirExists(t, filepath.Join(dir, "data", "dev", "todo-db"), "the data stays")
 	_, err := New(nil, WithStateDir(dir))
 	require.Error(t, err, "a second runtime cannot open the registry another one holds")
+}
+
+// A database's data moves into <root>/.quarantine/sqldatabase/<ns>/<name>/<since> (ADR-0288), and List reads no
+// namespace from the quarantine's own directory.
+func TestQuarantineOutsideTheListing(t *testing.T) {
+	root := t.TempDir()
+	r := mustNew(t, WithDataDir(root))
+	t.Cleanup(r.StopAll)
+	ctx := context.Background()
+	ref := provider.ProviderRef{Namespace: "default", Name: "todo-db"}
+	require.NoError(t, os.MkdirAll(r.dataPath(ref), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(r.dataPath(ref), "db.sqlite"), []byte("rows"), 0o600))
+
+	now := time.Date(2026, 10, 25, 1, 0, 0, 0, time.UTC)
+	e, err := r.Quarantine().Move(ctx, quarantine.Ref{ObjectRef: v1.ObjectRef{Kind: v1.KindSQLDatabase, Namespace: "default", Name: "todo-db"}}, now)
+	require.NoError(t, err)
+	require.FileExists(t, filepath.Join(root, ".quarantine", "sqldatabase", "default", "todo-db", quarantine.Stamp(e.Since), "db.sqlite"))
+	refs, err := r.List(ctx)
+	require.NoError(t, err)
+	require.Empty(t, refs, "the quarantine is no namespace")
+	entries, err := r.Quarantine().List(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []quarantine.Entry{e}, entries)
 }

@@ -318,7 +318,7 @@ func (r *Reconciler) platformHeld() bool { return r.hold != nil && r.hold.Held()
 
 // ReclaimVolumes runs at boot before the controller (ADR-0262 Decision 8): no worker survives a restart, so every
 // emptyDir left goes, and the local volumes of Functions no longer stored, or stored under another UID, follow their
-// deletion policy. While the platform is held it reclaims nothing: hold status lists the local volumes
+// deletion policy, a delete one into the quarantine (ADR-0288). While the platform is held it reclaims nothing: hold status lists the local volumes
 // (VolumeOrphans), and the emptyDirs go once the hold lifts (releaseHeldLeftovers, #1204).
 func (r *Reconciler) ReclaimVolumes(ctx context.Context) error {
 	if r.volumes == nil {
@@ -356,7 +356,7 @@ func (r *Reconciler) ReclaimVolumes(ctx context.Context) error {
 			return err
 		}
 		if !live {
-			if err := r.dropVolume(ctx, in); err != nil {
+			if err := r.reclaimOrphanVolume(ctx, in); err != nil {
 				return err
 			}
 		}

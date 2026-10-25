@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/platform/quarantine"
 	"github.com/pyvvo/funcd/internal/provider"
 )
 
@@ -97,6 +98,7 @@ type fileEngines struct {
 	engines  map[provider.ProviderRef]*fileEngine
 	notReady map[v1.ObjectName]bool
 	dirs     map[provider.ProviderRef]bool
+	moved    []quarantine.Entry
 }
 
 func newFileEngines(t *testing.T) *fileEngines {

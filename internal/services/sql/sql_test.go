@@ -17,6 +17,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controller"
+	"github.com/pyvvo/funcd/internal/platform/quarantine"
 	"github.com/pyvvo/funcd/internal/provider"
 	sqlsvc "github.com/pyvvo/funcd/internal/services/sql"
 	"github.com/pyvvo/funcd/internal/store"
@@ -57,6 +58,7 @@ type fakeRuntime struct {
 	teardowns int
 	dirs      map[provider.ProviderRef]bool
 	reclaims  int
+	moved     []quarantine.Entry
 	last      provider.ProviderSpec
 }
 
@@ -89,6 +91,28 @@ func (f *fakeRuntime) List(context.Context) ([]provider.ProviderRef, error) {
 	}
 	return out, nil
 }
+
+// Quarantine records each move; a moved directory leaves dirs (ADR-0288).
+func (f *fakeRuntime) Quarantine() quarantine.Store { return fakeQuarantine{f} }
+
+type fakeQuarantine struct{ f *fakeRuntime }
+
+func (q fakeQuarantine) Move(_ context.Context, ref quarantine.Ref, now time.Time) (quarantine.Entry, error) {
+	q.f.mu.Lock()
+	defer q.f.mu.Unlock()
+	delete(q.f.dirs, provider.ProviderRef{Namespace: ref.Namespace, Name: ref.Name})
+	e := quarantine.Entry{Ref: ref, Since: now, State: quarantine.Kept}
+	q.f.moved = append(q.f.moved, e)
+	return e, nil
+}
+
+func (q fakeQuarantine) List(context.Context) ([]quarantine.Entry, error) {
+	q.f.mu.Lock()
+	defer q.f.mu.Unlock()
+	return slices.Clone(q.f.moved), nil
+}
+
+func (fakeQuarantine) Expire(context.Context, time.Time) ([]quarantine.Entry, error) { return nil, nil }
 
 // plainRuntime offers no durable storage.
 type plainRuntime struct{}
@@ -209,6 +233,8 @@ func TestDeleteReclaimsUnlessHeld(t *testing.T) {
 	}
 }
 
+// TestReclaimOrphans (ADR-0232 Decision 7, ADR-0288 Decision 1): the directory of a database with no object is moved
+// into the quarantine at an unheld start, never removed; a held start moves nothing; an API delete still reclaims.
 func TestReclaimOrphans(t *testing.T) {
 	kept := provider.ProviderRef{Namespace: "default", Name: "kept-db"}
 	rt := newRuntime(todoDB(), kept)
@@ -223,13 +249,21 @@ func TestReclaimOrphans(t *testing.T) {
 	require.Equal(t, []v1.ObjectRef{{Kind: v1.KindSQLDatabase, Namespace: "default", Name: "todo-db"}}, orphans)
 	require.NoError(t, r.ReclaimOrphans(context.Background()))
 	require.Zero(t, rt.reclaims, "a no-op while held")
+	require.Empty(t, rt.moved, "a no-op while held")
 
 	r2, err := sqlsvc.NewReconciler(sqlsvc.ReconcilerDeps{Store: st, Provider: rt, Engines: sqlsvc.NewEngines(), Master: []byte(masterKey)})
 	require.NoError(t, err)
 	require.NoError(t, r2.ReclaimOrphans(context.Background()))
-	require.Equal(t, 1, rt.reclaims)
+	require.Zero(t, rt.reclaims, "an orphan's directory is quarantined, not removed")
+	require.Len(t, rt.moved, 1)
+	require.Equal(t, quarantine.Ref{ObjectRef: v1.ObjectRef{Kind: v1.KindSQLDatabase, Namespace: "default", Name: "todo-db"}},
+		rt.moved[0].Ref)
+	require.Equal(t, 1, rt.teardowns, "its engine is torn down first")
 	require.False(t, rt.dirs[todoDB()])
 	require.True(t, rt.dirs[kept], "a database with an object keeps its directory")
+	entries, err := r2.Quarantine().List(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, rt.moved, entries)
 }
 
 func TestProberHasTables(t *testing.T) {

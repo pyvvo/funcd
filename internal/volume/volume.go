@@ -70,6 +70,8 @@ type Manager interface {
 	Untar(ctx context.Context, id ID, r io.Reader) error   // Conflict when the leaf is not empty
 	Empty(ctx context.Context, id ID) (bool, error)        // the leaf holds no entry; NotFound with no leaf
 	Clear(ctx context.Context, id ID) error                // removes the leaf's entries, after a failed load
+	// Quarantine keeps the local volumes a start-up reclaim moves aside (ADR-0288).
+	Quarantine() Quarantine
 }
 
 // Sentinels the reconciler maps to reasons (ADR-0262 Decisions 5 and 7).

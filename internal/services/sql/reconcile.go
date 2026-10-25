@@ -17,6 +17,7 @@ import (
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/platform/httpx"
+	"github.com/pyvvo/funcd/internal/platform/quarantine"
 	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/store"
 )
@@ -60,6 +61,9 @@ type ReconcilerDeps struct {
 	// DurableStorage is engine storage that outlives a daemon start: only then does a missing directory mean lost
 	// data (DataMissing). False with no storage root or with storage.mode memory.
 	DurableStorage bool
+	// QuarantinePeriod is how long a quarantined directory is kept (storage.quarantineRetention, ADR-0288): the until
+	// a move logs.
+	QuarantinePeriod time.Duration
 }
 
 // Reconciler is the controller.Reconciler for KindSQLDatabase.
@@ -374,6 +378,21 @@ func (r *Reconciler) engineSpec(db *v1.SQLDatabase) provider.ProviderSpec {
 // deleted tears a deleted database's engine down and reclaims its directory unless the platform is held.
 func (r *Reconciler) deleted(ctx context.Context, ref provider.ProviderRef) error {
 	const op = "sql.Reconcile"
+	if err := r.forget(ctx, ref); err != nil {
+		return err
+	}
+	if r.held() {
+		return nil
+	}
+	if err := r.volumes.Reclaim(ctx, ref); err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "reclaim the storage of %s/%s", ref.Namespace, ref.Name)
+	}
+	return nil
+}
+
+// forget drops what this daemon knows of ref's engine: its address, its passes, the engine itself and its watermark.
+func (r *Reconciler) forget(ctx context.Context, ref provider.ProviderRef) error {
+	const op = "sql.Reconcile"
 	r.d.Engines.Delete(ref.Namespace, ref.Name)
 	// A database created again under this name is a new one: it has lost nothing.
 	r.mu.Lock()
@@ -387,12 +406,6 @@ func (r *Reconciler) deleted(ctx context.Context, ref provider.ProviderRef) erro
 		if err := r.d.Watermarks.Delete(ctx, ref.Namespace, ref.Name); err != nil {
 			return err
 		}
-	}
-	if r.held() {
-		return nil
-	}
-	if err := r.volumes.Reclaim(ctx, ref); err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), op, "reclaim the storage of %s/%s", ref.Namespace, ref.Name)
 	}
 	return nil
 }
@@ -417,9 +430,11 @@ func (r *Reconciler) Orphans(ctx context.Context) ([]v1.ObjectRef, error) {
 	return out, nil
 }
 
-// ReclaimOrphans removes, before the controller runs, the directory of every engine with no SQLDatabase left; a
-// no-op while the platform is held, whose hold status lists them instead.
+// ReclaimOrphans moves into the quarantine, before the controller runs, the directory of every engine with no
+// SQLDatabase left, instead of removing it (ADR-0288 Decision 1); a no-op while the platform is held, whose hold
+// status lists them instead.
 func (r *Reconciler) ReclaimOrphans(ctx context.Context) error {
+	const op = "sql.ReclaimOrphans"
 	if r.held() {
 		return nil
 	}
@@ -428,12 +443,22 @@ func (r *Reconciler) ReclaimOrphans(ctx context.Context) error {
 		return err
 	}
 	for _, o := range orphans {
-		if derr := r.deleted(ctx, provider.ProviderRef{Namespace: o.Namespace, Name: o.Name}); derr != nil {
-			return derr
+		if err := r.forget(ctx, provider.ProviderRef{Namespace: o.Namespace, Name: o.Name}); err != nil {
+			return err
 		}
+		e, err := r.volumes.Quarantine().Move(ctx, quarantine.Ref{ObjectRef: o}, time.Now())
+		if err != nil {
+			return fault.Wrapf(err, fault.KindOf(err), op, "quarantine the storage of %s/%s", o.Namespace, o.Name)
+		}
+		r.log.WarnContext(ctx, "moved the data of a SQLDatabase with no object into the quarantine", "namespace", o.Namespace,
+			"name", o.Name, "until", e.Until(r.d.QuarantinePeriod))
 	}
 	return nil
 }
+
+// Quarantine is the quarantine of the databases' directories (ADR-0288): ReclaimOrphans's moves; a database's data
+// goes back by hand (the runbook).
+func (r *Reconciler) Quarantine() quarantine.Store { return r.volumes.Quarantine() }
 
 // Prober answers the deletion protection's question (ADR-0232 Decision 7): does a database's engine hold a user table?
 type Prober struct {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/platform/quarantine"
 	containerrt "github.com/pyvvo/funcd/internal/runtime"
 )
 
@@ -21,6 +22,8 @@ type Volumes interface {
 	Reclaim(ctx context.Context, ref ProviderRef) error
 	// List returns the engines of the runtime's owner kind that have a directory, sorted.
 	List(ctx context.Context) ([]ProviderRef, error)
+	// Quarantine keeps the directories a start-up reclaim moves aside instead of removing (ADR-0288).
+	Quarantine() quarantine.Store
 }
 
 var _ Volumes = (*engineRuntime)(nil)
