@@ -4,6 +4,9 @@
 - **Superseded in part by**: [ADR-0270](0270-derived-s3-key-pairs-rotate.md) (2026-10-23) — the in-platform key format gains a window part.
 - **Superseded in part by**: [ADR-0275](0275-a-bucket-prefix-owner-names-its-kind.md) (2026-10-24) — Decision 6 and its accepted risk: a prefix owner names its kind, and a
   Lake owner writes on the Bucket's word with no lookup.
+- **Superseded in part by**: [ADR-0281](0281-ai-gateways.md) (2026-10-25) — Decision 1 (the owner kinds the egress
+  index covers), Decision 2's sentence that an engine's external egress is denied, and Decision 5 (principal
+  sources).
 - **Date**: 2026-10-05 (judged twice by three lenses; held from publication)
 - **Deciders**: green-0-rabbit
 - **Tags**: authorization, cedar, s3, egress, catalog, identity
