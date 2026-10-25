@@ -22,10 +22,11 @@ jobs:
   # ADR-0141), and rides the runtime images — so any of these paths changing means the heavy
   # suite must run. `nondocs`: anything but Markdown, LICENSE or a file under docs/ (the review ledger's JSON
   # included; a push to main still runs the fast lane). `design`: the design specs and their diagrams under
-  # docs/design, which `just ci` checks (ADR-0272), so a spec-only change still runs the fast lane. `nonrelease`: anything but
-  # release-please's own files. The fast lane needs both, so a docs-only PR and a release PR skip
-  # it, while a release PR that also touches code still runs it. A skipped required job still
-  # reports success, so neither is blocked.
+  # docs/design (ADR-0272). A change with no `nondocs` file that touches a spec takes the `ci` job's light path in
+  # its pull_request and merge_group runs: `just check-hygiene check-specs`, not the whole fast lane.
+  # `nonrelease`: anything but release-please's own files. The `ci` job needs `nonrelease` and either `nondocs` or
+  # `design`, so a docs-only PR and a release PR skip it, while a release PR that also touches code still runs
+  # it. A skipped required job still reports success, so neither is blocked.
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -65,7 +66,8 @@ jobs:
 
   # Fast lane — runs on every change but a docs-only one (and always on push to main). The heavy
   # pkg/funcd e2e suite is build-tagged out of `just ci`, so this is fmt + lint + fast tests +
-  # build (seconds of test, not ~70s).
+  # build (seconds of test, not ~70s). A docs change that touches a design spec runs only the two
+  # checks it can break, in this same job, so the required `ci` check still reports.
   ci:
     needs: changes
     if: ((needs.changes.outputs.nondocs == 'true' || needs.changes.outputs.design == 'true') && needs.changes.outputs.nonrelease == 'true') || github.event_name == 'push'
@@ -96,6 +98,7 @@ jobs:
           purge-primary-key: never
 
       - name: Cache Go modules & build
+        if: needs.changes.outputs.nondocs == 'true' || github.event_name == 'push'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -105,7 +108,12 @@ jobs:
           restore-keys: go-${{ runner.os }}-
 
       - name: Run CI (fmt check + lint + fast tests + build)
+        if: needs.changes.outputs.nondocs == 'true' || github.event_name == 'push'
         run: nix develop --command just ci
+
+      - name: Check the design specs and the repository hygiene (docs and specs only)
+        if: needs.changes.outputs.nondocs != 'true' && github.event_name != 'push'
+        run: nix develop --command just check-hygiene check-specs
 
   # Heavy lane — the pkg/funcd e2e scenarios (`-tags e2e`). Runs only when the change
   # touches code the suite depends on (the `changes` filter), and always on push to main
