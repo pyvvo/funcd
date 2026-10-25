@@ -8,7 +8,7 @@
 ## Purpose & how to read this
 
 This file sequences the ADRs that realize FEAT-0013's six built features (F170 to F175, no gaps) so that the epoch
-becomes implementable without dead-ends or stalls. F176 to F179 are ideas and get no item. It is a *plan*, not a
+becomes implementable without dead-ends or stalls. F176 to F179 and F201 are ideas and get no item. It is a *plan*, not a
 decision: it commits to no architecture, which is the ADRs' job. The slate comes from the
 [design report](../reports/vector-store-design.md), whose decisions and open questions each ADR takes up.
 
@@ -28,7 +28,7 @@ one wave ahead of the build track.
 | P-C | Vector access from functions: the binding, the local API, the facade and its checks, the portable filter, Cedar and roles, the TypeScript and Python helpers, Workflow steps | F172 | P-B, ADR-0069, ADR-0074, ADR-0116, ADR-0136, ADR-0141, ADR-0215, ADR-0246, ADR-0248 |
 | P-D | Vector stores in Apps: the App's store entry and its deletion policy | F173 | P-B, P-C, ADR-0199, ADR-0248 |
 | P-E | Vector backup and restore: a store as a workload backup member | F174 | P-B, ADR-0206, ADR-0209, ADR-0222 |
-| P-F | Vectors in funcdctl dev: a store in the dev loop | F175 | P-A, P-B, P-C, ADR-0125 |
+| P-F | Vectors in funcdctl dev: the real LanceDB engine in the dev loop, as SQL's and the lake's, and how funcdctl gets it | F175 | P-A, P-B, P-C, ADR-0125, ADR-0237 |
 
 ## Build dependency graph
 
@@ -51,6 +51,7 @@ flowchart TB
     ADR_0215["ADR-0215 ✓"]
     ADR_0222["ADR-0222 ✓"]
     ADR_0231["ADR-0231 ✓"]
+    ADR_0237["ADR-0237 ✓"]
     ADR_0246["ADR-0246 ✓"]
     ADR_0248["ADR-0248 ✓"]
     P_A["P-A · F170<br/>Vector engine port, vector/v1 and the in-memory engine"]
@@ -86,13 +87,14 @@ flowchart TB
     P_B --> P_F
     P_C --> P_F
     ADR_0125 --> P_F
+    ADR_0237 --> P_F
 ```
 
 ## Build waves (computed)
 
 | Tier | Items |
 |---|---|
-| 0 (done) | ADR-0054, ADR-0069, ADR-0074, ADR-0082, ADR-0087, ADR-0116, ADR-0125, ADR-0136, ADR-0141, ADR-0199, ADR-0206, ADR-0209, ADR-0215, ADR-0222, ADR-0231, ADR-0246, ADR-0248 |
+| 0 (done) | ADR-0054, ADR-0069, ADR-0074, ADR-0082, ADR-0087, ADR-0116, ADR-0125, ADR-0136, ADR-0141, ADR-0199, ADR-0206, ADR-0209, ADR-0215, ADR-0222, ADR-0231, ADR-0237, ADR-0246, ADR-0248 |
 | 1 | P-A |
 | 2 | P-B |
 | 3 | P-C, P-E |
@@ -130,7 +132,7 @@ Computed critical path: **ADR-0054 → P-B → P-C → P-D** (P-A sits before P-
 | No engine and no credential in the sandbox | P-C |
 | The data survives an engine restart and a daemon restart | P-B |
 | A backup restores it into a new name | P-E |
-| `funcdctl dev` runs a function with its store | P-F |
+| `funcdctl dev` runs a function with its store on the real LanceDB engine | P-F |
 | The LanceDB and in-memory engines pass the same conformance suite | P-A, P-B |
 
 The exit criterion is met at wave 4, when P-D and P-F land; P-E can land in wave 3.

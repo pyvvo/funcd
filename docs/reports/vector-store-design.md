@@ -20,8 +20,8 @@ funcd gets vector stores: a namespace declares a `VectorStore`, functions search
   by name: there is no plugin registry and no `RuntimeClass`.
 - **A wrapper in two layers**: a Go engine port in the daemon, which the facade calls whatever the engine, and
   `vector/v1`, funcd's own protocol between the daemon and an engine container. An in-memory engine implements the
-  port for tests and `funcdctl dev`, and one conformance suite runs against every engine, as `blobcontract` does for
-  the blob port.
+  port for unit tests, `funcdctl dev` runs the real LanceDB engine, and one conformance suite runs against every
+  engine, as `blobcontract` does for the blob port.
 
 ## The question
 
@@ -77,7 +77,7 @@ JSON answer with vectors is several times its Arrow size.
 
 ## Decisions
 
-Refined with the decider on 2026-10-22; the last three rows on 2026-10-25.
+Refined with the decider on 2026-10-22; the last five rows on 2026-10-25.
 
 | Topic | Decision |
 |---|---|
@@ -98,6 +98,8 @@ Refined with the decider on 2026-10-22; the last three rows on 2026-10-25.
 | Hybrid fusion | RRF only; the other rerankers are left out |
 | Scalar indexes | the engine indexes every filterable field; no choice per field |
 | Left out | the LanceDB features that [FEAT-0013](../feat/0013-feat-vector.md#lancedb-features-not-implemented-in-this-epoch) lists as not implemented, each with its reason |
+| Dev | `funcdctl dev` runs the real LanceDB engine, as it runs SQL's and the lake's; the in-memory engine serves unit tests only |
+| Embedding | the function embeds its text; LanceDB's embedding functions are not used, and the platform embedding through an AI gateway is the idea F201 |
 
 ## Illustrative shapes
 
@@ -220,6 +222,7 @@ derived from the node master as SQL's, and calls to apply the tables, search, co
 |---|---|
 | How the lancedb image ships: embedded in the binary, as rqlite's, or pulled from a registry | the VectorStore ADR, with the decider |
 | The memory engine's algorithm and size limits | the engine port ADR |
+| How `funcdctl dev` gets the LanceDB engine: embedded in funcdctl, as the lake's engine, or installed on first use | the dev ADR |
 | The capability names, and how a query refuses one its engine lacks | the engine port ADR |
 | How an engine moves to a new LanceDB version | the VectorStore ADR |
 | The workload backup format of a store | the backup ADR |

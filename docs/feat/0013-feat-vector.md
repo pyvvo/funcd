@@ -34,7 +34,8 @@ to match. Feature status: `idea → adr → accepted → reviewing → implement
 ## Features
 
 F170 comes first: the stores, the access and the dev loop all call engines through its port. F171 builds on it, F172
-and F174 build on F171, and F173 and F175 build on F171 and F172. F176 to F179 are ideas, not built in this epoch.
+and F174 build on F171, and F173 and F175 build on F171 and F172. F176 to F179 and F201 are ideas, not built in this
+epoch.
 
 ```mermaid
 flowchart LR
@@ -50,16 +51,17 @@ flowchart LR
 
 | # | Feature | Builds on | ADR(s) | Status |
 |---|---|---|---|---|
-| F170 | **A swappable vector engine**: funcd talks to every vector engine through one port of its own, with one protocol for engines that run in a container, and an engine that keeps everything in memory for tests and the dev loop. Each engine says what it can do beyond the common core and which settings it takes, and one conformance suite checks every engine against the same rules. **Why**: the decider wants to swap LanceDB for another engine, such as zvec or Cloudflare Vectorize, without changing a function; funcd's ports have a real driver and an in-memory one. | [ADR-0087](../adr/0087-add-on-provider-runtime.md) (the add-on runtime) · [ADR-0007](../adr/0007-blob-storage-layer-port.md) (a port with a conformance suite) | — | idea |
+| F170 | **A swappable vector engine**: funcd talks to every vector engine through one port of its own, with one protocol for engines that run in a container, and an engine that keeps everything in memory for unit tests. Each engine says what it can do beyond the common core and which settings it takes, and one conformance suite checks every engine against the same rules. **Why**: the decider wants to swap LanceDB for another engine, such as zvec or Cloudflare Vectorize, without changing a function; funcd's ports have a real driver and an in-memory one. | [ADR-0087](../adr/0087-add-on-provider-runtime.md) (the add-on runtime) · [ADR-0007](../adr/0007-blob-storage-layer-port.md) (a port with a conformance suite) | — | idea |
 | F171 | **Vector stores**: a namespace declares a vector store as a resource, with its engine, its tables, their fields and indexes. The platform runs one engine for it, LanceDB unless the store or the platform says otherwise, keeps its tables in the store's own directory, creates the tables and indexes, keeps the engine running, reports when it is ready, bounds its memory and CPU, and refuses to delete it while a function binds it or it holds rows. **Why**: one engine per store pays LanceDB's memory once for every function that uses the store, and keeps one app's data and load away from another's. | F170 · [ADR-0231](../adr/0231-durable-storage-for-add-on-engines.md) (an engine's directory) · [ADR-0082](../adr/0082-provider-model-catalog.md) (the provider model) · [ADR-0232](../adr/0232-sql-database-resource-and-rqlite-engine.md) (a resource deployed as an engine) | — | idea |
 | F172 | **Vectors from functions**: a function binds a store by name and, from TypeScript and Python, searches it by vector, by text or both, counts, upserts and deletes rows, with a filter that every engine understands. A binding grants reads; a write needs the store's owner or a role, and every call is authorized. The function holds no engine and no credential, and Workflow steps bind stores the same way. **Why**: one access model for KV, blob, SQL and vectors, and a function that stays a plain, small worker. | F171 · [ADR-0069](../adr/0069-kv-data-plane.md) (the worker-node local API) · [ADR-0074](../adr/0074-cedar-authorization-resource-access.md)/[ADR-0116](../adr/0116-capability-authorization-framework.md) (Cedar) · [ADR-0136](../adr/0136-roles-and-role-assignments.md) (roles) · [ADR-0233](../adr/0233-sql-access-from-functions.md) (SQL from functions) | — | idea |
 | F173 | **Vector stores in Apps**: an App declares its vector stores next to its other stores, with the same deletion policy. **Why**: an App is the unit an owner installs, upgrades and removes. | F171 · F172 · [ADR-0199](../adr/0199-app-resource.md) (the App) · [ADR-0248](../adr/0248-stores-at-the-root.md) (stores at the root) | — | idea |
 | F174 | **Vector backup and restore**: an app owner's backups copy its vector stores with its other stores, on its own schedule and encrypted, and a restore brings a store back into a new name or in place. **Why**: a store on one disk is lost with the disk. | F171 · [ADR-0222](../adr/0222-workload-backup-resources-and-catalog-scope.md) (workload backups) · [ADR-0234](../adr/0234-sql-backup-and-restore.md) (SQL backups) | — | idea |
-| F175 | **Vectors in funcdctl dev**: `funcdctl dev` gives a function that binds a store a local store, so a developer runs the same calls before deploying. **Why**: the dev loop must match production, as it does for KV, blob, the lake and SQL. | F170 · F171 · F172 · [ADR-0125](../adr/0125-funcdctl-dev-local-run.md) (funcdctl dev) | — | idea |
+| F175 | **Vectors in funcdctl dev**: `funcdctl dev` runs a function that binds a store against the real LanceDB engine, as it runs the real engines of SQL and the lake, so a developer runs the same calls on the same engine before deploying. The in-memory engine serves unit tests only. **Why**: the dev loop must match production, and a search must give in dev the answer it gives in production; the decider chose the real engine on 2026-10-25. | F170 · F171 · F172 · [ADR-0125](../adr/0125-funcdctl-dev-local-run.md) (funcdctl dev) · [ADR-0237](../adr/0237-sql-in-funcdctl-dev.md) (the real SQL engine in dev) | — | idea |
 | F176 | **The zvec engine**: a second engine in a container, Alibaba's embedded library under Apache-2.0, whose writes are single-process as one engine per store needs. A reference for later, so it is not built in this epoch. **Why**: it shows the port holds a second embedded engine. | F170 · F171 | — | idea |
-| F177 | **The Cloudflare Vectorize engine**: an engine that calls Cloudflare's API, with its own settings and credentials. A reference for later, so it is not built in this epoch. **Why**: a team on Cloudflare keeps its vectors there. | F170 · F171 | — | idea |
+| F177 | **The Cloudflare Vectorize engine**: an engine that calls Cloudflare's API, with its own settings and credentials. A reference for later, so it is not built in this epoch. **Why**: a team on Cloudflare keeps its vectors there. | F170 · F171 · [FEAT-0015](0015-feat-ai-gateway.md) F194 (an engine's egress grant, keys from bound Secrets) | — | idea |
 | F178 | **LanceDB extras as capabilities**: versions with tags and restore, multivector and binary vectors, behind capabilities that only some engines declare. Not built in this epoch. **Why**: LanceDB offers them, but no other engine of this epoch does, and the core stays portable without them. | F171 · F172 | — | idea |
 | F179 | **Arrow answers**: large answers travel as Arrow instead of JSON. Not built in this epoch. **Why**: a JSON answer with vectors is several times its Arrow size; bulk reads would gain. | F172 | — | idea |
+| F201 | **Embedding through an AI gateway**: a vector field names an embedding model of an AI gateway in the store's namespace, and an upsert or a search may then send text in place of the vector. The platform embeds the text through that gateway before the engine sees it, under the gateway's limits and in its usage records. LanceDB's own embedding functions are not used. Not built in this epoch. **Why**: one model embeds a store's rows and its queries, with no embedding code in the function. The decider chose the AI gateway over LanceDB's embedding functions on 2026-10-25: those would hold a vendor key in the vector engine, call the vendor from it and skip the gateway's limits. | F172 · [FEAT-0015](0015-feat-ai-gateway.md) F194, F195, F196 | — | idea |
 
 ## How it lands on funcd (high level)
 
@@ -79,7 +81,7 @@ flowchart TB
     API --> PEP["Vector facade: binding, Cedar, checks"]
     PEP --> PORT["Engine port"]
     PORT -->|"vector/v1"| ENG
-    PORT --> MEM["In-memory engine: tests, dev"]
+    PORT --> MEM["In-memory engine: unit tests"]
 ```
 
 ## Capability map: reuse vs. new
@@ -94,7 +96,7 @@ flowchart TB
 | Cedar and roles ([ADR-0116](../adr/0116-capability-authorization-framework.md), [ADR-0136](../adr/0136-roles-and-role-assignments.md)) | authorize reads and writes on a store | exist; vector capability and roles new | F172 |
 | The App ([ADR-0199](../adr/0199-app-resource.md)) | declares stores | exists; vector entry new | F173 |
 | Workload backups ([ADR-0222](../adr/0222-workload-backup-resources-and-catalog-scope.md)) | copy and restore stores | exist; vector member new | F174 |
-| `funcdctl dev` ([ADR-0125](../adr/0125-funcdctl-dev-local-run.md)) | runs a store locally | exists; vector store new | F175 |
+| `funcdctl dev` ([ADR-0125](../adr/0125-funcdctl-dev-local-run.md), [ADR-0237](../adr/0237-sql-in-funcdctl-dev.md)) | runs the real LanceDB engine on the developer's machine, as it runs SQL's | exists; the LanceDB engine in dev new | F175 |
 
 ## Rules at a glance (illustrative, non-normative)
 
@@ -109,7 +111,8 @@ flowchart TB
 | Filters | a portable filter of field conditions; no SQL | F172 |
 | Grants | a binding grants reads; writes need the store's owner or a role | F172 |
 | Admin | indexes, optimization and schema come from the spec, never from a function | F171 |
-| Engine code | the function's own embedding and reranking stay in the function | F172 |
+| Engine code | no function code runs in the engine: the function embeds its text, for example through an AI gateway, and reranks the rows itself; LanceDB's embedding functions are not used | F172, F201 |
+| Dev | `funcdctl dev` runs the real LanceDB engine; the in-memory engine serves unit tests | F170, F175 |
 
 ## Exit criterion
 
@@ -126,12 +129,13 @@ with its store, and each feature passes its checks:
   a filter on a field that is not filterable is refused; both runtimes pass the same checks.
 - **F173**: an App installs a store and its deletion policy keeps or removes it with the App.
 - **F174**: a scheduled backup copies a store, encrypted; a restore into a new name gives the same rows.
-- **F175**: `funcdctl dev` runs a function that binds a store, as in production.
+- **F175**: `funcdctl dev` runs a function that binds a store against the real LanceDB engine, as in production.
 
 ## Out of scope (tracked elsewhere)
 
-- **Embedding models in the platform**: a function embeds its text itself, or calls a model elsewhere, such as
-  through the AI gateway of [FEAT-0015](0015-feat-ai-gateway.md); heavy compute is offloaded.
+- **Embedding models in the platform**: no model runs in a vector engine. A function embeds its text itself, or calls
+  a model elsewhere, such as through the AI gateway of [FEAT-0015](0015-feat-ai-gateway.md), and the platform
+  embedding through a gateway is the idea F201; heavy compute is offloaded.
 - **Engines other than LanceDB**: kept as references, F176 and F177.
 - **A store on a Bucket**: the engine keeps its tables in its own directory.
 - **Stores across namespaces**: a binding names a store of its own namespace, as for KV and SQL.
@@ -141,7 +145,7 @@ with its store, and each feature passes its checks:
 
 The epoch implements LanceDB's search by vector, by text or both, its counts, upserts and deletes, and the indexes and
 maintenance that a store's spec declares. It does not implement the features below, which the decider set aside on
-2026-10-25. All of them but a table's own embedding function also work through an engine, as the design report's
+2026-10-25. All of them but LanceDB's embedding functions also work through an engine, as the design report's
 experiments showed. In the **Later** column, *no* means left out by design, *possible* means it can come later without
 changing the API's shape, and a feature code names the idea row that holds it.
 
@@ -161,7 +165,8 @@ changing the API's shape, and a feature code names the idea row that holds it.
 | Arrow answers | The epoch's wire format is JSON. | F179 |
 | Updates and filters written in SQL | The portable filter replaces SQL. | no |
 | Row ids, reads by row offset and query plans | They are the engine's internals, which no other engine shares. | no |
-| A table's own embedding function, and a reranker that the function writes | The engine does not run a function's own code: the function embeds its text, for example through the AI gateway of [FEAT-0015](0015-feat-ai-gateway.md), and reranks the rows it gets back. | no |
+| LanceDB's embedding functions, built in or defined by the function | The vector engine would hold a vendor key, call the vendor itself and skip the AI gateway's limits. The function embeds its text, for example through the AI gateway of [FEAT-0015](0015-feat-ai-gateway.md), and F201 would have the platform embed through a gateway. | no |
+| A reranker that the function writes | The engine does not run a function's own code; the function reranks the rows it gets back. | no |
 
 ## Open questions
 
@@ -170,5 +175,6 @@ changing the API's shape, and a feature code names the idea row that holds it.
 | How the LanceDB engine image ships: embedded in the binary, as rqlite's, or pulled from a registry | the F171 ADR, with the decider |
 | The capability names, and how a request that needs a missing capability is refused | the F170 ADR |
 | The in-memory engine's algorithm and limits | the F170 ADR |
+| How `funcdctl dev` gets the LanceDB engine on the developer's machine: embedded in funcdctl, as the lake's engine, or installed on first use | the F175 ADR |
 | The kind's name, around the `vector` vocabulary | the F171 ADR |
 | Size caps per call, rows per call and the call timeout | the F172 ADR |
