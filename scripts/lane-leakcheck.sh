@@ -10,6 +10,7 @@ counts=(
   "cgroups=$(find /sys/fs/cgroup/funcd-* -type d 2>/dev/null | wc -l)"
   "task-mounts=$(awk '$2 ~ "^/var/lib/funcd/"' /proc/self/mounts | wc -l)"
   "netns-pins=$(find "$data/run/netns" -mindepth 1 2>/dev/null | wc -l)"
+  "runc-state=$(ls -d /run/containerd/runc/funcd-* 2>/dev/null | wc -l)"
   "funcd0=$(ip -o link show funcd0 2>/dev/null | wc -l)"
   "cni-leases=$(find /var/lib/cni/networks/funcd -maxdepth 1 -type f -name '[0-9]*' 2>/dev/null | wc -l)"
   "nft-tables=$(nft list tables | awk '$3 ~ /^funcd_/' | wc -l)"

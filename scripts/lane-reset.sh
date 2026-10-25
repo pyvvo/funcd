@@ -51,6 +51,10 @@ while read -r mnt; do
   umount -l "$mnt" || fail "cannot unmount $mnt"
 done < <(awk '$2 ~ "^/var/lib/funcd/" { print $2 }' /proc/self/mounts | sort -r)
 
+# crun's state of each worker, under /run/containerd/runc/<namespace>/<id>, outside $data: left there, the next
+# platform's first create of the same worker id fails with "already exists" (#1291). A real host's reboot clears /run.
+rm -rf /run/containerd/runc/funcd-* || fail "cannot remove the runtime state under /run/containerd/runc"
+
 # The worker network: the bridge, the CNI IP leases and results, the CNI iptables lines, and funcd's nftables tables.
 if ip link show funcd0 >/dev/null 2>&1; then ip link delete funcd0 || fail "cannot delete the link funcd0"; fi
 rm -rf /var/lib/cni || fail "cannot remove /var/lib/cni"

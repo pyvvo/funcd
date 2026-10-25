@@ -171,6 +171,23 @@ func TestLaneVMScriptsParse(t *testing.T) {
 	}
 }
 
+// Issue #1291: crun keeps each worker's state under /run/containerd/runc/<namespace>/<id>, outside the data dir the
+// reset removes. Left there, the next platform's first create of each worker id failed with "already exists" and was
+// requeued. The reset removes funcd's runc namespaces and nothing broader under /run, and the leak check counts them.
+func TestIssue1291_ResetRemovesTheRuntimeStateOfFuncdNamespaces(t *testing.T) {
+	reset, err := os.ReadFile("lane-reset.sh")
+	require.NoError(t, err)
+	leak, err := os.ReadFile("lane-leakcheck.sh")
+	require.NoError(t, err)
+	require.Regexp(t, `(?m)^\s*rm -rf /run/containerd/runc/funcd-\*`, string(reset), "lane-reset.sh removes funcd's runc state")
+	for _, rm := range regexp.MustCompile(`\brm\s[^;&|\n]*`).FindAllString(string(reset), -1) {
+		for _, path := range regexp.MustCompile(`(^|\s)["']?/run[^\s"']*`).FindAllString(rm, -1) {
+			require.Equal(t, "/run/containerd/runc/funcd-*", strings.Trim(path, " \t\"'"), "lane-reset.sh removes nothing else under /run: %s", rm)
+		}
+	}
+	require.Contains(t, string(leak), "/run/containerd/runc/funcd-*", "lane-leakcheck.sh counts what is left of it")
+}
+
 // ADR-0230: the lane template keeps no provision or readiness code of its own; it reads the shared scripts in, so a
 // single-lane VM and the shared VM deploy and probe a lane the same way. Lima 2.1 reads no `file:` of a probe, so the
 // readiness script is a data file that the probe runs.
