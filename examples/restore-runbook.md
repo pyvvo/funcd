@@ -64,7 +64,9 @@ operator reads the evidence and releases the hold.
    `<dataDir>/providers/.quarantine/sqldatabase/<ns>/<name>/<since>`, then start funcd.
 8. **Hand each app namespace to its owner.** A namespace with a BackupSchedule stays held (reason `data`) after
    `hold release`, and its schedules take no slot, until its owner restores its data and runs
-   `funcdctl hold release --namespace <ns>` ([workload-backup.md](workload-backup.md#after-a-platform-restore)). Each
+   `funcdctl hold release --namespace <ns>` ([workload-backup.md](workload-backup.md#after-a-platform-restore)).
+   Until then, calls to its Functions get 503 with `Retry-After: 30`, and its Sites keep serving their files
+   (ADR-0290). Each
    schedule first records the copies its target holds from after the restored point (ADR-0287): the owner waits for
    its `TargetSynced` condition to read `True` before choosing the Backup to restore.
 

@@ -36,8 +36,9 @@ func authDoor(t *testing.T, warm map[v1.ObjectName]string, entries []router.Entr
 	return authDoorUpstream(t, warm, entries, tokens, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) }))
 }
 
-// authDoorUpstream is authDoor with the warm function's upstream handler supplied by the test.
-func authDoorUpstream(t *testing.T, warm map[v1.ObjectName]string, entries []router.Entry, tokens creds, upstream http.Handler) (http.Handler, store.Store, *spyScaler) {
+// authDoorUpstream is authDoor with the warm function's upstream handler and the Handler options supplied by the test.
+func authDoorUpstream(t *testing.T, warm map[v1.ObjectName]string, entries []router.Entry, tokens creds, upstream http.Handler,
+	opts ...dataplane.Option) (http.Handler, store.Store, *spyScaler) {
 	t.Helper()
 	up := httptest.NewServer(upstream)
 	t.Cleanup(up.Close)
@@ -49,7 +50,7 @@ func authDoorUpstream(t *testing.T, warm map[v1.ObjectName]string, entries []rou
 	require.NoError(t, rtr.Program(context.Background(), entries, nil))
 	enf, err := authn.New(authn.Deps{Creds: tokens, Authz: rbac.New()})
 	require.NoError(t, err)
-	return dataplane.Handler(st, act, rtr, "", enf, nil, nil, 0, nil), st, scaler
+	return dataplane.Handler(st, act, rtr, "", enf, nil, nil, 0, nil, opts...), st, scaler
 }
 
 func seedNSAuth(t *testing.T, st store.Store, name string, exposure v1.ExposureMode, mode v1.AuthMode) {

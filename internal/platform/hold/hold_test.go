@@ -190,3 +190,34 @@ func TestCreated(t *testing.T) {
 	require.NoDirExists(t, filepath.Join(dir, "a"))
 	require.DirExists(t, dir)
 }
+
+// TestNamespaceMarker (ADR-0290 Decision 3): a namespace's restore marker comes before its data marker, the platform's
+// own hold is no namespace marker, and NeverCall holds nothing.
+func TestNamespaceMarker(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	require.NoError(t, hold.MarkNamespaces(dir, []v1.NamespaceName{"orders"}, hold.Marker{Reason: hold.ReasonData, Since: v1.NewTimestamp(time.Now())}))
+	require.NoError(t, hold.Write(dir, hold.Marker{Reason: "restore", Since: v1.NewTimestamp(time.Now())}))
+	h, err := hold.Open(dir)
+	require.NoError(t, err)
+	got, ok := h.NamespaceMarker("orders")
+	require.True(t, ok)
+	require.Equal(t, hold.ReasonData, got.Reason)
+	_, ok = h.NamespaceMarker("web")
+	require.False(t, ok, "the platform's hold is no namespace marker")
+
+	load := hold.Marker{Reason: hold.ReasonRestore, Since: v1.NewTimestamp(time.Now()), Restore: "nightly-1"}
+	require.NoError(t, h.HoldNamespace("orders", load))
+	got, ok = h.NamespaceMarker("orders")
+	require.True(t, ok)
+	require.Equal(t, load, got)
+	require.NoError(t, h.ReleaseNamespaceMarker("orders", load))
+	got, ok = h.NamespaceMarker("orders")
+	require.True(t, ok)
+	require.Equal(t, hold.ReasonData, got.Reason)
+	require.NoError(t, h.ReleaseNamespace("orders", hold.ReasonData))
+	_, ok = h.NamespaceMarker("orders")
+	require.False(t, ok)
+	_, ok = hold.NeverCall.NamespaceMarker("orders")
+	require.False(t, ok)
+}

@@ -33,6 +33,7 @@ import (
 	"github.com/pyvvo/funcd/internal/edge/observ"
 	"github.com/pyvvo/funcd/internal/edge/router"
 	"github.com/pyvvo/funcd/internal/edge/static"
+	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/platform/httpx"
 	"github.com/pyvvo/funcd/internal/store"
 )
@@ -71,7 +72,18 @@ type Server struct {
 	transport  *http.Transport // the Upstream routes' connection pool, shared by every request
 	// defaultTimeout bounds an external invoke of a Function without spec.timeout (ADR-0151).
 	defaultTimeout time.Duration
+	// held is the namespace hold the Function and upstream paths ask (ADR-0290); hold.NeverCall without WithCallGate.
+	held hold.CallGate
 }
+
+// Option configures Handler.
+type Option func(*Server)
+
+// WithCallGate makes the data plane refuse calls into a namespace that g holds (ADR-0290).
+func WithCallGate(g hold.CallGate) Option { return func(s *Server) { s.held = g } }
+
+// heldRetryAfter is the Retry-After, in seconds, of a call refused by a namespace hold (ADR-0290 Decision 2).
+const heldRetryAfter = "30"
 
 // Handler builds the data-plane HTTP handler. The activator is the sole serving path;
 // gateway.Handler() is not mounted here (ADR-0033). rtr is the F79 edge router (may be nil, in
@@ -82,17 +94,22 @@ type Server struct {
 // invoke.defaultTimeout, the response deadline of an external invoke whose Function sets no spec.timeout
 // (≤ 0 ⇒ v1.DefaultInvokeTimeout, ADR-0151).
 func Handler(st store.Store, act *activator.Activator, rtr router.Router, baseDomain string, enf *authn.Enforcer,
-	lim *limit.TargetLimiter, stat *static.Handler, defaultTimeout time.Duration, logger *slog.Logger) http.Handler {
+	lim *limit.TargetLimiter, stat *static.Handler, defaultTimeout time.Duration, logger *slog.Logger,
+	opts ...Option) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	if defaultTimeout <= 0 {
 		defaultTimeout = v1.DefaultInvokeTimeout
 	}
-	return &Server{
+	s := &Server{
 		store: st, activator: act, router: rtr, baseDomain: baseDomain, enforcer: enf, limiter: lim, static: stat, logger: logger.With("component", "dataplane"),
-		transport: httpx.NodeTransport(), defaultTimeout: defaultTimeout,
+		transport: httpx.NodeTransport(), defaultTimeout: defaultTimeout, held: hold.NeverCall,
 	}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -231,6 +248,10 @@ func (s *Server) serveFunction(w http.ResponseWriter, r *http.Request, ns v1.Nam
 	if t, ok := observ.TargetFrom(r.Context()); ok {
 		t.Namespace, t.Function = string(ns), string(name)
 	}
+	if m, held := s.held.NamespaceMarker(ns); held {
+		refuseHeld(w, heldError(op, ns, m))
+		return
+	}
 	if !internal && s.limiter.Throttle(w, ns, name) {
 		return
 	}
@@ -285,6 +306,22 @@ func (s *Server) serveFunction(w http.ResponseWriter, r *http.Request, ns v1.Nam
 	}
 	out = activator.WithFunction(out, activator.FunctionRef{Namespace: ns, Name: name})
 	s.activator.ServeHTTP(w, out)
+}
+
+// heldError refuses a call into ns while m holds it (ADR-0290 Decision 2). It names the hold, so the Function path
+// returns it only after the caller's authentication.
+func heldError(op string, ns v1.NamespaceName, m hold.Marker) error {
+	if m.Reason == hold.ReasonRestore {
+		return fault.Unavailablef(op, "namespace %s is held while Restore %s loads it since %s", ns, m.Restore, m.Since)
+	}
+	return fault.Unavailablef(op, "namespace %s is held for its data since %s: calls resume after funcdctl hold release --namespace %s",
+		ns, m.Since, ns)
+}
+
+// refuseHeld sets Retry-After before the problem body, as the edge limiter does (ADR-0112 §2).
+func refuseHeld(w http.ResponseWriter, err error) {
+	w.Header().Set("Retry-After", heldRetryAfter)
+	fault.WriteProblem(w, err)
 }
 
 // responseDeadline is an external invoke's limit, read from the Function loaded for this call so an edit applies
@@ -344,6 +381,11 @@ func (s *Server) serveUpstream(w http.ResponseWriter, r *http.Request, m router.
 	}
 	if t, ok := observ.TargetFrom(r.Context()); ok {
 		t.Namespace, t.Function = string(m.Namespace), m.Upstream
+	}
+	// No edge PEP runs here, so the refusal says what an engine that is down says and names no hold (ADR-0290).
+	if _, held := s.held.NamespaceMarker(m.Namespace); held {
+		refuseHeld(w, fault.Unavailablef(op, "edge upstream unavailable"))
+		return
 	}
 	remainder := stripMatched(r.URL.Path, m.StripPrefix)
 	if remainder == "" {

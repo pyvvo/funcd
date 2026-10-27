@@ -1,8 +1,8 @@
 # ADR-0290: A namespace held for its data refuses calls to its Functions
 
-- **Status**: Accepted (2026-10-27, by an `adr-batch` run on the decider's delegation, after one `adr-judge` round
-  with no Blocker; folded: the upstream's detail names no hold, the S3 gateway out of scope (#1302), a daemon test
-  instead of a lane step, `hold.NeverCall`)
+- **Status**: Reviewing (2026-10-27; accepted 2026-10-27, by an `adr-batch` run on the decider's delegation,
+  after one `adr-judge` round with no Blocker; folded: the upstream's detail names no hold, the S3 gateway out of
+  scope (#1302), a daemon test instead of a lane step, `hold.NeverCall`)
 - **Date**: 2026-10-27
 - **Deciders**: green-0-rabbit
 - **Tags**: disaster-recovery, data-plane, hold

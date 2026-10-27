@@ -439,6 +439,15 @@ func (c *config) nsGate() hold.NamespaceGate {
 	return c.hold
 }
 
+// callGate is the namespace hold the data plane asks before it serves a call (ADR-0290): hold.NeverCall without
+// WithHold.
+func (c *config) callGate() hold.CallGate {
+	if c.hold == nil {
+		return hold.NeverCall
+	}
+	return c.hold
+}
+
 // minRecordBytes is the smallest funclog.maxRecordBytes: a record's envelope and cut marker always fit (ADR-0168).
 const minRecordBytes = 1024
 
@@ -1500,7 +1509,7 @@ func (p *Platform) buildControlPlane() error {
 	// bound is outermost, so every byte of every listener response passes it. Runtime order:
 	// WriteStall → Recover → RequestID → observ → limit → shape → dataplane.Handler.
 	dpCore := dataplane.Handler(c.store, act, p.edgeRouter, c.baseDomain, edgeEnforcer, limit.NewTargetLimiter(c.limits), staticHandler,
-		c.invokeDefaultTimeout, p.logger)
+		c.invokeDefaultTimeout, p.logger, dataplane.WithCallGate(c.callGate()))
 	edgeObserv, edgeShape := observ.Chain(c.observ, c.telemetry, p.logger), shape.Chain(c.shaping)
 	dpHandler := gateway.Chain(dpCore, gateway.WriteStall(gateway.WriteStallTimeout), gateway.Recover(p.logger),
 		gateway.RequestID, edgeObserv, limit.Chain(c.limits), edgeShape)
