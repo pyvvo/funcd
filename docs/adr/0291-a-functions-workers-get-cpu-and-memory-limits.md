@@ -82,7 +82,7 @@ keep no CPU or memory limit and a pool-wide heap cap (`FUNCD_POOL_MAX_OLD_MB`).
 ## Design model
 
 None: no protocol runs between actors. Admission and the reconciler agree by construction, both calling
-`ResourceSpec.Validate`; the kernel enforces the limits.
+`ResourceSpec.Validate` and `FunctionSpec.PooledWithResources`; the kernel enforces the limits.
 
 ## Temporary workarounds
 

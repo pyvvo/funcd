@@ -7,11 +7,14 @@
 - **Realizes**: [FEAT-0016/F209](../feat/0016-feat-workload-limits.md) (a Lake's catalog outside its Bucket)
 - **Answers**: the decider's choices of 2026-10-27: the catalog leaves the owner's Bucket for a platform-owned store
   that only the Lake's own engine reaches; one platform setting, `lake.catalogMaxSize`, default 1GiB, caps it; its
-  own ADR, superseding ADR-0271 in part
+  own ADR, superseding ADR-0271 in part; a catalog counts as its prefix's data, deleted only by a writer of the
+  prefix once no Lake is located there
 - **Supersedes (in part)**: [ADR-0086](0086-catalog-query-provider-ducklake-duckdb-quack.md) and
   [ADR-0271](0271-the-lake-catalog-is-a-duckdb-file.md) Decision 1: where the catalog object lives (the reserved
   `_ducklake/catalog.db` key of the owned prefix); [ADR-0208](0208-blob-store-backend-and-backup-target.md): how
-  the mirror's freeze finds a catalog's prefix
+  the mirror's freeze finds a catalog's prefix · [ADR-0080](0080-s3-protocol-frontend-blob-substrate.md): what the
+  deletion guard probes · [ADR-0288](0288-a-boot-reclaim-quarantines-data-no-object-names.md) Decision 2 and
+  [ADR-0206](0206-restore-and-held-boot.md) Decision 6: what a Bucket's quarantine entry and orphan walk hold
 - **Relates to**: [ADR-0292](0292-stores-get-a-quota-block-and-a-quota-framework.md) (the prefix quota now caps only
   a Lake's files) · [ADR-0275](0275-a-bucket-prefix-owner-names-its-kind.md) (the prefix owner) ·
   [ADR-0276](0276-a-lake-shows-when-its-catalog-saves-fail.md) and
@@ -33,9 +36,9 @@ Lake's own state. The catalog moves to a store of the platform's, outside every 
 - **scenario: catalog-only-its-lake**: Given Lake `analytics` that owns `lakehouse/gold`, When a Function bound to
   read `gold`, another Lake or an S3 identity gets, puts, heads or lists `gold`'s catalog, Then it gets
   `AccessDenied`; `analytics`' engine gets, heads and puts it.
-- **scenario: lake-at-cap-drops**: Given a Lake whose prefix holds its quota, When a client commits an `INSERT`, Then
-  the Parquet write gets 507 and the commit fails, while a query and a `DROP TABLE` still answer; after the dropped
-  files are expired and cleaned up and the quota re-measured, an `INSERT` commits again.
+- **scenario: lake-at-cap-drops**: Given a Lake whose prefix holds its quota, When a client commits an `INSERT` too
+  large for DuckLake to inline, Then the Parquet write gets 507 and the commit fails, while a query and a `DROP TABLE`
+  still answer; after the dropped files are expired and cleaned up and the quota re-measured, an `INSERT` commits.
 - **scenario: catalog-cap-refused**: Given `lake.catalogMaxSize: 1MiB`, When a commit grows the catalog past it, Then
   its save gets `EntityTooLarge` naming the setting, the commit's answer is an error (ADR-0279) and `CatalogSaved` is
   `False` with that message (ADR-0276).
@@ -46,17 +49,29 @@ Lake's own state. The catalog moves to a store of the platform's, outside every 
   the generation holds the catalog and every file it names (ADR-0208's `catalog-checkpoint-first`).
 - **scenario: purge-removes-catalogs**: Given a Bucket whose prefixes hold Lakes, When the Bucket is purged, Then their
   catalogs are deleted too.
+- **scenario: catalog-keeps-its-bucket**: Given Bucket `media` whose prefix `web` holds no object but a Lake's
+  catalog, its rows inlined, When the Bucket is deleted or `web` is removed from it, Then each gets 409 Conflict, as
+  for an object; once the catalog is deleted, both pass.
+- **scenario: catalog-deleted-once-no-lake**: Given a catalog for `lakehouse/bronze`, When a caller allowed to write
+  `bronze` deletes it through `funcd.lake-catalogs`, Then it gets `AccessDenied` naming the Lake while one is located
+  there, and the delete passes once none is; a caller not allowed to write `bronze` gets `AccessDenied`.
+- **scenario: catalog-quarantined-with-its-bucket**: Given a start whose blob store holds a Bucket's objects and
+  catalogs while no Bucket of that name exists (ADR-0288), Then its quarantine entry holds both, a return brings
+  both back, and its expiry deletes both; a Bucket whose only data is a catalog is quarantined too.
 
 ## Scope
 
 **In**: the catalog's place, who reaches it, its cap, the engine's environment, and every reader and writer of the
-catalog (the S3 gateway, the mirror, App backups, Restores, the Bucket purger, the dev engine).
+catalog (the S3 gateway, the mirror, App backups, Restores, the Bucket purger, the deletion guard, the quarantine, the
+dev engine).
 **Out**: moving a catalog an older funcd stored in a Bucket (none is deployed; the decider, 2026-10-27); counting the
 catalog store in a namespace budget (F208).
 
 ## Constraints & Decision drivers
 
 - The catalog stays with its data: keyed by the location, as today, so a Lake re-created on a prefix finds both.
+- The catalog is data: DuckLake can keep every row of a Lake in it, so whatever protects or moves a Bucket's objects
+  protects or moves its catalogs.
 - The platform mirror copies the blob store's directory whole (ADR-0208), so a store in that directory is backed up
   with no new wiring.
 
@@ -69,6 +84,7 @@ catalog store in a namespace budget (F208).
 | C. Reserve a share of the prefix quota for the catalog | No new store | A share of a small quota may not hold a catalog; readers as in B | Rejected: the decider |
 | D. A separate directory or the metastore | Isolated | The mirror copies neither without new wiring | Rejected |
 | E. Key the catalog by the Lake's name | Simple gateway rule | A Lake re-created elsewhere finds a catalog of other data; the mirror needs a Lake lookup | Rejected |
+| F. A live Lake blocks its Bucket's delete, as a binding does; its catalog goes with the purge | No delete in the store | A deleted Lake's inlined rows are purged with no Conflict, which ADR-0080 refuses for an object | Rejected: the decider |
 
 ## Decision
 
@@ -77,14 +93,15 @@ catalog store in a namespace budget (F208).
    ADR-0292 counts it; the platform mirror copies it with the rest of the directory.
 2. **The owning Lake only.** The S3 gateway serves the store under the reserved bucket name `funcd.lake-catalogs`
    (`v1.LakeCatalogBucket`), which no Bucket can take, since a Bucket's name is a DNS label
-   (`api/types/v1alpha1/ids.go:129-137`). A key is
-   `<bucket>/<prefix>/_ducklake/catalog.db`, and only GetObject, HeadObject and PutObject serve it, to a Lake
-   principal named as the owner of that prefix of that Bucket in its namespace (ADR-0275). Every other caller, key or
-   operation gets `AccessDenied`; ListBuckets and HeadBucket never show the store; no Cedar policy is asked, as for
-   the hold (ADR-0290). A Put still gets the hold's 503 while the namespace is held (ADR-0290 Decision 6).
+   (`api/types/v1alpha1/ids.go:129-137`). A key is `<bucket>/<prefix>/_ducklake/catalog.db`, and GetObject,
+   HeadObject and PutObject serve it to a Lake principal named as the owner of that prefix of that Bucket in its
+   namespace (ADR-0275), with no Cedar policy asked, as for the hold (ADR-0290); DeleteObject serves it as Decision 6
+   says. Every other caller, key or operation gets `AccessDenied`; ListBuckets and HeadBucket never show the store. A
+   Put or a Delete still gets the hold's 503 while the namespace is held (ADR-0290 Decision 6).
 3. **The cap.** `lake.catalogMaxSize` (a `ByteSize`, ADR-0266; default `1GiB`, or `s3gateway.maxUploadBytes` when
-   smaller; set above it, the start is refused) caps one catalog. A larger Put gets `EntityTooLarge` (400) whose message names its size and the setting; the save
-   fails, so ADR-0279 errors the commit's answer and ADR-0276 shows `SavesFailing` until a smaller catalog saves.
+   smaller; set above it, the start is refused) caps one catalog. A larger Put gets `EntityTooLarge` (400) whose
+   message names its size and the setting; the save fails, so ADR-0279 errors the commit's answer and ADR-0276 shows
+   `SavesFailing` until a smaller catalog saves.
 4. **The engine's environment.** `FUNCD_DUCKLAKE_CATALOG` is
    `s3://funcd.lake-catalogs/<bucket>/<prefix>/_ducklake/catalog.db`, and the NEW `FUNCD_DUCKLAKE_DATA_PATH`,
    `s3://<bucket>/<prefix>/`, is the Parquet path the duckdb shim and the dev engine no longer derive.
@@ -94,13 +111,20 @@ catalog store in a namespace budget (F208).
    that record to the store under the target's location, and an in-place one deletes the target's catalog when it
    empties the prefix. A target that is not in place is not empty while its catalog exists, since DuckLake can keep a
    Lake's rows in its catalog alone. The Bucket purger deletes `lake-catalogs/<ns>/<bucket>/` with the Bucket's objects.
-6. **No move.** A catalog an older funcd stored under the prefix is neither read nor moved: that Lake starts empty
+6. **A catalog is data.** ADR-0080's deletion guard probes a prefix's catalog with its objects: a Bucket, or a prefix
+   removed from it, that holds only a catalog gets the same 409. A deleted Lake keeps its catalog, as before (the
+   location keys it), so the store answers DeleteObject on a catalog key to a caller the PDP lets write that prefix
+   (ADR-0080's PEP, `s3::write`), while no Lake of the namespace is located there (`AccessDenied` naming that Lake).
+   The quarantine (ADR-0288) moves, returns and expires `lake-catalogs/<ns>/<bucket>/` with the Bucket's objects,
+   under its entry's `catalogs/`, and the orphan walk (ADR-0206 Decision 6) reads the store too.
+7. **No move.** A catalog an older funcd stored under the prefix is neither read nor moved: that Lake starts empty
    beside its old files, which App backups now copy as plain files.
 
 ## Design model
 
 Not required: no new state machine. The save path, its retries and its order are ADR-0279's and ADR-0289's, unchanged;
-only the object's key and its authorization change.
+only the object's key and its authorization change. The quarantine keeps ADR-0288's model, its entry holding two
+prefixes instead of one.
 
 ## Temporary workarounds
 
@@ -123,6 +147,8 @@ type Deps struct {
 	Catalogs func(ns v1.NamespaceName) blob.Bucket
 	// CatalogMaxBytes is lake.catalogMaxSize in bytes, NEW.
 	CatalogMaxBytes int64
+	// LakeAt names the Lake of ns located on bucket/prefix, NEW; nil ⇒ every catalog delete is AccessDenied.
+	LakeAt func(ctx context.Context, ns v1.NamespaceName, bucket, prefix string) (v1.ObjectName, bool, error)
 }
 
 // Package workload (internal/backup/workload).
@@ -143,20 +169,24 @@ type Config struct {
 func (c Config) LakeCatalogMaxBytes() (int64, error) // fault.Invalid past s3gateway.maxUploadBytes
 ```
 
+`admission.BlobProber.HasAny` keeps its signature; it now also reports a catalog for the prefix.
+
 | Consumes | Exposes |
 |---|---|
-| `lake.catalogMaxSize`; Bucket prefix owners (ADR-0275) | `funcd.lake-catalogs` to the owning Lake; `FUNCD_DUCKLAKE_DATA_PATH`; `EntityTooLarge` past the cap |
+| `lake.catalogMaxSize`; Bucket prefix owners (ADR-0275); the namespace's Lakes | `funcd.lake-catalogs` to the owning Lake, and its delete to a writer of the prefix with no Lake there; `FUNCD_DUCKLAKE_DATA_PATH`; `EntityTooLarge` past the cap; 409 while a catalog holds a Bucket |
 
 ## Implementation plan
 
-- `pkg/funcd`: the `lake-catalogs/` root beside `s3Root`, the gateway's `Catalogs` view, the backup `Sources`, the
-  purger; `cmd/funcd`: the mirror's `LakeData` and the setting.
-- `internal/blob/s3gateway`: the reserved bucket's rule in Get, Head and Put, the cap, `AccessDenied` elsewhere.
+- `pkg/funcd`: the `lake-catalogs/` root beside `s3Root`, the gateway's `Catalogs` view and `LakeAt`, the backup
+  `Sources`, the purger, the deletion prober, the quarantine's `catalogs/` and the orphan walk; `cmd/funcd`: the
+  mirror's `LakeData` and the setting.
+- `internal/blob/s3gateway`: the reserved bucket's rule in Get, Head, Put and Delete, the cap, `AccessDenied` elsewhere.
 - `internal/services/lake`: both environment keys; `images/runtime/duckdb/shim.py` and `internal/lake/devengine`:
   `FUNCD_DUCKLAKE_DATA_PATH`; the backup, restore and mirror changes of Decision 5.
-- Tests, one per scenario: `TestScenarioCatalogOutsideBucket`, `…CatalogOnlyItsLake`, `…CatalogCapRefused` (the
-  gateway), `…CatalogBackedUpAndRestored`, `…CatalogFreezesFirst`, `…PurgeRemovesCatalogs`; `lake-at-cap-drops` in
-  the duckdb Lima lane (`e2e/duckdb.venom.yml`) against the real engine, with ADR-0292's quota.
+- Tests, one per scenario: `TestScenarioCatalogOutsideBucket`, `…CatalogOnlyItsLake`, `…CatalogCapRefused`,
+  `…CatalogDeletedOnceNoLake` (the gateway), `…CatalogBackedUpAndRestored`, `…CatalogFreezesFirst`,
+  `…PurgeRemovesCatalogs`, `…CatalogKeepsItsBucket`, `…CatalogQuarantinedWithItsBucket`; `lake-at-cap-drops` in the
+  duckdb Lima lane (`e2e/duckdb.venom.yml`) against the real engine, with ADR-0292's quota.
 - Docs: the Lake reference, the blueprint, `examples/funcdconfig.yaml`, the language repos' lake examples' comments.
 - **Done when**: the tests pass with `-race`; build, vet (plain, dev, e2e, Linux) and lint are clean; the duckdb and
   app-todo lanes pass; `scripts/agent/gate.sh` passes.
@@ -164,19 +194,24 @@ func (c Config) LakeCatalogMaxBytes() (int64, error) // fault.Invalid past s3gat
 ## Review checklist
 
 - [ ] No catalog key under `s3/` is written; every reader and writer of a catalog uses the store's key.
-- [ ] The gateway serves `funcd.lake-catalogs` to the prefix's owning Lake only, and only Get, Head and Put; no Cedar
-      call is made for it; a Put past the cap gets `EntityTooLarge` naming `lake.catalogMaxSize`.
+- [ ] The gateway serves `funcd.lake-catalogs` Get, Head and Put to the prefix's owning Lake only, with no Cedar call,
+      and Delete to a writer of the prefix while no Lake is located there; a Put past the cap gets `EntityTooLarge`
+      naming `lake.catalogMaxSize`.
+- [ ] The deletion guard, the quarantine and the orphan walk treat a Bucket's catalogs as its data.
 - [ ] The mirror freezes a catalog before its prefix; App backups keep their member format; every scenario has its
       named test.
 
 ## Consequences
 
 - **Positive**: a Lake at its prefix's quota still answers queries and drops, so its owner can free room; only its
-  engine reads its catalog; the prefix's quota caps exactly the Lake's files.
-- **Negative (accepted)**: the catalog store is outside every Bucket quota, bounded only by `lake.catalogMaxSize` per
-  Lake until F208, and so are the rows DuckLake inlines in the catalog instead of writing Parquet (the experiment's
-  lane: many small commits left the prefix empty); a Function bound to a Lake's prefix can no longer read its catalog; a Lake from an older funcd
-  starts empty; a query the engine runs can still reach its own catalog's key, as it could under its prefix
+  engine reads its catalog; the prefix's quota caps exactly the Lake's files; a catalog protects its Bucket as an
+  object does, inlined rows included.
+- **Negative (accepted)**: the catalog store is outside every Bucket quota, bounded by `lake.catalogMaxSize` per
+  location that holds a catalog until a writer of its prefix deletes it, or F208; so are the rows DuckLake inlines
+  in the catalog instead of writing Parquet (the experiment's lane: many small commits left the prefix empty).
+  Draining a deleted Lake's catalog needs a writer of its prefix, a grant or the prefix handed to a Function, as its
+  leftover files already do. A Function bound to a Lake's prefix can no longer read its catalog; a Lake from an older
+  funcd starts empty; a query the engine runs can still reach its own catalog's key, as it could under its prefix
   (ADR-0263 Decision 8 allows every `s3://` path; the key pair decides).
 
 ## Open questions
@@ -188,4 +223,5 @@ func (c Config) LakeCatalogMaxBytes() (int64, error) // fault.Invalid past s3gat
 - The decider's choices of 2026-10-27; FEAT-0016; tracker #1315.
 - `internal/services/lake/reconcile.go:417-423,509-511`, `internal/backup/blobmirror/freeze.go:21-22,103-125`,
   `internal/backup/workload/workload.go:287-330`, `internal/services/backup/restore.go:314-323,473-507`,
-  `pkg/funcd/funcd.go:2433-2456,2510-2530`, `images/runtime/duckdb/shim.py:129-142,455`.
+  `pkg/funcd/funcd.go:2433-2456,2510-2530`, `images/runtime/duckdb/shim.py:129-142,455`,
+  `internal/controlplane/admission/bucket.go:59-62`, `pkg/funcd/quarantine.go:98,120,230`.
