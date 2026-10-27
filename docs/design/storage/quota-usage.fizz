@@ -1,5 +1,5 @@
 ---
-# One capped store's usage under the quota framework (ADR-0291 Decisions 3 and 4). Admit reserves a write's bytes
+# One capped store's usage under the quota framework (ADR-0292 Decisions 3 and 4). Admit reserves a write's bytes
 # against the usage (the last measure, the bytes settled since and the bytes reserved in flight), the write is stored,
 # then settled (or released when it fails). A background measure reads the store's total and, when it lands, keeps the
 # bytes settled while it ran. A write that would pass the cap waits for a fresh measure when bytes were settled since
@@ -154,6 +154,10 @@ action Init:
 # The usage never counts less than the store holds, so a write never passes the cap unseen.
 always assertion UsageNeverBelowTotal:
     return measured + since + inflight >= total
+
+# The store never holds more than its cap: the cap's own promise, which UsageNeverBelowTotal serves.
+always assertion CapHolds:
+    return total <= LIMIT
 
 # A write that found bytes settled since the last measure is refused only on a measure that landed after it arrived.
 always assertion RefusalsRestOnAFreshMeasure:
