@@ -1,6 +1,6 @@
 # ADR-0291: A Function's workers get CPU and memory limits through the runtime port
 
-- **Status**: Reviewing (2026-10-28); Accepted (2026-10-27; six adr-judge rounds and the experiment on real engines; the decider confirmed every choice)
+- **Status**: Implemented (2026-10-28), review passed ([report](../reviews/adr-0291-implementation-claude-opus-5-5.md)); Reviewing (2026-10-28); Accepted (2026-10-27; six adr-judge rounds and the experiment on real engines; the decider confirmed every choice)
 - **Date**: 2026-10-27
 - **Deciders**: green-0-rabbit
 - **Tags**: runtime, limits
