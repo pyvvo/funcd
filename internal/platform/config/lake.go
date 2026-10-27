@@ -34,11 +34,45 @@ func (c Config) LakeSaveInterval() (time.Duration, error) {
 	return time.Duration(d), nil
 }
 
-// CheckLake refuses a lake.saveInterval that LakeSaveInterval refuses.
+// DefaultLakeCatalogMaxSize caps one Lake's catalog when lake.catalogMaxSize is empty (ADR-0293 Decision 3).
+const DefaultLakeCatalogMaxSize = "1GiB"
+
+// LakeCatalogMaxBytes is lake.catalogMaxSize in bytes; empty, DefaultLakeCatalogMaxSize or s3gateway.maxUploadBytes
+// when that is smaller. fault.Invalid names the key for a size that does not parse, is zero, or passes
+// s3gateway.maxUploadBytes, which the gateway would refuse first with no word of the setting.
+func (c Config) LakeCatalogMaxBytes() (int64, error) {
+	const op = "config.LakeCatalogMaxBytes"
+	maxUpload := c.S3Gateway.MaxUploadBytes
+	if maxUpload <= 0 {
+		maxUpload = 1 << 30
+	}
+	v := c.Lake.CatalogMaxSize
+	if v == "" {
+		n, _ := v1.ByteSize(DefaultLakeCatalogMaxSize).Bytes()
+		return min(n, maxUpload), nil
+	}
+	n, err := v1.ByteSize(v).Bytes()
+	if err != nil {
+		return 0, fault.Wrapf(err, fault.Invalid, op, "config key %q", "lake.catalogMaxSize")
+	}
+	if n <= 0 {
+		return 0, fault.Invalidf(op, "config key %q: %q must be above zero", "lake.catalogMaxSize", v)
+	}
+	if n > maxUpload {
+		return 0, fault.Invalidf(op, "config key %q: %s is over s3gateway.maxUploadBytes (%d bytes)", "lake.catalogMaxSize", v, maxUpload)
+	}
+	return n, nil
+}
+
+// CheckLake refuses a lake.saveInterval that LakeSaveInterval refuses and a lake.catalogMaxSize that
+// LakeCatalogMaxBytes refuses.
 func (c Config) CheckLake() []Finding {
 	var f findings
 	if _, err := c.LakeSaveInterval(); err != nil {
 		f.refuse("lake.saveInterval", "%v", err)
+	}
+	if _, err := c.LakeCatalogMaxBytes(); err != nil {
+		f.refuse("lake.catalogMaxSize", "%v", err)
 	}
 	return f.errs
 }

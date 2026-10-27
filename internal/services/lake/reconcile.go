@@ -30,7 +30,7 @@ const quackTokenEnvKey = "QUACK_TOKEN"
 // Reconcile converges one Lake (ADR-0086 as reworked by ADR-0087). A present
 // Lake is deployed as an add-on provider: the reconciler assembles a provider.ProviderSpec
 // from its bindings (spec.bindings.blob → the ADR-0085 per-fn S3 keypair derived over the provider identity;
-// spec.location → FUNCD_DUCKLAKE_CATALOG; spec.bindings.secret/spec.bindings.config → the Quack token + engine
+// spec.location → FUNCD_DUCKLAKE_CATALOG and FUNCD_DUCKLAKE_DATA_PATH; spec.bindings.secret/spec.bindings.config → the Quack token + engine
 // config) and calls the provider-runtime's Converge — NO backing Function is materialized. It
 // reflects the provider's readiness/address into status. A deleted Lake (NotFound) tears
 // the engine down via provider.Teardown.
@@ -407,8 +407,9 @@ func (r *Reconciler) saveURL(address string) (string, error) {
 }
 
 // engineEnv assembles the engine's environment (ADR-0087), but for its S3 key pair, issued with the engine
-// (ProviderSpec.IssueEnv, ADR-0270): AWS_REGION/AWS_ENDPOINT_URL, FUNCD_DUCKLAKE_CATALOG (the
-// lake's s3:// key), FUNCD_QUACK_PORT, FUNCD_LAKE_SAVE_INTERVAL (lake.saveInterval, ADR-0274) or, without it,
+// (ProviderSpec.IssueEnv, ADR-0270): AWS_REGION/AWS_ENDPOINT_URL, FUNCD_DUCKLAKE_CATALOG (the catalog's s3:// key in
+// the catalog store) and FUNCD_DUCKLAKE_DATA_PATH (its files' s3:// prefix, ADR-0293), FUNCD_QUACK_PORT,
+// FUNCD_LAKE_SAVE_INTERVAL (lake.saveInterval, ADR-0274) or, without it,
 // FUNCD_LAKE_SAVE_PORT (ADR-0279), and the resolved
 // spec.bindings.secret (the Quack token) +
 // spec.bindings.config (DUCKDB_*) Data keys. funcd's own keys win over bound data, so a bound ConfigMap or Secret
@@ -417,9 +418,10 @@ func (r *Reconciler) saveURL(address string) (string, error) {
 func (r *Reconciler) engineEnv(ctx context.Context, cs *v1.Lake) (map[string]string, error) {
 	const op = "services.lake.engineEnv"
 	own := map[string]string{
-		"AWS_REGION":             "us-east-1",
-		"FUNCD_QUACK_PORT":       strconv.Itoa(enginePort),
-		"FUNCD_DUCKLAKE_CATALOG": lakeURI(cs.Spec.Location),
+		"AWS_REGION":               "us-east-1",
+		"FUNCD_QUACK_PORT":         strconv.Itoa(enginePort),
+		"FUNCD_DUCKLAKE_CATALOG":   "s3://" + v1.LakeCatalogBucket + "/" + v1.LakeCatalogKey(cs.Spec.Location),
+		"FUNCD_DUCKLAKE_DATA_PATH": fmt.Sprintf("s3://%s/%s/", cs.Spec.Location.Bucket, cs.Spec.Location.Prefix),
 	}
 	if r.s3Endpoint != "" {
 		own["AWS_ENDPOINT_URL_S3"] = r.s3Endpoint
@@ -502,12 +504,6 @@ func (r *Reconciler) resolveBucketRefs(ctx context.Context, cs *v1.Lake) (requeu
 		return true, msg, nil
 	}
 	return false, "", nil
-}
-
-// lakeURI is the s3:// key the DuckLake catalog lives at (ADR-0086, a DuckDB file since ADR-0271): the bound
-// (bucket, prefix) under the reserved _ducklake/catalog.db key.
-func lakeURI(c v1.LakeLocation) string {
-	return fmt.Sprintf("s3://%s/%s/_ducklake/catalog.db", c.Bucket, c.Prefix)
 }
 
 // retryOnConflict swallows a store Conflict (re-reconciled on the next watch event), else wraps.

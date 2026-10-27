@@ -62,6 +62,10 @@ type Deps struct {
 	External ExternalKeys
 	// Listen is the node-private bind address (e.g. 127.0.0.1:9000).
 	Listen string
+	// Catalogs is a namespace's view of the Lake catalog store, served under v1.LakeCatalogBucket to the Lake that owns
+	// the location a key names (ADR-0293); nil serves none. CatalogMaxBytes is lake.catalogMaxSize in bytes.
+	Catalogs        func(ns v1.NamespaceName) blob.Bucket
+	CatalogMaxBytes int64
 	// MaxUploadBytes caps a single buffered (multipart/put) object; 0 ⇒ defaultMaxUpload. It also sizes the
 	// multipart budget (ADR-0188): buffered parts plus assembled copies stay within 3 × MaxUploadBytes daemon-wide,
 	// and one principal's parts within MaxUploadBytes.
@@ -134,15 +138,17 @@ func New(d Deps) (*Server, error) {
 
 	life, stop := context.WithCancel(context.Background())
 	backendImpl := &be{
-		bucketFor: d.BucketFor,
-		buckets:   d.Buckets,
-		pdp:       d.PDP,
-		external:  d.External,
-		maxUpload: maxUpload,
-		log:       logger,
-		mp:        newMultipartStore(maxUpload),
-		life:      life,
-		held:      held,
+		bucketFor:  d.BucketFor,
+		buckets:    d.Buckets,
+		pdp:        d.PDP,
+		external:   d.External,
+		maxUpload:  maxUpload,
+		log:        logger,
+		mp:         newMultipartStore(maxUpload),
+		life:       life,
+		held:       held,
+		catalogs:   d.Catalogs,
+		catalogMax: d.CatalogMaxBytes,
 	}
 	iamImpl := &iam{derive: d.Deriver(), external: d.External}
 

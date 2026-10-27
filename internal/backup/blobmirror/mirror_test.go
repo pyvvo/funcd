@@ -78,8 +78,8 @@ const (
 
 func parquet(name string) string { return lake + "data/" + name + ".parquet" }
 
-// requireLakeConsistent checks the generation's checkpoint names only files the generation holds.
-func requireLakeConsistent(t *testing.T, got map[string]string) {
+// requireLakeConsistent checks the generation's checkpoint at ck names only files the generation holds.
+func requireLakeConsistent(t *testing.T, got map[string]string, ck string) {
 	t.Helper()
 	cp, ok := got[ck]
 	require.True(t, ok, "the generation holds the checkpoint")
@@ -88,10 +88,8 @@ func requireLakeConsistent(t *testing.T, got map[string]string) {
 	}
 }
 
-// scenario: lake-checkpoint-first — mid-freeze the engine writes f2 and a checkpoint listing both, or a
-// checkpoint without f1 and deletes f1: each checkpoint's files are in the generation.
-func TestScenarioLakeCheckpointFirst(t *testing.T) {
-	t.Parallel()
+// checkpointFirst runs lake-checkpoint-first with the checkpoint at ck and cfg's Config.
+func checkpointFirst(t *testing.T, ck string, cfg func(*blobmirror.Config)) {
 	for name, change := range map[string]func(f *fixture){
 		"f2 added": func(f *fixture) {
 			f.put(parquet("f2"), "rows 2")
@@ -105,7 +103,7 @@ func TestScenarioLakeCheckpointFirst(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			f := newFixture(t, nil)
+			f := newFixture(t, cfg)
 			f.put(parquet("f1"), "rows 1")
 			f.put(ck, "f1")
 			changed := false
@@ -116,9 +114,26 @@ func TestScenarioLakeCheckpointFirst(t *testing.T) {
 				}
 			}})
 			m := f.run()
-			requireLakeConsistent(t, f.restored(m.Generation, nil))
+			requireLakeConsistent(t, f.restored(m.Generation, nil), ck)
 		})
 	}
+}
+
+// scenario: lake-checkpoint-first — mid-freeze the engine writes f2 and a checkpoint listing both, or a
+// checkpoint without f1 and deletes f1: each checkpoint's files are in the generation.
+func TestScenarioLakeCheckpointFirst(t *testing.T) {
+	t.Parallel()
+	checkpointFirst(t, ck, nil)
+}
+
+// scenario: catalog-freezes-first (ADR-0293) — the same with the catalog in the catalog store, outside its files'
+// prefix, which Config.LakeData names.
+func TestScenarioCatalogFreezesFirst(t *testing.T) {
+	t.Parallel()
+	const stored = "lake-catalogs/ns/b/lake/_ducklake/catalog.db"
+	checkpointFirst(t, stored, func(c *blobmirror.Config) {
+		c.LakeData = func(key string) (string, bool) { return lake, key == stored }
+	})
 }
 
 // scenario: mirror-epoch-rolls — a run that finds the epoch older than blob.backup.rebaseline writes epoch e+1 with

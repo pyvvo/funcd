@@ -880,15 +880,15 @@ func (b *cleanupBucket) Get(ctx context.Context, key string) ([]byte, error) {
 	return b.Bucket.Get(ctx, key)
 }
 
-// scenario: lake-copy-unopened (ADR-0271) — the backup copies a lake's checkpoint as it is, never opening it: lake
-// lake loses f1 to a cleanup mid-copy, so attempt 2 runs, its files then its new catalog.db; lake lake-two lists a
+// scenario: lake-copy-unopened (ADR-0271) — the backup copies a lake's checkpoint as it is, never opening it, from the
+// catalog store (ADR-0293): lake lake loses f1 to a cleanup mid-copy, so attempt 2 runs, its files then its new catalog.db; lake lake-two lists a
 // key that vanishes at every read, which fails the Backup LakeUnstable after three attempts.
 func TestScenarioLakeCopyUnopened(t *testing.T) {
 	t.Parallel()
 	mem, err := gocloud.Open(context.Background(), "mem://")
 	require.NoError(t, err)
-	root := bucketPrefix("orders", "lake-files")
-	shared := &cleanupBucket{Bucket: mem, f1: root + "lake/main/t/f1.parquet", checkpoint: root + "lake/_ducklake/catalog.db",
+	root, catalogs := bucketPrefix("orders", "lake-files"), lakeCatalogPrefix("orders")+"lake-files/"
+	shared := &cleanupBucket{Bucket: mem, f1: root + "lake/main/t/f1.parquet", checkpoint: catalogs + "lake/_ducklake/catalog.db",
 		gone: root + "lake-two/main/t/gone.parquet", next: []byte("a DuckDB catalog, opaque to the backup: C2")}
 	r := newWBRig(t, wbOptions{opts: []Option{WithBlob(shared)}, setup: func(r *wbRig) {
 		r.seed(&v1.Bucket{TypeMeta: tmeta(v1.KindBucket), ObjectMeta: ordersMeta("lake-files")})
@@ -899,11 +899,11 @@ func TestScenarioLakeCopyUnopened(t *testing.T) {
 			}})
 		}
 		for key, data := range map[string][]byte{
-			root + "lake/_ducklake/catalog.db":     []byte("a DuckDB catalog, opaque to the backup: C1"),
-			root + "lake/main/t/f1.parquet":        []byte("f1"),
-			root + "lake/main/t/f2.parquet":        []byte("f2"),
-			root + "lake-two/_ducklake/catalog.db": []byte("a DuckDB catalog, opaque to the backup"),
-			root + "lake-two/main/t/gone.parquet":  []byte("gone"),
+			catalogs + "lake/_ducklake/catalog.db":     []byte("a DuckDB catalog, opaque to the backup: C1"),
+			root + "lake/main/t/f1.parquet":            []byte("f1"),
+			root + "lake/main/t/f2.parquet":            []byte("f2"),
+			catalogs + "lake-two/_ducklake/catalog.db": []byte("a DuckDB catalog, opaque to the backup"),
+			root + "lake-two/main/t/gone.parquet":      []byte("gone"),
 		} {
 			require.NoError(t, mem.Put(r.ctx, key, data, blob.PutOptions{}))
 		}
@@ -925,4 +925,69 @@ func TestScenarioLakeCopyUnopened(t *testing.T) {
 	b = r.waitBackup("lake-two-now", v1.RunFailed)
 	require.Equal(t, "LakeUnstable", reason(b.Status.Status))
 	require.Len(t, r.stub.PutKeys(b.Status.Path), 3, "three attempts' files, no catalog.db and no manifest")
+}
+
+// scenario: catalog-backed-up-and-restored (ADR-0293) — an App backup reads lake's catalog from the catalog store and
+// keeps the member's catalog.db record; a Restore asLocation writes it to the store under the new location, the files
+// under its prefix, and an in-place Restore puts back the catalog and the files the backup holds, dropping later ones,
+// and a later catalog when the backup holds none.
+func TestScenarioCatalogBackedUpAndRestored(t *testing.T) {
+	t.Parallel()
+	root, catalogs := bucketPrefix("orders", "lake-files"), lakeCatalogPrefix("orders")+"lake-files/"
+	r := newWBRig(t, wbOptions{setup: func(r *wbRig) {
+		r.seed(&v1.Bucket{TypeMeta: tmeta(v1.KindBucket), ObjectMeta: ordersMeta("lake-files"), Spec: v1.BucketSpec{
+			Prefixes: []v1.BucketPrefix{{Name: "lake", Owner: v1.LakeOwner("lake")}, {Name: "copy"}, {Name: "fresh", Owner: v1.LakeOwner("fresh")}}}})
+		for _, name := range []string{"lake", "fresh"} {
+			r.seed(&v1.Lake{TypeMeta: tmeta(v1.KindLake), ObjectMeta: ordersMeta(name), Spec: v1.LakeSpec{
+				Location: v1.LakeLocation{Bucket: "lake-files", Prefix: name},
+				Bindings: v1.LakeBindings{Blob: []v1.FunctionBlob{{Alias: "lake", Bucket: "lake-files", Prefix: name}}},
+			}})
+		}
+		for key, data := range map[string]string{catalogs + "lake/_ducklake/catalog.db": "C1", root + "lake/main/t/f1.parquet": "f1"} {
+			require.NoError(r.t, r.p.cfg.blob.Put(r.ctx, key, []byte(data), blob.PutOptions{}))
+		}
+	}})
+	r.create(r.dev, r.schedule("lake-nightly", "0 3 * * *", func(s *v1.BackupScheduleSpec) {
+		s.Scope = v1.BackupScope{Lakes: []v1.ObjectName{"lake"}}
+	}))
+	r.create(r.dev, r.backupObj("b1", "lake-nightly"))
+	b := r.waitBackup("b1", v1.RunSucceeded)
+	require.Contains(t, r.stub.PutKeys(b.Status.Path), b.Status.Path+"lake/lake/1/catalog.db/part-00000", "the member keeps its format")
+	get := func(key string) string {
+		data, err := r.p.cfg.blob.Get(r.ctx, key)
+		if fault.KindOf(err) == fault.NotFound {
+			return ""
+		}
+		require.NoError(t, err)
+		return string(data)
+	}
+
+	r.create(r.dev, r.restoreObj("copy", "b1", v1.RestoreMember{Kind: v1.KindLake, Name: "lake",
+		AsLocation: &v1.LakeLocation{Bucket: "lake-files", Prefix: "copy"}}))
+	r.waitRestore("copy", v1.RunSucceeded)
+	require.Equal(t, "C1", get(catalogs+"copy/_ducklake/catalog.db"), "the catalog lands in the store under the new location")
+	require.Equal(t, "f1", get(root+"copy/main/t/f1.parquet"))
+	require.Empty(t, get(root+"copy/_ducklake/catalog.db"), "no catalog under the files")
+
+	for key, data := range map[string]string{catalogs + "lake/_ducklake/catalog.db": "C2", root + "lake/main/t/f3.parquet": "f3"} {
+		require.NoError(t, r.p.cfg.blob.Put(r.ctx, key, []byte(data), blob.PutOptions{}))
+	}
+	r.create(r.admin, r.restoreObj("rewind", "b1", v1.RestoreMember{Kind: v1.KindLake, Name: "lake", InPlace: true}))
+	r.waitRestore("rewind", v1.RunSucceeded)
+	require.Equal(t, "C1", get(catalogs+"lake/_ducklake/catalog.db"))
+	require.Equal(t, "f1", get(root+"lake/main/t/f1.parquet"))
+	require.Empty(t, get(root+"lake/main/t/f3.parquet"), "the in-place load empties the prefix first")
+
+	r.create(r.dev, r.schedule("fresh-nightly", "0 3 * * *", func(s *v1.BackupScheduleSpec) {
+		s.Scope = v1.BackupScope{Lakes: []v1.ObjectName{"fresh"}}
+	}))
+	r.create(r.dev, r.backupObj("b2", "fresh-nightly"))
+	r.waitBackup("b2", v1.RunSucceeded)
+	for key, data := range map[string]string{catalogs + "fresh/_ducklake/catalog.db": "C9", root + "fresh/main/t/f9.parquet": "f9"} {
+		require.NoError(t, r.p.cfg.blob.Put(r.ctx, key, []byte(data), blob.PutOptions{}))
+	}
+	r.create(r.admin, r.restoreObj("empty", "b2", v1.RestoreMember{Kind: v1.KindLake, Name: "fresh", InPlace: true}))
+	r.waitRestore("empty", v1.RunSucceeded)
+	require.Empty(t, get(catalogs+"fresh/_ducklake/catalog.db"), "a backup without a catalog leaves none")
+	require.Empty(t, get(root+"fresh/main/t/f9.parquet"))
 }

@@ -19,6 +19,7 @@ package devengine
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -385,7 +386,7 @@ func (w *rowWatcher) Write(b []byte) (int, error) {
 
 // buildInitSQL assembles the duckdb init script: pin the extension dir, LOAD the engine extensions,
 // wire an S3 secret from the injected dev keypair (so httpfs reaches the dev S3 gateway), ATTACH the
-// DuckLake (a LOCAL DuckDB catalog file + the S3 DATA_PATH derived from FUNCD_DUCKLAKE_CATALOG) as the
+// DuckLake (a LOCAL DuckDB catalog file + the S3 DATA_PATH, FUNCD_DUCKLAKE_DATA_PATH) as the
 // default lake so a consumer's server-side `quack_query` DDL writes gold Parquet, then start the
 // Quack server. This mirrors the prod duckdb runtime shim (images/runtime/duckdb/shim.py) minus the
 // boto3 lake recovery/checkpoint — dev starts a fresh local lake each boot (the Parquet DATA
@@ -413,7 +414,7 @@ func buildInitSQL(extDir, catalogFile string, env map[string]string) string {
 	if cat := env["FUNCD_DUCKLAKE_CATALOG"]; cat != "" {
 		// OVERRIDE_DATA_PATH: a lake restored under another prefix (ADR-0222 asLocation) records its old one
 		fmt.Fprintf(&b, "ATTACH %s AS lakehouse (DATA_PATH %s, OVERRIDE_DATA_PATH TRUE, DUCKLAKE_VERSION '1.1');\n",
-			sqlStr("ducklake:"+catalogFile), sqlStr(dataPathFor(cat)))
+			sqlStr("ducklake:"+catalogFile), sqlStr(cmp.Or(env["FUNCD_DUCKLAKE_DATA_PATH"], dataPathFor(cat))))
 	}
 
 	token := firstNonEmpty(env["FUNCD_QUACK_TOKEN"], env["QUACK_TOKEN"], DevQuackToken)
@@ -421,9 +422,9 @@ func buildInitSQL(extDir, catalogFile string, env map[string]string) string {
 	return b.String()
 }
 
-// dataPathFor derives the DuckLake Parquet DATA_PATH (s3://<bucket>/<prefix>/) from the lake URL
-// (s3://<bucket>/<prefix>/_ducklake/catalog.db), mirroring the prod shim's _data_path. Without the
-// marker it falls back to the URL's parent directory.
+// dataPathFor derives the DuckLake Parquet DATA_PATH (s3://<bucket>/<prefix>/) from a lake URL under its files
+// (s3://<bucket>/<prefix>/_ducklake/catalog.db), mirroring the prod shim's _data_path, for an environment without
+// FUNCD_DUCKLAKE_DATA_PATH (ADR-0293). Without the marker it falls back to the URL's parent directory.
 func dataPathFor(lakeURL string) string {
 	const marker = "/_ducklake/"
 	if i := strings.Index(lakeURL, marker); i >= 0 {

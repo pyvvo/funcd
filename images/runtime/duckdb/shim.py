@@ -13,9 +13,12 @@ Injected environment (ADR-0085 keypair + ADR-0032 fixed port):
     AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY  — the function's per-fn S3 keypair.
     AWS_ENDPOINT_URL / FUNCD_S3_ENDPOINT       — the injected funcd S3 gateway endpoint (path-style).
     AWS_REGION                                 — the S3 region the gateway expects.
-    FUNCD_DUCKLAKE_CATALOG                     — the catalog blob key, an ``s3://<bucket>/<prefix>/
-                                                 _ducklake/catalog.db`` URL. The Parquet DATA_PATH is
-                                                 derived from it (``s3://<bucket>/<prefix>/``).
+    FUNCD_DUCKLAKE_CATALOG                     — the catalog blob key in the catalog store (ADR-0293), an
+                                                 ``s3://funcd.lake-catalogs/<bucket>/<prefix>/_ducklake/
+                                                 catalog.db`` URL.
+    FUNCD_DUCKLAKE_DATA_PATH                   — the Parquet DATA_PATH, ``s3://<bucket>/<prefix>/``; without
+                                                 it (an engine started by hand) it is derived from the
+                                                 catalog URL, as before the catalog store.
     FUNCD_QUACK_PORT                           — the fixed netns port the Quack server binds.
 
 Engine confinement (the "Confine the SQL engine's reach" constraint, ADR-0086 B1 fix, an allow-list
@@ -675,7 +678,7 @@ def main() -> int:
     access, secret = os.environ.pop("AWS_ACCESS_KEY_ID"), os.environ.pop("AWS_SECRET_ACCESS_KEY")
     bucket, key = _split_s3_url(catalog_url)
     save_interval = _save_interval(os.environ)
-    data_path = _data_path(catalog_url)
+    data_path = os.environ.get("FUNCD_DUCKLAKE_DATA_PATH") or _data_path(catalog_url)
 
     s3 = _s3_client(endpoint, region, access, secret)
     con = _connect()

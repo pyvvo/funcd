@@ -16,6 +16,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/blob"
+	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
 )
 
@@ -124,4 +125,74 @@ func TestScenarioLakeTotalRefused(t *testing.T) {
 	requireQuotaExceeded(t, err)
 	require.ErrorContains(t, err, "prefix gold of bucket default/media holds 1000 of its 1024 bytes")
 	require.NoError(t, put(ctx, writer, "raw/big.bin", 4096), "a prefix without a quota is not capped by another's")
+}
+
+// scenario: catalog-outside-bucket — a Lake's engine saves its catalog to the catalog store (ADR-0293): the Bucket's
+// listing does not show it, its prefix's quota does not count it, and a Lake whose prefix holds its quota still saves.
+func TestScenarioCatalogOutsideBucket(t *testing.T) {
+	ctx := context.Background()
+	p, client := quotaGateway(t, quotaBucket(v1.BucketSpec{Prefixes: []v1.BucketPrefix{
+		{Name: "gold", Owner: v1.LakeOwner("analytics"), Quota: v1.SizeQuota{MaxBytes: 1000}},
+	}}))
+	engine := client(v1.KindLake, "analytics")
+	catalog := func(n int) error {
+		_, err := engine.PutObject(ctx, &awss3.PutObjectInput{Bucket: aws.String(v1.LakeCatalogBucket),
+			Key: aws.String("media/gold/_ducklake/catalog.db"), Body: bytes.NewReader(make([]byte, n))})
+		return err
+	}
+
+	require.NoError(t, put(ctx, engine, "gold/main/t/f1.parquet", 1000), "the files fill the prefix's quota")
+	requireQuotaExceeded(t, put(ctx, engine, "gold/main/t/f2.parquet", 1))
+	require.NoError(t, catalog(4096), "the catalog saves outside the prefix's quota")
+	require.NoError(t, catalog(2048), "and again")
+	stored, err := p.cfg.blob.Get(ctx, "lake-catalogs/default/media/gold/_ducklake/catalog.db")
+	require.NoError(t, err)
+	require.Len(t, stored, 2048)
+	view, ok := s3BucketFor(p.cfg.blob, p.cfg.store, p.quotas)("default", "media")
+	require.True(t, ok)
+	items, err := view.List(ctx, "gold/")
+	require.NoError(t, err)
+	require.Len(t, items, 1, "the Bucket lists the Lake's file, not its catalog")
+}
+
+// scenario: purge-removes-catalogs — purging a Bucket deletes the catalogs of the Lakes on its prefixes, and no other.
+func TestScenarioPurgeRemovesCatalogs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	shared, err := gocloud.Open(ctx, "mem://")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = shared.Close() })
+	for _, k := range []string{
+		"s3/default/media/gold/main/f1.parquet",
+		"lake-catalogs/default/media/gold/_ducklake/catalog.db",
+		"lake-catalogs/default/media-two/gold/_ducklake/catalog.db",
+		"lake-catalogs/orders/media/gold/_ducklake/catalog.db",
+	} {
+		require.NoError(t, shared.Put(ctx, k, []byte("x"), blob.PutOptions{}))
+	}
+	require.NoError(t, bucketPurger{shared: shared}.Purge(ctx, "default", "media"))
+	for k, want := range map[string]bool{
+		"s3/default/media/gold/main/f1.parquet":                     false,
+		"lake-catalogs/default/media/gold/_ducklake/catalog.db":     false,
+		"lake-catalogs/default/media-two/gold/_ducklake/catalog.db": true,
+		"lake-catalogs/orders/media/gold/_ducklake/catalog.db":      true,
+	} {
+		found, err := shared.Exists(ctx, k)
+		require.NoError(t, err)
+		require.Equal(t, want, found, k)
+	}
+}
+
+func TestLakeData(t *testing.T) {
+	t.Parallel()
+	for key, want := range map[string]string{
+		"lake-catalogs/default/media/gold/_ducklake/catalog.db": "s3/default/media/gold/",
+		"lake-catalogs/default/media/_ducklake/catalog.db":      "",
+		"lake-catalogs/default/media/gold/catalog.db":           "",
+		"s3/default/media/gold/_ducklake/catalog.db":            "",
+	} {
+		got, ok := LakeData(key)
+		require.Equal(t, want, got, key)
+		require.Equal(t, want != "", ok, key)
+	}
 }

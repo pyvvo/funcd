@@ -56,7 +56,10 @@ type Config struct {
 	Interval, Rebaseline, Retention, RetryInterval time.Duration
 	Logger                                         *slog.Logger
 	Hold                                           interface{ Held() bool }
-	Record                                         func(start time.Time, err error)
+	// LakeData maps a Lake catalog's key to the prefix of its files, ok=false for any other key (ADR-0293); nil keeps
+	// the catalog under its files, <p>/_ducklake/catalog.db.
+	LakeData func(key string) (prefix string, ok bool)
+	Record   func(start time.Time, err error)
 }
 
 // Manifest is a generation's manifest.yaml, created last. Recipients are the sorted fingerprints the objects and the

@@ -173,7 +173,9 @@ func TestReconcile_lake_uses_provider_runtime(t *testing.T) {
 	require.Equal(t, "secret-lake", issued["AWS_SECRET_ACCESS_KEY"])
 	require.Equal(t, "us-east-1", spec.Env["AWS_REGION"])
 	require.Equal(t, "http://10.63.0.1:9000", spec.Env["AWS_ENDPOINT_URL_S3"])
-	require.Equal(t, "s3://lakehouse/gold/_ducklake/catalog.db", spec.Env["FUNCD_DUCKLAKE_CATALOG"])
+	require.Equal(t, "s3://funcd.lake-catalogs/lakehouse/gold/_ducklake/catalog.db", spec.Env["FUNCD_DUCKLAKE_CATALOG"],
+		"the catalog lives in the catalog store (ADR-0293)")
+	require.Equal(t, "s3://lakehouse/gold/", spec.Env["FUNCD_DUCKLAKE_DATA_PATH"])
 	require.Equal(t, "8080", spec.Env["FUNCD_QUACK_PORT"])
 
 	// NO backing Function exists — the engine is not a Function (scenario: provider-not-a-function).

@@ -333,6 +333,9 @@ type config struct {
 	// functionDefaultResources fills what a solo Function's spec.resources leaves empty (ADR-0291); zero sets none.
 	functionDefaultResources v1.ResourceSpec
 	quarantineClock          clock.Clock
+	// lakeCatalogMaxBytes caps one Lake's catalog in the catalog store (lake.catalogMaxSize, ADR-0293); 0 ⇒ the
+	// gateway's upload cap alone.
+	lakeCatalogMaxBytes int64
 	// lakeSaveInterval is every Lake engine's catalog save interval (lake.saveInterval, ADR-0274); 0 ⇒ none set: every
 	// Lake saves before it answers (ADR-0279).
 	lakeSaveInterval time.Duration
@@ -881,6 +884,10 @@ func (p *Platform) buildControlPlane() error {
 			KeySalt:        salt,
 			Listen:         c.s3gwListenAddr,
 			MaxUploadBytes: c.s3gwMaxUploadBytes,
+			Catalogs: func(ns v1.NamespaceName) blob.Bucket {
+				return blob.Prefixed(c.blob, lakeCatalogPrefix(ns))
+			},
+			CatalogMaxBytes: c.lakeCatalogMaxBytes,
 			// ADR-0135: resolve external Identity-issued keys to their stored secret (populates the
 			// previously-nil ExternalKeys seam), so a managed Identity authenticates over SigV4.
 			External: identitysvc.NewExternalKeys(c.store),
@@ -2481,13 +2488,34 @@ func bucketPrefix(ns v1.NamespaceName, bucket v1.ObjectName) string {
 	return s3Root + string(ns) + "/" + string(bucket) + "/"
 }
 
+// lakeCatalogRoot is the substrate key prefix of the Lake catalog store, beside s3Root (ADR-0293): a Lake's catalog is
+// lake-catalogs/<ns>/<bucket>/<prefix>/_ducklake/catalog.db, under the location of its files.
+const lakeCatalogRoot = "lake-catalogs/"
+
+// lakeCatalogPrefix is a namespace's substrate prefix in the catalog store.
+func lakeCatalogPrefix(ns v1.NamespaceName) string { return lakeCatalogRoot + string(ns) + "/" }
+
+// LakeData maps a catalog's substrate key to the substrate prefix of its Lake's files, ok=false for any other key: the
+// platform mirror freezes a catalog before them (ADR-0293 Decision 5).
+func LakeData(key string) (prefix string, ok bool) {
+	rest, ok := strings.CutPrefix(key, lakeCatalogRoot)
+	if !ok {
+		return "", false
+	}
+	loc, ok := strings.CutSuffix(rest, "/_ducklake/catalog.db")
+	if !ok || strings.Count(loc, "/") != 2 {
+		return "", false
+	}
+	return s3Root + loc + "/", true
+}
+
 // registerWorkloadBackups builds the BackupSchedule, Backup and Restore reconcilers (ADR-0222) over the shared stores
 // and registers them: a Backup's change requeues its schedule and the Restores that read or wait for it.
 func (p *Platform) registerWorkloadBackups(ctrl *controller.Controller, secrets backupsvc.SecretReader) error {
 	c := p.cfg
 	d := backupsvc.Deps{
 		Store: c.store, Secrets: secrets, Purger: bucketPurger{shared: c.blob}, StoreURL: c.blobStoreURL,
-		Sources: workload.Sources{Blob: c.blob, BucketPrefix: bucketPrefix, SQL: p.sqlReconciler.Backups().Source},
+		Sources: workload.Sources{Blob: c.blob, BucketPrefix: bucketPrefix, CatalogPrefix: lakeCatalogPrefix, SQL: p.sqlReconciler.Backups().Source},
 		SQL:     p.sqlReconciler.Backups(),
 		Period:  c.pacing.SupervisionPeriod, Clock: c.backupClock, Meter: c.backupMeter, Logger: p.logger,
 	}
@@ -2535,9 +2563,17 @@ const purgePage = 1000
 // s3BucketFor it resolves no Bucket resource, so it also purges the prefix of a deleted one.
 type bucketPurger struct{ shared blob.Bucket }
 
+// Purge deletes the Bucket's objects, then the catalogs of the Lakes on its prefixes (ADR-0293 Decision 5).
 func (p bucketPurger) Purge(ctx context.Context, ns v1.NamespaceName, bucket v1.ObjectName) error {
+	if err := p.purge(ctx, ns, bucket, bucketPrefix(ns, bucket)); err != nil {
+		return err
+	}
+	return p.purge(ctx, ns, bucket, lakeCatalogPrefix(ns)+string(bucket)+"/")
+}
+
+func (p bucketPurger) purge(ctx context.Context, ns v1.NamespaceName, bucket v1.ObjectName, prefix string) error {
 	const op = "funcd.bucketPurger.Purge"
-	view := blob.Prefixed(p.shared, bucketPrefix(ns, bucket))
+	view := blob.Prefixed(p.shared, prefix)
 	after := ""
 	for {
 		items, more, err := view.ListAfter(ctx, "", after, purgePage)

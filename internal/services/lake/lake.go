@@ -2,8 +2,8 @@
 // the ADR-0019 controller half of the DuckLake/DuckDB/Quack add-on provider. Its engine is NO
 // longer a backing Function — it is deployed by the add-on-provider runtime (internal/provider,
 // ADR-0087): the reconciler resolves the service's bindings (spec.bindings.blob → the ADR-0085 per-fn S3
-// keypair derived over the provider identity; spec.location → FUNCD_DUCKLAKE_CATALOG;
-// spec.bindings.secret/spec.bindings.config → the Quack token + engine config) into a provider.ProviderSpec and
+// keypair derived over the provider identity; spec.location → FUNCD_DUCKLAKE_CATALOG and FUNCD_DUCKLAKE_DATA_PATH
+// (ADR-0293); spec.bindings.secret/spec.bindings.config → the Quack token + engine config) into a provider.ProviderSpec and
 // calls provider.Runtime.Converge. It reflects the provider's readiness/address into status and
 // tears the engine down on delete. cgo never touches the daemon — DuckDB runs out-of-process in
 // the curated image.

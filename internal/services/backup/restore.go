@@ -32,6 +32,7 @@ type target struct {
 	kv      string
 	sql     v1.ObjectName
 	view    blob.Bucket
+	catalog string // with a lake: the blob key its catalog loads to (ADR-0293)
 	bucket  v1.ObjectName
 	volFn   v1.ObjectName // with volume: the Function whose local volume volume is loaded (ADR-0262)
 	volume  v1.ObjectName
@@ -314,11 +315,13 @@ func (r *RestoreReconciler) plan(ctx context.Context, rs *v1.Restore, m workload
 		case mb.AsLocation != nil:
 			_, err = r.d.Store.Get(ctx, v1.KindBucket.GVK(), ns, mb.AsLocation.Bucket)
 			t.view = blob.Prefixed(r.d.Sources.Blob, r.d.Sources.BucketPrefix(ns, mb.AsLocation.Bucket)+mb.AsLocation.Prefix+"/")
+			t.catalog = r.d.Sources.CatalogKey(ns, *mb.AsLocation)
 		default:
 			var obj v1.Object
 			if obj, err = r.d.Store.Get(ctx, v1.KindLake.GVK(), ns, mb.Name); err == nil {
 				c := obj.(*v1.Lake).Spec.Location
 				t.view = blob.Prefixed(r.d.Sources.Blob, r.d.Sources.BucketPrefix(ns, c.Bucket)+c.Prefix+"/")
+				t.catalog = r.d.Sources.CatalogKey(ns, c)
 			}
 		}
 		if fault.KindOf(err) == fault.NotFound {
@@ -376,6 +379,12 @@ func (r *RestoreReconciler) isEmpty(ctx context.Context, ns v1.NamespaceName, t 
 		keys, err := r.d.KV.List(ctx, t.kv)
 		return len(keys) == 0, err
 	}
+	if t.catalog != "" {
+		has, err := r.d.Sources.Blob.Exists(ctx, t.catalog)
+		if err != nil || has {
+			return false, err
+		}
+	}
 	items, _, err := t.view.ListAfter(ctx, "", "", 1)
 	return len(items) == 0, err
 }
@@ -428,7 +437,11 @@ func (r *RestoreReconciler) fill(ctx context.Context, ns v1.NamespaceName, t *ta
 			if err != nil {
 				return ReasonIntegrity, err
 			}
-			if err := t.view.Put(ctx, string(rec.Key), body, blob.PutOptions{ContentType: ct, Metadata: md}); err != nil {
+			view, key := t.view, string(rec.Key)
+			if t.catalog != "" && key == workload.CatalogRecord {
+				view, key = r.d.Sources.Blob, t.catalog
+			}
+			if err := view.Put(ctx, key, body, blob.PutOptions{ContentType: ct, Metadata: md}); err != nil {
 				return reasonFailed, err
 			}
 		}
@@ -489,6 +502,11 @@ func (r *RestoreReconciler) emptyOne(ctx context.Context, ns v1.NamespaceName, t
 		return r.d.KV.DropPrefix(t.kv)
 	case t.bucket != "" && r.d.Purger != nil:
 		return r.d.Purger.Purge(ctx, ns, t.bucket)
+	}
+	if t.catalog != "" {
+		if err := r.d.Sources.Blob.Delete(ctx, t.catalog); err != nil && fault.KindOf(err) != fault.NotFound {
+			return err
+		}
 	}
 	for {
 		items, more, err := t.view.ListAfter(ctx, "", "", 1000)

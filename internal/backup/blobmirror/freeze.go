@@ -18,7 +18,8 @@ import (
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 )
 
-// checkpointName ends a DuckLake catalog's checkpoint key, <p>/_ducklake/catalog.db (ADR-0086).
+// checkpointName ends a DuckLake catalog's checkpoint key: <p>/_ducklake/catalog.db under its files before the catalog
+// store (ADR-0086), and a key of the catalog store since (ADR-0293).
 const checkpointName = "_ducklake/catalog.db"
 
 // maxRefreezes is the re-freezes of one key or prefix a run accepts; the next fails it.
@@ -75,8 +76,25 @@ type freezer struct {
 	src      blob.Bucket
 	img      map[string]*frozen
 	refrozen map[string]int
-	lakes    []string
+	lakes    []lake
 	warned   bool
+}
+
+// lake is one Lake in the image: its catalog's key and the prefix of its files, which the catalog no longer lies under
+// since the catalog store (ADR-0293).
+type lake struct{ catalog, data string }
+
+// lakeOf is the lake whose catalog key is key: Config.LakeData's mapping, or without it the catalog under its files,
+// <p>/_ducklake/catalog.db (ADR-0086).
+func (m *mirror) lakeOf(key string) (lake, bool) {
+	if m.cfg.LakeData != nil {
+		data, ok := m.cfg.LakeData(key)
+		return lake{catalog: key, data: data}, ok
+	}
+	if p, ok := strings.CutSuffix(key, checkpointName); ok && strings.HasSuffix(p, "/") {
+		return lake{catalog: key, data: p}, true
+	}
+	return lake{}, false
 }
 
 func (f *freezer) close() { _ = f.src.Close() }
@@ -104,13 +122,15 @@ func (m *mirror) freeze(ctx context.Context) (*freezer, error) {
 		f.close()
 		return nil, err
 	}
+	catalogs := map[string]bool{}
 	for _, w := range all {
-		if p, ok := strings.CutSuffix(w.key, checkpointName); ok && strings.HasSuffix(p, "/") {
-			f.lakes = append(f.lakes, p)
+		if l, ok := m.lakeOf(w.key); ok {
+			f.lakes = append(f.lakes, l)
+			catalogs[w.key] = true
 		}
 	}
 	for _, w := range all {
-		if f.owner(w.key) != "" {
+		if f.owner(w.key) != "" || catalogs[w.key] {
 			continue
 		}
 		if _, err := f.freezeKey(ctx, w.key, w.path, false); err != nil {
@@ -118,8 +138,8 @@ func (m *mirror) freeze(ctx context.Context) (*freezer, error) {
 			return nil, err
 		}
 	}
-	for _, p := range f.lakes {
-		if err := f.freezePrefix(ctx, p, filepath.Join(m.cfg.Dir, filepath.FromSlash(p+checkpointName))); err != nil {
+	for _, l := range f.lakes {
+		if err := f.freezePrefix(ctx, l); err != nil {
 			f.close()
 			return nil, err
 		}
@@ -130,9 +150,9 @@ func (m *mirror) freeze(ctx context.Context) (*freezer, error) {
 // owner is the longest lake prefix holding key, "" when none.
 func (f *freezer) owner(key string) string {
 	best := ""
-	for _, p := range f.lakes {
-		if strings.HasPrefix(key, p) && len(p) > len(best) {
-			best = p
+	for _, l := range f.lakes {
+		if strings.HasPrefix(key, l.data) && len(l.data) > len(best) {
+			best = l.data
 		}
 	}
 	return best
@@ -153,11 +173,12 @@ func (f *freezer) walk(ctx context.Context, prefix string) ([]walked, error) {
 	return out, nil
 }
 
-// freezePrefix freezes the lake at p: its checkpoint (MD5 checked at once), then each key of a new walk of p. A
-// walked key gone at its link, or the live checkpoint's MD5 changed by the end of the walk, freezes p again. Without
-// a checkpoint, p's keys freeze as any other.
-func (f *freezer) freezePrefix(ctx context.Context, p, checkpointPath string) error {
-	ck := p + checkpointName
+// freezePrefix freezes lake l: its checkpoint (MD5 checked at once), then each key of a new walk of its files' prefix
+// p. A walked key gone at its link, or the live checkpoint's MD5 changed by the end of the walk, freezes p again.
+// Without a checkpoint, p's keys freeze as any other.
+func (f *freezer) freezePrefix(ctx context.Context, l lake) error {
+	p, ck := l.data, l.catalog
+	checkpointPath := filepath.Join(f.m.cfg.Dir, filepath.FromSlash(ck))
 	for {
 		for k := range f.img {
 			if f.owner(k) == p {

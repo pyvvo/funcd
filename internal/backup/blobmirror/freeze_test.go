@@ -71,7 +71,7 @@ func TestAttrsMismatchRefrozen(t *testing.T) {
 		})
 		m := f.run()
 		require.Equal(t, []string{"walk ", "link " + ck, "link " + ck, "link " + ck, "walk " + lake, "link " + parquet("f1")}, events[:6])
-		requireLakeConsistent(t, f.restored(m.Generation, nil))
+		requireLakeConsistent(t, f.restored(m.Generation, nil), ck)
 	})
 	t.Run("fourth fails", func(t *testing.T) {
 		t.Parallel()
@@ -139,7 +139,7 @@ func TestCheckpointChangedAfterListingRelistsPrefix(t *testing.T) {
 	require.Equal(t, []string{"", lake, lake}, walks)
 	got := f.restored(m.Generation, nil)
 	require.Equal(t, "f1,f2", got[ck])
-	requireLakeConsistent(t, got)
+	requireLakeConsistent(t, got, ck)
 }
 
 // A Parquet file gone at its link (walked, then cleaned up after a new checkpoint) freezes the prefix again; a key
@@ -167,7 +167,7 @@ func TestMissingLakeKeyRefreezesPrefix(t *testing.T) {
 	got := f.restored(m.Generation, nil)
 	require.NotContains(t, got, "other")
 	require.Equal(t, "f2", got[ck])
-	requireLakeConsistent(t, got)
+	requireLakeConsistent(t, got, ck)
 	require.False(t, slices.Contains(keysOf(got), parquet("f1")))
 }
 

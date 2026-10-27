@@ -12,9 +12,8 @@ import (
 // materializes a backing min-replica=1 `duckdb` Function (the declared spec.bindings.blob bindings, so
 // ADR-0085 injects the per-fn S3 keypair). The engine is the deployed Function, exposed through
 // the EXISTING function→gateway path (ADR-0013) — there is NO Route resource. DuckDB reads/writes
-// Parquet only through the F47 S3 surface under binding-as-grant; its DuckLake catalog lives on
-// the same blob (a reserved `_ducklake/catalog.db` key in an owned prefix), loaded + checkpointed
-// by the single replica. cgo never touches the daemon — DuckDB runs out-of-process in the curated
+// Parquet only through the F47 S3 surface under binding-as-grant; its DuckLake catalog lives in the platform's
+// catalog store (ADR-0293), outside every Bucket, loaded + checkpointed by the single replica. cgo never touches the daemon — DuckDB runs out-of-process in the curated
 // image.
 type Lake struct {
 	TypeMeta   `json:",inline"`
@@ -29,9 +28,9 @@ type Lake struct {
 type LakeSpec struct {
 	// Bindings are what the engine uses (ADR-0246): the lakehouse buckets, its ConfigMaps and its Secrets.
 	Bindings LakeBindings `json:"bindings"`
-	// Location names the bound (bucket, prefix) the DuckLake catalog syncs under (a `_ducklake/` key);
-	// the prefix must be OWNED by this service's function (single-writer). The catalog, a DuckDB file
-	// (ADR-0271), lives at <prefix>/_ducklake/catalog.db.
+	// Location names the bound (bucket, prefix) the Lake's files live under; the prefix must be OWNED by this Lake
+	// (single-writer). Its catalog, a DuckDB file (ADR-0271), lives in the catalog store under the same location
+	// (ADR-0293).
 	Location LakeLocation `json:"location"`
 	// Resources sizes the engine (cpu/mem); DuckDB is memory-hungry. The provider-runtime maps it
 	// onto runtime.Limits when numerically parseable (ADR-0087), else it is recorded forward-compat.
@@ -69,15 +68,24 @@ func (s *LakeSpec) rootField() string {
 	return ""
 }
 
-// LakeLocation names the bound (bucket, prefix) the DuckLake catalog syncs under (ADR-0086). The
-// prefix must be OWNED by this service's function (single-writer); the catalog, a DuckDB file (ADR-0271), lives at
-// <prefix>/_ducklake/catalog.db. Cross-resource validity (the bucket/prefix exist, owner is this
-// service's function) is the lake-blob-validity admission's job, NOT Validate.
+// LakeCatalogBucket is the S3 bucket under which the S3 gateway serves the catalog store to each Lake's engine
+// (ADR-0293), at the key <bucket>/<prefix>/_ducklake/catalog.db of its location: the dot keeps it out of every Bucket's
+// name, which is a DNS label.
+const LakeCatalogBucket = "funcd.lake-catalogs"
+
+// LakeCatalogKey is a location's catalog key under LakeCatalogBucket.
+func LakeCatalogKey(l LakeLocation) string {
+	return string(l.Bucket) + "/" + l.Prefix + "/_ducklake/catalog.db"
+}
+
+// LakeLocation names the bound (bucket, prefix) of a Lake's files (ADR-0086). The prefix must be OWNED by this Lake
+// (single-writer); the catalog, a DuckDB file (ADR-0271), lives in the catalog store under the same location
+// (ADR-0293). Cross-resource validity (the bucket/prefix exist, owner is this Lake) is the reconciler's job, NOT
+// Validate.
 type LakeLocation struct {
 	// Bucket is the name of a Bucket in this service's namespace.
 	Bucket ObjectName `json:"bucket"`
-	// Prefix is a sub-domain (BucketPrefix.name) of that bucket; a DNS-1123 label. The catalog
-	// lives at <prefix>/_ducklake/catalog.db.
+	// Prefix is a sub-domain (BucketPrefix.name) of that bucket; a DNS-1123 label.
 	Prefix string `json:"prefix" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"`
 }
 

@@ -38,7 +38,8 @@ const Format = 1
 
 const (
 	manifestName = "manifest.yaml"
-	// checkpointName is a DuckLake catalog's checkpoint under its prefix (ADR-0086).
+	// checkpointName is a DuckLake catalog's checkpoint under its prefix (ADR-0086), and its record's key in a lake
+	// member.
 	checkpointName = "_ducklake/catalog.db"
 	// lakeAttempts is the copies of one lake a run makes before LakeUnstable (Decision 5).
 	lakeAttempts = 3
@@ -71,7 +72,10 @@ type Sources struct {
 	KV           func(prefix string) snapshot.Source
 	Blob         blob.Bucket
 	BucketPrefix func(ns v1.NamespaceName, b v1.ObjectName) string
-	SQL          func(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (io.ReadCloser, error)
+	// CatalogPrefix is a namespace's prefix in the Lake catalog store (ADR-0293); nil keeps a Lake's catalog under its
+	// files.
+	CatalogPrefix func(ns v1.NamespaceName) string
+	SQL           func(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (io.ReadCloser, error)
 	// Volume is a Function's local volume as a tar, read live (ADR-0262 Decision 11); nil ⇒ no volume members.
 	Volume func(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName) (io.ReadCloser, error)
 }
@@ -287,13 +291,14 @@ func Write(ctx context.Context, ns v1.NamespaceName, ms []Member, src Sources, o
 func (w *writer) lake(ctx context.Context, ns v1.NamespaceName, mb Member, src Sources) (MemberFile, error) {
 	const op = "workload.Write"
 	root := src.BucketPrefix(ns, mb.Location.Bucket) + mb.Location.Prefix + "/"
+	catalog := src.CatalogKey(ns, mb.Location)
 	var last string
 	for attempt := 1; attempt <= lakeAttempts; attempt++ {
 		listed, err := keys(ctx, src.Blob, root)
 		if err != nil {
 			return MemberFile{}, err
 		}
-		c1, err := src.Blob.Get(ctx, root+checkpointName)
+		c1, err := src.Blob.Get(ctx, catalog)
 		if fault.KindOf(err) == fault.NotFound {
 			// DuckLake opens a missing catalog.db as a new, empty lake: no object under the prefix is part of one
 			return MemberFile{Kind: mb.Kind, Name: mb.Name}, nil
@@ -301,7 +306,7 @@ func (w *writer) lake(ctx context.Context, ns v1.NamespaceName, mb Member, src S
 		if err != nil {
 			return MemberFile{}, fault.Wrapf(err, fault.KindOf(err), op, "lake %s: read its checkpoint", mb.Name)
 		}
-		attrs, err := src.Blob.Attributes(ctx, root+checkpointName)
+		attrs, err := src.Blob.Attributes(ctx, catalog)
 		if err != nil {
 			return MemberFile{}, fault.Wrapf(err, fault.KindOf(err), op, "lake %s: read its checkpoint", mb.Name)
 		}
@@ -330,6 +335,18 @@ func (w *writer) lake(ctx context.Context, ns v1.NamespaceName, mb Member, src S
 	}
 	return MemberFile{}, fault.Wrapf(ErrLakeUnstable, fault.Conflict, op, "lake %s: %d copies missed %q, deleted while it was copied",
 		mb.Name, lakeAttempts, last)
+}
+
+// CatalogRecord is the key of a lake member's catalog record, wherever the catalog lives (ADR-0293 Decision 5).
+const CatalogRecord = checkpointName
+
+// CatalogKey is the blob key of the catalog of the Lake at loc: in the catalog store under its location (ADR-0293), or
+// under its files without CatalogPrefix. Its member record keeps the key checkpointName either way.
+func (s Sources) CatalogKey(ns v1.NamespaceName, loc v1.LakeLocation) string {
+	if s.CatalogPrefix == nil {
+		return s.BucketPrefix(ns, loc.Bucket) + loc.Prefix + "/" + checkpointName
+	}
+	return s.CatalogPrefix(ns) + string(loc.Bucket) + "/" + loc.Prefix + "/" + checkpointName
 }
 
 // keys lists the keys under prefix, relative to it.
