@@ -226,6 +226,7 @@ derived from the node master as SQL's, and calls to apply the tables, search, co
 | The capability names, and how a query refuses one its engine lacks | the engine port ADR |
 | How an engine moves to a new LanceDB version | the VectorStore ADR |
 | The workload backup format of a store | the backup ADR |
+| How a store notices that its embedding model changed: an edit of an AI gateway's model that keeps the dimensions mixes vectors from two models, and searches return wrong matches with no error | the access ADR (F172), and F201's |
 
 ## Sources
 

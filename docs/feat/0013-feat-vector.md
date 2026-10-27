@@ -178,3 +178,4 @@ changing the API's shape, and a feature code names the idea row that holds it.
 | How `funcdctl dev` gets the LanceDB engine on the developer's machine: embedded in funcdctl, as the lake's engine, or installed on first use | the F175 ADR |
 | The kind's name, around the `vector` vocabulary | the F171 ADR |
 | Size caps per call, rows per call and the call timeout | the F172 ADR |
+| How a store notices that its embedding model changed. An AI gateway's model can be edited ([ADR-0281](../adr/0281-ai-gateways.md)); an edit that keeps the dimensions makes new queries and old rows come from two models, and searches then return wrong matches with no error. One answer: the store records the model that embedded each vector field and refuses another | the F172 ADR, and the F201 ADR when F201 is picked up |
