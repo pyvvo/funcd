@@ -50,8 +50,8 @@ Lake's own state. The catalog moves to a store of the platform's, outside every 
 - **scenario: purge-removes-catalogs**: Given a Bucket whose prefixes hold Lakes, When the Bucket is purged, Then their
   catalogs are deleted too.
 - **scenario: catalog-keeps-its-bucket**: Given Bucket `media` whose prefix `web` holds no object but a Lake's
-  catalog, its rows inlined, When the Bucket is deleted or `web` is removed from it, Then each gets 409 Conflict, as
-  for an object; once the catalog is deleted, both pass.
+  catalog, its rows inlined, When the Bucket is deleted or `web` is removed from it, Then each gets 409 Conflict
+  naming `funcd.lake-catalogs/media/web/_ducklake/catalog.db`; once that catalog is deleted, both pass.
 - **scenario: catalog-deleted-once-no-lake**: Given a catalog for `lakehouse/bronze`, When a caller allowed to write
   `bronze` deletes it through `funcd.lake-catalogs`, Then it gets `AccessDenied` naming the Lake while one is located
   there, and the delete passes once none is; a caller not allowed to write `bronze` gets `AccessDenied`.
@@ -95,9 +95,10 @@ catalog store in a namespace budget (F208).
    (`v1.LakeCatalogBucket`), which no Bucket can take, since a Bucket's name is a DNS label
    (`api/types/v1alpha1/ids.go:129-137`). A key is `<bucket>/<prefix>/_ducklake/catalog.db`, and GetObject,
    HeadObject and PutObject serve it to a Lake principal named as the owner of that prefix of that Bucket in its
-   namespace (ADR-0275), with no Cedar policy asked, as for the hold (ADR-0290); DeleteObject serves it as Decision 6
-   says. Every other caller, key or operation gets `AccessDenied`; ListBuckets and HeadBucket never show the store. A
-   Put or a Delete still gets the hold's 503 while the namespace is held (ADR-0290 Decision 6).
+   namespace (ADR-0275), with no Cedar policy asked, as for the hold (ADR-0290); DeleteObject and each key of a
+   DeleteObjects serve it as Decision 6 says. Every other caller, key or operation gets `AccessDenied`; ListBuckets
+   and HeadBucket never show the store. A Put or a delete still gets the hold's 503 while the namespace is held
+   (ADR-0290 Decision 6).
 3. **The cap.** `lake.catalogMaxSize` (a `ByteSize`, ADR-0266; default `1GiB`, or `s3gateway.maxUploadBytes` when
    smaller; set above it, the start is refused) caps one catalog. A larger Put gets `EntityTooLarge` (400) whose
    message names its size and the setting; the save fails, so ADR-0279 errors the commit's answer and ADR-0276 shows
@@ -112,8 +113,9 @@ catalog store in a namespace budget (F208).
    empties the prefix. A target that is not in place is not empty while its catalog exists, since DuckLake can keep a
    Lake's rows in its catalog alone. The Bucket purger deletes `lake-catalogs/<ns>/<bucket>/` with the Bucket's objects.
 6. **A catalog is data.** ADR-0080's deletion guard probes a prefix's catalog with its objects: a Bucket, or a prefix
-   removed from it, that holds only a catalog gets the same 409. A deleted Lake keeps its catalog, as before (the
-   location keys it), so the store answers DeleteObject on a catalog key to a caller the PDP lets write that prefix
+   removed from it, that holds only a catalog gets a 409 naming its key in `funcd.lake-catalogs`, which its owner
+   cannot list. A deleted Lake keeps its catalog, as before (the location keys it), so the store answers DeleteObject,
+   and each key of a DeleteObjects, on a catalog key to a caller the PDP lets write that prefix
    (ADR-0080's PEP, `s3::write`), while no Lake of the namespace is located there (`AccessDenied` naming that Lake).
    The quarantine (ADR-0288) moves, returns and expires `lake-catalogs/<ns>/<bucket>/` with the Bucket's objects,
    under its entry's `catalogs/`, and the orphan walk (ADR-0206 Decision 6) reads the store too.
@@ -169,7 +171,13 @@ type Config struct {
 func (c Config) LakeCatalogMaxBytes() (int64, error) // fault.Invalid past s3gateway.maxUploadBytes
 ```
 
-`admission.BlobProber.HasAny` keeps its signature; it now also reports a catalog for the prefix.
+```go
+// Package admission (internal/controlplane/admission): BlobProber's HasAny is replaced, NEW.
+type BlobProber interface {
+	// Remaining is what still lies under the prefix: "objects", "its Lake catalog funcd.lake-catalogs/<key>", or "".
+	Remaining(ctx context.Context, ns v1.NamespaceName, bucket v1.ObjectName, prefix string) (string, error)
+}
+```
 
 | Consumes | Exposes |
 |---|---|
@@ -180,7 +188,8 @@ func (c Config) LakeCatalogMaxBytes() (int64, error) // fault.Invalid past s3gat
 - `pkg/funcd`: the `lake-catalogs/` root beside `s3Root`, the gateway's `Catalogs` view and `LakeAt`, the backup
   `Sources`, the purger, the deletion prober, the quarantine's `catalogs/` and the orphan walk; `cmd/funcd`: the
   mirror's `LakeData` and the setting.
-- `internal/blob/s3gateway`: the reserved bucket's rule in Get, Head, Put and Delete, the cap, `AccessDenied` elsewhere.
+- `internal/blob/s3gateway`: the reserved bucket's rule in Get, Head, Put, DeleteObject and DeleteObjects, the cap,
+  `AccessDenied` elsewhere; `internal/controlplane/admission`: `Remaining` and its 409.
 - `internal/services/lake`: both environment keys; `images/runtime/duckdb/shim.py` and `internal/lake/devengine`:
   `FUNCD_DUCKLAKE_DATA_PATH`; the backup, restore and mirror changes of Decision 5.
 - Tests, one per scenario: `TestScenarioCatalogOutsideBucket`, `…CatalogOnlyItsLake`, `…CatalogCapRefused`,
@@ -195,8 +204,8 @@ func (c Config) LakeCatalogMaxBytes() (int64, error) // fault.Invalid past s3gat
 
 - [ ] No catalog key under `s3/` is written; every reader and writer of a catalog uses the store's key.
 - [ ] The gateway serves `funcd.lake-catalogs` Get, Head and Put to the prefix's owning Lake only, with no Cedar call,
-      and Delete to a writer of the prefix while no Lake is located there; a Put past the cap gets `EntityTooLarge`
-      naming `lake.catalogMaxSize`.
+      and DeleteObject and DeleteObjects to a writer of the prefix while no Lake is located there; a Put past the cap
+      gets `EntityTooLarge` naming `lake.catalogMaxSize`; the guard's 409 names a catalog's key.
 - [ ] The deletion guard, the quarantine and the orphan walk treat a Bucket's catalogs as its data.
 - [ ] The mirror freezes a catalog before its prefix; App backups keep their member format; every scenario has its
       named test.

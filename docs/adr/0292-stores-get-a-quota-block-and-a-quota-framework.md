@@ -84,9 +84,10 @@ quota policies (opt-in, later); a store's usage in its status; funclog sizes; a 
    plus the settled and the reserved bytes, so for a write of known size it never counts less than the store holds; a
    measure that lands keeps the bytes settled while it ran. A subject's first write reads its limit and, when capped,
    its usage; `Book.Run` reads both again every minute, and drops a subject unused for ten minutes. A failed refresh
-   keeps the last values; while a first one fails, writes get 503. A quota change applies from the next refresh; a
-   newly capped subject is measured before its next decision. A capped subject's stored write of unknown size (a SQL
-   Execute) starts a measure, so the next write sees what it added.
+   keeps the last values; while a first one fails, writes get 503. A changed limit applies from the next refresh, a
+   Bucket's cap added or removed at its next write (its view asks only capped subjects); a newly capped subject is
+   measured before its next decision. A capped subject's stored write of unknown size (a SQL Execute) starts a
+   measure, so the next write sees what it added.
 4. **The refusal.** A delete through an enforcement point reports itself (`Request.Deletes`, always admitted). When a
    write would pass the limit and bytes were settled or deleted since the last measure, `Admit` waits on one shared
    fresh measure. On that usage, the size the write replaces (`Request.Replaces`: a stat of the key, or the old value's
@@ -205,9 +206,8 @@ func InsufficientStoragef(op, format string, a ...any) *Error
 
 - `internal/quota`, tested with a fake clock (refresh, single flight, a fresh measure before a refusal, the
   credit, a failed refresh, `Deletes`, a kind without a source), with `oracle:` markers for the spec's assertions.
-- `api/types/v1alpha1`: the quota types and their validation; `api/fault`: the kind, its problem and builder; the
-  OpenAPI spec and SDK types regenerated.
-- The sources and enforcement points; `Usager` on both KV engines; `pkg/funcd` builds the `Book` and runs it.
+- `api/types/v1alpha1`: the quota types and their validation, the OpenAPI spec and SDK types regenerated; `api/fault`:
+  the kind; the sources and enforcement points; `Usager` on both KV engines; `pkg/funcd` builds and runs the `Book`.
 - The move: every reader of a per-item cap (`pkg/funcd/funcd.go:2444`, `internal/services/kv/resolver.go:118-119`)
   reads `spec.quota`; the five example manifests of funcd-typescript and funcd-python move first, in their own
   releases, then funcd bumps them (ADR-0141).
@@ -234,7 +234,7 @@ func InsufficientStoragef(op, format string, a ...any) *Error
 - **Positive**: no store grows without end; a store's caps sit in one block; the next quota is a new source.
 - **Negative (accepted)**: a manifest with a per-item cap at the spec's root must move it into `quota` (the changelog
   says so); near its cap, a store that overwrites or deletes is re-measured before the next refusal, one measure at a
-  time; a quota change, and a delete made outside the enforcement points (a Restore's load, the purger), count from
+  time; a changed limit, and a delete made outside the enforcement points (a Restore's load, the purger), count from
   the next refresh, up to a minute later; a SQLDatabase can pass its cap by the Executes admitted before the measure
   that follows them lands, one Execute of any size included; a Restore can load a store past its cap, after which
   only deletes run until it is under.
