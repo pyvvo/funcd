@@ -427,3 +427,62 @@ testcases:
         assertions:
           - result.statuscode ShouldEqual 200
           - result.bodyjson.migrations ShouldEqual 2
+
+  # ADR-0292 (experiment): a SQLDatabase over its quota refuses an Execute with 507, the measure reading
+  # (page_count - freelist_count) * page_size through the real rqlite engine, and a quota change keeps the engine
+  # running. The earlier cases left notes-db near 100 MB, over the 1Mi cap; a read still works, and once the quota is
+  # lifted the write lands. The fill op calls ctx.sql.execute directly, so its error carries the status.
+  - name: sql-total-refused — notes-db over its 1Mi quota refuses a fill with 507, answers a read, and takes the fill once lifted
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/notes"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"size"}}'
+        info: "notes-db before the quota → {{.result.statuscode}} {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: exec
+        script: "{{.vmsh}} 'funcdctl apply -f /opt/lane/sql/notes-db-quota.yaml > /dev/null && echo APPLIED'"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual APPLIED
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/notes"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"fill","megabytes":1}}'
+        retry: 45
+        delay: 2
+        info: "a fill over the cap → {{.result.statuscode}} {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldNotEqual 200
+          - result.body ShouldContainSubstring 507
+          - result.body ShouldContainSubstring "sqldatabase default/notes-db holds"
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/notes"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"size"}}'
+        info: "a read over the cap → {{.result.statuscode}} {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: exec
+        script: "{{.vmsh}} 'funcdctl apply -f /opt/lane/sql/notes-db.yaml > /dev/null && echo APPLIED'"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual APPLIED
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/notes"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"fill","megabytes":1}}'
+        retry: 45
+        delay: 2
+        info: "the fill once the quota is lifted → {{.result.statuscode}} {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200

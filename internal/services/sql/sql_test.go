@@ -202,7 +202,9 @@ func TestReconcileStartingThenReady(t *testing.T) {
 	require.Equal(t, v, get(t, st).ResourceVersion, "an unchanged status is not written")
 }
 
-func TestGenerationChangeTearsDownOnce(t *testing.T) {
+// A new bound reaches the engine through the spec Converge gets: the provider runtime replaces an engine of another spec
+// (#1195), so the reconciler tears nothing down itself (ADR-0292, refining ADR-0232 Decision 2).
+func TestGenerationChangeConvergesTheNewBound(t *testing.T) {
 	rt := newRuntime()
 	r, st := setup(t, rt, false)
 	create(t, st, "")
@@ -212,9 +214,27 @@ func TestGenerationChangeTearsDownOnce(t *testing.T) {
 	_, err := st.Update(context.Background(), d)
 	require.NoError(t, err)
 	reconcile(t, r)
-	reconcile(t, r)
-	require.Equal(t, 1, rt.teardowns, "the engine never got Ready, and still only one teardown")
+	require.Equal(t, "512Mi", rt.last.Resources.Memory, "Converge gets the new bound")
+	require.Zero(t, rt.teardowns)
 	require.Equal(t, get(t, st).Generation, get(t, st).Status.ObservedGeneration)
+}
+
+// scenario: quota-change-keeps-the-engine — a changed quota reaches no engine (ADR-0292): a Ready database keeps its
+// engine and its address through the change.
+func TestScenarioQuotaChangeKeepsTheEngine(t *testing.T) {
+	rt := newRuntime()
+	rt.ready = true
+	r, st := setup(t, rt, false)
+	create(t, st, "")
+	reconcile(t, r)
+	d := get(t, st)
+	d.Spec.Quota = v1.SizeQuota{MaxSize: "1Mi"}
+	_, err := st.Update(context.Background(), d)
+	require.NoError(t, err)
+	reconcile(t, r)
+	require.Zero(t, rt.teardowns, "a quota change tears no engine down")
+	_, ok := r.Engines().Address(todoDB().Namespace, todoDB().Name)
+	require.True(t, ok, "the engine keeps serving")
 }
 
 func TestDeleteReclaimsUnlessHeld(t *testing.T) {

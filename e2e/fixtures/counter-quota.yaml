@@ -1,0 +1,26 @@
+# The kv lane's kv-total-refused case re-applies counter as kv-counter's counter.yaml has it, with its store capped at
+# 100 bytes (ADR-0292): a put past the cap gets 507, an overwrite that fits still lands.
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: counter
+  namespace: default
+  resourceGroup: rg1
+spec:
+  runtime: nodejs22
+  handler: handle
+  image: oci-layout:///mnt/funcd-deps/registry:counter   # funcdctl push counter.mjs (built from src/main.ts)
+  replicas: 1
+  scaling:
+    minReplicas: 1
+  kv:
+    - name: counters-kv         # the KVStore (domain) this function owns
+      quota:
+        maxBytes: 100
+      tables:
+        - name: table-counters  # the sub-domain counter owns (single writer)
+  bindings:
+    kv:
+      - alias: counters         # the in-code handle: ctx.kv.*('counters', …)
+        store: counters-kv
+        table: table-counters

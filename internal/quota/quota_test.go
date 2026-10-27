@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/stretchr/testify/require"
 
@@ -169,8 +170,8 @@ func TestUnknownSizeNeedsRoomAndDeletesPass(t *testing.T) {
 	ctx := context.Background()
 	settle, err := b.Admit(ctx, quota.Request{Subject: subject()})
 	require.NoError(t, err, "one byte left admits a write of unknown size")
-	settle(true)
 	s.put("a", 1024)
+	settle(true)
 	b.Refresh(ctx)
 	_, err = b.Admit(ctx, quota.Request{Subject: subject()})
 	require.Equal(t, fault.InsufficientStorage, fault.KindOf(err))
@@ -401,4 +402,71 @@ func TestBookUsageNeverBelowTotalAndCapHolds(t *testing.T) {
 	cancel()
 	bg.Wait()
 	require.Zero(t, violations.Load())
+}
+
+// A subject that a quota caps only now is measured before its next write is decided: until the measure lands, its
+// usage counts nothing it held while uncapped.
+// oracle: docs/design/storage/quota-usage.fizz#CapHolds
+func TestNewlyCappedSubjectMeasuredFirst(t *testing.T) {
+	t.Parallel()
+	s := newStore(0, map[string]int64{"a": 900})
+	b := newBook(s)
+	ctx := context.Background()
+	require.NoError(t, write(ctx, b, s, "b", 50), "uncapped: admitted, never measured")
+	s.mu.Lock()
+	s.limit, s.capped = 1000, true
+	s.mu.Unlock()
+	s.gate = make(chan struct{})
+	refreshed := make(chan struct{})
+	go func() {
+		b.Refresh(ctx)
+		close(refreshed)
+	}()
+	require.Eventually(t, func() bool { return s.measures.Load() == 1 }, time.Second, time.Millisecond, "the refresh measures")
+	decided := make(chan error, 1)
+	go func() { decided <- write(ctx, b, s, "c", 100) }()
+	select {
+	case err := <-decided:
+		t.Fatalf("a write was decided before the first measure of the newly capped subject landed: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(s.gate)
+	<-refreshed
+	require.Equal(t, fault.InsufficientStorage, fault.KindOf(<-decided), "950 held: 100 more passes 1000")
+}
+
+// A stored write of unknown size, a SQL Execute, starts a measure, so the next write is decided on what it added
+// rather than on the measure before it.
+func TestUnknownSizeWriteMeasuredSoon(t *testing.T) {
+	t.Parallel()
+	s := newStore(100, map[string]int64{"a": 10})
+	b := newBook(s)
+	ctx := context.Background()
+	settle, err := b.Admit(ctx, quota.Request{Subject: subject()})
+	require.NoError(t, err, "room left: an Execute of unknown size is admitted")
+	s.put("bulk", 500)
+	settle(true)
+	require.Eventually(t, func() bool {
+		usage, _ := b.Usage(subject())
+		return usage == 510
+	}, time.Second, time.Millisecond, "the write's growth is measured without waiting for the refresh")
+	_, err = b.Admit(ctx, quota.Request{Subject: subject()})
+	require.Equal(t, fault.InsufficientStorage, fault.KindOf(err), "%v", err)
+}
+
+// The Book keeps its own copy of a subject: the S3 gateway hands it strings that live in a request buffer the next
+// request reuses, which a kept key or a background measure would read changed.
+func TestSubjectKeptAsACopy(t *testing.T) {
+	t.Parallel()
+	s := newStore(1000, map[string]int64{"a": 990})
+	b := newBook(s)
+	ctx := context.Background()
+	buf := []byte("media")
+	borrowed := quota.Subject{Kind: v1.KindBucket, Namespace: "default", Name: v1.ObjectName(unsafe.String(&buf[0], len(buf)))}
+	_, err := b.Admit(ctx, quota.Request{Subject: borrowed, Bytes: 100, Replaces: s.size("b")})
+	require.Equal(t, fault.InsufficientStorage, fault.KindOf(err), "%v", err)
+	copy(buf, "other")
+	_, err = b.Admit(ctx, quota.Request{Subject: subject(), Bytes: 100, Replaces: s.size("b")})
+	require.Equal(t, fault.InsufficientStorage, fault.KindOf(err), "the subject is found again after its request's buffer is reused: %v", err)
+	require.Equal(t, int32(1), s.measures.Load(), "one subject, measured once")
 }

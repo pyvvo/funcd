@@ -180,6 +180,9 @@ duckdb:
       to: lake-redeploy.yaml
     - from: e2e/fixtures/lake-saves-refused.yaml
       to: lake-saves-refused.yaml
+    # ADR-0292/0293: lake re-applied with its gold prefix capped at 1Mi
+    - from: e2e/fixtures/lake-quota.yaml
+      to: lake-quota.yaml
     - from: e2e/fixtures/quack-attach-probe.py
       to: quack-attach-probe.py
     - from: e2e/fixtures/cgroup-view.py
@@ -281,6 +284,8 @@ kv:
     - counter.contract.yaml
     - counter.yaml
     - fixtures/counter-unbound.yaml   # the fail-closed negative applied in-VM by the Venom suite
+    - from: e2e/fixtures/counter-quota.yaml   # ADR-0292: the store capped at 100 bytes
+      to: fixtures/counter-quota.yaml
     - funcdconfig.yaml
     - from: examples/kv-counter/src/main.py
       module: github.com/pyvvo/funcd-python
@@ -456,6 +461,8 @@ sql:
     - sql/notes-restored.yaml
     - sql/restore-in-place.yaml
     - sql/changes.yaml
+    - from: e2e/fixtures/notes-db-quota.yaml   # ADR-0292: notes-db capped at 1Mi
+      to: sql/notes-db-quota.yaml
     # The todo App's S3 server key, workload Secrets and test identity.
     - dr
     - from: apps/todo/sql/funcdconfig.yaml

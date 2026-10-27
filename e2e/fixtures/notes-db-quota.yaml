@@ -1,0 +1,12 @@
+# The sql lane's sql-total-refused case re-applies notes-db capped at 1Mi (ADR-0292): the earlier cases left it near
+# 100 MB, so a write gets 507; the measure reads the pages in use through the engine, which keeps running.
+apiVersion: funcd.io/v1alpha1
+kind: SQLDatabase
+metadata:
+  name: notes-db
+  namespace: default
+  resourceGroup: notes
+spec:
+  owner: notes
+  quota:
+    maxSize: 1Mi

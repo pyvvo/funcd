@@ -84,3 +84,44 @@ testcases:
         info: "denied response → status {{.result.statuscode}} body {{.result.body}}"
         assertions:
           - result.body ShouldContainSubstring forbidden
+
+  # ADR-0292 (experiment): a KVStore over its quota refuses a put with 507 and takes it again once the quota is lifted.
+  # The quota's limit is read again within a minute: the retries wait for it, and a put may land before it does.
+  - name: kv-total-refused — counters-kv capped at 100 bytes refuses a long key with 507, and takes it once lifted
+    steps:
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token \
+            funcdctl apply -f /opt/lane/fixtures/counter-quota.yaml
+        assertions:
+          - result.code ShouldEqual 0
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/counter"
+        headers:
+          content-type: application/json
+        body: '{"data":{"name":"a-name-long-enough-to-pass-the-quota"}}'
+        retry: 45
+        delay: 2
+        info: "a long key past the cap → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldNotEqual 200
+          - result.body ShouldContainSubstring 507
+          - result.body ShouldContainSubstring "kvstore default/counters-kv holds"
+      - type: exec
+        script: |
+          limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token \
+            funcdctl apply -f /opt/lane/counter.yaml
+        assertions:
+          - result.code ShouldEqual 0
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/counter"
+        headers:
+          content-type: application/json
+        body: '{"data":{"name":"a-name-long-enough-to-pass-the-quota"}}'
+        retry: 45
+        delay: 2
+        info: "the key once the quota is lifted → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200

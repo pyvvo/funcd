@@ -1,0 +1,42 @@
+# The duckdb lane's lake-at-cap-drops case re-applies Lake lake as lake-redeploy.yaml has it, with its gold prefix capped
+# at 1Mi (ADR-0292): a Parquet write past it gets 507, while queries and drops work, the catalog saving outside the
+# prefix (ADR-0293).
+apiVersion: funcd.io/v1alpha1
+kind: Lake
+metadata:
+  name: lake
+  namespace: default
+  resourceGroup: rg1
+spec:
+  buckets:
+    - name: lakehouse
+      prefixes:
+        - name: gold
+          quota:
+            maxSize: 1Mi
+      quota:
+        maxObjectBytes: 1073741824
+  configMaps:
+    - ref: lake-engine-config
+  secrets:
+    - name: lake-quack-token
+      keys:
+        - QUACK_TOKEN
+  bindings:
+    blob:
+      - alias: gold
+        bucket: lakehouse
+        prefix: gold
+    secret:
+      - lake-quack-token
+    config:
+      - lake-engine-config
+  location:
+    bucket: lakehouse
+    prefix: gold
+  resources:
+    cpu: "2"
+    memory: "3Gi"
+  ingress:
+    enabled: true
+    path: /lake/lake

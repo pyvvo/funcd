@@ -337,6 +337,15 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldEqual MAGIC=DUCK
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            sudo find /var/lib/funcd/data/blob -path "*/_ducklake/catalog.db" -type f | sed "s#^/var/lib/funcd/data/blob/##" | sort'
+        info: "every catalog on disk → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring lake-catalogs/default/lakehouse/gold/_ducklake/catalog.db
+          - result.systemout ShouldNotContainSubstring s3/
       - type: http
         method: POST
         url: "http://127.0.0.1:8081/function/lake-reader"
@@ -632,6 +641,117 @@ testcases:
         assertions:
           - result.statuscode ShouldEqual 200
           - result.body ShouldContainSubstring "[[1233]]"
+
+  # ADR-0292/0293 (experiment): a Lake whose prefix holds its quota refuses a commit's Parquet with 507, keeps answering
+  # queries and drops, its catalog saving outside the prefix, and once dropped files are cleaned up takes a commit again.
+  - name: lake-at-cap-drops — the gold prefix over its 1Mi quota refuses a commit, answers a query and a drop, and after a cleanup the commit lands
+    steps:
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"CREATE OR REPLACE TABLE lakehouse.cap_big AS SELECT range AS i, md5(range::VARCHAR) || md5((range + 1)::VARCHAR) AS s FROM range(200000)"}}'
+        info: "an 8 MB table before the quota → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            funcdctl apply -f /opt/lane/lake-quota.yaml >/dev/null && echo APPLIED
+            echo "GOLD=$(sudo du -sb /var/lib/funcd/data/blob/s3/default/lakehouse/gold 2>/dev/null | cut -f1)"'
+        info: "the quota applied over what gold holds → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring APPLIED
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"CREATE OR REPLACE TABLE lakehouse.cap_more AS SELECT range AS i, md5(range::VARCHAR) AS s FROM range(20000)"}}'
+        retry: 45
+        delay: 2
+        info: "a commit over the cap → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldNotEqual 200
+          - result.body ShouldContainSubstring 507
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT count(*) FROM lakehouse.cap_big"}}'
+        info: "a query over the cap → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring "[[200000]]"
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"DROP TABLE lakehouse.cap_big"}}'
+        info: "a drop of cap_big over the cap, its catalog save outside the prefix → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"DROP TABLE IF EXISTS lakehouse.cap_more"}}'
+        info: "a drop of cap_more over the cap, its catalog save outside the prefix → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT count(*) FROM ducklake_expire_snapshots(''lakehouse'', older_than => now())"}}'
+        info: "expire the snapshots → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT count(*) FROM ducklake_cleanup_old_files(''lakehouse'', cleanup_all => true)"}}'
+        info: "clean up the dropped files → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc 'echo "GOLD=$(sudo du -sb /var/lib/funcd/data/blob/s3/default/lakehouse/gold 2>/dev/null | cut -f1)"'
+        info: "gold after the cleanup → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"CREATE OR REPLACE TABLE lakehouse.cap_more AS SELECT range AS i, md5(range::VARCHAR) AS s FROM range(20000)"}}'
+        info: "the refused commit again, the reported deletes making room at once → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            funcdctl get lake lake -n default -o json | python3 -c "import sys,json
+          s=json.load(sys.stdin)[\"status\"]
+          c=next((c for c in s.get(\"conditions\",[]) if c[\"type\"]==\"CatalogSaved\"),{})
+          print(c.get(\"status\",\"\"),c.get(\"reason\",\"\"))"
+            funcdctl apply -f /opt/lane/lake-redeploy.yaml >/dev/null && echo APPLIED'
+        info: "CatalogSaved through the cap, then the quota lifted → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldStartWith "True Saved"
+          - result.systemout ShouldContainSubstring APPLIED
 
   # ADR-0152: a Function and a Lake share the name `lake`; each reconciler manages only its own kind's workers.
   - name: same-name-function-and-lake-stay-ready — Function lake deploys and scales beside Lake lake, which keeps its engine
@@ -1114,10 +1234,35 @@ testcases:
             task=$(sudo /var/lib/funcd/bin/ctr --address $sock -n funcd-default task ls | awk "index(\$1,\"lake-reader\")==1{print \$1; exit}")
             sudo timeout 60 /var/lib/funcd/bin/ctr --address $sock -n funcd-default task exec --exec-id cgroup-view "$task" \
               /usr/local/bin/python3.14 -c "$(cat /opt/lane/cgroup-view.py)" 2>&1 | tail -1'
-        info: "lake-reader's cgroup view, with no limit → {{.result.systemout}}"
+        info: "lake-reader's cgroup view, with functions.defaultResources (ADR-0291) → {{.result.systemout}}"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "CGROUP=0::/ MEMORY_MAX=max CPU_MAX=max/100000 WRITE=refused"
+          - result.systemout ShouldContainSubstring "CGROUP=0::/ MEMORY_MAX=536870912 CPU_MAX=100000/100000 WRITE=refused"
+      # ADR-0291 (experiment): the default 512Mi is enforced: a process in lake-reader's worker that takes 700 MiB is
+      # OOM-killed by the kernel, and the worker keeps serving.
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            sock=/var/lib/funcd/data/containerd/containerd.sock
+            task=$(sudo /var/lib/funcd/bin/ctr --address $sock -n funcd-default task ls | awk "index(\$1,\"lake-reader\")==1{print \$1; exit}")
+            sudo timeout 60 /var/lib/funcd/bin/ctr --address $sock -n funcd-default task exec --exec-id oom-probe "$task" \
+              /usr/local/bin/python3.14 -c "b = bytearray(700 * 1024 * 1024); b[::4096] = b\"x\" * len(b[::4096]); print(\"ALLOCATED\")"
+            echo "EXIT=$?"'
+        info: "700 MiB in lake-reader's worker → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldNotContainSubstring ALLOCATED
+          - result.systemout ShouldContainSubstring EXIT=137
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT 42 AS n"}}'
+        retry: 15
+        delay: 2
+        info: "lake-reader after the OOM kill → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
 
   # Last: the probe leaves a query hanging on the dropped connection, so no later step shares the engine with it.
   - name: engine-fenced — a query that points an S3 secret at the VM's own address opens no connection there (ADR-0269)

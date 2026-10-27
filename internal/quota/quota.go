@@ -33,6 +33,13 @@ type Subject struct {
 	Prefix    string
 }
 
+// clone copies s's strings: the S3 gateway's come from a request buffer the next request reuses (as its multipart
+// store copies them), and a subject outlives its request as a map key and in a background measure.
+func (s Subject) clone() Subject {
+	return Subject{Kind: v1.Kind(strings.Clone(string(s.Kind))), Namespace: v1.NamespaceName(strings.Clone(string(s.Namespace))),
+		Name: v1.ObjectName(strings.Clone(string(s.Name))), Prefix: strings.Clone(s.Prefix)}
+}
+
 func (s Subject) String() string {
 	name := fmt.Sprintf("%s %s/%s", strings.ToLower(string(s.Kind)), s.Namespace, s.Name)
 	if s.Prefix != "" {
@@ -108,12 +115,14 @@ func (b *Book) Register(kind v1.Kind, src Source) {
 
 // usage is one subject's state, as the design model has it (docs/design/storage/quota-usage.fizz).
 type usage struct {
-	src   Source
-	first sync.Mutex // held while the first refresh runs
+	src     Source
+	subject Subject    // the Book's own copy, read by background measures
+	first   sync.Mutex // held while the first refresh runs
 
 	mu        sync.Mutex
 	ready     bool
 	capped    bool
+	fresh     bool // a measure landed since the subject was last capped
 	limit     int64
 	measured  int64
 	settled   int64 // bytes settled since the last measure landed
@@ -122,6 +131,7 @@ type usage struct {
 	during    int64 // bytes settled while the running measure runs
 	freed     bool  // a delete was stored since the last measure's read, maybe
 	freedMid  bool  // a delete was stored while the running measure runs
+	again     bool  // a write of unknown size was stored while the running measure runs: measure once more
 	landed    chan struct{}
 	epoch     uint64
 	used      time.Time
@@ -137,7 +147,8 @@ func (b *Book) usage(s Subject) (*usage, bool) {
 	if !ok {
 		return nil, false
 	}
-	u := &usage{src: src, used: b.clk.Now()}
+	s = s.clone()
+	u := &usage{src: src, subject: s, used: b.clk.Now()}
 	b.subjects[s] = u
 	return u, true
 }
@@ -152,18 +163,27 @@ func (b *Book) Admit(ctx context.Context, r Request) (Settle, error) {
 	if !ok {
 		return settled, nil
 	}
+	r.Subject = u.subject
 	if err := b.ready(ctx, u, r.Subject); err != nil {
 		return nil, err
 	}
 	u.mu.Lock()
 	u.used = b.clk.Now()
-	if !u.capped {
+	for u.capped && !u.fresh {
+		epoch := u.epoch
 		u.mu.Unlock()
-		return settled, nil
+		if err := b.awaitMeasure(ctx, u, r.Subject, epoch); err != nil {
+			return nil, err
+		}
+		u.mu.Lock()
+	}
+	if !u.capped {
+		defer u.mu.Unlock()
+		return b.reserve(u, r.Subject, r.Bytes), nil
 	}
 	if u.room(r.Bytes, 0) {
 		defer u.mu.Unlock()
-		return u.reserve(r.Bytes), nil
+		return b.reserve(u, r.Subject, r.Bytes), nil
 	}
 	epoch, dirty := u.epoch, u.settled > 0 || u.freed
 	u.mu.Unlock()
@@ -175,7 +195,7 @@ func (b *Book) Admit(ctx context.Context, r Request) (Settle, error) {
 	credit := b.credit(ctx, u, r)
 	defer u.mu.Unlock()
 	if u.room(r.Bytes, credit) {
-		return u.reserve(r.Bytes), nil
+		return b.reserve(u, r.Subject, r.Bytes), nil
 	}
 	used := u.measured + u.settled + u.reserved
 	if r.Bytes == 0 {
@@ -236,8 +256,9 @@ func (u *usage) room(n, credit int64) bool {
 	return used+n-credit <= u.limit
 }
 
-// reserve counts n bytes in flight and returns their Settle; u.mu is held.
-func (u *usage) reserve(n int64) Settle {
+// reserve counts n bytes in flight and returns their Settle; u.mu is held. A capped subject's stored write of unknown
+// size, a SQL Execute, starts a measure, or one more after the running one, so the next write sees what it added.
+func (b *Book) reserve(u *usage, s Subject, n int64) Settle {
 	u.reserved += n
 	var once sync.Once
 	return func(stored bool) {
@@ -245,10 +266,18 @@ func (u *usage) reserve(n int64) Settle {
 			u.mu.Lock()
 			defer u.mu.Unlock()
 			u.reserved -= n
-			if stored {
-				u.settled += n
+			if !stored {
+				return
+			}
+			u.settled += n
+			if u.measuring {
+				u.during += n
+			}
+			if n == 0 && u.capped {
 				if u.measuring {
-					u.during += n
+					u.again = true
+				} else {
+					b.startMeasure(u, s)
 				}
 			}
 		})
@@ -284,6 +313,9 @@ func (b *Book) refresh(ctx context.Context, u *usage, s Subject) error {
 		return err
 	}
 	u.mu.Lock()
+	if capped && !u.capped {
+		u.fresh = false
+	}
 	u.limit, u.capped = limit, capped
 	if !capped {
 		u.ready = true
@@ -309,8 +341,7 @@ func (b *Book) awaitMeasure(ctx context.Context, u *usage, s Subject, epoch uint
 		return nil
 	}
 	if !u.measuring {
-		u.measuring, u.during, u.freedMid, u.landed = true, 0, false, make(chan struct{})
-		go b.measure(u, s, u.landed)
+		b.startMeasure(u, s)
 	}
 	landed := u.landed
 	u.mu.Unlock()
@@ -327,6 +358,12 @@ func (b *Book) awaitMeasure(ctx context.Context, u *usage, s Subject, epoch uint
 	return fault.Unavailablef("quota.Admit", "could not measure %s; retry", s)
 }
 
+// startMeasure starts a measure of s; u.mu is held and none runs.
+func (b *Book) startMeasure(u *usage, s Subject) {
+	u.measuring, u.during, u.freedMid, u.again, u.landed = true, 0, false, false, make(chan struct{})
+	go b.measure(u, s, u.landed)
+}
+
 // measure reads s's total and lands it, keeping the bytes settled while it ran.
 func (b *Book) measure(u *usage, s Subject, landed chan struct{}) {
 	ctx, cancel := context.WithTimeout(context.Background(), measureTimeout)
@@ -337,11 +374,15 @@ func (b *Book) measure(u *usage, s Subject, landed chan struct{}) {
 	if err != nil {
 		b.logger.Warn("could not measure a store's quota usage; keeping the last measure", "subject", s.String(), "error", err)
 	} else {
-		u.measured, u.settled, u.freed = total, u.during, u.freedMid
+		u.measured, u.settled, u.freed, u.fresh = total, u.during, u.freedMid, true
 		u.epoch++
 	}
-	u.measuring, u.during, u.freedMid = false, 0, false
+	again := u.again
+	u.measuring, u.during, u.freedMid, u.again = false, 0, false, false
 	close(landed)
+	if again {
+		b.startMeasure(u, s)
+	}
 }
 
 // Run refreshes every subject each refreshInterval until ctx ends, and drops those unused for idleAfter.

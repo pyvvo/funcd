@@ -147,14 +147,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	if merr != nil {
 		return controller.Result{}, merr
 	}
-	// A changed spec (its bounds) reaches the engine only through a new container; the same pass records the
-	// generation, so one change makes exactly one teardown (ADR-0232 Decision 2).
-	if db.Status.ObservedGeneration != 0 && db.Status.ObservedGeneration != db.Generation {
-		r.d.Engines.Delete(ref.Namespace, ref.Name)
-		if terr := r.d.Provider.Teardown(ctx, ref); terr != nil {
-			return controller.Result{}, fault.Wrapf(terr, fault.KindOf(terr), op, "restart engine %s/%s for its new spec", ref.Namespace, ref.Name)
-		}
-	}
+	// A changed bound reaches the engine through a new container: the provider runtime replaces an engine of another
+	// spec (#1195), so a change the engine never reads, its quota, keeps it running (ADR-0292, refining ADR-0232
+	// Decision 2).
 	st, cerr := r.d.Provider.Converge(ctx, r.engineSpec(db))
 	if cerr != nil {
 		r.log.WarnContext(ctx, "sql engine converge failed", "database", string(req.Namespace)+"/"+string(req.Name), "err", cerr)
