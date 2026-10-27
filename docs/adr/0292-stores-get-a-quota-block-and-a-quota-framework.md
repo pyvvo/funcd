@@ -1,6 +1,6 @@
 # ADR-0292: Stores get a quota block, enforced by one quota framework
 
-- **Status**: Proposed (2026-10-27)
+- **Status**: Accepted (2026-10-27; six adr-judge rounds and the experiment on real engines; the decider confirmed every choice)
 - **Date**: 2026-10-27
 - **Deciders**: green-0-rabbit
 - **Tags**: storage, limits, quota

@@ -3,6 +3,7 @@
 - **Status**: Implemented (2026-06-23)
 - **Superseded in part by**: [ADR-0148](0148-size-caps-answer-413.md) (2026-10-05) — Decision §4 per-op caps → Invalid; value-over-cap-rejected Then-clause.
 - **Superseded in part by**: [ADR-0246](0246-bindings-under-spec.md) (2026-10-19) — where the binding lives: `Function.spec.kv` moves to `spec.bindings.kv`; what it grants is unchanged.
+- **Superseded in part by**: [ADR-0292](0292-stores-get-a-quota-block-and-a-quota-framework.md) (2026-10-27) — the KVStore's per-item caps: `spec.maxKeyBytes` and `spec.maxValueBytes` move into `spec.quota`; their 413 stays
 - **Date**: 2026-06-22 (judged 2026-06-22 — sound supersede, no Blockers; folded 2 Majors: specified the
   **table-removal lifecycle** (deletion-protection on Update + reconciler `DropPrefix(<store>/<table>/)`) and
   fixed the **owner admission** (single-owner is structural via unique table names; the admission is

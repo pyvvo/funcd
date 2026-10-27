@@ -1,6 +1,7 @@
 # ADR-0271: The Lake keeps its catalog in a DuckDB file, and a backup copies it unopened
 
 - **Status**: Implemented (2026-10-23), review passed with one non-blocking Minor ([report](../reviews/adr-0271-implementation-claude-opus-5-5.md)); Reviewing 2026-10-23; Accepted 2026-10-23
+- **Superseded in part by**: [ADR-0293](0293-a-lakes-catalog-lives-in-a-platform-catalog-store.md) (2026-10-27) — Decision 1's place of the catalog object: the catalog store, not the prefix's `_ducklake/catalog.db`
   by the decider; Proposed 2026-10-23
 - **Superseded in part by**: [ADR-0273](0273-a-lake-stop-cancels-the-queries-that-outlive-its-wait.md) (2026-10-24) — Decision 3, the `stop` contract and Review checklist item 3: the stop drains while the watcher saves, then cancels the queries that still hold the catalog
 - **Date**: 2026-10-23

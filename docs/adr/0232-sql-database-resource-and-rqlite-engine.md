@@ -1,6 +1,7 @@
 # ADR-0232: The SQLDatabase resource and its rqlite engine
 
 - **Status**: Implemented (2026-10-12, review passed). Accepted (2026-10-12, self-accepted under the decider's batch delegation; judged twice: the first round
+- **Superseded in part by**: [ADR-0292](0292-stores-get-a-quota-block-and-a-quota-framework.md) (2026-10-27) — Decision 2's teardown at each generation: the provider runtime replaces an engine whose spec changed, so a quota change keeps it
   added `-http-adv-addr` without which rqlited refuses to start, let a database with no directory be deleted, applied a
   resources change by a single teardown, and pinned the upgrade rule; the second found one Major, fixed: the teardown
   pass records the observed generation)

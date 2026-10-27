@@ -2,6 +2,8 @@
 
 - **Status**: Implemented
 - **Superseded in part by**: [ADR-0275](0275-a-bucket-prefix-owner-names-its-kind.md) (2026-10-24) — `BucketPrefix.owner` becomes `{kind, name}`.
+- **Superseded in part by**: [ADR-0292](0292-stores-get-a-quota-block-and-a-quota-framework.md) (2026-10-27) — where `spec.maxObjectBytes` lives: in `spec.quota`; its 413 stays
+- **Superseded in part by**: [ADR-0293](0293-a-lakes-catalog-lives-in-a-platform-catalog-store.md) (2026-10-27) — what the deletion guard probes: a prefix's Lake catalog in the catalog store counts as its data
 - **Date**: 2026-06-24 (Accepted 2026-06-29 after judge pass — folded M1 new-Bucket-kind plumbing, M2 schema.go
   curated-vocabulary edits + S3Identity principal, M3 connection→identity trust anchor, m4 s3::write base-permit;
   reframed as a **built-in provider** per the blueprint provider model. **Reviewing → Implemented 2026-06-30** —

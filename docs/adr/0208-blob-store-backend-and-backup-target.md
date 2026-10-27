@@ -3,6 +3,7 @@
 - **Status**: Implemented (2026-10-11; the implementation review passed on its first round, docs/reviews/adr-0208-implementation-claude-opus-5-5.md; accepted 2026-10-10 by an `adr-batch` run after a clean `adr-judge` gate; the defaults below were not confirmed one by one)
 - **Superseded in part by**: [ADR-0227](0227-disaster-recovery-implementation-addenda.md) (2026-10-11; lines at 74f8e604) — "the mirror is due when the newest complete manifest is this old" (91), by Decision 5.1; Decision 6's "one `backup.Unseal` for the index and every object" (144–145), by Decision 5.3.
 - **Superseded in part by**: [ADR-0278](0278-a-file-blob-put-returns-once-its-object-is-on-disk.md) (2026-10-24) — Decision 5's MD5 rule: the freeze pairs an object's attributes with its linked file, re-freezes attributes naming another file and then copies those bytes unchecked.
+- **Superseded in part by**: [ADR-0293](0293-a-lakes-catalog-lives-in-a-platform-catalog-store.md) (2026-10-27) — how the mirror's freeze finds a catalog's prefix: it maps `lake-catalogs/` to `s3/`
 - **Date**: 2026-10-08
 - **Deciders**: green-0-rabbit
 - **Tags**: blob, s3, versioning, object-lock, backup, disaster-recovery
