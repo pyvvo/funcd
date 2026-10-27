@@ -90,8 +90,9 @@ hold begins (ADR-0222 Decision 7's load rules, unchanged); a metric of refused c
    platform's own hold is not a namespace marker and does not count.
 4. **Unchanged.** `serveStatic` (a Site's files), the platform hold, Cedar and every PEP, the hold's writers, its
    release, its per-namespace runners and `funcdctl hold status`.
-5. **Wiring.** `dataplane.Handler` takes a `hold.CallGate`. The daemon passes `c.hold` when it is set and a nil
-   interface otherwise (a nil `*hold.Hold` inside the interface would not be nil); a nil gate refuses nothing.
+5. **Wiring.** `dataplane.Handler` keeps its parameters and gains a variadic `opts ...Option` (functional options,
+   ADR-0002), so its 25 existing callers stay as they are; `WithCallGate` sets the gate. The daemon adds it only when
+   `c.hold` is set (a nil `*hold.Hold` inside the interface would not be nil); no gate refuses nothing.
 
 ## Design model
 
@@ -116,10 +117,14 @@ type CallGate interface {
 
 func (h *Hold) NamespaceMarker(ns v1.NamespaceName) (Marker, bool)
 
-// Package dataplane (internal/dataplane): held joins the parameters; nil ⇒ no gate.
+// Package dataplane (internal/dataplane), NEW: options for Handler; no WithCallGate ⇒ no gate.
+type Option func(*Server)
+
+func WithCallGate(g hold.CallGate) Option
+
 func Handler(st store.Store, act *activator.Activator, rtr router.Router, baseDomain string, enf *authn.Enforcer,
-	lim *limit.TargetLimiter, stat *static.Handler, held hold.CallGate, defaultTimeout time.Duration,
-	logger *slog.Logger) http.Handler
+	lim *limit.TargetLimiter, stat *static.Handler, defaultTimeout time.Duration, logger *slog.Logger,
+	opts ...Option) http.Handler
 ```
 
 | Consumes | Exposes |
@@ -130,12 +135,13 @@ func Handler(st store.Store, act *activator.Activator, rtr router.Router, baseDo
 
 - `internal/platform/hold/namespace.go`: `CallGate`, `(*Hold).NamespaceMarker`; tests in `namespace_test.go` (the
   `restore` marker preferred, the `data` marker, none, the platform hold alone ⇒ false).
-- `internal/dataplane/dataplane.go`: the `held` field and parameter, a `refuseHeld(w, ns, op) bool` helper used by
-  `serveFunction` and `serveUpstream`, the `heldRetryAfter` constant. Tests in the package's existing harness, one per
+- `internal/dataplane/dataplane.go`: `Option`, `WithCallGate`, the `held` field, a `refuseHeld(w, ns, op) bool`
+  helper used by `serveFunction` and `serveUpstream`, the `heldRetryAfter` constant. Tests in the package's existing harness, one per
   scenario: `TestScenarioDataHoldRefusesCalls`, `…ReleaseServesCalls`, `…RestoreLoadRefusesCalls`,
   `…InternalCallRefused`, `…LakeUpstreamRefused`, `…SiteServesWhileHeld`, `…AuthBeforeHold`,
   `…PlatformHoldUnchanged`, `…UnheldNamespaceUnaffected`; each asserts the activator was not reached when refused.
-- `pkg/funcd/funcd.go:1502`: pass the gate, nil when `c.hold` is nil; update the other `Handler` callers.
+- `pkg/funcd/funcd.go:1502`: add `dataplane.WithCallGate(c.hold)` only when `c.hold` is set; no other caller
+  changes.
 - `e2e/app-todo.venom.yml`: in the DR drill, after `hold release` and before the owner's restore, a write to the App
   gets 503 with `Retry-After`, and the same write succeeds after `hold release --namespace`. Run
   `go test -run Lane ./cmd/funcd/ ./internal/testkit/langmod/` after the edit.
@@ -151,7 +157,8 @@ func Handler(st store.Store, act *activator.Activator, rtr router.Router, baseDo
 - [ ] `serveUpstream` checks; `serveStatic` does not.
 - [ ] A refused call answers 503, `Retry-After: 30` and Decision 2's detail; the activator is not reached.
 - [ ] `NamespaceMarker` prefers `restore`, ignores the platform hold, reads memory only under the read lock.
-- [ ] A nil gate refuses nothing; the daemon never passes a nil `*hold.Hold` inside the interface.
+- [ ] Without `WithCallGate` nothing is refused; the daemon never passes a nil `*hold.Hold` inside the interface;
+      the existing `Handler` callers are unchanged.
 - [ ] No new field, config key or API; Cedar and the hold's writers and release are untouched.
 - [ ] Every scenario has its named test; the app-todo lane case and both docs are updated.
 
