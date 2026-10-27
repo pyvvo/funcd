@@ -75,14 +75,15 @@ catalog store in a namespace budget (F208).
 1. **The store.** A Lake's catalog is the blob store object `lake-catalogs/<ns>/<bucket>/<prefix>/_ducklake/catalog.db`,
    beside the Buckets' `s3/<ns>/<bucket>/` (`pkg/funcd/funcd.go:2451-2456`). No Bucket lists it and no quota of
    ADR-0292 counts it; the platform mirror copies it with the rest of the directory.
-2. **The owning Lake only.** The S3 gateway serves the store under the reserved bucket name `funcd.lake-catalogs`,
-   which no Bucket can take, since a Bucket's name is a DNS label (`api/types/v1alpha1/ids.go:129-137`). A key is
+2. **The owning Lake only.** The S3 gateway serves the store under the reserved bucket name `funcd.lake-catalogs`
+   (`v1.LakeCatalogBucket`), which no Bucket can take, since a Bucket's name is a DNS label
+   (`api/types/v1alpha1/ids.go:129-137`). A key is
    `<bucket>/<prefix>/_ducklake/catalog.db`, and only GetObject, HeadObject and PutObject serve it, to a Lake
    principal named as the owner of that prefix of that Bucket in its namespace (ADR-0275). Every other caller, key or
    operation gets `AccessDenied`; ListBuckets and HeadBucket never show the store; no Cedar policy is asked, as for
    the hold (ADR-0290). A Put still gets the hold's 503 while the namespace is held (ADR-0290 Decision 6).
-3. **The cap.** `lake.catalogMaxSize` (a `ByteSize`, ADR-0266; default `1GiB`, at most `s3gateway.maxUploadBytes`)
-   caps one catalog. A larger Put gets `EntityTooLarge` (400) whose message names its size and the setting; the save
+3. **The cap.** `lake.catalogMaxSize` (a `ByteSize`, ADR-0266; default `1GiB`, or `s3gateway.maxUploadBytes` when
+   smaller; set above it, the start is refused) caps one catalog. A larger Put gets `EntityTooLarge` (400) whose message names its size and the setting; the save
    fails, so ADR-0279 errors the commit's answer and ADR-0276 shows `SavesFailing` until a smaller catalog saves.
 4. **The engine's environment.** `FUNCD_DUCKLAKE_CATALOG` is
    `s3://funcd.lake-catalogs/<bucket>/<prefix>/_ducklake/catalog.db`, and the NEW `FUNCD_DUCKLAKE_DATA_PATH`,
@@ -91,7 +92,8 @@ catalog store in a namespace budget (F208).
    keeps ADR-0208's order: the catalog, then a walk of the prefix. An App backup reads the catalog from the store and
    writes the same member (`_ducklake/catalog.db` record last), so every backup restores as before; a Restore writes
    that record to the store under the target's location, and an in-place one deletes the target's catalog when it
-   empties the prefix. The Bucket purger deletes `lake-catalogs/<ns>/<bucket>/` with the Bucket's objects.
+   empties the prefix. A target that is not in place is not empty while its catalog exists, since DuckLake can keep a
+   Lake's rows in its catalog alone. The Bucket purger deletes `lake-catalogs/<ns>/<bucket>/` with the Bucket's objects.
 6. **No move.** A catalog an older funcd stored under the prefix is neither read nor moved: that Lake starts empty
    beside its old files, which App backups now copy as plain files.
 
@@ -107,8 +109,14 @@ None.
 ## Contracts
 
 ```go
+// Package v1alpha1 (api/types/v1alpha1), NEW.
+const LakeCatalogBucket = "funcd.lake-catalogs"
+func LakeCatalogKey(l LakeLocation) string // <bucket>/<prefix>/_ducklake/catalog.db
+
+// Package funcd (pkg/funcd), NEW: the mirror's LakeData.
+func LakeData(key string) (prefix string, ok bool) // lake-catalogs/<ns>/<b>/<p>/_ducklake/catalog.db → s3/<ns>/<b>/<p>/
+
 // Package s3gateway (internal/blob/s3gateway).
-const CatalogBucket = "funcd.lake-catalogs" // NEW
 type Deps struct {
 	// ... existing fields ...
 	// Catalogs is a namespace's view of the Lake catalog store (ADR-0293), NEW; nil ⇒ the store answers AccessDenied.
@@ -132,7 +140,7 @@ type Config struct {
 
 // Package config (internal/platform/config), NEW key and accessor.
 // Lake.CatalogMaxSize string `json:"catalogMaxSize,omitempty" env:"FUNCD_LAKE_CATALOG_MAX_SIZE"`
-func (c Config) LakeCatalogMaxBytes() (int64, error) // default 1GiB; 422-style Invalid past s3gateway.maxUploadBytes
+func (c Config) LakeCatalogMaxBytes() (int64, error) // fault.Invalid past s3gateway.maxUploadBytes
 ```
 
 | Consumes | Exposes |
@@ -166,8 +174,10 @@ func (c Config) LakeCatalogMaxBytes() (int64, error) // default 1GiB; 422-style 
 - **Positive**: a Lake at its prefix's quota still answers queries and drops, so its owner can free room; only its
   engine reads its catalog; the prefix's quota caps exactly the Lake's files.
 - **Negative (accepted)**: the catalog store is outside every Bucket quota, bounded only by `lake.catalogMaxSize` per
-  Lake until F208; a Function bound to a Lake's prefix can no longer read its catalog; a Lake from an older funcd
-  starts empty.
+  Lake until F208, and so are the rows DuckLake inlines in the catalog instead of writing Parquet (the experiment's
+  lane: many small commits left the prefix empty); a Function bound to a Lake's prefix can no longer read its catalog; a Lake from an older funcd
+  starts empty; a query the engine runs can still reach its own catalog's key, as it could under its prefix
+  (ADR-0263 Decision 8 allows every `s3://` path; the key pair decides).
 
 ## Open questions
 

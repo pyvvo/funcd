@@ -10,7 +10,9 @@
   framework shaped like IAM; Cedar quota policies opt-in, later; #1314
 - **Supersedes (in part)**: [ADR-0073](0073-kv-bindings-and-subdomains.md) and
   [ADR-0080](0080-s3-protocol-frontend-blob-substrate.md): where the per-item caps live (`spec.maxKeyBytes`,
-  `spec.maxValueBytes`, `spec.maxObjectBytes` move into `spec.quota`); their 413 (ADR-0148) is unchanged
+  `spec.maxValueBytes`, `spec.maxObjectBytes` move into `spec.quota`); their 413 (ADR-0148) is unchanged ·
+  [ADR-0232](0232-sql-database-resource-and-rqlite-engine.md) Decision 2: a new generation no longer tears the engine
+  down; the provider runtime replaces an engine whose spec changed (#1195)
 - **Relates to**: [ADR-0291](0291-a-functions-workers-get-cpu-and-memory-limits.md) (F206, split from this ADR) ·
   [ADR-0251](0251-catalogservice-declares-its-stores.md) (inline stores) · [ADR-0266](0266-volume-sizes-with-units.md)
   (`ByteSize`) · [ADR-0275](0275-a-bucket-prefix-owner-names-its-kind.md) (a Lake's prefix) ·
@@ -41,6 +43,8 @@ next quota (per namespace, V2) is a new source on the same framework.
   507, and so does `DELETE FROM t WHERE 0; INSERT …`; When it executes only `DELETE` or `DROP` statements, Then they
   run, and after the next measure an `INSERT` lands again.
 - **scenario: no-cap-unchanged**: Given a store whose quota sets no size, When it is written, Then nothing is measured.
+- **scenario: quota-change-keeps-the-engine**: Given a Ready SQLDatabase, When its owner changes only its quota, Then
+  its engine keeps running and its calls are served throughout.
 - **scenario: per-item-cap-moved**: Given a Bucket with `quota.maxObjectBytes: 1024`, When an object of 2 KiB is put,
   Then it gets 413 as today (ADR-0148); a manifest with `spec.maxObjectBytes` at the root is refused with 422.
 
@@ -48,17 +52,13 @@ next quota (per namespace, V2) is a new source on the same framework.
 
 **In**: the quota framework (decision point, enforcement points, sources); the `quota` block on Bucket, Bucket prefix,
 KVStore and SQLDatabase, with the per-item caps moved into it.
-**Out**: Function CPU and memory (ADR-0291); per-namespace budgets (V2, F208), keyed by what is consumed (`compute`,
-`volumes` and each store kind), which register into the framework; Cedar quota policies (opt-in, a later ADR); a
-store's usage in its status; funclog sizes; a Restore's loads and the Bucket purger, which write through raw prefixes
-and stay uncapped.
+**Out**: Function CPU and memory (ADR-0291); per-namespace budgets (V2, F208), new sources on this framework; Cedar
+quota policies (opt-in, later); a store's usage in its status; funclog sizes; a Restore's loads and the purger.
 
 ## Constraints & Decision drivers
 
-- One check: every storage write asks one decision point (`auth.Authorizer` is the precedent,
-  `internal/auth/authorizer.go:123`); a new cap is a new source, never a new check in a write path.
-- A write path measures a store only at its first capped write and to confirm a refusal; an uncapped store pays a map
-  lookup.
+- One check, as `auth.Authorizer` (`internal/auth/authorizer.go:123`): a new cap is a new source, never a new check.
+- A write path measures only a capped store, and only when a decision needs it; an uncapped store pays a map lookup.
 
 ## Alternatives considered
 
@@ -72,42 +72,47 @@ and stay uncapped.
 
 ## Decision
 
-1. **The decision point.** `internal/platform/quota` (NEW) defines `Checker`, the quota counterpart of
-   `auth.Authorizer`: `Admit` before a write, `Settle` after it. `Book` implements it; `quota.None` admits everything
-   and is the default of every enforcement point, as `hold.NeverCall` is for the hold. The daemon builds one `Book`.
-2. **Sources.** The feature that owns a kind registers a `Source`: `Limit` reads the subject's cap from its quota (no
-   size ⇒ no cap), `Measure` reads its usage: a Bucket, the sum of its listing's sizes; a prefix, the same under it
-   (for a Lake, its files; its catalog is outside, ADR-0293); a KVStore, its engine's NEW `Usage`; a SQLDatabase, `(page_count -
-   freelist_count) * page_size` through its engine. F208 adds the namespace as a parent the `Book` derives from
-   `Subject.Namespace`, with no write-path change.
-3. **Usage.** `Admit` reserves the write's full bytes; after the store, `Settle` turns them into settled bytes, or
-   releases them when the store failed. Usage is the last measure plus the settled and the reserved bytes, so for a
-   write of known size it never counts less than the store holds. A background refresh per subject, started at its
-   first use and repeated every minute (the constant `refreshInterval`), re-reads its limit and measure off the write
-   path; the first write waits on it, and a measure that lands keeps the bytes settled while it ran. A failed refresh
-   keeps the last values and logs; while a subject's first refresh fails, its writes get 503.
-4. **The refusal.** When a write would take usage past the limit and bytes were settled since the last measure,
-   `Admit` waits on one shared fresh measure. On that usage, the size the write replaces (`Request.Replaces`: one stat
-   of the key for a Bucket, the old value's length for a KVStore) is credited to the decision, never to the count,
-   since a concurrent delete can falsify it. A write still past the limit gets the NEW `fault.InsufficientStorage`
-   (507, `urn:funcd:problem:insufficient-storage`) naming the subject, its usage and its limit. An Execute, of unknown
-   size, is refused once usage is at the limit, unless it only deletes: each statement text holds one statement (only
-   comments and whitespace after its first `;`) whose first keyword is `DELETE` or `DROP`; anything else, a `WITH …
-   DELETE` included, is a write. A delete trigger may still write a bounded amount.
-5. **Enforcement points.** Bucket: a decorator in `s3BucketFor` inside `blob.Capped` (`pkg/funcd/funcd.go:2446`), so
-   a per-item 413 comes before any reservation, the one view behind the S3 gateway, `ctx.blob` and Sites; it charges the key's prefix when that prefix has a cap, then
-   the Bucket, and a refusal by the Bucket releases the prefix's reservation; the gateway's `mapBlobErr` answers
-   `QuotaExceeded` with 507. KVStore: the KV facade's Put. SQLDatabase: the SQL facade's Execute. Reads and deletes
-   never ask.
+1. **The decision point.** `internal/quota` (NEW; not under `internal/platform`, a leaf that imports no clock) defines
+   `Checker`, the quota counterpart of `auth.Authorizer`: `Admit` before a write returns the write's `Settle`, called
+   once after it. `Book` implements it; `quota.None` admits everything and is the default of every enforcement point,
+   as `hold.NeverCall` is for the hold. The daemon builds one `Book` and runs its refresh. The `Book` keeps its own
+   copy of a subject: the S3 gateway's strings live in a request buffer the next request reuses (its multipart store
+   copies them for the same reason); the experiment's lanes lost and duplicated subjects until it did.
+2. **Sources.** The feature that owns a kind registers a `Source`: `Limit` reads the subject's cap (no size ⇒ no cap),
+   `Measure` its usage: a Bucket's or a prefix's listed sizes (a Lake's catalog is outside, ADR-0293); a KVStore's
+   keys and values, through `kvstore.Usager` (NEW, a driver capability beside `DropPrefix`); a SQLDatabase's
+   `(page_count - freelist_count) * page_size`, through its engine. F208 adds the namespace as a parent.
+3. **Usage.** `Admit` reserves the write's full bytes; `Settle` settles or releases them. Usage is the last measure
+   plus the settled and the reserved bytes, so for a write of known size it never counts less than the store holds; a
+   measure that lands keeps the bytes settled while it ran. A subject's first write reads its limit and, when capped,
+   its usage; `Book.Run` reads both again every minute, and drops a subject unused for ten minutes. A failed refresh
+   keeps the last values; while a first one fails, writes get 503. A quota change applies from the next refresh; a
+   newly capped subject is measured before its next decision. A capped subject's stored write of unknown size (a SQL
+   Execute) starts a measure, so the next write sees what it added.
+4. **The refusal.** A delete through an enforcement point reports itself (`Request.Deletes`, always admitted). When a
+   write would pass the limit and bytes were settled or deleted since the last measure, `Admit` waits on one shared
+   fresh measure. On that usage, the size the write replaces (`Request.Replaces`: a stat of the key, or the old value's
+   length) is credited to the decision, never to the count, and read again if a measure lands before the decision. A
+   write still past the limit gets the NEW `fault.InsufficientStorage` (507, `urn:funcd:problem:insufficient-storage`)
+   naming the subject, its usage and its limit. An Execute, of unknown size, needs room left, unless it only deletes:
+   each statement text holds one statement (only comments and whitespace after its first `;`) whose first keyword is
+   `DELETE` or `DROP`; anything else, a `WITH … DELETE` included, is a write; a delete trigger may write a little.
+5. **Enforcement points.** Bucket: `blob.Quoted` (NEW), in `s3BucketFor` inside `blob.Capped`
+   (`pkg/funcd/funcd.go:2446`), so a per-item 413 comes before any reservation; it is the one view behind the S3
+   gateway, `ctx.blob` and Sites. It charges the key's prefix, then the Bucket, a refusal by the Bucket releasing the
+   prefix's reservation, reports a delete to both, and refuses a presigned PUT under a cap (403), as `blob.Capped`
+   does under a per-object cap. The gateway answers `QuotaExceeded` with 507; a Site is `NotReady`, reason
+   `QuotaExceeded`. KVStore: the KV facade's Put and Delete. SQLDatabase: the SQL facade's Execute. Reads never ask.
 6. **The quota block.** Every cap of a store sits in its `spec.quota` (NEW), under the component it caps: `BucketSpec`,
    `BucketPrefix`, `KVStoreSpec` and `SQLDatabaseSpec`. Its size is `maxSize` (a `ByteSize`, ADR-0266) or `maxBytes`
    (a byte count), at most one, as `volumeBudget` and `volumeBudgetBytes` are; none means no cap. The per-item caps
    move into it unchanged, with no compatibility path, as the resource-shape refactor did (#1072):
    `quota.maxObjectBytes` on a Bucket, `quota.maxKeyBytes` and `quota.maxValueBytes` on a KVStore; one at the spec's
-   root is a 422, and so is a size that does not parse or both forms. A stored object loses a root cap at the upgrade
-   until its owner applies it again under `quota` (none is deployed; the decider accepted breaking changes). The inline entries embed these specs (ADR-0251),
-   so a quota is written once, wherever the store is declared: alone, or in an App, a Function, a Workflow, a Lake or
-   a Site. A Lake has no quota of its own; its prefix's quota is its cap.
+   root is a 422, and so is a size that does not parse or both forms; a stored one is lost at the upgrade (breaking,
+   accepted). The inline entries embed these specs (ADR-0251), so a quota is written once, wherever the store is
+   declared. A Lake has no quota of its own: its prefix's quota caps its files, and `lake.catalogMaxSize` its catalog,
+   inlined rows included (ADR-0293). A quota change reaches no engine: the SQL reconciler no longer tears one down at
+   each generation; the provider runtime replaces an engine whose spec changed (#1195).
 
 ## Design model
 
@@ -116,20 +121,19 @@ and stay uncapped.
 - **Assertions**:
   | Assertion | Kind | Protects | Oracle test |
   |---|---|---|---|
-  | `UsageNeverBelowTotal` | always | `bucket-total-refused`, `lake-total-refused`, `kv-total-refused` | `TestBookUsageNeverBelowTotal` |
-  | `CapHolds` | always | the same: the cap's own promise | `TestBookCapHolds` |
-  | `RefusalsRestOnAFreshMeasure` | always | `overwrite-not-refused` | `TestScenarioOverwriteNotRefused` |
-- **Bounds**: one capped subject, two writes over two keys and two sizes, one delete, two measures; 10 actions, at
-  which each mutant fails.
-- **Faults**: a failed store, which releases its reservation; a delete racing the writes and the measure.
-- **Mutants**: `forget-settled-while-measuring` and `count-the-credit` (a credit that counts, which a concurrent delete
-  falsifies; the model found it) fail `UsageNeverBelowTotal`; `refuse-on-stale-measure` fails
-  `RefusalsRestOnAFreshMeasure`.
-- **Result**: pass, 53,446 states, 12 s, FizzBee v0.5.4.
-- **Left to tests**: a paged listing, modeled as one read (safe: a write stored once a measure has started settles
-  into it); `Replaces`' stat outside the lock (safe: a credit never counts); a waiter's progress
-  (`…OverwriteNotRefused`); SQL's unknown-size Execute and the deletes rule (`…SQLDeleteAtCap`); a write charged to a
-  prefix and its Bucket (`…LakeTotalRefused`).
+  | `UsageNeverBelowTotal` | always | `bucket-total-refused`, `lake-total-refused`, `kv-total-refused` | `TestBookUsageNeverBelowTotalAndCapHolds` |
+  | `CapHolds` | always | the same: the cap's own promise | `…UsageNeverBelowTotalAndCapHolds`, `TestStaleCreditReadAgain` |
+  | `RefusalsRestOnAFreshMeasure` | always | `overwrite-not-refused`, a delete making room | `TestScenarioOverwriteNotRefused`, `TestDeleteMakesRoomAtOnce`, `TestDeleteDuringAMeasureCounts` |
+- **Bounds and faults**: one capped subject, two writes over two keys and two sizes, a failed store, one delete, two
+  measures; 9 actions (10 pass too: 137,648 states, 33 s). **Result**: pass, 80,459 states, 19 s, FizzBee v0.5.4.
+- **Mutants**: `forget-settled-while-measuring` and `count-the-credit` (the model found it) fail `UsageNeverBelowTotal`;
+  `refuse-on-stale-measure`, `deletes-not-reported` and `forget-a-delete-while-measuring` fail
+  `RefusalsRestOnAFreshMeasure`, which reads the ground truth: changes since the last landed measure's read.
+- **Left to tests**: a paged listing (one read in the model); the credit's stat outside the lock, unsafe when a measure
+  lands between it and the decision (the experiment's stress test, `TestStaleCreditReadAgain`); a waiter's progress;
+  SQL's unknown-size Execute and its deletes rule (`…SQLDeleteAtCap`); a prefix and its Bucket charged together
+  (`…LakeTotalRefused`); a subject capped only now (`TestNewlyCappedSubjectMeasuredFirst`) and a subject's strings
+  reused by the next request (`TestSubjectKeptAsACopy`), both from the lane logs.
 
 ## Temporary workarounds
 
@@ -138,7 +142,7 @@ None.
 ## Contracts
 
 ```go
-// Package quota (internal/platform/quota), NEW.
+// Package quota (internal/quota), NEW.
 type Subject struct {
 	Kind      v1.Kind
 	Namespace v1.NamespaceName
@@ -149,21 +153,26 @@ type Request struct {
 	Subject  Subject
 	Bytes    int64                                     // the write's size; 0 when unknown
 	Replaces func(ctx context.Context) (int64, error) // the size it overwrites, asked only before a refusal; nil: 0
-	Deletes  bool                                      // a SQL Execute that only deletes
+	Deletes  bool                                      // a delete: always admitted, reported once stored
 }
+type Settle func(stored bool) // ends an admitted write: settles its bytes, or releases them
 // Checker is the quota counterpart of auth.Authorizer.
 type Checker interface {
-	Admit(ctx context.Context, r Request) error // reserves r.Bytes, or fault.InsufficientStorage past the limit
-	Settle(r Request, stored bool)              // the reservation becomes settled bytes, or is released
+	Admit(ctx context.Context, r Request) (Settle, error) // reserves r.Bytes, or fault.InsufficientStorage
 }
 var None Checker // admits everything
 type Source struct {
 	Limit   func(ctx context.Context, s Subject) (int64, bool, error)
 	Measure func(ctx context.Context, s Subject) (int64, error)
 }
-type Book struct{ /* sources by kind; per-subject lock, limit, measure, settled and reserved bytes */ }
-func NewBook(clk clock.Clock) *Book
+type Book struct{ /* sources by kind; per subject: limit, measure, settled, reserved, deleted-since */ }
+func NewBook(clk clock.Clock, logger *slog.Logger) *Book
 func (b *Book) Register(kind v1.Kind, src Source)
+func (b *Book) Run(ctx context.Context)     // Refresh every minute
+func (b *Book) Refresh(ctx context.Context) // every subject's limit and usage, read again
+
+// Package blob (internal/blob), NEW: the Bucket enforcement point.
+func Quoted(inner Bucket, chk quota.Checker, bucket quota.Subject, capped func(prefix string) bool) Bucket
 
 // Package v1alpha1 (api/types/v1alpha1), NEW: BucketSpec.Quota BucketQuota; BucketPrefix.Quota and
 // SQLDatabaseSpec.Quota SizeQuota; KVStoreSpec.Quota KVStoreQuota.
@@ -181,8 +190,8 @@ type KVStoreQuota struct {
 	MaxValueBytes int64 `json:"maxValueBytes,omitempty"` // moved from KVStoreSpec
 }
 
-// Package kvstore (internal/kvstore), NEW method on the KV port, by both engines and in the contract suite.
-Usage(ctx context.Context, prefix string) (int64, error)
+// Package kvstore (internal/kvstore), NEW driver capability, by both engines and in the contract suite (RunUsage).
+type Usager interface{ Usage(ctx context.Context, prefix string) (int64, error) }
 
 // Package fault (api/fault), NEW kind (507).
 const InsufficientStorage Kind = "insufficient_storage"
@@ -195,42 +204,44 @@ func InsufficientStoragef(op, format string, a ...any) *Error
 
 ## Implementation plan
 
-- `internal/platform/quota`, tested with a fake clock (refresh, single flight, a fresh measure before a refusal, the
+- `internal/quota`, tested with a fake clock (refresh, single flight, a fresh measure before a refusal, the
   credit, a failed refresh, `Deletes`, a kind without a source), with `oracle:` markers for the spec's assertions.
 - `api/types/v1alpha1`: the quota types and their validation; `api/fault`: the kind, its problem and builder; the
   OpenAPI spec and SDK types regenerated.
-- The sources and enforcement points; `Usage` on the KV port and both engines; `pkg/funcd` builds the `Book`.
-- The move: every reader of a per-item cap (`s3BucketFor`, `pkg/funcd/funcd.go:2444`; the KV resolver through
-  `KVStoreSpec.EffectiveMax*`, `internal/services/kv/resolver.go:118-119`) reads `spec.quota`; the five example manifests of
-  funcd-typescript and funcd-python move first, in their own releases, then funcd bumps them (ADR-0141).
+- The sources and enforcement points; `Usager` on both KV engines; `pkg/funcd` builds the `Book` and runs it.
+- The move: every reader of a per-item cap (`pkg/funcd/funcd.go:2444`, `internal/services/kv/resolver.go:118-119`)
+  reads `spec.quota`; the five example manifests of funcd-typescript and funcd-python move first, in their own
+  releases, then funcd bumps them (ADR-0141).
 - Tests, one per scenario: `TestScenarioBucketTotalRefused` (`ctx.blob`, the gateway, a Site), `…LakeTotalRefused`,
-  `…OverwriteNotRefused`, `…KVTotalRefused`, `…SQLDeleteAtCap`, `…NoCapUnchanged`, `…PerItemCapMoved`.
+  `…OverwriteNotRefused`, `…KVTotalRefused`, `…SQLDeleteAtCap`, `…NoCapUnchanged`, `…PerItemCapMoved`,
+  `…QuotaChangeKeepsTheEngine`; on real engines, a case each in the duckdb, kv and sql Lima lanes.
 - Docs: the Bucket, KVStore, SQLDatabase and Lake references, the blueprint, the changelog's note on the move.
 - **Done when**: the tests pass with `-race`; build, vet (plain, dev, e2e, Linux) and lint are clean;
   `scripts/agent/gate.sh` passes; `just check-hygiene check-specs` passes.
 
 ## Review checklist
 
-- [ ] No size check outside `Book`; each enforcement point asks `Admit` before it stores and `Settle` after; reads and
-      deletes never ask; the default is `quota.None`; an uncapped subject is never measured.
-- [ ] A credit never lowers the count; a refusal follows a fresh measure when bytes were settled since the last one.
+- [ ] No size check outside `Book`; each enforcement point asks `Admit` before it stores and `Settle` after, a delete
+      reports itself, reads never ask; the default is `quota.None`; an uncapped subject is never measured.
+- [ ] A credit never lowers the count and is read again after a landed measure; a refusal follows a fresh measure when
+      bytes were settled or deleted since the last one; a newly capped subject is measured before its next decision.
 - [ ] Admission refuses a bad size, both `maxSize` and `maxBytes`, and a per-item cap at the spec's root, with 422.
 - [ ] `fault.InsufficientStorage` maps to 507, and the S3 gateway answers `QuotaExceeded` with 507; every scenario has
       its named test.
 
 ## Consequences
 
-- **Positive**: a store can no longer grow without end; all of a store's caps sit in one block, written once wherever
-  the store is declared; the next quota is a new source.
+- **Positive**: no store grows without end; a store's caps sit in one block; the next quota is a new source.
 - **Negative (accepted)**: a manifest with a per-item cap at the spec's root must move it into `quota` (the changelog
-  says so); near its cap, a store that overwrites is re-measured before each such write, one at a time; a write can be
-  refused up to a minute after deletes made room; a SQLDatabase can grow up to a minute of writes past its cap; a
-  Restore can load a store past its cap, after which only deletes run until it is under.
+  says so); near its cap, a store that overwrites or deletes is re-measured before the next refusal, one measure at a
+  time; a quota change, and a delete made outside the enforcement points (a Restore's load, the purger), count from
+  the next refresh, up to a minute later; a SQLDatabase can pass its cap by the Executes admitted before the measure
+  that follows them lands, one Execute of any size included; a Restore can load a store past its cap, after which
+  only deletes run until it is under.
 
 ## Open questions
 
-- Cedar quota policies (opt-in, the decider's choice): a later ADR has `Book.Admit` ask the PDP after its own check,
-  with `usage`, `bytes` and `limit` in the context, a deny by a `@quota` policy answering 507.
+- Cedar quota policies (opt-in): a later ADR has `Admit` ask the PDP with `usage`, `bytes` and `limit` in the context.
 - A store's usage in its status: a later ADR, if owners ask for it.
 
 ## References

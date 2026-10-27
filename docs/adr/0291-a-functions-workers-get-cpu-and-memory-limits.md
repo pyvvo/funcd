@@ -100,7 +100,7 @@ func LimitsFrom(cpu, memory string) Limits // the provider's limitsFrom, moved
 // Package v1alpha1 (api/types/v1alpha1), NEW.
 func (r ResourceSpec) Validate(op, path string) error
 func (s *FunctionSpec) PooledWithResources() bool // pooling.worker together with resources
-// FunctionSpec.Resources ResourceSpec `json:"resources,omitempty"`
+// FunctionSpec.Resources ResourceSpec `json:"resources,omitzero"` (an unsized Function renders no resources: {})
 
 // Package config (internal/platform/config), NEW: functions.defaultResources; each key has an env override, as every
 // key does.
@@ -121,8 +121,9 @@ func (c Config) FunctionDefaultResources() (v1.ResourceSpec, error) // checked w
   calls it); `internal/platform/config`: `Functions.DefaultResources`; `internal/function`: the worker's limits, the
   default, admission and the two reasons.
 - Tests, one per scenario: `TestScenarioFunctionLimitsApplied` (the containerd spec carries the limits),
-  `…FunctionDefaultLimits`, `…InvalidResourcesRefused`, `…PastAdmissionBlocked`, `…LimitsNotEnforcedLogged`; the OOM
-  restart runs in `just test-linux`.
+  `…FunctionDefaultLimits`, `…InvalidResourcesRefused`, `…PastAdmissionBlocked`, `…LimitsNotEnforcedLogged`; on
+  real containerd, the duckdb Lima lane reads an unsized worker's cgroup (the default) and OOM-kills a process in it
+  that passes 512 MiB while the worker keeps serving.
 - Docs: the Function reference, `funcdconfig.yaml`'s reference, the changelog's note on the default.
 - **Done when**: the tests pass with `-race`; build, vet (plain, dev, e2e, Linux) and lint are clean;
   `scripts/agent/gate.sh` passes; `just check-hygiene check-specs` passes.
