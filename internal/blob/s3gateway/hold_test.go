@@ -96,8 +96,9 @@ func TestScenarioGatewayReadServed(t *testing.T) {
 	require.Len(t, list.Contents, 1)
 }
 
-// scenario: gateway-restore-load-refused — while an in-place Restore loads the namespace, a part upload gets the 503,
-// which names the Restore, and the upload begun before the hold can still be aborted.
+// scenario: gateway-restore-load-refused — while an in-place Restore loads the namespace, a part and the complete of
+// an upload begun before the hold get the 503, which names the Restore, the object is not written, and the upload can
+// still be aborted.
 func TestScenarioGatewayRestoreLoadRefused(t *testing.T) {
 	t.Parallel()
 	h, err := hold.Open(t.TempDir())
@@ -105,18 +106,28 @@ func TestScenarioGatewayRestoreLoadRefused(t *testing.T) {
 	g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, memBucket, withHeld(h))
 	c := g.client(t, "default", "etl-svc")
 	ctx := context.Background()
-	up, err := c.CreateMultipartUpload(ctx, &awss3.CreateMultipartUploadInput{Bucket: ptrS("lakehouse"),
-		Key: ptrS("bronze/big.parquet")}, oneAttempt)
+	bucket, key := ptrS("lakehouse"), ptrS("bronze/big.parquet")
+	up, err := c.CreateMultipartUpload(ctx, &awss3.CreateMultipartUploadInput{Bucket: bucket, Key: key}, oneAttempt)
+	require.NoError(t, err)
+	part, err := c.UploadPart(ctx, &awss3.UploadPartInput{Bucket: bucket, Key: key, UploadId: up.UploadId,
+		PartNumber: aws.Int32(1), Body: strings.NewReader("part-1")}, oneAttempt)
 	require.NoError(t, err)
 
 	require.NoError(t, h.HoldNamespace("default", hold.Marker{Reason: hold.ReasonRestore, Since: v1.NewTimestamp(time.Now()),
 		Restore: "nightly-1"}))
-	_, err = c.UploadPart(ctx, &awss3.UploadPartInput{Bucket: ptrS("lakehouse"), Key: ptrS("bronze/big.parquet"),
-		UploadId: up.UploadId, PartNumber: aws.Int32(1), Body: strings.NewReader("part")}, oneAttempt)
-	requireHeld(t, err, "namespace default is held while Restore nightly-1 loads it since ")
-	_, err = c.AbortMultipartUpload(ctx, &awss3.AbortMultipartUploadInput{Bucket: ptrS("lakehouse"),
-		Key: ptrS("bronze/big.parquet"), UploadId: up.UploadId}, oneAttempt)
-	require.NoError(t, err, "an abort writes nothing, so the hold lets it through")
+	const want = "namespace default is held while Restore nightly-1 loads it since "
+	_, err = c.UploadPart(ctx, &awss3.UploadPartInput{Bucket: bucket, Key: key, UploadId: up.UploadId,
+		PartNumber: aws.Int32(2), Body: strings.NewReader("part-2")}, oneAttempt)
+	requireHeld(t, err, want)
+	_, err = c.CompleteMultipartUpload(ctx, &awss3.CompleteMultipartUploadInput{Bucket: bucket, Key: key, UploadId: up.UploadId,
+		MultipartUpload: &awstypes.CompletedMultipartUpload{Parts: []awstypes.CompletedPart{{ETag: part.ETag, PartNumber: aws.Int32(1)}}}},
+		oneAttempt)
+	requireHeld(t, err, want)
+	written, err := g.buckets["default/lakehouse"].Exists(ctx, *key)
+	require.NoError(t, err)
+	require.False(t, written, "a refused complete writes nothing")
+	_, err = c.AbortMultipartUpload(ctx, &awss3.AbortMultipartUploadInput{Bucket: bucket, Key: key, UploadId: up.UploadId}, oneAttempt)
+	require.NoError(t, err, "the upload is still there, and an abort writes nothing, so the hold lets it through")
 }
 
 // scenario: gateway-auth-before-hold — a caller the PEP denies gets the 403 it gets today, which says nothing of the
