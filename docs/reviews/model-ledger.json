@@ -13003,5 +13003,20 @@
     "dod_total": 8,
     "report": "docs/reviews/adr-0290-implementation-claude-opus-5-5.md",
     "notes": "Minor (model): TestNamespaceMarker sits in hold_test.go, not the plan's namespace_test.go; five mutants each fail their test; main's TestScenarioFinishedRunKept fails on main too (routed)"
+  },
+  {
+    "date": "2026-10-27",
+    "adr": "0290",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "changes-requested",
+    "blockers": 0,
+    "majors": 1,
+    "minors": 2,
+    "model_attributed": 3,
+    "dod_passed": 8,
+    "dod_total": 9,
+    "report": "docs/reviews/adr-0290-amendment-implementation-claude-opus-5-5.md",
+    "notes": "amendment (S3 gateway writes, #1302): Major model - no test sees CompleteMultipartUpload refused (mutant survives); Minor model - Decision 2 detail formatted twice; Minor model - #1302 has no decision record"
   }
 ]
