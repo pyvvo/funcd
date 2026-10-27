@@ -25,11 +25,11 @@ the first ADR was drafted.
 
 | # | Feature | Builds on | ADR(s) | Status |
 |---|---|---|---|---|
-| F206 | **Function CPU and memory limits**: a Function sets `resources.cpu` and `resources.memory`, a node default limits one that sets neither, and its worker cannot use more | — | [ADR-0291](../adr/0291-functions-get-cpu-and-memory-limits-and-stores-a-total-size.md) | adr |
-| F207 | **A store's total size**: a Bucket, a KVStore or a SQLDatabase sets `maxBytes`, and a write that would pass it is refused, while reads and deletes still work | — | [ADR-0291](../adr/0291-functions-get-cpu-and-memory-limits-and-stores-a-total-size.md) | adr |
+| F206 | **Function CPU and memory limits**: an owner sizes a Function's CPU and memory, a node default sizes one the owner left unsized, and the Function's workers cannot use more | — | [ADR-0291](../adr/0291-functions-get-cpu-and-memory-limits-and-stores-a-total-size.md) | adr |
+| F207 | **A store's total size**: an owner caps what a Bucket, a KVStore or a SQLDatabase holds, and a write that would pass the cap is refused, while reads still work and deletes can bring the store back under it | — | [ADR-0291](../adr/0291-functions-get-cpu-and-memory-limits-and-stores-a-total-size.md) | adr |
 | F208 | **Per-namespace quotas**: CPU, memory and storage summed over a namespace and checked at admission (V2, ADR-0018) | F206 · F207 | — | idea |
 
 ## Exit criterion
 
-A Function on the containerd runtime that sets `resources` cannot use more CPU or memory than it set, and one that sets
-none gets the node default; a store at its `maxBytes` refuses a write with 507 and still answers reads and deletes.
+A Function sized by its owner cannot use more CPU or memory than it was given, and an unsized one gets the node
+default; a store at its cap refuses a write, still answers reads, and takes writes again once deletes free room.
