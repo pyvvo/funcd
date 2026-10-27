@@ -59,8 +59,9 @@ losses. This ADR makes a held namespace refuse calls, and writes through the S3 
   is unchanged; after the release the write lands.
 - **scenario: gateway-read-served**: Given `orders` held, When a client reads or lists its Bucket through the S3
   gateway, Then it is served.
-- **scenario: gateway-restore-load-refused**: Given an in-place Restore loading `orders`, When a part of an upload
-  begun before arrives, Then it gets the 503, which names the Restore, and the upload can still be aborted.
+- **scenario: gateway-restore-load-refused**: Given an in-place Restore loading `orders`, When a part or the complete
+  of an upload begun before arrives, Then it gets the 503, which names the Restore, nothing is written, and the upload
+  can still be aborted.
 - **scenario: gateway-auth-before-hold**: Given `orders` held, When a caller the PEP denies writes, Then it gets 403
   as today, which says nothing about the hold.
 - **scenario: gateway-unheld-namespace-served**: Given `orders` held, When a `web` caller writes to a `web` Bucket,
