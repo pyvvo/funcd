@@ -11,8 +11,11 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/kvstore"
 	kvbadger "github.com/pyvvo/funcd/internal/kvstore/badger"
 	"github.com/pyvvo/funcd/internal/kvstore/memory"
+	"github.com/pyvvo/funcd/internal/platform/clock"
+	"github.com/pyvvo/funcd/internal/quota"
 	"github.com/pyvvo/funcd/internal/services/kv"
 )
 
@@ -232,7 +235,7 @@ func TestIssue377_DeclaredKeyCapIsStorable(t *testing.T) {
 		ks := &v1.KVStore{
 			TypeMeta:   v1.TypeMeta{APIVersion: v1.KindKVStore.GVK().APIVersion(), Kind: v1.KindKVStore},
 			ObjectMeta: v1.ObjectMeta{Name: store, Namespace: ns, ResourceGroup: "rg1"},
-			Spec:       v1.KVStoreSpec{MaxKeyBytes: capBytes, Tables: []v1.KVTable{{Name: table, Owner: "fn"}}},
+			Spec:       v1.KVStoreSpec{Quota: v1.KVStoreQuota{MaxKeyBytes: capBytes}, Tables: []v1.KVTable{{Name: table, Owner: "fn"}}},
 		}
 		if ks.Validate() != nil {
 			continue
@@ -270,7 +273,7 @@ func TestIssue461_StoredOverLimitCapsAreClamped(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	ks := mkKVStore("legacy", v1.KVTable{Name: "t", Owner: "fn"})
-	ks.Spec.MaxKeyBytes, ks.Spec.MaxValueBytes = 100000, 4<<20
+	ks.Spec.Quota.MaxKeyBytes, ks.Spec.Quota.MaxValueBytes = 100000, 4<<20
 	require.Error(t, ks.Validate(), "precondition: today's Validate rejects the stored caps")
 	r, err := kv.NewResolver(rawMeta{
 		"fn":     mkFunctionWithKV("fn", v1.FunctionKV{Alias: "b", Store: "legacy", Table: "t"}),
@@ -323,4 +326,41 @@ func TestScenarioKVLoweredKeyCapKeepsKeys(t *testing.T) {
 	_, found, err = lowered.Get(ctx, "default", "fn", "b", key)
 	require.NoError(t, err)
 	require.False(t, found, "the delete removed the key")
+}
+
+// scenario: kv-total-refused — a KVStore at its quota (ADR-0292) refuses a put with 507 before the write reaches the
+// driver, still answers a get and a delete, and after the delete and the next measure takes the put.
+func TestScenarioKVTotalRefused(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	b := fakeResolver{m: map[string]kv.Binding{
+		bkey("fn", "cache"): {Store: "s", Table: "t", Owner: "fn", MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
+	}}
+	db := memory.New()
+	book := quota.NewBook(clock.System(), nil)
+	book.Register(v1.KindKVStore, quota.Source{
+		Limit: func(context.Context, quota.Subject) (int64, bool, error) { return 64, true, nil },
+		Measure: func(ctx context.Context, s quota.Subject) (int64, error) {
+			return db.(kvstore.Usager).Usage(ctx, string(s.Namespace)+"/"+string(s.Name)+"/")
+		},
+	})
+	f, err := kv.NewFacade(kv.FacadeDeps{KV: db, Resolver: b, Authorizer: &pdpStub{
+		readGrants: map[string]bool{rgKey("default", "fn", "s"): true}, owners: map[string]v1.ObjectName{"s/t": "fn"}}, Quota: book})
+	require.NoError(t, err)
+
+	value := []byte(strings.Repeat("v", 30))
+	require.NoError(t, f.Put(ctx, "default", "fn", "cache", "a", value), "default/s/t/a and 30 bytes: 43 of 64")
+	err = f.Put(ctx, "default", "fn", "cache", "b", value)
+	require.Equal(t, fault.InsufficientStorage, fault.KindOf(err), "%v", err)
+	require.ErrorContains(t, err, "kvstore default/s holds 43 of its 64 bytes")
+	_, found, err := db.Get(ctx, "default/s/t/b")
+	require.NoError(t, err)
+	require.False(t, found, "a refused put reaches no driver")
+	require.NoError(t, f.Put(ctx, "default", "fn", "cache", "a", value), "an overwrite of the same size fits on its credit")
+	got, found, err := f.Get(ctx, "default", "fn", "cache", "a")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, value, got)
+	require.NoError(t, f.Delete(ctx, "default", "fn", "cache", "a"))
+	require.NoError(t, f.Put(ctx, "default", "fn", "cache", "b", value), "a fresh measure sees the delete")
 }

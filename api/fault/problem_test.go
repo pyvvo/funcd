@@ -66,6 +66,12 @@ func TestScenario_ErrorMapsToProblem(t *testing.T) {
 			wantType:   "urn:funcd:problem:payload-too-large",
 		},
 		{
+			name:       "InsufficientStorage maps to 507",
+			err:        InsufficientStoragef("quota.Admit", "bucket default/media holds 1048576 of its 1048576 bytes"),
+			wantStatus: http.StatusInsufficientStorage,
+			wantType:   "urn:funcd:problem:insufficient-storage",
+		},
+		{
 			name:       "Internal maps to 500",
 			err:        Internalf("controller.refresh", "unexpected nil pointer"),
 			wantStatus: http.StatusInternalServerError,

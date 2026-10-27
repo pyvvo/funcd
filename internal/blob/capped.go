@@ -7,7 +7,7 @@ import (
 )
 
 // Capped returns a view of inner whose Put refuses an object larger than maxBytes with
-// fault.PayloadTooLarge: the Bucket.spec.maxObjectBytes per-object policy (ADR-0080, ADR-0148). It also
+// fault.PayloadTooLarge: the Bucket.spec.quota.maxObjectBytes per-object policy (ADR-0080, ADR-0148, ADR-0292). It also
 // refuses to sign a PUT URL with fault.Forbidden, since the upload then bypasses Put and SignOptions
 // carries no size limit to bind it. maxBytes <= 0 returns inner
 // unchanged. It forwards the optional RangeReader capability when inner implements it.

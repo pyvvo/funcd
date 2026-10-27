@@ -12,7 +12,7 @@ func bucket(name string, mob int64, prefixes ...BucketPrefix) *Bucket {
 	return &Bucket{
 		TypeMeta:   TypeMeta{APIVersion: KindBucket.GVK().APIVersion(), Kind: KindBucket},
 		ObjectMeta: ObjectMeta{Name: ObjectName(name), Namespace: "default", ResourceGroup: "rg1"},
-		Spec:       BucketSpec{Prefixes: prefixes, MaxObjectBytes: mob},
+		Spec:       BucketSpec{Prefixes: prefixes, Quota: BucketQuota{MaxObjectBytes: mob}},
 	}
 }
 
@@ -30,7 +30,7 @@ func TestBucketRoundtrip(t *testing.T) {
 	if err := json.Unmarshal(data, &b2); err != nil {
 		t.Fatalf("unmarshal Bucket: %v", err)
 	}
-	if b2.Name != b.Name || b2.Spec.MaxObjectBytes != 4096 {
+	if b2.Name != b.Name || b2.Spec.Quota.MaxObjectBytes != 4096 {
 		t.Errorf("Bucket roundtrip mismatch: %+v", b2)
 	}
 	if len(b2.Spec.Prefixes) != 2 || b2.Spec.Prefixes[0].Name != "bronze" || b2.Spec.Prefixes[0].Owner != FunctionOwner("bronze-svc") {
@@ -42,7 +42,7 @@ func TestBucketRoundtrip(t *testing.T) {
 }
 
 // scenario: single-writer-per-prefix (structural half) — Bucket.Validate enforces unique prefix names
-// within a bucket (so a prefix has exactly one owner by construction) + non-negative MaxObjectBytes.
+// within a bucket (so a prefix has exactly one owner by construction) + a non-negative quota.maxObjectBytes.
 func TestBucketValidate(t *testing.T) {
 	if err := bucket("ok", 0).Validate(); err != nil {
 		t.Errorf("valid Bucket rejected: %v", err)

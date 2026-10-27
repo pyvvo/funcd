@@ -57,6 +57,9 @@ func writeIndexCopy(ctx context.Context, view blob.Bucket, sp, index, rel, href 
 		if k := fault.KindOf(perr); k == fault.PayloadTooLarge || k == fault.Invalid {
 			return "MaterializeFailed", perr.Error(), nil
 		}
+		if fault.KindOf(perr) == fault.InsufficientStorage {
+			return reasonQuotaExceeded, perr.Error(), nil
+		}
 		return "", "", fault.Wrapf(perr, fault.KindOf(perr), op, "put %q", key)
 	}
 	return "", "", nil

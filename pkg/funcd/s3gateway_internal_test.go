@@ -27,6 +27,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
+	"github.com/pyvvo/funcd/internal/quota"
 	"github.com/pyvvo/funcd/internal/testkit/freeport"
 )
 
@@ -298,7 +299,7 @@ func TestIssue109_BucketMaxObjectBytesRejectsOversizeWrite(t *testing.T) {
 	st := p.cfg.store
 	bucket := &v1.Bucket{TypeMeta: v1.TypeMeta{APIVersion: v1.KindBucket.GVK().APIVersion(), Kind: v1.KindBucket}}
 	bucket.Name, bucket.Namespace, bucket.ResourceGroup = "lake", "default", "rg1"
-	bucket.Spec = v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "raw", Owner: v1.FunctionOwner("writer")}}, MaxObjectBytes: 16}
+	bucket.Spec = v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "raw", Owner: v1.FunctionOwner("writer")}}, Quota: v1.BucketQuota{MaxObjectBytes: 16}}
 	writer := &v1.Function{TypeMeta: v1.TypeMeta{APIVersion: v1.KindFunction.GVK().APIVersion(), Kind: v1.KindFunction}}
 	writer.Name, writer.Namespace, writer.ResourceGroup = "writer", "default", "rg1"
 	writer.Spec = v1.FunctionSpec{Runtime: "nodejs22"}
@@ -343,7 +344,7 @@ func TestIssue109_BucketMaxObjectBytesRejectsOversizeWrite(t *testing.T) {
 	if !errors.As(perr, &coded) || coded.ErrorCode() != "EntityTooLarge" {
 		t.Fatalf("an over-cap PutObject must be EntityTooLarge, got %v", perr)
 	}
-	view, ok := s3BucketFor(p.cfg.blob, st)("default", "lake")
+	view, ok := s3BucketFor(p.cfg.blob, st, quota.None)("default", "lake")
 	if !ok {
 		t.Fatal("the Bucket view must resolve")
 	}

@@ -365,10 +365,6 @@ components:
                   - retain
                   - delete
                 type: string
-              maxObjectBytes:
-                format: int64
-                minimum: 0
-                type: integer
               name:
                 description: The part's name. The object takes the App's namespace and resource group.
                 maxLength: 63
@@ -381,6 +377,8 @@ components:
                 type:
                   - array
                   - "null"
+              quota:
+                $ref: "#/components/schemas/BucketQuota"
               ref:
                 description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
                 maxLength: 63
@@ -457,10 +455,6 @@ components:
                         - retain
                         - delete
                       type: string
-                    maxObjectBytes:
-                      format: int64
-                      minimum: 0
-                      type: integer
                     name:
                       description: The part's name. The object takes the App's namespace and resource group.
                       maxLength: 63
@@ -473,6 +467,8 @@ components:
                       type:
                         - array
                         - "null"
+                    quota:
+                      $ref: "#/components/schemas/BucketQuota"
                     ref:
                       description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
                       maxLength: 63
@@ -527,22 +523,14 @@ components:
                         - retain
                         - delete
                       type: string
-                    maxKeyBytes:
-                      format: int64
-                      maximum: 64000
-                      minimum: 0
-                      type: integer
-                    maxValueBytes:
-                      format: int64
-                      maximum: 1048576
-                      minimum: 0
-                      type: integer
                     name:
                       description: The part's name. The object takes the App's namespace and resource group.
                       maxLength: 63
                       minLength: 1
                       pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                       type: string
+                    quota:
+                      $ref: "#/components/schemas/KVStoreQuota"
                     ref:
                       description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
                       maxLength: 63
@@ -575,10 +563,6 @@ components:
                               - retain
                               - delete
                             type: string
-                          maxObjectBytes:
-                            format: int64
-                            minimum: 0
-                            type: integer
                           name:
                             description: The part's name. The object takes the App's namespace and resource group.
                             maxLength: 63
@@ -591,6 +575,8 @@ components:
                             type:
                               - array
                               - "null"
+                          quota:
+                            $ref: "#/components/schemas/BucketQuota"
                           ref:
                             description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
                             maxLength: 63
@@ -756,6 +742,8 @@ components:
                       minLength: 1
                       pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                       type: string
+                    quota:
+                      $ref: "#/components/schemas/SizeQuota"
                     ref:
                       description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
                       maxLength: 63
@@ -795,22 +783,14 @@ components:
                   - retain
                   - delete
                 type: string
-              maxKeyBytes:
-                format: int64
-                maximum: 64000
-                minimum: 0
-                type: integer
-              maxValueBytes:
-                format: int64
-                maximum: 1048576
-                minimum: 0
-                type: integer
               name:
                 description: The part's name. The object takes the App's namespace and resource group.
                 maxLength: 63
                 minLength: 1
                 pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                 type: string
+              quota:
+                $ref: "#/components/schemas/KVStoreQuota"
               ref:
                 description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
                 maxLength: 63
@@ -843,10 +823,6 @@ components:
                         - retain
                         - delete
                       type: string
-                    maxObjectBytes:
-                      format: int64
-                      minimum: 0
-                      type: integer
                     name:
                       description: The part's name. The object takes the App's namespace and resource group.
                       maxLength: 63
@@ -859,6 +835,8 @@ components:
                       type:
                         - array
                         - "null"
+                    quota:
+                      $ref: "#/components/schemas/BucketQuota"
                     ref:
                       description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
                       maxLength: 63
@@ -1057,10 +1035,6 @@ components:
                         - retain
                         - delete
                       type: string
-                    maxObjectBytes:
-                      format: int64
-                      minimum: 0
-                      type: integer
                     name:
                       description: The part's name. The object takes the App's namespace and resource group.
                       maxLength: 63
@@ -1073,6 +1047,8 @@ components:
                       type:
                         - array
                         - "null"
+                    quota:
+                      $ref: "#/components/schemas/BucketQuota"
                     ref:
                       description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
                       maxLength: 63
@@ -1131,6 +1107,8 @@ components:
                 minLength: 1
                 pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                 type: string
+              quota:
+                $ref: "#/components/schemas/SizeQuota"
               ref:
                 description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
                 maxLength: 63
@@ -1159,10 +1137,6 @@ components:
                         - retain
                         - delete
                       type: string
-                    maxObjectBytes:
-                      format: int64
-                      minimum: 0
-                      type: integer
                     name:
                       description: The part's name. The object takes the App's namespace and resource group.
                       maxLength: 63
@@ -1175,6 +1149,8 @@ components:
                       type:
                         - array
                         - "null"
+                    quota:
+                      $ref: "#/components/schemas/BucketQuota"
                     ref:
                       description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
                       maxLength: 63
@@ -1221,22 +1197,14 @@ components:
                         - retain
                         - delete
                       type: string
-                    maxKeyBytes:
-                      format: int64
-                      maximum: 64000
-                      minimum: 0
-                      type: integer
-                    maxValueBytes:
-                      format: int64
-                      maximum: 1048576
-                      minimum: 0
-                      type: integer
                     name:
                       description: The part's name. The object takes the App's namespace and resource group.
                       maxLength: 63
                       minLength: 1
                       pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                       type: string
+                    quota:
+                      $ref: "#/components/schemas/KVStoreQuota"
                     ref:
                       description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
                       maxLength: 63
@@ -1269,10 +1237,6 @@ components:
                               - retain
                               - delete
                             type: string
-                          maxObjectBytes:
-                            format: int64
-                            minimum: 0
-                            type: integer
                           name:
                             description: The part's name. The object takes the App's namespace and resource group.
                             maxLength: 63
@@ -1285,6 +1249,8 @@ components:
                             type:
                               - array
                               - "null"
+                          quota:
+                            $ref: "#/components/schemas/BucketQuota"
                           ref:
                             description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
                             maxLength: 63
@@ -1435,6 +1401,8 @@ components:
                       minLength: 1
                       pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                       type: string
+                    quota:
+                      $ref: "#/components/schemas/SizeQuota"
                     ref:
                       description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
                       maxLength: 63
@@ -1902,22 +1870,36 @@ components:
           type: string
         owner:
           $ref: "#/components/schemas/PrefixOwner"
+        quota:
+          $ref: "#/components/schemas/SizeQuota"
       required:
         - name
       type: object
-    BucketSpec:
+    BucketQuota:
       additionalProperties: false
       properties:
+        maxBytes:
+          format: int64
+          minimum: 0
+          type: integer
         maxObjectBytes:
           format: int64
           minimum: 0
           type: integer
+        maxSize:
+          type: string
+      type: object
+    BucketSpec:
+      additionalProperties: false
+      properties:
         prefixes:
           items:
             $ref: "#/components/schemas/BucketPrefix"
           type:
             - array
             - "null"
+        quota:
+          $ref: "#/components/schemas/BucketQuota"
       required:
         - prefixes
       type: object
@@ -2512,10 +2494,6 @@ components:
                   - retain
                   - delete
                 type: string
-              maxObjectBytes:
-                format: int64
-                minimum: 0
-                type: integer
               name:
                 description: The part's name. The object takes the App's namespace and resource group.
                 maxLength: 63
@@ -2528,6 +2506,8 @@ components:
                 type:
                   - array
                   - "null"
+              quota:
+                $ref: "#/components/schemas/BucketQuota"
               ref:
                 description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
                 maxLength: 63
@@ -2582,22 +2562,14 @@ components:
                   - retain
                   - delete
                 type: string
-              maxKeyBytes:
-                format: int64
-                maximum: 64000
-                minimum: 0
-                type: integer
-              maxValueBytes:
-                format: int64
-                maximum: 1048576
-                minimum: 0
-                type: integer
               name:
                 description: The part's name. The object takes the App's namespace and resource group.
                 maxLength: 63
                 minLength: 1
                 pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                 type: string
+              quota:
+                $ref: "#/components/schemas/KVStoreQuota"
               ref:
                 description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
                 maxLength: 63
@@ -2630,10 +2602,6 @@ components:
                         - retain
                         - delete
                       type: string
-                    maxObjectBytes:
-                      format: int64
-                      minimum: 0
-                      type: integer
                     name:
                       description: The part's name. The object takes the App's namespace and resource group.
                       maxLength: 63
@@ -2646,6 +2614,8 @@ components:
                       type:
                         - array
                         - "null"
+                    quota:
+                      $ref: "#/components/schemas/BucketQuota"
                     ref:
                       description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
                       maxLength: 63
@@ -2799,6 +2769,8 @@ components:
                 minLength: 1
                 pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                 type: string
+              quota:
+                $ref: "#/components/schemas/SizeQuota"
               ref:
                 description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
                 maxLength: 63
@@ -3131,19 +3103,31 @@ components:
       required:
         - workflow
       type: object
-    KVStoreSpec:
+    KVStoreQuota:
       additionalProperties: false
       properties:
+        maxBytes:
+          format: int64
+          minimum: 0
+          type: integer
         maxKeyBytes:
           format: int64
           maximum: 64000
           minimum: 0
           type: integer
+        maxSize:
+          type: string
         maxValueBytes:
           format: int64
           maximum: 1048576
           minimum: 0
           type: integer
+      type: object
+    KVStoreSpec:
+      additionalProperties: false
+      properties:
+        quota:
+          $ref: "#/components/schemas/KVStoreQuota"
         tables:
           items:
             $ref: "#/components/schemas/KVTable"
@@ -3273,10 +3257,6 @@ components:
                   - retain
                   - delete
                 type: string
-              maxObjectBytes:
-                format: int64
-                minimum: 0
-                type: integer
               name:
                 description: The part's name. The object takes the App's namespace and resource group.
                 maxLength: 63
@@ -3289,6 +3269,8 @@ components:
                 type:
                   - array
                   - "null"
+              quota:
+                $ref: "#/components/schemas/BucketQuota"
               ref:
                 description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
                 maxLength: 63
@@ -4465,6 +4447,8 @@ components:
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
+        quota:
+          $ref: "#/components/schemas/SizeQuota"
         resources:
           $ref: "#/components/schemas/ResourceSpec"
       type: object
@@ -4810,10 +4794,6 @@ components:
                   - retain
                   - delete
                 type: string
-              maxObjectBytes:
-                format: int64
-                minimum: 0
-                type: integer
               name:
                 description: The part's name. The object takes the App's namespace and resource group.
                 maxLength: 63
@@ -4826,6 +4806,8 @@ components:
                 type:
                   - array
                   - "null"
+              quota:
+                $ref: "#/components/schemas/BucketQuota"
               ref:
                 description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
                 maxLength: 63
@@ -4883,6 +4865,16 @@ components:
             - Terminating
           type: string
         servingPrefix:
+          type: string
+      type: object
+    SizeQuota:
+      additionalProperties: false
+      properties:
+        maxBytes:
+          format: int64
+          minimum: 0
+          type: integer
+        maxSize:
           type: string
       type: object
     StaticBackend:
@@ -5250,10 +5242,6 @@ components:
                   - retain
                   - delete
                 type: string
-              maxObjectBytes:
-                format: int64
-                minimum: 0
-                type: integer
               name:
                 description: The part's name. The object takes the App's namespace and resource group.
                 maxLength: 63
@@ -5266,6 +5254,8 @@ components:
                 type:
                   - array
                   - "null"
+              quota:
+                $ref: "#/components/schemas/BucketQuota"
               ref:
                 description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
                 maxLength: 63
@@ -5312,22 +5302,14 @@ components:
                   - retain
                   - delete
                 type: string
-              maxKeyBytes:
-                format: int64
-                maximum: 64000
-                minimum: 0
-                type: integer
-              maxValueBytes:
-                format: int64
-                maximum: 1048576
-                minimum: 0
-                type: integer
               name:
                 description: The part's name. The object takes the App's namespace and resource group.
                 maxLength: 63
                 minLength: 1
                 pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                 type: string
+              quota:
+                $ref: "#/components/schemas/KVStoreQuota"
               ref:
                 description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
                 maxLength: 63
@@ -5360,10 +5342,6 @@ components:
                         - retain
                         - delete
                       type: string
-                    maxObjectBytes:
-                      format: int64
-                      minimum: 0
-                      type: integer
                     name:
                       description: The part's name. The object takes the App's namespace and resource group.
                       maxLength: 63
@@ -5376,6 +5354,8 @@ components:
                       type:
                         - array
                         - "null"
+                    quota:
+                      $ref: "#/components/schemas/BucketQuota"
                     ref:
                       description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
                       maxLength: 63
@@ -5514,6 +5494,8 @@ components:
                 minLength: 1
                 pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                 type: string
+              quota:
+                $ref: "#/components/schemas/SizeQuota"
               ref:
                 description: The name of an existing object of this kind in the App's namespace. A ref entry sets no other field.
                 maxLength: 63

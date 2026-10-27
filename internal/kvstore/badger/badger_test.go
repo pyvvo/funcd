@@ -40,6 +40,12 @@ func TestScenarioKVDurableDriverRoundtrips(t *testing.T) {
 		kvstorecontract.Run(t, kv)
 	})
 
+	t.Run("usage", func(t *testing.T) {
+		kv := openKV(t, t.TempDir())
+		t.Cleanup(func() { _ = kv.(closer).Close() })
+		kvstorecontract.RunUsage(t, kv)
+	})
+
 	t.Run("survives-restart", func(t *testing.T) {
 		dir := t.TempDir()
 		ctx := context.Background()

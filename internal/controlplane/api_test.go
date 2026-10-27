@@ -383,3 +383,39 @@ func TestNonFixedInputRefused(t *testing.T) {
 		t.Fatalf("the fixed form: want accepted, got %d: %s", resp.Code, resp.Body.String())
 	}
 }
+
+// ===== scenario: per-item-cap-moved (ADR-0292) =====
+// The per-item caps live under spec.quota: a manifest that sets one at the spec's root is refused at the edge (422),
+// and the same cap under quota is accepted.
+func TestScenarioPerItemCapMoved(t *testing.T) {
+	h := controlplane.NewStubHandlers()
+	r := chi.NewRouter()
+	api := controlplane.NewAPI(r, h)
+	ta := humatest.Wrap(t, api)
+	for _, c := range []struct {
+		path, kind  string
+		root, moved map[string]interface{}
+	}{
+		{"buckets", "Bucket",
+			map[string]interface{}{"prefixes": []interface{}{}, "maxObjectBytes": 1024},
+			map[string]interface{}{"prefixes": []interface{}{}, "quota": map[string]interface{}{"maxObjectBytes": 1024, "maxSize": "1Gi"}}},
+		{"kvstores", "KVStore",
+			map[string]interface{}{"maxValueBytes": 1024},
+			map[string]interface{}{"quota": map[string]interface{}{"maxValueBytes": 1024, "maxBytes": 1 << 20}}},
+	} {
+		path := "/apis/funcd.io/v1alpha1/namespaces/my-ns/" + c.path
+		body := func(spec map[string]interface{}) map[string]interface{} {
+			return map[string]interface{}{
+				"apiVersion": "funcd.io/v1alpha1", "kind": c.kind,
+				"metadata": map[string]interface{}{"name": "media", "namespace": "my-ns", "resourceGroup": "rg1"},
+				"spec":     spec,
+			}
+		}
+		if resp := ta.Post(path, "Content-Type: application/json", body(c.root)); resp.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("%s with a root per-item cap: want 422, got %d: %s", c.kind, resp.Code, resp.Body.String())
+		}
+		if resp := ta.Post(path, "Content-Type: application/json", body(c.moved)); resp.Code != http.StatusOK && resp.Code != http.StatusCreated {
+			t.Fatalf("%s with the cap under quota: want 2xx, got %d: %s", c.kind, resp.Code, resp.Body.String())
+		}
+	}
+}

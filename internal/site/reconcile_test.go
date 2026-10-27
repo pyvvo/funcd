@@ -72,7 +72,7 @@ func (h *harness) resolve(n v1.NamespaceName, b string) (blob.Bucket, bool) {
 	if err != nil {
 		return nil, false
 	}
-	return blob.Capped(blob.Prefixed(h.shared, "s3/"+string(n)+"/"+b+"/"), obj.(*v1.Bucket).Spec.MaxObjectBytes), true
+	return blob.Capped(blob.Prefixed(h.shared, "s3/"+string(n)+"/"+b+"/"), obj.(*v1.Bucket).Spec.Quota.MaxObjectBytes), true
 }
 
 // push writes files into a dir and pushes it as a site artifact under tag, returning the digest.
@@ -135,7 +135,7 @@ func (h *harness) seedBucket(maxObjectBytes int64, prefixes ...string) {
 	h.t.Helper()
 	b := &v1.Bucket{TypeMeta: v1.TypeMeta{APIVersion: v1.KindBucket.GVK().APIVersion(), Kind: v1.KindBucket}}
 	b.Name, b.Namespace, b.ResourceGroup = bucket, ns, "rg1"
-	b.Spec.MaxObjectBytes = maxObjectBytes
+	b.Spec.Quota.MaxObjectBytes = maxObjectBytes
 	for _, p := range prefixes {
 		b.Spec.Prefixes = append(b.Spec.Prefixes, v1.BucketPrefix{Name: p})
 	}
@@ -294,7 +294,7 @@ func TestScenarioSiteFollowsTheRule(t *testing.T) {
 	pre := &v1.Bucket{TypeMeta: v1.TypeMeta{APIVersion: v1.KindBucket.GVK().APIVersion(), Kind: v1.KindBucket}}
 	pre.Name, pre.Namespace, pre.ResourceGroup = bucket, ns, "rg1"
 	pre.OwnerReferences = []v1.OwnerReference{{ObjectRef: v1.ObjectRef{Kind: v1.KindApp, Namespace: ns, Name: "todo"}, UID: "app-uid"}}
-	pre.Spec = v1.BucketSpec{MaxObjectBytes: 4096, Prefixes: []v1.BucketPrefix{{Name: "bi"}, {Name: "bronze", Owner: v1.FunctionOwner("ingest")}}}
+	pre.Spec = v1.BucketSpec{Quota: v1.BucketQuota{MaxObjectBytes: 4096}, Prefixes: []v1.BucketPrefix{{Name: "bi"}, {Name: "bronze", Owner: v1.FunctionOwner("ingest")}}}
 	_, err := h.st.Create(h.ctx, pre)
 	require.NoError(t, err)
 	before := h.bucket().Spec
@@ -694,7 +694,7 @@ func TestSite_ObjectOverBucketCapIsNotReadyNotRetried(t *testing.T) {
 	require.Error(t, gerr, "nothing is served")
 
 	b := h.bucket()
-	b.Spec.MaxObjectBytes = 1024
+	b.Spec.Quota.MaxObjectBytes = 1024
 	raised, err := h.st.Update(h.ctx, b)
 	require.NoError(t, err)
 	require.Equal(t, []controller.Request{{GVK: v1.KindSite.GVK(), Namespace: ns, Name: "bi"}}, h.r.MapBucket(h.ctx, raised))

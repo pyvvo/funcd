@@ -6,14 +6,14 @@ import (
 
 // Default per-op caps for a KVStore (ADR-0072): applied where the spec value is read when 0.
 const (
-	// DefaultMaxValueBytes is the default per-value cap (1 MiB) when KVStoreSpec.MaxValueBytes is 0.
+	// DefaultMaxValueBytes is the default per-value cap (1 MiB) when KVStoreQuota.MaxValueBytes is 0.
 	DefaultMaxValueBytes int64 = 1 << 20
-	// MaxValueBytesLimit is the largest spec.maxValueBytes a store may declare: the worker-node local API
+	// MaxValueBytesLimit is the largest spec.quota.maxValueBytes a store may declare: the worker-node local API
 	// buffers a KV put body up to this size, so a larger cap could never be served.
 	MaxValueBytesLimit int64 = 1 << 20
-	// DefaultMaxKeyBytes is the default per-key cap (1 KiB) when KVStoreSpec.MaxKeyBytes is 0.
+	// DefaultMaxKeyBytes is the default per-key cap (1 KiB) when KVStoreQuota.MaxKeyBytes is 0.
 	DefaultMaxKeyBytes int = 1024
-	// MaxKeyBytesLimit is the largest spec.maxKeyBytes a store may declare: the durable KV engine (Badger)
+	// MaxKeyBytesLimit is the largest spec.quota.maxKeyBytes a store may declare: the durable KV engine (Badger)
 	// stores keys of at most 65000 bytes, and the stored key <ns>/<store>/<table>/<key> adds at most 192
 	// bytes (three DNS labels and their slashes), so every key within this cap can be stored.
 	MaxKeyBytesLimit int = 64000
@@ -35,10 +35,8 @@ type KVStore struct {
 // before a write reaches the driver, and the store's sub-domains (tables). A 0 cap means "use the
 // default" (read at enforcement time).
 type KVStoreSpec struct {
-	// MaxValueBytes caps a single value's size; 0 ⇒ DefaultMaxValueBytes (1 MiB); at most MaxValueBytesLimit.
-	MaxValueBytes int64 `json:"maxValueBytes,omitempty" minimum:"0" maximum:"1048576"`
-	// MaxKeyBytes caps a single key's size; 0 ⇒ DefaultMaxKeyBytes (1 KiB); at most MaxKeyBytesLimit.
-	MaxKeyBytes int `json:"maxKeyBytes,omitempty" minimum:"0" maximum:"64000"`
+	// Quota caps the store's total size, each value and each key (ADR-0292).
+	Quota KVStoreQuota `json:"quota,omitzero"`
 	// Tables are the store's sub-domains (ADR-0073): each is a key space <ns>/<store>/<table>/ with a
 	// single-writer Owner. Table names are unique within the store (so a table has exactly one owner by
 	// construction). Empty ⇒ a store with no writable sub-domains.
@@ -70,19 +68,19 @@ type KVStoreStatus struct {
 // EffectiveMaxValueBytes returns the per-value cap, applying the default when the spec is 0 and clamping to
 // MaxValueBytesLimit: a store persisted before Validate enforced the limit is never re-validated.
 func (s KVStoreSpec) EffectiveMaxValueBytes() int64 {
-	if s.MaxValueBytes <= 0 {
+	if s.Quota.MaxValueBytes <= 0 {
 		return DefaultMaxValueBytes
 	}
-	return min(s.MaxValueBytes, MaxValueBytesLimit)
+	return min(s.Quota.MaxValueBytes, MaxValueBytesLimit)
 }
 
 // EffectiveMaxKeyBytes returns the per-key cap, applying the default when the spec is 0 and clamping to
 // MaxKeyBytesLimit: a store persisted before Validate enforced the limit is never re-validated.
 func (s KVStoreSpec) EffectiveMaxKeyBytes() int {
-	if s.MaxKeyBytes <= 0 {
+	if s.Quota.MaxKeyBytes <= 0 {
 		return DefaultMaxKeyBytes
 	}
-	return min(s.MaxKeyBytes, MaxKeyBytesLimit)
+	return min(s.Quota.MaxKeyBytes, MaxKeyBytesLimit)
 }
 
 // GroupVersionKind returns the constant GVK for KVStore.
@@ -98,17 +96,21 @@ func (s *KVStore) Validate() error {
 	if err := validateMeta(s.TypeMeta, &s.ObjectMeta, KindKVStore); err != nil {
 		return err
 	}
-	if s.Spec.MaxValueBytes < 0 {
-		return fault.Invalidf(op, "spec.maxValueBytes (%d) must not be negative", s.Spec.MaxValueBytes)
+	q := s.Spec.Quota
+	if err := q.Validate(op, "spec.quota"); err != nil {
+		return err
 	}
-	if s.Spec.MaxValueBytes > MaxValueBytesLimit {
-		return fault.Invalidf(op, "spec.maxValueBytes (%d) exceeds the largest servable value (%d bytes)", s.Spec.MaxValueBytes, MaxValueBytesLimit)
+	if q.MaxValueBytes < 0 {
+		return fault.Invalidf(op, "spec.quota.maxValueBytes (%d) must not be negative", q.MaxValueBytes)
 	}
-	if s.Spec.MaxKeyBytes < 0 {
-		return fault.Invalidf(op, "spec.maxKeyBytes (%d) must not be negative", s.Spec.MaxKeyBytes)
+	if q.MaxValueBytes > MaxValueBytesLimit {
+		return fault.Invalidf(op, "spec.quota.maxValueBytes (%d) exceeds the largest servable value (%d bytes)", q.MaxValueBytes, MaxValueBytesLimit)
 	}
-	if s.Spec.MaxKeyBytes > MaxKeyBytesLimit {
-		return fault.Invalidf(op, "spec.maxKeyBytes (%d) exceeds the largest storable key (%d bytes)", s.Spec.MaxKeyBytes, MaxKeyBytesLimit)
+	if q.MaxKeyBytes < 0 {
+		return fault.Invalidf(op, "spec.quota.maxKeyBytes (%d) must not be negative", q.MaxKeyBytes)
+	}
+	if q.MaxKeyBytes > MaxKeyBytesLimit {
+		return fault.Invalidf(op, "spec.quota.maxKeyBytes (%d) exceeds the largest storable key (%d bytes)", q.MaxKeyBytes, MaxKeyBytesLimit)
 	}
 	return validateTables(op, "spec.tables", s.Spec.Tables)
 }

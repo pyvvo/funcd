@@ -16,6 +16,8 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/platform/clock"
+	"github.com/pyvvo/funcd/internal/quota"
 	sqlsvc "github.com/pyvvo/funcd/internal/services/sql"
 	"github.com/pyvvo/funcd/internal/testkit/fakesql"
 	"github.com/pyvvo/funcd/internal/workernode/local"
@@ -157,4 +159,37 @@ func TestFacadeEngineFailures(t *testing.T) {
 	}))
 	t.Cleanup(huge.Close)
 	require.Equal(t, fault.PayloadTooLarge, fault.KindOf(query(facade(t, &recordingPDP{}, strings.TrimPrefix(huge.URL, "http://"), &bytes.Buffer{}, 0))))
+}
+
+// scenario: sql-delete-at-cap — a SQLDatabase at its quota (ADR-0292) refuses an INSERT with 507, and a DELETE beside
+// it, before the engine runs them; only DELETE or DROP statements run, and after the next measure an INSERT lands.
+func TestScenarioSQLDeleteAtCap(t *testing.T) {
+	engine := fakesql.New(t, sqlsvc.EnginePassword([]byte(masterKey), "default", "todo-db"))
+	engine.Seed("milk", "eggs", "bread")
+	book := quota.NewBook(clock.System(), nil)
+	engines := sqlsvc.NewEngines()
+	engines.Set("default", "todo-db", engine.Addr())
+	f, err := sqlsvc.NewFacade(sqlsvc.FacadeDeps{Resolver: staticResolver{}, Authorizer: &recordingPDP{}, Engines: engines,
+		Master: []byte(masterKey), Quota: book})
+	require.NoError(t, err)
+	book.Register(v1.KindSQLDatabase, quota.Source{
+		Limit:   func(context.Context, quota.Subject) (int64, bool, error) { return 3 * fakesql.RowBytes, true, nil },
+		Measure: func(ctx context.Context, s quota.Subject) (int64, error) { return f.Usage(ctx, s.Namespace, s.Name) },
+	})
+	ctx := context.Background()
+	insert := `["INSERT INTO todos(title, done) VALUES(?, ?)", "jam", 0]`
+
+	_, err = f.Execute(ctx, "default", "todo-api", "app", stmts(t, `[`+insert+`]`))
+	require.Equal(t, fault.InsufficientStorage, fault.KindOf(err), "%v", err)
+	require.ErrorContains(t, err, "sqldatabase default/todo-db holds 300 of its 300 bytes (spec.quota): delete to make room")
+	_, err = f.Execute(ctx, "default", "todo-api", "app", stmts(t, `[["DELETE FROM todos"], `+insert+`]`))
+	require.Equal(t, fault.InsufficientStorage, fault.KindOf(err), "a DELETE beside an INSERT is a write: %v", err)
+	require.Len(t, engine.Rows(), 3, "a refused Execute reaches no engine")
+
+	_, err = f.Execute(ctx, "default", "todo-api", "app", stmts(t, `[["DELETE FROM todos"]]`))
+	require.NoError(t, err, "only deletes run at the cap")
+	book.Refresh(ctx)
+	_, err = f.Execute(ctx, "default", "todo-api", "app", stmts(t, `[`+insert+`]`))
+	require.NoError(t, err, "the next measure sees the room")
+	require.Len(t, engine.Rows(), 1)
 }

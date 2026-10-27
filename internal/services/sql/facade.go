@@ -13,6 +13,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/platform/httpx"
+	"github.com/pyvvo/funcd/internal/quota"
 	"github.com/pyvvo/funcd/internal/workernode/local"
 )
 
@@ -30,7 +31,9 @@ type FacadeDeps struct {
 	Master      []byte
 	HTTPClient  *http.Client  // nil ⇒ a node client bounded by CallTimeout
 	CallTimeout time.Duration // 0 ⇒ DefaultCallTimeout
-	Logger      *slog.Logger
+	// Quota decides each Execute against its database's quota (ADR-0292); nil is quota.None.
+	Quota  quota.Checker
+	Logger *slog.Logger
 }
 
 // Facade resolves a caller's alias, asks Cedar, and calls the database's engine as user funcd. It implements
@@ -63,13 +66,16 @@ func NewFacade(d FacadeDeps) (*Facade, error) {
 	if d.Logger == nil {
 		d.Logger = slog.Default()
 	}
+	if d.Quota == nil {
+		d.Quota = quota.None
+	}
 	d.Logger = d.Logger.With("component", "services.sql")
 	return &Facade{d: d}, nil
 }
 
 // Query runs read-only statements on /db/query (ADR-0233): sql::read, and a write is refused by the engine.
 func (f *Facade) Query(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding string, stmts []json.RawMessage) ([]local.QueryResult, error) {
-	res, err := f.run(ctx, ns, fn, binding, stmts, "/db/query", url.Values{}, auth.ActionSQLRead)
+	res, err := f.run(ctx, ns, fn, binding, stmts, "/db/query", url.Values{}, false, auth.ActionSQLRead)
 	if err != nil {
 		return nil, err
 	}
@@ -81,9 +87,9 @@ func (f *Facade) Query(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectNam
 }
 
 // Execute runs statements in one transaction on /db/execute (ADR-0233): sql::read and sql::write, since RETURNING
-// reads; one failed statement applies none.
+// reads; one failed statement applies none. Its database's quota decides it first (ADR-0292).
 func (f *Facade) Execute(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding string, stmts []json.RawMessage) ([]local.ExecResult, error) {
-	res, err := f.run(ctx, ns, fn, binding, stmts, "/db/execute", url.Values{"transaction": {""}}, auth.ActionSQLRead, auth.ActionSQLWrite)
+	res, err := f.run(ctx, ns, fn, binding, stmts, "/db/execute", url.Values{"transaction": {""}}, true, auth.ActionSQLRead, auth.ActionSQLWrite)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +114,7 @@ func (f *Facade) CheckRead(ctx context.Context, ns v1.NamespaceName, fn v1.Objec
 }
 
 func (f *Facade) run(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding string, stmts []json.RawMessage,
-	path string, query url.Values, actions ...auth.Action) ([]engineResult, error) {
+	path string, query url.Values, writes bool, actions ...auth.Action) ([]engineResult, error) {
 	const op = "sql.call"
 	if err := validateStatements(stmts); err != nil {
 		return nil, err
@@ -121,10 +127,21 @@ func (f *Facade) run(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName,
 	if !ok {
 		return nil, fault.Wrapf(local.ErrEngineNotReady, fault.Unavailable, op, "the engine of SQLDatabase %q is not Ready", db)
 	}
+	settle := quota.Settle(func(bool) {})
+	if writes {
+		settle, err = f.d.Quota.Admit(ctx, quota.Request{
+			Subject: quota.Subject{Kind: v1.KindSQLDatabase, Namespace: ns, Name: db},
+			Deletes: deletesOnly(stmts),
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
 	ctx, cancel := context.WithTimeout(ctx, f.d.CallTimeout)
 	defer cancel()
 	query.Set("db_timeout", f.d.CallTimeout.String())
 	res, err := call(ctx, f.d.HTTPClient, addr, EnginePassword(f.d.Master, ns, db), path, query, stmts)
+	settle(err == nil)
 	if err != nil {
 		if fault.KindOf(err) == fault.Internal {
 			f.d.Logger.ErrorContext(ctx, "sql engine refused funcd", "database", string(ns)+"/"+string(db), "err", err)
@@ -143,6 +160,31 @@ func (f *Facade) run(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName,
 		return nil, fault.Internalf(op, "the engine answered %d results for %d statements", len(res), len(stmts))
 	}
 	return res, nil
+}
+
+// usageSQL is a database's pages in use (ADR-0292 Decision 2): its size less its free pages.
+const usageSQL = "SELECT (page_count - freelist_count) * page_size FROM pragma_page_count(), pragma_freelist_count(), pragma_page_size()"
+
+// Usage reads the bytes of db's pages in use through its engine, as funcd: what its quota measures.
+func (f *Facade) Usage(ctx context.Context, ns v1.NamespaceName, db v1.ObjectName) (int64, error) {
+	const op = "sql.Usage"
+	addr, ok := f.d.Engines.Address(ns, db)
+	if !ok {
+		return 0, fault.Wrapf(local.ErrEngineNotReady, fault.Unavailable, op, "the engine of SQLDatabase %q is not Ready", db)
+	}
+	ctx, cancel := context.WithTimeout(ctx, f.d.CallTimeout)
+	defer cancel()
+	stmt, _ := json.Marshal([]string{usageSQL})
+	res, err := call(ctx, f.d.HTTPClient, addr, EnginePassword(f.d.Master, ns, db), "/db/query", url.Values{}, []json.RawMessage{stmt})
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	if len(res) != 1 || res[0].Error != "" || len(res[0].Values) != 1 || len(res[0].Values[0]) != 1 ||
+		json.Unmarshal(res[0].Values[0][0], &n) != nil {
+		return 0, fault.Internalf(op, "SQLDatabase %q answered no page count", db)
+	}
+	return n, nil
 }
 
 // authorize resolves the alias, then asks Cedar every action on the database; any deny is Forbidden.

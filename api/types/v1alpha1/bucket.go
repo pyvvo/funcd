@@ -29,9 +29,8 @@ type BucketSpec struct {
 	// single-writer Owner. Prefix names are unique within the bucket (so a prefix has exactly one owner
 	// by construction). Empty ⇒ a bucket with no writable sub-domains.
 	Prefixes []BucketPrefix `json:"prefixes"`
-	// MaxObjectBytes is the per-object resource policy on THIS bucket (a write past it ⇒ PayloadTooLarge);
-	// 0 ⇒ unset (no per-bucket cap; the daemon-wide s3gateway.maxUploadBytes still applies).
-	MaxObjectBytes int64 `json:"maxObjectBytes,omitempty" minimum:"0"`
+	// Quota caps the bucket's total size and each object (ADR-0292).
+	Quota BucketQuota `json:"quota,omitzero"`
 }
 
 // BucketPrefix is one sub-domain of a Bucket (ADR-0080): a named key prefix with a single-writer owner.
@@ -42,6 +41,8 @@ type BucketPrefix struct {
 	// Owner is the single writer, a Function or a Lake in this bucket's namespace, named with its kind (ADR-0275).
 	// Zero ⇒ no writer (read-only).
 	Owner PrefixOwner `json:"owner,omitzero"`
+	// Quota caps the prefix's total size (ADR-0292); a Lake's prefix quota is the Lake's cap.
+	Quota SizeQuota `json:"quota,omitzero"`
 }
 
 // PrefixOwner is a Bucket prefix's single writer, named with its kind (ADR-0275): a Function and a Lake may share a
@@ -67,7 +68,7 @@ func (b *Bucket) GroupVersionKind() GroupVersionKind { return KindBucket.GVK() }
 func (b *Bucket) GetStatus() *Status { return &b.Status.Status }
 
 // Validate performs envelope validation via the shared validateMeta helper, then the BucketSpec rules
-// JSON Schema can't express: MaxObjectBytes is non-negative; within the bucket, prefix names are
+// JSON Schema can't express: the quota (ADR-0292) and each prefix's; within the bucket, prefix names are
 // unique (⇒ a prefix has exactly one owner) and each is a DNS-1123 label; and a set owner names a Function or a
 // Lake by a DNS-1123 label (ADR-0275).
 func (b *Bucket) Validate() error {
@@ -75,8 +76,11 @@ func (b *Bucket) Validate() error {
 	if err := validateMeta(b.TypeMeta, &b.ObjectMeta, KindBucket); err != nil {
 		return err
 	}
-	if b.Spec.MaxObjectBytes < 0 {
-		return fault.Invalidf(op, "spec.maxObjectBytes (%d) must not be negative", b.Spec.MaxObjectBytes)
+	if err := b.Spec.Quota.Validate(op, "spec.quota"); err != nil {
+		return err
+	}
+	if b.Spec.Quota.MaxObjectBytes < 0 {
+		return fault.Invalidf(op, "spec.quota.maxObjectBytes (%d) must not be negative", b.Spec.Quota.MaxObjectBytes)
 	}
 	seen := make(map[string]bool, len(b.Spec.Prefixes))
 	for _, p := range b.Spec.Prefixes {
@@ -88,6 +92,9 @@ func (b *Bucket) Validate() error {
 		}
 		seen[p.Name] = true
 		if err := p.Owner.validate(op, "spec.prefixes owner of "+p.Name); err != nil {
+			return err
+		}
+		if err := p.Quota.Validate(op, "spec.prefixes quota of "+p.Name); err != nil {
 			return err
 		}
 	}

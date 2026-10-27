@@ -25,6 +25,12 @@ type KV interface {
 	List(ctx context.Context, prefix string) (keys []string, err error)
 }
 
+// Usager is a driver capability beyond the KV port (ADR-0292): the bytes of the keys and values under prefix, which a
+// KVStore's quota measures.
+type Usager interface {
+	Usage(ctx context.Context, prefix string) (int64, error)
+}
+
 // CheckStorePrefix refuses a per-store export prefix (ADR-0209 Decision 7) that is empty, lacks the trailing "/" or
 // starts with the NUL of a driver's reserved keys.
 func CheckStorePrefix(op, prefix string) error {

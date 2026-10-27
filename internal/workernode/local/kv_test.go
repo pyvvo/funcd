@@ -160,7 +160,7 @@ func TestIssue169_DeclaredValueCapIsServable(t *testing.T) {
 		ks := &v1.KVStore{
 			TypeMeta:   v1.TypeMeta{APIVersion: v1.KindKVStore.GVK().APIVersion(), Kind: v1.KindKVStore},
 			ObjectMeta: v1.ObjectMeta{Name: "s", Namespace: "default", ResourceGroup: "rg1"},
-			Spec:       v1.KVStoreSpec{MaxValueBytes: capBytes, Tables: []v1.KVTable{{Name: "t", Owner: "fn"}}},
+			Spec:       v1.KVStoreSpec{Quota: v1.KVStoreQuota{MaxValueBytes: capBytes}, Tables: []v1.KVTable{{Name: "t", Owner: "fn"}}},
 		}
 		if ks.Validate() != nil {
 			continue

@@ -19,6 +19,8 @@ type SQLDatabase struct {
 type SQLDatabaseSpec struct {
 	Resources ResourceSpec `json:"resources,omitempty"`
 	Owner     ObjectName   `json:"owner,omitempty"`
+	// Quota caps the database's total size (ADR-0292).
+	Quota SizeQuota `json:"quota,omitzero"`
 }
 
 // SQLDatabaseStatus is the observed state of a SQLDatabase. Bindings counts the Functions that bind it.
@@ -39,6 +41,9 @@ func (d *SQLDatabase) GetStatus() *Status { return &d.Status.Status }
 func (d *SQLDatabase) Validate() error {
 	const op = "SQLDatabase.Validate"
 	if err := validateMeta(d.TypeMeta, &d.ObjectMeta, KindSQLDatabase); err != nil {
+		return err
+	}
+	if err := d.Spec.Quota.Validate(op, "spec.quota"); err != nil {
 		return err
 	}
 	if err := d.Spec.Resources.Validate(op, "spec.resources"); err != nil {

@@ -179,10 +179,17 @@ var (
 	deleteTodos = regexp.MustCompile(`^DELETE FROM todos$`)
 )
 
+// RowBytes is what one todo row adds to the pages in use the fake reports (ADR-0292's measure).
+const RowBytes = 100
+
 func run(st *state, stmt []json.RawMessage, readOnly bool) result {
 	var text string
 	_ = json.Unmarshal(stmt[0], &text)
 	text = strings.TrimSpace(text)
+	if strings.HasPrefix(text, "SELECT (page_count - freelist_count) * page_size") {
+		n, _ := json.Marshal(int64(len(st.rows)) * RowBytes)
+		return result{Columns: []string{"bytes"}, Values: [][]json.RawMessage{{n}}}
+	}
 	param := params(stmt[1:])
 	writes := !strings.HasPrefix(text, "SELECT")
 	if writes && readOnly {

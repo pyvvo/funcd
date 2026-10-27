@@ -80,7 +80,7 @@ type FunctionSpec struct {
 	Pooling Pooling `json:"pooling,omitempty"`
 	// Resources sizes each solo worker (ADR-0291): its cpu and memory, enforced by the runtime driver; an empty field
 	// takes functions.defaultResources. Not with pooling.worker: a pool's heap cap is pool-wide.
-	Resources ResourceSpec `json:"resources,omitempty"`
+	Resources ResourceSpec `json:"resources,omitzero"`
 	// Bindings are what the Function's code uses (ADR-0246): each binding is its grant, named like the ctx accessor
 	// that reaches it.
 	Bindings FunctionBindings `json:"bindings,omitzero"`

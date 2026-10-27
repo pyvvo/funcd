@@ -175,6 +175,8 @@ func mapBlobErr(err error) error {
 		return s3err.GetAPIError(s3err.ErrInvalidRequest)
 	case fault.PayloadTooLarge:
 		return s3err.GetAPIError(s3err.ErrEntityTooLarge)
+	case fault.InsufficientStorage:
+		return s3err.APIError{Code: "QuotaExceeded", Description: err.Error(), HTTPStatusCode: http.StatusInsufficientStorage}
 	default:
 		return s3err.GetAPIError(s3err.ErrInternalError)
 	}

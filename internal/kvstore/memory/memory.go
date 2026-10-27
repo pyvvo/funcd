@@ -69,6 +69,19 @@ func (d *driver) DropPrefix(prefix string) error {
 	return nil
 }
 
+// Usage is the bytes of the keys and values under prefix (ADR-0292), the badger driver's analogue.
+func (d *driver) Usage(_ context.Context, prefix string) (int64, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	var n int64
+	for k, v := range d.m {
+		if strings.HasPrefix(k, prefix) {
+			n += int64(len(k) + len(v))
+		}
+	}
+	return n, nil
+}
+
 func (d *driver) List(_ context.Context, prefix string) ([]string, error) {
 	d.mu.RLock()
 	keys := make([]string, 0)

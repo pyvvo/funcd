@@ -58,6 +58,26 @@ func Run(t *testing.T, kv kvstore.KV) {
 	require.NoError(t, kv.Delete(ctx, "a/k1"), "deleting a missing key is a no-op")
 }
 
+// RunUsage asserts the Usager capability against kv (ADR-0292): the bytes of the keys and values under a prefix, which
+// an overwrite and a delete change, and no key outside it.
+func RunUsage(t *testing.T, kv kvstore.KV) {
+	t.Helper()
+	ctx := context.Background()
+	u, ok := kv.(kvstore.Usager)
+	require.True(t, ok, "the driver measures a prefix's usage")
+	require.NoError(t, kv.Put(ctx, "u/k1", []byte("12345")))
+	require.NoError(t, kv.Put(ctx, "u/k2", []byte("1")))
+	require.NoError(t, kv.Put(ctx, "u/k1", []byte("123")))
+	require.NoError(t, kv.Put(ctx, "uv/k", []byte("not under u/")))
+	n, err := u.Usage(ctx, "u/")
+	require.NoError(t, err)
+	require.Equal(t, int64(len("u/k1")+3+len("u/k2")+1), n)
+	require.NoError(t, kv.Delete(ctx, "u/k2"))
+	n, err = u.Usage(ctx, "u/")
+	require.NoError(t, err)
+	require.Equal(t, int64(len("u/k1")+3), n)
+}
+
 // Exporter is the per-store export a driver offers beyond the port (ADR-0209 Decision 7).
 type Exporter interface {
 	SnapshotPrefix(prefix string) snapshot.Source

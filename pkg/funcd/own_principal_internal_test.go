@@ -20,6 +20,7 @@ import (
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
 	"github.com/pyvvo/funcd/internal/network/egress"
+	"github.com/pyvvo/funcd/internal/quota"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
@@ -196,7 +197,7 @@ func TestScenarioKeysReissuedOnUpgrade(t *testing.T) {
 	fn.Spec.Scaling.MinReplicas = 1
 	seedObjects(t, p.cfg.store, bucket, fn, lakeResource("default"))
 
-	view, ok := s3BucketFor(p.cfg.blob, p.cfg.store)("default", "lakehouse")
+	view, ok := s3BucketFor(p.cfg.blob, p.cfg.store, quota.None)("default", "lakehouse")
 	require.True(t, ok)
 	require.NoError(t, view.Put(ctx, "a/x", []byte("fn"), blob.PutOptions{}))
 	require.NoError(t, view.Put(ctx, "raw/x", []byte("engine"), blob.PutOptions{}))

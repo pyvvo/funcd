@@ -13,7 +13,7 @@ func kvStore(name string, mvb int64, mkb int, tables ...KVTable) *KVStore {
 	ks := &KVStore{
 		TypeMeta:   TypeMeta{APIVersion: KindKVStore.GVK().APIVersion(), Kind: KindKVStore},
 		ObjectMeta: ObjectMeta{Name: ObjectName(name), Namespace: "default", ResourceGroup: "rg1"},
-		Spec:       KVStoreSpec{MaxValueBytes: mvb, MaxKeyBytes: mkb, Tables: tables},
+		Spec:       KVStoreSpec{Quota: KVStoreQuota{MaxValueBytes: mvb, MaxKeyBytes: mkb}, Tables: tables},
 	}
 	return ks
 }
@@ -33,7 +33,7 @@ func TestKVStoreRoundtrip(t *testing.T) {
 	if err := json.Unmarshal(data, &ks2); err != nil {
 		t.Fatalf("unmarshal KVStore: %v", err)
 	}
-	if ks2.Name != ks.Name || ks2.Spec.MaxValueBytes != 2048 || ks2.Spec.MaxKeyBytes != 64 {
+	if ks2.Name != ks.Name || ks2.Spec.Quota.MaxValueBytes != 2048 || ks2.Spec.Quota.MaxKeyBytes != 64 {
 		t.Errorf("KVStore roundtrip mismatch: %+v", ks2)
 	}
 	if len(ks2.Spec.Tables) != 2 || ks2.Spec.Tables[0].Name != "customers" || ks2.Spec.Tables[0].Owner != "customers-svc" {
@@ -77,7 +77,7 @@ func TestKVStoreEffectiveCaps(t *testing.T) {
 	if got := zero.EffectiveMaxKeyBytes(); got != DefaultMaxKeyBytes {
 		t.Errorf("default maxKeyBytes = %d, want %d", got, DefaultMaxKeyBytes)
 	}
-	set := KVStoreSpec{MaxValueBytes: 7, MaxKeyBytes: 3}
+	set := KVStoreSpec{Quota: KVStoreQuota{MaxValueBytes: 7, MaxKeyBytes: 3}}
 	if set.EffectiveMaxValueBytes() != 7 || set.EffectiveMaxKeyBytes() != 3 {
 		t.Errorf("explicit caps not honored: %+v", set)
 	}
@@ -110,7 +110,7 @@ func TestKVStoreValidate(t *testing.T) {
 	if err := kvStore("key-over-limit", 0, MaxKeyBytesLimit+1).Validate(); fault.KindOf(err) != fault.Invalid {
 		t.Errorf("maxKeyBytes over the limit: want Invalid, got %v", err)
 	}
-	f, _ := reflect.TypeOf(KVStoreSpec{}).FieldByName("MaxKeyBytes")
+	f, _ := reflect.TypeOf(KVStoreQuota{}).FieldByName("MaxKeyBytes")
 	if got := f.Tag.Get("maximum"); got != strconv.Itoa(MaxKeyBytesLimit) {
 		t.Errorf("maxKeyBytes schema maximum = %q, want MaxKeyBytesLimit (%d)", got, MaxKeyBytesLimit)
 	}

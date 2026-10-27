@@ -32,6 +32,8 @@ const (
 	// PayloadTooLarge means a payload, key, object or record is over a size cap funcd enforces (413
 	// Content Too Large when it answers HTTP).
 	PayloadTooLarge Kind = "payload_too_large"
+	// InsufficientStorage means a write would take a store past its quota (507 Insufficient Storage, ADR-0292).
+	InsufficientStorage Kind = "insufficient_storage"
 	// DeadlineExceeded means the upstream did not start its response in time (504 Gateway Timeout, ADR-0151).
 	DeadlineExceeded Kind = "deadline_exceeded"
 	// Internal means an unexpected internal error occurred.
@@ -114,6 +116,11 @@ func ResourceExhaustedf(op, format string, a ...any) *Error {
 // PayloadTooLargef builds a PayloadTooLarge error (413) with a formatted message.
 func PayloadTooLargef(op, format string, a ...any) *Error {
 	return &Error{Kind: PayloadTooLarge, Op: op, Msg: fmt.Sprintf(format, a...)}
+}
+
+// InsufficientStoragef builds an InsufficientStorage error (507) with a formatted message.
+func InsufficientStoragef(op, format string, a ...any) *Error {
+	return &Error{Kind: InsufficientStorage, Op: op, Msg: fmt.Sprintf(format, a...)}
 }
 
 // DeadlineExceededf builds a DeadlineExceeded error (504) with a formatted message.

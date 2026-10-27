@@ -55,6 +55,8 @@ func (r *Reconciler) writeRuntimeConfig(ctx context.Context, s *v1.Site, view bl
 		switch fault.KindOf(perr) {
 		case fault.PayloadTooLarge:
 			return reasonRuntimeConfigTooLarge, perr.Error(), nil
+		case fault.InsufficientStorage:
+			return reasonQuotaExceeded, perr.Error(), nil
 		case fault.Invalid:
 			return "MaterializeFailed", perr.Error(), nil
 		}

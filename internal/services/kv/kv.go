@@ -20,6 +20,7 @@ import (
 	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/kvstore"
+	"github.com/pyvvo/funcd/internal/quota"
 	"github.com/pyvvo/funcd/internal/services"
 )
 
@@ -29,7 +30,9 @@ type FacadeDeps struct {
 	KV         kvstore.KV
 	Resolver   BindingResolver
 	Authorizer auth.Authorizer
-	Logger     *slog.Logger
+	// Quota decides each Put against its store's quota (ADR-0292); nil is quota.None.
+	Quota  quota.Checker
+	Logger *slog.Logger
 }
 
 // Facade is what a function calls: binding-resolved + PDP-authorized + table-prefixed KV (ADR-0074).
@@ -37,6 +40,7 @@ type Facade struct {
 	kv         kvstore.KV
 	resolver   BindingResolver
 	authorizer auth.Authorizer
+	quota      quota.Checker
 	logger     *slog.Logger
 }
 
@@ -55,7 +59,11 @@ func NewFacade(d FacadeDeps) (*Facade, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Facade{kv: d.KV, resolver: d.Resolver, authorizer: d.Authorizer, logger: logger.With("component", "services.kv")}, nil
+	chk := d.Quota
+	if chk == nil {
+		chk = quota.None
+	}
+	return &Facade{kv: d.KV, resolver: d.Resolver, authorizer: d.Authorizer, quota: chk, logger: logger.With("component", "services.kv")}, nil
 }
 
 // tableKey is the on-disk key for a resolved (store, table, key): "<ns>/<store>/<table>/<key>" (ADR-0073)
@@ -124,7 +132,8 @@ func (f *Facade) Get(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName,
 }
 
 // Put stores value under the alias's key. The PDP authorizes kv::write — the built-in
-// forbid(kv::write) unless principal == resource.owner makes this owner-only (ADR-0074). Per-op caps next.
+// forbid(kv::write) unless principal == resource.owner makes this owner-only (ADR-0074). Per-op caps next, then the
+// store's quota (ADR-0292), which counts the stored key and the value and credits the value it replaces.
 func (f *Facade) Put(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias, key string, value []byte) error {
 	b, err := f.resolveAuth(ctx, ns, fn, alias, auth.ActionKVWrite)
 	if err != nil {
@@ -136,7 +145,24 @@ func (f *Facade) Put(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName,
 	if len(key) > b.MaxKeyBytes {
 		return fault.PayloadTooLargef("services.kv.put", "key (%d bytes) exceeds the store cap (%d bytes)", len(key), b.MaxKeyBytes)
 	}
-	return f.kv.Put(ctx, tableKey(ns, b, key), value)
+	k := tableKey(ns, b, key)
+	settle, err := f.quota.Admit(ctx, quota.Request{
+		Subject: quota.Subject{Kind: v1.KindKVStore, Namespace: ns, Name: b.Store},
+		Bytes:   int64(len(k) + len(value)),
+		Replaces: func(ctx context.Context) (int64, error) {
+			old, found, err := f.kv.Get(ctx, k)
+			if err != nil || !found {
+				return 0, err
+			}
+			return int64(len(k) + len(old)), nil
+		},
+	})
+	if err != nil {
+		return err
+	}
+	err = f.kv.Put(ctx, k, value)
+	settle(err == nil)
+	return err
 }
 
 // Delete removes the alias's key. The PDP authorizes kv::write (owner-only via the built-in forbid).
@@ -148,7 +174,12 @@ func (f *Facade) Delete(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectNa
 	if err := checkKeyLimit("services.kv.delete", key); err != nil {
 		return err
 	}
-	return f.kv.Delete(ctx, tableKey(ns, b, key))
+	settle, qerr := f.quota.Admit(ctx, quota.Request{Subject: quota.Subject{Kind: v1.KindKVStore, Namespace: ns, Name: b.Store}, Deletes: true})
+	err = f.kv.Delete(ctx, tableKey(ns, b, key))
+	if qerr == nil {
+		settle(err == nil)
+	}
+	return err
 }
 
 // checkKeyLimit refuses a key no store can hold (ADR-0148). Get and Delete check this limit, not the

@@ -510,15 +510,15 @@ func TestDeleteRechecksProtectionWrittenConcurrently(t *testing.T) {
 			races: 1, code: http.StatusConflict, gets: 2,
 		},
 		"unprotected change": {
-			write: func(b *v1.Bucket) { b.Spec.MaxObjectBytes = 1 << 20 },
+			write: func(b *v1.Bucket) { b.Spec.Quota.MaxObjectBytes = 1 << 20 },
 			races: 1, code: http.StatusNoContent, gets: 2,
 		},
 		"write on every attempt": {
-			write: func(b *v1.Bucket) { b.Spec.MaxObjectBytes++ },
+			write: func(b *v1.Bucket) { b.Spec.Quota.MaxObjectBytes++ },
 			races: 1000, code: http.StatusConflict, gets: controlplane.OwnReadAttempts,
 		},
 		"client version": {
-			write: func(b *v1.Bucket) { b.Spec.MaxObjectBytes = 1 << 20 },
+			write: func(b *v1.Bucket) { b.Spec.Quota.MaxObjectBytes = 1 << 20 },
 			races: 1, ifMatch: true, code: http.StatusConflict, gets: 1,
 		},
 	} {

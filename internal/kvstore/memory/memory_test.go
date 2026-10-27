@@ -38,6 +38,12 @@ func TestScenarioKVStoreContractHolds(t *testing.T) {
 	kvstorecontract.Run(t, memory.New())
 }
 
+// The usage a KVStore's quota measures (ADR-0292), on the in-memory driver.
+func TestUsageContract(t *testing.T) {
+	t.Parallel()
+	kvstorecontract.RunUsage(t, memory.New())
+}
+
 // The per-store export contract (ADR-0209 Decision 7) on the in-memory driver.
 func TestSnapshotPrefixContract(t *testing.T) {
 	t.Parallel()

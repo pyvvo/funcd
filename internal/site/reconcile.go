@@ -320,6 +320,9 @@ func prefixOf(b *v1.Bucket, name string) (v1.BucketPrefix, bool) {
 	return v1.BucketPrefix{}, false
 }
 
+// reasonQuotaExceeded is a Site whose writes its Bucket's quota refuses (ADR-0292).
+const reasonQuotaExceeded = "QuotaExceeded"
+
 // unpack pulls the digest-pinned bundle into a scratch dir and Puts every entry under sp — non-index
 // entries first, the index LAST so its presence is the completeness marker. A bundle without the index
 // is not uploaded at all (IndexMissing); a NotFound/Invalid pull, an entry over the Bucket's
@@ -378,9 +381,12 @@ func (r *Reconciler) unpack(ctx context.Context, view blob.Bucket, s *v1.Site, d
 		if perr := view.Put(ctx, sp+rel, data, blob.PutOptions{}); perr != nil {
 			// An object over the Bucket's maxObjectBytes (blob.Capped: PayloadTooLarge), or a key the
 			// substrate cannot store (Invalid), fails every retry until the spec or the Bucket changes
-			// (MapBucket).
+			// (MapBucket); so does a Bucket at its quota (ADR-0292).
 			if k := fault.KindOf(perr); k == fault.PayloadTooLarge || k == fault.Invalid {
 				return "MaterializeFailed", perr.Error(), nil
+			}
+			if fault.KindOf(perr) == fault.InsufficientStorage {
+				return reasonQuotaExceeded, perr.Error(), nil
 			}
 			return "", "", fault.Wrapf(perr, fault.KindOf(perr), op, "put %q", sp+rel)
 		}

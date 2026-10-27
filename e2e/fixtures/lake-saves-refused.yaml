@@ -15,7 +15,8 @@ spec:
           owner:
             kind: Function
             name: other
-      maxObjectBytes: 1073741824
+      quota:
+        maxObjectBytes: 1073741824
   configMaps:
     - ref: lake-engine-config
   secrets:

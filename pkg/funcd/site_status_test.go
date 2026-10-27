@@ -98,7 +98,7 @@ func TestSite_RaisedBucketCapDeploysTheRefusedBundle(t *testing.T) {
 	ctx := context.Background()
 	b := &v1.Bucket{TypeMeta: v1.TypeMeta{APIVersion: v1.KindBucket.GVK().APIVersion(), Kind: v1.KindBucket}}
 	b.Name, b.Namespace, b.ResourceGroup = "reports", "default", "rg1"
-	b.Spec.MaxObjectBytes = 64
+	b.Spec.Quota.MaxObjectBytes = 64
 	st, ready := startSite(t, map[string]string{"index.html": "<title>bi</title>", "big.bin": strings.Repeat("x", 100)}, b)
 	require.Eventually(t, func() bool { return ready().Reason == "MaterializeFailed" }, 10*time.Second, 20*time.Millisecond,
 		"an over-cap object is a status; last %+v", ready())
@@ -108,7 +108,7 @@ func TestSite_RaisedBucketCapDeploysTheRefusedBundle(t *testing.T) {
 	obj, err := st.Get(ctx, v1.KindBucket.GVK(), "default", "reports")
 	require.NoError(t, err)
 	raised := obj.(*v1.Bucket)
-	raised.Spec.MaxObjectBytes = 0
+	raised.Spec.Quota.MaxObjectBytes = 0
 	_, err = st.Update(ctx, raised)
 	require.NoError(t, err)
 	require.Eventually(t, func() bool { return ready().Status == v1.ConditionTrue }, 10*time.Second, 20*time.Millisecond,

@@ -14,6 +14,7 @@ import (
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/gc"
 	"github.com/pyvvo/funcd/internal/platform/quarantine"
+	"github.com/pyvvo/funcd/internal/quota"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
 )
@@ -80,7 +81,7 @@ func TestDeleteBucketPurgesTheSubstratePrefix(t *testing.T) {
 	onEachSubstrate(t, func(t *testing.T, ctx context.Context, shared blob.Bucket, base store.Store) {
 		b := createBucket(t, base, "default", "tmp")
 		createBucket(t, base, "default", "tmp2")
-		view, ok := s3BucketFor(shared, base)("default", "tmp")
+		view, ok := s3BucketFor(shared, base, quota.None)("default", "tmp")
 		require.True(t, ok)
 		for i := range purgePage + 1 {
 			require.NoError(t, view.Put(ctx, fmt.Sprintf("raw/part-%04d", i), []byte("x"), blob.PutOptions{}))

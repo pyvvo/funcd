@@ -344,6 +344,31 @@ func (d *driver) List(ctx context.Context, prefix string) ([]string, error) {
 	return keys, nil
 }
 
+// Usage is the bytes of the keys and values under prefix (ADR-0292), a capability beyond the kvstore.KV port like
+// DropPrefix: one read transaction, values unread.
+func (d *driver) Usage(ctx context.Context, prefix string) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	var n int64
+	p := []byte(prefix)
+	err := d.db.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.PrefetchValues = false
+		opts.Prefix = p
+		it := txn.NewIterator(opts)
+		defer it.Close()
+		for it.Seek(p); it.ValidForPrefix(p); it.Next() {
+			n += int64(len(it.Item().Key())) + it.Item().ValueSize()
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, fault.Internalf("kvbadger.Usage", "%v", err)
+	}
+	return n, nil
+}
+
 // Reserved is the NUL-prefixed namespace for the driver's internal keys (the CDC outbox + its cursors,
 // ADR-0068; the backup cursor and delete records, ADR-0067/0195). NUL cannot occur in a facade tenant key
 // (<namespace>/<binding>/<key>), so List excludes it without ever hiding a real key.
