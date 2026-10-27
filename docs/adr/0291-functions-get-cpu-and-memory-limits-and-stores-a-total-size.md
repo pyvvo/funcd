@@ -8,7 +8,8 @@
   store's total size)
 - **Answers**: the decider's refinement of 2026-10-27: `spec.resources` on a Function, a node default
   (`functions.defaultResources`, 1 CPU and 512Mi), `maxBytes` on Bucket, KVStore and SQLDatabase, 507 past it; and
-  the decider's ask that quotas be a framework, as IAM is
+  the decider's ask that quotas be a framework, as IAM is; and, confirmed by the decider, `resources` and
+  `pooling.worker` refused together at admission and blocked by the reconciler
 - **Relates to**: [ADR-0086](0086-catalog-query-provider-ducklake-duckdb-quack.md) (`ResourceSpec`) ·
   [ADR-0233](0233-sql-access-from-functions.md) (SQLDatabase `resources`) · [ADR-0044](0044-worker-pooling-threads.md) and
   [ADR-0046](0046-pooling-placement-policy.md) (pool workers) · [ADR-0018](0018-api-server-authn-rbac-admission.md)
@@ -33,6 +34,9 @@ makes storage quotas a framework the next cap reuses: per-namespace quotas (V2, 
   Function without `resources` starts a worker, Then the worker gets those limits.
 - **scenario: invalid-resources-refused**: Given `resources.cpu: "lots"`, or `resources` together with
   `pooling.worker`, When the Function is applied, Then admission refuses it with 422 and names the field.
+- **scenario: pooled-resources-blocked**: Given a stored Function with both `resources` and `pooling.worker` (stored
+  before this ADR, or brought back by a restore), When the reconciler converges it, Then no worker starts and the
+  Function stays `Pending` with reason `ResourcesWithPooling`, which names both fields.
 - **scenario: bucket-total-refused**: Given a Bucket with `maxBytes: 1MiB` that holds 1 MiB, When a Function's
   `ctx.blob` put or an S3 client's put adds an object, Then it gets 507 (the S3 error `QuotaExceeded`), the object is
   not written, and a read or a delete still works.
@@ -98,8 +102,12 @@ field in a store's status; funclog sizes.
    ignores the limits.
 7. **The default.** `functions.defaultResources` in `funcdconfig.yaml` (NEW key), `cpu: "1"` and `memory: 512Mi` by
    default, fills each field a Function leaves empty; an operator who clears it leaves such Functions unlimited.
-8. **Pools.** Admission refuses a Function that sets both `resources` and `pooling.worker`; a pooled Function keeps its
-   pool's per-thread heap cap, and the default does not apply to it.
+8. **Pools.** A pool's heap cap is pool-wide (`FUNCD_POOL_MAX_OLD_MB`), so `resources` and `pooling.worker` are
+   exclusive. Admission refuses a Function that sets both with 422. The Function reconciler blocks one that reaches it
+   anyway, stored before this rule or brought back by a restore: it starts no worker and leaves the Function `Pending`
+   with the NEW reason `ResourcesWithPooling` naming both fields, as a volume that does not fit leaves it with
+   `VolumeBudget` (`internal/function/volumes.go:31`). A pooled Function keeps its pool's per-thread heap cap, and the
+   default does not apply to it.
 9. **Store caps.** `maxBytes` is a `ByteSize` (`"10GiB"` or a byte count, ADR-0266's parser) on `BucketSpec`,
    `KVStoreSpec` and `SQLDatabaseSpec`; unset means no cap; admission refuses one that does not parse with 422.
 
@@ -163,7 +171,7 @@ Usage(ctx context.Context, prefix string) (int64, error) // the bytes of every k
 
 | Consumes | Exposes |
 |---|---|
-| `functions.defaultResources` (NEW); each store's `maxBytes`; the engines' measures | A worker's cgroup limits; 507 on a capped write; 422 at admission |
+| `functions.defaultResources` (NEW); each store's `maxBytes`; the engines' measures | A worker's cgroup limits; 507 on a capped write; 422 at admission; the reason `ResourcesWithPooling` |
 
 ## Implementation plan
 
@@ -175,12 +183,13 @@ Usage(ctx context.Context, prefix string) (int64, error) // the bytes of every k
 - `internal/runtime`: `LimitsFrom`; `internal/provider` calls it and drops `limitsFrom`.
 - `internal/platform/config`: `Functions.DefaultResources`, its default and validation.
 - `internal/function`: limits on the worker from the spec or the default; admission of `resources` with
-  `pooling.worker`.
+  `pooling.worker`, and the reconciler's `ResourcesWithPooling` block before any placement.
 - The three sources, registered by their features; `Usage` on the memory and Badger KV engines and in the contract
   suite; each enforcement point gets the `Checker` through its deps (default `quota.None`); `pkg/funcd` builds the
   `Book`.
 - Tests, one per scenario: `TestScenarioFunctionLimitsApplied` (the containerd spec carries the limits),
-  `…FunctionDefaultLimits`, `…InvalidResourcesRefused`, `…BucketTotalRefused` (the blob facade and the S3 gateway),
+  `…FunctionDefaultLimits`, `…InvalidResourcesRefused`, `…PooledResourcesBlocked` (a Function stored past
+  admission), `…BucketTotalRefused` (the blob facade and the S3 gateway),
   `…KVTotalRefused`, `…SQLTotalRefused`, `…SpaceFreedWritesAgain`, `…NoCapUnchanged`; the OOM restart runs in the
   Linux tests (`just test-linux`).
 - Docs: the Function, Bucket, KVStore and SQLDatabase references, `funcdconfig.yaml`'s reference, and the changelog's
@@ -197,6 +206,7 @@ Usage(ctx context.Context, prefix string) (int64, error) // the bytes of every k
 - [ ] A subject without a cap is never measured; usage refreshes at first use and after `refreshInterval`.
 - [ ] A worker's limits come from `resources`, else the default; process mode ignores them; admission refuses a bad
       `cpu`, `memory` or `maxBytes`, and `resources` with `pooling.worker`, with 422.
+- [ ] The reconciler blocks a stored Function with both, before placing it, as `Pending` with `ResourcesWithPooling`.
 - [ ] `fault.InsufficientStorage` maps to 507; the S3 gateway answers `QuotaExceeded` with 507.
 - [ ] Every scenario has its named test.
 
