@@ -28,6 +28,7 @@ the first ADR was drafted.
 | F206 | **Function CPU and memory limits**: an owner sizes a Function's CPU and memory, a node default sizes one the owner left unsized, and the Function's workers cannot use more | — | [ADR-0291](../adr/0291-a-functions-workers-get-cpu-and-memory-limits.md) | adr |
 | F207 | **A store's total size**: an owner caps what a Bucket, a Lake, a KVStore or a SQLDatabase holds, and a write that would pass the cap is refused, while reads still work and deletes can bring the store back under it | — | [ADR-0292](../adr/0292-stores-get-a-quota-block-and-a-quota-framework.md) | adr |
 | F208 | **Per-namespace quotas**: a namespace's budget per consumed resource, compute for every worker (Functions, Jobs, engines), volumes, and each kind of store, checked at admission (V2, ADR-0018) | F206 · F207 | — | idea |
+| F209 | **A Lake's catalog outside its Bucket**: a Lake's catalog is kept in a platform store that only its engine reaches, capped by one platform setting, so a Lake at its prefix's quota still answers queries and drops | F207 | [ADR-0293](../adr/0293-a-lakes-catalog-lives-in-a-platform-catalog-store.md) | adr |
 
 ## Exit criterion
 

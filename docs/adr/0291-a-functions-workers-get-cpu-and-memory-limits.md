@@ -35,7 +35,7 @@ the same limits.
   `pooling.worker`, When the Function is applied, Then admission refuses it with 422 and names the field.
 - **scenario: past-admission-blocked**: Given a Function written past admission, such as by a restore, with an
   unparsable `resources` or with `resources` and `pooling.worker`, When the reconciler converges it, Then no worker
-  starts and the Function is `Failed` with reason `ResourcesInvalid` or `ResourcesWithPooling`.
+  starts and the Function is `Failed` with reason `ResourcesInvalid` or `ResourcesWithPooling` (see the workaround).
 - **scenario: limits-not-enforced-logged**: Given the process runtime, When a Function with limits starts a worker,
   Then the worker runs and the reconciler logs once that its limits are not enforced.
 
@@ -73,8 +73,9 @@ keep no CPU or memory limit and a pool-wide heap cap (`FUNCD_POOL_MAX_OLD_MB`).
    `limitsFrom` moved, on `ByteSize`) is the one mapping, for the provider runtime and the Function reconciler.
 3. **The default.** `functions.defaultResources` (NEW key, `cpu: "1"`, `memory: 512Mi`) fills each field a solo
    Function leaves empty; cleared, it leaves them unlimited.
-4. **Pools and the second layer.** Admission refuses `resources` with `pooling.worker` (422). The reconciler blocks a
-   Function written past admission, such as by a restore, before any placement: no worker, phase `Failed`, reason
+4. **Pools and the second layer.** Admission refuses `resources` with `pooling.worker` (422), through the one predicate
+   `FunctionSpec.PooledWithResources` (NEW) that the reconciler asks too. The reconciler blocks a Function written past
+   admission, such as by a restore, before any placement: no worker, phase `Failed`, reason
    `ResourcesWithPooling` or, for a value that does not parse, `ResourcesInvalid`, as `VolumeInvalid` does
    (`internal/function/volumes.go:105`).
 
@@ -85,7 +86,9 @@ None: no protocol runs between actors. Admission and the reconciler agree by con
 
 ## Temporary workarounds
 
-None.
+- The store refuses a status write for an object that fails `Validate` (#1317), so a Function blocked by Decision 4
+  keeps its last phase: the reconciler returns the error, which names the field, and starts no worker. Exit: #1317
+  fixed, then `TestScenarioPastAdmissionBlocked` asserts the phase and the reason.
 
 ## Contracts
 
@@ -96,10 +99,14 @@ func LimitsFrom(cpu, memory string) Limits // the provider's limitsFrom, moved
 
 // Package v1alpha1 (api/types/v1alpha1), NEW.
 func (r ResourceSpec) Validate(op, path string) error
+func (s *FunctionSpec) PooledWithResources() bool // pooling.worker together with resources
 // FunctionSpec.Resources ResourceSpec `json:"resources,omitempty"`
 
-// Package config (internal/platform/config), NEW: functions.defaultResources.
-type Functions struct{ DefaultResources v1.ResourceSpec `json:"defaultResources,omitempty"` }
+// Package config (internal/platform/config), NEW: functions.defaultResources; each key has an env override, as every
+// key does.
+//	Functions.DefaultResources.CPU    string `json:"cpu" env:"FUNCD_FUNCTIONS_DEFAULT_CPU"`
+//	Functions.DefaultResources.Memory string `json:"memory" env:"FUNCD_FUNCTIONS_DEFAULT_MEMORY"`
+func (c Config) FunctionDefaultResources() (v1.ResourceSpec, error) // checked with ResourceSpec.Validate
 ```
 
 | Consumes | Exposes |
@@ -134,7 +141,8 @@ type Functions struct{ DefaultResources v1.ResourceSpec `json:"defaultResources,
   implementing `LimitEnforcer`.
 - **Negative (accepted)**: existing solo Functions get the default 1 CPU and 512 MiB at upgrade (the changelog says
   so); pool workers stay unlimited; a Lake or SQLDatabase whose `resources` was ignored until now gets 422 at its next
-  apply if it does not parse; `funcdctl dev` enforces no CPU or memory limit.
+  apply if it does not parse, and a stored one takes no status write until it is applied again (#1317); `funcdctl dev`
+  enforces no CPU or memory limit.
 
 ## Open questions
 

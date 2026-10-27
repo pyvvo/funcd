@@ -14,7 +14,7 @@
 - **Relates to**: [ADR-0291](0291-a-functions-workers-get-cpu-and-memory-limits.md) (F206, split from this ADR) ·
   [ADR-0251](0251-catalogservice-declares-its-stores.md) (inline stores) · [ADR-0266](0266-volume-sizes-with-units.md)
   (`ByteSize`) · [ADR-0275](0275-a-bucket-prefix-owner-names-its-kind.md) (a Lake's prefix) ·
-  [ADR-0279](0279-a-lake-answers-a-commit-once-its-catalog-save-covers-it.md) (catalog saves) ·
+  [ADR-0293](0293-a-lakes-catalog-lives-in-a-platform-catalog-store.md) (a Lake's catalog, outside its prefix) ·
   [ADR-0018](0018-api-server-authn-rbac-admission.md) (V2 quotas)
 
 ## Context & Need
@@ -31,10 +31,10 @@ next quota (per namespace, V2) is a new source on the same framework.
   `ctx.blob` put, an S3 client's put or a Site's build adds an object, Then it gets 507 (the S3 error
   `QuotaExceeded`), the object is not written, and a read or a delete still works.
 - **scenario: lake-total-refused**: Given a Lake whose prefix has `quota.maxSize: 1MiB` and holds 1 MiB, When a client
-  commits an `INSERT`, Then the engine's write gets 507 and the commit fails, as a refused save fails one (ADR-0279),
-  while a query still works.
-- **scenario: overwrite-not-refused**: Given a Lake whose Bucket is within one catalog of its quota, When a commit's
-  catalog save overwrites `catalog.db`, Then it waits on one fresh measure and is admitted.
+  commits an `INSERT`, Then the engine's Parquet write gets 507 and the commit fails, while a query still works: the
+  catalog saves outside the prefix (ADR-0293).
+- **scenario: overwrite-not-refused**: Given a Bucket within 1 KiB of its quota that holds a 4 KiB object, When an S3
+  client overwrites it with 4 KiB, Then the put waits on one fresh measure and is admitted.
 - **scenario: kv-total-refused**: Given a KVStore at its quota, When a Function puts a key, Then it gets 507, and a get
   or a delete still works.
 - **scenario: sql-delete-at-cap**: Given a SQLDatabase at its quota, When its owner executes an `INSERT`, Then it gets
@@ -77,7 +77,7 @@ and stay uncapped.
    and is the default of every enforcement point, as `hold.NeverCall` is for the hold. The daemon builds one `Book`.
 2. **Sources.** The feature that owns a kind registers a `Source`: `Limit` reads the subject's cap from its quota (no
    size ⇒ no cap), `Measure` reads its usage: a Bucket, the sum of its listing's sizes; a prefix, the same under it
-   (for a Lake, its files and `catalog.db`); a KVStore, its engine's NEW `Usage`; a SQLDatabase, `(page_count -
+   (for a Lake, its files; its catalog is outside, ADR-0293); a KVStore, its engine's NEW `Usage`; a SQLDatabase, `(page_count -
    freelist_count) * page_size` through its engine. F208 adds the namespace as a parent the `Book` derives from
    `Subject.Namespace`, with no write-path change.
 3. **Usage.** `Admit` reserves the write's full bytes; after the store, `Settle` turns them into settled bytes, or
@@ -94,8 +94,8 @@ and stay uncapped.
    size, is refused once usage is at the limit, unless it only deletes: each statement text holds one statement (only
    comments and whitespace after its first `;`) whose first keyword is `DELETE` or `DROP`; anything else, a `WITH …
    DELETE` included, is a write. A delete trigger may still write a bounded amount.
-5. **Enforcement points.** Bucket: a decorator in `s3BucketFor` beside `blob.Capped` (`pkg/funcd/funcd.go:2445`), the
-   one view behind the S3 gateway, `ctx.blob` and Sites; it charges the key's prefix when that prefix has a cap, then
+5. **Enforcement points.** Bucket: a decorator in `s3BucketFor` inside `blob.Capped` (`pkg/funcd/funcd.go:2446`), so
+   a per-item 413 comes before any reservation, the one view behind the S3 gateway, `ctx.blob` and Sites; it charges the key's prefix when that prefix has a cap, then
    the Bucket, and a refusal by the Bucket releases the prefix's reservation; the gateway's `mapBlobErr` answers
    `QuotaExceeded` with 507. KVStore: the KV facade's Put. SQLDatabase: the SQL facade's Execute. Reads and deletes
    never ask.
@@ -104,7 +104,8 @@ and stay uncapped.
    (a byte count), at most one, as `volumeBudget` and `volumeBudgetBytes` are; none means no cap. The per-item caps
    move into it unchanged, with no compatibility path, as the resource-shape refactor did (#1072):
    `quota.maxObjectBytes` on a Bucket, `quota.maxKeyBytes` and `quota.maxValueBytes` on a KVStore; one at the spec's
-   root is a 422, and so is a size that does not parse or both forms. The inline entries embed these specs (ADR-0251),
+   root is a 422, and so is a size that does not parse or both forms. A stored object loses a root cap at the upgrade
+   until its owner applies it again under `quota` (none is deployed; the decider accepted breaking changes). The inline entries embed these specs (ADR-0251),
    so a quota is written once, wherever the store is declared: alone, or in an App, a Function, a Workflow, a Lake or
    a Site. A Lake has no quota of its own; its prefix's quota is its cap.
 
@@ -199,8 +200,8 @@ func InsufficientStoragef(op, format string, a ...any) *Error
 - `api/types/v1alpha1`: the quota types and their validation; `api/fault`: the kind, its problem and builder; the
   OpenAPI spec and SDK types regenerated.
 - The sources and enforcement points; `Usage` on the KV port and both engines; `pkg/funcd` builds the `Book`.
-- The move: every reader of a per-item cap (`internal/blob/capped.go` through `s3BucketFor`, `internal/services/kv`,
-  `internal/workernode/local/kv.go`, `internal/site`) reads `spec.quota`; the five example manifests of
+- The move: every reader of a per-item cap (`s3BucketFor`, `pkg/funcd/funcd.go:2444`; the KV resolver through
+  `KVStoreSpec.EffectiveMax*`, `internal/services/kv/resolver.go:118-119`) reads `spec.quota`; the five example manifests of
   funcd-typescript and funcd-python move first, in their own releases, then funcd bumps them (ADR-0141).
 - Tests, one per scenario: `TestScenarioBucketTotalRefused` (`ctx.blob`, the gateway, a Site), `…LakeTotalRefused`,
   `…OverwriteNotRefused`, `…KVTotalRefused`, `…SQLDeleteAtCap`, `…NoCapUnchanged`, `…PerItemCapMoved`.
@@ -235,5 +236,5 @@ func InsufficientStoragef(op, format string, a ...any) *Error
 ## References
 
 - The decider's refinement of 2026-10-27; FEAT-0016; #1314, tracker #1315.
-- `internal/auth/authorizer.go:123`, `pkg/funcd/funcd.go:2422-2445` (the shared Bucket view),
+- `internal/auth/authorizer.go:123`, `pkg/funcd/funcd.go:2433-2447` (the shared Bucket view),
   `api/types/v1alpha1/namespace.go:27-31` (`volumeBudget` beside `volumeBudgetBytes`).
