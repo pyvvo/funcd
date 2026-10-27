@@ -7,7 +7,7 @@
 - **Realizes**: [FEAT-0016/F206](../feat/0016-feat-workload-limits.md) (Function CPU and memory limits) and F207 (a
   store's total size)
 - **Answers**: the decider's refinement of 2026-10-27: `spec.resources` on a Function, a node default
-  (`functions.defaultResources`, 1 CPU and 512Mi), `maxBytes` on Bucket, KVStore and SQLDatabase, 507 past it; storage
+  (`functions.defaultResources`, 1 CPU and 512Mi), `maxBytes` on Bucket, KVStore, SQLDatabase and Lake, 507 past it; storage
   quotas as a framework shaped like IAM; CPU and memory behind the runtime port so a driver can be swapped;
   `resources` and `pooling.worker` refused together at admission and blocked by the reconciler
 - **Relates to**: [ADR-0086](0086-catalog-query-provider-ducklake-duckdb-quack.md) (`ResourceSpec`) ·
@@ -22,8 +22,8 @@ A Function has no CPU or memory field, and `internal/function/function.go:3387` 
 `runtime.Limits`, so one Function can take a node's CPU and memory. Lake and SQLDatabase engines get theirs from
 `spec.resources` through the provider's private `limitsFrom` (`internal/provider/runtime.go:394`), which containerd
 applies as cgroup limits (`internal/runtime/containerd/containerd_linux.go:1231-1236`); `SQLDatabase.Validate` checks
-those fields inline (`api/types/v1alpha1/sqldatabase.go:52-60`). A Bucket, a KVStore and a SQLDatabase cap one object,
-key, value or database count, but nothing caps what a store holds in total. This ADR adds both limits behind ports:
+those fields inline (`api/types/v1alpha1/sqldatabase.go:52-60`). A Bucket, a Lake, a KVStore and a SQLDatabase cap at
+most one item or a count, never what a store holds in total. This ADR adds both limits behind ports:
 storage quotas as a framework the next cap reuses (per-namespace quotas, V2, come first), CPU and memory on the
 runtime port so another driver can enforce them.
 
@@ -44,6 +44,9 @@ runtime port so another driver can enforce them.
   `QuotaExceeded`), the object is not written, and a read or a delete still works.
 - **scenario: overwrite-not-refused**: Given a Lake whose Bucket is within one catalog of its `maxBytes`, When a
   commit's catalog save overwrites `catalog.db`, Then it waits on one fresh measure and is admitted.
+- **scenario: lake-total-refused**: Given a Lake with `maxBytes: 1MiB` that holds 1 MiB, When a client commits an
+  `INSERT`, Then the engine's write gets 507 and the commit fails, as a refused save fails one (ADR-0279), while a query
+  still works.
 - **scenario: kv-total-refused**: Given a KVStore at its `maxBytes`, When a Function puts a key, Then it gets 507, and
   a get or a delete still works.
 - **scenario: sql-delete-at-cap**: Given a SQLDatabase at its `maxBytes`, When its owner executes an `INSERT`, Then it
@@ -56,7 +59,7 @@ runtime port so another driver can enforce them.
 
 **In**: the quota framework (decision point, enforcement points, sources); the runtime port's limits contract and its
 `LimitEnforcer` capability; `FunctionSpec.Resources`, its default, admission and the reconciler's block; `maxBytes`
-on the three stores; one `ResourceSpec` validation and one limits mapping shared with Lake and SQLDatabase.
+on the four stores; one `ResourceSpec` validation and one limits mapping shared with Lake and SQLDatabase.
 **Out**: per-namespace quotas (V2, F208), which register into the framework; Cedar quota policies (opt-in, the
 decider's choice: a later ADR); pool workers, which keep no CPU or memory
 limit and a pool-wide heap cap (`FUNCD_POOL_MAX_OLD_MB`); a store's usage in its status; funclog sizes; a Restore's
@@ -86,7 +89,8 @@ loads and the Bucket purger, which write through raw prefixes and stay uncapped.
    and is the default of every enforcement point, as `hold.NeverCall` is for the hold. The daemon builds one `Book`.
 2. **Sources.** The feature that owns a kind registers a `Source` with the `Book`: `Limit` reads the subject's cap from
    its resource (none ⇒ no cap), `Measure` reads its usage. This ADR registers Bucket (the sum of its listing's sizes),
-   KVStore (its engine's NEW `Usage`) and SQLDatabase (`(page_count - freelist_count) * page_size` through its engine).
+   Lake (the same, under its location, catalog included), KVStore (its engine's NEW `Usage`) and SQLDatabase
+   (`(page_count - freelist_count) * page_size` through its engine).
    The `Book` charges the subject alone; F208 adds the namespace as a parent the `Book` derives from
    `Subject.Namespace`, with no write-path change.
 3. **Usage.** `Admit` reserves the write's full bytes; after the store, `Settle` turns them into settled bytes, or
@@ -105,7 +109,10 @@ loads and the Bucket purger, which write through raw prefixes and stay uncapped.
    `DROP`; anything else, a `WITH … DELETE` included, is a write. A delete trigger may still write a bounded amount.
 5. **Enforcement points.** Bucket: a decorator in `s3BucketFor` beside `blob.Capped` (`pkg/funcd/funcd.go:2445`), the one
    view behind the S3 gateway, `ctx.blob` and Sites; the gateway's `mapBlobErr` answers `QuotaExceeded` with 507.
-   KVStore: the KV facade's Put. SQLDatabase: the SQL facade's Execute. Reads and deletes never ask.
+   Lake: the S3 gateway also charges the caller's own subject when its kind has a source, so a Lake engine's write,
+   signed with its Lake's keypair (ADR-0270), charges its Lake and then its Bucket; the second's refusal releases the
+   first's reservation. KVStore: the KV facade's Put. SQLDatabase: the SQL facade's Execute. Reads and deletes never
+   ask.
 6. **CPU and memory on the runtime port.** `runtime.WorkerSpec.Limits` is the contract, and enforcing it is the
    driver's job. A driver that enforces it implements the NEW capability `runtime.LimitEnforcer`, as `StopGracer`
    reports a grace (`internal/runtime/runtime.go:183`): containerd does, by cgroups; the process driver does not, and
@@ -121,7 +128,7 @@ loads and the Bucket purger, which write through raw prefixes and stay uncapped.
    `pooling.worker` (422). The reconciler blocks a Function written past admission, such as by a restore, before any
    placement: no worker, phase `Failed`, reason `ResourcesWithPooling` or, for a value that does not parse,
    `ResourcesInvalid`, as `VolumeInvalid` does (`internal/function/volumes.go:105`).
-9. **Store caps.** `maxBytes` is a `ByteSize` on `BucketSpec`, `KVStoreSpec` and `SQLDatabaseSpec`; unset means no cap;
+9. **Store caps.** `maxBytes` is a `ByteSize` on `BucketSpec`, `LakeSpec`, `KVStoreSpec` and `SQLDatabaseSpec`; unset means no cap;
    admission refuses one that does not parse with 422.
 
 ## Design model
@@ -130,7 +137,8 @@ loads and the Bucket purger, which write through raw prefixes and stay uncapped.
 one capped subject, two writes, a delete and the background measure. It asserts `UsageNeverBelowTotal` and
 `RefusalsRestOnAFreshMeasure`; its mutants show each guard matters: a landing measure that drops the bytes settled while
 it ran, a refusal on a stale measure, and counting a credit, which a concurrent delete falsifies (the model found it).
-Admission and the reconciler agree by construction: both call `ResourceSpec.Validate`.
+A Lake engine's write keeps the protocol on each of its two subjects. Admission and the reconciler agree by
+construction: both call `ResourceSpec.Validate`.
 
 ## Temporary workarounds
 
@@ -174,7 +182,7 @@ Usage(ctx context.Context, prefix string) (int64, error)
 
 // Package v1alpha1 (api/types/v1alpha1), NEW.
 func (r ResourceSpec) Validate(op, path string) error
-// FunctionSpec.Resources ResourceSpec; BucketSpec, KVStoreSpec and SQLDatabaseSpec .MaxBytes ByteSize
+// FunctionSpec.Resources ResourceSpec; BucketSpec, LakeSpec, KVStoreSpec and SQLDatabaseSpec .MaxBytes ByteSize
 
 // Package fault (api/fault), NEW kind (507).
 const InsufficientStorage Kind = "insufficient_storage"
@@ -197,12 +205,12 @@ func InsufficientStoragef(op, format string, a ...any) *Error
   `runtimecontract` case for any `LimitEnforcer`.
 - `internal/platform/config`: `Functions.DefaultResources`; `internal/function`: limits, the default, admission and
   the reconciler's two reasons.
-- The three sources and enforcement points; `Usage` on the KV port and both engines; `pkg/funcd` builds the `Book`.
+- The four sources and enforcement points, the gateway's caller subject included; `Usage` on the KV port and both engines; `pkg/funcd` builds the `Book`.
 - Tests, one per scenario: `TestScenarioFunctionLimitsApplied` (the containerd spec carries the limits),
   `…FunctionDefaultLimits`, `…InvalidResourcesRefused`, `…PastAdmissionBlocked`, `…BucketTotalRefused` (`ctx.blob`,
-  the gateway and a Site), `…OverwriteNotRefused`, `…KVTotalRefused`, `…SQLDeleteAtCap`, `…NoCapUnchanged`; the OOM
+  the gateway and a Site), `…LakeTotalRefused`, `…OverwriteNotRefused`, `…KVTotalRefused`, `…SQLDeleteAtCap`, `…NoCapUnchanged`; the OOM
   restart runs in the Linux tests (`just test-linux`).
-- Docs: the Function, Bucket, KVStore and SQLDatabase references, `funcdconfig.yaml`'s reference, the changelog's notes.
+- Docs: the Function, Bucket, Lake, KVStore and SQLDatabase references, `funcdconfig.yaml`'s reference, the changelog's notes.
 - **Done when**: the tests pass with `-race`; build, vet (plain, dev, e2e, Linux) and lint are clean;
   `scripts/agent/gate.sh` passes; `just check-hygiene check-specs` passes.
 
@@ -231,10 +239,9 @@ func InsufficientStoragef(op, format string, a ...any) *Error
 
 ## Open questions
 
-- A store's usage in its status: a later ADR, if owners ask for it.
 - Cedar quota policies (opt-in, the decider's choice): a later ADR has `Book.Admit` ask the PDP after its own check,
   with `usage`, `bytes` and `limit` in the context, a deny by a `@quota` policy answering 507.
-- A pool's per-Function heap cap: needs a TypeScript shim change; its own ADR.
+- A pool's per-Function heap cap (a TypeScript shim change) and a store's usage in its status: later ADRs.
 
 ## References
 
