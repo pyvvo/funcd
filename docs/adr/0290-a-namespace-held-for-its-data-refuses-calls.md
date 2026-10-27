@@ -4,6 +4,8 @@
   Reviewing 2026-10-27; accepted 2026-10-27, by an `adr-batch` run on the decider's delegation,
   after one `adr-judge` round with no Blocker; folded: the upstream's detail names no hold, the S3 gateway out of
   scope (#1302), a daemon test instead of a lane step, `hold.NeverCall`)
+- **Amended in place**: 2026-10-27, by the decider on [#1302](https://github.com/pyvvo/funcd/issues/1302): the S3
+  gateway refuses writes into a held namespace's Buckets (Decision 6)
 - **Date**: 2026-10-27
 - **Deciders**: green-0-rabbit
 - **Tags**: disaster-recovery, data-plane, hold
@@ -18,7 +20,7 @@
   [ADR-0287](0287-a-platform-restore-finds-the-backups-made-after-its-point.md) (the runbook's step 8) ·
   [ADR-0120](0120-static-asset-serving-route.md) (the static backend) ·
   [ADR-0138](0138-external-catalog-ingress-and-route-aggregation.md) (the upstream backend) ·
-  [ADR-0135](0135-managed-identity.md) (the S3 gateway, out of scope)
+  [ADR-0135](0135-managed-identity.md) (the S3 gateway)
 
 ## Context & Need
 
@@ -27,8 +29,9 @@ After a platform restore, `funcd restore run` holds each namespace that has a Ba
 `funcdctl hold release --namespace`. An in-place Restore holds its namespace the same way while it loads (reason
 `restore`). The hold pauses the namespace's timers, blob sources, Sensors, runs, App and slots, but nothing on the
 call path reads it, so the namespace's Functions keep answering: a write lands in an empty store, and the owner's
-restore then replaces that store and erases a write the platform acknowledged. Experiment 0014 (pyvvo/experiment#26,
-private) saw it in both of its SQL host losses. This ADR makes a held namespace refuse calls until its data is back.
+restore then replaces that store and erases a write the platform acknowledged. Writes through the S3 gateway, its own
+listener (ADR-0135), land the same way. Experiment 0014 (pyvvo/experiment#26, private) saw it in both of its SQL host
+losses. This ADR makes a held namespace refuse calls, and writes through the S3 gateway, until its data is back.
 
 ## Scenarios
 
@@ -51,14 +54,25 @@ private) saw it in both of its SQL host losses. This ADR makes a held namespace 
   Then it is handled as today.
 - **scenario: unheld-namespace-unaffected**: Given `orders` held, When a client calls a `web` Function, Then it is
   served.
+- **scenario: gateway-write-refused**: Given `orders` held, When its owner puts, deletes or uploads an object through
+  the S3 gateway, Then it gets the S3 error `ServiceUnavailable` (503), whose message names the hold, and the Bucket
+  is unchanged; after the release the write lands.
+- **scenario: gateway-read-served**: Given `orders` held, When a client reads or lists its Bucket through the S3
+  gateway, Then it is served.
+- **scenario: gateway-restore-load-refused**: Given an in-place Restore loading `orders`, When a part or the complete
+  of an upload begun before arrives, Then it gets the 503, which names the Restore, nothing is written, and the upload
+  can still be aborted.
+- **scenario: gateway-auth-before-hold**: Given `orders` held, When a caller the PEP denies writes, Then it gets 403
+  as today, which says nothing about the hold.
+- **scenario: gateway-unheld-namespace-served**: Given `orders` held, When a `web` caller writes to a `web` Bucket,
+  Then the write lands.
 
 ## Scope
 
-**In**: a check, against the hold's in-memory namespace markers, on the data plane's Function and upstream paths; a
-read-locked marker lookup; the restore runbook's step 8 and the workload backup guide.
+**In**: a check, against the hold's in-memory namespace markers, on the data plane's Function and upstream paths and
+on the S3 gateway's writes; a read-locked marker lookup; the restore runbook's step 8 and the workload backup guide.
 **Out**: the platform hold, during which ADR-0206 keeps the data plane serving ("API, controllers and data plane
-serve"), since its held boot loads every store before the start; store writes that do not pass through the data
-plane, such as an Identity's Bucket writes through the S3 gateway, its own listener (ADR-0135; #1302); an owner's
+serve"), since its held boot loads every store before the start; an owner's
 opt-out that keeps serving during the hold (no one has asked; it would be its own ADR); Cedar; calls already in flight
 when an in-place Restore's hold begins (ADR-0222 Decision 7's load rules, unchanged); a metric of refused calls.
 
@@ -108,6 +122,13 @@ when an in-place Restore's hold begins (ADR-0222 Decision 7's load rules, unchan
    ADR-0002), so its 25 existing callers stay as they are. `WithCallGate` sets the gate; without it the Server asks
    `hold.NeverCall`. The daemon passes `WithCallGate(c.callGate())`, which is `hold.NeverCall` without `WithHold`, as
    `c.gate()` and `c.nsGate()` do (`pkg/funcd/funcd.go:426-440`).
+6. **The S3 gateway** (amended 2026-10-27). Each write, `PutObject`, `DeleteObject`, `DeleteObjects` and a multipart
+   upload's create, part and complete, asks `held.NamespaceMarker` for the caller's namespace after the PEP's allow
+   and the Bucket's lookup (`authorizeWrite`, `internal/blob/s3gateway/backend.go`); `DeleteObjects` refuses the
+   whole request at its first allowed key, before any delete. A marker ⇒ the S3 error `ServiceUnavailable` (503),
+   which S3 clients retry with backoff, with Decision 2's detail ending `writes resume after …`; versitygw writes no
+   `Retry-After`. Reads and `AbortMultipartUpload`, which writes nothing and frees the multipart budget, are served.
+   `s3gateway.Deps.Held` carries the gate (nil ⇒ `hold.NeverCall`); the daemon passes `c.callGate()`.
 
 ## Design model
 
@@ -144,11 +165,18 @@ func WithCallGate(g hold.CallGate) Option
 func Handler(st store.Store, act *activator.Activator, rtr router.Router, baseDomain string, enf *authn.Enforcer,
 	lim *limit.TargetLimiter, stat *static.Handler, defaultTimeout time.Duration, logger *slog.Logger,
 	opts ...Option) http.Handler
+
+// Package s3gateway (internal/blob/s3gateway), amended: Deps gains the gate; its other fields are unchanged.
+type Deps struct {
+	// Held is the namespace hold under which a write into the caller's namespace is refused (ADR-0290 Decision 6);
+	// nil ⇒ hold.NeverCall.
+	Held hold.CallGate
+}
 ```
 
 | Consumes | Exposes |
 |---|---|
-| The hold's in-memory namespace markers (`.hold-ns/<ns>.<reason>`, loaded at start, written by `restore run`, the in-place Restore and `HoldNamespace`, removed by `hold release --namespace`) | On a held namespace's Function or upstream path: 503, `Retry-After: 30`, the problem detail of Decision 2 |
+| The hold's in-memory namespace markers (`.hold-ns/<ns>.<reason>`, loaded at start, written by `restore run`, the in-place Restore and `HoldNamespace`, removed by `hold release --namespace`) | On a held namespace's Function or upstream path: 503, `Retry-After: 30`, the problem detail of Decision 2; on its S3 gateway writes: the S3 error `ServiceUnavailable` (503) with that detail |
 
 ## Implementation plan
 
@@ -167,8 +195,15 @@ func Handler(st store.Store, act *activator.Activator, rtr router.Router, baseDo
   sees a call into the held namespace refused, a call into another namespace not refused, and the call no longer
   refused after `ReleaseNamespace`. The app-todo lane stays unchanged: its only platform restore (D2) restores a
   generation without a BackupSchedule, so it holds no namespace for data.
+- `internal/blob/s3gateway` (amendment): `Deps.Held`, the backend's `held` field, `authorizeWrite` and `refuseHeld`
+  for the writes of Decision 6, and `DeleteObjects`' whole-request refusal. Tests in `hold_test.go` over the
+  package's harness, one per gateway scenario: `TestScenarioGatewayWriteRefused`, `…ReadServed`,
+  `…RestoreLoadRefused`, `…AuthBeforeHold`, `…UnheldNamespaceServed`. `pkg/funcd/funcd.go` passes
+  `Held: c.callGate()`; `TestS3GatewayAsksTheNamespaceHold` (`pkg/funcd/hold_internal_test.go`) sees the owner's
+  write refused until the release.
 - `examples/restore-runbook.md` step 8 and `examples/workload-backup.md` ("After a platform restore"): until the
-  owner's release, calls to the namespace's Functions get 503 and its Sites keep serving.
+  owner's release, calls to the namespace's Functions and writes through the S3 gateway get 503, and its Sites keep
+  serving.
 - **Done when**: the tests above pass with `-race`; build, vet (plain, dev, e2e, Linux) and lint are clean;
   `scripts/agent/gate.sh` passes, its e2e suite included; `just check-hygiene check-specs` passes.
 
@@ -182,17 +217,19 @@ func Handler(st store.Store, act *activator.Activator, rtr router.Router, baseDo
 - [ ] Without `WithCallGate` the Server asks `hold.NeverCall`; the daemon passes `c.callGate()`; the existing
       `Handler` callers are unchanged.
 - [ ] No new field, config key or API; Cedar and the hold's writers and release are untouched.
-- [ ] Every scenario has its named test; the daemon test and both docs are updated.
+- [ ] The S3 gateway's writes ask the hold after the PEP's allow and the Bucket's lookup; reads and
+      `AbortMultipartUpload` do not; `DeleteObjects` refuses whole before any delete; the daemon passes `Held`.
+- [ ] Every scenario has its named test; both daemon tests and both docs are updated.
 
 ## Consequences
 
-- **Positive**: a call into a namespace that waits for its data can no longer write what the owner's restore then
-  erases; one check reuses the hold the platform already writes and lifts; a client sees a retryable 503 before any
+- **Positive**: a call, or a write through the S3 gateway, into a namespace that waits for its data can no longer
+  write what the owner's restore then erases; one check reuses the hold the platform already writes and lifts; a client sees a retryable 503 before any
   work.
 - **Negative (accepted)**: a held namespace's Functions are down, reads included, until its owner's release; an owner
   who forgets the release keeps them down (`funcdctl hold status` lists the hold); a Site's own calls to those
-  Functions fail meanwhile. Writes that do not pass through the data plane, such as the S3 gateway's, still land
-  during the hold (#1302). Each call takes the hold's read lock, so a call waits while a hold or a release writes and
+  Functions fail meanwhile. An S3 client's writes fail with 503 until the release, a Lake engine's catalog saves
+  included (ADR-0289 retries them). Each call takes the hold's read lock, so a call waits while a hold or a release writes and
   syncs its marker under the write lock (`namespace.go:59-74`, `:99-135`); moving that I/O out of the lock is a
   separate change.
 
@@ -202,7 +239,7 @@ func Handler(st store.Store, act *activator.Activator, rtr router.Router, baseDo
 
 ## References
 
-- [#1297](https://github.com/pyvvo/funcd/issues/1297) and its decision comment; tracker #1276; the S3 gateway
-  follow-up [#1302](https://github.com/pyvvo/funcd/issues/1302).
+- [#1297](https://github.com/pyvvo/funcd/issues/1297) and its decision comment; tracker #1276;
+  [#1302](https://github.com/pyvvo/funcd/issues/1302), the S3 gateway's writes, answered by the amendment.
 - Experiment 0014, a backup target that lags or fails (pyvvo/experiment#26, private).
 - `internal/platform/hold/namespace.go:41` (`HeldIn`, true while the platform is held), `:77` (`NamespaceMarkers`).

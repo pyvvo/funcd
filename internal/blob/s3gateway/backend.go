@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +23,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	authz "github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/blob"
+	"github.com/pyvvo/funcd/internal/platform/hold"
 )
 
 // region is the single S3 region funcd's gateway advertises (ADR-0085); DuckDB and
@@ -43,6 +45,7 @@ type be struct {
 	log       *slog.Logger
 	mp        *multipartStore
 	life      context.Context // canceled when the gateway closes
+	held      hold.CallGate   // a write into a namespace it holds is refused (ADR-0290 Decision 6)
 }
 
 var _ backend.Backend = (*be)(nil)
@@ -94,6 +97,34 @@ func (b *be) authorize(ctx context.Context, action authz.Action, bucket, prefix 
 		return nil, pr, s3err.GetAPIError(s3err.ErrNoSuchBucket)
 	}
 	return sub, pr, nil
+}
+
+// authorizeWrite is authorize for s3::write, then the namespace hold (ADR-0290 Decision 6). The hold is read after the
+// PEP's allow, so only a caller allowed to write learns of it.
+func (b *be) authorizeWrite(ctx context.Context, bucket, prefix string) (blob.Bucket, principal, error) {
+	sub, pr, err := b.authorize(ctx, authz.ActionS3Write, bucket, prefix)
+	if err != nil {
+		return nil, pr, err
+	}
+	if err := b.refuseHeld(pr.namespace); err != nil {
+		return nil, pr, err
+	}
+	return sub, pr, nil
+}
+
+// refuseHeld is the 503 of a write into ns while ns is held for its data or a Restore loads it, nil otherwise. S3
+// clients retry a 503 with backoff.
+func (b *be) refuseHeld(ns v1.NamespaceName) error {
+	m, held := b.held.NamespaceMarker(ns)
+	if !held {
+		return nil
+	}
+	detail := fmt.Sprintf("namespace %s is held for its data since %s: writes resume after funcdctl hold release --namespace %s",
+		ns, m.Since, ns)
+	if m.Reason == hold.ReasonRestore {
+		detail = fmt.Sprintf("namespace %s is held while Restore %s loads it since %s", ns, m.Restore, m.Since)
+	}
+	return s3err.APIError{Code: "ServiceUnavailable", Description: detail, HTTPStatusCode: http.StatusServiceUnavailable}
 }
 
 // caller resolves the request's principal; an unauthenticated or unknown caller is denied.
@@ -463,7 +494,7 @@ func (b *be) PutObject(ctx context.Context, in s3response.PutObjectInput) (s3res
 	defer end()
 	bucket, key := deref(in.Bucket), deref(in.Key)
 	prefix, _ := splitKey(key)
-	sub, _, err := b.authorize(ctx, authz.ActionS3Write, bucket, prefix)
+	sub, _, err := b.authorizeWrite(ctx, bucket, prefix)
 	if err != nil {
 		return s3response.PutObjectOutput{}, err
 	}
@@ -486,7 +517,7 @@ func (b *be) DeleteObject(ctx context.Context, in *awss3.DeleteObjectInput) (*aw
 	defer end()
 	bucket, key := deref(in.Bucket), deref(in.Key)
 	prefix, _ := splitKey(key)
-	sub, _, err := b.authorize(ctx, authz.ActionS3Write, bucket, prefix)
+	sub, _, err := b.authorizeWrite(ctx, bucket, prefix)
 	if err != nil {
 		return nil, err
 	}
@@ -496,7 +527,8 @@ func (b *be) DeleteObject(ctx context.Context, in *awss3.DeleteObjectInput) (*aw
 	return &awss3.DeleteObjectOutput{}, nil
 }
 
-// DeleteObjects is the batch delete (ADR-0080): each key is a per-object s3::write PEP.
+// DeleteObjects is the batch delete (ADR-0080): each key is a per-object s3::write PEP. A held namespace refuses the
+// whole request at its first allowed key, before any delete (ADR-0290 Decision 6).
 func (b *be) DeleteObjects(ctx context.Context, in *awss3.DeleteObjectsInput) (s3response.DeleteResult, error) {
 	ctx, end := b.opContext(ctx)
 	defer end()
@@ -508,10 +540,13 @@ func (b *be) DeleteObjects(ctx context.Context, in *awss3.DeleteObjectsInput) (s
 	for _, obj := range in.Delete.Objects {
 		key := deref(obj.Key)
 		prefix, _ := splitKey(key)
-		sub, _, err := b.authorize(ctx, authz.ActionS3Write, bucket, prefix)
+		sub, pr, err := b.authorize(ctx, authz.ActionS3Write, bucket, prefix)
 		if err != nil {
 			res.Error = append(res.Error, awstypes.Error{Key: ptr(key), Code: ptr("AccessDenied"), Message: ptr("access denied")})
 			continue
+		}
+		if herr := b.refuseHeld(pr.namespace); herr != nil {
+			return s3response.DeleteResult{}, herr
 		}
 		if derr := sub.Delete(ctx, key); derr != nil && fault.KindOf(derr) != fault.NotFound {
 			res.Error = append(res.Error, awstypes.Error{Key: ptr(key), Code: ptr("InternalError"), Message: ptr("delete failed")})

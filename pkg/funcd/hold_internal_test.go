@@ -12,6 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	awscreds "github.com/aws/aws-sdk-go-v2/credentials"
+	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/stretchr/testify/require"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -21,6 +25,7 @@ import (
 	"github.com/pyvvo/funcd/internal/backup/runner"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
+	"github.com/pyvvo/funcd/internal/blob/s3gateway"
 	"github.com/pyvvo/funcd/internal/eventing"
 	"github.com/pyvvo/funcd/internal/eventing/deadletter"
 	"github.com/pyvvo/funcd/internal/platform/clock"
@@ -345,4 +350,50 @@ func TestDataPlaneAsksTheNamespaceHold(t *testing.T) {
 	require.NoError(t, h.ReleaseNamespace("team", hold.ReasonData))
 	_, body = call("team")
 	require.Contains(t, body, "activating team/api", "after the release a call into team reaches the activator")
+}
+
+// TestS3GatewayAsksTheNamespaceHold (ADR-0290 Decision 6): the daemon hands its hold to the S3 gateway, so the owner's
+// write into a namespace that restore run held for its data gets 503 until the release.
+func TestS3GatewayAsksTheNamespaceHold(t *testing.T) {
+	ctx := context.Background()
+	dir, err := os.MkdirTemp("", "funcd")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	require.NoError(t, hold.MarkNamespaces(dir, []v1.NamespaceName{"default"}, hold.Marker{Reason: hold.ReasonData, Since: v1.NewTimestamp(time.Now())}))
+	h, err := hold.Open(dir)
+	require.NoError(t, err)
+	p, addr := startS3Gateway(t, freeLoopbackAddr, func(addr string) (*Platform, error) {
+		return New(InMemory(), WithLogger(slog.New(slog.DiscardHandler)), WithHold(h), WithS3Gateway(addr, "", 0, "", dir))
+	}, s3GatewayRun)
+	seedObjects(t, p.cfg.store,
+		&v1.Function{TypeMeta: tmeta(v1.KindFunction), ObjectMeta: nsMeta("default", "etl")},
+		&v1.Bucket{TypeMeta: tmeta(v1.KindBucket), ObjectMeta: nsMeta("default", "lakehouse"), Spec: v1.BucketSpec{
+			Prefixes: []v1.BucketPrefix{{Name: "raw", Owner: v1.FunctionOwner("etl")}}}})
+
+	master, err := s3gateway.LoadOrCreateMaster("", dir)
+	require.NoError(t, err)
+	kp := s3gateway.DeriveKeypair(master, v1.KindFunction, "default", "etl")
+	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion("us-east-1"),
+		awsconfig.WithCredentialsProvider(awscreds.NewStaticCredentialsProvider(kp.AccessKey, kp.SecretKey, "")))
+	require.NoError(t, err)
+	endpoint := "http://" + addr
+	client := awss3.NewFromConfig(cfg, func(o *awss3.Options) {
+		o.BaseEndpoint = &endpoint
+		o.UsePathStyle = true
+		o.RetryMaxAttempts = 1
+		o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
+		o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
+	})
+	put := func() error {
+		_, err := client.PutObject(ctx, &awss3.PutObjectInput{Bucket: aws.String("lakehouse"), Key: aws.String("raw/x"),
+			Body: strings.NewReader("x")})
+		return err
+	}
+
+	err = put()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "StatusCode: 503")
+	require.Contains(t, err.Error(), "namespace default is held for its data since ")
+	require.NoError(t, h.ReleaseNamespace("default", hold.ReasonData))
+	require.NoError(t, put(), "after the release the owner's write lands")
 }

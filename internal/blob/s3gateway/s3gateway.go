@@ -21,6 +21,7 @@ import (
 	authz "github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/platform/durable"
+	"github.com/pyvvo/funcd/internal/platform/hold"
 )
 
 // defaultMaxUpload is the fail-closed buffer cap on a single buffered object when a
@@ -67,6 +68,9 @@ type Deps struct {
 	MaxUploadBytes int64
 	// Logger is the server logger; nil ⇒ slog.Default(). The master secret is NEVER logged.
 	Logger *slog.Logger
+	// Held is the namespace hold under which a write into the caller's namespace is refused (ADR-0290 Decision 6);
+	// nil ⇒ hold.NeverCall.
+	Held hold.CallGate
 }
 
 // Deriver is the key-pair deriver the gateway checks with; the injection of worker pairs uses the same (ADR-0270).
@@ -123,6 +127,11 @@ func New(d Deps) (*Server, error) {
 		maxUpload = defaultMaxUpload
 	}
 
+	held := d.Held
+	if held == nil {
+		held = hold.NeverCall
+	}
+
 	life, stop := context.WithCancel(context.Background())
 	backendImpl := &be{
 		bucketFor: d.BucketFor,
@@ -133,6 +142,7 @@ func New(d Deps) (*Server, error) {
 		log:       logger,
 		mp:        newMultipartStore(maxUpload),
 		life:      life,
+		held:      held,
 	}
 	iamImpl := &iam{derive: d.Deriver(), external: d.External}
 

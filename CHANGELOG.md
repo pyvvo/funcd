@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.32.0](https://github.com/pyvvo/funcd/compare/v0.31.0...v0.32.0) (2026-10-27)
+
+
+### Features
+
+* **s3gateway:** a namespace held for its data refuses writes through the S3 gateway (ADR-0290, amended) ([17ed221](https://github.com/pyvvo/funcd/commit/17ed221aa7da1bbc0f685e0d17b3085aeb0bfc78))
+
 ## [0.31.0](https://github.com/pyvvo/funcd/compare/v0.30.1...v0.31.0) (2026-10-27)
 
 

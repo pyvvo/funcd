@@ -872,6 +872,7 @@ func (p *Platform) buildControlPlane() error {
 			// previously-nil ExternalKeys seam), so a managed Identity authenticates over SigV4.
 			External: identitysvc.NewExternalKeys(c.store),
 			Logger:   p.logger,
+			Held:     c.callGate(),
 		}
 		srv, gerr := s3gateway.New(gwDeps)
 		if gerr != nil {
