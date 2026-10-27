@@ -1,0 +1,160 @@
+---
+# One capped store's usage under the quota framework (ADR-0291 Decisions 3 and 4). Admit reserves a write's bytes
+# against the usage (the last measure, the bytes settled since and the bytes reserved in flight), the write is stored,
+# then settled (or released when it fails). A background measure reads the store's total and, when it lands, keeps the
+# bytes settled while it ran. A write that would pass the cap waits for a fresh measure when bytes were settled since
+# the last one; on that fresh usage the size it replaces is credited to the decision, never to the count, since a
+# concurrent delete can make the credit wrong. A delete lowers the total, never the usage.
+# Environment: two keys, two sizes, one delete at a time; the store holds 2 bytes under key a at the start.
+deadlock_detection: false
+options:
+  # Two writes racing with a delete and a measure; every action is atomic.
+  max_concurrent_actions: 2
+  max_actions: 10
+  crash_on_yield: false
+---
+# diagram: Write.phase
+# mutant forget-settled-while-measuring: UsageNeverBelowTotal
+# mutant count-the-credit: UsageNeverBelowTotal
+# mutant refuse-on-stale-measure: RefusalsRestOnAFreshMeasure
+
+LIMIT = 4
+# forget-settled-while-measuring: a landing measure drops the bytes settled while it ran.
+# count-the-credit: a credited overwrite reserves only what it adds, which a concurrent delete of its key falsifies.
+# refuse-on-stale-measure: a write is refused without waiting for a fresh measure.
+MUTANT = ""
+
+role Write:
+    action Init:
+        self.phase = "new"
+        self.key = ""
+        self.size = 0
+        self.rec = 0
+        self.epoch = 0
+        self.dirty = False
+        self.fresh = False
+
+    # Admit reserves the write's bytes when they fit; else it waits for a fresh measure, or decides at once.
+    atomic action Admit:
+        require self.phase == "new"
+        k = oneof ["a", "b"]
+        n = oneof [1, 2]
+        self.key = k
+        self.size = n
+        self.epoch = epoch
+        self.dirty = since > 0
+        used = measured + since + inflight
+        if used + n <= LIMIT:
+            self.rec = n
+            inflight = inflight + n
+            self.phase = "admitted"
+        elif since > 0 and MUTANT != "refuse-on-stale-measure":
+            self.phase = "waiting"
+        else:
+            eff = n - objects.get(k, 0)
+            if used + eff <= LIMIT:
+                self.rec = n
+                if MUTANT == "count-the-credit":
+                    self.rec = max(eff, 0)
+                inflight = inflight + self.rec
+                self.phase = "admitted"
+            else:
+                self.phase = "refused"
+
+    # After a measure that landed since it waited, the write is decided on that fresh usage, with the credit.
+    atomic fair action Recheck:
+        require self.phase == "waiting"
+        require epoch > self.epoch
+        self.fresh = True
+        used = measured + since + inflight
+        eff = self.size - objects.get(self.key, 0)
+        if used + self.size <= LIMIT:
+            self.rec = self.size
+            inflight = inflight + self.size
+            self.phase = "admitted"
+        elif used + eff <= LIMIT:
+            self.rec = self.size
+            if MUTANT == "count-the-credit":
+                self.rec = max(eff, 0)
+            inflight = inflight + self.rec
+            self.phase = "admitted"
+        else:
+            self.phase = "refused"
+
+    # The store takes the write, or fails it; a failed write releases its reservation.
+    atomic fair action Store:
+        require self.phase == "admitted"
+        ok = oneof [True, False]
+        if ok:
+            total = total - objects.get(self.key, 0) + self.size
+            objects[self.key] = self.size
+            self.phase = "stored"
+        else:
+            inflight = inflight - self.rec
+            self.phase = "failed"
+
+    # Record after store: the reservation becomes settled bytes, counted for a measure that is running.
+    atomic fair action Settle:
+        require self.phase == "stored"
+        inflight = inflight - self.rec
+        since = since + self.rec
+        if measuring:
+            during = during + self.rec
+        self.phase = "done"
+
+# A delete through the store: it lowers the total and leaves the usage to the next measure.
+atomic action Delete:
+    require deletes < 1
+    require len(objects) > 0
+    ks = [x for x in objects]
+    k = oneof ks
+    deletes = deletes + 1
+    total = total - objects[k]
+    objects.pop(k)
+
+atomic fair action StartMeasure:
+    require not measuring
+    require epoch < 2
+    measuring = True
+    read = False
+    during = 0
+
+# The listing reads the total at one point while the measure runs.
+atomic fair action Read:
+    require measuring and not read
+    seen = total
+    read = True
+
+atomic fair action Land:
+    require measuring and read
+    measured = seen
+    if MUTANT == "forget-settled-while-measuring":
+        since = 0
+    else:
+        since = during
+    measuring = False
+    epoch = epoch + 1
+
+action Init:
+    objects = {"a": 2}
+    total = 2
+    measured = 2
+    since = 0
+    inflight = 0
+    measuring = False
+    read = False
+    during = 0
+    seen = 0
+    epoch = 0
+    deletes = 0
+    writes = []
+    for i in range(2):
+        writes.append(Write(id=i))
+
+# The usage never counts less than the store holds, so a write never passes the cap unseen.
+always assertion UsageNeverBelowTotal:
+    return measured + since + inflight >= total
+
+# A write that found bytes settled since the last measure is refused only on a measure that landed after it arrived.
+always assertion RefusalsRestOnAFreshMeasure:
+    return all([w.fresh or not w.dirty for w in writes if w.phase == "refused"])

@@ -42,13 +42,13 @@ runtime port so another driver can enforce them.
 - **scenario: bucket-total-refused**: Given a Bucket with `maxBytes: 1MiB` that holds 1 MiB, When a Function's
   `ctx.blob` put, an S3 client's put or a Site's build adds an object, Then it gets 507 (the S3 error
   `QuotaExceeded`), the object is not written, and a read or a delete still works.
-- **scenario: overwrite-not-refused**: Given a Lake whose Bucket is near its `maxBytes`, When each commit's catalog
-  save overwrites `catalog.db`, Then no save is refused while the measured total stays under the cap.
+- **scenario: overwrite-not-refused**: Given a Lake whose Bucket is within one catalog of its `maxBytes`, When a
+  commit's catalog save overwrites `catalog.db`, Then it waits on one fresh measure and is admitted.
 - **scenario: kv-total-refused**: Given a KVStore at its `maxBytes`, When a Function puts a key, Then it gets 507, and
   a get or a delete still works.
 - **scenario: sql-delete-at-cap**: Given a SQLDatabase at its `maxBytes`, When its owner executes an `INSERT`, Then it
-  gets 507; When it executes only `DELETE` or `DROP` statements, Then they run, and after the next measure an `INSERT`
-  lands again.
+  gets 507, and so does `DELETE FROM t WHERE 0; INSERT …`; When it executes only `DELETE` or `DROP` statements, Then
+  they run, and after the next measure an `INSERT` lands again.
 - **scenario: no-cap-unchanged**: Given a store without `maxBytes`, When it is written, Then nothing is measured or
   refused.
 
@@ -57,7 +57,8 @@ runtime port so another driver can enforce them.
 **In**: the quota framework (decision point, enforcement points, sources); the runtime port's limits contract and its
 `LimitEnforcer` capability; `FunctionSpec.Resources`, its default, admission and the reconciler's block; `maxBytes`
 on the three stores; one `ResourceSpec` validation and one limits mapping shared with Lake and SQLDatabase.
-**Out**: per-namespace quotas (V2, F208), which register into the framework; pool workers, which keep no CPU or memory
+**Out**: per-namespace quotas (V2, F208), which register into the framework; Cedar quota policies (opt-in, the
+decider's choice: a later ADR); pool workers, which keep no CPU or memory
 limit and a pool-wide heap cap (`FUNCD_POOL_MAX_OLD_MB`); a store's usage in its status; funclog sizes; a Restore's
 loads and the Bucket purger, which write through raw prefixes and stay uncapped.
 
@@ -66,7 +67,8 @@ loads and the Bucket purger, which write through raw prefixes and stay uncapped.
 - One check of each kind: every storage write asks one decision point, as every PEP asks the one Cedar PDP
   (`auth.Authorizer`, `internal/auth/authorizer.go:123`); one `ResourceSpec` check and one limits mapping.
 - Every limit sits behind a port with a swappable driver.
-- A write path lists or scans a store only to confirm a refusal; a store without a cap pays a map lookup.
+- A write path measures a store only at its first capped write and to confirm a refusal; a store without a cap pays a
+  map lookup.
 
 ## Alternatives considered
 
@@ -80,29 +82,35 @@ loads and the Bucket purger, which write through raw prefixes and stay uncapped.
 ## Decision
 
 1. **The decision point.** `internal/platform/quota` (NEW) defines `Checker`, the quota counterpart of
-   `auth.Authorizer`: `Admit` before a write, `Record` after it. `Book` implements it; `quota.None` admits everything
+   `auth.Authorizer`: `Admit` before a write, `Settle` after it. `Book` implements it; `quota.None` admits everything
    and is the default of every enforcement point, as `hold.NeverCall` is for the hold. The daemon builds one `Book`.
 2. **Sources.** The feature that owns a kind registers a `Source` with the `Book`: `Limit` reads the subject's cap from
    its resource (none ⇒ no cap), `Measure` reads its usage. This ADR registers Bucket (the sum of its listing's sizes),
    KVStore (its engine's NEW `Usage`) and SQLDatabase (`(page_count - freelist_count) * page_size` through its engine).
    The `Book` charges the subject alone; F208 adds the namespace as a parent the `Book` derives from
    `Subject.Namespace`, with no write-path change.
-3. **Usage.** A capped subject's usage is its last measure plus the bytes recorded since. A background refresh per
-   subject, started at its first use and repeated every minute (the constant `refreshInterval`), re-reads its limit
-   and measure off the write path; the first write waits on that first refresh. When `Admit` would refuse and bytes
-   were recorded since the last measure, it first waits on one shared measure and checks again, so a refusal never
-   rests on overwrites counted twice.
-4. **The refusal.** `Admit` refuses a write whose bytes would take the subject past its limit with the NEW
+3. **Usage.** `Admit` reserves the write's full bytes; after the store, `Settle` turns them into settled bytes, or
+   releases them when the store failed. Usage is the last measure plus the settled bytes since plus the reserved ones,
+   so it never counts less than the store holds. A background refresh per subject, started at its first use and
+   repeated every minute (the constant `refreshInterval`), re-reads its limit and measure off the write path; the
+   first write waits on that first refresh, and a measure that lands keeps the bytes settled while it ran. A failed
+   refresh keeps the last values and logs; while a subject's first refresh fails, its writes get 503.
+4. **The refusal.** When a write's bytes would take usage past the limit and bytes were settled since the last
+   measure, `Admit` waits on one shared fresh measure. On that usage, the size the write replaces
+   (`Request.Replaces`: one stat of the key for a Bucket, the old value's length for a KVStore) is credited to the
+   decision, never to the count, since a concurrent delete can falsify it. A write still past the limit gets the NEW
    `fault.InsufficientStorage` (507, `urn:funcd:problem:insufficient-storage`) naming the subject, its usage and its
-   limit; an Execute, of unknown size, is refused once usage is at the limit, unless all its statements are `DELETE`
-   or `DROP`.
+   limit. An Execute, of unknown size, is refused once usage is at the limit, unless it only deletes: each statement
+   text holds one statement (only comments and whitespace after its first `;`) whose first keyword is `DELETE` or
+   `DROP`; anything else, a `WITH … DELETE` included, is a write. A delete trigger may still write a bounded amount.
 5. **Enforcement points.** Bucket: a decorator in `s3BucketFor` beside `blob.Capped` (`pkg/funcd/funcd.go:2445`), the one
    view behind the S3 gateway, `ctx.blob` and Sites; the gateway's `mapBlobErr` answers `QuotaExceeded` with 507.
    KVStore: the KV facade's Put. SQLDatabase: the SQL facade's Execute. Reads and deletes never ask.
 6. **CPU and memory on the runtime port.** `runtime.WorkerSpec.Limits` is the contract, and enforcing it is the
    driver's job. A driver that enforces it implements the NEW capability `runtime.LimitEnforcer`, as `StopGracer`
    reports a grace (`internal/runtime/runtime.go:183`): containerd does, by cgroups; the process driver does not, and
-   the Function reconciler logs once per Function that its limits are not enforced. Another driver, a microVM's sizes
+   the Function reconciler and the provider runtime log once per Function or engine that its limits are not
+   enforced. Another driver, a microVM's sizes
    or a cgroup for the process driver, plugs in by implementing it.
 7. **Function limits.** `FunctionSpec.Resources` is the `ResourceSpec` of Lake and SQLDatabase. `ResourceSpec.Validate`
    (NEW) is the one check, a finite `cpu` of at least 0.01 and a `memory` in `ByteSize`'s grammar (ADR-0266), and
@@ -118,8 +126,11 @@ loads and the Bucket purger, which write through raw prefixes and stay uncapped.
 
 ## Design model
 
-None: per subject, one lock guards limit, measure and bytes since; one measure runs at a time (single flight) and,
-when it lands, keeps the bytes recorded while it ran, so usage only errs high; no state spans subjects.
+[`docs/design/storage/quota-usage.fizz`](../design/storage/quota-usage.fizz) ([diagram](../design/storage/quota-usage.md)):
+one capped subject, two writes, a delete and the background measure. It asserts `UsageNeverBelowTotal` and
+`RefusalsRestOnAFreshMeasure`; its mutants show each guard matters: a landing measure that drops the bytes settled while
+it ran, a refusal on a stale measure, and counting a credit, which a concurrent delete falsifies (the model found it).
+Admission and the reconciler agree by construction: both call `ResourceSpec.Validate`.
 
 ## Temporary workarounds
 
@@ -135,14 +146,15 @@ type Subject struct {
 	Name      v1.ObjectName
 }
 type Request struct {
-	Subject Subject
-	Bytes   int64    // the write's size; 0 when unknown
-	Deletes bool     // a SQL Execute of only DELETE or DROP statements
+	Subject  Subject
+	Bytes    int64                                     // the write's size; 0 when unknown
+	Replaces func(ctx context.Context) (int64, error) // the size it overwrites, asked only before a refusal; nil: 0
+	Deletes  bool                                      // a SQL Execute that only deletes
 }
 // Checker is the quota counterpart of auth.Authorizer.
 type Checker interface {
-	Admit(ctx context.Context, r Request) error // fault.InsufficientStorage past a capped subject's limit
-	Record(r Request)                           // adds a stored write to its subject
+	Admit(ctx context.Context, r Request) error // reserves r.Bytes, or fault.InsufficientStorage past the limit
+	Settle(r Request, stored bool)              // the reservation becomes settled bytes, or is released
 }
 var None Checker // admits everything
 type Source struct {
@@ -176,7 +188,8 @@ func InsufficientStoragef(op, format string, a ...any) *Error
 ## Implementation plan
 
 - `internal/platform/quota` with a fake clock in its tests (refresh, single flight, refusal after a fresh measure,
-  `Deletes`, a kind without a source).
+  the credit, a failed refresh, `Deletes`, a kind without a source); they carry `oracle:` markers for the spec's two
+  assertions (ADR-0272).
 - `api/types/v1alpha1`: the fields, `ResourceSpec.Validate` (SQLDatabase's inline checks go; the `ResourceSpec` doc
   comment, `lake.go:84-86`, is rewritten); `api/fault`: the kind, its problem and builder; regenerate the OpenAPI spec
   and the SDK types.
@@ -197,8 +210,8 @@ func InsufficientStoragef(op, format string, a ...any) *Error
 
 - [ ] No size check outside `Book`, no `ResourceSpec` check outside `Validate`, no limits mapping outside
       `LimitsFrom`.
-- [ ] Each enforcement point asks `Admit` before it stores and `Record` after; reads and deletes never ask; the default
-      is `quota.None`.
+- [ ] Each enforcement point asks `Admit` before it stores and `Settle` after; reads and deletes never ask; the
+      default is `quota.None`; a credit never lowers the count.
 - [ ] A subject without a cap is never measured; a refusal follows a fresh measure when bytes were recorded since.
 - [ ] Only a `LimitEnforcer` driver is trusted to enforce; the process driver logs once per Function.
 - [ ] Admission refuses a bad `cpu`, `memory` or `maxBytes`, and `resources` with `pooling.worker`; the reconciler blocks
@@ -211,13 +224,16 @@ func InsufficientStoragef(op, format string, a ...any) *Error
   the next quota is a new source, the next runtime a new `LimitEnforcer`.
 - **Negative (accepted)**: existing solo Functions get the default 1 CPU and 512 MiB at upgrade (the changelog says so);
   pool workers stay unlimited; a Lake whose `resources` was ignored until now gets 422 at its next apply if it does
-  not parse; a write can be refused up to a minute after deletes made room, and a SQLDatabase can grow up to a minute
+  not parse; near its cap, a store whose writes overwrite is
+  re-measured before each such write (one at a time); a write can be refused up to a minute after deletes made room, and a SQLDatabase can grow up to a minute
   of writes past its cap; a Restore can load a store past its cap, after which only deletes run until it is under;
   `funcdctl dev` enforces no CPU or memory limit.
 
 ## Open questions
 
 - A store's usage in its status: a later ADR, if owners ask for it.
+- Cedar quota policies (opt-in, the decider's choice): a later ADR has `Book.Admit` ask the PDP after its own check,
+  with `usage`, `bytes` and `limit` in the context, a deny by a `@quota` policy answering 507.
 - A pool's per-Function heap cap: needs a TypeScript shim change; its own ADR.
 
 ## References
