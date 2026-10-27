@@ -13018,5 +13018,20 @@
     "dod_total": 9,
     "report": "docs/reviews/adr-0290-amendment-implementation-claude-opus-5-5.md",
     "notes": "amendment (S3 gateway writes, #1302): Major model - no test sees CompleteMultipartUpload refused (mutant survives); Minor model - Decision 2 detail formatted twice; Minor model - #1302 has no decision record"
+  },
+  {
+    "date": "2026-10-27",
+    "adr": "0290",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 9,
+    "dod_total": 9,
+    "report": "docs/reviews/adr-0290-amendment-implementation-claude-opus-5-5-2.md",
+    "notes": "amendment round 2: Complete test added (mutant now fails), #1302 decision recorded; Minor model - Decision 2 detail formatted twice (kept by choice)"
   }
 ]
