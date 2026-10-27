@@ -2732,20 +2732,28 @@ func (l blobBucketLister) List(ctx context.Context, ns v1.NamespaceName, bucket 
 	return b.List(ctx, prefix)
 }
 
-// blobProber adapts blobBucketLister to admission.BlobProber (ADR-0080 deletion-protection): HasAny reports
-// whether any object exists under "<prefix>/" of the Bucket's substrate view, or a Lake's catalog for that prefix in
-// the catalog store, whose inlined rows are the prefix's data too (ADR-0293).
+// blobProber adapts blobBucketLister to admission.BlobProber (ADR-0080 deletion-protection): Remaining reports the
+// objects under "<prefix>/" of the Bucket's substrate view, else a Lake's catalog for that prefix in the catalog store,
+// whose inlined rows are the prefix's data too (ADR-0293), by the S3 key its writer deletes it with.
 type blobProber struct {
 	lister blobBucketLister
 	shared blob.Bucket
 }
 
-func (p blobProber) HasAny(ctx context.Context, ns v1.NamespaceName, bucket v1.ObjectName, prefix string) (bool, error) {
+func (p blobProber) Remaining(ctx context.Context, ns v1.NamespaceName, bucket v1.ObjectName, prefix string) (string, error) {
 	items, err := p.lister.List(ctx, ns, bucket, prefix+"/")
-	if err != nil || len(items) > 0 {
-		return len(items) > 0, err
+	switch {
+	case err != nil:
+		return "", err
+	case len(items) > 0:
+		return "objects", nil
 	}
-	return p.shared.Exists(ctx, lakeCatalogPrefix(ns)+v1.LakeCatalogKey(v1.LakeLocation{Bucket: bucket, Prefix: prefix}))
+	key := v1.LakeCatalogKey(v1.LakeLocation{Bucket: bucket, Prefix: prefix})
+	found, err := p.shared.Exists(ctx, lakeCatalogPrefix(ns)+key)
+	if err != nil || !found {
+		return "", err
+	}
+	return "its Lake catalog " + v1.LakeCatalogBucket + "/" + key, nil
 }
 
 // kvProber adapts the kvstore.KV driver's List to admission.KVProber (ADR-0072 deletion-protection):

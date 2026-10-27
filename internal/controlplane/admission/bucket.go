@@ -7,14 +7,16 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
-// BlobProber probes whether a Bucket prefix holds any objects (ADR-0080), its Lake's catalog included (ADR-0293): the
-// deletion-protection admission uses it to block deleting a bucket (or removing a prefix) that still holds data. Declared
+// BlobProber probes what still lies under a Bucket prefix (ADR-0080), its Lake's catalog included (ADR-0293): the
+// deletion-protection admission uses it to block deleting a bucket (or removing a prefix) that still holds data, and
+// names that data in its 409. Declared
 // HERE (like KVProber/StoreReader) so the admission package stays a near-leaf; the wiring resolves the
 // Bucket to the substrate view the s3gateway writes, so the key layout has one owner. Optional — a nil
 // prober skips the data-emptiness check (binding-protection still applies).
 type BlobProber interface {
-	// HasAny reports whether any object exists under the prefix of the namespace's bucket, or a Lake catalog for it.
-	HasAny(ctx context.Context, ns v1.NamespaceName, bucket v1.ObjectName, prefix string) (bool, error)
+	// Remaining describes what still lies under the prefix of the namespace's bucket: "objects", its Lake catalog with
+	// the S3 key its writer deletes it by, or "" when nothing does.
+	Remaining(ctx context.Context, ns v1.NamespaceName, bucket v1.ObjectName, prefix string) (string, error)
 }
 
 // --- bucket-count quota (ADR-0080): Create on Bucket ------------------------------------------
@@ -110,12 +112,12 @@ func (a bucketDeletionProtection) admitDelete(ctx context.Context, req Request) 
 
 	if a.p != nil {
 		for _, p := range oldB.Spec.Prefixes {
-			has, perr := a.p.HasAny(ctx, ns, bucket, p.Name)
+			left, perr := a.p.Remaining(ctx, ns, bucket, p.Name)
 			if perr != nil {
 				return nil, fault.Wrapf(perr, fault.Internal, op, "probe bucket %q prefix %q for data", bucket, p.Name)
 			}
-			if has {
-				return nil, fault.Conflictf(op, "Bucket %q prefix %q still holds objects or a Lake catalog; drain it first", bucket, p.Name)
+			if left != "" {
+				return nil, fault.Conflictf(op, "Bucket %q prefix %q still holds %s; drain it first", bucket, p.Name, left)
 			}
 		}
 	}
@@ -171,12 +173,12 @@ func (a bucketDeletionProtection) admitUpdate(ctx context.Context, req Request) 
 			}
 		}
 		if a.p != nil {
-			has, perr := a.p.HasAny(ctx, ns, bucket, name)
+			left, perr := a.p.Remaining(ctx, ns, bucket, name)
 			if perr != nil {
 				return nil, fault.Wrapf(perr, fault.Internal, op, "probe bucket %q prefix %q for data", bucket, name)
 			}
-			if has {
-				return nil, fault.Conflictf(op, "prefix %q of Bucket %q still holds objects or a Lake catalog; drain it first", name, bucket)
+			if left != "" {
+				return nil, fault.Conflictf(op, "prefix %q of Bucket %q still holds %s; drain it first", name, bucket, left)
 			}
 		}
 	}

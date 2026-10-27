@@ -45,8 +45,11 @@ func (r blobReader) List(_ context.Context, gvk v1.GroupVersionKind, ns v1.Names
 
 type blobFakeProber struct{ has bool }
 
-func (p blobFakeProber) HasAny(_ context.Context, _ v1.NamespaceName, _ v1.ObjectName, _ string) (bool, error) {
-	return p.has, nil
+func (p blobFakeProber) Remaining(_ context.Context, _ v1.NamespaceName, _ v1.ObjectName, _ string) (string, error) {
+	if p.has {
+		return "objects", nil
+	}
+	return "", nil
 }
 
 func mkBucket(name string, prefixes ...v1.BucketPrefix) *v1.Bucket {

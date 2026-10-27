@@ -487,8 +487,11 @@ func TestIssue900_UnversionedWriteSurvivesStatusWrite(t *testing.T) {
 // fullPrefixes is a BlobProber whose listed prefixes hold objects.
 type fullPrefixes map[string]bool
 
-func (p fullPrefixes) HasAny(_ context.Context, _ v1.NamespaceName, _ v1.ObjectName, prefix string) (bool, error) {
-	return p[prefix], nil
+func (p fullPrefixes) Remaining(_ context.Context, _ v1.NamespaceName, _ v1.ObjectName, prefix string) (string, error) {
+	if p[prefix] {
+		return "objects", nil
+	}
+	return "", nil
 }
 
 // An unversioned delete is judged by bucket-deletion-protection (ADR-0080). It reads other objects (the namespace's
