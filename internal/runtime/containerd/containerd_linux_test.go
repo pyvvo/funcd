@@ -49,6 +49,7 @@ func TestScenarioContainerdWorkerLifecycle(t *testing.T) {
 		t.Helper()
 		rt, err := containerd.New(integrationConfig())
 		require.NoError(t, err)
+		runtimecontract.RequireLimits(t, rt, true)
 		return rt
 	})
 }

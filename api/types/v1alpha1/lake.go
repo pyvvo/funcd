@@ -32,8 +32,8 @@ type LakeSpec struct {
 	// (single-writer). Its catalog, a DuckDB file (ADR-0271), lives in the catalog store under the same location
 	// (ADR-0293).
 	Location LakeLocation `json:"location"`
-	// Resources sizes the engine (cpu/mem); DuckDB is memory-hungry. The provider-runtime maps it
-	// onto runtime.Limits when numerically parseable (ADR-0087), else it is recorded forward-compat.
+	// Resources sizes the engine (cpu/mem); DuckDB is memory-hungry. Validate refuses a value that does not parse, and
+	// the provider-runtime maps it onto runtime.Limits (ADR-0087, ADR-0291 Decision 2).
 	Resources ResourceSpec `json:"resources,omitempty"`
 	// Ingress declares the edge exposure of this lake's lake::query PEP proxy (ADR-0138, ADR-0241), on only
 	// with enabled: true; its default path is /lake/<name>. Once Ready, the reconciler programs an edge

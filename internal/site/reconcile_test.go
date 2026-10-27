@@ -18,6 +18,7 @@ import (
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/controller"
+	"github.com/pyvvo/funcd/internal/quota"
 	"github.com/pyvvo/funcd/internal/site"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/store/memory"
@@ -54,6 +55,7 @@ type harness struct {
 	shared *recorder
 	layout string
 	r      *site.Reconciler
+	quota  quota.Checker // when set, the Bucket's view asks it before every write, as a Bucket's quota does
 }
 
 func newHarness(t *testing.T) *harness {
@@ -72,7 +74,23 @@ func (h *harness) resolve(n v1.NamespaceName, b string) (blob.Bucket, bool) {
 	if err != nil {
 		return nil, false
 	}
-	return blob.Capped(blob.Prefixed(h.shared, "s3/"+string(n)+"/"+b+"/"), obj.(*v1.Bucket).Spec.Quota.MaxObjectBytes), true
+	view := blob.Prefixed(h.shared, "s3/"+string(n)+"/"+b+"/")
+	if h.quota != nil {
+		subject := quota.Subject{Kind: v1.KindBucket, Namespace: n, Name: v1.ObjectName(b)}
+		view = blob.Quoted(view, h.quota, subject, func(string) bool { return true })
+	}
+	return blob.Capped(view, obj.(*v1.Bucket).Spec.Quota.MaxObjectBytes), true
+}
+
+// fullBucket is the quota of a Bucket at its cap: it refuses every write but a delete (ADR-0292).
+type fullBucket struct{}
+
+func (fullBucket) Admit(_ context.Context, r quota.Request) (quota.Settle, error) {
+	if r.Deletes {
+		return func(bool) {}, nil
+	}
+	return nil, fault.InsufficientStoragef("test", "%s holds 64 of its 64 bytes (spec.quota): a write of %d bytes would pass it",
+		r.Subject, r.Bytes)
 }
 
 // push writes files into a dir and pushes it as a site artifact under tag, returning the digest.
@@ -699,6 +717,24 @@ func TestSite_ObjectOverBucketCapIsNotReadyNotRetried(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []controller.Request{{GVK: v1.KindSite.GVK(), Namespace: ns, Name: "bi"}}, h.r.MapBucket(h.ctx, raised))
 	h.deploy("bi")
+}
+
+// A Bucket at its quota refuses the build's writes with 507 (ADR-0292 Decision 5): the Site reports it, NotReady
+// QuotaExceeded, instead of failing the reconcile into a hot retry, and nothing is served.
+func TestSite_BucketAtQuotaIsNotReadyQuotaExceeded(t *testing.T) {
+	h := newHarness(t)
+	h.push("v1", map[string]string{"index.html": "<title>A</title>"})
+	h.seedBucket(0, "bi")
+	h.quota = fullBucket{}
+	h.seedSite("bi", "v1", byRef)
+
+	res := h.reconcile("bi")
+	require.Zero(t, res.RequeueAfter)
+	c := readyCond(t, h.site("bi"))
+	require.Equal(t, "QuotaExceeded", c.Reason)
+	require.Contains(t, c.Message, "bucket default/"+bucket+" holds 64 of its 64 bytes")
+	_, gerr := h.st.Get(h.ctx, v1.KindRoute.GVK(), ns, "bi")
+	require.Error(t, gerr, "nothing is served")
 }
 
 // A bundle entry the file substrate cannot store under its key (fault.Invalid: a name past the OS limit

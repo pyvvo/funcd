@@ -258,12 +258,13 @@ log:
 #                                 # volumes book its filesystem's free space, a few percent less: ext4 keeps the rest for its metadata
 #   capacityBytes: 10737418240    # the same size in bytes; set at most one of capacity and capacityBytes. default: 0
 
-# --- site: declarative static web apps (ADR-0139) ----------------------------------------------
+# --- functions: the workers' CPU and memory (ADR-0291) ------------------------------------------
 # functions:
 #   defaultResources:             # what a solo Function's spec.resources leaves empty (ADR-0291); "" sets no default
 #     cpu: "1"                    # cores per worker, at least 0.01. default: 1
 #     memory: 512Mi               # per worker, e.g. 256Mi or 1GiB. default: 512Mi
 
+# --- site: declarative static web apps (ADR-0139) ----------------------------------------------
 # site:
 #   defaultIndex: index.html      # document served for "/" when a Site sets no spec.index. default: index.html
 

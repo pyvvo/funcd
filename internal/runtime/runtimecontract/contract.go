@@ -501,3 +501,11 @@ func waitState(t *testing.T, rt runtime.Runtime, id runtime.InstanceID, want run
 	}
 	t.Fatalf("instance %q did not reach state %q within deadline", id, want)
 }
+
+// RequireLimits asserts whether rt enforces WorkerSpec.Limits (ADR-0291 Decision 1): a driver that does claims the
+// runtime.LimitEnforcer capability; one that does not leaves it out, so the callers log its limits as unenforced.
+func RequireLimits(t *testing.T, rt runtime.Runtime, enforces bool) {
+	t.Helper()
+	e, ok := rt.(runtime.LimitEnforcer)
+	require.Equal(t, enforces, ok && e.EnforcesLimits(), "the driver's LimitEnforcer claim")
+}

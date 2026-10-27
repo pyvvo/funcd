@@ -12,9 +12,12 @@ import (
 // each a subject of its own and asked only when capped reports a size for it, so a key's leading segment that no quota
 // names is never tracked; a refusal by the Bucket releases the prefix's reservation. A delete reports itself to the
 // same subjects; reads pass through. capped reports whether the Bucket (prefix "") or a declared prefix sets a size; a
-// presigned PUT under one is fault.Forbidden, since its upload bypasses Put, as Capped refuses one. It forwards
-// RangeReader.
+// presigned PUT under one is fault.Forbidden, since its upload bypasses Put, as Capped refuses one. A nil chk is
+// quota.None. It forwards RangeReader.
 func Quoted(inner Bucket, chk quota.Checker, bucket quota.Subject, capped func(prefix string) bool) Bucket {
+	if chk == nil {
+		chk = quota.None
+	}
 	q := &quotedBucket{Bucket: inner, chk: chk, subject: bucket, capped: capped}
 	if rr, ok := inner.(RangeReader); ok {
 		return &quotedRangeBucket{quotedBucket: q, rr: rr}

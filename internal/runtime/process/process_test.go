@@ -29,6 +29,12 @@ func TestProcessDriverContract(t *testing.T) {
 	})
 }
 
+// The process driver enforces no CPU or memory limit (ADR-0291 Decision 1), so it does not claim LimitEnforcer.
+func TestProcessDriverLeavesLimitsUnenforced(t *testing.T) {
+	t.Parallel()
+	runtimecontract.RequireLimits(t, process.New(nil), false)
+}
+
 // The process driver reports the grace it stops with, which Run's Shutdown bound counts (ADR-0277): the one Open is
 // given, and DefaultStopGrace from New or a zero grace.
 func TestStopGraceReported(t *testing.T) {

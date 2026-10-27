@@ -936,7 +936,8 @@ func TestScenarioCatalogBackedUpAndRestored(t *testing.T) {
 	root, catalogs := bucketPrefix("orders", "lake-files"), lakeCatalogPrefix("orders")+"lake-files/"
 	r := newWBRig(t, wbOptions{setup: func(r *wbRig) {
 		r.seed(&v1.Bucket{TypeMeta: tmeta(v1.KindBucket), ObjectMeta: ordersMeta("lake-files"), Spec: v1.BucketSpec{
-			Prefixes: []v1.BucketPrefix{{Name: "lake", Owner: v1.LakeOwner("lake")}, {Name: "copy"}, {Name: "fresh", Owner: v1.LakeOwner("fresh")}}}})
+			Prefixes: []v1.BucketPrefix{{Name: "lake", Owner: v1.LakeOwner("lake")}, {Name: "copy"}, {Name: "taken"},
+				{Name: "fresh", Owner: v1.LakeOwner("fresh")}}}})
 		for _, name := range []string{"lake", "fresh"} {
 			r.seed(&v1.Lake{TypeMeta: tmeta(v1.KindLake), ObjectMeta: ordersMeta(name), Spec: v1.LakeSpec{
 				Location: v1.LakeLocation{Bucket: "lake-files", Prefix: name},
@@ -968,6 +969,13 @@ func TestScenarioCatalogBackedUpAndRestored(t *testing.T) {
 	require.Equal(t, "C1", get(catalogs+"copy/_ducklake/catalog.db"), "the catalog lands in the store under the new location")
 	require.Equal(t, "f1", get(root+"copy/main/t/f1.parquet"))
 	require.Empty(t, get(root+"copy/_ducklake/catalog.db"), "no catalog under the files")
+
+	require.NoError(t, r.p.cfg.blob.Put(r.ctx, catalogs+"taken/_ducklake/catalog.db", []byte("C0"), blob.PutOptions{}))
+	r.create(r.dev, r.restoreObj("onto-catalog", "b1", v1.RestoreMember{Kind: v1.KindLake, Name: "lake",
+		AsLocation: &v1.LakeLocation{Bucket: "lake-files", Prefix: "taken"}}))
+	rs := r.waitRestore("onto-catalog", v1.RunFailed)
+	require.Equal(t, "NotEmpty", reason(rs.Status.Status), "a prefix that holds only a catalog holds inlined rows")
+	require.Equal(t, "C0", get(catalogs+"taken/_ducklake/catalog.db"), "nothing is loaded")
 
 	for key, data := range map[string]string{catalogs + "lake/_ducklake/catalog.db": "C2", root + "lake/main/t/f3.parquet": "f3"} {
 		require.NoError(t, r.p.cfg.blob.Put(r.ctx, key, []byte(data), blob.PutOptions{}))
