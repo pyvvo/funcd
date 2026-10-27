@@ -109,7 +109,8 @@ or Bucket), `asLocation` (an empty bucket prefix, then point a Lake at it) or `i
 Restore needs `update` on the Namespace (an admin), and one runs per namespace at a time: a second is refused while
 the first is `Pending` or `Running`, and so is a delete of the first. It first runs Backup `<restore>-before`, then holds the namespace while it
 empties and loads the store; only a completed load lifts that hold. While it is held, calls to the namespace's
-Functions get 503 with `Retry-After: 30` (ADR-0290). One whose load fails, or that funcd stopped
+Functions get 503 with `Retry-After: 30`, and writes through the S3 gateway get the S3 error `ServiceUnavailable`
+(ADR-0290). One whose load fails, or that funcd stopped
 during the load (it ends `Failed`, `Interrupted`, at the next start), keeps the namespace held: `funcdctl hold status`
 names it, and no in-place Restore of the namespace is admitted until the release: check the store, then
 `funcdctl hold release --namespace orders` (refused while a Restore it names is `Pending` or `Running`).
@@ -119,9 +120,9 @@ names it, and no in-place Restore of the namespace is admitted until the release
 `funcd restore run` holds each namespace that has a BackupSchedule: its stores return without their data, so its
 timers, blob sources, Sensors, runs, App and slots wait (Backups by hand and Restores still run). Calls to its
 Functions get 503 with `Retry-After: 30`, so that no write lands in a store that the owner's restore then replaces,
-and its Sites keep serving their files (ADR-0290). Writes through the S3 gateway are not refused yet (#1302): stop an
-Identity's writers to the namespace's Buckets until the release. Restore the data, then
-`funcdctl hold release --namespace orders`; the next call is served.
+and its Sites keep serving their files (ADR-0290). Writes through the S3 gateway into its Buckets get the S3 error
+`ServiceUnavailable` (503), which S3 clients retry; reads still work. Restore the data, then
+`funcdctl hold release --namespace orders`; the next call and the next write are served.
 
 The restored records stop at the platform backup's point, while the schedule kept backing up on the lost host. So
 `restore run` marks each schedule `TargetSynced` `False` (reason `PlatformRestored`). Its reconciler then lists the

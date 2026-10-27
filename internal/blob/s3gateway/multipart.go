@@ -301,7 +301,7 @@ func (b *be) CreateMultipartUpload(ctx context.Context, in s3response.CreateMult
 	bucket := deref(in.Bucket)
 	key := deref(in.Key)
 	prefix, _ := splitKey(key)
-	_, pr, err := b.authorize(ctx, authz.ActionS3Write, bucket, prefix)
+	_, pr, err := b.authorizeWrite(ctx, bucket, prefix)
 	if err != nil {
 		return s3response.InitiateMultipartUploadResult{}, err
 	}
@@ -317,7 +317,7 @@ func (b *be) UploadPart(ctx context.Context, in *awss3.UploadPartInput) (*awss3.
 	bucket := deref(in.Bucket)
 	key := deref(in.Key)
 	prefix, _ := splitKey(key)
-	_, pr, err := b.authorize(ctx, authz.ActionS3Write, bucket, prefix)
+	_, pr, err := b.authorizeWrite(ctx, bucket, prefix)
 	if err != nil {
 		return nil, err
 	}
@@ -344,7 +344,7 @@ func (b *be) CompleteMultipartUpload(ctx context.Context, in *awss3.CompleteMult
 	defer end()
 	bucket, key := deref(in.Bucket), deref(in.Key)
 	prefix, _ := splitKey(key)
-	sub, pr, err := b.authorize(ctx, authz.ActionS3Write, bucket, prefix)
+	sub, pr, err := b.authorizeWrite(ctx, bucket, prefix)
 	if err != nil {
 		return s3response.CompleteMultipartUploadResult{}, "", err
 	}
@@ -375,7 +375,8 @@ func (b *be) CompleteMultipartUpload(ctx context.Context, in *awss3.CompleteMult
 	}, "", nil
 }
 
-// AbortMultipartUpload discards buffered parts (ADR-0080): s3::write PEP.
+// AbortMultipartUpload discards buffered parts (ADR-0080): s3::write PEP. A namespace hold does not refuse it, since it
+// writes nothing and frees the multipart budget (ADR-0290 Decision 6).
 func (b *be) AbortMultipartUpload(ctx context.Context, in *awss3.AbortMultipartUploadInput) error {
 	ctx, end := b.opContext(ctx)
 	defer end()
