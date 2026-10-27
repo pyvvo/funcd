@@ -16,6 +16,19 @@ import (
 // s3gateway writes (s3/<ns>/<bucket>/<prefix>/…), so a Bucket whose prefix still holds objects can be
 // neither deleted nor stripped of that prefix; once drained, both are allowed.
 func TestIssue58_BucketWithObjectsIsDeletionProtected(t *testing.T) {
+	requireKeptUntilDrained(t, "s3/default/lake/web/index.html")
+}
+
+// scenario: catalog-keeps-its-bucket (ADR-0293) — a prefix whose only data is a Lake's catalog, its rows inlined, keeps
+// its Bucket as an object does.
+func TestScenarioCatalogKeepsItsBucket(t *testing.T) {
+	requireKeptUntilDrained(t, "lake-catalogs/default/lake/web/_ducklake/catalog.db")
+}
+
+// requireKeptUntilDrained stores key as Bucket lake's data under its prefix web: neither the Bucket's delete nor web's
+// removal passes until key is deleted, and both pass after.
+func requireKeptUntilDrained(t *testing.T, key string) {
+	t.Helper()
 	p, err := New(InMemory())
 	require.NoError(t, err)
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -39,14 +52,13 @@ func TestIssue58_BucketWithObjectsIsDeletionProtected(t *testing.T) {
 	}
 	_, err = c.Apply(ctx, lake("raw", "web"))
 	require.NoError(t, err)
-
-	const key = "s3/default/lake/web/index.html"
 	require.NoError(t, p.cfg.blob.Put(ctx, key, []byte("<title>v1</title>"), blob.PutOptions{}))
 
 	err = c.Delete(ctx, v1.KindBucket, "default", "lake")
-	require.Equal(t, fault.Conflict, fault.KindOf(err), "deleting a Bucket whose prefix still holds objects ⇒ Conflict, got %v", err)
+	require.Equal(t, fault.Conflict, fault.KindOf(err), "deleting a Bucket whose prefix still holds data ⇒ Conflict, got %v", err)
+	require.ErrorContains(t, err, "still holds objects or a Lake catalog")
 	_, err = c.Apply(ctx, lake("raw"))
-	require.Equal(t, fault.Conflict, fault.KindOf(err), "dropping a prefix that still holds objects ⇒ Conflict, got %v", err)
+	require.Equal(t, fault.Conflict, fault.KindOf(err), "dropping a prefix that still holds data ⇒ Conflict, got %v", err)
 
 	require.NoError(t, p.cfg.blob.Delete(ctx, key))
 	_, err = c.Apply(ctx, lake("raw"))

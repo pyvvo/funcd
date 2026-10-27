@@ -309,3 +309,41 @@ func TestScenarioQuarantineExpires(t *testing.T) {
 	require.Empty(t, w.kvKeys(t, ".quarantine/"))
 	require.Equal(t, 2, strings.Count(w.log.String(), "deleted quarantined data"))
 }
+
+// scenario: catalog-quarantined-with-its-bucket (ADR-0293) — an orphan Bucket's Lake catalogs go into its entry with
+// its objects and come back with them; a Bucket whose only data is a catalog is an orphan too, and its entry expires
+// with the catalog.
+func TestScenarioCatalogQuarantinedWithItsBucket(t *testing.T) {
+	t.Parallel()
+	w := newQWorld(t, fileStore(t))
+	w.orphans(t)
+	const catalog = "gold/_ducklake/catalog.db"
+	shared := w.open(t)
+	for _, k := range []string{"lake-catalogs/default/gone/" + catalog, "lake-catalogs/default/inlined/" + catalog} {
+		require.NoError(t, shared.Put(context.Background(), k, []byte(k), blob.PutOptions{}))
+	}
+	require.NoError(t, shared.Close())
+
+	r := w.start(t)
+	var buckets []v1.ObjectName
+	for _, e := range r.quarantine(t) {
+		if e.Kind == v1.KindBucket {
+			buckets = append(buckets, e.Name)
+		}
+	}
+	require.ElementsMatch(t, []v1.ObjectName{"gone", "inlined"}, buckets)
+	require.Empty(t, r.objects(t, "lake-catalogs/"))
+	entry := "quarantine/bucket/default/gone/" + quarantine.Stamp(w.clk.Now()) + "/"
+	require.Equal(t, []string{catalog}, r.objects(t, entry+"catalogs/"))
+
+	r.apply(t, goneBucket())
+	require.NoError(t, r.admin.ReturnQuarantined(r.ctx, hold.QuarantineReturn{Kind: v1.KindBucket, Namespace: "default", Name: "gone"}))
+	require.Equal(t, []string{catalog}, r.objects(t, "lake-catalogs/default/gone/"), "the catalog comes back with the objects")
+	require.ElementsMatch(t, []string{"a", "b/c"}, r.objects(t, "s3/default/gone/"))
+	r.stop()
+
+	w.clk.Advance(168*time.Hour + time.Millisecond)
+	r = w.start(t)
+	r.p.sweepQuarantine(r.ctx)
+	require.Empty(t, r.objects(t, "quarantine/bucket/"), "the expired entry goes with its catalog")
+}

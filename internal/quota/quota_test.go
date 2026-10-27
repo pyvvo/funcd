@@ -168,17 +168,27 @@ func TestUnknownSizeNeedsRoomAndDeletesPass(t *testing.T) {
 	s := newStore(1024, map[string]int64{"a": 1023})
 	b := newBook(s)
 	ctx := context.Background()
-	settle, err := b.Admit(ctx, quota.Request{Subject: subject()})
+	settle, err := b.Admit(ctx, quota.Request{Subject: subject(), Bytes: quota.Unknown})
 	require.NoError(t, err, "one byte left admits a write of unknown size")
 	s.put("a", 1024)
 	settle(true)
 	b.Refresh(ctx)
-	_, err = b.Admit(ctx, quota.Request{Subject: subject()})
+	_, err = b.Admit(ctx, quota.Request{Subject: subject(), Bytes: quota.Unknown})
 	require.Equal(t, fault.InsufficientStorage, fault.KindOf(err))
 	require.ErrorContains(t, err, "delete to make room")
 	settle, err = b.Admit(ctx, quota.Request{Subject: subject(), Deletes: true})
 	require.NoError(t, err, "a write that only deletes always passes")
 	settle(true)
+}
+
+// A write of 0 bytes has a known size: it fits at the cap, and once stored it starts no measure.
+func TestEmptyWriteAtTheCap(t *testing.T) {
+	t.Parallel()
+	s := newStore(1024, map[string]int64{"a": 1024})
+	b := newBook(s)
+	require.NoError(t, write(context.Background(), b, s, "empty", 0), "it adds nothing, so it needs no byte left")
+	require.Never(t, func() bool { return s.measures.Load() > 1 }, 50*time.Millisecond, time.Millisecond,
+		"only the first read measures: a stored empty write starts none")
 }
 
 // scenario: overwrite-not-refused — a Bucket within 1 KiB of its quota that holds a 4 KiB object takes an overwrite of
@@ -442,7 +452,7 @@ func TestUnknownSizeWriteMeasuredSoon(t *testing.T) {
 	s := newStore(100, map[string]int64{"a": 10})
 	b := newBook(s)
 	ctx := context.Background()
-	settle, err := b.Admit(ctx, quota.Request{Subject: subject()})
+	settle, err := b.Admit(ctx, quota.Request{Subject: subject(), Bytes: quota.Unknown})
 	require.NoError(t, err, "room left: an Execute of unknown size is admitted")
 	s.put("bulk", 500)
 	settle(true)
@@ -450,7 +460,7 @@ func TestUnknownSizeWriteMeasuredSoon(t *testing.T) {
 		usage, _ := b.Usage(subject())
 		return usage == 510
 	}, time.Second, time.Millisecond, "the write's growth is measured without waiting for the refresh")
-	_, err = b.Admit(ctx, quota.Request{Subject: subject()})
+	_, err = b.Admit(ctx, quota.Request{Subject: subject(), Bytes: quota.Unknown})
 	require.Equal(t, fault.InsufficientStorage, fault.KindOf(err), "%v", err)
 }
 

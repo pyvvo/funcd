@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -134,4 +135,36 @@ func TestScenarioCatalogCapRefused(t *testing.T) {
 
 	require.NoError(t, h.HoldNamespace("default", hold.Marker{Reason: hold.ReasonData, Since: v1.NewTimestamp(time.Now())}))
 	requireHeld(t, putCatalog(owner, goldCatalog, "c"), "namespace default is held for its data since ")
+}
+
+// scenario: catalog-deleted-once-no-lake (ADR-0293) — a caller allowed to write a prefix deletes its catalog once no
+// Lake is located there; while one is, and for a caller not allowed to write it, the delete is AccessDenied.
+func TestScenarioCatalogDeletedOnceNoLake(t *testing.T) {
+	t.Parallel()
+	store := memBucket(t)
+	var located atomic.Bool
+	located.Store(true)
+	g := newGateway(t, lakehouseMeta(), fixedPolicies{rev: "0"}, nil, memBucket, withCatalogs(store, 1<<20), func(d *s3gateway.Deps) {
+		d.LakeAt = func(_ context.Context, _ v1.NamespaceName, bucket, prefix string) (v1.ObjectName, bool, error) {
+			return "analytics", located.Load() && bucket == "lakehouse" && prefix == "bronze", nil
+		}
+	})
+	ctx := context.Background()
+	const key = "lakehouse/bronze/_ducklake/catalog.db"
+	require.NoError(t, store.Put(ctx, "lake-catalogs/default/"+key, []byte("DUCK"), blob.PutOptions{}))
+	del := func(c *awss3.Client) error {
+		_, err := c.DeleteObject(ctx, &awss3.DeleteObjectInput{Bucket: aws.String(v1.LakeCatalogBucket), Key: aws.String(key)}, oneAttempt)
+		return err
+	}
+	writer := g.client(t, "default", "etl-svc")
+
+	err := del(writer)
+	require.Equal(t, http.StatusForbidden, statusCode(err), "%v", err)
+	require.ErrorContains(t, err, "Lake analytics is located on lakehouse/bronze")
+	located.Store(false)
+	require.Equal(t, http.StatusForbidden, statusCode(del(g.client(t, "default", "reporting"))), "a caller not allowed to write bronze")
+	require.NoError(t, del(writer), "no Lake is located on bronze: its writer drains the catalog")
+	found, err := store.Exists(ctx, "lake-catalogs/default/"+key)
+	require.NoError(t, err)
+	require.False(t, found)
 }

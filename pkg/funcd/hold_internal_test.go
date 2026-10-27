@@ -35,18 +35,23 @@ import (
 	"github.com/pyvvo/funcd/internal/workflow/runstate"
 )
 
-// bucketOrphans lists each <ns>/<bucket> holding objects without its Bucket, once, and skips a prefix that is not a
-// pair of DNS labels; it deletes nothing.
+// bucketOrphans lists each <ns>/<bucket> holding objects or Lake catalogs without its Bucket, once, and skips a prefix
+// that is not a pair of DNS labels; it deletes nothing.
 func TestBucketOrphans(t *testing.T) {
 	onEachSubstrate(t, func(t *testing.T, ctx context.Context, shared blob.Bucket, st store.Store) {
 		createBucket(t, st, "team", "keep")
-		for _, k := range []string{"s3/team/keep/a", "s3/team/gone/a", "s3/team/gone/b", "s3/Team_/x/y", "funclog/z"} {
+		for _, k := range []string{"s3/team/keep/a", "s3/team/gone/a", "s3/team/gone/b", "s3/Team_/x/y", "funclog/z",
+			"lake-catalogs/team/keep/gold/_ducklake/catalog.db", "lake-catalogs/team/gone/gold/_ducklake/catalog.db",
+			"lake-catalogs/team/inlined/gold/_ducklake/catalog.db"} {
 			require.NoError(t, shared.Put(ctx, k, []byte("x"), blob.PutOptions{}))
 		}
 		got, err := bucketOrphans(ctx, shared, st)
 		require.NoError(t, err)
-		require.Equal(t, []v1.ObjectRef{{Kind: v1.KindBucket, Namespace: "team", Name: "gone"}}, got)
-		require.Len(t, keys(t, shared), 5)
+		require.Equal(t, []v1.ObjectRef{
+			{Kind: v1.KindBucket, Namespace: "team", Name: "gone"},
+			{Kind: v1.KindBucket, Namespace: "team", Name: "inlined"},
+		}, got, "a Bucket whose only data is a catalog is an orphan too")
+		require.Len(t, keys(t, shared), 8)
 	})
 }
 

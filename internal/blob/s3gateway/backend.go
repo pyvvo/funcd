@@ -49,6 +49,7 @@ type be struct {
 	// catalogs is a namespace's view of the Lake catalog store, capped at catalogMax bytes (ADR-0293); nil serves none.
 	catalogs   func(ns v1.NamespaceName) blob.Bucket
 	catalogMax int64
+	lakeAt     func(ctx context.Context, ns v1.NamespaceName, bucket, prefix string) (v1.ObjectName, bool, error)
 }
 
 var _ backend.Backend = (*be)(nil)
@@ -88,7 +89,7 @@ func (b *be) authorize(ctx context.Context, action authz.Action, bucket, prefix 
 	if err != nil {
 		return nil, principal{}, err
 	}
-	if bucket == v1.LakeCatalogBucket { // only object() serves the catalog store, and only Get, Head and Put
+	if bucket == v1.LakeCatalogBucket { // only object() and deletable() serve the catalog store
 		return nil, pr, accessDenied()
 	}
 	ok, err := b.allowed(ctx, pr, action, bucket, prefix)
@@ -529,9 +530,11 @@ func (b *be) DeleteObject(ctx context.Context, in *awss3.DeleteObjectInput) (*aw
 	ctx, end := b.opContext(ctx)
 	defer end()
 	bucket, key := deref(in.Bucket), deref(in.Key)
-	prefix, _ := splitKey(key)
-	sub, _, err := b.authorizeWrite(ctx, bucket, prefix)
+	sub, pr, err := b.deletable(ctx, bucket, key)
 	if err != nil {
+		return nil, err
+	}
+	if err := b.refuseHeld(pr.namespace); err != nil {
 		return nil, err
 	}
 	if derr := sub.Delete(ctx, key); derr != nil && fault.KindOf(derr) != fault.NotFound {
@@ -552,8 +555,7 @@ func (b *be) DeleteObjects(ctx context.Context, in *awss3.DeleteObjectsInput) (s
 	}
 	for _, obj := range in.Delete.Objects {
 		key := deref(obj.Key)
-		prefix, _ := splitKey(key)
-		sub, pr, err := b.authorize(ctx, authz.ActionS3Write, bucket, prefix)
+		sub, pr, err := b.deletable(ctx, bucket, key)
 		if err != nil {
 			res.Error = append(res.Error, awstypes.Error{Key: ptr(key), Code: ptr("AccessDenied"), Message: ptr("access denied")})
 			continue

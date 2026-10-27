@@ -38,9 +38,8 @@ func (b *be) catalog(ctx context.Context, key string) (blob.Bucket, principal, e
 	if b.catalogs == nil || pr.ref.Type != v1.KindLake {
 		return nil, pr, accessDenied()
 	}
-	loc, ok := strings.CutSuffix(key, catalogName)
-	bucket, prefix, split := strings.Cut(loc, "/")
-	if !ok || !split || strings.Contains(prefix, "/") {
+	bucket, prefix, ok := catalogLocation(key)
+	if !ok {
 		return nil, pr, accessDenied()
 	}
 	all, err := b.namespaceBuckets(ctx, pr)
@@ -55,6 +54,56 @@ func (b *be) catalog(ctx context.Context, key string) (blob.Bucket, principal, e
 	})
 	if !owns {
 		return nil, pr, accessDenied()
+	}
+	return b.catalogs(pr.namespace), pr, nil
+}
+
+// catalogLocation splits a catalog key, <bucket>/<prefix>/_ducklake/catalog.db, ok=false for any other key.
+func catalogLocation(key string) (bucket, prefix string, ok bool) {
+	loc, ok := strings.CutSuffix(key, catalogName)
+	bucket, prefix, split := strings.Cut(loc, "/")
+	return bucket, prefix, ok && split && !strings.Contains(prefix, "/")
+}
+
+// deletable resolves the view a delete of key runs on: the catalog store by its own rule, any other bucket through the
+// PEP's s3::write.
+func (b *be) deletable(ctx context.Context, bucket, key string) (blob.Bucket, principal, error) {
+	if bucket == v1.LakeCatalogBucket {
+		return b.catalogDelete(ctx, key)
+	}
+	prefix, _ := splitKey(key)
+	return b.authorize(ctx, authz.ActionS3Write, bucket, prefix)
+}
+
+// catalogDelete serves the delete of a catalog (ADR-0293 Decision 6): to a caller the PDP lets write the prefix the key
+// names, while no Lake of its namespace is located there, so a deleted Lake's catalog can be drained from its Bucket.
+func (b *be) catalogDelete(ctx context.Context, key string) (blob.Bucket, principal, error) {
+	pr, err := b.caller(ctx)
+	if err != nil {
+		return nil, principal{}, err
+	}
+	bucket, prefix, ok := catalogLocation(key)
+	if !ok || b.catalogs == nil || b.lakeAt == nil {
+		return nil, pr, accessDenied()
+	}
+	allowed, err := b.allowed(ctx, pr, authz.ActionS3Write, bucket, prefix)
+	if err != nil {
+		return nil, principal{}, err
+	}
+	if !allowed {
+		return nil, pr, accessDenied()
+	}
+	lake, located, err := b.lakeAt(ctx, pr.namespace, bucket, prefix)
+	if err != nil {
+		b.log.Error("s3 catalog delete: find the Lake", "namespace", pr.namespace, "bucket", bucket, "prefix", prefix, "err", err)
+		return nil, pr, s3err.GetAPIError(s3err.ErrInternalError)
+	}
+	if located {
+		return nil, pr, s3err.APIError{
+			Code:           "AccessDenied",
+			Description:    fmt.Sprintf("Lake %s is located on %s/%s: its catalog is deleted only once the Lake is", lake, bucket, prefix),
+			HTTPStatusCode: http.StatusForbidden,
+		}
 	}
 	return b.catalogs(pr.namespace), pr, nil
 }

@@ -46,7 +46,8 @@ func (c *config) quarantineNow() time.Time {
 }
 
 // bucketQuarantine is the Buckets' quarantine.Store and quarantine.Returner: entry <ns>/<bucket>/<since> holds its
-// state at quarantine/bucket/<ns>/<bucket>/<since>/state and the Bucket's objects under …/<since>/data/.
+// state at quarantine/bucket/<ns>/<bucket>/<since>/state, the Bucket's objects under …/<since>/data/ and the catalogs
+// of the Lakes on its prefixes under …/<since>/catalogs/ (ADR-0293 Decision 6).
 type bucketQuarantine struct {
 	shared blob.Bucket
 	store  store.Store
@@ -98,6 +99,9 @@ func (q bucketQuarantine) Move(ctx context.Context, ref quarantine.Ref, now time
 	if err := m.MovePrefix(ctx, bucketPrefix(ref.Namespace, ref.Name), prefix+"data/"); err != nil {
 		return quarantine.Entry{}, err
 	}
+	if err := m.MovePrefix(ctx, bucketCatalogPrefix(ref.Namespace, ref.Name), prefix+"catalogs/"); err != nil {
+		return quarantine.Entry{}, err
+	}
 	if err := q.putState(ctx, prefix, quarantine.Kept); err != nil {
 		return quarantine.Entry{}, err
 	}
@@ -105,8 +109,8 @@ func (q bucketQuarantine) Move(ctx context.Context, ref quarantine.Ref, now time
 	return e, nil
 }
 
-// settle writes kept each moving entry with nothing left to move: its Bucket's prefix is empty, or a Bucket of the
-// name exists again, whose objects not yet moved stay with it (Decision 3).
+// settle writes kept each moving entry with nothing left to move: its Bucket's prefix and catalogs are empty, or a
+// Bucket of the name exists again, whose objects not yet moved stay with it (Decision 3).
 func (q bucketQuarantine) settle(ctx context.Context) error {
 	entries, err := q.List(ctx)
 	if err != nil {
@@ -117,12 +121,12 @@ func (q bucketQuarantine) settle(ctx context.Context) error {
 		if e.State != quarantine.Moving {
 			continue
 		}
-		left, _, err := q.shared.ListAfter(ctx, bucketPrefix(e.Namespace, e.Name), "", 1)
+		left, err := q.holds(ctx, e.Namespace, e.Name)
 		if err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		if len(left) > 0 {
+		if left {
 			if _, gerr := q.store.Get(ctx, v1.KindBucket.GVK(), e.Namespace, e.Name); gerr != nil {
 				if fault.KindOf(gerr) != fault.NotFound {
 					errs = append(errs, gerr)
@@ -133,6 +137,17 @@ func (q bucketQuarantine) settle(ctx context.Context) error {
 		errs = append(errs, q.putState(ctx, bucketEntryPrefix(e.Namespace, e.Name, e.Since), quarantine.Kept))
 	}
 	return errors.Join(errs...)
+}
+
+// holds reports whether the Bucket ns/name has objects or catalogs left in place.
+func (q bucketQuarantine) holds(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (bool, error) {
+	for _, prefix := range []string{bucketPrefix(ns, name), bucketCatalogPrefix(ns, name)} {
+		left, _, err := q.shared.ListAfter(ctx, prefix, "", 1)
+		if err != nil || len(left) > 0 {
+			return len(left) > 0, err
+		}
+	}
+	return false, nil
 }
 
 // List returns each entry under quarantine/bucket/, reading one key per entry and seeking past the rest, as
@@ -198,7 +213,7 @@ func (q bucketQuarantine) Expire(ctx context.Context, cutoff time.Time) ([]quara
 			continue
 		}
 		prefix := bucketEntryPrefix(e.Namespace, e.Name, e.Since)
-		if err := deletePrefix(ctx, q.shared, prefix+"data/"); err != nil {
+		if err := errors.Join(deletePrefix(ctx, q.shared, prefix+"data/"), deletePrefix(ctx, q.shared, prefix+"catalogs/")); err != nil {
 			errs = append(errs, err)
 			continue
 		}
@@ -229,11 +244,11 @@ func (q bucketQuarantine) Return(ctx context.Context, ref quarantine.Ref, since 
 	}
 	prefix, dst := bucketEntryPrefix(e.Namespace, e.Name, e.Since), bucketPrefix(ref.Namespace, ref.Name)
 	if e.State == quarantine.Kept {
-		left, _, err := q.shared.ListAfter(ctx, dst, "", 1)
+		left, err := q.holds(ctx, ref.Namespace, ref.Name)
 		if err != nil {
 			return err
 		}
-		if len(left) > 0 {
+		if left {
 			return fault.Conflictf(op, "%s holds objects: the quarantine returns only into an empty Bucket", ref)
 		}
 		if err := q.putState(ctx, prefix, quarantine.Returning); err != nil {
@@ -241,6 +256,9 @@ func (q bucketQuarantine) Return(ctx context.Context, ref quarantine.Ref, since 
 		}
 	}
 	if err := m.MovePrefix(ctx, prefix+"data/", dst); err != nil {
+		return err
+	}
+	if err := m.MovePrefix(ctx, prefix+"catalogs/", bucketCatalogPrefix(ref.Namespace, ref.Name)); err != nil {
 		return err
 	}
 	if err := q.shared.Delete(ctx, prefix+"state"); err != nil && fault.KindOf(err) != fault.NotFound {

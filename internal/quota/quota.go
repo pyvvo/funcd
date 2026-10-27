@@ -51,7 +51,7 @@ func (s Subject) String() string {
 // Request is one write a Checker decides.
 type Request struct {
 	Subject Subject
-	// Bytes is the write's size; 0 when unknown, which needs room left under the limit.
+	// Bytes is the write's size, or Unknown.
 	Bytes int64
 	// Replaces is the size the write overwrites, asked only before a refusal; nil is 0. It is credited to the
 	// decision, never to the count, since a concurrent delete can make it wrong.
@@ -60,6 +60,10 @@ type Request struct {
 	// refusal waits on a fresh measure, so the room it made counts at once.
 	Deletes bool
 }
+
+// Unknown is the Bytes of a write whose size is known only once it ran, a SQL Execute: it needs room left under the
+// limit, and once stored on a capped subject it starts a measure.
+const Unknown int64 = -1
 
 // Settle ends an admitted write: stored turns its reservation into settled bytes, false releases it. Call it once.
 type Settle func(stored bool)
@@ -198,7 +202,7 @@ func (b *Book) Admit(ctx context.Context, r Request) (Settle, error) {
 		return b.reserve(u, r.Subject, r.Bytes), nil
 	}
 	used := u.measured + u.settled + u.reserved
-	if r.Bytes == 0 {
+	if r.Bytes == Unknown {
 		return nil, fault.InsufficientStoragef(op, "%s holds %d of its %d bytes (spec.quota): delete to make room", r.Subject, used, u.limit)
 	}
 	return nil, fault.InsufficientStoragef(op, "%s holds %d of its %d bytes (spec.quota): a write of %d bytes would pass it",
@@ -234,7 +238,7 @@ func (b *Book) credit(ctx context.Context, u *usage, r Request) int64 {
 		epoch := u.epoch
 		u.mu.Unlock()
 		var credit int64
-		if r.Replaces != nil && r.Bytes > 0 {
+		if r.Replaces != nil && r.Bytes != Unknown {
 			if n, err := r.Replaces(ctx); err == nil {
 				credit = n
 			}
@@ -250,7 +254,7 @@ func (b *Book) credit(ctx context.Context, u *usage, r Request) int64 {
 // room reports whether n more bytes fit, credit deducted; a write of unknown size needs a byte left.
 func (u *usage) room(n, credit int64) bool {
 	used := u.measured + u.settled + u.reserved
-	if n == 0 {
+	if n == Unknown {
 		return used < u.limit
 	}
 	return used+n-credit <= u.limit
@@ -259,6 +263,8 @@ func (u *usage) room(n, credit int64) bool {
 // reserve counts n bytes in flight and returns their Settle; u.mu is held. A capped subject's stored write of unknown
 // size, a SQL Execute, starts a measure, or one more after the running one, so the next write sees what it added.
 func (b *Book) reserve(u *usage, s Subject, n int64) Settle {
+	unknown := n == Unknown
+	n = max(n, 0)
 	u.reserved += n
 	var once sync.Once
 	return func(stored bool) {
@@ -273,7 +279,7 @@ func (b *Book) reserve(u *usage, s Subject, n int64) Settle {
 			if u.measuring {
 				u.during += n
 			}
-			if n == 0 && u.capped {
+			if unknown && u.capped {
 				if u.measuring {
 					u.again = true
 				} else {

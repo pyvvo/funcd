@@ -131,6 +131,7 @@ func (f *Facade) run(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName,
 	if writes {
 		settle, err = f.d.Quota.Admit(ctx, quota.Request{
 			Subject: quota.Subject{Kind: v1.KindSQLDatabase, Namespace: ns, Name: db},
+			Bytes:   quota.Unknown,
 			Deletes: deletesOnly(stmts),
 		})
 		if err != nil {

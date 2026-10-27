@@ -66,6 +66,9 @@ type Deps struct {
 	// the location a key names (ADR-0293); nil serves none. CatalogMaxBytes is lake.catalogMaxSize in bytes.
 	Catalogs        func(ns v1.NamespaceName) blob.Bucket
 	CatalogMaxBytes int64
+	// LakeAt names the Lake of ns located on bucket/prefix, ok=false when none is: a catalog's delete is refused while
+	// one is (ADR-0293). nil refuses every catalog delete.
+	LakeAt func(ctx context.Context, ns v1.NamespaceName, bucket, prefix string) (v1.ObjectName, bool, error)
 	// MaxUploadBytes caps a single buffered (multipart/put) object; 0 ⇒ defaultMaxUpload. It also sizes the
 	// multipart budget (ADR-0188): buffered parts plus assembled copies stay within 3 × MaxUploadBytes daemon-wide,
 	// and one principal's parts within MaxUploadBytes.
@@ -149,6 +152,7 @@ func New(d Deps) (*Server, error) {
 		held:       held,
 		catalogs:   d.Catalogs,
 		catalogMax: d.CatalogMaxBytes,
+		lakeAt:     d.LakeAt,
 	}
 	iamImpl := &iam{derive: d.Deriver(), external: d.External}
 
