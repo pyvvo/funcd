@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.31.0](https://github.com/pyvvo/funcd/compare/v0.30.1...v0.31.0) (2026-10-27)
+
+
+### Features
+
+* **dataplane:** a namespace held for its data refuses calls until its owner's release (ADR-0290) ([ef03630](https://github.com/pyvvo/funcd/commit/ef0363015caae2359c7ae81293dad8d4d967ac8f))
+
 ## [0.30.1](https://github.com/pyvvo/funcd/compare/v0.30.0...v0.30.1) (2026-10-25)
 
 

@@ -228,13 +228,26 @@ func TestScenarioUnreachableTargetRetried(t *testing.T) {
 // oracle: docs/design/backup/target-sync.fizz#FinishedRunKept
 func TestScenarioFinishedRunKept(t *testing.T) {
 	t.Parallel()
+	finishedRunKept(t, time.Time{})
+}
+
+// Issue #1303: the scenario dated its Backups from a fixed day, so once the real time passed their expireTime, the
+// reconciler deleted queued as soon as the sync recorded it. Run on a backup clock years later, it must still hold.
+func TestIssue1303_FinishedRunKeptOnAnyDate(t *testing.T) {
+	t.Parallel()
+	finishedRunKept(t, time.Date(2031, 3, 1, 12, 0, 0, 0, time.UTC))
+}
+
+// finishedRunKept runs the scenario on a backup clock that starts at now, the real time when zero.
+func finishedRunKept(t *testing.T, now time.Time) {
 	var killed, queued *v1.Backup
 	var failing atomic.Bool
 	var killedLists atomic.Int32
 	failing.Store(true)
-	start := time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC)
-	r := newWBRig(t, wbOptions{setup: func(r *wbRig) {
+	var start time.Time
+	r := newWBRig(t, wbOptions{now: now, setup: func(r *wbRig) {
 		_, slots := r.minutes(3)
+		start = slots[0] // on the backup clock, so the Backups' expireTime stays ahead of it (#1303)
 		r.seed(r.restoredSchedule("orders-sql", slots[0], nil))
 		for _, name := range []string{"killed", "queued"} {
 			created, err := r.st.Create(r.ctx, r.backupObj(name, "orders-sql"))

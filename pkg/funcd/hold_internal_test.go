@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"reflect"
 	"strings"
@@ -305,4 +307,42 @@ func TestEveryRunnerConsultsHoldInNamespace(t *testing.T) {
 	for name, did := range acted("team") {
 		require.False(t, did, "%s acted in the held namespace", name)
 	}
+}
+
+// TestDataPlaneAsksTheNamespaceHold (ADR-0290 Decision 5): the daemon hands its hold to the data plane, so a data marker
+// that restore run wrote refuses calls into its namespace until the release, and another namespace is not refused.
+func TestDataPlaneAsksTheNamespaceHold(t *testing.T) {
+	t.Parallel()
+	dir, err := os.MkdirTemp("", "funcd")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	require.NoError(t, hold.MarkNamespaces(dir, []v1.NamespaceName{"team"}, hold.Marker{Reason: hold.ReasonData, Since: v1.NewTimestamp(time.Now())}))
+	h, err := hold.Open(dir)
+	require.NoError(t, err)
+	p, err := New(InMemory(), WithLogger(slog.New(slog.DiscardHandler)), WithHold(h))
+	require.NoError(t, err)
+	for _, ns := range []v1.NamespaceName{"team", "web"} {
+		seedObjects(t, p.cfg.store,
+			&v1.Namespace{TypeMeta: tmeta(v1.KindNamespace), ObjectMeta: v1.ObjectMeta{Name: v1.ObjectName(ns)}, Spec: v1.NamespaceSpec{
+				DefaultExposure: v1.ExposureImplicit, EdgeDefaults: &v1.EdgeDefaults{Auth: &v1.EdgeAuth{Mode: v1.AuthOpen}}}},
+			&v1.Function{TypeMeta: tmeta(v1.KindFunction), ObjectMeta: nsMeta(ns, "api"), Spec: v1.FunctionSpec{
+				Runtime: "nodejs22", Handler: "handle", Image: "file:///fn"}})
+	}
+	call := func(ns string) (int, string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+		defer cancel()
+		req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/function/api", nil)
+		req.Header.Set("X-Funcd-Namespace", ns)
+		rec := httptest.NewRecorder()
+		p.dataPlaneServer.Handler.ServeHTTP(rec, req)
+		return rec.Code, rec.Body.String()
+	}
+	code, body := call("team")
+	require.Equal(t, http.StatusServiceUnavailable, code, body)
+	require.Contains(t, body, "namespace team is held for its data since ")
+	_, body = call("web")
+	require.Contains(t, body, "activating web/api", "a call into web passes the hold and reaches the activator")
+	require.NoError(t, h.ReleaseNamespace("team", hold.ReasonData))
+	_, body = call("team")
+	require.Contains(t, body, "activating team/api", "after the release a call into team reaches the activator")
 }

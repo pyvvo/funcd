@@ -37,11 +37,36 @@ var NeverNamespace NamespaceGate = never{}
 func (never) HeldIn(v1.NamespaceName) bool            { return false }
 func (never) ReleasedAtIn(v1.NamespaceName) time.Time { return time.Time{} }
 
+// CallGate is what the data plane asks before it serves a call into a namespace (ADR-0290).
+type CallGate interface {
+	// NamespaceMarker is the marker holding ns: its restore marker if any, else its data marker. False when ns holds
+	// neither; the platform's own hold never counts.
+	NamespaceMarker(ns v1.NamespaceName) (Marker, bool)
+}
+
+// NeverCall is the call gate of a platform without a hold.
+//
+//nolint:gochecknoglobals // ADR-0290 contract: the data plane's default
+var NeverCall CallGate = never{}
+
+func (never) NamespaceMarker(v1.NamespaceName) (Marker, bool) { return Marker{}, false }
+
 // HeldIn reports whether the platform is held or ns holds a restore or data marker.
 func (h *Hold) HeldIn(ns v1.NamespaceName) bool {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return h.m != nil || len(h.nsHeld[ns]) > 0
+}
+
+// NamespaceMarker is ns's restore marker if it holds one, else its data marker; the platform's hold never counts.
+func (h *Hold) NamespaceMarker(ns v1.NamespaceName) (Marker, bool) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if m, ok := h.nsHeld[ns][ReasonRestore]; ok {
+		return m, true
+	}
+	m, ok := h.nsHeld[ns][ReasonData]
+	return m, ok
 }
 
 // ReleasedAtIn is the later of ReleasedAt and ns's last release, zero when neither happened.
