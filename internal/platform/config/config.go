@@ -393,6 +393,15 @@ type Config struct {
 		ReclaimInterval   string `json:"reclaimInterval,omitempty" env:"FUNCD_INVOKE_RECLAIM_INTERVAL"`
 	} `json:"invoke,omitempty"`
 
+	// Functions tunes Functions (ADR-0291). DefaultResources fills each field a solo Function's spec.resources leaves
+	// empty: 1 CPU and 512Mi by default; an empty value sets no default for its field.
+	Functions struct {
+		DefaultResources struct {
+			CPU    string `json:"cpu" env:"FUNCD_FUNCTIONS_DEFAULT_CPU"`
+			Memory string `json:"memory" env:"FUNCD_FUNCTIONS_DEFAULT_MEMORY"`
+		} `json:"defaultResources,omitempty"`
+	} `json:"functions,omitempty"`
+
 	// Site tunes the declarative static web app reconciler (ADR-0139, FEAT-0003/F103). DefaultIndex is
 	// the document a Site serves for "/" — and asserts present before it reports Ready — when its
 	// spec.index is empty. A relative path (no leading '/').
@@ -456,6 +465,8 @@ func defaults() Config {
 	c.Server.Network.WorkerSyncInterval = "2s"
 	c.Storage.Mode = "file"
 	c.Storage.DataDir = "/var/lib/funcd"
+	c.Functions.DefaultResources.CPU = DefaultFunctionCPU
+	c.Functions.DefaultResources.Memory = DefaultFunctionMemory
 	c.Auth.Namespaces = []string{"default"}
 	c.Runtime.Mode = "process"
 	c.Runtime.BootBackoffInitial = "10s"
@@ -681,7 +692,7 @@ func (c Config) Validate() error {
 		if err := c.validateCredentials(op); err != nil {
 			return err
 		}
-		for _, fs := range [][]Finding{c.CheckBackup(), c.CheckBlob(), c.CheckBridge(), c.CheckLake(), c.CheckQuarantine()} {
+		for _, fs := range [][]Finding{c.CheckBackup(), c.CheckBlob(), c.CheckBridge(), c.CheckLake(), c.CheckQuarantine(), c.CheckFunctions()} {
 			if len(fs) > 0 && fs[0].Error {
 				return fault.Invalidf(op, "%s", fs[0].Message)
 			}

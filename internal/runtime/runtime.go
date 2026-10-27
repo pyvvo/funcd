@@ -14,7 +14,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"math"
 	"net/netip"
+	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -178,6 +183,42 @@ type OutputCaptureFunc func(spec WorkerSpec, out *workerpipe.Output)
 // hook; with no hook a run keeps only its tail.
 type OutputCapturer interface {
 	SetOutputCapture(OutputCaptureFunc)
+}
+
+// LimitEnforcer is a Runtime that enforces WorkerSpec.Limits (ADR-0291 Decision 1); a driver without it ignores them.
+type LimitEnforcer interface {
+	EnforcesLimits() bool
+}
+
+// LimitsFrom is the one mapping of a ResourceSpec's cpu and memory onto Limits (ADR-0291 Decision 2). A value that does
+// not parse maps to 0, no limit: admission and the Function reconciler's gate refuse it before a worker is built.
+func LimitsFrom(cpu, memory string) Limits {
+	var l Limits
+	if n, err := strconv.ParseFloat(strings.TrimSpace(cpu), 64); err == nil && !math.IsNaN(n) && !math.IsInf(n, 0) && n > 0 {
+		l.CPUs = n
+	}
+	if n, err := v1alpha1.ByteSize(strings.TrimSpace(memory)).Bytes(); err == nil {
+		l.MemoryBytes = n
+	}
+	return l
+}
+
+// LimitWarner logs once per worker owner that its runtime leaves its limits unenforced (ADR-0291 Decision 1), for the
+// Function reconciler and the provider runtime alike. The zero value is ready.
+type LimitWarner struct{ seen sync.Map }
+
+// Warn logs, once for owner, that rt ignores l: rt is no LimitEnforcer, and l sets a limit.
+func (w *LimitWarner) Warn(ctx context.Context, logger *slog.Logger, rt Runtime, owner string, l Limits) {
+	if l == (Limits{}) {
+		return
+	}
+	if e, ok := rt.(LimitEnforcer); ok && e.EnforcesLimits() {
+		return
+	}
+	if _, seen := w.seen.LoadOrStore(owner, true); !seen {
+		logger.WarnContext(ctx, "the runtime does not enforce these CPU and memory limits", "owner", owner,
+			"cpus", l.CPUs, "memoryBytes", l.MemoryBytes)
+	}
 }
 
 // StopGracer is a Runtime that reports its SIGTERM-to-SIGKILL grace, which Run's Shutdown bound counts (ADR-0277).

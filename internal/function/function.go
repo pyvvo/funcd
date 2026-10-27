@@ -100,6 +100,9 @@ type Deps struct {
 	Logger    *slog.Logger
 	// LogMaxRecordBytes is FUNCD_FUNCLOG_MAX_RECORD_BYTES for every shim and pool host (ADR-0168); 0 sets none.
 	LogMaxRecordBytes int
+	// DefaultResources fills each field a solo Function's spec.resources leaves empty (functions.defaultResources,
+	// ADR-0291); zero sets no default.
+	DefaultResources v1.ResourceSpec
 	// Materializer + ShimCommand enable real function execution (ADR-0030): the
 	// reconciler materializes the artifact and launches the runtime shim, and gates
 	// readiness on the shim's /health/readiness. When Materializer is nil the reconciler
@@ -274,7 +277,9 @@ const (
 // Reconciler is the one controller.Reconciler for KindFunction.
 type Reconciler struct {
 	probeTimeout      time.Duration
-	logMaxRecordBytes int // FUNCD_FUNCLOG_MAX_RECORD_BYTES for every shim and pool host (ADR-0168); 0 sets none
+	logMaxRecordBytes int                 // FUNCD_FUNCLOG_MAX_RECORD_BYTES for every shim and pool host (ADR-0168); 0 sets none
+	defaultResources  v1.ResourceSpec     // functions.defaultResources (ADR-0291)
+	unenforced        runtime.LimitWarner // logs once per Function its runtime ignores its limits (ADR-0291)
 	store             store.Store
 	runtime           runtime.Runtime
 	scheduler         scheduler.Scheduler
@@ -509,8 +514,8 @@ func NewReconciler(d Deps) (*Reconciler, error) {
 	r := &Reconciler{
 		store: d.Store, runtime: d.Runtime, scheduler: d.Scheduler,
 		gateway: d.Gateway, validator: d.Validator, logger: logger.With("component", "function"),
-		logMaxRecordBytes: d.LogMaxRecordBytes,
-		materializer:      d.Materializer, shimCommand: d.ShimCommand, shimByFamily: d.ShimCommandsByFamily,
+		logMaxRecordBytes: d.LogMaxRecordBytes, defaultResources: d.DefaultResources,
+		materializer: d.Materializer, shimCommand: d.ShimCommand, shimByFamily: d.ShimCommandsByFamily,
 		endpointMode: d.EndpointMode, imageFor: d.ImageFor, resolver: d.Resolver, platformsOf: d.Platforms,
 		httpClient:        httpx.NodeClient(cmp.Or(d.ProbeTimeout, probeTimeout)),
 		probeTimeout:      cmp.Or(d.ProbeTimeout, probeTimeout),
@@ -706,7 +711,13 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 		return r.heldThenGate(ctx, fn, gateFailure{reason: reasonRuntimeUnavailable, message: msg, readyMessage: msg, phase: v1.PhaseFailed}, idx, drainAfter, nil)
 	}
 
-	// 3b. pooling placement (ADR-0046): decide whether this function is solo (status quo) or
+	// 3b. resources gate (ADR-0291 Decision 4): a Function written past admission, such as by a restore, with a
+	// spec.resources that does not parse or with spec.pooling.worker gets no worker.
+	if g := resourcesGate(fn); g != nil {
+		return r.heldThenGate(ctx, fn, *g, idx, drainAfter, nil)
+	}
+
+	// 3c. pooling placement (ADR-0046): decide whether this function is solo (status quo) or
 	// joins a shared pool worker by (namespace, runtime, worker-id). A REJECTED (over-cap)
 	// member is held NotReady with a PoolFull condition and gets no worker and no route; it
 	// comes back on the supervision period, since a slot frees without a write to its object.
@@ -3392,6 +3403,7 @@ func (r *Reconciler) workerSpec(ctx context.Context, fn *v1.Function, rev v1.Obj
 			Image:     r.imageFor(string(fn.Spec.Runtime)),
 			Mounts:    mounts,
 			Env:       env,
+			Limits:    r.limitsOf(ctx, fn),
 		}, nil
 	}
 	if r.materializer != nil {
@@ -3419,6 +3431,7 @@ func (r *Reconciler) workerSpec(ctx context.Context, fn *v1.Function, rev v1.Obj
 			Image:     string(fn.Spec.Runtime),
 			Command:   r.shimFor(fn.Spec.Runtime), // node by default; python* → the python shim (ADR-0049)
 			Env:       env,
+			Limits:    r.limitsOf(ctx, fn),
 		}, nil
 	}
 	return runtime.WorkerSpec{

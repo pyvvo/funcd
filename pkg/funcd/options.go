@@ -572,6 +572,18 @@ func WithQuarantinePeriod(d time.Duration) Option {
 	}
 }
 
+// WithFunctionDefaultResources sets what a solo Function's spec.resources leaves empty (functions.defaultResources,
+// ADR-0291 Decision 3); without it, such a Function has no limit.
+func WithFunctionDefaultResources(rs v1.ResourceSpec) Option {
+	return func(c *config) error {
+		if err := rs.Validate("funcd.WithFunctionDefaultResources", "default resources"); err != nil {
+			return err
+		}
+		c.functionDefaultResources = rs
+		return nil
+	}
+}
+
 // WithLakeSaveInterval sets how often every Lake engine saves its catalog after a commit, the Lake's recovery point
 // (ADR-0274, config lake.saveInterval), as the engine's FUNCD_LAKE_SAVE_INTERVAL: a whole number of milliseconds within
 // lake.saveInterval's bounds, 500ms to 1h. 0 ⇒ none set: every Lake saves its catalog before it answers (ADR-0279).

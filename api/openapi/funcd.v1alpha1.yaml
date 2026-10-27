@@ -699,6 +699,8 @@ components:
                 maximum: 15
                 minimum: 0
                 type: integer
+              resources:
+                $ref: "#/components/schemas/ResourceSpec"
               runtime:
                 maxLength: 63
                 minLength: 1
@@ -2740,6 +2742,8 @@ components:
           maximum: 15
           minimum: 0
           type: integer
+        resources:
+          $ref: "#/components/schemas/ResourceSpec"
         runtime:
           maxLength: 63
           minLength: 1

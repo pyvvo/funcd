@@ -654,6 +654,9 @@ func (d *driver) Stop(ctx context.Context, id runtime.InstanceID) error {
 }
 
 // StopGrace reports the grace Stop and Close wait after SIGTERM (runtime.StopGracer, ADR-0277).
+// EnforcesLimits reports that a worker's cgroup carries its WorkerSpec.Limits (ADR-0291 Decision 1).
+func (d *driver) EnforcesLimits() bool { return true }
+
 func (d *driver) StopGrace() time.Duration {
 	if d.cfg.StopGrace > 0 {
 		return d.cfg.StopGrace

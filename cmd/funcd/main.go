@@ -562,6 +562,12 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 		return nil, noopClose, nil, "", err
 	}
 	opts = append(opts, funcd.WithQuarantinePeriod(quarantinePeriod))
+	// What a solo Function's spec.resources leaves empty (ADR-0291), checked by the config loader.
+	fnResources, err := cfg.FunctionDefaultResources()
+	if err != nil {
+		return nil, noopClose, nil, "", err
+	}
+	opts = append(opts, funcd.WithFunctionDefaultResources(fnResources))
 	// Site default index document (ADR-0139, F103).
 	opts = append(opts, funcd.WithSiteDefaultIndex(cfg.Site.DefaultIndex))
 

@@ -1,10 +1,6 @@
 package v1alpha1
 
 import (
-	"regexp"
-	"strconv"
-	"strings"
-
 	"github.com/pyvvo/funcd/api/fault"
 )
 
@@ -38,10 +34,6 @@ func (d *SQLDatabase) GroupVersionKind() GroupVersionKind { return KindSQLDataba
 // (ADR-0236 Decision 3).
 func (d *SQLDatabase) GetStatus() *Status { return &d.Status.Status }
 
-// memoryQuantity is the size grammar the runtime parses (internal/platform/units.ParseBytes): an integer with an
-// optional Ki, Mi, Gi or Ti suffix.
-var memoryQuantity = regexp.MustCompile(`^[0-9]+(Ki|Mi|Gi|Ti)?$`)
-
 // Validate performs envelope validation, then refuses a cpu or memory value the runtime cannot parse, so a bound is
 // never silently ignored (ADR-0232 Decision 1).
 func (d *SQLDatabase) Validate() error {
@@ -49,16 +41,11 @@ func (d *SQLDatabase) Validate() error {
 	if err := validateMeta(d.TypeMeta, &d.ObjectMeta, KindSQLDatabase); err != nil {
 		return err
 	}
-	if m := strings.TrimSpace(d.Spec.Resources.Memory); m != "" && !memoryQuantity.MatchString(m) {
-		return fault.Invalidf(op, "spec.resources.memory %q is not a size such as 64Mi or 1Gi", d.Spec.Resources.Memory)
+	if err := d.Spec.Resources.Validate(op, "spec.resources"); err != nil {
+		return err
 	}
 	if d.Spec.Owner != "" && !dnsLabel.MatchString(string(d.Spec.Owner)) {
 		return fault.Invalidf(op, "spec.owner %q is not a valid Function name", d.Spec.Owner)
-	}
-	if c := strings.TrimSpace(d.Spec.Resources.CPU); c != "" {
-		if n, err := strconv.ParseFloat(c, 64); err != nil || n <= 0 {
-			return fault.Invalidf(op, "spec.resources.cpu %q is not a positive number of cores", d.Spec.Resources.CPU)
-		}
 	}
 	return nil
 }

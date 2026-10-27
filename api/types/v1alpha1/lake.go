@@ -81,16 +81,6 @@ type LakeLocation struct {
 	Prefix string `json:"prefix" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"`
 }
 
-// ResourceSpec sizes the backing engine (cpu/mem). RECORDED ONLY on the Lake (ADR-0086):
-// FunctionSpec has no resources field today, so this is forward-compat (the same posture as
-// Scaling.MaxReplicas) and is never projected onto the materialized Function.
-type ResourceSpec struct {
-	// CPU is a recorded CPU request/limit hint (e.g. "2"); forward-compat only.
-	CPU string `json:"cpu,omitempty"`
-	// Memory is a recorded memory request/limit hint (e.g. "4Gi"); forward-compat only.
-	Memory string `json:"memory,omitempty"`
-}
-
 // LakeStatus is the observed state of a Lake (ADR-0086): the reconciler reflects
 // readiness (Ready once the backing duckdb Function is up), the materialized backing Function, and
 // the published Quack endpoint. It embeds the shared Status (Phase + Conditions) so the controller's
@@ -171,6 +161,9 @@ func (c *Lake) Validate() error {
 		return fault.Invalidf(op, "spec.ingress.auth is not allowed: the lake::query PEP proxy authenticates the caller")
 	}
 	if err := c.Spec.Ingress.validate(op, "spec.ingress"); err != nil {
+		return err
+	}
+	if err := c.Spec.Resources.Validate(op, "spec.resources"); err != nil {
 		return err
 	}
 	roots := rootSections{ConfigMaps: c.Spec.ConfigMaps, Buckets: c.Spec.Buckets, Secrets: c.Spec.SecretDeclarations}

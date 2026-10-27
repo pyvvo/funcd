@@ -329,7 +329,9 @@ type config struct {
 	// ADR-0288); 0 ⇒ platformconfig.DefaultQuarantineRetention. quarantineClock dates the entries and the sweep's
 	// cutoff; nil ⇒ the system clock.
 	quarantinePeriod time.Duration
-	quarantineClock  clock.Clock
+	// functionDefaultResources fills what a solo Function's spec.resources leaves empty (ADR-0291); zero sets none.
+	functionDefaultResources v1.ResourceSpec
+	quarantineClock          clock.Clock
 	// lakeSaveInterval is every Lake engine's catalog save interval (lake.saveInterval, ADR-0274); 0 ⇒ none set: every
 	// Lake saves before it answers (ADR-0279).
 	lakeSaveInterval time.Duration
@@ -916,6 +918,7 @@ func (p *Platform) buildControlPlane() error {
 	fnReconciler, err := function.NewReconciler(function.Deps{
 		Store:                c.store,
 		QuarantinePeriod:     c.quarantinePeriodOrDefault(),
+		DefaultResources:     c.functionDefaultResources,
 		LogMaxRecordBytes:    cmp.Or(c.funclogMaxRecordBytes, funclog.DefaultMaxRecordBytes),
 		Calls:                calls,
 		InvokeSockets:        p.invokeMgr,

@@ -78,6 +78,9 @@ type FunctionSpec struct {
 	// access (bindings, owned data, grants) co-locate as handlers in one pool worker; status.pool
 	// names it.
 	Pooling Pooling `json:"pooling,omitempty"`
+	// Resources sizes each solo worker (ADR-0291): its cpu and memory, enforced by the runtime driver; an empty field
+	// takes functions.defaultResources. Not with pooling.worker: a pool's heap cap is pool-wide.
+	Resources ResourceSpec `json:"resources,omitempty"`
 	// Bindings are what the Function's code uses (ADR-0246): each binding is its grant, named like the ctx accessor
 	// that reaches it.
 	Bindings FunctionBindings `json:"bindings,omitzero"`
@@ -254,6 +257,12 @@ func (f *Function) Validate() error {
 	return f.Spec.Validate()
 }
 
+// PooledWithResources reports a Function that sets spec.resources and joins a pool, which admission refuses and the
+// reconciler blocks (ADR-0291 Decision 4).
+func (s *FunctionSpec) PooledWithResources() bool {
+	return s.Pooling.Worker != "" && s.Resources != (ResourceSpec{})
+}
+
 // Validate enforces the FunctionSpec rule JSON Schema can't express (ADR-0048): the Scaling
 // cross-field bound (minReplicas ≤ maxReplicas when maxReplicas > 0) and the duration bounds
 // (ADR-0194). It deliberately does NOT re-check field PRESENCE (runtime/handler/artifact non-empty)
@@ -276,6 +285,12 @@ func (s *FunctionSpec) Validate() error {
 		if err := CheckDuration(op, fmt.Sprintf("spec.bindings.links[%d].timeout", i), s.Bindings.Links[i].Timeout, 0, MaxLinkTimeout); err != nil {
 			return err
 		}
+	}
+	if err := s.Resources.Validate(op, "spec.resources"); err != nil {
+		return err
+	}
+	if s.PooledWithResources() {
+		return fault.Invalidf(op, "spec.resources cannot be set with spec.pooling.worker: a pool's heap cap is pool-wide")
 	}
 	if s.Scaling.MaxReplicas > 0 && s.Scaling.MinReplicas > s.Scaling.MaxReplicas {
 		return fault.Invalidf(op, "spec.scaling.minReplicas (%d) must not exceed maxReplicas (%d)",

@@ -9,7 +9,6 @@ import (
 	"maps"
 	"net/http"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -17,7 +16,6 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/gateway"
 	"github.com/pyvvo/funcd/internal/platform/httpx"
-	"github.com/pyvvo/funcd/internal/platform/units"
 	containerrt "github.com/pyvvo/funcd/internal/runtime"
 )
 
@@ -68,6 +66,7 @@ type engineRuntime struct {
 	logger      *slog.Logger
 	httpClient  *http.Client
 	storageRoot string
+	unenforced  containerrt.LimitWarner // logs once per engine its runtime ignores its limits (ADR-0291)
 	// specs is the fingerprint of the spec each provider's engine was created from: a running engine of another spec
 	// is replaced, since a provider re-created or changed between two reconciler passes reaches Converge with its new
 	// spec while the old engine runs (#1195). The map starts empty, so a running engine this process did not create is
@@ -201,6 +200,7 @@ func (r *engineRuntime) Converge(ctx context.Context, spec ProviderSpec) (Provid
 				}
 				maps.Copy(ws.Env, spec.IssueEnv())
 			}
+			r.unenforced.Warn(ctx, r.logger, r.rt, string(spec.Ref.Namespace)+"/"+string(spec.Ref.Name), ws.Limits)
 			created, cerr := r.rt.Create(ctx, ws)
 			if cerr != nil {
 				return ProviderStatus{}, fault.Wrapf(cerr, fault.KindOf(cerr), op, "create engine replica %d", i)
@@ -305,7 +305,7 @@ func (r *engineRuntime) workerSpec(spec ProviderSpec, replica int) containerrt.W
 		Image:     spec.Image,
 		Command:   nil, // the curated image entrypoint is the engine — no artifact, no shape gate
 		Env:       spec.Env,
-		Limits:    limitsFrom(spec.Resources),
+		Limits:    containerrt.LimitsFrom(spec.Resources.CPU, spec.Resources.Memory),
 		Mounts:    r.storageMounts(spec),
 
 		EgressOnly: spec.EgressOnly,
@@ -386,18 +386,4 @@ func (r *engineRuntime) removeRoute(ctx context.Context, ref ProviderRef) error 
 		return fault.Wrapf(perr, fault.KindOf(perr), op, "re-program routes without %s", ownID)
 	}
 	return nil
-}
-
-// limitsFrom maps the recorded ResourceSpec onto runtime.Limits when the values are parseable
-// (forward-compat, ADR-0086 sizing). Unparseable / empty values map to 0 (unlimited) — the runtime
-// driver applies what it can; this never fails a deploy on a cosmetic sizing string.
-func limitsFrom(rs ResourceSpec) containerrt.Limits {
-	var l containerrt.Limits
-	if cpu, err := strconv.ParseFloat(strings.TrimSpace(rs.CPU), 64); err == nil && cpu > 0 {
-		l.CPUs = cpu
-	}
-	if b, ok := units.ParseBytes(rs.Memory); ok {
-		l.MemoryBytes = b
-	}
-	return l
 }
