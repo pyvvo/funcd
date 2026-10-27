@@ -15,6 +15,13 @@ updates:
       - /images/runtime/duckdb
     schedule:
       interval: weekly
+    # A runtime image's Python version is part of its name (python314), so only digest and patch updates come here: a
+    # new Python minor is a new runtime image.
+    ignore:
+      - dependency-name: python
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
     groups:
       runtime-images:
         patterns:
@@ -25,6 +32,11 @@ updates:
       - /images/runtime/duckdb
     schedule:
       interval: weekly
+    # botocore requires python-dateutil <3.0.0, and the images install with --no-deps, so no step would catch a 3.x pin.
+    ignore:
+      - dependency-name: python-dateutil
+        update-types:
+          - version-update:semver-major
     groups:
       pip:
         patterns:
