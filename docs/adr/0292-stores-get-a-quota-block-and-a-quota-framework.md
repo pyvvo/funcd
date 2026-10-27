@@ -66,7 +66,7 @@ quota policies (opt-in, later); a store's usage in its status; funclog sizes; a 
 |---|---|---|---|
 | **A. One quota framework shaped like IAM, one `quota` block per store** | One check; a new cap is a new source | Usage errs high between measures | **Chosen** |
 | B. A size check coded in each write path | No new package | One copy per path; namespace quotas would add more | Rejected: not DRY |
-| C. Exact counters updated on every write | No error margin | An extra read on every overwrite and delete; drift after a crash | Rejected |
+| C. Exact counters updated on every write | No error margin | An extra read on every overwrite and delete; drift after an unclean stop | Rejected |
 | D. SQLite's `PRAGMA max_page_count` for SQL | Exact; deletes always work | Per connection inside the engine, unverified for rqlite | Rejected for now |
 | E. A size field on the Lake itself | Close to the Lake | Repeats its prefix's cap; a second enforcement path | Rejected: the prefix caps it once |
 
@@ -76,8 +76,7 @@ quota policies (opt-in, later); a store's usage in its status; funclog sizes; a 
    `Checker`, the quota counterpart of `auth.Authorizer`: `Admit` before a write returns the write's `Settle`, called
    once after it. `Book` implements it; `quota.None` admits everything and is the default of every enforcement point,
    as `hold.NeverCall` is for the hold. The daemon builds one `Book` and runs its refresh. The `Book` keeps its own
-   copy of a subject: the S3 gateway's strings live in a request buffer the next request reuses (its multipart store
-   copies them for the same reason); the experiment's lanes lost and duplicated subjects until it did.
+   copy of a subject, whose strings the S3 gateway reads from a buffer the next request reuses (the lanes showed it).
 2. **Sources.** The feature that owns a kind registers a `Source`: `Limit` reads the subject's cap (no size ⇒ no cap),
    `Measure` its usage: a Bucket's or a prefix's listed sizes (a Lake's catalog is outside, ADR-0293); a KVStore's
    keys and values, through `kvstore.Usager` (NEW, a driver capability beside `DropPrefix`); a SQLDatabase's
