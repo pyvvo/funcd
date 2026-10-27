@@ -1,6 +1,6 @@
 # ADR-0293: A Lake's catalog lives in a platform catalog store
 
-- **Status**: Accepted (2026-10-27; two adr-judge rounds and the experiment on real engines; the decider chose that a catalog counts as data and confirmed every choice)
+- **Status**: Reviewing (2026-10-28); Accepted (2026-10-27; two adr-judge rounds and the experiment on real engines; the decider chose that a catalog counts as data and confirmed every choice)
 - **Date**: 2026-10-27
 - **Deciders**: green-0-rabbit
 - **Tags**: lake, storage, limits
