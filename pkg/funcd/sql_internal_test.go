@@ -275,7 +275,9 @@ func TestScenarioDeleteOfNeverStartedDatabase(t *testing.T) {
 	require.False(t, ok)
 }
 
-// scenario: resources-change-restarts-engine — a new memory bound recreates the engine once, on the same directory.
+// scenario: resources-change-restarts-engine — a new memory bound reaches the engine through Converge, on the same
+// directory. The provider runtime replaces an engine whose spec changed (#1195), so the reconciler tears none down
+// (ADR-0292, refining ADR-0232 Decision 2).
 func TestScenarioResourcesChangeRestartsEngine(t *testing.T) {
 	t.Parallel()
 	e := startSQL(t, newSQLRuntime(t))
@@ -286,10 +288,10 @@ func TestScenarioResourcesChangeRestartsEngine(t *testing.T) {
 	d.Spec.Resources.Memory = "512Mi"
 	require.NoError(t, e.apply(t, d))
 	e.waitReady(t, "todo-db", 2)
-	time.Sleep(300 * time.Millisecond) // three supervision periods: no second teardown may follow
+	time.Sleep(300 * time.Millisecond) // three supervision periods: no teardown may follow
 	spec, _, teardowns, dir := e.rt.spec(sqlRef("todo-db"))
-	require.Equal(t, 1, teardowns, "one change makes exactly one teardown")
-	require.Equal(t, "512Mi", spec.Resources.Memory)
+	require.Zero(t, teardowns, "the provider runtime replaces the engine; the reconciler tears none down")
+	require.Equal(t, "512Mi", spec.Resources.Memory, "Converge gets the new bound")
 	require.True(t, dir, "the directory stays")
 	has, err := e.p.sqlReconciler.Prober().HasTables(e.ctx, "default", "todo-db")
 	require.NoError(t, err)
