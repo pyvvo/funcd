@@ -222,6 +222,6 @@ func InsufficientStoragef(op, format string, a ...any) *Error
 
 ## References
 
-- The decider's refinement of 2026-10-27; FEAT-0016.
+- The decider's refinement of 2026-10-27; FEAT-0016; its features #1313 (F206) and #1314 (F207), tracker #1315.
 - `internal/auth/authorizer.go:123`, `internal/runtime/runtime.go:183`, `internal/provider/runtime.go:394`,
   `api/types/v1alpha1/sqldatabase.go:52-60`, `pkg/funcd/funcd.go:2422-2445` (the shared Bucket view).
