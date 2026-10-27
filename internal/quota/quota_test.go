@@ -16,6 +16,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/platform/clock"
 	"github.com/pyvvo/funcd/internal/quota"
+	"github.com/pyvvo/funcd/internal/testkit/poll"
 )
 
 const media = "media"
@@ -187,7 +188,7 @@ func TestEmptyWriteAtTheCap(t *testing.T) {
 	s := newStore(1024, map[string]int64{"a": 1024})
 	b := newBook(s)
 	require.NoError(t, write(context.Background(), b, s, "empty", 0), "it adds nothing, so it needs no byte left")
-	require.Never(t, func() bool { return s.measures.Load() > 1 }, 50*time.Millisecond, time.Millisecond,
+	require.True(t, poll.Never(func() bool { return s.measures.Load() > 1 }, 50*time.Millisecond, time.Millisecond),
 		"only the first read measures: a stored empty write starts none")
 }
 
