@@ -30,7 +30,8 @@ RestrictSUIDSGID=true
 LockPersonality=true
 RestrictRealtime=true
 AmbientCapabilities=
-# The function-sandbox lane (F12/F13) adds CAP_NET_ADMIN here for netns wiring — deferred.
+# This unit runs runtime.mode: process. The containerd runtime (F12/F13) needs root for its netns, cgroups and
+# mounts, so it runs from the unit `funcd install` writes (ADR-0054).
 
 [Install]
 WantedBy=multi-user.target

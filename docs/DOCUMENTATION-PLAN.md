@@ -17,7 +17,7 @@
    (third-party systems funcd integrates with). The dividing question, from the blueprint: *can it be
    embedded pure-Go in the trusted daemon with direct port access?* Yes → built-in; no → add-on. `bus`
    is core, not a provider: internal plane, no `spec.*` binding.
-3. **Reference is generated, not written.** 27 kinds in `api/types/v1alpha1`, the OpenAPI at
+3. **Reference is generated, not written.** 33 kinds in `api/types/v1alpha1`, the OpenAPI at
    `api/openapi/funcd.v1alpha1.yaml`, ~30 cobra verbs, the DTO validation reference (ADR-0048).
    Hand-written copies drift.
 
@@ -31,7 +31,7 @@ docs/
 ├─ 0-start/
 │  ├─ what-is-funcd.md              # the 3 anchors (bottomless, ports+drivers, hexagonal) + design point (~100 agents / 8-core / 18 GB) — PROJECT-SUMMARY §1, FEAT-0000
 │  ├─ when-to-use-it.md             # single box, RAM-bound, scale-to-zero agents/MCP; explicit non-goals (multi-node, OIDC, canary, north-south egress)
-│  ├─ install.md                    # exists (docs/install.md); add `funcd install` self-provisioning of crun/containerd/CNI (ADR-0054/0056)
+│  ├─ install.md                    # exists (docs/install.md): `funcd install` for the containerd runtime, the bundled unit for process mode (ADR-0054/0056)
 │  ├─ quickstart.md                 # push → apply → get → invoke in 5 min; reuse docs/demo (gif + journey.sh)
 │  └─ glossary.md                   # Function/Revision/worker/worker node/Route/Sensor/Site…; the repo reuses words precisely (ADR-0045/0079)
 │

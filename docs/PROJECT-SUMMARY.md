@@ -181,7 +181,7 @@ stateDiagram-v2
 | [**Event / EventSource**](../internal/eventing/eventing.go) | Triggers a function from HTTP, timer, queue, or message; binds a source to one or more functions in the namespace. Timers take an interval or a cron expression in a time zone (ADR-0211); object-store and SQL change-feed sources fire on data changes (ADR-0119, ADR-0235). | V1 (HTTP, timer + cron, object store, SQL change feed) |
 | [**Invocation**](../api/types/v1alpha1/invocation.go) | The recorded result of each trigger fire (Ready/Failed + timing); a trigger is **never silently dropped**. | V1 |
 | [**ConfigMap**](../api/types/v1alpha1/configmap.go) | Non-sensitive configuration (env vars, args, flags); bound via `spec.bindings.config` (ADR-0246) and injected as worker env; a key a bound Secret also holds stays out and reads through `ctx.secret` (ADR-0249). Renamed from `Config` by ADR-0079. | V1 (ADR-0093) |
-| [**Secret**](../internal/secrets/secrets.go) | Sensitive data, managed separately from config, exposed only to authorized workloads (see [Security](#security)). A handler reads it through `ctx.secret`, from funcd on each read; no secret value enters the worker environment (ADR-0249). | V1 (inject last-mile: **P-W**) |
+| [**Secret**](../internal/secrets/secrets.go) | Sensitive data, managed separately from config, exposed only to authorized workloads (see [Security](#security)). A handler reads it through `ctx.secret`, from funcd on each read; no secret value enters the worker environment (ADR-0249). | V1 (inject last mile: ADR-0057) |
 | [**Scaling & scale-to-zero**](../internal/activator/activator.go) | Horizontal scaling between `minReplicas`/`maxReplicas`; with `minReplicas: 0`, idle functions scale to zero and the **activator** buffers the first request/trigger during cold start, then forwards. | V1 |
 | [**Gateway / ingress**](../internal/gateway/gateway.go) + [**data plane**](../internal/dataplane/dataplane.go) | Embedded `net/http` + `httputil` reverse proxy is the ingress; the **data plane** serves invocations through the activator (warm proxy / cold wake) over a dedicated listener (ADR-0033). Ingress hardening (FEAT-0006): declarative `Route` exposure, TLS, rate/size/concurrency limits, an edge authn PEP, and edge observability + shaping. Every non-default namespace gets the host `<ns>.<baseDomain>` (ADR-0240), and Function, Site and Lake share one `spec.ingress` shape (ADR-0241). | V1 (**FEAT-0006 complete**, ADR-0110–0114, 0240–0243) |
 | [**Runtime & RuntimeClass**](../internal/runtime/runtime.go) | The **worker** (the process running a function) behind the `runtime.Runtime` port: a **process driver** (dev/CI) and a **containerd/crun driver** (Linux prod) running **curated runtime images** carrying the **runtime shim** (loads the handler, serves CloudEvents). | V1 (**Node** + **Python**, ADR-0049) |
@@ -200,6 +200,7 @@ stateDiagram-v2
 | [**Sensor**](../api/types/v1alpha1/sensor.go) | The reusable event→action binder: subscribes to named `EventSource` v2 events and runs kind-keyed actions (start a `WorkflowRun` / invoke a `Function`), delivering event-driven and scheduled workflows. | V1 (ADR-0108/0109) |
 | [**App**](../internal/app/reconcile.go) + [**AppRevision**](../api/types/v1alpha1/apprevision.go) | One resource declares, installs and removes a whole app (Functions, Workflows, stores, Routes, Sites, lakes, SQL databases, ConfigMaps, Secret declarations); every spec change stamps an immutable `AppRevision` with history and rollback; drift is self-healed, with pause, lifecycle hooks, built-in health, requirements on other Apps, templates with values and pinned images from an OCI registry, and a dry-run engine. | V1 (FEAT-0010, ADR-0199–0220; App tests ADR-0216 accepted, not built) |
 | [**Disaster recovery**](../internal/backup/) | Platform backup of the metastore, run state and event store as age-sealed generations on an S3 or file target, with `funcd restore`, a held boot, a pre-upgrade snapshot and safe mode; blob and KV backups on the same format; app-owned `BackupSchedule` / `Backup` / `Restore` for KV stores, Buckets, lakes and SQL databases; `funcdctl backup plan`; API `If-Match` concurrency. | V1 (FEAT-0009, ADR-0201–0210, 0222/0223) |
+| [**Identity**](../api/types/v1alpha1/identity.go), [**Role**](../api/types/v1alpha1/role.go) + [**RolesAssignment**](../api/types/v1alpha1/rolesassignment.go) | A managed **Identity** is a principal for a caller outside funcd, issued a revocable SigV4 key pair (ADR-0135); a **Role** is a reusable set of data-plane actions, and a **RolesAssignment** grants roles to principals at a scope, compiled into Cedar (ADR-0136, FEAT-0008). | V1 (FEAT-0008) |
 
 ---
 
@@ -411,8 +412,8 @@ sequenceDiagram
 
 ## Build status (V1)
 
-The V1 build slate is complete and past it: **ADR-0001…0290** decided, **279 Implemented** (34 accepted as the
-roadmap's tier-0 build items; the rest — incl. ADR-0034…0290 — are follow-ons refining or extending
+The V1 build slate is complete and past it: **ADR-0001…0293** decided, **282 Implemented** (34 accepted as the
+roadmap's tier-0 build items; the rest — incl. ADR-0034…0293 — are follow-ons refining or extending
 existing feature rows), **0 roadmap items remaining**. Not Implemented: ADR-0000 (the process ADR), ADR-0216
 (App tests, Accepted, F119 deferred), the two DR addenda ADR-0227/0228 (Accepted; they record code already
 on main) and the AI gateway epoch's ADR-0280…0285 (FEAT-0015, Accepted). The exit-criterion path is proven end-to-end — a
@@ -482,15 +483,28 @@ configuration, namespace hosts, one exposure shape for every kind, a Route backe
 Functions that serve HTTP (ADR-0239–0243). Handlers then gained `ctx.config`, `ctx.secret` and `ctx.lake`
 (ADR-0245), and the resource-shape refactor shipped in v0.15.0: bindings under `spec.bindings`, stores
 declared at each resource's root, a contract file replacing `funcdctl.yaml`, and secrets read from funcd instead
-of the worker environment (ADR-0246–0252). See
+of the worker environment (ADR-0246–0252). Since then, `funcdctl dev` runs a whole App from its template, with
+watch builds that reload a Site's pages (ADR-0253–0257); TypeScript ships the `@funcd-dev/drizzle` adapter over
+`context.sql` (ADR-0258); `CatalogService` became `Lake` (ADR-0261); Functions own size-limited volumes (FEAT-0014,
+ADR-0262, ADR-0266, ADR-0268); every worker sees its own cgroup and runs under the default seccomp profile, and a
+provider engine reaches only its one internal endpoint (ADR-0264, ADR-0267, ADR-0269); derived S3 key pairs rotate
+(ADR-0270). The Lake runs DuckDB 2.0 and keeps its catalog in a DuckDB file that it saves at an interval, reports
+failed saves, retries them, and answers a commit once a save covers it (ADR-0263, ADR-0265, ADR-0271, ADR-0273,
+ADR-0274, ADR-0276, ADR-0279, ADR-0289). A Bucket prefix's owner names its kind (ADR-0275), a containerd worker gets
+one stop grace (ADR-0277), a file blob Put returns once its object is on disk (ADR-0278), and a design model checks
+every lifecycle decision (ADR-0272). The DR batch made `backup plan` print an example, finds the Backups made after
+a restored point, quarantines data no object names, and refuses calls into a namespace still held for its data
+(ADR-0286–0288, ADR-0290). The workload limits gave a Function's workers CPU and memory limits, every store a
+`quota` block, and a Lake's catalog its own store (FEAT-0016, ADR-0291–0293, v0.33.0). See
 [docs/roadmap/v1-delivery-plan.md](roadmap/v1-delivery-plan.md).
 
 **Out of V1 scope** (recorded for later): multi-node workers, north-south egress enforcement, an OIDC
 auth driver, workload-token *enforcement*, traffic-split/canary rollout, the bottomless bus, and
-per-route edge policy (TLS/limits/CORS/authn), mTLS + SNI routing (FEAT-0006 V2 follow-ons). Also not built: App
+a per-Route `tls` override and edge mTLS (FEAT-0006 V2 refinements). Also not built: App
 tests (F119, ADR-0216 accepted), external SQL access and a shared SQL server (F134/F135, ideas), pooling under
 container execution (ADR-0173: a board card), and **InfraStack** (FEAT-0012: Jobs, runtime plugins, Pulumi
-stacks — every row still an idea).
+stacks — every row still an idea), vector stores (FEAT-0013, ideas), the AI gateway (FEAT-0015, ADR-0280–0285
+accepted) and per-namespace quotas (F208, an idea).
 
 ---
 

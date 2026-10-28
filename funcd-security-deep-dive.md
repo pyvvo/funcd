@@ -1,5 +1,9 @@
 # funcd — Security Deep-Dive & Hardening Plan
 
+> **A snapshot, not kept up to date.** This assessment describes funcd as of 2026-07-07 (ADRs 0000 to 0106);
+> ADR-0261 keeps it as history. The current security model is in [blueprint.md](blueprint.md) (Security) and
+> [docs/PROJECT-SUMMARY.md](docs/PROJECT-SUMMARY.md) (Security), with the ADRs decided since.
+
 > **Date:** 2026-07-07 · **Scope:** cryptography, mTLS/transport, IAM (authn/RBAC/Cedar/workload identity),
 > secret & data persistence, ingress, function-to-function communication, runtime isolation, supply chain.
 > **Basis:** direct source inspection of the `internal/`, `pkg/`, `cmd/`, `shim/` trees + ADR status

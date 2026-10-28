@@ -22,22 +22,12 @@
     "ADR-0208",
     "ADR-0209",
     "ADR-0210",
+    "ADR-0211",
     "ADR-0222",
     "ADR-0223",
     "ADR-0227",
     "ADR-0228"
   ],
-  "items": [
-    {
-      "id": "X-CRON",
-      "title": "Cron ADR (Apps epoch)",
-      "features": [],
-      "depends_on": []
-    }
-  ],
-  "waves": {
-    "1": [
-      "X-CRON"
-    ]
-  }
+  "items": [],
+  "waves": {}
 }

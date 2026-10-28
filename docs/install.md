@@ -3,9 +3,16 @@
 funcd ships as a **single binary** plus a **systemd unit** (ADR-0026). These instructions
 cover Debian/Ubuntu and RHEL/Fedora; the steps are identical except where noted.
 
+There are two ways to run it:
+
+- **The containerd runtime**, the isolation boundary for untrusted functions: `funcd install` lays down crun and a
+  private containerd and writes one systemd unit that runs funcd as root (ADR-0054, ADR-0056). See step 2.
+- **The process runtime**, for trusted functions only: the unit in `configs/systemd/` runs funcd as an unprivileged
+  user (ADR-0011). See step 3.
+
 ## 1. Get the binary
 
-Either download a release binary, or build from source:
+Build the daemon from source; a release attaches only the `funcdctl` binaries:
 
 ```sh
 git clone https://github.com/pyvvo/funcd && cd funcd
@@ -17,7 +24,21 @@ funcd version                      # prints the stamped build identity
 > **Release build.** The production binary is the same pure-Go static build (`CGO_ENABLED=0`) — ADR-0065
 > made the metastore engine pure-Go Badger, so there is no cgo/`-tags slatedb` lane anymore.
 
-## 2. Create the service user and state directory
+## 2. The containerd runtime: `funcd install`
+
+```sh
+sudo funcd install --print         # prints the version-stamped funcd.service and changes nothing
+sudo funcd install                 # lays down crun and the private containerd, writes and enables funcd.service
+```
+
+`funcd install` is idempotent. It writes one unit, `/etc/systemd/system/funcd.service`: funcd is the service and
+containerd its managed child, with no separate containerd unit. The unit runs as root, which the private containerd
+needs for cgroups, network namespaces and mounts; it restarts on failure except safe mode's exit status 70
+(ADR-0207). `sudo funcd uninstall` removes the service again. Then go to step 4.
+
+## 3. The process runtime: the bundled unit
+
+### Create the service user and state directory
 
 ```sh
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin funcd   # Debian/Ubuntu
@@ -27,7 +48,7 @@ sudo useradd --system --no-create-home --shell /usr/sbin/nologin funcd   # Debia
 `systemd` creates and owns `/var/lib/funcd` automatically via `StateDirectory=funcd`
 (the Badger metastore writes there — `<dataDir>/store`, ADR-0065).
 
-## 3. Install and enable the unit
+### Install and enable the unit
 
 ```sh
 sudo install -m0644 configs/systemd/funcd.service /etc/systemd/system/funcd.service
@@ -39,8 +60,8 @@ journalctl -u funcd -f             # structured slog output
 
 The unit runs as the unprivileged `funcd` user, restarts on failure except safe mode's exit status 70 (ADR-0207,
 `examples/restore-runbook.md`), and ships hardened
-(`NoNewPrivileges`, `ProtectSystem=strict`, `PrivateTmp`, …). The function-worker lane
-(F12/F13) later adds `CAP_NET_ADMIN` for netns wiring — see the comment in the unit.
+(`NoNewPrivileges`, `ProtectSystem=strict`, `PrivateTmp`, …). It has no capability for network namespaces: the
+containerd runtime runs from the unit of step 2.
 
 > **Runtime.** The unit runs the default `runtime.mode: process`, which is not an isolation boundary (ADR-0011):
 > every function runs as the `funcd` user and can read what that user can. Use it only for trusted functions;
@@ -48,7 +69,8 @@ The unit runs as the unprivileged `funcd` user, restarts on failure except safe 
 
 ## 4. Drive it
 
-Use the CLI (built alongside via `go build ./cmd/funcdctl`, ADR-0024):
+Use the CLI (ADR-0024): download `funcdctl-<version>-<os>-<arch>` from a release and check it against the release's
+`SHA256SUMS`, or build it with `go build ./cmd/funcdctl`:
 
 ```sh
 funcdctl --server http://localhost:8080 get functions -n default
@@ -76,6 +98,8 @@ prints the generation as `<timeline>/<n>`: the way back (`examples/restore-runbo
   command (`examples/backup-lifecycle.md`).
 
 ## Uninstall
+
+After `funcd install`, run `sudo funcd uninstall`. After the bundled unit:
 
 ```sh
 sudo systemctl disable --now funcd

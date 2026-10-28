@@ -793,199 +793,87 @@ plat, err := funcd.New(funcd.InMemory())
 
 ### Layout
 
+The repository as built (2026-10-28); each comment is the package's own doc line, shortened.
+
 ```text
 funcd/
 ├── api/                                  # public contracts — the only packages SDK/CLI may depend on
-│   ├── openapi/
-│   │   ├── funcd.v1alpha1.yaml           # GENERATED OpenAPI 3.1 (code-first via huma — ADR-0005)
-│   │   └── generated/                     # (reserved for future generated client — P-R/F18)
-│   ├── proto/
-│   │   └── funcd/v1/
-│   │       ├── controlplane.proto        # worker node ⇆ control-plane registration & watch (multi-node)
-│   │       ├── workernode.proto              # placement & worker lifecycle (multi-node)
-│   │       └── runtime.proto             # out-of-tree runtime shim contract
-│   ├── types/
-│   │   └── v1alpha1/                     # CRD-like resource model (matches apiVersion funcd.io/v1alpha1)
-│   │       ├── metadata.go               # TypeMeta, ObjectMeta (incl. required resourceGroup + optional tags), owner refs
-│   │       ├── namespace.go
-│   │       ├── resourcegroup.go
-│   │       ├── function.go
-│   │       ├── revision.go
-│   │       ├── route.go
-│   │       ├── service.go
-│   │       ├── eventsource.go
-│   │       ├── config.go
-│   │       ├── secret.go
-│   │       ├── grant.go
-│   │       ├── egresspolicy.go
-│   │       ├── invocation.go
-│   │       ├── runtimeclass.go
-│   │       ├── workernode.go
-│   │       ├── gateway.go
-│   │       └── status.go                 # shared Conditions / Phase types
-│   └── fault/                            # error kernel + edge mapping (ADR-0002; stdlib-only, public contract)
-│       ├── fault.go                      # Kind enum, Error+Unwrap, KindOf, Wrapf, NotFoundf/Invalidf/…
-│       └── problem.go                    # RFC 9457 application/problem+json (single status-mapping site)
-│
+│   ├── cron/                             # 5-field cron expressions in an IANA time zone (ADR-0211)
+│   ├── fault/                            # the shared error taxonomy (ADR-0002)
+│   ├── lintfixture/                      # a known-bad lint fixture (ADR-0002, ADR-0025)
+│   ├── openapi/funcd.v1alpha1.yaml       # GENERATED OpenAPI 3.1 (code-first via huma, ADR-0005)
+│   └── types/v1alpha1/                   # the 33 resource kinds and their validation
 ├── cmd/
-│   ├── funcd/
-│   │   └── main.go                       # thin shell: config → drivers → funcd.Run(ctx)
-│   └── funcdctl/
-│       └── main.go                       # separate CLI; depends on pkg/sdk only
-│
-├── pkg/                                  # public Go surface — "the platform as a library"
-│   ├── funcd/
-│   │   ├── funcd.go                      # New(...Option) (*Platform, error), Run, Shutdown
-│   │   ├── options.go                    # WithStore / WithBus / WithGateway / WithRuntime / …
-│   │   └── presets.go                    # InMemory() for tests, Production() defaults
-│   └── sdk/                              # ergonomic wrapper over the generated client
-│
+│   ├── funcd/                            # the daemon: configuration, driver selection, install, upgrade, restore
+│   ├── funcd-rqlite/                     # the SQL engine an add-on provider runs (ADR-0232, ADR-0235)
+│   └── funcdctl/                         # the CLI (ADR-0024); its dev mode builds with -tags dev
+├── pkg/
+│   ├── funcd/                            # the platform-as-a-library facade (ADR-0014)
+│   └── sdk/                              # the typed Go client of the control-plane API (ADR-0024)
 ├── internal/
-│   ├── app/                              # composition root behind pkg/funcd
-│   │   ├── bootstrap.go                  # wire store, bus, features, controllers, servers
-│   │   ├── config.go                     # daemon config schema + validation + env overrides
-│   │   ├── container.go                  # dependency container
-│   │   └── lifecycle.go                  # ordered start/stop, readiness, crash-only restart
-│   │
-│   ├── features/                         # vertical slices — one package per resource kind
-│   │   ├── feature.go                    # Feature = types + validation + handlers + reconciler
-│   │   ├── registry.go                   # features self-register: API routes + control loops
-│   │   ├── namespaces/
-│   │   ├── resourcegroups/
-│   │   ├── functions/
-│   │   ├── revisions/
-│   │   ├── routes/
-│   │   ├── services/
-│   │   ├── eventsources/
-│   │   ├── configs/
-│   │   ├── secrets/
-│   │   ├── grants/
-│   │   ├── egresspolicies/
-│   │   └── invocations/
-│   │
-│   ├── controlplane/                     # API server (implements the generated server interface)
-│   │   ├── server.go
-│   │   ├── router.go
-│   │   ├── middleware/                   # authn, audit, recovery, request-id, otel
-│   │   └── admission/                    # validation, defaulting, quota enforcement
-│   │
-│   ├── controller/                       # generic reconciliation engine
-│   │   ├── manager.go                    # runs every feature's control loop
-│   │   ├── reconciler.go                 # watch → diff → act → write status
-│   │   └── workqueue.go                  # rate-limited retries with backoff
-│   │
-│   ├── scheduler/                        # placement port (ADR-0017): control-plane, called by the reconciler
-│   │   ├── scheduler.go                  # Scheduler port: Schedule(Request) → Placement
-│   │   ├── singlenode/                   # single-node driver (places on the local worker node); multi-node is V3
-│   │   └── schedulercontract/            # the port guarantee any driver must satisfy
-│   │
-│   ├── gateway/
-│   │   ├── gateway.go                    # Gateway port: ProgramRoutes(desired), health
-│   │   ├── middleware.go                 # net/http middleware seam: Chain + recover + request-id
-│   │   └── embedded/                     # built-in net/http/httputil reverse-proxy driver (the single driver — ADR-0029)
-│   │
-│   ├── activator/                        # scale-to-zero (ADR-0016): its own package, not under gateway/
-│   │   ├── activator.go                  # cold-start buffer→wake→forward + idle reclaim (in-process)
-│   │   └── storescaler/                  # store-backed Scaler driver: partitioned Phase write-back
-│   │
-│   ├── network/                          # network manager: netns wiring + egress control
-│   │   ├── netns.go                      # veth/bridge wiring per worker (no k8s CNI)
-│   │   ├── nftables.go                   # default-deny lateral + transparent redirect
-│   │   └── egress/                       # transparent egress gateway: TPROXY, SNI peek, DNS-aware
-│   │
-│   ├── workernode/                       # node agent
-│   │   ├── workernode.go                     # exposes worker-node API (control-plane + worker-local); no SDK
-│   │   ├── supervisor.go                 # child processes: containerd, OpenBAO (when used)
-│   │   └── heartbeat.go
-│   │
-│   ├── runtime/
-│   │   ├── runtime.go                    # Runtime port: Create/Start/Stop/Exec/Logs
-│   │   ├── manager.go
-│   │   ├── shim/                         # in-worker shim: CloudEvents contract, health, SDK, egress hooks
-│   │   └── providers/
-│   │       ├── process/                  # plain OS processes (dev / e2e)
-│   │       ├── wasm/                     # wazero / wasmtime
-│   │       ├── containerd/               # containerd + crun curated runtimes (kata shim from V3)
-│   │       └── external/                 # remote runtimes via runtime.proto
-│   │
-│   ├── blob/                             # STORAGE LAYER (substrate): blob.Bucket port (ADR-0002: not "storage", to stay distinct from "store")
-│   │   ├── blob.go                       # port: get/put/list/delete/presign (driver-dep-free)
-│   │   └── gocloud/                      # one-file driver (gocloud.go): memory+file+S3 via go-cloud; own pkg only to keep go-cloud out of blob.go
-│   │
-│   ├── store/                            # DATABASE LAYER (substrate): Store/kvstore port — DISTINCT engines (no single lib covers all, unlike blob), so sibling drivers are warranted
-│   │   ├── store.go                      # port: CRUD + generations + watch
-│   │   ├── memory/                       # one-file driver (memory.go): in-process map
-│   │   └── badger/                       # one-file driver (badger.go): pure-Go embedded LSM, local file store (ADR-0065, superseding ADR-0006's slatedb/cgo engine)
-│   │
-│   ├── kvstore/                          # KV port + drivers (substrate, ADR-0019): memory now; jetstream/db-layer later
-│   ├── services/                         # function-facing services (ADR-0019): one KindService dispatcher + a facade+handler per type
-│   │   ├── dispatcher.go                 # the single KindService reconciler: routes spec.type → TypeHandler (one-reconciler-per-gvk)
-│   │   ├── kv/                           # KV facade (PDP authz + <ns>/<binding>/<key> prefix) + TypeHandler, on internal/kvstore
-│   │   ├── blob/                         # on storage layer
-│   │   ├── secrets/                      # memory / s3+encryption / openbao
-│   │   ├── config/                       # memory / file / s3
-│   │   └── vector/                       # in-process / external
-│   │
-│   ├── bus/
-│   │   ├── bus.go                        # Bus port: pub/sub + streams
-│   │   ├── memory/                       # pure in-process bus (unit tests)
-│   │   └── nats/                         # embedded or external NATS/JetStream
-│   │
-│   ├── eventing/                         # runtime machinery behind EventSource
-│   │   ├── source.go                     # adapters → CloudEvents normalization
-│   │   ├── sensor.go                     # filters, dependency expressions
-│   │   └── trigger.go                    # invoke functions, publish, notify
-│   │
-│   ├── auth/                             # authorization kernel (ADR-0018): the PDP every PEP calls
-│   │   ├── authorizer.go                 # Authorizer port (PDP) + Identity/Verb/Role/Decision
-│   │   ├── rbac/                          # built-in namespace-RBAC driver, default-deny (Grants → V2)
-│   │   ├── authcontract/                 # the Authorizer port conformance suite
-│   │   ├── authenticator.go              # workload identity + OIDC → V2 (V1 request authn is the API-server middleware, internal/controlplane)
-│   │   └── policy/                       # optional cedar-go / opa engines behind the port → V2
-│   │
-│   └── platform/                         # shared kernel — zero business logic (LEAF: imports no internal/, ADR-0002 depguard)
-│       │                                  # (error kernel lives in api/fault, not here)
-│       ├── clock/                         # testable clock abstraction
-│       ├── config/                        # daemon config (FuncdConfig): schema + validation + env overrides
-│       ├── lintfixture/                   # ADR-0002 lint-rule test fixtures
-│       ├── observability/                 # slog root + OTel metrics/tracing + audit (logger/metrics/tracing/audit.go)
-│       └── version/                       # version.go — filled by -ldflags at build time
-│
-├── tests/
-│   ├── e2e/                              # black-box: only pkg/funcd + pkg/sdk + api imports (depguard e2e-boundary)
-│   │   ├── e2e_test.go                   # ADR-0025 L3b: funcd.InMemory() embed e2e (boot/run-shutdown/multi-instance)
-│   │   ├── contractcoverage_test.go      # ADR-0025 L2 drift guard (walks internal/ for <port>contract suites)
-│   │   ├── boundary-fixture/             # lintfixture: proves the e2e-boundary depguard rule fires
-│   │   └── linux_integration_test.go     # ADR-0025 L4: //go:build linux && integration (deferred walk)
-│   └── lint-fixtures/                    # ADR-0002/0025 runnable lint-rule proofs (any-leak, mock, e2e-boundary)
-# NOTE (ADR-0025): contract suites live at internal/<port>/<port>contract (ADR-0002), NOT a top-level tests/contract;
-# the Linux per-driver lane co-locates in tests/e2e behind `//go:build linux && integration` (containerd precedent).
-│
-├── e2e/                                  # declarative containerd-lane e2e (ADR-0077): OVH Venom YAML suites that
-│   │                                     #   assert the `just lima-example-*` lanes on a real self-deploying VM.
-│   │                                     #   DISTINCT from tests/e2e (the Go funcd.InMemory() embed tests above).
-│   ├── kv-counter.venom.yml              #   the KV lane (ADR-0069/0076) · fn-to-fn.venom.yml — the link lane (ADR-0064/0058)
-│   └── README.md                         #   authoring playbook = the venom-e2e skill (.claude/skills/venom-e2e)
-│
-├── configs/
-│   ├── funcd.yaml                        # production example (drivers, gateway, storage, bus)
-│   └── funcd.dev.yaml                    # in-memory / embedded everything
-├── deploy/
-│   ├── systemd/funcd.service
-│   └── compose.dev.yaml                  # optional local deps: registry, victoria-*, …
-├── scripts/
-│   ├── generate.sh                       # openapi + proto codegen (wired to go:generate)
-│   ├── test-e2e.sh
-│   └── build.sh                          # single binary + version stamping (pure-Go static, CGO_ENABLED=0 — ADR-0065 removed the slatedb/cgo release path)
-├── docs/                                 # blueprint, SPEC, ADRs (architecture decision records)
-├── .github/workflows/ci.yml              # lint → unit → codegen-drift → integration → e2e
-├── .golangci.yml
+│   ├── activator/                        # scale-to-zero (ADR-0016)
+│   ├── app/                              # the App kind's server side (ADR-0199)
+│   ├── artifact/                         # OCI artifact distribution (ADR-0031)
+│   ├── auth/                             # the authorization kernel: one PDP, RBAC and Cedar drivers (ADR-0018)
+│   ├── backup/                           # the platform backup format and target (ADR-0203)
+│   ├── blob/                             # the storage-layer port (ADR-0007) and the S3 gateway (ADR-0080)
+│   ├── bus/                              # the messaging port (ADR-0008)
+│   ├── contract/                         # the function contract type profile (ADR-0058)
+│   ├── controller/                       # the one reconcile engine (ADR-0015)
+│   ├── controlplane/                     # the API server: huma operations and admission (ADR-0005, ADR-0018)
+│   ├── dataplane/                        # the function-invocation data plane (ADR-0033)
+│   ├── edge/                             # the edge router: authn, limits, shaping, static files, TLS (ADR-0110 to ADR-0114)
+│   ├── envresolve/                       # the config and secret environment resolver (ADR-0093)
+│   ├── eventing/                         # eventing (ADR-0023, ADR-0108)
+│   ├── expr/                             # the reference engine (ADR-0095)
+│   ├── funclog/                          # function telemetry capture and reads (ADR-0081, ADR-0084)
+│   ├── function/                         # the Function lifecycle reconciler (ADR-0020)
+│   ├── gateway/                          # the ingress gateway port (ADR-0012)
+│   ├── gc/                               # the owner garbage collector (ADR-0170)
+│   ├── health/                           # built-in health (ADR-0215)
+│   ├── kvstore/                          # the key/value substrate port: memory and Badger drivers (ADR-0019)
+│   ├── lake/                             # the Lake engines of funcdctl dev and the PEP proxy before each engine (ADR-0137, ADR-0279)
+│   ├── network/                          # worker network isolation (ADR-0115)
+│   ├── ownedstore/                       # the stores a resource declares (ADR-0178, ADR-0248)
+│   ├── platform/                         # leaf packages: clock, config, hold, quarantine, units, version, …
+│   ├── pooling/                          # the worker-pooling placement policy (ADR-0046)
+│   ├── provider/                         # the provider catalog and the add-on provider runtime (ADR-0082, ADR-0087)
+│   ├── quota/                            # the storage quota framework (ADR-0292)
+│   ├── restore/                          # platform restore and held boot (ADR-0206)
+│   ├── revhold/                          # the Function revisions open workflow runs hold (ADR-0190)
+│   ├── route/                            # the Route reconciler (ADR-0110)
+│   ├── runtime/                          # the worker port (ADR-0011): process and containerd drivers
+│   ├── safemode/                         # unclean-start counting and the held start (ADR-0207)
+│   ├── scheduler/                        # the placement port (ADR-0017)
+│   ├── secrets/                          # secret delivery (ADR-0022)
+│   ├── sensor/                           # the Sensor (ADR-0109)
+│   ├── services/                         # the service pattern (ADR-0019): backup, blob, identity, kv, lake, roles, secret, sql
+│   ├── site/                             # the Site reconciler (ADR-0139)
+│   ├── snapshot/                         # the platform-store snapshot seam (ADR-0202)
+│   ├── sql/                              # the SQL engines of funcdctl dev (ADR-0237)
+│   ├── store/                            # the metastore port: Badger and memory drivers (ADR-0006, ADR-0065)
+│   ├── testkit/                          # shared test helpers
+│   ├── upgrade/                          # `funcd upgrade` (ADR-0207)
+│   ├── volume/                           # the directories Functions own (ADR-0262)
+│   ├── workernode/local/                 # the worker node's local API that a function's context calls reach
+│   └── workflow/                         # the workflow engine core (ADR-0094)
+├── images/runtime/                       # the curated runtime images: nodejs22, python314, duckdb, rqlite (ADR-0054)
+├── e2e/                                  # the Venom suites of the Lima lanes (ADR-0077, ADR-0230); see e2e/README.md
+├── tests/                                # Go end-to-end tests on funcd.InMemory(), chaos tests, lint fixtures
+├── bench/                                # benchmarks (ADR-0040)
+├── examples/                             # funcdconfig.yaml and the operator runbooks
+├── configs/systemd/funcd.service         # the process-mode unit; `funcd install` writes the containerd one
+├── scripts/                              # build.sh, the lanes (lanes.yaml, lane.py) and agent/ (d, gate.sh)
+├── docs/                                 # ADRs, feature docs, roadmaps, reviews, reports, the project summary
 ├── justfile                              # single task runner (just)
-├── go.mod                                # module github.com/pyvvo/funcd; codegen tools via `tool`; the language repos pinned by tag (ADR-0141)
-├── go.sum
+├── flake.nix                             # the pinned toolchain: Go, just, Lima, Venom, FizzBee
+├── go.mod                                # module github.com/pyvvo/funcd; the language repos pinned by tag (ADR-0141)
 ├── LICENSE
 └── README.md
 ```
+
+Not built yet, though the architecture above names them: a wasm and a kata microVM worker driver, a gRPC API, the
+vector service (FEAT-0013) and multi-node worker registration (FEAT-0002).
 
 ### Companion repositories (ADR-0141)
 
@@ -994,7 +882,7 @@ funcd consumes as Go modules pinned by release tag in `go.mod`:
 
 | Repo | Holds | funcd uses |
 |------|-------|------------|
-| `pyvvo/funcd-typescript` | the Node shim (`shim.mjs`, `pool.mjs`), npm `@funcd-dev/shim` and `@funcd-dev/vite-plugin` (ADR-0144), the JS examples with committed builds | `shim.Shim`, `shim.Pool` (embedded), the image's `shim.mjs`, the examples for e2e and lanes |
+| `pyvvo/funcd-typescript` | the Node shim (`shim.mjs`, `pool.mjs`), npm `@funcd-dev/shim`, `@funcd-dev/vite-plugin` (ADR-0144) and `@funcd-dev/drizzle` (ADR-0258), the JS examples with committed builds | `shim.Shim`, `shim.Pool` (embedded), the image's `shim.mjs`, the examples for e2e and lanes |
 | `pyvvo/funcd-python` | the Python shim (`funcd_shim`), PyPI `funcd-shim` and `funcd-bundle` (ADR-0144), the Python examples | `shim.Extract` (embedded), the image's `funcd_shim`, the examples for e2e and lanes |
 | `pyvvo/funcd-functions` | real functions deployed on the platform | nothing (a consumer of funcd) |
 

@@ -1,5 +1,9 @@
 # funcd — Security Assessment: Summary Table
 
+> **A snapshot, not kept up to date.** This assessment describes funcd as of 2026-07-07 (ADRs 0000 to 0106);
+> ADR-0261 keeps it as history. The current security model is in [blueprint.md](blueprint.md) (Security) and
+> [docs/PROJECT-SUMMARY.md](docs/PROJECT-SUMMARY.md) (Security), with the ADRs decided since.
+
 > **Status:** confirmed (2026-07-07). Statuses and severities are **firmed by the full deep dive**
 > ([funcd-security-deep-dive.md](funcd-security-deep-dive.md)) — direct source inspection plus dependency/source
 > greps for every absence claim. Rows are grounded in the **as-built** stack, not the blueprint's target state

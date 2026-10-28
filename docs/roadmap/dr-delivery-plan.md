@@ -1,7 +1,8 @@
 # DR delivery plan — ADR sequencing to ship FEAT-0009
 
-- **Status**: Active (living — update as ADRs are created/accepted/implemented)
-- **Date**: 2026-10-07
+- **Status**: Complete: every ADR of this plan is Implemented. X-CRON became [ADR-0211](../adr/0211-cron-schedules.md),
+  Implemented on 2026-10-10. The DR ADRs decided later, ADR-0286 to ADR-0290, were built outside this plan.
+- **Date**: 2026-10-07 (refreshed 2026-10-28)
 - **Realizes**: [FEAT-0009 (Disaster recovery)](../feat/0009-feat-disaster-recovery.md)
 - **Process**: [ADR-0000](../adr/0000-adr-process.md) · skills `/adr` → `/adr-judge` → `/adr-impl` → `/adr-impl-review`
 
@@ -25,7 +26,7 @@ one wave ahead of the build track.
 
 | Plan id | Proposed ADR working title | Realizes | Build-depends on |
 |---|---|---|---|
-| X-CRON | Cron ADR of the Apps epoch (outside this plan; the `schedule` field of `BackupSchedule` needs it) | — | — |
+| X-CRON | Cron ADR of the Apps epoch (outside this plan; the `schedule` field of `BackupSchedule` needs it), built as [ADR-0211](../adr/0211-cron-schedules.md) | — | — |
 
 The report lists 17 rows in its section I. This slate keeps the ADRs that realize FEAT-0009 and one item outside it, X-CRON.
 ADR-0195 (KV delete records) and ADR-0196 (UTC timestamps) are Implemented and appear only as built dependencies in tier 0.
@@ -81,24 +82,25 @@ flowchart TB
     ADR_0208["ADR-0208 ✓"]
     ADR_0209["ADR-0209 ✓"]
     ADR_0210["ADR-0210 ✓"]
+    ADR_0211["ADR-0211 ✓"]
     ADR_0222["ADR-0222 ✓"]
     ADR_0223["ADR-0223 ✓"]
     ADR_0227["ADR-0227 ✓"]
     ADR_0228["ADR-0228 ✓"]
-    X_CRON["X-CRON · —<br/>Cron ADR (Apps epoch)"]
-
 ```
 
 ## Build waves (computed)
 
 | Tier | Items |
 |---|---|
-| 0 (done) | ADR-0006, ADR-0007, ADR-0018, ADR-0065, ADR-0067, ADR-0094, ADR-0118, ADR-0119, ADR-0157, ADR-0195, ADR-0196, ADR-0201, ADR-0202, ADR-0203, ADR-0204, ADR-0205, ADR-0206, ADR-0207, ADR-0208, ADR-0209, ADR-0210, ADR-0222, ADR-0223, ADR-0227 |
-| 1 | X-CRON |
+| 0 (done) | ADR-0006, ADR-0007, ADR-0018, ADR-0065, ADR-0067, ADR-0094, ADR-0118, ADR-0119, ADR-0157, ADR-0195, ADR-0196, ADR-0201, ADR-0202, ADR-0203, ADR-0204, ADR-0205, ADR-0206, ADR-0207, ADR-0208, ADR-0209, ADR-0210, ADR-0211, ADR-0222, ADR-0223, ADR-0227, ADR-0228 |
+
+Analyzer: `no items in plan`: `items: []`, so no wave is left to compute. The tiers below record the order the ADRs were
+built in.
 
 Why each tier:
 
-- **Tier 1** needs only built ADRs or none: ADR-0202 extends the store, and X-CRON belongs to the Apps epoch.
+- **Tier 1** needs only built ADRs or none: ADR-0202 extends the store, and X-CRON (ADR-0211) belongs to the Apps epoch.
 - **Tier 2**: ADR-0203 is the keystone, since every later item stores or reads the format it fixes; it needs ADR-0202. ADR-0201
   needs the snapshot port of ADR-0202. ADR-0210 needs the version of ADR-0202.
 - **Tier 3**: ADR-0204 wraps the format in encryption.
@@ -126,7 +128,7 @@ Why each tier:
 - **Design wave 1**: draft ADR-0202.
 - **Design wave 2** (while ADR-0202 is built): draft ADR-0203, ADR-0201 and ADR-0210, then ADR-0204 as soon as ADR-0203 is Accepted.
 - **Design wave 3**: draft ADR-0205 and ADR-0206.
-- **Design wave 4**: draft ADR-0207, ADR-0208 and ADR-0209, then ADR-0222 once the Cron ADR of the Apps epoch is Accepted.
+- **Design wave 4**: draft ADR-0207, ADR-0208 and ADR-0209, then ADR-0222 once the Cron ADR of the Apps epoch (ADR-0211) is Accepted.
 - **Review attention.** ADR-0203 carries the fencing rule, the credential model and a change to the blob port. ADR-0206 is the
   biggest merge and the hold touches every runner. ADR-0204 holds the key custody. ADR-0202 changes the resource version, which
   six places of the code parse as a number; ADR-0210 and ADR-0206 rely on that change.
@@ -146,7 +148,7 @@ Critical path (1 items, the longest build chain):
 | F109: a client that holds a version from before the restore gets a conflict | ADR-0202, ADR-0210, ADR-0206 |
 | F109: the release turns the held parts on | ADR-0206 |
 | F109: an upgrade first snapshots the platform, and a platform that keeps crashing starts held, then stops and names the restore of the last good copy | ADR-0207 |
-| F111: an app owner backs up a KV store, a bucket and a lake on a schedule, restores into a new name and swaps it in | ADR-0222 (with ADR-0208, ADR-0209, X-CRON) |
+| F111: an app owner backs up a KV store, a bucket and a lake on a schedule, restores into a new name and swaps it in | ADR-0222 (with ADR-0208, ADR-0209, ADR-0211) |
 | F111: the backups of a deleted App stay until their time to live | ADR-0222 |
 | F111: the blob store runs on an S3-compatible target and a backup of it restores | ADR-0208 |
 | F111: the KV backup follows the same rules as the platform backup | ADR-0209 |
@@ -159,11 +161,11 @@ as the helper that the feature table marks as later.
 ## Parallelization & sequencing notes
 
 - **Leaf:** ADR-0207 (nothing depends on it and it is off the critical path) can be deferred.
-- **Parallel inside tiers:** ADR-0202 and X-CRON in tier 1; ADR-0201, ADR-0203 and ADR-0210 in tier 2; ADR-0205 and
+- **Parallel inside tiers:** ADR-0202 and X-CRON (ADR-0211) in tier 1; ADR-0201, ADR-0203 and ADR-0210 in tier 2; ADR-0205 and
   ADR-0206 in tier 4; ADR-0207, ADR-0208 and ADR-0209 in tier 5.
 - **Riskiest ADRs:** ADR-0203 (fencing and the blob port), ADR-0206 (the hold and the merge) and ADR-0202 (the version timeline).
 - **Off the spine, can trail:** ADR-0223, ADR-0207 and ADR-0210.
-- **Outside owner:** X-CRON belongs to the Apps epoch.
+- **Outside owner:** X-CRON belongs to the Apps epoch, which built it as ADR-0211.
 
 ## Reproducing & maintaining this plan
 
