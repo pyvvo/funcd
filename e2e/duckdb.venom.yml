@@ -1234,7 +1234,7 @@ testcases:
         info: "the spill limit → status {{.result.statuscode}} body {{.result.body}}"
         assertions:
           - result.statuscode ShouldEqual 200
-          - result.body ShouldContainSubstring MiB
+          - result.body ShouldMatchRegex "[0-9.]+ [MG]iB"
       - type: http
         method: POST
         url: "http://127.0.0.1:8081/function/lake-reader"
