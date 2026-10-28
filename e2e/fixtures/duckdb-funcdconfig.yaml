@@ -2,6 +2,7 @@
 # replaced by an ADR-0171 credential list, so the suite applies the ADR-0179 engines in namespaces a-b and a with an
 # admin token. The provisioning writes both token files (root, 0600) from the lane's `tokens` in scripts/lanes.yaml.
 # It sets no s3gateway.endpoint: the S3 URL and the lake proxies derive from the bridge address (ADR-0238).
+# lake.scratchSize is 2GiB: the 1Gi engine's spill case needs more than the 1GiB default leaves for spills (ADR-0294).
 apiVersion: funcd.io/v1alpha1
 kind: FuncdConfig
 server:
@@ -21,6 +22,8 @@ runtime:
 s3gateway:
   enabled: true
   listenAddr: 0.0.0.0:9000
+lake:
+  scratchSize: 2GiB
 log:
   format: text
   level: info

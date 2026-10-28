@@ -1213,7 +1213,7 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "LAKE=Ready OOM_KILL=0"
 
-  # ADR-0294: the engine's /var/funcd/ducklake is a loop-mounted ext4 of lake.scratchSize, 1 GiB by default, and its
+  # ADR-0294: the engine's /var/funcd/ducklake is a loop-mounted ext4 of lake.scratchSize, 2GiB in this lane, and its
   # spill limit is that filesystem's free space less twice lake.catalogMaxSize. A query that would spill past it fails on
   # its own, and the next commit is answered after its save.
   - name: lake-scratch-bounded — a query that spills past the scratch fails, and the next commit and save succeed
@@ -1224,7 +1224,7 @@ testcases:
             findmnt -n -o FSTYPE,SOURCE --mountpoint /var/lib/funcd/data/run/scratch/default/lake'
         info: "the engine's scratch → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
-          - result.systemout ShouldContainSubstring "ext4 /dev/loop"
+          - result.systemout ShouldMatchRegex "ext4 +/dev/loop"
       - type: http
         method: POST
         url: "http://127.0.0.1:8081/function/lake-reader"
