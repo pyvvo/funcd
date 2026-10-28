@@ -1,6 +1,6 @@
 # ADR-0297: A store write on a full disk fails as an error, and a start waits for space
 
-- **Status**: Proposed (2026-10-28; adr-judge round 1 folded in)
+- **Status**: Proposed (2026-10-28; adr-judge rounds 1 and 2 folded in)
 - **Date**: 2026-10-28
 - **Deciders**: green-0-rabbit
 - **Tags**: storage, reliability
@@ -18,14 +18,15 @@ The metastore, the KV stores, the workflow run state, the dead-letter queue and 
 (`internal/store/badger/badger.go:72`, `internal/kvstore/badger/badger.go:120`,
 `internal/workflow/runstate/badger/badger.go:57`, `internal/eventing/deadletter/badger/badger.go:68`,
 `internal/eventing/eventstore/eventstore.go:53`). Badger memory-maps its memtable, value-log and table files, and
-ristretto v2.2.0 creates each one at its full size as a sparse file (`z/file.go:37`), so a page gets its disk block only
-when it is first written. This ADR makes a full data filesystem an error that a store write returns and the daemon
-survives, and makes a start wait for space. That takes three facts of Badger v4.9.6 into account: it does not keep its
-memtable after a failed creation (`db.go:1061`, `:1049`), a failed value-log creation blocks later rotations
-(`value.go:536`), and a failed growth of its discard-stats file is not returned (`discard.go:129`). An experiment on
-2026-10-28, Badger v4.9.6 filling 48 MiB tmpfs and ext4 images in a Linux VM, showed that with the changes below every
-write on the full filesystem returns "no space left on device", reads work, and writes resume once space is freed, on
-the memtable and the value-log paths.
+ristretto v2.2.0 creates each one at its full size as a sparse file (`z/file.go:37`). This ADR makes a full data
+filesystem an error that a store write returns and the daemon survives, and makes a start wait for space. That takes
+these facts of Badger v4.9.6 into account: it does not keep its memtable after a failed creation (`db.go:1061`,
+`:1049`); a failed memtable or value-log creation leaves a file that blocks later rotations and the next open
+(`memtable.go:75-78`, `:146`, `value.go:536`); a failed growth of its discard-stats file is not returned
+(`discard.go:129`); and `y.Wrap` copies an error's text without its chain (`y/error.go:55-62`). An experiment on
+2026-10-28, Badger v4.9.6 filling 48 MiB tmpfs and ext4 images in a Linux VM, showed that with the changes below a
+write on the full filesystem, and an open on it, return an error that matches `syscall.ENOSPC`; reads work; and after
+a fill ended by a kill, the database opens and writes once space is freed, on the memtable and the value-log paths.
 
 ## Scenarios
 
@@ -55,7 +56,6 @@ discard-stats growth on a failed allocation; how a full filesystem surfaces from
 | **A. Allocate each memory-mapped file's blocks when it is created (`fallocate`), in a patched ristretto, and have Badger return the error, in a patched Badger** | Out of space becomes an error at a file's creation, and every Badger path returns it | Two forks to keep until upstream ships the changes; each Badger's newest files take their full size on disk | **Chosen** |
 | A1. The ristretto patch alone | One fork | Badger does not keep its memtable after a failed creation (`db.go:1061`), so later writes cannot proceed | Rejected |
 | B. A reserve file that funcd deletes when the disk is full | No fork | A fill faster than the check is not covered; the decider chose A | Rejected |
-| C. `debug.SetPanicOnFault` | No fork | It is per goroutine, and Badger writes from its own goroutines | Rejected |
 | D. Reopen the stores read-only on a full disk | Reads go on | Badger opens read-only only after a clean close, and every writer would need a read-only path | Rejected |
 
 ## Decision
@@ -66,9 +66,11 @@ discard-stats growth on a failed allocation; how a full filesystem surfaces from
    `Truncate` only when the filesystem does not support `fallocate` (`EOPNOTSUPP`). `OpenMmapFile` closes the file it
    opened when mapping fails.
 2. **Badger returns the error.** `ensureRoomForWrite` creates the next memtable before it queues the full one: a failed
-   creation leaves the full memtable in place and returns the error. A value-log or table file whose creation fails is
-   removed, so the next rotation or flush tries again. A failed growth of the discard-stats file drops that update and
-   logs it, since those stats only guide value-log garbage collection.
+   creation leaves the full memtable in place and returns the error. A memtable, value-log or table file whose creation
+   fails is removed, so the next rotation or flush tries again, and an open removes an empty memtable file, a creation
+   that did not finish and holds no entry. `y.Wrap` keeps the error's chain (`%w`) in both of its modes. A failed
+   growth of the discard-stats file drops that update and logs it, since those stats only guide value-log garbage
+   collection.
 3. **The forks.** funcd takes both through `replace`: `github.com/dgraph-io/ristretto/v2 =>
    github.com/pyvvo/ristretto/v2 v2.2.0-funcd.1` and `github.com/dgraph-io/badger/v4 =>
    github.com/pyvvo/badger/v4 v4.9.6-funcd.1`, forks of the pinned releases with these changes only, tagged. Each
@@ -102,13 +104,15 @@ func OpenMmapFileUsing(fd *os.File, sz int, writable bool) (*MmapFile, error)
 func (m *MmapFile) Truncate(maxSz int64) error
 
 // github.com/dgraph-io/badger/v4 (the fork), changed: ensureRoomForWrite keeps the full memtable when the next one
-// cannot be created; a value-log or table file whose creation fails is removed; a failed discard-stats growth is logged.
+// cannot be created; a memtable, value-log or table file whose creation fails is removed, and an open removes an empty
+// memtable file; y.Wrap keeps the chain; a failed discard-stats growth is logged.
 
 // The five Badger adapters, changed: Open keeps the error chain; a write's errors.Is(err, syscall.ENOSPC) → 507.
 
 // Package main (cmd/funcd), NEW.
 const spaceWait = 10 * time.Second
-func waitForSpace(ctx context.Context, log *slog.Logger, dataDir string, try func() error) error // retries try on ENOSPC
+// waitForSpace retries try while it fails with ENOSPC.
+func waitForSpace(ctx context.Context, log *slog.Logger, dataDir string, try func() error) error
 ```
 
 | Consumes | Exposes |
@@ -119,9 +123,10 @@ func waitForSpace(ctx context.Context, log *slog.Logger, dataDir string, try fun
 
 - The forks: `github.com/pyvvo/ristretto` from upstream's v2.2.0, one commit in `z/file.go`, `z/file_linux.go` and
   `z/file_default.go`, tagged `v2.2.0-funcd.1`; `github.com/pyvvo/badger` from upstream's v4.9.6, one commit in
-  `db.go`, `value.go`, `table/table.go` and `discard.go`, tagged `v4.9.6-funcd.1`. Each has a test that fills a small
-  ext4 loop image and a tmpfs: a write past it returns its error, reads work, and a write succeeds once space is freed,
-  on the memtable and the value-log paths. `go.mod` gets both `replace` lines.
+  `db.go`, `memtable.go`, `value.go`, `table/table.go`, `discard.go` and `y/error.go`, tagged `v4.9.6-funcd.1`. Each
+  has a test that fills a small ext4 loop image and a tmpfs, on the memtable and the value-log paths: a write past it
+  and an open on it return an error matching `syscall.ENOSPC`, reads work, and after the fill the database reopens and
+  writes once space is freed. `go.mod` gets both `replace` lines.
 - The five Badger adapters: `Open` keeps the chain, and a write maps `ENOSPC` to 507. `cmd/funcd/main.go`:
   `waitForSpace` around `safeModeStart` and `funcd.New`.
 - Tests, one per scenario: `TestScenarioFullDiskWriteFails` (Linux as root: a KV store with small Badger options on an
@@ -147,7 +152,8 @@ func waitForSpace(ctx context.Context, log *slog.Logger, dataDir string, try fun
 - **Negative (accepted)**: each Badger database's newest memtable and value-log files take their full size on disk at
   once: with funcd's 16 MiB memtables and 64 MiB value logs, about 160 MiB each, about 0.8 GiB for the five, inside
   ADR-0296's 2 GiB margin; a 507 on a full disk may come with a stored write; while Badger cannot flush, a write can
-  wait instead of failing; funcd carries two forks until upstream ships the changes.
+  wait instead of failing, and a stop waits for the flush until systemd ends the process, whose next start replays the
+  memtable log; funcd carries two forks until upstream ships the changes.
 
 ## Open questions
 
@@ -158,5 +164,5 @@ func waitForSpace(ctx context.Context, log *slog.Logger, dataDir string, try fun
 - The decider's refinement of 2026-10-28; FEAT-0016; adr-judge round 1 (coworker-3, 2026-10-28).
 - The experiment of 2026-10-28 (a Linux VM, Badger v4.9.6 on 48 MiB tmpfs and ext4 images).
 - ristretto v2.2.0 `z/file.go:30-77`, `z/file_linux.go`; Badger v4.9.6 `db.go:868-914`, `:1044-1090`, `:1160`,
-  `memtable.go:137-149`, `value.go:526-539`, `table/table.go:245-254`, `discard.go:129`; fallocate(2);
-  `cmd/funcd/install.go:47-52`; `pkg/funcd/funcd.go:571` (#94).
+  `memtable.go:75-78`, `:137-149`, `value.go:526-539`, `table/table.go:245-254`, `discard.go:129`, `y/error.go:55-62`;
+  fallocate(2); `pkg/funcd/funcd.go:571` (#94).

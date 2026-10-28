@@ -16,7 +16,8 @@
   [ADR-0265](0265-the-lake-engine-takes-tuning-keys-from-an-allow-list.md) (`DUCKDB_MAX_TEMP_DIRECTORY_SIZE`) ·
   [ADR-0293](0293-a-lakes-catalog-lives-in-a-platform-catalog-store.md) (`lake.catalogMaxSize`) ·
   [ADR-0081](0081-function-log-capture-side-channel-blob.md) (the log channel) ·
-  [ADR-0295](0295-a-volumes-quota-limits-its-inodes.md) · [ADR-0296](0296-the-data-filesystem-keeps-a-free-space-floor.md)
+  [ADR-0295](0295-a-volumes-quota-limits-its-inodes.md) ·
+  [ADR-0296](0296-the-data-filesystem-keeps-a-free-space-floor.md)
 
 ## Context & Need
 
@@ -80,13 +81,15 @@ bounded, and they are the Lake's own concern.
 4. **Boot directory.** The driver mounts a 1 MiB tmpfs (`nosuid`, `nodev`, `noexec`, mode 0777) on the host's boot
    directory before it creates the container, and unmounts it before it removes the directory: at teardown and at a
    failed create. At boot, the driver unmounts every mount under the boot root that `/proc/self/mountinfo` lists, since
-   an unclean stop or a failed create can leave one that containerd's container list does not name. The directory holds the
-   port and report files only.
+   an unclean stop or a failed create can leave one that containerd's container list does not name. The directory
+   holds the port and report files only.
 5. **Log directory.** The log channel's directory is bind-mounted read-only. A socket on a read-only mount still
    connects: Linux returns "read-only file system" only for regular files, directories and symbolic links.
 6. **The Lake engine's scratch.** `/var/funcd/ducklake` is a filesystem of its own:
-   - `lake.scratchSize` (NEW key, a `ByteSize`, 4GiB when empty) sizes it; the configuration is refused unless it is
-     more than twice `lake.catalogMaxSize`, which leaves room for the catalog, its checkpoint copy and the spills.
+   - `lake.scratchSize` (NEW key, a `ByteSize`) sizes it. Empty, it is the larger of 4GiB and twice
+     `lake.catalogMaxSize` plus 2GiB, so a node whose catalog cap is already large starts after the upgrade; a value
+     that is set is refused unless it is more than twice `lake.catalogMaxSize`, which leaves room for the catalog, its
+     checkpoint copy and the spills.
    - Before it allocates anything, the provider runtime asks the free-space floor (ADR-0296) for `lake.scratchSize`; a
      refusal fails the start, and the Lake reports that the data filesystem lacks the space for its scratch.
    - At each engine start the provider runtime creates `<dataDir>/scratch/<ns>/<lake>.img` of `lake.scratchSize`,
@@ -120,11 +123,12 @@ type ScratchSpec struct {
 	SizeBytes int64
 }
 // ProviderSpec.Scratch *ScratchSpec // nil: none
-// The engine runtime's deps gain the floor: Floor interface{ Check(ctx context.Context, bytes int64) error } (ADR-0296).
+// The engine runtime's deps gain the floor (ADR-0296):
+//	Floor interface{ Check(ctx context.Context, bytes int64) error }
 
 // Package config (internal/platform/config), NEW.
 //	Lake.ScratchSize string `json:"scratchSize,omitempty" env:"FUNCD_LAKE_SCRATCH_SIZE"`
-func (c Config) LakeScratchBytes() (int64, error) // 4GiB when empty; refused unless above 2 × LakeCatalogMaxBytes
+func (c Config) LakeScratchBytes() (int64, error) // empty: max(4GiB, 2 × catalog cap + 2GiB); set: above 2 × the cap
 ```
 
 | Consumes | Exposes |
@@ -145,7 +149,8 @@ func (c Config) LakeScratchBytes() (int64, error) // 4GiB when empty; refused un
   read-only root, the tmpfs and its size, and `HOME`); `…LakeScratchRefusedBelowFloor` and `…LakeScratchRecreated`
   (the provider runtime with a fake floor and a fake image); the image package's own test as root
   (`just test-volumes-root`). On real containerd: the kv-counter Lima lane execs into a Function's worker (a write to
-  `/etc` fails, `/tmp` is a tmpfs, a 2 MiB write to `/run/funcd-boot` fails, a write to `/run/funcd-log` fails);
+  `/etc` fails, `/tmp` is a tmpfs) and, as `…BootAndLogDirsBounded`, a 2 MiB write to `/run/funcd-boot` fails, a
+  write to `/run/funcd-log` fails, and the Function's next log line still reaches funcd;
   the duckdb lane, with a 512Mi scratch and a 128Mi catalog cap, runs a query that spills past 256 MiB and fails, then
   a commit and a save that succeed (`…LakeScratchBounded`); the sql lane execs a write to `/etc` in the engine, which
   fails, and its SQL cases pass (`…SqlEngineReadOnlyRoot`).

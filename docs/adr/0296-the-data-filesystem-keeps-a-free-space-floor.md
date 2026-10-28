@@ -68,18 +68,21 @@ catalog), funclog, and the start of a Lake engine's scratch image (ADR-0294).
    write's own size, is below the floor. It admits a write of unknown size (a SQL Execute) only while the reading less
    the admitted bytes is at or above the floor; the margin absorbs what such writes add between two readings. A delete
    is always admitted. The refusal is `fault.InsufficientStorage` (507) with a fixed message, "the data filesystem is
-   below storage.minFreeSize: writes are refused until space is freed"; the free space and the floor go to funcd's log,
-   once when it starts refusing and once when it stops. A reading that fails admits the write and is logged.
-3. **One decision point.** `Floor.Guard(book)` is the Checker that KV, SQL and every `blob.Quoted` view get. A `Quoted`
-   view asks it once with the zero `Subject` when no capped subject covers a key, so an uncapped store's write meets
-   the floor too; the `Book` admits the zero `Subject`, which no `Source` claims.
+   below storage.minFreeSize, or this write would take it there: writes are refused until space is freed"; the free
+   space and the floor go to funcd's log, once when a reading falls below the floor and once when one is back above
+   it. A reading that fails admits the write and is logged.
+3. **One decision point.** `Floor.Guard(book)` is the Checker that KV, SQL and every `blob.Quoted` view get. The
+   guard asks the floor at a write's subject without a prefix: a store, a Bucket, or the zero `Subject`, which no
+   `Source` claims and the `Book` admits. A `Quoted` view asks a capped prefix's subject first, then the Bucket when it
+   is capped, else the zero `Subject`, so every write meets the floor once and its size is counted once.
 4. **The catalog store.** Its view (`s3gateway.Deps.Catalogs`) is a `Quoted` view with no capped subject, so a Lake's
    catalog save meets the floor; the Lake reports a refused save as ADR-0276 does.
 5. **funclog.** `BlobSink.Append` asks `Floor.Check` with the record's size; below the floor it drops the record and
    counts it, and the count is logged at the first record admitted again.
 6. **Not gated.** The metastore, workflow run state, the dead-letter queue, the event store, backups and restores write
-   into the margin. What workloads drive into them stays bounded: a workflow run's input by `workflow.payloadLimit` and
-   its records by `workflow.retention`; dead letters by the dead-letter `maxEntries` per namespace and its retention;
+   into the margin. What workloads drive into them is bounded per run and by age, at their defaults: a workflow run's
+   input by `workflow.payloadLimit` and its records by `workflow.retention`; dead letters by the dead-letter
+   `maxEntries` per namespace and its retention;
    the event store's seen lists by the objects of the Buckets they watch, which the floor gates. Presigned PUTs never
    reach the data filesystem: only an S3-backed blob store signs them (`internal/blob/gocloud/gocloud.go:744`; the
    local backend has no URL signer).

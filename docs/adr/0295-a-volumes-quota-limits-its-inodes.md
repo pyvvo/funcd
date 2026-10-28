@@ -54,9 +54,10 @@ share of the image's inodes that its size is of the image's bytes.
    mounted image's `statfs` (`f_files`, `f_blocks × f_bsize`) when `quotafs.Open` mounts it, and again after it grows.
 2. **Every call.** Every `Limit` call applies both limits. The volume manager calls `Limit` on each reservation pass
    (`internal/volume/volume.go:471`), so a volume created before this ADR gets its inode limit at its next pass.
-3. **No overcommit.** Volume sizes never sum past the image's free space, which the booking reads from the filesystem
-   (#1201, `internal/volume/volume.go:369-391`), so the inode limits never sum past its inodes. The exceptions are ext4's own reserved inodes and the image's directories, which the limits do not
-   count: a nearly full image can refuse a file a few dozen inodes before a volume reaches its limit.
+3. **No overcommit.** Volume sizes never sum past the image's free space, which the booking reads from the
+   filesystem (#1201, `internal/volume/volume.go:369-391`), so the inode limits never sum past its inodes. The
+   exceptions are ext4's own reserved inodes and the image's directories, which the limits do not count: a nearly
+   full image can refuse a file a few dozen inodes before a volume reaches its limit.
 
 ## Design model
 
@@ -70,7 +71,8 @@ None.
 
 ```go
 // Package quotafs (internal/volume/quotafs), Linux. The signature is unchanged; the limits it sets are new.
-func (f *FS) Limit(dir string, project uint32, sizeBytes int64) error // block and inode limits (QIF_BLIMITS|QIF_ILIMITS)
+// Limit sets the block and the inode limits (QIF_BLIMITS|QIF_ILIMITS).
+func (f *FS) Limit(dir string, project uint32, sizeBytes int64) error
 func inodesFor(sizeBytes, imageBytes, imageInodes int64) uint64      // NEW: ⌊size × inodes ÷ bytes⌋, at least 1
 ```
 
@@ -82,10 +84,10 @@ func inodesFor(sizeBytes, imageBytes, imageInodes int64) uint64      // NEW: ⌊
 
 - `internal/volume/quotafs/quotafs_linux.go`: `qifILimits` (4), the image's inode count and size read at `Open` and
   after `grow`, `inodesFor`, and both limits in `Limit`; `quotafs_other.go` is unchanged.
-- Tests, one per scenario: `TestInodesFor` (the arithmetic and its floor of 1); `TestScenarioInodeLimitApplied` (which
-  also checks that another volume of the image still creates a file),
-  `…ExistingVolumeLimited` and `…EmptyDirLimited` on a real image (Linux as root, run by `just test-volumes-root`); the volumes Lima
-  lane gets a case where a Function fills its inodes and a second volume still creates a file.
+- Tests, one per scenario: `TestInodesFor` (the arithmetic and its floor of 1); `TestScenarioInodeLimitApplied`
+  (which also checks that another volume of the image still creates a file), `…ExistingVolumeLimited` and
+  `…EmptyDirLimited` on a real image (Linux as root, run by `just test-volumes-root`); the volumes Lima lane gets a
+  case where a Function fills its inodes and a second volume still creates a file.
 - Docs: the volume reference (a volume holds at most its share of the image's inodes).
 - **Done when**: the tests pass with `-race`; build, vet (plain, dev, e2e, Linux) and lint are clean; the volumes lane
   passes; `scripts/agent/gate.sh` passes.
