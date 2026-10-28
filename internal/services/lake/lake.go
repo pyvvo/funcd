@@ -116,7 +116,16 @@ type ReconcilerDeps struct {
 	// LocalCatalog: the engines keep their catalog in a local file and serve no save endpoint (funcdctl dev's process
 	// engine, ADR-0125), so answers go out at once, with no barrier, whatever SaveInterval is (ADR-0279 Scope).
 	LocalCatalog bool
+	// ScratchBytes sizes each engine's scratch at scratchPath (lake.scratchSize, ADR-0294); 0 ⇒ none asked.
+	// CatalogMaxBytes is lake.catalogMaxSize, set as FUNCD_LAKE_CATALOG_MAX_BYTES for the engine's spill limit; 0 ⇒
+	// unset.
+	ScratchBytes    int64
+	CatalogMaxBytes int64
 }
+
+// scratchPath is where the engine keeps its catalog copy, its checkpoint copy and its spills (shim.py LOCAL_CATALOG,
+// LOCAL_TMP), on a scratch of its own (ADR-0294).
+const scratchPath = "/var/funcd/ducklake"
 
 const defaultPollInterval = 2 * time.Second
 
@@ -147,6 +156,8 @@ type Reconciler struct {
 	enginePoll   time.Duration
 	saveInterval time.Duration
 	localCatalog bool
+	scratchBytes int64
+	catalogMax   int64
 }
 
 // NewReconciler builds the Lake reconciler. Store + Provider are required.
@@ -191,6 +202,8 @@ func NewReconciler(d ReconcilerDeps) (*Reconciler, error) {
 		enginePoll:   min(orDefault(d.EnginePollInterval, defaultPollInterval), period),
 		saveInterval: d.SaveInterval,
 		localCatalog: d.LocalCatalog,
+		scratchBytes: d.ScratchBytes,
+		catalogMax:   d.CatalogMaxBytes,
 	}, nil
 }
 

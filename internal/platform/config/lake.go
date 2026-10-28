@@ -34,8 +34,40 @@ func (c Config) LakeSaveInterval() (time.Duration, error) {
 	return time.Duration(d), nil
 }
 
-// DefaultLakeCatalogMaxSize caps one Lake's catalog when lake.catalogMaxSize is empty (ADR-0293 Decision 3).
-const DefaultLakeCatalogMaxSize = "1GiB"
+// DefaultLakeCatalogMaxSize caps one Lake's catalog when lake.catalogMaxSize is empty (ADR-0293 Decision 3, its
+// default lowered by ADR-0294).
+const DefaultLakeCatalogMaxSize = "256MiB"
+
+// The Lake engine's scratch (ADR-0294 Decision 6) holds the catalog twice, the copy and its checkpoint, plus at least
+// lakeScratchMargin for ext4's own overhead and the spills; empty, it is at least MinLakeScratchBytes.
+const (
+	MinLakeScratchBytes = 1 << 30
+	lakeScratchMargin   = 512 << 20
+)
+
+// LakeScratchBytes is lake.scratchSize in bytes: empty, the larger of MinLakeScratchBytes and twice the catalog cap
+// plus lakeScratchMargin; fault.Invalid names the key for a size that does not parse or is below that sum.
+func (c Config) LakeScratchBytes() (int64, error) {
+	const op = "config.LakeScratchBytes"
+	catalogMax, err := c.LakeCatalogMaxBytes()
+	if err != nil {
+		return 0, err
+	}
+	need := 2*catalogMax + lakeScratchMargin
+	v := c.Lake.ScratchSize
+	if v == "" {
+		return max(MinLakeScratchBytes, need), nil
+	}
+	n, err := v1.ByteSize(v).Bytes()
+	if err != nil {
+		return 0, fault.Wrapf(err, fault.Invalid, op, "config key %q", "lake.scratchSize")
+	}
+	if n < need {
+		return 0, fault.Invalidf(op, "config key %q: %s is below twice lake.catalogMaxSize plus 512MiB (%d bytes)",
+			"lake.scratchSize", v, need)
+	}
+	return n, nil
+}
 
 // LakeCatalogMaxBytes is lake.catalogMaxSize in bytes; empty, DefaultLakeCatalogMaxSize or s3gateway.maxUploadBytes
 // when that is smaller. fault.Invalid names the key for a size that does not parse, is zero, or passes
@@ -64,8 +96,8 @@ func (c Config) LakeCatalogMaxBytes() (int64, error) {
 	return n, nil
 }
 
-// CheckLake refuses a lake.saveInterval that LakeSaveInterval refuses and a lake.catalogMaxSize that
-// LakeCatalogMaxBytes refuses.
+// CheckLake refuses a lake.saveInterval that LakeSaveInterval refuses, a lake.catalogMaxSize that LakeCatalogMaxBytes
+// refuses and a lake.scratchSize that LakeScratchBytes refuses.
 func (c Config) CheckLake() []Finding {
 	var f findings
 	if _, err := c.LakeSaveInterval(); err != nil {
@@ -73,6 +105,8 @@ func (c Config) CheckLake() []Finding {
 	}
 	if _, err := c.LakeCatalogMaxBytes(); err != nil {
 		f.refuse("lake.catalogMaxSize", "%v", err)
+	} else if _, err := c.LakeScratchBytes(); err != nil {
+		f.refuse("lake.scratchSize", "%v", err)
 	}
 	return f.errs
 }

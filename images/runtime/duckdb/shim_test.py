@@ -1334,5 +1334,39 @@ class TestMainServesSavesBeforeQuack(unittest.TestCase):
         self.assertEqual(watchers, [False], "no watcher runs")
 
 
+class TestScenarioLakeScratchSpillLimit(unittest.TestCase):
+    """ADR-0294: the spills get the scratch's free space less twice the catalog cap, or less."""
+
+    @staticmethod
+    def statvfs(free: int) -> Callable[[str], types.SimpleNamespace]:
+        return lambda _path: types.SimpleNamespace(f_bavail=free // 4096, f_frsize=4096)
+
+    def test_the_limit_is_the_free_space_less_two_catalogs(self) -> None:
+        limit = shim._spill_limit({shim.CATALOG_MAX_KEY: str(256 << 20)}, self.statvfs(970 << 20))
+        self.assertEqual((970 << 20) - (512 << 20), limit)
+
+    def test_no_cap_no_limit(self) -> None:
+        self.assertIsNone(shim._spill_limit({}, self.statvfs(0)))
+
+    def test_no_room_for_spills_ends_the_start(self) -> None:
+        err = io.StringIO()
+        with self.assertRaises(SystemExit) as cm, contextlib.redirect_stderr(err):
+            shim._spill_limit({shim.CATALOG_MAX_KEY: str(512 << 20)}, self.statvfs(1000 << 20))
+        self.assertEqual(2, cm.exception.code)
+        self.assertIn("raise lake.scratchSize", err.getvalue())
+
+    def test_a_smaller_tuned_size_wins(self) -> None:
+        con = mock.Mock()
+        shim._cap_spills(con, 512 << 20, {"DUCKDB_MAX_TEMP_DIRECTORY_SIZE": "100MiB"})
+        con.execute.assert_not_called()
+        shim._cap_spills(con, 512 << 20, {"DUCKDB_MAX_TEMP_DIRECTORY_SIZE": "1 GB"})
+        con.execute.assert_called_once_with("SET max_temp_directory_size = ?", [f"{512 << 20}B"])
+
+    def test_sizes(self) -> None:
+        for value, want in {"512MiB": 512 << 20, "1 GB": 10**9, "2kib": 2048, "100": 100, "1.5GiB": 3 << 29,
+                            "90%": None, "lots": None}.items():
+            self.assertEqual(want, shim._size_bytes(value), value)
+
+
 if __name__ == "__main__":
     unittest.main()

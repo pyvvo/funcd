@@ -36,7 +36,9 @@ import (
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/containerd/errdefs"
 	gocni "github.com/containerd/go-cni"
+	"github.com/moby/sys/mountinfo"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
+	"golang.org/x/sys/unix"
 
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -68,6 +70,16 @@ const (
 
 // containerBootDir is where a worker's boot dir is mounted; the shim writes its port to FUNCD_PORTFILE in it (ADR-0160).
 const containerBootDir = "/run/funcd-boot"
+
+// bootDirBytes sizes the tmpfs of a worker's boot dir, which holds its port and report files only (ADR-0294).
+const bootDirBytes = 1 << 20
+
+// tmpDir is a worker's /tmp, a tmpfs counted in its memory, and its HOME unless its spec sets one (ADR-0294);
+// tmpDefaultBytes sizes it for a worker with no memory limit, ADR-0291's default memory.
+const (
+	tmpDir          = "/tmp"
+	tmpDefaultBytes = 512 << 20
+)
 
 // ownerKindLabel names the container label that keeps the kind whose reconciler created the worker (ADR-0152).
 const ownerKindLabel = "funcd/owner-kind"
@@ -133,8 +145,11 @@ type driver struct {
 	cni        gocni.CNI
 	resolvPath string // host path to the shared worker /etc/resolv.conf (bind-mounted into every worker)
 	bootRoot   string // 0700 parent of the per-worker boot dirs (ADR-0160)
-	netns      netnsPins
-	mu         sync.Mutex
+	// bootTmpfs: each boot dir is a tmpfs of bootDirBytes (ADR-0294), which needs root; false only in a test that
+	// builds a driver by hand, without root.
+	bootTmpfs bool
+	netns     netnsPins
+	mu        sync.Mutex
 
 	capture   runtime.LogCaptureFunc    // optional Path B hook (runtime.LogCapturer, ADR-0081); nil = disabled
 	outputs   runtime.OutputCaptureFunc // optional Path A hook (runtime.OutputCapturer, ADR-0168); nil = tail only
@@ -209,7 +224,8 @@ func setupLogChannel(ctrID string, spec runtime.WorkerSpec, capture runtime.LogC
 		env[k] = v
 	}
 	env["FUNCD_LOG_SOCK"] = "/run/funcd-log/log.sock"
-	return runtime.Mount{Source: dir, Target: "/run/funcd-log", ReadOnly: false}, env, ul, dir, nil
+	// read-only: the worker writes nothing there, and a socket on a read-only mount still connects (ADR-0294)
+	return runtime.Mount{Source: dir, Target: "/run/funcd-log", ReadOnly: true}, env, ul, dir, nil
 }
 
 // soloLogConns bounds the live connections on a solo worker's log socket. The sandbox can dial it at will and each
@@ -318,7 +334,7 @@ func New(cfg Config) (runtime.Runtime, error) {
 		_ = client.Close()
 		return nil, err
 	}
-	return &driver{cfg: cfg, client: client, cni: cni, resolvPath: resolvPath, bootRoot: bootRoot, netns: newNetnsPins(netnsDir),
+	return &driver{cfg: cfg, client: client, cni: cni, resolvPath: resolvPath, bootRoot: bootRoot, bootTmpfs: true, netns: newNetnsPins(netnsDir),
 		fifoDir: fifoDir, ownFifo: ownFifo, instances: map[runtime.InstanceID]*worker{}}, nil
 }
 
@@ -346,8 +362,9 @@ func makeStateDir(stateDir, name string) (string, error) {
 	return dir, nil
 }
 
-// makeBootDir makes worker ctrID's boot dir under 0700 parents, removing an earlier one first. Only the leaf is 0777,
-// so the sandbox's non-root uid can write its port file there.
+// makeBootDir makes worker ctrID's boot dir under 0700 parents, removing an earlier one first, and mounts a tmpfs of
+// bootDirBytes on it (ADR-0294). Only that tmpfs's root is 0777, so the sandbox's non-root uid can write its port file
+// there.
 func (d *driver) makeBootDir(ns v1alpha1.NamespaceName, ctrID string) (string, error) {
 	const op = "runtime.containerd.Create"
 	parent := filepath.Join(d.bootRoot, nsPrefix+string(ns))
@@ -355,17 +372,55 @@ func (d *driver) makeBootDir(ns v1alpha1.NamespaceName, ctrID string) (string, e
 		return "", fault.Wrapf(err, fault.Internal, op, "create boot dir parent %q", parent)
 	}
 	dir := filepath.Join(parent, ctrID)
-	if err := os.RemoveAll(dir); err != nil {
+	if err := removeBootDir(dir); err != nil {
 		return "", fault.Wrapf(err, fault.Internal, op, "remove earlier boot dir %q", dir)
 	}
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		return "", fault.Wrapf(err, fault.Internal, op, "create boot dir %q", dir)
 	}
-	if err := os.Chmod(dir, 0o777); err != nil { //nolint:gosec // the sandbox uid writes its port here; the 0700 parents keep host users out
-		_ = os.RemoveAll(dir)
-		return "", fault.Wrapf(err, fault.Internal, op, "open boot dir %q to the sandbox", dir)
+	if !d.bootTmpfs {
+		if err := os.Chmod(dir, 0o777); err != nil { //nolint:gosec // the sandbox uid writes its port here; the 0700 parents keep host users out
+			_ = os.RemoveAll(dir)
+			return "", fault.Wrapf(err, fault.Internal, op, "open boot dir %q to the sandbox", dir)
+		}
+		return dir, nil
+	}
+	data := "size=" + strconv.Itoa(bootDirBytes) + ",mode=0777"
+	if err := unix.Mount("tmpfs", dir, "tmpfs", unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, data); err != nil {
+		_ = os.Remove(dir)
+		return "", fault.Wrapf(err, fault.Internal, op, "mount the boot dir %q", dir)
 	}
 	return dir, nil
+}
+
+// removeBootDir detaches the tmpfs on a boot dir, when one is mounted there, and removes the dir.
+func removeBootDir(dir string) error {
+	if mounted, err := mountinfo.Mounted(dir); err == nil && mounted {
+		if err := unix.Unmount(dir, unix.MNT_DETACH); err != nil && !errors.Is(err, unix.EINVAL) {
+			return err
+		}
+	}
+	return os.RemoveAll(dir)
+}
+
+// unmountUnder detaches every mount below root that /proc/self/mountinfo lists, deepest first: an unclean stop or a
+// failed create can leave a boot dir's tmpfs that no container names (ADR-0294).
+func unmountUnder(root string) error {
+	mounts, err := mountinfo.GetMounts(mountinfo.PrefixFilter(root))
+	if err != nil {
+		return err
+	}
+	slices.SortFunc(mounts, func(a, b *mountinfo.Info) int { return len(b.Mountpoint) - len(a.Mountpoint) })
+	var errs []error
+	for _, m := range mounts {
+		if m.Mountpoint == root {
+			continue
+		}
+		if err := unix.Unmount(m.Mountpoint, unix.MNT_DETACH); err != nil && !errors.Is(err, unix.EINVAL) && !errors.Is(err, unix.ENOENT) {
+			errs = append(errs, fmt.Errorf("unmount %q: %w", m.Mountpoint, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // writeWorkerResolv writes the shared /etc/resolv.conf funcd bind-mounts into every worker, pointing at
@@ -445,7 +500,7 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 				out.Close()
 			}
 			if bootDir != "" {
-				_ = os.RemoveAll(bootDir)
+				_ = removeBootDir(bootDir)
 			}
 		}
 	}()
@@ -678,7 +733,7 @@ func (d *driver) stop(ctx context.Context, id runtime.InstanceID, grace time.Dur
 	d.mu.Lock()
 	sb.stopping = true
 	d.mu.Unlock()
-	defer func() { _ = os.RemoveAll(sb.bootDir) }()
+	defer func() { _ = removeBootDir(sb.bootDir) }()
 	container, err := d.client.LoadContainer(nctx, sb.ctrID)
 	if errdefs.IsNotFound(err) {
 		if d.netns.pinned(sb.cniID) != "" {
@@ -825,7 +880,7 @@ func (d *driver) discard(nctx context.Context, c containerd.Container) error {
 		}
 	}
 	if ns, ok := namespaces.Namespace(nctx); ok && d.bootRoot != "" {
-		_ = os.RemoveAll(filepath.Join(d.bootRoot, ns, c.ID()))
+		_ = removeBootDir(filepath.Join(d.bootRoot, ns, c.ID()))
 	}
 	return c.Delete(nctx, containerd.WithSnapshotCleanup)
 }
@@ -1069,12 +1124,18 @@ func (d *driver) SweepAll(ctx context.Context) error {
 	return nil
 }
 
-// BootSweep is the boot sweep (ADR-0167 Decision 8, ADR-0186): it runs SweepAll and, on the private containerd only,
-// deletes every image in each funcd-<ns> namespace with a synchronous delete, then the namespace and its boot-dir
-// parent. Close does not call it.
+// BootSweep is the boot sweep (ADR-0167 Decision 8, ADR-0186): it runs SweepAll, detaches every mount left under the
+// boot root (ADR-0294) and, on the private containerd only, deletes every image in each funcd-<ns> namespace with a
+// synchronous delete, then the namespace and its boot-dir parent. Close does not call it.
 func (d *driver) BootSweep(ctx context.Context) error {
 	const op = "runtime.containerd.BootSweep"
-	if err := d.SweepAll(ctx); err != nil || !d.cfg.Private {
+	err := d.SweepAll(ctx)
+	if d.bootRoot != "" {
+		if uerr := unmountUnder(d.bootRoot); uerr != nil {
+			err = errors.Join(err, fault.Wrapf(uerr, fault.Internal, op, "detach the mounts left under %q", d.bootRoot))
+		}
+	}
+	if err != nil || !d.cfg.Private {
 		return err
 	}
 	names, err := d.client.NamespaceService().List(ctx)
@@ -1211,13 +1272,28 @@ func (d *driver) resolveImage(nctx context.Context, op, ref string) (containerd.
 	return image, nil
 }
 
-// ociOpts builds the conservative OCI spec for a worker.
+// ociOpts builds the conservative OCI spec for a worker: its image's config, then sandboxOpts, then the seccomp
+// profile.
 func ociOpts(spec runtime.WorkerSpec, image containerd.Image, bootDir string) []oci.SpecOpts {
+	opts := append([]oci.SpecOpts{oci.WithImageConfig(image)}, sandboxOpts(spec, bootDir)...)
+	// last, so the profile sees the spec's final capabilities (ADR-0267)
+	return append(opts, withSeccompProfile)
+}
+
+// sandboxOpts is what funcd sets over a worker's image config. Its root is read-only, and it writes only to /tmp, a
+// tmpfs counted in its memory, its volumes and its boot dir's tmpfs (ADR-0294).
+func sandboxOpts(spec runtime.WorkerSpec, bootDir string) []oci.SpecOpts {
+	env := spec.Env
+	if _, ok := env["HOME"]; !ok {
+		env = make(map[string]string, len(spec.Env)+1)
+		maps.Copy(env, spec.Env)
+		env["HOME"] = tmpDir
+	}
 	opts := []oci.SpecOpts{
-		oci.WithImageConfig(image),
 		oci.WithHostname(string(spec.Name)),
-		oci.WithEnv(envSlice(spec.Env)),
+		oci.WithEnv(envSlice(env)),
 		oci.WithNoNewPrivileges,
+		oci.WithRootFSReadonly(),
 		withAbsoluteCwd, // crun rejects a non-absolute cwd; WithImageConfig leaves it "" for a WORKDIR-less image
 	}
 	if cgroups.Mode() == cgroups.Unified {
@@ -1227,11 +1303,20 @@ func ociOpts(spec runtime.WorkerSpec, image containerd.Image, bootDir string) []
 	if len(spec.Command) > 0 {
 		opts = append(opts, oci.WithProcessArgs(spec.Command...))
 	}
+	tmpBytes := spec.Limits.MemoryBytes
+	if tmpBytes <= 0 {
+		tmpBytes = tmpDefaultBytes
+	}
 	opts = append(opts, oci.WithMounts(append(bindMounts(spec.Mounts), specs.Mount{
 		Destination: containerBootDir,
 		Type:        "bind",
 		Source:      bootDir,
 		Options:     []string{"rbind", "rw", "nosuid", "nodev", "noexec"},
+	}, specs.Mount{
+		Destination: tmpDir,
+		Type:        "tmpfs",
+		Source:      "tmpfs",
+		Options:     []string{"nosuid", "nodev", "mode=1777", "size=" + strconv.FormatInt(tmpBytes, 10)},
 	})))
 	if spec.Limits.MemoryBytes > 0 {
 		opts = append(opts, oci.WithMemoryLimit(uint64(spec.Limits.MemoryBytes)))
@@ -1240,8 +1325,7 @@ func ociOpts(spec runtime.WorkerSpec, image containerd.Image, bootDir string) []
 		const period = 100000
 		opts = append(opts, oci.WithCPUCFS(int64(spec.Limits.CPUs*period), period))
 	}
-	// last, so the profile sees the spec's final capabilities (ADR-0267)
-	return append(opts, withSeccompProfile)
+	return opts
 }
 
 // The ioctls that set a file's project id or flags (ADR-0268): FS_IOC_FSSETXATTR, _IOW('X', 32, struct fsxattr), and

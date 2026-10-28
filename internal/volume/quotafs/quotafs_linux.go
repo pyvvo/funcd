@@ -8,15 +8,12 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
 	"unsafe"
 
-	"github.com/containerd/containerd/v2/core/mount"
 	"golang.org/x/sys/unix"
 
 	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/platform/loopfs"
 )
 
 // Config names the image file, where it is mounted, and its size.
@@ -81,15 +78,15 @@ func Open(ctx context.Context, cfg Config) (*FS, error) {
 	if err := kernelSupported(); err != nil {
 		return nil, err
 	}
-	if dev, ok := mountedAt(cfg.Mount); ok {
-		if err := mount.UnmountAll(cfg.Mount, 0); err != nil {
+	if dev, ok := loopfs.MountedAt(cfg.Mount); ok {
+		if err := loopfs.Unmount(cfg.Mount); err != nil {
 			return nil, fault.Wrapf(err, fault.Internal, op, "unmount a stale volume image at %s (%s)", cfg.Mount, dev)
 		}
 	}
 	fi, err := os.Stat(cfg.Image)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		if err := create(ctx, cfg); err != nil {
+		if err := loopfs.Create(ctx, cfg.Image, cfg.CapacityBytes, "quota,project"); err != nil {
 			return nil, err
 		}
 	case err != nil:
@@ -97,18 +94,14 @@ func Open(ctx context.Context, cfg Config) (*FS, error) {
 	case fi.Size() > cfg.CapacityBytes:
 		return nil, fault.Invalidf(op, "volumes.capacityBytes %d is below the volume image's %d bytes; a volume image does not shrink", cfg.CapacityBytes, fi.Size())
 	case fi.Size() < cfg.CapacityBytes:
-		if err := grow(ctx, cfg); err != nil {
+		if err := loopfs.Grow(ctx, cfg.Image, cfg.CapacityBytes); err != nil {
 			return nil, err
 		}
 	}
-	if err := os.MkdirAll(cfg.Mount, 0o700); err != nil {
-		return nil, fault.Wrapf(err, fault.Internal, op, "create the volume mount point")
+	if err := loopfs.Mount(cfg.Image, cfg.Mount, "prjquota"); err != nil {
+		return nil, fault.Wrapf(err, fault.KindOf(err), op, "mount the volume image")
 	}
-	m := mount.Mount{Type: "ext4", Source: cfg.Image, Options: []string{"loop", "nosuid", "nodev", "prjquota"}}
-	if err := m.Mount(cfg.Mount); err != nil {
-		return nil, fault.Wrapf(err, fault.Internal, op, "mount the volume image")
-	}
-	dev, ok := mountedAt(cfg.Mount)
+	dev, ok := loopfs.MountedAt(cfg.Mount)
 	if !ok {
 		return nil, fault.Internalf(op, "the volume image is not mounted at %s after mount", cfg.Mount)
 	}
@@ -120,51 +113,6 @@ func Open(ctx context.Context, cfg Config) (*FS, error) {
 		return nil, fault.Wrapf(err, fault.Internal, op, "read the volume image's size and inodes")
 	}
 	return &FS{cfg: cfg, dev: dev, imageBytes: int64(st.Blocks) * st.Bsize, imageInodes: int64(st.Files)}, nil
-}
-
-func create(ctx context.Context, cfg Config) error {
-	const op = "quotafs.create"
-	if err := os.MkdirAll(filepath.Dir(cfg.Image), 0o700); err != nil {
-		return fault.Wrapf(err, fault.Internal, op, "create the volume image's directory")
-	}
-	f, err := os.OpenFile(cfg.Image, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return fault.Wrapf(err, fault.Internal, op, "create the volume image")
-	}
-	ferr := unix.Fallocate(int(f.Fd()), 0, 0, cfg.CapacityBytes)
-	if cerr := f.Close(); ferr == nil {
-		ferr = cerr
-	}
-	if ferr == nil {
-		ferr = run(ctx, "mkfs.ext4", "-q", "-F", "-m", "0", "-O", "quota,project", cfg.Image)
-	}
-	if ferr != nil {
-		_ = os.Remove(cfg.Image)
-		return fault.Wrapf(ferr, fault.Internal, op, "preallocate and format the volume image")
-	}
-	return nil
-}
-
-func grow(ctx context.Context, cfg Config) error {
-	const op = "quotafs.grow"
-	f, err := os.OpenFile(cfg.Image, os.O_RDWR, 0)
-	if err != nil {
-		return fault.Wrapf(err, fault.Internal, op, "open the volume image")
-	}
-	ferr := unix.Fallocate(int(f.Fd()), 0, 0, cfg.CapacityBytes)
-	if cerr := f.Close(); ferr == nil {
-		ferr = cerr
-	}
-	if ferr == nil {
-		ferr = run(ctx, "e2fsck", "-f", "-p", cfg.Image)
-	}
-	if ferr == nil {
-		ferr = run(ctx, "resize2fs", cfg.Image)
-	}
-	if ferr != nil {
-		return fault.Wrapf(ferr, fault.Internal, op, "grow the volume image to %d bytes", cfg.CapacityBytes)
-	}
-	return nil
 }
 
 // Limit gives dir the project id, inherited by everything created under it, a hard block limit of sizeBytes and a hard
@@ -231,8 +179,8 @@ func (f *FS) Root() string { return f.cfg.Mount }
 
 // Close unmounts the image.
 func (f *FS) Close() error {
-	if err := mount.UnmountAll(f.cfg.Mount, 0); err != nil {
-		return fault.Wrapf(err, fault.Internal, "quotafs.Close", "unmount the volume image")
+	if err := loopfs.Unmount(f.cfg.Mount); err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), "quotafs.Close", "unmount the volume image")
 	}
 	return nil
 }
@@ -240,39 +188,6 @@ func (f *FS) Close() error {
 func ioctl(fd uintptr, req uintptr, arg unsafe.Pointer) error {
 	if _, _, e := unix.Syscall(unix.SYS_IOCTL, fd, req, uintptr(arg)); e != 0 {
 		return e
-	}
-	return nil
-}
-
-// mountedAt returns the device mounted exactly at dir.
-func mountedAt(dir string) (string, bool) {
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		return "", false
-	}
-	info, err := mount.Lookup(abs)
-	if err != nil || info.Mountpoint != abs {
-		return "", false
-	}
-	return info.Source, true
-}
-
-func run(ctx context.Context, name string, args ...string) error {
-	path, err := exec.LookPath(name)
-	if err != nil {
-		for _, dir := range []string{"/usr/sbin", "/sbin", "/usr/bin", "/bin"} {
-			if _, serr := os.Stat(filepath.Join(dir, name)); serr == nil {
-				path, err = filepath.Join(dir, name), nil
-				break
-			}
-		}
-	}
-	if err != nil {
-		return fault.Wrapf(err, fault.Unavailable, "quotafs.run", "%s is not installed on the host", name)
-	}
-	out, err := exec.CommandContext(ctx, path, args...).CombinedOutput()
-	if err != nil {
-		return fault.Wrapf(err, fault.Internal, "quotafs.run", "%s %s: %s", name, strings.Join(args, " "), strings.TrimSpace(string(out)))
 	}
 	return nil
 }

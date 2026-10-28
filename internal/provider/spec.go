@@ -71,6 +71,13 @@ type StorageSpec struct {
 	GID  int
 }
 
+// ScratchSpec asks for a filesystem of fixed size mounted into the engine (ADR-0294): a preallocated image made new
+// at each engine start and removed with the engine, so the engine's writes there stay within SizeBytes.
+type ScratchSpec struct {
+	Path      string // the mount path inside the engine, absolute
+	SizeBytes int64
+}
+
 // ProviderSpec is the desired state of one add-on-provider engine, assembled by a per-provider
 // reconciler. The Env is caller-assembled (the ADR-0085 keypair, the engine token, config) — the
 // runtime puts it verbatim on the worker; it owns no engine-specific logic.
@@ -89,6 +96,8 @@ type ProviderSpec struct {
 	Route *RouteSpec
 	// Storage is OPTIONAL durable storage (ADR-0231); nil ⇒ the engine keeps nothing across re-creations.
 	Storage *StorageSpec
+	// Scratch is an OPTIONAL filesystem of fixed size (ADR-0294); nil, or a runtime with no scratch root, ⇒ none.
+	Scratch *ScratchSpec
 	// EgressOnly is copied to the engine's WorkerSpec: nil means no fence (ADR-0269).
 	EgressOnly []netip.AddrPort
 	// MaxAge, when positive, makes Converge replace a running engine older than it, so a new one carries a fresh key

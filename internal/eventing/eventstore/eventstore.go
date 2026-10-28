@@ -23,6 +23,7 @@ import (
 	"github.com/pyvvo/funcd/internal/eventing"
 	"github.com/pyvvo/funcd/internal/eventing/deadletter"
 	dlbadger "github.com/pyvvo/funcd/internal/eventing/deadletter/badger"
+	"github.com/pyvvo/funcd/internal/platform/diskfull"
 	"github.com/pyvvo/funcd/internal/snapshot"
 	snapshotbadger "github.com/pyvvo/funcd/internal/snapshot/badger"
 )
@@ -52,7 +53,7 @@ type Store struct {
 func Open(cfg Config) (*Store, error) {
 	db, err := badger.Open(dlbadger.Options(cfg))
 	if err != nil {
-		return nil, fault.Internalf(op, "open the event store (inMemory=%v): %v", cfg.InMemory, err)
+		return nil, fault.Wrapf(err, fault.Internal, op, "open the event store (inMemory=%v)", cfg.InMemory)
 	}
 	s := &Store{db: db, stop: make(chan struct{})}
 	if cfg.InMemory {
@@ -116,7 +117,7 @@ func (w ChangeWatermarks) Set(_ context.Context, ns v1.NamespaceName, database v
 		return txn.Set(cdcKey(ns, database, epoch), binary.BigEndian.AppendUint64(nil, index))
 	})
 	if err != nil {
-		return fault.Internalf(op, "write the change watermark of %s/%s: %v", ns, database, err)
+		return diskfull.Wrapf(err, op, "write the change watermark of %s/%s", ns, database)
 	}
 	return nil
 }
@@ -133,7 +134,7 @@ func (w ChangeWatermarks) Delete(_ context.Context, ns v1.NamespaceName, databas
 		return nil
 	})
 	if err != nil {
-		return fault.Internalf(op, "delete the change watermarks of %s/%s: %v", ns, database, err)
+		return diskfull.Wrapf(err, op, "delete the change watermarks of %s/%s", ns, database)
 	}
 	return nil
 }
@@ -378,7 +379,7 @@ func (l *seenLists) Save(_ context.Context, ns v1.NamespaceName, source, event v
 		}
 	}
 	if err := wb.Flush(); err != nil {
-		return fault.Internalf(op, "write the parts of %s: %v", key, err)
+		return diskfull.Wrapf(err, op, "write the parts of %s", key)
 	}
 	hv, err := json.Marshal(head{Gen: gen, Parts: len(chunks)})
 	if err != nil {
@@ -394,7 +395,7 @@ func (l *seenLists) Save(_ context.Context, ns v1.NamespaceName, source, event v
 		}
 		return txn.Set(key, hv)
 	}); err != nil {
-		return fault.Internalf(op, "write head %s: %v", key, err)
+		return diskfull.Wrapf(err, op, "write head %s", key)
 	}
 	return nil
 }
@@ -412,7 +413,7 @@ func (l *seenLists) Delete(_ context.Context, ns v1.NamespaceName, source v1.Obj
 		}
 		return nil
 	}); err != nil {
-		return fault.Internalf(op, "delete the seen lists of %s/%s: %v", ns, source, err)
+		return diskfull.Wrapf(err, op, "delete the seen lists of %s/%s", ns, source)
 	}
 	return nil
 }

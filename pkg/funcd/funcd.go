@@ -336,6 +336,10 @@ type config struct {
 	// lakeCatalogMaxBytes caps one Lake's catalog in the catalog store (lake.catalogMaxSize, ADR-0293); 0 ⇒ the
 	// gateway's upload cap alone.
 	lakeCatalogMaxBytes int64
+	// lakeScratchBytes sizes each Lake engine's scratch, kept as images under scratchRoot and mounted under
+	// scratchMountRoot (lake.scratchSize, ADR-0294); scratchRoot "" ⇒ no scratch, as on the process runtime.
+	lakeScratchBytes              int64
+	scratchRoot, scratchMountRoot string
 	// floorFree and floorMinFree are the free-space floor of the data filesystem (storage.minFreeSize, ADR-0296);
 	// floorMinFree 0 ⇒ no floor.
 	floorFree    quota.FreeFunc
@@ -1193,10 +1197,15 @@ func (p *Platform) buildControlPlane() error {
 	// injects a process-mode driver that runs the embedded engine as a subprocess (no containers).
 	providerRuntime := c.lakeProvider
 	if providerRuntime == nil {
+		var floor provider.Floor
+		if p.floor != nil {
+			floor = p.floor
+		}
 		var perr error
 		providerRuntime, perr = provider.NewRuntime(provider.Deps{
 			Runtime: c.runtime, OwnerKind: v1.KindLake, Gateway: c.gateway, Logger: p.logger,
 			ProbeTimeout: c.pacing.EngineProbeTimeout, StorageRoot: c.providerStorage,
+			ScratchRoot: c.scratchRoot, ScratchMountRoot: c.scratchMountRoot, Floor: floor,
 		})
 		if perr != nil {
 			return fault.Wrapf(perr, fault.KindOf(perr), op, "build provider runtime")
@@ -1218,6 +1227,9 @@ func (p *Platform) buildControlPlane() error {
 		SaveInterval:         c.lakeSaveInterval,
 		// Only funcdctl dev overrides the Lake runtime: its process engine keeps a local catalog (ADR-0125, ADR-0279).
 		LocalCatalog: c.lakeProvider != nil,
+	}
+	if c.lakeProvider == nil && c.scratchRoot != "" {
+		lakeDeps.ScratchBytes, lakeDeps.CatalogMaxBytes = c.lakeScratchBytes, c.lakeCatalogMaxBytes // ADR-0294
 	}
 	// The engine's S3 keypair is derived over its Lake identity (ADR-0085, ADR-0175) by the same
 	// deriver the Function reconciler uses — present only when the S3 gateway is enabled.

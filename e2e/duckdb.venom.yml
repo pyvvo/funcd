@@ -1213,6 +1213,57 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "LAKE=Ready OOM_KILL=0"
 
+  # ADR-0294: the engine's /var/funcd/ducklake is a loop-mounted ext4 of lake.scratchSize, 1 GiB by default, and its
+  # spill limit is that filesystem's free space less twice lake.catalogMaxSize. A query that would spill past it fails on
+  # its own, and the next commit is answered after its save.
+  - name: lake-scratch-bounded — a query that spills past the scratch fails, and the next commit and save succeed
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            findmnt -n -o FSTYPE,SOURCE --mountpoint /var/lib/funcd/data/run/scratch/default/lake'
+        info: "the engine's scratch → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "ext4 /dev/loop"
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: "{\"data\":{\"sql\":\"SELECT current_setting('max_temp_directory_size') AS s\"}}"
+        info: "the spill limit → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring MiB
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT max(x) FROM (SELECT i, lead(i) OVER (ORDER BY hash(i)) AS x FROM range(200000000) t(i))"}}'
+        info: "a query that spills past the scratch → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldNotEqual 200
+          - result.body ShouldContainSubstring max_temp_directory_size
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"CREATE OR REPLACE TABLE lakehouse.adr0294 AS SELECT 294 AS n"}}'
+        info: "a commit after the refused query → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT n FROM lakehouse.adr0294"}}'
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring "[[294]]"
+
   # ADR-0264: inside a worker, /proc/self/cgroup is its cgroup namespace's root, /sys/fs/cgroup holds its own limits
   # (max without one) and refuses a write.
   - name: worker-sees-only-its-cgroup — the engine reads its limits and lake-reader reads max, read-only

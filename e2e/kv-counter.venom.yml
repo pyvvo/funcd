@@ -125,3 +125,57 @@ testcases:
         info: "the key once the quota is lifted → status {{.result.statuscode}} body {{.result.body}}"
         assertions:
           - result.statuscode ShouldEqual 200
+
+  # ADR-0296: with storage.minFreeSize above the data filesystem's free space, a workload's KV put gets 507 naming the
+  # setting while funcd serves; lowered back, the put is stored.
+  - name: floor-refuses-workload-writes — a floor above the free space refuses a put with 507, and lifting it lets it through
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            set -e
+            systemctl stop funcd-demo
+            systemctl reset-failed funcd-demo 2>/dev/null || true
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=45 --setenv=FUNCD_STORAGE_MIN_FREE_SIZE=100TiB \
+              /usr/local/bin/funcd --config /opt/lane/funcdconfig.yaml
+            curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
+            echo RESTARTED'
+        info: "the daemon restart with a 100TiB floor → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring RESTARTED
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/counter"
+        headers:
+          content-type: application/json
+        body: '{"data":{"name":"below-the-floor"}}'
+        retry: 45
+        delay: 2
+        info: "a put below the floor → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldNotEqual 200
+          - result.body ShouldContainSubstring 507
+          - result.body ShouldContainSubstring storage.minFreeSize
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            set -e
+            systemctl stop funcd-demo
+            systemctl reset-failed funcd-demo 2>/dev/null || true
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=45 /usr/local/bin/funcd --config /opt/lane/funcdconfig.yaml
+            curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
+            echo RESTARTED'
+        info: "the daemon restart with the default floor → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring RESTARTED
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/counter"
+        headers:
+          content-type: application/json
+        body: '{"data":{"name":"below-the-floor"}}'
+        retry: 45
+        delay: 2
+        info: "the put once the floor is lowered → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200

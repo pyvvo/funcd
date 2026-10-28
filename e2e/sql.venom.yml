@@ -115,6 +115,19 @@ testcases:
         assertions:
           - result.bodyjson.notes ShouldHaveLength 2
 
+  # ADR-0294: the engine runs on a read-only root with a /tmp tmpfs; its data stays in its ADR-0231 directory, as every
+  # case here shows.
+  - name: SR the engine's root is read-only
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            t=$({{.ctr}} task ls | awk "\$1 ~ /^notes-db-r[0-9]+$/ && \$3 == \"RUNNING\" {print \$1}" | head -1)
+            {{.ctr}} containers info "$t" | python3 -c "import json,sys;s=json.load(sys.stdin)[\"Spec\"];m=[x for x in s[\"mounts\"] if x[\"destination\"]==\"/tmp\"];print(\"ROOT_RO\" if s[\"root\"].get(\"readonly\") else \"ROOT_RW\",\"TMP_\"+(m[0][\"type\"] if m else \"none\"))"'
+        info: "the engine's spec → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "ROOT_RO TMP_tmpfs"
+
   - name: S4 the rows survive a kill of the engine and a restart of the daemon
     steps:
       - type: exec

@@ -14,6 +14,8 @@
 #      volumes-files, whose new worker writes; a Restore in place stops that worker, replaces what the volume got since
 #      the loss with the Backup, lets a new worker start and clears DataMissing (ADR-0262 Decisions 11 and 12).
 #   V9 deleting the App keeps the local volumes (retain); funcdctl volume delete removes one.
+#   V10 (after V6) a worker writes only to /tmp, its volumes and a 1 MiB boot dir (ADR-0294); a volume takes files up
+#      to its share of the image's inodes, and another volume still takes one (ADR-0295).
 # Scenarios (ADR-0262, ADR-0266, ADR-0268): V1-V2 volume-path-in-env, size-with-units; V3 only-its-own-volume,
 # worker-cannot-set-project-id, high-bits-do-not-pass, other-ioctls-pass; V4 write-past-size-fails; V5 local-survives,
 # emptydir-goes-with-worker; V6 local-survives; V7 capacity-not-overcommitted, one-replica; V8 volume-backup-restore;
@@ -260,6 +262,43 @@ testcases:
         body: '{"data":{"op":"read","volume":"data","name":"note"}}'
         assertions:
           - result.bodyjson.text ShouldEqual kept
+
+  # ADR-0294: the worker's root and its log directory are read-only, /tmp is a tmpfs, HOME is /tmp and the boot
+  # directory holds 1 MiB. ADR-0295: the 1 MiB scratch takes empty files only up to its share of the image's inodes,
+  # and the peer's volume still takes a file.
+  - name: V10 a worker writes only where a size bounds it, and a volume holds at most its share of inodes
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            cp /opt/lane/sandbox-probe {{.vols}}/volumes-files/data/sandbox-probe
+            t=$({{.ctr}} task ls | awk "\$1 ~ /^volumes-files-.*r0\$/ && \$3 == \"RUNNING\" {print \$1}" | head -1)
+            out=$({{.ctr}} task exec --exec-id sandbox-$$ "$t" /var/funcd/volumes/data/sandbox-probe /var/funcd/volumes/scratch)
+            rm -f {{.vols}}/volumes-files/data/sandbox-probe
+            echo "$out"
+            share=$(python3 -c "import os;s=os.statvfs(\"/var/lib/funcd/data/volumes\");print(1048576*s.f_files//(s.f_blocks*s.f_frsize))")
+            n=$(echo "$out" | awk "\$1==\"files\" {print \$2}")
+            [ "$n" -gt 0 ] && [ "$n" -lt "$share" ] && echo "INODES_WITHIN_SHARE $n of $share"'
+        info: "probe → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "etc EROFS"
+          - result.systemout ShouldMatchRegex "tmp tmpfs [0-9]+"
+          - result.systemout ShouldContainSubstring "tmp-write ok"
+          - result.systemout ShouldContainSubstring "home /tmp"
+          - result.systemout ShouldContainSubstring "boot ENOSPC"
+          - result.systemout ShouldContainSubstring "log EROFS"
+          - result.systemout ShouldMatchRegex "files [0-9]+ EDQUOT"
+          - result.systemout ShouldContainSubstring INODES_WITHIN_SHARE
+      - type: http
+        method: POST
+        url: "{{.dp}}/peer"
+        headers:
+          content-type: application/json
+        body: '{"data":{"op":"write","name":"after-inodes","text":"still"}}'
+        assertions:
+          - result.statuscode ShouldEqual 200
 
   - name: V7 apply refuses a volume over the capacity and two replicas with a local volume
     steps:

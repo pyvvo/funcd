@@ -19,6 +19,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/eventing/deadletter"
+	"github.com/pyvvo/funcd/internal/platform/diskfull"
 )
 
 const op = "deadletter.badger"
@@ -67,7 +68,7 @@ func Options(cfg Config) badger.Options {
 func New(cfg Config) (deadletter.Store, error) {
 	db, err := badger.Open(Options(cfg))
 	if err != nil {
-		return nil, fault.Internalf(op, "opening dead-letter store (inMemory=%v): %v", cfg.InMemory, err)
+		return nil, fault.Wrapf(err, fault.Internal, op, "opening dead-letter store (inMemory=%v)", cfg.InMemory)
 	}
 	return owned{Store: NewOnDB(db), db: db}, nil
 }
@@ -94,7 +95,7 @@ func (s *store) Put(_ context.Context, dl deadletter.DeadLetter) error {
 	if err := s.db.Update(func(txn *badger.Txn) error {
 		return txn.Set(recordKey(dl.Namespace, dl.ID), b)
 	}); err != nil {
-		return fault.Wrapf(err, fault.Internal, op, "putting dead letter %q", dl.ID)
+		return diskfull.Wrapf(err, op, "putting dead letter %q", dl.ID)
 	}
 	return nil
 }
@@ -120,7 +121,7 @@ func (s *store) Update(_ context.Context, dl deadletter.DeadLetter) error {
 	case errors.Is(err, badger.ErrConflict):
 		return fault.Wrapf(err, fault.Conflict, op, "updating dead letter %q/%q", dl.Namespace, dl.ID)
 	}
-	return fault.Wrapf(err, fault.Internal, op, "updating dead letter %q/%q", dl.Namespace, dl.ID)
+	return diskfull.Wrapf(err, op, "updating dead letter %q/%q", dl.Namespace, dl.ID)
 }
 
 func (s *store) Get(_ context.Context, ns v1.NamespaceName, id string) (deadletter.DeadLetter, error) {
@@ -167,7 +168,7 @@ func (s *store) Delete(_ context.Context, ns v1.NamespaceName, id string) error 
 	if err := s.db.Update(func(txn *badger.Txn) error {
 		return txn.Delete(recordKey(ns, id))
 	}); err != nil {
-		return fault.Wrapf(err, fault.Internal, op, "deleting dead letter %q/%q", ns, id)
+		return diskfull.Wrapf(err, op, "deleting dead letter %q/%q", ns, id)
 	}
 	return nil
 }

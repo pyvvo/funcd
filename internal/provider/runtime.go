@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -52,8 +53,19 @@ type Deps struct {
 	// StorageRoot is the root of the engines' durable directories (ADR-0231); "" ⇒ no durable storage, so a spec with
 	// Storage fails Invalid.
 	StorageRoot string
+	// ScratchRoot holds the engines' scratch images and ScratchMountRoot their mount points (ADR-0294); "" ⇒ no
+	// scratch, so a spec's Scratch is ignored, as on the process runtime, which isolates nothing.
+	ScratchRoot      string
+	ScratchMountRoot string
+	// Floor is asked for a scratch's size before it is allocated (ADR-0296); nil ⇒ no floor.
+	Floor Floor
 	// Now is the clock ProviderSpec.MaxAge is measured with (ADR-0270); nil ⇒ time.Now.
 	Now func() time.Time
+}
+
+// Floor is the free-space floor of the data filesystem (quota.Floor, ADR-0296).
+type Floor interface {
+	Check(ctx context.Context, bytes int64) error
 }
 
 const defaultProbeTimeout = 2 * time.Second
@@ -66,6 +78,8 @@ type engineRuntime struct {
 	logger      *slog.Logger
 	httpClient  *http.Client
 	storageRoot string
+	scratch     scratchFiles
+	floor       Floor
 	unenforced  containerrt.LimitWarner // logs once per engine its runtime ignores its limits (ADR-0291)
 	// specs is the fingerprint of the spec each provider's engine was created from: a running engine of another spec
 	// is replaced, since a provider re-created or changed between two reconciler passes reaches Converge with its new
@@ -109,6 +123,8 @@ func NewRuntime(d Deps) (Runtime, error) {
 		logger:      logger.With("component", "provider.runtime"),
 		httpClient:  client,
 		storageRoot: d.StorageRoot,
+		scratch:     scratchFiles{root: d.ScratchRoot, mountRoot: d.ScratchMountRoot, fs: loopScratch{}},
+		floor:       d.Floor,
 		specs:       map[ProviderRef]string{},
 		now:         now,
 	}, nil
@@ -135,6 +151,9 @@ func (r *engineRuntime) Converge(ctx context.Context, spec ProviderSpec) (Provid
 		if err := r.prepareStorage(spec); err != nil {
 			return ProviderStatus{}, err
 		}
+	}
+	if spec.Scratch != nil && spec.Replicas != 1 {
+		return ProviderStatus{}, fault.Invalidf(op, "an engine with a scratch runs exactly one replica; got %d", spec.Replicas)
 	}
 
 	existing, err := r.namedInstances(ctx, spec.Ref)
@@ -201,9 +220,13 @@ func (r *engineRuntime) Converge(ctx context.Context, spec ProviderSpec) (Provid
 				maps.Copy(ws.Env, spec.IssueEnv())
 			}
 			r.unenforced.Warn(ctx, r.logger, r.rt, string(spec.Ref.Namespace)+"/"+string(spec.Ref.Name), ws.Limits)
+			if serr := r.makeScratch(ctx, spec); serr != nil {
+				return ProviderStatus{}, serr
+			}
 			created, cerr := r.rt.Create(ctx, ws)
 			if cerr != nil {
-				return ProviderStatus{}, fault.Wrapf(cerr, fault.KindOf(cerr), op, "create engine replica %d", i)
+				return ProviderStatus{}, errors.Join(fault.Wrapf(cerr, fault.KindOf(cerr), op, "create engine replica %d", i),
+					r.removeScratch(spec.Ref))
 			}
 			inst = created
 			fallthrough
@@ -262,6 +285,9 @@ func (r *engineRuntime) Teardown(ctx context.Context, ref ProviderRef) error {
 			return fault.Wrapf(rerr, fault.KindOf(rerr), op, "retire engine %s", in.ID)
 		}
 	}
+	if serr := r.removeScratch(ref); serr != nil {
+		return serr
+	}
 	r.specsMu.Lock()
 	delete(r.specs, ref)
 	r.specsMu.Unlock()
@@ -306,7 +332,7 @@ func (r *engineRuntime) workerSpec(spec ProviderSpec, replica int) containerrt.W
 		Command:   nil, // the curated image entrypoint is the engine — no artifact, no shape gate
 		Env:       spec.Env,
 		Limits:    containerrt.LimitsFrom(spec.Resources.CPU, spec.Resources.Memory),
-		Mounts:    r.storageMounts(spec),
+		Mounts:    append(r.storageMounts(spec), r.scratch.mounts(spec)...),
 
 		EgressOnly: spec.EgressOnly,
 	}

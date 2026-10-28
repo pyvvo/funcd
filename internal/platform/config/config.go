@@ -327,9 +327,12 @@ type Config struct {
 		// (ADR-0274): an ADR-0194 duration from 500ms to 1h, an opt-in; empty, every answer waits for a save that
 		// covers it (ADR-0279). It is set by hand: funcdctl backup plan sets no Lake key (ADR-0286).
 		SaveInterval string `json:"saveInterval,omitempty" env:"FUNCD_LAKE_SAVE_INTERVAL"`
-		// CatalogMaxSize caps one Lake's catalog in the catalog store (ADR-0293): a ByteSize, 1GiB when empty, at most
-		// s3gateway.maxUploadBytes. A save past it fails, and the Lake shows it (ADR-0276).
+		// CatalogMaxSize caps one Lake's catalog in the catalog store (ADR-0293): a ByteSize, 256MiB when empty
+		// (ADR-0294), at most s3gateway.maxUploadBytes. A save past it fails, and the Lake shows it (ADR-0276).
 		CatalogMaxSize string `json:"catalogMaxSize,omitempty" env:"FUNCD_LAKE_CATALOG_MAX_SIZE"`
+		// ScratchSize sizes the Lake engine's scratch filesystem (ADR-0294): a ByteSize, at least twice
+		// CatalogMaxSize plus 512MiB; empty, the larger of 1GiB and that sum.
+		ScratchSize string `json:"scratchSize,omitempty" env:"FUNCD_LAKE_SCRATCH_SIZE"`
 		// EnginePollInterval and EngineProbeTimeout pace the wait for an engine's readiness probe (ADR-0163).
 		EnginePollInterval string `json:"enginePollInterval,omitempty" env:"FUNCD_LAKE_ENGINE_POLL_INTERVAL"`
 		EngineProbeTimeout string `json:"engineProbeTimeout,omitempty" env:"FUNCD_LAKE_ENGINE_PROBE_TIMEOUT"`

@@ -18,6 +18,7 @@ import (
 	"github.com/dgraph-io/badger/v4/options"
 
 	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/platform/diskfull"
 	"github.com/pyvvo/funcd/internal/snapshot"
 	snapbadger "github.com/pyvvo/funcd/internal/snapshot/badger"
 	"github.com/pyvvo/funcd/internal/store"
@@ -71,7 +72,7 @@ func Open(dir string, opts ...Option) (store.Engine, error) {
 		WithCompression(options.None)
 	db, err := badger.Open(bopts)
 	if err != nil {
-		return nil, fault.Internalf(op, "open badger at %q: %v", dir, err)
+		return nil, fault.Wrapf(err, fault.Internal, op, "open badger at %q", dir)
 	}
 	e := &engine{db: db, stop: make(chan struct{})}
 	if cfg.gcInterval > 0 {
@@ -112,6 +113,9 @@ func (e *engine) Update(ctx context.Context, fn func(store.Txn) error) error {
 	err := e.db.Update(func(bt *badger.Txn) error { return fn(&txn{bt: bt, write: true}) })
 	if errors.Is(err, badger.ErrConflict) { // defensive — the store wrapper serializes writers
 		return fault.Conflictf("badger.Update", "transaction conflict")
+	}
+	if diskfull.Is(err) {
+		return diskfull.Wrapf(err, "badger.Update", "commit")
 	}
 	return err
 }

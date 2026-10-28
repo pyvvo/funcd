@@ -97,6 +97,26 @@ prints the generation as `<timeline>/<n>`: the way back (`examples/restore-runbo
 - funcd deletes no pin: it lists those older than the newest `backup.retention.preUpgrade` (3) with their prune
   command (`examples/backup-lifecycle.md`).
 
+From the release with ADR-0294, a worker on the containerd runtime has a read-only root: a Function writes to `/tmp`
+(a tmpfs counted in its memory), to `$HOME`, which is `/tmp` unless its spec sets `HOME`, and to its volumes. Code that
+wrote elsewhere fails with "read-only file system". The default `lake.catalogMaxSize` is 256MiB: a Lake whose catalog
+is larger needs the setting, else its saves are refused, and it does not start once its catalog no longer fits its
+scratch (`lake.scratchSize`).
+
+## A full data disk
+
+funcd keeps `storage.minFreeSize` (2GiB by default) free on the filesystem of `storage.dataDir` (ADR-0296). Below it,
+workload writes (a KV put, a Bucket upload, a SQL write, a Lake commit or save) get 507, and funcd logs once when the
+free space falls below the setting and once when it is back above. Reads, deletes and funcd's own writes go on. Once
+space is freed, writes are admitted again within a second.
+
+A start of funcd needs about 640 MiB free for its stores (ADR-0297). Before it opens them, it removes the Lake scratch
+images an earlier run left under `<dataDir>/scratch`, then logs the free space every 10 seconds until that much is free;
+the wait counts no failed start in safe mode. A Lake engine of an earlier run that still runs keeps its scratch until
+funcd stops it: if the start waits for that space, end the engine's processes, which run in the cgroup
+`/sys/fs/cgroup/funcd-<namespace>/<engine container>` (`echo 1 | sudo tee <that cgroup>/cgroup.kill`), or free other
+space.
+
 ## Uninstall
 
 After `funcd install`, run `sudo funcd uninstall`. After the bundled unit:

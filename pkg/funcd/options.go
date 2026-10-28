@@ -609,6 +609,19 @@ func WithLakeCatalogMaxBytes(n int64) Option {
 	}
 }
 
+// WithLakeScratch gives each Lake engine on the containerd runtime a scratch of sizeBytes (lake.scratchSize,
+// ADR-0294): a preallocated image under root, mounted under mountRoot.
+func WithLakeScratch(sizeBytes int64, root, mountRoot string) Option {
+	return func(c *config) error {
+		if sizeBytes <= 0 || root == "" || mountRoot == "" {
+			return fault.Invalidf("funcd.WithLakeScratch", "lake scratch of %d bytes under %q and %q: want a size and both roots",
+				sizeBytes, root, mountRoot)
+		}
+		c.lakeScratchBytes, c.scratchRoot, c.scratchMountRoot = sizeBytes, root, mountRoot
+		return nil
+	}
+}
+
 // WithLakeSaveInterval sets how often every Lake engine saves its catalog after a commit, the Lake's recovery point
 // (ADR-0274, config lake.saveInterval), as the engine's FUNCD_LAKE_SAVE_INTERVAL: a whole number of milliseconds within
 // lake.saveInterval's bounds, 500ms to 1h. 0 ⇒ none set: every Lake saves its catalog before it answers (ADR-0279).

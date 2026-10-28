@@ -14,6 +14,7 @@ import (
 	"github.com/dgraph-io/badger/v4/options"
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/platform/diskfull"
 	"github.com/pyvvo/funcd/internal/snapshot"
 	snapbadger "github.com/pyvvo/funcd/internal/snapshot/badger"
 	"github.com/pyvvo/funcd/internal/workflow/runstate"
@@ -56,7 +57,7 @@ func New(cfg Config) (runstate.Store, error) {
 	bopts = bopts.WithLoggingLevel(badger.ERROR)
 	db, err := badger.Open(bopts)
 	if err != nil {
-		return nil, fault.Internalf(op, "opening run store (inMemory=%v): %v", cfg.InMemory, err)
+		return nil, fault.Wrapf(err, fault.Internal, op, "opening run store (inMemory=%v)", cfg.InMemory)
 	}
 	maxValue := bopts.ValueLogFileSize
 	if cfg.InMemory && bopts.ValueThreshold < maxValue {
@@ -101,7 +102,7 @@ func (s *store) Put(_ context.Context, rec *runstate.Record) error {
 	if err := s.db.Update(func(txn *badger.Txn) error {
 		return txn.Set(recordKey(rec.Namespace, rec.Name), b)
 	}); err != nil {
-		return fault.Wrapf(err, fault.Internal, op, "putting run %q", rec.Name)
+		return diskfull.Wrapf(err, op, "putting run %q", rec.Name)
 	}
 	return nil
 }
@@ -110,7 +111,7 @@ func (s *store) Delete(_ context.Context, ns v1.NamespaceName, name v1.ObjectNam
 	if err := s.db.Update(func(txn *badger.Txn) error {
 		return txn.Delete(recordKey(ns, name))
 	}); err != nil {
-		return fault.Wrapf(err, fault.Internal, op, "deleting run %q/%q", ns, name)
+		return diskfull.Wrapf(err, op, "deleting run %q/%q", ns, name)
 	}
 	return nil
 }

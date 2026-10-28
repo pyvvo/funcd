@@ -131,6 +131,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		Route:      nil,
 		EgressOnly: fence,
 	}
+	if r.scratchBytes > 0 {
+		spec.Scratch = &provider.ScratchSpec{Path: scratchPath, SizeBytes: r.scratchBytes}
+	}
 	// The engine signs as Lake::"<ns>/<cs.Name>" (ADR-0175): its reads are its own spec.bindings.blob bindings, and it
 	// writes a prefix only where the S3 PEP resolves it as that prefix's writer. Its pair is issued with the engine
 	// (ADR-0270 Decision 5), and a fresh pair needs a fresh engine: Converge replaces one older than its renewal age.
@@ -146,6 +149,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	}
 
 	st, cerr := r.prov.Converge(ctx, spec)
+	if fault.KindOf(cerr) == fault.InsufficientStorage {
+		// The free-space floor refused the engine's scratch before anything was allocated (ADR-0294): wait for space.
+		return r.holdNotReady(ctx, cs, "ScratchSpaceLacking",
+			"the data filesystem lacks the space for this Lake engine's scratch (lake.scratchSize)", r.enginePoll)
+	}
 	if cerr != nil {
 		// An engine that cannot be (re)created is not Ready: write that before failing the pass, else the last Ready
 		// status and the dead engine's endpoint outlive it (issue #104).
@@ -429,6 +437,9 @@ func (r *Reconciler) engineEnv(ctx context.Context, cs *v1.Lake) (map[string]str
 	}
 	if r.saveInterval > 0 {
 		own["FUNCD_LAKE_SAVE_INTERVAL"] = v1.Duration(r.saveInterval).String()
+	}
+	if r.catalogMax > 0 {
+		own["FUNCD_LAKE_CATALOG_MAX_BYTES"] = strconv.FormatInt(r.catalogMax, 10) // the engine's spill limit (ADR-0294)
 	}
 	if r.saves() {
 		own["FUNCD_LAKE_SAVE_PORT"] = strconv.Itoa(savePort)

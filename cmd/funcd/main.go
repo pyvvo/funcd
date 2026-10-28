@@ -171,8 +171,21 @@ func serve(parent context.Context, configPath string, memoryFlag *bool, out io.W
 		}
 	}()
 
+	// ADR-0297 Decision 2: before this start counts, the Lake scratch an earlier run left goes, and each step below waits
+	// while the stores' newest files would not fit or it fails with ENOSPC; a stop during a wait records no failed start.
+	space := startSpace(parent, cfg, root)
+
 	// ADR-0207 Decisions 3 and 4: this start counts before any store opens; a crash loop starts held, then stops.
-	start, held, stableAfter, err := safeModeStart(parent, cfg, held, root)
+	var start *safemode.Start
+	var stableAfter time.Duration
+	err = space.run(parent, func() error {
+		var serr error
+		start, held, stableAfter, serr = safeModeStart(parent, cfg, held, root)
+		return serr
+	})
+	if stoppedWaiting(parent, err) {
+		return nil
+	}
 	defer func() {
 		if err != nil {
 			if ferr := start.Failed(err); ferr != nil {
@@ -184,7 +197,24 @@ func serve(parent context.Context, configPath string, memoryFlag *bool, out io.W
 		return err
 	}
 
-	opts, closeExec, startLoops, substrate, err := buildOptions(parent, cfg, root, held)
+	// The steps that open the stores are one step, which closes what it opened when it fails, so a retry finds no
+	// store locked (ADR-0297 Decision 2).
+	closeExec, startLoops, substrate, platform := noopClose, func(context.Context) {}, "", (*funcd.Platform)(nil)
+	err = space.run(parent, func() error {
+		opts, ce, sl, sub, berr := buildOptions(parent, cfg, root, held)
+		if berr != nil {
+			return berr
+		}
+		p, nerr := funcd.New(opts...)
+		if nerr != nil {
+			return errors.Join(fmt.Errorf("assemble platform: %w", nerr), ce())
+		}
+		closeExec, startLoops, substrate, platform = ce, sl, sub, p
+		return nil
+	})
+	if stoppedWaiting(parent, err) {
+		return start.Clean()
+	}
 	if err != nil {
 		return err
 	}
@@ -193,11 +223,6 @@ func serve(parent context.Context, configPath string, memoryFlag *bool, out io.W
 			root.Warn("funcd: closing execution runtime", "error", cerr)
 		}
 	}()
-
-	platform, err := funcd.New(opts...)
-	if err != nil {
-		return fmt.Errorf("assemble platform: %w", err)
-	}
 
 	ctx, stop := signal.NotifyContext(parent, stopsignal.Signals()...)
 	defer stop()
@@ -1538,8 +1563,17 @@ func containerdOptions(ctx context.Context, cfg config.Config, stopGrace time.Du
 		return nil, noopClose, err
 	}
 	closer := func() error { return errors.Join(mgr.Close(), closeVolumes(), closeRoot()) }
+	scratchBytes, err := cfg.LakeScratchBytes()
+	if err != nil {
+		_ = closer()
+		return nil, noopClose, err
+	}
+	scratchRoot, scratchMount := lakeScratchRoots(cfg)
+	if cfg.Storage.Mode == "memory" {
+		scratchRoot = filepath.Join(root, ".scratch") // removed with the temporary engine storage root
+	}
 	opts := []funcd.Option{funcd.WithRuntime(cd), funcd.WithContainerExecution(mgrCfg.ImageFor(c.ImagePrefix)),
-		funcd.WithProviderStorage(root)}
+		funcd.WithProviderStorage(root), funcd.WithLakeScratch(scratchBytes, scratchRoot, scratchMount)}
 	if cfg.Storage.Mode == "memory" {
 		opts = append(opts, funcd.WithEphemeralProviderStorage())
 	}
@@ -1580,6 +1614,12 @@ func functionVolumes(ctx context.Context, cfg config.Config) ([]funcd.Option, fu
 	}
 	opt := funcd.WithFunctionVolumes(volume.Options{Root: fs.Root(), Limiter: fs, CapacityBytes: capacity}, ephemeral)
 	return []funcd.Option{opt}, func() error { return errors.Join(fs.Close(), cleanup()) }, nil
+}
+
+// lakeScratchRoots are where the Lake engines' scratch images and their mount points live on the containerd runtime
+// (ADR-0294): <dataDir>/scratch, mounted under <stateDir>/scratch.
+func lakeScratchRoots(cfg config.Config) (images, mounts string) {
+	return filepath.Join(cfg.Storage.DataDir, "scratch"), filepath.Join(cfg.Runtime.Containerd.StateDir, "scratch")
 }
 
 // providerStorageRoot is the add-on engines' storage root on the containerd runtime (ADR-0231 Decision 5):

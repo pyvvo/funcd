@@ -713,6 +713,7 @@ volumes:
   copy: true
   build:
     - CGO_ENABLED=0 GOOS=linux GOARCH=$(go env GOARCH) go -C "$FUNCD_ROOT" build -o "$PWD/projid-probe" ./e2e/fixtures/projid-probe
+    - CGO_ENABLED=0 GOOS=linux GOARCH=$(go env GOARCH) go -C "$FUNCD_ROOT" build -o "$PWD/sandbox-probe" ./e2e/fixtures/sandbox-probe
     - CGO_ENABLED=0 GOOS=linux GOARCH=$(go env GOARCH) GOBIN= go install github.com/versity/versitygw/cmd/versitygw@v1.9.0 && cp "$(go env GOPATH)/bin/linux_$(go env GOARCH)/versitygw" versitygw
   stage:
     - app
@@ -723,6 +724,7 @@ volumes:
     - functions/ts/files.mjs
     - functions/ts/files.contract.yaml
     - projid-probe
+    - sandbox-probe
     - versitygw
     # The S3 server's key, the workload Secrets and the admin token of the todo App's test fixtures, which the backup
     # step uses.

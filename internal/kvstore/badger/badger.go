@@ -19,6 +19,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/kvstore"
+	"github.com/pyvvo/funcd/internal/platform/diskfull"
 	"github.com/pyvvo/funcd/internal/snapshot"
 	snapbadger "github.com/pyvvo/funcd/internal/snapshot/badger"
 )
@@ -119,7 +120,7 @@ func openDB(dir string, sync bool) (*badger.DB, error) {
 		WithCompression(options.None)
 	db, err := badger.Open(bopts)
 	if err != nil {
-		return nil, fault.Internalf("kvbadger.Open", "open badger at %q: %v", dir, err)
+		return nil, fault.Wrapf(err, fault.Internal, "kvbadger.Open", "open badger at %q", dir)
 	}
 	return db, nil
 }
@@ -275,7 +276,7 @@ func (d *driver) submit(ctx context.Context, r *writeReq) error {
 	select {
 	case err := <-r.done:
 		if err != nil {
-			return fault.Internalf("kvbadger.write", "%v", err)
+			return diskfull.Wrapf(err, "kvbadger.write", "commit")
 		}
 		return nil
 	case <-ctx.Done():
@@ -385,7 +386,7 @@ const dropConcurrency = 64
 func (d *driver) DropPrefix(prefix string) error {
 	if d.cdc == nil && d.backup == nil {
 		if err := d.db.DropPrefix([]byte(prefix)); err != nil {
-			return fault.Internalf("kvbadger.DropPrefix", "%v", err)
+			return diskfull.Wrapf(err, "kvbadger.DropPrefix", "drop %q", prefix)
 		}
 		return nil
 	}

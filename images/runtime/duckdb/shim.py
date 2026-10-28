@@ -110,6 +110,14 @@ TUNING = {
     "DUCKDB_THREADS": "threads",
 }
 
+# The Lake's catalog cap, which funcd sets when the engine has a scratch of its own (ADR-0294): the scratch keeps room
+# for the catalog and its checkpoint copy, and the spills get the rest.
+CATALOG_MAX_KEY = "FUNCD_LAKE_CATALOG_MAX_BYTES"
+
+# The size units DuckDB reads in a setting such as max_temp_directory_size, in bytes.
+SIZE_UNITS = {"": 1, "b": 1, "byte": 1, "bytes": 1, "k": 1000, "kb": 1000, "kib": 1024, "m": 1000**2, "mb": 1000**2,
+              "mib": 1024**2, "g": 1000**3, "gb": 1000**3, "gib": 1024**3, "t": 1000**4, "tb": 1000**4, "tib": 1024**4}
+
 
 def _require(name: str) -> str:
     """Read a required env var or exit non-zero (fail closed)."""
@@ -203,6 +211,43 @@ def _tune(con: "duckdb.DuckDBPyConnection", environ: Mapping[str, str]) -> None:
         except Exception as exc:  # noqa: BLE001 — DuckDB's error names no key, so the message adds it.
             sys.stderr.write(f"funcd duckdb shim: {name}={value} is not a valid {TUNING[name]}: {exc}\n")
             raise SystemExit(2) from exc
+
+
+def _size_bytes(value: str) -> int | None:
+    """value as DuckDB reads a size (``512MiB``, ``1 GB``), in bytes, or None for a form this does not read."""
+    m = re.fullmatch(r"\s*([0-9]+(?:\.[0-9]+)?)\s*([a-zA-Z]*)\s*", value)
+    if not m or m.group(2).lower() not in SIZE_UNITS:
+        return None
+    return int(float(m.group(1)) * SIZE_UNITS[m.group(2).lower()])
+
+
+def _spill_limit(environ: Mapping[str, str], statvfs: Callable[[str], os.statvfs_result] = os.statvfs) -> int | None:
+    """The engine's spill limit (ADR-0294): the scratch's free space before the engine writes to it, less twice the
+    catalog cap, the room the catalog and its checkpoint copy need; None when funcd set no cap. A limit of zero or
+    less ends the start (exit 2) with a message naming lake.scratchSize."""
+    value = environ.get(CATALOG_MAX_KEY)
+    if value is None:
+        return None
+    try:
+        catalog_max = int(value)
+        st = statvfs(os.path.dirname(LOCAL_CATALOG))
+    except (ValueError, OSError) as exc:
+        sys.stderr.write(f"funcd duckdb shim: cannot size the spills from {CATALOG_MAX_KEY}={value}: {exc}\n")
+        raise SystemExit(2) from exc
+    limit = st.f_bavail * st.f_frsize - 2 * catalog_max
+    if limit <= 0:
+        sys.stderr.write("funcd duckdb shim: the scratch leaves no room for spills beside the catalog and its "
+                         "checkpoint copy: raise lake.scratchSize\n")
+        raise SystemExit(2)
+    return limit
+
+
+def _cap_spills(con: "duckdb.DuckDBPyConnection", limit: int, environ: Mapping[str, str]) -> None:
+    """Sets max_temp_directory_size to limit, unless DUCKDB_MAX_TEMP_DIRECTORY_SIZE (ADR-0265) set a smaller one."""
+    tuned = environ.get("DUCKDB_MAX_TEMP_DIRECTORY_SIZE")
+    if tuned is not None and (size := _size_bytes(tuned)) is not None and size <= limit:
+        return
+    con.execute("SET max_temp_directory_size = ?", [f"{limit}B"])
 
 
 def _configure(con: "duckdb.DuckDBPyConnection", endpoint: str, region: str, access: str, secret: str) -> None:
@@ -679,10 +724,13 @@ def main() -> int:
     bucket, key = _split_s3_url(catalog_url)
     save_interval = _save_interval(os.environ)
     data_path = os.environ.get("FUNCD_DUCKLAKE_DATA_PATH") or _data_path(catalog_url)
+    spill_limit = _spill_limit(os.environ)  # before anything is written to the scratch
 
     s3 = _s3_client(endpoint, region, access, secret)
     con = _connect()
     _tune(con, os.environ)
+    if spill_limit is not None:
+        _cap_spills(con, spill_limit, os.environ)
     _configure(con, endpoint, region, access, secret)
 
     # Recover: GetObject the catalog from blob → local file → ATTACH (fresh on first deploy). The
