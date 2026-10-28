@@ -1,7 +1,7 @@
 # ADR-0294: A worker's root filesystem is read-only, and everything it writes has a size limit
 
 - **Status**: Proposed (2026-10-28; adr-judge round 1 folded in; revised after the decider's review: a 1GiB scratch
-  and a 256MiB catalog cap; round 4 passed, its Minors folded in)
+  and a 256MiB catalog cap; rounds 4 and 5 passed, their Minors folded in)
 - **Date**: 2026-10-28
 - **Deciders**: green-0-rabbit
 - **Tags**: runtime, limits, storage
@@ -81,8 +81,8 @@ bounded, and they are the Lake's own concern.
 1. **Read-only root.** Every containerd worker's root filesystem is read-only (`oci.WithRootFSReadonly()`).
 2. **`/tmp` in memory.** Every worker gets a tmpfs at `/tmp` (`nosuid`, `nodev`, mode 1777) of its memory limit, whose
    pages count in its memory cgroup. A pool worker has no memory limit (ADR-0291), so its `/tmp` is 512 MiB, ADR-0291's
-   default memory, bounded by the tmpfs's size in the node's memory. The tmpfs ends with the worker. containerd's own
-   `/run` and `/dev/shm` stay tmpfs of 64 MiB each (`pkg/oci/mounts.go`), in memory too.
+   default memory, bounded by the tmpfs's size in the node's memory. The tmpfs ends with the worker. containerd's
+   default tmpfs mounts, `/dev`, `/dev/shm` and `/run`, stay 64 MiB each (`pkg/oci/mounts.go`), in memory too.
 3. **`HOME`.** A worker's environment gets `HOME=/tmp` unless its spec sets `HOME`.
 4. **Boot directory.** The driver mounts a 1 MiB tmpfs (`nosuid`, `nodev`, `noexec`, mode 0777) on the host's boot
    directory before it creates the container, and unmounts it before it removes the directory: at teardown and at a
@@ -94,8 +94,8 @@ bounded, and they are the Lake's own concern.
 6. **The Lake engine's scratch.** `/var/funcd/ducklake` is a filesystem of its own:
    - `lake.scratchSize` (NEW key, a `ByteSize`) sizes it. Empty, it is the larger of 1GiB and twice
      `lake.catalogMaxSize` plus 512MiB, so a node that sets a large catalog cap still starts; a value that is set is
-     refused unless it is more than twice `lake.catalogMaxSize`, which leaves room for the catalog, its checkpoint
-     copy and the spills.
+     refused unless it is at least twice `lake.catalogMaxSize` plus 512MiB, which leaves room for the catalog, its
+     checkpoint copy, ext4's overhead and the spills.
    - `lake.catalogMaxSize` defaults to 256MiB (ADR-0293 Decision 3 said 1GiB), so the default scratch is 1GiB:
      512MiB for the catalog and its checkpoint copy, 512MiB for spills.
    - Before it allocates anything, the provider runtime asks the free-space floor (ADR-0296) for `lake.scratchSize`; a
@@ -104,12 +104,14 @@ bounded, and they are the Lake's own concern.
      preallocated and formatted, loop-mounts it (`nosuid`, `nodev`) at `<stateDir>/scratch/<ns>/<lake>` and
      bind-mounts it into the engine. It reuses quotafs's image code (`internal/volume/quotafs/quotafs_linux.go:104`,
      `:127`, `:132`), moved to a package both use. The image is unmounted and deleted after the engine's teardown.
-     Before a start waits for space (ADR-0297), funcd unmounts and removes the images an earlier run left that no
-     engine holds (`provider.RemoveLeftoverScratch`), and the boot sweep removes the rest.
+     Before a start waits for space (ADR-0297), funcd unmounts and removes the images an earlier run left
+     (`provider.RemoveLeftoverScratch`); one that an engine of that run still holds frees its space only once the boot
+     sweep stops that engine.
    - The spill limit is the scratch's free space before the engine writes to it, less twice `lake.catalogMaxSize`, so
      ext4's own overhead never comes out of the catalog's room: the Lake reconciler passes the cap as
      `FUNCD_LAKE_CATALOG_MAX_BYTES` (NEW), and the shim reads the free space with `statvfs` and sets DuckDB's
-     `max_temp_directory_size` to the result, or to `DUCKDB_MAX_TEMP_DIRECTORY_SIZE` (ADR-0265) when that is smaller.
+     `max_temp_directory_size` to the result, or to `DUCKDB_MAX_TEMP_DIRECTORY_SIZE` (ADR-0265) when that is smaller;
+     at a result of zero or less, the engine refuses to start with a message naming `lake.scratchSize`.
 7. **The SQL engine.** It keeps its data in its ADR-0231 directory and writes nothing else outside `/tmp`.
 
 ## Design model
@@ -137,12 +139,12 @@ type ScratchSpec struct {
 //	Floor interface{ Check(ctx context.Context, bytes int64) error }
 
 // RemoveLeftoverScratch unmounts and removes the scratch images an earlier run left under root, mounted under
-// mountRoot; held is the size of those an engine still holds, which the boot sweep frees (ADR-0297).
-func RemoveLeftoverScratch(root, mountRoot string) (held int64, err error)
+// mountRoot; one that an engine still holds frees its space once the boot sweep stops that engine (ADR-0297).
+func RemoveLeftoverScratch(root, mountRoot string) error
 
 // Package config (internal/platform/config), NEW.
 //	Lake.ScratchSize string `json:"scratchSize,omitempty" env:"FUNCD_LAKE_SCRATCH_SIZE"`
-func (c Config) LakeScratchBytes() (int64, error) // empty: max(1GiB, 2 × catalog cap + 512MiB); set: above 2 × the cap
+func (c Config) LakeScratchBytes() (int64, error) // empty: max(1GiB, 2 × cap + 512MiB); set: at least 2 × cap + 512MiB
 // CHANGED: DefaultLakeCatalogMaxSize = "256MiB" (was "1GiB", ADR-0293 Decision 3)
 ```
 
@@ -164,9 +166,10 @@ func (c Config) LakeScratchBytes() (int64, error) // empty: max(1GiB, 2 × catal
 - Tests, one per scenario: `TestScenarioWorkerRootReadOnly` and `…TmpCountsInMemory` (the OCI spec carries the
   read-only root, the tmpfs and its size, and `HOME`); `…LakeScratchRefusedBelowFloor` and `…LakeScratchRecreated`
   (the provider runtime with a fake floor and a fake image); the image package's own test and
-  `RemoveLeftoverScratch`'s as root (`just test-volumes-root`); the shim's spill limit from a fake `statvfs`
-  (`shim_test.py`). On real containerd: the kv-counter Lima lane execs into a Function's worker (a write to
-  `/etc` fails, `/tmp` is a tmpfs) and, as `…BootAndLogDirsBounded`, a 2 MiB write to `/run/funcd-boot` fails, a
+  `RemoveLeftoverScratch`'s as root (`just test-volumes-root`); the shim's spill limit from a fake `statvfs`, and its
+  refusal at a limit of zero or less (`shim_test.py`). On real containerd: the kv-counter Lima lane execs into a
+  Function's worker (a write to `/etc` fails, `/tmp` is a tmpfs) and, as `…BootAndLogDirsBounded`, a 2 MiB write to
+  `/run/funcd-boot` fails, a
   write to `/run/funcd-log` fails, and the Function's next log line still reaches funcd;
   the duckdb lane, with a 512Mi scratch and a 128Mi catalog cap, runs a query that spills past 256 MiB and fails, then
   a commit and a save that succeed (`…LakeScratchBounded`); the sql lane execs a write to `/etc` in the engine, which
@@ -184,8 +187,9 @@ func (c Config) LakeScratchBytes() (int64, error) // empty: max(1GiB, 2 × catal
 - [ ] Every path that removes a boot directory unmounts its tmpfs first, and the boot sweep unmounts what
       `/proc/self/mountinfo` lists under the boot root; the log directory's mount is read-only.
 - [ ] The Lake engine's scratch is asked of the floor, preallocated, mounted before the engine starts, removed after
-      it stops, removed before the start's wait when no engine holds it, and swept at boot; `lake.scratchSize` must
-      exceed twice `lake.catalogMaxSize`, whose default is 256MiB; the spill limit comes from the scratch's free space.
+      it stops, removed before the start's wait, and swept at boot; `lake.scratchSize` must be at least twice
+      `lake.catalogMaxSize`, whose default is 256MiB, plus 512MiB; the spill limit comes from the scratch's free space,
+      and the engine refuses to start when it is zero or less.
 
 ## Consequences
 
@@ -202,5 +206,5 @@ func (c Config) LakeScratchBytes() (int64, error) // empty: max(1GiB, 2 × catal
 
 ## References
 
-- The decider's refinement and review of 2026-10-28; FEAT-0016; adr-judge rounds 1 and 4 (coworker-3, 2026-10-28).
+- The decider's refinement and review of 2026-10-28; FEAT-0016; adr-judge rounds 1, 4 and 5 (coworker-3, 2026-10-28).
 - `images/runtime/duckdb/shim.py:61-66`, `:107-111`, `:225`, `:445-452`; containerd v2.4.2 `pkg/oci/spec_opts.go:500`.

@@ -1,7 +1,7 @@
 # ADR-0297: A start waits for disk space, and a store's out-of-space error is 507
 
 - **Status**: Proposed (2026-10-28; adr-judge rounds 1 to 3 passed an earlier draft that forked ristretto and Badger;
-  rewritten after the decider chose no fork; round 4 folded in)
+  rewritten after the decider chose no fork; rounds 4 and 5 folded in)
 - **Date**: 2026-10-28
 - **Deciders**: green-0-rabbit
 - **Tags**: storage, reliability
@@ -24,18 +24,19 @@ on 48 MiB tmpfs and ext4 images in a Linux VM) found a change in two parts after
 filesystem return `ENOSPC`, reads work, and the database writes again once space is freed: ristretto allocates a
 file's blocks when it creates or grows the file, and Badger handles the error that then comes back (`db.go:1061`,
 `memtable.go:75-78`, `value.go:536`, `discard.go:129`, `y/error.go:55-62`). funcd's start writes the safe-mode record
-and opens the stores before it serves, so today a start on a full filesystem fails, and the unit starts it again
-(`Restart=on-failure`, `cmd/funcd/install.go:49`) until space is freed. This ADR makes the start wait for space
-instead, and makes a store's out-of-space error a 507.
+and opens the stores before it serves, so today a start on a full filesystem fails, and repeated failed starts can
+leave funcd stopped even after space is freed (safe mode, ADR-0207; `RestartPreventExitStatus=70`,
+`cmd/funcd/install.go:49-52`). This ADR makes the start wait for space instead, and makes a store's out-of-space error
+a 507.
 
 ## Scenarios
 
 - **scenario: start-waits-for-space**: Given a data filesystem with less free space than the stores' newest files take,
   When funcd starts, Then it logs the free space every 10 seconds, records no failed start, and finishes starting once
   that space is free.
-- **scenario: start-frees-leftover-scratch**: Given a Lake scratch image an earlier run left (ADR-0294) on a data
-  filesystem that is otherwise too full, When funcd starts, Then it removes the image before it waits and starts
-  without waiting.
+- **scenario: start-frees-leftover-scratch**: Given a Lake scratch image an earlier run left, which no engine holds
+  (ADR-0294), on a data filesystem that is otherwise too full, When funcd starts, Then it removes the image before it
+  waits and starts without waiting.
 - **scenario: start-below-floor**: Given less free space than `storage.minFreeSize` but enough for the stores, When
   funcd starts, Then it serves reads and the control plane and refuses workload writes (ADR-0296).
 - **scenario: enospc-is-507**: Given a store write that fails with an error matching `syscall.ENOSPC`, When a client
@@ -71,14 +72,16 @@ instead, and makes a store's out-of-space error a 507.
    carries no patch meanwhile.
 2. **The start waits.** Before it counts the start in the safe-mode record (ADR-0207), `cmd/funcd` unmounts and removes
    the Lake scratch images an earlier run left (`provider.RemoveLeftoverScratch`, ADR-0294), then reads the data
-   filesystem's free space (ADR-0296's `quota.DiskFree`). While that free space, plus the size of a leftover image an
-   engine still holds, which the boot sweep frees, is below what the stores' newest files take, twice each database's
-   memtable size plus twice its value-log file size (640 MiB for the four, with their 16 MiB memtables and 64 MiB value
-   logs), funcd logs the free space every 10 seconds and waits. The safe-mode record's write, and the steps that open
-   the stores, `buildOptions` and `funcd.New`, run as one step that releases what it opened when it fails, wait the
-   same way when they fail with `ENOSPC`. A failed read does not wait; signals end the wait, and a stop during it
-   records no failed start. A start with that much space proceeds even below the floor, and ADR-0296 then refuses
-   workload writes.
+   filesystem's free space (ADR-0296's `quota.DiskFree`). While that is below what the stores' newest files take,
+   twice each database's memtable size plus twice its value-log file size (640 MiB for the four, with their 16 MiB
+   memtables and 64 MiB value logs), funcd logs the free space every 10 seconds and waits. Only free space counts: an
+   image that an engine of the earlier run still holds frees nothing until the boot sweep stops that engine, so the
+   wait then lasts until an operator frees space or stops that engine (the operations guide says how). Two steps wait
+   the same way when they fail with `ENOSPC`: the safe-mode record's write, and the opening of the stores,
+   `buildOptions` with `funcd.New`, which releases what it opened when it fails. Until the upstream release, a store's
+   error reaches that second step as text, so its retry catches funcd's own writes only. A failed read does not wait;
+   signals end the wait, and a stop during it records no failed start. A start with that much space proceeds even
+   below the floor, and ADR-0296 then refuses workload writes.
 3. **A returned error.** Each Badger adapter's `Open` keeps the error's chain (`fault.Wrapf`, not `%v`), and a write
    whose error matches `syscall.ENOSPC` returns `fault.InsufficientStorage`, so a client gets 507. This takes effect
    with the upstream release, whose `y.Wrap` keeps the chain.
@@ -99,13 +102,12 @@ None: the start's wait is one loop over the free space.
 // Package main (cmd/funcd), NEW.
 const spaceWait = 10 * time.Second
 
-// spaceWaiter runs a start step once the data filesystem has need bytes free, counting held as free, and again while
-// the step fails with ENOSPC, logging the free space every spaceWait; ctx ends the wait.
+// spaceWaiter runs a start step once the data filesystem has need bytes free, and again while the step fails with
+// ENOSPC, logging the free space every spaceWait; ctx ends the wait.
 type spaceWaiter struct {
 	log   *slog.Logger
 	free  quota.FreeFunc
 	need  int64 // what the stores' newest files take
-	held  int64 // leftover scratch an engine still holds, which the boot sweep frees
 	sleep func(ctx context.Context, d time.Duration) error
 }
 
@@ -131,7 +133,8 @@ func (w spaceWaiter) run(ctx context.Context, step func() error) error
   `ENOSPC`).
 - Upstream: the issue and the two pull requests, built from the experiment's changes with their tests, shown to the
   decider before they are posted.
-- Docs: the operations guide (a full data disk: what funcd frees by itself, what it waits for, and what it logs).
+- Docs: the operations guide (a full data disk: what funcd frees by itself, what it waits for and logs, and how to
+  stop an earlier run's engine that still holds its scratch).
 - **Done when**: the tests pass with `-race`; build, vet (plain, dev, e2e, Linux) and lint are clean; every Lima lane
   passes; `scripts/agent/gate.sh` passes; the upstream issue is open.
 
@@ -147,7 +150,9 @@ func (w spaceWaiter) run(ctx context.Context, step func() error) error
 
 - **Positive**: a start on a full disk waits instead of exiting, records no failed start, and finishes by itself once
   space is freed; a store's out-of-space error becomes 507 with the upstream release.
-- **Negative (accepted)**: a start needs about 640 MiB free; funcd depends on upstream's release date for Decision 3.
+- **Negative (accepted)**: a start needs about 640 MiB free; after an unclean stop, an earlier run's Lake engine can
+  hold its scratch until an operator stops it, if the rest of the disk lacks that space; funcd depends on upstream's
+  release date for Decision 3.
 
 ## Open questions
 
@@ -156,8 +161,8 @@ func (w spaceWaiter) run(ctx context.Context, step func() error) error
 ## References
 
 - The decider's refinement and review of 2026-10-28; FEAT-0016; adr-judge rounds 1 to 3 (coworker-3, 2026-10-28) on
-  the earlier draft, round 4 on this one.
+  the earlier draft, rounds 4 and 5 on this one.
 - The experiment of 2026-10-28 (a Linux VM, Badger v4.9.6 on 48 MiB tmpfs and ext4 images).
 - dgraph-io/badger#1801; ristretto v2.2.0 and v2.4.2 `z/file.go:37`; Badger v4.9.6 `db.go:1044-1090`,
   `memtable.go:75-78`, `value.go:526-539`, `discard.go:129`, `y/error.go:55-62`; fallocate(2);
-  `cmd/funcd/install.go:49`; `cmd/funcd/main.go:175-199` (the start's order).
+  `cmd/funcd/install.go:49-52`; `cmd/funcd/main.go:175-199` (the start's order).
