@@ -71,6 +71,7 @@ downstream-or-sideways obligates an update to the documents that referenced it.
 |---|---|---|---|---|
 | plan | [roadmap-planner](../.claude/skills/roadmap-planner/SKILL.md) | sequence ADRs into build waves + critical path (computed) | `docs/roadmap/` + `plan.json` | — (notes missing decisions as items) |
 | decide | [adr](../.claude/skills/adr/SKILL.md) | brainstorm → Accepted ADR | `docs/adr/NNNN-*.md` | **feat row + blueprint** (see below) |
+| model | [fizzbee](../.claude/skills/fizzbee/SKILL.md) | when a decision adds or changes a lifecycle, a race, a timer or another ADR-0272 trigger: a FizzBee design model checked before acceptance | `docs/design/<part>/<topic>.fizz` + its generated `.md` state machine | the ADR's *Design model* section |
 | judge | [adr-judge](../.claude/skills/adr-judge/SKILL.md) | judge the ADR *document* before acceptance — evidence-cited verdict | a report (no doc edits) | nothing — it never edits what it judges |
 | refine / accept | [brief](../.claude/skills/brief/SKILL.md) | brief the decider: a needs-adr card before its ADR (refine), a Proposed ADR before acceptance | nothing until the decider answers | refine → the answers recorded, then `adr`; on an explicit accept → the `adr` skill's acceptance steps |
 | build | [adr-impl](../.claude/skills/adr-impl/SKILL.md) | ADR → working code (interfaces + drivers + facades + deps + scenario tests **written and passing**, green `just ci`) | code | **ADR `Accepted → Reviewing` + feat row → `reviewing`** |
@@ -133,17 +134,21 @@ When you change the **row**, you owe the checked **columns** — in the same ses
 ## Invariants (must always hold)
 
 - Every ADR has a `Realizes: FEAT-NNNN/Fxx` header pointing at a real feat row.
+- Every ADR header field is a `- **Key**: value` list item (`- **Status**:`, `- **Realizes**:`, …), never a bare
+  `**Key**:` line: `just check-hygiene` enforces it, and the project-summary reconciler reads that form.
 - Blueprint ⟷ newest Accepted ADR: on conflict the ADR wins and the blueprint is updated.
 - **An `Accepted` ADR is frozen in substance.** Context, Scenarios, Decision, Contracts,
   Alternatives — none of it changes after acceptance. The *only* edits ever allowed are the
   forward status bumps (`Accepted → Reviewing` by `adr-impl`, then `Reviewing → Implemented`
-  by the review gate) and the single `Superseded by ADR-XXXX` back-link. To change the
+  by the review gate) and the single `Superseded by ADR-XXXX` back-link (or, for a partial supersession, a
+  `- **Superseded in part by**: [ADR-XXXX](…) (<date>) — <parts>` header line; ADR-0272 Decision 7). To change the
   decision, write a new superseding ADR — never rewrite history.
 - **An `Implemented` ADR is fully frozen — never updated.** Once its status reads
   `Implemented`, the file is closed: no substance, contract, or status edit ever again. The
-  one and only permitted touch is adding the `Superseded by ADR-XXXX` back-link. A correction
-  to an implemented decision is *always* a new superseding ADR (carrying its own feat row and
-  roadmap follow-through), never an in-place edit.
+  one and only permitted touch is adding the `Superseded by ADR-XXXX` back-link (or a `Superseded in part by`
+  header line). A correction to an implemented decision is *always* a new superseding ADR (carrying its own
+  feat row and roadmap follow-through), never an in-place edit; one that replaces only some decision items is an
+  amendment, a short partial supersession (ADR-0272 Decision 7).
 - Roadmap computed sections ≡ `plan.json` (analyzer output, not hand-drawn); the slate
   table and `plan.json` stay mirrored.
 - Roadmap `P-x` placeholders reconcile to real ADR numbers as ADRs land (track by the
@@ -185,7 +190,8 @@ stays free (see below).
    a defect.
 5. **Never hand-edit a computed artifact.** The roadmap's graph, waves, and critical path are
    `plan_waves.py` output; the slate table mirrors `plan.json`. Change `plan.json`, re-run the
-   analyzer, repaste — never edit the computed sections by hand (they silently drift otherwise).
+   analyzer, repaste — never edit the computed sections by hand (they silently drift otherwise). The state
+   machine beside a design spec (`docs/design/**/*.md`) is `just spec-diagrams` output, checked by `just check-specs`.
 6. **No orphans, no ghosts.** Every ADR's `Realizes: FEAT-NNNN/Fxx` points at a real row, and
    every feat row's status equals its ADR's status. One without the other is a defect to fix
    in the same session.
@@ -200,7 +206,10 @@ weigh options; edit `Draft`/`Proposed` ADRs as much as you like (they freeze onl
 acceptance); draft independent ADRs in parallel; choose any Apache-2.0/MIT-compatible library
 on its merits; reorder or parallelize work within a build tier; and restructure the prose of
 living docs (blueprint, feat, roadmap) freely — as long as their *facts* stay consistent with
-the rules above. The judge advises; it never blocks a sound decision on taste.
+the rules above. The judge advises; it never blocks a sound decision on taste, nor on a problem that belongs to
+another feature or to a concept the platform has not decided yet (a recovery objective, a tenancy model): those it
+routes to their owner (a feat row, a board card, an issue, a follow-up ADR), and only findings this ADR must fix can
+block it.
 
 ## Backlog — un-scoped ideas live on the GitHub Project, not in the docs
 
@@ -282,6 +291,11 @@ generates the issue forms in `.github/ISSUE_TEMPLATE/` (computed — never hand-
 
 - **Where things go**: a defect, a task or a feature of a feat doc → an issue; an un-scoped idea → a board card;
   a decision → an ADR.
+- **Check that it is a defect before filing it.** Read what pins the behavior first: its ADR's Decision and Scenarios,
+  the docs, and the code's own comments and tests; a bug names the clause it breaks, or says that none covers it.
+  Behavior they intend is no bug: a request to change it is a design change (`kind/feature` with `needs-adr`, a
+  superseding ADR) or a board card, and the reply to the reporter says which. Reproduce a
+  suspected bug on the current main, and say what ran, before filing it.
 - **One defect per issue**, with exactly one `kind/`, exactly one `priority/`, and at least one `area/` label.
 - **No issue without a parent.** Every issue is a sub-issue of a tracker: a campaign files a root tracker,
   one group tracker per theme under it, and its issues under the group trackers (#232, #732); an epoch files one
@@ -290,7 +304,8 @@ generates the issue forms in `.github/ISSUE_TEMPLATE/` (computed — never hand-
 - **Close an issue only when every case it describes is fixed and tested.** A PR that fixes one of its cases
   leaves it open (#70 was closed on its first case and reopened).
 - **A fix that needs a design decision** gets `needs-adr`: the ADR cites the issue in its References, and the
-  PR that implements it closes the issue (`Fixes #N` in the PR description).
+  PR that implements it closes the issue (`Fixes #N` in the PR description). A fix that adds a policy, such as a
+  limit, a timeout, a tolerance window, a retry or a durability mechanism, needs one.
 - **Every other fix** goes through [`/fix`](../.claude/skills/fix/SKILL.md) (test-first, one issue per commit) and
   the independent [`/fix-review`](../.claude/skills/fix-review/SKILL.md) gate; [`/fix-batch`](../.claude/skills/fix-batch/SKILL.md)
   works through a tracker issue's sub-issues. A security finding is a private draft security advisory, not a
@@ -355,7 +370,9 @@ rules that did it:
   runs the e2e suite on Linux in the same VM, on demand only: CI already runs it on every PR that touches code. Runs
   in that VM take turns (a second run waits). Never run the e2e suite or `go test ./...` inside a per-item fixer or
   reviewer. The bloat audit (`scripts/agent/audit.py`) is a gate step too: diff-scoped, a few seconds per PR; its full
-  mode, with the `-count=3` flake run, runs once per campaign.
+  mode, with the `-count=3` flake run, runs once per campaign. The gate also stress-runs the Test functions the branch
+  adds or changes (`scripts/agent/stress.py`: each alone under `-race`, up to 20 runs, within about 5 min; SKIP when no
+  test changed; the per-test runs in `.cache/gate/stress.log`).
 - **Toolchain**: `scripts/agent/d` (above), never a `nix develop -c` per command.
 - **Worktrees, not the shared checkout.** Other sessions switch branches in the main checkout; agents work in their
   own worktree under the session scratchpad. Never `git stash` there: `refs/stash` is shared by every worktree of
@@ -380,6 +397,21 @@ rules that did it:
 - **Group PRs of one wave conflict with each other.** Before queueing any of them, run
   `scripts/agent/wave-check.sh <branch>...` on all of the wave's group branches, in queue order: it names each branch
   that conflicts with the ones before it (rebase it on them) and, when none conflicts, gates the merged wave once.
+- **One PR for a batch, on request.** When the decider asks for one PR, a batch of fixes or an epoch's ADR work (its
+  docs, implementation and stamp) ships as a single PR instead of one per item. Each item is one commit, with its
+  conventional subject and `Fixes #N`, and is reviewed on that commit. Every review report and ledger row goes in one
+  last commit. Then the PR gets one gate, one CI run and one queue entry, and a failing item's commit is rebased out
+  while the rest go on. The queue squashes, so the PR body ends with one `Fixes #N` line per issue and a release-please
+  block with one conventional line per item, which gives each item its own changelog line:
+
+  ```
+  BEGIN_COMMIT_OVERRIDE
+  fix(funcdctl): <the first item's subject>
+  fix(e2e): <the second item's subject>
+  END_COMMIT_OVERRIDE
+  ```
+
+  Without that request, each item keeps its own PR.
 - **Merging and waiting.** Repo auto-merge is off, so `gh pr merge` fails: enqueue with the GraphQL
   `enqueuePullRequest` mutation after reading every check's conclusion; the queue builds up to 5 PRs together.
   Wait in the background (`scripts/agent/watch-prs.py` exits when a PR turns green, red or conflicted), never in a

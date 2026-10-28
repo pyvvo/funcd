@@ -82,7 +82,7 @@ func mkFunctionWithKV(name string, kv ...v1.FunctionKV) *v1.Function {
 }
 
 // scenario: kvstore-create-provisions — a present KVStore reaches Ready with status.tables (declared
-// sub-domains) + status.bindings (Function.spec.kv entries referencing it).
+// sub-domains) + status.bindings (Function.spec.bindings.kv entries referencing it).
 func TestScenarioKVStoreCreateProvisions(t *testing.T) {
 	ctx := context.Background()
 	st := store.New(storemem.New())

@@ -78,7 +78,7 @@ With Blocker/Major findings folded in, **self-accept**:
    uncommitted tracked files (expected; do not treat as a defect). For Linux-only / inherently-e2e
    scenarios, ship contract/unit tests and **defer** the e2e ones per the roadmap's test-sequencing note,
    recording the deferral. On exit `adr-impl` sets ADR `Accepted → Reviewing` + feat row `→ reviewing`.
-2. Invoke **`adr-impl-review`** with the producing model name (`claude-opus-4-8` unless told otherwise).
+2. Invoke **`adr-impl-review`** with the producing model name (the session's model id, e.g. `claude-opus-5-5`).
    It runs the verification, writes the `docs/reviews/` report, and records the scorecard.
 3. **Loop on the verdict:**
    - **pass** → it stamps ADR `Reviewing → Implemented` + feat row `→ implemented`. Item done.
@@ -96,7 +96,7 @@ With Blocker/Major findings folded in, **self-accept**:
    item's delta at commit time, so a per-item `git add` of the item's files (its ADR + `docs/reviews/`
    report + code + the feat-row/blueprint/scorecard edits it made) is unambiguous — never let the next item
    start until the current one is committed. Message: `feat: implement ADR-NNNN — <title> (FEAT-0000/Fxx)`,
-   ending with the `Co-Authored-By: Claude Opus 4.8` trailer. **If on the default branch, branch first**
+   ending with the trailer the session's attribution reminder gives. **If on the default branch, branch first**
    (never commit a batch straight to `main`); don't push or open a PR (that's Step 7).
 
 Then advance to the next item (its deps now include any item just Implemented).
@@ -131,7 +131,7 @@ Once every requested item is `Implemented`:
    hand-drawn — graph ≡ table. (Or invoke the `roadmap-planner` skill to do this.)
 4. **Commit the reconcile** as the batch's final phase checkpoint — `docs(roadmap): reconcile V1 plan after
    ADR-NNNN…<list>` (the `docs/roadmap/` files + any trailing feat/blueprint sync the reconcile made), with
-   the `Co-Authored-By: Claude Opus 4.8` trailer.
+   the trailer the session's attribution reminder gives.
 
 ## Step 7 — Finish
 

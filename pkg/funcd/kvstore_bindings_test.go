@@ -11,7 +11,7 @@ import (
 )
 
 // A Function binding or unbinding a KVStore re-runs that store's reconcile, so status.bindings follows
-// the Function.spec.kv entries that reference it (ADR-0073 Decision 7).
+// the Function.spec.bindings.kv entries that reference it (ADR-0073 Decision 7).
 func TestIssue147_KVStoreBindingsFollowFunctions(t *testing.T) {
 	t.Parallel()
 	p, err := New(InMemory())

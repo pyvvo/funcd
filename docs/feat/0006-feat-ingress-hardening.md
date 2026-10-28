@@ -130,7 +130,7 @@ the complete edge picture without duplicating tracking rows.
 Per [ADR-0033](../adr/0033-data-plane-serving-and-trigger-wake.md), function invocations are
 served by a dedicated data-plane listener whose handler chain wraps `dataplane.Handler` in
 gateway middleware — `gateway.Handler()`'s route table is **not** on the invoke path (it
-serves optional add-on provider ingress, [ADR-0087](../adr/0087-addon-provider-runtime.md)).
+serves optional add-on provider ingress, [ADR-0087](../adr/0087-add-on-provider-runtime.md)).
 Every F-row in this epoch lands on the numbered path below; only F107 also reaches the
 activator's half, since its limit covers the cold-start wake and ends when the response starts.
 

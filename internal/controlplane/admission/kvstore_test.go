@@ -76,12 +76,12 @@ func TestScenarioStoreCountQuota(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// scenario: deletion-protected — a store named by some Function.spec.kv or still holding keys can't be
+// scenario: deletion-protected — a store named by some Function.spec.bindings.kv or still holding keys can't be
 // deleted (Conflict); a clean store is deletable.
 func TestScenarioKVStoreDeletionProtection(t *testing.T) {
 	gvk := v1.KindKVStore.GVK()
 
-	// bound by a Function.spec.kv ⇒ Conflict
+	// bound by a Function.spec.bindings.kv ⇒ Conflict
 	rBound := kvReader{fns: []*v1.Function{mkFn("svc", kvb("c", "orders", "customers"))}}
 	adm := admission.NewKVStoreDeletionProtectionAdmission(rBound, fakeProber{has: false})
 	require.True(t, adm.Handles(gvk, admission.Delete))
@@ -101,7 +101,7 @@ func TestScenarioKVStoreDeletionProtection(t *testing.T) {
 }
 
 // scenario: table-removal-protected-and-reclaimed (admission half) — removing a table from spec.tables[]
-// while it is still bound by some Function.spec.kv is rejected on Update (Conflict); removing an unbound
+// while it is still bound by some Function.spec.bindings.kv is rejected on Update (Conflict); removing an unbound
 // table is allowed.
 func TestScenarioTableRemovalProtected(t *testing.T) {
 	gvk := v1.KindKVStore.GVK()

@@ -7,8 +7,8 @@ argument-hint: <topic to decide | ADR number e.g. 0003 | path to an ADR>
 
 Run the ADR-0000 workflow for **$ARGUMENTS**, gate by gate. You are the **conductor**: every gate
 is an existing skill — *invoke it, never reimplement it*. The authority is
-[ADR-0000](docs/adr/0000-adr-process.md); the cross-document propagation rules are in
-[CLAUDE.md](.claude/CLAUDE.md). Each skill discharges its own obligations on exit (feat row,
+[ADR-0000](../../docs/adr/0000-adr-process.md); the cross-document propagation rules are in
+[CLAUDE.md](../CLAUDE.md). Each skill discharges its own obligations on exit (feat row,
 blueprint, roadmap, ADR status) — your job is **sequencing** and the **human checkpoint**, not
 re-doing their work.
 
@@ -34,13 +34,13 @@ checkpoint.
 | `Reviewing` | Gate 5 (→ loop back to Gate 4 on `changes-requested`) |
 | `Implemented` | **Stop** — frozen. A change is a new *superseding* ADR; offer to start `/adr-cycle <new topic>`. |
 
-## Gate 1–2 · Brainstorm → Draft  ·  *recommended: Opus 4.8 MAX*
+## Gate 1–2 · Brainstorm → Draft  ·  *recommended: the strongest model at max effort*
 
 Invoke the **`adr`** skill on the topic. It brainstorms with me, writes the Draft, and marks it
 `Proposed` when ready (advancing the feat row `idea → adr` and reconciling the roadmap placeholder).
 When it returns, continue to Gate 3.
 
-## Gate 3 · Judge the ADR *document*  ·  *recommended: Opus 4.8 Extra*
+## Gate 3 · Judge the ADR *document*  ·  *recommended: the strongest model at high effort*
 
 Invoke the **`adr-judge`** skill on the `Proposed` ADR. It emits an evidence-cited, severity-tiered
 verdict and **edits nothing**. Present its verdict to me.
@@ -67,10 +67,10 @@ interfaces, one-file drivers, facades, deps — **and the scenario tests written
 the ADR can't go green within its sanctioned scope (an **`adr`** gap), don't force it — that breaks
 out to a superseding ADR. Otherwise continue to Gate 5.
 
-## Gate 5 · Review gate  ·  *recommended: Opus 4.8 Extra*
+## Gate 5 · Review gate  ·  *recommended: the strongest model at high effort*
 
 Invoke the **`adr-impl-review`** skill on the implementation, passing the **implementing model's
-name** (e.g. `sonnet-4.6`) for the scorecard. Branch on its verdict:
+name** (e.g. `claude-opus-5-5`) for the scorecard. Branch on its verdict:
 
 - **pass** → it stamps ADR `Reviewing → Implemented` and feat row `→ implemented`. **Cycle done.**
 - **changes-requested / fail** → ADR stays `Reviewing`. Loop:

@@ -26,7 +26,7 @@ and sent back; the rest are routed to where they belong (Step 3).
 1. **Which ADR** (e.g. `0002`). The work is an implementation — working code with passing scenario
    tests, produced by the `adr-impl` gate; the ADR should be at status `Reviewing`.
 2. **Which model produced the work** — required (`sonnet-4.6`, `deepseek-v4-pro`, `gpt-5.4-mini`,
-   `claude-opus-4-8`, …). The scorecard is keyed on it; if not given, ask before recording.
+   `claude-opus-5-5`, …). The scorecard is keyed on it; if not given, ask before recording.
 
 ## Step 1 — Orient (what "done" means here)
 

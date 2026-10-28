@@ -86,7 +86,7 @@ func TestScenarioBucketCountQuota(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// scenario: deletion-protected — a bucket named by some Function.spec.blob or still holding objects can't
+// scenario: deletion-protected — a bucket named by some Function.spec.bindings.blob or still holding objects can't
 // be deleted (Conflict); a clean bucket is deletable. The data check is gated on the optional prober.
 func TestScenarioBucketDeletionProtection(t *testing.T) {
 	gvk := v1.KindBucket.GVK()
@@ -115,7 +115,7 @@ func TestScenarioBucketDeletionProtection(t *testing.T) {
 }
 
 // scenario: prefix-removal-protected (admission half) — removing a prefix from spec.prefixes[] while it
-// is still bound by some Function.spec.blob is rejected on Update (Conflict); removing an unbound prefix
+// is still bound by some Function.spec.bindings.blob is rejected on Update (Conflict); removing an unbound prefix
 // is allowed.
 func TestScenarioBucketPrefixRemovalProtected(t *testing.T) {
 	gvk := v1.KindBucket.GVK()
