@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -23,6 +24,7 @@ func TestLoopfsAsRoot(t *testing.T) {
 	fi, err := os.Stat(image)
 	require.NoError(t, err)
 	require.Equal(t, int64(64<<20), fi.Size())
+	require.GreaterOrEqual(t, fi.Sys().(*syscall.Stat_t).Blocks*512, int64(64<<20), "its blocks are allocated")
 	require.Error(t, loopfs.Create(ctx, image, 64<<20, ""), "an image is never made over another")
 
 	require.NoError(t, loopfs.Mount(image, mount))

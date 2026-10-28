@@ -33,7 +33,8 @@ func Create(ctx context.Context, image string, sizeBytes int64, features string)
 		ferr = cerr
 	}
 	if ferr == nil {
-		args := []string{"-q", "-F", "-m", "0"}
+		// nodiscard: mkfs discards a file's blocks by default, which would undo the preallocation
+		args := []string{"-q", "-F", "-m", "0", "-E", "nodiscard"}
 		if features != "" {
 			args = append(args, "-O", features)
 		}
