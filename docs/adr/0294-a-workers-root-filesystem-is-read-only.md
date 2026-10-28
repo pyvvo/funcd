@@ -1,13 +1,16 @@
 # ADR-0294: A worker's root filesystem is read-only, and everything it writes has a size limit
 
-- **Status**: Proposed (2026-10-28; adr-judge round 1 folded in)
+- **Status**: Proposed (2026-10-28; adr-judge round 1 folded in; revised after the decider's review: a 1GiB scratch
+  and a 256MiB catalog cap)
 - **Date**: 2026-10-28
 - **Deciders**: green-0-rabbit
 - **Tags**: runtime, limits, storage
 - **Realizes**: [FEAT-0016/F210](../feat/0016-feat-workload-limits.md) (a worker's writes bounded)
 - **Answers**: the decider's refinement of 2026-10-28: option A (a read-only root, `/tmp` in the worker's memory,
-  `HOME=/tmp`, a small boot directory, a read-only log directory) and the engines in the same ADR. The scratch's
-  size, 4GiB by default, and its spill limit are choices to confirm
+  `HOME=/tmp`, a small boot directory, a read-only log directory) and the engines in the same ADR; the decider's
+  review of the same day: the Lake engine's scratch stays preallocated, 1GiB by default, with a lower catalog cap
+- **Supersedes (in part)**: [ADR-0293](0293-a-lakes-catalog-lives-in-a-platform-catalog-store.md) Decision 3's
+  default for `lake.catalogMaxSize`: 256MiB instead of 1GiB
 - **Relates to**: [ADR-0291](0291-a-functions-workers-get-cpu-and-memory-limits.md) (the memory limit `/tmp` counts
   in) · [ADR-0262](0262-function-owned-volumes.md) (volumes, the place for larger files) ·
   [ADR-0231](0231-durable-storage-for-add-on-engines.md) (engine directories) ·
@@ -25,7 +28,8 @@ A containerd worker, a Function's or an engine's, writes beyond its volumes: to 
 directory and to its log channel's directory. This ADR gives every byte a worker writes a fixed limit: its memory, its
 volumes, or a filesystem of fixed size. The Lake engine keeps three things in one directory, `/var/funcd/ducklake`: its
 catalog copy, a checkpoint copy of the catalog made before each save, and DuckDB's spill files
-(`images/runtime/duckdb/shim.py:61-66`, `:445-452`). That directory gets a filesystem of its own, sized for all three.
+(`images/runtime/duckdb/shim.py:61-66`, `:445-452`). A Lake's Parquet files live in its Bucket, not there, and its
+catalog holds the Lake's metadata, small next to them. That directory gets a filesystem of its own, sized for all three.
 
 ## Scenarios
 
@@ -70,6 +74,7 @@ bounded, and they are the Lake's own concern.
 | C. The writable layer inside the volume image | Reuses quotafs | Volumes are off until `volumes.capacity` is set (ADR-0262), so a default node would get no limit | Rejected |
 | D. The Lake engine's temp directory as a tmpfs | No image | DuckDB spills there when memory runs short; a spill in memory counts in the same cgroup (ADR-0264) | Rejected |
 | E. Narrow DuckDB's `allowed_directories` | No image | The engine's temp directory must stay writable for its spills | Rejected |
+| F. A sparse scratch image | Takes disk only as the Lake writes | Lakes spilling at once can use up the free-space margin; the decider chose a preallocated, smaller one | Rejected |
 
 ## Decision
 
@@ -86,10 +91,12 @@ bounded, and they are the Lake's own concern.
 5. **Log directory.** The log channel's directory is bind-mounted read-only. A socket on a read-only mount still
    connects: Linux returns "read-only file system" only for regular files, directories and symbolic links.
 6. **The Lake engine's scratch.** `/var/funcd/ducklake` is a filesystem of its own:
-   - `lake.scratchSize` (NEW key, a `ByteSize`) sizes it. Empty, it is the larger of 4GiB and twice
-     `lake.catalogMaxSize` plus 2GiB, so a node whose catalog cap is already large starts after the upgrade; a value
-     that is set is refused unless it is more than twice `lake.catalogMaxSize`, which leaves room for the catalog, its
-     checkpoint copy and the spills.
+   - `lake.scratchSize` (NEW key, a `ByteSize`) sizes it. Empty, it is the larger of 1GiB and twice
+     `lake.catalogMaxSize` plus 512MiB, so a node that sets a large catalog cap still starts; a value that is set is
+     refused unless it is more than twice `lake.catalogMaxSize`, which leaves room for the catalog, its checkpoint
+     copy and the spills.
+   - `lake.catalogMaxSize` defaults to 256MiB (ADR-0293 Decision 3 said 1GiB), so the default scratch is 1GiB:
+     512MiB for the catalog and its checkpoint copy, 512MiB for spills.
    - Before it allocates anything, the provider runtime asks the free-space floor (ADR-0296) for `lake.scratchSize`; a
      refusal fails the start, and the Lake reports that the data filesystem lacks the space for its scratch.
    - At each engine start the provider runtime creates `<dataDir>/scratch/<ns>/<lake>.img` of `lake.scratchSize`,
@@ -128,7 +135,8 @@ type ScratchSpec struct {
 
 // Package config (internal/platform/config), NEW.
 //	Lake.ScratchSize string `json:"scratchSize,omitempty" env:"FUNCD_LAKE_SCRATCH_SIZE"`
-func (c Config) LakeScratchBytes() (int64, error) // empty: max(4GiB, 2 × catalog cap + 2GiB); set: above 2 × the cap
+func (c Config) LakeScratchBytes() (int64, error) // empty: max(1GiB, 2 × catalog cap + 512MiB); set: above 2 × the cap
+// CHANGED: DefaultLakeCatalogMaxSize = "256MiB" (was "1GiB", ADR-0293 Decision 3)
 ```
 
 | Consumes | Exposes |
@@ -144,7 +152,8 @@ func (c Config) LakeScratchBytes() (int64, error) // empty: max(4GiB, 2 × catal
 - `internal/provider`: `ProviderSpec.Scratch`, the floor check, and the image's lifecycle (create before `Create`,
   remove after teardown, sweep at boot), Linux only. `internal/services/lake/reconcile.go:117` sets
   `Scratch{Path: "/var/funcd/ducklake", SizeBytes: lake.scratchSize}` and `FUNCD_LAKE_SPILL_BYTES`.
-  `images/runtime/duckdb/shim.py` applies the spill limit. `internal/platform/config`: the key and its check.
+  `images/runtime/duckdb/shim.py` applies the spill limit. `internal/platform/config`: the key and its check, and
+  `DefaultLakeCatalogMaxSize` lowered to 256MiB.
 - Tests, one per scenario: `TestScenarioWorkerRootReadOnly` and `…TmpCountsInMemory` (the OCI spec carries the
   read-only root, the tmpfs and its size, and `HOME`); `…LakeScratchRefusedBelowFloor` and `…LakeScratchRecreated`
   (the provider runtime with a fake floor and a fake image); the image package's own test as root
@@ -154,7 +163,8 @@ func (c Config) LakeScratchBytes() (int64, error) // empty: max(4GiB, 2 × catal
   the duckdb lane, with a 512Mi scratch and a 128Mi catalog cap, runs a query that spills past 256 MiB and fails, then
   a commit and a save that succeed (`…LakeScratchBounded`); the sql lane execs a write to `/etc` in the engine, which
   fails, and its SQL cases pass (`…SqlEngineReadOnlyRoot`).
-- Docs: the Function reference (where code may write), `funcdconfig.yaml`'s reference, a changelog note.
+- Docs: the Function reference (where code may write), `funcdconfig.yaml`'s reference, a changelog note (where code
+  may write; a Lake whose catalog is over 256 MiB needs `lake.catalogMaxSize` set).
 - **Done when**: the tests pass with `-race`; build, vet (plain, dev, e2e, Linux) and lint are clean; the root tests
   and every Lima lane pass; `scripts/agent/gate.sh` passes.
 
@@ -165,15 +175,16 @@ func (c Config) LakeScratchBytes() (int64, error) // empty: max(4GiB, 2 × catal
 - [ ] Every path that removes a boot directory unmounts its tmpfs first, and the boot sweep unmounts what
       `/proc/self/mountinfo` lists under the boot root; the log directory's mount is read-only.
 - [ ] The Lake engine's scratch is asked of the floor, preallocated, mounted before the engine starts, removed after
-      it stops and swept at boot; `lake.scratchSize` must exceed twice `lake.catalogMaxSize`; the spill limit is passed
-      and applied.
+      it stops and swept at boot; `lake.scratchSize` must exceed twice `lake.catalogMaxSize`, whose default is 256MiB;
+      the spill limit is passed and applied.
 
 ## Consequences
 
 - **Positive**: a worker's writes are bounded by its memory, its volumes or its scratch.
 - **Negative (accepted)**: code that writes outside `/tmp`, `$HOME` and its volumes now fails (the changelog says so);
-  `/tmp` uses the worker's memory; each running Lake holds `lake.scratchSize` of disk, 4 GiB by default, and its start
-  formats an image.
+  `/tmp` uses the worker's memory; each running Lake holds `lake.scratchSize` of disk, 1 GiB by default, and its start
+  formats an image; a Lake whose catalog is over 256 MiB has its saves refused after the upgrade (ADR-0276's
+  `SavesFailing`) until `lake.catalogMaxSize` is raised.
 
 ## Open questions
 

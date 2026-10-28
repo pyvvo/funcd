@@ -30,13 +30,13 @@ the first ADR was drafted.
 | F208 | **Per-namespace quotas**: a namespace's budget per consumed resource, compute for every worker (Functions, Jobs, engines), volumes, and each kind of store, checked at admission (V2, ADR-0018) | F206 · F207 | — | idea |
 | F209 | **A Lake's catalog outside its Bucket**: a Lake's catalog is kept in a platform store that only its engine reaches, capped by one platform setting, so a Lake at its prefix's quota still answers queries and drops | F207 | [ADR-0293](../adr/0293-a-lakes-catalog-lives-in-a-platform-catalog-store.md) | implemented |
 | F210 | **A worker's writes bounded**: a Function's or an engine's worker writes only into its memory, its volumes or a scratch of fixed size, so its writes cannot grow the node's disk past those sizes | F206 | [ADR-0294](../adr/0294-a-workers-root-filesystem-is-read-only.md) | adr |
-| F211 | **A volume's file count bounded**: a volume holds at most its share of the volume image's inodes, as it holds at most its size in bytes | — | [ADR-0295](../adr/0295-a-volumes-quota-limits-its-inodes.md) | adr |
+| F211 | **A volume's file count bounded**: a volume holds at most its share of the volume image's inodes, as it holds at most its size in bytes | — | [ADR-0295](../adr/0295-a-volumes-quota-limits-its-inodes.md) | accepted |
 | F212 | **Free space kept for the platform**: workload writes stop at a free-space floor on the data filesystem, while reads, deletes and the platform's own writes go on | F207 | [ADR-0296](../adr/0296-the-data-filesystem-keeps-a-free-space-floor.md) | adr |
-| F213 | **A full disk does not stop the daemon**: a store write on a full data filesystem fails as an error, and a start on one waits for space instead of exiting | F212 | [ADR-0297](../adr/0297-a-store-write-on-a-full-disk-fails-cleanly.md) | adr |
+| F213 | **A full disk does not keep the daemon down**: a start on a full data filesystem waits for space instead of exiting, and finishes once space is freed | F212 | [ADR-0297](../adr/0297-a-start-waits-for-disk-space.md) | adr |
 
 ## Exit criterion
 
 A Function sized by its owner cannot use more CPU or memory than it was given, and an unsized one gets the node
 default; a store at its cap refuses a write, still answers reads, and takes writes again once deletes free room. A worker
 writes only into its memory, its volumes or a scratch of fixed size; workload writes stop before the data filesystem
-is full, and a full filesystem does not stop the daemon.
+is full, and a start on a full one waits for space instead of exiting.

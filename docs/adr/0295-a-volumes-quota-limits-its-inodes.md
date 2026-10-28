@@ -1,6 +1,6 @@
 # ADR-0295: A volume's quota limits its inodes in proportion to its size
 
-- **Status**: Proposed (2026-10-28; adr-judge round 1 folded in)
+- **Status**: Accepted (2026-10-28; adr-judge round 1 folded in; the decider kept it as drafted)
 - **Date**: 2026-10-28
 - **Deciders**: green-0-rabbit
 - **Tags**: volumes, limits, storage
