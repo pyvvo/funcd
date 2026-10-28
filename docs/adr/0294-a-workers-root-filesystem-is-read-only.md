@@ -93,7 +93,8 @@ bounded, and they are the Lake's own concern.
    connects: Linux returns "read-only file system" only for regular files, directories and symbolic links.
 6. **The Lake engine's scratch.** `/var/funcd/ducklake` is a filesystem of its own:
    - `lake.scratchSize` (NEW key, a `ByteSize`) sizes it. Empty, it is the larger of 1GiB and twice
-     `lake.catalogMaxSize` plus 512MiB, so a node that sets a large catalog cap still starts; a value that is set is
+     `lake.catalogMaxSize` plus 512MiB, so a node that sets a catalog cap of up to about 10GiB still starts (above
+     that, ext4's own overhead passes 512MiB, and the engine's refusal names `lake.scratchSize`); a value that is set is
      refused unless it is at least twice `lake.catalogMaxSize` plus 512MiB, which leaves room for the catalog, its
      checkpoint copy, ext4's overhead and the spills.
    - `lake.catalogMaxSize` defaults to 256MiB (ADR-0293 Decision 3 said 1GiB), so the default scratch is 1GiB:
