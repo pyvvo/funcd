@@ -1,6 +1,7 @@
 # ADR-0293: A Lake's catalog lives in a platform catalog store
 
 - **Status**: Implemented (2026-10-28), review passed ([report](../reviews/adr-0293-implementation-claude-opus-5-5.md)); Reviewing (2026-10-28); Accepted (2026-10-27; two adr-judge rounds and the experiment on real engines; the decider chose that a catalog counts as data and confirmed every choice)
+- **Superseded in part by**: [ADR-0294](0294-a-workers-root-filesystem-is-read-only.md) (2026-10-28): Decision 3's default for `lake.catalogMaxSize`, now 256MiB instead of 1GiB
 - **Date**: 2026-10-27
 - **Deciders**: green-0-rabbit
 - **Tags**: lake, storage, limits

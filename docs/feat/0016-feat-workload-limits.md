@@ -29,10 +29,10 @@ the first ADR was drafted.
 | F207 | **A store's total size**: an owner caps what a Bucket, a Lake, a KVStore or a SQLDatabase holds, and a write that would pass the cap is refused, while reads still work and deletes can bring the store back under it | — | [ADR-0292](../adr/0292-stores-get-a-quota-block-and-a-quota-framework.md) | implemented |
 | F208 | **Per-namespace quotas**: a namespace's budget per consumed resource, compute for every worker (Functions, Jobs, engines), volumes, and each kind of store, checked at admission (V2, ADR-0018) | F206 · F207 | — | idea |
 | F209 | **A Lake's catalog outside its Bucket**: a Lake's catalog is kept in a platform store that only its engine reaches, capped by one platform setting, so a Lake at its prefix's quota still answers queries and drops | F207 | [ADR-0293](../adr/0293-a-lakes-catalog-lives-in-a-platform-catalog-store.md) | implemented |
-| F210 | **A worker's writes bounded**: a Function's or an engine's worker writes only into its memory, its volumes or a scratch of fixed size, so its writes cannot grow the node's disk past those sizes | F206 | [ADR-0294](../adr/0294-a-workers-root-filesystem-is-read-only.md) | adr |
+| F210 | **A worker's writes bounded**: a Function's or an engine's worker writes only into its memory, its volumes or a scratch of fixed size, so its writes cannot grow the node's disk past those sizes | F206 | [ADR-0294](../adr/0294-a-workers-root-filesystem-is-read-only.md) | accepted |
 | F211 | **A volume's file count bounded**: a volume holds at most its share of the volume image's inodes, as it holds at most its size in bytes | — | [ADR-0295](../adr/0295-a-volumes-quota-limits-its-inodes.md) | accepted |
-| F212 | **Free space kept for the platform**: workload writes stop at a free-space floor on the data filesystem, while reads, deletes and the platform's own writes go on | F207 | [ADR-0296](../adr/0296-the-data-filesystem-keeps-a-free-space-floor.md) | adr |
-| F213 | **A start on a full disk waits**: a start on a full data filesystem waits for space instead of exiting, and finishes once space is freed | F212 | [ADR-0297](../adr/0297-a-start-waits-for-disk-space.md) | adr |
+| F212 | **Free space kept for the platform**: workload writes stop at a free-space floor on the data filesystem, while reads, deletes and the platform's own writes go on | F207 | [ADR-0296](../adr/0296-the-data-filesystem-keeps-a-free-space-floor.md) | accepted |
+| F213 | **A start on a full disk waits**: a start on a full data filesystem waits for space instead of exiting, and finishes once space is freed | F212 | [ADR-0297](../adr/0297-a-start-waits-for-disk-space.md) | accepted |
 
 ## Exit criterion
 
