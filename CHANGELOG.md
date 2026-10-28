@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.33.0](https://github.com/pyvvo/funcd/compare/v0.32.0...v0.33.0) (2026-10-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* **storage:** a store caps what it holds in spec.quota, and the per-item caps move into it (ADR-0292)
+* **function:** a Function's workers get CPU and memory limits, and an unsized solo Function gets 1 CPU and 512Mi (ADR-0291)
+
+### Features
+
+* **function:** a Function's workers get CPU and memory limits, and an unsized solo Function gets 1 CPU and 512Mi (ADR-0291) ([a6fa161](https://github.com/pyvvo/funcd/commit/a6fa16158614061aea3e8eabaabe57beb46a9e63))
+* **lake:** a Lake's catalog lives in a platform catalog store that only its engine reaches (ADR-0293) ([a6fa161](https://github.com/pyvvo/funcd/commit/a6fa16158614061aea3e8eabaabe57beb46a9e63))
+* **storage:** a store caps what it holds in spec.quota, and the per-item caps move into it (ADR-0292) ([a6fa161](https://github.com/pyvvo/funcd/commit/a6fa16158614061aea3e8eabaabe57beb46a9e63))
+
 ## [0.32.0](https://github.com/pyvvo/funcd/compare/v0.31.0...v0.32.0) (2026-10-27)
 
 
