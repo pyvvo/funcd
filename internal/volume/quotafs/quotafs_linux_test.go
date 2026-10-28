@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 
@@ -187,5 +188,122 @@ func TestIssue1203_NewVolumeBesideADamagedMetaWritesItsSize(t *testing.T) {
 	blocks := (16<<20 - 64<<10) / (64 << 10) // its size, but for the blocks its own directory and file metadata take
 	if out, err := asNobody(fmt.Sprintf("dd if=/dev/zero of=fill bs=64k count=%d conv=fsync", blocks), dir); err != nil {
 		t.Fatalf("thumbs writing %d KiB of its 16 MiB beside cart's 8 MiB: %v: %s", blocks*64, err, out)
+	}
+}
+
+// projectOf reads dir's project id.
+func projectOf(t *testing.T, dir string) uint32 {
+	t.Helper()
+	d, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = d.Close() }()
+	var x fsxattr
+	if err := ioctl(d.Fd(), fsIOCGetXattr, unsafe.Pointer(&x)); err != nil {
+		t.Fatal(err)
+	}
+	return x.projid
+}
+
+// quotactl runs one project-quota command on f's device.
+func quotactl(t *testing.T, f *FS, cmd uintptr, project uint32, q *ifDqblk) {
+	t.Helper()
+	dev, err := unix.BytePtrFromString(f.dev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, e := unix.Syscall6(unix.SYS_QUOTACTL, cmd<<8|prjQuota, uintptr(unsafe.Pointer(dev)), uintptr(project), uintptr(unsafe.Pointer(q)), 0, 0); e != 0 {
+		t.Fatal(e)
+	}
+}
+
+func newVolumes(t *testing.T, f *FS) volume.Manager {
+	t.Helper()
+	m, err := volume.New(volume.Options{Root: f.Root(), Limiter: f, CapacityBytes: 64 << 20, UID: nobody, GID: nobody})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+// TestScenarioInodeLimitApplied: a 1 MiB volume creates files up to its share of the image's inodes, its directory
+// included, the next create fails with "disk quota exceeded", and another volume of the image still creates a file.
+// scenario: inode-limit-applied
+func TestScenarioInodeLimitApplied(t *testing.T) {
+	needRoot(t)
+	f, _ := openFS(t, 64<<20)
+	m := newVolumes(t, f)
+	ctx := context.Background()
+	a, err := m.Reserve(ctx, volume.ID{Namespace: "shop", Function: "cart", Name: "a"}, "uid-1", 1<<20, v1.DeletionRetain)
+	if err != nil {
+		t.Fatalf("Reserve a: %v", err)
+	}
+	b, err := m.Reserve(ctx, volume.ID{Namespace: "shop", Function: "cart", Name: "b"}, "uid-1", 1<<20, v1.DeletionRetain)
+	if err != nil {
+		t.Fatalf("Reserve b: %v", err)
+	}
+	share := inodesFor(1<<20, f.imageBytes, f.imageInodes)
+	out, err := asNobody("i=0; while touch f$i 2>/dev/null; do i=$((i+1)); done; echo $i; touch over", a)
+	if err == nil || !bytes.Contains(out, []byte("quota")) {
+		t.Fatalf("a create past the share = %v: %s, want a quota failure", err, out)
+	}
+	var created uint64
+	if _, err := fmt.Sscan(string(out), &created); err != nil {
+		t.Fatalf("the count: %v: %s", err, out)
+	}
+	if created+1 != share {
+		t.Fatalf("created %d files, want %d: the share of %d inodes less the volume's directory", created, share-1, share)
+	}
+	if out, err := asNobody("touch fine", b); err != nil {
+		t.Fatalf("a create in the other volume: %v: %s", err, out)
+	}
+}
+
+// TestScenarioExistingVolumeLimited: a volume whose quota carries no inode limit, as one created before ADR-0295
+// does, gets it at its next reservation pass.
+// scenario: existing-volume-limited
+func TestScenarioExistingVolumeLimited(t *testing.T) {
+	needRoot(t)
+	f, _ := openFS(t, 64<<20)
+	m := newVolumes(t, f)
+	ctx := context.Background()
+	id := volume.ID{Namespace: "shop", Function: "cart", Name: "state"}
+	dir, err := m.Reserve(ctx, id, "uid-1", 1<<20, v1.DeletionRetain)
+	if err != nil {
+		t.Fatalf("Reserve: %v", err)
+	}
+	project := projectOf(t, dir)
+	var q ifDqblk
+	quotactl(t, f, qGetQuota, project, &q)
+	q.ihardlimit, q.isoftlimit, q.valid = 0, 0, qifILimits
+	quotactl(t, f, qSetQuota, project, &q)
+	if _, err := m.Reserve(ctx, id, "uid-1", 1<<20, v1.DeletionRetain); err != nil {
+		t.Fatalf("the next pass: %v", err)
+	}
+	quotactl(t, f, qGetQuota, project, &q)
+	if want := inodesFor(1<<20, f.imageBytes, f.imageInodes); q.ihardlimit != want || q.isoftlimit != want {
+		t.Fatalf("inode limits after the next pass = %d/%d, want %d", q.ihardlimit, q.isoftlimit, want)
+	}
+}
+
+// TestScenarioEmptyDirLimited: a worker's emptyDir, reserved through Renew as a worker start does, carries the inode
+// limit of its size.
+// scenario: emptydir-limited
+func TestScenarioEmptyDirLimited(t *testing.T) {
+	needRoot(t)
+	f, _ := openFS(t, 64<<20)
+	m := newVolumes(t, f)
+	id := volume.ID{Namespace: "shop", Function: "cart", Name: "scratch", Worker: "w1"}
+	old := id
+	old.Worker = "w0"
+	dir, err := m.Renew(context.Background(), old, id, 2<<20)
+	if err != nil {
+		t.Fatalf("Renew: %v", err)
+	}
+	var q ifDqblk
+	quotactl(t, f, qGetQuota, projectOf(t, dir), &q)
+	if want := inodesFor(2<<20, f.imageBytes, f.imageInodes); q.ihardlimit != want {
+		t.Fatalf("the emptyDir's inode limit = %d, want %d", q.ihardlimit, want)
 	}
 }

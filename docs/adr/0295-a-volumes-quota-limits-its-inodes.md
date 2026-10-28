@@ -83,7 +83,7 @@ func inodesFor(sizeBytes, imageBytes, imageInodes int64) uint64      // NEW: ⌊
 - `internal/volume/quotafs/quotafs_linux.go`: `qifILimits` (4), the image's inode count and size read at `Open` and
   after `grow`, `inodesFor`, and both limits in `Limit`; `quotafs_other.go` is unchanged.
 - Tests, one per scenario: `TestInodesFor` (the arithmetic and its floor of 1); `TestScenarioInodeLimitApplied`,
-  `…ExistingVolumeLimited` and `…EmptyDirLimited` on a real image (Linux, run by `just test-linux`); the volumes Lima
+  `…ExistingVolumeLimited` and `…EmptyDirLimited` on a real image (Linux as root, run by `just test-volumes-root`); the volumes Lima
   lane gets a case where a Function fills its inodes and a second volume still creates a file.
 - Docs: the volume reference (a volume holds at most its share of the image's inodes).
 - **Done when**: the tests pass with `-race`; build, vet (plain, dev, e2e, Linux) and lint are clean; the volumes lane

@@ -30,6 +30,8 @@ type Config struct {
 type FS struct {
 	cfg Config
 	dev string // the loop device, quotactl's special file
+	// imageBytes and imageInodes are the mounted image's size and inode count, which share out inodes (ADR-0295).
+	imageBytes, imageInodes int64
 }
 
 // The kernel ABI quotafs drives, from linux/fs.h and linux/quota.h; golang.org/x/sys/unix has none of them.
@@ -41,6 +43,7 @@ const (
 	qSetQuota          = 0x800008
 	prjQuota           = 2
 	qifBLimits         = 1
+	qifILimits         = 4
 	qifBlockSize       = 1024
 )
 
@@ -112,7 +115,11 @@ func Open(ctx context.Context, cfg Config) (*FS, error) {
 	if err := os.Chmod(cfg.Mount, 0o700); err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "set the volume root's mode")
 	}
-	return &FS{cfg: cfg, dev: dev}, nil
+	var st unix.Statfs_t
+	if err := unix.Statfs(cfg.Mount, &st); err != nil {
+		return nil, fault.Wrapf(err, fault.Internal, op, "read the volume image's size and inodes")
+	}
+	return &FS{cfg: cfg, dev: dev, imageBytes: int64(st.Blocks) * st.Bsize, imageInodes: int64(st.Files)}, nil
 }
 
 func create(ctx context.Context, cfg Config) error {
@@ -160,7 +167,8 @@ func grow(ctx context.Context, cfg Config) error {
 	return nil
 }
 
-// Limit gives dir the project id, inherited by everything created under it, and a hard block limit of sizeBytes.
+// Limit gives dir the project id, inherited by everything created under it, a hard block limit of sizeBytes and a hard
+// inode limit of its share of the image's inodes (ADR-0295).
 func (f *FS) Limit(dir string, project uint32, sizeBytes int64) error {
 	const op = "quotafs.Limit"
 	d, err := os.Open(dir)
@@ -177,7 +185,8 @@ func (f *FS) Limit(dir string, project uint32, sizeBytes int64) error {
 		return fault.Wrapf(err, fault.Internal, op, "set project %d on %s", project, dir)
 	}
 	blocks := uint64((sizeBytes + qifBlockSize - 1) / qifBlockSize)
-	q := ifDqblk{bhardlimit: blocks, bsoftlimit: blocks, valid: qifBLimits}
+	inodes := inodesFor(sizeBytes, f.imageBytes, f.imageInodes)
+	q := ifDqblk{bhardlimit: blocks, bsoftlimit: blocks, ihardlimit: inodes, isoftlimit: inodes, valid: qifBLimits | qifILimits}
 	dev, err := unix.BytePtrFromString(f.dev)
 	if err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "the volume device")
