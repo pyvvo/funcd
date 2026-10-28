@@ -26,14 +26,19 @@ Go cannot recover, so the daemon exits. A restart then fails at its first write,
 space is freed. Allocating the files up front turns the fault into an error at a file's creation, but Badger v4.9.6
 does not survive that error everywhere: when the next memtable cannot be created it sets `db.mt` to nil
 (`db.go:1061`), and the next write ends the process through `y.AssertTrue` (`db.go:1049`, `log.Fatalf`); a failed
-growth of its discard-stats file does the same through `y.Check` (`discard.go:129`). ADR-0296 keeps a margin, but
+growth of its discard-stats file does the same through `y.Check` (`discard.go:129`); and a value-log file whose
+creation fails stays on disk, so every later rotation fails with "file exists", even after space is freed
+(`value.go:536`). An experiment on 2026-10-28 (Badger v4.9.6 filling a 48 MiB tmpfs in a Linux VM) showed each case:
+upstream faults; with the ristretto change alone the process exits at the write after a failed memtable rotation, and
+the value log stays stuck; with the changes below every write on the full filesystem fails with "no space left on
+device", reads still work, and writes resume once space is freed. ADR-0296 keeps a margin, but
 something else on the node can still fill the filesystem. This ADR makes a full filesystem an error the daemon
 survives.
 
 ## Scenarios
 
 - **scenario: full-disk-write-fails**: Given a data filesystem with no free space, When a write needs a new Badger
-  file (a memtable or a value log), Then the write fails, a client gets 507, and the daemon keeps running and serving
+  file, a memtable or a value log, Then the write fails, a client gets 507, and the daemon keeps running and serving
   reads; once space is freed, the next write succeeds.
 - **scenario: start-waits-for-space**: Given a data filesystem too full to open the stores, When funcd starts, Then it
   does not exit: it logs the free space every 10 seconds and finishes starting once space is freed.
@@ -67,9 +72,10 @@ failed allocation; how a full filesystem surfaces from a Badger store; the start
    instead of `Truncate`, and `MmapFile.Truncate` allocates the range a file grows by. Both fall back to `Truncate`
    only when the filesystem does not support `fallocate` (`EOPNOTSUPP`).
 2. **Badger survives the error.** Badger's `ensureRoomForWrite` creates the next memtable before it queues the full
-   one: a failed creation leaves the full memtable in place and returns the error, so `db.mt` is never nil. A failed
-   growth of the discard-stats file drops that update and logs it, since those stats only guide value-log garbage
-   collection.
+   one: a failed creation leaves the full memtable in place and returns the error, so `db.mt` is never nil. A
+   value-log or table file whose creation fails is removed, so the next rotation or flush tries again. A failed growth
+   of the discard-stats file drops that update and logs it, since those stats only guide value-log garbage collection.
+   ristretto's `OpenMmapFile` closes the file it opened when mapping fails.
 3. **The forks.** funcd takes both through `replace`: `github.com/dgraph-io/ristretto/v2 =>
    github.com/pyvvo/ristretto/v2 v2.2.0-funcd.1` and `github.com/dgraph-io/badger/v4 =>
    github.com/pyvvo/badger/v4 v4.9.6-funcd.1`, forks of the pinned releases with these changes only, tagged. Each
@@ -98,8 +104,8 @@ None: each write's outcome is decided by the filesystem at the file's creation.
 func OpenMmapFileUsing(fd *os.File, sz int, writable bool) (*MmapFile, error)
 func (m *MmapFile) Truncate(maxSz int64) error
 
-// github.com/dgraph-io/badger/v4 (the fork), changed: ensureRoomForWrite never leaves db.mt nil; a failed discard-stats
-// growth is logged, not fatal.
+// github.com/dgraph-io/badger/v4 (the fork), changed: ensureRoomForWrite never leaves db.mt nil; a value-log or table
+// file whose creation fails is removed; a failed discard-stats growth is logged, not fatal.
 
 // Package fault use, NEW in each Badger adapter: errors.Is(err, syscall.ENOSPC) → fault.InsufficientStorage.
 
@@ -116,8 +122,9 @@ func waitForSpace(ctx context.Context, log *slog.Logger, dataDir string, try fun
 
 - The forks: `github.com/pyvvo/ristretto` from upstream's v2.2.0, one commit in `z/file.go` with a test that a new
   writable file's blocks and a grown range are allocated (`st_blocks × 512 ≥ size`), tagged `v2.2.0-funcd.1`;
-  `github.com/pyvvo/badger` from upstream's v4.9.6, one commit in `db.go` and `discard.go` with a test that a failed
-  memtable creation returns its error and the next write and read still work, tagged `v4.9.6-funcd.1`; `go.mod` gets
+  `github.com/pyvvo/badger` from upstream's v4.9.6, one commit in `db.go`, `value.go`, `table/table.go` and
+  `discard.go` with a test that fills a small filesystem on the memtable and the value-log paths: each write past it
+  returns its error, reads work, and a write succeeds once space is freed, tagged `v4.9.6-funcd.1`; `go.mod` gets
   both `replace` lines.
 - The five Badger adapters: the `ENOSPC` mapping. `cmd/funcd/main.go`: `waitForSpace` around `safeModeStart` and
   `funcd.New`.
@@ -150,4 +157,6 @@ func waitForSpace(ctx context.Context, log *slog.Logger, dataDir string, try fun
 ## References
 
 - The decider's refinement of 2026-10-28; FEAT-0016.
-- ristretto v2.2.0 `z/file.go:30-45`; Badger v4.9.6 `db.go:1044-1090`, `memtable.go:137-149`, `discard.go:129`; fallocate(2); `cmd/funcd/install.go:47-52`; `pkg/funcd/funcd.go:571` (#94).
+- The experiment of 2026-10-28 (a Linux VM, Badger v4.9.6 on a 48 MiB tmpfs, upstream, the ristretto change, both).
+- ristretto v2.2.0 `z/file.go:30-77`; Badger v4.9.6 `db.go:1044-1090`, `memtable.go:137-149`, `value.go:526-539`,
+  `table/table.go:245-254`, `discard.go:129`; fallocate(2); `cmd/funcd/install.go:47-52`; `pkg/funcd/funcd.go:571` (#94).
