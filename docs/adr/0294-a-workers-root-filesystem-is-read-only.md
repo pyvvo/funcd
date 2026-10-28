@@ -1,6 +1,6 @@
 # ADR-0294: A worker's root filesystem is read-only, and everything it writes has a size limit
 
-- **Status**: Accepted (2026-10-28; adr-judge rounds 1, 4 and 5 and a last look; revised after the decider's review:
+- **Status**: Reviewing (2026-10-29); Accepted (2026-10-28; adr-judge rounds 1, 4 and 5 and a last look; revised after the decider's review:
   a 1GiB scratch and a 256MiB catalog cap; a prototype of Decisions 1 to 5 passed 13 Lima lanes)
 - **Date**: 2026-10-28
 - **Deciders**: green-0-rabbit

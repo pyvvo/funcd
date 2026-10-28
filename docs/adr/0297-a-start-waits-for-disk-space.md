@@ -1,6 +1,6 @@
 # ADR-0297: A start waits for disk space, and a store's out-of-space error is 507
 
-- **Status**: Accepted (2026-10-28; adr-judge rounds 1 to 3 passed an earlier draft that forked ristretto and Badger;
+- **Status**: Reviewing (2026-10-29); Accepted (2026-10-28; adr-judge rounds 1 to 3 passed an earlier draft that forked ristretto and Badger;
   rewritten after the decider chose no fork, rounds 4 and 5 and a last look; the decider confirmed the wording and the
   computed 640 MiB)
 - **Date**: 2026-10-28
