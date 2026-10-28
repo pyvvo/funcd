@@ -70,13 +70,15 @@ func Grow(ctx context.Context, image string, sizeBytes int64) error {
 	return nil
 }
 
-// Mount mounts image at dir through a loop device, with nosuid, nodev and the extra options.
+// Mount mounts image at dir through a loop device, with nosuid, nodev and the extra options. The loop device reads and
+// writes image with direct I/O: buffered, every write is cached a second time, for image, and a 1 GiB worker spilling
+// 0.7 GiB through it took 126 s instead of 5 s.
 func Mount(image, dir string, options ...string) error {
 	const op = "loopfs.Mount"
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "create the mount point %s", dir)
 	}
-	m := mount.Mount{Type: "ext4", Source: image, Options: append([]string{"loop", "nosuid", "nodev"}, options...)}
+	m := mount.Mount{Type: "ext4", Source: image, Options: append([]string{"loop", "direct-io", "nosuid", "nodev"}, options...)}
 	if err := m.Mount(dir); err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "mount %s at %s", image, dir)
 	}

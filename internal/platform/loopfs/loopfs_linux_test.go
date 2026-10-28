@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -28,8 +29,11 @@ func TestLoopfsAsRoot(t *testing.T) {
 	require.Error(t, loopfs.Create(ctx, image, 64<<20, ""), "an image is never made over another")
 
 	require.NoError(t, loopfs.Mount(image, mount))
-	_, ok := loopfs.MountedAt(mount)
+	dev, ok := loopfs.MountedAt(mount)
 	require.True(t, ok)
+	dio, err := os.ReadFile(filepath.Join("/sys/block", filepath.Base(dev), "loop", "dio"))
+	require.NoError(t, err)
+	require.Equal(t, "1", strings.TrimSpace(string(dio)), "the loop device writes the image with direct I/O")
 	require.NoError(t, os.WriteFile(filepath.Join(mount, "catalog.ducklake"), []byte("x"), 0o600))
 
 	require.NoError(t, loopfs.Remove(image, mount))
