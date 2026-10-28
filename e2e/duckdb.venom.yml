@@ -485,7 +485,8 @@ testcases:
           limactl shell --workdir / {{.vm}} bash -lc '
             set -e
             sudo cp /opt/lane/funcdconfig.yaml /opt/lane/funcdconfig.yaml.issue1232
-            printf "\nlake:\n  saveInterval: 1h\n" | sudo tee -a /opt/lane/funcdconfig.yaml >/dev/null
+            sudo sed -i "s/^lake:\$/lake:\n  saveInterval: 1h/" /opt/lane/funcdconfig.yaml
+            grep -qx "  saveInterval: 1h" /opt/lane/funcdconfig.yaml
             sudo systemctl stop funcd-demo
             echo STOPPED'
         assertions:
