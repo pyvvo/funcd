@@ -1,6 +1,7 @@
 # ADR-0296: The data filesystem keeps a free-space floor that workload writes cannot pass
 
-- **Status**: Proposed (2026-10-28; adr-judge round 1 folded in; revised after the decider's review)
+- **Status**: Proposed (2026-10-28; adr-judge round 1 folded in; revised after the decider's review; round 4 passed,
+  its Minors folded in)
 - **Date**: 2026-10-28
 - **Deciders**: green-0-rabbit
 - **Tags**: storage, limits, quota
@@ -66,8 +67,9 @@ catalog), funclog, and the start of a Lake engine's scratch image (ADR-0294).
 2. **The floor.** `quota.Floor` (NEW) reads the filesystem's available bytes (`statfs`: `f_bavail × f_bsize`) at most
    once a second. It refuses a write when the last reading, less the bytes it admitted since that reading, less the
    write's own size, is below the floor. It admits a write of unknown size (a SQL Execute) only while the reading less
-   the admitted bytes is at or above the floor. A delete is always admitted. The refusal is `fault.InsufficientStorage` (507) with a fixed message, "the data filesystem is
-   below storage.minFreeSize, or this write would take it there: writes are refused until space is freed"; the free
+   the admitted bytes is at or above the floor. A delete is always admitted. The refusal is
+   `fault.InsufficientStorage` (507) with a fixed message, "the data filesystem is below storage.minFreeSize, or this
+   write would take it there: writes are refused until space is freed"; the free
    space and the floor go to funcd's log, once when a reading falls below the floor and once when one is back above
    it. A reading that fails admits the write and is logged.
 3. **One decision point.** `Floor.Guard(book)` is the Checker that KV, SQL and every `blob.Quoted` view get. The
@@ -141,12 +143,11 @@ func (c Config) StorageMinFreeBytes() (int64, error) // 2GiB when empty; 0 off
 
 - **Positive**: workload writes through funcd stop before the data filesystem is full; the platform keeps the margin.
 - **Negative (accepted)**: with less than 2 GiB free a node refuses workload writes, so a small disk needs a smaller
-  setting; funclog records are lost while the floor refuses; a write of unknown size is checked before it runs.
+  setting; funclog records are lost while the floor refuses.
 
 ## Open questions
 
 - Per-namespace budgets: F208, V2.
-- A size limit per SQL database: its own ADR.
 
 ## References
 

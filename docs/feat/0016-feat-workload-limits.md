@@ -32,7 +32,7 @@ the first ADR was drafted.
 | F210 | **A worker's writes bounded**: a Function's or an engine's worker writes only into its memory, its volumes or a scratch of fixed size, so its writes cannot grow the node's disk past those sizes | F206 | [ADR-0294](../adr/0294-a-workers-root-filesystem-is-read-only.md) | adr |
 | F211 | **A volume's file count bounded**: a volume holds at most its share of the volume image's inodes, as it holds at most its size in bytes | — | [ADR-0295](../adr/0295-a-volumes-quota-limits-its-inodes.md) | accepted |
 | F212 | **Free space kept for the platform**: workload writes stop at a free-space floor on the data filesystem, while reads, deletes and the platform's own writes go on | F207 | [ADR-0296](../adr/0296-the-data-filesystem-keeps-a-free-space-floor.md) | adr |
-| F213 | **A full disk does not keep the daemon down**: a start on a full data filesystem waits for space instead of exiting, and finishes once space is freed | F212 | [ADR-0297](../adr/0297-a-start-waits-for-disk-space.md) | adr |
+| F213 | **A start on a full disk waits**: a start on a full data filesystem waits for space instead of exiting, and finishes once space is freed | F212 | [ADR-0297](../adr/0297-a-start-waits-for-disk-space.md) | adr |
 
 ## Exit criterion
 
