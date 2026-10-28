@@ -14,10 +14,13 @@ copy its shape. This skill is the *why* behind that shape, so a new lane is mech
 ## Architecture (how a lane runs)
 
 ```
-just lima-example-X  ──►  build artifacts + bundle  ──►  limactl start (self-deploying VM, provisioning
-                                                          applies the resources + a Ready probe gates boot)
-                                                     ──►  go run venom run e2e/X.venom.yml   (host-side)
-                                                     ──►  trap: limactl stop/delete on EXIT
+just lima-example <name>  ──►  scripts/lane.py reads the lane's section of scripts/lanes.yaml: builds, stages
+                               its files for /opt/lane
+                          ──►  limactl start scripts/lima-lane.yaml (one generic VM: scripts/lane-provision.sh
+                               pushes and applies, scripts/lane-ready.sh gates on the lane's `ready`)
+                          ──►  venom run <the lane's `venom` suite>   (host-side)
+                          ──►  trap: limactl stop/delete on EXIT
+just lima-example-all     ──►  every lane not marked `optional`, in turn, on one shared VM (ADR-0230)
 ```
 
 - **Venom runs HOST-SIDE.** Its `http` steps hit the VM's **forwarded `127.0.0.1` ports** (Lima auto-forwards
@@ -46,27 +49,20 @@ just lima-example-X  ──►  build artifacts + bundle  ──►  limactl sta
    that needs the daemon (the `funcdctl apply` / `get`) until it returns `result.code 0` — that is the wait,
    with no poll loop and no dependency on host port-forwarding.
 4. **Mutate by applying a STATIC fixture, not runtime config surgery.** To unbind/alter a resource, ship a
-   static variant YAML (e.g. `counter-unbound.yaml` = `counter.yaml` minus `spec.kv`) and `apply` it — not a
+   static variant YAML (e.g. `counter-unbound.yaml` = `counter.yaml` minus `spec.bindings.kv`) and `apply` it — not a
    `python -c` strip at runtime. Declarative, reviewable, bundled with the lane.
 5. **No machine-specific paths in the tracked suite — inject them with `--var`.** The suite uses `{{.vm}}`
-   (and any host path) as a variable; the recipe passes `--var "vm=…"`. In-VM deploy paths
-   (`/opt/<lane>/…`) are the lane's own convention (set in `scripts/lima-<lane>.yaml`) and may appear
-   literally. **Never** write a dev-machine path (`/Users/…`, `/home/…`) into the suite.
+   (and any host path) as a variable; the recipe passes `--var "vm=…"`. In-VM paths under `/opt/lane/`, where a
+   lane's files are staged, may appear literally. **Never** write a dev-machine path (`/Users/…`, `/home/…`) into the suite.
 6. **Keep Venom's logs out of the repo.** Venom writes `venom.log` + rotated `venom.N.log` in its CWD — run
-   it **from the scratch dir** (`{{lima_deps}}` = `~/.cache/funcd-lima`, outside the repo) with an absolute
-   suite path and `--output-dir {{lima_deps}}` for the JUnit results. `*.log` is also gitignored.
+   it **from the scratch dir** (the recipe's `lima_deps`, outside the repo) with an absolute suite path and
+   `--output-dir` there for the JUnit results; the generic recipe already does. `*.log` is also gitignored.
 
-## The recipe wiring (copy this tail)
+## Declare the lane (scripts/lanes.yaml)
 
-After the lane builds its bundle and `limactl start`s the VM:
-
-```just
-    suite="$(pwd)/e2e/<lane>.venom.yml"
-    ( cd {{lima_deps}} && venom run --output-dir {{lima_deps}} --var "vm={{lima_<lane>_vm}}" "$suite" )
-    echo "venom results: {{lima_deps}}/test_results_<lane>.venom.xml"
-```
-
-The `trap '… limactl stop/delete … ' EXIT` (already in the recipe) tears the VM down regardless of result.
+A lane is one section of `scripts/lanes.yaml`, read by the one generic recipe and the one generic VM: no per-lane
+recipe or VM YAML. Its header documents every key: `module`, `dir`, `copy`, `build`, `stage`, `push`, `apply`,
+`ready`, `tokens`, `venom` and `optional`. The recipe's `trap` tears the VM down regardless of result.
 
 ## Suite skeleton (copy + adapt)
 
@@ -95,7 +91,7 @@ testcases:
       - type: exec          # the ONE mutation line, co-located with the daemon
         script: |
           limactl shell {{.vm}} -- sudo env FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token \
-            funcdctl apply -f /opt/<lane>/<static-mutated>.yaml
+            funcdctl apply -f /opt/lane/fixtures/<static-mutated>.yaml
         assertions:
           - result.code ShouldEqual 0
       - type: http          # retry/delay IS the reconcile wait — no poll loop
@@ -117,20 +113,17 @@ Assertion vocabulary you'll reuse: `ShouldEqual`, `ShouldNotEqual`, `ShouldConta
 
 ## Steps to add a new lane suite
 
-1. **Find the lane recipe** in `Justfile` (`lima-example-<X>`) and read `scripts/lima-<X>.yaml` (the VM
-   provisioning) — note the in-VM deploy path (`/opt/<X>/…`), the function names, and the forwarded ports.
+1. **Read or add the lane's section** in `scripts/lanes.yaml`: the module and directory its files come from,
+   what it stages into `/opt/lane`, what it pushes and applies, and its `ready` gate.
 2. **Write `e2e/<X>.venom.yml`** from the skeleton: positive `http` testcases first; any negative as an
    in-VM `exec` mutation + a `retry`-ed `http` assert. If the negative needs a mutated resource, add a
-   **static fixture** beside the example (e.g. `examples/.../<thing>-<variant>.yaml`) and bundle it in the
-   recipe's `cp … "$stage/"`.
-3. **Wire the recipe**: replace the `limactl shell … bash … invoke.sh` line with the Venom tail above; pass
-   `--var "vm={{lima_<X>_vm}}"` (+ any host path the suite needs).
-4. **Run it green**: `nix develop -c just lima-example-<X>` → the run must end `final status: PASS`. Each
+   **static fixture** (beside the example, or in `e2e/fixtures/`) and list it under the lane's `stage`.
+3. **Name the suite** in the lane's `venom:` key, then run the lane guard tests:
+   `go test -run Lane ./cmd/funcd/ ./internal/testkit/langmod/` and `go test ./scripts/`.
+4. **Run it green**: `scripts/agent/d just lima-example <X>` → the run must end `final status: PASS`. Each
    failed assertion prints the testcase/step — read it and fix the suite (not the platform). Budget for a
    couple of full VM boots; that is normal.
-5. **Delete the retired bash invoke** once the suite covers it; `scripts/` should keep only the
-   `lima-<X>.yaml` provisioning, not an invoke script.
-6. **Update `e2e/README.md`** if the lane set changed.
+5. **Update `e2e/README.md`** if the lane set changed.
 
 ## Verify
 
@@ -145,11 +138,11 @@ on EXIT regardless (`trap`); confirm with `limactl list` (no `funcd-*` instance)
 
 ## Project conventions (apply silently)
 
-- Run everything through **`nix develop -c …`** (the pinned toolchain provides `just`, Go, `limactl`).
+- Run everything through **`scripts/agent/d …`** or `nix develop -c …` (the pinned toolchain provides `just`, Go, `limactl`).
 - Deps are **Apache-2.0/MIT/BSD** only — Venom is Apache-2.0. ✓
 - **Identity / paths**: never write a dev-machine username or an OS-absolute path (`/Users/…`, `/home/…`)
-  into the suite, the recipe, or a fixture — inject host paths via `--var`; in-VM `/opt/<lane>/…` paths are
+  into the suite, the recipe, or a fixture — inject host paths via `--var`; in-VM `/opt/lane/…` paths are
   fine. Grep changed files before finishing.
-- Venom is standardised + flake-pinned by **ADR-0077**; the **kv, fn-to-fn, and metastore** lanes are
-  converted (`scripts/` keeps only `lima-*.yaml` provisioning). A further cross-cutting change (e.g. CI-gating
-  the lanes, a Venom version bump) is an **ADR** (`/adr`), not an ad-hoc change.
+- Venom is standardised + flake-pinned by **ADR-0077**, and every lane is a Venom suite declared in
+  `scripts/lanes.yaml` (ADR-0230: one shared VM for `just lima-example-all`). A further cross-cutting change
+  (e.g. CI-gating the lanes, a Venom version bump) is an **ADR** (`/adr`), not an ad-hoc change.

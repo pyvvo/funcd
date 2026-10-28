@@ -329,12 +329,12 @@ install.** Enter it once with `nix develop`, or prefix individual commands:
 ```bash
 nix develop -c just ci
 nix develop -c go test ./...
-nix develop -c just bench-containerd-lima
+nix develop -c just lima-bench
 ```
 
 This guarantees the pinned versions; a binary found on the bare `PATH` is **not** the source of
 truth and may differ. New tooling dependencies are **added to the flake (pinned), not installed on
-the machine** — e.g. Lima (for the ADR-0052 containerd footprint lane, `just bench-containerd-lima`)
+the machine** — e.g. Lima (for the ADR-0052 containerd footprint lane, `just lima-up` then `just lima-bench`)
 is provided by the dev shell via a pinned `nixpkgs-lima` input, not `brew`. Don't reach for a
 globally-installed binary when a `nix develop -c …` invocation will use the pinned one.
 
