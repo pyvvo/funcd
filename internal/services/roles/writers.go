@@ -30,10 +30,11 @@ func NewLister(s store.Store) *Lister {
 	return &Lister{store: s, resolver: cedar.NewRoleResolver(s)}
 }
 
-// BlobWriters returns the principals with a writer-role grant covering the (bucket, prefix).
+// BlobWriters returns the principals whose grant covering the (bucket, prefix) holds s3::write: a role writing only
+// KV or SQL, even namespace-wide, makes no blob writer.
 func (l *Lister) BlobWriters(ctx context.Context, ns v1.NamespaceName, bucket, prefix string) []cedartypes.EntityUID {
 	return l.writers(ctx, ns, func(g cedar.WriterGrant) bool {
-		if sqlOnly(g) {
+		if !slices.Contains(g.Writes, string(auth.ActionS3Write)) {
 			return false
 		}
 		switch sc := g.Scope; sc.Kind {
@@ -47,10 +48,11 @@ func (l *Lister) BlobWriters(ctx context.Context, ns v1.NamespaceName, bucket, p
 	})
 }
 
-// KVWriters returns the principals with a writer-role grant covering the (store, table).
+// KVWriters returns the principals whose grant covering the (store, table) holds kv::write: a role writing only blob
+// or SQL, even namespace-wide, makes no KV writer.
 func (l *Lister) KVWriters(ctx context.Context, ns v1.NamespaceName, kvStore, table string) []cedartypes.EntityUID {
 	return l.writers(ctx, ns, func(g cedar.WriterGrant) bool {
-		if sqlOnly(g) {
+		if !slices.Contains(g.Writes, string(auth.ActionKVWrite)) {
 			return false
 		}
 		switch sc := g.Scope; sc.Kind {
@@ -62,11 +64,6 @@ func (l *Lister) KVWriters(ctx context.Context, ns v1.NamespaceName, kvStore, ta
 			return false
 		}
 	})
-}
-
-// sqlOnly reports whether a grant writes only SQL databases, so it makes no KV or blob writer (ADR-0233).
-func sqlOnly(g cedar.WriterGrant) bool {
-	return !slices.ContainsFunc(g.Writes, func(a string) bool { return a != string(auth.ActionSQLWrite) })
 }
 
 // SQLWriters returns the principals whose grant covering the SQL database holds sql::write (ADR-0233): a role

@@ -217,3 +217,31 @@ func TestSQLWriterMakesNoKVOrBlobWriter(t *testing.T) {
 	require.Empty(t, l.BlobWriters(context.Background(), "data", "releves", "gold"))
 	require.Len(t, l.SQLWriters(context.Background(), "data", "todo-db"), 1)
 }
+
+// A namespace-wide writer role writes only the kinds its actions name: Blob Data Writer every prefix and no KV table,
+// KV Data Writer the reverse, Contributor both.
+func TestWriterRoleWritesOnlyItsKinds(t *testing.T) {
+	t.Parallel()
+	st := store.New(memory.New())
+	seedBucket(t, st)
+	seedKV(t, st)
+	grant := func(name, fn, role string) {
+		assign(t, st, name, v1.RolesAssignmentSpec{
+			Principal: &v1.PrincipalRef{Kind: v1.PrincipalKindFunction, Name: v1.ObjectName(fn)},
+			Assignments: []v1.AssignmentEntry{{RoleRef: v1.RoleRef{Kind: v1.RoleRefKindBuiltin, Name: role},
+				Scope: &v1.ScopeRef{Kind: v1.ScopeKindNamespace}}},
+		})
+	}
+	grant("blob-writer", "uploader", "Blob Data Writer")
+	grant("kv-writer", "counter", "KV Data Writer")
+	grant("contributor", "both", "Contributor")
+	pdp := buildPDP(t, st)
+
+	require.True(t, write(t, pdp, v1.PrincipalKindFunction, "uploader", "gold"))
+	require.False(t, kvWrite(t, pdp, v1.PrincipalKindFunction, "uploader", "counters", "landing"),
+		"Blob Data Writer holds no kv::write")
+	require.True(t, kvWrite(t, pdp, v1.PrincipalKindFunction, "counter", "counters", "landing"))
+	require.False(t, write(t, pdp, v1.PrincipalKindFunction, "counter", "gold"), "KV Data Writer holds no s3::write")
+	require.True(t, write(t, pdp, v1.PrincipalKindFunction, "both", "gold"))
+	require.True(t, kvWrite(t, pdp, v1.PrincipalKindFunction, "both", "counters", "landing"))
+}
