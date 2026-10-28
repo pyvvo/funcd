@@ -468,3 +468,51 @@ func TestIssue152_AppendRacingFlushKeepsEveryRecord(t *testing.T) {
 		}))
 	})
 }
+
+// floorAt refuses every record while below is set.
+type floorAt struct{ below atomic.Bool }
+
+func (f *floorAt) Check(context.Context, int64) error {
+	if f.below.Load() {
+		return fault.InsufficientStoragef("test", "below the floor")
+	}
+	return nil
+}
+
+// scenario: funclog-drops-below-floor — below the free-space floor a Function's records are dropped and counted, and
+// the first record admitted again logs how many (ADR-0296).
+func TestScenarioFunclogDropsBelowFloor(t *testing.T) {
+	ctx := context.Background()
+	b := memBucket(t)
+	floor := &floorAt{}
+	var logs bytes.Buffer
+	s, err := funclog.NewBlobSink(funclog.Deps{Bucket: b, SegmentMaxBytes: 1 << 20, SegmentMaxAge: time.Hour,
+		Clock: clock.Fake(time.Unix(1_700_000_000, 0)), Floor: floor, Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	res := defaultRes()
+
+	require.NoError(t, s.Append(ctx, res, funclog.Entry{Severity: funclog.SevInfo, Body: "kept-1"}))
+	floor.below.Store(true)
+	for range 3 {
+		require.NoError(t, s.Append(ctx, res, funclog.Entry{Severity: funclog.SevInfo, Body: "dropped"}))
+	}
+	require.NotContains(t, logs.String(), "dropped records", "nothing is logged while the floor refuses")
+	floor.below.Store(false)
+	require.NoError(t, s.Append(ctx, res, funclog.Entry{Severity: funclog.SevInfo, Body: "kept-2"}))
+	require.Contains(t, logs.String(), "records=3")
+	_, err = s.Flush(ctx, res)
+	require.NoError(t, err)
+
+	got := readBackOne(t, b, "")
+	var bodies []string
+	for i := range got.ResourceLogs().Len() {
+		sl := got.ResourceLogs().At(i).ScopeLogs()
+		for j := range sl.Len() {
+			for k := range sl.At(j).LogRecords().Len() {
+				bodies = append(bodies, sl.At(j).LogRecords().At(k).Body().AsString())
+			}
+		}
+	}
+	require.Equal(t, []string{"kept-1", "kept-2"}, bodies)
+}

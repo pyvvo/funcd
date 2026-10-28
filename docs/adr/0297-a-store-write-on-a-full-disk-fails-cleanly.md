@@ -1,6 +1,6 @@
 # ADR-0297: A store write on a full disk fails as an error, and a start waits for space
 
-- **Status**: Proposed (2026-10-28; adr-judge rounds 1 and 2 folded in)
+- **Status**: Proposed (2026-10-28; adr-judge rounds 1 to 3, passed at round 3)
 - **Date**: 2026-10-28
 - **Deciders**: green-0-rabbit
 - **Tags**: storage, reliability
@@ -33,8 +33,9 @@ a fill ended by a kill, the database opens and writes once space is freed, on th
 - **scenario: full-disk-write-fails**: Given a data filesystem with no free space, When a write needs a new Badger
   file, a memtable or a value log, Then the write fails, a client gets 507, and the daemon keeps running and serving
   reads; once space is freed, the next write succeeds.
-- **scenario: start-waits-for-space**: Given a data filesystem too full to open the stores, When funcd starts, Then it
-  logs the free space every 10 seconds and finishes starting once space is freed.
+- **scenario: start-waits-for-space**: Given a data filesystem too full to open the stores, about 0.8 GiB free or less
+  with funcd's options, When funcd starts, Then it logs the free space every 10 seconds and finishes starting once
+  space is freed.
 - **scenario: start-below-floor**: Given less free space than `storage.minFreeSize` but enough to open the stores,
   When funcd starts, Then it serves reads and the control plane and refuses workload writes (ADR-0296).
 
@@ -126,7 +127,7 @@ func waitForSpace(ctx context.Context, log *slog.Logger, dataDir string, try fun
   `db.go`, `memtable.go`, `value.go`, `table/table.go`, `discard.go` and `y/error.go`, tagged `v4.9.6-funcd.1`. Each
   has a test that fills a small ext4 loop image and a tmpfs, on the memtable and the value-log paths: a write past it
   and an open on it return an error matching `syscall.ENOSPC`, reads work, and after the fill the database reopens and
-  writes once space is freed. `go.mod` gets both `replace` lines.
+  writes once space is freed. Each fork runs its upstream's whole test suite. `go.mod` gets both `replace` lines.
 - The five Badger adapters: `Open` keeps the chain, and a write maps `ENOSPC` to 507. `cmd/funcd/main.go`:
   `waitForSpace` around `safeModeStart` and `funcd.New`.
 - Tests, one per scenario: `TestScenarioFullDiskWriteFails` (Linux as root: a KV store with small Badger options on an
@@ -152,8 +153,10 @@ func waitForSpace(ctx context.Context, log *slog.Logger, dataDir string, try fun
 - **Negative (accepted)**: each Badger database's newest memtable and value-log files take their full size on disk at
   once: with funcd's 16 MiB memtables and 64 MiB value logs, about 160 MiB each, about 0.8 GiB for the five, inside
   ADR-0296's 2 GiB margin; a 507 on a full disk may come with a stored write; while Badger cannot flush, a write can
-  wait instead of failing, and a stop waits for the flush until systemd ends the process, whose next start replays the
-  memtable log; funcd carries two forks until upstream ships the changes.
+  wait instead of failing, and a stop waits for the flush until systemd ends the process after 45 seconds
+  (`TimeoutStopSec`, `KillMode=mixed`), whose next start replays the memtable log; a start allocates each database's
+  new value-log and memtable files, so it needs about 0.8 GiB free and waits below that; funcd carries two forks until
+  upstream ships the changes.
 
 ## Open questions
 
@@ -165,4 +168,4 @@ func waitForSpace(ctx context.Context, log *slog.Logger, dataDir string, try fun
 - The experiment of 2026-10-28 (a Linux VM, Badger v4.9.6 on 48 MiB tmpfs and ext4 images).
 - ristretto v2.2.0 `z/file.go:30-77`, `z/file_linux.go`; Badger v4.9.6 `db.go:868-914`, `:1044-1090`, `:1160`,
   `memtable.go:75-78`, `:137-149`, `value.go:526-539`, `table/table.go:245-254`, `discard.go:129`, `y/error.go:55-62`;
-  fallocate(2); `pkg/funcd/funcd.go:571` (#94).
+  fallocate(2); `cmd/funcd/install.go:60-63`; `pkg/funcd/funcd.go:571` (#94).

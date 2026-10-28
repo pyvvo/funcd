@@ -193,3 +193,26 @@ func TestScenarioSQLDeleteAtCap(t *testing.T) {
 	require.NoError(t, err, "the next measure sees the room")
 	require.Len(t, engine.Rows(), 1)
 }
+
+// scenario: floor-refuses-workload-writes (SQL) — below the free-space floor an INSERT gets 507 before the engine runs
+// it, while a query and a DELETE still run (ADR-0296).
+func TestFloorRefusesSQLWrite(t *testing.T) {
+	engine := fakesql.New(t, sqlsvc.EnginePassword([]byte(masterKey), "default", "todo-db"))
+	engine.Seed("milk", "eggs")
+	floor := quota.NewFloor(func() (int64, error) { return 1 << 30, nil }, 2<<30, clock.System(), nil)
+	engines := sqlsvc.NewEngines()
+	engines.Set("default", "todo-db", engine.Addr())
+	f, err := sqlsvc.NewFacade(sqlsvc.FacadeDeps{Resolver: staticResolver{}, Authorizer: &recordingPDP{}, Engines: engines,
+		Master: []byte(masterKey), Quota: floor.Guard(quota.None)})
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	_, err = f.Execute(ctx, "default", "todo-api", "app", stmts(t, `[["INSERT INTO todos(title, done) VALUES(?, ?)", "jam", 0]]`))
+	require.Equal(t, fault.InsufficientStorage, fault.KindOf(err), "%v", err)
+	require.Len(t, engine.Rows(), 2, "a refused Execute reaches no engine")
+	_, err = f.Query(ctx, "default", "todo-api", "app", stmts(t, `[["SELECT id, title FROM todos"]]`))
+	require.NoError(t, err, "a query is not a write")
+	_, err = f.Execute(ctx, "default", "todo-api", "app", stmts(t, `[["DELETE FROM todos"]]`))
+	require.NoError(t, err, "a delete is admitted below the floor")
+	require.Empty(t, engine.Rows())
+}

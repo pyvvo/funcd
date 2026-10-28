@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
@@ -39,6 +40,13 @@ type Deps struct {
 	SegmentMaxAge   time.Duration // ...or after this long (default 10s)
 	Clock           clock.Clock
 	Logger          *slog.Logger
+	// Floor, when set, admits each record by its size; a refused record is dropped and counted (ADR-0296).
+	Floor Floor
+}
+
+// Floor is the free-space floor a record asks before it is buffered (quota.Floor).
+type Floor interface {
+	Check(ctx context.Context, bytes int64) error
 }
 
 const (
@@ -64,6 +72,9 @@ type BlobSink struct {
 	// flushing is read-held by each Flush from taking its segment until its Put returns, and write-held by
 	// Close: a taken segment is no longer in segments, so Close must wait for that Put instead.
 	flushing sync.RWMutex
+
+	floor   Floor
+	dropped atomic.Int64 // records the floor refused since the last one it admitted
 }
 
 type segment struct {
@@ -96,7 +107,7 @@ func NewBlobSink(d Deps) (*BlobSink, error) {
 	s := &BlobSink{
 		bucket: d.Bucket, maxBytes: d.SegmentMaxBytes, maxAge: d.SegmentMaxAge,
 		clock: d.Clock, log: d.Logger, segments: make(map[Resource]*segment),
-		stop: make(chan struct{}),
+		stop: make(chan struct{}), floor: d.Floor,
 	}
 	go s.flushLoop()
 	return s, nil
@@ -143,8 +154,18 @@ func (s *BlobSink) flushAged() {
 	}
 }
 
-// Append adds e to res's open segment, sealing+Putting it if it crosses the size/age cap.
+// Append adds e to res's open segment, sealing+Putting it if it crosses the size/age cap. Below the free-space floor
+// it drops e, and the next record admitted logs how many were dropped.
 func (s *BlobSink) Append(ctx context.Context, res Resource, e Entry) error {
+	if s.floor != nil {
+		if s.floor.Check(ctx, int64(estimateBytes(e))) != nil {
+			s.dropped.Add(1)
+			return nil
+		}
+		if n := s.dropped.Swap(0); n > 0 {
+			s.log.Warn("funclog: dropped records while the data filesystem was below storage.minFreeSize", "records", n)
+		}
+	}
 	seg := s.lockedSegment(res)
 	seg.entries = append(seg.entries, e)
 	seg.bytes += estimateBytes(e)

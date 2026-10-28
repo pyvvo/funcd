@@ -10,7 +10,8 @@ import (
 
 // Quoted returns a view of inner whose Put asks chk before it stores (ADR-0292): the key's prefix, then the Bucket,
 // each a subject of its own and asked only when capped reports a size for it, so a key's leading segment that no quota
-// names is never tracked; a refusal by the Bucket releases the prefix's reservation. A delete reports itself to the
+// names is never tracked; an uncapped Bucket's place goes to the zero Subject, for the free-space floor (ADR-0296); a
+// refusal by the Bucket releases the prefix's reservation. A delete reports itself to the
 // same subjects; reads pass through. capped reports whether the Bucket (prefix "") or a declared prefix sets a size; a
 // presigned PUT under one is fault.Forbidden, since its upload bypasses Put, as Capped refuses one. A nil chk is
 // quota.None. It forwards RangeReader.
@@ -87,7 +88,9 @@ func (q *quotedBucket) admit(ctx context.Context, key string, r quota.Request) (
 	}, nil
 }
 
-// subjects are the capped subjects a write to key charges: the Bucket prefix it lies in, then the Bucket.
+// subjects are the subjects a write to key asks: the capped Bucket prefix it lies in, then the Bucket when it is
+// capped, else the zero Subject, which only the free-space floor decides (ADR-0296); each write thus asks one subject
+// without a prefix, where the floor counts it.
 func (q *quotedBucket) subjects(key string) []quota.Subject {
 	var out []quota.Subject
 	if p := prefixOf(key); p != "" && q.capped(p) {
@@ -97,6 +100,8 @@ func (q *quotedBucket) subjects(key string) []quota.Subject {
 	}
 	if q.capped("") {
 		out = append(out, q.subject)
+	} else {
+		out = append(out, quota.Subject{})
 	}
 	return out
 }

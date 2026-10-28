@@ -4,7 +4,9 @@ import (
 	"context"
 	"io"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -363,4 +365,40 @@ func TestScenarioKVTotalRefused(t *testing.T) {
 	require.Equal(t, value, got)
 	require.NoError(t, f.Delete(ctx, "default", "fn", "cache", "a"))
 	require.NoError(t, f.Put(ctx, "default", "fn", "cache", "b", value), "a fresh measure sees the delete")
+}
+
+// scenario: floor-refuses-workload-writes (KV) — below the free-space floor a put gets 507 before it reaches the
+// driver, while a get and a delete still work; above it again, the put lands (ADR-0296).
+func TestFloorRefusesKVPut(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	b := fakeResolver{m: map[string]kv.Binding{
+		bkey("fn", "cache"): {Store: "s", Table: "t", Owner: "fn", MaxValueBytes: 1 << 20, MaxKeyBytes: 1024},
+	}}
+	db := memory.New()
+	var free atomic.Int64
+	free.Store(3 << 30)
+	clk := clock.NewManual(time.Unix(0, 0))
+	floor := quota.NewFloor(func() (int64, error) { return free.Load(), nil }, 2<<30, clk, nil)
+	f, err := kv.NewFacade(kv.FacadeDeps{KV: db, Resolver: b, Authorizer: &pdpStub{
+		readGrants: map[string]bool{rgKey("default", "fn", "s"): true}, owners: map[string]v1.ObjectName{"s/t": "fn"}},
+		Quota: floor.Guard(quota.None)})
+	require.NoError(t, err)
+
+	require.NoError(t, f.Put(ctx, "default", "fn", "cache", "a", []byte("v")))
+	free.Store(1 << 30)
+	clk.Advance(time.Second)
+	err = f.Put(ctx, "default", "fn", "cache", "b", []byte("v"))
+	require.Equal(t, fault.InsufficientStorage, fault.KindOf(err), "%v", err)
+	_, found, err := db.Get(ctx, "default/s/t/b")
+	require.NoError(t, err)
+	require.False(t, found, "a refused put reaches no driver")
+	got, found, err := f.Get(ctx, "default", "fn", "cache", "a")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, []byte("v"), got)
+	require.NoError(t, f.Delete(ctx, "default", "fn", "cache", "a"), "a delete is admitted below the floor")
+	free.Store(3 << 30)
+	clk.Advance(time.Second)
+	require.NoError(t, f.Put(ctx, "default", "fn", "cache", "b", []byte("v")), "above the floor again")
 }

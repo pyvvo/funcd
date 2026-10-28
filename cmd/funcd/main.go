@@ -55,6 +55,7 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/observability"
 	"github.com/pyvvo/funcd/internal/platform/stopsignal"
 	"github.com/pyvvo/funcd/internal/platform/version"
+	"github.com/pyvvo/funcd/internal/quota"
 	"github.com/pyvvo/funcd/internal/restore"
 	fnruntime "github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/containerd"
@@ -562,6 +563,14 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 		return nil, noopClose, nil, "", err
 	}
 	opts = append(opts, funcd.WithLakeCatalogMaxBytes(catalogMax))
+	// The free space kept on the data filesystem for funcd's own stores (ADR-0296); memory mode has no data filesystem.
+	minFree, err := cfg.StorageMinFreeBytes()
+	if err != nil {
+		return nil, noopClose, nil, "", err
+	}
+	if cfg.Storage.Mode != "memory" {
+		opts = append(opts, funcd.WithFreeSpaceFloor(quota.DiskFree(cfg.Storage.DataDir), minFree))
+	}
 	// How long the start-up reclaims keep the data no object names (ADR-0288), checked by the config loader.
 	quarantinePeriod, err := cfg.QuarantineRetention()
 	if err != nil {

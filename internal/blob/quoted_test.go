@@ -21,7 +21,8 @@ func (a *asked) Admit(_ context.Context, r quota.Request) (quota.Settle, error) 
 }
 
 // A Bucket asks the quota only about a subject a size caps (ADR-0292 Decision 5): a key's leading segment that no
-// capped prefix names is never tracked, and an uncapped Bucket never is.
+// capped prefix names is never tracked, and an uncapped Bucket never is; its place goes to the zero Subject, which only
+// the free-space floor decides (ADR-0296), so every write asks exactly one subject without a prefix.
 func TestQuotedAsksOnlyCappedSubjects(t *testing.T) {
 	ctx := context.Background()
 	inner, err := gocloud.Open(ctx, "mem://")
@@ -36,10 +37,10 @@ func TestQuotedAsksOnlyCappedSubjects(t *testing.T) {
 		key    string
 		want   []quota.Subject
 	}{
-		{"an uncapped Bucket's root key", nil, "index.html", nil},
-		{"an uncapped Bucket's prefix", nil, "raw/a", nil},
-		{"a capped prefix", map[string]bool{"gold": true}, "gold/a", []quota.Subject{gold}},
-		{"a root key beside a capped prefix", map[string]bool{"gold": true}, "index.html", nil},
+		{"an uncapped Bucket's root key", nil, "index.html", []quota.Subject{{}}},
+		{"an uncapped Bucket's prefix", nil, "raw/a", []quota.Subject{{}}},
+		{"a capped prefix", map[string]bool{"gold": true}, "gold/a", []quota.Subject{gold, {}}},
+		{"a root key beside a capped prefix", map[string]bool{"gold": true}, "index.html", []quota.Subject{{}}},
 		{"a capped prefix of a capped Bucket", map[string]bool{"": true, "gold": true}, "gold/a", []quota.Subject{gold, bucket}},
 		{"a capped Bucket's root key", map[string]bool{"": true}, "index.html", []quota.Subject{bucket}},
 	} {
@@ -47,10 +48,6 @@ func TestQuotedAsksOnlyCappedSubjects(t *testing.T) {
 		view := blob.Quoted(inner, chk, bucket, func(p string) bool { return c.capped[p] })
 		require.NoError(t, view.Put(ctx, c.key, []byte("x"), blob.PutOptions{}), c.name)
 		require.NoError(t, view.Delete(ctx, c.key), c.name)
-		if len(c.want) == 0 {
-			require.Empty(t, chk.subjects, c.name)
-			continue
-		}
 		require.Equal(t, append(append([]quota.Subject{}, c.want...), c.want...), chk.subjects, "%s: the put, then the delete", c.name)
 	}
 }

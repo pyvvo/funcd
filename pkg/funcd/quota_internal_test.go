@@ -24,9 +24,15 @@ import (
 // kind/name in namespace default.
 func quotaGateway(t *testing.T, objs ...v1.Object) (*Platform, func(kind v1.Kind, name v1.ObjectName) *awss3.Client) {
 	t.Helper()
+	return quotaGatewayWith(t, nil, objs...)
+}
+
+// quotaGatewayWith is quotaGateway with the platform options opts.
+func quotaGatewayWith(t *testing.T, opts []Option, objs ...v1.Object) (*Platform, func(kind v1.Kind, name v1.ObjectName) *awss3.Client) {
+	t.Helper()
 	dataDir := t.TempDir()
 	p, addr := startS3Gateway(t, freeLoopbackAddr, func(addr string) (*Platform, error) {
-		return New(InMemory(), WithS3Gateway(addr, "", 0, "", dataDir))
+		return New(append([]Option{InMemory(), WithS3Gateway(addr, "", 0, "", dataDir)}, opts...)...)
 	}, s3GatewayRun)
 	for _, o := range objs {
 		_, err := p.cfg.store.Create(context.Background(), o)

@@ -123,6 +123,9 @@ type Config struct {
 		// QuarantineRetention is how long the start-up reclaims keep the data no object names before the sweep deletes
 		// it (ADR-0288): an ADR-0194 duration of at least 1h; empty ⇒ 168h.
 		QuarantineRetention string `json:"quarantineRetention,omitempty" env:"FUNCD_STORAGE_QUARANTINE_RETENTION"`
+		// MinFreeSize is the free space funcd keeps on DataDir's filesystem for its own stores: workload writes that
+		// would take it lower get 507 (ADR-0296). A ByteSize; empty ⇒ 2GiB; "0" turns the floor off.
+		MinFreeSize string `json:"minFreeSize,omitempty" env:"FUNCD_STORAGE_MIN_FREE_SIZE"`
 	} `json:"storage,omitempty"`
 	Kvstore struct {
 		// Engine for the function-facing KV service (ADR-0066/0069): memory (default, ephemeral) or

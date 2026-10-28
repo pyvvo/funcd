@@ -31,6 +31,7 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/platform/observability"
 	"github.com/pyvvo/funcd/internal/provider"
+	"github.com/pyvvo/funcd/internal/quota"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/volume"
@@ -580,6 +581,18 @@ func WithFunctionDefaultResources(rs v1.ResourceSpec) Option {
 			return err
 		}
 		c.functionDefaultResources = rs
+		return nil
+	}
+}
+
+// WithFreeSpaceFloor keeps minFreeBytes free on the data filesystem whose free space free reads: workload writes that
+// would take it lower get 507 (storage.minFreeSize, ADR-0296); 0 sets no floor.
+func WithFreeSpaceFloor(free quota.FreeFunc, minFreeBytes int64) Option {
+	return func(c *config) error {
+		if minFreeBytes < 0 || minFreeBytes > 0 && free == nil {
+			return fault.Invalidf("funcd.WithFreeSpaceFloor", "a floor of %d bytes needs a free-space reader and 0 or more bytes", minFreeBytes)
+		}
+		c.floorFree, c.floorMinFree = free, minFreeBytes
 		return nil
 	}
 }
