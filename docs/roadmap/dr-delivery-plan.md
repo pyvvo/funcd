@@ -19,7 +19,7 @@ is a later epoch.
 track* implements and reviews them, and is serialized by hard compile and runtime dependencies. Keep the design track
 one wave ahead of the build track.
 
-> **ADR numbers.** The ten ADRs drafted so far are ADR-0201 to ADR-0210 (Accepted 2026-10-10), taken from the number
+> **ADR numbers.** The ten ADRs drafted so far are ADR-0201 to ADR-0210 (Accepted 2026-10-10, all Implemented since), taken from the number
 > pool that every epoch shares. Every item of this plan now carries its real number (ADR-0222 and ADR-0223 since 2026-10-10). Track the work by **feature code** (stable). Accepted ADRs use their real number.
 
 ## Proposed ADR slate
