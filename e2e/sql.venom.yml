@@ -116,8 +116,8 @@ testcases:
           - result.bodyjson.notes ShouldHaveLength 2
 
   # ADR-0294: the engine runs on a read-only root with a /tmp tmpfs; its data stays in its ADR-0231 directory, as every
-  # case here shows.
-  - name: SR the engine's root is read-only
+  # case here shows. The engine's image has no shell to try a write, so the case reads the root and /tmp of its spec.
+  - name: SR sql-engine-read-only-root — the engine's root is read-only and its /tmp a tmpfs
     steps:
       - type: exec
         script: |
