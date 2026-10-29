@@ -1,7 +1,7 @@
 // Package badger is the dead-letter-queue deadletter driver (ADR-0118), backed by Badger v4 in its own instance
 // (never the metastore), which the event store shares with the blob seen lists (ADR-0201, NewOnDB). It mirrors the
 // ADR-0094 run-state driver: one driver serves every backend — New selects Badger's in-memory mode (tests/dev,
-// hermetic — no files) or an on-disk directory (<dataDir>/deadletter, production). Key layout is dl/<ns>/<ulid>: the
+// hermetic — no files) or an on-disk directory (<dataDir>/eventstore, production). Key layout is dl/<ns>/<ulid>: the
 // ULID makes a namespace's keys time-sortable, so cap eviction takes the oldest cheaply. The store imports NO bus —
 // the DLQ guarantee is bus-driver-independent. The shared deadletter.Contract proves memory and this driver behave
 // identically.
@@ -30,7 +30,7 @@ const keyPrefix = "dl/"
 type Config struct {
 	// InMemory runs Badger fully in memory (tests/dev) — no files, no disk.
 	InMemory bool
-	// Dir is the on-disk data directory when InMemory is false (production: <dataDir>/deadletter).
+	// Dir is the on-disk data directory when InMemory is false (production: <dataDir>/eventstore).
 	Dir string
 }
 

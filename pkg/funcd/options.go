@@ -307,7 +307,7 @@ func WithWorkflowMaxStepsInFlight(n int) Option {
 // in-memory, the InMemory-preset / memory-storage path),
 // deliveryAttempts is the bounded-retry cap before a failed workflow:/function: delivery is dead-lettered
 // (< 1 ⇒ 3), retention is how long parked entries survive the periodic sweep (0 ⇒ never), and maxEntries is
-// the per-namespace count cap (0 ⇒ unbounded). cmd/funcd derives dataDir as <dataDir>/deadletter from config.
+// the per-namespace count cap (0 ⇒ unbounded). cmd/funcd derives dataDir as <dataDir>/eventstore from config.
 func WithDeadLetterQueue(dataDir string, deliveryAttempts int, retention time.Duration, maxEntries int) Option {
 	return func(c *config) error {
 		c.deadletterDataDir = dataDir

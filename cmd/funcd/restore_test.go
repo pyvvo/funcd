@@ -77,7 +77,7 @@ func newGSource(t *testing.T, key []byte) *gsource {
 	s.meta = store.New(eng, opts...)
 	s.runs, err = runbadger.New(runbadger.Config{Dir: filepath.Join(s.dir, "workflow")})
 	require.NoError(t, err)
-	s.events, err = eventstore.Open(eventstore.Config{Dir: filepath.Join(s.dir, "deadletter")})
+	s.events, err = eventstore.Open(eventstore.Config{Dir: filepath.Join(s.dir, "eventstore")})
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = s.meta.Close()
@@ -256,6 +256,22 @@ func TestScenarioRestoreRefusesNonEmpty(t *testing.T) {
 	entries, err := os.ReadDir(storeDir)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
+}
+
+// scenario: messages-name-eventstore (ADR-0300) — a restore into a non-empty event store directory is refused by its
+// key and its default path, <dataDir>/eventstore.
+func TestScenarioRestoreNamesEventStoreKey(t *testing.T) {
+	t.Parallel()
+	s := newGSource(t, nil)
+	s.cut(t)
+	n := newNode(t, nil, "")
+	dir := filepath.Join(n.dataDir, "eventstore")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "MANIFEST"), []byte("x"), 0o600))
+
+	_, err := n.restore("run", "latest", "--from", s.target)
+	require.Equal(t, fault.Conflict, fault.KindOf(err), "%v", err)
+	require.ErrorContains(t, err, "eventing.eventstore.dataDir "+dir)
 }
 
 // scenario: restore-crash-refuses-start — what a restore run killed after its metastore Load leaves (restore.inprogress,

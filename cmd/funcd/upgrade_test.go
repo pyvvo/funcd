@@ -310,7 +310,7 @@ func TestScenarioRollbackToPreUpgrade(t *testing.T) {
 	require.NoError(t, err)
 	b.stop(t)
 
-	for _, d := range []string{"store", "workflow", "deadletter"} {
+	for _, d := range []string{"store", "workflow", "eventstore"} {
 		require.NoError(t, os.Rename(filepath.Join(n.dataDir, d), filepath.Join(n.dataDir, d+".moved")))
 	}
 	// The operator's escrow set (ADR-0204): the node's master secret, which the generation names.

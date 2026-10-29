@@ -26,6 +26,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/backup"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
+	"github.com/pyvvo/funcd/internal/eventing/eventstore"
 	"github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/platform/version"
@@ -501,4 +502,16 @@ func TestStoreHeldConflict(t *testing.T) {
 	m, err := upgrade.Snapshot(ctx, f.cfg)
 	require.NoError(t, err)
 	require.Equal(t, backup.Format, m.Format)
+}
+
+// scenario: messages-name-eventstore (ADR-0300) — a pre-upgrade snapshot while the event store is open is
+// fault.Conflict naming eventing.eventstore.dataDir and its directory.
+func TestScenarioUpgradeProbeNamesEventStoreKey(t *testing.T) {
+	f := newFixture(t, "v0.8.0")
+	events, err := eventstore.Open(eventstore.Config{Dir: f.cfg.Eventing.EventStore.DataDir})
+	require.NoError(t, err)
+	_, err = upgrade.Snapshot(context.Background(), f.cfg)
+	require.Equal(t, fault.Conflict, fault.KindOf(err), "%v", err)
+	require.ErrorContains(t, err, "eventing.eventstore.dataDir "+f.cfg.Eventing.EventStore.DataDir)
+	require.NoError(t, events.Close())
 }

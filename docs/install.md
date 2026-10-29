@@ -103,6 +103,20 @@ wrote elsewhere fails with "read-only file system". The default `lake.catalogMax
 is larger needs the setting, else its saves are refused, and it does not start once its catalog no longer fits its
 scratch (`lake.scratchSize`).
 
+From the release with ADR-0300, the event store's directory is `<dataDir>/eventstore` and its key
+`eventing.eventstore.dataDir`; the old key fails to load. Upgrade to it in four steps, so the installed binary still
+snapshots the store from `deadletter`:
+
+```sh
+sudo systemctl stop funcd
+sudo funcd upgrade --unit "" ./funcd-<new version>
+sudo mv <dataDir>/deadletter <dataDir>/eventstore    # and rename eventing.deadletter.dataDir if the config sets it
+sudo systemctl start funcd
+```
+
+A start without the move begins on an empty event store: its dead letters are gone, every blob EventSource fires again
+for each object under its prefixes, and the SQL change feed publishes again any group its engine resends.
+
 ## A full data disk
 
 funcd keeps `storage.minFreeSize` (2GiB by default) free on the filesystem of `storage.dataDir` (ADR-0296). Below it,

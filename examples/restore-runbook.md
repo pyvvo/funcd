@@ -14,7 +14,7 @@ operator reads the evidence and releases the hold.
    generations as a tree: each timeline under the generation its restore loaded, `abandoned` on a dead branch.
    `funcd restore inspect <point>` shows the manifest, the keys it needs, the version verdict, the counts per kind
    and the evidence; `--diff <other point>` lists what changed between two points.
-3. **Restore the platform.** With funcd stopped and the metastore, workflow and dead-letter directories empty:
+3. **Restore the platform.** With funcd stopped and the metastore, workflow and event store directories empty:
 
    ```sh
    funcd restore run latest --from <target> --credentials-file <restore credential> \
@@ -82,7 +82,7 @@ To bring back one object, `funcd restore inspect <point> --object Secret/<ns>/<n
 outside it: a release that migrates them says how it rolls back.
 
 1. `sudo systemctl stop funcd`.
-2. Move the metastore, workflow and dead-letter directories aside (`<dataDir>/store`, `workflow`, `deadletter`).
+2. Move the metastore, workflow and event store directories aside (`<dataDir>/store`, `workflow`, `eventstore`).
 3. Restore with the old binary, which reads what it wrote (a newer minor's generation it refuses, ADR-0206):
 
    ```sh

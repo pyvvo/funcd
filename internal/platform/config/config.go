@@ -361,9 +361,9 @@ type Config struct {
 	} `json:"workflow,omitempty"`
 
 	// Eventing tunes the Sensor action-delivery reliability path (ADR-0118, F85). DeliveryAttempts is the
-	// bounded-retry cap before a failed workflow:/function: delivery is dead-lettered. The event store (ADR-0201),
-	// one Badger instance holding the dead letters and the blob seen lists, is at Deadletter.DataDir (default
-	// <Storage.DataDir>/deadletter; in-memory when Storage.Mode is memory); Deadletter.Retention (TTL) and
+	// bounded-retry cap before a failed workflow:/function: delivery is dead-lettered. The event store (ADR-0201,
+	// ADR-0300), one Badger instance holding the dead letters, the blob seen lists and the change feed's watermarks, is
+	// at EventStore.DataDir (default <Storage.DataDir>/eventstore; in-memory when Storage.Mode is memory); Deadletter.Retention (TTL) and
 	// Deadletter.MaxEntries (per-namespace count cap) drive the periodic retention sweep of dead letters only. MaxDeliveriesInFlight (the delivery
 	// workers), MaxInFlightPerTarget and MaxQueuedPerSensor size the Sensor delivery queue (ADR-0156); each is
 	// at least 1 and the per-target cap at most the workers. MaxDeliveriesInFlight is declared before
@@ -376,10 +376,12 @@ type Config struct {
 		Deadletter            struct {
 			Retention  string `json:"retention,omitempty" env:"FUNCD_EVENTING_DEADLETTER_RETENTION"`
 			MaxEntries int    `json:"maxEntries,omitempty" env:"FUNCD_EVENTING_DEADLETTER_MAX_ENTRIES" validate:"min=0"`
-			// DataDir is the event store's Badger directory. Empty ⇒ derived as <Storage.DataDir>/deadletter in
-			// Load(); ignored (in-memory) when Storage.Mode is memory. An explicit value overrides it.
-			DataDir string `json:"dataDir,omitempty" env:"FUNCD_EVENTING_DEADLETTER_DATA_DIR"`
 		} `json:"deadletter,omitempty"`
+		EventStore struct {
+			// DataDir is the event store's Badger directory (ADR-0300). Empty ⇒ derived as <Storage.DataDir>/eventstore
+			// in Load(); ignored (in-memory) when Storage.Mode is memory. An explicit value overrides it.
+			DataDir string `json:"dataDir,omitempty" env:"FUNCD_EVENTING_EVENTSTORE_DATA_DIR"`
+		} `json:"eventstore,omitempty"`
 		// BlobPollInterval is the cadence a `blob:` EventSource's prefixes are List-polled for new objects
 		// (ADR-0119, F83). A duration ("15s"); one cadence for all blob sources in V1.
 		BlobPollInterval string `json:"blobPollInterval,omitempty" env:"FUNCD_EVENTING_BLOB_POLL_INTERVAL"`
@@ -655,8 +657,8 @@ func Parse(name string, data []byte, flags Flags) (Config, error) {
 	if c.Workflow.DataDir == "" {
 		c.Workflow.DataDir = filepath.Join(c.Storage.DataDir, "workflow")
 	}
-	if c.Eventing.Deadletter.DataDir == "" {
-		c.Eventing.Deadletter.DataDir = filepath.Join(c.Storage.DataDir, "deadletter")
+	if c.Eventing.EventStore.DataDir == "" {
+		c.Eventing.EventStore.DataDir = filepath.Join(c.Storage.DataDir, "eventstore")
 	}
 	// The local blob store (ADR-0208): derived only where it serves, so a set blob.dir stays visible to CheckBlob.
 	switch {

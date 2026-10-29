@@ -395,7 +395,7 @@ func (s *snapshotRun) stores() []struct{ key, dir string } {
 	return []struct{ key, dir string }{
 		{"storage.metastoreDir", c.Storage.MetastoreDir},
 		{"workflow.dataDir", c.Workflow.DataDir},
-		{"eventing.deadletter.dataDir", c.Eventing.Deadletter.DataDir},
+		{"eventing.eventstore.dataDir", c.Eventing.EventStore.DataDir},
 	}
 }
 
@@ -439,7 +439,7 @@ func (s *snapshotRun) write(ctx context.Context) (m backup.Manifest, past []back
 		return m, nil, err
 	}
 	closers = append(closers, runs)
-	events, err := eventstore.Open(eventstore.Config{Dir: s.cfg.Eventing.Deadletter.DataDir})
+	events, err := eventstore.Open(eventstore.Config{Dir: s.cfg.Eventing.EventStore.DataDir})
 	if err != nil {
 		return m, nil, err
 	}

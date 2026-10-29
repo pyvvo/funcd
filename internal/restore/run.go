@@ -110,7 +110,7 @@ func Run(ctx context.Context, p Point, o Options) (_ Report, err error) {
 	dirs := []storeDir{
 		{key: "storage.metastoreDir", path: cfg.Storage.MetastoreDir},
 		{key: "workflow.dataDir", path: cfg.Workflow.DataDir},
-		{key: "eventing.deadletter.dataDir", path: cfg.Eventing.Deadletter.DataDir},
+		{key: "eventing.eventstore.dataDir", path: cfg.Eventing.EventStore.DataDir},
 	}
 	for i := range dirs {
 		if dirs[i].existed, err = emptyDir(op, dirs[i]); err != nil {
@@ -321,7 +321,7 @@ func (r *restoring) open() error {
 	if r.runs, err = runbadger.New(runbadger.Config{Dir: cfg.Workflow.DataDir}); err != nil {
 		return err
 	}
-	r.events, err = eventstore.Open(eventstore.Config{Dir: cfg.Eventing.Deadletter.DataDir})
+	r.events, err = eventstore.Open(eventstore.Config{Dir: cfg.Eventing.EventStore.DataDir})
 	return err
 }
 

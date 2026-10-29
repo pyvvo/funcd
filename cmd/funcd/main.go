@@ -552,14 +552,14 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 	opts = append(opts, funcd.WithSQLCallTimeout(sqlCallTimeout), funcd.WithSQLChangeFeedPort(cfg.SQL.ChangeFeedPort))
 
 	// Eventing DLQ + bounded action-delivery retry (ADR-0118, F85): its own dedicated Badger store at
-	// Eventing.Deadletter.DataDir (default <dataDir>/deadletter; in-memory when the substrate is memory).
+	// Eventing.EventStore.DataDir (default <dataDir>/eventstore; in-memory when the substrate is memory).
 	dlRetention, err := parseDuration("eventing.deadletter.retention", cfg.Eventing.Deadletter.Retention, 0, 0, v1.MaxDuration)
 	if err != nil {
 		return nil, noopClose, nil, "", err
 	}
 	deadletterDir := ""
 	if cfg.Storage.Mode != "memory" {
-		deadletterDir = cfg.Eventing.Deadletter.DataDir
+		deadletterDir = cfg.Eventing.EventStore.DataDir
 	}
 	opts = append(opts, funcd.WithDeadLetterQueue(deadletterDir, cfg.Eventing.DeliveryAttempts, dlRetention, cfg.Eventing.Deadletter.MaxEntries),
 		funcd.WithSensorDelivery(cfg.Eventing.MaxDeliveriesInFlight, cfg.Eventing.MaxInFlightPerTarget, cfg.Eventing.MaxQueuedPerSensor))

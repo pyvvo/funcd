@@ -73,7 +73,7 @@ func (e *StoppedError) Error() string {
 		fmt.Fprintf(&b, "; the last start failed with: %s", s.LastError)
 	}
 	self := self()
-	steps := "stop the unit; move the directories of storage.metastoreDir, workflow.dataDir and eventing.deadletter.dataDir aside; "
+	steps := "stop the unit; move the directories of storage.metastoreDir, workflow.dataDir and eventing.eventstore.dataDir aside; "
 	u := s.Upgrade
 	switch {
 	case u != nil && u.To == version.Version && u.Generation != nil:

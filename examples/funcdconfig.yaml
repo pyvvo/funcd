@@ -147,8 +147,9 @@ storage:
 #   bucketRecheckInterval: 15s    # re-check of every blob EventSource's Bucket (ADR-0163). default: 15s
 #   deliveryBackoffInitial: 100ms # first Sensor delivery retry wait, doubled. default: 100ms
 #   deliveryBackoffMax: 10s       # cap of that wait; at least the initial wait. default: 10s (or the initial wait when larger)
+#   eventstore:
+#     dataDir: ""                 # event store Badger dir: dead letters, blob seen lists, change feed watermarks (ADR-0201, ADR-0300). default: <dataDir>/eventstore
 #   deadletter:
-#     dataDir: ""                 # event store Badger dir: dead letters and blob seen lists (ADR-0201). default: <dataDir>/deadletter
 #     retention: 720h             # how long a parked entry is kept (dead letters only). default: 720h
 #     maxEntries: 1000            # parked entries per namespace (dead letters only). default: 1000
 

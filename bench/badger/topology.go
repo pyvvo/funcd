@@ -65,7 +65,7 @@ func openTopoDBs(shared bool, dir, profile string, valThresh int, sync bool) (*t
 		_ = m.Close()
 		return nil, err
 	}
-	d, err := open("deadletter")
+	d, err := open("eventstore")
 	if err != nil {
 		_ = m.Close()
 		_ = r.Close()

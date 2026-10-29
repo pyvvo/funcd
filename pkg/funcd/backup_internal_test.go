@@ -43,7 +43,7 @@ func TestPlatformBackupWired(t *testing.T) {
 	require.NoError(t, err)
 	p, err := New(InMemory(), WithLogger(quiet), WithoutLogCompaction(), WithStore(store.New(eng)),
 		WithRuntime(&recordingRuntime{insts: map[runtime.InstanceID]runtime.Instance{}}),
-		WithDeadLetterQueue(filepath.Join(dir, "deadletter"), 3, 0, 0), WithPlatformBackup(r), WithBackupParent(parent))
+		WithDeadLetterQueue(filepath.Join(dir, "eventstore"), 3, 0, 0), WithPlatformBackup(r), WithBackupParent(parent))
 	require.NoError(t, err)
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)

@@ -62,7 +62,7 @@ func fileStart(t *testing.T, dir string) *Platform {
 	require.NoError(t, os.MkdirAll(blobDir, 0o700))
 	bucket, err := gocloud.Open(context.Background(), gocloud.FileURL(blobDir))
 	require.NoError(t, err)
-	return eventingPlatform(t, WithStore(store.New(eng)), WithBlob(bucket), WithDeadLetterQueue(filepath.Join(dir, "deadletter"), 3, 0, 0))
+	return eventingPlatform(t, WithStore(store.New(eng)), WithBlob(bucket), WithDeadLetterQueue(filepath.Join(dir, "eventstore"), 3, 0, 0))
 }
 
 // watchDrops reconciles the blob EventSource default/drops, then runs the BlobWatcher until fired holds want and
@@ -172,7 +172,7 @@ func TestNewRunsTheSeenListMove(t *testing.T) {
 	ctx := context.Background()
 	t.Run("moved", func(t *testing.T) {
 		kv := legacyKV(t)
-		p := eventingPlatform(t, WithKVStore(kv), WithDeadLetterQueue(filepath.Join(eventingDir(t), "deadletter"), 3, 0, 0))
+		p := eventingPlatform(t, WithKVStore(kv), WithDeadLetterQueue(filepath.Join(eventingDir(t), "eventstore"), 3, 0, 0))
 		t.Cleanup(func() { _ = p.Shutdown(ctx) })
 		rec, err := p.eventStore.SeenLists().Load(ctx, "default", "drops", "arrived")
 		require.NoError(t, err)
@@ -184,7 +184,7 @@ func TestNewRunsTheSeenListMove(t *testing.T) {
 	t.Run("failed", func(t *testing.T) {
 		kv := legacyKV(t)
 		_, err := New(InMemory(), WithLogger(slog.New(slog.DiscardHandler)), WithKVStore(failingList{kv}),
-			WithDeadLetterQueue(filepath.Join(eventingDir(t), "deadletter"), 3, 0, 0))
+			WithDeadLetterQueue(filepath.Join(eventingDir(t), "eventstore"), 3, 0, 0))
 		require.ErrorContains(t, err, "seen-list move")
 		_, found, err := kv.Get(ctx, legacySeenKey)
 		require.NoError(t, err)

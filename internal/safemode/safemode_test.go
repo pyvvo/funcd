@@ -132,6 +132,14 @@ func TestStartCleanFailedRace(t *testing.T) {
 	require.Equal(t, "run: boom", got.LastError)
 }
 
+// scenario: messages-name-eventstore (ADR-0300) — the safe-mode stop names the event store's key.
+func TestScenarioSafeModeNamesEventStoreKey(t *testing.T) {
+	t.Parallel()
+	err := &safemode.StoppedError{State: safemode.State{Unclean: 6}}
+	require.Contains(t, err.Error(), "eventing.eventstore.dataDir")
+	require.NotContains(t, err.Error(), "deadletter")
+}
+
 // The stopped error names the count, the last error and the next command: the rollback to the upgrade's
 // generation when its to is this version, else the newest verified generation, "no way back" after --no-snapshot.
 func TestStoppedErrorNamesNextCommand(t *testing.T) {
