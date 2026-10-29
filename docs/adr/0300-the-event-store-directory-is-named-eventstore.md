@@ -1,6 +1,6 @@
 # ADR-0300: The event store's directory and config key are named `eventstore`
 
-- **Status**: Reviewing (2026-10-29); Accepted (2026-10-29; adr-judge round 1 folded in and a last look passed; accepted under the decider's
+- **Status**: Implemented (2026-10-29), review passed ([report](../reviews/adr-0300-implementation-claude-opus-5-5.md)); Reviewing (2026-10-29); Accepted (2026-10-29; adr-judge round 1 folded in and a last look passed; accepted under the decider's
   delegation of 2026-10-29, "batch them", after they chose the names and confirmed that no workload runs anywhere)
 - **Date**: 2026-10-29
 - **Deciders**: green-0-rabbit

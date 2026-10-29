@@ -13093,5 +13093,20 @@
     "dod_total": 8,
     "report": "docs/reviews/adr-0293-implementation-claude-opus-5-5.md",
     "notes": "Minor (model): Decision 5's not-empty rule for a catalog-only target was untested (mutant survived); folded in cdcba094 with a NotEmpty restore case"
+  },
+  {
+    "date": "2026-10-29",
+    "adr": "0300",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 8,
+    "dod_total": 8,
+    "report": "docs/reviews/adr-0300-implementation-claude-opus-5-5.md",
+    "notes": "eventstore rename complete; minor (model): the default-dir scenario test proves the derived path, not a start"
   }
 ]
