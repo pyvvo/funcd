@@ -1,6 +1,9 @@
 # ADR-0299: `funcdctl scan` matches what runs against its SBOMs, in an extension built on Grype
 
-- **Status**: Proposed (2026-10-29; judged twice by the author under the adr-judge skill: no Blocker, the Majors folded)
+- **Status**: Accepted (2026-10-29; judged twice by the author under the adr-judge skill, no Blocker; the decider
+  confirmed the seven choices the draft made: exit 2 for anything not scanned, any finding failing without
+  `--fail-on`, serving and draining Revisions as what runs, the ref mode, the `funcdctl-scan/` module, the database
+  updated unless `--no-update`, and several SBOMs read as their union)
 - **Date**: 2026-10-29
 - **Deciders**: green-0-rabbit
 - **Tags**: supply-chain, sbom, scanning, funcdctl, extension
