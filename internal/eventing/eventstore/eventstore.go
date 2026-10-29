@@ -375,7 +375,7 @@ func (l *seenLists) Save(_ context.Context, ns v1.NamespaceName, source, event v
 		pk := partKey(key, gen, i)
 		wrote[string(pk)] = true
 		if err := wb.Set(pk, c); err != nil {
-			return fault.Internalf(op, "write part %d of %s: %v", i, key, err)
+			return diskfull.Wrapf(err, op, "write part %d of %s", i, key)
 		}
 	}
 	if err := wb.Flush(); err != nil {
