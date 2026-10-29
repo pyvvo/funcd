@@ -30,7 +30,7 @@ the first ADR was drafted, on the evidence of experiment 0015.
 
 | # | Feature | Builds on | ADR(s) | Status |
 |---|---|---|---|---|
-| F214 | **An SBOM for every function artifact**: a function built with funcd's bundlers and pushed with funcdctl carries, for each platform, an SBOM of exactly the packages its bundle ships, which a scanner reads without the bundle; a CI may sign the same SBOM | — | [ADR-0298](../adr/0298-a-function-artifact-carries-an-sbom.md) | adr |
+| F214 | **An SBOM for every function artifact**: a function built with funcd's bundlers and pushed with funcdctl carries, for each platform, an SBOM of exactly the packages its bundle ships, which a scanner reads without the bundle; a CI may sign the same SBOM | — | [ADR-0298](../adr/0298-a-function-artifact-carries-an-sbom.md) | accepted |
 | F215 | **A vulnerability scan of what runs**: funcdctl lists the known vulnerabilities of the revisions that run, or of a pushed artifact, from their SBOMs, and names each one it could not scan instead of passing it | F214 | [ADR-0299](../adr/0299-funcdctl-scan-matches-sboms-in-an-extension.md) | adr |
 | F216 | **Trusted artifacts**: a node checks an artifact's signed provenance against its namespace's policy before it starts a worker, and a funcd registry could take only signed artifacts | F214 | — | idea |
 

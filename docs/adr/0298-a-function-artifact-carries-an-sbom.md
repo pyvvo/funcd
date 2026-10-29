@@ -1,6 +1,8 @@
 # ADR-0298: A function artifact carries an SBOM, one per platform manifest
 
-- **Status**: Proposed (2026-10-29; judged twice by the author under the adr-judge skill: no Blocker, the Majors folded)
+- **Status**: Accepted (2026-10-29; judged twice by the author under the adr-judge skill, no Blocker; the decider
+  confirmed the five choices the draft made: the file beside the build, a warning when there is none, a refused push
+  for a broken one, always written, and Python's from the vendored `*.dist-info`)
 - **Date**: 2026-10-29
 - **Deciders**: green-0-rabbit
 - **Tags**: artifact, sbom, supply-chain, funcdctl, bundling
