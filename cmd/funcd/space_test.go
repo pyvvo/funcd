@@ -110,7 +110,6 @@ func TestScenarioStartFreesLeftoverScratch(t *testing.T) {
 // storesOpenBytes is what the four stores' newest files take once they are open: a store whose memtable or value-log
 // size changes must change it.
 func TestStoresOpenBytes(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	meta, err := badgerstore.Open(filepath.Join(dir, "store"))
 	require.NoError(t, err)
