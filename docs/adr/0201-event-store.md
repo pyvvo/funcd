@@ -1,6 +1,7 @@
 # ADR-0201: Event store — the one durable home of eventing state (dead letters and blob seen lists)
 
 - **Status**: Implemented (2026-10-10; accepted 2026-10-10 by an `adr-batch` run after a clean `adr-judge` gate; the defaults below were not confirmed one by one)
+- **Superseded in part by**: [ADR-0300](0300-the-event-store-directory-is-named-eventstore.md) (2026-10-29) — Decision 1's last sentence (the directory, now `<dataDir>/eventstore`) and Decision 7's `eventing.deadletter.dataDir` (now `eventing.eventstore.dataDir`)
 - **Date**: 2026-10-08
 - **Deciders**: green-0-rabbit
 - **Tags**: eventing, dead-letter, eventsource, blob, badger, disaster-recovery

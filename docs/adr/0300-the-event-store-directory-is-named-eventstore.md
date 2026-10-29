@@ -1,6 +1,7 @@
 # ADR-0300: The event store's directory and config key are named `eventstore`
 
-- **Status**: Proposed (2026-10-29; adr-judge round 1 folded in)
+- **Status**: Accepted (2026-10-29; adr-judge round 1 folded in and a last look passed; accepted under the decider's
+  delegation of 2026-10-29, "batch them", after they chose the names and confirmed that no workload runs anywhere)
 - **Date**: 2026-10-29
 - **Deciders**: green-0-rabbit
 - **Tags**: eventing, config, rename, disaster-recovery, breaking-change
