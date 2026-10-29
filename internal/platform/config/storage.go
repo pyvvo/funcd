@@ -22,3 +22,13 @@ func (c Config) StorageMinFreeBytes() (int64, error) {
 	}
 	return n, nil
 }
+
+// CheckStorage refuses a storage.minFreeSize that StorageMinFreeBytes refuses, so a bad value fails the config's load
+// instead of a start that safe mode counts.
+func (c Config) CheckStorage() []Finding {
+	var f findings
+	if _, err := c.StorageMinFreeBytes(); err != nil {
+		f.refuse("storage.minFreeSize", "%v", err)
+	}
+	return f.errs
+}
