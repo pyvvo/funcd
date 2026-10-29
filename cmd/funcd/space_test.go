@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -15,7 +17,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/eventing/eventstore"
+	kvbadger "github.com/pyvvo/funcd/internal/kvstore/badger"
 	"github.com/pyvvo/funcd/internal/platform/config"
+	badgerstore "github.com/pyvvo/funcd/internal/store/badger"
+	runbadger "github.com/pyvvo/funcd/internal/workflow/runstate/badger"
 )
 
 // scenario: start-waits-for-space — the start waits, logging the free space, until the stores' newest files fit, and
@@ -99,4 +105,36 @@ func TestScenarioStartFreesLeftoverScratch(t *testing.T) {
 		return nil
 	}
 	require.NoError(t, w.run(context.Background(), func() error { return nil }))
+}
+
+// storesOpenBytes is what the four stores' newest files take once they are open: a store whose memtable or value-log
+// size changes must change it.
+func TestStoresOpenBytes(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	meta, err := badgerstore.Open(filepath.Join(dir, "store"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = meta.Close() })
+	kv, err := kvbadger.Open(filepath.Join(dir, "kv"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = kv.(io.Closer).Close() })
+	runs, err := runbadger.New(runbadger.Config{Dir: filepath.Join(dir, "workflow")})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = runs.Close() })
+	events, err := eventstore.Open(eventstore.Config{Dir: filepath.Join(dir, "deadletter")})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = events.Close() })
+
+	var sum int64
+	require.NoError(t, filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || (filepath.Ext(path) != ".mem" && filepath.Ext(path) != ".vlog") {
+			return err
+		}
+		info, err := d.Info()
+		if err == nil {
+			sum += info.Size()
+		}
+		return err
+	}))
+	require.Equal(t, int64(storesOpenBytes), sum)
 }
