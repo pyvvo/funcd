@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.35.0](https://github.com/pyvvo/funcd/compare/v0.34.0...v0.35.0) (2026-10-29)
+
+
+### ⚠ BREAKING CHANGES
+
+* **eventing:** the event store's directory and config key are named eventstore (ADR-0300)
+
+### Features
+
+* **eventing:** the event store's directory and config key are named eventstore (ADR-0300) ([fef70f2](https://github.com/pyvvo/funcd/commit/fef70f24af9635b8d0650ce25714072a87c755d3))
+
 ## [0.34.0](https://github.com/pyvvo/funcd/compare/v0.33.0...v0.34.0) (2026-10-29)
 
 
