@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.34.0](https://github.com/pyvvo/funcd/compare/v0.33.0...v0.34.0) (2026-10-29)
+
+
+### ⚠ BREAKING CHANGES
+
+* **runtime:** a worker's root filesystem is read-only, its /tmp counts in its memory, and a Lake engine writes into a scratch of fixed size; lake.catalogMaxSize defaults to 256MiB (ADR-0294)
+
+### Features
+
+* **platform:** a start on a full data filesystem waits for space instead of exiting (ADR-0297) ([7b45172](https://github.com/pyvvo/funcd/commit/7b45172800affd0473df5d4eedd379815104b955))
+* **runtime:** a worker's root filesystem is read-only, its /tmp counts in its memory, and a Lake engine writes into a scratch of fixed size; lake.catalogMaxSize defaults to 256MiB (ADR-0294) ([7b45172](https://github.com/pyvvo/funcd/commit/7b45172800affd0473df5d4eedd379815104b955))
+* **storage:** workload writes stop at a free-space floor of the data filesystem, storage.minFreeSize (ADR-0296) ([7b45172](https://github.com/pyvvo/funcd/commit/7b45172800affd0473df5d4eedd379815104b955))
+* **volume:** a volume's quota limits its inodes in proportion to its size (ADR-0295) ([7b45172](https://github.com/pyvvo/funcd/commit/7b45172800affd0473df5d4eedd379815104b955))
+
+
+### Bug Fixes
+
+* **iam:** a writer role writes only the data kinds its actions name ([7b45172](https://github.com/pyvvo/funcd/commit/7b45172800affd0473df5d4eedd379815104b955))
+* **volumes:** loop devices read and write their image with direct I/O ([7b45172](https://github.com/pyvvo/funcd/commit/7b45172800affd0473df5d4eedd379815104b955))
+* **volumes:** the volume image keeps the blocks preallocated for it ([7b45172](https://github.com/pyvvo/funcd/commit/7b45172800affd0473df5d4eedd379815104b955))
+
 ## [0.33.0](https://github.com/pyvvo/funcd/compare/v0.32.0...v0.33.0) (2026-10-28)
 
 
