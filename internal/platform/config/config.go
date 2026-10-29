@@ -703,7 +703,7 @@ func (c Config) Validate() error {
 		if err := c.validateCredentials(op); err != nil {
 			return err
 		}
-		for _, fs := range [][]Finding{c.CheckBackup(), c.CheckBlob(), c.CheckBridge(), c.CheckLake(), c.CheckQuarantine(), c.CheckFunctions()} {
+		for _, fs := range [][]Finding{c.CheckBackup(), c.CheckBlob(), c.CheckBridge(), c.CheckLake(), c.CheckQuarantine(), c.CheckFunctions(), c.CheckStorage()} {
 			if len(fs) > 0 && fs[0].Error {
 				return fault.Invalidf(op, "%s", fs[0].Message)
 			}

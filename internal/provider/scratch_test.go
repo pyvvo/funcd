@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -82,8 +83,48 @@ func TestScenarioLakeScratchRecreated(t *testing.T) {
 	require.Len(t, rt.created, 2, "the dead engine is recreated")
 	require.Equal(t, []string{image, image}, calls.Made, "with a new scratch")
 
+	require.True(t, calls.Holds(image))
 	require.NoError(t, pr.Teardown(ctx, provider.ProviderRef{Namespace: "default", Name: "lake"}))
-	require.Equal(t, []string{image}, calls.Removed)
+	require.False(t, calls.Holds(image), "a teardown removes the scratch")
+}
+
+// scenario: lake-scratch-freed-on-restart — a restart that the floor refuses still removes the scratch of the engine
+// it replaces, and the next pass makes a new one once the floor admits it.
+func TestScenarioRefusedRestartFreesScratch(t *testing.T) {
+	t.Parallel()
+	host, port, closeFn := engineServer(t, 200)
+	defer closeFn()
+	rt := newFakeRuntime(host, port)
+	var refusing atomic.Bool
+	pr, calls, root, _ := newScratchRuntime(t, rt, floorFunc(func(int64) error {
+		if refusing.Load() {
+			return fault.InsufficientStoragef("quota.Floor", "the data filesystem is below storage.minFreeSize")
+		}
+		return nil
+	}))
+	ctx := context.Background()
+	_, err := pr.Converge(ctx, scratchSpec(host, port))
+	require.NoError(t, err)
+	image := filepath.Join(root, "default", "lake.img")
+	require.True(t, calls.Holds(image))
+
+	rt.mu.Lock()
+	for id, in := range rt.instances {
+		in.State = containerrt.StateFailed
+		rt.instances[id] = in
+	}
+	rt.mu.Unlock()
+	refusing.Store(true)
+	_, err = pr.Converge(ctx, scratchSpec(host, port))
+	require.Equal(t, fault.InsufficientStorage, fault.KindOf(err), "%v", err)
+	require.False(t, calls.Holds(image), "the ended engine's scratch is removed though the floor refuses a new one")
+	require.Len(t, rt.created, 1, "no engine is created")
+
+	refusing.Store(false)
+	_, err = pr.Converge(ctx, scratchSpec(host, port))
+	require.NoError(t, err)
+	require.True(t, calls.Holds(image), "the next pass makes a new scratch")
+	require.Len(t, rt.created, 2)
 }
 
 func TestScratchNeedsOneReplica(t *testing.T) {

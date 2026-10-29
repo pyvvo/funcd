@@ -240,11 +240,11 @@ func (s *store) SweepExpired(_ context.Context, retention time.Duration, maxPerN
 	defer wb.Cancel()
 	for _, k := range toDelete {
 		if derr := wb.Delete(k); derr != nil {
-			return 0, fault.Wrapf(derr, fault.Internal, op, "evicting swept dead letters")
+			return 0, diskfull.Wrapf(derr, op, "evicting swept dead letters")
 		}
 	}
 	if derr := wb.Flush(); derr != nil {
-		return 0, fault.Wrapf(derr, fault.Internal, op, "evicting swept dead letters")
+		return 0, diskfull.Wrapf(derr, op, "evicting swept dead letters")
 	}
 	return len(toDelete), nil
 }

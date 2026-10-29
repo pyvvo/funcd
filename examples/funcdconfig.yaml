@@ -259,6 +259,7 @@ log:
 # volumes:
 #   capacity: 10Gi                # the one volume image on containerd, preallocated at <dataDir>/volumes.img; Ki/Mi/Gi/Ti (ADR-0266). default: 0, volumes off
 #                                 # volumes book its filesystem's free space, a few percent less: ext4 keeps the rest for its metadata
+#                                 # a volume holds at most its share of the image's files, in proportion to its size (ADR-0295): 4,203 for 64Mi of a 10Gi image
 #   capacityBytes: 10737418240    # the same size in bytes; set at most one of capacity and capacityBytes. default: 0
 
 # --- functions: the workers' CPU and memory (ADR-0291) ------------------------------------------

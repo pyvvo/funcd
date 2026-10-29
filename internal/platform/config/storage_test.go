@@ -32,3 +32,9 @@ func TestStorageMinFreeBytes(t *testing.T) {
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
 	require.ErrorContains(t, err, "storage.minFreeSize")
 }
+
+// A storage.minFreeSize that does not parse fails the config's load (ADR-0296), not the start after it.
+func TestCheckStorageRefusesABadFloor(t *testing.T) {
+	_, err := config.Load(writeCfg(t, "storage:\n  minFreeSize: lots\n"), config.Flags{})
+	require.ErrorContains(t, err, "storage.minFreeSize")
+}

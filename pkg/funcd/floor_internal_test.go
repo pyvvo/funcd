@@ -14,6 +14,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/blob"
+	"github.com/pyvvo/funcd/internal/workflow/runstate"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
@@ -63,9 +64,10 @@ func TestScenarioFloorRefusesWorkloadWrites(t *testing.T) {
 		"above the floor again, an upload lands with no restart")
 }
 
-// scenario: platform-writes-continue — below the floor an operator's apply still succeeds: the control plane writes
-// into the margin (ADR-0296 Decision 6).
-func TestScenarioPlatformWritesContinue(t *testing.T) {
+// belowFloor runs a platform whose data filesystem has 1 GiB free, below its 2 GiB floor, and applies Bucket media,
+// which an apply below the floor may do (ADR-0296 Decision 6).
+func belowFloor(t *testing.T) (*Platform, *sdk.Client) {
+	t.Helper()
 	var free atomic.Int64
 	free.Store(1 << 30)
 	p, err := New(InMemory(), floorOf(&free))
@@ -76,14 +78,36 @@ func TestScenarioPlatformWritesContinue(t *testing.T) {
 	t.Cleanup(func() { cancel(); <-done })
 	c, err := sdk.New("http://"+p.Addr(), sdk.WithToken(DevToken))
 	require.NoError(t, err)
-	ctx := context.Background()
-
-	_, err = c.Apply(ctx, floorBucket())
+	_, err = c.Apply(context.Background(), floorBucket())
 	require.NoError(t, err, "an apply below the floor")
+	return p, c
+}
+
+func requireWorkloadWriteRefused(t *testing.T, p *Platform) {
+	t.Helper()
 	view, ok := s3BucketFor(p.cfg.blob, p.cfg.store, p.checker)("default", "media")
 	require.True(t, ok)
-	require.Equal(t, fault.InsufficientStorage, fault.KindOf(view.Put(ctx, "raw/a", []byte("x"), blob.PutOptions{})),
-		"while a workload write is refused")
+	require.Equal(t, fault.InsufficientStorage, fault.KindOf(view.Put(context.Background(), "raw/a", []byte("x"), blob.PutOptions{})),
+		"a workload write is refused")
+}
+
+// scenario: platform-writes-continue — below the floor an operator's apply and a workflow run's state still write: the
+// control plane writes into the margin (ADR-0296 Decision 6).
+func TestScenarioPlatformWritesContinue(t *testing.T) {
+	p, _ := belowFloor(t)
+	require.NoError(t, p.workflowRuns.Put(context.Background(), &runstate.Record{Namespace: "default", Name: "below-floor",
+		Workflow: "wf", Phase: v1.RunRunning}), "a workflow run records its state below the floor")
+	requireWorkloadWriteRefused(t, p)
+}
+
+// scenario: start-below-floor — a platform started below the floor serves reads and the control plane, and refuses
+// workload writes (ADR-0297).
+func TestScenarioStartBelowFloor(t *testing.T) {
+	p, c := belowFloor(t)
+	got, err := c.Get(context.Background(), v1.KindBucket, "default", "media")
+	require.NoError(t, err, "a read below the floor")
+	require.Equal(t, v1.ObjectName("media"), got.GetObjectMeta().Name)
+	requireWorkloadWriteRefused(t, p)
 }
 
 // scenario: floor-off — with storage.minFreeSize "0" no write is refused for the filesystem's free space.

@@ -1,6 +1,6 @@
 # ADR-0296: The data filesystem keeps a free-space floor that workload writes cannot pass
 
-- **Status**: Reviewing (2026-10-29); Accepted (2026-10-28; adr-judge rounds 1, 4 and 5; the decider confirmed the agent's choices: the bytes
+- **Status**: Implemented (2026-10-29); Reviewing (2026-10-29); Accepted (2026-10-28; adr-judge rounds 1, 4 and 5; the decider confirmed the agent's choices: the bytes
   admitted since a reading count, a 507 that names no number, one reading a second, funclog's dropped records counted)
 - **Date**: 2026-10-28
 - **Deciders**: green-0-rabbit
