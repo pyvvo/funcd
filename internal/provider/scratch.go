@@ -47,11 +47,8 @@ func (s scratchFiles) mounts(spec ProviderSpec) []containerrt.Mount {
 // loopScratch is a preallocated ext4 image, loop-mounted (internal/platform/loopfs).
 type loopScratch struct{}
 
-// Make removes an earlier image first, so each engine start gets a new, empty filesystem.
+// Make creates and mounts a new image; makeScratch removes an earlier one first.
 func (loopScratch) Make(ctx context.Context, image, dir string, sizeBytes int64) error {
-	if err := loopfs.Remove(image, dir); err != nil {
-		return err
-	}
 	if err := loopfs.Create(ctx, image, sizeBytes, ""); err != nil {
 		return err
 	}
@@ -63,8 +60,9 @@ func (loopScratch) Make(ctx context.Context, image, dir string, sizeBytes int64)
 
 func (loopScratch) Remove(image, dir string) error { return loopfs.Remove(image, dir) }
 
-// makeScratch asks the floor for spec's scratch and makes it before the engine is created. The floor's refusal is
-// fault.InsufficientStorage.
+// makeScratch removes the scratch of the engine it replaces, asks the floor for a new one and makes it before the
+// engine is created, so each engine start gets an empty filesystem. Removing first lets a restart reuse the space it
+// frees: the floor's refusal, fault.InsufficientStorage, leaves no image behind.
 func (r *engineRuntime) makeScratch(ctx context.Context, spec ProviderSpec) error {
 	const op = "provider.Converge"
 	if spec.Scratch == nil || !r.scratch.enabled() {
@@ -75,6 +73,9 @@ func (r *engineRuntime) makeScratch(ctx context.Context, spec ProviderSpec) erro
 	}
 	if err := spec.Ref.Name.Validate(); err != nil {
 		return fault.Wrapf(err, fault.Invalid, op, "scratch name")
+	}
+	if err := r.removeScratch(spec.Ref); err != nil {
+		return err
 	}
 	if r.floor != nil {
 		if err := r.floor.Check(ctx, spec.Scratch.SizeBytes); err != nil {
