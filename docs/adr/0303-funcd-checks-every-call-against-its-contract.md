@@ -11,8 +11,9 @@
 - **Relates to**: [ADR-0301](0301-funcd-defines-each-contract-rule-once.md) (the rules) ·
   [ADR-0302](0302-every-call-to-a-worker-runs-one-chain-of-invoke-plugins.md) (the chain) ·
   [ADR-0058](0058-contract-codegen-from-code-types.md) (the answers) · [ADR-0143](0143-redeploy-by-revision-switch.md)
-  and [ADR-0190](0190-run-bound-to-its-revision.md) (which revision serves) · issue
-  [#1339](https://github.com/pyvvo/funcd/issues/1339), which this ADR's implementation closes
+  and [ADR-0190](0190-run-bound-to-its-revision.md) (which revision serves) · [ADR-0214](0214-app-hooks.md) Decision 5
+  (a hook's input is checked) · issue [#1339](https://github.com/pyvvo/funcd/issues/1339), which this ADR's
+  implementation closes
 
 ## Context & Need
 
@@ -25,9 +26,9 @@ The purpose: a contract means the same on every runtime and every path, because 
 before the worker and the result after it, for every caller of a cloudevent Function.
 
 The check brings two costs into funcd's shared process, and the Decision bounds both. funcd holds a body in memory to
-check it. And a check can be made slow: ADR-0301 bounds one pattern match, not a document, and Go's `big.Rat` parses a
-number with an exponent near 10^6 in about 21 ms (measured on the dev host, 2026-10-30), as the engine does for every
-integer and every bound.
+check it. And a check can be made slow: ADR-0301 bounds one pattern match, not a document, and Go's `big.Rat`, which
+the engine runs on every number it compares, takes about 21 ms on an exponent near 10^6 and 480 ms on a number of
+10^6 digits (measured on the dev host, 2026-10-30).
 
 ## Scenarios
 
@@ -43,17 +44,18 @@ integer and every bound.
   "details": [{"path": "/message", …}]}`.
 - `scenario: a-void-result-is-checked` — Given the output contract `{"type": "null"}`, When the worker answers 204,
   Then the caller gets 204; When it answers 200 with `{"x": 1}`, Then the caller gets 500.
-- `scenario: the-shim-gets-an-open-contract` — Given a nodejs22 and a python314 Function with the same contract, When
-  each worker starts, Then its `FUNCD_CONTRACT_PATH` names a contract whose sides are both `{}`, and a call the
-  contract refuses gets the same 422 from funcd on both.
-- `scenario: a-contract-that-cannot-compile-stops-the-revision` — Given an artifact whose contract has the pattern
-  `[z-a]`, When its revision deploys, Then the Function is Failed with reason `ContractInvalid` and no worker of that
-  revision starts.
+- `scenario: the-shims-stop-checking` — Given an input contract with `format: email` on the Node shim and the Python
+  shim funcd pins, solo and pooled, When `{"email": "ops@localhost"}` arrives, which funcd accepts, Then each shim
+  answers 422 with the delivered contract and runs the handler with the open contract.
+- `scenario: a-contract-that-cannot-compile-stops-the-revision` — Given a fixture artifact whose contract has the
+  pattern `[z-a]` (push refuses it since ADR-0301), When its revision deploys, Then the Function is Failed with reason
+  `ContractInvalid` and no worker of that revision starts.
 - `scenario: a-slow-check-is-cut` — Given an input contract whose pattern `^(a+)+$` applies to each of 1 000 strings
-  of 40 `a` and a `!`, When the call arrives, Then the caller gets 422 within 3 s and the worker never runs.
-- `scenario: a-body-over-the-limit-is-refused` — Given a contracted Function, When a call sends 2 MiB of input, Then it
-  gets 413; When the worker answers 2 MiB, Then the caller gets 500; When a number in the input has the exponent
-  `1e999999`, Then the caller gets 422 at that number's path.
+  of 40 `a` and a `!`, When the call arrives, Then the caller gets 422 within 3 s, with a detail that names the
+  budget, and the worker never runs.
+- `scenario: a-body-over-the-limit-is-refused` — Given a contracted Function, When the input plugin gets 2 MiB, Then
+  it answers 413; When the worker answers 2 MiB, Then the caller gets 500; When a number has the exponent `1e1001` or
+  1 001 digits, Then the caller gets 422 at that number's path.
 
 ## Scope
 
@@ -85,19 +87,22 @@ Out:
 |---|---|---|---|
 | **Two plugins; the shim gets an open contract** | One check on every path, with the shims pinned today | The shims compile an empty schema they never need | **chosen** |
 | A new env var that a shim release honors, to skip its check | No idle validator | The shims keep disagreeing until two releases and a pin | rejected |
-| Stop setting `FUNCD_CONTRACT_PATH` | No new file | A shim then falls back to module-baked validators (Node `shim.ts:248`, Python `shim.py:365`), and funcd-python's `build.py:77-82` bakes them | rejected |
+| Stop setting `FUNCD_CONTRACT_PATH` | No new file | A shim then falls back to module-baked validators (Node `shim.ts:248` and `pool.ts:154`, Python `shim.py:365`), and funcd-python's `build.py:77-82` bakes them | rejected |
 | Read each revision's contract from the registry (`artifact.InspectContract`) | No bundle read | `funcdctl dev`'s file artifacts have no registry; a second source beside the bundle's blob | rejected |
+| A budget cut answers 503 with Retry-After | Honest about load | A pathological input is retried and cut again; the cut is the input's cost | rejected |
 | No bounds beyond ADR-0301's match timeout | Simpler | A 1 MiB call can spend minutes of funcd's CPU | rejected |
 
 ## Decision
 
 1. **Two invokePlugins**, appended to ADR-0302's chain after `deadline`: `contract-input` at Before and
    `contract-output` at After. They apply to every caller of a cloudevent Function, never to an http one.
-2. **The contract is the one of the revision that serves the call**: a pinned step's revision (ADR-0190), else the
-   Function's `status.servingRevision` (ADR-0143), else its `status.currentRevision`. The function reconciler serves
-   it: it materializes that revision's artifact with its pinned digest (the bundle its worker gets, from the
-   materializer's cache), reads the delivered blob (ADR-0123 Decision 4), and compiles both sides with
-   `contract.Compile`, once per artifact digest.
+2. **The contract is the one of the revision that serves the call**: a pinned step's revision (ADR-0190); else, for a
+   pooled Function, its `status.currentRevision`, the one its pool runs; else its `status.servingRevision`
+   (ADR-0143), then `status.currentRevision`. The function reconciler serves it: it materializes that revision's
+   artifact with its pinned digest (the bundle its worker gets), reads the delivered blob (ADR-0123 Decision 4), and
+   compiles both sides with `contract.Compile`, cached per artifact digest (for a file artifact, per blob). The input
+   plugin resolves it once per call and hands it to the output plugin on the request's context. A failure to resolve
+   it refuses the call with 503; no contract means only that the revision delivers no blob.
 3. **A contract that does not compile fails the revision**: the reconciler compiles it when it materializes the
    artifact, and a failure fails the generation with reason `ContractInvalid` (new), as a missing contract does with
    `ContractMissing` (issue #1084).
@@ -107,16 +112,18 @@ Out:
 5. **The output check** checks a 200 answer's body, and `null` for a 204; any other status passes unchanged. A
    failure answers 500 `{"error": "handler result does not match the output contract", "details": […]}`.
 6. **The bounds of one check:**
-   - a body over 1 MiB, the limit external bodies and fn-to-fn calls already have, is not checked: an input gets 413
-     and a result 500, both RFC 9457 problems;
-   - a number whose decimal exponent exceeds 1 000 in magnitude fails at its path, before the engine reads any number;
-   - pattern matching stops after 1 s per check: each pattern asked after that fails its value, so the check still
-     answers with details.
-7. **The shims get an open contract.** For a contracted worker, solo or pooled, the reconciler writes
-   `.funcd-contract-open.json`, the blob with both sides `{}` (ADR-0058's Json form), beside the delivered blob in the
-   bundle root, and points `FUNCD_CONTRACT_PATH` at it. A shim's validators then accept everything, so funcd's
-   plugins are the one check, with the shims funcd pins today. The void rule needs no shim: a null result answers 204,
-   and the output check refuses a body a void contract forbids.
+   - an input over 1 MiB, the limit external bodies and fn-to-fn calls already have, answers 413; a result over 1 MiB
+     answers 500, both as RFC 9457 problems. The result bound is new for external callers, Sensors and App hooks,
+     which received any size: a contracted result is a JSON document, and a larger one belongs in a Bucket;
+   - a number with more than 1 000 digits, or an exponent over 1 000 in magnitude, fails at its path before the
+     engine reads any number;
+   - pattern matching stops after 1 s per check: each pattern asked after that fails its value, and the answer adds a
+     detail at the root that names the budget, so a cut check stays fail-closed and says why.
+7. **The shims get an open contract.** For a contracted worker, the reconciler writes `.funcd-contract-open.json`, the
+   blob with both sides `{}` (ADR-0058's Json form), beside the delivered blob in the bundle root, and names it to the
+   shim: as `FUNCD_CONTRACT_PATH` for a solo worker, as the member's `contract` in a pool's manifest. A shim's
+   validators then accept everything, so funcd's plugins are the one check, with the shims funcd pins today. The void
+   rule needs no shim: a null result answers 204, and the output check refuses a body a void contract forbids.
 
 ## Design model
 
@@ -133,9 +140,9 @@ None: the decision holds with the shims funcd pins today.
 // internal/contract (new Option; ADR-0301's defaults are unchanged).
 
 // WithCallBounds bounds each Validate call: pattern matching stops after budget, and each pattern asked later fails
-// its value; a number whose decimal exponent exceeds maxExponent in magnitude fails at its path before the engine
-// reads any number.
-func WithCallBounds(budget time.Duration, maxExponent int) Option
+// its value, with a root detail naming the budget; a number with more than maxDigits digits, or an exponent over
+// maxDigits in magnitude, fails at its path before the engine reads any number.
+func WithCallBounds(budget time.Duration, maxDigits int) Option
 
 // internal/contractcheck (new): the two invokePlugins.
 package contractcheck
@@ -159,46 +166,52 @@ func (r *Reconciler) ContractOf(ctx context.Context, ref activator.FunctionRef, 
 | Consumes | Exposes |
 |---|---|
 | The delivered blob of the serving revision's bundle; ADR-0301's `Compile` | The 422 and 500 answers above; reason `ContractInvalid` |
-| — | `.funcd-contract-open.json` in each contracted bundle root, named by `FUNCD_CONTRACT_PATH` |
+| — | `.funcd-contract-open.json` in each contracted bundle root |
 
 ## Implementation plan
 
-1. `internal/contract/rules.go`: `WithCallBounds`. A bounded `Validator` keeps a free list of compiled instances, each
-   with its own deadline, which its pattern engine reads; `Validate` takes one, sets the deadline and puts it back. The
-   exponent check walks the decoded document before the engine runs.
-2. `internal/contractcheck/contractcheck.go`: the plugins. The input plugin reads up to 1 MiB + 1 of the body and puts
-   it back; the output plugin reads with `Answer.Body(1 MiB)`. Both answer with a `Refusal` that has its own status,
+1. `internal/contract`: `WithCallBounds`. The engine binds a pattern at compile time and `Validate` takes no context,
+   so a bounded `Validator` keeps a free list of compiled instances, each with its own deadline; `Validate` takes one
+   (compiling another when none is idle) and puts it back. The number check walks the decoded document first.
+2. `internal/contractcheck`: the plugins. The input plugin reads up to 1 MiB + 1 of the body and puts it back; the
+   output plugin reads with `Answer.Body(1 MiB)`. Both answer with a `Refusal` that has its own status,
    `Content-Type: application/json` and body (ADR-0302 Decision 6).
-3. `internal/function`: `ContractOf` (the revision rule of Decision 2, `revisionTemplate`, `materialize`, the blob
-   read, a digest-keyed cache); `materialize` compiles the blob and returns a `ContractInvalid` gate failure;
-   `addContractEnv` and the pool manifest write and name the open contract.
+3. `internal/function`: `ContractOf` (Decision 2's rule, `revisionTemplate`, `materialize`, the blob, the cache);
+   `materialize` compiles the blob and returns a `ContractInvalid` gate failure; `addContractEnv` and the pool
+   manifest write and name the open contract.
 4. `pkg/funcd/funcd.go`: append `contractcheck.Plugins(fnReconciler)` to the chain.
 5. Tests: one per Scenario named `TestScenario` plus its name in CamelCase. `every-path-checks-the-input` has one test
-   of that name per entry (`internal/dataplane`, `internal/workflow`, `internal/sensor`, Function and App hook callers
-   included); `the-shim-gets-an-open-contract` checks both runtimes' worker environments in `internal/function`;
-   `contractcheck` unit tests cover the bounds; `TestCallBounds` in `internal/contract`.
-6. `just ci` green, and the e2e contract tests of `pkg/funcd/invoke_e2e_test.go` still pass. Definition of done:
-   every Scenario test passes and #1339's three cases answer the same on both runtimes.
+   of that name per entry (`internal/dataplane`, `internal/workflow`, `internal/sensor`), the FnToFn and AppHook
+   callers included. `the-shims-stop-checking` runs the pinned Node and Python shims (`internal/testkit/langmod`),
+   solo and pooled, on the delivered and on the open contract. `a-slow-check-is-cut` and
+   `a-body-over-the-limit-is-refused` run the plugins directly. ADR-0123's two env scenarios now expect the open
+   contract.
+6. `just ci` green. Definition of done: every Scenario test passes, so on both runtimes funcd answers #1339's three
+   cases before any shim, and a value funcd accepts reaches the handler.
 
 ## Review checklist
 
 - [ ] The plugins sit after `deadline`, apply to every caller of a cloudevent Function, and never to an http one.
-- [ ] The contract comes from the pinned, serving or current revision, compiled once per digest; `ContractInvalid`
-      fails a revision whose blob does not compile.
-- [ ] The 422 and 500 bodies are `{error, details}` as `application/json`; a body over 1 MiB, a large exponent and the
+- [ ] Decision 2's revision rule, one lookup per call reused at After, and 503 when the lookup fails;
+      `ContractInvalid` fails a revision whose blob does not compile.
+- [ ] The 422 and 500 bodies are `{error, details}` as `application/json`; the 1 MiB bounds, the number bound and the
       1 s budget answer as Decision 6 says.
-- [ ] Every contracted worker, solo or pooled, gets `.funcd-contract-open.json` as its `FUNCD_CONTRACT_PATH`.
+- [ ] Every contracted worker, solo or pooled, is named `.funcd-contract-open.json`.
 - [ ] Each Scenario has its named, passing test(s); no new config key, API field, CLI flag or dependency.
 
 ## Consequences
 
 - Positive: one meaning for every contract on every runtime and path, with the shims pinned today; a bad input never
   wakes a sleeping Function; #1339 closes.
-- Negative: the check spends funcd's CPU and memory, within Decision 6's bounds; the shims compile an empty schema they
-  never use, until their validator code is removed.
-- Risks accepted: during a revision switch, a call checked against the serving revision may be answered by the next
-  one; both revisions' contracts were pushed through the same rules. A pattern's 1 s budget is wall-clock, so a check
-  near it can pass on an idle host and fail on a loaded one.
+- Negative: answer changes, beyond #1339's own: a contracted result over 1 MiB now answers 500 on paths that had no
+  limit, and a number over the digit or exponent bound, which `type: number` accepted, answers 422. The check spends
+  funcd's CPU and memory within Decision 6's bounds; a bounded side holds one compiled instance per concurrent check,
+  and an empty free list compiles one on the call path, as a cold cache materializes an artifact there. The shims
+  compile an empty schema they never use, and a shim's span ends OK for a result funcd then refuses.
+- Risks accepted: a call checked against the serving revision can still land on the next one when the revision
+  switches between the check and the activator's own read of the Function (`function.go:3079`); the next revision's
+  shim no longer checks, so for that call its contract is not enforced. The 1 s budget is wall-clock, so a borderline
+  check can pass on an idle host and be cut on a loaded one, and a cut step fails permanently.
 
 ## Open questions
 
@@ -209,4 +222,4 @@ func (r *Reconciler) ContractOf(ctx context.Context, ref activator.FunctionRef, 
 - Issue [#1339](https://github.com/pyvvo/funcd/issues/1339) and its refine brief of 2026-10-30.
 - The shims' answers: funcd-typescript `shim/src/shim.ts:110-159` at v0.23.0; funcd-python
   `shim/src/funcd_shim/shim.py:269-301` at v0.18.1.
-- Go `math/big`: `Rat.SetString` expands a decimal exponent.
+- Go `math/big`: `Rat.SetString` reads every digit and expands a decimal exponent.
