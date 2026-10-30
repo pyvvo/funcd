@@ -36,10 +36,9 @@ type poolManifestEntry struct {
 	Name     string `json:"name"`
 	Artifact string `json:"artifact"`
 	Handler  string `json:"handler"`
-	// Contract is the delivered ADR-0059 contract-blob path (ADR-0123) the pool worker compiles
-	// its I/O validator from at member init — the pool analog of the solo worker's
-	// FUNCD_CONTRACT_PATH. Empty ⇒ no schema delivered (dev/legacy); the worker falls back to a
-	// module-baked validator. A contracted member with a set-but-broken path fails the host closed.
+	// Contract is the open contract funcd writes beside the member's delivered contract blob (ADR-0303):
+	// the pool analog of the solo worker's FUNCD_CONTRACT_PATH, so the member's shim checks nothing and
+	// funcd checks the calls. Empty ⇒ no contract delivered.
 	Contract string `json:"contract,omitempty"`
 	// Env is set in this member's env only: its own credentials and bundle dir (memberEnv).
 	Env map[string]string `json:"env,omitempty"`
