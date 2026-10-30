@@ -13228,5 +13228,20 @@
     "dod_total": 8,
     "report": "docs/reviews/adr-0300-implementation-claude-opus-5-5.md",
     "notes": "eventstore rename complete; minor (model): the default-dir scenario test proves the derived path, not a start"
+  },
+  {
+    "date": "2026-10-30",
+    "issue": "1337",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-1337-fix-claude-opus-5-5.md",
+    "notes": "[funcd-python] funcd-python fix/1337-py 7732d22: pass, no findings. disable_nagle_algorithm on ShimHandler and PoolHandler. Without the fix both regression tests fail (Linux median 46.05 and 45.52 ms against 20 ms; macOS on TCP_NODELAY); with it they pass. Mutants 3/3 killed. The issue's steps in a Linux container: p50 45.31 ms before, 0.10 ms after. just ci exits 0. No contract change (ADR-0049, 0041, 0050, 0279)."
   }
 ]
