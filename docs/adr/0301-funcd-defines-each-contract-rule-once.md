@@ -1,6 +1,6 @@
 # ADR-0301: funcd defines each contract rule once, in its contract package
 
-- **Status**: Accepted 2026-10-30 by an `adr-batch` run the decider started ("then adr-batch till completion");
+- **Status**: Reviewing 2026-10-30; Accepted 2026-10-30 by an `adr-batch` run the decider started ("then adr-batch till completion");
   judged twice: round 1's findings folded, round 2 found no Blocker
 - **Date**: 2026-10-30
 - **Deciders**: green-0-rabbit
