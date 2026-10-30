@@ -125,7 +125,9 @@ func (r *Reconciler) ContractOf(ctx context.Context, ref activator.FunctionRef, 
 		return nil, nil
 	}
 	tmpl, digest, err := r.revisionTemplate(ctx, fn, rev)
-	if err != nil {
+	if k := fault.KindOf(err); k == fault.NotFound || k == fault.Conflict {
+		return nil, nil // a revision that is gone or another's serves no call: the activator answers it (ADR-0190)
+	} else if err != nil {
 		return nil, err
 	}
 	mfn := *tmpl

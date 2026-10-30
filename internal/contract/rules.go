@@ -45,6 +45,7 @@ type Validator struct {
 	schema *jsonschema.Schema // nil: ADR-0058's Json form, which accepts every document
 	unions map[string]union   // the side's discriminated oneOfs, by the location of the schema holding each
 	bounds *bounds            // WithCallBounds; nil is ADR-0301's unbounded Validator
+	all    bool               // the side is {} or true: it accepts every document
 }
 
 // union is one discriminated oneOf: its tag property, and each variant's location and the tag values it names.
@@ -71,11 +72,14 @@ func Compile(schemaJSON []byte, opts ...Option) (*Validator, error) {
 		opt(&o)
 	}
 	if len(bytes.TrimSpace(schemaJSON)) == 0 {
-		return &Validator{}, nil
+		return &Validator{all: true}, nil
 	}
 	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(schemaJSON))
 	if err != nil {
 		return nil, fault.Invalidf(op, "contract side is not JSON: %v", err)
+	}
+	if m, ok := doc.(map[string]interface{}); ok && len(m) == 0 || doc == true {
+		return &Validator{all: true}, nil
 	}
 	if o.budget > 0 || o.maxDigits > 0 {
 		first, err := compileInstance(doc, o)
@@ -117,6 +121,10 @@ func compileSide(doc interface{}, o options, engine jsonschema.RegexpEngine) (*j
 	return sch, nil
 }
 
+// AcceptsAll reports whether the side accepts every document, as ADR-0058's Json form ({} or true) does, so a check
+// need not read the document (ADR-0303).
+func (v *Validator) AcceptsAll() bool { return v.all }
+
 // Validate returns every error of doc (Decision 3), or nil when doc is valid. Numbers are compared exactly, never
 // through float64. It returns a fault.Invalid when doc is not JSON. It does no I/O, and the match timeout bounds
 // each pattern match (Decision 2), so it takes no context.
@@ -148,7 +156,7 @@ func (v *Validator) Validate(doc []byte) ([]Detail, error) {
 		return details, err
 	}
 	if v.schema == nil {
-		return nil, nil
+		return nil, nil // the Json form: AcceptsAll
 	}
 	return v.validate(v.schema, inst)
 }

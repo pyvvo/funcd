@@ -303,3 +303,17 @@ func TestCallBounds(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// AcceptsAll is true only for ADR-0058's Json form: an empty side, {} or true.
+func TestAcceptsAll(t *testing.T) {
+	t.Parallel()
+	for side, want := range map[string]bool{``: true, `{}`: true, `true`: true, `{"type": "string"}`: false, `{"title": "x"}`: false} {
+		v, err := contract.Compile([]byte(side))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := v.AcceptsAll(); got != want {
+			t.Errorf("Compile(%q).AcceptsAll() = %v, want %v", side, got, want)
+		}
+	}
+}

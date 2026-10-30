@@ -61,4 +61,9 @@ func TestContractOfPicksTheRevisionThatServes(t *testing.T) {
 	requires(ref, "b") // pooled: the current revision, the one the pool runs
 	ref.Revision = "fn-1"
 	requires(ref, "a") // a pinned step: its own revision
+
+	ref.Revision = "fn-9" // a pin that is gone: the activator answers it with ADR-0190's NotFound
+	pair, err := r.ContractOf(context.Background(), ref, fn)
+	require.NoError(t, err)
+	require.Nil(t, pair)
 }

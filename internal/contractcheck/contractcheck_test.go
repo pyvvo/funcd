@@ -116,7 +116,7 @@ func TestScenarioASlowCheckIsCut(t *testing.T) {
 // scenario: a-body-over-the-limit-is-refused
 func TestScenarioABodyOverTheLimitIsRefused(t *testing.T) {
 	t.Parallel()
-	ch := chainOf(t, `{"type": "object", "properties": {"n": {"type": "number"}}}`, `{}`)
+	ch := chainOf(t, `{"type": "object", "properties": {"n": {"type": "number"}}}`, `{"type": "object"}`)
 	big := `{"data": {"s": "` + strings.Repeat("x", 2<<20) + `"}}`
 	rf := ch.Before(context.Background(), callWith(nil, big))
 	require.NotNil(t, rf)
@@ -172,4 +172,19 @@ type failingSource struct{}
 
 func (failingSource) ContractOf(context.Context, activator.FunctionRef, *v1.Function) (*contractcheck.Pair, error) {
 	return nil, fault.Internalf("test", "the artifact cannot be read")
+}
+
+// A side that accepts every document is not read, so a large input or result streams as before ADR-0303.
+func TestAnOpenSideIsNotRead(t *testing.T) {
+	t.Parallel()
+	ch := chainOf(t, `{}`, `{}`)
+	big := `{"data": "` + strings.Repeat("x", 2<<20) + `"}`
+	c := callWith(nil, big)
+	require.Nil(t, ch.Before(context.Background(), c))
+	in, _ := io.ReadAll(c.Request.Body)
+	require.Len(t, in, len(big))
+	res := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(bytes.Repeat([]byte("y"), 2<<20)))}
+	require.Nil(t, ch.After(context.Background(), c, invoke.NewAnswer(res)))
+	out, _ := io.ReadAll(res.Body)
+	require.Len(t, out, 2<<20)
 }

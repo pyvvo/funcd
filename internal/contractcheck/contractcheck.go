@@ -61,8 +61,8 @@ func (p inputPlugin) Before(ctx context.Context, c *invoke.Call) *invoke.Refusal
 	}
 	// Decision 2: the output check uses the contract the input was checked against.
 	c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), pairKey{}, pairBox{pair: pair}))
-	if pair == nil || pair.Input == nil {
-		return nil
+	if pair == nil || pair.Input == nil || pair.Input.AcceptsAll() {
+		return nil // a side that accepts every document needs no read, so the body streams
 	}
 	body, err := io.ReadAll(io.LimitReader(c.Request.Body, MaxCheckedBytes+1))
 	c.Request.Body = io.NopCloser(io.MultiReader(bytes.NewReader(body), c.Request.Body))
@@ -102,8 +102,8 @@ func (p outputPlugin) After(ctx context.Context, c *invoke.Call, a *invoke.Answe
 			return rf
 		}
 	}
-	if pair == nil || pair.Output == nil {
-		return nil
+	if pair == nil || pair.Output == nil || pair.Output.AcceptsAll() {
+		return nil // a side that accepts every document needs no read, so the answer streams
 	}
 	result := []byte("null")
 	if a.Status == http.StatusOK {
