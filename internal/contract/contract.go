@@ -28,7 +28,8 @@ import (
 // Check reports whether a JSON Schema (a generated function I/O contract) lies within the
 // funcd profile. It returns nil when every construct is supported, or a fault.Invalid whose
 // message names the first unsupported construct and its JSON-pointer-ish path. A nil/empty
-// input is treated as the `Json` (any) form — valid.
+// input is treated as the `Json` (any) form — valid. A side in the profile must also compile
+// with funcd's rules (ADR-0301 Decision 4), so a pattern no check could run fails here.
 func Check(schemaJSON []byte) error {
 	const op = "contract.Check"
 	if len(bytes.TrimSpace(schemaJSON)) == 0 {
@@ -40,6 +41,9 @@ func Check(schemaJSON []byte) error {
 	}
 	if err := walk(&s, "(root)"); err != nil {
 		return fault.Wrapf(err, fault.Invalid, op, "contract type is outside the funcd profile")
+	}
+	if _, err := Compile(schemaJSON); err != nil {
+		return fault.Wrapf(err, fault.Invalid, op, "contract cannot be checked")
 	}
 	return nil
 }

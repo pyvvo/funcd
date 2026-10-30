@@ -213,6 +213,20 @@ func functionFrom(ctx context.Context) (FunctionRef, bool) {
 	return fn, ok
 }
 
+type answerCheckKey struct{}
+
+// WithAnswerCheck returns r carrying check: ServeHTTP passes a final answer from the worker to check before the caller
+// sees it, and writes the error check returns with its WriteAnswer method (ADR-0302). The activator does not import
+// internal/invoke, which imports it.
+func WithAnswerCheck(r *http.Request, check func(*http.Response) error) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), answerCheckKey{}, check))
+}
+
+// answerWriter is an error that writes its own answer: an answer check's refusal (ADR-0302).
+type answerWriter interface {
+	WriteAnswer(w http.ResponseWriter)
+}
+
 // ServeHTTP serves one request: warm → proxy now; cold → single-flight ScaleTo(1),
 // wait for a ready upstream (bounded by ActivationTimeout), then forward. On activation
 // timeout or for a Failed function → 503 problem+json; a request with no FunctionRef in
@@ -490,6 +504,10 @@ func (a *Activator) forward(w http.ResponseWriter, r *http.Request, upstream str
 	logger := a.logger.With("upstream", upstream)
 	rp.ErrorLog = slog.NewLogLogger(logger.Handler(), slog.LevelWarn)
 	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, perr error) {
+		if aw := (answerWriter)(nil); errors.As(perr, &aw) {
+			aw.WriteAnswer(w)
+			return
+		}
 		if fault.KindOf(perr) == fault.DeadlineExceeded {
 			fault.WriteProblem(w, perr)
 			return
@@ -498,6 +516,18 @@ func (a *Activator) forward(w http.ResponseWriter, r *http.Request, upstream str
 		fault.WriteProblem(w, fault.Unavailablef(op, "upstream call failed"))
 	}
 	KeepEdgeHeaders(rp, w)
+	if check, _ := r.Context().Value(answerCheckKey{}).(func(*http.Response) error); check != nil {
+		keep := rp.ModifyResponse
+		rp.ModifyResponse = func(res *http.Response) error {
+			if err := keep(res); err != nil {
+				return err
+			}
+			if res.StatusCode == http.StatusSwitchingProtocols {
+				return nil // a tunnel follows a 101, not an answer
+			}
+			return check(res)
+		}
+	}
 	rp.ServeHTTP(w, r)
 }
 

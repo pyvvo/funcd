@@ -47,7 +47,8 @@ const (
 	// bundleContractFile is the ADR-0090 I/O contract the bundle embeds ({input, output}); push
 	// gates it (VerifyBundleContract) and promotes it to the ADR-0059 contract layer. On
 	// materialization (ADR-0123) it is (re)written in the bundle dir with the exact digest-pinned
-	// ADR-0059 blob so the shim compiles the same bytes `funcdctl inspect` advertises.
+	// ADR-0059 blob, so funcd checks the calls against the same bytes `funcdctl inspect` advertises
+	// (ADR-0303).
 	bundleContractFile = "__funcd_contract.json"
 	// singleFileContractSidecar is the ADR-0123 dotfile sidecar carrying the delivered contract blob
 	// next to a single-file handler in the materializer cache. It is a DOTFILE (mirroring
@@ -180,11 +181,11 @@ func packDir(op, dir, entry string) (data []byte, err error) {
 // BOTH keys present (a void side is {"type":"null"}, never absent) AND each side must lie within
 // the funcd type profile (contract.Check — the same gate the single-file --schema path applies).
 // It no longer requires a baked validator symbol in the entry file: the artifact is schema-only
-// and the runtime shim compiles the validator from the delivered schema at worker warm-up
-// (ADR-0123, supersedes ADR-0060's build-time bake). The `entry` argument is retained for the
-// signature but is no longer read. It returns the {dialect, input, output} blob to promote through
-// the EXISTING ContractBlob path. fault.Invalid on any gap — an out-of-profile schema that slipped
-// through here would otherwise only fail at worker compile-time (cold-start fail-closed).
+// and funcd checks each call against the delivered schema (ADR-0303; ADR-0123 superseded ADR-0060's
+// build-time bake). The `entry` argument is retained for the signature but is no longer read. It
+// returns the {dialect, input, output} blob to promote through the EXISTING ContractBlob path.
+// fault.Invalid on any gap — an out-of-profile schema that slipped through here would otherwise only
+// fail when the reconciler compiles it (ContractInvalid, ADR-0303).
 func VerifyBundleContract(dir, _ string) (contractBlob []byte, err error) {
 	const op = "artifact.VerifyBundleContract"
 	raw, rerr := os.ReadFile(filepath.Join(dir, bundleContractFile)) //nolint:gosec // path is under the user-supplied bundle dir

@@ -8,12 +8,14 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/activator"
+	"github.com/pyvvo/funcd/internal/invoke"
 	"github.com/pyvvo/funcd/internal/platform/httpx"
 )
 
@@ -72,6 +74,7 @@ type HTTPDispatcher struct {
 	waker     Waker
 	grant     Granter
 	protocol  activator.ProtocolFunc
+	chain     *invoke.Chain
 	client    *http.Client
 	log       *slog.Logger
 }
@@ -83,8 +86,10 @@ type DispatchDeps struct {
 	Grant     Granter
 	// Protocol, when set, refuses a step function that serves HTTP before any request (ADR-0243 Decision 5).
 	Protocol activator.ProtocolFunc
-	Client   *http.Client
-	Logger   *slog.Logger
+	// Chain is the invokePlugin chain each step call runs around its wake (ADR-0302); nil runs nothing.
+	Chain  *invoke.Chain
+	Client *http.Client
+	Logger *slog.Logger
 }
 
 // NewHTTPDispatcher builds the production dispatcher.
@@ -101,7 +106,7 @@ func NewHTTPDispatcher(d DispatchDeps) (*HTTPDispatcher, error) {
 		log = slog.Default()
 	}
 	return &HTTPDispatcher{
-		endpoints: d.Endpoints, waker: d.Waker, grant: d.Grant, protocol: d.Protocol, client: client,
+		endpoints: d.Endpoints, waker: d.Waker, grant: d.Grant, protocol: d.Protocol, chain: d.Chain, client: client,
 		log: log.With("component", "workflow.dispatch"),
 	}, nil
 }
@@ -128,11 +133,8 @@ func (d *HTTPDispatcher) Dispatch(ctx context.Context, req DispatchRequest) (jso
 	if err := activator.RefuseHTTP(ctx, d.protocol, fn, op); err != nil {
 		return nil, Permanent(err)
 	}
-	upstream, err := d.upstream(ctx, fn)
-	if err != nil {
-		return nil, err
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, upstream, bytes.NewReader(stepEvent(req)))
+	// The upstream is known only after the wake, and Before runs first (ADR-0302), so the URL is set below.
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://upstream.invalid/", bytes.NewReader(stepEvent(req)))
 	if err != nil {
 		return nil, fault.Internalf(op, "build request: %v", err)
 	}
@@ -151,34 +153,70 @@ func (d *HTTPDispatcher) Dispatch(ctx context.Context, req DispatchRequest) (jso
 	if len(req.Links) > 0 {
 		httpReq.Header.Set("X-Funcd-Span-Links", strings.Join(req.Links, ","))
 	}
-	resp, err := d.client.Do(httpReq)
+	call := &invoke.Call{Caller: invoke.WorkflowStep, Target: fn, Request: httpReq}
+	if rf := d.chain.Admit(ctx, call); rf != nil {
+		return refusedStep(req, rf)
+	}
+	if rf := d.chain.Before(ctx, call); rf != nil {
+		return refusedStep(req, rf)
+	}
+	upstream, err := d.upstream(ctx, fn)
+	if err != nil {
+		return nil, err
+	}
+	target, err := url.Parse(upstream)
+	if err != nil {
+		return nil, fault.Internalf(op, "build request: %v", err)
+	}
+	call.Request.URL, call.Request.Host = target, ""
+	resp, err := d.client.Do(call.Request)
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Unavailable, op, "invoke %s/%s", req.Namespace, req.Target) // retryable
 	}
 	defer httpx.CloseBody(resp.Body)
-	// Read only what the outcome needs: an output up to one byte past its payload limit (a longer one is
-	// rejected anyway), the head of a rejection that its error keeps, and nothing of a retryable failure;
-	// the deferred drain discards at most httpx.DrainLimit more.
-	ok := resp.StatusCode >= 200 && resp.StatusCode < 300
-	rejected := resp.StatusCode >= 400 && resp.StatusCode < 500
-	if !ok && !rejected {
-		return nil, fault.Unavailablef(op, "%s/%s returned %d", req.Namespace, req.Target, resp.StatusCode) // retryable
+	if rf := d.chain.After(ctx, call, invoke.NewAnswer(resp)); rf != nil {
+		return refusedStep(req, rf)
 	}
-	var src io.Reader = resp.Body
+	return stepAnswer(req, resp.StatusCode, resp.Body)
+}
+
+// stepAnswer maps a step's answer: a 2xx is the output, read up to one byte past its payload limit (a longer one is
+// rejected anyway); a 4xx is a permanent failure that keeps the head of the answer; anything else is retryable and
+// reads nothing. The caller's deferred drain discards at most httpx.DrainLimit more.
+func stepAnswer(req DispatchRequest, status int, body io.Reader) (json.RawMessage, error) {
+	const op = "workflow.dispatch"
+	ok := status >= 200 && status < 300
+	rejected := status >= 400 && status < 500
+	if !ok && !rejected {
+		return nil, fault.Unavailablef(op, "%s/%s returned %d", req.Namespace, req.Target, status) // retryable
+	}
+	src := body
 	switch {
 	case rejected:
 		src = io.LimitReader(src, errBodyMax+1)
 	case req.MaxOutput > 0:
 		src = io.LimitReader(src, req.MaxOutput+1)
 	}
-	body, err := io.ReadAll(src)
+	out, err := io.ReadAll(src)
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Unavailable, op, "read response from %s/%s", req.Namespace, req.Target)
 	}
 	if rejected {
-		return nil, Permanent(fault.Invalidf(op, "%s/%s rejected the step (%d): %s", req.Namespace, req.Target, resp.StatusCode, truncate(body)))
+		return nil, Permanent(fault.Invalidf(op, "%s/%s rejected the step (%d): %s", req.Namespace, req.Target, status, truncate(out)))
 	}
-	return body, nil
+	return out, nil
+}
+
+// refusedStep maps a refusal as ADR-0302 Decision 3 says: one with its own status and body as the worker's answer,
+// a 4xx problem as permanent, any other problem as retryable.
+func refusedStep(req DispatchRequest, rf *invoke.Refusal) (json.RawMessage, error) {
+	if rf.Status != 0 {
+		return stepAnswer(req, rf.Status, bytes.NewReader(rf.Body))
+	}
+	if s := rf.StatusCode(); s >= 400 && s < 500 {
+		return nil, Permanent(rf)
+	}
+	return nil, rf
 }
 
 // errBodyMax is how much of a rejection's body its error keeps.

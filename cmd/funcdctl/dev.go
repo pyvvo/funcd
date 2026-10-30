@@ -705,8 +705,8 @@ const (
 	devManagedTag = "managed-by"
 	devManagedBy  = "funcdctl-dev"
 	// devContractFile is the ADR-0123 delivered-contract dotfile `funcdctl dev` writes into the bundle
-	// dir (the working tree). The Function reconciler probes the bundle root for it and sets
-	// FUNCD_CONTRACT_PATH, so the shim runtime-compiles + enforces the manifest's contract with no push.
+	// dir (the working tree). The Function reconciler probes the bundle root for it, and the gateway checks
+	// each call against it (ADR-0303), so the manifest's contract holds with no push.
 	devContractFile = ".funcd-contract.json"
 	// devS3Master is the FIXED dev S3 master secret the S3 frontend (ADR-0085) derives per-function
 	// keypairs from in `funcdctl dev` (Decision 6). Like DevToken, it is a well-known, non-secret dev
@@ -1010,8 +1010,9 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, folder *devFold
 		funcd.WithRuntime(rt),
 		funcd.WithMaterializer(function.NewFileMaterializer()),
 		// A step's file:// copy carries no OCI artifact, so the production F65 resolver can never inspect it. An untyped
-		// resolver makes the typed-edge gate a no-op and the Workflow reaches Ready (each step still enforces its OWN
-		// contract at the shim, ADR-0123); the runtime comes from the build's contract file (ADR-0247 Decision 7).
+		// resolver makes the typed-edge gate a no-op and the Workflow reaches Ready (funcd still checks each step's
+		// call against its OWN contract, ADR-0303); the runtime comes from the build's contract file (ADR-0247
+		// Decision 7).
 		funcd.WithWorkflowContractResolver(devWorkflowContracts{}),
 		funcd.WithWorkflowRuntimeResolver(inst.runtimes),
 	}
@@ -1483,8 +1484,8 @@ func linkSources(op, srcDir, bundleDir string) error {
 
 // devWorkflowContracts is the `funcdctl dev` workflow ContractResolver (ADR-0125): from-source steps have
 // no OCI metadata to inspect, so every step is reported untyped (an empty contract). The F65 typed-edge
-// gate then no-ops and the Workflow reaches Ready; each step still enforces its own delivered contract at
-// the shim (FUNCD_CONTRACT_PATH, ADR-0123) — the dev fidelity trade is only the cross-step typed-edge check.
+// gate then no-ops and the Workflow reaches Ready; the gateway still checks each step's call against its
+// delivered contract (ADR-0303) — the dev fidelity trade is only the cross-step typed-edge check.
 type devWorkflowContracts struct{}
 
 // Contract reports every from-source step as untyped (empty contract, no digest, no error).

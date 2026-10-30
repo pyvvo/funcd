@@ -55,6 +55,11 @@ func ToProblem(err error) Problem {
 	return p
 }
 
+// StatusOf returns the HTTP status WriteProblem writes for err.
+func StatusOf(err error) int {
+	return ToProblem(err).Status
+}
+
 // WriteProblem writes an error as an RFC 9457 application/problem+json response.
 // It sets Content-Type and writes the JSON body.
 func WriteProblem(w http.ResponseWriter, err error) {

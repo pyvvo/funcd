@@ -36,10 +36,9 @@ type poolManifestEntry struct {
 	Name     string `json:"name"`
 	Artifact string `json:"artifact"`
 	Handler  string `json:"handler"`
-	// Contract is the delivered ADR-0059 contract-blob path (ADR-0123) the pool worker compiles
-	// its I/O validator from at member init — the pool analog of the solo worker's
-	// FUNCD_CONTRACT_PATH. Empty ⇒ no schema delivered (dev/legacy); the worker falls back to a
-	// module-baked validator. A contracted member with a set-but-broken path fails the host closed.
+	// Contract is the open contract funcd writes beside the member's delivered contract blob (ADR-0303):
+	// the pool analog of the solo worker's FUNCD_CONTRACT_PATH, so the member's shim checks nothing and
+	// funcd checks the calls. Empty ⇒ no contract delivered.
 	Contract string `json:"contract,omitempty"`
 	// Env is set in this member's env only: its own credentials and bundle dir (memberEnv).
 	Env map[string]string `json:"env,omitempty"`
@@ -756,8 +755,17 @@ func (r *Reconciler) poolManifest(ctx context.Context, members []*v1.Function, s
 			}
 			path = p
 			// ADR-0123: the pool host runs in process mode (it reads the host artifact paths
-			// directly), so the delivered contract path is the host path in the bundle root.
-			if name, ok := contractFileIn(filepath.Dir(p)); ok {
+			// directly), so the contract path is the host path in the bundle root; ADR-0303 Decision 7: the
+			// member's shim gets the open contract.
+			name, err := writeOpenContract(filepath.Dir(p))
+			if err != nil {
+				if m.Name == self.Name {
+					return nil, 0, fault.Wrapf(err, fault.KindOf(err), op, "write the open contract of %s/%s", m.Namespace, m.Name)
+				}
+				r.logger.Warn("pool member left out: its open contract cannot be written", "function", m.Name, "err", err)
+				continue
+			}
+			if name != "" {
 				contractPath = filepath.Join(filepath.Dir(p), name)
 			}
 		}
