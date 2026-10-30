@@ -53,6 +53,10 @@ go work init . ../funcd-typescript
 
 See [docs/PROJECT-SUMMARY.md](docs/PROJECT-SUMMARY.md) for what is built and the decision log.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). A first pull request needs a signed Contributor License Agreement.
+
 ## License
 
 [Apache-2.0](LICENSE) — Copyright 2026 The funcd Authors.
