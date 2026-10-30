@@ -13273,5 +13273,20 @@
     "dod_total": 14,
     "report": "docs/reviews/adr-0302-implementation-claude-opus-5-5.md",
     "notes": "pass; minors (model): a test helper takes options, a shared test-plugin package; 9 mutants caught"
+  },
+  {
+    "date": "2026-10-30",
+    "adr": "0303",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 2,
+    "dod_passed": 14,
+    "dod_total": 14,
+    "report": "docs/reviews/adr-0303-implementation-claude-opus-5-5.md",
+    "notes": "pass; minors (model): three tests added after the first mutant pass, the real-shim test skips without node or python3; 10 mutants caught"
   }
 ]

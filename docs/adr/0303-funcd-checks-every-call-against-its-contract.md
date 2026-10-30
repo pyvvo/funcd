@@ -1,6 +1,6 @@
 # ADR-0303: funcd checks every call against its contract, and the shims stop checking
 
-- **Status**: Reviewing 2026-10-30; Accepted 2026-10-30 by an `adr-batch` run the decider started ("then adr-batch till completion");
+- **Status**: Implemented 2026-10-30, review passed with two Minors ([report](../reviews/adr-0303-implementation-claude-opus-5-5.md)); Reviewing 2026-10-30; Accepted 2026-10-30 by an `adr-batch` run the decider started ("then adr-batch till completion");
   judged twice: round 1's three Majors (a real-shim proof, the result bound as an answer change, a named budget cut)
   and its Minors folded; round 2 found no Blocker or Major, and its Minor on the steps' and events' bounds is folded
 - **Date**: 2026-10-30
