@@ -1,7 +1,7 @@
 # ADR-0301: funcd defines each contract rule once, in its contract package
 
-- **Status**: Draft
-- **Date**: 2026-10-30
+- **Status**: Proposed
+- **Date**: 2026-10-30 (judged twice; round 2 found no Blocker)
 - **Deciders**: green-0-rabbit
 - **Tags**: contract, validation, json-schema
 - **Realizes**: [FEAT-0001/F88](../feat/0001-feat-v1.1.md) (runtime-compiled I/O validators — advertised == enforced)
@@ -63,10 +63,12 @@ Each scenario runs on the contract package (`Compile`, then `Validate`) unless i
   the value is 40 `a` followed by `!`, Then `Validate` returns within 1 s with one detail at path `""`.
 - `scenario: every-error-is-listed` — Given a closed object whose required properties are `a` (string) and `b`
   (integer), When the value is `{"a": 1, "b": "x"}`, Then `Validate` returns two details, paths `/a` then `/b`, each
-  with a message; When it is `{"a": "x"}`, Then one detail at `/b`.
+  with a message; When it is `{"a": "x"}`, Then one detail at `/b`; When it is `{"a": "x", "b": 1, "c": true}`,
+  Then one detail at `/c`.
 - `scenario: a-union-reports-its-tagged-variant` — Given a discriminated `oneOf` on `kind` whose variants are
   `{"kind": "a", "x": integer}` and `{"kind": "b", "y": string}`, When the value is `{"kind": "a", "x": "1"}`, Then
-  one detail at `/x`; When it is `{"kind": "c"}` or has no `kind`, Then one detail at `""`.
+  one detail at `/x`; When it is `{"kind": "c"}` or has no `kind`, Then one detail at `""`; Given two variants that
+  both accept `{"kind": "a"}`, When the value is `{"kind": "a"}`, Then one detail at `""`.
 - `scenario: push-gates-patterns` — Given a contract side with `pattern: "[z-a]"`, When `funcdctl push`,
   `funcdctl types` or the bundle gate runs `contract.Check` on it, Then it fails with Invalid naming the pattern's
   schema location and nothing is pushed; Given `pattern: ^(?!admin$)[a-z]+$` instead, Then `contract.Check` passes.
@@ -132,14 +134,15 @@ Out:
 2. **A `pattern` means what ECMA-262 says**, with the `u` flag. regexp2/v2 compiles it with `ECMAScript|Unicode`, the
    options goja uses, so `\d` is `[0-9]`, `\w` is `[A-Za-z0-9_]` and `$` ends the input. A pattern is not anchored.
    Each match runs under a timeout, 100 ms by default, and a match that times out fails the value like any non-match.
-   The default matches regexp2's deadline clock, which ticks every 100 ms (`DefaultClockPeriod`), so a shorter timeout
-   is not tighter; a legitimate match takes microseconds.
+   The default matches regexp2's deadline clock, which ticks every 100 ms by default (`DefaultClockPeriod`), so a
+   shorter timeout is not tighter; funcd leaves that process-wide period alone. A legitimate match takes microseconds.
 3. **`details` lists every error**, in one shape for input (422) and output (500): one `{"path", "message"}` entry per
    leaf of the engine's error tree. `path` is an RFC 6901 JSON Pointer; `""` is the root. A missing required property
-   gets its own entry at the pointer it would have (`/b`). In a discriminated `oneOf`, only the variant whose tag the
-   value names is reported; a missing or unknown tag gives one entry at the union's path. Entries are sorted by
-   `path` in byte order, then by `message`. `message` is for people, and its wording is not part of the contract.
-   ADR-0058's `error` string is unchanged.
+   and an extra property of a closed object each get their own entry at their own pointer (`/b`). In a discriminated
+   `oneOf`, only the variant whose tag the value names is reported. A missing or unknown tag, a tag that more than
+   one variant names, or a failed union whose tagged variant adds no leaf gives one entry at the union's path, so an
+   invalid document always yields at least one entry. Entries are sorted by `path` in byte order, then by `message`.
+   `message` is for people, and its wording is not part of the contract. ADR-0058's `error` string is unchanged.
 4. **`internal/contract` owns these rules**, through `Compile` and `Validator.Validate` (Contracts). `Check` also
    compiles each side with `Compile`, so `funcdctl push` and `funcdctl types` (`cmd/funcdctl/contract.go:47-58`) and
    the bundle gate (`internal/artifact/bundle.go:209-212`) refuse a side that cannot be checked, an invalid pattern
@@ -215,8 +218,9 @@ A 422 body under this ADR (the messages are illustrative):
    `DefaultDraft(jsonschema.Draft2020)`, `AssertFormat()`, `RegisterFormat` for the six profile names, and
    `UseRegexpEngine` with regexp2/v2 (`ECMAScript|Unicode`, `MatchTimeout` on each compiled pattern; a timeout error
    is a non-match). The leaves come from walking `ValidationError.Causes`, as `leaves` in
-   `internal/app/template/values.go` does, with each token escaped per RFC 6901; the union rule reads the
-   `discriminator` and each variant's tag `const` or `enum` from the compiled side.
+   `internal/app/template/values.go` does, with each token escaped per RFC 6901. The engine's compiled schema keeps no
+   `discriminator`, so the union rule reads it and each variant's tag `const` or `enum` from the side's JSON, as `walk`
+   decodes it (`internal/contract/contract.go:115-127`).
 2. `internal/contract/contract.go`: `Check` calls `Compile` after `walk` and wraps its error as Invalid.
 3. `go mod tidy`: regexp2/v2 v2.2.1 moves to the direct block; no new module.
 4. Tests in `internal/contract`: one test per scenario named `TestScenario` plus the scenario name in CamelCase
@@ -229,8 +233,9 @@ A 422 body under this ADR (the messages are illustrative):
 
 - [ ] funcd registers the six profile formats with the meanings of Decision 1, and every case of the table passes.
 - [ ] Patterns compile with regexp2/v2 `ECMAScript|Unicode` and a `MatchTimeout`; a timed-out match fails the value.
-- [ ] `Validate` returns the leaves of `Causes` as `{path, message}`: RFC 6901 paths, one entry per missing property,
-      only the tagged variant of a union, sorted by path in byte order then message.
+- [ ] `Validate` returns the leaves of `Causes` as `{path, message}`: RFC 6901 paths, one entry per missing or extra
+      property, only the tagged variant of a union, sorted by path in byte order then message.
+- [ ] An invalid document always yields at least one entry, including a union that two variants accept.
 - [ ] `Check` compiles each side: `[z-a]` fails it and `^(?!admin$)[a-z]+$` passes it.
 - [ ] Each scenario has one named, passing test; `TestValidateConcurrent` passes under `-race`.
 - [ ] regexp2/v2 v2.2.1 is direct in `go.mod`; no shim, gateway or `CheckInput` change.
@@ -243,8 +248,8 @@ A 422 body under this ADR (the messages are illustrative):
   regexp2 cannot compile now fails push and `funcdctl types`; no example in funcd-functions v0.7.0 has a pattern or a
   format. Detail messages differ from the shims' wording.
 - Risks accepted: the timeout bounds one match, not one document. A pathological pattern costs up to the timeout plus
-  one clock tick for each string it checks, so one large document can cost minutes of CPU; the call-time ADR sets the
-  budget of one request. The timeout is wall-clock, so a match near it can pass on an idle host and fail on a loaded
+  one clock tick for each string it checks, and a `oneOf` checks a string once per variant: a 1 MiB document of short
+  strings can cost on the order of 100 CPU-minutes. The call-time ADR sets the budget of one request. The timeout is wall-clock, so a match near it can pass on an idle host and fail on a loaded
   one; legitimate patterns finish orders of magnitude below it. regexp2/v2's ECMAScript mode aims at the
   specification but is not a JavaScript engine; the tests pin what funcd relies on, and push refuses what regexp2
   cannot compile.
@@ -255,6 +260,8 @@ A 422 body under this ADR (the messages are illustrative):
   timeout, the CPU budget of one request, and whether `details` is capped: the call-time ADR.
 - A 422 that funcd's own Go code produces at the edge falls under the blueprint's RFC 9457 rule
   (`blueprint.md:970`), while this body is ADR-0058's `{error, details}`: the call-time ADR reconciles them.
+- Whether the profile requires each union variant to declare a distinct, required tag: an issue against ADR-0058's
+  profile. Until then, Decision 3's fallback keeps `Validate` failing closed.
 
 ## References
 
