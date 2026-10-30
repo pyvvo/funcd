@@ -1,6 +1,6 @@
 # ADR-0302: Every call to a worker runs one chain of invokePlugins
 
-- **Status**: Accepted 2026-10-30 by an `adr-batch` run the decider started ("then adr-batch till completion");
+- **Status**: Reviewing 2026-10-30; Accepted 2026-10-30 by an `adr-batch` run the decider started ("then adr-batch till completion");
   judged twice: round 1's Blocker (the by-name order) and two Majors folded; round 2 found no Blocker or Major,
   and its three Minors on the refusal's own answer, the client mapping and the error handler's order are folded
 - **Date**: 2026-10-30

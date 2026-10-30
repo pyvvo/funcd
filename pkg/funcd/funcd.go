@@ -66,6 +66,7 @@ import (
 	"github.com/pyvvo/funcd/internal/gateway"
 	"github.com/pyvvo/funcd/internal/gc"
 	"github.com/pyvvo/funcd/internal/health"
+	"github.com/pyvvo/funcd/internal/invoke"
 	"github.com/pyvvo/funcd/internal/kvstore"
 	kvmemory "github.com/pyvvo/funcd/internal/kvstore/memory"
 	lakegw "github.com/pyvvo/funcd/internal/lake/gateway"
@@ -1119,10 +1120,23 @@ func (p *Platform) buildControlPlane() error {
 	// ADR-0109 (F69) + ADR-0118 (F85): the Sensor binds the named events published on the Fanout to actions
 	// — start a WorkflowRun / invoke a Function (via the re-created invoke/wake logic), with bounded retry
 	// before dead-lettering. It subscribes to fanout.
+	// ADR-0302: one invokePlugin chain, which every call to a worker runs: the data plane's, the workflow
+	// dispatcher's, the Sensors' and the App hooks'. ADR-0113 (F77): its authn plugin is the edge PEP, built from the
+	// control-plane credentials + authorizer; nil unless enabled (an authenticated stance then fails closed).
+	var edgeEnforcer *authn.Enforcer
+	if c.edgeAuthEnabled {
+		edgeEnforcer, err = authn.New(authn.Deps{Creds: c.credentials, Authz: c.authorizer})
+		if err != nil {
+			return fault.Wrapf(err, fault.KindOf(err), op, "build edge authn PEP")
+		}
+	}
+	targetLimiter := limit.NewTargetLimiter(c.limits)
+	callChain := invoke.NewChain(dataplane.Plugins(edgeEnforcer, targetLimiter, c.callGate(), c.invokeDefaultTimeout)...)
 	sensorReconciler, err := sensor.NewReconciler(sensor.Deps{
-		Store:                 c.store,
-		Subscriber:            fanout,
-		Invoker:               &sensor.HTTPInvoker{Endpoints: fnReconciler.Endpoints(), Waker: act, Protocol: protocolOf(c.store), Client: workerClient(calls, 30*time.Second)},
+		Store:      c.store,
+		Subscriber: fanout,
+		Invoker: &sensor.HTTPInvoker{Endpoints: fnReconciler.Endpoints(), Waker: act, Protocol: protocolOf(c.store),
+			Client: workerClient(calls, 30*time.Second), Chain: callChain},
 		DeadLetters:           dlq,
 		DeliveryAttempts:      c.deliveryAttempts,
 		MaxDeliveriesInFlight: c.sensorMaxDeliveriesInFlight,
@@ -1339,6 +1353,7 @@ func (p *Platform) buildControlPlane() error {
 		Endpoints: fnReconciler.Endpoints(),
 		Waker:     act, // wake a scaled-to-zero step function (ADR-0033)
 		Protocol:  protocolOf(c.store),
+		Chain:     callChain,
 		Grant:     storeGranter{store: c.store},
 		// No client Timeout: the engine bounds each attempt with the step's timeout on the request context
 		// (ADR-0094), and a client-wide cap would cut a longer step short.
@@ -1393,7 +1408,8 @@ func (p *Platform) buildControlPlane() error {
 		SupervisionPeriod: c.pacing.SupervisionPeriod, Hold: c.gate(), NamespaceHold: c.nsGate(),
 		// ADR-0214: a second invoker for the hook calls, with no client timeout: the context carries the hook
 		// Function's spec.timeout or invoke.defaultTimeout, as the workflow dispatcher bounds a step.
-		Invoker:       &sensor.HTTPInvoker{Endpoints: fnReconciler.Endpoints(), Waker: act, Protocol: protocolOf(c.store), Client: workerClient(calls, 0)},
+		Invoker: &sensor.HTTPInvoker{Endpoints: fnReconciler.Endpoints(), Waker: act, Protocol: protocolOf(c.store),
+			Client: workerClient(calls, 0), Chain: callChain, Caller: invoke.AppHook},
 		InvokeTimeout: c.invokeDefaultTimeout,
 		Enqueue:       ctrl.Enqueue,
 	})
@@ -1534,16 +1550,6 @@ func (p *Platform) buildControlPlane() error {
 	// the activator (zero wake) yet stay panic-guarded + X-Request-Id-correlated. A zero Config is a
 	// pass-through (limits off by default). ADR-0164: under key: function the rate step runs inside
 	// dataplane.Handler instead (limit.NewTargetLimiter), once the target Function is resolved.
-	// ADR-0113 (F77): the edge authn PEP runs INSIDE dataplane.Handler (after the target resolves,
-	// before store.Get + the activator). Built from the control-plane credentials + authorizer; nil
-	// unless enabled (an authenticated stance then fails closed).
-	var edgeEnforcer *authn.Enforcer
-	if c.edgeAuthEnabled {
-		edgeEnforcer, err = authn.New(authn.Deps{Creds: c.credentials, Authz: c.authorizer})
-		if err != nil {
-			return fault.Wrapf(err, fault.KindOf(err), op, "build edge authn PEP")
-		}
-	}
 	// ADR-0120 (F82): the static-asset handler serves a static Route's Bucket prefix directly over the
 	// SAME per-namespace Bucket view the S3 frontend uses (s3BucketFor → blob.Prefixed), with no
 	// activator hop. Always wired; a static Route match without it would 404.
@@ -1555,8 +1561,8 @@ func (p *Platform) buildControlPlane() error {
 	// inner-than-RequestID (reads X-Request-Id); shaping is innermost (wraps the real response). The write stall
 	// bound is outermost, so every byte of every listener response passes it. Runtime order:
 	// WriteStall → Recover → RequestID → observ → limit → shape → dataplane.Handler.
-	dpCore := dataplane.Handler(c.store, act, p.edgeRouter, c.baseDomain, edgeEnforcer, limit.NewTargetLimiter(c.limits), staticHandler,
-		c.invokeDefaultTimeout, p.logger, dataplane.WithCallGate(c.callGate()))
+	dpCore := dataplane.Handler(c.store, act, p.edgeRouter, c.baseDomain, edgeEnforcer, targetLimiter, staticHandler,
+		c.invokeDefaultTimeout, p.logger, dataplane.WithCallGate(c.callGate()), dataplane.WithChain(callChain))
 	edgeObserv, edgeShape := observ.Chain(c.observ, c.telemetry, p.logger), shape.Chain(c.shaping)
 	dpHandler := gateway.Chain(dpCore, gateway.WriteStall(gateway.WriteStallTimeout), gateway.Recover(p.logger),
 		gateway.RequestID, edgeObserv, limit.Chain(c.limits), edgeShape)

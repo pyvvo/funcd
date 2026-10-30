@@ -113,21 +113,37 @@ func newTargetLimiter(cfg Config, clk clock.Clock) *TargetLimiter {
 // table is full of buckets that have not refilled, it writes the 429 and returns true. A nil receiver
 // returns false.
 func (l *TargetLimiter) Throttle(w http.ResponseWriter, ns v1.NamespaceName, name v1.ObjectName) bool {
-	if l == nil {
-		return false
-	}
-	retryAfter, err := l.t.take(string(ns) + "/" + string(name))
+	retryAfter, err := l.Take(ns, name)
 	if err != nil {
-		writeTooMany(w, retryAfter, err)
+		w.Header().Set("Retry-After", retryAfter)
+		fault.WriteProblem(w, err)
 		return true
 	}
 	return false
 }
 
+// Take takes a token from ns/name's bucket without writing (ADR-0302): an empty bucket returns the 429 error and the
+// Retry-After value to send with it. A nil limiter takes nothing.
+func (l *TargetLimiter) Take(ns v1.NamespaceName, name v1.ObjectName) (retryAfter string, err error) {
+	if l == nil {
+		return "", nil
+	}
+	wait, err := l.t.take(string(ns) + "/" + string(name))
+	if err != nil {
+		return retryAfterValue(wait), err
+	}
+	return "", nil
+}
+
 // writeTooMany sets Retry-After before the problem body (ADR-0112 §2), rounded up to whole seconds.
 func writeTooMany(w http.ResponseWriter, retryAfter time.Duration, err error) {
-	w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(retryAfter.Seconds()))))
+	w.Header().Set("Retry-After", retryAfterValue(retryAfter))
 	fault.WriteProblem(w, err)
+}
+
+// retryAfterValue is a wait as a Retry-After header value: whole seconds, rounded up.
+func retryAfterValue(wait time.Duration) string {
+	return strconv.Itoa(int(math.Ceil(wait.Seconds())))
 }
 
 // bucketTable holds at most maxKeys token buckets. A full table evicts only a bucket that has refilled to

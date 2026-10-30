@@ -13,15 +13,12 @@
 package dataplane
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -33,6 +30,7 @@ import (
 	"github.com/pyvvo/funcd/internal/edge/observ"
 	"github.com/pyvvo/funcd/internal/edge/router"
 	"github.com/pyvvo/funcd/internal/edge/static"
+	"github.com/pyvvo/funcd/internal/invoke"
 	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/platform/httpx"
 	"github.com/pyvvo/funcd/internal/store"
@@ -66,14 +64,13 @@ type Server struct {
 	// (ADR-0240 Decision 6).
 	baseDomain string
 	enforcer   *authn.Enforcer
-	limiter    *limit.TargetLimiter
 	static     *static.Handler
 	logger     *slog.Logger
 	transport  *http.Transport // the Upstream routes' connection pool, shared by every request
-	// defaultTimeout bounds an external invoke of a Function without spec.timeout (ADR-0151).
-	defaultTimeout time.Duration
-	// held is the namespace hold the Function and upstream paths ask (ADR-0290); hold.NeverCall without WithCallGate.
+	// held is the namespace hold the upstream path asks (ADR-0290); hold.NeverCall without WithCallGate.
 	held hold.CallGate
+	// chain is the invokePlugin chain every function call runs (ADR-0302).
+	chain *invoke.Chain
 }
 
 // Option configures Handler.
@@ -81,6 +78,10 @@ type Option func(*Server)
 
 // WithCallGate makes the data plane refuse calls into a namespace that g holds (ADR-0290).
 func WithCallGate(g hold.CallGate) Option { return func(s *Server) { s.held = g } }
+
+// WithChain makes the data plane run ch on every function call (ADR-0302). Without it, Handler builds the built-in
+// chain from its own arguments.
+func WithChain(ch *invoke.Chain) Option { return func(s *Server) { s.chain = ch } }
 
 // heldRetryAfter is the Retry-After, in seconds, of a call refused by a namespace hold (ADR-0290 Decision 2).
 const heldRetryAfter = "30"
@@ -99,15 +100,15 @@ func Handler(st store.Store, act *activator.Activator, rtr router.Router, baseDo
 	if logger == nil {
 		logger = slog.Default()
 	}
-	if defaultTimeout <= 0 {
-		defaultTimeout = v1.DefaultInvokeTimeout
-	}
 	s := &Server{
-		store: st, activator: act, router: rtr, baseDomain: baseDomain, enforcer: enf, limiter: lim, static: stat, logger: logger.With("component", "dataplane"),
-		transport: httpx.NodeTransport(), defaultTimeout: defaultTimeout, held: hold.NeverCall,
+		store: st, activator: act, router: rtr, baseDomain: baseDomain, enforcer: enf, static: stat, logger: logger.With("component", "dataplane"),
+		transport: httpx.NodeTransport(), held: hold.NeverCall,
 	}
 	for _, o := range opts {
 		o(s)
+	}
+	if s.chain == nil {
+		s.chain = invoke.NewChain(Plugins(enf, lim, s.held, defaultTimeout)...)
 	}
 	return s
 }
@@ -182,9 +183,13 @@ func (s *Server) serveByName(w http.ResponseWriter, r *http.Request, ns v1.Names
 	}
 	fn, _ := obj.(*v1.Function)
 	if fn == nil || !s.servedByName(r, fn) {
-		if s.enforce(w, r, activator.FunctionRef{Namespace: ns, Name: name}, s.authStance(r, "", ns), op) {
-			fault.WriteProblem(w, fault.NotFoundf(op, "function %s/%s is not exposed by name", ns, name))
+		c := newCall(r, ns, name, rest, s.authStance(r, "", ns), false, received)
+		c.Function = fn
+		if rf := s.chain.Admit(r.Context(), c); rf != nil {
+			rf.WriteAnswer(w)
+			return
 		}
+		fault.WriteProblem(w, fault.NotFoundf(op, "function %s/%s is not exposed by name", ns, name))
 		return
 	}
 	stance := fn.Spec.Ingress.AuthMode()
@@ -203,44 +208,30 @@ func (s *Server) servedByName(r *http.Request, fn *v1.Function) bool {
 	return fn.Spec.Ingress.EnabledIn(s.exposureMode(r, fn.Namespace))
 }
 
-// enforce runs the F77 edge PEP for stance and writes its refusal; it reports whether the request may go on.
-func (s *Server) enforce(w http.ResponseWriter, r *http.Request, ref activator.FunctionRef, stance v1.AuthMode, op string) bool {
-	if s.enforcer != nil {
-		if err := s.enforcer.Enforce(r.Context(), r, ref, stance); err != nil {
-			fault.WriteProblem(w, err)
-			return false
-		}
-	} else if stance == v1.AuthAuthenticated {
-		// Fail-closed: an authenticated stance with no PEP wired cannot authenticate ⇒ 401.
-		fault.WriteProblem(w, fault.Unauthorizedf(op, "authentication required but no authenticator is configured"))
-		return false
-	}
-	return true
-}
-
-// serveFunction addresses the resolved function and hands off to the activator (the existing
-// warm-proxy / cold-wake path). remainder is the function-relative path (matched prefix already
-// stripped for a Route hit; the /function/<name> remainder for the path form). The F77 edge authn
-// PEP is enforced FIRST — before store.Get (no function-enumeration oracle) and before the activator
-// (no wake) — unless the request is internal fn-to-fn (ADR-0064), which is never edge-gated. Under key: function
-// an external call then takes a token from the Function's bucket, so a name that does not resolve creates no
-// bucket and a 429 never wakes a sandbox (ADR-0164). An external invoke gets a response deadline from received:
-// the Function's spec.timeout, else invoke.defaultTimeout (ADR-0151). fn is the Function already read, or nil.
+// serveFunction runs the call's invokePlugin chain around the activator hop (ADR-0302 Decision 3): Admit, the Function
+// read unless fn is the Function already read (the by-name form), the observ label, Before, then the activator, whose
+// answer hook runs After. The PEP runs at Admit, before store.Get (no function-enumeration oracle) and before the
+// activator (no wake); an internal fn-to-fn call (ADR-0064) is never edge-gated, so no Admit plugin applies to it.
+// remainder is the function-relative path: the matched prefix already stripped for a Route hit, the /function/<name>
+// remainder for the path form.
 func (s *Server) serveFunction(w http.ResponseWriter, r *http.Request, ns v1.NamespaceName, name v1.ObjectName, remainder string,
 	stance v1.AuthMode, internal bool, received time.Time, op string, fn *v1.Function) {
 	if remainder == "" {
 		remainder = "/"
 	}
-	if !internal && !s.enforce(w, r, activator.FunctionRef{Namespace: ns, Name: name}, stance, op) {
+	c := newCall(r, ns, name, remainder, stance, internal, received)
+	c.Function = fn
+	if rf := s.chain.Admit(r.Context(), c); rf != nil {
+		rf.WriteAnswer(w)
 		return
 	}
-	var obj v1.Object = fn
-	if fn == nil {
-		var err error
-		if obj, err = s.store.Get(r.Context(), v1.KindFunction.GVK(), ns, name); err != nil {
+	if c.Function == nil {
+		obj, err := s.store.Get(r.Context(), v1.KindFunction.GVK(), ns, name)
+		if err != nil {
 			fault.WriteProblem(w, fault.Wrapf(err, fault.KindOf(err), op, "function %s/%s", ns, name))
 			return
 		}
+		c.Function, _ = obj.(*v1.Function)
 	}
 	// Fill the F76 observability holder (if any) only once the function exists, so the metric/log
 	// label is correct for a Route hit and stays "-" for a 404 or a PEP reject — a client-chosen
@@ -248,64 +239,35 @@ func (s *Server) serveFunction(w http.ResponseWriter, r *http.Request, ns v1.Nam
 	if t, ok := observ.TargetFrom(r.Context()); ok {
 		t.Namespace, t.Function = string(ns), string(name)
 	}
-	if m, held := s.held.NamespaceMarker(ns); held {
-		refuseHeld(w, heldError(op, ns, m))
+	if rf := s.chain.Before(r.Context(), c); rf != nil {
+		rf.WriteAnswer(w)
 		return
-	}
-	if !internal && s.limiter.Throttle(w, ns, name) {
-		return
-	}
-	out := r.Clone(r.Context())
-	// A Function never receives the platform credential the PEP consumed (ADR-0171 Decision 5).
-	if !internal && stance == v1.AuthAuthenticated {
-		out.Header.Del("Authorization")
-		out.Header.Del("X-Api-Key")
-	}
-	fn, _ = obj.(*v1.Function)
-	serveHTTP := fn != nil && fn.Spec.Protocol.Normalized() == v1.ProtocolHTTP
-	// ADR-0243 Decision 3: an http Function learns the prefix the edge stripped (a Route's, or /function/<name>), so
-	// its redirects and links point back through the edge.
-	if !internal && serveHTTP {
-		out.Header.Del("X-Forwarded-Prefix")
-		if prefix := strings.TrimSuffix(strings.TrimSuffix(r.URL.Path, remainder), "/"); prefix != "" {
-			out.Header.Set("X-Forwarded-Prefix", prefix)
-		}
-	}
-	// ADR-0134: for an EXTERNAL invoke, build the CloudEvent envelope from the request body so a
-	// caller sends plain data (or nothing) and never hand-writes {"data":…}. Internal producers
-	// (fn-to-fn/workflow/sensor) already emit a v1.0 envelope and bypass this — leave them streamed.
-	// The read is independently bounded (maxNormalizeBytes) because normalization buffers. A bodiless upgrade
-	// (a WebSocket handshake) is the one external exception: it is streamed untouched, so the tunnel after the
-	// 101 carries no envelope bytes (ADR-0181).
-	if !internal && !bodilessUpgrade(r) {
-		body, rerr := io.ReadAll(http.MaxBytesReader(w, r.Body, maxNormalizeBytes))
-		if rerr != nil {
-			var tooLarge *http.MaxBytesError
-			if errors.As(rerr, &tooLarge) {
-				fault.WriteProblem(w, fault.PayloadTooLargef(op, "request body exceeds %d bytes", tooLarge.Limit))
-			} else {
-				fault.WriteProblem(w, fault.Invalidf(op, "reading request body: %v", rerr))
-			}
-			return
-		}
-		if serveHTTP {
-			body = HTTPEnvelope(ns, name, body)
-		} else {
-			body = InvokeEnvelope(ns, name, body)
-		}
-		out.Body = io.NopCloser(bytes.NewReader(body))
-		out.ContentLength = int64(len(body))
-		out.Header.Set("Content-Length", strconv.Itoa(len(body)))
 	}
 	// The remainder is relative to the function's upstream: a solo shim serves POST /, and a pooled
 	// function's upstream carries the /function/<name> its pool worker routes by (ADR-0046), set by
 	// the reconciler, which decides whether the function is pooled.
+	out := c.Request
 	out.URL.Path = remainder
-	if !internal {
-		out = activator.WithResponseDeadline(out, s.responseDeadline(obj, received))
-	}
-	out = activator.WithFunction(out, activator.FunctionRef{Namespace: ns, Name: name})
+	out = activator.WithFunction(out, c.Target)
+	out = activator.WithAnswerCheck(out, func(res *http.Response) error {
+		if rf := s.chain.After(r.Context(), c, invoke.NewAnswer(res)); rf != nil {
+			return rf
+		}
+		return nil // a nil *Refusal is not a nil error
+	})
 	s.activator.ServeHTTP(w, out)
+}
+
+// newCall is the Call of one function call through the data plane, on a clone of the inbound request, so a plugin
+// that edits the worker's request never edits the caller's.
+func newCall(r *http.Request, ns v1.NamespaceName, name v1.ObjectName, remainder string, stance v1.AuthMode,
+	internal bool, received time.Time) *invoke.Call {
+	caller := invoke.External
+	if internal {
+		caller = invoke.FnToFn
+	}
+	return &invoke.Call{Caller: caller, Target: activator.FunctionRef{Namespace: ns, Name: name}, Stance: stance,
+		Remainder: remainder, Received: received, Request: r.Clone(r.Context())}
 }
 
 // heldError refuses a call into ns while m holds it (ADR-0290 Decision 2). It names the hold, so the Function path
@@ -322,16 +284,6 @@ func heldError(op string, ns v1.NamespaceName, m hold.Marker) error {
 func refuseHeld(w http.ResponseWriter, err error) {
 	w.Header().Set("Retry-After", heldRetryAfter)
 	fault.WriteProblem(w, err)
-}
-
-// responseDeadline is an external invoke's limit, read from the Function loaded for this call so an edit applies
-// to the next one: spec.timeout, else invoke.defaultTimeout.
-func (s *Server) responseDeadline(obj v1.Object, received time.Time) activator.ResponseDeadline {
-	limit, source := s.defaultTimeout, "invoke.defaultTimeout"
-	if fn, ok := obj.(*v1.Function); ok && fn.Spec.Timeout > 0 {
-		limit, source = time.Duration(fn.Spec.Timeout), "spec.timeout"
-	}
-	return activator.ResponseDeadline{At: received.Add(limit), Limit: limit, Source: source}
 }
 
 // serveStatic serves a static Bucket-prefix backend (ADR-0120, F82). It resolves the auth stance

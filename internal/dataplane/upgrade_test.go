@@ -24,7 +24,7 @@ import (
 )
 
 // wsDataPlane serves dataplane.Handler for a warm Function f in default whose upstream is a wsupstream server.
-func wsDataPlane(t *testing.T, timeout time.Duration) (http.Handler, *httptest.Server, *wsupstream.Server) {
+func wsDataPlane(t *testing.T, timeout time.Duration, opts ...dataplane.Option) (http.Handler, *httptest.Server, *wsupstream.Server) {
 	t.Helper()
 	up := wsupstream.New(t)
 	st := store.New(memory.New())
@@ -35,7 +35,7 @@ func wsDataPlane(t *testing.T, timeout time.Duration) (http.Handler, *httptest.S
 		Scaler:    &spyScaler{},
 	})
 	require.NoError(t, err)
-	h := dataplane.Handler(st, act, router.New(), "", nil, nil, nil, timeout, nil)
+	h := dataplane.Handler(st, act, router.New(), "", nil, nil, nil, timeout, nil, opts...)
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	return h, srv, up
