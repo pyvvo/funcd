@@ -1,7 +1,8 @@
 # ADR-0301: funcd defines each contract rule once, in its contract package
 
-- **Status**: Proposed
-- **Date**: 2026-10-30 (judged twice; round 2 found no Blocker)
+- **Status**: Accepted 2026-10-30 by an `adr-batch` run the decider started ("then adr-batch till completion");
+  judged twice: round 1's findings folded, round 2 found no Blocker
+- **Date**: 2026-10-30
 - **Deciders**: green-0-rabbit
 - **Tags**: contract, validation, json-schema
 - **Realizes**: [FEAT-0001/F88](../feat/0001-feat-v1.1.md) (runtime-compiled I/O validators — advertised == enforced)
