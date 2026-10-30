@@ -85,3 +85,12 @@ func TestScenarioAVoidResultIsChecked(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, call(h, false, nil).Code)
 	require.Equal(t, http.StatusInternalServerError, call(h, false, map[string]string{"X-Test-Answer": `{"x": 1}`}).Code)
 }
+
+// A 204 is the null result, so an output contract that wants an object refuses it (ADR-0303 Decision 5).
+func TestANullResultIsCheckedToo(t *testing.T) {
+	t.Parallel()
+	up := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	h, st, _ := authDoorUpstream(t, warmAPI(), nil, creds{}, up, chainWith(checkedBy(t, `{}`, `{"type": "object"}`)...))
+	seedFunction(t, st, "api")
+	require.Equal(t, http.StatusInternalServerError, call(h, false, nil).Code)
+}
