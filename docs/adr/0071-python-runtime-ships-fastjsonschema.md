@@ -1,6 +1,7 @@
 # ADR-0071: the curated Python runtime image runs contract-validated functions — fastjsonschema + base/lib-closure repair
 
 - **Status**: Implemented (2026-06-22)
+- **Superseded in part by**: [ADR-0304](0304-the-shims-read-no-contract.md) (2026-10-31) — Decision 2, the Decision's closing paragraph, the scenario `validator-imports-in-image`, the fastjsonschema clause of `shim-stays-stdlib-only` and the checklist's fastjsonschema parts: the python314 image ships no fastjsonschema.
 - **Date**: 2026-06-22 (judged 2026-06-22 — resolves the ADR-0060⟷ADR-0054 contradiction; newest/load-bearing
   decision wins, reconciled here not by editing frozen ADR-0054; license BSD-3 + pinned + pure-Python.
   **Scope broadened at the decider's direction** during impl: verifying the rebuild surfaced two further

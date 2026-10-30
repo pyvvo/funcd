@@ -1,14 +1,14 @@
 # ADR-0304: the shims read no contract, and funcd names none to them
 
-- **Status**: Proposed (judged twice: round 1's Blocker, the http refusal, and its Major, the supersession list,
-  are folded; round 2 found no Blocker or Major, and its two Minors are folded; then widened at the decider's word,
-  2026-10-30, so that no part of funcd keeps fastjsonschema, and judged a third time: no Blocker or Major, and its
-  four Minors are folded)
+- **Status**: Accepted 2026-10-31 by the decider. Proposed 2026-10-30 and judged three times: round 1's Blocker, the
+  http refusal, and its Major, the supersession list, are folded; round 2 found no Blocker or Major, and its two Minors
+  are folded; then widened at the decider's word, 2026-10-30, so that no part of funcd keeps fastjsonschema, and
+  judged a third time: no Blocker or Major, and its four Minors are folded
 - **Date**: 2026-10-30
 - **Deciders**: green-0-rabbit
 - **Tags**: contract, runtime, shim, image
 - **Realizes**: [FEAT-0001/F88](../feat/0001-feat-v1.1.md) (advertised == enforced: funcd is the one reader of a contract)
-- **Supersedes in part**, each to get a `Superseded in part by: ADR-0304` back-link:
+- **Supersedes in part**, each with a `Superseded in part by: ADR-0304` back-link:
   - [ADR-0303](0303-funcd-checks-every-call-against-its-contract.md) Decision 7 (the shims get an open contract) and
     its scenario `the-shims-stop-checking`;
   - [ADR-0123](0123-runtime-compiled-io-validators.md) Decisions 2 (the shim's warm-up compile), 3 (the nodejs22
