@@ -2,7 +2,8 @@
 
 - **Status**: Proposed (judged twice: round 1's Blocker, the http refusal, and its Major, the supersession list,
   are folded; round 2 found no Blocker or Major, and its two Minors are folded; then widened at the decider's word,
-  2026-10-30, so that no part of funcd keeps fastjsonschema)
+  2026-10-30, so that no part of funcd keeps fastjsonschema, and judged a third time: no Blocker or Major, and its
+  four Minors are folded)
 - **Date**: 2026-10-30
 - **Deciders**: green-0-rabbit
 - **Tags**: contract, runtime, shim, image
@@ -22,8 +23,12 @@
   - [ADR-0158](0158-pool-member-identity.md) Contracts: the pool manifest row's `contract?`;
   - [ADR-0243](0243-http-functions.md) Decision 2's delivered-contract clause, and the matching parts of its scenario
     `http-mismatch` and its checklist: the reconciler refuses such a Function, not the shim (Decision 3);
-  - [ADR-0071](0071-python-runtime-ships-fastjsonschema.md) Decision 2 (the python314 image ships fastjsonschema),
-    its scenario `validator-imports-in-image`, and the fastjsonschema clause of its scenario `shim-stays-stdlib-only`.
+  - [ADR-0071](0071-python-runtime-ships-fastjsonschema.md) Decision 2 (the python314 image ships fastjsonschema), the
+    closing paragraph of its Decision ("stdlib + the contract-validator dep + the stdlib C-ext lib closure"), its
+    scenario `validator-imports-in-image`, the fastjsonschema clause of its scenario `shim-stays-stdlib-only`, and the
+    fastjsonschema parts of its checklist: the image is ADR-0054's stdlib-only one again, plus its library closure;
+  - [ADR-0144](0144-bundling-in-the-language-toolchains.md)'s statements that the runtime ships fastjsonschema: its
+    Relates to, a Constraint, the example of its scenario `bundle-vendors-locked-deps`, and its checklist.
 - **Relates to**: [ADR-0141](0141-repo-split-pyvvo-pinned-language-modules.md) (a shim change is a release, then a pin) ·
   issue [#1346](https://github.com/pyvvo/funcd/issues/1346), which this ADR's implementation closes
 
@@ -66,7 +71,8 @@ that says the Python shim needs it; the four scenarios.
 Out:
 - the shims' code: ADR-0303 decided that they stop checking, and each repo releases its change (ADR-0141);
 - the delivered blob, `ContractOf` and the checks (ADR-0303 Decisions 1 to 6), which stay;
-- `bench/contract-validation`, which installs its own fastjsonschema;
+- `bench/contract-validation`, a manual benchmark that needs fastjsonschema from whoever runs it (for example
+  `uv run --with fastjsonschema`);
 - an http Function's API contract, an OpenAPI spec for example, which funcd has no way to embed today (the decider,
   2026-10-30).
 
@@ -88,7 +94,7 @@ Out:
 | **Pin the new shims, name no contract, refuse an http Function with a contract in the reconciler, and ship no fastjsonschema** | One reader of the contract; no dead file, variable or package; the refusal comes before any worker boots | Waits for two releases; moves ADR-0243's delivered-contract start check into funcd | **chosen** |
 | Pin the new shims, keep writing the open contract | No reconciler change; ADR-0243's guard keeps working | A file that no shim reads; the scenario changes anyway | rejected |
 | Pin them and name no contract, but keep `FUNCD_CONTRACT_PATH` for an http worker whose bundle carries one | ADR-0243 unchanged | funcd stays a writer of the variable for one case; the refusal waits for a worker to boot and exit | rejected |
-| Keep fastjsonschema in the python314 image (ADR-0071) | An artifact built by hand with an older `funcd_shim.build`, whose baked validators import it, still loads | A package that nothing in funcd imports: no funcd build path bakes validators since ADR-0123 | rejected |
+| Keep fastjsonschema in the python314 image (ADR-0071) | An artifact built by hand with an older `funcd_shim.build`, whose baked validators import it, still loads | A package that nothing in funcd imports: no funcd build path bakes validators since ADR-0144 | rejected |
 | Keep today's pins | No change | Every worker compiles an empty schema with an engine it never needs; the build exports keep baking validators | rejected |
 
 ## Decision
@@ -146,10 +152,17 @@ None.
    with the message `pkg/funcd/shim_python_ci_e2e_test.go:39` asserts. `internal/testkit/bench/pypool_test.go` drops
    its fastjsonschema skip. The fake-interpreter fixtures that give a missing fastjsonschema as the reason
    (`cmd/funcd/main_test.go:254-256` and `:278`, `cmd/funcdctl/dev_interpreter_test.go:49-59`,
-   `cmd/funcdctl/dev_phase2_test.go:67`) take another reason.
-4. Decision 4: `images/runtime/python314` loses `requirements.txt` and the Dockerfile's `COPY`, `pip install` and
-   their comment; `flake.nix`'s dev-shell Python lists only `pyyaml`; `scripts/lima-linux-tests.yaml` drops the
-   fastjsonschema install, its probe line and its comment. The lane guard tests pass (`go test -run Lane ./scripts/`).
+   `cmd/funcdctl/dev_phase2_test.go:67`) take another reason, and the comment of `TestIssue129`
+   (`pkg/funcd/shim_regression_e2e_test.go:466-467`) no longer names the image's fastjsonschema.
+4. Decision 4:
+   - `images/runtime/python314` loses `requirements.txt` and the Dockerfile's `COPY`, `pip install` and their
+     comment; `.github/dependabot.yml` drops that directory from its `pip` entry and keeps it under `docker`;
+   - `flake.nix`'s dev-shell Python lists only `pyyaml`, and its comment (`:98`) no longer calls fastjsonschema the
+     shim's dependency;
+   - `scripts/lima-linux-tests.yaml` drops the fastjsonschema install and its probe line, and its comment and probe
+     description name python3.14 alone; `scripts/linux-exec.sh --recreate` boots a VM from the new template;
+   - `docs/DOCUMENTATION-PLAN.md:81` drops fastjsonschema from the planned Python guide;
+   - the lane guard tests pass (`go test -run Lane ./scripts/`).
 5. Tests, one per Scenario:
    - `TestScenarioTheShimsReadNoContract` replaces `TestScenarioTheShimsStopChecking`
      (`internal/function/openshim_internal_test.go`): the pinned shims through `internal/testkit/langmod`, solo and
@@ -160,12 +173,14 @@ None.
      delivered through `pushHandler` and the ORAS materializer (it replaces `TestPoolManifestNamesTheOpenContract`).
    - `TestScenarioAnHTTPFunctionWithAContractNeverStarts` in package `function_test`, beside
      `TestIssue1084_OCIArtifactWithoutContractDoesNotStart`; ADR-0243's `TestScenarioHTTPMismatch` passes unchanged.
-   - `the-python-image-runs-without-fastjsonschema`: `just lima-example kv` on the rebuilt runtime images, and
-     `python3.14 -c 'import fastjsonschema'` fails in the python314 image.
+   - `the-python-image-runs-without-fastjsonschema`: `just lima-example kv` on the rebuilt runtime images, and a
+     step of `build-runtime-images`, after the python314 build, that runs `docker run --rm --entrypoint python3.14
+     funcd/runtime-python314:latest -c "import funcd_shim.shim, ssl; import fastjsonschema"` and requires its error
+     to be `No module named 'fastjsonschema'`.
 6. `just ci` green and the e2e suite green with the new pins. Definition of done: the four Scenario tests pass,
    ADR-0303's other scenario tests and `TestScenarioHTTPMismatch` pass unchanged, no non-test code in funcd sets
    `FUNCD_CONTRACT_PATH` or writes `.funcd-contract-open.json` (only `TestScenarioTheShimsReadNoContract` sets them,
-   to prove that the shims ignore them), and no file in funcd installs fastjsonschema but `bench/contract-validation`.
+   to prove that the shims ignore them), and no file in funcd installs fastjsonschema; only `bench/contract-validation` imports it.
 
 ## Review checklist
 
@@ -188,7 +203,7 @@ None.
 - Negative: each pool whose members carry a contract is rebuilt once after the upgrade, because its manifest signature
   changes (`manifestSignature`, `internal/function/pool.go`). An artifact built by hand with an older
   `funcd_shim.build` keeps baked validators that import fastjsonschema, so it fails `ShapeInvalid` when it loads, in
-  the image and on any host Python; no funcd build path makes one since ADR-0123. As under ADR-0303, a call that
+  the image and on a host Python without fastjsonschema; no funcd build path makes one since ADR-0144. As under ADR-0303, a call that
   reaches a shim without funcd's chain is not checked.
 - Risks accepted: an image override (`--image runtime=<ref>`) or a custom image prefix
   (`internal/runtime/ctrmanager/manager.go`) can run an older shim, which then falls back to its module-baked
@@ -196,7 +211,8 @@ None.
 
 ## Open questions
 
-- How an http Function carries its API contract, an OpenAPI spec for example: a later ADR.
+- How an http Function carries its API contract, an OpenAPI spec for example: a later ADR, tracked by the board card
+  "An http Function's API contract, such as an OpenAPI spec".
 
 ## References
 
