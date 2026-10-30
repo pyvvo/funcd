@@ -36,7 +36,8 @@ the Python shim the first one as a string
 
 The purpose: one definition of each rule, owned by funcd and pinned by tests: what each profile format and a `pattern`
 accept, and what a 422 or 500 lists. Its callers are funcd's profile gate now (`contract.Check`, run by
-`funcdctl push` and the bundle gate) and the call-time check later, which a following ADR places and which closes #1339.
+`funcdctl push`, `funcdctl types` and the bundle gate) and the call-time check later, which a following ADR places and
+which closes #1339.
 
 ## Scenarios
 
@@ -49,22 +50,26 @@ Each scenario runs on the contract package (`Compile`, then `Validate`) unless i
   `"urn:uuid:550e8400-e29b-41d4-a716-446655440000"` returns one detail.
 - `scenario: email-is-an-rfc5321-mailbox` — Given `format: email`, Then `"ops@localhost"` passes and
   `"a b@example.com"` returns one detail.
-- `scenario: uri-is-absolute-and-ascii` — Given `format: uri`, Then `"https://example.com/a?b=c"` passes, and
-  `"http://例え.テスト/"` and `"/relative/path"` each return one detail.
-- `scenario: integer-formats-keep-their-ranges` — Given `format: int32`, Then 2147483647 passes and 2147483648 fails;
-  Given `format: int64`, Then 9007199254740991 passes and 9007199254740992 fails (ADR-0150).
-- `scenario: pattern-follows-ecma262` — Given `pattern: ^\d+$`, Then `"123"` passes and `"١٢٣"` fails; Given
-  `pattern: ^\w+$`, Then `"café"` fails; Given `pattern: ^(?!admin$)[a-z]+$`, Then `"alice"` passes and `"admin"`
-  fails.
+- `scenario: uri-has-a-scheme-and-is-ascii` — Given `format: uri`, Then `"https://example.com/a?b=c"` and
+  `"https://example.com/a#b"` pass, and `"http://例え.テスト/"`, `"http://example.com/a b"` and `"/relative/path"`
+  each return one detail.
+- `scenario: integer-formats-keep-their-ranges` — Given `format: int32`, Then 2147483647 and −2147483648 pass and
+  2147483648 and −2147483649 fail; Given `format: int64`, Then ±9007199254740991 pass and ±9007199254740992 fail
+  (ADR-0150).
+- `scenario: pattern-follows-ecma262` — Given `pattern: ^\d+$`, Then `"123"` passes, and `"١٢٣"` and `"123\n"` fail;
+  Given `pattern: ^\w+$`, Then `"café"` fails; Given `pattern: ^(?!admin$)[a-z]+$`, Then `"alice"` passes and
+  `"admin"` fails.
 - `scenario: a-runaway-pattern-match-fails-the-value` — Given `pattern: ^(a+)+$` and the default match timeout, When
-  the value is 40 `a` followed by `!`, Then `Validate` returns within 1 s with one detail whose message names the
-  timeout.
+  the value is 40 `a` followed by `!`, Then `Validate` returns within 1 s with one detail at path `""`.
 - `scenario: every-error-is-listed` — Given a closed object whose required properties are `a` (string) and `b`
   (integer), When the value is `{"a": 1, "b": "x"}`, Then `Validate` returns two details, paths `/a` then `/b`, each
-  with a message.
-- `scenario: push-gates-patterns` — Given a contract side with `pattern: "[z-a]"`, When `funcdctl push` or the bundle
-  gate runs `contract.Check` on it, Then it fails with Invalid naming the pattern's schema location and nothing is
-  pushed; Given `pattern: ^(?!admin$)[a-z]+$` instead, Then `contract.Check` passes.
+  with a message; When it is `{"a": "x"}`, Then one detail at `/b`.
+- `scenario: a-union-reports-its-tagged-variant` — Given a discriminated `oneOf` on `kind` whose variants are
+  `{"kind": "a", "x": integer}` and `{"kind": "b", "y": string}`, When the value is `{"kind": "a", "x": "1"}`, Then
+  one detail at `/x`; When it is `{"kind": "c"}` or has no `kind`, Then one detail at `""`.
+- `scenario: push-gates-patterns` — Given a contract side with `pattern: "[z-a]"`, When `funcdctl push`,
+  `funcdctl types` or the bundle gate runs `contract.Check` on it, Then it fails with Invalid naming the pattern's
+  schema location and nothing is pushed; Given `pattern: ^(?!admin$)[a-z]+$` instead, Then `contract.Check` passes.
 
 ## Scope
 
@@ -73,11 +78,13 @@ shape of `details` in a 422 (input) and a 500 (output); the Go API that compiles
 validates a document; `contract.Check` compiling each side with it.
 
 Out:
-- where the call-time check runs (a per-worker Go front or funcd's gateway), its wiring and config keys, and whether a
-  422 caps `details`: the following ADR, which closes #1339;
+- where the call-time check runs (a per-worker Go front or funcd's gateway), its wiring, its config keys, and the
+  budget of one request: the following ADR, which closes #1339;
 - the Node and Python shims, unchanged until that ADR replaces their check;
 - funcd's Go `CheckInput` for Workflow inputs, which checks types only (`internal/controlplane/admission/workflowrun.go:89`,
   `internal/workflow/engine.go:304`), as in ADR-0150;
+- App values schemas ([ADR-0217](0217-app-templates-values-and-rendering.md)), which keep the engine's defaults
+  (`internal/app/template/values.go:133-134`: RE2 patterns, formats as annotations);
 - a new format, and the `error` string of a 422 or 500 (unchanged).
 
 ## Constraints & Decision drivers
@@ -97,51 +104,61 @@ Out:
 |---|---|---|---|
 | **One Go definition in `internal/contract`; push uses it now, the call-time check later** | One definition under test; Go is funcd's language and the engine is already a dependency | The shims keep disagreeing until the call-time ADR ships | **chosen** (#1339) |
 | Register the same rules in each shim now (ajv, fastjsonschema) | Closes the gap at once | Three definitions to keep equal, and shim code plus two releases that the call-time check then retires | rejected |
-| The engine's own behavior is the definition | No code | An engine upgrade changes a verdict unnoticed; the engine accepts an IRI as a `uri` ([format.go#L535-L548](https://github.com/santhosh-tekuri/jsonschema/blob/v6.0.3/format.go#L535-L548)) | rejected |
+| The engine's own behavior is the definition | No code | An engine upgrade changes a verdict unnoticed; the built-in `uri` accepts an IRI and a space ([format.go#L515-L548](https://github.com/santhosh-tekuri/jsonschema/blob/v6.0.3/format.go#L515-L548)) | rejected |
 | Patterns in Go's RE2, the engine's default ([compiler.go#L330-L331](https://github.com/santhosh-tekuri/jsonschema/blob/v6.0.3/compiler.go#L330-L331)) | Linear time, no timeout needed | Not ECMA-262: refuses lookarounds and backreferences that ajv accepts | rejected |
-| **Patterns in ECMA-262 through regexp2/v2 (`ECMAScript\|Unicode`), with a match timeout** | JSON Schema's dialect; the reading goja already gives funcd's expressions | Backtracking, so it needs the timeout | **chosen** |
+| Patterns through regexp2 v1 (`ECMAScript`), already an indirect dependency | Same engine family | Its option follows C#'s `RegexOptions.ECMAScript`; v2's targets the ECMAScript specification (README) and is the version goja uses for funcd's expressions | rejected |
+| **Patterns in ECMA-262 through regexp2/v2 (`ECMAScript\|Unicode`), with a match timeout** | JSON Schema's dialect; the reading goja already gives funcd | Backtracking, so it needs the timeout | **chosen** |
 | `details` lists the first error only | fastjsonschema's default | Hides the other errors | rejected |
+| A union's `details` lists every variant's errors (the engine's output) | No selection code | A value with a valid tag also reports every other variant's tag and required failures | rejected |
 
 ## Decision
 
 1. **A format means its standard**, and every format is asserted. funcd registers its own check for each profile name
    with `Compiler.RegisterFormat`, which replaces the engine's built-in of the same name
-   ([compiler.go#L67-L79](https://github.com/santhosh-tekuri/jsonschema/blob/v6.0.3/compiler.go#L67-L79)), so no
-   engine default decides a verdict:
+   ([compiler.go#L67-L79](https://github.com/santhosh-tekuri/jsonschema/blob/v6.0.3/compiler.go#L67-L79)):
 
    | Format | Meaning | Passes | Fails |
    |---|---|---|---|
-   | `date-time` | RFC 3339 §5.6 with §5.7: the day exists in its month, the hour is 00–23, the offset is required | `2026-10-30T10:00:00Z` | `2026-02-30T10:00:00Z`, `2026-10-30T10:00:00` |
+   | `date-time` | RFC 3339 §5.6, with §5.7: the day exists in its month, the hour is 00–23, the offset is required | `2026-10-30T10:00:00Z` | `2026-02-30T10:00:00Z`, `2026-10-30T10:00:00` |
    | `uuid` | RFC 4122 §3 string form, hex digits in any case, no `urn:uuid:` prefix | `550E8400-E29B-41D4-A716-446655440000` | `urn:uuid:550e8400-…` |
    | `email` | RFC 5321 §4.1.2 `Mailbox` | `ops@localhost` | `a b@example.com` |
-   | `uri` | RFC 3986 §4.3 absolute URI, ASCII only, so an IRI (RFC 3987) fails | `https://example.com/a?b=c` | `http://例え.テスト/`, `/relative/path` |
+   | `uri` | RFC 3986 §3 URI: a scheme is required, a fragment is allowed, ASCII only, so an IRI (RFC 3987) fails | `https://example.com/a#b` | `http://例え.テスト/`, `http://example.com/a b`, `/relative/path` |
    | `int32` | −2^31 … 2^31 − 1 | 2147483647 | 2147483648 |
    | `int64` | ADR-0150: −(2^53 − 1) … 2^53 − 1 | 9007199254740991 | 9007199254740992 |
 
+   A table pins each meaning: the scenario values plus the JSON-Schema-Test-Suite draft 2020-12 `optional/format`
+   cases for `date-time`, `email`, `uri` and `uuid` (MIT, commit `89e83a7`). A check may reuse the engine's built-in
+   only where that built-in passes the whole table.
 2. **A `pattern` means what ECMA-262 says**, with the `u` flag. regexp2/v2 compiles it with `ECMAScript|Unicode`, the
-   options goja uses, so `\d` is `[0-9]` and `\w` is `[A-Za-z0-9_]`. A pattern is not anchored. Each match runs under a
-   timeout, 100 ms by default; a match that times out fails the value with a detail that says so.
+   options goja uses, so `\d` is `[0-9]`, `\w` is `[A-Za-z0-9_]` and `$` ends the input. A pattern is not anchored.
+   Each match runs under a timeout, 100 ms by default, and a match that times out fails the value like any non-match.
+   The default matches regexp2's deadline clock, which ticks every 100 ms (`DefaultClockPeriod`), so a shorter timeout
+   is not tighter; a legitimate match takes microseconds.
 3. **`details` lists every error**, in one shape for input (422) and output (500): one `{"path", "message"}` entry per
-   failing keyword at a value, which are the leaves of the engine's error tree. `path` is an RFC 6901 JSON Pointer to
-   the value; `""` is the root, and a missing required property is reported at its object's path. Entries are sorted
-   by `path`, then `message`. `message` is for people, and its wording is not part of the contract. ADR-0058's `error`
-   string is unchanged.
+   leaf of the engine's error tree. `path` is an RFC 6901 JSON Pointer; `""` is the root. A missing required property
+   gets its own entry at the pointer it would have (`/b`). In a discriminated `oneOf`, only the variant whose tag the
+   value names is reported; a missing or unknown tag gives one entry at the union's path. Entries are sorted by
+   `path` in byte order, then by `message`. `message` is for people, and its wording is not part of the contract.
+   ADR-0058's `error` string is unchanged.
 4. **`internal/contract` owns these rules**, through `Compile` and `Validator.Validate` (Contracts). `Check` also
-   compiles each side with `Compile`, so `funcdctl push` (`cmd/funcdctl/contract.go:54-57`) and the bundle gate
-   (`internal/artifact/bundle.go:209-212`) refuse a side that cannot be checked, an invalid pattern included.
+   compiles each side with `Compile`, so `funcdctl push` and `funcdctl types` (`cmd/funcdctl/contract.go:47-58`) and
+   the bundle gate (`internal/artifact/bundle.go:209-212`) refuse a side that cannot be checked, an invalid pattern
+   included.
 5. **The shims stay unchanged.** A following ADR moves the call-time check to this package and decides where it runs;
    #1339 closes with that ADR's implementation.
 
 ## Design model
 
-None: the decision defines formats, a pattern dialect and an error shape, and picks a library; it adds no lifecycle or
-concurrency step (ADR-0272).
+None: the decision defines formats, a pattern dialect and an error shape, and picks a library (ADR-0272). The push
+gate and the call-time check are two rules that must agree, and they agree by construction: both call `Compile`.
 
 ## Temporary workarounds
 
 The Node and Python shims keep ajv and fastjsonschema, which disagree with Decisions 1 to 3 on the cases in Context.
-Exit criterion: the call-time ADR's implementation checks every call with this package and the shims stop checking;
-#1339 closes then.
+Push now compiles patterns with regexp2 only, so a pattern that Python's `re` cannot compile (`\p{…}`, a
+variable-width lookbehind) passes push and then fails the worker's validator compile, as any pattern can today. Exit
+criterion: the call-time ADR's implementation checks every call with this package and the shims stop checking; #1339
+closes then.
 
 ## Contracts
 
@@ -170,7 +187,8 @@ type Validator struct{ /* unexported */ }
 func Compile(schemaJSON []byte, opts ...Option) (*Validator, error)
 
 // Validate returns every error of doc (Decision 3), or nil when doc is valid. Numbers are compared exactly, never
-// through float64. It returns a fault.Invalid when doc is not JSON.
+// through float64. It returns a fault.Invalid when doc is not JSON. It does no I/O, and the match timeout bounds
+// each pattern match (Decision 2), so it takes no context.
 func (v *Validator) Validate(doc []byte) ([]Detail, error)
 ```
 
@@ -195,59 +213,73 @@ A 422 body under this ADR (the messages are illustrative):
 
 1. `internal/contract/rules.go`: the Contracts. Each `Compile` builds a `jsonschema.Compiler` with
    `DefaultDraft(jsonschema.Draft2020)`, `AssertFormat()`, `RegisterFormat` for the six profile names, and
-   `UseRegexpEngine` with regexp2/v2 (`ECMAScript|Unicode`, `MatchTimeout` set on each compiled pattern). `date-time`,
-   `uuid` and `email` may wrap the engine's built-in checks where the scenario values pass; `uri` adds the ASCII rule;
-   `int32` and `int64` are funcd's. The leaves of `ValidationError.BasicOutput()` map to `Detail`.
+   `UseRegexpEngine` with regexp2/v2 (`ECMAScript|Unicode`, `MatchTimeout` on each compiled pattern; a timeout error
+   is a non-match). The leaves come from walking `ValidationError.Causes`, as `leaves` in
+   `internal/app/template/values.go` does, with each token escaped per RFC 6901; the union rule reads the
+   `discriminator` and each variant's tag `const` or `enum` from the compiled side.
 2. `internal/contract/contract.go`: `Check` calls `Compile` after `walk` and wraps its error as Invalid.
 3. `go mod tidy`: regexp2/v2 v2.2.1 moves to the direct block; no new module.
-4. Tests: in `internal/contract/rules_test.go`, one test per scenario named `TestScenario` plus the scenario name in
-   CamelCase (`TestScenarioDateTimeFollowsRFC3339`, …) with the values above, and `TestValidateConcurrent` under
-   `-race`; `TestScenarioPushGatesPatterns` goes through `Check` in `internal/contract/contract_test.go`.
-5. `just ci` green. Definition of done: every scenario has one passing test, and no shim, gateway or `CheckInput` code
-   changes.
+4. Tests in `internal/contract`: one test per scenario named `TestScenario` plus the scenario name in CamelCase
+   (`TestScenarioDateTimeFollowsRFC3339`, …), `TestScenarioPushGatesPatterns` through `Check`; `TestFormatTable` over
+   the test-suite files vendored under `testdata/jsts/` with their license; `TestValidateConcurrent` under `-race`.
+5. `just ci` green. Definition of done: every scenario has one passing test, `TestFormatTable` passes, and no shim,
+   gateway or `CheckInput` code changes.
 
 ## Review checklist
 
-- [ ] funcd registers the six profile formats with the meanings of Decision 1; `uri` fails any non-ASCII character.
+- [ ] funcd registers the six profile formats with the meanings of Decision 1, and every case of the table passes.
 - [ ] Patterns compile with regexp2/v2 `ECMAScript|Unicode` and a `MatchTimeout`; a timed-out match fails the value.
-- [ ] `Validate` returns every leaf error as `{path, message}`, `path` an RFC 6901 pointer, sorted by path then message.
+- [ ] `Validate` returns the leaves of `Causes` as `{path, message}`: RFC 6901 paths, one entry per missing property,
+      only the tagged variant of a union, sorted by path in byte order then message.
 - [ ] `Check` compiles each side: `[z-a]` fails it and `^(?!admin$)[a-z]+$` passes it.
 - [ ] Each scenario has one named, passing test; `TestValidateConcurrent` passes under `-race`.
 - [ ] regexp2/v2 v2.2.1 is direct in `go.mod`; no shim, gateway or `CheckInput` change.
 
 ## Consequences
 
-- Positive: each rule has one definition, written by funcd and pinned by tests, so an engine upgrade cannot change a
-  verdict unnoticed. Push refuses a pattern that no check could run. The call-time ADR only wires this package.
+- Positive: each rule has one definition, written by funcd and pinned by a table, so an engine upgrade cannot change a
+  pinned verdict unnoticed. Push refuses a pattern that no check could run. The call-time ADR only wires this package.
 - Negative: the shims keep disagreeing until the call-time ADR ships (Temporary workarounds). A contract whose pattern
-  regexp2 cannot compile now fails push; no example in funcd-functions v0.7.0 has a pattern or a format. Detail
-  messages differ from the shims' wording.
-- Risks accepted: regexp2's ECMAScript mode follows .NET's reading of ECMA-262 and may differ from a JavaScript engine
-  on rare syntax; the scenario tests pin what funcd relies on, and push refuses what regexp2 cannot compile. A
-  pathological pattern costs up to the match timeout per match.
+  regexp2 cannot compile now fails push and `funcdctl types`; no example in funcd-functions v0.7.0 has a pattern or a
+  format. Detail messages differ from the shims' wording.
+- Risks accepted: the timeout bounds one match, not one document. A pathological pattern costs up to the timeout plus
+  one clock tick for each string it checks, so one large document can cost minutes of CPU; the call-time ADR sets the
+  budget of one request. The timeout is wall-clock, so a match near it can pass on an idle host and fail on a loaded
+  one; legitimate patterns finish orders of magnitude below it. regexp2/v2's ECMAScript mode aims at the
+  specification but is not a JavaScript engine; the tests pin what funcd relies on, and push refuses what regexp2
+  cannot compile.
 
 ## Open questions
 
 - Where the call-time check runs (a per-worker Go front or funcd's gateway), the funcdconfig key for the match
-  timeout, and whether a 422 caps `details`: the call-time ADR.
-- Whether a failed discriminated `oneOf` lists every variant's errors or only the tagged variant's: the call-time ADR.
+  timeout, the CPU budget of one request, and whether `details` is capped: the call-time ADR.
+- A 422 that funcd's own Go code produces at the edge falls under the blueprint's RFC 9457 rule
+  (`blueprint.md:970`), while this body is ADR-0058's `{error, details}`: the call-time ADR reconciles them.
 
 ## References
 
 - Issue [#1339](https://github.com/pyvvo/funcd/issues/1339) and its decision comment; issue #518 (ADR-0150).
 - JSON Schema 2020-12: Core §6.4 (regular expressions: ECMA-262, the `u` flag, not anchored); Validation §6.3.3
   (`pattern`), §7.2 (format as annotation or assertion), §7.3.1, §7.3.2 and §7.3.5 (date-time, email, uri, uuid).
-- RFC 3339 §5.6–5.7, RFC 4122 §3, RFC 5321 §4.1.2, RFC 3986 §4.3, RFC 3987, RFC 6901, ECMA-262.
+- RFC 3339 §5.6–5.7, RFC 4122 §3 (obsoleted by RFC 9562, same string form), RFC 5321 §4.1.2, RFC 3986 §3, RFC 3987,
+  RFC 6901, ECMA-262.
+- JSON-Schema-Test-Suite (MIT), `tests/draft2020-12/optional/format/` at
+  [`89e83a7`](https://github.com/json-schema-org/JSON-Schema-Test-Suite/tree/89e83a74014617ffbe79a56d83d14d054cd11417/tests/draft2020-12/optional/format).
 - santhosh-tekuri/jsonschema v6.0.3:
   [compiler.go#L53](https://github.com/santhosh-tekuri/jsonschema/blob/v6.0.3/compiler.go#L53) (`AssertFormat`),
   [#L67-L79](https://github.com/santhosh-tekuri/jsonschema/blob/v6.0.3/compiler.go#L67-L79) (`RegisterFormat`),
   [#L146](https://github.com/santhosh-tekuri/jsonschema/blob/v6.0.3/compiler.go#L146) (`UseRegexpEngine`),
-  [output.go#L149](https://github.com/santhosh-tekuri/jsonschema/blob/v6.0.3/output.go#L149) (`BasicOutput`).
+  [#L306-L314](https://github.com/santhosh-tekuri/jsonschema/blob/v6.0.3/compiler.go#L306-L314) (`Regexp` is
+  `MatchString(string) bool`), [validator.go#L960-L972](https://github.com/santhosh-tekuri/jsonschema/blob/v6.0.3/validator.go#L960-L972)
+  (`ValidationError.Causes`). It does not document `*Schema` as safe for concurrent use, so `TestValidateConcurrent`
+  is the guard.
 - dlclark/regexp2/v2 v2.2.1 (MIT):
   [options.go#L34-L36](https://github.com/dlclark/regexp2/blob/v2.2.1/options.go#L34-L36) (`ECMAScript`, `Unicode`),
   [regexp.go#L31](https://github.com/dlclark/regexp2/blob/v2.2.1/regexp.go#L31) (safe for concurrent use),
-  [regexp.go#L38](https://github.com/dlclark/regexp2/blob/v2.2.1/regexp.go#L38) (`MatchTimeout`). goja compiles
-  patterns with the same options (`regexp.go:89-102` at the version in `go.mod`).
+  [regexp.go#L38](https://github.com/dlclark/regexp2/blob/v2.2.1/regexp.go#L38) (`MatchTimeout`),
+  [fastclock.go#L117](https://github.com/dlclark/regexp2/blob/v2.2.1/fastclock.go#L117) (`DefaultClockPeriod`),
+  [README.md#L272-L275](https://github.com/dlclark/regexp2/blob/v2.2.1/README.md#L272-L275) (the ECMAScript mode).
+  goja compiles patterns with the same options (`regexp.go:89-102` at the version in `go.mod`).
 - The shims' 422 today: funcd-typescript
   [shim.ts#L129](https://github.com/pyvvo/funcd-typescript/blob/4a1ef558a936fc840c86d65336b304ba7affc1b4/shim/src/shim.ts#L129);
   funcd-python
