@@ -1,6 +1,8 @@
 # ADR-0303: funcd checks every call against its contract, and the shims stop checking
 
-- **Status**: Proposed
+- **Status**: Accepted 2026-10-30 by an `adr-batch` run the decider started ("then adr-batch till completion");
+  judged twice: round 1's three Majors (a real-shim proof, the result bound as an answer change, a named budget cut)
+  and its Minors folded; round 2 found no Blocker or Major, and its Minor on the steps' and events' bounds is folded
 - **Date**: 2026-10-30
 - **Deciders**: green-0-rabbit
 - **Tags**: contract, validation, gateway, runtime
@@ -72,8 +74,8 @@ Out:
 
 ## Constraints & Decision drivers
 
-- ADR-0058 and ADR-0123: advertised == enforced with no fail-open, and the 422, 500 and 204 answers keep their status
-  and `error`; `details` takes ADR-0301's shape.
+- ADR-0058 and ADR-0123: advertised == enforced with no fail-open, except the switch window Risks accepts, and the
+  422, 500 and 204 answers keep their status and `error`; `details` takes ADR-0301's shape.
 - ADR-0302: the check is two plugins of the one chain, and a refusal before the worker wakes nothing.
 - funcd is one shared process: a check is bounded in memory and in CPU, since the call now spends funcd's resources,
   not its own cgroup's ([ADR-0291](0291-a-functions-workers-get-cpu-and-memory-limits.md)).
@@ -113,8 +115,11 @@ Out:
    failure answers 500 `{"error": "handler result does not match the output contract", "details": […]}`.
 6. **The bounds of one check:**
    - an input over 1 MiB, the limit external bodies and fn-to-fn calls already have, answers 413; a result over 1 MiB
-     answers 500, both as RFC 9457 problems. The result bound is new for external callers, Sensors and App hooks,
-     which received any size: a contracted result is a JSON document, and a larger one belongs in a Bucket;
+     answers 500, both as RFC 9457 problems. The input bound is new for Sensor events and App hook inputs, which have
+     no size cap of their own, and the result bound for external callers, Sensors and App hooks, which received any
+     size. Workflow steps already stay within the engine's `PayloadLimit` (256 KiB by default,
+     `pkg/funcd/funcd.go:135`), so the bounds change a step's answer only where an operator raised it past 1 MiB. A
+     contracted result is a JSON document, and a larger one belongs in a Bucket;
    - a number with more than 1 000 digits, or an exponent over 1 000 in magnitude, fails at its path before the
      engine reads any number;
    - pattern matching stops after 1 s per check: each pattern asked after that fails its value, and the answer adds a
@@ -187,7 +192,7 @@ func (r *Reconciler) ContractOf(ctx context.Context, ref activator.FunctionRef, 
    `a-body-over-the-limit-is-refused` run the plugins directly. ADR-0123's two env scenarios now expect the open
    contract.
 6. `just ci` green. Definition of done: every Scenario test passes, so on both runtimes funcd answers #1339's three
-   cases before any shim, and a value funcd accepts reaches the handler.
+   cases before any shim, with the verdicts ADR-0301's rule tests pin, and a value funcd accepts reaches the handler.
 
 ## Review checklist
 
@@ -203,8 +208,9 @@ func (r *Reconciler) ContractOf(ctx context.Context, ref activator.FunctionRef, 
 
 - Positive: one meaning for every contract on every runtime and path, with the shims pinned today; a bad input never
   wakes a sleeping Function; #1339 closes.
-- Negative: answer changes, beyond #1339's own: a contracted result over 1 MiB now answers 500 on paths that had no
-  limit, and a number over the digit or exponent bound, which `type: number` accepted, answers 422. The check spends
+- Negative: answer changes, beyond #1339's own: a contracted input over 1 MiB from a Sensor or an App hook now
+  answers 413, a contracted result over 1 MiB 500 on the paths that had no limit, and a number over the digit or
+  exponent bound, which `type: number` accepted, 422. The check spends
   funcd's CPU and memory within Decision 6's bounds; a bounded side holds one compiled instance per concurrent check,
   and an empty free list compiles one on the call path, as a cold cache materializes an artifact there. The shims
   compile an empty schema they never use, and a shim's span ends OK for a result funcd then refuses.
