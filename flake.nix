@@ -95,9 +95,9 @@
           git
           lefthook  # git hooks manager (gofmt gate — see lefthook.yml); installed by the shellHook
           act  # run GitHub Actions locally (nektos/act) — needs a docker daemon (colima on macOS)
-          # the Python shim's interpreter and runtime dep (ADR-0049/0123), 3.14 for the pool host (ADR-0050)
+          # the Python shim's interpreter (ADR-0049; the shim needs only its stdlib, ADR-0304), 3.14 for the pool host (ADR-0050)
           # PyYAML: the lane tools read their registry and VM YAML (scripts/lanes.yaml, scripts/lima.yaml) with it
-          (python314.withPackages (ps: [ ps.fastjsonschema ps.pyyaml ]))
+          (python314.withPackages (ps: [ ps.pyyaml ]))
           uv  # the duckdb lane's build runs funcd-bundle with it (scripts/lanes.yaml)
         ]) ++ limaFor system ++ [ (venomFor system) (fizzbeeFor system) ];
         shellHook = ''

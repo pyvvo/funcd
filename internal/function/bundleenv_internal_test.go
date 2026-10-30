@@ -86,41 +86,26 @@ func TestScenarioSingleFileBundleEnvHarmless(t *testing.T) {
 	require.Equal(t, "/art", spec.Env["FUNCD_BUNDLE_DIR"], "the bundle env is set but harmless")
 }
 
-// scenario: contract-env-process-mode (ADR-0123, superseded in part by ADR-0303 Decision 7) — a delivered contract
-// file in the bundle root makes the reconciler write the open contract beside it and point FUNCD_CONTRACT_PATH at its
-// host path, so the shim's validators accept everything and funcd checks the call.
-func TestScenarioContractEnvProcessMode(t *testing.T) {
+// scenario: funcd-names-no-contract (solo) — with a delivered contract in the bundle root, a solo worker's env has no
+// FUNCD_CONTRACT_PATH in process or in container mode, and funcd writes no open contract beside the blob (ADR-0304).
+func TestScenarioFuncdNamesNoContract(t *testing.T) {
 	t.Parallel()
-	r := newShimReconciler(t, nil)
-	root := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(root, ".funcd-contract.json"), []byte(`{"input":{},"output":{}}`), 0o600))
-	art := filepath.Join(root, "app.mjs")
-
-	spec := mustWorkerSpec(t, r, sampleFn(), art, envresolve.Resolved{}, nil)
-	require.Equal(t, filepath.Join(root, ".funcd-contract-open.json"), spec.Env["FUNCD_CONTRACT_PATH"],
-		"process mode points FUNCD_CONTRACT_PATH at the open contract beside the delivered one")
-}
-
-// scenario: contract-env-container-mode (ADR-0123, superseded in part by ADR-0303 Decision 7) — the same open contract
-// under the bind-mount target.
-func TestScenarioContractEnvContainerMode(t *testing.T) {
-	t.Parallel()
-	r := newContainerReconciler(t)
-	root := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(root, "__funcd_contract.json"), []byte(`{"input":{},"output":{}}`), 0o600))
-	art := filepath.Join(root, "handler.py")
-
-	spec := mustWorkerSpec(t, r, pythonFn(), art, envresolve.Resolved{}, nil)
-	require.Equal(t, filepath.Join(containerArtifactDir, ".funcd-contract-open.json"), spec.Env["FUNCD_CONTRACT_PATH"],
-		"container mode roots FUNCD_CONTRACT_PATH at the bind-mount target")
-}
-
-// scenario: no-contract-no-env — with no delivered contract file the env stays unset (dev/legacy),
-// so the shim's fail-closed path fires only for a contracted function whose schema truly went missing.
-func TestScenarioNoContractNoEnv(t *testing.T) {
-	t.Parallel()
-	r := newShimReconciler(t, nil)
-	spec := mustWorkerSpec(t, r, sampleFn(), filepath.Join(t.TempDir(), "app.mjs"), envresolve.Resolved{}, nil)
-	_, has := spec.Env["FUNCD_CONTRACT_PATH"]
-	require.False(t, has, "no delivered contract → FUNCD_CONTRACT_PATH unset")
+	for name, tc := range map[string]struct {
+		r                  *Reconciler
+		fn                 *v1.Function
+		contract, artifact string
+	}{
+		"process":   {newShimReconciler(t, nil), sampleFn(), ".funcd-contract.json", "app.mjs"},
+		"container": {newContainerReconciler(t), pythonFn(), "__funcd_contract.json", "handler.py"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(root, tc.contract), []byte(`{"input":{},"output":{}}`), 0o600))
+			spec := mustWorkerSpec(t, tc.r, tc.fn, filepath.Join(root, tc.artifact), envresolve.Resolved{}, nil)
+			_, has := spec.Env["FUNCD_CONTRACT_PATH"]
+			require.False(t, has, "the worker's env names no contract")
+			require.NoFileExists(t, filepath.Join(root, ".funcd-contract-open.json"), "funcd writes no open contract")
+		})
+	}
 }

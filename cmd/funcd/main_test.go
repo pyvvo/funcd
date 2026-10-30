@@ -251,8 +251,8 @@ func TestExecutionOptionsNodeAbsentDegrades(t *testing.T) {
 	require.Len(t, opts, 1, "only the runtime driver is wired (no shim)")
 }
 
-// Issue #184: a python that cannot import the shim (too old for its syntax, or missing
-// fastjsonschema) is not registered for the python* family; startup reports why instead. Counts are
+// Issue #184: a python that cannot import the shim (one too old for its syntax) is not registered for the
+// python* family; startup reports why instead. Counts are
 // relative to the wiring with no python, so the host's interpreters and node options don't change them.
 func TestIssue184_UnusablePythonNotRegistered(t *testing.T) {
 	t.Setenv("FUNCD_RUNTIME", "")
@@ -275,7 +275,7 @@ func TestIssue184_UnusablePythonNotRegistered(t *testing.T) {
 		extraOpts int
 		wantLog   string
 	}{
-		{"cannot-load", "echo \"ModuleNotFoundError: No module named 'fastjsonschema'\" >&2\nexit 1\n", 0, "fastjsonschema"},
+		{"cannot-load", "echo \"SyntaxError: invalid syntax\" >&2\nexit 1\n", 0, "SyntaxError"},
 		{"loads", "exit 0\n", 2, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

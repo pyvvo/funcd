@@ -15,9 +15,9 @@ import (
 	"github.com/pyvvo/funcd/internal/pooling"
 )
 
-// A pooled member's manifest row names the open contract funcd writes beside the delivered one, so its shim checks
-// nothing (ADR-0303 Decision 7).
-func TestPoolManifestNamesTheOpenContract(t *testing.T) {
+// scenario: funcd-names-no-contract (pooled) — a contracted cloudevent Function's pool manifest row has no contract,
+// and funcd writes no open contract beside the blob, which the materializer still delivers (ADR-0304).
+func TestScenarioFuncdNamesNoContract(t *testing.T) {
 	t.Parallel()
 	blob, err := artifact.ContractBlob([]byte(`{"type": "object", "required": ["a"]}`), []byte(`{}`))
 	require.NoError(t, err)
@@ -37,16 +37,12 @@ func TestPoolManifestNamesTheOpenContract(t *testing.T) {
 	require.True(t, ok)
 	data, err := os.ReadFile(spec.Env["FUNCD_POOL_MANIFEST"])
 	require.NoError(t, err)
-	var rows []struct {
-		Contract string `json:"contract"`
-	}
+	var rows []map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(data, &rows))
 	require.Len(t, rows, 1)
-	require.Equal(t, ".funcd-contract-open.json", filepath.Base(rows[0].Contract))
-	open, err := os.ReadFile(rows[0].Contract)
-	require.NoError(t, err)
-	var sides map[string]json.RawMessage
-	require.NoError(t, json.Unmarshal(open, &sides))
-	require.JSONEq(t, `{}`, string(sides["input"]))
-	require.JSONEq(t, `{}`, string(sides["output"]))
+	require.NotContains(t, rows[0], "contract", "the member's row names no contract")
+	var path string
+	require.NoError(t, json.Unmarshal(rows[0]["artifact"], &path))
+	require.FileExists(t, filepath.Join(filepath.Dir(path), ".funcd-contract.json"), "the materializer delivers the blob")
+	require.NoFileExists(t, filepath.Join(filepath.Dir(path), ".funcd-contract-open.json"), "funcd writes no open contract")
 }

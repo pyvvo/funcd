@@ -3,6 +3,7 @@ package function
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -16,10 +17,10 @@ import (
 	"github.com/pyvvo/funcd/internal/testkit/langmod"
 )
 
-// scenario: the-shims-stop-checking — the pinned Node and Python shims, solo and pooled, refuse #1339's ops@localhost
-// with the delivered contract (their engines want a dot in the domain) and run the handler with the open contract
-// funcd gives them (ADR-0303 Decision 7). funcd's RFC 5321 rule accepts the value (ADR-0301).
-func TestScenarioTheShimsStopChecking(t *testing.T) {
+// scenario: the-shims-read-no-contract — the Node and Python shims funcd pins, solo and pooled, run a handler whose
+// module still exports validators that refuse everything, with a delivered contract that the call and the result
+// break, named the way funcd named one before ADR-0304: they read neither, and answer 200 with the handler's result.
+func TestScenarioTheShimsReadNoContract(t *testing.T) {
 	t.Parallel()
 	node, nerr := exec.LookPath("node")
 	python, perr := exec.LookPath("python3.14")
@@ -34,40 +35,44 @@ func TestScenarioTheShimsStopChecking(t *testing.T) {
 		file, source string
 		solo, pool   []string
 	}{
-		"node":   {"handler.mjs", "export function handle() { return { ok: true }; }\n", []string{node, langmod.NodeShim(t)}, []string{node, langmod.PoolShim(t)}},
-		"python": {"handler.py", "def handle(context, event):\n    return {\"ok\": True}\n", []string{python, pyShim}, []string{python, pyPool}},
+		"node": {"handler.mjs", "export const __funcdValidateInput = () => [{ message: 'rejected' }];\n" +
+			"export const __funcdValidateOutput = () => [{ message: 'rejected' }];\n" +
+			"export function handle() { return { ok: 'yes' }; }\n", []string{node, langmod.NodeShim(t)}, []string{node, langmod.PoolShim(t)}},
+		"python": {"handler.py", "def __funcd_validate_input(d):\n    return ['rejected']\n\n\n" +
+			"def __funcd_validate_output(d):\n    return ['rejected']\n\n\n" +
+			"def handle(context, event):\n    return {'ok': 'yes'}\n", []string{python, pyShim}, []string{python, pyPool}},
 	}
+	blob := `{"dialect": "funcd-contract-test", "input": {"type": "object", "properties": {"email": {"type": "string"}},
+		"required": ["email"]}, "output": {"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"]}}`
 	for name, rt := range runtimes {
 		for _, pooled := range []bool{false, true} {
 			t.Run(name+map[bool]string{false: "-solo", true: "-pooled"}[pooled], func(t *testing.T) {
 				t.Parallel()
 				dir := t.TempDir()
 				require.NoError(t, os.WriteFile(filepath.Join(dir, rt.file), []byte(rt.source), 0o600))
-				blob := `{"dialect": "funcd-contract-test", "input": {"type": "object", "properties": {"email": {"type": "string",
-					"format": "email"}}, "required": ["email"]}, "output": {}}`
-				require.NoError(t, os.WriteFile(filepath.Join(dir, "__funcd_contract.json"), []byte(blob), 0o600))
-				open, err := writeOpenContract(dir)
-				require.NoError(t, err)
-				for contract, want := range map[string]int{"__funcd_contract.json": http.StatusUnprocessableEntity, open: http.StatusOK} {
-					cmd, path := rt.solo, "/"
-					if pooled {
-						cmd, path = rt.pool, "/function/fn"
-					}
-					port := startShim(t, dir, cmd, rt.file, filepath.Join(dir, contract), pooled)
-					// A pool host answers 503 until its member has loaded, as funcd's readiness probe sees it.
-					var got int
-					require.Eventually(t, func() bool {
-						resp, err := http.Post("http://127.0.0.1:"+port+path, "application/json",
-							strings.NewReader(`{"specversion": "1.0", "id": "1", "source": "test", "type": "t", "data": {"email": "ops@localhost"}}`))
-						if err != nil {
-							return false
-						}
-						_ = resp.Body.Close()
-						got = resp.StatusCode
-						return got != http.StatusServiceUnavailable
-					}, 30*time.Second, 50*time.Millisecond)
-					require.Equal(t, want, got, "%s with %s", name, contract)
+				contract := filepath.Join(dir, "__funcd_contract.json")
+				require.NoError(t, os.WriteFile(contract, []byte(blob), 0o600))
+				cmd, path := rt.solo, "/"
+				if pooled {
+					cmd, path = rt.pool, "/function/fn"
 				}
+				port := startShim(t, dir, cmd, rt.file, contract, pooled)
+				// A pool host answers 503 until its member has loaded, as funcd's readiness probe sees it.
+				var got int
+				var body []byte
+				require.Eventually(t, func() bool {
+					resp, err := http.Post("http://127.0.0.1:"+port+path, "application/json",
+						strings.NewReader(`{"specversion": "1.0", "id": "1", "source": "test", "type": "t", "data": {"email": 5}}`))
+					if err != nil {
+						return false
+					}
+					body, _ = io.ReadAll(resp.Body)
+					_ = resp.Body.Close()
+					got = resp.StatusCode
+					return got != http.StatusServiceUnavailable
+				}, 30*time.Second, 50*time.Millisecond)
+				require.Equal(t, http.StatusOK, got, "%s: %s", name, body)
+				require.JSONEq(t, `{"ok": "yes"}`, string(body))
 			})
 		}
 	}

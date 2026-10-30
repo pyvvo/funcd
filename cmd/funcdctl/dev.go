@@ -1610,7 +1610,7 @@ func devShimOptions(ctx context.Context, op string, needPython, needNode bool) (
 				haveDefault = true
 			}
 		case needPython:
-			return nil, nil, fault.Invalidf(op, "python %s cannot load the runtime shim (needs Python ≥3.12 with fastjsonschema; set FUNCD_PYTHON): %s", python, reason)
+			return nil, nil, fault.Invalidf(op, "python %s cannot load the runtime shim (needs Python ≥3.12; set FUNCD_PYTHON): %s", python, reason)
 		}
 	}
 

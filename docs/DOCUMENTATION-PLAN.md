@@ -78,7 +78,7 @@ docs/
 ├─ 2-guides/                        # how-to — one task per page, every page runnable against examples/
 │  ├─ write-a-function/
 │  │  ├─ typescript.md              # lift from funcd-typescript examples/hello-world/README.md (already the right shape)
-│  │  ├─ python.md                  # uv project, handler.py, dependency bundling, fastjsonschema (ADR-0049/0071/0089)
+│  │  ├─ python.md                  # uv project, handler.py, dependency bundling (ADR-0049/0089)
 │  │  └─ funcdctl-yaml.md           # client config: runtime/handler/bindings/contract; multi-function files (ADR-0122/0124)
 │  ├─ local-dev-loop.md             # `funcdctl dev`: from source, zero CRDs, --persist, print-env, interpreter config (ADR-0125–0132)
 │  ├─ package-and-push.md           # OCI artifact: push/pull/inspect/login; digest pinning at Revision (ADR-0031/0035/0059)

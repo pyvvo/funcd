@@ -28,7 +28,6 @@ updates:
           - "*"
   - package-ecosystem: pip
     directories:
-      - /images/runtime/python314
       - /images/runtime/duckdb
     schedule:
       interval: weekly
