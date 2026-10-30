@@ -56,3 +56,7 @@ docs/reviews/model-scorecard.md.
 
 ### Recommendation
 Pass: stamp ADR-0303 `Implemented` and F88's call-time part `implemented`.
+
+### Addendum
+This review ran `just ci`, which skips the e2e suite. The repo-wide gate then failed two e2e tests, both fixed in
+a2d814c4: see [the re-review](adr-0303-implementation-claude-opus-5-5-2.md).
