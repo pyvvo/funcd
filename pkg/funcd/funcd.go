@@ -44,6 +44,7 @@ import (
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
 	"github.com/pyvvo/funcd/internal/bus"
+	"github.com/pyvvo/funcd/internal/contractcheck"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/controlplane"
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
@@ -1131,7 +1132,9 @@ func (p *Platform) buildControlPlane() error {
 		}
 	}
 	targetLimiter := limit.NewTargetLimiter(c.limits)
-	callChain := invoke.NewChain(dataplane.Plugins(edgeEnforcer, targetLimiter, c.callGate(), c.invokeDefaultTimeout)...)
+	// ADR-0303: the contract plugins come last, so they check the envelope the data plane built.
+	callChain := invoke.NewChain(append(dataplane.Plugins(edgeEnforcer, targetLimiter, c.callGate(), c.invokeDefaultTimeout),
+		contractcheck.Plugins(fnReconciler)...)...)
 	sensorReconciler, err := sensor.NewReconciler(sensor.Deps{
 		Store:      c.store,
 		Subscriber: fanout,

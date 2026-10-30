@@ -1,4 +1,5 @@
-// Package plugintest holds invokePlugins for the tests of the chain's entries (ADR-0302).
+// Package plugintest holds invokePlugins and a contract source for the tests of the chain's entries (ADR-0302,
+// ADR-0303).
 package plugintest
 
 import (
@@ -7,8 +8,13 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"testing"
 
 	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/activator"
+	"github.com/pyvvo/funcd/internal/contract"
+	"github.com/pyvvo/funcd/internal/contractcheck"
 	"github.com/pyvvo/funcd/internal/invoke"
 )
 
@@ -78,3 +84,29 @@ func (p *Peeker) After(context.Context, *invoke.Call, *invoke.Answer) *invoke.Re
 
 // Seen is how many answers the peeker saw.
 func (p *Peeker) Seen() int { return int(p.seen.Load()) }
+
+// Contract is a contractcheck.Source that serves one compiled contract for every call.
+type Contract struct{ Pair *contractcheck.Pair }
+
+func (s Contract) ContractOf(context.Context, activator.FunctionRef, *v1.Function) (*contractcheck.Pair, error) {
+	return s.Pair, nil
+}
+
+// CompileContract compiles an input and an output side with the bounds funcd checks calls with (ADR-0303).
+func CompileContract(t testing.TB, input, output string) Contract {
+	t.Helper()
+	bounds := contract.WithCallBounds(contractcheck.CallBudget, contractcheck.MaxDigits)
+	in, err := contract.Compile([]byte(input), bounds)
+	if err != nil {
+		t.Fatalf("compile the input side: %v", err)
+	}
+	out, err := contract.Compile([]byte(output), bounds)
+	if err != nil {
+		t.Fatalf("compile the output side: %v", err)
+	}
+	return Contract{Pair: &contractcheck.Pair{Input: in, Output: out}}
+}
+
+// EmailInput is an input contract with one required email field, the field #1339's email case reads.
+const EmailInput = `{"type": "object", "properties": {"email": {"type": "string", "format": "email"}},
+	"required": ["email"], "additionalProperties": false}`

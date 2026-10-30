@@ -756,8 +756,17 @@ func (r *Reconciler) poolManifest(ctx context.Context, members []*v1.Function, s
 			}
 			path = p
 			// ADR-0123: the pool host runs in process mode (it reads the host artifact paths
-			// directly), so the delivered contract path is the host path in the bundle root.
-			if name, ok := contractFileIn(filepath.Dir(p)); ok {
+			// directly), so the contract path is the host path in the bundle root; ADR-0303 Decision 7: the
+			// member's shim gets the open contract.
+			name, err := writeOpenContract(filepath.Dir(p))
+			if err != nil {
+				if m.Name == self.Name {
+					return nil, 0, fault.Wrapf(err, fault.KindOf(err), op, "write the open contract of %s/%s", m.Namespace, m.Name)
+				}
+				r.logger.Warn("pool member left out: its open contract cannot be written", "function", m.Name, "err", err)
+				continue
+			}
+			if name != "" {
 				contractPath = filepath.Join(filepath.Dir(p), name)
 			}
 		}

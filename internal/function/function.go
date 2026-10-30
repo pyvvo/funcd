@@ -294,6 +294,7 @@ type Reconciler struct {
 	resolver          ArtifactResolver // nil → no digest resolution (ADR-0035)
 	platformsOf       PlatformResolver // nil → no platform gate (ADR-0145)
 	httpClient        *http.Client
+	contracts         contracts // each artifact's compiled contract (ADR-0303)
 
 	// secrets (ADR-0057) resolves a function's bound Secret names → env vars; nil → injection
 	// disabled (a function declaring spec.bindings.secret fails closed). developerFor supplies the PDP
@@ -770,6 +771,11 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 	if cm := (contractMissingError{}); errors.As(err, &cm) {
 		// Issue #1084: only a new artifact, so a new generation, brings the contract; no pass retries this one.
 		res, gerr := r.gateFailed(ctx, fn, gateFailure{reason: reasonContractMissing, message: cm.Error(), readyMessage: cm.Error(), phase: v1.PhaseFailed}, idx, drainAfter)
+		return afterHeld(res, gerr, herr)
+	}
+	if ci := (contractInvalidError{}); errors.As(err, &ci) {
+		// ADR-0303 Decision 3: as for a missing contract, only a new artifact brings one funcd can compile.
+		res, gerr := r.gateFailed(ctx, fn, gateFailure{reason: reasonContractInvalid, message: ci.Error(), readyMessage: ci.Error(), phase: v1.PhaseFailed}, idx, drainAfter)
 		return afterHeld(res, gerr, herr)
 	}
 	if err != nil {
@@ -3304,33 +3310,41 @@ func (e contractMissingError) Error() string {
 	return "artifact " + e.digest + " carries no I/O contract; a cloudevent Function needs one (ADR-0090)"
 }
 
-// materialize materializes fn's artifact and refuses it when the materializer is a ContractRequirer, fn is a
-// cloudevent Function and the bundle root holds no delivered contract (issue #1084). An http Function carries none by
-// design (ADR-0243).
+// materialize materializes fn's artifact and refuses it when fn is a cloudevent Function and the bundle root holds no
+// delivered contract while the materializer is a ContractRequirer (issue #1084), or one funcd cannot compile (ADR-0303).
+// An http Function carries none by design (ADR-0243).
 func (r *Reconciler) materialize(ctx context.Context, fn *v1.Function) (string, error) {
 	path, err := r.materializer.Materialize(ctx, fn)
 	if err != nil {
 		return "", err
 	}
-	if req, ok := r.materializer.(ContractRequirer); !ok || !req.RequiresContract() || fn.Spec.Protocol.Normalized() != v1.ProtocolCloudEvent {
+	if fn.Spec.Protocol.Normalized() != v1.ProtocolCloudEvent {
 		return path, nil
 	}
 	if _, ok := contractFileIn(filepath.Dir(path)); !ok {
-		return "", contractMissingError{digest: fn.Spec.ImageDigest}
+		if req, ok := r.materializer.(ContractRequirer); ok && req.RequiresContract() {
+			return "", contractMissingError{digest: fn.Spec.ImageDigest}
+		}
+		return path, nil
+	}
+	// ADR-0303 Decision 3: a delivered contract funcd cannot compile fails the revision.
+	if _, err := r.contracts.compiled(fn.Spec.ImageDigest, filepath.Dir(path)); err != nil {
+		return "", err
 	}
 	return path, nil
 }
 
-// addContractEnv sets FUNCD_CONTRACT_PATH (ADR-0123) so the shim compiles the delivered I/O schema
-// at worker warm-up. hostRoot is the bundle root on the host (where the materializer wrote the
-// contract file); workerRoot is the path the same dir is visible at inside the worker — equal to
-// hostRoot in process mode, the container mount target in container mode. No-op when no contract
-// file was delivered (legacy/dev), so the shim's fail-closed path only triggers for a contracted
-// function whose schema genuinely failed to reach the worker.
-func addContractEnv(env map[string]string, hostRoot, workerRoot string) {
-	if name, ok := contractFileIn(hostRoot); ok {
+// addContractEnv sets FUNCD_CONTRACT_PATH to the open contract it writes beside the delivered one (ADR-0303
+// Decision 7), so the shim's validators accept everything and funcd's contract plugins are the one check. hostRoot is
+// the bundle root on the host (where the materializer wrote the contract file); workerRoot is the path the same dir is
+// visible at inside the worker — equal to hostRoot in process mode, the container mount target in container mode.
+// No-op when no contract file was delivered (legacy/dev).
+func addContractEnv(env map[string]string, hostRoot, workerRoot string) error {
+	name, err := writeOpenContract(hostRoot)
+	if err == nil && name != "" {
 		env["FUNCD_CONTRACT_PATH"] = filepath.Join(workerRoot, name)
 	}
+	return err
 }
 
 // shimEnv is the env a solo shim worker starts from: the artifact path as the worker sees it, the
@@ -3376,7 +3390,9 @@ func (r *Reconciler) workerSpec(ctx context.Context, fn *v1.Function, rev v1.Obj
 		// FUNCD_CONTRACT_PATH (ADR-0123): the schema is delivered into the host bundle root
 		// (Dir(artifactPath)) which is bind-mounted at containerArtifactDir, so the in-worker path
 		// is under the mount target.
-		addContractEnv(env, filepath.Dir(artifactPath), containerArtifactDir)
+		if err := addContractEnv(env, filepath.Dir(artifactPath), containerArtifactDir); err != nil {
+			return runtime.WorkerSpec{}, err
+		}
 		r.addS3Env(env, fn)
 		r.addLakeEnv(env, lakeEnv)     // FUNCD_LAKE_<ALIAS>_URL/_TOKEN written DIRECTLY (ADR-0091) — never via addBindingEnv
 		r.addLakeExtensionDir(env, fn) // DUCKDB_EXTENSION_DIRECTORY for a lake consumer (dev; prod uses the bundle's duckdb-ext)
@@ -3413,7 +3429,9 @@ func (r *Reconciler) workerSpec(ctx context.Context, fn *v1.Function, rev v1.Obj
 		addBundleEnv(env, fn.Spec.Runtime, filepath.Dir(artifactPath)) // FUNCD_BUNDLE_DIR (+ PYTHONPATH, python family), ADR-0089
 		// FUNCD_CONTRACT_PATH (ADR-0123): the delivered schema sits in the same host dir the shim
 		// reads directly in process mode, so host root == worker root.
-		addContractEnv(env, filepath.Dir(artifactPath), filepath.Dir(artifactPath))
+		if err := addContractEnv(env, filepath.Dir(artifactPath), filepath.Dir(artifactPath)); err != nil {
+			return runtime.WorkerSpec{}, err
+		}
 		// FUNCD_INVOKE_SOCKET for context.invoke (ADR-0064); reachable on the host
 		if err := r.addInvokeSocket(env, fn); err != nil {
 			return runtime.WorkerSpec{}, err

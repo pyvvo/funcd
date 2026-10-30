@@ -2,6 +2,7 @@ package sensor_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/activator"
+	"github.com/pyvvo/funcd/internal/contractcheck"
 	"github.com/pyvvo/funcd/internal/eventing"
 	"github.com/pyvvo/funcd/internal/invoke"
 	"github.com/pyvvo/funcd/internal/sensor"
@@ -74,4 +76,20 @@ func TestScenarioAnAfterPluginReplacesTheAnswer(t *testing.T) {
 	require.Equal(t, fault.Unavailable, fault.KindOf(err))
 	good := &sensor.HTTPInvoker{Endpoints: readyEndpoints{upstream: answering(t, `{"ok":true}`).URL}, Chain: chain}
 	require.NoError(t, good.Invoke(context.Background(), "default", "fn", event()))
+}
+
+// scenario: every-path-checks-the-input (the sensor entry: Sensor actions and App hooks)
+func TestScenarioEveryPathChecksTheInput(t *testing.T) {
+	t.Parallel()
+	waker := &countingWaker{upstream: "http://unused.invalid"}
+	chain := invoke.NewChain(contractcheck.Plugins(plugintest.CompileContract(t, plugintest.EmailInput, `{}`))...)
+	bad := eventing.CloudEvent{SpecVersion: "1.0", ID: "e1", Data: json.RawMessage(`{"email": "a b@example.com"}`)}
+	for _, caller := range []invoke.Caller{invoke.SensorAction, invoke.AppHook} {
+		inv := &sensor.HTTPInvoker{Waker: waker, Chain: chain, Caller: caller}
+		err := inv.Invoke(context.Background(), "default", "fn", bad)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "returned status 422", "a %v call gets the contract's 422", caller)
+		require.Contains(t, err.Error(), "/email")
+	}
+	require.Zero(t, waker.wakes.Load(), "a refused call wakes nothing")
 }

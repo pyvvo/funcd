@@ -269,3 +269,37 @@ func TestValidateRefusesNonJSON(t *testing.T) {
 		}
 	}
 }
+
+// WithCallBounds (ADR-0303 Decision 6): a call's pattern matching stops at its budget and says so at the root, an
+// outsized number fails at its path before the engine reads it, and concurrent calls keep their budgets apart.
+func TestCallBounds(t *testing.T) {
+	t.Parallel()
+	v, err := contract.Compile([]byte(`{"type": "object", "properties": {
+		"n": {"type": "number"}, "s": {"type": "array", "items": {"type": "string", "pattern": "^(a+)+$"}}}}`),
+		contract.WithCallBounds(300*time.Millisecond, 10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPaths(t, v, `{"n": 1e10, "s": ["aaa"]}`)
+	wantPaths(t, v, `{"n": 1e11, "s": ["aaa"]}`, "/n")
+	wantPaths(t, v, `{"n": -2.5E-12}`, "/n")
+	wantPaths(t, v, `{"n": 1234567890}`)
+	wantPaths(t, v, `{"n": 12345678901}`, "/n")
+
+	hostile := `"` + strings.Repeat("a", 40) + `!"`
+	doc := `{"s": [` + strings.Repeat(hostile+",", 49) + hostile + `]}`
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() {
+			start := time.Now()
+			d, err := v.Validate([]byte(doc))
+			if err != nil || len(d) != 51 || d[0].Path != "" || !strings.Contains(d[0].Message, "budget") {
+				t.Errorf("Validate = %d details, %v; want the 50 values and a root detail naming the budget", len(d), err)
+			}
+			if took := time.Since(start); took > 2*time.Second {
+				t.Errorf("a bounded call took %v", took)
+			}
+		})
+	}
+	wg.Wait()
+}

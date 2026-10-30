@@ -25,9 +25,18 @@ func chainWith(extra ...invoke.Plugin) dataplane.Option {
 	return dataplane.WithChain(invoke.NewChain(append(dataplane.Plugins(nil, nil, nil, 0), extra...)...))
 }
 
-// call POSTs to /function/api in the default namespace, as an external call or, with internal, a fn-to-fn one.
+// call POSTs {} to /function/api in the default namespace, as an external call or, with internal, a fn-to-fn one.
 func call(h http.Handler, internal bool, header map[string]string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(http.MethodPost, "http://any/function/api", strings.NewReader(`{}`))
+	return callWith(h, internal, `{}`, header)
+}
+
+// callBody is call with its own body.
+func callBody(h http.Handler, internal bool, body string) *httptest.ResponseRecorder {
+	return callWith(h, internal, body, nil)
+}
+
+func callWith(h http.Handler, internal bool, body string, header map[string]string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, "http://any/function/api", strings.NewReader(body))
 	req.Header.Set("X-Funcd-Namespace", "default")
 	for k, v := range header {
 		req.Header.Set(k, v)

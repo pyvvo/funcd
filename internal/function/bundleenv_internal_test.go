@@ -86,8 +86,9 @@ func TestScenarioSingleFileBundleEnvHarmless(t *testing.T) {
 	require.Equal(t, "/art", spec.Env["FUNCD_BUNDLE_DIR"], "the bundle env is set but harmless")
 }
 
-// scenario: contract-env-process-mode (ADR-0123) — a delivered contract file in the bundle root
-// sets FUNCD_CONTRACT_PATH to the host path so the shim compiles the schema at warm-up.
+// scenario: contract-env-process-mode (ADR-0123, superseded in part by ADR-0303 Decision 7) — a delivered contract
+// file in the bundle root makes the reconciler write the open contract beside it and point FUNCD_CONTRACT_PATH at its
+// host path, so the shim's validators accept everything and funcd checks the call.
 func TestScenarioContractEnvProcessMode(t *testing.T) {
 	t.Parallel()
 	r := newShimReconciler(t, nil)
@@ -96,11 +97,12 @@ func TestScenarioContractEnvProcessMode(t *testing.T) {
 	art := filepath.Join(root, "app.mjs")
 
 	spec := mustWorkerSpec(t, r, sampleFn(), art, envresolve.Resolved{}, nil)
-	require.Equal(t, filepath.Join(root, ".funcd-contract.json"), spec.Env["FUNCD_CONTRACT_PATH"],
-		"process mode points FUNCD_CONTRACT_PATH at the delivered host sidecar")
+	require.Equal(t, filepath.Join(root, ".funcd-contract-open.json"), spec.Env["FUNCD_CONTRACT_PATH"],
+		"process mode points FUNCD_CONTRACT_PATH at the open contract beside the delivered one")
 }
 
-// scenario: contract-env-container-mode (ADR-0123) — the same delivery under the bind-mount target.
+// scenario: contract-env-container-mode (ADR-0123, superseded in part by ADR-0303 Decision 7) — the same open contract
+// under the bind-mount target.
 func TestScenarioContractEnvContainerMode(t *testing.T) {
 	t.Parallel()
 	r := newContainerReconciler(t)
@@ -109,7 +111,7 @@ func TestScenarioContractEnvContainerMode(t *testing.T) {
 	art := filepath.Join(root, "handler.py")
 
 	spec := mustWorkerSpec(t, r, pythonFn(), art, envresolve.Resolved{}, nil)
-	require.Equal(t, filepath.Join(containerArtifactDir, "__funcd_contract.json"), spec.Env["FUNCD_CONTRACT_PATH"],
+	require.Equal(t, filepath.Join(containerArtifactDir, ".funcd-contract-open.json"), spec.Env["FUNCD_CONTRACT_PATH"],
 		"container mode roots FUNCD_CONTRACT_PATH at the bind-mount target")
 }
 

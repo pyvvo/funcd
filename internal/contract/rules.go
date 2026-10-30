@@ -28,6 +28,8 @@ type Option func(*options)
 
 type options struct {
 	matchTimeout time.Duration
+	budget       time.Duration // WithCallBounds: 0 is no budget
+	maxDigits    int           // WithCallBounds: 0 is no limit
 }
 
 // defaultMatchTimeout is regexp2's deadline clock period (DefaultClockPeriod), so a shorter one is not tighter.
@@ -42,6 +44,7 @@ func WithMatchTimeout(d time.Duration) Option {
 type Validator struct {
 	schema *jsonschema.Schema // nil: ADR-0058's Json form, which accepts every document
 	unions map[string]union   // the side's discriminated oneOfs, by the location of the schema holding each
+	bounds *bounds            // WithCallBounds; nil is ADR-0301's unbounded Validator
 }
 
 // union is one discriminated oneOf: its tag property, and each variant's location and the tag values it names.
@@ -74,13 +77,35 @@ func Compile(schemaJSON []byte, opts ...Option) (*Validator, error) {
 	if err != nil {
 		return nil, fault.Invalidf(op, "contract side is not JSON: %v", err)
 	}
+	if o.budget > 0 || o.maxDigits > 0 {
+		first, err := compileInstance(doc, o)
+		if err != nil {
+			return nil, err
+		}
+		v := &Validator{unions: map[string]union{}, bounds: &bounds{doc: doc, opts: o, idle: make(chan *instance, maxIdle)}}
+		v.collectUnions(first.schema, doc)
+		v.bounds.put(first)
+		return v, nil
+	}
+	sch, err := compileSide(doc, o, ecmaScript(o.matchTimeout))
+	if err != nil {
+		return nil, err
+	}
+	v := &Validator{schema: sch, unions: map[string]union{}}
+	v.collectUnions(sch, doc)
+	return v, nil
+}
+
+// compileSide compiles a decoded side with funcd's formats and engine as the pattern engine.
+func compileSide(doc interface{}, o options, engine jsonschema.RegexpEngine) (*jsonschema.Schema, error) {
+	const op = "contract.Compile"
 	c := jsonschema.NewCompiler()
 	c.DefaultDraft(jsonschema.Draft2020)
 	c.AssertFormat()
 	for _, f := range profileFormats() {
 		c.RegisterFormat(f)
 	}
-	c.UseRegexpEngine(ecmaScript(o.matchTimeout))
+	c.UseRegexpEngine(engine)
 	c.UseLoader(sideOnly{})
 	if err := c.AddResource(sideURL, doc); err != nil {
 		return nil, fault.Invalidf(op, "contract side: %v", err)
@@ -89,9 +114,7 @@ func Compile(schemaJSON []byte, opts ...Option) (*Validator, error) {
 	if err != nil {
 		return nil, fault.Invalidf(op, "contract side does not compile: %v", err)
 	}
-	v := &Validator{schema: sch, unions: map[string]union{}}
-	v.collectUnions(sch, doc)
-	return v, nil
+	return sch, nil
 }
 
 // Validate returns every error of doc (Decision 3), or nil when doc is valid. Numbers are compared exactly, never
@@ -103,20 +126,49 @@ func (v *Validator) Validate(doc []byte) ([]Detail, error) {
 	if err != nil {
 		return nil, fault.Invalidf(op, "document is not JSON: %v", err)
 	}
+	if b := v.bounds; b != nil {
+		if b.opts.maxDigits > 0 {
+			if details := outsizedNumbers(inst, nil, b.opts.maxDigits, nil); len(details) > 0 {
+				return sorted(details), nil
+			}
+		}
+		in, err := b.take()
+		if err != nil {
+			return nil, fault.Wrapf(err, fault.Internal, op, "compile another instance")
+		}
+		defer b.put(in)
+		if b.opts.budget > 0 {
+			in.deadline.Store(time.Now().Add(b.opts.budget).UnixNano())
+		}
+		details, err := v.validate(in.schema, inst)
+		if err == nil && in.cut.Load() {
+			details = sorted(append(details, Detail{Path: "",
+				Message: fmt.Sprintf("the contract check ran out of its %v budget, so later patterns failed their values", b.opts.budget)}))
+		}
+		return details, err
+	}
 	if v.schema == nil {
 		return nil, nil
 	}
+	return v.validate(v.schema, inst)
+}
+
+func (v *Validator) validate(sch *jsonschema.Schema, inst interface{}) ([]Detail, error) {
 	var verr *jsonschema.ValidationError
-	if err := v.schema.Validate(inst); errors.As(err, &verr) {
-		details := v.leaves(verr, inst, nil)
-		slices.SortFunc(details, func(a, b Detail) int {
-			return cmp.Or(strings.Compare(a.Path, b.Path), strings.Compare(a.Message, b.Message))
-		})
-		return slices.Compact(details), nil
+	if err := sch.Validate(inst); errors.As(err, &verr) {
+		return sorted(v.leaves(verr, inst, nil)), nil
 	} else if err != nil {
-		return nil, fault.Internalf(op, "validate: %v", err)
+		return nil, fault.Internalf("contract.Validate", "validate: %v", err)
 	}
 	return nil, nil
+}
+
+// sorted orders details by path in byte order, then message, without duplicates (Decision 3).
+func sorted(details []Detail) []Detail {
+	slices.SortFunc(details, func(a, b Detail) int {
+		return cmp.Or(strings.Compare(a.Path, b.Path), strings.Compare(a.Message, b.Message))
+	})
+	return slices.Compact(details)
 }
 
 // leaves turns the engine's error tree into details: one per leaf, one per missing or extra property, and a

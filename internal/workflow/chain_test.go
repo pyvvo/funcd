@@ -2,10 +2,13 @@ package workflow
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/pyvvo/funcd/internal/contractcheck"
 	"github.com/pyvvo/funcd/internal/invoke"
 	"github.com/pyvvo/funcd/internal/testkit/plugintest"
 )
@@ -66,5 +69,26 @@ func TestScenarioAnAfterPluginReplacesTheAnswer(t *testing.T) {
 		case !refused && (err != nil || string(out) != body):
 			t.Fatalf("Dispatch(%s) = %s, %v, want the answer", body, out, err)
 		}
+	}
+}
+
+// scenario: every-path-checks-the-input (the dispatcher entry): the contract's 422 fails the step permanently, as the
+// shim's 422 did, and the step's function is never woken.
+func TestScenarioEveryPathChecksTheInput(t *testing.T) {
+	t.Parallel()
+	waker := &fakeWaker{upstream: "http://unused.invalid"}
+	d, err := NewHTTPDispatcher(DispatchDeps{Endpoints: fakeEndpoints{}, Waker: waker, Grant: fakeGrant{allow: true},
+		Chain: invoke.NewChain(contractcheck.Plugins(plugintest.CompileContract(t, plugintest.EmailInput, `{}`))...)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := dispatchReq("s-fn")
+	req.Input = json.RawMessage(`{"email": "a b@example.com"}`)
+	_, err = d.Dispatch(context.Background(), req)
+	if !isPermanent(err) || !strings.Contains(err.Error(), "rejected the step (422)") || !strings.Contains(err.Error(), "/email") {
+		t.Fatalf("Dispatch = %v, want a permanent 422 naming /email", err)
+	}
+	if waker.called {
+		t.Fatal("a refused step woke its function")
 	}
 }
