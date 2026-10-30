@@ -113,14 +113,13 @@ func TestE2EUserJourney(t *testing.T) {
 // TestE2EEventDataContract validates the I/O contract (ADR-0058/0123) through the public surface:
 // a SCHEMA-ONLY artifact (no baked validator) whose delivered input schema requires {hello: string}
 // rejects a wrong-shaped event with 422 *before* the handler runs, and runs normally on a matching
-// one. Under ADR-0123 the shim compiles the validator from the delivered digest-pinned schema at
-// warm-up (advertised == enforced) — the artifact bakes no __funcdValidate* callable. Node-gated.
+// one. Under ADR-0303 funcd compiles the delivered digest-pinned schema and checks each call against
+// it (advertised == enforced) — the artifact bakes no __funcdValidate* callable. Node-gated.
 func TestE2EEventDataContract(t *testing.T) {
 	dataPlane, runCLI := execPlatform(t)
 
-	// the artifact is schema-only (ADR-0123): just the handler, NO baked __funcdValidate*. The shim
-	// compiles the validator from the delivered schema and validates event.data before invoking
-	// (mismatch → 422). The output side is Json ({}), so the handler's object return is accepted.
+	// the artifact is schema-only (ADR-0123): just the handler, NO baked __funcdValidate*. funcd
+	// checks event.data against the delivered schema before invoking (mismatch → 422, ADR-0303). The output side is Json ({}), so the handler's object return is accepted.
 	bundle := filepath.Join(t.TempDir(), "handler.mjs")
 	require.NoError(t, os.WriteFile(bundle, []byte(
 		`export function handle(_, event) { return { echoed: event.data }; }`+"\n"), 0o600))

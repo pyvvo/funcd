@@ -153,8 +153,8 @@ func TestScenarioPushGatesBundleContract(t *testing.T) {
 		t.Parallel()
 		dir, entry := goodBundle(t)
 		// A schema-only handler carrying NO __funcd_validate_* symbols: the artifact no longer bakes
-		// a validator (ADR-0123 supersedes ADR-0060's build-time bake — the shim compiles it at
-		// warm-up), so the entry defining no validator symbol is now valid.
+		// a validator (ADR-0123 supersedes ADR-0060's build-time bake — funcd compiles the delivered
+		// schema, ADR-0303), so the entry defining no validator symbol is now valid.
 		require.NoError(t, os.WriteFile(filepath.Join(dir, entry),
 			[]byte("def handle(context, event):\n    return {}\n"), 0o600))
 		blob, err := artifact.VerifyBundleContract(dir, entry)

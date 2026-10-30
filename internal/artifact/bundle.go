@@ -47,7 +47,8 @@ const (
 	// bundleContractFile is the ADR-0090 I/O contract the bundle embeds ({input, output}); push
 	// gates it (VerifyBundleContract) and promotes it to the ADR-0059 contract layer. On
 	// materialization (ADR-0123) it is (re)written in the bundle dir with the exact digest-pinned
-	// ADR-0059 blob so the shim compiles the same bytes `funcdctl inspect` advertises.
+	// ADR-0059 blob, so funcd checks the calls against the same bytes `funcdctl inspect` advertises
+	// (ADR-0303).
 	bundleContractFile = "__funcd_contract.json"
 	// singleFileContractSidecar is the ADR-0123 dotfile sidecar carrying the delivered contract blob
 	// next to a single-file handler in the materializer cache. It is a DOTFILE (mirroring

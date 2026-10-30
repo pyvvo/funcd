@@ -1010,8 +1010,9 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, folder *devFold
 		funcd.WithRuntime(rt),
 		funcd.WithMaterializer(function.NewFileMaterializer()),
 		// A step's file:// copy carries no OCI artifact, so the production F65 resolver can never inspect it. An untyped
-		// resolver makes the typed-edge gate a no-op and the Workflow reaches Ready (each step still enforces its OWN
-		// contract at the shim, ADR-0123); the runtime comes from the build's contract file (ADR-0247 Decision 7).
+		// resolver makes the typed-edge gate a no-op and the Workflow reaches Ready (funcd still checks each step's
+		// call against its OWN contract, ADR-0303); the runtime comes from the build's contract file (ADR-0247
+		// Decision 7).
 		funcd.WithWorkflowContractResolver(devWorkflowContracts{}),
 		funcd.WithWorkflowRuntimeResolver(inst.runtimes),
 	}

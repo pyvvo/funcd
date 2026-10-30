@@ -256,8 +256,8 @@ func Pull(ctx context.Context, ref, digest, dir string, node v1.OCIPlatform) (pa
 		return "", fault.Wrapf(werr, fault.Internal, op, "write bundle")
 	}
 	// ADR-0123: deliver the digest-pinned ADR-0059 contract blob as a DOTFILE sidecar beside the
-	// single-file handler so the shim compiles the exact advertised bytes (advertised == enforced,
-	// no fail-open). The dotfile name is skipped by the FUNCD_ARTIFACT resolver (below), so it can
+	// single-file handler, so funcd checks the calls against the exact advertised bytes (advertised ==
+	// enforced, no fail-open; ADR-0303). The dotfile name is skipped by the FUNCD_ARTIFACT resolver (below), so it can
 	// never displace the handler as the lone entry.
 	if cerr := deliverContract(ctx, op, target, &manifest, dir, singleFileContractSidecar); cerr != nil {
 		return "", cerr
