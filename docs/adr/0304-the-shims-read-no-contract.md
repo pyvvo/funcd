@@ -1,6 +1,7 @@
 # ADR-0304: the shims read no contract, and funcd names none to them
 
-- **Status**: Proposed (judge round 1: one Blocker, the http refusal, and one Major, the supersession list, folded)
+- **Status**: Proposed (judged twice: round 1's Blocker, the http refusal, and its Major, the supersession list,
+  are folded; round 2 found no Blocker or Major, and its two Minors are folded)
 - **Date**: 2026-10-30
 - **Deciders**: green-0-rabbit
 - **Tags**: contract, runtime, shim
@@ -8,15 +9,16 @@
 - **Supersedes in part**, each to get a `Superseded in part by: ADR-0304` back-link:
   - [ADR-0303](0303-funcd-checks-every-call-against-its-contract.md) Decision 7 (the shims get an open contract) and
     its scenario `the-shims-stop-checking`;
-  - [ADR-0123](0123-runtime-compiled-io-validators.md) Decisions 2 (the shim's warm-up compile), 3 (AJV in the Node
-    shim, fastjsonschema's compile at init in the Python one), 6 and 7 (that compile's eval and cold-start bounds),
+  - [ADR-0123](0123-runtime-compiled-io-validators.md) Decisions 2 (the shim's warm-up compile), 3 (the nodejs22
+    image ships AJV; the Python shim compiles with fastjsonschema at init), 6 and 7 (that compile's eval and cold-start bounds),
     Decision 4's `FUNCD_CONTRACT_PATH` and its "the shim refuses to serve", which funcd's `ContractMissing` gate
     (#1084) now carries, and the scenarios `runtime-compiles-validator`, `schema-tamper-evident`,
     `eval-over-trusted-input` and `cold-start-within-budget`;
-  - [ADR-0125](0125-funcdctl-dev-local-run.md) Decision 3's `FUNCD_CONTRACT_PATH`: dev's 422, 500 and 204 come from
-    the gateway of its in-memory platform (ADR-0303);
+  - [ADR-0125](0125-funcdctl-dev-local-run.md) Decision 3's `FUNCD_CONTRACT_PATH`: dev's 422 and contract 500 come
+    from the gateway of its in-memory platform, which also checks the shim's 204 (ADR-0303);
   - [ADR-0150](0150-int64-contract-range.md) Decisions 2 and 3, the shims' int64 checks; Decision 1's range is
     `internal/contract`'s (ADR-0301);
+  - [ADR-0158](0158-pool-member-identity.md) Contracts: the pool manifest row's `contract?`;
   - [ADR-0243](0243-http-functions.md) Decision 2's delivered-contract clause, and the matching parts of its scenario
     `http-mismatch` and its checklist: the reconciler refuses such a Function, not the shim (Decision 3).
 - **Relates to**: [ADR-0141](0141-repo-split-pyvvo-pinned-language-modules.md) (a shim change is a release, then a pin) ·
@@ -45,7 +47,7 @@ The purpose: funcd is the only reader of a Function's contract. A shim gets none
   mode, solo in container mode and as a pool member, Then the worker's env has no `FUNCD_CONTRACT_PATH`, the member's
   manifest row has no `contract`, and funcd writes no `.funcd-contract-open.json`.
 - `scenario: an-http-function-with-a-contract-never-starts` — Given an http Function whose artifact carries a contract,
-  When it deploys, Then it is `ShapeValid=False` with reason `ShapeInvalid` and a message that names
+  When it deploys with one replica, Then it is `ShapeValid=False` with reason `ShapeInvalid` and a message that names
   `spec.protocol: http`, and no worker starts.
 
 ## Scope
@@ -73,7 +75,7 @@ Out:
 
 | Option | Pros | Cons | Outcome |
 |---|---|---|---|
-| **Pin the new shims, name no contract, and refuse an http Function with a contract in the reconciler** | One reader of the contract; no dead file or variable; the refusal comes before any worker boots | Waits for two releases; moves ADR-0243's start check into funcd | **chosen** |
+| **Pin the new shims, name no contract, and refuse an http Function with a contract in the reconciler** | One reader of the contract; no dead file or variable; the refusal comes before any worker boots | Waits for two releases; moves ADR-0243's delivered-contract start check into funcd | **chosen** |
 | Pin the new shims, keep writing the open contract | No reconciler change; ADR-0243's guard keeps working | A file that no shim reads; the scenario changes anyway | rejected |
 | Pin them and name no contract, but keep `FUNCD_CONTRACT_PATH` for an http worker whose bundle carries one | ADR-0243 unchanged | funcd stays a writer of the variable for one case; the refusal waits for a worker to boot and exit | rejected |
 | Keep today's pins | No change | Every worker compiles an empty schema with an engine it never needs; the build exports keep baking validators | rejected |
@@ -122,12 +124,14 @@ None.
    #111, then `go mod tidy`.
 2. `internal/function`: remove `writeOpenContract`, `openContractName`, `addContractEnv` and its two calls, and the
    pool manifest's `Contract` field with its writer. In `materialize`, an http Function whose bundle root holds a
-   delivered blob returns an error that maps to a `ShapeInvalid` gate failure with `shapeInvalid: true`, as the shape
-   gate's does (`function.go:706`). The comments of `contractDeliveryNames` and `contractFileIn` name their readers.
+   delivered blob returns an error that maps, beside ContractMissing and ContractInvalid (`function.go:771-780`),
+   to a `gateFailed` with reason `ShapeInvalid` and `shapeInvalid: true`. The comments of `contractDeliveryNames` and `contractFileIn` name their readers.
 3. The messages that say the Python shim needs fastjsonschema: `cmd/funcd/main.go:1665` and `:1682`,
    `cmd/funcdctl/dev.go:1613`, and the e2e harness's `requirePython` (`pkg/funcd/shim_regression_e2e_test.go:138-162`)
    with the message `pkg/funcd/shim_python_ci_e2e_test.go:39` asserts. `internal/testkit/bench/pypool_test.go` drops
-   its fastjsonschema skip. The comments of `flake.nix` and `scripts/lima-linux-tests.yaml` wait for the follow-up
+   its fastjsonschema skip. The fake-interpreter fixtures that give a missing fastjsonschema as the
+   reason (`cmd/funcd/main_test.go:254-256` and `:278`, `cmd/funcdctl/dev_interpreter_test.go:49-59`,
+   `cmd/funcdctl/dev_phase2_test.go:67`) take another reason. The comments of `flake.nix` and `scripts/lima-linux-tests.yaml` wait for the follow-up
    issue.
 4. Tests, one per Scenario:
    - `TestScenarioTheShimsReadNoContract` replaces `TestScenarioTheShimsStopChecking`
@@ -140,8 +144,9 @@ None.
    - `TestScenarioAnHTTPFunctionWithAContractNeverStarts` in package `function_test`, beside
      `TestIssue1084_OCIArtifactWithoutContractDoesNotStart`; ADR-0243's `TestScenarioHTTPMismatch` passes unchanged.
 5. `just ci` green and the e2e suite green with the new pins. Definition of done: the three Scenario tests pass,
-   ADR-0303's other scenario tests and `TestScenarioHTTPMismatch` pass unchanged, and no code in funcd writes
-   `FUNCD_CONTRACT_PATH` or `.funcd-contract-open.json`.
+   ADR-0303's other scenario tests and `TestScenarioHTTPMismatch` pass unchanged, and no non-test code in funcd sets
+   `FUNCD_CONTRACT_PATH` or writes `.funcd-contract-open.json`; only `TestScenarioTheShimsReadNoContract` sets them,
+   to prove that the shims ignore them.
 
 ## Review checklist
 
@@ -151,7 +156,8 @@ None.
 - [ ] An http Function whose bundle holds a delivered blob fails at `materialize` with `ShapeInvalid`, and no worker
       starts.
 - [ ] The materializer still delivers the blob; ADR-0303's scenario tests and `TestScenarioHTTPMismatch` pass.
-- [ ] No message or test harness says the Python shim needs fastjsonschema.
+- [ ] No message, test harness or fixture says the Python shim needs fastjsonschema, except the comments that
+      step 3 defers.
 - [ ] Each Scenario has its named, passing test; the replaced tests are removed, not skipped; no new config key, API
       field, CLI flag or dependency.
 
@@ -165,9 +171,9 @@ None.
   funcd's chain is not checked.
 - Risks accepted: an artifact built by an older `funcd_shim.build` keeps its baked validators. The shim no longer runs
   them, and the python314 image keeps fastjsonschema, so the artifact still loads there; in process mode, the load
-  probe (`internal/runtime/process/python.go`) now registers a host Python without fastjsonschema, where such an
-  artifact fails `ShapeInvalid` at load. An image override (`--image runtime=<ref>`,
-  `internal/runtime/ctrmanager/manager.go`) can run an older shim, which then falls back to its module-baked
+  probe (`internal/runtime/process/python.go`) now passes on a host Python without fastjsonschema, so funcd registers
+  it, and such an artifact fails `ShapeInvalid` at load. An image override (`--image runtime=<ref>`) or a custom
+  image prefix (`internal/runtime/ctrmanager/manager.go`) can run an older shim, which then falls back to its module-baked
   validators; that image is the operator's choice.
 
 ## Open questions
