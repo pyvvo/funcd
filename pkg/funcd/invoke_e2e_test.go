@@ -140,7 +140,8 @@ func TestScenarioHandlerInvokesLinkedFunction(t *testing.T) {
 }
 
 // scenario: linked-input-contract-validated (ADR-0058/0064) — greeter's GENERATED, BAKED contract
-// rejects a wrong-shaped input with 422 at the shim, before the handler; a valid one returns 200.
+// rejects a wrong-shaped input with 422 at funcd's gateway (ADR-0303), before the handler; a valid
+// one returns 200.
 func TestScenarioContractRejectsBadInput(t *testing.T) {
 	c, dpURL := shimPlatformOCI(t)
 	exDir := tsExample(t, "fn-to-fn")
