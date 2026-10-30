@@ -13243,5 +13243,20 @@
     "dod_total": 12,
     "report": "docs/reviews/issue-1337-fix-claude-opus-5-5.md",
     "notes": "[funcd-python] funcd-python fix/1337-py 7732d22: pass, no findings. disable_nagle_algorithm on ShimHandler and PoolHandler. Without the fix both regression tests fail (Linux median 46.05 and 45.52 ms against 20 ms; macOS on TCP_NODELAY); with it they pass. Mutants 3/3 killed. The issue's steps in a Linux container: p50 45.31 ms before, 0.10 ms after. just ci exits 0. No contract change (ADR-0049, 0041, 0050, 0279)."
+  },
+  {
+    "date": "2026-10-30",
+    "adr": "0301",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 3,
+    "model_attributed": 3,
+    "dod_passed": 16,
+    "dod_total": 16,
+    "report": "docs/reviews/adr-0301-implementation-claude-opus-5-5.md",
+    "notes": "pass; minors (model): checks in formats.go, tag values from the compiled schema, WithMatchTimeout untested; 6 mutants caught"
   }
 ]
