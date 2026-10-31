@@ -1,6 +1,7 @@
 # ADR-0304: the shims read no contract, and funcd names none to them
 
-- **Status**: Reviewing 2026-10-31; Accepted 2026-10-31 by the decider. Proposed 2026-10-30 and judged three times: round 1's Blocker, the
+- **Status**: Implemented 2026-10-31, review passed ([report](../reviews/adr-0304-implementation-claude-opus-5-5.md));
+  Reviewing 2026-10-31; Accepted 2026-10-31 by the decider. Proposed 2026-10-30 and judged three times: round 1's Blocker, the
   http refusal, and its Major, the supersession list, are folded; round 2 found no Blocker or Major, and its two Minors
   are folded; then widened at the decider's word, 2026-10-30, so that no part of funcd keeps fastjsonschema, and
   judged a third time: no Blocker or Major, and its four Minors are folded
