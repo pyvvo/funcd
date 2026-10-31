@@ -2,6 +2,7 @@
 
 - **Status**: Implemented
 - **Superseded in part by**: [ADR-0247](0247-contract-file-replaces-funcdctl-yaml.md) (2026-10-19) — Decisions 1, 3, 4, 8 and 9: dev runs a folder's resource files with their contract files and builds; the `dev:` block and the file and stem targets go; an image step keeps the tag-stem rule and runs through the materializer.
+- **Superseded in part by**: [ADR-0304](0304-the-shims-read-no-contract.md) (2026-10-31) — Decision 3's `FUNCD_CONTRACT_PATH`: dev's 422 and contract 500 come from the gateway of its in-memory platform (ADR-0303).
 - **Date**: 2026-07-11 (**Implemented 2026-07-12** — review gate PASS, claude-opus-4-8; all 9 scenarios tested, four
   sub-checks green both build tags; `dev-catalog-query` live lane + lazy-fetch engine size are the recorded
   follow-ups. **Accepted 2026-07-11** — self-accepted via `/adr-batch`; adr-judge: **no Blockers**. Applied M1

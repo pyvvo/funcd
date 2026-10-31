@@ -307,8 +307,8 @@ func mkFunction(t *testing.T, ref, digest string) *v1.Function {
 
 // scenario: schema-delivered-single-file (ADR-0123) — materializing a contracted single-file
 // function delivers the exact ADR-0059 contract blob as the .funcd-contract.json dotfile sidecar
-// AND still resolves the handler (the dotfile never displaces entries[0]); FUNCD_CONTRACT_PATH's
-// target bytes == the inspect-advertised blob (advertised == enforced).
+// AND still resolves the handler (the dotfile never displaces entries[0]); the sidecar's bytes, which
+// funcd checks each call against, == the inspect-advertised blob (advertised == enforced).
 func TestScenarioSchemaDeliveredSingleFile(t *testing.T) {
 	t.Parallel()
 	ref := layoutRef(t, "v1")

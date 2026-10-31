@@ -2,6 +2,7 @@
 
 - **Status**: Implemented
 - **Superseded in part by**: [ADR-0243](0243-http-functions.md) (2026-10-17) — Decisions 1 and 4: an `http` Function carries no contract, and a delivered one makes the shim fail closed. [ADR-0303](0303-funcd-checks-every-call-against-its-contract.md) (2026-10-30) — Decision 2 and Decision 4's exact-blob rule for the shim: funcd checks every call, and the shim gets an open contract.
+- **Superseded in part by**: [ADR-0304](0304-the-shims-read-no-contract.md) (2026-10-31) — Decisions 2, 3, 6 and 7, Decision 4's `FUNCD_CONTRACT_PATH` and "the shim refuses to serve", and the scenarios `runtime-compiles-validator`, `schema-tamper-evident`, `eval-over-trusted-input` and `cold-start-within-budget`: the shims compile no validator and read no contract, and funcd's `ContractMissing` gate refuses a Function without one.
 - **Date**: 2026-07-11 (**Implemented 2026-07-11**; **Accepted 2026-07-11** — adr-judge: no Blockers. Applied M1 (single-file schema delivered as a
   `.funcd-contract.json` **dotfile sidecar**, isolated from `entries[0]` handler resolution), m1 (`VerifyBundleContract`
   now also **adds** per-side `contract.Check`), m2 (the ADR-0060 supersession scope clarified — the *integrity

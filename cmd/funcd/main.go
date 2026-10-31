@@ -1662,7 +1662,7 @@ func processShimOptions(ctx context.Context, cfg config.Config, logger *slog.Log
 		funcd.WithPoolManifestDir(filepath.Join(cfg.Storage.DataDir, "pool")))
 
 	// Optional second curated language — the Python shim (ADR-0049). If a python3 is present and can
-	// import the extracted shim package (it needs Python ≥3.12 and fastjsonschema, ADR-0123), register
+	// import the extracted shim package (it needs Python ≥3.12 and only its stdlib, ADR-0304), register
 	// it for the `python*` runtime family; node functions are unaffected when it is absent or unusable.
 	python := envOr("FUNCD_PYTHON", "")
 	if python == "" {
@@ -1679,7 +1679,7 @@ func processShimOptions(ctx context.Context, cfg config.Config, logger *slog.Log
 		return nil, fmt.Errorf("extract python runtime shim: %w", perr)
 	}
 	if reason := process.PythonShimLoadError(ctx, python, filepath.Dir(shimEntry)); reason != "" {
-		logger.WarnContext(ctx, "funcd: python cannot load the runtime shim — python functions will not execute in process mode (set FUNCD_PYTHON to a Python ≥3.12 with fastjsonschema); node functions unaffected",
+		logger.WarnContext(ctx, "funcd: python cannot load the runtime shim — python functions will not execute in process mode (set FUNCD_PYTHON to a Python ≥3.12); node functions unaffected",
 			"python", python, "reason", reason)
 		return opts, nil
 	}

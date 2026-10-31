@@ -3,6 +3,7 @@
 - **Status**: Implemented 2026-10-30, review passed with two Minors ([report](../reviews/adr-0303-implementation-claude-opus-5-5.md)); Reviewing 2026-10-30; Accepted 2026-10-30 by an `adr-batch` run the decider started ("then adr-batch till completion");
   judged twice: round 1's three Majors (a real-shim proof, the result bound as an answer change, a named budget cut)
   and its Minors folded; round 2 found no Blocker or Major, and its Minor on the steps' and events' bounds is folded
+- **Superseded in part by**: [ADR-0304](0304-the-shims-read-no-contract.md) (2026-10-31) — Decision 7 and the scenario `the-shims-stop-checking`: the shims read no contract, and funcd names none to them.
 - **Date**: 2026-10-30
 - **Deciders**: green-0-rabbit
 - **Tags**: contract, validation, gateway, runtime

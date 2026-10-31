@@ -1,6 +1,7 @@
 # ADR-0150: The int64 contract format — the JSON safe-integer range on every runtime
 
 - **Status**: Implemented (2026-10-05)
+- **Superseded in part by**: [ADR-0304](0304-the-shims-read-no-contract.md) (2026-10-31) — Decisions 2 and 3, the shims' int64 checks: the shims check nothing; Decision 1's range is `internal/contract`'s (ADR-0301).
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged once)
 - **Deciders**: green-0-rabbit
 - **Tags**: contract, shim, validation, json

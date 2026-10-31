@@ -71,3 +71,27 @@ func TestIssue1084_OCIArtifactWithoutContractDoesNotStart(t *testing.T) {
 		})
 	}
 }
+
+// scenario: an-http-function-with-a-contract-never-starts — an http Function whose artifact carries a contract,
+// deployed with one replica, is ShapeValid=False ShapeInvalid with a message naming spec.protocol: http, and no worker
+// starts (ADR-0304 Decision 3).
+func TestScenarioAnHTTPFunctionWithAContractNeverStarts(t *testing.T) {
+	t.Parallel()
+	contract, err := artifact.ContractBlob([]byte(`{}`), []byte(`{}`))
+	require.NoError(t, err)
+	ref, digest := pushHandler(t, contract)
+	oras := artifact.NewOrasMaterializer(t.TempDir(), "")
+	h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool, func(d *function.Deps) { d.Materializer = oras })
+	h.create(t, "api", func(fn *v1.Function) {
+		fn.Spec.Image, fn.Spec.ImageDigest, fn.Spec.Protocol, fn.Spec.Replicas = ref, digest, v1.ProtocolHTTP, 1
+	})
+	h.reconcile(t, "api")
+
+	shape := h.condition(t, "api", "ShapeValid")
+	require.Equal(t, v1.ConditionFalse, shape.Status)
+	require.Equal(t, "ShapeInvalid", shape.Reason)
+	require.Contains(t, shape.Message, "spec.protocol: http")
+	require.Equal(t, v1.PhaseFailed, h.getFn(t, "api").Status.Phase)
+	creates, _ := h.rt.counts()
+	require.Zero(t, creates, "no worker starts")
+}

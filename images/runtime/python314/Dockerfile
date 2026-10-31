@@ -29,12 +29,6 @@ FROM python:3.14-slim-bookworm@sha256:9974e24551f9e7ca172cf284d85b8ab3e031d22d94
 # embedded 3.14 will see. `shim` is a named build context: the pinned funcd-python module's shim/ dir
 # (ADR-0141).
 COPY --from=shim src/funcd_shim /opt/funcd/funcd_shim
-# fastjsonschema (pure-Python, BSD-3) — the ONE runtime dependency the build-baked contract validators
-# import (ADR-0060). Shipped onto the same PYTHONPATH as the shim so a contract-validated artifact can
-# import its validator at runtime; without it such functions crash at startup (ADR-0071). Pinned by version
-# and wheel hash (requirements.txt); the final distroless stage carries it with no pip/venv.
-COPY images/runtime/python314/requirements.txt /tmp/requirements.txt
-RUN pip install --no-compile --no-deps --require-hashes --target /opt/funcd -r /tmp/requirements.txt
 # The system shared-library closure the 3.14 interpreter + its stdlib C-extensions link against (zlib,
 # openssl, ffi, sqlite, lzma, …). distroless/cc ships ONLY glibc + libstdc++/libgcc, so the stdlib's
 # C-extensions (zlib→binascii, ssl, sqlite3, …) fail to load there. Gather the resolved ldd closure here —

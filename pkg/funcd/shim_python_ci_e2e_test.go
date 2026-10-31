@@ -36,7 +36,7 @@ func TestIssue544_PythonShimLaneFailsInCIWithoutInterpreter(t *testing.T) {
 				require.NoError(t, err, "%s", out)
 			}
 			assert.Contains(t, string(out), tc.result)
-			assert.Contains(t, string(out), "no Python 3.12 or later with fastjsonschema")
+			assert.Contains(t, string(out), "no Python 3.12 or later (set FUNCD_PYTHON)")
 		})
 	}
 }

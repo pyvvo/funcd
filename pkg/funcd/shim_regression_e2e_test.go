@@ -136,7 +136,7 @@ func shortDataDir(t *testing.T) string {
 }
 
 // requirePython returns an interpreter that can load the Python shim (3.12 or later, 3.14 or later for the
-// pool host, with fastjsonschema): FUNCD_PYTHON, else python3.14 or python3 on PATH. Without one it skips, but
+// pool host): FUNCD_PYTHON, else python3.14 or python3 on PATH. Without one it skips, but
 // fails in CI (CI set), whose dev shell pins one: a skip there would hide the lane (issue #544).
 func requirePython(t *testing.T, pool bool) string {
 	t.Helper()
@@ -144,7 +144,7 @@ func requirePython(t *testing.T, pool bool) string {
 	if pool {
 		minor = 14
 	}
-	check := fmt.Sprintf("import sys, fastjsonschema; raise SystemExit(0 if sys.version_info >= (3, %d) else 1)", minor)
+	check := fmt.Sprintf("import sys; raise SystemExit(0 if sys.version_info >= (3, %d) else 1)", minor)
 	for _, name := range []string{os.Getenv("FUNCD_PYTHON"), "python3.14", "python3"} {
 		if name == "" {
 			continue
@@ -154,7 +154,7 @@ func requirePython(t *testing.T, pool bool) string {
 			return path
 		}
 	}
-	missing := fmt.Sprintf("no Python 3.%d or later with fastjsonschema (set FUNCD_PYTHON)", minor)
+	missing := fmt.Sprintf("no Python 3.%d or later (set FUNCD_PYTHON)", minor)
 	if os.Getenv("CI") != "" {
 		t.Fatal(missing + "; CI must run the Python shim lane")
 	}
@@ -463,8 +463,7 @@ def handle(ctx, event):
 }
 
 // Issue #129: the Python worker failed to compile the in-profile format uuid, so the Function went Failed
-// (ShapeInvalid) instead of validating it. It reproduces with the runtime image's fastjsonschema 2.21.2;
-// fastjsonschema 2.22 ships the uuid format itself.
+// (ShapeInvalid) instead of validating it. funcd checks the contract since ADR-0303, and no shim compiles one.
 func TestIssue129_PythonUUIDContractServesAndValidates(t *testing.T) {
 	h := newShimRig(t, requirePython(t, false))
 	h.deploy(t, "puuid", pythonFn(`def handle(ctx, event):

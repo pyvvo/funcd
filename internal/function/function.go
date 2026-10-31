@@ -778,6 +778,11 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 		res, gerr := r.gateFailed(ctx, fn, gateFailure{reason: reasonContractInvalid, message: ci.Error(), readyMessage: ci.Error(), phase: v1.PhaseFailed}, idx, drainAfter)
 		return afterHeld(res, gerr, herr)
 	}
+	if hc := (httpContractError{}); errors.As(err, &hc) {
+		// ADR-0304 Decision 3: a shape failure, before any worker starts; only an artifact without the contract clears it.
+		res, gerr := r.gateFailed(ctx, fn, gateFailure{reason: "ShapeInvalid", message: hc.Error(), readyMessage: hc.Error(), phase: v1.PhaseFailed, shapeInvalid: true}, idx, drainAfter)
+		return afterHeld(res, gerr, herr)
+	}
 	if err != nil {
 		return controller.Result{}, convergeError{err}
 	}
@@ -3281,15 +3286,16 @@ func addBundleEnv(env map[string]string, rt v1.RuntimeName, bundleRoot string) {
 
 // contractDeliveryNames are the delivered contract file names the materializer writes into the
 // bundle root (ADR-0123): the in-bundle blob for a bundle, the dotfile sidecar for a single-file
-// function. The reconciler probes the host bundle root for one of them to set FUNCD_CONTRACT_PATH.
+// function. Only funcd reads them (ADR-0304): ContractOf compiles one for the call-time check (ADR-0303),
+// and materialize gates on one.
 //
 //nolint:gochecknoglobals // an immutable lookup table (a slice can't be const)
 var contractDeliveryNames = []string{"__funcd_contract.json", ".funcd-contract.json"}
 
 // contractFileIn reports the delivered contract file name present in the host bundle root dir, if
-// any (ADR-0123). "" when none — an http Function's artifact (ADR-0243), or a dev FileMaterializer path
-// with no delivered schema (the shim then falls back to a module-baked validator); a cloudevent
-// Function's OCI artifact without one never starts (materialize, issue #1084).
+// any (ADR-0123), for ContractOf and materialize's gates. "" when none — an http Function's artifact
+// (ADR-0243), or a dev FileMaterializer path with no delivered schema, whose calls funcd checks against
+// nothing; a cloudevent Function's OCI artifact without one never starts (materialize, issue #1084).
 func contractFileIn(dir string) (name string, ok bool) {
 	for _, n := range contractDeliveryNames {
 		if _, err := os.Stat(filepath.Join(dir, n)); err == nil {
@@ -3310,18 +3316,30 @@ func (e contractMissingError) Error() string {
 	return "artifact " + e.digest + " carries no I/O contract; a cloudevent Function needs one (ADR-0090)"
 }
 
+// httpContractError is the materialize error of an http Function whose artifact carries an I/O contract, which it may
+// not (ADR-0243). No shim reads the contract to refuse it, so funcd does, as a shape failure (ADR-0304 Decision 3).
+type httpContractError struct{ digest string }
+
+func (e httpContractError) Error() string {
+	return "artifact " + e.digest + " carries an I/O contract; a Function with spec.protocol: http has none (ADR-0243)"
+}
+
 // materialize materializes fn's artifact and refuses it when fn is a cloudevent Function and the bundle root holds no
-// delivered contract while the materializer is a ContractRequirer (issue #1084), or one funcd cannot compile (ADR-0303).
-// An http Function carries none by design (ADR-0243).
+// delivered contract while the materializer is a ContractRequirer (issue #1084), or one funcd cannot compile (ADR-0303),
+// and when fn is an http Function, which carries none (ADR-0243), and the bundle root holds one (ADR-0304).
 func (r *Reconciler) materialize(ctx context.Context, fn *v1.Function) (string, error) {
 	path, err := r.materializer.Materialize(ctx, fn)
 	if err != nil {
 		return "", err
 	}
+	_, delivered := contractFileIn(filepath.Dir(path))
 	if fn.Spec.Protocol.Normalized() != v1.ProtocolCloudEvent {
+		if delivered {
+			return "", httpContractError{digest: fn.Spec.ImageDigest}
+		}
 		return path, nil
 	}
-	if _, ok := contractFileIn(filepath.Dir(path)); !ok {
+	if !delivered {
 		if req, ok := r.materializer.(ContractRequirer); ok && req.RequiresContract() {
 			return "", contractMissingError{digest: fn.Spec.ImageDigest}
 		}
@@ -3332,19 +3350,6 @@ func (r *Reconciler) materialize(ctx context.Context, fn *v1.Function) (string, 
 		return "", err
 	}
 	return path, nil
-}
-
-// addContractEnv sets FUNCD_CONTRACT_PATH to the open contract it writes beside the delivered one (ADR-0303
-// Decision 7), so the shim's validators accept everything and funcd's contract plugins are the one check. hostRoot is
-// the bundle root on the host (where the materializer wrote the contract file); workerRoot is the path the same dir is
-// visible at inside the worker — equal to hostRoot in process mode, the container mount target in container mode.
-// No-op when no contract file was delivered (legacy/dev).
-func addContractEnv(env map[string]string, hostRoot, workerRoot string) error {
-	name, err := writeOpenContract(hostRoot)
-	if err == nil && name != "" {
-		env["FUNCD_CONTRACT_PATH"] = filepath.Join(workerRoot, name)
-	}
-	return err
 }
 
 // shimEnv is the env a solo shim worker starts from: the artifact path as the worker sees it, the
@@ -3387,12 +3392,6 @@ func (r *Reconciler) workerSpec(ctx context.Context, fn *v1.Function, rev v1.Obj
 		r.addRecordBound(env)
 		env["FUNCD_PORT"] = strconv.Itoa(containerShimPort)
 		addBundleEnv(env, fn.Spec.Runtime, containerArtifactDir) // FUNCD_BUNDLE_DIR (+ PYTHONPATH, python family), ADR-0089
-		// FUNCD_CONTRACT_PATH (ADR-0123): the schema is delivered into the host bundle root
-		// (Dir(artifactPath)) which is bind-mounted at containerArtifactDir, so the in-worker path
-		// is under the mount target.
-		if err := addContractEnv(env, filepath.Dir(artifactPath), containerArtifactDir); err != nil {
-			return runtime.WorkerSpec{}, err
-		}
 		r.addS3Env(env, fn)
 		r.addLakeEnv(env, lakeEnv)     // FUNCD_LAKE_<ALIAS>_URL/_TOKEN written DIRECTLY (ADR-0091) — never via addBindingEnv
 		r.addLakeExtensionDir(env, fn) // DUCKDB_EXTENSION_DIRECTORY for a lake consumer (dev; prod uses the bundle's duckdb-ext)
@@ -3427,11 +3426,6 @@ func (r *Reconciler) workerSpec(ctx context.Context, fn *v1.Function, rev v1.Obj
 		env := shimEnv(fn, artifactPath)
 		r.addRecordBound(env)
 		addBundleEnv(env, fn.Spec.Runtime, filepath.Dir(artifactPath)) // FUNCD_BUNDLE_DIR (+ PYTHONPATH, python family), ADR-0089
-		// FUNCD_CONTRACT_PATH (ADR-0123): the delivered schema sits in the same host dir the shim
-		// reads directly in process mode, so host root == worker root.
-		if err := addContractEnv(env, filepath.Dir(artifactPath), filepath.Dir(artifactPath)); err != nil {
-			return runtime.WorkerSpec{}, err
-		}
 		// FUNCD_INVOKE_SOCKET for context.invoke (ADR-0064); reachable on the host
 		if err := r.addInvokeSocket(env, fn); err != nil {
 			return runtime.WorkerSpec{}, err

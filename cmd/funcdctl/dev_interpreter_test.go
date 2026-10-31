@@ -46,17 +46,17 @@ func TestDevInterpreter(t *testing.T) {
 }
 
 // Issue #322: funcdctl dev registered whatever python it found, so one that cannot import the shim (too
-// old, or missing fastjsonschema) surfaced only later as a shape error. A python handler now fails at
+// old for its syntax) surfaced only later as a shape error. A python handler now fails at
 // startup with the interpreter's reason; a node handler still starts.
 func TestIssue322_UnusablePythonFailsAtStartup(t *testing.T) {
 	python := filepath.Join(t.TempDir(), "python3")
-	require.NoError(t, os.WriteFile(python, []byte("#!/bin/sh\necho \"ModuleNotFoundError: No module named 'fastjsonschema'\" >&2\nexit 1\n"), 0o700))
+	require.NoError(t, os.WriteFile(python, []byte("#!/bin/sh\necho \"SyntaxError: invalid syntax\" >&2\nexit 1\n"), 0o700))
 	t.Setenv("FUNCD_PYTHON", python)
 
 	t.Run("python-handler", func(t *testing.T) {
 		_, err := tryStartDev(t, devProject(t, pythonHandlerProject()))
 		require.Error(t, err, "a python handler with a python that cannot load the shim fails at startup")
-		require.Contains(t, err.Error(), "fastjsonschema", "the error names why the shim cannot load")
+		require.Contains(t, err.Error(), "SyntaxError", "the error names why the shim cannot load")
 	})
 	t.Run("node-handler", func(t *testing.T) {
 		requireNode(t)

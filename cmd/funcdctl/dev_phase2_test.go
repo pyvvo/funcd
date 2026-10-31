@@ -64,7 +64,7 @@ func bucketDoc(name, owner string, prefixes ...string) string {
 func TestIssue431_RequireRuntimeSkipsWhenPythonCannotLoadShim(t *testing.T) {
 	bin := t.TempDir()
 	python := filepath.Join(bin, "python3")
-	require.NoError(t, os.WriteFile(python, []byte("#!/bin/sh\necho \"ModuleNotFoundError: No module named 'fastjsonschema'\" >&2\nexit 1\n"), 0o700))
+	require.NoError(t, os.WriteFile(python, []byte("#!/bin/sh\necho \"SyntaxError: invalid syntax\" >&2\nexit 1\n"), 0o700))
 	t.Setenv("PATH", bin)
 	t.Setenv("FUNCD_NODE", "")
 	t.Setenv("FUNCD_PYTHON", "")

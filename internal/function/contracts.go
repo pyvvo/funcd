@@ -1,7 +1,6 @@
 package function
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -16,11 +15,6 @@ import (
 	"github.com/pyvvo/funcd/internal/contract"
 	"github.com/pyvvo/funcd/internal/contractcheck"
 )
-
-// openContractName is the contract a shim gets once funcd checks every call (ADR-0303 Decision 7): the delivered
-// blob with both sides {}, ADR-0058's Json form, so the shim's validators accept everything. A dotfile, so the
-// single-file artifact resolver never takes it for the handler (ADR-0123).
-const openContractName = ".funcd-contract-open.json"
 
 // reasonContractInvalid is the reason of a Function whose delivered contract does not compile (ADR-0303 Decision 3).
 const reasonContractInvalid = "ContractInvalid"
@@ -137,47 +131,4 @@ func (r *Reconciler) ContractOf(ctx context.Context, ref activator.FunctionRef, 
 		return nil, err
 	}
 	return r.contracts.compiled(digest, filepath.Dir(path))
-}
-
-// writeOpenContract writes the open contract beside the delivered blob in dir and returns its name, or "" when dir
-// delivers none (ADR-0303 Decision 7). It keeps the delivered blob's dialect, and writes only when the file differs.
-func writeOpenContract(dir string) (string, error) {
-	const op = "function.writeOpenContract"
-	name, ok := contractFileIn(dir)
-	if !ok {
-		return "", nil
-	}
-	blob, err := os.ReadFile(filepath.Join(dir, name))
-	if err != nil {
-		return "", fault.Wrapf(err, fault.Unavailable, op, "read the delivered contract")
-	}
-	var sides map[string]json.RawMessage
-	if err := json.Unmarshal(blob, &sides); err != nil {
-		return "", fault.Invalidf(op, "the delivered contract is not JSON: %v", err)
-	}
-	sides["input"], sides["output"] = json.RawMessage("{}"), json.RawMessage("{}")
-	open, err := json.Marshal(sides)
-	if err != nil {
-		return "", fault.Internalf(op, "marshal the open contract: %v", err)
-	}
-	path := filepath.Join(dir, openContractName)
-	if have, err := os.ReadFile(path); err == nil && bytes.Equal(have, open) {
-		return openContractName, nil
-	}
-	tmp, err := os.CreateTemp(dir, openContractName+".*")
-	if err != nil {
-		return "", fault.Wrapf(err, fault.Unavailable, op, "write the open contract")
-	}
-	_, werr := tmp.Write(open)
-	if cerr := tmp.Close(); werr == nil {
-		werr = cerr
-	}
-	if werr == nil {
-		werr = os.Rename(tmp.Name(), path)
-	}
-	if werr != nil {
-		_ = os.Remove(tmp.Name())
-		return "", fault.Wrapf(werr, fault.Unavailable, op, "write the open contract")
-	}
-	return openContractName, nil
 }

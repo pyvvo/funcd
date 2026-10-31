@@ -36,10 +36,6 @@ type poolManifestEntry struct {
 	Name     string `json:"name"`
 	Artifact string `json:"artifact"`
 	Handler  string `json:"handler"`
-	// Contract is the open contract funcd writes beside the member's delivered contract blob (ADR-0303):
-	// the pool analog of the solo worker's FUNCD_CONTRACT_PATH, so the member's shim checks nothing and
-	// funcd checks the calls. Empty ⇒ no contract delivered.
-	Contract string `json:"contract,omitempty"`
 	// Env is set in this member's env only: its own credentials and bundle dir (memberEnv).
 	Env map[string]string `json:"env,omitempty"`
 	// code is the code the row runs the member at; unexported, so it is neither in the manifest nor its signature.
@@ -735,7 +731,6 @@ func (r *Reconciler) poolManifest(ctx context.Context, members []*v1.Function, s
 	desired := 0
 	for _, m := range members {
 		path := ""
-		contractPath := ""
 		if r.materializer != nil {
 			p, err := r.materialize(ctx, m)
 			if err != nil && m.Name != self.Name {
@@ -754,20 +749,6 @@ func (r *Reconciler) poolManifest(ctx context.Context, members []*v1.Function, s
 				continue
 			}
 			path = p
-			// ADR-0123: the pool host runs in process mode (it reads the host artifact paths
-			// directly), so the contract path is the host path in the bundle root; ADR-0303 Decision 7: the
-			// member's shim gets the open contract.
-			name, err := writeOpenContract(filepath.Dir(p))
-			if err != nil {
-				if m.Name == self.Name {
-					return nil, 0, fault.Wrapf(err, fault.KindOf(err), op, "write the open contract of %s/%s", m.Namespace, m.Name)
-				}
-				r.logger.Warn("pool member left out: its open contract cannot be written", "function", m.Name, "err", err)
-				continue
-			}
-			if name != "" {
-				contractPath = filepath.Join(filepath.Dir(p), name)
-			}
 		}
 		env, err := r.memberEnv(m, path, shared)
 		if err != nil {
@@ -781,7 +762,7 @@ func (r *Reconciler) poolManifest(ctx context.Context, members []*v1.Function, s
 			desired = d
 		}
 		manifest = append(manifest, poolManifestEntry{
-			Name: string(m.Name), Artifact: path, Handler: m.Spec.Handler, Contract: contractPath, Env: env,
+			Name: string(m.Name), Artifact: path, Handler: m.Spec.Handler, Env: env,
 			code: memberCode{image: m.Spec.Image, digest: m.Spec.ImageDigest, handler: m.Spec.Handler},
 			s3:   r.s3Gateway.Enabled && r.s3Gateway.Derive != nil && len(m.Spec.Bindings.Blob) > 0,
 		})
