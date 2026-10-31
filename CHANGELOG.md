@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.36.0](https://github.com/pyvvo/funcd/compare/v0.35.0...v0.36.0) (2026-10-31)
+
+
+### ⚠ BREAKING CHANGES
+
+* **runtime:** the shims read no contract, and the python314 image ships no fastjsonschema (ADR-0304)
+
+### Features
+
+* **contract:** funcd defines each contract rule once (ADR-0301) ([d66ebc3](https://github.com/pyvvo/funcd/commit/d66ebc3aa5ad0fc7d5c86635515e852de56c8cb6))
+* **gateway:** every call to a worker runs one chain of invokePlugins (ADR-0302) ([d66ebc3](https://github.com/pyvvo/funcd/commit/d66ebc3aa5ad0fc7d5c86635515e852de56c8cb6))
+* **gateway:** funcd checks every call against its contract, and the shims stop checking (ADR-0303) ([d66ebc3](https://github.com/pyvvo/funcd/commit/d66ebc3aa5ad0fc7d5c86635515e852de56c8cb6))
+* **runtime:** the shims read no contract, and the python314 image ships no fastjsonschema (ADR-0304) ([3a54c9f](https://github.com/pyvvo/funcd/commit/3a54c9fca0d6489378a60b19e02d6c66f7c61a86))
+
+
+### Bug Fixes
+
+* **deps:** pin funcd-python v0.18.1, so warm Python calls no longer wait about 40 ms ([#1341](https://github.com/pyvvo/funcd/issues/1341)) ([5f21f5d](https://github.com/pyvvo/funcd/commit/5f21f5df9cf39035fb002a8123bdad792f951f90))
+
 ## [0.35.0](https://github.com/pyvvo/funcd/compare/v0.34.0...v0.35.0) (2026-10-29)
 
 
