@@ -28,7 +28,7 @@ require (
 	github.com/danielgtaylor/huma/v2 v2.40.0
 	github.com/dgraph-io/badger/v4 v4.9.6
 	github.com/distribution/reference v0.6.0
-	github.com/dlclark/regexp2/v2 v2.11.0
+	github.com/dlclark/regexp2/v2 v2.12.0
 	github.com/dop251/goja v0.0.0-20260701091749-b07b74453ea9
 	github.com/dustin/go-humanize v1.1.0
 	github.com/go-chi/chi/v5 v5.5.0
@@ -49,7 +49,7 @@ require (
 	github.com/pyvvo/funcd-python v0.19.0
 	github.com/pyvvo/funcd-typescript v0.24.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
-	github.com/shirou/gopsutil/v4 v4.26.9
+	github.com/shirou/gopsutil/v4 v4.26.10
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/stretchr/testify v1.12.1
@@ -66,7 +66,7 @@ require (
 	go.opentelemetry.io/otel/sdk/log v1.47.0
 	go.opentelemetry.io/otel/sdk/metric v1.47.0
 	go.opentelemetry.io/otel/trace v1.47.0
-	go.yaml.in/yaml/v3 v3.0.5
+	go.yaml.in/yaml/v3 v3.0.6
 	gocloud.dev v0.47.0
 	golang.org/x/mod v0.42.0
 	golang.org/x/net v0.62.0
@@ -179,7 +179,7 @@ require (
 	github.com/denis-tingaikin/go-header v0.5.0 // indirect
 	github.com/dgraph-io/ristretto/v2 v2.2.0 // indirect
 	github.com/dlclark/regexp2 v1.12.0 // indirect
-	github.com/ebitengine/purego v0.11.1 // indirect
+	github.com/ebitengine/purego v0.11.2 // indirect
 	github.com/ettle/strcase v0.2.0 // indirect
 	github.com/fatih/color v1.19.0 // indirect
 	github.com/fatih/structtag v1.2.0 // indirect
