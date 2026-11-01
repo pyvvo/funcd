@@ -447,7 +447,7 @@ sql:
   # the python314 runtime image pins.
   # versitygw (Apache-2.0), the S3 server of the backup steps, is built for the VM at the app-todo lane's pinned version.
   build:
-    - docker pull python:3.14-slim-bookworm@sha256:9974e24551f9e7ca172cf284d85b8ab3e031d22d945f7026ede7a8279118c9f1 && docker tag python:3.14-slim-bookworm@sha256:9974e24551f9e7ca172cf284d85b8ab3e031d22d945f7026ede7a8279118c9f1 python:3.14-slim-bookworm
+    - docker pull python:3.14-slim-bookworm@sha256:516b51cb9db2ef061e465c803e50f64361b82cefd91e525b889b967b83e83527 && docker tag python:3.14-slim-bookworm@sha256:516b51cb9db2ef061e465c803e50f64361b82cefd91e525b889b967b83e83527 python:3.14-slim-bookworm
     - cd functions/py && uv run --locked funcd-bundle
     - CGO_ENABLED=0 GOOS=linux GOARCH=$(go env GOARCH) GOBIN= go install github.com/versity/versitygw/cmd/versitygw@v1.9.0 && cp "$(go env GOPATH)/bin/linux_$(go env GOARCH)/versitygw" dr/versitygw
   stage:
@@ -530,7 +530,7 @@ sql-examples:
   # funcd-bundle installs the bundles in the local python:3.14-slim-bookworm image: that tag first points at the
   # digest the python314 runtime image pins.
   build:
-    - docker pull python:3.14-slim-bookworm@sha256:9974e24551f9e7ca172cf284d85b8ab3e031d22d945f7026ede7a8279118c9f1 && docker tag python:3.14-slim-bookworm@sha256:9974e24551f9e7ca172cf284d85b8ab3e031d22d945f7026ede7a8279118c9f1 python:3.14-slim-bookworm
+    - docker pull python:3.14-slim-bookworm@sha256:516b51cb9db2ef061e465c803e50f64361b82cefd91e525b889b967b83e83527 && docker tag python:3.14-slim-bookworm@sha256:516b51cb9db2ef061e465c803e50f64361b82cefd91e525b889b967b83e83527 python:3.14-slim-bookworm
     - cd sql-orders && uv run --locked funcd-bundle
     - cd sql-readings && uv run --locked funcd-bundle
   stage:
@@ -694,7 +694,7 @@ app-todo:
   # first points at the digest the python314 runtime image pins (ADR-0247). versitygw (Apache-2.0), the S3 server of
   # the DR block, is built for the VM at a pinned version.
   build:
-    - docker pull python:3.14-slim-bookworm@sha256:9974e24551f9e7ca172cf284d85b8ab3e031d22d945f7026ede7a8279118c9f1 && docker tag python:3.14-slim-bookworm@sha256:9974e24551f9e7ca172cf284d85b8ab3e031d22d945f7026ede7a8279118c9f1 python:3.14-slim-bookworm
+    - docker pull python:3.14-slim-bookworm@sha256:516b51cb9db2ef061e465c803e50f64361b82cefd91e525b889b967b83e83527 && docker tag python:3.14-slim-bookworm@sha256:516b51cb9db2ef061e465c803e50f64361b82cefd91e525b889b967b83e83527 python:3.14-slim-bookworm
     - cd functions/py && uv run --locked funcd-bundle
     - CGO_ENABLED=0 GOOS=linux GOARCH=$(go env GOARCH) GOBIN= go install github.com/versity/versitygw/cmd/versitygw@v1.9.0 && cp "$(go env GOPATH)/bin/linux_$(go env GOARCH)/versitygw" dr/versitygw
   # The objects the App needs beside it; the Venom suite pushes, locks and deploys the App itself.
