@@ -292,7 +292,9 @@ var (
 // any day only when every external input is read at a pinned value: an image is named by its digest, pip installs
 // hashed requirements, a download is checked against a recorded checksum, a VM image is a dated build with its digest,
 // apt installs named versions from the Debian snapshot archive at one fixed time, a VM does not take the host's time
-// zone, and go run or go install names a version. One image tag names one digest everywhere.
+// zone, and go run or go install names a version. One image tag names one digest everywhere, and a lane pins no image
+// a runtime Dockerfile pins: dependabot moves the digest in the Dockerfile only, so the lanes that pinned the Python
+// base as well failed this test on each of its bumps (#1298, #1353).
 func TestLaneInputsArePinned(t *testing.T) {
 	g := newGuard()
 	dockerfiles, err := filepath.Glob("../images/runtime/*/Dockerfile")
@@ -353,6 +355,9 @@ func TestLaneInputGuardRules(t *testing.T) {
 		{"go run at a version", "build", "go run golang.org/x/tools/cmd/stringer@v0.30.0", ""},
 		{"apt at no version", "script", "apt-get install -y git", "at no named version"},
 		{"uv without the lockfile", "build", "uv run funcd-bundle", "without --locked"},
+		{"a lane pins an image a runtime Dockerfile pins", "build after FROM", "docker pull python:3.14" + digest,
+			"dependabot moves its digest only there"},
+		{"a lane pins an image no Dockerfile pins", "build after FROM", "docker pull node:22" + digest, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			g := newGuard()
@@ -362,6 +367,9 @@ func TestLaneInputGuardRules(t *testing.T) {
 			case "script":
 				g.shell("script", logicalLines(c.text))
 			case "build":
+				g.laneBuild("build", c.text)
+			case "build after FROM":
+				g.dockerfile("Dockerfile", "FROM python:3.14"+digest)
 				g.laneBuild("build", c.text)
 			}
 			if c.want == "" {
@@ -374,31 +382,41 @@ func TestLaneInputGuardRules(t *testing.T) {
 	}
 }
 
-// guard collects the unpinned inputs it finds, and each digest-pinned image reference by its image name and tag.
+// guard collects the unpinned inputs it finds, each digest-pinned image reference by its image name and tag, and the
+// Dockerfile that pins each image.
 type guard struct {
 	problems []string
 	images   map[string]map[string]bool
+	pinnedIn map[string]string
 }
 
 func newGuard() *guard {
-	return &guard{images: map[string]map[string]bool{}}
+	return &guard{images: map[string]map[string]bool{}, pinnedIn: map[string]string{}}
 }
 
 func (g *guard) report(problem string) {
 	g.problems = append(g.problems, problem)
 }
 
-// image notes a reference pinned by digest, or reports one that names no digest.
-func (g *guard) image(where, ref string) {
+// image notes a reference pinned by digest and returns its image name and tag, or reports one that names no digest.
+func (g *guard) image(where, ref string) string {
 	m := pinnedImage.FindStringSubmatch(ref)
 	if m == nil {
 		g.report(fmt.Sprintf("%s: the image %s names no sha256 digest", where, ref))
-		return
+		return ""
 	}
 	if g.images[m[1]] == nil {
 		g.images[m[1]] = map[string]bool{}
 	}
 	g.images[m[1]][ref] = true
+	return m[1]
+}
+
+// dockerfileImage notes an image a Dockerfile reads, and that the Dockerfile pins it.
+func (g *guard) dockerfileImage(rel, where, ref string) {
+	if name := g.image(where, ref); name != "" {
+		g.pinnedIn[name] = rel
+	}
 }
 
 // conflicts reports each image pinned at more than one digest.
@@ -423,7 +441,7 @@ func (g *guard) dockerfile(rel, text string) {
 		case "FROM":
 			args := slices.DeleteFunc(f[1:], func(a string) bool { return strings.HasPrefix(a, "--") })
 			if !stages[strings.ToLower(args[0])] {
-				g.image(where, args[0])
+				g.dockerfileImage(rel, where, args[0])
 			}
 			if len(args) == 3 && strings.EqualFold(args[1], "AS") {
 				stages[strings.ToLower(args[2])] = true
@@ -433,7 +451,7 @@ func (g *guard) dockerfile(rel, text string) {
 				// A name with no tag and no path is a stage or a named build context (--build-context).
 				if from, ok := strings.CutPrefix(a, "--from="); ok && !stages[strings.ToLower(from)] &&
 					imageInReference.MatchString(from) {
-					g.image(where, from)
+					g.dockerfileImage(rel, where, from)
 				}
 			}
 		case "ADD":
@@ -521,13 +539,22 @@ func (g *guard) vmTemplates(t *testing.T) {
 	}
 }
 
-// laneBuild checks one build command of a lane: uv reads the lockfile, and the command's installs, downloads and
-// images are pinned.
+// laneBuild checks one build command of a lane: uv reads the lockfile, the command's installs, downloads and images
+// are pinned, and it pins no image a Dockerfile pins.
 func (g *guard) laneBuild(where, cmd string) {
 	if uvResolve.MatchString(cmd) && !uvLocked.MatchString(cmd) {
 		g.report(where + ": uv resolves without --locked or --frozen")
 	}
-	g.shell(where, logicalLines(cmd))
+	lines := logicalLines(cmd)
+	for _, l := range lines {
+		for _, ref := range dockerImages(l.text) {
+			if m := pinnedImage.FindStringSubmatch(ref); m != nil && g.pinnedIn[m[1]] != "" {
+				g.report(fmt.Sprintf("%s:%d: %s already pins %s, and dependabot moves its digest only there", where,
+					l.n, g.pinnedIn[m[1]], m[1]))
+			}
+		}
+	}
+	g.shell(where, lines)
 }
 
 // shell checks a script's lines: an apt install of a package at no named version, pip reading an index without

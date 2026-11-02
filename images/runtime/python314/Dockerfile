@@ -17,7 +17,7 @@
 
 # Both bases are pinned by the digest of their multi-arch index (resolved 2026-10-11), so every build reads
 # the same bytes; move one deliberately, from `docker buildx imagetools inspect <image>:<tag>`, and keep
-# python:3.14-slim-bookworm at the digest images/runtime/duckdb/Dockerfile and scripts/lanes.yaml use.
+# python:3.14-slim-bookworm at the digest images/runtime/duckdb/Dockerfile uses.
 
 # --- stage 1: the stock 3.14 build, source of the runtime + stdlib C-ext libs --------------
 # Pinned to the BOOKWORM variant (glibc 2.36) so the interpreter + its C-ext libs link against the SAME

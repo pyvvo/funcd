@@ -151,8 +151,7 @@ duckdb:
   module: github.com/pyvvo/funcd-python
   dir: examples/lake-quack
   copy: true
-  # funcd-bundle (funcd-python) installs the bundle in the local python:3.14-slim-bookworm image: point that tag at the
-  # digest the runtime images pin first. It downloads the DuckDB extensions: check them against their pins after.
+  # funcd-bundle (funcd-python) downloads the DuckDB extensions: check them against their pins after.
   build:
     - uv run --locked funcd-bundle
     - cd dist/lake-reader/duckdb-ext && grep -E "/linux_$(go env GOARCH)/(httpfs|quack)\." "$FUNCD_ROOT/images/runtime/duckdb/duckdb.sha256" | sha256sum -c - && test "$(find . -name '*.duckdb_extension' | wc -l)" -eq 2
@@ -443,11 +442,8 @@ sql:
   dir: apps/todo
   # funcd-bundle writes dist/ beside the Python project, so the lane builds in a writable copy of the module.
   copy: true
-  # funcd-bundle installs the bundle in the local python:3.14-slim-bookworm image: that tag first points at the digest
-  # the python314 runtime image pins.
   # versitygw (Apache-2.0), the S3 server of the backup steps, is built for the VM at the app-todo lane's pinned version.
   build:
-    - docker pull python:3.14-slim-bookworm@sha256:516b51cb9db2ef061e465c803e50f64361b82cefd91e525b889b967b83e83527 && docker tag python:3.14-slim-bookworm@sha256:516b51cb9db2ef061e465c803e50f64361b82cefd91e525b889b967b83e83527 python:3.14-slim-bookworm
     - cd functions/py && uv run --locked funcd-bundle
     - CGO_ENABLED=0 GOOS=linux GOARCH=$(go env GOARCH) GOBIN= go install github.com/versity/versitygw/cmd/versitygw@v1.9.0 && cp "$(go env GOPATH)/bin/linux_$(go env GOARCH)/versitygw" dr/versitygw
   stage:
@@ -527,10 +523,7 @@ sql-examples:
   dir: examples
   # funcd-bundle writes dist/ beside each Python example, so the lane builds in a writable copy of the module.
   copy: true
-  # funcd-bundle installs the bundles in the local python:3.14-slim-bookworm image: that tag first points at the
-  # digest the python314 runtime image pins.
   build:
-    - docker pull python:3.14-slim-bookworm@sha256:516b51cb9db2ef061e465c803e50f64361b82cefd91e525b889b967b83e83527 && docker tag python:3.14-slim-bookworm@sha256:516b51cb9db2ef061e465c803e50f64361b82cefd91e525b889b967b83e83527 python:3.14-slim-bookworm
     - cd sql-orders && uv run --locked funcd-bundle
     - cd sql-readings && uv run --locked funcd-bundle
   stage:
@@ -690,11 +683,9 @@ app-todo:
     - from: apps/site-config
       module: github.com/pyvvo/funcd-functions
       to: site-config
-  # funcd-bundle builds each Python part into functions/py/dist/ in the local python:3.14-slim-bookworm image: that tag
-  # first points at the digest the python314 runtime image pins (ADR-0247). versitygw (Apache-2.0), the S3 server of
+  # funcd-bundle builds each Python part into functions/py/dist/ (ADR-0247). versitygw (Apache-2.0), the S3 server of
   # the DR block, is built for the VM at a pinned version.
   build:
-    - docker pull python:3.14-slim-bookworm@sha256:516b51cb9db2ef061e465c803e50f64361b82cefd91e525b889b967b83e83527 && docker tag python:3.14-slim-bookworm@sha256:516b51cb9db2ef061e465c803e50f64361b82cefd91e525b889b967b83e83527 python:3.14-slim-bookworm
     - cd functions/py && uv run --locked funcd-bundle
     - CGO_ENABLED=0 GOOS=linux GOARCH=$(go env GOARCH) GOBIN= go install github.com/versity/versitygw/cmd/versitygw@v1.9.0 && cp "$(go env GOPATH)/bin/linux_$(go env GOARCH)/versitygw" dr/versitygw
   # The objects the App needs beside it; the Venom suite pushes, locks and deploys the App itself.

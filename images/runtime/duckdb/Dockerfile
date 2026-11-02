@@ -15,7 +15,7 @@
 # extension shipped with DuckDB 2.0.0. Every input is pinned: both bases by the digest of their multi-arch
 # index, every pip package by version and wheel hash (requirements.txt), and every extension by the SHA-256
 # of its file (duckdb.sha256); DuckDB's resolved 2026-10-23, the rest 2026-10-11. python:3.14-slim-bookworm
-# stays at the digest images/runtime/python314/Dockerfile and scripts/lanes.yaml use.
+# stays at the digest images/runtime/python314/Dockerfile uses.
 #
 # The shim entrypoint is Python (images/runtime/duckdb/shim.py): it reads the injected AWS_* keypair
 # (ADR-0085) + FUNCD_DUCKLAKE_CATALOG + FUNCD_QUACK_PORT, configures the engine (s3_endpoint pinned,
