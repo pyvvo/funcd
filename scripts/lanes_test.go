@@ -323,6 +323,30 @@ func TestLaneInputsArePinned(t *testing.T) {
 	require.Empty(t, g.problems, "unpinned lane inputs:\n%s", strings.Join(g.problems, "\n"))
 }
 
+// Dependabot moves the digests of the Dockerfiles in its docker directories only: the rqlite image, added after the
+// list was written (#1003), kept both its bases at their first pins.
+func TestDependabotMovesEveryRuntimeImage(t *testing.T) {
+	var config struct {
+		Updates []struct {
+			Ecosystem   string   `yaml:"package-ecosystem"`
+			Directories []string `yaml:"directories"`
+		} `yaml:"updates"`
+	}
+	require.NoError(t, yaml.Unmarshal([]byte(readText(t, "../.github/dependabot.yml")), &config))
+	var moved []string
+	for _, u := range config.Updates {
+		if u.Ecosystem == "docker" {
+			moved = append(moved, u.Directories...)
+		}
+	}
+	dockerfiles, err := filepath.Glob("../images/runtime/*/Dockerfile")
+	require.NoError(t, err)
+	require.NotEmpty(t, dockerfiles)
+	for _, path := range dockerfiles {
+		require.Contains(t, moved, strings.TrimPrefix(filepath.Dir(path), ".."), ".github/dependabot.yml docker directories")
+	}
+}
+
 // The guard flags each kind of unpinned input and leaves the pinned and the local ones alone.
 func TestLaneInputGuardRules(t *testing.T) {
 	digest := "@sha256:" + strings.Repeat("0", 64)
