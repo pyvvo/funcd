@@ -13,6 +13,7 @@ updates:
       - /images/runtime/nodejs22
       - /images/runtime/python314
       - /images/runtime/duckdb
+      - /images/runtime/rqlite
     schedule:
       interval: weekly
     # A runtime image's Python version is part of its name (python314), so only digest and patch updates come here: a
