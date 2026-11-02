@@ -71,6 +71,7 @@ import (
 	"github.com/pyvvo/funcd/internal/kvstore"
 	kvmemory "github.com/pyvvo/funcd/internal/kvstore/memory"
 	lakegw "github.com/pyvvo/funcd/internal/lake/gateway"
+	"github.com/pyvvo/funcd/internal/lifecycle"
 	"github.com/pyvvo/funcd/internal/network"
 	"github.com/pyvvo/funcd/internal/network/egress"
 	"github.com/pyvvo/funcd/internal/platform/clock"
@@ -555,7 +556,9 @@ type Platform struct {
 	egressGateway        egress.Gateway            // transparent egress PEP (ADR-0117, F81); nil unless egress enabled
 	egressForwarder      egress.Forwarder          // DNS forwarder / domain trust anchor (ADR-0117); nil unless enabled
 	egressWorkers        *egress.MemoryWorkerIndex // src-IP → Ref, populated by the containerd runtime (ADR-0117 §5)
-	workerServices       workerServices            // runs s3gw, egressGateway and egressForwarder until Shutdown stops them
+	workerServices       workerServices            // runs s3gw until Shutdown stops it, after the workers (#1232)
+	phases               *lifecycle.Phases         // the providers in boot order, the Executor first
+	exec                 *executor                 // the Executor provider
 
 	drainTimeout time.Duration // server.shutdownTimeout: bounds the HTTP, workflow-run and Sensor drains and a failed New's cleanup
 	shutdownOnce sync.Once
@@ -580,6 +583,11 @@ func New(opts ...Option) (_ *Platform, err error) {
 		workflowMaxStepsInFlight: defaultWorkflowMaxStepsInFlight,
 	}
 	p := &Platform{cfg: cfg, drainTimeout: shutdownTimeout}
+	// The Executor is listed before anything is built, so a New that fails still closes the runtime its options opened
+	// (#94).
+	p.exec = &executor{p: p}
+	p.phases = lifecycle.New(append([]lifecycle.Provider{p.exec, &kvProvider{p}, &blobProvider{p}, &sqlProvider{p},
+		&lakeProvider{p}, &eventingProvider{p}}, hookless()...)...)
 	// A failed New releases what the options and the build acquired, so the caller can retry (issue #94).
 	defer func() {
 		if err != nil {
@@ -612,7 +620,7 @@ func New(opts ...Option) (_ *Platform, err error) {
 		cfg.runtime = process.New(cfg.logger)
 	}
 
-	pc, err := providerCatalog()
+	pc, err := providerCatalog(p.phases)
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, "funcd.New", "build provider catalog")
 	}
@@ -1722,32 +1730,11 @@ func (p *Platform) Run(ctx context.Context) error {
 		return abort(err)
 	}
 
-	// Egress network isolation (ADR-0115, F80): program the default-deny + redirect substrate once, at
-	// start, before any worker serves (fail-closed) — a no-op when disabled or non-Linux. A failure to
-	// program is fatal: a half-applied egress fence must not run.
-	if p.cfg.netManager != nil {
-		if err := p.cfg.netManager.Apply(ctx, p.cfg.netPolicy); err != nil {
-			return abort(fault.Wrapf(err, fault.KindOf(err), "funcd.Run", "apply worker egress isolation"))
-		}
-	}
-
-	// ADR-0178 Decision 3: mark the KVStores the previous materializer made, before any controller, the
-	// collector or the control plane reads them.
-	if err := workflow.MarkKVStoresOnce(ctx, p.cfg.store, p.logger); err != nil && ctx.Err() == nil {
-		return abort(fault.Wrapf(err, fault.KindOf(err), "funcd.Run", "mark workflow kv stores"))
-	}
-
-	if p.s3gw != nil { // ADR-0080/0085: the S3-protocol frontend listener (opt-in; serves until Shutdown stops it)
-		p.workerServices.start(ctx, func(ctx context.Context) {
-			if err := p.s3gw.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-				p.logger.ErrorContext(ctx, "s3 gateway stopped", "error", err)
-			}
-		})
-		// versitygw binds the address only once Run serves it, so a taken port fails Run here, before anything
-		// else starts, as a taken control-plane port fails New (#497, ADR-0028).
-		if err := p.s3gw.Wait(ctx); err != nil && ctx.Err() == nil {
-			return abort(fault.Wrapf(err, fault.KindOf(err), "funcd.Run", "start the s3 gateway"))
-		}
+	// The providers start first, the Executor at their head: it applies the egress fence before anything can run a
+	// worker (ADR-0115). A failed Start shuts the platform down (#489); a Start a stop signal cut is a clean stop.
+	p.logger.InfoContext(ctx, "platform provider hooks", "providers", p.phases.Hooks())
+	if err := p.phases.Start(ctx); err != nil && ctx.Err() == nil {
+		return abort(err)
 	}
 
 	if m, held := p.heldMarker(); held {
@@ -1760,26 +1747,10 @@ func (p *Platform) Run(ctx context.Context) error {
 		if err := p.fnReconciler.ReclaimVolumes(ctx); err != nil && ctx.Err() == nil {
 			p.logger.WarnContext(ctx, "booking of Function volumes incomplete", "error", err)
 		}
-	} else {
-		// Issue #708 (ADR-0170 "also across a crash"): reclaim the data of each KVStore deleted before its reconcile
-		// ran, before the controller or the control plane can create a store of the same name.
-		now := p.cfg.quarantineNow()
-		if err := p.kvReconciler.ReclaimDeleted(ctx, now); err != nil && ctx.Err() == nil {
-			p.logger.WarnContext(ctx, "reclaim of deleted KV stores incomplete", "error", err)
-		}
-		// ADR-0199 Decision 7: the same for the objects of each Bucket deleted before its second purge ran.
-		if err := reclaimDeletedBuckets(ctx, p.cfg.blob, p.cfg.store, p.logger, now, p.cfg.quarantinePeriodOrDefault()); err != nil && ctx.Err() == nil {
-			p.logger.WarnContext(ctx, "reclaim of deleted Buckets incomplete", "error", err)
-		}
-		// ADR-0232 Decision 7: the same for the directory of each SQLDatabase deleted before its reconcile ran.
-		if err := p.sqlReconciler.ReclaimOrphans(ctx, now); err != nil && ctx.Err() == nil {
-			p.logger.WarnContext(ctx, "reclaim of deleted SQL databases incomplete", "error", err)
-		}
+	} else if err := p.fnReconciler.ReclaimVolumes(ctx); err != nil && ctx.Err() == nil {
 		// ADR-0262 Decision 8: no worker survives a restart, so emptyDirs go; volumes of deleted Functions follow their
 		// deletion policy.
-		if err := p.fnReconciler.ReclaimVolumes(ctx); err != nil && ctx.Err() == nil {
-			p.logger.WarnContext(ctx, "reclaim of Function volumes incomplete", "error", err)
-		}
+		p.logger.WarnContext(ctx, "reclaim of Function volumes incomplete", "error", err)
 	}
 
 	// ADR-0176 Decision 6: the edge aggregator holds every lake entry until "routes" has Set once, and no
@@ -1791,142 +1762,33 @@ func (p *Platform) Run(ctx context.Context) error {
 	// ADR-0215 Decision 6: the first storage probe runs before the reconcilers read its result.
 	p.prober.Start(ctx)
 
-	wg.Add(4)
-	go func() {
-		defer wg.Done()
-		if err := p.controller.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			p.logger.ErrorContext(ctx, "controller stopped", "error", err)
-		}
-		p.backups.Wait() // a run's goroutine outlives its reconcile, never the controller (ADR-0222)
-	}()
-	go func() {
-		defer wg.Done()
-		if err := p.collector.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			p.logger.ErrorContext(ctx, "garbage collector stopped", "error", err)
-		}
-	}()
-	go func() {
-		defer wg.Done()
-		if err := p.eventing.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			p.logger.ErrorContext(ctx, "eventing stopped", "error", err)
-		}
-	}()
-	if p.volumes != nil { // ADR-0262 Decision 10: funcdctl dev measures the volumes it cannot limit
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			volume.Run(ctx, p.volumes)
-		}()
+	// The providers' loops and the Platform's own run on Run's context, so they all drain together before the providers
+	// stop.
+	p.phases.Run(ctx, &wg)
+	loops := []func(context.Context){
+		func(ctx context.Context) {
+			p.loop("controller stopped", p.controller.Run)(ctx)
+			p.backups.Wait() // a run's goroutine outlives its reconcile, never the controller (ADR-0222)
+		},
+		p.loop("garbage collector stopped", p.collector.Run),
+		p.loop("activator stopped", p.activator.Run),
+		p.quotas.Run,         // ADR-0292 Decision 3: the store quotas' refresh, off the write path
+		p.runQuarantineSweep, // ADR-0288 Decision 5: the quarantine's sweep, never inside the start
 	}
-	if p.sqlFeed != nil { // ADR-0235: the engines' change feed (closes on ctx cancel)
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			p.openSQLFeed(ctx)
-		}()
-		go func() {
-			defer wg.Done()
-			var err error
-			if p.sqlFeedListener != nil {
-				err = p.sqlFeed.ServeListener(ctx, p.sqlFeedListener)
-			} else {
-				err = p.sqlFeed.Serve(ctx, p.sqlFeedHost, p.sqlFeedPort)
-			}
-			if err != nil && !errors.Is(err, context.Canceled) {
-				p.logger.ErrorContext(ctx, "sql change feed stopped", "error", err)
-			}
-		}()
-	}
-	if p.blobWatcher != nil { // ADR-0119: the blob EventSource poll loop (drains on ctx cancel)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := p.blobWatcher.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-				p.logger.ErrorContext(ctx, "blob watcher stopped", "error", err)
-			}
-		}()
-	}
-	go func() {
-		defer wg.Done()
-		if err := p.activator.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			p.logger.ErrorContext(ctx, "activator stopped", "error", err)
-		}
-	}()
-	if p.compactor != nil { // ADR-0083: funclog compacted compaction loop (stops on ctx cancel)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := p.compactor.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-				p.logger.ErrorContext(ctx, "funclog compactor stopped", "error", err)
-			}
-		}()
-	}
-	wg.Add(1)
-	go func() { // ADR-0292 Decision 3: the store quotas' refresh, off the write path
-		defer wg.Done()
-		p.quotas.Run(ctx)
-	}()
-	wg.Add(1)
-	go func() { // ADR-0288 Decision 5: the quarantine's sweep, never inside the start
-		defer wg.Done()
-		p.runQuarantineSweep(ctx)
-	}()
 	if p.workflowSweeper != nil && p.workflowRetention > 0 { // ADR-0094: periodic terminal-run retention sweep
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			p.runWorkflowRetention(ctx)
-		}()
+		loops = append(loops, p.runWorkflowRetention)
 	}
 	if p.workflowEngine != nil { // ADR-0146: the run goroutines, drained within the shutdown bound before Shutdown
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			p.workflowEngine.Run(ctx, p.drainTimeout)
-		}()
-	}
-	if p.sensorReconciler != nil { // ADR-0118: the Sensor action-delivery retry workers (drained on ctx cancel, within the shutdown bound)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			p.sensorReconciler.RunRetryWorkers(ctx, p.drainTimeout)
-		}()
+		loops = append(loops, func(ctx context.Context) { p.workflowEngine.Run(ctx, p.drainTimeout) })
 	}
 	if p.cfg.backupRunner != nil { // ADR-0205: the platform backup runs (stops on ctx cancel)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			p.cfg.backupRunner.Run(ctx)
-		}()
+		loops = append(loops, p.cfg.backupRunner.Run)
 	}
-	if p.deadLetters != nil && (p.deadletterRetention > 0 || p.deadletterMaxEntries > 0) { // ADR-0118: DLQ retention sweep
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			p.runDeadLetterRetention(ctx)
-		}()
-	}
-	if p.egressForwarder != nil { // ADR-0117 (F81): the DNS forwarder / domain trust anchor (serves until Shutdown stops it)
-		p.workerServices.start(ctx, func(ctx context.Context) {
-			if err := p.egressForwarder.Serve(ctx); err != nil && !errors.Is(err, context.Canceled) {
-				p.logger.ErrorContext(ctx, "egress dns forwarder stopped", "error", err)
-			}
-		})
-	}
-	if p.egressGateway != nil { // ADR-0117 (F81): the transparent egress PEP (no-op on non-Linux; serves until Shutdown stops it)
-		p.workerServices.start(ctx, func(ctx context.Context) {
-			if err := p.egressGateway.Serve(ctx); err != nil && !errors.Is(err, context.Canceled) {
-				p.logger.ErrorContext(ctx, "egress gateway stopped", "error", err)
-			}
-		})
-	}
-	if p.egressWorkers != nil { // ADR-0117 §5: keep the src-IP→worker index synced from the running worker set
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			p.syncEgressWorkers(ctx)
-		}()
-	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		runAll(ctx, loops...)
+	}()
 	// TLS termination (ADR-0111, F74): when configured, both listeners serve HTTPS. The provider is
 	// given the F79 Route hosts (+ configured hosts) for its cert set; plaintext otherwise.
 	serve := func(srv *http.Server, ln net.Listener) error { return srv.Serve(ln) }
@@ -2004,68 +1866,39 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 		if p.dataPlaneListener != nil {
 			_ = p.dataPlaneListener.Close() // best-effort; may already be closed by dataPlaneServer.Shutdown
 		}
-		if p.sqlFeedListener != nil {
-			_ = p.sqlFeedListener.Close() // best-effort; New's loopback feed port, served or not (ADR-0260)
-		}
-		if p.invokeMgr != nil {
-			p.invokeMgr.Close() // stop all per-function local API listeners (ADR-0064)
-		}
 		if p.tlsProvider != nil {
 			_ = p.tlsProvider.Close(ctx) // stop certmagic's renewal goroutine (ADR-0111)
 		}
-		if cl, ok := p.cfg.kvStore.(io.Closer); ok { // the durable KV driver (ADR-0066/0069)
-			_ = cl.Close()
+		// Every provider gets ready to close, in reverse order: the Lake closes its PEP proxies, then the Executor ends its
+		// loops and closes the runtime, which stops every worker.
+		beforeStopErr := p.phases.BeforeStop(ctx)
+		if p.invokeMgr != nil {
+			p.invokeMgr.Close() // stop all per-function local API listeners (ADR-0064), now that no worker calls them
 		}
-		// Stop the per-Lake lake PEP proxies (ADR-0137) — node-private http.Servers that
-		// front the engines; closed before the runtime tears the engines down.
-		if p.lakeProxy != nil {
-			p.lakeProxy.Shutdown()
-		}
-		// Close the runtime first (stops instances → log channels EOF), let every capture Route read its
-		// channel to the end and flush, then seal any remaining funclog segments, all before blob.Close()
-		// (the sink writes to blob) — ADR-0081.
-		runtimeErr := closeDriver(p.cfg.runtime)
-		// The egress fence comes down only once the runtime has stopped the workers it confines. When the runtime's Close
-		// failed a worker may still run, so the nftables tables stay for the next start's Apply to replace.
-		if p.cfg.netManager != nil && runtimeErr == nil {
-			_ = p.cfg.netManager.Remove(ctx) // tear down the egress nftables tables (ADR-0115, F80)
-		}
-		// The S3 gateway, the egress gateway and the DNS forwarder stop only once the runtime has stopped the workers
-		// that use them (#1232). Their Serve ends first, so Close cannot fail a Serve that still runs; the S3 gateway
-		// serves from the blob substrate, so it closes before blob.Close (ADR-0080/0085).
-		p.workerServices.stop(ctx)
-		if p.egressGateway != nil {
-			_ = p.egressGateway.Close() // stop the transparent egress PEP (ADR-0117, F81)
-		}
-		var s3gwErr error
-		if p.s3gw != nil {
-			s3gwErr = p.s3gw.Close()
-		}
+		// Every provider stops, in reverse order: the binding providers release what the workers used (the SQL feed's
+		// port, the S3 gateway, the KV driver), then the Executor takes the egress fence down once the runtime
+		// closed, stops the egress gateway and the DNS forwarder, and drains the log Routes into the sinks before
+		// blob.Close (ADR-0081).
+		stopErr := p.phases.Stop(ctx)
 		if p.fnReconciler != nil {
-			_ = p.fnReconciler.Close() // the pool workers are stopped, so their manifests can go
-		}
-		p.logRoutes.drain(ctx)
-		var logSinkErr, traceSinkErr error
-		if p.logSink != nil {
-			logSinkErr = p.logSink.Close()
-		}
-		if p.traceSink != nil { // ADR-0101: seal remaining trace segments before blob.Close()
-			traceSinkErr = p.traceSink.Close()
+			// Only after Stop is the runtime closed on every path, booted or not: the pool workers are stopped, so their
+			// manifests can go.
+			_ = p.fnReconciler.Close()
 		}
 		errs := []error{
-			s3gwErr,
 			closeDriver(p.cfg.bus),
 			closeDriver(p.cfg.gateway),
-			runtimeErr,
-			logSinkErr,
-			traceSinkErr,
+			beforeStopErr,
+			stopErr,
 			closeDriver(p.cfg.blob),
 			closeDriver(p.cfg.store),
 		}
 		if p.workflowRuns != nil {
 			errs = append(errs, p.workflowRuns.Close())
 		}
-		if p.eventStore != nil { // ADR-0201: after Run stopped the BlobWatcher and the Sensor
+		// ADR-0201: after Run stopped the BlobWatcher and the Sensor. Eventing, the SQL feed's watermarks and the platform
+		// backup share the event store, so it closes with the Platform's own parts (ADR-0305 Decision 5).
+		if p.eventStore != nil {
 			errs = append(errs, p.eventStore.Close())
 		}
 		if p.invokeTmpDir != "" { // after the runtime stopped the workers that dial its sockets (issue #330)

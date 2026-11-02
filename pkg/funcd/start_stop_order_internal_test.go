@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -100,6 +101,28 @@ func (f *fenceSeen) sawFence() bool {
 // A taken S3 gateway address fails Run, and Run rolls back what had started before it returns (issue #497, ADR-0028):
 // the runtime closes before the fence comes down, and the bus and the control-plane listener close.
 func TestRun_AFailedS3BindRollsBackWhatStarted(t *testing.T) {
+	p, rt, probe, err := runWithTakenS3Port(t)
+	require.ErrorIs(t, err, syscall.EADDRINUSE)
+	require.True(t, rt.closed, "the runtime is still open after Run failed")
+	require.True(t, probe.removed, "the egress fence is still up after Run failed")
+	require.False(t, rt.fenceGone, "the fence came down before the runtime stopped its workers")
+	require.Error(t, p.cfg.bus.Publish(context.Background(), bus.Subject("x"), []byte("y")), "the bus is still open")
+	if conn, derr := net.Dial("tcp", p.Addr()); derr == nil {
+		_ = conn.Close()
+		t.Fatal("the control-plane listener is still open after Run failed")
+	}
+}
+
+// scenario: a-failed-start-stops-everything
+// Run's error names the provider whose Start failed (ADR-0305 Decision 4).
+func TestRun_AFailedStartNamesItsProvider(t *testing.T) {
+	_, _, _, err := runWithTakenS3Port(t)
+	require.ErrorContains(t, err, "start blob")
+}
+
+// runWithTakenS3Port runs a platform whose S3 gateway address is taken and returns Run's error.
+func runWithTakenS3Port(t *testing.T) (*Platform, *fenceAtClose, *removeProbe, error) {
+	t.Helper()
 	held, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = held.Close() })
@@ -115,7 +138,6 @@ func TestRun_AFailedS3BindRollsBackWhatStarted(t *testing.T) {
 		})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
-
 	done := make(chan error, 1)
 	go func() { done <- p.Run(context.Background()) }()
 	select {
@@ -123,15 +145,7 @@ func TestRun_AFailedS3BindRollsBackWhatStarted(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("Run kept serving without its S3 gateway")
 	}
-	require.ErrorIs(t, err, syscall.EADDRINUSE)
-	require.True(t, rt.closed, "the runtime is still open after Run failed")
-	require.True(t, probe.removed, "the egress fence is still up after Run failed")
-	require.False(t, rt.fenceGone, "the fence came down before the runtime stopped its workers")
-	require.Error(t, p.cfg.bus.Publish(context.Background(), bus.Subject("x"), []byte("y")), "the bus is still open")
-	if conn, derr := net.Dial("tcp", p.Addr()); derr == nil {
-		_ = conn.Close()
-		t.Fatal("the control-plane listener is still open after Run failed")
-	}
+	return p, rt, probe, err
 }
 
 // Shutdown closes the lake PEP proxies before the runtime stops the engines behind them (ADR-0137), so no query is
@@ -272,5 +286,46 @@ func (r *dirsAtClose) Close() error {
 			r.seen = append(r.seen, prefix)
 		}
 	}
+	return r.Runtime.Close()
+}
+
+// scenario: workers-keep-their-services-while-stopping
+// Shutdown keeps the local API until the runtime has stopped the workers that call it (ADR-0305 Decision 5).
+func TestShutdown_KeepsTheLocalAPIUntilTheWorkersStop(t *testing.T) {
+	rt := &apiAtClose{}
+	p, err := New(InMemory(), WithoutLogCompaction(), func(c *config) error {
+		rt.Runtime, c.runtime = process.New(c.logger), rt
+		return nil
+	})
+	require.NoError(t, err)
+	rt.sock, err = p.invokeMgr.SocketFor("default", "fn")
+	require.NoError(t, err)
+	require.NoError(t, p.Shutdown(context.Background()))
+	require.True(t, rt.closed, "Shutdown must close the runtime")
+	require.NoError(t, rt.callErr, "a stopping worker could not reach its local API while the runtime closed")
+}
+
+// apiAtClose is a runtime that calls a worker's local API when Close runs, as a stopping worker may.
+type apiAtClose struct {
+	runtime.Runtime
+	sock    string
+	closed  bool
+	callErr error
+}
+
+func (r *apiAtClose) Close() error {
+	r.closed = true
+	c := &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", r.sock)
+	}}}
+	defer c.CloseIdleConnections()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://local/health/dependencies", http.NoBody)
+	if err == nil {
+		var resp *http.Response
+		if resp, err = c.Do(req); err == nil {
+			_ = resp.Body.Close()
+		}
+	}
+	r.callErr = err
 	return r.Runtime.Close()
 }
