@@ -1,6 +1,7 @@
 package funcd_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -24,9 +25,10 @@ func TestWithLakeSaveIntervalBounds(t *testing.T) {
 		1500 * time.Microsecond: false,
 		-time.Second:            false,
 	} {
-		_, err := funcd.New(funcd.InMemory(), funcd.WithLakeSaveInterval(d))
+		p, err := funcd.New(funcd.InMemory(), funcd.WithLakeSaveInterval(d))
 		if ok {
 			require.NoError(t, err, d)
+			t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
 			continue
 		}
 		require.Equal(t, fault.Invalid, fault.KindOf(err), "%s: %v", d, err)

@@ -517,10 +517,10 @@ func TestIssue350_WorkflowDefaultsWithoutWithWorkflow(t *testing.T) {
 	require.Equal(t, daemon.Workflow.PayloadLimit, p.cfg.workflowPayloadLimit)
 	require.Equal(t, daemon.Workflow.DefaultRetry, p.cfg.workflowDefaultRetry)
 
-	p, err = New(WithWorkflow("", 0, 0, 1, 0), InMemory())
+	explicit, err := New(WithWorkflow("", 0, 0, 1, 0), InMemory())
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
-	require.Zero(t, p.cfg.workflowStepTimeout, "an explicit zero still means no step timeout, in any option order")
+	t.Cleanup(func() { _ = explicit.Shutdown(context.Background()) })
+	require.Zero(t, explicit.cfg.workflowStepTimeout, "an explicit zero still means no step timeout, in any option order")
 }
 
 // Issue #446: a platform built without WithDeadLetterQueue (funcdctl dev, any InMemory embedding) bounds the
@@ -538,11 +538,11 @@ func TestIssue446_DeadLetterDefaultsWithoutWithDeadLetterQueue(t *testing.T) {
 	require.Equal(t, retention, p.deadletterRetention)
 	require.Equal(t, daemon.Eventing.Deadletter.MaxEntries, p.deadletterMaxEntries)
 
-	p, err = New(WithDeadLetterQueue("", 3, 0, 0), InMemory())
+	explicit, err := New(WithDeadLetterQueue("", 3, 0, 0), InMemory())
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
-	require.Zero(t, p.deadletterRetention, "an explicit zero still means no TTL")
-	require.Zero(t, p.deadletterMaxEntries, "an explicit zero still means no cap")
+	t.Cleanup(func() { _ = explicit.Shutdown(context.Background()) })
+	require.Zero(t, explicit.deadletterRetention, "an explicit zero still means no TTL")
+	require.Zero(t, explicit.deadletterMaxEntries, "an explicit zero still means no cap")
 }
 
 // Issue #94: a failed New releases what the options and the build acquired (ADR-0014: never a partial

@@ -331,6 +331,7 @@ func TestDataPlaneAsksTheNamespaceHold(t *testing.T) {
 	require.NoError(t, err)
 	p, err := New(InMemory(), WithLogger(slog.New(slog.DiscardHandler)), WithHold(h))
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
 	for _, ns := range []v1.NamespaceName{"team", "web"} {
 		seedObjects(t, p.cfg.store,
 			&v1.Namespace{TypeMeta: tmeta(v1.KindNamespace), ObjectMeta: v1.ObjectMeta{Name: v1.ObjectName(ns)}, Spec: v1.NamespaceSpec{

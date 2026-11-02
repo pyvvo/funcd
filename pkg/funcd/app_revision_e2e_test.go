@@ -99,7 +99,7 @@ func TestMain(m *testing.M) {
 	cmdBuilds.dir = dir
 	code := m.Run()
 	_ = os.RemoveAll(dir)
-	os.Exit(code)
+	os.Exit(leftOpen(code))
 }
 
 // buildCmd compiles this repository's cmd/<name> once per test binary and returns the binary's path.

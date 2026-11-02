@@ -31,6 +31,7 @@ func newVolumeAPI(t *testing.T, o volume.Options) volumeAPI {
 	o.Root = t.TempDir()
 	p, err := New(InMemory(), WithLogger(slog.New(slog.DiscardHandler)), WithFunctionVolumes(o, false))
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
 	srv := httptest.NewServer(p.httpServer.Handler)
 	t.Cleanup(srv.Close)
 	return volumeAPI{t: t, p: p, srv: srv}
