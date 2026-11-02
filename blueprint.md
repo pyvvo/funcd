@@ -954,8 +954,9 @@ The control-plane REST API is the single front door for *all* clients — `funcd
 
 **The other direction: funcd runs infrastructure-as-code ([FEAT-0012](docs/feat/0012-feat-infrastack.md)).** An
 `InfraStack` keeps a Pulumi program's stack applied, as Crossplane does on Kubernetes but with the whole program as the
-unit. Each change runs as a `JobRun` of a generic run-to-completion `Job`, on a runtime plugin pulled by digest, and
-waits for a person's approval of its preview unless the stack says `bypass`. The stack's outputs reach Functions as a
+unit. Each change runs as a `JobRun` of a generic run-to-completion `Job`, which is built as a Function is: its runtime
+plugin is a shim with its tool, so a run goes on either runtime driver. A run waits for a person's approval of its
+preview unless the stack says `bypass`. The stack's outputs reach Functions as a
 ConfigMap and a Secret. The [design report](docs/reports/infrastack-design.md) holds the study; no ADR decides it yet,
 so every name here is a placeholder.
 

@@ -95,7 +95,7 @@ flowchart TB
         rec["InfraStack reconciler<br/>owns the stack's Job, starts runs"]
         runner["Job runner<br/>preview · approval gate · run"]
     end
-    subgraph sandbox["Job sandbox · containerd"]
+    subgraph sandbox["Job sandbox · containerd or process"]
         shim["Pulumi shim<br/>speaks job/v1"]
         pulumi["Pulumi CLI<br/>runs the program"]
     end
@@ -119,8 +119,9 @@ flowchart TB
     sec --> fn
 ```
 
-The daemon only starts sandboxes and records results. Pulumi lives in the plugin image, so a new engine is a new
-image, not a daemon change. The runner and the shim talk over `job/v1`: the phase to run, the result, and the secret
+The daemon only starts sandboxes and records results. A Job is built as a Function is: its runtime is a shim with its
+tool, so a run goes on either runtime driver. Pulumi lives in the plugin: an image on the containerd driver, the host's
+own install on the process driver of `funcdctl dev`. So a new engine is a new runtime, not a daemon change. The runner and the shim talk over `job/v1`: the phase to run, the result, and the secret
 outputs. Plain outputs travel in the run's result. Secret outputs travel only over the run's socket, and the runner
 writes them to the stack's Secret, never to a status.
 
@@ -135,7 +136,7 @@ writes them to the stack's Secret, never to a status.
 | App `infra` section | An App declares stacks like its other parts | funcd API | Extends ADR-0199 |
 | InfraStack reconciler | Config check; owns the stack's Job and starts its runs; drift schedule; outputs; delete | funcd daemon | New |
 | Job runner | Runs JobRuns: preview, approval gate, run, sandbox, bindings, deadline, cancel, queue, history | funcd daemon | New, over the existing runtime port, its workers owned by kind `JobRun` (ADR-0152) |
-| Image and program pull | The plugin image through the containerd driver's pull; the program through `internal/artifact` | funcd daemon | Exists; gains a program artifact type and registry credentials |
+| Image and program pull | The plugin image through the containerd driver's pull, while the process driver uses the host's tool; the program through `internal/artifact` | funcd daemon | Exists; gains a program artifact type and registry credentials |
 | Pulumi plugin image | Pinned Pulumi CLI with its YAML and Node language hosts, pinned Node, and the shim, for amd64 and arm64 | funcd, `images/plugins/pulumi` | New |
 | Pulumi shim (Go) | Speaks `job/v1`: maps the `preview` and `run` phases to Pulumi through its Automation API | Plugin image | New |
 | Program build | YAML in funcdctl, TypeScript in the funcd-typescript toolchain (ADR-0144) | funcdctl, funcd-typescript | New |
@@ -154,7 +155,7 @@ pipeline, BackupSchedule's schedule fields (ADR-0211), duration strings (ADR-019
 | Kind | Spec | Status |
 |---|---|---|
 | `InfraStack` (namespaced) | `engine`, `program.image`, `pulumi.stack`, `config`, `credentials.secret`, `state.bucket` · `prefix` · `passphraseSecret`, `outputs.configMap` · `secret`, `approval.mode` · `expiry`, `drift.schedule` · `timeZone`, `resources`, `timeout`, `deletion` (`retain` · `delete`) | `Ready`, `Drifted`, `appliedGeneration`, `lastRun`, output names |
-| `Job` (namespaced) | Envelope: `runtime`, `image`, `secrets` · `config` · `blob` (a Function's shapes), `approval.mode` · `expiry`, `resources` (`cpu`, `memory`, as a provider engine's), `timeout`, `concurrency`, `locked`. Plus default `params`, governed by the runtime | `Ready`, the params schema |
+| `Job` (namespaced) | Envelope: `runtime`, `image`, `bindings` with `secret` · `config` · `blob` (a Function's shapes, [ADR-0246](../adr/0246-bindings-under-spec.md)), `approval.mode` · `expiry`, `resources` (`cpu`, `memory`, as a provider engine's), `timeout`, `concurrency`, `locked`. Plus default `params`, governed by the runtime | `Ready`, the params schema |
 | `JobRun` (namespaced) | `job`, `input` (overrides the Job's params), `approval.expiry` (an optional override), `cancel` | Phase, `requestedBy`, effective `params`, `preview` (digest, time, expiry, count, summary), approval or rejection (who, when, reason), `result` |
 | `RuntimeClass` (cluster) | `handler` (exists); new `image` and `protocol` | `Ready`, architectures, `paramsSchema` |
 | `App` | A new `infra` section: a name plus an InfraStack spec, or a `ref` | A new `InfraApplied` condition |
@@ -235,13 +236,14 @@ spec:
     - operation
     - stack
     - config
-  secrets:
-    - aws-team-a
-    - todo-infra-state-key
-  blob:
-    - alias: state
-      bucket: infra-state
-      prefix: todo-infra
+  bindings:
+    secret:
+      - aws-team-a
+      - todo-infra-state-key
+    blob:
+      - alias: state
+        bucket: infra-state
+        prefix: todo-infra
   resources:
     memory: 1Gi
   timeout: 1h
@@ -284,7 +286,7 @@ such as a Python job or OpenTofu, is a new plugin, not a new kind.
 
 | Part | Defined by | Fields |
 |---|---|---|
-| Envelope | funcd, the same for every runtime | `runtime`, `image`, `secrets`, `config`, `blob`, `approval` (`mode`, `expiry`), `resources`, `timeout`, `concurrency`, `locked` |
+| Envelope | funcd, the same for every runtime | `runtime`, `image`, `bindings` (`secret`, `config`, `blob`), `approval` (`mode`, `expiry`), `resources`, `timeout`, `concurrency`, `locked` |
 | `params` | The runtime plugin, which can hand a part to the program's own schema | Pulumi: `operation` (`up`, `refresh`, `destroy`), `stack`, `config`. A Python job: the program's typed input |
 
 The plugin ships its params schema, and funcd caches it on `RuntimeClass.status` at registration. The Job reconciler
@@ -700,8 +702,8 @@ the CLI, a language host and the provider plugins. Its memory use has not been m
 | Outputs | See [Outputs](#outputs) |
 | Credentials | The cloud credentials are a Secret of env vars, such as `AWS_ACCESS_KEY_ID`, injected into the stack's runs only. The state key is described in [Credentials and state](#credentials-and-state) |
 | State | Pulumi's self-managed S3 backend in a funcd Bucket, through the S3 gateway. The stack's Job runs one run at a time |
-| Isolation | containerd mode only, one sandbox per run, with the run's own principal. EgressPolicy limits outbound traffic, for example to `*.amazonaws.com`, once its compiled rules cover that principal |
-| Plugins | A plugin image comes only from a registry an admin chose, as a runtime image does today (ADR-0149). `RuntimeClass` is cluster-scoped, so only an admin can register one |
+| Isolation | One sandbox per run, with the run's own principal, on either runtime driver, as for a Function. On the containerd driver, EgressPolicy limits outbound traffic, for example to `*.amazonaws.com`, once its compiled rules cover that principal. The process driver of `funcdctl dev` isolates nothing, as for a Function |
+| Plugins | A plugin image comes only from a registry an admin chose, as a runtime image does today (ADR-0149). On the process driver, the plugin's tool is the host's own install. `RuntimeClass` is cluster-scoped, so only an admin can register one |
 
 ## Gaps in today's code
 
@@ -722,7 +724,7 @@ the CLI, a language host and the provider plugins. Its memory use has not been m
 
 Not in v1: Python programs, OpenTofu, workload identity federation for cloud credentials, Pulumi Cloud (ESC,
 Deployments), YAML stacks that use TypeScript components, re-rendering every stack when a template changes, roles for
-people (a `RolesAssignment` naming a `User`), a funcd-frontend UI, and Jobs in process mode (`funcdctl dev`).
+people (a `RolesAssignment` naming a `User`), and a funcd-frontend UI.
 
 | Question | Decided in |
 |---|---|
