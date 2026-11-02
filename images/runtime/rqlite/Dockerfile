@@ -2,7 +2,7 @@
 # entrypoint funcd-rqlite, on distroless static, as uid 65532. The version and commit come from rqlite.pin, passed by
 # `just build-runtime-images`; the entrypoint is built on the host and passed as the build context `entry`. Every
 # base is pinned by the digest of its multi-arch index; rqlite's Go modules are checked against its go.sum.
-FROM golang:1.26.7-alpine@sha256:28d89ee9cc0ff9fec75c82ca201e6bf7fdf9a679d4b7b24dfa04f2bb766bb468 AS rqlite
+FROM golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb AS rqlite
 ARG RQLITE_VERSION
 ARG RQLITE_COMMIT
 ARG SOURCE_DATE_EPOCH
