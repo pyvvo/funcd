@@ -8,15 +8,17 @@ on:
     - cron: "17 3 * * 1"
   workflow_dispatch:
 
-# actions:write: cache-nix-action lists, saves and purges its store caches. issues:write: the comment on #1142.
 permissions:
   contents: read
-  actions: write
-  issues: write
 
 jobs:
   stress:
+    name: "${{ matrix.suite }}: ${{ matrix.title }}"
     runs-on: ubuntu-latest
+    # actions:write: cache-nix-action lists, saves and purges its store caches.
+    permissions:
+      contents: read
+      actions: write
     timeout-minutes: 300
     strategy:
       fail-fast: false
@@ -76,12 +78,29 @@ jobs:
           path: stress.json
           retention-days: 30
 
+  # A runner that stops runs no further step, so the comment on #1142 comes from a job of its own. For each failed
+  # suite it lists the failing tests, or says that the suite's job saved no test log.
+  report:
+    needs: stress
+    if: always() && needs.stress.result == 'failure'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Report the failing tests on the flake tracker
-        if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python3 scripts/stress-summary.py "${{ matrix.title }}" stress.json > comment.md
-          echo "" >> comment.md
-          echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> comment.md
+          gh run download "${{ github.run_id }}" --repo "${{ github.repository }}" --pattern 'stress-*' --dir logs || true
+          gh run view "${{ github.run_id }}" --repo "${{ github.repository }}" --json jobs \
+            --jq '.jobs[] | select(.conclusion == "failure") | .name' |
+            while IFS= read -r name; do
+              python3 scripts/stress-summary.py "${name#*: }" "logs/stress-${name%%:*}/stress.json"
+              echo
+            done >comment.md
+          echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >>comment.md
           gh issue comment 1142 --repo "${{ github.repository }}" --body-file comment.md

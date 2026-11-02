@@ -733,3 +733,12 @@ func TestLinuxExecRunsTheBinaryFromItsOwnCopy(t *testing.T) {
 		})
 	}
 }
+
+// Issue #1362: a suite whose job saved no test log, as when its runner was stopped, still gets its heading and a line
+// saying so in the Stress run's report; the summary failed on the missing file.
+func TestIssue1362_StressSummaryNamesASuiteWithoutALog(t *testing.T) {
+	cmd := exec.Command("python3", "stress-summary.py", "Default-tag suite", filepath.Join(t.TempDir(), "stress.json"))
+	code, out := exitCode(t, cmd)
+	require.Equal(t, 0, code, out)
+	require.Equal(t, "### Default-tag suite\n\nThe job saved no test log: its runner stopped, or the job failed before its suite ran.\n", out)
+}

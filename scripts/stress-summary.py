@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
 """Summarize `go test -json` logs from the weekly stress run (#1167): a Markdown table of the tests that failed, with
 how many of their runs failed, or a line saying that none failed. A subtest's parent is left out when the subtest
-failed, and a package that failed outside any test is listed by name.
+failed, and a package that failed outside any test is listed by name. A suite whose job saved no log, as when its
+runner was stopped, gets a line saying so.
 
   scripts/stress-summary.py <title> <go-test.json>...
 """
 import json
+import os
 import sys
 from collections import defaultdict
 
 
 def main(title, paths):
+    paths = [p for p in paths if os.path.exists(p)]
+    if not paths:
+        print(f"### {title}\n\nThe job saved no test log: its runner stopped, or the job failed before its suite ran.")
+        return
     runs = defaultdict(lambda: [0, 0])  # (package, test) -> [failed, total]
     broken = set()
     for path in paths:

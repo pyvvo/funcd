@@ -258,6 +258,7 @@ func TestScenarioChangesWaitForSensorsAtBoot(t *testing.T) {
 	p, err := New(InMemory(), WithSQLProviderRuntime(newSQLRuntime(t)), WithMasterSecret([]byte(feedMasterKey)),
 		WithLogger(slog.New(slog.DiscardHandler)))
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
 	e := &changesEnv{sqlEnv: &sqlEnv{ctx: context.Background(), p: p}}
 	se := &v1.Sensor{TypeMeta: tmeta(v1.KindSensor), Spec: v1.SensorSpec{
 		On: []v1.Dependency{{Name: "added", Source: "todo-changes", Event: "todo-added"}},
