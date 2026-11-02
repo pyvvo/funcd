@@ -347,6 +347,26 @@ func TestDependabotMovesEveryRuntimeImage(t *testing.T) {
 	}
 }
 
+// funcd-bundle (funcd-python, ADR-0144) runs its import check and its hermetic install in BASE_IMAGE, pinned by digests
+// of its own, and the runtime images take their CPython from the same tag. The digests may differ: dependabot moves the
+// Dockerfiles' only, and uv picks the wheels by the Python version and the glibc, not by the image. The tag may not: a
+// new CPython minor or Debian release in the runtime is one the bundler must build for.
+func TestFuncdBundleUsesTheRuntimePythonTag(t *testing.T) {
+	bundle := readText(t, filepath.Join(langmod.Dir(t, langmod.Python), "bundle", "src", "funcd_bundle", "bundle.py"))
+	base := regexp.MustCompile(`(?m)^BASE_IMAGE = "([^"]+)"$`).FindStringSubmatch(bundle)
+	require.NotNil(t, base, "funcd-bundle's BASE_IMAGE in bundle.py")
+	g := newGuard()
+	dockerfiles, err := filepath.Glob("../images/runtime/*/Dockerfile")
+	require.NoError(t, err)
+	for _, path := range dockerfiles {
+		g.dockerfile(strings.TrimPrefix(path, "../"), readText(t, path))
+	}
+	python := slices.DeleteFunc(slices.Sorted(maps.Keys(g.images)), func(name string) bool {
+		return !strings.HasPrefix(name, "python:")
+	})
+	require.Equal(t, []string{base[1]}, python, "the runtime images' Python tags and funcd-bundle's BASE_IMAGE")
+}
+
 // The guard flags each kind of unpinned input and leaves the pinned and the local ones alone.
 func TestLaneInputGuardRules(t *testing.T) {
 	digest := "@sha256:" + strings.Repeat("0", 64)
