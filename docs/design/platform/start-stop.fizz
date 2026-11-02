@@ -1,0 +1,141 @@
+---
+# The daemon's start and stop over its providers (ADR-0305): Phases.Start runs each provider's Start in list order,
+# the Executor first, and starts nothing once a stop began; at stop, Phases.BeforeStop and then Phases.Stop run for
+# every provider, booted or not. The Executor applies the egress fence in Start, closes the runtime (which stops every
+# worker) in BeforeStop, and in Stop removes the fence only once the runtime closed. The blob provider serves the S3
+# gateway from its Start to its Stop.
+# Environment: the runtime driver is open from New on; its Close stops every worker or fails with one still running.
+# A fence may be left by an earlier run: Stop removes it whether or not this run applied it.
+# Left to tests: the timing of a stop signal against a Start in flight (pkg/funcd order tests), the close budget
+# (ADR-0277, TestScenarioDaemonStopKeepsItsFlush).
+deadlock_detection: false
+options:
+  # One daemon goroutine runs every step; a stop signal or a failure picks the next step. Every action is atomic.
+  max_concurrent_actions: 2
+  max_actions: 10
+  crash_on_yield: false
+---
+# diagram: phase
+# mutant close-only-in-before-stop: RuntimeClosedAtExit
+# mutant no-rollback: RuntimeClosedAtExit
+# mutant fence-goes-anyway: FenceStaysWhileAWorkerMayRun
+# mutant s3-stops-first: WorkersKeepTheS3Gateway
+# mutant no-fence: NoUnfencedWorker
+# mutant start-after-stop: NothingServesAfterStop
+
+# close-only-in-before-stop: BeforeStop runs only for the providers the boot passed. no-rollback: a failed Start ends
+# Run without the stop phases. fence-goes-anyway: Stop removes the fence although the runtime's Close failed.
+# s3-stops-first: the S3 gateway stops before the workers. no-fence: the Executor's Start does not apply it.
+# start-after-stop: Phases.Start starts a provider after a stop began.
+MUTANT = ""
+
+action Init:
+    left = oneof ["none", "applied"]
+    fence = left
+    phase = "new"
+    runtime = "open"
+    workers = 0
+    s3 = "off"
+    passed = False
+
+# New fails after the preset opened the runtime (#94): the platform is shut down without a Run.
+atomic action NewFails:
+    require phase == "new"
+    phase = "before-stop"
+
+# Run boots: the Executor's Start applies the fence, or fails (#489) and Run shuts the platform down.
+atomic action ExecutorStart:
+    require phase == "new"
+    ok = oneof [True, False]
+    if ok:
+        if MUTANT != "no-fence":
+            fence = "applied"
+        passed = True
+        phase = "booting"
+    else:
+        phase = "before-stop"
+
+# The blob provider's Start binds the S3 gateway, or a taken port fails Run (#497). Once a stop began, Start starts it
+# no more, except in the mutant.
+atomic action S3Start:
+    require phase == "booting" or (MUTANT == "start-after-stop" and phase in ["before-stop", "s3-stop", "stop"])
+    ok = oneof [True, False]
+    if phase != "booting":
+        s3 = "serving"
+    elif ok:
+        s3 = "serving"
+        phase = "running"
+    elif MUTANT == "no-rollback":
+        phase = "exited"
+    else:
+        phase = "before-stop"
+
+# The controller creates a worker.
+atomic action WorkerStarts:
+    require phase == "running"
+    require workers == 0
+    workers = 1
+
+# A stop signal while booting or running: Run stops its loops and shuts the platform down.
+atomic action StopSignal:
+    require phase in ["booting", "running"]
+    phase = "before-stop"
+
+# Phases.BeforeStop: the Executor closes the runtime, booted or not; the Close may fail with a worker running.
+atomic fair action BeforeStop:
+    require phase == "before-stop"
+    if runtime == "open" and (passed or MUTANT != "close-only-in-before-stop"):
+        ok = oneof [True, False]
+        if ok:
+            runtime = "closed"
+            workers = 0
+        else:
+            runtime = "close-failed"
+    phase = "s3-stop"
+
+# The mutant's S3 gateway stops before the runtime has stopped the workers.
+atomic fair action S3StopsEarly:
+    require MUTANT == "s3-stops-first"
+    require phase == "before-stop"
+    require s3 == "serving"
+    s3 = "stopped"
+
+# Phases.Stop, the blob provider: its Stop stops the S3 gateway once the workers are stopped (#1232).
+atomic fair action S3Stop:
+    require phase == "s3-stop"
+    if s3 == "serving":
+        s3 = "stopped"
+    phase = "stop"
+
+# Phases.Stop, the Executor last: it removes the fence once the runtime's Close succeeded.
+atomic fair action Stop:
+    require phase == "stop"
+    if fence == "applied":
+        if runtime == "closed" or MUTANT == "fence-goes-anyway":
+            fence = "removed"
+    phase = "exited"
+
+# A worker never runs without the egress fence (ADR-0115).
+always assertion NoUnfencedWorker:
+    return workers == 0 or fence == "applied"
+
+# The fence stays while a worker may still run: until the runtime's Close succeeded (ADR-0115).
+always assertion FenceStaysWhileAWorkerMayRun:
+    return fence != "removed" or runtime == "closed"
+
+# The S3 gateway serves the workers until the runtime's Close returned (#1232). After a failed Close the daemon keeps
+# only the fence around a worker it could not stop.
+always assertion WorkersKeepTheS3Gateway:
+    return workers == 0 or s3 != "stopped" or runtime == "close-failed"
+
+# Whatever ended the platform, its runtime was closed before the daemon exited (#94, #489).
+always assertion RuntimeClosedAtExit:
+    return phase != "exited" or runtime != "open"
+
+# A provider that starts after a stop began is never stopped: nothing serves once the daemon exited.
+always assertion NothingServesAfterStop:
+    return phase != "exited" or s3 != "serving"
+
+# A stop that began always ends.
+always eventually assertion StopEnds:
+    return phase not in ["before-stop", "s3-stop", "stop"]

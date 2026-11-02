@@ -1,6 +1,7 @@
 # ADR-0082: The provider model — a built-in/add-on provider catalog
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0305](0305-providers-start-and-stop-through-one-lifecycle.md) (2026-11-02) — the static descriptor set: the catalog is drawn from the providers' own descriptors (ADR-0305 Decision 7).
 - **Date**: 2026-06-29 (Accepted 2026-06-29 after two judge passes — folded M1 `bus` mis-tiering → `eventing`/`invoke`
   per the blueprint, m1 `New` runs `Validate`, and the F56 feat-row propagation. **Reviewing → Implemented 2026-06-29**
   — review **pass** (DoD 10/10), see docs/reviews/adr-0082-implementation-claude-opus-4-8.md; `internal/provider`
