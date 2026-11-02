@@ -129,6 +129,7 @@ func TestIssue41_RejectsInvokeSocketDirOverUnixLimit(t *testing.T) {
 	require.Contains(t, err.Error(), "Unix socket limit")
 }
 
+// scenario: workers-keep-their-services-while-stopping
 // Issue #330: the temp invoke socket dir New creates when no WithInvokeSocketDir is set is removed by
 // Shutdown, and by a New that fails after creating it.
 func TestIssue330_TempInvokeSocketDirRemoved(t *testing.T) {
@@ -154,6 +155,7 @@ func TestIssue330_TempInvokeSocketDirRemoved(t *testing.T) {
 
 // scenario: run-shutdown-lifecycle — Run returns nil on ctx cancel; concurrent
 // Shutdown is idempotent (sync.Once) and the bus is closed afterwards.
+// oracle: docs/design/platform/start-stop.fizz#StopEnds
 func TestScenarioRunShutdownLifecycle(t *testing.T) {
 	t.Parallel()
 	p, err := New(InMemory())
@@ -187,6 +189,7 @@ type removeProbe struct {
 func (r *removeProbe) Apply(context.Context, network.Policy) error { return r.applyErr }
 func (r *removeProbe) Remove(context.Context) error                { r.removed = true; return nil }
 
+// scenario: workers-keep-their-services-while-stopping
 // Shutdown removes the egress fence (ADR-0115) and closes the egress gateway (ADR-0117) only after the runtime's Close
 // has stopped the workers, so no worker runs without them while the daemon stops.
 func TestShutdown_KeepsEgressFenceUntilRuntimeClosed(t *testing.T) {
@@ -207,7 +210,10 @@ func TestShutdown_KeepsEgressFenceUntilRuntimeClosed(t *testing.T) {
 	require.True(t, gw.afterRuntime, "Shutdown closed the egress gateway while the runtime's workers were still running")
 }
 
+// scenario: a-failed-new-stops-what-it-opened
+// scenario: workers-keep-their-services-while-stopping
 // When the runtime's Close fails a worker may still run, so Shutdown leaves the egress fence for the next start's Apply.
+// oracle: docs/design/platform/start-stop.fizz#FenceStaysWhileAWorkerMayRun
 func TestShutdown_KeepsEgressFenceWhenRuntimeCloseFails(t *testing.T) {
 	probe := &removeProbe{}
 	rt := &fenceAtClose{fence: probe, err: errors.New("worker still running")}
@@ -245,9 +251,11 @@ func (r *fenceAtClose) Close() error {
 	return errors.Join(r.Runtime.Close(), r.err)
 }
 
+// scenario: workers-keep-their-services-while-stopping
 // Issue #1232: when Run's context ends, the S3 gateway, the egress gateway and the DNS forwarder keep serving while
 // the runtime stops the workers that use them (a stopping Lake engine saves its catalog through the gateway,
 // ADR-0273), and Shutdown stops them after that.
+// oracle: docs/design/platform/start-stop.fizz#WorkersKeepTheS3Gateway
 func TestIssue1232_DaemonStopKeepsWorkerServicesUntilTheWorkersStop(t *testing.T) {
 	var (
 		rt      *servicesAtClose
@@ -545,10 +553,12 @@ func TestIssue446_DeadLetterDefaultsWithoutWithDeadLetterQueue(t *testing.T) {
 	require.Zero(t, explicit.deadletterMaxEntries, "an explicit zero still means no cap")
 }
 
+// scenario: a-failed-new-stops-what-it-opened
 // Issue #94: a failed New releases what the options and the build acquired (ADR-0014: never a partial
 // platform), so the caller can fix the cause and call New again with the same data dirs.
 //
 // Serial: it reopens Badger directories it closed, which a parallel test's forked child can hold locked (#1178).
+// oracle: docs/design/platform/start-stop.fizz#RuntimeClosedAtExit
 func TestIssue94_FailedNewReleasesResources(t *testing.T) {
 	busy, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)

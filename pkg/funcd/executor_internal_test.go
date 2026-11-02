@@ -11,6 +11,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
+// scenario: providers-boot-in-order
 // The platform lists its providers in boot order with the hooks each one has. A wrapper that hid a hook would show
 // here: a hook found by type assertion disappears behind a wrapper, as a lost StopGrace once cut the close budget
 // (#453).
@@ -32,6 +33,7 @@ func TestPhases_ListTheProvidersWithTheirHooks(t *testing.T) {
 	}, p.phases.Hooks())
 }
 
+// scenario: the-catalog-names-every-binding
 // Every binding a Function can declare names a provider of the catalog, which is built from the providers that run: a
 // new binding, or a provider left out of the list, fails here instead of drifting (ADR-0082).
 func TestCatalog_NamesEveryFunctionBinding(t *testing.T) {

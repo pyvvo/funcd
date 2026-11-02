@@ -134,7 +134,9 @@ func TestPhases_StopJoinsErrorsAndRunsEveryStop(t *testing.T) {
 	require.Equal(t, []string{"stop c", "stop b", "stop a"}, j.list())
 }
 
+// scenario: a-stop-during-boot-starts-nothing-more
 // Once stopping has begun, Start starts no further provider.
+// oracle: docs/design/platform/start-stop.fizz#NothingServesAfterStop
 func TestPhases_StartAfterStopStartsNothing(t *testing.T) {
 	j := &journal{}
 	ph := lifecycle.New(&full{name: "a", j: j})
@@ -182,6 +184,7 @@ func TestPhases_RunServesEachRunnerUntilItsContextEnds(t *testing.T) {
 	}
 }
 
+// scenario: a-stop-during-boot-starts-nothing-more
 // Once stopping has begun, Run starts no Runner.
 func TestPhases_RunAfterStopStartsNothing(t *testing.T) {
 	r := &runner{name: "a", ended: make(chan struct{})}
