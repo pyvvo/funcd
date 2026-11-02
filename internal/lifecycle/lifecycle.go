@@ -1,7 +1,7 @@
-// Package lifecycle runs the platform's providers through boot and stop in one order. A provider implements Provider
-// and any of Starter, BeforeStopper and Stopper; Phases runs each hook a provider has: Start in list order at boot,
-// BeforeStop and Stop in reverse at stop. It is the provider contract of the provider-lifecycle experiment, in the
-// idiom of the invoke chain (ADR-0302): a required interface, and optional ones a type assertion finds.
+// Package lifecycle runs the platform's providers through boot and stop in one order (ADR-0305). A provider implements
+// Provider and any of Starter, Runner, BeforeStopper and Stopper; Phases runs each hook a provider has: Start in list
+// order at boot, Run once every Start passed, BeforeStop and Stop in reverse at stop. It follows the idiom of the
+// invoke chain (ADR-0302): a required interface, and optional ones a type assertion finds.
 package lifecycle
 
 import (

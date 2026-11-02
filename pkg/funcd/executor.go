@@ -11,9 +11,9 @@ import (
 	"github.com/pyvvo/funcd/internal/volume"
 )
 
-// executor is the platform's Executor provider: the runtime that runs every workload, and what it gives a workload
-// around it: the egress fence, the egress gateway and the DNS forwarder, and the capture of its logs. It reads its
-// parts from the Platform when a hook runs, not when it is built, so a part set after New counts.
+// executor is the platform's Executor provider (ADR-0305): the runtime that runs every workload, and what it gives a
+// workload around it: the egress fence, the egress gateway and the DNS forwarder, and the capture of its logs. It reads
+// its parts from the Platform when a hook runs, not when it is built, so a part set after New counts.
 type executor struct {
 	p *Platform
 
