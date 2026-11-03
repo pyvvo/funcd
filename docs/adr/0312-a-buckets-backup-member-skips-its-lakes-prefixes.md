@@ -18,8 +18,8 @@
 A Lake sits on a Bucket: `LakeLocation{bucket, prefix}`, a prefix the Lake owns (ADR-0275). On main, a Backup that holds
 both stores the Lake's files twice: `blob/<bucket>/` holds every object, and `lake/<name>/<attempt>/` holds them again with
 the catalog (ADR-0271). Most App backups hold both. A Bucket's in-place Restore purges the Lake's files and catalog and loads
-back only the files, so the Lake loses its catalog (#1383). And a Lake restored in place does not reach its running engine,
-which answers from its local catalog and overwrites the restored one at its next save or stop (#1384, measured on a real engine).
+back only the files, so the Lake loses its catalog (#1383). And a Lake restored in place does not reach its running engine, which
+answers from its local catalog and overwrites the restored one at its next commit, its stop or a retried save (#1384, measured).
 
 Purpose: each byte of a Bucket's data belongs to exactly one member, a Bucket's Restore touches only the Bucket's own, and a
 Lake's Restore reaches its engine. Callers: a Backup's run and an in-place Restore's export (`Resolve`, `Write`), a Restore's load.
@@ -54,14 +54,12 @@ file `f1` and catalog `C1`. Each scenario names its Go tests and its lane cases 
   `NotEmpty`; naming `sales` `asLocation` too brings `f1` and `C1` to a free prefix, and is `NotEmpty` where a Lake is located.
   Go: `TestScenarioBucketRestoredAsCarriesNoLake`, `TestScenarioAsLocationOnALakeIsNotEmpty`. Lane: B2, B5.
 - **scenario: load-skips-a-lakes-prefix** — *Given* a Bucket's file that holds `gold/f0`, from before Lake `sales` took
-  `gold`, *When* the Bucket is restored in place, *Then* `gold/f0` is not written and the Lake's files and catalog stay;
-  `as` a Bucket with no Lake on `gold`, it is a plain object. Go: `TestScenarioLoadSkipsALakesPrefix`. Lane: B4.
+  `gold`, *When* the Bucket is restored in place, *Then* it is not written and the Lake stays. Go: `TestScenarioLoadSkipsALakesPrefix`. Lane: B4.
 - **scenario: catalog-with-no-lake-is-the-buckets** — *Given* a catalog on a prefix no Lake owns, *When* the Bucket is backed up
   and restored, *Then* `blob/data/catalogs/` holds it, it comes back under the destination, and an `as` target that holds only
   such a catalog is `NotEmpty`. Go: `TestScenarioCatalogWithNoLakeIsTheBuckets`. Lane: B5.
-- **scenario: failed-restore-leaves-the-lakes** — *Given* an empty Bucket `new` with Lake `fresh` on `new/gold`, *When* a Restore
-  of `data` `as` `new` fails on a put after `fresh` saved a file and a catalog, *Then* what the load wrote is gone and `fresh`'s
-  data stays. Go: `TestScenarioFailedRestoreLeavesTheLakes`. Lane: none (plan).
+- **scenario: failed-restore-leaves-the-lakes** — *Given* Bucket `new` with Lake `fresh` on `new/gold`, *When* a Restore `as` `new` fails
+  on a put after `fresh` saved, *Then* what the load wrote is gone and `fresh`'s data stays. Go: `TestScenarioFailedRestoreLeavesTheLakes`.
 - **scenario: a-lake-without-a-catalog-keeps-its-files** — *Given* Lake `sales` with no catalog and `x.parquet` under its prefix,
   *When* it is backed up, *Then* its `files/` hold `x.parquet`, and a Restore brings it back. Go: `TestWriteLakeWithoutCheckpoint`. Lane: B7.
 - **scenario: refused-restores** — *Given* a Restore naming Bucket `data` in place and Lake `sales` `asLocation` `data/copy`, or a
@@ -75,8 +73,7 @@ file `f1` and catalog `C1`. Each scenario names its Go tests and its lane cases 
 
 ## Constraints & Decision drivers
 
-- No node is deployed, so a breaking change is free (the decider), but the rule must lose no data: whatever a Bucket stops
-  copying, a member the same scope takes copies instead.
+- No node is deployed, so a breaking change is free (the decider), but the rule must lose no data.
 
 ## Alternatives considered
 
@@ -114,13 +111,15 @@ file `f1` and catalog `C1`. Each scenario names its Go tests and its lane cases 
    cannot do it: ADR-0121 admits a Lake and its Bucket in any order, and `Validate` reads no store.
 8. **`Format` is 2, and `ReadManifest` refuses any other.** A Bucket's file means something else now, and no node holds an
    older copy, so a funcd reads one format, and the load's skip never meets a file that holds a Lake's only copy.
-9. **An in-place Restore of a Lake stops its engine until release** (the decider, #1384). The Lake kind's `Prepare` calls
-   `StopEngine`, as the volume kind calls `StopWorkers`: it marks the Lake, waits for a pass already starting an engine, and
-   stops the engine by the gated Lake's path (`holdNotReady`, new reason `Restoring`) before the first load. The mark keeps
-   every pass from starting one, so the next engine reads the restored catalog. The stop's last save gets the hold's 503
-   (ADR-0276), within `runtime.containerd.stopGrace`. The mark lives in memory: after a failed load or a funcd stop the hold stays,
-   a new engine reads what the store holds, and its saves get 503 until `hold release`. A Lake restored under a `data` hold after
-   a host loss is covered too (read, not run). A Bucket's Restore needs no stop, and no lifecycle hook is added.
+9. **An in-place Restore of a Lake stops its engine until release** (the decider, #1384). After the hold, the Lake kind's `Prepare`
+   calls `StopEngine`, as the volume kind calls `StopWorkers`: it marks the Lake, waits for a pass already starting an engine, and
+   stops the engine by the gated Lake's path (`holdNotReady`, new reason `Restoring`) before the first load. The mark keeps every
+   pass from starting one, so the next engine reads the restored catalog. The stop's saves get the hold's 503 (ADR-0276), and the
+   load overwrites whatever the stop left. The hold does not cover a Lake's direct endpoint (ADR-0290's `lake-upstream-refused` is
+   about its Route; read, not run), so the stop and the proxy's suspension close that path; a Lake not being restored stays as it
+   is, its saves refused until the release. The mark lives in memory: after a failed load or a funcd stop the hold stays, a new
+   engine reads what the store holds, and its saves get 503 until `hold release`. A Lake restored under a `data` hold after a host
+   loss is covered too (read, not run). A Bucket's Restore needs no stop, and no lifecycle hook is added.
 10. **`asLocation` where a Lake is located is `NotEmpty`.** That path takes no hold, so no engine may stop there, and a running
     one would overwrite the load. A Restore first and the Lake applied after, as `dr/restore-lake.yaml` does, passes.
 
@@ -174,17 +173,16 @@ func Lakes(st store.Store, shared blob.Bucket, prefix func(v1.NamespaceName, v1.
 ## Implementation plan
 
 1. On ADR-0311's finished code (`claude/adr-0311-impl-48e2c4`), removing its catalog carry. `internal/backup/workload`: `Format`,
-   `ReadManifest`, `Member.LakePrefixes`, one helper for a Bucket's Lake prefixes, `Resolve` (one path for the three scope
-   forms), `buckets.go`, `lakes.go`. `internal/services/lake/reconcile.go`: Decision 7, `StopEngine`, the mark's check.
-2. `pkg/funcd/binding_providers.go`: no purger; `lakeProvider` keeps its reconciler and hands over the stop. `api/types/v1alpha1/backup.go`:
-   Decision 6; the comments of `BackupScope` and `RestoreMember` (`:148-149`). `examples/workload-backup.md:58`, `:108-109`: a Bucket
-   brings in its Lakes; a Restore of it, `as` included, leaves them, so a whole copy elsewhere is 1 + N members; a skip leaves no trace.
+   `ReadManifest`, `Member.LakePrefixes`, one helper for Lake prefixes, `Resolve` (one path for the scope forms), `buckets.go`, `lakes.go`.
+   `internal/services/lake/reconcile.go`: Decision 7, `StopEngine`. `pkg/funcd/binding_providers.go`: no purger; `lakeProvider` hands over the stop.
+2. `api/types/v1alpha1/backup.go`: Decision 6; the comments of `BackupScope` and `RestoreMember` (`:148-149`). `examples/workload-backup.md:58`,
+   `:108-109`: a Bucket brings in its Lakes; a Restore of it, `as` included, leaves them, so a whole copy elsewhere is 1 + N members; a skip leaves no trace.
 3. Go tests, each scenario's named test new unless noted, with the Design model's oracle markers:
    - removed: `TestWriteBucket_ReadsCatalogsBeforeItsObjects`; assertions changed: `TestWriteLakeWithoutCheckpoint` and
      `TestScenarioRestoreBucketAsAndInPlace` (`member_restore_internal_test.go:49`, `:54`, `:63`);
    - setup only: the `Buckets(…)` and `Lakes(…)` calls; a Lake test's Bucket gains the Lake as owner (first `seedLakeBucket`).
-4. Block B in `e2e/app-todo.venom.yml`, on a real engine with real rows read by a new Function that runs SQL on the Lake, after
-   D18 and before Q1. It tests only the final behavior, and each case leaves `todo-lake` running and the namespace unheld:
+4. Block B in `e2e/app-todo.venom.yml`, after D18 and before Q1: the final behavior only, on real rows read by a new Function that
+   runs SQL on the Lake, each case leaving `todo-lake` running and the namespace unheld:
 
    | Case | What it proves |
    |---|---|
@@ -197,7 +195,7 @@ func Lakes(st store.Store, shared blob.Bucket, prefix func(v1.NamespaceName, v1.
    | B7 | a Lake on a prefix that holds an object, before its first commit: its member holds `files/` and no `catalog.db/`, and a Restore `asLocation` brings the object |
    | B8 | `funcdctl apply` of Decision 6's Restore gets 400 |
    | B9 | the Bucket alone in place, rows R1 at the Backup, then R2 and a changed object: it rewinds the object, and the same engine answers R1 and R2 and saves a new commit |
-   | B10 | the Lake alone in place answers the Backup's rows, and still does after a commit, a SIGTERM and a daemon restart; `CatalogSaved` is `True` after the new engine's first save; the stop's time is measured |
+   | B10 | the Lake alone in place answers the Backup's rows, no retried save overwrites the catalog, and it still answers them after a commit, a SIGTERM and a daemon restart; `CatalogSaved` is `True` after the new engine's first save; the stop's time is measured |
    | B11 | a Lake applied on `todo-files/uploads` is held `PrefixNotOwned`; the uploads stay in the Bucket's copy, and a Restore `as` shows `receipt.txt` |
    | B12 | a funcd stop mid-load, with the target paused: the hold stays, the new engine's saves get 503 until `hold release`, and a new Restore then succeeds |
 
@@ -207,18 +205,20 @@ func Lakes(st store.Store, shared blob.Bucket, prefix func(v1.NamespaceName, v1.
 5. Guards that keep every assertion: the two `TestKinds_…` and three `TestIssue1383_…` (read, not run: the prototype changed
    `member_kinds_internal_test.go:215` only for its own `IsEmpty`), `TestIssue1206_…`; app-todo's D8 and Q5; volumes' V8; the duckdb
    lane's `issue1227-redeploy-keeps-commits`, `issue1232-daemon-stop-keeps-commits`, `same-name-function-and-lake-stay-ready`, `lake-scratch-bounded`,
-   and `issue1233-failing-saves-show`, whose Lake sits on a Function's prefix, so it refuses saves another way (`lake.catalogMaxSize`, untried).
+   and `issue1233-failing-saves-show`. Its fixture, `e2e/fixtures/lake-saves-refused.yaml`, changes: Decision 7 holds a Lake on a
+   Function's prefix, so it refuses saves another way (`lake.catalogMaxSize`, untried until the implementation tries it).
 6. Mutants, each restored, with the test that caught it: the two specs' seventeen in code, and a key match without the `/`, an
    `IsEmpty` blind to catalogs, a `Resolve` that misses a scope form, a Lake listed twice, and Decisions 6 to 8 and 10 gone.
 7. One PR with ADR-0311 (the decider). `scripts/agent/gate.sh`, `just lima-example-all` and `just lima-example app-todo` run once, on
    its tip. The queue squashes it: its body carries `Fixes #1383`, `Fixes #1384` and a BEGIN_COMMIT_OVERRIDE with its fix and refactor lines.
-8. At acceptance: the back-links on ADR-0311, ADR-0222 and ADR-0293; F226 → `accepted`; `blueprint.md:241` takes this rule.
+8. At acceptance: the back-links on ADR-0311, ADR-0222 and ADR-0293; F226 → `accepted`; `blueprint.md:241` takes this rule. When the
+   branches come together, F225's row in `docs/feat/0001-feat-v1.1.md` loses "backups already made restore as before".
 
 ## Review checklist
 
 - [ ] `buckets.go` purges nothing; `Write` reads no store; `IsEmpty`, `Clear` and `Load` read the Lake prefixes when they run;
   `Format` is 2 and `ReadManifest` refuses any other; a Lake on a prefix it does not own runs no engine.
-- [ ] `StopEngine` marks first, waits for a starting pass, returns once the engine is gone, and every pass checks the mark.
+- [ ] `StopEngine` runs after the hold, marks first, waits for a starting pass and suspends the proxy; every pass checks the mark.
 - [ ] Every scenario's Go tests and block B cases pass on real rows; only the plan's Go-only items lack a case; the guards
   keep their assertions; each assertion has its oracle marker, and `just check-specs` passes.
 
@@ -227,15 +227,16 @@ func Lakes(st store.Store, shared blob.Bucket, prefix func(v1.NamespaceName, v1.
 - **Positive**: a Lake's files and catalog are stored and restored once. A Bucket's Restore cannot damage a Lake, located or
   gone, and a Lake's Restore holds on a running engine, which removes #1383's and #1384's classes. Member order stops mattering.
 - **For a user, compared with today's main** (accepted by the decider): a Backup whose scope names only `data` lists `Lake sales`
-  as a second member, and a Restore can then name it. A Bucket's Restore no longer rewinds its Lakes' files or deletes their
-  catalogs. A Bucket restored `as` a new name carries no Lake: a whole copy elsewhere is 1 + N members, which `status.members`
-  lists and nothing warns of. A member can name a Lake with no resource. A copy made before this ADR is refused.
+  as a second member, which a Restore can name and which may have no resource. A Bucket's Restore no longer rewinds its Lakes' files or
+  deletes their catalogs. A Bucket restored `as` a new name carries no Lake: a whole copy elsewhere is 1 + N members, which
+  `status.members` lists and nothing warns of. A copy made before this ADR is refused.
 - **Negative, named here**: a Bucket-only schedule copies its Lakes, so a busy Lake fails it `LakeUnstable` and an in-place Bucket
-  restore `ExportFailed`, until the next try. An in-place Lake Restore stops the engine for up to a grace; right after the hold lifts
-  a query can fail while it starts (`LakeNotReady`, ADR-0162), and `CatalogSaved` can read `False` until its first save (#1233).
-- **Risks**: a record skipped under a Lake prefix leaves no trace. A Lake applied during a Bucket's `Clear` or load meets the
-  walk, as it met the purge. A Lake that reads other prefixes of its Bucket (`spec.bindings.blob`, or `ducklake_add_data_files`,
-  which no funcd code calls) sees them change with a rewind. A scope that names a held Lake still copies its location.
+  restore `ExportFailed`, until the next try. An in-place Lake Restore adds up to `stopGrace` (10 s by default) of held time per Lake,
+  since each of the stop's two saves took 3.8 to 12.3 s to be refused; harmless, as the Restore replaces the engine's local state and
+  the `<restore>-before` export ran before the hold. Right after the hold lifts a query can fail while the engine starts
+  (`LakeNotReady`, ADR-0162), and `CatalogSaved` can read `False` until its first save (#1233).
+- **Risks**: a skipped record leaves no trace. A Lake applied during a Bucket's `Clear` or load meets the walk, as it met the purge.
+  A Lake that reads other prefixes of its Bucket (`spec.bindings.blob`, or `ducklake_add_data_files`) sees them change with a rewind.
 
 ## Open questions
 
@@ -243,7 +244,6 @@ None.
 
 ## References
 
-- The decider's answers and the requirement that every feature has Go tests and app-todo cases (2026-11-03); #1383; #1384, measured
-  on a real engine on `3ee793d8`; the code read at `32169c14`, the source of every line cited here.
+- The decider's answers (2026-11-03); #1383; #1384, measured on a real engine on `3ee793d8`; the code read at `32169c14`.
 - The prototype of the first rule (`40d9e982`, `fc0ebe8a`, unpushed) and its owner variant by overlay. `just lima-example app-todo`
   passed 50 of 50 on it, which is weak evidence: D18's Lake holds no data file and no step restores a Bucket that holds a Lake.
