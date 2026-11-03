@@ -1,18 +1,18 @@
 # ADR-0311: Each provider backs up and restores its own member kind
 
-- **Status**: Proposed (2026-11-03; refined with the decider, who validated the contract sketch, confirmed on 2026-11-03
-  the kinds' location that departs from it, see Alternatives, and decided here how #1383 is fixed; judged once in an
-  independent session, every finding folded)
+- **Status**: Proposed (2026-11-03; refined with the decider, who validated the contract sketch and confirmed on
+  2026-11-03 the kinds' location that departs from it, see Alternatives; judged once in an independent session, every
+  finding folded; #1383's regression fix lands first in the same PR)
 - **Date**: 2026-11-03
 - **Deciders**: green-0-rabbit
 - **Tags**: provider, backup, restore, refactor
 - **Realizes**: [FEAT-0001/F225](../feat/0001-feat-v1.1.md) (each provider backs up and restores its own stores)
-- **Supersedes (in part)**, each back-linked at acceptance, in its Contracts unless named: ADR-0222's `Format = 1`,
-  `Sources` and `Write`'s `src Sources` (`:175-177`, `:182`; also the Bucket line of Decision 4's layout, `:98`, and
-  `Sources.BucketPrefix` in Decision 7); ADR-0234's `Sources.SQL`, `SQLLoader`'s package and methods (it gains
-  `Source`), `Deps.SQL` and the restore target's `sql` field (`:119-132`; also `workload.Sources.SQL` in Decision 2);
-  ADR-0262's `workload.Sources` (`:212`; Decision 11 stands); ADR-0287's `ListCopy` and `SlotCopies` signatures
-  (`:173-175`); ADR-0293's `Sources.CatalogPrefix` (`:158-161`); ADR-0308's Decision 6 row "Workload backup members".
+- **Supersedes (in part)**, each back-linked at acceptance, in its Contracts unless named: ADR-0222's `Sources` and
+  `Write`'s `src Sources` (`:176-177`, `:182`; also `Sources.BucketPrefix` in Decision 7); ADR-0234's `Sources.SQL`,
+  `SQLLoader`'s package and methods (it gains `Source`), `Deps.SQL` and the restore target's `sql` field (`:119-132`;
+  also `workload.Sources.SQL` in Decision 2); ADR-0262's `workload.Sources` (`:212`; Decision 11 stands); ADR-0287's
+  `ListCopy` and `SlotCopies` signatures (`:173-175`); ADR-0293's `Sources.CatalogPrefix` (`:158-161`); and ADR-0308's
+  Decision 6 row "Workload backup members".
 - **Relates to**: ADR-0308's open question, answered here · ADR-0309 Decisions 2 and 3 (sql's hook hands its backups
   over; `New` hands the Function reconciler to the Executor again) · ADR-0199 Decision 7 · ADR-0293 Decisions 5, 6
 
@@ -25,7 +25,7 @@ volume, and a Restore loads them back. Each kind is named in about ten places: `
 `workload.go:67-81`), and `pkg/funcd`'s own Bucket and Lake sources (`funcd.go:1850-1887`). The vector stores' backup
 (F174) would edit them all again, as the SQL member did (ADR-0234), and a kind with no case in `plan` would be restored
 as a Lake (`restore.go:315-325`), which only the API's kind check prevents (`api/types/v1alpha1/backup.go:454-455`).
-And a Restore that purges a Bucket deletes the catalogs of the Lakes on it, which the Bucket's copy lacks (#1383).
+And since #1320, a Restore that purges a Bucket deletes its Lakes' catalogs, which the Bucket's copy lacks (#1383).
 
 Purpose: each kind's backup and restore is one type that its provider hands over, and the backup service names no
 kind. Callers: a Backup's run (`run.go:149-201`), a Restore's load (`restore.go:173-243`) and the schedule sync's
@@ -35,7 +35,7 @@ listing (`sync.go:55`, `:163`).
 
 - **scenario: each-kind-round-trips-as-today** — *Given* members of the five kinds, *When* a Backup copies them and a
   Restore loads each into an empty new destination (`as`; a Lake `asLocation`) and in place, *Then* the copy (files,
-  names, records, order), its listing, the failure reasons and every destination are today's, but for the Bucket row
+  names, records, order), its listing, the failure reasons and every destination are those of a main with #1383's fix
   (Decisions 4 and 5). Tests, assertions unchanged: every test of `internal/backup/workload` and of `pkg/funcd`'s
   `workload_backup`, `sql_backup`, `volume_backup` and `target_sync` internal test files. Seven new pins, written
   before the refactor where no test covers a case: a Bucket `as` and in place to success, a volume `as`
@@ -62,16 +62,16 @@ listing (`sync.go:55`, `:163`).
 
 ## Scope
 
-**In**: Decisions 1 to 6, with #1383's fix in Decision 4's Bucket row, and the plan's stale texts. **Out**: the API,
-with `RestoreMember`'s validation (`api/types/v1alpha1/backup.go:413-458`), and `Resolve` (the decider's answer 3); the
-backup format and the restore's order, but for the Bucket row (answer 4); clearing `DataMissing` (`funcd.go:851`,
+**In**: Decisions 1 to 6 and the plan's stale texts; #1383's regression fix is the PR's first commit (the plan).
+**Out**: the API, with `RestoreMember`'s validation (`api/types/v1alpha1/backup.go:413-458`), and `Resolve` (the
+decider's answer 3); the backup format and the restore's order (answer 4); clearing `DataMissing` (`funcd.go:851`,
 `binding_providers.go:475`); the platform backup (ADR-0205); F174's kind.
 
 ## Constraints & Decision drivers
 
-- Behavior-preserving (answer 4), but for Decision 4's Bucket row, #1383's fix, a change the decider allowed since no
-  workload runs anywhere: the same files, names, order and records; the same restore order, rules, reasons and
-  `Unavailable` answers; the pinned tests keep their assertions.
+- Behavior-preserving (answer 4) from a main that carries #1383's fix: `Format = 1` (`workload.go:37`); the same files,
+  names, order and records; the same restore order, rules, reasons and `Unavailable` answers; the pinned tests keep
+  their assertions.
 - ADR-0308's idiom and ADR-0309's rule: an optional hook embeds `lifecycle.Provider` and returns a part built from its
   provider's own fields; the Platform puts the parts in place; no `init()` registry (ADR-0002); no new dependency.
 
@@ -107,17 +107,17 @@ backup format and the restore's order, but for the Bucket row (answer 4); cleari
    | Kind (provider) | Copy, under the copy's directory | Destination | Empty, unless in place | Prepare | Load | Clear |
    |---|---|---|---|---|---|---|
    | KVStore (kv) | `kv/<name>/`: the driver's export | the KVStore `as`, or itself | no key | — | in place, Clear first; `LoadPrefix` | `DropPrefix` |
-   | Bucket (blob) | `blob/<name>/`: its objects; `blob/<name>/catalogs/`: its Lakes' catalogs | the Bucket `as`, or itself | no object and no Lake catalog | — | in place, Clear first; its objects, then its catalogs | `Purge`: objects and catalogs |
+   | Bucket (blob) | `blob/<name>/`: its objects, then its Lakes' catalogs as `<p>/_ducklake/catalog.db` | the Bucket `as`, or itself | no object and no Lake catalog | — | in place, Clear first; each object, each catalog into the catalog store | `Purge`: objects and catalogs |
    | Lake (lake) | `lake/<name>/<attempt>/files/`, then `catalog.db/`; up to 3 attempts | the `asLocation` prefix, or its location | no catalog, no object | — | in place, Clear first; its files, then its catalog | the catalog, then each object |
    | SQLDatabase (sql) | `sql/<name>/`: its file in 8 MiB records | the database `as`, or itself | no table, view, index or trigger, and no Function binding it | — | its engine's load, which empties first | its engine's `Empty` |
    | Function volume (Executor) | `volume/<fn>/<vol>/`: its tar | that volume of the Function `as`, or of itself | empty, or lost | stop the Function's workers until release | if lost, Clear first; the untar | `Clear` |
 
-   The Bucket row fixes #1383: its second file holds the catalogs under `lake-catalogs/<ns>/<bucket>/`, keyed under it
-   and framed as objects, read before the objects as the mirror's freeze reads a catalog first (ADR-0293 Decision 5),
-   written only when one exists, and loaded last; a one-file copy restores as before, and a Lake's consistent copy stays
-   its own member's (ADR-0271). That layout bumps `Format` to 2 (`workload.go:36`), so an older funcd refuses what it
-   would misload; format 1 still reads. The unreachable nil-Purger fallback (`restore.go:503`, `:511-524`;
-   `funcd.go:1855`) is not ported.
+   The Bucket row is the one #1383's fix gives: a Bucket's file carries, after its objects, each catalog under
+   `lake-catalogs/<ns>/<bucket>/` as a record keyed `<p>/_ducklake/catalog.db`, its key before #1320, and a restore
+   puts such a record into the catalog store under the destination's location, as the Lake member's catalog record goes
+   (`restore.go:440-443`). So ADR-0293 Decision 5's "every backup restores as before" holds, a copy taken before #1320
+   restores its catalogs too, and a Lake's consistent copy stays its own member's (ADR-0271). The unreachable nil-Purger
+   fallback (`restore.go:503`, `:511-524`; `funcd.go:1855`) is not ported.
 5. **Reasons, per call**, from sentinels (`internal/backup/workload` cannot import the service's reasons). A missing
    manifest entry, or a `Destination`'s `fault.NotFound`, is `MemberNotFound` and its other errors `Failed`
    (`restore.go:284-286`, `:327-332`); `IsEmpty`: `EngineNotReady` (`ErrEngineNotReady`) or `Failed` (`:333-337`);
@@ -161,7 +161,6 @@ type FileWriter interface { // today's writer.file: framed, sealed, hashed and c
 type RecordOpener func(ctx context.Context, f backup.StoreFile) func() (snapshot.Record, error) // today's Records
 var ErrNotEmpty = errors.New("the destination holds data")         // reason NotEmpty
 var ErrTornObject = errors.New("an object record's frame is torn") // reason Integrity
-const Format = 2                                                   // changed: the Bucket's catalogs file; 1 still reads
 // The five kinds, named after their scope lists; a nil part follows Decision 2, but a nil catalog prefix keeps catalogs
 // under their files, as Sources.CatalogPrefix does (workload.go:75-77); purge is never nil.
 func KVStores(st store.Store, export func(prefix string) snapshot.Source, load KVLoader) MemberKind
@@ -194,15 +193,15 @@ func (e *executor) useFunctions(fn *function.Reconciler)
 | Dependencies & I/O | |
 |---|---|
 | Consumes | the parts above and the metadata store, as today |
-| Exposes | no new resource, field, reason or route; a Bucket member's catalogs file and `Format` 2 (#1383); the boot log's provider hooks gain `backups` |
+| Exposes | no new resource, field, file, reason or route; the boot log's provider hooks gain `backups` |
 | Config keys, dependencies | none new |
 
 ## Implementation plan
 
-1. **Commit 1, #1383's fix on today's code, under `/fix`**: Decision 4's Bucket row in `Write`'s Bucket case and the
-   restore's `isEmpty` and `fill`, over `Sources.CatalogPrefix`, with `Format` 2. The three `TestIssue1383_…` tests of
-   `08cef605` turn green, the revert check turns them red, and an independent `/fix-review` passes; the commits below
-   keep the fixed row, and the PR closes #1383.
+1. **Commit 1, #1383's fix under `/fix`** (`fix(backup): …`, `Fixes #1383`): Decision 4's Bucket row in `Write`'s
+   Bucket case and the restore's `isEmpty` and `fill`, over `Sources.CatalogPrefix`. The three `TestIssue1383_…` tests
+   of `08cef605` turn green, the revert check turns them red, and an independent `/fix-review` passes; the refactor
+   commits below keep the fixed row.
 2. **Commit 2, no behavior change**: `kinds.go` (interfaces, wrappers, sentinels) and one file per kind in
    `internal/backup/workload`, porting Decision 4's lines, with the loader interfaces; nothing calls them yet. Tests:
    the seven pins, passing on commit 1's services (a failing pin is a defect of main, filed apart), and
@@ -233,8 +232,8 @@ func (e *executor) useFunctions(fn *function.Reconciler)
 
 - [ ] `internal/services/backup` names no member kind and has no `Sources`, `KV`, `SQL`, `Volumes` or `Purger` field;
   in `internal/backup/workload`, only the five kind files and `Resolve` with its helpers name one.
-- [ ] `Format` is 2 and format 1 still reads; the `TestIssue1383_…` tests pass, and the pinned tests' assertions are
-  unchanged, only the planned setups changed; `api/types/v1alpha1` changes only in two doc comments.
+- [ ] `Format` is 1; the `TestIssue1383_…` tests pass, and the pinned tests' assertions are unchanged, only the
+  planned setups changed; `api/types/v1alpha1` changes only in two doc comments.
 - [ ] A Restore keeps today's order; an unserved kind fails by its name before any put and before the hold; the
   listing skips a key no kind parses; one function maps a member call's error to its reason, and the service's own
   steps keep theirs.
@@ -248,9 +247,11 @@ func (e *executor) useFunctions(fn *function.Reconciler)
   the services; an unserved kind can no longer be restored as a Lake; a Bucket's Restore keeps its Lakes' catalogs.
 - **Negative**: two interfaces, two wrappers, two sentinels, five kind types; six ADRs superseded in part; the Executor
   keeps the Function reconciler; a Function with two volume members stops twice; a Backup of a Bucket and its Lakes
-  holds each catalog twice; an older funcd refuses a format-2 copy.
+  holds each catalog twice.
 - **Risks**: a load that refuses without `ErrNotEmpty` lets the clearing empty what the Restore never wrote (a mutant
-  pins it); a new kind must take a directory of its own, which `TestKinds_ParseReadsWhatWriteWrote` checks.
+  pins it); a new kind must take a directory of its own, which `TestKinds_ParseReadsWhatWriteWrote` checks; an object a
+  Bucket holds at `<p>/_ducklake/catalog.db`, which since #1320 only a deliberate write puts there, restores as a
+  catalog.
 
 ## Open questions
 
@@ -260,4 +261,4 @@ None.
 
 - ADR-0308's Open questions; the decider's refine card (answers "1. B, 2. yes, 3. yes, 4. yes") and the contract
   sketch they validated (2026-11-03); the code read at `0db817a6`, the source of every line cited here.
-- #1383, proven on `0db817a6` by the three tests of `08cef605`, and the decider's answers on it (2026-11-03).
+- #1383, a regression from #1320 (ADR-0293), proven on `0db817a6` by the three tests of `08cef605`.
