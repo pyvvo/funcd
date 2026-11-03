@@ -7,17 +7,15 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controller"
-	lakegw "github.com/pyvvo/funcd/internal/lake/gateway"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
-// resolveLakeEnv resolves each spec.bindings.lake binding into the FUNCD_LAKE_<ALIAS>_URL/_TOKEN env
-// pair for worker injection (ADR-0091 as reworked by ADR-0137). For every binding it Gets the bound
-// Lake in the function's namespace, reads its status.endpoint — now the node-private lake
-// PEP proxy URL (ADR-0137), no longer the engine — and derives the per-function lake token
-// DeriveLakeToken(master, ns, fn): a MAC-authenticated bearer the proxy constant-time-verifies to
-// this Function principal, then PEPs lake::query per query. The shared QUACK_TOKEN is no longer
-// handed to the function — the proxy holds it and swaps it in only after an allow.
+// resolveLakeEnv resolves each spec.bindings.lake binding into its FUNCD_LAKE_<ALIAS>_URL for worker
+// injection (ADR-0091 as reworked by ADR-0137). For every binding it Gets the bound Lake in the
+// function's namespace and reads its status.endpoint — now the node-private lake PEP proxy URL
+// (ADR-0137), no longer the engine. The per-function lake token the proxy verifies is the Lake hook's
+// own env (lakeHook.own, ADR-0306 Decision 7); the shared QUACK_TOKEN is no longer handed to the
+// function — the proxy holds it and swaps it in only after an allow.
 //
 // It is fail-closed on readiness: a bound lake that is not Ready yet returns (requeue=true) with no
 // env — the caller holds the function Ready=False/LakeNotReady and requeues. Readiness is the
@@ -36,14 +34,7 @@ func (r *Reconciler) resolveLakeEnv(ctx context.Context, fn *v1.Function) (env m
 	if len(fn.Spec.Bindings.Lake) == 0 {
 		return nil, false, nil
 	}
-	// The per-function lake token is keyed by (ns, fn), so it is the SAME across every binding of
-	// this function; the proxy for each lake resolves it to this Function principal, then PEPs
-	// lake::query on THAT lake. Derived once here.
-	token, terr := lakegw.DeriveLakeToken(r.lakeMaster, fn.Namespace, fn.Name)
-	if terr != nil {
-		return nil, false, fault.Wrapf(terr, fault.KindOf(terr), op, "derive lake token for %s/%s", fn.Namespace, fn.Name)
-	}
-	out := make(map[string]string, len(fn.Spec.Bindings.Lake)*2)
+	out := make(map[string]string, len(fn.Spec.Bindings.Lake))
 	for _, bnd := range fn.Spec.Bindings.Lake {
 		obj, gerr := r.store.Get(ctx, v1.KindLake.GVK(), fn.Namespace, bnd.Lake)
 		if gerr != nil {
@@ -74,9 +65,7 @@ func (r *Reconciler) resolveLakeEnv(ctx context.Context, fn *v1.Function) (env m
 		if url == "" {
 			return nil, true, nil
 		}
-		alias := strings.ToUpper(bnd.Alias)
-		out["FUNCD_LAKE_"+alias+"_URL"] = url     // the node-private lake PEP proxy (ADR-0137)
-		out["FUNCD_LAKE_"+alias+"_TOKEN"] = token // per-function MAC token (ADR-0137), not the shared QUACK_TOKEN
+		out["FUNCD_LAKE_"+strings.ToUpper(bnd.Alias)+"_URL"] = url // the node-private lake PEP proxy (ADR-0137)
 	}
 	return out, false, nil
 }
@@ -120,15 +109,6 @@ func (r *Reconciler) MapLake(ctx context.Context, obj v1.Object) []controller.Re
 		}
 	}
 	return out
-}
-
-// addLakeEnv writes the already-resolved lake env pairs DIRECTLY into a worker's env (ADR-0091).
-// It bypasses addBindingEnv on purpose: the keys are FUNCD_-prefixed, which the reserved-key guard
-// (secrets.MergeEnvGuarded) drops from bound values. lakeEnv is nil for a function with no spec.bindings.lake.
-func (r *Reconciler) addLakeEnv(env, lakeEnv map[string]string) {
-	for k, v := range lakeEnv {
-		env[k] = v
-	}
 }
 
 // addLakeExtensionDir injects DUCKDB_EXTENSION_DIRECTORY for a lake-consumer function (one

@@ -41,6 +41,15 @@ func seedLakeIn(t *testing.T, r *Reconciler, name, endpoint string, phase v1.Pha
 	require.NoError(t, err)
 }
 
+// lakeOwn is the Lake hook's own env for fn, its lake token per alias.
+func lakeOwn(t *testing.T, r *Reconciler, fn *v1.Function) map[string]string {
+	t.Helper()
+	own, issue, gate := lakeHook{r}.own(fn)
+	require.Nil(t, gate)
+	require.Nil(t, issue, "a lake token is stable across workers, never issued")
+	return own
+}
+
 // lakeConsumerFn is a Function that consumes one lake under a given alias.
 func lakeConsumerFn(alias, lake string) *v1.Function {
 	fn := sampleFn()
@@ -68,15 +77,11 @@ func TestScenarioBindingInjectsEndpointAndToken(t *testing.T) {
 	env, requeue, err := r.resolveLakeEnv(context.Background(), fn)
 	require.NoError(t, err)
 	require.False(t, requeue, "a Ready lake does not requeue")
+	require.Equal(t, map[string]string{"FUNCD_LAKE_LAKE_URL": proxyURL}, env, "URL is status.endpoint (the proxy), verbatim")
 
-	// Present AND non-empty — the values survive the DIRECT write (not routed through addBindingEnv).
-	require.Contains(t, env, "FUNCD_LAKE_LAKE_URL")
-	require.Contains(t, env, "FUNCD_LAKE_LAKE_TOKEN")
-	require.Equal(t, proxyURL, env["FUNCD_LAKE_LAKE_URL"], "URL is status.endpoint (the proxy), verbatim")
-
-	// The injected token is the per-function MAC token — it resolves to THIS Function principal, and is
-	// NOT the shared QUACK_TOKEN (the proxy holds that and swaps it in only after an allow).
-	injected := env["FUNCD_LAKE_LAKE_TOKEN"]
+	// The injected token is the Lake hook's own env, the per-function MAC token — it resolves to THIS Function
+	// principal, and is NOT the shared QUACK_TOKEN (the proxy holds that and swaps it in only after an allow).
+	injected := lakeOwn(t, r, fn)["FUNCD_LAKE_LAKE_TOKEN"]
 	require.NotEmpty(t, injected, "token must survive non-empty")
 	require.NotEqual(t, "t0ken-abc", injected, "the shared QUACK_TOKEN is NOT handed to the function")
 	want, derr := lakegw.DeriveLakeToken(master, fn.Namespace, fn.Name)
@@ -90,7 +95,7 @@ func TestScenarioBindingInjectsEndpointAndToken(t *testing.T) {
 
 	// End-to-end through workerSpec: the DIRECT write means the FUNCD_-prefixed keys reach Env even
 	// though addBindingEnv would have dropped them.
-	spec := mustWorkerSpec(t, r, fn, "/art/app.mjs", envresolve.Resolved{}, env)
+	spec := mustWorkerSpec(t, r, fn, "/art/app.mjs", envresolve.Resolved{})
 	require.Equal(t, proxyURL, spec.Env["FUNCD_LAKE_LAKE_URL"], "the URL reaches the worker env DIRECTLY")
 	require.Equal(t, injected, spec.Env["FUNCD_LAKE_LAKE_TOKEN"], "the token reaches the worker env DIRECTLY")
 }
@@ -122,7 +127,10 @@ func TestScenarioRequeueUntilLakeReadyNotOnEngineAddress(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, requeue, "a Pending lake requeues even though it publishes an endpoint")
 	require.NotContains(t, env, "FUNCD_LAKE_LAKE_URL", "the raw engine address is never injected")
-	require.NotContains(t, env, "FUNCD_LAKE_LAKE_TOKEN")
+	be, err := r.bindings(context.Background(), lakeConsumerFn("lake", "lake"))
+	require.NoError(t, err)
+	require.Equal(t, "LakeNotReady", be.gate.reason)
+	require.Empty(t, be.worker.own, "the Lake hook holds the consumer before its token is derived")
 }
 
 // scenario: token-decoupled-from-lake-secret (ADR-0137) — the per-function token no longer comes
@@ -137,12 +145,12 @@ func TestScenarioTokenDecoupledFromLakeSecret(t *testing.T) {
 	seedLake(t, r, "lake", "http://127.0.0.1:54321")
 
 	fn := lakeConsumerFn("lake", "lake")
-	env, requeue, err := r.resolveLakeEnv(context.Background(), fn)
+	_, requeue, err := r.resolveLakeEnv(context.Background(), fn)
 	require.NoError(t, err)
 	require.False(t, requeue, "a Ready lake injects even when its Secret lacks QUACK_TOKEN (token is derived, not read)")
 	want2, derr2 := lakegw.DeriveLakeToken(master, fn.Namespace, fn.Name)
 	require.NoError(t, derr2)
-	require.Equal(t, want2, env["FUNCD_LAKE_LAKE_TOKEN"],
+	require.Equal(t, want2, lakeOwn(t, r, fn)["FUNCD_LAKE_LAKE_TOKEN"],
 		"the per-function token is derived over the node master, independent of the lake Secret")
 }
 
@@ -157,18 +165,16 @@ func TestScenarioDevLakeExtensionDirToConsumer(t *testing.T) {
 
 	// consumer: DUCKDB_EXTENSION_DIRECTORY injected.
 	consumer := lakeConsumerFn("lake", "lake")
-	env, _, err := r.resolveLakeEnv(context.Background(), consumer)
-	require.NoError(t, err)
-	spec := mustWorkerSpec(t, r, consumer, "/art/app.mjs", envresolve.Resolved{}, env)
+	spec := mustWorkerSpec(t, r, consumer, "/art/app.mjs", envresolve.Resolved{})
 	require.Equal(t, "/dev/ext", spec.Env["DUCKDB_EXTENSION_DIRECTORY"], "a lake consumer gets the extension dir")
 
 	// non-consumer: no injection.
-	nonSpec := mustWorkerSpec(t, r, sampleFn(), "/art/app.mjs", envresolve.Resolved{}, nil)
+	nonSpec := mustWorkerSpec(t, r, sampleFn(), "/art/app.mjs", envresolve.Resolved{})
 	require.NotContains(t, nonSpec.Env, "DUCKDB_EXTENSION_DIRECTORY", "a non-consumer gets no extension dir")
 
 	// empty dir (prod default): no injection even for a consumer.
 	r.lakeExtensionDir = ""
-	prodSpec := mustWorkerSpec(t, r, consumer, "/art/app.mjs", envresolve.Resolved{}, env)
+	prodSpec := mustWorkerSpec(t, r, consumer, "/art/app.mjs", envresolve.Resolved{})
 	require.NotContains(t, prodSpec.Env, "DUCKDB_EXTENSION_DIRECTORY", "empty dir (prod) injects nothing")
 }
 
@@ -183,9 +189,10 @@ func TestScenarioTokenOnlyToDeclaredConsumer(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, requeue)
 	require.Nil(t, env, "a non-declaring function resolves to no lake env")
+	require.Nil(t, lakeOwn(t, r, sampleFn()), "nor gets a lake token")
 
 	// And through workerSpec: no FUNCD_LAKE_* keys appear.
-	spec := mustWorkerSpec(t, r, sampleFn(), "/art/app.mjs", envresolve.Resolved{}, env)
+	spec := mustWorkerSpec(t, r, sampleFn(), "/art/app.mjs", envresolve.Resolved{})
 	for k := range spec.Env {
 		require.NotContains(t, k, "FUNCD_LAKE_", "a non-declaring function gets no FUNCD_LAKE_* env")
 	}

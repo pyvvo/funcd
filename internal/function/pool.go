@@ -19,8 +19,6 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
-	"github.com/pyvvo/funcd/internal/envresolve"
-	lakegw "github.com/pyvvo/funcd/internal/lake/gateway"
 	"github.com/pyvvo/funcd/internal/pooling"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/scheduler"
@@ -40,9 +38,9 @@ type poolManifestEntry struct {
 	Env map[string]string `json:"env,omitempty"`
 	// code is the code the row runs the member at; unexported, so it is neither in the manifest nor its signature.
 	code memberCode
-	// s3 marks a member that gets an S3 key pair; createPool adds the pair when it writes the manifest, so a new key
-	// window never changes the signature (ADR-0270 Decision 5).
-	s3 bool
+	// issue issues the env the member's providers give each of its workers (its S3 key pair); createPool adds it when
+	// it writes the manifest, so a new key window never changes the signature (ADR-0270 Decision 5).
+	issue func() map[string]string
 }
 
 // memberCode is the code a pool row runs a member at, as a Revision snapshots it (ADR-0020).
@@ -203,8 +201,8 @@ func (r *Reconciler) servingMember(ctx context.Context, m *v1.Function) *v1.Func
 // member's current revision differs from the one it serves; a Start error takes its place. The pool worker is judged on
 // its own liveness (ensurePool), never on a member's state. It also returns how soon an old pool worker's drain needs
 // the pass back.
-func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pooling.Assignment, bindEnv envresolve.Resolved, lakeEnv map[string]string, idx accessIndex) (verdict, time.Duration, error) {
-	pass, err := r.ensurePool(ctx, a.Key, fn, bindEnv, lakeEnv, idx)
+func (r *Reconciler) convergePooled(ctx context.Context, fn *v1.Function, a pooling.Assignment, we workerEnv, idx accessIndex) (verdict, time.Duration, error) {
+	pass, err := r.ensurePool(ctx, a.Key, fn, we, idx)
 	if err != nil {
 		return verdict{}, 0, err
 	}
@@ -403,14 +401,14 @@ type poolPass struct {
 // is silent on /health/liveness for livenessTimeout is restarted at once (#422). Every worker is reclaimed when desired
 // is 0. The pass carries the current worker's running count, its backoff deadline, its Start error and its boot crash,
 // which the pass writes to the member's status, as for a solo worker (issue #73). self is the member being reconciled:
-// its resolved config and secret env and its lakeEnv give the pool's shared env.
-func (r *Reconciler) ensurePool(ctx context.Context, key pooling.PoolKey, self *v1.Function, bindEnv envresolve.Resolved, lakeEnv map[string]string, idx accessIndex) (poolPass, error) {
+// what the providers it binds give its workers gives the pool's shared env.
+func (r *Reconciler) ensurePool(ctx context.Context, key pooling.PoolKey, self *v1.Function, we workerEnv, idx accessIndex) (poolPass, error) {
 	members, err := r.admittedMembers(ctx, key, idx)
 	if err != nil {
 		return poolPass{}, err
 	}
-	shared := r.poolSharedEnv(self, bindEnv, lakeEnv)
-	manifest, desired, err := r.poolManifest(ctx, members, self, shared)
+	shared := r.poolSharedEnv(we)
+	manifest, desired, err := r.poolManifest(ctx, members, self)
 	if err != nil {
 		return poolPass{}, err
 	}
@@ -725,7 +723,7 @@ func (r *Reconciler) rankedMembers(ctx context.Context, key pooling.PoolKey, idx
 // A member whose artifact cannot be materialized fails alone (ADR-0046 bounded blast radius): it
 // keeps the revision it serves (servingMember) or is left out of the manifest, and only self's own
 // failure is returned. Each row carries the env only that member gets (memberEnv); it resolves nothing.
-func (r *Reconciler) poolManifest(ctx context.Context, members []*v1.Function, self *v1.Function, shared map[string]string) ([]poolManifestEntry, int, error) {
+func (r *Reconciler) poolManifest(ctx context.Context, members []*v1.Function, self *v1.Function) ([]poolManifestEntry, int, error) {
 	const op = "function.poolManifest"
 	manifest := make([]poolManifestEntry, 0, len(members))
 	desired := 0
@@ -750,72 +748,51 @@ func (r *Reconciler) poolManifest(ctx context.Context, members []*v1.Function, s
 			}
 			path = p
 		}
-		env, err := r.memberEnv(m, path, shared)
-		if err != nil {
+		own, issue, g := r.ownWorkerEnv(m)
+		if g != nil {
 			if m.Name == self.Name {
-				return nil, 0, fault.Wrapf(err, fault.KindOf(err), op, "build the env of %s/%s", m.Namespace, m.Name)
+				return nil, 0, fault.Internalf(op, "build the env of %s/%s: %s", m.Namespace, m.Name, g.message)
 			}
-			r.logger.Warn("pool member left out: its env cannot be built", "function", m.Name, "err", err)
+			r.logger.Warn("pool member left out: its env cannot be built", "function", m.Name, "err", g.message)
 			continue
 		}
 		if d := r.desiredReplicas(m); d > desired {
 			desired = d
 		}
 		manifest = append(manifest, poolManifestEntry{
-			Name: string(m.Name), Artifact: path, Handler: m.Spec.Handler, Env: env,
-			code: memberCode{image: m.Spec.Image, digest: m.Spec.ImageDigest, handler: m.Spec.Handler},
-			s3:   r.s3Gateway.Enabled && r.s3Gateway.Derive != nil && len(m.Spec.Bindings.Blob) > 0,
+			Name: string(m.Name), Artifact: path, Handler: m.Spec.Handler, Env: memberEnv(path, own),
+			code:  memberCode{image: m.Spec.Image, digest: m.Spec.ImageDigest, handler: m.Spec.Handler},
+			issue: issue,
 		})
 	}
 	return manifest, desired, nil
 }
 
-// memberEnv is the env only member m gets, set in its manifest row: its lake token per alias and its bundle dir. It
-// derives from the name, so a row is stable across passes; the S3 key pair is added by createPool (withPairs). A key
-// the shared env sets is omitted, so the shared env wins as a solo worker's later env does.
-func (r *Reconciler) memberEnv(m *v1.Function, artifact string, shared map[string]string) (map[string]string, error) {
-	env := map[string]string{}
+// memberEnv is the env only a member gets, set in its manifest row: its bundle dir and own, the stable part of what
+// its workload hooks give it alone (its lake token), so a row is stable across passes; its issued part (the S3 key
+// pair) is added by createPool (withPairs). Each pool host merges a row over the shared env, so a member's own and
+// issued keys win over a config key of the same name, as a solo worker's do (ADR-0306 Decisions 3 and 4).
+func memberEnv(artifact string, own map[string]string) map[string]string {
+	env := maps.Clone(own)
+	if env == nil {
+		env = map[string]string{}
+	}
 	if artifact != "" {
 		env["FUNCD_BUNDLE_DIR"] = filepath.Dir(artifact)
 	}
-	if len(m.Spec.Bindings.Lake) > 0 {
-		token, err := lakegw.DeriveLakeToken(r.lakeMaster, m.Namespace, m.Name)
-		if err != nil {
-			return nil, err
-		}
-		for _, c := range m.Spec.Bindings.Lake {
-			env["FUNCD_LAKE_"+strings.ToUpper(c.Alias)+"_TOKEN"] = token
-		}
-	}
-	for k := range shared {
-		delete(env, k)
-	}
 	if len(env) == 0 {
-		return nil, nil
+		return nil
 	}
-	return env, nil
+	return env
 }
 
 // poolSharedEnv is the env every member of a pool shares, taken from self, the member being reconciled — members of
-// one key share their access, so their bindings resolve alike: its config and secrets, its lake URLs, the S3
-// region and endpoint, and the DuckDB extension dir. Never from a manifest member, which may serve an older revision.
-func (r *Reconciler) poolSharedEnv(self *v1.Function, bindEnv envresolve.Resolved, lakeEnv map[string]string) map[string]string {
-	env := map[string]string{}
-	s3 := map[string]string{}
-	r.addS3Env(s3, self)
-	for _, k := range []string{"AWS_REGION", "AWS_ENDPOINT_URL_S3"} {
-		if v, ok := s3[k]; ok {
-			env[k] = v
-		}
-	}
-	for k, v := range lakeEnv {
-		if strings.HasSuffix(k, "_URL") {
-			env[k] = v
-		}
-	}
-	r.addLakeExtensionDir(env, self)
+// one key share their access, so their bindings resolve alike: the shared part of what its providers give it (its
+// config keys, the S3 region and endpoint, its lake URLs, the DuckDB extension dir) and the record bound. Never from a
+// manifest member, which may serve an older revision.
+func (r *Reconciler) poolSharedEnv(we workerEnv) map[string]string {
+	env := maps.Clone(we.shared)
 	r.addRecordBound(env)
-	r.addBindingEnv(env, bindEnv)
 	return env
 }
 
@@ -828,7 +805,7 @@ func (r *Reconciler) poolSharedEnv(self *v1.Function, bindEnv envresolve.Resolve
 // apart (startPoolInstance).
 func (r *Reconciler) createPool(ctx context.Context, key pooling.PoolKey, sig string, manifest []poolManifestEntry, shared map[string]string, keep []v1.ObjectName) (startErr, err error) {
 	const op = "function.createPool"
-	manifestPath, err := writePoolManifest(r.poolManifestDir, key, r.withPairs(key.Namespace, manifest))
+	manifestPath, err := writePoolManifest(r.poolManifestDir, key, withPairs(manifest))
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "write pool manifest")
 	}
@@ -872,19 +849,19 @@ func (r *Reconciler) createPool(ctx context.Context, key pooling.PoolKey, sig st
 	return r.startPoolInstance(ctx, []runtime.Instance{inst}), nil
 }
 
-// withPairs is manifest with each marked member's S3 key pair in its row's env, derived now, as the pool worker is
-// created (ADR-0270 Decision 5).
-func (r *Reconciler) withPairs(ns v1.NamespaceName, manifest []poolManifestEntry) []poolManifestEntry {
+// withPairs is manifest with the env each member's providers issue (its S3 key pair) in its row's env, issued now, as
+// the pool worker is created (ADR-0270 Decision 5).
+func withPairs(manifest []poolManifestEntry) []poolManifestEntry {
 	out := slices.Clone(manifest)
 	for i, m := range out {
-		if !m.s3 {
+		if m.issue == nil {
 			continue
 		}
 		env := maps.Clone(m.Env)
 		if env == nil {
 			env = map[string]string{}
 		}
-		env["AWS_ACCESS_KEY_ID"], env["AWS_SECRET_ACCESS_KEY"] = r.s3Gateway.Derive(v1.KindFunction, string(ns), m.Name)
+		maps.Copy(env, m.issue())
 		out[i].Env = env
 	}
 	return out

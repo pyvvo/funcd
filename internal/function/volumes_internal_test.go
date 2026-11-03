@@ -58,7 +58,7 @@ func TestScenarioVolumePathInEnv(t *testing.T) {
 	r := newContainerReconciler(t)
 	root := withVolumes(t, r)
 	fn := volumeFn("cart", stateVolume())
-	spec := mustWorkerSpec(t, r, fn, "/art/app.mjs", envresolve.Resolved{}, nil)
+	spec := mustWorkerSpec(t, r, fn, "/art/app.mjs", envresolve.Resolved{})
 	require.Equal(t, "/var/funcd/volumes/state", spec.Env["FUNCD_VOLUME_STATE"])
 	m, ok := mountFor(spec, "/var/funcd/volumes/state")
 	require.True(t, ok, "the volume is mounted")
@@ -67,7 +67,7 @@ func TestScenarioVolumePathInEnv(t *testing.T) {
 
 	p := newShimReconciler(t, nil)
 	proot := withVolumes(t, p)
-	pspec := mustWorkerSpec(t, p, fn, "/art/app.mjs", envresolve.Resolved{}, nil)
+	pspec := mustWorkerSpec(t, p, fn, "/art/app.mjs", envresolve.Resolved{})
 	require.Equal(t, filepath.Join(proot, "shop", "cart", "state"), pspec.Env["FUNCD_VOLUME_STATE"])
 	require.Empty(t, pspec.Mounts, "process mode mounts nothing")
 }
@@ -79,8 +79,8 @@ func TestScenarioOnlyItsOwnVolume(t *testing.T) {
 	t.Parallel()
 	r := newContainerReconciler(t)
 	root := withVolumes(t, r)
-	cart := mustWorkerSpec(t, r, volumeFn("cart", stateVolume(), cacheVolume()), "/art/app.mjs", envresolve.Resolved{}, nil)
-	thumbs := mustWorkerSpec(t, r, volumeFn("thumbs", stateVolume()), "/art/app.mjs", envresolve.Resolved{}, nil)
+	cart := mustWorkerSpec(t, r, volumeFn("cart", stateVolume(), cacheVolume()), "/art/app.mjs", envresolve.Resolved{})
+	thumbs := mustWorkerSpec(t, r, volumeFn("thumbs", stateVolume()), "/art/app.mjs", envresolve.Resolved{})
 	theirs := filepath.Join(root, "shop", "thumbs", "state")
 	for _, m := range cart.Mounts {
 		if !strings.HasPrefix(m.Target, containerVolumeDir) {
@@ -102,11 +102,11 @@ func TestScenarioLocalSurvives(t *testing.T) {
 	r := newShimReconciler(t, nil)
 	withVolumes(t, r)
 	fn := volumeFn("cart", stateVolume())
-	first := mustWorkerSpec(t, r, fn, "/art/app.mjs", envresolve.Resolved{}, nil)
+	first := mustWorkerSpec(t, r, fn, "/art/app.mjs", envresolve.Resolved{})
 	dir := first.Env["FUNCD_VOLUME_STATE"]
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "orders.db"), []byte("rows"), 0o600))
 	for _, rev := range []v1.ObjectName{"", "cart-2", "cart-3"} {
-		spec, err := r.workerSpec(t.Context(), fn, rev, 0, "/art/app.mjs", envresolve.Resolved{}, nil)
+		spec, err := r.workerSpec(t.Context(), fn, rev, 0, "/art/app.mjs", workerEnv{})
 		require.NoError(t, err)
 		require.Equal(t, dir, spec.Env["FUNCD_VOLUME_STATE"])
 		b, err := os.ReadFile(filepath.Join(spec.Env["FUNCD_VOLUME_STATE"], "orders.db"))
@@ -123,10 +123,10 @@ func TestScenarioEmptyDirGoesWithWorker(t *testing.T) {
 	r := newShimReconciler(t, nil)
 	withVolumes(t, r)
 	fn := volumeFn("thumbs", cacheVolume())
-	first := mustWorkerSpec(t, r, fn, "/art/app.mjs", envresolve.Resolved{}, nil)
+	first := mustWorkerSpec(t, r, fn, "/art/app.mjs", envresolve.Resolved{})
 	old := first.Env["FUNCD_VOLUME_CACHE"]
 	require.NoError(t, os.WriteFile(filepath.Join(old, "tmp"), []byte("x"), 0o600))
-	second := mustWorkerSpec(t, r, fn, "/art/app.mjs", envresolve.Resolved{}, nil)
+	second := mustWorkerSpec(t, r, fn, "/art/app.mjs", envresolve.Resolved{})
 	fresh := second.Env["FUNCD_VOLUME_CACHE"]
 	require.NotEqual(t, old, fresh)
 	ents, err := os.ReadDir(fresh)
@@ -329,10 +329,10 @@ func TestIssue1207_ReplacedWorkerKeepsItsEmptyDirSpace(t *testing.T) {
 	s := &stealing{Manager: inner}
 	r.volumes, r.volumesDurable = s, true
 	fn := volumeFn("thumbs", cacheVolume()) // a 1 MiB emptyDir
-	_ = mustWorkerSpec(t, r, fn, "/art/app.mjs", envresolve.Resolved{}, nil)
+	_ = mustWorkerSpec(t, r, fn, "/art/app.mjs", envresolve.Resolved{})
 	require.ErrorIs(t, inner.Book(t.Context(), waiting, 2<<20), volume.ErrCapacity, "the capacity holds no 2 MiB beside the worker")
 	s.steal = func() { _ = inner.Book(context.Background(), waiting, 2<<20) }
-	_, err = r.workerSpec(t.Context(), fn, "", 0, "/art/app.mjs", envresolve.Resolved{}, nil)
+	_, err = r.workerSpec(t.Context(), fn, "", 0, "/art/app.mjs", workerEnv{})
 	require.NoError(t, err, "the replacement worker gets its emptyDir")
 	require.ErrorIs(t, inner.Book(t.Context(), waiting, 2<<20), volume.ErrCapacity, "the waiting volume took no space of the replaced worker")
 }

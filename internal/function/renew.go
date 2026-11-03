@@ -198,11 +198,11 @@ func (r *Reconciler) renew(ctx context.Context, in runtime.Instance, ns, name st
 	return time.Time{}, nil
 }
 
-// poolRenewal decides the renewal of the running worker of a pool whose manifest holds a member with a key pair; the
-// pool's identity for the renewal age is its worker's name.
+// poolRenewal decides the renewal of the running worker of a pool whose manifest holds a member with issued env (its
+// key pair); the pool's identity for the renewal age is its worker's name.
 func (r *Reconciler) poolRenewal(cur []runtime.Instance, ns v1.NamespaceName, pool v1.ObjectName, manifest []poolManifestEntry) renewal {
 	if !r.keysRotate() || len(cur) == 0 || cur[0].State != runtime.StateRunning ||
-		!slices.ContainsFunc(manifest, func(m poolManifestEntry) bool { return m.s3 }) {
+		!slices.ContainsFunc(manifest, func(m poolManifestEntry) bool { return m.issue != nil }) {
 		return renewNone
 	}
 	idle := r.calls == nil || r.calls.Idle(instanceURL(ns, pool, cur[0]), r.handOutSettle)

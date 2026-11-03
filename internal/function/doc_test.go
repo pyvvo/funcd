@@ -37,9 +37,9 @@ func TestIssue352_ShimForDocDescribesOnlyShimFor(t *testing.T) {
 	require.NotContains(t, doc, "workerSpec")
 }
 
-func TestIssue450_AddInvokeSocketDocDescribesOnlyAddInvokeSocket(t *testing.T) {
-	doc := funcDoc(t, "addInvokeSocket")
-	require.True(t, strings.HasPrefix(doc, "addInvokeSocket "), "addInvokeSocket doc must start with its name, got:\n%s", doc)
+func TestIssue450_InvokeSocketDocDescribesOnlyInvokeSocket(t *testing.T) {
+	doc := funcDoc(t, "invokeSocket")
+	require.True(t, strings.HasPrefix(doc, "invokeSocket "), "invokeSocket doc must start with its name, got:\n%s", doc)
 	require.NotContains(t, doc, "workerSpec")
 	require.NotContains(t, funcDoc(t, "workerSpec"), "is pure", "workerSpec provisions the local API socket, so it is not pure")
 }

@@ -20,7 +20,7 @@ func TestScenarioFunctionLimitsApplied(t *testing.T) {
 	fn := sampleFn()
 	fn.Spec.Resources = v1.ResourceSpec{CPU: "0.5", Memory: "256Mi"}
 	for _, r := range []*Reconciler{newContainerReconciler(t), newShimReconciler(t, nil)} {
-		spec := mustWorkerSpec(t, r, fn, "/art/app.mjs", envresolve.Resolved{}, nil)
+		spec := mustWorkerSpec(t, r, fn, "/art/app.mjs", envresolve.Resolved{})
 		require.Equal(t, runtime.Limits{CPUs: 0.5, MemoryBytes: 256 << 20}, spec.Limits)
 	}
 }
@@ -33,7 +33,7 @@ func TestScenarioFunctionDefaultLimits(t *testing.T) {
 	r.defaultResources = v1.ResourceSpec{CPU: "1", Memory: "512Mi"}
 	fn := sampleFn()
 	limits := func() runtime.Limits {
-		return mustWorkerSpec(t, r, fn, "/art/app.mjs", envresolve.Resolved{}, nil).Limits
+		return mustWorkerSpec(t, r, fn, "/art/app.mjs", envresolve.Resolved{}).Limits
 	}
 	require.Equal(t, runtime.Limits{CPUs: 1, MemoryBytes: 512 << 20}, limits())
 	fn.Spec.Resources.CPU = "0.25"
@@ -53,7 +53,7 @@ func TestScenarioLimitsNotEnforcedLogged(t *testing.T) {
 	fn := sampleFn()
 	fn.Spec.Resources.Memory = "256Mi"
 	for range 3 {
-		mustWorkerSpec(t, r, fn, "/art/app.mjs", envresolve.Resolved{}, nil)
+		mustWorkerSpec(t, r, fn, "/art/app.mjs", envresolve.Resolved{})
 	}
 	require.Equal(t, 1, strings.Count(buf.String(), "does not enforce"))
 }
