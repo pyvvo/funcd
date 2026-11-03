@@ -217,8 +217,7 @@ func (h s3Hook) own(fn *v1.Function) (map[string]string, func() map[string]strin
 
 // lakeHook gives a Function that binds a Lake each Lake's PEP proxy URL and, in dev, the DuckDB extension dir, shared,
 // and its lake token, its own (ADR-0091 as reworked by ADR-0137). A bound Lake that is not Ready yet holds fn Pending
-// and requeues fail-closed (LakeNotReady, F61). The keys go straight into the worker env, never through addBindingEnv,
-// whose FUNCD_ guard would drop them.
+// and requeues fail-closed (LakeNotReady, F61).
 type lakeHook struct{ r *Reconciler }
 
 func (h lakeHook) check(ctx context.Context, fn *v1.Function) (map[string]string, *gateFailure, error) {

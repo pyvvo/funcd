@@ -130,7 +130,7 @@ func TestScenarioRequeueUntilLakeReadyNotOnEngineAddress(t *testing.T) {
 	be, err := r.bindings(context.Background(), lakeConsumerFn("lake", "lake"))
 	require.NoError(t, err)
 	require.Equal(t, "LakeNotReady", be.gate.reason)
-	require.Empty(t, be.worker.own, "the Lake hook holds the consumer before its token is derived")
+	require.Empty(t, be.worker.own, "a held consumer gets no worker env")
 }
 
 // scenario: token-decoupled-from-lake-secret (ADR-0137) — the per-function token no longer comes
