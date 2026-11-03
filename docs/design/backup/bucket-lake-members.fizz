@@ -1,16 +1,17 @@
 ---
-# A Bucket member and the Lake on its prefix p, in one Backup and then one in-place Restore (ADR-0312). The Bucket holds
-# a plain object and p's files; p's owner names a Lake, which is located on p or deleted; the catalog lives in the
-# catalog store. Resolve reads the Lakes once per run: the Lake becomes a member and p the Bucket's skip. The Bucket's
-# walk copies p unless skipped; the Lake member copies p and its catalog. A Restore names the Bucket and perhaps the
-# Lake, either first; each member clears, then loads; a load may fail, and the Restore then clears every member whose
-# load began. The Bucket's clear and load read the Lakes when they run. The control plane may apply or delete the Lake
-# at any step. A stopped or crashed load is an intermediate state, which the always assertions cover (its marker is
-# ADR-0228's). Environment: a Lake's engine writes nothing here, since the hold refuses its writes during an in-place
-# load (ADR-0290) and the Lake member's own copy is ADR-0271's; what a running engine does after the hold is ADR-0312's
-# open question 4. Left out: an `as` destination, which takes the same
-# clear and load after its emptiness check, and a named Lake with no location, which fails the Restore's plan (both
-# left to TestScenarioBucketRestoredAsCarriesNoLake and TestRestoreReason_MemberNotFound).
+# A Bucket member and the Lake L that owns its prefixes p and q, in one Backup and then one in-place Restore (ADR-0312).
+# The Bucket also holds a plain object, and each prefix may hold a catalog. L is located on p, on q, elsewhere, or is
+# gone. L's one Lake prefix is its location or, when L is gone, its first prefix in spec order, p; every other prefix is
+# the Bucket's. Resolve reads this once per run: L becomes the member of that prefix, and that prefix the Bucket's skip.
+# The Bucket's walk copies the rest, objects and catalogs. A Restore names the Bucket and perhaps L, either first; each
+# member clears, then loads; a load may fail, and the Restore then clears every member whose load began. The Bucket's
+# clear and load read the Lake prefix when they run. The control plane may apply, move or delete L at any step. A stopped
+# or crashed load is an intermediate state, which the always assertions cover (its marker is ADR-0228's). Environment:
+# a prefix's owner does not change during a run; a Lake's engine writes nothing here, since the hold refuses its writes
+# during an in-place load (ADR-0290) and the Lake member's own copy is ADR-0271's; what a running engine does after the
+# hold is ADR-0312's open question. Left out: an `as` destination, which takes the same clear and load after its
+# emptiness check, and a named Lake that is gone, which fails the Restore's plan (both left to
+# TestScenarioBucketRestoredAsCarriesNoLake and TestScenarioGoneLakeKeepsItsPrefix).
 deadlock_detection: false
 options:
   max_concurrent_actions: 1
@@ -19,82 +20,96 @@ options:
 ---
 # diagram: phase
 # mutant no-skip: EachObjectInOneMember
-# mutant skip-by-owner: EachObjectInOneMember
 # mutant read-at-walk: EachObjectInOneMember
 # mutant no-lake-member: EachObjectInOneMember
+# mutant skip-every-owned: EachObjectInOneMember
+# mutant no-bucket-catalogs: EachObjectInOneMember
 # mutant empty-without-catalog: EachObjectInOneMember
 # mutant clear-under-lake: BucketRestoreLeavesItsLake
 # mutant clear-takes-catalogs: BucketRestoreLeavesItsLake
 # mutant load-under-lake: BucketRestoreLeavesItsLake
-# mutant catalog-to-store: BucketRestoreLeavesItsLake
+# mutant load-catalog-under-lake: BucketRestoreLeavesItsLake
+# mutant location-only: BucketRestoreLeavesItsLake
 # mutant clear-named-lake: OrderDoesNotMatter
-# mutant load-by-owner: DeletedLakesPrefixIsTheBuckets
+# mutant load-every-owned-skipped: BucketsOwnComesBack
 
+PREFIXES = ["p", "q"]
 CHANGES = 2
-# no-skip: the Bucket's walk copies p whatever Resolve read (ADR-0311).
-# skip-by-owner: the skip reads the prefix's owner.kind, which outlives its Lake, not the Lake's location.
-# read-at-walk: the walk reads the Lakes again, so a Lake applied after Resolve is skipped with no member.
+# no-skip: the Bucket's walk copies every prefix (ADR-0311).
+# read-at-walk: the walk reads the Lake prefix again, so a Lake moved after Resolve is skipped on one side only.
 # no-lake-member: a Bucket does not bring in the Lake on it.
+# skip-every-owned: the walk skips each prefix the Lake owns, so the one with no member is copied by nobody.
+# no-bucket-catalogs: the walk leaves out the catalogs of the Bucket's own prefixes.
 # empty-without-catalog: a Lake member with no catalog copies nothing, its objects included (ADR-0311).
-# clear-under-lake: the Bucket's clear deletes under the Lake's prefix (ADR-0311's purge).
-# clear-takes-catalogs: the Bucket's clear deletes its Lakes' catalogs (ADR-0311's purge).
-# load-under-lake: the Bucket's load writes the records under the Lake's prefix.
-# catalog-to-store: the Bucket's load puts a catalog record into the catalog store (ADR-0311).
+# clear-under-lake: the Bucket's clear deletes under its Lake prefix (ADR-0311's purge).
+# clear-takes-catalogs: the Bucket's clear deletes its Lake prefix's catalog (ADR-0311's purge).
+# load-under-lake: the Bucket's load writes the objects under its Lake prefix.
+# load-catalog-under-lake: the Bucket's load writes a catalog under its Lake prefix.
+# location-only: a gone Lake's prefix is no Lake prefix (spec.location), so a rewind after it went deletes its data.
 # clear-named-lake: the Bucket's clear also takes the prefix of a Lake the Restore names, so the later member wins.
-# load-by-owner: the load skips by the prefix's owner.kind, so a deleted Lake's prefix never comes back.
+# load-every-owned-skipped: the load skips each prefix the Lake owns, so the Bucket's own never comes back.
 MUTANT = ""
 
 action Init:
-    located = oneof [True, False]
-    has_catalog = oneof [True, False]
+    lake = oneof ["p", "q", "other", "gone"]
+    cats0 = oneof [[], ["p"], ["q"], ["p", "q"]]
     names_lake = oneof [True, False]
     lake_first = oneof [True, False]
     changes = 0
     phase = "resolve"
-    skip = False
-    lake_member = False
-    in_bucket = False
-    in_lake = False
+    skip = ""
+    member = ""
+    in_bucket = []
+    cats_in_bucket = []
+    in_lake = ""
+    held = ""
     stayed = False
     with_lake = False
     todo = []
     begun = []
     cleared = False
     plain = "live"
-    files = "live"
-    catalog = "live" if has_catalog else "none"
+    files = {"p": "live", "q": "live"}
+    cats = {"p": "live" if "p" in cats0 else "none", "q": "live" if "q" in cats0 else "none"}
 
 atomic action Resolve:
     require phase == "resolve"
-    skip = located
-    lake_member = located
-    if MUTANT == "skip-by-owner":
-        skip = True
+    where = lake if lake in PREFIXES else ("p" if lake == "gone" else "")
+    skip = where
+    member = where
     if MUTANT == "no-lake-member":
-        lake_member = False
+        member = ""
     phase = "walk"
 
 atomic action WalkBucket:
     require phase == "walk"
-    in_bucket = not skip
+    now = skip
     if MUTANT == "read-at-walk":
-        in_bucket = not located
+        now = lake if lake in PREFIXES else ("p" if lake == "gone" else "")
     if MUTANT == "no-skip":
-        in_bucket = True
+        now = ""
+    in_bucket = [x for x in PREFIXES if x != now]
+    if MUTANT == "skip-every-owned":
+        in_bucket = []
+    cats_in_bucket = [x for x in in_bucket if x in cats0]
+    if MUTANT == "no-bucket-catalogs":
+        cats_in_bucket = []
     phase = "copy"
 
 atomic action CopyLake:
     require phase == "copy"
-    in_lake = lake_member
-    if MUTANT == "empty-without-catalog" and not has_catalog:
-        in_lake = False
+    in_lake = member
+    if MUTANT == "empty-without-catalog" and member not in cats0:
+        in_lake = ""
     phase = "backed-up"
 
-# Its plan, before any write: a member's kind, destination and manifest entry; the hold; no read of the Lakes is kept.
+# Its plan, before any write: each member's manifest entry and destination, then the hold. A gone Lake's in-place
+# destination is not found, so a Restore names L only where it is still located on the prefix the copy holds.
 atomic action Plan:
     require phase == "backed-up"
-    stayed = located
-    with_lake = names_lake and in_lake and located
+    held = lake if lake in PREFIXES else ("p" if lake == "gone" else "")
+    stayed = True
+    with_lake = names_lake and in_lake != "" and lake == in_lake
     todo = ["bucket"]
     if with_lake:
         todo = ["lake", "bucket"] if lake_first else ["bucket", "lake"]
@@ -104,17 +119,18 @@ atomic action Clear:
     require (phase == "load" and len(todo) > 0 and not cleared) or (phase == "failing" and len(todo) > 0)
     m = todo[0]
     if m == "bucket":
+        now = lake if lake in PREFIXES else ("p" if lake == "gone" else "")
+        if MUTANT == "location-only":
+            now = lake if lake in PREFIXES else ""
         plain = "gone"
-        if not located or MUTANT == "clear-under-lake":
-            files = "gone"
-        if MUTANT == "clear-takes-catalogs":
-            catalog = "none"
-        if MUTANT == "clear-named-lake" and with_lake:
-            files = "gone"
-            catalog = "none"
+        for x in PREFIXES:
+            if x != now or MUTANT == "clear-under-lake" or (MUTANT == "clear-named-lake" and with_lake):
+                files[x] = "gone"
+            if x != now or MUTANT == "clear-takes-catalogs" or (MUTANT == "clear-named-lake" and with_lake):
+                cats[x] = "none"
     else:
-        files = "gone"
-        catalog = "none"
+        files[in_lake] = "gone"
+        cats[in_lake] = "none"
     if phase == "failing":
         todo = todo[1:]
         if len(todo) == 0:
@@ -128,14 +144,18 @@ atomic action Load:
     require phase == "load" and cleared
     m = todo[0]
     if m == "bucket":
+        now = lake if lake in PREFIXES else ("p" if lake == "gone" else "")
         plain = "copy"
-        if in_bucket and (not located or MUTANT == "load-under-lake") and MUTANT != "load-by-owner":
-            files = "copy"
-        if in_bucket and MUTANT == "catalog-to-store":
-            catalog = "copy"
+        for x in PREFIXES:
+            if MUTANT == "load-every-owned-skipped":
+                continue
+            if x in in_bucket and (x != now or MUTANT == "load-under-lake"):
+                files[x] = "copy"
+            if x in cats_in_bucket and (x != now or MUTANT == "load-catalog-under-lake"):
+                cats[x] = "copy"
     else:
-        files = "copy"
-        catalog = "copy" if has_catalog else "none"
+        files[in_lake] = "copy"
+        cats[in_lake] = "copy" if in_lake in cats0 else "none"
     todo = todo[1:]
     cleared = False
     if len(todo) == 0:
@@ -148,30 +168,33 @@ atomic action FailLoad:
     cleared = False
     phase = "failing"
 
-atomic action ApplyLake:
-    require not located and changes < CHANGES
-    located = True
-    changes += 1
-
-atomic action DeleteLake:
-    require located and changes < CHANGES
-    located = False
+# The control plane applies, moves or deletes L.
+atomic action ChangeLake:
+    require changes < CHANGES
+    to = oneof ["p", "q", "other", "gone"]
+    require to != lake
+    lake = to
     stayed = False
     changes += 1
 
-# Each object of p is in exactly one member of a finished copy, whatever the control plane did during the run.
+# Each object and catalog of the prefixes is in exactly one member of a finished copy, whatever happened to L.
 always assertion EachObjectInOneMember:
     if phase in ["resolve", "walk", "copy"]:
         return True
-    return in_bucket != in_lake
+    for x in PREFIXES:
+        if (x in in_bucket) == (x == in_lake):
+            return False
+        if x in cats0 and (x in cats_in_bucket) == (x == in_lake):
+            return False
+    return True
 
-# A Restore that does not name a Lake located all along leaves its files and catalog as they are, at every step.
+# A Restore that does not name L leaves L's prefix as it is, at every step, whether L is located there or gone.
 always assertion BucketRestoreLeavesItsLake:
-    if phase not in ["load", "failing", "failed", "done"] or not stayed or with_lake:
+    if phase not in ["load", "failing", "failed", "done"] or not stayed or with_lake or held == "":
         return True
-    return files == "live" and catalog == ("live" if has_catalog else "none")
+    return files[held] == "live" and cats[held] == ("live" if held in cats0 else "none")
 
-# A completed Restore ends the same whichever member it loads first: the Bucket's objects and a named Lake as copied.
+# A completed Restore ends the same whichever member it loads first: the plain object and a named L as copied.
 always assertion OrderDoesNotMatter:
     if phase != "done" or not stayed:
         return True
@@ -179,10 +202,13 @@ always assertion OrderDoesNotMatter:
         return False
     if not with_lake:
         return True
-    return files == "copy" and catalog == ("copy" if has_catalog else "none")
+    return files[held] == "copy" and cats[held] == ("copy" if held in cats0 else "none")
 
-# With no Lake located and none applied or deleted, p is the Bucket's: the copy holds it and the Restore brings it back.
-always assertion DeletedLakesPrefixIsTheBuckets:
-    if phase != "done" or changes > 0 or located:
+# With L left alone, every prefix other than its Lake prefix is the Bucket's: the copy holds it and the Restore brings it back.
+always assertion BucketsOwnComesBack:
+    if phase != "done" or changes > 0:
         return True
-    return in_bucket and files == "copy"
+    for x in PREFIXES:
+        if x != skip and (files[x] != "copy" or cats[x] != ("copy" if x in cats0 else "none")):
+            return False
+    return True

@@ -16,21 +16,21 @@ stateDiagram-v2
     state "resolve" as s6
     state "walk" as s7
     [*] --> s6
-    s0 --> s0 : ApplyLake, DeleteLake
+    s0 --> s0 : ChangeLake
     s0 --> s5 : Plan
     s1 --> s0 : CopyLake
-    s1 --> s1 : ApplyLake, DeleteLake
-    s2 --> s2 : ApplyLake, DeleteLake
-    s3 --> s3 : ApplyLake, DeleteLake
+    s1 --> s1 : ChangeLake
+    s2 --> s2 : ChangeLake
+    s3 --> s3 : ChangeLake
     s4 --> s3 : Clear
-    s4 --> s4 : ApplyLake, Clear, DeleteLake
+    s4 --> s4 : ChangeLake, Clear
     s5 --> s2 : Load
     s5 --> s4 : FailLoad
-    s5 --> s5 : ApplyLake, Clear, DeleteLake, Load
-    s6 --> s6 : ApplyLake, DeleteLake
+    s5 --> s5 : ChangeLake, Clear, Load
+    s6 --> s6 : ChangeLake
     s6 --> s7 : Resolve
     s7 --> s1 : WalkBucket
-    s7 --> s7 : ApplyLake, DeleteLake
+    s7 --> s7 : ChangeLake
     s2 --> [*]
     s3 --> [*]
 ```
