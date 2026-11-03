@@ -230,13 +230,13 @@ func Write(ctx context.Context, ns v1.NamespaceName, ms []Member, src Sources, o
 			if src.KV == nil {
 				return Manifest{}, fault.Unavailablef(op, "member %s/%s: the KV driver exports no store", mb.Kind, mb.Name)
 			}
-			f, err = w.file(ctx, "kv/"+string(mb.Name), func(emit func(snapshot.Record) error) error {
+			f, err = w.File(ctx, "kv/"+string(mb.Name), func(emit func(snapshot.Record) error) error {
 				_, err := src.KV(KVPrefix(ns, mb.Name)).Snapshot(ctx, emit)
 				return err
 			})
 			mf.Files = []backup.StoreFile{f}
 		case v1.KindBucket:
-			f, err = w.file(ctx, "blob/"+string(mb.Name), func(emit func(snapshot.Record) error) error {
+			f, err = w.File(ctx, "blob/"+string(mb.Name), func(emit func(snapshot.Record) error) error {
 				return bucketObjects(ctx, ns, mb.Name, src, emit)
 			})
 			mf.Files = []backup.StoreFile{f}
@@ -246,7 +246,7 @@ func Write(ctx context.Context, ns v1.NamespaceName, ms []Member, src Sources, o
 			if src.SQL == nil {
 				return Manifest{}, fault.Unavailablef(op, "member %s/%s: no SQL engine is wired", mb.Kind, mb.Name)
 			}
-			f, err = w.file(ctx, "sql/"+string(mb.Name), func(emit func(snapshot.Record) error) error {
+			f, err = w.File(ctx, "sql/"+string(mb.Name), func(emit func(snapshot.Record) error) error {
 				rc, err := src.SQL(ctx, ns, mb.Name)
 				if err != nil {
 					return fault.Wrapf(err, fault.KindOf(err), op, "database %s", mb.Name)
@@ -258,7 +258,7 @@ func Write(ctx context.Context, ns v1.NamespaceName, ms []Member, src Sources, o
 			if src.Volume == nil {
 				return Manifest{}, fault.Unavailablef(op, "member volume %s/%s: volumes are off", mb.Name, mb.Volume)
 			}
-			f, err = w.file(ctx, "volume/"+string(mb.Name)+"/"+string(mb.Volume), func(emit func(snapshot.Record) error) error {
+			f, err = w.File(ctx, "volume/"+string(mb.Name)+"/"+string(mb.Volume), func(emit func(snapshot.Record) error) error {
 				rc, err := src.Volume(ctx, ns, mb.Name, mb.Volume)
 				if err != nil {
 					return fault.Wrapf(err, fault.KindOf(err), op, "volume %s/%s", mb.Name, mb.Volume)
@@ -312,7 +312,7 @@ func (w *writer) lake(ctx context.Context, ns v1.NamespaceName, mb Member, src S
 		}
 		dir := fmt.Sprintf("lake/%s/%d/", mb.Name, attempt)
 		copied := map[string]bool{}
-		files, err := w.file(ctx, dir+"files", func(emit func(snapshot.Record) error) error {
+		files, err := w.File(ctx, dir+"files", func(emit func(snapshot.Record) error) error {
 			return objects(ctx, src.Blob, root, func(key string) bool { return key == checkpointName }, func(r snapshot.Record) error {
 				copied[string(r.Key)] = true
 				return emit(r)
@@ -325,7 +325,7 @@ func (w *writer) lake(ctx context.Context, ns v1.NamespaceName, mb Member, src S
 			last = listed[i]
 			continue
 		}
-		db, err := w.file(ctx, dir+"catalog.db", func(emit func(snapshot.Record) error) error {
+		db, err := w.File(ctx, dir+"catalog.db", func(emit func(snapshot.Record) error) error {
 			return emit(snapshot.Record{Key: []byte(checkpointName), Value: EncodeObject(attrs.ContentType, attrs.Metadata, c1)})
 		})
 		if err != nil {
@@ -489,8 +489,8 @@ func (w *writer) put(ctx context.Context, key string, data []byte) error {
 	return fault.Wrapf(err, fault.KindOf(err), op, "put %q", key)
 }
 
-// file writes the records emit produces as the file name/, part-00000 first; an empty file is one empty part.
-func (w *writer) file(ctx context.Context, name string, produce func(emit func(snapshot.Record) error) error) (backup.StoreFile, error) {
+// File writes the records emit produces as the file name/, part-00000 first; an empty file is one empty part.
+func (w *writer) File(ctx context.Context, name string, produce func(emit func(snapshot.Record) error) error) (backup.StoreFile, error) {
 	p := &parts{w: w, dir: w.o.Path + name + "/", h: sha256.New(),
 		put: func(key string, data []byte) error { return w.put(ctx, key, data) }}
 	var sealed io.WriteCloser = nopCloser{p}
