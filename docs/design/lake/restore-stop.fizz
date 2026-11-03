@@ -1,0 +1,127 @@
+---
+# A Lake's engine against an in-place Restore of that Lake (ADR-0312 Decision 9, #1384). The engine reads the store's
+# catalog into a local file at its start and uploads that file at each save and at its stop, whatever the store holds.
+# A Restore holds the namespace, marks the Lake, waits for a pass already starting an engine, stops the engine, clears
+# and loads the store's catalog, lifts the hold and releases the mark. A reconcile pass runs on its own goroutine: it
+# checks the mark, then starts an engine when none runs, which reads the store then. An engine may die at any time. A
+# load may fail or funcd may stop during it: the hold stays until an operator's release, and the mark, held in memory, is
+# gone. Environment: a save or a stop's save under the hold gets 503 (ADR-0290), so a stop leaves the store as it was; the
+# runtime bounds a stop by its grace (ADR-0277). Left out: queries, which the hold and the gate refuse (left to the lane's
+# Lake-alone case), and the partial load itself, which ADR-0228's marker fences.
+deadlock_detection: false
+options:
+  max_concurrent_actions: 1
+  max_actions: 16
+  crash_on_yield: false
+---
+# diagram: phase
+# mutant no-stop: NoStaleEngineOverTheCopy
+# mutant no-mark: NoStaleEngineOverTheCopy
+# mutant no-wait: NoStaleEngineOverTheCopy
+# mutant never-released: liveness
+
+COPY = ["copy", "copy+"]
+# no-stop: the engine keeps running through the load (#1384).
+# no-mark: the stop keeps no pass from starting an engine, so supervision brings one up during the load.
+# no-wait: the stop does not wait for a pass already starting an engine (#1206's race).
+# never-released: the mark outlives a completed Restore, so no engine comes back.
+MUTANT = ""
+
+action Init:
+    store = "old"
+    engine = "old"
+    held = False
+    marked = False
+    passing = False
+    phase = "running"
+    dies = 0
+    commits = 0
+
+atomic fair action Hold:
+    require phase == "running"
+    held = True
+    phase = "held"
+
+atomic fair action Mark:
+    require phase == "held"
+    marked = MUTANT not in ["no-mark", "no-stop"]
+    phase = "marked"
+
+atomic fair action WaitForThePass:
+    require phase == "marked"
+    if MUTANT != "no-wait":
+        require not passing
+    phase = "waited"
+
+# Synchronous: its last save gets the hold's 503.
+atomic fair action Stop:
+    require phase == "waited"
+    if MUTANT != "no-stop":
+        engine = ""
+    phase = "stopped"
+
+atomic fair action Clear:
+    require phase == "stopped"
+    store = "none"
+    phase = "cleared"
+
+atomic fair action Load:
+    require phase == "cleared"
+    store = "copy"
+    phase = "loaded"
+
+atomic fair action LiftHold:
+    require phase == "loaded"
+    held = False
+    phase = "lifted"
+
+atomic fair action Release:
+    require phase == "lifted" and MUTANT != "never-released"
+    marked = False
+    phase = "done"
+
+atomic action FailOrStop:
+    require phase in ["stopped", "cleared"]
+    marked = False
+    phase = "failed"
+
+atomic fair action OperatorRelease:
+    require phase == "failed"
+    held = False
+    phase = "released"
+
+atomic fair action PassBegin:
+    require engine == "" and not passing and not marked
+    passing = True
+
+atomic fair action PassStartsEngine:
+    require passing
+    engine = store
+    passing = False
+
+atomic action EngineDies:
+    require engine != "" and dies == 0
+    engine = ""
+    dies = 1
+
+atomic action Commit:
+    require engine == "copy" and commits == 0
+    engine = "copy+"
+    commits = 1
+
+# A save uploads the local catalog over the store's, unless the hold refuses it.
+atomic fair action Save:
+    require engine != "" and not held and store != engine
+    store = engine
+
+# From the stop on, no engine runs until the mark is released, and then only one that read the copy, over the copy.
+always assertion NoStaleEngineOverTheCopy:
+    if phase in ["stopped", "cleared", "loaded", "lifted"]:
+        return engine == ""
+    if phase == "done":
+        return engine in ["", "copy", "copy+"] and store in COPY
+    return True
+
+# Every Restore ends, completed or released by an operator, with an engine running.
+eventually always assertion AnEngineComesBack:
+    return phase in ["done", "released"] and engine != ""
