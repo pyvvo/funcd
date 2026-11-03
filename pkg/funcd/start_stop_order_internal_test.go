@@ -4,11 +4,14 @@ import (
 	"context"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -24,8 +27,10 @@ import (
 	"github.com/pyvvo/funcd/internal/runtime/process"
 )
 
+// scenario: providers-boot-in-order
 // Run applies the egress fence before it starts any loop, so no reconcile can create a worker that runs unfenced
 // (ADR-0115). The fence's Apply waits a while for a reconcile: a loop started before it would reconcile meanwhile.
+// oracle: docs/design/platform/start-stop.fizz#NoUnfencedWorker
 func TestRun_AppliesTheEgressFenceBeforeAnyLoop(t *testing.T) {
 	probe := &applyWaitProbe{reconciled: make(chan struct{})}
 	p, err := New(InMemory(), WithoutLogCompaction(), WithEgressIsolation(probe, network.Policy{}))
@@ -97,8 +102,10 @@ func (f *fenceSeen) sawFence() bool {
 	return f.saw
 }
 
+// scenario: a-failed-start-stops-everything
 // A taken S3 gateway address fails Run, and Run rolls back what had started before it returns (issue #497, ADR-0028):
 // the runtime closes before the fence comes down, and the bus and the control-plane listener close.
+// oracle: docs/design/platform/start-stop.fizz#RuntimeClosedAtExit
 func TestRun_AFailedS3BindRollsBackWhatStarted(t *testing.T) {
 	held, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -134,6 +141,21 @@ func TestRun_AFailedS3BindRollsBackWhatStarted(t *testing.T) {
 	}
 }
 
+// scenario: a-failed-start-stops-everything
+// Run's error names the provider whose Start failed (ADR-0305 Decision 4).
+func TestRun_AFailedStartNamesItsProvider(t *testing.T) {
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = held.Close() })
+	p, err := New(InMemory(), WithoutLogCompaction(), WithS3Gateway(held.Addr().String(), "", 0, "", t.TempDir()))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	require.ErrorContains(t, p.Run(ctx), "start blob", "Run kept serving without its S3 gateway, or its error names no provider")
+}
+
+// scenario: workers-keep-their-services-while-stopping
 // Shutdown closes the lake PEP proxies before the runtime stops the engines behind them (ADR-0137), so no query is
 // proxied to an engine that is stopping.
 func TestShutdown_ClosesLakeProxiesBeforeTheRuntime(t *testing.T) {
@@ -171,6 +193,7 @@ func (r *proxyAtClose) Close() error {
 	return r.Runtime.Close()
 }
 
+// scenario: workers-keep-their-services-while-stopping
 // The log Routes drain only after the runtime has stopped the workers, so the lines a worker writes on its way out are
 // kept (ADR-0081): a drain that half-closed the channels first would end each Route before those lines exist.
 func TestShutdown_KeepsTheLinesAWorkerWritesWhileStopping(t *testing.T) {
@@ -236,6 +259,7 @@ func (l *lastWordsChannel) CloseRead() error { l.shutOnce.Do(func() { close(l.ha
 func (l *lastWordsChannel) Close() error     { return l.CloseRead() }
 func (l *lastWordsChannel) stop()            { l.stopOnce.Do(func() { close(l.stopping) }) }
 
+// scenario: workers-keep-their-services-while-stopping
 // Shutdown removes the invoke socket dir and the pool manifest dir only after the runtime has stopped the workers that
 // use them (issue #330, ADR-0064, ADR-0050).
 func TestShutdown_KeepsWorkerDirsUntilTheWorkersStop(t *testing.T) {
@@ -273,4 +297,123 @@ func (r *dirsAtClose) Close() error {
 		}
 	}
 	return r.Runtime.Close()
+}
+
+// scenario: workers-keep-their-services-while-stopping
+// Shutdown keeps the local API until the runtime has stopped the workers that call it (ADR-0305 Decision 5): a
+// stopping worker's KV write succeeds, and its call to a cold linked function starts no worker, since the controller
+// stopped before the runtime closes.
+func TestShutdown_KeepsTheLocalAPIUntilTheWorkersStop(t *testing.T) {
+	rt := &apiAtClose{recordingRuntime: &recordingRuntime{insts: map[runtime.InstanceID]runtime.Instance{}}}
+	p, err := New(InMemory(), WithoutLogCompaction(), WithRuntime(rt))
+	require.NoError(t, err)
+	ks := &v1.KVStore{TypeMeta: v1.TypeMeta{APIVersion: v1.KindKVStore.GVK().APIVersion(), Kind: v1.KindKVStore}}
+	ks.Name, ks.Namespace, ks.ResourceGroup = "notes", "default", "rg1"
+	ks.Spec.Tables = []v1.KVTable{{Name: "last", Owner: "leaving"}}
+	create(t, p.cfg.store, ks)
+	for name, bindings := range map[v1.ObjectName]v1.FunctionBindings{
+		"cold": {},
+		"leaving": {
+			KV:    []v1.FunctionKV{{Alias: "notes", Store: "notes", Table: "last"}},
+			Links: []v1.FunctionLink{{Alias: "cold", Target: "cold", Timeout: v1.Duration(2 * time.Second)}},
+		},
+	} {
+		fn := &v1.Function{TypeMeta: v1.TypeMeta{APIVersion: v1.KindFunction.GVK().APIVersion(), Kind: v1.KindFunction}}
+		fn.Name, fn.Namespace, fn.ResourceGroup = name, "default", "rg1"
+		fn.Spec = v1.FunctionSpec{Runtime: "nodejs22", Handler: "index.handler", Image: "oci-layout://" + string(name) + ":1",
+			Bindings: bindings}
+		create(t, p.cfg.store, fn)
+	}
+	rt.sock, err = p.invokeMgr.SocketFor("default", "leaving")
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- p.Run(ctx) }()
+	require.Eventually(t, func() bool {
+		obj, err := p.cfg.store.Get(context.Background(), v1.KindFunction.GVK(), "default", "cold")
+		return err == nil && obj.(*v1.Function).Status.Phase == v1.PhaseIdle
+	}, 10*time.Second, 5*time.Millisecond, "the controller reconciles the cold function before the daemon stops")
+	cancel()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("Run did not return after its context ended")
+	}
+	require.True(t, rt.closing.Load(), "Shutdown must close the runtime")
+	require.NoError(t, rt.put.err, "a stopping worker could not reach its local API while the runtime closed")
+	require.Equal(t, http.StatusNoContent, rt.put.status, "a stopping worker's KV write failed while the runtime closed")
+	require.NoError(t, rt.call.err, "a stopping worker could not reach its local API while the runtime closed")
+	require.Equal(t, http.StatusServiceUnavailable, rt.call.status, "a call to a cold function was not refused while the runtime closed")
+	require.Empty(t, rt.lateCalls(), "a call made while the runtime closed started a worker")
+}
+
+// apiAtClose is a runtime whose Close calls a worker's local API, as a stopping worker may, and that records each
+// worker created or started once Close began.
+type apiAtClose struct {
+	*recordingRuntime
+	sock      string
+	closing   atomic.Bool
+	put, call reply
+
+	lateMu sync.Mutex
+	late   []string
+}
+
+// reply is a local API call's status, or the error that kept it from an answer.
+type reply struct {
+	status int
+	err    error
+}
+
+func (r *apiAtClose) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.Instance, error) {
+	r.record("create " + string(spec.Name))
+	return r.recordingRuntime.Create(ctx, spec)
+}
+
+func (r *apiAtClose) Start(ctx context.Context, id runtime.InstanceID) error {
+	r.record("start " + string(id))
+	return r.recordingRuntime.Start(ctx, id)
+}
+
+// record keeps call once Close has begun.
+func (r *apiAtClose) record(call string) {
+	if !r.closing.Load() {
+		return
+	}
+	r.lateMu.Lock()
+	defer r.lateMu.Unlock()
+	r.late = append(r.late, call)
+}
+
+func (r *apiAtClose) lateCalls() []string {
+	r.lateMu.Lock()
+	defer r.lateMu.Unlock()
+	return slices.Clone(r.late)
+}
+
+func (r *apiAtClose) Close() error {
+	r.closing.Store(true)
+	c := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", r.sock)
+	}}}
+	defer c.CloseIdleConnections()
+	r.put = callLocalAPI(c, http.MethodPut, "/kv/notes/bye", "the last note")
+	r.call = callLocalAPI(c, http.MethodPost, "/invoke/cold", "{}")
+	return r.recordingRuntime.Close()
+}
+
+// callLocalAPI sends one request to a worker's local API through c.
+func callLocalAPI(c *http.Client, method, path, body string) reply {
+	req, err := http.NewRequestWithContext(context.Background(), method, "http://local"+path, strings.NewReader(body))
+	if err != nil {
+		return reply{err: err}
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		return reply{err: err}
+	}
+	_ = resp.Body.Close()
+	return reply{status: resp.StatusCode}
 }

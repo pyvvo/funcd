@@ -3,35 +3,28 @@ package funcd
 import (
 	"context"
 
+	"github.com/pyvvo/funcd/internal/lifecycle"
 	"github.com/pyvvo/funcd/internal/provider"
 )
 
-// providerCatalog is the platform's static provider catalog (ADR-0082): the single source of
-// truth for which capability providers funcd offers and their tier. It is declared here at the
-// composition root, which already wires every provider, so internal/provider stays a leaf.
-//
-// Built-ins are in-daemon / pure-Go / always-on; add-ons are out-of-daemon managed engine
-// services deployed by the provider runtime (ADR-0087). `bus` is intentionally absent: it is the
-// internal-plane messaging substrate, never function-bindable, so it is not a provider. The F54
-// observability read path (ADR-0084) is likewise absent: it is in-daemon substrate serving the
-// log-ingest capability, not a provider of its own.
-func providerCatalog() (*provider.Catalog, error) {
-	return provider.New(
-		// built-in data-plane services (function-bindable)
-		provider.Descriptor{Name: "kv", Kind: provider.Builtin, Port: "kvstore.KV", Bindings: []string{"spec.bindings.kv"}, Summary: "namespaced key-value store"},
-		provider.Descriptor{Name: "blob", Kind: provider.Builtin, Port: "blob.Bucket", Bindings: []string{"spec.bindings.blob"}, Summary: "opaque-byte object substrate"},
-		provider.Descriptor{Name: "secrets", Kind: provider.Builtin, Port: "secrets.Resolver", Summary: "secret resolution + at-rest encryption"},
-		provider.Descriptor{Name: "eventing", Kind: provider.Builtin, Summary: "CloudEvents trigger delivery (EventSource)"},
-		provider.Descriptor{Name: "invoke", Kind: provider.Builtin, Bindings: []string{"spec.bindings.links"}, Summary: "synchronous fn-to-fn RPC (context.invoke)"},
-		// built-in protocol gateways (infra; no function-facing binding)
-		provider.Descriptor{Name: "ingress", Kind: provider.Builtin, Port: "gateway.Gateway", Summary: "HTTP ingress gateway"},
-		provider.Descriptor{Name: "egress", Kind: provider.Builtin, Summary: "egress gateway (default-deny + audit)"},
-		provider.Descriptor{Name: "s3", Kind: provider.Builtin, Port: "blob.Bucket", Bindings: []string{"spec.bindings.blob"}, Summary: "S3-protocol frontend over blob (ADR-0080)"},
-		provider.Descriptor{Name: "log-ingest", Kind: provider.Builtin, Summary: "function-telemetry side channel + funclog read path (ADR-0081/0084)"},
-		// add-on providers — out-of-daemon managed engines (ADR-0087)
-		provider.Descriptor{Name: "lake", Kind: provider.Addon, Bindings: []string{"spec.bindings.lake"}, Summary: "the lake service: DuckLake over DuckDB and Quack (F48, ADR-0086)"},
-		provider.Descriptor{Name: "sql", Kind: provider.Addon, Summary: "one rqlite SQL engine per SQLDatabase (ADR-0232)"},
-	)
+// describer is a provider that names its own entries in the provider catalog (ADR-0082).
+type describer interface {
+	Descriptors() []provider.Descriptor
+}
+
+// providerCatalog builds the platform's provider catalog (ADR-0082) from its providers, each naming its own entries,
+// so a provider added to the list is in the catalog and the catalog cannot drift from what runs. The ingress is the
+// Platform's own and stays listed until its place is decided. `bus` is intentionally absent: it is the internal-plane
+// messaging substrate, never function-bindable. The F54 observability read path (ADR-0084) is in-daemon substrate
+// serving the log-ingest capability, not a provider of its own.
+func providerCatalog(ph *lifecycle.Phases) (*provider.Catalog, error) {
+	ds := []provider.Descriptor{{Name: "ingress", Kind: provider.Builtin, Port: "gateway.Gateway", Summary: "HTTP ingress gateway"}}
+	for _, pr := range ph.Providers() {
+		if d, ok := pr.(describer); ok {
+			ds = append(ds, d.Descriptors()...)
+		}
+	}
+	return provider.New(ds...)
 }
 
 // Providers returns the platform's provider catalog (ADR-0082), available after New.

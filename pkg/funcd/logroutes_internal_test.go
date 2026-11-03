@@ -174,6 +174,7 @@ func TestIssue33_ShutdownDrainsLogRoutes(t *testing.T) {
 	require.Equal(t, lines, before, "every record written before shutdown is persisted before the blob closes (%d were Put after it)", after)
 }
 
+// scenario: workers-keep-their-services-while-stopping
 // The close phase of Run's shutdown keeps its own bound: an HTTP drain that used all of its bound (a slow in-flight
 // request) must not leave Shutdown an expired context, or the log drain returns at once and the tail of the function
 // logs is lost (issue #453, ADR-0081, ADR-0028).
