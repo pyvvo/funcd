@@ -13333,20 +13333,5 @@
     "dod_total": 12,
     "report": "docs/reviews/issue-1362-fix-claude-opus-5-5.md",
     "notes": "self-review in the session that wrote the fix, at the user's request; minor (model): pkg/funcd's TestMain wiring of the open-Badger check has no test of its own"
-  },
-  {
-    "date": "2026-11-03",
-    "issue": "1370",
-    "phase": "fix",
-    "model": "claude-opus-5-5",
-    "verdict": "pass",
-    "blockers": 0,
-    "majors": 0,
-    "minors": 0,
-    "model_attributed": 0,
-    "dod_passed": 11,
-    "dod_total": 12,
-    "report": "docs/reviews/issue-1370-fix-claude-opus-5-5.md",
-    "notes": "pass; revert + 3 mutants fail the regression test, 2 more pin the Bucket and SQLDatabase rows; local-API probe 204 on main, 507 with the fix; observation (not scored): an injected-driver mutant survives the pkg/funcd unit suite, only the kv-counter lane covers the daemon path; gate pending (env)"
   }
 ]
