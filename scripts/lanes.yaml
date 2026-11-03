@@ -177,8 +177,6 @@ duckdb:
     # Issue #1227: lake re-applied at 3Gi, so a spec change replaces its engine through a graceful stop
     - from: e2e/fixtures/lake-redeploy.yaml
       to: lake-redeploy.yaml
-    - from: e2e/fixtures/lake-saves-refused.yaml
-      to: lake-saves-refused.yaml
     # ADR-0292/0293: lake re-applied with its gold prefix capped at 1Mi
     - from: e2e/fixtures/lake-quota.yaml
       to: lake-quota.yaml

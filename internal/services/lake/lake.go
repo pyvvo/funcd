@@ -56,8 +56,12 @@ const (
 	reasonSavesFailing = "SavesFailing"
 )
 
-// reasonRestoring holds a Lake not Ready while an in-place Restore loads it, with no engine (ADR-0312 Decision 9).
-const reasonRestoring = "Restoring"
+// The reasons that hold a Lake not Ready with no engine (ADR-0312): an in-place Restore loads it (Decision 9), or
+// spec.location is a prefix it does not own (Decision 7).
+const (
+	reasonRestoring      = "Restoring"
+	reasonPrefixNotOwned = "PrefixNotOwned"
+)
 
 // SecretResolver resolves a service's bound Secret names → an env-var map for engine injection,
 // PDP-authorized for id (ADR-0022/0057). The reconciler depends on this local seam (ADR-0002

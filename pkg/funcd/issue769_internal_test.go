@@ -100,19 +100,19 @@ func (r *asleepRig) del(t *testing.T, kind v1.Kind, name v1.ObjectName) {
 	require.NoError(t, r.c.Delete(context.Background(), kind, "default", name))
 }
 
-func (r *asleepRig) bucket(t *testing.T, name, prefix, owner v1.ObjectName) {
+func (r *asleepRig) bucket(t *testing.T, name, prefix v1.ObjectName, owner v1.PrefixOwner) {
 	t.Helper()
 	obj, _ := v1.NewObject(v1.KindBucket)
 	b := obj.(*v1.Bucket)
 	b.Name, b.Namespace, b.ResourceGroup = name, "default", "rg1"
-	b.Spec = v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: string(prefix), Owner: v1.FunctionOwner(owner)}}}
+	b.Spec = v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: string(prefix), Owner: owner}}}
 	r.apply(t, b)
 }
 
 // lake applies Bucket lakehouse and Lake lake and waits for lake to be Ready.
 func (r *asleepRig) lake(t *testing.T) {
 	t.Helper()
-	r.bucket(t, "lakehouse", "raw", "lake")
+	r.bucket(t, "lakehouse", "raw", v1.LakeOwner("lake"))
 	r.applyLake(t)
 }
 
@@ -346,7 +346,7 @@ func TestScenarioDependencyReturnsStaysAsleep(t *testing.T) {
 		// No Bucket event reconciles a Function and the referent poll is a minute away, so the call's wake is the first
 		// pass to see the Bucket back while Asleep=True.
 		r := newAsleepRig(t, time.Minute)
-		r.bucket(t, "data", "in", "reader")
+		r.bucket(t, "data", "in", v1.FunctionOwner("reader"))
 		r.reader(t, replicas1(func(fn *v1.Function) {
 			fn.Spec.Bindings.Blob = []v1.FunctionBlob{{Alias: "in", Bucket: "data", Prefix: "in"}}
 		}))
@@ -356,7 +356,7 @@ func TestScenarioDependencyReturnsStaysAsleep(t *testing.T) {
 		// a store delete: admission's deletion protection refuses a bound Bucket
 		require.NoError(t, r.p.cfg.store.Delete(context.Background(), v1.KindBucket.GVK(), "default", "data", ""))
 		r.requireAsleep(t, start, writes, v1.PhasePending, "BucketNotFound")
-		r.bucket(t, "data", "in", "reader")
+		r.bucket(t, "data", "in", v1.FunctionOwner("reader"))
 		r.wakeReady(t)
 		require.Equal(t, v1.ConditionFalse, condition(r.fn(t), "Asleep").Status, "the woken pass clears Asleep")
 	})

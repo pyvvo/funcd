@@ -90,13 +90,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	// ADR-0121: spec.bindings.blob + spec.location (bucket, prefix) EXISTENCE is reconcile-time — a Lake
 	// naming a not-yet-applied Bucket/prefix is admitted and held not-Ready (BucketNotFound) until it
 	// resolves, then converges (this is the check the removed lake-blob-validity admission made). Fail-
-	// closed: the engine's S3 reach is denied until the prefix (and its owner == cs.Name) exist.
-	refRequeue, refMsg, rberr := r.resolveBucketRefs(ctx, cs)
+	// closed: the engine's S3 reach is denied until the prefix exists and its owner is this Lake (PrefixNotOwned,
+	// ADR-0312 Decision 7).
+	refReason, refMsg, rberr := r.resolveBucketRefs(ctx, cs)
 	if rberr != nil {
 		return controller.Result{}, rberr
 	}
-	if refRequeue {
-		return r.holdNotReady(ctx, cs, "BucketNotFound", refMsg, r.referentPoll)
+	if refReason != "" {
+		return r.holdNotReady(ctx, cs, refReason, refMsg, r.referentPoll)
 	}
 
 	// Resolve the engine env (the bindings ADR-0087 injects) BEFORE converging. A secret/config
@@ -568,45 +569,54 @@ func (r *Reconciler) engineEnv(ctx context.Context, cs *v1.Lake) (map[string]str
 
 // resolveBucketRefs enforces ADR-0121's reconcile-time existence for a Lake's data references:
 // every spec.bindings.blob (bucket, prefix) AND spec.location (bucket, prefix) must name a Bucket prefix that exists
-// in the namespace — the check the removed lake-blob-validity admission made synchronously. A miss
-// returns requeue=true with a message; the caller holds the service not-Ready and re-reconciles.
-func (r *Reconciler) resolveBucketRefs(ctx context.Context, cs *v1.Lake) (requeue bool, message string, err error) {
+// in the namespace — the check the removed lake-blob-validity admission made synchronously — and spec.location's owner
+// must be this Lake, a prefix with no owner counting as another's (ADR-0312 Decision 7). A miss returns the reason and a
+// message; the caller holds the service not-Ready and re-reconciles.
+func (r *Reconciler) resolveBucketRefs(ctx context.Context, cs *v1.Lake) (reason, message string, err error) {
 	const op = "services.lake.resolveBucketRefs"
 	bl, lerr := r.store.List(ctx, v1.KindBucket.GVK(), store.ListOptions{Namespace: cs.Namespace})
 	if lerr != nil {
-		return false, "", fault.Wrapf(lerr, fault.KindOf(lerr), op, "list buckets in %q", cs.Namespace)
+		return "", "", fault.Wrapf(lerr, fault.KindOf(lerr), op, "list buckets in %q", cs.Namespace)
 	}
-	prefixes := map[v1.ObjectName]map[string]bool{} // bucket name → set of prefix names
+	prefixes := map[v1.ObjectName]map[string]v1.PrefixOwner{} // bucket name → its prefixes' owners
 	for _, o := range bl.Items {
 		b, ok := o.(*v1.Bucket)
 		if !ok {
 			continue
 		}
-		set := make(map[string]bool, len(b.Spec.Prefixes))
+		set := make(map[string]v1.PrefixOwner, len(b.Spec.Prefixes))
 		for _, p := range b.Spec.Prefixes {
-			set[p.Name] = true
+			set[p.Name] = p.Owner
 		}
 		prefixes[b.Name] = set
 	}
-	check := func(what string, bucket v1.ObjectName, prefix string) (bool, string) {
+	check := func(what string, bucket v1.ObjectName, prefix string) string {
 		set, ok := prefixes[bucket]
 		if !ok {
-			return true, fmt.Sprintf("%s → bucket %q not found in namespace %q; waiting", what, bucket, cs.Namespace)
+			return fmt.Sprintf("%s → bucket %q not found in namespace %q; waiting", what, bucket, cs.Namespace)
 		}
-		if !set[prefix] {
-			return true, fmt.Sprintf("%s → prefix %q not found in bucket %q; waiting", what, prefix, bucket)
+		if _, ok := set[prefix]; !ok {
+			return fmt.Sprintf("%s → prefix %q not found in bucket %q; waiting", what, prefix, bucket)
 		}
-		return false, ""
+		return ""
 	}
 	for _, bnd := range cs.Spec.Bindings.Blob {
-		if rq, msg := check(fmt.Sprintf("spec.bindings.blob[%s]", bnd.Alias), bnd.Bucket, bnd.Prefix); rq {
-			return true, msg, nil
+		if msg := check(fmt.Sprintf("spec.bindings.blob[%s]", bnd.Alias), bnd.Bucket, bnd.Prefix); msg != "" {
+			return "BucketNotFound", msg, nil
 		}
 	}
-	if rq, msg := check("spec.location", cs.Spec.Location.Bucket, cs.Spec.Location.Prefix); rq {
-		return true, msg, nil
+	loc := cs.Spec.Location
+	if msg := check("spec.location", loc.Bucket, loc.Prefix); msg != "" {
+		return "BucketNotFound", msg, nil
 	}
-	return false, "", nil
+	switch owner := prefixes[loc.Bucket][loc.Prefix]; {
+	case owner.IsZero():
+		return reasonPrefixNotOwned, fmt.Sprintf("spec.location → prefix %q of bucket %q has no owner: this Lake must own it", loc.Prefix, loc.Bucket), nil
+	case owner != v1.LakeOwner(cs.Name):
+		return reasonPrefixNotOwned, fmt.Sprintf("spec.location → prefix %q of bucket %q is owned by %s %q: this Lake must own it", loc.Prefix, loc.Bucket,
+			owner.Kind, owner.Name), nil
+	}
+	return "", "", nil
 }
 
 // retryOnConflict swallows a store Conflict (re-reconciled on the next watch event), else wraps.

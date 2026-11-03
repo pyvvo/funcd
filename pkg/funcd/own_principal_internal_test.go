@@ -190,7 +190,7 @@ func TestScenarioKeysReissuedOnUpgrade(t *testing.T) {
 
 	bucket := &v1.Bucket{TypeMeta: v1.TypeMeta{APIVersion: v1.KindBucket.GVK().APIVersion(), Kind: v1.KindBucket}}
 	bucket.Name, bucket.Namespace, bucket.ResourceGroup = "lakehouse", "default", "rg1"
-	bucket.Spec = v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "a"}, {Name: "raw"}}}
+	bucket.Spec = v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "a"}, {Name: "raw", Owner: v1.LakeOwner("lake")}}}
 	fn := lakeFunction("default", v1.FunctionBlob{Alias: "a", Bucket: "lakehouse", Prefix: "a"})
 	fn.Spec.Image = "file:///art/app.mjs"
 	fn.Spec.Handler = "app.handler"

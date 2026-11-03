@@ -167,7 +167,7 @@ func TestScenarioProviderEnvUnchanged(t *testing.T) {
 	t.Parallel()
 	r := newSecretRig(t)
 	r.applySecret(t, "quack", map[string][]byte{"QUACK_TOKEN": []byte("qt")})
-	r.bucket(t, "lakehouse", "raw", "lake")
+	r.bucket(t, "lakehouse", "raw", v1.LakeOwner("lake"))
 	cs := lakeResource("default")
 	cs.Spec.Bindings.Secret = []v1.ObjectName{"quack"}
 	cs.Spec.SecretDeclarations = []v1.SecretDeclaration{{Name: "quack", Keys: []string{"QUACK_TOKEN"}}}

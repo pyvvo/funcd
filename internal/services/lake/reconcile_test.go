@@ -131,7 +131,7 @@ func seedLakeBucket(t *testing.T, st store.Store) {
 	b := &v1.Bucket{}
 	b.TypeMeta = v1.TypeMeta{APIVersion: v1.KindBucket.GVK().APIVersion(), Kind: v1.KindBucket}
 	b.Name, b.Namespace, b.ResourceGroup = "lakehouse", "default", "rg1"
-	b.Spec.Prefixes = []v1.BucketPrefix{{Name: "gold", Owner: v1.FunctionOwner("lake")}}
+	b.Spec.Prefixes = []v1.BucketPrefix{{Name: "gold", Owner: v1.LakeOwner("lake")}}
 	_, err := st.Create(context.Background(), b)
 	require.NoError(t, err)
 }
@@ -1241,6 +1241,13 @@ func TestScenario_exposure_lake_default_path(t *testing.T) {
 	h := newEdgeHarness(t, nil)
 	h.run(t, controller.Request{GVK: v1.KindRoute.GVK()})
 	on, off := mkLake("bi"), mkLake("lake")
+	biFiles := &v1.Bucket{TypeMeta: v1.TypeMeta{APIVersion: v1.KindBucket.GVK().APIVersion(), Kind: v1.KindBucket},
+		ObjectMeta: v1.ObjectMeta{Name: "bi-files", Namespace: "default", ResourceGroup: "rg1"},
+		Spec:       v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "gold", Owner: v1.LakeOwner("bi")}}}}
+	_, err := h.st.Create(ctx, biFiles)
+	require.NoError(t, err)
+	on.Spec.Location = v1.LakeLocation{Bucket: "bi-files", Prefix: "gold"}
+	on.Spec.Bindings.Blob = []v1.FunctionBlob{{Alias: "lake", Bucket: "bi-files", Prefix: "gold"}}
 	on.Spec.Ingress = &v1.Ingress{Enabled: new(true)}
 	off.Spec.Ingress = &v1.Ingress{}
 	for _, cs := range []*v1.Lake{on, off} {
@@ -1322,5 +1329,61 @@ func TestScenarioLakeEngineRenewalAge(t *testing.T) {
 			want = 20 * time.Hour
 		}
 		require.Equal(t, want, prov.lastSpec(t).MaxAge, "gateway %v", gateway)
+	}
+}
+
+// scenario: lake-off-its-own-prefix-is-held (ADR-0312 Decision 7) — a Lake located on a prefix a Function or another Lake
+// owns, or with no owner, is not Ready, PrefixNotOwned naming the owner, with no engine; given the prefix, it converges. A
+// prefix of another binding needs no owner: only the location is the Lake's own.
+func TestScenarioLakeOffItsOwnPrefixIsHeld(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		owner v1.PrefixOwner
+		names string
+	}{
+		"a Function's":                 {v1.FunctionOwner("f"), `Function "f"`},
+		"another Lake's":               {v1.LakeOwner("other"), `Lake "other"`},
+		"a Function's of its own name": {v1.FunctionOwner("lake"), `Function "lake"`},
+		"no owner":                     {v1.PrefixOwner{}, "no owner"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			st := store.New(storemem.New())
+			seedLakeBucket(t, st)
+			obj, err := st.Get(ctx, v1.KindBucket.GVK(), "default", "lakehouse")
+			require.NoError(t, err)
+			b := obj.(*v1.Bucket)
+			b.Spec.Prefixes = []v1.BucketPrefix{{Name: "gold", Owner: c.owner}, {Name: "raw"}}
+			_, err = st.Update(ctx, b)
+			require.NoError(t, err)
+			_, err = st.Create(ctx, mkLake("lake", v1.FunctionBlob{Alias: "raw", Bucket: "lakehouse", Prefix: "raw"}))
+			require.NoError(t, err)
+			prov := &fakeProvider{status: provider.ProviderStatus{Running: 1, Ready: true, Address: "10.63.0.7:8080"}}
+			r := newReconciler(t, st, prov, nil)
+
+			reconcileOnce(t, r, "lake")
+			obj, err = st.Get(ctx, v1.KindLake.GVK(), "default", "lake")
+			require.NoError(t, err)
+			cs := obj.(*v1.Lake)
+			require.Equal(t, v1.PhasePending, cs.Status.Phase)
+			ready, _ := cs.Status.Conditions.Get("Ready")
+			require.Equal(t, "PrefixNotOwned", ready.Reason)
+			require.Contains(t, ready.Message, c.names)
+			require.Empty(t, prov.converged, "no engine")
+			require.Len(t, prov.tornDown, 1)
+
+			obj, err = st.Get(ctx, v1.KindBucket.GVK(), "default", "lakehouse")
+			require.NoError(t, err)
+			b = obj.(*v1.Bucket)
+			b.Spec.Prefixes[0].Owner = v1.LakeOwner("lake")
+			_, err = st.Update(ctx, b)
+			require.NoError(t, err)
+			reconcileOnce(t, r, "lake")
+			obj, err = st.Get(ctx, v1.KindLake.GVK(), "default", "lake")
+			require.NoError(t, err)
+			require.Equal(t, v1.PhaseReady, obj.(*v1.Lake).Status.Phase)
+			require.Len(t, prov.converged, 1)
+		})
 	}
 }
