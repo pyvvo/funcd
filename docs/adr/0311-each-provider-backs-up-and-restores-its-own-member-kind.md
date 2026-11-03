@@ -1,8 +1,8 @@
 # ADR-0311: Each provider backs up and restores its own member kind
 
 - **Status**: Proposed (2026-11-03; refined with the decider, who validated the contract sketch; judged once in an
-  independent session, every finding folded; the kinds' location departs from the sketch and awaits the decider's
-  confirmation, see Alternatives; it stays Proposed until the fix of the Lake-catalog purge is on main)
+  independent session, every finding folded; the kinds' location departs from that sketch, and the decider confirmed
+  it on 2026-11-03, see Alternatives; it stays Proposed until the fix of the Lake-catalog purge is on main)
 - **Date**: 2026-11-03
 - **Deciders**: green-0-rabbit
 - **Tags**: provider, backup, restore, refactor
