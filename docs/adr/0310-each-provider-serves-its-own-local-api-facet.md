@@ -1,7 +1,6 @@
 # ADR-0310: Each provider serves its own facet of a worker's local API
 
-- **Status**: Proposed (2026-11-03; refined with the decider, then judged once in an independent session: its Major,
-  the built-in fetch route, its seven Minors and its four Nits folded)
+- **Status**: Proposed (2026-11-03; refined with the decider; judged in an independent session, every finding folded)
 - **Date**: 2026-11-03
 - **Deciders**: green-0-rabbit
 - **Tags**: provider, local-api, architecture, refactor
@@ -47,11 +46,10 @@ paths. Callers: the Executor's `build`, once; `NewHandler`, once per caller.
   `/fetch/{alias}/…` and `/health/dependencies` on its local API, *Then* each answers as today, the first four
   served by the facet of the provider that owns it. Tests: `TestShutdown_KeepsTheLocalAPIUntilTheWorkersStop` (kv,
   invoke), `TestScenarioE2EBlobObjectViaContextBlob`, `TestScenarioBoundFunctionReads`, `TestScenarioSecretReadLive`,
-  `TestDependencyCheck_AForbiddenLinkFails` and ADR-0243's fetch tests, their assertions unchanged;
+  `TestDependencyCheck_AForbiddenLinkFails` and `TestScenarioHTTPFetch`, their assertions unchanged;
   `TestFacets_TheProvidersServeKVBlobSQLAndSecret` (new).
 - **scenario: a-misplaced-facet-fails-the-start** — *Given* a facet whose segment is empty or holds `/`, `{` or `}`,
-  a pattern outside its segment (such as `GET /kv/{binding}/stats` from another facet, which `ServeMux` accepts and
-  answers for kv's key `stats`) or with a host, two facets on one segment, or a facet on `invoke`, `fetch` or
+  a pattern outside its segment or with a host, two facets on one segment, or a facet on `invoke`, `fetch` or
   `health`, *When* the Executor builds, *Then* `New` fails with an Invalid error naming the facet and the pattern or
   segment before the Executor opens anything, and no worker starts. Tests: `TestCheckFacets` (new, one case each,
   plus the zero facet, ignored); `TestExecutorBuild_RefusesTwoFacetsOnOneSegment` (new: two `local.KVFacet`s).
@@ -72,9 +70,9 @@ collision rule, unchanged; out-of-process providers.
   do not change.
 - A handler takes its caller from the `Ref` it was built for, in a pool the member ADR-0158 checks, never from the
   request (ADR-0064, ADR-0075).
-- Go's `ServeMux` panics at registration on two patterns that match the same requests, and handlers are built per
-  sandbox (`manager.go:127`); it accepts without a panic a more specific or host-qualified pattern that takes another
-  pattern's requests (References).
+- Go's `ServeMux` panics at registration on two patterns that match the same requests, so, with handlers built per
+  sandbox (`manager.go:127`), a panic would come at the first worker start; it accepts without a panic a more
+  specific or host-qualified pattern that takes another pattern's requests (References).
 - ADR-0002: typed, no globals, no new dependency, no duplicated logic.
 
 ## Alternatives considered
@@ -87,7 +85,7 @@ collision rule, unchanged; out-of-process providers.
 | The name `Routes`, or `Verbs` | `routes` already names the Route kind, App routes and edge routes (146 lines of Go); the decider declined `Verbs`. `Handlers`, `Mount`, `Segment` and `Surface` are taken or overloaded; `Facet` appears nowhere. |
 | Turn `ServeMux`'s panic into a start error by building one handler at boot | It misses the overlaps `ServeMux` accepts without a panic. |
 | ADR-0176's edge collision rule | It refuses only equal claims and lets a more specific prefix win, as a Site at `/` beside a Route at `/api` needs; facets must refuse that. Its segment-aware prefix test is reused (Decision 5). |
-| One `ServeMux` per facet, picked by the first segment | Overlap is impossible by construction, but every request takes one more step on the hot path; the start-time check gives the same guarantee with no request-path change. |
+| One `ServeMux` per facet, picked by the first segment | Overlap is impossible by construction, but it changes how every request is routed; the start-time check gives the same guarantee and leaves the request path as it is. |
 | Invoke and fetch as facets | `New` builds their invoker over the data plane after the providers (`funcd.go:770`); no provider holds it. |
 | Config as a facet, read live like secrets | ConfigMaps reach a worker in its environment (ADR-0093, ADR-0245); live reads are a separate decision. |
 
@@ -96,13 +94,13 @@ collision rule, unchanged; out-of-process providers.
 1. **A facet is one provider's part of a worker's local API.** `local.Facet` holds a segment and the function that
    registers its routes for a caller. Only `internal/workernode/local` builds one (`KVFacet`, `BlobFacet`,
    `SQLFacet`, `SecretFacet`; ADR-0282 adds `AIFacet`), so every route takes its caller from the `Ref` its handler
-   serves. The paths and handlers are today's (`registerKV`, `registerBlob`, `registerSQL`, `registerSecrets`). The
-   zero `Facet`, with no register function, serves nothing.
+   serves. The paths and handlers are today's (`registerKV`, `registerBlob`, `registerSQL`, `registerSecrets`), and a
+   facet's patterns depend on neither its port nor its caller.
 2. **A provider returns its facet.** The shared hook `facetHook` (`Facet() local.Facet`) has ADR-0308's shape and
    joins its logged list. kv, blob, sql and secrets implement it. A provider's `Facet()` tests its own facade pointer
-   and returns the zero `Facet` when it is nil; no facade is nil after a successful build today, so this serves an
-   optional provider such as ADR-0282's. `New` passes the facets, in list order, to the Executor's `build`, which
-   serves them through `WithFacets`.
+   and returns the zero `Facet` when it is nil; no facade is nil after a successful build today, so this serves a
+   later optional provider. `New` passes the facets, in list order, to the Executor's `build`, which serves them
+   through `WithFacets`.
 3. **Invoke, fetch and health stay built in.** `NewHandler` keeps `POST /invoke/{alias}`, `/fetch/{alias}/{path...}`
    (any method, answered before the mux, ADR-0243) and `GET /health/dependencies`, and its `opaqueKeys` escaping of
    kv and blob keys (#100). It loses its `kv` and `blob` ports, and so does `NewManager`; `WithSQL` and `WithSecrets`
@@ -120,10 +118,10 @@ collision rule, unchanged; out-of-process providers.
    contract validator's schema-location test (`internal/contract/rules.go:235`). Their behavior is unchanged:
    `matchPath` keeps its exact and `/` cases and `IsFunctionPath` its `path.Clean`.
 6. **Secrets is a provider.** `secretsProvider` builds the secret resolver and the secret facade over the config alone
-   and keeps them, serves the `secret` facet, and names its catalog entry in place of the hand-written one (config
-   keeps its entry). It is built before every other provider, after the RBAC default (`funcd.go:577-579`), since
-   lake, the Function reconciler and the workload backups read its resolver (`funcd.go:755`, `:824`, `:1018`). It
-   takes the hand-written entry's place in the list, so the catalog's order is unchanged.
+   and keeps them, and serves the `secret` facet. It is built before every other provider, after the RBAC default
+   (`funcd.go:577-579`), since lake, the Function reconciler and the workload backups read its resolver
+   (`funcd.go:755`, `:824`, `:1018`). It takes the hand-written catalog entry's place in the list, so the catalog and
+   its order are unchanged (config keeps its entry).
 
 ## Design model
 
@@ -220,10 +218,9 @@ func HasPrefix(p, prefix string) bool
    `secrets: facets`; `Facet()` on the four, each asserting `facetHook` at compile time; `execDeps` takes the facets
    instead of the four facades; the Executor's `build` calls `local.CheckFacets` first; lake, the Function
    reconciler and the workload backups read the resolver from secrets. Tests:
-   `TestFacets_TheProvidersServeKVBlobSQLAndSecret` (the assembled facets pass `CheckFacets` and register on one
-   handler), `TestExecutorBuild_RefusesTwoFacetsOnOneSegment`, `TestFacet_ANilFacadeServesNothing`
-   (`(&kvProvider{}).Facet()` through `NewHandler` answers 404 on `/kv/b/k`); a `// scenario:` line above each
-   Scenario's tests.
+   `TestFacets_TheProvidersServeKVBlobSQLAndSecret` (Decision 4), `TestExecutorBuild_RefusesTwoFacetsOnOneSegment`,
+   `TestFacet_ANilFacadeServesNothing` (`(&kvProvider{}).Facet()` through `NewHandler` answers 404 on `/kv/b/k`); a
+   `// scenario:` line above each Scenario's tests.
 4. Mutants, each restored: a facet registering outside its segment; two facets on `kv`; a facet on `fetch`;
    `CheckFacets` not called; a provider's `Facet()` returning the zero facet; secrets built after lake. List which
    test caught each; a survivor is named in the hand-over with the checklist line that guards it.
@@ -250,8 +247,7 @@ Done when the gate, the 13 lanes and the app-todo lane pass. It lands before ADR
 ## Consequences
 
 - **Positive**: a new binding, ADR-0282's AI or F172's vectors, is a facet in `internal/workernode/local` and one
-  method on its provider, with no line in `New`, `execDeps` or `NewHandler` that names it. A facet that would take
-  another's paths fails the start, including the overlaps `ServeMux` accepts silently. Five copies of the prefix
+  method on its provider, with no line in `New`, `execDeps` or `NewHandler` that names it. Five copies of the prefix
   test become one.
 - **Negative**: the constructors change in many tests; five ADRs are superseded in part; secrets gets a provider type;
   `opaqueKeys` still names kv and blob in `NewHandler`.
