@@ -1,8 +1,9 @@
 # ADR-0310: Each provider serves its own facet of a worker's local API
 
-- **Status**: Reviewing (2026-11-03, implemented in three commits: the prefix test, the local API's facets, the
-  providers' facets); Accepted (2026-11-03, by the decider, after refining it with them; judged twice in an independent
-  session, every finding folded)
+- **Status**: Implemented (2026-11-03), review passed with no finding
+  ([report](../reviews/adr-0310-implementation-claude-opus-5-5.md)); Reviewing (2026-11-03, implemented in three
+  commits: the prefix test, the local API's facets, the providers' facets); Accepted (2026-11-03, by the decider,
+  after refining it with them; judged twice in an independent session, every finding folded)
 - **Date**: 2026-11-03
 - **Deciders**: green-0-rabbit
 - **Tags**: provider, local-api, architecture, refactor
