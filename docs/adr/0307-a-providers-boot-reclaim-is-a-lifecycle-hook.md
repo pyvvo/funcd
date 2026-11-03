@@ -1,8 +1,10 @@
 # ADR-0307: A provider's boot reclaim is a lifecycle hook
 
-- **Status**: Reviewing (2026-11-03, implemented from the experiment's commit `41bdf1d9`); Accepted (2026-11-03, under
-  the decider's delegation: "pick whatever ADR you want and ship them"; judged twice under the adr-judge skill: round
-  1's Major, the Scenario tests, and five Minors folded; round 2 accept)
+- **Status**: Implemented (2026-11-03), review passed with one Minor
+  ([report](../reviews/adr-0307-implementation-claude-opus-5-5.md)); Reviewing (2026-11-03, implemented from the
+  experiment's commit `41bdf1d9`); Accepted (2026-11-03, under the decider's delegation: "pick whatever ADR you want
+  and ship them"; judged twice under the adr-judge skill: round 1's Major, the Scenario tests, and five Minors folded;
+  round 2 accept)
 - **Date**: 2026-11-03
 - **Deciders**: green-0-rabbit
 - **Tags**: provider, lifecycle, disaster-recovery, refactor
