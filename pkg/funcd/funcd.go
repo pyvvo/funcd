@@ -56,7 +56,6 @@ import (
 	"github.com/pyvvo/funcd/internal/edge/static"
 	edgetls "github.com/pyvvo/funcd/internal/edge/tls"
 	"github.com/pyvvo/funcd/internal/eventing"
-	"github.com/pyvvo/funcd/internal/eventing/deadletter"
 	"github.com/pyvvo/funcd/internal/eventing/eventstore"
 	"github.com/pyvvo/funcd/internal/funclog"
 	"github.com/pyvvo/funcd/internal/funclog/logread"
@@ -457,12 +456,10 @@ type Platform struct {
 	providers    *provider.Catalog // the platform provider catalog (ADR-0082)
 
 	controller  *controller.Controller
-	collector   *gc.Collector // ADR-0170: the owner garbage collector, run beside the controller
-	eventing    *eventing.Source
-	eventFanout *eventing.Fanout      // ADR-0108: the named-event publisher the F69 Sensor subscribes to
-	blobWatcher *eventing.BlobWatcher // ADR-0119: the blob EventSource poll watcher (side Run loop)
-	edgeRouter  router.Router         // ADR-0110 (F79): the Route matcher the data-plane front door consults
-	tlsProvider edgetls.Provider      // ADR-0111 (F74): the TLS cert provider (nil ⇒ plaintext)
+	collector   *gc.Collector    // ADR-0170: the owner garbage collector, run beside the controller
+	eventFanout *eventing.Fanout // ADR-0108: the named-event publisher the F69 Sensor subscribes to
+	edgeRouter  router.Router    // ADR-0110 (F79): the Route matcher the data-plane front door consults
+	tlsProvider edgetls.Provider // ADR-0111 (F74): the TLS cert provider (nil ⇒ plaintext)
 	activator   *activator.Activator
 	httpServer  *http.Server
 	listener    net.Listener
@@ -481,18 +478,15 @@ type Platform struct {
 	workflowEngine    *workflow.Engine        // owns the run goroutines; drained on shutdown (ADR-0146)
 	workflowRetention time.Duration           // terminal-run retention horizon (0 ⇒ no sweep)
 
-	eventStore           *eventstore.Store  // eventing's durable store (ADR-0201): dead letters + seen lists; closed on shutdown
-	deadLetters          deadletter.Store   // the event store's dead-letter tenant (ADR-0118)
-	sensorReconciler     *sensor.Reconciler // owns the retry workers (drained on shutdown) + the DLQ replay seam
-	deadletterRetention  time.Duration      // DLQ TTL horizon (0 ⇒ no TTL eviction)
-	deadletterMaxEntries int                // DLQ per-namespace count cap (0 ⇒ unbounded)
-	phases               *lifecycle.Phases  // the providers in boot order, the Executor first
-	exec                 *executor          // the Executor provider
-	kv                   *kvProvider
-	blob                 *blobProvider
-	sql                  *sqlProvider
-	lake                 *lakeProvider
-	invoke               *invokeProvider
+	eventStore *eventstore.Store // eventing's durable store (ADR-0201): dead letters + seen lists; closed on shutdown
+	phases     *lifecycle.Phases // the providers in boot order, the Executor first
+	exec       *executor         // the Executor provider
+	kv         *kvProvider
+	blob       *blobProvider
+	sql        *sqlProvider
+	lake       *lakeProvider
+	eventing   *eventingProvider
+	invoke     *invokeProvider
 
 	drainTimeout time.Duration // server.shutdownTimeout: bounds the HTTP, workflow-run and Sensor drains and a failed New's cleanup
 	shutdownOnce sync.Once
@@ -519,9 +513,10 @@ func New(opts ...Option) (_ *Platform, err error) {
 	p := &Platform{cfg: cfg, drainTimeout: shutdownTimeout}
 	// The Executor is listed before anything is built, so a New that fails still closes the runtime its options opened
 	// (#94).
-	p.exec, p.kv, p.blob, p.sql, p.lake, p.invoke = &executor{cfg: cfg}, &kvProvider{cfg: cfg}, &blobProvider{cfg: cfg},
-		&sqlProvider{cfg: cfg}, &lakeProvider{cfg: cfg}, &invokeProvider{cfg: cfg}
-	p.phases = lifecycle.New(append(append([]lifecycle.Provider{p.exec, p.kv, p.blob, p.sql, p.lake, &eventingProvider{p}},
+	p.exec, p.kv, p.blob, p.sql, p.lake = &executor{cfg: cfg}, &kvProvider{cfg: cfg}, &blobProvider{cfg: cfg},
+		&sqlProvider{cfg: cfg}, &lakeProvider{cfg: cfg}
+	p.eventing, p.invoke = &eventingProvider{cfg: cfg}, &invokeProvider{cfg: cfg}
+	p.phases = lifecycle.New(append(append([]lifecycle.Provider{p.exec, p.kv, p.blob, p.sql, p.lake, p.eventing},
 		hookless()...), p.invoke)...)
 	// A failed New releases what the options and the build acquired, so the caller can retry (issue #94).
 	defer func() {
@@ -854,31 +849,6 @@ func (p *Platform) buildControlPlane() error {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build activator")
 	}
 	p.activator = act
-	// ADR-0119 (F83): the blob EventSource poll watcher. It lists the SAME s3BucketFor substrate view
-	// external S3-frontend writes land in (writer-agnostic detection over blob.Bucket.List), keeps its per-event
-	// seen lists in the event store, and publishes a named CloudEvent per new object onto the same Fanout the
-	// Sensor subscribes to. Registered by the EventSource reconciler; Run in Run().
-	blobWatcher, err := eventing.NewBlobWatcher(blobBucketLister{resolve: s3BucketFor(c.blob, c.store, p.checker)}, fanout, es.SeenLists(), c.blobPollInterval, p.logger)
-	if err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), op, "build blob watcher")
-	}
-	blobWatcher.SetHold(c.gate())
-	blobWatcher.SetNamespaceHold(c.nsGate())
-	p.blobWatcher = blobWatcher
-	source, err := eventing.NewSource(eventing.Deps{
-		Store:     c.store,
-		Publisher: fanout,
-		Blob:      blobWatcher,
-		Logger:    p.logger,
-		Hold:      c.gate(),
-
-		NamespaceHold:         c.nsGate(),
-		BucketRecheckInterval: c.pacing.BucketRecheckInterval,
-	})
-	if err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), op, "build eventing source")
-	}
-	p.eventing = source
 
 	if p.collector, err = gc.New(gc.Deps{Store: c.store, Purger: bucketPurger{shared: c.blob}, Interval: c.gcSweepInterval, Logger: p.logger}); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build garbage collector")
@@ -898,16 +868,6 @@ func (p *Platform) buildControlPlane() error {
 		ctrl.Watches(k.GVK(), ownedstore.MapOwner(c.store, v1.KindFunction))
 	}
 	ctrl.Register(v1.KindService.GVK(), dispatcher)
-	ctrl.Register(v1.KindEventSource.GVK(), source)
-	// ADR-0118 (F85): the eventing DLQ — the event store's dead-letter tenant, independent of the bus driver. It
-	// backs the Sensor's bounded action-delivery retry + dead-lettering and the control-plane read/replay surface.
-	dlq := es.DeadLetters()
-	p.deadLetters = dlq
-	p.deadletterRetention = c.deadletterRetention
-	p.deadletterMaxEntries = c.deadletterMaxEntries
-	// ADR-0109 (F69) + ADR-0118 (F85): the Sensor binds the named events published on the Fanout to actions
-	// — start a WorkflowRun / invoke a Function (via the re-created invoke/wake logic), with bounded retry
-	// before dead-lettering. It subscribes to fanout.
 	// ADR-0302: one invokePlugin chain, which every call to a worker runs: the data plane's, the workflow
 	// dispatcher's, the Sensors' and the App hooks'. ADR-0113 (F77): its authn plugin is the edge PEP, built from the
 	// control-plane credentials + authorizer; nil unless enabled (an authenticated stance then fails closed).
@@ -922,29 +882,12 @@ func (p *Platform) buildControlPlane() error {
 	// ADR-0303: the contract plugins come last, so they check the envelope the data plane built.
 	callChain := invoke.NewChain(append(dataplane.Plugins(edgeEnforcer, targetLimiter, c.callGate(), c.invokeDefaultTimeout),
 		contractcheck.Plugins(fnReconciler)...)...)
-	sensorReconciler, err := sensor.NewReconciler(sensor.Deps{
-		Store:      c.store,
-		Subscriber: fanout,
-		Invoker: &sensor.HTTPInvoker{Endpoints: fnReconciler.Endpoints(), Waker: act, Protocol: protocolOf(c.store),
-			Client: workerClient(calls, 30*time.Second), Chain: callChain},
-		DeadLetters:           dlq,
-		DeliveryAttempts:      c.deliveryAttempts,
-		MaxDeliveriesInFlight: c.sensorMaxDeliveriesInFlight,
-		MaxInFlightPerTarget:  c.sensorMaxInFlightPerTarget,
-		MaxQueuedPerSensor:    c.sensorMaxQueuedPerSensor,
-		Logger:                p.logger,
-
-		DeliveryBackoffInitial: c.pacing.DeliveryBackoffInitial,
-		DeliveryBackoffMax:     c.pacing.deliveryBackoffMax(),
-		Hold:                   c.gate(),
-		NamespaceHold:          c.nsGate(),
-	})
-	if err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), op, "build sensor reconciler")
+	// ADR-0309: eventing builds its parts once the workload core exists, since its Sensors call through the Function
+	// reconciler's endpoints, the activator and the call chain.
+	if err := p.eventing.build(eventingDeps{fanout: fanout, events: es, quota: p.checker, endpoints: fnReconciler.Endpoints(),
+		waker: act, calls: calls, chain: callChain, drainTimeout: p.drainTimeout, ctrl: ctrl}); err != nil {
+		return err
 	}
-	p.sensorReconciler = sensorReconciler
-	ctrl.Register(v1.KindSensor.GVK(), sensorReconciler)
-	ctrl.Watches(v1.KindFunction.GVK(), sensorReconciler.MapFunction) // a Function that serves HTTP fails its Sensors (ADR-0243)
 	// ADR-0110 (F79): the Route reconciler validates backends + multi-tenancy rules and programs the
 	// edge router (replace-all) the data-plane front door consults. p.edgeRouter is created up front so
 	// both the reconciler and the data-plane handler share the one live table.
@@ -1141,14 +1084,14 @@ func (p *Platform) buildControlPlane() error {
 		Logger:      p.logger,
 		Logs:        logReader,
 		RunLogs:     runLogQuerier,
-		DeadLetters: dlq,                     // ADR-0118: the DLQ read + replay/discard surface
-		Replayer:    sensorReconciler,        // ADR-0118: the imperative replay seam (one synchronous attempt)
-		Collector:   p.collector,             // ADR-0170: a forced ResourceGroup delete collects the members' children
-		AppRetrier:  appReconciler,           // ADR-0214: retry an App's failed hook
-		Planner:     app.NewPlanner(c.store), // ADR-0220: a dry-run App write's plan
-		Volumes:     p.volumeDeleter(),       // ADR-0262: delete a retained Function volume
+		DeadLetters: p.eventing.deadLetters,      // ADR-0118: the DLQ read + replay/discard surface
+		Replayer:    p.eventing.sensorReconciler, // ADR-0118: the imperative replay seam (one synchronous attempt)
+		Collector:   p.collector,                 // ADR-0170: a forced ResourceGroup delete collects the members' children
+		AppRetrier:  appReconciler,               // ADR-0214: retry an App's failed hook
+		Planner:     app.NewPlanner(c.store),     // ADR-0220: a dry-run App write's plan
+		Volumes:     p.volumeDeleter(),           // ADR-0262: delete a retained Function volume
 		Hold: controlplane.NewHoldService(controlplane.HoldDeps{ // ADR-0206: the hold's evidence and release
-			Hold: c.hold, Store: c.store, DeadLetters: dlq, Platform: holdPlatform{p},
+			Hold: c.hold, Store: c.store, DeadLetters: p.eventing.deadLetters, Platform: holdPlatform{p},
 		}),
 		// ADR-0219: app-requires runs after app-parts.
 		Admissions: append(partAdmissions(storeReader{c.store}), app.NewAdmission(partAdmissions, storeReader{c.store}),
@@ -1582,10 +1525,11 @@ func (p *Platform) runWorkflowRetention(ctx context.Context) {
 // runDeadLetterRetention periodically evicts dead letters past the TTL and over the per-namespace count cap
 // (ADR-0118 §5), mirroring the run-retention sweep. It sweeps at most hourly (sooner when the TTL is short),
 // stops on ctx cancel, and logs (never fatal) a sweep failure — the next tick retries.
-func (p *Platform) runDeadLetterRetention(ctx context.Context) {
+func (s *eventingProvider) runDeadLetterRetention(ctx context.Context) {
+	c := s.cfg
 	interval := time.Hour
-	if p.deadletterRetention > 0 && p.deadletterRetention < interval {
-		interval = p.deadletterRetention
+	if c.deadletterRetention > 0 && c.deadletterRetention < interval {
+		interval = c.deadletterRetention
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -1594,16 +1538,16 @@ func (p *Platform) runDeadLetterRetention(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if p.cfg.gate().Held() { // held dead letters are evidence (ADR-0206 Decision 6)
+			if c.gate().Held() { // held dead letters are evidence (ADR-0206 Decision 6)
 				continue
 			}
-			n, err := p.deadLetters.SweepExpired(ctx, p.deadletterRetention, p.deadletterMaxEntries)
+			n, err := s.deadLetters.SweepExpired(ctx, c.deadletterRetention, c.deadletterMaxEntries)
 			if err != nil {
-				p.logger.WarnContext(ctx, "dead-letter retention sweep failed", "error", err)
+				c.logger.WarnContext(ctx, "dead-letter retention sweep failed", "error", err)
 				continue
 			}
 			if n > 0 {
-				p.logger.InfoContext(ctx, "dead-letter retention sweep evicted entries", "count", n)
+				c.logger.InfoContext(ctx, "dead-letter retention sweep evicted entries", "count", n)
 			}
 		}
 	}
@@ -2071,11 +2015,11 @@ func (h holdPlatform) VolumeOrphans(ctx context.Context) ([]v1.ObjectRef, error)
 }
 
 func (h holdPlatform) Advance(ctx context.Context, ns v1.NamespaceName, source v1.ObjectName) error {
-	return h.p.blobWatcher.Advance(ctx, ns, source)
+	return h.p.eventing.blobWatcher.Advance(ctx, ns, source)
 }
 
 func (h holdPlatform) Pending(ctx context.Context, ns v1.NamespaceName, source v1.ObjectName) (map[string]int, error) {
-	return h.p.blobWatcher.Pending(ctx, ns, source)
+	return h.p.eventing.blobWatcher.Pending(ctx, ns, source)
 }
 
 // s3Buckets lists a namespace's Bucket resources for the S3 gateway's HeadBucket and

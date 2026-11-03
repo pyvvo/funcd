@@ -125,7 +125,7 @@ func TestEveryRunnerConsultsHold(t *testing.T) {
 					Blob: &v1.BlobSource{Bucket: "inbox", Events: []v1.BlobEvent{{Name: "new"}}}}})
 			require.NoError(t, p.cfg.blob.Put(ctx, bucketPrefix("team", "inbox")+"a", []byte("a"), blob.PutOptions{}))
 		}, still: func(t *testing.T, p *Platform) {
-			pending, err := p.blobWatcher.Pending(ctx, "team", "files")
+			pending, err := p.eventing.blobWatcher.Pending(ctx, "team", "files")
 			require.NoError(t, err)
 			require.Equal(t, map[string]int{"new": 1}, pending, "a held blob source polled")
 		}},
@@ -138,7 +138,7 @@ func TestEveryRunnerConsultsHold(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, p.eventFanout.Publish(ctx, ev))
 			require.Eventually(t, func() bool {
-				dls, err := p.deadLetters.List(ctx, "team")
+				dls, err := p.eventing.deadLetters.List(ctx, "team")
 				require.NoError(t, err)
 				return len(dls) == 2 && strings.Contains(dls[0].Reason+dls[1].Reason, "held")
 			}, 5*time.Second, 20*time.Millisecond, "the held Sensor parks the delivery")
@@ -164,12 +164,12 @@ func TestEveryRunnerConsultsHold(t *testing.T) {
 		{name: "dead-letter retention and replay", seed: func(t *testing.T, p *Platform) {
 			payload, err := json.Marshal(eventing.CloudEvent{})
 			require.NoError(t, err)
-			require.NoError(t, p.deadLetters.Put(ctx, deadletter.DeadLetter{ID: "01JA0000000000000000000001", Namespace: "team",
+			require.NoError(t, p.eventing.deadLetters.Put(ctx, deadletter.DeadLetter{ID: "01JA0000000000000000000001", Namespace: "team",
 				Sensor: "s", Source: "tick", Event: "t", Action: "a", Payload: payload, FailedAt: v1.NewTimestamp(time.Now().Add(-time.Hour))}))
 		}, still: func(t *testing.T, p *Platform) {
-			_, err := p.deadLetters.Get(ctx, "team", "01JA0000000000000000000001")
+			_, err := p.eventing.deadLetters.Get(ctx, "team", "01JA0000000000000000000001")
 			require.NoError(t, err, "the retention sweep evicted a held dead letter")
-			require.Equal(t, fault.Unavailable, fault.KindOf(p.sensorReconciler.Replay(ctx, "team", "01JA0000000000000000000001")))
+			require.Equal(t, fault.Unavailable, fault.KindOf(p.eventing.sensorReconciler.Replay(ctx, "team", "01JA0000000000000000000001")))
 			sensorRuns(t)
 		}},
 		{name: "App", seed: func(t *testing.T, p *Platform) {
@@ -217,7 +217,7 @@ func TestEveryRunnerConsultsHold(t *testing.T) {
 	go func() { done <- p.Run(runCtx) }()
 	t.Cleanup(func() { cancel(); <-done })
 	require.Eventually(t, func() bool {
-		pending, err := p.blobWatcher.Pending(ctx, "team", "files")
+		pending, err := p.eventing.blobWatcher.Pending(ctx, "team", "files")
 		return err == nil && pending["new"] == 1
 	}, 5*time.Second, 10*time.Millisecond, "the blob source registers")
 	// The timers tick every 100 ms; the sweeps, the held requeues and the blob polls every 50 ms.
@@ -225,6 +225,36 @@ func TestEveryRunnerConsultsHold(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) { c.still(t, p) })
 	}
+}
+
+// The hold's evidence and its release reach the blob watcher eventing builds (ADR-0206 Decision 8): on a held
+// platform, Pending counts a blob source's unseen objects, and Advance marks them seen, so a release replays none.
+func TestHold_PendingAndAdvanceReachTheBlobWatcher(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dir := t.TempDir()
+	require.NoError(t, hold.Write(dir, hold.Marker{Reason: "restore", Since: v1.NewTimestamp(time.Now())}))
+	h, err := hold.Open(dir)
+	require.NoError(t, err)
+	p, err := New(InMemory(), WithLogger(slog.New(slog.DiscardHandler)), WithHold(h), WithBlobPollInterval(50*time.Millisecond))
+	require.NoError(t, err)
+	seedObjects(t, p.cfg.store, &v1.Bucket{TypeMeta: tmeta(v1.KindBucket), ObjectMeta: teamMeta("inbox")},
+		&v1.EventSource{TypeMeta: tmeta(v1.KindEventSource), ObjectMeta: teamMeta("files"), Spec: v1.EventSourceSpec{
+			Blob: &v1.BlobSource{Bucket: "inbox", Events: []v1.BlobEvent{{Name: "new"}}}}})
+	require.NoError(t, p.cfg.blob.Put(ctx, bucketPrefix("team", "inbox")+"a", []byte("a"), blob.PutOptions{}))
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- p.Run(runCtx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	platform := holdPlatform{p}
+	require.Eventually(t, func() bool {
+		pending, err := platform.Pending(ctx, "team", "files")
+		return err == nil && pending["new"] == 1
+	}, 5*time.Second, 10*time.Millisecond, "the hold counts the held source's unseen object")
+	require.NoError(t, platform.Advance(ctx, "team", "files"))
+	pending, err := platform.Pending(ctx, "team", "files")
+	require.NoError(t, err)
+	require.Zero(t, pending["new"], "an advanced source has nothing left to replay")
 }
 
 // nsMeta is teamMeta in namespace ns.
@@ -296,7 +326,7 @@ func TestEveryRunnerConsultsHoldInNamespace(t *testing.T) {
 		obj, err := st.Get(ctx, v1.KindWorkflowRun.GVK(), ns, "r1")
 		require.NoError(t, err)
 		out["runs"] = obj.GetObjectMeta().ResourceVersion != versions[ns]
-		pending, err := p.blobWatcher.Pending(ctx, ns, "files")
+		pending, err := p.eventing.blobWatcher.Pending(ctx, ns, "files")
 		require.NoError(t, err)
 		out["blob sources"] = pending["new"] == 0 && len(pending) == 1
 		_, err = st.Get(ctx, v1.KindKVStore.GVK(), ns, "appstore")
@@ -304,7 +334,7 @@ func TestEveryRunnerConsultsHoldInNamespace(t *testing.T) {
 		l, err := st.List(ctx, v1.KindBackup.GVK(), store.ListOptions{Namespace: ns})
 		require.NoError(t, err)
 		out["schedule slots"] = len(l.Items) > 0
-		out["dead-letter replay"] = fault.KindOf(p.sensorReconciler.Replay(ctx, ns, "01JA0000000000000000000001")) != fault.Unavailable
+		out["dead-letter replay"] = fault.KindOf(p.eventing.sensorReconciler.Replay(ctx, ns, "01JA0000000000000000000001")) != fault.Unavailable
 		return out
 	}
 	all := map[string]bool{"timers and Sensors": true, "runs": true, "blob sources": true, "App": true, "schedule slots": true,
@@ -312,7 +342,7 @@ func TestEveryRunnerConsultsHoldInNamespace(t *testing.T) {
 	require.Eventually(t, func() bool { return reflect.DeepEqual(all, acted("web")) }, 10*time.Second, 20*time.Millisecond,
 		"every per-namespace runner acts in web")
 	require.Eventually(t, func() bool {
-		pending, err := p.blobWatcher.Pending(ctx, "team", "files")
+		pending, err := p.eventing.blobWatcher.Pending(ctx, "team", "files")
 		return err == nil && pending["new"] == 1
 	}, 5*time.Second, 10*time.Millisecond, "team's blob source registers")
 	for name, did := range acted("team") {
