@@ -5,6 +5,10 @@
   experiment's commits, without its route hook); Accepted (2026-11-03, under the decider's delegation: "pick whatever
   ADR you want and ship them", then "ADR batch ... for all of the remaining works"; judged under the adr-judge skill
   in an independent session: its Blocker, invoke built before the Executor, three Majors and seven Minors folded)
+- **Superseded in part by**: [ADR-0310](0310-each-provider-serves-its-own-local-api-facet.md) (2026-11-03) — in
+  Decision 2, "the kv, blob, sql facades to the Executor" and the secret resolver and facade as the Platform's parts;
+  in Decision 3, the order (secrets is built first); in Decision 4, `WithSQL` and `WithSecrets`; Decision 6; the
+  executor row of its Contracts table.
 - **Date**: 2026-11-03
 - **Deciders**: green-0-rabbit
 - **Tags**: provider, lifecycle, architecture, refactor

@@ -115,6 +115,7 @@ func (e *accessEnv) do(t *testing.T, fn, method, path, body string) (int, string
 
 func (e *accessEnv) todo() *fakesql.Engine { return e.engines.engine("todo-db") }
 
+// scenario: each-provider-serves-its-facet
 // scenario: a-worker-reaches-each-binding-on-its-local-api
 // scenario: bound-function-reads — a bound function's query returns the rows.
 func TestScenarioBoundFunctionReads(t *testing.T) {

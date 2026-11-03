@@ -15,6 +15,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6/kind"
 
 	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/platform/pathx"
 )
 
 // Detail is one entry of a 422 or 500 body's details (ADR-0301 Decision 3).
@@ -232,7 +233,7 @@ func (v *Validator) tagged(e *jsonschema.ValidationError, k *kind.OneOf, u union
 	}
 	n := len(out)
 	for _, c := range e.Causes {
-		if c.SchemaURL == named[0].location || strings.HasPrefix(c.SchemaURL, named[0].location+"/") {
+		if pathx.HasPrefix(c.SchemaURL, named[0].location) {
 			out = v.leaves(c, inst, out)
 		}
 	}

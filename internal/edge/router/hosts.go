@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/platform/pathx"
 )
 
 // defaultBaseDomain is server.baseDomain when unset (ADR-0240 Decision 1).
@@ -46,8 +47,7 @@ func NamespaceOfHost(host, base string) v1.NamespaceName {
 
 // IsFunctionPath reports whether a cleaned path is /function or under it, the by-name invoke form.
 func IsFunctionPath(p string) bool {
-	p = path.Clean(p)
-	return p == functionPath || strings.HasPrefix(p, functionPath+"/")
+	return pathx.HasPrefix(path.Clean(p), functionPath)
 }
 
 // onReservedHost reports whether host is one of reserved or a name under one.

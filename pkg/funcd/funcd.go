@@ -80,7 +80,6 @@ import (
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/process"
 	"github.com/pyvvo/funcd/internal/scheduler/singlenode"
-	"github.com/pyvvo/funcd/internal/secrets"
 	"github.com/pyvvo/funcd/internal/sensor"
 	"github.com/pyvvo/funcd/internal/services"
 	backupsvc "github.com/pyvvo/funcd/internal/services/backup"
@@ -88,7 +87,6 @@ import (
 	identitysvc "github.com/pyvvo/funcd/internal/services/identity"
 	kvsvc "github.com/pyvvo/funcd/internal/services/kv"
 	rolessvc "github.com/pyvvo/funcd/internal/services/roles"
-	secretsvc "github.com/pyvvo/funcd/internal/services/secret"
 	"github.com/pyvvo/funcd/internal/site"
 	"github.com/pyvvo/funcd/internal/snapshot"
 	"github.com/pyvvo/funcd/internal/store"
@@ -486,6 +484,7 @@ type Platform struct {
 	sql        *sqlProvider
 	lake       *lakeProvider
 	eventing   *eventingProvider
+	secrets    *secretsProvider
 	invoke     *invokeProvider
 
 	drainTimeout time.Duration // server.shutdownTimeout: bounds the HTTP, workflow-run and Sensor drains and a failed New's cleanup
@@ -515,8 +514,8 @@ func New(opts ...Option) (_ *Platform, err error) {
 	// (#94).
 	p.exec, p.kv, p.blob, p.sql, p.lake = &executor{cfg: cfg}, &kvProvider{cfg: cfg}, &blobProvider{cfg: cfg},
 		&sqlProvider{cfg: cfg}, &lakeProvider{cfg: cfg}
-	p.eventing, p.invoke = &eventingProvider{cfg: cfg}, &invokeProvider{cfg: cfg}
-	p.phases = lifecycle.New(append(append([]lifecycle.Provider{p.exec, p.kv, p.blob, p.sql, p.lake, p.eventing},
+	p.eventing, p.secrets, p.invoke = &eventingProvider{cfg: cfg}, &secretsProvider{cfg: cfg}, &invokeProvider{cfg: cfg}
+	p.phases = lifecycle.New(append(append([]lifecycle.Provider{p.exec, p.kv, p.blob, p.sql, p.lake, p.eventing, p.secrets},
 		hookless()...), p.invoke)...)
 	// A failed New releases what the options and the build acquired, so the caller can retry (issue #94).
 	defer func() {
@@ -577,6 +576,11 @@ func (p *Platform) buildControlPlane() error {
 	if c.authorizer == nil {
 		c.authorizer = rbac.New()
 	}
+	// ADR-0310 Decision 6: secrets is built before every other provider, over the config alone, since lake, the Function
+	// reconciler and the workload backups read its resolver.
+	if err := p.secrets.build(); err != nil {
+		return err
+	}
 	if c.localNode == "" {
 		c.localNode = defaultLocalNode
 	}
@@ -613,13 +617,6 @@ func (p *Platform) buildControlPlane() error {
 	resolver, _ := materializer.(function.ArtifactResolver)
 	// ...and lists an artifact's platforms for the placement gate (ADR-0145).
 	platforms, _ := materializer.(function.PlatformResolver)
-	// Secret injection (ADR-0057, F15 last mile): the reconciler resolves a function's bound
-	// Secrets into worker env via the PDP-authorized resolver (ADR-0022) over the same store +
-	// authorizer the control plane uses. DeveloperFor defaults to the namespace-scoped developer.
-	secretResolver, err := secrets.NewResolver(secrets.Deps{Store: c.store, Authorizer: c.authorizer, Logger: p.logger})
-	if err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), op, "build secrets resolver")
-	}
 	// A worker's fn-to-fn invoke (ADR-0064) forwards through the data-plane handler built below, so the local API's
 	// Invoker reaches it through a holder set once it exists.
 	dpHolder := &local.HandlerHolder{}
@@ -740,8 +737,8 @@ func (p *Platform) buildControlPlane() error {
 			p.logger.InfoContext(ctx, "moved blob seen lists from the KV into the event store", "count", moved)
 		}
 	}
-	// ADR-0309 Decision 3: the providers build their parts over the Platform's, kv, blob, sql and lake in list order, then
-	// invoke, whose links check reads the PDP; the Executor comes after them and the dependency check.
+	// ADR-0309 Decision 3: the other providers build their parts over the Platform's, kv, blob, sql and lake in list
+	// order, then invoke, whose links check reads the PDP; the Executor comes after them and the dependency check.
 	if err := p.kv.build(kvDeps{authz: cedarPDP, quota: p.checker, prober: p.prober, ctrl: ctrl}); err != nil {
 		return err
 	}
@@ -752,8 +749,8 @@ func (p *Platform) buildControlPlane() error {
 		events: es}); err != nil {
 		return err
 	}
-	if err := p.lake.build(lakeDeps{authz: cedarPDP, master: master, floor: p.floor, secrets: secretResolver, routes: edgeAgg,
-		s3: p.blob.injection, ctrl: ctrl}); err != nil {
+	if err := p.lake.build(lakeDeps{authz: cedarPDP, master: master, floor: p.floor, secrets: p.secrets.resolver,
+		routes: edgeAgg, s3: p.blob.injection, ctrl: ctrl}); err != nil {
 		return err
 	}
 	if err := p.invoke.build(invokeDeps{authz: cedarPDP}); err != nil {
@@ -768,15 +765,9 @@ func (p *Platform) buildControlPlane() error {
 		nestedCap = defaultNestedInFlightCap
 	}
 	invoker := local.NewNestedCapInvoker(local.NewInvoker(dpHolder), nestedCap, invokeMeter(c.telemetry))
-	// ADR-0249: ctx.secret reads each secret from funcd through the reconciler's PDP-checked resolver, on every read.
-	secretFacade, err := secretsvc.NewFacade(secretsvc.Deps{Store: c.store, Resolver: secretResolver})
-	if err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), op, "build secret facade")
-	}
-	// The Executor is built once the binding providers are: a worker's local API serves their facades, and the secret
-	// facade, which the Platform builds while secrets is a catalog entry.
-	if err := p.exec.build(execDeps{authz: cedarPDP, floor: p.floor, invoker: invoker, checks: deps, kv: p.kv.facade,
-		blob: p.blob.facade, sql: p.sql.facade, secrets: secretFacade}); err != nil {
+	// The Executor is built once the providers are: a worker's local API serves their facets, in list order (ADR-0310).
+	if err := p.exec.build(execDeps{authz: cedarPDP, floor: p.floor, invoker: invoker, checks: deps,
+		facets: p.facets()}); err != nil {
 		return err
 	}
 
@@ -821,7 +812,7 @@ func (p *Platform) buildControlPlane() error {
 		LakeMaster:           master, // ADR-0137: per-function lake token derivation (same master as S3)
 		LakeExtensionDir:     c.lakeExtensionDir,
 		LakeProxies:          p.lake.proxy,
-		Secrets:              secretResolver,
+		Secrets:              p.secrets.resolver,
 		Volumes:              p.exec.volumes,
 		VolumesDurable:       p.exec.volumes != nil && !c.functionVolumesEphemeral,
 		Hold:                 c.gate(),
@@ -1015,7 +1006,7 @@ func (p *Platform) buildControlPlane() error {
 	ctrl.Watches(v1.KindSecret.GVK(), appReconciler.MapSecret) // ADR-0213: a declared Secret created, changed or deleted
 	ctrl.Watches(v1.KindApp.GVK(), appReconciler.MapRequires)  // ADR-0219: an App's dependents and the Apps it requires
 	// ADR-0222: an app owner's backups, run with the platform's rights on the shared stores.
-	if err := p.registerWorkloadBackups(ctrl, secretResolver); err != nil {
+	if err := p.registerWorkloadBackups(ctrl, p.secrets.resolver); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build the workload backup reconcilers")
 	}
 	p.controller = ctrl

@@ -9,6 +9,7 @@ import (
 	"github.com/pyvvo/funcd/internal/lifecycle"
 	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/quota"
+	"github.com/pyvvo/funcd/internal/workernode/local"
 )
 
 // describer is a provider that names its own entries in the provider catalog (ADR-0082).
@@ -18,9 +19,9 @@ type describer interface {
 }
 
 // The shared hooks (ADR-0308): each returns a provider's part of a cross-cutting feature, which the Platform puts in
-// place in list order, as providerCatalog puts the descriptors. Quotas and Dependencies run once, while New builds the
-// platform, after the last store facade exists; Admissions runs when the control-plane chain is built and on every App
-// write. No hook runs at boot or at stop.
+// place in list order, as providerCatalog puts the descriptors. Quotas, Dependencies and Facet run once, while New
+// builds the platform, after the last store facade exists; Admissions runs when the control-plane chain is built and on
+// every App write. No hook runs at boot or at stop.
 
 // quotaHook is a provider whose stores a size quota caps: the quota Source of each kind it serves (ADR-0292).
 type quotaHook interface {
@@ -42,10 +43,17 @@ type dependencyHook interface {
 	Dependencies() []health.Binding
 }
 
+// facetHook is a provider whose binding a worker calls on its local API: its facet there (ADR-0310), which only
+// internal/workernode/local builds.
+type facetHook interface {
+	lifecycle.Provider
+	Facet() local.Facet // the zero Facet when the provider's facade is nil
+}
+
 // sharedHooks names the shared hooks in the boot log.
 func sharedHooks() []lifecycle.Hook {
 	return []lifecycle.Hook{lifecycle.Named[quotaHook]("quotas"), lifecycle.Named[admissionHook]("admissions"),
-		lifecycle.Named[dependencyHook]("dependencies")}
+		lifecycle.Named[dependencyHook]("dependencies"), lifecycle.Named[facetHook]("facets")}
 }
 
 // registerQuotas registers each provider's quota Sources in the Book.
@@ -71,6 +79,15 @@ func (p *Platform) dependencyChecks() []health.Binding {
 	var out []health.Binding
 	for _, h := range lifecycle.Each[dependencyHook](p.phases) {
 		out = append(out, h.Dependencies()...)
+	}
+	return out
+}
+
+// facets are the providers' facets of a worker's local API, in list order.
+func (p *Platform) facets() []local.Facet {
+	var out []local.Facet
+	for _, h := range lifecycle.Each[facetHook](p.phases) {
+		out = append(out, h.Facet())
 	}
 	return out
 }

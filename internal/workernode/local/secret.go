@@ -18,8 +18,12 @@ type Secrets interface {
 	Get(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, key string) (value string, found bool, err error)
 }
 
-// WithSecrets routes GET /secret and GET /secret/{key} to s (ADR-0249); without it there are no /secret routes.
-func WithSecrets(s Secrets) Option { return func(o *options) { o.secrets = s } }
+// SecretFacet serves GET /secret and GET /secret/{key} over s (ADR-0249).
+func SecretFacet(s Secrets) Facet {
+	return Facet{segment: "secret", register: func(mux facetMux, caller Ref, logger *slog.Logger) {
+		registerSecrets(mux, caller, s, logger)
+	}}
+}
 
 // secretKeys and secretValue are the bodies of GET /secret and GET /secret/{key}.
 type secretKeys struct {
@@ -32,7 +36,7 @@ type secretValue struct {
 
 // registerSecrets adds GET /secret and GET /secret/{key}, routed to s with the sandbox's fixed namespace and function.
 // A key no bound Secret holds is 404; a failed check is its problem document (403 on a deny). Values are never logged.
-func registerSecrets(mux *http.ServeMux, caller Ref, s Secrets, logger *slog.Logger) {
+func registerSecrets(mux facetMux, caller Ref, s Secrets, logger *slog.Logger) {
 	ns, fn := caller.Namespace, caller.Function
 	mux.HandleFunc("GET /secret", func(w http.ResponseWriter, r *http.Request) {
 		keys, err := s.List(r.Context(), ns, fn)

@@ -36,9 +36,9 @@ func (f *fakeSQL) Execute(_ context.Context, ns v1.NamespaceName, fn v1.ObjectNa
 func sqlHandler(s local.SQL) http.Handler {
 	opts := []local.Option{}
 	if s != nil {
-		opts = append(opts, local.WithSQL(s))
+		opts = append(opts, local.WithFacets(local.SQLFacet(s)))
 	}
-	return local.NewHandler(local.Ref{Namespace: "default", Function: "todo-api"}, nil, nil, nil, nil, nil, nil, nil, opts...)
+	return local.NewHandler(local.Ref{Namespace: "default", Function: "todo-api"}, nil, nil, nil, nil, nil, opts...)
 }
 
 func TestSQLRoutes(t *testing.T) {

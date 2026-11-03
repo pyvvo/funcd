@@ -30,8 +30,8 @@ import (
 
 // executor is the platform's Executor provider (ADR-0305): the runtime that runs every workload, and what it gives a
 // workload around it: the egress fence, the egress gateway and the DNS forwarder, the volumes, the local API sockets
-// that serve the binding providers' facades (ADR-0309 Decision 4), and the capture of its logs. The runtime and the
-// fence are the config's, so its hooks release them even when New failed before build.
+// that serve the providers' facets (ADR-0310), and the capture of its logs. The runtime and the fence are the config's,
+// so its hooks release them even when New failed before build.
 type executor struct {
 	cfg *config
 
@@ -61,17 +61,14 @@ var (
 	_ describer               = (*executor)(nil)
 )
 
-// execDeps are the parts the Executor is built over: the Platform's, and the facades of the binding providers and of
-// secrets, which a worker's local API serves.
+// execDeps are the parts the Executor is built over: the Platform's, and the providers' facets, which a worker's local
+// API serves.
 type execDeps struct {
 	authz   auth.Authorizer
 	floor   *quota.Floor
 	invoker local.Invoker           // a worker's fn-to-fn calls, through the data plane once it is built
 	checks  local.DependencyChecker // a worker's binding check (ADR-0215 Decision 3)
-	kv      local.KV
-	blob    local.Blob
-	sql     local.SQL
-	secrets local.Secrets
+	facets  []local.Facet
 }
 
 func (e *executor) Name() string { return "executor" }
@@ -83,12 +80,15 @@ func (e *executor) Descriptors() []provider.Descriptor {
 	}
 }
 
-// build builds the egress gateway and the DNS forwarder when egress is on (ADR-0117), the volumes (ADR-0262), the
-// local API sockets over the binding providers' facades, and the log sinks and compactor. It runs after the binding
-// providers are built, since a worker's local API serves their facades.
+// build checks the providers' facets before it opens anything (ADR-0310 Decision 4), then builds the egress gateway and
+// the DNS forwarder when egress is on (ADR-0117), the volumes (ADR-0262), the local API sockets over the facets, and
+// the log sinks and compactor. It runs after the providers are built, since a worker's local API serves their facets.
 func (e *executor) build(d execDeps) error {
 	const op = "funcd.New"
 	c := e.cfg
+	if err := local.CheckFacets(d.facets...); err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "check the providers' local API facets")
+	}
 	if c.egressGatewayEnabled {
 		e.buildEgress(d.authz)
 	}
@@ -106,8 +106,7 @@ func (e *executor) build(d execDeps) error {
 	if err := local.CheckDir(dir); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "invoke socket dir")
 	}
-	e.sockets = local.NewManager(dir, c.store, d.invoker, d.authz, d.kv, d.blob, d.checks, c.logger, local.WithSQL(d.sql),
-		local.WithSecrets(d.secrets))
+	e.sockets = local.NewManager(dir, c.store, d.invoker, d.authz, d.checks, c.logger, local.WithFacets(d.facets...))
 	return e.buildLogs(d.floor)
 }
 

@@ -231,6 +231,7 @@ func TestDependencyCheckReadsThePolicies(t *testing.T) {
 	}, 5*time.Second, 5*time.Millisecond)
 }
 
+// scenario: each-provider-serves-its-facet
 // scenario: a-forbidden-link-fails-the-dependency-check
 // A forbid Policy on a link's link::invoke is a Forbidden report naming the link (ADR-0215 Decision 3): the links check
 // asks the PDP that invoke's build keeps, and New builds invoke before the dependency check (ADR-0309 Decision 3).

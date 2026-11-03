@@ -17,6 +17,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
+// scenario: each-provider-serves-its-facet
 // scenario: a-worker-reaches-each-binding-on-its-local-api
 // scenario (e2e): blob-object-via-context-blob (ADR-0127) — the REAL native path: build the blob-object
 // handler, push it, apply it, then POST. The handler put/get/lists its BOUND, OWNED gold prefix through

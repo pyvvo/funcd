@@ -62,8 +62,8 @@ func secretFacade(t *testing.T, st store.Store, allow bool) *secretsvc.Facade {
 
 func secretHandler(t *testing.T, allow bool) http.Handler {
 	t.Helper()
-	return local.NewHandler(local.Ref{Namespace: "team-a", Function: "fn"}, nil, nil, nil, nil, nil, nil, nil,
-		local.WithSecrets(secretFacade(t, secretStore(t, "fn"), allow)))
+	return local.NewHandler(local.Ref{Namespace: "team-a", Function: "fn"}, nil, nil, nil, nil, nil,
+		local.WithFacets(local.SecretFacet(secretFacade(t, secretStore(t, "fn"), allow))))
 }
 
 // scenario: secret-read-from-funcd — GET /secret/{key} returns a bound Secret's value and GET /secret its sorted keys,
@@ -94,8 +94,8 @@ func TestSecretListWithNoBindingIsEmpty(t *testing.T) {
 	fn.Spec.Runtime, fn.Spec.Handler, fn.Spec.Image = "nodejs22", "handle", "file:///unused.mjs"
 	_, err := st.Create(context.Background(), fn)
 	require.NoError(t, err)
-	h := local.NewHandler(local.Ref{Namespace: "team-a", Function: "plain"}, nil, nil, nil, nil, nil, nil, nil,
-		local.WithSecrets(secretFacade(t, st, true)))
+	h := local.NewHandler(local.Ref{Namespace: "team-a", Function: "plain"}, nil, nil, nil, nil, nil,
+		local.WithFacets(local.SecretFacet(secretFacade(t, st, true))))
 
 	rec := do(t, h, http.MethodGet, "/secret", "")
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
@@ -122,7 +122,8 @@ func TestScenarioSecretPooledMember(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	st := secretStore(t, "a", "b")
-	m := local.NewManager(dir, st, nil, nil, nil, nil, nil, slog.New(slog.DiscardHandler), local.WithSecrets(secretFacade(t, st, true)))
+	m := local.NewManager(dir, st, nil, nil, nil, slog.New(slog.DiscardHandler),
+		local.WithFacets(local.SecretFacet(secretFacade(t, st, true))))
 	t.Cleanup(m.Close)
 	sock, err := m.PoolSocketFor("team-a", testPool, []v1.ObjectName{"a", "b"})
 	require.NoError(t, err)

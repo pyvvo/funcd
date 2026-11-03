@@ -42,7 +42,7 @@ func (d *fakeDeps) seen() []local.Ref {
 }
 
 func depsHandler(caller local.Ref, deps local.DependencyChecker) http.Handler {
-	return local.NewHandler(caller, &fakeResolver{}, fakeInvoker{}, nil, nil, nil, deps, slog.New(slog.DiscardHandler))
+	return local.NewHandler(caller, &fakeResolver{}, fakeInvoker{}, nil, deps, slog.New(slog.DiscardHandler))
 }
 
 // GET /health/dependencies answers the fixed caller's check: 200 when it passes, 503 with the report as JSON when it
@@ -92,7 +92,7 @@ func TestPoolSocketDependencies(t *testing.T) {
 		{Namespace: "team-a", Function: "b"}: {Kind: "blob", Binding: "files", Reason: "StorageUnreachable", Message: "down"},
 	}}
 	rec := &poolCalls{}
-	m := local.NewManager(dir, poolStore{rec}, poolInvoker{rec}, nil, nil, nil, deps, slog.New(slog.DiscardHandler))
+	m := local.NewManager(dir, poolStore{rec}, poolInvoker{rec}, nil, deps, slog.New(slog.DiscardHandler))
 	t.Cleanup(m.Close)
 	sock, err := m.PoolSocketFor("team-a", testPool, []v1.ObjectName{"a", "b"})
 	require.NoError(t, err)
