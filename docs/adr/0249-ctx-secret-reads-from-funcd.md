@@ -5,6 +5,9 @@
   #1099; Accepted (2026-10-19), after two judge rounds, under `adr-batch` with acceptance delegated by the decider: the
   judge kept `envresolve` unchanged for providers, made the denial scenario the namespace-level check it is, and stated
   the pool and the revision limits.
+- **Superseded in part by**: [ADR-0310](0310-each-provider-serves-its-own-local-api-facet.md) (2026-11-03) — Decision
+  1's "registered by `WithSecrets` like `WithSQL`" and `WithSecrets` in its Contracts: the secrets provider serves the
+  `secret` facet.
 - **Date**: 2026-10-19
 - **Deciders**: green-0-rabbit
 - **Tags**: secrets, shim, ctx, local-api, security

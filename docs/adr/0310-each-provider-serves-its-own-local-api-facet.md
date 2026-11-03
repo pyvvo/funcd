@@ -1,6 +1,7 @@
 # ADR-0310: Each provider serves its own facet of a worker's local API
 
-- **Status**: Proposed (2026-11-03; refined with the decider; judged in an independent session, every finding folded)
+- **Status**: Accepted (2026-11-03, by the decider, after refining it with them; judged twice in an independent
+  session, every finding folded)
 - **Date**: 2026-11-03
 - **Deciders**: green-0-rabbit
 - **Tags**: provider, local-api, architecture, refactor
