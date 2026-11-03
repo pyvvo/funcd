@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.36.1](https://github.com/pyvvo/funcd/compare/v0.36.0...v0.36.1) (2026-11-03)
+
+
+### Bug Fixes
+
+* **funcd:** a KVStore's quota caps the default in-memory KV driver too ([#1373](https://github.com/pyvvo/funcd/issues/1373)) ([374d09a](https://github.com/pyvvo/funcd/commit/374d09a783773e938c1264266ad00de95a822009))
+* **function:** a bound ConfigMap no longer replaces a solo worker's issued S3 key pair (ADR-0306) ([c737d1c](https://github.com/pyvvo/funcd/commit/c737d1cf6d286a6e7a163dd72be4136768b6ec19))
+
 ## [0.36.0](https://github.com/pyvvo/funcd/compare/v0.35.0...v0.36.0) (2026-10-31)
 
 
