@@ -39,8 +39,14 @@
 #   D15 a crash-looping funcd starts held, then stops with status 70 naming the restore (ADR-0207 safe mode);
 #   D16 funcd restore blob --at on the S3 store, to a key's earlier version and to before the key existed; D17 the App swaps a restored copy in through ref, and its Backups
 #       outlive it until their ttl (ADR-0208, ADR-0222).
-#   D18 the App's backup copies its DuckLake catalog, empty before its first checkpoint, and a Restore into an empty
-#       prefix gives a lake a new Lake serves (ADR-0222 Decisions 4, 5, 7).
+#   D18 a new lake is an empty member of the App's backup until its first commit (ADR-0222 Decisions 4, 5, 7).
+#   B1-B12 a Bucket and its Lake, with real rows on real engines, through Function todo-lake-sql (ADR-0312): a Bucket's
+#       schedule takes its Lake as its own member, and the App's Backup stores it once; a Restore of the Bucket, in place or
+#       as another, leaves its Lakes; the Lake, alone or with the Bucket in either order, gives the Backup's rows on a new
+#       engine, through a commit and a restart; a load skips a prefix a Lake took later; a Lake gone is in its Bucket's copy; a
+#       Lake off its own prefix is held; a catalog no Lake owns is the Bucket's; a Lake with no catalog keeps its files; a Lake
+#       asLocation on a Bucket in place is refused; and a target killed, or funcd stopped, in the middle of a load keeps the
+#       hold (ADR-0228).
 #   Q1-Q6 version 1.2.0, whose todos and upload records live in SQLDatabase todo-db: its pre-hook migrates the database
 #       and copies them from KV before the SQL API serves; done, a filter, counts and a join; an upload the 1.2.0 intake
 #       records in SQL; a new row that fires the App's sql EventSource, whose Sensor records it in KV; the App's backup
@@ -56,7 +62,7 @@
 #       since the developer token is scoped to default.
 # The suite pushes, locks and deploys the App itself; the lane only creates the Secret and the grant beside it. Every
 # file it applies comes from funcd-functions, staged by scripts/lanes.yaml.
-name: app-todo — the todo App from its pushed template on real containerd (ADR-0199/0200/0211-0215/0217-0220/0226/0229), a disaster-recovery drill (ADR-0202-0209/0222/0223), version 1.2.0 on rqlite (ADR-0233-0236), and runtime configuration of a Site (ADR-0239)
+name: app-todo — the todo App from its pushed template on real containerd (ADR-0199/0200/0211-0215/0217-0220/0226/0229), a disaster-recovery drill (ADR-0202-0209/0222/0223/0293/0312), version 1.2.0 on rqlite (ADR-0233-0236), and runtime configuration of a Site (ADR-0239)
 
 vars:
   dp: http://127.0.0.1:8081
@@ -81,18 +87,19 @@ testcases:
             for f in planner:todo-planner:1.0.0 rank:todo-rank:1.0.0 warm:todo-warm:1.0.0 intake:todo-intake:1.0.0 stats:todo-stats:1.0.0; do
               funcdctl push functions/py/dist/${f%%:*} {{.reg}}/${f#*:}
             done
+            funcdctl push functions/py-lake/dist/lake_sql {{.reg}}/todo-lake-sql:1.0.0
             funcdctl push --site web {{.reg}}/todo-web:1.0.0' | grep -c "@sha256:"
         info: "pushed → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldEqual 11
+          - result.systemout ShouldEqual 12
       - type: exec
         script: |
           {{.fctl}} app lock /opt/lane/app -f /opt/lane/values/e2e.yaml | grep -E '^[a-z]+ 1[.]0[.]0 sha256:[0-9a-f]{64}$' | cut -d' ' -f1 | paste -sd, -
         info: "app.lock → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldEqual api,collect,intake,migrate,planner,rank,stats,warm,web
+          - result.systemout ShouldEqual api,collect,intake,lakesql,migrate,planner,rank,stats,warm,web
       - type: exec
         script: "{{.fctl}} push --template /opt/lane/app {{.reg}}/todo:1.0.0"
         info: "template → {{.result.systemout}} {{.result.systemerr}}"
@@ -1989,13 +1996,11 @@ testcases:
           - result.systemout ShouldContainSubstring "short gone"
           - result.systemout ShouldContainSubstring "long kept"
 
-  # ADR-0222 Decisions 4, 5 and 7: the App's backups copy a DuckLake catalog it owns (files first, catalog.db last),
-  # and a Restore puts the lake into an empty bucket prefix, which a new Lake then serves. The engine
-  # checkpoints catalog.db only at shutdown (the per-commit checkpoint of ADR-0086 is #998), so a new lake is an
-  # empty member until then, and the stores beside it are still backed up (#996). The case writes no table: a write
-  # needs a Quack client in the lane, so the lake it copies holds no data file. It restarts funcd on the local
-  # blob store with the S3 gateway and the lake proxy, and deploys the App again, which D17 deleted.
-  - name: D18 the App's backup copies its DuckLake catalog, empty before its first checkpoint, and a Restore into an empty prefix gives a lake a new Lake serves
+  # ADR-0222 Decisions 4, 5 and 7: a new lake is an empty member until its first commit, and the stores beside it are still
+  # backed up (#996). The case restarts funcd on the local blob store with the S3 gateway and the lake proxy, and deploys the
+  # App again, which D17 deleted. Rows R1 then go through Function todo-lake-sql, which runs SQL over Quack as lake-reader does
+  # in the duckdb lane: table notes stays inlined in the catalog, and events, past DuckLake's inlining limit, has a Parquet file.
+  - name: D18 a lake is an empty member of the App's backup until its first commit, and its rows are then saved
     steps:
       - type: exec
         script: |
@@ -2020,14 +2025,13 @@ testcases:
           - result.systemout ShouldContainSubstring DEPLOYED
       - type: exec
         script: |
-          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
-            funcdctl get lake todo-lake -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get lake todo-lake -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
         retry: 60
-        delay: 3
+        delay: 2
         info: "lake todo-lake → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.systemout ShouldMatchRegex phase.{1,4}Ready
-      # Before any checkpoint: a Backup succeeds, with the stores' parts and no part of the lake.
+      # Before the first commit: a Backup succeeds, with the stores' parts and no part of the lake.
       - type: exec
         script: |
           {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
@@ -2044,55 +2048,191 @@ testcases:
             ls $d/lake 2>/dev/null | grep -q . && echo "LAKE FILES" || echo "LAKE EMPTY"'
         retry: 60
         delay: 3
-        info: "a Backup before the first checkpoint → {{.result.systemout}} {{.result.systemerr}}"
+        info: "a Backup before the first commit → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.systemout ShouldNotContainSubstring CHECKPOINTED
           - result.systemout ShouldContainSubstring "STORES COPIED"
           - result.systemout ShouldContainSubstring "LAKE LISTED"
           - result.systemout ShouldContainSubstring "LAKE EMPTY"
-      # A SIGTERM to the engine alone, as a sandbox stop sends it, makes it checkpoint its catalog file while funcd serves.
+      # The first commits save the catalog before they answer (ADR-0279).
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"CREATE TABLE IF NOT EXISTS lakehouse.notes (id INTEGER, label VARCHAR)"}}'
+        retry: 30
+        delay: 2
+        info: "create notes → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"INSERT INTO lakehouse.notes VALUES (1, ''backed-up''), (2, ''backed-up''), (3, ''backed-up'')"}}'
+        info: "the rows of notes → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"CREATE TABLE lakehouse.events AS SELECT range AS id FROM range(1000)"}}'
+        info: "create events → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
       - type: exec
         script: |
           {{.vmsh}} '
-            t=$({{.ctr}} task ls | awk "\$1 ~ /^todo-lake-r[0-9]+$/ && \$3 == \"RUNNING\" {print \$1}" | head -1)
-            echo "engine $t" >&2
-            [ -n "$t" ] && {{.ctr}} task kill -s SIGTERM "$t"
-            for i in $(seq 30); do
-              find /var/lib/funcd/data/blob -path "*/todo-lakehouse/lake/_ducklake/catalog.db" -type f | grep -q . && break
-              sleep 1
-            done
-            find /var/lib/funcd/data/blob -path "*/todo-lakehouse/lake/_ducklake/catalog.db" -type f | grep -q . && echo CHECKPOINTED
-            echo $(( $(date +%s) / 60 )) >/root/lake-minute'
-        info: "the engine's checkpoint → {{.result.systemout}} {{.result.systemerr}}"
+            cd /var/lib/funcd/data/blob
+            test -f lake-catalogs/default/todo-lakehouse/lake/_ducklake/catalog.db && echo CHECKPOINTED
+            echo "notes=$(find s3/default/todo-lakehouse/lake -path "*/notes/*.parquet" -type f | wc -l)."
+            echo "events=$(find s3/default/todo-lakehouse/lake -path "*/events/*.parquet" -type f | wc -l)."'
+        info: "the lake's files → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.systemout ShouldContainSubstring CHECKPOINTED
+          - result.systemout ShouldContainSubstring "notes=0."
+          - result.systemout ShouldContainSubstring "events=1."
+
+  # Block B: ADR-0312, on a real engine with real rows. Each case leaves todo-lake running and the namespace unheld.
+  # Decisions 2 and 3: each byte of a Bucket's data is in one member. The later Restores of the block read this Backup, which
+  # holds rows R1 and the plain object at v1. The sealed file's size shows what it holds; B5's Restore as another shows the rest.
+  - name: B1 a schedule naming only the Bucket lists its Lake as its own member, and the Bucket's copy holds no Lake file
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"put":{"key":"note.txt","content":"v1"}}}'
+        retry: 30
+        delay: 2
+        info: "a plain object beside the Lake → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
       - type: exec
         script: |
-          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
-            m=$(cat /root/lake-minute)
-            for b in $(funcdctl get backups -n default | grep -E "^todo-backup-[0-9]+$" | sort); do
-              [ "${b#todo-backup-}" -gt "$m" ] || continue
-              funcdctl get backup $b -n default -o json | grep -qE "\"phase\": *\"Succeeded\"" && echo $b
-            done | tail -1 | grep . | tee /root/lake-backup'
-        retry: 60
-        delay: 3
-        info: "a Backup after the checkpoint → {{.result.systemout}} {{.result.systemerr}}"
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/SCHEDULE/todo-lakehouse-only/; s/BUCKET/todo-lakehouse/" /opt/lane/dr/schedule-of-bucket.yaml | funcdctl apply -f -'
+        info: "apply the schedule → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
-          - result.systemout ShouldMatchRegex "^todo-backup-[0-9]+$"
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/NAME/todo-lakehouse-b1/; s/SCHEDULE/todo-lakehouse-only/" /opt/lane/dr/backup-by-hand.yaml | funcdctl apply -f -'
+        info: "apply Backup todo-lakehouse-b1 → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get backup todo-lakehouse-b1 -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 45
+        delay: 1
+        info: "backup todo-lakehouse-b1 → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Succeeded
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get backup todo-lakehouse-b1 -n default -o json | python3 -c "import json,sys; print(\" \".join(m[\"kind\"] + \"/\" + m[\"name\"] for m in json.load(sys.stdin)[\"status\"][\"members\"]))"'
+        info: "the members of todo-lakehouse-b1 → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldEqual "Bucket/todo-lakehouse Lake/todo-lake"
       - type: exec
         script: |
           {{.vmsh}} '
-            d=$(ls -d /var/lib/vgw/data/todo-workload/default/$(cat /root/lake-backup)-*)
+            d=$(ls -d /var/lib/vgw/data/todo-workload/default/todo-lakehouse-b1-*)
+            ls -d $d/lake/todo-lake/*/files $d/lake/todo-lake/*/catalog.db >/dev/null && echo "LAKE FILES AND CATALOG"
+            [ "$(stat -c %s $d/blob/todo-lakehouse/part-00000)" -lt 2000 ] && echo "ONLY A PLAIN OBJECT"
+            ls -d $d/blob/todo-lakehouse/catalogs 2>/dev/null || echo "NO CATALOG"'
+        info: "the Backup on the target → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "LAKE FILES AND CATALOG"
+          - result.systemout ShouldContainSubstring "ONLY A PLAIN OBJECT"
+          - result.systemout ShouldContainSubstring "NO CATALOG"
+
+  # ADR-0222 Decisions 4, 5 and 7, ADR-0312 Decision 2: the App's copy holds the catalog once, in the Lake's member (files first,
+  # catalog.db last), and a Restore puts the lake into an empty bucket prefix, which a new Lake then serves (Decision 10).
+  - name: B2 the App's Backup stores the Lake once, and a Lake on the restored prefix answers its rows
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/NAME/todo-lake-rows/; s/SCHEDULE/todo-backup/" /opt/lane/dr/backup-by-hand.yaml | funcdctl apply -f -'
+        info: "apply Backup todo-lake-rows → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get backup todo-lake-rows -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 45
+        delay: 1
+        info: "backup todo-lake-rows → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Succeeded
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            d=$(ls -d /var/lib/vgw/data/todo-workload/default/todo-lake-rows-*)
             ls -d $d/lake/todo-lake/*/catalog.db >/dev/null && echo "LAKE COPIED"
-            echo "sealed=$(find $d/lake/todo-lake -path "*catalog.db*" -type f | head -1 | xargs head -c 21)."'
+            echo "sealed=$(find $d/lake/todo-lake -path "*catalog.db*" -type f | head -1 | xargs head -c 21)."
+            c=$(stat -c %s /var/lib/funcd/data/blob/lake-catalogs/default/todo-lakehouse/lake/_ducklake/catalog.db)
+            [ "$(stat -c %s $d/lake/todo-lake/*/catalog.db/part-00000)" -ge "$c" ] && echo "CATALOG IN THE LAKE MEMBER"
+            [ "$(stat -c %s $d/blob/todo-lakehouse/part-00000)" -lt 2000 ] && echo "NOT IN THE BUCKET MEMBER"'
         info: "the lake on the target → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.systemout ShouldContainSubstring "LAKE COPIED"
           - result.systemout ShouldContainSubstring "sealed=age-encryption.org/v1."
+          - result.systemout ShouldContainSubstring "CATALOG IN THE LAKE MEMBER"
+          - result.systemout ShouldContainSubstring "NOT IN THE BUCKET MEMBER"
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"INSERT INTO lakehouse.notes VALUES (4, ''after-the-first-backup'')"}}'
+        info: "one more row → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"INSERT INTO lakehouse.events SELECT range + 1000 FROM range(1000)"}}'
+        info: "more events → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/NAME/todo-lake-rows-2/; s/SCHEDULE/todo-backup/" /opt/lane/dr/backup-by-hand.yaml | funcdctl apply -f -'
+        info: "apply Backup todo-lake-rows-2 → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get backup todo-lake-rows-2 -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 45
+        delay: 1
+        info: "backup todo-lake-rows-2 → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Succeeded
       - type: exec
         script: |
           {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
-            sed "s/BACKUP/$(cat /root/lake-backup)/" /opt/lane/dr/restore-lake.yaml | funcdctl apply -f -'
+            set -- $(funcdctl get backup todo-lake-rows -n default -o json | python3 -c "import json,sys; print(\" \".join(str(m[\"bytes\"]) for m in json.load(sys.stdin)[\"status\"][\"members\"] if m[\"name\"] in (\"todo-lakehouse\", \"todo-lake\")))")
+            b1=$1 l1=$2
+            set -- $(funcdctl get backup todo-lake-rows-2 -n default -o json | python3 -c "import json,sys; print(\" \".join(str(m[\"bytes\"]) for m in json.load(sys.stdin)[\"status\"][\"members\"] if m[\"name\"] in (\"todo-lakehouse\", \"todo-lake\")))")
+            echo "bucket $b1 then $1, lake $l1 then $2" >&2
+            [ "$1" = "$b1" ] && echo "BUCKET THE SAME"
+            [ "$2" -gt "$l1" ] && echo "LAKE GREW"'
+        info: "the members' bytes → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "BUCKET THE SAME"
+          - result.systemout ShouldContainSubstring "LAKE GREW"
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/BACKUP/todo-lake-rows-2/" /opt/lane/dr/restore-lake.yaml | funcdctl apply -f -'
         info: "apply todo-lake-back → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
@@ -2110,19 +2250,1613 @@ testcases:
           - result.systemout ShouldContainSubstring "LAKE RESTORED"
       - type: exec
         script: |
-          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl apply -f /opt/lane/dr/lake-copy.yaml'
-        info: "apply todo-lake-r → {{.result.systemout}} {{.result.systemerr}}"
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl apply -f /opt/lane/dr/lake-copy.yaml && sed "s/LAKE/todo-lake-r/g" /opt/lane/dr/lake-sql.yaml | funcdctl apply -f -'
+        info: "apply todo-lake-r and its Function → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get lake todo-lake-r -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 60
+        delay: 2
+        info: "lake todo-lake-r → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Ready
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-r-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT id, label FROM lakehouse.notes ORDER BY id"}}'
+        retry: 30
+        delay: 2
+        info: "notes on the copy → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '[[1,"backed-up"],[2,"backed-up"],[3,"backed-up"],[4,"after-the-first-backup"]]'
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-r-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT count(*), sum(id) FROM lakehouse.events"}}'
+        info: "events on the copy → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '[[2000,1999000]]'
+
+  # ADR-0312 Decisions 4 and 9: the members' order does not matter, and a new engine reads the restored catalog.
+  - name: B3 the Bucket and the Lake in place, in both orders, give the Backup's rows and object
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"INSERT INTO lakehouse.notes VALUES (6, ''after-the-backup'')"}}'
+        retry: 30
+        delay: 2
+        info: "a row after the Backup → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"CREATE TABLE IF NOT EXISTS lakehouse.later AS SELECT range AS id FROM range(1000)"}}'
+        info: "a table after the Backup → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"put":{"key":"note.txt","content":"v3"}}}'
+        info: "the object changed → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; funcdctl apply -f /opt/lane/dr/restore-lake-then-bucket-in-place.yaml'
+        info: "apply todo-lake-bucket-back, Lake first → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; funcdctl get restore todo-lake-bucket-back -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 45
+        delay: 1
+        info: "restore todo-lake-bucket-back → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Succeeded
+      - type: exec
+        script: |
+          {{.vmsh}} 'echo "note=$(cat /var/lib/funcd/data/blob/s3/default/todo-lakehouse/docs/note.txt)."'
+        info: "the object → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "note=v1."
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT id, label FROM lakehouse.notes ORDER BY id"}}'
+        retry: 30
+        delay: 2
+        info: "notes, Lake first → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '[[1,"backed-up"],[2,"backed-up"],[3,"backed-up"]]'
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT count(*), sum(id) FROM lakehouse.events"}}'
+        info: "events, Lake first → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '[[1000,499500]]'
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT count(*) FROM lakehouse.later"}}'
+        info: "the table after the Backup, Lake first → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 500
+          - result.body ShouldContainSubstring "does not exist"
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"INSERT INTO lakehouse.notes VALUES (7, ''after-the-backup'')"}}'
+        retry: 30
+        delay: 2
+        info: "a row after the Backup → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"CREATE TABLE IF NOT EXISTS lakehouse.later AS SELECT range AS id FROM range(1000)"}}'
+        info: "a table after the Backup → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"put":{"key":"note.txt","content":"v4"}}}'
+        info: "the object changed → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; funcdctl apply -f /opt/lane/dr/restore-bucket-then-lake-in-place.yaml'
+        info: "apply todo-bucket-lake-back, Bucket first → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; funcdctl get restore todo-bucket-lake-back -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 45
+        delay: 1
+        info: "restore todo-bucket-lake-back → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Succeeded
+      - type: exec
+        script: |
+          {{.vmsh}} 'echo "note=$(cat /var/lib/funcd/data/blob/s3/default/todo-lakehouse/docs/note.txt)."'
+        info: "the object → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "note=v1."
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT id, label FROM lakehouse.notes ORDER BY id"}}'
+        retry: 30
+        delay: 2
+        info: "notes, Bucket first → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '[[1,"backed-up"],[2,"backed-up"],[3,"backed-up"]]'
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT count(*), sum(id) FROM lakehouse.events"}}'
+        info: "events, Bucket first → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '[[1000,499500]]'
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT count(*) FROM lakehouse.later"}}'
+        info: "the table after the Backup, Bucket first → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 500
+          - result.body ShouldContainSubstring "does not exist"
+
+  # ADR-0312 Decision 4. No API writes an object under a prefix that a Lake owns next, so the case plants it where a Put
+  # writes in the local blob store.
+  - name: B4 a Bucket's load skips an object under a prefix a Lake took after the copy, and that Lake's rows stay
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            set -e
+            sed "s/BUCKET/todo-takeover/" /opt/lane/dr/bucket-of-prefix.yaml | funcdctl apply -f -
+            sed "s/SCHEDULE/todo-takeover-only/; s/BUCKET/todo-takeover/" /opt/lane/dr/schedule-of-bucket.yaml | funcdctl apply -f -
+            install -d /var/lib/funcd/data/blob/s3/default/todo-takeover/gold
+            printf v1 >/var/lib/funcd/data/blob/s3/default/todo-takeover/gold/old.txt'
+        info: "a Bucket with a plain object on a prefix no Lake owns → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/NAME/todo-takeover-b1/; s/SCHEDULE/todo-takeover-only/" /opt/lane/dr/backup-by-hand.yaml | funcdctl apply -f -'
+        info: "apply Backup todo-takeover-b1 → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get backup todo-takeover-b1 -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 45
+        delay: 1
+        info: "backup todo-takeover-b1 → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Succeeded
+      # The Lake takes the prefix after the copy. The object goes, so that a load that wrote it would show.
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            set -e
+            sed "s/BUCKET/todo-takeover/; s/LAKE/todo-takeover-lake/" /opt/lane/dr/bucket-with-lake.yaml | funcdctl apply -f -
+            sed "s/LAKE/todo-takeover-lake/; s/BUCKET/todo-takeover/; s/PREFIX/gold/" /opt/lane/dr/lake-on-prefix.yaml | funcdctl apply -f -
+            sed "s/LAKE/todo-takeover-lake/g" /opt/lane/dr/lake-sql.yaml | funcdctl apply -f -
+            rm -f /var/lib/funcd/data/blob/s3/default/todo-takeover/gold/old.txt'
+        info: "the Lake takes the prefix → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get lake todo-takeover-lake -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 60
+        delay: 2
+        info: "lake todo-takeover-lake → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Ready
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-takeover-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"CREATE TABLE IF NOT EXISTS lakehouse.rows AS SELECT range AS id FROM range(1000)"}}'
+        retry: 30
+        delay: 2
+        info: "that Lake's rows → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            {{.ctr}} task ls | awk "\$1 ~ /^todo-takeover-lake-r[0-9]+$/ && \$3 == \"RUNNING\" {print \$2}" | head -1 >/root/takeover-engine-pid
+            sha256sum /var/lib/funcd/data/blob/lake-catalogs/default/todo-takeover/gold/_ducklake/catalog.db | cut -d" " -f1 >/root/takeover-catalog-sum'
+        info: "its engine and catalog before → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; sed "s/NAME/todo-takeover-back/; s/BACKUP/todo-takeover-b1/; s/BUCKET/todo-takeover/" /opt/lane/dr/restore-bucket-in-place.yaml | funcdctl apply -f -'
+        info: "apply todo-takeover-back → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; funcdctl get restore todo-takeover-back -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 45
+        delay: 1
+        info: "restore todo-takeover-back → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Succeeded
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            test -e /var/lib/funcd/data/blob/s3/default/todo-takeover/gold/old.txt || echo "OBJECT SKIPPED"
+            [ "$({{.ctr}} task ls | awk "\$1 ~ /^todo-takeover-lake-r[0-9]+$/ && \$3 == \"RUNNING\" {print \$2}" | head -1)" = "$(cat /root/takeover-engine-pid)" ] && echo "SAME ENGINE"
+            [ "$(sha256sum /var/lib/funcd/data/blob/lake-catalogs/default/todo-takeover/gold/_ducklake/catalog.db | cut -d" " -f1)" = "$(cat /root/takeover-catalog-sum)" ] && echo "CATALOG KEPT"'
+        info: "the prefix after the Restore → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "OBJECT SKIPPED"
+          - result.systemout ShouldContainSubstring "SAME ENGINE"
+          - result.systemout ShouldContainSubstring "CATALOG KEPT"
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-takeover-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT count(*), sum(id) FROM lakehouse.rows"}}'
+        info: "that Lake's rows after the Restore → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '[[1000,499500]]'
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            funcdctl delete function todo-takeover-lake-sql -n default >/dev/null
+            funcdctl delete lake todo-takeover-lake -n default >/dev/null
+            echo CLEANED'
+        info: "the case's Lake and Function go → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring CLEANED
+
+  # ADR-0312 Decisions 2, 4 and 10.
+  - name: B5 a Bucket restored as another brings only its object, and a catalog no Lake owns comes with its Bucket
+    steps:
+      # As an empty Bucket: only the object, and no catalog.
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            set -e
+            sed "s/BUCKET/todo-lakehouse-c/" /opt/lane/dr/bucket-of-prefix.yaml | funcdctl apply -f -
+            sed "s/NAME/todo-lakehouse-copy/; s/BACKUP/todo-lakehouse-b1/; s/BUCKET/todo-lakehouse/; s/TARGET/todo-lakehouse-c/" /opt/lane/dr/restore-bucket-as.yaml | funcdctl apply -f -'
+        info: "apply todo-lakehouse-copy → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get restore todo-lakehouse-copy -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 45
+        delay: 1
+        info: "restore todo-lakehouse-copy → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Succeeded
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            cd /var/lib/funcd/data/blob
+            echo "note=$(cat s3/default/todo-lakehouse-c/docs/note.txt)."
+            echo "others=$(find s3/default/todo-lakehouse-c -type f ! -path "*/docs/*" | wc -l)."
+            ls -d lake-catalogs/default/todo-lakehouse-c 2>/dev/null || echo "NO CATALOG"'
+        info: "the copy → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "note=v1."
+          - result.systemout ShouldContainSubstring "others=0."
+          - result.systemout ShouldContainSubstring "NO CATALOG"
+      # As a Bucket whose own Lake holds rows: the object arrives, and that Lake stays. A second load then finds the object.
+      - type: exec
+        script: |
+          {{.vmsh}} '{{.ctr}} task ls | awk "\$1 ~ /^todo-lake-r-r[0-9]+$/ && \$3 == \"RUNNING\" {print \$2}" | head -1 >/root/lake-r-engine-pid'
+        info: "the copy's engine before → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/NAME/todo-lakehouse-into-r/; s/BACKUP/todo-lakehouse-b1/; s/BUCKET/todo-lakehouse/; s/TARGET/todo-lakehouse-r/" /opt/lane/dr/restore-bucket-as.yaml | funcdctl apply -f -'
+        info: "apply todo-lakehouse-into-r → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get restore todo-lakehouse-into-r -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 45
+        delay: 1
+        info: "restore todo-lakehouse-into-r → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Succeeded
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            echo "note=$(cat /var/lib/funcd/data/blob/s3/default/todo-lakehouse-r/docs/note.txt)."
+            [ "$({{.ctr}} task ls | awk "\$1 ~ /^todo-lake-r-r[0-9]+$/ && \$3 == \"RUNNING\" {print \$2}" | head -1)" = "$(cat /root/lake-r-engine-pid)" ] && echo "SAME ENGINE"'
+        info: "the object and the engine → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "note=v1."
+          - result.systemout ShouldContainSubstring "SAME ENGINE"
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/NAME/todo-lakehouse-into-r-again/; s/BACKUP/todo-lakehouse-b1/; s/BUCKET/todo-lakehouse/; s/TARGET/todo-lakehouse-r/" /opt/lane/dr/restore-bucket-as.yaml | funcdctl apply -f -'
+        info: "apply todo-lakehouse-into-r-again → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get restore todo-lakehouse-into-r-again -n default -o json'
+        retry: 30
+        delay: 1
+        info: "Restore todo-lakehouse-into-r-again → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex "phase.{1,4}Failed"
+          - result.systemout ShouldContainSubstring NotEmpty
+      # A Lake asLocation where a Lake is located: that path takes no hold, so no engine may stop there (Decision 10).
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/NAME/todo-lake-onto-r/; s/BACKUP/todo-lakehouse-b1/; s/LAKE/todo-lake/; s/BUCKET/todo-lakehouse-r/; s/PREFIX/lake/" /opt/lane/dr/restore-lake-as-location.yaml | funcdctl apply -f -'
+        info: "apply todo-lake-onto-r → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get restore todo-lake-onto-r -n default -o json'
+        retry: 30
+        delay: 1
+        info: "Restore todo-lake-onto-r → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex "phase.{1,4}Failed"
+          - result.systemout ShouldContainSubstring NotEmpty
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-r-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT id, label FROM lakehouse.notes ORDER BY id"}}'
+        info: "that Lake's notes → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '[[1,"backed-up"],[2,"backed-up"],[3,"backed-up"],[4,"after-the-first-backup"]]'
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-r-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT count(*), sum(id) FROM lakehouse.events"}}'
+        info: "that Lake's events → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '[[2000,1999000]]'
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            funcdctl delete function todo-lake-r-sql -n default >/dev/null
+            funcdctl delete lake todo-lake-r -n default >/dev/null
+            echo CLEANED'
+        info: "the case's Lake and Function go → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring CLEANED
+      # A Lake restored on a prefix no Lake owns is the Bucket's: its files and catalog, in blob/<name>/catalogs/, come back with
+      # the Bucket as another, and a Lake on that prefix then answers its rows.
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            set -e
+            sed "s/BUCKET/todo-plain/" /opt/lane/dr/bucket-of-prefix.yaml | funcdctl apply -f -
+            sed "s/SCHEDULE/todo-plain-only/; s/BUCKET/todo-plain/" /opt/lane/dr/schedule-of-bucket.yaml | funcdctl apply -f -
+            sed "s/NAME/todo-plain-fill/; s/BACKUP/todo-lake-rows/; s/LAKE/todo-lake/; s/BUCKET/todo-plain/; s/PREFIX/gold/" /opt/lane/dr/restore-lake-as-location.yaml | funcdctl apply -f -'
+        info: "a Lake restored on a prefix no Lake owns → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get restore todo-plain-fill -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 45
+        delay: 1
+        info: "restore todo-plain-fill → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Succeeded
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/NAME/todo-plain-b1/; s/SCHEDULE/todo-plain-only/" /opt/lane/dr/backup-by-hand.yaml | funcdctl apply -f -'
+        info: "apply Backup todo-plain-b1 → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get backup todo-plain-b1 -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 45
+        delay: 1
+        info: "backup todo-plain-b1 → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Succeeded
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get backup todo-plain-b1 -n default -o json | python3 -c "import json,sys; print(\" \".join(m[\"kind\"] + \"/\" + m[\"name\"] for m in json.load(sys.stdin)[\"status\"][\"members\"]))"'
+        info: "the members of todo-plain-b1 → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldEqual "Bucket/todo-plain"
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            d=$(ls -d /var/lib/vgw/data/todo-workload/default/todo-plain-b1-*)
+            [ "$(stat -c %s $d/blob/todo-plain/catalogs/part-00000)" -ge "$(stat -c %s /var/lib/funcd/data/blob/lake-catalogs/default/todo-plain/gold/_ducklake/catalog.db)" ] && echo "CATALOG IN THE BUCKET MEMBER"'
+        info: "the Backup on the target → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "CATALOG IN THE BUCKET MEMBER"
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            set -e
+            sed "s/BUCKET/todo-plain-c/" /opt/lane/dr/bucket-of-prefix.yaml | funcdctl apply -f -
+            sed "s/NAME/todo-plain-copy/; s/BACKUP/todo-plain-b1/; s/BUCKET/todo-plain/; s/TARGET/todo-plain-c/" /opt/lane/dr/restore-bucket-as.yaml | funcdctl apply -f -'
+        info: "apply todo-plain-copy → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get restore todo-plain-copy -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 45
+        delay: 1
+        info: "restore todo-plain-copy → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Succeeded
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            set -e
+            sed "s/BUCKET/todo-plain-c/; s/LAKE/todo-plain-lake/" /opt/lane/dr/bucket-with-lake.yaml | funcdctl apply -f -
+            sed "s/LAKE/todo-plain-lake/; s/BUCKET/todo-plain-c/; s/PREFIX/gold/" /opt/lane/dr/lake-on-prefix.yaml | funcdctl apply -f -
+            sed "s/LAKE/todo-plain-lake/g" /opt/lane/dr/lake-sql.yaml | funcdctl apply -f -'
+        info: "a Lake on that prefix of the copy → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get lake todo-plain-lake -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 60
+        delay: 2
+        info: "lake todo-plain-lake → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Ready
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-plain-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT id, label FROM lakehouse.notes ORDER BY id"}}'
+        retry: 30
+        delay: 2
+        info: "its notes → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '[[1,"backed-up"],[2,"backed-up"],[3,"backed-up"]]'
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-plain-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT count(*), sum(id) FROM lakehouse.events"}}'
+        info: "its events → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '[[1000,499500]]'
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            funcdctl delete function todo-plain-lake-sql -n default >/dev/null
+            funcdctl delete lake todo-plain-lake -n default >/dev/null
+            echo CLEANED'
+        info: "the case's Lake and Function go → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring CLEANED
+
+  # ADR-0312 Decisions 1, 2 and 4: a Lake prefix is one whose owner Lake exists and is located on it, and a Bucket's Restore also
+  # leaves a prefix whose owner Lake is gone.
+  - name: B6 a Lake removed while its Bucket stays is in the Bucket's copy, a rewind keeps its prefix, and its rows answer again
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            set -e
+            sed "s/BUCKET/todo-gone/; s/LAKE/todo-gone-lake/" /opt/lane/dr/bucket-with-lake.yaml | funcdctl apply -f -
+            sed "s/SCHEDULE/todo-gone-only/; s/BUCKET/todo-gone/" /opt/lane/dr/schedule-of-bucket.yaml | funcdctl apply -f -
+            sed "s/LAKE/todo-gone-lake/; s/BUCKET/todo-gone/; s/PREFIX/gold/" /opt/lane/dr/lake-on-prefix.yaml | funcdctl apply -f -
+            sed "s/LAKE/todo-gone-lake/g" /opt/lane/dr/lake-sql.yaml | funcdctl apply -f -'
+        info: "a Bucket and its Lake → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get lake todo-gone-lake -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 60
+        delay: 2
+        info: "lake todo-gone-lake → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Ready
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-gone-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"CREATE TABLE IF NOT EXISTS lakehouse.g AS SELECT range AS id FROM range(2000)"}}'
+        retry: 30
+        delay: 2
+        info: "its rows → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      # The Lake is removed while its Bucket stays. A new copy lists no Lake: the Bucket's file holds its files and catalog.
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            funcdctl delete lake todo-gone-lake -n default >/dev/null
+            for i in $(seq 45); do
+              funcdctl get lake todo-gone-lake -n default >/dev/null 2>&1 || { echo DELETED; break; }
+              sleep 1
+            done'
+        info: "the Lake removed → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring DELETED
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/NAME/todo-gone-b1/; s/SCHEDULE/todo-gone-only/" /opt/lane/dr/backup-by-hand.yaml | funcdctl apply -f -'
+        info: "apply Backup todo-gone-b1 → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get backup todo-gone-b1 -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 45
+        delay: 1
+        info: "backup todo-gone-b1 → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Succeeded
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get backup todo-gone-b1 -n default -o json | python3 -c "import json,sys; print(\" \".join(m[\"kind\"] + \"/\" + m[\"name\"] for m in json.load(sys.stdin)[\"status\"][\"members\"]))"'
+        info: "the members of todo-gone-b1 → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldEqual "Bucket/todo-gone"
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            d=$(ls -d /var/lib/vgw/data/todo-workload/default/todo-gone-b1-*)
+            ls -d $d/lake 2>/dev/null || echo "NO LAKE MEMBER"
+            [ "$(stat -c %s $d/blob/todo-gone/part-00000)" -gt 2000 ] && echo "FILES IN THE BUCKET MEMBER"
+            [ "$(stat -c %s $d/blob/todo-gone/catalogs/part-00000)" -ge "$(stat -c %s /var/lib/funcd/data/blob/lake-catalogs/default/todo-gone/gold/_ducklake/catalog.db)" ] && echo "CATALOG IN THE BUCKET MEMBER"'
+        info: "the Backup on the target → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "NO LAKE MEMBER"
+          - result.systemout ShouldContainSubstring "FILES IN THE BUCKET MEMBER"
+          - result.systemout ShouldContainSubstring "CATALOG IN THE BUCKET MEMBER"
+      # A rewind leaves the prefix of a Lake that is gone: an object planted there after the copy stays, as a Put would write it.
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            cd /var/lib/funcd/data/blob
+            printf later >s3/default/todo-gone/gold/later.txt
+            find s3/default/todo-gone/gold lake-catalogs/default/todo-gone/gold -type f | sort | xargs sha256sum >/root/gone-gold-sums'
+        info: "what the prefix holds → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; sed "s/NAME/todo-gone-back/; s/BACKUP/todo-gone-b1/; s/BUCKET/todo-gone/" /opt/lane/dr/restore-bucket-in-place.yaml | funcdctl apply -f -'
+        info: "apply todo-gone-back → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; funcdctl get restore todo-gone-back -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 45
+        delay: 1
+        info: "restore todo-gone-back → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Succeeded
+      - type: exec
+        script: |
+          {{.vmsh}} 'cd /var/lib/funcd/data/blob && sha256sum -c /root/gone-gold-sums >/dev/null && echo "PREFIX KEPT"'
+        info: "the prefix after the rewind → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "PREFIX KEPT"
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/LAKE/todo-gone-lake/; s/BUCKET/todo-gone/; s/PREFIX/gold/" /opt/lane/dr/lake-on-prefix.yaml | funcdctl apply -f -'
+        info: "the Lake applied again → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get lake todo-gone-lake -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 60
+        delay: 2
+        info: "lake todo-gone-lake → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Ready
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-gone-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT count(*), sum(id) FROM lakehouse.g"}}'
+        retry: 30
+        delay: 2
+        info: "its rows again → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '[[2000,1999000]]'
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            funcdctl delete function todo-gone-lake-sql -n default >/dev/null
+            funcdctl delete lake todo-gone-lake -n default >/dev/null
+            echo CLEANED'
+        info: "the case's Lake and Function go → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring CLEANED
+      # The Bucket as a new name brings the files and the catalog, and a Lake on that prefix answers the rows.
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            set -e
+            sed "s/BUCKET/todo-gone-c/" /opt/lane/dr/bucket-of-prefix.yaml | funcdctl apply -f -
+            sed "s/NAME/todo-gone-copy/; s/BACKUP/todo-gone-b1/; s/BUCKET/todo-gone/; s/TARGET/todo-gone-c/" /opt/lane/dr/restore-bucket-as.yaml | funcdctl apply -f -'
+        info: "apply todo-gone-copy → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get restore todo-gone-copy -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 45
+        delay: 1
+        info: "restore todo-gone-copy → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Succeeded
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            set -e
+            sed "s/BUCKET/todo-gone-c/; s/LAKE/todo-gone-c-lake/" /opt/lane/dr/bucket-with-lake.yaml | funcdctl apply -f -
+            sed "s/LAKE/todo-gone-c-lake/; s/BUCKET/todo-gone-c/; s/PREFIX/gold/" /opt/lane/dr/lake-on-prefix.yaml | funcdctl apply -f -
+            sed "s/LAKE/todo-gone-c-lake/g" /opt/lane/dr/lake-sql.yaml | funcdctl apply -f -'
+        info: "a Lake on that prefix of the copy → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get lake todo-gone-c-lake -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 60
+        delay: 2
+        info: "lake todo-gone-c-lake → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Ready
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-gone-c-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT count(*), sum(id) FROM lakehouse.g"}}'
+        retry: 30
+        delay: 2
+        info: "its rows → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '[[2000,1999000]]'
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            funcdctl delete function todo-gone-c-lake-sql -n default >/dev/null
+            funcdctl delete lake todo-gone-c-lake -n default >/dev/null
+            echo CLEANED'
+        info: "the case's Lake and Function go → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring CLEANED
+
+  # ADR-0312 Decision 5: with the Bucket skipping the prefix, only the Lake's member can hold the object. As in B4, the
+  # object is planted where a Put writes in the local blob store.
+  - name: B7 a Lake before its first commit has a member with its files and no catalog
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            set -e
+            sed "s/BUCKET/todo-early/; s/LAKE/todo-early-lake/" /opt/lane/dr/bucket-with-lake.yaml | funcdctl apply -f -
+            sed "s/SCHEDULE/todo-early-only/; s/BUCKET/todo-early/" /opt/lane/dr/schedule-of-bucket.yaml | funcdctl apply -f -
+            install -d /var/lib/funcd/data/blob/s3/default/todo-early/gold
+            printf early >/var/lib/funcd/data/blob/s3/default/todo-early/gold/x.txt
+            sed "s/LAKE/todo-early-lake/; s/BUCKET/todo-early/; s/PREFIX/gold/" /opt/lane/dr/lake-on-prefix.yaml | funcdctl apply -f -'
+        info: "a Lake on a prefix that holds an object → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get lake todo-early-lake -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 60
+        delay: 2
+        info: "lake todo-early-lake → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Ready
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/NAME/todo-early-b1/; s/SCHEDULE/todo-early-only/" /opt/lane/dr/backup-by-hand.yaml | funcdctl apply -f -'
+        info: "apply Backup todo-early-b1 → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get backup todo-early-b1 -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 45
+        delay: 1
+        info: "backup todo-early-b1 → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Succeeded
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get backup todo-early-b1 -n default -o json | python3 -c "import json,sys; print(\" \".join(m[\"kind\"] + \"/\" + m[\"name\"] for m in json.load(sys.stdin)[\"status\"][\"members\"]))"'
+        info: "the members of todo-early-b1 → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldEqual "Bucket/todo-early Lake/todo-early-lake"
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            test -e /var/lib/funcd/data/blob/lake-catalogs/default/todo-early/gold/_ducklake/catalog.db || echo "NO COMMIT YET"
+            d=$(ls -d /var/lib/vgw/data/todo-workload/default/todo-early-b1-*)
+            ls -d $d/lake/todo-early-lake/*/files >/dev/null && echo "FILES"
+            ls -d $d/lake/todo-early-lake/*/catalog.db 2>/dev/null || echo "NO CATALOG"'
+        info: "the Backup on the target → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "NO COMMIT YET"
+          - result.systemout ShouldContainSubstring FILES
+          - result.systemout ShouldContainSubstring "NO CATALOG"
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            set -e
+            sed "s/BUCKET/todo-early-c/" /opt/lane/dr/bucket-of-prefix.yaml | funcdctl apply -f -
+            sed "s/NAME/todo-early-copy/; s/BACKUP/todo-early-b1/; s/LAKE/todo-early-lake/; s/BUCKET/todo-early-c/; s/PREFIX/gold/" /opt/lane/dr/restore-lake-as-location.yaml | funcdctl apply -f -'
+        info: "apply todo-early-copy → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get restore todo-early-copy -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 45
+        delay: 1
+        info: "restore todo-early-copy → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Succeeded
+      - type: exec
+        script: |
+          {{.vmsh}} 'echo "x=$(cat /var/lib/funcd/data/blob/s3/default/todo-early-c/gold/x.txt)."'
+        info: "the copy → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "x=early."
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            funcdctl delete lake todo-early-lake -n default >/dev/null
+            echo CLEANED'
+        info: "the case's Lake and Function go → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring CLEANED
+
+  # ADR-0312 Decision 6.
+  - name: B8 a Restore of a Bucket in place with a Lake asLocation on it is refused
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; funcdctl apply -f /opt/lane/dr/restore-lake-on-bucket-in-place.yaml'
+        info: "the Restore → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldNotEqual 0
+          - result.systemerr ShouldContainSubstring asLocation
+
+  # ADR-0312 Decision 4: a Bucket's Restore acts outside its Lake prefixes.
+  - name: B9 the Bucket alone in place rewinds its object, and the same engine answers all its rows
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"INSERT INTO lakehouse.notes VALUES (4, ''after-the-backup'')"}}'
+        retry: 30
+        delay: 2
+        info: "a row after the Backup → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"INSERT INTO lakehouse.events SELECT range + 1000 FROM range(1000)"}}'
+        info: "more events → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"CREATE TABLE IF NOT EXISTS lakehouse.late AS SELECT range AS id FROM range(1000)"}}'
+        info: "a table after the Backup → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"put":{"key":"note.txt","content":"v2"}}}'
+        info: "the object changed → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"put":{"key":"later.txt","content":"x"}}}'
+        info: "an object after the Backup → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            {{.ctr}} task ls | awk "\$1 ~ /^todo-lake-r[0-9]+$/ && \$3 == \"RUNNING\" {print \$2}" | head -1 >/root/lake-engine-pid
+            sha256sum /var/lib/funcd/data/blob/lake-catalogs/default/todo-lakehouse/lake/_ducklake/catalog.db | cut -d" " -f1 >/root/lake-catalog-sum'
+        info: "the engine and its catalog before → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; sed "s/NAME/todo-lakehouse-back/; s/BACKUP/todo-lakehouse-b1/; s/BUCKET/todo-lakehouse/" /opt/lane/dr/restore-bucket-in-place.yaml | funcdctl apply -f -'
+        info: "apply todo-lakehouse-back → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; funcdctl get restore todo-lakehouse-back -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 45
+        delay: 1
+        info: "restore todo-lakehouse-back → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Succeeded
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; funcdctl get backup todo-lakehouse-back-before -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 45
+        delay: 1
+        info: "backup todo-lakehouse-back-before → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Succeeded
+      - type: exec
+        script: |
+          {{.vmsh}} 'FUNCD_TOKEN=todo-lane-admin funcdctl hold status'
+        info: "hold status → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - 'result.systemout ShouldContainSubstring "held: false"'
+          - 'result.systemout ShouldNotContainSubstring "namespaces:"'
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            cd /var/lib/funcd/data/blob/s3/default/todo-lakehouse/docs
+            echo "note=$(cat note.txt)."
+            test -e later.txt || echo "LATER GONE"
+            [ "$({{.ctr}} task ls | awk "\$1 ~ /^todo-lake-r[0-9]+$/ && \$3 == \"RUNNING\" {print \$2}" | head -1)" = "$(cat /root/lake-engine-pid)" ] && echo "SAME ENGINE"
+            [ "$(sha256sum /var/lib/funcd/data/blob/lake-catalogs/default/todo-lakehouse/lake/_ducklake/catalog.db | cut -d" " -f1)" = "$(cat /root/lake-catalog-sum)" ] && echo "CATALOG KEPT"'
+        info: "the Bucket and the engine after the Restore → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "note=v1."
+          - result.systemout ShouldContainSubstring "LATER GONE"
+          - result.systemout ShouldContainSubstring "SAME ENGINE"
+          - result.systemout ShouldContainSubstring "CATALOG KEPT"
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT id, label FROM lakehouse.notes ORDER BY id"}}'
+        info: "notes after the Restore → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '[[1,"backed-up"],[2,"backed-up"],[3,"backed-up"],[4,"after-the-backup"]]'
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT count(*), sum(id) FROM lakehouse.events"}}'
+        info: "events after the Restore → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '[[2000,1999000]]'
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT count(*), sum(id) FROM lakehouse.late"}}'
+        info: "the table after the Backup → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '[[1000,499500]]'
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"INSERT INTO lakehouse.notes VALUES (5, ''after-the-restore'')"}}'
+        info: "a commit after the Restore → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: exec
+        script: |
+          {{.vmsh}} '[ "$(sha256sum /var/lib/funcd/data/blob/lake-catalogs/default/todo-lakehouse/lake/_ducklake/catalog.db | cut -d" " -f1)" != "$(cat /root/lake-catalog-sum)" ] && echo SAVED'
+        info: "the catalog after the commit → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring SAVED
+
+  # ADR-0312 Decision 9, #1384: the engine must not answer, or save over the Restore, from the catalog it held before it.
+  - name: B10 the Lake alone in place gives the Backup's rows on a new engine, also after a commit and restarts
+    steps:
+      # Decision 9: the Restore stops the engine under the hold, so the stop's saves get 503, within the stop grace. The step
+      # prints how long that took, and asserts only that the engine went. An INSERT runs as the hold begins: whatever its commit
+      # and its save meet, no retried save may bring its row back over the restored catalog.
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; 
+            p=$({{.ctr}} task ls | awk "\$1 ~ /^todo-lake-r[0-9]+$/ && \$3 == \"RUNNING\" {print \$2}" | head -1)
+            echo "$p" >/root/lake-engine-pid
+            date +%s >/root/lake-rewind-at
+            curl -s -m 60 -o /dev/null -w "the INSERT answered %{http_code}\n" -H "content-type: application/json" \
+              -d @/opt/lane/dr/lake-long-insert.json http://127.0.0.1:8081/function/todo-lake-sql &
+            insert=$!
+            sleep 1
+            s=$(date +%s.%N)
+            sed "s/NAME/todo-lake-rewind/; s/BACKUP/todo-lakehouse-b1/; s/LAKE/todo-lake/" /opt/lane/dr/restore-lake-in-place.yaml | funcdctl apply -f - >/dev/null
+            for i in $(seq 300); do
+              [ "$({{.ctr}} task ls | awk "\$1 ~ /^todo-lake-r[0-9]+$/ && \$3 == \"RUNNING\" {print \$2}" | head -1)" != "$p" ] && { echo "ENGINE STOPPED after $(python3 -c "import time; print(round(time.time() - $s, 1))") s"; break; }
+              sleep 0.2
+            done
+            wait "$insert"'
+        info: "the Restore and the engine's stop → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "ENGINE STOPPED"
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; funcdctl get restore todo-lake-rewind -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 45
+        delay: 1
+        info: "restore todo-lake-rewind → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Succeeded
+      - type: exec
+        script: |
+          {{.vmsh}} 'FUNCD_TOKEN=todo-lane-admin funcdctl hold status'
+        info: "hold status → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - 'result.systemout ShouldContainSubstring "held: false"'
+          - 'result.systemout ShouldNotContainSubstring "namespaces:"'
+      # A new engine reads the restored catalog. It may still be starting when the hold lifts, so the reads retry.
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            n=$({{.ctr}} task ls | awk "\$1 ~ /^todo-lake-r[0-9]+$/ && \$3 == \"RUNNING\" {print \$2}" | head -1)
+            [ -n "$n" ] && [ "$n" != "$(cat /root/lake-engine-pid)" ] && echo REPLACED'
+        retry: 30
+        delay: 1
+        info: "the engine after the Restore → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring REPLACED
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT id, label FROM lakehouse.notes ORDER BY id"}}'
+        retry: 30
+        delay: 2
+        info: "notes after the Restore → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '[[1,"backed-up"],[2,"backed-up"],[3,"backed-up"]]'
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT count(*), sum(id) FROM lakehouse.events"}}'
+        info: "events after the Restore → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '[[1000,499500]]'
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT count(*) FROM lakehouse.late"}}'
+        info: "the table after the Backup after the Restore → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 500
+          - result.body ShouldContainSubstring "does not exist"
+      # A recovered catalog is saved once at the engine's start (ADR-0276 Decision 2), after the time noted before the Restore.
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get lake todo-lake -n default -o json | python3 -c "import datetime,json,sys; c = next(c for c in json.load(sys.stdin)[\"status\"][\"conditions\"] if c[\"type\"] == \"CatalogSaved\"); t = datetime.datetime.fromisoformat(c[\"message\"].split()[1]).timestamp(); print(c[\"status\"], c[\"reason\"], \"after\" if t >= float(open(\"/root/lake-rewind-at\").read()) else \"before\")"'
+        retry: 30
+        delay: 1
+        info: "CatalogSaved → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldEqual "True Saved after"
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"INSERT INTO lakehouse.notes VALUES (5, ''after-the-restore'')"}}'
+        info: "a commit after the Restore → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT id, label FROM lakehouse.notes ORDER BY id"}}'
+        retry: 30
+        delay: 2
+        info: "notes after the commit → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '[[1,"backed-up"],[2,"backed-up"],[3,"backed-up"],[5,"after-the-restore"]]'
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT count(*), sum(id) FROM lakehouse.events"}}'
+        info: "events after the commit → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '[[1000,499500]]'
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT count(*) FROM lakehouse.late"}}'
+        info: "the table after the Backup after the commit → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 500
+          - result.body ShouldContainSubstring "does not exist"
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            pid() { {{.ctr}} task ls | awk "\$1 ~ /^todo-lake-r[0-9]+$/ && \$3 == \"RUNNING\" {print \$2}" | head -1; }
+            t=$({{.ctr}} task ls | awk "\$1 ~ /^todo-lake-r[0-9]+$/ && \$3 == \"RUNNING\" {print \$1}" | head -1)
+            p=$(pid)
+            echo "engine $t pid $p" >&2
+            [ -n "$t" ] && {{.ctr}} task kill -s SIGTERM "$t"
+            for i in $(seq 45); do
+              n=$(pid)
+              [ -n "$n" ] && [ "$n" != "$p" ] && { echo RESTARTED; break; }
+              sleep 1
+            done'
+        info: "the engine's stop and its next start → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring RESTARTED
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT id, label FROM lakehouse.notes ORDER BY id"}}'
+        retry: 30
+        delay: 2
+        info: "notes after the engine's restart → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '[[1,"backed-up"],[2,"backed-up"],[3,"backed-up"],[5,"after-the-restore"]]'
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT count(*), sum(id) FROM lakehouse.events"}}'
+        info: "events after the engine's restart → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '[[1000,499500]]'
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT count(*) FROM lakehouse.late"}}'
+        info: "the table after the Backup after the engine's restart → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 500
+          - result.body ShouldContainSubstring "does not exist"
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            unset FUNCD_TOKEN
+            systemctl stop funcd-demo
+            systemctl reset-failed funcd-demo 2>/dev/null || true
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=45 /usr/local/bin/funcd \
+              --config /opt/lane/dr/funcdconfig-lake.yaml
+            curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
+            systemctl is-active --quiet funcd-demo || { journalctl -u funcd-demo --no-pager -n 60; exit 1; }
+            echo RESTARTED'
+        info: "funcd's restart → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring RESTARTED
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT id, label FROM lakehouse.notes ORDER BY id"}}'
+        retry: 30
+        delay: 2
+        info: "notes after funcd's restart → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '[[1,"backed-up"],[2,"backed-up"],[3,"backed-up"],[5,"after-the-restore"]]'
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT count(*), sum(id) FROM lakehouse.events"}}'
+        info: "events after funcd's restart → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '[[1000,499500]]'
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT count(*) FROM lakehouse.late"}}'
+        info: "the table after the Backup after funcd's restart → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 500
+          - result.body ShouldContainSubstring "does not exist"
+
+  # ADR-0312 Decisions 1 and 7. It reuses D7's upload.
+  - name: B11 a Lake on a prefix it does not own is held PrefixNotOwned, and the prefix stays in the Bucket's copy
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/LAKE/todo-uploads-lake/; s/BUCKET/todo-files/; s/PREFIX/uploads/" /opt/lane/dr/lake-on-prefix.yaml | funcdctl apply -f -'
+        info: "apply a Lake on uploads → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
       - type: exec
         script: |
           {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
-            funcdctl get lake todo-lake-r -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
-        retry: 60
-        delay: 3
-        info: "lake todo-lake-r → {{.result.systemout}} {{.result.systemerr}}"
+            funcdctl get lake todo-uploads-lake -n default -o json
+            echo "engines=$({{.ctr}} task ls | grep -c "^todo-uploads-lake-r")."'
+        retry: 30
+        delay: 1
+        info: "that Lake → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
-          - result.systemout ShouldMatchRegex phase.{1,4}Ready
+          - result.systemout ShouldContainSubstring PrefixNotOwned
+          - result.systemout ShouldContainSubstring "engines=0."
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/NAME/todo-uploads-b1/; s/SCHEDULE/todo-backup/" /opt/lane/dr/backup-by-hand.yaml | funcdctl apply -f -'
+        info: "apply Backup todo-uploads-b1 → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get backup todo-uploads-b1 -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 45
+        delay: 1
+        info: "backup todo-uploads-b1 → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Succeeded
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            set -e
+            sed "s/BUCKET/todo-files-u/" /opt/lane/dr/bucket-of-prefix.yaml | funcdctl apply -f -
+            sed "s/NAME/todo-uploads-copy/; s/BACKUP/todo-uploads-b1/; s/BUCKET/todo-files/; s/TARGET/todo-files-u/" /opt/lane/dr/restore-bucket-as.yaml | funcdctl apply -f -'
+        info: "apply todo-uploads-copy → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get restore todo-uploads-copy -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 45
+        delay: 1
+        info: "restore todo-uploads-copy → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Succeeded
+      - type: exec
+        script: |
+          {{.vmsh}} 'test -f /var/lib/funcd/data/blob/s3/default/todo-files-u/uploads/milk/receipt.txt && echo RECEIPT'
+        info: "the upload on the copy → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring RECEIPT
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            funcdctl delete lake todo-uploads-lake -n default >/dev/null
+            echo CLEANED'
+        info: "the case's Lake and Function go → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring CLEANED
+
+  # ADR-0312 Decision 9: after a failed load the hold stays, and a new engine's saves get 503 until the release.
+  - name: B13 a target killed in the middle of a load fails the Restore and keeps the hold, and a release and a new Restore recover
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"INSERT INTO lakehouse.notes VALUES (8, ''after-the-backup'')"}}'
+        retry: 30
+        delay: 2
+        info: "a row after the Backup → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      # The shell's own kill ends the S3 target as soon as the marker appears, before the load's first read from it, so that read
+      # fails. The Bucket comes first: a Lake's Clear would leave a new engine no catalog, and nothing to save.
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            v=$(pidof versitygw)
+            (
+              e=$((SECONDS + 60))
+              while [ "$SECONDS" -lt "$e" ]; do [ -e /var/lib/funcd/data/.hold-ns/default.restore ] && break; done
+              kill -KILL "$v"
+            ) &
+            catcher=$!
+            sed "s/todo-bucket-lake-back/todo-load-failed/" /opt/lane/dr/restore-bucket-then-lake-in-place.yaml | FUNCD_TOKEN=todo-lane-admin funcdctl apply -f - >/dev/null
+            wait "$catcher"
+            echo "KILLED, $(pidof versitygw | wc -w) left"'
+        info: "the target killed at the marker → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "KILLED, 0 left"
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; funcdctl get restore todo-load-failed -n default -o json'
+        retry: 45
+        delay: 1
+        info: "Restore todo-load-failed → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex "phase.{1,4}Failed"
+          - result.systemout ShouldContainSubstring "read the store file"
+      - type: exec
+        script: |
+          {{.vmsh}} 'FUNCD_TOKEN=todo-lane-admin funcdctl hold status'
+        info: "hold status → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - 'result.systemout ShouldContainSubstring "restore: todo-load-failed"'
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT count(*) FROM lakehouse.notes"}}'
+        info: "a call while held → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 503
+          - result.body ShouldContainSubstring "held"
+      # The new engine read the catalog the store holds, and its saves get the hold's 503 until the release.
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get lake todo-lake -n default -o json'
+        retry: 45
+        delay: 2
+        info: "the Lake while held → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring SavesFailing
+          - result.systemout ShouldContainSubstring ServiceUnavailable
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            systemctl reset-failed todo-s3 2>/dev/null || true
+            systemd-run --unit todo-s3 -p EnvironmentFile=/opt/lane/dr/versitygw.env /opt/lane/dr/versitygw \
+              --port 127.0.0.1:7070 posix --versioning-dir /var/lib/vgw/versions /var/lib/vgw/data
+            curl -s --retry-connrefused --retry 30 --retry-delay 1 -o /dev/null http://127.0.0.1:7070/
+            date +%s >/root/lake-release-at
+            FUNCD_TOKEN=todo-lane-admin funcdctl hold release --namespace default'
+        info: "the target back, and the release → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get lake todo-lake -n default -o json | python3 -c "import datetime,json,sys; c = next(c for c in json.load(sys.stdin)[\"status\"][\"conditions\"] if c[\"type\"] == \"CatalogSaved\"); t = datetime.datetime.fromisoformat(c[\"message\"].split()[1]).timestamp(); print(c[\"status\"], c[\"reason\"], \"after\" if t >= float(open(\"/root/lake-release-at\").read()) else \"before\")"'
+        retry: 30
+        delay: 1
+        info: "CatalogSaved after the release → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldEqual "True Saved after"
+      # The load never reached the Lake, so its rows are those from before the Restore.
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT id, label FROM lakehouse.notes ORDER BY id"}}'
+        retry: 30
+        delay: 2
+        info: "notes after the release → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '[8,"after-the-backup"]'
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; sed "s/todo-bucket-lake-back/todo-load-recovered/" /opt/lane/dr/restore-bucket-then-lake-in-place.yaml | funcdctl apply -f -'
+        info: "apply todo-load-recovered → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; funcdctl get restore todo-load-recovered -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 45
+        delay: 1
+        info: "restore todo-load-recovered → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Succeeded
+      - type: exec
+        script: |
+          {{.vmsh}} 'echo "note=$(cat /var/lib/funcd/data/blob/s3/default/todo-lakehouse/docs/note.txt)."'
+        info: "the object → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "note=v1."
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT id, label FROM lakehouse.notes ORDER BY id"}}'
+        retry: 30
+        delay: 2
+        info: "notes after the new Restore → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '[[1,"backed-up"],[2,"backed-up"],[3,"backed-up"]]'
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT count(*), sum(id) FROM lakehouse.events"}}'
+        info: "events after the new Restore → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '[[1000,499500]]'
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT count(*) FROM lakehouse.late"}}'
+        info: "the table after the Backup after the new Restore → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 500
+          - result.body ShouldContainSubstring "does not exist"
+
+  # ADR-0312 Decision 9, ADR-0228's stopped-in-place-load-stays-held, on a real engine and a real daemon stop.
+  - name: B12 funcd stopped in the middle of a load keeps the hold, and a new Restore then gives the Backup's rows
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"INSERT INTO lakehouse.notes VALUES (8, ''after-the-backup'')"}}'
+        retry: 30
+        delay: 2
+        info: "a row after the Backup → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      # The shell's own kill stops the S3 target as soon as the marker appears, before the load's first read from it, so the
+      # load waits under the hold for as long as the case needs. The Bucket comes first: its Clear ran, and the Lake's catalog
+      # is still there for the next engine to read and try to save.
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
+            v=$(pidof versitygw)
+            (
+              e=$((SECONDS + 60))
+              while [ "$SECONDS" -lt "$e" ]; do [ -e /var/lib/funcd/data/.hold-ns/default.restore ] && break; done
+              kill -STOP "$v"
+            ) &
+            catcher=$!
+            sed "s/todo-bucket-lake-back/todo-load-stopped/" /opt/lane/dr/restore-bucket-then-lake-in-place.yaml | FUNCD_TOKEN=todo-lane-admin funcdctl apply -f - >/dev/null
+            wait "$catcher"
+            for i in $(seq 45); do test -e /var/lib/funcd/data/blob/s3/default/todo-lakehouse/docs/note.txt || { echo LOADING; break; }; sleep 1; done
+            FUNCD_TOKEN=todo-lane-admin funcdctl get restore todo-load-stopped -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1
+            FUNCD_TOKEN=todo-lane-admin funcdctl hold status'
+        info: "the load, waiting → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring LOADING
+          - result.systemout ShouldMatchRegex phase.{1,4}Running
+          - 'result.systemout ShouldContainSubstring "restore: todo-load-stopped"'
+      # funcd stops in the middle of the load, and the S3 target goes on while it is down.
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            unset FUNCD_TOKEN
+            systemctl stop funcd-demo
+            pkill -CONT -x versitygw
+            systemctl reset-failed funcd-demo 2>/dev/null || true
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=45 /usr/local/bin/funcd \
+              --config /opt/lane/dr/funcdconfig-lake.yaml
+            curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
+            systemctl is-active --quiet funcd-demo || { journalctl -u funcd-demo --no-pager -n 60; exit 1; }
+            echo RESTARTED'
+        info: "funcd's stop and its next start → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring RESTARTED
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; funcdctl get restore todo-load-stopped -n default -o json'
+        retry: 30
+        delay: 1
+        info: "Restore todo-load-stopped → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex "phase.{1,4}Failed"
+          - result.systemout ShouldContainSubstring Interrupted
+      - type: exec
+        script: |
+          {{.vmsh}} 'FUNCD_TOKEN=todo-lane-admin funcdctl hold status'
+        info: "hold status → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - 'result.systemout ShouldContainSubstring "restore: todo-load-stopped"'
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT count(*) FROM lakehouse.notes"}}'
+        info: "a call while held → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 503
+          - result.body ShouldContainSubstring "held"
+      # The new engine read the catalog the store holds, and its saves get the hold's 503 until the release.
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get lake todo-lake -n default -o json'
+        retry: 45
+        delay: 2
+        info: "the Lake while held → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring SavesFailing
+          - result.systemout ShouldContainSubstring ServiceUnavailable
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            date +%s >/root/lake-release-at
+            FUNCD_TOKEN=todo-lane-admin funcdctl hold release --namespace default'
+        info: "the release → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get lake todo-lake -n default -o json | python3 -c "import datetime,json,sys; c = next(c for c in json.load(sys.stdin)[\"status\"][\"conditions\"] if c[\"type\"] == \"CatalogSaved\"); t = datetime.datetime.fromisoformat(c[\"message\"].split()[1]).timestamp(); print(c[\"status\"], c[\"reason\"], \"after\" if t >= float(open(\"/root/lake-release-at\").read()) else \"before\")"'
+        retry: 30
+        delay: 1
+        info: "CatalogSaved after the release → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldEqual "True Saved after"
+      # The Bucket's Clear ran and its load did not: a new Restore of the Backup brings everything back.
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; sed "s/todo-bucket-lake-back/todo-load-again/" /opt/lane/dr/restore-bucket-then-lake-in-place.yaml | funcdctl apply -f -'
+        info: "apply todo-load-again → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; funcdctl get restore todo-load-again -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 45
+        delay: 1
+        info: "restore todo-load-again → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Succeeded
+      - type: exec
+        script: |
+          {{.vmsh}} 'echo "note=$(cat /var/lib/funcd/data/blob/s3/default/todo-lakehouse/docs/note.txt)."'
+        info: "the object → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "note=v1."
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT id, label FROM lakehouse.notes ORDER BY id"}}'
+        retry: 30
+        delay: 2
+        info: "notes after the new Restore → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '[[1,"backed-up"],[2,"backed-up"],[3,"backed-up"]]'
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT count(*), sum(id) FROM lakehouse.events"}}'
+        info: "events after the new Restore → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldContainSubstring '[[1000,499500]]'
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/todo-lake-sql"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"SELECT count(*) FROM lakehouse.late"}}'
+        info: "the table after the Backup after the new Restore → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 500
+          - result.body ShouldContainSubstring "does not exist"
 
   # Version 1.2.0 keeps the todos and their upload records in SQLDatabase todo-db (ADR-0233 to ADR-0236). Its pre-hook
   # migrates the database and copies them from KV before the SQL API serves; the KV records stay for 1.1.0.
