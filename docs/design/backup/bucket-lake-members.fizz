@@ -7,7 +7,8 @@
 # load began. The Bucket's clear and load read the Lakes when they run. The control plane may apply or delete the Lake
 # at any step. A stopped or crashed load is an intermediate state, which the always assertions cover (its marker is
 # ADR-0228's). Environment: a Lake's engine writes nothing here, since the hold refuses its writes during an in-place
-# load (ADR-0290) and the Lake member's own copy is ADR-0271's. Left out: an `as` destination, which takes the same
+# load (ADR-0290) and the Lake member's own copy is ADR-0271's; what a running engine does after the hold is ADR-0312's
+# open question 4. Left out: an `as` destination, which takes the same
 # clear and load after its emptiness check, and a named Lake with no location, which fails the Restore's plan (both
 # left to TestScenarioBucketRestoredAsCarriesNoLake and TestRestoreReason_MemberNotFound).
 deadlock_detection: false
