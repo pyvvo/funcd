@@ -1,9 +1,9 @@
 # Workload backups: an app owner's schedule, records and restores
 
-An app owner backs up its own KVStores, Buckets and lakes with three namespaced kinds (ADR-0222): a
-`BackupSchedule` defines the scope, the cron slots, the S3 target and the recipients; each slot, a hook or a
-developer creates a `Backup`, one full copy; a `Restore` loads a `Backup`'s members back. funcd runs them with the
-platform's rights; RBAC at admission is the boundary (developers and admins write them, viewers read them).
+An app owner backs up its own KVStores, Buckets, Lakes, SQLDatabases and Functions' local volumes with three namespaced
+kinds (ADR-0222): a `BackupSchedule` defines the scope, the cron slots, the S3 target and the recipients; each slot, a
+hook or a developer creates a `Backup`, one full copy; a `Restore` loads a `Backup`'s members back. funcd runs them with
+the platform's rights; RBAC at admission is the boundary (developers and admins write them, viewers read them).
 
 ## The target and its credentials
 
@@ -55,9 +55,10 @@ spec:
       - age1recovery…
 ```
 
-The scope is one form: names (`kvStores`, `buckets`, `lakes`), `app` (the App's stores) or `resourceGroup`. Every
-file is sealed to the recipients, two or more of one family; keep the recovery identity outside the platform. An App
-declares the same under `spec.backupSchedules`; an entry without a scope backs up the App itself.
+The scope is one form: names (`kvStores`, `buckets`, `lakes`, `databases`, `volumes` as `<function>/<volume>`), `app`
+(the App's stores) or `resourceGroup`. Every file is sealed to the recipients, two or more of one family; keep the
+recovery identity outside the platform. An App declares the same under `spec.backupSchedules`; an entry without a scope
+backs up the App itself.
 
 `funcdctl get backups -n orders` lists the runs. A schedule's `status` carries `lastSuccessTime`,
 `earliestRestorePoint` and `rpoRisk`, also counted by the `funcd.backup.workload_rpo_risk` gauge.

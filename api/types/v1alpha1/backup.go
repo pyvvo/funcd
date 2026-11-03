@@ -145,8 +145,8 @@ type RestoreSource struct {
 	IdentitySecret    ObjectName `json:"identitySecret,omitempty"`
 }
 
-// RestoreMember is one member of the Backup and exactly one target: as (an empty KVStore, Bucket or SQLDatabase),
-// asLocation (an empty bucket prefix) or inPlace.
+// RestoreMember is one member of the Backup and exactly one target: as (an empty KVStore, Bucket or SQLDatabase, or
+// the empty volume of another Function), asLocation (an empty bucket prefix, for a Lake) or inPlace.
 type RestoreMember struct {
 	Kind       Kind          `json:"kind"`
 	Name       ObjectName    `json:"name"`
@@ -368,7 +368,7 @@ func (r *Restore) InPlace() bool {
 func (r *Restore) Ended() bool { return r.Status.Phase == RunSucceeded || r.Status.Phase == RunFailed }
 
 // Validate enforces Decision 7's shape: a name of at most 56 characters, the Backup and the two Secrets named, and
-// each member a KVStore, Bucket or Lake, once, with exactly one target of its kind.
+// each member a KVStore, Bucket, Lake, SQLDatabase or Function volume, once, with exactly one target of its kind.
 func (r *Restore) Validate() error {
 	const op = "Restore.Validate"
 	if err := validateMeta(r.TypeMeta, &r.ObjectMeta, KindRestore); err != nil {

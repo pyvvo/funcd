@@ -95,9 +95,9 @@ type Manifest struct {
 	Recipients []string     `json:"recipients,omitempty"`
 }
 
-// Resolve lists the members s names in ns (Decision 2), KVStores, Buckets, Lakes then SQLDatabases: by name, the
-// stores of the App's kv, buckets, lakes and sql entries, or the stores of the ResourceGroup. A named member or App that
-// does not exist is fault.NotFound naming it.
+// Resolve lists the members s names in ns (Decision 2), KVStores, Buckets, Lakes, SQLDatabases then Function volumes:
+// by name, the stores of the App's kv, buckets, lakes and sql entries and its Functions' local volumes, or the stores of
+// the ResourceGroup. A named member or App that does not exist is fault.NotFound naming it.
 func Resolve(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1.BackupScope) ([]Member, error) {
 	const op = "workload.Resolve"
 	names := map[v1.Kind][]v1.ObjectName{

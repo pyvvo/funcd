@@ -29,8 +29,8 @@ const streamErrorTrailer = "X-Stream-Error"
 // userObjectsQuery counts a database's tables, views, indexes and triggers (ADR-0234 Decision 3).
 const userObjectsQuery = "SELECT count(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'"
 
-// Backups copies and loads databases through their engines for workload backups (ADR-0234): Source is
-// workload.Sources.SQL, and Backups implements the backup service's SQLLoader. Neither holds a whole database in
+// Backups copies and loads databases through their engines for workload backups (ADR-0234): it is the
+// workload.SQLLoader of the SQLDatabase member kind (ADR-0311). Neither Source nor Load holds a whole database in
 // memory.
 type Backups struct {
 	Engines *Engines
