@@ -210,10 +210,10 @@ func KVPrefix(ns v1.NamespaceName, name v1.ObjectName) string {
 }
 
 // Write copies ms under o.Path, then puts the manifest (Decisions 4, 5): a KVStore to kv/<store>/, a Bucket's
-// objects to blob/<bucket>/, a lake's objects but catalog.db to lake/<name>/<attempt>/files/ and then its
-// catalog.db to lake/<name>/<attempt>/catalog.db/, and a SQLDatabase's SQLite file to sql/<name>/ in records of
-// 8 MiB keyed 000001, 000002, … (ADR-0234 Decision 2). A refused IfNotExist is ErrTargetUnconditional; a lake that
-// loses a listed object under every copy is ErrLakeUnstable.
+// objects and then its Lakes' catalogs to blob/<bucket>/, a lake's objects but catalog.db to
+// lake/<name>/<attempt>/files/ and then its catalog.db to lake/<name>/<attempt>/catalog.db/, and a SQLDatabase's
+// SQLite file to sql/<name>/ in records of 8 MiB keyed 000001, 000002, … (ADR-0234 Decision 2). A refused IfNotExist
+// is ErrTargetUnconditional; a lake that loses a listed object under every copy is ErrLakeUnstable.
 func Write(ctx context.Context, ns v1.NamespaceName, ms []Member, src Sources, o Options) (Manifest, error) {
 	const op = "workload.Write"
 	m := Manifest{
@@ -237,7 +237,7 @@ func Write(ctx context.Context, ns v1.NamespaceName, ms []Member, src Sources, o
 			mf.Files = []backup.StoreFile{f}
 		case v1.KindBucket:
 			f, err = w.file(ctx, "blob/"+string(mb.Name), func(emit func(snapshot.Record) error) error {
-				return objects(ctx, src.Blob, src.BucketPrefix(ns, mb.Name), nil, emit)
+				return bucketObjects(ctx, ns, mb.Name, src, emit)
 			})
 			mf.Files = []backup.StoreFile{f}
 		case v1.KindLake:
@@ -337,8 +337,49 @@ func (w *writer) lake(ctx context.Context, ns v1.NamespaceName, mb Member, src S
 		mb.Name, lakeAttempts, last)
 }
 
+// bucketObjects emits a Bucket's objects, then the catalogs of the Lakes on its prefixes in the catalog store, each keyed
+// <prefix>/_ducklake/catalog.db as the Bucket held it before ADR-0293 and read before the walk, as a lake's checkpoint
+// is: a catalog saved during the walk could name a file the walk passed (#1383).
+func bucketObjects(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, src Sources, emit func(snapshot.Record) error) error {
+	var catalogs []snapshot.Record
+	if p := src.BucketCatalogPrefix(ns, name); p != "" {
+		err := objects(ctx, src.Blob, p, func(key string) bool { return !IsBucketCatalog(key) }, func(r snapshot.Record) error {
+			catalogs = append(catalogs, r)
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+	if err := objects(ctx, src.Blob, src.BucketPrefix(ns, name), nil, emit); err != nil {
+		return err
+	}
+	for _, r := range catalogs {
+		if err := emit(r); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // CatalogRecord is the key of a lake member's catalog record, wherever the catalog lives (ADR-0293 Decision 5).
 const CatalogRecord = checkpointName
+
+// IsBucketCatalog reports a Bucket member's record of the catalog of the Lake on one of its prefixes,
+// <prefix>/_ducklake/catalog.db, which a restore puts in the catalog store.
+func IsBucketCatalog(key string) bool {
+	p, ok := strings.CutSuffix(key, "/"+checkpointName)
+	return ok && p != "" && !strings.Contains(p, "/")
+}
+
+// BucketCatalogPrefix is the prefix of the catalogs of the Lakes on Bucket b's prefixes in the catalog store, "" without
+// CatalogPrefix, which keeps them among b's objects.
+func (s Sources) BucketCatalogPrefix(ns v1.NamespaceName, b v1.ObjectName) string {
+	if s.CatalogPrefix == nil {
+		return ""
+	}
+	return s.CatalogPrefix(ns) + string(b) + "/"
+}
 
 // CatalogKey is the blob key of the catalog of the Lake at loc: in the catalog store under its location (ADR-0293), or
 // under its files without CatalogPrefix. Its member record keeps the key checkpointName either way.
@@ -346,7 +387,7 @@ func (s Sources) CatalogKey(ns v1.NamespaceName, loc v1.LakeLocation) string {
 	if s.CatalogPrefix == nil {
 		return s.BucketPrefix(ns, loc.Bucket) + loc.Prefix + "/" + checkpointName
 	}
-	return s.CatalogPrefix(ns) + string(loc.Bucket) + "/" + loc.Prefix + "/" + checkpointName
+	return s.BucketCatalogPrefix(ns, loc.Bucket) + loc.Prefix + "/" + checkpointName
 }
 
 // keys lists the keys under prefix, relative to it.

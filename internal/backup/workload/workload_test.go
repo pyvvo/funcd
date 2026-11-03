@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sync"
 	"testing"
 
 	"filippo.io/age"
@@ -207,4 +208,63 @@ func TestWriteLakeWithoutCheckpoint(t *testing.T) {
 	got, err := workload.ReadManifest(ctx, target, path)
 	require.NoError(t, err)
 	require.NoError(t, workload.Integrity(ctx, target, path, got))
+}
+
+// catalogSaver is a blob store whose first read of key saves catalog anew: a Lake's commit while a copy walks.
+type catalogSaver struct {
+	blob.Bucket
+	key, catalog string
+	once         sync.Once
+}
+
+func (b *catalogSaver) Get(ctx context.Context, key string) ([]byte, error) {
+	if key == b.key {
+		var err error
+		b.once.Do(func() { err = b.Put(ctx, b.catalog, []byte("C2"), blob.PutOptions{}) })
+		if err != nil {
+			return nil, err
+		}
+	}
+	return b.Bucket.Get(ctx, key)
+}
+
+// ADR-0311 Decision 4 (#1383): a Bucket's copy holds its objects, then the catalog of the Lake on its prefix lake keyed
+// lake/_ducklake/catalog.db, read before the walk as a lake member's checkpoint is: a catalog the Lake saves during the
+// walk, which can name a file the walk passed, is not the one copied.
+func TestWriteBucket_ReadsCatalogsBeforeItsObjects(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mem, err := gocloud.Open(ctx, "mem://")
+	require.NoError(t, err)
+	const catalog = "lake-catalogs/orders/lake-files/lake/_ducklake/catalog.db"
+	shared := &catalogSaver{Bucket: mem, key: "s3/orders/lake-files/lake/main/t/f1.parquet", catalog: catalog}
+	require.NoError(t, mem.Put(ctx, catalog, []byte("C1"), blob.PutOptions{}))
+	require.NoError(t, mem.Put(ctx, shared.key, []byte("f1"), blob.PutOptions{}))
+	src := workload.Sources{
+		Blob: shared,
+		BucketPrefix: func(ns v1.NamespaceName, b v1.ObjectName) string {
+			return "s3/" + string(ns) + "/" + string(b) + "/"
+		},
+		CatalogPrefix: func(ns v1.NamespaceName) string { return "lake-catalogs/" + string(ns) + "/" },
+	}
+	s := s3stub.New(t, nil)
+	target, err := gocloud.OpenWith(ctx, s.URL(), gocloud.OpenOptions{Static: &gocloud.StaticKey{ID: "AKIDOWNER", Secret: "s"}})
+	require.NoError(t, err)
+	const path = "orders/nightly-1-uid/"
+	m, err := workload.Write(ctx, "orders", []workload.Member{{Kind: v1.KindBucket, Name: "lake-files"}}, src,
+		workload.Options{Target: target, Path: path})
+	require.NoError(t, err)
+	next := workload.Records(ctx, target, path, m.Members[0].Files[0], nil)
+	var got []string
+	for {
+		rec, err := next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		require.NoError(t, err)
+		_, _, body, err := workload.DecodeObject(rec.Value)
+		require.NoError(t, err)
+		got = append(got, string(rec.Key)+"="+string(body))
+	}
+	require.Equal(t, []string{"lake/main/t/f1.parquet=f1", "lake/_ducklake/catalog.db=C1"}, got)
 }

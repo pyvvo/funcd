@@ -33,11 +33,13 @@ type target struct {
 	sql     v1.ObjectName
 	view    blob.Bucket
 	catalog string // with a lake: the blob key its catalog loads to (ADR-0293)
-	bucket  v1.ObjectName
-	volFn   v1.ObjectName // with volume: the Function whose local volume volume is loaded (ADR-0262)
-	volume  v1.ObjectName
-	lost    bool // with volume: its Function's DataMissing names it, so what it holds dates from after the loss (#1206)
-	written bool
+	// catalogs, with a Bucket: the catalog store's view of the Lakes on its prefixes, where its catalog records load
+	catalogs blob.Bucket
+	bucket   v1.ObjectName
+	volFn    v1.ObjectName // with volume: the Function whose local volume volume is loaded (ADR-0262)
+	volume   v1.ObjectName
+	lost     bool // with volume: its Function's DataMissing names it, so what it holds dates from after the loss (#1206)
+	written  bool
 }
 
 // Reconcile drives a Restore Pending → Running → Succeeded | Failed. It waits for its Backup to succeed; an in-place
@@ -297,6 +299,9 @@ func (r *RestoreReconciler) plan(ctx context.Context, rs *v1.Restore, m workload
 		case mb.Kind == v1.KindBucket:
 			_, err = r.d.Store.Get(ctx, v1.KindBucket.GVK(), ns, dest)
 			t.bucket, t.view = dest, blob.Prefixed(r.d.Sources.Blob, r.d.Sources.BucketPrefix(ns, dest))
+			if p := r.d.Sources.BucketCatalogPrefix(ns, dest); p != "" {
+				t.catalogs = blob.Prefixed(r.d.Sources.Blob, p)
+			}
 		case mb.Kind == v1.KindSQLDatabase:
 			_, err = r.d.Store.Get(ctx, v1.KindSQLDatabase.GVK(), ns, dest)
 			t.sql = dest
@@ -344,8 +349,9 @@ func (r *RestoreReconciler) plan(ctx context.Context, rs *v1.Restore, m workload
 	return out, "", nil
 }
 
-// isEmpty reports a target with no data; a SQLDatabase also needs no Function binding it, which closes the race
-// between the check and the load (ADR-0234 Decision 3), and a Ready engine to answer.
+// isEmpty reports a target with no data; a Bucket also needs no catalog of a Lake on its prefixes, whose rows are its
+// data (ADR-0293 Decision 6), and a SQLDatabase no Function binding it, which closes the race between the check and the
+// load (ADR-0234 Decision 3), and a Ready engine to answer.
 func (r *RestoreReconciler) isEmpty(ctx context.Context, ns v1.NamespaceName, t *target) (bool, error) {
 	if t.volume != "" {
 		if r.d.Volumes == nil {
@@ -385,13 +391,19 @@ func (r *RestoreReconciler) isEmpty(ctx context.Context, ns v1.NamespaceName, t 
 			return false, err
 		}
 	}
+	if t.catalogs != nil {
+		items, _, err := t.catalogs.ListAfter(ctx, "", "", 1)
+		if err != nil || len(items) > 0 {
+			return false, err
+		}
+	}
 	items, _, err := t.view.ListAfter(ctx, "", "", 1)
 	return len(items) == 0, err
 }
 
 // fill empties an in-place target, then loads its member: a KVStore by LoadPrefix, a SQLDatabase by streaming its
-// file's records to the engine's load, which replaces all its data, objects by Put, a lake's files before its
-// catalog.db.
+// file's records to the engine's load, which replaces all its data, objects by Put, a Bucket's Lakes' catalogs into the
+// catalog store, a lake's files before its catalog.db.
 func (r *RestoreReconciler) fill(ctx context.Context, ns v1.NamespaceName, t *target, src blob.Bucket, path string, unseal backup.Unseal) (string, error) {
 	if t.volume != "" {
 		return r.fillVolume(ctx, ns, t, src, path, unseal)
@@ -438,8 +450,11 @@ func (r *RestoreReconciler) fill(ctx context.Context, ns v1.NamespaceName, t *ta
 				return ReasonIntegrity, err
 			}
 			view, key := t.view, string(rec.Key)
-			if t.catalog != "" && key == workload.CatalogRecord {
+			switch {
+			case t.catalog != "" && key == workload.CatalogRecord:
 				view, key = r.d.Sources.Blob, t.catalog
+			case t.catalogs != nil && workload.IsBucketCatalog(key):
+				view = t.catalogs
 			}
 			if err := view.Put(ctx, key, body, blob.PutOptions{ContentType: ct, Metadata: md}); err != nil {
 				return reasonFailed, err
