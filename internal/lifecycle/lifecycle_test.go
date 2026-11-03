@@ -151,6 +151,29 @@ func TestPhases_HooksNamesWhatEachProviderHas(t *testing.T) {
 	require.Equal(t, []string{"a: start, before stop, stop", "b: stop", "c: ", "d: run"}, ph.Hooks())
 }
 
+// quoter is a shared hook of the test package, as one beside lifecycle defines its own.
+type quoter interface {
+	lifecycle.Provider
+	Quota() string
+}
+
+// quoted has the shared hook and a Stop.
+type quoted struct{ stopOnly }
+
+func (q *quoted) Quota() string { return "quota " + q.name }
+
+// Each walks a shared hook in list order, and Hooks names it after the lifecycle's own hooks.
+func TestPhases_EachWalksASharedHookInOrder(t *testing.T) {
+	ph := lifecycle.New(&quoted{stopOnly{name: "a"}}, &full{name: "b"}, none{name: "c"}, &quoted{stopOnly{name: "d"}})
+	var got []string
+	for _, q := range lifecycle.Each[quoter](ph) {
+		got = append(got, q.Quota())
+	}
+	require.Equal(t, []string{"quota a", "quota d"}, got)
+	require.Equal(t, []string{"a: stop, quotas", "b: start, before stop, stop", "c: ", "d: stop, quotas"},
+		ph.Hooks(lifecycle.Named[quoter]("quotas")))
+}
+
 // runner has a Run that serves until its context ends.
 type runner struct {
 	name  string
@@ -198,4 +221,53 @@ func TestPhases_RunAfterStopStartsNothing(t *testing.T) {
 		t.Fatal("a Runner started after stopping began")
 	default:
 	}
+}
+
+// reclaimer reclaims, failing with err when it is set; during, when set, runs inside its Reclaim.
+type reclaimer struct {
+	name   string
+	j      *journal
+	err    error
+	during func()
+}
+
+var _ lifecycle.Reclaimer = (*reclaimer)(nil)
+
+func (r *reclaimer) Name() string { return r.name }
+
+func (r *reclaimer) Reclaim(context.Context) error {
+	r.j.add("reclaim " + r.name)
+	if r.during != nil {
+		r.during()
+	}
+	return r.err
+}
+
+// scenario: a-failed-reclaim-warns-and-boots
+// scenario: a-stop-during-boot-reclaims-nothing-more
+// Reclaim runs every Reclaimer in list order, past a failed one, and joins the errors with their provider's name. Once
+// a stop phase began, before the walk or during a reclaim, it reclaims nothing more.
+func TestPhases_ReclaimRunsEveryReclaimerInOrder(t *testing.T) {
+	j := &journal{}
+	errA, errC := errors.New("disk full"), errors.New("store unreachable")
+	ph := lifecycle.New(&reclaimer{name: "a", j: j, err: errA}, none{name: "n"}, &reclaimer{name: "b", j: j},
+		&reclaimer{name: "c", j: j, err: errC})
+	err := ph.Reclaim(context.Background())
+	require.ErrorIs(t, err, errA)
+	require.ErrorIs(t, err, errC)
+	require.ErrorContains(t, err, "reclaim a: disk full")
+	require.ErrorContains(t, err, "reclaim c: store unreachable")
+	require.Equal(t, []string{"reclaim a", "reclaim b", "reclaim c"}, j.list())
+	require.Equal(t, []string{"a: reclaim", "n: ", "b: reclaim", "c: reclaim"}, ph.Hooks())
+
+	require.NoError(t, ph.Stop(context.Background()))
+	require.NoError(t, ph.Reclaim(context.Background()))
+	require.Equal(t, []string{"reclaim a", "reclaim b", "reclaim c"}, j.list(), "nothing is reclaimed once a stop began")
+
+	cj := &journal{}
+	var cut *lifecycle.Phases
+	stop := func() { require.NoError(t, cut.BeforeStop(context.Background())) }
+	cut = lifecycle.New(&reclaimer{name: "a", j: cj, during: stop}, &reclaimer{name: "b", j: cj})
+	require.NoError(t, cut.Reclaim(context.Background()))
+	require.Equal(t, []string{"reclaim a"}, cj.list(), "a stop that began during a reclaim reclaims nothing more")
 }

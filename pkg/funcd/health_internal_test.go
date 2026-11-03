@@ -69,7 +69,7 @@ func healthPlatform(t *testing.T, kv kvstore.KV, b blob.Bucket) *Platform {
 // dependencies asks the platform's invoke socket of fn for GET /health/dependencies, as a new shim's readiness does.
 func dependencies(t *testing.T, p *Platform, fn v1.ObjectName) (int, *local.DependencyReport) {
 	t.Helper()
-	sock, err := p.invokeMgr.SocketFor("default", fn)
+	sock, err := p.exec.sockets.SocketFor("default", fn)
 	require.NoError(t, err)
 	c := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", sock)
@@ -229,4 +229,37 @@ func TestDependencyCheckReadsThePolicies(t *testing.T) {
 		code, _ := dependencies(t, p, "todo-api")
 		return code == http.StatusOK
 	}, 5*time.Second, 5*time.Millisecond)
+}
+
+// scenario: a-forbidden-link-fails-the-dependency-check
+// A forbid Policy on a link's link::invoke is a Forbidden report naming the link (ADR-0215 Decision 3): the links check
+// asks the PDP that invoke's build keeps, and New builds invoke before the dependency check (ADR-0309 Decision 3).
+func TestDependencyCheck_AForbiddenLinkFails(t *testing.T) {
+	t.Parallel()
+	mem, err := gocloud.Open(context.Background(), "mem://")
+	require.NoError(t, err)
+	p := healthPlatform(t, kvmemory.New(), mem)
+	for name, links := range map[v1.ObjectName][]v1.FunctionLink{"front": {{Alias: "next", Target: "billing"}}, "billing": nil} {
+		fn := &v1.Function{TypeMeta: tmeta(v1.KindFunction), ObjectMeta: v1.ObjectMeta{Namespace: "default", ResourceGroup: "rg1", Name: name},
+			Spec: v1.FunctionSpec{Runtime: "nodejs22", Handler: "index.handler", Image: "oci-layout://" + string(name) + ":1",
+				Bindings: v1.FunctionBindings{Links: links}}}
+		create(t, p.cfg.store, fn)
+	}
+	require.Eventually(t, func() bool {
+		code, _ := dependencies(t, p, "front")
+		return code == http.StatusOK
+	}, 5*time.Second, 5*time.Millisecond, "the declared link grants the invoke")
+
+	pol := &v1.Policy{TypeMeta: tmeta(v1.KindPolicy), ObjectMeta: v1.ObjectMeta{Namespace: "default", ResourceGroup: "rg1", Name: "forbid-link"}}
+	pol.Spec.Cedar = `forbid(principal == Function::"default/front", action == Action::"link::invoke", resource == Function::"default/billing");`
+	create(t, p.cfg.store, pol)
+	var rep *local.DependencyReport
+	require.Eventually(t, func() bool {
+		var code int
+		code, rep = dependencies(t, p, "front")
+		return code == http.StatusServiceUnavailable
+	}, 5*time.Second, 5*time.Millisecond, "a forbidden link fails the check")
+	require.Equal(t, "link", rep.Kind)
+	require.Equal(t, "next", rep.Binding)
+	require.Equal(t, "Forbidden", rep.Reason)
 }

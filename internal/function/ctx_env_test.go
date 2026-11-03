@@ -13,6 +13,7 @@ import (
 	lakegw "github.com/pyvvo/funcd/internal/lake/gateway"
 )
 
+// scenario: a-pool-shares-only-what-is-shared (ADR-0306)
 // scenario: ctx-pooled-member — two Functions in one pool share its config with its key list (ADR-0245) in the pool's
 // shared env, which holds no secret value and no FUNCD_SECRET_KEYS (ADR-0249), and each member's manifest row carries
 // its own lake token.

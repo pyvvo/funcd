@@ -46,7 +46,7 @@ func pythonFn() *v1.Function {
 func TestScenarioBundleEnvProcessMode(t *testing.T) {
 	t.Parallel()
 	r := newShimReconciler(t, nil)
-	spec := mustWorkerSpec(t, r, pythonFn(), "/art/bundle/handler.py", envresolve.Resolved{}, nil)
+	spec := mustWorkerSpec(t, r, pythonFn(), "/art/bundle/handler.py", envresolve.Resolved{})
 
 	require.Equal(t, "/art/bundle", spec.Env["FUNCD_BUNDLE_DIR"], "the bundle root is Dir(artifactPath)")
 	require.Equal(t, "/art/bundle", spec.Env["PYTHONPATH"], "python family imports vendored deps via PYTHONPATH")
@@ -57,7 +57,7 @@ func TestScenarioBundleEnvProcessMode(t *testing.T) {
 func TestScenarioBundleEnvContainerMode(t *testing.T) {
 	t.Parallel()
 	r := newContainerReconciler(t)
-	spec := mustWorkerSpec(t, r, pythonFn(), "/art/bundle/handler.py", envresolve.Resolved{}, nil)
+	spec := mustWorkerSpec(t, r, pythonFn(), "/art/bundle/handler.py", envresolve.Resolved{})
 
 	require.Equal(t, containerArtifactDir, spec.Env["FUNCD_BUNDLE_DIR"], "container bundle root == the bind-mount target")
 	require.Equal(t, containerArtifactDir, spec.Env["PYTHONPATH"])
@@ -67,7 +67,7 @@ func TestScenarioBundleEnvContainerMode(t *testing.T) {
 func TestScenarioBundleEnvNonPythonNoPythonpath(t *testing.T) {
 	t.Parallel()
 	r := newShimReconciler(t, nil)
-	spec := mustWorkerSpec(t, r, sampleFn(), "/art/app.mjs", envresolve.Resolved{}, nil) // sampleFn is nodejs22
+	spec := mustWorkerSpec(t, r, sampleFn(), "/art/app.mjs", envresolve.Resolved{}) // sampleFn is nodejs22
 
 	require.Equal(t, "/art", spec.Env["FUNCD_BUNDLE_DIR"], "FUNCD_BUNDLE_DIR is generic (any runtime)")
 	_, hasPy := spec.Env["PYTHONPATH"]
@@ -79,7 +79,7 @@ func TestScenarioBundleEnvNonPythonNoPythonpath(t *testing.T) {
 func TestScenarioSingleFileBundleEnvHarmless(t *testing.T) {
 	t.Parallel()
 	r := newShimReconciler(t, nil)
-	spec := mustWorkerSpec(t, r, sampleFn(), "/art/app.mjs", envresolve.Resolved{}, nil)
+	spec := mustWorkerSpec(t, r, sampleFn(), "/art/app.mjs", envresolve.Resolved{})
 
 	require.Equal(t, "/art/app.mjs", spec.Env["FUNCD_ARTIFACT"], "FUNCD_ARTIFACT unchanged for a single file")
 	require.Equal(t, "app.handler", spec.Env["FUNCD_HANDLER"])
@@ -102,7 +102,7 @@ func TestScenarioFuncdNamesNoContract(t *testing.T) {
 			t.Parallel()
 			root := t.TempDir()
 			require.NoError(t, os.WriteFile(filepath.Join(root, tc.contract), []byte(`{"input":{},"output":{}}`), 0o600))
-			spec := mustWorkerSpec(t, tc.r, tc.fn, filepath.Join(root, tc.artifact), envresolve.Resolved{}, nil)
+			spec := mustWorkerSpec(t, tc.r, tc.fn, filepath.Join(root, tc.artifact), envresolve.Resolved{})
 			_, has := spec.Env["FUNCD_CONTRACT_PATH"]
 			require.False(t, has, "the worker's env names no contract")
 			require.NoFileExists(t, filepath.Join(root, ".funcd-contract-open.json"), "funcd writes no open contract")

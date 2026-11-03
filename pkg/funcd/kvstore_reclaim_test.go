@@ -23,6 +23,7 @@ import (
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
+// scenario: deleted-data-quarantined-at-boot
 // A KVStore whose delete committed before its NotFound reconcile ran (a crash, or a stop that drops that
 // reconcile) keeps its <ns>/<store>/ data in the KV engine; the next start moves it into the quarantine (ADR-0170
 // "also across a crash", ADR-0288), so a store re-created under the same name starts empty.

@@ -88,9 +88,9 @@ func newFixture(t *testing.T) *fixture {
 	f.prob = newProber(t, nil, time.Hour, time.Second, map[health.Target]health.Probe{
 		health.TargetKV: f.kvP.probe, health.TargetBlob: f.blobP.probe,
 	})
-	f.check = health.NewChecker(health.CheckerDeps{
-		Store: f.st, KV: f.kv, Blob: f.blob, Links: local.NewResolver(f.st), Authz: f.pdp, Health: f.prob,
-	})
+	f.check = health.NewChecker(health.CheckerDeps{Store: f.st, Bindings: []health.Binding{
+		health.KV(f.kv, f.prob), health.Blob(f.blob, f.prob), health.Links(local.NewResolver(f.st), f.pdp, f.st),
+	}})
 	return f
 }
 
@@ -281,7 +281,8 @@ func TestCheckerSQL(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	sql := &readCheck{errs: map[string]error{}}
-	check := health.NewChecker(health.CheckerDeps{Store: f.st, KV: f.kv, Blob: f.blob, SQL: sql, Links: local.NewResolver(f.st), Authz: f.pdp, Health: f.prob})
+	check := health.NewChecker(health.CheckerDeps{Store: f.st, Bindings: []health.Binding{health.KV(f.kv, f.prob),
+		health.Blob(f.blob, f.prob), health.SQL(sql), health.Links(local.NewResolver(f.st), f.pdp, f.st)}})
 	f.fn("todo-api", "", func(fn *v1.Function) {
 		api(fn)
 		fn.Spec.Bindings.SQL = []v1.FunctionSQL{{Alias: "app", Database: "todo-db"}}

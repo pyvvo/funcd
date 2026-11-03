@@ -32,6 +32,8 @@ func (h *shimHarness) createObj(t *testing.T, k v1.Kind, name string, change fun
 		o.Name, o.Namespace, o.ResourceGroup = v1.ObjectName(name), "default", "rg1"
 	case *v1.Policy:
 		o.Name, o.Namespace, o.ResourceGroup = v1.ObjectName(name), "default", "rg1"
+	case *v1.ConfigMap:
+		o.Name, o.Namespace, o.ResourceGroup = v1.ObjectName(name), "default", "rg1"
 	}
 	_, err := h.st.Create(context.Background(), obj)
 	require.NoError(t, err)
@@ -146,6 +148,7 @@ func TestScenarioPoolSplitsByGrant(t *testing.T) {
 	}
 }
 
+// scenario: a-pool-shares-only-what-is-shared (ADR-0306)
 // Each manifest row carries only its member's credentials and bundle dir; the shared env comes from the member being
 // reconciled; the load bound and the pool socket are set; the manifest is 0600 in a 0700 dir.
 func TestPoolManifestCarriesMemberEnv(t *testing.T) {

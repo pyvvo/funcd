@@ -8,7 +8,6 @@ package funcd
 import (
 	"cmp"
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"github.com/pyvvo/funcd/internal/ownedstore"
@@ -20,7 +19,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -61,7 +59,6 @@ import (
 	"github.com/pyvvo/funcd/internal/eventing/deadletter"
 	"github.com/pyvvo/funcd/internal/eventing/eventstore"
 	"github.com/pyvvo/funcd/internal/funclog"
-	"github.com/pyvvo/funcd/internal/funclog/compact"
 	"github.com/pyvvo/funcd/internal/funclog/logread"
 	"github.com/pyvvo/funcd/internal/function"
 	"github.com/pyvvo/funcd/internal/gateway"
@@ -70,7 +67,6 @@ import (
 	"github.com/pyvvo/funcd/internal/invoke"
 	"github.com/pyvvo/funcd/internal/kvstore"
 	kvmemory "github.com/pyvvo/funcd/internal/kvstore/memory"
-	lakegw "github.com/pyvvo/funcd/internal/lake/gateway"
 	"github.com/pyvvo/funcd/internal/lifecycle"
 	"github.com/pyvvo/funcd/internal/network"
 	"github.com/pyvvo/funcd/internal/network/egress"
@@ -84,7 +80,6 @@ import (
 	"github.com/pyvvo/funcd/internal/route/owned"
 	"github.com/pyvvo/funcd/internal/runtime"
 	"github.com/pyvvo/funcd/internal/runtime/process"
-	"github.com/pyvvo/funcd/internal/runtime/workerpipe"
 	"github.com/pyvvo/funcd/internal/scheduler/singlenode"
 	"github.com/pyvvo/funcd/internal/secrets"
 	"github.com/pyvvo/funcd/internal/sensor"
@@ -93,10 +88,8 @@ import (
 	blobsvc "github.com/pyvvo/funcd/internal/services/blob"
 	identitysvc "github.com/pyvvo/funcd/internal/services/identity"
 	kvsvc "github.com/pyvvo/funcd/internal/services/kv"
-	lakesvc "github.com/pyvvo/funcd/internal/services/lake"
 	rolessvc "github.com/pyvvo/funcd/internal/services/roles"
 	secretsvc "github.com/pyvvo/funcd/internal/services/secret"
-	sqlsvc "github.com/pyvvo/funcd/internal/services/sql"
 	"github.com/pyvvo/funcd/internal/site"
 	"github.com/pyvvo/funcd/internal/snapshot"
 	"github.com/pyvvo/funcd/internal/store"
@@ -395,50 +388,6 @@ type config struct {
 	presetBus  bus.Bus
 }
 
-// sqlFeedBootWait bounds how long the change feed's boot gate waits for the Sensors present at the start to subscribe
-// (ADR-0235 Decision 4); one that never does, an invalid Sensor, keeps no other change waiting past it.
-const sqlFeedBootWait = 30 * time.Second
-
-// openSQLFeed opens the change feed's boot gate once every Sensor present at the start has subscribed to each event it
-// names, so a change redelivered at boot reaches it; until then rqlite's deliveries answer 503 and are retried.
-func (p *Platform) openSQLFeed(ctx context.Context) {
-	defer p.sqlFeed.Loaded()
-	l, err := p.cfg.store.List(ctx, v1.KindSensor.GVK(), store.ListOptions{})
-	if err != nil {
-		p.logger.WarnContext(ctx, "sql change feed: list the Sensors to wait for", "error", err)
-		return
-	}
-	type dep struct {
-		ns            v1.NamespaceName
-		source, event v1.ObjectName
-	}
-	var deps []dep
-	for _, o := range l.Items {
-		if se, ok := o.(*v1.Sensor); ok {
-			for _, d := range se.Spec.On {
-				deps = append(deps, dep{ns: se.Namespace, source: d.Source, event: d.Event})
-			}
-		}
-	}
-	deadline := time.Now().Add(sqlFeedBootWait)
-	for {
-		deps = slices.DeleteFunc(deps, func(d dep) bool { return p.eventFanout.Subscribed(d.ns, d.source, d.event) })
-		if len(deps) == 0 {
-			return
-		}
-		if time.Now().After(deadline) {
-			p.logger.WarnContext(ctx, "sql change feed: opening with Sensors not subscribed", "waiting", len(deps),
-				"first", string(deps[0].ns)+"/"+string(deps[0].source)+"/"+string(deps[0].event))
-			return
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(50 * time.Millisecond):
-		}
-	}
-}
-
 // gate is the hold every side-effect runner asks (ADR-0206 Decision 6): hold.Never without WithHold.
 func (c *config) gate() hold.Gate {
 	if c.hold == nil {
@@ -504,7 +453,6 @@ type Platform struct {
 	checker      quota.Checker        // what every storage write asks: the quotas, behind the free-space floor (ADR-0296)
 	floor        *quota.Floor         // the free-space floor; nil ⇒ none
 	fnReconciler *function.Reconciler // the Function reconciler; Shutdown removes its private pool manifest dir
-	volumes      volume.Manager       // the Functions' volumes (ADR-0262); nil ⇒ off
 	logger       *slog.Logger
 	providers    *provider.Catalog // the platform provider catalog (ADR-0082)
 
@@ -522,43 +470,29 @@ type Platform struct {
 
 	routeReconciler *route.Reconciler      // Sets the full Route table once before the controller runs (ADR-0176)
 	backups         *backupsvc.Reconcilers // ADR-0222: the workload backups, whose runs Run waits for
-	kvReconciler    *kvsvc.Reconciler      // reclaims deleted stores' data once before the controller runs (issue #708)
-	sqlReconciler   *sqlsvc.Reconciler     // reclaims deleted databases' directories before the controller runs (ADR-0232)
-	sqlFeed         *sqlsvc.Feed           // the engines' change feed, served from Run (ADR-0235)
-	sqlFeedHost     string
-	sqlFeedPort     int
-	sqlFeedListener net.Listener   // bound by New on loopback with the port unset (ADR-0260); nil ⇒ Run binds the port
-	prober          *health.Prober // the storage probes (ADR-0215), started before the controller runs
+	prober          *health.Prober         // the storage probes (ADR-0215), started before the controller runs
 
 	dataPlaneServer   *http.Server // function-invocation listener (ADR-0033)
 	dataPlaneListener net.Listener
 	dataPlaneAddr     string
 
-	invokeMgr         *local.Manager          // per-function worker-node local API broker (ADR-0064)
-	invokeTmpDir      string                  // the temp socket dir New created (no WithInvokeSocketDir); removed by Shutdown
 	workflowRuns      runstate.Store          // durable workflow run state (ADR-0094); closed on shutdown
 	workflowSweeper   *workflow.RunReconciler // the run reconciler (ADR-0094); drives the retention sweep
 	workflowEngine    *workflow.Engine        // owns the run goroutines; drained on shutdown (ADR-0146)
 	workflowRetention time.Duration           // terminal-run retention horizon (0 ⇒ no sweep)
 
-	eventStore           *eventstore.Store         // eventing's durable store (ADR-0201): dead letters + seen lists; closed on shutdown
-	deadLetters          deadletter.Store          // the event store's dead-letter tenant (ADR-0118)
-	sensorReconciler     *sensor.Reconciler        // owns the retry workers (drained on shutdown) + the DLQ replay seam
-	deadletterRetention  time.Duration             // DLQ TTL horizon (0 ⇒ no TTL eviction)
-	deadletterMaxEntries int                       // DLQ per-namespace count cap (0 ⇒ unbounded)
-	logSink              *funclog.BlobSink         // structured function-log capture sink (ADR-0081); nil if unwired
-	traceSink            *funclog.BlobTraceSink    // per-invocation trace sink (ADR-0101); nil if unwired/disabled
-	logRoutes            logRoutes                 // the live capture Routes feeding logSink/traceSink, drained by Shutdown
-	compactor            *compact.Compactor        // funclog compacted compaction pipeline (ADR-0083); nil if unwired
-	s3gw                 *s3gateway.Server         // S3-protocol frontend (ADR-0080/0085); nil unless s3gwEnabled
-	s3Keys               s3gateway.Deriver         // the gateway's key-pair deriver (ADR-0270); zero unless s3gwEnabled
-	lakeProxy            *lakegw.Manager           // per-Lake node-private lake PEP proxies (ADR-0137); Shutdown-closed
-	egressGateway        egress.Gateway            // transparent egress PEP (ADR-0117, F81); nil unless egress enabled
-	egressForwarder      egress.Forwarder          // DNS forwarder / domain trust anchor (ADR-0117); nil unless enabled
-	egressWorkers        *egress.MemoryWorkerIndex // src-IP → Ref, populated by the containerd runtime (ADR-0117 §5)
-	workerServices       workerServices            // runs s3gw until Shutdown stops it, after the workers (#1232)
-	phases               *lifecycle.Phases         // the providers in boot order, the Executor first
-	exec                 *executor                 // the Executor provider
+	eventStore           *eventstore.Store  // eventing's durable store (ADR-0201): dead letters + seen lists; closed on shutdown
+	deadLetters          deadletter.Store   // the event store's dead-letter tenant (ADR-0118)
+	sensorReconciler     *sensor.Reconciler // owns the retry workers (drained on shutdown) + the DLQ replay seam
+	deadletterRetention  time.Duration      // DLQ TTL horizon (0 ⇒ no TTL eviction)
+	deadletterMaxEntries int                // DLQ per-namespace count cap (0 ⇒ unbounded)
+	phases               *lifecycle.Phases  // the providers in boot order, the Executor first
+	exec                 *executor          // the Executor provider
+	kv                   *kvProvider
+	blob                 *blobProvider
+	sql                  *sqlProvider
+	lake                 *lakeProvider
+	invoke               *invokeProvider
 
 	drainTimeout time.Duration // server.shutdownTimeout: bounds the HTTP, workflow-run and Sensor drains and a failed New's cleanup
 	shutdownOnce sync.Once
@@ -585,9 +519,10 @@ func New(opts ...Option) (_ *Platform, err error) {
 	p := &Platform{cfg: cfg, drainTimeout: shutdownTimeout}
 	// The Executor is listed before anything is built, so a New that fails still closes the runtime its options opened
 	// (#94).
-	p.exec = &executor{p: p}
-	p.phases = lifecycle.New(append([]lifecycle.Provider{p.exec, &kvProvider{p}, &blobProvider{p}, &sqlProvider{p},
-		&lakeProvider{p}, &eventingProvider{p}}, hookless()...)...)
+	p.exec, p.kv, p.blob, p.sql, p.lake, p.invoke = &executor{cfg: cfg}, &kvProvider{cfg: cfg}, &blobProvider{cfg: cfg},
+		&sqlProvider{cfg: cfg}, &lakeProvider{cfg: cfg}, &invokeProvider{cfg: cfg}
+	p.phases = lifecycle.New(append(append([]lifecycle.Provider{p.exec, p.kv, p.blob, p.sql, p.lake, &eventingProvider{p}},
+		hookless()...), p.invoke)...)
 	// A failed New releases what the options and the build acquired, so the caller can retry (issue #94).
 	defer func() {
 		if err != nil {
@@ -644,9 +579,6 @@ func (p *Platform) buildControlPlane() error {
 		p.floor = quota.NewFloor(c.floorFree, c.floorMinFree, clock.System(), p.logger)
 		p.checker = p.floor.Guard(p.quotas)
 	}
-	if c.blob != nil {
-		p.quotas.Register(v1.KindBucket, bucketQuotas(c.blob, c.store))
-	}
 	if c.authorizer == nil {
 		c.authorizer = rbac.New()
 	}
@@ -661,20 +593,6 @@ func (p *Platform) buildControlPlane() error {
 	}
 	if c.dataPlaneAddr == "" {
 		c.dataPlaneAddr = defaultDataPlaneAddr
-	}
-	// KVStore per-namespace count quota (ADR-0072): 0 ⇒ the default (100); negative disables it.
-	kvMaxStores := c.kvMaxStoresPerNamespace
-	if kvMaxStores == 0 {
-		kvMaxStores = defaultKVStoresPerNamespace
-	}
-	// Bucket per-namespace count quota (ADR-0080): 0 ⇒ the default (100); negative disables it.
-	bucketMax := c.bucketMaxPerNamespace
-	if bucketMax == 0 {
-		bucketMax = defaultBucketsPerNamespace
-	}
-	sqlMax := c.sqlMaxDatabasesPerNamespace
-	if sqlMax == 0 {
-		sqlMax = defaultSQLDatabasesPerNamespace
 	}
 
 	sched, err := singlenode.New(c.localNode, c.nodePlatform)
@@ -707,36 +625,12 @@ func (p *Platform) buildControlPlane() error {
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build secrets resolver")
 	}
-	// Worker-node local API (ADR-0064): the per-function fn-to-fn invoke broker. Its Invoker
-	// forwards through the data-plane handler built below, so wire that handler via a holder set
-	// after it exists (the reconciler is constructed before the data plane, which wraps its activator).
+	// A worker's fn-to-fn invoke (ADR-0064) forwards through the data-plane handler built below, so the local API's
+	// Invoker reaches it through a holder set once it exists.
 	dpHolder := &local.HandlerHolder{}
-	invokeSockDir := c.invokeSocketDir // config-derived (<dataDir>/invoke); empty ⇒ a temp dir (InMemory/tests)
-	if invokeSockDir == "" {
-		tmp, terr := os.MkdirTemp("", "funcd-invoke")
-		if terr != nil {
-			return fault.Wrapf(terr, fault.Internal, op, "create invoke socket dir")
-		}
-		invokeSockDir, p.invokeTmpDir = tmp, tmp
-	}
-	if err := local.CheckDir(invokeSockDir); err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), op, "invoke socket dir")
-	}
-	// KV service (ADR-0069/0072/0073): the durable driver (config-selected, ADR-0066) behind the
-	// binding-gated Facade, reached by functions through the worker-node local API's /kv routes. Defaults
-	// to in-memory. The BindingResolver resolves a caller's (function, alias) to its (store, table) via
-	// the caller's Function.spec.bindings.kv over the metastore (default-deny); reads are coarse-allowed for any
-	// bound caller, writes are owner-only (ADR-0073).
+	// The KV driver (config-selected, ADR-0066) defaults to in-memory.
 	if c.kvStore == nil {
 		c.kvStore = kvmemory.New()
-	}
-	// After the default is set: the in-memory driver counts its usage too (ADR-0292, issue #1370).
-	if kv, ok := c.kvStore.(kvstore.Usager); ok {
-		p.quotas.Register(v1.KindKVStore, kvQuotas(kv, c.store))
-	}
-	kvResolver, err := kvsvc.NewResolver(metaReader{c.store})
-	if err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), op, "build KV binding resolver")
 	}
 	// Cedar PDP driver (ADR-0074): the per-object authorization engine the KV facade (PEP) calls for
 	// kv::read/kv::write. Entities are materialized per call from the metastore (principal Function +
@@ -774,36 +668,6 @@ func (p *Platform) buildControlPlane() error {
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build cedar PDP driver")
 	}
-	kvFacade, err := kvsvc.NewFacade(kvsvc.FacadeDeps{KV: c.kvStore, Resolver: kvResolver, Authorizer: cedarPDP, Quota: p.checker, Logger: p.logger})
-	if err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), op, "build KV facade")
-	}
-	// The invoke Manager (ADR-0064) now also carries the cedar PDP (ADR-0075): the per-sandbox local
-	// API asks link::invoke on the resolved target so a forbid Policy can revoke a declared link.
-	// The function-facing blob facade (ADR-0127): context.blob's PEP. Built only when a blob substrate
-	// is present (else the /blob routes stay off, exactly like a nil kv). It reuses the SAME cedar PDP
-	// (the S3Capability already materializes a Function's spec.bindings.blob as its blobBindings), the SAME
-	// s3BucketFor substrate view, and the SAME blobKey keyspace as the ADR-0080 S3 frontend — so objects
-	// written via context.blob are the objects the S3 frontend serves. A nil interface (not a nil
-	// *Facade) keeps the routes off; a typed nil pointer would slip past NewHandler's nil check.
-	var blobPort local.Blob
-	var blobCheck health.ReadChecker
-	if c.blob != nil {
-		blobResolver, rerr := blobsvc.NewResolver(metaReader{c.store})
-		if rerr != nil {
-			return fault.Wrapf(rerr, fault.KindOf(rerr), op, "build blob binding resolver")
-		}
-		blobFacade, berr := blobsvc.NewFacade(blobsvc.FacadeDeps{
-			Resolver:   blobResolver,
-			BucketFor:  s3BucketFor(c.blob, c.store, p.checker),
-			Authorizer: cedarPDP,
-			Logger:     p.logger,
-		})
-		if berr != nil {
-			return fault.Wrapf(berr, fault.KindOf(berr), op, "build blob facade")
-		}
-		blobPort, blobCheck = blobFacade, blobFacade
-	}
 	// ADR-0215: the storage probes read a sentinel key of the KV engine and the blob store; the dependency check the
 	// local API answers reads their results, the Facades' resolve and read authorization, the link resolver and the PDP.
 	probes := map[health.Target]health.Probe{health.TargetKV: health.KVProbe(c.kvStore)}
@@ -831,23 +695,79 @@ func (p *Platform) buildControlPlane() error {
 			return fault.Wrapf(merr, fault.KindOf(merr), op, "load node master secret")
 		}
 	}
-	// ADR-0233: the SQL facade, context.sql's PEP, over the engines the SQLDatabase reconciler records.
-	sqlEngines := sqlsvc.NewEngines()
-	sqlResolver, err := sqlsvc.NewResolver(metaReader{c.store})
+	ctrl, err := controller.New(controller.Deps{Store: c.store, Logger: p.logger, RetryBackoffMax: c.pacing.RetryBackoffMax})
 	if err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), op, "build SQL binding resolver")
+		return fault.Wrapf(err, fault.KindOf(err), op, "build controller")
 	}
-	sqlFacade, err := sqlsvc.NewFacade(sqlsvc.FacadeDeps{
-		Resolver: sqlResolver, Authorizer: cedarPDP, Engines: sqlEngines, Master: master, CallTimeout: c.sqlCallTimeout,
-		Quota: p.checker, Logger: p.logger,
-	})
+	p.edgeRouter = router.New() // ADR-0110 (F79): shared by the Route reconciler + the data-plane handler
+	// Edge-route aggregator (ADR-0138): the SINGLE sole-writer of p.edgeRouter's replace-all table. The
+	// Route reconciler (user Routes) and the Lake reconciler (its node-private lake::query
+	// PEP proxy entry) each Set only their own source partition; the aggregator unions all sources into
+	// one Program call — so an exposed lake coexists with user Routes instead of clobbering them. The
+	// data-plane still reads p.edgeRouter directly (Resolve); only writes go through the aggregator.
+	// ADR-0176: it arbitrates every source's claims against the namespace exposure modes and re-runs the
+	// reconciler of each owner whose verdict another source's Set changed.
+	edgeAgg := router.NewAggregator(p.edgeRouter,
+		func(ctx context.Context, ns v1.NamespaceName) (v1.ExposureMode, error) {
+			obj, err := c.store.Get(ctx, v1.KindNamespace.GVK(), "", v1.ObjectName(ns))
+			if err != nil {
+				return "", err
+			}
+			n, ok := obj.(*v1.Namespace)
+			if !ok {
+				return "", fault.Internalf(op, "namespace %q is a %T", ns, obj)
+			}
+			return n.Spec.DefaultExposure.Normalized(), nil
+		},
+		func(o router.Owner) {
+			ctrl.Enqueue(controller.Request{GVK: o.Kind.GVK(), Namespace: o.Namespace, Name: o.Name})
+		},
+		c.baseDomain, p.logger)
+	// ADR-0108: an EventSource firing PUBLISHES a named CloudEvent onto the in-process Fanout; the F69
+	// Sensor subscribes to it (the action side — invoke/start-workflow — moved off the Source).
+	fanout := eventing.NewFanout()
+	p.eventFanout = fanout
+	// ADR-0201: the event store holds the Sensor's dead letters and the BlobWatcher's seen lists, on disk when
+	// deadletterDataDir is set, else in memory. On disk, the seen lists an earlier release kept in the KV move in
+	// before the BlobWatcher is built; a failed move fails the start and keeps the KV records for the next one.
+	es, err := eventstore.Open(eventstore.Config{InMemory: c.deadletterDataDir == "", Dir: c.deadletterDataDir})
 	if err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), op, "build SQL facade")
+		return fault.Wrapf(err, fault.KindOf(err), op, "open event store")
 	}
-	p.quotas.Register(v1.KindSQLDatabase, sqlQuotas(sqlFacade.Usage, c.store))
-	deps := health.NewChecker(health.CheckerDeps{
-		Store: c.store, KV: kvFacade, Blob: blobCheck, SQL: sqlFacade, Links: local.NewResolver(c.store), Authz: cedarPDP, Health: p.prober,
-	})
+	p.eventStore = es
+	if c.deadletterDataDir != "" {
+		ctx := context.Background()
+		moved, merr := eventstore.MigrateSeenLists(ctx, c.kvStore, es)
+		if merr != nil {
+			return fault.Wrapf(merr, fault.KindOf(merr), op, "move the blob seen lists out of the KV")
+		}
+		if moved > 0 {
+			p.logger.InfoContext(ctx, "moved blob seen lists from the KV into the event store", "count", moved)
+		}
+	}
+	// ADR-0309 Decision 3: the providers build their parts over the Platform's, kv, blob, sql and lake in list order, then
+	// invoke, whose links check reads the PDP; the Executor comes after them and the dependency check.
+	if err := p.kv.build(kvDeps{authz: cedarPDP, quota: p.checker, prober: p.prober, ctrl: ctrl}); err != nil {
+		return err
+	}
+	if err := p.blob.build(blobDeps{authz: cedarPDP, quota: p.checker, master: master, prober: p.prober, ctrl: ctrl}); err != nil {
+		return err
+	}
+	if err := p.sql.build(sqlDeps{authz: cedarPDP, quota: p.checker, master: master, ctrl: ctrl, fanout: fanout,
+		events: es}); err != nil {
+		return err
+	}
+	if err := p.lake.build(lakeDeps{authz: cedarPDP, master: master, floor: p.floor, secrets: secretResolver, routes: edgeAgg,
+		s3: p.blob.injection, ctrl: ctrl}); err != nil {
+		return err
+	}
+	if err := p.invoke.build(invokeDeps{authz: cedarPDP}); err != nil {
+		return err
+	}
+	// ADR-0308 Decision 3: every store's facade exists and the default KV driver is set (#1370), so the providers'
+	// quotas go in the Book and their bindings into the dependency check, in list order.
+	p.registerQuotas()
+	deps := health.NewChecker(health.CheckerDeps{Store: c.store, Bindings: p.dependencyChecks()})
 	nestedCap := c.nestedInFlightCap
 	if nestedCap == 0 {
 		nestedCap = defaultNestedInFlightCap
@@ -858,116 +778,23 @@ func (p *Platform) buildControlPlane() error {
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build secret facade")
 	}
-	p.invokeMgr = local.NewManager(invokeSockDir, c.store, invoker, cedarPDP, kvFacade, blobPort, deps, p.logger,
-		local.WithSQL(sqlFacade), local.WithSecrets(secretFacade))
-
-	// Egress gateway + DNS forwarder (ADR-0117, F81): the sole egress PEP + the domain trust anchor.
-	// Wired only when enabled (Linux/containerd only; egress.New is a no-op elsewhere, mirroring F80).
-	// The gateway authorizes every outbound worker connection via the cedar PDP (egress::connect over
-	// the forwarder-attested NetDestination); the forwarder records (worker,domain)→IP so a domain rule
-	// is trustworthy. The WorkerIndex is populated by the containerd runtime at worker provisioning (§5).
-	if c.egressGatewayEnabled {
-		p.egressWorkers = egress.NewMemoryWorkerIndex()
-		fwd := egress.NewForwarder(
-			netip.AddrPortFrom(netip.AddrFrom4([4]byte{0, 0, 0, 0}), c.dnsForwarderPort),
-			c.dnsUpstream,
-			p.egressWorkers,                // src-IP → namespace (ADR-0117 §5)
-			storeWildcardPatterns{c.store}, // namespace → EgressPolicy wildcards (judge Major 2 dep)
-		)
-		p.egressForwarder = fwd
-		p.egressGateway = egress.New(true, egress.Deps{
-			GatewayPort: c.egressGatewayPort,
-			Workers:     p.egressWorkers,
-			DNS:         fwd,
-			Authz:       cedarPDP,
-			Audit:       egressAuditSink{logger: p.logger.With("component", "egress.audit")},
-			Logger:      p.logger.With("component", "egress.gateway"),
-		})
+	// The Executor is built once the binding providers are: a worker's local API serves their facades, and the secret
+	// facade, which the Platform builds while secrets is a catalog entry.
+	if err := p.exec.build(execDeps{authz: cedarPDP, floor: p.floor, invoker: invoker, checks: deps, kv: p.kv.facade,
+		blob: p.blob.facade, sql: p.sql.facade, secrets: secretFacade}); err != nil {
+		return err
 	}
-
-	// S3 gateway (ADR-0080/0085): opt-in S3-protocol frontend over the blob substrate, reusing the
-	// cedar PDP as the PEP. When enabled, build the server and expose the per-function keypair deriver to
-	// the reconciler for worker-env injection. Disabled ⇒ nothing is built (no listener, no IAM, no
-	// injection) — zero-config unchanged. The master is loaded either way (ADR-0204 Decision 7), above.
-
-	var s3Injection function.S3GatewayInjection
-	if c.s3gwEnabled {
-		bucketFor := s3BucketFor(c.blob, c.store, p.checker)
-		// ADR-0270: a fresh salt per start, kept in memory, so a restart ends every earlier pair.
-		var salt []byte
-		if c.s3gwKeyPeriod > 0 {
-			salt = make([]byte, 32)
-			if _, rerr := rand.Read(salt); rerr != nil {
-				return fault.Wrapf(rerr, fault.Internal, op, "draw the S3 key salt")
-			}
-		}
-		gwDeps := s3gateway.Deps{
-			BucketFor:      bucketFor,
-			Buckets:        s3Buckets(c.store),
-			PDP:            cedarPDP,
-			Master:         master,
-			KeyPeriod:      c.s3gwKeyPeriod,
-			KeySalt:        salt,
-			Listen:         c.s3gwListenAddr,
-			MaxUploadBytes: c.s3gwMaxUploadBytes,
-			Catalogs: func(ns v1.NamespaceName) blob.Bucket {
-				// no quota caps a catalog; the view asks the free-space floor (ADR-0296 Decision 4)
-				return blob.Quoted(blob.Prefixed(c.blob, lakeCatalogPrefix(ns)), p.checker, quota.Subject{}, func(string) bool { return false })
-			},
-			CatalogMaxBytes: c.lakeCatalogMaxBytes,
-			LakeAt:          lakeAt(c.store),
-			// ADR-0135: resolve external Identity-issued keys to their stored secret (populates the
-			// previously-nil ExternalKeys seam), so a managed Identity authenticates over SigV4.
-			External: identitysvc.NewExternalKeys(c.store),
-			Logger:   p.logger,
-			Held:     c.callGate(),
-		}
-		srv, gerr := s3gateway.New(gwDeps)
-		if gerr != nil {
-			return fault.Wrapf(gerr, fault.KindOf(gerr), op, "build s3gateway")
-		}
-		p.s3gw = srv
-		keys := gwDeps.Deriver()
-		p.s3Keys = keys
-		s3Injection = function.S3GatewayInjection{
-			Enabled:    true,
-			ListenAddr: c.s3gwListenAddr,
-			Endpoint:   c.s3gwEndpoint,
-			Derive: func(kind v1.Kind, ns, name string) (string, string) {
-				kp := keys.Keypair(kind, ns, name)
-				return kp.AccessKey, kp.SecretKey
-			},
-			Period:     keys.Period,
-			RenewalAge: keys.RenewalAge,
-		}
-	}
-
-	// Lake PEP proxy manager (ADR-0137): the node-private per-Lake proxies that bring
-	// internal function→lake queries under the same per-caller, per-query Cedar PEP as blob/kv/S3.
-	// It resolves a presented lake token (a per-function MAC bearer or a minted per-Identity token)
-	// to its principal via lakeKeys, PEPs lake::query on the endpoint's Lake, and swaps
-	// the caller token for the shared engine token only after an allow. The lake reconciler binds a
-	// listener per lake on its recorded port and Ensures it fronts the Ready engine (publishing its url as
-	// Status.Endpoint); a deleted lake's listener closes once no Function binds it (ADR-0162).
-	// The proxies bind and publish the bridge address, node-private, or the shared loopback (ADR-0238).
-	catHost := cmp.Or(c.bridgeAddress, "127.0.0.1")
-	lakeKeys := lakegw.NewLakeKeys(master, c.store)
-	lakeMgr := lakegw.NewManager(catHost, lakeKeys, cedarPDP, p.logger)
-	p.lakeProxy = lakeMgr
 
 	// ADR-0143: one tracker counts every call to a worker — the activator's proxy, the Sensor invoker and the workflow
 	// dispatcher send through it — so the reconciler can tell when a demoted revision's worker is drained.
 	calls := activator.NewCallTracker(clock.System())
-	if err := p.openVolumes(); err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), op, "open the Function volumes")
-	}
 	fnReconciler, err := function.NewReconciler(function.Deps{
 		Store:                c.store,
 		QuarantinePeriod:     c.quarantinePeriodOrDefault(),
 		DefaultResources:     c.functionDefaultResources,
 		LogMaxRecordBytes:    cmp.Or(c.funclogMaxRecordBytes, funclog.DefaultMaxRecordBytes),
 		Calls:                calls,
-		InvokeSockets:        p.invokeMgr,
+		InvokeSockets:        p.exec.sockets,
 		Runtime:              c.runtime,
 		Scheduler:            sched,
 		Gateway:              c.gateway,
@@ -995,18 +822,19 @@ func (p *Platform) buildControlPlane() error {
 		PoolShimsByFamily:    c.poolShimsByFamily,
 		PoolManifestDir:      c.poolManifestDir,
 		PoolLimit:            c.poolLimit,
-		S3Gateway:            s3Injection,
+		S3Gateway:            p.blob.injection,
 		LakeMaster:           master, // ADR-0137: per-function lake token derivation (same master as S3)
 		LakeExtensionDir:     c.lakeExtensionDir,
-		LakeProxies:          lakeMgr,
+		LakeProxies:          p.lake.proxy,
 		Secrets:              secretResolver,
-		Volumes:              p.volumes,
-		VolumesDurable:       p.volumes != nil && !c.functionVolumesEphemeral,
+		Volumes:              p.exec.volumes,
+		VolumesDurable:       p.exec.volumes != nil && !c.functionVolumesEphemeral,
 		Hold:                 c.gate(),
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build function reconciler")
 	}
+	p.exec.captureLogs(fnReconciler) // a pool worker's lines go to the members the reconciler names
 	dispatcher, err := services.NewDispatcher(c.store, p.logger, kvsvc.NewHandler(), blobsvc.NewHandler())
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build service dispatcher")
@@ -1026,28 +854,6 @@ func (p *Platform) buildControlPlane() error {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build activator")
 	}
 	p.activator = act
-	// ADR-0108: an EventSource firing PUBLISHES a named CloudEvent onto the in-process Fanout; the F69
-	// Sensor subscribes to it (the action side — invoke/start-workflow — moved off the Source).
-	fanout := eventing.NewFanout()
-	p.eventFanout = fanout
-	// ADR-0201: the event store holds the Sensor's dead letters and the BlobWatcher's seen lists, on disk when
-	// deadletterDataDir is set, else in memory. On disk, the seen lists an earlier release kept in the KV move in
-	// before the BlobWatcher is built; a failed move fails the start and keeps the KV records for the next one.
-	es, err := eventstore.Open(eventstore.Config{InMemory: c.deadletterDataDir == "", Dir: c.deadletterDataDir})
-	if err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), op, "open event store")
-	}
-	p.eventStore = es
-	if c.deadletterDataDir != "" {
-		ctx := context.Background()
-		moved, merr := eventstore.MigrateSeenLists(ctx, c.kvStore, es)
-		if merr != nil {
-			return fault.Wrapf(merr, fault.KindOf(merr), op, "move the blob seen lists out of the KV")
-		}
-		if moved > 0 {
-			p.logger.InfoContext(ctx, "moved blob seen lists from the KV into the event store", "count", moved)
-		}
-	}
 	// ADR-0119 (F83): the blob EventSource poll watcher. It lists the SAME s3BucketFor substrate view
 	// external S3-frontend writes land in (writer-agnostic detection over blob.Bucket.List), keeps its per-event
 	// seen lists in the event store, and publishes a named CloudEvent per new object onto the same Fanout the
@@ -1074,37 +880,9 @@ func (p *Platform) buildControlPlane() error {
 	}
 	p.eventing = source
 
-	ctrl, err := controller.New(controller.Deps{Store: c.store, Logger: p.logger, RetryBackoffMax: c.pacing.RetryBackoffMax})
-	if err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), op, "build controller")
-	}
 	if p.collector, err = gc.New(gc.Deps{Store: c.store, Purger: bucketPurger{shared: c.blob}, Interval: c.gcSweepInterval, Logger: p.logger}); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build garbage collector")
 	}
-	p.edgeRouter = router.New() // ADR-0110 (F79): shared by the Route reconciler + the data-plane handler
-	// Edge-route aggregator (ADR-0138): the SINGLE sole-writer of p.edgeRouter's replace-all table. The
-	// Route reconciler (user Routes) and the Lake reconciler (its node-private lake::query
-	// PEP proxy entry) each Set only their own source partition; the aggregator unions all sources into
-	// one Program call — so an exposed lake coexists with user Routes instead of clobbering them. The
-	// data-plane still reads p.edgeRouter directly (Resolve); only writes go through the aggregator.
-	// ADR-0176: it arbitrates every source's claims against the namespace exposure modes and re-runs the
-	// reconciler of each owner whose verdict another source's Set changed.
-	edgeAgg := router.NewAggregator(p.edgeRouter,
-		func(ctx context.Context, ns v1.NamespaceName) (v1.ExposureMode, error) {
-			obj, err := c.store.Get(ctx, v1.KindNamespace.GVK(), "", v1.ObjectName(ns))
-			if err != nil {
-				return "", err
-			}
-			n, ok := obj.(*v1.Namespace)
-			if !ok {
-				return "", fault.Internalf(op, "namespace %q is a %T", ns, obj)
-			}
-			return n.Spec.DefaultExposure.Normalized(), nil
-		},
-		func(o router.Owner) {
-			ctrl.Enqueue(controller.Request{GVK: o.Kind.GVK(), Namespace: o.Namespace, Name: o.Name})
-		},
-		c.baseDomain, p.logger)
 	ctrl.Register(v1.KindFunction.GVK(), fnReconciler)
 	p.fnReconciler = fnReconciler
 	// a held revision's wake or reclaim is written to its Revision's status (ADR-0190 Decision 5)
@@ -1189,24 +967,7 @@ func (p *Platform) buildControlPlane() error {
 	ctrl.Watches(v1.KindRoute.GVK(), owned.MapOwner(c.store, v1.KindFunction))
 	ctrl.Watches(v1.KindBucket.GVK(), siteReconciler.MapBucket)       // a raised maxObjectBytes lets a refused bundle deploy
 	ctrl.Watches(v1.KindConfigMap.GVK(), siteReconciler.MapConfigMap) // a changed ConfigMap re-renders config.json (ADR-0239)
-	// KVStore reconciler (ADR-0072/0073): Ready + status.tables/bindings; on delete reclaim the store
-	// prefix and on a table removed from spec.tables[] reclaim its sub-prefix, via the driver's
-	// DropPrefix+List (type-asserted PrefixManager — a driver without it gets a no-op).
-	prefixMgr, _ := c.kvStore.(kvsvc.PrefixManager)
-	kvReconciler, err := kvsvc.NewReconciler(kvsvc.ReconcilerDeps{Store: c.store, KV: prefixMgr, Logger: p.logger, Health: p.prober, Hold: c.gate(),
-		QuarantinePeriod: c.quarantinePeriodOrDefault()})
-	if err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), op, "build KVStore reconciler")
-	}
-	ctrl.Register(v1.KindKVStore.GVK(), kvReconciler)
-	p.kvReconciler = kvReconciler
-	ctrl.Watches(v1.KindFunction.GVK(), kvReconciler.MapFunction) // status.bindings counts Function.spec.bindings.kv
-	// ADR-0215 Decision 7: a Bucket's status follows the blob probe; a probe flip re-runs every KVStore or Bucket.
-	bucketReconciler, err := blobsvc.NewReconciler(blobsvc.ReconcilerDeps{Store: c.store, Health: p.prober, Logger: p.logger})
-	if err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), op, "build Bucket reconciler")
-	}
-	ctrl.Register(v1.KindBucket.GVK(), bucketReconciler)
+	// ADR-0215 Decision 7: a probe flip re-runs every KVStore or Bucket.
 	p.prober.OnChange(func(t health.Target, _ health.Result) {
 		kind := v1.KindKVStore
 		if t == health.TargetBlob {
@@ -1214,115 +975,7 @@ func (p *Platform) buildControlPlane() error {
 		}
 		enqueueAll(context.Background(), c.store, ctrl, kind, p.logger)
 	})
-	// Lake reconciler (ADR-0086 as reworked by ADR-0087/F48/F57): the DuckDB/Quack engine
-	// is deployed by the add-on-provider runtime (NOT a backing Function). The provider-runtime reuses
-	// the EXISTING container port + ingress gateway; the reconciler derives the per-fn S3 keypair over
-	// the provider identity (ADR-0085) and resolves spec.bindings.secret/spec.bindings.config (the Quack token + engine
-	// config) into the engine env. DuckDB runs out-of-process in the curated image — no cgo in daemon.
-	// Prod: the add-on-provider runtime supervises the curated duckdb CONTAINER. Dev (ADR-0125)
-	// injects a process-mode driver that runs the embedded engine as a subprocess (no containers).
-	providerRuntime := c.lakeProvider
-	if providerRuntime == nil {
-		var floor provider.Floor
-		if p.floor != nil {
-			floor = p.floor
-		}
-		var perr error
-		providerRuntime, perr = provider.NewRuntime(provider.Deps{
-			Runtime: c.runtime, OwnerKind: v1.KindLake, Gateway: c.gateway, Logger: p.logger,
-			ProbeTimeout: c.pacing.EngineProbeTimeout, StorageRoot: c.providerStorage,
-			ScratchRoot: c.scratchRoot, ScratchMountRoot: c.scratchMountRoot, Floor: floor,
-		})
-		if perr != nil {
-			return fault.Wrapf(perr, fault.KindOf(perr), op, "build provider runtime")
-		}
-	}
-	lakeDeps := lakesvc.ReconcilerDeps{
-		Store:      c.store,
-		Provider:   providerRuntime,
-		Secrets:    secretResolver,
-		S3Endpoint: c.s3gwEndpoint,
-		ImageFor:   c.imageFor,
-		Logger:     p.logger,
-		Proxy:      lakeMgr, // ADR-0137: Ensure a node-private lake PEP proxy per Ready lake
-		Routes:     edgeAgg, // ADR-0138: program the opt-in external edge entry to the proxy
-
-		SupervisionPeriod:    c.pacing.SupervisionPeriod,
-		ReferentPollInterval: c.pacing.ReferentPollInterval,
-		EnginePollInterval:   c.pacing.EnginePollInterval,
-		SaveInterval:         c.lakeSaveInterval,
-		// Only funcdctl dev overrides the Lake runtime: its process engine keeps a local catalog (ADR-0125, ADR-0279).
-		LocalCatalog: c.lakeProvider != nil,
-	}
-	if c.lakeProvider == nil && c.scratchRoot != "" {
-		lakeDeps.ScratchBytes, lakeDeps.CatalogMaxBytes = c.lakeScratchBytes, c.lakeCatalogMaxBytes // ADR-0294
-	}
-	// The engine's S3 keypair is derived over its Lake identity (ADR-0085, ADR-0175) by the same
-	// deriver the Function reconciler uses — present only when the S3 gateway is enabled.
-	if s3Injection.Enabled {
-		lakeDeps.Derive = s3Injection.Derive
-		lakeDeps.RenewalAge = s3Injection.RenewalAge
-		if lakeDeps.S3Endpoint == "" {
-			lakeDeps.S3Endpoint = "http://" + s3Injection.ListenAddr
-		}
-	}
-	lakeReconciler, err := lakesvc.NewReconciler(lakeDeps)
-	if err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), op, "build Lake reconciler")
-	}
-	ctrl.Register(v1.KindLake.GVK(), lakeReconciler)
-	// ADR-0162: a consumer's status follows its lake, and a released listener closes once no Function binds it.
-	ctrl.Watches(v1.KindLake.GVK(), fnReconciler.MapLake)
-	ctrl.Watches(v1.KindFunction.GVK(), lakeReconciler.MapFunction)
-
-	// ADR-0232: one rqlite engine per SQLDatabase, run by its own add-on runtime with durable storage (ADR-0231).
-	sqlRuntime := c.sqlProvider
-	if sqlRuntime == nil {
-		var perr error
-		sqlRuntime, perr = provider.NewRuntime(provider.Deps{
-			Runtime: c.runtime, OwnerKind: v1.KindSQLDatabase, Gateway: c.gateway, Logger: p.logger,
-			ProbeTimeout: c.pacing.EngineProbeTimeout, StorageRoot: c.providerStorage,
-		})
-		if perr != nil {
-			return fault.Wrapf(perr, fault.KindOf(perr), op, "build the SQL provider runtime")
-		}
-	}
-	// ADR-0235: every engine posts its changes to the feed, on the lake proxies' host, which workers reach.
-	feedWatermarks := p.eventStore.ChangeWatermarks()
-	p.sqlFeed, err = sqlsvc.NewFeed(sqlsvc.FeedDeps{Store: c.store, Publisher: p.eventFanout, Watermarks: feedWatermarks, Master: master,
-		Hold: c.gate(), NamespaceHold: c.nsGate(), Logger: p.logger})
-	if err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), op, "build the SQL change feed")
-	}
-	p.sqlFeedHost = cmp.Or(c.bridgeAddress, "127.0.0.1")
-	if c.imageFor != nil && c.bridgeAddress == "" {
-		p.logger.Warn("sql change feed listens on loopback, which engine containers cannot reach: give funcd its bridge " +
-			"address (WithBridgeAddress), else no EventSource of kind sql fires")
-	}
-	p.logger.Info("bridge address", "address", p.sqlFeedHost)
-	p.sqlFeedPort = c.sqlChangeFeedPort
-	if c.bridgeAddress == "" && p.sqlFeedPort == 0 {
-		// ADR-0260 Decision 1: on loopback an unset port is the one a bind of port 0 gets, held from here to Shutdown.
-		if p.sqlFeedListener, err = p.sqlFeed.Listen(context.Background(), p.sqlFeedHost, 0); err != nil {
-			return fault.Wrapf(err, fault.KindOf(err), op, "bind the SQL change feed")
-		}
-		p.sqlFeedPort = p.sqlFeedListener.Addr().(*net.TCPAddr).Port
-	}
-	p.sqlFeedPort = cmp.Or(p.sqlFeedPort, 7075)
-	sqlReconciler, err := sqlsvc.NewReconciler(sqlsvc.ReconcilerDeps{
-		Store: c.store, Provider: sqlRuntime, Engines: sqlEngines, Master: master, ImageFor: c.imageFor,
-		Hold: c.gate(), Logger: p.logger, SupervisionPeriod: c.pacing.SupervisionPeriod,
-		DurableStorage: c.providerStorage != "" && !c.providerStorageEphemeral,
-		ChangeFeedURL:  p.sqlFeed.URL(p.sqlFeedHost, p.sqlFeedPort), Watermarks: feedWatermarks,
-		QuarantinePeriod: c.quarantinePeriodOrDefault(),
-	})
-	if err != nil {
-		return fault.Wrapf(err, fault.KindOf(err), op, "build SQLDatabase reconciler")
-	}
-	ctrl.Register(v1.KindSQLDatabase.GVK(), sqlReconciler)
-	ctrl.Watches(v1.KindFunction.GVK(), sqlReconciler.MapFunction) // status.bindings counts Function.spec.bindings.sql
-	ctrl.Watches(v1.KindRestore.GVK(), sqlReconciler.MapRestore)   // a Succeeded Restore clears DataMissing (ADR-0234)
-	p.sqlReconciler = sqlReconciler
+	ctrl.Watches(v1.KindLake.GVK(), fnReconciler.MapLake) // ADR-0162: a consumer's status follows its lake
 
 	// ADR-0135 (F100): the Identity credential-issuing reconciler — issues a keypair→owned Secret and
 	// registers it (via storeExternalKeys, wired into s3gateway.Deps.External above).
@@ -1331,25 +984,6 @@ func (p *Platform) buildControlPlane() error {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build Identity reconciler")
 	}
 	ctrl.Register(v1.KindIdentity.GVK(), identityReconciler)
-
-	// ADR-0101/0103: one shared funclog trace sink — the F51 per-invocation step spans AND the
-	// engine's per-run root span (ADR-0103) both persist here, so a run's spans form one coherent
-	// trace. Built whenever a blob substrate is present and traces are enabled (NOT gated on
-	// LogCapturer: the run-root span is emitted in-process, not over the shim channel). traceSink is
-	// a nil INTERFACE when disabled (never a typed-nil *BlobTraceSink), so the reconciler's nil-check
-	// holds. pkg/funcd owns its lifecycle (closed once at shutdown); consumers only hold a reference.
-	var traceSink funclog.TraceSink
-	if c.blob != nil && !c.funclogDisabled && !c.funclogTracesDisabled {
-		ts, terr := funclog.NewBlobTraceSink(funclog.Deps{
-			Bucket: c.blob, Clock: clock.System(), Logger: p.logger,
-			SegmentMaxAge: c.funclogMaxAge, SegmentMaxBytes: c.funclogMaxBytes,
-		})
-		if terr != nil {
-			return fault.Wrapf(terr, fault.Internal, op, "build funclog trace sink")
-		}
-		p.traceSink = ts
-		traceSink = ts
-	}
 
 	// Workflow engine (ADR-0094): durable run state (Badger at workflowDataDir; in-memory when
 	// unset — the InMemory preset / tests), a step dispatcher over the activator's endpoints +
@@ -1387,7 +1021,7 @@ func (p *Platform) buildControlPlane() error {
 			MaxStepsInFlight: c.workflowMaxStepsInFlight, DefaultRetryBackoff: c.pacing.DefaultRetryBackoff,
 		},
 		Children: childResolver{c.store}, // ADR-0099: resolve a child workflow's spec for a `workflow:` step
-		Traces:   traceSink,              // ADR-0104: the engine emits the run-root span for inline sub-workflow child runs
+		Traces:   p.exec.traces(),        // ADR-0104: the engine emits the run-root span for inline sub-workflow child runs
 		Notify: func(ns v1.NamespaceName, name v1.ObjectName) { // ADR-0146: the run reconciler mirrors the run
 			ctrl.Enqueue(controller.Request{GVK: v1.KindWorkflowRun.GVK(), Namespace: ns, Name: name})
 		},
@@ -1408,7 +1042,7 @@ func (p *Platform) buildControlPlane() error {
 		wfContracts = c.workflowContracts
 	}
 	ctrl.Register(v1.KindWorkflow.GVK(), workflow.NewWorkflowReconciler(c.store, wfMaterializer, wfContracts, p.logger, c.pacing.ArtifactPollInterval))
-	p.workflowSweeper = workflow.NewRunReconciler(c.store, wfEngine, traceSink, p.logger, c.pacing.ReferentPollInterval)
+	p.workflowSweeper = workflow.NewRunReconciler(c.store, wfEngine, p.exec.traces(), p.logger, c.pacing.ReferentPollInterval)
 	p.workflowSweeper.SetHold(c.gate())
 	p.workflowSweeper.SetNamespaceHold(c.nsGate())
 	ctrl.Register(v1.KindWorkflowRun.GVK(), p.workflowSweeper)
@@ -1446,27 +1080,9 @@ func (p *Platform) buildControlPlane() error {
 	// partAdmissions are the admissions a direct write passes, over the reader r: the control plane runs them over
 	// the store, and app-parts over a view that already holds an App's other parts (ADR-0199 Decision 3).
 	partAdmissions := func(r admission.StoreReader) []admission.Admission {
-		return []admission.Admission{
-			// ADR-0064 fn-to-fn link rules on the write path.
-			admission.NewLinkValidityAdmission(r),
-			admission.NewLinkDeletionProtectionAdmission(r),
-			// ADR-0072/0073 KV resource rules: store-count quota + KVStore deletion-protection (bound by
-			// spec.bindings.kv or non-empty data on Delete; still-bound table removal and unreclaimed table re-add on
-			// Update). Binding/owner EXISTENCE (Function.spec.bindings.kv → an existing store/table; KVStore
-			// tables[].owner → a real Function) is RECONCILE-TIME (ADR-0121): the Function reconciler holds a
-			// binding not-Ready until it resolves, and the owner UID is fail-closed at the PDP until the owner
-			// exists — no write-time existence gate.
-			admission.NewKVStoreQuotaAdmission(r, kvMaxStores),
-			admission.NewKVStoreDeletionProtectionAdmission(r, kvProber{c.kvStore}),
-			// ADR-0080 Bucket resource rules (the KVStore parallel): bucket-count quota + bucket-deletion-
-			// protection (bound by spec.bindings.blob or non-empty data on Delete; still-bound prefix removal on Update).
-			// Binding/owner EXISTENCE is reconcile-time (ADR-0121), as for KV. The data-emptiness prober Lists
-			// the same substrate view the s3gateway writes (s3BucketFor).
-			admission.NewBucketQuotaAdmission(r, bucketMax),
-			admission.NewBucketDeletionProtectionAdmission(r, blobProber{lister: blobBucketLister{resolve: s3BucketFor(c.blob, c.store, p.checker)}, shared: c.blob}),
-			// ADR-0232 SQLDatabase rules: the count quota, and no API delete while the engine holds a table.
-			admission.NewSQLDatabaseQuotaAdmission(r, sqlMax),
-			admission.NewSQLDatabaseDeletionProtectionAdmission(r, sqlReconciler.Prober()),
+		// ADR-0064 fn-to-fn link rules on the write path, then each store provider's resource rules.
+		links := []admission.Admission{admission.NewLinkValidityAdmission(r), admission.NewLinkDeletionProtectionAdmission(r)}
+		return append(append(links, p.providerAdmissions(r)...),
 			// ADR-0086/0091 lake blob + consumer-binding EXISTENCE were write-time gates; now reconcile-time
 			// (ADR-0121): the Lake / Function reconcilers wait for the referent (Waiting condition).
 			// ADR-0139 Site: spec.bindings.blob[0].prefix is immutable on Update (the prefix permanently holds the site's bundles).
@@ -1495,7 +1111,7 @@ func (p *Platform) buildControlPlane() error {
 			admission.NewBackupSpecImmutableAdmission(),
 			admission.NewBackupTTLAdmission(r),
 			admission.NewRestoreInPlaceAdmission(c.authorizer, r, c.hold),
-		}
+		)
 	}
 
 	// ADR-0084: the function-log reader backing GET …/functions/{name}/logs (funcdctl logs). Present
@@ -1594,99 +1210,6 @@ func (p *Platform) buildControlPlane() error {
 	p.dataPlaneListener = dln
 	p.dataPlaneAddr = dln.Addr().String()
 
-	// ADR-0081: structured function-log capture (Path B). If the runtime driver implements the
-	// LogCapturer capability and a blob substrate is present, build the funclog sink and install the
-	// per-instance capture hook — a Pump per channel that drains the shim's NDJSON into the sink. logs stays nil
-	// without it, and Path A below then keeps only a Function's tail (ADR-0168).
-	var logs funclog.Sink
-	if lc, ok := c.runtime.(runtime.LogCapturer); ok && c.blob != nil && !c.funclogDisabled {
-		deps := funclog.Deps{
-			Bucket: c.blob, Clock: clock.System(), Logger: p.logger,
-			SegmentMaxAge: c.funclogMaxAge, SegmentMaxBytes: c.funclogMaxBytes,
-		}
-		if p.floor != nil {
-			deps.Floor = p.floor
-		}
-		sink, serr := funclog.NewBlobSink(deps)
-		if serr != nil {
-			return fault.Wrapf(serr, fault.Internal, op, "build funclog sink")
-		}
-		p.logSink = sink
-		// ADR-0101: the traces signal rides the same channel. Reuse the shared trace sink built above
-		// (ADR-0103) so step spans + the run-root span land in one trace store; the demux (Route) sends
-		// span-tagged lines to it and untagged lines to the logs sink. nil ⇒ span lines are dropped.
-		// Dev streams logs live by tee'ing an observer onto the logs sink (production leaves it nil, so
-		// logs are only persisted).
-		logs = sink
-		if c.logObserver != nil {
-			logs = &teeLogSink{inner: sink, observe: c.logObserver}
-		}
-		sinks := funclog.Sinks{Logs: logs, Traces: traceSink}
-		lc.SetLogCapture(func(spec runtime.WorkerSpec, r io.ReadCloser) {
-			res := funclog.Resource{
-				Namespace: string(spec.Namespace),
-				Function:  string(spec.Name),
-				Replica:   strconv.Itoa(spec.Replica),
-			}
-			if !strings.HasPrefix(string(spec.Name), "__pool__") {
-				p.logRoutes.start(r, func() { _ = funclog.Route(context.Background(), r, sinks, res, p.logger) })
-				return
-			}
-			// A pool worker's records are stored under the member each names. The set is taken once per
-			// process, here at its start, so a member removed later still has its drained records kept.
-			_, isMember, _ := fnReconciler.PoolMembers(spec.Namespace, spec.Name)
-			p.logRoutes.start(r, func() { _ = funclog.RoutePool(context.Background(), r, sinks, res, isMember, p.logger) })
-		})
-	}
-	// ADR-0168 Path A: a Function worker's raw stdout (INFO) and stderr (ERROR) go to the funclog logs sink, dev's tee
-	// included, and only its tail stays without funclog. An engine's lines go to the daemon's log whatever funclog's
-	// setting (ADR-0276).
-	if oc, ok := c.runtime.(runtime.OutputCapturer); ok {
-		oc.SetOutputCapture(func(spec runtime.WorkerSpec, out *workerpipe.Output) {
-			if spec.OwnerKind != v1.KindFunction {
-				p.logEngineOutput(spec, out)
-				return
-			}
-			if logs == nil {
-				return
-			}
-			res := funclog.Resource{Namespace: string(spec.Namespace), Function: string(spec.Name), Replica: strconv.Itoa(spec.Replica)}
-			dst := logs
-			if strings.HasPrefix(string(spec.Name), "__pool__") {
-				// A raw line names no member, so it is stored under each member the pool runs now.
-				members, _, _ := fnReconciler.PoolMembers(spec.Namespace, spec.Name)
-				dst = newMemberSink(logs, res, members)
-			}
-			for _, src := range []struct {
-				stream workerpipe.Stream
-				source funclog.Source
-			}{{workerpipe.Stdout, funclog.SourceStdout}, {workerpipe.Stderr, funclog.SourceStderr}} {
-				r := out.Reader(src.stream)
-				p.logRoutes.start(r, func() {
-					_ = funclog.Pump(context.Background(), funclog.NewRawReader(r, src.source), dst, res, p.logger)
-				})
-			}
-		})
-	}
-
-	// ADR-0083: funclog compacted compaction. When a blob substrate is present and compaction is not disabled,
-	// build the daemon-internal compactor that folds raw OTLP-JSONL into partitioned Parquet. Defaults
-	// (window 1h / interval 5m / retention 30d) unless WithLogCompaction set explicit values.
-	if c.blob != nil && !c.logCompactDisabled {
-		retention := compact.DefaultRetention
-		if c.logCompactConfigured {
-			retention = c.logCompactRetention
-		}
-		comp, cerr := compact.New(compact.Deps{
-			Bucket: c.blob, Clock: clock.System(), Logger: p.logger,
-			Window: c.logCompactWindow, Interval: c.logCompactInterval, Retention: retention,
-		})
-		if cerr != nil {
-			return fault.Wrapf(cerr, fault.Internal, op, "build funclog compactor")
-		}
-		p.compactor = comp
-	}
-
 	return nil
 }
 
@@ -1701,10 +1224,10 @@ func (p *Platform) DataPlaneAddr() string { return p.dataPlaneAddr }
 // or ctx is done. The gateway binds its address only once Run starts it (ADR-0085), so a taken port surfaces here
 // and from Run, not from New. Without the gateway it returns nil.
 func (p *Platform) WaitS3Gateway(ctx context.Context) error {
-	if p.s3gw == nil {
+	if p.blob.gateway == nil {
 		return nil
 	}
-	return p.s3gw.Wait(ctx)
+	return p.blob.gateway.Wait(ctx)
 }
 
 // Run starts the control loops + the control-plane server and blocks until ctx is
@@ -1733,7 +1256,7 @@ func (p *Platform) Run(ctx context.Context) error {
 
 	// The providers start first, the Executor at their head: it applies the egress fence before anything can run a
 	// worker (ADR-0115). A failed Start shuts the platform down (#489); a Start a stop signal cut is a clean stop.
-	p.logger.InfoContext(ctx, "platform provider hooks", "providers", p.phases.Hooks())
+	p.logger.InfoContext(ctx, "platform provider hooks", "providers", p.phases.Hooks(sharedHooks()...))
 	if err := p.phases.Start(ctx); err != nil && ctx.Err() == nil {
 		return abort(err)
 	}
@@ -1748,10 +1271,18 @@ func (p *Platform) Run(ctx context.Context) error {
 		if err := p.fnReconciler.ReclaimVolumes(ctx); err != nil && ctx.Err() == nil {
 			p.logger.WarnContext(ctx, "booking of Function volumes incomplete", "error", err)
 		}
-	} else if err := p.fnReconciler.ReclaimVolumes(ctx); err != nil && ctx.Err() == nil {
+	} else {
+		// ADR-0307: only a boot that is not held reclaims what deleted KVStores, Buckets and SQLDatabases left (#708,
+		// ADR-0199 Decision 7, ADR-0232 Decision 7), once every provider started and before any controller can create
+		// a resource of the same name.
+		if err := p.phases.Reclaim(ctx); err != nil && ctx.Err() == nil {
+			p.logger.WarnContext(ctx, "reclaim of deleted resources incomplete", "error", err)
+		}
 		// ADR-0262 Decision 8: no worker survives a restart, so emptyDirs go; volumes of deleted Functions follow their
 		// deletion policy.
-		p.logger.WarnContext(ctx, "reclaim of Function volumes incomplete", "error", err)
+		if err := p.fnReconciler.ReclaimVolumes(ctx); err != nil && ctx.Err() == nil {
+			p.logger.WarnContext(ctx, "reclaim of Function volumes incomplete", "error", err)
+		}
 	}
 
 	// ADR-0176 Decision 6: the edge aggregator holds every lake entry until "routes" has Set once, and no
@@ -1768,11 +1299,11 @@ func (p *Platform) Run(ctx context.Context) error {
 	p.phases.Run(ctx, &wg)
 	loops := []func(context.Context){
 		func(ctx context.Context) {
-			p.loop("controller stopped", p.controller.Run)(ctx)
+			loop(p.logger, "controller stopped", p.controller.Run)(ctx)
 			p.backups.Wait() // a run's goroutine outlives its reconcile, never the controller (ADR-0222)
 		},
-		p.loop("garbage collector stopped", p.collector.Run),
-		p.loop("activator stopped", p.activator.Run),
+		loop(p.logger, "garbage collector stopped", p.collector.Run),
+		loop(p.logger, "activator stopped", p.activator.Run),
 		p.quotas.Run,         // ADR-0292 Decision 3: the store quotas' refresh, off the write path
 		p.runQuarantineSweep, // ADR-0288 Decision 5: the quarantine's sweep, never inside the start
 	}
@@ -1870,16 +1401,13 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 		if p.tlsProvider != nil {
 			_ = p.tlsProvider.Close(ctx) // stop certmagic's renewal goroutine (ADR-0111)
 		}
-		// Every provider gets ready to close, in reverse order: the Lake closes its PEP proxies, then the Executor ends its
-		// loops and closes the runtime, which stops every worker.
+		// Every provider gets ready to close, in reverse order: the Lake closes its PEP proxies, then the Executor closes
+		// the runtime, which stops every worker, and the workers' local API listeners.
 		beforeStopErr := p.phases.BeforeStop(ctx)
-		if p.invokeMgr != nil {
-			p.invokeMgr.Close() // stop all per-function local API listeners (ADR-0064), now that no worker calls them
-		}
 		// Every provider stops, in reverse order: the binding providers release what the workers used (the SQL feed's
 		// port, the S3 gateway, the KV driver), then the Executor takes the egress fence down once the runtime
-		// closed, stops the egress gateway and the DNS forwarder, and drains the log Routes into the sinks before
-		// blob.Close (ADR-0081).
+		// closed, stops the egress gateway and the DNS forwarder, drains the log Routes into the sinks before
+		// blob.Close (ADR-0081) and removes the socket dir it made (#330).
 		stopErr := p.phases.Stop(ctx)
 		if p.fnReconciler != nil {
 			// Only after Stop is the runtime closed on every path, booted or not: the pool workers are stopped, so their
@@ -1901,9 +1429,6 @@ func (p *Platform) Shutdown(ctx context.Context) error {
 		// backup share the event store, so it closes with the Platform's own parts (ADR-0305 Decision 5).
 		if p.eventStore != nil {
 			errs = append(errs, p.eventStore.Close())
-		}
-		if p.invokeTmpDir != "" { // after the runtime stopped the workers that dial its sockets (issue #330)
-			errs = append(errs, os.RemoveAll(p.invokeTmpDir))
 		}
 		if p.cfg.telemetry != nil {
 			errs = append(errs, p.cfg.telemetry.Shutdown(ctx))
@@ -2229,10 +1754,10 @@ func (s egressAuditSink) Egress(ctx context.Context, rec egress.AuditRecord) {
 // EgressWorkerIndex returns the egress WorkerIndex the containerd runtime populates at worker
 // provisioning (ADR-0117 §5): on worker-up it records the funcd0 IP → the worker's principal
 // Ref (its owner kind) so the gateway can authenticate the caller by source IP. nil ⇒ egress is not enabled.
-func (p *Platform) EgressWorkerIndex() *egress.MemoryWorkerIndex { return p.egressWorkers }
+func (p *Platform) EgressWorkerIndex() *egress.MemoryWorkerIndex { return p.exec.egressWorkers }
 
 // S3Keys is the deriver of the platform's in-platform S3 key pairs (ADR-0270); its zero value when the gateway is off.
-func (p *Platform) S3Keys() s3gateway.Deriver { return p.s3Keys }
+func (p *Platform) S3Keys() s3gateway.Deriver { return p.blob.keys }
 
 // syncEgressWorkers keeps the ADR-0117 §5 WorkerIndex (src funcd0 IP → principal Ref) reconciled with the
 // runtime's running worker set, so the egress gateway can authenticate a redirected connection by source
@@ -2240,17 +1765,17 @@ func (p *Platform) S3Keys() s3gateway.Deriver { return p.s3Keys }
 // runtime — the same observed view the Function reconciler drives — every interval, diffing against the
 // last snapshot: a newly-running worker's IP is Added, a vanished one Removed. Runs only when the egress
 // gateway is wired; stops on ctx cancel.
-func (p *Platform) syncEgressWorkers(ctx context.Context) {
-	t := time.NewTicker(orDefault(p.cfg.pacing.WorkerSyncInterval, defaultWorkerSyncInterval))
+func (e *executor) syncEgressWorkers(ctx context.Context) {
+	t := time.NewTicker(orDefault(e.cfg.pacing.WorkerSyncInterval, defaultWorkerSyncInterval))
 	defer t.Stop()
 	prev := map[netip.Addr]auth.EntityRef{}
-	prev = p.reconcileEgressWorkers(ctx, prev) // seed immediately (don't wait a full tick)
+	prev = e.reconcileEgressWorkers(ctx, prev) // seed immediately (don't wait a full tick)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			prev = p.reconcileEgressWorkers(ctx, prev)
+			prev = e.reconcileEgressWorkers(ctx, prev)
 		}
 	}
 }
@@ -2262,10 +1787,10 @@ func (p *Platform) syncEgressWorkers(ctx context.Context) {
 // unknown source, denied). A worker's funcd0 IP is the source IP the F80 REDIRECT preserves, so it keys both
 // the gateway lookup and the DNS-forwarder correlation. A transient store error keeps the current index
 // (returns prev).
-func (p *Platform) reconcileEgressWorkers(ctx context.Context, prev map[netip.Addr]auth.EntityRef) map[netip.Addr]auth.EntityRef {
+func (e *executor) reconcileEgressWorkers(ctx context.Context, prev map[netip.Addr]auth.EntityRef) map[netip.Addr]auth.EntityRef {
 	namespaces := map[v1.NamespaceName]struct{}{}
 	for _, kind := range []v1.Kind{v1.KindFunction, v1.KindLake} {
-		res, err := p.cfg.store.List(ctx, kind.GVK(), store.ListOptions{})
+		res, err := e.cfg.store.List(ctx, kind.GVK(), store.ListOptions{})
 		if err != nil {
 			return prev
 		}
@@ -2275,7 +1800,7 @@ func (p *Platform) reconcileEgressWorkers(ctx context.Context, prev map[netip.Ad
 	}
 	live := map[netip.Addr]auth.EntityRef{}
 	for ns := range namespaces {
-		insts, lerr := p.cfg.runtime.List(ctx, ns)
+		insts, lerr := e.cfg.runtime.List(ctx, ns)
 		if lerr != nil {
 			continue
 		}
@@ -2295,12 +1820,12 @@ func (p *Platform) reconcileEgressWorkers(ctx context.Context, prev map[netip.Ad
 	}
 	for ip, ref := range live {
 		if pr, ok := prev[ip]; !ok || pr != ref {
-			p.egressWorkers.Add(ip, ref)
+			e.egressWorkers.Add(ip, ref)
 		}
 	}
 	for ip := range prev {
 		if _, ok := live[ip]; !ok {
-			p.egressWorkers.Remove(ip)
+			e.egressWorkers.Remove(ip)
 		}
 	}
 	return live
@@ -2393,8 +1918,8 @@ func (p *Platform) registerWorkloadBackups(ctrl *controller.Controller, secrets 
 	c := p.cfg
 	d := backupsvc.Deps{
 		Store: c.store, Secrets: secrets, Purger: bucketPurger{shared: c.blob}, StoreURL: c.blobStoreURL,
-		Sources: workload.Sources{Blob: c.blob, BucketPrefix: bucketPrefix, CatalogPrefix: lakeCatalogPrefix, SQL: p.sqlReconciler.Backups().Source},
-		SQL:     p.sqlReconciler.Backups(),
+		Sources: workload.Sources{Blob: c.blob, BucketPrefix: bucketPrefix, CatalogPrefix: lakeCatalogPrefix, SQL: p.sql.reconciler.Backups().Source},
+		SQL:     p.sql.reconciler.Backups(),
 		Period:  c.pacing.SupervisionPeriod, Clock: c.backupClock, Meter: c.backupMeter, Logger: p.logger,
 	}
 	if d.Meter == nil {
@@ -2409,8 +1934,8 @@ func (p *Platform) registerWorkloadBackups(ctrl *controller.Controller, secrets 
 	if c.hold != nil {
 		d.Hold = c.hold
 	}
-	if p.volumes != nil { // ADR-0262 Decision 11: a Function's local volume is a workload backup member
-		vl := volumeLoader{m: p.volumes, lost: p.fnReconciler.VolumeLost, stop: p.fnReconciler.StopWorkers}
+	if p.exec.volumes != nil { // ADR-0262 Decision 11: a Function's local volume is a workload backup member
+		vl := volumeLoader{m: p.exec.volumes, lost: p.fnReconciler.VolumeLost, stop: p.fnReconciler.StopWorkers}
 		d.Sources.Volume, d.Volumes = vl.Source, vl
 	}
 	rs, err := backupsvc.New(d)
@@ -2530,7 +2055,7 @@ func (h holdPlatform) Counts(ctx context.Context) (map[v1.Kind]int, error) {
 }
 
 func (h holdPlatform) Orphans(ctx context.Context) ([]string, error) {
-	return h.p.kvReconciler.Orphans(ctx)
+	return h.p.kv.reconciler.Orphans(ctx)
 }
 
 func (h holdPlatform) BucketOrphans(ctx context.Context) ([]v1.ObjectRef, error) {
@@ -2538,7 +2063,7 @@ func (h holdPlatform) BucketOrphans(ctx context.Context) ([]v1.ObjectRef, error)
 }
 
 func (h holdPlatform) SQLOrphans(ctx context.Context) ([]v1.ObjectRef, error) {
-	return h.p.sqlReconciler.Orphans(ctx)
+	return h.p.sql.reconciler.Orphans(ctx)
 }
 
 func (h holdPlatform) VolumeOrphans(ctx context.Context) ([]v1.ObjectRef, error) {
@@ -2648,13 +2173,13 @@ func workerClient(calls *activator.CallTracker, timeout time.Duration) *http.Cli
 
 // openVolumes opens the Functions' volume manager when WithFunctionVolumes turned volumes on (ADR-0262), with the
 // namespace budget read from each Namespace and the holder read from each Function.
-func (p *Platform) openVolumes() error {
-	c := p.cfg
+func (e *executor) openVolumes() error {
+	c := e.cfg
 	if c.functionVolumes == nil {
 		return nil
 	}
 	o := *c.functionVolumes
-	o.Logger = p.logger.With("component", "volume")
+	o.Logger = c.logger.With("component", "volume")
 	o.Budget = func(ctx context.Context, ns v1.NamespaceName) (int64, error) {
 		obj, err := c.store.Get(ctx, v1.KindNamespace.GVK(), "", v1.ObjectName(ns))
 		if fault.KindOf(err) == fault.NotFound {
@@ -2709,16 +2234,16 @@ func (p *Platform) openVolumes() error {
 	if err != nil {
 		return err
 	}
-	p.volumes = m
+	e.volumes = m
 	return nil
 }
 
 // volumeBooker is the function-volumes admission's booker: nil (volumes off) without a manager.
 func (p *Platform) volumeBooker() admission.VolumeBooker {
-	if p.volumes == nil {
+	if p.exec.volumes == nil {
 		return nil
 	}
-	return volumeBooker{p.volumes}
+	return volumeBooker{p.exec.volumes}
 }
 
 type volumeBooker struct{ m volume.Manager }
@@ -2769,7 +2294,7 @@ func (l volumeLoader) StopWorkers(ctx context.Context, ns v1.NamespaceName, fn v
 
 // volumeDeleter is the volume route's deleter: nil (no route) while volumes are off.
 func (p *Platform) volumeDeleter() controlplane.VolumeDeleter {
-	if p.volumes == nil {
+	if p.exec.volumes == nil {
 		return nil
 	}
 	return p.fnReconciler

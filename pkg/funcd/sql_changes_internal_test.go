@@ -62,7 +62,7 @@ func (e *changesEnv) init(t *testing.T, events ...v1.SQLEvent) {
 		})
 		t.Cleanup(cancel)
 	}
-	e.feed = httptest.NewServer(e.p.sqlFeed.Handler())
+	e.feed = httptest.NewServer(e.p.sql.feed.Handler())
 	t.Cleanup(e.feed.Close)
 	// The boot gate opens once the Sensors present at the start subscribed: probe it with a database no EventSource
 	// names, which answers 200, and fires nothing, once it is open.
@@ -266,12 +266,12 @@ func TestScenarioChangesWaitForSensorsAtBoot(t *testing.T) {
 	}}
 	se.Name, se.Namespace, se.ResourceGroup = "todo-notify", "default", "rg1"
 	seedObjects(t, p.cfg.store, sqlDatabase("todo-db"), todoChanges(added()), se)
-	e.feed = httptest.NewServer(p.sqlFeed.Handler())
+	e.feed = httptest.NewServer(p.sql.feed.Handler())
 	t.Cleanup(e.feed.Close)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	opened := make(chan struct{})
-	go func() { p.openSQLFeed(ctx); close(opened) }()
+	go func() { p.sql.openFeed(ctx); close(opened) }()
 
 	require.Equal(t, http.StatusServiceUnavailable, e.post(t, "", delivery("e1", 4, insertMilk)), "the Sensor has not subscribed")
 	cancelSub := p.eventFanout.Subscribe("default", "todo-changes", "todo-added", func(_ context.Context, ce eventing.CloudEvent) {

@@ -42,7 +42,7 @@ func TestLakeWithALocalCatalogAnswersAtOnce(t *testing.T) {
 	var addr string
 	require.Eventually(t, func() bool {
 		var bound bool
-		addr, bound = p.lakeProxy.ProxyURL("default", "lake")
+		addr, bound = p.lake.proxy.ProxyURL("default", "lake")
 		obj, gerr := st.Get(ctx, v1.KindLake.GVK(), "default", "lake")
 		return bound && gerr == nil && obj.(*v1.Lake).Status.Phase == v1.PhaseReady
 	}, 5*time.Second, 10*time.Millisecond, "lake lake is Ready")

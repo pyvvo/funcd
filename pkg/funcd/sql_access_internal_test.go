@@ -98,7 +98,7 @@ func (e *accessEnv) call(t *testing.T, fn, verb, alias, statements string) (int,
 
 func (e *accessEnv) do(t *testing.T, fn, method, path, body string) (int, string) {
 	t.Helper()
-	sock, err := e.p.invokeMgr.SocketFor("default", v1.ObjectName(fn))
+	sock, err := e.p.exec.sockets.SocketFor("default", v1.ObjectName(fn))
 	require.NoError(t, err)
 	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", sock)
@@ -115,6 +115,7 @@ func (e *accessEnv) do(t *testing.T, fn, method, path, body string) (int, string
 
 func (e *accessEnv) todo() *fakesql.Engine { return e.engines.engine("todo-db") }
 
+// scenario: a-worker-reaches-each-binding-on-its-local-api
 // scenario: bound-function-reads — a bound function's query returns the rows.
 func TestScenarioBoundFunctionReads(t *testing.T) {
 	t.Parallel()

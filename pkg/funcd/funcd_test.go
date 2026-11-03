@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,6 +27,8 @@ import (
 	edgetls "github.com/pyvvo/funcd/internal/edge/tls"
 	"github.com/pyvvo/funcd/internal/function"
 	"github.com/pyvvo/funcd/internal/gateway"
+	"github.com/pyvvo/funcd/internal/kvstore"
+	kvmemory "github.com/pyvvo/funcd/internal/kvstore/memory"
 	"github.com/pyvvo/funcd/internal/network"
 	"github.com/pyvvo/funcd/internal/network/egress"
 	platformconfig "github.com/pyvvo/funcd/internal/platform/config"
@@ -129,6 +132,7 @@ func TestIssue41_RejectsInvokeSocketDirOverUnixLimit(t *testing.T) {
 	require.Contains(t, err.Error(), "Unix socket limit")
 }
 
+// scenario: a-stopping-worker-keeps-its-local-api
 // scenario: workers-keep-their-services-while-stopping
 // Issue #330: the temp invoke socket dir New creates when no WithInvokeSocketDir is set is removed by
 // Shutdown, and by a New that fails after creating it.
@@ -136,7 +140,7 @@ func TestIssue330_TempInvokeSocketDirRemoved(t *testing.T) {
 	t.Run("shutdown", func(t *testing.T) {
 		p, err := New(InMemory())
 		require.NoError(t, err)
-		sock, err := p.invokeMgr.SocketFor("default", "fn")
+		sock, err := p.exec.sockets.SocketFor("default", "fn")
 		require.NoError(t, err)
 		require.NoError(t, p.Shutdown(context.Background()))
 		require.NoDirExists(t, filepath.Dir(sock))
@@ -201,7 +205,7 @@ func TestShutdown_KeepsEgressFenceUntilRuntimeClosed(t *testing.T) {
 	})
 	require.NoError(t, err)
 	gw := &gatewayAtClose{rt: rt}
-	p.egressGateway = gw
+	p.exec.egressGateway = gw
 	require.NoError(t, p.Shutdown(context.Background()))
 	require.True(t, rt.closed, "Shutdown must close the runtime")
 	require.False(t, rt.fenceGone, "Shutdown removed the egress fence while the runtime's workers were still running")
@@ -273,7 +277,7 @@ func TestIssue1232_DaemonStopKeepsWorkerServicesUntilTheWorkersStop(t *testing.T
 			return nil
 		})
 		if err == nil {
-			p.egressGateway, p.egressForwarder = gw, fwd
+			p.exec.egressGateway, p.exec.egressForwarder = gw, fwd
 		}
 		return p, err
 	}, func(ctx context.Context, p *Platform) error {
@@ -553,6 +557,7 @@ func TestIssue446_DeadLetterDefaultsWithoutWithDeadLetterQueue(t *testing.T) {
 	require.Zero(t, explicit.deadletterMaxEntries, "an explicit zero still means no cap")
 }
 
+// scenario: a-failed-new-releases-what-it-opened
 // scenario: a-failed-new-stops-what-it-opened
 // Issue #94: a failed New releases what the options and the build acquired (ADR-0014: never a partial
 // platform), so the caller can fix the cause and call New again with the same data dirs.
@@ -589,6 +594,28 @@ func TestIssue94_FailedNewReleasesResources(t *testing.T) {
 	p, err = New(append([]Option{InMemory()}, persist...)...)
 	require.NoError(t, err, "a retry with the same data dirs succeeds")
 	require.NoError(t, p.Shutdown(context.Background()))
+}
+
+// closeRecordingKV is a KV driver that records its Close.
+type closeRecordingKV struct {
+	kvstore.KV
+	closed atomic.Bool
+}
+
+func (k *closeRecordingKV) Close() error {
+	k.closed.Store(true)
+	return nil
+}
+
+// scenario: a-failed-new-releases-what-it-opened
+// A KV driver an option handed New is closed when a later option fails, though the kv provider's build never ran: its
+// Stop closes the config's driver (#94, ADR-0309 Decision 3).
+func TestIssue94_AFailedNewClosesTheOptionsKVDriver(t *testing.T) {
+	t.Parallel()
+	kv := &closeRecordingKV{KV: kvmemory.New()}
+	_, err := New(InMemory(), WithKVStore(kv), func(*config) error { return fault.Invalidf("test", "bad option") })
+	require.Error(t, err)
+	require.True(t, kv.closed.Load(), "a failed New left the options' KV driver open")
 }
 
 const containerPoolingRefused = "worker pooling is not supported with container execution: " +

@@ -1,8 +1,10 @@
 # ADR-0308: Store providers plug into quotas, admissions and the dependency check through shared hooks
 
-- **Status**: Accepted (2026-11-03, under the decider's delegation: "pick whatever ADR you want and ship them";
-  judged twice under the adr-judge skill in an independent session: round 1's Major, the admissions' timing, and
-  five Minors folded; round 2 accept)
+- **Status**: Implemented (2026-11-03), review passed with one Minor
+  ([report](../reviews/adr-0308-implementation-claude-opus-5-5.md)); Reviewing (2026-11-03, implemented from the
+  experiment's commits `6f2733aa` and `26bfb6bd`); Accepted (2026-11-03, under the decider's delegation: "pick
+  whatever ADR you want and ship them"; judged twice under the adr-judge skill in an independent session: round 1's
+  Major, the admissions' timing, and five Minors folded; round 2 accept)
 - **Date**: 2026-11-03
 - **Deciders**: green-0-rabbit
 - **Tags**: provider, quota, admission, health, refactor

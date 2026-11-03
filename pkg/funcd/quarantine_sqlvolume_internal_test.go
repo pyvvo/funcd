@@ -68,7 +68,7 @@ func quarantineRig(t *testing.T) (*wbRig, *fileEngines, string) {
 			engines.mu.Lock()
 			engines.dirs[provider.ProviderRef{Namespace: "orders", Name: "todo-db"}] = true
 			engines.mu.Unlock()
-			dir, err := r.p.volumes.Reserve(r.ctx, cartState(), "uid-gone", 1<<20, v1.DeletionDelete)
+			dir, err := r.p.exec.volumes.Reserve(r.ctx, cartState(), "uid-gone", 1<<20, v1.DeletionDelete)
 			require.NoError(t, err)
 			require.NoError(t, os.WriteFile(filepath.Join(dir, "orders.db"), []byte("rows"), 0o600))
 		},
@@ -93,11 +93,12 @@ func cartFunction() *v1.Function {
 func (r *wbRig) waitEmptyVolume(id volume.ID) {
 	r.t.Helper()
 	require.Eventually(r.t, func() bool {
-		empty, err := r.p.volumes.Empty(r.ctx, id)
+		empty, err := r.p.exec.volumes.Empty(r.ctx, id)
 		return err == nil && empty
 	}, 10*time.Second, 10*time.Millisecond, "volume %s is made, empty", id)
 }
 
+// scenario: deleted-data-quarantined-at-boot
 // scenario: sql-and-volume-quarantined — a SQL database directory with no SQLDatabase and a deletion: delete local
 // volume of a Function that is not stored: after an unheld start both are in the quarantine, listed with their since,
 // each named by one Warn line, and a Function applied again under that name gets a new, empty volume.
@@ -107,7 +108,7 @@ func TestScenarioSQLAndVolumeQuarantined(t *testing.T) {
 	t.Parallel()
 	r, engines, volRoot := quarantineRig(t)
 
-	sqlEntries, err := r.p.sqlReconciler.Quarantine().List(r.ctx)
+	sqlEntries, err := r.p.sql.reconciler.Quarantine().List(r.ctx)
 	require.NoError(t, err)
 	require.Len(t, sqlEntries, 1)
 	require.Equal(t, quarantine.Ref{ObjectRef: v1.ObjectRef{Kind: v1.KindSQLDatabase, Namespace: "orders", Name: "todo-db"}},
@@ -149,7 +150,7 @@ func TestScenarioQuarantineReturnedVolume(t *testing.T) {
 
 	r.create(r.dev, cartFunction())
 	r.waitEmptyVolume(cartState())
-	dir, err := r.p.volumes.Reserve(r.ctx, cartState(), r.getFunctionUID("cart"), 1<<20, v1.DeletionDelete)
+	dir, err := r.p.exec.volumes.Reserve(r.ctx, cartState(), r.getFunctionUID("cart"), 1<<20, v1.DeletionDelete)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "new.db"), []byte("new"), 0o600))
 	require.Equal(t, fault.Conflict, fault.KindOf(ret.Return(r.ctx, cartStateRef(), time.Time{})), "the volume holds a file")

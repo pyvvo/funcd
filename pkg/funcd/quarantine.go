@@ -288,11 +288,11 @@ func deletePrefix(ctx context.Context, b blob.Bucket, prefix string) error {
 // quarantineStores are the platform's quarantines (ADR-0288 Decision 2), the sweep's and hold status's.
 func (p *Platform) quarantineStores() []quarantine.Store {
 	stores := []quarantine.Store{bucketQuarantine{shared: p.cfg.blob, store: p.cfg.store}}
-	if p.kvReconciler != nil {
-		stores = append(stores, p.kvReconciler.Quarantine())
+	if p.kv.reconciler != nil {
+		stores = append(stores, p.kv.reconciler.Quarantine())
 	}
-	if p.sqlReconciler != nil {
-		stores = append(stores, p.sqlReconciler.Quarantine())
+	if p.sql.reconciler != nil {
+		stores = append(stores, p.sql.reconciler.Quarantine())
 	}
 	if p.fnReconciler != nil {
 		if s := p.fnReconciler.Quarantine(); s != nil { // nil while volumes are off
@@ -397,8 +397,8 @@ func (h holdPlatform) ReturnQuarantined(ctx context.Context, r hold.QuarantineRe
 	var ret quarantine.Returner
 	switch r.Kind {
 	case v1.KindKVStore:
-		if h.p.kvReconciler != nil {
-			ret = h.p.kvReconciler.Quarantine()
+		if h.p.kv.reconciler != nil {
+			ret = h.p.kv.reconciler.Quarantine()
 		}
 	case v1.KindBucket:
 		ret = bucketQuarantine{shared: h.p.cfg.blob, store: h.p.cfg.store}

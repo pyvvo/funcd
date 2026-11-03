@@ -58,10 +58,17 @@ func sampleFn() *v1.Function {
 	return fn
 }
 
-// mustWorkerSpec is replica 0's workerSpec with bindEnv, for a test whose spec builds.
-func mustWorkerSpec(t *testing.T, r *Reconciler, fn *v1.Function, artifactPath string, bindEnv envresolve.Resolved, lakeEnv map[string]string) runtime.WorkerSpec {
+// mustWorkerSpec is replica 0's workerSpec, for a test whose spec builds, with the env a pass gives it: bindEnv as the
+// config hook shares it, and what the S3 and Lake hooks give fn's workers.
+func mustWorkerSpec(t *testing.T, r *Reconciler, fn *v1.Function, artifactPath string, bindEnv envresolve.Resolved) runtime.WorkerSpec {
 	t.Helper()
-	spec, err := r.workerSpec(t.Context(), fn, "", 0, artifactPath, bindEnv, lakeEnv)
+	shared, gate, err := checkAll(t.Context(), fn, []workloadHook{s3Hook{r}, lakeHook{r}})
+	require.NoError(t, err)
+	require.Nil(t, gate, "the S3 and Lake hooks hold nothing")
+	r.addBindingEnv(shared, bindEnv) // the config hook comes before them, so its keys win
+	own, issue, gate := r.ownWorkerEnv(fn)
+	require.Nil(t, gate)
+	spec, err := r.workerSpec(t.Context(), fn, "", 0, artifactPath, workerEnv{shared: shared, own: own, issue: issue})
 	require.NoError(t, err)
 	return spec
 }
@@ -78,7 +85,7 @@ func TestScenarioSecretShadowsConfig(t *testing.T) {
 	bind, err := r.resolveBindingEnv(context.Background(), fn)
 	require.NoError(t, err)
 
-	spec := mustWorkerSpec(t, r, fn, "/art/app.mjs", bind, nil)
+	spec := mustWorkerSpec(t, r, fn, "/art/app.mjs", bind)
 	require.Equal(t, "debug", spec.Env["LOG_LEVEL"])
 	require.Equal(t, "LOG_LEVEL", spec.Env["FUNCD_CONFIG_KEYS"])
 	for _, k := range []string{"STRIPE_KEY", "MODE", "FUNCD_SECRET_KEYS"} {
@@ -93,7 +100,7 @@ func TestScenarioReservedEnvNotOverridable(t *testing.T) {
 	createCM(t, r, "default", "evil", map[string]string{"FUNCD_ARTIFACT": "/evil/override", "FUNCD_PORT": "9999", "SAFE": "ok"})
 	bind, err := r.resolveBindingEnv(context.Background(), configFn("evil"))
 	require.NoError(t, err)
-	spec := mustWorkerSpec(t, r, configFn("evil"), "/art/app.mjs", bind, nil)
+	spec := mustWorkerSpec(t, r, configFn("evil"), "/art/app.mjs", bind)
 
 	require.Equal(t, "/art/app.mjs", spec.Env["FUNCD_ARTIFACT"], "the reserved key keeps its real value")
 	require.NotContains(t, spec.Env, "FUNCD_PORT", "a FUNCD_-prefixed bound key is dropped, not injected")
@@ -147,15 +154,14 @@ func TestSecretNames(t *testing.T) {
 func TestWorkerSpecWritesBindingKeyLists(t *testing.T) {
 	t.Parallel()
 	r := newShimReconciler(t, fakeResolver{})
-	spec, err := r.workerSpec(t.Context(), sampleFn(), "", 0, "/art/app.mjs", envresolve.Resolved{
+	spec := mustWorkerSpec(t, r, sampleFn(), "/art/app.mjs", envresolve.Resolved{
 		Env:        map[string]string{"LOG_LEVEL": "debug", "MODE": "prod", "STRIPE_KEY": "sk"},
 		ConfigKeys: []string{"LOG_LEVEL"},
 		SecretKeys: []string{"MODE", "STRIPE_KEY"},
-	}, nil)
-	require.NoError(t, err)
+	})
 	require.Equal(t, "LOG_LEVEL", spec.Env["FUNCD_CONFIG_KEYS"])
 	require.NotContains(t, spec.Env, "FUNCD_SECRET_KEYS", "secrets are read from funcd (ADR-0249)")
 
-	spec = mustWorkerSpec(t, r, sampleFn(), "/art/app.mjs", envresolve.Resolved{}, nil)
+	spec = mustWorkerSpec(t, r, sampleFn(), "/art/app.mjs", envresolve.Resolved{})
 	require.NotContains(t, spec.Env, "FUNCD_CONFIG_KEYS")
 }

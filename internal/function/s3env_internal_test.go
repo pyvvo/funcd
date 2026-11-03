@@ -60,7 +60,7 @@ func blobFn() *v1.Function {
 func TestScenarioKeypairInjected(t *testing.T) {
 	t.Parallel()
 	r := newS3Reconciler(t, true)
-	spec := mustWorkerSpec(t, r, blobFn(), "/art/app.mjs", envresolve.Resolved{}, nil)
+	spec := mustWorkerSpec(t, r, blobFn(), "/art/app.mjs", envresolve.Resolved{})
 
 	want := s3gateway.DeriveKeypair(s3TestMaster, v1.KindFunction, "default", "echo")
 	require.Equal(t, want.AccessKey, spec.Env["AWS_ACCESS_KEY_ID"])
@@ -90,7 +90,7 @@ func TestScenarioEndpointOverridesBindAddr(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	spec := mustWorkerSpec(t, r, blobFn(), "/art/app.mjs", envresolve.Resolved{}, nil)
+	spec := mustWorkerSpec(t, r, blobFn(), "/art/app.mjs", envresolve.Resolved{})
 	require.Equal(t, "http://10.63.0.1:9000", spec.Env["AWS_ENDPOINT_URL_S3"])
 }
 
@@ -99,7 +99,7 @@ func TestScenarioEndpointOverridesBindAddr(t *testing.T) {
 func TestScenarioNoInjectionWithoutBlob(t *testing.T) {
 	t.Parallel()
 	r := newS3Reconciler(t, true)
-	spec := mustWorkerSpec(t, r, sampleFn(), "/art/app.mjs", envresolve.Resolved{}, nil)
+	spec := mustWorkerSpec(t, r, sampleFn(), "/art/app.mjs", envresolve.Resolved{})
 
 	require.NotContains(t, spec.Env, "AWS_ACCESS_KEY_ID")
 	require.NotContains(t, spec.Env, "AWS_SECRET_ACCESS_KEY")
@@ -111,7 +111,7 @@ func TestScenarioNoInjectionWithoutBlob(t *testing.T) {
 func TestScenarioDisabledNoInjection(t *testing.T) {
 	t.Parallel()
 	r := newS3Reconciler(t, false)
-	spec := mustWorkerSpec(t, r, blobFn(), "/art/app.mjs", envresolve.Resolved{}, nil)
+	spec := mustWorkerSpec(t, r, blobFn(), "/art/app.mjs", envresolve.Resolved{})
 
 	require.NotContains(t, spec.Env, "AWS_ACCESS_KEY_ID")
 	require.NotContains(t, spec.Env, "AWS_ENDPOINT_URL_S3")

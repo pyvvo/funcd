@@ -3,13 +3,76 @@ package funcd
 import (
 	"context"
 
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/controlplane/admission"
+	"github.com/pyvvo/funcd/internal/health"
 	"github.com/pyvvo/funcd/internal/lifecycle"
 	"github.com/pyvvo/funcd/internal/provider"
+	"github.com/pyvvo/funcd/internal/quota"
 )
 
 // describer is a provider that names its own entries in the provider catalog (ADR-0082).
 type describer interface {
+	lifecycle.Provider
 	Descriptors() []provider.Descriptor
+}
+
+// The shared hooks (ADR-0308): each returns a provider's part of a cross-cutting feature, which the Platform puts in
+// place in list order, as providerCatalog puts the descriptors. Quotas and Dependencies run once, while New builds the
+// platform, after the last store facade exists; Admissions runs when the control-plane chain is built and on every App
+// write. No hook runs at boot or at stop.
+
+// quotaHook is a provider whose stores a size quota caps: the quota Source of each kind it serves (ADR-0292).
+type quotaHook interface {
+	lifecycle.Provider
+	Quotas() map[v1.Kind]quota.Source
+}
+
+// admissionHook is a provider whose resources a write must pass rules for: its admissions over r, the store or an
+// App's view of it (ADR-0199 Decision 3). An App write builds them again, so Admissions only builds values from parts
+// New set: no I/O, no state, safe to call concurrently.
+type admissionHook interface {
+	lifecycle.Provider
+	Admissions(r admission.StoreReader) []admission.Admission
+}
+
+// dependencyHook is a provider whose bindings a worker's dependency check reads (ADR-0215 Decision 3).
+type dependencyHook interface {
+	lifecycle.Provider
+	Dependencies() []health.Binding
+}
+
+// sharedHooks names the shared hooks in the boot log.
+func sharedHooks() []lifecycle.Hook {
+	return []lifecycle.Hook{lifecycle.Named[quotaHook]("quotas"), lifecycle.Named[admissionHook]("admissions"),
+		lifecycle.Named[dependencyHook]("dependencies")}
+}
+
+// registerQuotas registers each provider's quota Sources in the Book.
+func (p *Platform) registerQuotas() {
+	for _, h := range lifecycle.Each[quotaHook](p.phases) {
+		for kind, src := range h.Quotas() {
+			p.quotas.Register(kind, src)
+		}
+	}
+}
+
+// providerAdmissions are the providers' admissions over r, in list order.
+func (p *Platform) providerAdmissions(r admission.StoreReader) []admission.Admission {
+	var out []admission.Admission
+	for _, h := range lifecycle.Each[admissionHook](p.phases) {
+		out = append(out, h.Admissions(r)...)
+	}
+	return out
+}
+
+// dependencyChecks are the providers' binding checks, in list order.
+func (p *Platform) dependencyChecks() []health.Binding {
+	var out []health.Binding
+	for _, h := range lifecycle.Each[dependencyHook](p.phases) {
+		out = append(out, h.Dependencies()...)
+	}
+	return out
 }
 
 // providerCatalog builds the platform's provider catalog (ADR-0082) from its providers, each naming its own entries,
@@ -19,10 +82,8 @@ type describer interface {
 // serving the log-ingest capability, not a provider of its own.
 func providerCatalog(ph *lifecycle.Phases) (*provider.Catalog, error) {
 	ds := []provider.Descriptor{{Name: "ingress", Kind: provider.Builtin, Port: "gateway.Gateway", Summary: "HTTP ingress gateway"}}
-	for _, pr := range ph.Providers() {
-		if d, ok := pr.(describer); ok {
-			ds = append(ds, d.Descriptors()...)
-		}
+	for _, d := range lifecycle.Each[describer](ph) {
+		ds = append(ds, d.Descriptors()...)
 	}
 	return provider.New(ds...)
 }

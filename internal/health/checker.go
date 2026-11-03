@@ -11,34 +11,85 @@ import (
 	"github.com/pyvvo/funcd/internal/workernode/local"
 )
 
-// ReadChecker resolves a caller's binding alias and authorizes a read on it, with no storage call: the KV and blob
+// ReadChecker resolves a caller's binding alias and authorizes a read on it, with no storage call: the KV, blob and SQL
 // Facades' CheckRead.
 type ReadChecker interface {
 	CheckRead(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias string) error
 }
 
-// CheckerDeps are what the dependency check reads: the metastore, the binding Facades' resolve and read
-// authorization, the link resolver, the PDP and the prober's memory. A nil KV, Blob, SQL or Links skips that kind.
-// SQL's CheckRead also checks that the database's engine is Ready (ADR-0233 Decision 8); it has no prober target.
+// CheckerDeps are what the dependency check reads: the metastore that holds the caller, and the kinds of bindings it
+// checks in list order, each a provider's own (ADR-0308).
 type CheckerDeps struct {
-	Store  local.FunctionStore
-	KV     ReadChecker
-	Blob   ReadChecker
-	SQL    ReadChecker
-	Links  local.Resolver
-	Authz  auth.Authorizer
-	Health *Prober
+	Store    local.FunctionStore
+	Bindings []Binding
+}
+
+// Binding is one kind of a Function's bindings the dependency check reads: Aliases lists them in spec order, and Check
+// checks one, returning its failure or nil. A kind with no constructor below fills the fields itself.
+type Binding struct {
+	Kind    string
+	Aliases func(fn *v1.Function) []string
+	Check   func(ctx context.Context, caller local.Ref, alias string) *local.DependencyReport
+}
+
+// KV checks a Function's KV bindings: resolve and read authorization, then the KV probe's last result.
+func KV(rc ReadChecker, p *Prober) Binding {
+	return readBinding(local.DependencyKV, func(fn *v1.Function) []string {
+		return aliases(fn.Spec.Bindings.KV, func(b v1.FunctionKV) string { return b.Alias })
+	}, rc, p, TargetKV)
+}
+
+// Blob checks a Function's blob bindings as KV checks its KV ones, against the blob probe.
+func Blob(rc ReadChecker, p *Prober) Binding {
+	return readBinding(local.DependencyBlob, func(fn *v1.Function) []string {
+		return aliases(fn.Spec.Bindings.Blob, func(b v1.FunctionBlob) string { return b.Alias })
+	}, rc, p, TargetBlob)
+}
+
+// SQL checks a Function's SQL bindings: resolve, read authorization and a Ready engine (ADR-0233 Decision 8); it has no
+// prober target.
+func SQL(rc ReadChecker) Binding {
+	return readBinding(local.DependencySQL, func(fn *v1.Function) []string {
+		return aliases(fn.Spec.Bindings.SQL, func(b v1.FunctionSQL) string { return b.Alias })
+	}, rc, nil, "")
+}
+
+// Links checks a Function's links: the resolver's link-as-grant, link::invoke when authz is set, and that the target
+// exists in st and is not Failed.
+func Links(r local.Resolver, authz auth.Authorizer, st local.FunctionStore) Binding {
+	l := linkCheck{links: r, authz: authz, store: st}
+	return Binding{Kind: local.DependencyLink, Aliases: func(fn *v1.Function) []string {
+		return aliases(fn.Spec.Bindings.Links, func(b v1.FunctionLink) string { return b.Alias })
+	}, Check: l.check}
+}
+
+// entry is a binding entry of a Function.
+type entry interface {
+	v1.FunctionKV | v1.FunctionBlob | v1.FunctionSQL | v1.FunctionLink
+}
+
+func aliases[B entry](bs []B, alias func(B) string) []string {
+	out := make([]string, len(bs))
+	for i, b := range bs {
+		out[i] = alias(b)
+	}
+	return out
 }
 
 // NewChecker builds the dependency check of ADR-0215 Decision 3.
-func NewChecker(d CheckerDeps) local.DependencyChecker { return checker{d} }
+func NewChecker(d CheckerDeps) local.DependencyChecker {
+	return checker{store: d.Store, bindings: d.Bindings}
+}
 
-type checker struct{ d CheckerDeps }
+type checker struct {
+	store    local.FunctionStore
+	bindings []Binding
+}
 
-// Check checks caller's spec.bindings.kv, then spec.bindings.blob, then spec.bindings.sql, then spec.bindings.links entries in order and returns the first failure. It
+// Check checks caller's bindings kind by kind, each kind's entries in spec order, and returns the first failure. It
 // calls no worker, activator or storage engine and writes nothing. A binding reached after ctx is done is a Timeout.
 func (c checker) Check(ctx context.Context, caller local.Ref) *local.DependencyReport {
-	obj, err := c.d.Store.Get(ctx, v1.KindFunction.GVK(), caller.Namespace, caller.Function)
+	obj, err := c.store.Get(ctx, v1.KindFunction.GVK(), caller.Namespace, caller.Function)
 	switch {
 	case fault.KindOf(err) == fault.NotFound:
 		return nil
@@ -49,33 +100,12 @@ func (c checker) Check(ctx context.Context, caller local.Ref) *local.DependencyR
 	if !ok {
 		return nil
 	}
-	if c.d.KV != nil {
-		for _, b := range fn.Spec.Bindings.KV {
-			if r := c.read(ctx, caller, local.DependencyKV, b.Alias, c.d.KV, TargetKV); r != nil {
+	for _, b := range c.bindings {
+		for _, alias := range b.Aliases(fn) {
+			if r := timedOut(ctx, b.Kind, alias); r != nil {
 				return r
 			}
-		}
-	}
-	if c.d.Blob != nil {
-		for _, b := range fn.Spec.Bindings.Blob {
-			if r := c.read(ctx, caller, local.DependencyBlob, b.Alias, c.d.Blob, TargetBlob); r != nil {
-				return r
-			}
-		}
-	}
-	if c.d.SQL != nil {
-		for _, b := range fn.Spec.Bindings.SQL {
-			if r := timedOut(ctx, local.DependencySQL, b.Alias); r != nil {
-				return r
-			}
-			if err := c.d.SQL.CheckRead(ctx, caller.Namespace, caller.Function, b.Alias); err != nil {
-				return &local.DependencyReport{Kind: local.DependencySQL, Binding: b.Alias, Reason: reasonOf(ctx, err), Message: messageOf(err)}
-			}
-		}
-	}
-	if c.d.Links != nil {
-		for _, l := range fn.Spec.Bindings.Links {
-			if r := c.link(ctx, caller, l.Alias); r != nil {
+			if r := b.Check(ctx, caller, alias); r != nil {
 				return r
 			}
 		}
@@ -83,36 +113,39 @@ func (c checker) Check(ctx context.Context, caller local.Ref) *local.DependencyR
 	return nil
 }
 
-// read checks one KV or blob binding: its resolve and read authorization, then the storage probe's last result.
-func (c checker) read(ctx context.Context, caller local.Ref, kind, alias string, rc ReadChecker, t Target) *local.DependencyReport {
-	if r := timedOut(ctx, kind, alias); r != nil {
-		return r
-	}
-	if err := rc.CheckRead(ctx, caller.Namespace, caller.Function, alias); err != nil {
-		return &local.DependencyReport{Kind: kind, Binding: alias, Reason: reasonOf(ctx, err), Message: messageOf(err)}
-	}
-	if res := c.d.Health.Result(t); !res.Healthy {
-		return &local.DependencyReport{Kind: kind, Binding: alias, Reason: local.ReasonStorageUnreachable, Message: res.Message}
-	}
-	return nil
+// readBinding checks one kind's bindings by their resolve and read authorization, then the storage probe's last result
+// for t; a nil prober, or a target it does not probe, is healthy.
+func readBinding(kind string, list func(*v1.Function) []string, rc ReadChecker, p *Prober, t Target) Binding {
+	return Binding{Kind: kind, Aliases: list, Check: func(ctx context.Context, caller local.Ref, alias string) *local.DependencyReport {
+		if err := rc.CheckRead(ctx, caller.Namespace, caller.Function, alias); err != nil {
+			return &local.DependencyReport{Kind: kind, Binding: alias, Reason: reasonOf(ctx, err), Message: messageOf(err)}
+		}
+		if res := p.Result(t); !res.Healthy {
+			return &local.DependencyReport{Kind: kind, Binding: alias, Reason: local.ReasonStorageUnreachable, Message: res.Message}
+		}
+		return nil
+	}}
 }
 
-// link checks one link: the resolver's link-as-grant, link::invoke, and that its target exists and is not Failed. An
-// Idle, Deploying, Degraded or never-booted target passes, so mutual links never block each other.
-func (c checker) link(ctx context.Context, caller local.Ref, alias string) *local.DependencyReport {
+// linkCheck checks one link. An Idle, Deploying, Degraded or never-booted target passes, so mutual links never block
+// each other.
+type linkCheck struct {
+	links local.Resolver
+	authz auth.Authorizer
+	store local.FunctionStore
+}
+
+func (c linkCheck) check(ctx context.Context, caller local.Ref, alias string) *local.DependencyReport {
 	const op = "health.link"
 	report := func(err error) *local.DependencyReport {
 		return &local.DependencyReport{Kind: local.DependencyLink, Binding: alias, Reason: reasonOf(ctx, err), Message: messageOf(err)}
 	}
-	if r := timedOut(ctx, local.DependencyLink, alias); r != nil {
-		return r
-	}
-	target, _, _, err := c.d.Links.Resolve(ctx, caller, alias)
+	target, _, _, err := c.links.Resolve(ctx, caller, alias)
 	if err != nil {
 		return report(err)
 	}
-	if c.d.Authz != nil {
-		dec, err := c.d.Authz.Authorize(ctx, auth.Request{
+	if c.authz != nil {
+		dec, err := c.authz.Authorize(ctx, auth.Request{
 			Identity: auth.Identity{
 				Subject:   caller.String(),
 				Principal: &auth.EntityRef{Type: v1.KindFunction, Namespace: caller.Namespace, Name: caller.Function},
@@ -127,7 +160,7 @@ func (c checker) link(ctx context.Context, caller local.Ref, alias string) *loca
 			return report(fault.Forbiddenf(op, "caller %s is not authorized to invoke %s: %s", caller, target, dec.Reason))
 		}
 	}
-	obj, err := c.d.Store.Get(ctx, v1.KindFunction.GVK(), target.Namespace, target.Function)
+	obj, err := c.store.Get(ctx, v1.KindFunction.GVK(), target.Namespace, target.Function)
 	if err != nil {
 		if fault.KindOf(err) == fault.NotFound {
 			return report(fault.NotFoundf(op, "link target %s does not exist", target))

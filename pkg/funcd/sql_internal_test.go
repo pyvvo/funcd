@@ -184,7 +184,7 @@ func TestScenarioDatabaseStartsItsEngine(t *testing.T) {
 	require.Equal(t, "256Mi", spec.Resources.Memory, "the default memory bound")
 	require.Equal(t, "todo-db", spec.Env["FUNCD_SQL_NODE_ID"])
 	require.NotEmpty(t, spec.Env["FUNCD_SQL_PASSWORD"])
-	addr, ok := e.p.sqlReconciler.Engines().Address("default", "todo-db")
+	addr, ok := e.p.sql.reconciler.Engines().Address("default", "todo-db")
 	require.True(t, ok, "the Ready engine is in the registry")
 	require.Equal(t, strings.TrimPrefix(e.rt.engine.URL, "http://"), addr)
 }
@@ -214,10 +214,11 @@ func TestScenarioDeleteReclaimsEngineAndData(t *testing.T) {
 		_, _, teardowns, dir := e.rt.spec(sqlRef("todo-db"))
 		return teardowns > 0 && !dir
 	}, 5*time.Second, 10*time.Millisecond, "the engine is torn down and its directory reclaimed")
-	_, ok := e.p.sqlReconciler.Engines().Address("default", "todo-db")
+	_, ok := e.p.sql.reconciler.Engines().Address("default", "todo-db")
 	require.False(t, ok, "the deleted engine leaves the registry")
 }
 
+// scenario: a-held-boot-reclaims-nothing
 // scenario: delete-reclaims-engine-and-data (held half) — while the platform is held the directory of a database
 // with no object stays and hold status lists it; the first boot after the release reclaims it.
 func TestScenarioDeleteReclaimsEngineAndDataAfterHold(t *testing.T) {
@@ -293,11 +294,12 @@ func TestScenarioResourcesChangeRestartsEngine(t *testing.T) {
 	require.Zero(t, teardowns, "the provider runtime replaces the engine; the reconciler tears none down")
 	require.Equal(t, "512Mi", spec.Resources.Memory, "Converge gets the new bound")
 	require.True(t, dir, "the directory stays")
-	has, err := e.p.sqlReconciler.Prober().HasTables(e.ctx, "default", "todo-db")
+	has, err := e.p.sql.reconciler.Prober().HasTables(e.ctx, "default", "todo-db")
 	require.NoError(t, err)
 	require.True(t, has, "the data is still there")
 }
 
+// scenario: store-rules-on-the-write-path
 // scenario: delete-refused-while-holding-data — an API delete of a database with a table answers 409 and keeps it.
 func TestScenarioDeleteRefusedWhileHoldingData(t *testing.T) {
 	t.Parallel()
@@ -314,6 +316,7 @@ func TestScenarioDeleteRefusedWhileHoldingData(t *testing.T) {
 	require.True(t, dir, "its data stays")
 }
 
+// scenario: store-rules-on-the-write-path
 // scenario: database-quota — a namespace at its SQLDatabase cap answers 400 to one more.
 func TestScenarioDatabaseQuota(t *testing.T) {
 	t.Parallel()

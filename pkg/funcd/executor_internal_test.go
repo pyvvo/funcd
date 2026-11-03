@@ -2,9 +2,12 @@ package funcd
 
 import (
 	"context"
+	"encoding/json"
+	"log/slog"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -12,25 +15,39 @@ import (
 )
 
 // scenario: providers-boot-in-order
-// The platform lists its providers in boot order with the hooks each one has. A wrapper that hid a hook would show
-// here: a hook found by type assertion disappears behind a wrapper, as a lost StopGrace once cut the close budget
-// (#453).
+// scenario: boot-log-names-shared-hooks
+// Run logs its providers in boot order with the hooks each one has, the shared hooks after the lifecycle ones. A
+// wrapper that hid a hook would show here: a hook found by type assertion disappears behind a wrapper, as a lost
+// StopGrace once cut the close budget (#453).
 func TestPhases_ListTheProvidersWithTheirHooks(t *testing.T) {
 	t.Parallel()
-	p, err := New(InMemory())
+	log := &syncBuffer{}
+	p, err := New(InMemory(), WithLogger(slog.New(slog.NewJSONHandler(log, nil))))
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- p.Run(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	var logged struct{ Providers []string }
+	require.Eventually(t, func() bool {
+		for line := range strings.Lines(log.String()) {
+			if strings.Contains(line, `"msg":"platform provider hooks"`) {
+				return json.Unmarshal([]byte(line), &logged) == nil
+			}
+		}
+		return false
+	}, 10*time.Second, 10*time.Millisecond, "Run logs its providers' hooks")
 	require.Equal(t, []string{
 		"executor: start, run, before stop, stop",
-		"kv: start, stop",
-		"blob: start, stop",
-		"sql: start, run, stop",
+		"kv: start, reclaim, stop, quotas, admissions, dependencies",
+		"blob: start, reclaim, stop, quotas, admissions, dependencies",
+		"sql: reclaim, run, stop, quotas, admissions, dependencies",
 		"lake: before stop",
 		"eventing: run",
 		"secrets: ",
 		"config: ",
-		"invoke: ",
-	}, p.phases.Hooks())
+		"invoke: dependencies",
+	}, logged.Providers)
 }
 
 // scenario: the-catalog-names-every-binding

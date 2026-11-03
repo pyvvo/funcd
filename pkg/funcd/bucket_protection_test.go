@@ -12,6 +12,7 @@ import (
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
+// scenario: store-rules-on-the-write-path
 // Issue #58 (ADR-0080 bucket-deletion-protection): the production wiring probes the substrate the
 // s3gateway writes (s3/<ns>/<bucket>/<prefix>/…), so a Bucket whose prefix still holds objects can be
 // neither deleted nor stripped of that prefix; once drained, both are allowed.

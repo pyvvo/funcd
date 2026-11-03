@@ -14,6 +14,7 @@ import (
 	"github.com/pyvvo/funcd/internal/volume"
 )
 
+// scenario: a-held-boot-reclaims-nothing
 // TestIssue1204_LeftoverEmptyDirsGoOnceTheHoldLifts: a held boot keeps the last run's emptyDirs, which hold capacity;
 // once the hold is released, the next Function pass releases them, as an unheld boot does (#1204).
 func TestIssue1204_LeftoverEmptyDirsGoOnceTheHoldLifts(t *testing.T) {
@@ -41,7 +42,7 @@ func TestIssue1204_LeftoverEmptyDirsGoOnceTheHoldLifts(t *testing.T) {
 	go func() { done <- p.Run(runCtx) }()
 	t.Cleanup(func() { cancel(); <-done })
 	listed := func() bool {
-		infos, err := p.volumes.List(ctx)
+		infos, err := p.exec.volumes.List(ctx)
 		require.NoError(t, err)
 		return slices.ContainsFunc(infos, func(in volume.Info) bool { return in.ID == leftover })
 	}

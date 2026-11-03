@@ -1,8 +1,10 @@
 # ADR-0306: Workload hooks check a Function's bindings and give its workers their env
 
-- **Status**: Accepted (2026-11-03; judged three times under the adr-judge skill, last verdict accept; the decider
-  accepted the choices the draft made: today's gate order, a ConfigMap may still move the S3 endpoint, the Executor's
-  own env stays outside the hooks, and `memberEnv`'s delete loop goes)
+- **Status**: Implemented (2026-11-03), review passed with three Minors
+  ([report](../reviews/adr-0306-implementation-claude-opus-5-5.md)); Reviewing (2026-11-03); Accepted (2026-11-03;
+  judged three times under the adr-judge skill, last verdict accept; the decider accepted the choices the draft made:
+  today's gate order, a ConfigMap may still move the S3 endpoint, the Executor's own env stays outside the hooks, and
+  `memberEnv`'s delete loop goes)
 - **Date**: 2026-11-03
 - **Deciders**: green-0-rabbit
 - **Tags**: provider, function, worker-env, bindings, refactor

@@ -145,6 +145,7 @@ func TestScenarioSecretNotInEnv(t *testing.T) {
 	require.Nil(t, out.ConfigMode, "MODE is a secret, never read through ctx.config")
 }
 
+// scenario: a-worker-reaches-each-binding-on-its-local-api
 // scenario: secret-read-live — a changed Secret value is the next read's, with no restart of the worker.
 func TestScenarioSecretReadLive(t *testing.T) {
 	t.Parallel()
