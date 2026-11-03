@@ -13333,5 +13333,20 @@
     "dod_total": 12,
     "report": "docs/reviews/issue-1362-fix-claude-opus-5-5.md",
     "notes": "self-review in the session that wrote the fix, at the user's request; minor (model): pkg/funcd's TestMain wiring of the open-Badger check has no test of its own"
+  },
+  {
+    "date": "2026-11-03",
+    "adr": "0305",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 3,
+    "model_attributed": 1,
+    "dod_passed": 18,
+    "dod_total": 18,
+    "report": "docs/reviews/adr-0305-implementation-claude-opus-5-5.md",
+    "notes": "pass; m1 (model): the lifecycle docs omit Run, the local-API test names the controller instead of the stopped activator, a hookless provider logs 'secrets: '; m2 (adr): Decision 5 lists only the moves across the runtime's Close, not the S3-before-fence stop order or the earlier egress services and KV reclaim at boot that the list order and Contracts imply; m3 (adr): Decision 5 says a cold call records a wake, but the stopped activator refuses it with 503; 4 reviewer mutants killed; check-specs 14 specs, 0 failing"
   }
 ]
