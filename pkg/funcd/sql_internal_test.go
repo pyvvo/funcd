@@ -299,6 +299,7 @@ func TestScenarioResourcesChangeRestartsEngine(t *testing.T) {
 	require.True(t, has, "the data is still there")
 }
 
+// scenario: store-rules-on-the-write-path
 // scenario: delete-refused-while-holding-data — an API delete of a database with a table answers 409 and keeps it.
 func TestScenarioDeleteRefusedWhileHoldingData(t *testing.T) {
 	t.Parallel()
@@ -315,6 +316,7 @@ func TestScenarioDeleteRefusedWhileHoldingData(t *testing.T) {
 	require.True(t, dir, "its data stays")
 }
 
+// scenario: store-rules-on-the-write-path
 // scenario: database-quota — a namespace at its SQLDatabase cap answers 400 to one more.
 func TestScenarioDatabaseQuota(t *testing.T) {
 	t.Parallel()

@@ -204,6 +204,7 @@ func TestLakeData(t *testing.T) {
 	}
 }
 
+// scenario: quotas-cap-every-store
 // TestIssue1370_EveryStoreKindIsCappedOnTheDefaultDrivers: every store kind's quota is in the Book (ADR-0292 Decision 2),
 // the in-memory KV a platform runs without WithKVStore included. A write past a Bucket's or a KVStore's cap is refused;
 // one to a capped SQLDatabase whose engine cannot report its usage yet is a 503.

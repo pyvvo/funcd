@@ -1,7 +1,9 @@
 // Package lifecycle runs the platform's providers through boot and stop in one order (ADR-0305). A provider implements
 // Provider and any of Starter, Reclaimer, Runner, BeforeStopper and Stopper; Phases runs each hook a provider has:
 // Start, then Reclaim, in list order at boot, Run once every Start passed, BeforeStop and Stop in reverse at stop. It
-// follows the idiom of the invoke chain (ADR-0302): a required interface, and optional ones a type assertion finds.
+// follows the idiom of the invoke chain (ADR-0302): a required interface, and optional ones a type assertion finds. A
+// shared hook is such an optional interface of the package that builds the list, walked with Each and named in the
+// boot log with Named (ADR-0308).
 package lifecycle
 
 import (
@@ -131,6 +133,31 @@ func (ph *Phases) Providers() []Provider {
 	return slices.Clone(ph.providers)
 }
 
+// Each returns the providers that implement H, in list order: the walk a shared hook of another package runs.
+func Each[H Provider](ph *Phases) []H {
+	var out []H
+	for _, p := range ph.providers {
+		if h, ok := p.(H); ok {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// Hook is an optional provider interface under its boot-log name.
+type Hook struct {
+	name string
+	has  func(Provider) bool
+}
+
+// Named is the hook H, logged as name.
+func Named[H Provider](name string) Hook {
+	return Hook{name: name, has: func(p Provider) bool {
+		_, ok := p.(H)
+		return ok
+	}}
+}
+
 // BeforeStop runs every BeforeStopper in reverse order and joins their errors.
 func (ph *Phases) BeforeStop(ctx context.Context) error {
 	return stopEach(ctx, ph, "lifecycle.BeforeStop", "before stop", BeforeStopper.BeforeStop)
@@ -158,26 +185,18 @@ func stopEach[H Provider](ctx context.Context, ph *Phases, op, verb string, hook
 	return errors.Join(errs...)
 }
 
-// Hooks names each provider with the hooks it has, in list order, for the boot log: "executor: start, run, before
-// stop, stop".
-func (ph *Phases) Hooks() []string {
+// Hooks names each provider with the hooks it has, then each of shared it implements, in list order, for the boot log:
+// "executor: start, run, before stop, stop".
+func (ph *Phases) Hooks(shared ...Hook) []string {
+	all := append([]Hook{Named[Starter]("start"), Named[Reclaimer]("reclaim"), Named[Runner]("run"),
+		Named[BeforeStopper]("before stop"), Named[Stopper]("stop")}, shared...)
 	out := make([]string, 0, len(ph.providers))
 	for _, p := range ph.providers {
 		var hooks []string
-		if _, ok := p.(Starter); ok {
-			hooks = append(hooks, "start")
-		}
-		if _, ok := p.(Reclaimer); ok {
-			hooks = append(hooks, "reclaim")
-		}
-		if _, ok := p.(Runner); ok {
-			hooks = append(hooks, "run")
-		}
-		if _, ok := p.(BeforeStopper); ok {
-			hooks = append(hooks, "before stop")
-		}
-		if _, ok := p.(Stopper); ok {
-			hooks = append(hooks, "stop")
+		for _, h := range all {
+			if h.has(p) {
+				hooks = append(hooks, h.name)
+			}
 		}
 		out = append(out, p.Name()+": "+strings.Join(hooks, ", "))
 	}

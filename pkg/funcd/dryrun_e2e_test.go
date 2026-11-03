@@ -118,6 +118,7 @@ func (e *gcEnv) settledList(t *testing.T, kind v1.Kind) []v1.Object {
 	return before
 }
 
+// scenario: store-rules-on-the-write-path
 // scenario: apply-dry-run-refused
 func TestScenarioApplyDryRunRefused(t *testing.T) {
 	t.Parallel()

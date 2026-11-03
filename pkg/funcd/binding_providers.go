@@ -1,12 +1,19 @@
 package funcd
 
 import (
+	"cmp"
 	"context"
 	"io"
 
 	"github.com/pyvvo/funcd/api/fault"
+	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/controlplane/admission"
+	"github.com/pyvvo/funcd/internal/health"
+	"github.com/pyvvo/funcd/internal/kvstore"
 	"github.com/pyvvo/funcd/internal/lifecycle"
 	"github.com/pyvvo/funcd/internal/provider"
+	"github.com/pyvvo/funcd/internal/quota"
+	"github.com/pyvvo/funcd/internal/workernode/local"
 	"github.com/pyvvo/funcd/internal/workflow"
 )
 
@@ -21,9 +28,36 @@ var (
 	_ lifecycle.Reclaimer = (*kvProvider)(nil)
 	_ lifecycle.Stopper   = (*kvProvider)(nil)
 	_ describer           = (*kvProvider)(nil)
+	_ quotaHook           = (*kvProvider)(nil)
+	_ admissionHook       = (*kvProvider)(nil)
+	_ dependencyHook      = (*kvProvider)(nil)
 )
 
 func (s *kvProvider) Name() string { return "kv" }
+
+// Quotas is the KVStores' quota, when the KV driver counts its usage.
+func (s *kvProvider) Quotas() map[v1.Kind]quota.Source {
+	kv, ok := s.p.cfg.kvStore.(kvstore.Usager)
+	if !ok {
+		return nil
+	}
+	return map[v1.Kind]quota.Source{v1.KindKVStore: kvQuotas(kv, s.p.cfg.store)}
+}
+
+// Admissions are the KVStore rules (ADR-0072/0073): the store-count quota (0 ⇒ the default, negative disables it),
+// and no delete of a store still bound or holding data. Binding and owner existence are reconcile-time (ADR-0121).
+func (s *kvProvider) Admissions(r admission.StoreReader) []admission.Admission {
+	c := s.p.cfg
+	return []admission.Admission{
+		admission.NewKVStoreQuotaAdmission(r, cmp.Or(c.kvMaxStoresPerNamespace, defaultKVStoresPerNamespace)),
+		admission.NewKVStoreDeletionProtectionAdmission(r, kvProber{c.kvStore}),
+	}
+}
+
+// Dependencies checks a worker's KV bindings: resolve, read authorization and the KV probe.
+func (s *kvProvider) Dependencies() []health.Binding {
+	return []health.Binding{health.KV(s.p.kvFacade, s.p.prober)}
+}
 
 func (s *kvProvider) Descriptors() []provider.Descriptor {
 	return []provider.Descriptor{{Name: "kv", Kind: provider.Builtin, Port: "kvstore.KV", Bindings: []string{"spec.bindings.kv"},
@@ -61,9 +95,38 @@ var (
 	_ lifecycle.Reclaimer = (*blobProvider)(nil)
 	_ lifecycle.Stopper   = (*blobProvider)(nil)
 	_ describer           = (*blobProvider)(nil)
+	_ quotaHook           = (*blobProvider)(nil)
+	_ admissionHook       = (*blobProvider)(nil)
+	_ dependencyHook      = (*blobProvider)(nil)
 )
 
 func (s *blobProvider) Name() string { return "blob" }
+
+// Quotas is the quota of the Buckets and their prefixes, over the blob substrate.
+func (s *blobProvider) Quotas() map[v1.Kind]quota.Source {
+	if s.p.cfg.blob == nil {
+		return nil
+	}
+	return map[v1.Kind]quota.Source{v1.KindBucket: bucketQuotas(s.p.cfg.blob, s.p.cfg.store)}
+}
+
+// Admissions are the Bucket rules (ADR-0080), the KVStore's parallel: the bucket-count quota, and no delete of a
+// Bucket still bound or holding data, which it lists through the substrate view the S3 gateway writes.
+func (s *blobProvider) Admissions(r admission.StoreReader) []admission.Admission {
+	p, c := s.p, s.p.cfg
+	return []admission.Admission{
+		admission.NewBucketQuotaAdmission(r, cmp.Or(c.bucketMaxPerNamespace, defaultBucketsPerNamespace)),
+		admission.NewBucketDeletionProtectionAdmission(r, blobProber{lister: blobBucketLister{resolve: s3BucketFor(c.blob, c.store, p.checker)}, shared: c.blob}),
+	}
+}
+
+// Dependencies checks a worker's blob bindings as kv checks its KV ones; without a blob substrate there are none.
+func (s *blobProvider) Dependencies() []health.Binding {
+	if s.p.blobFacade == nil {
+		return nil
+	}
+	return []health.Binding{health.Blob(s.p.blobFacade, s.p.prober)}
+}
 
 func (s *blobProvider) Descriptors() []provider.Descriptor {
 	return []provider.Descriptor{
@@ -109,9 +172,31 @@ var (
 	_ lifecycle.Runner    = (*sqlProvider)(nil)
 	_ lifecycle.Stopper   = (*sqlProvider)(nil)
 	_ describer           = (*sqlProvider)(nil)
+	_ quotaHook           = (*sqlProvider)(nil)
+	_ admissionHook       = (*sqlProvider)(nil)
+	_ dependencyHook      = (*sqlProvider)(nil)
 )
 
 func (s *sqlProvider) Name() string { return "sql" }
+
+// Quotas is the SQLDatabases' quota: its pages in use, read through its engine.
+func (s *sqlProvider) Quotas() map[v1.Kind]quota.Source {
+	return map[v1.Kind]quota.Source{v1.KindSQLDatabase: sqlQuotas(s.p.sqlFacade.Usage, s.p.cfg.store)}
+}
+
+// Admissions are the SQLDatabase rules (ADR-0232): the count quota, and no API delete while the engine holds a table.
+func (s *sqlProvider) Admissions(r admission.StoreReader) []admission.Admission {
+	c := s.p.cfg
+	return []admission.Admission{
+		admission.NewSQLDatabaseQuotaAdmission(r, cmp.Or(c.sqlMaxDatabasesPerNamespace, defaultSQLDatabasesPerNamespace)),
+		admission.NewSQLDatabaseDeletionProtectionAdmission(r, s.p.sqlReconciler.Prober()),
+	}
+}
+
+// Dependencies checks a worker's SQL bindings: resolve, read authorization and a Ready engine (ADR-0233 Decision 8).
+func (s *sqlProvider) Dependencies() []health.Binding {
+	return []health.Binding{health.SQL(s.p.sqlFacade)}
+}
 
 func (s *sqlProvider) Descriptors() []provider.Descriptor {
 	return []provider.Descriptor{{Name: "sql", Kind: provider.Addon, Bindings: []string{"spec.bindings.sql"},
@@ -200,6 +285,27 @@ func (s *eventingProvider) Run(ctx context.Context) {
 	runAll(ctx, loops...)
 }
 
+// invokeProvider is the fn-to-fn invoke provider (ADR-0064), served from the worker-node local API.
+type invokeProvider struct{ p *Platform }
+
+var (
+	_ describer      = (*invokeProvider)(nil)
+	_ dependencyHook = (*invokeProvider)(nil)
+)
+
+func (s *invokeProvider) Name() string { return "invoke" }
+
+func (s *invokeProvider) Descriptors() []provider.Descriptor {
+	return []provider.Descriptor{{Name: "invoke", Kind: provider.Builtin, Bindings: []string{"spec.bindings.links"},
+		Summary: "synchronous fn-to-fn RPC (context.invoke)"}}
+}
+
+// Dependencies checks a worker's links: link-as-grant, link::invoke, and a target that exists and is not Failed.
+func (s *invokeProvider) Dependencies() []health.Binding {
+	st := s.p.cfg.store
+	return []health.Binding{health.Links(local.NewResolver(st), s.p.pdp, st)}
+}
+
 // catalogEntry is a provider with no hook: its Function-facing service is served from the socket or the env, and it
 // only names its catalog entry.
 type catalogEntry struct{ d provider.Descriptor }
@@ -209,14 +315,12 @@ var _ describer = catalogEntry{}
 func (c catalogEntry) Name() string                       { return c.d.Name }
 func (c catalogEntry) Descriptors() []provider.Descriptor { return []provider.Descriptor{c.d} }
 
-// hookless are the providers with no hook, after the ones that have hooks.
+// hookless are the providers that only name their catalog entry.
 func hookless() []lifecycle.Provider {
 	return []lifecycle.Provider{
 		catalogEntry{provider.Descriptor{Name: "secrets", Kind: provider.Builtin, Port: "secrets.Resolver",
 			Bindings: []string{"spec.bindings.secret"}, Summary: "secret resolution + at-rest encryption"}},
 		catalogEntry{provider.Descriptor{Name: "config", Kind: provider.Builtin, Bindings: []string{"spec.bindings.config"},
 			Summary: "ConfigMap values a Function reads from its env (ADR-0245)"}},
-		catalogEntry{provider.Descriptor{Name: "invoke", Kind: provider.Builtin, Bindings: []string{"spec.bindings.links"},
-			Summary: "synchronous fn-to-fn RPC (context.invoke)"}},
 	}
 }

@@ -151,6 +151,29 @@ func TestPhases_HooksNamesWhatEachProviderHas(t *testing.T) {
 	require.Equal(t, []string{"a: start, before stop, stop", "b: stop", "c: ", "d: run"}, ph.Hooks())
 }
 
+// quoter is a shared hook of the test package, as one beside lifecycle defines its own.
+type quoter interface {
+	lifecycle.Provider
+	Quota() string
+}
+
+// quoted has the shared hook and a Stop.
+type quoted struct{ stopOnly }
+
+func (q *quoted) Quota() string { return "quota " + q.name }
+
+// Each walks a shared hook in list order, and Hooks names it after the lifecycle's own hooks.
+func TestPhases_EachWalksASharedHookInOrder(t *testing.T) {
+	ph := lifecycle.New(&quoted{stopOnly{name: "a"}}, &full{name: "b"}, none{name: "c"}, &quoted{stopOnly{name: "d"}})
+	var got []string
+	for _, q := range lifecycle.Each[quoter](ph) {
+		got = append(got, q.Quota())
+	}
+	require.Equal(t, []string{"quota a", "quota d"}, got)
+	require.Equal(t, []string{"a: stop, quotas", "b: start, before stop, stop", "c: ", "d: stop, quotas"},
+		ph.Hooks(lifecycle.Named[quoter]("quotas")))
+}
+
 // runner has a Run that serves until its context ends.
 type runner struct {
 	name  string

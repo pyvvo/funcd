@@ -530,6 +530,13 @@ type Platform struct {
 	sqlFeedListener net.Listener   // bound by New on loopback with the port unset (ADR-0260); nil ⇒ Run binds the port
 	prober          *health.Prober // the storage probes (ADR-0215), started before the controller runs
 
+	// the parts the shared hooks read (ADR-0308, until the providers build their own): the binding facades (blobFacade
+	// nil without a blob substrate) and the PDP
+	kvFacade   *kvsvc.Facade
+	blobFacade *blobsvc.Facade
+	sqlFacade  *sqlsvc.Facade
+	pdp        auth.Authorizer
+
 	dataPlaneServer   *http.Server // function-invocation listener (ADR-0033)
 	dataPlaneListener net.Listener
 	dataPlaneAddr     string
@@ -586,8 +593,9 @@ func New(opts ...Option) (_ *Platform, err error) {
 	// The Executor is listed before anything is built, so a New that fails still closes the runtime its options opened
 	// (#94).
 	p.exec = &executor{p: p}
-	p.phases = lifecycle.New(append([]lifecycle.Provider{p.exec, &kvProvider{p}, &blobProvider{p}, &sqlProvider{p},
-		&lakeProvider{p}, &eventingProvider{p}}, hookless()...)...)
+	providers := append([]lifecycle.Provider{p.exec, &kvProvider{p}, &blobProvider{p}, &sqlProvider{p},
+		&lakeProvider{p}, &eventingProvider{p}}, hookless()...)
+	p.phases = lifecycle.New(append(providers, &invokeProvider{p})...)
 	// A failed New releases what the options and the build acquired, so the caller can retry (issue #94).
 	defer func() {
 		if err != nil {
@@ -644,9 +652,6 @@ func (p *Platform) buildControlPlane() error {
 		p.floor = quota.NewFloor(c.floorFree, c.floorMinFree, clock.System(), p.logger)
 		p.checker = p.floor.Guard(p.quotas)
 	}
-	if c.blob != nil {
-		p.quotas.Register(v1.KindBucket, bucketQuotas(c.blob, c.store))
-	}
 	if c.authorizer == nil {
 		c.authorizer = rbac.New()
 	}
@@ -661,20 +666,6 @@ func (p *Platform) buildControlPlane() error {
 	}
 	if c.dataPlaneAddr == "" {
 		c.dataPlaneAddr = defaultDataPlaneAddr
-	}
-	// KVStore per-namespace count quota (ADR-0072): 0 ⇒ the default (100); negative disables it.
-	kvMaxStores := c.kvMaxStoresPerNamespace
-	if kvMaxStores == 0 {
-		kvMaxStores = defaultKVStoresPerNamespace
-	}
-	// Bucket per-namespace count quota (ADR-0080): 0 ⇒ the default (100); negative disables it.
-	bucketMax := c.bucketMaxPerNamespace
-	if bucketMax == 0 {
-		bucketMax = defaultBucketsPerNamespace
-	}
-	sqlMax := c.sqlMaxDatabasesPerNamespace
-	if sqlMax == 0 {
-		sqlMax = defaultSQLDatabasesPerNamespace
 	}
 
 	sched, err := singlenode.New(c.localNode, c.nodePlatform)
@@ -730,10 +721,6 @@ func (p *Platform) buildControlPlane() error {
 	if c.kvStore == nil {
 		c.kvStore = kvmemory.New()
 	}
-	// After the default is set: the in-memory driver counts its usage too (ADR-0292, issue #1370).
-	if kv, ok := c.kvStore.(kvstore.Usager); ok {
-		p.quotas.Register(v1.KindKVStore, kvQuotas(kv, c.store))
-	}
 	kvResolver, err := kvsvc.NewResolver(metaReader{c.store})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build KV binding resolver")
@@ -774,10 +761,12 @@ func (p *Platform) buildControlPlane() error {
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build cedar PDP driver")
 	}
+	p.pdp = cedarPDP
 	kvFacade, err := kvsvc.NewFacade(kvsvc.FacadeDeps{KV: c.kvStore, Resolver: kvResolver, Authorizer: cedarPDP, Quota: p.checker, Logger: p.logger})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build KV facade")
 	}
+	p.kvFacade = kvFacade
 	// The invoke Manager (ADR-0064) now also carries the cedar PDP (ADR-0075): the per-sandbox local
 	// API asks link::invoke on the resolved target so a forbid Policy can revoke a declared link.
 	// The function-facing blob facade (ADR-0127): context.blob's PEP. Built only when a blob substrate
@@ -787,7 +776,6 @@ func (p *Platform) buildControlPlane() error {
 	// written via context.blob are the objects the S3 frontend serves. A nil interface (not a nil
 	// *Facade) keeps the routes off; a typed nil pointer would slip past NewHandler's nil check.
 	var blobPort local.Blob
-	var blobCheck health.ReadChecker
 	if c.blob != nil {
 		blobResolver, rerr := blobsvc.NewResolver(metaReader{c.store})
 		if rerr != nil {
@@ -802,7 +790,7 @@ func (p *Platform) buildControlPlane() error {
 		if berr != nil {
 			return fault.Wrapf(berr, fault.KindOf(berr), op, "build blob facade")
 		}
-		blobPort, blobCheck = blobFacade, blobFacade
+		blobPort, p.blobFacade = blobFacade, blobFacade
 	}
 	// ADR-0215: the storage probes read a sentinel key of the KV engine and the blob store; the dependency check the
 	// local API answers reads their results, the Facades' resolve and read authorization, the link resolver and the PDP.
@@ -844,10 +832,11 @@ func (p *Platform) buildControlPlane() error {
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build SQL facade")
 	}
-	p.quotas.Register(v1.KindSQLDatabase, sqlQuotas(sqlFacade.Usage, c.store))
-	deps := health.NewChecker(health.CheckerDeps{
-		Store: c.store, KV: kvFacade, Blob: blobCheck, SQL: sqlFacade, Links: local.NewResolver(c.store), Authz: cedarPDP, Health: p.prober,
-	})
+	p.sqlFacade = sqlFacade
+	// ADR-0308 Decision 3: every store's facade exists and the default KV driver is set (#1370), so the providers'
+	// quotas go in the Book and their bindings into the dependency check, in list order.
+	p.registerQuotas()
+	deps := health.NewChecker(health.CheckerDeps{Store: c.store, Bindings: p.dependencyChecks()})
 	nestedCap := c.nestedInFlightCap
 	if nestedCap == 0 {
 		nestedCap = defaultNestedInFlightCap
@@ -1446,27 +1435,9 @@ func (p *Platform) buildControlPlane() error {
 	// partAdmissions are the admissions a direct write passes, over the reader r: the control plane runs them over
 	// the store, and app-parts over a view that already holds an App's other parts (ADR-0199 Decision 3).
 	partAdmissions := func(r admission.StoreReader) []admission.Admission {
-		return []admission.Admission{
-			// ADR-0064 fn-to-fn link rules on the write path.
-			admission.NewLinkValidityAdmission(r),
-			admission.NewLinkDeletionProtectionAdmission(r),
-			// ADR-0072/0073 KV resource rules: store-count quota + KVStore deletion-protection (bound by
-			// spec.bindings.kv or non-empty data on Delete; still-bound table removal and unreclaimed table re-add on
-			// Update). Binding/owner EXISTENCE (Function.spec.bindings.kv → an existing store/table; KVStore
-			// tables[].owner → a real Function) is RECONCILE-TIME (ADR-0121): the Function reconciler holds a
-			// binding not-Ready until it resolves, and the owner UID is fail-closed at the PDP until the owner
-			// exists — no write-time existence gate.
-			admission.NewKVStoreQuotaAdmission(r, kvMaxStores),
-			admission.NewKVStoreDeletionProtectionAdmission(r, kvProber{c.kvStore}),
-			// ADR-0080 Bucket resource rules (the KVStore parallel): bucket-count quota + bucket-deletion-
-			// protection (bound by spec.bindings.blob or non-empty data on Delete; still-bound prefix removal on Update).
-			// Binding/owner EXISTENCE is reconcile-time (ADR-0121), as for KV. The data-emptiness prober Lists
-			// the same substrate view the s3gateway writes (s3BucketFor).
-			admission.NewBucketQuotaAdmission(r, bucketMax),
-			admission.NewBucketDeletionProtectionAdmission(r, blobProber{lister: blobBucketLister{resolve: s3BucketFor(c.blob, c.store, p.checker)}, shared: c.blob}),
-			// ADR-0232 SQLDatabase rules: the count quota, and no API delete while the engine holds a table.
-			admission.NewSQLDatabaseQuotaAdmission(r, sqlMax),
-			admission.NewSQLDatabaseDeletionProtectionAdmission(r, sqlReconciler.Prober()),
+		// ADR-0064 fn-to-fn link rules on the write path, then each store provider's resource rules.
+		links := []admission.Admission{admission.NewLinkValidityAdmission(r), admission.NewLinkDeletionProtectionAdmission(r)}
+		return append(append(links, p.providerAdmissions(r)...),
 			// ADR-0086/0091 lake blob + consumer-binding EXISTENCE were write-time gates; now reconcile-time
 			// (ADR-0121): the Lake / Function reconcilers wait for the referent (Waiting condition).
 			// ADR-0139 Site: spec.bindings.blob[0].prefix is immutable on Update (the prefix permanently holds the site's bundles).
@@ -1495,7 +1466,7 @@ func (p *Platform) buildControlPlane() error {
 			admission.NewBackupSpecImmutableAdmission(),
 			admission.NewBackupTTLAdmission(r),
 			admission.NewRestoreInPlaceAdmission(c.authorizer, r, c.hold),
-		}
+		)
 	}
 
 	// ADR-0084: the function-log reader backing GET …/functions/{name}/logs (funcdctl logs). Present
@@ -1733,7 +1704,7 @@ func (p *Platform) Run(ctx context.Context) error {
 
 	// The providers start first, the Executor at their head: it applies the egress fence before anything can run a
 	// worker (ADR-0115). A failed Start shuts the platform down (#489); a Start a stop signal cut is a clean stop.
-	p.logger.InfoContext(ctx, "platform provider hooks", "providers", p.phases.Hooks())
+	p.logger.InfoContext(ctx, "platform provider hooks", "providers", p.phases.Hooks(sharedHooks()...))
 	if err := p.phases.Start(ctx); err != nil && ctx.Err() == nil {
 		return abort(err)
 	}
