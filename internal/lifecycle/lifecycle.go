@@ -56,8 +56,8 @@ type Stopper interface {
 
 // Phases runs the hooks of its providers in their order. BeforeStop and Stop run for every provider, booted or not, so
 // each must be safe when its Start never ran or failed: a New that fails stops the platform it was building, and a
-// failed Start stops the providers after it too. It is safe for concurrent use; once stopping has begun, Start and
-// Reclaim run no further provider.
+// failed Start stops the providers after it too. It is safe for concurrent use; once stopping has begun, Start,
+// Reclaim and Run start no further provider.
 type Phases struct {
 	providers []Provider
 
