@@ -1853,26 +1853,32 @@ func (p *Platform) registerWorkloadBackups(ctrl *controller.Controller, secrets 
 	c := p.cfg
 	d := backupsvc.Deps{
 		Store: c.store, Secrets: secrets, Purger: bucketPurger{shared: c.blob}, StoreURL: c.blobStoreURL,
-		Sources: workload.Sources{Blob: c.blob, BucketPrefix: bucketPrefix, CatalogPrefix: lakeCatalogPrefix, SQL: p.sql.reconciler.Backups().Source},
-		SQL:     p.sql.reconciler.Backups(),
-		Period:  c.pacing.SupervisionPeriod, Clock: c.backupClock, Meter: c.backupMeter, Logger: p.logger,
+		SQL:    p.sql.reconciler.Backups(),
+		Period: c.pacing.SupervisionPeriod, Clock: c.backupClock, Meter: c.backupMeter, Logger: p.logger,
 	}
 	if d.Meter == nil {
 		d.Meter = backupMeter(c.telemetry)
 	}
+	var export func(prefix string) snapshot.Source
 	if exp, ok := c.kvStore.(interface{ SnapshotPrefix(string) snapshot.Source }); ok {
-		d.Sources.KV = exp.SnapshotPrefix
+		export = exp.SnapshotPrefix
 	}
-	if kv, ok := c.kvStore.(backupsvc.KVLoader); ok {
-		d.KV = kv
+	var kv workload.KVLoader
+	if l, ok := c.kvStore.(workload.KVLoader); ok {
+		kv, d.KV = l, l
 	}
 	if c.hold != nil {
 		d.Hold = c.hold
 	}
+	var vols workload.VolumeLoader
 	if p.exec.volumes != nil { // ADR-0262 Decision 11: a Function's local volume is a workload backup member
 		vl := volumeLoader{m: p.exec.volumes, lost: p.fnReconciler.VolumeLost, stop: p.fnReconciler.StopWorkers}
-		d.Sources.Volume, d.Volumes = vl.Source, vl
+		vols, d.Volumes = vl, vl
 	}
+	d.Kinds = []workload.MemberKind{workload.KVStores(c.store, export, kv),
+		workload.Buckets(c.store, c.blob, bucketPrefix, bucketCatalogPrefix, bucketPurger{shared: c.blob}),
+		workload.Lakes(c.store, c.blob, bucketPrefix, lakeCatalogPrefix), workload.Databases(c.store, p.sql.reconciler.Backups()),
+		workload.Volumes(c.store, vols)}
 	rs, err := backupsvc.New(d)
 	if err != nil {
 		return err

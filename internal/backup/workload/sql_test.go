@@ -30,6 +30,16 @@ func (b brokenStream) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// sqlSource is a SQLLoader whose Source is source; Write calls nothing else.
+type sqlSource struct {
+	workload.SQLLoader
+	source func(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (io.ReadCloser, error)
+}
+
+func (s sqlSource) Source(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (io.ReadCloser, error) {
+	return s.source(ctx, ns, name)
+}
+
 // ADR-0234 Decision 2: a database's file is stored as records of 8 MiB keyed 000001, 000002, …; a broken stream or a
 // database with no Ready engine fails the run with no manifest.
 func TestWriteSQLDatabase(t *testing.T) {
@@ -39,7 +49,7 @@ func TestWriteSQLDatabase(t *testing.T) {
 	target, err := gocloud.OpenWith(ctx, s.URL(), gocloud.OpenOptions{Static: &gocloud.StaticKey{ID: "AKIDOWNER", Secret: "s"}})
 	require.NoError(t, err)
 	file := bytes.Repeat([]byte("q"), 8<<20+5)
-	src := workload.Sources{SQL: func(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (io.ReadCloser, error) {
+	src := []workload.MemberKind{workload.Databases(nil, sqlSource{source: func(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (io.ReadCloser, error) {
 		switch name {
 		case "todo-db":
 			return io.NopCloser(bytes.NewReader(file)), nil
@@ -47,7 +57,7 @@ func TestWriteSQLDatabase(t *testing.T) {
 			return io.NopCloser(brokenStream{strings.NewReader("partial")}), nil
 		}
 		return nil, fault.Wrapf(workload.ErrEngineNotReady, fault.Unavailable, "test", "%s/%s", ns, name)
-	}}
+	}})}
 	const path = "orders/nightly-1-uid/"
 	m, err := workload.Write(ctx, "orders", []workload.Member{{Kind: v1.KindSQLDatabase, Name: "todo-db"}}, src,
 		workload.Options{Target: target, Path: path})
@@ -78,7 +88,7 @@ func TestWriteSQLDatabase(t *testing.T) {
 	_, err = workload.Write(ctx, "orders", []workload.Member{{Kind: v1.KindSQLDatabase, Name: "stopped-db"}}, src,
 		workload.Options{Target: target, Path: "orders/again-uid/"})
 	require.ErrorIs(t, err, workload.ErrEngineNotReady)
-	_, err = workload.Write(ctx, "orders", []workload.Member{{Kind: v1.KindSQLDatabase, Name: "todo-db"}}, workload.Sources{},
+	_, err = workload.Write(ctx, "orders", []workload.Member{{Kind: v1.KindSQLDatabase, Name: "todo-db"}}, []workload.MemberKind{workload.Databases(nil, nil)},
 		workload.Options{Target: target, Path: "orders/none-uid/"})
 	require.Equal(t, fault.Unavailable, fault.KindOf(err), "no SQL source wired")
 }

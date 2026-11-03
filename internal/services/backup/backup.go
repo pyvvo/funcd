@@ -108,13 +108,12 @@ type Hold interface {
 type Deps struct {
 	Store   store.Store
 	Secrets SecretReader
-	// Sources are what a Backup copies; KV loads and empties a KVStore; Purger empties a Bucket; SQL loads and empties
-	// a SQLDatabase (nil ⇒ a Restore of one fails).
-	Sources workload.Sources
+	// Kinds are the member kinds a Backup copies and a Restore loads (ADR-0311).
+	Kinds []workload.MemberKind
+	// KV, Purger, SQL and Volumes are no longer read: they go with the providers' hook.
 	KV      KVLoader
 	Purger  gc.BucketPurger
 	SQL     SQLLoader
-	// Volumes loads a Function's local volume (nil ⇒ a Restore of one fails).
 	Volumes VolumeLoader
 	// Hold nil is a platform never held, whose in-place Restore holds nothing.
 	Hold Hold
@@ -139,6 +138,7 @@ type Reconcilers struct {
 // base is what every reconciler reads.
 type base struct {
 	d        Deps
+	kinds    map[v1.Kind]workload.MemberKind // d.Kinds by the kind each serves
 	log      *slog.Logger
 	runs     metric.Int64Counter
 	duration metric.Float64Histogram
@@ -172,8 +172,12 @@ func New(d Deps) (*Reconcilers, error) {
 	if log == nil {
 		log = slog.Default()
 	}
-	b := &base{d: d, log: log.With("component", "backup.workload"), active: map[v1.ObjectRef]bool{}, risk: map[v1.ObjectRef]bool{},
-		warned: map[v1.ObjectRef]bool{}, synced: map[v1.ObjectRef]time.Time{}}
+	kinds := make(map[v1.Kind]workload.MemberKind, len(d.Kinds))
+	for _, k := range d.Kinds {
+		kinds[k.Kind()] = k
+	}
+	b := &base{d: d, kinds: kinds, log: log.With("component", "backup.workload"), active: map[v1.ObjectRef]bool{},
+		risk: map[v1.ObjectRef]bool{}, warned: map[v1.ObjectRef]bool{}, synced: map[v1.ObjectRef]time.Time{}}
 	var err error
 	if b.runs, err = d.Meter.Int64Counter("funcd.backup.runs"); err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "register funcd.backup.runs")

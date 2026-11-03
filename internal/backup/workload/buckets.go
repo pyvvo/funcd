@@ -3,6 +3,7 @@ package workload
 import (
 	"cmp"
 	"context"
+	"strings"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/backup"
@@ -34,7 +35,7 @@ func (k buckets) Write(ctx context.Context, w FileWriter, ns v1.NamespaceName, m
 	f, err := w.File(ctx, "blob/"+string(m.Name), func(emit func(snapshot.Record) error) error {
 		var catalogs []snapshot.Record
 		if k.catalogs != nil {
-			err := objects(ctx, k.shared, k.catalogs(ns, m.Name), func(key string) bool { return !IsBucketCatalog(key) },
+			err := objects(ctx, k.shared, k.catalogs(ns, m.Name), func(key string) bool { return !bucketCatalog(key) },
 				func(r snapshot.Record) error {
 					catalogs = append(catalogs, r)
 					return nil
@@ -112,7 +113,7 @@ func (d bucketDestination) Load(ctx context.Context, f MemberFile, open RecordOp
 	}
 	for _, file := range f.Files {
 		err := loadObjects(ctx, file, open, func(key string, body []byte, o blob.PutOptions) error {
-			if d.catalogs != nil && IsBucketCatalog(key) {
+			if d.catalogs != nil && bucketCatalog(key) {
 				return d.catalogs.Put(ctx, key, body, o)
 			}
 			return d.view.Put(ctx, key, body, o)
@@ -125,3 +126,10 @@ func (d bucketDestination) Load(ctx context.Context, f MemberFile, open RecordOp
 }
 
 func (d bucketDestination) Clear(ctx context.Context) error { return d.purge.Purge(ctx, d.ns, d.name) }
+
+// bucketCatalog reports a Bucket member's record of the catalog of the Lake on one of its prefixes,
+// <prefix>/_ducklake/catalog.db, which a Restore puts in the catalog store.
+func bucketCatalog(key string) bool {
+	p, ok := strings.CutSuffix(key, "/"+checkpointName)
+	return ok && p != "" && !strings.Contains(p, "/")
+}

@@ -25,6 +25,11 @@ import (
 
 func TestMain(m *testing.M) { s3stub.Main(m) }
 
+// s3Prefix is a Bucket's prefix in the shared blob store, s3/<ns>/<bucket>/.
+func s3Prefix(ns v1.NamespaceName, b v1.ObjectName) string {
+	return "s3/" + string(ns) + "/" + string(b) + "/"
+}
+
 func meta(name, rg string) v1.ObjectMeta {
 	return v1.ObjectMeta{Name: v1.ObjectName(name), Namespace: "orders", ResourceGroup: v1.ResourceGroupName(rg)}
 }
@@ -108,12 +113,9 @@ func TestWriteReadBack(t *testing.T) {
 	shared, err := gocloud.Open(ctx, "mem://")
 	require.NoError(t, err)
 	require.NoError(t, shared.Put(ctx, "s3/orders/orders-files/a.csv", []byte("a"), blob.PutOptions{ContentType: "text/csv", Metadata: map[string]string{"k": "v"}}))
-	src := workload.Sources{
-		KV:   kv.(interface{ SnapshotPrefix(string) snapshot.Source }).SnapshotPrefix,
-		Blob: shared,
-		BucketPrefix: func(ns v1.NamespaceName, b v1.ObjectName) string {
-			return "s3/" + string(ns) + "/" + string(b) + "/"
-		},
+	src := []workload.MemberKind{
+		workload.KVStores(nil, kv.(interface{ SnapshotPrefix(string) snapshot.Source }).SnapshotPrefix, nil),
+		workload.Buckets(nil, shared, s3Prefix, nil, nil),
 	}
 	owner, err := age.GenerateX25519Identity()
 	require.NoError(t, err)
@@ -168,9 +170,7 @@ func TestWriteWithoutKVExport(t *testing.T) {
 	require.NoError(t, err)
 	shared, err := gocloud.Open(ctx, "mem://")
 	require.NoError(t, err)
-	src := workload.Sources{Blob: shared, BucketPrefix: func(ns v1.NamespaceName, b v1.ObjectName) string {
-		return string(ns) + "/" + string(b) + "/"
-	}}
+	src := []workload.MemberKind{workload.KVStores(nil, nil, nil), workload.Buckets(nil, shared, s3Prefix, nil, nil)}
 	const path = "orders/nightly-1-uid/"
 	_, err = workload.Write(ctx, "orders", []workload.Member{{Kind: v1.KindKVStore, Name: "orders-state"}}, src,
 		workload.Options{Target: target, Path: path})
@@ -189,9 +189,7 @@ func TestWriteLakeWithoutCheckpoint(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, shared.Put(ctx, "s3/orders/orders-files/a.csv", []byte("a"), blob.PutOptions{}))
 	require.NoError(t, shared.Put(ctx, "s3/orders/lakehouse/gold/orphan.parquet", []byte("p"), blob.PutOptions{}))
-	src := workload.Sources{Blob: shared, BucketPrefix: func(ns v1.NamespaceName, b v1.ObjectName) string {
-		return "s3/" + string(ns) + "/" + string(b) + "/"
-	}}
+	src := []workload.MemberKind{workload.Buckets(nil, shared, s3Prefix, nil, nil), workload.Lakes(nil, shared, s3Prefix, nil)}
 	s := s3stub.New(t, nil)
 	target, err := gocloud.OpenWith(ctx, s.URL(), gocloud.OpenOptions{Static: &gocloud.StaticKey{ID: "AKIDOWNER", Secret: "s"}})
 	require.NoError(t, err)
@@ -240,13 +238,9 @@ func TestWriteBucket_ReadsCatalogsBeforeItsObjects(t *testing.T) {
 	shared := &catalogSaver{Bucket: mem, key: "s3/orders/lake-files/lake/main/t/f1.parquet", catalog: catalog}
 	require.NoError(t, mem.Put(ctx, catalog, []byte("C1"), blob.PutOptions{}))
 	require.NoError(t, mem.Put(ctx, shared.key, []byte("f1"), blob.PutOptions{}))
-	src := workload.Sources{
-		Blob: shared,
-		BucketPrefix: func(ns v1.NamespaceName, b v1.ObjectName) string {
-			return "s3/" + string(ns) + "/" + string(b) + "/"
-		},
-		CatalogPrefix: func(ns v1.NamespaceName) string { return "lake-catalogs/" + string(ns) + "/" },
-	}
+	src := []workload.MemberKind{workload.Buckets(nil, shared, s3Prefix, func(ns v1.NamespaceName, b v1.ObjectName) string {
+		return "lake-catalogs/" + string(ns) + "/" + string(b) + "/"
+	}, nil)}
 	s := s3stub.New(t, nil)
 	target, err := gocloud.OpenWith(ctx, s.URL(), gocloud.OpenOptions{Static: &gocloud.StaticKey{ID: "AKIDOWNER", Secret: "s"}})
 	require.NoError(t, err)
@@ -267,4 +261,24 @@ func TestWriteBucket_ReadsCatalogsBeforeItsObjects(t *testing.T) {
 		got = append(got, string(rec.Key)+"="+string(body))
 	}
 	require.Equal(t, []string{"lake/main/t/f1.parquet=f1", "lake/_ducklake/catalog.db=C1"}, got)
+}
+
+// ADR-0311 Decision 6: a member of a kind that no MemberKind serves fails Write fault.Invalid naming its kind, before
+// the first put, though a member a kind serves comes before it.
+func TestWrite_AnUnservedKindFailsByName(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	kv := memory.New()
+	require.NoError(t, kv.Put(ctx, "orders/orders-state/t/1", []byte("one")))
+	s := s3stub.New(t, nil)
+	target, err := gocloud.OpenWith(ctx, s.URL(), gocloud.OpenOptions{Static: &gocloud.StaticKey{ID: "AKIDOWNER", Secret: "s"}})
+	require.NoError(t, err)
+	const path = "orders/nightly-1-uid/"
+	_, err = workload.Write(ctx, "orders", []workload.Member{{Kind: v1.KindKVStore, Name: "orders-state"},
+		{Kind: v1.KindFunction, Name: "cart", Volume: "state"}},
+		[]workload.MemberKind{workload.KVStores(nil, kv.(interface{ SnapshotPrefix(string) snapshot.Source }).SnapshotPrefix, nil)},
+		workload.Options{Target: target, Path: path})
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
+	require.ErrorContains(t, err, "no member kind serves Function")
+	require.Empty(t, s.PutKeys(path), "nothing is written")
 }

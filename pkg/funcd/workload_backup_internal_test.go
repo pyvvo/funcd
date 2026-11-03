@@ -785,9 +785,9 @@ func (r *wbRig) copyOn(name v1.ObjectName, uid string) (string, []string) {
 	tg, err := gocloud.OpenWith(r.ctx, r.stub.URL(), gocloud.OpenOptions{Static: &gocloud.StaticKey{ID: "AKIDWRITER", Secret: "w"}})
 	require.NoError(r.t, err)
 	defer func() { _ = tg.Close() }()
-	src := workload.Sources{KV: r.p.cfg.kvStore.(interface {
+	src := []workload.MemberKind{workload.KVStores(r.st, r.p.cfg.kvStore.(interface {
 		SnapshotPrefix(string) snapshot.Source
-	}).SnapshotPrefix, Blob: r.p.cfg.blob, BucketPrefix: bucketPrefix}
+	}).SnapshotPrefix, nil)}
 	_, err = workload.Write(r.ctx, "orders", []workload.Member{{Kind: v1.KindKVStore, Name: "orders-state"}}, src,
 		workload.Options{Target: tg, Path: path, Seal: sealer.Seal(), Recipients: sealer.Keys().Recipients})
 	require.NoError(r.t, err)
