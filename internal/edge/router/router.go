@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/platform/pathx"
 )
 
 // Router holds the compiled, replace-all Route table and resolves a request to a Match.
@@ -205,7 +206,7 @@ func matchPath(path, prefix string, exact bool) bool {
 	if prefix == "/" {
 		return true
 	}
-	return path == prefix || strings.HasPrefix(path, prefix+"/")
+	return pathx.HasPrefix(path, prefix)
 }
 
 // matchedPath is the path a rule is matched, stripped and claimed by. A Prefix rule's trailing slash is not

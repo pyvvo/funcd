@@ -16,6 +16,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/gateway"
 	"github.com/pyvvo/funcd/internal/platform/httpx"
+	"github.com/pyvvo/funcd/internal/platform/pathx"
 )
 
 type compiledRoute struct {
@@ -107,7 +108,7 @@ func (d *driver) Close() error { return nil }
 // (so "/function/echo" matches "/function/echo" and "/function/echo/x" but not
 // "/function/echo-2").
 func matchPrefix(path, prefix string) bool {
-	return path == prefix || strings.HasPrefix(path, prefix+"/")
+	return pathx.HasPrefix(path, prefix)
 }
 
 // stripPrefix removes the route prefix so the function is addressed at its root.

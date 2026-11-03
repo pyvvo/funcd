@@ -6,20 +6,20 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net/url"
-	"strings"
 
 	"golang.org/x/net/html"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/blob"
+	"github.com/pyvvo/funcd/internal/platform/pathx"
 )
 
 // runtimeDir is the root entry funcd reserves in every bundle for a Site's generated files (ADR-0239 Decision 10).
 const runtimeDir = "_runtime"
 
 func isRuntimeEntry(rel string) bool {
-	return rel == runtimeDir || strings.HasPrefix(rel, runtimeDir+"/")
+	return pathx.HasPrefix(rel, runtimeDir)
 }
 
 // indexCopyRel is where, inside a digest folder, a Site with baseHref keeps its index copy. The key names the Site and a
