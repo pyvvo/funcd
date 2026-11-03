@@ -14,6 +14,7 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/backup/workload"
 	"github.com/pyvvo/funcd/internal/funclog"
 	"github.com/pyvvo/funcd/internal/funclog/compact"
 	"github.com/pyvvo/funcd/internal/function"
@@ -39,6 +40,7 @@ type executor struct {
 	egressForwarder egress.Forwarder
 	egressGateway   egress.Gateway
 	volumes         volume.Manager         // the Functions' volumes (ADR-0262); nil ⇒ off
+	functions       *function.Reconciler   // a volume's Restore reads its DataMissing and stops its workers (useFunctions)
 	sockets         *local.Manager         // one local API listener per worker (ADR-0064)
 	socketTmpDir    string                 // the socket dir build created when WithInvokeSocketDir set none
 	logSink         *funclog.BlobSink      // structured function-log capture (ADR-0081); nil if unwired
@@ -59,6 +61,7 @@ var (
 	_ lifecycle.BeforeStopper = (*executor)(nil)
 	_ lifecycle.Stopper       = (*executor)(nil)
 	_ describer               = (*executor)(nil)
+	_ backupHook              = (*executor)(nil)
 )
 
 // execDeps are the parts the Executor is built over: the Platform's, and the providers' facets, which a worker's local
@@ -239,6 +242,20 @@ func (e *executor) captureLogs(fn *function.Reconciler) {
 			}
 		})
 	}
+}
+
+// useFunctions hands over the Function reconciler, which New builds after the Executor (ADR-0309 Decision 3): a Restore
+// of a Function's volume reads its DataMissing and stops its workers (#1206).
+func (e *executor) useFunctions(fn *function.Reconciler) { e.functions = fn }
+
+// BackupKinds is the kind of a Function's local volume over the volume manager (ADR-0262 Decision 11), which serves
+// none while volumes are off.
+func (e *executor) BackupKinds() []workload.MemberKind {
+	var load workload.VolumeLoader
+	if e.volumes != nil {
+		load = volumeLoader{m: e.volumes, lost: e.functions.VolumeLost, stop: e.functions.StopWorkers}
+	}
+	return []workload.MemberKind{workload.Volumes(e.cfg.store, load)}
 }
 
 // Start applies the egress fence before any worker can run (ADR-0115), then serves the egress gateway and the DNS

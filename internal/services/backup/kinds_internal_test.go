@@ -224,3 +224,17 @@ func TestRestore_AnUnservedKindFailsByName(t *testing.T) {
 	require.Empty(t, h.held, "nothing is held")
 	require.Empty(t, log, "nothing is loaded")
 }
+
+// ADR-0311 Decision 6: New refuses a kind that two of its kinds serve, and a nil kind, fault.Invalid naming it.
+func TestNew_RefusesAKindServedTwice(t *testing.T) {
+	t.Parallel()
+	kind := testStore{log: &[]string{}, mu: &sync.Mutex{}}
+	for want, kinds := range map[string][]workload.MemberKind{
+		"two member kinds serve TestStore": {kind, kind},
+		"member kind 1 is nil":             {kind, nil},
+	} {
+		_, err := New(Deps{Store: store.New(storemem.New()), Secrets: noSecrets{}, Kinds: kinds})
+		require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
+		require.ErrorContains(t, err, want)
+	}
+}

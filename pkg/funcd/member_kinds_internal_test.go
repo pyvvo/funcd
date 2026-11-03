@@ -16,6 +16,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
+	"github.com/pyvvo/funcd/internal/lifecycle"
 	"github.com/pyvvo/funcd/internal/volume"
 )
 
@@ -139,10 +140,21 @@ func (k *kindsRig) stores() map[string]string {
 
 // scenario: every-kind-round-trips-the-whole-store (ADR-0311, #1383's class) — each member restored in place alone, then
 // all in one Restore that lists the Lake before its Bucket, with only the volume emptied first, leaves every store as
-// it was after the backup: no Clear deletes what its member's copy lacks or what no member names.
+// it was after the backup: no Clear deletes what its member's copy lacks or what no member names. Its members are of
+// every kind the providers serve, so a new kind joins them.
 func TestKinds_RoundTripLeavesTheStoresAsTheyWere(t *testing.T) {
 	t.Parallel()
 	k := newKindsRig(t, nil, nil, nil, func(r *wbRig) { r.put("orders/orders-state-r/t/9", "no member names it") })
+	var served, members []v1.Kind
+	for _, h := range lifecycle.Each[backupHook](k.p.phases) {
+		for _, kind := range h.BackupKinds() {
+			served = append(served, kind.Kind())
+		}
+	}
+	for _, m := range kindsMembers() {
+		members = append(members, m.Kind)
+	}
+	require.ElementsMatch(t, served, members, "a member of every kind the providers serve")
 	k.create(k.dev, k.backupObj("b1", "kinds-nightly"))
 	k.waitBackup("b1", v1.RunSucceeded)
 	want := k.stores()
