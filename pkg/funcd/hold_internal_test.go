@@ -26,8 +26,10 @@ import (
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
+	"github.com/pyvvo/funcd/internal/controlplane"
 	"github.com/pyvvo/funcd/internal/eventing"
 	"github.com/pyvvo/funcd/internal/eventing/deadletter"
+	"github.com/pyvvo/funcd/internal/lifecycle"
 	"github.com/pyvvo/funcd/internal/platform/clock"
 	funcdconfig "github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/platform/hold"
@@ -224,6 +226,62 @@ func TestEveryRunnerConsultsHold(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) { c.still(t, p) })
+	}
+}
+
+// reclaimEvidence is the hold evidence of one provider whose boot reclaim drops data: seed leaves data its Reclaim
+// drops, and listed is the hold.Evidence field that names that data as want.
+type reclaimEvidence struct {
+	seed   func(t *testing.T, p *Platform)
+	listed func(e hold.Evidence) []string
+	want   string
+}
+
+// TestEveryReclaimHasHoldEvidence: every provider whose boot reclaim drops data (ADR-0307) names that data in the hold's
+// evidence (ADR-0206 Decision 1), so `funcdctl hold status` shows it before the release lets the first start move it
+// into the quarantine (ADR-0288). It fails on a Reclaimer missing from the table and on an entry whose provider no
+// longer reclaims; for each entry, the seeded data must be in the evidence, and its provider's Reclaim must take it.
+func TestEveryReclaimHasHoldEvidence(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	p, err := New(InMemory(), WithLogger(slog.New(slog.DiscardHandler)), WithSQLProviderRuntime(newSQLRuntime(t, sqlRef("gone"))))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = p.Shutdown(ctx) })
+	evidence := map[string]reclaimEvidence{
+		"kv": {seed: func(t *testing.T, p *Platform) {
+			require.NoError(t, p.cfg.kvStore.Put(ctx, "default/gone/t/1", []byte("x")))
+		}, listed: func(e hold.Evidence) []string { return e.Orphans }, want: "default/gone/"},
+		"blob": {seed: func(t *testing.T, p *Platform) {
+			require.NoError(t, p.cfg.blob.Put(ctx, bucketPrefix("default", "gone")+"x", []byte("x"), blob.PutOptions{}))
+		}, listed: func(e hold.Evidence) []string { return e.BucketOrphans }, want: "default/gone"},
+		// The SQL runtime above already lists gone's directory.
+		"sql": {seed: func(*testing.T, *Platform) {},
+			listed: func(e hold.Evidence) []string { return e.SQLOrphans }, want: "default/gone"},
+	}
+	for _, e := range evidence {
+		e.seed(t, p)
+	}
+	status := controlplane.NewHoldService(controlplane.HoldDeps{Store: p.cfg.store, Platform: holdPlatform{p}}).Status
+	before, err := status(ctx)
+	require.NoError(t, err)
+	reclaims := map[string]bool{}
+	for _, r := range lifecycle.Each[lifecycle.Reclaimer](p.phases) {
+		reclaims[r.Name()] = true
+		t.Run(r.Name(), func(t *testing.T) {
+			e, ok := evidence[r.Name()]
+			require.True(t, ok, "provider %s reclaims at boot but has no hold evidence: add a controlplane.HoldPlatform method "+
+				"listing the data its Reclaim drops, implement it on holdPlatform, report it in a hold.Evidence field from "+
+				"HoldService.Status, then add %s to this table", r.Name(), r.Name())
+			require.Contains(t, e.listed(before), e.want, "the hold evidence names the data %s's reclaim drops", r.Name())
+			require.NoError(t, r.Reclaim(ctx))
+			after, err := status(ctx)
+			require.NoError(t, err)
+			require.NotContains(t, e.listed(after), e.want, "%s's reclaim takes the data its evidence names", r.Name())
+		})
+	}
+	for name := range evidence {
+		require.True(t, reclaims[name], "provider %s has hold evidence in this table but no longer reclaims at boot: remove "+
+			"its entry, and its evidence once no boot reclaim drops that data", name)
 	}
 }
 
