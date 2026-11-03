@@ -286,19 +286,19 @@ func TestScenarioEventingKeysPaceRecheckAndDeliveryRetry(t *testing.T) {
 		es.Name, es.Namespace, es.ResourceGroup = "drops", "default", "rg1"
 		es.Spec.Blob = &v1.BlobSource{Bucket: "missing", Events: []v1.BlobEvent{{Name: "arrived"}}}
 		create(t, p.cfg.store, es)
-		res, err := p.eventing.Reconcile(context.Background(), controller.Request{GVK: v1.KindEventSource.GVK(), Namespace: "default", Name: "drops"})
+		res, err := p.eventing.source.Reconcile(context.Background(), controller.Request{GVK: v1.KindEventSource.GVK(), Namespace: "default", Name: "drops"})
 		require.NoError(t, err)
 		require.Equal(t, 200*time.Millisecond, res.RequeueAfter, "a blob source whose Bucket is missing")
 	})
 	t.Run("deliveryBackoffInitial", func(t *testing.T) {
 		p := pacedPlatform(t, Pacing{DeliveryBackoffInitial: 50 * time.Millisecond, DeliveryBackoffMax: 100 * time.Millisecond})
-		require.Equal(t, 50*time.Millisecond, durationAt(reflect.ValueOf(p.sensorReconciler), "retry", "base"))
+		require.Equal(t, 50*time.Millisecond, durationAt(reflect.ValueOf(p.eventing.sensorReconciler), "retry", "base"))
 	})
 	t.Run("deliveryBackoffMax", func(t *testing.T) {
 		p := pacedPlatform(t, Pacing{DeliveryBackoffInitial: 50 * time.Millisecond, DeliveryBackoffMax: 100 * time.Millisecond})
-		require.Equal(t, 100*time.Millisecond, durationAt(reflect.ValueOf(p.sensorReconciler), "retry", "max"))
+		require.Equal(t, 100*time.Millisecond, durationAt(reflect.ValueOf(p.eventing.sensorReconciler), "retry", "max"))
 		q := pacedPlatform(t, Pacing{DeliveryBackoffInitial: 20 * time.Second})
-		require.Equal(t, 20*time.Second, durationAt(reflect.ValueOf(q.sensorReconciler), "retry", "max"), "an unset max follows a larger initial wait")
+		require.Equal(t, 20*time.Second, durationAt(reflect.ValueOf(q.eventing.sensorReconciler), "retry", "max"), "an unset max follows a larger initial wait")
 	})
 }
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/activator"
 	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
@@ -18,14 +19,17 @@ import (
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
 	"github.com/pyvvo/funcd/internal/edge/router"
 	"github.com/pyvvo/funcd/internal/eventing"
+	"github.com/pyvvo/funcd/internal/eventing/deadletter"
 	"github.com/pyvvo/funcd/internal/eventing/eventstore"
 	"github.com/pyvvo/funcd/internal/function"
 	"github.com/pyvvo/funcd/internal/health"
+	"github.com/pyvvo/funcd/internal/invoke"
 	"github.com/pyvvo/funcd/internal/kvstore"
 	lakegw "github.com/pyvvo/funcd/internal/lake/gateway"
 	"github.com/pyvvo/funcd/internal/lifecycle"
 	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/quota"
+	"github.com/pyvvo/funcd/internal/sensor"
 	blobsvc "github.com/pyvvo/funcd/internal/services/blob"
 	identitysvc "github.com/pyvvo/funcd/internal/services/identity"
 	kvsvc "github.com/pyvvo/funcd/internal/services/kv"
@@ -36,10 +40,9 @@ import (
 	"github.com/pyvvo/funcd/internal/workflow"
 )
 
-// The binding providers (ADR-0305): the high-level providers a Function binds. kv, blob, sql, lake and invoke build their
-// own parts over the Platform's shared ones (ADR-0309), and every stop hook is safe on a provider whose build never ran
-// (#94). eventing still reads its parts from the Platform, which builds them after the Function reconciler, the
-// activator and the call chain its Sensors call through (ADR-0309's Temporary workaround).
+// The binding providers (ADR-0305): the high-level providers a Function binds. Each builds its own parts over the
+// Platform's shared ones (ADR-0309), eventing after the workload core its Sensors call through, and every stop hook is
+// safe on a provider whose build never ran (#94).
 
 // kvProvider is the KV provider (ADR-0069/0072): the binding-gated facade over the KV driver, which the local API's /kv
 // routes call, and the KVStore reconciler. The driver is the config's (WithKVStore, else the in-memory default), so Stop
@@ -613,13 +616,35 @@ func (s *lakeProvider) BeforeStop(context.Context) error {
 	return nil
 }
 
-// eventingProvider is the eventing provider (ADR-0108).
-type eventingProvider struct{ p *Platform }
+// eventingProvider is the eventing provider (ADR-0108): the EventSource reconciler and its blob poll watcher
+// (ADR-0119), the Sensor reconciler, which delivers the named events to their actions (ADR-0109), and the event store's
+// dead-letter tenant, where a delivery its retries could not make ends (ADR-0118).
+type eventingProvider struct {
+	cfg              *config
+	source           *eventing.Source
+	blobWatcher      *eventing.BlobWatcher // the hold advances and lists its pending objects (ADR-0206)
+	sensorReconciler *sensor.Reconciler    // owns the retry workers, drained within drainTimeout, and the replay seam
+	deadLetters      deadletter.Store      // the control plane reads, replays and discards them
+	drainTimeout     time.Duration
+}
 
 var (
 	_ lifecycle.Runner = (*eventingProvider)(nil)
 	_ describer        = (*eventingProvider)(nil)
 )
+
+// eventingDeps are the parts eventing is built over: the Platform's, and the workload core's its Sensors call through.
+type eventingDeps struct {
+	fanout       *eventing.Fanout  // a firing EventSource publishes on it, and the Sensors subscribe to it (ADR-0108)
+	events       *eventstore.Store // holds the blob watcher's seen lists and the dead letters (ADR-0201)
+	quota        quota.Checker     // the blob watcher lists the Bucket view over it
+	endpoints    activator.Endpoints
+	waker        sensor.Waker // the activator: a cold target wakes before its event is delivered (ADR-0033)
+	calls        *activator.CallTracker
+	chain        *invoke.Chain // every call to a worker runs it (ADR-0302)
+	drainTimeout time.Duration
+	ctrl         *controller.Controller
+}
 
 func (s *eventingProvider) Name() string { return "eventing" }
 
@@ -627,19 +652,72 @@ func (s *eventingProvider) Descriptors() []provider.Descriptor {
 	return []provider.Descriptor{{Name: "eventing", Kind: provider.Builtin, Summary: "CloudEvents trigger delivery (EventSource)"}}
 }
 
+// build builds the blob watcher, which lists the Bucket view the S3 gateway writes, keeps its seen lists in the event
+// store and publishes a named CloudEvent per new object (ADR-0119); the EventSource reconciler over it; and the Sensor
+// reconciler, which binds the named events to their actions, a WorkflowRun or a Function call, and dead-letters a
+// delivery its bounded retries could not make (ADR-0109, ADR-0118). It runs once the workload core exists, as the
+// Executor's captureLogs does.
+func (s *eventingProvider) build(d eventingDeps) error {
+	const op = "funcd.New"
+	c := s.cfg
+	blobWatcher, err := eventing.NewBlobWatcher(blobBucketLister{resolve: s3BucketFor(c.blob, c.store, d.quota)}, d.fanout,
+		d.events.SeenLists(), c.blobPollInterval, c.logger)
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build blob watcher")
+	}
+	blobWatcher.SetHold(c.gate())
+	blobWatcher.SetNamespaceHold(c.nsGate())
+	s.blobWatcher, s.deadLetters, s.drainTimeout = blobWatcher, d.events.DeadLetters(), d.drainTimeout
+	if s.source, err = eventing.NewSource(eventing.Deps{
+		Store:     c.store,
+		Publisher: d.fanout,
+		Blob:      blobWatcher,
+		Logger:    c.logger,
+		Hold:      c.gate(),
+
+		NamespaceHold:         c.nsGate(),
+		BucketRecheckInterval: c.pacing.BucketRecheckInterval,
+	}); err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build eventing source")
+	}
+	if s.sensorReconciler, err = sensor.NewReconciler(sensor.Deps{
+		Store:      c.store,
+		Subscriber: d.fanout,
+		Invoker: &sensor.HTTPInvoker{Endpoints: d.endpoints, Waker: d.waker, Protocol: protocolOf(c.store),
+			Client: workerClient(d.calls, 30*time.Second), Chain: d.chain},
+		DeadLetters:           s.deadLetters,
+		DeliveryAttempts:      c.deliveryAttempts,
+		MaxDeliveriesInFlight: c.sensorMaxDeliveriesInFlight,
+		MaxInFlightPerTarget:  c.sensorMaxInFlightPerTarget,
+		MaxQueuedPerSensor:    c.sensorMaxQueuedPerSensor,
+		Logger:                c.logger,
+
+		DeliveryBackoffInitial: c.pacing.DeliveryBackoffInitial,
+		DeliveryBackoffMax:     c.pacing.deliveryBackoffMax(),
+		Hold:                   c.gate(),
+		NamespaceHold:          c.nsGate(),
+	}); err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build sensor reconciler")
+	}
+	d.ctrl.Register(v1.KindEventSource.GVK(), s.source)
+	d.ctrl.Register(v1.KindSensor.GVK(), s.sensorReconciler)
+	d.ctrl.Watches(v1.KindFunction.GVK(), s.sensorReconciler.MapFunction) // a Function that serves HTTP fails its Sensors (ADR-0243)
+	return nil
+}
+
 // Run delivers events, polls the blob EventSources (ADR-0119), retries the Sensor's actions and sweeps the dead letters
 // (ADR-0118). The retries drain within the platform's drain bound once the run context ends.
 func (s *eventingProvider) Run(ctx context.Context) {
-	p := s.p
-	loops := []func(context.Context){loop(p.logger, "eventing stopped", p.eventing.Run)}
-	if p.blobWatcher != nil {
-		loops = append(loops, loop(p.logger, "blob watcher stopped", p.blobWatcher.Run))
+	c := s.cfg
+	loops := []func(context.Context){loop(c.logger, "eventing stopped", s.source.Run)}
+	if s.blobWatcher != nil {
+		loops = append(loops, loop(c.logger, "blob watcher stopped", s.blobWatcher.Run))
 	}
-	if p.sensorReconciler != nil {
-		loops = append(loops, func(ctx context.Context) { p.sensorReconciler.RunRetryWorkers(ctx, p.drainTimeout) })
+	if s.sensorReconciler != nil {
+		loops = append(loops, func(ctx context.Context) { s.sensorReconciler.RunRetryWorkers(ctx, s.drainTimeout) })
 	}
-	if p.deadLetters != nil && (p.deadletterRetention > 0 || p.deadletterMaxEntries > 0) {
-		loops = append(loops, p.runDeadLetterRetention)
+	if s.deadLetters != nil && (c.deadletterRetention > 0 || c.deadletterMaxEntries > 0) {
+		loops = append(loops, s.runDeadLetterRetention)
 	}
 	runAll(ctx, loops...)
 }

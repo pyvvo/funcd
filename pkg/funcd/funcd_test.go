@@ -547,14 +547,14 @@ func TestIssue446_DeadLetterDefaultsWithoutWithDeadLetterQueue(t *testing.T) {
 	p, err := New(InMemory())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
-	require.Equal(t, retention, p.deadletterRetention)
-	require.Equal(t, daemon.Eventing.Deadletter.MaxEntries, p.deadletterMaxEntries)
+	require.Equal(t, retention, p.cfg.deadletterRetention)
+	require.Equal(t, daemon.Eventing.Deadletter.MaxEntries, p.cfg.deadletterMaxEntries)
 
 	explicit, err := New(WithDeadLetterQueue("", 3, 0, 0), InMemory())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = explicit.Shutdown(context.Background()) })
-	require.Zero(t, explicit.deadletterRetention, "an explicit zero still means no TTL")
-	require.Zero(t, explicit.deadletterMaxEntries, "an explicit zero still means no cap")
+	require.Zero(t, explicit.cfg.deadletterRetention, "an explicit zero still means no TTL")
+	require.Zero(t, explicit.cfg.deadletterMaxEntries, "an explicit zero still means no cap")
 }
 
 // scenario: a-failed-new-releases-what-it-opened

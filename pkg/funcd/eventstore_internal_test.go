@@ -52,6 +52,24 @@ func eventingPlatform(t *testing.T, opts ...Option) *Platform {
 	return p
 }
 
+// The dead-letter retention sweep runs from eventing's Run (ADR-0118 §5): with a TTL set, a dead letter past it is
+// evicted.
+func TestDeadLetterRetention_EvictsPastTheTTL(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	p := eventingPlatform(t, WithDeadLetterQueue("", 3, 50*time.Millisecond, 0))
+	require.NoError(t, p.eventing.deadLetters.Put(ctx, deadletter.DeadLetter{ID: "01OLD", Namespace: "default",
+		FailedAt: v1.NewTimestamp(time.Now().Add(-time.Hour))}))
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- p.Run(runCtx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	require.Eventually(t, func() bool {
+		_, err := p.eventing.deadLetters.Get(ctx, "default", "01OLD")
+		return fault.KindOf(err) == fault.NotFound
+	}, 5*time.Second, 10*time.Millisecond, "the retention sweep evicts a dead letter past its TTL")
+}
+
 // fileStart starts a platform whose metastore, blob store and event store live under dir, with the default KV
 // engine (memory), as storage.mode: file does.
 func fileStart(t *testing.T, dir string) *Platform {
@@ -70,7 +88,7 @@ func fileStart(t *testing.T, dir string) *Platform {
 func watchDrops(t *testing.T, p *Platform, want string) []string {
 	t.Helper()
 	ctx := context.Background()
-	_, err := p.eventing.Reconcile(ctx, controller.Request{GVK: v1.KindEventSource.GVK(), Namespace: "default", Name: "drops"})
+	_, err := p.eventing.source.Reconcile(ctx, controller.Request{GVK: v1.KindEventSource.GVK(), Namespace: "default", Name: "drops"})
 	require.NoError(t, err)
 	var mu sync.Mutex
 	var fired []string
@@ -85,7 +103,7 @@ func watchDrops(t *testing.T, p *Platform, want string) []string {
 	defer cancelSub()
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)
-	go func() { done <- p.blobWatcher.Run(runCtx) }()
+	go func() { done <- p.eventing.blobWatcher.Run(runCtx) }()
 	require.Eventually(t, func() bool {
 		rec, err := p.eventStore.SeenLists().Load(ctx, "default", "drops", "arrived")
 		return err == nil && rec.Seen[want] != ""
@@ -117,7 +135,7 @@ func TestScenarioRestartKeepsEventingState(t *testing.T) {
 	create(t, p.cfg.store, es)
 	require.NoError(t, p.cfg.blob.Put(ctx, "s3/default/raw/drop/a", []byte("a"), blob.PutOptions{}))
 	require.Equal(t, []string{"drop/a"}, watchDrops(t, p, "drop/a"))
-	require.NoError(t, p.deadLetters.Put(ctx, deadletter.DeadLetter{ID: id, Namespace: "default", Sensor: "notifier", Attempts: 3, FailedAt: v1.NewTimestamp(time.Now())}))
+	require.NoError(t, p.eventing.deadLetters.Put(ctx, deadletter.DeadLetter{ID: id, Namespace: "default", Sensor: "notifier", Attempts: 3, FailedAt: v1.NewTimestamp(time.Now())}))
 	require.NoError(t, p.Shutdown(ctx))
 
 	p = fileStart(t, dir)
@@ -142,7 +160,7 @@ func TestScenarioMemoryModeForgets(t *testing.T) {
 	ctx := context.Background()
 	p := eventingPlatform(t, WithDeadLetterQueue("", 3, 0, 0))
 	require.NoError(t, p.eventStore.SeenLists().Save(ctx, "default", "drops", "arrived", eventing.SeenList{Bucket: "raw", Seen: map[string]string{"drop/a": "1-1"}}))
-	require.NoError(t, p.deadLetters.Put(ctx, deadletter.DeadLetter{ID: "01A", Namespace: "default"}))
+	require.NoError(t, p.eventing.deadLetters.Put(ctx, deadletter.DeadLetter{ID: "01A", Namespace: "default"}))
 	require.Equal(t, 3, snapshotRecords(t, p), "a head, a part and a dead letter before the restart")
 	require.NoError(t, p.Shutdown(ctx))
 
