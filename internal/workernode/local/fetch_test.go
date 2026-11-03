@@ -34,9 +34,9 @@ func (f fetchInvoker) Fetch(_ context.Context, _ local.Ref, req local.FetchReque
 func fetchHandler(protocol v1.FunctionProtocol, inv local.Invoker, authz *fakeAuthz) http.Handler {
 	res := &fakeResolver{target: local.Ref{Namespace: "team-a", Function: "devices"}, protocol: protocol}
 	if authz == nil {
-		return local.NewHandler(local.Ref{Namespace: "team-a", Function: "bridge"}, res, inv, nil, nil, nil, nil, nil)
+		return local.NewHandler(local.Ref{Namespace: "team-a", Function: "bridge"}, res, inv, nil, nil, nil)
 	}
-	return local.NewHandler(local.Ref{Namespace: "team-a", Function: "bridge"}, res, inv, authz, nil, nil, nil, nil)
+	return local.NewHandler(local.Ref{Namespace: "team-a", Function: "bridge"}, res, inv, authz, nil, nil)
 }
 
 // scenario: http-fetch — context.fetch reaches a linked http Function with the caller's method, path, query, headers

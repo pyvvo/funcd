@@ -106,8 +106,8 @@ func (e *executor) build(d execDeps) error {
 	if err := local.CheckDir(dir); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "invoke socket dir")
 	}
-	e.sockets = local.NewManager(dir, c.store, d.invoker, d.authz, d.kv, d.blob, d.checks, c.logger, local.WithSQL(d.sql),
-		local.WithSecrets(d.secrets))
+	e.sockets = local.NewManager(dir, c.store, d.invoker, d.authz, d.checks, c.logger, local.WithFacets(local.KVFacet(d.kv),
+		local.BlobFacet(d.blob), local.SQLFacet(d.sql), local.SecretFacet(d.secrets)))
 	return e.buildLogs(d.floor)
 }
 

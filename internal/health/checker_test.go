@@ -254,7 +254,7 @@ func TestDependencyEndpointNeverCallsAWorker(t *testing.T) {
 	f := newFixture(t)
 	f.fn("todo-api", "", api)
 	f.fn("mailer", v1.PhaseIdle, nil)
-	h := local.NewHandler(local.Ref{Namespace: ns, Function: "todo-api"}, local.NewResolver(f.st), noInvoke{t}, f.pdp, nil, nil,
+	h := local.NewHandler(local.Ref{Namespace: ns, Function: "todo-api"}, local.NewResolver(f.st), noInvoke{t}, f.pdp,
 		f.check, slog.New(slog.DiscardHandler))
 
 	get := func() *httptest.ResponseRecorder {

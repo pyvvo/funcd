@@ -139,19 +139,15 @@ const DependencyCheckBudget = 50 * time.Millisecond
 // dependenciesPath is the dependency check a shim's readiness asks over its invoke socket (ADR-0215 Decision 3).
 const dependenciesPath = "/health/dependencies"
 
-// Option adds an optional port to the local API.
+// Option adds an optional part to the local API: the providers' facets (ADR-0310).
 type Option func(*options)
 
 type options struct {
-	sql     SQL
-	secrets Secrets
+	facets []Facet
 }
 
-// WithSQL routes /sql/{binding}/query and /execute to s (ADR-0233); without it there are no /sql routes.
-func WithSQL(s SQL) Option { return func(o *options) { o.sql = s } }
-
-// NewHandler builds the per-sandbox local API handler: POST /invoke/{alias} (ADR-0064/0075) plus, when
-// kv is non-nil, the KV verbs GET/PUT/DELETE /kv/{binding}/{key} + list (ADR-0069). caller is the fixed
+// NewHandler builds the per-sandbox local API handler: POST /invoke/{alias} (ADR-0064/0075), /fetch/{alias}/…
+// (ADR-0243) and each facet WithFacets passes, under its own segment (ADR-0310). caller is the fixed
 // sandbox identity (connection-scoped) — the handler never reads a caller from the request. authz is the
 // PDP (ADR-0075): after the Resolver maps the alias→target (naming; unknown alias ⇒ Forbidden), the
 // handler asks it `link::invoke` on the target Function — a deny (a forbid Policy revoking a declared
@@ -159,8 +155,8 @@ func WithSQL(s SQL) Option { return func(o *options) { o.sql = s } }
 // request. Every invoke is logged through logger (the broker is the audit point): an allowed call at
 // Info, a denial / upstream error at Warn. A nil logger defaults to slog.Default(). deps non-nil registers GET
 // /health/dependencies (ADR-0215 Decision 3); nil registers no route, so a shim reads 404 as a pass.
-func NewHandler(caller Ref, res Resolver, inv Invoker, authz auth.Authorizer, kv KV, blob Blob,
-	deps DependencyChecker, logger *slog.Logger, opts ...Option) http.Handler {
+func NewHandler(caller Ref, res Resolver, inv Invoker, authz auth.Authorizer, deps DependencyChecker,
+	logger *slog.Logger, opts ...Option) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -175,17 +171,10 @@ func NewHandler(caller Ref, res Resolver, inv Invoker, authz auth.Authorizer, kv
 		Principal: &auth.EntityRef{Type: v1.KindFunction, Namespace: caller.Namespace, Name: caller.Function},
 	}
 	mux := http.NewServeMux()
-	if kv != nil {
-		registerKV(mux, caller, kv, logger)
-	}
-	if blob != nil {
-		registerBlob(mux, caller, blob, logger)
-	}
-	if o.sql != nil {
-		registerSQL(mux, caller, o.sql, logger)
-	}
-	if o.secrets != nil {
-		registerSecrets(mux, caller, o.secrets, logger)
+	for _, f := range o.facets {
+		if f.register != nil {
+			f.register(mux, caller, logger)
+		}
 	}
 	if deps != nil {
 		mux.HandleFunc("GET "+dependenciesPath, func(w http.ResponseWriter, r *http.Request) {

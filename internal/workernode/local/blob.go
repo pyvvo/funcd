@@ -34,12 +34,19 @@ type Blob interface {
 // minSignExpiry and maxSignExpiry bound a presign lifetime (ADR-0198): S3 signs whole seconds; SigV4 caps at 7 days.
 const minSignExpiry, maxSignExpiry = time.Second, 168 * time.Hour
 
+// BlobFacet serves the blob verbs under /blob over b (ADR-0127).
+func BlobFacet(b Blob) Facet {
+	return Facet{segment: "blob", register: func(mux facetMux, caller Ref, logger *slog.Logger) {
+		registerBlob(mux, caller, b, logger)
+	}}
+}
+
 // registerBlob adds the blob verbs to mux — GET/PUT/DELETE /blob/{binding}/{key...}, GET /blob/{binding}
 // (list, ?prefix=…), and GET /blob/{binding}/{key...}?sign=1 (a presigned URL; ?method= exactly GET, PUT or
 // DELETE, ?expiry= an ADR-0194 duration in whole seconds from 1s to 168h, ADR-0198) — routed to b with the
 // sandbox's fixed namespace + function (ADR-0127/0073). Errors are RFC 9457 (binding/owner denial → 403, missing
 // object → 404, over a cap → 413, bad input → 400, engine → 500); a bad method or expiry is 400 before the PDP.
-func registerBlob(mux *http.ServeMux, caller Ref, b Blob, logger *slog.Logger) {
+func registerBlob(mux facetMux, caller Ref, b Blob, logger *slog.Logger) {
 	ns := caller.Namespace
 	fn := caller.Function
 

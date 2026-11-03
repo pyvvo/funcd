@@ -105,8 +105,8 @@ func poolManager(t *testing.T) (*local.Manager, *poolCalls) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	rec := &poolCalls{}
-	m := local.NewManager(dir, poolStore{rec}, poolInvoker{rec}, nil, poolPort{rec, "kv"},
-		poolBlob{poolPort{rec, "blob"}}, nil, slog.New(slog.DiscardHandler))
+	m := local.NewManager(dir, poolStore{rec}, poolInvoker{rec}, nil, nil, slog.New(slog.DiscardHandler),
+		local.WithFacets(local.KVFacet(poolPort{rec, "kv"}), local.BlobFacet(poolBlob{poolPort{rec, "blob"}})))
 	t.Cleanup(m.Close)
 	return m, rec
 }
@@ -211,7 +211,7 @@ func TestPoolServesSQLAsMember(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	s := &fakeSQL{}
-	m := local.NewManager(dir, fakeStore{}, fakeInvoker{}, nil, nil, nil, nil, slog.New(slog.DiscardHandler), local.WithSQL(s))
+	m := local.NewManager(dir, fakeStore{}, fakeInvoker{}, nil, nil, slog.New(slog.DiscardHandler), local.WithFacets(local.SQLFacet(s)))
 	t.Cleanup(m.Close)
 	sock, err := m.PoolSocketFor("team-a", testPool, []v1.ObjectName{"a", "b"})
 	require.NoError(t, err)

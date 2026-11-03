@@ -594,7 +594,7 @@ func TestScenarioHealthShimCompat(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	h, _, _ := healthHarness(t)
-	m := local.NewManager(dir, h.st, nil, nil, nil, nil, nil, slog.New(slog.DiscardHandler))
+	m := local.NewManager(dir, h.st, nil, nil, nil, slog.New(slog.DiscardHandler))
 	t.Cleanup(m.Close)
 	sock, err := m.SocketFor("default", "todo-api")
 	require.NoError(t, err)

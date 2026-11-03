@@ -106,7 +106,7 @@ func blobHandler(t *testing.T, ns v1.NamespaceName, pdp auth.Authorizer, bkt ibl
 		Authorizer: pdp,
 	})
 	require.NoError(t, err)
-	return local.NewHandler(local.Ref{Namespace: ns, Function: "fn"}, nil, nil, nil, nil, f, nil, nil)
+	return local.NewHandler(local.Ref{Namespace: ns, Function: "fn"}, nil, nil, nil, nil, nil, local.WithFacets(local.BlobFacet(f)))
 }
 
 // scenario: blob-read-write (local API) — a bound function put/gets its prefix over context.blob, no keypair.

@@ -62,10 +62,17 @@ type sqlRequest struct {
 	Statements []json.RawMessage `json:"statements"`
 }
 
+// SQLFacet serves POST /sql/{binding}/query and /execute over s (ADR-0233).
+func SQLFacet(s SQL) Facet {
+	return Facet{segment: "sql", register: func(mux facetMux, caller Ref, logger *slog.Logger) {
+		registerSQL(mux, caller, s, logger)
+	}}
+}
+
 // registerSQL adds POST /sql/{binding}/query and POST /sql/{binding}/execute, routed to s with the sandbox's fixed
 // namespace and function. Errors are RFC 9457: an unknown alias or a denial 403, a failed statement 400, an engine
 // that is not Ready 503, an oversized body or answer 413.
-func registerSQL(mux *http.ServeMux, caller Ref, s SQL, logger *slog.Logger) {
+func registerSQL(mux facetMux, caller Ref, s SQL, logger *slog.Logger) {
 	ns, fn := caller.Namespace, caller.Function
 	mux.HandleFunc("POST /sql/{binding}/query", func(w http.ResponseWriter, r *http.Request) {
 		stmts, ok := readStatements(w, r, "workernode.local.sql.query")

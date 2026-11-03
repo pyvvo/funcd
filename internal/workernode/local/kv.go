@@ -25,11 +25,18 @@ type KV interface {
 	List(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, binding, prefix string) ([]string, error)
 }
 
+// KVFacet serves the KV verbs under /kv over kv (ADR-0069).
+func KVFacet(kv KV) Facet {
+	return Facet{segment: "kv", register: func(mux facetMux, caller Ref, logger *slog.Logger) {
+		registerKV(mux, caller, kv, logger)
+	}}
+}
+
 // registerKV adds the KV verbs to mux — GET/PUT/DELETE /kv/{binding}/{key...} and GET /kv/{binding} (list,
 // ?prefix=…) — routed to kv with the sandbox's fixed namespace + function (ADR-0069/0073). Errors are RFC
 // 9457 (the Facade's binding/owner denial → 403, missing key → 404, over a cap → 413, bad input → 400,
 // engine error → 500).
-func registerKV(mux *http.ServeMux, caller Ref, kv KV, logger *slog.Logger) {
+func registerKV(mux facetMux, caller Ref, kv KV, logger *slog.Logger) {
 	ns := caller.Namespace
 	fn := caller.Function
 
