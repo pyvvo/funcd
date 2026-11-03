@@ -30,6 +30,16 @@
       "depends_on": []
     },
     {
+      "id": "ADR-0311",
+      "title": "Each provider backs up and restores its own member kind",
+      "features": [
+        "F225"
+      ],
+      "depends_on": [
+        "ADR-0222"
+      ]
+    },
+    {
       "id": "P-B",
       "title": "VectorStore resource and its LanceDB engine",
       "features": [
@@ -84,7 +94,8 @@
         "P-B",
         "ADR-0206",
         "ADR-0209",
-        "ADR-0222"
+        "ADR-0222",
+        "ADR-0311"
       ]
     },
     {
@@ -104,7 +115,8 @@
   ],
   "waves": {
     "1": [
-      "P-A"
+      "P-A",
+      "ADR-0311"
     ],
     "2": [
       "P-B"

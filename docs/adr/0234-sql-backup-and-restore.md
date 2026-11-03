@@ -4,6 +4,9 @@
   added emptying a database on a failed restore, a reason of its own for a not-Ready engine, the stream-error check, the
   supported load size and the `DataMissing` condition, and made the no-platform-export call one decision; the second
   found no Blocker or Major. The decider is told that no platform export is the choice)
+- **Superseded in part by**: [ADR-0311](0311-each-provider-backs-up-and-restores-its-own-member-kind.md) (2026-11-03) —
+  `Sources.SQL`, `SQLLoader`'s package and methods (it gains `Source`), `Deps.SQL` and the restore target's `sql` field
+  in its Contracts, and `workload.Sources.SQL` in Decision 2.
 - **Date**: 2026-10-12
 - **Deciders**: green-0-rabbit
 - **Tags**: sql, backup, restore, dr
