@@ -18,7 +18,8 @@
     "ADR-0231",
     "ADR-0237",
     "ADR-0246",
-    "ADR-0248"
+    "ADR-0248",
+    "ADR-0311"
   ],
   "items": [
     {
@@ -28,16 +29,6 @@
         "F170"
       ],
       "depends_on": []
-    },
-    {
-      "id": "ADR-0311",
-      "title": "Each provider backs up and restores its own member kind",
-      "features": [
-        "F225"
-      ],
-      "depends_on": [
-        "ADR-0222"
-      ]
     },
     {
       "id": "P-B",

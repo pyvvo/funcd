@@ -412,8 +412,8 @@ sequenceDiagram
 
 ## Build status (V1)
 
-The V1 build slate is complete and past it: **ADR-0001…0310** decided, **297 Implemented** (34 accepted as the
-roadmap's tier-0 build items; the rest — incl. ADR-0034…0309 — are follow-ons refining or extending
+The V1 build slate is complete and past it: **ADR-0001…0311** decided, **298 Implemented** (34 accepted as the
+roadmap's tier-0 build items; the rest — incl. ADR-0034…0311 — are follow-ons refining or extending
 existing feature rows), **0 roadmap items remaining**. Not Implemented: ADR-0000 (the process ADR), ADR-0216
 (App tests, Accepted, F119 deferred), the two DR addenda ADR-0227/0228 (Accepted; they record code already
 on main) the AI gateway epoch's ADR-0280…0285 (FEAT-0015, Accepted) and the artifact supply chain's ADR-0298/0299 (FEAT-0017, Accepted). The exit-criterion path is proven end-to-end — a
@@ -501,8 +501,8 @@ runs one chain of invokePlugins (ADR-0302), funcd checks the input and the outpu
 Function (ADR-0303), and the shims read no contract (ADR-0304, v0.36.0). The providers then moved onto one lifecycle: they
 start and stop through ordered hooks (ADR-0305), give a Function's workers their env through workload hooks
 (ADR-0306), reclaim at boot through one hook (ADR-0307), plug into quotas, admissions and the dependency check
-through shared hooks (ADR-0308), build and hold their own parts (ADR-0309), and serve their own facets of a
-worker's local API (ADR-0310). See
+through shared hooks (ADR-0308), build and hold their own parts (ADR-0309), serve their own facets of a
+worker's local API (ADR-0310), and back up and restore their own member kinds (ADR-0311). See
 [docs/roadmap/v1-delivery-plan.md](roadmap/v1-delivery-plan.md).
 
 **Out of V1 scope** (recorded for later): multi-node workers, north-south egress enforcement, an OIDC
@@ -833,3 +833,4 @@ All are **Implemented** unless the recap says *superseded*.
 | [ADR-0308 — Store providers plug into quotas, admissions and the dependency check through shared hooks](adr/0308-store-providers-plug-into-quotas-admissions-and-the-dependency-check.md) | **Implemented.** kv, blob, sql and invoke name their size quotas, store rules and dependency checks through three optional hooks, which the Platform puts in place in list order (FEAT-0001 F222). | <ol><li>`Quotas()`, `Admissions(r)` and `Dependencies()` in `pkg/funcd`; `lifecycle.Each` and `Named` walk them</li><li>the dependency check takes a list of `health.Binding`</li><li>no per-kind wiring is left in `buildControlPlane` or `internal/health`</li></ol> |
 | [ADR-0309 — Each provider builds and holds its own parts](adr/0309-each-provider-builds-and-holds-its-own-parts.md) | **Implemented.** The Executor, kv, blob, sql, lake and invoke build the parts of their own service in `New`, over typed inputs, and keep them, so their hooks read only their own parts; the Executor owns the workers' local API sockets (FEAT-0001 F223). | <ol><li>listed with the config before the options run (#94), then built in order: the shared parts, kv, blob, sql, lake, invoke, the quotas and the dependency check, the Executor, the workload core</li><li>eventing builds its own parts too, after the workload core, which closes the Temporary workaround</li><li>`buildControlPlane` 384 → 245 statements</li></ol> |
 | [ADR-0310 — Each provider serves its own facet of a worker's local API](adr/0310-each-provider-serves-its-own-local-api-facet.md) | **Implemented.** kv, blob, sql and secrets each serve their routes on a worker's local API as a facet that only `internal/workernode/local` builds; invoke, fetch and health stay built in, and secrets is a provider (FEAT-0001 F224). | <ol><li>each facet owns its first path segment, checked by `CheckFacets` before the Executor opens anything, which also refuses the overlaps `ServeMux` accepts silently</li><li>`NewHandler` and `NewManager` take no store port; `WithSQL` and `WithSecrets` are gone</li><li>one `internal/platform/pathx.HasPrefix` replaces five copies of the segment-aware prefix test</li></ol> |
+| [ADR-0311 — Each provider backs up and restores its own member kind](adr/0311-each-provider-backs-up-and-restores-its-own-member-kind.md) | **Implemented.** kv, blob, lake, sql and the Executor each hand over a `workload.MemberKind` through `backupHook`, so the backup service names no kind and a new kind is one type; a Bucket's copy carries its Lakes' catalogs again, which fixes #1383 (FEAT-0001 F225). | <ol><li>one interface per kind: `Write`, `Parse` and a `Destination` that prepares, checks emptiness, loads and clears</li><li>the services dispatch by kind in today's order; a kind no provider serves fails by name before any put or hold</li><li>a Bucket's copy reads each catalog before its walk and writes it after its objects; `Format` stays 1</li><li>a round-trip guard over every kind: a backup and an in-place restore leave all storage as it was</li></ol> |

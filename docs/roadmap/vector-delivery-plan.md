@@ -24,7 +24,6 @@ one wave ahead of the build track.
 | Plan id | Proposed ADR working title | Realizes | Build-depends on |
 |---|---|---|---|
 | P-A | Vector engine port, `vector/v1` and the in-memory engine: the Go port the facade calls, the protocol to engine containers, capabilities and params schemas, exact search in memory, one conformance suite | F170 | — |
-| ADR-0311 | Each provider backs up and restores its own member kind (FEAT-0001, Accepted): a workload backup member is a type its provider hands over | F225 | ADR-0222 |
 | P-B | VectorStore resource and its LanceDB engine: the kind, its tables and fields, the reconciler, the engine image and its directory, readiness, bounds, delete protection, the default engine | F171 | P-A, ADR-0054, ADR-0082, ADR-0087, ADR-0231 |
 | P-C | Vector access from functions: the binding, the local API, the facade and its checks, the portable filter, Cedar and roles, the TypeScript and Python helpers, Workflow steps | F172 | P-B, ADR-0069, ADR-0074, ADR-0116, ADR-0136, ADR-0141, ADR-0215, ADR-0246, ADR-0248 |
 | P-D | Vector stores in Apps: the App's store entry and its deletion policy | F173 | P-B, P-C, ADR-0199, ADR-0248 |
@@ -55,15 +54,14 @@ flowchart TB
     ADR_0237["ADR-0237 ✓"]
     ADR_0246["ADR-0246 ✓"]
     ADR_0248["ADR-0248 ✓"]
+    ADR_0311["ADR-0311 ✓"]
     P_A["P-A · F170<br/>Vector engine port, vector/v1 and the in-memory engine"]
-    ADR_0311["ADR-0311 · F225<br/>Each provider backs up and restores its own member kind"]
     P_B["P-B · F171<br/>VectorStore resource and its LanceDB engine"]
     P_C["P-C · F172<br/>Vector access from functions"]
     P_D["P-D · F173<br/>Vector stores in Apps"]
     P_E["P-E · F174<br/>Vector backup and restore"]
     P_F["P-F · F175<br/>Vectors in funcdctl dev"]
 
-    ADR_0222 --> ADR_0311
     P_A --> P_B
     ADR_0054 --> P_B
     ADR_0082 --> P_B
@@ -98,14 +96,13 @@ flowchart TB
 
 | Tier | Items |
 |---|---|
-| 0 (done) | ADR-0054, ADR-0069, ADR-0074, ADR-0082, ADR-0087, ADR-0116, ADR-0125, ADR-0136, ADR-0141, ADR-0199, ADR-0206, ADR-0209, ADR-0215, ADR-0222, ADR-0231, ADR-0237, ADR-0246, ADR-0248 |
-| 1 | ADR-0311, P-A |
+| 0 (done) | ADR-0054, ADR-0069, ADR-0074, ADR-0082, ADR-0087, ADR-0116, ADR-0125, ADR-0136, ADR-0141, ADR-0199, ADR-0206, ADR-0209, ADR-0215, ADR-0222, ADR-0231, ADR-0237, ADR-0246, ADR-0248, ADR-0311 |
+| 1 | P-A |
 | 2 | P-B |
 | 3 | P-C, P-E |
 | 4 | P-D, P-F |
 
 - **Wave 1, P-A**: the port and the in-memory engine are plain Go; everything after calls engines through them.
-  ADR-0311 (FEAT-0001/F225, Accepted) lands beside it: P-E's store then joins the backups as one member kind.
 - **Wave 2, P-B**: the store kind needs the port, the add-on runtime and an engine's durable directory.
 - **Wave 3, P-C and P-E**: access and backup each need a running store, not each other.
 - **Wave 4, P-D and P-F**: an App's store and the dev loop need the access path that functions use.

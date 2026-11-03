@@ -1,9 +1,10 @@
 # ADR-0311: Each provider backs up and restores its own member kind
 
-- **Status**: Reviewing (2026-11-03, implemented in the plan's five commits: #1383's fix, the kinds, the services'
-  dispatch, the providers' hook and the stale texts); Accepted (2026-11-03, by the decider after two judge rounds:
-  round 2 added the catalog read before the Bucket walk and made the guard precise; the decider confirmed the kinds'
-  location, see Alternatives)
+- **Status**: Implemented (2026-11-03), review passed with no finding
+  ([report](../reviews/adr-0311-implementation-claude-opus-5-5.md)); Reviewing (2026-11-03, implemented in the plan's
+  five commits: #1383's fix, the kinds, the services' dispatch, the providers' hook and the stale texts); Accepted
+  (2026-11-03, by the decider after two judge rounds: round 2 added the catalog read before the Bucket walk and made
+  the guard precise; the decider confirmed the kinds' location, see Alternatives)
 - **Date**: 2026-11-03
 - **Deciders**: green-0-rabbit
 - **Tags**: provider, backup, restore, refactor
