@@ -303,8 +303,8 @@ func (r *dirsAtClose) Close() error {
 // scenario: a-stopping-worker-keeps-its-local-api
 // scenario: workers-keep-their-services-while-stopping
 // Shutdown keeps the local API until the runtime has stopped the workers that call it (ADR-0305 Decision 5): a
-// stopping worker's KV write succeeds, and its call to a cold linked function starts no worker, since the controller
-// stopped before the runtime closes.
+// stopping worker's KV write succeeds, and its call to a cold linked function starts no worker: Run's drain has
+// stopped the activator, which refuses the wake at once (503).
 func TestShutdown_KeepsTheLocalAPIUntilTheWorkersStop(t *testing.T) {
 	rt := &apiAtClose{recordingRuntime: &recordingRuntime{insts: map[runtime.InstanceID]runtime.Instance{}}}
 	p, err := New(InMemory(), WithoutLogCompaction(), WithRuntime(rt))
