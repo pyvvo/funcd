@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/controlplane"
 	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/volume"
 )
@@ -60,4 +61,34 @@ func TestIssue1204_LeftoverEmptyDirsGoOnceTheHoldLifts(t *testing.T) {
 	}, 5*time.Second, 20*time.Millisecond)
 	require.Eventually(t, func() bool { return !listed() }, 5*time.Second, 20*time.Millisecond,
 		"the last run's emptyDirs are released once the hold lifts")
+}
+
+// TestHoldStatusListsOrphanVolumes: hold status names each local volume that no stored Function holds, as
+// "<ns>/<function>/<volume>": the restore evidence of ADR-0262 Decision 8, which the first start after the release
+// reclaims. A volume whose Function is gone is listed, and so is one whose Function was created again under another
+// UID; a stored Function's own volume is not, nor is an emptyDir, which is never restore evidence (#1204).
+func TestHoldStatusListsOrphanVolumes(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	p, err := New(InMemory(), WithLogger(slog.New(slog.DiscardHandler)),
+		WithFunctionVolumes(volume.Options{Root: t.TempDir()}, false))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = p.Shutdown(ctx) })
+	seedObjects(t, p.cfg.store,
+		&v1.Function{TypeMeta: tmeta(v1.KindFunction), ObjectMeta: teamMeta("thumbs"), Spec: stateVolumeSpec("1Mi")},
+		&v1.Function{TypeMeta: tmeta(v1.KindFunction), ObjectMeta: teamMeta("recreated"), Spec: stateVolumeSpec("1Mi")})
+	thumbs, err := p.cfg.store.Get(ctx, v1.KindFunction.GVK(), "team", "thumbs")
+	require.NoError(t, err)
+	for id, owner := range map[volume.ID]v1.UID{
+		{Namespace: "team", Function: "thumbs", Name: "state"}:                           thumbs.GetObjectMeta().UID,
+		{Namespace: "team", Function: "thumbs", Name: "scratch", Worker: "a1b2c3d4e5f6"}: "",
+		{Namespace: "team", Function: "gone", Name: "state"}:                             "uid-of-gone",
+		{Namespace: "team", Function: "recreated", Name: "state"}:                        "uid-before-recreate",
+	} {
+		_, err := p.exec.volumes.Reserve(ctx, id, owner, 1<<20, "")
+		require.NoError(t, err, "reserve %s", id)
+	}
+	ev, err := controlplane.NewHoldService(controlplane.HoldDeps{Store: p.cfg.store, Platform: holdPlatform{p}}).Status(ctx)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"team/gone/state", "team/recreated/state"}, ev.VolumeOrphans)
 }
