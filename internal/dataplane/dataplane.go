@@ -347,6 +347,9 @@ func (s *Server) serveUpstream(w http.ResponseWriter, r *http.Request, m router.
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	proxy.Transport = s.transport
 	proxy.ErrorLog = slog.NewLogLogger(logger.Handler(), slog.LevelWarn)
+	// An answer that breaks after it began reaches the caller begun: a Lake's proxy breaks one when its catalog save fails,
+	// and an empty reply in its place makes a Quack client send the statement again, so it commits twice (#1385).
+	proxy.FlushInterval = -1
 	proxy.ErrorHandler = func(w http.ResponseWriter, pr *http.Request, perr error) {
 		var tooLarge *http.MaxBytesError
 		if errors.As(perr, &tooLarge) {

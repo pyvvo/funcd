@@ -69,6 +69,10 @@ func newLakeProxy(keys LakeKeys, pdp auth.Authorizer, engine EngineTarget, trans
 		if engine.SaveURL != "" {
 			p.saves = &saveBarrier{url: engine.SaveURL, client: &http.Client{Transport: transport}}
 			p.rp.ModifyResponse = p.saves.hold
+			// An answer begins before its save (ADR-0279 Decision 3). A small one would otherwise wait in the server's
+			// write buffer, and a refused save would leave the client an empty reply, which a Quack client answers by
+			// sending the statement again, so it commits twice (#1385).
+			p.rp.FlushInterval = -1
 		}
 	}
 	return p

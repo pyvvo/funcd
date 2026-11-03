@@ -457,12 +457,13 @@ class TestIssue1198CheckpointsUnderLoadKeepTheCatalogWhole(unittest.TestCase):
 class _BarrierProxy:
     """The Lake PEP proxy's barrier as a test stand-in (ADR-0279 Decision 3): it forwards each request to the engine,
     sends the answer but its last byte, makes one POST /save to the engine's save endpoint and sends the last byte
-    only on a 200, else breaks the connection. With cut, it never sends the last byte; with refuse, it answers 503."""
+    only on a 200, else breaks the connection. With cut, it never sends the last byte; with refuse, it answers 503; with
+    empty, it sends nothing until the save, so a failed one leaves an empty reply."""
 
     HOP = {"connection", "transfer-encoding", "content-length", "keep-alive", "host"}
 
     def __init__(self, test: unittest.TestCase, engine_port: int, save_port: int, cut: bool = False,
-                 refuse: bool = False) -> None:
+                 refuse: bool = False, empty: bool = False) -> None:
         proxy = self
         self.saves: list[dict] = []
 
@@ -477,6 +478,10 @@ class _BarrierProxy:
                 resp = upstream.getresponse()
                 data = resp.read()
                 upstream.close()
+                if empty and not proxy.save(save_port):
+                    self.close_connection = True
+                    self.connection.shutdown(socket.SHUT_RDWR)
+                    return
                 if refuse:
                     self.send_response(503)
                     self.send_header("Content-Length", "0")
@@ -586,10 +591,11 @@ class TestScenarioWaitingCommitsShareASave(unittest.TestCase):
         self.assertLess(saves, writers * 5, f"{saves} saves for {writers * 5} commits: no commit shared a save")
 
 
-class TestTheBarrierRestsOnTwoQuackFacts(unittest.TestCase):
+class TestTheBarrierRestsOnThreeQuackFacts(unittest.TestCase):
     """ADR-0279 Design model, Left to tests: an engine's answer ends only after its commit is visible to another
-    connection, so the save made when it ends stores it; and a Quack client completes no answer before its last byte,
-    so one held byte holds the answer."""
+    connection, so the save made when it ends stores it; a Quack client completes no answer before its last byte, so
+    one held byte holds the answer; and it sends a statement again after an empty reply, so a failed answer must have
+    begun (#1385)."""
 
     def test_answer_ends_after_its_commit_is_visible(self) -> None:
         lake = _Lake(self)
@@ -610,6 +616,18 @@ class TestTheBarrierRestsOnTwoQuackFacts(unittest.TestCase):
             via = _Via(_BarrierProxy(self, port, save_port, **kw).uri)
             with self.assertRaises(Exception, msg=f"{kw}: the client completed an answer without its last byte"):
                 lake.client.query(via, "INSERT INTO lakehouse.t VALUES (1)")
+
+    def test_client_sends_a_statement_again_after_an_empty_reply(self) -> None:
+        for kw, rows in (({"empty": True}, 2), ({}, 1)):
+            lake = _Lake(self)
+            _, _, via = _barrier(self, lake, **kw)
+            lake.client.query(via, "CREATE TABLE lakehouse.t (i BIGINT)")
+            refuse = os.path.join(lake.s3, "refuse")
+            open(refuse, "w").close()
+            with self.assertRaises(Exception, msg=f"{kw}: a commit was acknowledged while S3 refused its save"):
+                lake.client.query(via, "INSERT INTO lakehouse.t VALUES (1)")
+            os.remove(refuse)
+            self.assertEqual(lake.client.query(via, "SELECT count(*) FROM lakehouse.t"), [(rows,)], str(kw))
 
 
 class TestScenarioReadWaitsForNothingSaved(unittest.TestCase):
