@@ -35,7 +35,6 @@ import (
 	"github.com/pyvvo/funcd/internal/activator"
 	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/controller"
-	"github.com/pyvvo/funcd/internal/envresolve"
 	"github.com/pyvvo/funcd/internal/gateway"
 	"github.com/pyvvo/funcd/internal/platform/clock"
 	"github.com/pyvvo/funcd/internal/platform/hold"
@@ -163,7 +162,7 @@ type Deps struct {
 	S3Gateway S3GatewayInjection
 
 	// LakeMaster is the node master secret the per-function lake token is derived from (ADR-0137):
-	// resolveLakeEnv injects FUNCD_LAKE_<ALIAS>_TOKEN = DeriveLakeToken(master, ns, fn), a
+	// the Lake hook injects FUNCD_LAKE_<ALIAS>_TOKEN = DeriveLakeToken(master, ns, fn), a
 	// MAC-authenticated bearer the lake PEP proxy verifies (was the shared QUACK_TOKEN). It is the
 	// SAME master the S3 gateway derives keypairs from (loaded once at the compose root). nil/empty ⇒ a
 	// still-derivable but unverifiable token (the proxy holds the real master); the master is never logged.
@@ -756,10 +755,10 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 	var v verdict
 	if assign.Pooled {
 		var poolAfter time.Duration
-		v, poolAfter, err = r.convergePooled(ctx, fn, assign, env.secret, env.lake, idx)
+		v, poolAfter, err = r.convergePooled(ctx, fn, assign, env.worker, idx)
 		drainAfter = earliest(drainAfter, poolAfter)
 	} else {
-		v, err = r.convergeSolo(ctx, fn, pinned, env.secret, env.lake)
+		v, err = r.convergeSolo(ctx, fn, pinned, env.worker)
 		if errors.Is(err, runtime.ErrImageUnavailable) {
 			// ADR-0149 Decisions 4 and 5: an absent image fails the latest generation as a gate does, and a later
 			// periodic pass tries the Create again, so an image that appears recovers the Function.
@@ -798,76 +797,6 @@ func (r *Reconciler) reconcileFunction(ctx context.Context, fn *v1.Function) (co
 		err = r.pruneConfigMaps(ctx, fn)
 	}
 	return afterHeld(res, err, herr)
-}
-
-// boundEnv is the env fn's current bindings give every revision it boots, its secret and config env and its lake
-// env, or the binding gate that stopped them.
-type boundEnv struct {
-	secret envresolve.Resolved
-	lake   map[string]string
-	gate   *gateFailure
-}
-
-// bindings resolves fn's current bindings, or returns the first binding gate that fails.
-func (r *Reconciler) bindings(ctx context.Context, fn *v1.Function) (boundEnv, error) {
-	// 3b-bis. root entries (ADR-0248): what fn defines at its root exists, as fn's, before a binding resolves to it.
-	if g, err := r.ensureRootEntries(ctx, fn); err != nil || g != nil {
-		return boundEnv{gate: g}, err
-	}
-	// ADR-0262: fn's local volumes are reserved, as fn's, before any worker mounts them.
-	if g, err := r.ensureVolumes(ctx, fn); err != nil || g != nil {
-		return boundEnv{gate: g}, err
-	}
-
-	// 3c. secret injection gate (ADR-0057, F15 last mile): resolve the function's bound secrets
-	// into an env map BEFORE provisioning any worker. A PDP-deny / missing Secret / unconfigured
-	// resolver fails the function CLOSED (SecretResolveFailed, no worker) — never a worker
-	// started with the secret absent. A pooled member resolves its own, like a solo one. A running
-	// worker of the serving revision keeps its start-time env and serves on (ADR-0221 Decision 3).
-	bindEnv, serr := r.resolveBindingEnv(ctx, fn)
-	if serr != nil {
-		// Side-attributed reason (ADR-0093 §4): a config-side failure (missing ConfigMap) reports
-		// ConfigResolveFailed; every other case (secret PDP-deny / missing / unconfigured) reports
-		// SecretResolveFailed. One envresolve.ResolveEnv call, two reasons.
-		reason := "SecretResolveFailed"
-		if errors.Is(serr, envresolve.ErrConfig) {
-			reason = "ConfigResolveFailed"
-		}
-		// No ConfigMap or Secret event reconciles a Function, so a binding applied later is found only by a requeue.
-		var requeue time.Duration
-		if fault.KindOf(serr) == fault.NotFound {
-			requeue = r.referentPoll
-		}
-		return boundEnv{gate: &gateFailure{reason: reason, message: serr.Error(), readyMessage: serr.Error(), phase: v1.PhaseFailed, requeue: requeue}}, nil
-	}
-
-	// 3c-bis. data-reference gate (ADR-0121): a spec.bindings.blob/spec.bindings.kv binding naming a not-yet-applied
-	// Bucket/prefix or KVStore/table holds the function not-Ready and requeues (accept-and-requeue) —
-	// fail-closed, since the PDP denies the bound access until the referent exists, so waiting just avoids
-	// booting a worker whose grants can't resolve. This is the existence check the removed blob/kv
-	// binding-validity admissions used to make synchronously at apply time.
-	refRequeue, refReason, refMsg, rferr := r.resolveDataReferences(ctx, fn)
-	if rferr != nil {
-		return boundEnv{}, rferr
-	}
-	if refRequeue {
-		return boundEnv{gate: &gateFailure{reason: refReason, message: refMsg, readyMessage: refMsg, phase: v1.PhasePending, requeue: r.referentPoll}}, nil
-	}
-
-	// 3d. lake consumer-binding gate (ADR-0091, F61): resolve each spec.bindings.lake binding into the
-	// FUNCD_LAKE_<ALIAS>_URL/_TOKEN env pair BEFORE provisioning any worker. A bound lake that
-	// is not Ready yet (its endpoint is not the PEP proxy yet) requeues fail-closed —
-	// the function is held Ready=False/LakeNotReady and re-reconciled soon, never booted with an
-	// empty URL/token (mirrors the ADR-0088 lake-wait). A hard resolution error fails it closed.
-	lakeEnv, requeue, cerr := r.resolveLakeEnv(ctx, fn)
-	if cerr != nil {
-		return boundEnv{gate: &gateFailure{reason: "LakeResolveFailed", message: cerr.Error(), readyMessage: cerr.Error(), phase: v1.PhaseFailed}}, nil
-	}
-	if requeue {
-		const msg = "a bound Lake is not Ready yet (no endpoint, token or live proxy); waiting"
-		return boundEnv{gate: &gateFailure{reason: "LakeNotReady", message: msg, readyMessage: msg, phase: v1.PhasePending, requeue: r.referentPoll}}, nil
-	}
-	return boundEnv{secret: bindEnv, lake: lakeEnv}, nil
 }
 
 // heldThenGate converges fn's held revisions, then records the gate g that stopped its current revision, so that gate
@@ -1623,7 +1552,7 @@ func (r *Reconciler) desiredReplicas(fn *v1.Function) int {
 // convergeSolo converges a solo Function's revisions and judges them (ADR-0143 Decision 4). With nothing serving, or
 // the current revision serving, it is ADR-0142's per-replica converge of the current revision; otherwise the current
 // revision comes up beside the serving one (switchSolo).
-func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned string, bindEnv envresolve.Resolved, lakeEnv map[string]string) (verdict, error) {
+func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned string, we workerEnv) (verdict, error) {
 	c := v1.ObjectName(fn.Status.CurrentRevision)
 	s := v1.ObjectName(fn.Status.ServingRevision)
 	desired := r.desiredReplicas(fn)
@@ -1636,7 +1565,7 @@ func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned s
 		s = ""
 	}
 	if s != "" && s != c {
-		return r.switchSolo(ctx, fn, s, c, pinned, desired, untried, bindEnv, lakeEnv)
+		return r.switchSolo(ctx, fn, s, c, pinned, desired, untried, we)
 	}
 	serving := servingPhase(fn.Status.Phase)
 	var hung bool
@@ -1651,7 +1580,7 @@ func (r *Reconciler) convergeSolo(ctx context.Context, fn *v1.Function, pinned s
 			return verdict{}, rerr
 		}
 	}
-	pass, err := r.convergeRevision(ctx, fn, c, pinned, replicaRange(desired), convergeOpts{serving: serving, untried: untried, scaleDown: true}, bindEnv, lakeEnv)
+	pass, err := r.convergeRevision(ctx, fn, c, pinned, replicaRange(desired), convergeOpts{serving: serving, untried: untried, scaleDown: true}, we)
 	if err != nil {
 		return verdict{}, err
 	}
@@ -1801,7 +1730,7 @@ func (r *Reconciler) stopUnlistenedIn(ctx context.Context, insts []runtime.Insta
 // switchSolo brings the current revision c up beside the serving revision s and moves the calls to it once every
 // replica of c is ready and no revision drains (ADR-0143 Decisions 4.3–4.5). s keeps its replica indexes, and a dead s
 // worker is replaced from s's Revision; once that Revision is deleted, s's listening workers serve until the switch.
-func (r *Reconciler) switchSolo(ctx context.Context, fn *v1.Function, s, c v1.ObjectName, pinned string, desired int, untried bool, bindEnv envresolve.Resolved, lakeEnv map[string]string) (verdict, error) {
+func (r *Reconciler) switchSolo(ctx context.Context, fn *v1.Function, s, c v1.ObjectName, pinned string, desired int, untried bool, we workerEnv) (verdict, error) {
 	sIdx, err := r.servingIndexes(ctx, fn, s)
 	if err != nil {
 		return verdict{}, err
@@ -1816,12 +1745,12 @@ func (r *Reconciler) switchSolo(ctx context.Context, fn *v1.Function, s, c v1.Ob
 		if hung, err = r.restartHung(ctx, fn, s, maxIndex(sIdx)+1); err != nil {
 			return verdict{}, err
 		}
-		sPass, err = r.convergeRevision(ctx, sfn, s, spinned, sIdx, convergeOpts{serving: true}, bindEnv, lakeEnv)
+		sPass, err = r.convergeRevision(ctx, sfn, s, spinned, sIdx, convergeOpts{serving: true}, we)
 	}
 	if err != nil {
 		return verdict{}, err
 	}
-	cPass, err := r.convergeRevision(ctx, fn, c, pinned, replicaRange(desired), convergeOpts{untried: untried, scaleDown: true}, bindEnv, lakeEnv)
+	cPass, err := r.convergeRevision(ctx, fn, c, pinned, replicaRange(desired), convergeOpts{untried: untried, scaleDown: true}, we)
 	if err != nil {
 		return verdict{}, err
 	}
@@ -1937,7 +1866,7 @@ type revisionPass struct {
 
 // convergeRevision drives replicas `indexes` of revision rev toward running with ADR-0142's per-replica table
 // (planReplicas). With opts.scaleDown it stops rev's replicas outside indexes. tmpl is fn as rev runs it.
-func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, rev v1.ObjectName, pinnedDigest string, indexes []int, opts convergeOpts, bindEnv envresolve.Resolved, lakeEnv map[string]string) (revisionPass, error) {
+func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, rev v1.ObjectName, pinnedDigest string, indexes []int, opts convergeOpts, we workerEnv) (revisionPass, error) {
 	const op = "function.converge"
 	insts, err := r.namedInstances(ctx, tmpl.Namespace, tmpl.Name)
 	if err != nil {
@@ -2022,7 +1951,7 @@ func (r *Reconciler) convergeRevision(ctx context.Context, tmpl *v1.Function, re
 		if _, perr := r.scheduler.Schedule(ctx, scheduler.Request{Namespace: tmpl.Namespace, Name: tmpl.Name, Replica: i, Platforms: platforms}); perr != nil {
 			return revisionPass{}, fault.Wrapf(perr, fault.KindOf(perr), op, "schedule")
 		}
-		spec, serr := r.workerSpec(ctx, tmpl, rev, i, artifactPath, bindEnv, lakeEnv)
+		spec, serr := r.workerSpec(ctx, tmpl, rev, i, artifactPath, we)
 		if serr != nil {
 			r.logger.Warn("could not start worker", "function", tmpl.Name, "replica", i, "err", serr)
 			retryAt = earlier(retryAt, r.boot.startResult(runtime.NewInstanceID(tmpl.Namespace, tmpl.Name, rev, i), now, serr))
@@ -2401,7 +2330,7 @@ func (r *Reconciler) convergeHeldRevision(ctx context.Context, fn *v1.Function, 
 			return 0, err
 		}
 	}
-	pass, err := r.convergeRevision(ctx, tmpl, rev.Name, digest, replicaRange(1), convergeOpts{serving: serving, scaleDown: true}, env.secret, env.lake)
+	pass, err := r.convergeRevision(ctx, tmpl, rev.Name, digest, replicaRange(1), convergeOpts{serving: serving, scaleDown: true}, env.worker)
 	if err != nil {
 		return r.heldBootFailed(ctx, rev, err)
 	}
@@ -3218,20 +3147,10 @@ func unavailablePrefix(rt v1.RuntimeName) string {
 	return fmt.Sprintf("runtime %q is not available on this node", rt)
 }
 
-// addInvokeSocket sets FUNCD_INVOKE_SOCKET so the worker's shim can dial the per-sandbox worker-node
-// local API — context.invoke (ADR-0064) AND context.kv (ADR-0069). EVERY function gets the socket (KV is
-// available to all; the link-as-grant check for invoke stays at RESOLVE time, so a linkless function's
-// invoke still fails closed). No-op when the local API is off entirely (r.invokeSockets nil); a socket that cannot be
-// provisioned is an error, so no worker starts without its local API (issue #358).
-func (r *Reconciler) addInvokeSocket(env map[string]string, fn *v1.Function) error {
-	sock, err := r.invokeSocket(fn)
-	if sock != "" {
-		env["FUNCD_INVOKE_SOCKET"] = sock
-	}
-	return err
-}
-
-// invokeSocket provisions fn's local API socket and returns its host path; "" when the local API is off.
+// invokeSocket provisions fn's local API socket, which the worker's shim dials for context.invoke (ADR-0064),
+// context.kv (ADR-0069) and the rest, and returns its host path. EVERY function gets one (KV is available to all; the
+// link-as-grant check for invoke stays at resolve time, so a linkless function's invoke still fails closed). "" when
+// the local API is off; a socket that cannot be provisioned is an error, so no worker starts without it (issue #358).
 func (r *Reconciler) invokeSocket(fn *v1.Function) (string, error) {
 	if r.invokeSockets == nil {
 		return "", nil
@@ -3241,28 +3160,6 @@ func (r *Reconciler) invokeSocket(fn *v1.Function) (string, error) {
 		return "", fault.Wrapf(err, fault.KindOf(err), "function.invokeSocket", "provision the local API socket")
 	}
 	return sock, nil
-}
-
-// addS3Env injects the per-function S3 SigV4 keypair + endpoint (ADR-0085) when the s3gateway
-// is enabled AND the function declares spec.bindings.blob — AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY
-// (derived from the node master secret over the Ref), AWS_REGION, AWS_ENDPOINT_URL_S3. The
-// function never chooses its secret; it cannot derive a peer's. A function without spec.bindings.blob,
-// or a disabled gateway, gets nothing. The secret is set into env but never logged.
-func (r *Reconciler) addS3Env(env map[string]string, fn *v1.Function) {
-	if !r.s3Gateway.Enabled || r.s3Gateway.Derive == nil || len(fn.Spec.Bindings.Blob) == 0 {
-		return
-	}
-	access, secret := r.s3Gateway.Derive(v1.KindFunction, string(fn.Namespace), string(fn.Name))
-	env["AWS_ACCESS_KEY_ID"] = access
-	env["AWS_SECRET_ACCESS_KEY"] = secret
-	env["AWS_REGION"] = "us-east-1"
-	// The sandbox-facing endpoint: Endpoint when set (the node address a netns'd worker can reach —
-	// the CNI bridge gateway IP under containerd), else derive from the bind ListenAddr (loopback dev).
-	endpoint := r.s3Gateway.Endpoint
-	if endpoint == "" {
-		endpoint = "http://" + r.s3Gateway.ListenAddr
-	}
-	env["AWS_ENDPOINT_URL_S3"] = endpoint
 }
 
 // isPythonFamily reports whether rt is a python-family runtime (e.g. "python314") — the family
@@ -3371,91 +3268,59 @@ func (r *Reconciler) addRecordBound(env map[string]string) {
 	}
 }
 
-// workerSpec builds the runtime spec for one replica. In shim mode (a Materializer is
-// configured, ADR-0030) it launches the runtime shim with the materialized artifact +
-// handler in the env; otherwise it runs the legacy long-lived placeholder (ADR-0020).
-// bindEnv is the already-resolved config and secret env (ADR-0057), merged into Env with
-// reserved-FUNCD_-key precedence, plus its key lists (ADR-0245).
-func (r *Reconciler) workerSpec(ctx context.Context, fn *v1.Function, rev v1.ObjectName, replica int, artifactPath string, bindEnv envresolve.Resolved, lakeEnv map[string]string) (runtime.WorkerSpec, error) {
-	var volMounts []runtime.Mount
-	var volEnv map[string]string
-	if r.materializer != nil {
-		var err error
-		if volMounts, volEnv, err = r.workerVolumes(ctx, fn, runtime.NewInstanceID(fn.Namespace, fn.Name, rev, replica)); err != nil {
-			return runtime.WorkerSpec{}, err
-		}
+// workerSpec builds the runtime spec for one replica. In shim mode (a Materializer is configured, ADR-0030) it launches
+// the runtime shim with the materialized artifact and handler in the env; otherwise it runs the legacy long-lived
+// placeholder (ADR-0020). we is what the providers fn binds give its workers (bindings).
+func (r *Reconciler) workerSpec(ctx context.Context, fn *v1.Function, rev v1.ObjectName, replica int, artifactPath string, we workerEnv) (runtime.WorkerSpec, error) {
+	spec := runtime.WorkerSpec{Namespace: fn.Namespace, Name: fn.Name, OwnerKind: v1.KindFunction, Replica: replica, Image: string(fn.Spec.Runtime)}
+	if r.materializer == nil {
+		// Legacy placeholder: a long-lived process stands in for the worker; real execution is the shim path (ADR-0030).
+		spec.Command = []string{"sleep", "86400"}
+		return spec, nil
 	}
-	if r.materializer != nil && r.endpointMode == EndpointNetnsFixedPort {
-		// Container mode (ADR-0032): the shim is the curated image's entrypoint (Command
-		// empty), the artifact is bind-mounted read-only, and it binds a fixed netns port.
-		env := shimEnv(fn, filepath.Join(containerArtifactDir, filepath.Base(artifactPath)))
-		r.addRecordBound(env)
-		env["FUNCD_PORT"] = strconv.Itoa(containerShimPort)
-		addBundleEnv(env, fn.Spec.Runtime, containerArtifactDir) // FUNCD_BUNDLE_DIR (+ PYTHONPATH, python family), ADR-0089
-		r.addS3Env(env, fn)
-		r.addLakeEnv(env, lakeEnv)     // FUNCD_LAKE_<ALIAS>_URL/_TOKEN written DIRECTLY (ADR-0091) — never via addBindingEnv
-		r.addLakeExtensionDir(env, fn) // DUCKDB_EXTENSION_DIRECTORY for a lake consumer (dev; prod uses the bundle's duckdb-ext)
-		r.addBindingEnv(env, bindEnv)
-		maps.Copy(env, volEnv) // FUNCD_VOLUME_<NAME>, each a bind of its leaf alone (ADR-0262)
-		mounts := append([]runtime.Mount{{
-			Source: filepath.Dir(artifactPath), Target: containerArtifactDir, ReadOnly: true,
-		}}, volMounts...)
-		// Bind-mount the per-function local API socket into the sandbox so the shim can dial
-		// context.invoke (ADR-0064) + context.kv (ADR-0069) at the in-container path. Every function gets one.
-		sock, err := r.invokeSocket(fn)
-		if err != nil {
-			return runtime.WorkerSpec{}, err
-		}
-		if sock != "" {
-			env["FUNCD_INVOKE_SOCKET"] = containerInvokeSocket
-			mounts = append(mounts, runtime.Mount{Source: sock, Target: containerInvokeSocket})
-		}
-		return runtime.WorkerSpec{
-			Namespace: fn.Namespace,
-			Name:      fn.Name,
-			OwnerKind: v1.KindFunction,
-			Replica:   replica,
-			Image:     r.imageFor(string(fn.Spec.Runtime)),
-			Mounts:    mounts,
-			Env:       env,
-			Limits:    r.limitsOf(ctx, fn),
-		}, nil
+	volMounts, volEnv, err := r.workerVolumes(ctx, fn, runtime.NewInstanceID(fn.Namespace, fn.Name, rev, replica))
+	if err != nil {
+		return runtime.WorkerSpec{}, err
 	}
-	if r.materializer != nil {
-		// Process mode (ADR-0030): ShimCommand launches the shim; loopback + portfile.
-		env := shimEnv(fn, artifactPath)
-		r.addRecordBound(env)
-		addBundleEnv(env, fn.Spec.Runtime, filepath.Dir(artifactPath)) // FUNCD_BUNDLE_DIR (+ PYTHONPATH, python family), ADR-0089
-		// FUNCD_INVOKE_SOCKET for context.invoke (ADR-0064); reachable on the host
-		if err := r.addInvokeSocket(env, fn); err != nil {
-			return runtime.WorkerSpec{}, err
-		}
-		r.addS3Env(env, fn)            // AWS_* S3 keypair + endpoint for a spec.bindings.blob function (ADR-0085)
-		r.addLakeEnv(env, lakeEnv)     // FUNCD_LAKE_<ALIAS>_URL/_TOKEN written DIRECTLY (ADR-0091) — never via addBindingEnv
-		r.addLakeExtensionDir(env, fn) // DUCKDB_EXTENSION_DIRECTORY for a lake consumer (dev; prod uses the bundle's duckdb-ext)
-		r.addBindingEnv(env, bindEnv)
-		maps.Copy(env, volEnv) // FUNCD_VOLUME_<NAME>: the host directory, no mount in process mode (ADR-0262)
-		return runtime.WorkerSpec{
-			Namespace: fn.Namespace,
-			Name:      fn.Name,
-			OwnerKind: v1.KindFunction,
-			Replica:   replica,
-			Image:     string(fn.Spec.Runtime),
-			Command:   r.shimFor(fn.Spec.Runtime), // node by default; python* → the python shim (ADR-0049)
-			Env:       env,
-			Limits:    r.limitsOf(ctx, fn),
-		}, nil
+	sock, err := r.invokeSocket(fn)
+	if err != nil {
+		return runtime.WorkerSpec{}, err
 	}
-	return runtime.WorkerSpec{
-		Namespace: fn.Namespace,
-		Name:      fn.Name,
-		OwnerKind: v1.KindFunction,
-		Replica:   replica,
-		Image:     string(fn.Spec.Runtime),
-		// Legacy placeholder (no Materializer): a long-lived process stands in for the
-		// worker; real execution is the shim path (ADR-0030).
-		Command: []string{"sleep", "86400"},
-	}, nil
+	spec.Limits = r.limitsOf(ctx, fn)
+	if r.endpointMode != EndpointNetnsFixedPort {
+		// Process mode (ADR-0030): ShimCommand launches the shim, which binds loopback and writes its port file; the
+		// worker sees the host paths, and its volumes are host directories with no mount (ADR-0262).
+		spec.Command = r.shimFor(fn.Spec.Runtime) // node by default; python* → the python shim (ADR-0049)
+		spec.Env = r.shimWorkerEnv(fn, artifactPath, filepath.Dir(artifactPath), sock, we, volEnv)
+		return spec, nil
+	}
+	// Container mode (ADR-0032): the shim is the curated image's entrypoint (Command empty), the artifact is bind-mounted
+	// read-only, each volume is a bind of its leaf alone (ADR-0262), the local API socket is bound in at its in-container
+	// path, and the shim binds a fixed netns port.
+	spec.Image = r.imageFor(string(fn.Spec.Runtime))
+	spec.Mounts = append([]runtime.Mount{{Source: filepath.Dir(artifactPath), Target: containerArtifactDir, ReadOnly: true}}, volMounts...)
+	if sock != "" {
+		spec.Mounts = append(spec.Mounts, runtime.Mount{Source: sock, Target: containerInvokeSocket})
+		sock = containerInvokeSocket
+	}
+	spec.Env = r.shimWorkerEnv(fn, filepath.Join(containerArtifactDir, filepath.Base(artifactPath)), containerArtifactDir, sock, we, volEnv)
+	spec.Env["FUNCD_PORT"] = strconv.Itoa(containerShimPort)
+	return spec, nil
+}
+
+// shimWorkerEnv is the env a solo shim worker starts with, artifact, bundleRoot and socket as the worker sees them: the
+// shim's own (shimEnv), the record bound (ADR-0168), the bundle's (ADR-0089), the local API socket, what the providers
+// fn binds give it, and FUNCD_VOLUME_<NAME> for each of its volumes (ADR-0262).
+func (r *Reconciler) shimWorkerEnv(fn *v1.Function, artifact, bundleRoot, socket string, we workerEnv, volEnv map[string]string) map[string]string {
+	env := shimEnv(fn, artifact)
+	r.addRecordBound(env)
+	addBundleEnv(env, fn.Spec.Runtime, bundleRoot)
+	if socket != "" {
+		env["FUNCD_INVOKE_SOCKET"] = socket
+	}
+	we.into(env)
+	maps.Copy(env, volEnv)
+	return env
 }
 
 func retryOnConflict(err error, op string) error {

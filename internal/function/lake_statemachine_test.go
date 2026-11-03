@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -31,8 +32,8 @@ const (
 
 // TestLakePathStateMachine is a stateful property test of the lake path (ADR-0137). rapid runs random
 // sequences of engine crashes, engine readiness, lake reconciles and consumer provisioning against the
-// real lake reconciler, the real PEP proxy Manager and the real resolveLakeEnv, over one store; only
-// the engine is faked. After every action it checks that:
+// real lake reconciler, the real PEP proxy Manager, the real resolveLakeEnv and the Lake hook's token,
+// over one store; only the engine is faked. After every action it checks that:
 //   - a consumer is provisioned only while the lake is Ready;
 //   - the lake's Ready endpoint never changes, and every consumer holds it;
 //   - once the proxy targets the current engine, every consumer's query reaches that engine with the shared
@@ -209,6 +210,9 @@ func (w *lakeWorld) provision(rt *rapid.T, i int) (requeued bool) {
 	env, requeue, err := w.fn.resolveLakeEnv(context.Background(), fn)
 	require.NoError(rt, err)
 	if !requeue {
+		own, _, gate := lakeHook{w.fn}.own(fn)
+		require.Nil(rt, gate)
+		maps.Copy(env, own)
 		w.consumers[i] = env
 	}
 	return requeue
