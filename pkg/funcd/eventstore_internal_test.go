@@ -16,6 +16,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/activator"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/controller"
@@ -68,6 +69,53 @@ func TestDeadLetterRetention_EvictsPastTheTTL(t *testing.T) {
 		_, err := p.eventing.deadLetters.Get(ctx, "default", "01OLD")
 		return fault.KindOf(err) == fault.NotFound
 	}, 5*time.Second, 10*time.Millisecond, "the retention sweep evicts a dead letter past its TTL")
+}
+
+// scenario: http-no-events
+// A Ready Sensor goes Ready=False TargetServesHTTP once the Function its action names turns into one that serves HTTP:
+// the Function's change re-runs the Sensor through the Function watch eventing's build registers (ADR-0243 Decision 5),
+// since the Sensor's own reconcile saw a cloudevent target.
+func TestSensor_FailsWhenItsTargetTurnsIntoAnHTTPFunction(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	p := eventingPlatform(t)
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- p.Run(runCtx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	meta := func(name v1.ObjectName) v1.ObjectMeta {
+		return v1.ObjectMeta{Namespace: "default", ResourceGroup: "rg1", Name: name}
+	}
+	create(t, p.cfg.store, &v1.Function{TypeMeta: tmeta(v1.KindFunction), ObjectMeta: meta("devices-api"),
+		Spec: v1.FunctionSpec{Runtime: "nodejs22", Handler: "index.handler", Image: "oci-layout://devices-api:1"}})
+	create(t, p.cfg.store, &v1.Sensor{TypeMeta: tmeta(v1.KindSensor), ObjectMeta: meta("purge"), Spec: v1.SensorSpec{
+		On: []v1.Dependency{{Name: "tick", Source: "clock", Event: "nightly"}},
+		Do: []v1.Action{{Name: "purge", On: "tick", Function: "devices-api"}},
+	}})
+	readyIs := func(status v1.ConditionStatus, reason string) func() bool {
+		return func() bool {
+			obj, err := p.cfg.store.Get(ctx, v1.KindSensor.GVK(), "default", "purge")
+			if err != nil {
+				return false
+			}
+			c, ok := obj.(*v1.Sensor).Status.Conditions.Get("Ready")
+			return ok && c.Status == status && c.Reason == reason
+		}
+	}
+	require.Eventually(t, readyIs(v1.ConditionTrue, "Bound"), 5*time.Second, 10*time.Millisecond,
+		"the Sensor is Ready with a cloudevent target")
+	require.Eventually(t, func() bool {
+		obj, err := p.cfg.store.Get(ctx, v1.KindFunction.GVK(), "default", "devices-api")
+		if err != nil {
+			return false
+		}
+		fn := obj.(*v1.Function)
+		fn.Spec.Protocol = v1.ProtocolHTTP
+		_, err = p.cfg.store.Update(ctx, fn)
+		return err == nil
+	}, 5*time.Second, 10*time.Millisecond, "the Function turns into one that serves HTTP")
+	require.Eventually(t, readyIs(v1.ConditionFalse, activator.ReasonTargetServesHTTP), 5*time.Second, 10*time.Millisecond,
+		"the Sensor is Ready=False TargetServesHTTP")
 }
 
 // fileStart starts a platform whose metastore, blob store and event store live under dir, with the default KV
