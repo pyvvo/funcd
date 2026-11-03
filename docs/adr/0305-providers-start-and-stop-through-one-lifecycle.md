@@ -1,8 +1,9 @@
 # ADR-0305: Providers start and stop through one lifecycle
 
-- **Status**: Accepted (2026-11-02; judged three times under the adr-judge skill, last verdict accept; the decider
-  accepted the choices the draft made: stop hooks for every provider, the `Run` hook, the provider order, the three
-  steps moved after the runtime's Close and the pool manifests after `Stop`, and the event store kept last)
+- **Status**: Reviewing (2026-11-03, implemented from the in-scope part of the provider-lifecycle experiment); Accepted
+  (2026-11-02; judged three times under the adr-judge skill, last verdict accept; the decider accepted the choices the
+  draft made: stop hooks for every provider, the `Run` hook, the provider order, the three steps moved after the
+  runtime's Close and the pool manifests after `Stop`, and the event store kept last)
 - **Superseded in part by**: [ADR-0307](0307-a-providers-boot-reclaim-is-a-lifecycle-hook.md) (2026-11-03) — the "unless held, reclaim deleted … (warn)" steps of its Contracts table's kv, blob and sql `Start` rows: they are `Reclaim` hooks, run once after every `Start` while the platform is not held.
 - **Date**: 2026-11-02
 - **Deciders**: green-0-rabbit
