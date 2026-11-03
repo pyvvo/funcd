@@ -1,8 +1,9 @@
 # ADR-0309: Each provider builds and holds its own parts
 
-- **Status**: Accepted (2026-11-03, under the decider's delegation: "pick whatever ADR you want and ship them", then
-  "ADR batch ... for all of the remaining works"; judged under the adr-judge skill in an independent session: its
-  Blocker, invoke built before the Executor, three Majors and seven Minors folded)
+- **Status**: Reviewing (2026-11-03, implemented from the experiment's commits, without its route hook); Accepted
+  (2026-11-03, under the decider's delegation: "pick whatever ADR you want and ship them", then "ADR batch ... for all
+  of the remaining works"; judged under the adr-judge skill in an independent session: its Blocker, invoke built
+  before the Executor, three Majors and seven Minors folded)
 - **Date**: 2026-11-03
 - **Deciders**: green-0-rabbit
 - **Tags**: provider, lifecycle, architecture, refactor
