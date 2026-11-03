@@ -6,6 +6,7 @@
   draft made: stop hooks for every provider, the `Run` hook, the provider order, the three steps moved after the
   runtime's Close and the pool manifests after `Stop`, and the event store kept last)
 - **Superseded in part by**: [ADR-0307](0307-a-providers-boot-reclaim-is-a-lifecycle-hook.md) (2026-11-03) — the "unless held, reclaim deleted … (warn)" steps of its Contracts table's kv, blob and sql `Start` rows: they are `Reclaim` hooks, run once after every `Start` while the platform is not held.
+- **Superseded in part by**: [ADR-0309](0309-each-provider-builds-and-holds-its-own-parts.md) (2026-11-03) — Decision 1's "keeps the local API sockets for now", Decision 5's Platform steps for the invoke listeners and the invoke socket directory, and its Contracts table's Executor `BeforeStop` and `Stop` cells: the Executor owns the sockets, closes their listeners after the runtime and removes a socket directory it made.
 - **Date**: 2026-11-02
 - **Deciders**: green-0-rabbit
 - **Tags**: provider, lifecycle, architecture, shutdown, refactor
