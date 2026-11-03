@@ -71,7 +71,7 @@ func egressToExample(ns v1.NamespaceName, appliesTo ...v1.ObjectName) *v1.Egress
 // egressConnect decides a connection from src to example.com:443 the way the egress gateway's decideConnect
 // does: the source IP resolves through the worker index, then the PDP decides egress::connect. It returns the
 // audit record the gateway writes.
-func egressConnect(t *testing.T, p *Platform, pdp auth.Authorizer, src string) egress.AuditRecord {
+func egressConnect(t *testing.T, p *executor, pdp auth.Authorizer, src string) egress.AuditRecord {
 	t.Helper()
 	ref, ok := p.egressWorkers.Lookup(netip.MustParseAddr(src))
 	require.True(t, ok, "worker %s is indexed", src)
@@ -86,9 +86,9 @@ func egressConnect(t *testing.T, p *Platform, pdp auth.Authorizer, src string) e
 	return egress.AuditRecord{Namespace: string(ref.Namespace), Function: string(ref.Name), Allowed: dec.Allowed, Reason: dec.Reason}
 }
 
-func egressPlatform(t *testing.T, st store.Store, rt runtime.Runtime) (*Platform, auth.Authorizer) {
+func egressPlatform(t *testing.T, st store.Store, rt runtime.Runtime) (*executor, auth.Authorizer) {
 	t.Helper()
-	p := &Platform{cfg: &config{store: st, runtime: rt}, egressWorkers: egress.NewMemoryWorkerIndex()}
+	p := &executor{cfg: &config{store: st, runtime: rt}, egressWorkers: egress.NewMemoryWorkerIndex()}
 	p.reconcileEgressWorkers(context.Background(), map[netip.Addr]auth.EntityRef{})
 	ep, err := cedarauth.NewEntityProvider(cedarMetaReader{st})
 	require.NoError(t, err)
@@ -149,7 +149,7 @@ func TestScenarioEngineEgressIsLake(t *testing.T) {
 		seedObjects(t, st, lakeResource("solo"))
 		rt := &recordingRuntime{insts: map[runtime.InstanceID]runtime.Instance{}}
 		runningWorker(rt, "solo", "lake", v1.KindLake, "10.63.0.4")
-		p := &Platform{cfg: &config{store: st, runtime: rt}, egressWorkers: egress.NewMemoryWorkerIndex()}
+		p := &executor{cfg: &config{store: st, runtime: rt}, egressWorkers: egress.NewMemoryWorkerIndex()}
 		prev := p.reconcileEgressWorkers(context.Background(), map[netip.Addr]auth.EntityRef{})
 
 		p.cfg.store = lakeListFails{st}

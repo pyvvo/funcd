@@ -42,7 +42,7 @@ func TestIssue1204_LeftoverEmptyDirsGoOnceTheHoldLifts(t *testing.T) {
 	go func() { done <- p.Run(runCtx) }()
 	t.Cleanup(func() { cancel(); <-done })
 	listed := func() bool {
-		infos, err := p.volumes.List(ctx)
+		infos, err := p.exec.volumes.List(ctx)
 		require.NoError(t, err)
 		return slices.ContainsFunc(infos, func(in volume.Info) bool { return in.ID == leftover })
 	}

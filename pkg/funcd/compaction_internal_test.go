@@ -15,7 +15,7 @@ func TestScenarioDisabledConfigNoCompactor(t *testing.T) {
 		t.Fatalf("New(InMemory): %v", err)
 	}
 	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
-	if p.compactor == nil {
+	if p.exec.compactor == nil {
 		t.Fatal("expected a compactor by default when a blob substrate is present")
 	}
 
@@ -25,7 +25,7 @@ func TestScenarioDisabledConfigNoCompactor(t *testing.T) {
 		t.Fatalf("New(InMemory, WithoutLogCompaction): %v", err)
 	}
 	t.Cleanup(func() { _ = p2.Shutdown(context.Background()) })
-	if p2.compactor != nil {
+	if p2.exec.compactor != nil {
 		t.Fatal("WithoutLogCompaction() must wire no compactor")
 	}
 }

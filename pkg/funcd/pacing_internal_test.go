@@ -324,7 +324,7 @@ func TestScenarioServerKeysPaceShutdownAndEgressSync(t *testing.T) {
 	t.Run("workerSyncInterval", func(t *testing.T) {
 		st := store.New(memory.New())
 		rt := &recordingRuntime{insts: map[runtime.InstanceID]runtime.Instance{}}
-		p := &Platform{cfg: &config{store: st, runtime: rt, pacing: Pacing{WorkerSyncInterval: 200 * time.Millisecond}}, egressWorkers: egress.NewMemoryWorkerIndex()}
+		p := &executor{cfg: &config{store: st, runtime: rt, pacing: Pacing{WorkerSyncInterval: 200 * time.Millisecond}}, egressWorkers: egress.NewMemoryWorkerIndex()}
 		obj, _ := v1.NewObject(v1.KindFunction)
 		fn := obj.(*v1.Function)
 		fn.Name, fn.Namespace, fn.ResourceGroup = "fn", "default", "rg1"

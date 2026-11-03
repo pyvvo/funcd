@@ -59,7 +59,7 @@ func TestScenarioPlatformsOwnFeeds(t *testing.T) {
 		buf := &syncBuffer{}
 		logs = append(logs, buf)
 		e := startSQL(t, newSQLRuntime(t), WithLogger(slog.New(slog.NewTextHandler(buf, nil))))
-		port := e.p.sqlFeedListener.Addr().(*net.TCPAddr).Port
+		port := e.p.sql.feedListener.Addr().(*net.TCPAddr).Port
 		requirePortHeld(t, port)
 		u := e.feedEndpoint(t, name)
 		require.Equal(t, "127.0.0.1:"+strconv.Itoa(port), u.Host, "the engines are given their own feed")
@@ -105,7 +105,7 @@ func TestScenarioBridgeKeeps7075(t *testing.T) {
 	t.Parallel()
 	e := startSQL(t, newSQLRuntime(t), WithBridgeAddress(netip.MustParseAddr("10.63.0.1")),
 		WithLogger(slog.New(slog.DiscardHandler)))
-	require.Nil(t, e.p.sqlFeedListener)
+	require.Nil(t, e.p.sql.feedListener)
 	require.Equal(t, "10.63.0.1:7075", e.feedEndpoint(t, "todo-db").Host)
 }
 
@@ -114,7 +114,7 @@ func TestShutdownReleasesTheLoopbackFeedPort(t *testing.T) {
 	t.Parallel()
 	p, err := New(InMemory(), WithSQLProviderRuntime(newSQLRuntime(t)), WithLogger(slog.New(slog.DiscardHandler)))
 	require.NoError(t, err)
-	port := p.sqlFeedListener.Addr().(*net.TCPAddr).Port
+	port := p.sql.feedListener.Addr().(*net.TCPAddr).Port
 	requirePortHeld(t, port)
 	require.NoError(t, p.Shutdown(context.Background()))
 	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))

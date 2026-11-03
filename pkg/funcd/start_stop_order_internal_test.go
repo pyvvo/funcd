@@ -165,7 +165,7 @@ func TestShutdown_ClosesLakeProxiesBeforeTheRuntime(t *testing.T) {
 		return nil
 	})
 	require.NoError(t, err)
-	port, _, err := p.lakeProxy.Listen("default", "lk", 0)
+	port, _, err := p.lake.proxy.Listen("default", "lk", 0)
 	require.NoError(t, err)
 	rt.addr = net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
 	conn, err := net.DialTimeout("tcp", rt.addr, time.Second)
@@ -299,6 +299,8 @@ func (r *dirsAtClose) Close() error {
 	return r.Runtime.Close()
 }
 
+// scenario: a-worker-reaches-each-binding-on-its-local-api
+// scenario: a-stopping-worker-keeps-its-local-api
 // scenario: workers-keep-their-services-while-stopping
 // Shutdown keeps the local API until the runtime has stopped the workers that call it (ADR-0305 Decision 5): a
 // stopping worker's KV write succeeds, and its call to a cold linked function starts no worker, since the controller
@@ -324,7 +326,7 @@ func TestShutdown_KeepsTheLocalAPIUntilTheWorkersStop(t *testing.T) {
 			Bindings: bindings}
 		create(t, p.cfg.store, fn)
 	}
-	rt.sock, err = p.invokeMgr.SocketFor("default", "leaving")
+	rt.sock, err = p.exec.sockets.SocketFor("default", "leaving")
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())

@@ -80,7 +80,7 @@ func TestScenarioS3GatewayDisabledByDefault(t *testing.T) {
 		t.Fatalf("New(InMemory): %v", err)
 	}
 	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
-	if p.s3gw != nil {
+	if p.blob.gateway != nil {
 		t.Fatal("the S3 gateway must be absent unless WithS3Gateway is set")
 	}
 }
@@ -115,14 +115,14 @@ func startS3Gateway(t *testing.T, reserve func(*testing.T) string, build func(ad
 		if err != nil {
 			t.Fatalf("New with the S3 gateway on %s: %v", addr, err)
 		}
-		if p.s3gw == nil {
+		if p.blob.gateway == nil {
 			t.Fatal("WithS3Gateway must wire the S3 gateway")
 		}
 		runCtx, cancel := context.WithCancel(context.Background())
 		runErr := make(chan error, 1)
 		go func() { runErr <- serve(runCtx, p) }()
 		select {
-		case <-p.s3gw.Ready():
+		case <-p.blob.gateway.Ready():
 			t.Cleanup(func() {
 				cancel()
 				<-runErr
@@ -142,7 +142,7 @@ func startS3Gateway(t *testing.T, reserve func(*testing.T) string, build func(ad
 }
 
 // s3GatewayRun serves only the platform's S3 gateway.
-func s3GatewayRun(ctx context.Context, p *Platform) error { return p.s3gw.Run(ctx) }
+func s3GatewayRun(ctx context.Context, p *Platform) error { return p.blob.gateway.Run(ctx) }
 
 // platformRun serves the whole platform, which starts the S3 gateway itself. Platform.Run returns a bind error
 // (#497) and logs any later gateway stop, so the returned logger option also hands that logged error to serve.

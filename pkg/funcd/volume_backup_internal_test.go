@@ -34,7 +34,7 @@ func TestScenarioVolumeBackupRestore(t *testing.T) {
 	require.NoError(t, err)
 	id := volume.ID{Namespace: "orders", Function: "cart", Name: "state"}
 	reserve := func() string {
-		dir, err := r.p.volumes.Reserve(r.ctx, id, stored.GetObjectMeta().UID, 1<<20, v1.DeletionRetain)
+		dir, err := r.p.exec.volumes.Reserve(r.ctx, id, stored.GetObjectMeta().UID, 1<<20, v1.DeletionRetain)
 		require.NoError(t, err)
 		return dir
 	}
@@ -50,7 +50,7 @@ func TestScenarioVolumeBackupRestore(t *testing.T) {
 	require.Len(t, b.Status.Members, 1)
 	require.Equal(t, v1.BackupMember{Kind: v1.KindFunction, Name: "cart", Volume: "state", Bytes: b.Status.Members[0].Bytes}, b.Status.Members[0])
 
-	require.NoError(t, r.p.volumes.Release(r.ctx, id)) // the host is lost: the volume goes, cart's next pass makes it empty
+	require.NoError(t, r.p.exec.volumes.Release(r.ctx, id)) // the host is lost: the volume goes, cart's next pass makes it empty
 	dir = reserve()
 	r.create(r.admin, r.restoreObj("back", "b1", v1.RestoreMember{Kind: v1.KindFunction, Name: "cart", Volume: "state", InPlace: true}))
 	r.waitRestore("back", v1.RunSucceeded)
@@ -74,7 +74,7 @@ func TestRefusedVolumeRestoreKeepsItsData(t *testing.T) {
 	})
 	stored, err := r.st.Get(r.ctx, v1.KindFunction.GVK(), "orders", "cart")
 	require.NoError(t, err)
-	dir, err := r.p.volumes.Reserve(r.ctx, volume.ID{Namespace: "orders", Function: "cart", Name: "state"}, stored.GetObjectMeta().UID, 1<<20, v1.DeletionRetain)
+	dir, err := r.p.exec.volumes.Reserve(r.ctx, volume.ID{Namespace: "orders", Function: "cart", Name: "state"}, stored.GetObjectMeta().UID, 1<<20, v1.DeletionRetain)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "orders.sqlite"), []byte("rows"), 0o600))
 	r.create(r.dev, r.schedule("orders-vol", "0 3 * * *", func(s *v1.BackupScheduleSpec) {
@@ -172,7 +172,7 @@ func TestIssue1206_RestoreReplacesWhatALostVolumeGot(t *testing.T) {
 	require.NoError(t, err)
 	id := volume.ID{Namespace: "orders", Function: "cart", Name: "state"}
 	reserve := func() string {
-		dir, err := r.p.volumes.Reserve(r.ctx, id, stored.GetObjectMeta().UID, 1<<20, v1.DeletionRetain)
+		dir, err := r.p.exec.volumes.Reserve(r.ctx, id, stored.GetObjectMeta().UID, 1<<20, v1.DeletionRetain)
 		require.NoError(t, err)
 		return dir
 	}
@@ -184,7 +184,7 @@ func TestIssue1206_RestoreReplacesWhatALostVolumeGot(t *testing.T) {
 	r.create(r.dev, r.backupObj("b1", "orders-vol"))
 	r.waitBackup("b1", v1.RunSucceeded)
 
-	require.NoError(t, r.p.volumes.Release(r.ctx, id)) // the host is lost
+	require.NoError(t, r.p.exec.volumes.Release(r.ctx, id)) // the host is lost
 	dir = reserve()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "orders.sqlite"), []byte("schema only"), 0o600)) // the worker's start
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "since.log"), []byte("a write since the loss"), 0o600))

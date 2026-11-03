@@ -118,7 +118,7 @@ func TestIssue1208_AppliedVolumeKeepsItsBooking(t *testing.T) {
 	api := newVolumeAPI(t, volume.Options{CapacityBytes: 4 << 20, Clock: func() time.Time { return time.Unix(0, now.Load()) }})
 	code, out := api.function("cart", "3Mi", false)
 	require.Less(t, code, 300, "cart applied with a 3Mi volume: %s", out)
-	require.NoError(t, api.p.volumes.Book(context.Background(), volume.ID{Namespace: "default", Function: "refused", Name: "state"}, 1<<20))
+	require.NoError(t, api.p.exec.volumes.Book(context.Background(), volume.ID{Namespace: "default", Function: "refused", Name: "state"}, 1<<20))
 	now.Add(int64(2 * time.Minute)) // past BookingTTL, and no pass reserved cart's volume
 
 	code, out = api.function("thumbs", "3Mi", false)
@@ -139,7 +139,7 @@ func TestIssue1208_AppPartVolumeKeepsItsBooking(t *testing.T) {
 	api := newVolumeAPI(t, volume.Options{CapacityBytes: 4 << 20, Clock: func() time.Time { return time.Unix(0, now.Load()) }})
 	code, out := api.app("app-cart", "3Mi", false)
 	require.Less(t, code, 300, "shop applied with a 3Mi part volume: %s", out)
-	require.NoError(t, api.p.volumes.Book(context.Background(), volume.ID{Namespace: "default", Function: "refused", Name: "state"}, 1<<20))
+	require.NoError(t, api.p.exec.volumes.Book(context.Background(), volume.ID{Namespace: "default", Function: "refused", Name: "state"}, 1<<20))
 	now.Add(int64(2 * time.Minute)) // past BookingTTL, and the App wrote no part Function
 
 	code, out = api.function("thumbs", "3Mi", false)

@@ -59,7 +59,7 @@ func TestLakeWatchesFollowLakeAndBinders(t *testing.T) {
 	var url string
 	require.Eventually(t, func() bool {
 		var bound bool
-		url, bound = p.lakeProxy.ProxyURL("default", "lake")
+		url, bound = p.lake.proxy.ProxyURL("default", "lake")
 		obj, gerr := st.Get(ctx, v1.KindLake.GVK(), "default", "lake")
 		return bound && gerr == nil && obj.(*v1.Lake).Status.Phase == v1.PhaseReady
 	}, 5*time.Second, 10*time.Millisecond, "lake lake is Ready")
@@ -88,7 +88,7 @@ func TestLakeWatchesFollowLakeAndBinders(t *testing.T) {
 		require.NoError(t, st.Delete(ctx, v1.KindLake.GVK(), "default", "lake", ""))
 		require.Eventually(t, readerIs(v1.PhaseReady, v1.ConditionFalse, "LakeNotReady"), turn, 10*time.Millisecond,
 			"reader shows LakeNotReady and keeps serving")
-		require.Eventually(t, func() bool { return slices.Contains(p.lakeProxy.Released("default"), "lake") }, turn,
+		require.Eventually(t, func() bool { return slices.Contains(p.lake.proxy.Released("default"), "lake") }, turn,
 			10*time.Millisecond, "lake's listener is released, not closed, while reader binds it")
 		resp, gerr := http.Get("http://" + url)
 		require.NoError(t, gerr)
@@ -99,7 +99,7 @@ func TestLakeWatchesFollowLakeAndBinders(t *testing.T) {
 	seedObjects(t, st, lakeResource("default"))
 	require.Eventually(t, readerIs(v1.PhaseReady, v1.ConditionTrue, ""), turn, 10*time.Millisecond,
 		"reader re-resolves the re-created lake")
-	again, bound := p.lakeProxy.ProxyURL("default", "lake")
+	again, bound := p.lake.proxy.ProxyURL("default", "lake")
 	require.True(t, bound)
 	require.Equal(t, url, again)
 	require.Len(t, rt.created()["reader"], 1, "reader's worker is not re-created")
@@ -107,7 +107,7 @@ func TestLakeWatchesFollowLakeAndBinders(t *testing.T) {
 	deleteLake()
 	require.NoError(t, st.Delete(ctx, v1.KindFunction.GVK(), "default", "reader", ""))
 	require.Eventually(t, func() bool {
-		_, bound := p.lakeProxy.ProxyURL("default", "lake")
-		return !bound && len(p.lakeProxy.Released("default")) == 0
+		_, bound := p.lake.proxy.ProxyURL("default", "lake")
+		return !bound && len(p.lake.proxy.Released("default")) == 0
 	}, turn, 10*time.Millisecond, "lake's listener closes once reader, its last binder, is deleted")
 }
