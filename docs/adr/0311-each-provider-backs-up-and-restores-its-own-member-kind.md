@@ -43,11 +43,12 @@ listing (`sync.go:55`, `:163`).
   asserts (`TestRestoreReason_MemberNotFound`, `TestRestoreReason_TornObjectIsIntegrity` with a torn frame re-sealed and
   its sha256 updated, `TestRestoreReason_EngineNotReady`, `TestRestoreReason_VolumeWithoutLeafIsFailed`); a Lake's
   files put before its catalog (`TestRestoreLake_PutsFilesBeforeCatalog`, a recording bucket as `cleanupBucket` is).
-- **scenario: a-bucket-restore-keeps-its-lakes-catalogs** (#1383) — *Given* a Bucket that holds a Lake whose catalog
-  is `C1`, *When* it is restored in place from a Backup, alone or after its Lake in one Restore, or another Bucket's
-  copy is restored `as` it, *Then* the catalog is `C1` afterwards, the `as` Restore failing before any write. Tests:
-  `TestIssue1383_InPlaceBucketRestoreKeepsItsLakesCatalog`, `TestIssue1383_FailedRestoreKeepsACatalogItNeverWrote`,
-  `TestIssue1383_InPlaceRestoreOfALakeAndItsBucketKeepsTheCatalog` (`08cef605`).
+- **scenario: every-kind-round-trips-the-whole-store** (#1383's class) — *Given* a member of every kind the providers
+  serve, a Lake on one of the Bucket's prefixes, *When* each is backed up, emptied and restored in place, alone and in
+  one Restore that lists the Lake before its Bucket, *Then* every object under `s3/`, catalog under `lake-catalogs/`,
+  KV key, database file and volume is as it was, and a Restore that fails mid-load leaves every key it did not write as
+  it was. Tests (new): `TestKinds_RoundTripLeavesTheStoresAsTheyWere`, `TestKinds_AFailedRestoreDeletesOnlyWhatItWrote`,
+  `TestKinds_EveryServedKindRoundTrips` (its kinds must equal `Deps.Kinds`); #1383's `TestIssue1383_…` (`08cef605`).
 - **scenario: an-unserved-kind-fails-by-name** — *Given* a backup service whose kinds do not serve a kind the copy
   holds, *When* a Backup writes a member of it or a Restore names one, *Then* each fails naming the kind, the Backup
   before any put and the Restore before the hold; a listing still skips a key no kind parses. Tests (new):
@@ -83,7 +84,6 @@ decider's answer 3); the backup format and the restore's order (answer 4); clear
 | The kinds as unexported `pkg/funcd` adapters, where the validated sketch put them | About six helpers of the format would be exported or copied (`streamFile`, `objects`, `keys`, the Lake attempts, the restore's object loop, `recordReader`); the Lake attempts (ADR-0222 Decision 5, ADR-0271) would move into the composition root, and the format's unit tests into platform rigs; ADR-0310 Decision 1 builds a provider's part in the package that owns its rules (`local.KVFacet`). `Resolve` names every kind in `internal/backup/workload` either way. |
 | A backup interface and a restore interface per kind | A kind's `Write` and `Parse` define its directory, and its `Load` reads what `Write` wrote: one type keeps both ends of its format. |
 | Generic member streams, the service keeping emptiness and in-place rules | "In place" means three things (emptied first; emptied by the load; never, unless lost): one service rule changes two kinds. |
-| A generic scope (`members` of kind and name), or kinds resolving their own lists | An API change the decider declined; App and ResourceGroup scopes resolve every kind at once (`workload.go:116-182`). |
 | Register only the kinds whose parts are wired | Today's `Unavailable` answers (a KV driver without an export, volumes off) become "no kind serves", and the listing drops `volume/`. |
 | The Platform builds the volume kind | It would be the one kind that `New` names; the Executor owns the volume manager, and `New` already hands it the Function reconciler (ADR-0309 Decision 3). |
 | The listing fails on a key that no kind parses | A failed listing turns `TargetSynced` False and stops the schedule's slots (`sync.go:62`, `api/types/v1alpha1/backup.go:178-181`); the listing only fills a found copy's `status.members`, and a Restore reads the manifest. |
@@ -98,10 +98,10 @@ decider's answer 3); the backup format and the restore's order (answer 4); clear
    in list order, into `Deps.Kinds`. With a nil part, `Write`, `IsEmpty` and `Load` answer `Unavailable`; `Destination`,
    `Prepare` and `Clear` do nothing, as today (e.g. `workload.go:230-232`, `restore.go:311`, `:351-353`, `:489-491`).
 3. **The services dispatch by kind, in today's order** (`restore.go:173-243`): a Backup looks every member's kind up,
-   then writes each through its kind, the manifest last; a Restore plans every member (manifest entry, kind,
-   `Destination`, `IsEmpty` unless in place) before any write, holds the namespace when in place, calls every `Prepare`
-   (a failed one releases the earlier ones; nothing is cleared), loads in spec order, on a failure clears each
-   destination a load began, and lifts the hold only after a completed load.
+   then writes each and the manifest last; a Restore plans every member (manifest entry, kind, `Destination`, `IsEmpty`
+   unless in place) before any write, holds the namespace when in place, calls every `Prepare` (a failed one releases
+   the earlier ones; nothing is cleared), loads in spec order, clears on a failure what each load began, and lifts the
+   hold only after a completed load.
 4. **Each kind keeps its rules** (today: `workload.go:228-268`, `:287-350`; `copies.go:125-154`; `restore.go:245-525`):
 
    | Kind (provider) | Copy, under the copy's directory | Destination | Empty, unless in place | Prepare | Load | Clear |
@@ -112,12 +112,11 @@ decider's answer 3); the backup format and the restore's order (answer 4); clear
    | SQLDatabase (sql) | `sql/<name>/`: its file in 8 MiB records | the database `as`, or itself | no table, view, index or trigger, and no Function binding it | — | its engine's load, which empties first | its engine's `Empty` |
    | Function volume (Executor) | `volume/<fn>/<vol>/`: its tar | that volume of the Function `as`, or of itself | empty, or lost | stop the Function's workers until release | if lost, Clear first; the untar | `Clear` |
 
-   The Bucket row is the one #1383's fix gives: a Bucket's file carries, after its objects, each catalog under
-   `lake-catalogs/<ns>/<bucket>/` as a record keyed `<p>/_ducklake/catalog.db`, its key before #1320, and a restore
-   puts such a record into the catalog store under the destination's location, as the Lake member's catalog record goes
-   (`restore.go:440-443`). So ADR-0293 Decision 5's "every backup restores as before" holds, a copy taken before #1320
-   restores its catalogs too, and a Lake's consistent copy stays its own member's (ADR-0271). The unreachable nil-Purger
-   fallback (`restore.go:503`, `:511-524`; `funcd.go:1855`) is not ported.
+   The Bucket row is #1383's fix: after its objects, a Bucket's file carries each catalog under
+   `lake-catalogs/<ns>/<bucket>/` as a record keyed `<p>/_ducklake/catalog.db`, its key before #1320, which a restore
+   puts into the catalog store under the destination, as the Lake member does (`restore.go:440-443`); so a pre-#1320
+   copy restores its catalogs too, and a Lake's consistent copy stays its own member's (ADR-0271). The unreachable
+   nil-Purger fallback (`restore.go:503`, `:511-524`; `funcd.go:1855`) is not ported.
 5. **Reasons, per call**, from sentinels (`internal/backup/workload` cannot import the service's reasons). A missing
    manifest entry, or a `Destination`'s `fault.NotFound`, is `MemberNotFound` and its other errors `Failed`
    (`restore.go:284-286`, `:327-332`); `IsEmpty`: `EngineNotReady` (`ErrEngineNotReady`) or `Failed` (`:333-337`);
@@ -178,15 +177,13 @@ func SlotCopies(ctx context.Context, target blob.Bucket, ns v1.NamespaceName, sc
 
 // internal/services/backup: New refuses a nil kind and a Kind() served twice, fault.Invalid naming it.
 type Deps struct{ Kinds []workload.MemberKind /* replaces Sources, KV, SQL, Volumes, Purger; the rest unchanged */ }
-// pkg/funcd, unexported, over today's wiring (funcd.go:1852-1875): kv's KVStores its driver's SnapshotPrefix and
-// KVLoader, nil when absent; blob's Buckets the store, bucketPrefix, bucketCatalogPrefix and bucketPurger; lake's
-// Lakes the store, bucketPrefix and lakeCatalogPrefix; sql's Databases its Backups(); the Executor's, its volumeLoader.
+// pkg/funcd, unexported, over today's wiring (funcd.go:1852-1875): kv's driver; blob's store, bucketPrefix,
+// bucketCatalogPrefix, bucketPurger; lake's store, bucketPrefix, lakeCatalogPrefix; sql's Backups(); volumeLoader.
 type backupHook interface {
 	lifecycle.Provider
 	BackupKinds() []workload.MemberKind // runs once, in registerWorkloadBackups
 }
-// useFunctions keeps fn's VolumeLost and StopWorkers, which the volume kind reads through volumeLoader; New builds the
-// Function reconciler after the Executor and calls it beside captureLogs (funcd.go:823).
+// New calls it beside captureLogs (funcd.go:823); the volume kind reads fn's VolumeLost and StopWorkers.
 func (e *executor) useFunctions(fn *function.Reconciler)
 ```
 
@@ -199,31 +196,31 @@ func (e *executor) useFunctions(fn *function.Reconciler)
 ## Implementation plan
 
 1. **Commit 1, #1383's fix under `/fix`** (`fix(backup): …`, `Fixes #1383`): Decision 4's Bucket row in `Write`'s
-   Bucket case and the restore's `isEmpty` and `fill`, over `Sources.CatalogPrefix`. The three `TestIssue1383_…` tests
-   of `08cef605` turn green, the revert check turns them red, and an independent `/fix-review` passes; the refactor
-   commits below keep the fixed row.
+   Bucket case and the restore's `isEmpty` and `fill`, over `Sources.CatalogPrefix`. #1383's three tests and the
+   guards `TestKinds_RoundTripLeavesTheStoresAsTheyWere` and `TestKinds_AFailedRestoreDeletesOnlyWhatItWrote` (on
+   `wbRig`, with SQL file engines and function volumes) fail on today's main on the Bucket path and turn green; the
+   revert check turns them red; an independent `/fix-review` passes; the commits below keep them green.
 2. **Commit 2, no behavior change**: `kinds.go` (interfaces, wrappers, sentinels) and one file per kind in
    `internal/backup/workload`, porting Decision 4's lines, with the loader interfaces; nothing calls them yet. Tests:
    the seven pins, passing on commit 1's services (a failing pin is a defect of main, filed apart), and
    `TestKinds_ParseReadsWhatWriteWrote`, which also asserts that no other kind's `Parse` accepts a kind's keys.
-3. **Commit 3, the services dispatch through the kinds**: `Write`, `ListCopy` and `SlotCopies` take them; a Restore's
-   plan, prepare, load and clear go through `Destination`, with the per-call reasons; `Deps.Kinds`, filled by hand in
-   `registerWorkloadBackups` until commit 4; `Sources`, the restore's `target` struct and the per-kind branches go.
-   Tests: the unserved-kind tests and `TestKinds_ATestKindNeedsNoServiceCode`; only setups change in the four `Write`
-   tests, the two listing tests and `wbRig.copyOn`.
+3. **Commit 3, the services dispatch through the kinds**: `Write`, `ListCopy` and `SlotCopies` take them, a Restore's
+   plan, prepare, load and clear go through `Destination`, and `Deps.Kinds` is filled by hand until commit 4; `Sources`,
+   the restore's `target` struct and the per-kind branches go. Tests: the unserved-kind tests and
+   `TestKinds_ATestKindNeedsNoServiceCode`; only setups change in the four `Write` tests, two listing tests, `copyOn`.
 4. **Commit 4, the providers' hook**: `backupHook`, `backups` in `sharedHooks`, the five providers implementing and
-   asserting it; `New` calls `useFunctions` beside `captureLogs`; the old `Deps` fields go. Tests:
-   `TestNew_RefusesAKindServedTwice` (new); `TestPhases_ListTheProvidersWithTheirHooks` gains `, backups` on the five.
+   asserting it; `New` calls `useFunctions` beside `captureLogs`; the old `Deps` fields go. Tests (new):
+   `TestNew_RefusesAKindServedTwice`, `TestKinds_EveryServedKindRoundTrips`; the golden hook list gains `, backups`.
 5. **Commit 5, the stale texts**: `api/types/v1alpha1/backup.go:148-149` and `:370-371`, `workload.go:113-115`,
    `internal/services/sql/backup.go:31-33`, `examples/workload-backup.md:3` and `:58` name the five kinds.
 6. **Mutants**, each restored, with the test that caught it, a survivor named with its checklist line: an in-place
-   KVStore, Bucket or Lake load without its Clear; a Bucket copy without its catalogs, or a Bucket `IsEmpty` blind to
-   them; a Lake catalog put before its files; a SQL `IsEmpty` blind to a binding Function; a volume `Prepare` that stops
-   nothing; a failed `Prepare` that keeps the earlier stops; a volume refusal without `ErrNotEmpty`; a Lake `Parse` with
-   attempt 0; a `Destination` `NotFound` mapped to `Failed`; any `NotFound` mapped to `MemberNotFound`; `ErrTornObject`
-   not wrapped; `EngineNotReady` lost at the load; a late kind lookup in `Write`; an unserved kind taken for another; a
-   listing that fails on an unparsed key; a provider whose `BackupKinds` returns nothing; a kind served twice; `backups`
-   left out of `sharedHooks`.
+   KVStore, Bucket or Lake load without its Clear; a Bucket copy without its Lakes' catalogs, or a Bucket `IsEmpty`
+   blind to them; a Clear that deletes outside its own member's footprint; a Lake catalog put before its files; a SQL
+   `IsEmpty` blind to a binding Function; a volume `Prepare` that stops nothing; a failed `Prepare` that keeps the
+   earlier stops; a volume refusal without `ErrNotEmpty`; a Lake `Parse` with attempt 0; a `Destination` `NotFound`
+   mapped to `Failed`; any `NotFound` mapped to `MemberNotFound`; `ErrTornObject` not wrapped; `EngineNotReady` lost
+   at the load; a late kind lookup in `Write`; an unserved kind taken for another; a listing that fails on an unparsed
+   key; a provider whose `BackupKinds` returns nothing; a kind served twice; `backups` left out of `sharedHooks`.
 7. **Checks**: `scripts/agent/d go test -race` on the touched packages, lint with the tags dev, e2e and integration,
    `scripts/agent/gate.sh`, then `just lima-example-all` and `just lima-example app-todo`, once each. Done when the
    gate, the 13 lanes and the app-todo lane pass, every pinned test unchanged in its assertions.
@@ -234,11 +231,11 @@ func (e *executor) useFunctions(fn *function.Reconciler)
   in `internal/backup/workload`, only the five kind files and `Resolve` with its helpers name one.
 - [ ] `Format` is 1; the `TestIssue1383_…` tests pass, and the pinned tests' assertions are unchanged, only the
   planned setups changed; `api/types/v1alpha1` changes only in two doc comments.
-- [ ] A Restore keeps today's order; an unserved kind fails by its name before any put and before the hold; the
-  listing skips a key no kind parses; one function maps a member call's error to its reason, and the service's own
-  steps keep theirs.
+- [ ] A Restore keeps today's order; an unserved kind fails by its name before any put or hold; the listing skips a
+  key no kind parses; one function maps a member call's error to its reason, and the service's own steps keep theirs.
 - [ ] `backupHook` embeds `lifecycle.Provider`, its five implementers assert it, `sharedHooks` names it `backups`, and
-  `BackupKinds` runs only in `registerWorkloadBackups`; every provider returns its kind whatever is wired.
+  `BackupKinds` runs only in `registerWorkloadBackups`; every provider returns its kind whatever is wired, and every
+  served kind is in the round-trip test.
 
 ## Consequences
 
@@ -249,9 +246,8 @@ func (e *executor) useFunctions(fn *function.Reconciler)
   keeps the Function reconciler; a Function with two volume members stops twice; a Backup of a Bucket and its Lakes
   holds each catalog twice.
 - **Risks**: a load that refuses without `ErrNotEmpty` lets the clearing empty what the Restore never wrote (a mutant
-  pins it); a new kind must take a directory of its own, which `TestKinds_ParseReadsWhatWriteWrote` checks; an object a
-  Bucket holds at `<p>/_ducklake/catalog.db`, which since #1320 only a deliberate write puts there, restores as a
-  catalog.
+  pins it); a new kind needs a directory of its own (`TestKinds_ParseReadsWhatWriteWrote`); an object a Bucket holds at
+  `<p>/_ducklake/catalog.db`, which since #1320 only a deliberate write puts there, restores as a catalog.
 
 ## Open questions
 
