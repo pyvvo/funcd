@@ -18,6 +18,7 @@ import (
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
+	"github.com/pyvvo/funcd/internal/quota"
 )
 
 // quotaGateway starts a platform with the S3 gateway and seeds objs; client returns an S3 client of the principal
@@ -200,5 +201,34 @@ func TestLakeData(t *testing.T) {
 		got, ok := LakeData(key)
 		require.Equal(t, want, got, key)
 		require.Equal(t, want != "", ok, key)
+	}
+}
+
+// TestIssue1370_EveryStoreKindIsCappedOnTheDefaultDrivers: every store kind's quota is in the Book (ADR-0292 Decision 2),
+// the in-memory KV a platform runs without WithKVStore included. A write past a Bucket's or a KVStore's cap is refused;
+// one to a capped SQLDatabase whose engine cannot report its usage yet is a 503.
+func TestIssue1370_EveryStoreKindIsCappedOnTheDefaultDrivers(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	p, err := New(InMemory())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
+	capped := v1.SizeQuota{MaxBytes: 8}
+	meta := v1.ObjectMeta{Namespace: "default", ResourceGroup: "rg1", Name: "data"}
+	for _, c := range []struct {
+		obj  v1.Object
+		want fault.Kind
+	}{
+		{&v1.Bucket{TypeMeta: tmeta(v1.KindBucket), ObjectMeta: meta, Spec: v1.BucketSpec{Quota: v1.BucketQuota{SizeQuota: capped}}}, fault.InsufficientStorage},
+		{&v1.KVStore{TypeMeta: tmeta(v1.KindKVStore), ObjectMeta: meta, Spec: v1.KVStoreSpec{Quota: v1.KVStoreQuota{SizeQuota: capped}}}, fault.InsufficientStorage},
+		{&v1.SQLDatabase{TypeMeta: tmeta(v1.KindSQLDatabase), ObjectMeta: meta, Spec: v1.SQLDatabaseSpec{Quota: capped}}, fault.Unavailable},
+	} {
+		kind := c.obj.GroupVersionKind().Kind
+		t.Run(string(kind), func(t *testing.T) {
+			_, err := p.cfg.store.Create(ctx, c.obj)
+			require.NoError(t, err)
+			_, err = p.checker.Admit(ctx, quota.Request{Subject: quota.Subject{Kind: kind, Namespace: "default", Name: "data"}, Bytes: 9})
+			require.Equal(t, c.want, fault.KindOf(err), "a write of 9 bytes to a %s capped at 8: %v", kind, err)
+		})
 	}
 }

@@ -647,9 +647,6 @@ func (p *Platform) buildControlPlane() error {
 	if c.blob != nil {
 		p.quotas.Register(v1.KindBucket, bucketQuotas(c.blob, c.store))
 	}
-	if kv, ok := c.kvStore.(kvstore.Usager); ok {
-		p.quotas.Register(v1.KindKVStore, kvQuotas(kv, c.store))
-	}
 	if c.authorizer == nil {
 		c.authorizer = rbac.New()
 	}
@@ -732,6 +729,10 @@ func (p *Platform) buildControlPlane() error {
 	// bound caller, writes are owner-only (ADR-0073).
 	if c.kvStore == nil {
 		c.kvStore = kvmemory.New()
+	}
+	// After the default is set: the in-memory driver counts its usage too (ADR-0292, issue #1370).
+	if kv, ok := c.kvStore.(kvstore.Usager); ok {
+		p.quotas.Register(v1.KindKVStore, kvQuotas(kv, c.store))
 	}
 	kvResolver, err := kvsvc.NewResolver(metaReader{c.store})
 	if err != nil {
