@@ -14,6 +14,7 @@ import (
 	"github.com/pyvvo/funcd/internal/volume"
 )
 
+// scenario: a-held-boot-reclaims-nothing
 // TestIssue1204_LeftoverEmptyDirsGoOnceTheHoldLifts: a held boot keeps the last run's emptyDirs, which hold capacity;
 // once the hold is released, the next Function pass releases them, as an unheld boot does (#1204).
 func TestIssue1204_LeftoverEmptyDirsGoOnceTheHoldLifts(t *testing.T) {

@@ -14,6 +14,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
+	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/kvstore"
 	kvmem "github.com/pyvvo/funcd/internal/kvstore/memory"
 	"github.com/pyvvo/funcd/internal/platform/clock"
@@ -153,6 +154,7 @@ func oldStore() *v1.KVStore {
 	return ks
 }
 
+// scenario: deleted-data-quarantined-at-boot
 // scenario: orphan-quarantined — a Bucket prefix with objects and a KV store prefix with keys, neither named by an
 // object: an unheld start empties both prefixes, hold status lists both with their since and until, and one Warn
 // line names each; on a file store the Bucket's objects keep their bytes and content type.
@@ -181,6 +183,7 @@ func TestScenarioOrphanQuarantined(t *testing.T) {
 	}
 }
 
+// scenario: deleted-data-quarantined-at-boot
 // scenario: same-name-starts-empty — once the start quarantined them, a Bucket and a KVStore applied under the
 // orphans' names start empty, and the quarantine keeps their old data.
 // oracle: docs/design/storage/quarantine.fizz#NoReturnUnasked
@@ -242,6 +245,92 @@ func TestScenarioQuarantineReturned(t *testing.T) {
 	}
 }
 
+// refusingMover is a blob store whose every prefix move fails.
+type refusingMover struct{ blob.Bucket }
+
+func (refusingMover) MovePrefix(context.Context, string, string) error {
+	return fault.Unavailablef("blob.test", "the store refuses the move")
+}
+
+// scenario: a-failed-reclaim-warns-and-boots
+// A blob reclaim that fails leaves one warning, which names the provider, and the boot goes on: start returns once the
+// control plane serves, which Run reaches only after the reclaims.
+func TestRun_AFailedReclaimWarnsOnce(t *testing.T) {
+	t.Parallel()
+	open := fileStore(t)
+	w := newQWorld(t, func(t *testing.T) blob.Bucket { return refusingMover{open(t)} })
+	w.orphans(t)
+	w.start(t)
+	var warns []string
+	for line := range strings.Lines(w.log.String()) {
+		if strings.Contains(line, "reclaim of deleted resources incomplete") {
+			warns = append(warns, line)
+		}
+	}
+	require.Len(t, warns, 1, "one warning for all the reclaims")
+	require.Contains(t, warns[0], "reclaim blob: ")
+	require.Contains(t, warns[0], "the store refuses the move")
+}
+
+// moveWaitBucket is a blob store whose prefix moves wait up to 300 ms for a reconcile first.
+type moveWaitBucket struct {
+	blob.Bucket
+	reconciled chan struct{}
+}
+
+func (b moveWaitBucket) MovePrefix(ctx context.Context, src, dst string) error {
+	select {
+	case <-b.reconciled:
+	case <-time.After(300 * time.Millisecond):
+	}
+	return b.Bucket.(blob.PrefixMover).MovePrefix(ctx, src, dst)
+}
+
+// orphanSeen is a reconciler that records whether the deleted Bucket's objects were still in place when it first ran.
+type orphanSeen struct {
+	shared     blob.Bucket
+	reconciled chan struct{}
+	once       sync.Once
+	saw        bool // written before reconciled closes
+}
+
+func (o *orphanSeen) Reconcile(ctx context.Context, _ controller.Request) (controller.Result, error) {
+	o.once.Do(func() {
+		items, err := o.shared.List(ctx, "s3/default/gone/")
+		o.saw = err != nil || len(items) > 0
+		close(o.reconciled)
+	})
+	return controller.Result{}, nil
+}
+
+// scenario: deleted-data-quarantined-at-boot
+// Run reclaims before any controller runs (#708), so no reconcile can make a Bucket of the same name over the old
+// objects. The move into the quarantine waits a while for a reconcile: a controller started before the reclaims would
+// reconcile meanwhile.
+func TestRun_ReclaimsBeforeAnyController(t *testing.T) {
+	t.Parallel()
+	shared := fileStore(t)(t)
+	require.NoError(t, shared.Put(context.Background(), "s3/default/gone/a", []byte("a"), blob.PutOptions{}))
+	rec := &orphanSeen{shared: shared, reconciled: make(chan struct{})}
+	p, err := New(InMemory(), WithoutLogCompaction(), WithBlob(moveWaitBucket{Bucket: shared, reconciled: rec.reconciled}))
+	require.NoError(t, err)
+	p.controller.Register(v1.KindConfigMap.GVK(), rec)
+	p.controller.Enqueue(controller.Request{GVK: v1.KindConfigMap.GVK(), Namespace: "default", Name: "cm"})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- p.Run(ctx) }()
+	select {
+	case <-rec.reconciled:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the controller never reconciled the queued request")
+	}
+	cancel()
+	require.NoError(t, <-done)
+	require.False(t, rec.saw, "a reconcile ran before Run reclaimed the deleted Bucket's objects")
+}
+
+// scenario: a-failed-reclaim-warns-and-boots
 // scenario: crash-during-move — a start whose move of a Bucket's objects is cut (the S3 store refuses the second
 // copy) leaves the entry moving and goes on; the next start resumes that entry, and it ends kept with every object.
 // oracle: docs/design/storage/quarantine.fizz#NothingLost

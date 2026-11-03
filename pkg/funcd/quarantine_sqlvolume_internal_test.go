@@ -98,6 +98,7 @@ func (r *wbRig) waitEmptyVolume(id volume.ID) {
 	}, 10*time.Second, 10*time.Millisecond, "volume %s is made, empty", id)
 }
 
+// scenario: deleted-data-quarantined-at-boot
 // scenario: sql-and-volume-quarantined — a SQL database directory with no SQLDatabase and a deletion: delete local
 // volume of a Function that is not stored: after an unheld start both are in the quarantine, listed with their since,
 // each named by one Warn line, and a Function applied again under that name gets a new, empty volume.

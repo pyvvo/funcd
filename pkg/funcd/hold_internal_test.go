@@ -69,6 +69,7 @@ type runnerCase struct {
 	still func(t *testing.T, p *Platform)
 }
 
+// scenario: a-held-boot-reclaims-nothing
 // TestEveryRunnerConsultsHold: on a held platform every Decision 6 runner built so far, the App's and the platform
 // backup's included, stays still; it fails when one acts. ADR-0208 and ADR-0209 add their backup loops' cases.
 func TestEveryRunnerConsultsHold(t *testing.T) {

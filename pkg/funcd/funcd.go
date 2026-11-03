@@ -1748,10 +1748,18 @@ func (p *Platform) Run(ctx context.Context) error {
 		if err := p.fnReconciler.ReclaimVolumes(ctx); err != nil && ctx.Err() == nil {
 			p.logger.WarnContext(ctx, "booking of Function volumes incomplete", "error", err)
 		}
-	} else if err := p.fnReconciler.ReclaimVolumes(ctx); err != nil && ctx.Err() == nil {
+	} else {
+		// ADR-0307: only a boot that is not held reclaims what deleted KVStores, Buckets and SQLDatabases left (#708,
+		// ADR-0199 Decision 7, ADR-0232 Decision 7), once every provider started and before any controller can create
+		// a resource of the same name.
+		if err := p.phases.Reclaim(ctx); err != nil && ctx.Err() == nil {
+			p.logger.WarnContext(ctx, "reclaim of deleted resources incomplete", "error", err)
+		}
 		// ADR-0262 Decision 8: no worker survives a restart, so emptyDirs go; volumes of deleted Functions follow their
 		// deletion policy.
-		p.logger.WarnContext(ctx, "reclaim of Function volumes incomplete", "error", err)
+		if err := p.fnReconciler.ReclaimVolumes(ctx); err != nil && ctx.Err() == nil {
+			p.logger.WarnContext(ctx, "reclaim of Function volumes incomplete", "error", err)
+		}
 	}
 
 	// ADR-0176 Decision 6: the edge aggregator holds every lake entry until "routes" has Set once, and no

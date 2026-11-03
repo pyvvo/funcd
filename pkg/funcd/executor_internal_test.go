@@ -22,9 +22,9 @@ func TestPhases_ListTheProvidersWithTheirHooks(t *testing.T) {
 	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
 	require.Equal(t, []string{
 		"executor: start, run, before stop, stop",
-		"kv: start, stop",
-		"blob: start, stop",
-		"sql: start, run, stop",
+		"kv: start, reclaim, stop",
+		"blob: start, reclaim, stop",
+		"sql: reclaim, run, stop",
 		"lake: before stop",
 		"eventing: run",
 		"secrets: ",

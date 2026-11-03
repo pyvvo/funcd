@@ -218,6 +218,7 @@ func TestScenarioDeleteReclaimsEngineAndData(t *testing.T) {
 	require.False(t, ok, "the deleted engine leaves the registry")
 }
 
+// scenario: a-held-boot-reclaims-nothing
 // scenario: delete-reclaims-engine-and-data (held half) — while the platform is held the directory of a database
 // with no object stays and hold status lists it; the first boot after the release reclaims it.
 func TestScenarioDeleteReclaimsEngineAndDataAfterHold(t *testing.T) {

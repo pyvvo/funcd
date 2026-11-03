@@ -1,7 +1,7 @@
 // Package lifecycle runs the platform's providers through boot and stop in one order (ADR-0305). A provider implements
-// Provider and any of Starter, Runner, BeforeStopper and Stopper; Phases runs each hook a provider has: Start in list
-// order at boot, Run once every Start passed, BeforeStop and Stop in reverse at stop. It follows the idiom of the
-// invoke chain (ADR-0302): a required interface, and optional ones a type assertion finds.
+// Provider and any of Starter, Reclaimer, Runner, BeforeStopper and Stopper; Phases runs each hook a provider has:
+// Start, then Reclaim, in list order at boot, Run once every Start passed, BeforeStop and Stop in reverse at stop. It
+// follows the idiom of the invoke chain (ADR-0302): a required interface, and optional ones a type assertion finds.
 package lifecycle
 
 import (
@@ -14,7 +14,8 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 )
 
-// Provider is one platform provider; it also implements none or more of Starter, BeforeStopper and Stopper.
+// Provider is one platform provider; it also implements none or more of Starter, Reclaimer, Runner, BeforeStopper and
+// Stopper.
 type Provider interface {
 	Name() string
 }
@@ -23,6 +24,13 @@ type Provider interface {
 type Starter interface {
 	Provider
 	Start(ctx context.Context) error
+}
+
+// Reclaimer reclaims at boot, after every Start, what its provider's resources deleted before their reconcile ran
+// still hold (ADR-0307). The platform runs it only on a boot that is not held (ADR-0206 Decision 6).
+type Reclaimer interface {
+	Provider
+	Reclaim(ctx context.Context) error
 }
 
 // Runner runs a provider's long-running work on the platform's run context, from after every Start until that context
@@ -46,8 +54,8 @@ type Stopper interface {
 
 // Phases runs the hooks of its providers in their order. BeforeStop and Stop run for every provider, booted or not, so
 // each must be safe when its Start never ran or failed: a New that fails stops the platform it was building, and a
-// failed Start stops the providers after it too. It is safe for concurrent use; once stopping has begun, Start starts
-// no further provider.
+// failed Start stops the providers after it too. It is safe for concurrent use; once stopping has begun, Start and
+// Reclaim run no further provider.
 type Phases struct {
 	providers []Provider
 
@@ -62,21 +70,42 @@ func New(providers ...Provider) *Phases {
 
 // Start runs each Starter in list order and returns the first error, naming its provider.
 func (ph *Phases) Start(ctx context.Context) error {
-	const op = "lifecycle.Start"
+	return forEach(ctx, ph, "lifecycle.Start", "start", Starter.Start, true)
+}
+
+// Reclaim runs each Reclaimer in list order and joins their errors, naming each provider.
+func (ph *Phases) Reclaim(ctx context.Context) error {
+	return forEach(ctx, ph, "lifecycle.Reclaim", "reclaim", Reclaimer.Reclaim, false)
+}
+
+// forEach runs hook on every provider that implements H, in list order, until stopping begins. With first it returns
+// the first error, else every error joined.
+func forEach[H Provider](ctx context.Context, ph *Phases, op, verb string, hook func(H, context.Context) error, first bool) error {
+	var errs []error
 	for _, p := range ph.providers {
-		ph.mu.Lock()
-		stopping := ph.stopping
-		ph.mu.Unlock()
-		if stopping {
-			return nil
+		if ph.isStopping() {
+			break
 		}
-		if s, ok := p.(Starter); ok {
-			if err := s.Start(ctx); err != nil {
-				return fault.Wrapf(err, fault.KindOf(err), op, "start %s", p.Name())
+		h, ok := p.(H)
+		if !ok {
+			continue
+		}
+		if err := hook(h, ctx); err != nil {
+			err = fault.Wrapf(err, fault.KindOf(err), op, "%s %s", verb, h.Name())
+			if first {
+				return err
 			}
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
+}
+
+// isStopping reports whether a stop phase has begun.
+func (ph *Phases) isStopping() bool {
+	ph.mu.Lock()
+	defer ph.mu.Unlock()
+	return ph.stopping
 }
 
 // Run starts each Runner on ctx in its own goroutine, counted in wg, unless stopping has begun.
@@ -137,6 +166,9 @@ func (ph *Phases) Hooks() []string {
 		var hooks []string
 		if _, ok := p.(Starter); ok {
 			hooks = append(hooks, "start")
+		}
+		if _, ok := p.(Reclaimer); ok {
+			hooks = append(hooks, "reclaim")
 		}
 		if _, ok := p.(Runner); ok {
 			hooks = append(hooks, "run")

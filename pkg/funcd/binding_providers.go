@@ -17,9 +17,10 @@ import (
 type kvProvider struct{ p *Platform }
 
 var (
-	_ lifecycle.Starter = (*kvProvider)(nil)
-	_ lifecycle.Stopper = (*kvProvider)(nil)
-	_ describer         = (*kvProvider)(nil)
+	_ lifecycle.Starter   = (*kvProvider)(nil)
+	_ lifecycle.Reclaimer = (*kvProvider)(nil)
+	_ lifecycle.Stopper   = (*kvProvider)(nil)
+	_ describer           = (*kvProvider)(nil)
 )
 
 func (s *kvProvider) Name() string { return "kv" }
@@ -30,20 +31,18 @@ func (s *kvProvider) Descriptors() []provider.Descriptor {
 }
 
 // Start marks the KVStores the previous materializer made before any controller, the collector or the control plane
-// reads them (ADR-0178 Decision 3). Unless the platform is held, it then reclaims the data of each KVStore deleted
-// before its reconcile ran, before a store of the same name can be created (issue #708).
+// reads them (ADR-0178 Decision 3).
 func (s *kvProvider) Start(ctx context.Context) error {
-	p := s.p
-	if err := workflow.MarkKVStoresOnce(ctx, p.cfg.store, p.logger); err != nil {
+	if err := workflow.MarkKVStoresOnce(ctx, s.p.cfg.store, s.p.logger); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), "funcd.Run", "mark workflow kv stores")
 	}
-	if _, held := p.heldMarker(); held {
-		return nil
-	}
-	if err := p.kvReconciler.ReclaimDeleted(ctx, p.cfg.quarantineNow()); err != nil && ctx.Err() == nil {
-		p.logger.WarnContext(ctx, "reclaim of deleted KV stores incomplete", "error", err)
-	}
 	return nil
+}
+
+// Reclaim reclaims the data of each KVStore deleted before its reconcile ran, before a store of the same name can be
+// created (issue #708).
+func (s *kvProvider) Reclaim(ctx context.Context) error {
+	return s.p.kvReconciler.ReclaimDeleted(ctx, s.p.cfg.quarantineNow())
 }
 
 // Stop closes the durable KV driver (ADR-0066), once the workers that call it stopped.
@@ -58,9 +57,10 @@ func (s *kvProvider) Stop(context.Context) error {
 type blobProvider struct{ p *Platform }
 
 var (
-	_ lifecycle.Starter = (*blobProvider)(nil)
-	_ lifecycle.Stopper = (*blobProvider)(nil)
-	_ describer         = (*blobProvider)(nil)
+	_ lifecycle.Starter   = (*blobProvider)(nil)
+	_ lifecycle.Reclaimer = (*blobProvider)(nil)
+	_ lifecycle.Stopper   = (*blobProvider)(nil)
+	_ describer           = (*blobProvider)(nil)
 )
 
 func (s *blobProvider) Name() string { return "blob" }
@@ -73,8 +73,7 @@ func (s *blobProvider) Descriptors() []provider.Descriptor {
 }
 
 // Start serves the S3 gateway, and a taken port fails the start: versitygw binds the address only once Run serves it
-// (#497, ADR-0028). Unless the platform is held, it then reclaims the objects of each Bucket deleted before its second
-// purge ran (ADR-0199 Decision 7).
+// (#497, ADR-0028).
 func (s *blobProvider) Start(ctx context.Context) error {
 	p := s.p
 	if gw := p.s3gw; gw != nil {
@@ -83,14 +82,13 @@ func (s *blobProvider) Start(ctx context.Context) error {
 			return fault.Wrapf(err, fault.KindOf(err), "funcd.Run", "start the s3 gateway")
 		}
 	}
-	if _, held := p.heldMarker(); held {
-		return nil
-	}
-	err := reclaimDeletedBuckets(ctx, p.cfg.blob, p.cfg.store, p.logger, p.cfg.quarantineNow(), p.cfg.quarantinePeriodOrDefault())
-	if err != nil && ctx.Err() == nil {
-		p.logger.WarnContext(ctx, "reclaim of deleted Buckets incomplete", "error", err)
-	}
 	return nil
+}
+
+// Reclaim reclaims the objects of each Bucket deleted before its second purge ran (ADR-0199 Decision 7).
+func (s *blobProvider) Reclaim(ctx context.Context) error {
+	p := s.p
+	return reclaimDeletedBuckets(ctx, p.cfg.blob, p.cfg.store, p.logger, p.cfg.quarantineNow(), p.cfg.quarantinePeriodOrDefault())
 }
 
 // Stop stops the S3 gateway after the runtime stopped the workers that use it (#1232). Its Serve ends first, so Close
@@ -107,10 +105,10 @@ func (s *blobProvider) Stop(ctx context.Context) error {
 type sqlProvider struct{ p *Platform }
 
 var (
-	_ lifecycle.Starter = (*sqlProvider)(nil)
-	_ lifecycle.Runner  = (*sqlProvider)(nil)
-	_ lifecycle.Stopper = (*sqlProvider)(nil)
-	_ describer         = (*sqlProvider)(nil)
+	_ lifecycle.Reclaimer = (*sqlProvider)(nil)
+	_ lifecycle.Runner    = (*sqlProvider)(nil)
+	_ lifecycle.Stopper   = (*sqlProvider)(nil)
+	_ describer           = (*sqlProvider)(nil)
 )
 
 func (s *sqlProvider) Name() string { return "sql" }
@@ -120,17 +118,9 @@ func (s *sqlProvider) Descriptors() []provider.Descriptor {
 		Summary: "one rqlite SQL engine per SQLDatabase (ADR-0232)"}}
 }
 
-// Start reclaims, unless the platform is held, the directory of each SQLDatabase deleted before its reconcile ran
-// (ADR-0232 Decision 7).
-func (s *sqlProvider) Start(ctx context.Context) error {
-	p := s.p
-	if _, held := p.heldMarker(); held {
-		return nil
-	}
-	if err := p.sqlReconciler.ReclaimOrphans(ctx, p.cfg.quarantineNow()); err != nil && ctx.Err() == nil {
-		p.logger.WarnContext(ctx, "reclaim of deleted SQL databases incomplete", "error", err)
-	}
-	return nil
+// Reclaim reclaims the directory of each SQLDatabase deleted before its reconcile ran (ADR-0232 Decision 7).
+func (s *sqlProvider) Reclaim(ctx context.Context) error {
+	return s.p.sqlReconciler.ReclaimOrphans(ctx, s.p.cfg.quarantineNow())
 }
 
 // Run opens and serves the engines' change feed (ADR-0235) until the run context ends.
