@@ -1,6 +1,7 @@
 # ADR-0310: Each provider serves its own facet of a worker's local API
 
-- **Status**: Accepted (2026-11-03, by the decider, after refining it with them; judged twice in an independent
+- **Status**: Reviewing (2026-11-03, implemented in three commits: the prefix test, the local API's facets, the
+  providers' facets); Accepted (2026-11-03, by the decider, after refining it with them; judged twice in an independent
   session, every finding folded)
 - **Date**: 2026-11-03
 - **Deciders**: green-0-rabbit
