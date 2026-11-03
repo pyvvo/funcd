@@ -29,11 +29,13 @@ import (
 	"github.com/pyvvo/funcd/internal/lifecycle"
 	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/quota"
+	"github.com/pyvvo/funcd/internal/secrets"
 	"github.com/pyvvo/funcd/internal/sensor"
 	blobsvc "github.com/pyvvo/funcd/internal/services/blob"
 	identitysvc "github.com/pyvvo/funcd/internal/services/identity"
 	kvsvc "github.com/pyvvo/funcd/internal/services/kv"
 	lakesvc "github.com/pyvvo/funcd/internal/services/lake"
+	secretsvc "github.com/pyvvo/funcd/internal/services/secret"
 	sqlsvc "github.com/pyvvo/funcd/internal/services/sql"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/workernode/local"
@@ -41,8 +43,8 @@ import (
 )
 
 // The binding providers (ADR-0305): the high-level providers a Function binds. Each builds its own parts over the
-// Platform's shared ones (ADR-0309), eventing after the workload core its Sensors call through, and every stop hook is
-// safe on a provider whose build never ran (#94).
+// Platform's shared ones (ADR-0309), secrets first, over the config alone (ADR-0310 Decision 6), and eventing after the
+// workload core its Sensors call through. Every stop hook is safe on a provider whose build never ran (#94).
 
 // kvProvider is the KV provider (ADR-0069/0072): the binding-gated facade over the KV driver, which the local API's /kv
 // routes call, and the KVStore reconciler. The driver is the config's (WithKVStore, else the in-memory default), so Stop
@@ -62,6 +64,7 @@ var (
 	_ quotaHook           = (*kvProvider)(nil)
 	_ admissionHook       = (*kvProvider)(nil)
 	_ dependencyHook      = (*kvProvider)(nil)
+	_ facetHook           = (*kvProvider)(nil)
 )
 
 // kvDeps are the Platform's parts the KV provider is built over.
@@ -96,6 +99,14 @@ func (s *kvProvider) Admissions(r admission.StoreReader) []admission.Admission {
 // Dependencies checks a worker's KV bindings: resolve, read authorization and the KV probe.
 func (s *kvProvider) Dependencies() []health.Binding {
 	return []health.Binding{health.KV(s.facade, s.prober)}
+}
+
+// Facet serves the facade on a worker's /kv routes (ADR-0069).
+func (s *kvProvider) Facet() local.Facet {
+	if s.facade == nil {
+		return local.Facet{}
+	}
+	return local.KVFacet(s.facade)
 }
 
 func (s *kvProvider) Descriptors() []provider.Descriptor {
@@ -172,6 +183,7 @@ var (
 	_ quotaHook           = (*blobProvider)(nil)
 	_ admissionHook       = (*blobProvider)(nil)
 	_ dependencyHook      = (*blobProvider)(nil)
+	_ facetHook           = (*blobProvider)(nil)
 )
 
 // blobDeps are the Platform's parts the blob provider is built over.
@@ -209,6 +221,14 @@ func (s *blobProvider) Dependencies() []health.Binding {
 		return nil
 	}
 	return []health.Binding{health.Blob(s.facade, s.prober)}
+}
+
+// Facet serves the facade on a worker's /blob routes (ADR-0127).
+func (s *blobProvider) Facet() local.Facet {
+	if s.facade == nil {
+		return local.Facet{}
+	}
+	return local.BlobFacet(s.facade)
 }
 
 func (s *blobProvider) Descriptors() []provider.Descriptor {
@@ -348,6 +368,7 @@ var (
 	_ quotaHook           = (*sqlProvider)(nil)
 	_ admissionHook       = (*sqlProvider)(nil)
 	_ dependencyHook      = (*sqlProvider)(nil)
+	_ facetHook           = (*sqlProvider)(nil)
 )
 
 // sqlDeps are the Platform's parts the SQL provider is built over.
@@ -379,6 +400,14 @@ func (s *sqlProvider) Admissions(r admission.StoreReader) []admission.Admission 
 // Dependencies checks a worker's SQL bindings: resolve, read authorization and a Ready engine (ADR-0233 Decision 8).
 func (s *sqlProvider) Dependencies() []health.Binding {
 	return []health.Binding{health.SQL(s.facade)}
+}
+
+// Facet serves the facade on a worker's /sql routes (ADR-0233).
+func (s *sqlProvider) Facet() local.Facet {
+	if s.facade == nil {
+		return local.Facet{}
+	}
+	return local.SQLFacet(s.facade)
 }
 
 func (s *sqlProvider) Descriptors() []provider.Descriptor {
@@ -722,6 +751,50 @@ func (s *eventingProvider) Run(ctx context.Context) {
 	runAll(ctx, loops...)
 }
 
+// secretsProvider is the secrets provider (ADR-0310 Decision 6): the PDP-checked secret resolver (ADR-0022), which the
+// Function reconciler (ADR-0057), lake and the workload backups read, and the facade a worker reads each secret
+// through, on every read (ADR-0249).
+type secretsProvider struct {
+	cfg      *config
+	resolver *secrets.Resolver
+	facade   *secretsvc.Facade
+}
+
+var (
+	_ describer = (*secretsProvider)(nil)
+	_ facetHook = (*secretsProvider)(nil)
+)
+
+func (s *secretsProvider) Name() string { return "secrets" }
+
+func (s *secretsProvider) Descriptors() []provider.Descriptor {
+	return []provider.Descriptor{{Name: "secrets", Kind: provider.Builtin, Port: "secrets.Resolver",
+		Bindings: []string{"spec.bindings.secret"}, Summary: "secret resolution + at-rest encryption"}}
+}
+
+// build builds, over the config alone, the resolver, which reads through the store and authorizer the control plane
+// uses, then the facade over it. New builds it first, after the authorizer's default.
+func (s *secretsProvider) build() error {
+	const op = "funcd.New"
+	c := s.cfg
+	var err error
+	if s.resolver, err = secrets.NewResolver(secrets.Deps{Store: c.store, Authorizer: c.authorizer, Logger: c.logger}); err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build secrets resolver")
+	}
+	if s.facade, err = secretsvc.NewFacade(secretsvc.Deps{Store: c.store, Resolver: s.resolver}); err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build secret facade")
+	}
+	return nil
+}
+
+// Facet serves the facade on a worker's /secret routes (ADR-0249).
+func (s *secretsProvider) Facet() local.Facet {
+	if s.facade == nil {
+		return local.Facet{}
+	}
+	return local.SecretFacet(s.facade)
+}
+
 // invokeProvider is the fn-to-fn invoke provider (ADR-0064), served from the worker-node local API. It builds nothing:
 // its links check reads the PDP its build keeps.
 type invokeProvider struct {
@@ -759,8 +832,8 @@ func (s *invokeProvider) Dependencies() []health.Binding {
 	return []health.Binding{health.Links(local.NewResolver(st), s.pdp, st)}
 }
 
-// catalogEntry is a provider with no hook: its Function-facing service is served from the socket or the env, and it
-// only names its catalog entry.
+// catalogEntry is a provider with no hook: its Function-facing service reaches a worker in its env, and it only names
+// its catalog entry.
 type catalogEntry struct{ d provider.Descriptor }
 
 var _ describer = catalogEntry{}
@@ -771,8 +844,6 @@ func (c catalogEntry) Descriptors() []provider.Descriptor { return []provider.De
 // hookless are the providers that only name their catalog entry.
 func hookless() []lifecycle.Provider {
 	return []lifecycle.Provider{
-		catalogEntry{provider.Descriptor{Name: "secrets", Kind: provider.Builtin, Port: "secrets.Resolver",
-			Bindings: []string{"spec.bindings.secret"}, Summary: "secret resolution + at-rest encryption"}},
 		catalogEntry{provider.Descriptor{Name: "config", Kind: provider.Builtin, Bindings: []string{"spec.bindings.config"},
 			Summary: "ConfigMap values a Function reads from its env (ADR-0245)"}},
 	}

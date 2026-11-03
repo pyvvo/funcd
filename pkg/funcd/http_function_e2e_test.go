@@ -320,6 +320,7 @@ func TestScenarioHTTPNoEvents(t *testing.T) {
 	})
 }
 
+// scenario: each-provider-serves-its-facet
 // scenario: http-fetch — purge-bridge reaches devices-api with ctx.fetch over its link and gets the app's status,
 // headers and body; ctx.invoke on that link names ctx.fetch, and ctx.fetch to an event Function names ctx.invoke.
 func TestScenarioHTTPFetch(t *testing.T) {

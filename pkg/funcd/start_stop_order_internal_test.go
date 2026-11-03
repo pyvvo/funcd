@@ -299,6 +299,7 @@ func (r *dirsAtClose) Close() error {
 	return r.Runtime.Close()
 }
 
+// scenario: each-provider-serves-its-facet
 // scenario: a-worker-reaches-each-binding-on-its-local-api
 // scenario: a-stopping-worker-keeps-its-local-api
 // scenario: workers-keep-their-services-while-stopping
