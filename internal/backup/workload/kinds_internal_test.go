@@ -53,7 +53,7 @@ func TestKinds_ParseReadsWhatWriteWrote(t *testing.T) {
 	kinds := []MemberKind{
 		KVStores(nil, kv.(interface{ SnapshotPrefix(string) snapshot.Source }).SnapshotPrefix, nil),
 		Buckets(nil, shared, prefix, func(ns v1.NamespaceName, b v1.ObjectName) string { return catalogs(ns) + string(b) + "/" }, nil),
-		Lakes(nil, shared, prefix, catalogs),
+		Lakes(nil, shared, prefix, catalogs, nil),
 		Databases(nil, sqlFile{}),
 		Volumes(nil, volumeTar{}),
 	}

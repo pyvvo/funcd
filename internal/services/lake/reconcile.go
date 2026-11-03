@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -40,6 +41,11 @@ const quackTokenEnvKey = "QUACK_TOKEN"
 // DuckDB scenarios run on the deferred node-gated lane.
 func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (controller.Result, error) {
 	const op = "services.lake.Reconcile"
+	ref := lakeRef{req.Namespace, req.Name}
+	if !r.beginPass(ref) {
+		return controller.Result{RequeueAfter: r.referentPoll}, nil
+	}
+	defer r.endPass(ref)
 	obj, err := r.store.Get(ctx, req.GVK, req.Namespace, req.Name)
 	if err != nil {
 		if fault.KindOf(err) == fault.NotFound {
@@ -330,10 +336,7 @@ func (r *Reconciler) holdNotReady(ctx context.Context, cs *v1.Lake, reason, mess
 	if r.proxy != nil {
 		r.proxy.Suspend(cs.Namespace, cs.Name)
 	}
-	cs.Status.Function = v1.ObjectName(engineName(string(cs.Name)))
-	cs.Status.Endpoint = ""
-	cs.Status.Phase = v1.PhasePending
-	cs.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: message, ObservedGeneration: cs.Generation})
+	setHeld(cs, reason, message)
 	if _, uerr := r.store.Update(ctx, cs); uerr != nil {
 		return controller.Result{}, retryOnConflict(uerr, op)
 	}
@@ -341,6 +344,95 @@ func (r *Reconciler) holdNotReady(ctx context.Context, cs *v1.Lake, reason, mess
 		return controller.Result{}, fault.Wrapf(terr, fault.KindOf(terr), op, "stop provider engine %s/%s", cs.Namespace, cs.Name)
 	}
 	return controller.Result{RequeueAfter: requeue}, nil
+}
+
+// setHeld is a held Lake's status: Pending, with no endpoint.
+func setHeld(cs *v1.Lake, reason, message string) {
+	cs.Status.Function = v1.ObjectName(engineName(string(cs.Name)))
+	cs.Status.Endpoint = ""
+	cs.Status.Phase = v1.PhasePending
+	cs.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: message, ObservedGeneration: cs.Generation})
+}
+
+// StopEngine stops Lake ns/name's engine and keeps its passes from touching it until release is called: an in-place
+// Restore loads the Lake's files and catalog while none runs, so no engine answers from a catalog the load replaced or
+// saves it over the copy, and the next engine reads the copy (ADR-0312 Decision 9, #1384). A pass already running ends
+// first, and StopEngine returns only once the engine is gone, whatever its status write answers. The stop's saves get the
+// hold's 503, so the runtime's grace bounds it, and the load overwrites whatever it left. The Lake's edge entry stays: the
+// hold answers there with ADR-0290's 503, and after the lift the suspended proxy does, until the next engine is Ready.
+func (r *Reconciler) StopEngine(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (release func(), err error) {
+	const op = "services.lake.StopEngine"
+	ref := lakeRef{ns, name}
+	r.passMu.Lock()
+	r.stopping[ref]++
+	for r.passing[ref] > 0 {
+		r.passDone.Wait()
+	}
+	r.passMu.Unlock()
+	release = sync.OnceFunc(func() {
+		r.passMu.Lock()
+		if r.stopping[ref]--; r.stopping[ref] == 0 {
+			delete(r.stopping, ref)
+		}
+		r.passMu.Unlock()
+	})
+	if r.proxy != nil {
+		r.proxy.Suspend(ns, name)
+	}
+	if err := r.markRestoring(ctx, ns, name); err != nil && fault.KindOf(err) != fault.NotFound {
+		r.logger.WarnContext(ctx, "lake status not written for its restore; its engine stops all the same", "lake", string(ns)+"/"+string(name), "error", err)
+	}
+	if err := r.prov.Teardown(ctx, provider.ProviderRef{Namespace: ns, Name: name}); err != nil {
+		release()
+		return nil, fault.Wrapf(err, fault.KindOf(err), op, "stop engine %s/%s", ns, name)
+	}
+	return release, nil
+}
+
+// restoringWrites bounds StopEngine's status write; the engine stops whatever it answers.
+const restoringWrites = 3
+
+// markRestoring holds a stopped Lake not Ready for its Restore. CatalogSaved goes: it speaks of a catalog the Restore
+// replaces, and an engine with nothing to save reports nothing that would correct it. No pass writes while the Lake is
+// marked, so only an apply can take the write from it, and it goes again.
+func (r *Reconciler) markRestoring(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error {
+	const op = "services.lake.markRestoring"
+	for attempt := 1; ; attempt++ {
+		obj, err := r.store.Get(ctx, v1.KindLake.GVK(), ns, name)
+		if err != nil {
+			return err
+		}
+		cs, ok := obj.(*v1.Lake)
+		if !ok {
+			return fault.Internalf(op, "object %s/%s is not a Lake", ns, name)
+		}
+		cs.Status.Conditions = slices.DeleteFunc(cs.Status.Conditions, func(c v1.Condition) bool { return c.Type == condCatalogSaved })
+		setHeld(cs, reasonRestoring, "an in-place Restore is loading this Lake; its engine comes back when the load ends")
+		_, err = r.store.Update(ctx, cs)
+		if fault.KindOf(err) != fault.Conflict || attempt == restoringWrites {
+			return err
+		}
+	}
+}
+
+// beginPass reports whether a pass may touch ref's engine, which StopEngine forbids; a true answer is paired with endPass.
+func (r *Reconciler) beginPass(ref lakeRef) bool {
+	r.passMu.Lock()
+	defer r.passMu.Unlock()
+	if r.stopping[ref] > 0 {
+		return false
+	}
+	r.passing[ref]++
+	return true
+}
+
+func (r *Reconciler) endPass(ref lakeRef) {
+	r.passMu.Lock()
+	if r.passing[ref]--; r.passing[ref] == 0 {
+		delete(r.passing, ref)
+	}
+	r.passMu.Unlock()
+	r.passDone.Broadcast()
 }
 
 // syncIngressRoute reconciles this lake's OPT-IN external edge entry (ADR-0138, ADR-0241). When spec.ingress

@@ -189,7 +189,7 @@ func TestWriteLakeWithoutCheckpoint(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, shared.Put(ctx, "s3/orders/orders-files/a.csv", []byte("a"), blob.PutOptions{}))
 	require.NoError(t, shared.Put(ctx, "s3/orders/lakehouse/gold/orphan.parquet", []byte("p"), blob.PutOptions{}))
-	src := []workload.MemberKind{workload.Buckets(nil, shared, s3Prefix, nil, nil), workload.Lakes(nil, shared, s3Prefix, nil)}
+	src := []workload.MemberKind{workload.Buckets(nil, shared, s3Prefix, nil, nil), workload.Lakes(nil, shared, s3Prefix, nil, nil)}
 	s := s3stub.New(t, nil)
 	target, err := gocloud.OpenWith(ctx, s.URL(), gocloud.OpenOptions{Static: &gocloud.StaticKey{ID: "AKIDOWNER", Secret: "s"}})
 	require.NoError(t, err)
@@ -281,4 +281,55 @@ func TestWrite_AnUnservedKindFailsByName(t *testing.T) {
 	require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
 	require.ErrorContains(t, err, "no member kind serves Function")
 	require.Empty(t, s.PutKeys(path), "nothing is written")
+}
+
+// ADR-0312 Decision 9: a Lake's Prepare stops its engine until release when it loads in place, and only then: an as
+// location takes no hold, and no engine runs there. A nil stop does nothing.
+func TestLake_PrepareStopsItsEngineInPlaceOnly(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := store.New(storemem.New())
+	for _, o := range []v1.Object{
+		&v1.Bucket{TypeMeta: tm(v1.KindBucket), ObjectMeta: meta("lake-files", "app")},
+		&v1.Lake{TypeMeta: tm(v1.KindLake), ObjectMeta: meta("lake", "app"), Spec: v1.LakeSpec{
+			Location: v1.LakeLocation{Bucket: "lake-files", Prefix: "lake"},
+			Bindings: v1.LakeBindings{Blob: []v1.FunctionBlob{{Alias: "lake", Bucket: "lake-files", Prefix: "lake"}}},
+		}},
+	} {
+		_, err := st.Create(ctx, o)
+		require.NoError(t, err)
+	}
+	shared, err := gocloud.Open(ctx, "mem://")
+	require.NoError(t, err)
+	catalogs := func(ns v1.NamespaceName) string { return "lake-catalogs/" + string(ns) + "/" }
+	var stopped []v1.ObjectName
+	released := 0
+	stop := func(_ context.Context, ns v1.NamespaceName, name v1.ObjectName) (func(), error) {
+		require.Equal(t, v1.NamespaceName("orders"), ns)
+		stopped = append(stopped, name)
+		return func() { released++ }, nil
+	}
+	inPlace := v1.RestoreMember{Kind: v1.KindLake, Name: "lake", InPlace: true}
+	d, err := workload.Lakes(st, shared, s3Prefix, catalogs, stop).Destination(ctx, "orders", inPlace)
+	require.NoError(t, err)
+	release, err := d.Prepare(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []v1.ObjectName{"lake"}, stopped)
+	release()
+	require.Equal(t, 1, released)
+
+	stopped = nil
+	d, err = workload.Lakes(st, shared, s3Prefix, catalogs, stop).Destination(ctx, "orders", v1.RestoreMember{Kind: v1.KindLake, Name: "lake",
+		AsLocation: &v1.LakeLocation{Bucket: "lake-files", Prefix: "copy"}})
+	require.NoError(t, err)
+	release, err = d.Prepare(ctx)
+	require.NoError(t, err)
+	release()
+	require.Empty(t, stopped, "an as location stops no engine")
+
+	d, err = workload.Lakes(st, shared, s3Prefix, catalogs, nil).Destination(ctx, "orders", inPlace)
+	require.NoError(t, err)
+	release, err = d.Prepare(ctx)
+	require.NoError(t, err)
+	release()
 }

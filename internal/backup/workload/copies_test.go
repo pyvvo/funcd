@@ -22,7 +22,7 @@ func put(t *testing.T, b blob.Bucket, key string, n int) {
 // kinds are the five member kinds, as a listing parses them.
 func kinds() []workload.MemberKind {
 	return []workload.MemberKind{workload.KVStores(nil, nil, nil), workload.Buckets(nil, nil, nil, nil, nil),
-		workload.Lakes(nil, nil, nil, nil), workload.Databases(nil, nil), workload.Volumes(nil, nil)}
+		workload.Lakes(nil, nil, nil, nil, nil), workload.Databases(nil, nil), workload.Volumes(nil, nil)}
 }
 
 const (

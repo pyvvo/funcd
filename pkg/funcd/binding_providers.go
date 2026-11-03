@@ -577,8 +577,9 @@ func (s *sqlProvider) Stop(context.Context) error {
 // lakeProvider is the Lake provider (ADR-0086/0087): one DuckDB/Quack engine per Lake, run by its add-on runtime, and
 // the node-private PEP proxies in front of the engines (ADR-0137).
 type lakeProvider struct {
-	cfg   *config
-	proxy *lakegw.Manager
+	cfg        *config
+	proxy      *lakegw.Manager
+	reconciler *lakesvc.Reconciler
 }
 
 var (
@@ -602,9 +603,10 @@ type lakeDeps struct {
 
 func (s *lakeProvider) Name() string { return "lake" }
 
-// BackupKinds is the Lake kind over the blob substrate, its catalog in the catalog store (ADR-0271, ADR-0293).
+// BackupKinds is the Lake kind over the blob substrate, its catalog in the catalog store (ADR-0271, ADR-0293), which stops
+// an engine with the reconciler that runs it (ADR-0312 Decision 9).
 func (s *lakeProvider) BackupKinds() []workload.MemberKind {
-	return []workload.MemberKind{workload.Lakes(s.cfg.store, s.cfg.blob, bucketPrefix, lakeCatalogPrefix)}
+	return []workload.MemberKind{workload.Lakes(s.cfg.store, s.cfg.blob, bucketPrefix, lakeCatalogPrefix, s.reconciler.StopEngine)}
 }
 
 func (s *lakeProvider) Descriptors() []provider.Descriptor {
@@ -663,6 +665,7 @@ func (s *lakeProvider) build(d lakeDeps) error {
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build Lake reconciler")
 	}
+	s.reconciler = reconciler
 	d.ctrl.Register(v1.KindLake.GVK(), reconciler)
 	// ADR-0162: a released listener closes once no Function binds it.
 	d.ctrl.Watches(v1.KindFunction.GVK(), reconciler.MapFunction)

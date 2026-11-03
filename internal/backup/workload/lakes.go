@@ -17,10 +17,11 @@ import (
 // Lakes is the Lake kind (Decision 5, ADR-0271): lake/<name>/<attempt>/files/ holds a lake's objects under its
 // location, but its catalog, then lake/<name>/<attempt>/catalog.db/ the catalog as it was before they were listed. The
 // catalog lives in the catalog store under catalogPrefix (ADR-0293; nil keeps it under the files). A Restore loads into
-// the prefix asLocation, or the lake's location emptied first: its files, then its catalog.
-func Lakes(st store.Store, shared blob.Bucket, prefix func(v1.NamespaceName, v1.ObjectName) string,
-	catalogPrefix func(v1.NamespaceName) string) MemberKind {
-	return lakes{st: st, shared: shared, prefix: prefix, catalogPrefix: catalogPrefix}
+// the prefix asLocation, or the lake's location emptied first: its files, then its catalog. An in-place Restore does so
+// with the lake's engine stopped until release (stop; nil does nothing), so no engine outlives the load (#1384).
+func Lakes(st store.Store, shared blob.Bucket, prefix func(v1.NamespaceName, v1.ObjectName) string, catalogPrefix func(v1.NamespaceName) string,
+	stop func(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (release func(), err error)) MemberKind {
+	return lakes{st: st, shared: shared, prefix: prefix, catalogPrefix: catalogPrefix, stop: stop}
 }
 
 type lakes struct {
@@ -28,6 +29,7 @@ type lakes struct {
 	shared        blob.Bucket
 	prefix        func(v1.NamespaceName, v1.ObjectName) string
 	catalogPrefix func(v1.NamespaceName) string
+	stop          func(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (release func(), err error)
 }
 
 func (lakes) Kind() v1.Kind { return v1.KindLake }
@@ -120,16 +122,25 @@ func (k lakes) Destination(ctx context.Context, ns v1.NamespaceName, rm v1.Resto
 		loc = obj.(*v1.Lake).Spec.Location
 	}
 	return lakeDestination{shared: k.shared, view: blob.Prefixed(k.shared, k.prefix(ns, loc.Bucket)+loc.Prefix+"/"),
-		catalog: k.catalogKey(ns, loc), inPlace: rm.InPlace}, nil
+		catalog: k.catalogKey(ns, loc), inPlace: rm.InPlace, ns: ns, name: rm.Name, stop: k.stop}, nil
 }
 
 type lakeDestination struct {
 	shared, view blob.Bucket // the blob store, and the lake's prefix in it
 	catalog      string      // the blob key its catalog loads to
 	inPlace      bool
+	ns           v1.NamespaceName
+	name         v1.ObjectName
+	stop         func(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (release func(), err error)
 }
 
-func (lakeDestination) Prepare(context.Context) (func(), error) { return none, nil }
+// Prepare stops the lake's engine until release when it loads in place (ADR-0312 Decision 9): the hold is on by then.
+func (d lakeDestination) Prepare(ctx context.Context) (func(), error) {
+	if !d.inPlace || d.stop == nil {
+		return none, nil
+	}
+	return d.stop(ctx, d.ns, d.name)
+}
 
 // IsEmpty reports a prefix with no object and no catalog, whose inlined rows are data (ADR-0293 Decision 5).
 func (d lakeDestination) IsEmpty(ctx context.Context) (bool, error) {

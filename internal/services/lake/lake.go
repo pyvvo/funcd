@@ -12,6 +12,7 @@ package lake
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -19,7 +20,6 @@ import (
 	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/edge/router"
-	lakegw "github.com/pyvvo/funcd/internal/lake/gateway"
 	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/secrets"
 	"github.com/pyvvo/funcd/internal/store"
@@ -55,6 +55,9 @@ const (
 	reasonSaved        = "Saved"
 	reasonSavesFailing = "SavesFailing"
 )
+
+// reasonRestoring holds a Lake not Ready while an in-place Restore loads it, with no engine (ADR-0312 Decision 9).
+const reasonRestoring = "Restoring"
 
 // SecretResolver resolves a service's bound Secret names → an env-var map for engine injection,
 // PDP-authorized for id (ADR-0022/0057). The reconciler depends on this local seam (ADR-0002
@@ -95,7 +98,7 @@ type ReconcilerDeps struct {
 	// Status.Endpoint (internal functions inject the proxy, not the engine), a not-Ready pass Suspends it, and a
 	// delete Releases it, closing it only once no Function binds the lake. nil ⇒ no internal PEP proxy (the
 	// engine address is published directly, the pre-ADR-0137 posture) — kept nil-safe for the in-memory/unit path.
-	Proxy *lakegw.Manager
+	Proxy ProxyManager
 	// Routes contributes this lake's OPT-IN external ingress entry (source "lake/<ns>/<name>")
 	// to the shared edge-router aggregator (ADR-0138). When spec.ingress is set and the lake is
 	// Ready, the reconciler programs an edge entry whose Upstream is the PEP PROXY (never the engine);
@@ -129,6 +132,17 @@ const scratchPath = "/var/funcd/ducklake"
 
 const defaultPollInterval = 2 * time.Second
 
+// ProxyManager runs the per-Lake PEP proxies (ADR-0137); the gateway's Manager is the driver.
+type ProxyManager interface {
+	Listen(ns v1.NamespaceName, name v1.ObjectName, port int) (bound int, moved bool, err error)
+	Ensure(lake auth.EntityRef, upstream, engineToken, saveURL string) (string, error)
+	Suspend(ns v1.NamespaceName, name v1.ObjectName)
+	ProxyURL(ns v1.NamespaceName, name v1.ObjectName) (string, bool)
+	Release(ns v1.NamespaceName, name v1.ObjectName)
+	Released(ns v1.NamespaceName) []v1.ObjectName
+	Remove(ns v1.NamespaceName, name v1.ObjectName)
+}
+
 func orDefault(d, def time.Duration) time.Duration {
 	if d > 0 {
 		return d
@@ -149,7 +163,7 @@ type Reconciler struct {
 	developerFor func(ns v1.NamespaceName) auth.Identity
 	s3Endpoint   string
 	imageFor     func(string) string
-	proxy        *lakegw.Manager
+	proxy        ProxyManager
 	routes       router.EntrySetter
 	period       time.Duration // steady-state requeue (ADR-0142)
 	referentPoll time.Duration
@@ -158,6 +172,19 @@ type Reconciler struct {
 	localCatalog bool
 	scratchBytes int64
 	catalogMax   int64
+
+	// passMu guards passing and stopping: StopEngine keeps a stopping Lake's passes from touching its engine, and passDone
+	// tells it that the pass it waits for ended (ADR-0312 Decision 9).
+	passMu   sync.Mutex
+	passing  map[lakeRef]int
+	stopping map[lakeRef]int
+	passDone *sync.Cond
+}
+
+// lakeRef names one Lake of a namespace.
+type lakeRef struct {
+	ns   v1.NamespaceName
+	name v1.ObjectName
 }
 
 // NewReconciler builds the Lake reconciler. Store + Provider are required.
@@ -185,7 +212,7 @@ func NewReconciler(d ReconcilerDeps) (*Reconciler, error) {
 	if period <= 0 {
 		period = controller.SupervisionPeriod
 	}
-	return &Reconciler{
+	r := &Reconciler{
 		store:        d.Store,
 		prov:         d.Provider,
 		logger:       logger.With("component", "services.lake.reconciler"),
@@ -204,7 +231,11 @@ func NewReconciler(d ReconcilerDeps) (*Reconciler, error) {
 		localCatalog: d.LocalCatalog,
 		scratchBytes: d.ScratchBytes,
 		catalogMax:   d.CatalogMaxBytes,
-	}, nil
+		passing:      map[lakeRef]int{},
+		stopping:     map[lakeRef]int{},
+	}
+	r.passDone = sync.NewCond(&r.passMu)
+	return r, nil
 }
 
 // lakeRouteSource is the lake's edge-aggregator source key (ADR-0138): its external ingress
