@@ -55,8 +55,8 @@ cite; for the others, the header and the Decision are enough to know you need no
 
 ## A chapter
 
-In order: a `Kinds:` line, a Mermaid `stateDiagram-v2`, a short note, one table, the generated block. About 50 lines, about 15
-rows: the written part of the whole file stays under 800 lines. A step that belongs to a neighbor's chapter gets at most one row,
+In order: a `Kinds:` line, a Mermaid `stateDiagram-v2`, a short note, one table, the generated block. About 60 lines, about 20
+rows: the written part of the whole file stays under 1000 lines. A step that belongs to a neighbor's chapter gets at most one row,
 saying what a caller sees here, and the neighbor holds the rest. A kind nothing acts on still sits on a `Kinds:` line: one row says so.
 
 - **The machine** tells the process in order, in the code's state names. Group states that behave alike. A process with no

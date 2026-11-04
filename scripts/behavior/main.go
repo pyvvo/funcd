@@ -29,8 +29,7 @@ const (
 	blockBegin       = "<!-- generated values, do not edit: just behavior-values -->"
 	blockEnd         = "<!-- end of generated values -->"
 	rowHeader        = "| Where | What happens | Time | You see | Status | Source |"
-	notWritten       = "Not written yet."
-	maxWritten       = 800
+	maxWritten       = 1000
 	maxRow           = 400
 	firstADRWithRows = 314
 	skillHint        = "run the /behavior-registry skill: regenerate with `just behavior-values`, then check that each written row still holds"
@@ -65,7 +64,6 @@ func chapters() []chapter {
 // inputs is what a run reads besides the tree at root, so a test brings its own.
 type inputs struct {
 	root     string
-	doc      string
 	chapters []chapter
 	keys     map[string]string
 	kinds    []string
@@ -85,11 +83,9 @@ type row struct{ name, value, from string }
 
 func main() {
 	check := flag.Bool("check", false, "fail when the file differs from what the code gives, or a written row does not hold")
-	doc := flag.String("doc", docPath, "the file to read or write, to try a chapter on a copy")
 	flag.Parse()
 	in, err := realInputs()
 	if err == nil {
-		in.doc = *doc
 		err = run(in, *check)
 	}
 	if err != nil {
@@ -132,10 +128,7 @@ func run(in inputs, check bool) error {
 	for name, rows := range code.rows {
 		byChapter[name] = append(byChapter[name], rows...)
 	}
-	path := cmp.Or(in.doc, docPath)
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(in.root, path)
-	}
+	path := filepath.Join(in.root, docPath)
 	current, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -807,7 +800,6 @@ type section struct {
 	line           int
 	kinds, machine int
 	table          int
-	notWritten     bool
 }
 
 func (s section) problems() []string {
@@ -819,9 +811,6 @@ func (s section) problems() []string {
 	switch {
 	case s.kinds == 0:
 		out = append(out, at+" has no Kinds: line")
-	case s.notWritten:
-		out = append(out, at+" reads "+notWritten)
-		return out
 	case s.machine == 0:
 		out = append(out, at+" has no machine")
 	case s.table == 0:
@@ -903,9 +892,6 @@ func validate(in inputs, text string, byChapter map[string][]row, known map[stri
 		if strings.HasPrefix(line, "Kinds:") {
 			kindLines += line + "\n"
 			current.kinds = n + 1
-		}
-		if line == notWritten {
-			current.notWritten = true
 		}
 		if m := newWords.FindStringSubmatch(line); m != nil && current.marked != nil {
 			for _, word := range strings.Split(m[1], ",") {

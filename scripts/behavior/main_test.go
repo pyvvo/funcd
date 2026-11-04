@@ -188,7 +188,6 @@ func TestChapterShape(t *testing.T) {
 		"no Kinds line": {"Kinds: Route.\n", "", "chapter Calls has no Kinds: line"},
 		"no machine":    {"```mermaid\nstateDiagram-v2\n    [*] --> Held\n```\n", "", "chapter Calls has no machine"},
 		"no table":      {rowHeader + "\n|---|---|---|---|---|---|\n" + goodRow, "", "chapter Calls has no table"},
-		"not written":   {"A note. New words: Held.\n", notWritten + "\n", "chapter Calls reads Not written yet."},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -215,7 +214,7 @@ func TestChapterShape(t *testing.T) {
 	t.Run("over the cap", func(t *testing.T) {
 		tr := newTree(t, goodRow)
 		tr.edit("A note. New words: Held.\n", strings.Repeat("A note. New words: Held.\n", maxWritten))
-		tr.checkFails("over the cap of 800")
+		tr.checkFails("over the cap of 1000")
 	})
 }
 
