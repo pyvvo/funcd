@@ -783,8 +783,12 @@ func rowProblem(line string) string {
 		if source == "" {
 			return "a row that says uncovered does not say what was read"
 		}
+	case "differs":
+		if !adrRef.MatchString(source) && !strings.Contains(source, "blueprint.md") {
+			return "a row that says differs cites no ADR and not the blueprint"
+		}
 	default:
-		return "status " + status + " is not decided, accepted, deferred or uncovered"
+		return "status " + status + " is not decided, accepted, deferred, uncovered or differs"
 	}
 	return ""
 }

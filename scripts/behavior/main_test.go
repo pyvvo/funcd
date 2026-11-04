@@ -240,6 +240,7 @@ func TestScenarioRowDoesNotHold(t *testing.T) {
 		"deferred with a bare card":   {"| A | B | none | C | deferred | a card |\n", "cites no card"},
 		"deferred with no holder":     {"| A | B | none | C | deferred | ADR-0001 |\n", "cites no card"},
 		"uncovered with no source":    {"| A | B | none | C | **uncovered** |  |\n", "does not say what was read"},
+		"differs with no clause":      {"| A | B | none | C | **differs** | the code |\n", "cites no ADR and not the blueprint"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -260,6 +261,7 @@ func TestScenarioRowDoesNotHold(t *testing.T) {
 		"deferred to an open question":  "| A | B | none | C | deferred | ADR-0001 Open questions |\n",
 		"deferred to an issue":          "| A | B | none | C | deferred | #1391 |\n",
 		"uncovered, bold":               "| A | B | none | C | **uncovered** | read ADR-0001 |\n",
+		"differs, citing its clause":    "| A | B | none | C | **differs** | ADR-0001 Decision 1 says otherwise |\n",
 		"a partly superseded ADR":       "| A | B | none | C | decided | ADR-0005 Decision 1 |\n",
 		"a pipe in a cell":              "| A | B `x\\|y` | none | C | decided | ADR-0001 |\n",
 		"a value by its name":           "| A | B | `heldIdleTimeout` 5 min | C | decided | ADR-0001 |\n",

@@ -93,6 +93,7 @@ cut one or split it. A row that mixes a decision and a cost is two rows, each wi
 | `accepted` | an ADR or the decider named it as a cost or a risk; or no ADR speaks of it, and a test pins it or a closed issue's fix chose it | the same, or the test, or `#N` |
 | `deferred` | a card, an ADR's open question or an open issue holds it | `card "<title>"`, `ADR-NNNN Open questions` or `#N` |
 | `uncovered` (written `**uncovered**`) | nothing speaks of it | what you read |
+| `differs` (written `**differs**`) | an ADR or the blueprint says otherwise, and the code does this | the clause and the code that differs |
 
 An ADR accepted a cost and a card proposes to change it: `accepted`, citing both. A card is named by a few words of its title, as
 `driver.py show` finds it. A later ADR that made a sentence stale with no `Superseded in part by` line: cite the later one and tell the
@@ -103,9 +104,12 @@ decider. Evidence you ran yourself goes in the source as `ran it`.
 - **Read, do not recall.** Open each ADR you cite, whole: costs live in Scope, Alternatives, Consequences, Risks and Open
   questions. Follow each `Superseded by` and `Superseded in part by`: cite what holds now. A row points at what to read and proves
   nothing alone, and the check proves only that a citation exists, so the reading is yours.
-- **Check the code too.** Trace each row's behavior to the code that runs it. If the code does what no clause says, or differs
-  from its ADR, the row says what the code does, with `uncovered`, and its source names both; tell the decider. Until the bug
-  rule's two checks are done, write "surprising", never "bug", and propose no fix.
+- **Check the code too.** Trace each row's behavior to the code that runs it. If the code does what no clause says, the row says
+  what the code does, with `uncovered`. If it differs from its ADR, with `differs`. Either way tell the decider. An `uncovered` row is a
+  question; a `differs` row is a surprise the bug rule's two checks turn into an issue or a superseding ADR, and the issue then moves it
+  to `deferred`. Until those checks are done, write "surprising", never "bug", and propose no fix.
+- **Read beyond the first hits before you write `uncovered`.** Of 32 rows first written `uncovered`, a second reader moved 3 to `decided`,
+  11 to `differs` and found 2 false.
 - **Mark what you invent.** A name, a state or a reason is traced to the code or marked new.
 - **Security.** A possible vulnerability goes in no row: it is a private draft advisory (CLAUDE.md, *Issues*).
 - **Identity.** No absolute path, local username or personal email.
