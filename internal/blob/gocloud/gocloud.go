@@ -73,8 +73,9 @@ type OpenOptions struct {
 	// CredentialsFile is an AWS shared credentials file whose [default] profile is the only credential source;
 	// s3:// only, another scheme is fault.Invalid.
 	CredentialsFile string
-	// Static is an access key that is the only credential source (ADR-0222 Decision 6, a namespace Secret's keys);
-	// s3:// only, and not with CredentialsFile.
+	// Static is an access key that is the only credential source (ADR-0222 Decision 6, a namespace Secret's keys), whose
+	// client reads no more than maxAnswerBytes of an answer but an object's content; s3:// only, and not with
+	// CredentialsFile.
 	Static *StaticKey
 }
 
@@ -134,6 +135,9 @@ func openS3With(ctx context.Context, url string, opts OpenOptions) (*gcblob.Buck
 	s3opts, bopts, err := s3URLOptions(q)
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Invalid, op, "open %q", url)
+	}
+	if opts.Static != nil {
+		s3opts = append(s3opts, func(o *awss3.Options) { o.HTTPClient = cappedAnswers{o.HTTPClient} })
 	}
 	cfg, err := gcaws.V2ConfigFromURLParams(ctx, q)
 	if err != nil {
