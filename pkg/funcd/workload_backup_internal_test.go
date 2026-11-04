@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -878,6 +879,46 @@ func TestBackup_GoesOnWhenAListedObjectHasNoTime(t *testing.T) {
 	r.create(r.dev, r.backupObj("b1", "listed"))
 	r.waitBackup("b1", v1.RunSucceeded)
 	require.Positive(t, listed.Load())
+}
+
+// A listing that fails, for any reason of the store's answers, leaves a Backup to its own copy and its record to its own scope.
+func TestBackup_GoesOnWhenItsListingFails(t *testing.T) {
+	t.Parallel()
+	const head = `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>b</Name>`
+	for name, page := range map[string]func(prefix string) string{
+		"pages with no key": func(string) string {
+			return head + `<IsTruncated>true</IsTruncated><NextContinuationToken>t</NextContinuationToken></ListBucketResult>`
+		},
+		"more members than a copy holds": func(prefix string) string {
+			const object = `<LastModified>2026-11-04T00:00:00.000Z</LastModified><Size>1</Size></Contents>`
+			var sb strings.Builder
+			sb.WriteString(head + `<Contents><Key>` + prefix + `manifest.yaml</Key>` + object)
+			for i := range workload.MaxCopyMembers + 1 {
+				fmt.Fprintf(&sb, `<Contents><Key>%skv/m-%d/part-00000</Key>%s`, prefix, i, object)
+			}
+			return sb.String() + `</ListBucketResult>`
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newWBRig(t, wbOptions{})
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				if !req.URL.Query().Has("list-type") {
+					r.stub.ServeHTTP(w, req)
+					return
+				}
+				_, _ = w.Write([]byte(page(req.URL.Query().Get("prefix"))))
+			}))
+			t.Cleanup(srv.Close)
+			r.create(r.dev, r.schedule("listed", "0 3 * * *", func(s *v1.BackupScheduleSpec) {
+				s.Target.URL = strings.Replace(r.stub.URL(), r.stub.Endpoint(), srv.URL, 1)
+			}))
+			r.create(r.dev, r.backupObj("b1", "listed"))
+			b := r.waitBackup("b1", v1.RunSucceeded)
+			require.NotEqual(t, v1.ReasonFoundOnTarget, reason(b.Status.Status))
+			require.Less(t, len(b.Status.Members), workload.MaxCopyMembers)
+		})
+	}
 }
 
 // cleanupBucket is the shared blob store with a DuckLake cleanup that runs once, the first time f1 is read after

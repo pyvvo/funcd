@@ -16,6 +16,11 @@ import (
 // uidHex is the length of a store UID, 16 random bytes in hex.
 const uidHex = 32
 
+// MaxCopyMembers is the most members one copy's listing may name. A scope's members are stores that exist in its namespace,
+// named one by one or held by an App or a ResourceGroup, so a real scope stays far below it. A Backup's record then stays under
+// 200 KiB.
+const MaxCopyMembers = 1024
+
 // MaxListedKeys is the most keys one listing of a target reads. A copy holds a key per 8 MiB part, so this holds 8 TiB of
 // copies.
 const MaxListedKeys = 1 << 20
@@ -47,7 +52,9 @@ func ListCopy(ctx context.Context, target blob.Bucket, path string, kinds []Memb
 	if err := listFrom(ctx, target, path, "", func(a blob.Attributes) { items = append(items, a) }); err != nil {
 		return Copy{}, fault.Wrapf(err, fault.KindOf(err), op, "list %q", path)
 	}
-	c.fill(items, kinds)
+	if err := c.fill(items, kinds); err != nil {
+		return Copy{}, err
+	}
 	return c, nil
 }
 
@@ -89,7 +96,9 @@ func SlotCopies(ctx context.Context, target blob.Bucket, ns v1.NamespaceName, sc
 	out := make([]Copy, 0, len(dirs))
 	for _, p := range dirs {
 		c, _ := copyAt(p)
-		c.fill(items[p], kinds)
+		if err := c.fill(items[p], kinds); err != nil {
+			return nil, err
+		}
 		out = append(out, c)
 	}
 	slices.SortFunc(out, func(a, b Copy) int {
@@ -114,8 +123,9 @@ func copyAt(p string) (Copy, bool) {
 }
 
 // fill reads the directory's listing: the manifest, and each member's bytes under its kind directory (ADR-0222
-// Decision 4's layout), skipping a key no kind parses; a Lake counts its last attempt only.
-func (c *Copy) fill(items []blob.Attributes, kinds []MemberKind) {
+// Decision 4's layout), skipping a key no kind parses or that names no store; a Lake counts its last attempt only. Over
+// MaxCopyMembers members it is fault.Invalid.
+func (c *Copy) fill(items []blob.Attributes, kinds []MemberKind) error {
 	type member struct {
 		v1.BackupMember
 		attempt int
@@ -136,13 +146,16 @@ func (c *Copy) fill(items []blob.Attributes, kinds []MemberKind) {
 				break
 			}
 		}
-		if !ok {
+		if !ok || bm.Name.Validate() != nil || (bm.Volume != "" && bm.Volume.Validate() != nil) {
 			continue
 		}
 		key := string(bm.Kind) + "/" + string(bm.Name) + "/" + string(bm.Volume)
 		m := byKey[key]
 		switch {
 		case m == nil:
+			if len(ms) == MaxCopyMembers {
+				return fault.Invalidf("workload.fill", "%s lists more than %d members", c.Path, MaxCopyMembers)
+			}
 			m = &member{BackupMember: bm, attempt: attempt}
 			byKey[key] = m
 			ms = append(ms, m)
@@ -157,6 +170,7 @@ func (c *Copy) fill(items []blob.Attributes, kinds []MemberKind) {
 	for _, m := range ms {
 		c.Members = append(c.Members, m.BackupMember)
 	}
+	return nil
 }
 
 // listFrom calls each for every object under prefix whose key sorts after `after`, in key order; over MaxListedKeys keys or
