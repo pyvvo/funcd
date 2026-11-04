@@ -137,7 +137,10 @@ func openS3With(ctx context.Context, url string, opts OpenOptions) (*gcblob.Buck
 		return nil, fault.Wrapf(err, fault.Invalid, op, "open %q", url)
 	}
 	if opts.Static != nil {
-		s3opts = append(s3opts, func(o *awss3.Options) { o.HTTPClient = cappedAnswers{o.HTTPClient} })
+		s3opts = append(s3opts, func(o *awss3.Options) {
+			o.HTTPClient = cappedAnswers{o.HTTPClient}
+			o.APIOptions = append(o.APIOptions, requireListedTimes)
+		})
 	}
 	cfg, err := gcaws.V2ConfigFromURLParams(ctx, q)
 	if err != nil {

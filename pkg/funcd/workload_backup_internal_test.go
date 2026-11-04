@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"sort"
 	"strings"
@@ -853,6 +855,29 @@ func TestScenarioRestoreInPlace(t *testing.T) {
 	rs = r.waitRestore("again", v1.RunFailed)
 	require.Equal(t, "ExportFailed", reason(rs.Status.Status))
 	require.Equal(t, map[string]string{"t/1": "one", "t/3": "kept"}, r.kv("orders-state"), "no write after a failed export")
+}
+
+// A Backup lists its own directory on the target first. A listed object with no modification time fails that listing, as any
+// failed listing does, and the Backup goes on with its own copy.
+func TestBackup_GoesOnWhenAListedObjectHasNoTime(t *testing.T) {
+	t.Parallel()
+	r := newWBRig(t, wbOptions{})
+	listed := atomic.Int32{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if !req.URL.Query().Has("list-type") {
+			r.stub.ServeHTTP(w, req)
+			return
+		}
+		listed.Add(1)
+		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>b</Name><Contents><Key>a</Key><Size>1</Size></Contents></ListBucketResult>`))
+	}))
+	t.Cleanup(srv.Close)
+	r.create(r.dev, r.schedule("listed", "0 3 * * *", func(s *v1.BackupScheduleSpec) {
+		s.Target.URL = strings.Replace(r.stub.URL(), r.stub.Endpoint(), srv.URL, 1)
+	}))
+	r.create(r.dev, r.backupObj("b1", "listed"))
+	r.waitBackup("b1", v1.RunSucceeded)
+	require.Positive(t, listed.Load())
 }
 
 // cleanupBucket is the shared blob store with a DuckLake cleanup that runs once, the first time f1 is read after

@@ -129,6 +129,32 @@ func TestStaticKeyAnswers_ReadNoMoreThanTheLimit(t *testing.T) {
 	}
 }
 
+// An upload's answer is bounded too when it succeeds: the store stops sending when the client closes the connection.
+func TestStaticKeyAnswers_BoundAnUploadsAnswer(t *testing.T) {
+	t.Parallel()
+	const body = 32 << 20
+	var sent atomic.Int64
+	done := make(chan struct{}, 1)
+	chunk := []byte(strings.Repeat(" ", 64<<10))
+	b := answeringStore(t, func(w http.ResponseWriter, _ *http.Request) {
+		defer func() { done <- struct{}{} }()
+		for sent.Load() < body {
+			n, err := w.Write(chunk)
+			sent.Add(int64(n))
+			if err != nil {
+				return
+			}
+		}
+	}, OpenOptions{})
+	require.NoError(t, b.Put(context.Background(), "k", []byte("v"), blob.PutOptions{}))
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the store is still sending")
+	}
+	require.Less(t, sent.Load(), int64(body/2), "the client read the answer whole")
+}
+
 // An object's content is not an answer the limit cuts: its reader bounds it.
 func TestStaticKeyAnswers_LeaveAnObjectsContent(t *testing.T) {
 	t.Parallel()
@@ -180,6 +206,16 @@ func TestStaticKeyAnswers_BoundAListingPage(t *testing.T) {
 		t.Fatal("the store is still sending")
 	}
 	require.Less(t, sent.Load(), int64(body/2), "the client read the page whole")
+}
+
+// A listed object with no modification time fails its listing.
+func TestStaticKeyAnswers_FailAListedObjectWithNoTime(t *testing.T) {
+	t.Parallel()
+	b := answeringStore(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>b</Name><Contents><Key>a</Key><Size>1</Size></Contents></ListBucketResult>`))
+	}, OpenOptions{})
+	_, _, err := b.ListAfter(context.Background(), "", "", 10)
+	require.ErrorContains(t, err, "no modification time")
 }
 
 // A credentials file is the operator's own store, whose client stays as it was.

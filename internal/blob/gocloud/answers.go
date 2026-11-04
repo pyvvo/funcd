@@ -1,10 +1,17 @@
 package gocloud
 
 import (
+	"context"
 	"io"
 	"net/http"
+	"slices"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go/middleware"
+
+	"github.com/pyvvo/funcd/api/fault"
 )
 
 // maxAnswerBytes bounds what a static key's client reads of an answer that is not an object's content. A real S3 error or
@@ -32,6 +39,23 @@ func (c cappedAnswers) Do(r *http.Request) (*http.Response, error) {
 	}
 	resp.Body = cappedBody{io.LimitReader(resp.Body, limit), resp.Body}
 	return resp, nil
+}
+
+// requireListedTimes fails a listing page that holds an object with no modification time: S3 sends one with every object,
+// and the S3 driver needs it.
+func requireListedTimes(stack *middleware.Stack) error {
+	return stack.Deserialize.Add(middleware.DeserializeMiddlewareFunc("funcdRequireListedTimes", func(ctx context.Context,
+		in middleware.DeserializeInput, next middleware.DeserializeHandler) (middleware.DeserializeOutput, middleware.Metadata, error) {
+		out, md, err := next.HandleDeserialize(ctx, in)
+		if err != nil {
+			return out, md, err
+		}
+		if page, ok := out.Result.(*awss3.ListObjectsV2Output); ok &&
+			slices.ContainsFunc(page.Contents, func(o s3types.Object) bool { return o.LastModified == nil }) {
+			return out, md, fault.Invalidf("gocloud.ListObjectsV2", "a listed object has no modification time")
+		}
+		return out, md, nil
+	}), middleware.Before)
 }
 
 // cappedBody reads through its Reader and closes the body under it.
