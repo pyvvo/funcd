@@ -125,6 +125,9 @@ func (d bucketDestination) IsEmpty(ctx context.Context) (bool, error) {
 // Load puts its files' records outside its Lake prefixes: Files[0] among its objects, Files[1] among its catalogs. A
 // record under a Lake prefix, from before that Lake took it, leaves no trace.
 func (d bucketDestination) Load(ctx context.Context, f MemberFile, open RecordOpener) error {
+	if err := wantFiles(f, 1, 2); err != nil {
+		return err
+	}
 	if d.inPlace {
 		if err := d.Clear(ctx); err != nil {
 			return err
@@ -134,13 +137,16 @@ func (d bucketDestination) Load(ctx context.Context, f MemberFile, open RecordOp
 	if err != nil {
 		return err
 	}
-	views := []blob.Bucket{d.view, d.catalogs}
 	for i, file := range f.Files {
+		view := d.view
+		if i > 0 {
+			view = d.catalogs
+		}
 		err := loadObjects(ctx, file, open, func(key string, body []byte, o blob.PutOptions) error {
 			if underLake(key, lakes) {
 				return nil
 			}
-			return views[i].Put(ctx, key, body, o)
+			return view.Put(ctx, key, body, o)
 		})
 		if err != nil {
 			return err

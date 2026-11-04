@@ -112,6 +112,9 @@ func (d volumeDestination) IsEmpty(ctx context.Context) (bool, error) {
 // Load untars the file into the volume: only into an empty one, in place too (ADR-0262 Decision 11), but for a lost
 // one, which is emptied first, since what it holds dates from after the loss (#1206).
 func (d volumeDestination) Load(ctx context.Context, f MemberFile, open RecordOpener) error {
+	if err := wantFiles(f, 1, 1); err != nil {
+		return err
+	}
 	if d.load == nil {
 		return fault.Unavailablef("backup.Restore", "volumes are off: no volume loads")
 	}

@@ -99,6 +99,9 @@ func (d dbDestination) IsEmpty(ctx context.Context) (bool, error) {
 
 // Load streams the file's records to the engine's load, which replaces all the database's data.
 func (d dbDestination) Load(ctx context.Context, f MemberFile, open RecordOpener) error {
+	if err := wantFiles(f, 1, 1); err != nil {
+		return err
+	}
 	if d.load == nil {
 		return fault.Unavailablef("backup.Restore", "no SQL engine loads a database")
 	}

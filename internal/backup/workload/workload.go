@@ -541,7 +541,7 @@ func newPartReader(ctx context.Context, src blob.Bucket, dir string, parts int) 
 
 func (r *partReader) Read(p []byte) (int, error) {
 	for r.cur == nil || r.cur.Len() == 0 {
-		if r.i == r.parts {
+		if r.i >= r.parts {
 			return 0, io.EOF
 		}
 		data, err := r.get(fmt.Sprintf("%spart-%05d", r.dir, r.i))

@@ -80,6 +80,9 @@ func (d kvDestination) IsEmpty(ctx context.Context) (bool, error) {
 }
 
 func (d kvDestination) Load(ctx context.Context, f MemberFile, open RecordOpener) error {
+	if err := wantFiles(f, 1, 1); err != nil {
+		return err
+	}
 	if d.inPlace {
 		if err := d.Clear(ctx); err != nil {
 			return err

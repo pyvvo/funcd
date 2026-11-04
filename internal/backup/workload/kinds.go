@@ -27,7 +27,7 @@ type MemberKind interface {
 type Destination interface {
 	Prepare(ctx context.Context) (release func(), err error)         // after the plan, before the first load
 	IsEmpty(ctx context.Context) (bool, error)                       // asked only when not in place
-	Load(ctx context.Context, f MemberFile, open RecordOpener) error // a refusal wraps ErrNotEmpty, writing nothing
+	Load(ctx context.Context, f MemberFile, open RecordOpener) error // a refusal wraps ErrNotEmpty or ErrFileCount, writing nothing
 	Clear(ctx context.Context) error                                 // after a failed Restore whose load began here
 }
 
@@ -43,6 +43,7 @@ type RecordOpener func(ctx context.Context, f backup.StoreFile) func() (snapshot
 var (
 	ErrNotEmpty   = errors.New("the destination holds data")       // reason NotEmpty
 	ErrTornObject = errors.New("an object record's frame is torn") // reason Integrity
+	ErrFileCount  = errors.New("the member lists another number of files than its kind writes")
 )
 
 // marked is err marked with a sentinel for errors.Is; its message and fault kind stay err's.
@@ -61,6 +62,21 @@ func notEmpty(err error) error {
 		return marked{err, ErrNotEmpty}
 	}
 	return err
+}
+
+// wantFiles is fault.Invalid naming f's member, marked with ErrFileCount, when its manifest entry lists fewer than least or
+// more than most files, the range its kind's Write produces. A load asks it first, before it empties or writes anything.
+func wantFiles(f MemberFile, least, most int) error {
+	n := len(f.Files)
+	if n >= least && n <= most {
+		return nil
+	}
+	member := string(f.Name)
+	if f.Volume != "" {
+		member += "/" + string(f.Volume)
+	}
+	return marked{fault.Invalidf("backup.Restore", "member %s %s: the manifest lists %d files, and its kind writes %d to %d",
+		f.Kind, member, n, least, most), ErrFileCount}
 }
 
 // loadObjects puts each object record of f's records through put, in order; a torn frame is ErrTornObject.

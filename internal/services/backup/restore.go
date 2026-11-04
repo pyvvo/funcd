@@ -219,10 +219,10 @@ func (r *RestoreReconciler) load(ctx context.Context, rs *v1.Restore, b *v1.Back
 	for _, t := range targets {
 		t.written = true
 		if err := t.dest.Load(ctx, t.file, open); err != nil {
-			// a load that refused its destination as not empty wrote nothing there: what it holds is not the
-			// Restore's to clear
+			// a load that refused its destination as not empty, or its member for the files it lists, wrote nothing
+			// there: what it holds is not the Restore's to clear
 			reason := reasonOf(callLoad, err)
-			t.written = reason != ReasonNotEmpty
+			t.written = reason != ReasonNotEmpty && !errors.Is(err, workload.ErrFileCount)
 			return reason, errors.Join(err, clearBegun(ctx, targets))
 		}
 	}

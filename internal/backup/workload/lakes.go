@@ -170,6 +170,9 @@ func (d lakeDestination) IsEmpty(ctx context.Context) (bool, error) {
 }
 
 func (d lakeDestination) Load(ctx context.Context, f MemberFile, open RecordOpener) error {
+	if err := wantFiles(f, 0, 2); err != nil {
+		return err
+	}
 	if d.inPlace {
 		if err := d.Clear(ctx); err != nil {
 			return err

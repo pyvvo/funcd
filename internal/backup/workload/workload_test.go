@@ -14,6 +14,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/backup"
 	"github.com/pyvvo/funcd/internal/backup/envelope"
 	"github.com/pyvvo/funcd/internal/backup/workload"
 	"github.com/pyvvo/funcd/internal/blob"
@@ -271,6 +272,19 @@ func TestWriteLakeWithoutCheckpoint(t *testing.T) {
 
 // scenario: refused-restores (ADR-0312 Decision 8) — a funcd reads one format: a copy of format 1 or 3 fails naming both, and
 // Format is 2.
+// A manifest's part count bounds what Integrity reads, so a negative one reads no part.
+func TestIntegrity_ANegativePartCountReadsNoPart(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	target, err := gocloud.Open(ctx, "mem://")
+	require.NoError(t, err)
+	require.NoError(t, target.Put(ctx, "c/kv/x/part-00000", []byte("x"), blob.PutOptions{}))
+	err = workload.Integrity(ctx, target, "c/", workload.Manifest{Members: []workload.MemberFile{{Kind: v1.KindKVStore, Name: "x",
+		Files: []backup.StoreFile{{Name: "kv/x", Parts: -1, Bytes: 1}}}}})
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	require.ErrorContains(t, err, "holds 0 bytes")
+}
+
 func TestReadManifest_RefusesAnotherFormat(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

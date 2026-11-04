@@ -12,8 +12,10 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"sigs.k8s.io/yaml"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/backup/workload"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/lifecycle"
@@ -217,4 +219,71 @@ func TestKinds_AFailedRestoreDeletesOnlyWhatItWrote(t *testing.T) {
 
 	restore("mid-load", "copy-files")
 	require.Equal(t, before, k.stores(), "the failure empties every target whose load began, and nothing else")
+}
+
+// listFiles stores the manifest of the copy under path with mb's entry listing its first file count times.
+func (k *kindsRig) listFiles(path string, mb v1.RestoreMember, count int) {
+	k.t.Helper()
+	src := k.target()
+	m, err := workload.ReadManifest(k.ctx, src, path)
+	require.NoError(k.t, err)
+	i := slices.IndexFunc(m.Members, func(mf workload.MemberFile) bool {
+		return mf.Kind == mb.Kind && mf.Name == mb.Name && mf.Volume == mb.Volume
+	})
+	require.GreaterOrEqual(k.t, i, 0)
+	m.Members[i].Files = slices.Repeat(m.Members[i].Files[:1:1], count)
+	data, err := yaml.Marshal(m)
+	require.NoError(k.t, err)
+	require.NoError(k.t, src.Put(k.ctx, strings.TrimPrefix(path, "/")+"manifest.yaml", data, blob.PutOptions{}))
+}
+
+// A Restore fails a member whose manifest entry lists another number of files than its kind writes, before it writes to
+// that member or empties it: reason Failed, naming the member, the stores as they were, and the hold of an in-place Restore
+// left as any failed load leaves it. A Lake that held nothing lists no file, and restores.
+func TestRestore_RefusesAMemberWithAnotherFileCount(t *testing.T) {
+	t.Parallel()
+	inPlace := func(kind v1.Kind, name, vol v1.ObjectName) v1.RestoreMember {
+		return v1.RestoreMember{Kind: kind, Name: name, Volume: vol, InPlace: true}
+	}
+	for _, c := range []struct {
+		member v1.RestoreMember
+		count  int
+		names  string
+	}{
+		{inPlace(v1.KindKVStore, "orders-state", ""), 0, "orders-state"},
+		{inPlace(v1.KindKVStore, "orders-state", ""), 2, "orders-state"},
+		{v1.RestoreMember{Kind: v1.KindKVStore, Name: "orders-state", As: "orders-state-r"}, 0, "orders-state"},
+		{inPlace(v1.KindBucket, "lake-files", ""), 0, "lake-files"},
+		{inPlace(v1.KindBucket, "lake-files", ""), 3, "lake-files"},
+		{inPlace(v1.KindLake, "lake", ""), 3, "lake"},
+		{inPlace(v1.KindSQLDatabase, "todo-db", ""), 0, "todo-db"},
+		{inPlace(v1.KindSQLDatabase, "todo-db", ""), 2, "todo-db"},
+		{inPlace(v1.KindFunction, "cart", "state"), 0, "cart/state"},
+		{inPlace(v1.KindFunction, "cart", "state"), 2, "cart/state"},
+	} {
+		t.Run(fmt.Sprintf("%s %d files, in place %v", c.member.Kind, c.count, c.member.InPlace), func(t *testing.T) {
+			t.Parallel()
+			k := newKindsRig(t, nil, nil, nil, nil)
+			k.create(k.dev, k.backupObj("b1", "kinds-nightly"))
+			k.listFiles(k.waitBackup("b1", v1.RunSucceeded).Status.Path, c.member, c.count)
+			before := k.stores()
+
+			k.create(k.admin, k.restoreObj("refused", "b1", c.member))
+			rs := k.waitRestore("refused", v1.RunFailed)
+			require.Equal(t, "Failed", reason(rs.Status.Status))
+			cond, _ := rs.Status.Conditions.Get("Ready")
+			require.Contains(t, cond.Message, c.names)
+			require.Equal(t, before, k.stores())
+			require.Equal(t, c.member.InPlace, k.hold.HeldIn("orders"))
+		})
+	}
+	t.Run("a Lake that lists no file", func(t *testing.T) {
+		t.Parallel()
+		k := newKindsRig(t, nil, nil, nil, nil)
+		member := inPlace(v1.KindLake, "lake", "")
+		k.create(k.dev, k.backupObj("b1", "kinds-nightly"))
+		k.listFiles(k.waitBackup("b1", v1.RunSucceeded).Status.Path, member, 0)
+		k.create(k.admin, k.restoreObj("restored", "b1", member))
+		k.waitRestore("restored", v1.RunSucceeded)
+	})
 }
