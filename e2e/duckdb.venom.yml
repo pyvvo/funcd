@@ -28,6 +28,7 @@
 # The #1227 case: tables committed just before a spec change replaces the engine are read back from the new engine.
 # The #1232 case: tables committed just before a graceful daemon stop are read back after the daemon starts again.
 # The #1233 case: a Lake whose catalog saves are refused reports it in CatalogSaved and the daemon's journal.
+# The #1385 case: a statement whose catalog save is refused runs once, though its answer is an error.
 # ADR-0275: Lake lake keeps its prefix's write beside Function lake and through its own delete (#1231).
 name: lake-quack add-on provider — deploy + Ready + live SQL round-trip on real containerd (ADR-0086/0087/0088/0091)
 
@@ -642,6 +643,72 @@ testcases:
         assertions:
           - result.statuscode ShouldEqual 200
           - result.body ShouldContainSubstring "[[1233]]"
+
+  # Issue #1385: a refused save breaks an answer that began. An empty reply makes a Quack client send the statement again,
+  # so one INSERT commits twice. Each attempt inserts its own number, and the first one the save refuses must be held once.
+  - name: issue1385-a-refused-save-runs-a-statement-once — an INSERT whose save is refused is in the table once
+    steps:
+      - type: http
+        method: POST
+        url: "http://127.0.0.1:8081/function/lake-reader"
+        headers:
+          content-type: application/json
+        body: '{"data":{"sql":"CREATE TABLE IF NOT EXISTS lakehouse.issue1385_once (n BIGINT)"}}'
+        retry: 10
+        delay: 2
+        info: "the table, saved → status {{.result.statuscode}} body {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            funcdctl apply -f /opt/lane/lake-saves-refused.yaml >/dev/null && echo APPLIED'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual APPLIED
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            for i in $(seq 1 60); do
+              code=$(curl -s -m 60 -o /tmp/issue1385 -w "%{http_code}" -X POST -H "content-type: application/json" \
+                --data "{\"data\":{\"sql\":\"INSERT INTO lakehouse.issue1385_once VALUES ($i)\"}}" \
+                http://127.0.0.1:8081/function/lake-reader)
+              if [ "$code" != 200 ]; then
+                echo "$code $(cat /tmp/issue1385)" >&2
+                echo "$i"
+                exit 0
+              fi
+              sleep 1
+            done
+            echo NEVER_REFUSED'
+        info: "the first refused INSERT → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex "^[0-9]+$"
+          - result.systemerr ShouldNotContainSubstring "Server returned nothing"
+        vars:
+          refused:
+            from: result.systemout
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            export FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN={{.devtoken}}
+            funcdctl apply -f /opt/lane/lake-redeploy.yaml >/dev/null && echo APPLIED'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual APPLIED
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} bash -lc '
+            n=$(printf %s "{{.refused}}" | tr -d "[:space:]")
+            curl -s -m 60 -X POST -H "content-type: application/json" \
+              --data "{\"data\":{\"sql\":\"SELECT count(*) FROM lakehouse.issue1385_once WHERE n = $n\"}}" \
+              http://127.0.0.1:8081/function/lake-reader'
+        retry: 30
+        delay: 2
+        info: "how many times the refused INSERT is in the table, once saves work again → {{.result.systemout}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "[[1]]"
 
   # ADR-0292/0293 (experiment): a Lake whose prefix holds its quota refuses a commit's Parquet with 507, keeps answering
   # queries and drops, its catalog saving outside the prefix, and once dropped files are cleaned up takes a commit again.

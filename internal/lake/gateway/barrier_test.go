@@ -1,9 +1,11 @@
 package gateway
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -160,6 +162,40 @@ func TestScenarioRefusedSaveIsAnError(t *testing.T) {
 			require.Equal(t, int32(3), save.calls.Load(), "the refused save call was not retried")
 		})
 	}
+}
+
+// Issue #1385: a refused save breaks an answer that began. A break with no byte sent is an empty reply, which a Quack
+// client takes for a dead connection: it sends the statement again, and the statement commits twice.
+func TestIssue1385_ARefusedSaveBreaksAnAnswerThatBegan(t *testing.T) {
+	t.Parallel()
+	const body = "012345678"
+	save := newSaveStub("A")
+	url := barrierFront(t, body, save)
+	conn, err := net.Dial("tcp", strings.TrimPrefix(url, "http://"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	require.NoError(t, conn.SetDeadline(time.Now().Add(10*time.Second)))
+	reader := bufio.NewReader(conn)
+	post := func() (*http.Response, error) {
+		_, err := io.WriteString(conn, "POST /quack HTTP/1.1\r\nHost: lake\r\nContent-Length: 0\r\n\r\n")
+		require.NoError(t, err)
+		return http.ReadResponse(reader, nil)
+	}
+	saved, err := post()
+	require.NoError(t, err)
+	got, err := io.ReadAll(saved.Body)
+	require.NoError(t, err)
+	require.Equal(t, body, string(got), "a saved answer on the kept-alive connection the client reuses")
+
+	save.mu.Lock()
+	save.refuse = true
+	save.mu.Unlock()
+	refused, err := post()
+	require.NoError(t, err, "the client got an empty reply, which it answers by sending the statement again")
+	require.Equal(t, http.StatusOK, refused.StatusCode)
+	got, err = io.ReadAll(refused.Body)
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF, "the answer is broken, not whole")
+	require.Equal(t, body[:len(body)-1], string(got), "all but the last byte went out before the break")
 }
 
 // ADR-0279 Decision 3: an answer is released only by the instance the proxy knew when it forwarded the request, with

@@ -66,6 +66,41 @@ func TestScenarioDataPlaneServesUpstreamBackend(t *testing.T) {
 	require.Equal(t, "/db", gotPath, "the matched prefix /lake/lake is stripped — the upstream is addressed at its root")
 }
 
+// Issue #1385: an upstream answer that breaks after it began reaches the caller begun. Dropped in the edge's write buffer,
+// it would be an empty reply, which a Quack client answers by sending the statement again, so it commits twice.
+func TestIssue1385_ABrokenUpstreamAnswerReachesTheCallerBegun(t *testing.T) {
+	t.Parallel()
+	const begun = "01234567"
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		conn, _, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		_, _ = io.WriteString(conn, "HTTP/1.1 200 OK\r\nContent-Length: 9\r\n\r\n"+begun)
+	}))
+	t.Cleanup(up.Close)
+
+	rtr := router.New()
+	require.NoError(t, rtr.Program(context.Background(), []router.Entry{{
+		Namespace: "default",
+		Auth:      v1.AuthOpen,
+		Rules:     []router.CompiledRule{{Path: "/lake/lake", Upstream: up.URL}},
+	}}, nil))
+	st := store.New(memory.New())
+	act, err := activator.New(activator.Deps{Store: st, Endpoints: fakeEndpoints{upstream: "http://unused"}, Scaler: noScaler{}})
+	require.NoError(t, err)
+	front := httptest.NewServer(dataplane.Handler(st, act, rtr, "", nil, nil, nil, 0, nil))
+	t.Cleanup(front.Close)
+
+	resp, err := http.Post(front.URL+"/lake/lake/quack", "application/octet-stream", strings.NewReader("query"))
+	require.NoError(t, err, "the caller got an empty reply, which it answers by sending the statement again")
+	defer func() { _ = resp.Body.Close() }()
+	got, err := io.ReadAll(resp.Body)
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF, "the answer is broken, not whole")
+	require.Equal(t, begun, string(got))
+}
+
 // TestScenarioDataPlaneUpstreamUnreachable covers the 502 path: a programmed Upstream that can't be
 // dialed yields a fault (not a panic), so a rebinding proxy degrades gracefully.
 func TestScenarioDataPlaneUpstreamUnreachable(t *testing.T) {
