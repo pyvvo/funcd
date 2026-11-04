@@ -1,6 +1,7 @@
 package gocloud_test
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net/http"
@@ -157,4 +158,20 @@ func keys(items []blob.Attributes) []string {
 		out = append(out, it.Key)
 	}
 	return out
+}
+
+// A range read returns no more than it asked for, whatever the store answers.
+func TestGetRange_ReturnsNoMoreThanItAsked(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(bytes.Repeat([]byte("x"), 1<<20))
+	}))
+	t.Cleanup(srv.Close)
+	b, err := gocloud.OpenWith(context.Background(), "s3://b?region=us-east-1&use_path_style=true&endpoint="+srv.URL,
+		gocloud.OpenOptions{Static: &gocloud.StaticKey{ID: "id", Secret: "secret"}})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = b.Close() })
+	got, err := b.(blob.RangeReader).GetRange(context.Background(), "k", 0, 10)
+	require.NoError(t, err)
+	require.Len(t, got, 10)
 }

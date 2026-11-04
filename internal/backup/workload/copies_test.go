@@ -19,6 +19,12 @@ func put(t *testing.T, b blob.Bucket, key string, n int) {
 	require.NoError(t, b.Put(context.Background(), key, []byte(strings.Repeat("x", n)), blob.PutOptions{}))
 }
 
+// kinds are the five member kinds, as a listing parses them.
+func kinds() []workload.MemberKind {
+	return []workload.MemberKind{workload.KVStores(nil, nil, nil), workload.Buckets(nil, nil, nil, nil),
+		workload.Lakes(nil, nil, nil, nil, nil), workload.Databases(nil, nil), workload.Volumes(nil, nil)}
+}
+
 const (
 	uid1 = "0123456789abcdef0123456789abcdef"
 	uid2 = "fedcba9876543210fedcba9876543210"
@@ -46,7 +52,7 @@ func TestFindSlotsSkipsOtherSchedules(t *testing.T) {
 	put(t, b, "orders/"+string(v1.BackupSlotName("a", slot(4))), 1)
 	put(t, b, "orders/"+string(v1.BackupSlotName("a", slot(5)))+"-short/manifest.yaml", 1)
 
-	got, err := workload.SlotCopies(ctx, b, "orders", "a", after)
+	got, err := workload.SlotCopies(ctx, b, "orders", "a", after, kinds())
 	require.NoError(t, err)
 	var names []v1.ObjectName
 	var whole []bool
@@ -78,7 +84,7 @@ func TestListCopyMembers(t *testing.T) {
 	put(t, b, d+"sql/notes-db/part-00000", 13)
 	put(t, b, d+"volume/fn/data/part-00000", 17)
 
-	c, err := workload.ListCopy(ctx, b, d)
+	c, err := workload.ListCopy(ctx, b, d, kinds())
 	require.NoError(t, err)
 	require.False(t, c.Whole, "no manifest yet")
 	require.Equal(t, []v1.BackupMember{
@@ -92,11 +98,30 @@ func TestListCopyMembers(t *testing.T) {
 	require.Equal(t, v1.UID(uid1), c.UID)
 
 	put(t, b, d+"manifest.yaml", 1)
-	c, err = workload.ListCopy(ctx, b, d)
+	c, err = workload.ListCopy(ctx, b, d, kinds())
 	require.NoError(t, err)
 	require.True(t, c.Whole)
 	require.False(t, c.Completed.IsZero())
 
-	_, err = workload.ListCopy(ctx, b, "orders/b1/")
+	_, err = workload.ListCopy(ctx, b, "orders/b1/", kinds())
 	require.Error(t, err)
+}
+
+// ADR-0311 Decision 6: a listing skips a key that no kind parses, as it skips a key of no kind directory, and lists
+// the members of the kinds it is given.
+func TestListCopy_SkipsAKeyNoKindParses(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	b, err := gocloud.Open(ctx, "mem://")
+	require.NoError(t, err)
+	d := "orders/b1-" + uid1 + "/"
+	put(t, b, d+"kv/orders-state/part-00000", 7)
+	put(t, b, d+"volume/fn/data/part-00000", 17)
+	put(t, b, d+"vector/notes/part-00000", 3)
+	put(t, b, d+"manifest.yaml", 1)
+
+	c, err := workload.ListCopy(ctx, b, d, []workload.MemberKind{workload.KVStores(nil, nil, nil)})
+	require.NoError(t, err)
+	require.True(t, c.Whole)
+	require.Equal(t, []v1.BackupMember{{Kind: v1.KindKVStore, Name: "orders-state", Bytes: 7}}, c.Members)
 }

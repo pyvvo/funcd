@@ -7,7 +7,6 @@ package backup
 import (
 	"cmp"
 	"context"
-	"io"
 	"log/slog"
 	"sync"
 	"time"
@@ -23,10 +22,8 @@ import (
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/controller"
-	"github.com/pyvvo/funcd/internal/gc"
 	"github.com/pyvvo/funcd/internal/platform/clock"
 	"github.com/pyvvo/funcd/internal/platform/hold"
-	"github.com/pyvvo/funcd/internal/snapshot"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -69,32 +66,6 @@ type SecretReader interface {
 	ResolveEnv(ctx context.Context, id auth.Identity, ns v1.NamespaceName, names []string) (map[string]string, error)
 }
 
-// KVLoader is the KV driver's per-store load, teardown and listing (ADR-0222 LoadPrefix, ADR-0072 DropPrefix).
-type KVLoader interface {
-	LoadPrefix(ctx context.Context, prefix string, next func() (snapshot.Record, error)) error
-	DropPrefix(prefix string) error
-	List(ctx context.Context, prefix string) ([]string, error)
-}
-
-// SQLLoader loads, empties and inspects a database through its engine (ADR-0234). HasTables counts tables, views,
-// indexes and triggers.
-type SQLLoader interface {
-	Load(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName, file io.Reader) error
-	Empty(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) error
-	HasTables(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (bool, error)
-}
-
-// VolumeLoader loads, checks and clears a Function's local volume (ADR-0262 Decision 11); Load refuses Conflict when
-// the volume is not empty. Lost reports a volume its Function's DataMissing names (Decision 12), whose content a
-// Restore replaces, and StopWorkers keeps the Function workerless until release, while its volume loads (#1206).
-type VolumeLoader interface {
-	Load(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName, archive io.Reader) error
-	IsEmpty(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName) (bool, error)
-	Clear(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName) error
-	Lost(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName) (bool, error)
-	StopWorkers(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName) (release func(), err error)
-}
-
 // Hold is the daemon's hold (ADR-0206): the platform gate the runs wait on, the namespace gate the slots ask, and the
 // namespace hold an in-place Restore takes.
 type Hold interface {
@@ -108,14 +79,8 @@ type Hold interface {
 type Deps struct {
 	Store   store.Store
 	Secrets SecretReader
-	// Sources are what a Backup copies; KV loads and empties a KVStore; Purger empties a Bucket; SQL loads and empties
-	// a SQLDatabase (nil ⇒ a Restore of one fails).
-	Sources workload.Sources
-	KV      KVLoader
-	Purger  gc.BucketPurger
-	SQL     SQLLoader
-	// Volumes loads a Function's local volume (nil ⇒ a Restore of one fails).
-	Volumes VolumeLoader
+	// Kinds are the member kinds a Backup copies and a Restore loads, each served once (ADR-0311).
+	Kinds []workload.MemberKind
 	// Hold nil is a platform never held, whose in-place Restore holds nothing.
 	Hold Hold
 	// StoreURL is the blob store's URL, blob.target or the file:// URL of blob.dir: a schedule on its provider is
@@ -139,6 +104,7 @@ type Reconcilers struct {
 // base is what every reconciler reads.
 type base struct {
 	d        Deps
+	kinds    map[v1.Kind]workload.MemberKind // d.Kinds by the kind each serves
 	log      *slog.Logger
 	runs     metric.Int64Counter
 	duration metric.Float64Histogram
@@ -152,7 +118,8 @@ type base struct {
 }
 
 // New builds the reconcilers and registers the metrics: funcd.backup.runs and .duration_ms with stream=workload, and
-// the gauge funcd.backup.workload_rpo_risk, the schedules at risk.
+// the gauge funcd.backup.workload_rpo_risk, the schedules at risk. A nil kind, or a kind two of Kinds serve, is
+// fault.Invalid naming it.
 func New(d Deps) (*Reconcilers, error) {
 	const op = "backup.New"
 	switch {
@@ -172,8 +139,18 @@ func New(d Deps) (*Reconcilers, error) {
 	if log == nil {
 		log = slog.Default()
 	}
-	b := &base{d: d, log: log.With("component", "backup.workload"), active: map[v1.ObjectRef]bool{}, risk: map[v1.ObjectRef]bool{},
-		warned: map[v1.ObjectRef]bool{}, synced: map[v1.ObjectRef]time.Time{}}
+	kinds := make(map[v1.Kind]workload.MemberKind, len(d.Kinds))
+	for i, k := range d.Kinds {
+		if k == nil {
+			return nil, fault.Invalidf(op, "member kind %d is nil", i)
+		}
+		if _, twice := kinds[k.Kind()]; twice {
+			return nil, fault.Invalidf(op, "two member kinds serve %s", k.Kind())
+		}
+		kinds[k.Kind()] = k
+	}
+	b := &base{d: d, kinds: kinds, log: log.With("component", "backup.workload"), active: map[v1.ObjectRef]bool{},
+		risk: map[v1.ObjectRef]bool{}, warned: map[v1.ObjectRef]bool{}, synced: map[v1.ObjectRef]time.Time{}}
 	var err error
 	if b.runs, err = d.Meter.Int64Counter("funcd.backup.runs"); err != nil {
 		return nil, fault.Wrapf(err, fault.Internal, op, "register funcd.backup.runs")

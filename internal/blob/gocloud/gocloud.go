@@ -780,7 +780,11 @@ func (k *bucket) GetRange(ctx context.Context, key string, offset, length int64)
 		return nil, mapErr(op, key, err)
 	}
 	defer func() { _ = r.Close() }()
-	data, err := io.ReadAll(r)
+	var from io.Reader = r
+	if length >= 0 {
+		from = io.LimitReader(r, length)
+	}
+	data, err := io.ReadAll(from)
 	if err != nil {
 		return nil, mapErr(op, key, err)
 	}

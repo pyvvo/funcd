@@ -1,7 +1,8 @@
 // Package workload is an app owner's backup (ADR-0222): the members a BackupSchedule's scope names, one full copy of
 // them under <target>/<ns>/<backup>-<uid>/ (Decision 4) and the reads a Restore makes of it. Each member's file is
 // ADR-0203's framed records in one Seal stream, put in 8 MiB parts IfNotExist; a lake's objects go before its
-// catalog.db, checked against it (Decision 5); the plain manifest.yaml goes last.
+// catalog.db, checked against it (Decision 5); the plain manifest.yaml goes last. Each kind of member is one MemberKind,
+// which its provider hands over (ADR-0311).
 package workload
 
 import (
@@ -33,8 +34,9 @@ import (
 	"github.com/pyvvo/funcd/internal/store"
 )
 
-// Format is the workload manifest's format; a changed meaning, framing or layout bumps it.
-const Format = 1
+// Format is the workload manifest's format; a changed meaning, framing or layout bumps it. A funcd reads one format:
+// from 2 on a Bucket's file holds none of its Lakes' data (ADR-0312 Decision 8).
+const Format = 2
 
 const (
 	manifestName = "manifest.yaml"
@@ -56,28 +58,19 @@ var (
 // sqlRecordBytes is the size of one record of a database's file (ADR-0234 Decision 2).
 const sqlRecordBytes = 8 << 20
 
+// MaxManifestBytes is the largest manifest a Restore reads. A member's entry takes under 1 KiB, so this holds over 16,000
+// members.
+const MaxManifestBytes = 16 << 20
+
 // Member is one store of a scope. Location is a Lake member's spec.location, which Write copies.
 type Member struct {
 	Kind     v1.Kind
 	Name     v1.ObjectName
 	Location v1.LakeLocation
 	Volume   v1.ObjectName // with Kind Function: the Function's local volume (ADR-0262 Decision 11)
-}
-
-// Sources are what Write reads: the KV driver's per-store export (ADR-0209 SnapshotPrefix; nil when the driver offers
-// none), the shared blob store and a Bucket's prefix in it, and a database's SQLite file from its engine (ADR-0234;
-// nil ⇒ no SQL members), which fails ErrEngineNotReady for a database with no Ready engine and returns the stream's
-// error, not io.EOF, when the engine reports one at its end.
-type Sources struct {
-	KV           func(prefix string) snapshot.Source
-	Blob         blob.Bucket
-	BucketPrefix func(ns v1.NamespaceName, b v1.ObjectName) string
-	// CatalogPrefix is a namespace's prefix in the Lake catalog store (ADR-0293); nil keeps a Lake's catalog under its
-	// files.
-	CatalogPrefix func(ns v1.NamespaceName) string
-	SQL           func(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (io.ReadCloser, error)
-	// Volume is a Function's local volume as a tar, read live (ADR-0262 Decision 11); nil ⇒ no volume members.
-	Volume func(ctx context.Context, ns v1.NamespaceName, fn, name v1.ObjectName) (io.ReadCloser, error)
+	// LakePrefixes, with Kind Bucket, are its Lake prefixes as Resolve read them, so a Lake applied during a run leaves each
+	// byte in one member (ADR-0312).
+	LakePrefixes []string
 }
 
 // Options are where Write puts the copy and to whom it seals it: Path is <ns>/<backup>-<uid>/ on Target, Recipients
@@ -110,9 +103,11 @@ type Manifest struct {
 	Recipients []string     `json:"recipients,omitempty"`
 }
 
-// Resolve lists the members s names in ns (Decision 2), KVStores, Buckets, Lakes then SQLDatabases: by name, the
-// stores of the App's kv, buckets, lakes and sql entries, or the stores of the ResourceGroup. A named member or App that
-// does not exist is fault.NotFound naming it.
+// Resolve lists the members s names in ns (Decision 2), KVStores, Buckets, Lakes, SQLDatabases then Function volumes:
+// by name, the stores of the App's kv, buckets, lakes and sql entries and its Functions' local volumes, or the stores of
+// the ResourceGroup. In each form a Bucket brings in the Lakes on its Lake prefixes as their own members, once, after the
+// Lakes s names, whichever App or ResourceGroup holds them (ADR-0312). A named member or App that does not exist is
+// fault.NotFound naming it.
 func Resolve(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1.BackupScope) ([]Member, error) {
 	const op = "workload.Resolve"
 	names := map[v1.Kind][]v1.ObjectName{
@@ -160,18 +155,34 @@ func Resolve(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1.Back
 			slices.Sort(names[k])
 		}
 	}
-	var out []Member
+	var out, brought []Member
+	read := reader(ctx, st, ns)
 	for _, k := range memberKinds() {
 		for _, n := range names[k] {
-			obj, err := st.Get(ctx, k.GVK(), ns, n)
+			obj, err := read(k, n)
 			if err != nil {
 				return nil, fault.Wrapf(err, fault.KindOf(err), op, "member %s/%s", k, n)
 			}
 			m := Member{Kind: k, Name: n}
-			if cs, ok := obj.(*v1.Lake); ok {
-				m.Location = cs.Spec.Location
+			switch o := obj.(type) {
+			case *v1.Lake:
+				m.Location = o.Spec.Location
+			case *v1.Bucket:
+				prefixes, err := lakePrefixes(o, false, read)
+				if err != nil {
+					return nil, err
+				}
+				for _, p := range prefixes {
+					m.LakePrefixes = append(m.LakePrefixes, p.name)
+					if !slices.Contains(names[v1.KindLake], p.owner) {
+						brought = append(brought, Member{Kind: v1.KindLake, Name: p.owner, Location: v1.LakeLocation{Bucket: o.Name, Prefix: p.name}})
+					}
+				}
 			}
 			out = append(out, m)
+		}
+		if k == v1.KindLake {
+			out = append(out, brought...)
 		}
 	}
 	vols, err := volumeMembers(ctx, st, ns, s.Volumes)
@@ -179,6 +190,57 @@ func Resolve(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1.Back
 		return nil, err
 	}
 	return append(out, vols...), nil
+}
+
+// lakePrefix is one Lake prefix of a Bucket, and the Lake that owns it.
+type lakePrefix struct {
+	name  string
+	owner v1.ObjectName
+}
+
+// reader reads each object of ns once: one Resolve sees one Lake at one location, so what a Bucket's copy skips and what
+// the Lake's member copies agree.
+func reader(ctx context.Context, st store.Store, ns v1.NamespaceName) func(v1.Kind, v1.ObjectName) (v1.Object, error) {
+	read := map[string]v1.Object{}
+	return func(k v1.Kind, n v1.ObjectName) (v1.Object, error) {
+		key := string(k) + "/" + string(n)
+		if obj, ok := read[key]; ok {
+			return obj, nil
+		}
+		obj, err := st.Get(ctx, k.GVK(), ns, n)
+		if err == nil {
+			read[key] = obj
+		}
+		return obj, err
+	}
+}
+
+// lakePrefixes reads b's Lake prefixes (ADR-0312 Decision 1): those whose owner has kind Lake and is located there, in spec
+// order. Every other prefix is the Bucket's. With gone it adds those whose owner Lake does not exist, which a Restore leaves
+// alone, as a rewind would delete that Lake's data. The location test stays beside ADR-0312 Decision 7: a Lake owns every
+// ownerless prefix of a bucket it defines, and sits on one of them.
+func lakePrefixes(b *v1.Bucket, gone bool, read func(v1.Kind, v1.ObjectName) (v1.Object, error)) ([]lakePrefix, error) {
+	var out []lakePrefix
+	for _, p := range b.Spec.Prefixes {
+		if p.Owner.Kind != v1.KindLake {
+			continue
+		}
+		obj, err := read(v1.KindLake, p.Owner.Name)
+		switch {
+		case fault.KindOf(err) == fault.NotFound:
+			if !gone {
+				continue
+			}
+		case err != nil:
+			return nil, fault.Wrapf(err, fault.KindOf(err), "workload.lakePrefixes", "get Lake %s/%s", b.Namespace, p.Owner.Name)
+		default:
+			if lk, ok := obj.(*v1.Lake); !ok || lk.Spec.Location != (v1.LakeLocation{Bucket: b.Name, Prefix: p.Name}) {
+				continue
+			}
+		}
+		out = append(out, lakePrefix{name: p.Name, owner: p.Owner.Name})
+	}
+	return out, nil
 }
 
 // volumeMembers resolves "<function>/<name>" scope entries: the Function exists and declares that local volume.
@@ -209,66 +271,28 @@ func KVPrefix(ns v1.NamespaceName, name v1.ObjectName) string {
 	return string(ns) + "/" + string(name) + "/"
 }
 
-// Write copies ms under o.Path, then puts the manifest (Decisions 4, 5): a KVStore to kv/<store>/, a Bucket's
-// objects to blob/<bucket>/, a lake's objects but catalog.db to lake/<name>/<attempt>/files/ and then its
-// catalog.db to lake/<name>/<attempt>/catalog.db/, and a SQLDatabase's SQLite file to sql/<name>/ in records of
-// 8 MiB keyed 000001, 000002, … (ADR-0234 Decision 2). A refused IfNotExist is ErrTargetUnconditional; a lake that
-// loses a listed object under every copy is ErrLakeUnstable.
-func Write(ctx context.Context, ns v1.NamespaceName, ms []Member, src Sources, o Options) (Manifest, error) {
+// Write copies ms under o.Path, then puts the manifest (Decisions 4, 5): each member's kind among kinds writes its files
+// under its own directory of the copy (ADR-0311), a KVStore to kv/<store>/, a Bucket to blob/<bucket>/, a lake to
+// lake/<name>/<attempt>/, a SQLDatabase to sql/<name>/ and a Function's volume to volume/<function>/<volume>/. A member
+// that no kind serves is fault.Invalid naming its kind, before the first put; a refused IfNotExist is
+// ErrTargetUnconditional.
+func Write(ctx context.Context, ns v1.NamespaceName, ms []Member, kinds []MemberKind, o Options) (Manifest, error) {
 	const op = "workload.Write"
+	served := make([]MemberKind, len(ms))
+	for i, mb := range ms {
+		j := slices.IndexFunc(kinds, func(k MemberKind) bool { return k.Kind() == mb.Kind })
+		if j < 0 {
+			return Manifest{}, fault.Invalidf(op, "member %s/%s: no member kind serves %s", mb.Kind, mb.Name, mb.Kind)
+		}
+		served[i] = kinds[j]
+	}
 	m := Manifest{
 		Format: Format, Namespace: string(ns), Backup: path.Base(strings.TrimSuffix(o.Path, "/")), Funcd: version.Version,
 		At: v1.NewTimestamp(time.Now()), Recipients: o.Recipients,
 	}
 	w := &writer{o: o, buf: make([]byte, 0, backup.PartBytes)}
-	for _, mb := range ms {
-		mf := MemberFile{Kind: mb.Kind, Name: mb.Name, Volume: mb.Volume}
-		var f backup.StoreFile
-		var err error
-		switch mb.Kind {
-		case v1.KindKVStore:
-			if src.KV == nil {
-				return Manifest{}, fault.Unavailablef(op, "member %s/%s: the KV driver exports no store", mb.Kind, mb.Name)
-			}
-			f, err = w.file(ctx, "kv/"+string(mb.Name), func(emit func(snapshot.Record) error) error {
-				_, err := src.KV(KVPrefix(ns, mb.Name)).Snapshot(ctx, emit)
-				return err
-			})
-			mf.Files = []backup.StoreFile{f}
-		case v1.KindBucket:
-			f, err = w.file(ctx, "blob/"+string(mb.Name), func(emit func(snapshot.Record) error) error {
-				return objects(ctx, src.Blob, src.BucketPrefix(ns, mb.Name), nil, emit)
-			})
-			mf.Files = []backup.StoreFile{f}
-		case v1.KindLake:
-			mf, err = w.lake(ctx, ns, mb, src)
-		case v1.KindSQLDatabase:
-			if src.SQL == nil {
-				return Manifest{}, fault.Unavailablef(op, "member %s/%s: no SQL engine is wired", mb.Kind, mb.Name)
-			}
-			f, err = w.file(ctx, "sql/"+string(mb.Name), func(emit func(snapshot.Record) error) error {
-				rc, err := src.SQL(ctx, ns, mb.Name)
-				if err != nil {
-					return fault.Wrapf(err, fault.KindOf(err), op, "database %s", mb.Name)
-				}
-				return streamFile(op, "database "+string(mb.Name), rc, emit)
-			})
-			mf.Files = []backup.StoreFile{f}
-		case v1.KindFunction:
-			if src.Volume == nil {
-				return Manifest{}, fault.Unavailablef(op, "member volume %s/%s: volumes are off", mb.Name, mb.Volume)
-			}
-			f, err = w.file(ctx, "volume/"+string(mb.Name)+"/"+string(mb.Volume), func(emit func(snapshot.Record) error) error {
-				rc, err := src.Volume(ctx, ns, mb.Name, mb.Volume)
-				if err != nil {
-					return fault.Wrapf(err, fault.KindOf(err), op, "volume %s/%s", mb.Name, mb.Volume)
-				}
-				return streamFile(op, "volume "+string(mb.Name)+"/"+string(mb.Volume), rc, emit)
-			})
-			mf.Files = []backup.StoreFile{f}
-		default:
-			err = fault.Invalidf(op, "member %s/%s: want a KVStore, Bucket, Lake, SQLDatabase or Function volume", mb.Kind, mb.Name)
-		}
+	for i, mb := range ms {
+		mf, err := served[i].Write(ctx, w, ns, mb)
 		if err != nil {
 			return Manifest{}, err
 		}
@@ -284,70 +308,8 @@ func Write(ctx context.Context, ns v1.NamespaceName, ms []Member, src Sources, o
 	return m, nil
 }
 
-// lake copies one lake in at most lakeAttempts attempts (Decision 5): a listing of the prefix, the checkpoint C1,
-// every other object of the prefix, then C1. C1 is copied as it is, never opened: a file it names was written
-// before it, so it is in the listing, and an attempt whose copy misses a listed key, deleted meanwhile, runs again.
-// A lake without a checkpoint is an empty member.
-func (w *writer) lake(ctx context.Context, ns v1.NamespaceName, mb Member, src Sources) (MemberFile, error) {
-	const op = "workload.Write"
-	root := src.BucketPrefix(ns, mb.Location.Bucket) + mb.Location.Prefix + "/"
-	catalog := src.CatalogKey(ns, mb.Location)
-	var last string
-	for attempt := 1; attempt <= lakeAttempts; attempt++ {
-		listed, err := keys(ctx, src.Blob, root)
-		if err != nil {
-			return MemberFile{}, err
-		}
-		c1, err := src.Blob.Get(ctx, catalog)
-		if fault.KindOf(err) == fault.NotFound {
-			// DuckLake opens a missing catalog.db as a new, empty lake: no object under the prefix is part of one
-			return MemberFile{Kind: mb.Kind, Name: mb.Name}, nil
-		}
-		if err != nil {
-			return MemberFile{}, fault.Wrapf(err, fault.KindOf(err), op, "lake %s: read its checkpoint", mb.Name)
-		}
-		attrs, err := src.Blob.Attributes(ctx, catalog)
-		if err != nil {
-			return MemberFile{}, fault.Wrapf(err, fault.KindOf(err), op, "lake %s: read its checkpoint", mb.Name)
-		}
-		dir := fmt.Sprintf("lake/%s/%d/", mb.Name, attempt)
-		copied := map[string]bool{}
-		files, err := w.file(ctx, dir+"files", func(emit func(snapshot.Record) error) error {
-			return objects(ctx, src.Blob, root, func(key string) bool { return key == checkpointName }, func(r snapshot.Record) error {
-				copied[string(r.Key)] = true
-				return emit(r)
-			})
-		})
-		if err != nil {
-			return MemberFile{}, err
-		}
-		if i := slices.IndexFunc(listed, func(k string) bool { return k != checkpointName && !copied[k] }); i >= 0 {
-			last = listed[i]
-			continue
-		}
-		db, err := w.file(ctx, dir+"catalog.db", func(emit func(snapshot.Record) error) error {
-			return emit(snapshot.Record{Key: []byte(checkpointName), Value: EncodeObject(attrs.ContentType, attrs.Metadata, c1)})
-		})
-		if err != nil {
-			return MemberFile{}, err
-		}
-		return MemberFile{Kind: mb.Kind, Name: mb.Name, Attempt: attempt, Files: []backup.StoreFile{files, db}}, nil
-	}
-	return MemberFile{}, fault.Wrapf(ErrLakeUnstable, fault.Conflict, op, "lake %s: %d copies missed %q, deleted while it was copied",
-		mb.Name, lakeAttempts, last)
-}
-
 // CatalogRecord is the key of a lake member's catalog record, wherever the catalog lives (ADR-0293 Decision 5).
 const CatalogRecord = checkpointName
-
-// CatalogKey is the blob key of the catalog of the Lake at loc: in the catalog store under its location (ADR-0293), or
-// under its files without CatalogPrefix. Its member record keeps the key checkpointName either way.
-func (s Sources) CatalogKey(ns v1.NamespaceName, loc v1.LakeLocation) string {
-	if s.CatalogPrefix == nil {
-		return s.BucketPrefix(ns, loc.Bucket) + loc.Prefix + "/" + checkpointName
-	}
-	return s.CatalogPrefix(ns) + string(loc.Bucket) + "/" + loc.Prefix + "/" + checkpointName
-}
 
 // keys lists the keys under prefix, relative to it.
 func keys(ctx context.Context, b blob.Bucket, prefix string) ([]string, error) {
@@ -448,8 +410,8 @@ func (w *writer) put(ctx context.Context, key string, data []byte) error {
 	return fault.Wrapf(err, fault.KindOf(err), op, "put %q", key)
 }
 
-// file writes the records emit produces as the file name/, part-00000 first; an empty file is one empty part.
-func (w *writer) file(ctx context.Context, name string, produce func(emit func(snapshot.Record) error) error) (backup.StoreFile, error) {
+// File writes the records emit produces as the file name/, part-00000 first; an empty file is one empty part.
+func (w *writer) File(ctx context.Context, name string, produce func(emit func(snapshot.Record) error) error) (backup.StoreFile, error) {
 	p := &parts{w: w, dir: w.o.Path + name + "/", h: sha256.New(),
 		put: func(key string, data []byte) error { return w.put(ctx, key, data) }}
 	var sealed io.WriteCloser = nopCloser{p}
@@ -513,10 +475,10 @@ type nopCloser struct{ io.Writer }
 
 func (nopCloser) Close() error { return nil }
 
-// ReadManifest reads the manifest under path; a format above Format is fault.Invalid.
+// ReadManifest reads the manifest under path; one over MaxManifestBytes or of any format but Format is fault.Invalid.
 func ReadManifest(ctx context.Context, src blob.Bucket, path string) (Manifest, error) {
 	const op = "workload.ReadManifest"
-	data, err := src.Get(ctx, path+manifestName)
+	data, err := readAtMost(ctx, src, path+manifestName, MaxManifestBytes)
 	if err != nil {
 		return Manifest{}, fault.Wrapf(err, fault.KindOf(err), op, "read %s%s", path, manifestName)
 	}
@@ -524,7 +486,7 @@ func ReadManifest(ctx context.Context, src blob.Bucket, path string) (Manifest, 
 	if err := yaml.Unmarshal(data, &m); err != nil {
 		return Manifest{}, fault.Wrapf(err, fault.Invalid, op, "decode %s%s", path, manifestName)
 	}
-	if m.Format > Format {
+	if m.Format != Format {
 		return Manifest{}, fault.Invalidf(op, "%s%s has format %d; this funcd reads format %d", path, manifestName, m.Format, Format)
 	}
 	return m, nil
@@ -568,7 +530,27 @@ func Records(ctx context.Context, src blob.Bucket, path string, f backup.StoreFi
 	}
 }
 
-// partReader reads a file's parts in order, one Get each.
+// readAtMost reads the object at key, asking its target for no more bytes than it reports. An object it reports over limit
+// is fault.Invalid naming it, with nothing read.
+func readAtMost(ctx context.Context, src blob.Bucket, key string, limit int64) ([]byte, error) {
+	attrs, err := src.Attributes(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case attrs.Size > limit:
+		return nil, fault.Invalidf("workload.readAtMost", "%s holds %d bytes, and funcd writes at most %d", key, attrs.Size, limit)
+	case attrs.Size <= 0:
+		return []byte{}, nil
+	}
+	if rr, ok := src.(blob.RangeReader); ok {
+		return rr.GetRange(ctx, key, 0, attrs.Size)
+	}
+	return src.Get(ctx, key)
+}
+
+// partReader reads a file's parts in order, one read each. The writer cuts a file's sealed bytes, so a part is at most
+// backup.PartBytes, sealed or not.
 type partReader struct {
 	get   func(key string) ([]byte, error)
 	dir   string
@@ -578,12 +560,12 @@ type partReader struct {
 }
 
 func newPartReader(ctx context.Context, src blob.Bucket, dir string, parts int) *partReader {
-	return &partReader{get: func(key string) ([]byte, error) { return src.Get(ctx, key) }, dir: dir, parts: parts}
+	return &partReader{get: func(key string) ([]byte, error) { return readAtMost(ctx, src, key, backup.PartBytes) }, dir: dir, parts: parts}
 }
 
 func (r *partReader) Read(p []byte) (int, error) {
 	for r.cur == nil || r.cur.Len() == 0 {
-		if r.i == r.parts {
+		if r.i >= r.parts {
 			return 0, io.EOF
 		}
 		data, err := r.get(fmt.Sprintf("%spart-%05d", r.dir, r.i))

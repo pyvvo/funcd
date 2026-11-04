@@ -5,6 +5,8 @@
   restore member), round 2 one (the booking's lifecycle), all folded
 - **Superseded in part by**: [ADR-0266](0266-volume-sizes-with-units.md) (2026-10-23) — the size fields of Decisions 1, 3
   and 5: `size`, `volumeBudget` and `volumes.capacity` beside their byte forms.
+- **Superseded in part by**: [ADR-0311](0311-each-provider-backs-up-and-restores-its-own-member-kind.md) (2026-11-03) —
+  `workload.Sources` in its Contracts' I/O table; Decision 11 stands.
 - **Date**: 2026-10-23
 - **Deciders**: green-0-rabbit
 - **Tags**: function, storage, volume, runtime, quota, backup

@@ -177,8 +177,6 @@ duckdb:
     # Issue #1227: lake re-applied at 3Gi, so a spec change replaces its engine through a graceful stop
     - from: e2e/fixtures/lake-redeploy.yaml
       to: lake-redeploy.yaml
-    - from: e2e/fixtures/lake-saves-refused.yaml
-      to: lake-saves-refused.yaml
     # ADR-0292/0293: lake re-applied with its gold prefix capped at 1Mi
     - from: e2e/fixtures/lake-quota.yaml
       to: lake-quota.yaml
@@ -620,7 +618,7 @@ sql-examples:
   venom: e2e/sql-examples.venom.yml
 
 app-todo:
-  description: The todo App of funcd-functions, deployed from its pushed template on real containerd (ADR-0217/0218), and the App features on it — pinned digests, a TypeScript→Python Workflow, a zoned cron timer, hooks, kept stores, a dry run, drift and pause, a config roll, rollback, liveness and dependency health, a late call, a refused binding, a requirement and a blob upload; then the disaster-recovery drill of FEAT-0009 — a backup to an S3 server in the VM, a lost data directory restored, held boot and release, the App's own backups and restores, a pre-upgrade generation, and the blob store on S3; then version 1.2.0 on rqlite — its pre-hook moving the todos and uploads from KV into a SQL database, SQL queries and a join, the change feed, and the database's backup, in-place restore and restored copy; then one Site build of the site-config App deployed into staging and prod, each serving its own generated config.json, and at the path /preview with its mount as its base.
+  description: The todo App of funcd-functions, deployed from its pushed template on real containerd (ADR-0217/0218), and the App features on it — pinned digests, a TypeScript→Python Workflow, a zoned cron timer, hooks, kept stores, a dry run, drift and pause, a config roll, rollback, liveness and dependency health, a late call, a refused binding, a requirement and a blob upload; then the disaster-recovery drill of FEAT-0009 — a backup to an S3 server in the VM, a lost data directory restored, held boot and release, the App's own backups and restores, a pre-upgrade generation, the blob store on S3, and a Bucket and its Lake backed up and restored apart, real rows read back; then version 1.2.0 on rqlite — its pre-hook moving the todos and uploads from KV into a SQL database, SQL queries and a join, the change feed, and the database's backup, in-place restore and restored copy; then one Site build of the site-config App deployed into staging and prod, each serving its own generated config.json, and at the path /preview with its mount as its base.
   module: github.com/pyvvo/funcd-functions
   dir: apps/todo
   # The build writes the Python bundles into functions/py/dist/ and the S3 server into dr/, so the lane builds in a
@@ -656,6 +654,7 @@ app-todo:
     - functions/py/dist/stats
     - functions/py/dist/intake_sql
     - functions/py/dist/notify
+    - functions/py-lake/dist/lake_sql
     # Version 1.1.0 is the same resources with the app.yaml of 1.1.0.
     - from: apps/todo/app/resources
       module: github.com/pyvvo/funcd-functions
@@ -683,10 +682,13 @@ app-todo:
     - from: apps/site-config
       module: github.com/pyvvo/funcd-functions
       to: site-config
-  # funcd-bundle builds each Python part into functions/py/dist/ (ADR-0247). versitygw (Apache-2.0), the S3 server of
-  # the DR block, is built for the VM at a pinned version.
+  # funcd-bundle builds each Python part into functions/py/dist/ (ADR-0247), and the Quack client of the value lake into
+  # functions/py-lake/dist/, whose DuckDB extensions it downloads: check them against their pins after. versitygw
+  # (Apache-2.0), the S3 server of the DR block, is built for the VM at a pinned version.
   build:
     - cd functions/py && uv run --locked funcd-bundle
+    - cd functions/py-lake && uv run --locked funcd-bundle
+    - cd functions/py-lake/dist/lake_sql/duckdb-ext && grep -E "/linux_$(go env GOARCH)/(httpfs|quack)\." "$FUNCD_ROOT/images/runtime/duckdb/duckdb.sha256" | sha256sum -c - && test "$(find . -name '*.duckdb_extension' | wc -l)" -eq 2
     - CGO_ENABLED=0 GOOS=linux GOARCH=$(go env GOARCH) GOBIN= go install github.com/versity/versitygw/cmd/versitygw@v1.9.0 && cp "$(go env GOPATH)/bin/linux_$(go env GOARCH)/versitygw" dr/versitygw
   # The objects the App needs beside it; the Venom suite pushes, locks and deploys the App itself.
   apply:

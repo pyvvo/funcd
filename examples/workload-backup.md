@@ -1,9 +1,9 @@
 # Workload backups: an app owner's schedule, records and restores
 
-An app owner backs up its own KVStores, Buckets and lakes with three namespaced kinds (ADR-0222): a
-`BackupSchedule` defines the scope, the cron slots, the S3 target and the recipients; each slot, a hook or a
-developer creates a `Backup`, one full copy; a `Restore` loads a `Backup`'s members back. funcd runs them with the
-platform's rights; RBAC at admission is the boundary (developers and admins write them, viewers read them).
+An app owner backs up its own KVStores, Buckets, Lakes, SQLDatabases and Functions' local volumes with three namespaced
+kinds (ADR-0222): a `BackupSchedule` defines the scope, the cron slots, the S3 target and the recipients; each slot, a
+hook or a developer creates a `Backup`, one full copy; a `Restore` loads a `Backup`'s members back. funcd runs them with
+the platform's rights; RBAC at admission is the boundary (developers and admins write them, viewers read them).
 
 ## The target and its credentials
 
@@ -55,9 +55,12 @@ spec:
       - age1recovery…
 ```
 
-The scope is one form: names (`kvStores`, `buckets`, `lakes`), `app` (the App's stores) or `resourceGroup`. Every
-file is sealed to the recipients, two or more of one family; keep the recovery identity outside the platform. An App
-declares the same under `spec.backupSchedules`; an entry without a scope backs up the App itself.
+The scope is one form: names (`kvStores`, `buckets`, `lakes`, `databases`, `volumes` as `<function>/<volume>`), `app`
+(the App's stores) or `resourceGroup`. In each form a Bucket brings in the Lakes on its prefixes: each is a member of its own,
+holding its files and catalog once, and the Bucket's copy holds neither. A prefix whose owner Lake was deleted stays in the
+Bucket's copy, files and catalog, and comes back with the Bucket `as` a new name, for a new Lake on that prefix. Every file is sealed to the recipients, two or more of one family; keep the
+recovery identity outside the platform. An App declares the same under `spec.backupSchedules`; an entry without a scope
+backs up the App itself.
 
 `funcdctl get backups -n orders` lists the runs. A schedule's `status` carries `lastSuccessTime`,
 `earliestRestorePoint` and `rpoRisk`, also counted by the `funcd.backup.workload_rpo_risk` gauge.
@@ -105,7 +108,14 @@ spec:
 ```
 
 `owner-key` holds the owner's age identity under `AGE_IDENTITY`. Each member names one target: `as` (an empty KVStore
-or Bucket), `asLocation` (an empty bucket prefix, then point a Lake at it) or `inPlace: true`. An in-place
+or Bucket), `asLocation` (an empty bucket prefix where no Lake is located, then point a Lake at it) or `inPlace: true`.
+A Bucket's Restore, `as` included, acts only outside the prefixes of the Lakes on its destination, and of owner Lakes that were
+deleted, and leaves those as they are: a Bucket with no other object counts as empty, and restoring a whole copy elsewhere takes
+one member for the Bucket and one for each Lake, which `status.members` lists. A record of the copy under such a prefix, from
+before that Lake took it, is skipped and leaves no trace in the status. A prefix that stopped being a Lake's since the copy, the
+Lake moved or its owner changed, is the Bucket's again, so a Restore whose copy lacks it deletes it; the copy's Lake member and the
+Restore's `<restore>-before` export still hold it. A Lake restored in place runs no engine during the load; the next
+engine, once the Restore ends, answers the Backup's rows. An in-place
 Restore needs `update` on the Namespace (an admin), and one runs per namespace at a time: a second is refused while
 the first is `Pending` or `Running`, and so is a delete of the first. It first runs Backup `<restore>-before`, then holds the namespace while it
 empties and loads the store; only a completed load lifts that hold. While it is held, calls to the namespace's

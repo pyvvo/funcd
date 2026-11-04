@@ -73,6 +73,8 @@ done
 journalctl --sync && journalctl --rotate && journalctl --vacuum-time=1s >/dev/null 2>&1 ||
   fail "cannot rotate and vacuum the journal"
 
+# The duckdb lane's #1233 case makes a catalog's directory immutable: a case that failed before clearing it would stop the rm.
+chattr -R -i "$data/blob/lake-catalogs" 2>/dev/null
 rm -rf "$data" /opt/lane /etc/funcd/tokens || fail "cannot remove $data, /opt/lane or /etc/funcd/tokens"
 echo "lane-reset: took $((($(date +%s%N) - t0) / 1000000)) ms"
 exit "$rc"

@@ -34,7 +34,7 @@ func TestBuild_TheLakeEngineGetsTheKeysOfBlobsDeriver(t *testing.T) {
 	}, serve)
 	bucket := &v1.Bucket{TypeMeta: v1.TypeMeta{APIVersion: v1.KindBucket.GVK().APIVersion(), Kind: v1.KindBucket}}
 	bucket.Name, bucket.Namespace, bucket.ResourceGroup = "lakehouse", "default", "rg1"
-	bucket.Spec = v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "raw", Owner: v1.FunctionOwner("lake")}}}
+	bucket.Spec = v1.BucketSpec{Prefixes: []v1.BucketPrefix{{Name: "raw", Owner: v1.LakeOwner("lake")}}}
 	seedObjects(t, p.cfg.store, bucket, lakeResource("default"))
 
 	want := p.S3Keys().Keypair(v1.KindLake, "default", "lake")

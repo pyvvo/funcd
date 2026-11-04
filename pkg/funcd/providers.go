@@ -4,6 +4,7 @@ import (
 	"context"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/backup/workload"
 	"github.com/pyvvo/funcd/internal/controlplane/admission"
 	"github.com/pyvvo/funcd/internal/health"
 	"github.com/pyvvo/funcd/internal/lifecycle"
@@ -19,9 +20,9 @@ type describer interface {
 }
 
 // The shared hooks (ADR-0308): each returns a provider's part of a cross-cutting feature, which the Platform puts in
-// place in list order, as providerCatalog puts the descriptors. Quotas, Dependencies and Facet run once, while New
-// builds the platform, after the last store facade exists; Admissions runs when the control-plane chain is built and on
-// every App write. No hook runs at boot or at stop.
+// place in list order, as providerCatalog puts the descriptors. Quotas, Dependencies, Facet and BackupKinds run once,
+// while New builds the platform, after the last store facade exists; Admissions runs when the control-plane chain is
+// built and on every App write. No hook runs at boot or at stop.
 
 // quotaHook is a provider whose stores a size quota caps: the quota Source of each kind it serves (ADR-0292).
 type quotaHook interface {
@@ -50,10 +51,18 @@ type facetHook interface {
 	Facet() local.Facet // the zero Facet when the provider's facade is nil
 }
 
+// backupHook is a provider whose stores a workload backup copies: the member kinds it serves (ADR-0311), built from its
+// own parts, whatever of them is wired.
+type backupHook interface {
+	lifecycle.Provider
+	BackupKinds() []workload.MemberKind // runs once, in registerWorkloadBackups
+}
+
 // sharedHooks names the shared hooks in the boot log.
 func sharedHooks() []lifecycle.Hook {
 	return []lifecycle.Hook{lifecycle.Named[quotaHook]("quotas"), lifecycle.Named[admissionHook]("admissions"),
-		lifecycle.Named[dependencyHook]("dependencies"), lifecycle.Named[facetHook]("facets")}
+		lifecycle.Named[dependencyHook]("dependencies"), lifecycle.Named[facetHook]("facets"),
+		lifecycle.Named[backupHook]("backups")}
 }
 
 // registerQuotas registers each provider's quota Sources in the Book.

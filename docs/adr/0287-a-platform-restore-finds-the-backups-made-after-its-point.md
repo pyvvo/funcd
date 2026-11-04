@@ -1,6 +1,8 @@
 # ADR-0287: A platform restore finds the Backups its schedules made after the restored point
 
 - **Status**: Implemented (2026-10-25), review passed with no finding ([report](../reviews/adr-0287-implementation-claude-opus-5-5.md)); Reviewing (2026-10-25); Accepted 2026-10-25 under the decider's delegation, after two judge rounds (cowork); Proposed 2026-10-25
+- **Superseded in part by**: [ADR-0311](0311-each-provider-backs-up-and-restores-its-own-member-kind.md) (2026-11-03) —
+  the `ListCopy` and `SlotCopies` signatures in its Contracts, which take the member kinds.
 - **Date**: 2026-10-25
 - **Deciders**: green-0-rabbit
 - **Tags**: backup, restore, disaster-recovery, workload

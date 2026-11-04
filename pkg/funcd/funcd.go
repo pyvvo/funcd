@@ -38,7 +38,6 @@ import (
 	"github.com/pyvvo/funcd/internal/auth/rbac"
 	"github.com/pyvvo/funcd/internal/backup"
 	"github.com/pyvvo/funcd/internal/backup/runner"
-	"github.com/pyvvo/funcd/internal/backup/workload"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
 	"github.com/pyvvo/funcd/internal/bus"
@@ -88,7 +87,6 @@ import (
 	kvsvc "github.com/pyvvo/funcd/internal/services/kv"
 	rolessvc "github.com/pyvvo/funcd/internal/services/roles"
 	"github.com/pyvvo/funcd/internal/site"
-	"github.com/pyvvo/funcd/internal/snapshot"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/volume"
 	"github.com/pyvvo/funcd/internal/workernode/local"
@@ -821,6 +819,7 @@ func (p *Platform) buildControlPlane() error {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build function reconciler")
 	}
 	p.exec.captureLogs(fnReconciler) // a pool worker's lines go to the members the reconciler names
+	p.exec.useFunctions(fnReconciler)
 	dispatcher, err := services.NewDispatcher(c.store, p.logger, kvsvc.NewHandler(), blobsvc.NewHandler())
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build service dispatcher")
@@ -1847,31 +1846,23 @@ func LakeData(key string) (prefix string, ok bool) {
 	return s3Root + loc + "/", true
 }
 
-// registerWorkloadBackups builds the BackupSchedule, Backup and Restore reconcilers (ADR-0222) over the shared stores
-// and registers them: a Backup's change requeues its schedule and the Restores that read or wait for it.
+// registerWorkloadBackups builds the BackupSchedule, Backup and Restore reconcilers (ADR-0222) over the member kinds the
+// providers serve (ADR-0311), in list order, and registers them: a Backup's change requeues its schedule and the
+// Restores that read or wait for it.
 func (p *Platform) registerWorkloadBackups(ctrl *controller.Controller, secrets backupsvc.SecretReader) error {
 	c := p.cfg
 	d := backupsvc.Deps{
-		Store: c.store, Secrets: secrets, Purger: bucketPurger{shared: c.blob}, StoreURL: c.blobStoreURL,
-		Sources: workload.Sources{Blob: c.blob, BucketPrefix: bucketPrefix, CatalogPrefix: lakeCatalogPrefix, SQL: p.sql.reconciler.Backups().Source},
-		SQL:     p.sql.reconciler.Backups(),
-		Period:  c.pacing.SupervisionPeriod, Clock: c.backupClock, Meter: c.backupMeter, Logger: p.logger,
+		Store: c.store, Secrets: secrets, StoreURL: c.blobStoreURL,
+		Period: c.pacing.SupervisionPeriod, Clock: c.backupClock, Meter: c.backupMeter, Logger: p.logger,
+	}
+	for _, h := range lifecycle.Each[backupHook](p.phases) {
+		d.Kinds = append(d.Kinds, h.BackupKinds()...)
 	}
 	if d.Meter == nil {
 		d.Meter = backupMeter(c.telemetry)
 	}
-	if exp, ok := c.kvStore.(interface{ SnapshotPrefix(string) snapshot.Source }); ok {
-		d.Sources.KV = exp.SnapshotPrefix
-	}
-	if kv, ok := c.kvStore.(backupsvc.KVLoader); ok {
-		d.KV = kv
-	}
 	if c.hold != nil {
 		d.Hold = c.hold
-	}
-	if p.exec.volumes != nil { // ADR-0262 Decision 11: a Function's local volume is a workload backup member
-		vl := volumeLoader{m: p.exec.volumes, lost: p.fnReconciler.VolumeLost, stop: p.fnReconciler.StopWorkers}
-		d.Sources.Volume, d.Volumes = vl.Source, vl
 	}
 	rs, err := backupsvc.New(d)
 	if err != nil {

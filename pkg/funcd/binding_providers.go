@@ -13,6 +13,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/activator"
 	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/backup/workload"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/s3gateway"
 	"github.com/pyvvo/funcd/internal/controller"
@@ -37,6 +38,7 @@ import (
 	lakesvc "github.com/pyvvo/funcd/internal/services/lake"
 	secretsvc "github.com/pyvvo/funcd/internal/services/secret"
 	sqlsvc "github.com/pyvvo/funcd/internal/services/sql"
+	"github.com/pyvvo/funcd/internal/snapshot"
 	"github.com/pyvvo/funcd/internal/store"
 	"github.com/pyvvo/funcd/internal/workernode/local"
 	"github.com/pyvvo/funcd/internal/workflow"
@@ -65,6 +67,7 @@ var (
 	_ admissionHook       = (*kvProvider)(nil)
 	_ dependencyHook      = (*kvProvider)(nil)
 	_ facetHook           = (*kvProvider)(nil)
+	_ backupHook          = (*kvProvider)(nil)
 )
 
 // kvDeps are the Platform's parts the KV provider is built over.
@@ -107,6 +110,16 @@ func (s *kvProvider) Facet() local.Facet {
 		return local.Facet{}
 	}
 	return local.KVFacet(s.facade)
+}
+
+// BackupKinds is the KVStore kind over the KV driver's export and load, each when the driver offers it (ADR-0222).
+func (s *kvProvider) BackupKinds() []workload.MemberKind {
+	var export func(prefix string) snapshot.Source
+	if exp, ok := s.cfg.kvStore.(interface{ SnapshotPrefix(string) snapshot.Source }); ok {
+		export = exp.SnapshotPrefix
+	}
+	load, _ := s.cfg.kvStore.(workload.KVLoader)
+	return []workload.MemberKind{workload.KVStores(s.cfg.store, export, load)}
 }
 
 func (s *kvProvider) Descriptors() []provider.Descriptor {
@@ -184,6 +197,7 @@ var (
 	_ admissionHook       = (*blobProvider)(nil)
 	_ dependencyHook      = (*blobProvider)(nil)
 	_ facetHook           = (*blobProvider)(nil)
+	_ backupHook          = (*blobProvider)(nil)
 )
 
 // blobDeps are the Platform's parts the blob provider is built over.
@@ -229,6 +243,12 @@ func (s *blobProvider) Facet() local.Facet {
 		return local.Facet{}
 	}
 	return local.BlobFacet(s.facade)
+}
+
+// BackupKinds is the Bucket kind over the blob substrate, with the catalogs of the prefixes no Lake of it is located on
+// (ADR-0293 Decision 6, ADR-0312).
+func (s *blobProvider) BackupKinds() []workload.MemberKind {
+	return []workload.MemberKind{workload.Buckets(s.cfg.store, s.cfg.blob, bucketPrefix, bucketCatalogPrefix)}
 }
 
 func (s *blobProvider) Descriptors() []provider.Descriptor {
@@ -369,6 +389,7 @@ var (
 	_ admissionHook       = (*sqlProvider)(nil)
 	_ dependencyHook      = (*sqlProvider)(nil)
 	_ facetHook           = (*sqlProvider)(nil)
+	_ backupHook          = (*sqlProvider)(nil)
 )
 
 // sqlDeps are the Platform's parts the SQL provider is built over.
@@ -408,6 +429,11 @@ func (s *sqlProvider) Facet() local.Facet {
 		return local.Facet{}
 	}
 	return local.SQLFacet(s.facade)
+}
+
+// BackupKinds is the SQLDatabase kind, through each database's engine (ADR-0234).
+func (s *sqlProvider) BackupKinds() []workload.MemberKind {
+	return []workload.MemberKind{workload.Databases(s.cfg.store, s.reconciler.Backups())}
 }
 
 func (s *sqlProvider) Descriptors() []provider.Descriptor {
@@ -551,13 +577,15 @@ func (s *sqlProvider) Stop(context.Context) error {
 // lakeProvider is the Lake provider (ADR-0086/0087): one DuckDB/Quack engine per Lake, run by its add-on runtime, and
 // the node-private PEP proxies in front of the engines (ADR-0137).
 type lakeProvider struct {
-	cfg   *config
-	proxy *lakegw.Manager
+	cfg        *config
+	proxy      *lakegw.Manager
+	reconciler *lakesvc.Reconciler
 }
 
 var (
 	_ lifecycle.BeforeStopper = (*lakeProvider)(nil)
 	_ describer               = (*lakeProvider)(nil)
+	_ backupHook              = (*lakeProvider)(nil)
 )
 
 // lakeDeps are the parts the Lake provider is built over: the Platform's, and what blob, before it in the list, built.
@@ -574,6 +602,12 @@ type lakeDeps struct {
 }
 
 func (s *lakeProvider) Name() string { return "lake" }
+
+// BackupKinds is the Lake kind over the blob substrate, its catalog in the catalog store (ADR-0271, ADR-0293), which stops
+// an engine with the reconciler that runs it (ADR-0312 Decision 9).
+func (s *lakeProvider) BackupKinds() []workload.MemberKind {
+	return []workload.MemberKind{workload.Lakes(s.cfg.store, s.cfg.blob, bucketPrefix, lakeCatalogPrefix, s.reconciler.StopEngine)}
+}
 
 func (s *lakeProvider) Descriptors() []provider.Descriptor {
 	return []provider.Descriptor{{Name: "lake", Kind: provider.Addon, Bindings: []string{"spec.bindings.lake"},
@@ -631,6 +665,7 @@ func (s *lakeProvider) build(d lakeDeps) error {
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build Lake reconciler")
 	}
+	s.reconciler = reconciler
 	d.ctrl.Register(v1.KindLake.GVK(), reconciler)
 	// ADR-0162: a released listener closes once no Function binds it.
 	d.ctrl.Watches(v1.KindFunction.GVK(), reconciler.MapFunction)

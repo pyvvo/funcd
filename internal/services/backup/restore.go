@@ -1,11 +1,10 @@
 package backup
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"slices"
 	"strings"
 	"time"
 
@@ -14,7 +13,6 @@ import (
 	"github.com/pyvvo/funcd/internal/backup"
 	"github.com/pyvvo/funcd/internal/backup/envelope"
 	"github.com/pyvvo/funcd/internal/backup/workload"
-	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/controller"
 	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/snapshot"
@@ -24,19 +22,10 @@ import (
 // RestoreReconciler is the controller.Reconciler for KindRestore (Decision 7).
 type RestoreReconciler struct{ *base }
 
-// target is one member's destination: a KVStore prefix, a SQLDatabase, or a view of the blob store and whether it is
-// a Bucket.
-type target struct {
-	member  v1.RestoreMember
+// planned is one member of a Restore: its file in the manifest, its destination, and whether its load began.
+type planned struct {
 	file    workload.MemberFile
-	kv      string
-	sql     v1.ObjectName
-	view    blob.Bucket
-	catalog string // with a lake: the blob key its catalog loads to (ADR-0293)
-	bucket  v1.ObjectName
-	volFn   v1.ObjectName // with volume: the Function whose local volume volume is loaded (ADR-0262)
-	volume  v1.ObjectName
-	lost    bool // with volume: its Function's DataMissing names it, so what it holds dates from after the loss (#1206)
+	dest    workload.Destination
 	written bool
 }
 
@@ -170,9 +159,10 @@ func (r *RestoreReconciler) export(ctx context.Context, rs *v1.Restore, b *v1.Ba
 	return ex != nil, nil
 }
 
-// load reads b with the Restore's credential and identity, checks every part, then loads each member (Decision 7):
-// an empty target or, in place, the store emptied under a namespace hold that only a completed load lifts. A
-// non-empty target is NotEmpty before any write; a failure empties what it wrote. It returns the failure's reason.
+// load reads b with the Restore's credential and identity, checks every part, then loads each member through its
+// kind's destination (Decision 7, ADR-0311 Decision 3): an empty one or, in place, the store emptied under a namespace
+// hold that only a completed load lifts. A destination that is not empty is NotEmpty before any write; a failure
+// clears what each load began. It returns the failure's reason.
 func (r *RestoreReconciler) load(ctx context.Context, rs *v1.Restore, b *v1.Backup) (string, error) {
 	key, err := r.staticKey(ctx, rs.Namespace, rs.Spec.Source.CredentialsSecret)
 	if err != nil {
@@ -218,18 +208,22 @@ func (r *RestoreReconciler) load(ctx context.Context, rs *v1.Restore, b *v1.Back
 		}
 		held = &m
 	}
-	release, err := r.stopVolumeWorkers(ctx, rs.Namespace, targets)
+	release, err := prepare(ctx, targets)
 	if err != nil {
-		return reasonFailed, err
+		return reasonOf(callPrepare, err), err
 	}
 	defer release()
+	open := func(ctx context.Context, f backup.StoreFile) func() (snapshot.Record, error) {
+		return workload.Records(ctx, src, b.Status.Path, f, unseal)
+	}
 	for _, t := range targets {
 		t.written = true
-		if reason, err := r.fill(ctx, rs.Namespace, t, src, b.Status.Path, unseal); err != nil {
-			// a load that refused its target as not empty wrote nothing there: what the target holds is not the
-			// Restore's to empty
-			t.written = reason != ReasonNotEmpty
-			return reason, errors.Join(err, r.empty(ctx, rs.Namespace, targets))
+		if err := t.dest.Load(ctx, t.file, open); err != nil {
+			// a load that refused its destination as not empty, or its member for the files it lists, wrote nothing
+			// there: what it holds is not the Restore's to clear
+			reason := reasonOf(callLoad, err)
+			t.written = reason != ReasonNotEmpty && !errors.Is(err, workload.ErrFileCount)
+			return reason, errors.Join(err, clearBegun(ctx, targets))
 		}
 	}
 	// Only a completed load lifts the hold: a failure, a stop or a crash leaves it to hold release --namespace once
@@ -242,22 +236,17 @@ func (r *RestoreReconciler) load(ctx context.Context, rs *v1.Restore, b *v1.Back
 	return "", nil
 }
 
-// stopVolumeWorkers stops the workers of each Function whose volume the load fills until release, so none runs while
-// its volume is emptied and loaded (ADR-0262 Decisions 11 and 12, #1206).
-func (r *RestoreReconciler) stopVolumeWorkers(ctx context.Context, ns v1.NamespaceName, targets []*target) (release func(), err error) {
+// prepare calls each destination's Prepare once every member is planned, before the first load (Decision 3), such as
+// a volume's stop of its Function's workers; a failed one releases the earlier ones.
+func prepare(ctx context.Context, targets []*planned) (release func(), err error) {
 	var releases []func()
 	release = func() {
 		for _, f := range releases {
 			f()
 		}
 	}
-	stopped := map[v1.ObjectName]bool{}
 	for _, t := range targets {
-		if t.volume == "" || r.d.Volumes == nil || stopped[t.volFn] {
-			continue
-		}
-		stopped[t.volFn] = true
-		f, err := r.d.Volumes.StopWorkers(ctx, ns, t.volFn)
+		f, err := t.dest.Prepare(ctx)
 		if err != nil {
 			release()
 			return nil, err
@@ -267,14 +256,13 @@ func (r *RestoreReconciler) stopVolumeWorkers(ctx context.Context, ns v1.Namespa
 	return release, nil
 }
 
-// plan resolves each member's file in m and its destination; a missing member or destination is MemberNotFound and a
-// destination that is not empty NotEmpty.
-func (r *RestoreReconciler) plan(ctx context.Context, rs *v1.Restore, m workload.Manifest) ([]*target, string, error) {
+// plan resolves each member's file in m, its kind and its destination, and checks that a destination not in place is
+// empty, all before any write: a missing member or destination is MemberNotFound, a kind no MemberKind serves Failed
+// naming it, and a destination that is not empty NotEmpty.
+func (r *RestoreReconciler) plan(ctx context.Context, rs *v1.Restore, m workload.Manifest) ([]*planned, string, error) {
 	const op = "backup.Restore"
-	ns := rs.Namespace
-	var out []*target
+	var out []*planned
 	for _, mb := range rs.Spec.Members {
-		t := &target{member: mb}
 		i := -1
 		for j, mf := range m.Members {
 			if mf.Kind == mb.Kind && mf.Name == mb.Name && mf.Volume == mb.Volume {
@@ -284,271 +272,66 @@ func (r *RestoreReconciler) plan(ctx context.Context, rs *v1.Restore, m workload
 		if i < 0 {
 			return nil, ReasonMemberNotFound, fault.NotFoundf(op, "the Backup holds no %s/%s%s", mb.Kind, mb.Name, volumeSuffix(mb.Volume))
 		}
-		t.file = m.Members[i]
-		dest := mb.Name
-		if mb.As != "" {
-			dest = mb.As
+		k, ok := r.kinds[mb.Kind]
+		if !ok {
+			return nil, reasonFailed, fault.Invalidf(op, "member %s/%s%s: no member kind serves %s", mb.Kind, mb.Name,
+				volumeSuffix(mb.Volume), mb.Kind)
 		}
-		var err error
-		switch {
-		case mb.Kind == v1.KindKVStore:
-			_, err = r.d.Store.Get(ctx, v1.KindKVStore.GVK(), ns, dest)
-			t.kv = workload.KVPrefix(ns, dest)
-		case mb.Kind == v1.KindBucket:
-			_, err = r.d.Store.Get(ctx, v1.KindBucket.GVK(), ns, dest)
-			t.bucket, t.view = dest, blob.Prefixed(r.d.Sources.Blob, r.d.Sources.BucketPrefix(ns, dest))
-		case mb.Kind == v1.KindSQLDatabase:
-			_, err = r.d.Store.Get(ctx, v1.KindSQLDatabase.GVK(), ns, dest)
-			t.sql = dest
-		case mb.Kind == v1.KindFunction:
-			var obj v1.Object
-			if obj, err = r.d.Store.Get(ctx, v1.KindFunction.GVK(), ns, dest); err == nil {
-				f, _ := obj.(*v1.Function)
-				if f == nil || !slices.ContainsFunc(f.Spec.Volumes, func(v v1.VolumeEntry) bool { return v.Type == v1.VolumeLocal && v.VolumeName() == mb.Volume }) {
-					err = fault.NotFoundf(op, "function %s declares no local volume %s", dest, mb.Volume)
-				}
-			}
-			if err == nil && r.d.Volumes != nil {
-				t.lost, err = r.d.Volumes.Lost(ctx, ns, dest, mb.Volume)
-			}
-			t.volFn, t.volume = dest, mb.Volume
-		case mb.AsLocation != nil:
-			_, err = r.d.Store.Get(ctx, v1.KindBucket.GVK(), ns, mb.AsLocation.Bucket)
-			t.view = blob.Prefixed(r.d.Sources.Blob, r.d.Sources.BucketPrefix(ns, mb.AsLocation.Bucket)+mb.AsLocation.Prefix+"/")
-			t.catalog = r.d.Sources.CatalogKey(ns, *mb.AsLocation)
-		default:
-			var obj v1.Object
-			if obj, err = r.d.Store.Get(ctx, v1.KindLake.GVK(), ns, mb.Name); err == nil {
-				c := obj.(*v1.Lake).Spec.Location
-				t.view = blob.Prefixed(r.d.Sources.Blob, r.d.Sources.BucketPrefix(ns, c.Bucket)+c.Prefix+"/")
-				t.catalog = r.d.Sources.CatalogKey(ns, c)
-			}
-		}
-		if fault.KindOf(err) == fault.NotFound {
-			return nil, ReasonMemberNotFound, err
-		}
+		d, err := k.Destination(ctx, rs.Namespace, mb)
 		if err != nil {
-			return nil, reasonFailed, err
+			return nil, reasonOf(callDestination, err), err
 		}
 		if !mb.InPlace {
-			empty, err := r.isEmpty(ctx, ns, t)
+			empty, err := d.IsEmpty(ctx)
 			if err != nil {
-				return nil, failReason(err), err
+				return nil, reasonOf(callIsEmpty, err), err
 			}
 			if !empty {
-				return nil, ReasonNotEmpty, fault.Conflictf(op, "%s/%s is not empty: a Restore loads into an empty one", mb.Kind, dest)
+				return nil, ReasonNotEmpty, fault.Conflictf(op, "%s/%s is not empty: a Restore loads into an empty one", mb.Kind,
+					cmp.Or(mb.As, mb.Name))
 			}
 		}
-		out = append(out, t)
+		out = append(out, &planned{file: m.Members[i], dest: d})
 	}
 	return out, "", nil
 }
 
-// isEmpty reports a target with no data; a SQLDatabase also needs no Function binding it, which closes the race
-// between the check and the load (ADR-0234 Decision 3), and a Ready engine to answer.
-func (r *RestoreReconciler) isEmpty(ctx context.Context, ns v1.NamespaceName, t *target) (bool, error) {
-	if t.volume != "" {
-		if r.d.Volumes == nil {
-			return false, fault.Unavailablef("backup.Restore", "volumes are off: no volume loads")
-		}
-		if t.lost {
-			return true, nil
-		}
-		return r.d.Volumes.IsEmpty(ctx, ns, t.volFn, t.volume)
-	}
-	if t.sql != "" {
-		if r.d.SQL == nil {
-			return false, fault.Unavailablef("backup.Restore", "no SQL engine loads a database")
-		}
-		fns, err := r.d.Store.List(ctx, v1.KindFunction.GVK(), store.ListOptions{Namespace: ns})
-		if err != nil {
-			return false, err
-		}
-		for _, o := range fns.Items {
-			if fn, ok := o.(*v1.Function); ok && slices.ContainsFunc(fn.Spec.Bindings.SQL, func(b v1.FunctionSQL) bool { return b.Database == t.sql }) {
-				return false, nil
-			}
-		}
-		has, err := r.d.SQL.HasTables(ctx, ns, t.sql)
-		return !has, err
-	}
-	if t.kv != "" {
-		if r.d.KV == nil {
-			return false, fault.Unavailablef("backup.Restore", "the KV driver loads no store")
-		}
-		keys, err := r.d.KV.List(ctx, t.kv)
-		return len(keys) == 0, err
-	}
-	if t.catalog != "" {
-		has, err := r.d.Sources.Blob.Exists(ctx, t.catalog)
-		if err != nil || has {
-			return false, err
-		}
-	}
-	items, _, err := t.view.ListAfter(ctx, "", "", 1)
-	return len(items) == 0, err
-}
-
-// fill empties an in-place target, then loads its member: a KVStore by LoadPrefix, a SQLDatabase by streaming its
-// file's records to the engine's load, which replaces all its data, objects by Put, a lake's files before its
-// catalog.db.
-func (r *RestoreReconciler) fill(ctx context.Context, ns v1.NamespaceName, t *target, src blob.Bucket, path string, unseal backup.Unseal) (string, error) {
-	if t.volume != "" {
-		return r.fillVolume(ctx, ns, t, src, path, unseal)
-	}
-	if t.sql != "" {
-		if r.d.SQL == nil {
-			return reasonFailed, fault.Unavailablef("backup.Restore", "no SQL engine loads a database")
-		}
-		if err := r.d.SQL.Load(ctx, ns, t.sql, &recordReader{next: workload.Records(ctx, src, path, t.file.Files[0], unseal)}); err != nil {
-			return failReason(err), err
-		}
-		return "", nil
-	}
-	if t.member.InPlace {
-		if err := r.emptyOne(ctx, ns, t); err != nil {
-			return reasonFailed, err
-		}
-	}
-	if t.kv != "" {
-		if r.d.KV == nil {
-			return reasonFailed, fault.Unavailablef("backup.Restore", "the KV driver loads no store")
-		}
-		err := r.d.KV.LoadPrefix(ctx, t.kv, workload.Records(ctx, src, path, t.file.Files[0], unseal))
-		if fault.KindOf(err) == fault.Conflict {
-			return ReasonNotEmpty, err
-		}
-		if err != nil {
-			return reasonFailed, err
-		}
-		return "", nil
-	}
-	for _, f := range t.file.Files {
-		next := workload.Records(ctx, src, path, f, unseal)
-		for {
-			rec, err := next()
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			if err != nil {
-				return reasonFailed, err
-			}
-			ct, md, body, err := workload.DecodeObject(rec.Value)
-			if err != nil {
-				return ReasonIntegrity, err
-			}
-			view, key := t.view, string(rec.Key)
-			if t.catalog != "" && key == workload.CatalogRecord {
-				view, key = r.d.Sources.Blob, t.catalog
-			}
-			if err := view.Put(ctx, key, body, blob.PutOptions{ContentType: ct, Metadata: md}); err != nil {
-				return reasonFailed, err
-			}
-		}
-	}
-	return "", nil
-}
-
-// fillVolume loads a Function's local volume: only into an empty one, in place too (ADR-0262 Decision 11), but for a
-// lost one, which is emptied first, since what it holds dates from after the loss (#1206).
-func (r *RestoreReconciler) fillVolume(ctx context.Context, ns v1.NamespaceName, t *target, src blob.Bucket, path string, unseal backup.Unseal) (string, error) {
-	if r.d.Volumes == nil {
-		return reasonFailed, fault.Unavailablef("backup.Restore", "volumes are off: no volume loads")
-	}
-	if t.lost {
-		if err := r.d.Volumes.Clear(ctx, ns, t.volFn, t.volume); err != nil {
-			return reasonFailed, err
-		}
-	}
-	err := r.d.Volumes.Load(ctx, ns, t.volFn, t.volume, &recordReader{next: workload.Records(ctx, src, path, t.file.Files[0], unseal)})
-	if fault.KindOf(err) == fault.Conflict {
-		return ReasonNotEmpty, err
-	}
-	if err != nil {
-		return reasonFailed, err
-	}
-	return "", nil
-}
-
-// empty empties every target a load began, after a failure.
-func (r *RestoreReconciler) empty(ctx context.Context, ns v1.NamespaceName, targets []*target) error {
+// clearBegun clears every destination whose load began, after a failure.
+func clearBegun(ctx context.Context, targets []*planned) error {
 	var errs []error
 	for _, t := range targets {
 		if t.written {
-			errs = append(errs, r.emptyOne(ctx, ns, t))
+			errs = append(errs, t.dest.Clear(ctx))
 		}
 	}
 	return errors.Join(errs...)
 }
 
-// emptyOne empties a target: a KVStore by DropPrefix, a SQLDatabase by its engine, a Bucket by BucketPurger.Purge, a
-// lake prefix key by key.
-func (r *RestoreReconciler) emptyOne(ctx context.Context, ns v1.NamespaceName, t *target) error {
-	switch {
-	case t.volume != "":
-		if r.d.Volumes == nil {
-			return nil
-		}
-		return r.d.Volumes.Clear(ctx, ns, t.volFn, t.volume)
-	case t.sql != "":
-		if r.d.SQL == nil {
-			return nil
-		}
-		return r.d.SQL.Empty(ctx, ns, t.sql)
-	case t.kv != "":
-		if r.d.KV == nil {
-			return nil
-		}
-		return r.d.KV.DropPrefix(t.kv)
-	case t.bucket != "" && r.d.Purger != nil:
-		return r.d.Purger.Purge(ctx, ns, t.bucket)
-	}
-	if t.catalog != "" {
-		if err := r.d.Sources.Blob.Delete(ctx, t.catalog); err != nil && fault.KindOf(err) != fault.NotFound {
-			return err
-		}
-	}
-	for {
-		items, more, err := t.view.ListAfter(ctx, "", "", 1000)
-		if err != nil {
-			return err
-		}
-		for _, it := range items {
-			if err := t.view.Delete(ctx, it.Key); err != nil && fault.KindOf(err) != fault.NotFound {
-				return err
-			}
-		}
-		if !more || len(items) == 0 {
-			return nil
-		}
-	}
-}
+// call is a member call whose error reasonOf maps.
+type call int
 
-// failReason is a load's reason: EngineNotReady for a database whose engine is not Ready, else Failed.
-func failReason(err error) string {
-	if errors.Is(err, workload.ErrEngineNotReady) {
+const (
+	callDestination call = iota
+	callIsEmpty
+	callPrepare
+	callLoad
+)
+
+// reasonOf is the reason of a member call's error (ADR-0311 Decision 5): a Destination's NotFound is MemberNotFound,
+// IsEmpty's and Load's ErrEngineNotReady EngineNotReady, Load's ErrNotEmpty NotEmpty and its ErrTornObject Integrity,
+// and any other Failed.
+func reasonOf(c call, err error) string {
+	switch {
+	case c == callDestination && fault.KindOf(err) == fault.NotFound:
+		return ReasonMemberNotFound
+	case c == callLoad && errors.Is(err, workload.ErrNotEmpty):
+		return ReasonNotEmpty
+	case c == callLoad && errors.Is(err, workload.ErrTornObject):
+		return ReasonIntegrity
+	case (c == callIsEmpty || c == callLoad) && errors.Is(err, workload.ErrEngineNotReady):
 		return ReasonEngineNotReady
 	}
 	return reasonFailed
-}
-
-// recordReader reads the values of a file's records in order, as one stream: a database's SQLite file.
-type recordReader struct {
-	next func() (snapshot.Record, error)
-	cur  []byte
-}
-
-func (r *recordReader) Read(p []byte) (int, error) {
-	for len(r.cur) == 0 {
-		rec, err := r.next()
-		if err != nil {
-			return 0, err
-		}
-		r.cur = rec.Value
-	}
-	n := copy(p, r.cur)
-	r.cur = r.cur[n:]
-	return n, nil
 }
 
 // finish writes the end of the Restore: Succeeded, or Failed with reason and err's message.

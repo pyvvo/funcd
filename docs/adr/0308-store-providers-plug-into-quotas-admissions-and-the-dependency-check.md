@@ -5,6 +5,8 @@
   experiment's commits `6f2733aa` and `26bfb6bd`); Accepted (2026-11-03, under the decider's delegation: "pick
   whatever ADR you want and ship them"; judged twice under the adr-judge skill in an independent session: round 1's
   Major, the admissions' timing, and five Minors folded; round 2 accept)
+- **Superseded in part by**: [ADR-0311](0311-each-provider-backs-up-and-restores-its-own-member-kind.md) (2026-11-03) —
+  Decision 6's row "Workload backup members" in its Scope table: the members are now a shared hook.
 - **Date**: 2026-11-03
 - **Deciders**: green-0-rabbit
 - **Tags**: provider, quota, admission, health, refactor

@@ -28,8 +28,8 @@ type Copy struct {
 	Members   []v1.BackupMember
 }
 
-// ListCopy lists the Backup directory path, <ns>/<backup>-<uid>/ (ADR-0287 Decision 5).
-func ListCopy(ctx context.Context, target blob.Bucket, path string) (Copy, error) {
+// ListCopy lists the Backup directory path, <ns>/<backup>-<uid>/ (ADR-0287 Decision 5), its members as kinds parse them.
+func ListCopy(ctx context.Context, target blob.Bucket, path string, kinds []MemberKind) (Copy, error) {
 	const op = "workload.ListCopy"
 	c, ok := copyAt(path)
 	if !ok {
@@ -39,7 +39,7 @@ func ListCopy(ctx context.Context, target blob.Bucket, path string) (Copy, error
 	if err := listFrom(ctx, target, path, "", func(a blob.Attributes) { items = append(items, a) }); err != nil {
 		return Copy{}, fault.Wrapf(err, fault.KindOf(err), op, "list %q", path)
 	}
-	c.fill(items)
+	c.fill(items, kinds)
 	return c, nil
 }
 
@@ -47,7 +47,8 @@ func ListCopy(ctx context.Context, target blob.Bucket, path string) (Copy, error
 // Decision 3). The listing starts after every key of after's slot: keys sort by slot, as Unix minutes have 8 digits
 // until 2160 (the bound of a schedule name's length). Directories of other schedules, Backups by hand and exports
 // under the same prefix are skipped.
-func SlotCopies(ctx context.Context, target blob.Bucket, ns v1.NamespaceName, schedule v1.ObjectName, after time.Time) ([]Copy, error) {
+func SlotCopies(ctx context.Context, target blob.Bucket, ns v1.NamespaceName, schedule v1.ObjectName, after time.Time,
+	kinds []MemberKind) ([]Copy, error) {
 	const op = "workload.SlotCopies"
 	prefix := string(ns) + "/" + string(schedule) + "-"
 	start := prefix + strconv.FormatInt(after.Unix()/60, 10) + "~"
@@ -80,7 +81,7 @@ func SlotCopies(ctx context.Context, target blob.Bucket, ns v1.NamespaceName, sc
 	out := make([]Copy, 0, len(dirs))
 	for _, p := range dirs {
 		c, _ := copyAt(p)
-		c.fill(items[p])
+		c.fill(items[p], kinds)
 		out = append(out, c)
 	}
 	slices.SortFunc(out, func(a, b Copy) int {
@@ -105,8 +106,8 @@ func copyAt(p string) (Copy, bool) {
 }
 
 // fill reads the directory's listing: the manifest, and each member's bytes under its kind directory (ADR-0222
-// Decision 4's layout); a Lake counts its last attempt only.
-func (c *Copy) fill(items []blob.Attributes) {
+// Decision 4's layout), skipping a key no kind parses; a Lake counts its last attempt only.
+func (c *Copy) fill(items []blob.Attributes, kinds []MemberKind) {
 	type member struct {
 		v1.BackupMember
 		attempt int
@@ -121,23 +122,13 @@ func (c *Copy) fill(items []blob.Attributes) {
 		}
 		seg := strings.Split(rel, "/")
 		var bm v1.BackupMember
-		attempt := 0
-		switch {
-		case len(seg) >= 3 && seg[0] == "kv":
-			bm = v1.BackupMember{Kind: v1.KindKVStore, Name: v1.ObjectName(seg[1])}
-		case len(seg) >= 3 && seg[0] == "blob":
-			bm = v1.BackupMember{Kind: v1.KindBucket, Name: v1.ObjectName(seg[1])}
-		case len(seg) >= 3 && seg[0] == "sql":
-			bm = v1.BackupMember{Kind: v1.KindSQLDatabase, Name: v1.ObjectName(seg[1])}
-		case len(seg) >= 4 && seg[0] == "volume":
-			bm = v1.BackupMember{Kind: v1.KindFunction, Name: v1.ObjectName(seg[1]), Volume: v1.ObjectName(seg[2])}
-		case len(seg) >= 4 && seg[0] == "lake":
-			n, err := strconv.Atoi(seg[2])
-			if err != nil {
-				continue
+		attempt, ok := 0, false
+		for _, k := range kinds {
+			if bm, attempt, ok = k.Parse(seg); ok {
+				break
 			}
-			bm, attempt = v1.BackupMember{Kind: v1.KindLake, Name: v1.ObjectName(seg[1])}, n
-		default:
+		}
+		if !ok {
 			continue
 		}
 		key := string(bm.Kind) + "/" + string(bm.Name) + "/" + string(bm.Volume)

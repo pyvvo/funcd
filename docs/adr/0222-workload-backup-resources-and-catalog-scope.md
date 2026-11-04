@@ -5,6 +5,12 @@
 - **Superseded in part by**: [ADR-0271](0271-the-lake-catalog-is-a-duckdb-file.md) (2026-10-23) — Decision 5's check of the copy against the files the checkpoint names: the checkpoint is copied unopened, and a copy that misses a listed key runs again
 - **Superseded in part by**: [ADR-0287](0287-a-platform-restore-finds-the-backups-made-after-its-point.md) (2026-10-25) — Decision 4's "`Running` at start ⇒ `Failed` (`Interrupted`)": a record whose copy's manifest is on the target becomes `Succeeded`
 - **Superseded in part by**: [ADR-0290](0290-a-namespace-held-for-its-data-refuses-calls.md) (2026-10-27) — Decision 8's list of what the per-namespace hold gates: the data plane's calls into the namespace join it.
+- **Superseded in part by**: [ADR-0311](0311-each-provider-backs-up-and-restores-its-own-member-kind.md) (2026-11-03) —
+  `Sources` and `Write`'s `src Sources` in its Contracts, and `Sources.BucketPrefix` in Decision 7: each member kind is
+  a type its provider hands over.
+- **Superseded in part by**: [ADR-0312](0312-a-buckets-backup-member-skips-its-lakes-prefixes.md) (2026-11-04) —
+  Decision 2 (a Bucket brings in its Lakes), Decision 4's `blob/<bucket>/` line ("every object"), and Decision 7's
+  `BucketPurger.Purge` in a Restore and `Format`: a Bucket's copy leaves its Lakes to their own members.
 - **Date**: 2026-10-10
 - **Deciders**: green-0-rabbit
 - **Tags**: backup, restore, disaster-recovery, kvstore, blob, catalog, rbac, app

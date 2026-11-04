@@ -176,7 +176,7 @@ func (r *BackupReconciler) copy(ctx context.Context, b *v1.Backup) (string, erro
 	defer func() { _ = target.Close() }()
 	path := copyPath(b)
 	b.Status.Target, b.Status.Path, b.Status.Recipients = s.Spec.Target.URL, path, sealer.Keys().Recipients
-	m, err := workload.Write(ctx, b.Namespace, members, r.d.Sources, workload.Options{
+	m, err := workload.Write(ctx, b.Namespace, members, r.d.Kinds, workload.Options{
 		Target: target, Path: path, Seal: sealer.Seal(), Recipients: sealer.Keys().Recipients,
 	})
 	switch {
