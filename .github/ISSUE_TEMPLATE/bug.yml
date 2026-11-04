@@ -41,6 +41,13 @@ body:
     validations:
       required: true
   - type: textarea
+    id: design
+    attributes:
+      label: Design check
+      description: "What you read and what it says, then the verdict, in four lines. ADRs: ADR-NNNN: what it says. Issues: #N: what it says, or none. Cards: its title, or none. Verdict: bug, and the clause it breaks."
+    validations:
+      required: false
+  - type: textarea
     id: cause
     attributes:
       label: Root cause

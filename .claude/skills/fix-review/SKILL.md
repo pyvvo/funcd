@@ -50,7 +50,10 @@ Through `scripts/agent/d <cmd>` (the cached pinned dev shell); capture real outp
    only, no `any` in signatures, the import graph), the `CLAUDE.md` style rules (block-style YAML,
    top-level imports, no comment bloat), and the surrounding code's naming and idiom. A breach → Major
    (Minor when cosmetic).
-9. **ADRs**: the fix contradicts no Accepted/Implemented ADR's Decision or Contracts (if it must, that is
+9. **It is a bug**: for a `kind/bug`, read what the issue's `### Design check` cites, and search the ADRs on the path, the
+   issues and the board cards once yourself (CLAUDE.md → *⛔ Is it a bug?*). A fix of behavior that was accepted or deferred
+   → `fail`, attribution `issue`, however well it is built.
+   **ADRs**: the fix contradicts no Accepted/Implemented ADR's Decision or Contracts (if it must, that is
    an `adr` finding — the fix needs an ADR), and no Accepted/Implemented ADR file was edited (Blocker).
 10. **Checks**: rerun the touched packages' tests (`-race`), vet and lint yourself, through `scripts/agent/d`.
    The repo-wide set (`scripts/agent/gate.sh`, then CI) runs once per PR: read its result, and run it yourself
@@ -75,7 +78,7 @@ Count the items that apply (`--dod-total`) and those that hold (`--dod-passed`):
 4. Reverting or mutating the fix's key lines fails a test.
 5. The root cause is fixed, not masked.
 6. Only the issue's scope changed; no test was weakened or deleted.
-7. No Accepted/Implemented ADR is contradicted or edited; living docs stay true.
+7. The issue's Design check holds. No Accepted/Implemented ADR is contradicted or edited; living docs stay true.
 8. Build, vet, lint (host and Linux) and tests are green; e2e and the lane too where they cover the path.
 9. Conventions hold: ADR-0002, the `CLAUDE.md` style rules, and the surrounding code's naming and idiom.
 10. The change reuses what exists: no duplicated logic, and no new helper, type, harness or dependency where

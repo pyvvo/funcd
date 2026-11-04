@@ -742,3 +742,61 @@ func TestIssue1362_StressSummaryNamesASuiteWithoutALog(t *testing.T) {
 	require.Equal(t, 0, code, out)
 	require.Equal(t, "### Default-tag suite\n\nThe job saved no test log: its runner stopped, or the job failed before its suite ran.\n", out)
 }
+
+// issueDriver runs the issue driver on stdin.
+func issueDriver(t *testing.T, stdin string, args ...string) (int, string) {
+	t.Helper()
+	cmd := exec.Command("python3", append([]string{filepath.Join("..", ".claude", "skills", "issue-management", "driver.py")}, args...)...)
+	cmd.Stdin = strings.NewReader(stdin)
+	return exitCode(t, cmd)
+}
+
+// A bug is filed only with a Design check that names what was read and the verdict bug (.claude/CLAUDE.md, "Is it a bug?"), and
+// another kind carries none. A dry run stops before any call to GitHub. The web form leaves the check to triage.
+func TestIssueDriver_ABugNeedsItsDesignCheck(t *testing.T) {
+	const adrs, issues, cards, verdict = "ADRs: ADR-0016: C3 serves a cold request.", "Issues: none.", "Cards: none.", "Verdict: bug, it breaks ADR-0016 C3."
+	bug := func(design string) string {
+		var b strings.Builder
+		for _, section := range []string{"Summary", "Steps to reproduce", "Expected behavior", "Actual behavior", "Environment"} {
+			fmt.Fprintf(&b, "### %s\n\nfilled\n\n", section)
+		}
+		return b.String() + "### Design check\n\n" + design + "\n\n### Root cause\n\n_No response_\n\n### Workaround\n\n_No response_\n\n### References\n\n_No response_\n"
+	}
+	file := func(kind, body string) (int, string) {
+		return issueDriver(t, body, "create", "--kind", kind, "--title", "A plain title", "--area", "function", "--priority", "low", "--body-file", "-", "--dry-run")
+	}
+	code, out := file("bug", bug(strings.Join([]string{adrs, issues, cards, verdict}, "\n")))
+	require.Equal(t, 0, code, out)
+	require.Contains(t, out, verdict)
+
+	for name, c := range map[string]struct{ design, refused string }{
+		"empty":             {"_No response_", "Design check is required"},
+		"no ADR":            {strings.Join([]string{issues, cards, verdict}, "\n"), "the ADRs you read"},
+		"no ADR number":     {strings.Join([]string{"ADRs: none.", issues, cards, verdict}, "\n"), "the ADRs you read"},
+		"no issues":         {strings.Join([]string{adrs, cards, verdict}, "\n"), "the issues you searched"},
+		"no cards":          {strings.Join([]string{adrs, issues, verdict}, "\n"), "the board cards you searched"},
+		"no verdict":        {strings.Join([]string{adrs, issues, cards}, "\n"), "the verdict"},
+		"verdict accepted":  {strings.Join([]string{adrs, issues, cards, "Verdict: accepted, ADR-0016 names it."}, "\n"), "any other verdict files no bug"},
+		"verdict uncovered": {strings.Join([]string{adrs, issues, cards, "Verdict: uncovered."}, "\n"), "any other verdict files no bug"},
+	} {
+		code, out := file("bug", bug(c.design))
+		require.NotEqual(t, 0, code, name)
+		require.Contains(t, out, c.refused, name)
+	}
+	code, out = file("bug", strings.Replace(bug("x"), "### Design check\n\nx\n\n", "", 1))
+	require.NotEqual(t, 0, code)
+	require.Contains(t, out, "the sections must be", "a body with no such section")
+
+	const flake = "### Test\n\nfilled\n\n### Failure\n\nfilled\n\n### Frequency\n\nfilled\n\n### Suspected cause\n\n_No response_\n\n### References\n\n_No response_\n"
+	code, out = file("flake", flake)
+	require.Equal(t, 0, code, out)
+
+	code, out = issueDriver(t, "", "forms", "--check")
+	require.Equal(t, 0, code, out)
+	form, err := os.ReadFile(filepath.Join("..", ".github", "ISSUE_TEMPLATE", "bug.yml"))
+	require.NoError(t, err)
+	_, after, found := strings.Cut(string(form), "id: design\n")
+	require.True(t, found)
+	field, _, _ := strings.Cut(after, "- type:")
+	require.Contains(t, field, "required: false")
+}

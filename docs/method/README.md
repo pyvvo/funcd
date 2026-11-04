@@ -126,7 +126,8 @@ this:
 
 ## 4. Fix it: the fix pipeline
 
-A defect that needs no design decision goes through three skills:
+A finding is a defect only after two checks (`.claude/CLAUDE.md`, *Is it a bug?*): it reproduces on main, and no ADR, issue or
+board card decided, accepted or deferred it. A defect that needs no design decision goes through three skills:
 
 | Skill | What it does |
 |---|---|

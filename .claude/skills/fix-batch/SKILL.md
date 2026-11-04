@@ -45,7 +45,7 @@ Around it:
 For every issue at once, each in its own worktree from `origin/main` under the session scratchpad (never the
 shared checkout: `git worktree add -q -b fix/w<wave>-i<N> <scratch>/wt/i<N> origin/main`):
 
-1. **Fix** — `/fix` Steps 2–6: regression test first, root-cause fix, revert check, one commit with `Fixes #N`.
+1. **Fix** — `/fix` Steps 2–6: the check that it is a bug, regression test first, root-cause fix, revert check, one commit with `Fixes #N`.
    Checks on the touched packages only; no e2e suite, no `go test ./...`, no lanes — the gate runs those once.
 2. **Review** — as soon as the fix is committed, `/fix-review` by an independent agent in the same worktree: the
    revert check of `/fix-review` Step 2.1 (an `origin/main` overlay of the changed non-test files, or a

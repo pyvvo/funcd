@@ -35,6 +35,39 @@ you must *describe* a check, describe it generically ("grepped for the local use
 transcribe the real value**. The single exception: when genuinely operating inside a *separate* sibling project
 or a remote target (e.g. the homebox box), that project's own root is the path origin — still never an OS-absolute prefix.
 
+## ⛔ Is it a bug? Verify twice before you say so
+
+Every package here is built from an ADR, so most surprising behavior was decided, accepted or deferred by someone. Calling it
+a bug starts a fix, the fix changes a decision nobody reopened, and the next session finds the next "bug". That loop is the cost
+this rule stops: of 125 closed `kind/bug` issues, 13 were decided behavior (#1226), and on 2026-11-04 two delays called bugs in
+chat were both named in their ADRs.
+
+**It binds the moment you would write "bug", "defect" or "to fix"**: in chat, a report, a review, a follow-up list, an issue, a
+card or a commit, for a defect found on the way and for a subagent's finding too. Until both checks are done, write "surprising"
+or "not checked yet", and propose no fix.
+
+1. **It happens.** Reproduce it on the current `origin/main`, and say what ran.
+2. **Nothing decided it.** Dive deep, and read instead of recalling:
+   - **Every ADR on its path**: grep the component, the phase, the reason and the key, and follow each `Superseded in part by`
+     line. Read the whole ADR, not only its Decision: accepted costs live in **Scope** (what it leaves out), **Alternatives**
+     (the fix someone rejected), **Consequences**, **Risks accepted** and **Open questions**.
+   - **Issues**, open and closed: search the symptom, the error text and the test name (`gh issue list --state all --search`).
+   - **Board cards** (`python3 .claude/skills/project-management/driver.py list`): what the decider deferred lives there.
+   - **The tests that pin it**, the docs and the blueprint's state machine.
+
+Then give it one verdict, citing what you read:
+
+| Verdict | It means | What you do |
+|---|---|---|
+| `bug` | It breaks a clause you can cite, or no sound design could want it (a crash, lost data, a hang), and nothing above accepts it | `/fix`, or file it; its `### Design check` records this |
+| `accepted` | An ADR decided it, named it as a cost or a risk, left it out on purpose or rejected its fix, or a test pins it | No issue and no fix: report it with the citation. Changing it is the decider's new decision: a `kind/feature` with `needs-adr` and a superseding ADR, or a board card |
+| `deferred` | A board card or an ADR's open question holds it | No issue and no fix: add your evidence to the card |
+| `uncovered` | Nothing above speaks of it, and a sound design could want either | A question for the decider with the evidence, or a line of the report in a campaign. No fix until answered |
+
+Check a fix you would propose the same way: it can break the rule the behavior follows. `driver.py create --kind bug` refuses an
+issue with no Design check, and `/fix` and `/fix-review` stop on one that does not hold. A security finding takes the same two
+checks and stays in its private advisory.
+
 ## The four document layers (+ code)
 
 | Layer | Path | Answers | Mutability | Source-of-truth rule |
@@ -291,11 +324,9 @@ generates the issue forms in `.github/ISSUE_TEMPLATE/` (computed — never hand-
 
 - **Where things go**: a defect, a task or a feature of a feat doc → an issue; an un-scoped idea → a board card;
   a decision → an ADR.
-- **Check that it is a defect before filing it.** Read what pins the behavior first: its ADR's Decision and Scenarios,
-  the docs, and the code's own comments and tests; a bug names the clause it breaks, or says that none covers it.
-  Behavior they intend is no bug: a request to change it is a design change (`kind/feature` with `needs-adr`, a
-  superseding ADR) or a board card, and the reply to the reporter says which. Reproduce a
-  suspected bug on the current main, and say what ran, before filing it.
+- **Check that it is a defect before filing it**: the two checks of *⛔ Is it a bug?* above. A bug's `### Design check` records
+  them and names the clause it breaks. Behavior they show as intended is no bug, and the reply to a reporter says what it is
+  instead.
 - **One defect per issue**, with exactly one `kind/`, exactly one `priority/`, and at least one `area/` label.
 - **No issue without a parent.** Every issue is a sub-issue of a tracker: a campaign files a root tracker,
   one group tracker per theme under it, and its issues under the group trackers (#232, #732); an epoch files one
