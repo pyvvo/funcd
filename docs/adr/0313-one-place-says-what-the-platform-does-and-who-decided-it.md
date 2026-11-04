@@ -268,7 +268,7 @@ Measured on the experiment's text as one file, with a list of 14 past surprises 
 - **(+)** A reader of the registry alone reached the right verdict on 13 of 14, at about 12k tokens each, a saving Decision 11
   lets a session keep; a read that goes on to the ADRs took about 46k, and one with no registry 41k. The miss read "no row",
   which sends a reader on to the issues.
-- **(+)** Writing it showed what no list did: 19 questions and 11 places where the code differs from its ADR.
+- **(+)** Writing it showed what no list did: 20 questions and 11 places where the code differs from its ADR.
 - **(−)** It is a first stop, not a shorter dive: on the same 7 surprises, the registry with the ADRs took 314k tokens and
   none 285k. Both got all 7.
 - **(−)** The check proves a citation exists, not what it says, and does not compare a machine with the code. An audit of 40
