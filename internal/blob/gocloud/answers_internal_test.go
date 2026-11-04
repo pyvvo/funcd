@@ -164,7 +164,7 @@ func TestStaticKeyAnswers_BoundAnUploadsAnswer(t *testing.T) {
 // An object's content is not an answer the limit cuts: its reader bounds it.
 func TestStaticKeyAnswers_LeaveAnObjectsContent(t *testing.T) {
 	t.Parallel()
-	content := strings.Repeat("x", maxListPageBytes+1)
+	content := strings.Repeat("x", maxListBytes+1)
 	b := answeringStore(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(content))
 	}, OpenOptions{})
@@ -173,55 +173,99 @@ func TestStaticKeyAnswers_LeaveAnObjectsContent(t *testing.T) {
 	require.Len(t, got, len(content))
 }
 
+// listedObject is a page's entry for key, which XML escapes as the caller wrote it.
+func listedObject(key string) string {
+	return `<Contents><Key>` + key + `</Key><LastModified>2026-11-04T00:00:00.000Z</LastModified><Size>1</Size></Contents>`
+}
+
 // listingPage is one page of a listing of one key, padded to size bytes.
 func listingPage(size int) []byte {
-	head, tail := `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>b</Name><Contents><Key>a</Key><LastModified>2026-11-04T00:00:00.000Z</LastModified><Size>1</Size></Contents>`, `</ListBucketResult>`
+	head, tail := `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>b</Name>`+listedObject("a"), `</ListBucketResult>`
 	return []byte(head + strings.Repeat(" ", size-len(head)-len(tail)) + tail)
 }
 
-// A listing's page of maxListPageBytes is read, and a longer one fails its listing, having read no more than that.
-func TestStaticKeyAnswers_BoundAListingPage(t *testing.T) {
+// truncatedPage is a page that holds contents and says more follow.
+func truncatedPage(contents string) []byte {
+	return []byte(`<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>b</Name><IsTruncated>true</IsTruncated>` +
+		`<NextContinuationToken>t</NextContinuationToken>` + contents + `</ListBucketResult>`)
+}
+
+// One ListAfter reads a page that spends its budget to the byte, and a page one byte longer fails it. So does one cut before its
+// root, which would otherwise read as an empty listing.
+func TestStaticKeyAnswers_FailAListingThatSpendsItsBudget(t *testing.T) {
 	t.Parallel()
+	whole := maxListBytes - listPageCharge
 	b := answeringStore(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(listingPage(maxListPageBytes))
+		_, _ = w.Write(listingPage(whole))
 	}, OpenOptions{})
 	items, _, err := b.ListAfter(context.Background(), "", "", 10)
 	require.NoError(t, err)
 	require.Len(t, items, 1)
 
-	const body = 2 * (maxListPageBytes + 32<<20)
-	var sent atomic.Int64
-	done := make(chan struct{}, 1)
-	chunk := []byte(strings.Repeat(" ", 64<<10))
-	long := answeringStore(t, func(w http.ResponseWriter, _ *http.Request) {
-		defer func() { done <- struct{}{} }()
-		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>b</Name>`))
-		for sent.Load() < body {
-			n, err := w.Write(chunk)
-			sent.Add(int64(n))
-			if err != nil {
-				return
-			}
-		}
-	}, OpenOptions{})
-	_, _, err = long.ListAfter(context.Background(), "", "", 10)
-	require.Error(t, err)
-	select {
-	case <-done:
-	case <-time.After(30 * time.Second):
-		t.Fatal("the store is still sending")
+	for name, page := range map[string][]byte{
+		"one byte over":     listingPage(whole + 1),
+		"before its root":   []byte(strings.Repeat(" ", whole+1)),
+		"far past its size": []byte(strings.Repeat(" ", 3*maxListBytes)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			b := answeringStore(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(page) }, OpenOptions{})
+			items, more, err := b.ListAfter(context.Background(), "", "", 10)
+			require.ErrorContains(t, err, "pages of one listing")
+			require.Empty(t, items)
+			require.False(t, more)
+		})
 	}
-	require.Less(t, sent.Load(), int64(body/2), "the client read the page whole")
 }
 
-// A listed object with no modification time fails its listing.
-func TestStaticKeyAnswers_FailAListedObjectWithNoTime(t *testing.T) {
+// One ListAfter has one budget across its pages, however its store cuts them.
+func TestStaticKeyAnswers_SpendOneBudgetAcrossAListingsPages(t *testing.T) {
 	t.Parallel()
+	const pageBytes = 256 << 10
+	page := truncatedPage(listedObject("a") + strings.Repeat(" ", pageBytes))
+	var requests atomic.Int64
 	b := answeringStore(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>b</Name><Contents><Key>a</Key><Size>1</Size></Contents></ListBucketResult>`))
+		requests.Add(1)
+		_, _ = w.Write(page)
 	}, OpenOptions{})
-	_, _, err := b.ListAfter(context.Background(), "", "", 10)
-	require.ErrorContains(t, err, "no modification time")
+	_, _, err := b.ListAfter(context.Background(), "", "", 1000)
+	require.ErrorContains(t, err, "pages of one listing")
+	require.LessOrEqual(t, requests.Load(), int64(maxListBytes/pageBytes+1))
+}
+
+// Pages with a token and no key end through the same budget.
+func TestStaticKeyAnswers_EndAListingOfEmptyPages(t *testing.T) {
+	t.Parallel()
+	var requests atomic.Int64
+	b := answeringStore(t, func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		_, _ = w.Write(truncatedPage(""))
+	}, OpenOptions{})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _, err := b.ListAfter(ctx, "", "", 1000)
+	require.ErrorContains(t, err, "pages of one listing")
+	require.LessOrEqual(t, requests.Load(), int64(maxListBytes/listPageCharge+1))
+}
+
+// A fill of 1000 of the longest keys S3 allows, of a character XML escapes, stays within the budget in one page and in 1000.
+func TestStaticKeyAnswers_ReadARealListingHoweverItsStoreCutsIt(t *testing.T) {
+	t.Parallel()
+	object := listedObject(strings.Repeat("&amp;", 1024))
+	for name, h := range map[string]http.HandlerFunc{
+		"one page": func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>b</Name>` + strings.Repeat(object, 1000) + `</ListBucketResult>`))
+		},
+		"a page per key": func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(truncatedPage(object)) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			b := answeringStore(t, h, OpenOptions{})
+			items, _, err := b.ListAfter(context.Background(), "", "", 1000)
+			require.NoError(t, err)
+			require.Len(t, items, 1000)
+		})
+	}
 }
 
 // A session's answer is bounded, as a directory bucket's name makes the client ask for one before its first request.

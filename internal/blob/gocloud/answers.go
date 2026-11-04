@@ -19,8 +19,13 @@ import (
 // upload answer takes a few KiB; a longer one is cut, which at most makes its error less precise.
 const maxAnswerBytes = 64 << 10
 
-// maxListPageBytes bounds what the same client reads of one page of a listing. A page of 1000 keys takes under 2 MiB.
-const maxListPageBytes = 16 << 20
+// maxListBytes is what the same client reads of all the pages of one ListAfter, however its store cuts them. A fill of 1000
+// keys takes about 5.2 MiB at worst, 1,024-byte keys of a character XML escapes.
+const maxListBytes = 16 << 20
+
+// listPageCharge is the least a page spends of maxListBytes, so pages with no key end too. A fill of 1000 pages of a key each
+// spends 4 MiB of it.
+const listPageCharge = 4 << 10
 
 // cappedAnswers is a static key's HTTP client. It bounds its answers here, below the S3 client, which reads an error's body
 // whole before its caller sees the error. An object's content is its reader's to bound.
@@ -31,17 +36,61 @@ func (c cappedAnswers) Do(r *http.Request) (*http.Response, error) {
 	if err != nil {
 		return resp, err
 	}
-	limit := int64(maxAnswerBytes)
 	if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
 		switch awsmiddleware.GetOperationName(r.Context()) {
 		case "GetObject":
 			return resp, nil
 		case "ListObjectsV2":
-			limit = maxListPageBytes
+			resp.Body = listingBody(r.Context(), resp.Body)
+			return resp, nil
 		}
 	}
-	resp.Body = cappedBody{io.LimitReader(resp.Body, limit), resp.Body}
+	resp.Body = cappedBody{io.LimitReader(resp.Body, maxAnswerBytes), resp.Body}
 	return resp, nil
+}
+
+type listBudgetKey struct{}
+
+// withListBudget gives the pages asked for under ctx one budget of maxListBytes.
+func withListBudget(ctx context.Context) context.Context {
+	return context.WithValue(ctx, listBudgetKey{}, new(int64(maxListBytes)))
+}
+
+// listingBody reads a listing's page out of ctx's budget, or out of a budget of its own.
+func listingBody(ctx context.Context, body io.ReadCloser) io.ReadCloser {
+	left, ok := ctx.Value(listBudgetKey{}).(*int64)
+	if !ok {
+		left = new(int64(maxListBytes))
+	}
+	*left -= listPageCharge
+	return spendingBody{body, left}
+}
+
+// spendingBody fails a read past its budget with an error, not io.EOF: a page cut before its root would read as an empty
+// listing.
+type spendingBody struct {
+	io.ReadCloser
+	left *int64
+}
+
+func (b spendingBody) Read(p []byte) (int, error) {
+	if *b.left < 0 {
+		return 0, listBudgetSpent()
+	}
+	// One byte past the budget tells a page that ends on it from a longer one.
+	if room := *b.left + 1; int64(len(p)) > room {
+		p = p[:room]
+	}
+	n, err := b.ReadCloser.Read(p)
+	*b.left -= int64(n)
+	if *b.left < 0 {
+		return n - 1, listBudgetSpent()
+	}
+	return n, err
+}
+
+func listBudgetSpent() error {
+	return fault.Invalidf("gocloud.ListObjectsV2", "the pages of one listing take more than %d bytes", maxListBytes)
 }
 
 // requireListedTimes fails a listing page that holds an object with no modification time: S3 sends one with every object,

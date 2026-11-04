@@ -509,7 +509,7 @@ func (k *bucket) s3ListAfter(ctx context.Context, prefix, after string, limit in
 			return nil
 		},
 	}
-	objs, next, err := k.b.ListPage(ctx, gcblob.FirstPageToken, limit, opts)
+	objs, next, err := k.b.ListPage(withListBudget(ctx), gcblob.FirstPageToken, limit, opts)
 	if errors.Is(err, errNoV2Input) {
 		all, lerr := k.List(ctx, prefix)
 		if lerr != nil {
