@@ -1,6 +1,6 @@
-// Command behavior writes the generated value blocks of docs/BEHAVIOR.md, each chapter's config keys and hard-coded
-// values, and with -check fails when the file no longer matches the code: a value changed, a package has no chapter, or
-// a written row cites an ADR, a test, a reason or a number that is not so.
+// Command behavior writes the generated value blocks of docs/BEHAVIOR.md (ADR-0313), each chapter's config keys and
+// hard-coded values, and with -check fails when the file no longer matches the code: a value changed, a number is written
+// inline, a package, config section or kind has no chapter, or a written row cites what does not exist.
 package main
 
 import (
@@ -25,11 +25,14 @@ import (
 )
 
 const (
-	docPath    = "docs/BEHAVIOR.md"
-	blockBegin = "<!-- generated values, do not edit: just behavior-values -->"
-	blockEnd   = "<!-- end of generated values -->"
-	maxWritten = 800
-	skillHint  = "run the /behavior-registry skill: regenerate with `just behavior-values`, then check that each written row still holds"
+	docPath          = "docs/BEHAVIOR.md"
+	blockBegin       = "<!-- generated values, do not edit: just behavior-values -->"
+	blockEnd         = "<!-- end of generated values -->"
+	rowHeader        = "| Where | What happens | Time | You see | Status | Source |"
+	notWritten       = "Not written yet."
+	maxWritten       = 800
+	firstADRWithRows = 314
+	skillHint        = "run the /behavior-registry skill: regenerate with `just behavior-values`, then check that each written row still holds"
 )
 
 // chapter is one chapter of the file: the packages and the config sections its values come from.
@@ -58,58 +61,102 @@ func chapters() []chapter {
 	}
 }
 
+// inputs is what a run reads besides the tree at root, so a test brings its own.
+type inputs struct {
+	root     string
+	chapters []chapter
+	keys     map[string]string
+	kinds    []string
+}
+
 // skipped holds no platform behavior: tests, tools and benches.
 var skipped = regexp.MustCompile(`^(\.[a-z]+|vendor|node_modules|e2e|examples|scripts|docs|images|bench|tests|api/cron|api/lintfixture|internal/testkit|internal/controlplane/cmd)(/|$)`)
+
+// nameTest is a name that reads as a limit, a wait or a count, so its plain number counts as a value.
+var nameTest = regexp.MustCompile(`(?i)^(default|max|min|limit|grace|timeout|interval|retry|retries|attempts|budget)|(max|limit|timeout|interval|grace|wait|period|budget|attempts|retries|bytes|size|ttl|page|batch|concurrency|conns|buf)$`)
 
 // row is one generated value.
 type row struct{ name, value, from string }
 
-// limitName is a name that reads as a limit, a wait or a count, so its plain number counts as a value.
-var limitName = regexp.MustCompile(`(?i)^(default|max|min|limit|grace|timeout|interval|retry|retries|attempts|budget)|(max|limit|timeout|interval|grace|wait|period|budget|attempts|retries|bytes|size|ttl)$`)
-
 func main() {
 	check := flag.Bool("check", false, "fail when the file differs from what the code gives, or a written row does not hold")
 	flag.Parse()
-	if err := run(*check); err != nil {
+	in, err := realInputs()
+	if err == nil {
+		err = run(in, *check)
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(check bool) error {
-	byChapter := map[string][]row{}
-	stringsInCode := map[string]bool{}
-	keys, err := configRows(byChapter)
+func realInputs() (inputs, error) {
+	documented, err := exampleDefaults("examples/funcdconfig.yaml")
+	if err != nil {
+		return inputs{}, err
+	}
+	keys := map[string]string{}
+	leaves(reflect.ValueOf(config.Defaults()), "", func(key string, v reflect.Value) {
+		section, _, _ := strings.Cut(key, ".")
+		if section == "apiVersion" || section == "kind" {
+			return
+		}
+		value := fmt.Sprint(v.Interface())
+		if v.IsZero() {
+			value = cmp.Or(documented[key], "(empty)")
+		}
+		keys[key] = value
+	})
+	var kinds []string
+	for _, k := range v1.AllKinds() {
+		kinds = append(kinds, string(k))
+	}
+	return inputs{root: ".", chapters: chapters(), keys: keys, kinds: kinds}, nil
+}
+
+func run(in inputs, check bool) error {
+	code, err := scanCode(in)
 	if err != nil {
 		return err
 	}
-	if err := scanCode(byChapter, stringsInCode, keys); err != nil {
-		return err
+	byChapter, problems := configRows(in)
+	problems = append(problems, code.orphans...)
+	for name, rows := range code.rows {
+		byChapter[name] = append(byChapter[name], rows...)
 	}
-	current, err := os.ReadFile(docPath)
+	path := filepath.Join(in.root, docPath)
+	current, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	next, err := render(string(current), byChapter)
-	if err != nil {
-		return err
-	}
+	next, missing := render(string(current), in.chapters, byChapter)
+	problems = append(problems, missing...)
 	if !check {
-		return os.WriteFile(docPath, []byte(next), 0o600)
+		if len(problems) > 0 {
+			return failure(problems)
+		}
+		return os.WriteFile(path, []byte(next), 0o600)
 	}
-	problems := validate(next, byChapter, keys, stringsInCode)
+	problems = append(problems, code.inline...)
+	problems = append(problems, validate(in, string(current), byChapter, code.known)...)
+	problems = append(problems, adrsWithoutRows(in.root)...)
 	if changed := changedLines(string(current), next); len(changed) > 0 {
 		problems = append(problems, fmt.Sprintf("%s no longer matches the code:\n  %s", docPath, strings.Join(changed, "\n  ")))
 	}
 	if len(problems) > 0 {
-		return fmt.Errorf("%s\n\n%s", strings.Join(problems, "\n"), skillHint)
+		return failure(problems)
 	}
 	return nil
 }
 
-func home(dir string) (string, bool) {
+func failure(problems []string) error {
+	return fmt.Errorf("%s\n\n%s", strings.Join(problems, "\n"), skillHint)
+}
+
+func home(chapters []chapter, dir string) (string, bool) {
 	best, name := -1, ""
-	for _, c := range chapters() {
+	for _, c := range chapters {
 		for _, p := range c.packages {
 			if (dir == p || strings.HasPrefix(dir, p+"/")) && len(p) > best {
 				best, name = len(p), c.name
@@ -119,114 +166,201 @@ func home(dir string) (string, bool) {
 	return name, best >= 0
 }
 
-func scanCode(byChapter map[string][]row, literals map[string]bool, keys map[string]string) error {
+// scanned is what the production code gives: its values by chapter, every string and identifier it holds, the numbers
+// it writes inline and the packages with no chapter.
+type scanned struct {
+	rows    map[string][]row
+	known   map[string]bool
+	inline  []string
+	orphans []string
+}
+
+func scanCode(in inputs) (scanned, error) {
+	out := scanned{rows: map[string][]row{}, known: map[string]bool{}}
 	fset := token.NewFileSet()
-	var orphans []string
-	err := filepath.WalkDir(".", func(path string, d os.DirEntry, err error) error {
+	err := filepath.WalkDir(in.root, func(full string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
+		path, err := filepath.Rel(in.root, full)
+		if err != nil {
+			return err
+		}
+		path = filepath.ToSlash(path)
 		if d.IsDir() {
 			if path != "." && skipped.MatchString(path) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") || strings.HasSuffix(path, "/bench.go") || strings.Contains(path, "zz_generated") {
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") || strings.HasSuffix(path, "/bench.go") {
 			return nil
 		}
-		f, perr := parser.ParseFile(fset, path, nil, 0)
+		f, perr := parser.ParseFile(fset, full, nil, parser.ParseComments)
 		if perr != nil {
 			return fmt.Errorf("parse %s: %w", path, perr)
 		}
+		if ast.IsGenerated(f) || importsTesting(f) {
+			return nil
+		}
 		ast.Inspect(f, func(n ast.Node) bool {
-			if l, ok := n.(*ast.BasicLit); ok && l.Kind == token.STRING {
-				if s, uerr := strconv.Unquote(l.Value); uerr == nil {
-					literals[s] = true
+			switch v := n.(type) {
+			case *ast.BasicLit:
+				if s, uerr := strconv.Unquote(v.Value); uerr == nil && v.Kind == token.STRING {
+					out.known[s] = true
 				}
+			case *ast.Ident:
+				out.known[v.Name] = true
 			}
 			return true
 		})
-		chapterName, ok := home(filepath.Dir(path))
+		name, ok := home(in.chapters, filepath.ToSlash(filepath.Dir(path)))
 		if !ok {
-			if d := filepath.Dir(path); !slices.Contains(orphans, d) {
-				orphans = append(orphans, d)
+			if p := "package " + filepath.ToSlash(filepath.Dir(path)) + " has no chapter in scripts/behavior/main.go"; !slices.Contains(out.orphans, p) {
+				out.orphans = append(out.orphans, p)
 			}
 			return nil
 		}
-		byChapter[chapterName] = append(byChapter[chapterName], fileRows(fset, f, path, keys)...)
+		rows, inline := fileValues(fset, f, path, in.keys)
+		out.rows[name] = append(out.rows[name], rows...)
+		out.inline = append(out.inline, inline...)
 		return nil
 	})
-	if err != nil {
-		return err
-	}
-	if len(orphans) > 0 {
-		slices.Sort(orphans)
-		return fmt.Errorf("these packages have no chapter in scripts/behavior/main.go: %s\n\n%s", strings.Join(orphans, ", "), skillHint)
-	}
-	return nil
+	slices.Sort(out.orphans)
+	return out, err
 }
 
-// fileRows returns f's named values and the numbers written inline in its functions.
-func fileRows(fset *token.FileSet, f *ast.File, path string, keys map[string]string) []row {
-	var out []row
-	named := map[ast.Node]bool{}
+func importsTesting(f *ast.File) bool {
+	return slices.ContainsFunc(f.Imports, func(im *ast.ImportSpec) bool { return im.Path.Value == `"testing"` })
+}
+
+// fileValues returns f's package-level values, its fallbacks that differ from their key, and its inline numbers.
+func fileValues(fset *token.FileSet, f *ast.File, path string, keys map[string]string) (rows []row, inline []string) {
+	scan := func(name string, body ast.Node) {
+		r, i := inlineNumbers(fset, body, path, name, keys)
+		rows, inline = append(rows, r...), append(inline, i...)
+	}
 	for _, decl := range f.Decls {
-		prefix := ""
-		if fd, ok := decl.(*ast.FuncDecl); ok {
-			prefix = fd.Name.Name + "(): "
-		}
-		ast.Inspect(decl, func(n ast.Node) bool {
-			vs, ok := n.(*ast.ValueSpec)
-			if !ok {
-				return true
+		switch d := decl.(type) {
+		case *ast.FuncDecl:
+			if d.Body != nil {
+				scan(d.Name.Name, d.Body)
 			}
-			for i, name := range vs.Names {
-				if i >= len(vs.Values) {
+		case *ast.GenDecl:
+			if d.Tok != token.CONST && d.Tok != token.VAR {
+				continue
+			}
+			for _, spec := range d.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
 					continue
 				}
-				v := vs.Values[i]
-				ast.Inspect(v, func(m ast.Node) bool { named[m] = true; return true })
-				if value, ok := valueOf(fset, v, name.Name); ok {
-					out = append(out, row{prefix + name.Name, value, path})
+				for i, v := range vs.Values {
+					if i >= len(vs.Names) {
+						break
+					}
+					if value, ok := valueOf(fset, v, vs.Names[i].Name); ok {
+						rows = append(rows, row{vs.Names[i].Name, value, path})
+					}
+					ast.Inspect(v, func(n ast.Node) bool {
+						if lit, ok := n.(*ast.FuncLit); ok {
+							scan(vs.Names[i].Name, lit.Body)
+							return false
+						}
+						return true
+					})
 				}
 			}
-			return true
-		})
-	}
-	for _, decl := range f.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok {
-			continue
 		}
-		var stack []ast.Node
-		ast.Inspect(fd, func(n ast.Node) bool {
-			if n == nil {
-				stack = stack[:len(stack)-1]
-				return true
-			}
-			b, ok := n.(*ast.BinaryExpr)
-			if !ok || named[n] || b.Op != token.MUL || !isUnit(b.X) && !isUnit(b.Y) || !isNumber(b.X) && !isNumber(b.Y) {
-				stack = append(stack, n)
-				return true
-			}
-			if d, ok := eval(b); ok {
-				if name, ok := inlineName(fset, stack, fd.Name.Name, time.Duration(d), keys); ok {
-					out = append(out, row{name, formatDuration(time.Duration(d)), path})
-				}
-			}
-			return false
-		})
 	}
-	return out
+	return rows, inline
 }
 
-// inlineName says what an inline number sets, from the code around it. A number that is a config key's hard-coded
-// fallback has no row of its own while it equals the key's default: only a fallback that differs is worth reading.
-func inlineName(fset *token.FileSet, stack []ast.Node, fn string, d time.Duration, keys map[string]string) (string, bool) {
+// inlineNumbers finds the numbers a function body writes inline. One beside its config key is that key's hard-coded
+// fallback: it has no row while it equals the key's default, and any other is refused.
+func inlineNumbers(fset *token.FileSet, body ast.Node, path, fn string, keys map[string]string) (rows []row, inline []string) {
+	var stack []ast.Node
+	ast.Inspect(body, func(n ast.Node) bool {
+		if n == nil {
+			stack = stack[:len(stack)-1]
+			return true
+		}
+		if refused(n, stack, fset) {
+			e, _ := n.(ast.Expr)
+			if key := besideKey(stack, keys); key != "" {
+				if v, ok := eval(e); ok && differs(keys[key], v, hasUnit(e)) {
+					rows = append(rows, row{key + " (fallback)", formatValue(v, hasUnit(e)), path})
+				}
+			} else {
+				inline = append(inline, fmt.Sprintf("%s: %s() writes the number %s inline: give it a name at package level", path, fn, exprText(fset, n)))
+			}
+			return false
+		}
+		stack = append(stack, n)
+		return true
+	})
+	return rows, inline
+}
+
+// refused says whether n is a literal duration or size, or a bare unit used as a value. A bare unit stays allowed in
+// arithmetic, in a conversion, and as the unit given to rounding.
+func refused(n ast.Node, stack []ast.Node, fset *token.FileSet) bool {
+	switch v := n.(type) {
+	case *ast.BinaryExpr:
+		switch v.Op {
+		case token.MUL:
+			return (isUnit(v.X) && isNumber(v.Y)) || (isUnit(v.Y) && isNumber(v.X)) || isKibi(v)
+		case token.SHL:
+			return isNumber(v.X) && isNumber(v.Y)
+		}
+	case *ast.SelectorExpr:
+		if !isUnit(v) || !slices.Contains([]string{"Second", "Minute", "Hour"}, v.Sel.Name) || len(stack) == 0 {
+			return false
+		}
+		i := len(stack) - 1
+		for i > 0 {
+			if _, paren := stack[i].(*ast.ParenExpr); !paren {
+				break
+			}
+			i--
+		}
+		switch p := stack[i].(type) {
+		case *ast.CallExpr:
+			callee := exprText(fset, p.Fun)
+			return !isConversion(callee) && !slices.Contains([]string{"ceilUnits", "ceilDiv"}, callee) &&
+				!strings.HasSuffix(callee, ".Round") && !strings.HasSuffix(callee, ".Truncate")
+		case *ast.KeyValueExpr, *ast.AssignStmt, *ast.ReturnStmt, *ast.ValueSpec:
+			return true
+		case *ast.BinaryExpr:
+			return slices.Contains([]token.Token{token.LSS, token.LEQ, token.GTR, token.GEQ, token.EQL, token.NEQ}, p.Op)
+		}
+	}
+	return false
+}
+
+func isConversion(callee string) bool {
+	return slices.Contains([]string{"time.Duration", "v1.Duration", "int", "int32", "int64", "uint", "uint32", "uint64", "float32", "float64"}, callee)
+}
+
+// isKibi is a literal `N * 1024`: a size written without a shift.
+func isKibi(b *ast.BinaryExpr) bool {
+	if !isNumber(b.X) || !isNumber(b.Y) {
+		return false
+	}
+	x, y := exprNumber(b.X), exprNumber(b.Y)
+	return x == 1024 || y == 1024
+}
+
+func exprNumber(e ast.Expr) int64 {
+	n, _ := eval(e)
+	return n
+}
+
+// besideKey returns the config key a string literal names in the same call or composite literal.
+func besideKey(stack []ast.Node, keys map[string]string) string {
 	for i := len(stack) - 1; i >= 0; i-- {
 		if _, isStmt := stack[i].(ast.Stmt); isStmt {
-			break
+			return ""
 		}
 		var args []ast.Expr
 		switch s := stack[i].(type) {
@@ -235,56 +369,36 @@ func inlineName(fset *token.FileSet, stack []ast.Node, fn string, d time.Duratio
 		case *ast.CompositeLit:
 			args = s.Elts
 		}
-		if key := keyIn(args, keys); key != "" {
-			have, _, _ := strings.Cut(keys[key], ",") // a derived default reads "30s, or three supervisionPeriod when larger"
-			if h, err := time.ParseDuration(have); err == nil && h == d {
-				return "", false
+		for _, a := range args {
+			if kv, ok := a.(*ast.KeyValueExpr); ok {
+				a = kv.Value
 			}
-			return key + " (fallback)", true
-		}
-	}
-	for i := len(stack) - 1; i >= 0; i-- {
-		switch p := stack[i].(type) {
-		case *ast.ParenExpr:
-			continue
-		case *ast.CallExpr:
-			callee := exprText(fset, p.Fun)
-			if slices.Contains([]string{"time.Duration", "v1.Duration", "int64", "float64", "max", "min"}, callee) {
-				continue
-			}
-			return fn + "(): " + callee, true
-		case *ast.KeyValueExpr:
-			return fn + "(): " + exprText(fset, p.Key), true
-		case *ast.AssignStmt:
-			return fn + "(): " + exprText(fset, p.Lhs[0]), true
-		case *ast.ReturnStmt:
-			return fn + "(): return", true
-		case *ast.CompositeLit:
-			if p.Type == nil {
-				continue
-			}
-			return fn + "(): " + exprText(fset, p.Type), true
-		case *ast.BinaryExpr:
-			if t := exprText(fset, p); len(t) <= 60 {
-				return fn + "(): " + t, true
-			}
-		}
-		break
-	}
-	return fn + "()", true
-}
-
-func keyIn(args []ast.Expr, keys map[string]string) string {
-	for _, a := range args {
-		if l, ok := a.(*ast.BasicLit); ok && l.Kind == token.STRING {
-			if s, err := strconv.Unquote(l.Value); err == nil {
-				if _, known := keys[s]; known {
-					return s
+			if l, ok := a.(*ast.BasicLit); ok && l.Kind == token.STRING {
+				if s, err := strconv.Unquote(l.Value); err == nil {
+					if _, known := keys[s]; known {
+						return s
+					}
 				}
 			}
 		}
 	}
 	return ""
+}
+
+func differs(have string, n int64, duration bool) bool {
+	have, _, _ = strings.Cut(have, ",") // a derived default reads "30s, or three supervisionPeriod when larger"
+	if duration {
+		d, err := time.ParseDuration(have)
+		return err != nil || int64(d) != n
+	}
+	return have != strconv.FormatInt(n, 10) && have != formatSize(n)
+}
+
+func formatValue(n int64, duration bool) string {
+	if duration {
+		return formatDuration(time.Duration(n))
+	}
+	return formatSize(n)
 }
 
 func exprText(fset *token.FileSet, n ast.Node) string {
@@ -303,14 +417,33 @@ func isUnit(e ast.Expr) bool {
 	return ok && x.Name == "time" && known
 }
 
+// isNumber is a literal, or arithmetic or a conversion over literals only.
 func isNumber(e ast.Expr) bool {
-	l, ok := e.(*ast.BasicLit)
-	return ok && (l.Kind == token.INT || l.Kind == token.FLOAT)
+	switch v := e.(type) {
+	case *ast.BasicLit:
+		return v.Kind == token.INT || v.Kind == token.FLOAT
+	case *ast.ParenExpr:
+		return isNumber(v.X)
+	case *ast.UnaryExpr:
+		return isNumber(v.X)
+	case *ast.BinaryExpr:
+		return isNumber(v.X) && isNumber(v.Y)
+	case *ast.CallExpr:
+		if len(v.Args) != 1 {
+			return false
+		}
+		_, ident := v.Fun.(*ast.Ident)
+		s, sel := v.Fun.(*ast.SelectorExpr)
+		return (ident || sel && s.Sel.Name == "Duration") && isNumber(v.Args[0])
+	}
+	return false
 }
 
 func unit(name string) (time.Duration, bool) {
-	d, ok := map[string]time.Duration{"Nanosecond": time.Nanosecond, "Microsecond": time.Microsecond, "Millisecond": time.Millisecond,
-		"Second": time.Second, "Minute": time.Minute, "Hour": time.Hour}[name]
+	d, ok := map[string]time.Duration{
+		"Nanosecond": time.Nanosecond, "Microsecond": time.Microsecond, "Millisecond": time.Millisecond,
+		"Second": time.Second, "Minute": time.Minute, "Hour": time.Hour,
+	}[name]
 	return d, ok
 }
 
@@ -322,6 +455,12 @@ func eval(e ast.Expr) (int64, bool) {
 		return n, err == nil
 	case *ast.ParenExpr:
 		return eval(v.X)
+	case *ast.UnaryExpr:
+		n, ok := eval(v.X)
+		if v.Op == token.SUB {
+			n = -n
+		}
+		return n, ok && (v.Op == token.SUB || v.Op == token.ADD)
 	case *ast.SelectorExpr:
 		if isUnit(v) {
 			d, _ := unit(v.Sel.Name)
@@ -366,10 +505,10 @@ func hasUnit(e ast.Expr) bool {
 	return found
 }
 
-func hasShift(e ast.Expr) bool {
+func hasSize(e ast.Expr) bool {
 	found := false
 	ast.Inspect(e, func(n ast.Node) bool {
-		if b, ok := n.(*ast.BinaryExpr); ok && b.Op == token.SHL {
+		if b, ok := n.(*ast.BinaryExpr); ok && ((b.Op == token.SHL && isNumber(b.X) && isNumber(b.Y)) || (b.Op == token.MUL && isKibi(b))) {
 			found = true
 		}
 		return true
@@ -377,21 +516,41 @@ func hasShift(e ast.Expr) bool {
 	return found
 }
 
-// valueOf returns a named value's text when it is a duration, a size or a limit by name.
+// plain is an expression of only numbers, names, units, shifts and conversions: a string, a composite literal, a function
+// or any other call is no value.
+func plain(e ast.Expr, fset *token.FileSet) bool {
+	ok := true
+	ast.Inspect(e, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.BasicLit:
+			ok = ok && (v.Kind == token.INT || v.Kind == token.FLOAT)
+		case *ast.CompositeLit, *ast.FuncLit:
+			ok = false
+		case *ast.CallExpr:
+			ok = ok && isConversion(exprText(fset, v.Fun))
+		}
+		return ok
+	})
+	return ok
+}
+
+// valueOf returns a package-level value's text when it is a duration, a size, or a count or a derived value by its name.
 func valueOf(fset *token.FileSet, e ast.Expr, name string) (string, bool) {
+	if !plain(e, fset) {
+		return "", false
+	}
 	n, ok := eval(e)
 	switch {
-	case hasUnit(e):
-		if ok {
-			return formatDuration(time.Duration(n)), true
-		}
-		var b strings.Builder
-		_ = printer.Fprint(&b, fset, e)
-		return "`" + b.String() + "`", true
-	case hasShift(e) && ok:
+	case hasUnit(e) && ok:
+		return formatDuration(time.Duration(n)), true
+	case hasSize(e) && ok:
 		return formatSize(n), true
-	case ok && limitName.MatchString(name):
+	case hasUnit(e) || hasSize(e):
+		return "`" + exprText(fset, e) + "`", true
+	case ok && nameTest.MatchString(name):
 		return strconv.FormatInt(n, 10), true
+	case nameTest.MatchString(name):
+		return "`" + exprText(fset, e) + "`", true
 	}
 	return "", false
 }
@@ -419,47 +578,29 @@ func formatSize(n int64) string {
 	return strconv.FormatInt(n, 10)
 }
 
-// configRows adds every config key with its default to its section's chapter and returns the keys.
-func configRows(byChapter map[string][]row) (map[string]string, error) {
-	documented, err := exampleDefaults()
-	if err != nil {
-		return nil, err
-	}
-	keys := map[string]string{}
-	leaves(reflect.ValueOf(config.Defaults()), "", func(key string, v reflect.Value) {
-		value := fmt.Sprint(v.Interface())
-		if v.IsZero() {
-			value = cmp.Or(documented[key], "(empty)")
-		}
-		keys[key] = value
-	})
+// configRows puts every config key with its default into its section's chapter.
+func configRows(in inputs) (map[string][]row, []string) {
 	sections := map[string]string{}
-	for _, c := range chapters() {
+	for _, c := range in.chapters {
 		for _, s := range c.sections {
 			sections[s] = c.name
 		}
 	}
+	byChapter := map[string][]row{}
 	var orphans []string
-	for key, value := range keys {
+	for key, value := range in.keys {
 		section, _, _ := strings.Cut(key, ".")
-		if section == "apiVersion" || section == "kind" {
-			delete(keys, key)
-			continue
-		}
 		name, ok := sections[section]
 		if !ok {
-			if !slices.Contains(orphans, section) {
-				orphans = append(orphans, section)
+			if p := "config section " + section + " has no chapter in scripts/behavior/main.go"; !slices.Contains(orphans, p) {
+				orphans = append(orphans, p)
 			}
 			continue
 		}
 		byChapter[name] = append(byChapter[name], row{key, value, "config"})
 	}
-	if len(orphans) > 0 {
-		slices.Sort(orphans)
-		return nil, fmt.Errorf("these config sections have no chapter in scripts/behavior/main.go: %s\n\n%s", strings.Join(orphans, ", "), skillHint)
-	}
-	return keys, nil
+	slices.Sort(orphans)
+	return byChapter, orphans
 }
 
 func leaves(v reflect.Value, prefix string, each func(string, reflect.Value)) {
@@ -478,10 +619,10 @@ var (
 	exampleDefault = regexp.MustCompile(`default: (.*)$`)
 )
 
-// exampleDefaults reads the default examples/funcdconfig.yaml documents for each key, for the keys whose default is
-// derived at start and so is empty in the config's defaults.
-func exampleDefaults() (map[string]string, error) {
-	data, err := os.ReadFile("examples/funcdconfig.yaml")
+// exampleDefaults reads the default the example config documents for each key, for the keys whose default is derived at
+// start and so is empty in the config's defaults.
+func exampleDefaults(path string) (map[string]string, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -518,12 +659,14 @@ func exampleDefaults() (map[string]string, error) {
 }
 
 // render rewrites each chapter's generated block, at the end of the chapter when it has none yet.
-func render(text string, byChapter map[string][]row) (string, error) {
-	for _, c := range chapters() {
+func render(text string, chapters []chapter, byChapter map[string][]row) (string, []string) {
+	var problems []string
+	for _, c := range chapters {
 		heading := "\n## " + c.name + "\n"
 		start := strings.Index(text, heading)
 		if start < 0 {
-			return "", fmt.Errorf("%s has no chapter %q\n\n%s", docPath, c.name, skillHint)
+			problems = append(problems, fmt.Sprintf("%s has no chapter %q", docPath, c.name))
+			continue
 		}
 		bodyStart := start + len(heading)
 		end := len(text)
@@ -531,18 +674,18 @@ func render(text string, byChapter map[string][]row) (string, error) {
 			end = bodyStart + i + 1
 		}
 		body := text[bodyStart:end]
-		if i := strings.Index(body, blockBegin); i >= 0 {
-			j := strings.Index(body, blockEnd)
-			if j < i {
-				return "", fmt.Errorf("%s: chapter %q has a generated block with no end", docPath, c.name)
-			}
+		i, j := strings.Index(body, blockBegin), strings.Index(body, blockEnd)
+		switch {
+		case i >= 0 && j > i:
 			body = body[:i] + block(c.name, byChapter[c.name]) + body[j+len(blockEnd):]
-		} else {
+		case i >= 0:
+			problems = append(problems, fmt.Sprintf("%s: chapter %q has a generated block with no end", docPath, c.name))
+		default:
 			body = strings.TrimRight(body, "\n") + "\n\n" + block(c.name, byChapter[c.name]) + "\n"
 		}
 		text = text[:bodyStart] + body + text[end:]
 	}
-	return text, nil
+	return text, problems
 }
 
 func block(name string, rows []row) string {
@@ -557,8 +700,7 @@ func block(name string, rows []row) string {
 		if from != "config" {
 			from = "`" + from + "`"
 		}
-		value := strings.ReplaceAll(r.value, "|", `\|`)
-		fmt.Fprintf(&b, "| `%s` | %s | %s |\n", strings.ReplaceAll(r.name, "|", `\|`), cmp.Or(value, "(empty)"), from)
+		fmt.Fprintf(&b, "| `%s` | %s | %s |\n", strings.ReplaceAll(r.name, "|", `\|`), cmp.Or(strings.ReplaceAll(r.value, "|", `\|`), "(empty)"), from)
 	}
 	b.WriteString("\n</details>\n" + blockEnd)
 	return b.String()
@@ -576,58 +718,105 @@ var (
 	testRef   = regexp.MustCompile("`(Test[A-Za-z0-9_]+)`")
 	tick      = regexp.MustCompile("`([^`]+)`")
 	reasonish = regexp.MustCompile(`\b[A-Z][A-Za-z]*[a-z][A-Z][A-Za-z]+\b`)
-	cited     = regexp.MustCompile("`([A-Za-z][A-Za-z0-9.]*)` (\\d+(?:\\.\\d+)?) ?(ms|s|min|h|KiB|MiB|GiB)?\\b")
-	decision  = regexp.MustCompile(`ADR-\d{4}|decider \d{4}-\d{2}-\d{2}`)
-	holder    = regexp.MustCompile(`(?i)\bcard\b|#\d+`)
+	cited     = regexp.MustCompile("`([A-Za-z][A-Za-z0-9.]*)` (\\d+(?:\\.\\d+)?) ?(ms|s|min|h|KiB|MiB|GiB)?(?:\\b|$)")
+	link      = regexp.MustCompile(`\]\(([^)#\s]+)(#[^)]*)?\)`)
+	record    = regexp.MustCompile(`#\d+|card "[^"]+"`)
+	dated     = regexp.MustCompile(`decider \d{4}-\d{2}-\d{2}`)
+	holder    = regexp.MustCompile(`#\d+|card "[^"]+"|ADR-\d{4} Open questions`)
+	adrStatus = regexp.MustCompile(`(?m)^- \*\*Status\*\*: (.*)$`)
 )
 
-const rowHeader = "| Where | What happens | Time | You see | Status | Source |"
+func cells(line string) []string {
+	line = strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(line), "|"), "|")
+	var out []string
+	var b strings.Builder
+	for i := range len(line) {
+		if line[i] == '|' && (i == 0 || line[i-1] != '\\') {
+			out = append(out, strings.TrimSpace(b.String()))
+			b.Reset()
+			continue
+		}
+		b.WriteByte(line[i])
+	}
+	return append(out, strings.TrimSpace(b.String()))
+}
 
 // rowProblem checks a row of a chapter's table: six cells, and a status that cites what its word promises.
 func rowProblem(line string) string {
-	cells := strings.Split(strings.Trim(line, "| "), " | ")
-	if len(cells) != 6 {
-		return fmt.Sprintf("a row has %d cells, not 6", len(cells))
+	c := cells(line)
+	if len(c) != 6 {
+		return fmt.Sprintf("a row has %d cells, not 6", len(c))
 	}
-	status, source := strings.Trim(cells[4], "*"), cells[5]
+	status, source := strings.Trim(c[4], "*"), c[5]
 	switch status {
 	case "decided", "accepted":
-		if !decision.MatchString(source) {
-			return "a row that says " + status + " cites no ADR and no dated decider"
+		if !adrRef.MatchString(source) && (!dated.MatchString(source) || !record.MatchString(source)) {
+			return "a row that says " + status + " cites no ADR, and no dated decider with its record"
 		}
 	case "deferred":
 		if !holder.MatchString(source) {
-			return "a row that says deferred cites no card and no issue"
+			return `a row that says deferred cites no card "<title>", no ADR-NNNN Open questions and no issue`
 		}
 	case "uncovered":
+		if source == "" {
+			return "a row that says uncovered does not say what was read"
+		}
 	default:
 		return "status " + status + " is not decided, accepted, deferred or uncovered"
 	}
 	return ""
 }
 
-// validate checks the written part: every ADR, test and reason it cites exists, every value it cites with a number has
-// that number, each row's status holds, and it stays short enough to read whole.
-func validate(text string, byChapter map[string][]row, keys map[string]string, literals map[string]bool) []string {
+// section is what a chapter's written part holds, in order.
+type section struct {
+	name           string
+	line           int
+	kinds, machine int
+	table          int
+	notWritten     bool
+}
+
+func (s section) problems() []string {
+	if s.name == "" {
+		return nil
+	}
+	at := fmt.Sprintf("%s:%d: chapter %s", docPath, s.line, s.name)
+	var out []string
+	switch {
+	case s.kinds == 0:
+		out = append(out, at+" has no Kinds: line")
+	case s.notWritten:
+		out = append(out, at+" reads "+notWritten)
+		return out
+	case s.machine == 0:
+		out = append(out, at+" has no machine")
+	case s.table == 0:
+		out = append(out, at+" has no table")
+	case s.kinds > s.machine || s.machine > s.table:
+		out = append(out, at+" does not follow the order: Kinds: line, machine, note, table")
+	}
+	return out
+}
+
+// validate checks the written part: each chapter's shape, each row's status, and every ADR, test, reason, link and number
+// it cites.
+func validate(in inputs, text string, byChapter map[string][]row, known map[string]bool) []string {
 	var problems []string
-	known := map[string]bool{}
-	for _, c := range chapters() {
-		known[c.name] = true
+	names := map[string]bool{}
+	for _, c := range in.chapters {
+		names[c.name] = true
 	}
-	kindLines := ""
-	inTable := false
 	values := map[string][]string{}
-	for key, v := range keys {
-		values[key] = append(values[key], v)
-	}
 	for _, rows := range byChapter {
 		for _, r := range rows {
 			values[r.name] = append(values[r.name], r.value)
 		}
 	}
-	tests := testNames()
+	tests := testNames(in.root)
+	var current section
+	kindLines := ""
 	written := 0
-	inBlock, inFence := false, false
+	inBlock, inFence, inTable := false, false, false
 	for n, line := range strings.Split(text, "\n") {
 		switch {
 		case strings.HasPrefix(line, blockBegin):
@@ -641,21 +830,36 @@ func validate(text string, byChapter map[string][]row, keys map[string]string, l
 		}
 		written++
 		if strings.HasPrefix(line, "```") {
+			if !inFence && line == "```mermaid" && current.machine == 0 {
+				current.machine = n + 1
+			}
 			inFence = !inFence
+			continue
 		}
 		if inFence {
 			continue
 		}
 		at := fmt.Sprintf("%s:%d", docPath, n+1)
-		if name, ok := strings.CutPrefix(line, "## "); ok && !known[name] {
-			problems = append(problems, at+": chapter "+name+" is not in scripts/behavior/main.go")
+		if name, ok := strings.CutPrefix(line, "## "); ok {
+			problems = append(problems, current.problems()...)
+			current = section{name: name, line: n + 1}
+			if !names[name] {
+				problems = append(problems, at+": chapter "+name+" is not in scripts/behavior/main.go")
+			}
 		}
 		if strings.HasPrefix(line, "Kinds:") {
 			kindLines += line + "\n"
+			current.kinds = n + 1
+		}
+		if line == notWritten {
+			current.notWritten = true
 		}
 		switch {
 		case line == rowHeader:
 			inTable = true
+			if current.table == 0 {
+				current.table = n + 1
+			}
 		case !strings.HasPrefix(line, "|"):
 			inTable = false
 		case inTable && !strings.HasPrefix(line, "|---"):
@@ -664,7 +868,7 @@ func validate(text string, byChapter map[string][]row, keys map[string]string, l
 			}
 		}
 		for _, m := range adrRef.FindAllStringSubmatch(line, -1) {
-			if p := adrProblem(m[1]); p != "" {
+			if p := adrProblem(in.root, m[1]); p != "" {
 				problems = append(problems, at+": ADR-"+m[1]+" "+p)
 			}
 		}
@@ -675,23 +879,34 @@ func validate(text string, byChapter map[string][]row, keys map[string]string, l
 		}
 		for _, m := range tick.FindAllStringSubmatch(line, -1) {
 			for _, word := range reasonish.FindAllString(m[1], -1) {
-				if !strings.HasPrefix(word, "Test") && !strings.Contains(m[1], "/") && !literals[word] && values[word] == nil {
-					problems = append(problems, at+": no status reason, value or literal named "+word)
+				if !strings.HasPrefix(word, "Test") && !strings.Contains(m[1], "/") && !known[word] && values[word] == nil {
+					problems = append(problems, at+": no status reason, value or name in the code called "+word)
+				}
+			}
+		}
+		for _, m := range link.FindAllStringSubmatch(line, -1) {
+			if !strings.Contains(m[1], "://") {
+				if _, err := os.Stat(filepath.Join(in.root, filepath.Dir(docPath), m[1])); err != nil {
+					problems = append(problems, at+": links to "+m[1]+", which does not exist")
 				}
 			}
 		}
 		for _, m := range cited.FindAllStringSubmatch(line, -1) {
 			have, ok := values[m[1]]
-			if ok && !slices.ContainsFunc(have, func(v string) bool { return sameValue(v, m[2], m[3]) }) {
+			switch {
+			case !ok:
+				problems = append(problems, fmt.Sprintf("%s: cites %s %s %s: no config key or value has that name", at, m[1], m[2], m[3]))
+			case !slices.ContainsFunc(have, func(v string) bool { return sameValue(v, m[2], m[3]) }):
 				problems = append(problems, fmt.Sprintf("%s: %s is %s in the code, not %s %s", at, m[1], strings.Join(have, ", "), m[2], m[3]))
 			}
 		}
 	}
+	problems = append(problems, current.problems()...)
 	if written > maxWritten {
 		problems = append(problems, fmt.Sprintf("%s: the written part is %d lines, over the cap of %d", docPath, written, maxWritten))
 	}
-	for _, k := range v1.AllKinds() {
-		if !regexp.MustCompile(`\b` + string(k) + `\b`).MatchString(kindLines) {
+	for _, k := range in.kinds {
+		if !regexp.MustCompile(`\b` + k + `\b`).MatchString(kindLines) {
 			problems = append(problems, fmt.Sprintf("%s: kind %s is on no chapter's Kinds line", docPath, k))
 		}
 	}
@@ -708,8 +923,8 @@ func sameValue(have, number, unit string) bool {
 	return strings.EqualFold(have, number+unit)
 }
 
-func adrProblem(number string) string {
-	files, _ := filepath.Glob("docs/adr/" + number + "-*.md")
+func adrProblem(root, number string) string {
+	files, _ := filepath.Glob(filepath.Join(root, "docs/adr", number+"-*.md"))
 	if len(files) != 1 {
 		return "does not exist"
 	}
@@ -717,21 +932,45 @@ func adrProblem(number string) string {
 	if err != nil {
 		return err.Error()
 	}
-	head, _, _ := strings.Cut(string(data), "## ")
-	if regexp.MustCompile(`(?m)^- \*\*Status\*\*: Superseded`).MatchString(head) {
+	head, _, _ := strings.Cut(string(data), "\n## ")
+	status := ""
+	if m := adrStatus.FindStringSubmatch(head); m != nil {
+		status = m[1]
+	}
+	switch {
+	case strings.HasPrefix(status, "Superseded") || strings.Contains(head, "- **Superseded by**"):
 		return "is superseded: cite the ADR that replaced it"
+	case !strings.HasPrefix(status, "Accepted") && !strings.HasPrefix(status, "Reviewing") && !strings.HasPrefix(status, "Implemented"):
+		return "is not accepted: " + cmp.Or(status, "it has no Status line")
 	}
 	return ""
 }
 
-func testNames() map[string]bool {
+// adrsWithoutRows names each ADR past ADR-0313 with no Behavior rows section.
+func adrsWithoutRows(root string) []string {
+	files, _ := filepath.Glob(filepath.Join(root, "docs/adr", "[0-9][0-9][0-9][0-9]-*.md"))
+	var out []string
+	for _, f := range files {
+		n, err := strconv.Atoi(filepath.Base(f)[:4])
+		if err != nil || n < firstADRWithRows {
+			continue
+		}
+		data, err := os.ReadFile(f)
+		if err == nil && !strings.Contains(string(data), "\n## Behavior rows\n") {
+			out = append(out, "docs/adr/"+filepath.Base(f)+" has no Behavior rows section")
+		}
+	}
+	return out
+}
+
+func testNames(root string) map[string]bool {
 	names := map[string]bool{}
 	test := regexp.MustCompile(`(?m)^func (Test[A-Za-z0-9_]+)\(`)
-	_ = filepath.WalkDir(".", func(path string, d os.DirEntry, err error) error {
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() && strings.HasPrefix(path, ".") && path != "." {
+		if d.IsDir() && strings.HasPrefix(d.Name(), ".") && path != root {
 			return filepath.SkipDir
 		}
 		if strings.HasSuffix(path, "_test.go") {
