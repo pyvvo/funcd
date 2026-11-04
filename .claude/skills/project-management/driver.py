@@ -38,6 +38,29 @@ STATUS_OPTIONS = {
     "Done": "98236657",
 }
 
+# Every show, status and refine lists the board, and the token's GraphQL budget is shared by all its sessions, so the
+# listing asks only for what this driver reads, at about 1 point per 100 items.
+ITEMS_QUERY = """
+query($owner: String!, $number: Int!, $after: String) {
+  organization(login: $owner) {
+    projectV2(number: $number) {
+      items(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id
+          status: fieldValueByName(name: "Status") { ... on ProjectV2ItemFieldSingleSelectValue { name } }
+          content {
+            ... on DraftIssue { id title body }
+            ... on Issue { title body url }
+            ... on PullRequest { title body url }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
 
 def gh(*args):
     """Run a gh command; exit with its stderr on failure."""
@@ -48,8 +71,20 @@ def gh(*args):
 
 
 def items():
-    out = gh("project", "item-list", NUMBER, "--owner", OWNER, "--format", "json", "-L", "200")
-    return json.loads(out).get("items", [])
+    out, after = [], None
+    while True:
+        args = ["api", "graphql", "-f", f"query={ITEMS_QUERY}", "-f", f"owner={OWNER}", "-F", f"number={NUMBER}"]
+        if after:
+            args += ["-f", f"after={after}"]
+        page = json.loads(gh(*args))["data"]["organization"]["projectV2"]["items"]
+        for node in page["nodes"]:
+            content = node.get("content") or {}
+            status = node.get("status") or {}
+            title = content.get("title", "")
+            out.append({"id": node["id"], "status": status.get("name"), "title": title, "content": content})
+        if not page["pageInfo"]["hasNextPage"]:
+            return out
+        after = page["pageInfo"]["endCursor"]
 
 
 def status_of(it):
