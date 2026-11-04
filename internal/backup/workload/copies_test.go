@@ -139,6 +139,21 @@ func TestSlotCopies_RefusesAListingOverItsLimit(t *testing.T) {
 	require.Greater(t, target.left, workload.MaxListedKeys-2*1000, "it stopped at the limit")
 }
 
+// A listing of MaxListedKeyBytes bytes of keys is read; one key more fails it.
+func TestSlotCopies_RefusesAListingOverItsKeyBytes(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const size = 16 << 10
+	key := "orders/a-not-a-copy/"
+	key += strings.Repeat("k", size-len(key))
+	_, err := workload.SlotCopies(ctx, &pagedKeys{key: key, left: workload.MaxListedKeyBytes / size}, "orders", "a", time.Time{}, kinds())
+	require.NoError(t, err)
+
+	_, err = workload.SlotCopies(ctx, &pagedKeys{key: key, left: workload.MaxListedKeyBytes/size + 1}, "orders", "a", time.Time{}, kinds())
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
+	require.ErrorContains(t, err, `"orders/a-"`)
+}
+
 func TestListCopy_RefusesAListingOverItsLimit(t *testing.T) {
 	t.Parallel()
 	d := "orders/b1-" + strings.Repeat("a", 32) + "/"

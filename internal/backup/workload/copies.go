@@ -20,6 +20,10 @@ const uidHex = 32
 // copies.
 const MaxListedKeys = 1 << 20
 
+// MaxListedKeyBytes is the most bytes of keys one listing of a target reads: 256 bytes a key at MaxListedKeys, where a copy's
+// key takes about 100 bytes.
+const MaxListedKeyBytes = 256 << 20
+
 // Copy is one Backup's directory on a target as a listing shows it, read with list rights only (ADR-0287): it is
 // whole once its manifest.yaml, written last, is there; Completed is that manifest's modification time. Members are
 // the kind directories the listing holds, for display: a Restore matches the manifest's members.
@@ -155,17 +159,21 @@ func (c *Copy) fill(items []blob.Attributes, kinds []MemberKind) {
 	}
 }
 
-// listFrom calls each for every object under prefix whose key sorts after `after`, in key order; over MaxListedKeys keys
-// it is fault.Invalid.
+// listFrom calls each for every object under prefix whose key sorts after `after`, in key order; over MaxListedKeys keys or
+// MaxListedKeyBytes bytes of keys it is fault.Invalid.
 func listFrom(ctx context.Context, b blob.Bucket, prefix, after string, each func(blob.Attributes)) error {
-	listed := 0
+	listed, keyBytes := 0, 0
 	for {
 		items, more, err := b.ListAfter(ctx, prefix, after, listPage)
 		if err != nil {
 			return err
 		}
-		if listed += len(items); listed > MaxListedKeys {
-			return fault.Invalidf("workload.listFrom", "it holds more than %d keys", MaxListedKeys)
+		listed += len(items)
+		for _, it := range items {
+			keyBytes += len(it.Key)
+		}
+		if listed > MaxListedKeys || keyBytes > MaxListedKeyBytes {
+			return fault.Invalidf("workload.listFrom", "it holds more than %d keys or %d bytes of keys", MaxListedKeys, MaxListedKeyBytes)
 		}
 		for _, it := range items {
 			each(it)
