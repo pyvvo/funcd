@@ -32,7 +32,7 @@ fmt:
 
 # run the linter (golangci-lint via go tool); no-op when no Go packages exist
 [group('go')]
-lint:
+lint: check-behavior
     @if [ -n "{{_has-packages}}" ]; then go tool golangci-lint run ./...; fi
     go tool golangci-lint run --build-tags dev {{_dev-packages}}
 

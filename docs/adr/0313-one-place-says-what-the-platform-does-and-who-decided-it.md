@@ -30,13 +30,13 @@ session or a person reads it before calling something a bug; an ADR author updat
 - `scenario: line-moved`: Given a value moves to another line, or a function with no value is added, When the check
   runs, Then it passes.
 - `scenario: inline-number`: Given a function calls `context.WithTimeout(ctx, 30*time.Second)` or
-  `io.LimitReader(r, 1<<20)`, When the check runs, Then it fails naming the file and the function. A number beside its
-  config key passes, and when it differs from the key's default a row `<key> (fallback)` shows it.
+  `io.LimitReader(r, 1<<20)`, When the check runs, at a commit too, Then it fails naming the file, the line and the function.
+  A number beside its config key passes while it equals the key's default, and fails when it differs.
 - `scenario: new-component`: Given a new package, config section or kind that no chapter names, or a chapter with no file,
   no machine or no table, When the check runs, Then it fails naming it.
 - `scenario: row-does-not-hold`: Given a row cites an ADR that is missing, wholly superseded or not accepted, a missing
   test, status reason or link, or `` `name` N unit `` with a name that does not exist or a number that differs, or its
-  status breaks Decision 5, or it passes 400 characters, or a machine's state is not in the code and not marked new, When
+  status breaks Decision 5, or it passes 400 bytes, or a machine's state is not in the code and not marked new, When
   the check runs, Then it fails naming the line.
 - `scenario: parallel-prs`: Given two PRs each add a value to one chapter's block, When they merge, Then no hand edit is
   needed: the rows merge cleanly, or `just behavior-values` clears a conflict inside the block.
@@ -69,6 +69,7 @@ code, and generating values from a shim (Open questions).
 | One file with chapters | one place to read | about 45k tokens whole, where a chapter is about 3k | the decider's first pick, reversed on that measure |
 | YAML or JSON rows and a renderer | parseable | one more source; the table holds the same fields and the check reads it | rejected |
 | Values typed into rows, or a scan that writes no file | a shorter file | typed values drift; scanned values are not where a session reads | rejected by the decider |
+| A lint plugin or a `go vet` tool for Decision 7 | shows in an editor | a custom linter binary, or a copy of the rule that cannot see a key beside a number | rejected: one Go rule, at each commit, in `just lint` and in CI |
 | Four status words, `uncovered` also for code that differs from its ADR | one word fewer | the experiment's 11 such rows are no question for the decider: a clause already answers | rejected |
 
 How a value is shaped in code:
@@ -90,7 +91,7 @@ How a value is shaped in code:
 2. **Chapters**, one per process, in this order: Platform lifecycle, Controller, Admission, Security, Workers, Functions,
    Calls, Services, Eventing, Apps, Disaster recovery, Health, Limits, funcdctl dev. Every package, config section and
    kind has one. A new component joins one or adds one.
-3. **A chapter's shape**, in order: its title; a `Kinds:` line; a Mermaid state machine; a short note; one table; the generated
+3. **A chapter's shape**, in order: its title; a link to the index; a `Kinds:` line; a Mermaid state machine; a short note; one table; the generated
    block. A machine uses the code's state names, and a word the code does not have is marked on the note's `New words:`
    line. A design spec's generated machine is linked, not copied. The Functions chapter's machine replaces the copies in
    `blueprint.md` and `docs/PROJECT-SUMMARY.md`, which link to it; each edge added or dropped against the blueprint's machine
@@ -111,7 +112,8 @@ How a value is shaped in code:
 
    A clause that reaches a case only by its letter, with no sign its author weighed the case, decides nothing: `uncovered`,
    citing it. A cost an ADR accepted, with a card that proposes a change, is `accepted`, citing both. An `uncovered` row is a
-   question for the decider, with no fix until answered; it is written only after a read beyond the first hits. The answer
+   question for the decider, with no fix until answered, unless no sound design could want it; it is written only after a
+   read beyond the first hits. The answer
    moves the row, and its PR or issue records it; one that changes an Accepted ADR still takes a superseding ADR. A `differs`
    row goes through the bug rule: an issue moves it to `deferred`; a clause that turns out to decide it, or a superseding ADR
    that keeps the behavior, to `decided`.
@@ -130,12 +132,14 @@ How a value is shaped in code:
    parseDuration("sql.callTimeout", raw, 30*time.Second, ...)  // allowed: beside its config key
    ```
 
-   The check refuses what it can see: an inline duration or size. A number beside its config key, a string literal naming
-   the key in the same call or composite literal, is that key's hard-coded fallback: it has no row while it equals the
-   key's default, and a row `<key> (fallback)` when it differs.
-8. **The check.** `just check-behavior` regenerates the blocks in memory and fails on: a block that differs by a byte; an
-   inline number; a package, config section or kind with no chapter; a chapter with no
-   title, `Kinds:` line, machine or table, or with them out of order; a chapter with no file, a file with no chapter, or a
+   A value an operator may need to change is a config key, with its default in `internal/platform/config` and
+   `examples/funcdconfig.yaml`. A number beside its key, a string literal naming the key in the same call or composite literal,
+   is that key's hard-coded fallback, and one key has one default. The implementation skills state this rule, and one Go check
+   enforces what it can see: an inline duration or size, a fallback that differs, a key with no default. It runs at each commit
+   (lefthook), in `just lint` and in CI.
+8. **The check.** `just check-behavior` regenerates the blocks in memory and fails on: a block that differs by a byte; what
+   Decision 7 refuses; a package, config section or kind with no chapter; a chapter with no
+   title, link to the index, `Kinds:` line, machine or table, or with them out of order; a chapter with no file, a file with no chapter, or a
    chapter the index does not list; a row that breaks `scenario: row-does-not-hold`; a row without six cells or outside the one
    table; a written part over its cap; an ADR numbered above 0313 with no *Behavior rows* section. It runs in `just ci`, and
    in CI's light path when a docs-only PR touches a chapter or an ADR.
@@ -145,18 +149,18 @@ How a value is shaped in code:
    defaults, hard-coded values, states, errors, who may act, deletes, the order of steps, the unit and the CLI, the why
    (an ADR's Scope, Alternatives, Consequences and Risks, following each `Superseded in part by`, then issues and cards) and
    proof, how to find the ADRs that govern a package, and how to write a row.
-10. **The gates.** The template's *Behavior rows* follows *Design model*: the rows an ADR adds, changes or removes, by
-    chapter, or `None` and why. Each gate gains one step:
+10. **The gates.** The template's *Behavior rows* follows *Design model*: the rows and machine edges an ADR adds, changes or
+    removes, by chapter, or `None` and why. Each gate gains one step:
     - draft (`adr`): fill the section;
     - accept (`adr`): rows citing what it wholly supersedes move to it, `differs` until implemented;
     - judge (`adr-judge`): a Decision that changes what a user sees, with `None`, or a row it changes and does not list,
       is a Major;
-    - implement (`adr-impl`): the rows land in the implementation PR, with `just behavior-values`;
+    - implement (`adr-impl`): each new number gets a name or a config key; the rows land in the PR, with `just behavior-values`;
     - review (`adr-impl-review`): the file's rows match the section, and `just check-behavior` passes;
     - file or fix (`issue-management`, `/fix`, `/fix-review`): filing a `differs` row moves it to `deferred`; a fix that changes
-      what a row says, or closes an issue a row cites, updates the row in the same commit.
+      what a row or an edge says, or closes an issue a row cites, updates it in the same commit.
 11. **The bug rule.** Step 2 of *Is it a bug?* starts with a grep of what it saw across the chapters and reads every row it
-    hits: the status tells them apart. A row whose cited clause reads as the row says ends the dive, with no issue and no fix;
+    hits: the object's phase and reason tell them apart. A row whose cited clause reads as the row says ends the dive, with no issue and no fix;
     a session about to file or fix does the rest of step 2. A dive that finds no row ends by adding one, or, in a gate or
     campaign that edits nothing, by reporting it. An issue's *Design check* gains no line: a row's ADR goes on its `ADRs:`
     line. CLAUDE.md lists the place as a reference that decides nothing, and its propagation table gains a column for it.
@@ -178,6 +182,7 @@ None: all 14 chapters land together.
 ````
 docs/behavior/<chapter, lower case with dashes>.md:
 # <Chapter>
+<a link to the index>
 Kinds: <its kinds>.   (or: Kinds: none of its own.)
 ```mermaid
 stateDiagram-v2
@@ -210,54 +215,52 @@ stateDiagram-v2
   `buf`.
 - **An inline number**, in a function body: `N * time.Unit`, `N << M` or `N * 1024` with literals, wherever it stands, or
   a bare `time.Second`, `time.Minute` or `time.Hour` passed as an argument, set as a field, assigned, returned or compared.
-  A bare unit is allowed in arithmetic (`d / time.Second`), in a conversion, or as the unit given to `Round`, `Truncate`,
-  `ceilUnits` or `ceilDiv`. Any number beside its key is allowed.
+  A bare unit is allowed in arithmetic (`d / time.Second`), in a conversion, as the unit given to `Round`, `Truncate`,
+  `ceilUnits` or `ceilDiv`, or in a positional literal that names no key. Any number beside its key that equals its default is allowed.
 - **A cited number**: `` `name` N unit ``. A config key or a value is compared, a name only the code holds is not, and any
   other name fails. **A cited word**: a backticked CamelCase word, a backticked capitalized word in *Where* or *You see*, and a
   machine's state, unless marked new, must be a string literal or an identifier in production code, a value or a test. **A
   link**: a relative link must resolve from its file, and a bare `#` link is refused.
 - **A cited ADR**: superseded when its Status starts with `Superseded` or it has a `- **Superseded by**` line; accepted
   when its Status starts with `Accepted`, `Reviewing` or `Implemented`.
-- **Output**: `docs/behavior/<file>:<line>: <what does not hold>`, or `<file>: <func>() writes the number <expr> inline: give
+- **Output**: `docs/behavior/<file>:<line>: <what does not hold>`, or `<file>:<line>: <func>() writes the number <expr> inline: give
   it a name at package level`, with `now: <row>` and `was: <row>` for a block that differs. The last line always names
   the skill: ``run the /behavior-registry skill: regenerate with `just behavior-values`, then check that each written row still holds``.
 
 ## Implementation plan
 
-The local branch `exp/behavior-registry` holds the tool, its tests, the named numbers, the skill and the 14 chapters. Left: step
-1's `ci.yml`, step 2's renames, step 3 but the skill, step 4's edge rows and its questions, step 5.
-
 1. `internal/platform/config/config.go`: `Defaults()`. `scripts/behavior/main.go`, whose run takes the chapters, the keys
    and the kinds as inputs so a test brings its own. `justfile`: `behavior-values`, `check-behavior`, and `check-behavior`
-   in `ci`. `.github/workflows/ci.yml`: the `design` filter gains `docs/behavior/**` and `docs/adr/**`; the light path
+   in `ci` and `lint`. `lefthook.yml`: the check at each commit. `.github/workflows/ci.yml`: the `design` filter gains `docs/behavior/**` and `docs/adr/**`; the light path
    runs `just check-hygiene check-specs check-behavior`, with the Go cache; its comments follow.
 2. Name the inline numbers, in one commit that changes no value: 102 sites in 42 files, each compared with its literal.
    Rename the plain constants the name test should catch: about six, such as `engineStarts`.
 3. `.claude/skills/behavior-registry/SKILL.md`; Decision 10's step in the `adr`, `adr-judge`, `adr-impl`,
-   `adr-impl-review`, `fix` and `fix-review` skills, and the section in the `adr` skill's template and partial-supersession
-   lists; the bug rule in `.claude/CLAUDE.md` and its mirror `.github/copilot-instructions.md` (step 2, and an open issue in the
-   `deferred` verdict), and its restatements: `fix`, `fix-review`, `issue-management`, `.claude/workflows/fix-batch.js`, `shim-fix.js`;
+   `adr-impl-review`, `fix`, `fix-review` and `issue-management` skills, Decision 7's rule in `adr-impl` and CLAUDE.md, and the section in the `adr` skill's template and partial-supersession
+   lists; the bug rule in `.claude/CLAUDE.md` and its mirror `.github/copilot-instructions.md` (step 2, "where no clause says otherwise"
+   in `accepted`, an open issue in `deferred`), and its restatements: `fix`, `fix-review`, `.claude/workflows/fix-batch.js`, `shim-fix.js`;
    CLAUDE.md's layer, pipeline and propagation tables, strict rule 5's list, the code conventions and *Before you finish*;
    `docs/method/README.md`; `README.md`; at acceptance, the back-links in ADR-0000 and ADR-0272.
 4. The 14 chapters, written with the skill, and a row per edge the Functions chapter adds or drops against the blueprint's
    machine. Each `uncovered` row goes to the decider as a question, each `differs` row through the bug rule's two checks; no fix
    in this PR.
-5. Replace the Function machine: `blueprint.md` and `docs/PROJECT-SUMMARY.md` link to the chapter; `.claude/skills/project-summary/summary-shape.md`, that skill's line on copied diagrams, the bug rule's mention of
-   the blueprint's state machine and the row at the chapter's `Terminating` follow.
+5. Replace the Function machine: `blueprint.md` and `docs/PROJECT-SUMMARY.md` link to the chapter; the `project-summary` skill's
+   line on copied diagrams, the bug rule's mention of the blueprint's machine, the comments of `internal/function/function.go` that
+   name its edges and the `Terminating` row follow.
 6. Tests in `scripts/behavior/main_test.go`, on small fixture trees: one `TestScenario<Name>` per Scenario, each item of
-   Decision 8, the value shapes and the name test. `TestScenarioSurpriseLookedUp` reads the real file and the bug rule.
+   Decision 8, the value shapes and the name test. `TestScenarioSurpriseLookedUp` reads the real chapters and the bug rule.
 7. Done when `just ci-full` and CI pass; the lanes run only as the merge queue's rule for the touched paths requires.
 
 ## Review checklist
 
-- [ ] `just check-behavior` passes; a Linux run gives the same bytes as a macOS run.
+- [ ] `just check-behavior` passes; a Linux run gives the same result as a macOS run; a commit with an inline number fails at its hook.
 - [ ] Each Scenario has its named test, passing; each fails when the check it tests is removed.
 - [ ] The commit that names the numbers changes no value: each new constant equals the literal it replaces.
 - [ ] A random 40 rows' citations were re-read, not only found by the check; a docs-only PR with a broken row fails CI's
       light path, run once.
 - [ ] `blueprint.md` and `docs/PROJECT-SUMMARY.md` link to the chapter and hold no copy of the machine; each edge the
       blueprint's copy had and the chapter lacks, or the reverse, has a row with its status and source.
-- [ ] The six skills carry Decision 10's step; the bug rule and its restatements start at the file; the CLAUDE.md mirror
+- [ ] The seven skills carry Decision 10's step; the bug rule and its restatements start at the file; the CLAUDE.md mirror
       is byte-identical.
 - [ ] No absolute path or local username in a chapter; no security finding in any row.
 
@@ -265,8 +268,7 @@ The local branch `exp/behavior-registry` holds the tool, its tests, the named nu
 
 Measured on the experiment's text as one file, with a list of 14 past surprises written before its new chapters:
 
-- **(+)** A reader of the registry alone reached the right verdict on 13 of 14, at about 12k tokens each, a saving Decision 11
-  lets a session keep; a read that goes on to the ADRs took about 46k, and one with no registry 41k. The miss read "no row",
+- **(+)** A reader of the registry alone reached the right verdict on 13 of 14, at about 12k tokens each; a read that goes on to the ADRs took about 46k, and one with no registry 41k. The miss read "no row",
   which sends a reader on to the issues.
 - **(+)** Writing it showed what no list did: 20 questions and 11 places where the code differs from its ADR.
 - **(−)** It is a first stop, not a shorter dive: on the same 7 surprises, the registry with the ADRs took 314k tokens and

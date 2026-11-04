@@ -1140,7 +1140,7 @@ func (r *Reconciler) finish(ctx context.Context, fn *v1.Function, v verdict, dra
 		}
 		fn.Status.Conditions.Set(ready)
 	case v.serving:
-		// ADR-0142: no replica is ready while a dead one is replaced (the blueprint's Ready → Degraded → Ready).
+		// ADR-0142: no replica is ready while a dead one is replaced (Ready → Degraded → Ready, docs/behavior/functions.md).
 		fn.Status.Phase = v1.PhaseDegraded
 		reason, msg := "Restarting", "a replica exited and is being replaced"
 		switch {
@@ -1161,7 +1161,7 @@ func (r *Reconciler) finish(ctx context.Context, fn *v1.Function, v verdict, dra
 		}
 		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: msg})
 	case v.startErr != nil && v.running == 0:
-		// the blueprint's Deploying → Failed on a worker error; requeueFor retries it after its growing wait (ADR-0169)
+		// Deploying → Failed on a worker error; requeueFor retries it after its growing wait (ADR-0169)
 		fn.Status.Phase = v1.PhaseFailed
 		fn.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: startReason(v.startErr), Message: v.startErr.Error()})
 	case v.crashLoop != "":

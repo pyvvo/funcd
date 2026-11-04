@@ -27,6 +27,7 @@ import (
 const (
 	docDir           = "docs/behavior"
 	indexFile        = "README.md"
+	noDefault        = "(empty)"
 	blockBegin       = "<!-- generated values, do not edit: just behavior-values -->"
 	blockEnd         = "<!-- end of generated values -->"
 	rowHeader        = "| Where | What happens | Time | You see | Status | Source |"
@@ -116,7 +117,7 @@ func realInputs() (inputs, error) {
 		}
 		value := fmt.Sprint(v.Interface())
 		if v.IsZero() {
-			value = cmp.Or(documented[key], "(empty)")
+			value = cmp.Or(documented[key], noDefault)
 		}
 		keys[key] = value
 	})
@@ -265,11 +266,10 @@ func importsTesting(f *ast.File) bool {
 	return slices.ContainsFunc(f.Imports, func(im *ast.ImportSpec) bool { return im.Path.Value == `"testing"` })
 }
 
-// fileValues returns f's package-level values, its fallbacks that differ from their key, and its inline numbers.
+// fileValues returns f's package-level values, and the numbers its functions write inline or hold beside a key that says otherwise.
 func fileValues(fset *token.FileSet, f *ast.File, path string, keys map[string]string) (rows []row, inline []string) {
 	scan := func(name string, body ast.Node) {
-		r, i := inlineNumbers(fset, body, path, name, keys)
-		rows, inline = append(rows, r...), append(inline, i...)
+		inline = append(inline, inlineNumbers(fset, body, path, name, keys)...)
 	}
 	for _, decl := range f.Decls {
 		switch d := decl.(type) {
@@ -308,8 +308,8 @@ func fileValues(fset *token.FileSet, f *ast.File, path string, keys map[string]s
 }
 
 // inlineNumbers finds the numbers a function body writes inline. One beside its config key is that key's hard-coded
-// fallback: it has no row while it equals the key's default, and any other is refused.
-func inlineNumbers(fset *token.FileSet, body ast.Node, path, fn string, keys map[string]string) (rows []row, inline []string) {
+// fallback, and one key has one default: a fallback that differs is refused too.
+func inlineNumbers(fset *token.FileSet, body ast.Node, path, fn string, keys map[string]string) (inline []string) {
 	var stack []ast.Node
 	ast.Inspect(body, func(n ast.Node) bool {
 		if n == nil {
@@ -318,19 +318,20 @@ func inlineNumbers(fset *token.FileSet, body ast.Node, path, fn string, keys map
 		}
 		if refused(n, stack, fset, keys) {
 			e, _ := n.(ast.Expr)
+			at := fmt.Sprintf("%s:%d", path, fset.Position(n.Pos()).Line)
 			if key := besideKey(stack, keys); key != "" {
 				if v, ok := eval(e); ok && differs(keys[key], v, hasUnit(e)) {
-					rows = append(rows, row{key + " (fallback)", formatValue(v, hasUnit(e)), path})
+					inline = append(inline, fmt.Sprintf("%s: %s() falls back to %s for %s, whose default is %s: one key has one default", at, fn, formatValue(v, hasUnit(e)), key, keys[key]))
 				}
 			} else {
-				inline = append(inline, fmt.Sprintf("%s: %s() writes the number %s inline: give it a name at package level", path, fn, exprText(fset, n)))
+				inline = append(inline, fmt.Sprintf("%s: %s() writes the number %s inline: give it a name at package level", at, fn, exprText(fset, n)))
 			}
 			return false
 		}
 		stack = append(stack, n)
 		return true
 	})
-	return rows, inline
+	return inline
 }
 
 // refused says whether n is a literal duration or size, or a bare unit used as a value. A bare unit stays allowed in
@@ -719,7 +720,7 @@ func block(name string, rows []row) string {
 		if from != "config" {
 			from = "`" + from + "`"
 		}
-		fmt.Fprintf(&b, "| `%s` | %s | %s |\n", strings.ReplaceAll(r.name, "|", `\|`), cmp.Or(strings.ReplaceAll(r.value, "|", `\|`), "(empty)"), from)
+		fmt.Fprintf(&b, "| `%s` | %s | %s |\n", strings.ReplaceAll(r.name, "|", `\|`), cmp.Or(strings.ReplaceAll(r.value, "|", `\|`), noDefault), from)
 	}
 	b.WriteString("\n</details>\n" + blockEnd)
 	return b.String()
@@ -769,7 +770,7 @@ func rowProblem(line string) string {
 		return fmt.Sprintf("a row has %d cells, not 6", len(c))
 	}
 	if len(line) > maxRow {
-		return fmt.Sprintf("a row has %d characters, over the cap of %d: cut it or split it", len(line), maxRow)
+		return fmt.Sprintf("a row has %d bytes, over the cap of %d: cut it or split it", len(line), maxRow)
 	}
 	status, source := strings.Trim(c[4], "*"), c[5]
 	switch status {
@@ -807,9 +808,9 @@ var (
 
 // section is where a chapter's written part holds each part of its shape, and what its machine and note name.
 type section struct {
-	title, kinds, machine, table int
-	states                       []string
-	marked                       map[string]bool
+	title, index, kinds, machine, table int
+	states                              []string
+	marked                              map[string]bool
 }
 
 func (s section) shape(path, name string) []string {
@@ -817,14 +818,16 @@ func (s section) shape(path, name string) []string {
 	switch {
 	case s.title == 0:
 		return []string{at + " has no title: # " + name}
+	case s.index == 0:
+		return []string{at + " has no link to the index"}
 	case s.kinds == 0:
 		return []string{at + " has no Kinds: line"}
 	case s.machine == 0:
 		return []string{at + " has no machine"}
 	case s.table == 0:
 		return []string{at + " has no table"}
-	case s.kinds > s.machine || s.machine > s.table:
-		return []string{at + " does not follow the order: title, Kinds: line, machine, note, table"}
+	case s.title > s.index || s.index > s.kinds || s.kinds > s.machine || s.machine > s.table:
+		return []string{at + " does not follow the order: title, link to the index, Kinds: line, machine, note, table"}
 	}
 	return nil
 }
@@ -840,6 +843,12 @@ func validate(in inputs, files []chapterFile, byChapter map[string][]row, known 
 	}
 	tests := testNames(in.root)
 	var problems []string
+	for key, value := range in.keys {
+		if value == noDefault {
+			problems = append(problems, "config key "+key+" has no default in internal/platform/config or examples/funcdconfig.yaml")
+		}
+	}
+	slices.Sort(problems)
 	kindLines := ""
 	for _, f := range files {
 		p, kinds := validateChapter(in, f, values, known, tests)
@@ -943,6 +952,9 @@ func validateChapter(in inputs, f chapterFile, values map[string][]string, known
 		at := fmt.Sprintf("%s:%d", f.path, n+1)
 		if line == "# "+f.name && s.title == 0 {
 			s.title = n + 1
+		}
+		if strings.Contains(line, "]("+indexFile+")") && s.index == 0 {
+			s.index = n + 1
 		}
 		if strings.HasPrefix(line, "Kinds:") {
 			kindLine += line + "\n"

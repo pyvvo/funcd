@@ -51,7 +51,7 @@ func newTree(t *testing.T, rows string) tree {
 }
 
 func chapterText(name, kinds, rows string) string {
-	return "# " + name + "\n\nKinds: " + kinds + ".\n\n```mermaid\nstateDiagram-v2\n    [*] --> Held\n```\n\nA note. New words: Held.\n\n" +
+	return "# " + name + "\n\nSee [the index](README.md).\n\nKinds: " + kinds + ".\n\n```mermaid\nstateDiagram-v2\n    [*] --> Held\n```\n\nA note. New words: Held.\n\n" +
 		rowHeader + "\n|---|---|---|---|---|---|\n" + rows + "\n"
 }
 
@@ -129,7 +129,7 @@ func TestScenarioInlineNumber(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			tr := newTree(t, goodRow)
 			tr.write("internal/invoke/extra.go", "package invoke\n\n"+code+"\n")
-			tr.checkFails("internal/invoke/extra.go: f() writes the number", "inline: give it a name at package level")
+			tr.checkFails("internal/invoke/extra.go:3: f() writes the number", "inline: give it a name at package level")
 		})
 	}
 	allowed := map[string]string{
@@ -149,20 +149,23 @@ func TestScenarioInlineNumber(t *testing.T) {
 			tr.write("internal/invoke/extra.go", "package invoke\n\n"+code+"\n")
 			require.NoError(t, run(tr.in, false))
 			require.NoError(t, run(tr.in, true))
-			require.NotContains(t, tr.read(callsDoc), "(fallback)")
 		})
 	}
-	t.Run("a fallback that differs has a row", func(t *testing.T) {
+	t.Run("a fallback that differs from its key is refused", func(t *testing.T) {
 		tr := newTree(t, goodRow)
 		tr.write("internal/invoke/extra.go", "package invoke\n\nfunc f() { parse(\"invoke.activationTimeout\", 20*time.Second) }\n")
-		require.NoError(t, run(tr.in, false))
-		require.Contains(t, tr.read(callsDoc), "| `invoke.activationTimeout (fallback)` | 20s |")
+		tr.checkFails("internal/invoke/extra.go:3: f() falls back to 20s for invoke.activationTimeout, whose default is 30s: one key has one default")
 	})
-	t.Run("a positional unit that differs has a row", func(t *testing.T) {
+	t.Run("a positional unit that differs from its key is refused", func(t *testing.T) {
 		tr := newTree(t, goodRow)
 		tr.write("internal/invoke/extra.go", "package invoke\n\nfunc f() { _ = field{\"invoke.activationTimeout\", time.Second} }\n")
+		tr.checkFails("falls back to 1s for invoke.activationTimeout, whose default is 30s")
+	})
+	t.Run("a config key with no default is refused", func(t *testing.T) {
+		tr := newTree(t, goodRow)
+		tr.in.keys["invoke.nothing"] = noDefault
 		require.NoError(t, run(tr.in, false))
-		require.Contains(t, tr.read(callsDoc), "| `invoke.activationTimeout (fallback)` | 1s |")
+		tr.checkFails("config key invoke.nothing has no default")
 	})
 }
 
@@ -204,6 +207,7 @@ func TestScenarioNewComponent(t *testing.T) {
 func TestChapterShape(t *testing.T) {
 	cases := map[string]struct{ old, replacement, want string }{
 		"no title":      {"# Calls\n", "", "chapter Calls has no title"},
+		"no index link": {"See [the index](README.md).\n", "", "chapter Calls has no link to the index"},
 		"no Kinds line": {"Kinds: Route.\n", "", "chapter Calls has no Kinds: line"},
 		"no machine":    {"```mermaid\nstateDiagram-v2\n    [*] --> Held\n```\n", "", "chapter Calls has no machine"},
 		"no table":      {rowHeader + "\n|---|---|---|---|---|---|\n" + goodRow, "", "chapter Calls has no table"},
@@ -221,6 +225,12 @@ func TestChapterShape(t *testing.T) {
 		tr.checkFails("the machine's state Waiting is not in the code and the note does not mark it new")
 		tr.edit("New words: Held.\n", "New words: Waiting.\n")
 		require.NoError(t, run(tr.in, true))
+	})
+	t.Run("a title after the Kinds line", func(t *testing.T) {
+		tr := newTree(t, goodRow)
+		tr.edit("# Calls\n", "")
+		tr.edit("Kinds: Route.\n", "Kinds: Route.\n\n# Calls\n")
+		tr.checkFails("does not follow the order")
 	})
 	t.Run("the table before the machine", func(t *testing.T) {
 		tr := newTree(t, goodRow)
@@ -355,6 +365,20 @@ func TestScenarioSurpriseLookedUp(t *testing.T) {
 	index, err := os.ReadFile("../../" + docDir + "/" + indexFile)
 	require.NoError(t, err)
 	require.Contains(t, string(index), "grep -rl", "the index starts a lookup with a grep")
+	rule, err := os.ReadFile("../../.claude/CLAUDE.md")
+	require.NoError(t, err)
+	require.Contains(t, string(rule), "docs/behavior/", "the bug rule starts there")
+}
+
+// The rule runs while a change is written, not only in CI: at each commit and in the lint recipe.
+func TestTheRuleRunsAtEachStep(t *testing.T) {
+	hook, err := os.ReadFile("../../lefthook.yml")
+	require.NoError(t, err)
+	require.Contains(t, string(hook), "go run ./scripts/behavior -check")
+	recipes, err := os.ReadFile("../../justfile")
+	require.NoError(t, err)
+	require.Contains(t, string(recipes), "lint: check-behavior")
+	require.Regexp(t, "(?m)^ci: .*check-behavior", string(recipes))
 }
 
 func TestValues(t *testing.T) {

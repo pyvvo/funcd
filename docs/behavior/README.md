@@ -6,7 +6,7 @@ generated, and `just check-behavior` fails when a row's citation or named number
 
 ## Before you call something a bug
 
-Grep what you saw across the chapters, and read every row it hits: the status tells them apart.
+Grep what you saw across the chapters, and read every row it hits: the object's phase and reason tell them apart.
 
 ```bash
 grep -rl "did not become ready" docs/behavior
@@ -24,7 +24,7 @@ the bug rule in `.claude/CLAUDE.md`: a row points at what to read and proves not
 | `decided` | an ADR or the decider chose it |
 | `accepted` | an ADR or the decider named it as a cost or a risk, left it out on purpose or rejected its fix; or no clause speaks of it and a test pins it |
 | `deferred` | a board card, an ADR's open question or an open issue holds it |
-| `uncovered` | nothing speaks of it: a question for the decider, no fix until answered |
+| `uncovered` | nothing speaks of it: a question for the decider, no fix until answered, unless no sound design could want it |
 | `differs` | an ADR or the blueprint says otherwise and the code does this: a surprise for the bug rule |
 
 ## Chapters

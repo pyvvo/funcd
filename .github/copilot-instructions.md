@@ -47,21 +47,25 @@ card or a commit, for a defect found on the way and for a subagent's finding too
 or "not checked yet", and propose no fix.
 
 1. **It happens.** Reproduce it on the current `origin/main`, and say what ran.
-2. **Nothing decided it.** Dive deep, and read instead of recalling:
+2. **Nothing decided it.** Start at [docs/behavior/](../docs/behavior/README.md): grep what you saw across the chapters and read
+   every row it hits, since the object's phase and reason tell them apart. A row whose cited clause reads as the row says ends the dive, with no
+   issue and no fix. About to file or fix, or no row found? Dive deep, and read instead of recalling:
    - **Every ADR on its path**: grep the component, the phase, the reason and the key, and follow each `Superseded in part by`
      line. Read the whole ADR, not only its Decision: accepted costs live in **Scope** (what it leaves out), **Alternatives**
      (the fix someone rejected), **Consequences**, **Risks accepted** and **Open questions**.
    - **Issues**, open and closed: search the symptom, the error text and the test name (`gh issue list --state all --search`).
    - **Board cards** (`python3 .claude/skills/project-management/driver.py list`): what the decider deferred lives there.
-   - **The tests that pin it**, the docs and the blueprint's state machine.
+   - **The tests that pin it**, the docs and the chapter's state machine.
+
+   A dive that finds no row ends by adding one, or, in a gate or campaign that edits nothing, by reporting it.
 
 Then give it one verdict, citing what you read:
 
 | Verdict | It means | What you do |
 |---|---|---|
 | `bug` | It breaks a clause you can cite, or no sound design could want it (a crash, lost data, a hang), and nothing above accepts it | `/fix`, or file it; its `### Design check` records this |
-| `accepted` | An ADR decided it, named it as a cost or a risk, left it out on purpose or rejected its fix, or a test pins it | No issue and no fix: report it with the citation. Changing it is the decider's new decision: a `kind/feature` with `needs-adr` and a superseding ADR, or a board card |
-| `deferred` | A board card or an ADR's open question holds it | No issue and no fix: add your evidence to the card |
+| `accepted` | An ADR decided it, named it as a cost or a risk, left it out on purpose or rejected its fix, or, where no clause says otherwise, a test pins it | No issue and no fix: report it with the citation. Changing it is the decider's new decision: a `kind/feature` with `needs-adr` and a superseding ADR, or a board card |
+| `deferred` | A board card, an ADR's open question or an open issue holds it (an open `kind/bug` is `bug`, already filed) | No new issue and no fix: add your evidence to the card or the issue |
 | `uncovered` | Nothing above speaks of it, and a sound design could want either | A question for the decider with the evidence, or a line of the report in a campaign. No fix until answered |
 
 Check a fix you would propose the same way: it can break the rule the behavior follows. `driver.py create --kind bug` refuses an
@@ -77,6 +81,7 @@ checks and stays in its private advisory.
 | **ADR** | [docs/adr/](../docs/adr/) `NNNN-*.md` | *How* one decision is made + its contracts | **Immutable once `Accepted`** (change = a new superseding ADR) | The truth for its topic |
 | **Roadmap** | [docs/roadmap/](../docs/roadmap/) `<v>-delivery-plan.md` + `<v>-plan.json` | *In what order* ADRs get built | **Living + computed** | Sequencing only; commits to no architecture |
 | Code | (not yet) | The implementation | — | Must conform to its ADR's Contracts |
+| *Reference* | [docs/behavior/](../docs/behavior/README.md) | *What the platform does now and who decided it* | Living; its value blocks are generated | Decides nothing: a row that misstates an ADR is corrected; where the code differs from its ADR, the row says `differs` |
 
 ### Reading / derivation direction
 
@@ -108,6 +113,7 @@ downstream-or-sideways obligates an update to the documents that referenced it.
 | judge | [adr-judge](../.claude/skills/adr-judge/SKILL.md) | judge the ADR *document* before acceptance — evidence-cited verdict | a report (no doc edits) | nothing — it never edits what it judges |
 | refine / accept | [brief](../.claude/skills/brief/SKILL.md) | brief the decider: a needs-adr card before its ADR (refine), a Proposed ADR before acceptance | nothing until the decider answers | refine → the answers recorded, then `adr`; on an explicit accept → the `adr` skill's acceptance steps |
 | build | [adr-impl](../.claude/skills/adr-impl/SKILL.md) | ADR → working code (interfaces + drivers + facades + deps + scenario tests **written and passing**, green `just ci`) | code | **ADR `Accepted → Reviewing` + feat row → `reviewing`** |
+| keep | [behavior-registry](../.claude/skills/behavior-registry/SKILL.md) | when a value or a behavior changes, an ADR is accepted, or a component arrives: regenerate the values and correct the rows | `docs/behavior/` | each `uncovered` row goes to the decider, each `differs` row through the bug rule |
 | review | [adr-impl-review](../.claude/skills/adr-impl-review/SKILL.md) | review the *work* vs ADR + Definition of Done by **running** build/lint/test; score the model | a verdict + `docs/reviews/` model scorecard | **on a `pass`**: ADR `Reviewing → Implemented` + feat row → `implemented` (sole stamper of `Implemented`); non-pass advances nothing (ADR stays `Reviewing`); still never edits the *work* (code) |
 
 `adr-judge` and `adr-impl-review` are different gates: the judge reads the *ADR document* (before
@@ -131,16 +137,17 @@ pipeline for `/adr`.
 
 When you change the **row**, you owe the checked **columns** — in the same session.
 
-| You changed… | → blueprint.md | → docs/feat row | → the ADR | → roadmap + plan.json | → code |
-|---|---|---|---|---|---|
-| ADR drafted / `Proposed` | — | `idea → adr`, link the ADR | — | reconcile its `P-x` placeholder → real number | — |
-| ADR **Accepted** | sync **iff** it refines/contradicts the blueprint (newest accepted wins) | `→ accepted` | set `Accepted` + date | reconcile number; **re-run analyzer** if a new build dep surfaced | — |
-| ADR **Reviewing** (implementation done) | — | `→ reviewing` | set `Accepted → Reviewing` (by `adr-impl`) | — | implementation lands |
-| ADR **Implemented** (review passed) | — | `→ implemented` | set `Reviewing → Implemented` (by the review gate; final edit — frozen after) | — | — |
-| ADR **Superseded** | sync (newest wins) | re-point row to the new ADR | old → `Superseded by ADR-XXXX`; write the new ADR | re-sequence if build order changed | maybe |
-| **feat** feature added / removed / re-scoped | maybe (if architectural intent shifts) | (the edit itself) | draft a new ADR or defer one | **update `plan.json`, re-run `plan_waves.py`, repaste graph/waves/critical-path** | — |
-| **blueprint** architecture change | (the edit itself) | maybe add/adjust feature rows | maybe a new or superseding ADR | maybe re-sequence | — |
-| **roadmap** reveals a missing decision | — | maybe add a feature row | note it as an item to be decided (don't decide it in the roadmap) | (the edit itself) | — |
+| You changed… | → blueprint.md | → docs/feat row | → the ADR | → roadmap + plan.json | → code | → docs/behavior |
+|---|---|---|---|---|---|---|
+| ADR drafted / `Proposed` | — | `idea → adr`, link the ADR | its *Behavior rows* | reconcile its `P-x` placeholder → real number | — | — |
+| ADR **Accepted** | sync **iff** it refines/contradicts the blueprint (newest accepted wins) | `→ accepted` | set `Accepted` + date | reconcile number; **re-run analyzer** if a new build dep surfaced | — | rows citing what it wholly supersedes move to it, `differs` until implemented |
+| ADR **Reviewing** (implementation done) | — | `→ reviewing` | set `Accepted → Reviewing` (by `adr-impl`) | — | implementation lands | its *Behavior rows* land, with `just behavior-values` |
+| ADR **Implemented** (review passed) | — | `→ implemented` | set `Reviewing → Implemented` (by the review gate; final edit — frozen after) | — | — | — |
+| ADR **Superseded** | sync (newest wins) | re-point row to the new ADR | old → `Superseded by ADR-XXXX`; write the new ADR | re-sequence if build order changed | maybe | rows cite the new ADR |
+| **feat** feature added / removed / re-scoped | maybe (if architectural intent shifts) | (the edit itself) | draft a new ADR or defer one | **update `plan.json`, re-run `plan_waves.py`, repaste graph/waves/critical-path** | — | — |
+| **blueprint** architecture change | (the edit itself) | maybe add/adjust feature rows | maybe a new or superseding ADR | maybe re-sequence | — | maybe a chapter's machine |
+| **roadmap** reveals a missing decision | — | maybe add a feature row | note it as an item to be decided (don't decide it in the roadmap) | (the edit itself) | — | — |
+| **code**: a default, a named value or a behavior | — | — | — | — | (the edit itself) | `just behavior-values`, and the rows that cite it |
 
 ### The two chains worth memorizing
 
@@ -224,7 +231,8 @@ stays free (see below).
 5. **Never hand-edit a computed artifact.** The roadmap's graph, waves, and critical path are
    `plan_waves.py` output; the slate table mirrors `plan.json`. Change `plan.json`, re-run the
    analyzer, repaste — never edit the computed sections by hand (they silently drift otherwise). The state
-   machine beside a design spec (`docs/design/**/*.md`) is `just spec-diagrams` output, checked by `just check-specs`.
+   machine beside a design spec (`docs/design/**/*.md`) is `just spec-diagrams` output, checked by `just check-specs`. A chapter's value
+   block (`docs/behavior/*.md`) is `just behavior-values` output, checked by `just check-behavior`.
 6. **No orphans, no ghosts.** Every ADR's `Realizes: FEAT-NNNN/Fxx` points at a real row, and
    every feat row's status equals its ADR's status. One without the other is a defect to fix
    in the same session.
@@ -514,6 +522,19 @@ Small house-style rules that apply to every file you write or edit:
     - name
   ```
 
+- **A number that changes behavior has a name (ADR-0313).** A duration or a size in a function body gets a package-level `const`
+  that says what it sets, and a count's name passes the name test (`nameTest` in `scripts/behavior/main.go`):
+
+  ```go
+  context.WithTimeout(ctx, 30*time.Second)  // refused
+  const probeTimeout = 30 * time.Second     // the value then shows in its chapter's block
+  ```
+
+  The same Go rule runs at each commit (lefthook), in `just lint` and in CI, and it names the file and the line.
+- **A value an operator may need to change is a config key (ADR-0313).** It goes in `internal/platform/config` with its default and in
+  `examples/funcdconfig.yaml` with that default (`TestIssue341_ExampleDocumentsEveryKeyWithDefault`), and it joins a chapter's config
+  sections in `scripts/behavior/main.go`. A hard-coded fallback beside the key must equal that default: the check refuses one that differs.
+
 - **Imports at module top level.** No `import`/`from … import` inside a function or method (Python, JS/TS,
   Go). The only exception is a genuine circular-import break.
 
@@ -602,6 +623,7 @@ closed): a higher limit only hides a hung test for longer.
 - [ ] Did an ADR change status? Update its feat row (and blueprint, if it refined it).
 - [ ] Did the feature set or a build dependency change? Update `plan.json`, re-run
       `plan_waves.py`, re-validate the graph, repaste the computed roadmap sections.
+- [ ] Did a default, a named value or a behavior change? `just behavior-values`, then correct the rows that cite it (`just check-behavior`).
 - [ ] Did the blueprint change architecture? Check whether a feat row or ADR must follow.
 - [ ] Are all four layers internally consistent (no stale status, no orphan ADR, no
       placeholder left pointing at a now-real ADR number)?

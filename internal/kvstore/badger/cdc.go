@@ -34,7 +34,7 @@ const (
 	cdcLogPrefix    = Reserved + "cdc/"               // _cdc/<020d seq> outbox entries, seq-ordered
 	cdcCursorKey    = Reserved + "cdc_cursor/default" // the single-consumer durable cursor
 	cdcStream       = "KV_CDC"                        // the bus stream that keeps the feed for the retention window
-	cdcSeqBandwidth = 100                             // lease 100 seqs per persisted write (gaps on crash are fine)
+	cdcSeqBatch     = 100                             // lease 100 seqs per persisted write (gaps on crash are fine)
 	cdcPollInterval = 200 * time.Millisecond          // tail wake cadence when the log is drained
 	cdcRetryDelay   = time.Second                     // RunCDC's wait before re-tailing after a failed pass
 )
@@ -52,7 +52,7 @@ func NewCDC(db *badger.DB, sink bus.Bus, cfg CDCConfig) (CDC, error) {
 	if sink == nil || cfg.Subject == "" {
 		return nil, fault.Invalidf("kvbadger.NewCDC", "cdc enabled but sink is empty")
 	}
-	seq, err := db.GetSequence([]byte(cdcSeqKey), cdcSeqBandwidth)
+	seq, err := db.GetSequence([]byte(cdcSeqKey), cdcSeqBatch)
 	if err != nil {
 		return nil, fault.Internalf("kvbadger.NewCDC", "lease cdc sequence: %v", err)
 	}

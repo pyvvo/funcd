@@ -7,6 +7,8 @@ Kubernetes-inspired internals, designed for the agent era.
   architecture, resource model, repository structure. The single architectural reference.
 - **`docs/feat/`** — feature-version documents: the initial need and the high-level
   feature/component list per version (V1, V2, …). What and why — never how.
+- **[docs/behavior/](docs/behavior/README.md)** — what the platform does now, per process, how long it takes and who decided
+  it. Read it before you call something a bug. It decides nothing.
 - **`docs/adr/`** — Architecture Decision Records. Every concrete decision (project setup,
   ports & drivers, gateway mechanics, …) is captured as an ADR: need, constraints,
   alternatives, final solution, and the contracts (interfaces, resource definitions,

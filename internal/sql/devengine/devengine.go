@@ -46,9 +46,9 @@ const (
 	reapGrace = 3 * time.Second
 	// readyTimeout bounds an engine's start, a fresh one or one replaying its log.
 	readyTimeout = 30 * time.Second
-	// engineStarts bounds the starts of an engine whose port another process took before it bound it (ADR-0260
+	// maxEngineStarts bounds the starts of an engine whose port another process took before it bound it (ADR-0260
 	// Decision 3), as dev's S3 port (cmd/funcdctl/dev.go, #627).
-	engineStarts = 3
+	maxEngineStarts = 3
 )
 
 // errPortTaken is a start whose engine reported that a port it was given was taken.
@@ -284,11 +284,11 @@ func (p *engineProc) stop() {
 }
 
 // launch starts the engine and waits until it is ready. A start whose engine reported a taken port is made again at
-// once with new ports, engineStarts starts in all; any other failure ends it (ADR-0260 Decision 3).
+// once with new ports, maxEngineStarts starts in all; any other failure ends it (ADR-0260 Decision 3).
 func (r *Runtime) launch(ctx context.Context, spec provider.ProviderSpec) (*engineProc, error) {
 	for n := 1; ; n++ {
 		p, err := r.launchOnce(ctx, spec)
-		if err == nil || !errors.Is(err, errPortTaken) || n == engineStarts {
+		if err == nil || !errors.Is(err, errPortTaken) || n == maxEngineStarts {
 			return p, err
 		}
 		r.logger.WarnContext(ctx, "a port of the sql engine was taken before it bound it; starting it again with new ports",

@@ -75,7 +75,8 @@ python3 .claude/skills/project-summary/state.py --check
 Author `docs/PROJECT-SUMMARY.md` by following the section outline + row shapes in
 **[summary-shape.md](summary-shape.md)** (the canonical structure — section names,
 the Features-table and Decision-log row shapes, the two required sections). Copy the
-mermaid diagrams verbatim from the architecture doc (`blueprint.md`); fill the
+mermaid diagrams verbatim from the architecture doc (`blueprint.md`), and link a process's machine to its chapter in
+`docs/behavior/` instead of copying it (ADR-0313); fill the
 **Decision log** rows and the **Build status** section from the driver's report.
 
 ## Gotchas
@@ -90,7 +91,8 @@ mermaid diagrams verbatim from the architecture doc (`blueprint.md`); fill the
   *other* direction — the driver ignores it, so an ADR that supersedes another isn't itself
   flagged superseded.
 - **mermaid diagrams are copied from `blueprint.md`** (the source of truth for architecture
-  pictures); the summary embeds them verbatim — don't redraw them here.
+  pictures); the summary embeds them verbatim — don't redraw them here. A process's state machine lives in its chapter of
+  `docs/behavior/`: link it.
 - **Run from anywhere in the repo** — `state.py` walks up to the root (the dir containing
   `docs/adr/`); or pass `--root <dir>`.
 - **No identity/path leak in the summary.** `PROJECT-SUMMARY.md` is a tracked file: never write the

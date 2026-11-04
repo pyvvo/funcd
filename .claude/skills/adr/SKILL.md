@@ -65,8 +65,8 @@ from ADR-0000, in order — a section that does not apply says "None" but still 
 
 Header (status, date, deciders, tags, realizes, relates-to/supersedes) · Context & Need ·
 Scenarios · Scope (in/out) · Constraints & Decision drivers · Alternatives considered ·
-Decision · Design model · Temporary workarounds · Contracts · Implementation plan · Review checklist ·
-Consequences · Open questions · References. (*Design model* is ADR-0272's addition to ADR-0000's template.)
+Decision · Design model · Behavior rows · Temporary workarounds · Contracts · Implementation plan · Review checklist ·
+Consequences · Open questions · References. (*Design model* is ADR-0272's addition to ADR-0000's template, *Behavior rows* ADR-0313's.)
 
 **Be concise — the overriding style rule.** An ADR records a *decision* and the contracts to
 implement it, not an essay. Every sentence must change what gets built or how it's judged; if it
@@ -115,9 +115,11 @@ Quality bar per section:
   `scripts/agent/d just check-specs` and `just spec-diagrams`, and fill the section as that skill shows: the spec,
   each assertion with its kind, Scenario and oracle test, the bounds and why, the faults, the mutants, the result,
   what is left to tests. Otherwise write `None` and why.
+- **Behavior rows** (ADR-0313): the rows of `docs/behavior/` this ADR adds, changes or removes, by chapter, or `None` and why. A new
+  wait, state, refusal, accepted cost or limit gets a row, and each new number a name or a config key.
 - **Partial supersession** (ADR-0272 Decision 7): an ADR that replaces named parts of one Accepted or Implemented
   ADR lists them in `Supersedes (in part)` (its title may say `(amends ADR-XXXX)`), carries Context, Scenarios (new
-  or changed), Alternatives, Decision (numbered as in the parent), Design model, Contracts (the delta),
+  or changed), Alternatives, Decision (numbered as in the parent), Design model, Behavior rows, Contracts (the delta),
   Implementation plan, Review checklist, Consequences and References, and may write `Unchanged (ADR-XXXX)` for Scope
   and Constraints. It has its own feat row.
 
@@ -148,6 +150,7 @@ the `Realizes:` header decides: a user-facing feat-row has a feature issue, an i
 
 ## Step 4 — Sync the blueprint and the feat tracking
 
+- Rows of `docs/behavior/` that cite what it wholly supersedes move to it, `differs` until it is implemented (ADR-0313).
 - If the accepted decision refines or contradicts `blueprint.md`, update the blueprint in
   the same session (focused edits, not rewrites). The rule from ADR-0000: the newest
   accepted ADR wins and the blueprint follows.

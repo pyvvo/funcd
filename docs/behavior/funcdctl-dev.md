@@ -75,6 +75,7 @@ Phases: [Functions](functions.md). New words: Reading, Waiting, Starting, Servin
 | `devWatchMaxDelay` | 30s | `cmd/funcdctl/devwatch.go` |
 | `devWatchQuiet` | 3s | `cmd/funcdctl/devwatch.go` |
 | `devWatchTail` | 64KiB | `cmd/funcdctl/devwatch.go` |
+| `maxDevWatchLastLines` | 20 | `cmd/funcdctl/devwatch.go` |
 | `applyAttempts` | 5 | `cmd/funcdctl/workflow.go` |
 
 </details>

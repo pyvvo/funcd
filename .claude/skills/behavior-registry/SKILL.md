@@ -20,7 +20,9 @@ repo-root-relative. Run tools through `scripts/agent/d`.
 
    | It says | Do this |
    |---|---|
-   | `writes the number ... inline` | Give the number a name at package level that says what it sets. A count's name must pass the name test (`nameTest` in `scripts/behavior/main.go`). Beside its config key, a number needs nothing. |
+   | `writes the number ... inline` | Give the number a name at package level that says what it sets. A count's name must pass the name test (`nameTest` in `scripts/behavior/main.go`). If an operator may need to change it, make it a config key instead. |
+   | `falls back to ... whose default is` | One key has one default: make the fallback equal it. |
+   | `config key ... has no default` | Give it one in `internal/platform/config`, or document it in `examples/funcdconfig.yaml`. |
    | `package ... has no chapter`, `config section ... has no chapter` | Add it to `chapters()` under the process it belongs to, then answer *A new component*. |
    | `kind ... is on no chapter's Kinds line` | Add it to the chapter that owns its lifecycle. |
    | `now:` and `was:` | Run step 1. |
@@ -56,8 +58,8 @@ cite; for the others, the header and the Decision are enough to know you need no
 
 ## A chapter
 
-A file `docs/behavior/<chapter, lower case with dashes>.md`, listed in the index. In order: its title `# <Chapter>`, a `Kinds:` line, a
-Mermaid `stateDiagram-v2`, a short note, one table, the generated block. About 60 lines, about 20 rows: the written part stays under
+A file `docs/behavior/<chapter, lower case with dashes>.md`, listed in the index. In order: its title `# <Chapter>`, a link to the index,
+a `Kinds:` line, a Mermaid `stateDiagram-v2`, a short note, one table, the generated block. About 60 lines, about 20 rows: the written part stays under
 16 KiB, about 4k tokens, because a session reads one chapter. A link to a neighbor names its file: `[Workers](workers.md)`. A step that belongs to a neighbor's chapter gets at most one row,
 saying what a caller sees here, and the neighbor holds the rest. A kind nothing acts on still sits on a `Kinds:` line: one row says so.
 

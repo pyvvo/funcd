@@ -715,32 +715,8 @@ sequenceDiagram
 
 #### Resource state machine
 
-```mermaid
-stateDiagram-v2
-    [*] --> Pending : manifest validated & stored
-    Pending --> Deploying : controller picks up, scheduler places
-    Deploying --> Ready : instances healthy, routes programmed
-    Deploying --> Deploying : boot crash, retried after a growing wait (CrashLoopBackOff, ADR-0160)
-    Deploying --> Failed : shape invalid, Start failure, or missing revision (ADR-0169, ADR-0172)
-    note right of Deploying : a failed pass keeps its phase and retries (ADR-0161)
-    Ready --> Failed : a gate fails on a later pass, such as the revision gate or a pooled member of a new revision that cannot load (ADR-0172, ADR-0158)
-    Degraded --> Failed : a gate fails on a later pass (ADR-0158)
-    Failed --> Deploying : a new spec, a gate that passes, or a Start retried after a growing wait (ADR-0169) (not while asleep, ADR-0192)
-    Failed --> Ready : a worker becomes ready (ADR-0169)
-    note right of Failed : idle reclaim never leaves it
-    Ready --> Degraded : partial failure detected
-    Degraded --> Ready : reconciliation repairs, or a serving worker passes its probe while a gate fails (ADR-0221)
-    Ready --> Idle : no traffic for idleTimeout (scale-to-zero)
-    Degraded --> Idle : no traffic for idleTimeout
-    Pending --> Idle : a gate clears with nothing to run (replicas 0, or asleep), written by the reconciler (ADR-0185, ADR-0192)
-    Idle --> Pending : a gate fails while asleep (ADR-0121, ADR-0185, ADR-0192)
-    Idle --> Failed : a gate with phase Failed fails while asleep (ADR-0192)
-    Failed --> Idle : the gates pass on an asleep Function (ADR-0192)
-    Idle --> Deploying : request / event arrives (scale from zero)
-    Ready --> Terminating : delete requested
-    Idle --> Terminating : delete requested
-    Terminating --> [*] : workers, routes & vendor resources reclaimed
-```
+A Function's phases, what moves it between them and who decided each are in
+[docs/behavior/functions.md](docs/behavior/functions.md) (ADR-0313): each chapter of the registry opens with its process's machine.
 
 ### Open design points
 

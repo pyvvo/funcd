@@ -899,7 +899,7 @@ func TestDevBurst(t *testing.T) {
 		for i := range 10000 {
 			_, err := fmt.Fprintf(w, "line %05d\n", i)
 			require.NoError(t, err)
-			if i >= 10000-devWatchLastLines {
+			if i >= 10000-maxDevWatchLastLines {
 				fmt.Fprintf(&want, "web | line %05d\n", i)
 			}
 		}

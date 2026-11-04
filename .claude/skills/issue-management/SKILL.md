@@ -74,7 +74,8 @@ Each kind is one issue form in `.github/ISSUE_TEMPLATE/` and the same `### ` sec
 | flake | Test · Failure · Frequency · Suspected cause* · References* |
 | task | Summary · Details · Done when · References* |
 
-A bug's **Design check** records the two checks of CLAUDE.md → *⛔ Is it a bug?* in four lines, here those of #49:
+Filing a `differs` row of `docs/behavior/` moves it to `deferred`, citing the issue (ADR-0313). A bug's **Design check** records the two
+checks of CLAUDE.md → *⛔ Is it a bug?* in four lines, here those of #49:
 
 ```
 ADRs: ADR-0016: C3 says a cold request is served once the Function boots inside the activation timeout; C2 has no Deploying to Idle edge.

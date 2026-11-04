@@ -42,7 +42,7 @@ ends the sleep (ADR-0192). A `Revision` is read-only, one per spec change, and s
 
 | Where | What happens | Time | You see | Status | Source |
 |---|---|---|---|---|---|
-| Before the first pass | A new Function has no phase; the first pass writes `Idle`, `Deploying`, `Pending` or `Failed`, where the blueprint's copy drew `Pending` first | the first pass | an empty `status.phase` | **uncovered** | ADR-0003 names the phases and no first step; ran it on a scratch test |
+| Before the first pass | A new Function has no phase; the first pass writes `Idle`, `Deploying`, `Pending` or `Failed` | the first pass | an empty `status.phase` | **uncovered** | ADR-0169 Decision 3 names "the empty phase", ADR-0003 no first step; ran it on a scratch test |
 | A gate fails, nothing serving | The gate's own phase is written from any phase, so `Deploying`, `Ready`, `Degraded` and `Failed` can go `Pending`, and `Pending` can go `Failed` | the next pass | `Pending` or `Failed`, with the gate's reason | decided | ADR-0161 Decision 2, ADR-0192 Decision 1 |
 | A gate fails, a worker runs | `Deploying` goes `Degraded`; `Ready` stays while one listens, and `Degraded` is `Ready` while one passes its probe | the next pass | `Degraded`, or `Ready` | decided | ADR-0161 Decision 2, ADR-0221 Decision 1 |
 | A call with no ready worker, in any phase but `Failed` | Held, and `Idle` or `Pending` wakes first. Calls share one wake and its clock, so a late one gets less time. Forwarded once `Ready` | `invoke.activationTimeout` 30 s | 503 `function <ns>/<name> did not become ready within 30s` | decided | ADR-0161 Decision 4, ADR-0016 Decision 3, `TestScenarioCallHeldWhileNotReady` |
@@ -71,7 +71,7 @@ ends the sleep (ADR-0192). A `Revision` is read-only, one per spec change, and s
 | A member changes, joins or leaves | A second pool worker boots, and all calls stay on the old one until every member that stays is ready. A slow member delays its siblings; one not loaded at the bound loses its old revision | `runtime.bootTimeout` 1 min, then the drain | `RevisionReady=False`, `Progressing` | accepted | ADR-0224 Decision 3 and Consequences, `TestScenarioSwitchAfterLoadTimeout` |
 | A pool with an idle member | Any member that wants a worker, a `Failed` one too, keeps the pool and every sibling's memory up; it goes with the last | none | an idle member's memory stays | accepted | ADR-0046 Decision 6 and Consequences, ADR-0169 Consequences, `TestScenarioPoolWakeKeepsSiblings`, `TestScenarioPooledFailedMemberNeverIdle` |
 | A delete | The object goes at once, with no phase. The next pass stops its workers with no drain, so calls in flight are cut, and drops its route and socket | the next pass | the object gone | decided | ADR-0020 Decision 2, `TestScenarioDeleteReclaims` |
-| The blueprint's `Terminating` | No code writes this phase, though `blueprint.md` draws it: nothing holds a deleted object while its workers stop | none | never this phase | deferred | card "Two-phase delete: an object stays, marked deleting, until its controller has stopped its workers (#1231)", ADR-0169 Decision 3 |
+| `Terminating` | No code writes this phase, though ADR-0003 names it: nothing holds a deleted object while its workers stop | none | never this phase | deferred | card "Two-phase delete: an object stays, marked deleting, until its controller has stopped its workers (#1231)", ADR-0169 Decision 3 |
 
 <!-- generated values, do not edit: just behavior-values -->
 <details>

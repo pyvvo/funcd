@@ -49,9 +49,9 @@ const (
 
 const (
 	backupCursorKey = Reserved + "backup/cursor"
-	// exportNumGo caps the export's producers: each holds its own batch buffers, so Badger's default of 8
+	// exportConcurrency caps the export's producers: each holds its own batch buffers, so Badger's default of 8
 	// multiplies the export's peak heap (ADR-0067 Decision 2: a low Stream.NumGo caps the export RSS).
-	exportNumGo = 1
+	exportConcurrency = 1
 
 	delRecordPrefix = Reserved + "backup/del/" // a record per key deleted through the gateway with backup on
 	delChunkBytes   = 1 << 20                  // the budget of one restore or prune transaction
@@ -312,7 +312,7 @@ func (b *exporter) export(w io.Writer, since uint64, base bool) (to, readTs uint
 	s := b.db.NewStream()
 	s.LogPrefix = "kvbadger.backup"
 	s.SinceTs = since
-	s.NumGo = exportNumGo
+	s.NumGo = exportConcurrency
 	s.ChooseKey = func(item *badger.Item) bool {
 		k := item.Key()
 		if string(k) == backupCursorKey {
