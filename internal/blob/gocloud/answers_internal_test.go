@@ -132,13 +132,54 @@ func TestStaticKeyAnswers_ReadNoMoreThanTheLimit(t *testing.T) {
 // An object's content is not an answer the limit cuts: its reader bounds it.
 func TestStaticKeyAnswers_LeaveAnObjectsContent(t *testing.T) {
 	t.Parallel()
-	content := strings.Repeat("x", 2*maxAnswerBytes)
+	content := strings.Repeat("x", maxListPageBytes+1)
 	b := answeringStore(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(content))
 	}, OpenOptions{})
 	got, err := b.(blob.RangeReader).GetRange(context.Background(), "k", 0, int64(len(content)))
 	require.NoError(t, err)
 	require.Len(t, got, len(content))
+}
+
+// listingPage is one page of a listing of one key, padded to size bytes.
+func listingPage(size int) []byte {
+	head, tail := `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>b</Name><Contents><Key>a</Key><LastModified>2026-11-04T00:00:00.000Z</LastModified><Size>1</Size></Contents>`, `</ListBucketResult>`
+	return []byte(head + strings.Repeat(" ", size-len(head)-len(tail)) + tail)
+}
+
+// A listing's page of maxListPageBytes is read, and a longer one fails its listing, having read no more than that.
+func TestStaticKeyAnswers_BoundAListingPage(t *testing.T) {
+	t.Parallel()
+	b := answeringStore(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(listingPage(maxListPageBytes))
+	}, OpenOptions{})
+	items, _, err := b.ListAfter(context.Background(), "", "", 10)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+
+	const body = 2 * (maxListPageBytes + 32<<20)
+	var sent atomic.Int64
+	done := make(chan struct{}, 1)
+	chunk := []byte(strings.Repeat(" ", 64<<10))
+	long := answeringStore(t, func(w http.ResponseWriter, _ *http.Request) {
+		defer func() { done <- struct{}{} }()
+		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>b</Name>`))
+		for sent.Load() < body {
+			n, err := w.Write(chunk)
+			sent.Add(int64(n))
+			if err != nil {
+				return
+			}
+		}
+	}, OpenOptions{})
+	_, _, err = long.ListAfter(context.Background(), "", "", 10)
+	require.Error(t, err)
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the store is still sending")
+	}
+	require.Less(t, sent.Load(), int64(body/2), "the client read the page whole")
 }
 
 // A credentials file is the operator's own store, whose client stays as it was.

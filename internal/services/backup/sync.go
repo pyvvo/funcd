@@ -112,7 +112,10 @@ func (b *base) onTarget(ctx context.Context, s *v1.BackupSchedule, f func(blob.B
 		return err
 	}
 	defer func() { _ = target.Close() }()
-	return f(target)
+	if err := f(target); err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), "backup.onTarget", "target %s", s.Spec.Target.URL)
+	}
+	return nil
 }
 
 // writeSync writes TargetSynced and, when later, lastScheduleTime last onto the stored schedule; turning False logs

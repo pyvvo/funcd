@@ -2,12 +2,14 @@ package workload_test
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/backup/workload"
 	"github.com/pyvvo/funcd/internal/blob"
@@ -109,6 +111,42 @@ func TestListCopyMembers(t *testing.T) {
 
 // ADR-0311 Decision 6: a listing skips a key that no kind parses, as it skips a key of no kind directory, and lists
 // the members of the kinds it is given.
+// pagedKeys is a target whose listing answers total keys in pages of the limit it is asked for, all of them key.
+type pagedKeys struct {
+	blob.Bucket
+	key  string
+	left int
+}
+
+func (b *pagedKeys) ListAfter(_ context.Context, _, _ string, limit int) ([]blob.Attributes, bool, error) {
+	n := min(limit, b.left)
+	b.left -= n
+	return slices.Repeat([]blob.Attributes{{Key: b.key}}, n), b.left > 0, nil
+}
+
+// A listing of MaxListedKeys keys is read; one key more fails it, naming what it listed, whatever the target goes on answering.
+func TestSlotCopies_RefusesAListingOverItsLimit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const key = "orders/a-not-a-copy/k"
+	_, err := workload.SlotCopies(ctx, &pagedKeys{key: key, left: workload.MaxListedKeys}, "orders", "a", time.Time{}, kinds())
+	require.NoError(t, err)
+
+	target := &pagedKeys{key: key, left: workload.MaxListedKeys * 2}
+	_, err = workload.SlotCopies(ctx, target, "orders", "a", time.Time{}, kinds())
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
+	require.ErrorContains(t, err, `"orders/a-"`)
+	require.Greater(t, target.left, workload.MaxListedKeys-2*1000, "it stopped at the limit")
+}
+
+func TestListCopy_RefusesAListingOverItsLimit(t *testing.T) {
+	t.Parallel()
+	d := "orders/b1-" + strings.Repeat("a", 32) + "/"
+	_, err := workload.ListCopy(context.Background(), &pagedKeys{key: d + "kv/x/part-00000", left: workload.MaxListedKeys + 1}, d, kinds())
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
+	require.ErrorContains(t, err, d)
+}
+
 func TestListCopy_SkipsAKeyNoKindParses(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

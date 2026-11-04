@@ -16,6 +16,10 @@ import (
 // uidHex is the length of a store UID, 16 random bytes in hex.
 const uidHex = 32
 
+// MaxListedKeys is the most keys one listing of a target reads. A copy holds a key per 8 MiB part, so this holds 8 TiB of
+// copies.
+const MaxListedKeys = 1 << 20
+
 // Copy is one Backup's directory on a target as a listing shows it, read with list rights only (ADR-0287): it is
 // whole once its manifest.yaml, written last, is there; Completed is that manifest's modification time. Members are
 // the kind directories the listing holds, for display: a Restore matches the manifest's members.
@@ -151,12 +155,17 @@ func (c *Copy) fill(items []blob.Attributes, kinds []MemberKind) {
 	}
 }
 
-// listFrom calls each for every object under prefix whose key sorts after `after`, in key order.
+// listFrom calls each for every object under prefix whose key sorts after `after`, in key order; over MaxListedKeys keys
+// it is fault.Invalid.
 func listFrom(ctx context.Context, b blob.Bucket, prefix, after string, each func(blob.Attributes)) error {
+	listed := 0
 	for {
 		items, more, err := b.ListAfter(ctx, prefix, after, listPage)
 		if err != nil {
 			return err
+		}
+		if listed += len(items); listed > MaxListedKeys {
+			return fault.Invalidf("workload.listFrom", "it holds more than %d keys", MaxListedKeys)
 		}
 		for _, it := range items {
 			each(it)
