@@ -1,6 +1,6 @@
 # ADR-0313: One place says what the platform does and who decided it
 
-- **Status**: Reviewing (2026-11-05), implemented on the branch of the experiment that tested this text; Accepted (2026-11-05), the
+- **Status**: Implemented (2026-11-05), review passed with four minors ([report](../reviews/adr-0313-implementation-claude-opus-5-5.md)); Reviewing (2026-11-05), implemented on the branch of the experiment that tested this text; Accepted (2026-11-05), the
   decider: "finish the behaviour tasks, then merge it". Judged four rounds; the last verdict, accept after small edits, is folded in
 - **Date**: 2026-11-04
 - **Deciders**: green-0-rabbit
@@ -211,7 +211,7 @@ stateDiagram-v2
   `retry`, `retries`, `attempts` or `budget`, or ends with `max`, `limit`, `timeout`, `interval`, `grace`, `wait`,
   `period`, `after`, `budget`, `attempts`, `retries`, `bytes`, `size`, `ttl`, `page`, `batch`, `concurrency`, `conns` or
   `buf`.
-- **An inline number**, in a function body: `N * time.Unit`, `N << M` or `N * 1024` with literals, wherever it stands, or
+- **An inline number**, in a function body or a package-level literal: `N * time.Unit`, `N << M` or `N * 1024` with literals, wherever it stands, or
   a bare `time.Second`, `time.Minute` or `time.Hour` passed as an argument, set as a field, assigned, returned or compared.
   A bare unit is allowed in arithmetic (`d / time.Second`), in a conversion, as the unit given to `Round`, `Truncate`,
   `ceilUnits` or `ceilDiv`, or in a positional literal that names no key. Any number beside its key that equals its default is allowed.

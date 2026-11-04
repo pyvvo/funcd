@@ -475,12 +475,12 @@ type Flags struct{ MemoryOnly *bool }
 // the operator chose, an imageOverride entry or a custom imagePrefix.
 const DefaultImagePrefix = "funcd/runtime-"
 
-// defaults returns the Config with every built-in default set (the bottom precedence tier; identical
-// to ADR-0061's defaults). The dataDir-relative containerd paths (Root, CNIConfDir) are derived in
-// Load after the merge, when DataDir is final.
 // Defaults is every key's built-in default, before a file or a variable applies.
 func Defaults() Config { return defaults() }
 
+// defaults returns the Config with every built-in default set (the bottom precedence tier; identical
+// to ADR-0061's defaults). The dataDir-relative containerd paths (Root, CNIConfDir) are derived in
+// Load after the merge, when DataDir is final.
 func defaults() Config {
 	var c Config
 	c.Server.ListenAddr = "0.0.0.0:8080"

@@ -62,7 +62,7 @@ ADR-0117 Consequences). New words: Redirected, Refused.
 | `auth.credentials` | none | config |
 | `auth.namespaces` | [default] | config |
 | `auth.token` | a built-in dev token | config |
-| `secrets.encryptionKeyFile` | "" ⇒ Secret values | config |
+| `secrets.encryptionKeyFile` | none | config |
 | `dnsTimeout` | 5s | `internal/network/egress/forwarder.go` |
 | `maxPairsPerSource` | 1024 | `internal/network/egress/forwarder.go` |
 | `minRecordTTL` | 1s | `internal/network/egress/forwarder.go` |

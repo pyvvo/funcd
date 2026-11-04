@@ -293,13 +293,9 @@ func fileValues(fset *token.FileSet, f *ast.File, path string, keys map[string]s
 					if value, ok := valueOf(fset, v, vs.Names[i].Name); ok {
 						rows = append(rows, row{vs.Names[i].Name, value, path})
 					}
-					ast.Inspect(v, func(n ast.Node) bool {
-						if lit, ok := n.(*ast.FuncLit); ok {
-							scan(vs.Names[i].Name, lit.Body)
-							return false
-						}
-						return true
-					})
+					if !plain(v, fset) {
+						scan(vs.Names[i].Name, v)
+					}
 				}
 			}
 		}
@@ -320,7 +316,9 @@ func inlineNumbers(fset *token.FileSet, body ast.Node, path, fn string, keys map
 			e, _ := n.(ast.Expr)
 			at := fmt.Sprintf("%s:%d", path, fset.Position(n.Pos()).Line)
 			if key := besideKey(stack, keys); key != "" {
-				if v, ok := eval(e); ok && differs(keys[key], v, hasUnit(e)) {
+				if v, ok := eval(e); !ok {
+					inline = append(inline, fmt.Sprintf("%s: %s() falls back to %s for %s, whose default is %s: one key has one default", at, fn, exprText(fset, n), key, keys[key]))
+				} else if differs(keys[key], v, hasUnit(e)) {
 					inline = append(inline, fmt.Sprintf("%s: %s() falls back to %s for %s, whose default is %s: one key has one default", at, fn, formatValue(v, hasUnit(e)), key, keys[key]))
 				}
 			} else {
@@ -425,7 +423,7 @@ func differs(have string, n int64, duration bool) bool {
 		d, err := time.ParseDuration(have)
 		return err != nil || int64(d) != n
 	}
-	return have != strconv.FormatInt(n, 10) && have != formatSize(n)
+	return have != strconv.FormatInt(n, 10) && have != formatSize(n) && have+"B" != formatSize(n)
 }
 
 func formatValue(n int64, duration bool) string {
@@ -1002,7 +1000,7 @@ func validateChapter(in inputs, f chapterFile, values map[string][]string, known
 		}
 		for _, m := range tick.FindAllStringSubmatch(line, -1) {
 			for _, word := range reasonish.FindAllString(m[1], -1) {
-				if !strings.HasPrefix(word, "Test") && !strings.Contains(m[1], "/") && !known[word] && values[word] == nil {
+				if !strings.HasPrefix(word, "Test") && !strings.Contains(m[1], "/") && !known[word] && !s.marked[word] && values[word] == nil {
 					problems = append(problems, at+": no status reason, value or name in the code called "+word)
 				}
 			}

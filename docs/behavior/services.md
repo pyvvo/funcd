@@ -90,7 +90,7 @@ Details: [stop](../design/lake/stop.md), [commit-save](../design/lake/commit-sav
 | `lake.enginePollInterval` | 2s | config |
 | `lake.engineProbeTimeout` | 2s | config |
 | `lake.saveInterval` | unset ⇒ every answer waits for a save that covers it | config |
-| `lake.scratchSize` | the larger of 1GiB and that | config |
+| `lake.scratchSize` | 1GiB, or that when larger | config |
 | `s3gateway.enabled` | false | config |
 | `s3gateway.endpoint` | "" ⇒ http://<bridge address>:<port> under containerd when listenAddr binds the bridge or all hosts, else http://<listenAddr> | config |
 | `s3gateway.keyRotationPeriod` | 24h | config |

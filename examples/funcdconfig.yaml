@@ -206,8 +206,8 @@ runtime:
 
 # --- secrets: at-rest encryption of Secret values (ADR-0022) -----------------------------------
 # secrets:
-#   encryptionKeyFile: /etc/funcd/secret.key   # path to a 32-byte AES-256 key. default: "" ⇒ Secret values
-#                                              #   are NOT encrypted (a startup warning). Never inline the key.
+#   encryptionKeyFile: /etc/funcd/secret.key   # path to a 32-byte AES-256 key. default: none
+#                                              #   with none, Secret values are NOT encrypted (a startup warning). Never inline the key.
 
 # --- log: structured logging (ADR-0009) --------------------------------------------------------
 log:
@@ -242,7 +242,7 @@ log:
 #   saveInterval: 1s              # opt-in: save the catalog at this interval and answer commits at once; a crash loses up to it (ADR-0274). default: unset ⇒ every answer waits for a save that covers it (ADR-0279)
 #                                 # 500ms to 1h, set by hand: funcdctl backup plan sets no Lake key (ADR-0286)
 #   catalogMaxSize: 256MiB        # caps one Lake's catalog in the catalog store, at most s3gateway.maxUploadBytes; a save past it fails and the Lake shows it (ADR-0293, ADR-0294). default: 256MiB
-#   scratchSize: 1GiB             # each Lake engine's own filesystem for its catalog copy, its checkpoint copy and its spills, preallocated on the data filesystem while the engine runs; at least 2 × catalogMaxSize + 512MiB (ADR-0294). default: the larger of 1GiB and that
+#   scratchSize: 1GiB             # each Lake engine's own filesystem for its catalog copy, its checkpoint copy and its spills, preallocated on the data filesystem while the engine runs; at least 2 × catalogMaxSize + 512MiB (ADR-0294). default: 1GiB, or that when larger
 #   enginePollInterval: 2s        # re-check of an engine not answering its probe yet (ADR-0163). default: 2s
 #   engineProbeTimeout: 2s        # bound of one engine probe. default: 2s
 

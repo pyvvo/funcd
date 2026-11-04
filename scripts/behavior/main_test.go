@@ -51,7 +51,7 @@ func newTree(t *testing.T, rows string) tree {
 }
 
 func chapterText(name, kinds, rows string) string {
-	return "# " + name + "\n\nSee [the index](README.md).\n\nKinds: " + kinds + ".\n\n```mermaid\nstateDiagram-v2\n    [*] --> Held\n```\n\nA note. New words: Held.\n\n" +
+	return "# " + name + "\n\nSee [the index](README.md).\n\nKinds: " + kinds + ".\n\n```mermaid\nstateDiagram-v2\n    [*] --> Held\n```\n\nA note. New words: Held, HeldAgain.\n\n" +
 		rowHeader + "\n|---|---|---|---|---|---|\n" + rows + "\n"
 }
 
@@ -123,6 +123,7 @@ func TestScenarioInlineNumber(t *testing.T) {
 		"a bare comparison": `func f(d time.Duration) bool { return d < time.Second }`,
 		"a local const":     `func f() { const wait = 5 * time.Second; _ = wait }`,
 		"a function value":  `var f = func() time.Duration { return 5 * time.Second }`,
+		"a package literal": `var f = http.Client{Timeout: 30 * time.Second}`,
 		"a truncated day":   `func f(d time.Duration) time.Duration { return d.Truncate(24 * time.Hour) }`,
 	}
 	for name, code := range refused {
@@ -160,6 +161,18 @@ func TestScenarioInlineNumber(t *testing.T) {
 		tr := newTree(t, goodRow)
 		tr.write("internal/invoke/extra.go", "package invoke\n\nfunc f() { _ = field{\"invoke.activationTimeout\", time.Second} }\n")
 		tr.checkFails("falls back to 1s for invoke.activationTimeout, whose default is 30s")
+	})
+	t.Run("a fallback that cannot be compared is refused", func(t *testing.T) {
+		tr := newTree(t, goodRow)
+		tr.write("internal/invoke/extra.go", "package invoke\n\nfunc f() { parse(\"invoke.activationTimeout\", 1.5*time.Second) }\n")
+		tr.checkFails("falls back to 1.5 * time.Second for invoke.activationTimeout")
+	})
+	t.Run("a size equal to its key's default passes", func(t *testing.T) {
+		tr := newTree(t, goodRow)
+		tr.in.keys["runtime.memory"] = "512Mi"
+		tr.write("internal/invoke/extra.go", "package invoke\n\nfunc f() { parse(\"runtime.memory\", 512<<20) }\n")
+		require.NoError(t, run(tr.in, false))
+		require.NoError(t, run(tr.in, true))
 	})
 	t.Run("a config key with no default is refused", func(t *testing.T) {
 		tr := newTree(t, goodRow)
@@ -223,7 +236,7 @@ func TestChapterShape(t *testing.T) {
 		tr := newTree(t, goodRow)
 		tr.edit("    [*] --> Held\n", "    [*] --> Waiting : a call\n    Waiting --> heldIdleTimeout\n")
 		tr.checkFails("the machine's state Waiting is not in the code and the note does not mark it new")
-		tr.edit("New words: Held.\n", "New words: Waiting.\n")
+		tr.edit("New words: Held, HeldAgain.\n", "New words: Waiting.\n")
 		require.NoError(t, run(tr.in, true))
 	})
 	t.Run("a title after the Kinds line", func(t *testing.T) {
@@ -242,7 +255,7 @@ func TestChapterShape(t *testing.T) {
 	})
 	t.Run("over the cap", func(t *testing.T) {
 		tr := newTree(t, goodRow)
-		tr.edit("A note. New words: Held.\n", strings.Repeat("A note. New words: Held.\n", maxChapter/10))
+		tr.edit("A note. New words: Held, HeldAgain.\n", strings.Repeat("A note. New words: Held, HeldAgain.\n", maxChapter/10))
 		tr.checkFails("over the cap of 16384: cut a row or split the chapter")
 	})
 	t.Run("a second table", func(t *testing.T) {
@@ -252,7 +265,7 @@ func TestChapterShape(t *testing.T) {
 	})
 	t.Run("a row outside the table", func(t *testing.T) {
 		tr := newTree(t, goodRow)
-		tr.edit("A note. New words: Held.\n", "A note. New words: Held.\n\n| a | stray | row |\n")
+		tr.edit("A note. New words: Held, HeldAgain.\n", "A note. New words: Held, HeldAgain.\n\n| a | stray | row |\n")
 		tr.checkFails("a table row outside the chapter's table")
 	})
 	t.Run("a generated block out of order", func(t *testing.T) {
@@ -321,6 +334,7 @@ func TestScenarioRowDoesNotHold(t *testing.T) {
 		"a neighbor's value":            "| A | B | `killWait` 10 s | C | decided | ADR-0001 |\n",
 		"a neighbor's file":             "| A | [Workers](workers.md) | none | C | decided | ADR-0001 |\n",
 		"a word the note marks new":     "| A | B | none | `Held` | decided | ADR-0001 |\n",
+		"a CamelCase word marked new":   "| A | `HeldAgain` | none | C | decided | ADR-0001 |\n",
 		"a colon after a unit":          "| A | `invoke.activationTimeout` 30 s: held | none | C | decided | ADR-0001 |\n",
 		"an address is no number":       "| A | B `invoke.activationTimeout` 127.0.0.1:0 | none | C | decided | ADR-0001 |\n",
 		"a name in the code":            "| A | `heldIdleTimeout` runs | none | C | decided | ADR-0001 |\n",
