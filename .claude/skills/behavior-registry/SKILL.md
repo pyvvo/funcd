@@ -42,21 +42,28 @@ states on the chapter's machine, or link its design spec.
 | Hard-coded values | the generated blocks; by hand `images/runtime/duckdb/shim.py` and the pinned shims (`scripts/moddir.sh <module>`) |
 | States and reasons | `api/types/v1alpha1`, each reconciler's reasons, `docs/design/**` |
 | Errors | `api/fault`, and the message each step writes |
+| Who may act | `internal/auth/rbac`, `cmd/funcd/credentials.go` |
+| Deletes and owners | `internal/gc`, `internal/ownedstore` |
+| The unit and the CLI | `cmd/funcd/install.go`, `configs/systemd/funcd.service`, `cmd/funcdctl` |
 | The order of steps | `Run` and `Shutdown` in `pkg/funcd/funcd.go`, `pkg/funcd/providers.go`, `internal/lifecycle` |
 | The why | an ADR's Scope, Alternatives, Consequences, Risks and Open questions, following each `Superseded in part by`; then issues (`gh issue list --state all --search`) and board cards (`python3 .claude/skills/project-management/driver.py list`, `show "<title>"`) |
 | Proof | `TestScenario*`, `TestIssue*`, `e2e/*.venom.yml`, and the lanes' cases |
 
-Find ADRs by content, not by title: `grep -l '<key or reason>' docs/adr/*`.
+Find the ADRs in this order: the code's own comments (`grep -rhno 'ADR-[0-9]*' <package> | sort -u`), a key or a reason
+(`grep -l '<key or reason>' docs/adr/*`), the feat rows in `docs/feat/`. A common word finds too much. Read whole each ADR you
+cite; for the others, the header and the Decision are enough to know you need not cite them.
 
 ## A chapter
 
 In order: a `Kinds:` line, a Mermaid `stateDiagram-v2`, a short note, one table, the generated block. About 50 lines, about 15
-rows: the written part of the whole file stays under 800 lines.
+rows: the written part of the whole file stays under 800 lines. A step that belongs to a neighbor's chapter gets at most one row,
+saying what a caller sees here, and the neighbor holds the rest. A kind nothing acts on still sits on a `Kinds:` line: one row says so.
 
 - **The machine** tells the process in order, in the code's state names. Group states that behave alike. A process with no
   phase of its own, such as a startup, may use its steps as states. Link a design spec's generated machine instead of copying it.
-- **The note** says in a few lines what the machine cannot, and links details. A word the code does not have is marked new here:
-  `New words: Awake, Counted.`
+  Use one word per state, and write each transition on one line: `A --> B : what makes it move`.
+- **The note** says in a few lines what the machine cannot, and links details. A word on the machine that the code does not have
+  is marked new here on one line, or the check refuses it: `New words: Awake, Counted.`
 - **The table** holds what someone could see and wonder about: a wait of about a second or more; a state, error or refusal a
   user sees; a cost, risk or limit an ADR accepted; a step nothing answers. Internal polls, buffers and log rates stay in the
   block. Follow the machine: ask at each state "what if a call, a stop or a crash arrives now?", and write down an answer
@@ -64,22 +71,32 @@ rows: the written part of the whole file stays under 800 lines.
 
 ## A row
 
-`| Where | What happens | Time | You see | Status | Source |`, with `|` inside a cell written `\|`.
+`| Where | What happens | Time | You see | Status | Source |`, with `|` inside a cell written `\|`. A row stays under 400
+characters, or the check refuses it: it holds one fact someone could ask about, not all there is to say. If it holds two facts,
+cut one or split it. A row that mixes a decision and a cost is two rows, each with its own status.
 
 - **Where**: the step or the trigger, in a few words.
 - **What happens**: one short sentence of observable behavior, not the mechanism.
-- **Time**: `` `name` N unit `` for a value (units `ms`, `s`, `min`, `h`, `KiB`, `MiB`, `GiB`, none for a count). The name is a
-  config key or a name in a block, and the check compares the number. `none` when nothing waits.
-- **You see**: the phase, reason, status code or message, word for word from the code.
+- **Time**: `` `name` N unit `` for a value (units `ms`, `s`, `min`, `h`, `KiB`, `MiB`, `GiB`, none for a count; `` `key` 0 `` for
+  a limit that is off). The name is a config key or a name in a block, and the check compares the number. A number with no name, such
+  as a shim's or a library's, is written plain and says where it comes from: `1 s (the shim)`. `none` when nothing waits.
+- **You see**: the phase, the reason, the status code or the message a user reads, word for word from the code and without its `op:`
+  prefix. Name the one or two someone would search for: the code holds the full list. A library's word goes without backticks, which
+  the check keeps for funcd's own names.
 - **Status**: one word.
-- **Source**: the clause you read (`ADR-0161 Decision 4`), the test that pins it (`` `TestScenarioActivationTimeout` ``), a lane case.
+- **Source**: the clause you read (`ADR-0161 Decision 4`) and the test that pins it (`` `TestScenarioActivationTimeout` ``) or a
+  lane case. One clause and one test are usually enough.
 
 | Status | When | Source must name |
 |---|---|---|
 | `decided` | an ADR or the decider chose it | an accepted ADR, or `decider <date>` with `#N` or `card "<title>"` |
-| `accepted` | an ADR or the decider named it as a cost or a risk | the same |
+| `accepted` | an ADR or the decider named it as a cost or a risk; or no ADR speaks of it, and a test pins it or a closed issue's fix chose it | the same, or the test, or `#N` |
 | `deferred` | a card, an ADR's open question or an open issue holds it | `card "<title>"`, `ADR-NNNN Open questions` or `#N` |
 | `uncovered` (written `**uncovered**`) | nothing speaks of it | what you read |
+
+An ADR accepted a cost and a card proposes to change it: `accepted`, citing both. A card is named by a few words of its title, as
+`driver.py show` finds it. A later ADR that made a sentence stale with no `Superseded in part by` line: cite the later one and tell the
+decider. Evidence you ran yourself goes in the source as `ran it`.
 
 ## The rules
 

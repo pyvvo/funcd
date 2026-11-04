@@ -46,7 +46,7 @@ func newTree(t *testing.T, rows string) tree {
 }
 
 func chapterText(rows string) string {
-	return "# Platform behavior\n\n## Calls\n\nKinds: Route.\n\n```mermaid\nstateDiagram-v2\n    [*] --> Held\n```\n\nA note.\n\n" +
+	return "# Platform behavior\n\n## Calls\n\nKinds: Route.\n\n```mermaid\nstateDiagram-v2\n    [*] --> Held\n```\n\nA note. New words: Held.\n\n" +
 		rowHeader + "\n|---|---|---|---|---|---|\n" + rows + "\n"
 }
 
@@ -188,7 +188,7 @@ func TestChapterShape(t *testing.T) {
 		"no Kinds line": {"Kinds: Route.\n", "", "chapter Calls has no Kinds: line"},
 		"no machine":    {"```mermaid\nstateDiagram-v2\n    [*] --> Held\n```\n", "", "chapter Calls has no machine"},
 		"no table":      {rowHeader + "\n|---|---|---|---|---|---|\n" + goodRow, "", "chapter Calls has no table"},
-		"not written":   {"A note.\n", notWritten + "\n", "chapter Calls reads Not written yet."},
+		"not written":   {"A note. New words: Held.\n", notWritten + "\n", "chapter Calls reads Not written yet."},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -197,6 +197,13 @@ func TestChapterShape(t *testing.T) {
 			tr.checkFails(c.want)
 		})
 	}
+	t.Run("a machine's word the code does not have", func(t *testing.T) {
+		tr := newTree(t, goodRow)
+		tr.edit("    [*] --> Held\n", "    [*] --> Waiting : a call\n    Waiting --> heldIdleTimeout\n")
+		tr.checkFails("the machine's state Waiting is not in the code and the note does not mark it new")
+		tr.edit("New words: Held.\n", "New words: Waiting.\n")
+		require.NoError(t, run(tr.in, true))
+	})
 	t.Run("the table before the machine", func(t *testing.T) {
 		tr := newTree(t, goodRow)
 		machine := "```mermaid\nstateDiagram-v2\n    [*] --> Held\n```\n"
@@ -207,7 +214,7 @@ func TestChapterShape(t *testing.T) {
 	})
 	t.Run("over the cap", func(t *testing.T) {
 		tr := newTree(t, goodRow)
-		tr.edit("A note.\n", strings.Repeat("A note.\n", maxWritten))
+		tr.edit("A note. New words: Held.\n", strings.Repeat("A note. New words: Held.\n", maxWritten))
 		tr.checkFails("over the cap of 800")
 	})
 }
@@ -226,9 +233,10 @@ func TestScenarioRowDoesNotHold(t *testing.T) {
 		"an unknown name":             {"| A | B | `noSuchKey` 6 min | C | decided | ADR-0001 |\n", "cites noSuchKey 6 min: no config key or value has that name"},
 		"five cells":                  {"| A | B | none | decided | ADR-0001 |\n", "a row has 5 cells, not 6"},
 		"an unknown status":           {"| A | B | none | C | maybe | ADR-0001 |\n", "status maybe is not"},
-		"decided with no source":      {"| A | B | none | C | decided | `TestHeld` |\n", "cites no ADR, and no dated decider"},
+		"decided on a test alone":     {"| A | B | none | C | decided | `TestHeld` |\n", "cites no ADR, and no dated decider"},
 		"a decider with no record":    {"| A | B | none | C | decided | decider 2026-11-04 |\n", "cites no ADR, and no dated decider"},
-		"accepted with no source":     {"| A | B | none | C | accepted | a talk |\n", "cites no ADR, and no dated decider"},
+		"accepted with no source":     {"| A | B | none | C | accepted | a talk |\n", "cites no ADR, no test"},
+		"a row over the cap":          {"| A | " + strings.Repeat("B", maxRow) + " | none | C | decided | ADR-0001 |\n", "over the cap of 400"},
 		"deferred with a bare card":   {"| A | B | none | C | deferred | a card |\n", "cites no card"},
 		"deferred with no holder":     {"| A | B | none | C | deferred | ADR-0001 |\n", "cites no card"},
 		"uncovered with no source":    {"| A | B | none | C | **uncovered** |  |\n", "does not say what was read"},
@@ -255,6 +263,10 @@ func TestScenarioRowDoesNotHold(t *testing.T) {
 		"a partly superseded ADR":       "| A | B | none | C | decided | ADR-0005 Decision 1 |\n",
 		"a pipe in a cell":              "| A | B `x\\|y` | none | C | decided | ADR-0001 |\n",
 		"a value by its name":           "| A | B | `heldIdleTimeout` 5 min | C | decided | ADR-0001 |\n",
+		"accepted on a test":            "| A | B | none | C | accepted | `TestHeld` |\n",
+		"accepted on a closed fix":      "| A | B | none | C | accepted | #90 |\n",
+		"a colon after a unit":          "| A | `invoke.activationTimeout` 30 s: held | none | C | decided | ADR-0001 |\n",
+		"an address is no number":       "| A | B `invoke.activationTimeout` 127.0.0.1:0 | none | C | decided | ADR-0001 |\n",
 		"a name in the code":            "| A | `heldIdleTimeout` runs | none | C | decided | ADR-0001 |\n",
 	}
 	for name, row := range good {
@@ -313,6 +325,9 @@ const (
 	derivedMax  = maxCopies * 2
 	derivedTimeout = aWait * 2
 	aName       = "not a number"
+	heldRetryAfter = "30"
+	defaultMemory  = "256Mi"
+	aVersion       = "1.0"
 )
 
 var (
@@ -327,10 +342,11 @@ var (
 	for _, want := range []string{
 		"| `aWait` | 5m |", "| `aSize` | 64MiB |", "| `aKibiSize` | 64KiB |", "| `maxCopies` | 1024 |", "| `listPage` | 500 |",
 		"| `derivedMax` | `maxCopies * 2` |", "| `derivedTimeout` | `aWait * 2` |",
+		"| `heldRetryAfter` | 30 |", "| `defaultMemory` | 256Mi |",
 	} {
 		require.Contains(t, block, want)
 	}
-	for _, not := range []string{"plainPort", "aName", "retryLimit", "notAValue"} {
+	for _, not := range []string{"plainPort", "aName", "aVersion", "retryLimit", "notAValue"} {
 		require.NotContains(t, block, not)
 	}
 }
@@ -348,7 +364,7 @@ func TestSkippedFiles(t *testing.T) {
 
 func TestNameTest(t *testing.T) {
 	for _, name := range []string{"defaultX", "maxX", "minX", "limitX", "graceX", "timeoutX", "intervalX", "retryX", "retriesX", "attemptsX", "budgetX",
-		"xMax", "xLimit", "xTimeout", "xInterval", "xGrace", "xWait", "xPeriod", "xBudget", "xAttempts", "xRetries", "xBytes", "xSize", "xTTL", "xPage", "xBatch", "xConcurrency", "xConns", "xBuf"} {
+		"xMax", "xLimit", "xTimeout", "xInterval", "xGrace", "xWait", "xPeriod", "xAfter", "xBudget", "xAttempts", "xRetries", "xBytes", "xSize", "xTTL", "xPage", "xBatch", "xConcurrency", "xConns", "xBuf"} {
 		require.True(t, nameTest.MatchString(name), name)
 	}
 	for _, name := range []string{"port", "formatVersion", "flagBit", "engineStarts"} {
@@ -366,4 +382,6 @@ func TestFormats(t *testing.T) {
 	require.True(t, sameValue("5m", "5", "min"))
 	require.True(t, sameValue("1048576", "1048576", ""))
 	require.False(t, sameValue("5m", "6", "min"))
+	require.True(t, sameValue("512Mi", "512", "MiB"))
+	require.True(t, sameValue("0s", "0", ""))
 }

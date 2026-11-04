@@ -31,6 +31,7 @@ const (
 	rowHeader        = "| Where | What happens | Time | You see | Status | Source |"
 	notWritten       = "Not written yet."
 	maxWritten       = 800
+	maxRow           = 400
 	firstADRWithRows = 314
 	skillHint        = "run the /behavior-registry skill: regenerate with `just behavior-values`, then check that each written row still holds"
 )
@@ -49,12 +50,12 @@ func chapters() []chapter {
 		{"Admission", []string{"internal/controlplane", "api/types", "api/openapi", "api/fault"}, nil},
 		{"Security", []string{"internal/auth", "internal/secrets", "internal/envresolve", "internal/network"}, []string{"auth", "secrets"}},
 		{"Workers", []string{"internal/runtime", "internal/workernode", "internal/volume", "internal/funclog", "internal/scheduler"}, []string{"runtime", "volumes", "funclog"}},
-		{"Functions", []string{"internal/function", "internal/pooling", "internal/artifact", "internal/contract", "internal/contractcheck", "internal/revhold", "internal/snapshot"}, []string{"functions"}},
+		{"Functions", []string{"internal/function", "internal/pooling", "internal/artifact", "internal/contract", "internal/contractcheck", "internal/revhold"}, []string{"functions"}},
 		{"Calls", []string{"internal/edge", "internal/gateway", "internal/dataplane", "internal/activator", "internal/invoke", "internal/route", "internal/site"}, []string{"server", "invoke", "site"}},
 		{"Services", []string{"internal/kvstore", "internal/blob", "internal/sql", "internal/lake", "internal/services", "internal/provider"}, []string{"kvstore", "blob", "s3gateway", "lake", "sql"}},
 		{"Eventing", []string{"internal/bus", "internal/eventing", "internal/sensor", "internal/workflow", "internal/expr"}, []string{"workflow", "eventing"}},
 		{"Apps", []string{"internal/app"}, []string{"app"}},
-		{"Disaster recovery", []string{"internal/backup", "internal/restore", "internal/services/backup", "internal/platform/hold"}, []string{"backup", "workloadBackup"}},
+		{"Disaster recovery", []string{"internal/backup", "internal/restore", "internal/services/backup", "internal/platform/hold", "internal/snapshot"}, []string{"backup", "workloadBackup"}},
 		{"Health", []string{"internal/health"}, []string{"health"}},
 		{"Limits", []string{"internal/quota"}, nil},
 		{"funcdctl dev", []string{"cmd/funcdctl", "pkg/sdk"}, nil},
@@ -64,6 +65,7 @@ func chapters() []chapter {
 // inputs is what a run reads besides the tree at root, so a test brings its own.
 type inputs struct {
 	root     string
+	doc      string
 	chapters []chapter
 	keys     map[string]string
 	kinds    []string
@@ -73,16 +75,21 @@ type inputs struct {
 var skipped = regexp.MustCompile(`^(\.[a-z]+|vendor|node_modules|e2e|examples|scripts|docs|images|bench|tests|api/cron|api/lintfixture|internal/testkit|internal/controlplane/cmd)(/|$)`)
 
 // nameTest is a name that reads as a limit, a wait or a count, so its plain number counts as a value.
-var nameTest = regexp.MustCompile(`(?i)^(default|max|min|limit|grace|timeout|interval|retry|retries|attempts|budget)|(max|limit|timeout|interval|grace|wait|period|budget|attempts|retries|bytes|size|ttl|page|batch|concurrency|conns|buf)$`)
+var nameTest = regexp.MustCompile(`(?i)^(default|max|min|limit|grace|timeout|interval|retry|retries|attempts|budget)|(max|limit|timeout|interval|grace|wait|period|after|budget|attempts|retries|bytes|size|ttl|page|batch|concurrency|conns|buf)$`)
+
+// numberText is a number held in a string, such as a default read later as a duration or a size.
+var numberText = regexp.MustCompile(`^\d+(\.\d+)?(ms|s|m|h|Ki|Mi|Gi|KiB|MiB|GiB)?$`)
 
 // row is one generated value.
 type row struct{ name, value, from string }
 
 func main() {
 	check := flag.Bool("check", false, "fail when the file differs from what the code gives, or a written row does not hold")
+	doc := flag.String("doc", docPath, "the file to read or write, to try a chapter on a copy")
 	flag.Parse()
 	in, err := realInputs()
 	if err == nil {
+		in.doc = *doc
 		err = run(in, *check)
 	}
 	if err != nil {
@@ -125,7 +132,10 @@ func run(in inputs, check bool) error {
 	for name, rows := range code.rows {
 		byChapter[name] = append(byChapter[name], rows...)
 	}
-	path := filepath.Join(in.root, docPath)
+	path := cmp.Or(in.doc, docPath)
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(in.root, path)
+	}
 	current, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -339,7 +349,7 @@ func refused(n ast.Node, stack []ast.Node, fset *token.FileSet) bool {
 }
 
 func isConversion(callee string) bool {
-	return slices.Contains([]string{"time.Duration", "v1.Duration", "int", "int32", "int64", "uint", "uint32", "uint64", "float32", "float64"}, callee)
+	return slices.Contains([]string{"time.Duration", "v1.Duration", "Duration", "int", "int32", "int64", "uint", "uint32", "uint64", "float32", "float64"}, callee)
 }
 
 // isKibi is a literal `N * 1024`: a size written without a shift.
@@ -536,6 +546,10 @@ func plain(e ast.Expr, fset *token.FileSet) bool {
 
 // valueOf returns a package-level value's text when it is a duration, a size, or a count or a derived value by its name.
 func valueOf(fset *token.FileSet, e ast.Expr, name string) (string, bool) {
+	if l, ok := e.(*ast.BasicLit); ok && l.Kind == token.STRING {
+		s, err := strconv.Unquote(l.Value)
+		return s, err == nil && numberText.MatchString(s) && nameTest.MatchString(name)
+	}
 	if !plain(e, fset) {
 		return "", false
 	}
@@ -716,9 +730,10 @@ func rank(r row) int {
 var (
 	adrRef    = regexp.MustCompile(`ADR-(\d{4})`)
 	testRef   = regexp.MustCompile("`(Test[A-Za-z0-9_]+)`")
+	issueRef  = regexp.MustCompile(`#\d+`)
 	tick      = regexp.MustCompile("`([^`]+)`")
 	reasonish = regexp.MustCompile(`\b[A-Z][A-Za-z]*[a-z][A-Z][A-Za-z]+\b`)
-	cited     = regexp.MustCompile("`([A-Za-z][A-Za-z0-9.]*)` (\\d+(?:\\.\\d+)?) ?(ms|s|min|h|KiB|MiB|GiB)?(?:\\b|$)")
+	cited     = regexp.MustCompile("`([A-Za-z][A-Za-z0-9.]*)` (\\d+(?:\\.\\d+)?) ?(ms|s|min|h|KiB|MiB|GiB)?(?:[^\\w.:]|[.:](?:\\s|$)|$)")
 	link      = regexp.MustCompile(`\]\(([^)#\s]+)(#[^)]*)?\)`)
 	record    = regexp.MustCompile(`#\d+|card "[^"]+"`)
 	dated     = regexp.MustCompile(`decider \d{4}-\d{2}-\d{2}`)
@@ -747,11 +762,18 @@ func rowProblem(line string) string {
 	if len(c) != 6 {
 		return fmt.Sprintf("a row has %d cells, not 6", len(c))
 	}
+	if len(line) > maxRow {
+		return fmt.Sprintf("a row has %d characters, over the cap of %d: cut it or split it", len(line), maxRow)
+	}
 	status, source := strings.Trim(c[4], "*"), c[5]
 	switch status {
-	case "decided", "accepted":
+	case "decided":
 		if !adrRef.MatchString(source) && (!dated.MatchString(source) || !record.MatchString(source)) {
-			return "a row that says " + status + " cites no ADR, and no dated decider with its record"
+			return "a row that says decided cites no ADR, and no dated decider with its record"
+		}
+	case "accepted":
+		if !adrRef.MatchString(source) && !testRef.MatchString(source) && !issueRef.MatchString(source) && (!dated.MatchString(source) || !record.MatchString(source)) {
+			return "a row that says accepted cites no ADR, no test, no closed fix, and no dated decider with its record"
 		}
 	case "deferred":
 		if !holder.MatchString(source) {
@@ -767,8 +789,16 @@ func rowProblem(line string) string {
 	return ""
 }
 
+var (
+	machineEdge  = regexp.MustCompile(`^\s*(\S+)\s+-->\s+(\S+)`)
+	machineState = regexp.MustCompile(`^\s*state\s+(\S+)`)
+	newWords     = regexp.MustCompile(`New words?: ([^.]*)\.`)
+)
+
 // section is what a chapter's written part holds, in order.
 type section struct {
+	states         []string
+	marked         map[string]bool
 	name           string
 	line           int
 	kinds, machine int
@@ -794,6 +824,17 @@ func (s section) problems() []string {
 		out = append(out, at+" has no table")
 	case s.kinds > s.machine || s.machine > s.table:
 		out = append(out, at+" does not follow the order: Kinds: line, machine, note, table")
+	}
+	return out
+}
+
+// unmarked names a machine's states that the code does not have and the note does not mark new.
+func (s section) unmarked(known map[string]bool) []string {
+	var out []string
+	for _, state := range s.states {
+		if !known[state] && !s.marked[state] {
+			out = append(out, fmt.Sprintf("%s:%d: chapter %s: the machine's state %s is not in the code and the note does not mark it new", docPath, s.line, s.name, state))
+		}
 	}
 	return out
 }
@@ -837,12 +878,20 @@ func validate(in inputs, text string, byChapter map[string][]row, known map[stri
 			continue
 		}
 		if inFence {
+			for _, m := range [][]string{machineEdge.FindStringSubmatch(line), machineState.FindStringSubmatch(line)} {
+				for _, state := range m[min(1, len(m)):] {
+					if state != "[*]" && !slices.Contains(current.states, state) {
+						current.states = append(current.states, state)
+					}
+				}
+			}
 			continue
 		}
 		at := fmt.Sprintf("%s:%d", docPath, n+1)
 		if name, ok := strings.CutPrefix(line, "## "); ok {
 			problems = append(problems, current.problems()...)
-			current = section{name: name, line: n + 1}
+			problems = append(problems, current.unmarked(known)...)
+			current = section{name: name, line: n + 1, marked: map[string]bool{}}
 			if !names[name] {
 				problems = append(problems, at+": chapter "+name+" is not in scripts/behavior/main.go")
 			}
@@ -853,6 +902,11 @@ func validate(in inputs, text string, byChapter map[string][]row, known map[stri
 		}
 		if line == notWritten {
 			current.notWritten = true
+		}
+		if m := newWords.FindStringSubmatch(line); m != nil && current.marked != nil {
+			for _, word := range strings.Split(m[1], ",") {
+				current.marked[strings.TrimSpace(word)] = true
+			}
 		}
 		switch {
 		case line == rowHeader:
@@ -894,6 +948,7 @@ func validate(in inputs, text string, byChapter map[string][]row, known map[stri
 		for _, m := range cited.FindAllStringSubmatch(line, -1) {
 			have, ok := values[m[1]]
 			switch {
+			case !ok && known[m[1]]: // a name in the code that is no value, such as a fault kind beside a status code
 			case !ok:
 				problems = append(problems, fmt.Sprintf("%s: cites %s %s %s: no config key or value has that name", at, m[1], m[2], m[3]))
 			case !slices.ContainsFunc(have, func(v string) bool { return sameValue(v, m[2], m[3]) }):
@@ -902,6 +957,7 @@ func validate(in inputs, text string, byChapter map[string][]row, known map[stri
 		}
 	}
 	problems = append(problems, current.problems()...)
+	problems = append(problems, current.unmarked(known)...)
 	if written > maxWritten {
 		problems = append(problems, fmt.Sprintf("%s: the written part is %d lines, over the cap of %d", docPath, written, maxWritten))
 	}
@@ -916,11 +972,13 @@ func validate(in inputs, text string, byChapter map[string][]row, known map[stri
 func sameValue(have, number, unit string) bool {
 	have, _, _ = strings.Cut(have, ",") // a derived default reads "30s, or three supervisionPeriod when larger"
 	unit = strings.Replace(unit, "min", "m", 1)
-	if d, err := time.ParseDuration(number + unit); err == nil && unit != "" {
+	if d, err := time.ParseDuration(number + unit); err == nil && (unit != "" || number == "0") {
 		h, herr := time.ParseDuration(have)
-		return herr == nil && h == d
+		if herr == nil {
+			return h == d
+		}
 	}
-	return strings.EqualFold(have, number+unit)
+	return strings.EqualFold(have, number+unit) || strings.EqualFold(have+"B", number+unit)
 }
 
 func adrProblem(root, number string) string {
