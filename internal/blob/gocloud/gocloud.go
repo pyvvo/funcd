@@ -73,8 +73,9 @@ type OpenOptions struct {
 	// CredentialsFile is an AWS shared credentials file whose [default] profile is the only credential source;
 	// s3:// only, another scheme is fault.Invalid.
 	CredentialsFile string
-	// Static is an access key that is the only credential source (ADR-0222 Decision 6, a namespace Secret's keys);
-	// s3:// only, and not with CredentialsFile.
+	// Static is an access key that is the only credential source (ADR-0222 Decision 6, a namespace Secret's keys), whose
+	// client bounds what it reads of an answer but an object's content (cappedAnswers); s3:// only, and not with
+	// CredentialsFile.
 	Static *StaticKey
 }
 
@@ -134,6 +135,12 @@ func openS3With(ctx context.Context, url string, opts OpenOptions) (*gcblob.Buck
 	s3opts, bopts, err := s3URLOptions(q)
 	if err != nil {
 		return nil, fault.Wrapf(err, fault.Invalid, op, "open %q", url)
+	}
+	if opts.Static != nil {
+		s3opts = append(s3opts, func(o *awss3.Options) {
+			o.HTTPClient = cappedAnswers{o.HTTPClient}
+			o.APIOptions = append(o.APIOptions, requireListedTimes)
+		})
 	}
 	cfg, err := gcaws.V2ConfigFromURLParams(ctx, q)
 	if err != nil {
@@ -502,7 +509,7 @@ func (k *bucket) s3ListAfter(ctx context.Context, prefix, after string, limit in
 			return nil
 		},
 	}
-	objs, next, err := k.b.ListPage(ctx, gcblob.FirstPageToken, limit, opts)
+	objs, next, err := k.b.ListPage(withListBudget(ctx), gcblob.FirstPageToken, limit, opts)
 	if errors.Is(err, errNoV2Input) {
 		all, lerr := k.List(ctx, prefix)
 		if lerr != nil {

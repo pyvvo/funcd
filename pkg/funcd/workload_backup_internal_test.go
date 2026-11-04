@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"sort"
 	"strings"
@@ -853,6 +856,89 @@ func TestScenarioRestoreInPlace(t *testing.T) {
 	rs = r.waitRestore("again", v1.RunFailed)
 	require.Equal(t, "ExportFailed", reason(rs.Status.Status))
 	require.Equal(t, map[string]string{"t/1": "one", "t/3": "kept"}, r.kv("orders-state"), "no write after a failed export")
+}
+
+// A Backup lists its own directory on the target first. A listed object with no modification time fails that listing, as any
+// failed listing does, and the Backup goes on with its own copy.
+func TestBackup_GoesOnWhenAListedObjectHasNoTime(t *testing.T) {
+	t.Parallel()
+	r := newWBRig(t, wbOptions{})
+	listed := atomic.Int32{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if !req.URL.Query().Has("list-type") {
+			r.stub.ServeHTTP(w, req)
+			return
+		}
+		listed.Add(1)
+		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>b</Name><Contents><Key>a</Key><Size>1</Size></Contents></ListBucketResult>`))
+	}))
+	t.Cleanup(srv.Close)
+	r.create(r.dev, r.schedule("listed", "0 3 * * *", func(s *v1.BackupScheduleSpec) {
+		s.Target.URL = strings.Replace(r.stub.URL(), r.stub.Endpoint(), srv.URL, 1)
+	}))
+	r.create(r.dev, r.backupObj("b1", "listed"))
+	r.waitBackup("b1", v1.RunSucceeded)
+	require.Positive(t, listed.Load())
+}
+
+// A listing that fails, for any reason of the store's answers, leaves a Backup to its own copy and its record to its own scope.
+func TestBackup_GoesOnWhenItsListingFails(t *testing.T) {
+	t.Parallel()
+	const head = `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>b</Name>`
+	for name, page := range map[string]func(prefix string) string{
+		"pages with no key": func(string) string {
+			return head + `<IsTruncated>true</IsTruncated><NextContinuationToken>t</NextContinuationToken></ListBucketResult>`
+		},
+		"more members than a copy holds": func(prefix string) string {
+			const object = `<LastModified>2026-11-04T00:00:00.000Z</LastModified><Size>1</Size></Contents>`
+			var sb strings.Builder
+			sb.WriteString(head + `<Contents><Key>` + prefix + `manifest.yaml</Key>` + object)
+			for i := range workload.MaxCopyMembers + 1 {
+				fmt.Fprintf(&sb, `<Contents><Key>%skv/m-%d/part-00000</Key>%s`, prefix, i, object)
+			}
+			return sb.String() + `</ListBucketResult>`
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newWBRig(t, wbOptions{})
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				if !req.URL.Query().Has("list-type") {
+					r.stub.ServeHTTP(w, req)
+					return
+				}
+				_, _ = w.Write([]byte(page(req.URL.Query().Get("prefix"))))
+			}))
+			t.Cleanup(srv.Close)
+			r.create(r.dev, r.schedule("listed", "0 3 * * *", func(s *v1.BackupScheduleSpec) {
+				s.Target.URL = strings.Replace(r.stub.URL(), r.stub.Endpoint(), srv.URL, 1)
+			}))
+			r.create(r.dev, r.backupObj("b1", "listed"))
+			b := r.waitBackup("b1", v1.RunSucceeded)
+			require.NotEqual(t, v1.ReasonFoundOnTarget, reason(b.Status.Status))
+			require.Less(t, len(b.Status.Members), workload.MaxCopyMembers)
+		})
+	}
+}
+
+// A Backup whose scope is over what one copy may hold fails with the limit in its message, and leaves nothing on the target.
+func TestBackup_FailsOnAScopeOverACopysMembers(t *testing.T) {
+	t.Parallel()
+	r := newWBRig(t, wbOptions{})
+	for i := range workload.MaxCopyMembers + 1 {
+		meta := ordersMeta(fmt.Sprintf("large-%d", i))
+		meta.ResourceGroup = "large"
+		_, err := r.st.Create(r.ctx, &v1.KVStore{TypeMeta: tmeta(v1.KindKVStore), ObjectMeta: meta})
+		require.NoError(t, err)
+	}
+	r.create(r.dev, r.schedule("large", "0 3 * * *", func(s *v1.BackupScheduleSpec) {
+		s.Scope = v1.BackupScope{ResourceGroup: "large"}
+	}))
+	r.create(r.dev, r.backupObj("b1", "large"))
+	b := r.waitBackup("b1", v1.RunFailed)
+	ready, _ := b.Status.Conditions.Get("Ready")
+	require.Contains(t, ready.Message, fmt.Sprint(workload.MaxCopyMembers))
+	require.Empty(t, r.stub.Keys(""))
 }
 
 // cleanupBucket is the shared blob store with a DuckLake cleanup that runs once, the first time f1 is read after

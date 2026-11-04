@@ -2,12 +2,15 @@ package workload_test
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/backup/workload"
 	"github.com/pyvvo/funcd/internal/blob"
@@ -105,6 +108,105 @@ func TestListCopyMembers(t *testing.T) {
 
 	_, err = workload.ListCopy(ctx, b, "orders/b1/", kinds())
 	require.Error(t, err)
+}
+
+// pagedKeys is a target whose listing answers total keys in pages of the limit it is asked for, all of them key.
+type pagedKeys struct {
+	blob.Bucket
+	key  string
+	left int
+}
+
+func (b *pagedKeys) ListAfter(_ context.Context, _, _ string, limit int) ([]blob.Attributes, bool, error) {
+	n := min(limit, b.left)
+	b.left -= n
+	return slices.Repeat([]blob.Attributes{{Key: b.key}}, n), b.left > 0, nil
+}
+
+// A listing of MaxListedKeys keys is read; one key more fails it, naming what it listed, whatever the target goes on answering.
+func TestSlotCopies_RefusesAListingOverItsLimit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const key = "orders/a-not-a-copy/k"
+	_, err := workload.SlotCopies(ctx, &pagedKeys{key: key, left: workload.MaxListedKeys}, "orders", "a", time.Time{}, kinds())
+	require.NoError(t, err)
+
+	target := &pagedKeys{key: key, left: workload.MaxListedKeys * 2}
+	_, err = workload.SlotCopies(ctx, target, "orders", "a", time.Time{}, kinds())
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
+	require.ErrorContains(t, err, `"orders/a-"`)
+	require.Greater(t, target.left, workload.MaxListedKeys-2*1000, "it stopped at the limit")
+}
+
+// A listing of MaxListedKeyBytes bytes of keys is read; one key more fails it.
+func TestSlotCopies_RefusesAListingOverItsKeyBytes(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const size = 16 << 10
+	key := "orders/a-not-a-copy/"
+	key += strings.Repeat("k", size-len(key))
+	_, err := workload.SlotCopies(ctx, &pagedKeys{key: key, left: workload.MaxListedKeyBytes / size}, "orders", "a", time.Time{}, kinds())
+	require.NoError(t, err)
+
+	_, err = workload.SlotCopies(ctx, &pagedKeys{key: key, left: workload.MaxListedKeyBytes/size + 1}, "orders", "a", time.Time{}, kinds())
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
+	require.ErrorContains(t, err, `"orders/a-"`)
+}
+
+// A copy of MaxCopyMembers members is listed; one member more fails its listing, whichever way it is listed.
+func TestListings_RefuseACopyOverItsMembers(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	after := time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC)
+	d := "orders/" + string(v1.BackupSlotName("a", after.Add(time.Minute))) + "-" + uid1 + "/"
+	seeded := func(members int) blob.Bucket {
+		b, err := gocloud.Open(ctx, "mem://")
+		require.NoError(t, err)
+		for i := range members {
+			put(t, b, fmt.Sprintf("%skv/m-%d/part-00000", d, i), 1)
+		}
+		return b
+	}
+	at := seeded(workload.MaxCopyMembers)
+	c, err := workload.ListCopy(ctx, at, d, kinds())
+	require.NoError(t, err)
+	require.Len(t, c.Members, workload.MaxCopyMembers)
+	copies, err := workload.SlotCopies(ctx, at, "orders", "a", after, kinds())
+	require.NoError(t, err)
+	require.Len(t, copies, 1)
+
+	over := seeded(workload.MaxCopyMembers + 1)
+	_, err = workload.ListCopy(ctx, over, d, kinds())
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
+	require.ErrorContains(t, err, d)
+	_, err = workload.SlotCopies(ctx, over, "orders", "a", after, kinds())
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
+	require.ErrorContains(t, err, d)
+}
+
+// A key that names no store is no member: a store's and a volume's names are DNS labels.
+func TestListCopy_SkipsAKeyThatNamesNoStore(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	b, err := gocloud.Open(ctx, "mem://")
+	require.NoError(t, err)
+	d := "orders/b1-" + uid1 + "/"
+	long := strings.Repeat("a", 64)
+	for _, key := range []string{"kv/" + long + "/part-00000", "kv/Not_A_Name/part-00000", "volume/cart/" + long + "/part-00000", "kv/orders-state/part-00000"} {
+		put(t, b, d+key, 1)
+	}
+	c, err := workload.ListCopy(ctx, b, d, kinds())
+	require.NoError(t, err)
+	require.Len(t, c.Members, 1)
+	require.Equal(t, v1.ObjectName("orders-state"), c.Members[0].Name)
+}
+
+func TestListCopy_RefusesAListingOverItsLimit(t *testing.T) {
+	t.Parallel()
+	d := "orders/b1-" + strings.Repeat("a", 32) + "/"
+	_, err := workload.ListCopy(context.Background(), &pagedKeys{key: d + "kv/x/part-00000", left: workload.MaxListedKeys + 1}, d, kinds())
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
+	require.ErrorContains(t, err, d)
 }
 
 // ADR-0311 Decision 6: a listing skips a key that no kind parses, as it skips a key of no kind directory, and lists

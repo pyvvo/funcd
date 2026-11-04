@@ -16,6 +16,19 @@ import (
 // uidHex is the length of a store UID, 16 random bytes in hex.
 const uidHex = 32
 
+// MaxCopyMembers is the most members one copy may hold: Resolve refuses a scope over it, and a listing that names more fails. A
+// scope's members are stores that exist in its namespace, named one by one or held by an App or a ResourceGroup, so a real scope
+// stays far below it. A Backup's record then stays under 200 KiB.
+const MaxCopyMembers = 1024
+
+// MaxListedKeys is the most keys one listing of a target reads. A copy holds a key per 8 MiB part, so this holds 8 TiB of
+// copies.
+const MaxListedKeys = 1 << 20
+
+// MaxListedKeyBytes is the most bytes of keys one listing of a target reads: 256 bytes a key at MaxListedKeys, where a copy's
+// key takes about 100 bytes.
+const MaxListedKeyBytes = 256 << 20
+
 // Copy is one Backup's directory on a target as a listing shows it, read with list rights only (ADR-0287): it is
 // whole once its manifest.yaml, written last, is there; Completed is that manifest's modification time. Members are
 // the kind directories the listing holds, for display: a Restore matches the manifest's members.
@@ -39,7 +52,9 @@ func ListCopy(ctx context.Context, target blob.Bucket, path string, kinds []Memb
 	if err := listFrom(ctx, target, path, "", func(a blob.Attributes) { items = append(items, a) }); err != nil {
 		return Copy{}, fault.Wrapf(err, fault.KindOf(err), op, "list %q", path)
 	}
-	c.fill(items, kinds)
+	if err := c.fill(items, kinds); err != nil {
+		return Copy{}, err
+	}
 	return c, nil
 }
 
@@ -81,7 +96,9 @@ func SlotCopies(ctx context.Context, target blob.Bucket, ns v1.NamespaceName, sc
 	out := make([]Copy, 0, len(dirs))
 	for _, p := range dirs {
 		c, _ := copyAt(p)
-		c.fill(items[p], kinds)
+		if err := c.fill(items[p], kinds); err != nil {
+			return nil, err
+		}
 		out = append(out, c)
 	}
 	slices.SortFunc(out, func(a, b Copy) int {
@@ -106,8 +123,9 @@ func copyAt(p string) (Copy, bool) {
 }
 
 // fill reads the directory's listing: the manifest, and each member's bytes under its kind directory (ADR-0222
-// Decision 4's layout), skipping a key no kind parses; a Lake counts its last attempt only.
-func (c *Copy) fill(items []blob.Attributes, kinds []MemberKind) {
+// Decision 4's layout), skipping a key no kind parses or that names no store; a Lake counts its last attempt only. Over
+// MaxCopyMembers members it is fault.Invalid.
+func (c *Copy) fill(items []blob.Attributes, kinds []MemberKind) error {
 	type member struct {
 		v1.BackupMember
 		attempt int
@@ -128,13 +146,16 @@ func (c *Copy) fill(items []blob.Attributes, kinds []MemberKind) {
 				break
 			}
 		}
-		if !ok {
+		if !ok || bm.Name.Validate() != nil || (bm.Volume != "" && bm.Volume.Validate() != nil) {
 			continue
 		}
 		key := string(bm.Kind) + "/" + string(bm.Name) + "/" + string(bm.Volume)
 		m := byKey[key]
 		switch {
 		case m == nil:
+			if len(ms) == MaxCopyMembers {
+				return fault.Invalidf("workload.fill", "%s lists more than %d members", c.Path, MaxCopyMembers)
+			}
 			m = &member{BackupMember: bm, attempt: attempt}
 			byKey[key] = m
 			ms = append(ms, m)
@@ -149,14 +170,24 @@ func (c *Copy) fill(items []blob.Attributes, kinds []MemberKind) {
 	for _, m := range ms {
 		c.Members = append(c.Members, m.BackupMember)
 	}
+	return nil
 }
 
-// listFrom calls each for every object under prefix whose key sorts after `after`, in key order.
+// listFrom calls each for every object under prefix whose key sorts after `after`, in key order; over MaxListedKeys keys or
+// MaxListedKeyBytes bytes of keys it is fault.Invalid.
 func listFrom(ctx context.Context, b blob.Bucket, prefix, after string, each func(blob.Attributes)) error {
+	listed, keyBytes := 0, 0
 	for {
 		items, more, err := b.ListAfter(ctx, prefix, after, listPage)
 		if err != nil {
 			return err
+		}
+		listed += len(items)
+		for _, it := range items {
+			keyBytes += len(it.Key)
+		}
+		if listed > MaxListedKeys || keyBytes > MaxListedKeyBytes {
+			return fault.Invalidf("workload.listFrom", "it holds more than %d keys or %d bytes of keys", MaxListedKeys, MaxListedKeyBytes)
 		}
 		for _, it := range items {
 			each(it)

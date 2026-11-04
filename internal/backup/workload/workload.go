@@ -107,7 +107,7 @@ type Manifest struct {
 // by name, the stores of the App's kv, buckets, lakes and sql entries and its Functions' local volumes, or the stores of
 // the ResourceGroup. In each form a Bucket brings in the Lakes on its Lake prefixes as their own members, once, after the
 // Lakes s names, whichever App or ResourceGroup holds them (ADR-0312). A named member or App that does not exist is
-// fault.NotFound naming it.
+// fault.NotFound naming it; a scope over MaxCopyMembers is fault.Invalid naming the limit.
 func Resolve(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1.BackupScope) ([]Member, error) {
 	const op = "workload.Resolve"
 	names := map[v1.Kind][]v1.ObjectName{
@@ -189,7 +189,11 @@ func Resolve(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1.Back
 	if err != nil {
 		return nil, err
 	}
-	return append(out, vols...), nil
+	out = append(out, vols...)
+	if len(out) > MaxCopyMembers {
+		return nil, fault.Invalidf(op, "the scope resolves to %d members, more than the %d one copy may hold", len(out), MaxCopyMembers)
+	}
+	return out, nil
 }
 
 // lakePrefix is one Lake prefix of a Bucket, and the Lake that owns it.
