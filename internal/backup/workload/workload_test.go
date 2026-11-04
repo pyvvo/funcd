@@ -139,6 +139,48 @@ func TestResolveScopes(t *testing.T) {
 	require.Equal(t, fault.NotFound, fault.KindOf(err))
 }
 
+// A scope of MaxCopyMembers members resolves. One member more is fault.Invalid naming the limit, in each form and whatever brings
+// that member in, as a copy over it would fail its listing.
+func TestResolve_RefusesAScopeOverACopysMembers(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := store.New(storemem.New())
+	names := make([]v1.ObjectName, workload.MaxCopyMembers+1)
+	entries := make([]v1.KVStoreEntry, len(names))
+	for i := range names {
+		names[i] = v1.ObjectName(fmt.Sprintf("kv-%d", i))
+		entries[i] = v1.KVStoreEntry{Ref: names[i]}
+		_, err := st.Create(ctx, &v1.KVStore{TypeMeta: tm(v1.KindKVStore), ObjectMeta: meta(string(names[i]), "large")})
+		require.NoError(t, err)
+	}
+	for _, o := range []v1.Object{
+		&v1.App{TypeMeta: tm(v1.KindApp), ObjectMeta: meta("large", "other"), Spec: v1.AppSpec{KV: entries}},
+		&v1.Bucket{TypeMeta: tm(v1.KindBucket), ObjectMeta: meta("lakehouse", "other"), Spec: v1.BucketSpec{Prefixes: []v1.BucketPrefix{
+			{Name: "gold", Owner: v1.LakeOwner("gold")}}}},
+		&v1.Lake{TypeMeta: tm(v1.KindLake), ObjectMeta: meta("gold", "other"), Spec: v1.LakeSpec{Location: v1.LakeLocation{Bucket: "lakehouse", Prefix: "gold"},
+			Bindings: v1.LakeBindings{Blob: []v1.FunctionBlob{{Alias: "lake", Bucket: "lakehouse", Prefix: "gold"}}}}},
+		&v1.Function{TypeMeta: tm(v1.KindFunction), ObjectMeta: meta("fn", "other"), Spec: v1.FunctionSpec{Volumes: []v1.VolumeEntry{{Name: "data", Type: v1.VolumeLocal, Size: "1GiB"}}}},
+	} {
+		_, err := st.Create(ctx, o)
+		require.NoError(t, err)
+	}
+	limit := workload.MaxCopyMembers
+	got, err := workload.Resolve(ctx, st, "orders", v1.BackupScope{KVStores: names[:limit]})
+	require.NoError(t, err)
+	require.Len(t, got, limit)
+	for name, scope := range map[string]v1.BackupScope{
+		"names":                     {KVStores: names},
+		"an App":                    {App: "large"},
+		"a ResourceGroup":           {ResourceGroup: "large"},
+		"a Lake a Bucket brings in": {KVStores: names[:limit-1], Buckets: []v1.ObjectName{"lakehouse"}},
+		"a Function's volume":       {KVStores: names[:limit], Volumes: []string{"fn/data"}},
+	} {
+		_, err := workload.Resolve(ctx, st, "orders", scope)
+		require.Equal(t, fault.Invalid, fault.KindOf(err), name)
+		require.ErrorContains(t, err, fmt.Sprint(limit), name)
+	}
+}
+
 // TestObjectFrame: EncodeObject's frame decodes to the object it framed, metadata in any order; a torn or trailing
 // frame is fault.Invalid.
 func TestObjectFrame(t *testing.T) {

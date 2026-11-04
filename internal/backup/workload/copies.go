@@ -16,9 +16,9 @@ import (
 // uidHex is the length of a store UID, 16 random bytes in hex.
 const uidHex = 32
 
-// MaxCopyMembers is the most members one copy's listing may name. A scope's members are stores that exist in its namespace,
-// named one by one or held by an App or a ResourceGroup, so a real scope stays far below it. A Backup's record then stays under
-// 200 KiB.
+// MaxCopyMembers is the most members one copy may hold: Resolve refuses a scope over it, and a listing that names more fails. A
+// scope's members are stores that exist in its namespace, named one by one or held by an App or a ResourceGroup, so a real scope
+// stays far below it. A Backup's record then stays under 200 KiB.
 const MaxCopyMembers = 1024
 
 // MaxListedKeys is the most keys one listing of a target reads. A copy holds a key per 8 MiB part, so this holds 8 TiB of

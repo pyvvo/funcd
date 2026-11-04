@@ -921,6 +921,26 @@ func TestBackup_GoesOnWhenItsListingFails(t *testing.T) {
 	}
 }
 
+// A Backup whose scope is over what one copy may hold fails with the limit in its message, and leaves nothing on the target.
+func TestBackup_FailsOnAScopeOverACopysMembers(t *testing.T) {
+	t.Parallel()
+	r := newWBRig(t, wbOptions{})
+	for i := range workload.MaxCopyMembers + 1 {
+		meta := ordersMeta(fmt.Sprintf("large-%d", i))
+		meta.ResourceGroup = "large"
+		_, err := r.st.Create(r.ctx, &v1.KVStore{TypeMeta: tmeta(v1.KindKVStore), ObjectMeta: meta})
+		require.NoError(t, err)
+	}
+	r.create(r.dev, r.schedule("large", "0 3 * * *", func(s *v1.BackupScheduleSpec) {
+		s.Scope = v1.BackupScope{ResourceGroup: "large"}
+	}))
+	r.create(r.dev, r.backupObj("b1", "large"))
+	b := r.waitBackup("b1", v1.RunFailed)
+	ready, _ := b.Status.Conditions.Get("Ready")
+	require.Contains(t, ready.Message, fmt.Sprint(workload.MaxCopyMembers))
+	require.Empty(t, r.stub.Keys(""))
+}
+
 // cleanupBucket is the shared blob store with a DuckLake cleanup that runs once, the first time f1 is read after
 // the listing: it deletes f1 and checkpoints the lake again; and gone, a listed key that vanishes at every read.
 type cleanupBucket struct {
