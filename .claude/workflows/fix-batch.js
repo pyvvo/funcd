@@ -123,13 +123,14 @@ const multi = (u) => u.tracker || u.issues.length > 1
 
 const isTask = (it) => it.k === 'task'
 
-const FIX_STEPS = (it) => `1. Write the regression test TestIssue${it.n}_<Behavior> FIRST, beside the package's tests, reusing their harnesses. It must FAIL on the unfixed code for the reported reason.
+const FIX_STEPS = (it) => `0. For a kind/bug, check that it is one, as .claude/CLAUDE.md's "Is it a bug?" says: read what the issue's "Design check" section cites, and search the ADRs on the path, the issues and the board cards once yourself. With no such section, run the check and add it with \`driver.py edit\`.
+1. Write the regression test TestIssue${it.n}_<Behavior> FIRST, beside the package's tests, reusing their harnesses. It must FAIL on the unfixed code for the reported reason.
 2. Make the smallest root-cause fix. Search before you write: reuse existing helpers, types, harnesses and dependencies; never duplicate logic.
    Then search for siblings: grep for the same faulty construct in the code paths that do the same job (the other commands, handlers, printers, parsers, gates or drivers). Fix each sibling with the same cause in this commit, with a test case for it; report a sibling with another cause in new_defects. Every case the issue describes must be fixed and tested.
 3. Revert check: write \`git show origin/main:<file>\` of each non-test file you changed to a scratch file outside the worktree and run the test with \`go test -overlay\` mapping the file to it: it must fail.
 4. Checks on the touched packages only: the regression test with -race, the packages' tests, \`go build ./...\`, and \`go vet\` and \`go tool golangci-lint run\` on the touched packages.
 5. One commit: subject \`fix(<scope>): <what is fixed>\`, a body with the cause, the fix and the test name, a line \`Fixes #${it.n}\`, then the line \`${TRAILER}\`.
-PARK instead (no commit; give the reason) if the issue does not reproduce as written, or the only sound fix needs a design decision or changes an Accepted ADR's decision.`
+PARK instead (no commit; give the reason) if the check's verdict is not bug, the issue does not reproduce as written, or the only sound fix needs a design decision or changes an Accepted ADR's decision.`
 
 const TASK_STEPS = (it) => `This is a task (kind/task), not a bug: the issue's "Done when" section is the target.
 1. Make the smallest change that meets the "Done when". Search before you write: reuse existing helpers, types, harnesses and dependencies; never duplicate logic.
@@ -144,7 +145,7 @@ Setup, one call: \`cd ${REPO} && git fetch -q origin && git worktree add -q -b $
 
 ${isTask(it) ? TASK_STEPS(it) : FIX_STEPS(it)}
 needs_lane = true if your commit touches ${LANE_PATHS}.
-Another defect you find on the way that you would rate medium or high (wrong behavior a user can hit, data loss, a crash or a hang) is fixed in the same go by default: its own commit after this issue's, with its own regression test and revert check. List each in new_defects as \`fixed on the way: <defect>, <cause> (<commit>, <test>)\`. List one without fixing it only when you cannot fix it here: its fix needs a design decision (say needs-adr), it is a security flaw (write only \`security: report privately\`, no detail), or it lies outside this repo. Leave out wording, logging, docs, test-only and unlikely-edge issues.
+Another defect you find on the way that you would rate medium or high (wrong behavior a user can hit, data loss, a crash or a hang), once it passes the two checks of .claude/CLAUDE.md's "Is it a bug?", is fixed in the same go by default: its own commit after this issue's, with its own regression test and revert check. List each in new_defects as \`fixed on the way: <defect>, <cause> (<commit>, <test>)\`. List one without fixing it only when you cannot fix it here: its fix needs a design decision (say needs-adr), it is a security flaw (write only \`security: report privately\`, no detail), or it lies outside this repo. Leave out wording, logging, docs, test-only and unlikely-edge issues.
 
 ${EFFICIENT}
 

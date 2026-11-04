@@ -67,6 +67,8 @@ SHAPES = {
         Field("expected", "Expected behavior", "What should happen, as observable behavior.", True),
         Field("actual", "Actual behavior", "What happens instead, with the output: logs, status, errors.", True),
         Field("environment", "Environment", "funcd version or commit, runtime driver (process or containerd), OS.", True),
+        Field("design", "Design check", "What you read and what it says, then the verdict, in four lines. ADRs: ADR-NNNN: "
+              "what it says. Issues: #N: what it says, or none. Cards: its title, or none. Verdict: bug, and the clause it breaks.", True),
         Field("cause", "Root cause", "If known: the code (file:line) and the ADRs it touches.", False),
         Field("workaround", "Workaround", "How to get by until it is fixed, and whether it was tested.", False),
         REFERENCES,
@@ -92,6 +94,13 @@ SHAPES = {
         REFERENCES,
     ]),
 }
+# What `create` and `edit` require of a bug's Design check (.claude/CLAUDE.md, "Is it a bug?").
+DESIGN_CHECK = (
+    (re.compile(r"^ADRs:.*ADR-\d{4}", re.M), "the ADRs you read (ADRs: ADR-NNNN: what it says)"),
+    (re.compile(r"^Issues: *\S", re.M), "the issues you searched (Issues: #N: what it says, or none)"),
+    (re.compile(r"^Cards: *\S", re.M), "the board cards you searched (Cards: its title, or none)"),
+    (re.compile(r"^Verdict: bug\b", re.M), "the verdict (Verdict: bug, and the clause it breaks); any other verdict files no bug"),
+)
 NO_RESPONSE = "_No response_"  # what GitHub writes for an optional form field left empty
 LOCAL_PATH = re.compile(r"/Users/|/home/|/private/|/var/folders/|[A-Za-z]:\\Users\\")
 
@@ -152,6 +161,8 @@ def check_body(kind, body):
         empty = text in ("", NO_RESPONSE, placeholder(f))
         if empty and f.required:
             problems.append(f"{f.label} is required")
+        if f.id == "design" and not empty:
+            problems += [f"{f.label} needs {what}" for pattern, what in DESIGN_CHECK if not pattern.search(text)]
         parts.append(f"### {f.label}\n\n{NO_RESPONSE if empty else text}")
     m = LOCAL_PATH.search(body)
     if m:
@@ -286,8 +297,9 @@ def form(kind):
     lines = [GENERATED, f"name: {scalar(shape.name)}", f"description: {scalar(shape.about)}",
              "labels:", f"  - kind/{kind}", "  - needs-triage", "body:"]
     for f in shape.fields:
+        required = f.required and f.id != "design"  # a reporter on the web form leaves it to triage
         lines += ["  - type: textarea", f"    id: {f.id}", "    attributes:", f"      label: {scalar(f.label)}",
-                  f"      description: {scalar(f.hint)}", "    validations:", f"      required: {str(f.required).lower()}"]
+                  f"      description: {scalar(f.hint)}", "    validations:", f"      required: {str(required).lower()}"]
     return "\n".join(lines) + "\n"
 
 

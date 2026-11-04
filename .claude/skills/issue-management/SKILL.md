@@ -69,10 +69,21 @@ Each kind is one issue form in `.github/ISSUE_TEMPLATE/` and the same `### ` sec
 
 | Kind | Sections |
 |---|---|
-| bug | Summary · Steps to reproduce · Expected behavior · Actual behavior · Environment · Root cause* · Workaround* · References* |
+| bug | Summary · Steps to reproduce · Expected behavior · Actual behavior · Environment · Design check · Root cause* · Workaround* · References* |
 | feature | Summary · Problem · Proposed behavior · Alternatives* · References* |
 | flake | Test · Failure · Frequency · Suspected cause* · References* |
 | task | Summary · Details · Done when · References* |
+
+A bug's **Design check** records the two checks of CLAUDE.md → *⛔ Is it a bug?* in four lines, here those of #49:
+
+```
+ADRs: ADR-0016: C3 says a cold request is served once the Function boots inside the activation timeout; C2 has no Deploying to Idle edge.
+Issues: none.
+Cards: none.
+Verdict: bug, it breaks ADR-0016 C3.
+```
+
+Any other verdict files no bug: CLAUDE.md says what `accepted`, `deferred` and `uncovered` do instead.
 
 ## Filing an issue
 
@@ -100,12 +111,12 @@ sub_issue_id=$(gh api repos/pyvvo/funcd/issues/<N> --jq .id)`. After a batch, li
 parent (`gh api graphql` on `issues(states: OPEN) { nodes { number parent { number } } }`): only root
 trackers may remain.
 
-`create` refuses a body whose sections differ from the shape, an empty required section, a title over 80
-characters or with a `[tag]`/`type:` prefix or a trailing period, an unknown label, an open issue with the same
-title, and a local absolute path.
+`create` refuses a body whose sections differ from the shape, an empty required section, a bug's Design check that
+lacks one of its lines, a title over 80 characters or with a `[tag]`/`type:` prefix or a trailing period, an unknown
+label, an open issue with the same title, and a local absolute path.
 
 To change an issue later, edit its current body and run `edit`, which applies the same checks against the
-issue's `kind/` label:
+issue's `kind/` label, so a bug filed before the Design check gets one at its next edit:
 
 ```bash
 python3 .claude/skills/issue-management/driver.py show 13 --body > issue.md   # the body only
@@ -133,9 +144,9 @@ Example: tracker #1028 and its sub-issues #1015 to #1027, for FEAT-0012.
   the runtime driver. Never claim a result you did not observe; mark what is inferred ("not run on containerd").
 - **Grounded references.** Cite `file:line`, ADR numbers and commits; read them, don't recall them.
 - **Expected behavior is the observable outcome**, not the fix design — that belongs in the ADR.
-- **Name the rule a bug breaks.** Its Expected behavior or Root cause cites the ADR clause, doc or contract the
-  behavior contradicts, or says that none covers it. Behavior an ADR decided is a `kind/feature` with
-  `needs-adr`, never a `kind/bug`: its fix is a superseding ADR.
+- **Name the rule a bug breaks.** Its Design check cites the ADR clause, doc or contract the behavior contradicts, or
+  says why no sound design could want it. Behavior an ADR decided is a `kind/feature` with `needs-adr`, never a
+  `kind/bug`: its fix is a superseding ADR.
 - **A defect of agent tooling or of a test environment** (`scripts/agent`, a dev-shell quirk) is a `kind/task`;
   `kind/bug` is the platform doing something wrong.
 - **Say whether a workaround was tested.**
@@ -144,8 +155,10 @@ Example: tracker #1028 and its sub-issues #1015 to #1027, for FEAT-0012.
 
 ## Triage
 
-An issue opened from a web form carries its `kind/` label and `needs-triage`. Triage adds the `area/` and
-`priority/` labels (and `needs-adr` if the fix needs a decision) and removes `needs-triage`:
+An issue opened from a web form carries its `kind/` label and `needs-triage`, and a bug's Design check is empty. Triage
+runs that check: with the verdict `bug`, `edit` adds the section; with any other, the reply cites what was read, and the
+issue is relabelled or closed as CLAUDE.md says. Triage adds the `area/` and `priority/` labels (and `needs-adr` if the
+fix needs a decision) and removes `needs-triage`:
 
 ```bash
 python3 .claude/skills/issue-management/driver.py relabel 12 --add area/runtime --add priority/medium --remove needs-triage

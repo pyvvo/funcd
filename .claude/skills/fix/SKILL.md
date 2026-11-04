@@ -33,6 +33,11 @@ Read the code the issue points at and the ADRs that govern it (`docs/adr`, `blue
 must conform to them. The issue's cause is the reporter's claim — verify it in the code before
 relying on it, and correct it in the handoff if it is wrong.
 
+**Check that it is a bug** (CLAUDE.md → *⛔ Is it a bug?*). For a `kind/bug`, read what its `### Design check` cites, and
+search the ADRs on the path, the issues and the board cards once yourself. With no such section (an older issue, a web
+form), run the check and add the section with `driver.py edit`. Any verdict but `bug` stops here: report it with the
+citation, and change nothing.
+
 ## Step 3 — Reproduce first
 
 Write the regression test **before** touching the code:
@@ -55,9 +60,10 @@ Write the regression test **before** touching the code:
   that do the same job (the other commands, handlers, printers, parsers, gates or drivers). A sibling with the
   same cause is this issue's scope: fix it in the same commit, with a regression test case for it. The
   2026-10-05 campaign found about ten defects that were siblings of issues already fixed on one path only.
-- A defect found on the way, a sibling with another cause included, is fixed in the same go by default: its
-  own commit with its own regression test and revert check, on the same branch, reviewed like the main fix,
-  and a PR comment that records the defect, its cause, the commit and the test. Filing it as an issue
+- A defect found on the way, a sibling with another cause included, takes the same two checks first (Step 2). With the
+  verdict `bug` it is fixed in the same go by default: its own commit with its own regression test and revert check, on
+  the same branch, reviewed like the main fix, and a PR comment that records the defect, its cause, what the check read,
+  the commit and the test. Filing it as an issue
   instead is opt-in: only when the user asks for it. The exceptions stay: a security flaw goes to a private
   advisory, and a defect whose fix needs a design decision goes to `/adr` (an issue with `needs-adr`).
 - Change nothing else: only what this issue and the defects found on the way need.
