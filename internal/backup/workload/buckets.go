@@ -3,61 +3,60 @@ package workload
 import (
 	"cmp"
 	"context"
+	"slices"
 	"strings"
+	"unicode/utf8"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/backup"
 	"github.com/pyvvo/funcd/internal/blob"
-	"github.com/pyvvo/funcd/internal/gc"
 	"github.com/pyvvo/funcd/internal/snapshot"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
-// Buckets is the Bucket kind: blob/<bucket>/ holds the Bucket's objects under prefix in shared, then the catalogs of
-// the Lakes on its prefixes under catalogs in the catalog store (ADR-0293; nil keeps them among its objects), each
-// keyed <prefix>/_ducklake/catalog.db as the Bucket held it before and read before the walk (#1383). A Restore loads
-// them into the Bucket as, or into the Bucket itself, emptied first by purge, which takes its catalogs too.
-func Buckets(st store.Store, shared blob.Bucket, prefix, catalogs func(v1.NamespaceName, v1.ObjectName) string,
-	purge gc.BucketPurger) MemberKind {
-	return buckets{st: st, shared: shared, prefix: prefix, catalogs: catalogs, purge: purge}
+// Buckets is the Bucket kind (ADR-0312): blob/<bucket>/ holds the Bucket's objects under prefix in shared, but those under
+// its Lake prefixes, which the Lakes' members hold, and blob/<bucket>/catalogs/, only when there is one to copy, the
+// catalogs of its other prefixes under catalogs. A Restore loads them into the Bucket as, or into the Bucket itself,
+// emptied first, and touches neither objects nor catalogs under that Bucket's Lake prefixes, or a prefix whose owner Lake is
+// gone.
+func Buckets(st store.Store, shared blob.Bucket, prefix, catalogs func(v1.NamespaceName, v1.ObjectName) string) MemberKind {
+	return buckets{st: st, shared: shared, prefix: prefix, catalogs: catalogs}
 }
 
 type buckets struct {
 	st               store.Store
 	shared           blob.Bucket
 	prefix, catalogs func(v1.NamespaceName, v1.ObjectName) string
-	purge            gc.BucketPurger
 }
 
 func (buckets) Kind() v1.Kind { return v1.KindBucket }
 
 func (k buckets) Write(ctx context.Context, w FileWriter, ns v1.NamespaceName, m Member) (MemberFile, error) {
-	f, err := w.File(ctx, "blob/"+string(m.Name), func(emit func(snapshot.Record) error) error {
-		var catalogs []snapshot.Record
-		if k.catalogs != nil {
-			err := objects(ctx, k.shared, k.catalogs(ns, m.Name), func(key string) bool { return !bucketCatalog(key) },
-				func(r snapshot.Record) error {
-					catalogs = append(catalogs, r)
-					return nil
-				})
-			if err != nil {
-				return err
-			}
-		}
-		if err := objects(ctx, k.shared, k.prefix(ns, m.Name), nil, emit); err != nil {
-			return err
-		}
-		for _, r := range catalogs {
-			if err := emit(r); err != nil {
-				return err
-			}
-		}
-		return nil
+	skip := func(key string) bool { return underLake(key, m.LakePrefixes) }
+	name := "blob/" + string(m.Name)
+	f, err := w.File(ctx, name, func(emit func(snapshot.Record) error) error {
+		return objects(ctx, k.shared, k.prefix(ns, m.Name), skip, emit)
 	})
 	if err != nil {
 		return MemberFile{}, err
 	}
-	return MemberFile{Kind: m.Kind, Name: m.Name, Files: []backup.StoreFile{f}}, nil
+	files := []backup.StoreFile{f}
+	catalogs := k.catalogs(ns, m.Name)
+	held, err := keys(ctx, k.shared, catalogs)
+	if err != nil {
+		return MemberFile{}, err
+	}
+	if slices.ContainsFunc(held, func(key string) bool { return !skip(key) }) {
+		c, err := w.File(ctx, name+"/catalogs", func(emit func(snapshot.Record) error) error {
+			return objects(ctx, k.shared, catalogs, skip, emit)
+		})
+		if err != nil {
+			return MemberFile{}, err
+		}
+		files = append(files, c)
+	}
+	return MemberFile{Kind: m.Kind, Name: m.Name, Files: files}, nil
 }
 
 func (buckets) Parse(seg []string) (v1.BackupMember, int, bool) {
@@ -72,51 +71,76 @@ func (k buckets) Destination(ctx context.Context, ns v1.NamespaceName, rm v1.Res
 	if _, err := k.st.Get(ctx, v1.KindBucket.GVK(), ns, dest); err != nil {
 		return nil, err
 	}
-	d := bucketDestination{ns: ns, name: dest, view: blob.Prefixed(k.shared, k.prefix(ns, dest)), purge: k.purge,
-		inPlace: rm.InPlace}
-	if k.catalogs != nil {
-		d.catalogs = blob.Prefixed(k.shared, k.catalogs(ns, dest))
-	}
-	return d, nil
+	return bucketDestination{st: k.st, ns: ns, name: dest, view: blob.Prefixed(k.shared, k.prefix(ns, dest)),
+		catalogs: blob.Prefixed(k.shared, k.catalogs(ns, dest)), inPlace: rm.InPlace}, nil
 }
 
 type bucketDestination struct {
+	st             store.Store
 	ns             v1.NamespaceName
 	name           v1.ObjectName
-	view, catalogs blob.Bucket // its objects, and the catalogs of the Lakes on its prefixes (nil: among its objects)
-	purge          gc.BucketPurger
+	view, catalogs blob.Bucket // its objects, and the catalogs of its prefixes
 	inPlace        bool
 }
 
 func (bucketDestination) Prepare(context.Context) (func(), error) { return none, nil }
 
-// IsEmpty reports a Bucket with no object and no catalog of a Lake on its prefixes, whose rows are its data (ADR-0293
-// Decision 6).
+// lakes reads the prefixes a Restore leaves, now: a Lake applied since the plan keeps its prefix, and a gone one keeps its data.
+func (d bucketDestination) lakes(ctx context.Context) ([]string, error) {
+	obj, err := d.st.Get(ctx, v1.KindBucket.GVK(), d.ns, d.name)
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.KindOf(err), "workload.Buckets", "get Bucket %s/%s", d.ns, d.name)
+	}
+	ps, err := lakePrefixes(obj.(*v1.Bucket), true, reader(ctx, d.st, d.ns))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(ps))
+	for _, p := range ps {
+		out = append(out, p.name)
+	}
+	return out, nil
+}
+
+// IsEmpty reports a Bucket with no object and no catalog outside its Lake prefixes: a catalog no Lake owns is the Bucket's
+// data (ADR-0293 Decision 6).
 func (d bucketDestination) IsEmpty(ctx context.Context) (bool, error) {
-	for _, v := range []blob.Bucket{d.catalogs, d.view} {
-		if v == nil {
-			continue
-		}
-		items, _, err := v.ListAfter(ctx, "", "", 1)
-		if err != nil || len(items) > 0 {
+	lakes, err := d.lakes(ctx)
+	if err != nil {
+		return false, err
+	}
+	empty := true
+	for _, v := range []blob.Bucket{d.view, d.catalogs} {
+		err := outsideLakes(ctx, v, lakes, func(string) (bool, error) {
+			empty = false
+			return false, nil
+		})
+		if err != nil || !empty {
 			return false, err
 		}
 	}
 	return true, nil
 }
 
+// Load puts its files' records outside its Lake prefixes: Files[0] among its objects, Files[1] among its catalogs. A
+// record under a Lake prefix, from before that Lake took it, leaves no trace.
 func (d bucketDestination) Load(ctx context.Context, f MemberFile, open RecordOpener) error {
 	if d.inPlace {
 		if err := d.Clear(ctx); err != nil {
 			return err
 		}
 	}
-	for _, file := range f.Files {
+	lakes, err := d.lakes(ctx)
+	if err != nil {
+		return err
+	}
+	views := []blob.Bucket{d.view, d.catalogs}
+	for i, file := range f.Files {
 		err := loadObjects(ctx, file, open, func(key string, body []byte, o blob.PutOptions) error {
-			if d.catalogs != nil && bucketCatalog(key) {
-				return d.catalogs.Put(ctx, key, body, o)
+			if underLake(key, lakes) {
+				return nil
 			}
-			return d.view.Put(ctx, key, body, o)
+			return views[i].Put(ctx, key, body, o)
 		})
 		if err != nil {
 			return err
@@ -125,11 +149,53 @@ func (d bucketDestination) Load(ctx context.Context, f MemberFile, open RecordOp
 	return nil
 }
 
-func (d bucketDestination) Clear(ctx context.Context) error { return d.purge.Purge(ctx, d.ns, d.name) }
+// Clear deletes each object and each catalog outside its Lake prefixes.
+func (d bucketDestination) Clear(ctx context.Context) error {
+	lakes, err := d.lakes(ctx)
+	if err != nil {
+		return err
+	}
+	for _, v := range []blob.Bucket{d.view, d.catalogs} {
+		err := outsideLakes(ctx, v, lakes, func(key string) (bool, error) {
+			if err := v.Delete(ctx, key); err != nil && fault.KindOf(err) != fault.NotFound {
+				return false, err
+			}
+			return true, nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
-// bucketCatalog reports a Bucket member's record of the catalog of the Lake on one of its prefixes,
-// <prefix>/_ducklake/catalog.db, which a Restore puts in the catalog store.
-func bucketCatalog(key string) bool {
-	p, ok := strings.CutSuffix(key, "/"+checkpointName)
-	return ok && p != "" && !strings.Contains(p, "/")
+// underLake reports a key under one of the prefixes lakes, by <prefix>/, so a sibling <prefix>2/ is not.
+func underLake(key string, lakes []string) bool {
+	return slices.ContainsFunc(lakes, func(p string) bool { return strings.HasPrefix(key, p+"/") })
+}
+
+// outsideLakes calls each for every key of view outside lakes, in key order, seeking past a Lake prefix rather than listing
+// it, until each returns false.
+func outsideLakes(ctx context.Context, view blob.Bucket, lakes []string, each func(key string) (bool, error)) error {
+	after := ""
+	for {
+		items, more, err := view.ListAfter(ctx, "", after, listPage)
+		if err != nil {
+			return err
+		}
+		for _, it := range items {
+			if i := slices.IndexFunc(lakes, func(p string) bool { return strings.HasPrefix(it.Key, p+"/") }); i >= 0 {
+				after, more = max(lakes[i]+"/"+string(utf8.MaxRune), it.Key), true
+				break
+			}
+			next, err := each(it.Key)
+			if err != nil || !next {
+				return err
+			}
+			after = it.Key
+		}
+		if !more || len(items) == 0 {
+			return nil
+		}
+	}
 }

@@ -28,10 +28,10 @@ import (
 	"github.com/pyvvo/funcd/internal/volume"
 )
 
-// scenario: each-kind-round-trips-as-today, a Bucket's destinations (ADR-0311) — restored as the empty Bucket
-// lake-files-r, a Bucket's copy brings its objects, with their type and metadata, and its Lake's catalog under the new
-// name, the source keeping what it got since; restored in place, the Bucket holds the copy's objects and catalog
-// again, and none of what it got since.
+// scenario: each-kind-round-trips-as-today, a Bucket's destinations (ADR-0311, ADR-0312) — restored as the empty Bucket
+// lake-files-r, a Bucket's copy brings its objects, with their type and metadata, and none of its Lake's, the source
+// keeping what it got since; restored in place, the Bucket holds the copy's objects again and none of what it got since,
+// and its Lake stays as it is.
 func TestScenarioRestoreBucketAsAndInPlace(t *testing.T) {
 	t.Parallel()
 	k := newKindsRig(t, nil, nil, nil, func(r *wbRig) {
@@ -46,12 +46,12 @@ func TestScenarioRestoreBucketAsAndInPlace(t *testing.T) {
 	k.create(k.dev, k.restoreObj("copy", "b1", v1.RestoreMember{Kind: v1.KindBucket, Name: "lake-files", As: "lake-files-r"}))
 	k.waitRestore("copy", v1.RunSucceeded)
 	copied := bucketPrefix("orders", "lake-files-r")
-	require.Equal(t, "f1", k.blobAt(copied+"lake/main/t/f1.parquet"))
+	require.Empty(t, k.blobAt(copied+"lake/main/t/f1.parquet"), "the Lake's file is its member's")
 	attrs, err := k.p.cfg.blob.Attributes(k.ctx, copied+"notes.txt")
 	require.NoError(t, err)
 	require.Equal(t, []string{"n", "text/plain", "export"}, []string{k.blobAt(copied + "notes.txt"), attrs.ContentType, attrs.Metadata["source"]})
 	require.Empty(t, k.blobAt(copied+"later.txt"))
-	require.Equal(t, "C1", k.blobAt(catalogs+"lake-files-r/lake/_ducklake/catalog.db"), "its Lake's catalog, under the new name")
+	require.Empty(t, k.blobAt(catalogs+"lake-files-r/lake/_ducklake/catalog.db"), "and so is its catalog")
 	require.Empty(t, k.blobAt(copied+"lake/_ducklake/catalog.db"), "no catalog among the objects")
 	require.Equal(t, "later", k.blobAt(files+"later.txt"), "the source is unchanged")
 	require.Equal(t, "C2", k.blobAt(catalogs+"lake-files/lake/_ducklake/catalog.db"))
@@ -60,7 +60,7 @@ func TestScenarioRestoreBucketAsAndInPlace(t *testing.T) {
 	k.waitRestore("rewind", v1.RunSucceeded)
 	require.Equal(t, []string{"f1", "n", ""}, []string{k.blobAt(files + "lake/main/t/f1.parquet"), k.blobAt(files + "notes.txt"),
 		k.blobAt(files + "later.txt")}, "the in-place load empties the Bucket first")
-	require.Equal(t, "C1", k.blobAt(catalogs+"lake-files/lake/_ducklake/catalog.db"))
+	require.Equal(t, "C2", k.blobAt(catalogs+"lake-files/lake/_ducklake/catalog.db"), "the Lake keeps what it holds")
 }
 
 // scenario: each-kind-round-trips-as-today, a volume's destination — cart's volume state restored as cart2's empty

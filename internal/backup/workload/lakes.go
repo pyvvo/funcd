@@ -15,9 +15,9 @@ import (
 )
 
 // Lakes is the Lake kind (Decision 5, ADR-0271): lake/<name>/<attempt>/files/ holds a lake's objects under its
-// location, but its catalog, then lake/<name>/<attempt>/catalog.db/ the catalog as it was before they were listed. The
-// catalog lives in the catalog store under catalogPrefix (ADR-0293; nil keeps it under the files). A Restore loads into
-// the prefix asLocation, or the lake's location emptied first: its files, then its catalog. An in-place Restore does so
+// location, then lake/<name>/<attempt>/catalog.db/ the catalog as it was before they were listed. The catalog lives in the
+// catalog store under catalogPrefix (ADR-0293). A Restore loads into the prefix asLocation, where no Lake may be located
+// (ADR-0312 Decision 10), or the lake's location emptied first: its files, then its catalog. An in-place Restore does so
 // with the lake's engine stopped until release (stop; nil does nothing), so no engine outlives the load (#1384).
 func Lakes(st store.Store, shared blob.Bucket, prefix func(v1.NamespaceName, v1.ObjectName) string, catalogPrefix func(v1.NamespaceName) string,
 	stop func(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (release func(), err error)) MemberKind {
@@ -34,19 +34,17 @@ type lakes struct {
 
 func (lakes) Kind() v1.Kind { return v1.KindLake }
 
-// catalogKey is the blob key of the catalog of the Lake at loc: in the catalog store under its location, or under its
-// files without a catalog prefix. Its member record keeps the key checkpointName either way.
+// catalogKey is the blob key of the catalog of the Lake at loc, in the catalog store under its location. Its member record
+// keeps the key checkpointName.
 func (k lakes) catalogKey(ns v1.NamespaceName, loc v1.LakeLocation) string {
-	if k.catalogPrefix == nil {
-		return k.prefix(ns, loc.Bucket) + loc.Prefix + "/" + checkpointName
-	}
 	return k.catalogPrefix(ns) + string(loc.Bucket) + "/" + loc.Prefix + "/" + checkpointName
 }
 
 // Write copies one lake in at most lakeAttempts attempts: a listing of the prefix, the checkpoint C1, every other object
 // of the prefix, then C1. C1 is copied as it is, never opened: a file it names was written before it, so it is in the
-// listing, and an attempt whose copy misses a listed key, deleted meanwhile, runs again. A lake without a checkpoint is
-// an empty member.
+// listing, and an attempt whose copy misses a listed key, deleted meanwhile, runs again. A lake without a checkpoint still
+// copies its objects, with no catalog.db/, since its Bucket's copy skips them (ADR-0312 Decision 5); with no object either
+// it is an empty member.
 func (k lakes) Write(ctx context.Context, w FileWriter, ns v1.NamespaceName, mb Member) (MemberFile, error) {
 	const op = "workload.Write"
 	root := k.prefix(ns, mb.Location.Bucket) + mb.Location.Prefix + "/"
@@ -58,16 +56,18 @@ func (k lakes) Write(ctx context.Context, w FileWriter, ns v1.NamespaceName, mb 
 			return MemberFile{}, err
 		}
 		c1, err := k.shared.Get(ctx, catalog)
-		if fault.KindOf(err) == fault.NotFound {
-			// DuckLake opens a missing catalog.db as a new, empty lake: no object under the prefix is part of one
+		noCatalog := fault.KindOf(err) == fault.NotFound
+		if noCatalog && !slices.ContainsFunc(listed, func(k string) bool { return k != checkpointName }) {
 			return MemberFile{Kind: mb.Kind, Name: mb.Name}, nil
 		}
-		if err != nil {
+		if err != nil && !noCatalog {
 			return MemberFile{}, fault.Wrapf(err, fault.KindOf(err), op, "lake %s: read its checkpoint", mb.Name)
 		}
-		attrs, err := k.shared.Attributes(ctx, catalog)
-		if err != nil {
-			return MemberFile{}, fault.Wrapf(err, fault.KindOf(err), op, "lake %s: read its checkpoint", mb.Name)
+		var attrs blob.Attributes
+		if !noCatalog {
+			if attrs, err = k.shared.Attributes(ctx, catalog); err != nil {
+				return MemberFile{}, fault.Wrapf(err, fault.KindOf(err), op, "lake %s: read its checkpoint", mb.Name)
+			}
 		}
 		dir := fmt.Sprintf("lake/%s/%d/", mb.Name, attempt)
 		copied := map[string]bool{}
@@ -83,6 +83,9 @@ func (k lakes) Write(ctx context.Context, w FileWriter, ns v1.NamespaceName, mb 
 		if i := slices.IndexFunc(listed, func(k string) bool { return k != checkpointName && !copied[k] }); i >= 0 {
 			last = listed[i]
 			continue
+		}
+		if noCatalog {
+			return MemberFile{Kind: mb.Kind, Name: mb.Name, Attempt: attempt, Files: []backup.StoreFile{files}}, nil
 		}
 		db, err := w.File(ctx, dir+"catalog.db", func(emit func(snapshot.Record) error) error {
 			return emit(snapshot.Record{Key: []byte(checkpointName), Value: EncodeObject(attrs.ContentType, attrs.Metadata, c1)})
@@ -121,16 +124,18 @@ func (k lakes) Destination(ctx context.Context, ns v1.NamespaceName, rm v1.Resto
 		}
 		loc = obj.(*v1.Lake).Spec.Location
 	}
-	return lakeDestination{shared: k.shared, view: blob.Prefixed(k.shared, k.prefix(ns, loc.Bucket)+loc.Prefix+"/"),
-		catalog: k.catalogKey(ns, loc), inPlace: rm.InPlace, ns: ns, name: rm.Name, stop: k.stop}, nil
+	return lakeDestination{st: k.st, shared: k.shared, view: blob.Prefixed(k.shared, k.prefix(ns, loc.Bucket)+loc.Prefix+"/"),
+		catalog: k.catalogKey(ns, loc), inPlace: rm.InPlace, ns: ns, name: rm.Name, loc: loc, stop: k.stop}, nil
 }
 
 type lakeDestination struct {
+	st           store.Store
 	shared, view blob.Bucket // the blob store, and the lake's prefix in it
 	catalog      string      // the blob key its catalog loads to
 	inPlace      bool
 	ns           v1.NamespaceName
 	name         v1.ObjectName
+	loc          v1.LakeLocation
 	stop         func(ctx context.Context, ns v1.NamespaceName, name v1.ObjectName) (release func(), err error)
 }
 
@@ -142,8 +147,20 @@ func (d lakeDestination) Prepare(ctx context.Context) (func(), error) {
 	return d.stop(ctx, d.ns, d.name)
 }
 
-// IsEmpty reports a prefix with no object and no catalog, whose inlined rows are data (ADR-0293 Decision 5).
+// IsEmpty reports a prefix with no object and no catalog, whose inlined rows are data (ADR-0293 Decision 5), and where no
+// Lake is located: this path takes no hold, so no engine may stop there, and a running one would overwrite the load
+// (ADR-0312 Decision 10).
 func (d lakeDestination) IsEmpty(ctx context.Context) (bool, error) {
+	l, err := d.st.List(ctx, v1.KindLake.GVK(), store.ListOptions{Namespace: d.ns})
+	if err != nil {
+		return false, fault.Wrapf(err, fault.KindOf(err), "workload.Lakes", "list the Lakes of %q", d.ns)
+	}
+	if slices.ContainsFunc(l.Items, func(o v1.Object) bool {
+		lk, ok := o.(*v1.Lake)
+		return ok && lk.Spec.Location == d.loc
+	}) {
+		return false, nil
+	}
 	has, err := d.shared.Exists(ctx, d.catalog)
 	if err != nil || has {
 		return false, err

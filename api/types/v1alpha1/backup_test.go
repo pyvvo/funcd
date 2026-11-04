@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/pyvvo/funcd/api/fault"
 )
 
@@ -150,6 +152,8 @@ func TestRestoreValidate(t *testing.T) {
 		"database in place":  {base(RestoreMember{Kind: KindSQLDatabase, Name: "todo-db", InPlace: true}), ""},
 		"database asLocation": {base(RestoreMember{Kind: KindSQLDatabase, Name: "todo-db", AsLocation: &LakeLocation{Bucket: "b", Prefix: "p"}}),
 			"takes as or inPlace"},
+		"lake as a location on another bucket, beside a bucket in place": {base(RestoreMember{Kind: KindBucket, Name: "b", InPlace: true},
+			RestoreMember{Kind: KindLake, Name: "lake", AsLocation: &LakeLocation{Bucket: "c", Prefix: "p"}}), ""},
 		"repeated member": {base(RestoreMember{Kind: KindKVStore, Name: "s", InPlace: true}, RestoreMember{Kind: KindKVStore, Name: "s", As: "t"}), "repeats"},
 		"no identity": {func() *Restore {
 			r := base(RestoreMember{Kind: KindKVStore, Name: "s", InPlace: true})
@@ -204,4 +208,22 @@ func TestAppBackupSchedulePart(t *testing.T) {
 	if err != nil || string(b) != `{"ref":"shared"}` {
 		t.Fatalf("a ref entry marshals as its ref alone: %s, %v", b, err)
 	}
+}
+
+// scenario: refused-restores (ADR-0312 Decision 6) — a Restore that names a Bucket in place and a Lake asLocation on it is
+// refused at validation, in either order: listed first, that Lake's copy would go with the Bucket's emptying. The Bucket as
+// another one empties nothing, so it passes.
+func TestRestore_RefusesALakeOnABucketInPlace(t *testing.T) {
+	bucket := RestoreMember{Kind: KindBucket, Name: "data", InPlace: true}
+	lake := RestoreMember{Kind: KindLake, Name: "sales", AsLocation: &LakeLocation{Bucket: "data", Prefix: "copy"}}
+	restore := func(ms ...RestoreMember) *Restore {
+		return &Restore{TypeMeta: typeMetaFor(KindRestore), ObjectMeta: ObjectMeta{Name: "r", Namespace: "orders", ResourceGroup: "rg"},
+			Spec: RestoreSpec{Backup: "b", Source: RestoreSource{CredentialsSecret: "reader", IdentitySecret: "owner-key"}, Members: ms}}
+	}
+	for name, ms := range map[string][]RestoreMember{"lake first": {lake, bucket}, "bucket first": {bucket, lake}} {
+		err := restore(ms...).Validate()
+		require.Equal(t, fault.Invalid, fault.KindOf(err), name)
+		require.ErrorContains(t, err, `asLocation is on Bucket "data"`, name)
+	}
+	require.NoError(t, restore(RestoreMember{Kind: KindBucket, Name: "data", As: "data-r"}, lake).Validate())
 }

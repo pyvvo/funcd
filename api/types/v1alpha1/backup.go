@@ -3,6 +3,7 @@ package v1alpha1
 import (
 	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -49,7 +50,8 @@ func (s BackupScheduleSpec) EffectiveTTL() Duration {
 	return s.TTL
 }
 
-// BackupScope names the members in one form (Decision 2): names, an App, or a ResourceGroup.
+// BackupScope names the members in one form (Decision 2): names, an App, or a ResourceGroup. In each form a Bucket brings in
+// the Lakes on its prefixes as their own members, since its copy holds none of their data (ADR-0312).
 type BackupScope struct {
 	KVStores  []ObjectName `json:"kvStores,omitempty"`
 	Buckets   []ObjectName `json:"buckets,omitempty"`
@@ -146,7 +148,9 @@ type RestoreSource struct {
 }
 
 // RestoreMember is one member of the Backup and exactly one target: as (an empty KVStore, Bucket or SQLDatabase, or
-// the empty volume of another Function), asLocation (an empty bucket prefix, for a Lake) or inPlace.
+// the empty volume of another Function), asLocation (an empty bucket prefix where no Lake is located, for a Lake) or
+// inPlace. A Bucket's member acts only outside the prefixes of the Lakes on its destination, so restoring a Lake takes
+// naming that Lake too (ADR-0312).
 type RestoreMember struct {
 	Kind       Kind          `json:"kind"`
 	Name       ObjectName    `json:"name"`
@@ -400,6 +404,15 @@ func (r *Restore) Validate() error {
 			return fault.Invalidf(op, "%s repeats %s/%s of %s", path, m.Kind, m.Name, prev)
 		}
 		seen[k] = path
+	}
+	// A Lake's copy on a prefix no Lake owns would go with the Bucket's emptying, from a Succeeded Restore (ADR-0312 Decision 6).
+	for i, m := range r.Spec.Members {
+		if m.AsLocation == nil {
+			continue
+		}
+		if slices.ContainsFunc(r.Spec.Members, func(b RestoreMember) bool { return b.Kind == KindBucket && b.InPlace && b.Name == m.AsLocation.Bucket }) {
+			return fault.Invalidf(op, "spec.members[%d]: asLocation is on Bucket %q, which this Restore restores in place: restore them apart", i, m.AsLocation.Bucket)
+		}
 	}
 	return nil
 }

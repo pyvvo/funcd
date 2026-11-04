@@ -34,8 +34,9 @@ import (
 	"github.com/pyvvo/funcd/internal/store"
 )
 
-// Format is the workload manifest's format; a changed meaning, framing or layout bumps it.
-const Format = 1
+// Format is the workload manifest's format; a changed meaning, framing or layout bumps it. A funcd reads one format:
+// from 2 on a Bucket's file holds none of its Lakes' data (ADR-0312 Decision 8).
+const Format = 2
 
 const (
 	manifestName = "manifest.yaml"
@@ -63,6 +64,9 @@ type Member struct {
 	Name     v1.ObjectName
 	Location v1.LakeLocation
 	Volume   v1.ObjectName // with Kind Function: the Function's local volume (ADR-0262 Decision 11)
+	// LakePrefixes, with Kind Bucket, are its Lake prefixes as Resolve read them, so a Lake applied during a run leaves each
+	// byte in one member (ADR-0312).
+	LakePrefixes []string
 }
 
 // Options are where Write puts the copy and to whom it seals it: Path is <ns>/<backup>-<uid>/ on Target, Recipients
@@ -97,7 +101,9 @@ type Manifest struct {
 
 // Resolve lists the members s names in ns (Decision 2), KVStores, Buckets, Lakes, SQLDatabases then Function volumes:
 // by name, the stores of the App's kv, buckets, lakes and sql entries and its Functions' local volumes, or the stores of
-// the ResourceGroup. A named member or App that does not exist is fault.NotFound naming it.
+// the ResourceGroup. In each form a Bucket brings in the Lakes on its Lake prefixes as their own members, once, after the
+// Lakes s names, whichever App or ResourceGroup holds them (ADR-0312). A named member or App that does not exist is
+// fault.NotFound naming it.
 func Resolve(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1.BackupScope) ([]Member, error) {
 	const op = "workload.Resolve"
 	names := map[v1.Kind][]v1.ObjectName{
@@ -145,18 +151,34 @@ func Resolve(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1.Back
 			slices.Sort(names[k])
 		}
 	}
-	var out []Member
+	var out, brought []Member
+	read := reader(ctx, st, ns)
 	for _, k := range memberKinds() {
 		for _, n := range names[k] {
-			obj, err := st.Get(ctx, k.GVK(), ns, n)
+			obj, err := read(k, n)
 			if err != nil {
 				return nil, fault.Wrapf(err, fault.KindOf(err), op, "member %s/%s", k, n)
 			}
 			m := Member{Kind: k, Name: n}
-			if cs, ok := obj.(*v1.Lake); ok {
-				m.Location = cs.Spec.Location
+			switch o := obj.(type) {
+			case *v1.Lake:
+				m.Location = o.Spec.Location
+			case *v1.Bucket:
+				prefixes, err := lakePrefixes(o, false, read)
+				if err != nil {
+					return nil, err
+				}
+				for _, p := range prefixes {
+					m.LakePrefixes = append(m.LakePrefixes, p.name)
+					if !slices.Contains(names[v1.KindLake], p.owner) {
+						brought = append(brought, Member{Kind: v1.KindLake, Name: p.owner, Location: v1.LakeLocation{Bucket: o.Name, Prefix: p.name}})
+					}
+				}
 			}
 			out = append(out, m)
+		}
+		if k == v1.KindLake {
+			out = append(out, brought...)
 		}
 	}
 	vols, err := volumeMembers(ctx, st, ns, s.Volumes)
@@ -164,6 +186,57 @@ func Resolve(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1.Back
 		return nil, err
 	}
 	return append(out, vols...), nil
+}
+
+// lakePrefix is one Lake prefix of a Bucket, and the Lake that owns it.
+type lakePrefix struct {
+	name  string
+	owner v1.ObjectName
+}
+
+// reader reads each object of ns once: one Resolve sees one Lake at one location, so what a Bucket's copy skips and what
+// the Lake's member copies agree.
+func reader(ctx context.Context, st store.Store, ns v1.NamespaceName) func(v1.Kind, v1.ObjectName) (v1.Object, error) {
+	read := map[string]v1.Object{}
+	return func(k v1.Kind, n v1.ObjectName) (v1.Object, error) {
+		key := string(k) + "/" + string(n)
+		if obj, ok := read[key]; ok {
+			return obj, nil
+		}
+		obj, err := st.Get(ctx, k.GVK(), ns, n)
+		if err == nil {
+			read[key] = obj
+		}
+		return obj, err
+	}
+}
+
+// lakePrefixes reads b's Lake prefixes (ADR-0312 Decision 1): those whose owner has kind Lake and is located there, in spec
+// order. Every other prefix is the Bucket's. With gone it adds those whose owner Lake does not exist, which a Restore leaves
+// alone, as a rewind would delete that Lake's data. The location test stays beside ADR-0312 Decision 7: a Lake owns every
+// ownerless prefix of a bucket it defines, and sits on one of them.
+func lakePrefixes(b *v1.Bucket, gone bool, read func(v1.Kind, v1.ObjectName) (v1.Object, error)) ([]lakePrefix, error) {
+	var out []lakePrefix
+	for _, p := range b.Spec.Prefixes {
+		if p.Owner.Kind != v1.KindLake {
+			continue
+		}
+		obj, err := read(v1.KindLake, p.Owner.Name)
+		switch {
+		case fault.KindOf(err) == fault.NotFound:
+			if !gone {
+				continue
+			}
+		case err != nil:
+			return nil, fault.Wrapf(err, fault.KindOf(err), "workload.lakePrefixes", "get Lake %s/%s", b.Namespace, p.Owner.Name)
+		default:
+			if lk, ok := obj.(*v1.Lake); !ok || lk.Spec.Location != (v1.LakeLocation{Bucket: b.Name, Prefix: p.Name}) {
+				continue
+			}
+		}
+		out = append(out, lakePrefix{name: p.Name, owner: p.Owner.Name})
+	}
+	return out, nil
 }
 
 // volumeMembers resolves "<function>/<name>" scope entries: the Function exists and declares that local volume.
@@ -398,7 +471,7 @@ type nopCloser struct{ io.Writer }
 
 func (nopCloser) Close() error { return nil }
 
-// ReadManifest reads the manifest under path; a format above Format is fault.Invalid.
+// ReadManifest reads the manifest under path; any format but Format is fault.Invalid.
 func ReadManifest(ctx context.Context, src blob.Bucket, path string) (Manifest, error) {
 	const op = "workload.ReadManifest"
 	data, err := src.Get(ctx, path+manifestName)
@@ -409,7 +482,7 @@ func ReadManifest(ctx context.Context, src blob.Bucket, path string) (Manifest, 
 	if err := yaml.Unmarshal(data, &m); err != nil {
 		return Manifest{}, fault.Wrapf(err, fault.Invalid, op, "decode %s%s", path, manifestName)
 	}
-	if m.Format > Format {
+	if m.Format != Format {
 		return Manifest{}, fault.Invalidf(op, "%s%s has format %d; this funcd reads format %d", path, manifestName, m.Format, Format)
 	}
 	return m, nil
