@@ -1,6 +1,7 @@
 # ADR-0313: One place says what the platform does and who decided it
 
-- **Status**: Proposed 2026-11-04, judged three rounds; an experiment built the whole registry, and this text folds in what it found
+- **Status**: Reviewing (2026-11-05), implemented on the branch of the experiment that tested this text; Accepted (2026-11-05), the
+  decider: "finish the behaviour tasks, then merge it". Judged four rounds; the last verdict, accept after small edits, is folded in
 - **Date**: 2026-11-04
 - **Deciders**: green-0-rabbit
 - **Tags**: meta, process, behavior-registry, documentation
@@ -156,7 +157,7 @@ How a value is shaped in code:
     - judge (`adr-judge`): a Decision that changes what a user sees, with `None`, or a row it changes and does not list,
       is a Major;
     - implement (`adr-impl`): each new number gets a name or a config key; the rows land in the PR, with `just behavior-values`;
-    - review (`adr-impl-review`): the file's rows match the section, and `just check-behavior` passes;
+    - review (`adr-impl-review`): the chapters' rows match the section, and `just check-behavior` passes;
     - file or fix (`issue-management`, `/fix`, `/fix-review`): filing a `differs` row moves it to `deferred`; a fix that changes
       what a row or an edge says, or closes an issue a row cites, updates it in the same commit.
 11. **The bug rule.** Step 2 of *Is it a bug?* starts with a grep of what it saw across the chapters and reads every row it
@@ -194,11 +195,8 @@ stateDiagram-v2
 <!-- end of generated values -->
 ````
 
-| Command | Does | Exit |
-|---|---|---|
-| `go run ./scripts/behavior` · `just behavior-values` | rewrite each chapter's block | 1 on a package or section with no chapter |
-| `go run ./scripts/behavior -check` · `just check-behavior` | Decision 8, writing nothing | 1 on any failure |
-
+- `just behavior-values` (`go run ./scripts/behavior`) rewrites each chapter's block, exit 1 on a package or section with no chapter;
+  `just check-behavior` (`go run ./scripts/behavior -check`) does Decision 8, writing nothing, exit 1 on any failure.
 - `internal/platform/config`: `func Defaults() Config`, every key's default before a file or a variable applies. A key
   empty there reads its documented default from `examples/funcdconfig.yaml`.
 - `chapters()` in `scripts/behavior/main.go` gives each chapter its packages (the longest prefix wins) and config
@@ -260,19 +258,20 @@ stateDiagram-v2
       light path, run once.
 - [ ] `blueprint.md` and `docs/PROJECT-SUMMARY.md` link to the chapter and hold no copy of the machine; each edge the
       blueprint's copy had and the chapter lacks, or the reverse, has a row with its status and source.
-- [ ] The seven skills carry Decision 10's step; the bug rule and its restatements start at the file; the CLAUDE.md mirror
+- [ ] The seven skills carry Decision 10's step; the bug rule and its restatements start at the registry; the CLAUDE.md mirror
       is byte-identical.
 - [ ] No absolute path or local username in a chapter; no security finding in any row.
 
 ## Consequences
 
-Measured on the experiment's text as one file, with a list of 14 past surprises written before its new chapters:
+Measured with a list of 14 past surprises written before the new chapters:
 
-- **(+)** A reader of the registry alone reached the right verdict on 13 of 14, at about 12k tokens each; a read that goes on to the ADRs took about 46k, and one with no registry 41k. The miss read "no row",
-  which sends a reader on to the issues.
+- **(+)** A reader on Decision 11's path (grep, chapter, the clause the row cites) reached the right verdict on 13 of 14, at about
+  11k tokens each; a dive through the ADRs took about 46k with the registry and 41k without. The miss read a row that mixed two facts,
+  since split. For a single surprise, the index and a chapter are about 4k tokens, where one file was about 45k.
 - **(+)** Writing it showed what no list did: 20 questions and 11 places where the code differs from its ADR.
-- **(−)** It is a first stop, not a shorter dive: on the same 7 surprises, the registry with the ADRs took 314k tokens and
-  none 285k. Both got all 7.
+- **(−)** It is a first stop, not a shorter dive: on 7 of those surprises, a dive took 314k tokens with the registry and 285k
+  without, and both got all 7.
 - **(−)** The check proves a citation exists, not what it says, and does not compare a machine with the code. An audit of 40
   random rows found 28 that hold, 12 imprecise, mostly a citation that does not pin the fact, and 0 wrong, which bounds the
   wrong rate near 7%: up to about 18 of the 242 rows no one re-read. A bare `30 s` in a cell is not compared at all.

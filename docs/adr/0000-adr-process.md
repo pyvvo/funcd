@@ -1,6 +1,7 @@
 # ADR-0000: ADR process, template, and workflow gates
 
 - **Status**: Accepted
+- **Superseded in part by**: [ADR-0313](0313-one-place-says-what-the-platform-does-and-who-decided-it.md) (2026-11-05) — *Template* gains a *Behavior rows* section, *Workflow gates* 2 to 5 a behavior-row step
 - **Superseded in part by**: [ADR-0272](0272-a-design-model-checks-lifecycle-and-concurrency-decisions.md) (2026-10-23) — the
   *Template* gains a *Design model* section, *Workflow gates* 2 to 5 a design-model step, and partial supersession a
   written form

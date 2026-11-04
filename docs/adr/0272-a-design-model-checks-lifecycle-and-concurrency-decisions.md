@@ -3,6 +3,7 @@
 - **Status**: Implemented (2026-10-24), review passed with one non-blocking Minor ([report](../reviews/adr-0272-implementation-claude-opus-5-5.md)); Reviewing 2026-10-23;
   Accepted 2026-10-23 by the decider, with the triggers, the state budget, `just ci` running every spec and
   FizzBee's own skills left out; Proposed 2026-10-23, judged three rounds, every Major folded
+- **Superseded in part by**: [ADR-0313](0313-one-place-says-what-the-platform-does-and-who-decided-it.md) (2026-11-05) — Decision 7's list of what an amendment carries gains *Behavior rows*
 - **Date**: 2026-10-23
 - **Deciders**: green-0-rabbit
 - **Tags**: meta, process, design-model, fizzbee, model-checking
