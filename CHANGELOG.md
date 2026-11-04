@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.37.0](https://github.com/pyvvo/funcd/compare/v0.36.1...v0.37.0) (2026-11-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* **lake:** a Lake on a prefix it does not own runs no engine
+* **backup:** a Bucket's backup member skips its Lakes' prefixes
+
+### Features
+
+* **backup:** a Bucket's backup member skips its Lakes' prefixes ([72b4c7f](https://github.com/pyvvo/funcd/commit/72b4c7fa8582af6f2a9e6140a507703de9bf041d))
+* **lake:** a Lake on a prefix it does not own runs no engine ([72b4c7f](https://github.com/pyvvo/funcd/commit/72b4c7fa8582af6f2a9e6140a507703de9bf041d))
+
+
+### Bug Fixes
+
+* **backup:** a backup target's client reads a bounded answer ([0facb28](https://github.com/pyvvo/funcd/commit/0facb28332dab058bd702959802b730f07777ab7))
+* **backup:** a backup target's listing fails on an object with no modification time ([0facb28](https://github.com/pyvvo/funcd/commit/0facb28332dab058bd702959802b730f07777ab7))
+* **backup:** a Restore fails a member whose manifest lists another number of files ([72b4c7f](https://github.com/pyvvo/funcd/commit/72b4c7fa8582af6f2a9e6140a507703de9bf041d))
+* **backup:** a Restore refuses a manifest or a part larger than funcd writes ([72b4c7f](https://github.com/pyvvo/funcd/commit/72b4c7fa8582af6f2a9e6140a507703de9bf041d))
+* **backup:** a workload Restore of a Bucket keeps the catalogs of its Lakes ([72b4c7f](https://github.com/pyvvo/funcd/commit/72b4c7fa8582af6f2a9e6140a507703de9bf041d))
+* **backup:** one copy's listing names a bounded number of members, and a Backup fails on a scope over them ([0facb28](https://github.com/pyvvo/funcd/commit/0facb28332dab058bd702959802b730f07777ab7))
+* **backup:** one listing of a backup target reads a bounded number of keys and key bytes ([0facb28](https://github.com/pyvvo/funcd/commit/0facb28332dab058bd702959802b730f07777ab7))
+* **lake:** a Lake restored in place runs no engine until its release ([72b4c7f](https://github.com/pyvvo/funcd/commit/72b4c7fa8582af6f2a9e6140a507703de9bf041d))
+* **lake:** a refused catalog save no longer makes a client run its statement twice ([5a347fa](https://github.com/pyvvo/funcd/commit/5a347faa1e1eed2064ea5defa430f6325173c437))
+
 ## [0.36.1](https://github.com/pyvvo/funcd/compare/v0.36.0...v0.36.1) (2026-11-03)
 
 
