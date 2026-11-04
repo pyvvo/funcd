@@ -110,8 +110,6 @@ func TestListCopyMembers(t *testing.T) {
 	require.Error(t, err)
 }
 
-// ADR-0311 Decision 6: a listing skips a key that no kind parses, as it skips a key of no kind directory, and lists
-// the members of the kinds it is given.
 // pagedKeys is a target whose listing answers total keys in pages of the limit it is asked for, all of them key.
 type pagedKeys struct {
 	blob.Bucket
@@ -211,6 +209,8 @@ func TestListCopy_RefusesAListingOverItsLimit(t *testing.T) {
 	require.ErrorContains(t, err, d)
 }
 
+// ADR-0311 Decision 6: a listing skips a key that no kind parses, as it skips a key of no kind directory, and lists
+// the members of the kinds it is given.
 func TestListCopy_SkipsAKeyNoKindParses(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

@@ -268,6 +268,24 @@ func TestStaticKeyAnswers_ReadARealListingHoweverItsStoreCutsIt(t *testing.T) {
 	}
 }
 
+// A listed object with no modification time fails its listing, wherever it sits on its page.
+func TestStaticKeyAnswers_FailAListedObjectWithNoTime(t *testing.T) {
+	t.Parallel()
+	for name, contents := range map[string]string{
+		"the only object": `<Contents><Key>a</Key><Size>1</Size></Contents>`,
+		"a later object":  listedObject("a") + `<Contents><Key>b</Key><Size>1</Size></Contents>`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			b := answeringStore(t, func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>b</Name>` + contents + `</ListBucketResult>`))
+			}, OpenOptions{})
+			_, _, err := b.ListAfter(context.Background(), "", "", 10)
+			require.ErrorContains(t, err, "no modification time")
+		})
+	}
+}
+
 // A session's answer is bounded, as a directory bucket's name makes the client ask for one before its first request.
 func TestStaticKeyAnswers_BoundASessionsAnswer(t *testing.T) {
 	t.Parallel()

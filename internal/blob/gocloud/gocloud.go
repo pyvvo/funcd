@@ -74,7 +74,7 @@ type OpenOptions struct {
 	// s3:// only, another scheme is fault.Invalid.
 	CredentialsFile string
 	// Static is an access key that is the only credential source (ADR-0222 Decision 6, a namespace Secret's keys), whose
-	// client reads no more than maxAnswerBytes of an answer but an object's content; s3:// only, and not with
+	// client bounds what it reads of an answer but an object's content (cappedAnswers); s3:// only, and not with
 	// CredentialsFile.
 	Static *StaticKey
 }

@@ -15,8 +15,8 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 )
 
-// maxAnswerBytes bounds what a static key's client reads of an answer that is not an object's content. A real S3 error or
-// upload answer takes a few KiB; a longer one is cut, which at most makes its error less precise.
+// maxAnswerBytes bounds what a static key's client reads of an answer that is neither an object's content nor a listing's
+// page. A real S3 error or upload answer takes a few KiB; a longer one is cut, which at most makes its error less precise.
 const maxAnswerBytes = 64 << 10
 
 // maxListBytes is what the same client reads of all the pages of one ListAfter, however its store cuts them. A fill of 1000

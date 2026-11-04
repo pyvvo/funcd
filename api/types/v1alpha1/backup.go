@@ -181,8 +181,8 @@ type AppBackupSchedule struct {
 
 // ConditionTargetSynced is a BackupSchedule's condition after a platform restore (ADR-0287): False with
 // ReasonPlatformRestored from funcd restore run, True once a sync recorded the whole copies its target holds after the
-// restored point, False with ReasonListFailed while the target refuses the listing. While it is False the schedule
-// takes no slot.
+// restored point, False with ReasonListFailed while the listing fails: the target refuses it, or what it lists is over a
+// listing's limits. While it is False the schedule takes no slot.
 const ConditionTargetSynced = ConditionType("TargetSynced")
 
 // The reasons of ADR-0287: restore run's mark on a restored schedule, a sync whose listing failed, and a Backup whose
