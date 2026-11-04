@@ -5,6 +5,9 @@
   five commits: #1383's fix, the kinds, the services' dispatch, the providers' hook and the stale texts); Accepted
   (2026-11-03, by the decider after two judge rounds: round 2 added the catalog read before the Bucket walk and made
   the guard precise; the decider confirmed the kinds' location, see Alternatives)
+- **Superseded in part by**: [ADR-0312](0312-a-buckets-backup-member-skips-its-lakes-prefixes.md) (2026-11-04) —
+  Decision 4's Bucket row with the paragraph under it and its Lake row's `Prepare`, `Buckets` and `Lakes` in its
+  Contracts, and what follows in its Consequences: a Bucket's copy no longer carries its Lakes' catalogs.
 - **Date**: 2026-11-03
 - **Deciders**: green-0-rabbit
 - **Tags**: provider, backup, restore, refactor

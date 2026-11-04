@@ -1,6 +1,6 @@
 # ADR-0312: A Bucket's backup member skips its Lakes' prefixes
 
-- **Status**: Proposed (2026-11-03; from the decider's answers, which replaced answer 1 with the owner field)
+- **Status**: Accepted (2026-11-04, by the parent session under the decider's delegation ("don't wait for me"), after one judge round whose findings are all folded); Proposed (2026-11-03; from the decider's answers, which replaced answer 1 with the owner field)
 - **Date**: 2026-11-03
 - **Deciders**: green-0-rabbit
 - **Tags**: backup, restore, bucket, lake

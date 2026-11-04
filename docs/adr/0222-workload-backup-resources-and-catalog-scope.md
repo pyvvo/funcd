@@ -8,6 +8,9 @@
 - **Superseded in part by**: [ADR-0311](0311-each-provider-backs-up-and-restores-its-own-member-kind.md) (2026-11-03) —
   `Sources` and `Write`'s `src Sources` in its Contracts, and `Sources.BucketPrefix` in Decision 7: each member kind is
   a type its provider hands over.
+- **Superseded in part by**: [ADR-0312](0312-a-buckets-backup-member-skips-its-lakes-prefixes.md) (2026-11-04) —
+  Decision 2 (a Bucket brings in its Lakes), Decision 4's `blob/<bucket>/` line ("every object"), and Decision 7's
+  `BucketPurger.Purge` in a Restore and `Format`: a Bucket's copy leaves its Lakes to their own members.
 - **Date**: 2026-10-10
 - **Deciders**: green-0-rabbit
 - **Tags**: backup, restore, disaster-recovery, kvstore, blob, catalog, rbac, app

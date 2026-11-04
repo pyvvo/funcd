@@ -4,6 +4,8 @@
 - **Superseded in part by**: [ADR-0294](0294-a-workers-root-filesystem-is-read-only.md) (2026-10-28): Decision 3's default for `lake.catalogMaxSize`, now 256MiB instead of 1GiB
 - **Superseded in part by**: [ADR-0311](0311-each-provider-backs-up-and-restores-its-own-member-kind.md) (2026-11-03) —
   `Sources.CatalogPrefix` in its Contracts.
+- **Superseded in part by**: [ADR-0312](0312-a-buckets-backup-member-skips-its-lakes-prefixes.md) (2026-11-04) —
+  Decision 5's "every backup restores as before": `Format` is 2, and a funcd reads one format.
 - **Date**: 2026-10-27
 - **Deciders**: green-0-rabbit
 - **Tags**: lake, storage, limits
