@@ -1,7 +1,10 @@
 package workload_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -283,6 +286,100 @@ func TestIntegrity_ANegativePartCountReadsNoPart(t *testing.T) {
 		Files: []backup.StoreFile{{Name: "kv/x", Parts: -1, Bytes: 1}}}}})
 	require.Equal(t, fault.Invalid, fault.KindOf(err))
 	require.ErrorContains(t, err, "holds 0 bytes")
+}
+
+// countedReads is a target that counts the reads of an object's content.
+type countedReads struct {
+	blob.Bucket
+	reads atomic.Int32
+}
+
+func (b *countedReads) Get(ctx context.Context, key string) ([]byte, error) {
+	b.reads.Add(1)
+	return b.Bucket.Get(ctx, key)
+}
+
+// A manifest over MaxManifestBytes is refused, naming it, with nothing read; one of that size is read.
+func TestReadManifest_RefusesAManifestLargerThanFuncdWrites(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mem, err := gocloud.Open(ctx, "mem://")
+	require.NoError(t, err)
+	target := &countedReads{Bucket: mem}
+	const path = "orders/nightly-1-uid/"
+	sized := func(n int) []byte {
+		return append([]byte("format: 2\n#"), bytes.Repeat([]byte("x"), n-len("format: 2\n#"))...)
+	}
+	require.NoError(t, mem.Put(ctx, path+"manifest.yaml", sized(workload.MaxManifestBytes+1), blob.PutOptions{}))
+	_, err = workload.ReadManifest(ctx, target, path)
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
+	require.ErrorContains(t, err, path+"manifest.yaml")
+	require.Zero(t, target.reads.Load())
+
+	require.NoError(t, mem.Put(ctx, path+"manifest.yaml", sized(workload.MaxManifestBytes), blob.PutOptions{}))
+	m, err := workload.ReadManifest(ctx, target, path)
+	require.NoError(t, err)
+	require.Equal(t, workload.Format, m.Format)
+}
+
+// A part over backup.PartBytes fails Integrity, naming it, with nothing read; one of that size passes, and an empty one is not
+// read at all, since a range of an empty object is an error on S3.
+func TestIntegrity_RefusesAPartLargerThanFuncdWrites(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mem, err := gocloud.Open(ctx, "mem://")
+	require.NoError(t, err)
+	target := &countedReads{Bucket: mem}
+	manifest := func(data []byte) workload.Manifest {
+		sum := sha256.Sum256(data)
+		return workload.Manifest{Members: []workload.MemberFile{{Kind: v1.KindKVStore, Name: "x",
+			Files: []backup.StoreFile{{Name: "kv/x", Parts: 1, Bytes: int64(len(data)), SHA256: hex.EncodeToString(sum[:])}}}}}
+	}
+	over := bytes.Repeat([]byte("x"), backup.PartBytes+1)
+	require.NoError(t, mem.Put(ctx, "c/kv/x/part-00000", over, blob.PutOptions{}))
+	err = workload.Integrity(ctx, target, "c/", manifest(over))
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
+	require.ErrorContains(t, err, "c/kv/x/part-00000")
+	require.Zero(t, target.reads.Load())
+
+	require.NoError(t, mem.Put(ctx, "c/kv/x/part-00000", nil, blob.PutOptions{}))
+	require.NoError(t, workload.Integrity(ctx, target, "c/", manifest(nil)))
+	require.Zero(t, target.reads.Load())
+
+	require.NoError(t, mem.Put(ctx, "c/kv/x/part-00000", over[:backup.PartBytes], blob.PutOptions{}))
+	require.NoError(t, workload.Integrity(ctx, target, "c/", manifest(over[:backup.PartBytes])))
+	require.EqualValues(t, 1, target.reads.Load())
+}
+
+// shortReport is a target that reports every object 4 bytes long and records the length of a range read.
+type shortReport struct {
+	blob.Bucket
+	asked atomic.Int64
+}
+
+func (b *shortReport) Attributes(ctx context.Context, key string) (blob.Attributes, error) {
+	a, err := b.Bucket.Attributes(ctx, key)
+	a.Size = 4
+	return a, err
+}
+
+func (b *shortReport) GetRange(ctx context.Context, key string, offset, length int64) ([]byte, error) {
+	b.asked.Store(length)
+	return b.Bucket.(blob.RangeReader).GetRange(ctx, key, offset, length)
+}
+
+// A read asks for no more bytes than the target reports.
+func TestIntegrity_AsksForNoMoreThanATargetReports(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mem, err := gocloud.Open(ctx, "mem://")
+	require.NoError(t, err)
+	require.NoError(t, mem.Put(ctx, "c/kv/x/part-00000", []byte("12345678"), blob.PutOptions{}))
+	target := &shortReport{Bucket: mem}
+	err = workload.Integrity(ctx, target, "c/", workload.Manifest{Members: []workload.MemberFile{{Kind: v1.KindKVStore, Name: "x",
+		Files: []backup.StoreFile{{Name: "kv/x", Parts: 1, Bytes: 8}}}}})
+	require.ErrorContains(t, err, "holds 4 bytes")
+	require.EqualValues(t, 4, target.asked.Load())
 }
 
 func TestReadManifest_RefusesAnotherFormat(t *testing.T) {

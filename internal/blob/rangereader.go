@@ -9,7 +9,7 @@ import "context"
 // optional interface keeps the blob.Bucket port minimal and the contract tests
 // additive.
 type RangeReader interface {
-	// GetRange returns bytes [offset, offset+length) of the object at key.
+	// GetRange returns bytes [offset, offset+length) of the object at key, and no more whatever its store answers.
 	// A negative length means "to end". offset must be >= 0. fault.NotFound if the
 	// key is absent; fault.Invalid for a negative offset.
 	GetRange(ctx context.Context, key string, offset, length int64) ([]byte, error)

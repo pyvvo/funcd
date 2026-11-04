@@ -58,6 +58,10 @@ var (
 // sqlRecordBytes is the size of one record of a database's file (ADR-0234 Decision 2).
 const sqlRecordBytes = 8 << 20
 
+// MaxManifestBytes is the largest manifest a Restore reads. A member's entry takes under 1 KiB, so this holds over 16,000
+// members.
+const MaxManifestBytes = 16 << 20
+
 // Member is one store of a scope. Location is a Lake member's spec.location, which Write copies.
 type Member struct {
 	Kind     v1.Kind
@@ -471,10 +475,10 @@ type nopCloser struct{ io.Writer }
 
 func (nopCloser) Close() error { return nil }
 
-// ReadManifest reads the manifest under path; any format but Format is fault.Invalid.
+// ReadManifest reads the manifest under path; one over MaxManifestBytes or of any format but Format is fault.Invalid.
 func ReadManifest(ctx context.Context, src blob.Bucket, path string) (Manifest, error) {
 	const op = "workload.ReadManifest"
-	data, err := src.Get(ctx, path+manifestName)
+	data, err := readAtMost(ctx, src, path+manifestName, MaxManifestBytes)
 	if err != nil {
 		return Manifest{}, fault.Wrapf(err, fault.KindOf(err), op, "read %s%s", path, manifestName)
 	}
@@ -526,7 +530,27 @@ func Records(ctx context.Context, src blob.Bucket, path string, f backup.StoreFi
 	}
 }
 
-// partReader reads a file's parts in order, one Get each.
+// readAtMost reads the object at key, asking its target for no more bytes than it reports. An object it reports over limit
+// is fault.Invalid naming it, with nothing read.
+func readAtMost(ctx context.Context, src blob.Bucket, key string, limit int64) ([]byte, error) {
+	attrs, err := src.Attributes(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case attrs.Size > limit:
+		return nil, fault.Invalidf("workload.readAtMost", "%s holds %d bytes, and funcd writes at most %d", key, attrs.Size, limit)
+	case attrs.Size <= 0:
+		return []byte{}, nil
+	}
+	if rr, ok := src.(blob.RangeReader); ok {
+		return rr.GetRange(ctx, key, 0, attrs.Size)
+	}
+	return src.Get(ctx, key)
+}
+
+// partReader reads a file's parts in order, one read each. The writer cuts a file's sealed bytes, so a part is at most
+// backup.PartBytes, sealed or not.
 type partReader struct {
 	get   func(key string) ([]byte, error)
 	dir   string
@@ -536,7 +560,7 @@ type partReader struct {
 }
 
 func newPartReader(ctx context.Context, src blob.Bucket, dir string, parts int) *partReader {
-	return &partReader{get: func(key string) ([]byte, error) { return src.Get(ctx, key) }, dir: dir, parts: parts}
+	return &partReader{get: func(key string) ([]byte, error) { return readAtMost(ctx, src, key, backup.PartBytes) }, dir: dir, parts: parts}
 }
 
 func (r *partReader) Read(p []byte) (int, error) {

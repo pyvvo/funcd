@@ -1,6 +1,7 @@
 package funcd
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io/fs"
@@ -9,16 +10,19 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/yaml"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/backup"
 	"github.com/pyvvo/funcd/internal/backup/workload"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/lifecycle"
+	"github.com/pyvvo/funcd/internal/testkit/s3stub"
 	"github.com/pyvvo/funcd/internal/volume"
 )
 
@@ -235,6 +239,51 @@ func (k *kindsRig) listFiles(path string, mb v1.RestoreMember, count int) {
 	data, err := yaml.Marshal(m)
 	require.NoError(k.t, err)
 	require.NoError(k.t, src.Put(k.ctx, strings.TrimPrefix(path, "/")+"manifest.yaml", data, blob.PutOptions{}))
+}
+
+// A Restore refuses a manifest or a part larger than funcd writes before any hold or write, naming the object, with nothing
+// read of it: the manifest ends it Failed, and the part with reason Integrity.
+func TestRestore_RefusesAManifestOrAPartLargerThanFuncdWrites(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		key    func(path string, m workload.Manifest) string
+		size   int
+		reason string
+	}{
+		"a manifest": {func(path string, _ workload.Manifest) string { return path + "manifest.yaml" }, workload.MaxManifestBytes + 1, "Failed"},
+		"a part": {func(path string, m workload.Manifest) string {
+			return path + m.Members[0].Files[0].Name + "/part-00000"
+		}, backup.PartBytes + 1, "Integrity"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			k := newKindsRig(t, nil, nil, nil, nil)
+			k.create(k.dev, k.backupObj("b1", "kinds-nightly"))
+			path := k.waitBackup("b1", v1.RunSucceeded).Status.Path
+			m, err := workload.ReadManifest(k.ctx, k.target(), path)
+			require.NoError(t, err)
+			key := c.key(path, m)
+			k.stub.Seed(key, bytes.Repeat([]byte("x"), c.size))
+			var reads atomic.Int32
+			k.stub.Set(func(s *s3stub.Stub) {
+				s.OnGet = func(got string) {
+					if strings.HasSuffix(got, key) {
+						reads.Add(1)
+					}
+				}
+			})
+			before := k.stores()
+
+			k.create(k.admin, k.restoreObj("refused", "b1", v1.RestoreMember{Kind: v1.KindKVStore, Name: "orders-state", InPlace: true}))
+			rs := k.waitRestore("refused", v1.RunFailed)
+			require.Equal(t, c.reason, reason(rs.Status.Status))
+			cond, _ := rs.Status.Conditions.Get("Ready")
+			require.Contains(t, cond.Message, key)
+			require.Zero(t, reads.Load())
+			require.Equal(t, before, k.stores())
+			require.False(t, k.hold.HeldIn("orders"))
+		})
+	}
 }
 
 // A Restore fails a member whose manifest entry lists another number of files than its kind writes, before it writes to
