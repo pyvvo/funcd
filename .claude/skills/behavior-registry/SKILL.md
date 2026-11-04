@@ -1,18 +1,19 @@
 ---
 name: behavior-registry
-description: Keep docs/BEHAVIOR.md true: the one file that says, per process, what funcd does, how long it takes, what a user sees and who decided it (ADR-0313). Use when a default, a hard-coded value or a behavior changes, an ADR is accepted or superseded, a new package, kind, config section or provider arrives, `just check-behavior` fails, or a chapter needs writing or correcting. It records what was decided and asks about what was not; it never decides or fixes anything.
+description: Keep docs/behavior true: the one place that says, per process, what funcd does, how long it takes, what a user sees and who decided it (ADR-0313). Use when a default, a hard-coded value or a behavior changes, an ADR is accepted or superseded, a new package, kind, config section or provider arrives, `just check-behavior` fails, or a chapter needs writing or correcting. It records what was decided and asks about what was not; it never decides or fixes anything.
 ---
 
 # Behavior registry
 
-`docs/BEHAVIOR.md` has one chapter per process. It decides nothing: if it and an ADR disagree, the ADR wins and the file is
-corrected, and code that differs from both is a surprise for the bug rule (CLAUDE.md, *Is it a bug?*). Paths are
+`docs/behavior/` has an index, `README.md`, and one file per process. It decides nothing: a row that misstates an ADR is corrected,
+and where the code differs from the ADR, the row says what the code does, with `differs`, a surprise for the bug rule (CLAUDE.md,
+*Is it a bug?*). Paths are
 repo-root-relative. Run tools through `scripts/agent/d`.
 
 ## When something changed
 
 1. `scripts/agent/d just behavior-values` rewrites the generated blocks. Never hand-edit a block.
-2. Read `git diff docs/BEHAVIOR.md`. For each value that changed, grep the written rows that cite it and correct them.
+2. Read `git diff docs/behavior`. For each value that changed, grep the written rows that cite it and correct them.
 3. If a behavior changed, find its chapter and correct or add the row: what happens, the time, what a user sees, the status,
    the source. Remove a row the change made false. An ADR's *Behavior rows* section lists the rows it changes.
 4. `scripts/agent/d just check-behavior`, then fix what it names:
@@ -55,8 +56,9 @@ cite; for the others, the header and the Decision are enough to know you need no
 
 ## A chapter
 
-In order: a `Kinds:` line, a Mermaid `stateDiagram-v2`, a short note, one table, the generated block. About 60 lines, about 20
-rows: the written part of the whole file stays under 1000 lines. A step that belongs to a neighbor's chapter gets at most one row,
+A file `docs/behavior/<chapter, lower case with dashes>.md`, listed in the index. In order: its title `# <Chapter>`, a `Kinds:` line, a
+Mermaid `stateDiagram-v2`, a short note, one table, the generated block. About 60 lines, about 20 rows: the written part stays under
+16 KiB, about 4k tokens, because a session reads one chapter. A link to a neighbor names its file: `[Workers](workers.md)`. A step that belongs to a neighbor's chapter gets at most one row,
 saying what a caller sees here, and the neighbor holds the rest. A kind nothing acts on still sits on a `Kinds:` line: one row says so.
 
 - **The machine** tells the process in order, in the code's state names. Group states that behave alike. A process with no
@@ -71,8 +73,8 @@ saying what a caller sees here, and the neighbor holds the rest. A kind nothing 
 
 ## A row
 
-`| Where | What happens | Time | You see | Status | Source |`, with `|` inside a cell written `\|`. A row stays under 400
-characters, or the check refuses it: it holds one fact someone could ask about, not all there is to say. If it holds two facts,
+`| Where | What happens | Time | You see | Status | Source |`, with `|` inside a cell written `\|`. A row is at most 400
+bytes, or the check refuses it: it holds one fact someone could ask about, not all there is to say. If it holds two facts,
 cut one or split it. A row that mixes a decision and a cost is two rows, each with its own status.
 
 - **Where**: the step or the trigger, in a few words.
@@ -90,12 +92,13 @@ cut one or split it. A row that mixes a decision and a cost is two rows, each wi
 | Status | When | Source must name |
 |---|---|---|
 | `decided` | an ADR or the decider chose it | an accepted ADR, or `decider <date>` with `#N` or `card "<title>"` |
-| `accepted` | an ADR or the decider named it as a cost or a risk; or no ADR speaks of it, and a test pins it or a closed issue's fix chose it | the same, or the test, or `#N` |
+| `accepted` | an ADR or the decider named it as a cost or a risk, left it out on purpose or rejected its fix; or no clause speaks of it and a test pins it | the same, or the test |
 | `deferred` | a card, an ADR's open question or an open issue holds it | `card "<title>"`, `ADR-NNNN Open questions` or `#N` |
 | `uncovered` (written `**uncovered**`) | nothing speaks of it | what you read |
 | `differs` (written `**differs**`) | an ADR or the blueprint says otherwise, and the code does this | the clause and the code that differs |
 
-An ADR accepted a cost and a card proposes to change it: `accepted`, citing both. A card is named by a few words of its title, as
+A clause that reaches a case only by its letter, with no sign its author weighed the case, decides nothing: `uncovered`, citing it. An
+ADR accepted a cost and a card proposes to change it: `accepted`, citing both. A card is named by a few words of its title, as
 `driver.py show` finds it. A later ADR that made a sentence stale with no `Superseded in part by` line: cite the later one and tell the
 decider. Evidence you ran yourself goes in the source as `ran it`.
 

@@ -1,6 +1,6 @@
-// Command behavior writes the generated value blocks of docs/BEHAVIOR.md (ADR-0313), each chapter's config keys and
-// hard-coded values, and with -check fails when the file no longer matches the code: a value changed, a number is written
-// inline, a package, config section or kind has no chapter, or a written row cites what does not exist.
+// Command behavior writes the generated value blocks of docs/behavior (ADR-0313), each chapter's config keys and hard-coded
+// values, and with -check fails when a chapter no longer matches the code: a value changed, a number is written inline, a
+// package, config section or kind has no chapter, or a written row cites what does not exist.
 package main
 
 import (
@@ -25,21 +25,28 @@ import (
 )
 
 const (
-	docPath          = "docs/BEHAVIOR.md"
+	docDir           = "docs/behavior"
+	indexFile        = "README.md"
 	blockBegin       = "<!-- generated values, do not edit: just behavior-values -->"
 	blockEnd         = "<!-- end of generated values -->"
 	rowHeader        = "| Where | What happens | Time | You see | Status | Source |"
-	maxWritten       = 1000
+	maxChapter       = 16 << 10
 	maxRow           = 400
 	firstADRWithRows = 314
 	skillHint        = "run the /behavior-registry skill: regenerate with `just behavior-values`, then check that each written row still holds"
 )
 
-// chapter is one chapter of the file: the packages and the config sections its values come from.
+// chapter is one file of the registry: the packages and the config sections its values come from.
 type chapter struct {
 	name     string
 	packages []string
 	sections []string
+}
+
+var notSlug = regexp.MustCompile(`[^a-z0-9]+`)
+
+func (c chapter) file() string {
+	return strings.Trim(notSlug.ReplaceAllString(strings.ToLower(c.name), "-"), "-") + ".md"
 }
 
 func chapters() []chapter {
@@ -85,7 +92,9 @@ func main() {
 	check := flag.Bool("check", false, "fail when the file differs from what the code gives, or a written row does not hold")
 	flag.Parse()
 	in, err := realInputs()
-	if err == nil {
+	if err != nil {
+		err = failure([]string{err.Error()})
+	} else {
 		err = run(in, *check)
 	}
 	if err != nil {
@@ -118,35 +127,54 @@ func realInputs() (inputs, error) {
 	return inputs{root: ".", chapters: chapters(), keys: keys, kinds: kinds}, nil
 }
 
+// chapterFile is one chapter as it stands and as the code would write it.
+type chapterFile struct {
+	chapter
+	path, current, next string
+}
+
 func run(in inputs, check bool) error {
 	code, err := scanCode(in)
 	if err != nil {
-		return err
+		return failure([]string{err.Error()})
 	}
 	byChapter, problems := configRows(in)
 	problems = append(problems, code.orphans...)
 	for name, rows := range code.rows {
 		byChapter[name] = append(byChapter[name], rows...)
 	}
-	path := filepath.Join(in.root, docPath)
-	current, err := os.ReadFile(path)
-	if err != nil {
-		return err
+	var files []chapterFile
+	for _, c := range in.chapters {
+		f := chapterFile{chapter: c, path: docDir + "/" + c.file()}
+		data, rerr := os.ReadFile(filepath.Join(in.root, f.path))
+		if rerr != nil {
+			problems = append(problems, fmt.Sprintf("%s: chapter %q has no file", f.path, c.name))
+			continue
+		}
+		f.current = string(data)
+		next, problem := render(f.current, c.name, byChapter[c.name])
+		if problem != "" {
+			problems = append(problems, f.path+": "+problem)
+		}
+		f.next = next
+		files = append(files, f)
 	}
-	next, missing := render(string(current), in.chapters, byChapter)
-	problems = append(problems, missing...)
 	if !check {
 		if len(problems) > 0 {
 			return failure(problems)
 		}
-		return os.WriteFile(path, []byte(next), 0o600)
+		for _, f := range files {
+			if f.next != f.current {
+				if err := os.WriteFile(filepath.Join(in.root, f.path), []byte(f.next), 0o600); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
 	}
 	problems = append(problems, code.inline...)
-	problems = append(problems, validate(in, string(current), byChapter, code.known)...)
+	problems = append(problems, validate(in, files, byChapter, code.known)...)
 	problems = append(problems, adrsWithoutRows(in.root)...)
-	if changed := changedLines(string(current), next); len(changed) > 0 {
-		problems = append(problems, fmt.Sprintf("%s no longer matches the code:\n  %s", docPath, strings.Join(changed, "\n  ")))
-	}
 	if len(problems) > 0 {
 		return failure(problems)
 	}
@@ -288,7 +316,7 @@ func inlineNumbers(fset *token.FileSet, body ast.Node, path, fn string, keys map
 			stack = stack[:len(stack)-1]
 			return true
 		}
-		if refused(n, stack, fset) {
+		if refused(n, stack, fset, keys) {
 			e, _ := n.(ast.Expr)
 			if key := besideKey(stack, keys); key != "" {
 				if v, ok := eval(e); ok && differs(keys[key], v, hasUnit(e)) {
@@ -307,7 +335,7 @@ func inlineNumbers(fset *token.FileSet, body ast.Node, path, fn string, keys map
 
 // refused says whether n is a literal duration or size, or a bare unit used as a value. A bare unit stays allowed in
 // arithmetic, in a conversion, and as the unit given to rounding.
-func refused(n ast.Node, stack []ast.Node, fset *token.FileSet) bool {
+func refused(n ast.Node, stack []ast.Node, fset *token.FileSet, keys map[string]string) bool {
 	switch v := n.(type) {
 	case *ast.BinaryExpr:
 		switch v.Op {
@@ -332,6 +360,8 @@ func refused(n ast.Node, stack []ast.Node, fset *token.FileSet) bool {
 			callee := exprText(fset, p.Fun)
 			return !isConversion(callee) && !slices.Contains([]string{"ceilUnits", "ceilDiv"}, callee) &&
 				!strings.HasSuffix(callee, ".Round") && !strings.HasSuffix(callee, ".Truncate")
+		case *ast.CompositeLit: // a positional element counts only beside its key: a table of units sets no value
+			return besideKey(stack, keys) != ""
 		case *ast.KeyValueExpr, *ast.AssignStmt, *ast.ReturnStmt, *ast.ValueSpec:
 			return true
 		case *ast.BinaryExpr:
@@ -665,34 +695,16 @@ func exampleDefaults(path string) (map[string]string, error) {
 	return out, nil
 }
 
-// render rewrites each chapter's generated block, at the end of the chapter when it has none yet.
-func render(text string, chapters []chapter, byChapter map[string][]row) (string, []string) {
-	var problems []string
-	for _, c := range chapters {
-		heading := "\n## " + c.name + "\n"
-		start := strings.Index(text, heading)
-		if start < 0 {
-			problems = append(problems, fmt.Sprintf("%s has no chapter %q", docPath, c.name))
-			continue
-		}
-		bodyStart := start + len(heading)
-		end := len(text)
-		if i := strings.Index(text[bodyStart:], "\n## "); i >= 0 {
-			end = bodyStart + i + 1
-		}
-		body := text[bodyStart:end]
-		i, j := strings.Index(body, blockBegin), strings.Index(body, blockEnd)
-		switch {
-		case i >= 0 && j > i:
-			body = body[:i] + block(c.name, byChapter[c.name]) + body[j+len(blockEnd):]
-		case i >= 0:
-			problems = append(problems, fmt.Sprintf("%s: chapter %q has a generated block with no end", docPath, c.name))
-		default:
-			body = strings.TrimRight(body, "\n") + "\n\n" + block(c.name, byChapter[c.name]) + "\n"
-		}
-		text = text[:bodyStart] + body + text[end:]
+// render rewrites a chapter's generated block, at its end when it has none yet.
+func render(text, name string, rows []row) (string, string) {
+	i, j := strings.Index(text, blockBegin), strings.Index(text, blockEnd)
+	switch {
+	case i >= 0 && j > i:
+		return text[:i] + block(name, rows) + text[j+len(blockEnd):], ""
+	case i >= 0:
+		return text, "its generated block has no end"
 	}
-	return text, problems
+	return strings.TrimRight(text, "\n") + "\n\n" + block(name, rows) + "\n", ""
 }
 
 func block(name string, rows []row) string {
@@ -723,11 +735,12 @@ func rank(r row) int {
 var (
 	adrRef    = regexp.MustCompile(`ADR-(\d{4})`)
 	testRef   = regexp.MustCompile("`(Test[A-Za-z0-9_]+)`")
-	issueRef  = regexp.MustCompile(`#\d+`)
 	tick      = regexp.MustCompile("`([^`]+)`")
 	reasonish = regexp.MustCompile(`\b[A-Z][A-Za-z]*[a-z][A-Z][A-Za-z]+\b`)
 	cited     = regexp.MustCompile("`([A-Za-z][A-Za-z0-9.]*)` (\\d+(?:\\.\\d+)?) ?(ms|s|min|h|KiB|MiB|GiB)?(?:[^\\w.:]|[.:](?:\\s|$)|$)")
+	oneWord   = regexp.MustCompile("^[A-Z][a-z]+$")
 	link      = regexp.MustCompile(`\]\(([^)#\s]+)(#[^)]*)?\)`)
+	bareLink  = regexp.MustCompile(`\]\(#`)
 	record    = regexp.MustCompile(`#\d+|card "[^"]+"`)
 	dated     = regexp.MustCompile(`decider \d{4}-\d{2}-\d{2}`)
 	holder    = regexp.MustCompile(`#\d+|card "[^"]+"|ADR-\d{4} Open questions`)
@@ -765,8 +778,8 @@ func rowProblem(line string) string {
 			return "a row that says decided cites no ADR, and no dated decider with its record"
 		}
 	case "accepted":
-		if !adrRef.MatchString(source) && !testRef.MatchString(source) && !issueRef.MatchString(source) && (!dated.MatchString(source) || !record.MatchString(source)) {
-			return "a row that says accepted cites no ADR, no test, no closed fix, and no dated decider with its record"
+		if !adrRef.MatchString(source) && !testRef.MatchString(source) && (!dated.MatchString(source) || !record.MatchString(source)) {
+			return "a row that says accepted cites no ADR, no test, and no dated decider with its record"
 		}
 	case "deferred":
 		if !holder.MatchString(source) {
@@ -792,54 +805,33 @@ var (
 	newWords     = regexp.MustCompile(`New words?: ([^.]*)\.`)
 )
 
-// section is what a chapter's written part holds, in order.
+// section is where a chapter's written part holds each part of its shape, and what its machine and note name.
 type section struct {
-	states         []string
-	marked         map[string]bool
-	name           string
-	line           int
-	kinds, machine int
-	table          int
+	title, kinds, machine, table int
+	states                       []string
+	marked                       map[string]bool
 }
 
-func (s section) problems() []string {
-	if s.name == "" {
-		return nil
-	}
-	at := fmt.Sprintf("%s:%d: chapter %s", docPath, s.line, s.name)
-	var out []string
+func (s section) shape(path, name string) []string {
+	at := fmt.Sprintf("%s: chapter %s", path, name)
 	switch {
+	case s.title == 0:
+		return []string{at + " has no title: # " + name}
 	case s.kinds == 0:
-		out = append(out, at+" has no Kinds: line")
+		return []string{at + " has no Kinds: line"}
 	case s.machine == 0:
-		out = append(out, at+" has no machine")
+		return []string{at + " has no machine"}
 	case s.table == 0:
-		out = append(out, at+" has no table")
+		return []string{at + " has no table"}
 	case s.kinds > s.machine || s.machine > s.table:
-		out = append(out, at+" does not follow the order: Kinds: line, machine, note, table")
+		return []string{at + " does not follow the order: title, Kinds: line, machine, note, table"}
 	}
-	return out
+	return nil
 }
 
-// unmarked names a machine's states that the code does not have and the note does not mark new.
-func (s section) unmarked(known map[string]bool) []string {
-	var out []string
-	for _, state := range s.states {
-		if !known[state] && !s.marked[state] {
-			out = append(out, fmt.Sprintf("%s:%d: chapter %s: the machine's state %s is not in the code and the note does not mark it new", docPath, s.line, s.name, state))
-		}
-	}
-	return out
-}
-
-// validate checks the written part: each chapter's shape, each row's status, and every ADR, test, reason, link and number
-// it cites.
-func validate(in inputs, text string, byChapter map[string][]row, known map[string]bool) []string {
-	var problems []string
-	names := map[string]bool{}
-	for _, c := range in.chapters {
-		names[c.name] = true
-	}
+// validate checks every chapter against the values, the names and the tests of the whole tree: a row may cite a neighbor's
+// value, and a kind may sit on any chapter's Kinds line.
+func validate(in inputs, files []chapterFile, byChapter map[string][]row, known map[string]bool) []string {
 	values := map[string][]string{}
 	for _, rows := range byChapter {
 		for _, r := range rows {
@@ -847,11 +839,79 @@ func validate(in inputs, text string, byChapter map[string][]row, known map[stri
 		}
 	}
 	tests := testNames(in.root)
-	var current section
+	var problems []string
 	kindLines := ""
+	for _, f := range files {
+		p, kinds := validateChapter(in, f, values, known, tests)
+		problems = append(problems, p...)
+		kindLines += kinds
+		if f.current != f.next {
+			changed := changedLines(f.current, f.next)
+			if len(changed) == 0 {
+				changed = []string{"its generated block is out of order or repeats a row"}
+			}
+			problems = append(problems, fmt.Sprintf("%s no longer matches the code:\n  %s", f.path, strings.Join(changed, "\n  ")))
+		}
+	}
+	for _, k := range in.kinds {
+		if !regexp.MustCompile(`\b` + k + `\b`).MatchString(kindLines) {
+			problems = append(problems, fmt.Sprintf("%s: kind %s is on no chapter's Kinds line", docDir, k))
+		}
+	}
+	return append(problems, validateIndex(in)...)
+}
+
+// validateIndex checks the index lists every chapter and that no file sits outside them.
+func validateIndex(in inputs) []string {
+	path := docDir + "/" + indexFile
+	data, err := os.ReadFile(filepath.Join(in.root, path))
+	if err != nil {
+		return []string{path + " does not exist: it lists the chapters"}
+	}
+	var problems []string
+	listed := map[string]bool{indexFile: true}
+	for _, c := range in.chapters {
+		listed[c.file()] = true
+		if !strings.Contains(string(data), "]("+c.file()+")") {
+			problems = append(problems, path+" does not list chapter "+c.name)
+		}
+	}
+	for n, line := range strings.Split(string(data), "\n") {
+		problems = append(problems, linkProblems(in, fmt.Sprintf("%s:%d", path, n+1), line)...)
+	}
+	found, _ := filepath.Glob(filepath.Join(in.root, docDir, "*.md"))
+	for _, full := range found {
+		if !listed[filepath.Base(full)] {
+			problems = append(problems, docDir+"/"+filepath.Base(full)+" is in no chapter of scripts/behavior/main.go")
+		}
+	}
+	return problems
+}
+
+func linkProblems(in inputs, at, line string) []string {
+	var problems []string
+	if bareLink.MatchString(line) {
+		problems = append(problems, at+": a bare # link: name the chapter's file")
+	}
+	for _, m := range link.FindAllStringSubmatch(line, -1) {
+		if !strings.Contains(m[1], "://") {
+			if _, err := os.Stat(filepath.Join(in.root, docDir, m[1])); err != nil {
+				problems = append(problems, at+": links to "+m[1]+", which does not exist")
+			}
+		}
+	}
+	return problems
+}
+
+// validateChapter checks one chapter's shape, its rows' statuses, and every ADR, test, reason, link and number it cites. It
+// returns the problems and its Kinds line.
+func validateChapter(in inputs, f chapterFile, values map[string][]string, known map[string]bool, tests map[string]bool) ([]string, string) {
+	var problems []string
+	s := section{marked: map[string]bool{}}
+	kindLine := ""
 	written := 0
 	inBlock, inFence, inTable := false, false, false
-	for n, line := range strings.Split(text, "\n") {
+	for n, line := range strings.Split(f.current, "\n") {
 		switch {
 		case strings.HasPrefix(line, blockBegin):
 			inBlock = true
@@ -862,10 +922,10 @@ func validate(in inputs, text string, byChapter map[string][]row, known map[stri
 		case inBlock:
 			continue
 		}
-		written++
+		written += len(line) + 1
 		if strings.HasPrefix(line, "```") {
-			if !inFence && line == "```mermaid" && current.machine == 0 {
-				current.machine = n + 1
+			if !inFence && line == "```mermaid" && s.machine == 0 {
+				s.machine = n + 1
 			}
 			inFence = !inFence
 			continue
@@ -873,42 +933,49 @@ func validate(in inputs, text string, byChapter map[string][]row, known map[stri
 		if inFence {
 			for _, m := range [][]string{machineEdge.FindStringSubmatch(line), machineState.FindStringSubmatch(line)} {
 				for _, state := range m[min(1, len(m)):] {
-					if state != "[*]" && !slices.Contains(current.states, state) {
-						current.states = append(current.states, state)
+					if state != "[*]" && !slices.Contains(s.states, state) {
+						s.states = append(s.states, state)
 					}
 				}
 			}
 			continue
 		}
-		at := fmt.Sprintf("%s:%d", docPath, n+1)
-		if name, ok := strings.CutPrefix(line, "## "); ok {
-			problems = append(problems, current.problems()...)
-			problems = append(problems, current.unmarked(known)...)
-			current = section{name: name, line: n + 1, marked: map[string]bool{}}
-			if !names[name] {
-				problems = append(problems, at+": chapter "+name+" is not in scripts/behavior/main.go")
-			}
+		at := fmt.Sprintf("%s:%d", f.path, n+1)
+		if line == "# "+f.name && s.title == 0 {
+			s.title = n + 1
 		}
 		if strings.HasPrefix(line, "Kinds:") {
-			kindLines += line + "\n"
-			current.kinds = n + 1
+			kindLine += line + "\n"
+			s.kinds = n + 1
 		}
-		if m := newWords.FindStringSubmatch(line); m != nil && current.marked != nil {
+		if m := newWords.FindStringSubmatch(line); m != nil {
 			for _, word := range strings.Split(m[1], ",") {
-				current.marked[strings.TrimSpace(word)] = true
+				s.marked[strings.TrimSpace(word)] = true
 			}
 		}
 		switch {
 		case line == rowHeader:
 			inTable = true
-			if current.table == 0 {
-				current.table = n + 1
+			if s.table != 0 {
+				problems = append(problems, at+": a second table: a chapter has one")
 			}
+			s.table = n + 1
 		case !strings.HasPrefix(line, "|"):
 			inTable = false
-		case inTable && !strings.HasPrefix(line, "|---"):
+		case strings.HasPrefix(line, "|---"):
+		case !inTable:
+			problems = append(problems, at+": a table row outside the chapter's table")
+		default:
 			if p := rowProblem(line); p != "" {
 				problems = append(problems, at+": "+p)
+			}
+			c := cells(line)
+			for _, cell := range []string{c[0], c[min(3, len(c)-1)]} {
+				for _, m := range tick.FindAllStringSubmatch(cell, -1) {
+					if oneWord.MatchString(m[1]) && !known[m[1]] && !s.marked[m[1]] && values[m[1]] == nil {
+						problems = append(problems, at+": no status reason, value or name in the code called "+m[1])
+					}
+				}
 			}
 		}
 		for _, m := range adrRef.FindAllStringSubmatch(line, -1) {
@@ -928,13 +995,7 @@ func validate(in inputs, text string, byChapter map[string][]row, known map[stri
 				}
 			}
 		}
-		for _, m := range link.FindAllStringSubmatch(line, -1) {
-			if !strings.Contains(m[1], "://") {
-				if _, err := os.Stat(filepath.Join(in.root, filepath.Dir(docPath), m[1])); err != nil {
-					problems = append(problems, at+": links to "+m[1]+", which does not exist")
-				}
-			}
-		}
+		problems = append(problems, linkProblems(in, at, line)...)
 		for _, m := range cited.FindAllStringSubmatch(line, -1) {
 			have, ok := values[m[1]]
 			switch {
@@ -946,17 +1007,16 @@ func validate(in inputs, text string, byChapter map[string][]row, known map[stri
 			}
 		}
 	}
-	problems = append(problems, current.problems()...)
-	problems = append(problems, current.unmarked(known)...)
-	if written > maxWritten {
-		problems = append(problems, fmt.Sprintf("%s: the written part is %d lines, over the cap of %d", docPath, written, maxWritten))
-	}
-	for _, k := range in.kinds {
-		if !regexp.MustCompile(`\b` + k + `\b`).MatchString(kindLines) {
-			problems = append(problems, fmt.Sprintf("%s: kind %s is on no chapter's Kinds line", docPath, k))
+	problems = append(problems, s.shape(f.path, f.name)...)
+	for _, state := range s.states {
+		if !known[state] && !s.marked[state] {
+			problems = append(problems, fmt.Sprintf("%s: the machine's state %s is not in the code and the note does not mark it new", f.path, state))
 		}
 	}
-	return problems
+	if written > maxChapter {
+		problems = append(problems, fmt.Sprintf("%s: the written part is %d bytes, over the cap of %d: cut a row or split the chapter", f.path, written, maxChapter))
+	}
+	return problems, kindLine
 }
 
 func sameValue(have, number, unit string) bool {

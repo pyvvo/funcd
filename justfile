@@ -558,12 +558,12 @@ check-hygiene:
 check-specs:
     python3 scripts/specs.py check
 
-# rewrite the generated value blocks of docs/BEHAVIOR.md from the config and the code.
+# rewrite the generated value blocks of docs/behavior from the config and the code.
 [group('design')]
 behavior-values:
     go run ./scripts/behavior
 
-# fail when docs/BEHAVIOR.md no longer matches the code, or a written row does not hold.
+# fail when docs/behavior no longer matches the code, or a written row does not hold.
 [group('design')]
 check-behavior:
     go run ./scripts/behavior -check
