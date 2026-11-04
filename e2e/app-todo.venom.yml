@@ -40,7 +40,7 @@
 #   D16 funcd restore blob --at on the S3 store, to a key's earlier version and to before the key existed; D17 the App swaps a restored copy in through ref, and its Backups
 #       outlive it until their ttl (ADR-0208, ADR-0222).
 #   D18 a new lake is an empty member of the App's backup until its first commit (ADR-0222 Decisions 4, 5, 7).
-#   B1-B12 a Bucket and its Lake, with real rows on real engines, through Function todo-lake-sql (ADR-0312): a Bucket's
+#   B1-B13 a Bucket and its Lake, with real rows on real engines, through Function todo-lake-sql (ADR-0312): a Bucket's
 #       schedule takes its Lake as its own member, and the App's Backup stores it once; a Restore of the Bucket, in place or
 #       as another, leaves its Lakes; the Lake, alone or with the Bucket in either order, gives the Backup's rows on a new
 #       engine, through a commit and a restart; a load skips a prefix a Lake took later; a Lake gone is in its Bucket's copy; a
@@ -87,19 +87,18 @@ testcases:
             for f in planner:todo-planner:1.0.0 rank:todo-rank:1.0.0 warm:todo-warm:1.0.0 intake:todo-intake:1.0.0 stats:todo-stats:1.0.0; do
               funcdctl push functions/py/dist/${f%%:*} {{.reg}}/${f#*:}
             done
-            funcdctl push functions/py-lake/dist/lake_sql {{.reg}}/todo-lake-sql:1.0.0
             funcdctl push --site web {{.reg}}/todo-web:1.0.0' | grep -c "@sha256:"
         info: "pushed → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldEqual 12
+          - result.systemout ShouldEqual 11
       - type: exec
         script: |
           {{.fctl}} app lock /opt/lane/app -f /opt/lane/values/e2e.yaml | grep -E '^[a-z]+ 1[.]0[.]0 sha256:[0-9a-f]{64}$' | cut -d' ' -f1 | paste -sd, -
         info: "app.lock → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldEqual api,collect,intake,lakesql,migrate,planner,rank,stats,warm,web
+          - result.systemout ShouldEqual api,collect,intake,migrate,planner,rank,stats,warm,web
       - type: exec
         script: "{{.fctl}} push --template /opt/lane/app {{.reg}}/todo:1.0.0"
         info: "template → {{.result.systemout}} {{.result.systemerr}}"
@@ -2054,6 +2053,16 @@ testcases:
           - result.systemout ShouldContainSubstring "STORES COPIED"
           - result.systemout ShouldContainSubstring "LAKE LISTED"
           - result.systemout ShouldContainSubstring "LAKE EMPTY"
+      # The lane's client of the Lake stays out of the App, and so out of the lock of every lane that deploys the App.
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            funcdctl push /opt/lane/functions/py-lake/dist/lake_sql {{.reg}}/todo-lake-sql:1.0.0 >/dev/null
+            FUNCD_TOKEN=todo-lane-developer funcdctl apply -f /opt/lane/dr/lake-sql-of-app.yaml'
+        info: "Function todo-lake-sql → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
       # The first commits save the catalog before they answer (ADR-0279).
       - type: http
         method: POST
@@ -2115,13 +2124,13 @@ testcases:
           - result.statuscode ShouldEqual 200
       - type: exec
         script: |
-          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/SCHEDULE/todo-lakehouse-only/; s/BUCKET/todo-lakehouse/" /opt/lane/dr/schedule-of-bucket.yaml | funcdctl apply -f -'
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/fill-schedule/todo-lakehouse-only/; s/fill-bucket/todo-lakehouse/" /opt/lane/dr/schedule-of-bucket.yaml | funcdctl apply -f -'
         info: "apply the schedule → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
       - type: exec
         script: |
-          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/NAME/todo-lakehouse-b1/; s/SCHEDULE/todo-lakehouse-only/" /opt/lane/dr/backup-by-hand.yaml | funcdctl apply -f -'
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/fill-name/todo-lakehouse-b1/; s/fill-schedule/todo-lakehouse-only/" /opt/lane/dr/backup-by-hand.yaml | funcdctl apply -f -'
         info: "apply Backup todo-lakehouse-b1 → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
@@ -2158,7 +2167,7 @@ testcases:
     steps:
       - type: exec
         script: |
-          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/NAME/todo-lake-rows/; s/SCHEDULE/todo-backup/" /opt/lane/dr/backup-by-hand.yaml | funcdctl apply -f -'
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/fill-name/todo-lake-rows/; s/fill-schedule/todo-backup/" /opt/lane/dr/backup-by-hand.yaml | funcdctl apply -f -'
         info: "apply Backup todo-lake-rows → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
@@ -2205,7 +2214,7 @@ testcases:
           - result.statuscode ShouldEqual 200
       - type: exec
         script: |
-          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/NAME/todo-lake-rows-2/; s/SCHEDULE/todo-backup/" /opt/lane/dr/backup-by-hand.yaml | funcdctl apply -f -'
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/fill-name/todo-lake-rows-2/; s/fill-schedule/todo-backup/" /opt/lane/dr/backup-by-hand.yaml | funcdctl apply -f -'
         info: "apply Backup todo-lake-rows-2 → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
@@ -2250,7 +2259,7 @@ testcases:
           - result.systemout ShouldContainSubstring "LAKE RESTORED"
       - type: exec
         script: |
-          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl apply -f /opt/lane/dr/lake-copy.yaml && sed "s/LAKE/todo-lake-r/g" /opt/lane/dr/lake-sql.yaml | funcdctl apply -f -'
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl apply -f /opt/lane/dr/lake-copy.yaml && sed "s/fill-lake/todo-lake-r/g" /opt/lane/dr/lake-sql.yaml | funcdctl apply -f -'
         info: "apply todo-lake-r and its Function → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
@@ -2459,8 +2468,8 @@ testcases:
         script: |
           {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
             set -e
-            sed "s/BUCKET/todo-takeover/" /opt/lane/dr/bucket-of-prefix.yaml | funcdctl apply -f -
-            sed "s/SCHEDULE/todo-takeover-only/; s/BUCKET/todo-takeover/" /opt/lane/dr/schedule-of-bucket.yaml | funcdctl apply -f -
+            sed "s/fill-bucket/todo-takeover/" /opt/lane/dr/bucket-of-prefix.yaml | funcdctl apply -f -
+            sed "s/fill-schedule/todo-takeover-only/; s/fill-bucket/todo-takeover/" /opt/lane/dr/schedule-of-bucket.yaml | funcdctl apply -f -
             install -d /var/lib/funcd/data/blob/s3/default/todo-takeover/gold
             printf v1 >/var/lib/funcd/data/blob/s3/default/todo-takeover/gold/old.txt'
         info: "a Bucket with a plain object on a prefix no Lake owns → {{.result.systemout}} {{.result.systemerr}}"
@@ -2468,7 +2477,7 @@ testcases:
           - result.code ShouldEqual 0
       - type: exec
         script: |
-          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/NAME/todo-takeover-b1/; s/SCHEDULE/todo-takeover-only/" /opt/lane/dr/backup-by-hand.yaml | funcdctl apply -f -'
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/fill-name/todo-takeover-b1/; s/fill-schedule/todo-takeover-only/" /opt/lane/dr/backup-by-hand.yaml | funcdctl apply -f -'
         info: "apply Backup todo-takeover-b1 → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
@@ -2485,9 +2494,9 @@ testcases:
         script: |
           {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
             set -e
-            sed "s/BUCKET/todo-takeover/; s/LAKE/todo-takeover-lake/" /opt/lane/dr/bucket-with-lake.yaml | funcdctl apply -f -
-            sed "s/LAKE/todo-takeover-lake/; s/BUCKET/todo-takeover/; s/PREFIX/gold/" /opt/lane/dr/lake-on-prefix.yaml | funcdctl apply -f -
-            sed "s/LAKE/todo-takeover-lake/g" /opt/lane/dr/lake-sql.yaml | funcdctl apply -f -
+            sed "s/fill-bucket/todo-takeover/; s/fill-lake/todo-takeover-lake/" /opt/lane/dr/bucket-with-lake.yaml | funcdctl apply -f -
+            sed "s/fill-lake/todo-takeover-lake/; s/fill-bucket/todo-takeover/; s/fill-prefix/gold/" /opt/lane/dr/lake-on-prefix.yaml | funcdctl apply -f -
+            sed "s/fill-lake/todo-takeover-lake/g" /opt/lane/dr/lake-sql.yaml | funcdctl apply -f -
             rm -f /var/lib/funcd/data/blob/s3/default/todo-takeover/gold/old.txt'
         info: "the Lake takes the prefix → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
@@ -2521,7 +2530,7 @@ testcases:
           - result.code ShouldEqual 0
       - type: exec
         script: |
-          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; sed "s/NAME/todo-takeover-back/; s/BACKUP/todo-takeover-b1/; s/BUCKET/todo-takeover/" /opt/lane/dr/restore-bucket-in-place.yaml | funcdctl apply -f -'
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; sed "s/fill-name/todo-takeover-back/; s/BACKUP/todo-takeover-b1/; s/fill-bucket/todo-takeover/" /opt/lane/dr/restore-bucket-in-place.yaml | funcdctl apply -f -'
         info: "apply todo-takeover-back → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
@@ -2572,8 +2581,8 @@ testcases:
         script: |
           {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
             set -e
-            sed "s/BUCKET/todo-lakehouse-c/" /opt/lane/dr/bucket-of-prefix.yaml | funcdctl apply -f -
-            sed "s/NAME/todo-lakehouse-copy/; s/BACKUP/todo-lakehouse-b1/; s/BUCKET/todo-lakehouse/; s/TARGET/todo-lakehouse-c/" /opt/lane/dr/restore-bucket-as.yaml | funcdctl apply -f -'
+            sed "s/fill-bucket/todo-lakehouse-c/" /opt/lane/dr/bucket-of-prefix.yaml | funcdctl apply -f -
+            sed "s/fill-name/todo-lakehouse-copy/; s/BACKUP/todo-lakehouse-b1/; s/fill-bucket/todo-lakehouse/; s/fill-target/todo-lakehouse-c/" /opt/lane/dr/restore-bucket-as.yaml | funcdctl apply -f -'
         info: "apply todo-lakehouse-copy → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
@@ -2606,7 +2615,7 @@ testcases:
           - result.code ShouldEqual 0
       - type: exec
         script: |
-          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/NAME/todo-lakehouse-into-r/; s/BACKUP/todo-lakehouse-b1/; s/BUCKET/todo-lakehouse/; s/TARGET/todo-lakehouse-r/" /opt/lane/dr/restore-bucket-as.yaml | funcdctl apply -f -'
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/fill-name/todo-lakehouse-into-r/; s/BACKUP/todo-lakehouse-b1/; s/fill-bucket/todo-lakehouse/; s/fill-target/todo-lakehouse-r/" /opt/lane/dr/restore-bucket-as.yaml | funcdctl apply -f -'
         info: "apply todo-lakehouse-into-r → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
@@ -2629,7 +2638,7 @@ testcases:
           - result.systemout ShouldContainSubstring "SAME ENGINE"
       - type: exec
         script: |
-          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/NAME/todo-lakehouse-into-r-again/; s/BACKUP/todo-lakehouse-b1/; s/BUCKET/todo-lakehouse/; s/TARGET/todo-lakehouse-r/" /opt/lane/dr/restore-bucket-as.yaml | funcdctl apply -f -'
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/fill-name/todo-lakehouse-into-r-again/; s/BACKUP/todo-lakehouse-b1/; s/fill-bucket/todo-lakehouse/; s/fill-target/todo-lakehouse-r/" /opt/lane/dr/restore-bucket-as.yaml | funcdctl apply -f -'
         info: "apply todo-lakehouse-into-r-again → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
@@ -2645,7 +2654,7 @@ testcases:
       # A Lake asLocation where a Lake is located: that path takes no hold, so no engine may stop there (Decision 10).
       - type: exec
         script: |
-          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/NAME/todo-lake-onto-r/; s/BACKUP/todo-lakehouse-b1/; s/LAKE/todo-lake/; s/BUCKET/todo-lakehouse-r/; s/PREFIX/lake/" /opt/lane/dr/restore-lake-as-location.yaml | funcdctl apply -f -'
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/fill-name/todo-lake-onto-r/; s/BACKUP/todo-lakehouse-b1/; s/fill-lake/todo-lake/; s/fill-bucket/todo-lakehouse-r/; s/fill-prefix/lake/" /opt/lane/dr/restore-lake-as-location.yaml | funcdctl apply -f -'
         info: "apply todo-lake-onto-r → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
@@ -2693,9 +2702,9 @@ testcases:
         script: |
           {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
             set -e
-            sed "s/BUCKET/todo-plain/" /opt/lane/dr/bucket-of-prefix.yaml | funcdctl apply -f -
-            sed "s/SCHEDULE/todo-plain-only/; s/BUCKET/todo-plain/" /opt/lane/dr/schedule-of-bucket.yaml | funcdctl apply -f -
-            sed "s/NAME/todo-plain-fill/; s/BACKUP/todo-lake-rows/; s/LAKE/todo-lake/; s/BUCKET/todo-plain/; s/PREFIX/gold/" /opt/lane/dr/restore-lake-as-location.yaml | funcdctl apply -f -'
+            sed "s/fill-bucket/todo-plain/" /opt/lane/dr/bucket-of-prefix.yaml | funcdctl apply -f -
+            sed "s/fill-schedule/todo-plain-only/; s/fill-bucket/todo-plain/" /opt/lane/dr/schedule-of-bucket.yaml | funcdctl apply -f -
+            sed "s/fill-name/todo-plain-fill/; s/BACKUP/todo-lake-rows/; s/fill-lake/todo-lake/; s/fill-bucket/todo-plain/; s/fill-prefix/gold/" /opt/lane/dr/restore-lake-as-location.yaml | funcdctl apply -f -'
         info: "a Lake restored on a prefix no Lake owns → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
@@ -2709,7 +2718,7 @@ testcases:
           - result.systemout ShouldMatchRegex phase.{1,4}Succeeded
       - type: exec
         script: |
-          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/NAME/todo-plain-b1/; s/SCHEDULE/todo-plain-only/" /opt/lane/dr/backup-by-hand.yaml | funcdctl apply -f -'
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/fill-name/todo-plain-b1/; s/fill-schedule/todo-plain-only/" /opt/lane/dr/backup-by-hand.yaml | funcdctl apply -f -'
         info: "apply Backup todo-plain-b1 → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
@@ -2739,8 +2748,8 @@ testcases:
         script: |
           {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
             set -e
-            sed "s/BUCKET/todo-plain-c/" /opt/lane/dr/bucket-of-prefix.yaml | funcdctl apply -f -
-            sed "s/NAME/todo-plain-copy/; s/BACKUP/todo-plain-b1/; s/BUCKET/todo-plain/; s/TARGET/todo-plain-c/" /opt/lane/dr/restore-bucket-as.yaml | funcdctl apply -f -'
+            sed "s/fill-bucket/todo-plain-c/" /opt/lane/dr/bucket-of-prefix.yaml | funcdctl apply -f -
+            sed "s/fill-name/todo-plain-copy/; s/BACKUP/todo-plain-b1/; s/fill-bucket/todo-plain/; s/fill-target/todo-plain-c/" /opt/lane/dr/restore-bucket-as.yaml | funcdctl apply -f -'
         info: "apply todo-plain-copy → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
@@ -2756,9 +2765,9 @@ testcases:
         script: |
           {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
             set -e
-            sed "s/BUCKET/todo-plain-c/; s/LAKE/todo-plain-lake/" /opt/lane/dr/bucket-with-lake.yaml | funcdctl apply -f -
-            sed "s/LAKE/todo-plain-lake/; s/BUCKET/todo-plain-c/; s/PREFIX/gold/" /opt/lane/dr/lake-on-prefix.yaml | funcdctl apply -f -
-            sed "s/LAKE/todo-plain-lake/g" /opt/lane/dr/lake-sql.yaml | funcdctl apply -f -'
+            sed "s/fill-bucket/todo-plain-c/; s/fill-lake/todo-plain-lake/" /opt/lane/dr/bucket-with-lake.yaml | funcdctl apply -f -
+            sed "s/fill-lake/todo-plain-lake/; s/fill-bucket/todo-plain-c/; s/fill-prefix/gold/" /opt/lane/dr/lake-on-prefix.yaml | funcdctl apply -f -
+            sed "s/fill-lake/todo-plain-lake/g" /opt/lane/dr/lake-sql.yaml | funcdctl apply -f -'
         info: "a Lake on that prefix of the copy → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
@@ -2810,10 +2819,10 @@ testcases:
         script: |
           {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
             set -e
-            sed "s/BUCKET/todo-gone/; s/LAKE/todo-gone-lake/" /opt/lane/dr/bucket-with-lake.yaml | funcdctl apply -f -
-            sed "s/SCHEDULE/todo-gone-only/; s/BUCKET/todo-gone/" /opt/lane/dr/schedule-of-bucket.yaml | funcdctl apply -f -
-            sed "s/LAKE/todo-gone-lake/; s/BUCKET/todo-gone/; s/PREFIX/gold/" /opt/lane/dr/lake-on-prefix.yaml | funcdctl apply -f -
-            sed "s/LAKE/todo-gone-lake/g" /opt/lane/dr/lake-sql.yaml | funcdctl apply -f -'
+            sed "s/fill-bucket/todo-gone/; s/fill-lake/todo-gone-lake/" /opt/lane/dr/bucket-with-lake.yaml | funcdctl apply -f -
+            sed "s/fill-schedule/todo-gone-only/; s/fill-bucket/todo-gone/" /opt/lane/dr/schedule-of-bucket.yaml | funcdctl apply -f -
+            sed "s/fill-lake/todo-gone-lake/; s/fill-bucket/todo-gone/; s/fill-prefix/gold/" /opt/lane/dr/lake-on-prefix.yaml | funcdctl apply -f -
+            sed "s/fill-lake/todo-gone-lake/g" /opt/lane/dr/lake-sql.yaml | funcdctl apply -f -'
         info: "a Bucket and its Lake → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
@@ -2850,7 +2859,7 @@ testcases:
           - result.systemout ShouldContainSubstring DELETED
       - type: exec
         script: |
-          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/NAME/todo-gone-b1/; s/SCHEDULE/todo-gone-only/" /opt/lane/dr/backup-by-hand.yaml | funcdctl apply -f -'
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/fill-name/todo-gone-b1/; s/fill-schedule/todo-gone-only/" /opt/lane/dr/backup-by-hand.yaml | funcdctl apply -f -'
         info: "apply Backup todo-gone-b1 → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
@@ -2892,7 +2901,7 @@ testcases:
           - result.code ShouldEqual 0
       - type: exec
         script: |
-          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; sed "s/NAME/todo-gone-back/; s/BACKUP/todo-gone-b1/; s/BUCKET/todo-gone/" /opt/lane/dr/restore-bucket-in-place.yaml | funcdctl apply -f -'
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; sed "s/fill-name/todo-gone-back/; s/BACKUP/todo-gone-b1/; s/fill-bucket/todo-gone/" /opt/lane/dr/restore-bucket-in-place.yaml | funcdctl apply -f -'
         info: "apply todo-gone-back → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
@@ -2912,7 +2921,7 @@ testcases:
           - result.systemout ShouldContainSubstring "PREFIX KEPT"
       - type: exec
         script: |
-          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/LAKE/todo-gone-lake/; s/BUCKET/todo-gone/; s/PREFIX/gold/" /opt/lane/dr/lake-on-prefix.yaml | funcdctl apply -f -'
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/fill-lake/todo-gone-lake/; s/fill-bucket/todo-gone/; s/fill-prefix/gold/" /opt/lane/dr/lake-on-prefix.yaml | funcdctl apply -f -'
         info: "the Lake applied again → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
@@ -2950,8 +2959,8 @@ testcases:
         script: |
           {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
             set -e
-            sed "s/BUCKET/todo-gone-c/" /opt/lane/dr/bucket-of-prefix.yaml | funcdctl apply -f -
-            sed "s/NAME/todo-gone-copy/; s/BACKUP/todo-gone-b1/; s/BUCKET/todo-gone/; s/TARGET/todo-gone-c/" /opt/lane/dr/restore-bucket-as.yaml | funcdctl apply -f -'
+            sed "s/fill-bucket/todo-gone-c/" /opt/lane/dr/bucket-of-prefix.yaml | funcdctl apply -f -
+            sed "s/fill-name/todo-gone-copy/; s/BACKUP/todo-gone-b1/; s/fill-bucket/todo-gone/; s/fill-target/todo-gone-c/" /opt/lane/dr/restore-bucket-as.yaml | funcdctl apply -f -'
         info: "apply todo-gone-copy → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
@@ -2967,9 +2976,9 @@ testcases:
         script: |
           {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
             set -e
-            sed "s/BUCKET/todo-gone-c/; s/LAKE/todo-gone-c-lake/" /opt/lane/dr/bucket-with-lake.yaml | funcdctl apply -f -
-            sed "s/LAKE/todo-gone-c-lake/; s/BUCKET/todo-gone-c/; s/PREFIX/gold/" /opt/lane/dr/lake-on-prefix.yaml | funcdctl apply -f -
-            sed "s/LAKE/todo-gone-c-lake/g" /opt/lane/dr/lake-sql.yaml | funcdctl apply -f -'
+            sed "s/fill-bucket/todo-gone-c/; s/fill-lake/todo-gone-c-lake/" /opt/lane/dr/bucket-with-lake.yaml | funcdctl apply -f -
+            sed "s/fill-lake/todo-gone-c-lake/; s/fill-bucket/todo-gone-c/; s/fill-prefix/gold/" /opt/lane/dr/lake-on-prefix.yaml | funcdctl apply -f -
+            sed "s/fill-lake/todo-gone-c-lake/g" /opt/lane/dr/lake-sql.yaml | funcdctl apply -f -'
         info: "a Lake on that prefix of the copy → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
@@ -3011,11 +3020,11 @@ testcases:
         script: |
           {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
             set -e
-            sed "s/BUCKET/todo-early/; s/LAKE/todo-early-lake/" /opt/lane/dr/bucket-with-lake.yaml | funcdctl apply -f -
-            sed "s/SCHEDULE/todo-early-only/; s/BUCKET/todo-early/" /opt/lane/dr/schedule-of-bucket.yaml | funcdctl apply -f -
+            sed "s/fill-bucket/todo-early/; s/fill-lake/todo-early-lake/" /opt/lane/dr/bucket-with-lake.yaml | funcdctl apply -f -
+            sed "s/fill-schedule/todo-early-only/; s/fill-bucket/todo-early/" /opt/lane/dr/schedule-of-bucket.yaml | funcdctl apply -f -
             install -d /var/lib/funcd/data/blob/s3/default/todo-early/gold
             printf early >/var/lib/funcd/data/blob/s3/default/todo-early/gold/x.txt
-            sed "s/LAKE/todo-early-lake/; s/BUCKET/todo-early/; s/PREFIX/gold/" /opt/lane/dr/lake-on-prefix.yaml | funcdctl apply -f -'
+            sed "s/fill-lake/todo-early-lake/; s/fill-bucket/todo-early/; s/fill-prefix/gold/" /opt/lane/dr/lake-on-prefix.yaml | funcdctl apply -f -'
         info: "a Lake on a prefix that holds an object → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
@@ -3029,7 +3038,7 @@ testcases:
           - result.systemout ShouldMatchRegex phase.{1,4}Ready
       - type: exec
         script: |
-          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/NAME/todo-early-b1/; s/SCHEDULE/todo-early-only/" /opt/lane/dr/backup-by-hand.yaml | funcdctl apply -f -'
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/fill-name/todo-early-b1/; s/fill-schedule/todo-early-only/" /opt/lane/dr/backup-by-hand.yaml | funcdctl apply -f -'
         info: "apply Backup todo-early-b1 → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
@@ -3063,8 +3072,8 @@ testcases:
         script: |
           {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
             set -e
-            sed "s/BUCKET/todo-early-c/" /opt/lane/dr/bucket-of-prefix.yaml | funcdctl apply -f -
-            sed "s/NAME/todo-early-copy/; s/BACKUP/todo-early-b1/; s/LAKE/todo-early-lake/; s/BUCKET/todo-early-c/; s/PREFIX/gold/" /opt/lane/dr/restore-lake-as-location.yaml | funcdctl apply -f -'
+            sed "s/fill-bucket/todo-early-c/" /opt/lane/dr/bucket-of-prefix.yaml | funcdctl apply -f -
+            sed "s/fill-name/todo-early-copy/; s/BACKUP/todo-early-b1/; s/fill-lake/todo-early-lake/; s/fill-bucket/todo-early-c/; s/fill-prefix/gold/" /opt/lane/dr/restore-lake-as-location.yaml | funcdctl apply -f -'
         info: "apply todo-early-copy → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
@@ -3096,7 +3105,7 @@ testcases:
     steps:
       - type: exec
         script: |
-          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; funcdctl apply -f /opt/lane/dr/restore-lake-on-bucket-in-place.yaml'
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; sed "s/fill-bucket/todo-lakehouse/" /opt/lane/dr/restore-lake-on-bucket-in-place.yaml | funcdctl apply -f -'
         info: "the Restore → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldNotEqual 0
@@ -3162,7 +3171,7 @@ testcases:
           - result.code ShouldEqual 0
       - type: exec
         script: |
-          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; sed "s/NAME/todo-lakehouse-back/; s/BACKUP/todo-lakehouse-b1/; s/BUCKET/todo-lakehouse/" /opt/lane/dr/restore-bucket-in-place.yaml | funcdctl apply -f -'
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-admin; sed "s/fill-name/todo-lakehouse-back/; s/BACKUP/todo-lakehouse-b1/; s/fill-bucket/todo-lakehouse/" /opt/lane/dr/restore-bucket-in-place.yaml | funcdctl apply -f -'
         info: "apply todo-lakehouse-back → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
@@ -3266,7 +3275,7 @@ testcases:
             insert=$!
             sleep 1
             s=$(date +%s.%N)
-            sed "s/NAME/todo-lake-rewind/; s/BACKUP/todo-lakehouse-b1/; s/LAKE/todo-lake/" /opt/lane/dr/restore-lake-in-place.yaml | funcdctl apply -f - >/dev/null
+            sed "s/fill-name/todo-lake-rewind/; s/BACKUP/todo-lakehouse-b1/; s/fill-lake/todo-lake/" /opt/lane/dr/restore-lake-in-place.yaml | funcdctl apply -f - >/dev/null
             for i in $(seq 300); do
               [ "$({{.ctr}} task ls | awk "\$1 ~ /^todo-lake-r[0-9]+$/ && \$3 == \"RUNNING\" {print \$2}" | head -1)" != "$p" ] && { echo "ENGINE STOPPED after $(python3 -c "import time; print(round(time.time() - $s, 1))") s"; break; }
               sleep 0.2
@@ -3484,7 +3493,7 @@ testcases:
     steps:
       - type: exec
         script: |
-          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/LAKE/todo-uploads-lake/; s/BUCKET/todo-files/; s/PREFIX/uploads/" /opt/lane/dr/lake-on-prefix.yaml | funcdctl apply -f -'
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/fill-lake/todo-uploads-lake/; s/fill-bucket/todo-files/; s/fill-prefix/uploads/" /opt/lane/dr/lake-on-prefix.yaml | funcdctl apply -f -'
         info: "apply a Lake on uploads → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
@@ -3501,7 +3510,7 @@ testcases:
           - result.systemout ShouldContainSubstring "engines=0."
       - type: exec
         script: |
-          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/NAME/todo-uploads-b1/; s/SCHEDULE/todo-backup/" /opt/lane/dr/backup-by-hand.yaml | funcdctl apply -f -'
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/fill-name/todo-uploads-b1/; s/fill-schedule/todo-backup/" /opt/lane/dr/backup-by-hand.yaml | funcdctl apply -f -'
         info: "apply Backup todo-uploads-b1 → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
@@ -3517,8 +3526,8 @@ testcases:
         script: |
           {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; 
             set -e
-            sed "s/BUCKET/todo-files-u/" /opt/lane/dr/bucket-of-prefix.yaml | funcdctl apply -f -
-            sed "s/NAME/todo-uploads-copy/; s/BACKUP/todo-uploads-b1/; s/BUCKET/todo-files/; s/TARGET/todo-files-u/" /opt/lane/dr/restore-bucket-as.yaml | funcdctl apply -f -'
+            sed "s/fill-bucket/todo-files-u/" /opt/lane/dr/bucket-of-prefix.yaml | funcdctl apply -f -
+            sed "s/fill-name/todo-uploads-copy/; s/BACKUP/todo-uploads-b1/; s/fill-bucket/todo-files/; s/fill-target/todo-files-u/" /opt/lane/dr/restore-bucket-as.yaml | funcdctl apply -f -'
         info: "apply todo-uploads-copy → {{.result.systemout}} {{.result.systemerr}}"
         assertions:
           - result.code ShouldEqual 0
