@@ -307,7 +307,7 @@ func TestScenarioSurpriseLookedUp(t *testing.T) {
 	require.True(t, ok)
 	functions, _, _ = strings.Cut(functions, "\n## ")
 	require.Contains(t, functions, "`invoke.activationTimeout` 30 s", "a 503 after 30 s has a row")
-	require.Contains(t, functions, "`TestScenarioActivationTimeout`", "and the row says what to read next")
+	require.Contains(t, functions, "ADR-0161 Decision 4", "and the row says what to read next")
 }
 
 func TestValues(t *testing.T) {
