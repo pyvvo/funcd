@@ -226,4 +226,8 @@ func TestRestore_RefusesALakeOnABucketInPlace(t *testing.T) {
 		require.ErrorContains(t, err, `asLocation is on Bucket "data"`, name)
 	}
 	require.NoError(t, restore(RestoreMember{Kind: KindBucket, Name: "data", As: "data-r"}, lake).Validate())
+	bucketAs := RestoreMember{Kind: KindBucket, Name: "data", As: "data-r"}
+	lakeOnIt := RestoreMember{Kind: KindLake, Name: "sales", AsLocation: &LakeLocation{Bucket: "data-r", Prefix: "gold"}}
+	require.NoError(t, restore(bucketAs, lakeOnIt).Validate(), "a whole copy elsewhere is the Bucket as a new name and its Lake on that name")
+	require.NoError(t, restore(lakeOnIt, bucketAs).Validate())
 }

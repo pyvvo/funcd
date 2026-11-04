@@ -245,8 +245,8 @@ func (s *blobProvider) Facet() local.Facet {
 	return local.BlobFacet(s.facade)
 }
 
-// BackupKinds is the Bucket kind over the blob substrate, with the catalogs of its Lakes, which its purge takes too
-// (ADR-0293 Decision 5, #1383).
+// BackupKinds is the Bucket kind over the blob substrate, with the catalogs of the prefixes no Lake of it is located on
+// (ADR-0293 Decision 6, ADR-0312).
 func (s *blobProvider) BackupKinds() []workload.MemberKind {
 	return []workload.MemberKind{workload.Buckets(s.cfg.store, s.cfg.blob, bucketPrefix, bucketCatalogPrefix)}
 }

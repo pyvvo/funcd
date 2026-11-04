@@ -217,7 +217,8 @@ func TestScenarioNamingTheLakeRollsItBack(t *testing.T) {
 
 // scenario: bucket-restored-as-carries-no-lake (ADR-0312) — data restored as data-r, which holds only a Lake of its own, gets
 // notes.txt and gold2/x, its Lake stays, and a second Restore is NotEmpty; naming sales asLocation too brings f1 and C1 to
-// a free prefix.
+// a free prefix. One Restore that names the Bucket as a new name and its Lake on that name brings the whole copy there, in
+// either order.
 func TestScenarioBucketRestoredAsCarriesNoLake(t *testing.T) {
 	t.Parallel()
 	const ownFile, ownCatalog = "s3/orders/data-r/own/o1", "lake-catalogs/orders/data-r/own/_ducklake/catalog.db"
@@ -227,6 +228,7 @@ func TestScenarioBucketRestoredAsCarriesNoLake(t *testing.T) {
 			Prefixes: []v1.BucketPrefix{{Name: "own", Owner: v1.LakeOwner("own-lake")}, {Name: "free"}}}}, lakeNamed("own-lake", "data-r", "own"))
 		r.putBlob(ownFile, "o1")
 		r.putBlob(ownCatalog, "O1")
+		r.seed(&v1.Bucket{TypeMeta: tmeta(v1.KindBucket), ObjectMeta: ordersMeta("whole-a")}, &v1.Bucket{TypeMeta: tmeta(v1.KindBucket), ObjectMeta: ordersMeta("whole-b")})
 	}})
 	r.dataSchedule("data-nightly")
 	r.create(r.dev, r.backupObj("b1", "data-nightly"))
@@ -246,6 +248,21 @@ func TestScenarioBucketRestoredAsCarriesNoLake(t *testing.T) {
 		AsLocation: &v1.LakeLocation{Bucket: "data-r", Prefix: "free"}}))
 	r.waitRestore("lake-copy", v1.RunSucceeded)
 	require.Equal(t, []string{"f1", "C1"}, []string{r.blobAt("s3/orders/data-r/free/f1"), r.blobAt("lake-catalogs/orders/data-r/free/_ducklake/catalog.db")})
+
+	for dest, bucketFirst := range map[v1.ObjectName]bool{"whole-a": true, "whole-b": false} {
+		bucket := v1.RestoreMember{Kind: v1.KindBucket, Name: "data", As: dest}
+		lake := v1.RestoreMember{Kind: v1.KindLake, Name: "sales", AsLocation: &v1.LakeLocation{Bucket: dest, Prefix: "gold"}}
+		rs := r.restoreObj("copy-"+string(dest), "b1", bucket)
+		rs.Spec.Members = []v1.RestoreMember{lake, bucket}
+		if bucketFirst {
+			rs.Spec.Members = []v1.RestoreMember{bucket, lake}
+		}
+		r.create(r.dev, rs)
+		r.waitRestore(v1.ObjectName("copy-"+string(dest)), v1.RunSucceeded)
+		root, catalogs := "s3/orders/"+string(dest)+"/", "lake-catalogs/orders/"+string(dest)+"/"
+		require.Equal(t, []string{"n", "x", "f1", "C1"}, []string{r.blobAt(root + "notes.txt"), r.blobAt(root + "gold2/x"), r.blobAt(root + "gold/f1"),
+			r.blobAt(catalogs + "gold/_ducklake/catalog.db")}, "%s holds the whole copy", dest)
+	}
 }
 
 // ADR-0312 Decision 10: a Lake restored asLocation where a Lake is located is NotEmpty, that prefix empty or not: no hold
