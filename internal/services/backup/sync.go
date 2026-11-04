@@ -52,7 +52,7 @@ func (r *ScheduleReconciler) sync(ctx context.Context, s *v1.BackupSchedule) {
 	}
 	var copies []workload.Copy
 	err := r.onTarget(ctx, s, func(target blob.Bucket) (err error) {
-		copies, err = workload.SlotCopies(ctx, target, s.Namespace, s.Name, last, r.d.Kinds)
+		copies, err = workload.SlotCopies(ctx, target, s.Namespace, s.Name, last, r.d.Kinds, r.d.Limits)
 		return err
 	})
 	if ctx.Err() != nil {
@@ -163,7 +163,7 @@ func (r *BackupReconciler) recoverCopy(ctx context.Context, b *v1.Backup, start 
 	}
 	var c workload.Copy
 	err = r.onTarget(ctx, s, func(target blob.Bucket) (err error) {
-		c, err = workload.ListCopy(ctx, target, copyPath(b), r.d.Kinds)
+		c, err = workload.ListCopy(ctx, target, copyPath(b), r.d.Kinds, r.d.Limits)
 		return err
 	})
 	switch {

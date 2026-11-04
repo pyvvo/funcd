@@ -158,7 +158,7 @@ func (r *BackupReconciler) copy(ctx context.Context, b *v1.Backup) (string, erro
 	if err != nil {
 		return reasonFailed, err
 	}
-	members, err := workload.Resolve(ctx, r.d.Store, b.Namespace, s.Spec.Scope)
+	members, err := workload.Resolve(ctx, r.d.Store, b.Namespace, s.Spec.Scope, r.d.Limits)
 	if fault.KindOf(err) == fault.NotFound {
 		return ReasonMemberNotFound, err
 	}

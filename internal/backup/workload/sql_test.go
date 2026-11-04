@@ -101,12 +101,12 @@ func TestResolveDatabases(t *testing.T) {
 	db := &v1.SQLDatabase{TypeMeta: tm(v1.KindSQLDatabase), ObjectMeta: meta("todo-db", "rg")}
 	_, err := st.Create(ctx, db)
 	require.NoError(t, err)
-	ms, err := workload.Resolve(ctx, st, "orders", v1.BackupScope{Databases: []v1.ObjectName{"todo-db"}})
+	ms, err := workload.Resolve(ctx, st, "orders", v1.BackupScope{Databases: []v1.ObjectName{"todo-db"}}, workload.DefaultLimits())
 	require.NoError(t, err)
 	require.Equal(t, []workload.Member{{Kind: v1.KindSQLDatabase, Name: "todo-db"}}, ms)
-	ms, err = workload.Resolve(ctx, st, "orders", v1.BackupScope{ResourceGroup: "rg"})
+	ms, err = workload.Resolve(ctx, st, "orders", v1.BackupScope{ResourceGroup: "rg"}, workload.DefaultLimits())
 	require.NoError(t, err)
 	require.Equal(t, []workload.Member{{Kind: v1.KindSQLDatabase, Name: "todo-db"}}, ms, "a ResourceGroup scope includes its databases")
-	_, err = workload.Resolve(ctx, st, "orders", v1.BackupScope{Databases: []v1.ObjectName{"gone-db"}})
+	_, err = workload.Resolve(ctx, st, "orders", v1.BackupScope{Databases: []v1.ObjectName{"gone-db"}}, workload.DefaultLimits())
 	require.Equal(t, fault.NotFound, fault.KindOf(err))
 }

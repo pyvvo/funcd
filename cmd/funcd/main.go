@@ -38,6 +38,7 @@ import (
 	"github.com/pyvvo/funcd/internal/backup/blobmirror"
 	"github.com/pyvvo/funcd/internal/backup/envelope"
 	"github.com/pyvvo/funcd/internal/backup/runner"
+	"github.com/pyvvo/funcd/internal/backup/workload"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
 	"github.com/pyvvo/funcd/internal/bus"
@@ -588,6 +589,11 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 		return nil, noopClose, nil, "", err
 	}
 	opts = append(opts, funcd.WithLakeCatalogMaxBytes(catalogMax))
+	limits, err := workloadBackupLimits(cfg)
+	if err != nil {
+		return nil, noopClose, nil, "", err
+	}
+	opts = append(opts, funcd.WithWorkloadBackupLimits(limits))
 	// The free space kept on the data filesystem for funcd's own stores (ADR-0296); memory mode has no data filesystem.
 	minFree, err := cfg.StorageMinFreeBytes()
 	if err != nil {
@@ -985,6 +991,15 @@ func pacing(cfg config.Config) (funcd.Pacing, error) {
 		return funcd.Pacing{}, refuse("health.storageProbeTimeout", p.StorageProbeTimeout, "less than health.storageProbeInterval, "+p.StorageProbeInterval.String())
 	}
 	return p, nil
+}
+
+// workloadBackupLimits is what a BackupSchedule's target may hold: the workloadBackup keys, checked by the config loader.
+func workloadBackupLimits(cfg config.Config) (workload.Limits, error) {
+	keyBytes, err := cfg.WorkloadBackupMaxListedKeyBytes()
+	if err != nil {
+		return workload.Limits{}, err
+	}
+	return workload.Limits{CopyMembers: cfg.WorkloadBackup.MaxCopyMembers, ListedKeys: cfg.WorkloadBackup.MaxListedKeys, ListedKeyBytes: keyBytes}, nil
 }
 
 // The config duration bounds (ADR-0194): minPositive for a key that must be positive, maxStopGrace for

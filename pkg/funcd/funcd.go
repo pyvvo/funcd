@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/pyvvo/funcd/internal/backup/workload"
 	"github.com/pyvvo/funcd/internal/ownedstore"
 	"io"
 	"log/slog"
@@ -263,6 +264,8 @@ type config struct {
 	// blobStoreURL is the blob store's URL (WithBlobStoreURL): a BackupSchedule's target is compared with it
 	// (ADR-0222 Decision 6); "" compares with nothing.
 	blobStoreURL string
+	// workloadBackupLimits bound one listing of a target and one copy (WithWorkloadBackupLimits); a zero field is its default.
+	workloadBackupLimits workload.Limits
 	// backupClock reads the workload backups' times and backupMeter takes their metrics (ADR-0222); nil ⇒
 	// clock.System() and the telemetry's meter.
 	backupClock clock.Clock
@@ -1852,7 +1855,7 @@ func LakeData(key string) (prefix string, ok bool) {
 func (p *Platform) registerWorkloadBackups(ctrl *controller.Controller, secrets backupsvc.SecretReader) error {
 	c := p.cfg
 	d := backupsvc.Deps{
-		Store: c.store, Secrets: secrets, StoreURL: c.blobStoreURL,
+		Store: c.store, Secrets: secrets, StoreURL: c.blobStoreURL, Limits: c.workloadBackupLimits,
 		Period: c.pacing.SupervisionPeriod, Clock: c.backupClock, Meter: c.backupMeter, Logger: p.logger,
 	}
 	for _, h := range lifecycle.Each[backupHook](p.phases) {
