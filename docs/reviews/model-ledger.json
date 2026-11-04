@@ -13498,5 +13498,20 @@
     "dod_total": 13,
     "report": "docs/reviews/adr-0311-implementation-claude-opus-5-5.md",
     "notes": "pass with no finding; builder's 26 mutants and the reviewer's 4 caught; gate PASS"
+  },
+  {
+    "date": "2026-11-04",
+    "adr": "0312",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 3,
+    "model_attributed": 3,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/adr-0312-implementation-claude-opus-5-5.md",
+    "notes": "pass with 3 minors, all model: a stale comment, an unstated CatalogSaved removal, no test of a Bucket as and a Lake asLocation in one Restore; the builder's 44 mutants and the reviewer's 70, one survivor; the gate runs on the PR's tip"
   }
 ]
