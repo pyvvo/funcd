@@ -17,26 +17,30 @@ stateDiagram-v2
     state "released" as s7
     state "running" as s8
     state "stopped" as s9
-    state "waited" as s10
+    state "stopping" as s10
+    state "waited" as s11
     [*] --> s8
     s0 --> s2 : FailOrStop
     s0 --> s5 : Load
-    s1 --> s1 : Commit, EngineDies, PassBegin, PassStartsEngine, Save
-    s2 --> s2 : EngineDies, PassBegin, PassStartsEngine
+    s1 --> s1 : Commit, EngineDies, PassBegin, PassEnsures, PassStartsEngine, Save
+    s2 --> s2 : EngineDies, EngineExits, PassBegin, PassEnsures, PassStartsEngine
     s2 --> s7 : OperatorRelease
-    s3 --> s3 : EngineDies, PassBegin, PassStartsEngine
+    s3 --> s3 : EngineDies, PassBegin, PassEnsures, PassStartsEngine
     s3 --> s6 : Mark
     s4 --> s1 : Release
     s5 --> s4 : LiftHold
-    s6 --> s6 : EngineDies, PassStartsEngine
-    s6 --> s10 : WaitForThePass
-    s7 --> s7 : EngineDies, PassBegin, PassStartsEngine
+    s6 --> s6 : EngineDies, PassEnsures, PassStartsEngine
+    s6 --> s11 : WaitForThePass
+    s7 --> s7 : EngineDies, EngineExits, PassBegin, PassEnsures, PassStartsEngine
     s8 --> s3 : Hold
-    s8 --> s8 : EngineDies, PassBegin, PassStartsEngine
+    s8 --> s8 : EngineDies, PassBegin, PassEnsures, PassStartsEngine
     s9 --> s0 : Clear
     s9 --> s2 : FailOrStop
-    s10 --> s9 : Stop
-    s10 --> s10 : EngineDies
+    s10 --> s2 : FailOrStop
+    s10 --> s9 : StopReturns
+    s10 --> s10 : EngineDies, EngineExits
+    s11 --> s10 : Stop
+    s11 --> s11 : EngineDies
     s1 --> [*]
     s7 --> [*]
 ```

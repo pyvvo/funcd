@@ -23,7 +23,7 @@ stateDiagram-v2
     s2 --> s2 : ChangeLake
     s3 --> s3 : ChangeLake
     s4 --> s3 : Clear
-    s4 --> s4 : ChangeLake, Clear
+    s4 --> s4 : ChangeLake
     s5 --> s2 : Load
     s5 --> s4 : FailLoad
     s5 --> s5 : ChangeLake, Clear, Load
@@ -31,6 +31,4 @@ stateDiagram-v2
     s6 --> s7 : Resolve
     s7 --> s1 : WalkBucket
     s7 --> s7 : ChangeLake
-    s2 --> [*]
-    s3 --> [*]
 ```

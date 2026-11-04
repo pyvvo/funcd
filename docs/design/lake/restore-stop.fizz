@@ -1,29 +1,37 @@
 ---
 # A Lake's engine against an in-place Restore of that Lake (ADR-0312 Decision 9, #1384). The engine reads the store's
 # catalog into a local file at its start and uploads that file at each save and at its stop, whatever the store holds.
-# A Restore holds the namespace, marks the Lake, waits for a pass already starting an engine, stops the engine, clears
-# and loads the store's catalog, lifts the hold and releases the mark. A reconcile pass runs on its own goroutine: it
-# checks the mark, then starts an engine when none runs, which reads the store then. An engine may die at any time. A
-# load may fail or funcd may stop during it: the hold stays until an operator's release, and the mark, held in memory, is
-# gone. Environment: a save or a stop's save under the hold gets 503 (ADR-0290), so a stop leaves the store as it was; the
-# runtime bounds a stop by its grace (ADR-0277). Left out: queries, which the hold and the gate refuse (left to the lane's
-# Lake-alone case), and the partial load itself, which ADR-0228's marker fences.
+# A Restore holds the namespace, marks the Lake, waits until a pass in flight returns, suspends the proxy and tears the
+# engine down itself, which takes time and returns only once the engine is gone, clears and loads the store's catalog,
+# lifts the hold and releases the mark. A reconcile pass runs on its own goroutine: it checks the mark, and a marked pass
+# only requeues; else it starts an engine when none runs, which reads the store then, and ensures the proxy, which lifts
+# its suspension, and returns. An engine may die at any time. A stop may fail, a load may fail, or funcd may stop: the
+# hold stays until an operator's release, and the mark, held in memory, is gone. Environment: a save or a stop's save
+# under the hold gets 503 (ADR-0290), so a stop leaves the store as it was; the runtime bounds a stop by its grace
+# (ADR-0277). Left out: queries, which the hold and the gate refuse (left to the lane's Lake-alone case), the status
+# write, which cannot stop the Teardown (left to TestIssue1384_StopEngineReturnsOnceTheEngineIsGone), and the partial load
+# itself, which ADR-0228's marker fences.
 deadlock_detection: false
 options:
   max_concurrent_actions: 1
-  max_actions: 16
+  max_actions: 18
   crash_on_yield: false
 ---
 # diagram: phase
 # mutant no-stop: NoStaleEngineOverTheCopy
 # mutant no-mark: NoStaleEngineOverTheCopy
 # mutant no-wait: NoStaleEngineOverTheCopy
+# mutant stop-returns-early: NoStaleEngineOverTheCopy
+# mutant count-until-converge: TheProxyStaysSuspended
 # mutant never-released: liveness
 
 COPY = ["copy", "copy+"]
 # no-stop: the engine keeps running through the load (#1384).
 # no-mark: the stop keeps no pass from starting an engine, so supervision brings one up during the load.
 # no-wait: the stop does not wait for a pass already starting an engine (#1206's race).
+# stop-returns-early: the stop returns with the engine still stopping (a status write's Conflict, or a marked pass that
+#   owns the Teardown), so it survives into the load and its next save lands once the hold lifts.
+# count-until-converge: the wait counts a pass only until its Converge returns, so its late Ensure lifts the suspension.
 # never-released: the mark outlives a completed Restore, so no engine comes back.
 MUTANT = ""
 
@@ -32,7 +40,10 @@ action Init:
     engine = "old"
     held = False
     marked = False
-    passing = False
+    suspended = False
+    starting = False
+    ensuring = False
+    stopping = False
     phase = "running"
     dies = 0
     commits = 0
@@ -50,14 +61,28 @@ atomic fair action Mark:
 atomic fair action WaitForThePass:
     require phase == "marked"
     if MUTANT != "no-wait":
-        require not passing
+        require not starting
+        if MUTANT != "count-until-converge":
+            require not ensuring
     phase = "waited"
 
-# Synchronous: its last save gets the hold's 503.
+# The Teardown begins; the engine's last save gets the hold's 503.
 atomic fair action Stop:
     require phase == "waited"
+    suspended = True
+    stopping = True
+    phase = "stopping"
+
+atomic fair action EngineExits:
+    require stopping
     if MUTANT != "no-stop":
         engine = ""
+    stopping = False
+
+atomic fair action StopReturns:
+    require phase == "stopping"
+    if MUTANT != "stop-returns-early":
+        require not stopping
     phase = "stopped"
 
 atomic fair action Clear:
@@ -81,7 +106,7 @@ atomic fair action Release:
     phase = "done"
 
 atomic action FailOrStop:
-    require phase in ["stopped", "cleared"]
+    require phase in ["stopping", "stopped", "cleared"]
     marked = False
     phase = "failed"
 
@@ -91,13 +116,19 @@ atomic fair action OperatorRelease:
     phase = "released"
 
 atomic fair action PassBegin:
-    require engine == "" and not passing and not marked
-    passing = True
+    require engine == "" and not starting and not ensuring and not marked
+    starting = True
 
 atomic fair action PassStartsEngine:
-    require passing
+    require starting
     engine = store
-    passing = False
+    starting = False
+    ensuring = True
+
+atomic fair action PassEnsures:
+    require ensuring
+    suspended = False
+    ensuring = False
 
 atomic action EngineDies:
     require engine != "" and dies == 0
@@ -122,6 +153,12 @@ always assertion NoStaleEngineOverTheCopy:
         return engine in ["", "copy", "copy+"] and store in COPY
     return True
 
-# Every Restore ends, completed or released by an operator, with an engine running.
+# From the stop on, no late pass lifts the proxy's suspension before the mark is released.
+always assertion TheProxyStaysSuspended:
+    if phase in ["stopped", "cleared", "loaded", "lifted"]:
+        return suspended
+    return True
+
+# Every Restore ends, completed or released by an operator, with an engine running behind a proxy that forwards.
 eventually always assertion AnEngineComesBack:
-    return phase in ["done", "released"] and engine != ""
+    return phase in ["done", "released"] and engine != "" and not suspended
