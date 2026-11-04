@@ -154,7 +154,7 @@ func TestKinds_ATestKindNeedsNoServiceCode(t *testing.T) {
 	b, secrets := kindsCopy(t, []workload.Member{{Kind: kindTestStore, Name: "a"}, {Kind: kindTestStore, Name: "b"}}, kind)
 	src, err := gocloud.OpenWith(ctx, b.Status.Target, gocloud.OpenOptions{Static: &gocloud.StaticKey{ID: "AKIDOWNER", Secret: "s"}})
 	require.NoError(t, err)
-	c, err := workload.ListCopy(ctx, src, b.Status.Path, []workload.MemberKind{kind})
+	c, err := workload.ListCopy(ctx, src, b.Status.Path, []workload.MemberKind{kind}, workload.DefaultLimits())
 	require.NoError(t, err)
 	require.True(t, c.Whole)
 	require.Equal(t, []v1.ObjectName{"a", "b"}, []v1.ObjectName{c.Members[0].Name, c.Members[1].Name})

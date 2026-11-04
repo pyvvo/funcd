@@ -893,7 +893,7 @@ func TestBackup_GoesOnWhenItsListingFails(t *testing.T) {
 			const object = `<LastModified>2026-11-04T00:00:00.000Z</LastModified><Size>1</Size></Contents>`
 			var sb strings.Builder
 			sb.WriteString(head + `<Contents><Key>` + prefix + `manifest.yaml</Key>` + object)
-			for i := range workload.MaxCopyMembers + 1 {
+			for i := range workload.DefaultLimits().CopyMembers + 1 {
 				fmt.Fprintf(&sb, `<Contents><Key>%skv/m-%d/part-00000</Key>%s`, prefix, i, object)
 			}
 			return sb.String() + `</ListBucketResult>`
@@ -916,7 +916,7 @@ func TestBackup_GoesOnWhenItsListingFails(t *testing.T) {
 			r.create(r.dev, r.backupObj("b1", "listed"))
 			b := r.waitBackup("b1", v1.RunSucceeded)
 			require.NotEqual(t, v1.ReasonFoundOnTarget, reason(b.Status.Status))
-			require.Less(t, len(b.Status.Members), workload.MaxCopyMembers)
+			require.Less(t, len(b.Status.Members), workload.DefaultLimits().CopyMembers)
 		})
 	}
 }
@@ -925,7 +925,7 @@ func TestBackup_GoesOnWhenItsListingFails(t *testing.T) {
 func TestBackup_FailsOnAScopeOverACopysMembers(t *testing.T) {
 	t.Parallel()
 	r := newWBRig(t, wbOptions{})
-	for i := range workload.MaxCopyMembers + 1 {
+	for i := range workload.DefaultLimits().CopyMembers + 1 {
 		meta := ordersMeta(fmt.Sprintf("large-%d", i))
 		meta.ResourceGroup = "large"
 		_, err := r.st.Create(r.ctx, &v1.KVStore{TypeMeta: tmeta(v1.KindKVStore), ObjectMeta: meta})
@@ -937,8 +937,78 @@ func TestBackup_FailsOnAScopeOverACopysMembers(t *testing.T) {
 	r.create(r.dev, r.backupObj("b1", "large"))
 	b := r.waitBackup("b1", v1.RunFailed)
 	ready, _ := b.Status.Conditions.Get("Ready")
-	require.Contains(t, ready.Message, fmt.Sprint(workload.MaxCopyMembers))
+	require.Contains(t, ready.Message, fmt.Sprint(workload.DefaultLimits().CopyMembers))
 	require.Empty(t, r.stub.Keys(""))
+}
+
+// WithWorkloadBackupLimits reaches a Backup: a scope over the limit it sets fails, naming it, and writes no copy; one within it is
+// copied.
+func TestBackup_FollowsTheLimitsItIsGiven(t *testing.T) {
+	t.Parallel()
+	r := newWBRig(t, wbOptions{opts: []Option{WithWorkloadBackupLimits(workload.Limits{CopyMembers: 1})}})
+	for _, name := range []string{"one", "two"} {
+		meta := ordersMeta(name)
+		meta.ResourceGroup = "pair"
+		_, err := r.st.Create(r.ctx, &v1.KVStore{TypeMeta: tmeta(v1.KindKVStore), ObjectMeta: meta})
+		require.NoError(t, err)
+	}
+	r.create(r.dev, r.schedule("pair", "0 3 * * *", func(s *v1.BackupScheduleSpec) {
+		s.Scope = v1.BackupScope{ResourceGroup: "pair"}
+	}))
+	r.create(r.dev, r.backupObj("over", "pair"))
+	over := r.waitBackup("over", v1.RunFailed)
+	ready, _ := over.Status.Conditions.Get("Ready")
+	require.Contains(t, ready.Message, "2 members, more than the 1 one copy may hold")
+	require.Empty(t, r.stub.Keys(""))
+
+	r.create(r.dev, r.schedule("single", "0 3 * * *", func(s *v1.BackupScheduleSpec) {
+		s.Scope = v1.BackupScope{KVStores: []v1.ObjectName{"one"}}
+	}))
+	r.create(r.dev, r.backupObj("within", "single"))
+	require.Len(t, r.waitBackup("within", v1.RunSucceeded).Status.Members, 1)
+}
+
+// WithWorkloadBackupLimits reaches a Backup's look at its own copy on the target: within the limit it records the copy, and over
+// it the listing fails and the Backup goes on with its own.
+func TestBackup_ListsItsCopyUnderTheLimitsItIsGiven(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		listedKeys int
+		found      bool
+	}{
+		"within": {listedKeys: 2, found: true},
+		"over":   {listedKeys: 1, found: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newWBRig(t, wbOptions{opts: []Option{WithWorkloadBackupLimits(workload.Limits{ListedKeys: c.listedKeys})}})
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				if !req.URL.Query().Has("list-type") {
+					r.stub.ServeHTTP(w, req)
+					return
+				}
+				const object = `<LastModified>2026-11-04T00:00:00.000Z</LastModified><Size>1</Size></Contents>`
+				prefix := req.URL.Query().Get("prefix")
+				_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>b</Name>` +
+					`<Contents><Key>` + prefix + `kv/m-0/part-00000</Key>` + object +
+					`<Contents><Key>` + prefix + `manifest.yaml</Key>` + object + `</ListBucketResult>`))
+			}))
+			t.Cleanup(srv.Close)
+			r.create(r.dev, r.schedule("listed", "0 3 * * *", func(s *v1.BackupScheduleSpec) {
+				s.Target.URL = strings.Replace(r.stub.URL(), r.stub.Endpoint(), srv.URL, 1)
+			}))
+			r.create(r.dev, r.backupObj("b1", "listed"))
+			require.Equal(t, c.found, reason(r.waitBackup("b1", v1.RunSucceeded).Status.Status) == v1.ReasonFoundOnTarget)
+		})
+	}
+}
+
+func TestWithWorkloadBackupLimits_RefusesANegativeLimit(t *testing.T) {
+	t.Parallel()
+	for _, l := range []workload.Limits{{CopyMembers: -1}, {ListedKeys: -1}, {ListedKeyBytes: -1}} {
+		require.Equal(t, fault.Invalid, fault.KindOf(WithWorkloadBackupLimits(l)(&config{})), "%+v", l)
+	}
+	require.NoError(t, WithWorkloadBackupLimits(workload.Limits{})(&config{}))
 }
 
 // cleanupBucket is the shared blob store with a DuckLake cleanup that runs once, the first time f1 is read after

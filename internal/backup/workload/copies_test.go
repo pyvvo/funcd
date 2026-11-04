@@ -55,7 +55,7 @@ func TestFindSlotsSkipsOtherSchedules(t *testing.T) {
 	put(t, b, "orders/"+string(v1.BackupSlotName("a", slot(4))), 1)
 	put(t, b, "orders/"+string(v1.BackupSlotName("a", slot(5)))+"-short/manifest.yaml", 1)
 
-	got, err := workload.SlotCopies(ctx, b, "orders", "a", after, kinds())
+	got, err := workload.SlotCopies(ctx, b, "orders", "a", after, kinds(), workload.DefaultLimits())
 	require.NoError(t, err)
 	var names []v1.ObjectName
 	var whole []bool
@@ -87,7 +87,7 @@ func TestListCopyMembers(t *testing.T) {
 	put(t, b, d+"sql/notes-db/part-00000", 13)
 	put(t, b, d+"volume/fn/data/part-00000", 17)
 
-	c, err := workload.ListCopy(ctx, b, d, kinds())
+	c, err := workload.ListCopy(ctx, b, d, kinds(), workload.DefaultLimits())
 	require.NoError(t, err)
 	require.False(t, c.Whole, "no manifest yet")
 	require.Equal(t, []v1.BackupMember{
@@ -101,12 +101,12 @@ func TestListCopyMembers(t *testing.T) {
 	require.Equal(t, v1.UID(uid1), c.UID)
 
 	put(t, b, d+"manifest.yaml", 1)
-	c, err = workload.ListCopy(ctx, b, d, kinds())
+	c, err = workload.ListCopy(ctx, b, d, kinds(), workload.DefaultLimits())
 	require.NoError(t, err)
 	require.True(t, c.Whole)
 	require.False(t, c.Completed.IsZero())
 
-	_, err = workload.ListCopy(ctx, b, "orders/b1/", kinds())
+	_, err = workload.ListCopy(ctx, b, "orders/b1/", kinds(), workload.DefaultLimits())
 	require.Error(t, err)
 }
 
@@ -123,37 +123,37 @@ func (b *pagedKeys) ListAfter(_ context.Context, _, _ string, limit int) ([]blob
 	return slices.Repeat([]blob.Attributes{{Key: b.key}}, n), b.left > 0, nil
 }
 
-// A listing of MaxListedKeys keys is read; one key more fails it, naming what it listed, whatever the target goes on answering.
+// A listing of its limit of keys is read; one key more fails it, naming what it listed, whatever the target goes on answering.
 func TestSlotCopies_RefusesAListingOverItsLimit(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	const key = "orders/a-not-a-copy/k"
-	_, err := workload.SlotCopies(ctx, &pagedKeys{key: key, left: workload.MaxListedKeys}, "orders", "a", time.Time{}, kinds())
+	_, err := workload.SlotCopies(ctx, &pagedKeys{key: key, left: workload.DefaultLimits().ListedKeys}, "orders", "a", time.Time{}, kinds(), workload.DefaultLimits())
 	require.NoError(t, err)
 
-	target := &pagedKeys{key: key, left: workload.MaxListedKeys * 2}
-	_, err = workload.SlotCopies(ctx, target, "orders", "a", time.Time{}, kinds())
+	target := &pagedKeys{key: key, left: workload.DefaultLimits().ListedKeys * 2}
+	_, err = workload.SlotCopies(ctx, target, "orders", "a", time.Time{}, kinds(), workload.DefaultLimits())
 	require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
 	require.ErrorContains(t, err, `"orders/a-"`)
-	require.Greater(t, target.left, workload.MaxListedKeys-2*1000, "it stopped at the limit")
+	require.Greater(t, target.left, workload.DefaultLimits().ListedKeys-2*1000, "it stopped at the limit")
 }
 
-// A listing of MaxListedKeyBytes bytes of keys is read; one key more fails it.
+// A listing of its limit of bytes of keys is read; one key more fails it.
 func TestSlotCopies_RefusesAListingOverItsKeyBytes(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	const size = 16 << 10
 	key := "orders/a-not-a-copy/"
 	key += strings.Repeat("k", size-len(key))
-	_, err := workload.SlotCopies(ctx, &pagedKeys{key: key, left: workload.MaxListedKeyBytes / size}, "orders", "a", time.Time{}, kinds())
+	_, err := workload.SlotCopies(ctx, &pagedKeys{key: key, left: int(workload.DefaultLimits().ListedKeyBytes) / size}, "orders", "a", time.Time{}, kinds(), workload.DefaultLimits())
 	require.NoError(t, err)
 
-	_, err = workload.SlotCopies(ctx, &pagedKeys{key: key, left: workload.MaxListedKeyBytes/size + 1}, "orders", "a", time.Time{}, kinds())
+	_, err = workload.SlotCopies(ctx, &pagedKeys{key: key, left: int(workload.DefaultLimits().ListedKeyBytes)/size + 1}, "orders", "a", time.Time{}, kinds(), workload.DefaultLimits())
 	require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
 	require.ErrorContains(t, err, `"orders/a-"`)
 }
 
-// A copy of MaxCopyMembers members is listed; one member more fails its listing, whichever way it is listed.
+// A copy of its limit of members is listed; one member more fails its listing, whichever way it is listed.
 func TestListings_RefuseACopyOverItsMembers(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -167,21 +167,94 @@ func TestListings_RefuseACopyOverItsMembers(t *testing.T) {
 		}
 		return b
 	}
-	at := seeded(workload.MaxCopyMembers)
-	c, err := workload.ListCopy(ctx, at, d, kinds())
+	at := seeded(workload.DefaultLimits().CopyMembers)
+	c, err := workload.ListCopy(ctx, at, d, kinds(), workload.DefaultLimits())
 	require.NoError(t, err)
-	require.Len(t, c.Members, workload.MaxCopyMembers)
-	copies, err := workload.SlotCopies(ctx, at, "orders", "a", after, kinds())
+	require.Len(t, c.Members, workload.DefaultLimits().CopyMembers)
+	copies, err := workload.SlotCopies(ctx, at, "orders", "a", after, kinds(), workload.DefaultLimits())
 	require.NoError(t, err)
 	require.Len(t, copies, 1)
 
-	over := seeded(workload.MaxCopyMembers + 1)
-	_, err = workload.ListCopy(ctx, over, d, kinds())
+	over := seeded(workload.DefaultLimits().CopyMembers + 1)
+	_, err = workload.ListCopy(ctx, over, d, kinds(), workload.DefaultLimits())
 	require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
 	require.ErrorContains(t, err, d)
-	_, err = workload.SlotCopies(ctx, over, "orders", "a", after, kinds())
+	_, err = workload.SlotCopies(ctx, over, "orders", "a", after, kinds(), workload.DefaultLimits())
 	require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
 	require.ErrorContains(t, err, d)
+}
+
+// The limits a platform is given bound each listing, below and above their defaults.
+func TestListings_FollowTheirLimits(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	after := time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC)
+	d := "orders/" + string(v1.BackupSlotName("a", after.Add(time.Minute))) + "-" + uid1 + "/"
+	key := d + "kv/x/part-00000"
+	def := workload.DefaultLimits()
+	with := func(change func(*workload.Limits)) workload.Limits {
+		l := def
+		change(&l)
+		return l
+	}
+	both := func(target func() blob.Bucket, limits workload.Limits) []error {
+		_, l := workload.ListCopy(ctx, target(), d, kinds(), limits)
+		_, s := workload.SlotCopies(ctx, target(), "orders", "a", after, kinds(), limits)
+		return []error{l, s}
+	}
+	keys := func(n int) func() blob.Bucket {
+		return func() blob.Bucket { return &pagedKeys{key: key, left: n} }
+	}
+	for name, c := range map[string]struct {
+		limits workload.Limits
+		keys   int
+		named  string
+	}{
+		"keys":      {with(func(l *workload.Limits) { l.ListedKeys = 10 }), 10, "10 keys"},
+		"key bytes": {with(func(l *workload.Limits) { l.ListedKeyBytes = 10 * int64(len(key)) }), 10, fmt.Sprintf("%d bytes", 10*len(key))},
+	} {
+		for _, err := range both(keys(c.keys), c.limits) {
+			require.NoError(t, err, name)
+		}
+		for _, err := range both(keys(c.keys+1), c.limits) {
+			require.Equal(t, fault.Invalid, fault.KindOf(err), "%s: %v", name, err)
+			require.ErrorContains(t, err, c.named, name)
+		}
+	}
+	for _, err := range both(keys(def.ListedKeys+1), with(func(l *workload.Limits) { l.ListedKeys = def.ListedKeys + 1 })) {
+		require.NoError(t, err, "a raised limit reads what the default refuses")
+	}
+
+	seeded := func(members int) func() blob.Bucket {
+		b, err := gocloud.Open(ctx, "mem://")
+		require.NoError(t, err)
+		for i := range members {
+			put(t, b, fmt.Sprintf("%skv/m-%d/part-00000", d, i), 1)
+		}
+		return func() blob.Bucket { return b }
+	}
+	lowered := with(func(l *workload.Limits) { l.CopyMembers = 2 })
+	for _, err := range both(seeded(2), lowered) {
+		require.NoError(t, err)
+	}
+	for _, err := range both(seeded(3), lowered) {
+		require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
+		require.ErrorContains(t, err, "more than 2 members")
+	}
+	for _, err := range both(seeded(def.CopyMembers+1), with(func(l *workload.Limits) { l.CopyMembers = def.CopyMembers + 1 })) {
+		require.NoError(t, err, "a raised limit lists what the default refuses")
+	}
+}
+
+// A zero limit is its default, and a set one stays.
+func TestLimits_OrDefaults(t *testing.T) {
+	t.Parallel()
+	def := workload.DefaultLimits()
+	require.Equal(t, workload.Limits{CopyMembers: 1024, ListedKeys: 1 << 20, ListedKeyBytes: 256 << 20}, def)
+	require.Equal(t, def, workload.Limits{}.OrDefaults())
+	set := workload.Limits{CopyMembers: 1, ListedKeys: 2, ListedKeyBytes: 3}
+	require.Equal(t, set, set.OrDefaults())
+	require.Equal(t, workload.Limits{CopyMembers: 1, ListedKeys: def.ListedKeys, ListedKeyBytes: def.ListedKeyBytes}, workload.Limits{CopyMembers: 1}.OrDefaults())
 }
 
 // A key that names no store is no member: a store's and a volume's names are DNS labels.
@@ -195,7 +268,7 @@ func TestListCopy_SkipsAKeyThatNamesNoStore(t *testing.T) {
 	for _, key := range []string{"kv/" + long + "/part-00000", "kv/Not_A_Name/part-00000", "volume/cart/" + long + "/part-00000", "kv/orders-state/part-00000"} {
 		put(t, b, d+key, 1)
 	}
-	c, err := workload.ListCopy(ctx, b, d, kinds())
+	c, err := workload.ListCopy(ctx, b, d, kinds(), workload.DefaultLimits())
 	require.NoError(t, err)
 	require.Len(t, c.Members, 1)
 	require.Equal(t, v1.ObjectName("orders-state"), c.Members[0].Name)
@@ -204,7 +277,7 @@ func TestListCopy_SkipsAKeyThatNamesNoStore(t *testing.T) {
 func TestListCopy_RefusesAListingOverItsLimit(t *testing.T) {
 	t.Parallel()
 	d := "orders/b1-" + strings.Repeat("a", 32) + "/"
-	_, err := workload.ListCopy(context.Background(), &pagedKeys{key: d + "kv/x/part-00000", left: workload.MaxListedKeys + 1}, d, kinds())
+	_, err := workload.ListCopy(context.Background(), &pagedKeys{key: d + "kv/x/part-00000", left: workload.DefaultLimits().ListedKeys + 1}, d, kinds(), workload.DefaultLimits())
 	require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
 	require.ErrorContains(t, err, d)
 }
@@ -222,7 +295,7 @@ func TestListCopy_SkipsAKeyNoKindParses(t *testing.T) {
 	put(t, b, d+"vector/notes/part-00000", 3)
 	put(t, b, d+"manifest.yaml", 1)
 
-	c, err := workload.ListCopy(ctx, b, d, []workload.MemberKind{workload.KVStores(nil, nil, nil)})
+	c, err := workload.ListCopy(ctx, b, d, []workload.MemberKind{workload.KVStores(nil, nil, nil)}, workload.DefaultLimits())
 	require.NoError(t, err)
 	require.True(t, c.Whole)
 	require.Equal(t, []v1.BackupMember{{Kind: v1.KindKVStore, Name: "orders-state", Bytes: 7}}, c.Members)

@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/backup/workload"
 	"github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/pkg/funcd"
 )
@@ -384,4 +385,20 @@ func TestScenarioReadinessTimeoutConfig(t *testing.T) {
 			require.ErrorContains(t, err, `"runtime.readinessTimeout"`)
 		})
 	}
+}
+
+// Each workloadBackup key reaches its own limit.
+func TestWorkloadBackupLimits(t *testing.T) {
+	t.Parallel()
+	var cfg config.Config
+	cfg.WorkloadBackup.MaxCopyMembers = 3
+	cfg.WorkloadBackup.MaxListedKeys = 5
+	cfg.WorkloadBackup.MaxListedKeySize = "7"
+	got, err := workloadBackupLimits(cfg)
+	require.NoError(t, err)
+	require.Equal(t, workload.Limits{CopyMembers: 3, ListedKeys: 5, ListedKeyBytes: 7}, got)
+
+	cfg.WorkloadBackup.MaxListedKeySize = "lots"
+	_, err = workloadBackupLimits(cfg)
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
 }

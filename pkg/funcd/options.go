@@ -16,6 +16,7 @@ import (
 	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/backup"
 	"github.com/pyvvo/funcd/internal/backup/runner"
+	"github.com/pyvvo/funcd/internal/backup/workload"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/bus"
 	"github.com/pyvvo/funcd/internal/controlplane/middleware"
@@ -228,6 +229,18 @@ func WithMasterSecret(secret []byte) Option {
 func WithBlobStoreURL(url string) Option {
 	return func(c *config) error {
 		c.blobStoreURL = url
+		return nil
+	}
+}
+
+// WithWorkloadBackupLimits bounds one listing of a BackupSchedule's target and one copy (the workloadBackup config keys); a
+// zero field is its default.
+func WithWorkloadBackupLimits(l workload.Limits) Option {
+	return func(c *config) error {
+		if l.CopyMembers < 0 || l.ListedKeys < 0 || l.ListedKeyBytes < 0 {
+			return fault.Invalidf("funcd.WithWorkloadBackupLimits", "limits %+v: want 0 or more", l)
+		}
+		c.workloadBackupLimits = l
 		return nil
 	}
 }

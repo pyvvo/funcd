@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/backup/workload"
 	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/testkit/s3stub"
 )
@@ -220,6 +221,19 @@ func TestScenarioUnreachableTargetRetried(t *testing.T) {
 	require.False(t, time.Time(*s.Status.LastScheduleTime).Before(slots[1]), "the slot logic resumes after the copy's slot")
 	r.waitBackup(v1.BackupSlotName("orders-sql", slots[1]), v1.RunSucceeded)
 	r.waitBackup(v1.BackupSlotName("orders-sql", base.Add(time.Minute)), v1.RunSucceeded)
+}
+
+// WithWorkloadBackupLimits reaches a schedule's sync: a target over the listing limit it sets turns TargetSynced False, ListFailed,
+// naming the limit.
+func TestTargetSync_FollowsTheLimitsItIsGiven(t *testing.T) {
+	t.Parallel()
+	r := newWBRig(t, wbOptions{opts: []Option{WithWorkloadBackupLimits(workload.Limits{ListedKeys: 1})}, setup: func(r *wbRig) {
+		_, slots := r.minutes(3, 1)
+		r.seed(r.restoredSchedule("orders-sql", slots[0], nil))
+		r.copyOn(v1.BackupSlotName("orders-sql", slots[1]), newUIDHex(t))
+	}})
+	failed, _ := r.waitSynced("orders-sql", v1.ConditionFalse, v1.ReasonListFailed).Status.Conditions.Get(v1.ConditionTargetSynced)
+	require.Contains(t, failed.Message, "more than 1 keys")
 }
 
 // scenario: finished-run-kept — a Backup Running when funcd stopped whose manifest is on the target is Succeeded,

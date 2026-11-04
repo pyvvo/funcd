@@ -81,6 +81,8 @@ type Deps struct {
 	Secrets SecretReader
 	// Kinds are the member kinds a Backup copies and a Restore loads, each served once (ADR-0311).
 	Kinds []workload.MemberKind
+	// Limits bound one listing of a target and one copy; a zero field is its default.
+	Limits workload.Limits
 	// Hold nil is a platform never held, whose in-place Restore holds nothing.
 	Hold Hold
 	// StoreURL is the blob store's URL, blob.target or the file:// URL of blob.dir: a schedule on its provider is
@@ -129,6 +131,7 @@ func New(d Deps) (*Reconcilers, error) {
 		return nil, fault.Invalidf(op, "secrets are required")
 	}
 	d.Period = cmp.Or(d.Period, controller.SupervisionPeriod)
+	d.Limits = d.Limits.OrDefaults()
 	if d.Clock == nil {
 		d.Clock = clock.System()
 	}

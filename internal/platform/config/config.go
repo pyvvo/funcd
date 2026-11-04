@@ -198,6 +198,13 @@ type Config struct {
 			RPO string `json:"rpo,omitempty" env:"FUNCD_BACKUP_OBJECTIVES_RPO"`
 		} `json:"objectives,omitempty"`
 	} `json:"backup,omitempty"`
+	// WorkloadBackup bounds what a BackupSchedule's target may hold (ADR-0222), with or without backup.target: the keys and
+	// the bytes of keys one listing reads, the latter a ByteSize, and the members of one copy.
+	WorkloadBackup struct {
+		MaxListedKeys    int    `json:"maxListedKeys,omitempty" env:"FUNCD_WORKLOAD_BACKUP_MAX_LISTED_KEYS" validate:"min=1"`
+		MaxListedKeySize string `json:"maxListedKeySize,omitempty" env:"FUNCD_WORKLOAD_BACKUP_MAX_LISTED_KEY_SIZE"`
+		MaxCopyMembers   int    `json:"maxCopyMembers,omitempty" env:"FUNCD_WORKLOAD_BACKUP_MAX_COPY_MEMBERS" validate:"min=1"`
+	} `json:"workloadBackup,omitempty"`
 	// Blob is the blob store (ADR-0208): Target an S3-compatible bucket funcd protects by its versioning, else the
 	// local store at Dir (derived as <Storage.DataDir>/blob in Load), which Backup mirrors to backup.target while the
 	// platform backup is on. VersionRetention is the store rule's noncurrent-version expiry, the window of a restore
@@ -523,6 +530,9 @@ func defaults() Config {
 	c.Backup.Interval = v1.Duration(defaultBackupInterval).String()
 	c.Backup.RetryInterval = v1.Duration(defaultBackupRetryInterval).String()
 	c.Backup.Objectives.RPO = v1.Duration(defaultBackupRPO).String()
+	c.WorkloadBackup.MaxListedKeys = DefaultWorkloadBackupMaxListedKeys
+	c.WorkloadBackup.MaxListedKeySize = DefaultWorkloadBackupMaxListedKeySize
+	c.WorkloadBackup.MaxCopyMembers = DefaultWorkloadBackupMaxCopyMembers
 	// The local blob store's mirror (ADR-0208): due hourly, a new epoch every 30 days, each generation kept 30 days.
 	c.Blob.Backup.Interval = v1.Duration(defaultBlobBackupInterval).String()
 	c.Blob.Backup.Rebaseline = v1.Duration(defaultBlobRebaseline).String()
@@ -703,7 +713,7 @@ func (c Config) Validate() error {
 		if err := c.validateCredentials(op); err != nil {
 			return err
 		}
-		for _, fs := range [][]Finding{c.CheckBackup(), c.CheckBlob(), c.CheckBridge(), c.CheckLake(), c.CheckQuarantine(), c.CheckFunctions(), c.CheckStorage()} {
+		for _, fs := range [][]Finding{c.CheckBackup(), c.CheckBlob(), c.CheckBridge(), c.CheckLake(), c.CheckQuarantine(), c.CheckFunctions(), c.CheckStorage(), c.CheckWorkloadBackup()} {
 			if len(fs) > 0 && fs[0].Error {
 				return fault.Invalidf(op, "%s", fs[0].Message)
 			}

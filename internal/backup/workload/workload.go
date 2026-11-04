@@ -107,8 +107,8 @@ type Manifest struct {
 // by name, the stores of the App's kv, buckets, lakes and sql entries and its Functions' local volumes, or the stores of
 // the ResourceGroup. In each form a Bucket brings in the Lakes on its Lake prefixes as their own members, once, after the
 // Lakes s names, whichever App or ResourceGroup holds them (ADR-0312). A named member or App that does not exist is
-// fault.NotFound naming it; a scope over MaxCopyMembers is fault.Invalid naming the limit.
-func Resolve(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1.BackupScope) ([]Member, error) {
+// fault.NotFound naming it; a scope over limits.CopyMembers is fault.Invalid naming the limit.
+func Resolve(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1.BackupScope, limits Limits) ([]Member, error) {
 	const op = "workload.Resolve"
 	names := map[v1.Kind][]v1.ObjectName{
 		v1.KindKVStore: s.KVStores, v1.KindBucket: s.Buckets, v1.KindLake: s.Lakes, v1.KindSQLDatabase: s.Databases,
@@ -190,8 +190,8 @@ func Resolve(ctx context.Context, st store.Store, ns v1.NamespaceName, s v1.Back
 		return nil, err
 	}
 	out = append(out, vols...)
-	if len(out) > MaxCopyMembers {
-		return nil, fault.Invalidf(op, "the scope resolves to %d members, more than the %d one copy may hold", len(out), MaxCopyMembers)
+	if len(out) > limits.CopyMembers {
+		return nil, fault.Invalidf(op, "the scope resolves to %d members, more than the %d one copy may hold", len(out), limits.CopyMembers)
 	}
 	return out, nil
 }

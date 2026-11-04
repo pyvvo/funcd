@@ -82,7 +82,7 @@ func TestResolveScopes(t *testing.T) {
 		"app":            {v1.BackupScope{App: "orders"}, []workload.Member{kv("orders-state"), kv("shared-state"), lakeMember}},
 		"resource group": {v1.BackupScope{ResourceGroup: "app"}, []workload.Member{kv("orders-state"), bucket, lakeMember}},
 	} {
-		got, err := workload.Resolve(ctx, st, "orders", c.scope)
+		got, err := workload.Resolve(ctx, st, "orders", c.scope, workload.DefaultLimits())
 		require.NoError(t, err, name)
 		require.Equal(t, c.want, got, name)
 	}
@@ -121,7 +121,7 @@ func TestResolveScopes(t *testing.T) {
 		"an App that names one Lake":                           {v1.BackupScope{App: "shop"}, []workload.Member{house, onSilver, onGold}},
 		"a ResourceGroup, and a Lake of another on its Bucket": {v1.BackupScope{ResourceGroup: "brings"}, []workload.Member{there, house, onGold, onSilver, onAway}},
 	} {
-		got, err := workload.Resolve(ctx, st, "orders", c.scope)
+		got, err := workload.Resolve(ctx, st, "orders", c.scope, workload.DefaultLimits())
 		require.NoError(t, err, name)
 		require.Equal(t, c.want, got, name)
 	}
@@ -129,23 +129,23 @@ func TestResolveScopes(t *testing.T) {
 	_, err := st.Create(ctx, &v1.Bucket{TypeMeta: tm(v1.KindBucket), ObjectMeta: meta("ghosts", "ghosts"), Spec: v1.BucketSpec{Prefixes: []v1.BucketPrefix{
 		{Name: "p", Owner: v1.LakeOwner("ghost")}, {Name: "q", Owner: v1.LakeOwner("ghost")}}}})
 	require.NoError(t, err)
-	got, err := workload.Resolve(ctx, st, "orders", v1.BackupScope{Buckets: []v1.ObjectName{"ghosts"}})
+	got, err := workload.Resolve(ctx, st, "orders", v1.BackupScope{Buckets: []v1.ObjectName{"ghosts"}}, workload.DefaultLimits())
 	require.NoError(t, err)
 	require.Equal(t, []workload.Member{{Kind: v1.KindBucket, Name: "ghosts"}}, got)
-	_, err = workload.Resolve(ctx, st, "orders", v1.BackupScope{Buckets: []v1.ObjectName{"gone"}})
+	_, err = workload.Resolve(ctx, st, "orders", v1.BackupScope{Buckets: []v1.ObjectName{"gone"}}, workload.DefaultLimits())
 	require.Equal(t, fault.NotFound, fault.KindOf(err))
 	require.ErrorContains(t, err, "Bucket/gone")
-	_, err = workload.Resolve(ctx, st, "orders", v1.BackupScope{App: "gone"})
+	_, err = workload.Resolve(ctx, st, "orders", v1.BackupScope{App: "gone"}, workload.DefaultLimits())
 	require.Equal(t, fault.NotFound, fault.KindOf(err))
 }
 
-// A scope of MaxCopyMembers members resolves. One member more is fault.Invalid naming the limit, in each form and whatever brings
+// A scope of its limit of members resolves. One member more is fault.Invalid naming the limit, in each form and whatever brings
 // that member in, as a copy over it would fail its listing.
 func TestResolve_RefusesAScopeOverACopysMembers(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := store.New(storemem.New())
-	names := make([]v1.ObjectName, workload.MaxCopyMembers+1)
+	names := make([]v1.ObjectName, workload.DefaultLimits().CopyMembers+1)
 	entries := make([]v1.KVStoreEntry, len(names))
 	for i := range names {
 		names[i] = v1.ObjectName(fmt.Sprintf("kv-%d", i))
@@ -164,8 +164,8 @@ func TestResolve_RefusesAScopeOverACopysMembers(t *testing.T) {
 		_, err := st.Create(ctx, o)
 		require.NoError(t, err)
 	}
-	limit := workload.MaxCopyMembers
-	got, err := workload.Resolve(ctx, st, "orders", v1.BackupScope{KVStores: names[:limit]})
+	limit := workload.DefaultLimits().CopyMembers
+	got, err := workload.Resolve(ctx, st, "orders", v1.BackupScope{KVStores: names[:limit]}, workload.DefaultLimits())
 	require.NoError(t, err)
 	require.Len(t, got, limit)
 	for name, scope := range map[string]v1.BackupScope{
@@ -175,10 +175,19 @@ func TestResolve_RefusesAScopeOverACopysMembers(t *testing.T) {
 		"a Lake a Bucket brings in": {KVStores: names[:limit-1], Buckets: []v1.ObjectName{"lakehouse"}},
 		"a Function's volume":       {KVStores: names[:limit], Volumes: []string{"fn/data"}},
 	} {
-		_, err := workload.Resolve(ctx, st, "orders", scope)
+		_, err := workload.Resolve(ctx, st, "orders", scope, workload.DefaultLimits())
 		require.Equal(t, fault.Invalid, fault.KindOf(err), name)
 		require.ErrorContains(t, err, fmt.Sprint(limit), name)
 	}
+	lowered := workload.Limits{CopyMembers: 2}
+	_, err = workload.Resolve(ctx, st, "orders", v1.BackupScope{KVStores: names[:2]}, lowered)
+	require.NoError(t, err)
+	_, err = workload.Resolve(ctx, st, "orders", v1.BackupScope{KVStores: names[:3]}, lowered)
+	require.Equal(t, fault.Invalid, fault.KindOf(err))
+	require.ErrorContains(t, err, "more than the 2 one copy may hold")
+	got, err = workload.Resolve(ctx, st, "orders", v1.BackupScope{KVStores: names}, workload.Limits{CopyMembers: limit + 1})
+	require.NoError(t, err, "a raised limit resolves what the default refuses")
+	require.Len(t, got, limit+1)
 }
 
 // TestObjectFrame: EncodeObject's frame decodes to the object it framed, metadata in any order; a torn or trailing
@@ -617,7 +626,7 @@ func TestResolve_ReadsEachLakeOnce(t *testing.T) {
 		_, err := st.Create(ctx, o)
 		require.NoError(t, err)
 	}
-	got, err := workload.Resolve(ctx, st, "orders", v1.BackupScope{Buckets: []v1.ObjectName{"data"}, Lakes: []v1.ObjectName{"sales"}})
+	got, err := workload.Resolve(ctx, st, "orders", v1.BackupScope{Buckets: []v1.ObjectName{"data"}, Lakes: []v1.ObjectName{"sales"}}, workload.DefaultLimits())
 	require.NoError(t, err)
 	require.True(t, st.moved.Load())
 	require.Equal(t, []workload.Member{{Kind: v1.KindBucket, Name: "data", LakePrefixes: []string{"gold"}},
@@ -646,7 +655,7 @@ func TestWrite_KeepsTheLakePrefixesResolveRead(t *testing.T) {
 		_, err := st.Create(ctx, o)
 		require.NoError(t, err)
 	}
-	ms, err := workload.Resolve(ctx, st, "orders", v1.BackupScope{Buckets: []v1.ObjectName{"data"}})
+	ms, err := workload.Resolve(ctx, st, "orders", v1.BackupScope{Buckets: []v1.ObjectName{"data"}}, workload.DefaultLimits())
 	require.NoError(t, err)
 	require.Len(t, ms, 2)
 

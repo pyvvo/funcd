@@ -47,6 +47,8 @@
 #       Lake off its own prefix is held; a catalog no Lake owns is the Bucket's; a Lake with no catalog keeps its files; a Lake
 #       asLocation on a Bucket in place is refused; and a target killed, or funcd stopped, in the middle of a load keeps the
 #       hold (ADR-0228).
+#   B14 workloadBackup.maxCopyMembers in funcdconfig.yaml fails a Backup over it, the default passes it, and a size that does
+#       not parse is refused at start.
 #   Q1-Q6 version 1.2.0, whose todos and upload records live in SQLDatabase todo-db: its pre-hook migrates the database
 #       and copies them from KV before the SQL API serves; done, a filter, counts and a join; an upload the 1.2.0 intake
 #       records in SQL; a new row that fires the App's sql EventSource, whose Sensor records it in KV; the App's backup
@@ -3866,6 +3868,91 @@ testcases:
         assertions:
           - result.statuscode ShouldEqual 500
           - result.body ShouldContainSubstring "does not exist"
+
+  - name: B14 workloadBackup.maxCopyMembers fails a Backup over it, the default passes it, and a size that does not parse is refused at start
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            cp /opt/lane/dr/funcdconfig-lake.yaml /root/limits.yaml
+            echo "workloadBackup:" >>/root/limits.yaml
+            echo "  maxCopyMembers: 1" >>/root/limits.yaml'
+        info: "a config with maxCopyMembers 1 → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            unset FUNCD_TOKEN
+            systemctl stop funcd-demo
+            systemctl reset-failed funcd-demo 2>/dev/null || true
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=45 /usr/local/bin/funcd \
+              --config /root/limits.yaml
+            curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
+            systemctl is-active --quiet funcd-demo || { journalctl -u funcd-demo --no-pager -n 60; exit 1; }
+            echo RESTARTED'
+        info: "funcd's restart with maxCopyMembers 1 → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring RESTARTED
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/fill-name/todo-limits-over/; s/fill-schedule/todo-lakehouse-only/" /opt/lane/dr/backup-by-hand.yaml | funcdctl apply -f -'
+        info: "apply Backup todo-limits-over → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get backup todo-limits-over -n default -o json'
+        retry: 45
+        delay: 1
+        info: "backup todo-limits-over → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Failed
+          - result.systemout ShouldContainSubstring "more than the 1 one copy may hold"
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            set -e
+            unset FUNCD_TOKEN
+            systemctl stop funcd-demo
+            systemctl reset-failed funcd-demo 2>/dev/null || true
+            systemd-run --unit funcd-demo -p KillMode=mixed -p TimeoutStopSec=45 /usr/local/bin/funcd \
+              --config /opt/lane/dr/funcdconfig-lake.yaml
+            curl -s --retry-connrefused --retry 60 --retry-delay 1 -o /dev/null http://127.0.0.1:8080/healthz
+            systemctl is-active --quiet funcd-demo || { journalctl -u funcd-demo --no-pager -n 60; exit 1; }
+            echo RESTARTED'
+        info: "funcd's restart with the default → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring RESTARTED
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; sed "s/fill-name/todo-limits-within/; s/fill-schedule/todo-lakehouse-only/" /opt/lane/dr/backup-by-hand.yaml | funcdctl apply -f -'
+        info: "apply Backup todo-limits-within → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'export FUNCD_TOKEN=todo-lane-developer; funcdctl get backup todo-limits-within -n default -o json | grep -oE "\"phase\": *\"[A-Za-z]+\"" | head -1'
+        retry: 45
+        delay: 1
+        info: "backup todo-limits-within → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldMatchRegex phase.{1,4}Succeeded
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            unset FUNCD_TOKEN
+            cp /opt/lane/dr/funcdconfig-lake.yaml /root/bad-limits.yaml
+            echo "workloadBackup:" >>/root/bad-limits.yaml
+            echo "  maxListedKeySize: lots" >>/root/bad-limits.yaml
+            timeout 30 /usr/local/bin/funcd --config /root/bad-limits.yaml >/root/start.log 2>&1
+            echo "start exit $?"; grep -o "workloadBackup.maxListedKeySize" /root/start.log | head -1'
+        info: "the refusal → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.systemout ShouldContainSubstring "start exit 1"
+          - result.systemout ShouldContainSubstring workloadBackup.maxListedKeySize
 
   # Version 1.2.0 keeps the todos and their upload records in SQLDatabase todo-db (ADR-0233 to ADR-0236). Its pre-hook
   # migrates the database and copies them from KV before the SQL API serves; the KV records stay for 1.1.0.

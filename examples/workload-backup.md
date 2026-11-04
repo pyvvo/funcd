@@ -147,8 +147,9 @@ funcdctl get backups -n orders                                 # then restore th
 
 While the listing fails, `TargetSynced` reads `False`, reason `ListFailed`, and the sync retries; its message names the
 target and the cause. The target may refuse the listing: point `spec.target.url` at a target that answers. Or the copies after
-the restored point may be over a listing's limits, 1 Mi keys, 256 MiB of keys or 1024 members in one copy: remove copies from
-the target until they fit. Deleting the schedule also lets it go on. A Backup whose scope resolves to more than 1024 members
-fails when it runs, with the limit in its message, and writes no copy. Copies of Backups by hand, of
+the restored point may be over a listing's limits, `workloadBackup.maxListedKeys`, `maxListedKeySize` or `maxCopyMembers` in
+`funcdconfig.yaml`, by default 1 Mi keys, 256 MiB of keys and 1024 members in one copy: raise the limit, or remove copies from
+the target until they fit. Deleting the schedule also lets it go on. A Backup whose scope resolves to more than
+`workloadBackup.maxCopyMembers` members fails when it runs, with the limit in its message, and writes no copy. Copies of Backups by hand, of
 exports and of schedules the restored platform does not hold get no record. Delete no Backup before `TargetSynced`
 reads `True`: a crash during the sync can bring a record deleted in the meantime back once.

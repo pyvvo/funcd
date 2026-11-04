@@ -115,6 +115,10 @@ storage:
 #   retryInterval: 5m             # wait after a failed run before the next attempt. default: 5m
 #   objectives:
 #     rpo: 2h                     # rpoRisk once the newest verified generation is this old. default: 2h
+# workloadBackup:                 # what a BackupSchedule's target may hold (examples/workload-backup.md); needs no backup.target
+#   maxListedKeys: 1048576        # keys one listing of a target reads; over it the listing fails. default: 1048576
+#   maxListedKeySize: 256MiB      # bytes of keys one listing reads, a ByteSize; over it the listing fails. default: 256MiB
+#   maxCopyMembers: 1024          # members one copy holds; a Backup whose scope is over it fails and writes no copy. default: 1024
 # blob:                           # the blob store (ADR-0208); storage.mode memory ignores every key
 #   target: ""                    # s3://<bucket>?region=…&endpoint=…&prefix=<p>/, a versioned S3-compatible bucket. default: "" (the local store)
 #   credentialsFile: ""           # with target: AWS shared credentials file, its [default] profile the only source. default: "" (the SDK chain)
