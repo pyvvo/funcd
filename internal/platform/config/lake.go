@@ -76,7 +76,7 @@ func (c Config) LakeCatalogMaxBytes() (int64, error) {
 	const op = "config.LakeCatalogMaxBytes"
 	maxUpload := c.S3Gateway.MaxUploadBytes
 	if maxUpload <= 0 {
-		maxUpload = 1 << 30
+		maxUpload = defaultS3MaxUpload
 	}
 	v := c.Lake.CatalogMaxSize
 	if v == "" {

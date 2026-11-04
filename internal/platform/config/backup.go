@@ -11,6 +11,8 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
+const oneDay = 24 * time.Hour
+
 // The platform backup's run times when a key is empty (ADR-0205 Decision 1).
 const (
 	defaultBackupInterval      = time.Hour
@@ -203,7 +205,7 @@ func (c Config) checkBackupTimes(f *findings, t BackupTimes, retentionOK bool) {
 		f.warn("backup.interval", "backup.interval %s is above half of backup.objectives.rpo %s: one failed run lets "+
 			"the newest generation pass the rpo", v1.Duration(t.Interval), v1.Duration(t.RPO))
 	}
-	if gap := t.RPO - t.Interval; retentionOK && int64(r.Verified) < ceilDiv(gap, 24*time.Hour) {
+	if gap := t.RPO - t.Interval; retentionOK && int64(r.Verified) < ceilDiv(gap, oneDay) {
 		f.warn("backup.retention.verified", "backup.retention.verified %d days is below backup.objectives.rpo − "+
 			"backup.interval (%s): a verified copy can expire before its original is rpo old", r.Verified, v1.Duration(gap))
 	}

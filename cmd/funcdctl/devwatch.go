@@ -32,6 +32,7 @@ const (
 	devWatchTail       = 64 << 10
 	devWatchQuiet      = 3 * time.Second
 	devWatchBuiltQuiet = time.Second
+	devWatchFirstDelay = time.Second
 )
 
 // ownedFiles reads the size and mtime of each file of the builds a watch command owns, by path (ADR-0256 Decision 2).
@@ -97,7 +98,7 @@ func startDevCommands(ctx context.Context, op, processDir string, entries []devW
 func (c *devCommands) supervise(ctx context.Context, e devWatchEntry, log *os.File, b *devBurst) {
 	defer c.wg.Done()
 	defer func() { _ = log.Close() }()
-	delay := time.Second
+	delay := devWatchFirstDelay
 	for ctx.Err() == nil {
 		began := time.Now()
 		cmd := exec.Command("sh", "-c", e.Run) //nolint:gosec // the command funcdctl.config.yaml names (ADR-0255)
@@ -144,7 +145,7 @@ func (c *devCommands) supervise(ctx context.Context, e devWatchEntry, log *os.Fi
 func restartDelay(last, ran time.Duration) (wait, next time.Duration) {
 	wait = last
 	if ran >= devWatchMaxDelay {
-		wait = time.Second
+		wait = devWatchFirstDelay
 	}
 	return wait, min(2*wait, devWatchMaxDelay)
 }

@@ -89,8 +89,8 @@ func NewBlobTraceSink(d Deps) (*BlobTraceSink, error) {
 // flushLoop proactively seals segments older than maxAge (the "time" flush for idle segments).
 func (s *BlobTraceSink) flushLoop() {
 	interval := s.maxAge / 2
-	if interval < 100*time.Millisecond {
-		interval = 100 * time.Millisecond
+	if interval < minFlushInterval {
+		interval = minFlushInterval
 	}
 	t := time.NewTicker(interval)
 	defer t.Stop()

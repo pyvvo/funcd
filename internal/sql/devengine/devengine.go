@@ -37,6 +37,11 @@ import (
 )
 
 const (
+	readyProbeTimeout = time.Second
+	readyPollInterval = 100 * time.Millisecond
+)
+
+const (
 	// reapGrace is how long a stop or the reap at New waits after SIGTERM before SIGKILL (ADR-0167).
 	reapGrace = 3 * time.Second
 	// readyTimeout bounds an engine's start, a fresh one or one replaying its log.
@@ -420,7 +425,7 @@ func waitReady(ctx context.Context, p *engineProc, timeout time.Duration) error 
 		return ctx.Err()
 	}
 	url := "http://" + p.addr + "/readyz"
-	client := httpx.NodeClient(time.Second)
+	client := httpx.NodeClient(readyProbeTimeout)
 	for {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
@@ -437,7 +442,7 @@ func waitReady(ctx context.Context, p *engineProc, timeout time.Duration) error 
 			return p.ended()
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(100 * time.Millisecond):
+		case <-time.After(readyPollInterval):
 		}
 	}
 }

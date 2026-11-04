@@ -131,6 +131,11 @@ const (
 	defaultDeadletterMaxEntries = 1000
 	// defaultNestedInFlightCap bounds the nested fn-to-fn calls in flight to one Function (ADR-0147).
 	defaultNestedInFlightCap = 10
+	// How long a client of the platform's two HTTP servers has to send a request.
+	serverReadHeaderTimeout = 10 * time.Second
+	serverReadTimeout       = 10 * time.Second
+	// maxRetentionSweep is the longest wait between two sweeps of terminal runs or dead letters.
+	maxRetentionSweep = time.Hour
 )
 
 // config holds the injected world — validated by validate() before New returns.
@@ -1098,7 +1103,7 @@ func (p *Platform) buildControlPlane() error {
 	// ErrorLog sends net/http's own errors (TLS handshake, accept, recovered panic) through the configured
 	// logger; left nil they go to the stdlib log package, bypassing the log format (#454).
 	httpErrorLog := slog.NewLogLogger(p.logger.Handler(), slog.LevelWarn)
-	p.httpServer = &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 10 * time.Second, ErrorLog: httpErrorLog}
+	p.httpServer = &http.Server{Handler: handler, ReadHeaderTimeout: serverReadHeaderTimeout, ReadTimeout: serverReadTimeout, ErrorLog: httpErrorLog}
 
 	ln, err := net.Listen("tcp", c.listenAddr)
 	if err != nil {
@@ -1138,7 +1143,7 @@ func (p *Platform) buildControlPlane() error {
 	// ReadTimeout bounds the whole request read (headers + body), so a client that stops sending its
 	// body cannot hold an ADR-0112 in-flight slot indefinitely (issue #90). net/http clears the
 	// deadline once the body is read, so it does not cut a long-running handler.
-	p.dataPlaneServer = &http.Server{Handler: dpHandler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 10 * time.Second, ErrorLog: httpErrorLog}
+	p.dataPlaneServer = &http.Server{Handler: dpHandler, ReadHeaderTimeout: serverReadHeaderTimeout, ReadTimeout: serverReadTimeout, ErrorLog: httpErrorLog}
 	dln, err := net.Listen("tcp", c.dataPlaneAddr)
 	if err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "bind data-plane listener on %s", c.dataPlaneAddr)
@@ -1490,8 +1495,8 @@ func (g storeGranter) Allow(ns v1.NamespaceName, target v1.ObjectName, pin *v1.R
 // cancel. A sweep failure is logged, not fatal — the next tick retries.
 func (p *Platform) runWorkflowRetention(ctx context.Context) {
 	interval := p.workflowRetention
-	if interval > time.Hour {
-		interval = time.Hour
+	if interval > maxRetentionSweep {
+		interval = maxRetentionSweep
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -1520,7 +1525,7 @@ func (p *Platform) runWorkflowRetention(ctx context.Context) {
 // stops on ctx cancel, and logs (never fatal) a sweep failure — the next tick retries.
 func (s *eventingProvider) runDeadLetterRetention(ctx context.Context) {
 	c := s.cfg
-	interval := time.Hour
+	interval := maxRetentionSweep
 	if c.deadletterRetention > 0 && c.deadletterRetention < interval {
 		interval = c.deadletterRetention
 	}

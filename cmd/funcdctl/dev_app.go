@@ -31,6 +31,8 @@ import (
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
 
+const appRevisionTimeout = 2 * time.Second
+
 // App mode (ADR-0253): `funcdctl dev <template dir>` deploys an App template on the embedded platform from local
 // builds. Dev pushes each image's build to an OCI layout in its state dir, renders the template with that layout as its
 // registry and a lock of those pushes, and applies the App as `app deploy` does. The App reconciler then writes the
@@ -1184,7 +1186,7 @@ func (s *devAppSession) watch(ctx context.Context, op string, a *cli, c *sdk.Cli
 
 // appRevision is the App's latest revision as the control plane stores it, for the banner (Decision 11).
 func (d *devInstance) appRevision() string {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), appRevisionTimeout)
 	defer cancel()
 	stored, err := storedApp(ctx, d.client, d.app.Namespace, d.app.Name)
 	switch {

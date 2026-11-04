@@ -17,6 +17,8 @@ import (
 	"github.com/pyvvo/funcd/internal/services/sql/engineargs"
 )
 
+const hasTablesTimeout = 30 * time.Second
+
 // emptyDatabase is an empty SQLite file, 4 KiB in DELETE mode: loading it replaces all of a database's data
 // (ADR-0234 Decision 4).
 //
@@ -194,7 +196,7 @@ func (b Backups) HasTables(ctx context.Context, ns v1.NamespaceName, name v1.Obj
 	if err != nil {
 		return false, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, hasTablesTimeout)
 	defer cancel()
 	stmt, _ := json.Marshal(userObjectsQuery)
 	res, err := call(ctx, b.client(), addr, EnginePassword(b.Master, ns, name), "/db/query", url.Values{}, []json.RawMessage{stmt})

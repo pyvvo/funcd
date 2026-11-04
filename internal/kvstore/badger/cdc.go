@@ -15,6 +15,8 @@ import (
 	"github.com/pyvvo/funcd/internal/bus"
 )
 
+const defaultCDCRetention = 24 * time.Hour
+
 // cdc implements the ADR-0066 CDC seam (ADR-0068) as a transactional outbox: every write appends a
 // _cdc/<seq> log entry IN the data's own txn (so the log can never diverge from the data), and a
 // durable-cursor tailer drains the log to a bus sink, resuming from a persisted cursor across a restart —
@@ -56,7 +58,7 @@ func NewCDC(db *badger.DB, sink bus.Bus, cfg CDCConfig) (CDC, error) {
 	}
 	ret := cfg.Retention
 	if ret <= 0 {
-		ret = 24 * time.Hour
+		ret = defaultCDCRetention
 	}
 	return &cdc{db: db, seq: seq, sink: sink, subject: cfg.Subject, retention: ret}, nil
 }

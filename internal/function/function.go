@@ -50,6 +50,8 @@ import (
 	"github.com/pyvvo/funcd/internal/workernode/local"
 )
 
+const maxMembersReply = 1 << 20
+
 const (
 	condReady         v1.ConditionType = "Ready"
 	condShapeValid    v1.ConditionType = "ShapeValid"
@@ -2996,7 +2998,7 @@ func (r *Reconciler) probeMembers(ctx context.Context, ip string, port int) (mem
 		return nil, false, lateRead(err)
 	}
 	defer httpx.CloseBody(resp.Body)
-	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&members) != nil {
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, maxMembersReply)).Decode(&members) != nil {
 		return nil, false, lateRead(pctx.Err())
 	}
 	return members, true, false

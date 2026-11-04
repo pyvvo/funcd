@@ -22,6 +22,13 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/diskfull"
 )
 
+const (
+	memTableSize     = 16 << 20
+	valueLogFileSize = 64 << 20
+	blockCacheSize   = 16 << 20
+	indexCacheSize   = 16 << 20
+)
+
 const op = "deadletter.badger"
 
 const keyPrefix = "dl/"
@@ -55,10 +62,10 @@ func Options(cfg Config) badger.Options {
 		bopts = badger.DefaultOptions(cfg.Dir).
 			WithSyncWrites(true).
 			WithNumMemtables(2).
-			WithMemTableSize(16 << 20).
-			WithValueLogFileSize(64 << 20).
-			WithBlockCacheSize(16 << 20).
-			WithIndexCacheSize(16 << 20).
+			WithMemTableSize(memTableSize).
+			WithValueLogFileSize(valueLogFileSize).
+			WithBlockCacheSize(blockCacheSize).
+			WithIndexCacheSize(indexCacheSize).
 			WithCompression(options.None)
 	}
 	return bopts.WithLoggingLevel(badger.ERROR)

@@ -24,6 +24,15 @@ import (
 	snapbadger "github.com/pyvvo/funcd/internal/snapshot/badger"
 )
 
+const (
+	defaultGCInterval = 5 * time.Minute
+	memTableSize      = 16 << 20
+	baseTableSize     = 8 << 20
+	valueLogFileSize  = 64 << 20
+	blockCacheSize    = 32 << 20
+	indexCacheSize    = 32 << 20
+)
+
 // Op is the mutation kind a CDC change-log entry records.
 type Op uint8
 
@@ -95,7 +104,7 @@ func Open(dir string, opts ...Option) (kvstore.KV, error) {
 
 // newConfig applies the options over the defaults (sync on, 5m GC, 256-batch).
 func newConfig(opts []Option) config {
-	cfg := config{sync: true, gcInterval: 5 * time.Minute, batchMax: 256}
+	cfg := config{sync: true, gcInterval: defaultGCInterval, batchMax: 256}
 	for _, o := range opts {
 		o(&cfg)
 	}
@@ -109,13 +118,13 @@ func openDB(dir string, sync bool) (*badger.DB, error) {
 		WithLoggingLevel(badger.ERROR).
 		WithSyncWrites(sync).
 		WithNumMemtables(2).
-		WithMemTableSize(16 << 20).
+		WithMemTableSize(memTableSize).
 		WithNumLevelZeroTables(1).
 		WithNumLevelZeroTablesStall(3).
-		WithBaseTableSize(8 << 20).
-		WithValueLogFileSize(64 << 20).
-		WithBlockCacheSize(32 << 20).
-		WithIndexCacheSize(32 << 20).
+		WithBaseTableSize(baseTableSize).
+		WithValueLogFileSize(valueLogFileSize).
+		WithBlockCacheSize(blockCacheSize).
+		WithIndexCacheSize(indexCacheSize).
 		WithNumCompactors(2).
 		WithCompression(options.None)
 	db, err := badger.Open(bopts)

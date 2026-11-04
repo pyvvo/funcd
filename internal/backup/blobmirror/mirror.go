@@ -33,6 +33,8 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/version"
 )
 
+const oneDay = 24 * time.Hour
+
 // Format is the mirror manifest's format. Object.Gen is the n of objects/<id>/<n>/; Object.SHA256 is the hex SHA-256
 // of its stored bytes, all parts in order.
 const Format = 1
@@ -152,8 +154,7 @@ func New(cfg Config) (Mirror, error) {
 // LifecycleRule is the operator's expiry of the target's blob/ prefix: ⌈(rebaseline + retention) / 24h⌉ days, so no
 // object expires before the last generation of its epoch is retention old.
 func LifecycleRule(rebaseline, retention time.Duration) (prefix string, days int) {
-	const day = 24 * time.Hour
-	return rootPrefix, int((rebaseline + retention + day - 1) / day)
+	return rootPrefix, int((rebaseline + retention + oneDay - 1) / oneDay)
 }
 
 func (m *mirror) Loop(ctx context.Context) {

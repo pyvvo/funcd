@@ -11,6 +11,14 @@ import (
 	"time"
 )
 
+const (
+	dialTimeout           = 30 * time.Second
+	dialKeepAlive         = 30 * time.Second
+	idleConnTimeout       = 90 * time.Second
+	tlsHandshakeTimeout   = 10 * time.Second
+	expectContinueTimeout = time.Second
+)
+
 // Transport returns a new transport with http.DefaultTransport's settings, the environment proxy included, and a
 // connection pool of its own, for destinations off this node. A pool whose every destination runs on this node uses
 // NodeTransport (ADR-0155).
@@ -21,12 +29,12 @@ func Transport() *http.Transport {
 	// Something replaced http.DefaultTransport with another RoundTripper: use the settings net/http gives it.
 	return &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		DialContext:           (&net.Dialer{Timeout: dialTimeout, KeepAlive: dialKeepAlive}).DialContext,
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: time.Second,
+		IdleConnTimeout:       idleConnTimeout,
+		TLSHandshakeTimeout:   tlsHandshakeTimeout,
+		ExpectContinueTimeout: expectContinueTimeout,
 	}
 }
 
@@ -43,8 +51,8 @@ func NodeTransport() *http.Transport {
 	tr.Proxy = nil
 	tr.MaxIdleConns = 512
 	tr.MaxIdleConnsPerHost = 256
-	tr.IdleConnTimeout = 90 * time.Second
-	tr.DialContext = (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+	tr.IdleConnTimeout = idleConnTimeout
+	tr.DialContext = (&net.Dialer{Timeout: dialTimeout, KeepAlive: dialKeepAlive}).DialContext
 	return tr
 }
 

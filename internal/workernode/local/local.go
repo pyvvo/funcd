@@ -27,6 +27,11 @@ import (
 	"github.com/pyvvo/funcd/internal/auth"
 )
 
+const (
+	serverHeaderTimeout = 5 * time.Second
+	serverIdleTimeout   = 30 * time.Second
+)
+
 // maxInvokeBytes caps an invoke request body and the target's response (a DoS guard on the local API).
 const maxInvokeBytes = 1 << 20 // 1 MiB
 
@@ -391,7 +396,7 @@ func readBody(w http.ResponseWriter, r *http.Request, op string, limit int64) ([
 // outlasts the TypeScript shim's 5 s client keep-alive, so the client closes an idle connection first.
 // ErrorLog sends net/http's own errors through logger, not the stdlib log package (#454).
 func newServer(h http.Handler, logger *slog.Logger) *http.Server {
-	return &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second,
+	return &http.Server{Handler: h, ReadHeaderTimeout: serverHeaderTimeout, IdleTimeout: serverIdleTimeout,
 		ErrorLog: slog.NewLogLogger(logger.Handler(), slog.LevelWarn)}
 }
 

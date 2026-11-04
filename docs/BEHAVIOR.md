@@ -5,8 +5,8 @@ disagree, the ADR wins and this file is corrected. Numbers come from the code an
 generated, and `just check-behavior` fails when a row no longer holds.
 
 A row's status is `decided` (an ADR or the dated decider chose it), `accepted` (an ADR or the dated decider named it as a cost or
-a risk), `deferred` (a board card or an open issue holds it) or `uncovered` (nothing speaks of it: a question for the decider, no
-fix until answered). A row names only what someone could see and wonder about: a wait of about a second or more; a state, error or
+a risk), `deferred` (a board card, an ADR's open question or an open issue holds it) or `uncovered` (nothing speaks of it: a
+question for the decider, no fix until answered). A row names only what someone could see and wonder about: a wait of about a second or more; a state, error or
 refusal; a cost, risk or limit an ADR accepted.
 
 ## Platform lifecycle
@@ -59,21 +59,23 @@ Providers start in list order, the Executor first: Executor, KV, blob, SQL, Lake
 | `telemetry.insecure` | false | config |
 | `maxTokenFileBytes` | 4096 | `cmd/funcd/credentials.go` |
 | `maxStopGrace` | 10s | `cmd/funcd/main.go` |
+| `minAppUpgradeTimeout` | 5m | `cmd/funcd/main.go` |
+| `minDeliveryBackoffMax` | 10s | `cmd/funcd/main.go` |
 | `minKeyRotationPeriod` | 1h | `cmd/funcd/main.go` |
 | `minPositive` | 1ms | `cmd/funcd/main.go` |
 | `minRetryBackoffMax` | 5ms | `cmd/funcd/main.go` |
-| `pacing(): p.AppUpgradeTimeout` | 5m | `cmd/funcd/main.go` |
-| `pacing(): p.DeliveryBackoffMax` | 10s | `cmd/funcd/main.go` |
 | `telemetryCloseTimeout` | 1s | `cmd/funcd/main.go` |
 | `spaceWait` | 10s | `cmd/funcd/space.go` |
 | `storesOpenBytes` | 640MiB | `cmd/funcd/space.go` |
-| `checkBackupTimes(): ceilDiv` | 24h | `internal/platform/config/backup.go` |
 | `defaultBackupInterval` | 1h | `internal/platform/config/backup.go` |
 | `defaultBackupRPO` | 2h | `internal/platform/config/backup.go` |
 | `defaultBackupRetryInterval` | 5m | `internal/platform/config/backup.go` |
+| `oneDay` | 24h | `internal/platform/config/backup.go` |
 | `defaultBlobBackupInterval` | 1h | `internal/platform/config/blob.go` |
 | `defaultBlobRebaseline` | 720h | `internal/platform/config/blob.go` |
 | `defaultBlobRetention` | 720h | `internal/platform/config/blob.go` |
+| `defaultS3MaxUpload` | 1GiB | `internal/platform/config/config.go` |
+| `defaultWorkflowPayloadLimit` | 256KiB | `internal/platform/config/config.go` |
 | `defaultKVBackupInterval` | 30s | `internal/platform/config/kvbackup.go` |
 | `defaultKVRebaseline` | 24h | `internal/platform/config/kvbackup.go` |
 | `defaultKVRebaselineRetry` | 1h | `internal/platform/config/kvbackup.go` |
@@ -87,18 +89,19 @@ Providers start in list order, the Executor first: Executor, KV, blob, SQL, Lake
 | `DefaultWorkloadBackupMaxCopyMembers` | 1024 | `internal/platform/config/workloadbackup.go` |
 | `DefaultWorkloadBackupMaxListedKeys` | 1MiB | `internal/platform/config/workloadbackup.go` |
 | `DrainLimit` | 4KiB | `internal/platform/httpx/httpx.go` |
-| `NodeTransport(): KeepAlive` | 30s | `internal/platform/httpx/httpx.go` |
-| `NodeTransport(): Timeout` | 30s | `internal/platform/httpx/httpx.go` |
-| `NodeTransport(): tr.IdleConnTimeout` | 1m30s | `internal/platform/httpx/httpx.go` |
-| `Transport(): IdleConnTimeout` | 1m30s | `internal/platform/httpx/httpx.go` |
-| `Transport(): KeepAlive` | 30s | `internal/platform/httpx/httpx.go` |
-| `Transport(): TLSHandshakeTimeout` | 10s | `internal/platform/httpx/httpx.go` |
-| `Transport(): Timeout` | 30s | `internal/platform/httpx/httpx.go` |
-| `build(): workerClient` | 30s | `pkg/funcd/binding_providers.go` |
-| `openFeed(): time.After` | 50ms | `pkg/funcd/binding_providers.go` |
+| `dialKeepAlive` | 30s | `internal/platform/httpx/httpx.go` |
+| `dialTimeout` | 30s | `internal/platform/httpx/httpx.go` |
+| `expectContinueTimeout` | 1s | `internal/platform/httpx/httpx.go` |
+| `idleConnTimeout` | 1m30s | `internal/platform/httpx/httpx.go` |
+| `tlsHandshakeTimeout` | 10s | `internal/platform/httpx/httpx.go` |
+| `gibi` | 1GiB | `internal/platform/units/units.go` |
+| `kibi` | 1KiB | `internal/platform/units/units.go` |
+| `mebi` | 1MiB | `internal/platform/units/units.go` |
+| `tebi` | 1TiB | `internal/platform/units/units.go` |
+| `feedWaitPoll` | 50ms | `pkg/funcd/binding_providers.go` |
+| `sensorDeliveryTimeout` | 30s | `pkg/funcd/binding_providers.go` |
 | `sqlFeedBootWait` | 30s | `pkg/funcd/binding_providers.go` |
-| `buildControlPlane(): ReadHeaderTimeout` | 10s | `pkg/funcd/funcd.go` |
-| `buildControlPlane(): ReadTimeout` | 10s | `pkg/funcd/funcd.go` |
+| `engineOutputBuf` | 64KiB | `pkg/funcd/engineoutput.go` |
 | `closeMargin` | 2s | `pkg/funcd/funcd.go` |
 | `defaultBucketsPerNamespace` | 100 | `pkg/funcd/funcd.go` |
 | `defaultCloseGrace` | 3s | `pkg/funcd/funcd.go` |
@@ -112,7 +115,11 @@ Providers start in list order, the Executor first: Executor, KV, blob, SQL, Lake
 | `defaultWorkflowRetention` | 720h | `pkg/funcd/funcd.go` |
 | `defaultWorkflowRetry` | 1 | `pkg/funcd/funcd.go` |
 | `defaultWorkflowStepTimeout` | 5m | `pkg/funcd/funcd.go` |
+| `maxRetentionSweep` | 1h | `pkg/funcd/funcd.go` |
 | `minRecordBytes` | 1024 | `pkg/funcd/funcd.go` |
+| `purgePage` | 1000 | `pkg/funcd/funcd.go` |
+| `serverReadHeaderTimeout` | 10s | `pkg/funcd/funcd.go` |
+| `serverReadTimeout` | 10s | `pkg/funcd/funcd.go` |
 | `shutdownTimeout` | 15s | `pkg/funcd/funcd.go` |
 | `defaultActivationTimeout` | 30s | `pkg/funcd/options.go` |
 | `defaultBootTimeout` | 1m | `pkg/funcd/options.go` |
@@ -133,6 +140,7 @@ Providers start in list order, the Executor first: Executor, KV, blob, SQL, Lake
 | `minRetryBackoffMax` | 5ms | `pkg/funcd/options.go` |
 | `quarantineSweepEvery` | 1h | `pkg/funcd/quarantine.go` |
 | `quarantineSweepFirst` | 5m | `pkg/funcd/quarantine.go` |
+| `measurePage` | 1000 | `pkg/funcd/quota.go` |
 
 </details>
 <!-- end of generated values -->
@@ -157,10 +165,15 @@ Not written yet.
 | `maxBackoff` | 1s | `internal/controller/controller.go` |
 | `DefaultInterval` | 5m | `internal/gc/gc.go` |
 | `rewatchBackoff` | 1s | `internal/gc/gc.go` |
-| `Open(): gcInterval` | 5m | `internal/store/badger/badger.go` |
+| `baseTableSize` | 8MiB | `internal/store/badger/badger.go` |
+| `blockCacheSize` | 32MiB | `internal/store/badger/badger.go` |
+| `defaultGCInterval` | 5m | `internal/store/badger/badger.go` |
+| `indexCacheSize` | 32MiB | `internal/store/badger/badger.go` |
+| `memTableSize` | 16MiB | `internal/store/badger/badger.go` |
+| `valueLogFileSize` | 64MiB | `internal/store/badger/badger.go` |
+| `loadBatch` | 1024 | `internal/store/memory/memory.go` |
 | `defaultRingCap` | 1024 | `internal/store/store.go` |
-| `recv(): time.After` | 2s | `internal/store/storecontract/contract.go` |
-| `testWatchStreams(): time.After` | 2s | `internal/store/storecontract/contract.go` |
+| `watchChanBuf` | 64 | `internal/store/store.go` |
 | `timelineBytes` | 8 | `internal/store/version.go` |
 
 </details>
@@ -180,27 +193,19 @@ Not written yet.
 | `maxAppConfigMapNameLength` | 52 | `api/types/v1alpha1/app.go` |
 | `maxAppNameLength` | 52 | `api/types/v1alpha1/app.go` |
 | `maxAppRevisionNumber` | 9999999999 | `api/types/v1alpha1/apprevision.go` |
-| `DefaultBackupTTL` | 720h | `api/types/v1alpha1/backup.go` |
 | `maxBackupScheduleNameLength` | 54 | `api/types/v1alpha1/backup.go` |
 | `maxRestoreNameLength` | 56 | `api/types/v1alpha1/backup.go` |
-| `MaxDuration` | `Duration(math.MaxInt64 - math.MaxInt64%int64(time.Millisecond))` | `api/types/v1alpha1/duration.go` |
 | `maxEgressDests` | 64 | `api/types/v1alpha1/egresspolicy.go` |
 | `maxEgressPorts` | 32 | `api/types/v1alpha1/egresspolicy.go` |
 | `maxEgressRules` | 64 | `api/types/v1alpha1/egresspolicy.go` |
 | `DefaultInvokeTimeout` | 1m | `api/types/v1alpha1/function.go` |
-| `MaxIdleTimeout` | 24h | `api/types/v1alpha1/function.go` |
 | `MaxInvokeTimeout` | 1h | `api/types/v1alpha1/function.go` |
-| `MaxLinkTimeout` | 5m | `api/types/v1alpha1/function.go` |
-| `MaxRetryBackoff` | 1h | `api/types/v1alpha1/function.go` |
-| `MaxStepTimeout` | 24h | `api/types/v1alpha1/function.go` |
-| `MaxTimerInterval` | 24h | `api/types/v1alpha1/function.go` |
-| `MaxWorkflowTimeout` | 168h | `api/types/v1alpha1/function.go` |
-| `MinTimerInterval` | 100ms | `api/types/v1alpha1/function.go` |
 | `DefaultMaxKeyBytes` | 1024 | `api/types/v1alpha1/kvstore.go` |
 | `DefaultMaxValueBytes` | 1MiB | `api/types/v1alpha1/kvstore.go` |
 | `MaxKeyBytesLimit` | 64000 | `api/types/v1alpha1/kvstore.go` |
 | `MaxValueBytesLimit` | 1MiB | `api/types/v1alpha1/kvstore.go` |
 | `nameSuffixHexBytes` | 4 | `api/types/v1alpha1/metadata.go` |
+| `MinCPU` | `0.01` | `api/types/v1alpha1/resources.go` |
 | `SiteRuntimeConfigMaxBytes` | 32KiB | `api/types/v1alpha1/site.go` |
 | `maxListedMembers` | 5 | `internal/controlplane/admission/resourcegroup.go` |
 | `ownReadAttempts` | 5 | `internal/controlplane/handlers.go` |
@@ -223,10 +228,11 @@ Not written yet.
 | `auth.namespaces` | [default] | config |
 | `auth.token` | a built-in dev token | config |
 | `secrets.encryptionKeyFile` | "" ⇒ Secret values | config |
-| `Serve(): Timeout` | 5s | `internal/network/egress/forwarder.go` |
+| `dnsTimeout` | 5s | `internal/network/egress/forwarder.go` |
 | `maxPairsPerSource` | 1024 | `internal/network/egress/forwarder.go` |
+| `minRecordTTL` | 1s | `internal/network/egress/forwarder.go` |
 | `minSweep` | 1024 | `internal/network/egress/forwarder.go` |
-| `peek(): time.Now().Add` | 500ms | `internal/network/egress/gateway_linux.go` |
+| `peekTimeout` | 500ms | `internal/network/egress/gateway_linux.go` |
 
 </details>
 <!-- end of generated values -->
@@ -278,53 +284,47 @@ Not written yet.
 | `DefaultLimit` | 1000 | `internal/funclog/logread/logread.go` |
 | `MaxLimit` | 10000 | `internal/funclog/logread/logread.go` |
 | `DefaultMaxRecordBytes` | 64KiB | `internal/funclog/reader.go` |
-| `MaxLineBytes` | 1048576 | `internal/funclog/reader.go` |
+| `MaxLineBytes` | 1MiB | `internal/funclog/reader.go` |
+| `lineReadBuf` | 64KiB | `internal/funclog/reader.go` |
 | `dropWarnEvery` | 1m | `internal/funclog/route.go` |
 | `defaultSegmentMaxAge` | 10s | `internal/funclog/sink.go` |
 | `defaultSegmentMaxBytes` | 8MiB | `internal/funclog/sink.go` |
-| `flushLoop(): interval` | 100ms | `internal/funclog/sink.go` |
-| `flushLoop(): interval < 100*time.Millisecond` | 100ms | `internal/funclog/sink.go` |
 | `maxKeyReplica` | 63 | `internal/funclog/sink.go` |
-| `flushLoop(): interval` | 100ms | `internal/funclog/tracesink.go` |
-| `flushLoop(): interval < 100*time.Millisecond` | 100ms | `internal/funclog/tracesink.go` |
+| `minFlushInterval` | 100ms | `internal/funclog/sink.go` |
 | `DefaultStopGrace` | 10s | `internal/runtime/containerd/containerd_linux.go` |
-| `acceptLogConns(): backoff` | 5ms | `internal/runtime/containerd/containerd_linux.go` |
 | `bootDirBytes` | 1MiB | `internal/runtime/containerd/containerd_linux.go` |
 | `killWait` | 10s | `internal/runtime/containerd/containerd_linux.go` |
+| `logAcceptBackoffMax` | 1s | `internal/runtime/containerd/containerd_linux.go` |
+| `logAcceptBackoffMin` | 5ms | `internal/runtime/containerd/containerd_linux.go` |
 | `outputWait` | 1s | `internal/runtime/containerd/containerd_linux.go` |
-| `sandboxOpts(): period` | 100000 | `internal/runtime/containerd/containerd_linux.go` |
+| `soloLogConns` | 4 | `internal/runtime/containerd/containerd_linux.go` |
 | `tmpDefaultBytes` | 512MiB | `internal/runtime/containerd/containerd_linux.go` |
 | `DefaultStopGrace` | 10s | `internal/runtime/containerd/containerd_other.go` |
-| `Close(): time.After` | 10s | `internal/runtime/ctrmanager/manager_linux.go` |
-| `startContainerd(): time.After` | 100ms | `internal/runtime/ctrmanager/manager_linux.go` |
+| `containerdStopGrace` | 10s | `internal/runtime/ctrmanager/manager_linux.go` |
+| `socketPollInterval` | 100ms | `internal/runtime/ctrmanager/manager_linux.go` |
 | `startTimeout` | 30s | `internal/runtime/ctrmanager/manager_linux.go` |
 | `DefaultStopGrace` | 3s | `internal/runtime/process/process.go` |
 | `outputWait` | 1s | `internal/runtime/process/process.go` |
 | `pollInterval` | 20ms | `internal/runtime/procreg/procreg.go` |
 | `maxAssetBytes` | 256MiB | `internal/runtime/provision/provision.go` |
 | `MaxReportBytes` | 1024 | `internal/runtime/runtime.go` |
-| `RunContract(): time.After` | 10s | `internal/runtime/runtimecontract/contract.go` |
-| `RunContract(): time.Now().Add` | 5s | `internal/runtime/runtimecontract/contract.go` |
-| `RunContract(): time.Sleep` | 10ms | `internal/runtime/runtimecontract/contract.go` |
-| `RunContract(): time.Sleep` | 20ms | `internal/runtime/runtimecontract/contract.go` |
-| `waitEnded(): time.Now().Add` | 5s | `internal/runtime/runtimecontract/contract.go` |
-| `waitEnded(): time.Sleep` | 10ms | `internal/runtime/runtimecontract/contract.go` |
-| `waitState(): time.Now().Add` | 5s | `internal/runtime/runtimecontract/contract.go` |
-| `waitState(): time.Sleep` | 10ms | `internal/runtime/runtimecontract/contract.go` |
 | `DefaultLineBytes` | 64KiB | `internal/runtime/workerpipe/workerpipe.go` |
 | `DefaultQueueBytes` | 256KiB | `internal/runtime/workerpipe/workerpipe.go` |
 | `DefaultTailBytes` | 64KiB | `internal/runtime/workerpipe/workerpipe.go` |
+| `drainBuf` | 32KiB | `internal/runtime/workerpipe/workerpipe.go` |
 | `dropWarnEvery` | 1m | `internal/runtime/workerpipe/workerpipe.go` |
 | `qifBlockSize` | 1024 | `internal/volume/quotafs/quotafs_linux.go` |
-| `New(): o.MeasureInterval` | 30s | `internal/volume/volume.go` |
+| `defaultBookingTTL` | 1m | `internal/volume/volume.go` |
+| `defaultMeasureInterval` | 30s | `internal/volume/volume.go` |
 | `volumeOverhead` | 16KiB | `internal/volume/volume.go` |
 | `maxBlobBytes` | 64MiB | `internal/workernode/local/blob.go` |
 | `maxSignExpiry` | 168h | `internal/workernode/local/blob.go` |
 | `minSignExpiry` | 1s | `internal/workernode/local/blob.go` |
+| `maxKVBytes` | `v1.MaxValueBytesLimit` | `internal/workernode/local/kv.go` |
 | `DependencyCheckBudget` | 50ms | `internal/workernode/local/local.go` |
 | `maxInvokeBytes` | 1MiB | `internal/workernode/local/local.go` |
-| `newServer(): IdleTimeout` | 30s | `internal/workernode/local/local.go` |
-| `newServer(): ReadHeaderTimeout` | 5s | `internal/workernode/local/local.go` |
+| `serverHeaderTimeout` | 5s | `internal/workernode/local/local.go` |
+| `serverIdleTimeout` | 30s | `internal/workernode/local/local.go` |
 | `defaultTimeout` | 30s | `internal/workernode/local/resolver.go` |
 | `MaxSQLStatements` | 500 | `internal/workernode/local/sql.go` |
 | `maxSQLBytes` | 1MiB | `internal/workernode/local/sql.go` |
@@ -391,6 +391,9 @@ stops its workers. Details: [scale-to-zero](design/function/scale-to-zero.md), [
 | `functions.defaultResources.memory` | 512Mi | config |
 | `registryResponseTimeout` | 10s | `internal/artifact/artifact.go` |
 | `maxIdle` | 32 | `internal/contract/bounds.go` |
+| `maxInt32` | 2147483647 | `internal/contract/formats.go` |
+| `maxSafeInteger` | 9007199254740991 | `internal/contract/formats.go` |
+| `minInt32` | -2147483648 | `internal/contract/formats.go` |
 | `defaultMatchTimeout` | 100ms | `internal/contract/rules.go` |
 | `CallBudget` | 1s | `internal/contractcheck/contractcheck.go` |
 | `MaxCheckedBytes` | 1MiB | `internal/contractcheck/contractcheck.go` |
@@ -403,11 +406,13 @@ stops its workers. Details: [scale-to-zero](design/function/scale-to-zero.md), [
 | `defaultHandOutSettle` | 2s | `internal/function/function.go` |
 | `defaultPoolLimit` | 16 | `internal/function/function.go` |
 | `defaultReferentPoll` | 2s | `internal/function/function.go` |
+| `maxMembersReply` | 1MiB | `internal/function/function.go` |
 | `maxRevisionName` | 63 | `internal/function/function.go` |
+| `probeTimeout` | `readinessPoll / 2` | `internal/function/function.go` |
 | `readinessPoll` | 200ms | `internal/function/function.go` |
 | `defaultLivenessTimeout` | 30s | `internal/function/liveness.go` |
+| `maxReadinessReply` | 64KiB | `internal/function/liveness.go` |
 | `defaultReadinessTimeout` | 5s | `internal/function/readiness.go` |
-| `minSnapshots` | 200 | `internal/snapshot/snapshotcontract/contract.go` |
 
 </details>
 <!-- end of generated values -->
@@ -548,43 +553,52 @@ Not written yet.
 | `maxInFlightRequests` | 4096 | `internal/blob/s3gateway/s3gateway.go` |
 | `maxMultipartParts` | 10000 | `internal/blob/s3gateway/s3gateway.go` |
 | `shutdownRetry` | 10ms | `internal/blob/s3gateway/s3gateway.go` |
-| `RunBackup(): interval` | 30s | `internal/kvstore/badger/backup.go` |
-| `RunBackup(): rebaseline` | 24h | `internal/kvstore/badger/backup.go` |
+| `defaultBackupInterval` | 30s | `internal/kvstore/badger/backup.go` |
+| `defaultBackupRebaseline` | 24h | `internal/kvstore/badger/backup.go` |
 | `defaultChunkBytes` | 8MiB | `internal/kvstore/badger/backup.go` |
 | `defaultRebaselineRetry` | 1h | `internal/kvstore/badger/backup.go` |
 | `delChunkBytes` | 1MiB | `internal/kvstore/badger/backup.go` |
 | `delEntryBytes` | 128 | `internal/kvstore/badger/backup.go` |
 | `pruneRetries` | 3 | `internal/kvstore/badger/backup.go` |
-| `newConfig(): gcInterval` | 5m | `internal/kvstore/badger/badger.go` |
-| `NewCDC(): ret` | 24h | `internal/kvstore/badger/cdc.go` |
+| `baseTableSize` | 8MiB | `internal/kvstore/badger/badger.go` |
+| `blockCacheSize` | 32MiB | `internal/kvstore/badger/badger.go` |
+| `defaultGCInterval` | 5m | `internal/kvstore/badger/badger.go` |
+| `dropConcurrency` | 64 | `internal/kvstore/badger/badger.go` |
+| `indexCacheSize` | 32MiB | `internal/kvstore/badger/badger.go` |
+| `memTableSize` | 16MiB | `internal/kvstore/badger/badger.go` |
+| `valueLogFileSize` | 64MiB | `internal/kvstore/badger/badger.go` |
 | `cdcPollInterval` | 200ms | `internal/kvstore/badger/cdc.go` |
 | `cdcRetryDelay` | 1s | `internal/kvstore/badger/cdc.go` |
-| `RunSnapshotPrefix(): require.Eventually` | 10s | `internal/kvstore/kvstorecontract/contract.go` |
+| `defaultCDCRetention` | 24h | `internal/kvstore/badger/cdc.go` |
 | `maxLine` | 4096 | `internal/lake/devengine/devengine.go` |
 | `reapGrace` | 3s | `internal/lake/devengine/devengine.go` |
 | `serveTimeout` | 20s | `internal/lake/devengine/devengine.go` |
 | `placeholderMaxBytes` | 4096 | `internal/lake/embedengine/embedengine.go` |
-| `newProxyServer(): IdleTimeout` | 2m | `internal/lake/gateway/manager.go` |
-| `newProxyServer(): ReadHeaderTimeout` | 10s | `internal/lake/gateway/manager.go` |
-| `newProxyServer(): ReadTimeout` | 10s | `internal/lake/gateway/manager.go` |
+| `maxBarrierReply` | 4KiB | `internal/lake/gateway/barrier.go` |
+| `proxyIdleTimeout` | 2m | `internal/lake/gateway/manager.go` |
+| `proxyReadHeaderTimeout` | 10s | `internal/lake/gateway/manager.go` |
+| `proxyReadTimeout` | 10s | `internal/lake/gateway/manager.go` |
+| `handshakeHeadMax` | `preambleLen + tokenHdrLen + binary.MaxVarintLen64 + 4<<10` | `internal/lake/gateway/proxy.go` |
 | `defaultProbeTimeout` | 2s | `internal/provider/runtime.go` |
 | `minSweepLen` | 64 | `internal/services/bindcache.go` |
 | `defaultResolverTTL` | 5s | `internal/services/blob/resolver.go` |
 | `defaultResolverTTL` | 5s | `internal/services/kv/resolver.go` |
 | `defaultPollInterval` | 2s | `internal/services/lake/lake.go` |
-| `HasTables(): context.WithTimeout` | 30s | `internal/services/sql/backup.go` |
-| `ServeListener(): ReadHeaderTimeout` | 5s | `internal/services/sql/changefeed.go` |
+| `hasTablesTimeout` | 30s | `internal/services/sql/backup.go` |
+| `feedHeaderTimeout` | 5s | `internal/services/sql/changefeed.go` |
+| `feedListenRetry` | 1s | `internal/services/sql/changefeed.go` |
 | `maxChangeData` | 256KiB | `internal/services/sql/changefeed.go` |
 | `maxEngineResponse` | 8MiB | `internal/services/sql/client.go` |
+| `cdcMaxBatch` | 100 | `internal/services/sql/engineargs/engineargs.go` |
 | `cdcTransmitTimeout` | 10s | `internal/services/sql/engineargs/engineargs.go` |
 | `DefaultCallTimeout` | 30s | `internal/services/sql/facade.go` |
-| `HasTables(): httpx.NodeClient` | 5s | `internal/services/sql/reconcile.go` |
-| `NewReconciler(): httpx.NodeClient` | 5s | `internal/services/sql/reconcile.go` |
 | `enginePoll` | 2s | `internal/services/sql/reconcile.go` |
+| `engineProbeTimeout` | 5s | `internal/services/sql/reconcile.go` |
 | `resolverTTL` | 5s | `internal/services/sql/resolver.go` |
+| `readyPollInterval` | 100ms | `internal/sql/devengine/devengine.go` |
+| `readyProbeTimeout` | 1s | `internal/sql/devengine/devengine.go` |
 | `readyTimeout` | 30s | `internal/sql/devengine/devengine.go` |
 | `reapGrace` | 3s | `internal/sql/devengine/devengine.go` |
-| `waitReady(): time.After` | 100ms | `internal/sql/devengine/devengine.go` |
 | `placeholderMaxBytes` | 4096 | `internal/sql/embedengine/embedengine.go` |
 
 </details>
@@ -620,10 +634,12 @@ Not written yet.
 | `workflow.maxStepsInFlight` | 64 | config |
 | `workflow.payloadLimit` | 262144 | config |
 | `workflow.retention` | 720h | config |
-| `quietWindow` | 250ms | `internal/bus/buscontract/contract.go` |
-| `recvTimeout` | 3s | `internal/bus/buscontract/contract.go` |
 | `readyTimeout` | 10s | `internal/bus/nats/nats.go` |
 | `defaultBlobPollInterval` | 15s | `internal/eventing/blobwatch.go` |
+| `blockCacheSize` | 16MiB | `internal/eventing/deadletter/badger/badger.go` |
+| `indexCacheSize` | 16MiB | `internal/eventing/deadletter/badger/badger.go` |
+| `memTableSize` | 16MiB | `internal/eventing/deadletter/badger/badger.go` |
+| `valueLogFileSize` | 64MiB | `internal/eventing/deadletter/badger/badger.go` |
 | `bucketRecheckInterval` | 15s | `internal/eventing/eventing.go` |
 | `runTick` | 25ms | `internal/eventing/eventing.go` |
 | `gcInterval` | 5m | `internal/eventing/eventstore/eventstore.go` |
@@ -635,17 +651,21 @@ Not written yet.
 | `maxErrorBody` | 1KiB | `internal/sensor/invoker.go` |
 | `retryBaseDelay` | 100ms | `internal/sensor/retry.go` |
 | `retryMaxDelay` | 10s | `internal/sensor/retry.go` |
-| `capMsg(): max` | 512 | `internal/sensor/sensor.go` |
 | `defaultDeliveryAttempts` | 3 | `internal/sensor/sensor.go` |
 | `defaultMaxDeliveriesInFlight` | 32 | `internal/sensor/sensor.go` |
 | `defaultMaxInFlightPerTarget` | 4 | `internal/sensor/sensor.go` |
 | `defaultMaxQueuedPerSensor` | 4096 | `internal/sensor/sensor.go` |
 | `errBodyMax` | 256 | `internal/workflow/dispatch.go` |
+| `maxRetryBackoff` | `time.Duration(v1.MaxRetryBackoff)` | `internal/workflow/engine.go` |
 | `maxStatusError` | 512 | `internal/workflow/engine.go` |
 | `linkAttempts` | 5 | `internal/workflow/reconcile_run.go` |
 | `waitRequeue` | 2s | `internal/workflow/reconcile_run.go` |
 | `contractRequeue` | 5s | `internal/workflow/reconcile_workflow.go` |
 | `stepIdleTimeout` | 5m | `internal/workflow/reconcile_workflow.go` |
+| `blockCacheSize` | 16MiB | `internal/workflow/runstate/badger/badger.go` |
+| `indexCacheSize` | 16MiB | `internal/workflow/runstate/badger/badger.go` |
+| `memTableSize` | 16MiB | `internal/workflow/runstate/badger/badger.go` |
+| `valueLogFileSize` | 64MiB | `internal/workflow/runstate/badger/badger.go` |
 
 </details>
 <!-- end of generated values -->
@@ -734,21 +754,22 @@ for a KVStore or a Bucket, 2.2 s for a SQLDatabase with its export, and 10.9 s f
 | `workloadBackup.maxListedKeySize` | 256MiB | config |
 | `workloadBackup.maxListedKeys` | 1048576 | config |
 | `maxRefreezes` | 3 | `internal/backup/blobmirror/freeze.go` |
-| `LifecycleRule(): day` | 24h | `internal/backup/blobmirror/mirror.go` |
-| `ClassFor(): at.Truncate` | 24h | `internal/backup/layout.go` |
-| `ClassFor(): now.Truncate` | 24h | `internal/backup/layout.go` |
+| `oneDay` | 24h | `internal/backup/blobmirror/mirror.go` |
 | `PartBytes` | 8MiB | `internal/backup/layout.go` |
-| `Cron(): half >= 24*time.Hour` | 24h | `internal/backup/plan/derive.go` |
-| `Ladder(): ceilUnits` | 168h | `internal/backup/plan/derive.go` |
-| `Ladder(): ceilUnits` | 24h | `internal/backup/plan/derive.go` |
-| `Ladder(): keep <= 48*time.Hour` | 48h | `internal/backup/plan/derive.go` |
-| `Ladder(): keep <= 720*time.Hour` | 720h | `internal/backup/plan/derive.go` |
+| `oneDay` | 24h | `internal/backup/layout.go` |
 | `defaultKVRebaseline` | 24h | `internal/backup/plan/derive.go` |
-| `kvHourlyFloor(): b / (24 * time.Hour)` | 24h | `internal/backup/plan/derive.go` |
+| `hourlyOnlyUpTo` | 48h | `internal/backup/plan/derive.go` |
+| `minCronStep` | 1m | `internal/backup/plan/derive.go` |
+| `noWeeklyUpTo` | 720h | `internal/backup/plan/derive.go` |
+| `oneDay` | 24h | `internal/backup/plan/derive.go` |
+| `oneWeek` | 168h | `internal/backup/plan/derive.go` |
 | `defaultStep` | 2 | `internal/backup/plan/edit.go` |
 | `MaxManifestBytes` | 16MiB | `internal/backup/workload/workload.go` |
 | `lakeAttempts` | 3 | `internal/backup/workload/workload.go` |
+| `listPage` | 1000 | `internal/backup/workload/workload.go` |
+| `sealedWriteBuf` | 64KiB | `internal/backup/workload/workload.go` |
 | `sqlRecordBytes` | 8MiB | `internal/backup/workload/workload.go` |
+| `sealedWriteBuf` | 64KiB | `internal/backup/write.go` |
 
 </details>
 <!-- end of generated values -->
@@ -803,14 +824,16 @@ Not written yet.
 | `deployPoll` | 1s | `cmd/funcdctl/app.go` |
 | `devReloadPoll` | 300ms | `cmd/funcdctl/dev.go` |
 | `devS3PortAttempts` | 3 | `cmd/funcdctl/dev.go` |
-| `appRevision(): context.WithTimeout` | 2s | `cmd/funcdctl/dev_app.go` |
+| `appRevisionTimeout` | 2s | `cmd/funcdctl/dev_app.go` |
 | `devFollowPoll` | 100ms | `cmd/funcdctl/dev_app.go` |
 | `devBlobPollInterval` | 1s | `cmd/funcdctl/devconfig.go` |
 | `devHandOutSettle` | 250ms | `cmd/funcdctl/devconfig.go` |
 | `devSegmentMaxAge` | 1s | `cmd/funcdctl/devconfig.go` |
 | `devVolumeMeasureInterval` | 30s | `cmd/funcdctl/devconfig.go` |
-| `startLiveReload(): ReadHeaderTimeout` | 5s | `cmd/funcdctl/devlivereload.go` |
+| `liveReloadHeaderTimeout` | 5s | `cmd/funcdctl/devlivereload.go` |
 | `devWatchBuiltQuiet` | 1s | `cmd/funcdctl/devwatch.go` |
+| `devWatchFirstDelay` | 1s | `cmd/funcdctl/devwatch.go` |
+| `devWatchGrace` | `process.DefaultStopGrace` | `cmd/funcdctl/devwatch.go` |
 | `devWatchMaxDelay` | 30s | `cmd/funcdctl/devwatch.go` |
 | `devWatchQuiet` | 3s | `cmd/funcdctl/devwatch.go` |
 | `devWatchTail` | 64KiB | `cmd/funcdctl/devwatch.go` |

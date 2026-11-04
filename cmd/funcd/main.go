@@ -72,6 +72,11 @@ import (
 	"github.com/pyvvo/funcd/pkg/funcd"
 )
 
+const (
+	minDeliveryBackoffMax = 10 * time.Second
+	minAppUpgradeTimeout  = 5 * time.Minute
+)
+
 func main() {
 	if err := newRootCmd(os.Stdout).Execute(); err != nil {
 		if !errors.As(err, new(loggedError)) {
@@ -960,13 +965,13 @@ func pacing(cfg config.Config) (funcd.Pacing, error) {
 	}
 	maxSet := p.DeliveryBackoffMax > 0
 	if !maxSet {
-		p.DeliveryBackoffMax = max(10*time.Second, p.DeliveryBackoffInitial)
+		p.DeliveryBackoffMax = max(minDeliveryBackoffMax, p.DeliveryBackoffInitial)
 	}
 	upgradeSet := p.AppUpgradeTimeout > 0
 	if !upgradeSet {
 		p.AppUpgradeTimeout = math.MaxInt64 // twice a bootTimeout above half the range saturates
 		if p.BootTimeout <= math.MaxInt64/2 {
-			p.AppUpgradeTimeout = max(5*time.Minute, 2*p.BootTimeout)
+			p.AppUpgradeTimeout = max(minAppUpgradeTimeout, 2*p.BootTimeout)
 		}
 	}
 	livenessSet := p.LivenessTimeout > 0

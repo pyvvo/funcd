@@ -11,6 +11,8 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 )
 
+const lineReadBuf = 64 * 1024
+
 // MaxLineBytes caps one channel line; a longer line is dropped, never buffered past the cap. It is the ceiling of
 // funclog.maxRecordBytes (ADR-0168).
 const MaxLineBytes = 1024 * 1024
@@ -30,7 +32,7 @@ type lineReader struct {
 }
 
 func newLineReader(r io.Reader) *lineReader {
-	return &lineReader{br: bufio.NewReaderSize(r, 64*1024)}
+	return &lineReader{br: bufio.NewReaderSize(r, lineReadBuf)}
 }
 
 // next returns the next line without its line end, valid until the following call. It returns

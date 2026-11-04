@@ -12,6 +12,14 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/config"
 )
 
+const (
+	oneDay         = 24 * time.Hour
+	oneWeek        = 168 * time.Hour
+	hourlyOnlyUpTo = 48 * time.Hour
+	noWeeklyUpTo   = 720 * time.Hour
+	minCronStep    = time.Minute
+)
+
 // Component is what a plan sets: the platform backup, the KV export or the blob mirror keys of funcdconfig.yaml, or a
 // BackupSchedule; a Lake needs no key (ADR-0286).
 type Component string
@@ -104,12 +112,12 @@ func Derive(c Component, o Objectives, cur config.Config) ([]Setting, error) {
 // Ladder gives (hourly, daily, weekly) in ADR-0203 Decision 5's units, 0 unused, so the longest kept class covers keep.
 func Ladder(keep time.Duration) (hourly, daily, weekly int) {
 	switch {
-	case keep <= 48*time.Hour:
+	case keep <= hourlyOnlyUpTo:
 		return ceilUnits(keep, time.Hour), 0, 0
-	case keep <= 720*time.Hour:
-		return 48, ceilUnits(keep, 24*time.Hour), 0
+	case keep <= noWeeklyUpTo:
+		return 48, ceilUnits(keep, oneDay), 0
 	default:
-		return 48, 30, ceilUnits(keep, 168*time.Hour)
+		return 48, 30, ceilUnits(keep, oneWeek)
 	}
 }
 
@@ -118,10 +126,10 @@ func Ladder(keep time.Duration) (hourly, daily, weekly int) {
 func Cron(rpo time.Duration) (string, error) {
 	half := rpo / 2
 	switch {
-	case half < time.Minute:
+	case half < minCronStep:
 		return "", fault.Invalidf("plan.Cron", "--rpo %s: a cron fires at most once a minute, so want at least 2m",
 			v1.Duration(rpo.Truncate(time.Millisecond)))
-	case half >= 24*time.Hour:
+	case half >= oneDay:
 		return "0 0 * * *", nil
 	}
 	for _, h := range []int{12, 8, 6, 4, 3, 2, 1} {
@@ -162,7 +170,7 @@ func kvHourlyFloor(cur config.Config) (int, error) {
 		}
 		b = time.Duration(d)
 	}
-	return 24*int(b/(24*time.Hour)) + 1, nil
+	return 24*int(b/oneDay) + 1, nil
 }
 
 // duration is d truncated to the ms in ADR-0194's normalized form.
