@@ -580,7 +580,7 @@ spec-diagrams:
 ci-full: ci test-e2e
 
 [group('go')]
-ci: tidy generate check-hygiene check-specs
+ci: tidy generate check-hygiene check-specs check-behavior
     go fmt ./...
     @if [ -n "$(git diff --name-only -- '*.go')" ]; then echo "Run just fmt and commit the result" && exit 1; fi
     @if [ -n "{{_has-packages}}" ]; then go tool golangci-lint run ./...; fi
