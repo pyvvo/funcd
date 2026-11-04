@@ -25,12 +25,18 @@ import (
 // answeringStore serves h and opens it with opts, a static key by default.
 func answeringStore(t *testing.T, h http.HandlerFunc, opts OpenOptions) blob.Bucket {
 	t.Helper()
+	return answeringBucket(t, "b", h, opts)
+}
+
+// answeringBucket is answeringStore for a bucket of that name.
+func answeringBucket(t *testing.T, bucket string, h http.HandlerFunc, opts OpenOptions) blob.Bucket {
+	t.Helper()
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	if opts.CredentialsFile == "" {
 		opts.Static = &StaticKey{ID: "id", Secret: "secret"}
 	}
-	b, err := OpenWith(context.Background(), "s3://b?region=us-east-1&use_path_style=true&endpoint="+srv.URL, opts)
+	b, err := OpenWith(context.Background(), "s3://"+bucket+"?region=us-east-1&use_path_style=true&endpoint="+srv.URL, opts)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = b.Close() })
 	return b
@@ -218,7 +224,43 @@ func TestStaticKeyAnswers_FailAListedObjectWithNoTime(t *testing.T) {
 	require.ErrorContains(t, err, "no modification time")
 }
 
-// A credentials file is the operator's own store, whose client stays as it was.
+// A session's answer is bounded, as a directory bucket's name makes the client ask for one before its first request.
+func TestStaticKeyAnswers_BoundASessionsAnswer(t *testing.T) {
+	t.Parallel()
+	const body = 32 << 20
+	var sent atomic.Int64
+	done := make(chan struct{}, 1)
+	chunk := []byte(strings.Repeat("x", 64<<10))
+	b := answeringBucket(t, "abc--use1-az4--x-s3", func(w http.ResponseWriter, r *http.Request) {
+		if !r.URL.Query().Has("session") {
+			_, _ = w.Write(listingPage(1024))
+			return
+		}
+		defer func() {
+			select {
+			case done <- struct{}{}:
+			default:
+			}
+		}()
+		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><CreateSessionResult><Junk>`))
+		for sent.Load() < body {
+			n, err := w.Write(chunk)
+			sent.Add(int64(n))
+			if err != nil {
+				return
+			}
+		}
+	}, OpenOptions{})
+	_, _, _ = b.ListAfter(context.Background(), "", "", 10)
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the client asked for no session")
+	}
+	require.Less(t, sent.Load(), int64(body/2), "the client read the answer whole")
+}
+
+// A credentials file's client reads its answers whole.
 func TestCredentialsFileAnswers_AreNotCut(t *testing.T) {
 	t.Parallel()
 	creds := filepath.Join(t.TempDir(), "credentials")

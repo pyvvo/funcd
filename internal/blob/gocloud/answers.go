@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go/middleware"
@@ -21,8 +22,8 @@ const maxAnswerBytes = 64 << 10
 // maxListPageBytes bounds what the same client reads of one page of a listing. A page of 1000 keys takes under 2 MiB.
 const maxListPageBytes = 16 << 20
 
-// cappedAnswers is a static key's HTTP client: the store is the key's owner's, so its answers are bounded here, below the S3
-// client, which reads an error's body whole before its caller sees the error. An object's content is its reader's to bound.
+// cappedAnswers is a static key's HTTP client. It bounds its answers here, below the S3 client, which reads an error's body
+// whole before its caller sees the error. An object's content is its reader's to bound.
 type cappedAnswers struct{ next aws.HTTPClient }
 
 func (c cappedAnswers) Do(r *http.Request) (*http.Response, error) {
@@ -31,11 +32,13 @@ func (c cappedAnswers) Do(r *http.Request) (*http.Response, error) {
 		return resp, err
 	}
 	limit := int64(maxAnswerBytes)
-	if r.Method == http.MethodGet && resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
-		if !r.URL.Query().Has("list-type") {
+	if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
+		switch awsmiddleware.GetOperationName(r.Context()) {
+		case "GetObject":
 			return resp, nil
+		case "ListObjectsV2":
+			limit = maxListPageBytes
 		}
-		limit = maxListPageBytes
 	}
 	resp.Body = cappedBody{io.LimitReader(resp.Body, limit), resp.Body}
 	return resp, nil
