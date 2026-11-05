@@ -378,20 +378,26 @@ func TestScenarioDomainRuleGloballyReachableOnly(t *testing.T) {
 	t.Parallel()
 	rig := newDomainRig(t)
 
+	var refused []netip.Addr
 	for _, s := range adr0317Table() {
 		p := netip.MustParsePrefix(s)
 		if p.Addr().Is4In6() {
 			continue // no address reaches this row: the mapping comes off first, and the PDP takes no mapped form
 		}
-		for _, addr := range []netip.Addr{p.Addr(), lastAddr(p)} {
-			t.Run(s+" "+addr.String(), func(t *testing.T) {
-				t.Parallel()
-				dec, rec := rig.decideDomain(t, addr, 443, offTheNode)
-				require.False(t, dec.Allowed, "%s takes a cidrs rule that names it", addr)
-				require.False(t, rec.Allowed)
-				require.Empty(t, rec.Domain, "the audit record names no domain there")
-			})
-		}
+		refused = append(refused, p.Addr(), lastAddr(p))
+	}
+	// The rows the registries mark globally reachable inside an entry count as the entry does.
+	for _, ip := range []string{"192.0.0.9", "192.0.0.10", "2001:1::1", "2001:1::2", "2001:1::3", "2001:3::1", "2001:4:112::1", "2001:20::1", "2001:30::1"} {
+		refused = append(refused, netip.MustParseAddr(ip))
+	}
+	for _, addr := range refused {
+		t.Run(addr.String(), func(t *testing.T) {
+			t.Parallel()
+			dec, rec := rig.decideDomain(t, addr, 443, offTheNode)
+			require.False(t, dec.Allowed, "%s takes a cidrs rule that names it", addr)
+			require.False(t, rec.Allowed)
+			require.Empty(t, rec.Domain, "the audit record names no domain there")
+		})
 	}
 
 	for _, ip := range []string{
