@@ -114,8 +114,8 @@ counts like a crash.
 Run the drill on a scratch node before relying on a backup:
 
 1. Take a generation of a seeded platform (or the newest one of production).
-2. On a scratch node with `server.network.egress: true` (on Linux, outbound traffic stays off), restore it with the
-   steps above. The integrity checks run during the restore: each store's sha256 against the manifest, and every
+2. On a scratch node with `server.network.egress: true` and no `server.network.dnsForwarderPort` (on Linux, outbound
+   traffic stays off, DNS included), restore it with the steps above. The integrity checks run during the restore: each store's sha256 against the manifest, and every
    Secret decoded with the configured key.
 3. Start funcd held and never release it: compare `funcdctl hold status` counts with the source's, read one object of
    each kind, and note the time from the restore to the first answer as a recovery-time input.

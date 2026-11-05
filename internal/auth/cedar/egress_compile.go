@@ -3,12 +3,14 @@ package cedar
 import (
 	"encoding/json"
 	"net/netip"
+	"slices"
 	"strings"
 
 	cedar "github.com/cedar-policy/cedar-go"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/auth"
 )
 
 // egressConnectAction mirrors auth.ActionEgressConnect for building the compiled permits' Action UID.
@@ -118,6 +120,23 @@ func CompileEgressPolicy(ns v1.NamespaceName, ep *v1.EgressPolicy, funcs []v1.Ob
 		Spec:       v1.PolicySpec{Cedar: b.String()},
 	}
 	return []v1.Policy{syn}, nil
+}
+
+// EgressDomains returns ep's domain rules that apply to principal: the principals CompileEgressPolicy grants. With no
+// spec.appliesTo that is each Function of ep's namespace, with one each Function it names, and never another owner kind
+// (ADR-0175). The DNS forwarder forwards only the names these allow (ADR-0315).
+func EgressDomains(ep *v1.EgressPolicy, principal auth.EntityRef) []string {
+	if ep == nil || principal.Type != v1.KindFunction || principal.Namespace != ep.Namespace {
+		return nil
+	}
+	if len(ep.Spec.AppliesTo) > 0 && !slices.Contains(ep.Spec.AppliesTo, principal.Name) {
+		return nil
+	}
+	var out []string
+	for i := range ep.Spec.Rules {
+		out = append(out, ep.Spec.Rules[i].To.Domains...)
+	}
+	return out
 }
 
 // namespaceScope is the whole-namespace principal guard: principal is Function && principal.namespace ==

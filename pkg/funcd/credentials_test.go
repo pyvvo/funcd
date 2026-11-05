@@ -9,6 +9,11 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/blob/gocloud"
+	"github.com/pyvvo/funcd/internal/bus/nats"
+	"github.com/pyvvo/funcd/internal/runtime/process"
+	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/store/memory"
 	"github.com/pyvvo/funcd/pkg/funcd"
 	"github.com/pyvvo/funcd/pkg/sdk"
 )
@@ -75,4 +80,71 @@ func TestScenarioLibraryCredentialsReplaceDevToken(t *testing.T) {
 	require.NoError(t, err)
 	_, err = admin.List(ctx, v1.KindNamespace, "")
 	require.NoError(t, err, "the admin lists the cluster-scoped Namespace kind")
+}
+
+// productionDrivers is Production() with in-memory drivers and a data plane on loopback, for what New does with a
+// credential and an address.
+func productionDrivers(t *testing.T) []funcd.Option {
+	t.Helper()
+	bucket, err := gocloud.Open(context.Background(), "mem://")
+	require.NoError(t, err)
+	messaging, err := nats.Open(context.Background(), nats.Options{Storage: nats.MemoryStorage})
+	require.NoError(t, err)
+	return []funcd.Option{
+		funcd.Production(), funcd.WithStore(store.New(memory.New())), funcd.WithBlob(bucket), funcd.WithBus(messaging),
+		funcd.WithRuntime(process.New(nil)), funcd.WithDataPlaneAddr("127.0.0.1:0"),
+	}
+}
+
+// scenario: library-follows-the-rule, and edge-auth-follows-the-rule's library half (ADR-0314 Decisions 5 and 6)
+func TestScenarioLibraryFollowsTheRule(t *testing.T) {
+	t.Parallel()
+	const own = "lib-own-0123456789abcdef"
+	inMemory := func(opts ...funcd.Option) func(*testing.T) []funcd.Option {
+		return func(*testing.T) []funcd.Option { return append([]funcd.Option{funcd.InMemory()}, opts...) }
+	}
+	inProduction := func(opts ...funcd.Option) func(*testing.T) []funcd.Option {
+		return func(t *testing.T) []funcd.Option { return append(productionDrivers(t), opts...) }
+	}
+	for name, tc := range map[string]struct {
+		opts      func(*testing.T) []funcd.Option
+		key, addr string
+	}{
+		"production-dev-token":      {inProduction(funcd.WithDevAuth(funcd.DevToken, "default")), "WithListenAddr", "0.0.0.0:8080"},
+		"every-address":             {inMemory(funcd.WithListenAddr("0.0.0.0:0")), "WithListenAddr", "0.0.0.0:0"},
+		"every-address-no-host":     {inMemory(funcd.WithListenAddr(":0")), "WithListenAddr", ":0"},
+		"a-lan-address":             {inMemory(funcd.WithListenAddr("192.0.2.1:0")), "WithListenAddr", "192.0.2.1:0"},
+		"a-hostname":                {inMemory(funcd.WithListenAddr("example.test:0")), "WithListenAddr", "example.test:0"},
+		"empty-resolves-to-default": {inMemory(funcd.WithListenAddr("")), "WithListenAddr", "0.0.0.0:8080"},
+		"edge-every-address":        {inMemory(funcd.WithEdgeAuth(), funcd.WithDataPlaneAddr("0.0.0.0:0")), "WithDataPlaneAddr", "0.0.0.0:0"},
+		"edge-empty-resolves":       {inMemory(funcd.WithEdgeAuth(), funcd.WithDataPlaneAddr("")), "WithDataPlaneAddr", "0.0.0.0:8081"},
+	} {
+		t.Run("refused/"+name, func(t *testing.T) {
+			t.Parallel()
+			_, err := funcd.New(tc.opts(t)...)
+			require.Error(t, err)
+			require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
+			require.ErrorContains(t, err, tc.key+` "`+tc.addr+`" is off loopback`)
+			require.NotContains(t, err.Error(), funcd.DevToken, "no token in the error")
+		})
+	}
+	admin := funcd.Credential{Token: libAdminToken, Role: "admin"}
+	for name, opts := range map[string]func(*testing.T) []funcd.Option{
+		"in-memory":                 inMemory(),
+		"localhost":                 inMemory(funcd.WithListenAddr("localhost:0")),
+		"edge-on-loopback":          inMemory(funcd.WithEdgeAuth()),
+		"edge-off-every-address":    inMemory(funcd.WithDataPlaneAddr("0.0.0.0:0")),
+		"own-token-every-address":   inMemory(funcd.WithDevAuth(own, "default"), funcd.WithListenAddr("0.0.0.0:0")),
+		"credentials-every-address": inMemory(funcd.WithCredentials(admin), funcd.WithListenAddr("0.0.0.0:0")),
+		"own-token-edge":            inMemory(funcd.WithDevAuth(own, "default"), funcd.WithEdgeAuth(), funcd.WithDataPlaneAddr("0.0.0.0:0")),
+		"production-own-token":      inProduction(funcd.WithDevAuth(own, "default"), funcd.WithListenAddr("0.0.0.0:0")),
+		"production-on-loopback":    inProduction(funcd.WithDevAuth(funcd.DevToken, "default"), funcd.WithListenAddr("127.0.0.1:0")),
+	} {
+		t.Run("starts/"+name, func(t *testing.T) {
+			t.Parallel()
+			p, err := funcd.New(opts(t)...)
+			require.NoError(t, err)
+			require.NoError(t, p.Shutdown(context.Background()))
+		})
+	}
 }

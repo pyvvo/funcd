@@ -3,7 +3,10 @@ package funcd
 import (
 	"bytes"
 	"context"
+	"log/slog"
+	"net"
 	"net/netip"
+	"strconv"
 	"testing"
 	"time"
 
@@ -95,6 +98,94 @@ func egressPlatform(t *testing.T, st store.Store, rt runtime.Runtime) (*executor
 	pdp, err := cedarauth.New(cedarauth.Deps{Entities: ep, Policies: policySource{st}})
 	require.NoError(t, err)
 	return p, pdp
+}
+
+// The forwarder listens on the bridge address, or on loopback with none, and on no other (ADR-0315): from another of the
+// host's addresses its port is closed, where a bind to all addresses would answer.
+func TestBuildEgressBindsTheBridgeAddress(t *testing.T) {
+	t.Parallel()
+	var other string
+	addrs, err := net.InterfaceAddrs()
+	require.NoError(t, err)
+	for _, a := range addrs {
+		if ipn, ok := a.(*net.IPNet); ok && ipn.IP.To4() != nil && !ipn.IP.IsLoopback() {
+			other = ipn.IP.String()
+			break
+		}
+	}
+	if other == "" {
+		t.Skip("this host has no other IPv4 address")
+	}
+	for name, bridge := range map[string]string{"a bridge address": "127.0.0.1", "none": ""} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			probe, err := net.Listen("tcp", "127.0.0.1:0")
+			require.NoError(t, err)
+			port := probe.Addr().(*net.TCPAddr).Port
+			require.NoError(t, probe.Close())
+
+			e := &executor{cfg: &config{
+				store: store.New(memory.New()), logger: slog.New(slog.DiscardHandler), bridgeAddress: bridge, dnsForwarderPort: uint16(port),
+				dnsUpstream: netip.MustParseAddrPort("127.0.0.1:53"),
+			}}
+			require.NoError(t, e.buildEgress(nil))
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			go func() { done <- e.egressForwarder.Serve(ctx) }()
+			t.Cleanup(func() { cancel(); <-done })
+
+			addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+			require.Eventually(t, func() bool {
+				c, derr := net.Dial("tcp", addr)
+				if derr != nil {
+					return false
+				}
+				return c.Close() == nil
+			}, 3*time.Second, 10*time.Millisecond, "it serves on that address")
+			_, err = net.DialTimeout("tcp", net.JoinHostPort(other, strconv.Itoa(port)), time.Second)
+			require.Error(t, err, "it does not serve on the host's other addresses")
+		})
+	}
+}
+
+// failingListStore fails every List.
+type failingListStore struct{ store.Store }
+
+func (failingListStore) List(context.Context, v1.GroupVersionKind, store.ListOptions) (store.List, error) {
+	return store.List{}, fault.Unavailablef("failingListStore.List", "store down")
+}
+
+// A worker's lookup reads the domain rules of the policies in its namespace that apply to its principal; a failed list is
+// an error, never an empty allow-list that could read as "allowed".
+func TestStoreDomainRules(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := store.New(memory.New())
+	whole := egressToExample("acme")
+	named := egressToExample("acme", "etl")
+	named.Name, named.Spec.Rules[0].To.Domains = "named", []string{"*.named.example"}
+	other := egressToExample("beta")
+	other.Spec.Rules[0].To.Domains = []string{"beta.example"}
+	seedObjects(t, st, whole, named, other)
+	rules := storeDomainRules{st}
+
+	for _, tc := range []struct {
+		principal auth.EntityRef
+		want      []string
+	}{
+		{auth.EntityRef{Type: v1.KindFunction, Namespace: "acme", Name: "etl"}, []string{"example.com", "*.named.example"}},
+		{auth.EntityRef{Type: v1.KindFunction, Namespace: "acme", Name: "web"}, []string{"example.com"}},
+		{auth.EntityRef{Type: v1.KindLake, Namespace: "acme", Name: "etl"}, nil},
+		{auth.EntityRef{Type: v1.KindFunction, Namespace: "empty", Name: "etl"}, nil},
+	} {
+		got, err := rules.For(ctx, tc.principal)
+		require.NoError(t, err)
+		require.ElementsMatch(t, tc.want, got, "%+v", tc.principal)
+	}
+
+	got, err := storeDomainRules{failingListStore{st}}.For(ctx, auth.EntityRef{Type: v1.KindFunction, Namespace: "acme", Name: "etl"})
+	require.Error(t, err)
+	require.Empty(t, got)
 }
 
 // scenario: engine-egress-is-lake — the egress index maps each worker to the principal of its owner

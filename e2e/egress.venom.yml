@@ -8,9 +8,11 @@
 # does a global fetch(url) and returns { ok } — a live read of the gateway's allow/deny decision. Each
 # testcase mirrors an ADR Scenario:
 #   * no-egresspolicy-denies-all / confidential-provably-local — no EgressPolicy ⇒ external DENIED (ok=false).
+#   * forwarder-on-the-bridge, lookups follow the policy (ADR-0315) — the forwarder listens on the bridge address only, and
+#     a lookup asked from the worker's own netns is answered or REFUSED by the EgressPolicy, with a log line.
 #   * allowlist-permits-declared-domain (WILDCARD) — a `*.example.com` EgressPolicy ⇒ www.example.com ALLOWED
 #     (ok=true); proves the forwarder wildcard-token injection + splice end to end.
-#   * CIDR allow — a `1.1.1.1/32` EgressPolicy ⇒ https://1.1.1.1 ALLOWED (ok=true); proves resource.ip.isInRange.
+#   * CIDR allow — a `1.1.1.1/32` EgressPolicy ⇒ https://1.1.1.1/cdn-cgi/trace ALLOWED (ok=true); proves resource.ip.isInRange.
 #   * CIDR deny — an unlisted IP (1.0.0.1) stays DENIED (ok=false); the allow-list is closed (implicit deny).
 #   * blocked-connection-audited — the gateway emits an egress audit record (allowed=false) to the funclog.
 #
@@ -21,10 +23,11 @@ name: egress-probe enforcement (ADR-0117 / F81, containerd lane)
 
 vars:
   dp: http://127.0.0.1:8081   # funcd data plane, forwarded from the Lima guest
+  ctr: "/var/lib/funcd/bin/ctr --address /var/lib/funcd/data/containerd/containerd.sock -n funcd-default"
 
 testcases:
   # 1) DEFAULT-DENY (needs no outbound internet): with NO EgressPolicy, a confidential worker reaches
-  #    nothing external. Whether DNS resolves or the gateway refuses the connect, the probe reports ok=false.
+  #    nothing external: its lookup gets REFUSED, so the probe reports ok=false.
   - name: no-egresspolicy-denies-all
     steps:
       - type: http
@@ -40,6 +43,41 @@ testcases:
         assertions:
           - result.statuscode ShouldEqual 200
           - result.bodyjson.ok ShouldEqual false   # default-deny: no EgressPolicy ⇒ nothing external
+
+  # 1b) The first worker made the bridge, so the forwarder has bound its address, and only that one. With no EgressPolicy
+  #     a lookup asked from the worker's own netns, as its resolver asks, gets rcode 5, REFUSED (ADR-0315).
+  - name: forwarder-on-the-bridge-refuses-a-lookup-with-no-policy
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c 'ss -Hlntu "sport = :15053"'
+        retry: 10
+        delay: 2
+        info: "forwarder sockets → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "10.63.0.1:15053"
+          - result.systemout ShouldNotContainSubstring "*:15053"
+          - result.systemout ShouldNotContainSubstring "0.0.0.0:15053"
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            pid=$({{.ctr}} task ls | awk "\$1 ~ /^egress-probe-/ && \$3 == \"RUNNING\" {print \$2}" | head -1)
+            nsenter -t "$pid" -n python3 - www.example.com <<"PY"
+          import socket, sys
+          labels = b"".join(bytes([len(l)]) + l.encode() for l in sys.argv[1].split("."))
+          query = b"\x00\x01\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00" + labels + b"\x00\x00\x01\x00\x01"
+          s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+          s.settimeout(3)
+          s.sendto(query, ("10.63.0.1", 53))
+          print("rcode", s.recv(512)[3] & 15)
+          PY'
+        retry: 10
+        delay: 2
+        info: "no-policy lookup → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "rcode 5"
 
   # 2) ALLOW via a WILDCARD domain rule (the highest-value new-mechanism test). Apply a `*.example.com`
   #    EgressPolicy, then probe a matching subdomain. The DNS forwarder attests www.example.com AND injects
@@ -69,6 +107,35 @@ testcases:
           - result.statuscode ShouldEqual 200
           - result.bodyjson.ok ShouldEqual true   # *.example.com:443 permit ⇒ www.example.com spliced
 
+  # 2b) With that policy a name under the rule is answered (rcode 0), and any other gets REFUSED (rcode 5) and a log line
+  #     that names it: at most one line per worker per 10 s, so the step repeats until its own line is due (ADR-0315).
+  - name: wildcard-policy-answers-its-names-and-refuses-the-rest
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            pid=$({{.ctr}} task ls | awk "\$1 ~ /^egress-probe-/ && \$3 == \"RUNNING\" {print \$2}" | head -1)
+            for name in www.example.com www.example.org; do
+              nsenter -t "$pid" -n python3 - "$name" <<"PY"
+          import socket, sys
+          labels = b"".join(bytes([len(l)]) + l.encode() for l in sys.argv[1].split("."))
+          query = b"\x00\x01\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00" + labels + b"\x00\x00\x01\x00\x01"
+          s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+          s.settimeout(3)
+          s.sendto(query, ("10.63.0.1", 53))
+          print(sys.argv[1], "rcode", s.recv(512)[3] & 15)
+          PY
+            done
+            journalctl -u funcd-demo --no-pager | grep "egress lookup refused" | grep "domain=www.example.org" | tail -1'
+        retry: 15
+        delay: 2
+        info: "lookups → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "www.example.com rcode 0"
+          - result.systemout ShouldContainSubstring "www.example.org rcode 5"
+          - result.systemout ShouldContainSubstring "egress lookup refused"
+
   # 3) ALLOW via a CIDR rule (no DNS): apply a 1.1.1.1/32 EgressPolicy, probe the literal IP. No DNS query
   #    is opened, so the gateway authorizes purely on the destination IP via resource.ip.isInRange.
   - name: cidr-rule-permits-declared-ip
@@ -83,7 +150,7 @@ testcases:
         url: "{{.dp}}/function/egress-probe"
         headers:
           content-type: application/json
-        body: '{"data":{"url":"https://1.1.1.1"}}'
+        body: '{"data":{"url":"https://1.1.1.1/cdn-cgi/trace"}}'
         retry: 25
         delay: 3
         info: "cidr-allow probe → {{.result.body}}"

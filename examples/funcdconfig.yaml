@@ -11,13 +11,14 @@
 # As shipped this is a zero-infra DEV config: in-memory substrate (nothing on disk) + the process
 # runtime (the embedded Node/Python shim), control plane + data plane on localhost. For a real
 # deployment, switch storage.mode → file, runtime.mode → containerd, set auth.credentials, and a
-# secrets.encryptionKeyFile (see the commented blocks).
+# secrets.encryptionKeyFile (see the commented blocks). An address off loopback needs auth.credentials
+# or a token of your own: the built-in dev token works only on loopback (ADR-0314).
 apiVersion: funcd.io/v1alpha1     # optional envelope (validated only if present)
 kind: FuncdConfig                 # optional
 
 # --- server: the control-plane + data-plane bind addresses (code-only before ADR-0061) ----------
 server:
-  listenAddr: 127.0.0.1:8080      # control-plane API. default: 0.0.0.0:8080
+  listenAddr: 127.0.0.1:8080      # control-plane API. default: 127.0.0.1:8080
   dataPlaneAddr: 127.0.0.1:8081   # function-invoke ingress. default: 127.0.0.1:0 (ephemeral)
   # baseDomain: localhost         # namespace hosts <namespace>.<baseDomain> (ADR-0240). default: localhost
   # tls:                          # HTTPS on both listeners (ADR-0111)
@@ -54,8 +55,8 @@ server:
   # network:                      # worker egress isolation (ADR-0115/0117); Linux + containerd only
   #   egress: false               # default-deny worker egress. default: false
   #   egressGatewayPort: 0        # egress gateway host port; required when egress is on. default: 0
-  #   dnsForwarderPort: 0         # DNS forwarder host port; 0 ⇒ no egress gateway. default: 0
-  #   dnsResolver: ""             # upstream resolver host:port; required when egress is on. default: ""
+  #   dnsForwarderPort: 0         # DNS forwarder port on the bridge address: it answers known workers, for the names a domain rule allows (ADR-0315); 0 ⇒ no forwarder and no egress gateway, so nothing goes out, DNS included. default: 0
+  #   dnsResolver: ""             # the forwarder's upstream resolver host:port; read only with a forwarder, and required then. default: ""
   #   internalAllow:              # node-service host:port addresses workers may reach. default: none
   #   workerSyncInterval: 2s      # egress WorkerIndex sync cadence (ADR-0163). default: 2s
   # shutdownTimeout: 15s          # HTTP, Sensor and workflow-run drain at shutdown. default: 15s; it + the runtime's stopGrace + 2s + the private containerd's 10s stop must fit the unit's TimeoutStopSec (45s, ADR-0277)
@@ -165,7 +166,7 @@ storage:
 
 # --- auth: control-plane and edge credentials (ADR-0028, ADR-0171) -----------------------------
 auth:
-  token: funcd-dev-token          # one developer credential. default: a built-in dev token (with a warning)
+  token: funcd-dev-token          # one developer credential. default: a built-in dev token (with a warning), which works only on loopback (ADR-0314)
   namespaces:                     # namespaces the token grants. default: [default]
     - default
   # credentials:                  # role-scoped tokens, one file each, read at startup. default: none

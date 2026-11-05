@@ -3,6 +3,7 @@ package egress
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -11,8 +12,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
+	cedarauth "github.com/pyvvo/funcd/internal/auth/cedar"
 )
 
 // captureClientHello drives a real crypto/tls client over a pipe and returns its first flight (a genuine
@@ -176,6 +179,157 @@ func TestScenarioDecideFlow(t *testing.T) {
 	dec, _, err = decideConnect(ctx, d, netip.MustParseAddr("10.63.0.99"), netip.AddrPortFrom(attestedIP, 443), "")
 	require.NoError(t, err)
 	require.False(t, dec.Allowed, "an unknown source worker is denied+audited")
+}
+
+// fnMeta holds Function etl of namespace acme for the real PDP.
+type fnMeta struct{}
+
+func (fnMeta) Get(_ context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName) (v1.Object, error) {
+	if gvk.Kind == v1.KindFunction && ns == "acme" && name == "etl" {
+		return &v1.Function{ObjectMeta: v1.ObjectMeta{Name: "etl", Namespace: "acme", ResourceGroup: "rg1"}}, nil
+	}
+	return nil, fault.NotFoundf("fnMeta.Get", "%s %s/%s not found", gvk.Kind, ns, name)
+}
+
+// compiledPolicies is a PolicySource over one compiled EgressPolicy.
+type compiledPolicies []v1.Policy
+
+func (c compiledPolicies) Policies(context.Context) ([]v1.Policy, string, error) { return c, "1", nil }
+
+// realPDP is the real compiler and Cedar PDP over ep.
+func realPDP(t *testing.T, ep *v1.EgressPolicy) auth.Authorizer {
+	t.Helper()
+	compiled, err := cedarauth.CompileEgressPolicy("acme", ep, nil)
+	require.NoError(t, err)
+	ents, err := cedarauth.NewEntityProvider(fnMeta{})
+	require.NoError(t, err)
+	pdp, err := cedarauth.New(cedarauth.Deps{Entities: ents, Policies: compiledPolicies(compiled)})
+	require.NoError(t, err)
+	return pdp
+}
+
+// scenario: domain-rule-public-only — a domain rule reaches public addresses only: at any other address the destination
+// carries no domains, so the rule does not fire, whatever the lookup answered.
+func TestScenarioDomainRulePublicOnly(t *testing.T) {
+	t.Parallel()
+	source := netip.MustParseAddr("10.63.0.5")
+	idx := NewMemoryWorkerIndex()
+	idx.Add(source, auth.EntityRef{Type: v1.KindFunction, Namespace: "acme", Name: "etl"})
+	pdp := realPDP(t, &v1.EgressPolicy{ObjectMeta: v1.ObjectMeta{Name: "egress", Namespace: "acme", ResourceGroup: "rg1"}, Spec: v1.EgressPolicySpec{
+		Rules: []v1.EgressRule{{To: v1.EgressTo{Domains: []string{"api.x.example", "*.y.example"}}, Ports: []int{443}}},
+	}})
+	node := func() ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("198.51.100.9"), netip.MustParseAddr("2001:db8:1::9")}, nil
+	}
+	decide := func(t *testing.T, addr netip.Addr, port uint16, d Deps) (auth.Decision, AuditRecord) {
+		t.Helper()
+		d.Workers, d.Authz = idx, pdp
+		d.DNS = fakeDNS{addr: {"a.y.example", "api.x.example", "*.y.example"}}
+		dec, rec, err := decideConnect(context.Background(), d, source, netip.AddrPortFrom(addr, port), "api.x.example")
+		require.NoError(t, err)
+		return dec, rec
+	}
+
+	for _, ip := range []string{
+		"10.0.0.5", "172.16.0.5", "192.168.1.5", // private
+		"169.254.169.254",               // link-local
+		"127.0.0.1",                     // loopback
+		"0.0.0.0",                       // unspecified
+		"100.64.0.5", "100.127.255.254", // shared
+		"224.0.0.1", "239.255.255.250", // multicast
+		"255.255.255.255",    // broadcast
+		"198.51.100.9",       // on the node
+		"fd00::5", "fc00::5", // private
+		"fe80::5",       // link-local
+		"::1",           // loopback
+		"::",            // unspecified
+		"ff02::1",       // multicast
+		"2001:db8:1::9", // on the node
+	} {
+		t.Run(ip, func(t *testing.T) {
+			t.Parallel()
+			dec, rec := decide(t, netip.MustParseAddr(ip), 443, Deps{NodeAddrs: node})
+			require.False(t, dec.Allowed, "%s takes a cidrs rule that names it", ip)
+			require.False(t, rec.Allowed)
+			require.Empty(t, rec.Domain, "the audit record names no domain there")
+		})
+	}
+
+	for _, ip := range []string{"::ffff:10.0.0.5", "::ffff:0.0.0.0", "::ffff:100.64.0.5", "::ffff:198.51.100.9"} {
+		restricted, err := Deps{NodeAddrs: node}.restricted(netip.MustParseAddr(ip))
+		require.NoError(t, err)
+		require.True(t, restricted, "%s reads as its IPv4 address", ip)
+	}
+
+	for _, ip := range []string{"93.184.216.34", "100.128.0.1", "100.63.255.254", "172.32.0.1", "2606:2800:220:1::1"} {
+		t.Run(ip, func(t *testing.T) {
+			t.Parallel()
+			addr := netip.MustParseAddr(ip)
+			dec, rec := decide(t, addr, 443, Deps{NodeAddrs: node})
+			require.True(t, dec.Allowed, "a public address behaves as before")
+			require.Equal(t, "api.x.example", rec.Domain)
+
+			dec, _ = decide(t, addr, 80, Deps{NodeAddrs: node})
+			require.False(t, dec.Allowed, "the rule's port holds")
+		})
+	}
+
+	t.Run("the host's own addresses are read when no reader is given", func(t *testing.T) {
+		t.Parallel()
+		addrs, err := interfaceAddrs()
+		require.NoError(t, err)
+		require.Contains(t, addrs, netip.MustParseAddr("127.0.0.1"))
+		restricted, err := Deps{}.restricted(netip.MustParseAddr("93.184.216.34"))
+		require.NoError(t, err)
+		require.False(t, restricted)
+	})
+
+	t.Run("a failed read of the node's addresses permits nothing", func(t *testing.T) {
+		t.Parallel()
+		d := Deps{Workers: idx, Authz: pdp, DNS: fakeDNS{netip.MustParseAddr("93.184.216.34"): {"api.x.example"}}, NodeAddrs: func() ([]netip.Addr, error) {
+			return nil, errors.New("netlink down")
+		}}
+		dec, _, err := decideConnect(context.Background(), d, source, netip.MustParseAddrPort("93.184.216.34:443"), "")
+		require.Error(t, err)
+		require.False(t, dec.Allowed)
+	})
+}
+
+// scenario: cidr-rule-names-the-address — a rule that lists the name and the address reaches it, on its ports. A connection
+// with no attested name needs no read of the node's addresses.
+func TestScenarioCIDRRuleNamesTheAddress(t *testing.T) {
+	t.Parallel()
+	source := netip.MustParseAddr("10.63.0.5")
+	idx := NewMemoryWorkerIndex()
+	idx.Add(source, auth.EntityRef{Type: v1.KindFunction, Namespace: "acme", Name: "etl"})
+	pdp := realPDP(t, &v1.EgressPolicy{ObjectMeta: v1.ObjectMeta{Name: "egress", Namespace: "acme", ResourceGroup: "rg1"}, Spec: v1.EgressPolicySpec{
+		Rules: []v1.EgressRule{{To: v1.EgressTo{Domains: []string{"db.internal.example"}, CIDRs: []string{"10.0.0.5/32", "198.51.100.9/32"}}, Ports: []int{5432}}},
+	}})
+	d := Deps{Workers: idx, Authz: pdp, NodeAddrs: func() ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("198.51.100.9")}, nil
+	}}
+	attested := func(addr string) fakeDNS { return fakeDNS{netip.MustParseAddr(addr): {"db.internal.example"}} }
+	for _, tc := range []struct {
+		dst     string
+		allowed bool
+	}{
+		{"10.0.0.5:5432", true},
+		{"10.0.0.5:5433", false},
+		{"10.0.0.6:5432", false},
+		{"198.51.100.9:5432", true},
+	} {
+		d := d
+		d.DNS = attested(netip.MustParseAddrPort(tc.dst).Addr().String())
+		dec, _, err := decideConnect(context.Background(), d, source, netip.MustParseAddrPort(tc.dst), "")
+		require.NoError(t, err)
+		require.Equal(t, tc.allowed, dec.Allowed, tc.dst)
+	}
+
+	d.DNS = fakeDNS{}
+	d.NodeAddrs = func() ([]netip.Addr, error) { return nil, errors.New("not read") }
+	dec, _, err := decideConnect(context.Background(), d, source, netip.MustParseAddrPort("10.0.0.5:5432"), "")
+	require.NoError(t, err)
+	require.True(t, dec.Allowed, "by address, with no name")
 }
 
 // scenario: disabled-passthrough — New(false) is the no-op Gateway: Serve returns on ctx cancel and

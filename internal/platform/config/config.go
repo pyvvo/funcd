@@ -101,14 +101,16 @@ type Config struct {
 		// Egress network isolation (ADR-0115, FEAT-0007/F80): the worker-egress default-deny substrate.
 		// Off by default (phased); Linux/containerd only (a no-op elsewhere). When enabled, funcd programs
 		// an nftables policy over the funcd0 bridge that default-denies worker egress and redirects
-		// remaining external TCP into the egress gateway (F81). DNSResolver / InternalAllow are the
-		// worker-reachable resolver + node-service addresses (host:port) passed directly.
+		// remaining external TCP into the egress gateway (F81). InternalAllow are the worker-reachable
+		// node-service addresses (host:port) passed directly; DNSResolver is the DNS forwarder's upstream, read
+		// only with a forwarder.
 		Network struct {
 			Egress            bool `json:"egress,omitempty" env:"FUNCD_NETWORK_EGRESS"`
 			EgressGatewayPort int  `json:"egressGatewayPort,omitempty" env:"FUNCD_NETWORK_EGRESS_GATEWAY_PORT" validate:"min=0,max=65535"`
-			// DNSForwarderPort is the funcd DNS forwarder host port (ADR-0117, F81): worker :53 is
-			// REDIRECTed into it so it is the only reachable resolver (the domain trust anchor). Wired
-			// with the gateway when Egress is on (Linux/containerd only).
+			// DNSForwarderPort is the funcd DNS forwarder's port on the bridge address (ADR-0117, F81, ADR-0315): worker
+			// :53 is REDIRECTed into it so it is the only reachable resolver (the domain trust anchor). It answers known
+			// workers only, and forwards only the names an EgressPolicy domain rule allows them. Wired with the gateway
+			// when Egress is on (Linux/containerd only). Zero ⇒ neither runs, and nothing goes out, DNS included.
 			DNSForwarderPort int      `json:"dnsForwarderPort,omitempty" env:"FUNCD_NETWORK_DNS_FORWARDER_PORT" validate:"min=0,max=65535"`
 			DNSResolver      string   `json:"dnsResolver,omitempty" env:"FUNCD_NETWORK_DNS_RESOLVER"`
 			InternalAllow    []string `json:"internalAllow,omitempty" env:"FUNCD_NETWORK_INTERNAL_ALLOW" envSeparator:","`
@@ -483,7 +485,7 @@ func Defaults() Config { return defaults() }
 // Load after the merge, when DataDir is final.
 func defaults() Config {
 	var c Config
-	c.Server.ListenAddr = "0.0.0.0:8080"
+	c.Server.ListenAddr = "127.0.0.1:8080"
 	c.Server.DataPlaneAddr = "127.0.0.1:0"
 	c.Server.BaseDomain = "localhost"
 	c.Server.Limits.MaxKeys = 4096

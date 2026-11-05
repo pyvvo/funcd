@@ -96,7 +96,7 @@ func (i *HTTPInvoker) Invoke(ctx context.Context, ns v1.NamespaceName, fn v1.Obj
 	call.Request.URL, call.Request.Host = target, ""
 	resp, err := i.client().Do(call.Request)
 	if err != nil {
-		return fault.Unavailablef(op, "POST to %s/%s upstream: %v", ns, fn, err)
+		return fault.Wrapf(err, fault.Unavailable, op, "POST to %s/%s upstream", ns, fn)
 	}
 	defer httpx.CloseBody(resp.Body)
 	if rf := i.Chain.After(ctx, call, invoke.NewAnswer(resp)); rf != nil {

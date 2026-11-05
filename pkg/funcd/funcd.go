@@ -70,6 +70,7 @@ import (
 	"github.com/pyvvo/funcd/internal/network"
 	"github.com/pyvvo/funcd/internal/network/egress"
 	"github.com/pyvvo/funcd/internal/platform/clock"
+	platformconfig "github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/platform/observability"
 	"github.com/pyvvo/funcd/internal/provider"
@@ -98,7 +99,8 @@ import (
 
 // DevToken is the default control-plane credential token wired by InMemory(). It
 // lets a test/tool authenticate against an embedded platform; it is NOT a
-// production identity story (Production() wires no default token — ADR-0028).
+// production identity story (Production() wires no default token — ADR-0028),
+// and New refuses it on an address off loopback (ADR-0314).
 const DevToken = "funcd-dev-token"
 
 const (
@@ -277,7 +279,7 @@ type config struct {
 	backupMeter metric.Meter
 
 	// bridgeAddress is funcd's address on its container bridge (ADR-0238), bound and published by the lake proxies and
-	// the SQL change feed; "" ⇒ 127.0.0.1.
+	// the SQL change feed, and bound by the DNS forwarder (ADR-0315); "" ⇒ 127.0.0.1.
 	bridgeAddress string
 
 	// Workflow engine (ADR-0094): always wired. Durable run state is a Badger store at
@@ -438,6 +440,9 @@ func (c *config) validate() error {
 	case c.credentials == nil:
 		return fault.Invalidf(op, "control-plane credentials are required (use WithCredentials, WithDevAuth or a preset)")
 	}
+	if err := c.checkDevTokenBind(); err != nil {
+		return err
+	}
 	if n := c.funclogMaxRecordBytes; n != 0 && (n < minRecordBytes || n > funclog.MaxLineBytes) {
 		return fault.Invalidf(op, "funclog.maxRecordBytes %d is outside [%d, %d]: the reader drops a line over %d bytes",
 			n, minRecordBytes, funclog.MaxLineBytes, funclog.MaxLineBytes)
@@ -445,6 +450,21 @@ func (c *config) validate() error {
 	// Container execution runs every Function solo: no pool worker can run in a curated image (ADR-0173).
 	if c.imageFor != nil && (len(c.poolShim) > 0 || len(c.poolShimsByFamily) > 0) {
 		return fault.Invalidf(op, "worker pooling is not supported with container execution: WithPoolShim and WithPoolShimFor cannot be combined with WithContainerExecution")
+	}
+	return nil
+}
+
+// checkDevTokenBind refuses the built-in DevToken on an address off loopback: the control plane's, and the data plane's
+// when the edge reads the same credentials (ADR-0314 Decisions 5 and 6). An empty address is judged as what it binds.
+func (c *config) checkDevTokenBind() error {
+	const op, wayOut = "funcd.New", "pass WithCredentials, WithDevAuth with a token of your own, or a loopback address"
+	_, err := c.credentials.Lookup(context.Background(), DevToken)
+	accepted := err == nil
+	if addr := cmp.Or(c.listenAddr, defaultProdAddr); accepted && !platformconfig.IsLoopbackAddr(addr) {
+		return fault.Invalidf(op, "WithListenAddr %q is off loopback, and the built-in DevToken works only on loopback: %s", addr, wayOut)
+	}
+	if addr := cmp.Or(c.dataPlaneAddr, defaultDataPlaneAddr); accepted && c.edgeAuthEnabled && !platformconfig.IsLoopbackAddr(addr) {
+		return fault.Invalidf(op, "WithDataPlaneAddr %q is off loopback, WithEdgeAuth is on, and the built-in DevToken works only on loopback: %s", addr, wayOut)
 	}
 	return nil
 }
@@ -1654,32 +1674,24 @@ func (p policySource) Policies(ctx context.Context) ([]v1.Policy, string, error)
 	return out, rev, nil
 }
 
-// storeWildcardPatterns adapts store.Store to egress.WildcardPatterns (ADR-0117, judge Major 2): it
-// returns a namespace's EgressPolicy wildcard domain patterns ("*.x.com") so the DNS forwarder injects a
-// matched pattern token, keeping wildcard authorization an exact set-membership check over a
-// forwarder-derived token. Derived from the same EgressPolicy set the PDP compiles (no duplicate state).
-type storeWildcardPatterns struct{ s store.Store }
+// storeDomainRules adapts store.Store to egress.DomainRules (ADR-0315): the domain rules of the EgressPolicies that apply
+// to a worker's principal, read on each lookup from the same EgressPolicy set the PDP compiles (no duplicate state). A
+// failed list is an error, so the lookup is refused.
+type storeDomainRules struct{ s store.Store }
 
-func (w storeWildcardPatterns) Wildcards(ns v1.NamespaceName) []string {
-	res, err := w.s.List(context.Background(), v1.KindEgressPolicy.GVK(), store.ListOptions{Namespace: ns})
+func (r storeDomainRules) For(ctx context.Context, principal auth.EntityRef) ([]string, error) {
+	const op = "funcd.storeDomainRules.For"
+	res, err := r.s.List(ctx, v1.KindEgressPolicy.GVK(), store.ListOptions{Namespace: principal.Namespace})
 	if err != nil {
-		return nil
+		return nil, fault.Wrapf(err, fault.KindOf(err), op, "list egress policies")
 	}
 	var out []string
 	for _, o := range res.Items {
-		ep, ok := o.(*v1.EgressPolicy)
-		if !ok {
-			continue
-		}
-		for i := range ep.Spec.Rules {
-			for _, d := range ep.Spec.Rules[i].To.Domains {
-				if len(d) > 2 && d[0] == '*' && d[1] == '.' {
-					out = append(out, d)
-				}
-			}
+		if ep, ok := o.(*v1.EgressPolicy); ok {
+			out = append(out, cedarauth.EgressDomains(ep, principal)...)
 		}
 	}
-	return out
+	return out, nil
 }
 
 // egressAuditSink records each egress decision (ADR-0117): every connection (allowed + blocked) is

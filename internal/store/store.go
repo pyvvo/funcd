@@ -615,7 +615,7 @@ func keyFor(ns v1.NamespaceName, name v1.ObjectName) string {
 func newUID() (v1.UID, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return "", fault.Internalf("store.newUID", "generate uid: %v", err)
+		return "", fault.Wrapf(err, fault.Internal, "store.newUID", "generate uid")
 	}
 	return v1.UID(hex.EncodeToString(b[:])), nil
 }
@@ -634,7 +634,7 @@ func readRevision(tx Txn) (uint64, error) {
 func parseRevision(raw []byte) (uint64, error) {
 	n, err := strconv.ParseUint(string(raw), 10, 64)
 	if err != nil {
-		return 0, fault.Internalf("store.readRevision", "corrupt revision %q: %v", raw, err)
+		return 0, fault.Wrapf(err, fault.Internal, "store.readRevision", "corrupt revision")
 	}
 	return n, nil
 }
@@ -655,12 +655,12 @@ func nextRevision(tx Txn) (uint64, error) {
 func (s *store) encode(ctx context.Context, k v1.Kind, obj v1.Object) ([]byte, error) {
 	raw, err := json.Marshal(obj)
 	if err != nil {
-		return nil, fault.Internalf("store.encode", "marshal %s: %v", k, err)
+		return nil, fault.Wrapf(err, fault.Internal, "store.encode", "marshal %s", k)
 	}
 	if enc, ok := s.enc[k]; ok {
 		ct, eerr := enc.Encrypt(ctx, raw)
 		if eerr != nil {
-			return nil, fault.Internalf("store.encode", "encrypt %s: %v", k, eerr)
+			return nil, fault.Wrapf(eerr, fault.Internal, "store.encode", "encrypt %s", k)
 		}
 		return ct, nil
 	}
@@ -672,7 +672,7 @@ func (s *store) decode(ctx context.Context, k v1.Kind, data []byte) (v1.Object, 
 	if enc, ok := s.enc[k]; ok {
 		pt, err := enc.Decrypt(ctx, data)
 		if err != nil {
-			return nil, fault.Internalf("store.decode", "decrypt %s: %v", k, err)
+			return nil, fault.Wrapf(err, fault.Internal, "store.decode", "decrypt %s", k)
 		}
 		data = pt
 	}
@@ -681,7 +681,7 @@ func (s *store) decode(ctx context.Context, k v1.Kind, data []byte) (v1.Object, 
 		return nil, fault.Internalf("store.decode", "unknown kind %q", k)
 	}
 	if err := json.Unmarshal(data, obj); err != nil {
-		return nil, fault.Internalf("store.decode", "unmarshal %s: %v", k, err)
+		return nil, fault.Wrapf(err, fault.Internal, "store.decode", "unmarshal %s", k)
 	}
 	return obj, nil
 }
@@ -691,14 +691,14 @@ func (s *store) decode(ctx context.Context, k v1.Kind, data []byte) (v1.Object, 
 func cloneObject(obj v1.Object) (v1.Object, error) {
 	raw, err := json.Marshal(obj)
 	if err != nil {
-		return nil, fault.Internalf("store.clone", "marshal: %v", err)
+		return nil, fault.Wrapf(err, fault.Internal, "store.clone", "marshal")
 	}
 	fresh, ok := v1.NewObject(obj.GroupVersionKind().Kind)
 	if !ok {
 		return nil, fault.Internalf("store.clone", "unknown kind %q", obj.GroupVersionKind().Kind)
 	}
 	if err := json.Unmarshal(raw, fresh); err != nil {
-		return nil, fault.Internalf("store.clone", "unmarshal: %v", err)
+		return nil, fault.Wrapf(err, fault.Internal, "store.clone", "unmarshal")
 	}
 	return fresh, nil
 }
@@ -721,11 +721,11 @@ func specChanged(a, b v1.Object) (bool, error) {
 func specOf(obj v1.Object) ([]byte, error) {
 	raw, err := json.Marshal(obj)
 	if err != nil {
-		return nil, fault.Internalf("store.specOf", "marshal: %v", err)
+		return nil, fault.Wrapf(err, fault.Internal, "store.specOf", "marshal")
 	}
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &m); err != nil {
-		return nil, fault.Internalf("store.specOf", "unmarshal: %v", err)
+		return nil, fault.Wrapf(err, fault.Internal, "store.specOf", "unmarshal")
 	}
 	return m["spec"], nil
 }

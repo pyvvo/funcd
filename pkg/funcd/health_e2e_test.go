@@ -429,3 +429,35 @@ func TestScenarioHealthPoolMemberDependency(t *testing.T) {
 			3*time.Second, 250*time.Millisecond), "a member's failed check never restarts the pool")
 	})
 }
+
+// scenario: funcds-probes-read-the-worker — on the real node and python shims: the probes go to the worker, so a is
+// Ready and b reads its dependency report, while the same path from the listener answers 404.
+func TestScenarioFuncdsProbesReadTheWorker(t *testing.T) {
+	t.Parallel()
+	forPoolLangs(t, func(t *testing.T, l poolLang) {
+		h := newShimRig(t, l.python, funcd.WithPacing(funcd.Pacing{SupervisionPeriod: 500 * time.Millisecond}))
+		h.applyObj(t, ownedKVStore(""))
+		h.applyObj(t, forbidReadOf("forbid-b", "b", "a", "s", "t"))
+		for _, n := range []string{"a", "b"} {
+			h.deploy(t, n, l.fn(l.quiet).with(bindTable))
+		}
+		waitReady(t, h.c, "a")
+		ready := dependencyReport(t, 20*time.Second, func() v1.Condition {
+			c, _ := h.function(t, "b").Status.Conditions.Get("Ready")
+			return c
+		}, `kv binding "t": `)
+		require.Contains(t, ready.Message, `not authorized to kv::read table "t"`)
+		for _, n := range []string{"a", "b"} {
+			for _, path := range []string{"/health/readiness", "/health/liveness"} {
+				resp, err := http.Get(h.dp + "/function/" + n + path)
+				require.NoError(t, err)
+				body, err := io.ReadAll(resp.Body)
+				require.NoError(t, err)
+				require.NoError(t, resp.Body.Close())
+				require.Equal(t, http.StatusNotFound, resp.StatusCode, "%s%s from the listener", n, path)
+				require.Contains(t, string(body), "no route for")
+			}
+		}
+		require.True(t, h.call(t, "a").OK)
+	})
+}

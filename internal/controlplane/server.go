@@ -82,6 +82,7 @@ func NewServer(d Deps) (http.Handler, error) {
 	}
 
 	r := chi.NewRouter()
+	r.Use(fault.LogCauses(logger.With("component", "controlplane")))
 	r.Use(middleware.Authn(d.Credentials))
 	admissions := append([]admission.Admission{admission.NewValidateAdmission()}, d.Admissions...)
 	api := NewAPI(r, NewStoreHandlers(d.Store, d.Authorizer, admission.NewPipeline(admissions...), d.Collector, d.Planner))

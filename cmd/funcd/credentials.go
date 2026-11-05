@@ -17,6 +17,9 @@ import (
 // maxTokenFileBytes bounds a token file read (ADR-0171 Decision 2).
 const maxTokenFileBytes = 4096
 
+// builtInTokenWayOut is what a start refused for the built-in dev token can set (ADR-0314 Decision 2).
+const builtInTokenWayOut = "set auth.credentials, or auth.token (FUNCD_TOKEN) to a token of your own, or use a loopback address"
+
 // credentialOption maps auth.* to the credential option (ADR-0171): auth.credentials ⇒ WithCredentials, else the
 // auth.token shorthand ⇒ WithDevAuth. It reads every token file and checks every entry, so buildOptions calls it
 // before it opens Badger, the substrate or KV. Errors name keys, paths and indexes, never a token.
@@ -65,10 +68,12 @@ func credentialOption(cfg config.Config, log *slog.Logger) (funcd.Option, error)
 // rules so a value no request can use refuses startup (#717).
 func devAuthOption(cfg config.Config, log *slog.Logger) (funcd.Option, error) {
 	const op = "devAuthOption"
+	if builtInTokenInEffect(cfg) {
+		log.Warn("funcd: using the built-in dev token, which works only on loopback: to reach funcd from another machine, " +
+			"set server.listenAddr and auth.credentials")
+	}
 	token := funcd.DevToken
-	if cfg.Auth.Token == "" {
-		log.Warn("funcd: no auth.token / FUNCD_TOKEN — using the built-in dev token (not for production)")
-	} else {
+	if cfg.Auth.Token != "" {
 		t, err := parseToken(cfg.Auth.Token)
 		if err != nil {
 			return nil, fault.Invalidf(op, "config key %q %v", "auth.token (FUNCD_TOKEN)", err)
@@ -80,6 +85,37 @@ func devAuthOption(cfg config.Config, log *slog.Logger) (funcd.Option, error) {
 		return nil, err
 	}
 	return funcd.WithDevAuth(token, nss...), nil
+}
+
+// builtInTokenInEffect reports whether cfg makes funcd.DevToken the daemon's credential: auth.credentials is absent and
+// auth.token is empty or, trimmed as devAuthOption trims it, equals it (ADR-0314 Decision 2).
+func builtInTokenInEffect(cfg config.Config) bool {
+	if cfg.Auth.Credentials != nil {
+		return false
+	}
+	if cfg.Auth.Token == "" {
+		return true
+	}
+	token, err := parseToken(cfg.Auth.Token)
+	return err == nil && token == funcd.DevToken
+}
+
+// checkBuiltInTokenBind refuses the built-in dev token on an address off loopback: the control plane's, and the data
+// plane's when the edge reads the same credentials (ADR-0314 Decisions 2 and 6). Its errors name the key, never a token.
+func checkBuiltInTokenBind(cfg config.Config) error {
+	const op = "checkBuiltInTokenBind"
+	if !builtInTokenInEffect(cfg) {
+		return nil
+	}
+	if addr := cfg.Server.ListenAddr; !config.IsLoopbackAddr(addr) {
+		return fault.Invalidf(op, "config key %q is %q, off loopback, and the built-in dev token works only on loopback: %s",
+			"server.listenAddr (FUNCD_LISTEN_ADDR)", addr, builtInTokenWayOut)
+	}
+	if addr := cfg.Server.DataPlaneAddr; cfg.Server.Auth.Edge && !config.IsLoopbackAddr(addr) {
+		return fault.Invalidf(op, "config key %q is %q, off loopback, server.auth.edge is on, and the built-in dev token works only on loopback: %s",
+			"server.dataPlaneAddr (FUNCD_DATA_PLANE_ADDR)", addr, builtInTokenWayOut)
+	}
+	return nil
 }
 
 // namespaceList returns the namespaces at key with surrounding whitespace trimmed, refusing an empty list or entry.

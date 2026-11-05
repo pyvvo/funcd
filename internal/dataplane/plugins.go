@@ -23,8 +23,8 @@ import (
 const callOp = "dataplane.ServeHTTP"
 
 // Plugins returns the data plane's built-in invokePlugins in ADR-0302 Decision 2's order: authn, hold, rate,
-// credentials, prefix, envelope, deadline. enf may be nil (an authenticated stance then fails closed), lim nil (no
-// per-target rate), held nil (no hold); defaultTimeout ≤ 0 is v1.DefaultInvokeTimeout.
+// credentials, prefix, envelope, deadline, then ADR-0316's health-paths. enf may be nil (an authenticated stance then
+// fails closed), lim nil (no per-target rate), held nil (no hold); defaultTimeout ≤ 0 is v1.DefaultInvokeTimeout.
 func Plugins(enf *authn.Enforcer, lim *limit.TargetLimiter, held hold.CallGate, defaultTimeout time.Duration) []invoke.Plugin {
 	if held == nil {
 		held = hold.NeverCall
@@ -40,6 +40,7 @@ func Plugins(enf *authn.Enforcer, lim *limit.TargetLimiter, held hold.CallGate, 
 		prefixPlugin{},
 		envelopePlugin{},
 		deadlinePlugin{defaultTimeout: defaultTimeout},
+		healthPathsPlugin{},
 	}
 }
 
@@ -143,7 +144,7 @@ func (envelopePlugin) Before(_ context.Context, c *invoke.Call) *invoke.Refusal 
 		if errors.As(err, &tooLarge) {
 			return &invoke.Refusal{Err: fault.PayloadTooLargef(callOp, "request body exceeds %d bytes", tooLarge.Limit)}
 		}
-		return &invoke.Refusal{Err: fault.Invalidf(callOp, "reading request body: %v", err)}
+		return &invoke.Refusal{Err: fault.Invalidf(callOp, "could not read request body")}
 	}
 	ns, name := c.Target.Namespace, c.Target.Name
 	if serveHTTP(c.Function) {
@@ -153,6 +154,7 @@ func (envelopePlugin) Before(_ context.Context, c *invoke.Call) *invoke.Refusal 
 	}
 	c.Request.Body = io.NopCloser(bytes.NewReader(body))
 	c.Request.ContentLength = int64(len(body))
+	c.Request.TransferEncoding = nil // the length frames the worker's request, however the caller framed its own
 	c.Request.Header.Set("Content-Length", strconv.Itoa(len(body)))
 	return nil
 }
@@ -172,6 +174,23 @@ func (p deadlinePlugin) Before(_ context.Context, c *invoke.Call) *invoke.Refusa
 	c.Request = activator.WithResponseDeadline(c.Request,
 		activator.ResponseDeadline{At: c.Received.Add(limit), Limit: limit, Source: source})
 	return nil
+}
+
+// healthPathsPrefix is the prefix of a Function's own paths: funcd's probes read them on the worker, at its address.
+const healthPathsPrefix = "/health/"
+
+// healthPathsPlugin keeps those paths from the listener: a call whose remainder lies under the prefix answers 404, right
+// after authn at Admit, whatever the Function's state, so nothing wakes (ADR-0316). It reads the remainder resolved, as a
+// shim's URL parser does, and rooted, since a Prefix rule at / leaves no leading slash.
+type healthPathsPlugin struct{}
+
+func (healthPathsPlugin) Name() string { return "health-paths" }
+func (healthPathsPlugin) Applies(c *invoke.Call) bool {
+	return c.Caller == invoke.External && strings.HasPrefix(activator.RootedClean(c.Remainder), healthPathsPrefix)
+}
+
+func (healthPathsPlugin) Admit(_ context.Context, c *invoke.Call) *invoke.Refusal {
+	return &invoke.Refusal{Err: fault.NotFoundf(callOp, "no route for %q", c.Request.URL.Path)}
 }
 
 func serveHTTP(fn *v1.Function) bool {

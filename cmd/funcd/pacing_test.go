@@ -69,6 +69,22 @@ func loadPacing(t *testing.T, body string) config.Config {
 	return cfg
 }
 
+// dnsResolver is read only with a forwarder, its upstream (ADR-0315): a bad value stops the start with one and means nothing
+// with none.
+func TestDNSResolverIsReadOnlyWithAForwarder(t *testing.T) {
+	body := "storage:\n  mode: memory\n  dataDir: \"" + shortDataDir(t) + "\"\nserver:\n  network:\n    egress: true\n    egressGatewayPort: 15001\n    dnsResolver: not-an-address\n"
+	root := slog.New(slog.DiscardHandler)
+
+	_, closeExec, _, _, err := buildOptions(context.Background(), loadPacing(t, body), root, nil)
+	require.NoError(t, err)
+	if closeExec != nil {
+		_ = closeExec()
+	}
+
+	_, _, _, _, err = buildOptions(context.Background(), loadPacing(t, body+"    dnsForwarderPort: 15053\n"), root, nil)
+	require.ErrorContains(t, err, "parse dnsResolver")
+}
+
 // scenario: defaults-equal-todays-values — with no config file and no FUNCD_* variable every key has its Default.
 func TestScenarioDefaultsEqualTodaysValues(t *testing.T) {
 	cfg, err := config.Load("", config.Flags{})
@@ -358,7 +374,7 @@ func TestScenarioHealthLivenessConfig(t *testing.T) {
 	require.ErrorContains(t, err, `"runtime.livenessTimeout"`)
 	require.ErrorContains(t, err, "runtime.supervisionPeriod, 10s")
 
-	cfg = loadPacing(t, "storage:\n  mode: memory\n  dataDir: \""+dir+"\"\nruntime:\n  livenessTimeout: 20s\n  supervisionPeriod: 10s\n")
+	cfg = loadPacing(t, "server:\n  listenAddr: \"127.0.0.1:0\"\nstorage:\n  mode: memory\n  dataDir: \""+dir+"\"\nruntime:\n  livenessTimeout: 20s\n  supervisionPeriod: 10s\n")
 	opts, closeExec, _, _, err := buildOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
 	require.NoError(t, err, "exactly twice the period starts")
 	release(t, opts, closeExec)

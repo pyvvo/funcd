@@ -57,7 +57,7 @@ func ResumePoint(seen, v Version) Version {
 func newTimeline() (string, error) {
 	var b [timelineBytes]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return "", fault.Internalf("store.newTimeline", "generate timeline: %v", err)
+		return "", fault.Wrapf(err, fault.Internal, "store.newTimeline", "generate timeline")
 	}
 	return hex.EncodeToString(b[:]), nil
 }

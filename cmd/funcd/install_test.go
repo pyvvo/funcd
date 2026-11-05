@@ -9,6 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
+	"github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/platform/durable"
 	"github.com/pyvvo/funcd/internal/safemode"
 )
@@ -74,6 +77,29 @@ func TestInstallPrintIsVersionStamped(t *testing.T) {
 	if !strings.Contains(unit, "version ") {
 		t.Fatalf("unit not version-stamped:\n%s", unit)
 	}
+}
+
+// The unit `funcd install` writes runs the containerd runtime with no config (ADR-0054 scenario runs-out-of-the-box):
+// each of its Environment= lines applied, the config loads containerd and binds loopback (ADR-0314).
+func TestInstallUnitRunsContainerd(t *testing.T) {
+	unit, err := renderUnit()
+	require.NoError(t, err)
+	var applied int
+	for _, line := range strings.Split(unit, "\n") {
+		if kv, ok := strings.CutPrefix(line, "Environment="); ok {
+			name, value, ok := strings.Cut(kv, "=")
+			require.True(t, ok, "%q", line)
+			t.Setenv(name, value)
+			applied++
+		}
+	}
+	require.NotZero(t, applied, "the unit sets its environment\n%s", unit)
+	cfg, err := config.Load("", config.Flags{})
+	require.NoError(t, err)
+	require.Equal(t, "containerd", cfg.Runtime.Mode)
+	require.Equal(t, dataRoot, cfg.Storage.DataDir)
+	require.Equal(t, "127.0.0.1:8080", cfg.Server.ListenAddr)
+	require.NoError(t, checkBuiltInTokenBind(cfg), "a fresh install starts with no config")
 }
 
 // TestUnitsPreventRestartOn70: both units stop restarting on safe mode's exit status 70 (ADR-0207 Decision 5).

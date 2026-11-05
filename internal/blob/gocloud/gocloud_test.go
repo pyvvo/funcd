@@ -323,3 +323,34 @@ func TestADR0159_FileListCarriesAttributesMD5(t *testing.T) {
 		require.Equal(t, a.MD5, it.MD5, it.Key)
 	}
 }
+
+// An answer about a key names the key and, for a key the backend cannot hold, the OS's reason.
+func TestFileBackendAnswersNameTheKey(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	b, err := gocloud.Open(ctx, gocloud.FileURL(dir))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = b.Close() })
+	require.NoError(t, b.Put(ctx, "a", []byte("v"), blob.PutOptions{}))
+	long := strings.Repeat("x", 300)
+	_, getMissing := b.Get(ctx, "missing")
+	_, getUnder := b.Get(ctx, "a/b")
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+		detail string
+	}{
+		{"a delete of a missing key", b.Delete(ctx, "missing"), 404, `blob.Delete: "missing" not found`},
+		{"a get of a missing key", getMissing, 404, `blob.Get: "missing" not found`},
+		{"a get of a key under an object", getUnder, 400, `blob.Get: "a/b" cannot be stored by this backend: not a directory`},
+		{"a put of a key under an object", b.Put(ctx, "a/b", []byte("v"), blob.PutOptions{}), 400, `blob.Put: "a/b" cannot be stored by this backend: not a directory`},
+		{"a put of a key past the OS limit", b.Put(ctx, long, []byte("v"), blob.PutOptions{}), 400, `blob.Put: "` + long + `" cannot be stored by this backend: file name too long`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := fault.ToProblem(tc.err)
+			require.Equal(t, tc.status, p.Status)
+			require.Equal(t, tc.detail, p.Detail)
+		})
+	}
+}

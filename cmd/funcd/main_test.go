@@ -432,9 +432,9 @@ func TestIssue36_DaemonPoolsNodeFunctions(t *testing.T) {
 // + data-plane addresses; the assembled platform binds them (the headline ADR-0061 gap closed).
 func TestScenarioFileSetsAddresses(t *testing.T) {
 	p, _ := addressesFromConfigFile(t)
-	// Production's default is 0.0.0.0:8080; the config set 127.0.0.1:0 → a loopback, ephemeral bind.
+	// The default is 127.0.0.1:8080; the config set 127.0.0.1:0 → an ephemeral bind.
 	require.True(t, strings.HasPrefix(p.Addr(), "127.0.0.1:"), "config listenAddr drove the control-plane bind, got %s", p.Addr())
-	require.NotEqual(t, "0.0.0.0:8080", p.Addr(), "not the Production default")
+	require.NotEqual(t, "127.0.0.1:8080", p.Addr(), "not the default")
 	require.True(t, strings.HasPrefix(p.DataPlaneAddr(), "127.0.0.1:"), "config dataPlaneAddr drove the data-plane bind, got %s", p.DataPlaneAddr())
 }
 
@@ -949,7 +949,7 @@ func TestReleaseLeavesNoBusDir(t *testing.T) {
 	dir := shortDataDir(t)
 	t.Setenv("TMPDIR", dir)
 	path := filepath.Join(dir, "funcdconfig.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("storage:\n  mode: memory\n  dataDir: \""+dir+"\"\n"), 0o600))
+	require.NoError(t, os.WriteFile(path, []byte("server:\n  listenAddr: \"127.0.0.1:0\"\nstorage:\n  mode: memory\n  dataDir: \""+dir+"\"\n"), 0o600))
 	cfg, err := config.Load(path, config.Flags{})
 	require.NoError(t, err)
 	opts, closeExec, _, _, err := buildOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)

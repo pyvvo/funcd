@@ -9,12 +9,12 @@ stateDiagram-v2
     [*] --> limit : the listener read the headers
     limit --> Refused : over a limit
     limit --> Resolve : within the limits
-    Resolve --> Refused : no rule, not exposed by name
+    Resolve --> Refused : no rule, not exposed by name, a failed read of the Namespace
     Resolve --> Direct : a static rule, a Site or a Lake
     Resolve --> Admit : a Function rule, or its name
     Direct --> Answered : the file, or the Lake answers
     Direct --> Refused : no object, or the Lake is down
-    Admit --> Refused : stance not met, Function missing
+    Admit --> Refused : stance not met, a health path, Function missing
     Admit --> Before : admitted
     Before --> Refused : hold, rate, body, contract
     Before --> Wake : deadline set
@@ -35,22 +35,32 @@ and no call reads it; `NetDestination` and `Invocation` are no step of a call. N
 
 | Where | What happens | Time | You see | Status | Source |
 |---|---|---|---|---|---|
+| A fresh funcd | The API answers on loopback, the data plane on loopback at an ephemeral port | none | connection refused at another address | decided | ADR-0314 Decision 1, `TestScenarioFreshConfigBindsLoopback` |
+| An address with no port, with the built-in dev token | This refusal, not a bind error | none | `is off loopback` | accepted | ADR-0314 Consequences, `TestIsLoopbackAddr` |
+| An explicit empty `server.listenAddr` with a real credential | It reaches the `Production()` default, `0.0.0.0:8080`, as before | none | `platform starting` | accepted | ADR-0314 Consequences, `TestScenarioRealCredentialBindsAnywhere` |
 | No rule, no by-name Function | Refused, nothing wakes | none | 404 `no route for "<path>"`, 404 `function <ns>/<name> is not exposed by name` | decided | ADR-0241 Decision 4, `TestScenario_exposure_function_off` |
+| A failed read of a Namespace | A call that needs it is refused before anything is served; only an absent Namespace reads as unset, implicit and open | none | 503 `edge settings unavailable` | accepted | ADR-0176 Decision 2 for the aggregator, `TestNamespaceRead_FailedReadRefusesTheCall` |
 | A rule with no host | In a namespace it answers only on `<ns>.<baseDomain>`; in `default`, on any host no namespace reserves | none | `status.host`, a 404 on another host | decided | ADR-0240 Decisions 3 and 4, `TestScenario_namespace_host_routes` |
 | Two rules match | The longest path wins and a host only breaks a tie, so a `default` host-less rule at a longer path takes a host's shorter one | none | the other rule's backend | deferred | ADR-0176 Open questions, `TestScenarioMatchLongestPrefix` |
 | A Route that cannot serve | It serves nothing, whichever rule is at fault | re-check `controller.routeResyncInterval` 10 s | `Pending`, `Ready=False`: `BackendNotFound`, `RouteConflict` | decided | ADR-0242 Decision 4, `TestScenarioRouteNotReadyMissingBackend` |
 | `server.limits` | Over a limit, refused before any wake; off by default | `server.limits.ratePerMin` 0, `server.limits.maxInFlight` 0 | 429 `rate limit exceeded`, 503 `in-flight concurrency ceiling reached` | decided | ADR-0112 Decision 1, `TestScenarioOverRate429NoWake` |
+| A chunked call | The edge reads it whole to build the CloudEvent, so the worker gets the body with a `Content-Length` | none | as any call | decided | ADR-0134 Contracts, ADR-0181 Decision 2, `TestChunkedCallReachesTheWorkerWithItsLength` |
 | A body over the cap | Refused before any wake, since the edge reads it whole to build the CloudEvent | `maxNormalizeBytes` 1 MiB | 413 `request body exceeds 1048576 bytes` | decided | ADR-0134 Contracts, `TestScenarioUpgradeWithBodyStillCapped` |
 | A call that breaks its contract | The input is refused before any wake; a bad result replaces the answer | `CallBudget` 1 s of patterns | 422 `event data does not match the input contract`, 500 `handler result does not match the output contract` | decided | ADR-0303 Decisions 4 and 5, `TestScenarioABadInputNeverReachesTheWorker` |
+| A contract that cannot be read | The call is refused before any wake | none | 503 `the contract of <ns>/<name> cannot be read` | decided | ADR-0303 Decision 2, `TestServerFaultCauseGoesToTheLog` |
 | An external call's deadline | It runs from receipt, through the wake, to the worker's headers | `invoke.defaultTimeout` 60 s, or `spec.timeout` | 504 `<ns>/<name> did not start its response within 1m0s (invoke.defaultTimeout)` | decided | ADR-0151 Decision 2, `TestScenarioColdWakeCutAtLimit` |
 | A handler past its deadline | It goes on after the 504 until the shim stops it or it ends, so a retry can repeat its effects | 1 s past the deadline (the shim) | the 504 only | accepted | ADR-0151 Consequences, `TestIssue928_StuckPythonCallStops` |
 | A client that stops reading | Its response is cut once it accepts no data; a slow live stream is not | `WriteStallTimeout` 60 s | the connection closes | decided | ADR-0191 Decision 1, `TestScenarioStalledReaderIsCut` |
-| A client slow to send | The whole request must arrive in time, so a slow upload fails | `serverReadTimeout` 10 s | 400 `reading request body: <error>` | accepted | #90, `TestIssue90_SilentBodyReleasesInFlightSlot` |
+| A client slow to send | The whole request must arrive in time, so a slow upload fails | `serverReadTimeout` 10 s | 400 `could not read request body` | accepted | #90, `TestIssue90_SilentBodyReleasesInFlightSlot`, `TestSlowBodyAnswersAFixedText` |
 | The worker fails during a call | funcd does not retry it; only a workflow step or a Sensor does | none | 503 `upstream call failed`; past the headers, a cut connection | accepted | ADR-0155 Risks accepted, `TestWorkerFailureProblemHidesWorkerAddress` |
 | A link's timeout | A nested call keeps its own bound, wake included, not its caller's deadline | `defaultTimeout` 30 s, or the link's `timeout` | 503 `upstream call failed` | decided | ADR-0064 Decision 4, `TestScenarioLinkKeepsOwnLimit` |
 | Nested calls to one Function | Over the cap the next call is refused at once, whoever calls | `invoke.maxNestedInFlight` 10 | 429 `<ns>/<name> has 10 nested calls in flight, the cap set by invoke.maxNestedInFlight` | decided | ADR-0147 Decision 3, `TestScenarioInflightFanoutOverCap` |
 | A Site's deploy | The last good build serves until the new index is written and the Route moves | none | `Ready=False`, `IndexMissing` or `ArtifactNotFound` | decided | ADR-0139 Decision 3, `TestScenarioRedeploySwapsAtomically` |
-| A GET or another path on a cloudevent Function | Unless its contract refuses the input, it wakes the worker, whose shim answers only `POST /` | a cold start | the shim's 404 | decided | ADR-0134 Contracts Wiring, ADR-0016 Decision 3, ADR-0243 Context |
+| A GET or another path on a cloudevent Function | Unless it lies under `/health/` or its contract refuses the input, it wakes the worker, whose shim answers only `POST /` | a cold start | the shim's 404 | decided | ADR-0134 Contracts Wiring, ADR-0016 Decision 3, ADR-0243 Context |
+| A path under `/health/` | Refused once the stance is met, by name and through a Route, with any method and whatever the Function's state. Nothing wakes and no worker is called | none | 404 `no route for "<path>"`; 401 or 403 first | decided | ADR-0316 Decisions 1 and 2, `TestScenarioAHealthPathAnswers404`, `TestScenarioTheStanceAnswersFirst` |
+| An http app's route under `/health/` | The edge answers it, so a route such as `/health/db` answers only over a link; the app's `/health` itself still answers | none | 404 `no route for "<path>"` | accepted | ADR-0316 Consequences, `TestScenarioOtherPathsReachTheWorker` |
+| A health path over a link | Another Function's `ctx.fetch` reaches these paths on an http Function: it holds a link and passes `link::invoke` | none | the worker's answer | accepted | ADR-0316 Scope and Risks accepted, `TestScenarioAnotherFunctionKeepsThePath` |
+| Another method on a Python worker | PUT, DELETE, PATCH, OPTIONS and HEAD answer the stdlib's 501 and close, where the Node shim answers 404 and keeps the connection | a cold start | 501 `Unsupported method` | **uncovered** | ADR-0030 §1 and ADR-0049 name only `POST /` and the two health GETs; issues searched; ran it |
 | A `Gateway` object | Stored and listed; nothing acts on it | none | no status | accepted | ADR-0003 Consequences, `TestScenario_KindRegistryRoundtripsEveryKind` |
 
 <!-- generated values, do not edit: just behavior-values -->
@@ -72,7 +82,7 @@ and no call reads it; `NetDestination` and `Invocation` are no step of a call. N
 | `server.limits.maxInFlight` | 0 | config |
 | `server.limits.maxKeys` | 4096 | config |
 | `server.limits.ratePerMin` | 0 | config |
-| `server.listenAddr` | 0.0.0.0:8080 | config |
+| `server.listenAddr` | 127.0.0.1:8080 | config |
 | `server.network.dnsForwarderPort` | 0 | config |
 | `server.network.dnsResolver` | "" | config |
 | `server.network.egress` | false | config |

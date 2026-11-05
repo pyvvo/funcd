@@ -77,12 +77,12 @@ func cdcLogKey(seq uint64) []byte { return []byte(fmt.Sprintf("%s%020d", cdcLogP
 func (c *cdc) OnWrite(txn *badger.Txn, key string, op Op) error {
 	next, err := c.seq.Next()
 	if err != nil {
-		return fault.Internalf("kvbadger.cdc.OnWrite", "next seq: %v", err)
+		return fault.Wrapf(err, fault.Internal, "kvbadger.cdc.OnWrite", "next seq")
 	}
 	seq := next + 1 // 1-based: seq 0 would be unreachable from a 0-initialised cursor (pending seeks cursor+1)
 	rec, err := json.Marshal(changeRecord{Key: key, Op: op, Seq: seq})
 	if err != nil {
-		return fault.Internalf("kvbadger.cdc.OnWrite", "encode change: %v", err)
+		return fault.Wrapf(err, fault.Internal, "kvbadger.cdc.OnWrite", "encode change")
 	}
 	return txn.Set(cdcLogKey(seq), rec)
 }

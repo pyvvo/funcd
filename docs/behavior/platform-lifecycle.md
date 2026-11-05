@@ -6,7 +6,7 @@ Kinds: none of its own.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Exited : funcdconfig.yaml or an interrupted restore refused, exit 1
+    [*] --> Exited : funcdconfig.yaml, the built-in dev token off loopback or an interrupted restore refused, exit 1
     [*] --> Waiting : config read
     Waiting --> Exited : stop signal
     Waiting --> Counted : enough free space
@@ -34,12 +34,14 @@ restore. Details: [start-stop](../design/platform/start-stop.md). New words: Wai
 
 | Where | What happens | Time | You see | Status | Source |
 |---|---|---|---|---|---|
+| The built-in dev token off loopback | Refused before the count and before anything opens, so it never leads to safe mode; the unit retries it as any failed start | 2 s (the unit) | `the built-in dev token works only on loopback`, naming the key | decided | ADR-0314 Decisions 2 and 3, `TestScenarioBuiltInTokenOffLoopbackRefused` |
+| `funcd install` | Writes one unit, which sets the containerd runtime, and starts it with no config | none | `installed and started funcd.service` | decided | ADR-0054 scenario `runs-out-of-the-box`, `TestInstallUnitRunsContainerd` |
 | An interrupted restore | Refused before the count, so it never reaches exit 70; the unit keeps restarting it | 2 s (the unit) | `restore <command>, begun <time>, was interrupted (<file>): a partial load must not start` | **differs** | ADR-0206 Decision 6 opens the hold after the count, `serve` in `cmd/funcd/main.go` before it; `TestScenarioRestoreCrashRefusesStart` |
 | Less than 640 MiB free | The start waits before it counts and goes on by itself; a stop ends the wait and records no failed start | `spaceWait` 10 s between reads, until `storesOpenBytes` 640 MiB | `funcd: waiting for space on the data filesystem before opening the stores` | decided | ADR-0297 Decision 2, `TestScenarioStartWaitsForSpace` |
 | A wait an earlier Lake engine holds up | Its scratch frees nothing until it stops, and the boot sweep comes after the wait, so an operator must free space or stop it | no end | the same line | accepted | ADR-0297 Consequences |
 | Less than the floor free | The start still serves: reads and the control plane work, workload writes are refused until space is freed | `storage.minFreeSize` 2 GiB | 507 `the data filesystem is below storage.minFreeSize` | decided | ADR-0296 Decision 2, ADR-0297 Decision 2, `TestScenarioStartBelowFloor` |
 | A store out of space | Badger's error reaches funcd as text until upstream releases its change: a write gets no 507, and a failed open is not retried, so the start fails and counts | until that release | the store's error | deferred | ADR-0297 Open questions and Temporary workarounds |
-| A start that fails | Any failure after the count adds one, a taken port or a bad duration too; a config refused at load does not | 2 s between starts (the unit) | exit 1, the cause in the `funcd` log line's `error` | accepted | ADR-0207 Decision 3 and Consequences, `TestScenarioSafeModeStopsLoop` |
+| A start that fails | Any failure after the count adds one, a taken port or a bad duration too; a config refused at load or the built-in dev token off loopback does not | 2 s between starts (the unit) | exit 1, the cause in the `funcd` log line's `error` | accepted | ADR-0207 Decision 3 and Consequences, `TestScenarioSafeModeStopsLoop` |
 | Unclean starts in a row | After `afterCrashes` the next start is held; after twice that it exits 70, not restarted. `stableAfter`, or a clean stop, clears the count | `recovery.safeMode.afterCrashes` 3, `recovery.safeMode.stableAfter` 10 min | `safe mode: 6 unclean starts in a row, so funcd stops (exit status 70)` | decided | ADR-0207 Decisions 3 and 4, `TestBeginModes`, app-todo D15 |
 | Exit 70's advice | It names a restore of the newest verified generation whatever the cause, which loses every write since; `funcd safe-mode reset` alone keeps them | none | `Restore the newest verified generation` | deferred | #1252 |
 | Leaving exit 70 | `funcd safe-mode reset` sets the count to 0 and keeps the hold, so the next start is held until `funcdctl hold release` | until the release | `safe mode reset: the unclean-start count is 0; the platform stays held` | decided | ADR-0207 Decision 5, `TestScenarioLeaveSafeMode`, app-todo D15 |

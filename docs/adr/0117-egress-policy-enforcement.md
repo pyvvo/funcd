@@ -1,6 +1,7 @@
 # ADR-0117: Egress policy enforcement — the in-binary egress gateway PEP (F81)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0315](0315-what-a-domain-rule-allows.md) (2026-11-05) — §1's domains at a restricted address, §2's forwarding of each query and what it records, and *Contracts*' `WildcardPatterns` and `NewForwarder`.
 - **Superseded in part by**: [ADR-0175](0175-engine-is-its-own-principal.md) (2026-10-05) — §4(b) namespace permit gains principal is Function; the §5 Ref and the WorkerIndex carry the owner kind.
 - **Date**: 2026-07-09
 - **Accepted**: 2026-07-09

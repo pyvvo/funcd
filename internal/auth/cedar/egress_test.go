@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 
@@ -261,4 +262,82 @@ func TestScenarioEgressCapabilityRegistered(t *testing.T) {
 	_, ok, err = netDestinationResource(context.Background(), nil, auth.EntityRef{Type: v1.KindKVStore, Namespace: "acme", Name: "orders", Path: "t"})
 	require.NoError(t, err)
 	require.False(t, ok, "the egress capability defers a non-NetDestination resource")
+}
+
+// agreeMeta is regMeta with Lake etl too.
+type agreeMeta struct{ regMeta }
+
+func (m agreeMeta) Get(ctx context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName) (v1.Object, error) {
+	if gvk.Kind == v1.KindLake && name == "etl" {
+		return &v1.Lake{ObjectMeta: v1.ObjectMeta{Name: name, Namespace: ns, ResourceGroup: "rg1"}}, nil
+	}
+	return m.regMeta.Get(ctx, gvk, ns, name)
+}
+
+// scenario: forwarder-and-pdp-agree — EgressDomains, which the DNS forwarder reads, holds a domain exactly when the real
+// compiler and PDP permit egress::connect for that principal with that domain attested. Forwarder and PDP are two rules that
+// must agree, one a Go reading of what the other compiles to Cedar, so every class of input runs through both.
+func TestScenarioForwarderAndPDPAgree(t *testing.T) {
+	t.Parallel()
+	policy := func(name v1.ObjectName, ns v1.NamespaceName, appliesTo []v1.ObjectName, rules ...v1.EgressRule) *v1.EgressPolicy {
+		return &v1.EgressPolicy{ObjectMeta: v1.ObjectMeta{Name: name, Namespace: ns, ResourceGroup: "rg1"}, Spec: v1.EgressPolicySpec{AppliesTo: appliesTo, Rules: rules}}
+	}
+	domains := func(d ...string) v1.EgressRule {
+		return v1.EgressRule{To: v1.EgressTo{Domains: d}, Ports: []int{443}}
+	}
+	whole := policy("whole", "acme", nil, domains("whole.example"))
+	named := policy("named", "acme", []v1.ObjectName{"etl"}, domains("named.example"))
+	mixed := policy("mixed", "acme", nil,
+		v1.EgressRule{To: v1.EgressTo{Domains: []string{"exact.example", "*.wild.example"}, CIDRs: []string{"198.51.100.0/24"}}, Ports: []int{443}},
+		domains("second.example"))
+	anyPort := policy("any", "acme", []v1.ObjectName{"web"}, v1.EgressRule{To: v1.EgressTo{Domains: []string{"any.example"}}})
+	elsewhere := policy("elsewhere", "beta", nil, domains("beta.example"))
+
+	principals := []auth.EntityRef{
+		{Type: v1.KindFunction, Namespace: "acme", Name: "etl"},
+		{Type: v1.KindFunction, Namespace: "acme", Name: "web"},
+		{Type: v1.KindLake, Namespace: "acme", Name: "etl"},
+		{Type: v1.KindFunction, Namespace: "beta", Name: "etl"},
+	}
+	names := []string{"whole.example", "named.example", "exact.example", "*.wild.example", "second.example", "any.example", "beta.example", "other.example"}
+
+	for name, policies := range map[string][]*v1.EgressPolicy{
+		"no policy":                    nil,
+		"whole namespace":              {whole},
+		"appliesTo":                    {named},
+		"one appliesTo and one whole":  {whole, named},
+		"exact, wildcard, CIDR, rules": {mixed},
+		"a rule of any port":           {anyPort},
+		"another namespace's":          {elsewhere},
+		"all":                          {whole, named, mixed, anyPort, elsewhere},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var text strings.Builder
+			for _, ep := range policies {
+				syn, err := CompileEgressPolicy(ep.Namespace, ep, nil)
+				require.NoError(t, err)
+				for _, p := range syn {
+					text.WriteString(p.Spec.Cedar)
+				}
+			}
+			reg := egressReg(t)
+			m := agreeMeta{regMeta{fns: map[string]*v1.Function{
+				"acme/etl": {ObjectMeta: v1.ObjectMeta{Name: "etl", Namespace: "acme", ResourceGroup: "rg1"}},
+				"acme/web": {ObjectMeta: v1.ObjectMeta{Name: "web", Namespace: "acme", ResourceGroup: "rg1"}},
+				"beta/etl": {ObjectMeta: v1.ObjectMeta{Name: "etl", Namespace: "beta", ResourceGroup: "rg1"}},
+			}}}
+			for _, principal := range principals {
+				var forwarded []string
+				for _, ep := range policies {
+					forwarded = append(forwarded, EgressDomains(ep, principal)...)
+				}
+				for _, domain := range names {
+					dst := auth.NetDestination{IP: netip.MustParseAddr("93.184.216.34"), Port: 443, Domains: []string{domain}}
+					require.Equal(t, decideEgress(t, reg, m, principal, dst, text.String()), slices.Contains(forwarded, domain),
+						"principal %s %s/%s, domain %s", principal.Type, principal.Namespace, principal.Name, domain)
+				}
+			}
+		})
+	}
 }

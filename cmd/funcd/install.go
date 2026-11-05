@@ -53,6 +53,7 @@ RestartPreventExitStatus=70
 # funcd needs root for the private containerd (cgroups, netns, mounts) — ADR-0011/0054.
 User=root
 Environment=FUNCD_DATA_DIR={{.DataRoot}}
+Environment=FUNCD_RUNTIME=containerd
 StateDirectory=funcd
 LimitNOFILE=1048576
 # containerd is a managed CHILD of this process: stop signals funcd alone, so it stops its workers and then

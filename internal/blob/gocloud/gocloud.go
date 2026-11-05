@@ -806,11 +806,12 @@ func (k *bucket) Close() error {
 }
 
 // mapErr translates gocloud error codes to api/fault kinds (ADR-0007 §3), wrapping
-// the gocloud cause so errors.Is/As can still reach it (fault.Error.Unwrap).
+// the gocloud cause so errors.Is/As can still reach it (fault.Error.Unwrap). A missing key and a key the
+// backend cannot hold are 4xx, whose detail keeps the whole text, so they carry only the key and the OS's reason.
 func mapErr(op, key string, err error) error {
 	switch gcerrors.Code(err) {
 	case gcerrors.NotFound:
-		return fault.Wrapf(err, fault.NotFound, op, "%q not found", key)
+		return fault.NotFoundf(op, "%q not found", key)
 	case gcerrors.Unimplemented:
 		return fault.Wrapf(err, fault.Unavailable, op, "operation not supported by this backend")
 	case gcerrors.InvalidArgument:
@@ -819,9 +820,10 @@ func mapErr(op, key string, err error) error {
 	// fileblob reports a key its OS path cannot hold as Unknown: a name past the OS limit, or
 	// an object and a "key/" prefix needing one path (a rename onto a directory is EISDIR on
 	// Linux, EEXIST on macOS). The key is at fault, not the backend.
-	if errors.Is(err, syscall.ENAMETOOLONG) || errors.Is(err, syscall.ENOTDIR) ||
-		errors.Is(err, syscall.EISDIR) || errors.Is(err, syscall.EEXIST) {
-		return fault.Wrapf(err, fault.Invalid, op, "%q cannot be stored by this backend", key)
+	var errno syscall.Errno
+	if errors.As(err, &errno) && (errno == syscall.ENAMETOOLONG || errno == syscall.ENOTDIR ||
+		errno == syscall.EISDIR || errno == syscall.EEXIST) {
+		return fault.Wrapf(errno, fault.Invalid, op, "%q cannot be stored by this backend", key)
 	}
 	return fault.Wrapf(err, fault.Internal, op, "%s failed for %q", op, key)
 }

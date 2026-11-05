@@ -2,6 +2,7 @@
 
 - **Status**: Implemented
 - **Superseded in part by**: [ADR-0171](0171-static-credential-list.md) (2026-10-05) — Every key FUNCD_*-overridable: auth.credentials has no env var.
+- **Superseded in part by**: [ADR-0314](0314-a-fresh-funcd-answers-on-loopback-until-it-has-a-real-credential.md) (2026-11-05) — scenario zero-config-defaults: 127.0.0.1:8080; Constraints' "a malformed bind fails at listen time": with the built-in token, a start is refused first.
 - **Date**: 2026-06-20
 - **Deciders**: green-0-rabbit
 - **Tags**: operability, config, daemon, refactor
