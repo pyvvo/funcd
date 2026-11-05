@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.39.1](https://github.com/pyvvo/funcd/compare/v0.39.0...v0.39.1) (2026-11-05)
+
+
+### Bug Fixes
+
+* **backup:** a 404 from the backup target is named in backup status, and any other cause stays in the log ([a018c8f](https://github.com/pyvvo/funcd/commit/a018c8f847accdb89a50ad227b4a16d6a8c34323))
+* **blob:** a store that closes the connection with no answer fails a listing ([a018c8f](https://github.com/pyvvo/funcd/commit/a018c8f847accdb89a50ad227b4a16d6a8c34323))
+
 ## [0.39.0](https://github.com/pyvvo/funcd/compare/v0.38.0...v0.39.0) (2026-11-05)
 
 
