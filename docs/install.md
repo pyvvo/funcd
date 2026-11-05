@@ -34,7 +34,8 @@ sudo funcd install                 # lays down crun and the private containerd, 
 `funcd install` is idempotent. It writes one unit, `/etc/systemd/system/funcd.service`: funcd is the service and
 containerd its managed child, with no separate containerd unit. The unit runs as root, which the private containerd
 needs for cgroups, network namespaces and mounts; it restarts on failure except safe mode's exit status 70
-(ADR-0207). `sudo funcd uninstall` removes the service again. Then go to step 4.
+(ADR-0207). It sets `FUNCD_RUNTIME=containerd`, which wins over `runtime.mode` in a config file. `sudo funcd uninstall`
+removes the service again. Then go to step 4.
 
 ## 3. The process runtime: the bundled unit
 
@@ -158,7 +159,8 @@ for each object under its prefixes, and the SQL change feed publishes again any 
 From the release with ADR-0314, a node with no `server.listenAddr` answers on `127.0.0.1:8080`: set the key to keep
 another address. A start with an address off loopback and the built-in token, in any form, is refused, so set
 `auth.credentials` or a token of your own first (step 5). `funcd upgrade` returns once it has started the unit, before the
-new binary reads its config: read `systemctl status funcd`.
+new binary reads its config: read `systemctl status funcd`. A unit written by `funcd install` from this release on sets
+`FUNCD_RUNTIME=containerd`; an installed unit keeps what it has until the next `funcd install`.
 
 ## A full data disk
 
