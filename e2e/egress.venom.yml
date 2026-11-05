@@ -12,8 +12,8 @@
 #     a lookup asked from the worker's own netns is answered or REFUSED by the EgressPolicy, with a log line.
 #   * a worker's traffic to the node stops at the input chain (ADR-0115 Scope) — a UDP listener on the bridge address answers
 #     the node and not the worker.
-#   * a worker's network holds what the rules read (ADR-0318) — no CAP_NET_RAW, no IPv6 on eth0 while loopback keeps it, and
-#     unicast, limited broadcast and multicast reach no sibling.
+#   * a worker's network holds what the rules read (ADR-0318) — no CAP_NET_RAW, no IPv6 on eth0 while loopback keeps it,
+#     unicast, limited broadcast and multicast reach no sibling, and an engine holds its fence and the setting together.
 #   * allowlist-permits-declared-domain (WILDCARD) — a `*.example.com` EgressPolicy ⇒ www.example.com ALLOWED
 #     (ok=true); proves the forwarder wildcard-token injection + splice end to end.
 #   * CIDR allow — a `1.1.1.1/32` EgressPolicy ⇒ https://1.1.1.1/cdn-cgi/trace ALLOWED (ok=true); proves resource.ip.isInRange.
@@ -272,6 +272,52 @@ testcases:
           - result.systemout ShouldNotContainSubstring "sibling received unicast"
           - result.systemout ShouldNotContainSubstring "sibling received broadcast"
           - result.systemout ShouldNotContainSubstring "sibling received multicast"
+
+  # 1g) An engine holds its fence and the setting together with egress on (ADR-0269, ADR-0318 Decision D): its eth0 has no
+  #     IPv6, and its plain TCP connect to the gateway's port times out where a worker's connects.
+  - name: engine-keeps-its-fence-with-no-ipv6
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            cat >/tmp/egress-engine.yaml <<"YAML"
+          apiVersion: funcd.io/v1alpha1
+          kind: SQLDatabase
+          metadata:
+            name: egress-engine
+            namespace: default
+            resourceGroup: rg1
+          spec:
+            owner: egress-probe
+          YAML
+            FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token funcdctl apply -f /tmp/egress-engine.yaml'
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            pid=$({{.ctr}} task ls | awk "\$1 ~ /^egress-probe-/ && \$3 == \"RUNNING\" {print \$2}" | head -1)
+            eng=$({{.ctr}} task ls | awk "\$1 ~ /^egress-engine-r[0-9]+$/ && \$3 == \"RUNNING\" {print \$2}" | head -1)
+            [ -n "$eng" ] || { echo "no engine yet"; exit 1; }
+            cat >/tmp/gateway-connect.py <<"PY"
+          import socket, sys
+          try:
+              socket.create_connection(("10.63.0.1", 15080), timeout=3).close()
+              print(sys.argv[1], "connected")
+          except OSError as e:
+              print(sys.argv[1], "connect failed", e)
+          PY
+            echo "engine eth0 inet6 [$(nsenter -t "$eng" -n ip -6 -o addr show dev eth0)]"
+            nsenter -t "$eng" -n python3 /tmp/gateway-connect.py engine
+            nsenter -t "$pid" -n python3 /tmp/gateway-connect.py worker'
+        retry: 15
+        delay: 2
+        info: "an engine → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "engine eth0 inet6 []"
+          - result.systemout ShouldContainSubstring "engine connect failed"
+          - result.systemout ShouldContainSubstring "worker connected"
 
   # 2) ALLOW via a WILDCARD domain rule (the highest-value new-mechanism test). Apply a `*.example.com`
   #    EgressPolicy, then probe a matching subdomain. The DNS forwarder attests www.example.com AND injects

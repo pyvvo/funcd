@@ -339,6 +339,7 @@ func TestScenarioOtherTrafficStaysUntouched(t *testing.T) {
 		{"IPv6 to a node service in the input chain", egressIn, packet{src: host6, dst: node6, iif: 2, proto: tcp, dport: 8080}, expr.VerdictAccept},
 		{"IPv6 between two hosts of a bridge", lateralFwd, packet{src: host6, dst: other6, proto: tcp, dport: 8080}, expr.VerdictAccept},
 		{"IPv4 unicast between two hosts of another bridge", lateralFwd, packet{src: addr("192.0.2.2"), dst: addr("192.0.2.3")}, expr.VerdictAccept},
+		{"IPv4 unicast from another source into the subnet", lateralFwd, packet{src: addr("192.0.2.2"), dst: addr("10.63.0.6")}, expr.VerdictAccept},
 		{"IPv4 broadcast from another source", lateralFwd, packet{src: addr("192.0.2.2"), dst: addr("255.255.255.255")}, expr.VerdictAccept},
 		{"IPv4 broadcast from no address yet", lateralFwd, packet{src: addr("0.0.0.0"), dst: addr("255.255.255.255")}, expr.VerdictAccept},
 		{"IPv4 multicast from another source", lateralFwd, packet{src: addr("192.0.2.2"), dst: addr("224.0.0.251")}, expr.VerdictAccept},

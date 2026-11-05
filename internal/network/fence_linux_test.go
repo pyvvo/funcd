@@ -11,6 +11,7 @@ import (
 	"github.com/google/nftables/binaryutil"
 	"github.com/google/nftables/expr"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 )
 
 // scenario: query-cannot-redirect — the fence accepts loopback, then established or related traffic, then IPv4 TCP to
@@ -81,5 +82,5 @@ func TestDisableWorkerIPv6RefusesAPathThatIsNoNetns(t *testing.T) {
 	require.Error(t, DisableWorkerIPv6(filepath.Join(t.TempDir(), "none")))
 	file := filepath.Join(t.TempDir(), "file")
 	require.NoError(t, os.WriteFile(file, nil, 0o600))
-	require.Error(t, DisableWorkerIPv6(file))
+	require.ErrorIs(t, DisableWorkerIPv6(file), unix.EINVAL)
 }
