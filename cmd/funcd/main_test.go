@@ -949,7 +949,7 @@ func TestReleaseLeavesNoBusDir(t *testing.T) {
 	dir := shortDataDir(t)
 	t.Setenv("TMPDIR", dir)
 	path := filepath.Join(dir, "funcdconfig.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("storage:\n  mode: memory\n  dataDir: \""+dir+"\"\n"), 0o600))
+	require.NoError(t, os.WriteFile(path, []byte("server:\n  listenAddr: \"127.0.0.1:0\"\nstorage:\n  mode: memory\n  dataDir: \""+dir+"\"\n"), 0o600))
 	cfg, err := config.Load(path, config.Flags{})
 	require.NoError(t, err)
 	opts, closeExec, _, _, err := buildOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
