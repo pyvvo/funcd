@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/google/nftables"
+	"github.com/google/nftables/binaryutil"
 	"github.com/google/nftables/expr"
 	"golang.org/x/sys/unix"
 
@@ -140,16 +141,19 @@ const (
 type ruleKind int
 
 const (
-	kindLateralDrop    ruleKind = iota // bridge/forward: src AND dst in the worker subnet → drop (L2 lateral)
-	kindRedirectSkip                   // inet/prerouting: src∈subnet, dst = internal → return (NOT redirected)
-	kindRedirect                       // inet/prerouting: src∈subnet, TCP → redirect to GatewayPort
-	kindForwardAccept                  // inet/forward: src∈subnet, dst = internal → accept (precedes the drop policy)
-	kindInputAccept                    // inet/input: TCP dport = GatewayPort → accept the redirected packets
-	kindDNSRedirect                    // inet/prerouting: src∈subnet, {UDP,TCP} dport 53 → redirect to DNSForwarderPort (F81)
-	kindDNSInputAccept                 // inet/input: {UDP,TCP} dport = DNSForwarderPort → accept the redirected DNS (F81)
+	kindLateralDrop      ruleKind = iota // bridge/forward: src AND dst in the worker subnet → drop (L2 lateral)
+	kindRedirectSkip                     // inet/prerouting: src∈subnet, dst = internal → return (NOT redirected)
+	kindRedirect                         // inet/prerouting: src∈subnet, TCP → redirect to GatewayPort
+	kindForwardAccept                    // inet/forward: src∈subnet, dst = internal → accept (precedes the drop policy)
+	kindInputAccept                      // inet/input: TCP dport = GatewayPort → accept the redirected packets
+	kindDNSRedirect                      // inet/prerouting: src∈subnet, {UDP,TCP} dport 53 → redirect to DNSForwarderPort (F81)
+	kindDNSInputAccept                   // inet/input: {UDP,TCP} dport = DNSForwarderPort → accept the redirected DNS (F81)
+	kindInputEstablished                 // inet/input: src∈subnet, conntrack established or related → accept a worker's replies
+	kindInputInternal                    // inet/input: src∈subnet, dst = internal → accept (precedes the drop)
+	kindInputWorkerDrop                  // inet/input: IPv4, not on loopback, src∈subnet → drop (ADR-0115 Scope)
 )
 
-// rulePlan is one planned rule. dst/port/proto are set only for the dst-scoped kinds (skip/forward-accept).
+// rulePlan is one planned rule. dst/port/proto are set only for the dst-scoped kinds (skip/forward-accept/input-internal).
 type rulePlan struct {
 	chain string
 	kind  ruleKind
@@ -185,12 +189,17 @@ func planRules(p Policy) []rulePlan {
 	}
 
 	// input: accept the redirected packets destined to the local gateway port; and (F81) the DNS now
-	// redirected to the local forwarder port (UDP+TCP).
+	// redirected to the local forwarder port (UDP+TCP). A worker's other traffic to the node stops here, past its
+	// replies and the internal-service TCP (ADR-0115 Scope); the chain's policy stays accept for the node's own.
 	rs = append(rs, rulePlan{chain: egressIn, kind: kindInputAccept})
 	for _, proto := range dnsForwarderProtos(p) {
 		rs = append(rs, rulePlan{chain: egressIn, kind: kindDNSInputAccept, port: p.DNSForwarderPort, proto: proto})
 	}
-	return rs
+	rs = append(rs, rulePlan{chain: egressIn, kind: kindInputEstablished})
+	for _, ep := range p.InternalAllow {
+		rs = append(rs, rulePlan{chain: egressIn, kind: kindInputInternal, dst: ep.Addr(), port: ep.Port(), proto: unix.IPPROTO_TCP})
+	}
+	return append(rs, rulePlan{chain: egressIn, kind: kindInputWorkerDrop})
 }
 
 // dnsForwarderProtos returns the L4 protos whose worker :53 is redirected into the funcd DNS forwarder —
@@ -245,7 +254,7 @@ func exprsFor(r rulePlan, p Policy, netAddr, mask [4]byte) []expr.Any {
 		return concat(src, matchDstAddr(r.dst.As4()), matchL4Proto(r.proto), matchDport(r.port), verdict(expr.VerdictReturn))
 	case kindRedirect:
 		return concat(src, matchL4Proto(unix.IPPROTO_TCP), redirectTo(p.GatewayPort))
-	case kindForwardAccept:
+	case kindForwardAccept, kindInputInternal:
 		return concat(src, matchDstAddr(r.dst.As4()), matchL4Proto(r.proto), matchDport(r.port), verdict(expr.VerdictAccept))
 	case kindInputAccept:
 		return concat(matchL4Proto(unix.IPPROTO_TCP), matchDport(p.GatewayPort), verdict(expr.VerdictAccept))
@@ -253,6 +262,12 @@ func exprsFor(r rulePlan, p Policy, netAddr, mask [4]byte) []expr.Any {
 		return concat(src, matchL4Proto(r.proto), matchDport(r.port), redirectTo(p.DNSForwarderPort))
 	case kindDNSInputAccept:
 		return concat(matchL4Proto(r.proto), matchDport(r.port), verdict(expr.VerdictAccept))
+	case kindInputEstablished:
+		return concat(src, matchEstablished(), verdict(expr.VerdictAccept))
+	case kindInputWorkerDrop:
+		// The node's own call to its bridge address comes in on loopback with that address as its source, the egress
+		// gateway's dial for a CIDR rule among them; and in this inet table an IPv6 header holds other bytes at srcOffset.
+		return concat(matchIPv4(), matchLoopback(expr.MetaKeyIIF, expr.CmpOpNeq), src, verdict(expr.VerdictDrop))
 	}
 	return nil
 }
@@ -277,6 +292,35 @@ func matchDstAddr(addr [4]byte) []expr.Any {
 	return []expr.Any{
 		&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: dstOffset, Len: 4},
 		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: addr[:]},
+	}
+}
+
+// matchIPv4 matches an IPv4 packet, in a table of the inet family.
+func matchIPv4() []expr.Any {
+	return []expr.Any{
+		&expr.Meta{Key: expr.MetaKeyNFPROTO, Register: 1},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{unix.NFPROTO_IPV4}},
+	}
+}
+
+// matchLoopback compares a packet's interface, key MetaKeyIIF or MetaKeyOIF, with loopback, ifindex 1 in every netns.
+func matchLoopback(key expr.MetaKey, op expr.CmpOp) []expr.Any {
+	return []expr.Any{
+		&expr.Meta{Key: key, Register: 1},
+		&expr.Cmp{Op: op, Register: 1, Data: binaryutil.NativeEndian.PutUint32(1)},
+	}
+}
+
+// matchEstablished matches a packet whose conntrack state is established or related.
+func matchEstablished() []expr.Any {
+	return []expr.Any{
+		&expr.Ct{Key: expr.CtKeySTATE, Register: 1},
+		&expr.Bitwise{
+			SourceRegister: 1, DestRegister: 1, Len: 4,
+			Mask: binaryutil.NativeEndian.PutUint32(expr.CtStateBitESTABLISHED | expr.CtStateBitRELATED),
+			Xor:  binaryutil.NativeEndian.PutUint32(0),
+		},
+		&expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: binaryutil.NativeEndian.PutUint32(0)},
 	}
 }
 

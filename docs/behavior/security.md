@@ -28,8 +28,8 @@ stateDiagram-v2
 The API and the edge read one token list; `/openapi`, `/docs` and `/schemas/` need no token. A binding grants read, the owner or a
 writer role grants write, and the built-in `Owner` covers KV and blob data only, not managing assignments (ADR-0136). An Identity's
 credential authenticates and grants nothing until a RolesAssignment does. A Policy naming another namespace in its scope is refused at
-apply (ADR-0177 Decision 3). With egress on, workers cannot reach each other and UDP other than DNS is dropped (ADR-0115 Decision,
-ADR-0117 Consequences). A domain rule reaches public addresses only: a private, link-local or node address takes a `cidrs` rule
+apply (ADR-0177 Decision 3). With egress on, workers cannot reach each other, UDP other than DNS is dropped, and a worker's traffic
+to the node stops at the input chain (ADR-0115 Scope and Decision, ADR-0117 Consequences). A domain rule reaches public addresses only: a private, link-local or node address takes a `cidrs` rule
 that names it, and a name needs a domain rule (ADR-0315). New words: Redirected, Refused, Lookup.
 
 | Where | What happens | Time | You see | Status | Source |
@@ -53,6 +53,7 @@ that names it, and a name needs a domain rule (ADR-0315). New words: Redirected,
 | A Secret a Lake's engine binds changes | The engine holds it in its environment, so it is replaced with the new value | within `runtime.supervisionPeriod` 10 s | the engine restarts | accepted | ADR-0249 Scope, #1195, `TestIssue1195_ConvergeReplacesAnEngineOfAnotherSpec`; no lane rotates it |
 | A `secrets.encryptionKeyFile` that does not match the stored Secrets | funcd does not start | none | `stored Secrets do not decrypt with secrets.encryptionKeyFile: they were written with a different key or with none` | accepted | #93, `TestIssue93_KeyMismatchFailsAtStartup` |
 | `server.network.egress`, off by default | Off, or not Linux with containerd: workers reach anything and an EgressPolicy does nothing. On: a Function no EgressPolicy covers reaches nothing external | none | on, a refused connection | decided | ADR-0117 Decisions 3 and 6, `TestScenarioDisabledPassthrough`, egress `no-egresspolicy-denies-all` |
+| A worker's traffic to the node, egress on | Stops at the input chain, except its replies, the gateway, the forwarder and `server.network.internalAllow`; the node's other traffic is untouched | none | no answer | decided | ADR-0115 Scope, `TestInputChainStopsAWorkersTraffic`, egress `worker-udp-to-the-node-gets-no-answer` |
 | A refused connection | It opens, then ends once the gateway has decided: an HTTP 403 on ports 80 and 8080, a plain close on any other | up to `peekTimeout` 500 ms | 403 `egress denied by funcd EgressPolicy`, or a closed socket | decided | ADR-0117 Decision 1, `TestScenarioDecideFlow`, egress `cidr-denies-unlisted-ip` |
 | A domain rule | Counts only for a name this worker looked up through funcd, also through a CNAME, until that answer's TTL: a hard-coded address or a cache kept longer is refused | the answer's TTL, at least `minRecordTTL` 1 s | a refused connection | decided | ADR-0117 Decisions 1 and 2, ADR-0315 Decision 2, `TestScenarioDomainsForCorrelationAndWildcard`, `TestScenarioRuleFiresThroughACNAME` |
 | A worker that just started | Its connections and lookups are refused until the next sync finds the worker | up to `server.network.workerSyncInterval` 2 s | a refused connection, `unknown source worker <ip>` in the audit record; REFUSED | decided | ADR-0163 scenario `server-keys-pace-shutdown-and-egress-sync`, ADR-0315 Consequences, `TestScenarioServerKeysPaceShutdownAndEgressSync` |

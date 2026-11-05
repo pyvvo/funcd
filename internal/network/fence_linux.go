@@ -7,7 +7,6 @@ import (
 	"os"
 
 	"github.com/google/nftables"
-	"github.com/google/nftables/binaryutil"
 	"github.com/google/nftables/expr"
 	"golang.org/x/sys/unix"
 
@@ -54,27 +53,12 @@ func FenceNetns(netnsPath string, allow []netip.AddrPort) error {
 // endpoint.
 func fenceRules(allow []netip.AddrPort) [][]expr.Any {
 	rules := [][]expr.Any{
-		concat([]expr.Any{
-			&expr.Meta{Key: expr.MetaKeyOIF, Register: 1},
-			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: binaryutil.NativeEndian.PutUint32(1)}, // lo is ifindex 1
-		}, verdict(expr.VerdictAccept)),
-		concat([]expr.Any{
-			&expr.Ct{Key: expr.CtKeySTATE, Register: 1},
-			&expr.Bitwise{
-				SourceRegister: 1, DestRegister: 1, Len: 4,
-				Mask: binaryutil.NativeEndian.PutUint32(expr.CtStateBitESTABLISHED | expr.CtStateBitRELATED),
-				Xor:  binaryutil.NativeEndian.PutUint32(0),
-			},
-			&expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: binaryutil.NativeEndian.PutUint32(0)},
-		}, verdict(expr.VerdictAccept)),
+		concat(matchLoopback(expr.MetaKeyOIF, expr.CmpOpEq), verdict(expr.VerdictAccept)),
+		concat(matchEstablished(), verdict(expr.VerdictAccept)),
 	}
 	for _, ap := range allow {
 		rules = append(rules, concat(
-			[]expr.Any{
-				&expr.Meta{Key: expr.MetaKeyNFPROTO, Register: 1},
-				&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{unix.NFPROTO_IPV4}},
-			},
-			matchDstAddr(ap.Addr().As4()), matchL4Proto(unix.IPPROTO_TCP), matchDport(ap.Port()), verdict(expr.VerdictAccept),
+			matchIPv4(), matchDstAddr(ap.Addr().As4()), matchL4Proto(unix.IPPROTO_TCP), matchDport(ap.Port()), verdict(expr.VerdictAccept),
 		))
 	}
 	return rules
