@@ -334,3 +334,19 @@ func TestCredentialsFileAnswers_AreNotCut(t *testing.T) {
 	_, err := b.(blob.RangeReader).GetRange(context.Background(), "k", 0, 10)
 	requireS3Error(t, err, "AccessDenied", http.StatusForbidden)
 }
+
+// A store that closes each connection with no answer fails a listing: the SDK's error wraps the transport's EOF, which
+// is not the iterator's end, and read as one it would make every object disappear.
+func TestStaticKeyAnswers_FailAListingWhenTheConnectionCloses(t *testing.T) {
+	t.Parallel()
+	b := answeringStore(t, func(w http.ResponseWriter, _ *http.Request) {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err == nil {
+			_ = conn.Close()
+		}
+	}, OpenOptions{})
+	_, err := b.List(context.Background(), "gen/")
+	require.Error(t, err, "List")
+	_, _, err = b.ListAfter(context.Background(), "gen/", "", 10)
+	require.Error(t, err, "ListAfter")
+}
