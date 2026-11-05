@@ -154,6 +154,7 @@ func (envelopePlugin) Before(_ context.Context, c *invoke.Call) *invoke.Refusal 
 	}
 	c.Request.Body = io.NopCloser(bytes.NewReader(body))
 	c.Request.ContentLength = int64(len(body))
+	c.Request.TransferEncoding = nil // the length frames the worker's request, however the caller framed its own
 	c.Request.Header.Set("Content-Length", strconv.Itoa(len(body)))
 	return nil
 }

@@ -78,3 +78,31 @@ func TestScenarioEmptyBodyForwardsNullData(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(got), &ce))
 	require.Equal(t, "null", string(ce.Data))
 }
+
+// The edge buffers a call's body to build its envelope, so the worker gets that body with its length, however the caller
+// framed it (ADR-0134 Contracts).
+func TestChunkedCallReachesTheWorkerWithItsLength(t *testing.T) {
+	t.Parallel()
+	type received struct {
+		codings []string
+		length  int64
+		body    string
+	}
+	got := make(chan received, 1)
+	h, st, _ := authDoorUpstream(t, warmAPI(), nil, creds{}, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		got <- received{codings: r.TransferEncoding, length: r.ContentLength, body: string(b)}
+	}))
+	seedFunction(t, st, "api")
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+
+	resp, err := http.Post(srv.URL+"/function/api", "application/json", io.MultiReader(strings.NewReader(`{"data":1}`)))
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	worker := <-got
+	require.Empty(t, worker.codings, "the worker's request is not chunked")
+	require.Equal(t, int64(len(worker.body)), worker.length)
+	require.Contains(t, worker.body, `"data":1`)
+}
