@@ -3,6 +3,7 @@ package runner_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -690,6 +691,34 @@ func TestIssue1286_WarnsWhileTheTargetDoesNotAnswer(t *testing.T) {
 			require.Eventually(t, func() bool { return h.logs.count("backup rpo at risk") > 0 }, 10*time.Second,
 				10*time.Millisecond, "no rpoRisk warning while the target does not answer")
 			require.Equal(t, int32(0), warnedBefore.Load(), "the warning came while the target held, not before")
+		})
+	}
+}
+
+// The status route is admin-only (ADR-0205 Decision 4) and a 503's detail holds its own faults: a missing bucket is
+// named in funcd's words, as a 404 cannot tell it from a wrong URL, and any other cause stays in the log.
+func TestStatus_FailedListingNamesOnlyAMissingBucket(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		cause error
+		want  string
+	}{
+		"missing bucket": {
+			cause: fault.NotFoundf("gocloud", "raw store text"),
+			want:  "runner.Status: list the backup target: the bucket does not exist or the target URL is wrong",
+		},
+		"any other cause": {
+			cause: errors.New("raw store text"),
+			want:  "runner.Status: list the backup target",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r, err := runner.New(runner.Config{Target: failing{err: tc.cause}, Sealer: noSeal(t), Times: times(), Clock: clock.NewManual(t0)})
+			require.NoError(t, err)
+			_, err = r.Status(context.Background())
+			require.Equal(t, fault.Unavailable, fault.KindOf(err))
+			require.Equal(t, tc.want, fault.ToProblem(err).Detail)
 		})
 	}
 }

@@ -312,7 +312,11 @@ func (r *Runner) Status(ctx context.Context) (Status, error) {
 	entries, err := r.cfg.Target.List(ctx)
 	now := r.cfg.Clock.Now()
 	if err != nil {
-		return r.status(now), fault.Wrapf(err, fault.Unavailable, "runner.Status", "list the backup target")
+		msg := "list the backup target"
+		if fault.KindOf(err) == fault.NotFound {
+			msg += ": the bucket does not exist or the target URL is wrong"
+		}
+		return r.status(now), fault.Wrapf(err, fault.Unavailable, "runner.Status", "%s", msg)
 	}
 	r.observe(ctx, entries, now)
 	return r.status(now), nil
