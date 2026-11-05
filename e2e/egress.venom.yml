@@ -12,7 +12,7 @@
 #     a lookup asked from the worker's own netns is answered or REFUSED by the EgressPolicy, with a log line.
 #   * allowlist-permits-declared-domain (WILDCARD) — a `*.example.com` EgressPolicy ⇒ www.example.com ALLOWED
 #     (ok=true); proves the forwarder wildcard-token injection + splice end to end.
-#   * CIDR allow — a `1.1.1.1/32` EgressPolicy ⇒ https://1.1.1.1 ALLOWED (ok=true); proves resource.ip.isInRange.
+#   * CIDR allow — a `1.1.1.1/32` EgressPolicy ⇒ https://1.1.1.1/cdn-cgi/trace ALLOWED (ok=true); proves resource.ip.isInRange.
 #   * CIDR deny — an unlisted IP (1.0.0.1) stays DENIED (ok=false); the allow-list is closed (implicit deny).
 #   * blocked-connection-audited — the gateway emits an egress audit record (allowed=false) to the funclog.
 #
@@ -150,7 +150,7 @@ testcases:
         url: "{{.dp}}/function/egress-probe"
         headers:
           content-type: application/json
-        body: '{"data":{"url":"https://1.1.1.1"}}'
+        body: '{"data":{"url":"https://1.1.1.1/cdn-cgi/trace"}}'
         retry: 25
         delay: 3
         info: "cidr-allow probe → {{.result.body}}"
