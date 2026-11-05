@@ -14,8 +14,11 @@ package egress
 import (
 	"context"
 	"log/slog"
+	"net"
 	"net/netip"
+	"slices"
 
+	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/auth"
 )
 
@@ -35,6 +38,9 @@ type Deps struct {
 	Authz       auth.Authorizer // the PDP (egress::connect over a NetDestination)
 	Audit       AuditSink       // every connection (allowed + blocked) → the funclog channel
 	Logger      *slog.Logger    // nil ⇒ slog.Default()
+	// NodeAddrs reads the addresses on the node's interfaces, which a domain rule never reaches (ADR-0315); nil reads them
+	// from the host.
+	NodeAddrs func() ([]netip.Addr, error)
 }
 
 // WorkerIndex resolves a worker's funcd0 source IP to the principal Ref of its owner kind (a Function or a
@@ -101,9 +107,47 @@ func buildDestination(dst netip.AddrPort, attested []string, asserted string) (a
 	return nd, confirmed
 }
 
+// restricted reports whether a domain rule may not reach ip (ADR-0315 Decision 1): a private, link-local, loopback,
+// unspecified, shared, multicast or broadcast address, or one on the node's interfaces. Only a CIDR rule permits those.
+func (d Deps) restricted(ip netip.Addr) (bool, error) {
+	ip = ip.Unmap()
+	// netip counts the shared address space of RFC 6598 as public.
+	shared := netip.PrefixFrom(netip.AddrFrom4([4]byte{100, 64, 0, 0}), 10)
+	if !ip.IsGlobalUnicast() || ip.IsPrivate() || shared.Contains(ip) {
+		return true, nil
+	}
+	read := d.NodeAddrs
+	if read == nil {
+		read = interfaceAddrs
+	}
+	node, err := read()
+	if err != nil {
+		return true, err
+	}
+	return slices.Contains(node, ip), nil
+}
+
+// interfaceAddrs reads the addresses on the host's interfaces, each with any IPv4 mapping removed.
+func interfaceAddrs() ([]netip.Addr, error) {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil, fault.Wrapf(err, fault.Internal, "egress.interfaceAddrs", "read the node's interface addresses")
+	}
+	out := make([]netip.Addr, 0, len(addrs))
+	for _, a := range addrs {
+		if ipn, ok := a.(*net.IPNet); ok {
+			if ip, ok := netip.AddrFromSlice(ipn.IP); ok {
+				out = append(out, ip.Unmap())
+			}
+		}
+	}
+	return out, nil
+}
+
 // decideConnect is the pure decision flow: authenticate the source IP → build the forwarder-attested
-// destination → ask the PDP. It returns the decision and the audit record; the driver handles I/O
-// (splice/refuse) and emits the record. An unknown source IP is denied+audited (fail-closed).
+// destination, which carries no domains at a restricted address → ask the PDP. It returns the decision and the
+// audit record; the driver handles I/O (splice/refuse) and emits the record. An unknown source IP is denied+audited
+// (fail-closed); a failed read of the node's addresses is an error, which permits nothing.
 func decideConnect(ctx context.Context, d Deps, src netip.Addr, dst netip.AddrPort, asserted string) (auth.Decision, AuditRecord, error) {
 	ref, ok := d.Workers.Lookup(src)
 	if !ok {
@@ -111,6 +155,15 @@ func decideConnect(ctx context.Context, d Deps, src netip.Addr, dst netip.AddrPo
 		return auth.Decision{Allowed: false, Reason: rec.Reason}, rec, nil
 	}
 	attested := d.DNS.DomainsFor(src, dst.Addr())
+	if len(attested) > 0 {
+		restricted, err := d.restricted(dst.Addr())
+		if err != nil {
+			return auth.Decision{}, AuditRecord{}, err
+		}
+		if restricted {
+			attested = nil
+		}
+	}
 	nd, confirmed := buildDestination(dst, attested, asserted)
 	resource := nd.Ref(ref.Namespace)
 	dec, err := d.Authz.Authorize(ctx, auth.Request{

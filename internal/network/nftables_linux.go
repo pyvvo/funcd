@@ -141,9 +141,9 @@ type ruleKind int
 
 const (
 	kindLateralDrop    ruleKind = iota // bridge/forward: src AND dst in the worker subnet → drop (L2 lateral)
-	kindRedirectSkip                   // inet/prerouting: src∈subnet, dst = internal/DNS → return (NOT redirected)
+	kindRedirectSkip                   // inet/prerouting: src∈subnet, dst = internal → return (NOT redirected)
 	kindRedirect                       // inet/prerouting: src∈subnet, TCP → redirect to GatewayPort
-	kindForwardAccept                  // inet/forward: src∈subnet, dst = internal/DNS → accept (precedes the drop policy)
+	kindForwardAccept                  // inet/forward: src∈subnet, dst = internal → accept (precedes the drop policy)
 	kindInputAccept                    // inet/input: TCP dport = GatewayPort → accept the redirected packets
 	kindDNSRedirect                    // inet/prerouting: src∈subnet, {UDP,TCP} dport 53 → redirect to DNSForwarderPort (F81)
 	kindDNSInputAccept                 // inet/input: {UDP,TCP} dport = DNSForwarderPort → accept the redirected DNS (F81)
@@ -159,37 +159,29 @@ type rulePlan struct {
 }
 
 // planRules is the pure, ordered rule plan F80 programs — the correct-by-construction core the Linux unit
-// test asserts. Ordering is load-bearing: in prerouting the internal-allow + DNS **return** (skip) rules
+// test asserts. Ordering is load-bearing: in prerouting the internal-allow **return** (skip) rules
 // MUST precede the redirect, or a NAT redirect (which rewrites dst before routing) would hijack internal
-// and DNS-over-TCP traffic to the gateway. In forward the accepts precede the chain's drop policy.
+// traffic to the gateway. In forward the accepts precede the chain's drop policy. With no forwarder a worker's
+// DNS has no accept (ADR-0315): UDP falls to the drop policy, TCP to the redirect.
 func planRules(p Policy) []rulePlan {
 	rs := []rulePlan{{chain: lateralFwd, kind: kindLateralDrop}}
 
 	// prerouting: (F81) redirect worker :53 into the DNS forwarder FIRST, then skip (return, no DNAT)
-	// internal-service TCP + (legacy) DNS-over-TCP, THEN redirect the rest. The general redirect MUST
-	// stay LAST — a NAT redirect rewrites dst before routing, so it would hijack the earlier destinations.
+	// internal-service TCP, THEN redirect the rest. The general redirect MUST stay LAST — a NAT redirect
+	// rewrites dst before routing, so it would hijack the earlier destinations.
 	for _, proto := range dnsForwarderProtos(p) {
 		rs = append(rs, rulePlan{chain: egressPre, kind: kindDNSRedirect, port: 53, proto: proto})
 	}
 	for _, ep := range p.InternalAllow {
 		rs = append(rs, rulePlan{chain: egressPre, kind: kindRedirectSkip, dst: ep.Addr(), port: ep.Port(), proto: unix.IPPROTO_TCP})
 	}
-	if p.DNSForwarderPort == 0 {
-		// legacy F80: DNS-over-TCP to the node resolver is skipped (returned), not redirected.
-		rs = append(rs, rulePlan{chain: egressPre, kind: kindRedirectSkip, dst: p.DNSResolver.Addr(), port: p.DNSResolver.Port(), proto: unix.IPPROTO_TCP})
-	}
 	rs = append(rs, rulePlan{chain: egressPre, kind: kindRedirect})
 
-	// forward (policy drop): accept the skipped internal-service TCP; and (legacy) DNS to the node
-	// resolver (UDP+TCP). With the forwarder, worker :53 is DNAT'd to the LOCAL forwarder and never
-	// forwarded, so no forward-accept for DNS is needed (or wanted — the forwarder is the only resolver).
+	// forward (policy drop): accept the skipped internal-service TCP. Worker :53 is DNAT'd to the LOCAL
+	// forwarder and never forwarded, so no forward-accept for DNS is needed (or wanted — the forwarder is
+	// the only resolver).
 	for _, ep := range p.InternalAllow {
 		rs = append(rs, rulePlan{chain: egressFwd, kind: kindForwardAccept, dst: ep.Addr(), port: ep.Port(), proto: unix.IPPROTO_TCP})
-	}
-	if p.DNSForwarderPort == 0 {
-		for _, proto := range []byte{unix.IPPROTO_UDP, unix.IPPROTO_TCP} {
-			rs = append(rs, rulePlan{chain: egressFwd, kind: kindForwardAccept, dst: p.DNSResolver.Addr(), port: p.DNSResolver.Port(), proto: proto})
-		}
 	}
 
 	// input: accept the redirected packets destined to the local gateway port; and (F81) the DNS now
@@ -202,7 +194,7 @@ func planRules(p Policy) []rulePlan {
 }
 
 // dnsForwarderProtos returns the L4 protos whose worker :53 is redirected into the funcd DNS forwarder —
-// UDP+TCP when a forwarder is configured (F81), else none (legacy F80 sends DNS straight to the resolver).
+// UDP+TCP when a forwarder is configured (F81), else none.
 func dnsForwarderProtos(p Policy) []byte {
 	if p.DNSForwarderPort == 0 {
 		return nil

@@ -463,7 +463,8 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 			return nil, noopClose, nil, "", fmt.Errorf("egress isolation: parse worker subnet %q: %w", cfg.Runtime.Containerd.SubnetCIDR, err)
 		}
 		pol := network.Policy{WorkerSubnet: subnet, GatewayPort: uint16(n.EgressGatewayPort), DNSForwarderPort: uint16(n.DNSForwarderPort)}
-		if n.DNSResolver != "" {
+		// dnsResolver is read only with a forwarder, its upstream (ADR-0315).
+		if n.DNSResolver != "" && n.DNSForwarderPort != 0 {
 			if pol.DNSResolver, err = netip.ParseAddrPort(n.DNSResolver); err != nil {
 				return nil, noopClose, nil, "", fmt.Errorf("egress isolation: parse dnsResolver %q: %w", n.DNSResolver, err)
 			}
@@ -477,7 +478,8 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 		}
 		opts = append(opts, funcd.WithEgressIsolation(network.New(true, root), pol))
 		// Egress gateway + DNS forwarder (ADR-0117, F81): the enforcement point F80 redirects into. Only
-		// wired when a forwarder port is configured (the forwarder is mandatory for domain policy).
+		// wired when a forwarder port is configured (the forwarder is mandatory for domain policy): with none,
+		// nothing goes out, DNS included (ADR-0315).
 		if n.DNSForwarderPort != 0 {
 			opts = append(opts, funcd.WithEgressGateway(uint16(n.EgressGatewayPort), uint16(n.DNSForwarderPort), pol.DNSResolver))
 		}

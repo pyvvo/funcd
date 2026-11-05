@@ -258,8 +258,8 @@ func WithHold(h *hold.Hold) Option {
 }
 
 // WithBridgeAddress sets funcd's address on its container bridge (ADR-0238): the lake proxies and the SQL change feed
-// bind and publish it, so a worker or an engine in its own netns reaches them. Unset ⇒ 127.0.0.1, where the daemon and
-// the workers share the loopback (the process runtime, funcdctl dev).
+// bind and publish it, so a worker or an engine in its own netns reaches them, and the DNS forwarder binds it (ADR-0315).
+// Unset ⇒ 127.0.0.1, where the daemon and the workers share the loopback (the process runtime, funcdctl dev).
 func WithBridgeAddress(addr netip.Addr) Option {
 	return func(c *config) error {
 		c.bridgeAddress = addr.String()
@@ -771,9 +771,10 @@ func WithEgressIsolation(mgr network.Manager, p network.Policy) Option {
 // WithEgressGateway wires the ADR-0117 (F81) transparent egress PEP + DNS forwarder: when enabled on
 // Linux, funcd starts a gateway on gatewayPort (F80's REDIRECT target) that authorizes every outbound
 // worker connection against its namespace's EgressPolicy via the cedar PDP (egress::connect over a
-// forwarder-attested NetDestination), and a DNS forwarder on dnsForwarderPort (the domain trust anchor +
-// the only reachable resolver). dnsUpstream is the node resolver the forwarder forwards to. Disabled or
-// non-Linux ⇒ no-op (egress open). Pairs with WithEgressIsolation (same server.network.egress flag).
+// forwarder-attested NetDestination), and a DNS forwarder on dnsForwarderPort of the bridge address (WithBridgeAddress):
+// the domain trust anchor + the only reachable resolver. It answers known workers only and forwards to dnsUpstream, the
+// node resolver, only the names an EgressPolicy domain rule allows them (ADR-0315). Disabled or non-Linux ⇒ no-op (egress
+// open). Pairs with WithEgressIsolation (same server.network.egress flag).
 func WithEgressGateway(gatewayPort, dnsForwarderPort uint16, dnsUpstream netip.AddrPort) Option {
 	return func(c *config) error {
 		c.egressGatewayEnabled = true

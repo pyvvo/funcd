@@ -45,7 +45,7 @@ func TestScenarioDNSRedirectFlip(t *testing.T) {
 	require.True(t, dnsRedirectProtos[unix.IPPROTO_TCP], "TCP :53 is redirected into the forwarder")
 	require.Equal(t, kindRedirect, pre[len(pre)-1].kind, "the general external-TCP redirect stays LAST")
 
-	// The node resolver is NOT skipped anymore — the worker cannot reach it directly (forwarder is the only
+	// The node resolver is NOT skipped — the worker cannot reach it directly (forwarder is the only
 	// resolver). Match the resolver's full addr:port: an InternalAllow endpoint may legitimately share the
 	// resolver's IP on a different port (e.g. 10.63.0.1:9000 vs 10.63.0.1:53), and that skip is allowed.
 	dns := forwarderPolicy().DNSResolver

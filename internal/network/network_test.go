@@ -34,7 +34,7 @@ func TestScenarioTeardownClean(t *testing.T) {
 	require.NoError(t, New(false, nil).Remove(context.Background()), "Remove is idempotent (safe if never applied)")
 }
 
-// Policy.Validate gates a programmable policy: a non-zero subnet, a gateway-port target, and a resolver.
+// Policy.Validate gates a programmable policy: a non-zero subnet, a gateway-port target, and a resolver with a forwarder.
 func TestPolicyValidate(t *testing.T) {
 	require.NoError(t, goodPolicy().Validate())
 
@@ -46,7 +46,10 @@ func TestPolicyValidate(t *testing.T) {
 	bad.WorkerSubnet = netip.Prefix{}
 	require.Error(t, bad.Validate(), "an invalid worker subnet is rejected")
 
-	bad = goodPolicy()
-	bad.DNSResolver = netip.AddrPort{}
-	require.Error(t, bad.Validate(), "an invalid DNS resolver is rejected")
+	noResolver := goodPolicy()
+	noResolver.DNSResolver = netip.AddrPort{}
+	require.NoError(t, noResolver.Validate(), "with no forwarder the resolver is not read")
+
+	noResolver.DNSForwarderPort = 15053
+	require.Error(t, noResolver.Validate(), "a forwarder needs a valid DNS resolver")
 }

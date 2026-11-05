@@ -37,19 +37,18 @@ type Policy struct {
 	// (the funcd0-gateway-IP:port a service's injected Endpoint resolves to), NOT the service's 127.0.0.1
 	// listen address (which is the worker's own netns loopback and unreachable).
 	InternalAllow []netip.AddrPort
-	// DNSResolver is the single node resolver a worker may reach on :53 — the accept is scoped to this
-	// address (not any :53), so it is not an open exfil channel.
+	// DNSResolver is the node resolver, the DNS forwarder's upstream: read only with a forwarder, and required then.
 	DNSResolver netip.AddrPort
 	// DNSForwarderPort, when non-zero, is the funcd DNS forwarder's host port (ADR-0117, F81): worker
 	// :53 (UDP+TCP) is REDIRECTed into it so the forwarder is the ONLY reachable resolver (the F80
-	// DNS-workaround exit — a worker cannot resolve out-of-band). Zero ⇒ legacy F80 behavior (worker DNS
-	// goes straight to DNSResolver, un-correlated).
+	// DNS-workaround exit — a worker cannot resolve out-of-band). Zero ⇒ no forwarder and no gateway run, and a
+	// worker's DNS has no accept, so nothing goes out (ADR-0315).
 	DNSForwarderPort uint16
 }
 
 // Validate reports whether the Policy is programmable: a valid non-zero worker subnet, a non-zero gateway
-// port (the redirect must have a target), and a valid resolver. Called by the enabled driver before it
-// programs anything.
+// port (the redirect must have a target), and, with a forwarder, a valid resolver. Called by the enabled
+// driver before it programs anything.
 func (p Policy) Validate() error {
 	const op = "network.Policy.Validate"
 	if !p.WorkerSubnet.IsValid() || p.WorkerSubnet.Bits() == 0 {
@@ -58,8 +57,8 @@ func (p Policy) Validate() error {
 	if p.GatewayPort == 0 {
 		return fault.Invalidf(op, "gateway port is required (the redirect must have a target)")
 	}
-	if !p.DNSResolver.IsValid() {
-		return fault.Invalidf(op, "DNS resolver address is required")
+	if p.DNSForwarderPort != 0 && !p.DNSResolver.IsValid() {
+		return fault.Invalidf(op, "DNS resolver address is required with a DNS forwarder")
 	}
 	return nil
 }

@@ -55,8 +55,8 @@ server:
   # network:                      # worker egress isolation (ADR-0115/0117); Linux + containerd only
   #   egress: false               # default-deny worker egress. default: false
   #   egressGatewayPort: 0        # egress gateway host port; required when egress is on. default: 0
-  #   dnsForwarderPort: 0         # DNS forwarder host port; 0 ⇒ no egress gateway. default: 0
-  #   dnsResolver: ""             # upstream resolver host:port; required when egress is on. default: ""
+  #   dnsForwarderPort: 0         # DNS forwarder port on the bridge address: it answers known workers, for the names a domain rule allows (ADR-0315); 0 ⇒ no forwarder and no egress gateway, so nothing goes out, DNS included. default: 0
+  #   dnsResolver: ""             # the forwarder's upstream resolver host:port; read only with a forwarder, and required then. default: ""
   #   internalAllow:              # node-service host:port addresses workers may reach. default: none
   #   workerSyncInterval: 2s      # egress WorkerIndex sync cadence (ADR-0163). default: 2s
   # shutdownTimeout: 15s          # HTTP, Sensor and workflow-run drain at shutdown. default: 15s; it + the runtime's stopGrace + 2s + the private containerd's 10s stop must fit the unit's TimeoutStopSec (45s, ADR-0277)

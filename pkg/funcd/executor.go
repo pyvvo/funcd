@@ -1,6 +1,7 @@
 package funcd
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"io"
@@ -93,7 +94,9 @@ func (e *executor) build(d execDeps) error {
 		return fault.Wrapf(err, fault.KindOf(err), op, "check the providers' local API facets")
 	}
 	if c.egressGatewayEnabled {
-		e.buildEgress(d.authz)
+		if err := e.buildEgress(d.authz); err != nil {
+			return fault.Wrapf(err, fault.KindOf(err), op, "build the egress gateway")
+		}
 	}
 	if err := e.openVolumes(); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "open the Function volumes")
@@ -114,15 +117,25 @@ func (e *executor) build(d execDeps) error {
 }
 
 // buildEgress builds the egress gateway, the sole egress PEP, which authorizes each worker connection through the PDP
-// (egress::connect), and the DNS forwarder, whose recorded (worker, domain) → IP makes a domain rule trustworthy.
-func (e *executor) buildEgress(authz auth.Authorizer) {
+// (egress::connect), and the DNS forwarder on the bridge address, whose recorded (worker, domain) → IP makes a domain rule
+// trustworthy.
+func (e *executor) buildEgress(authz auth.Authorizer) error {
 	c := e.cfg
+	bridge, err := netip.ParseAddr(cmp.Or(c.bridgeAddress, "127.0.0.1"))
+	if err != nil {
+		return fault.Wrapf(err, fault.Invalid, "funcd.buildEgress", "parse the bridge address")
+	}
+	if c.imageFor != nil && c.bridgeAddress == "" {
+		c.logger.Warn("the egress dns forwarder listens on loopback, which worker containers cannot reach: give funcd its " +
+			"bridge address (WithBridgeAddress), else no lookup is answered")
+	}
 	e.egressWorkers = egress.NewMemoryWorkerIndex()
 	fwd := egress.NewForwarder(
-		netip.AddrPortFrom(netip.AddrFrom4([4]byte{0, 0, 0, 0}), c.dnsForwarderPort),
+		netip.AddrPortFrom(bridge, c.dnsForwarderPort),
 		c.dnsUpstream,
-		e.egressWorkers,                // src-IP → namespace (ADR-0117 §5)
-		storeWildcardPatterns{c.store}, // namespace → EgressPolicy wildcards
+		e.egressWorkers,           // src-IP → principal (ADR-0117 §5)
+		storeDomainRules{c.store}, // principal → the domain rules that apply to it (ADR-0315)
+		c.logger.With("component", "egress.dns"),
 	)
 	e.egressForwarder = fwd
 	e.egressGateway = egress.New(true, egress.Deps{
@@ -133,6 +146,7 @@ func (e *executor) buildEgress(authz auth.Authorizer) {
 		Audit:       egressAuditSink{logger: c.logger.With("component", "egress.audit")},
 		Logger:      c.logger.With("component", "egress.gateway"),
 	})
+	return nil
 }
 
 // buildLogs builds, over the blob substrate, the trace sink the workflow engine shares (ADR-0103), the logs sink when the

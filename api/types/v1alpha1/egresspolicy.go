@@ -19,7 +19,12 @@ const (
 // EgressPolicy is a namespaced, pure-policy allow-list (implicit default-deny) governing worker egress
 // (ADR-0117, F81). No status (implements Object, not StatusObject). A namespace with no EgressPolicy ⇒
 // its workers reach nothing external. It is the first high-level typed policy CRD that compiles to
-// Cedar (internal/auth/cedar.CompileEgressPolicy). Example (YAML block syntax):
+// Cedar (internal/auth/cedar.CompileEgressPolicy).
+//
+// A name needs a domain rule (ADR-0315): the DNS forwarder answers known workers only, and forwards only the names a domain
+// rule that applies to them allows; any other name gets REFUSED, so reaching a CIDR-allowed host by name takes a domain
+// rule too. A domain rule reaches public addresses only: a private, link-local or node address takes a `cidrs` rule that
+// names it. Example (YAML block syntax):
 //
 //	apiVersion: funcd.io/v1alpha1
 //	kind: EgressPolicy

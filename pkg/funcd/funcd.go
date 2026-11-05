@@ -279,7 +279,7 @@ type config struct {
 	backupMeter metric.Meter
 
 	// bridgeAddress is funcd's address on its container bridge (ADR-0238), bound and published by the lake proxies and
-	// the SQL change feed; "" ⇒ 127.0.0.1.
+	// the SQL change feed, and bound by the DNS forwarder (ADR-0315); "" ⇒ 127.0.0.1.
 	bridgeAddress string
 
 	// Workflow engine (ADR-0094): always wired. Durable run state is a Badger store at
@@ -1674,32 +1674,24 @@ func (p policySource) Policies(ctx context.Context) ([]v1.Policy, string, error)
 	return out, rev, nil
 }
 
-// storeWildcardPatterns adapts store.Store to egress.WildcardPatterns (ADR-0117, judge Major 2): it
-// returns a namespace's EgressPolicy wildcard domain patterns ("*.x.com") so the DNS forwarder injects a
-// matched pattern token, keeping wildcard authorization an exact set-membership check over a
-// forwarder-derived token. Derived from the same EgressPolicy set the PDP compiles (no duplicate state).
-type storeWildcardPatterns struct{ s store.Store }
+// storeDomainRules adapts store.Store to egress.DomainRules (ADR-0315): the domain rules of the EgressPolicies that apply
+// to a worker's principal, read on each lookup from the same EgressPolicy set the PDP compiles (no duplicate state). A
+// failed list is an error, so the lookup is refused.
+type storeDomainRules struct{ s store.Store }
 
-func (w storeWildcardPatterns) Wildcards(ns v1.NamespaceName) []string {
-	res, err := w.s.List(context.Background(), v1.KindEgressPolicy.GVK(), store.ListOptions{Namespace: ns})
+func (r storeDomainRules) For(ctx context.Context, principal auth.EntityRef) ([]string, error) {
+	const op = "funcd.storeDomainRules.For"
+	res, err := r.s.List(ctx, v1.KindEgressPolicy.GVK(), store.ListOptions{Namespace: principal.Namespace})
 	if err != nil {
-		return nil
+		return nil, fault.Wrapf(err, fault.KindOf(err), op, "list egress policies")
 	}
 	var out []string
 	for _, o := range res.Items {
-		ep, ok := o.(*v1.EgressPolicy)
-		if !ok {
-			continue
-		}
-		for i := range ep.Spec.Rules {
-			for _, d := range ep.Spec.Rules[i].To.Domains {
-				if len(d) > 2 && d[0] == '*' && d[1] == '.' {
-					out = append(out, d)
-				}
-			}
+		if ep, ok := o.(*v1.EgressPolicy); ok {
+			out = append(out, cedarauth.EgressDomains(ep, principal)...)
 		}
 	}
-	return out
+	return out, nil
 }
 
 // egressAuditSink records each egress decision (ADR-0117): every connection (allowed + blocked) is

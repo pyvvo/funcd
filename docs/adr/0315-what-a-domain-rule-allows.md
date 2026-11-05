@@ -1,6 +1,6 @@
 # ADR-0315: What a domain rule allows, and the forwarder that enforces it (amends ADR-0117 and ADR-0115)
 
-- **Status**: Accepted (2026-11-05): the decider delegated acceptance to the session driving this work, which settled the
+- **Status**: Reviewing (2026-11-05, implementation done); Accepted (2026-11-05): the decider delegated acceptance to the session driving this work, which settled the
   last choices; judged once, its Blocker and Major folded
 - **Date**: 2026-11-05
 - **Deciders**: green-0-rabbit

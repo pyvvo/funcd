@@ -39,11 +39,11 @@ func TestScenarioRulesetProgrammed(t *testing.T) {
 	require.False(t, chains["input"].dropPol, "the input chain accepts the redirected-to-gateway packets")
 }
 
-// The prerouting rule plan excludes internal-service + DNS destinations from the redirect: every
+// The prerouting rule plan excludes internal-service destinations from the redirect: every
 // redirect-skip (return) rule MUST precede the single redirect, or a NAT redirect (dst rewritten before
-// routing) would hijack internal/DNS-over-TCP traffic to the gateway. (Review Blocker fix.)
-func TestPreroutingExcludesInternalAndDNSBeforeRedirect(t *testing.T) {
-	p := goodPolicy() // one internal endpoint + a DNS resolver
+// routing) would hijack internal traffic to the gateway. (Review Blocker fix.)
+func TestPreroutingExcludesInternalBeforeRedirect(t *testing.T) {
+	p := goodPolicy() // one internal endpoint
 	rules := planRules(p)
 
 	var pre []rulePlan
@@ -62,23 +62,42 @@ func TestPreroutingExcludesInternalAndDNSBeforeRedirect(t *testing.T) {
 		}
 	}
 	require.NotEqual(t, -1, redirectIdx, "a redirect rule exists")
-	require.Equal(t, len(pre)-1, redirectIdx, "the redirect is LAST — every internal/DNS skip precedes it")
+	require.Equal(t, len(pre)-1, redirectIdx, "the redirect is LAST — every internal skip precedes it")
 
-	// The skips cover the internal endpoint AND the DNS resolver (over TCP), so neither is redirected.
+	// The skips cover the internal endpoint, so it is not redirected.
 	skipped := map[netip.Addr]bool{}
 	for _, r := range pre[:redirectIdx] {
 		require.Equal(t, kindRedirectSkip, r.kind, "every pre-redirect rule is a return/skip")
 		skipped[r.dst] = true
 	}
 	require.True(t, skipped[p.InternalAllow[0].Addr()], "the internal-service endpoint is skipped (not redirected)")
-	require.True(t, skipped[p.DNSResolver.Addr()], "the DNS resolver is skipped (not redirected)")
 
-	// forward accepts the same internal + DNS destinations (so the returned traffic passes the drop policy).
+	// forward accepts the same internal destinations (so the returned traffic passes the drop policy).
 	fwdAccepts := 0
 	for _, r := range rules {
 		if r.chain == egressFwd && r.kind == kindForwardAccept {
 			fwdAccepts++
 		}
 	}
-	require.Equal(t, len(p.InternalAllow)+2, fwdAccepts, "forward accepts each internal endpoint + DNS over UDP and TCP")
+	require.Equal(t, len(p.InternalAllow), fwdAccepts, "forward accepts each internal endpoint")
+}
+
+// scenario: no-forwarder-nothing-out — with no forwarder a worker's DNS has no rule of its own: UDP :53 falls to the forward
+// chain's drop policy and TCP :53 to the redirect, whose gateway is not there. The internal endpoints and the redirect stand.
+func TestScenarioNoForwarderNothingOut(t *testing.T) {
+	p := goodPolicy()
+	p.DNSResolver = netip.MustParseAddrPort("192.0.2.53:53")
+	for _, r := range planRules(p) {
+		require.NotEqual(t, uint16(53), r.port, "no rule names :53: %+v", r)
+		require.NotEqual(t, p.DNSResolver.Addr(), r.dst, "no rule names the resolver: %+v", r)
+		require.NotEqual(t, kindDNSRedirect, r.kind)
+		require.NotEqual(t, kindDNSInputAccept, r.kind)
+	}
+	var kinds []ruleKind
+	for _, r := range planRules(p) {
+		if r.chain == egressPre {
+			kinds = append(kinds, r.kind)
+		}
+	}
+	require.Equal(t, []ruleKind{kindRedirectSkip, kindRedirect}, kinds, "only the internal endpoint is excluded from the redirect")
 }
