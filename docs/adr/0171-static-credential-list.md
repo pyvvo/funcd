@@ -1,6 +1,7 @@
 # ADR-0171: Static credential list — admin, developer and viewer tokens from the daemon config
 
 - **Status**: Implemented (2026-10-05)
+- **Superseded in part by**: [ADR-0314](0314-a-fresh-funcd-answers-on-loopback-until-it-has-a-real-credential.md) (2026-11-05) — Decision 4's shorthand path, Decision 7's "WithDevAuth does not change" and the built-in half of scenario legacy-token-is-developer: the built-in token works only on loopback, and warns in each form.
 - **Date**: 2026-10-05 (finish pass and cross-ADR audit fixes; judged once)
 - **Deciders**: green-0-rabbit
 - **Tags**: auth, rbac, config, control-plane, edge, daemon

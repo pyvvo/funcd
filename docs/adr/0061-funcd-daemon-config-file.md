@@ -3,6 +3,7 @@
 - **Status**: Implemented
 - **Superseded in part by**: [ADR-0163](0163-retry-times-in-config.md) (2026-10-05) — Scope Out scaling/activator intervals: adds activationTimeout, reclaimInterval keys.
 - **Superseded in part by**: [ADR-0171](0171-static-credential-list.md) (2026-10-05) — WithDevAuth(Token, Namespaces...) applies only while auth.credentials is absent.
+- **Superseded in part by**: [ADR-0314](0314-a-fresh-funcd-answers-on-loopback-until-it-has-a-real-credential.md) (2026-11-05) — scenario zero-config-defaults and the server.listenAddr default: 127.0.0.1:8080; scenarios file-sets-addresses and partial-file-fills-rest and Decision 3's "a partial file is valid": on loopback or with a real credential.
 - **Date**: 2026-06-19
 - **Deciders**: green-0-rabbit
 - **Tags**: operability, config, daemon, packaging, cli
