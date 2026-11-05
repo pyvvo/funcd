@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.39.0](https://github.com/pyvvo/funcd/compare/v0.38.0...v0.39.0) (2026-11-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **egress:** a worker's network holds what the rules read
+
+### Features
+
+* **egress:** a domain rule reaches globally reachable addresses only, by a table read from IANA's special-purpose registries (ADR-0317) ([c6ada8d](https://github.com/pyvvo/funcd/commit/c6ada8da69322dd2207cbd100fa90e41d319c832))
+* **egress:** a worker's network holds what the rules read ([9d7582b](https://github.com/pyvvo/funcd/commit/9d7582b388569d521b93848692375acadbb33adb))
+
+
+### Bug Fixes
+
+* **network:** a worker's traffic to the node stops at the input chain, except its replies, the gateway, the forwarder and internalAllow ([c6ada8d](https://github.com/pyvvo/funcd/commit/c6ada8da69322dd2207cbd100fa90e41d319c832))
+* **shim:** a Content-Type answers whatever its parameters hold, through funcd-python v0.19.3 ([9d7582b](https://github.com/pyvvo/funcd/commit/9d7582b388569d521b93848692375acadbb33adb))
+
 ## [0.38.0](https://github.com/pyvvo/funcd/compare/v0.37.0...v0.38.0) (2026-11-05)
 
 
