@@ -712,6 +712,9 @@ sequenceDiagram
 > address stays its by-name form; a Site, and a Function with a custom address, own a Route, which
 > `ingress.enabled: false` keeps but turns off (`Route.spec.enabled`). A Route you write wins an equal claim over an
 > owned one, and each Route rule may carry its own `auth`, which replaces `public`.
+>
+> **A Function's health paths (ADR-0316).** A Function's `/health/*` paths are funcd's own: its probes read them on the
+> worker, and the data plane answers them 404, after the caller's stance and with no wake.
 
 #### Resource state machine
 
