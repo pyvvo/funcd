@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.38.0](https://github.com/pyvvo/funcd/compare/v0.37.0...v0.38.0) (2026-11-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **server:** a fresh funcd answers on loopback until it has a real credential (ADR-0314)
+
+### Features
+
+* **backup:** the limits of a backup target's listing and of a copy are config keys ([#1391](https://github.com/pyvvo/funcd/issues/1391)) ([7942d08](https://github.com/pyvvo/funcd/commit/7942d08eb4c1071865a9f647955026b75d6e7bec))
+* **dataplane:** a Function's /health/* paths answer 404 from the listener (ADR-0316) ([b6cb707](https://github.com/pyvvo/funcd/commit/b6cb707e940f9da6a86470effb6bc8ff9af4471e))
+* **egress:** a domain rule reaches public addresses only; a private, link-local or node address takes a cidrs rule that names it ([b6cb707](https://github.com/pyvvo/funcd/commit/b6cb707e940f9da6a86470effb6bc8ff9af4471e))
+* **egress:** with egress on and no dnsForwarderPort, nothing goes out, DNS included ([b6cb707](https://github.com/pyvvo/funcd/commit/b6cb707e940f9da6a86470effb6bc8ff9af4471e))
+* **egress:** with egress on, the DNS forwarder answers known workers only, on the bridge address, and forwards only the names an EgressPolicy domain rule allows them ([b6cb707](https://github.com/pyvvo/funcd/commit/b6cb707e940f9da6a86470effb6bc8ff9af4471e))
+* **server:** a fresh funcd answers on loopback until it has a real credential (ADR-0314) ([b6cb707](https://github.com/pyvvo/funcd/commit/b6cb707e940f9da6a86470effb6bc8ff9af4471e))
+
+
+### Bug Fixes
+
+* **behavior:** the lookup test does not pin a row's status ([#1399](https://github.com/pyvvo/funcd/issues/1399)) ([889df61](https://github.com/pyvvo/funcd/commit/889df61ab72e2b9e4e127089b1947ff3f469319d))
+* **dataplane:** a failed read of a Namespace refuses the call ([b6cb707](https://github.com/pyvvo/funcd/commit/b6cb707e940f9da6a86470effb6bc8ff9af4471e))
+* **dataplane:** an external call reaches its worker with its length ([b6cb707](https://github.com/pyvvo/funcd/commit/b6cb707e940f9da6a86470effb6bc8ff9af4471e))
+* **deps:** pin funcd-python v0.19.1, so a request's body is read before it is answered ([b6cb707](https://github.com/pyvvo/funcd/commit/b6cb707e940f9da6a86470effb6bc8ff9af4471e))
+* **fault:** a 5xx's detail carries the operation and its message, and the cause goes to funcd's log ([b6cb707](https://github.com/pyvvo/funcd/commit/b6cb707e940f9da6a86470effb6bc8ff9af4471e))
+* **install:** the unit funcd install writes runs the containerd runtime ([b6cb707](https://github.com/pyvvo/funcd/commit/b6cb707e940f9da6a86470effb6bc8ff9af4471e))
+
 ## [0.37.0](https://github.com/pyvvo/funcd/compare/v0.36.1...v0.37.0) (2026-11-04)
 
 
