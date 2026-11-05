@@ -1,6 +1,6 @@
 # ADR-0317: A domain rule reaches globally reachable addresses only (amends ADR-0315)
 
-- **Status**: Reviewing (2026-11-05, implementation done); Accepted (2026-11-05): the decider delegated acceptance to the session driving this work, on the conditions that no Blocker or Major stays open, the decision stands and Open questions reads None; judged once, its two Majors folded
+- **Status**: Implemented (2026-11-05), review passed with no Blocker or Major ([report](../reviews/adr-0317-implementation-claude-opus-5-5.md)); Reviewing (2026-11-05, implementation done); Accepted (2026-11-05): the decider delegated acceptance to the session driving this work, on the conditions that no Blocker or Major stays open, the decision stands and Open questions reads None; judged once, its two Majors folded
 - **Date**: 2026-11-05
 - **Deciders**: green-0-rabbit
 - **Tags**: egress, network, security
