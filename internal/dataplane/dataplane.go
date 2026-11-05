@@ -144,7 +144,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				s.serveUpstream(w, r, m, op)
 				return
 			}
-			stance := s.authStance(r, m.Auth, m.Namespace)
+			stance, err := s.authStance(r, m.Auth, m.Namespace)
+			if err != nil {
+				fault.WriteProblem(w, err)
+				return
+			}
 			s.serveFunction(w, r, m.Namespace, m.Function, stripMatched(r.URL.Path, m.StripPrefix), stance, internal, received, op, nil)
 			return
 		}
@@ -173,17 +177,32 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // serveByName serves a public call at a Function's default address (ADR-0241 Decision 4). It reads the Function
 // first: one that is missing, off, or has an address of its own gets the namespace stance's PEP and then 404, so
 // in an authenticated namespace an anonymous caller cannot tell names apart and nothing wakes. One that is on gets
-// the PEP with its ingress.auth, else the namespace default.
+// the PEP with its ingress.auth, else the namespace default. Like namespaceSpec's, this read takes a context that
+// cannot end.
 func (s *Server) serveByName(w http.ResponseWriter, r *http.Request, ns v1.NamespaceName, name v1.ObjectName, rest string,
 	received time.Time, op string) {
-	obj, err := s.store.Get(r.Context(), v1.KindFunction.GVK(), ns, name)
+	obj, err := s.store.Get(context.WithoutCancel(r.Context()), v1.KindFunction.GVK(), ns, name)
 	if err != nil && fault.KindOf(err) != fault.NotFound {
 		fault.WriteProblem(w, fault.Wrapf(err, fault.KindOf(err), op, "function %s/%s", ns, name))
 		return
 	}
 	fn, _ := obj.(*v1.Function)
-	if fn == nil || !s.servedByName(r, fn) {
-		c := newCall(r, ns, name, rest, s.authStance(r, "", ns), false, received)
+	served, err := s.servedByName(r, fn)
+	if err != nil {
+		fault.WriteProblem(w, err)
+		return
+	}
+	var own v1.AuthMode
+	if served {
+		own = fn.Spec.Ingress.AuthMode()
+	}
+	stance, err := s.authStance(r, own, ns)
+	if err != nil {
+		fault.WriteProblem(w, err)
+		return
+	}
+	if !served {
+		c := newCall(r, ns, name, rest, stance, false, received)
 		c.Function = fn
 		if rf := s.chain.Admit(r.Context(), c); rf != nil {
 			rf.WriteAnswer(w)
@@ -192,20 +211,23 @@ func (s *Server) serveByName(w http.ResponseWriter, r *http.Request, ns v1.Names
 		fault.WriteProblem(w, fault.NotFoundf(op, "function %s/%s is not exposed by name", ns, name))
 		return
 	}
-	stance := fn.Spec.Ingress.AuthMode()
-	if stance == "" {
-		stance = s.authStance(r, "", ns)
-	}
 	s.serveFunction(w, r, ns, name, rest, stance, false, received, op, fn)
 }
 
-// servedByName reports whether a Function answers at its default address: its ingress is on (enabled, else its
-// namespace's mode) and names no host or path, which a Route the Function owns serves instead.
-func (s *Server) servedByName(r *http.Request, fn *v1.Function) bool {
-	if ing := fn.Spec.Ingress; ing != nil && (ing.Host != "" || ing.Path != "") {
-		return false
+// servedByName reports whether a Function answers at its default address: it exists, its ingress is on (enabled, else
+// its namespace's mode) and names no host or path, which a Route the Function owns serves instead.
+func (s *Server) servedByName(r *http.Request, fn *v1.Function) (bool, error) {
+	if fn == nil {
+		return false, nil
 	}
-	return fn.Spec.Ingress.EnabledIn(s.exposureMode(r, fn.Namespace))
+	if ing := fn.Spec.Ingress; ing != nil && (ing.Host != "" || ing.Path != "") {
+		return false, nil
+	}
+	mode, err := s.exposureMode(r, fn.Namespace)
+	if err != nil {
+		return false, err
+	}
+	return fn.Spec.Ingress.EnabledIn(mode), nil
 }
 
 // serveFunction runs the call's invokePlugin chain around the activator hop (ADR-0302 Decision 3): Admit, the Function
@@ -294,7 +316,11 @@ func refuseHeld(w http.ResponseWriter, err error) {
 // overload), and dispatches to the static handler with the stripped remainder — no activator hop.
 func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request, m router.Match, op string) {
 	ns := m.Namespace
-	stance := s.authStance(r, m.Auth, ns)
+	stance, err := s.authStance(r, m.Auth, ns)
+	if err != nil {
+		fault.WriteProblem(w, err)
+		return
+	}
 	// Fill the F76 observability holder with (ns, bucket) — the function label is overloaded with the
 	// bucket name for a static route (a distinct backend/kind label is a named follow-on, ADR-0120 §5).
 	if t, ok := observ.TargetFrom(r.Context()); ok {
@@ -371,31 +397,45 @@ func (s *Server) serveUpstream(w http.ResponseWriter, r *http.Request, m router.
 // authStance resolves the F77 auth stance for a request: the matched Route's mode if set, else the
 // namespace's edgeDefaults.auth.mode, else `open` (the phased default). routeMode is "" for the path
 // form or a Route with no auth set. It short-circuits without a store read when routeMode is set.
-func (s *Server) authStance(r *http.Request, routeMode v1.AuthMode, ns v1.NamespaceName) v1.AuthMode {
+func (s *Server) authStance(r *http.Request, routeMode v1.AuthMode, ns v1.NamespaceName) (v1.AuthMode, error) {
 	if routeMode != "" {
-		return routeMode
+		return routeMode, nil
 	}
-	obj, err := s.store.Get(r.Context(), v1.KindNamespace.GVK(), "", v1.ObjectName(ns))
+	spec, err := s.namespaceSpec(r, ns)
 	if err != nil {
-		return v1.AuthOpen
+		return "", err
 	}
-	if n, ok := obj.(*v1.Namespace); ok && n.Spec.EdgeDefaults != nil && n.Spec.EdgeDefaults.Auth != nil && n.Spec.EdgeDefaults.Auth.Mode != "" {
-		return n.Spec.EdgeDefaults.Auth.Mode
+	if d := spec.EdgeDefaults; d != nil && d.Auth != nil && d.Auth.Mode != "" {
+		return d.Auth.Mode, nil
 	}
-	return v1.AuthOpen
+	return v1.AuthOpen, nil
 }
 
-// exposureMode reads the target namespace's normalized exposure mode; an absent Namespace (or a
-// read error) is implicit — so a Spec-less namespace still serves by name.
-func (s *Server) exposureMode(r *http.Request, ns v1.NamespaceName) v1.ExposureMode {
-	obj, err := s.store.Get(r.Context(), v1.KindNamespace.GVK(), "", v1.ObjectName(ns))
+// exposureMode reads the target namespace's normalized exposure mode; an absent Namespace is implicit —
+// so a Spec-less namespace still serves by name.
+func (s *Server) exposureMode(r *http.Request, ns v1.NamespaceName) (v1.ExposureMode, error) {
+	spec, err := s.namespaceSpec(r, ns)
 	if err != nil {
-		return v1.ExposureImplicit
+		return "", err
 	}
-	if n, ok := obj.(*v1.Namespace); ok {
-		return n.Spec.DefaultExposure.Normalized()
+	return spec.DefaultExposure.Normalized(), nil
+}
+
+// namespaceSpec reads what a call's stance and exposure default to, with a context that cannot end: what comes before
+// the PEP depends on the store alone. An absent Namespace is the zero spec, which is unset (ADR-0110 Decision 6.3,
+// ADR-0113 Decision 3). Any other failed read refuses the call, as ADR-0176 Decision 2 rules for the edge aggregator;
+// the refusal comes before the PEP, so its detail names neither the cause nor the namespace, which stay in the log.
+func (s *Server) namespaceSpec(r *http.Request, ns v1.NamespaceName) (v1.NamespaceSpec, error) {
+	obj, err := s.store.Get(context.WithoutCancel(r.Context()), v1.KindNamespace.GVK(), "", v1.ObjectName(ns))
+	if fault.KindOf(err) == fault.NotFound {
+		return v1.NamespaceSpec{}, nil
 	}
-	return v1.ExposureImplicit
+	n, ok := obj.(*v1.Namespace)
+	if err != nil || !ok {
+		s.logger.WarnContext(r.Context(), "edge cannot read a namespace", "namespace", ns, "error", err)
+		return v1.NamespaceSpec{}, fault.Unavailablef(callOp, "edge settings unavailable")
+	}
+	return n.Spec, nil
 }
 
 // stripMatched removes the matched route prefix to get the function-relative remainder,

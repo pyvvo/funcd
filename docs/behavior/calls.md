@@ -9,7 +9,7 @@ stateDiagram-v2
     [*] --> limit : the listener read the headers
     limit --> Refused : over a limit
     limit --> Resolve : within the limits
-    Resolve --> Refused : no rule, not exposed by name
+    Resolve --> Refused : no rule, not exposed by name, a failed read of the Namespace
     Resolve --> Direct : a static rule, a Site or a Lake
     Resolve --> Admit : a Function rule, or its name
     Direct --> Answered : the file, or the Lake answers
@@ -39,6 +39,7 @@ and no call reads it; `NetDestination` and `Invocation` are no step of a call. N
 | An address with no port, with the built-in dev token | This refusal, not a bind error | none | `is off loopback` | accepted | ADR-0314 Consequences, `TestIsLoopbackAddr` |
 | An explicit empty `server.listenAddr` with a real credential | It reaches the `Production()` default, `0.0.0.0:8080`, as before | none | `platform starting` | accepted | ADR-0314 Consequences, `TestScenarioRealCredentialBindsAnywhere` |
 | No rule, no by-name Function | Refused, nothing wakes | none | 404 `no route for "<path>"`, 404 `function <ns>/<name> is not exposed by name` | decided | ADR-0241 Decision 4, `TestScenario_exposure_function_off` |
+| A failed read of a Namespace | A call that needs it is refused before anything is served; only an absent Namespace reads as unset, implicit and open | none | 503 `edge settings unavailable` | accepted | ADR-0176 Decision 2 for the aggregator, `TestNamespaceRead_FailedReadRefusesTheCall` |
 | A rule with no host | In a namespace it answers only on `<ns>.<baseDomain>`; in `default`, on any host no namespace reserves | none | `status.host`, a 404 on another host | decided | ADR-0240 Decisions 3 and 4, `TestScenario_namespace_host_routes` |
 | Two rules match | The longest path wins and a host only breaks a tie, so a `default` host-less rule at a longer path takes a host's shorter one | none | the other rule's backend | deferred | ADR-0176 Open questions, `TestScenarioMatchLongestPrefix` |
 | A Route that cannot serve | It serves nothing, whichever rule is at fault | re-check `controller.routeResyncInterval` 10 s | `Pending`, `Ready=False`: `BackendNotFound`, `RouteConflict` | decided | ADR-0242 Decision 4, `TestScenarioRouteNotReadyMissingBackend` |
