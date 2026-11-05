@@ -13798,5 +13798,35 @@
     "dod_total": 20,
     "report": "docs/reviews/adr-0318-implementation-claude-opus-5-5.md",
     "notes": "pass on 2811739d with 5 minors, all model: no test fails when the unicast drop stops reading the source (mutant survives, checklist line 1 one clause short); no committed test runs the eth0 setting and the fence together (2 mutants survive); the no-netns test passes with Setns's result dropped; no Decision log row in PROJECT-SUMMARY; a blueprint sentence and F232's clause say more than the Consequences. Routed (env): the IPv6 socket shows on no machine here. Gate and lanes all: not run here, the PR's"
+  },
+  {
+    "date": "2026-11-05",
+    "issue": "funcd-python#116",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "changes-requested",
+    "blockers": 0,
+    "majors": 1,
+    "minors": 6,
+    "model_attributed": 7,
+    "dod_passed": 10,
+    "dod_total": 12,
+    "report": "docs/reviews/python-request-head-fix-claude-opus-5-5.md",
+    "notes": "round 1: major (model): a well-formed Content-Type left a call unanswered; minors (model): limits status, a tab after a length, request-line text, length bounds, surviving mutants, test names; folded or routed"
+  },
+  {
+    "date": "2026-11-05",
+    "issue": "funcd-python#116",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 5,
+    "model_attributed": 4,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/python-request-head-fix-claude-opus-5-5.md",
+    "notes": "round 2, the rework: pass; minors: moved tests lost assertions, new tests pinned an open row, an open framing row, one sentence on methods, a long timeout header (not from this work); folded or routed"
   }
 ]
