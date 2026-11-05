@@ -30,6 +30,11 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
+const (
+	defaultS3MaxUpload          = 1 << 30
+	defaultWorkflowPayloadLimit = 256 << 10
+)
+
 // APIVersion / Kind are the optional funcdconfig.yaml envelope (validated only when present).
 const (
 	APIVersion = "funcd.io/v1alpha1"
@@ -470,6 +475,9 @@ type Flags struct{ MemoryOnly *bool }
 // the operator chose, an imageOverride entry or a custom imagePrefix.
 const DefaultImagePrefix = "funcd/runtime-"
 
+// Defaults is every key's built-in default, before a file or a variable applies.
+func Defaults() Config { return defaults() }
+
 // defaults returns the Config with every built-in default set (the bottom precedence tier; identical
 // to ADR-0061's defaults). The dataDir-relative containerd paths (Root, CNIConfDir) are derived in
 // Load after the merge, when DataDir is final.
@@ -540,14 +548,14 @@ func defaults() Config {
 	// S3 gateway (ADR-0080/0085): opt-in; node-private loopback; 1 GiB buffered-object cap.
 	c.S3Gateway.Enabled = false
 	c.S3Gateway.ListenAddr = "127.0.0.1:9000"
-	c.S3Gateway.MaxUploadBytes = 1 << 30
+	c.S3Gateway.MaxUploadBytes = defaultS3MaxUpload
 	c.S3Gateway.KeyRotationPeriod = "24h"
 	// Workflow engine (ADR-0094): one attempt by default (no retry), 300s per-step timeout,
 	// 30-day terminal-run retention, 256 KiB run-payload cap.
 	c.Workflow.DefaultRetry = 1
 	c.Workflow.DefaultStepTimeout = "300s"
 	c.Workflow.Retention = "720h"
-	c.Workflow.PayloadLimit = 256 << 10
+	c.Workflow.PayloadLimit = defaultWorkflowPayloadLimit
 	c.Workflow.MaxStepsInFlight = 64
 	c.Workflow.ArtifactPollInterval = "5s"
 	c.Workflow.DefaultRetryBackoff = "0s"

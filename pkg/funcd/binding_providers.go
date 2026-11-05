@@ -44,6 +44,11 @@ import (
 	"github.com/pyvvo/funcd/internal/workflow"
 )
 
+const (
+	feedWaitPoll          = 50 * time.Millisecond
+	sensorDeliveryTimeout = 30 * time.Second
+)
+
 // The binding providers (ADR-0305): the high-level providers a Function binds. Each builds its own parts over the
 // Platform's shared ones (ADR-0309), secrets first, over the config alone (ADR-0310 Decision 6), and eventing after the
 // workload core its Sensors call through. Every stop hook is safe on a provider whose build never ran (#94).
@@ -561,7 +566,7 @@ func (s *sqlProvider) openFeed(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(50 * time.Millisecond):
+		case <-time.After(feedWaitPoll):
 		}
 	}
 }
@@ -748,7 +753,7 @@ func (s *eventingProvider) build(d eventingDeps) error {
 		Store:      c.store,
 		Subscriber: d.fanout,
 		Invoker: &sensor.HTTPInvoker{Endpoints: d.endpoints, Waker: d.waker, Protocol: protocolOf(c.store),
-			Client: workerClient(d.calls, 30*time.Second), Chain: d.chain},
+			Client: workerClient(d.calls, sensorDeliveryTimeout), Chain: d.chain},
 		DeadLetters:           s.deadLetters,
 		DeliveryAttempts:      c.deliveryAttempts,
 		MaxDeliveriesInFlight: c.sensorMaxDeliveriesInFlight,

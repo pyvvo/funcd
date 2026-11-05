@@ -10,6 +10,8 @@ import (
 	"sync"
 )
 
+const maxBarrierReply = 4 << 10
+
 // errNotSaved fails an engine answer that no catalog save covered: the client gets 503 "lake catalog not saved", or a
 // broken connection once the answer's headers went out (ADR-0279 Decision 3).
 var errNotSaved = errors.New("lake catalog not saved")
@@ -46,7 +48,7 @@ func (b *saveBarrier) call(ctx context.Context) (string, error) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	var rep saveReport
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<10)).Decode(&rep); err != nil || rep.Engine == "" {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxBarrierReply)).Decode(&rep); err != nil || rep.Engine == "" {
 		return "", fmt.Errorf("%w: the save endpoint answered %s with no engine instance", errNotSaved, resp.Status)
 	}
 	if resp.StatusCode != http.StatusOK {

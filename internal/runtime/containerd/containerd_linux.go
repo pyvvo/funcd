@@ -49,6 +49,11 @@ import (
 	"github.com/pyvvo/funcd/internal/runtime/workerpipe"
 )
 
+const (
+	logAcceptBackoffMin = 5 * time.Millisecond
+	logAcceptBackoffMax = time.Second
+)
+
 // DefaultStopGrace is how long a single stop and the daemon stop wait after SIGTERM before sending SIGKILL unless
 // runtime.containerd.stopGrace sets it (ADR-0277).
 const DefaultStopGrace = 10 * time.Second
@@ -250,7 +255,7 @@ func acceptLogConns(ln *net.UnixListener, spec runtime.WorkerSpec, capture runti
 			return
 		}
 		if err != nil {
-			backoff = min(max(2*backoff, 5*time.Millisecond), time.Second)
+			backoff = min(max(2*backoff, logAcceptBackoffMin), logAcceptBackoffMax)
 			time.Sleep(backoff)
 			continue
 		}

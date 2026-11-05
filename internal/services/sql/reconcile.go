@@ -22,6 +22,8 @@ import (
 	"github.com/pyvvo/funcd/internal/store"
 )
 
+const engineProbeTimeout = 5 * time.Second
+
 // The engine's fixed shape (ADR-0232 Decisions 2 and 3).
 const (
 	Runtime       = "rqlite"
@@ -108,7 +110,7 @@ func NewReconciler(d ReconcilerDeps) (*Reconciler, error) {
 		d.Logger = slog.Default()
 	}
 	return &Reconciler{d: d, volumes: vols, log: d.Logger.With("component", "sql.reconciler"),
-		backupClient: httpx.NodeClient(0), probeClient: httpx.NodeClient(5 * time.Second),
+		backupClient: httpx.NodeClient(0), probeClient: httpx.NodeClient(engineProbeTimeout),
 		seen: map[string]bool{}, missing: map[string]bool{}}, nil
 }
 
@@ -484,7 +486,7 @@ func (p Prober) HasTables(ctx context.Context, ns v1.NamespaceName, name v1.Obje
 	}
 	client := p.Client
 	if client == nil {
-		client = httpx.NodeClient(5 * time.Second)
+		client = httpx.NodeClient(engineProbeTimeout)
 	}
 	stmt, _ := json.Marshal(userTablesQuery)
 	res, err := call(ctx, client, addr, EnginePassword(p.Master, ns, name), "/db/query", url.Values{}, []json.RawMessage{stmt})

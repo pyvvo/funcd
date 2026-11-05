@@ -8,6 +8,13 @@ import (
 	"strings"
 )
 
+const (
+	kibi = 1 << 10
+	mebi = 1 << 20
+	gibi = 1 << 30
+	tebi = 1 << 40
+)
+
 // ParseBytes parses s ("4Gi", "512Mi", "1024") into bytes; (0, false) on an empty, negative, unparseable or
 // overflowing value.
 func ParseBytes(s string) (int64, bool) {
@@ -19,7 +26,7 @@ func ParseBytes(s string) (int64, bool) {
 	for _, u := range []struct {
 		suffix string
 		mult   int64
-	}{{"Ki", 1 << 10}, {"Mi", 1 << 20}, {"Gi", 1 << 30}, {"Ti", 1 << 40}} {
+	}{{"Ki", kibi}, {"Mi", mebi}, {"Gi", gibi}, {"Ti", tebi}} {
 		if rest, ok := strings.CutSuffix(s, u.suffix); ok {
 			s, mult = rest, u.mult
 			break

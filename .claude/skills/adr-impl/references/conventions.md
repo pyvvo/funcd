@@ -49,6 +49,10 @@ Direction to remember: **everything imports *up* into `api/`; nothing imports *d
 
 These constraints hold for real code just as they did for skeletons — the same linters enforce them:
 
+- **A number that changes behavior has a name** (ADR-0313): `const probeTimeout = 30 * time.Second` at package level, never
+  `30*time.Second` or `1<<20` in a function body; a count's name passes the name test. One an operator may need to change is a config
+  key, with its default in `internal/platform/config` and `examples/funcdconfig.yaml`, and a fallback beside the key must equal it.
+  `just check-behavior` refuses the rest, at each commit too.
 - **Never `panic`** outside `package main` — `forbidigo` bans it. Return a typed `api/fault` error
   instead; surface unexpected states as errors, not panics.
 - **Error-returning func** → implement the behavior and return a real `api/fault` error on failure

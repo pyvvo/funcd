@@ -24,6 +24,15 @@ import (
 	"github.com/pyvvo/funcd/internal/store"
 )
 
+const (
+	defaultGCInterval = 5 * time.Minute
+	memTableSize      = 16 << 20
+	baseTableSize     = 8 << 20
+	valueLogFileSize  = 64 << 20
+	blockCacheSize    = 32 << 20
+	indexCacheSize    = 32 << 20
+)
+
 const sep = "\x00"
 
 type config struct {
@@ -53,7 +62,7 @@ type engine struct {
 // small resource blobs kept inline). Close flushes + releases the DB and stops GC.
 func Open(dir string, opts ...Option) (store.Engine, error) {
 	const op = "badger.Open"
-	cfg := config{sync: true, gcInterval: 5 * time.Minute}
+	cfg := config{sync: true, gcInterval: defaultGCInterval}
 	for _, o := range opts {
 		o(&cfg)
 	}
@@ -61,13 +70,13 @@ func Open(dir string, opts ...Option) (store.Engine, error) {
 		WithLoggingLevel(badger.ERROR).
 		WithSyncWrites(cfg.sync).
 		WithNumMemtables(2).
-		WithMemTableSize(16 << 20).
+		WithMemTableSize(memTableSize).
 		WithNumLevelZeroTables(1).
 		WithNumLevelZeroTablesStall(3).
-		WithBaseTableSize(8 << 20).
-		WithValueLogFileSize(64 << 20).
-		WithBlockCacheSize(32 << 20).
-		WithIndexCacheSize(32 << 20).
+		WithBaseTableSize(baseTableSize).
+		WithValueLogFileSize(valueLogFileSize).
+		WithBlockCacheSize(blockCacheSize).
+		WithIndexCacheSize(indexCacheSize).
 		WithNumCompactors(2).
 		WithCompression(options.None)
 	db, err := badger.Open(bopts)

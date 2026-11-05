@@ -17,6 +17,12 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/httpx"
 )
 
+const (
+	proxyReadHeaderTimeout = 10 * time.Second
+	proxyReadTimeout       = 10 * time.Second
+	proxyIdleTimeout       = 2 * time.Minute
+)
+
 // Manager owns the per-Lake lake PEP proxies (ADR-0137): it runs ONE node-private
 // http.Server per lake, each fronting that lake's engine. The Lake reconciler calls
 // Listen on every pass to bind the lake's listener on its recorded port (ADR-0162), Ensure on its Ready
@@ -298,7 +304,7 @@ func (m *Manager) closeProxy(key string, mp *managedProxy) {
 // proxy (ADR-0138), so that client closes an idle connection first. ErrorLog sends net/http's own errors
 // through log, not the stdlib log package (#454).
 func newProxyServer(h http.Handler, log *slog.Logger) *http.Server {
-	return &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute,
+	return &http.Server{Handler: h, ReadHeaderTimeout: proxyReadHeaderTimeout, ReadTimeout: proxyReadTimeout, IdleTimeout: proxyIdleTimeout,
 		ErrorLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
 }
 

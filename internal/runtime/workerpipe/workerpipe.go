@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+const drainBuf = 32 << 10
+
 // Stream names one of a worker's two raw output streams.
 type Stream int
 
@@ -92,7 +94,7 @@ func (o *Output) Drain(s Stream, r io.ReadCloser) {
 	o.drains++
 	o.mu.Unlock()
 	go func() {
-		buf := make([]byte, 32<<10)
+		buf := make([]byte, drainBuf)
 		for {
 			n, err := r.Read(buf)
 			if n > 0 {

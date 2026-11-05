@@ -15,6 +15,8 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 )
 
+const peekTimeout = 500 * time.Millisecond
+
 // newGateway returns the Linux transparent egress driver (ADR-0117). It listens on GatewayPort in the
 // host netns for F80-redirected worker connections.
 func newGateway(d Deps) Gateway { return &linuxGateway{deps: d} }
@@ -146,7 +148,7 @@ func srcAddr(c *net.TCPConn) (netip.Addr, bool) {
 // peek reads the connection preamble (with a short deadline) to extract an SNI/Host confirmation hint,
 // returning a replayed conn that re-serves the peeked bytes. A timeout / raw-TCP connect yields ("", conn).
 func peek(c *net.TCPConn) (string, net.Conn) {
-	_ = c.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	_ = c.SetReadDeadline(time.Now().Add(peekTimeout))
 	buf := make([]byte, 4096)
 	n, _ := c.Read(buf)
 	_ = c.SetReadDeadline(time.Time{})

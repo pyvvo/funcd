@@ -121,6 +121,9 @@ tests* with its real-platform test.
 A decision that relies on how the runtime treats a worker during a stop, a crash or a restart, with no real-platform
 lane case in its definition of done, is a Major (axis F): tests without funcd's runtime cannot show it.
 
+**I. Behavior rows (ADR-0313).** A Decision that changes what a user sees, with the section reading `None`, or a row it changes and
+does not list, is a Major.
+
 ## Step 3 — Calibrate before writing
 
 Apply these rules to the findings so the verdict is trustworthy, not just long:

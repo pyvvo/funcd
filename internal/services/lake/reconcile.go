@@ -390,8 +390,8 @@ func (r *Reconciler) StopEngine(ctx context.Context, ns v1.NamespaceName, name v
 	return release, nil
 }
 
-// restoringWrites bounds StopEngine's status write; the engine stops whatever it answers.
-const restoringWrites = 3
+// maxRestoringWrites bounds StopEngine's status write; the engine stops whatever it answers.
+const maxRestoringWrites = 3
 
 // markRestoring holds a stopped Lake not Ready for its Restore. CatalogSaved goes: it speaks of a catalog the Restore
 // replaces, and an engine with nothing to save reports nothing that would correct it. No pass writes while the Lake is
@@ -410,7 +410,7 @@ func (r *Reconciler) markRestoring(ctx context.Context, ns v1.NamespaceName, nam
 		cs.Status.Conditions = slices.DeleteFunc(cs.Status.Conditions, func(c v1.Condition) bool { return c.Type == condCatalogSaved })
 		setHeld(cs, reasonRestoring, "an in-place Restore is loading this Lake; its engine comes back when the load ends")
 		_, err = r.store.Update(ctx, cs)
-		if fault.KindOf(err) != fault.Conflict || attempt == restoringWrites {
+		if fault.KindOf(err) != fault.Conflict || attempt == maxRestoringWrites {
 			return err
 		}
 	}

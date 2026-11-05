@@ -21,6 +21,8 @@ import (
 	"github.com/pyvvo/funcd/internal/store"
 )
 
+const sealedWriteBuf = 64 << 10
+
 // Write runs snapshot.Cut once, then lists gen/ (n = 1 + the highest n of any key), puts each store's parts in cut
 // order, lists again and puts the manifest; every put goes IfNotExist unless Conditional is false, and an error ends
 // the run (Decision 2). The cut is spooled first: the keys name the timeline the cut returns.
@@ -217,7 +219,7 @@ func newStoreWriter(f *os.File, seal Seal) (*storeWriter, error) {
 		}
 		w.sealed = sealed
 	}
-	w.buf = bufio.NewWriterSize(w.sealed, 64<<10)
+	w.buf = bufio.NewWriterSize(w.sealed, sealedWriteBuf)
 	return w, nil
 }
 

@@ -16,6 +16,11 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
+const (
+	dnsTimeout   = 5 * time.Second
+	minRecordTTL = time.Second
+)
+
 // Forwarder is the ONLY resolver a worker can reach (F80 redirects worker :53 into it). It forwards to
 // the node resolver and records (src, domain)→resolved-IP set, exposing the reverse DomainsFor the
 // gateway uses to authorize domain rules. It also loads the namespace EgressPolicy domain patterns to
@@ -69,8 +74,8 @@ type forwarder struct {
 // truncated UDP answer is retried over TCP (RFC 7766). Each answered query records (src, domain)→IPs.
 func (f *forwarder) Serve(ctx context.Context) error {
 	const op = "egress.forwarder.Serve"
-	udpClient := &dns.Client{Net: "udp", Timeout: 5 * time.Second}
-	tcpClient := &dns.Client{Net: "tcp", Timeout: 5 * time.Second}
+	udpClient := &dns.Client{Net: "udp", Timeout: dnsTimeout}
+	tcpClient := &dns.Client{Net: "tcp", Timeout: dnsTimeout}
 	mux := dns.NewServeMux()
 	mux.HandleFunc(".", func(w dns.ResponseWriter, req *dns.Msg) {
 		client, limit := udpClient, dns.MinMsgSize
@@ -228,8 +233,8 @@ func newCorrelator(now func() time.Time, wildcardsFor func(netip.Addr) []string)
 // record binds (src, domain) to each resolved ip until now+ttl (a zero/negative ttl is clamped to a
 // short floor so a 0-TTL answer is still briefly usable for the connection it was resolved for).
 func (c *correlator) record(src netip.Addr, domain string, ips []netip.Addr, ttl time.Duration) {
-	if ttl < time.Second {
-		ttl = time.Second
+	if ttl < minRecordTTL {
+		ttl = minRecordTTL
 	}
 	now := c.now()
 	exp := now.Add(ttl)

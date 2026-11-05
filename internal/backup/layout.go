@@ -20,6 +20,8 @@ import (
 	"github.com/pyvvo/funcd/internal/snapshot"
 )
 
+const oneDay = 24 * time.Hour
+
 // The layout under the target root (Decision 2).
 const (
 	genPrefix    = "gen/"
@@ -177,7 +179,7 @@ func (f fence) atN(objs []object, put map[string]bool) string {
 func ClassFor(entries []Entry, now time.Time, r Retention) Class {
 	now = now.UTC()
 	year, week := now.ISOWeek()
-	day := now.Truncate(24 * time.Hour)
+	day := now.Truncate(oneDay)
 	var thisWeek, today bool
 	for _, e := range entries {
 		if !e.Complete || (e.Class != Weekly && e.Class != Daily) {
@@ -187,7 +189,7 @@ func ClassFor(entries []Entry, now time.Time, r Retention) Class {
 		if y, w := at.ISOWeek(); e.Class == Weekly && y == year && w == week {
 			thisWeek = true
 		}
-		if at.Truncate(24 * time.Hour).Equal(day) {
+		if at.Truncate(oneDay).Equal(day) {
 			today = true
 		}
 	}

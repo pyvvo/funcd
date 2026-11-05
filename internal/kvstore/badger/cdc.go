@@ -15,6 +15,8 @@ import (
 	"github.com/pyvvo/funcd/internal/bus"
 )
 
+const defaultCDCRetention = 24 * time.Hour
+
 // cdc implements the ADR-0066 CDC seam (ADR-0068) as a transactional outbox: every write appends a
 // _cdc/<seq> log entry IN the data's own txn (so the log can never diverge from the data), and a
 // durable-cursor tailer drains the log to a bus sink, resuming from a persisted cursor across a restart —
@@ -32,7 +34,7 @@ const (
 	cdcLogPrefix    = Reserved + "cdc/"               // _cdc/<020d seq> outbox entries, seq-ordered
 	cdcCursorKey    = Reserved + "cdc_cursor/default" // the single-consumer durable cursor
 	cdcStream       = "KV_CDC"                        // the bus stream that keeps the feed for the retention window
-	cdcSeqBandwidth = 100                             // lease 100 seqs per persisted write (gaps on crash are fine)
+	cdcSeqBatch     = 100                             // lease 100 seqs per persisted write (gaps on crash are fine)
 	cdcPollInterval = 200 * time.Millisecond          // tail wake cadence when the log is drained
 	cdcRetryDelay   = time.Second                     // RunCDC's wait before re-tailing after a failed pass
 )
@@ -50,13 +52,13 @@ func NewCDC(db *badger.DB, sink bus.Bus, cfg CDCConfig) (CDC, error) {
 	if sink == nil || cfg.Subject == "" {
 		return nil, fault.Invalidf("kvbadger.NewCDC", "cdc enabled but sink is empty")
 	}
-	seq, err := db.GetSequence([]byte(cdcSeqKey), cdcSeqBandwidth)
+	seq, err := db.GetSequence([]byte(cdcSeqKey), cdcSeqBatch)
 	if err != nil {
 		return nil, fault.Internalf("kvbadger.NewCDC", "lease cdc sequence: %v", err)
 	}
 	ret := cfg.Retention
 	if ret <= 0 {
-		ret = 24 * time.Hour
+		ret = defaultCDCRetention
 	}
 	return &cdc{db: db, seq: seq, sink: sink, subject: cfg.Subject, retention: ret}, nil
 }

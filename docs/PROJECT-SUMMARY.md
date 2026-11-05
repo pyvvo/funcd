@@ -140,32 +140,8 @@ controller** runs **one reconcile loop per kind** to drive *actual state → des
 
 ### Resource state machine
 
-```mermaid
-stateDiagram-v2
-    [*] --> Pending : manifest validated & stored
-    Pending --> Deploying : controller picks up, scheduler places
-    Deploying --> Ready : instances healthy, routes programmed
-    Deploying --> Deploying : boot crash, retried after a growing wait (CrashLoopBackOff, ADR-0160)
-    Deploying --> Failed : shape invalid, Start failure, or missing revision (ADR-0169, ADR-0172)
-    note right of Deploying : a failed pass keeps its phase and retries (ADR-0161)
-    Ready --> Failed : a gate fails on a later pass, such as the revision gate or a pooled member of a new revision that cannot load (ADR-0172, ADR-0158)
-    Degraded --> Failed : a gate fails on a later pass (ADR-0158)
-    Failed --> Deploying : a new spec, a gate that passes, or a Start retried after a growing wait (ADR-0169) (not while asleep, ADR-0192)
-    Failed --> Ready : a worker becomes ready (ADR-0169)
-    note right of Failed : idle reclaim never leaves it
-    Ready --> Degraded : partial failure detected
-    Degraded --> Ready : reconciliation repairs, or a serving worker passes its probe while a gate fails (ADR-0221)
-    Ready --> Idle : no traffic for idleTimeout (scale-to-zero)
-    Degraded --> Idle : no traffic for idleTimeout
-    Pending --> Idle : a gate clears with nothing to run (replicas 0, or asleep), written by the reconciler (ADR-0185, ADR-0192)
-    Idle --> Pending : a gate fails while asleep (ADR-0121, ADR-0185, ADR-0192)
-    Idle --> Failed : a gate with phase Failed fails while asleep (ADR-0192)
-    Failed --> Idle : the gates pass on an asleep Function (ADR-0192)
-    Idle --> Deploying : request / event arrives (scale from zero)
-    Ready --> Terminating : delete requested
-    Idle --> Terminating : delete requested
-    Terminating --> [*] : workers, routes & vendor resources reclaimed
-```
+A Function's phases, what moves it between them and who decided each are in
+[behavior/functions.md](behavior/functions.md) (ADR-0313).
 
 ---
 
@@ -412,8 +388,8 @@ sequenceDiagram
 
 ## Build status (V1)
 
-The V1 build slate is complete and past it: **ADR-0001…0312** decided, **299 Implemented** (34 accepted as the
-roadmap's tier-0 build items; the rest — incl. ADR-0034…0312 — are follow-ons refining or extending
+The V1 build slate is complete and past it: **ADR-0001…0313** decided, **300 Implemented** (34 accepted as the
+roadmap's tier-0 build items; the rest — incl. ADR-0034…0313 — are follow-ons refining or extending
 existing feature rows), **0 roadmap items remaining**. Not Implemented: ADR-0000 (the process ADR), ADR-0216
 (App tests, Accepted, F119 deferred), the two DR addenda ADR-0227/0228 (Accepted; they record code already
 on main) the AI gateway epoch's ADR-0280…0285 (FEAT-0015, Accepted) and the artifact supply chain's ADR-0298/0299 (FEAT-0017, Accepted). The exit-criterion path is proven end-to-end — a
@@ -835,3 +811,4 @@ All are **Implemented** unless the recap says *superseded*.
 | [ADR-0310 — Each provider serves its own facet of a worker's local API](adr/0310-each-provider-serves-its-own-local-api-facet.md) | **Implemented.** kv, blob, sql and secrets each serve their routes on a worker's local API as a facet that only `internal/workernode/local` builds; invoke, fetch and health stay built in, and secrets is a provider (FEAT-0001 F224). | <ol><li>each facet owns its first path segment, checked by `CheckFacets` before the Executor opens anything, which also refuses the overlaps `ServeMux` accepts silently</li><li>`NewHandler` and `NewManager` take no store port; `WithSQL` and `WithSecrets` are gone</li><li>one `internal/platform/pathx.HasPrefix` replaces five copies of the segment-aware prefix test</li></ol> |
 | [ADR-0311 — Each provider backs up and restores its own member kind](adr/0311-each-provider-backs-up-and-restores-its-own-member-kind.md) | **Implemented.** kv, blob, lake, sql and the Executor each hand over a `workload.MemberKind` through `backupHook`, so the backup service names no kind and a new kind is one type; a Bucket's copy carries its Lakes' catalogs again, which fixes #1383 (FEAT-0001 F225). *(Decision 4's Bucket row and its Lake row's `Prepare` superseded in part by ADR-0312.)* | <ol><li>one interface per kind: `Write`, `Parse` and a `Destination` that prepares, checks emptiness, loads and clears</li><li>the services dispatch by kind in today's order; a kind no provider serves fails by name before any put or hold</li><li>a Bucket's copy reads each catalog before its walk and writes it after its objects; `Format` stays 1</li><li>a round-trip guard over every kind: a backup and an in-place restore leave all storage as it was</li></ol> |
 | [ADR-0312 — A Bucket's backup member skips its Lakes' prefixes](adr/0312-a-buckets-backup-member-skips-its-lakes-prefixes.md) | **Implemented.** Each byte of a Bucket's data belongs to one backup member: a Bucket's copy leaves out the prefixes its Lakes are located on, each Lake a member of its own; a Bucket's Restore leaves those prefixes and a deleted Lake's; and a Lake's in-place Restore stops its engine until release, which fixes #1383 and #1384 (FEAT-0009 F226). | <ol><li>a Lake prefix is what the Bucket's owner field says, where that Lake exists and is located; every other prefix is the Bucket's, in `blob/<name>/` and `blob/<name>/catalogs/`</li><li>`Resolve` brings in those Lakes in each scope form, reading each once; `Write` reads no store</li><li>`StopEngine` marks the Lake, waits for a pass in flight, and returns once the engine is gone; a marked pass only requeues</li><li>a Lake on a prefix it does not own is held `PrefixNotOwned`; `asLocation` where a Lake is located is `NotEmpty`</li><li>`Format` is 2, and any other format is refused</li></ol> |
+| [ADR-0313 — One place says what the platform does and who decided it](adr/0313-one-place-says-what-the-platform-does-and-who-decided-it.md) | **Implemented.** `docs/behavior/` says, per process, what happens, how long it takes, what a user sees and who decided it, one chapter per process with its machine, its rows and its generated values. Every number that changes behavior has a name, one key has one default, and one Go check enforces it at each commit, in `just lint` and in CI. The bug rule starts there. |

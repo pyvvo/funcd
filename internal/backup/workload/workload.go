@@ -34,6 +34,8 @@ import (
 	"github.com/pyvvo/funcd/internal/store"
 )
 
+const sealedWriteBuf = 64 << 10
+
 // Format is the workload manifest's format; a changed meaning, framing or layout bumps it. A funcd reads one format:
 // from 2 on a Bucket's file holds none of its Lakes' data (ADR-0312 Decision 8).
 const Format = 2
@@ -425,7 +427,7 @@ func (w *writer) File(ctx context.Context, name string, produce func(emit func(s
 			return backup.StoreFile{}, fault.Wrapf(err, fault.KindOf(err), "workload.Write", "seal %s", name)
 		}
 	}
-	bw := bufio.NewWriterSize(sealed, 64<<10)
+	bw := bufio.NewWriterSize(sealed, sealedWriteBuf)
 	err := produce(func(r snapshot.Record) error { return backup.WriteRecord(bw, r) })
 	if err == nil {
 		err = errors.Join(bw.Flush(), sealed.Close(), p.flush(true))

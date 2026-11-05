@@ -18,6 +18,11 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 )
 
+const (
+	socketPollInterval  = 100 * time.Millisecond
+	containerdStopGrace = 10 * time.Second
+)
+
 // startTimeout bounds how long Ensure waits for the private containerd to listen on its socket
 // before declaring the daemon unhealthy.
 const startTimeout = 30 * time.Second
@@ -133,7 +138,7 @@ func (m *privateManager) startContainerd(ctx context.Context, op string) error {
 		select {
 		case <-ctx.Done():
 			return fault.Wrapf(ctx.Err(), fault.Unavailable, op, "waiting for private containerd socket")
-		case <-time.After(100 * time.Millisecond):
+		case <-time.After(socketPollInterval):
 		}
 	}
 	return fault.Unavailablef(op, "private containerd did not listen on %q within %s", m.socket, startTimeout)
@@ -179,7 +184,7 @@ func (m *privateManager) Close() error {
 		_ = m.cmd.Process.Signal(os.Interrupt)
 		select {
 		case <-m.reap():
-		case <-time.After(10 * time.Second):
+		case <-time.After(containerdStopGrace):
 			_ = m.cmd.Process.Kill()
 		}
 		m.started = false

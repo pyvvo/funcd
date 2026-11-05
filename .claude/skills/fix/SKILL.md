@@ -33,8 +33,8 @@ Read the code the issue points at and the ADRs that govern it (`docs/adr`, `blue
 must conform to them. The issue's cause is the reporter's claim — verify it in the code before
 relying on it, and correct it in the handoff if it is wrong.
 
-**Check that it is a bug** (CLAUDE.md → *⛔ Is it a bug?*). For a `kind/bug`, read what its `### Design check` cites, and
-search the ADRs on the path, the issues and the board cards once yourself. With no such section (an older issue, a web
+**Check that it is a bug** (CLAUDE.md → *⛔ Is it a bug?*). For a `kind/bug`, read what its `### Design check` cites, grep
+`docs/behavior/` for the symptom, and search the ADRs on the path, the issues and the board cards once yourself. With no such section (an older issue, a web
 form), run the check and add the section with `driver.py edit`. Any verdict but `bug` stops here: report it with the
 citation, and change nothing.
 
@@ -68,6 +68,8 @@ Write the regression test **before** touching the code:
   advisory, and a defect whose fix needs a design decision goes to `/adr` (an issue with `needs-adr`).
 - Change nothing else: only what this issue and the defects found on the way need.
 - Keep living docs true (blueprint, feat, READMEs, CLI help) if the fix changes what they describe.
+- A fix that changes what a row of `docs/behavior/` says, or closes an issue a row cites, updates the row in the same commit, and a
+  number the fix adds gets a name or a config key (ADR-0313): `just check-behavior` runs at each commit.
 - A fix that changes a behavior a design spec models (`docs/design/**`; an `oracle:` marker on a touched test) updates
   that spec and its diagram (`just spec-diagrams`) in the same commit, and `just check-specs` passes (ADR-0272).
 - House style holds (ADR-0002, `CLAUDE.md`): block-style YAML, top-level imports, no comment bloat.

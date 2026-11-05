@@ -15,6 +15,8 @@ import (
 	"github.com/pyvvo/funcd/internal/workernode/local"
 )
 
+const maxReadinessReply = 64 << 10
+
 // defaultLivenessTimeout is runtime.livenessTimeout's floor; the default is three supervision periods when larger
 // (ADR-0215 Contracts).
 const defaultLivenessTimeout = 30 * time.Second
@@ -167,7 +169,7 @@ func (r *Reconciler) probeReadiness(ctx context.Context, ip string, port int) (r
 		return true, nil, false
 	case http.StatusServiceUnavailable:
 		var rep local.DependencyReport
-		err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&rep)
+		err := json.NewDecoder(io.LimitReader(resp.Body, maxReadinessReply)).Decode(&rep)
 		switch {
 		case err == nil && rep.Kind != "":
 			return false, &rep, false

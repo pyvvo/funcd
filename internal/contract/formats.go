@@ -11,6 +11,12 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
+const (
+	minInt32       = -1 << 31
+	maxInt32       = 1<<31 - 1
+	maxSafeInteger = 1<<53 - 1 // ADR-0150: the JSON safe-integer range
+)
+
 // profileFormats are funcd's checks for the profile's format names (ADR-0301 Decision 1). Each replaces the
 // engine's built-in of the same name. A check passes a value of another JSON type: a format constrains only its own
 // type, and the type keyword reports a wrong type once.
@@ -20,8 +26,8 @@ func profileFormats() []*jsonschema.Format {
 		{Name: "uuid", Validate: onString(checkUUID)},
 		{Name: "email", Validate: onString(checkEmail)},
 		{Name: "uri", Validate: onString(checkURI)},
-		{Name: "int32", Validate: onInteger("int32", -1<<31, 1<<31-1)},
-		{Name: "int64", Validate: onInteger("int64", -(1<<53 - 1), 1<<53-1)}, // ADR-0150: the JSON safe-integer range
+		{Name: "int32", Validate: onInteger("int32", minInt32, maxInt32)},
+		{Name: "int64", Validate: onInteger("int64", -maxSafeInteger, maxSafeInteger)},
 	}
 }
 

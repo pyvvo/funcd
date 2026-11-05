@@ -24,6 +24,8 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 )
 
+const liveReloadHeaderTimeout = 5 * time.Second
+
 // devLiveReload serves the reload events of ADR-0255 Decision 5 on a loopback port kept in dev's process dir, and tells
 // open Site pages to reload when a revision dev applied serves new Site builds.
 type devLiveReload struct {
@@ -53,7 +55,7 @@ func startLiveReload(op, processDir string) (*devLiveReload, error) {
 	l := &devLiveReload{port: port, subs: map[chan struct{}]struct{}{}, sites: map[v1.ObjectName]string{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /events", l.events)
-	l.srv = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	l.srv = &http.Server{Handler: mux, ReadHeaderTimeout: liveReloadHeaderTimeout}
 	go func() { _ = l.srv.Serve(ln) }()
 	return l, nil
 }

@@ -20,6 +20,8 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/clock"
 )
 
+const minFlushInterval = 100 * time.Millisecond
+
 // Sink accumulates per-Resource segments, marshals each sealed segment to OTLP-JSON-Lines, and
 // persists it as ONE blob.Bucket object (whose own drivers give memory/file/s3). The seam is
 // signal-generic (this logs Sink takes Entry; F51/F52 add sibling Sinks for their record types).
@@ -118,8 +120,8 @@ func NewBlobSink(d Deps) (*BlobSink, error) {
 // on real time; age is judged by the sink clock. Stopped by Close.
 func (s *BlobSink) flushLoop() {
 	interval := s.maxAge / 2
-	if interval < 100*time.Millisecond {
-		interval = 100 * time.Millisecond
+	if interval < minFlushInterval {
+		interval = minFlushInterval
 	}
 	t := time.NewTicker(interval)
 	defer t.Stop()

@@ -26,12 +26,13 @@ import (
 // the most of it dev keeps to print, and how long the log file stays still before a burst ends, devWatchBuiltQuiet
 // once a build the command owns was written, so a failing save soon after a build gets a burst of its own.
 const (
-	devWatchGrace      = process.DefaultStopGrace
-	devWatchLastLines  = 20
-	devWatchMaxDelay   = 30 * time.Second
-	devWatchTail       = 64 << 10
-	devWatchQuiet      = 3 * time.Second
-	devWatchBuiltQuiet = time.Second
+	devWatchGrace        = process.DefaultStopGrace
+	maxDevWatchLastLines = 20
+	devWatchMaxDelay     = 30 * time.Second
+	devWatchTail         = 64 << 10
+	devWatchQuiet        = 3 * time.Second
+	devWatchBuiltQuiet   = time.Second
+	devWatchFirstDelay   = time.Second
 )
 
 // ownedFiles reads the size and mtime of each file of the builds a watch command owns, by path (ADR-0256 Decision 2).
@@ -97,7 +98,7 @@ func startDevCommands(ctx context.Context, op, processDir string, entries []devW
 func (c *devCommands) supervise(ctx context.Context, e devWatchEntry, log *os.File, b *devBurst) {
 	defer c.wg.Done()
 	defer func() { _ = log.Close() }()
-	delay := time.Second
+	delay := devWatchFirstDelay
 	for ctx.Err() == nil {
 		began := time.Now()
 		cmd := exec.Command("sh", "-c", e.Run) //nolint:gosec // the command funcdctl.config.yaml names (ADR-0255)
@@ -144,7 +145,7 @@ func (c *devCommands) supervise(ctx context.Context, e devWatchEntry, log *os.Fi
 func restartDelay(last, ran time.Duration) (wait, next time.Duration) {
 	wait = last
 	if ran >= devWatchMaxDelay {
-		wait = time.Second
+		wait = devWatchFirstDelay
 	}
 	return wait, min(2*wait, devWatchMaxDelay)
 }
@@ -215,7 +216,7 @@ func commandExitCode(err error) int {
 	return -1
 }
 
-// lastLines is the last devWatchLastLines lines of the log file at path, each prefixed with name, read from at most its
+// lastLines is the last maxDevWatchLastLines lines of the log file at path, each prefixed with name, read from at most its
 // last devWatchTail bytes.
 func lastLines(path, name string) string {
 	f, err := os.Open(path) //nolint:gosec // dev's own log file
@@ -230,11 +231,11 @@ func lastLines(path, name string) string {
 	return prefixLines(data, name)
 }
 
-// prefixLines is the last devWatchLastLines lines of data, each prefixed with name.
+// prefixLines is the last maxDevWatchLastLines lines of data, each prefixed with name.
 func prefixLines(data []byte, name string) string {
 	lines := strings.Split(strings.TrimRight(string(bytes.ToValidUTF8(data, nil)), "\n"), "\n")
-	if len(lines) > devWatchLastLines {
-		lines = lines[len(lines)-devWatchLastLines:]
+	if len(lines) > maxDevWatchLastLines {
+		lines = lines[len(lines)-maxDevWatchLastLines:]
 	}
 	var b strings.Builder
 	for _, l := range lines {

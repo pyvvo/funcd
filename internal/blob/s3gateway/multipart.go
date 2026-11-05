@@ -28,9 +28,9 @@ import (
 // until it is aborted, but a client that crashed never aborts, and here the parts are daemon RAM.
 const multipartIdleExpiry = time.Hour
 
-// multipartBudgetFactor sizes the daemon-wide budget on buffered multipart bytes (ADR-0188): budget =
-// multipartBudgetFactor × maxUpload, and parts may use budget − maxUpload so one full-cap Complete always fits.
-const multipartBudgetFactor = 3
+// budgetMultipartFactor sizes the daemon-wide budget on buffered multipart bytes (ADR-0188): budget =
+// budgetMultipartFactor × maxUpload, and parts may use budget − maxUpload so one full-cap Complete always fits.
+const budgetMultipartFactor = 3
 
 // multipartStore buffers in-flight multipart uploads in memory (ADR-0080 Temporary
 // workarounds): the blob port has no streaming-multipart seam, so parts accumulate
@@ -42,7 +42,7 @@ type multipartStore struct {
 	uploads    map[string]*upload // uploadID → buffered parts
 	clock      clock.Clock
 	maxUpload  int64                     // s3gateway.maxUploadBytes: the per-upload cap and the per-principal share
-	budget     int64                     // multipartBudgetFactor × maxUpload; 0 = off when that overflows
+	budget     int64                     // budgetMultipartFactor × maxUpload; 0 = off when that overflows
 	buffered   int64                     // the sum of every upload's size
 	assembling int64                     // the copies held by in-flight Completes
 	owned      map[authz.EntityRef]int64 // each owner's buffered bytes; no entry at 0
@@ -69,8 +69,8 @@ type upload struct {
 
 func newMultipartStore(maxUpload int64) *multipartStore {
 	var budget int64
-	if maxUpload <= math.MaxInt64/multipartBudgetFactor {
-		budget = multipartBudgetFactor * maxUpload
+	if maxUpload <= math.MaxInt64/budgetMultipartFactor {
+		budget = budgetMultipartFactor * maxUpload
 	}
 	return &multipartStore{
 		uploads:   map[string]*upload{},

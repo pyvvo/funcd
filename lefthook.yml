@@ -1,15 +1,26 @@
 # lefthook (https://lefthook.dev) — the git hooks manager for this repo, pinned via the Nix dev shell
 # (which runs `lefthook install` on entry; or `just install-hooks`). It mirrors the `just ci` gofmt
 # gate so a commit can never drift the tree out of CI-green on formatting. gofmt comes from the
-# flake-pinned Go, so no extra tool is needed.
+# flake-pinned Go, so no extra tool is needed. The behavior check enforces while a change is written
+# what ADR-0313 asks: each number that changes behavior has a name, and one key has one default.
 pre-commit:
-  parallel: true
+  piped: true
   commands:
     gofmt:
+      priority: 1
       glob: "*.go"
       # Format staged Go files and re-stage the result, so unformatted Go can't be committed.
       run: gofmt -w {staged_files}
       stage_fixed: true
+    behavior:
+      priority: 2
+      glob:
+        - "*.go"
+        - "docs/behavior/*"
+        - "docs/adr/*"
+        - "examples/funcdconfig.yaml"
+      # A hook's GIT_DIR would make the wrapper read this directory as the repo root in a worktree.
+      run: env -u GIT_DIR -u GIT_INDEX_FILE scripts/agent/d go run ./scripts/behavior -check
 
 commit-msg:
   commands:

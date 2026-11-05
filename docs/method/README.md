@@ -56,6 +56,10 @@ Four document layers sit above the code, and each answers one question:
 | ADR | [docs/adr/](../adr/) | How one decision is made, with its contracts | Frozen once `Accepted` |
 | Roadmap | [docs/roadmap/](../roadmap/) | In what order ADRs get built | Computed from `v1-plan.json` |
 
+A reference sits beside them and decides nothing: [docs/behavior/](../behavior/README.md) says, per process, what the platform does
+now, how long it takes and who decided it. A session reads it before it calls something a bug, each row names its status and what to
+read next, and a check fails when a value it shows or a citation it holds no longer holds (ADR-0313).
+
 A feature version is split into features, and each feature into one or more ADRs. Each ADR names the feature row
 it realizes (`Realizes: FEAT-NNNN/Fxx`), and the row's status follows the ADR's status. An ADR moves forward only:
 

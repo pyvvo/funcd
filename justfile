@@ -32,7 +32,7 @@ fmt:
 
 # run the linter (golangci-lint via go tool); no-op when no Go packages exist
 [group('go')]
-lint:
+lint: check-behavior
     @if [ -n "{{_has-packages}}" ]; then go tool golangci-lint run ./...; fi
     go tool golangci-lint run --build-tags dev {{_dev-packages}}
 
@@ -558,6 +558,16 @@ check-hygiene:
 check-specs:
     python3 scripts/specs.py check
 
+# rewrite the generated value blocks of docs/behavior from the config and the code.
+[group('design')]
+behavior-values:
+    go run ./scripts/behavior
+
+# fail when docs/behavior no longer matches the code, or a written row does not hold.
+[group('design')]
+check-behavior:
+    go run ./scripts/behavior -check
+
 # rewrite the Mermaid state machine beside each design spec, computed from the states FizzBee explores (ADR-0272).
 [group('design')]
 spec-diagrams:
@@ -570,7 +580,7 @@ spec-diagrams:
 ci-full: ci test-e2e
 
 [group('go')]
-ci: tidy generate check-hygiene check-specs
+ci: tidy generate check-hygiene check-specs check-behavior
     go fmt ./...
     @if [ -n "$(git diff --name-only -- '*.go')" ]; then echo "Run just fmt and commit the result" && exit 1; fi
     @if [ -n "{{_has-packages}}" ]; then go tool golangci-lint run ./...; fi

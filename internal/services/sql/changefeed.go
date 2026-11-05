@@ -25,6 +25,11 @@ import (
 	"github.com/pyvvo/funcd/internal/store"
 )
 
+const (
+	feedListenRetry   = time.Second
+	feedHeaderTimeout = 5 * time.Second
+)
+
 // maxChangeData is the most of a change's rows an event carries; past it before and after are dropped (ADR-0235
 // Decision 5).
 const maxChangeData = 256 << 10
@@ -140,7 +145,7 @@ func (f *Feed) Serve(ctx context.Context, host string, port int) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(time.Second):
+		case <-time.After(feedListenRetry):
 		}
 	}
 	return f.ServeListener(ctx, ln)
@@ -149,7 +154,7 @@ func (f *Feed) Serve(ctx context.Context, host string, port int) error {
 // ServeListener serves the feed on ln until ctx is done. A listener closed under it, as the platform's Shutdown does,
 // is a clean stop.
 func (f *Feed) ServeListener(ctx context.Context, ln net.Listener) error {
-	srv := &http.Server{Handler: f.Handler(), ReadHeaderTimeout: 5 * time.Second, ErrorLog: slog.NewLogLogger(f.log.Handler(), slog.LevelWarn)}
+	srv := &http.Server{Handler: f.Handler(), ReadHeaderTimeout: feedHeaderTimeout, ErrorLog: slog.NewLogLogger(f.log.Handler(), slog.LevelWarn)}
 	context.AfterFunc(ctx, func() { _ = srv.Close() })
 	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
 		return fault.Wrapf(err, fault.Unavailable, "sql.Feed", "serve the change feed")

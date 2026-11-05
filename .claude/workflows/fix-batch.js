@@ -123,7 +123,7 @@ const multi = (u) => u.tracker || u.issues.length > 1
 
 const isTask = (it) => it.k === 'task'
 
-const FIX_STEPS = (it) => `0. For a kind/bug, check that it is one, as .claude/CLAUDE.md's "Is it a bug?" says: read what the issue's "Design check" section cites, and search the ADRs on the path, the issues and the board cards once yourself. With no such section, run the check and add it with \`driver.py edit\`.
+const FIX_STEPS = (it) => `0. For a kind/bug, check that it is one, as .claude/CLAUDE.md's "Is it a bug?" says: read what the issue's "Design check" section cites, grep docs/behavior for the symptom, and search the ADRs on the path, the issues and the board cards once yourself. With no such section, run the check and add it with \`driver.py edit\`.
 1. Write the regression test TestIssue${it.n}_<Behavior> FIRST, beside the package's tests, reusing their harnesses. It must FAIL on the unfixed code for the reported reason.
 2. Make the smallest root-cause fix. Search before you write: reuse existing helpers, types, harnesses and dependencies; never duplicate logic.
    Then search for siblings: grep for the same faulty construct in the code paths that do the same job (the other commands, handlers, printers, parsers, gates or drivers). Fix each sibling with the same cause in this commit, with a test case for it; report a sibling with another cause in new_defects. Every case the issue describes must be fixed and tested.

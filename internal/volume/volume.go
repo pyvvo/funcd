@@ -23,6 +23,11 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/hold"
 )
 
+const (
+	defaultBookingTTL      = time.Minute
+	defaultMeasureInterval = 30 * time.Second
+)
+
 // ID names one volume: a Function's local volume, or with Worker set one worker's emptyDir.
 type ID struct {
 	Namespace v1.NamespaceName
@@ -163,10 +168,10 @@ func New(o Options) (Manager, error) {
 		o.Limiter = MeasureOnly()
 	}
 	if o.BookingTTL <= 0 {
-		o.BookingTTL = time.Minute
+		o.BookingTTL = defaultBookingTTL
 	}
 	if o.MeasureInterval <= 0 {
-		o.MeasureInterval = 30 * time.Second
+		o.MeasureInterval = defaultMeasureInterval
 	}
 	if o.Logger == nil {
 		o.Logger = slog.Default()

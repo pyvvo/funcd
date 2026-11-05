@@ -102,6 +102,11 @@ has each in full with rationale; consult it when a rule is unclear rather than g
   sibling features; `internal/platform/**` is a leaf; no mock frameworks; `log/slog` only.
 - **Typed surface**: no `interface{}`/`any`/`map[string]any` in hand-written exported or port
   signatures; typed enums/IDs; `ctx context.Context` first on every blocking call.
+- **Name every number that changes behavior; make it a config key if an operator may need to change it** (ADR-0313, CLAUDE.md
+  conventions). A duration or a size written in a function body is refused at each commit, in `just lint` and in CI. A new key goes in
+  `internal/platform/config` and `examples/funcdconfig.yaml`, with one default that any hard-coded fallback equals.
+- **The behavior rows land with the code**: apply the ADR's *Behavior rows* with the
+  [`behavior-registry`](../behavior-registry/SKILL.md) skill, and run `just behavior-values`.
 - **Deps**: add with `go get` / tools with `go get -tool`; pin and record the resolved versions. If
   the environment is offline/sandboxed and `go get` can't fetch, **do not hand-edit `go.mod` with a
   guessed version** — stop and report it; an implementation that can't fetch its deps isn't done.
