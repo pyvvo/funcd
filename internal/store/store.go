@@ -435,9 +435,6 @@ func (s *store) Update(ctx context.Context, obj v1.Object) (v1.Object, error) {
 	if s.initErr != nil {
 		return nil, s.initErr
 	}
-	if err := obj.Validate(); err != nil {
-		return nil, err
-	}
 	meta := obj.GetObjectMeta()
 	if meta.ResourceVersion == "" {
 		return nil, fault.Invalidf("store.Update", "resourceVersion is required for update")
@@ -482,8 +479,16 @@ func (s *store) Update(ctx context.Context, obj v1.Object) (v1.Object, error) {
 		if cerr != nil {
 			return cerr
 		}
+		// Only a spec change runs the spec rules: a status write on a stored object that an
+		// older rule refused (a restore, a tightened rule) must still land (#1317). The
+		// envelope (name, namespace, resource group) is checked on every write.
 		if changed {
+			if verr := obj.Validate(); verr != nil {
+				return verr
+			}
 			gen++
+		} else if verr := meta.Validate(gvk.Kind); verr != nil {
+			return verr
 		}
 		meta.UID = curMeta.UID
 		meta.Generation = gen
