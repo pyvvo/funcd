@@ -60,6 +60,7 @@ and no call reads it; `NetDestination` and `Invocation` are no step of a call. N
 | A path under `/health/` | Refused once the stance is met, by name and through a Route, with any method and whatever the Function's state. Nothing wakes and no worker is called | none | 404 `no route for "<path>"`; 401 or 403 first | decided | ADR-0316 Decisions 1 and 2, `TestScenarioAHealthPathAnswers404`, `TestScenarioTheStanceAnswersFirst` |
 | An http app's route under `/health/` | The edge answers it, so a route such as `/health/db` answers only over a link; the app's `/health` itself still answers | none | 404 `no route for "<path>"` | accepted | ADR-0316 Consequences, `TestScenarioOtherPathsReachTheWorker` |
 | A health path over a link | Another Function's `ctx.fetch` reaches these paths on an http Function: it holds a link and passes `link::invoke` | none | the worker's answer | accepted | ADR-0316 Scope and Risks accepted, `TestScenarioAnotherFunctionKeepsThePath` |
+| Another method on a Python worker | PUT, DELETE, PATCH, OPTIONS and HEAD answer the stdlib's 501 and close, where the Node shim answers 404 and keeps the connection | a cold start | 501 `Unsupported method` | **uncovered** | ADR-0030 §1 and ADR-0049 name only `POST /` and the two health GETs; issues searched; ran it |
 | A `Gateway` object | Stored and listed; nothing acts on it | none | no status | accepted | ADR-0003 Consequences, `TestScenario_KindRegistryRoundtripsEveryKind` |
 
 <!-- generated values, do not edit: just behavior-values -->
