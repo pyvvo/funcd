@@ -416,7 +416,7 @@ func (k *bucket) List(ctx context.Context, prefix string) ([]blob.Attributes, er
 	var out []blob.Attributes
 	for {
 		obj, err := iter.Next(ctx)
-		if errors.Is(err, io.EOF) {
+		if err == io.EOF { //nolint:errorlint // only the iterator's own end: the SDK's error wraps a closed connection's EOF
 			break
 		}
 		if err != nil {
@@ -466,7 +466,7 @@ func (k *bucket) memListAfter(ctx context.Context, prefix, after string, limit i
 		var out []blob.Attributes
 		for {
 			obj, err := iter.Next(ctx)
-			if errors.Is(err, io.EOF) {
+			if err == io.EOF { //nolint:errorlint // only the iterator's own end, as in List
 				return out, false, nil
 			}
 			if err != nil {
