@@ -194,3 +194,18 @@ Recorded: claude-opus-5-5 on ADR-0318 (implementation) → pass, 0 blockers, 0 m
 
 ADR-0318 is `Implemented` and F232 `implemented`, and the branch merges after its one gate and its lanes. The five Minors go back to the builder as a few small edits before the PR, and none holds the stamp; Minors 1, 3 and 4 are a few lines each. The ADR is now frozen, so whatever the
 gate finds in this work is corrected in the code. The PR closes no issue: the ADR's References cite none, a search of issues for `F232` and `ADR-0318` finds none, and F229 and F231 stand the same way.
+
+### After this review: a linked call with egress on
+
+The builder ran this after the verdict, at the decider's request, so it is no part of the verdict. It ran the `fn-to-fn` lane on `6c6404c3` with `server.network.egress` on, from a local ref, `820b123c`, that sets the
+lane's config and adds two cases to its suite. No committed lane holds that config. The lane ends `final status: PASS` on real containerd, in 61 s.
+
+| Case | Result |
+|---|---|
+| `front` invokes `greeter` through its declared link | 200, `via` is `front`, and the greeting holds the name |
+| The contract's 422 through `front` | 500 whose body carries `context.invoke("greeter") failed: 422` and `event data does not match the input contract` |
+| A direct call of `greeter` with a bad type | 422 |
+| `front`'s local-API socket | present |
+| `front`'s `eth0` | no `inet6`, as egress on sets it |
+| A plain TCP connect to `greeter`'s worker address, `10.63.0.2:8080` | From the node, connected. From `front`'s netns, timed out |
+| `front-nolink`, the same artifact with no link | 500 whose body carries a 403, `caller default/front-nolink declares no link "greeter" (no link is no grant)` |
