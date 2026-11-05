@@ -1,6 +1,6 @@
 # ADR-0316: A Function's /health/* paths are funcd's own
 
-- **Status**: Reviewing (2026-11-05); Accepted (2026-11-05), the decider delegated acceptance to the session driving this work, on the conditions
+- **Status**: Implemented (2026-11-05), review passed with three minors, folded ([report](../reviews/adr-0316-implementation-claude-opus-5-5.md)); Reviewing (2026-11-05); Accepted (2026-11-05), the decider delegated acceptance to the session driving this work, on the conditions
   that it decides only the behavior they chose, that no Blocker or Major stays open and that Open questions reads `None.`.
   Judged once: no Blocker, and its three Majors are folded
 - **Date**: 2026-11-05
