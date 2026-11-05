@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"io"
 	"log"
@@ -15,10 +16,12 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/platform/httpx"
@@ -486,4 +489,18 @@ func TestIssue634_ProxyResendsUnsentQueryOnFreshConn(t *testing.T) {
 	_, forwarded, ok := swapHandshakeToken(<-bodies, "x")
 	require.True(t, ok)
 	require.Equal(t, engineToken, forwarded, "the resent query carries the swapped handshake")
+}
+
+// A body that cannot be read answers 400 with a fixed text.
+func TestProxyUnreadableBodyAnswersAFixedText(t *testing.T) {
+	t.Parallel()
+	const timeout = "read tcp 10.0.0.1:8080->10.0.0.2:40000: i/o timeout"
+	h := NewLakeProxy(NewLakeKeys([]byte("proxy-test-node-master"), store.New(memory.New())), nil,
+		EngineTarget{Upstream: "http://127.0.0.1:1"}, nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/quack", iotest.ErrReader(errors.New(timeout))))
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	var p fault.Problem
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &p))
+	require.Equal(t, proxyOp+": could not read request body", p.Detail)
 }

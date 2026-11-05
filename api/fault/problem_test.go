@@ -153,3 +153,57 @@ func TestDeadlineExceededMapsTo504(t *testing.T) {
 		t.Fatalf("detail = %q", p.Detail)
 	}
 }
+
+// A 5xx is the platform's fault: its detail carries the operation and its message, or a fixed text when it has no
+// message, and the cause goes to funcd's log.
+func TestServerFaultDetailHoldsNoCause(t *testing.T) {
+	const fixed = "internal error: the cause is in funcd's log"
+	cause := errors.New("stat data/blob/k: permission denied")
+	tests := []struct {
+		name   string
+		err    error
+		status int
+		detail string
+	}{
+		{"an Internal fault", Wrapf(cause, Internal, "store.Get", "read %s", "x"), 500, "store.Get: read x"},
+		{"a kind taken from a plain cause", Wrapf(cause, KindOf(cause), "dataplane.ServeHTTP", "function default/f"), 500, "dataplane.ServeHTTP: function default/f"},
+		{"the outer of two faults", Wrapf(Wrapf(cause, Internal, "badger.Get", "read the key"), Internal, "store.Get", "read x"), 500, "store.Get: read x"},
+		{"a fault inside plain wrapping", fmt.Errorf("handler: %w", Wrapf(cause, Internal, "store.Get", "read x")), 500, "store.Get: read x"},
+		{"a plain error", cause, 500, fixed},
+		{"a fault with no message", &Error{Kind: Internal, Op: "store.Get", Err: cause}, 500, fixed},
+		{"a kind the map does not know", &Error{Kind: "other", Op: "op", Msg: "msg", Err: cause}, 500, "op: msg"},
+		{"an Unavailable fault", Wrapf(cause, Unavailable, "activator.Wake", "resolve upstream for default/f"), 503, "activator.Wake: resolve upstream for default/f"},
+		{"a DeadlineExceeded fault", Wrapf(cause, DeadlineExceeded, "activator.response-deadline", "default/f did not start"), 504, "activator.response-deadline: default/f did not start"},
+		{"an InsufficientStorage fault", Wrapf(cause, InsufficientStorage, "badger.Update", "commit"), 507, "badger.Update: commit"},
+		{"a fault with no cause", Unavailablef("edge.limit", "in-flight concurrency ceiling reached"), 503, "edge.limit: in-flight concurrency ceiling reached"},
+		{"a 503 over a fault that names a state", Wrapf(Unavailablef("storescaler", "function default/f is Failed (ShapeInvalid)"), Unavailable, "activator.activate", "scale up default/f"),
+			503, "activator.activate: scale up default/f: storescaler: function default/f is Failed (ShapeInvalid)"},
+		{"a 503 over a 503 with a cause", Wrapf(Wrapf(cause, Unavailable, "quota.Admit", "read the quota"), Unavailable, "activator.Wake", "resolve default/f"),
+			503, "activator.Wake: resolve default/f: quota.Admit: read the quota"},
+		{"a 503 over an Internal fault", Wrapf(Wrapf(cause, Internal, "badger.Get", "read the key"), Unavailable, "activator.Wake", "resolve default/f"),
+			503, "activator.Wake: resolve default/f"},
+		{"a 503 over a NotFound fault", Wrapf(NotFoundf("artifact.Pull", "fetch x: %v", cause), Unavailable, "contractcheck", "the contract of default/f cannot be read"),
+			503, "contractcheck: the contract of default/f cannot be read"},
+		{"a 503 over plain wrapping of a fault", Wrapf(fmt.Errorf("retry: %w", Unavailablef("quota.Admit", "measure x")), Unavailable, "op", "msg"),
+			503, "op: msg: quota.Admit: measure x"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := ToProblem(tt.err)
+			if p.Status != tt.status || p.Detail != tt.detail {
+				t.Fatalf("problem = %d %q, want %d %q", p.Status, p.Detail, tt.status, tt.detail)
+			}
+		})
+	}
+}
+
+// A 4xx is the caller's to correct, so its detail keeps the whole text.
+func TestCallerFaultDetailKeepsItsText(t *testing.T) {
+	cause := errors.New("line 3: unknown field")
+	for _, k := range []Kind{Invalid, NotFound, Conflict, Unauthorized, Forbidden, PayloadTooLarge, ResourceExhausted} {
+		err := Wrapf(cause, k, "admission", "Policy %q", "p")
+		if got, want := ToProblem(err).Detail, `admission: Policy "p": line 3: unknown field`; got != want {
+			t.Errorf("%s detail = %q, want %q", k, got, want)
+		}
+	}
+}

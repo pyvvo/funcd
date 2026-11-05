@@ -295,7 +295,7 @@ func (k *bucket) fileOpen(op, key string) (*fileObject, error) {
 func fileErr(op, key string, err error) error {
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return fault.Wrapf(err, fault.NotFound, op, "%q not found", key)
+		return fault.NotFoundf(op, "%q not found", key)
 	case errors.Is(err, blob.ErrCorrupt):
 		return fault.Wrapf(err, fault.Internal, op, "%q is refused", key)
 	}

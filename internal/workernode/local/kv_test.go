@@ -1,9 +1,12 @@
 package local_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -224,4 +227,41 @@ func TestScenarioLocalAPIInvalidStays400(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/kv/b/k", body))
 	requireProblem(t, rec, http.StatusBadRequest, "urn:funcd:problem:invalid", "read request body")
+}
+
+// A body that cannot be read answers 400 with a fixed text.
+func TestUnreadableBodyAnswersAFixedText(t *testing.T) {
+	h := kvHandler(t, "default", fakeKVResolver{owner: "fn"}, kvPDP{readOK: true, owner: "fn"})
+	body := iotest.ErrReader(errors.New("read unix data/run/api.sock->@: read: connection reset by peer"))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/kv/b/k", body))
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	var p fault.Problem
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &p))
+	require.Equal(t, "workernode.local.kv.put: could not read request body", p.Detail)
+}
+
+// failingKV fails each read.
+type failingKV struct {
+	local.KV
+	err error
+}
+
+func (f failingKV) Get(context.Context, v1.NamespaceName, v1.ObjectName, string, string) ([]byte, bool, error) {
+	return nil, false, f.err
+}
+
+// The local API's sites log what they are handed before they answer, so a 500's cause stays in the log there too.
+func TestLocalAPIFaultCauseStaysInTheLog(t *testing.T) {
+	const cause = "open data/kv/000001.vlog: permission denied"
+	var logs bytes.Buffer
+	h := local.NewHandler(local.Ref{Namespace: "default", Function: "fn"}, nil, nil, nil, nil, slog.New(slog.NewTextHandler(&logs, nil)),
+		local.WithFacets(local.KVFacet(failingKV{err: fault.Wrapf(errors.New(cause), fault.Internal, "kvbadger.Get", "read the key")})))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/kv/b/k", http.NoBody))
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	var p fault.Problem
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &p))
+	require.Equal(t, "kvbadger.Get: read the key", p.Detail)
+	require.Equal(t, 1, strings.Count(logs.String(), cause), logs.String())
 }

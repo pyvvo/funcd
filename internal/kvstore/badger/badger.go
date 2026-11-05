@@ -312,7 +312,7 @@ func (d *driver) Get(ctx context.Context, key string) ([]byte, bool, error) {
 		return err
 	})
 	if err != nil {
-		return nil, false, fault.Internalf("kvbadger.Get", "%v", err)
+		return nil, false, fault.Wrapf(err, fault.Internal, "kvbadger.Get", "read the key")
 	}
 	return out, found, nil
 }
@@ -348,7 +348,7 @@ func (d *driver) List(ctx context.Context, prefix string) ([]string, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, fault.Internalf("kvbadger.List", "%v", err)
+		return nil, fault.Wrapf(err, fault.Internal, "kvbadger.List", "list the keys")
 	}
 	sort.Strings(keys)
 	return keys, nil
@@ -374,7 +374,7 @@ func (d *driver) Usage(ctx context.Context, prefix string) (int64, error) {
 		return nil
 	})
 	if err != nil {
-		return 0, fault.Internalf("kvbadger.Usage", "%v", err)
+		return 0, fault.Wrapf(err, fault.Internal, "kvbadger.Usage", "measure the keys")
 	}
 	return n, nil
 }

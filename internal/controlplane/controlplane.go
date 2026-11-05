@@ -269,6 +269,7 @@ func NewAPI(r chi.Router, h Handlers) huma.API {
 			},
 		},
 		DefaultFormat: "application/json",
+		Transformers:  []huma.Transformer{logFaultCause},
 	}
 	api := humachi.New(r, cfg)
 	installRouterErrors(r, api)
@@ -324,6 +325,7 @@ func jsonUnmarshal(data []byte, v interface{}) error {
 // It embeds fault.Problem (RFC 9457 JSON tags) so huma can serialize it as flat application/problem+json.
 type faultError struct {
 	fault.Problem
+	cause error // what logFaultCause logs; never rendered
 }
 
 func (e *faultError) Error() string  { return e.Detail }
@@ -349,7 +351,7 @@ func installFaultErrors() {
 // newFaultError builds huma's own errors. A body over MaxBodyBytes is funcd's PayloadTooLarge problem
 // (ADR-0148), and a lone input resolver's faultError keeps its own problem; no fault Kind decided the
 // others, so their type is RFC 9457's about:blank, and each validation detail joins the detail that
-// clients show.
+// clients show. A raw error under a 5xx, such as a failed body read's, goes to the log instead.
 func newFaultError(status int, msg string, errs ...error) huma.StatusError {
 	if status == http.StatusRequestEntityTooLarge {
 		return &faultError{Problem: fault.ToProblem(fault.PayloadTooLargef("controlplane.body", "%s", msg))}
@@ -359,11 +361,14 @@ func newFaultError(status int, msg string, errs ...error) huma.StatusError {
 		return fe
 	}
 	var details []string
+	var causes []error
 	for _, err := range errs {
 		var d huma.ErrorDetailer
 		switch {
 		case err == nil:
 			continue
+		case !errors.As(err, &d) && status >= http.StatusInternalServerError:
+			causes = append(causes, err)
 		case !errors.As(err, &d):
 			details = append(details, err.Error())
 		case d.ErrorDetail().Location == "":
@@ -376,12 +381,27 @@ func newFaultError(status int, msg string, errs ...error) huma.StatusError {
 	if len(details) > 0 {
 		detail += ": " + strings.Join(details, "; ")
 	}
-	return &faultError{Problem: fault.Problem{
+	fe = &faultError{Problem: fault.Problem{
 		Type:   "about:blank",
 		Title:  http.StatusText(status),
 		Status: status,
 		Detail: detail,
 	}}
+	if len(causes) > 0 {
+		fe.cause = fault.Wrapf(errors.Join(causes...), fault.Internal, "controlplane.huma", "%s", msg)
+	}
+	return fe
+}
+
+// logFaultCause hands the error behind a faultError to fault.LogCauses (ADR-0002 §3): huma writes the body itself, so
+// fault.WriteProblem never sees it.
+func logFaultCause(ctx huma.Context, _ string, v any) (any, error) { //nolint:forbidigo // huma.Transformer fixes this signature
+	if fe, ok := v.(*faultError); ok && fe.cause != nil {
+		if w, ok := ctx.BodyWriter().(http.ResponseWriter); ok {
+			fault.LogCause(w, fe.cause)
+		}
+	}
+	return v, nil
 }
 
 // wrapFaultError wraps a fault.Error as a huma StatusError. Exported for testing.
@@ -391,6 +411,5 @@ func wrapFaultError(err error) error {
 	if err == nil {
 		return nil
 	}
-	p := fault.ToProblem(err)
-	return &faultError{Problem: p}
+	return &faultError{Problem: fault.ToProblem(err), cause: err}
 }

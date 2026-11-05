@@ -148,7 +148,7 @@ func (s *store) initialEvents(ctx context.Context, gvk v1.GroupVersionKind, ns v
 			}
 			v, perr := ParseVersion(obj.GetObjectMeta().ResourceVersion)
 			if perr != nil {
-				return fault.Internalf("store.initialEvents", "corrupt resourceVersion: %v", perr)
+				return fault.Wrapf(perr, fault.Internal, "store.initialEvents", "corrupt resourceVersion")
 			}
 			if v.Timeline == s.timeline && v.N > maxRV {
 				return nil

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -123,15 +124,25 @@ func replayToBrokenTarget(t *testing.T) (*sdk.Client, error) {
 		_, _ = io.WriteString(w, brokenAnswer)
 	}))
 	t.Cleanup(fn.Close)
+	c, replayErr := replayThrough(t, fn.URL, nil)
+	require.Error(t, replayErr)
+	require.Contains(t, replayErr.Error(), brokenAnswer, "the replay error relays the function's answer")
+	return c, replayErr
+}
+
+// replayThrough serves a control plane logging through logger whose Sensor target is upstream, and replays a seeded
+// dead letter once.
+func replayThrough(t *testing.T, upstream string, logger *slog.Logger) (*sdk.Client, error) {
+	t.Helper()
 	st := store.New(memory.New())
 	dlq := dlmemory.New()
-	r, err := sensor.NewReconciler(sensor.Deps{Store: st, Subscriber: eventing.NewFanout(), Invoker: &sensor.HTTPInvoker{Waker: upstreamWaker(fn.URL)}, DeadLetters: dlq})
+	r, err := sensor.NewReconciler(sensor.Deps{Store: st, Subscriber: eventing.NewFanout(), Invoker: &sensor.HTTPInvoker{Waker: upstreamWaker(upstream)}, DeadLetters: dlq})
 	require.NoError(t, err)
 	creds := middleware.NewStaticCredentials(map[string]auth.Identity{
 		devToken: {Subject: "dev", Role: auth.RoleDeveloper, Namespaces: []v1.NamespaceName{"team-a"}},
 	})
 	h, err := controlplane.NewServer(controlplane.Deps{
-		Store: st, Authorizer: rbac.New(), Credentials: creds, DeadLetters: dlq, Replayer: r,
+		Store: st, Authorizer: rbac.New(), Credentials: creds, DeadLetters: dlq, Replayer: r, Logger: logger,
 	})
 	require.NoError(t, err)
 	srv := httptest.NewServer(h)
@@ -139,10 +150,18 @@ func replayToBrokenTarget(t *testing.T) (*sdk.Client, error) {
 	c, err := sdk.New(srv.URL, sdk.WithToken(devToken))
 	require.NoError(t, err)
 	seedReplayable(t, st, dlq, "01DL")
-	replayErr := execCLI(io.Discard, c, "eventing", "dlq", "replay", "01DL", "-n", "team-a")
+	return c, execCLI(io.Discard, c, "eventing", "dlq", "replay", "01DL", "-n", "team-a")
+}
+
+// A replay whose worker refuses the connection answers that the delivery failed and the entry is re-parked; the
+// transport's error goes to the log, once.
+func TestFailedReplayCauseGoesToTheLog(t *testing.T) {
+	var logs lockedBuffer
+	_, replayErr := replayThrough(t, "http://127.0.0.1:1", slog.New(slog.NewTextHandler(&logs, nil)))
 	require.Error(t, replayErr)
-	require.Contains(t, replayErr.Error(), brokenAnswer, "the replay error relays the function's answer")
-	return c, replayErr
+	require.Contains(t, replayErr.Error(), "sensor.Replay: delivery failed (entry re-parked): sensor: POST to team-a/mailer upstream")
+	require.NotContains(t, replayErr.Error(), "127.0.0.1")
+	require.Equal(t, 1, strings.Count(logs.String(), "connection refused"), logs.String())
 }
 
 // A dead letter's reason carries the start of the target function's 4xx answer; dlq list escapes it, so

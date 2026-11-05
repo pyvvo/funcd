@@ -143,7 +143,7 @@ func (envelopePlugin) Before(_ context.Context, c *invoke.Call) *invoke.Refusal 
 		if errors.As(err, &tooLarge) {
 			return &invoke.Refusal{Err: fault.PayloadTooLargef(callOp, "request body exceeds %d bytes", tooLarge.Limit)}
 		}
-		return &invoke.Refusal{Err: fault.Invalidf(callOp, "reading request body: %v", err)}
+		return &invoke.Refusal{Err: fault.Invalidf(callOp, "could not read request body")}
 	}
 	ns, name := c.Target.Namespace, c.Target.Name
 	if serveHTTP(c.Function) {

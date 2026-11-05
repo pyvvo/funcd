@@ -103,7 +103,7 @@ func (p *lakeProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	head, err := io.ReadAll(io.LimitReader(r.Body, handshakeHeadMax))
 	if err != nil {
-		fault.WriteProblem(w, fault.Wrapf(err, fault.Invalid, proxyOp, "read request body"))
+		fault.WriteProblem(w, fault.Invalidf(proxyOp, "could not read request body"))
 		return
 	}
 	whole := len(head) < handshakeHeadMax

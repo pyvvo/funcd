@@ -388,7 +388,7 @@ func readBody(w http.ResponseWriter, r *http.Request, op string, limit int64) ([
 	if errors.As(err, &tooLarge) {
 		return nil, fault.PayloadTooLargef(op, "request body exceeds %d bytes", limit)
 	}
-	return nil, fault.Invalidf(op, "read request body: %v", err)
+	return nil, fault.Invalidf(op, "could not read request body")
 }
 
 // newServer builds the local API's http.Server. IdleTimeout closes a keep-alive connection left idle

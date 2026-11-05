@@ -93,7 +93,7 @@ const heldRetryAfter = "30"
 // lim is the key: function rate step (may be nil ⇒ no per-target check, ADR-0164).
 // stat is the F82 static-asset handler (may be nil ⇒ a static Route match 404s). defaultTimeout is
 // invoke.defaultTimeout, the response deadline of an external invoke whose Function sets no spec.timeout
-// (≤ 0 ⇒ v1.DefaultInvokeTimeout, ADR-0151).
+// (≤ 0 ⇒ v1.DefaultInvokeTimeout, ADR-0151). What a 5xx's detail leaves out goes to logger (fault.LogCauses).
 func Handler(st store.Store, act *activator.Activator, rtr router.Router, baseDomain string, enf *authn.Enforcer,
 	lim *limit.TargetLimiter, stat *static.Handler, defaultTimeout time.Duration, logger *slog.Logger,
 	opts ...Option) http.Handler {
@@ -110,7 +110,7 @@ func Handler(st store.Store, act *activator.Activator, rtr router.Router, baseDo
 	if s.chain == nil {
 		s.chain = invoke.NewChain(Plugins(enf, lim, s.held, defaultTimeout)...)
 	}
-	return s
+	return fault.LogCauses(s.logger)(s)
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {

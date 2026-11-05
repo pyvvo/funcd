@@ -172,11 +172,11 @@ func (t *txn) Get(bucket, key string) ([]byte, bool, error) {
 		return nil, false, nil
 	}
 	if err != nil {
-		return nil, false, fault.Internalf("badger.Get", "%v", err)
+		return nil, false, fault.Wrapf(err, fault.Internal, "badger.Get", "read the key")
 	}
 	v, err := item.ValueCopy(nil)
 	if err != nil {
-		return nil, false, fault.Internalf("badger.Get", "value: %v", err)
+		return nil, false, fault.Wrapf(err, fault.Internal, "badger.Get", "read the value")
 	}
 	return v, true, nil
 }
@@ -186,7 +186,7 @@ func (t *txn) Put(bucket, key string, val []byte) error {
 		return fault.Internalf("badger.Put", "write in a read-only transaction")
 	}
 	if err := t.bt.Set(skey(bucket, key), val); err != nil {
-		return fault.Internalf("badger.Put", "%v", err)
+		return fault.Wrapf(err, fault.Internal, "badger.Put", "write the key")
 	}
 	return nil
 }
@@ -196,7 +196,7 @@ func (t *txn) Delete(bucket, key string) error {
 		return fault.Internalf("badger.Delete", "write in a read-only transaction")
 	}
 	if err := t.bt.Delete(skey(bucket, key)); err != nil {
-		return fault.Internalf("badger.Delete", "%v", err)
+		return fault.Wrapf(err, fault.Internal, "badger.Delete", "delete the key")
 	}
 	return nil
 }
@@ -211,7 +211,7 @@ func (t *txn) Scan(bucket string, fn func(key string, val []byte) error) error {
 		item := it.Item()
 		v, err := item.ValueCopy(nil)
 		if err != nil {
-			return fault.Internalf("badger.Scan", "value: %v", err)
+			return fault.Wrapf(err, fault.Internal, "badger.Scan", "read the value")
 		}
 		key := strings.TrimPrefix(string(item.Key()), bucket+sep)
 		if err := fn(key, v); err != nil {

@@ -311,7 +311,7 @@ func withStatus(obj, from v1.Object) (v1.Object, error) {
 	}
 	raw, err := json.Marshal(fields)
 	if err != nil {
-		return nil, fault.Internalf(op, "marshal: %v", err)
+		return nil, fault.Wrapf(err, fault.Internal, op, "marshal")
 	}
 	kind := obj.GroupVersionKind().Kind
 	fresh, ok := v1.NewObject(kind)
@@ -319,7 +319,7 @@ func withStatus(obj, from v1.Object) (v1.Object, error) {
 		return nil, fault.Internalf(op, "unknown kind %q", kind)
 	}
 	if err := json.Unmarshal(raw, fresh); err != nil {
-		return nil, fault.Internalf(op, "unmarshal: %v", err)
+		return nil, fault.Wrapf(err, fault.Internal, op, "unmarshal")
 	}
 	return fresh, nil
 }
@@ -340,11 +340,11 @@ func withServerMeta(obj, from v1.Object) {
 func jsonFields(obj v1.Object) (map[string]json.RawMessage, error) {
 	raw, err := json.Marshal(obj)
 	if err != nil {
-		return nil, fault.Internalf("controlplane.jsonFields", "marshal: %v", err)
+		return nil, fault.Wrapf(err, fault.Internal, "controlplane.jsonFields", "marshal")
 	}
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &m); err != nil {
-		return nil, fault.Internalf("controlplane.jsonFields", "unmarshal: %v", err)
+		return nil, fault.Wrapf(err, fault.Internal, "controlplane.jsonFields", "unmarshal")
 	}
 	return m, nil
 }

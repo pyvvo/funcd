@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/stretchr/testify/require"
@@ -187,4 +189,17 @@ func TestAnOpenSideIsNotRead(t *testing.T) {
 	require.Nil(t, ch.After(context.Background(), c, invoke.NewAnswer(res)))
 	out, _ := io.ReadAll(res.Body)
 	require.Len(t, out, 2<<20)
+}
+
+// An input that cannot be read answers 400 with a fixed text.
+func TestUnreadableInputAnswersAFixedText(t *testing.T) {
+	t.Parallel()
+	ch := chainOf(t, plugintest.EmailInput, `{}`)
+	c := callWith(nil, "")
+	c.Request.Body = io.NopCloser(iotest.ErrReader(errors.New("read tcp 10.0.0.1:8080->10.0.0.2:40000: i/o timeout")))
+	rf := ch.Before(context.Background(), c)
+	require.NotNil(t, rf)
+	p := fault.ToProblem(rf)
+	require.Equal(t, http.StatusBadRequest, p.Status)
+	require.Equal(t, "contractcheck.input: could not read request body", p.Detail)
 }

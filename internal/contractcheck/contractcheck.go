@@ -67,7 +67,7 @@ func (p inputPlugin) Before(ctx context.Context, c *invoke.Call) *invoke.Refusal
 	body, err := io.ReadAll(io.LimitReader(c.Request.Body, MaxCheckedBytes+1))
 	c.Request.Body = io.NopCloser(io.MultiReader(bytes.NewReader(body), c.Request.Body))
 	if err != nil {
-		return &invoke.Refusal{Err: fault.Invalidf(op, "reading request body: %v", err)}
+		return &invoke.Refusal{Err: fault.Invalidf(op, "could not read request body")}
 	}
 	if len(body) > MaxCheckedBytes {
 		return &invoke.Refusal{Err: fault.PayloadTooLargef(op, "the input exceeds the %d-byte contract check", MaxCheckedBytes)}
