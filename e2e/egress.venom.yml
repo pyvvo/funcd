@@ -10,11 +10,14 @@
 #   * no-egresspolicy-denies-all / confidential-provably-local — no EgressPolicy ⇒ external DENIED (ok=false).
 #   * forwarder-on-the-bridge, lookups follow the policy (ADR-0315) — the forwarder listens on the bridge address only, and
 #     a lookup asked from the worker's own netns is answered or REFUSED by the EgressPolicy, with a log line.
+#   * a worker's traffic to the node stops at the input chain (ADR-0115 Scope) — a UDP listener on the bridge address answers
+#     the node and not the worker.
 #   * allowlist-permits-declared-domain (WILDCARD) — a `*.example.com` EgressPolicy ⇒ www.example.com ALLOWED
 #     (ok=true); proves the forwarder wildcard-token injection + splice end to end.
 #   * CIDR allow — a `1.1.1.1/32` EgressPolicy ⇒ https://1.1.1.1/cdn-cgi/trace ALLOWED (ok=true); proves resource.ip.isInRange.
 #   * CIDR deny — an unlisted IP (1.0.0.1) stays DENIED (ok=false); the allow-list is closed (implicit deny).
 #   * blocked-connection-audited — the gateway emits an egress audit record (allowed=false) to the funclog.
+#   * cidr-rule-reaches-the-bridge-address — a CIDR rule that names the bridge address reaches it through the gateway.
 #
 # The EgressPolicies are applied MID-SUITE (in-VM `limactl shell` — co-located with the daemon, no path leak;
 # {{.vm}} is injected by the recipe --var) so the deny-then-allow ordering is observable. http steps hit the
@@ -78,6 +81,47 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "rcode 5"
+
+  # 1c) A worker's traffic to the node stops at the input chain, except its replies, the gateway, the forwarder and
+  #     InternalAllow (ADR-0115 Scope). The node's own call comes in on loopback with the bridge address as its source.
+  - name: worker-udp-to-the-node-gets-no-answer
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            pid=$({{.ctr}} task ls | awk "\$1 ~ /^egress-probe-/ && \$3 == \"RUNNING\" {print \$2}" | head -1)
+            cat >/tmp/udp-ask.py <<"PY"
+          import socket, sys
+          s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+          s.settimeout(2)
+          s.sendto(b"hi", ("10.63.0.1", 15099))
+          try:
+              print(sys.argv[1], s.recv(64).decode())
+          except socket.timeout:
+              print(sys.argv[1], "no answer")
+          PY
+            python3 - <<"PY" &
+          import socket
+          s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+          s.bind(("10.63.0.1", 15099))
+          s.settimeout(6)
+          try:
+              while True:
+                  s.sendto(b"answered", s.recvfrom(64)[1])
+          except socket.timeout:
+              pass
+          PY
+            sleep 1
+            python3 /tmp/udp-ask.py node
+            nsenter -t "$pid" -n python3 /tmp/udp-ask.py worker
+            wait'
+        retry: 5
+        delay: 2
+        info: "udp on the bridge address → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "node answered"
+          - result.systemout ShouldContainSubstring "worker no answer"
 
   # 2) ALLOW via a WILDCARD domain rule (the highest-value new-mechanism test). Apply a `*.example.com`
   #    EgressPolicy, then probe a matching subdomain. The DNS forwarder attests www.example.com AND injects
@@ -190,3 +234,42 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "egress decision"
           - result.systemout ShouldContainSubstring "allowed=false"
+
+  # 6) A CIDR rule that names the bridge address reaches it through the gateway, whose dial comes in on loopback with that
+  #    address as its source (ADR-0315 Decision 1).
+  - name: cidr-rule-reaches-the-bridge-address
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            nohup timeout 180 python3 -m http.server 15098 --bind 10.63.0.1 --directory /tmp </dev/null >/dev/null 2>&1 &
+            cat >/tmp/egresspolicy-bridge.yaml <<"YAML"
+          apiVersion: funcd.io/v1alpha1
+          kind: EgressPolicy
+          metadata:
+            name: allow-the-bridge-address
+            namespace: default
+            resourceGroup: rg1
+          spec:
+            rules:
+              - to:
+                  cidrs:
+                    - 10.63.0.1/32
+                ports:
+                  - 15098
+          YAML
+            FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token funcdctl apply -f /tmp/egresspolicy-bridge.yaml'
+        assertions:
+          - result.code ShouldEqual 0
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/egress-probe"
+        headers:
+          content-type: application/json
+        body: '{"data":{"url":"http://10.63.0.1:15098/"}}'
+        retry: 25
+        delay: 3
+        info: "bridge-address probe → {{.result.body}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.ok ShouldEqual true

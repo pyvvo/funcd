@@ -208,26 +208,45 @@ func realPDP(t *testing.T, ep *v1.EgressPolicy) auth.Authorizer {
 	return pdp
 }
 
+// egressRig is a Function's worker under one EgressPolicy rule, with the real compiler and PDP.
+type egressRig struct {
+	source netip.Addr
+	deps   Deps
+}
+
+func newEgressRig(t *testing.T, rule v1.EgressRule) egressRig {
+	t.Helper()
+	source := netip.MustParseAddr("10.63.0.5")
+	idx := NewMemoryWorkerIndex()
+	idx.Add(source, auth.EntityRef{Type: v1.KindFunction, Namespace: "acme", Name: "etl"})
+	pdp := realPDP(t, &v1.EgressPolicy{ObjectMeta: v1.ObjectMeta{Name: "egress", Namespace: "acme", ResourceGroup: "rg1"}, Spec: v1.EgressPolicySpec{Rules: []v1.EgressRule{rule}}})
+	return egressRig{source: source, deps: Deps{Workers: idx, Authz: pdp}}
+}
+
+// newDomainRig holds the domain rules on 443 the domain scenarios share.
+func newDomainRig(t *testing.T) egressRig {
+	t.Helper()
+	return newEgressRig(t, v1.EgressRule{To: v1.EgressTo{Domains: []string{"api.x.example", "*.y.example"}}, Ports: []int{443}})
+}
+
+// decideDomain decides a connection to addr whose lookup answered with that address, on a node holding node's addresses.
+func (r egressRig) decideDomain(t *testing.T, addr netip.Addr, port uint16, node func() ([]netip.Addr, error)) (auth.Decision, AuditRecord) {
+	t.Helper()
+	d := r.deps
+	d.NodeAddrs = node
+	d.DNS = fakeDNS{addr: {"a.y.example", "api.x.example", "*.y.example"}}
+	dec, rec, err := decideConnect(context.Background(), d, r.source, netip.AddrPortFrom(addr, port), "api.x.example")
+	require.NoError(t, err)
+	return dec, rec
+}
+
 // scenario: domain-rule-public-only — a domain rule reaches public addresses only: at any other address the destination
 // carries no domains, so the rule does not fire, whatever the lookup answered.
 func TestScenarioDomainRulePublicOnly(t *testing.T) {
 	t.Parallel()
-	source := netip.MustParseAddr("10.63.0.5")
-	idx := NewMemoryWorkerIndex()
-	idx.Add(source, auth.EntityRef{Type: v1.KindFunction, Namespace: "acme", Name: "etl"})
-	pdp := realPDP(t, &v1.EgressPolicy{ObjectMeta: v1.ObjectMeta{Name: "egress", Namespace: "acme", ResourceGroup: "rg1"}, Spec: v1.EgressPolicySpec{
-		Rules: []v1.EgressRule{{To: v1.EgressTo{Domains: []string{"api.x.example", "*.y.example"}}, Ports: []int{443}}},
-	}})
+	rig := newDomainRig(t)
 	node := func() ([]netip.Addr, error) {
-		return []netip.Addr{netip.MustParseAddr("198.51.100.9"), netip.MustParseAddr("2001:db8:1::9")}, nil
-	}
-	decide := func(t *testing.T, addr netip.Addr, port uint16, d Deps) (auth.Decision, AuditRecord) {
-		t.Helper()
-		d.Workers, d.Authz = idx, pdp
-		d.DNS = fakeDNS{addr: {"a.y.example", "api.x.example", "*.y.example"}}
-		dec, rec, err := decideConnect(context.Background(), d, source, netip.AddrPortFrom(addr, port), "api.x.example")
-		require.NoError(t, err)
-		return dec, rec
+		return []netip.Addr{netip.MustParseAddr("203.0.114.9"), netip.MustParseAddr("2a00:1450:1::9")}, nil
 	}
 
 	for _, ip := range []string{
@@ -238,24 +257,24 @@ func TestScenarioDomainRulePublicOnly(t *testing.T) {
 		"100.64.0.5", "100.127.255.254", // shared
 		"224.0.0.1", "239.255.255.250", // multicast
 		"255.255.255.255",    // broadcast
-		"198.51.100.9",       // on the node
+		"203.0.114.9",        // on the node
 		"fd00::5", "fc00::5", // private
-		"fe80::5",       // link-local
-		"::1",           // loopback
-		"::",            // unspecified
-		"ff02::1",       // multicast
-		"2001:db8:1::9", // on the node
+		"fe80::5",        // link-local
+		"::1",            // loopback
+		"::",             // unspecified
+		"ff02::1",        // multicast
+		"2a00:1450:1::9", // on the node
 	} {
 		t.Run(ip, func(t *testing.T) {
 			t.Parallel()
-			dec, rec := decide(t, netip.MustParseAddr(ip), 443, Deps{NodeAddrs: node})
+			dec, rec := rig.decideDomain(t, netip.MustParseAddr(ip), 443, node)
 			require.False(t, dec.Allowed, "%s takes a cidrs rule that names it", ip)
 			require.False(t, rec.Allowed)
 			require.Empty(t, rec.Domain, "the audit record names no domain there")
 		})
 	}
 
-	for _, ip := range []string{"::ffff:10.0.0.5", "::ffff:0.0.0.0", "::ffff:100.64.0.5", "::ffff:198.51.100.9"} {
+	for _, ip := range []string{"::ffff:10.0.0.5", "::ffff:0.0.0.0", "::ffff:100.64.0.5", "::ffff:203.0.114.9"} {
 		restricted, err := Deps{NodeAddrs: node}.restricted(netip.MustParseAddr(ip))
 		require.NoError(t, err)
 		require.True(t, restricted, "%s reads as its IPv4 address", ip)
@@ -265,11 +284,11 @@ func TestScenarioDomainRulePublicOnly(t *testing.T) {
 		t.Run(ip, func(t *testing.T) {
 			t.Parallel()
 			addr := netip.MustParseAddr(ip)
-			dec, rec := decide(t, addr, 443, Deps{NodeAddrs: node})
+			dec, rec := rig.decideDomain(t, addr, 443, node)
 			require.True(t, dec.Allowed, "a public address behaves as before")
 			require.Equal(t, "api.x.example", rec.Domain)
 
-			dec, _ = decide(t, addr, 80, Deps{NodeAddrs: node})
+			dec, _ = rig.decideDomain(t, addr, 80, node)
 			require.False(t, dec.Allowed, "the rule's port holds")
 		})
 	}
@@ -286,10 +305,10 @@ func TestScenarioDomainRulePublicOnly(t *testing.T) {
 
 	t.Run("a failed read of the node's addresses permits nothing", func(t *testing.T) {
 		t.Parallel()
-		d := Deps{Workers: idx, Authz: pdp, DNS: fakeDNS{netip.MustParseAddr("93.184.216.34"): {"api.x.example"}}, NodeAddrs: func() ([]netip.Addr, error) {
-			return nil, errors.New("netlink down")
-		}}
-		dec, _, err := decideConnect(context.Background(), d, source, netip.MustParseAddrPort("93.184.216.34:443"), "")
+		d := rig.deps
+		d.DNS = fakeDNS{netip.MustParseAddr("93.184.216.34"): {"api.x.example"}}
+		d.NodeAddrs = func() ([]netip.Addr, error) { return nil, errors.New("netlink down") }
+		dec, _, err := decideConnect(context.Background(), d, rig.source, netip.MustParseAddrPort("93.184.216.34:443"), "")
 		require.Error(t, err)
 		require.False(t, dec.Allowed)
 	})
@@ -299,15 +318,11 @@ func TestScenarioDomainRulePublicOnly(t *testing.T) {
 // with no attested name needs no read of the node's addresses.
 func TestScenarioCIDRRuleNamesTheAddress(t *testing.T) {
 	t.Parallel()
-	source := netip.MustParseAddr("10.63.0.5")
-	idx := NewMemoryWorkerIndex()
-	idx.Add(source, auth.EntityRef{Type: v1.KindFunction, Namespace: "acme", Name: "etl"})
-	pdp := realPDP(t, &v1.EgressPolicy{ObjectMeta: v1.ObjectMeta{Name: "egress", Namespace: "acme", ResourceGroup: "rg1"}, Spec: v1.EgressPolicySpec{
-		Rules: []v1.EgressRule{{To: v1.EgressTo{Domains: []string{"db.internal.example"}, CIDRs: []string{"10.0.0.5/32", "198.51.100.9/32"}}, Ports: []int{5432}}},
-	}})
-	d := Deps{Workers: idx, Authz: pdp, NodeAddrs: func() ([]netip.Addr, error) {
-		return []netip.Addr{netip.MustParseAddr("198.51.100.9")}, nil
-	}}
+	rig := newEgressRig(t, v1.EgressRule{To: v1.EgressTo{Domains: []string{"db.internal.example"}, CIDRs: []string{"10.0.0.5/32", "203.0.114.9/32"}}, Ports: []int{5432}})
+	d := rig.deps
+	d.NodeAddrs = func() ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("203.0.114.9")}, nil
+	}
 	attested := func(addr string) fakeDNS { return fakeDNS{netip.MustParseAddr(addr): {"db.internal.example"}} }
 	for _, tc := range []struct {
 		dst     string
@@ -316,20 +331,147 @@ func TestScenarioCIDRRuleNamesTheAddress(t *testing.T) {
 		{"10.0.0.5:5432", true},
 		{"10.0.0.5:5433", false},
 		{"10.0.0.6:5432", false},
-		{"198.51.100.9:5432", true},
+		{"203.0.114.9:5432", true},
 	} {
 		d := d
 		d.DNS = attested(netip.MustParseAddrPort(tc.dst).Addr().String())
-		dec, _, err := decideConnect(context.Background(), d, source, netip.MustParseAddrPort(tc.dst), "")
+		dec, _, err := decideConnect(context.Background(), d, rig.source, netip.MustParseAddrPort(tc.dst), "")
 		require.NoError(t, err)
 		require.Equal(t, tc.allowed, dec.Allowed, tc.dst)
 	}
 
 	d.DNS = fakeDNS{}
 	d.NodeAddrs = func() ([]netip.Addr, error) { return nil, errors.New("not read") }
-	dec, _, err := decideConnect(context.Background(), d, source, netip.MustParseAddrPort("10.0.0.5:5432"), "")
+	dec, _, err := decideConnect(context.Background(), d, rig.source, netip.MustParseAddrPort("10.0.0.5:5432"), "")
 	require.NoError(t, err)
 	require.True(t, dec.Allowed, "by address, with no name")
+}
+
+// adr0317Table is ADR-0317 Decision 1's table.
+func adr0317Table() []string {
+	return []string{
+		"0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.0.0.0/24",
+		"192.0.2.0/24", "192.168.0.0/16", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "240.0.0.0/4",
+		"::/128", "::1/128", "::ffff:0:0/96", "64:ff9b:1::/48", "100::/64", "100:0:0:1::/64", "2001::/23", "2001:db8::/32",
+		"3fff::/20", "5f00::/16", "fc00::/7", "fe80::/10",
+		"192.88.99.0/24", "2002::/16", "64:ff9b::/96",
+		"224.0.0.0/4", "ff00::/8", "fec0::/10", "168.63.129.16/32",
+	}
+}
+
+// offTheNode is a node that holds none of the addresses a test names.
+func offTheNode() ([]netip.Addr, error) { return nil, nil }
+
+// lastAddr is the last address of p.
+func lastAddr(p netip.Prefix) netip.Addr {
+	b := p.Addr().AsSlice()
+	for i := p.Bits(); i < len(b)*8; i++ {
+		b[i/8] |= 1 << (7 - i%8)
+	}
+	last, _ := netip.AddrFromSlice(b)
+	return last
+}
+
+// scenario: domain-rule-globally-reachable-only — a domain rule permits nothing in a prefix of the table, from its first
+// address to its last, whatever the lookup answered; it reaches what lies just outside one, on its port.
+func TestScenarioDomainRuleGloballyReachableOnly(t *testing.T) {
+	t.Parallel()
+	rig := newDomainRig(t)
+
+	var refused []netip.Addr
+	for _, s := range adr0317Table() {
+		p := netip.MustParsePrefix(s)
+		if p.Addr().Is4In6() {
+			continue // no address reaches this row: the mapping comes off first, and the PDP takes no mapped form
+		}
+		refused = append(refused, p.Addr(), lastAddr(p))
+	}
+	// The rows the registries mark globally reachable inside an entry count as the entry does.
+	for _, ip := range []string{"192.0.0.9", "192.0.0.10", "2001:1::1", "2001:1::2", "2001:1::3", "2001:3::1", "2001:4:112::1", "2001:20::1", "2001:30::1"} {
+		refused = append(refused, netip.MustParseAddr(ip))
+	}
+	for _, addr := range refused {
+		t.Run(addr.String(), func(t *testing.T) {
+			t.Parallel()
+			dec, rec := rig.decideDomain(t, addr, 443, offTheNode)
+			require.False(t, dec.Allowed, "%s takes a cidrs rule that names it", addr)
+			require.False(t, rec.Allowed)
+			require.Empty(t, rec.Domain, "the audit record names no domain there")
+		})
+	}
+
+	for _, ip := range []string{
+		"1.0.0.0", "9.255.255.255", "11.0.0.0", "100.63.255.255", "100.128.0.0", "126.255.255.255", "128.0.0.0",
+		"168.63.129.15", "168.63.129.17", "169.253.255.255", "169.255.0.0", "172.15.255.255", "172.32.0.0", "192.0.1.255",
+		"192.0.3.0", "192.88.98.255", "192.88.100.0", "192.167.255.255", "192.169.0.0", "198.17.255.255", "198.20.0.0",
+		"198.51.99.255", "198.51.101.0", "203.0.112.255", "203.0.114.0", "223.255.255.255",
+		"::2", "64:ff9a::", "64:ff9b:0:0:0:1::", "64:ff9b:2::", "100:0:0:2::", "2000:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+		"2001:200::", "2001:db9::", "2003::", "3ffe:ffff::", "3fff:1000::", "5eff:ffff::", "5f01::", "fbff:ffff::", "fe00::",
+	} {
+		t.Run("outside "+ip, func(t *testing.T) {
+			t.Parallel()
+			dec, rec := rig.decideDomain(t, netip.MustParseAddr(ip), 443, offTheNode)
+			require.True(t, dec.Allowed, "%s lies outside the table", ip)
+			require.Equal(t, "api.x.example", rec.Domain)
+			dec, _ = rig.decideDomain(t, netip.MustParseAddr(ip), 80, offTheNode)
+			require.False(t, dec.Allowed, "the rule's port holds")
+		})
+	}
+
+	t.Run("an address reads with its mapping and zone removed, and an invalid one counts as restricted", func(t *testing.T) {
+		t.Parallel()
+		for ip, want := range map[netip.Addr]bool{
+			netip.MustParseAddr("::ffff:198.18.0.5"):    true,
+			netip.MustParseAddr("::ffff:93.184.216.34"): false,
+			netip.MustParseAddr("fe80::1%eth0"):         true,
+			{}:                                          true,
+		} {
+			restricted, err := Deps{NodeAddrs: offTheNode}.restricted(ip)
+			require.NoError(t, err)
+			require.Equal(t, want, restricted, "%s", ip)
+		}
+	})
+}
+
+// scenario: globally-reachable-block-allowed — an entry the registries mark globally reachable, which no prefix of the
+// table holds, stays in a domain rule's reach.
+func TestScenarioGloballyReachableBlockAllowed(t *testing.T) {
+	t.Parallel()
+	rig := newDomainRig(t)
+	for _, ip := range []string{"192.31.196.1", "192.52.193.1", "192.175.48.1", "2620:4f:8000::1"} {
+		dec, rec := rig.decideDomain(t, netip.MustParseAddr(ip), 443, offTheNode)
+		require.True(t, dec.Allowed, ip)
+		require.Equal(t, "api.x.example", rec.Domain, ip)
+	}
+}
+
+// scenario: cidr-rule-names-a-table-address — a rule that names an address of the table reaches it, on its ports, by address
+// or with a name attested; the name alone does not.
+func TestScenarioCIDRRuleNamesATableAddress(t *testing.T) {
+	t.Parallel()
+	rig := newEgressRig(t, v1.EgressRule{To: v1.EgressTo{Domains: []string{"lab.example"}, CIDRs: []string{"198.18.0.5/32", "168.63.129.16/32"}}, Ports: []int{443}})
+	for _, tc := range []struct {
+		dst      string
+		attested bool
+		allowed  bool
+	}{
+		{"198.18.0.5:443", false, true},
+		{"198.18.0.5:443", true, true},
+		{"168.63.129.16:443", true, true},
+		{"198.18.0.5:80", true, false},
+		{"198.18.0.6:443", true, false},
+	} {
+		dst := netip.MustParseAddrPort(tc.dst)
+		d := rig.deps
+		d.NodeAddrs = offTheNode
+		d.DNS = fakeDNS{}
+		if tc.attested {
+			d.DNS = fakeDNS{dst.Addr(): {"lab.example"}}
+		}
+		dec, _, err := decideConnect(context.Background(), d, rig.source, dst, "")
+		require.NoError(t, err)
+		require.Equal(t, tc.allowed, dec.Allowed, "%s attested=%v", tc.dst, tc.attested)
+	}
 }
 
 // scenario: disabled-passthrough — New(false) is the no-op Gateway: Serve returns on ctx cancel and
@@ -419,4 +561,16 @@ func TestIssue369_CorrelatorCapsLivePairsPerSource(t *testing.T) {
 	require.Equal(t, []string{"r19999.wild.example"}, c.DomainsFor(flooder, last), "the newest record is attested")
 	require.Equal(t, []string{"pinned.example.com"}, c.DomainsFor(flooder, pinned), "the cap sheds the earliest-expiring pair first")
 	require.Equal(t, []string{"api.example.com"}, c.DomainsFor(other, pinned), "a flood never displaces another worker's records")
+}
+
+// notGlobal holds exactly ADR-0317 Decision 1's table, each prefix masked.
+func TestNotGlobalIsTheDecidedTable(t *testing.T) {
+	t.Parallel()
+	var want []netip.Prefix
+	for _, s := range adr0317Table() {
+		p := netip.MustParsePrefix(s)
+		require.Equal(t, p.Masked(), p, s)
+		want = append(want, p)
+	}
+	require.ElementsMatch(t, want, notGlobal)
 }

@@ -13753,5 +13753,35 @@
     "dod_total": 12,
     "report": "docs/reviews/call-length-fix-claude-opus-5-5.md",
     "notes": "pass with no findings; routed: the Lake proxy's framing at its engine is uncovered"
+  },
+  {
+    "date": "2026-11-05",
+    "issue": "input-chain",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/input-chain-fix-claude-opus-5-5.md",
+    "notes": "pass; 1 Minor (model): the fence's loopback comparison has no unit pin, its rules equal origin/main's; routed: -race on the Linux-tagged tests cannot run from this host (env)"
+  },
+  {
+    "date": "2026-11-05",
+    "adr": "0317",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/adr-0317-implementation-claude-opus-5-5.md",
+    "notes": "pass; 1 Minor (model): no test samples a reachable row nested in an entry; routed: no owner compares the table with the registries, the ADR's IPv6 costs have no row (adr), two lines of ADR-0315's tests, a mapped or zoned destination at the PDP; the gate runs once per PR, after this review"
   }
 ]

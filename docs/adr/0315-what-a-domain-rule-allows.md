@@ -2,6 +2,7 @@
 
 - **Status**: Implemented (2026-11-05), review passed in its third round with no finding open ([report](../reviews/adr-0315-implementation-claude-opus-5-5-3.md)); Reviewing (2026-11-05, implementation done); Accepted (2026-11-05): the decider delegated acceptance to the session driving this work, which settled the
   last choices; judged once, its Blocker and Major folded
+- **Superseded in part by**: [ADR-0317](0317-a-domain-rule-reaches-globally-reachable-addresses-only.md) (2026-11-05) — Decision 1's list of restricted addresses, its last sentence included
 - **Date**: 2026-11-05
 - **Deciders**: green-0-rabbit
 - **Tags**: egress, network, dns, security

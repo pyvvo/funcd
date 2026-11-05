@@ -388,8 +388,8 @@ sequenceDiagram
 
 ## Build status (V1)
 
-The V1 build slate is complete and past it: **ADR-0001…0316** decided, **303 Implemented** (34 accepted as the
-roadmap's tier-0 build items; the rest — incl. ADR-0034…0316 — are follow-ons refining or extending
+The V1 build slate is complete and past it: **ADR-0001…0317** decided, **304 Implemented** (34 accepted as the
+roadmap's tier-0 build items; the rest — incl. ADR-0034…0317 — are follow-ons refining or extending
 existing feature rows), **0 roadmap items remaining**. Not Implemented: ADR-0000 (the process ADR), ADR-0216
 (App tests, Accepted, F119 deferred), the two DR addenda ADR-0227/0228 (Accepted; they record code already
 on main) the AI gateway epoch's ADR-0280…0285 (FEAT-0015, Accepted) and the artifact supply chain's ADR-0298/0299 (FEAT-0017, Accepted). The exit-criterion path is proven end-to-end — a
@@ -815,3 +815,4 @@ All are **Implemented** unless the recap says *superseded*.
 | [ADR-0314 — A fresh funcd answers on loopback until it has a real credential](adr/0314-a-fresh-funcd-answers-on-loopback-until-it-has-a-real-credential.md) | **Implemented.** A fresh funcd answers on loopback, and the built-in dev token works only there: an address off loopback needs `auth.credentials` or a token of your own, in the daemon and in `funcd.New`, and on the data plane too when edge auth is on. The unit `funcd install` writes runs the containerd runtime. Realizes F228. |
 | [ADR-0315 — What a domain rule allows, and the forwarder that enforces it](adr/0315-what-a-domain-rule-allows.md) | **Implemented.** With egress on, the DNS forwarder answers known workers only, on the bridge address, and forwards only the names an EgressPolicy domain rule allows them; a domain rule reaches public addresses only; with no `dnsForwarderPort`, nothing goes out. Amends ADR-0117 and ADR-0115. Realizes F229. |
 | [ADR-0316 — A Function's /health/* paths are funcd's own](adr/0316-a-functions-health-paths-are-funcds-own.md) | **Implemented.** A call from outside whose path under a Function is under `/health/` answers 404 at the listener, by name and on a Route, with no wake and no forward; funcd's own probes go straight to the worker. An external call reaches its worker with its length, and the Python shim reads a request's body before it answers (funcd-python v0.19.1). Realizes F230. |
+| [ADR-0317 — A domain rule reaches globally reachable addresses only](adr/0317-a-domain-rule-reaches-globally-reachable-addresses-only.md) | **Implemented.** One table, read from IANA's special-purpose registries, plus multicast, the rows that are deprecated or carry an IPv4 address, deprecated site-local and Azure's `168.63.129.16`, says which addresses a domain rule does not reach; a `cidrs` rule that names one still does. Amends ADR-0315. Realizes F231. |
