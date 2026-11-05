@@ -117,13 +117,30 @@ func TestScenarioNoForwarderNothingOut(t *testing.T) {
 	require.Equal(t, []ruleKind{kindRedirectSkip, kindRedirect}, kinds, "only the internal endpoint is excluded from the redirect")
 }
 
-// packet is what the input chain's rules read of one packet. iif is the interface index it came in on, 1 for loopback.
+// redirected is the verdict runRule reports for a rule that ends in a redirect, which has no verdict of its own.
+const redirected expr.VerdictKind = 100
+
+// packet is what a chain's rules read of one packet or frame. iif is the interface index it came in on, 1 for loopback;
+// arp marks an ARP frame, whose bytes the header shows as an IPv4 packet's, as no rule may read them; bridged marks one
+// read in a table of the bridge family.
 type packet struct {
 	src, dst netip.Addr
 	iif      uint32
 	proto    byte
 	dport    uint16
 	ct       uint32
+	arp      bool
+	bridged  bool
+}
+
+func (pkt packet) ethertype() uint16 {
+	switch {
+	case pkt.arp:
+		return unix.ETH_P_ARP
+	case pkt.src.Is4():
+		return unix.ETH_P_IP
+	}
+	return unix.ETH_P_IPV6
 }
 
 // header is the packet's network header, with its addresses where IPv4 or IPv6 holds them.
@@ -144,10 +161,16 @@ func runRule(t *testing.T, exprs []expr.Any, pkt packet) (expr.VerdictKind, bool
 		case *expr.Meta:
 			switch e.Key {
 			case expr.MetaKeyNFPROTO:
-				reg = []byte{unix.NFPROTO_IPV6}
-				if pkt.src.Is4() {
+				switch {
+				case pkt.bridged:
+					reg = []byte{unix.NFPROTO_BRIDGE}
+				case pkt.src.Is4():
 					reg = []byte{unix.NFPROTO_IPV4}
+				default:
+					reg = []byte{unix.NFPROTO_IPV6}
 				}
+			case expr.MetaKeyPROTOCOL:
+				reg = binaryutil.BigEndian.PutUint16(pkt.ethertype())
 			case expr.MetaKeyL4PROTO:
 				reg = []byte{pkt.proto}
 			case expr.MetaKeyIIF:
@@ -175,6 +198,9 @@ func runRule(t *testing.T, exprs []expr.Any, pkt packet) (expr.VerdictKind, bool
 			}
 		case *expr.Verdict:
 			return e.Kind, true
+		case *expr.Immediate:
+		case *expr.Redir:
+			return redirected, true
 		default:
 			t.Fatalf("no reading of %T", e)
 		}
@@ -182,13 +208,14 @@ func runRule(t *testing.T, exprs []expr.Any, pkt packet) (expr.VerdictKind, bool
 	return 0, false
 }
 
-// inputVerdict runs the input chain's planned rules over pkt: the first rule that matches decides, and none leaves the
-// chain's policy.
-func inputVerdict(t *testing.T, p Policy, pkt packet) expr.VerdictKind {
+// chainVerdict runs a chain's planned rules over pkt: the first rule that matches decides, and none leaves the chain's
+// policy.
+func chainVerdict(t *testing.T, p Policy, chain string, pkt packet) expr.VerdictKind {
 	t.Helper()
+	pkt.bridged = chain == lateralFwd
 	sub := p.WorkerSubnet.Masked()
 	for _, r := range planRules(p) {
-		if r.chain != egressIn {
+		if r.chain != chain {
 			continue
 		}
 		if v, ok := runRule(t, exprsFor(r, p, sub.Addr().As4(), net4Mask(sub.Bits())), pkt); ok {
@@ -197,12 +224,18 @@ func inputVerdict(t *testing.T, p Policy, pkt packet) expr.VerdictKind {
 	}
 	for _, tp := range planTables(p) {
 		for _, ch := range tp.chains {
-			if tp.name+"/"+ch.name == egressIn && ch.dropPol {
+			if tp.name+"/"+ch.name == chain && ch.dropPol {
 				return expr.VerdictDrop
 			}
 		}
 	}
 	return expr.VerdictAccept
+}
+
+// inputVerdict runs the input chain's planned rules over pkt.
+func inputVerdict(t *testing.T, p Policy, pkt packet) expr.VerdictKind {
+	t.Helper()
+	return chainVerdict(t, p, egressIn, pkt)
 }
 
 // A worker's traffic to the node stops at the input chain, except its replies, the gateway, the forwarder and
@@ -250,4 +283,100 @@ func TestInputChainStopsAWorkersTraffic(t *testing.T) {
 	t.Run("with no forwarder a worker's DNS to the node stops too", func(t *testing.T) {
 		require.Equal(t, expr.VerdictDrop, inputVerdict(t, goodPolicy(), packet{src: worker, dst: bridgeAddr, iif: bridge, proto: unix.IPPROTO_UDP, dport: 53}))
 	})
+}
+
+// scenario: worker-traffic-reaches-no-sibling — funcd_lateral drops an IPv4 frame from the worker subnet to the subnet, the
+// limited broadcast or multicast. ARP, and traffic from any other source, pass on any bridge of the node. The kernel's
+// effect is the egress lane's.
+func TestScenarioWorkerTrafficReachesNoSibling(t *testing.T) {
+	addr := netip.MustParseAddr
+	worker, sibling, outside := addr("10.63.0.5"), addr("10.63.0.6"), addr("192.0.2.2")
+	for _, tc := range []struct {
+		name string
+		pkt  packet
+		want expr.VerdictKind
+	}{
+		{"a worker's unicast to a sibling", packet{src: worker, dst: sibling}, expr.VerdictDrop},
+		{"a worker's subnet broadcast", packet{src: worker, dst: addr("10.63.255.255")}, expr.VerdictDrop},
+		{"a worker's limited broadcast", packet{src: worker, dst: addr("255.255.255.255")}, expr.VerdictDrop},
+		{"a worker's multicast, low end", packet{src: worker, dst: addr("224.0.0.0")}, expr.VerdictDrop},
+		{"a worker's multicast", packet{src: worker, dst: addr("239.1.1.1")}, expr.VerdictDrop},
+		{"a worker's multicast, high end", packet{src: worker, dst: addr("239.255.255.255")}, expr.VerdictDrop},
+		{"a worker's frame just below multicast", packet{src: worker, dst: addr("223.255.255.255")}, expr.VerdictAccept},
+		{"a worker's frame just above multicast", packet{src: worker, dst: addr("240.0.0.0")}, expr.VerdictAccept},
+		{"a worker's frame to the node or beyond", packet{src: worker, dst: outside}, expr.VerdictAccept},
+		{"a worker's ARP to the bridge", packet{arp: true, src: worker, dst: addr("10.63.0.1")}, expr.VerdictAccept},
+		{"a worker's ARP broadcast", packet{arp: true, src: worker, dst: addr("255.255.255.255")}, expr.VerdictAccept},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, chainVerdict(t, goodPolicy(), lateralFwd, tc.pkt))
+		})
+	}
+}
+
+// scenario: other-traffic-stays-untouched — traffic that is no worker's passes each chain as if the rules were not there.
+// The IPv6 source holds the subnet's bytes where IPv4 holds a source, and an internal endpoint's where IPv4 holds a
+// destination, so each rule reads a match there unless it matches IPv4 first. A worker's own traffic is the control.
+func TestScenarioOtherTrafficStaysUntouched(t *testing.T) {
+	addr := netip.MustParseAddr
+	host6, node6, other6 := addr("2001:db8:a3f:1:a3f:1::2"), addr("2001:db8:a3f:1::1"), addr("2001:db8:a3f:2:a3f:2::3")
+	worker, internal, external := addr("10.63.0.5"), addr("10.63.0.1"), addr("192.0.2.9")
+	const (
+		tcp = unix.IPPROTO_TCP
+		udp = unix.IPPROTO_UDP
+	)
+	for _, tc := range []struct {
+		name  string
+		chain string
+		pkt   packet
+		want  expr.VerdictKind
+	}{
+		{"IPv6 TCP to a node service", egressPre, packet{src: host6, dst: node6, proto: tcp, dport: 8080}, expr.VerdictAccept},
+		{"IPv6 TCP to an internal endpoint's port", egressPre, packet{src: host6, dst: node6, proto: tcp, dport: 9000}, expr.VerdictAccept},
+		{"IPv6 UDP to port 53", egressPre, packet{src: host6, dst: node6, proto: udp, dport: 53}, expr.VerdictAccept},
+		{"IPv6 TCP to port 53", egressPre, packet{src: host6, dst: node6, proto: tcp, dport: 53}, expr.VerdictAccept},
+		{"IPv6 to an internal endpoint's port takes the forward policy", egressFwd, packet{src: host6, dst: other6, proto: tcp, dport: 9000}, expr.VerdictDrop},
+		{"IPv6 to a node service in the input chain", egressIn, packet{src: host6, dst: node6, iif: 2, proto: tcp, dport: 8080}, expr.VerdictAccept},
+		{"IPv6 between two hosts of a bridge", lateralFwd, packet{src: host6, dst: other6, proto: tcp, dport: 8080}, expr.VerdictAccept},
+		{"IPv4 unicast between two hosts of another bridge", lateralFwd, packet{src: addr("192.0.2.2"), dst: addr("192.0.2.3")}, expr.VerdictAccept},
+		{"IPv4 unicast from another source into the subnet", lateralFwd, packet{src: addr("192.0.2.2"), dst: addr("10.63.0.6")}, expr.VerdictAccept},
+		{"IPv4 broadcast from another source", lateralFwd, packet{src: addr("192.0.2.2"), dst: addr("255.255.255.255")}, expr.VerdictAccept},
+		{"IPv4 broadcast from no address yet", lateralFwd, packet{src: addr("0.0.0.0"), dst: addr("255.255.255.255")}, expr.VerdictAccept},
+		{"IPv4 multicast from another source", lateralFwd, packet{src: addr("192.0.2.2"), dst: addr("224.0.0.251")}, expr.VerdictAccept},
+		{"a worker's TCP is redirected", egressPre, packet{src: worker, dst: external, proto: tcp, dport: 443}, redirected},
+		{"a worker's UDP to port 53 is redirected", egressPre, packet{src: worker, dst: external, proto: udp, dport: 53}, redirected},
+		{"a worker's TCP to an internal endpoint is skipped", egressPre, packet{src: worker, dst: internal, proto: tcp, dport: 9000}, expr.VerdictReturn},
+		{"a worker's TCP to an internal endpoint is forwarded", egressFwd, packet{src: worker, dst: internal, proto: tcp, dport: 9000}, expr.VerdictAccept},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, chainVerdict(t, forwarderPolicy(), tc.chain, tc.pkt))
+		})
+	}
+}
+
+// Every planned rule that reads a network-header field matches IPv4 first, by the match its table's family can read: meta
+// protocol in the bridge family, where meta nfproto reads NFPROTO_BRIDGE, and meta nfproto in the inet family.
+func TestEveryAddressRuleMatchesIPv4First(t *testing.T) {
+	p := forwarderPolicy()
+	sub := p.WorkerSubnet.Masked()
+	reads := 0
+	for _, r := range planRules(p) {
+		wantKey, wantData := expr.MetaKeyNFPROTO, []byte{unix.NFPROTO_IPV4}
+		if r.chain == lateralFwd {
+			wantKey, wantData = expr.MetaKeyPROTOCOL, binaryutil.BigEndian.PutUint16(unix.ETH_P_IP)
+		}
+		exprs := exprsFor(r, p, sub.Addr().As4(), net4Mask(sub.Bits()))
+		matched := false
+		for i, e := range exprs {
+			if m, ok := e.(*expr.Meta); ok && m.Key == wantKey {
+				cmp := exprs[i+1].(*expr.Cmp)
+				matched = cmp.Op == expr.CmpOpEq && bytes.Equal(cmp.Data, wantData)
+			}
+			if pl, ok := e.(*expr.Payload); ok && pl.Base == expr.PayloadBaseNetworkHeader {
+				reads++
+				require.True(t, matched, "rule kind %d in %s reads an address before it matches IPv4", r.kind, r.chain)
+			}
+		}
+	}
+	require.Positive(t, reads)
 }

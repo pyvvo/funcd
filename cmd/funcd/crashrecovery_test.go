@@ -344,6 +344,27 @@ func TestContainerdModeGivesTheDriverContainerdsExit(t *testing.T) {
 	require.Equal(t, 6*time.Second, got.StopGrace, "the driver must get runtime.containerd.stopGrace (ADR-0277)")
 }
 
+// The driver gets server.network.egress, so each worker's eth0 gets no IPv6 with egress on (ADR-0318).
+func TestContainerdModeGivesTheDriverTheEgressSwitch(t *testing.T) {
+	for _, egress := range []bool{true, false} {
+		cfg := cfgProcess(t.TempDir())
+		cfg.Runtime.Mode = "containerd"
+		cfg.Server.Network.Egress = egress
+		var got containerd.Config
+		_, closeExec, err := containerdOptions(context.Background(), cfg, 6*time.Second, slog.New(slog.DiscardHandler),
+			func(ctrmanager.Config) (ctrmanager.Manager, error) {
+				return exitingManager{exited: make(chan struct{})}, nil
+			},
+			func(c containerd.Config) (fnruntime.Runtime, error) {
+				got = c
+				return &sweptRuntime{}, nil
+			})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = closeExec() })
+		require.Equal(t, egress, got.Egress)
+	}
+}
+
 // Containerd mode sweeps every funcd namespace once before it hands the driver to the controllers; a failed sweep is
 // logged and funcd still boots (ADR-0167 Decision 8).
 func TestContainerdModeSweepsLeftoversAtBoot(t *testing.T) {

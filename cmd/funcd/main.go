@@ -1565,6 +1565,7 @@ func containerdOptions(ctx context.Context, cfg config.Config, stopGrace time.Du
 		Pullable:    mgrCfg.Pullable(c.ImagePrefix),
 		Private:     c.Socket == "",
 		Exited:      mgr.Exited(),
+		Egress:      cfg.Server.Network.Egress,
 	})
 	if err != nil {
 		_ = mgr.Close()

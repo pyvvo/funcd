@@ -2,6 +2,7 @@
 
 - **Status**: Implemented
 - **Superseded in part by**: [ADR-0315](0315-what-a-domain-rule-allows.md) (2026-11-05) — the DNS accept while F80 is alone: in Decision B the nat chain's "and *not* the DNS resolver" and the forward accept (2), its *Temporary workarounds* entry and scenario `dns-resolves`.
+- **Superseded in part by**: [ADR-0318](0318-a-workers-network-holds-what-the-rules-read.md) (2026-11-05) — Decision A's rule, the sentence that says which frames `funcd_lateral` drops.
 - **Date**: 2026-07-09
 - **Accepted**: 2026-07-09
 - **Implemented**: 2026-07-09

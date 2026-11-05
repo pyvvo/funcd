@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/containerd/containerd/v2/core/containers"
+	"github.com/containerd/containerd/v2/pkg/namespaces"
+	"github.com/containerd/containerd/v2/pkg/oci"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/require"
 
@@ -44,6 +46,40 @@ func TestScenarioWorkerRootReadOnly(t *testing.T) {
 		require.True(t, s.Root.Readonly, string(kind))
 		require.True(t, s.Process.NoNewPrivileges, string(kind))
 	}
+}
+
+// scenario: no-worker-holds-net-raw — every worker holds containerd's default capabilities but CAP_NET_RAW, whatever its
+// kind. sandboxOpts reads no egress setting, so this holds with egress on or off.
+func TestScenarioNoWorkerHoldsNetRaw(t *testing.T) {
+	t.Parallel()
+	const netRaw = "CAP_NET_RAW"
+	ctx := namespaces.WithNamespace(context.Background(), "funcd-default")
+	base, err := oci.GenerateSpec(ctx, nil, &containers.Container{ID: "w"})
+	require.NoError(t, err)
+	require.Contains(t, base.Process.Capabilities.Bounding, netRaw, "containerd's default list holds it")
+	want := slices.DeleteFunc(slices.Clone(base.Process.Capabilities.Bounding), func(c string) bool { return c == netRaw })
+
+	for _, kind := range []v1alpha1.Kind{v1alpha1.KindFunction, v1alpha1.KindLake, v1alpha1.KindSQLDatabase} {
+		s, err := oci.GenerateSpec(ctx, nil, &containers.Container{ID: "w"},
+			sandboxOpts(runtime.WorkerSpec{Name: "w", OwnerKind: kind}, "/state/boot/funcd-default/w")...)
+		require.NoError(t, err)
+		caps := s.Process.Capabilities
+		require.ElementsMatch(t, want, caps.Bounding, string(kind))
+		require.ElementsMatch(t, want, caps.Effective, string(kind))
+		require.ElementsMatch(t, want, caps.Permitted, string(kind))
+		require.NotContains(t, caps.Inheritable, netRaw, string(kind))
+		require.NotContains(t, caps.Ambient, netRaw, string(kind))
+	}
+}
+
+// A worker cannot change its netns's settings: as root it passes their file modes, so its /proc/sys is read-only for it.
+func TestProcSysStaysReadOnly(t *testing.T) {
+	t.Parallel()
+	ctx := namespaces.WithNamespace(context.Background(), "funcd-default")
+	s, err := oci.GenerateSpec(ctx, nil, &containers.Container{ID: "w"},
+		sandboxOpts(runtime.WorkerSpec{Name: "w", OwnerKind: v1alpha1.KindFunction}, "/state/boot/funcd-default/w")...)
+	require.NoError(t, err)
+	require.Contains(t, s.Linux.ReadonlyPaths, "/proc/sys")
 }
 
 // scenario: tmp-counts-in-memory — /tmp is a tmpfs of the worker's memory limit, 512 MiB without one, and HOME is /tmp

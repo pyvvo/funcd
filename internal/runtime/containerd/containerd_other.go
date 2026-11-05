@@ -43,6 +43,9 @@ type Config struct {
 
 	// Exited is closed once the containerd at Socket has exited (ctrmanager.Manager.Exited); nil ⇒ never known.
 	Exited <-chan struct{}
+
+	// Egress is server.network.egress: each worker's eth0 gets no IPv6 before its task starts (ADR-0318).
+	Egress bool
 }
 
 // New returns fault.Unavailable on non-Linux platforms — the containerd runtime

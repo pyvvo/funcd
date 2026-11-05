@@ -141,16 +141,18 @@ const (
 type ruleKind int
 
 const (
-	kindLateralDrop      ruleKind = iota // bridge/forward: src AND dst in the worker subnet → drop (L2 lateral)
-	kindRedirectSkip                     // inet/prerouting: src∈subnet, dst = internal → return (NOT redirected)
-	kindRedirect                         // inet/prerouting: src∈subnet, TCP → redirect to GatewayPort
-	kindForwardAccept                    // inet/forward: src∈subnet, dst = internal → accept (precedes the drop policy)
-	kindInputAccept                      // inet/input: TCP dport = GatewayPort → accept the redirected packets
-	kindDNSRedirect                      // inet/prerouting: src∈subnet, {UDP,TCP} dport 53 → redirect to DNSForwarderPort (F81)
-	kindDNSInputAccept                   // inet/input: {UDP,TCP} dport = DNSForwarderPort → accept the redirected DNS (F81)
-	kindInputEstablished                 // inet/input: src∈subnet, conntrack established or related → accept a worker's replies
-	kindInputInternal                    // inet/input: src∈subnet, dst = internal → accept (precedes the drop)
-	kindInputWorkerDrop                  // inet/input: IPv4, not on loopback, src∈subnet → drop (ADR-0115 Scope)
+	kindLateralDrop          ruleKind = iota // bridge/forward: src AND dst in the worker subnet → drop (L2 lateral)
+	kindLateralBroadcastDrop                 // bridge/forward: src∈subnet, dst = limited broadcast → drop (ADR-0318)
+	kindLateralMulticastDrop                 // bridge/forward: src∈subnet, dst multicast → drop (ADR-0318)
+	kindRedirectSkip                         // inet/prerouting: src∈subnet, dst = internal → return (NOT redirected)
+	kindRedirect                             // inet/prerouting: src∈subnet, TCP → redirect to GatewayPort
+	kindForwardAccept                        // inet/forward: src∈subnet, dst = internal → accept (precedes the drop policy)
+	kindInputAccept                          // inet/input: TCP dport = GatewayPort → accept the redirected packets
+	kindDNSRedirect                          // inet/prerouting: src∈subnet, {UDP,TCP} dport 53 → redirect to DNSForwarderPort (F81)
+	kindDNSInputAccept                       // inet/input: {UDP,TCP} dport = DNSForwarderPort → accept the redirected DNS (F81)
+	kindInputEstablished                     // inet/input: src∈subnet, conntrack established or related → accept a worker's replies
+	kindInputInternal                        // inet/input: src∈subnet, dst = internal → accept (precedes the drop)
+	kindInputWorkerDrop                      // inet/input: not on loopback, src∈subnet → drop (ADR-0115 Scope)
 )
 
 // rulePlan is one planned rule. dst/port/proto are set only for the dst-scoped kinds (skip/forward-accept/input-internal).
@@ -168,7 +170,11 @@ type rulePlan struct {
 // traffic to the gateway. In forward the accepts precede the chain's drop policy. With no forwarder a worker's
 // DNS has no accept (ADR-0315): UDP falls to the drop policy, TCP to the redirect.
 func planRules(p Policy) []rulePlan {
-	rs := []rulePlan{{chain: lateralFwd, kind: kindLateralDrop}}
+	rs := []rulePlan{
+		{chain: lateralFwd, kind: kindLateralDrop},
+		{chain: lateralFwd, kind: kindLateralBroadcastDrop},
+		{chain: lateralFwd, kind: kindLateralMulticastDrop},
+	}
 
 	// prerouting: (F81) redirect worker :53 into the DNS forwarder FIRST, then skip (return, no DNAT)
 	// internal-service TCP, THEN redirect the rest. The general redirect MUST stay LAST — a NAT redirect
@@ -211,8 +217,8 @@ func dnsForwarderProtos(p Policy) []byte {
 	return []byte{unix.IPPROTO_UDP, unix.IPPROTO_TCP}
 }
 
-// program builds the two funcd tables (planTables) and attaches the F80 rules (planRules). IPv4 only in
-// V1 (the funcd0 subnet is IPv4); IPv6 worker egress is a later refinement.
+// program builds the two funcd tables (planTables) and attaches the F80 rules (planRules). They read IPv4, the funcd0
+// subnet's family: with egress on, a worker's eth0 has no IPv6 (ADR-0318).
 func program(c *nftables.Conn, p Policy) error {
 	tables := map[string]*nftables.Table{}
 	chains := map[string]*nftables.Chain{}
@@ -246,10 +252,18 @@ func program(c *nftables.Conn, p Policy) error {
 
 // exprsFor builds the nftables expressions for one planned rule.
 func exprsFor(r rulePlan, p Policy, netAddr, mask [4]byte) []expr.Any {
-	src := matchIPv4Field(srcOffset, netAddr, mask)
+	// A rule that reads an address matches IPv4 first: an inet table sees IPv6 too and a bridge every ethertype, whose
+	// headers hold other bytes at these offsets (ADR-0318).
+	subnetSrc := matchIPv4Field(srcOffset, netAddr, mask)
+	frameSrc := concat(matchIPv4Frame(), subnetSrc)
+	src := concat(matchIPv4(), subnetSrc)
 	switch r.kind {
 	case kindLateralDrop:
-		return concat(src, matchIPv4Field(dstOffset, netAddr, mask), verdict(expr.VerdictDrop))
+		return concat(frameSrc, matchIPv4Field(dstOffset, netAddr, mask), verdict(expr.VerdictDrop))
+	case kindLateralBroadcastDrop:
+		return concat(frameSrc, matchDstAddr([4]byte{255, 255, 255, 255}), verdict(expr.VerdictDrop))
+	case kindLateralMulticastDrop:
+		return concat(frameSrc, matchIPv4Field(dstOffset, [4]byte{224, 0, 0, 0}, net4Mask(multicastBits)), verdict(expr.VerdictDrop))
 	case kindRedirectSkip:
 		return concat(src, matchDstAddr(r.dst.As4()), matchL4Proto(r.proto), matchDport(r.port), verdict(expr.VerdictReturn))
 	case kindRedirect:
@@ -266,8 +280,8 @@ func exprsFor(r rulePlan, p Policy, netAddr, mask [4]byte) []expr.Any {
 		return concat(src, matchEstablished(), verdict(expr.VerdictAccept))
 	case kindInputWorkerDrop:
 		// The node's own call to its bridge address comes in on loopback with that address as its source, the egress
-		// gateway's dial for a CIDR rule among them; and in this inet table an IPv6 header holds other bytes at srcOffset.
-		return concat(matchIPv4(), matchLoopback(expr.MetaKeyIIF, expr.CmpOpNeq), src, verdict(expr.VerdictDrop))
+		// gateway's dial for a CIDR rule among them.
+		return concat(matchLoopback(expr.MetaKeyIIF, expr.CmpOpNeq), src, verdict(expr.VerdictDrop))
 	}
 	return nil
 }
@@ -275,8 +289,9 @@ func exprsFor(r rulePlan, p Policy, netAddr, mask [4]byte) []expr.Any {
 // --- expr helpers (IPv4) -------------------------------------------------------------------------------
 
 const (
-	srcOffset = 12 // IPv4 source address offset in the network header
-	dstOffset = 16 // IPv4 destination address offset
+	srcOffset     = 12 // IPv4 source address offset in the network header
+	dstOffset     = 16 // IPv4 destination address offset
+	multicastBits = 4  // the prefix length of 224.0.0.0/4
 )
 
 // matchIPv4Field matches a masked IPv4 address field (src or dst) against a network address.
@@ -300,6 +315,14 @@ func matchIPv4() []expr.Any {
 	return []expr.Any{
 		&expr.Meta{Key: expr.MetaKeyNFPROTO, Register: 1},
 		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{unix.NFPROTO_IPV4}},
+	}
+}
+
+// matchIPv4Frame matches an IPv4 frame, in a table of the bridge family, where meta nfproto reads NFPROTO_BRIDGE.
+func matchIPv4Frame() []expr.Any {
+	return []expr.Any{
+		&expr.Meta{Key: expr.MetaKeyPROTOCOL, Register: 1},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: binaryutil.BigEndian.PutUint16(unix.ETH_P_IP)},
 	}
 }
 
