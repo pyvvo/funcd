@@ -107,13 +107,29 @@ func buildDestination(dst netip.AddrPort, attested []string, asserted string) (a
 	return nd, confirmed
 }
 
-// restricted reports whether a domain rule may not reach ip (ADR-0315 Decision 1): a private, link-local, loopback,
-// unspecified, shared, multicast or broadcast address, or one on the node's interfaces. Only a CIDR rule permits those.
+// notGlobal is what a domain rule does not reach (ADR-0317 Decision 1), read 2026-11-05 from IANA's IPv4 and IPv6
+// special-purpose registries: what they mark not globally reachable, each entry whole; then their rows that are deprecated
+// or carry an IPv4 address, multicast, deprecated site-local and Azure's virtual public address. Immutable.
+var notGlobal = func() []netip.Prefix { //nolint:gochecknoglobals // an immutable lookup table
+	var out []netip.Prefix
+	for _, s := range []string{
+		"0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.0.0.0/24",
+		"192.0.2.0/24", "192.168.0.0/16", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "240.0.0.0/4",
+		"::/128", "::1/128", "::ffff:0:0/96", "64:ff9b:1::/48", "100::/64", "100:0:0:1::/64", "2001::/23", "2001:db8::/32",
+		"3fff::/20", "5f00::/16", "fc00::/7", "fe80::/10",
+		"192.88.99.0/24", "2002::/16", "64:ff9b::/96",
+		"224.0.0.0/4", "ff00::/8", "fec0::/10", "168.63.129.16/32",
+	} {
+		out = append(out, netip.MustParsePrefix(s))
+	}
+	return out
+}()
+
+// restricted reports whether a domain rule may not reach ip (ADR-0317 Decision 1): an invalid address, one in notGlobal, or
+// one on the node's interfaces, read with any IPv4 mapping and zone removed. Only a CIDR rule permits those.
 func (d Deps) restricted(ip netip.Addr) (bool, error) {
-	ip = ip.Unmap()
-	// netip counts the shared address space of RFC 6598 as public.
-	shared := netip.PrefixFrom(netip.AddrFrom4([4]byte{100, 64, 0, 0}), 10)
-	if !ip.IsGlobalUnicast() || ip.IsPrivate() || shared.Contains(ip) {
+	ip = ip.Unmap().WithZone("")
+	if !ip.IsValid() || slices.ContainsFunc(notGlobal, func(p netip.Prefix) bool { return p.Contains(ip) }) {
 		return true, nil
 	}
 	read := d.NodeAddrs

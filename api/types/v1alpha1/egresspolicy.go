@@ -23,8 +23,9 @@ const (
 //
 // A name needs a domain rule (ADR-0315): the DNS forwarder answers known workers only, and forwards only the names a domain
 // rule that applies to them allows; any other name gets REFUSED, so reaching a CIDR-allowed host by name takes a domain
-// rule too. A domain rule reaches public addresses only: a private, link-local or node address takes a `cidrs` rule that
-// names it. Example (YAML block syntax):
+// rule too. A domain rule reaches globally reachable addresses only (ADR-0317): an address IANA's special-purpose registries
+// do not mark so, multicast, reserved IPv4 space, Azure's 168.63.129.16 or a node address takes a `cidrs` rule that names it.
+// Example (YAML block syntax):
 //
 //	apiVersion: funcd.io/v1alpha1
 //	kind: EgressPolicy
