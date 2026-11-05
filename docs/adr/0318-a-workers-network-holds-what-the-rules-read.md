@@ -1,6 +1,6 @@
 # ADR-0318: A worker's network holds what the rules read (amends ADR-0115)
 
-- **Status**: Accepted (2026-11-05): the decider delegated acceptance to the session driving this work, on the conditions that no Blocker or Major stays open, the decision stands and Open questions reads None; judged once, its one Major folded
+- **Status**: Reviewing (2026-11-05, implementation done); Accepted (2026-11-05): the decider delegated acceptance to the session driving this work, on the conditions that no Blocker or Major stays open, the decision stands and Open questions reads None; judged once, its one Major folded
 - **Date**: 2026-11-05
 - **Deciders**: green-0-rabbit
 - **Tags**: egress, network, security, containerd

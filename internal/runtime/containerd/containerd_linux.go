@@ -114,6 +114,9 @@ type Config struct {
 
 	// Exited is closed once the containerd at Socket has exited (ctrmanager.Manager.Exited); nil ⇒ never known.
 	Exited <-chan struct{}
+
+	// Egress is server.network.egress: each worker's eth0 gets no IPv6 before its task starts (ADR-0318).
+	Egress bool
 }
 
 // worker tracks the per-instance bookkeeping the port needs but containerd does
@@ -585,8 +588,8 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 	netnsPath, err := d.netns.pin(cniID, task.Pid())
 	var result *gocni.Result
 	if err == nil {
-		if result, err = d.cni.Setup(nctx, cniID, netnsPath); err == nil && spec.EgressOnly != nil {
-			err = network.FenceNetns(netnsPath, spec.EgressOnly) // before the task starts (ADR-0269)
+		if result, err = d.cni.Setup(nctx, cniID, netnsPath); err == nil {
+			err = d.writeNetns(netnsPath, spec)
 		}
 		if err != nil {
 			// Setup does not undo the plugins that succeeded and the CNI spec leaves that DEL to the runtime, so without
@@ -633,6 +636,20 @@ func (d *driver) Create(ctx context.Context, spec runtime.WorkerSpec) (runtime.I
 		ID: id, Namespace: spec.Namespace, Name: spec.Name, OwnerKind: spec.OwnerKind, Revision: spec.Revision,
 		Replica: spec.Replica, PID: int(task.Pid()), State: runtime.StateCreated, IP: sb.ip, Port: sb.port, CreatedAt: sb.createdAt,
 	}, nil
+}
+
+// writeNetns writes what a worker's netns holds before its task starts: with egress on, no IPv6 on its eth0 (ADR-0318),
+// and an engine's fence (ADR-0269).
+func (d *driver) writeNetns(netnsPath string, spec runtime.WorkerSpec) error {
+	if d.cfg.Egress {
+		if err := network.DisableWorkerIPv6(netnsPath); err != nil {
+			return err
+		}
+	}
+	if spec.EgressOnly != nil {
+		return network.FenceNetns(netnsPath, spec.EgressOnly)
+	}
+	return nil
 }
 
 // reclaim deletes the container and snapshot that hold a worker's name when this driver runs no worker under it.
@@ -1285,8 +1302,9 @@ func ociOpts(spec runtime.WorkerSpec, image containerd.Image, bootDir string) []
 	return append(opts, withSeccompProfile)
 }
 
-// sandboxOpts is what funcd sets over a worker's image config. Its root is read-only, and it writes only to /tmp, a
-// tmpfs counted in its memory, its volumes and its boot dir's tmpfs (ADR-0294).
+// sandboxOpts is what funcd sets over a worker's image config. It holds containerd's default capabilities but
+// CAP_NET_RAW (ADR-0318). Its root is read-only, and it writes only to /tmp, a tmpfs counted in its memory, its volumes
+// and its boot dir's tmpfs (ADR-0294).
 func sandboxOpts(spec runtime.WorkerSpec, bootDir string) []oci.SpecOpts {
 	env := spec.Env
 	if _, ok := env["HOME"]; !ok {
@@ -1298,6 +1316,7 @@ func sandboxOpts(spec runtime.WorkerSpec, bootDir string) []oci.SpecOpts {
 		oci.WithHostname(string(spec.Name)),
 		oci.WithEnv(envSlice(env)),
 		oci.WithNoNewPrivileges,
+		oci.WithDroppedCapabilities([]string{"CAP_NET_RAW"}),
 		oci.WithRootFSReadonly(),
 		withAbsoluteCwd, // crun rejects a non-absolute cwd; WithImageConfig leaves it "" for a WORKDIR-less image
 	}

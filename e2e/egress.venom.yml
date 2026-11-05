@@ -12,6 +12,8 @@
 #     a lookup asked from the worker's own netns is answered or REFUSED by the EgressPolicy, with a log line.
 #   * a worker's traffic to the node stops at the input chain (ADR-0115 Scope) — a UDP listener on the bridge address answers
 #     the node and not the worker.
+#   * a worker's network holds what the rules read (ADR-0318) — no CAP_NET_RAW, no IPv6 on eth0 while loopback keeps it, and
+#     unicast, limited broadcast and multicast reach no sibling.
 #   * allowlist-permits-declared-domain (WILDCARD) — a `*.example.com` EgressPolicy ⇒ www.example.com ALLOWED
 #     (ok=true); proves the forwarder wildcard-token injection + splice end to end.
 #   * CIDR allow — a `1.1.1.1/32` EgressPolicy ⇒ https://1.1.1.1/cdn-cgi/trace ALLOWED (ok=true); proves resource.ip.isInRange.
@@ -122,6 +124,154 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "node answered"
           - result.systemout ShouldContainSubstring "worker no answer"
+
+  # 1d) No worker holds CAP_NET_RAW, bit 13 of the effective and the bounding set, and the rest of containerd's default list
+  #     stands (ADR-0318 Decision E).
+  - name: worker-lacks-cap-net-raw
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            pid=$({{.ctr}} task ls | awk "\$1 ~ /^egress-probe-/ && \$3 == \"RUNNING\" {print \$2}" | head -1)
+            python3 - "$pid" <<"PY"
+          import sys
+          caps = {l.split(":")[0]: int(l.split()[1], 16) for l in open(f"/proc/{sys.argv[1]}/status") if l.startswith("Cap")}
+          print("effective CAP_NET_RAW", caps["CapEff"] >> 13 & 1, "bounding CAP_NET_RAW", caps["CapBnd"] >> 13 & 1)
+          print("effective CAP_CHOWN", caps["CapEff"] & 1, "bounding CAP_CHOWN", caps["CapBnd"] & 1)
+          PY'
+        retry: 5
+        delay: 2
+        info: "capabilities → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "effective CAP_NET_RAW 0 bounding CAP_NET_RAW 0"
+          - result.systemout ShouldContainSubstring "effective CAP_CHOWN 1 bounding CAP_CHOWN 1"
+
+  # 1e) With egress on a worker's eth0 has no IPv6 and its loopback keeps it (ADR-0318 Decision D). ctr runs a process under
+  #     the worker's own spec, so it reads, writes and binds as the worker does. The node's call to its link-local address is
+  #     the control of the worker's.
+  - name: worker-eth0-has-no-ipv6
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            read -r ctr pid <<<"$({{.ctr}} task ls | awk "\$1 ~ /^egress-probe-/ && \$3 == \"RUNNING\" {print \$1, \$2}" | head -1)"
+            echo "eth0 inet6 [$(nsenter -t "$pid" -n ip -6 -o addr show dev eth0)]"
+            echo "lo inet6 [$(nsenter -t "$pid" -n ip -6 -o addr show dev lo)]"
+            cat >/tmp/worker-ipv6.js <<"JS"
+          const fs = require("fs");
+          const net = require("net");
+          const setting = "/proc/sys/net/ipv6/conf/eth0/disable_ipv6";
+          console.log("disable_ipv6 reads", fs.readFileSync(setting, "utf8").trim());
+          try {
+            fs.writeFileSync(setting, "0");
+            console.log("own write succeeded");
+          } catch (e) {
+            console.log("own write failed", e.code);
+          }
+          const loopback = net.createServer().listen(15096, "::1", () => {
+            console.log("loopback bound", loopback.address().address);
+            const any = net.createServer().listen(15095, () => {
+              console.log("any bound", any.address().address);
+              any.close();
+              loopback.close();
+            });
+          });
+          JS
+            {{.ctr}} task exec --exec-id "ipv6-$$" "$ctr" /nodejs/bin/node -e "$(cat /tmp/worker-ipv6.js)"
+            cat >/tmp/link-local-connect.py <<"PY"
+          import socket, sys
+          try:
+              socket.create_connection((sys.argv[2], 15094), timeout=3).close()
+              print(sys.argv[1], "connected")
+          except OSError as e:
+              print(sys.argv[1], "connect failed", e)
+          PY
+            nohup timeout 20 python3 -m http.server 15094 --bind :: --directory /tmp </dev/null >/dev/null 2>&1 &
+            sleep 1
+            link=$(ip -6 -o addr show dev funcd0 scope link | awk "{print \$4}" | cut -d/ -f1)
+            python3 /tmp/link-local-connect.py node "$link%funcd0"
+            nsenter -t "$pid" -n python3 /tmp/link-local-connect.py worker "$link%eth0"'
+        retry: 5
+        delay: 2
+        info: "ipv6 → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "eth0 inet6 []"
+          - result.systemout ShouldContainSubstring "::1/128"
+          - result.systemout ShouldContainSubstring "disable_ipv6 reads 1"
+          - result.systemout ShouldContainSubstring "own write failed"
+          - result.systemout ShouldContainSubstring "loopback bound ::1"
+          - result.systemout ShouldContainSubstring "any bound ::"
+          - result.systemout ShouldContainSubstring "node connected"
+          - result.systemout ShouldContainSubstring "worker connect failed"
+
+  # 1f) A worker's unicast, limited broadcast and multicast reach no sibling (ADR-0318 Decision A). A second Function gives
+  #     the sibling; the node's unicast to its listener, sent last, is the control that the listener hears.
+  - name: worker-traffic-reaches-no-sibling
+    steps:
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            cat >/tmp/egress-sibling.yaml <<"YAML"
+          apiVersion: funcd.io/v1alpha1
+          kind: Function
+          metadata:
+            name: egress-sibling
+            namespace: default
+            resourceGroup: rg1
+          spec:
+            runtime: nodejs22
+            handler: handle
+            image: oci-layout:///mnt/funcd-deps/registry:egress-probe
+            replicas: 1
+            scaling:
+              minReplicas: 1
+          YAML
+            FUNCD_SERVER=http://127.0.0.1:8080 FUNCD_TOKEN=funcd-dev-token funcdctl apply -f /tmp/egress-sibling.yaml'
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          limactl shell --workdir / {{.vm}} -- sudo bash -c '
+            pid=$({{.ctr}} task ls | awk "\$1 ~ /^egress-probe-/ && \$3 == \"RUNNING\" {print \$2}" | head -1)
+            sib=$({{.ctr}} task ls | awk "\$1 ~ /^egress-sibling-/ && \$3 == \"RUNNING\" {print \$2}" | head -1)
+            [ -n "$sib" ] || { echo "no sibling yet"; exit 1; }
+            sibip=$(nsenter -t "$sib" -n ip -4 -o addr show dev eth0 | awk "{print \$4}" | cut -d/ -f1)
+            cat >/tmp/group-listen.py <<"PY"
+          import socket
+          s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+          s.bind(("", 15097))
+          s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, socket.inet_aton("239.1.1.1") + socket.inet_aton("0.0.0.0"))
+          s.settimeout(4)
+          try:
+              while True:
+                  print("sibling received", s.recv(64).decode(), flush=True)
+          except socket.timeout:
+              pass
+          PY
+            cat >/tmp/group-send.py <<"PY"
+          import socket, sys
+          s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+          s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+          s.sendto(sys.argv[2].encode(), (sys.argv[1], 15097))
+          PY
+            nsenter -t "$sib" -n python3 /tmp/group-listen.py &
+            sleep 1
+            nsenter -t "$pid" -n python3 /tmp/group-send.py "$sibip" unicast
+            nsenter -t "$pid" -n python3 /tmp/group-send.py 255.255.255.255 broadcast
+            nsenter -t "$pid" -n python3 /tmp/group-send.py 239.1.1.1 multicast
+            python3 /tmp/group-send.py "$sibip" control
+            wait'
+        retry: 15
+        delay: 2
+        info: "a worker to its sibling → {{.result.systemout}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "sibling received control"
+          - result.systemout ShouldNotContainSubstring "sibling received unicast"
+          - result.systemout ShouldNotContainSubstring "sibling received broadcast"
+          - result.systemout ShouldNotContainSubstring "sibling received multicast"
 
   # 2) ALLOW via a WILDCARD domain rule (the highest-value new-mechanism test). Apply a `*.example.com`
   #    EgressPolicy, then probe a matching subdomain. The DNS forwarder attests www.example.com AND injects

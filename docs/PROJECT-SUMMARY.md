@@ -209,8 +209,8 @@ channel** (ADR-0010) records authorization decisions.
 **namespace-scoped and never shared** across namespaces.
 
 **Worker isolation** — each function runs in its own worker. V1 ships **crun** (OCI runtime) with
-conservative defaults (no added caps, `no_new_privileges`, default seccomp) + the netns lateral
-default-deny. Stronger FS/network hardening and a microVM tier (Kata) are later tiers.
+conservative defaults (no added caps, no `CAP_NET_RAW`, `no_new_privileges`, default seccomp) + the
+netns lateral default-deny, and with egress on no IPv6 on a worker's `eth0` (ADR-0318). Stronger FS/network hardening and a microVM tier (Kata) are later tiers.
 
 **Secrets** — at rest, secrets are **AES-256-GCM encrypted in the metastore** (stdlib, filling the
 store `Encryptor` seam; ADR-0022) and delivered to the worker via a **PDP-authorized resolver** (env

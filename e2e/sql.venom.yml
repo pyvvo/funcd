@@ -128,6 +128,39 @@ testcases:
         assertions:
           - result.systemout ShouldContainSubstring "ROOT_RO TMP_tmpfs"
 
+  # ADR-0318: with egress off too, no worker holds CAP_NET_RAW, bit 13 of the bounding set, which shows whatever the worker's
+  # user: rqlite runs as a user of its own, so its effective set is empty. Here a Python worker and an engine.
+  - name: SC no-worker-holds-net-raw — a Python worker and the engine lack CAP_NET_RAW with egress off
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/notes-report"
+        headers:
+          content-type: application/json
+        body: '{"data":{}}'
+        retry: 15
+        delay: 2
+        assertions:
+          - result.statuscode ShouldEqual 200
+      - type: exec
+        script: |
+          {{.vmsh}} '
+            for name in notes-report-.* notes-db-r[0-9]+; do
+              pid=$({{.ctr}} task ls | awk -v name="^$name\$" "\$1 ~ name && \$3 == \"RUNNING\" {print \$2}" | head -1)
+              python3 - "$name" "$pid" <<"PY"
+          import sys
+          caps = {l.split(":")[0]: int(l.split()[1], 16) for l in open(f"/proc/{sys.argv[2]}/status") if l.startswith("Cap")}
+          print(sys.argv[1], "effective CAP_NET_RAW", caps["CapEff"] >> 13 & 1, "bounding CAP_NET_RAW", caps["CapBnd"] >> 13 & 1, "bounding CAP_CHOWN", caps["CapBnd"] & 1)
+          PY
+            done'
+        retry: 5
+        delay: 2
+        info: "capabilities → {{.result.systemout}} {{.result.systemerr}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "notes-report-.* effective CAP_NET_RAW 0 bounding CAP_NET_RAW 0 bounding CAP_CHOWN 1"
+          - result.systemout ShouldContainSubstring "notes-db-r[0-9]+ effective CAP_NET_RAW 0 bounding CAP_NET_RAW 0 bounding CAP_CHOWN 1"
+
   - name: S4 the rows survive a kill of the engine and a restart of the daemon
     steps:
       - type: exec

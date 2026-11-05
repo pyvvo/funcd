@@ -53,7 +53,7 @@ server:
   #     remove:                   # headers removed from every response. default: none
   #   compression: false          # gzip responses. default: false
   # network:                      # worker egress isolation (ADR-0115/0117); Linux + containerd only
-  #   egress: false               # default-deny worker egress. default: false
+  #   egress: false               # default-deny worker egress; a worker's eth0 has no IPv6, and its loopback keeps it (ADR-0318). default: false
   #   egressGatewayPort: 0        # egress gateway host port; required when egress is on. default: 0
   #   dnsForwarderPort: 0         # DNS forwarder port on the bridge address: it answers known workers, for the names a domain rule allows (ADR-0315); 0 ⇒ no forwarder and no egress gateway, so nothing goes out, DNS included. default: 0
   #   dnsResolver: ""             # the forwarder's upstream resolver host:port; read only with a forwarder, and required then. default: ""

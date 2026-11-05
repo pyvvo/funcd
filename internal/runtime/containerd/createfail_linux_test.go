@@ -159,6 +159,31 @@ func TestIssue706_FailedCreateDropsItsPin(t *testing.T) {
 	}
 }
 
+// scenario: ipv6-setting-failure-stops-the-worker — with egress on, a worker whose IPv6 setting cannot be written does not
+// start: Create fails after the CNI setup, sends the DEL in the pin, drops the pin, kills its task and deletes its
+// container. The fake pin is a plain file, so entering it fails, with the node's own netns out of reach. With egress off
+// nothing is written.
+func TestScenarioIPv6SettingFailureStopsTheWorker(t *testing.T) {
+	f := newCNIIDFixture(t)
+	mounts := fakePins(t, f.d)
+	f.d.cfg.Egress = true
+
+	_, err := f.d.Create(leases.WithLease(context.Background(), "ipv6setting"), f.engine(t, "a", "b"))
+	require.Error(t, err)
+	pin := filepath.Join(f.d.netns.dir, "a_b-r0")
+	require.Equal(t, []string{"a_b-r0"}, f.cni.setups, "the setting follows the CNI setup")
+	require.Equal(t, [][2]string{{"a_b-r0", pin}}, f.cni.removed, "the DEL runs in the pinned netns")
+	require.Equal(t, []string{"/proc/1/ns/net on " + pin, "unmount " + pin}, *mounts)
+	require.NoFileExists(t, pin)
+	tasks := f.d.client.TaskService().(*createdTasks)
+	require.Equal(t, []string{"b-r0"}, tasks.killed, "a failed Create must kill its created task")
+	require.Empty(t, f.ctrs.records, "a failed Create must delete its container")
+
+	f.d.cfg.Egress = false
+	_, err = f.d.Create(leases.WithLease(context.Background(), "ipv6setting-off"), f.engine(t, "a", "c"))
+	require.NoError(t, err, "with egress off the driver writes nothing")
+}
+
 var errFirewallAdd = errors.New("plugin type=\"firewall\" failed (add)")
 
 // failingSetupCNI fails Setup as a plugin after the bridge does (the IP is allocated by then) and records each Remove.

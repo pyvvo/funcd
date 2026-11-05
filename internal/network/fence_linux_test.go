@@ -4,6 +4,8 @@ package network
 
 import (
 	"net/netip"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/google/nftables/binaryutil"
@@ -40,4 +42,44 @@ func TestScenarioFenceRefusesOtherDestinations(t *testing.T) {
 
 	require.Len(t, fenceRules([]netip.AddrPort{}), 2, "an empty list allows no new outbound connection")
 	require.Error(t, FenceNetns("/nonexistent", []netip.AddrPort{netip.MustParseAddrPort("[::1]:9000")}), "an IPv6 endpoint is refused")
+}
+
+// ipv6Tree makes a tree shaped as /proc/sys/net/ipv6, each link's disable_ipv6 reading 0.
+func ipv6Tree(t *testing.T, links ...string) string {
+	t.Helper()
+	root := t.TempDir()
+	for _, link := range links {
+		dir := filepath.Join(root, "conf", link)
+		require.NoError(t, os.MkdirAll(dir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "disable_ipv6"), []byte("0"), 0o600))
+	}
+	return root
+}
+
+// scenario: worker-eth0-has-no-ipv6 — the writes: eth0 and default read 1, and all and lo keep what they held, so loopback
+// keeps IPv6. A missing setting under a present tree is an error, so the worker does not start; a kernel with no IPv6 has
+// nothing to write. The kernel's effect is the egress lane's.
+func TestScenarioWorkerEth0HasNoIPv6(t *testing.T) {
+	root := ipv6Tree(t, "all", "default", "eth0", "lo")
+	require.NoError(t, disableIPv6(root))
+	for link, want := range map[string]string{"all": "0", "default": "1", "eth0": "1", "lo": "0"} {
+		got, err := os.ReadFile(filepath.Join(root, "conf", link, "disable_ipv6"))
+		require.NoError(t, err)
+		require.Equal(t, want, string(got), link)
+	}
+
+	require.ErrorIs(t, disableIPv6(ipv6Tree(t, "default", "lo")), os.ErrNotExist, "no eth0")
+	require.ErrorIs(t, disableIPv6(ipv6Tree(t, "eth0", "lo")), os.ErrNotExist, "no default")
+
+	noIPv6 := filepath.Join(t.TempDir(), "ipv6")
+	require.NoError(t, disableIPv6(noIPv6), "a kernel with no IPv6")
+	require.NoDirExists(t, noIPv6)
+}
+
+// A path that is no network namespace is an error, whether it cannot be opened or cannot be entered.
+func TestDisableWorkerIPv6RefusesAPathThatIsNoNetns(t *testing.T) {
+	require.Error(t, DisableWorkerIPv6(filepath.Join(t.TempDir(), "none")))
+	file := filepath.Join(t.TempDir(), "file")
+	require.NoError(t, os.WriteFile(file, nil, 0o600))
+	require.Error(t, DisableWorkerIPv6(file))
 }
