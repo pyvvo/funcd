@@ -70,6 +70,7 @@ import (
 	"github.com/pyvvo/funcd/internal/network"
 	"github.com/pyvvo/funcd/internal/network/egress"
 	"github.com/pyvvo/funcd/internal/platform/clock"
+	platformconfig "github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/platform/hold"
 	"github.com/pyvvo/funcd/internal/platform/observability"
 	"github.com/pyvvo/funcd/internal/provider"
@@ -98,7 +99,8 @@ import (
 
 // DevToken is the default control-plane credential token wired by InMemory(). It
 // lets a test/tool authenticate against an embedded platform; it is NOT a
-// production identity story (Production() wires no default token — ADR-0028).
+// production identity story (Production() wires no default token — ADR-0028),
+// and New refuses it on an address off loopback (ADR-0314).
 const DevToken = "funcd-dev-token"
 
 const (
@@ -438,6 +440,9 @@ func (c *config) validate() error {
 	case c.credentials == nil:
 		return fault.Invalidf(op, "control-plane credentials are required (use WithCredentials, WithDevAuth or a preset)")
 	}
+	if err := c.checkDevTokenBind(); err != nil {
+		return err
+	}
 	if n := c.funclogMaxRecordBytes; n != 0 && (n < minRecordBytes || n > funclog.MaxLineBytes) {
 		return fault.Invalidf(op, "funclog.maxRecordBytes %d is outside [%d, %d]: the reader drops a line over %d bytes",
 			n, minRecordBytes, funclog.MaxLineBytes, funclog.MaxLineBytes)
@@ -445,6 +450,21 @@ func (c *config) validate() error {
 	// Container execution runs every Function solo: no pool worker can run in a curated image (ADR-0173).
 	if c.imageFor != nil && (len(c.poolShim) > 0 || len(c.poolShimsByFamily) > 0) {
 		return fault.Invalidf(op, "worker pooling is not supported with container execution: WithPoolShim and WithPoolShimFor cannot be combined with WithContainerExecution")
+	}
+	return nil
+}
+
+// checkDevTokenBind refuses the built-in DevToken on an address off loopback: the control plane's, and the data plane's
+// when the edge reads the same credentials (ADR-0314 Decisions 5 and 6). An empty address is judged as what it binds.
+func (c *config) checkDevTokenBind() error {
+	const op, wayOut = "funcd.New", "pass WithCredentials, WithDevAuth with a token of your own, or a loopback address"
+	_, err := c.credentials.Lookup(context.Background(), DevToken)
+	accepted := err == nil
+	if addr := cmp.Or(c.listenAddr, defaultProdAddr); accepted && !platformconfig.IsLoopbackAddr(addr) {
+		return fault.Invalidf(op, "WithListenAddr %q is off loopback, and the built-in DevToken works only on loopback: %s", addr, wayOut)
+	}
+	if addr := cmp.Or(c.dataPlaneAddr, defaultDataPlaneAddr); accepted && c.edgeAuthEnabled && !platformconfig.IsLoopbackAddr(addr) {
+		return fault.Invalidf(op, "WithDataPlaneAddr %q is off loopback, WithEdgeAuth is on, and the built-in DevToken works only on loopback: %s", addr, wayOut)
 	}
 	return nil
 }

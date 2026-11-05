@@ -35,6 +35,9 @@ and no call reads it; `NetDestination` and `Invocation` are no step of a call. N
 
 | Where | What happens | Time | You see | Status | Source |
 |---|---|---|---|---|---|
+| A fresh funcd | The API answers on loopback, the data plane on loopback at an ephemeral port | none | connection refused at another address | decided | ADR-0314 Decision 1, `TestScenarioFreshConfigBindsLoopback` |
+| An address with no port, with the built-in dev token | This refusal, not a bind error | none | `is off loopback` | accepted | ADR-0314 Consequences, `TestIsLoopbackAddr` |
+| An explicit empty `server.listenAddr` with a real credential | It reaches the `Production()` default, `0.0.0.0:8080`, as before | none | `platform starting` | accepted | ADR-0314 Consequences, `TestScenarioRealCredentialBindsAnywhere` |
 | No rule, no by-name Function | Refused, nothing wakes | none | 404 `no route for "<path>"`, 404 `function <ns>/<name> is not exposed by name` | decided | ADR-0241 Decision 4, `TestScenario_exposure_function_off` |
 | A rule with no host | In a namespace it answers only on `<ns>.<baseDomain>`; in `default`, on any host no namespace reserves | none | `status.host`, a 404 on another host | decided | ADR-0240 Decisions 3 and 4, `TestScenario_namespace_host_routes` |
 | Two rules match | The longest path wins and a host only breaks a tie, so a `default` host-less rule at a longer path takes a host's shorter one | none | the other rule's backend | deferred | ADR-0176 Open questions, `TestScenarioMatchLongestPrefix` |
@@ -72,7 +75,7 @@ and no call reads it; `NetDestination` and `Invocation` are no step of a call. N
 | `server.limits.maxInFlight` | 0 | config |
 | `server.limits.maxKeys` | 4096 | config |
 | `server.limits.ratePerMin` | 0 | config |
-| `server.listenAddr` | 0.0.0.0:8080 | config |
+| `server.listenAddr` | 127.0.0.1:8080 | config |
 | `server.network.dnsForwarderPort` | 0 | config |
 | `server.network.dnsResolver` | "" | config |
 | `server.network.egress` | false | config |

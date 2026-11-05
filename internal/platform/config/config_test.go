@@ -25,11 +25,50 @@ func writeCfg(t *testing.T, body string) string {
 	return p
 }
 
+// scenario: fresh-config-binds-loopback (ADR-0314): no file and no env bind the control plane on this machine.
+func TestScenarioFreshConfigBindsLoopback(t *testing.T) {
+	c, err := config.Load("", config.Flags{})
+	require.NoError(t, err)
+	require.Equal(t, "127.0.0.1:8080", c.Server.ListenAddr)
+	require.True(t, config.IsLoopbackAddr(c.Server.ListenAddr))
+	require.True(t, config.IsLoopbackAddr(c.Server.DataPlaneAddr), "the data plane's default stays on loopback")
+}
+
+// ADR-0314 Decision 2: loopback means localhost or an IP with IsLoopback, and an addr that does not split is not.
+func TestIsLoopbackAddr(t *testing.T) {
+	for addr, want := range map[string]bool{
+		"127.0.0.1:8080":              true,
+		"127.1.2.3:0":                 true,
+		"[::1]:8080":                  true,
+		"localhost:8080":              true,
+		"localhost:0":                 true,
+		"[::ffff:127.0.0.1]:8080":     true,
+		"0.0.0.0:8080":                false,
+		":8080":                       false,
+		":0":                          false,
+		"[::]:8080":                   false,
+		"192.0.2.1:8080":              false,
+		"10.0.0.1:0":                  false,
+		"[2001:db8::1]:8080":          false,
+		"[::ffff:192.0.2.1]:8080":     false,
+		"[::1%lo0]:8080":              false,
+		"example.test:8080":           false,
+		"localhost.example.test:8080": false,
+		"127.0.0.1.example.test:8080": false,
+		"LOCALHOST:8080":              false,
+		"127.0.0.1":                   false,
+		"localhost":                   false,
+		"":                            false,
+	} {
+		require.Equal(t, want, config.IsLoopbackAddr(addr), "%q", addr)
+	}
+}
+
 // scenario: zero-config-defaults — no file + no env ⇒ every field its built-in default (nested struct).
 func TestScenarioZeroConfigDefaults(t *testing.T) {
 	c, err := config.Load("", config.Flags{})
 	require.NoError(t, err)
-	require.Equal(t, "0.0.0.0:8080", c.Server.ListenAddr)
+	require.Equal(t, "127.0.0.1:8080", c.Server.ListenAddr, "ADR-0314 Decision 1")
 	require.Equal(t, "127.0.0.1:0", c.Server.DataPlaneAddr)
 	require.Equal(t, "file", c.Storage.Mode)
 	require.Equal(t, "/var/lib/funcd", c.Storage.DataDir)

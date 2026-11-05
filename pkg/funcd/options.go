@@ -680,6 +680,8 @@ func WithInvokeSocketDir(dir string) Option {
 
 // WithDataPlaneAddr sets the data-plane (function-invocation) listen address (ADR-0033).
 // Default is 0.0.0.0:8081 (Production); InMemory() uses an ephemeral 127.0.0.1:0.
+// Under WithEdgeAuth, New refuses an address off loopback while the store accepts the
+// built-in DevToken (ADR-0314).
 func WithDataPlaneAddr(addr string) Option {
 	return func(c *config) error { c.dataPlaneAddr = addr; return nil }
 }
@@ -739,7 +741,8 @@ func WithLimits(cfg limit.Config) Option {
 // WithEdgeAuth enables the edge authn PEP (ADR-0113, F77) on the data plane: for a target whose
 // stance is `authenticated`, the caller's bearer is authenticated (reusing the control-plane
 // credentials) and the decision delegated to the authorizer, rejecting 401/403 before the activator.
-// Without it, an `authenticated` stance fails closed (401); `open` targets are unaffected.
+// Without it, an `authenticated` stance fails closed (401); `open` targets are unaffected. With
+// it, the built-in DevToken needs a data plane on loopback (ADR-0314).
 func WithEdgeAuth() Option {
 	return func(c *config) error { c.edgeAuthEnabled = true; return nil }
 }
@@ -811,7 +814,8 @@ func WithTelemetry(t *observability.Telemetry) Option {
 }
 
 // WithListenAddr sets the control-plane bind address (host:port). Default is the
-// preset's (InMemory: an ephemeral "127.0.0.1:0"; Production: "0.0.0.0:8080").
+// preset's (InMemory: an ephemeral "127.0.0.1:0"; Production: "0.0.0.0:8080"). New refuses
+// an address off loopback while the store accepts the built-in DevToken (ADR-0314).
 func WithListenAddr(addr string) Option {
 	return func(c *config) error { c.listenAddr = addr; return nil }
 }
@@ -826,7 +830,8 @@ func WithAuthorizer(a auth.Authorizer) Option {
 // dev/test shorthand; WithCredentials lists several tokens with roles (ADR-0171).
 // It lets a public-surface caller authenticate without importing internal/auth.
 // InMemory() applies a default (DevToken in "default"); Production() sets none
-// (the operator supplies WithCredentials or WithDevAuth).
+// (the operator supplies WithCredentials or WithDevAuth). DevToken works only on
+// loopback (ADR-0314).
 func WithDevAuth(token string, namespaces ...string) Option {
 	return func(c *config) error {
 		nss := make([]v1.NamespaceName, len(namespaces))

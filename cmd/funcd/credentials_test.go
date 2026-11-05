@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -277,18 +278,242 @@ func TestScenarioLegacyTokenIsDeveloper(t *testing.T) {
 		_, err = c.Apply(ctx, namespaceObj("team-a"))
 		requireKind(t, fault.Forbidden, err, "a developer applies no Namespace")
 	})
-	t.Run("built-in", func(t *testing.T) {
-		cfg, err := loadConfig(t, shortDataDir(t), "")
+	for _, form := range builtInTokenForms() {
+		t.Run("built-in/"+form.name, func(t *testing.T) {
+			if form.env[0] != "" {
+				t.Setenv(form.env[0], form.env[1])
+			}
+			cfg, err := loadConfig(t, shortDataDir(t), form.auth)
+			require.NoError(t, err)
+			cp := startCredPlatform(t, cfg)
+			require.Contains(t, cp.log.String(), "built-in dev token", "the startup log warns")
+			c := cp.client(t, funcd.DevToken)
+			_, err = c.Apply(ctx, functionObj("default", "api"))
+			require.NoError(t, err, "the dev token is a developer in default")
+			_, err = c.Apply(ctx, functionObj("team-a", "api"))
+			requireKind(t, fault.Forbidden, err, "outside default")
+			_, err = c.Apply(ctx, namespaceObj("team-a"))
+			requireKind(t, fault.Forbidden, err, "a developer applies no Namespace")
+		})
+	}
+}
+
+type builtInTokenForm struct {
+	name, auth string
+	env        [2]string
+}
+
+// builtInTokenForms are the ways the built-in dev token comes into effect (ADR-0314 Decision 2).
+func builtInTokenForms() []builtInTokenForm {
+	return []builtInTokenForm{
+		{name: "auth.token-empty"},
+		{name: "auth.token", auth: "auth:\n  token: " + funcd.DevToken + "\n"},
+		{name: "FUNCD_TOKEN", env: [2]string{"FUNCD_TOKEN", funcd.DevToken}},
+		{name: "FUNCD_TOKEN-untrimmed", env: [2]string{"FUNCD_TOKEN", funcd.DevToken + " "}},
+	}
+}
+
+// writeDaemonConfig writes a funcdconfig.yaml of body over the memory substrate in dataDir and returns its path.
+func writeDaemonConfig(t *testing.T, dataDir, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "funcdconfig.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("storage:\n  mode: memory\n  dataDir: \""+dataDir+"\"\n"+body), 0o600))
+	return path
+}
+
+// requireBuiltInTokenRefused asserts what a start refused by ADR-0314's rule gives: fault.Invalid, exit status 1, the
+// key, the address and the way out, no token value, and no data directory: it did not count and nothing opened.
+func requireBuiltInTokenRefused(t *testing.T, err error, dataDir, key, addr string) {
+	t.Helper()
+	require.Error(t, err)
+	require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
+	require.Equal(t, 1, exitCode(err))
+	for _, want := range []string{key, `"` + addr + `"`, "off loopback", "built-in dev token", "auth.credentials", "auth.token (FUNCD_TOKEN)"} {
+		require.Contains(t, err.Error(), want)
+	}
+	require.NotContains(t, err.Error(), funcd.DevToken, "a token value reached the refusal")
+	_, serr := os.Stat(dataDir)
+	require.ErrorIs(t, serr, fs.ErrNotExist, "refused before the data directory exists")
+}
+
+// serveDaemon runs serve, as main does, on a config of body over the memory substrate until the test ends. It returns
+// the daemon's log.
+func serveDaemon(t *testing.T, body string) *syncBuf {
+	t.Helper()
+	logs := &syncBuf{}
+	path := writeDaemonConfig(t, shortDataDir(t), body)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- serve(ctx, path, nil, logs) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-done:
+			require.NoError(t, err, "logs: %s", logs.String())
+		case <-time.After(30 * time.Second):
+			t.Error("serve did not return")
+		}
+	})
+	return logs
+}
+
+// waitServed lists kind with token at addr until funcd answers, and returns the client.
+func waitServed(t *testing.T, addr, token string, kind v1.Kind, ns string) *sdk.Client {
+	t.Helper()
+	c, err := sdk.New("http://"+addr, sdk.WithToken(token))
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		_, err := c.List(context.Background(), kind, v1.NamespaceName(ns))
+		return err == nil
+	}, 20*time.Second, 20*time.Millisecond, "funcd answers %s with this token", addr)
+	return c
+}
+
+// scenario: built-in-token-off-loopback-refused (ADR-0314)
+func TestScenarioBuiltInTokenOffLoopbackRefused(t *testing.T) {
+	for _, addr := range []string{"0.0.0.0:8080", ":8080", "[::]:8080", "192.0.2.1:8080", "example.test:8080"} {
+		for _, form := range builtInTokenForms() {
+			t.Run(addr+"/"+form.name, func(t *testing.T) {
+				if form.env[0] != "" {
+					t.Setenv(form.env[0], form.env[1])
+				}
+				dataDir := filepath.Join(shortDataDir(t), "data")
+				path := writeDaemonConfig(t, dataDir, "server:\n  listenAddr: \""+addr+"\"\n"+form.auth)
+				requireBuiltInTokenRefused(t, serve(context.Background(), path, nil, io.Discard), dataDir,
+					"server.listenAddr (FUNCD_LISTEN_ADDR)", addr)
+			})
+		}
+	}
+	t.Run("FUNCD_LISTEN_ADDR", func(t *testing.T) {
+		t.Setenv("FUNCD_LISTEN_ADDR", "0.0.0.0:8080")
+		dataDir := filepath.Join(shortDataDir(t), "data")
+		requireBuiltInTokenRefused(t, serve(context.Background(), writeDaemonConfig(t, dataDir, ""), nil, io.Discard), dataDir,
+			"server.listenAddr (FUNCD_LISTEN_ADDR)", "0.0.0.0:8080")
+	})
+	t.Run("does-not-count", func(t *testing.T) {
+		// A durable node's start: refused like the others, so no safemode.json is ever written (ADR-0207 Decision 3).
+		dataDir := shortDataDir(t)
+		path := filepath.Join(t.TempDir(), "funcdconfig.yaml")
+		require.NoError(t, os.WriteFile(path, []byte("storage:\n  dataDir: \""+dataDir+"\"\nserver:\n  listenAddr: 0.0.0.0:0\n"), 0o600))
+		for range 8 {
+			require.Equal(t, fault.Invalid, fault.KindOf(serve(context.Background(), path, nil, io.Discard)))
+		}
+		entries, err := os.ReadDir(dataDir)
 		require.NoError(t, err)
-		cp := startCredPlatform(t, cfg)
-		require.Contains(t, cp.log.String(), "built-in dev token", "the startup log warns")
-		c := cp.client(t, funcd.DevToken)
-		_, err = c.Apply(ctx, functionObj("default", "api"))
-		require.NoError(t, err, "the dev token is a developer in default")
-		_, err = c.Apply(ctx, functionObj("team-a", "api"))
-		requireKind(t, fault.Forbidden, err, "outside default")
-		_, err = c.Apply(ctx, namespaceObj("team-a"))
-		requireKind(t, fault.Forbidden, err, "a developer applies no Namespace")
+		require.Empty(t, entries, "no safemode.json, no store/")
+	})
+}
+
+// scenario: built-in-token-on-loopback-warns (ADR-0314)
+func TestScenarioBuiltInTokenOnLoopbackWarns(t *testing.T) {
+	for _, addr := range []string{"127.0.0.1:8080", "127.1.2.3:0", "[::1]:8080", "localhost:8080"} {
+		for _, form := range builtInTokenForms() {
+			t.Run("rule/"+addr+"/"+form.name, func(t *testing.T) {
+				if form.env[0] != "" {
+					t.Setenv(form.env[0], form.env[1])
+				}
+				cfg, err := loadConfig(t, shortDataDir(t), "server:\n  listenAddr: \""+addr+"\"\n"+form.auth)
+				require.NoError(t, err)
+				require.NoError(t, checkBuiltInTokenBind(cfg))
+			})
+		}
+	}
+	for _, form := range builtInTokenForms() {
+		t.Run("start/"+form.name, func(t *testing.T) {
+			if form.env[0] != "" {
+				t.Setenv(form.env[0], form.env[1])
+			}
+			addr := freeAddr(t)
+			logs := serveDaemon(t, "server:\n  listenAddr: "+addr+"\n"+form.auth)
+			c := waitServed(t, addr, funcd.DevToken, v1.KindFunction, "default")
+			_, err := c.List(context.Background(), v1.KindFunction, "default")
+			require.NoError(t, err, "the built-in dev token answers 200")
+			require.Equal(t, 1, strings.Count(logs.String(), "built-in dev token"), "one warning: %s", logs.String())
+			require.NotContains(t, logs.String(), funcd.DevToken, "a token value reached the log")
+		})
+	}
+	for _, host := range []string{"localhost", "[::1]"} {
+		t.Run("start/"+host, func(t *testing.T) {
+			if host == "[::1]" {
+				ln, err := net.Listen("tcp", "[::1]:0")
+				if err != nil {
+					t.Skip("no IPv6 loopback on this host")
+				}
+				_ = ln.Close()
+			}
+			_, port, err := net.SplitHostPort(freeAddr(t))
+			require.NoError(t, err)
+			addr := host + ":" + port
+			serveDaemon(t, "server:\n  listenAddr: \""+addr+"\"\n")
+			waitServed(t, addr, funcd.DevToken, v1.KindFunction, "default")
+		})
+	}
+}
+
+// scenario: real-credential-binds-anywhere (ADR-0314)
+func TestScenarioRealCredentialBindsAnywhere(t *testing.T) {
+	admin := tokenFile(t, t.TempDir(), "admin", adminToken, 0o600)
+	for _, tc := range []struct {
+		name, auth, token string
+		kind              v1.Kind
+		ns                string
+	}{
+		{"auth.token", "auth:\n  token: " + legacyToken + "\n", legacyToken, v1.KindFunction, "default"},
+		{"auth.credentials", "auth:\n  credentials:\n" + entry(admin, "admin"), adminToken, v1.KindNamespace, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, port, err := net.SplitHostPort(freeAddr(t))
+			require.NoError(t, err)
+			logs := serveDaemon(t, "server:\n  listenAddr: 0.0.0.0:"+port+"\n"+tc.auth)
+			addr := "127.0.0.1:" + port
+			waitServed(t, addr, tc.token, tc.kind, tc.ns)
+
+			builtIn, err := sdk.New("http://"+addr, sdk.WithToken(funcd.DevToken))
+			require.NoError(t, err)
+			_, err = builtIn.List(context.Background(), tc.kind, v1.NamespaceName(tc.ns))
+			requireKind(t, fault.Unauthorized, err, "the built-in dev token is not among its tokens")
+			require.NotContains(t, logs.String(), "built-in dev token", "no warning about a token not in effect")
+		})
+	}
+	t.Run("empty-address", func(t *testing.T) {
+		cfg, err := loadConfig(t, shortDataDir(t), "server:\n  listenAddr: \"\"\nauth:\n  token: "+legacyToken+"\n")
+		require.NoError(t, err)
+		require.Empty(t, cfg.Server.ListenAddr, "the key stays empty, so New binds Production()'s default")
+		require.NoError(t, checkBuiltInTokenBind(cfg), "a real credential passes the rule")
+	})
+}
+
+// scenario: edge-auth-follows-the-rule (ADR-0314 Decision 6)
+func TestScenarioEdgeAuthFollowsTheRule(t *testing.T) {
+	const edgeOn = "  auth:\n    edge: true\n"
+	t.Run("edge-on-off-loopback-refused", func(t *testing.T) {
+		for _, form := range builtInTokenForms() {
+			t.Run(form.name, func(t *testing.T) {
+				if form.env[0] != "" {
+					t.Setenv(form.env[0], form.env[1])
+				}
+				dataDir := filepath.Join(shortDataDir(t), "data")
+				path := writeDaemonConfig(t, dataDir, "server:\n  listenAddr: 127.0.0.1:0\n  dataPlaneAddr: 0.0.0.0:0\n"+edgeOn+form.auth)
+				err := serve(context.Background(), path, nil, io.Discard)
+				requireBuiltInTokenRefused(t, err, dataDir, "server.dataPlaneAddr (FUNCD_DATA_PLANE_ADDR)", "0.0.0.0:0")
+				require.ErrorContains(t, err, "server.auth.edge is on")
+			})
+		}
+	})
+	t.Run("edge-off-starts", func(t *testing.T) {
+		addr := freeAddr(t)
+		serveDaemon(t, "server:\n  listenAddr: "+addr+"\n  dataPlaneAddr: 0.0.0.0:0\n")
+		waitServed(t, addr, funcd.DevToken, v1.KindFunction, "default")
+	})
+	t.Run("edge-on-loopback-starts", func(t *testing.T) {
+		addr := freeAddr(t)
+		serveDaemon(t, "server:\n  listenAddr: "+addr+"\n  dataPlaneAddr: 127.0.0.1:0\n"+edgeOn)
+		waitServed(t, addr, funcd.DevToken, v1.KindFunction, "default")
+	})
+	t.Run("edge-on-real-token-starts", func(t *testing.T) {
+		addr := freeAddr(t)
+		serveDaemon(t, "server:\n  listenAddr: "+addr+"\n  dataPlaneAddr: 0.0.0.0:0\n"+edgeOn+"auth:\n  token: "+legacyToken+"\n")
+		waitServed(t, addr, legacyToken, v1.KindFunction, "default")
 	})
 }
 

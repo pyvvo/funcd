@@ -18,7 +18,9 @@ import (
 // — memory store, gocloud mem bucket, embedded memory-storage NATS, process
 // runtime, embedded reverse-proxy gateway, a stdout text logger, and the no-op
 // telemetry pipeline. No root, no containerd, no network: the e2e-harness preset
-// every later feature embeds. Drivers that need a context at construction use
+// every later feature embeds. Its DevToken works only on loopback, so an address off
+// loopback also takes WithCredentials or WithDevAuth with another token (ADR-0314).
+// Drivers that need a context at construction use
 // context.Background() (the facade's New is ctx-free, ADR-0002/ADR-0014); they are
 // released by Shutdown.
 func InMemory() Option {
@@ -88,7 +90,8 @@ func Production() Option {
 		c.telemetry = telemetry
 
 		// Control plane (ADR-0028): a public bind + RBAC, but deliberately NO default
-		// credential — the operator supplies WithCredentials or WithDevAuth (no default prod token).
+		// credential — the operator supplies WithCredentials or WithDevAuth (no default prod token),
+		// and New refuses the built-in DevToken on this bind (ADR-0314).
 		c.listenAddr = "0.0.0.0:8080"
 		c.authorizer = rbac.New()
 		c.localNode = "local"

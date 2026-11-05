@@ -483,7 +483,7 @@ func Defaults() Config { return defaults() }
 // Load after the merge, when DataDir is final.
 func defaults() Config {
 	var c Config
-	c.Server.ListenAddr = "0.0.0.0:8080"
+	c.Server.ListenAddr = "127.0.0.1:8080"
 	c.Server.DataPlaneAddr = "127.0.0.1:0"
 	c.Server.BaseDomain = "localhost"
 	c.Server.Limits.MaxKeys = 4096

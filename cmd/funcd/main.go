@@ -154,6 +154,10 @@ func serve(parent context.Context, configPath string, memoryFlag *bool, out io.W
 	if err != nil {
 		return err
 	}
+	// ADR-0314 Decision 3: a config mistake, refused before the data directory, so it never counts as a start (ADR-0207).
+	if err := checkBuiltInTokenBind(cfg); err != nil {
+		return err
+	}
 
 	if err := os.MkdirAll(cfg.Storage.DataDir, 0o700); err != nil {
 		return fmt.Errorf("create data dir %s: %w", cfg.Storage.DataDir, err)
