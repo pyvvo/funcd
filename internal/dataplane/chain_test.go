@@ -158,12 +158,14 @@ func TestScenarioTheByNameFormKeepsItsStance(t *testing.T) {
 	require.Zero(t, scaler.count())
 }
 
-// The built-in plugins run in ADR-0302's order, at their points, on exactly the callers Decision 4 names.
+// The built-in plugins run in ADR-0302's order, at their points, on exactly the callers Decision 4 names, and
+// ADR-0316's health-paths comes last.
 func TestPluginsKeepTheirCallers(t *testing.T) {
 	t.Parallel()
 	callers := map[string][]invoke.Caller{
 		"authn": {invoke.External}, "hold": {invoke.External, invoke.FnToFn}, "rate": {invoke.External},
 		"credentials": {invoke.External}, "prefix": {invoke.External}, "envelope": {invoke.External}, "deadline": {invoke.External},
+		"health-paths": {invoke.External},
 	}
 	httpFn := &v1.Function{}
 	httpFn.Spec.Protocol = v1.ProtocolHTTP
@@ -172,13 +174,13 @@ func TestPluginsKeepTheirCallers(t *testing.T) {
 		names = append(names, p.Name())
 		_, admit := p.(invoke.AdmitPlugin)
 		_, before := p.(invoke.BeforePlugin)
-		require.Equal(t, p.Name() == "authn", admit && !before, "%s runs at Admit only if it is authn", p.Name())
+		require.Equal(t, p.Name() == "authn" || p.Name() == "health-paths", admit && !before, "%s runs at Admit only if it is authn or health-paths", p.Name())
 		for _, caller := range []invoke.Caller{invoke.External, invoke.FnToFn, invoke.WorkflowStep, invoke.SensorAction, invoke.AppHook} {
-			c := &invoke.Call{Caller: caller, Stance: v1.AuthAuthenticated, Function: httpFn, Request: httptest.NewRequest(http.MethodPost, "/", nil)}
+			c := &invoke.Call{Caller: caller, Stance: v1.AuthAuthenticated, Function: httpFn, Remainder: "/health/readiness", Request: httptest.NewRequest(http.MethodPost, "/", nil)}
 			require.Equal(t, slices.Contains(callers[p.Name()], caller), p.Applies(c), "%s on a %v call", p.Name(), caller)
 		}
 	}
-	require.Equal(t, []string{"authn", "hold", "rate", "credentials", "prefix", "envelope", "deadline"}, names)
+	require.Equal(t, []string{"authn", "hold", "rate", "credentials", "prefix", "envelope", "deadline", "health-paths"}, names)
 }
 
 // The answer check never runs on a 101: the tunnel after it is not an answer, so an After plugin that reads bodies

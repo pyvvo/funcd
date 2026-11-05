@@ -14,7 +14,7 @@ stateDiagram-v2
     Resolve --> Admit : a Function rule, or its name
     Direct --> Answered : the file, or the Lake answers
     Direct --> Refused : no object, or the Lake is down
-    Admit --> Refused : stance not met, Function missing
+    Admit --> Refused : stance not met, a health path, Function missing
     Admit --> Before : admitted
     Before --> Refused : hold, rate, body, contract
     Before --> Wake : deadline set
@@ -55,7 +55,10 @@ and no call reads it; `NetDestination` and `Invocation` are no step of a call. N
 | A link's timeout | A nested call keeps its own bound, wake included, not its caller's deadline | `defaultTimeout` 30 s, or the link's `timeout` | 503 `upstream call failed` | decided | ADR-0064 Decision 4, `TestScenarioLinkKeepsOwnLimit` |
 | Nested calls to one Function | Over the cap the next call is refused at once, whoever calls | `invoke.maxNestedInFlight` 10 | 429 `<ns>/<name> has 10 nested calls in flight, the cap set by invoke.maxNestedInFlight` | decided | ADR-0147 Decision 3, `TestScenarioInflightFanoutOverCap` |
 | A Site's deploy | The last good build serves until the new index is written and the Route moves | none | `Ready=False`, `IndexMissing` or `ArtifactNotFound` | decided | ADR-0139 Decision 3, `TestScenarioRedeploySwapsAtomically` |
-| A GET or another path on a cloudevent Function | Unless its contract refuses the input, it wakes the worker, whose shim answers only `POST /` | a cold start | the shim's 404 | decided | ADR-0134 Contracts Wiring, ADR-0016 Decision 3, ADR-0243 Context |
+| A GET or another path on a cloudevent Function | Unless it lies under `/health/` or its contract refuses the input, it wakes the worker, whose shim answers only `POST /` | a cold start | the shim's 404 | decided | ADR-0134 Contracts Wiring, ADR-0016 Decision 3, ADR-0243 Context |
+| A path under `/health/` | Refused once the stance is met, by name and through a Route, with any method and whatever the Function's state. Nothing wakes and no worker is called | none | 404 `no route for "<path>"`; 401 or 403 first | decided | ADR-0316 Decisions 1 and 2, `TestScenarioAHealthPathAnswers404`, `TestScenarioTheStanceAnswersFirst` |
+| An http app's route under `/health/` | The edge answers it, so a route such as `/health/db` answers only over a link; the app's `/health` itself still answers | none | 404 `no route for "<path>"` | accepted | ADR-0316 Consequences, `TestScenarioOtherPathsReachTheWorker` |
+| A health path over a link | Another Function's `ctx.fetch` reaches these paths on an http Function: it holds a link and passes `link::invoke` | none | the worker's answer | accepted | ADR-0316 Scope and Risks accepted, `TestScenarioAnotherFunctionKeepsThePath` |
 | A `Gateway` object | Stored and listed; nothing acts on it | none | no status | accepted | ADR-0003 Consequences, `TestScenario_KindRegistryRoundtripsEveryKind` |
 
 <!-- generated values, do not edit: just behavior-values -->

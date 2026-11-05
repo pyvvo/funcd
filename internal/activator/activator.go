@@ -563,7 +563,7 @@ func KeepEdgeHeaders(rp *httputil.ReverseProxy, w http.ResponseWriter) {
 func rebase(r *http.Request, base string) *http.Request {
 	out := r.WithContext(r.Context())
 	u := *r.URL
-	if rest := rootedClean(u.Path); rest == "/" {
+	if rest := RootedClean(u.Path); rest == "/" {
 		u.Path = base
 	} else {
 		u.Path = strings.TrimSuffix(base, "/") + rest
@@ -573,8 +573,8 @@ func rebase(r *http.Request, base string) *http.Request {
 	return out
 }
 
-// rootedClean resolves the dot segments of p as a path rooted at "/" and keeps a trailing slash.
-func rootedClean(p string) string {
+// RootedClean resolves the dot segments of p as a path rooted at "/" and keeps a trailing slash.
+func RootedClean(p string) string {
 	c := path.Clean("/" + p)
 	if c != "/" && strings.HasSuffix(p, "/") {
 		c += "/"
