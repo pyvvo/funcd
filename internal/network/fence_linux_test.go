@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"testing"
 
+	"github.com/google/nftables/binaryutil"
 	"github.com/google/nftables/expr"
 	"github.com/stretchr/testify/require"
 )
@@ -23,6 +24,7 @@ func TestScenarioFenceRefusesOtherDestinations(t *testing.T) {
 	}
 	require.IsType(t, &expr.Meta{}, rules[0][0])
 	require.Equal(t, expr.MetaKeyOIF, rules[0][0].(*expr.Meta).Key, "rule 0 accepts loopback")
+	require.Equal(t, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: binaryutil.NativeEndian.PutUint32(1)}, rules[0][1], "and only loopback")
 	require.IsType(t, &expr.Ct{}, rules[1][0], "rule 1 accepts established or related traffic")
 	var dst, port []byte
 	for _, e := range rules[2] {
