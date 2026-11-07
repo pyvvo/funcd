@@ -1096,17 +1096,13 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, folder *devFold
 	return append(opts, shimOpts...), nil
 }
 
-// devLakeOptions wires the lake dev engine (ADR-0125 Decision 5) when the folder holds a Lake or a
-// Function binds one: the process-mode DuckDB+Quack engine driver (internal/lake/devengine) becomes the
-// Lake add-on-provider runtime, running the go:embed'd engine as a host subprocess (no container, no cgo). A
-// dev binary built WITHOUT the engine reports lake-unavailable at reconcile time, not here, so `funcdctl dev` still
-// boots. It records the served lakes and registers each cleanup on inst; no lake ⇒ no options.
+// devLakeOptions wires the lake dev engine (ADR-0125 Decision 5): the process-mode DuckDB+Quack engine driver
+// (internal/lake/devengine) becomes the Lake add-on-provider runtime, running the go:embed'd engine as a host
+// subprocess (no container, no cgo), whether or not the folder holds a Lake at start, so a Lake a reload adds is
+// served too (#1409). A dev binary built WITHOUT the engine reports lake-unavailable at reconcile time, not here, so
+// `funcdctl dev` still boots. It records the lakes served at start and registers each cleanup on inst.
 func devLakeOptions(plan persistPlan, stateDir string, folder *devFolder, inst *devInstance) ([]funcd.Option, error) {
-	names := folder.lakeNames()
-	if len(names) == 0 && !slices.ContainsFunc(folder.functions, func(f *devFunction) bool { return len(f.fn.Spec.Bindings.Lake) > 0 }) {
-		return nil, nil
-	}
-	inst.lakes = names
+	inst.lakes = folder.lakeNames()
 	// Under --persist, the DuckLake catalog lives in a durable per-provider dir (mirroring the
 	// metastore) so a dev restart reopens it; ephemeral otherwise.
 	catOpts := []devengine.Option{devengine.WithStateDir(stateDir)}
@@ -1122,10 +1118,12 @@ func devLakeOptions(plan persistPlan, stateDir string, folder *devFolder, inst *
 
 	// A lake CONSUMER handler runs its own duckdb (from the dev venv) and must LOAD the curated
 	// quack/ducklake extensions — in prod those ride the bundle's duckdb-ext (ADR-0089), absent when
-	// running from source. Extract the embedded engine's extensions once and point consumers at them
-	// via DUCKDB_EXTENSION_DIRECTORY (ADR-0125 dev-lake-query). A placeholder build (no engine)
-	// skips it — the same not-bundled path the provider engine reports at reconcile time.
-	if embedengine.Bundled() {
+	// running from source. Extract the embedded engine's extensions once, when the folder holds a Lake or a Function
+	// binds one at start (ADR-0130 Decision 2), and point consumers at them via DUCKDB_EXTENSION_DIRECTORY (ADR-0125
+	// dev-lake-query). A placeholder build (no engine) skips it — the same not-bundled path the provider engine reports
+	// at reconcile time.
+	bound := len(inst.lakes) > 0 || slices.ContainsFunc(folder.functions, func(f *devFunction) bool { return len(f.fn.Spec.Bindings.Lake) > 0 })
+	if bound && embedengine.Bundled() {
 		if extRoot, xerr := os.MkdirTemp("", "funcd-dev-duckdb-ext-*"); xerr == nil {
 			if paths, perr := embedengine.Extract(extRoot); perr == nil {
 				opts = append(opts, funcd.WithLakeExtensionDir(paths.ExtensionDir))

@@ -13828,5 +13828,20 @@
     "dod_total": 12,
     "report": "docs/reviews/python-request-head-fix-claude-opus-5-5.md",
     "notes": "round 2, the rework: pass; minors: moved tests lost assertions, new tests pinned an open row, an open framing row, one sentence on methods, a long timeout header (not from this work); folded or routed"
+  },
+  {
+    "date": "2026-11-07",
+    "issue": "1409",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 0,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-1409-fix-claude-opus-5-5.md",
+    "notes": "pass; 1 minor (env): the extension-extraction guard cannot be tested on a build without the engine; a self-review, not independent"
   }
 ]
