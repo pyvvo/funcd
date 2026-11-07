@@ -937,8 +937,8 @@ func (s *devAppSession) inputsStamp() (string, error) {
 }
 
 // platformFolder is the devFolder devPlatformOptions reads for app: the template directory, the --apply documents and
-// a Lake per lakes entry (which wire the SQL and lake engines as in folder mode, Decision 5), and a
-// Function per function part and per step that dev built (which pick the shims).
+// a Lake per lakes entry (which wire the SQL engine and name the lakes served at start, as in folder mode, Decision 5),
+// and a Function per function part and per step that dev built (which pick the shims).
 func (s *devAppSession) platformFolder(app *v1.App, docs []v1.Object) *devFolder {
 	byDigest := map[string]*devImage{}
 	for _, img := range s.images {
