@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.39.3](https://github.com/pyvvo/funcd/compare/v0.39.2...v0.39.3) (2026-11-07)
+
+
+### Bug Fixes
+
+* **funcdctl:** funcdctl dev's Lake engine creates its S3 secret again ([#1415](https://github.com/pyvvo/funcd/issues/1415)) ([dc2955f](https://github.com/pyvvo/funcd/commit/dc2955f63c6e2e3fbd92e14672e9a5574133dd9b))
+
 ## [0.39.2](https://github.com/pyvvo/funcd/compare/v0.39.1...v0.39.2) (2026-11-07)
 
 
