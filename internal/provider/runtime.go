@@ -212,13 +212,7 @@ func (r *engineRuntime) Converge(ctx context.Context, spec ProviderSpec) (Provid
 				}
 			}
 			ws := r.workerSpec(spec, i)
-			if spec.IssueEnv != nil {
-				ws.Env = maps.Clone(ws.Env)
-				if ws.Env == nil {
-					ws.Env = map[string]string{}
-				}
-				maps.Copy(ws.Env, spec.IssueEnv())
-			}
+			ws.Env = spec.LaunchEnv()
 			r.unenforced.Warn(ctx, r.logger, r.rt, string(spec.Ref.Namespace)+"/"+string(spec.Ref.Name), ws.Limits)
 			if serr := r.makeScratch(ctx, spec); serr != nil {
 				return ProviderStatus{}, serr

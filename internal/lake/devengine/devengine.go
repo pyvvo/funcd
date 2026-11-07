@@ -283,7 +283,7 @@ func (r *Runtime) launch(ctx context.Context, spec provider.ProviderSpec) (*engi
 	}
 
 	initFile := filepath.Join(dir, "init.sql")
-	if werr := os.WriteFile(initFile, []byte(buildInitSQL(paths.ExtensionDir, catalogFile, spec.Env)), 0o600); werr != nil {
+	if werr := os.WriteFile(initFile, []byte(buildInitSQL(paths.ExtensionDir, catalogFile, spec.LaunchEnv())), 0o600); werr != nil {
 		_ = os.RemoveAll(dir)
 		return nil, fault.Wrapf(werr, fault.Internal, op, "write init.sql")
 	}
