@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.39.2](https://github.com/pyvvo/funcd/compare/v0.39.1...v0.39.2) (2026-11-07)
+
+
+### Bug Fixes
+
+* **blob:** a failed read in a Bucket's lookup answers InternalError, not NoSuchBucket ([#1413](https://github.com/pyvvo/funcd/issues/1413)) ([efd5fe5](https://github.com/pyvvo/funcd/commit/efd5fe5bef02241f6de0e27c3649804434fc397a))
+* **funcdctl:** a Lake added while funcdctl dev runs gets dev's Lake engine ([#1410](https://github.com/pyvvo/funcd/issues/1410)) ([d28fb7f](https://github.com/pyvvo/funcd/commit/d28fb7fd99f7c932f75b0e39a014c4ad158925b5))
+
 ## [0.39.1](https://github.com/pyvvo/funcd/compare/v0.39.0...v0.39.1) (2026-11-05)
 
 
