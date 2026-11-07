@@ -38,8 +38,9 @@ const (
 )
 
 // BucketResolver resolves a (namespace, bucket) to its per-namespace blob view — the SAME s3BucketFor
-// the S3 frontend and the ADR-0120 static handler use, so one substrate serves all three.
-type BucketResolver func(ns v1.NamespaceName, bucket string) (blob.Bucket, bool)
+// the S3 frontend and the ADR-0120 static handler use, so one substrate serves all three. A missing Bucket is
+// fault.NotFound; any other error is a failed lookup.
+type BucketResolver func(ns v1.NamespaceName, bucket string) (blob.Bucket, error)
 
 // Deps are the reconciler's dependencies; Store and Buckets are required.
 type Deps struct {
@@ -143,9 +144,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	if reason != "" {
 		return r.publish(ctx, s, outcome{digest: serving, cond: notReady(reason, msg)})
 	}
-	view, ok := r.buckets(s.Namespace, string(s.Spec.ServedBucket()))
-	if !ok {
-		return controller.Result{}, fault.Internalf(op, "bucket %s/%s has no substrate view", s.Namespace, s.Spec.ServedBucket())
+	view, err := r.buckets(s.Namespace, string(s.Spec.ServedBucket()))
+	if err != nil {
+		return controller.Result{}, fault.Wrapf(err, fault.Internal, op, "bucket %s/%s has no substrate view", s.Namespace, s.Spec.ServedBucket())
 	}
 
 	sp, index := servingPrefix(s.Spec.ServedPrefix(), target), indexOf(s, r.defaultIndex)

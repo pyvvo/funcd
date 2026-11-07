@@ -97,11 +97,11 @@ func blobHandler(t *testing.T, ns v1.NamespaceName, pdp auth.Authorizer, bkt ibl
 	t.Helper()
 	f, err := blobsvc.NewFacade(blobsvc.FacadeDeps{
 		Resolver: fakeBlobResolver{},
-		BucketFor: func(_ v1.NamespaceName, name string) (iblob.Bucket, bool) {
+		BucketFor: func(_ v1.NamespaceName, name string) (iblob.Bucket, error) {
 			if name == "bkt" {
-				return bkt, true
+				return bkt, nil
 			}
-			return nil, false
+			return nil, fault.NotFoundf("test", "no bucket %q", name)
 		},
 		Authorizer: pdp,
 	})

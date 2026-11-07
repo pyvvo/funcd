@@ -29,8 +29,9 @@ import (
 )
 
 // BucketResolver maps an (ns, bucket-name) to a prefixed substrate view — the s3gateway BucketFor
-// (pkg/funcd's s3BucketFor). A miss (no such bucket) ⇒ the facade returns fault.NotFound.
-type BucketResolver func(ns v1.NamespaceName, bucket string) (blob.Bucket, bool)
+// (pkg/funcd's s3BucketFor). A miss (no such bucket) is fault.NotFound, which the facade returns as such; any other
+// error is a failed lookup, which it returns with its kind.
+type BucketResolver func(ns v1.NamespaceName, bucket string) (blob.Bucket, error)
 
 // FacadeDeps configures the blob facade (the PEP). The Resolver (ADR-0127/0073) resolves the
 // alias→(bucket,prefix) NAMING; the BucketFor maps (ns,bucket)→substrate; the Authorizer (ADR-0080
@@ -113,9 +114,12 @@ func (f *Facade) resolveAuth(ctx context.Context, ns v1.NamespaceName, fn v1.Obj
 	if err := f.authorize(ctx, ns, fn, action, b); err != nil {
 		return Binding{}, nil, err
 	}
-	sub, ok := f.bucketFor(ns, string(b.Bucket))
-	if !ok {
+	sub, err := f.bucketFor(ns, string(b.Bucket))
+	if fault.KindOf(err) == fault.NotFound {
 		return Binding{}, nil, fault.NotFoundf(op, "binding %q references missing bucket %q", alias, b.Bucket)
+	}
+	if err != nil {
+		return Binding{}, nil, fault.Wrapf(err, fault.KindOf(err), op, "look up bucket %q of binding %q", b.Bucket, alias)
 	}
 	return b, sub, nil
 }

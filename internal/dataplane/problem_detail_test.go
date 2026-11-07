@@ -92,7 +92,7 @@ func TestServerFaultCauseGoesToTheLog(t *testing.T) {
 	mem, err := gocloud.Open(ctx, "mem://")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = mem.Close() })
-	stat, err := static.New(static.Deps{Buckets: func(v1.NamespaceName, string) (blob.Bucket, bool) { return failingAttributes{mem}, true }})
+	stat, err := static.New(static.Deps{Buckets: func(v1.NamespaceName, string) (blob.Bucket, error) { return failingAttributes{mem}, nil }})
 	require.NoError(t, err)
 	site := router.New()
 	require.NoError(t, site.Program(ctx, []router.Entry{{

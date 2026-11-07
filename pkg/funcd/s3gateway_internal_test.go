@@ -344,9 +344,9 @@ func TestIssue109_BucketMaxObjectBytesRejectsOversizeWrite(t *testing.T) {
 	if !errors.As(perr, &coded) || coded.ErrorCode() != "EntityTooLarge" {
 		t.Fatalf("an over-cap PutObject must be EntityTooLarge, got %v", perr)
 	}
-	view, ok := s3BucketFor(p.cfg.blob, st, quota.None)("default", "lake")
-	if !ok {
-		t.Fatal("the Bucket view must resolve")
+	view, verr := s3BucketFor(p.cfg.blob, st, quota.None)("default", "lake")
+	if verr != nil {
+		t.Fatalf("the Bucket view must resolve: %v", verr)
 	}
 	if found, _ := view.Exists(ctx, "raw/big.parquet"); found {
 		t.Fatal("the over-cap object must not be stored")

@@ -48,7 +48,7 @@ func TestFacadeCheckRead(t *testing.T) {
 
 	gone, err := svcblob.NewFacade(svcblob.FacadeDeps{
 		Resolver:   fakeResolver{},
-		BucketFor:  func(v1.NamespaceName, string) (iblob.Bucket, bool) { return nil, false },
+		BucketFor:  func(v1.NamespaceName, string) (iblob.Bucket, error) { return nil, fault.NotFoundf("test", "no bucket") },
 		Authorizer: s3PDP{readOK: true},
 	})
 	require.NoError(t, err)

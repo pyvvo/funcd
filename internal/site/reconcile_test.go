@@ -69,17 +69,17 @@ func newHarness(t *testing.T) *harness {
 	return h
 }
 
-func (h *harness) resolve(n v1.NamespaceName, b string) (blob.Bucket, bool) {
+func (h *harness) resolve(n v1.NamespaceName, b string) (blob.Bucket, error) {
 	obj, err := h.st.Get(h.ctx, v1.KindBucket.GVK(), n, v1.ObjectName(b))
 	if err != nil {
-		return nil, false
+		return nil, err
 	}
 	view := blob.Prefixed(h.shared, "s3/"+string(n)+"/"+b+"/")
 	if h.quota != nil {
 		subject := quota.Subject{Kind: v1.KindBucket, Namespace: n, Name: v1.ObjectName(b)}
 		view = blob.Quoted(view, h.quota, subject, func(string) bool { return true })
 	}
-	return blob.Capped(view, obj.(*v1.Bucket).Spec.Quota.MaxObjectBytes), true
+	return blob.Capped(view, obj.(*v1.Bucket).Spec.Quota.MaxObjectBytes), nil
 }
 
 // fullBucket is the quota of a Bucket at its cap: it refuses every write but a delete (ADR-0292).
@@ -690,8 +690,8 @@ func TestSite_ObjectOverBucketCapIsNotReadyNotRetried(t *testing.T) {
 	h := newHarness(t)
 	digest := h.push("v1", map[string]string{"index.html": "<title>A</title>", "big.bin": strings.Repeat("x", 100)})
 	h.seedBucket(64, "bi")
-	view, ok := h.resolve(ns, bucket)
-	require.True(t, ok)
+	view, err := h.resolve(ns, bucket)
+	require.NoError(t, err)
 	require.Equal(t, fault.PayloadTooLarge, fault.KindOf(view.Put(h.ctx, "probe", make([]byte, 65), blob.PutOptions{})), "blob.Capped refuses with PayloadTooLarge")
 	h.seedSite("bi", "v1", byRef)
 	h.seedSite("other", "v1", func(s *v1.Site) {

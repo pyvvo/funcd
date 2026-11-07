@@ -157,9 +157,7 @@ func TestScenarioSiteServesWhileHeld(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = b.Close() })
 	require.NoError(t, b.Put(context.Background(), "web/index.html", []byte("INDEX"), blob.PutOptions{}))
-	sh, err := static.New(static.Deps{Buckets: func(ns v1.NamespaceName, bucket string) (blob.Bucket, bool) {
-		return b, ns == "orders" && bucket == "site"
-	}})
+	sh, err := static.New(static.Deps{Buckets: onlyBucket(b, "orders", "site")})
 	require.NoError(t, err)
 	h := edgeDoor(t, []router.Entry{{Namespace: "orders", Auth: v1.AuthOpen,
 		Rules: []router.CompiledRule{{Path: "/", Static: &v1.StaticBackend{Bucket: "site", Prefix: "web/", Index: "index.html"}}}}},

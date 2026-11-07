@@ -42,9 +42,9 @@ const shutdownRetry = 10 * time.Millisecond
 
 // Deps configures the s3gateway server (ADR-0080 + ADR-0085).
 type Deps struct {
-	// BucketFor resolves (namespace, Bucket name) → the substrate bucket view. ok=false
-	// when no such Bucket exists for that namespace (⇒ NoSuchBucket).
-	BucketFor func(ns v1.NamespaceName, bucket string) (blob.Bucket, bool)
+	// BucketFor resolves (namespace, Bucket name) → the substrate bucket view: fault.NotFound when no such Bucket
+	// exists for that namespace (⇒ NoSuchBucket), any other error when the lookup failed (⇒ InternalError).
+	BucketFor func(ns v1.NamespaceName, bucket string) (blob.Bucket, error)
 	// Buckets lists a namespace's Bucket resources; HeadBucket and ListBuckets answer
 	// from it, keeping only the Buckets the caller is bound to.
 	Buckets func(ctx context.Context, ns v1.NamespaceName) ([]v1.Bucket, error)

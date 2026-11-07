@@ -81,8 +81,8 @@ func TestDeleteBucketPurgesTheSubstratePrefix(t *testing.T) {
 	onEachSubstrate(t, func(t *testing.T, ctx context.Context, shared blob.Bucket, base store.Store) {
 		b := createBucket(t, base, "default", "tmp")
 		createBucket(t, base, "default", "tmp2")
-		view, ok := s3BucketFor(shared, base, quota.None)("default", "tmp")
-		require.True(t, ok)
+		view, verr := s3BucketFor(shared, base, quota.None)("default", "tmp")
+		require.NoError(t, verr)
 		for i := range purgePage + 1 {
 			require.NoError(t, view.Put(ctx, fmt.Sprintf("raw/part-%04d", i), []byte("x"), blob.PutOptions{}))
 		}

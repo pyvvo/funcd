@@ -200,9 +200,7 @@ func TestScenarioStalledStaticAssetIsCut(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = b.Close() })
 	require.NoError(t, b.Put(context.Background(), "web/big.bin", bytes.Repeat([]byte("s"), asset), blob.PutOptions{}))
-	sh, err := static.New(static.Deps{Buckets: func(ns v1.NamespaceName, bucket string) (blob.Bucket, bool) {
-		return b, ns == "default" && bucket == "site"
-	}})
+	sh, err := static.New(static.Deps{Buckets: onlyBucket(b, "default", "site")})
 	require.NoError(t, err)
 	rtr := router.New()
 	require.NoError(t, rtr.Program(context.Background(), []router.Entry{{

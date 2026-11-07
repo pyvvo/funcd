@@ -48,8 +48,8 @@ func TestScenarioFloorRefusesWorkloadWrites(t *testing.T) {
 	_, err := engine.PutObject(ctx, &awss3.PutObjectInput{Bucket: aws.String(v1.LakeCatalogBucket),
 		Key: aws.String("media/gold/_ducklake/catalog.db"), Body: bytes.NewReader(make([]byte, 64))})
 	requireQuotaExceeded(t, err)
-	view, ok := s3BucketFor(p.cfg.blob, p.cfg.store, p.checker)("default", "media")
-	require.True(t, ok)
+	view, verr := s3BucketFor(p.cfg.blob, p.cfg.store, p.checker)("default", "media")
+	require.NoError(t, verr)
 	require.Equal(t, fault.InsufficientStorage, fault.KindOf(view.Put(ctx, "raw/c", []byte("x"), blob.PutOptions{})),
 		"ctx.blob writes through the same view")
 
@@ -85,8 +85,8 @@ func belowFloor(t *testing.T) (*Platform, *sdk.Client) {
 
 func requireWorkloadWriteRefused(t *testing.T, p *Platform) {
 	t.Helper()
-	view, ok := s3BucketFor(p.cfg.blob, p.cfg.store, p.checker)("default", "media")
-	require.True(t, ok)
+	view, verr := s3BucketFor(p.cfg.blob, p.cfg.store, p.checker)("default", "media")
+	require.NoError(t, verr)
 	require.Equal(t, fault.InsufficientStorage, fault.KindOf(view.Put(context.Background(), "raw/a", []byte("x"), blob.PutOptions{})),
 		"a workload write is refused")
 }

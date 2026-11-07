@@ -94,7 +94,7 @@ func namespaceReadDoor(t *testing.T, logger *slog.Logger) (http.Handler, *namesp
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = bucket.Close() })
 	require.NoError(t, bucket.Put(context.Background(), "web/index.html", []byte(siteFile), blob.PutOptions{}))
-	sh, err := static.New(static.Deps{Buckets: func(v1.NamespaceName, string) (blob.Bucket, bool) { return bucket, true }})
+	sh, err := static.New(static.Deps{Buckets: func(v1.NamespaceName, string) (blob.Bucket, error) { return bucket, nil }})
 	require.NoError(t, err)
 
 	tokens := creds{"tok": {Subject: "dev", Role: auth.RoleDeveloper, Namespaces: []v1.NamespaceName{"team"}}}

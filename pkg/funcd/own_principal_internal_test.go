@@ -288,8 +288,8 @@ func TestScenarioKeysReissuedOnUpgrade(t *testing.T) {
 	fn.Spec.Scaling.MinReplicas = 1
 	seedObjects(t, p.cfg.store, bucket, fn, lakeResource("default"))
 
-	view, ok := s3BucketFor(p.cfg.blob, p.cfg.store, quota.None)("default", "lakehouse")
-	require.True(t, ok)
+	view, verr := s3BucketFor(p.cfg.blob, p.cfg.store, quota.None)("default", "lakehouse")
+	require.NoError(t, verr)
 	require.NoError(t, view.Put(ctx, "a/x", []byte("fn"), blob.PutOptions{}))
 	require.NoError(t, view.Put(ctx, "raw/x", []byte("engine"), blob.PutOptions{}))
 

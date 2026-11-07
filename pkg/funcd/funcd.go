@@ -1804,22 +1804,24 @@ func enqueueAll(ctx context.Context, st store.Store, ctrl *controller.Controller
 // namespacing scheme is a key-prefix view `s3/<ns>/<bucket>/` over the shared bucket —
 // one substrate bucket, many logical S3 buckets — so distinct namespaces and buckets
 // never collide. Existence-by-namespace here gives tenancy a second guard (a missing /
-// cross-namespace bucket is NoSuchBucket); the binding-as-grant Cedar PEP is the
+// cross-namespace bucket is fault.NotFound, NoSuchBucket on the S3 frontend); a failed read of the Bucket is returned
+// as that error, so no caller takes it for a missing Bucket (#1411). The binding-as-grant Cedar PEP is the
 // authorization gate on every object op. The view carries the Bucket's spec.quota: its per-object cap
 // (blob.Capped, a 413 first) over its total sizes (blob.Quoted, ADR-0292), so every write path through it (S3
 // frontend, context.blob, site) enforces them.
-func s3BucketFor(shared blob.Bucket, st store.Store, chk quota.Checker) func(ns v1.NamespaceName, bucket string) (blob.Bucket, bool) {
-	return func(ns v1.NamespaceName, bucket string) (blob.Bucket, bool) {
+func s3BucketFor(shared blob.Bucket, st store.Store, chk quota.Checker) func(ns v1.NamespaceName, bucket string) (blob.Bucket, error) {
+	const op = "funcd.s3BucketFor"
+	return func(ns v1.NamespaceName, bucket string) (blob.Bucket, error) {
 		if bucket == "" {
-			return nil, false
+			return nil, fault.NotFoundf(op, "a bucket needs a name")
 		}
 		obj, err := st.Get(context.Background(), v1.KindBucket.GVK(), ns, v1.ObjectName(bucket))
-		if err != nil {
-			return nil, false
+		if err != nil && fault.KindOf(err) != fault.NotFound {
+			return nil, fault.Wrapf(err, fault.KindOf(err), op, "read bucket %q in namespace %q", bucket, ns)
 		}
 		b, _ := obj.(*v1.Bucket)
 		if b == nil {
-			return nil, false
+			return nil, fault.NotFoundf(op, "bucket %q not found in namespace %q", bucket, ns)
 		}
 		capped := func(prefix string) bool {
 			_, ok := bucketQuota(b, prefix).Limit()
@@ -1827,7 +1829,7 @@ func s3BucketFor(shared blob.Bucket, st store.Store, chk quota.Checker) func(ns 
 		}
 		subject := quota.Subject{Kind: v1.KindBucket, Namespace: ns, Name: v1.ObjectName(bucket)}
 		view := blob.Quoted(blob.Prefixed(shared, bucketPrefix(ns, v1.ObjectName(bucket))), chk, subject, capped)
-		return blob.Capped(view, b.Spec.Quota.MaxObjectBytes), true
+		return blob.Capped(view, b.Spec.Quota.MaxObjectBytes), nil
 	}
 }
 
@@ -2060,16 +2062,16 @@ func lakeAt(st store.Store) func(ctx context.Context, ns v1.NamespaceName, bucke
 
 // blobBucketLister adapts the s3BucketFor resolver to the eventing.BucketLister the BlobWatcher polls
 // (ADR-0119): it resolves (ns, Bucket) to the SAME prefixed substrate view external S3-frontend writes land
-// in, then Lists the prefix over it. A missing Bucket is fault.NotFound (the watcher logs + skips that poll;
-// the reconciler independently marks the source NotReady).
+// in, then Lists the prefix over it. A missing Bucket is fault.NotFound and a failed read of it is that error (the
+// watcher logs + skips that poll; the reconciler independently marks the source NotReady).
 type blobBucketLister struct {
-	resolve func(ns v1.NamespaceName, bucket string) (blob.Bucket, bool)
+	resolve func(ns v1.NamespaceName, bucket string) (blob.Bucket, error)
 }
 
 func (l blobBucketLister) List(ctx context.Context, ns v1.NamespaceName, bucket v1.ObjectName, prefix string) ([]blob.Attributes, error) {
-	b, ok := l.resolve(ns, string(bucket))
-	if !ok {
-		return nil, fault.NotFoundf("funcd.blobBucketLister", "bucket %q not found in namespace %q", bucket, ns)
+	b, err := l.resolve(ns, string(bucket))
+	if err != nil {
+		return nil, err
 	}
 	return b.List(ctx, prefix)
 }

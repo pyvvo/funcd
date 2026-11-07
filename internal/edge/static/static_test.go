@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/blob/gocloud"
@@ -31,11 +32,11 @@ func site(t *testing.T, extra map[string][]byte) *static.Handler {
 	for k, v := range extra {
 		put(k, v)
 	}
-	h, err := static.New(static.Deps{Buckets: func(ns v1.NamespaceName, bucket string) (blob.Bucket, bool) {
+	h, err := static.New(static.Deps{Buckets: func(ns v1.NamespaceName, bucket string) (blob.Bucket, error) {
 		if ns == "analytics" && bucket == "reports" {
-			return b, true
+			return b, nil
 		}
-		return nil, false
+		return nil, fault.NotFoundf("test", "no bucket %s/%s", ns, bucket)
 	}})
 	require.NoError(t, err)
 	return h
@@ -221,7 +222,7 @@ func TestIssue161_SameSecondRedeployIsNotStale304(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = mem.Close() })
 	b := &pinnedModTime{Bucket: mem, modTime: time.Unix(1790905216, 100_000_000)}
-	h, err := static.New(static.Deps{Buckets: func(v1.NamespaceName, string) (blob.Bucket, bool) { return b, true }})
+	h, err := static.New(static.Deps{Buckets: func(v1.NamespaceName, string) (blob.Bucket, error) { return b, nil }})
 	require.NoError(t, err)
 
 	require.NoError(t, b.Put(context.Background(), "bi/index.html", []byte("<title>build v1</title>"), blob.PutOptions{}))
