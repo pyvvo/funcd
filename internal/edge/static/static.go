@@ -31,8 +31,9 @@ const op = "edge.static"
 const defaultIndex = "index.html"
 
 // BucketResolver resolves a (namespace, bucket) to its per-namespace blob view (the same
-// s3BucketFor the S3 frontend uses, ADR-0080). ok=false ⇒ the Bucket is missing / cross-namespace.
-type BucketResolver func(ns v1.NamespaceName, bucket string) (blob.Bucket, bool)
+// s3BucketFor the S3 frontend uses, ADR-0080). fault.NotFound ⇒ the Bucket is missing / cross-namespace; any other
+// error is a failed lookup.
+type BucketResolver func(ns v1.NamespaceName, bucket string) (blob.Bucket, error)
 
 // Deps are the Handler's dependencies.
 type Deps struct {
@@ -75,10 +76,14 @@ func (h *Handler) Serve(w http.ResponseWriter, r *http.Request, ns v1.NamespaceN
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	bucket, ok := h.buckets(ns, string(back.Bucket))
-	if !ok {
+	bucket, err := h.buckets(ns, string(back.Bucket))
+	if fault.KindOf(err) == fault.NotFound {
 		// Tenancy guard: a missing / cross-namespace Bucket is a 404 (no existence oracle).
 		fault.WriteProblem(w, fault.NotFoundf(op, "no static content"))
+		return
+	}
+	if err != nil {
+		fault.WriteProblem(w, fault.Wrapf(err, fault.KindOf(err), op, "look up bucket %q", back.Bucket))
 		return
 	}
 	index := back.Index

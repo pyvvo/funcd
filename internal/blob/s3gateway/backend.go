@@ -37,7 +37,7 @@ const region = "us-east-1"
 // calls the cedar PDP BEFORE touching blob — !Allowed ⇒ S3 AccessDenied (403).
 type be struct {
 	backend.BackendUnsupported
-	bucketFor func(ns v1.NamespaceName, bucket string) (blob.Bucket, bool) // (ns, Bucket) → substrate bucket
+	bucketFor func(ns v1.NamespaceName, bucket string) (blob.Bucket, error) // (ns, Bucket) → substrate bucket
 	buckets   func(ctx context.Context, ns v1.NamespaceName) ([]v1.Bucket, error)
 	pdp       authz.Authorizer
 	external  ExternalKeys
@@ -99,9 +99,13 @@ func (b *be) authorize(ctx context.Context, action authz.Action, bucket, prefix 
 	if !ok {
 		return nil, principal{}, accessDenied()
 	}
-	sub, ok := b.bucketFor(pr.namespace, bucket)
-	if !ok {
+	sub, err := b.bucketFor(pr.namespace, bucket)
+	if fault.KindOf(err) == fault.NotFound {
 		return nil, pr, s3err.GetAPIError(s3err.ErrNoSuchBucket)
+	}
+	if err != nil {
+		b.log.Error("s3 bucket lookup error", "bucket", bucket, "namespace", pr.namespace, "err", err)
+		return nil, principal{}, s3err.GetAPIError(s3err.ErrInternalError)
 	}
 	return sub, pr, nil
 }

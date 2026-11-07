@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/activator"
 	"github.com/pyvvo/funcd/internal/blob"
@@ -35,9 +36,7 @@ func TestIssue108_StaticPathDecodedOnce(t *testing.T) {
 	} {
 		require.NoError(t, b.Put(context.Background(), k, []byte(v), blob.PutOptions{}))
 	}
-	sh, err := static.New(static.Deps{Buckets: func(ns v1.NamespaceName, bucket string) (blob.Bucket, bool) {
-		return b, ns == "default" && bucket == "site"
-	}})
+	sh, err := static.New(static.Deps{Buckets: onlyBucket(b, "default", "site")})
 	require.NoError(t, err)
 
 	rtr := router.New()
@@ -70,5 +69,15 @@ func TestIssue108_StaticPathDecodedOnce(t *testing.T) {
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
 		require.Equal(t, http.StatusNotFound, rec.Code, "GET %s", target)
 		require.NotContains(t, rec.Body.String(), "TOP-SECRET", "GET %s escaped the prefix", target)
+	}
+}
+
+// onlyBucket resolves Bucket name of namespace ns to b, and any other to fault.NotFound.
+func onlyBucket(b blob.Bucket, ns v1.NamespaceName, name string) static.BucketResolver {
+	return func(gotNS v1.NamespaceName, got string) (blob.Bucket, error) {
+		if gotNS == ns && got == name {
+			return b, nil
+		}
+		return nil, fault.NotFoundf("test", "no bucket %s/%s", gotNS, got)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/versity/versitygw/s3api"
 	"github.com/versity/versitygw/s3api/middlewares"
 
+	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	authz "github.com/pyvvo/funcd/internal/auth"
 	"github.com/pyvvo/funcd/internal/blob"
@@ -27,7 +28,7 @@ func (denyAll) Authorize(context.Context, authz.Request) (authz.Decision, error)
 func TestIssue583_RunReturnsWhenCloseLandsBeforeServe(t *testing.T) {
 	master := []byte("master")
 	srv, err := New(Deps{
-		BucketFor: func(v1.NamespaceName, string) (blob.Bucket, bool) { return nil, false },
+		BucketFor: func(v1.NamespaceName, string) (blob.Bucket, error) { return nil, fault.NotFoundf("test", "no bucket") },
 		Buckets:   func(context.Context, v1.NamespaceName) ([]v1.Bucket, error) { return nil, nil },
 		PDP:       denyAll{},
 		Master:    master,

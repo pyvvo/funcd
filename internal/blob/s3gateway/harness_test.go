@@ -106,9 +106,11 @@ func newGateway(t *testing.T, meta fakeMeta, policies fixedPolicies, external s3
 		t.Cleanup(func() { _ = b.Close() })
 	}
 
-	bucketFor := func(ns v1.NamespaceName, bucket string) (blob.Bucket, bool) {
-		b, ok := buckets[string(ns)+"/"+bucket]
-		return b, ok
+	bucketFor := func(ns v1.NamespaceName, bucket string) (blob.Bucket, error) {
+		if b, ok := buckets[string(ns)+"/"+bucket]; ok {
+			return b, nil
+		}
+		return nil, fault.NotFoundf("test", "no bucket %s/%s", ns, bucket)
 	}
 
 	listBuckets := func(_ context.Context, ns v1.NamespaceName) ([]v1.Bucket, error) {
