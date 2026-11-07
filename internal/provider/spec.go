@@ -24,6 +24,7 @@
 package provider
 
 import (
+	"maps"
 	"net/netip"
 	"net/url"
 	"strconv"
@@ -107,6 +108,19 @@ type ProviderSpec struct {
 	// for that engine's life (ADR-0270 Decision 5). Only its keys are part of the spec an engine is compared by (#1195),
 	// so a new key window replaces no engine, while gaining or losing a pair does.
 	IssueEnv func() map[string]string
+}
+
+// LaunchEnv is the env of an engine created now: Env with a fresh IssueEnv laid over it. Env itself is not changed.
+func (s ProviderSpec) LaunchEnv() map[string]string {
+	if s.IssueEnv == nil {
+		return s.Env
+	}
+	env := maps.Clone(s.Env)
+	if env == nil {
+		env = make(map[string]string)
+	}
+	maps.Copy(env, s.IssueEnv())
+	return env
 }
 
 // ProviderStatus is what Converge observes back to the caller (which writes it to its CRD status).

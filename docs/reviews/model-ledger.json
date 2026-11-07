@@ -13858,5 +13858,20 @@
     "dod_total": 12,
     "report": "docs/reviews/issue-1411-fix-claude-opus-5-5.md",
     "notes": "pass; no finding; a self-review, not independent"
+  },
+  {
+    "date": "2026-11-07",
+    "issue": "1414",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-1414-fix-claude-opus-5-5.md",
+    "notes": "dev Lake engine reads the issued key pair; shared ProviderSpec.LaunchEnv; real-engine Parquet write verified; review not independent (fixer ran it)"
   }
 ]
