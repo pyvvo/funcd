@@ -66,6 +66,7 @@ func chapters() []chapter {
 		{"Health", []string{"internal/health"}, []string{"health"}},
 		{"Limits", []string{"internal/quota"}, nil},
 		{"funcdctl dev", []string{"cmd/funcdctl", "pkg/sdk"}, nil},
+		{"funcdctl", nil, nil},
 	}
 }
 

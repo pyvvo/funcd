@@ -1,0 +1,126 @@
+name: funcdctl plugins on the guest's funcdctl and the lane's funcd
+vars:
+  vmsh: "limactl shell --workdir / {{.vm}} -- bash -c"
+
+testcases:
+  - name: a word that is no command runs funcdctl-word from PATH, named by the first word only
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} 'PATH=/opt/lane/plugins:$PATH funcdctl hello world'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "hello from funcdctl-hello"
+          - result.systemout ShouldContainSubstring "arg=world"
+      - type: exec
+        script: |
+          {{.vmsh}} 'PATH=/opt/lane/plugins:$PATH funcdctl nosuch'
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemerr ShouldContainSubstring "unknown command"
+
+  - name: a built-in command wins over a plugin of its name
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} 'export PATH=/opt/lane/plugins:$PATH FUNCD_TOKEN=$(sudo cat /etc/funcd/tokens/developer); funcdctl get functions -n default'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldNotContainSubstring "hello from"
+
+  - name: flags before the name are funcdctl's, and the words after it reach the plugin unchanged
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} 'PATH=/opt/lane/plugins:$PATH funcdctl --server http://127.0.0.1:8080 hello env'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FUNCD_SERVER=http://127.0.0.1:8080"
+      - type: exec
+        script: |
+          {{.vmsh}} 'PATH=/opt/lane/plugins:$PATH funcdctl hello --server http://b.example -n team -- "two words"'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "arg=--server"
+          - result.systemout ShouldContainSubstring "arg=http://b.example"
+          - result.systemout ShouldContainSubstring "arg=-n"
+          - result.systemout ShouldContainSubstring "arg=--"
+          - result.systemout ShouldContainSubstring "arg=two words"
+      - type: exec
+        script: |
+          {{.vmsh}} 'PATH=/opt/lane/plugins:$PATH funcdctl --bogus hello'
+        assertions:
+          - result.code ShouldEqual 1
+          - 'result.systemerr ShouldContainSubstring "unknown flag: --bogus"'
+
+  - name: the plugin is handed the calling funcdctl, its version, and the server and token funcdctl resolved
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} 'PATH=/opt/lane/plugins:$PATH funcdctl --token "$(sudo cat /etc/funcd/tokens/developer)" hello env'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FUNCDCTL=/usr/local/bin/funcdctl"
+          - result.systemout ShouldContainSubstring "FUNCDCTL_VERSION=dev"
+          - result.systemout ShouldContainSubstring "FUNCD_SERVER=http://localhost:8080"
+          - result.systemout ShouldContainSubstring "FUNCD_TOKEN=set"
+      - type: exec
+        script: |
+          {{.vmsh}} 'PATH=/opt/lane/plugins:$PATH funcdctl --token "$(sudo cat /etc/funcd/tokens/developer)" hello call get functions -n default'
+        assertions:
+          - result.code ShouldEqual 0
+      - type: exec
+        script: |
+          {{.vmsh}} 'PATH=/opt/lane/plugins:$PATH funcdctl --token wrong hello call get functions -n default'
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemerr ShouldContainSubstring "invalid credential"
+
+  - name: the plugin replaces funcdctl's process, so its PID, exit code, stdio and signals are its own
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} 'export PATH=/opt/lane/plugins:$PATH; t=$(mktemp); funcdctl hello pid >"$t" & c=$!; wait $c; if [ "$(cat "$t")" = "pid=$c" ]; then echo same-pid; else echo "funcdctl=$c plugin=$(cat "$t")"; fi'
+        assertions:
+          - result.systemout ShouldEqual same-pid
+      - type: exec
+        script: |
+          {{.vmsh}} 'PATH=/opt/lane/plugins:$PATH funcdctl hello exit 7'
+        assertions:
+          - result.code ShouldEqual 7
+      - type: exec
+        script: |
+          {{.vmsh}} 'echo ping | PATH=/opt/lane/plugins:$PATH funcdctl hello stdin; PATH=/opt/lane/plugins:$PATH funcdctl hello stderr oops'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual ping
+          - result.systemerr ShouldEqual oops
+      - type: exec
+        script: |
+          {{.vmsh}} 'export PATH=/opt/lane/plugins:$PATH; t=$(mktemp); funcdctl hello wait-signal >"$t" & c=$!; for i in $(seq 50); do grep -q ready "$t" && break; sleep 0.1; done; kill -TERM $c; wait $c; echo "rc=$?"; cat "$t"'
+        assertions:
+          - result.systemout ShouldContainSubstring "rc=143"
+          - result.systemout ShouldContainSubstring "got TERM"
+
+  - name: only a plain word names a plugin, so a versioned funcdctl on PATH neither runs nor lists
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} 'PATH=/opt/lane/plugins:$PATH funcdctl v0.39.3 get'
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemerr ShouldContainSubstring "unknown command"
+          - result.systemout ShouldNotContainSubstring "hello from"
+
+  - name: funcdctl plugin list names each plugin and warns about one a built-in command shadows
+    steps:
+      - type: exec
+        script: |
+          {{.vmsh}} 'PATH=/opt/lane/plugins:$PATH funcdctl plugin list'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "/opt/lane/plugins/funcdctl-hello"
+          - result.systemout ShouldContainSubstring "/opt/lane/plugins/funcdctl-get"
+          - result.systemerr ShouldContainSubstring "funcdctl-get never runs"
+          - result.systemerr ShouldContainSubstring "is a built-in command"
+          - result.systemout ShouldNotContainSubstring "v0.39.3"

@@ -45,3 +45,4 @@ the bug rule in `.claude/CLAUDE.md`: a row points at what to read and proves not
 | [Health](health.md) | storage probes, what funcd says about itself |
 | [Limits](limits.md) | quotas, the disk floor, caps a user hits |
 | [funcdctl dev](funcdctl-dev.md) | the dev loop, funcdctl's waits and errors |
+| [funcdctl](funcdctl.md) | plugins: an App's own CLI run as `funcdctl <name>` |

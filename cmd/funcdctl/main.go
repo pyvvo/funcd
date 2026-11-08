@@ -13,7 +13,15 @@ import (
 )
 
 func main() {
-	if err := newRootCmd(os.Stdout).Execute(); err != nil {
+	root := newRootCmd(os.Stdout)
+	call, ok, err := findPlugin(root, os.Args[1:], os.Environ())
+	if err == nil && ok {
+		err = runPlugin(call)
+	}
+	if err == nil {
+		err = root.Execute()
+	}
+	if err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, errorLine(err))
 		os.Exit(exitCode(err))
 	}
