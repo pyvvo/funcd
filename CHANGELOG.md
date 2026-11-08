@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.40.0](https://github.com/pyvvo/funcd/compare/v0.39.3...v0.40.0) (2026-11-08)
+
+
+### Features
+
+* **funcdctl:** funcdctl runs kubectl-style plugins found on PATH ([b08cf5b](https://github.com/pyvvo/funcd/commit/b08cf5b4795dad63d2b9eb740c7f2eb344ba1342))
+
 ## [0.39.3](https://github.com/pyvvo/funcd/compare/v0.39.2...v0.39.3) (2026-11-07)
 
 
