@@ -148,6 +148,18 @@ func TestPlugin_EnvNamesTheCallingFuncdctlAndWhatItResolved(t *testing.T) {
 	require.Contains(t, out, "FUNCD_SERVER=http://localhost:8080\n")
 	require.Contains(t, out, "FUNCD_TOKEN=unset\n")
 
+	// A shell starts funcdctl by its bare name, which argv[0] then holds; FUNCDCTL is still the binary's own path.
+	cmd := funcdctlCmd(t, path, "", nil, "hello", "env")
+	cmd.Args[0] = "funcdctl"
+	bare, err := cmd.Output()
+	require.NoError(t, err)
+	line, ok = strings.CutPrefix(strings.Split(string(bare), "\n")[0], "FUNCDCTL=")
+	require.True(t, ok, string(bare))
+	require.True(t, filepath.IsAbs(line), "FUNCDCTL is %q when argv[0] is a bare name", line)
+	got, err = filepath.EvalSymlinks(line)
+	require.NoError(t, err)
+	require.Equal(t, exe, got)
+
 	out, _, _ = runFuncdctl(t, path, []string{"FUNCD_SERVER=http://env.example", "FUNCD_TOKEN=from-env"}, "", "hello", "env")
 	require.Contains(t, out, "FUNCD_SERVER=http://env.example\n")
 	require.Contains(t, out, "FUNCD_TOKEN=set\n")
