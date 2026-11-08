@@ -1,6 +1,7 @@
 # ADR-0042: Adopt cobra for the CLI surface (refines ADR-0024)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0319](0319-funcdctl-runs-kubectl-style-plugins.md) (2026-11-08) — `scenario: cli-unknown-command`: an unknown verb runs a funcdctl plugin when `funcdctl-<verb>` is on PATH.
 - **Date**: 2026-06-16 (**Accepted 2026-06-16**, **Implemented 2026-06-16** — judge: right decision, honestly grounded (ADR-0024 pre-blessed the swap),
   advance as-is; folded 4 Minors: clarified the SDK-vs-artifact verb reach, scoped the `*sdk.Client` to control-plane
   verbs only (artifact verbs need no server), gave `funcd`'s root an `out` seam.)

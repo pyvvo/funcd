@@ -732,3 +732,21 @@ volumes:
       to: dr/workload-secrets.yaml
   # The suite pushes and deploys the App itself.
   venom: e2e/volumes.venom.yml
+
+funcdctl-plugin:
+  description: kubectl-style funcdctl plugins on the guest's installed funcdctl and the lane's funcd. A word that is no built-in command runs funcdctl-<word> from PATH, a built-in command wins, flags before the name stay funcdctl's, the plugin is handed FUNCDCTL, FUNCDCTL_VERSION, FUNCD_SERVER and FUNCD_TOKEN and calls funcd back with them, it replaces funcdctl's process, only a plain word names a plugin, and funcdctl plugin list names each plugin.
+  dir: cmd/funcdctl/testdata/plugins
+  stage:
+    - from: cmd/funcdctl/testdata/plugins/funcdctl-hello
+      to: plugins/funcdctl-hello
+    # Named like the built-in get, so it never runs.
+    - from: cmd/funcdctl/testdata/plugins/funcdctl-hello
+      to: plugins/funcdctl-get
+    # Named like a versioned funcdctl, which is no plain word, so it neither runs nor lists.
+    - from: cmd/funcdctl/testdata/plugins/funcdctl-hello
+      to: plugins/funcdctl-v0.39.3
+    - from: e2e/fixtures/funcdctl-plugin-funcdconfig.yaml
+      to: funcdconfig.yaml
+  tokens:
+    developer: funcdctl-plugin-lane-developer
+  venom: e2e/funcdctl-plugin.venom.yml

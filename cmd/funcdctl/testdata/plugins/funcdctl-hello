@@ -1,0 +1,34 @@
+#!/bin/sh
+# funcdctl-hello: a hello-world funcdctl plugin, and the fixture of the plugin tests and lane. `funcdctl hello …` runs
+# it. It tells whether FUNCD_TOKEN is set and never prints its value.
+name=$(basename "$0")
+case "${1:-}" in
+  env)
+    echo "FUNCDCTL=${FUNCDCTL-<unset>}"
+    echo "FUNCDCTL_VERSION=${FUNCDCTL_VERSION-<unset>}"
+    echo "FUNCD_SERVER=${FUNCD_SERVER-<unset>}"
+    if [ -n "${FUNCD_TOKEN:-}" ]; then echo "FUNCD_TOKEN=set"; else echo "FUNCD_TOKEN=unset"; fi
+    ;;
+  pid) echo "pid=$$" ;;
+  exit) exit "${2:-0}" ;;
+  stdin) cat ;;
+  stderr) shift; echo "$*" >&2 ;;
+  wait-signal)
+    trap 'echo "got TERM"; exit 143' TERM
+    trap 'echo "got INT"; exit 130' INT
+    echo ready
+    n=0
+    while [ "$n" -lt 10 ]; do
+      sleep 1 >/dev/null 2>&1 &
+      wait $!
+      n=$((n + 1))
+    done
+    echo "no signal"
+    exit 1
+    ;;
+  call) shift; exec "$FUNCDCTL" "$@" ;;
+  *)
+    echo "hello from $name"
+    for a in "$@"; do printf 'arg=%s\n' "$a"; done
+    ;;
+esac

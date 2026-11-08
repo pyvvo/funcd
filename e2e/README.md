@@ -24,6 +24,7 @@ and its suite. Every lane runs in one shared VM (ADR-0230).
 | `sql.venom.yml` | `sql` | SQL databases (ADR-0232 to ADR-0236), and a database at its quota (ADR-0292) |
 | `sql-examples.venom.yml` | `sql-examples` | The SQL examples (FEAT-0011) |
 | `volumes.venom.yml` | `volumes` | Function volumes, local and emptyDir (ADR-0262, ADR-0266, ADR-0268) |
+| `funcdctl-plugin.venom.yml` | `funcdctl-plugin` | kubectl-style funcdctl plugins: the lookup, built-in commands first, funcdctl's flags, the plugin's environment, the exec and `funcdctl plugin list` |
 | `app-todo.venom.yml` | `app-todo` | The todo App of [pyvvo/funcd-functions](https://github.com/pyvvo/funcd-functions) from its pushed template, and a disaster-recovery drill, with a Bucket and its Lake backed up and restored apart, real rows read back from a real engine (ADR-0293, ADR-0312); every file it applies comes from funcd-functions |
 | `metastore.venom.yml` | `just lima-example-metastore` | A ConfigMap survives a daemon restart (ADR-0065); the suite starts the daemon itself, so every step is an in-VM `exec` |
 
