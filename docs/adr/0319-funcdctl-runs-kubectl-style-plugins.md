@@ -1,6 +1,6 @@
 # ADR-0319: funcdctl runs kubectl-style plugins
 
-- **Status**: Reviewing (2026-11-08, implementation done); Accepted (2026-11-08), after a judge by the drafting session (not independent) whose one Blocker, one Major and seven Minors were folded, and a rerun of experiment 0017 on the final rules
+- **Status**: Implemented (2026-11-08), review passed with no Blocker or Major ([report](../reviews/adr-0319-implementation-claude-opus-5-5.md)); Reviewing (2026-11-08, implementation done); Accepted (2026-11-08), after a judge by the drafting session (not independent) whose one Blocker, one Major and seven Minors were folded, and a rerun of experiment 0017 on the final rules
 - **Date**: 2026-11-08
 - **Deciders**: green-0-rabbit
 - **Tags**: funcdctl, cli, apps
