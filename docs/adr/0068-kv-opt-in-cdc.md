@@ -1,6 +1,7 @@
 # ADR-0068: KV opt-in CDC — durable, resumable transactional-outbox change-feed
 
 - **Status**: Implemented (2026-06-22)
+- **Superseded in part by**: [ADR-0320](0320-kv-conditional-writes-and-expiring-keys.md) (2026-11-10) — Decision 1 and its Contracts: the change record carries the key's expiry, and the sweep's delete is a record
 - **Date**: 2026-06-22 (judged 2026-06-22 — aligned the contract to ADR-0066's `CDC` seam: the same-txn
   write-hook is the seam method `OnWrite(txn, key, op)` the driver calls, so the change-log entry commits
   atomically with the data through the interface. No Blockers.)

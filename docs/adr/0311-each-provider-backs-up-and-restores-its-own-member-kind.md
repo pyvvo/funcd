@@ -1,6 +1,7 @@
 # ADR-0311: Each provider backs up and restores its own member kind
 
 - **Status**: Implemented (2026-11-03), review passed with no finding
+- **Superseded in part by**: [ADR-0320](0320-kv-conditional-writes-and-expiring-keys.md) (2026-11-10) — Decision 4's KVStore row: the export carries each key's expiry
   ([report](../reviews/adr-0311-implementation-claude-opus-5-5.md)); Reviewing (2026-11-03, implemented in the plan's
   five commits: #1383's fix, the kinds, the services' dispatch, the providers' hook and the stale texts); Accepted
   (2026-11-03, by the decider after two judge rounds: round 2 added the catalog read before the Bucket walk and made

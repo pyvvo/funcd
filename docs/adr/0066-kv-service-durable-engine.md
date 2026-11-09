@@ -1,6 +1,7 @@
 # ADR-0066: KV-service durable engine (Badger) + the durability extension seams
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0320](0320-kv-conditional-writes-and-expiring-keys.md) (2026-11-10) — the gateway's one Badger txn per batch (a txn ends before a request for a key it already wrote when either is versioned), and its Contracts' `CDC.OnWrite`, which gains the key's expiry
 - **Date**: 2026-06-22 (judged 2026-06-22 — the judge's Major drove the split: this ADR is now just the
   durable driver + gateway + the `Backup`/`CDC` seams, with the DR/CDC mechanisms in ADR-0067/0068; folded
   the Minors (the `store.Store`-driver alternative; the V2→v1.1 scope note) and the decider's separate-instance

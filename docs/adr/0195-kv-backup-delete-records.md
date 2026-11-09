@@ -2,6 +2,7 @@
 
 - **Status**: Implemented (2026-10-08)
 - **Superseded in part by**: [ADR-0209](0209-kv-backup-on-the-common-format.md) (2026-10-10) — Decision 2's prune of old segments, Decision 5's `format` marker in `manifest.json` and the manifest contracts; its Decisions 1 to 4 and 6 stand.
+- **Superseded in part by**: [ADR-0320](0320-kv-conditional-writes-and-expiring-keys.md) (2026-11-10) — Decision 1: a key whose value expired counts as existing, so its delete, the sweep's or a plain one, writes a record, as does the sweep's delete of a key compaction left no entry
 - **Date**: 2026-10-07
 - **Deciders**: green-0-rabbit
 - **Tags**: kvstore, backup, disaster-recovery, badger

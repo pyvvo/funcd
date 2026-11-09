@@ -6,7 +6,8 @@
 # names it, and else writes it kept as it stands (split: the keys not moved stay with the new object). The sweep
 # deletes a kept entry once the period passed, while serving and not held. The owner may apply an object of that name
 # and write a key n; an admin may return the entry into it. funcd may crash once, at any step; the next start resumes.
-# Environment: nothing writes the source during a start; the verb's guards read the store as it is.
+# Environment: nothing writes the source during a start; the verb's guards read the store as it is. The keys here have
+# no TTL: a KV key with one keeps its expiry in the entry and leaves it when it expires (ADR-0320).
 # Left out: the SQL rename and the volume's retain (one step each), the layouts and the period's arithmetic (left to
 # TestScenarioSQLAndVolumeKept and the drivers' tests).
 deadlock_detection: false

@@ -1,0 +1,243 @@
+---
+# Conditional writes and expiring keys of the KV store (ADR-0320). Two claimants race for one key: a claim is a put-if-
+# absent with a TTL of T ticks, a renewal a compare-and-set with a new TTL, a release a delete conditional on the
+# version the claimant holds. The single-writer gateway puts no two versioned writes of one key in one txn, so each
+# condition reads the committed key; a write's version is a hash of the timeline, the key and n, written <timeline>-<n>.
+# A key's expiry is the first tick at or after its TTL ends; a holder counts on its claim until its claim time plus T,
+# the latest a holder that counts from before it sends its write can reach. An owner may Put the key once, with no TTL.
+# Badger's compaction may remove an expired entry before the sweep, which deletes a key with no live entry, one
+# compaction removed included, so the change feed hears of it. The chain is shipped once; a restore loads that earlier
+# point under a new timeline, and a claim made after it is lost: its holder leaves OneHolder (the DR ADRs' recovery
+# point), but its version must name no new write.
+# Environment: one clock for funcd and the claimants; the TTL's rounding up is kvstore.ExpiresAt's; a consumer of the
+# change feed rereads the store after a restore, since a restored outbox republishes nothing at or below its cursor.
+# Left out: the sweep's wait for a held namespace (TestSweepWaitsForAHeldNamespace) and its quota report
+# (TestSweepFreesQuotaAtOnce), the delete record a sweep writes for the chain (TestSweepDeletesWhatCompactionRemoved),
+# the index's size (TestEveryWriteDropsTheIndexKeyItReplaces), the readback of a winner's version after its commit
+# (TestGatewayVersionNamesOneWrite), the per-store export's and the quarantine's expiries
+# (TestKVStores_CarryEachKeysExpiry, TestQuarantineKeepsAnExpiry), and two Functions on containerd (the kv-claim lane).
+deadlock_detection: false
+options:
+  max_concurrent_actions: 1
+  max_actions: 15
+  crash_on_yield: false
+---
+# diagram: Claimant.phase
+# mutant no-split: OneHolder
+# mutant shared-version: VersionNamesItsWrite
+# mutant floor-expiry: OneHolder
+# mutant sweep-by-name: SweepSparesALiveKey
+# mutant keep-timeline: VersionNamesItsWrite
+# mutant no-sweep: liveness
+# mutant compaction-blind: liveness
+
+T = 2
+E = 3
+NEVER = 100
+# no-split: two claims of one key share a txn: each reads the key as the txn began, and both take its version.
+# shared-version: a plain Put batched after a versioned write of the key shares its txn and so its version.
+# floor-expiry: a key expires one tick before its TTL ends (Badger's WithTTL rounds down).
+# sweep-by-name: the sweeper deletes the key its index names, renewed or not.
+# keep-timeline: a restore keeps the timeline, so a write after it can take a version a holder kept from the lost part.
+# no-sweep: the sweeper deletes nothing.
+# compaction-blind: the sweeper deletes only an entry it finds, so a key compaction removed never reaches the feed.
+MUTANT = ""
+
+role Claimant:
+    action Init:
+        self.phase = "idle"
+        self.ver = ""
+        self.n = 0
+        self.until = 0
+        self.epoch = 0
+        self.lost = False
+
+    # put-if-absent with a TTL: the claim wins only while the key is absent or expired, as the txn that writes reads it.
+    atomic action Claim:
+        require self.phase == "idle" and claims < 2
+        claims = claims + 1
+        absent = "k" not in store or now >= store["k"]["exp"]
+        if MUTANT == "no-split" and batch:
+            absent = batch_absent
+        if not absent:
+            return
+        if not (MUTANT == "no-split" and batch):
+            n = n + 1
+        x = now + T
+        if MUTANT == "floor-expiry":
+            x = now + T - 1
+        v = str(tl) + "-" + str(n)
+        store["k"] = {"holder": self.id, "n": n, "ver": v, "exp": x}
+        index.append(x)
+        feed = True
+        self.ver = v
+        self.n = n
+        self.until = now + T
+        self.epoch = restores
+        self.lost = False
+        self.phase = "holding"
+
+    # compare-and-set with the version it holds and a new TTL, while it counts on its claim.
+    atomic action Renew:
+        require self.phase == "holding" and now < self.until and renews < 1
+        renews = renews + 1
+        if "k" not in store or now >= store["k"]["exp"] or store["k"]["ver"] != self.ver:
+            self.phase = "lapsed"
+            return
+        if self.epoch < restores:
+            stale_win = True
+        n = n + 1
+        x = now + T
+        if MUTANT == "floor-expiry":
+            x = now + T - 1
+        v = str(tl) + "-" + str(n)
+        store["k"] = {"holder": self.id, "n": n, "ver": v, "exp": x}
+        index.append(x)
+        feed = True
+        self.ver = v
+        self.n = n
+        self.until = now + T
+        self.lost = False
+
+    # a delete conditional on the version it holds.
+    atomic action Release:
+        require self.phase == "holding"
+        if "k" in store and now < store["k"]["exp"] and store["k"]["ver"] == self.ver:
+            store.pop("k")
+            feed = False
+        self.phase = "done"
+
+action Init:
+    now = 0
+    tl = 1
+    n = 0
+    store = {}
+    index = []
+    feed = False
+    claims = 0
+    renews = 0
+    plains = 0
+    ships = 0
+    shipped = {}
+    shipped_n = 0
+    shipped_index = []
+    restores = 0
+    batch = False
+    batch_absent = False
+    swept_live = False
+    stale_win = False
+    claimants = []
+    for i in range(2):
+        claimants.append(Claimant(id=i))
+
+# The mutant's shared txn: it opens with the key's state as it began, and its writes take one version.
+atomic action OpenBatch:
+    require MUTANT == "no-split" and not batch
+    batch = True
+    batch_absent = "k" not in store or now >= store["k"]["exp"]
+    n = n + 1
+
+atomic action CloseBatch:
+    require batch
+    batch = False
+
+# An owner's plain Put of the key: no TTL and a version of its own, unless the mutant batches it after a versioned write.
+atomic action PlainPut:
+    require plains < 1
+    plains = plains + 1
+    if MUTANT == "shared-version" and "k" in store:
+        m = store["k"]["n"]
+        v = store["k"]["ver"]
+    else:
+        n = n + 1
+        m = n
+        v = str(tl) + "-" + str(n)
+    store["k"] = {"holder": -1, "n": m, "ver": v, "exp": NEVER}
+    feed = True
+
+# Badger's compaction: an expired entry leaves the store with every older one, and publishes nothing.
+atomic action Compact:
+    require "k" in store and now >= store["k"]["exp"]
+    store.pop("k")
+
+# The sweeper takes the oldest due index entry and deletes the key unless it is live: an expired entry, or none.
+atomic fair action Sweep:
+    due = []
+    for x in index:
+        if x <= now:
+            due.append(x)
+    require len(due) > 0
+    x = due[0]
+    index.remove(x)
+    if MUTANT == "no-sweep":
+        return
+    if "k" not in store:
+        if MUTANT != "compaction-blind":
+            feed = False
+        return
+    if MUTANT == "sweep-by-name" or now >= store["k"]["exp"]:
+        if now < store["k"]["exp"]:
+            swept_live = True
+        store.pop("k")
+        feed = False
+
+# The DR chain takes the store as it stands, its index and its last version number.
+atomic action Ship:
+    require ships < 1 and not batch
+    ships = ships + 1
+    shipped = dict(store)
+    shipped_n = n
+    shipped_index = list(index)
+
+# A restore loads the shipped point and mints a new timeline, under which the key's write keeps its number; a claim
+# written after that point is lost.
+atomic action Restore:
+    require restores < 1 and ships > 0 and not batch
+    restores = restores + 1
+    store = dict(shipped)
+    n = shipped_n
+    index = list(shipped_index)
+    if MUTANT != "keep-timeline":
+        tl = tl + 1
+        if "k" in store:
+            e = store["k"]
+            store["k"] = {"holder": e["holder"], "n": e["n"], "ver": str(tl) + "-" + str(e["n"]), "exp": e["exp"]}
+    for c in claimants:
+        if c.phase == "holding" and not ("k" in shipped and shipped["k"]["n"] == c.n):
+            c.lost = True
+    feed = "k" in store
+
+atomic fair action Tick:
+    require now < E
+    now = now + 1
+
+# At most one claimant counts on the key at a time, among those whose claim a restore did not lose.
+always assertion OneHolder:
+    holding = 0
+    for c in claimants:
+        if c.phase == "holding" and not c.lost and now < c.until:
+            holding = holding + 1
+    return holding <= 1
+
+# The version a claimant holds names its own write: no other write of the key took it.
+always assertion VersionNamesItsWrite:
+    for c in claimants:
+        if c.phase == "holding" and "k" in store and store["k"]["ver"] == c.ver and store["k"]["holder"] != c.id:
+            return False
+    return True
+
+# The sweeper never deletes a key that has not expired.
+always assertion SweepSparesALiveKey:
+    return not swept_live
+
+# A version from before a restore wins no compare-and-set after it (ADR-0202's rule).
+always assertion StaleVersionLoses:
+    return not stale_win
+
+# A key whose expiry passed is deleted in the end.
+always eventually assertion ExpiredIsSwept:
+    return not ("k" in store and now >= store["k"]["exp"])
+
+# The change feed ends agreeing with the store: a key the store lost is deleted from the feed too.
+always eventually assertion FeedAgrees:
+    return feed == ("k" in store)
