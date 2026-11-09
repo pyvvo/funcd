@@ -49,7 +49,8 @@ the run. Update the feat row (`idea → adr`, link the ADR).
 
 ## Step 2 — Per item: judge + apply fixes (the `adr-judge` gate)
 
-1. Invoke the **`adr-judge`** skill on the Proposed ADR. Capture its severity-tiered verdict.
+1. Run the **`adr-judge`** skill on the Proposed ADR in a subagent (its *Who runs it*), one per ADR and reused for
+   a re-judge. Capture its severity-tiered verdict.
 2. **Apply every Blocker and Major** to the still-Proposed ADR (it is editable until accepted), plus any
    Minors that are clearly correct and cheap. Re-judge only if a fix opened a new branch.
 3. An ADR may **not** be accepted with an unresolved **Blocker**. If a Blocker is `adr`-attributed and

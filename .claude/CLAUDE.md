@@ -425,6 +425,10 @@ rules that did it:
   regenerate `model-scorecard.md` conflict one after another; record a batch's ledger rows in one ledger PR.
 - **Model per role.** Fixers and reviewers on the strongest model (reviews at medium effort held their depth);
   integration, gates and PR plumbing on a fast model at low effort.
+- **Judges run outside the work's context** (the decider, 2026-11-09). The ADR judge and the implementation review run
+  in a subagent or a subsession, never in the session that wrote the ADR or the code, briefed with the files and not
+  the author's findings. One judge serves every round of the same ADR, and one reviewer every round of the same
+  implementation; the author sends it the revised work.
 - **The host is shared.** Concurrent gates contend on one machine: many e2e runs, or a probe that opens a fresh
   connection per request, exhaust the ~16k ephemeral ports ("connect: can't assign requested address"; count
   `TIME_WAIT` with `netstat -an`). Run at most two gates at once, rerun only the step that failed for the

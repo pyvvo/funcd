@@ -152,7 +152,8 @@ When `just build`/`just lint`/`just test` fail, distinguish the cause:
   Scenario→test results (all passing), the green `just ci` result, the ADR → `Reviewing` and feat
   row → `reviewing` moves, and any ADR gaps you hit. If you were acting on a prior review report,
   list which `model` findings you closed. Point to the next gate: the high-capability **review** of
-  this implementation against the ADR's *Review checklist* and *Contracts*, which stamps the ADR
+  this implementation against the ADR's *Review checklist* and *Contracts*, run in a subagent or a subsession, never
+  this context (`adr-impl-review` → *Who runs it*), which stamps the ADR
   `Implemented` on a pass (or returns it to you with `changes-requested`, leaving it `Reviewing`).
 
 ## When the implementation is large or multi-package
