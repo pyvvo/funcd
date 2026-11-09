@@ -875,12 +875,12 @@ func TestScenarioDeleteThenSetKeepsValue(t *testing.T) {
 		},
 		"one gateway batch": func(t *testing.T, kv kvstore.KV) {
 			batch := []*writeReq{
-				{key: "k", del: true, done: make(chan error, 1)},
-				{key: "k", val: []byte("new"), done: make(chan error, 1)},
+				{key: "k", del: true, done: make(chan writeRes, 1)},
+				{key: "k", val: []byte("new"), done: make(chan writeRes, 1)},
 			}
 			kv.(*driver).commit(batch)
 			for _, r := range batch {
-				require.NoError(t, <-r.done)
+				require.NoError(t, (<-r.done).err)
 			}
 			var keyVersion uint64
 			require.NoError(t, kvDB(kv).View(func(txn *badger.Txn) error {
@@ -1219,12 +1219,12 @@ func TestDelRecordKeyFitsBadgerLimit(t *testing.T) {
 	over := strings.Repeat("o", badgerMaxKey-1)
 	putKeys(t, kv, over, "other")
 	batch := []*writeReq{
-		{key: over, del: true, done: make(chan error, 1)},
-		{key: "other", del: true, done: make(chan error, 1)},
+		{key: over, del: true, done: make(chan writeRes, 1)},
+		{key: "other", del: true, done: make(chan writeRes, 1)},
 	}
 	kv.(*driver).commit(batch)
-	require.Error(t, <-batch[0].done, "a delete whose record passes the key limit succeeded")
-	require.NoError(t, <-batch[1].done, "a co-batched delete failed")
+	require.Error(t, (<-batch[0].done).err, "a delete whose record passes the key limit succeeded")
+	require.NoError(t, (<-batch[1].done).err, "a co-batched delete failed")
 	err := kv.Delete(ctx, over)
 	require.Equal(t, fault.Internal, fault.KindOf(err))
 	_, found, err := kv.Get(ctx, over)

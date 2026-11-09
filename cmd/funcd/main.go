@@ -619,6 +619,12 @@ func buildOptions(ctx context.Context, cfg config.Config, root *slog.Logger, hel
 		return nil, noopClose, nil, "", err
 	}
 	opts = append(opts, funcd.WithQuarantinePeriod(quarantinePeriod))
+	// How often the KV service deletes the keys that expired (ADR-0320), checked by the config loader.
+	sweepInterval, err := cfg.KVSweepInterval()
+	if err != nil {
+		return nil, noopClose, nil, "", err
+	}
+	opts = append(opts, funcd.WithKVSweepInterval(sweepInterval))
 	// What a solo Function's spec.resources leaves empty (ADR-0291), checked by the config loader.
 	fnResources, err := cfg.FunctionDefaultResources()
 	if err != nil {

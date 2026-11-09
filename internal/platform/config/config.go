@@ -144,6 +144,9 @@ type Config struct {
 		// MaxStoresPerNamespace is the per-namespace KVStore count cap enforced at admission (ADR-0072);
 		// 0 ⇒ the default (100); a negative value disables the quota.
 		MaxStoresPerNamespace int `json:"maxStoresPerNamespace,omitempty" env:"FUNCD_KVSTORE_MAX_STORES_PER_NAMESPACE"`
+		// SweepInterval is how often the KV service deletes the keys that expired (ADR-0320), so the change feed, the
+		// backup and the quota see each expiry: an ADR-0194 duration of at least 100ms; empty ⇒ 1s.
+		SweepInterval string `json:"sweepInterval,omitempty" env:"FUNCD_KVSTORE_SWEEP_INTERVAL"`
 		// Backup is the opt-in DR export of the KV instance (ADR-0067) on the common backup format (ADR-0209), off
 		// by default. The target group (Target, CredentialsFile, SingleWriter) and the encryption group each come
 		// whole from here when their lead key is set, else from backup: (ResolveKVBackup); ignored with a warning when
@@ -723,7 +726,7 @@ func (c Config) Validate() error {
 		if err := c.validateCredentials(op); err != nil {
 			return err
 		}
-		for _, fs := range [][]Finding{c.CheckBackup(), c.CheckBlob(), c.CheckBridge(), c.CheckLake(), c.CheckQuarantine(), c.CheckFunctions(), c.CheckStorage(), c.CheckWorkloadBackup()} {
+		for _, fs := range [][]Finding{c.CheckBackup(), c.CheckBlob(), c.CheckBridge(), c.CheckLake(), c.CheckQuarantine(), c.CheckKVSweep(), c.CheckFunctions(), c.CheckStorage(), c.CheckWorkloadBackup()} {
 			if len(fs) > 0 && fs[0].Error {
 				return fault.Invalidf(op, "%s", fs[0].Message)
 			}

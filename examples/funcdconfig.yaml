@@ -77,6 +77,7 @@ storage:
 #   engine: memory                # memory | badger. default: memory (ephemeral)
 #   dataDir: ""                   # KV Badger dir when engine: badger. default: <dataDir>/kv
 #   maxStoresPerNamespace: 100    # KVStore count cap per namespace (ADR-0072); negative ⇒ no cap. default: 100
+#   sweepInterval: 1s             # how often expired keys are deleted, so CDC, backups and quotas see it (ADR-0320); min 100ms. default: 1s
 #   backup:                       # DR export under kv/ (ADR-0067, ADR-0209); engine: badger only
 #     enabled: false              # default: false
 #     target: ""                  # own s3:// or file:/// target, not backup.target; empty ⇒ the target group of backup:. default: ""

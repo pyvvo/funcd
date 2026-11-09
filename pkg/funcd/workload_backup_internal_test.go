@@ -330,7 +330,8 @@ func (r *wbRig) target() blob.Bucket {
 	return b
 }
 
-// records reads every record of one member's first file of the copy under path, opened with id.
+// records reads every record of one member's first file of the copy under path, opened with id; a KVStore record's
+// value comes without its expiry's frame (ADR-0320).
 func (r *wbRig) records(path string, kind v1.Kind, name v1.ObjectName, id age.Identity) map[string]string {
 	r.t.Helper()
 	src := r.target()
@@ -351,6 +352,10 @@ func (r *wbRig) records(path string, kind v1.Kind, name v1.ObjectName, id age.Id
 				return out
 			}
 			require.NoError(r.t, err)
+			if kind == v1.KindKVStore {
+				_, rec.Value, err = workload.DecodeKV(rec.Value)
+				require.NoError(r.t, err)
+			}
 			out[string(rec.Key)] = string(rec.Value)
 		}
 	}

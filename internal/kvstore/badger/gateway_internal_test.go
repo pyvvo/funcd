@@ -11,24 +11,42 @@ import (
 )
 
 // oneBatch queues reqs before the gateway starts, so its greedy drain takes them as ONE group-commit batch
-// (the co-batching concurrent Puts reach by timing), and returns the driver and each request's result.
+// (the co-batching concurrent Puts reach by timing), and returns the driver and each request's error.
 func oneBatch(t *testing.T, reqs []*writeReq) (*driver, []error) {
 	t.Helper()
-	db, err := openDB(t.TempDir(), false)
-	require.NoError(t, err)
-	d := &driver{db: db, reqs: make(chan *writeReq, len(reqs)), stop: make(chan struct{})}
-	t.Cleanup(func() { _ = d.Close() })
+	d, outs := oneBatchOn(t, nil, reqs)
+	errs := make([]error, len(outs))
+	for i, o := range outs {
+		errs[i] = o.err
+	}
+	return d, errs
+}
+
+// oneBatchOn is oneBatch on d (a new driver when nil), returning each request's whole outcome.
+func oneBatchOn(t *testing.T, d *driver, reqs []*writeReq) (*driver, []writeRes) {
+	t.Helper()
+	if d == nil {
+		db, err := openDB(t.TempDir(), false)
+		require.NoError(t, err)
+		d = &driver{db: db, stop: make(chan struct{})}
+		t.Cleanup(func() { _ = d.Close() })
+	} else {
+		close(d.stop)
+		d.wg.Wait()
+		d.stop = make(chan struct{})
+	}
+	d.reqs = make(chan *writeReq, len(reqs))
 	for _, r := range reqs {
-		r.done = make(chan error, 1)
+		r.done = make(chan writeRes, 1)
 		d.reqs <- r
 	}
 	d.wg.Add(1)
 	go d.gateway(newConfig(nil).batchMax)
-	errs := make([]error, len(reqs))
+	outs := make([]writeRes, len(reqs))
 	for i, r := range reqs {
-		errs[i] = <-r.done
+		outs[i] = <-r.done
 	}
-	return d, errs
+	return d, outs
 }
 
 // TestIssue31_OverBudgetBatchCommitsEveryWrite: eight 900 KiB values, each under the 1 MiB store cap,

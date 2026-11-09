@@ -1,0 +1,19 @@
+# The kv-claim lane's writer grant (ADR-0136): pyclaim writes the claims table that claim owns, so the two race one
+# table's conditional writes.
+apiVersion: funcd.io/v1alpha1
+kind: RolesAssignment
+metadata:
+  name: pyclaim-writes-claims
+  namespace: default
+  resourceGroup: rg1
+spec:
+  principal:
+    kind: Function
+    name: pyclaim
+  assignments:
+    - roleRef:
+        kind: BuiltinRole
+        name: KV Data Writer
+      scope:
+        kind: KVStore
+        name: claims-kv/claims

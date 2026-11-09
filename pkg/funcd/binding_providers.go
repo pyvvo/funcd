@@ -28,6 +28,7 @@ import (
 	"github.com/pyvvo/funcd/internal/kvstore"
 	lakegw "github.com/pyvvo/funcd/internal/lake/gateway"
 	"github.com/pyvvo/funcd/internal/lifecycle"
+	platformconfig "github.com/pyvvo/funcd/internal/platform/config"
 	"github.com/pyvvo/funcd/internal/provider"
 	"github.com/pyvvo/funcd/internal/quota"
 	"github.com/pyvvo/funcd/internal/secrets"
@@ -61,11 +62,13 @@ type kvProvider struct {
 	facade     *kvsvc.Facade
 	reconciler *kvsvc.Reconciler
 	prober     *health.Prober // read by its Dependencies hook (ADR-0308)
+	quota      quota.Checker
 }
 
 var (
 	_ lifecycle.Starter   = (*kvProvider)(nil)
 	_ lifecycle.Reclaimer = (*kvProvider)(nil)
+	_ lifecycle.Runner    = (*kvProvider)(nil)
 	_ lifecycle.Stopper   = (*kvProvider)(nil)
 	_ describer           = (*kvProvider)(nil)
 	_ quotaHook           = (*kvProvider)(nil)
@@ -145,7 +148,7 @@ func (s *kvProvider) build(d kvDeps) error {
 		Logger: c.logger}); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build KV facade")
 	}
-	s.prober = d.prober
+	s.prober, s.quota = d.prober, d.quota
 	prefixMgr, _ := c.kvStore.(kvsvc.PrefixManager)
 	if s.reconciler, err = kvsvc.NewReconciler(kvsvc.ReconcilerDeps{Store: c.store, KV: prefixMgr, Logger: c.logger, Health: d.prober,
 		Hold: c.gate(), QuarantinePeriod: c.quarantinePeriodOrDefault()}); err != nil {
@@ -163,6 +166,14 @@ func (s *kvProvider) Start(ctx context.Context) error {
 		return fault.Wrapf(err, fault.KindOf(err), "funcd.Run", "mark workflow kv stores")
 	}
 	return nil
+}
+
+// Run deletes the keys that expired, a pass every kvstore.sweepInterval, until Run's context ends (ADR-0320 Decision
+// 5); Run's drain waits for it, so it ends before Stop closes the driver (ADR-0305 Decision 4).
+func (s *kvProvider) Run(ctx context.Context) {
+	c := s.cfg
+	kvsvc.RunSweep(ctx, kvsvc.SweepDeps{KV: c.kvStore, Quota: s.quota, Hold: c.nsGate(),
+		Interval: cmp.Or(c.kvSweepInterval, platformconfig.DefaultKVSweepInterval), Logger: c.logger})
 }
 
 // Reclaim reclaims the data of each KVStore deleted before its reconcile ran, before a store of the same name can be

@@ -1,6 +1,6 @@
 # ADR-0320: KV writes that hold only while a condition holds, and keys that expire
 
-- **Status**: Accepted (2026-11-10), after four rounds of an independent judge (a subagent), whose two Majors and every Minor and Nit were folded
+- **Status**: Reviewing (2026-11-10, implementation done); Accepted (2026-11-10), after four rounds of an independent judge (a subagent), whose two Majors and every Minor and Nit were folded
 - **Date**: 2026-11-09
 - **Deciders**: green-0-rabbit
 - **Tags**: kv, kvstore, local-api, shims, backup, cdc, quota

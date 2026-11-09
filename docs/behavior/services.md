@@ -24,7 +24,8 @@ its last one until the pass ends. New words: Stopping. A held Lake also shows `B
 `ScratchSpaceLacking` or `GatewayEndpointNotAnAddress`. An exposed Lake that is not Ready has no edge entry: `IngressReady=False`,
 `LakeNotReady`. The S3 gateway opens with the blob provider, a taken `s3gateway.listenAddr` fails funcd's start (#497), and it closes after
 the workers (#1232).
-Details: [stop](../design/lake/stop.md), [commit-save](../design/lake/commit-save.md), [quarantine](../design/storage/quarantine.md).
+Details: [stop](../design/lake/stop.md), [commit-save](../design/lake/commit-save.md), [quarantine](../design/storage/quarantine.md),
+[kv-claims](../design/storage/kv-claims.md).
 
 | Where | What happens | Time | You see | Status | Source |
 |---|---|---|---|---|---|
@@ -52,6 +53,13 @@ Details: [stop](../design/lake/stop.md), [commit-save](../design/lake/commit-sav
 | A delete of a bound or non-empty KVStore, Bucket or SQLDatabase | Refused, also while a database's engine cannot answer; a Lake has no such check | none | 409 `still holds keys; drain it first`, `retry once its engine is Ready` | decided | ADR-0073 Decision 6, ADR-0232 Decision 7, ADR-0233 Decision 7, `TestScenarioDeleteRefusedWhileHoldingData` |
 | A delete that a crash cut | At the next start its data moves aside, so a new store of that name starts empty; it goes after the retention | `storage.quarantineRetention` 168 h | `moved the data of a KVStore with no object into the quarantine`, `funcdctl hold status` | decided | ADR-0288 Decisions 1, 4 and 5, `TestScenarioOrphanQuarantined` |
 | Two create-only PUTs for one key at once | `If-None-Match: *` checks, then writes, so more than one can get 200 and the later write replaces the earlier | none | 200 to both | deferred | #1179, ADR-0159 Open questions |
+| A put-if-absent or compare-and-set raced by writers | One stores and gets the key's new version; each other writes nothing and gets 412 with the current version | none | 201 or 204 with an `ETag`; 412 `precondition-failed` | decided | ADR-0320 Decisions 3 and 6, `TestConditionalContract`, `TestScenarioE2EKVClaimRace` |
+| A key written with a TTL | It lives at least its TTL from when funcd takes the write, and less than a second more; each write sets its own expiry, so a write without a TTL leaves none and a compare-and-set with one renews it | the TTL, whole seconds | `?ttl=<s>` on a PUT | decided | ADR-0320 Decision 4, `TestScenarioKVTTLOverLocalAPI` |
+| A key that expired | Absent at once to reads, lists, quotas and conditions; the sweep deletes it through the gateway, even after compaction, so CDC publishes a delete, the quota frees it and the DR chain records it | `kvstore.sweepInterval` 1 s | 404; a CDC delete | decided | ADR-0320 Decision 5, `TestKVProviderSweepsExpiredKeys`, `TestSweepDeletesWhatCompactionRemoved` |
+| A version from before a restore | A restore mints a new timeline, so every version changes and an old one names nothing: a compare-and-set with it loses, and the holder reads the key again | none | 412 | decided | ADR-0320 Decision 2, ADR-0202, `TestRestoreTakesANewTimeline` |
+| A KVStore backup and a key's expiry | The copy keeps each key's expiry (workload format 3), and a restore skips a key whose expiry passed | none | the key back with its expiry | decided | ADR-0320 Decision 8, `TestKVStores_CarryEachKeysExpiry` |
+| A quarantined key's expiry | The quarantine keeps each key's expiry, and the key leaves it when it expires | none | nothing | decided | ADR-0320 Decision 9, `TestQuarantineKeepsAnExpiry` |
+| An expired key in a held namespace | The sweep leaves it until the release; reads already miss it | until the release | nothing | decided | ADR-0320 Decision 5, ADR-0222 Decision 8, `TestSweepWaitsForAHeldNamespace` |
 | A Workflow's SQL database owned by its declared lake | The Lake gets no write on it | none | a refused write | deferred | #1235 |
 
 <!-- generated values, do not edit: just behavior-values -->
@@ -87,6 +95,7 @@ Details: [stop](../design/lake/stop.md), [commit-save](../design/lake/commit-sav
 | `kvstore.dataDir` | <dataDir>/kv | config |
 | `kvstore.engine` | memory | config |
 | `kvstore.maxStoresPerNamespace` | 100 | config |
+| `kvstore.sweepInterval` | 1s | config |
 | `lake.catalogMaxSize` | 256MiB | config |
 | `lake.enginePollInterval` | 2s | config |
 | `lake.engineProbeTimeout` | 2s | config |
@@ -148,6 +157,7 @@ Details: [stop](../design/lake/stop.md), [commit-save](../design/lake/commit-sav
 | `minSweepLen` | 64 | `internal/services/bindcache.go` |
 | `defaultResolverTTL` | 5s | `internal/services/blob/resolver.go` |
 | `defaultResolverTTL` | 5s | `internal/services/kv/resolver.go` |
+| `sweepBatch` | 1024 | `internal/services/kv/sweep.go` |
 | `defaultPollInterval` | 2s | `internal/services/lake/lake.go` |
 | `maxRestoringWrites` | 3 | `internal/services/lake/reconcile.go` |
 | `hasTablesTimeout` | 30s | `internal/services/sql/backup.go` |

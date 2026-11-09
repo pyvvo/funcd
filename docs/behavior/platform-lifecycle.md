@@ -100,6 +100,8 @@ restore. Details: [start-stop](../design/platform/start-stop.md). New words: Wai
 | `defaultKVRebaseline` | 24h | `internal/platform/config/kvbackup.go` |
 | `defaultKVRebaselineRetry` | 1h | `internal/platform/config/kvbackup.go` |
 | `kvChunkBytesMax` | 8MiB | `internal/platform/config/kvbackup.go` |
+| `DefaultKVSweepInterval` | 1s | `internal/platform/config/kvsweep.go` |
+| `MinKVSweepInterval` | 100ms | `internal/platform/config/kvsweep.go` |
 | `DefaultLakeCatalogMaxSize` | 256MiB | `internal/platform/config/lake.go` |
 | `MaxLakeSaveInterval` | 1h | `internal/platform/config/lake.go` |
 | `MinLakeSaveInterval` | 500ms | `internal/platform/config/lake.go` |

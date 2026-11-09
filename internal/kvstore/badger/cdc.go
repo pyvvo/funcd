@@ -63,24 +63,26 @@ func NewCDC(db *badger.DB, sink bus.Bus, cfg CDCConfig) (CDC, error) {
 	return &cdc{db: db, seq: seq, sink: sink, subject: cfg.Subject, retention: ret}, nil
 }
 
-// changeRecord is one outbox entry — the key, the op, and its seq — published to the bus.
+// changeRecord is one outbox entry — the key, the op, its seq, and the Unix second a put's key expires at — published
+// to the bus. A key's expiry publishes nothing.
 type changeRecord struct {
-	Key string `json:"key"`
-	Op  Op     `json:"op"`
-	Seq uint64 `json:"seq"`
+	Key       string `json:"key"`
+	Op        Op     `json:"op"`
+	Seq       uint64 `json:"seq"`
+	ExpiresAt uint64 `json:"expiresAt,omitempty"`
 }
 
 func cdcLogKey(seq uint64) []byte { return []byte(fmt.Sprintf("%s%020d", cdcLogPrefix, seq)) }
 
 // OnWrite appends the change-log entry in the SAME txn the gateway is committing the data write in, so the
 // data key and its _cdc/<seq> entry are atomic (both or neither — the outbox property).
-func (c *cdc) OnWrite(txn *badger.Txn, key string, op Op) error {
+func (c *cdc) OnWrite(txn *badger.Txn, key string, op Op, expiresAt uint64) error {
 	next, err := c.seq.Next()
 	if err != nil {
 		return fault.Wrapf(err, fault.Internal, "kvbadger.cdc.OnWrite", "next seq")
 	}
 	seq := next + 1 // 1-based: seq 0 would be unreachable from a 0-initialised cursor (pending seeks cursor+1)
-	rec, err := json.Marshal(changeRecord{Key: key, Op: op, Seq: seq})
+	rec, err := json.Marshal(changeRecord{Key: key, Op: op, Seq: seq, ExpiresAt: expiresAt})
 	if err != nil {
 		return fault.Wrapf(err, fault.Internal, "kvbadger.cdc.OnWrite", "encode change")
 	}

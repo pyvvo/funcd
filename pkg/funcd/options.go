@@ -77,6 +77,11 @@ func WithSQLProviderRuntime(r provider.Runtime) Option {
 	return func(c *config) error { c.sqlProvider = r; return nil }
 }
 
+// WithKVSweepInterval sets how often the KV service deletes the keys that expired (ADR-0320); 0 is the default.
+func WithKVSweepInterval(d time.Duration) Option {
+	return func(c *config) error { c.kvSweepInterval = d; return nil }
+}
+
 // WithKVStoreQuota sets the per-namespace KVStore count cap enforced at admission (ADR-0072,
 // kvstore.maxStoresPerNamespace). 0 ⇒ the default (100); a negative value disables the quota.
 func WithKVStoreQuota(maxPerNamespace int) Option {

@@ -56,7 +56,12 @@ func OpenWithSeams(
 			return nil, Seams{}, err
 		}
 	}
-	return startDriver(db, cfg), seams, nil
+	timeline, err := loadTimeline(db)
+	if err != nil {
+		_ = db.Close()
+		return nil, Seams{}, err
+	}
+	return startDriver(db, cfg, timeline), seams, nil
 }
 
 // OpenWithSeamsFor is the daemon-facing opener: it wires the opt-in seams from plain values, hiding the

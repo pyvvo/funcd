@@ -1,0 +1,132 @@
+# Venom e2e suite for the kv-claim containerd lane: two functions, claim (JS) and pyclaim (Python), race context.kv's
+# conditional writes on one table of a durable Badger store. Run host-side once the self-deploying Lima VM is Ready;
+# the http steps hit the VM's forwarded 127.0.0.1 ports.
+#
+# It proves on a real funcd (ADR-0320 scenario two-functions-race-a-claim):
+#   1. a put-if-absent raced by two functions has exactly one winner, and the loser reads the winner's holder;
+#   2. a claim with a ttl expires and the other function takes it over;
+#   3. a renewal and a release name the version their caller holds: a stale one loses.
+name: kv-claim conditional writes and expiring keys (containerd lane)
+
+vars:
+  dp: http://127.0.0.1:8081   # funcd data plane, forwarded from the Lima guest
+
+testcases:
+  - name: claim and pyclaim race a put-if-absent and exactly one wins each round
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/pyclaim"
+        headers:
+          content-type: application/json
+        body: '{"data":{"key":"warm","holder":"py"}}'
+        retry: 10
+        delay: 1
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.won ShouldEqual true
+      - type: exec
+        script: |
+          set -eu
+          d=$(mktemp -d)
+          ok=0
+          for i in $(seq 1 20); do
+            curl -sf -m 30 -X POST -H 'content-type: application/json' \
+              --data "{\"data\":{\"key\":\"race-$i\",\"holder\":\"js\"}}" {{.dp}}/function/claim >"$d/js" & js=$!
+            curl -sf -m 30 -X POST -H 'content-type: application/json' \
+              --data "{\"data\":{\"key\":\"race-$i\",\"holder\":\"py\"}}" {{.dp}}/function/pyclaim >"$d/py" & py=$!
+            wait "$js"
+            wait "$py"
+            wins=$(cat "$d/js" "$d/py" | grep -Eo '"won": ?true' | wc -l | tr -d ' ')
+            holders=$(cat "$d/js" "$d/py" | grep -Eo '"holder": ?"[a-z]+"' | sort -u | wc -l | tr -d ' ')
+            if [ "$wins" = 1 ] && [ "$holders" = 1 ]; then ok=$((ok + 1)); else echo "round $i: $(cat "$d/js") $(cat "$d/py")"; fi
+          done
+          rm -rf "$d"
+          echo "single-winner rounds: $ok of 20"
+        assertions:
+          - result.code ShouldEqual 0
+          - 'result.systemout ShouldEqual "single-winner rounds: 20 of 20"'
+
+  - name: a claim with a ttl expires and the other function takes it over
+    steps:
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/claim"
+        headers:
+          content-type: application/json
+        body: '{"data":{"key":"lease","holder":"js","ttl":2}}'
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.won ShouldEqual true
+        vars:
+          jsversion:
+            from: result.bodyjson.version
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/pyclaim"
+        headers:
+          content-type: application/json
+        body: '{"data":{"key":"lease","holder":"py"}}'
+        assertions:
+          - result.bodyjson.won ShouldEqual false
+          - result.bodyjson.holder ShouldEqual js
+          - result.bodyjson.version ShouldEqual {{.jsversion}}
+      # Each attempt before the expiry loses and writes nothing; the retry is the wait.
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/pyclaim"
+        headers:
+          content-type: application/json
+        body: '{"data":{"key":"lease","holder":"py","ttl":60}}'
+        retry: 10
+        delay: 1
+        assertions:
+          - result.bodyjson.won ShouldEqual true
+        vars:
+          pyversion:
+            from: result.bodyjson.version
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/claim"
+        headers:
+          content-type: application/json
+        body: '{"data":{"key":"lease","holder":"js","op":"renew","version":"{{.jsversion}}","ttl":60}}'
+        assertions:
+          - result.bodyjson.won ShouldEqual false
+          - result.bodyjson.holder ShouldEqual py
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/pyclaim"
+        headers:
+          content-type: application/json
+        body: '{"data":{"key":"lease","holder":"py","op":"renew","version":"{{.pyversion}}","ttl":60}}'
+        assertions:
+          - result.bodyjson.won ShouldEqual true
+          - result.bodyjson.version ShouldNotEqual {{.pyversion}}
+        vars:
+          renewed:
+            from: result.bodyjson.version
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/claim"
+        headers:
+          content-type: application/json
+        body: '{"data":{"key":"lease","holder":"js","op":"release","version":"{{.pyversion}}"}}'
+        assertions:
+          - result.bodyjson.won ShouldEqual false
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/pyclaim"
+        headers:
+          content-type: application/json
+        body: '{"data":{"key":"lease","holder":"py","op":"release","version":"{{.renewed}}"}}'
+        assertions:
+          - result.bodyjson.won ShouldEqual true
+      - type: http
+        method: POST
+        url: "{{.dp}}/function/claim"
+        headers:
+          content-type: application/json
+        body: '{"data":{"key":"lease","holder":"js"}}'
+        assertions:
+          - result.bodyjson.won ShouldEqual true

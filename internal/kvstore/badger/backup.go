@@ -299,7 +299,8 @@ func (b *exporter) ready(ctx context.Context) (bool, error) {
 
 // export streams every version > since to w and returns the version the cursor may advance to, and the read
 // timestamp taken before the stream. It leaves out the backup's own cursor: each cursor write is a new
-// version, so exporting it made every idle tick ship a segment (#790). Each Stream producer reads its own,
+// version, so exporting it made every idle tick ship a segment (#790). It leaves out the timeline too, so a restored
+// instance takes another (ADR-0202's rule for versions). Each Stream producer reads its own,
 // later snapshot, so a version above the read timestamp can be exported while a write below it was missed
 // (#806): the result is capped at that read timestamp, which every producer sees in full, and the next export
 // ships the versions above it again. A base also leaves out every delete record whose newest version is at or
@@ -315,7 +316,7 @@ func (b *exporter) export(w io.Writer, since uint64, base bool) (to, readTs uint
 	s.NumGo = exportConcurrency
 	s.ChooseKey = func(item *badger.Item) bool {
 		k := item.Key()
-		if string(k) == backupCursorKey {
+		if string(k) == backupCursorKey || string(k) == timelineKey {
 			return false
 		}
 		return !base || !bytes.HasPrefix(k, recPrefix) || item.Version() > readTs

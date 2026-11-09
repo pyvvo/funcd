@@ -20,7 +20,8 @@ func Snapshot(ctx context.Context, db *badger.DB, emit func(snapshot.Record) err
 	return SnapshotPrefix(ctx, db, nil, emit)
 }
 
-// SnapshotPrefix is Snapshot over the keys under prefix, each emitted without it (ADR-0209 Decision 7).
+// SnapshotPrefix is Snapshot over the keys under prefix, each emitted without it and with its expiry (ADR-0209
+// Decision 7).
 func SnapshotPrefix(ctx context.Context, db *badger.DB, prefix []byte, emit func(snapshot.Record) error) error {
 	const op = "badger.Snapshot"
 	if err := ctx.Err(); err != nil {
@@ -41,7 +42,7 @@ func SnapshotPrefix(ctx context.Context, db *badger.DB, prefix []byte, emit func
 			if err != nil {
 				return fault.Internalf(op, "value of %q: %v", item.Key(), err)
 			}
-			if err := emit(snapshot.Record{Key: item.KeyCopy(nil)[len(prefix):], Value: val}); err != nil {
+			if err := emit(snapshot.Record{Key: item.KeyCopy(nil)[len(prefix):], Value: val, ExpiresAt: item.ExpiresAt()}); err != nil {
 				return err
 			}
 		}

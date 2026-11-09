@@ -147,6 +147,8 @@ type config struct {
 	// kvMaxStoresPerNamespace is the per-namespace KVStore count cap at admission (ADR-0072); 0 ⇒
 	// the default (100); negative disables the quota.
 	kvMaxStoresPerNamespace int
+	// kvSweepInterval is how often the KV service deletes the keys that expired (ADR-0320); 0 ⇒ the default.
+	kvSweepInterval time.Duration
 	// bucketMaxPerNamespace is the per-namespace Bucket count cap at admission (ADR-0080); 0 ⇒
 	// the default (100); negative disables the quota.
 	bucketMaxPerNamespace int

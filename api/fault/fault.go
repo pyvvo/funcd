@@ -36,6 +36,8 @@ const (
 	InsufficientStorage Kind = "insufficient_storage"
 	// DeadlineExceeded means the upstream did not start its response in time (504 Gateway Timeout, ADR-0151).
 	DeadlineExceeded Kind = "deadline_exceeded"
+	// PreconditionFailed means a conditional write's condition did not hold, so nothing was written (412).
+	PreconditionFailed Kind = "precondition_failed"
 	// Internal means an unexpected internal error occurred.
 	Internal Kind = "internal"
 )
@@ -126,6 +128,11 @@ func InsufficientStoragef(op, format string, a ...any) *Error {
 // DeadlineExceededf builds a DeadlineExceeded error (504) with a formatted message.
 func DeadlineExceededf(op, format string, a ...any) *Error {
 	return &Error{Kind: DeadlineExceeded, Op: op, Msg: fmt.Sprintf(format, a...)}
+}
+
+// PreconditionFailedf builds a PreconditionFailed error (412) with a formatted message.
+func PreconditionFailedf(op, format string, a ...any) *Error {
+	return &Error{Kind: PreconditionFailed, Op: op, Msg: fmt.Sprintf(format, a...)}
 }
 
 // Internalf builds an Internal error with a formatted message.
