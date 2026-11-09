@@ -12,6 +12,11 @@ quietly corner-painting, *and* to protect the good parts from being "fixed" away
 that finds only problems is as much a failure as one that finds only praise: both mean the
 judge didn't calibrate against the actual goal.
 
+**Who runs it.** A subagent or a subsession, never the session that wrote the ADR: an author judging its own ADR has
+the conflict of interest Step 5 names (the decider, 2026-11-09). The judge gets the files (the ADR, its spec, the code
+and the experiment it cites), never the author's own findings or verdict. One judge serves every round of the same
+ADR: the author sends it the revised ADR, so the judge's orientation is paid once. A new ADR gets a new judge.
+
 The target ADR usually arrives as the skill argument (`/adr-judge 0002` or a path). If no
 ADR is named, ask which one before doing anything else.
 
@@ -33,11 +38,17 @@ Judge against the project's reality, never from memory or generic Go-style prior
    Apache-2.0/MIT-only deps, one task runner `just`, depguard import discipline,
    `log/slog`-only, crash-only, RFC 9457 on the wire) are the yardstick — an ADR that
    contradicts them needs an explicit, justified reason or it is a defect.
-5. List `docs/adr/` and read any **related, superseded, or depended-on** ADRs. Cross-ADR
+5. List `docs/adr/` and read any **related, superseded, or depended-on** ADRs, each whole and following each
+   `Superseded in part by` line: an accepted cost lives in its Scope, Alternatives, Consequences, Risks accepted and
+   Open questions, not only in its Decision. Cross-ADR
    contradiction is one of the most damaging defect classes — an ADR that conflicts with an
    *Accepted* ADR is wrong by default (ADR-0000: the newest accepted ADR wins, but a Draft
    does not get to silently override an Accepted one).
-6. If the ADR cites external facts the decision hinges on (library maintenance, license,
+6. Read the behavior registry, [docs/behavior/](../../../docs/behavior/README.md): grep the component, the phase, the
+   reason and the key the ADR touches, and read each row it hits with its citation. A row says what the platform does
+   today and who decided it, so it shows what is already decided and what already exists. Read `.claude/CLAUDE.md` of
+   the checkout too: its bug rule, *Grounding* and *Strict rules* bind the report.
+7. If the ADR cites external facts the decision hinges on (library maintenance, license,
    feature claims, release cadence), spot-verify the load-bearing ones with WebFetch —
    bias and staleness hide here. Don't re-verify everything; verify what the decision rests on.
 
@@ -132,7 +143,8 @@ Apply these rules to the findings so the verdict is trustworthy, not just long:
   home:
   - **here**: this ADR's own decision, contracts, scenarios or text must change. Only these get a severity tier and
     can block the ADR.
-  - **elsewhere**: another feature or ADR owns it (an Accepted ADR, a feat row, an open issue); name it.
+  - **elsewhere**: another feature or ADR owns it (an Accepted ADR, a feat row, an open issue), or the decider, for a
+    finding against a choice they recorded; name it.
   - **above**: the ADR runs into a concept the platform has not decided yet, a cross-cutting policy or objective (a
     recovery objective such as an RPO, a tenancy model, a security model); name the layer that should decide it (the
     blueprint, a feat row, a new ADR).
@@ -143,6 +155,23 @@ Apply these rules to the findings so the verdict is trustworthy, not just long:
   (ADR-0273, 2026-10-24): "a kill during the stop loses commits" was tiered Major; its home was partly here (the ADR
   had to state the loss honestly, and keep the Lake's existing one-second save interval) and partly above (how much
   loss a Lake may take is a recovery objective, FEAT-0009 F112), which went to its own ADR.
+- **Not a finding of this ADR.** Cite each of these where a reader needs it, and tier none:
+  - a behavior an Accepted ADR decided or a registry row records as `decided`, `accepted` or `deferred`, another
+    component's included: the memory KV engine keeps no key across a restart by ADR-0066, which is no limit of a KV
+    feature;
+  - what the ADR's Scope leaves out or its Open questions hold, unless leaving it out breaks a promise the ADR makes;
+  - a choice the decider recorded (the ADR's *Constraints* name it): a finding against one goes under *Routed*, to
+    the decider, as information, and never blocks;
+  - existing code that surprises you: it is "surprising" until the two checks of the bug rule (`.claude/CLAUDE.md`)
+    give the verdict `bug`;
+  - a migration path, an alias or an upgrade step for an older on-disk or backup format: no funcd node is deployed and
+    no workload runs anywhere (the decider, 2026-10-29), so a format change, a rename or a changed default ships
+    without one, stated as a consequence;
+  - the numbers of a private experiment: an ADR names pyvvo/experiment's timings and pastes no number without the
+    decider's go.
+- **Judge this ADR, not the platform around it.** A defect of other code or of another ADR that does not bear on this
+  decision is neither hunted nor reported. A possible vulnerability goes into no report: tell it only to whoever runs
+  the judge, for a private advisory (CLAUDE.md → *Issues*).
 - **Severity is about blast radius, not confidence.** Tier every finding placed here:
   - **Blocker** — a contradiction, contract bug, goal/Accepted-ADR conflict, or
     security-model violation within this ADR's scope that will break the implementation or the platform. Must fix

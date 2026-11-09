@@ -21,6 +21,10 @@ independence. Hand Blocker/Major findings back to the builder (the `adr-impl` sk
 apply fixes only as a separate, explicit step the user asks for. Only findings the builder can fix are tiered
 and sent back; the rest are routed to where they belong (Step 3).
 
+**Who runs it.** A subagent or a subsession, never the session that produced the work (the decider, 2026-11-09). It
+gets the ADR and the branch, never the builder's own verdict on its work. One reviewer serves every round of the same
+implementation: the builder sends it the reworked branch, so the reviewer's orientation is paid once.
+
 ## Step 0 — Inputs
 
 1. **Which ADR** (e.g. `0002`). The work is an implementation — working code with passing scenario
@@ -38,6 +42,10 @@ Read, and treat as the bar:
    implementation must also meet, even where the ADR was silent.
 3. `blueprint.md` (the architecture the work slots into) and `docs/adr/0002-*` (binding code
    conventions). For a feature ADR, also its realized `docs/feat/` row.
+4. The behavior registry rows on the work's path ([docs/behavior/](../../../docs/behavior/README.md)): grep the
+   component, the phase, the reason and the key, and read each row with its citation. A behavior an Accepted ADR or a
+   row records as decided, accepted or deferred is not a defect of this work. Existing code the work did not write that
+   surprises you is "surprising" until the bug rule's two checks (`.claude/CLAUDE.md`) say `bug`.
 
 ## Step 2 — Run the verification (evidence, not opinion)
 
@@ -88,6 +96,9 @@ back. The verdict lists it under *Routed (not this work's)* with its destination
 - **A deliverable that cannot be built as the ADR says**: check feasibility before charging the model; an
   impossible item is an `adr` finding (ADR-0005's first round charged the model for a client the generator
   could not produce).
+
+Not findings at all: a choice the decider recorded in the ADR, which is the bar, and a migration path, an alias or an
+upgrade step for an older format, which no deployed node needs (the decider, 2026-10-29).
 
 **Then attribute it**: decide whose fault it is, which is what keeps the model score fair:
 - **`model`** — the implementer got it wrong (missed a file, broke a convention, left a stub that

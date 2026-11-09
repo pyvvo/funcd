@@ -137,9 +137,10 @@ the `Realizes:` header decides: a user-facing feat-row has a feature issue, an i
 
 1. Present the acceptance brief (the `brief` skill). Link the file — don't paste the whole ADR into chat.
 2. When the draft is ready for review, set **Status: Proposed**, then run the **judge gate**
-   (ADR-0000 gate #3): hand the ADR to the `adr-judge` skill for an evidence-cited,
-   severity-tiered verdict — inconsistency, bias, scope creep, contract bugs, and the
-   strengths worth keeping. Loop its Blocker/Major findings back into the draft and revise.
+   (ADR-0000 gate #3): the `adr-judge` skill, in a subagent or a subsession (its *Who runs it*), for an
+   evidence-cited, severity-tiered verdict — inconsistency, bias, scope creep, contract bugs, and the
+   strengths worth keeping. Loop its Blocker/Major findings back into the draft, revise, and send the revised ADR to
+   the same judge for the next round.
 3. When the user is satisfied (judge findings addressed), set **Status: Accepted** with the
    date on their explicit go-ahead. Acceptance is the user's call — never self-accept; the
    judge advises but never accepts.

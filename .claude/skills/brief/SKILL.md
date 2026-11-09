@@ -48,11 +48,12 @@ answers as the brainstorm, up to Proposed; `adr-judge` judges it.
 
 ## Acceptance mode — one ADR per message
 
-Ready only if Status is Proposed, the last `adr-judge` verdict covers the current text, and no Blocker or Major is
-open. Otherwise say what is missing and recommend running `adr-judge` first.
+Ready only if Status is Proposed, the last `adr-judge` verdict covers the current text and came from a judge outside
+the drafting context (a subagent or a subsession), and no Blocker or Major is open. Otherwise say what is missing and
+recommend running `adr-judge` first.
 
-1. **Title:** `**ADR-NNNN: <what it decides, in plain words>**` and one line: status, judge rounds and the last
-   verdict, the card or issues it answers.
+1. **Title:** `**ADR-NNNN: <what it decides, in plain words>**` and one line: status, judge rounds, who judged and
+   the last verdict, the card or issues it answers.
 2. **It decides:** three to five bullets, one line each.
 3. **What changes for users and operators:** behavior, new config keys, kinds, fields and CLI flags (with
    defaults), new status reasons — one line each, with one example when the change is visible.
@@ -61,7 +62,8 @@ open. Otherwise say what is missing and recommend running `adr-judge` first.
 5. **Deferred / debt:** the judge's routed findings and where each goes, workarounds (exit criterion), open
    questions, new deps (license; not Apache/MIT/BSD needs
    the decider's approval), the losing alternatives in a few words, or none.
-6. **Cost and risks:** one to three bullets, from the ADR's Consequences.
+6. **Cost and risks:** one to three bullets, from the ADR's Consequences: only what the change itself costs or leaves
+   out. A property of an existing decision is cited as that decision's, never as this change's limit.
 7. **Replaces:** the Accepted or Implemented ADRs it supersedes or refines (header links), in a few words each.
 8. **Recommendation:** accept / accept after <one change> / not ready, plus a one-line reason.
 9. **Question:** "Accept? Or change what?"
