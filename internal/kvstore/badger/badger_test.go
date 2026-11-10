@@ -3,6 +3,7 @@ package badger_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -44,6 +45,14 @@ func TestScenarioKVDurableDriverRoundtrips(t *testing.T) {
 		kv := openKV(t, t.TempDir())
 		t.Cleanup(func() { _ = kv.(closer).Close() })
 		kvstorecontract.RunUsage(t, kv)
+	})
+
+	// oracle: docs/design/storage/kv-claims.fizz#OneHolder
+	// oracle: docs/design/storage/kv-claims.fizz#SweepSparesALiveKey
+	t.Run("conditional", func(t *testing.T) {
+		kv := openKV(t, t.TempDir())
+		t.Cleanup(func() { _ = kv.(closer).Close() })
+		kvstorecontract.RunConditional(t, kv)
 	})
 
 	t.Run("survives-restart", func(t *testing.T) {
@@ -116,7 +125,8 @@ func TestScenarioStoreTeardownDropsPrefix(t *testing.T) {
 }
 
 // scenario: base-driver-has-no-durability-side-effects — with no CDC/Backup seam wired, the driver writes
-// NO reserved (CDC outbox) keys and runs no background loop: a raw scan finds only the user keys.
+// NO reserved (CDC outbox) keys and runs no background loop: a raw scan finds only the user keys and the timeline its
+// versions name (ADR-0320).
 func TestScenarioBaseDriverHasNoDurabilitySideEffects(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
@@ -130,18 +140,20 @@ func TestScenarioBaseDriverHasNoDurabilitySideEffects(t *testing.T) {
 	raw, err := badger.Open(badger.DefaultOptions(dir).WithLoggingLevel(badger.ERROR))
 	require.NoError(t, err)
 	defer func() { _ = raw.Close() }()
-	var total, reserved int
+	var keys, reserved []string
 	require.NoError(t, raw.View(func(txn *badger.Txn) error {
 		it := txn.NewIterator(badger.DefaultIteratorOptions)
 		defer it.Close()
 		for it.Rewind(); it.Valid(); it.Next() {
-			total++
-			if string(it.Item().Key()[:1]) == kvbadger.Reserved {
-				reserved++
+			k := string(it.Item().Key())
+			if strings.HasPrefix(k, kvbadger.Reserved) {
+				reserved = append(reserved, k)
+			} else {
+				keys = append(keys, k)
 			}
 		}
 		return nil
 	}))
-	require.Equal(t, 2, total, "only the two user keys exist")
-	require.Zero(t, reserved, "base driver writes no reserved/CDC keys")
+	require.Equal(t, []string{"ns/b/k1", "ns/b/k2"}, keys, "only the two user keys exist")
+	require.Equal(t, []string{kvbadger.Reserved + "kv/timeline"}, reserved, "base driver writes no CDC or backup keys")
 }

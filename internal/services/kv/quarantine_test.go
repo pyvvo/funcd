@@ -147,3 +147,28 @@ func TestQuarantineExpire(t *testing.T) {
 	require.Equal(t, []quarantine.Entry{{Ref: ordersRef(), Since: t0, State: quarantine.Kept}}, gone)
 	require.Equal(t, []string{moving + "state"}, keysUnder(t, kv, ".quarantine/"), "a moving entry never expires")
 }
+
+// scenario: quarantine-keeps-the-expiry
+// ADR-0320 on ADR-0288's move: a quarantined key keeps its expiry, so a claim moved aside expires when it would have.
+func TestQuarantineKeepsAnExpiry(t *testing.T) {
+	ctx := context.Background()
+	kv := kvmem.New()
+	c := kv.(kvstore.Conditional)
+	_, err := c.PutIf(ctx, "default/orders/t/lease", []byte("me"), kvstore.Write{TTL: time.Hour})
+	require.NoError(t, err)
+	require.NoError(t, kv.Put(ctx, "default/orders/t/plain", []byte("p")))
+	held, _, err := c.GetEntry(ctx, "default/orders/t/lease")
+	require.NoError(t, err)
+	r, err := kvsvc.NewReconciler(kvsvc.ReconcilerDeps{Store: store.New(storemem.New()), KV: kv.(kvsvc.PrefixManager), QuarantinePeriod: time.Hour})
+	require.NoError(t, err)
+	t0 := time.Date(2026, 11, 9, 1, 0, 0, 0, time.UTC)
+	require.NoError(t, r.ReclaimDeleted(ctx, t0))
+	data := ".quarantine/default/orders/" + quarantine.Stamp(t0) + "/data/t/"
+	moved, found, err := c.GetEntry(ctx, data+"lease")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, held.ExpiresAt, moved.ExpiresAt, "the move keeps the key's expiry")
+	plain, _, err := c.GetEntry(ctx, data+"plain")
+	require.NoError(t, err)
+	require.Zero(t, plain.ExpiresAt)
+}

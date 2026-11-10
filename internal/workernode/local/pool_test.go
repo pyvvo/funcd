@@ -16,6 +16,7 @@ import (
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	iblob "github.com/pyvvo/funcd/internal/blob"
+	"github.com/pyvvo/funcd/internal/kvstore"
 	"github.com/pyvvo/funcd/internal/workernode/local"
 )
 
@@ -92,6 +93,23 @@ func (p poolPort) List(_ context.Context, ns v1.NamespaceName, fn v1.ObjectName,
 	return nil, nil
 }
 
+type poolKV struct{ poolPort }
+
+func (p poolKV) GetEntry(_ context.Context, ns v1.NamespaceName, fn v1.ObjectName, _, _ string) (kvstore.Entry, bool, error) {
+	p.record(ns, fn)
+	return kvstore.Entry{Value: []byte("v"), Version: "t-1"}, true, nil
+}
+
+func (p poolKV) PutIf(_ context.Context, ns v1.NamespaceName, fn v1.ObjectName, _, _ string, _ []byte, _ kvstore.Write) (kvstore.Result, error) {
+	p.record(ns, fn)
+	return kvstore.Result{Done: true, Version: "t-1"}, nil
+}
+
+func (p poolKV) DeleteIf(_ context.Context, ns v1.NamespaceName, fn v1.ObjectName, _, _, _ string) (kvstore.Result, error) {
+	p.record(ns, fn)
+	return kvstore.Result{Done: true}, nil
+}
+
 type poolBlob struct{ poolPort }
 
 func (p poolBlob) SignedURL(_ context.Context, ns v1.NamespaceName, fn v1.ObjectName, _, _ string, _ iblob.SignOptions) (string, error) {
@@ -106,7 +124,7 @@ func poolManager(t *testing.T) (*local.Manager, *poolCalls) {
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	rec := &poolCalls{}
 	m := local.NewManager(dir, poolStore{rec}, poolInvoker{rec}, nil, nil, slog.New(slog.DiscardHandler),
-		local.WithFacets(local.KVFacet(poolPort{rec, "kv"}), local.BlobFacet(poolBlob{poolPort{rec, "blob"}})))
+		local.WithFacets(local.KVFacet(poolKV{poolPort{rec, "kv"}}), local.BlobFacet(poolBlob{poolPort{rec, "blob"}})))
 	t.Cleanup(m.Close)
 	return m, rec
 }

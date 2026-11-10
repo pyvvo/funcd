@@ -65,6 +65,7 @@ flowchart LR
     F118 -->|"its liveness restart, extended"| F125["F125 A late call ends"]
     F113 --> F126["F126 Refused at apply"]
     F113 -.->|"ships its own CLI"| F233["F233 funcdctl plugins"]
+    F113 -.->|"its workflows claim runs"| F234["F234 KV claims"]
 ```
 
 | # | Feature | Builds on | ADR(s) | Status |
@@ -84,6 +85,7 @@ flowchart LR
 | F125 | **A late call ends**: a handler can read how much time its call has left, and a call that runs past its deadline ends. The platform stops the stuck call alone where it can, and replaces the replica when it cannot, so one stuck handler never holds a replica or a pool member for ever. **Why**: a Python handler stuck in a loop kept its replica busy for ever, because its liveness still answered (#928), and a pool member stuck the same way held every later call to it. Handlers also had no way to budget their work against the time left. | F118 · [ADR-0151](../adr/0151-external-invoke-deadline.md) (the deadline reaches the worker) · [ADR-0215](../adr/0215-built-in-health.md) (the liveness restart) | [ADR-0226](../adr/0226-stuck-calls-deadline-and-stop-ladder.md) | implemented |
 | F126 | **A binding that cannot work is refused at apply**: when a Workflow step, alone or inside an App, binds a KV store that its Workflow does not declare, applying it fails at once and names the field to fix. The platform keeps refusing such a binding when it builds the step, for anything that reached it another way. **Why**: the mistake surfaced only when the App's upgrade timed out, minutes later, with an error far from its cause (found by the app-todo lane). | F113 · [ADR-0178](../adr/0178-a-workflow-adopts-only-its-own-kv-stores.md) (a Workflow adopts only its own KV stores) · [ADR-0063](../adr/0063-admission-framework.md) (admission) | [ADR-0229](../adr/0229-undeclared-step-store-refused-at-apply.md) | implemented |
 | F233 | **An App's own CLI runs as a funcdctl plugin**: `funcdctl <name>` runs an executable `funcdctl-<name>` found on PATH when `<name>` is no built-in command, as kubectl runs its plugins, and hands it the funcdctl that called it with the server and the token funcdctl resolved. An App ships a CLI versioned with its own API, and funcd learns no App's command. `funcdctl plugin list` shows the plugins on PATH. | funcdctl ([ADR-0024](../adr/0024-funcdcli-and-sdk.md)) | [ADR-0319](../adr/0319-funcdctl-runs-kubectl-style-plugins.md) | implemented |
+| F234 | **A Function claims a key through KV**: a write stores only while its key is absent, or at the version the caller holds, and says who won; a key can expire, so a crashed holder's claim ends. Of Functions racing for one key exactly one wins and the others learn the current holder: the claims, locks, leases and idempotency keys an App's workflows need, beside a SQL database's conditional `UPDATE`. | KV ([ADR-0069](../adr/0069-kv-data-plane.md), [ADR-0073](../adr/0073-kv-bindings-and-subdomains.md)) | [ADR-0320](../adr/0320-kv-conditional-writes-and-expiring-keys.md) | implemented |
 
 ## How it lands on funcd (high level)
 

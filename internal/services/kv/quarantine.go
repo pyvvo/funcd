@@ -8,6 +8,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/kvstore"
 	"github.com/pyvvo/funcd/internal/platform/quarantine"
 )
 
@@ -205,21 +206,31 @@ func (q Quarantine) Return(ctx context.Context, ref quarantine.Ref, since time.T
 	return nil
 }
 
-// copyKeys puts under dst every key under src, its suffix kept.
+// copyKeys puts under dst every key under src, its suffix kept, and its expiry with it, so a quarantined claim expires
+// when it would have (ADR-0320); a key that expired meanwhile is left out.
 func (q Quarantine) copyKeys(ctx context.Context, src, dst string) error {
 	keys, err := q.r.kv.List(ctx, src)
 	if err != nil {
 		return err
 	}
+	c, _ := q.r.kv.(kvstore.Conditional)
 	for _, k := range keys {
-		v, found, err := q.r.kv.Get(ctx, k)
-		if err != nil {
-			return err
-		}
-		if !found {
+		to := dst + strings.TrimPrefix(k, src)
+		if c == nil {
+			v, found, err := q.r.kv.Get(ctx, k)
+			if err == nil && found {
+				err = q.r.kv.Put(ctx, to, v)
+			}
+			if err != nil {
+				return err
+			}
 			continue
 		}
-		if err := q.r.kv.Put(ctx, dst+strings.TrimPrefix(k, src), v); err != nil {
+		e, found, err := c.GetEntry(ctx, k)
+		if err == nil && found {
+			_, err = c.PutIf(ctx, to, e.Value, kvstore.Write{ExpiresAt: e.ExpiresAt})
+		}
+		if err != nil {
 			return err
 		}
 	}

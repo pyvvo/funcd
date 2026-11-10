@@ -34,6 +34,7 @@ var kindProblem = map[Kind]struct {
 	PayloadTooLarge:     {typeURI: "urn:funcd:problem:payload-too-large", title: "Content Too Large", status: http.StatusRequestEntityTooLarge},
 	InsufficientStorage: {typeURI: "urn:funcd:problem:insufficient-storage", title: "Insufficient Storage", status: http.StatusInsufficientStorage},
 	DeadlineExceeded:    {typeURI: "urn:funcd:problem:deadline-exceeded", title: "Gateway Timeout", status: http.StatusGatewayTimeout},
+	PreconditionFailed:  {typeURI: "urn:funcd:problem:precondition-failed", title: "Precondition Failed", status: http.StatusPreconditionFailed},
 	Internal:            {typeURI: "urn:funcd:problem:internal", title: "Internal Server Error", status: http.StatusInternalServerError},
 }
 

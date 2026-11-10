@@ -38,6 +38,14 @@ func TestScenarioKVStoreContractHolds(t *testing.T) {
 	kvstorecontract.Run(t, memory.New())
 }
 
+// The conditional writes and expiring keys, on the in-memory driver as on the badger one.
+// oracle: docs/design/storage/kv-claims.fizz#OneHolder
+// oracle: docs/design/storage/kv-claims.fizz#SweepSparesALiveKey
+func TestConditionalContract(t *testing.T) {
+	t.Parallel()
+	kvstorecontract.RunConditional(t, memory.New())
+}
+
 // The usage a KVStore's quota measures (ADR-0292), on the in-memory driver.
 func TestUsageContract(t *testing.T) {
 	t.Parallel()

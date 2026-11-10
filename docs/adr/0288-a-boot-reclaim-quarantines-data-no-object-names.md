@@ -2,6 +2,7 @@
 
 - **Status**: Implemented (2026-10-25), review passed ([report](../reviews/adr-0288-implementation-claude-opus-5-5.md)); Reviewing 2026-10-25; Accepted (2026-10-25, under the decider's delegation; judged twice)
 - **Superseded in part by**: [ADR-0293](0293-a-lakes-catalog-lives-in-a-platform-catalog-store.md) (2026-10-27) — Decision 2's Bucket entry: it also holds the Bucket's Lake catalogs, under `catalogs/`
+- **Superseded in part by**: [ADR-0320](0320-kv-conditional-writes-and-expiring-keys.md) (2026-11-10) — Decision 2's KVStore row: each key is copied with its expiry
 - **Date**: 2026-10-25
 - **Deciders**: green-0-rabbit
 - **Tags**: disaster-recovery, restore, storage, kv, blob, sql, volumes

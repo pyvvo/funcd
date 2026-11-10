@@ -20,8 +20,8 @@ type KVLoader interface {
 }
 
 // KVStores is the KVStore kind: kv/<store>/ holds the driver's export of the store (ADR-0209 SnapshotPrefix; nil when
-// the driver offers none), which a Restore loads with load into the KVStore as, or into the store itself, emptied
-// first.
+// the driver offers none), each record's value framed with its key's expiry (EncodeKV, ADR-0320), which a Restore loads
+// with load into the KVStore as, or into the store itself, emptied first.
 func KVStores(st store.Store, export func(prefix string) snapshot.Source, load KVLoader) MemberKind {
 	return kvStores{st: st, export: export, load: load}
 }
@@ -39,7 +39,9 @@ func (k kvStores) Write(ctx context.Context, w FileWriter, ns v1.NamespaceName, 
 		return MemberFile{}, fault.Unavailablef("workload.Write", "member %s/%s: the KV driver exports no store", m.Kind, m.Name)
 	}
 	f, err := w.File(ctx, "kv/"+string(m.Name), func(emit func(snapshot.Record) error) error {
-		_, err := k.export(KVPrefix(ns, m.Name)).Snapshot(ctx, emit)
+		_, err := k.export(KVPrefix(ns, m.Name)).Snapshot(ctx, func(r snapshot.Record) error {
+			return emit(snapshot.Record{Key: r.Key, Value: EncodeKV(r.ExpiresAt, r.Value)})
+		})
 		return err
 	})
 	if err != nil {
@@ -91,7 +93,15 @@ func (d kvDestination) Load(ctx context.Context, f MemberFile, open RecordOpener
 	if d.load == nil {
 		return fault.Unavailablef("backup.Restore", "the KV driver loads no store")
 	}
-	return notEmpty(d.load.LoadPrefix(ctx, d.prefix, open(ctx, f.Files[0])))
+	next := open(ctx, f.Files[0])
+	return notEmpty(d.load.LoadPrefix(ctx, d.prefix, func() (snapshot.Record, error) {
+		r, err := next()
+		if err != nil {
+			return r, err
+		}
+		at, v, err := DecodeKV(r.Value)
+		return snapshot.Record{Key: r.Key, Value: v, ExpiresAt: at}, err
+	}))
 }
 
 func (d kvDestination) Clear(context.Context) error {

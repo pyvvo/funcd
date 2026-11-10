@@ -12,12 +12,15 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 )
 
+// capFakeKV is a KV port the size cap stops requests before.
+type capFakeKV struct{ KV }
+
 // scenario: local-api-body-over-limit (ADR-0148)
 // Issue #172: a body over a local-API MaxBytesReader cap is 413 payload-too-large (as on the data plane,
 // ADR-0134), not 400 invalid. The cap fires before the resolver, invoker or port is reached.
 func TestIssue172_OverCapBodyIs413(t *testing.T) {
 	h := NewHandler(Ref{Namespace: "default", Function: "fn"}, nil, nil, nil, nil, nil,
-		WithFacets(KVFacet(capFakeBlob{}), BlobFacet(capFakeBlob{})))
+		WithFacets(KVFacet(capFakeKV{}), BlobFacet(capFakeBlob{})))
 	for _, tc := range []struct {
 		name, method, path string
 		limit              int64

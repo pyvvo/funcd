@@ -135,6 +135,31 @@ func (f *Facade) Get(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName,
 // forbid(kv::write) unless principal == resource.owner makes this owner-only (ADR-0074). Per-op caps next, then the
 // store's quota (ADR-0292), which counts the stored key and the value and credits the value it replaces.
 func (f *Facade) Put(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias, key string, value []byte) error {
+	return f.put(ctx, ns, fn, alias, key, value, func(k string) (bool, error) { return true, f.kv.Put(ctx, k, value) })
+}
+
+// PutIf is Put that stores only while w's condition on the key holds, and that can give the key a TTL. A condition
+// that does not hold is a Result that is not Done, charged nothing to the quota.
+func (f *Facade) PutIf(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias, key string, value []byte, w kvstore.Write) (kvstore.Result, error) {
+	c, err := f.conditional("services.kv.put")
+	if err == nil {
+		err = kvstore.CheckWrite("services.kv.put", w)
+	}
+	if err != nil {
+		return kvstore.Result{}, err
+	}
+	var res kvstore.Result
+	err = f.put(ctx, ns, fn, alias, key, value, func(k string) (bool, error) {
+		var err error
+		res, err = c.PutIf(ctx, k, value, w)
+		return res.Done, err
+	})
+	return res, err
+}
+
+// put authorizes kv::write on the alias's table, checks the per-op caps, admits the write against the store's quota,
+// then stores it with store, which reports whether it wrote; the quota settles what it wrote.
+func (f *Facade) put(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias, key string, value []byte, store func(k string) (bool, error)) error {
 	b, err := f.resolveAuth(ctx, ns, fn, alias, auth.ActionKVWrite)
 	if err != nil {
 		return err
@@ -160,13 +185,33 @@ func (f *Facade) Put(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName,
 	if err != nil {
 		return err
 	}
-	err = f.kv.Put(ctx, k, value)
-	settle(err == nil)
+	wrote, err := store(k)
+	settle(err == nil && wrote)
 	return err
 }
 
 // Delete removes the alias's key. The PDP authorizes kv::write (owner-only via the built-in forbid).
 func (f *Facade) Delete(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias, key string) error {
+	return f.delete(ctx, ns, fn, alias, key, func(k string) (bool, error) { return true, f.kv.Delete(ctx, k) })
+}
+
+// DeleteIf is Delete that deletes only while the key exists at version, as a lease holder releases what it holds.
+func (f *Facade) DeleteIf(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias, key, version string) (kvstore.Result, error) {
+	c, err := f.conditional("services.kv.delete")
+	if err != nil {
+		return kvstore.Result{}, err
+	}
+	var res kvstore.Result
+	err = f.delete(ctx, ns, fn, alias, key, func(k string) (bool, error) {
+		var err error
+		res, err = c.DeleteIf(ctx, k, version)
+		return res.Done, err
+	})
+	return res, err
+}
+
+// delete authorizes kv::write on the alias's table, then deletes with del, which reports whether it deleted.
+func (f *Facade) delete(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias, key string, del func(k string) (bool, error)) error {
 	b, err := f.resolveAuth(ctx, ns, fn, alias, auth.ActionKVWrite)
 	if err != nil {
 		return err
@@ -175,11 +220,36 @@ func (f *Facade) Delete(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectNa
 		return err
 	}
 	settle, qerr := f.quota.Admit(ctx, quota.Request{Subject: quota.Subject{Kind: v1.KindKVStore, Namespace: ns, Name: b.Store}, Deletes: true})
-	err = f.kv.Delete(ctx, tableKey(ns, b, key))
+	deleted, err := del(tableKey(ns, b, key))
 	if qerr == nil {
-		settle(err == nil)
+		settle(err == nil && deleted)
 	}
 	return err
+}
+
+// GetEntry is Get with the key's version and expiry, read under the same kv::read rule.
+func (f *Facade) GetEntry(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, alias, key string) (kvstore.Entry, bool, error) {
+	c, err := f.conditional("services.kv.get")
+	if err != nil {
+		return kvstore.Entry{}, false, err
+	}
+	b, err := f.resolveAuth(ctx, ns, fn, alias, auth.ActionKVRead)
+	if err != nil {
+		return kvstore.Entry{}, false, err
+	}
+	if err := checkKeyLimit("services.kv.get", key); err != nil {
+		return kvstore.Entry{}, false, err
+	}
+	return c.GetEntry(ctx, tableKey(ns, b, key))
+}
+
+// conditional is the driver's kvstore.Conditional; both drivers offer it.
+func (f *Facade) conditional(op string) (kvstore.Conditional, error) {
+	c, ok := f.kv.(kvstore.Conditional)
+	if !ok {
+		return nil, fault.Unavailablef(op, "the KV driver offers no conditional writes")
+	}
+	return c, nil
 }
 
 // checkKeyLimit refuses a key no store can hold (ADR-0148). Get and Delete check this limit, not the

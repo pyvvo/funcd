@@ -37,8 +37,9 @@ import (
 const sealedWriteBuf = 64 << 10
 
 // Format is the workload manifest's format; a changed meaning, framing or layout bumps it. A funcd reads one format:
-// from 2 on a Bucket's file holds none of its Lakes' data (ADR-0312 Decision 8).
-const Format = 2
+// from 2 on a Bucket's file holds none of its Lakes' data (ADR-0312 Decision 8), and from 3 on a KVStore's record holds
+// its key's expiry (ADR-0320).
+const Format = 3
 
 const (
 	manifestName = "manifest.yaml"
@@ -597,6 +598,27 @@ func EncodeObject(contentType string, md map[string]string, body []byte) []byte 
 	}
 	out = binary.AppendUvarint(out, uint64(len(body)))
 	return append(out, body...)
+}
+
+// EncodeKV frames a KVStore key's value as uvarint fields (ADR-0203): the Unix second it expires at (0 never), then the
+// value.
+func EncodeKV(expiresAt uint64, value []byte) []byte {
+	out := binary.AppendUvarint(nil, expiresAt)
+	out = binary.AppendUvarint(out, uint64(len(value)))
+	return append(out, value...)
+}
+
+// DecodeKV reverses EncodeKV; a torn or trailing frame is fault.Invalid.
+func DecodeKV(v []byte) (expiresAt uint64, value []byte, err error) {
+	expiresAt, k := binary.Uvarint(v)
+	if k <= 0 {
+		return 0, nil, fault.Invalidf("workload.DecodeKV", "torn expiry")
+	}
+	n, k2 := binary.Uvarint(v[k:])
+	if k2 <= 0 || n != uint64(len(v)-k-k2) {
+		return 0, nil, fault.Invalidf("workload.DecodeKV", "torn or trailing value")
+	}
+	return expiresAt, bytes.Clone(v[k+k2:]), nil
 }
 
 // DecodeObject reverses EncodeObject; a torn or trailing frame is fault.Invalid.

@@ -18,17 +18,21 @@ const (
 // names (ADR-0288): DefaultQuarantineRetention when empty; fault.Invalid naming the key for a value that is no ADR-0194
 // duration or lies below MinQuarantineRetention.
 func (c Config) QuarantineRetention() (time.Duration, error) {
-	const op, key = "config.QuarantineRetention", "storage.quarantineRetention"
-	v := c.Storage.QuarantineRetention
-	if v == "" {
-		return DefaultQuarantineRetention, nil
+	return boundedDuration("config.QuarantineRetention", "storage.quarantineRetention", c.Storage.QuarantineRetention,
+		DefaultQuarantineRetention, MinQuarantineRetention)
+}
+
+// boundedDuration parses value, the ADR-0194 duration of config key key: def when empty; fault.Invalid naming the key
+// for a value that is no duration or lies below floor.
+func boundedDuration(op, key, value string, def, floor time.Duration) (time.Duration, error) {
+	if value == "" {
+		return def, nil
 	}
-	d, err := v1.ParseDuration(v)
+	d, err := v1.ParseDuration(value)
 	if err != nil {
 		return 0, fault.Wrapf(err, fault.Invalid, op, "config key %q", key)
 	}
-	if err := v1.CheckDuration(op, fmt.Sprintf("config key %q", key), d, v1.Duration(MinQuarantineRetention),
-		v1.MaxDuration); err != nil {
+	if err := v1.CheckDuration(op, fmt.Sprintf("config key %q", key), d, v1.Duration(floor), v1.MaxDuration); err != nil {
 		return 0, err
 	}
 	return time.Duration(d), nil

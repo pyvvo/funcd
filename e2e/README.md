@@ -18,6 +18,7 @@ and its suite. Every lane runs in one shared VM (ADR-0230).
 | `duckdb.venom.yml` | `duckdb` | The Lake add-on: deploy, Ready and a live SQL round-trip (ADR-0086 to ADR-0091), its catalog in the catalog store (ADR-0293), a prefix at its quota (ADR-0292) and a worker's default limits (ADR-0291) |
 | `s3.venom.yml` | `s3` | The S3 frontend round-trip (ADR-0080, ADR-0085) |
 | `kv-counter.venom.yml` | `kv` | Binding as read grant and fail-closed (ADR-0076), and a store at its quota (ADR-0292) |
+| `kv-claim.venom.yml` | `kv-claim` | Two functions race context.kv's conditional writes on one table, and a key that expires (ADR-0320) |
 | `workflow.venom.yml` | `workflow` | The workflow engine: runs, chaining, fan-out, when and join, pause, resume and cancel (ADR-0094, ADR-0096) |
 | `funclog.venom.yml` | `funclog` | Function log capture, reads and traces (ADR-0081, ADR-0084, ADR-0101) |
 | `egress.venom.yml` | `egress` | Egress enforcement (ADR-0117), and what a worker's network holds (ADR-0318) |

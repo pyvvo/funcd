@@ -92,12 +92,14 @@ In order to make this platform self-contained, we will need to implement the fol
       `Function.spec.bindings.blob`: no binding ⇒ Forbidden), keyed on the **same substrate + keyspace** as the S3
       frontend so the two coexist. The ADR-0080 **S3-protocol frontend** (SigV4 keypair) stays the
       external/inspect path; `context.blob` is the in-function native path (no keypair, no S3 SDK).
-    - **KV storage** (`kvstore` port, ADR-0019): get/put/delete/list. Drivers: **durable Badger**
+    - **KV storage** (`kvstore` port, ADR-0019): get/put/delete/list, writes that hold only while a condition on the
+      key's opaque version holds, and keys that expire, deleted by a sweep through the gateway (ADR-0320). Drivers: **durable Badger**
       (ADR-0066 — a **separate** Badger instance from the metastore; prefix-per-store, single-writer gateway +
       group commit, `DropPrefix` teardown) and **in-memory** (default). The durable driver exposes two
       **opt-in, default-off** seams — **DR backup** (ADR-0067: version-watermarked incremental export → the
       `blob` port, with restore; on ADR-0203's layout, sealed (ADR-0209)) and **CDC** (ADR-0068: a durable transactional-outbox change-feed → the `bus`
-      port). **Functions reach KV** via `context.kv.{get,put,del,list}` over the per-sandbox worker-node local API
+      port). **Functions reach KV** via `context.kv.{get,put,del,list}` and its conditional verbs (`putIfAbsent`, `compareAndSet`,
+      `delIf`, `getEntry`; ADR-0320) over the per-sandbox worker-node local API
       (HTTP-over-UDS, connection-scoped identity; on a pool socket, the member named in `X-Funcd-Member`, checked
       against the pool's members — ADR-0158), routed to the PDP-authorized `Facade` (ADR-0069 — the same
       channel as `context.invoke`, ADR-0064). The shim KV client also offers typed read accessors

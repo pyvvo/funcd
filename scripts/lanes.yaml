@@ -311,6 +311,44 @@ kv:
     tries: 60
   venom: e2e/kv-counter.venom.yml
 
+kv-claim:
+  description: Two functions, claim (JS) and pyclaim (Python), race context.kv's conditional writes on one table — put-if-absent, compare-and-set and delete-if, with keys that expire — on a durable Badger store.
+  module: github.com/pyvvo/funcd-typescript
+  dir: examples/kv-claim
+  # claim owns the store (ADR-0248); pyclaim binds the same table and writes it through the writer grant (ADR-0136).
+  stage:
+    - claim.mjs
+    - claim.contract.yaml
+    - claim.yaml
+    - funcdconfig.yaml
+    - from: e2e/fixtures/kv-claim-writer.yaml
+      to: fixtures/kv-claim-writer.yaml
+    - from: examples/kv-claim/src/main.py
+      module: github.com/pyvvo/funcd-python
+      to: py/pyclaim.py
+    - from: examples/kv-claim/pyclaim.contract.yaml
+      module: github.com/pyvvo/funcd-python
+      to: py/pyclaim.contract.yaml
+    - from: examples/kv-claim/claim.yaml
+      module: github.com/pyvvo/funcd-python
+      to: py/claim.yaml
+  push:
+    - artifact: claim.mjs
+      ref: claim
+    - artifact: py/pyclaim.py
+      ref: pyclaim
+  apply:
+    - claim.yaml
+    - fixtures/kv-claim-writer.yaml
+    - py/claim.yaml
+  ready:
+    kind: function
+    names:
+      - claim
+      - pyclaim
+    tries: 60
+  venom: e2e/kv-claim.venom.yml
+
 workflow:
   description: A Workflow (ingest→score→{hi|lo}→report→wait→pass) mixing materialized function steps with engine-native built-ins (a blocking wait + a pass transform), driven on real containerd (ADR-0094 + ADR-0096).
   module: github.com/pyvvo/funcd-typescript

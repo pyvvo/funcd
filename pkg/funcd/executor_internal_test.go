@@ -39,7 +39,7 @@ func TestPhases_ListTheProvidersWithTheirHooks(t *testing.T) {
 	}, 10*time.Second, 10*time.Millisecond, "Run logs its providers' hooks")
 	require.Equal(t, []string{
 		"executor: start, run, before stop, stop, backups",
-		"kv: start, reclaim, stop, quotas, admissions, dependencies, facets, backups",
+		"kv: start, reclaim, run, stop, quotas, admissions, dependencies, facets, backups",
 		"blob: start, reclaim, stop, quotas, admissions, dependencies, facets, backups",
 		"sql: reclaim, run, stop, quotas, admissions, dependencies, facets, backups",
 		"lake: before stop, backups",

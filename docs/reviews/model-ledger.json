@@ -13888,5 +13888,35 @@
     "dod_total": 16,
     "report": "docs/reviews/adr-0319-implementation-claude-opus-5-5.md",
     "notes": "pass, not independent (the builder reviewed); 1 minor (model): an argv[0] mutant of FUNCDCTL survived, fixed with a bare-argv[0] test; 7 overlay mutants killed; gate and all 14 lanes pass"
+  },
+  {
+    "date": "2026-11-10",
+    "adr": "0320",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "changes-requested",
+    "blockers": 0,
+    "majors": 2,
+    "minors": 2,
+    "model_attributed": 4,
+    "dod_passed": 16,
+    "dod_total": 19,
+    "report": "docs/reviews/adr-0320-implementation-claude-opus-5-5.md",
+    "notes": "changes requested, independent subagent review; 2 majors (model): a winner batched behind a write whose key reads absent at the readback gets no version (overlay probe), and the floor-expiry and sweep-by-name mutants pass every test; 2 minors (model): four more stated rules unpinned (a CAS without TTL, a lost write's charge, a load's skip, the sweepInterval floor) and three wording slips; 20 of 26 overlay mutants killed"
+  },
+  {
+    "date": "2026-11-10",
+    "adr": "0320",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 17,
+    "dod_total": 19,
+    "report": "docs/reviews/adr-0320-implementation-claude-opus-5-5-2.md",
+    "notes": "pass in round 2, independent subagent review; round 1's 2 majors and 2 minors resolved, each with a test that fails when its rule breaks (the readback reads an entry Badger does not hide; floor-expiry and sweep-by-name now killed); 27 of 28 overlay mutants killed, the survivor a DropPrefix-only fallback; the gate is pending, after the stamp"
   }
 ]

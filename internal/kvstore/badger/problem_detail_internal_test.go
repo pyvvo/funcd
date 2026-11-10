@@ -42,7 +42,7 @@ func TestChangeLogFaultHoldsNoCause(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 	c := &cdc{db: db, seq: seq}
-	err = c.OnWrite(nil, "k", OpPut)
+	err = c.OnWrite(nil, "k", OpPut, 0)
 	require.ErrorContains(t, err, closedCause)
 	require.NotContains(t, fault.ToProblem(err).Detail, closedCause)
 }

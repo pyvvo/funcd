@@ -12,12 +12,14 @@ import (
 	"strings"
 	"testing"
 	"testing/iotest"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/auth"
+	"github.com/pyvvo/funcd/internal/kvstore"
 	kvmemory "github.com/pyvvo/funcd/internal/kvstore/memory"
 	kvsvc "github.com/pyvvo/funcd/internal/services/kv"
 	"github.com/pyvvo/funcd/internal/workernode/local"
@@ -247,8 +249,8 @@ type failingKV struct {
 	err error
 }
 
-func (f failingKV) Get(context.Context, v1.NamespaceName, v1.ObjectName, string, string) ([]byte, bool, error) {
-	return nil, false, f.err
+func (f failingKV) GetEntry(context.Context, v1.NamespaceName, v1.ObjectName, string, string) (kvstore.Entry, bool, error) {
+	return kvstore.Entry{}, false, f.err
 }
 
 // The local API's sites log what they are handed before they answer, so a 500's cause stays in the log there too.
@@ -264,4 +266,108 @@ func TestLocalAPIFaultCauseStaysInTheLog(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &p))
 	require.Equal(t, "kvbadger.Get: read the key", p.Detail)
 	require.Equal(t, 1, strings.Count(logs.String(), cause), logs.String())
+}
+
+// doH is do with request headers, given as name, value pairs.
+func doH(t *testing.T, h http.Handler, method, path, body string, hdr ...string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest(method, path, strings.NewReader(body))
+	for i := 0; i+1 < len(hdr); i += 2 {
+		r.Header.Add(hdr[i], hdr[i+1])
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	return rec
+}
+
+const preconditionFailed = "urn:funcd:problem:precondition-failed"
+
+// scenario: claim-race-one-winner (local API) — If-None-Match: * creates the key once: 201 with its version as a strong
+// ETag, then 412 with that ETag, and a GET answers the same ETag.
+func TestScenarioKVPutIfAbsentOverLocalAPI(t *testing.T) {
+	h := kvHandler(t, "default", fakeKVResolver{owner: "fn"}, kvPDP{readOK: true, owner: "fn"})
+	rec := doH(t, h, http.MethodPut, "/kv/b/claim", "a", "If-None-Match", "*")
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	tag := rec.Header().Get("ETag")
+	require.Regexp(t, `^"[0-9a-f]{32}"$`, tag, "a strong ETag of the key's version, an opaque hash")
+	rec = doH(t, h, http.MethodPut, "/kv/b/claim", "b", "If-None-Match", "*")
+	requireProblem(t, rec, http.StatusPreconditionFailed, preconditionFailed, "is at version")
+	require.Equal(t, tag, rec.Header().Get("ETag"), "the loser learns the holder's version")
+	rec = do(t, h, http.MethodGet, "/kv/b/claim", "")
+	require.Equal(t, "a", rec.Body.String())
+	require.Equal(t, tag, rec.Header().Get("ETag"))
+}
+
+// scenario: compare-and-set-names-a-version (local API) — If-Match: "<version>" replaces only the version it names: 204 with the
+// new ETag; a stale version is 412 with the current ETag, an absent key 412 without one.
+func TestScenarioKVCompareAndSetOverLocalAPI(t *testing.T) {
+	h := kvHandler(t, "default", fakeKVResolver{owner: "fn"}, kvPDP{readOK: true, owner: "fn"})
+	first := doH(t, h, http.MethodPut, "/kv/b/k", "v1", "If-None-Match", "*").Header().Get("ETag")
+	rec := doH(t, h, http.MethodPut, "/kv/b/k", "v2", "If-Match", first)
+	require.Equal(t, http.StatusNoContent, rec.Code, rec.Body.String())
+	second := rec.Header().Get("ETag")
+	require.NotEqual(t, first, second)
+	rec = doH(t, h, http.MethodPut, "/kv/b/k", "v3", "If-Match", first)
+	requireProblem(t, rec, http.StatusPreconditionFailed, preconditionFailed, "is at version")
+	require.Equal(t, second, rec.Header().Get("ETag"))
+	rec = doH(t, h, http.MethodPut, "/kv/b/absent", "x", "If-Match", first)
+	requireProblem(t, rec, http.StatusPreconditionFailed, preconditionFailed, "does not exist")
+	require.Empty(t, rec.Header().Get("ETag"))
+	requireProblem(t, doH(t, h, http.MethodPut, "/kv/b/k", "x", "If-Match", `"abc"`), http.StatusPreconditionFailed,
+		preconditionFailed, "is at version")
+	require.Equal(t, "v2", do(t, h, http.MethodGet, "/kv/b/k", "").Body.String())
+}
+
+// scenario: delete-if-releases-only-its-own (local API) — a DELETE with If-Match deletes only the version it names.
+func TestScenarioKVDeleteIfOverLocalAPI(t *testing.T) {
+	h := kvHandler(t, "default", fakeKVResolver{owner: "fn"}, kvPDP{readOK: true, owner: "fn"})
+	tag := doH(t, h, http.MethodPut, "/kv/b/lease", "me", "If-None-Match", "*").Header().Get("ETag")
+	doH(t, h, http.MethodPut, "/kv/b/other", "x", "If-None-Match", "*")
+	other := do(t, h, http.MethodGet, "/kv/b/other", "").Header().Get("ETag")
+	requireProblem(t, doH(t, h, http.MethodDelete, "/kv/b/lease", "", "If-Match", other), http.StatusPreconditionFailed, preconditionFailed, "is at version")
+	require.Equal(t, http.StatusNoContent, doH(t, h, http.MethodDelete, "/kv/b/lease", "", "If-Match", tag).Code)
+	require.Equal(t, http.StatusNotFound, do(t, h, http.MethodGet, "/kv/b/lease", "").Code)
+	requireProblem(t, doH(t, h, http.MethodDelete, "/kv/b/lease", "", "If-Match", tag), http.StatusPreconditionFailed, preconditionFailed, "does not exist")
+}
+
+// scenario: ttl-expires-a-key (local API) — ?ttl=1 makes the key expire: the GET finds it, then answers 404, and a put-if-absent
+// claims it again.
+func TestScenarioKVTTLOverLocalAPI(t *testing.T) {
+	h := kvHandler(t, "default", fakeKVResolver{owner: "fn"}, kvPDP{readOK: true, owner: "fn"})
+	require.Equal(t, http.StatusCreated, doH(t, h, http.MethodPut, "/kv/b/lease?ttl=1", "me", "If-None-Match", "*").Code)
+	require.Equal(t, http.StatusOK, do(t, h, http.MethodGet, "/kv/b/lease", "").Code)
+	require.Eventually(t, func() bool { return do(t, h, http.MethodGet, "/kv/b/lease", "").Code == http.StatusNotFound },
+		4*time.Second, 20*time.Millisecond)
+	require.JSONEq(t, `[]`, do(t, h, http.MethodGet, "/kv/b", "").Body.String())
+	require.Equal(t, http.StatusCreated, doH(t, h, http.MethodPut, "/kv/b/lease?ttl=1", "you", "If-None-Match", "*").Code)
+}
+
+// scenario: lost-condition-fails-only-its-request (local API refusals)
+// The conditions the local API refuses as 400 before any write, and the owner rule a conditional write keeps.
+func TestKVConditionalRefusals(t *testing.T) {
+	h := kvHandler(t, "default", fakeKVResolver{owner: "fn"}, kvPDP{readOK: true, owner: "fn"})
+	for _, tc := range []struct {
+		name, method, path string
+		hdr                []string
+	}{
+		{"if-none-match tag", http.MethodPut, "/kv/b/k", []string{"If-None-Match", `"1"`}},
+		{"if-match star", http.MethodPut, "/kv/b/k", []string{"If-Match", "*"}},
+		{"weak tag", http.MethodPut, "/kv/b/k", []string{"If-Match", `W/"1"`}},
+		{"unquoted", http.MethodPut, "/kv/b/k", []string{"If-Match", "1"}},
+		{"empty tag", http.MethodPut, "/kv/b/k", []string{"If-Match", `""`}},
+		{"a space in the tag", http.MethodPut, "/kv/b/k", []string{"If-Match", `"a b"`}},
+		{"two lines", http.MethodPut, "/kv/b/k", []string{"If-Match", `"1"`, "If-Match", `"2"`}},
+		{"both", http.MethodPut, "/kv/b/k", []string{"If-None-Match", "*", "If-Match", `"1"`}},
+		{"ttl 0", http.MethodPut, "/kv/b/k?ttl=0", nil},
+		{"ttl text", http.MethodPut, "/kv/b/k?ttl=1m", nil},
+		{"delete if-none-match", http.MethodDelete, "/kv/b/k", []string{"If-None-Match", "*"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			requireProblem(t, doH(t, h, tc.method, tc.path, "v", tc.hdr...), http.StatusBadRequest, "urn:funcd:problem:invalid", "")
+		})
+	}
+	require.Equal(t, http.StatusNotFound, do(t, h, http.MethodGet, "/kv/b/k", "").Code, "a refused write stores nothing")
+	other := kvHandler(t, "default", fakeKVResolver{owner: "someone-else"}, kvPDP{readOK: true, owner: "someone-else"})
+	require.Equal(t, http.StatusForbidden, doH(t, other, http.MethodPut, "/kv/b/k", "v", "If-None-Match", "*").Code)
+	require.Equal(t, http.StatusForbidden, doH(t, other, http.MethodDelete, "/kv/b/k", "", "If-Match", `"1"`).Code)
 }

@@ -6,8 +6,12 @@ package snapshot
 
 import "context"
 
-// Record is one entry of a store, its key and its latest value as stored.
-type Record struct{ Key, Value []byte }
+// Record is one entry of a store, its key and its latest value as stored, and for a KV store's per-store export the
+// Unix second its key expires at (0 never).
+type Record struct {
+	Key, Value []byte
+	ExpiresAt  uint64
+}
 
 // Source emits every record in key order from ONE read transaction with ONE producer and returns the store's
 // resourceVersion at that read ("" for a store without one). An emit error ends it; emit must not call the store.

@@ -324,8 +324,6 @@ func TestWriteLakeWithoutCheckpoint(t *testing.T) {
 	require.NoError(t, workload.Integrity(ctx, target, path, got))
 }
 
-// scenario: refused-restores (ADR-0312 Decision 8) — a funcd reads one format: a copy of format 1 or 3 fails naming both, and
-// Format is 2.
 // A manifest's part count bounds what Integrity reads, so a negative one reads no part.
 func TestIntegrity_ANegativePartCountReadsNoPart(t *testing.T) {
 	t.Parallel()
@@ -359,7 +357,7 @@ func TestReadManifest_RefusesAManifestLargerThanFuncdWrites(t *testing.T) {
 	target := &countedReads{Bucket: mem}
 	const path = "orders/nightly-1-uid/"
 	sized := func(n int) []byte {
-		return append([]byte("format: 2\n#"), bytes.Repeat([]byte("x"), n-len("format: 2\n#"))...)
+		return append([]byte("format: 3\n#"), bytes.Repeat([]byte("x"), n-len("format: 3\n#"))...)
 	}
 	require.NoError(t, mem.Put(ctx, path+"manifest.yaml", sized(workload.MaxManifestBytes+1), blob.PutOptions{}))
 	_, err = workload.ReadManifest(ctx, target, path)
@@ -433,21 +431,23 @@ func TestIntegrity_AsksForNoMoreThanATargetReports(t *testing.T) {
 	require.EqualValues(t, 4, target.asked.Load())
 }
 
+// scenario: refused-restores (ADR-0312 Decision 8, ADR-0320 Decision 8) — a funcd reads one format: a copy of format 2
+// or 4 fails naming both, and Format is 3.
 func TestReadManifest_RefusesAnotherFormat(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	require.Equal(t, 2, workload.Format)
+	require.Equal(t, 3, workload.Format)
 	target, err := gocloud.Open(ctx, "mem://")
 	require.NoError(t, err)
-	for _, format := range []int{1, 3} {
+	for _, format := range []int{2, 4} {
 		path := fmt.Sprintf("orders/f%d-uid/", format)
 		require.NoError(t, target.Put(ctx, path+"manifest.yaml", fmt.Appendf(nil, "format: %d\nnamespace: orders\n", format), blob.PutOptions{}))
 		_, err := workload.ReadManifest(ctx, target, path)
 		require.Equal(t, fault.Invalid, fault.KindOf(err), "%v", err)
-		require.ErrorContains(t, err, fmt.Sprintf("has format %d; this funcd reads format 2", format))
+		require.ErrorContains(t, err, fmt.Sprintf("has format %d; this funcd reads format 3", format))
 	}
-	path := "orders/f2-uid/"
-	require.NoError(t, target.Put(ctx, path+"manifest.yaml", []byte("format: 2\nnamespace: orders\n"), blob.PutOptions{}))
+	path := "orders/f3-uid/"
+	require.NoError(t, target.Put(ctx, path+"manifest.yaml", []byte("format: 3\nnamespace: orders\n"), blob.PutOptions{}))
 	_, err = workload.ReadManifest(ctx, target, path)
 	require.NoError(t, err)
 }
