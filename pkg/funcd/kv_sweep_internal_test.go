@@ -34,7 +34,7 @@ func (r *sweepRecorder) sweptKey(key string) bool {
 	return slices.Contains(r.swept, key)
 }
 
-// scenario: sweep-deletes-what-expired (platform) — the KV provider runs the sweep from its Start, every
+// scenario: sweep-deletes-what-expired (platform) — the KV provider runs the sweep from its Run, every
 // kvstore.sweepInterval, so a key that expired is deleted with no call asking for it (ADR-0320 Decision 5).
 // oracle: docs/design/storage/kv-claims.fizz#ExpiredIsSwept
 func TestKVProviderSweepsExpiredKeys(t *testing.T) {

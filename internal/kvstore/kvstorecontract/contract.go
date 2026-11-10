@@ -260,6 +260,17 @@ func RunConditional(t *testing.T, kv kvstore.KV) {
 		require.Zero(t, e.ExpiresAt, "a plain Put replaces the entry, its TTL included")
 	})
 
+	t.Run("each-write-sets-its-own-expiry", func(t *testing.T) {
+		w, err := c.PutIf(ctx, "c/own-expiry", []byte("me"), kvstore.Write{IfAbsent: true, TTL: time.Hour})
+		require.NoError(t, err)
+		cas, err := c.PutIf(ctx, "c/own-expiry", []byte("me"), kvstore.Write{IfVersion: w.Version})
+		require.NoError(t, err)
+		require.True(t, cas.Done)
+		e, _, err := c.GetEntry(ctx, "c/own-expiry")
+		require.NoError(t, err)
+		require.Zero(t, e.ExpiresAt, "a compare-and-set with no TTL leaves the key with none")
+	})
+
 	t.Run("absolute-expiry", func(t *testing.T) {
 		at := uint64(time.Now().Add(time.Hour).Unix()) //nolint:gosec // a time after the epoch
 		_, err := c.PutIf(ctx, "c/copied", []byte("x"), kvstore.Write{ExpiresAt: at})
@@ -417,6 +428,18 @@ func RunConditional(t *testing.T, kv kvstore.KV) {
 		again, _, err := s.Sweep(ctx, time.Now(), 1000, func(string) bool { return false })
 		require.NoError(t, err)
 		require.NotContains(t, again, "c/sweep/gone", "a swept key is swept once")
+
+		expireSoon(t, kv, c, "c/sweep/reclaimed")
+		claim, err := c.PutIf(ctx, "c/sweep/reclaimed", []byte("next"), kvstore.Write{IfAbsent: true, TTL: time.Hour})
+		require.NoError(t, err)
+		require.True(t, claim.Done, "an expired lease is claimed again")
+		swept, _, err = s.Sweep(ctx, time.Now(), 1000, func(string) bool { return false })
+		require.NoError(t, err)
+		require.NotContains(t, swept, "c/sweep/reclaimed", "a lease claimed again before the sweep stays")
+		v, found, err := kv.Get(ctx, "c/sweep/reclaimed")
+		require.NoError(t, err)
+		require.True(t, found)
+		require.Equal(t, "next", string(v))
 	})
 }
 

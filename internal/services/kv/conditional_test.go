@@ -3,6 +3,7 @@ package kv_test
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,8 +20,9 @@ import (
 )
 
 // scenario: sweep-deletes-what-expired (quota)
-// The quota of a store whose keys expire (ADR-0292): a lost put-if-absent is charged nothing, and the sweep reports an
-// expired key's delete, so the store's next write that does not fit measures again and fits (Decision 4).
+// The quota of a store whose keys expire (ADR-0292): a lost put-if-absent is charged nothing, so the store's next
+// refusal needs no new measure, and the sweep reports an expired key's delete, so the store's next write that does not
+// fit measures again and fits (Decision 4).
 func TestSweepFreesQuotaAtOnce(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -29,9 +31,11 @@ func TestSweepFreesQuotaAtOnce(t *testing.T) {
 	}}
 	db := memory.New()
 	book := quota.NewBook(clock.System(), nil)
+	var measures atomic.Int32
 	book.Register(v1.KindKVStore, quota.Source{
 		Limit: func(context.Context, quota.Subject) (int64, bool, error) { return 64, true, nil },
 		Measure: func(ctx context.Context, s quota.Subject) (int64, error) {
+			measures.Add(1)
 			return db.(kvstore.Usager).Usage(ctx, string(s.Namespace)+"/"+string(s.Name)+"/")
 		},
 	})
@@ -43,10 +47,13 @@ func TestSweepFreesQuotaAtOnce(t *testing.T) {
 	won, err := f.PutIf(ctx, "default", "fn", "cache", "lease", value, kvstore.Write{IfAbsent: true, TTL: time.Second})
 	require.NoError(t, err)
 	require.True(t, won.Done, "default/s/t/lease and 30 bytes: 47 of 64")
+	book.Refresh(ctx)
+	measured := measures.Load()
 	lost, err := f.PutIf(ctx, "default", "fn", "cache", "lease", value, kvstore.Write{IfAbsent: true})
 	require.NoError(t, err)
 	require.False(t, lost.Done, "a lost claim is its result, never 507")
 	require.Equal(t, fault.InsufficientStorage, fault.KindOf(f.Put(ctx, "default", "fn", "cache", "b", value)))
+	require.Equal(t, measured, measures.Load(), "the lost claim was charged nothing, so the refusal needed no new measure")
 	require.Eventually(t, func() bool {
 		_, found, err := f.Get(ctx, "default", "fn", "cache", "lease")
 		return err == nil && !found
@@ -64,7 +71,7 @@ func (h heldIn) HeldIn(ns v1.NamespaceName) bool       { return h[ns] }
 func (heldIn) ReleasedAtIn(v1.NamespaceName) time.Time { return time.Time{} }
 
 // scenario: sweep-deletes-what-expired (held namespace)
-// A sweep keeps the expired keys of a held namespace, as its timers wait (ADR-0290 Decision 4), and deletes them once
+// A sweep keeps the expired keys of a held namespace, as its timers wait (ADR-0222 Decision 8), and deletes them once
 // the hold is released.
 func TestSweepWaitsForAHeldNamespace(t *testing.T) {
 	t.Parallel()

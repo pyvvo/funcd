@@ -323,6 +323,20 @@ func reapable(txn *badger.Txn, key string) (bool, error) {
 	return !found || expired, nil
 }
 
+// newestVersion is the commit version of key's newest entry, an expired one included, which Get would hide; false when
+// the key holds no entry.
+func newestVersion(txn *badger.Txn, key string) (uint64, bool) {
+	opts := badger.DefaultIteratorOptions
+	opts.AllVersions, opts.PrefetchValues, opts.Prefix = true, false, []byte(key)
+	it := txn.NewIterator(opts)
+	defer it.Close()
+	it.Seek([]byte(key))
+	if !it.ValidForPrefix([]byte(key)) || string(it.Item().Key()) != key {
+		return 0, false
+	}
+	return it.Item().Version(), true
+}
+
 // newest reads key's newest entry, a delete and an expired value included, a value staged earlier in txn too: whether
 // there is one, whether it is a value, live or expired, and whether it expired. Badger's Get reads an expired value as
 // absent, though the chain may hold it.
@@ -365,9 +379,9 @@ func holds(cur kvstore.Entry, w kvstore.Write) bool {
 }
 
 // release answers rs, which one txn committed, or failed together with err. The versioned writes among them get the
-// txn's version, read back from one of their keys: the gateway is the only writer of a data key, so it still holds
-// the txn's version. A key a DropPrefix removed since reads as version 0. When the read fails, the writes are stored
-// but rs get the error.
+// txn's version, read back from their keys' newest entries, an expired copy's included: the gateway is the only writer
+// of a data key, so each still holds the txn's version, unless a native DropPrefix removed it since. When the read
+// fails, the writes are stored but rs get the error.
 func (d *driver) release(rs []*writeReq, err error) {
 	if err == nil {
 		err = d.readVersion(rs)
@@ -383,20 +397,20 @@ func (d *driver) release(rs []*writeReq, err error) {
 
 func (d *driver) readVersion(rs []*writeReq) error {
 	wrote := func(r *writeReq) bool { return r.versioned && r.res.Done && !r.del }
-	i := slices.IndexFunc(rs, wrote)
-	if i < 0 {
+	if !slices.ContainsFunc(rs, wrote) {
 		return nil
 	}
 	var n uint64
 	err := d.db.View(func(txn *badger.Txn) error {
-		item, err := txn.Get([]byte(rs[i].key))
-		if errors.Is(err, badger.ErrKeyNotFound) {
-			return nil
+		for _, r := range rs { // the txn's version, from the first winner's key that still holds an entry
+			if wrote(r) {
+				if v, ok := newestVersion(txn, r.key); ok {
+					n = v
+					return nil
+				}
+			}
 		}
-		if err == nil {
-			n = item.Version()
-		}
-		return err
+		return nil
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.Internal, "kvbadger.write", "read the version the write stored")

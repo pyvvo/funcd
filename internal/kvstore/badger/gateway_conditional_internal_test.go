@@ -3,6 +3,7 @@ package badger
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -67,4 +68,30 @@ func TestGatewayVersionNamesOneWrite(t *testing.T) {
 	lost, err := d.PutIf(ctx, "ns/s/k", []byte("cas"), kvstore.Write{IfVersion: outs[0].res.Version})
 	require.NoError(t, err)
 	require.Equal(t, kvstore.Result{Version: e.Version}, lost)
+}
+
+// scenario: version-names-one-write (an expired copy) — a winner batched behind a copy whose expiry already passed gets
+// its own version, read back from an entry Badger does not hide, as the quarantine's copy of a key at the edge of its
+// expiry would batch.
+func TestGatewayAWinnerBehindAnExpiredCopyGetsItsVersion(t *testing.T) {
+	past := uint64(time.Now().Unix()) - 1 //nolint:gosec // a time after the epoch
+	d, outs := oneBatchOn(t, nil, []*writeReq{
+		{key: "ns/s/copy", val: []byte("x"), expiresAt: past, versioned: true, cond: &kvstore.Write{ExpiresAt: past}},
+		ifAbsent("ns/s/claim", "me"),
+	})
+	for i, o := range outs {
+		require.NoError(t, o.err, "request %d", i)
+	}
+	require.True(t, outs[1].res.Done)
+	e, found, err := d.GetEntry(context.Background(), "ns/s/claim")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, e.Version, outs[1].res.Version, "the winner gets the version its key holds")
+
+	_, outs = oneBatchOn(t, d, []*writeReq{
+		{key: "ns/s/alone", val: []byte("x"), expiresAt: past, versioned: true, cond: &kvstore.Write{ExpiresAt: past}},
+	})
+	require.NoError(t, outs[0].err)
+	require.True(t, outs[0].res.Done)
+	require.NotEmpty(t, outs[0].res.Version, "a lone winner whose entry expired at once still gets its version")
 }

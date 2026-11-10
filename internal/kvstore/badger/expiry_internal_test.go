@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pyvvo/funcd/internal/kvstore"
+	"github.com/pyvvo/funcd/internal/snapshot"
 )
 
 // scenario: restore-takes-a-new-timeline
@@ -233,4 +234,28 @@ func TestDeleteOfAnExpiredKeyWritesItsRecord(t *testing.T) {
 	ship(t, seams)
 	dst, _ := restoreInto(t, bucket)
 	requireAbsent(t, dst, "ns/s/k")
+}
+
+// scenario: store-backup-carries-the-expiry (the load) — a load leaves out a record whose expiry passed, rather than
+// writing an entry already expired that the sweep would delete later.
+func TestLoadLeavesOutAnExpiredRecord(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	kv, err := Open(t.TempDir(), WithSyncWrites(false), WithValueLogGCInterval(0))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = kv.(io.Closer).Close() })
+	recs := []snapshot.Record{{Key: []byte("gone"), Value: []byte("z"), ExpiresAt: 1}, {Key: []byte("kept"), Value: []byte("y")}}
+	i := 0
+	require.NoError(t, kv.(*driver).LoadPrefix(ctx, "ns/l/", func() (snapshot.Record, error) {
+		if i == len(recs) {
+			return snapshot.Record{}, io.EOF
+		}
+		i++
+		return recs[i-1], nil
+	}))
+	require.Zero(t, versionsLeft(kvDB(kv), []string{"ns/l/gone"}), "the expired record is not written")
+	require.Zero(t, countPrefix(t, kvDB(kv), expiryPrefix), "and adds no index key")
+	_, found, err := kv.Get(ctx, "ns/l/kept")
+	require.NoError(t, err)
+	require.True(t, found)
 }

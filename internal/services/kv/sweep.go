@@ -23,7 +23,7 @@ type SweepDeps struct {
 	// Quota hears of each store a pass deleted from, as of a delete, so the store's next write that does not fit
 	// measures again (ADR-0292 Decision 4); nil is quota.None.
 	Quota quota.Checker
-	// Hold keeps a namespace's keys while it or the platform is held, as its timers wait (ADR-0290 Decision 4); nil is
+	// Hold keeps a namespace's keys while it or the platform is held, as its timers wait (ADR-0222 Decision 8); nil is
 	// hold.NeverNamespace.
 	Hold     hold.NamespaceGate
 	Interval time.Duration
