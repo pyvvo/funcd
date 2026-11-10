@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.41.0](https://github.com/pyvvo/funcd/compare/v0.40.0...v0.41.0) (2026-11-10)
+
+
+### Features
+
+* **kv:** a Function's KV writes hold only while a condition holds, and keys expire ([118dec8](https://github.com/pyvvo/funcd/commit/118dec83479653e17585bbb9a5e712c1b43ad9ed))
+
 ## [0.40.0](https://github.com/pyvvo/funcd/compare/v0.39.3...v0.40.0) (2026-11-08)
 
 
