@@ -82,8 +82,8 @@ func TestCheckRead_AsksTheDecisionAlone(t *testing.T) {
 }
 
 // scenario: secret-backup-and-api-unchanged — with a forbid on every secret::read of the namespace, a Backup run's coarse
-// read of its credential Secret still resolves, a viewer is still refused a Secret by RBAC, and only a workload is
-// denied.
+// read of its credential Secret still resolves, a coarse read never reaches Cedar, and only a workload is denied. The
+// API half, a person's real read through the API, is pkg/funcd's TestSecretAPIReadStaysRBACUnderAPolicy.
 func TestScenarioSecretBackupAndAPIUnchanged(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -108,10 +108,10 @@ func TestScenarioSecretBackupAndAPIUnchanged(t *testing.T) {
 	require.NoError(t, err, "a Backup run's read asks the coarse question, which no Policy reaches")
 	require.Equal(t, "AKID", env["AWS_ACCESS_KEY_ID"])
 
-	viewer := auth.Identity{Subject: "alice", Role: auth.RoleViewer, Namespaces: []v1.NamespaceName{"team-a"}}
-	dec, err := authz.Authorize(ctx, auth.Request{Identity: viewer, Verb: auth.VerbGet, Kind: v1.KindSecret, Namespace: "team-a"})
+	developer := auth.Identity{Subject: "alice", Role: auth.RoleDeveloper, Namespaces: []v1.NamespaceName{"team-a"}}
+	dec, err := authz.Authorize(ctx, auth.Request{Identity: developer, Verb: auth.VerbGet, Kind: v1.KindSecret, Namespace: "team-a"})
 	require.NoError(t, err)
-	require.False(t, dec.Allowed, "an API read is RBAC's, and a viewer never reads a Secret (ADR-0171 Decision 9)")
+	require.True(t, dec.Allowed, "a coarse read goes to RBAC, never to the forbid")
 
 	_, err = r.ResolveEnv(ctx, secrets.WorkloadIdentity(v1.KindFunction, "team-a", "reports"), "team-a", []string{"target-creds"})
 	require.Equal(t, fault.Forbidden, fault.KindOf(err), "a workload's read meets the forbid")

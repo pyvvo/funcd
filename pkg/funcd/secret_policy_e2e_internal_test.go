@@ -275,8 +275,9 @@ func TestScenarioSecretForbidLifted(t *testing.T) {
 
 // scenario: secret-missing-unchanged — a Function that binds a Secret not applied yet is held Pending, SecretNotFound,
 // as today, even with a Policy that permits its reads, until the Secret is applied; a bound Secret no forbid names,
-// deleted while a worker serves, leaves it serving and reading nothing (ADR-0321 Decision 4: the readiness check reads
-// no Secret).
+// deleted while a worker serves, leaves it serving and reading nothing. That the readiness check reads no Secret
+// (ADR-0321 Decision 4) is TestCheckRead_AsksTheDecisionAlone's: here the lost binding holds the Function's next pass
+// at its start gate (docs/behavior/functions.md), so its readiness is not read again.
 func TestScenarioSecretMissingUnchanged(t *testing.T) {
 	t.Parallel()
 	r, _ := newPolicyRig(t)
@@ -329,4 +330,16 @@ func TestScenarioLakeSecretForbidWhileRunning(t *testing.T) {
 	r.applyPolicy(t, "no-quack-for-lake", forbidRead(`Lake::"default/lake"`, "quack"))
 	require.Eventually(t, func() bool { reason, _ := r.lakeReady(t); return reason == "BindingResolveFailed" }, policyWait, policyTick)
 	require.Greater(t, engine.teardowns.Load(), stopsBefore, "the hold stops the running engine")
+}
+
+// A person's read of a Secret through the API stays RBAC's (ADR-0321 Decision 6): a forbid on every secret::read of the
+// namespace does not reach it. The API half of scenario secret-backup-and-api-unchanged, whose backup half is
+// internal/secrets' TestScenarioSecretBackupAndAPIUnchanged.
+func TestSecretAPIReadStaysRBACUnderAPolicy(t *testing.T) {
+	t.Parallel()
+	r, _ := newPolicyRig(t)
+	r.applyPolicy(t, "no-secrets", `forbid(principal, action == Action::"secret::read", resource);`)
+	obj, err := r.c.Get(context.Background(), v1.KindSecret, "default", "api-keys")
+	require.NoError(t, err)
+	require.Equal(t, "sk", string(obj.(*v1.Secret).Spec.Data["STRIPE_KEY"]))
 }
