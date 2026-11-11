@@ -4,6 +4,7 @@
   ([report](../reviews/adr-0310-implementation-claude-opus-5-5.md)); Reviewing (2026-11-03, implemented in three
   commits: the prefix test, the local API's facets, the providers' facets); Accepted (2026-11-03, by the decider,
   after refining it with them; judged twice in an independent session, every finding folded)
+- **Superseded in part by**: [ADR-0321](0321-cedar-decides-each-secret-a-workload-reads.md) (2026-11-11) — Decision 6's "over the config alone": the secrets provider is built over the policy decision point too, once it exists, still before every other provider.
 - **Date**: 2026-11-03
 - **Deciders**: green-0-rabbit
 - **Tags**: provider, local-api, architecture, refactor

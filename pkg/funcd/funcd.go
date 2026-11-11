@@ -604,11 +604,6 @@ func (p *Platform) buildControlPlane() error {
 	if c.authorizer == nil {
 		c.authorizer = rbac.New()
 	}
-	// ADR-0310 Decision 6: secrets is built before every other provider, over the config alone, since lake, the Function
-	// reconciler and the workload backups read its resolver.
-	if err := p.secrets.build(); err != nil {
-		return err
-	}
 	if c.localNode == "" {
 		c.localNode = defaultLocalNode
 	}
@@ -669,7 +664,7 @@ func (p *Platform) buildControlPlane() error {
 		// ADR-0137 (F102): LakeCapability makes the live PDP understand lake::query; the per-Lake
 		// PEP proxy that calls it is not yet wired here — see TODO(ADR-0137) in internal/services/lake/reconcile.go.
 		[]cedarauth.Capability{cedarauth.KVCapabilityWithWriters(writerLister), cedarauth.InvokeCapability(), s3Cap, cedarauth.EgressCapability(), cedarauth.LakeCapability(),
-			cedarauth.SQLCapabilityWithWriters(writerLister)},
+			cedarauth.SQLCapabilityWithWriters(writerLister), cedarauth.SecretCapability()},
 		[]cedarauth.PrincipalSource{cedarauth.FunctionPrincipalSource(), cedarauth.LakePrincipalSource()},
 	)
 	if err != nil {
@@ -687,6 +682,17 @@ func (p *Platform) buildControlPlane() error {
 	})
 	if err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build cedar PDP driver")
+	}
+	// ADR-0321 Decision 3 (superseding ADR-0310 Decision 6's "over the config alone"): secrets is built once the PDP
+	// exists, still before every other provider, since lake, the Function reconciler and the workload backups read its
+	// resolver. A workload's read (a principal on its identity) asks the PDP secret::read; a coarse read (the start
+	// check, the backups) still goes to the control plane's authorizer.
+	secretsAuthz, err := auth.NewRoutingAuthorizer(c.authorizer, cedarPDP)
+	if err != nil {
+		return fault.Wrapf(err, fault.KindOf(err), op, "build secrets authorizer")
+	}
+	if err := p.secrets.build(secretsAuthz); err != nil {
+		return err
 	}
 	// ADR-0215: the storage probes read a sentinel key of the KV engine and the blob store; the dependency check the
 	// local API answers reads their results, the Facades' resolve and read authorization, the link resolver and the PDP.

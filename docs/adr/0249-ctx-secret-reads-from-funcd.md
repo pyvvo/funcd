@@ -8,6 +8,7 @@
 - **Superseded in part by**: [ADR-0310](0310-each-provider-serves-its-own-local-api-facet.md) (2026-11-03) — Decision
   1's "registered by `WithSecrets` like `WithSQL`" and `WithSecrets` in its Contracts: the secrets provider serves the
   `secret` facet.
+- **Superseded in part by**: [ADR-0321](0321-cedar-decides-each-secret-a-workload-reads.md) (2026-11-11) — the Constraints' "No new Cedar action"; Decision 2's "under the namespace identity", since each read asks `secret::read` per bound Secret as the Function; the Consequences' "no Policy revokes a single Secret"; and scenario `secret-denied`'s namespace-wide premise.
 - **Date**: 2026-10-19
 - **Deciders**: green-0-rabbit
 - **Tags**: secrets, shim, ctx, local-api, security

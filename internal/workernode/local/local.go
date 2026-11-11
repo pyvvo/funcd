@@ -111,7 +111,7 @@ func (e *UpstreamError) Error() string { return fmt.Sprintf("upstream returned %
 // DependencyReport is the first binding of a sandbox's caller that fails its dependency check (ADR-0215 Decision 3),
 // the body of a 503 from GET /health/dependencies and, passed through by the shim, from its /health/readiness.
 type DependencyReport struct {
-	Kind    string `json:"kind"`    // kv | blob | sql | link | socket
+	Kind    string `json:"kind"`    // kv | blob | sql | secret | link | socket
 	Binding string `json:"binding"` // the alias
 	Reason  string `json:"reason"`  // Forbidden | NotFound | NotReady | StorageUnreachable | Timeout | Unreachable | EngineNotReady
 	Message string `json:"message"`
@@ -123,6 +123,7 @@ const (
 	DependencyBlob   = "blob"
 	DependencyLink   = "link"
 	DependencySocket = "socket"
+	DependencySecret = "secret" // a bound Secret's secret::read (ADR-0321)
 
 	ReasonForbidden          = "Forbidden"
 	ReasonNotFound           = "NotFound"

@@ -105,9 +105,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	// the same fail-closed posture the Function secret gate uses (ADR-0057).
 	env, berr := r.engineEnv(ctx, cs)
 	if berr != nil {
-		// No ConfigMap or Secret event reconciles a Lake, so a binding applied later is found only by a requeue.
+		// No ConfigMap, Secret or Policy event reconciles a Lake, so a binding applied later, or a forbid lifted
+		// (ADR-0321 Decision 5), is found only by a requeue.
 		var requeue time.Duration
-		if fault.KindOf(berr) == fault.NotFound {
+		if k := fault.KindOf(berr); k == fault.NotFound || k == fault.Forbidden {
 			requeue = r.referentPoll
 		}
 		return r.holdNotReady(ctx, cs, "BindingResolveFailed", berr.Error(), requeue)
@@ -546,10 +547,15 @@ func (r *Reconciler) engineEnv(ctx context.Context, cs *v1.Lake) (map[string]str
 	// The engine's own keys above are laid over the result; its key pair is issued with the engine
 	// (ProviderSpec.IssueEnv, ADR-0270).
 	resolved, rerr := provider.ResolveEnv(ctx, provider.EnvDeps{
-		Secrets:  r.secrets,
-		Store:    r.store,
-		Identity: r.developerFor,
-		Logger:   r.logger,
+		Secrets: r.secrets,
+		Store:   r.store,
+		// The Lake asks secret::read for each Secret as itself (ADR-0321 Decision 5).
+		Identity: func(ns v1.NamespaceName) auth.Identity {
+			id := r.developerFor(ns)
+			id.Principal = &auth.EntityRef{Type: v1.KindLake, Namespace: cs.Namespace, Name: cs.Name}
+			return id
+		},
+		Logger: r.logger,
 	}, cs.Namespace, cs.Spec.Bindings.Config, cs.Spec.Bindings.Secret)
 	if rerr != nil {
 		return nil, fault.Wrapf(rerr, fault.KindOf(rerr), op, "resolve provider env")

@@ -13,6 +13,9 @@
     "links": [
       "Function::\"team/billing\""
     ],
+    "secretBindings": [
+      "Secret::\"team/api-keys\""
+    ],
     "sqlBindings": [
       "SQLDatabase::\"team/todo-db\""
     ]
@@ -25,6 +28,9 @@
     "kvBindings": [],
     "lakeBindings": [],
     "links": [],
+    "secretBindings": [
+      "Secret::\"team/quack-token\""
+    ],
     "sqlBindings": []
   }
 }

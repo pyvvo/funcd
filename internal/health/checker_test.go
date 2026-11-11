@@ -301,3 +301,29 @@ func TestCheckerSQL(t *testing.T) {
 	sql.errs["app"] = fault.Forbiddenf("sql.authorize", "sql::read denied")
 	require.Equal(t, "Forbidden", check.Check(context.Background(), caller).Reason)
 }
+
+// The secret kind (ADR-0321 Decision 4) runs after sql and before links, asks each bound Secret in spec order, and
+// reports a denial as kind secret, Forbidden; links are not checked after it.
+func TestCheckerSecret(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	sec := &readCheck{errs: map[string]error{}}
+	check := health.NewChecker(health.CheckerDeps{Store: f.st, Bindings: []health.Binding{health.KV(f.kv, f.prob),
+		health.Blob(f.blob, f.prob), health.Secret(sec), health.Links(local.NewResolver(f.st), f.pdp, f.st)}})
+	f.fn("todo-api", "", func(fn *v1.Function) {
+		api(fn)
+		fn.Spec.Bindings.Secret = []v1.ObjectName{"api-keys", "settings"}
+	})
+	f.fn("mailer", v1.PhaseIdle, nil)
+	caller := local.Ref{Namespace: ns, Function: "todo-api"}
+	require.Nil(t, check.Check(context.Background(), caller))
+	require.Equal(t, []string{"api-keys", "settings"}, sec.calls)
+
+	sec.errs["settings"] = fault.Forbiddenf("secrets.CheckRead", `read secret "settings" in "default" denied: cedar: forbidden by policy default/p#0`)
+	f.pdp.asked = nil
+	r := check.Check(context.Background(), caller)
+	require.Equal(t, local.DependencySecret, r.Kind)
+	require.Equal(t, "settings", r.Binding)
+	require.Equal(t, "Forbidden", r.Reason)
+	require.Empty(t, f.pdp.asked, "links are not checked after a secret failure")
+}

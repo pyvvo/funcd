@@ -13918,5 +13918,35 @@
     "dod_total": 19,
     "report": "docs/reviews/adr-0320-implementation-claude-opus-5-5-2.md",
     "notes": "pass in round 2, independent subagent review; round 1's 2 majors and 2 minors resolved, each with a test that fails when its rule breaks (the readback reads an entry Badger does not hide; floor-expiry and sweep-by-name now killed); 27 of 28 overlay mutants killed, the survivor a DropPrefix-only fallback; the gate is pending, after the stamp"
+  },
+  {
+    "date": "2026-11-11",
+    "adr": "0321",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 2,
+    "dod_passed": 18,
+    "dod_total": 18,
+    "report": "docs/reviews/adr-0321-implementation-claude-opus-5-5.md",
+    "notes": "pass, independent subagent review; 2 minors (model): the deleted-Secret e2e credits Decision 4 but a CheckRead-reads-the-Secret mutant survives it (the unit test kills it), and the API half of secret-backup-and-api-unchanged makes no API read; 5 overlay mutants, 4 killed by the e2e scenarios; 105/105 e2e runs under -race; routed: a security.md row's reasons, the AI gateway to ADR-0281"
+  },
+  {
+    "date": "2026-11-11",
+    "adr": "0322",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 13,
+    "dod_total": 13,
+    "report": "docs/reviews/adr-0322-implementation-claude-opus-5-5.md",
+    "notes": "pass, independent subagent review; rows only (no code): security.md tells a Function's forbidden Secret, services.md a Lake's and the accepted check-to-Converge window, workers.md names the secret kind; each cites its ADR-0321 part; check-behavior green"
   }
 ]

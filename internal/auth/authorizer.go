@@ -88,6 +88,9 @@ const (
 	// ActionSQLWrite is the Cedar action for a SQL execute (ADR-0233): permitted only to the database's writers,
 	// its owner plus writer-role grants.
 	ActionSQLWrite Action = "sql::write"
+	// ActionSecretRead is the Cedar action for a read of a Secret's values (ADR-0321): a declared spec.bindings.secret
+	// binding grants it, to a Function or a Lake; a namespace Policy forbid revokes it. Resource = a Secret.
+	ActionSecretRead Action = "secret::read"
 )
 
 // Identity is an authenticated principal (resolved by authn from a token / API key).
