@@ -1,6 +1,8 @@
 # ADR-0322: A Lake's forbidden Secret is told in the Lake's chapter (amends ADR-0321)
 
-- **Status**: Proposed
+- **Status**: Reviewing (2026-11-11, implemented with ADR-0321); Accepted (2026-11-11), under the decider's delegation
+  ("Don't need acceptance brief run it till completion"), after two rounds of an independent judge (a subagent), every
+  finding folded
 - **Date**: 2026-11-11
 - **Deciders**: green-0-rabbit
 - **Tags**: behavior, secrets, lake
@@ -81,14 +83,14 @@ review of that implementation checks these rows and stamps ADR-0322 and F237 Imp
 
 ## Review checklist
 
-- [ ] security.md holds the Function's row, services.md the Lake's, and workers.md names the `secret` kind.
-- [ ] Each row cites the ADR-0321 Decision it tells, and `just check-behavior` passes.
+- [ ] security.md holds the Function's row, services.md the Lake's two rows, and workers.md names the `secret` kind.
+- [ ] Each row cites the ADR-0321 part it tells, and `just check-behavior` passes.
 
 ## Consequences
 
 - **Positive**: each chapter tells what it holds, within its caps.
 - **Negative**: a reader of security.md finds the Lake's rows in services.md, not through a link; and the security
-  chapter's written part is now a few dozen bytes under its 16 KiB cap, so the next ADR that adds a row there splits
+  chapter's written part is now about 20 bytes under its 16 KiB cap, so the next ADR that adds a row there splits
   the chapter (option C, postponed to it).
 
 ## Open questions
