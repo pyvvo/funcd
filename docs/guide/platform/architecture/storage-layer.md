@@ -3,7 +3,7 @@ title: Storage layer
 description: funcd's three platform stores, the metastore, the event store and the run state, and their backup.
 ---
 
-![The control plane reads and writes the metastore, eventing reads and writes the event store, and the workflow engine reads and writes the run state. Every hour, funcd copies the storage layer to the backup target](storage-layer.drawio.svg)
+![The control plane reads and writes the metastore, eventing reads and writes the event store, and the workflow engine reads and writes the run state. Every hour, funcd copies the storage layer to the backup target](../../assets/storage-layer.drawio.svg)
 
 The storage layer holds funcd's own state in three platform stores. Each store is a Badger database of its own under
 `storage.dataDir`. The metastore holds every resource. The event store holds what eventing must not lose. The run

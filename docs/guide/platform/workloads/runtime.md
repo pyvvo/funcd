@@ -3,7 +3,7 @@ title: Runtime
 description: Where a Function's code runs, and in which language.
 ---
 
-![A Function's spec.runtime picks the language of its worker, where a shim runs the Function's code. The process driver, the default, or containerd with crun on Linux runs the worker](runtime.drawio.svg)
+![A Function's spec.runtime picks the language of its worker, where a shim runs the Function's code. The process driver, the default, or containerd with crun on Linux runs the worker](../../assets/runtime.drawio.svg)
 
 A Function names its language in `spec.runtime`, such as `nodejs22` or `python312`. Its code runs in a worker, where a
 shim, in TypeScript or in Python, loads the code and gives it its context.

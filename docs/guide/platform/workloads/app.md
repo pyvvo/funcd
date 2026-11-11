@@ -3,7 +3,7 @@ title: App
 description: A whole app in one resource, rolled out and rolled back through its revisions.
 ---
 
-![funcdctl app deploy applies an App, and admission checks its parts. The App reconciler creates an AppRevision for each changed spec, waits for the Apps it requires, calls the before hooks, writes the parts and calls the after hooks. app rollback applies an earlier revision again](app.drawio.svg)
+![funcdctl app deploy applies an App, and admission checks its parts. The App reconciler creates an AppRevision for each changed spec, waits for the Apps it requires, calls the before hooks, writes the parts and calls the after hooks. app rollback applies an earlier revision again](../../assets/app.drawio.svg)
 
 An App declares a whole app in one resource: its Functions, Workflows, Sites, Routes, stores (KV, Buckets, SQL
 databases and Lakes), EventSources, Sensors and ConfigMaps, the Secrets its parts name, and its hooks. When it is

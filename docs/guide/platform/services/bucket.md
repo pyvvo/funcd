@@ -3,7 +3,7 @@ title: Bucket
 description: Objects under prefixes, reached through a Function's binding or over S3.
 ---
 
-![A Function's blob calls go through its local API to the blob facade, and S3 clients go through the S3 gateway. Both ask Cedar for s3::read or s3::write and reach a prefix of the Bucket, stored as files or in S3](bucket.drawio.svg)
+![A Function's blob calls go through its local API to the blob facade, and S3 clients go through the S3 gateway. Both ask Cedar for s3::read or s3::write and reach a prefix of the Bucket, stored as files or in S3](../../assets/bucket.drawio.svg)
 
 A Bucket holds objects under prefixes, its medallion layers, and each prefix has one writer, its owner. A Function
 reaches a prefix through a binding in `spec.bindings.blob`: its calls go to its local API, where the blob facade asks

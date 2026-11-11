@@ -3,7 +3,7 @@ title: KV
 description: Key-value tables a Function binds, on Badger.
 ---
 
-![The KV facade asks Cedar whether the Function may kv::read or kv::write the KVTable. Cedar decides from its rules. On allow, the call reaches the table in Badger, and on deny it is refused with 403](kv.drawio.svg)
+![The KV facade asks Cedar whether the Function may kv::read or kv::write the KVTable. Cedar decides from its rules. On allow, the call reaches the table in Badger, and on deny it is refused with 403](../../assets/kv.drawio.svg)
 
 A KVStore holds named tables, and each table has one writer, its owner. A Function reaches a table only through a
 binding in `spec.bindings.kv`. Its calls go to its local API, where the KV facade enforces the check. The facade turns

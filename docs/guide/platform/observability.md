@@ -4,7 +4,7 @@ description: What funcd records about Functions and about itself, and where to r
 icon: Activity
 ---
 
-![The workers' logs and spans go to the funcd-system bucket, where funcdctl logs reads them for a Function or a run. funcd writes its own log, and exports its traces, metrics and logs to an OTLP collector at telemetry.endpoint](observability.drawio.svg)
+![The workers' logs and spans go to the funcd-system bucket, where funcdctl logs reads them for a Function or a run. funcd writes its own log, and exports its traces, metrics and logs to an OTLP collector at telemetry.endpoint](../assets/observability.drawio.svg)
 
 funcd records what the Functions do and what it does itself. A Function's logs and spans go to a bucket in Blob,
 where `funcdctl logs` reads them. funcd writes its own log and, when `telemetry.endpoint` is set, exports its traces,

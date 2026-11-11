@@ -3,7 +3,7 @@ title: Limits
 description: The limits that keep one workload from taking the whole machine.
 ---
 
-![funcd's limits: CPU, memory and bounded writes for workers, a size and a file count for each volume, and a free-space floor on the disk](limits.drawio.svg)
+![funcd's limits: CPU, memory and bounded writes for workers, a size and a file count for each volume, and a free-space floor on the disk](../../assets/limits.drawio.svg)
 
 Each Function has a CPU and a memory limit, and a node default applies to a Function that sets none. A worker writes
 only into its memory, its volumes or a scratch space of a fixed size.

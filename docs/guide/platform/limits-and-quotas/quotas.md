@@ -3,7 +3,7 @@ title: Quotas
 description: How many stores a namespace holds, and how much each store holds.
 ---
 
-![At create, a store needs room in its namespace's count cap, else the create gets 400. On each write, a capped store needs room within its spec.quota, else the write gets 507 Insufficient Storage, or QuotaExceeded on S3](quotas.drawio.svg)
+![At create, a store needs room in its namespace's count cap, else the create gets 400. On each write, a capped store needs room within its spec.quota, else the write gets 507 Insufficient Storage, or QuotaExceeded on S3](../../assets/quotas.drawio.svg)
 
 A namespace holds at most 100 KVStores (`kvstore.maxStoresPerNamespace`), 100 Buckets and 20 SQL databases
 (`sql.maxDatabasesPerNamespace`). The API refuses a create past the cap with 400, and it counts an App's new parts

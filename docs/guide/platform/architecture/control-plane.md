@@ -3,7 +3,7 @@ title: Control plane
 description: The API that keeps the declared state, and the controller that makes the platform match it.
 ---
 
-![funcdctl, the SDK and any HTTP client call the API, which checks each write and stores it in the metastore. The controller watches the metastore, writes each resource's status back, and sets the data plane's routes, workers and stores](control-plane.drawio.svg)
+![funcdctl, the SDK and any HTTP client call the API, which checks each write and stores it in the metastore. The controller watches the metastore, writes each resource's status back, and sets the data plane's routes, workers and stores](../../assets/control-plane.drawio.svg)
 
 funcd's control plane keeps the declared state and makes the platform match it. Its API checks each write from funcdctl,
 the SDK or any HTTP client and stores it in the metastore. The controller watches the metastore and runs a reconciler
@@ -11,7 +11,7 @@ for each kind. A reconciler sets the data plane's routes, workers and stores, an
 
 ## API
 
-![funcdctl, the SDK and any HTTP client call the API. Each call needs a known token, else it gets 401, and RBAC's permission, else it gets 403. It then reaches one of the API's operations. Resources read and write the metastore, whose watch events reach the controller. Logs read the function logs in Blob. Dead letters read the event store. The other operations cover retries, backups and holds](control-plane-api.drawio.svg)
+![funcdctl, the SDK and any HTTP client call the API. Each call needs a known token, else it gets 401, and RBAC's permission, else it gets 403. It then reaches one of the API's operations. Resources read and write the metastore, whose watch events reach the controller. Logs read the function logs in Blob. Dead letters read the event store. The other operations cover retries, backups and holds](../../assets/control-plane-api.drawio.svg)
 
 The API is funcd's resource API. funcdctl, the SDK and any HTTP client call it under `/apis/funcd.io/v1alpha1/`, with
 a bearer token or an `X-Api-Key` header. Only its OpenAPI spec, schemas and docs, at `/openapi`, `/schemas` and
@@ -37,7 +37,7 @@ backup status needs get on the cluster-scoped WorkerNode, so only an admin can r
 
 ### Writes
 
-![After the token and RBAC checks, a resource write takes the namespace lock when an admission reads the namespace. It then needs a current version, else it gets 409, and the admission pipeline's approval, else it gets 400, 403, 409 or 413. A dry run answers with the admitted object. Any other write is stored in the metastore](control-plane-api-writes.drawio.svg)
+![After the token and RBAC checks, a resource write takes the namespace lock when an admission reads the namespace. It then needs a current version, else it gets 409, and the admission pipeline's approval, else it gets 400, 403, 409 or 413. A dry run answers with the admitted object. Any other write is stored in the metastore](../../assets/control-plane-api-writes.drawio.svg)
 
 A create, a replace and a delete take this path after the two checks. `funcdctl apply` validates each document offline
 first, then sends a PUT to the resource's path, and a POST to create it when the PUT answers 404.
@@ -67,7 +67,7 @@ when the spec changed. A replace that changes nothing stores nothing and sends n
 
 ## Controller
 
-![The controller's watches, one per kind, take the metastore's events into a work queue that holds each key once. One worker runs one pass at a time through the reconciler of the key's kind. The reconciler writes the status back to the metastore and sets the data plane's routes, workers and stores. Beside the controller, the owner collector watches the metastore and deletes the objects whose owner is gone](control-plane-controller.drawio.svg)
+![The controller's watches, one per kind, take the metastore's events into a work queue that holds each key once. One worker runs one pass at a time through the reconciler of the key's kind. The reconciler writes the status back to the metastore and sets the data plane's routes, workers and stores. Beside the controller, the owner collector watches the metastore and deletes the objects whose owner is gone](../../assets/control-plane-controller.drawio.svg)
 
 The controller makes the platform match the metastore. It opens a watch on each kind that it reconciles, and each
 change queues the object's key. A change to one kind can also queue other objects whose state depends on it. A changed

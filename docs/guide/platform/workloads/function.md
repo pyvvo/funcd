@@ -5,7 +5,7 @@ description: Who calls a Function, and what it binds.
 
 ## Callers
 
-![External callers reach a Function through the edge. Another Function calls it through its local API over a link. A Sensor, a Workflow step and an App hook also call it. Every call goes through the invoke chain and the activator to the Function's workers](function-callers.drawio.svg)
+![External callers reach a Function through the edge. Another Function calls it through its local API over a link. A Sensor, a Workflow step and an App hook also call it. Every call goes through the invoke chain and the activator to the Function's workers](../../assets/function-callers.drawio.svg)
 
 A Function is called from outside funcd or from inside it. From outside, an HTTP client reaches it through the edge,
 on one of its Routes or at `/function/<name>`. From inside, another Function calls it through its local API, over a
@@ -18,7 +18,7 @@ When the Function has no worker running, the activator starts one and holds the 
 
 ## Bindings
 
-![A Function binds KVStores, Buckets, SQL databases and Lakes, and owns its volumes. Each of them runs on its engine: Badger, files or S3, rqlite, DuckDB, or the local disk](function-bindings.drawio.svg)
+![A Function binds KVStores, Buckets, SQL databases and Lakes, and owns its volumes. Each of them runs on its engine: Badger, files or S3, rqlite, DuckDB, or the local disk](../../assets/function-bindings.drawio.svg)
 
 A Function names what it uses in `spec.bindings`: KVStores, Buckets, SQL databases and Lakes, and also other Functions
 (`links`), ConfigMaps and Secrets. Its volumes come from `spec.volumes`.

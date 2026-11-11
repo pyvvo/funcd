@@ -3,7 +3,7 @@ title: Architecture
 description: The control plane that keeps the declared state, and the data plane that serves the calls.
 ---
 
-![funcd's architecture: the control plane (API, authorization, admission, controller), the data plane (edge, invoke chain, activator, and the Executor with the workers and their local API sockets, then the services KV, Blob, rqlite, Lake and NATS) and the storage layer under them (metastore, event store, run state)](architecture.drawio.svg)
+![funcd's architecture: the control plane (API, authorization, admission, controller), the data plane (edge, invoke chain, activator, and the Executor with the workers and their local API sockets, then the services KV, Blob, rqlite, Lake and NATS) and the storage layer under them (metastore, event store, run state)](../../assets/architecture.drawio.svg)
 
 funcd runs a control plane and a data plane in one binary.
 

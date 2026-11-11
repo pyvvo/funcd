@@ -3,7 +3,7 @@ title: Site
 description: A static web app, served from a Bucket through its own Route.
 ---
 
-![funcdctl applies a Site. The Site reconciler resolves its bundle image to a digest, copies the bundle into the Site's Bucket with the index last, and writes the Site's Route. A browser's request goes through the edge and the Route to the Bucket's files](site.drawio.svg)
+![funcdctl applies a Site. The Site reconciler resolves its bundle image to a digest, copies the bundle into the Site's Bucket with the index last, and writes the Site's Route. A browser's request goes through the edge and the Route to the Bucket's files](../../assets/site.drawio.svg)
 
 A Site serves a static web app. Its spec names the bundle, which is an OCI image, and the Route that the Site owns.
 The Site reconciler resolves the image to a digest once for each change of the spec. It copies the bundle into the

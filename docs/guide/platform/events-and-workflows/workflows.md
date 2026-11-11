@@ -3,7 +3,7 @@ title: Workflows
 description: How a WorkflowRun moves through the steps of its Workflow.
 ---
 
-![Each execution of a Workflow is a WorkflowRun, started by funcdctl or a Sensor. The workflow engine runs it through the steps (Function steps, built-in steps, child workflows) and keeps its progress in the run state](workflows.drawio.svg)
+![Each execution of a Workflow is a WorkflowRun, started by funcdctl or a Sensor. The workflow engine runs it through the steps (Function steps, built-in steps, child workflows) and keeps its progress in the run state](../../assets/workflows.drawio.svg)
 
 A Workflow declares its steps and the stores they bind. Steps run in list order, unless a step names its parents with
 `dependsOn`. A step can wait for all of its parents or for any one of them, and a `when` condition can skip it. A step

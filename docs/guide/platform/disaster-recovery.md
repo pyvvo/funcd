@@ -4,7 +4,7 @@ description: What funcd copies to a backup target, and how to restore it after a
 icon: LifeBuoy
 ---
 
-![The platform backups of the storage layer, Blob and KV, and the Backups of each BackupSchedule, go to backup targets. funcd restore brings a platform back after a host loss, and a Restore brings back a namespace's stores](disaster-recovery.drawio.svg)
+![The platform backups of the storage layer, Blob and KV, and the Backups of each BackupSchedule, go to backup targets. funcd restore brings a platform back after a host loss, and a Restore brings back a namespace's stores](../assets/disaster-recovery.drawio.svg)
 
 funcd keeps two kinds of copies, each on a backup target, which is an S3 bucket or a directory. The operator runs the
 platform backups, which copy the storage layer, Blob's files and KV's stores. A namespace's owner schedules Backups of
@@ -13,7 +13,7 @@ namespace's stores.
 
 ## Platform backup
 
-![A backup run reads the event store, then the metastore, then the run state, and writes a generation on backup.target every hour](disaster-recovery-platform.drawio.svg)
+![A backup run reads the event store, then the metastore, then the run state, and writes a generation on backup.target every hour](../assets/disaster-recovery-platform.drawio.svg)
 
 With `backup.target` set and `storage.mode` set to `file`, funcd copies the
 [storage layer](architecture/storage-layer.md) to the target every `backup.interval`, 1 h, and tries a failed run
@@ -31,7 +31,7 @@ the copies with `funcdctl backup verify` from another machine.
 
 ## Backups and Restores
 
-![An in-place Restore first exports the namespace's stores, then checks every part and member, and fails with nothing written when a check fails. It then holds the namespace and loads each member in order. It lifts the hold on success, or fails with the hold kept](disaster-recovery-restore.drawio.svg)
+![An in-place Restore first exports the namespace's stores, then checks every part and member, and fails with nothing written when a check fails. It then holds the namespace and loads each member in order. It lifts the hold on success, or fails with the hold kept](../assets/disaster-recovery-restore.drawio.svg)
 
 A BackupSchedule copies a namespace's stores on a cron `schedule`, in a `timeZone`. It copies the KVStores, Buckets,
 Lakes, SQL databases and volumes that its `scope` names, or those of an App or a ResourceGroup. Each slot makes a
@@ -47,7 +47,7 @@ When a load fails, the hold stays until `funcdctl hold release --namespace`.
 
 ## After a host loss
 
-![After a host loss, the operator runs funcd restore run, then funcd restore kv and blob, and starts funcd, which is held. The operator runs funcdctl hold release. Each owner then restores its stores and runs funcdctl hold release --namespace](disaster-recovery-host-loss.drawio.svg)
+![After a host loss, the operator runs funcd restore run, then funcd restore kv and blob, and starts funcd, which is held. The operator runs funcdctl hold release. Each owner then restores its stores and runs funcdctl hold release --namespace](../assets/disaster-recovery-host-loss.drawio.svg)
 
 On a new host, `funcd restore run` loads a platform generation into the empty data directories. `funcd restore kv`
 and `funcd restore blob` bring back KV's stores and Blob's files, and `funcd restore list` shows the generations.
