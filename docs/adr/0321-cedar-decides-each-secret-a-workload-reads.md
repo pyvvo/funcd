@@ -16,8 +16,9 @@
     namespace identity", the Consequences' "no Policy revokes a single Secret", and scenario `secret-denied`'s
     namespace-wide premise;
   - [ADR-0281](0281-ai-gateways.md) Decision 4's "authorized as the namespace's developer identity": an AI gateway
-    reads as its own principal, as the Lake now does; and Decision 10's `AIGateway` entity, which gains
-    `secretBindings` beside `namespace` and `blobBindings`;
+    reads as its own principal, as the Lake now does, and a denied Secret holds it with the new reason
+    `SecretForbidden`; and Decision 10's `AIGateway` entity, which gains `secretBindings` beside `namespace` and
+    `blobBindings`;
   - [ADR-0310](0310-each-provider-serves-its-own-local-api-facet.md) Decision 6's "over the config alone": the
     secrets provider is built over the policy decision point too, still before every other provider.
 - **Relates to**: [ADR-0057](0057-secret-injection-last-mile.md) Decision 4 and
@@ -59,9 +60,9 @@ The Functions are solo; a pooled one is Decision 4's last sentence.
   `SecretResolveFailed`.
 - `scenario: secret-forbid-lifted` — *When* the Policy is deleted, *Then* the next read succeeds, and within one
   `runtime.supervisionPeriod` `reports` and the new Function are `Ready` on the same workers.
-- `scenario: secret-missing-unchanged` — *Given* a Function binds a Secret not applied yet, *Then* it is held as today;
-  *When* a bound Secret is deleted while a worker serves, *Then* the worker goes on serving and reads nothing
-  (docs/behavior/security.md and functions.md, their missing and lost Secret rows), whatever the Policies say.
+- `scenario: secret-missing-unchanged` — *Given* a Function binds a Secret not applied yet, *Then* it is held as today,
+  whatever the Policies say; *When* a bound Secret no forbid names is deleted while a worker serves, *Then* the worker
+  goes on serving and reads nothing (docs/behavior/security.md and functions.md, their missing and lost Secret rows).
 - `scenario: lake-secret-forbid-before-start` — *Given* Lake `lake` binds Secret `quack` and a forbid names the Lake,
   *When* the Lake is applied, *Then* it is held `BindingResolveFailed` and its engine never runs with `QUACK_TOKEN`;
   *When* the forbid is deleted, *Then* within `controller.referentPollInterval` the engine runs with it.
@@ -161,7 +162,9 @@ The Functions are solo; a pooled one is Decision 4's last sentence.
   `no-check-at-start` fails `NoEngineStartsWhileForbidden`.
 - **Result**: pass, 8 states, 0.2 s, FizzBee v0.5.4; wider (10 actions): pass.
 - **Left to tests**: the pass's order inside funcd (the resolve, then Converge or the hold's Teardown) and the
-  engine's real stop, in the two Lake scenarios; the Lake's stop itself is [`stop.fizz`](../design/lake/stop.fizz).
+  engine's real stop, in the two Lake scenarios; the Lake's stop itself is [`stop.fizz`](../design/lake/stop.fizz). The
+  spec's pass is atomic, so a forbid applied between funcd's resolve and its Converge, which starts the engine once,
+  is left to the Risks line.
 
 ## Behavior rows
 
@@ -169,8 +172,9 @@ The Functions are solo; a pooled one is Decision 4's last sentence.
   Secret); a new row "A Policy forbids a workload's read of a bound Secret": 403 at the next read; a Function
   `DependencyNotReady`, `Degraded` with no ready replica, never restarted, its calls held until
   `invoke.activationTimeout`; a Lake `BindingResolveFailed`, its engine stopped, its queries refused and its woken
-  consumers `LakeNotReady`; and its lift, within `runtime.supervisionPeriod` for a Function and
-  `controller.referentPollInterval` for a Lake; `decided`, this ADR's Decisions 4 and 5.
+  consumers `LakeNotReady`. It takes effect at the next read for `ctx.secret`, and within `runtime.supervisionPeriod`
+  for a serving Function's readiness and a running Lake; its lift, within `runtime.supervisionPeriod` for a Function
+  and `controller.referentPollInterval` for a Lake; `decided`, this ADR's Decisions 4 and 5.
 - **workers.md**: the `A binding check fails` row names the `secret` kind. No new number: every wait is an existing key.
 
 ## Temporary workarounds
@@ -248,7 +252,8 @@ Done when `just ci` and the e2e suite are green, the scenarios pass, `just check
   readiness check, within its 50 ms `DependencyCheckBudget`.
 - **Risks accepted**: a pooled Function a Policy names can still be named by a mate until its own pass moves it
   (ADR-0158's re-keying window), and a Policy keyed on an attribute rather than a name leaves mates together, as
-  ADR-0158 Decision 6 accepts; a running Lake's engine keeps its key until the pass that finds the forbid.
+  ADR-0158 Decision 6 accepts; a running Lake's engine keeps its key until the pass that finds the forbid, and a forbid
+  applied between a pass's check and its Converge starts the engine once with the key, until the next pass stops it.
 
 ## Open questions
 
