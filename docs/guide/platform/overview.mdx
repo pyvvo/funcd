@@ -1,0 +1,22 @@
+---
+title: Platform overview
+description: The parts of funcd, and how a call, an event and a deploy move through them.
+icon: Layers
+---
+
+funcd is one server binary, `funcd`, that you drive with one CLI, `funcdctl`. A call, an event or a deploy enters
+funcd; funcd runs your code, keeps its state and answers.
+
+<PlatformDiagram />
+
+## The platform
+
+- [Architecture](architecture/index.md): the control plane and the data plane.
+- [Workloads](workloads/index.md): Functions, Apps and Sites, and the [runtime](workloads/runtime.md) that runs them.
+- [Networking](networking/index.md): how a call reaches a worker.
+- [Services](services/index.mdx): KV, Buckets, SQL databases and Lakes, and the engines under them.
+- [Events](events-and-workflows/events.md): EventSources and Sensors.
+- [Workflows](events-and-workflows/workflows.md): Workflows and their runs.
+- [Configuration](configuration/index.md): ConfigMaps and Secrets.
+- [Security](security/index.md): the enforcement points and the authorizer.
+- [Limits](limits/index.md): CPU, memory, store sizes and disk space.

@@ -35,6 +35,8 @@ or a Lake.
 - **The examples** in [pyvvo/funcd-functions](https://github.com/pyvvo/funcd-functions) are Functions and Apps that
   funcd's end-to-end tests run on a real funcd.
 
+The [platform overview](platform/overview.mdx) shows how a call, an event and a deploy move through funcd.
+
 ## Get started
 
 - [Install](get-started/install.md) funcdctl, and the funcd server on Linux.
