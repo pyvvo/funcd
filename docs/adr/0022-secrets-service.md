@@ -1,6 +1,7 @@
 # ADR-0022: Secrets service — at-rest encryption + delivery resolver (`internal/secrets`)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0321](0321-cedar-decides-each-secret-a-workload-reads.md) (2026-11-11) — Decision 2's step 1 when the identity carries a workload principal, whose read now asks `secret::read` for each Secret as that workload; and the temporary workaround "Resolver authz is RBAC, not workload `Grant`", which ends for workload reads.
 - **Date**: 2026-06-14 (**Implemented 2026-06-14** — review pass (zero findings), see docs/reviews/adr-0022-implementation-claude-opus-4-8.md; DoD 5/5, 5 scenarios. **Reviewing 2026-06-14** — implemented: internal/secrets/aesgcm (AES-256-GCM store.Encryptor) + internal/secrets (PDP-authorized Resolver) + SecretTypeOpaque; 5 scenarios pass, OpenAPI regen, four sub-checks green, no new deps. **Accepted 2026-06-14** after judge pass — no Blockers. Folded the judge's **Major**:
   named the secret-injection last-mile's owner honestly — a **P-M-superseding ADR** (the frozen P-M doesn't
   inject secrets; no worker is built), recorded as a V1 follow-up, so this ADR ships **at-rest encryption + the

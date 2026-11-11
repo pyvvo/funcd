@@ -1,6 +1,7 @@
 # ADR-0281: AI gateways, one engine per AIGateway resource
 
 - **Status**: Accepted (2026-10-25, self-accepted under the decider's batch delegation; judged twice; root declarations and the EgressPolicy rule for `url` hosts are the decider's choices)
+- **Superseded in part by**: [ADR-0321](0321-cedar-decides-each-secret-a-workload-reads.md) (2026-11-11) — Decision 4's "authorized as the namespace's developer identity": a gateway reads as its own principal, and a denied Secret holds it with reason `SecretForbidden`; and Decision 10's `AIGateway` entity, which gains `secretBindings`.
 - **Date**: 2026-10-25
 - **Deciders**: green-0-rabbit
 - **Tags**: ai, provider, resource, egress

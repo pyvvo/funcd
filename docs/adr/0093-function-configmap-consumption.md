@@ -4,6 +4,7 @@
 - **Superseded in part by**: [ADR-0158](0158-pool-member-identity.md) (2026-10-05) — the pooled gate: a pooled Function declaring spec.config or spec.secrets no longer fails closed.
 - **Superseded in part by**: [ADR-0221](0221-degraded-recovers-under-gate.md) (2026-10-10) — Decision 3 (116-117) and scenario `config-missing-fails-closed` (52-53): `Ready=False` holds only while no worker of the serving revision passes its readiness probe; a `Degraded` Function then serves again with its start-time env. No worker is created or started while the ConfigMap is missing.
 - **Superseded in part by**: [ADR-0246](0246-bindings-under-spec.md) (2026-10-19) — where the binding lives: `spec.config` and `spec.secrets` move to `spec.bindings.config` and `spec.bindings.secret`; what it grants is unchanged.
+- **Superseded in part by**: [ADR-0321](0321-cedar-decides-each-secret-a-workload-reads.md) (2026-11-11) — Decision 2's "under the secret-injector identity" for a Lake, which resolves its Secrets as its own principal; a Function's start check keeps that identity.
 - **Date**: 2026-07-02 (accepted 2026-07-02 — judge: **ACCEPT**, sound + faithful to the code + cycle-free, 0
   Blockers/0 Majors; folded 3 Minors [the resolve-trigger + pooled gate flip to config-OR-secrets; sentinel
   `ErrConfig`/`ErrSecret` so the reconciler attributes `ConfigResolveFailed` vs `SecretResolveFailed` from one

@@ -1,6 +1,7 @@
 # ADR-0092: Shared provider env resolution — one `spec.secrets`+`spec.config`→engine-env helper (DRY)
 
 - **Status**: Implemented
+- **Superseded in part by**: [ADR-0321](0321-cedar-decides-each-secret-a-workload-reads.md) (2026-11-11) — Decision 2's "under the secret-injector identity" for a Lake, which resolves its Secrets as its own principal.
 - **Date**: 2026-07-02 (accepted 2026-07-02 — judge: sound, accurate to the code, behavior-preserving, 0
   Blockers; folded 1 Major [`EnvDeps.Secrets` must be a consumer-side **interface**, not the concrete
   `*secrets.Resolver` — so the catalog controller's `SecretResolver` interface + its fakes compile unchanged,
