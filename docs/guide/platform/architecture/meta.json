@@ -1,4 +1,5 @@
 {
   "title": "Architecture",
-  "icon": "Blocks"
+  "icon": "Blocks",
+  "pages": ["control-plane", "data-plane", "storage-layer"]
 }
