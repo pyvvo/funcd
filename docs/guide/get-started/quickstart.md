@@ -1,14 +1,14 @@
 ---
 title: Quickstart
-description: Run a first Function on your machine with funcdctl dev, call it, and read its logs.
+description: Run a first Function on the local machine with funcdctl dev, call it, and read its logs.
 icon: Rocket
 ---
 
-This page runs the hello-world example of [funcd-typescript](https://github.com/pyvvo/funcd-typescript) on your
-machine. It needs no funcd server, only two things:
+This page runs the hello-world example of [funcd-typescript](https://github.com/pyvvo/funcd-typescript) on the local
+machine. It needs no funcd server. It needs only two things:
 
 - `funcdctl` in its dev build (see [Install](install.md));
-- Node.js on your `PATH`, because funcd starts the Function with `node`.
+- Node.js on the `PATH`, because funcd starts the Function with `node`.
 
 ## 1. Get the example
 
@@ -66,7 +66,7 @@ Without `--gport` and `--cport`, it picks free ports. It also prints each Functi
 
 ## 3. Call it
 
-In another terminal:
+Call it from another terminal:
 
 ```sh
 curl -X POST http://127.0.0.1:8081/function/hello-world \
@@ -92,7 +92,7 @@ curl -X POST http://127.0.0.1:8081/function/hello-world \
 
 ## 4. Inspect it
 
-funcdctl works with the embedded platform as it does with a funcd server:
+funcdctl manages the embedded platform as it manages a funcd server:
 
 ```sh
 funcdctl --server http://127.0.0.1:8080 --token funcd-dev-token get functions -n default
