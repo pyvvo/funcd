@@ -4,6 +4,10 @@
   "include-component-in-tag": false,
   "bump-minor-pre-major": true,
   "packages": {
-    ".": {}
+    ".": {
+      "extra-files": [
+        "docs/guide/get-started/install.md"
+      ]
+    }
   }
 }

@@ -1,0 +1,5 @@
+{
+  "title": "Security and networking",
+  "icon": "ShieldCheck",
+  "pages": ["security", "networking"]
+}

@@ -1,0 +1,5 @@
+{
+  "title": "Limits and quotas",
+  "icon": "Gauge",
+  "pages": ["limits", "quotas"]
+}

@@ -1,0 +1,3 @@
+{
+  "pages": ["overview", "architecture", "workloads", "security-and-networking", "services", "events-and-workflows", "limits-and-quotas", "observability", "disaster-recovery"]
+}
