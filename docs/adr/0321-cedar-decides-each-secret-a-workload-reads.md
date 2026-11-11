@@ -15,7 +15,8 @@
     namespace identity", the Consequences' "no Policy revokes a single Secret", and scenario `secret-denied`'s
     namespace-wide premise;
   - [ADR-0281](0281-ai-gateways.md) Decision 4's "authorized as the namespace's developer identity": an AI gateway
-    reads as its own principal, as the Lake now does;
+    reads as its own principal, as the Lake now does; and Decision 10's `AIGateway` entity, which gains
+    `secretBindings` beside `namespace` and `blobBindings`;
   - [ADR-0310](0310-each-provider-serves-its-own-local-api-facet.md) Decision 6's "over the config alone": the
     secrets provider is built over the policy decision point too, still before every other provider.
 - **Relates to**: [ADR-0057](0057-secret-injection-last-mile.md) Decision 4 and
@@ -172,7 +173,8 @@ func (r *Resolver) ResolveEnv(ctx context.Context, id auth.Identity, ns v1.Names
 
 1. `internal/auth`, `internal/auth/cedar`: the action, the capability, the built-in, both registries,
    `resourceUID`, `namespacedEntityType`; regenerate the grants golden (`go test ./internal/auth/cedar/ -update`), which
-   gains `secretBindings` on the Function and the Lake; `schema_test.go`'s unknown-type example becomes `ConfigMap`.
+   gains `secretBindings` on the Function and the Lake; `schema_test.go`'s unknown-type example becomes `ConfigMap`;
+   `TestPhases_ListTheProvidersWithTheirHooks` lists secrets with `dependencies, facets`.
 2. `internal/secrets`: `WorkloadIdentity`, the per-Secret question, `CheckRead`.
 3. `internal/services/secret`: reads and `CheckRead` as the Function. `internal/health`: `Secret`.
    `pkg/funcd`: the provider's `Dependencies`, its build after the PDP over the routing authorizer.
@@ -215,6 +217,7 @@ finds nothing.
 ## References
 
 - #1429 (F235), tracker #1430; Secret writes: #1432 (F236).
-- Experiment 0019, pyvvo/experiment folder `0019-secret-reads-on-cedar`.
+- Experiment 0019: pyvvo/experiment folder `0019-secret-reads-on-cedar` at 53c235a (pyvvo/experiment#32), a spike on
+  main 1bd61c52 run on real Node workers; its first run, f3173fa, decided access at the start check (Alternative D).
 - `internal/secrets/secrets.go:55`, `pkg/funcd/binding_providers.go:832`, `internal/function/workerenv.go:163`,
   `internal/services/lake/reconcile.go:111`, `internal/health/checker.go:118`.
