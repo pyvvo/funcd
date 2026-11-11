@@ -1,6 +1,6 @@
 # ADR-0322: A Lake's forbidden Secret is told in the Lake's chapter (amends ADR-0321)
 
-- **Status**: Reviewing (2026-11-11, implemented with ADR-0321); Accepted (2026-11-11), under the decider's delegation
+- **Status**: Implemented (2026-11-11), review passed with no finding ([report](../reviews/adr-0322-implementation-claude-opus-5-5.md)); Reviewing (2026-11-11, implemented with ADR-0321); Accepted (2026-11-11), under the decider's delegation
   ("Don't need acceptance brief run it till completion"), after two rounds of an independent judge (a subagent), every
   finding folded
 - **Date**: 2026-11-11

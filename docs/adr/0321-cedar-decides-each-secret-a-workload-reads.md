@@ -1,6 +1,6 @@
 # ADR-0321: Cedar decides each Secret a workload reads
 
-- **Status**: Reviewing (2026-11-11, implementation done); Accepted (2026-11-11), by the decider, after three rounds of an independent judge (a subagent): round 1's
+- **Status**: Implemented (2026-11-11), review passed with two Minors, both test notes ([report](../reviews/adr-0321-implementation-claude-opus-5-5.md)); Reviewing (2026-11-11, implementation done); Accepted (2026-11-11), by the decider, after three rounds of an independent judge (a subagent): round 1's
   two Majors and six Minors and round 2's four points folded, one Nit declined with its reason; experiment 0019 rerun
   on the final rules
 - **Superseded in part by**: [ADR-0322](0322-a-lakes-forbidden-secret-is-told-in-the-lakes-chapter.md) (2026-11-11) — its Behavior rows section: a Function's forbidden Secret is told in security.md, a Lake's in services.md, and workers.md's binding row cites ADR-0321.
