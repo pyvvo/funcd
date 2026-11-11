@@ -24,9 +24,11 @@ funcdctl --help
 
 To install another release, set `FUNCDCTL_VERSION`:
 
+<!-- x-release-please-start-version -->
 ```sh
 curl -fsSL https://pyvvo.github.io/funcd/install.sh | FUNCDCTL_VERSION=v0.41.0 sh
 ```
+<!-- x-release-please-end -->
 
 A funcd server needs only the smaller build, `funcdctl-<version>-<os>-<arch>`, from the same
 [release](https://github.com/pyvvo/funcd/releases/latest).

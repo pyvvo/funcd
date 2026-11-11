@@ -66,6 +66,7 @@ jobs:
               - '!CHANGELOG.md'
               - '!version.txt'
               - '!.release-please-manifest.json'
+              - '!docs/guide/get-started/install.md'
 
   # Fast lane — runs on every change but a docs-only one (and always on push to main). The heavy
   # pkg/funcd e2e suite is build-tagged out of `just ci`, so this is fmt + lint + fast tests +
