@@ -1,6 +1,8 @@
 // Package secrets is the secrets delivery resolver (ADR-0022): it reads a function's
 // bound Secret resources (auto-decrypted by the store's at-rest encryptor) and returns
-// their data as an env-var map for worker injection — PDP-authorized (the secrets PEP).
+// their data as an env-var map for worker injection — PDP-authorized (the secrets PEP): a
+// workload's read asks secret::read for each Secret as that workload (ADR-0321), any other
+// read one coarse question for the namespace.
 // The injection is the function reconciler's secret gate (ADR-0057, internal/function): it
 // resolves the bound Secrets through this resolver before any worker is provisioned and
 // merges them into the worker's env (V1 delivers env only; tmpfs is V2). The at-rest
@@ -47,20 +49,29 @@ func NewResolver(d Deps) (*Resolver, error) {
 }
 
 // ResolveEnv reads the named Secrets in ns (store-decrypted), PDP-authorized (read), and
-// returns their merged Data as an env-var map for worker injection. A value env delivery cannot
+// returns their merged Data as an env-var map for worker injection. An identity that carries a
+// principal asks secret::read for each Secret before its read (ADR-0321 Decision 3); one that
+// carries none asks the coarse namespace question once. A value env delivery cannot
 // carry (EnvDataProblem: not valid UTF-8, or a NUL byte) is fault.Invalid; the first such key
 // in sorted order is named.
 func (r *Resolver) ResolveEnv(ctx context.Context, id auth.Identity, ns v1.NamespaceName, names []string) (map[string]string, error) {
 	const op = "secrets.ResolveEnv"
-	dec, err := r.authz.Authorize(ctx, auth.Request{Identity: id, Verb: auth.VerbGet, Kind: v1.KindSecret, Namespace: ns})
-	if err != nil {
-		return nil, fault.Wrapf(err, fault.Internal, op, "authorize")
-	}
-	if !dec.Allowed {
-		return nil, fault.Forbiddenf(op, "read secrets in %q denied: %s", ns, dec.Reason)
+	if id.Principal == nil {
+		dec, err := r.authz.Authorize(ctx, auth.Request{Identity: id, Verb: auth.VerbGet, Kind: v1.KindSecret, Namespace: ns})
+		if err != nil {
+			return nil, fault.Wrapf(err, fault.Internal, op, "authorize")
+		}
+		if !dec.Allowed {
+			return nil, fault.Forbiddenf(op, "read secrets in %q denied: %s", ns, dec.Reason)
+		}
 	}
 	env := make(map[string]string)
 	for _, name := range names {
+		if id.Principal != nil {
+			if err := r.authorizeRead(ctx, op, id, ns, name); err != nil {
+				return nil, err
+			}
+		}
 		obj, gerr := r.store.Get(ctx, v1.KindSecret.GVK(), ns, v1.ObjectName(name))
 		if gerr != nil {
 			return nil, fault.Wrapf(gerr, fault.KindOf(gerr), op, "get secret %q", name)
@@ -79,14 +90,40 @@ func (r *Resolver) ResolveEnv(ctx context.Context, id auth.Identity, ns v1.Names
 	return env, nil
 }
 
-// InjectorIdentity is the namespace-scoped developer identity a Function's secret reads are authorized as when no
+// authorizeRead asks secret::read on Secret name as id's workload principal (ADR-0321).
+func (r *Resolver) authorizeRead(ctx context.Context, op string, id auth.Identity, ns v1.NamespaceName, name string) error {
+	dec, err := r.authz.Authorize(ctx, auth.Request{Identity: id, Verb: auth.VerbGet, Kind: v1.KindSecret, Namespace: ns,
+		Action: auth.ActionSecretRead, Resource: &auth.EntityRef{Type: v1.KindSecret, Namespace: ns, Name: v1.ObjectName(name)}})
+	if err != nil {
+		return fault.Wrapf(err, fault.Internal, op, "authorize")
+	}
+	if !dec.Allowed {
+		return fault.Forbiddenf(op, "read secret %q in %q denied: %s", name, ns, dec.Reason)
+	}
+	return nil
+}
+
+// CheckRead is the readiness check's question for one bound Secret (ADR-0321 Decision 4): may id's workload principal
+// read it. It reads no Secret, so a missing one passes and the start check alone answers for it.
+func (r *Resolver) CheckRead(ctx context.Context, id auth.Identity, ns v1.NamespaceName, name string) error {
+	return r.authorizeRead(ctx, "secrets.CheckRead", id, ns, name)
+}
+
+// InjectorIdentity is the namespace-scoped developer identity a Function's start check resolves its secrets as when no
 // other is configured (ADR-0057 Decision 4): V1 is single-tenant per namespace, so the developer owns, and may read,
-// its own namespace's secrets. The Function reconciler, the lake service and the local API's /secret routes
-// (ADR-0249) share it.
+// its own namespace's secrets. A workload's own reads carry its principal on top of it (WorkloadIdentity, ADR-0321).
 func InjectorIdentity(ns v1.NamespaceName) auth.Identity {
 	return auth.Identity{
 		Subject:    "system:secret-injector:" + string(ns),
 		Role:       auth.RoleDeveloper,
 		Namespaces: []v1.NamespaceName{ns},
 	}
+}
+
+// WorkloadIdentity is a workload's reader identity (ADR-0321 Decision 3): the injector identity with the workload as its
+// Cedar principal, so ResolveEnv and CheckRead ask secret::read for each Secret as that Function or Lake.
+func WorkloadIdentity(kind v1.Kind, ns v1.NamespaceName, name v1.ObjectName) auth.Identity {
+	id := InjectorIdentity(ns)
+	id.Principal = &auth.EntityRef{Type: kind, Namespace: ns, Name: name}
+	return id
 }

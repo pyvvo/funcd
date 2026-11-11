@@ -568,3 +568,54 @@ func sqlResource(ctx context.Context, r MetaReader, resource auth.EntityRef, wri
 	}
 	return cedartypes.EntityMap{uid: {UID: uid, Attributes: cedartypes.NewRecord(attrs)}}, true, nil
 }
+
+//go:embed builtin_secret.cedar
+var builtinSecretPolicies string
+
+func secretUID(ns v1.NamespaceName, name v1.ObjectName) cedartypes.EntityUID {
+	return cedartypes.NewEntityUID(entityTypeSecret, cedartypes.String(string(ns)+"/"+string(name)))
+}
+
+// SecretCapability is the secret::read capability (ADR-0321): a Function's or a Lake's spec.bindings.secret → the
+// `secretBindings` Set of Secret entity-refs (binding-as-read-grant); the resource is the Secret read. Read-shaped: no
+// writers set and no write action, and no built-in role holds it.
+func SecretCapability() Capability {
+	return Capability{
+		Name:            "secret",
+		Actions:         []auth.Action{auth.ActionSecretRead},
+		EmitsEntityType: entityTypeSecret,
+		Resource:        secretResource,
+		PrincipalBinding: PrincipalBinding{
+			Attr: "secretBindings",
+			Bind: func(ns v1.NamespaceName, src PrincipalObject) []cedartypes.EntityUID {
+				var names []v1.ObjectName
+				switch o := src.(type) {
+				case *v1.Function:
+					names = o.Spec.Bindings.Secret
+				case *v1.Lake:
+					names = o.Spec.Bindings.Secret
+				default:
+					return nil
+				}
+				out := make([]cedartypes.EntityUID, 0, len(names))
+				for _, n := range names {
+					out = append(out, secretUID(ns, n))
+				}
+				return out
+			},
+		},
+		Builtin: builtinSecretPolicies,
+	}
+}
+
+// secretResource materializes the Secret as a bare entity with its namespace attr, which a Namespace-scoped
+// RolesAssignment grant reads; no MetaReader read, so a missing Secret is still an evaluable entity.
+func secretResource(_ context.Context, _ MetaReader, resource auth.EntityRef) (cedartypes.EntityMap, bool, error) {
+	if resource.Type != v1.KindSecret {
+		return nil, false, nil
+	}
+	rUID := secretUID(resource.Namespace, resource.Name)
+	return cedartypes.EntityMap{
+		rUID: {UID: rUID, Attributes: cedartypes.NewRecord(cedartypes.RecordMap{"namespace": cedartypes.String(resource.Namespace)})},
+	}, true, nil
+}

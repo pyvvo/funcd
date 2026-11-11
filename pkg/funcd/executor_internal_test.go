@@ -44,7 +44,7 @@ func TestPhases_ListTheProvidersWithTheirHooks(t *testing.T) {
 		"sql: reclaim, run, stop, quotas, admissions, dependencies, facets, backups",
 		"lake: before stop, backups",
 		"eventing: run",
-		"secrets: facets",
+		"secrets: dependencies, facets",
 		"config: ",
 		"invoke: dependencies",
 	}, logged.Providers)

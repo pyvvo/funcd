@@ -54,6 +54,18 @@ func SQL(rc ReadChecker) Binding {
 	}, rc, nil, "")
 }
 
+// Secret checks a Function's Secret bindings (ADR-0321 Decision 4): each bound Secret's secret::read as the caller. It
+// reads no Secret and has no prober target, so a missing Secret passes and the start check answers for it.
+func Secret(rc ReadChecker) Binding {
+	return readBinding(local.DependencySecret, func(fn *v1.Function) []string {
+		out := make([]string, len(fn.Spec.Bindings.Secret))
+		for i, n := range fn.Spec.Bindings.Secret {
+			out[i] = string(n)
+		}
+		return out
+	}, rc, nil, "")
+}
+
 // Links checks a Function's links: the resolver's link-as-grant, link::invoke when authz is set, and that the target
 // exists in st and is not Failed.
 func Links(r local.Resolver, authz auth.Authorizer, st local.FunctionStore) Binding {

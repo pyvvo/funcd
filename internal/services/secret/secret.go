@@ -1,6 +1,6 @@
 // Package secret is the function-facing secret service (ADR-0249): it answers the local API's /secret routes with the
-// keys and values of the Secrets a Function binds, resolved through the same PDP-checked resolver the reconciler uses,
-// on every read and with no cache.
+// keys and values of the Secrets a Function binds, on every read and with no cache, each Secret asked secret::read as
+// the calling Function (ADR-0321), and the readiness check's question for each of them.
 package secret
 
 import (
@@ -18,6 +18,7 @@ import (
 // Resolver resolves Secret names into one key-value map for id (ADR-0057); *secrets.Resolver satisfies it.
 type Resolver interface {
 	ResolveEnv(ctx context.Context, id auth.Identity, ns v1.NamespaceName, names []string) (map[string]string, error)
+	CheckRead(ctx context.Context, id auth.Identity, ns v1.NamespaceName, name string) error
 }
 
 // Deps carries what the Facade needs.
@@ -61,8 +62,9 @@ func (f *Facade) Get(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName,
 	return v, ok, nil
 }
 
-// values resolves the Secrets fn's current spec binds (ADR-0249 Decision 2), under the namespace identity the
-// reconciler reads them as; a later Secret's key wins and FUNCD_ keys are dropped, as in a worker's env (ADR-0092).
+// values resolves the Secrets fn's current spec binds (ADR-0249 Decision 2), each asked secret::read as fn (ADR-0321
+// Decision 3), so a forbid on one fails the whole read; a later Secret's key wins and FUNCD_ keys are dropped, as in a
+// worker's env (ADR-0092).
 func (f *Facade) values(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName) (map[string]string, error) {
 	const op = "secret.values"
 	obj, err := f.store.Get(ctx, v1.KindFunction.GVK(), ns, fn)
@@ -78,12 +80,17 @@ func (f *Facade) values(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectNa
 	if len(names) == 0 {
 		return out, nil
 	}
-	resolved, err := f.resolver.ResolveEnv(ctx, secrets.InjectorIdentity(ns), ns, objectNames(names))
+	resolved, err := f.resolver.ResolveEnv(ctx, secrets.WorkloadIdentity(v1.KindFunction, ns, fn), ns, objectNames(names))
 	if err != nil {
 		return nil, err
 	}
 	secrets.MergeEnvGuarded(out, resolved, nil)
 	return out, nil
+}
+
+// CheckRead answers the readiness check for Secret name, which fn binds (ADR-0321 Decision 4): may fn read it.
+func (f *Facade) CheckRead(ctx context.Context, ns v1.NamespaceName, fn v1.ObjectName, name string) error {
+	return f.resolver.CheckRead(ctx, secrets.WorkloadIdentity(v1.KindFunction, ns, fn), ns, name)
 }
 
 func objectNames(names []v1.ObjectName) []string {

@@ -20,8 +20,8 @@ import (
 	"github.com/pyvvo/funcd/internal/workernode/local"
 )
 
-// secretPDP allows or denies every request, standing in for an authorizer that lets the namespace's developer read
-// its Secrets or not (ADR-0057 Decision 4).
+// secretPDP allows or denies every request, standing in for the PDP that answers the caller's secret::read on each
+// bound Secret (ADR-0321).
 type secretPDP bool
 
 func (p secretPDP) Authorize(context.Context, auth.Request) (auth.Decision, error) {
@@ -103,8 +103,8 @@ func TestSecretListWithNoBindingIsEmpty(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, do(t, h, http.MethodGet, "/secret/STRIPE_KEY", "").Code)
 }
 
-// scenario: secret-denied — an authorizer that denies the namespace's Secret reads to the secret-injector identity
-// makes both routes 403.
+// scenario: secret-denied — an authorizer that denies the caller's Secret reads, which ADR-0321 asks per bound Secret as
+// the Function, makes both routes 403.
 func TestScenarioSecretDenied(t *testing.T) {
 	t.Parallel()
 	h := secretHandler(t, false)

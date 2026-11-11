@@ -803,8 +803,8 @@ func (s *eventingProvider) Run(ctx context.Context) {
 }
 
 // secretsProvider is the secrets provider (ADR-0310 Decision 6): the PDP-checked secret resolver (ADR-0022), which the
-// Function reconciler (ADR-0057), lake and the workload backups read, and the facade a worker reads each secret
-// through, on every read (ADR-0249).
+// Function reconciler (ADR-0057), lake and the workload backups read, the facade a worker reads each secret through,
+// on every read (ADR-0249), and the readiness check's secret kind (ADR-0321).
 type secretsProvider struct {
 	cfg      *config
 	resolver *secrets.Resolver
@@ -812,8 +812,9 @@ type secretsProvider struct {
 }
 
 var (
-	_ describer = (*secretsProvider)(nil)
-	_ facetHook = (*secretsProvider)(nil)
+	_ describer      = (*secretsProvider)(nil)
+	_ facetHook      = (*secretsProvider)(nil)
+	_ dependencyHook = (*secretsProvider)(nil)
 )
 
 func (s *secretsProvider) Name() string { return "secrets" }
@@ -823,19 +824,28 @@ func (s *secretsProvider) Descriptors() []provider.Descriptor {
 		Bindings: []string{"spec.bindings.secret"}, Summary: "secret resolution + at-rest encryption"}}
 }
 
-// build builds, over the config alone, the resolver, which reads through the store and authorizer the control plane
-// uses, then the facade over it. New builds it first, after the authorizer's default.
-func (s *secretsProvider) build() error {
+// build builds the resolver over authz, which sends a workload's secret::read to the PDP and a coarse read to the
+// control plane's authorizer (ADR-0321 Decision 3), then the facade over it. New builds it once the PDP exists, before
+// every other provider.
+func (s *secretsProvider) build(authz auth.Authorizer) error {
 	const op = "funcd.New"
 	c := s.cfg
 	var err error
-	if s.resolver, err = secrets.NewResolver(secrets.Deps{Store: c.store, Authorizer: c.authorizer, Logger: c.logger}); err != nil {
+	if s.resolver, err = secrets.NewResolver(secrets.Deps{Store: c.store, Authorizer: authz, Logger: c.logger}); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build secrets resolver")
 	}
 	if s.facade, err = secretsvc.NewFacade(secretsvc.Deps{Store: c.store, Resolver: s.resolver}); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "build secret facade")
 	}
 	return nil
+}
+
+// Dependencies gives the readiness check its secret kind (ADR-0321 Decision 4): a Function's access to each bound Secret.
+func (s *secretsProvider) Dependencies() []health.Binding {
+	if s.facade == nil {
+		return nil
+	}
+	return []health.Binding{health.Secret(s.facade)}
 }
 
 // Facet serves the facade on a worker's /secret routes (ADR-0249).

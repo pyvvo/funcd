@@ -1,6 +1,6 @@
 # ADR-0321: Cedar decides each Secret a workload reads
 
-- **Status**: Accepted (2026-11-11), by the decider, after three rounds of an independent judge (a subagent): round 1's
+- **Status**: Reviewing (2026-11-11, implementation done); Accepted (2026-11-11), by the decider, after three rounds of an independent judge (a subagent): round 1's
   two Majors and six Minors and round 2's four points folded, one Nit declined with its reason; experiment 0019 rerun
   on the final rules
 - **Date**: 2026-11-11

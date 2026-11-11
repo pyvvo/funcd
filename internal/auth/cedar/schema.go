@@ -43,6 +43,9 @@ const (
 	// ADR-0233 (F129): a SQL database, the resource of sql::read and sql::write; a Function's spec.bindings.sql are its
 	// `sqlBindings`.
 	entityTypeSQLDatabase = "SQLDatabase"
+	// ADR-0321: a Secret, the resource of secret::read; a Function's or a Lake's spec.bindings.secret are its
+	// `secretBindings`.
+	entityTypeSecret = "Secret"
 )
 
 // defaultRegistry is the assembled capability registry (ADR-0116): the three migrated capabilities
@@ -56,7 +59,8 @@ const (
 //
 //nolint:gochecknoglobals // the assembled default capability registry (ADR-0116)
 var defaultRegistry, _ = NewRegistry(
-	[]Capability{KVCapability(), InvokeCapability(), S3Capability(), EgressCapability(), LakeCapability(), SQLCapability()},
+	[]Capability{KVCapability(), InvokeCapability(), S3Capability(), EgressCapability(), LakeCapability(), SQLCapability(),
+		SecretCapability()},
 	[]PrincipalSource{FunctionPrincipalSource(), LakePrincipalSource()},
 )
 
@@ -109,7 +113,7 @@ func (e scopeEntity) named() []scopeUID {
 func namespacedEntityType(t string) bool {
 	switch t {
 	case entityTypeFunction, entityTypeKVStore, entityTypeKVTable, entityTypeBucket, entityTypeBlobPrefix,
-		entityTypeS3Identity, entityTypeIdentity, entityTypeLake, entityTypeSQLDatabase:
+		entityTypeS3Identity, entityTypeIdentity, entityTypeLake, entityTypeSQLDatabase, entityTypeSecret:
 		return true
 	}
 	return false

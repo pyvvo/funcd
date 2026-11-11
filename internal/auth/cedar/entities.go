@@ -197,6 +197,8 @@ func resourceUID(res auth.EntityRef) (cedartypes.EntityUID, error) {
 		return lakeUID(res.Namespace, res.Name), nil
 	case v1.KindSQLDatabase:
 		return sqlDatabaseUID(res.Namespace, res.Name), nil
+	case v1.KindSecret:
+		return secretUID(res.Namespace, res.Name), nil
 	case v1.KindNetDestination:
 		// ADR-0117 (F81): the egress destination — its UID is the Path's "<ip>:<port>" prefix,
 		// byte-matching what EgressCapability.Resource emits (mirroring principalUID's S3Identity case).

@@ -47,7 +47,8 @@ func TestCuratedSchemaVocabulary(t *testing.T) {
 	require.True(t, cedar.KnownEntityType("Function"))
 	require.True(t, cedar.KnownEntityType("KVStore"))
 	require.True(t, cedar.KnownEntityType("KVTable"))
-	require.False(t, cedar.KnownEntityType("Secret"))
+	require.True(t, cedar.KnownEntityType("Secret")) // secret::read's resource (ADR-0321)
+	require.False(t, cedar.KnownEntityType("ConfigMap"))
 }
 
 // The entity of an `is … in` scope is type-checked like an `==` or `in` scope's entity.
