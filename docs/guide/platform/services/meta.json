@@ -1,5 +1,5 @@
 {
   "title": "Services",
   "icon": "Database",
-  "pages": ["kv", "bucket", "sql", "lake"]
+  "pages": ["kv", "bucket", "sql", "lake", "secrets"]
 }
