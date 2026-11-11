@@ -52,7 +52,8 @@ assignment names), then **F101** builds the role/assignment/scope grant layer on
 serving layer's **per-caller** identity (was a single shared Quack token — no principal, no PEP on the query
 path) under the same role model, for **external** callers via the ingress gateway (ADR-0137).
 **F147 to F150** come from the infrastructure epoch ([FEAT-0012](0012-feat-infrastack.md)): F147 makes people
-principals, F148 and F149 build on it, and F138 there needs all three. F150 is an idea.
+principals, F148 and F149 build on it, and F138 there needs all three. F150 is an idea. **F235** puts a workload's
+Secret reads under the same policies as its KV, blob and SQL reads.
 
 | # | Feature | Builds on | ADR(s) | Status |
 |---|---------|-----------|--------|--------|
@@ -63,6 +64,7 @@ principals, F148 and F149 build on it, and F138 there needs all three. F150 is a
 | F148 | **Policies on control-plane actions**: an action on a control-plane object, such as starting, approving or cancelling a Job run, or setting a Job to `bypass` ([FEAT-0012](0012-feat-infrastack.md)/F138), can be decided by policies once RBAC allows it, including the policies of the object's namespace. Policies only narrow what RBAC allows. **Why**: RBAC alone decides control-plane writes, by role and namespace; some actions need finer rules, such as no self-approval, or destructive changes approved only by a named person. | F147 · [ADR-0018](../adr/0018-api-server-authn-rbac-admission.md) (RBAC) · [ADR-0074](../adr/0074-cedar-authorization-resource-access.md) (Cedar) · [ADR-0116](../adr/0116-capability-authorization-framework.md) (capabilities) | — | idea |
 | F149 | **Who changed an object**: the platform records which person wrote each generation of an object. **Why**: an object records no writer today, so a rule that forbids approving one's own change cannot apply to a run started by a spec change ([FEAT-0012](0012-feat-infrastack.md)/F138). | F147 · [ADR-0018](../adr/0018-api-server-authn-rbac-admission.md) | — | idea |
 | F150 | **Cluster-scoped Policies**: an admin writes rules that hold in every namespace and that developers cannot edit. An open question since [ADR-0074](../adr/0074-cedar-authorization-resource-access.md), recorded here as an idea; not built yet. **Why**: a developer can write and delete its namespace's Policies, so a team rule binds only the developers who leave it alone. | [ADR-0074](../adr/0074-cedar-authorization-resource-access.md) · [ADR-0177](../adr/0177-a-policy-governs-only-its-namespace.md) | — | idea |
+| F235 | **Policies decide Secret reads**: whether a Function may read a Secret it binds, when it starts and on each `ctx.secret` read, is decided for each Secret by its namespace's policies, as its KV, blob and SQL reads are. A bound Secret stays readable unless a policy says otherwise. A person's reads of Secrets through the API keep their roles. **Why**: every Function of a namespace reads its Secrets as the namespace itself today, so no policy can stop one Function from reading one Secret ([ADR-0249](../adr/0249-ctx-secret-reads-from-funcd.md) Consequences); [ADR-0074](../adr/0074-cedar-authorization-resource-access.md) left secrets as a follow-on, the last one not built. | F101 · [ADR-0074](../adr/0074-cedar-authorization-resource-access.md) (Cedar) · [ADR-0076](../adr/0076-cedar-kv-read-binding-grant.md) (a binding grants the read) · [ADR-0249](../adr/0249-ctx-secret-reads-from-funcd.md) (`ctx.secret`) | — | idea |
 
 ## How it lands on funcd (high level)
 
