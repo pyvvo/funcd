@@ -5,10 +5,10 @@ description: The services a Function binds, how each is reached, and where funcd
 
 ![How each store is reached (the local API, the S3 gateway, the Lake gateway, the worker's mounts) and the engine under it (Badger, files or S3, rqlite, DuckDB, the local disk)](../../assets/services.drawio.svg)
 
-funcd serves the stores a Function binds: a KVStore, a Bucket, a SQLDatabase and a Lake, and the Function's own
-volumes. A Function reaches KV, its Buckets and its SQL databases through its local API. S3 clients, including a
-Function, reach a Bucket through funcd's S3 gateway. A Lake answers queries through its Lake gateway. The worker mounts
-its volumes. funcd also keeps the Secrets that a Function or a Lake reads, in the metastore.
+funcd serves the stores a Function binds: a KVStore, a Bucket, a SQLDatabase and a Lake, and the Function's own volumes.
+A Function reaches KV, its Buckets and its SQL databases through its local API. S3 clients, including a Function, reach
+a Bucket through funcd's S3 gateway. A Lake answers queries through its Lake gateway. The worker mounts its volumes.
+funcd also keeps the Secrets that a Function, a Workflow step or a Lake reads, in the metastore.
 
 Each store runs on an engine. KV runs on Badger. A Bucket keeps its objects in files or in S3, and serves the S3
 protocol through funcd's S3 gateway. A SQL database runs on rqlite, which keeps its data in SQLite. A Lake runs on
