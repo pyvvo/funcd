@@ -6,50 +6,12 @@ description: Declare a key-value store, bind its tables to a Function, and read 
 ## Usage
 
 A Function declares a KV store under `spec.kv` and binds one of its tables under `spec.bindings.kv`. The binding's
-alias is the name that the handler passes to `ctx.kv`:
+alias is the name that the handler passes to `ctx.kv`. The kv-counter example, which funcd's lanes run on a real
+platform, shows both; its `image` is the bundle that `funcdctl push` wrote from the handler:
 
-```yaml
-apiVersion: funcd.io/v1alpha1
-kind: Function
-metadata:
-  name: counter
-  namespace: default
-  resourceGroup: rg1
-spec:
-  runtime: nodejs22
-  handler: handle
-  image: registry.example.com/counter:1.0.0
-  kv:
-    - name: counters-kv
-      tables:
-        - name: table-counters
-  bindings:
-    kv:
-      - alias: counters
-        store: counters-kv
-        table: table-counters
-```
+::include[../../../../../_repos/funcd-typescript/examples/kv-counter/counter.yaml#manifest]
 
-```ts
-import type { CloudEvent, FunctionContext } from '@funcd-dev/shim';
-
-export interface FuncInput {
-  name?: string;
-}
-export interface FuncOutput {
-  name: string;
-  count: number;
-}
-
-export async function handle(ctx: FunctionContext, event: CloudEvent<FuncInput>): Promise<FuncOutput> {
-  const name = event.data?.name ?? 'world';
-  const cur = await ctx.kv.getText('counters', name);
-  const count = Number(cur ?? 0) + 1;
-  await ctx.kv.put('counters', name, String(count));
-  ctx.log(`kv-counter: ${name} → ${count}`);
-  return { name, count };
-}
-```
+::include[../../../../../_repos/funcd-typescript/examples/kv-counter/src/main.ts#handler]
 
 The table names no owner, so its owner is the Function: `counter` is the one Function that may write it. A Function
 reaches a table only through an entry of its `spec.bindings.kv`; without one, `ctx.kv` on that alias is refused.
@@ -75,13 +37,7 @@ another Function that binds the table reads it.
 exactly one gets the new version, and the others get `null` (`false` for `delIf`). The kv-claim example uses them to
 hold a claim on a key:
 
-```ts
-const v =
-  op === 'renew'
-    ? await ctx.kv.compareAndSet('claims', key, holder, version, opts)
-    : await ctx.kv.putIfAbsent('claims', key, holder, opts);
-if (v !== null) return { key, won: true, version: v, holder };
-```
+::include[../../../../../_repos/funcd-typescript/examples/kv-claim/src/main.ts#claim]
 
 With a `ttl` in `opts`, the claim expires unless its holder renews it with `compareAndSet` and a new `ttl`.
 
@@ -90,34 +46,12 @@ With a `ttl` in `opts`, the claim expires unless its holder renews it with `comp
 A store can also be applied on its own, as a KVStore, for example when several Functions read it. Its table names the
 one Function that writes it:
 
-```yaml
-apiVersion: funcd.io/v1alpha1
-kind: KVStore
-metadata:
-  name: counters-kv
-  namespace: default
-  resourceGroup: rg1
-spec:
-  quota:
-    maxSize: 64Mi
-  tables:
-    - name: table-counters
-      owner: counter
-```
+::include[../../../../../api/types/v1alpha1/examples/kv/own-store.yaml#kvstore]
 
 The Function then declares the store by `ref` and binds its table as before. A binding names only a store that its
 Function declares, by `name` or by `ref`; funcd refuses a binding to any other store.
 
-```yaml
-spec:
-  kv:
-    - ref: counters-kv
-  bindings:
-    kv:
-      - alias: counters
-        store: counters-kv
-        table: table-counters
-```
+::include[../../../../../api/types/v1alpha1/examples/kv/own-store.yaml#binding]
 
 ## Quotas
 

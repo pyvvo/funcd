@@ -1,0 +1,15 @@
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: counter
+  namespace: default
+  resourceGroup: rg1
+spec:
+  runtime: nodejs22
+  handler: handle
+  image: registry.example.com/counter:1.0.0
+  bindings:
+    kv:
+      - alias: counters
+        store: counters-kv
+        table: table-counters

@@ -1,0 +1,34 @@
+# region kvstore
+apiVersion: funcd.io/v1alpha1
+kind: KVStore
+metadata:
+  name: counters-kv
+  namespace: default
+  resourceGroup: rg1
+spec:
+  quota:
+    maxSize: 64Mi
+  tables:
+    - name: table-counters
+      owner: counter
+# endregion kvstore
+---
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: counter
+  namespace: default
+  resourceGroup: rg1
+# region binding
+spec:
+  kv:
+    - ref: counters-kv
+  bindings:
+    kv:
+      - alias: counters
+        store: counters-kv
+        table: table-counters
+# endregion binding
+  runtime: nodejs22
+  handler: handle
+  image: registry.example.com/counter:1.0.0
