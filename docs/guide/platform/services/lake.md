@@ -7,7 +7,8 @@ description: A SQL lake on DuckDB, with its files in a Bucket and every query ch
 
 A Lake is a SQL lake: a DuckDB engine with a DuckLake catalog, one for each Lake, which funcd runs through its add-on
 runtime. Its data is Parquet files under a prefix of a Bucket, which the engine reads and writes through funcd's S3
-gateway. Its catalog is a DuckDB file in funcd's catalog store, outside every Bucket.
+gateway. Its catalog is a DuckDB file in funcd's catalog store, outside every Bucket. A Lake therefore needs the S3
+gateway: while the gateway is off, its engine cannot start, and the Lake stays Pending.
 
 Every query goes through the Lake gateway, which asks Cedar for `lake::query` for the caller before it passes the
 query to the engine. A Function bound to the Lake in `spec.bindings.lake` uses a token that funcd signs for it. A

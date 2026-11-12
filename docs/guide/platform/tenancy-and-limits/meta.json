@@ -1,0 +1,5 @@
+{
+  "title": "Tenancy and limits",
+  "icon": "Gauge",
+  "pages": ["namespaces", "limits", "quotas"]
+}
