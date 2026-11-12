@@ -945,13 +945,13 @@ func entrySchema(r huma.Registry, spec reflect.Type, deletion bool) *huma.Schema
 	props := make(map[string]*huma.Schema, len(base.Properties)+3)
 	maps.Copy(props, base.Properties)
 	name := dnsLabelSchema()
-	name.Description = "The part's name. The object takes the App's namespace and resource group."
+	name.Description = "The object's name. It takes the namespace and resource group of the resource that declares it."
 	ref := dnsLabelSchema()
-	ref.Description = "The name of an existing object of this kind in the App's namespace. A ref entry sets no other field."
+	ref.Description = "The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field."
 	props["name"], props["ref"] = name, ref
 	if deletion {
 		d := DeletionPolicy("").Schema(r)
-		d.Description = "retain (the default) keeps the store and its data when the App drops it or is deleted; delete removes them."
+		d.Description = "retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them."
 		props["deletion"] = d
 	}
 	return &huma.Schema{Type: huma.TypeObject, Properties: props, AdditionalProperties: false}

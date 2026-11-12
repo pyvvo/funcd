@@ -28,7 +28,7 @@ type NamespaceSpec struct {
 	// volumes.capacityBytes limits it.
 	VolumeBudgetBytes int64 `json:"volumeBudgetBytes,omitempty" minimum:"0"`
 	// VolumeBudget is the same budget with a binary unit, "4Gi" (ADR-0266); at most one of the two is set.
-	VolumeBudget ByteSize `json:"volumeBudget,omitempty" pattern:"^[0-9]{1,15}((Ki|Mi|Gi|Ti)B?)?$"`
+	VolumeBudget ByteSize `json:"volumeBudget,omitempty"`
 }
 
 // VolumeBudgetOf is the namespace's volume budget in bytes, from whichever form is set; 0 is none.

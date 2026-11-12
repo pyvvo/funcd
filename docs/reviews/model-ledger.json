@@ -13948,5 +13948,20 @@
     "dod_total": 13,
     "report": "docs/reviews/adr-0322-implementation-claude-opus-5-5.md",
     "notes": "pass, independent subagent review; rows only (no code): security.md tells a Function's forbidden Secret, services.md a Lake's and the accepted check-to-Converge window, workers.md names the secret kind; each cites its ADR-0321 part; check-behavior green"
+  },
+  {
+    "date": "2026-11-12",
+    "adr": "0323",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 3,
+    "model_attributed": 3,
+    "dod_passed": 24,
+    "dod_total": 24,
+    "report": "docs/reviews/adr-0323-implementation-claude-opus-5-5.md",
+    "notes": "pass, independent reviewer; 0B/0M/3m, all model and fixed in 0815560f: the constant pins matched substrings, specgen's stale-page removal was untested, the limits.md row lacked the funcdctl clause. 8/8 scenarios pass, generate byte-identical, 3 overlay mutants killed; gate PASS"
   }
 ]

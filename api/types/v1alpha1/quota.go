@@ -7,8 +7,8 @@ import (
 // SizeQuota caps what a store or a Bucket prefix holds in total (ADR-0292): maxSize in ByteSize's grammar (ADR-0266) or
 // maxBytes in bytes, at most one; neither means no cap. A write that would pass it gets 507.
 type SizeQuota struct {
-	MaxSize  ByteSize `json:"maxSize,omitempty"`
-	MaxBytes int64    `json:"maxBytes,omitempty" minimum:"0"`
+	MaxSize  ByteSize `json:"maxSize,omitempty" doc:"The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507."`
+	MaxBytes int64    `json:"maxBytes,omitempty" minimum:"0" doc:"The same cap as a number of bytes. Set maxSize or maxBytes, not both."`
 }
 
 // Limit is the cap in bytes, ok=false without one. It assumes Validate passed: a size that does not parse reads as no
@@ -59,7 +59,7 @@ type BucketQuota struct {
 type KVStoreQuota struct {
 	SizeQuota `json:",inline"`
 	// MaxValueBytes caps a single value's size; 0 ⇒ DefaultMaxValueBytes (1 MiB); at most MaxValueBytesLimit.
-	MaxValueBytes int64 `json:"maxValueBytes,omitempty" minimum:"0" maximum:"1048576"`
+	MaxValueBytes int64 `json:"maxValueBytes,omitempty" minimum:"0" maximum:"1048576" doc:"The largest value a write may store, in bytes. 0 means 1048576 (1 MiB)."`
 	// MaxKeyBytes caps a single key's size; 0 ⇒ DefaultMaxKeyBytes (1 KiB); at most MaxKeyBytesLimit.
-	MaxKeyBytes int `json:"maxKeyBytes,omitempty" minimum:"0" maximum:"64000"`
+	MaxKeyBytes int `json:"maxKeyBytes,omitempty" minimum:"0" maximum:"64000" doc:"The longest key, in bytes. 0 means 1024 (1 KiB)."`
 }

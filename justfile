@@ -500,7 +500,7 @@ release:
 # regenerate the OpenAPI spec from Go types (via huma reflection)
 [group('go')]
 generate:
-    go run ./internal/controlplane/cmd/specgen/ -out api/openapi/funcd.v1alpha1.yaml
+    go run ./internal/controlplane/cmd/specgen/ -out api/openapi/funcd.v1alpha1.yaml -guide docs/guide
 
 # tidy go.mod and go.sum
 [group('go')]
@@ -583,6 +583,7 @@ ci-full: ci test-e2e
 ci: tidy generate check-hygiene check-specs check-behavior
     go fmt ./...
     @if [ -n "$(git diff --name-only -- '*.go')" ]; then echo "Run just fmt and commit the result" && exit 1; fi
+    scripts/check-generated.sh
     @if [ -n "{{_has-packages}}" ]; then go tool golangci-lint run ./...; fi
     go tool golangci-lint run --build-tags dev {{_dev-packages}}
     @if [ -n "{{_has-packages}}" ]; then go test ./...; fi
