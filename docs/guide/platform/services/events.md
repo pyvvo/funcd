@@ -11,4 +11,6 @@ emitted while its Sensor is down is lost.
 
 A Sensor subscribes to named events and runs an action when one arrives. It calls a Function, for which the activator
 starts a worker when none is running, or it starts a WorkflowRun. When the Sensor cannot make a delivery, after its
-retries or because it had to stop, it stores the delivery as a dead letter in the event store.
+retries or because it had to stop, it stores the delivery as a dead letter in the event store. Each action that ends
+leaves an Invocation, a read-only record of the call: Ready when it succeeded, or Failed with its error. funcd keeps
+these records, and no sweep removes them.
