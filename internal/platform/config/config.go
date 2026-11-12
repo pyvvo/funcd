@@ -47,56 +47,56 @@ type Config struct {
 	APIVersion string `json:"apiVersion,omitempty" validate:"omitempty,eq=funcd.io/v1alpha1"`
 	Kind       string `json:"kind,omitempty" validate:"omitempty,eq=FuncdConfig"`
 	Server     struct {
-		ListenAddr    string `json:"listenAddr,omitempty" env:"FUNCD_LISTEN_ADDR"`
-		DataPlaneAddr string `json:"dataPlaneAddr,omitempty" env:"FUNCD_DATA_PLANE_ADDR"`
+		ListenAddr    string `json:"listenAddr,omitempty" env:"FUNCD_LISTEN_ADDR" doc:"The address that the control plane's API listens on. An address off loopback needs auth.credentials or a token of your own in auth.token."`
+		DataPlaneAddr string `json:"dataPlaneAddr,omitempty" env:"FUNCD_DATA_PLANE_ADDR" doc:"The address that the data plane listens on, where functions, Routes and Sites answer. Port 0 takes a free port. With server.auth.edge on, an address off loopback needs a credential of your own too."`
 		// BaseDomain is the domain under which every namespace but default answers, on <namespace>.<baseDomain>
 		// (ADR-0240). funcd validates it at start.
-		BaseDomain string `json:"baseDomain,omitempty" env:"FUNCD_BASE_DOMAIN"`
+		BaseDomain string `json:"baseDomain,omitempty" env:"FUNCD_BASE_DOMAIN" doc:"The domain under which every namespace but default answers, as <namespace>.<baseDomain>. funcd checks it at start."`
 		// TLS termination (ADR-0111, F74). When Enabled, both listeners serve HTTPS via ServeTLS.
 		// Mode defaults to selfsigned (stdlib, offline). Empty/Enabled=false ⇒ plaintext (default).
 		TLS struct {
-			Enabled  bool     `json:"enabled,omitempty" env:"FUNCD_TLS_ENABLED"`
-			Mode     string   `json:"mode,omitempty" env:"FUNCD_TLS_MODE" validate:"omitempty,oneof=selfsigned provided acme"`
-			Hosts    []string `json:"hosts,omitempty" env:"FUNCD_TLS_HOSTS" envSeparator:","`
-			CertFile string   `json:"certFile,omitempty" env:"FUNCD_TLS_CERT_FILE"`
-			KeyFile  string   `json:"keyFile,omitempty" env:"FUNCD_TLS_KEY_FILE"`
-			Email    string   `json:"email,omitempty" env:"FUNCD_TLS_EMAIL"`
-			CADir    string   `json:"caDir,omitempty" env:"FUNCD_TLS_CA_DIR"`
+			Enabled  bool     `json:"enabled,omitempty" env:"FUNCD_TLS_ENABLED" doc:"When true, both listeners serve HTTPS."`
+			Mode     string   `json:"mode,omitempty" env:"FUNCD_TLS_MODE" validate:"omitempty,oneof=selfsigned provided acme" doc:"Where the certificate comes from: selfsigned, made by funcd with no network; provided, the files certFile and keyFile; or acme, from an ACME server. Empty means selfsigned."`
+			Hosts    []string `json:"hosts,omitempty" env:"FUNCD_TLS_HOSTS" envSeparator:"," doc:"The host names that the certificate covers."`
+			CertFile string   `json:"certFile,omitempty" env:"FUNCD_TLS_CERT_FILE" doc:"The certificate file, in provided mode."`
+			KeyFile  string   `json:"keyFile,omitempty" env:"FUNCD_TLS_KEY_FILE" doc:"The private key file, in provided mode."`
+			Email    string   `json:"email,omitempty" env:"FUNCD_TLS_EMAIL" doc:"The contact email of the ACME account, in acme mode."`
+			CADir    string   `json:"caDir,omitempty" env:"FUNCD_TLS_CA_DIR" doc:"The directory URL of the ACME server, in acme mode. Empty means Let's Encrypt."`
 		} `json:"tls,omitempty"`
 		// Ingress protection limits (ADR-0112, F75). The rate, size and in-flight limits are off at 0; maxKeys is
 		// a table size (min 1, default 4096) with no off switch (ADR-0164).
 		Limits struct {
-			RatePerMin   int    `json:"ratePerMin,omitempty" env:"FUNCD_LIMITS_RATE_PER_MIN" validate:"min=0"`
-			Burst        int    `json:"burst,omitempty" env:"FUNCD_LIMITS_BURST" validate:"min=0"`
-			Key          string `json:"key,omitempty" env:"FUNCD_LIMITS_KEY" validate:"omitempty,oneof=clientIP function"`
-			MaxBodyBytes int64  `json:"maxBodyBytes,omitempty" env:"FUNCD_LIMITS_MAX_BODY_BYTES" validate:"min=0"`
-			MaxInFlight  int    `json:"maxInFlight,omitempty" env:"FUNCD_LIMITS_MAX_IN_FLIGHT" validate:"min=0"`
-			MaxKeys      int    `json:"maxKeys,omitempty" env:"FUNCD_LIMITS_MAX_KEYS" validate:"min=1"`
+			RatePerMin   int    `json:"ratePerMin,omitempty" env:"FUNCD_LIMITS_RATE_PER_MIN" validate:"min=0" doc:"The requests per minute that the data plane lets each key make. 0 turns the rate limit off."`
+			Burst        int    `json:"burst,omitempty" env:"FUNCD_LIMITS_BURST" validate:"min=0" doc:"How many requests a key may make in a row before its rate applies. 0 means as many as server.limits.ratePerMin."`
+			Key          string `json:"key,omitempty" env:"FUNCD_LIMITS_KEY" validate:"omitempty,oneof=clientIP function" doc:"What the rate limit counts per: clientIP, each client address, or function, each function called. Empty means clientIP."`
+			MaxBodyBytes int64  `json:"maxBodyBytes,omitempty" env:"FUNCD_LIMITS_MAX_BODY_BYTES" validate:"min=0" doc:"The largest request body, in bytes, that the data plane accepts; a larger one gets 413. 0 turns the cap off."`
+			MaxInFlight  int    `json:"maxInFlight,omitempty" env:"FUNCD_LIMITS_MAX_IN_FLIGHT" validate:"min=0" doc:"The most requests that the data plane serves at once; one more gets 503. 0 turns the cap off."`
+			MaxKeys      int    `json:"maxKeys,omitempty" env:"FUNCD_LIMITS_MAX_KEYS" validate:"min=1" doc:"The most keys whose rate the data plane tracks at once. It has no off switch."`
 		} `json:"limits,omitempty"`
 		// Edge authn PEP (ADR-0113, F77): enable per-target auth-stance enforcement on the data plane.
 		Auth struct {
-			Edge bool `json:"edge,omitempty" env:"FUNCD_AUTH_EDGE"`
+			Edge bool `json:"edge,omitempty" env:"FUNCD_AUTH_EDGE" doc:"When true, the data plane authenticates a call to a target whose stance is authenticated with the control plane's credentials, and authorizes it with its policies. When false, such a call gets 401. An open target answers either way."`
 		} `json:"auth,omitempty"`
 		// Edge observability (ADR-0114, F76): RED metrics + edge trace span + access log. Off by default.
 		Observability struct {
-			Metrics   bool `json:"metrics,omitempty" env:"FUNCD_OBS_METRICS"`
-			AccessLog bool `json:"accessLog,omitempty" env:"FUNCD_OBS_ACCESS_LOG"`
-			Trace     bool `json:"trace,omitempty" env:"FUNCD_OBS_TRACE"`
+			Metrics   bool `json:"metrics,omitempty" env:"FUNCD_OBS_METRICS" doc:"When true, the data plane counts each target's requests, errors and durations."`
+			AccessLog bool `json:"accessLog,omitempty" env:"FUNCD_OBS_ACCESS_LOG" doc:"When true, the data plane logs each request."`
+			Trace     bool `json:"trace,omitempty" env:"FUNCD_OBS_TRACE" doc:"When true, the data plane starts a trace span for each request."`
 		} `json:"observability,omitempty"`
 		// Edge shaping (ADR-0114, F78): CORS / response headers / gzip compression. Off by default.
 		Shaping struct {
 			CORS struct {
-				AllowOrigins  []string `json:"allowOrigins,omitempty" env:"FUNCD_SHAPING_CORS_ALLOW_ORIGINS" envSeparator:","`
-				AllowMethods  []string `json:"allowMethods,omitempty" env:"FUNCD_SHAPING_CORS_ALLOW_METHODS" envSeparator:","`
-				AllowHeaders  []string `json:"allowHeaders,omitempty" env:"FUNCD_SHAPING_CORS_ALLOW_HEADERS" envSeparator:","`
-				MaxAgeSeconds int      `json:"maxAgeSeconds,omitempty" env:"FUNCD_SHAPING_CORS_MAX_AGE_SECONDS" validate:"min=0"`
+				AllowOrigins  []string `json:"allowOrigins,omitempty" env:"FUNCD_SHAPING_CORS_ALLOW_ORIGINS" envSeparator:"," doc:"The origins that a browser may call the data plane from."`
+				AllowMethods  []string `json:"allowMethods,omitempty" env:"FUNCD_SHAPING_CORS_ALLOW_METHODS" envSeparator:"," doc:"The methods that a cross-origin call may use."`
+				AllowHeaders  []string `json:"allowHeaders,omitempty" env:"FUNCD_SHAPING_CORS_ALLOW_HEADERS" envSeparator:"," doc:"The request headers that a cross-origin call may send."`
+				MaxAgeSeconds int      `json:"maxAgeSeconds,omitempty" env:"FUNCD_SHAPING_CORS_MAX_AGE_SECONDS" validate:"min=0" doc:"How long, in seconds, a browser may keep the answer to a CORS preflight request."`
 			} `json:"cors,omitempty"`
 			Headers struct {
 				// The env form splits pairs on ",", so a header value that contains a comma needs the file.
-				Set    map[string]string `json:"set,omitempty" env:"FUNCD_SHAPING_HEADERS_SET" envSeparator:"," envKeyValSeparator:"=" validate:"dive,keys,header_name,endkeys"`
-				Remove []string          `json:"remove,omitempty" env:"FUNCD_SHAPING_HEADERS_REMOVE" envSeparator:","`
+				Set    map[string]string `json:"set,omitempty" env:"FUNCD_SHAPING_HEADERS_SET" envSeparator:"," envKeyValSeparator:"=" validate:"dive,keys,header_name,endkeys" doc:"The response headers that the data plane sets, by name. Each name must be a valid header name. The variable splits pairs at commas, so a value that holds a comma needs the file."`
+				Remove []string          `json:"remove,omitempty" env:"FUNCD_SHAPING_HEADERS_REMOVE" envSeparator:"," doc:"The response headers that the data plane removes."`
 			} `json:"headers,omitempty"`
-			Compression bool `json:"compression,omitempty" env:"FUNCD_SHAPING_COMPRESSION"`
+			Compression bool `json:"compression,omitempty" env:"FUNCD_SHAPING_COMPRESSION" doc:"When true, the data plane compresses responses with gzip."`
 		} `json:"shaping,omitempty"`
 		// Egress network isolation (ADR-0115, FEAT-0007/F80): the worker-egress default-deny substrate.
 		// Off by default (phased); Linux/containerd only (a no-op elsewhere). When enabled, funcd programs
@@ -105,20 +105,20 @@ type Config struct {
 		// node-service addresses (host:port) passed directly; DNSResolver is the DNS forwarder's upstream, read
 		// only with a forwarder.
 		Network struct {
-			Egress            bool `json:"egress,omitempty" env:"FUNCD_NETWORK_EGRESS"`
-			EgressGatewayPort int  `json:"egressGatewayPort,omitempty" env:"FUNCD_NETWORK_EGRESS_GATEWAY_PORT" validate:"min=0,max=65535"`
+			Egress            bool `json:"egress,omitempty" env:"FUNCD_NETWORK_EGRESS" doc:"When true, workers' outbound traffic is denied by default, and what their EgressPolicies allow goes through the egress gateway. Linux with containerd only; elsewhere it does nothing."`
+			EgressGatewayPort int  `json:"egressGatewayPort,omitempty" env:"FUNCD_NETWORK_EGRESS_GATEWAY_PORT" validate:"min=0,max=65535" doc:"The port of the egress gateway on the workers' bridge, where their outbound TCP is redirected. Required when server.network.egress is on."`
 			// DNSForwarderPort is the funcd DNS forwarder's port on the bridge address (ADR-0117, F81, ADR-0315): worker
 			// :53 is REDIRECTed into it so it is the only reachable resolver (the domain trust anchor). It answers known
 			// workers only, and forwards only the names an EgressPolicy domain rule allows them. Wired with the gateway
 			// when Egress is on (Linux/containerd only). Zero ⇒ neither runs, and nothing goes out, DNS included.
-			DNSForwarderPort int      `json:"dnsForwarderPort,omitempty" env:"FUNCD_NETWORK_DNS_FORWARDER_PORT" validate:"min=0,max=65535"`
-			DNSResolver      string   `json:"dnsResolver,omitempty" env:"FUNCD_NETWORK_DNS_RESOLVER"`
-			InternalAllow    []string `json:"internalAllow,omitempty" env:"FUNCD_NETWORK_INTERNAL_ALLOW" envSeparator:","`
+			DNSForwarderPort int      `json:"dnsForwarderPort,omitempty" env:"FUNCD_NETWORK_DNS_FORWARDER_PORT" validate:"min=0,max=65535" doc:"The port of the DNS forwarder on the bridge address. A worker's DNS goes only to it, and it answers only the names that an EgressPolicy domain rule allows. 0 runs neither the forwarder nor the gateway, and nothing goes out, DNS included."`
+			DNSResolver      string   `json:"dnsResolver,omitempty" env:"FUNCD_NETWORK_DNS_RESOLVER" doc:"The upstream resolver that the DNS forwarder asks."`
+			InternalAllow    []string `json:"internalAllow,omitempty" env:"FUNCD_NETWORK_INTERNAL_ALLOW" envSeparator:"," doc:"The addresses on the node, as host:port, that workers may reach directly."`
 			// WorkerSyncInterval is the egress WorkerIndex sync cadence (ADR-0163), a positive duration.
-			WorkerSyncInterval string `json:"workerSyncInterval,omitempty" env:"FUNCD_NETWORK_WORKER_SYNC_INTERVAL"`
+			WorkerSyncInterval string `json:"workerSyncInterval,omitempty" env:"FUNCD_NETWORK_WORKER_SYNC_INTERVAL" doc:"How often the egress rules follow the workers that start and stop, as a positive duration such as 2s."`
 		} `json:"network,omitempty"`
 		// ShutdownTimeout bounds the HTTP, Sensor and workflow-run drain at shutdown (ADR-0163), a positive duration.
-		ShutdownTimeout string `json:"shutdownTimeout,omitempty" env:"FUNCD_SHUTDOWN_TIMEOUT"`
+		ShutdownTimeout string `json:"shutdownTimeout,omitempty" env:"FUNCD_SHUTDOWN_TIMEOUT" doc:"How long funcd waits at shutdown for HTTP requests, Sensors and workflow runs to finish, as a positive duration such as 15s."`
 	} `json:"server,omitempty"`
 	Storage struct {
 		Mode    string `json:"mode,omitempty" env:"FUNCD_STORAGE_MODE" validate:"oneof=file memory"`

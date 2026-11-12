@@ -208,7 +208,7 @@ func (a *cli) applyCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVarP(&file, "file", "f", "", "manifest file (YAML or JSON); - for stdin")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "admit each document against the store and store nothing; print what would apply (ADR-0220)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "admit each document against the store and store nothing; print what would apply")
 	return cmd
 }
 
@@ -291,13 +291,13 @@ func (a *cli) pushCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&entry, "entry", "",
-		"handler entry file relative to the bundle root (directory push only, ADR-0089); default main.py for a python runtime, else main.mjs (ADR-0247)")
+		"handler entry file relative to the bundle root (directory push only); default main.py for a python runtime, else main.mjs")
 	cmd.Flags().StringVar(&platform, "platform", "",
-		"the platform the artifact was built for (linux/amd64 or linux/arm64), recorded on the manifest so `funcdctl index` can combine per-platform pushes (ADR-0145)")
+		"the platform the artifact was built for (linux/amd64 or linux/arm64), recorded on the manifest so `funcdctl index` can combine per-platform pushes")
 	cmd.Flags().BoolVar(&isSite, "site", false,
-		"push <path> (a directory) as a static-site bundle for a Site (ADR-0139): one deterministic tar+gzip layer, no contract/runtime/entry")
+		"push <path> (a directory) as a static-site bundle for a Site: one deterministic tar+gzip layer, no contract/runtime/entry")
 	cmd.Flags().BoolVar(&isTemplate, "template", false,
-		"push <path> (an App template directory with a fresh app.lock) as it is, tagged with its version (ADR-0218)")
+		"push <path> (an App template directory with a fresh app.lock) as it is, tagged with its version")
 	return cmd
 }
 

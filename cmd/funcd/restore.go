@@ -337,7 +337,7 @@ func newRestoreInspectCmd(out io.Writer) *cobra.Command {
 	cmd.Flags().StringVar(&secretsKey, "secrets-key", "", "the escrowed secrets key file, to decode Secrets (--object)")
 	cmd.Flags().BoolVar(&reveal, "reveal-secrets", false, "print Secret values (with --object and --secrets-key)")
 	cmd.Flags().StringVarP(&output, "output", "o", "yaml", "output format: yaml or json")
-	cmd.Flags().BoolVar(&kv, "kv", false, "show a KV point <chain>/<segment> of the kv/ chains (ADR-0209)")
+	cmd.Flags().BoolVar(&kv, "kv", false, "show a KV point <chain>/<segment> of the kv/ chains")
 	return cmd
 }
 

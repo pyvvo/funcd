@@ -48,7 +48,7 @@ func (a *cli) workflowReplayCmd() *cobra.Command {
 	var allowDrift bool
 	cmd := &cobra.Command{
 		Use:   "replay <source-run> --from <step>",
-		Short: "Re-run a finished run from a chosen step (reuses upstream outputs; ADR-0107)",
+		Short: "Re-run a finished run from a chosen step (reuses upstream outputs)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if from == "" {

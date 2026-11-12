@@ -66,7 +66,7 @@ func newBenchCmd(out io.Writer) *cobra.Command {
 	var c benchConfig
 	cmd := &cobra.Command{
 		Use:   "bench",
-		Short: "Benchmark & sustainability harness (ADR-0040/0052) — one flag-driven verb",
+		Short: "Benchmark & sustainability harness — one flag-driven verb",
 		Long: "bench runs the funcd sustainability harness in-process by default (memory+file " +
 			"substrate, RSS). --containerd runs only the cgroup-footprint lane; --doctor reports " +
 			"whether the containerd lane can run and warns on a live daemon (it never installs anything). " +
@@ -79,9 +79,9 @@ func newBenchCmd(out io.Writer) *cobra.Command {
 	f := cmd.Flags()
 	f.StringVar(&c.shim, "shim", "", "path to the node runtime shim (default: the embedded shim)")
 	f.StringVar(&c.poolShim, "pool-shim", "",
-		"path to the pooled worker_threads shim (ADR-0044; default: the embedded pool shim; a missing path skips the comparison)")
+		"path to the pooled worker_threads shim (default: the embedded pool shim; a missing path skips the comparison)")
 	f.StringVar(&c.python, "python", "",
-		"python ≥3.14 for the Python pool comparison (ADR-0050); default auto-detect, none found ⇒ skip")
+		"python ≥3.14 for the Python pool comparison; default auto-detect, none found ⇒ skip")
 	f.IntVar(&c.concurrency, "concurrency", 8, "load workers")
 	f.DurationVar(&c.duration, "duration", 5*time.Second, "load phase per backend")
 	f.IntVar(&c.density, "density", 5, "extra warm functions for the density sweep")
@@ -90,11 +90,11 @@ func newBenchCmd(out io.Writer) *cobra.Command {
 	f.StringVar(&c.out, "out", "bench", "output dir for the report")
 	f.StringVar(&c.backends, "backends", "memory,file", "comma-separated substrates")
 	f.BoolVar(&c.containerd, "containerd", false,
-		"run only the containerd cgroup-footprint lane (ADR-0052; Linux + root + containerd/crun/CNI + curated image)")
+		"run only the containerd cgroup-footprint lane (Linux + root + containerd/crun/CNI + curated image)")
 	f.BoolVar(&c.doctor, "doctor", false,
 		"report whether the lanes can run + warn on a live daemon — checks only, never installs/spins a VM/ships Lima")
 	f.StringVar(&c.ctrSocket, "containerd-socket", "",
-		"external containerd socket (with --containerd); \"\" (default) = funcd brings its own privately-managed containerd (ADR-0054)")
+		"external containerd socket (with --containerd); \"\" (default) = funcd brings its own privately-managed containerd")
 	f.StringVar(&c.snapshotter, "snapshotter", "overlayfs", "containerd snapshotter (with --containerd)")
 	f.StringVar(&c.cniBinDir, "cni-bin-dir", "/opt/cni/bin", "CNI plugin dir (with --containerd)")
 	f.StringVar(&c.cniConfDir, "cni-conf-dir", "/etc/cni/net.d", "CNI conflist dir (with --containerd)")

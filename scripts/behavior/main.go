@@ -79,7 +79,7 @@ type inputs struct {
 }
 
 // skipped holds no platform behavior: tests, tools and benches.
-var skipped = regexp.MustCompile(`^(\.[a-z]+|vendor|node_modules|e2e|examples|scripts|docs|images|bench|tests|api/cron|api/lintfixture|internal/testkit|internal/controlplane/cmd)(/|$)`)
+var skipped = regexp.MustCompile(`^(\.[a-z]+|vendor|node_modules|e2e|examples|scripts|docs|images|bench|tests|api/cron|api/lintfixture|internal/testkit|internal/controlplane/cmd|internal/reference)(/|$)`)
 
 // nameTest is a name that reads as a limit, a wait or a count, so its plain number counts as a value.
 var nameTest = regexp.MustCompile(`(?i)^(default|max|min|limit|grace|timeout|interval|retry|retries|attempts|budget)|(max|limit|timeout|interval|grace|wait|period|after|budget|attempts|retries|bytes|size|ttl|page|batch|concurrency|conns|buf)$`)

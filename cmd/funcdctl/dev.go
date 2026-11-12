@@ -72,19 +72,21 @@ import (
 func (a *cli) devCmd() *cobra.Command {
 	var cfg devConfig
 	cmd := &cobra.Command{
-		Use:   "dev [dir]",
-		Short: "Run a folder's resource files, or an App template, locally from their builds on the embedded platform",
-		Long: "funcdctl dev runs a folder's resource files from their local builds (ADR-0247). A directory that holds app.yaml " +
-			"beside resources/ runs as an App template instead (ADR-0253): dev pushes each image's build, renders the " +
+		Use: "dev [dir]",
+		// The Spec page marks it as a command of funcdctl-dev only (ADR-0324).
+		Annotations: map[string]string{"build": "dev"},
+		Short:       "Run a folder's resource files, or an App template, locally from their builds on the embedded platform",
+		Long: "funcdctl dev runs a folder's resource files from their local builds. A directory that holds app.yaml " +
+			"beside resources/ runs as an App template instead: dev pushes each image's build, renders the " +
 			"template as funcdctl app deploy does and applies the App, then again on each save.\n\n" +
-			"A " + devConfigFile + " in the current directory holds what dev is run with (ADR-0254): its dev keys are these " +
+			"A " + devConfigFile + " in the current directory holds what dev is run with: its dev keys are these " +
 			"flags in camelCase (dir, values, build, hooks, apply, persist, persistTo, gport, s3port, cport), plus env and " +
 			"envFile for the values of a declared Secret no document defines, and platform for runtime.handOutSettle, " +
 			"eventing.blobPollInterval and funclog.segmentMaxAge. A flag given here replaces its key, and a dir argument " +
 			"replaces dev.dir.\n\n" +
 			"For an App template the file also takes watch, a list of name, run and dir: dev starts each command, waits " +
 			"for the builds they write and keeps their output in log files; and liveReload: true, which reloads open " +
-			"Site pages after a Site change (ADR-0255).",
+			"Site pages after a Site change.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir, _, rerr := resolveDevRun("funcdctl dev", ".", args, cmd.Flags(), &cfg)

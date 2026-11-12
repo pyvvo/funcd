@@ -10,7 +10,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const undescribedList = "internal/controlplane/kindref/testdata/undescribed.txt"
+const (
+	undescribedList       = "internal/controlplane/kindref/testdata/undescribed.txt"
+	undescribedConfigList = "internal/reference/testdata/undescribed-config.txt"
+)
 
 // scenario: stale-generated-file-fails-ci
 func TestScenarioStaleGeneratedFileFailsCI(t *testing.T) {
@@ -48,6 +51,13 @@ func TestScenarioUndescribedListNeverGrows(t *testing.T) {
 	putFile(t, fresh, undescribedList, "FunctionSpec.handler\n")
 	out, err = runCheck(t, fresh, "check-undescribed.sh", before)
 	require.NoError(t, err, "the pull request that creates the list passes: %s", out)
+
+	keys := scratchRepo(t, map[string]string{undescribedConfigList: "server.listenAddr\n"})
+	keysBase := gitOut(t, keys, "rev-parse", "HEAD")
+	putFile(t, keys, undescribedConfigList, "server.listenAddr\nserver.newKey\n")
+	out, err = runCheck(t, keys, "check-undescribed.sh", keysBase)
+	require.Error(t, err, "the config keys' list may not grow either")
+	require.Contains(t, out, "server.newKey")
 }
 
 // scratchRepo returns a repository with one commit that holds files.

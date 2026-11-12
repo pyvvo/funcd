@@ -205,7 +205,7 @@ func (a *cli) appRollbackCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVarP(&ns, "namespace", "n", "", "namespace (default: default)")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "admit the rollback and store nothing; print what it would do (ADR-0220)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "admit the rollback and store nothing; print what it would do")
 	return cmd
 }
 
@@ -517,7 +517,7 @@ func (a *cli) appDeployCmd() *cobra.Command {
 	}
 	f.bind(cmd)
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "return once the App is applied")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "admit the App and store nothing; print what the deploy would do and wait for nothing (ADR-0220)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "admit the App and store nothing; print what the deploy would do and wait for nothing")
 	return cmd
 }
 
