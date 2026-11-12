@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"sigs.k8s.io/yaml"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -28,11 +29,13 @@ import (
 // the image registries an App template's lock reads (ADR-0218).
 type cli struct {
 	out    io.Writer
-	server string
-	token  string
-	client *sdk.Client // non-nil → injected (tests); else built from server/token on demand
+	conn   *pflag.FlagSet // the root's persistent --server and --token
+	client *sdk.Client    // non-nil → injected (tests); else built from conn on demand
 	images template.ImageResolver
 }
+
+// defaultServer is the control plane a command reaches when neither --server nor $FUNCD_SERVER names one.
+const defaultServer = "http://localhost:8080"
 
 // newRootCmd builds the funcdctl cobra command tree writing to out (production path).
 func newRootCmd(out io.Writer) *cobra.Command { return newRootCmdWith(out, nil) }
@@ -53,10 +56,9 @@ func newRootCmdFor(out io.Writer, client *sdk.Client, images template.ImageResol
 		SilenceErrors: true,
 	}
 	root.SetOut(out)
-	root.PersistentFlags().StringVar(&a.server, "server", envOr("FUNCD_SERVER", "http://localhost:8080"),
-		"control-plane base URL ($FUNCD_SERVER)")
-	root.PersistentFlags().StringVar(&a.token, "token", os.Getenv("FUNCD_TOKEN"),
-		"bearer token for the authenticated control plane ($FUNCD_TOKEN)")
+	a.conn = root.PersistentFlags()
+	a.conn.String("server", "", "control-plane base URL ($FUNCD_SERVER, else "+defaultServer+")")
+	a.conn.String("token", "", "bearer token for the authenticated control plane ($FUNCD_TOKEN)")
 	root.AddCommand(
 		a.getCmd(), a.describeCmd(), a.applyCmd(), a.deleteCmd(), a.logsCmd(), a.workflowCmd(), a.kvstoreCmd(), a.eventingCmd(), a.appCmd(), a.backupCmd(), a.holdCmd(), a.quarantineCmd(), a.volumeCmd(), // control-plane verbs (need the SDK client)
 		a.pushCmd(), a.indexCmd(), a.pullCmd(), a.inspectCmd(), a.loginCmd(), a.logoutCmd(), a.typesCmd(), // artifact verbs (internal/artifact; no server) + contract-file type codegen (ADR-0247)
@@ -73,11 +75,27 @@ func (a *cli) sdkClient() (*sdk.Client, error) {
 	if a.client != nil {
 		return a.client, nil
 	}
+	server, token := connection(a.conn)
 	var opts []sdk.Option
-	if a.token != "" {
-		opts = append(opts, sdk.WithToken(a.token))
+	if token != "" {
+		opts = append(opts, sdk.WithToken(token))
 	}
-	return sdk.New(a.server, opts...)
+	return sdk.New(server, opts...)
+}
+
+// connection is the control plane and the token that the persistent flags resolve to when a command runs, for the
+// client and for a plugin alike (ADR-0319).
+func connection(flags *pflag.FlagSet) (server, token string) {
+	return flagOrEnv(flags, "server", "FUNCD_SERVER", defaultServer), flagOrEnv(flags, "token", "FUNCD_TOKEN", "")
+}
+
+// flagOrEnv is the value of the flag name when the command line gives it, even empty, else $key when it is not empty,
+// else def. A flag that reads a variable keeps an empty default, so its help is the same on every machine.
+func flagOrEnv(flags *pflag.FlagSet, name, key, def string) string {
+	if f := flags.Lookup(name); f.Changed {
+		return f.Value.String()
+	}
+	return envOr(key, def)
 }
 
 func (a *cli) getCmd() *cobra.Command {
@@ -348,6 +366,10 @@ func (a *cli) pullCmd() *cobra.Command {
 				}
 				dir = tmp
 			}
+			// function artifacts target Linux, so a pull on any host defaults to linux/<host arch> (ADR-0145)
+			if !cmd.Flags().Changed("platform") {
+				platform = "linux/" + goruntime.GOARCH
+			}
 			node := v1.OCIPlatform(platform)
 			if verr := node.Validate(); verr != nil {
 				return fault.Wrapf(verr, fault.Invalid, "funcdctl pull", "--platform")
@@ -359,9 +381,8 @@ func (a *cli) pullCmd() *cobra.Command {
 			return a.writef("%s\n", path)
 		},
 	}
-	// function artifacts target Linux, so a pull on any host defaults to linux/<host arch>
-	cmd.Flags().StringVar(&platform, "platform", "linux/"+goruntime.GOARCH,
-		"the platform whose manifest to pull from a multi-arch index (ADR-0145)")
+	cmd.Flags().StringVar(&platform, "platform", "",
+		"the platform whose manifest to pull from a multi-arch index (linux and this machine's architecture when not given)")
 	return cmd
 }
 

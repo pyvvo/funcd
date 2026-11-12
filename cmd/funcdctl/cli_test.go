@@ -4,15 +4,19 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -204,6 +208,104 @@ func TestScenarioCLIHelpAndCompletion(t *testing.T) {
 	for _, verb := range []string{"get", "describe", "apply", "delete", "push", "pull", "login", "logout", "completion"} {
 		require.Contains(t, help, verb, "--help lists %q", verb)
 	}
+}
+
+// A flag's default is the same on every machine: with FUNCD_SERVER, FUNCD_TOKEN and FUNCD_DATA_PLANE set, the help of
+// funcdctl and of every command under it holds none of their values and is the help printed with them unset, and pull's
+// help names no architecture. pull without --platform still pulls linux and this machine's architecture.
+func TestIssue1445_FlagDefaultsAreTheSameOnEveryMachine(t *testing.T) {
+	vars := map[string]string{
+		"FUNCD_SERVER":     "http://server-from-env.example",
+		"FUNCD_TOKEN":      "value-from-env",
+		"FUNCD_DATA_PLANE": "http://data-plane-from-env.example",
+	}
+	for k := range vars {
+		t.Setenv(k, "")
+		require.NoError(t, os.Unsetenv(k))
+	}
+	unset := helpByCommand(t)
+	for k, v := range vars {
+		t.Setenv(k, v)
+	}
+	set := helpByCommand(t)
+	for _, path := range slices.Sorted(maps.Keys(set)) {
+		for _, k := range slices.Sorted(maps.Keys(vars)) {
+			require.NotContains(t, set[path], vars[k], "funcdctl %s --help holds $%s", path, k)
+		}
+	}
+	require.Equal(t, unset, set)
+	require.NotContains(t, set["pull"], goruntime.GOARCH)
+
+	layout := filepath.Join(t.TempDir(), "layout")
+	pushPlatform(t, layout, "amd", v1.PlatformLinuxAMD64)
+	pushPlatform(t, layout, "arm", v1.PlatformLinuxARM64)
+	ref := "oci-layout://" + layout + ":fn"
+	var out bytes.Buffer
+	require.NoError(t, execCLI(&out, nil, "index", ref, "oci-layout://"+layout+":amd", "oci-layout://"+layout+":arm"))
+	digest := strings.TrimPrefix(strings.TrimSpace(out.String()), ref+"@")
+	out.Reset()
+	require.NoError(t, execCLI(&out, nil, "pull", ref, digest, filepath.Join(t.TempDir(), "out")))
+	got, err := os.ReadFile(strings.TrimSpace(out.String())) //nolint:gosec // test-owned
+	require.NoError(t, err)
+	require.Contains(t, string(got), "linux/"+goruntime.GOARCH)
+	require.ErrorContains(t, execCLI(io.Discard, nil, "pull", ref, digest, t.TempDir(), "--platform", ""), "--platform")
+}
+
+// helpByCommand is the --help of funcdctl and of every command under it, cobra's help and completion included, by the
+// command's path.
+func helpByCommand(t *testing.T) map[string]string {
+	t.Helper()
+	tree := newRootCmd(io.Discard)
+	tree.InitDefaultHelpCmd()
+	tree.InitDefaultCompletionCmd()
+	helps := map[string]string{}
+	var walk func(*cobra.Command)
+	walk = func(c *cobra.Command) {
+		path := strings.Fields(c.CommandPath())[1:]
+		var out bytes.Buffer
+		require.NoError(t, execCLI(&out, nil, append(path, "--help")...), "funcdctl %v --help", path)
+		helps[strings.Join(path, " ")] = out.String()
+		for _, sub := range c.Commands() {
+			walk(sub)
+		}
+	}
+	walk(tree)
+	return helps
+}
+
+// The commands read the variables when they run: the client takes FUNCD_SERVER and FUNCD_TOKEN, and bench
+// FUNCD_DATA_PLANE, when the flag is not given, and a flag given on the command line wins, even empty.
+func TestIssue1445_CommandsReadTheVariablesWhenTheyRun(t *testing.T) {
+	t.Parallel()
+	_, url, _ := newTestServerVia(t, nil)
+	get := []string{"get", "functions", "-n", "team-a"}
+	env := []string{"FUNCD_SERVER=" + url, "FUNCD_TOKEN=" + devToken}
+
+	_, errOut, code := runFuncdctl(t, sysPath, env, "", get...)
+	require.Equal(t, 0, code, errOut)
+	_, errOut, code = runFuncdctl(t, sysPath, env, "", append([]string{"--token", ""}, get...)...)
+	require.Equal(t, 1, code)
+	require.Contains(t, errOut, "missing bearer token")
+	_, errOut, code = runFuncdctl(t, sysPath, []string{"FUNCD_SERVER=http://127.0.0.1:1", "FUNCD_TOKEN=" + devToken}, "",
+		append([]string{"--server", url}, get...)...)
+	require.Equal(t, 0, code, errOut)
+
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/function/hello" {
+			hits.Add(1)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	dataPlane := []string{"FUNCD_DATA_PLANE=" + srv.URL}
+	out, errOut, code := runFuncdctl(t, sysPath, dataPlane, "", "bench", "-f", "hello", "-n", "1", "-c", "1")
+	require.Equal(t, 0, code, errOut)
+	require.Contains(t, out, "bench "+srv.URL+"/function/hello\n")
+	require.Equal(t, int32(1), hits.Load())
+	_, errOut, code = runFuncdctl(t, sysPath, dataPlane, "", "bench", "-f", "hello", "--data-plane", "")
+	require.Equal(t, 1, code)
+	require.Contains(t, errOut, "--function together with --data-plane")
 }
 
 // scenario: cli-flag-compat (ADR-0042) — the short flags survive (as pflag shorthands) and gain
