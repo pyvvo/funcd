@@ -1,6 +1,6 @@
 # ADR-0325: The guide's examples are tested files that its pages include
 
-- **Status**: Reviewing
+- **Status**: Implemented (2026-11-12), review passed with three Minors, all on the tests' strictness ([report](../reviews/adr-0325-implementation-claude-opus-5-5.md))
 - **Date**: 2026-11-12
 - **Deciders**: green-0-rabbit
 - **Tags**: docs, examples, testing
