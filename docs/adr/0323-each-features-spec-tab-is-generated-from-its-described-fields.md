@@ -1,6 +1,6 @@
 # ADR-0323: Each feature's Spec tab is generated from its described fields
 
-- **Status**: Reviewing (2026-11-12, implemented); Accepted (2026-11-12), on the decider's go, after three rounds of an independent judge (a subagent), every
+- **Status**: Implemented (2026-11-12), review passed ([report](../reviews/adr-0323-implementation-claude-opus-5-5.md)); Reviewing (2026-11-12, implemented); Accepted (2026-11-12), on the decider's go, after three rounds of an independent judge (a subagent), every
   finding folded
 - **Date**: 2026-11-12
 - **Deciders**: green-0-rabbit
