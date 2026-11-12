@@ -1,6 +1,6 @@
 # ADR-0325: The guide's examples are tested files that its pages include
 
-- **Status**: Accepted (2026-11-12)
+- **Status**: Reviewing
 - **Date**: 2026-11-12
 - **Deciders**: green-0-rabbit
 - **Tags**: docs, examples, testing
