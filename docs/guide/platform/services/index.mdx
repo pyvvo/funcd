@@ -3,18 +3,19 @@ title: Services
 description: The services that funcd runs for its workloads, how each is reached, and where funcd keeps them on disk.
 ---
 
-![How each store is reached (the local API, the S3 gateway, the Lake gateway, the worker's mounts) and the engine under it (Badger, files or S3, rqlite, DuckDB, the local disk)](../../assets/services.drawio.svg)
+![How each store is reached (the local API, the S3 gateway, the Lake gateway, the worker's mounts) and the engine under it (memory or Badger, files or S3, rqlite, DuckDB, the local disk)](../../assets/services.drawio.svg)
 
 funcd serves the stores a Function binds: a KVStore, a Bucket, a SQLDatabase and a Lake, and the Function's own volumes.
-A Function reaches KV, its Buckets and its SQL databases through its local API. S3 clients, including a Function, reach
-a Bucket through funcd's S3 gateway. A Lake answers queries through its Lake gateway. The worker mounts its volumes.
-funcd also keeps the Secrets that a Function, a Workflow step or a Lake reads, in the metastore. Events are the last
-service: an EventSource emits them on a timer, on a new object in a Bucket or on a row change in a SQL table, and a
-Sensor calls a Function or starts a WorkflowRun for each one.
+A Function reaches KV, its Buckets and its SQL databases through its local API. When the operator turns on funcd's S3
+gateway, S3 clients, including a Function, reach a Bucket through it, and a Lake's engine reads and writes its files
+through it. A Lake answers queries through its Lake gateway. The worker mounts its volumes. funcd also keeps the Secrets
+that a Function, a Workflow step or a Lake reads, in the metastore. Events are the last service: an EventSource emits
+them on a timer, on a new object in a Bucket or on a row change in a SQL table, and a Sensor calls a Function or starts
+a WorkflowRun for each one.
 
-Each store runs on an engine. KV runs on Badger. A Bucket keeps its objects in files or in S3, and serves the S3
-protocol through funcd's S3 gateway. A SQL database runs on rqlite, which keeps its data in SQLite. A Lake runs on
-DuckDB with DuckLake, and keeps its files under a prefix of a Bucket. A volume is a directory of a fixed size on the
+Each store runs on an engine. KV runs in memory by default, or on Badger when the operator chooses the durable engine. A
+Bucket keeps its objects in files or in S3. A SQL database runs on rqlite, which keeps its data in SQLite. A Lake runs
+on DuckDB with DuckLake, and keeps its files under a prefix of a Bucket. A volume is a directory of a fixed size on the
 local disk.
 
 Each service has its own page: [KV](kv.md), [Bucket](bucket.md), [SQL](sql.md), [Lake](lake.md),
@@ -29,7 +30,7 @@ funcd keeps its stores under one directory, `storage.dataDir`:
     <Folder name="store — the metastore" disabled />
     <Folder name="eventstore — the event store" disabled />
     <Folder name="workflow — the Workflow run state" disabled />
-    <Folder name="kv — KV's own Badger" disabled />
+    <Folder name="kv — KV's own Badger, with the durable engine" disabled />
     <Folder name="blob — Buckets as files, unless S3" disabled />
     <Folder name="providers — the SQL and Lake engines' data" disabled />
     <Folder name="nats — the internal bus" disabled />
