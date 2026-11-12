@@ -1,3 +1,3 @@
 {
-  "pages": ["overview", "architecture", "workloads", "security-and-networking", "services", "events", "limits-and-quotas", "observability", "disaster-recovery"]
+  "pages": ["overview", "architecture", "workloads", "events", "services", "security-and-networking", "limits-and-quotas", "observability", "disaster-recovery"]
 }
