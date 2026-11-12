@@ -10,9 +10,11 @@ databases and Lakes), EventSources, Sensors and ConfigMaps, the Secrets its part
 applied, admission checks each part as if it were written on its own. `funcdctl app deploy` renders an App template,
 applies the App and waits until its new revision is current or has failed.
 
-The App reconciler creates an AppRevision for each changed spec and rolls it out. It waits until every App that this
-one requires is Ready at a matching version, and calls the App's before hooks. It then writes the parts and deletes
-the parts that the new spec dropped. Once the new revision is current, it calls the after hooks. It writes nothing
-while the App is paused, and it writes no part while a Secret that the App declares is missing.
+The App reconciler creates an AppRevision for each changed spec and rolls it out. It waits until every App that this one
+requires is Ready at a matching version, and calls the App's before hooks. It then writes the parts and deletes the
+parts that the new spec dropped. Once the new revision is current, it calls the after hooks. It writes nothing while the
+App is paused, and it writes no part while a Secret that the App declares is missing. Each hook call leaves an
+Invocation, a read-only record that belongs to the AppRevision and goes away with it. When a hook fails, the reason
+names that record and its error.
 `funcdctl app history` lists the revisions, and `funcdctl app rollback` applies an earlier one again as a new
 revision. Deleting the App deletes its parts.
