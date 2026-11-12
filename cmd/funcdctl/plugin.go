@@ -53,8 +53,8 @@ func findPlugin(root *cobra.Command, args, environ []string) (pluginCall, bool, 
 	if err != nil {
 		return pluginCall{}, false, fault.Wrapf(err, fault.Internal, "funcdctl "+name, "find the running funcdctl for the plugin %s", path)
 	}
-	flags := root.PersistentFlags()
-	env := pluginEnv(environ, exe, flags.Lookup("server").Value.String(), flags.Lookup("token").Value.String())
+	server, token := connection(root.PersistentFlags())
+	env := pluginEnv(environ, exe, server, token)
 	return pluginCall{path: path, argv: append([]string{path}, fs.Args()[1:]...), env: env}, true, nil
 }
 

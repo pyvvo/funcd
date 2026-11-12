@@ -17,7 +17,7 @@ import (
 // stdlib-only, so funcdctl ships no bench dependency (ADR-0051's confinement).
 func (a *cli) benchCmd() *cobra.Command {
 	var (
-		url, function, dataPlane  string
+		url, function             string
 		method, body, contentType string
 		concurrency, requests     int
 		duration                  time.Duration
@@ -28,7 +28,7 @@ func (a *cli) benchCmd() *cobra.Command {
 		Short: "Load-test a deployed function's data-plane endpoint (throughput + tail latency)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			target, err := benchTarget(url, function, dataPlane)
+			target, err := benchTarget(url, function, flagOrEnv(cmd.Flags(), "data-plane", "FUNCD_DATA_PLANE", ""))
 			if err != nil {
 				return err
 			}
@@ -51,7 +51,7 @@ func (a *cli) benchCmd() *cobra.Command {
 	f := cmd.Flags()
 	f.StringVar(&url, "url", "", "data-plane endpoint to hit (e.g. http://host:8081/function/hello)")
 	f.StringVarP(&function, "function", "f", "", "function name — with --data-plane builds <data-plane>/function/<name>")
-	f.StringVar(&dataPlane, "data-plane", envOr("FUNCD_DATA_PLANE", ""), "data-plane base URL ($FUNCD_DATA_PLANE), used with --function")
+	f.String("data-plane", "", "data-plane base URL ($FUNCD_DATA_PLANE), used with --function")
 	f.IntVarP(&concurrency, "concurrency", "c", 8, "concurrent workers")
 	f.DurationVarP(&duration, "duration", "d", 5*time.Second, "run length (ignored when --requests is set)")
 	f.IntVarP(&requests, "requests", "n", 0, "total requests across workers (overrides --duration)")
