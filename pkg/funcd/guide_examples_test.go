@@ -26,7 +26,17 @@ import (
 func TestScenarioGuideExamplesApply(t *testing.T) {
 	t.Parallel()
 	files := guideManifests(t)
-	require.NotEmpty(t, files, "the guide shows no example manifest")
+	examples, err := filepath.Glob(filepath.Join("..", "..", "api", "types", "v1alpha1", "examples", "*", "*.yaml"))
+	require.NoError(t, err)
+	require.NotEmpty(t, examples, "the guide has no example manifest")
+	for _, file := range examples {
+		require.Contains(t, files, file, "every example file is applied")
+	}
+	for _, inc := range guideIncludes(t, filepath.Join("docs", "guide")) {
+		if file, pinned := inc.target(t); pinned && filepath.Ext(file) == ".yaml" {
+			require.Contains(t, files, file, "every lane manifest that a page includes is applied")
+		}
+	}
 	for _, file := range files {
 		t.Run(filepath.Base(file), func(t *testing.T) {
 			t.Parallel()
@@ -49,17 +59,22 @@ func TestScenarioGuideIncludesResolve(t *testing.T) {
 	t.Parallel()
 	require.Empty(t, includeProblems(t, filepath.Join("docs", "guide")))
 	problems := includeProblems(t, filepath.Join("pkg", "funcd", "testdata", "guide-broken"))
-	require.Len(t, problems, 2, "%v", problems)
+	require.Len(t, problems, 3, "%v", problems)
 	require.Contains(t, problems[0], "no-such-file.yaml")
 	require.Contains(t, problems[1], "own-store.yaml#no-such-region")
+	require.Contains(t, problems[2], "attributes")
+	for _, problem := range problems {
+		require.Contains(t, problem, filepath.Join("guide-broken", "page.md"), "a problem names its page")
+	}
 }
 
-// guideInclude is one ::include line of a guide page: the page's path and the file and region the line names.
-type guideInclude struct{ page, path, region string }
+// guideInclude is one ::include line of a guide page: the page's path, the file and region the line names, and the
+// attributes it carries, which this check does not read.
+type guideInclude struct{ page, path, region, attributes string }
 
 func guideIncludes(t *testing.T, pages string) []guideInclude {
 	t.Helper()
-	line := regexp.MustCompile(`(?m)^::include\[([^\]]+)\]\s*$`)
+	line := regexp.MustCompile(`(?m)^\s*::include\[([^\]]+)\](\{[^}]*\})?\s*$`)
 	var found []guideInclude
 	err := filepath.WalkDir(filepath.Join("..", "..", pages), func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || (filepath.Ext(path) != ".md" && filepath.Ext(path) != ".mdx") {
@@ -71,7 +86,7 @@ func guideIncludes(t *testing.T, pages string) []guideInclude {
 		}
 		for _, m := range line.FindAllStringSubmatch(string(data), -1) {
 			file, region, _ := strings.Cut(m[1], "#")
-			found = append(found, guideInclude{page: path, path: file, region: region})
+			found = append(found, guideInclude{page: path, path: file, region: region, attributes: m[2]})
 		}
 		return nil
 	})
@@ -104,6 +119,8 @@ func includeProblems(t *testing.T, pages string) []string {
 		file, _ := inc.target(t)
 		data, err := os.ReadFile(file)
 		switch {
+		case inc.attributes != "":
+			problems = append(problems, inc.page+": "+name+": an include with attributes is not checked; write it without")
 		case err != nil:
 			problems = append(problems, inc.page+": "+name+": "+err.Error())
 		case inc.region != "" && !marksRegion(string(data), inc.region):
