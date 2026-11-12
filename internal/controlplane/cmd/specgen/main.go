@@ -1,34 +1,29 @@
 // Command specgen writes the huma-generated OpenAPI 3.1 spec to the committed path.
 // It builds the API with stub handlers and writes the YAML output deterministically.
-// Usage: go run ./cmd/specgen/ -out ../../api/openapi/funcd.v1alpha1.yaml
+// Usage: go run ./cmd/specgen/ -out ../../api/openapi/funcd.v1alpha1.yaml [-guide ../../docs/guide]
 package main
 
 import (
 	"flag"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
-	"github.com/go-chi/chi/v5"
+	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/pyvvo/funcd/internal/controlplane"
+	"github.com/pyvvo/funcd/internal/controlplane/kindref"
 )
 
 func main() {
 	outPath := flag.String("out", "api/openapi/funcd.v1alpha1.yaml", "output path for the OpenAPI YAML spec")
+	guide := flag.String("guide", "", "the user guide's directory: write each feature's Spec page under it (ADR-0323)")
 	flag.Parse()
 
-	r := chi.NewRouter()
-	h := controlplane.NewStubHandlers()
-	api := controlplane.NewAPI(r, h)
-	controlplane.RegisterStubLogs(api)            // ADR-0084: document the function-logs route in the committed spec
-	controlplane.RegisterStubWorkflowRunLogs(api) // ADR-0106: document the run-scoped logs route in the committed spec
-	controlplane.RegisterStubVolumes(api)         // ADR-0262: delete a retained Function volume
-	controlplane.RegisterStubDeadLetters(api)     // ADR-0118: document the DLQ read + replay/discard routes
-	controlplane.RegisterStubAppRetry(api)        // ADR-0214: document the App retry route
-	controlplane.RegisterStubPlatformBackup(api)  // ADR-0205: the platform backup status route
-	controlplane.RegisterStubHold(api)            // ADR-0206: document the hold status + release routes
+	api := controlplane.SpecAPI()
 
 	raw, yamlErr := api.OpenAPI().YAML()
 	if yamlErr != nil {
@@ -50,6 +45,52 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Fprintf(os.Stderr, "specgen: wrote %s\n", *outPath)
+
+	if *guide != "" {
+		if err := writeGuide(*guide, api.OpenAPI()); err != nil {
+			fmt.Fprintf(os.Stderr, "specgen: %v\n", err)
+			os.Exit(1)
+		}
+	}
+}
+
+// writeGuide writes the Spec pages under dir and deletes each page under its develop/ folder that carries the
+// generated marker and that kindref no longer renders (ADR-0323 Decision 1).
+func writeGuide(dir string, doc *huma.OpenAPI) error {
+	pages, err := kindref.Render(doc)
+	if err != nil {
+		return err
+	}
+	for rel, body := range pages {
+		path := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, body, 0o644); err != nil {
+			return err
+		}
+	}
+	root := filepath.Join(dir, "develop")
+	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || filepath.Ext(path) != ".md" {
+			return err
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		if _, ok := pages[filepath.ToSlash(rel)]; ok || !generated(path) {
+			return nil
+		}
+		fmt.Fprintf(os.Stderr, "specgen: removed %s\n", rel)
+		return os.Remove(path)
+	})
+}
+
+// generated reports whether the page at path carries kindref's marker as its front matter's first line.
+func generated(path string) bool {
+	b, err := os.ReadFile(path)
+	return err == nil && strings.HasPrefix(string(b), "---\n"+kindref.Marker+"\n")
 }
 
 // canonicalizeYAML reorders top-level map keys for deterministic output.

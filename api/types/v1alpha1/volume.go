@@ -32,7 +32,7 @@ type VolumeEntry struct {
 	Ref  ObjectName `json:"ref,omitempty"`
 	Type VolumeType `json:"type"`
 	// Size and SizeBytes are the volume's size, exactly one of them set (ADR-0266): "2GiB", or a byte count.
-	Size      ByteSize       `json:"size,omitempty" pattern:"^[0-9]{1,15}((Ki|Mi|Gi|Ti)B?)?$"`
+	Size      ByteSize       `json:"size,omitempty"`
 	SizeBytes int64          `json:"sizeBytes,omitempty" minimum:"1"`
 	Deletion  DeletionPolicy `json:"deletion,omitempty"`
 }

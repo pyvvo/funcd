@@ -35,6 +35,7 @@ jobs:
       design: ${{ steps.filter.outputs.design }}
       nondocs: ${{ steps.filter.outputs.nondocs }}
       nonrelease: ${{ steps.filter.outputs.nonrelease }}
+      generated: ${{ steps.filter.outputs.generated }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
@@ -67,6 +68,9 @@ jobs:
               - '!version.txt'
               - '!.release-please-manifest.json'
               - '!docs/guide/get-started/install.md'
+            generated:
+              - 'docs/guide/develop/**/spec.md'
+              - 'docs/guide/develop/common-definitions.md'
 
   # Fast lane — runs on every change but a docs-only one (and always on push to main). The heavy
   # pkg/funcd e2e suite is build-tagged out of `just ci`, so this is fmt + lint + fast tests +
@@ -74,7 +78,7 @@ jobs:
   # only the checks it can break, in this same job, so the required `ci` check still reports.
   ci:
     needs: changes
-    if: ((needs.changes.outputs.nondocs == 'true' || needs.changes.outputs.design == 'true') && needs.changes.outputs.nonrelease == 'true') || github.event_name == 'push'
+    if: ((needs.changes.outputs.nondocs == 'true' || needs.changes.outputs.design == 'true' || needs.changes.outputs.generated == 'true') && needs.changes.outputs.nonrelease == 'true') || github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -110,12 +114,19 @@ jobs:
           key: go-${{ runner.os }}-${{ hashFiles('go.sum') }}
           restore-keys: go-${{ runner.os }}-
 
+      - name: Check that the list of fields without a description does not grow (ADR-0323)
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE"
+          scripts/check-undescribed.sh "$BASE"
       - name: Run CI (fmt check + lint + fast tests + build)
-        if: needs.changes.outputs.nondocs == 'true' || github.event_name == 'push'
+        if: needs.changes.outputs.nondocs == 'true' || needs.changes.outputs.generated == 'true' || github.event_name == 'push'
         run: nix develop --command just ci
 
       - name: Check the design specs, the behavior registry and the repository hygiene (docs only)
-        if: needs.changes.outputs.nondocs != 'true' && github.event_name != 'push'
+        if: needs.changes.outputs.nondocs != 'true' && needs.changes.outputs.generated != 'true' && github.event_name != 'push'
         run: nix develop --command just check-hygiene check-specs check-behavior
 
   # Heavy lane — the pkg/funcd e2e scenarios (`-tags e2e`). Runs only when the change

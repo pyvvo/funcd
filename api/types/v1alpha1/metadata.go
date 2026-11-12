@@ -143,25 +143,25 @@ type TypeMeta struct {
 type ObjectMeta struct {
 	// Name is the resource name. omitempty (not "required") so a create may omit it in favour of
 	// GenerateName; the store still requires a non-empty Name (ObjectMeta.Validate) once assigned.
-	Name ObjectName `json:"name,omitempty"`
+	Name ObjectName `json:"name,omitempty" doc:"The object's name, unique among the objects of its kind in its namespace. A create may leave it empty and set generateName instead."`
 	// GenerateName is an optional NAME PREFIX for server-side name generation (the k8s pattern): when Name
 	// is empty and GenerateName is set, the create path fills Name = GenerateName + a random suffix
 	// (GenerateObjectName), retrying on the rare collision. Ignored once Name is set. A plain prefix string
 	// (a trailing '-' is idiomatic and allowed — the generated Name is what must be a valid label).
-	GenerateName  string            `json:"generateName,omitempty" pattern:"^[a-z0-9][a-z0-9-]{0,62}$"`
-	Namespace     NamespaceName     `json:"namespace,omitempty"`
-	ResourceGroup ResourceGroupName `json:"resourceGroup,omitempty"`
-	Tags          Tags              `json:"tags,omitempty"`
-	UID           UID               `json:"uid,omitempty"`
-	Generation    int64             `json:"generation,omitempty"`
+	GenerateName  string            `json:"generateName,omitempty" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"A prefix from which funcd makes the name, adding a random suffix, when a create leaves name empty."`
+	Namespace     NamespaceName     `json:"namespace,omitempty" doc:"The namespace the object belongs to. A cluster-scoped kind has none."`
+	ResourceGroup ResourceGroupName `json:"resourceGroup,omitempty" doc:"The resource group the object belongs to, within its namespace."`
+	Tags          Tags              `json:"tags,omitempty" doc:"Labels on the object, as keys and values."`
+	UID           UID               `json:"uid,omitempty" doc:"The object's unique ID, which funcd sets when it creates the object."`
+	Generation    int64             `json:"generation,omitempty" doc:"Set by funcd: 1 when the object is created, then one more each time its spec changes."`
 	// ResourceVersion is opaque: "<timeline>-<n>", or a plain "<n>" on an object written before timelines
 	// (ADR-0202). Compare it for equality only; a version minted by another store or before a restore
 	// matches none this store holds.
-	ResourceVersion string           `json:"resourceVersion,omitempty"`
-	CreationTime    Timestamp        `json:"creationTimestamp,omitzero"`
-	DeletionTime    *Timestamp       `json:"deletionTimestamp,omitempty"`
-	OwnerReferences []OwnerReference `json:"ownerReferences,omitempty"`
-	Finalizers      []string         `json:"finalizers,omitempty"`
+	ResourceVersion string           `json:"resourceVersion,omitempty" doc:"An opaque version of the stored object, which funcd sets. An update that sends it gets a conflict when the object changed since; compare it for equality only."`
+	CreationTime    Timestamp        `json:"creationTimestamp,omitzero" doc:"When funcd created the object."`
+	DeletionTime    *Timestamp       `json:"deletionTimestamp,omitempty" doc:"funcd does not set it."`
+	OwnerReferences []OwnerReference `json:"ownerReferences,omitempty" doc:"The objects that own this one. funcd deletes an owned object when its owner goes."`
+	Finalizers      []string         `json:"finalizers,omitempty" doc:"funcd does not read it."`
 }
 
 // Validate checks the ObjectMeta against envelope rules. Scope is derived from
@@ -235,17 +235,17 @@ func (m *ObjectMeta) GetGeneration() int64 { return m.Generation }
 // ObjectRef addresses an object within the single v1alpha1 group/version.
 // Cross-version refs (the v1 graduation) would add an apiVersion field.
 type ObjectRef struct {
-	Kind      Kind          `json:"kind"`
-	Namespace NamespaceName `json:"namespace,omitempty"`
-	Name      ObjectName    `json:"name"`
+	Kind      Kind          `json:"kind" doc:"The kind of the object it names."`
+	Namespace NamespaceName `json:"namespace,omitempty" doc:"The namespace of the object it names."`
+	Name      ObjectName    `json:"name" doc:"The name of the object it names."`
 }
 
 // OwnerReference establishes a parent-child relationship between resources.
 type OwnerReference struct {
 	ObjectRef          `json:",inline"`
-	UID                UID  `json:"uid"`
-	Controller         bool `json:"controller,omitempty"`
-	BlockOwnerDeletion bool `json:"blockOwnerDeletion,omitempty"`
+	UID                UID  `json:"uid" doc:"The owner's unique ID."`
+	Controller         bool `json:"controller,omitempty" doc:"Whether this owner is the one that manages the object."`
+	BlockOwnerDeletion bool `json:"blockOwnerDeletion,omitempty" doc:"funcd does not read it."`
 }
 
 // ControllerOf returns the controller OwnerReference of refs, the first one marked Controller.

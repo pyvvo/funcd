@@ -18,12 +18,12 @@ type ConditionType string
 
 // Condition represents a single observed condition on a resource's status.
 type Condition struct {
-	Type               ConditionType   `json:"type"`
-	Status             ConditionStatus `json:"status"`
-	ObservedGeneration int64           `json:"observedGeneration,omitempty"`
-	LastTransitionTime Timestamp       `json:"lastTransitionTime,omitzero"`
-	Reason             string          `json:"reason,omitempty"`
-	Message            string          `json:"message,omitempty"`
+	Type               ConditionType   `json:"type" doc:"What the condition reports, such as Ready."`
+	Status             ConditionStatus `json:"status" doc:"Whether the condition holds."`
+	ObservedGeneration int64           `json:"observedGeneration,omitempty" doc:"The object's generation when funcd set the condition."`
+	LastTransitionTime Timestamp       `json:"lastTransitionTime,omitzero" doc:"When the status last changed."`
+	Reason             string          `json:"reason,omitempty" doc:"A short CamelCase reason for the status."`
+	Message            string          `json:"message,omitempty" doc:"A sentence that explains the status."`
 }
 
 // Conditions is an ordered set of conditions.
@@ -61,7 +61,7 @@ func (cs Conditions) Get(t ConditionType) (Condition, bool) {
 // Status is the shared status base embedded by kinds with observed state.
 // Pure-data/policy kinds (ConfigMap, Secret, Grant, EgressPolicy) do not have status.
 type Status struct {
-	Phase              Phase      `json:"phase,omitempty"`
-	ObservedGeneration int64      `json:"observedGeneration,omitempty"`
-	Conditions         Conditions `json:"conditions,omitempty"`
+	Phase              Phase      `json:"phase,omitempty" doc:"Where the object is in its lifecycle."`
+	ObservedGeneration int64      `json:"observedGeneration,omitempty" doc:"The generation of the spec that funcd last acted on."`
+	Conditions         Conditions `json:"conditions,omitempty" doc:"The conditions that explain the phase."`
 }

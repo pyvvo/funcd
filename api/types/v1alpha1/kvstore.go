@@ -36,21 +36,21 @@ type KVStore struct {
 // default" (read at enforcement time).
 type KVStoreSpec struct {
 	// Quota caps the store's total size, each value and each key (ADR-0292).
-	Quota KVStoreQuota `json:"quota,omitzero"`
+	Quota KVStoreQuota `json:"quota,omitzero" doc:"Caps on the store's total size, on each value and on each key."`
 	// Tables are the store's sub-domains (ADR-0073): each is a key space <ns>/<store>/<table>/ with a
 	// single-writer Owner. Table names are unique within the store (so a table has exactly one owner by
 	// construction). Empty ⇒ a store with no writable sub-domains.
-	Tables []KVTable `json:"tables,omitempty"`
+	Tables []KVTable `json:"tables,omitempty" doc:"The store's tables. A table is a key space with at most one writer, its owner. Table names are unique within the store, and a store with no table has nothing a Function can write."`
 }
 
 // KVTable is one sub-domain of a KVStore (ADR-0073): a named key space with a single-writer owner.
 // The typed-record engine (backlog) attaches its Schema/Indexes here (table-scoped) without a re-model.
 type KVTable struct {
 	// Name is the sub-domain name; a DNS-1123 label, unique within the store.
-	Name string `json:"name" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"`
+	Name string `json:"name" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" doc:"The table's name, unique within the store."`
 	// Owner is the single writer: a Function in this store's namespace. Empty ⇒ no writer (read-only
 	// through the facade). Cross-resource validity (the owner exists) is an admission, not Validate.
-	Owner ObjectName `json:"owner,omitempty"`
+	Owner ObjectName `json:"owner,omitempty" doc:"The one Function that may write the table, in the store's namespace. In a store that a Function declares, it defaults to that Function. In a KVStore applied on its own, an empty owner means that no Function can write the table. Every Function, the owner included, reaches the table through an entry of its spec.bindings.kv."`
 }
 
 // KVStoreStatus is the observed state of a KVStore (ADR-0072/0073): the reconciler sets Ready and the
@@ -60,9 +60,9 @@ type KVTable struct {
 type KVStoreStatus struct {
 	Status `json:",inline"`
 	// Tables is the number of sub-domains declared on the store (computed by the reconciler).
-	Tables int `json:"tables,omitempty"`
+	Tables int `json:"tables,omitempty" doc:"The number of tables the store declares."`
 	// Bindings is the number of Function.spec.bindings.kv entries referencing this store (computed by the reconciler).
-	Bindings int `json:"bindings,omitempty"`
+	Bindings int `json:"bindings,omitempty" doc:"The number of Function spec.bindings.kv entries that name the store."`
 }
 
 // EffectiveMaxValueBytes returns the per-value cap, applying the default when the spec is 0 and clamping to
