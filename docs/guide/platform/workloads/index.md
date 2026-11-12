@@ -1,15 +1,15 @@
 ---
 title: Workloads
-description: The Functions, Apps and Sites that run on funcd, and what a Function needs to run.
+description: The Functions, Apps, Sites and Workflows that run on funcd, and what they need to run.
 ---
 
-![An App, a Function and a Site take their code and files from bundles in an OCI registry, pinned by digest, and rely on their configuration: ConfigMaps and Secrets, or only ConfigMaps for a Site](../../assets/workloads.drawio.svg)
+![An App, a Function, a Workflow and a Site take their code and files from bundles in an OCI registry, pinned by digest, and rely on their configuration: ConfigMaps and Secrets, or only ConfigMaps for a Site](../../assets/workloads.drawio.svg)
 
-funcd runs three kinds of workload. A Function is code, an App is a whole app in one resource, and a Site is a static
-web app. Their code and files come from bundles in an OCI registry, pinned by digest: a Function's code, a Site's static
-files and the bundles of an App's parts. All three rely on configuration: ConfigMaps for their settings and, except for
-a Site, Secrets. The pages of this section cover each kind, then what a Function needs to run: its artifact, its runtime
-and its configuration.
+funcd runs four kinds of workload. A Function is code, an App is a whole app in one resource, a Site is a static web
+app, and a Workflow runs Functions as steps. Their code and files come from bundles in an OCI registry, pinned by
+digest: a Function's code, a Site's static files, and the bundles of an App's parts and of a Workflow's steps. All of
+them rely on configuration: ConfigMaps for their settings and, except for a Site, Secrets. The pages of this section
+cover each kind, then what a workload needs to run: its artifact, its runtime and its configuration.
 
 ## Function
 
@@ -31,6 +31,13 @@ App back through its revisions.
 A [Site](site.md) is a static web app. funcd copies its bundle into a prefix of a Bucket, and the edge serves the
 files from there through the Site's Route, with no worker. When a deploy fails, the previous version keeps serving.
 
+## Workflow
+
+A [Workflow](workflow.md) runs Functions as steps, in order or as their dependencies allow, along with built-in steps
+and child Workflows. Each execution is a WorkflowRun, which keeps the revisions of the step Functions that it started
+with. The workflow engine passes each step's output to the steps that follow, retries a failed step, and keeps the
+run's progress in the run state.
+
 ## Artifacts
 
 A Function's code reaches funcd as an OCI [artifact](artifacts.md), together with its contract and its runtime. The
@@ -44,6 +51,7 @@ A Function's code runs in a worker, where a shim in TypeScript or in Python load
 
 ## Configuration
 
-A Function takes its settings from ConfigMaps and its secrets from Secrets. A ConfigMap's keys reach its workers as
-environment variables, while a Secret's values never do: the Function reads them through its local API, as the
-[Configuration](configuration.md) page describes.
+Workloads take their settings from ConfigMaps and their secrets from Secrets. A Function and a Workflow's steps
+receive ConfigMap keys as environment variables and read Secret values through their local API. A Lake's engine
+receives both in its environment. A Site writes a ConfigMap's keys into a public file, and an App declares both for
+its parts. The [Configuration](configuration.md) page describes each of them.
