@@ -34,7 +34,7 @@ func TestScenarioConfigSpecGenerated(t *testing.T) {
 
 // scenario: page-same-on-every-host
 func TestScenarioPageSameOnEveryHost(t *testing.T) {
-	names, err := reference.Variables(".")
+	names, err := reference.Variables("../funcd", "../funcdctl")
 	require.NoError(t, err)
 	funcdenv.Sentinels(t, names)
 	require.NoError(t, reference.Stale(runningFuncdSpec, renderRunningFuncdSpec(t)))
