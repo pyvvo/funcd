@@ -22,7 +22,7 @@ func TestScenarioDocNamesTheConstant(t *testing.T) {
 		f, ok := reflect.TypeFor[KVStoreQuota]().FieldByName(c.field)
 		require.True(t, ok, c.field)
 		if got := f.Tag.Get(c.tag); c.tag == "doc" {
-			require.Contains(t, got, c.want, "KVStoreQuota.%s doc", c.field)
+			require.Regexp(t, `\b`+c.want+`\b`, got, "KVStoreQuota.%s doc names %s as a whole number", c.field, c.want)
 		} else {
 			require.Equal(t, c.want, got, "KVStoreQuota.%s %s", c.field, c.tag)
 		}
