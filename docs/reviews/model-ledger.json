@@ -13963,5 +13963,20 @@
     "dod_total": 24,
     "report": "docs/reviews/adr-0323-implementation-claude-opus-5-5.md",
     "notes": "pass, independent reviewer; 0B/0M/3m, all model and fixed in 0815560f: the constant pins matched substrings, specgen's stale-page removal was untested, the limits.md row lacked the funcdctl clause. 8/8 scenarios pass, generate byte-identical, 3 overlay mutants killed; gate PASS"
+  },
+  {
+    "date": "2026-11-12",
+    "issue": "1445",
+    "phase": "fix",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 12,
+    "dod_total": 12,
+    "report": "docs/reviews/issue-1445-fix-claude-opus-5-5.md",
+    "notes": "No findings (0 model, 0 issue, 0 adr, 0 env). The regression test fails before the fix on the default of --server holding the value of $FUNCD_SERVER; with the fix the help of all 61 commands is the same with the variables set or unset, and pull still defaults to linux/<host arch>. 7/7 mutants killed; -race green on the default and dev builds; the gate has not run yet."
   }
 ]
