@@ -1,5 +1,5 @@
 ---
-title: Workflows
+title: Workflow
 description: How a WorkflowRun moves through the steps of its Workflow.
 ---
 
