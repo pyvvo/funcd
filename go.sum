@@ -705,8 +705,6 @@ github.com/pyvvo/funcd-functions v0.25.1 h1:LLXuNRmOWtHx/v3D6A9ZZ7Ibl9DPmzAgCuVV
 github.com/pyvvo/funcd-functions v0.25.1/go.mod h1:L91uY7v74Ik9u+ui8J8p6Zqu/6RAK9uJWJFAKl6TxSY=
 github.com/pyvvo/funcd-python v0.20.0 h1:XLdtY2IkbZ33/CSvo0P+evjjsNYTCi7RlaFbMImcSM4=
 github.com/pyvvo/funcd-python v0.20.0/go.mod h1:xgR0Do0470V/uB78dA8QEsKrzyiHr4EeO1c37b92E2c=
-github.com/pyvvo/funcd-typescript v0.25.0 h1:wm7z+Yb01UL9XLdBnnNYdF7tFOT60T5Rw3d3iWvO16s=
-github.com/pyvvo/funcd-typescript v0.25.0/go.mod h1:DGPLN+6I5a0GD2isOoo/c5EIxkajwtqV6lJlT7+1WX8=
 github.com/pyvvo/funcd-typescript v0.26.0 h1:0tVT0ICGBBBCP4j/mgSRvfRfDEaf2GbebG8NXYjioTs=
 github.com/pyvvo/funcd-typescript v0.26.0/go.mod h1:DGPLN+6I5a0GD2isOoo/c5EIxkajwtqV6lJlT7+1WX8=
 github.com/quasilyte/go-ruleguard v0.4.5 h1:AGY0tiOT5hJX9BTdx/xBdoCubQUAE2grkqY2lSwvZcA=
