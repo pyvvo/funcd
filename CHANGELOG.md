@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.42.0](https://github.com/pyvvo/funcd/compare/v0.41.0...v0.42.0) (2026-11-11)
+
+
+### Features
+
+* **funcdctl:** an install script installs the latest release of funcdctl ([3f53db3](https://github.com/pyvvo/funcd/commit/3f53db3dc1806698068359ef638baba4177a3054))
+* **secrets:** Cedar decides each Secret a workload reads ([d5cdbbd](https://github.com/pyvvo/funcd/commit/d5cdbbdc228237c82c2c7ef3f5348e9e4289b4e6))
+
 ## [0.41.0](https://github.com/pyvvo/funcd/compare/v0.40.0...v0.41.0) (2026-11-10)
 
 
