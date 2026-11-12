@@ -1,6 +1,6 @@
 # ADR-0324: funcd's and funcdctl's Spec tabs come from the config struct and the command trees
 
-- **Status**: Accepted (2026-11-12)
+- **Status**: Reviewing (2026-11-13, implementation done); Accepted (2026-11-12)
 - **Date**: 2026-11-12
 - **Deciders**: green-0-rabbit
 - **Tags**: docs, config, cli, codegen
