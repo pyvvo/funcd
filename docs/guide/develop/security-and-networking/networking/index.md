@@ -141,10 +141,10 @@ The edge compares each request with the rules of every Route that answers on the
   host decides nothing else, so in the namespace `default`, a rule without a host at `/api/v2` takes a request for
   `devices.example.com/api/v2/x` from a rule of the host `devices.example.com` at `/api`.
 
-One exception holds on a host that names a namespace, `<namespace>.<server.baseDomain>`: a request for a path under
-`/function` goes to the Function of that name in that namespace, unless the rule that matches it lies under
-`/function` itself and belongs to that namespace. A rule at `/`, of that namespace or of `default`, never takes such a
-request there.
+One exception holds on a host that names a namespace, `<namespace>.<server.baseDomain>` or a name under it: a request
+for a path under `/function` goes to the Function of that name in that namespace, unless the rule that matches it lies
+under `/function` itself and belongs to that namespace. A rule at `/`, of that namespace or of `default`, never takes
+such a request there.
 
 A request that no rule matches, and that is not addressed to a Function's own address, gets the HTTP status 404 with
 the message `no route for "<path>"`.
