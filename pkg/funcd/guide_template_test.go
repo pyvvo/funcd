@@ -58,7 +58,7 @@ func TestTemplateRefusesABrokenPage(t *testing.T) {
 	for _, want := range []string{
 		`the first section is "Overview", not "Usage"`,
 		`"Quotas" is a refused heading`,
-		`"Limits and quotas" comes after "Access"`,
+		`"Access" comes after "Limits and quotas"`,
 		`the free section "Conditional writes" comes after an optional one`,
 		`"Examples" is not the last section`,
 		`line 11: a "yaml" fence`,

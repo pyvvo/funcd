@@ -24,19 +24,19 @@ free:
     the optional ones: prose and included regions, each language's code under its own heading after the text both
     share. A task that a reader meets when calls race, such as a conditional write, gets its own section.
 optional:
+  - heading: Access
+    holds: >-
+      Only for a feature whose calls an authorizer checks. First what a Function gets by itself from its declaration,
+      binding or ownership, each with its Cedar action, linking the Security page; then, when a role exists and is
+      needed, the smallest built-in role, its scope and a tested RolesAssignment, included as YAML; then the shipped
+      policy, quoted in a cedar block titled with its file name and labelled as part of funcd; then the scope rules and
+      a denial that a reader may meet. A feature with no role or no policy leaves that part out.
   - heading: Limits and quotas
     holds: The limits a reader meets, from doc tags and constants, with a link to the Spec tab.
   - heading: Data storage
     holds: >-
-      Only for a feature that stores data: where the data is stored, whether it survives a restart, the default, the
-      setting that changes that, and any setting that overrides it.
-  - heading: Access
-    holds: >-
-      Only for a feature whose calls a built-in Cedar policy checks. First what a Function gets by itself from its
-      declaration, binding or ownership, each with its Cedar action; then what a reader must configure for anything
-      else: the smallest built-in role, its scope and a tested RolesAssignment, included as YAML. The shipped policy is
-      quoted in a cedar block titled with its file name, and a denial shows its status and the rule that its message
-      names.
+      Only for a feature that stores data on the server: where it is stored, the default, whether it survives a
+      restart, and the settings that change or override that.
   - heading: Status
     holds: The conditions a reader checks, and how.
   - heading: Changes and deletion
@@ -44,7 +44,9 @@ optional:
   - heading: Errors
     holds: The refusals and failures a reader meets, and what they mean.
   - heading: Run it locally
-    holds: What funcdctl dev does for the feature, beyond the first example.
+    holds: >-
+      What is specific to local development: its prerequisites and behavior, how it differs from a deployed service,
+      its local state and how to clean it up. It does not repeat the first example.
   - heading: Deploy it
     holds: >-
       Run the first example on a platform and verify its result. Push an artifact only when required; apply resource

@@ -31,7 +31,7 @@ The example's manifest connects the Function to its data:
 
 - It declares a **store** under `spec.kv`, with one **table**. A table is a separate set of keys inside the store.
 - The table sets no `owner`, so the Function that declares the store becomes the table's owner. The owner can write
-  the table.
+  the table; [Access](#access) explains who else can.
 - A **binding** under `spec.bindings.kv` connects the table to the Function and gives the table an alias. The handler
   passes that alias to `ctx.kv`. funcd rejects a `ctx.kv` call that uses an alias that no binding declares.
 
@@ -175,25 +175,6 @@ Every Function that binds the table can read it. To write the table, a Function 
 permission that [Access](#access) describes. When a table of a KVStore sets no `owner`, only that permission lets a
 principal write the table.
 
-## Limits and quotas
-
-A store's `spec.quota` sets its limits:
-
-- `maxSize` or `maxBytes` limits the total size of the store. Set one of the two, not both. Without either, the store
-  has no size limit.
-- `maxValueBytes` limits the size of each value. When it is not set, the limit is 1 MiB.
-- `maxKeyBytes` limits the size of each key. When it is not set, the limit is 1 KiB.
-
-A write whose value or key is above its limit fails with the HTTP status 413. A write that would take the store above
-its total size fails with the HTTP status 507. The [Spec](spec.md) tab gives the range of each field.
-
-## Data storage
-
-By default, funcd keeps KV data in memory, and the data is lost when funcd stops. To keep the data on disk, set
-`kvstore.engine: badger` in funcd's configuration. funcd then stores the data in the `kv` folder of its data
-directory, unless `kvstore.dataDir` names another folder. `storage.mode: memory` keeps KV data in memory even when
-`kvstore.engine` is `badger`.
-
 ## Access
 
 A Function gets two grants from its own manifest, with no role to assign. funcd checks both with Cedar, as the
@@ -240,10 +221,30 @@ A binding can name only a store that its own Function declares, by `name` or by 
 other store. A call that the policy denies fails with the HTTP status 403, and its message names the rule, such as
 `cedar: forbidden by policy builtin/kv-single-writer`.
 
+## Limits and quotas
+
+A store's `spec.quota` sets its limits:
+
+- `maxSize` or `maxBytes` limits the total size of the store. Set one of the two, not both. Without either, the store
+  has no size limit.
+- `maxValueBytes` limits the size of each value. When it is not set, the limit is 1 MiB.
+- `maxKeyBytes` limits the size of each key. When it is not set, the limit is 1 KiB.
+
+A write whose value or key is above its limit fails with the HTTP status 413. A write that would take the store above
+its total size fails with the HTTP status 507. The [Spec](spec.md) tab gives the range of each field.
+
+## Data storage
+
+By default, funcd keeps KV data in memory, and the data is lost when funcd stops. To keep the data on disk, set
+`kvstore.engine: badger` in funcd's configuration. funcd then stores the data in the `kv` folder of its data
+directory, unless `kvstore.dataDir` names another folder. `storage.mode: memory` keeps KV data in memory even when
+`kvstore.engine` is `badger`.
+
 ## Run it locally
 
-`funcdctl dev` keeps the KV data in memory, so the data is lost when `funcdctl dev` stops. With the `--persist` flag,
-`funcdctl dev` keeps the KV, blob and metastore data in a local folder between runs.
+`funcdctl dev` keeps the KV data in memory, so the data is lost when `funcdctl dev` stops, whatever
+[Data storage](#data-storage) says about a server. With the `--persist` flag, `funcdctl dev` keeps the KV, blob and
+metastore data in a local folder between runs.
 
 ## Examples
 
