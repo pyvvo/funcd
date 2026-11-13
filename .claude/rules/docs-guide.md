@@ -18,6 +18,8 @@ paths:
 - Give every "only", "exactly one" or "never" its scope, such as the same key or the same version.
 - Label an excerpt as an excerpt, explain each name it uses but does not define, and link the complete file beside
   it.
+- Use conventional technical terms: a method returns a value, a response contains a field, a caller has
+  permission. Repeat the name of an operation or a setting when a pronoun could refer to more than one.
 - Write no empty section and no summary that repeats the page.
 - The Platform chapter explains concepts only: no spec fields, YAML or funcdctl commands. Those belong to the Developer
   chapter, `docs/guide/develop/`.

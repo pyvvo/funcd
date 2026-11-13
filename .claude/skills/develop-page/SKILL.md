@@ -68,10 +68,10 @@ Every page shares the reader contract of `template.yaml`'s first section; the wo
 8. **Write** in the guide's voice, around the reader's task: the first section's example is the one that
    `template.yaml` names for the feature's type (service, workload, tool or cross-cutting), a free section is one task
    under a heading that names it, and an optional section appears only when it explains a real decision or behavior.
-   Run the first example before keeping it, exactly as the page documents it: each command in order, from a fresh
-   clone, with funcdctl as the Install page installs it (or a `-tags dev` build of the release it names), with the
-   runtimes on the `PATH` and outside the development shell. Record the versions. A helper such as
-   `scripts/example-copy.sh`, or a copy of a module, is a different test and does not count. A tool's command runs with
+   Run the first example before keeping it, exactly as the page documents it: each command in order, in an
+   environment that contains only the prerequisites the page declares, with the documented release of each tool it
+   uses. When the workflow starts from a repository, start from a fresh clone. Record the versions. A helper such as
+   `scripts/example-copy.sh`, a copy of a module, or a setup the page does not declare does not count. A tool's command runs with
    the tool itself; a resource manifest, such as a namespace or a grant, is applied to a running platform with no
    push; the server's configuration file starts funcd with `--config`. `funcdctl dev` runs each Function from its
    local build, which it finds by the Function's name (`<name>.mjs`, or the Python entry), in place of its `image`
@@ -85,7 +85,8 @@ Every page shares the reader contract of `template.yaml`'s first section; the wo
    (`?rev=<commit>`), and find a sentence that the revision added.
 10. **Critique**: one subagent per page, reused across rounds, checks the page against the code, the template and the
     reader, briefed with the files, not your conclusions. Fix what the page owns; route the rest (an issue, a board
-    card, a question in the PR).
+    card, a question in the PR). After each round of fixes, read the whole page again from the top, so that a fix
+    reaches every sentence with the same problem, not only the one quoted.
 11. **Fresh-reader check**: an agent other than the writer reads what the site publishes, not the source: after the
     site's build, the page's Markdown copy with its includes expanded (`build/client/docs/<page path>.md` in
     funcd-frontend's `packages/docs`, which the site serves at the page's URL plus `.md`) and its Spec page's copy. It
