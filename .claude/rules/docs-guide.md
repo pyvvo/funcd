@@ -31,7 +31,8 @@ paths:
 - Write no empty section and no summary that repeats the page.
 - The Platform chapter explains concepts only: no spec fields, YAML or funcdctl commands. Those belong to the Developer
   chapter, `docs/guide/develop/`.
-- Check every fact in the code on main before writing it: a default, a limit, a behavior.
+- Check every fact in the code on main before writing it: a default, a limit, a behavior. Check a behavior through
+  the call the reader makes (the route and its validation, the SDK and its errors), not through one helper inside it.
 - Run every command and example that a page shows before it is published, the way the page tells a reader to: an
   example that `funcdctl dev` runs with it, a tool's command with the tool, and a server configuration by starting
   `funcd --config` with it. Run it with only the tools the page declares on the `PATH`, and send each step as soon as

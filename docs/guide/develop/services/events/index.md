@@ -432,8 +432,8 @@ The funcd [Spec](../../running-funcd/spec.md#funcdconfigyaml) tab describes each
 
 ## Data storage
 
-funcd does not store the events themselves: an event that fires while no Sensor subscribes to it is lost, with no
-Invocation. A delivery waits in memory until its action ends. When funcd stops, it keeps each delivery that still waits
+funcd keeps no event, except the CloudEvent inside a dead letter: an event that fires while no Sensor subscribes to it
+is lost, with no Invocation. A delivery waits in memory until its action ends. When funcd stops, it keeps each delivery that still waits
 as a dead letter, with a reason that contains `daemon shut down with the delivery still queued`, until
 `server.shutdownTimeout` has passed, 15 seconds by default: the deliveries that still wait then are dropped, and a line
 of funcd's log counts them. When funcd crashes, the deliveries that still wait are lost.
