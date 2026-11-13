@@ -18,6 +18,8 @@ paths:
 - Give every "only", "exactly one" or "never" its scope, such as the same key or the same version.
 - Label an excerpt as an excerpt, explain each name it uses but does not define, and link the complete file beside
   it.
+- Show the code that explains the current task. When a file also holds unrelated operations, include a tested region
+  for the task and link the complete file, instead of making the reader scan the whole file.
 - Use conventional technical terms: a method returns a value, a response contains a field, a caller has
   permission. Repeat the name of an operation or a setting when a pronoun could refer to more than one.
 - Keep what a field does apart from what its reference page documents: a field such as `roleRef` names one role, and
