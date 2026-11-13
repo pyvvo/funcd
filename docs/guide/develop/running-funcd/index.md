@@ -14,7 +14,7 @@ which suits a test or a first try.
 funcd reads its settings from one file, `funcdconfig.yaml`: the file that `--config` names, else the one that
 `FUNCD_CONFIG` names, else `./funcdconfig.yaml`, else `/etc/funcd/funcdconfig.yaml`. The file is optional and sets
 only the keys that differ from their defaults; a key that funcd does not know is an error. This file keeps the data on
-disk and runs each Function in containerd:
+disk, the KV data included, and runs each Function in containerd:
 
 ```yaml
 apiVersion: funcd.io/v1alpha1
@@ -25,9 +25,14 @@ server:
 storage:
   mode: file
   dataDir: /var/lib/funcd/data
+kvstore:
+  engine: badger
 runtime:
   mode: containerd
 ```
+
+`storage.mode: file` keeps funcd's own data on disk, but the KV data lives in memory, and is lost when funcd stops,
+unless `kvstore.engine` is `badger`.
 
 [`examples/funcdconfig.yaml`](https://github.com/pyvvo/funcd/blob/main/examples/funcdconfig.yaml) shows every key
 with its default, and the [Spec](spec.md) tab lists each one with its type, limits and variable.

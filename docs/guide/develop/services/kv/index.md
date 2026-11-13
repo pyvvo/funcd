@@ -10,34 +10,71 @@ A KV store holds tables of keys and values that Functions read and write through
 and binds one of its tables under `spec.bindings.kv`. The binding's alias is the name that the handler passes to
 `ctx.kv`. The [Spec](spec.md) tab lists every method of `ctx.kv`, in TypeScript and Python.
 
+In a store that a Function declares itself, as both examples below do, a table that names no owner belongs to that
+Function, which writes it. A Function reaches a table only through an entry of its `spec.bindings.kv`; without one,
+`ctx.kv` on that alias is refused.
+
+The kv-counter example counts the calls for each name. In a clone of the example's repository, `funcdctl dev
+examples/kv-counter` runs it on a local platform as it stands: it runs the Function from its local build in place of
+its `image`, keeps the KV data in memory and prints the URL of each Function. `--gport` fixes the port of that URL.
+
 ### TypeScript
 
-The kv-counter example, which funcd's lanes run on a real platform, counts the calls for each name. Its `image` is the
-bundle that `funcdctl push` wrote from the handler:
+The example in funcd-typescript declares a store, `counters-kv`, and binds its table as `counters`; its Function,
+`counter`, owns the table:
 
 ::include[../../../../../_repos/funcd-typescript/examples/kv-counter/counter.yaml#manifest]
 
 ::include[../../../../../_repos/funcd-typescript/examples/kv-counter/src/main.ts#handler]
 
+Run it, then call it twice from another terminal; the count goes up:
+
+```console
+$ funcdctl dev examples/kv-counter --gport 8080
+```
+
+```console
+$ curl -s -X POST -H 'content-type: application/json' -d '{"name":"ada"}' http://127.0.0.1:8080/function/counter
+{"name":"ada","count":1}
+$ curl -s -X POST -H 'content-type: application/json' -d '{"name":"ada"}' http://127.0.0.1:8080/function/counter
+{"name":"ada","count":2}
+```
+
 ### Python
 
-The Python kv-counter, which the same lanes run, declares its own store, `py-counters`, and binds it as `pycounters`:
+The example in funcd-python declares its own store, `py-counters`, and binds it as `pycounters`; its Function,
+`pycounter`, owns the table:
 
 ::include[../../../../../_repos/funcd-python/examples/kv-counter/counter.yaml#manifest]
 
 ::include[../../../../../_repos/funcd-python/examples/kv-counter/src/main.py#handler]
 
-Neither table names an owner, so each table's owner is the Function that declares it: `counter` writes its table, and
-`pycounter` writes its own. A Function reaches a table only through an entry of its `spec.bindings.kv`; without one,
-`ctx.kv` on that alias is refused.
+Run it, then call it twice from another terminal; the count goes up:
+
+```console
+$ funcdctl dev examples/kv-counter --gport 8080
+```
+
+```console
+$ curl -s -X POST -H 'content-type: application/json' -d '{"name":"ada"}' http://127.0.0.1:8080/function/pycounter
+{"name":"ada","count":1}
+$ curl -s -X POST -H 'content-type: application/json' -d '{"name":"ada"}' http://127.0.0.1:8080/function/pycounter
+{"name":"ada","count":2}
+```
 
 ## Conditional writes and expiry
 
-`putIfAbsent`, `compareAndSet` and `delIf` (`put_if_absent`, `compare_and_set` and `delete_if` in Python) write only
-while their condition holds, and say who won: of racing writers, exactly one gets the new version, and the others get
-`null` (`None` in Python), or `false` (`False`) for a delete. The kv-claim example uses them to hold a claim on a key.
-Its TypeScript Function, `claim`, owns the claims table, and its Python Function, `pyclaim`, writes the same table
-through a writer role (see [Access](#access)), so the two race on one table.
+kv-counter reads the count, adds one and writes it back. Two calls for the same name at the same moment can read the
+same count, and one increment is then lost. A conditional write stops that: `putIfAbsent`, `compareAndSet` and `delIf`
+(`put_if_absent`, `compare_and_set` and `delete_if` in Python) write only while their condition holds, and say who
+won. Of racing writers, exactly one gets the new version, and the others get `null` (`None` in Python), or `false`
+(`False`) for a delete; a writer that lost can read the key again and retry. The kv-claim example uses them to hold a
+claim on a key. Its TypeScript Function, `claim`, owns the claims table, and its Python Function, `pyclaim`, writes the
+same table through a writer role (see [Access](#access)), so the two race on one table.
+
+Each write sets the key's expiry: with a `ttl`, in whole seconds, the key expires after that time, and a write without
+one leaves the key with no expiry. A claim with a `ttl` expires unless its holder renews it with `compareAndSet` and a
+new `ttl`.
 
 ### TypeScript
 
@@ -46,10 +83,6 @@ through a writer role (see [Access](#access)), so the two race on one table.
 ### Python
 
 ::include[../../../../../_repos/funcd-python/examples/kv-claim/src/main.py#claim]
-
-Each write sets the key's expiry: with a `ttl`, in whole seconds, the key expires after that time, and a write without
-one leaves the key with no expiry. A claim with a `ttl` expires unless its holder renews it with `compareAndSet` and a
-new `ttl`.
 
 ## A store applied on its own
 
@@ -85,8 +118,7 @@ declares, by `name` or by `ref`; funcd refuses a binding to any other store. The
 ## Run it locally
 
 `funcdctl dev` keeps KV data in memory; with `--persist`, it keeps KV, blob and metastore data in a local directory
-between runs. In a clone of funcd-typescript, `funcdctl dev examples/kv-counter` runs the TypeScript quick start as it
-stands: dev runs each Function from its local build, which it finds by the Function's name, in place of its `image`.
+between runs.
 
 ## Examples
 
