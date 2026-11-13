@@ -45,7 +45,7 @@ hosts that other namespaces use; [Choose the host of a Route](#choose-the-host-o
 
 Before it calls the Function, the edge removes the rule's path from the request: a request for `/api/devices` reaches
 the app as `/devices`. Since `devices-api` serves HTTP, the request's `X-Forwarded-Prefix` header holds the part that
-the edge removed, `/api`. The Route adds an address to the Function: the Function's own address,
+the edge removed, `/api`. The Route adds an address to the Function: here, the Function's own address,
 `/function/devices-api`, keeps answering.
 
 The example exists in TypeScript only, since a Function that serves HTTP runs on Node.js.
@@ -104,7 +104,7 @@ answers on one host, which its [`host`](spec.md#routespec) sets:
 
 funcd does not serve a Route whose host is the host of another namespace, or a name under it, while that namespace has
 a Route there. It never serves a Route with a rule at or under `/function` on such a host, whether the other namespace
-has a Route there or not. Either Route is not Ready, with the reason `HostReserved`.
+has a Route there or not. In both cases, the Route is not Ready, with the reason `HostReserved`.
 
 Two more rules apply to a Route of the namespace `default` that sets no host. It may not have a rule at or under
 `/function`, the path at which the edge calls Functions by name (`ReservedPath`). It is not served at all when the
@@ -141,17 +141,27 @@ The edge compares each request with the rules of every Route that answers on the
   host decides nothing else, so in the namespace `default`, a rule without a host at `/api/v2` takes a request for
   `devices.example.com/api/v2/x` from a rule of the host `devices.example.com` at `/api`.
 
+One exception holds on a host that names a namespace, `<namespace>.<server.baseDomain>`: a request for a path under
+`/function` goes to the Function of that name in that namespace, unless the rule that matches it lies under
+`/function` itself and belongs to that namespace. A rule at `/`, of that namespace or of `default`, never takes such a
+request there.
+
 A request that no rule matches, and that is not addressed to a Function's own address, gets the HTTP status 404 with
 the message `no route for "<path>"`.
 
-Two rules conflict when they answer on the same host, have the same path, a trailing slash aside, and have a method in
-common. Only one Route keeps that path: the first in this order. Routes are ordered by the name of their namespace, in
-alphabetical order; within a namespace, the Routes that a Function or a Site owns come after the others, and the
-Routes of each of these two groups are ordered by name. The order in which the Routes were applied does not count, so
-a Route applied later whose name comes first takes the path from a Route that served it. The other Route serves none
-of its rules: it is not Ready, with the reason `RouteConflict` and a message that names the Route that keeps the path,
-such as `conflicts with Route default/a-conflict on (host, path, method)`. Once the Route that keeps the path is
-deleted, the other Route serves again.
+Two rules conflict when their Routes claim the same host, the one that `status.host` shows, have the same path, a
+trailing slash aside, and have a method in common. Only one Route then keeps that path: the first in this order.
+Routes are ordered by the name of their namespace, in alphabetical order; within a namespace, the Routes that a
+Function or a Site owns come after the others, and the Routes of each of these two groups are ordered by name. The
+order in which the Routes were applied does not count, so a Route applied later whose name comes first takes the path
+from a Route that served it. The other Route serves none of its rules: it is not Ready, with the reason
+`RouteConflict` and a message that names the Route that keeps the path, such as
+`conflicts with Route default/a-conflict on (host, path, method)`. Once the Route that keeps the path is deleted, the
+other Route serves again.
+
+A Route of the namespace `default` that sets no host claims no host, so its rules conflict only with the rules of the
+other Routes of `default` that set none. Its rule and a rule of a Route with a host never conflict, even on the same
+path: the length of the path, then the host, decide which of them serves a request, as the list above says.
 
 ## Ask callers to authenticate
 
@@ -175,10 +185,15 @@ What a call to an `authenticated` rule needs depends on the server setting
   get those Functions gets 403; [Access](#access) names the roles. The Function receives the call without these two
   headers.
 
-The mode of a Route covers only the requests through its rules. A Function's own address, `/function/<name>`, follows
-the Function's [`spec.ingress.auth`](../../workloads/function/spec.md#functionspecingressauth), else the default of
-its Namespace. It stays open beside an authenticated Route unless one of the two asks for authentication, or the
-Function's [`spec.ingress.enabled`](../../workloads/function/spec.md#functionspecingress) turns that address off.
+The mode of a Route covers only the requests through its rules. A Function's own address, `/function/<name>`, has a
+mode of its own: the Function's [`spec.ingress.auth`](../../workloads/function/spec.md#functionspecingressauth), else
+the default of its Namespace, else open. A mode in `spec.ingress.auth` wins over the Namespace's default, so the mode
+`open` there keeps the address open in a namespace whose default is `authenticated`. Beside an authenticated Route,
+the address therefore stays open unless `spec.ingress.auth` asks for authentication, or sets no mode while the
+Namespace's default asks for it. The address answers only while it is on:
+[`spec.ingress.enabled`](../../workloads/function/spec.md#functionspecingress) set to `false` turns it off, and so
+does a Namespace whose `defaultExposure` is `explicit`, while `enabled` is not set. A host or a path in
+`spec.ingress` replaces the address with a Route that the Function owns.
 
 The env-echo example below exists in TypeScript only.
 
@@ -215,18 +230,30 @@ $ curl -s -X POST http://127.0.0.1:8080/function/env-echo
 {"config":"prod","secret":"s3cr3t","shared":"from-secret"}
 ```
 
-`funcdctl dev` has no authenticator, so the Route refuses every call, while the Function's own address stays open.
+`funcdctl dev` has no authenticator, so the Route refuses every call. The Function's own address stays open, since
+`env-echo` sets no `spec.ingress` and the namespace `default` sets no default mode.
 
 To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
 
 ## Allow a Function's outbound connections
 
-A Function's code opens an outbound connection when it calls a service outside funcd, such as an HTTPS API. The server
-setting [`server.network.egress`](../../running-funcd/spec.md#funcdconfigyaml) turns egress control on, which works
-only on Linux with the containerd runtime. With egress control on, funcd refuses each outbound connection of a
-Function's workers that no EgressPolicy allows: a Function that no EgressPolicy covers reaches nothing outside funcd.
-With `server.network.egress` at its default, `false`, on another system or runtime, and in `funcdctl dev`, workers
-connect to every address, and an EgressPolicy changes nothing.
+A Function's code opens an outbound connection when it calls a service outside funcd, such as an HTTPS API. Egress
+control, which works only on Linux with the containerd runtime, takes these server settings, which the funcd
+[Spec](../../running-funcd/spec.md#funcdconfigyaml) tab describes:
+
+- `server.network.egress`, set to `true`, refuses the outbound traffic of the workers by default.
+- `server.network.egressGatewayPort` is the port of the egress gateway, which receives the workers' outbound TCP
+  connections and lets through the allowed ones. It is required when `server.network.egress` is `true`.
+- `server.network.dnsForwarderPort` is the port of the DNS forwarder, which answers the workers' lookups, and
+  `server.network.dnsResolver` names the resolver that the forwarder asks. While `dnsForwarderPort` is 0, its
+  default, neither the forwarder nor the gateway runs, and nothing goes out, not even a lookup.
+
+The egress-probe example's
+[`funcdconfig.yaml`](https://github.com/pyvvo/funcd-typescript/blob/main/examples/egress-probe/funcdconfig.yaml)
+sets all four. With egress control on, funcd refuses each outbound connection of a Function's workers that nothing
+allows: a Function that no EgressPolicy covers, and that no Policy allows, as [Access](#access) explains, reaches
+nothing outside funcd. With `server.network.egress` at its default, `false`, on another system or runtime, and in
+`funcdctl dev`, workers connect to every address, and an EgressPolicy changes nothing.
 
 An EgressPolicy holds [`rules`](spec.md#egresspolicyspec). Each rule allows outbound TCP connections to the
 destinations of its [`to`](spec.md#egresspolicyspecrules), on its [`ports`](spec.md#egresspolicyspecrules), or on
@@ -238,7 +265,7 @@ every port when it lists none:
 
 The policy's [`appliesTo`](spec.md#egresspolicyspec) names the Functions of the namespace that its rules apply to;
 without `appliesTo`, they apply to every Function of the namespace. The rules of every EgressPolicy of a namespace add
-up: a connection is allowed when one rule of one of them allows it.
+up: a connection is allowed when one rule of one of them allows it, unless a Policy forbids it.
 
 With egress control on, a worker looks names up through funcd's DNS forwarder, which answers only the names that a
 domain rule applying to the Function allows. It refuses the other names, which most libraries report as a temporary
@@ -252,44 +279,54 @@ returned, until that answer expires. Two consequences follow:
 
 A refused connection opens, then ends once funcd has decided: on the ports 80 and 8080, it gets an HTTP answer with
 the status 403 and the message `egress denied by funcd EgressPolicy`, and on any other port, it is closed. funcd writes
-each decision to its own log, not to the Function's logs: a line `egress decision` with the namespace, the Function,
-the domain, the address, the port, `allowed` and the reason, and for a refused lookup a line `egress lookup refused`,
-at most one per worker every 10 seconds.
+each decision to its own log, not to the Function's logs, as a record whose message is `egress decision`, with the
+namespace, the Function, the domain, the address, the port, `allowed` and the reason. A refused lookup gives a record
+`egress lookup refused`, at most one per worker every 10 seconds. The server's
+[`log.format`](../../running-funcd/spec.md#funcdconfigyaml) sets how a record reads: with the default, `json`, a
+refused connection's record holds `"allowed":false`, and with `text`, `allowed=false`.
 
 The egress-probe example below exists in TypeScript only.
 
 ### TypeScript
 
-The egress-probe example's test runs on a funcd server with egress control on, and applies two EgressPolicies one
-after the other. The example's Function `egress-probe`, in
+The egress-probe example shows both kinds of rule. Its Function `egress-probe`, in
 [`function.yaml`](https://github.com/pyvvo/funcd-typescript/blob/main/examples/egress-probe/function.yaml), declares
 nothing about outbound connections. Its handler, in
 [`src/main.ts`](https://github.com/pyvvo/funcd-typescript/blob/main/examples/egress-probe/src/main.ts), calls `fetch`
-with the URL of each call and returns `ok`, which is `true` when the request completed. With no EgressPolicy, a call
-for `https://example.com` returns `"ok":false`.
+with the `url` of the call's input, such as `{"url":"https://www.example.com"}`, and returns `ok`, which is `true`
+when the request completed. The results below hold on a platform with egress control on. While no EgressPolicy
+applies to the Function, a call for `https://example.com` returns `"ok":false`.
 
 The first EgressPolicy, in `examples/egress-probe/fixtures/egresspolicy-wildcard.yaml`, allows HTTPS, on the port 443,
 to every name under `example.com`, for every Function of the namespace:
 
 ::include[../../../../../_repos/funcd-typescript/examples/egress-probe/fixtures/egresspolicy-wildcard.yaml]
 
-With it, a call for `https://www.example.com` returns `"ok":true`, and the worker's lookup of `www.example.org` is
-refused. The second, in `examples/egress-probe/fixtures/egresspolicy-cidr.yaml`, allows the port 443 at the address
+Once `funcdctl apply -f examples/egress-probe/fixtures/egresspolicy-wildcard.yaml` has applied it on such a platform,
+a call for `https://www.example.com` returns `"ok":true`, and the worker's lookup of `www.example.org` is refused. The
+second EgressPolicy, in `examples/egress-probe/fixtures/egresspolicy-cidr.yaml`, allows the port 443 at the address
 `1.1.1.1`:
 
 ::include[../../../../../_repos/funcd-typescript/examples/egress-probe/fixtures/egresspolicy-cidr.yaml]
 
-With both, a call for a URL at `https://1.1.1.1` returns `"ok":true`, since the URL names the address and needs no
-lookup, and a call for `https://1.0.0.1`, an address that no rule holds, returns `"ok":false`. Each refused
-connection leaves a line `egress decision` with `allowed=false` in funcd's log. Under `funcdctl dev`, which controls
-no outbound connection, each of these calls returns `"ok":true` when the local computer can reach the address, with
-or without the EgressPolicies.
+With both applied, a call for a URL at `https://1.1.1.1` returns `"ok":true`, since the URL names the address and
+needs no lookup, and a call for `https://1.0.0.1`, an address that no rule holds, returns `"ok":false`. Each refused
+connection leaves an `egress decision` record whose `allowed` is false in funcd's log. Under `funcdctl dev`, which
+controls no outbound connection, each of these calls returns `"ok":true` when the local computer can reach the
+address, with or without the EgressPolicies.
 
 ## Access
 
-A call through the edge and an outbound connection are checked by two different authorizers, as the
+A Function's outbound connections and the calls through the edge are checked by two different authorizers, as the
 [Security](../../../platform/security-and-networking/security.md) page explains.
 
+- **The outbound connections of a Function.** A Function gets no outbound connection by itself: nothing in its spec,
+  no binding and no ownership allows one, and funcd supplies no built-in policy for them. With egress control on,
+  funcd asks Cedar about each connection, for the action `egress::connect`. A connection needs a `permit` of that
+  action: funcd turns each EgressPolicy rule that applies to the Function into one, and a
+  [Policy](../security/spec.md#policy) of the namespace can hold one too. The lookup of a name still needs an
+  EgressPolicy domain rule, since the DNS forwarder reads only those. A `forbid` statement in a Policy overrides every
+  `permit`, so it stops a connection that an EgressPolicy allows, but not the lookup of the name.
 - **The callers of an authenticated rule.** With `server.auth.edge` set to `true`, the caller's token must belong to
   one of the server's credentials, which `auth.token` and
   [`auth.credentials`](../../running-funcd/spec.md#funcdconfigyaml) set, and the credential's role decides: `admin`,
@@ -297,20 +334,17 @@ A call through the edge and an outbound connection are checked by two different 
   every namespace, so `viewer`, which only reads, is the smallest role that lets a caller through. A caller whose
   credential does not act in the rule's namespace gets 403, with a message such as
   `not authorized to invoke default/env-echo: viewer not scoped to namespace "default"`.
-- **The outbound connections of a Function.** Nothing in a Function's spec, and no binding, allows an outbound
-  connection: only an EgressPolicy rule that applies to the Function does. funcd turns the namespace's EgressPolicies
-  into Cedar policies that permit the action `egress::connect`, and asks Cedar about each connection. A
-  [Policy](../security/spec.md#policy) of the namespace can forbid a connection that an EgressPolicy allows, because a
-  `forbid` statement overrides every `permit`. Such a Policy stops the connection only: the lookup of the name still
-  follows the EgressPolicies.
 
 ## Limits and quotas
 
 - An EgressPolicy holds 1 to 64 rules. Each rule names at most 64 domains and CIDRs together, and at most 32 ports,
   each from 1 to 65535. `funcdctl apply` refuses a policy beyond these limits.
-- The limits of the edge apply to every call through a Route:
-  [`server.limits`](../../running-funcd/spec.md#funcdconfigyaml) sets a request rate, a cap on the calls in flight
-  and a cap on the size of a request's body, each off by default, and the Function page lists the
+- A call to a Function through the edge, through a Route or at the Function's own address, holds a body of at most
+  1 MiB, a cap that no setting changes: a larger body gets the HTTP status 413 with the message
+  `request body exceeds 1048576 bytes`.
+- [`server.limits`](../../running-funcd/spec.md#funcdconfigyaml) sets the other limits of the edge, which apply to
+  every call through a Route: a request rate, a cap on the calls in flight and a cap of its own on the size of a
+  request's body, each off by default. The Function page lists the
   [limits of a call to a Function](../../workloads/function/index.md#limits-and-quotas).
 
 This page's [Spec](spec.md) tab gives the range of each field.
@@ -338,7 +372,7 @@ so one rule at fault keeps the whole Route off. The condition `Ready` explains t
 host, and while a backend is missing.
 
 An EgressPolicy has no status. `funcdctl get egresspolicy -n <namespace>` lists the EgressPolicies of a namespace, and
-the lines `egress decision` in funcd's log show what they allow.
+the `egress decision` records in funcd's log show what they allow.
 
 ## Changes and deletion
 
@@ -346,9 +380,10 @@ the lines `egress decision` in funcd's log show what they allow.
   `metadata.generation` as its `observedGeneration`.
 - Deleting a Route removes its rules from the edge at once: a request on its paths then gets 404, unless another rule
   matches it. A Route that lost a conflict to the deleted Route serves again.
-- Deleting a Function does not delete the Routes that call it. funcd checks a Route whose backend exists every
-  `controller.routeResyncInterval`, 10 seconds by default, so within that time the Route reports `BackendNotFound` and
-  serves none of its rules. It serves again once a Function of that name exists.
+- Deleting a Function also deletes the Route that funcd wrote for its `spec.ingress`, but not the other Routes that
+  call the Function. funcd checks those Routes every `controller.routeResyncInterval`, 10 seconds by default, so
+  within that time each of them reports `BackendNotFound` and serves none of its rules. Each serves again once a
+  Function of that name exists.
 - A change to an EgressPolicy, or its deletion, applies to the next connection and the next lookup of the namespace's
   workers, with no restart.
 
@@ -372,7 +407,7 @@ A caller of a Route meets these HTTP statuses, each with a message in the body, 
 
 On a server with egress control on, a worker's outbound connection meets these refusals:
 
-- A connection that no rule allows gets, on the ports 80 and 8080, an HTTP answer with the status 403 and the message
+- A connection that nothing allows gets, on the ports 80 and 8080, an HTTP answer with the status 403 and the message
   `egress denied by funcd EgressPolicy`; on any other port, it is closed.
 - A lookup of a name that no domain rule allows is refused, which most libraries report as a temporary
   name-resolution error.
@@ -401,10 +436,12 @@ such as:
   address. It applies an EgressPolicy, which `funcdctl get egresspolicy` lists, but the policy changes nothing, and
   its banner ends with a warning that begins `⚠ egress is NOT isolated in dev`.
 
-`funcdctl dev` keeps its state in memory, where it is lost when `funcdctl dev` stops. With the `--persist` flag, it
-keeps its state between runs in `.funcd-dev`, a folder that it creates in the current folder, or in the folder that
-`--persist-to` names: the metastore, which holds the Routes, the EgressPolicies and the other objects that it applied,
-the data of its services, and the copies of the builds that it runs. To start again from nothing, delete that folder
+`funcdctl dev` keeps its data in memory, where it is lost when `funcdctl dev` stops. It keeps only a record of the
+processes that it starts, so that it can stop them after a crash, in `funcd/dev/<id>/process` under the user's cache
+folder, `<id>` naming the project folder. With the `--persist` flag, it keeps its state between runs in `.funcd-dev`, a
+folder that it creates in the current folder, or in the folder that `--persist-to` names: the metastore, which holds
+the Routes, the EgressPolicies and the other objects that it applied, the data of its services, and the copies of the
+builds that it runs. To start again from nothing, delete that folder
 after `funcdctl dev` stops. The [reference of `funcdctl dev`](../../tools/funcdctl/spec.md#funcdctl-dev) lists its
 flags.
 
@@ -415,4 +452,4 @@ flags.
 - [env-echo in TypeScript](https://github.com/pyvvo/funcd-typescript/tree/main/examples/env-echo): an open Route and a
   Route that asks its callers to authenticate, in front of the same Function.
 - [egress-probe in TypeScript](https://github.com/pyvvo/funcd-typescript/tree/main/examples/egress-probe): a Function
-  that reports whether an outbound connection succeeds, and the two EgressPolicies that its test applies.
+  that reports whether an outbound connection succeeds, and two EgressPolicies in its `fixtures` folder.
