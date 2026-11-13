@@ -4,7 +4,7 @@ title: "Function, Revision and Invocation spec"
 description: "Every field of Function, Revision and Invocation: its type, its limits and its description."
 ---
 
-The spec and the status of each kind of this feature, as funcd's API schema states them. The [Platform page](../../../platform/workloads/function.md) explains the concept, and the `metadata` of every kind is [the same](../../common-definitions.md#objectmeta).
+This page lists the spec and status fields of Function, Revision and Invocation, each with its type, its limits and its description. The [Platform page](../../../platform/workloads/function.md) explains the concept, and the `metadata` of every kind is [the same](../../common-definitions.md#objectmeta).
 
 ## Function
 
@@ -43,7 +43,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `blob` | array of [`Function.spec.bindings.blob[]`](#functionspecbindingsblob) | The Bucket prefixes the code reaches through ctx.blob, and over S3 while the S3 gateway is on, each under its alias. The binding grants reads; only the prefix's owner and the writers that a RolesAssignment names may write. A Bucket or prefix that does not exist yet holds the Function in Pending with BucketNotFound. |
-| `config` | array of string values, each a DNS-1123 label | ConfigMaps whose keys each worker gets as environment variables when it starts, a later ConfigMap's value winning for a key that both hold. A key that starts with FUNCD_, or that a bound Secret holds, is left out; and while the S3 gateway is on, a Function that binds a Bucket gets the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY that funcd issues it, in place of a ConfigMap's. A missing ConfigMap holds the Function Failed with ConfigResolveFailed. |
+| `config` | array of string values, each a DNS-1123 label | ConfigMaps whose keys each worker gets as environment variables when it starts, a later ConfigMap's value winning for a key that both hold. A key that starts with FUNCD\_, or that a bound Secret holds, is left out; and while the S3 gateway is on, a Function that binds a Bucket gets the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY that funcd issues it, in place of a ConfigMap's. A missing ConfigMap holds the Function Failed with ConfigResolveFailed. |
 | `kv` | array of [`Function.spec.bindings.kv[]`](#functionspecbindingskv) | The KV tables the code reaches through ctx.kv, each under its alias. The binding grants reads; only the table's owner and the writers that a RolesAssignment names may write. A store or table that does not exist yet holds the Function in Pending with KVStoreNotFound. |
 | `lake` | array of [`Function.spec.bindings.lake[]`](#functionspecbindingslake) | The Lakes the code queries, each under its alias. The Function waits in Pending with LakeNotReady until every bound Lake is Ready. |
 | `links` | array of [`Function.spec.bindings.links[]`](#functionspecbindingslinks) | The Functions the code calls, each under its alias: through ctx.invoke one whose protocol is cloudevent, through ctx.fetch one whose protocol is http. Each target must exist in the namespace when this Function is applied, the namespace's links form no cycle, and a Function that a link targets cannot be deleted until the link goes. |
@@ -70,7 +70,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `alias` | string, required, a DNS-1123 label | The binding's name, unique in the list. Each worker reads the Lake's address and its token from FUNCD_LAKE_&lt;ALIAS&gt;_URL and FUNCD_LAKE_&lt;ALIAS&gt;_TOKEN, the alias upper-cased. |
+| `alias` | string, required, a DNS-1123 label | The binding's name, unique in the list. Each worker reads the Lake's address and its token from FUNCD_LAKE\_&lt;ALIAS&gt;\_URL and FUNCD_LAKE\_&lt;ALIAS&gt;\_TOKEN, the alias upper-cased. |
 | `lake` | string, required, a DNS-1123 label | The Lake to query, in the same namespace. |
 
 ### `Function.spec.bindings.links[]`
@@ -132,7 +132,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `data` | map of string to string | Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each value must be UTF-8 text with no NUL byte: a Function or a Lake that binds a ConfigMap holding another value does not start. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds; and while the S3 gateway is on, a Function that binds a Bucket gets the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY that funcd issues it, in place of the ConfigMap's. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through. |
+| `data` | map of string to string | Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and \_, not starting with a digit. Each value must be UTF-8 text with no NUL byte: a Function or a Lake that binds a ConfigMap holding another value does not start. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD\_ or that a bound Secret also holds; and while the S3 gateway is on, a Function that binds a Bucket gets the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY that funcd issues it, in place of the ConfigMap's. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through. |
 | `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as &lt;name&gt;-&lt;hash of data&gt;, and the config of each part that names it is set to that stored name. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 
@@ -196,7 +196,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `blob` | array of [`Function.spec.bindings.blob[]`](#functionspecbindingsblob), required | The Bucket prefixes the engine may read, each under an alias. It writes only a prefix whose owner is this Lake, and the Lake's location must be one of them. |
-| `config` | array of string values, each a DNS-1123 label | ConfigMaps whose data the engine gets as environment variables. Only QUACK_TOKEN and the DUCKDB_ keys pass, DUCKDB_EXTENSION_DIRECTORY excepted, and a bound Secret's value wins over a ConfigMap's for the same key. A missing ConfigMap holds the Lake in Pending, with the reason BindingResolveFailed. |
+| `config` | array of string values, each a DNS-1123 label | ConfigMaps whose data the engine gets as environment variables. Only QUACK_TOKEN and the DUCKDB\_ keys pass, DUCKDB_EXTENSION_DIRECTORY excepted, and a bound Secret's value wins over a ConfigMap's for the same key. A missing ConfigMap holds the Lake in Pending, with the reason BindingResolveFailed. |
 | `secret` | array of string values, each a DNS-1123 label | Secrets whose data the engine gets as environment variables, such as its QUACK_TOKEN; the same keys pass as for config. funcd asks Cedar, as the Lake, for secret::read on each: a forbidden Secret holds the Lake in Pending, with the reason BindingResolveFailed, as does a missing one in a lake that another resource declares. A changed value replaces the engine. |
 
 ### `Function.spec.lakes[].buckets[]`
@@ -213,7 +213,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `data` | map of string to string | Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each value must be UTF-8 text with no NUL byte: a Function or a Lake that binds a ConfigMap holding another value does not start. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds; and while the S3 gateway is on, a Function that binds a Bucket gets the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY that funcd issues it, in place of the ConfigMap's. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through. |
+| `data` | map of string to string | Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and \_, not starting with a digit. Each value must be UTF-8 text with no NUL byte: a Function or a Lake that binds a ConfigMap holding another value does not start. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD\_ or that a bound Secret also holds; and while the S3 gateway is on, a Function that binds a Bucket gets the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY that funcd issues it, in place of the ConfigMap's. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through. |
 | `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as &lt;name&gt;-&lt;hash of data&gt;, and the config of each part that names it is set to that stored name. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 
@@ -277,7 +277,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `deletion` | string, one of `retain`, `delete` | Only for a local volume declared by name: retain, the default, keeps the volume and its files with no owner when the Function drops it or is deleted, so that a ref can take it again; delete removes them. |
-| `name` | string, a DNS-1123 label | The volume's name, unique in the list; set name or ref, not both. The code reads the directory's path from FUNCD_VOLUME_&lt;NAME&gt;, the name or ref upper-cased. |
+| `name` | string, a DNS-1123 label | The volume's name, unique in the list; set name or ref, not both. The code reads the directory's path from FUNCD_VOLUME\_&lt;NAME&gt;, the name or ref upper-cased. |
 | `ref` | string, a DNS-1123 label | Instead of name: a retained local volume that this Function, or an earlier Function of the same name, dropped with retain, and that the Function takes over; with no such volume, it waits in Pending with VolumeNotFound. Only a local volume takes a ref; it sets no deletion and states the retained volume's own size, since apply refuses another size. |
 | `size` | string, a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB) | The volume's size, the most its directory may hold, above zero; set size or sizeBytes, not both. Apply refuses a local volume whose size changes, or that does not fit both the capacity that volumes.capacity or volumes.capacityBytes sets and the namespace's spec.volumeBudget. |
 | `sizeBytes` | integer, at least 1 | The same size as a number of bytes. Set size or sizeBytes, not both. |

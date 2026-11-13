@@ -4,7 +4,7 @@ title: "Identity, Role, RolesAssignment and Policy spec"
 description: "Every field of Identity, Role, RolesAssignment and Policy: its type, its limits and its description."
 ---
 
-The spec and the status of each kind of this feature, as funcd's API schema states them. The [Platform page](../../../platform/security-and-networking/security.md) explains the concept, and the `metadata` of every kind is [the same](../../common-definitions.md#objectmeta).
+This page lists the spec and status fields of Identity, Role, RolesAssignment and Policy, each with its type, its limits and its description. The [Platform page](../../../platform/security-and-networking/security.md) explains the concept, and the `metadata` of every kind is [the same](../../common-definitions.md#objectmeta).
 
 ## Identity
 

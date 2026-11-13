@@ -143,3 +143,20 @@ func check(got []string) error {
 	}
 	return errors.New("keys with no description, which need a doc tag written for users: " + strings.Join(got, ", "))
 }
+
+func TestCellFitsATableCell(t *testing.T) {
+	for in, want := range map[string]string{
+		"a | b\n  c":                      `a \| b c`,
+		"x < y > z, {a}":                  "x &lt; y &gt; z, &#123;a&#125;",
+		"`get(k) <T> | null {}` then <b>": "`get(k) <T> \\| null {}` then &lt;b&gt;",
+		"``{\"columns\": [x]}`` {y}":      "``{\"columns\": [x]}`` &#123;y&#125;",
+		"``a ` b`` <c>":                   "``a ` b`` &lt;c&gt;",
+		"``a ``` b`` <c> `d`":             "``a ``` b`` &lt;c&gt; `d`",
+		"it`s <here>":                     "it`s &lt;here&gt;",
+		"digits and _, a key that starts with FUNCD_ or QUACK_TOKEN": "digits and \\_, a key that starts with FUNCD\\_ or QUACK_TOKEN",
+		"_a_ *b* ~c~ FUNCD_LAKE_<ALIAS>_URL":                         "\\_a\\_ \\*b\\* \\~c\\~ FUNCD_LAKE\\_&lt;ALIAS&gt;\\_URL",
+		"`FUNCD_ *x* ~y~` é_é":                                       "`FUNCD_ *x* ~y~` é_é",
+	} {
+		require.Equal(t, want, Cell(in), "Cell(%q)", in)
+	}
+}

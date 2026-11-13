@@ -4,7 +4,7 @@ title: "Workflow and WorkflowRun spec"
 description: "Every field of Workflow and WorkflowRun: its type, its limits and its description."
 ---
 
-The spec and the status of each kind of this feature, as funcd's API schema states them. The [Platform page](../../../platform/workloads/workflow.md) explains the concept, and the `metadata` of every kind is [the same](../../common-definitions.md#objectmeta).
+This page lists the spec and status fields of Workflow and WorkflowRun, each with its type, its limits and its description. The [Platform page](../../../platform/workloads/workflow.md) explains the concept, and the `metadata` of every kind is [the same](../../common-definitions.md#objectmeta).
 
 ## Workflow
 
@@ -74,7 +74,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `data` | map of string to string | Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each value must be UTF-8 text with no NUL byte: a Function or a Lake that binds a ConfigMap holding another value does not start. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds; and while the S3 gateway is on, a Function that binds a Bucket gets the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY that funcd issues it, in place of the ConfigMap's. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through. |
+| `data` | map of string to string | Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and \_, not starting with a digit. Each value must be UTF-8 text with no NUL byte: a Function or a Lake that binds a ConfigMap holding another value does not start. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD\_ or that a bound Secret also holds; and while the S3 gateway is on, a Function that binds a Bucket gets the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY that funcd issues it, in place of the ConfigMap's. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through. |
 | `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as &lt;name&gt;-&lt;hash of data&gt;, and the config of each part that names it is set to that stored name. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 
@@ -131,7 +131,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `blob` | array of [`Workflow.spec.lakes[].bindings.blob[]`](#workflowspeclakesbindingsblob), required | The Bucket prefixes the engine may read, each under an alias. It writes only a prefix whose owner is this Lake, and the Lake's location must be one of them. |
-| `config` | array of string values, each a DNS-1123 label | ConfigMaps whose data the engine gets as environment variables. Only QUACK_TOKEN and the DUCKDB_ keys pass, DUCKDB_EXTENSION_DIRECTORY excepted, and a bound Secret's value wins over a ConfigMap's for the same key. A missing ConfigMap holds the Lake in Pending, with the reason BindingResolveFailed. |
+| `config` | array of string values, each a DNS-1123 label | ConfigMaps whose data the engine gets as environment variables. Only QUACK_TOKEN and the DUCKDB\_ keys pass, DUCKDB_EXTENSION_DIRECTORY excepted, and a bound Secret's value wins over a ConfigMap's for the same key. A missing ConfigMap holds the Lake in Pending, with the reason BindingResolveFailed. |
 | `secret` | array of string values, each a DNS-1123 label | Secrets whose data the engine gets as environment variables, such as its QUACK_TOKEN; the same keys pass as for config. funcd asks Cedar, as the Lake, for secret::read on each: a forbidden Secret holds the Lake in Pending, with the reason BindingResolveFailed, as does a missing one in a lake that another resource declares. A changed value replaces the engine. |
 
 ### `Workflow.spec.lakes[].bindings.blob[]`
@@ -156,7 +156,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `data` | map of string to string | Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each value must be UTF-8 text with no NUL byte: a Function or a Lake that binds a ConfigMap holding another value does not start. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds; and while the S3 gateway is on, a Function that binds a Bucket gets the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY that funcd issues it, in place of the ConfigMap's. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through. |
+| `data` | map of string to string | Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and \_, not starting with a digit. Each value must be UTF-8 text with no NUL byte: a Function or a Lake that binds a ConfigMap holding another value does not start. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD\_ or that a bound Secret also holds; and while the S3 gateway is on, a Function that binds a Bucket gets the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY that funcd issues it, in place of the ConfigMap's. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through. |
 | `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as &lt;name&gt;-&lt;hash of data&gt;, and the config of each part that names it is set to that stored name. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 
@@ -260,7 +260,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `blob` | array of [`Workflow.spec.lakes[].bindings.blob[]`](#workflowspeclakesbindingsblob) | The Bucket prefixes the step's code reaches through ctx.blob, and over S3 while the S3 gateway is on, each under its alias; each Bucket must be declared at the root, in buckets. The binding grants reads; only the prefix's owner and the writers that a RolesAssignment names may write. |
-| `config` | array of string values, each a DNS-1123 label | ConfigMaps whose keys each worker of the step gets as environment variables when it starts; each must be declared at the root, in configMaps. A key that starts with FUNCD_, or that a bound Secret holds, is left out. |
+| `config` | array of string values, each a DNS-1123 label | ConfigMaps whose keys each worker of the step gets as environment variables when it starts; each must be declared at the root, in configMaps. A key that starts with FUNCD\_, or that a bound Secret holds, is left out. |
 | `kv` | array of [`Workflow.spec.steps[].function.bindings.kv[]`](#workflowspecstepsfunctionbindingskv) | The KV tables the step's code reaches through ctx.kv, each under its alias; each store must be declared at the root, in kv. The binding grants reads; only the table's owner and the writers that a RolesAssignment names may write. |
 | `lake` | array of [`Workflow.spec.steps[].function.bindings.lake[]`](#workflowspecstepsfunctionbindingslake) | The Lakes the step's code queries, each under its alias; each must be declared at the root, in lakes. The step's Function waits until every bound Lake is Ready. |
 | `secret` | array of string values, each a DNS-1123 label | Secrets whose keys the step's code reads through ctx.secret, on each read; each must be declared at the root, in secrets. No value reaches the worker's environment. |
@@ -278,7 +278,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `alias` | string, required, a DNS-1123 label | The binding's name, unique in the list. Each worker reads the Lake's address and its token from FUNCD_LAKE_&lt;ALIAS&gt;_URL and FUNCD_LAKE_&lt;ALIAS&gt;_TOKEN, the alias upper-cased. |
+| `alias` | string, required, a DNS-1123 label | The binding's name, unique in the list. Each worker reads the Lake's address and its token from FUNCD_LAKE\_&lt;ALIAS&gt;\_URL and FUNCD_LAKE\_&lt;ALIAS&gt;\_TOKEN, the alias upper-cased. |
 | `lake` | string, required, a DNS-1123 label | The Lake to query, in the same namespace. |
 
 ### `Workflow.spec.steps[].function.bindings.sql[]`

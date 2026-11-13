@@ -4,7 +4,7 @@ title: "KVStore spec and handler API"
 description: "Every field of KVStore, then the methods a handler calls on ctx.kv."
 ---
 
-The spec and the status of each kind of this feature, as funcd's API schema states them. The [Platform page](../../../platform/services/kv.md) explains the concept, and the `metadata` of every kind is [the same](../../common-definitions.md#objectmeta).
+This page lists the spec and status fields of KVStore, each with its type, its limits and its description. The [Platform page](../../../platform/services/kv.md) explains the concept, and the `metadata` of every kind is [the same](../../common-definitions.md#objectmeta).
 
 ## KVStore
 

@@ -4,7 +4,7 @@ title: "SQLDatabase spec"
 description: "Every field of SQLDatabase: its type, its limits and its description."
 ---
 
-The spec and the status of each kind of this feature, as funcd's API schema states them. The [Platform page](../../../platform/services/sql.md) explains the concept, and the `metadata` of every kind is [the same](../../common-definitions.md#objectmeta).
+This page lists the spec and status fields of SQLDatabase, each with its type, its limits and its description. The [Platform page](../../../platform/services/sql.md) explains the concept, and the `metadata` of every kind is [the same](../../common-definitions.md#objectmeta).
 
 ## SQLDatabase
 
