@@ -497,10 +497,13 @@ example-fn-to-fn:
 release:
     ./scripts/build.sh
 
-# regenerate the OpenAPI spec from Go types (via huma reflection)
+# regenerate the OpenAPI spec and the kinds' Spec pages from the Go types (via huma reflection), then the Spec
+# pages of funcd and funcdctl from the config struct and the command trees (ADR-0324)
 [group('go')]
 generate:
     go run ./internal/controlplane/cmd/specgen/ -out api/openapi/funcd.v1alpha1.yaml -guide docs/guide
+    go test ./cmd/funcd -run '^TestScenarioConfigSpecGenerated$' -count=1 -update
+    go test -tags dev ./cmd/funcdctl -run '^TestScenarioCommandSpecGenerated$' -count=1 -update
 
 # tidy go.mod and go.sum
 [group('go')]

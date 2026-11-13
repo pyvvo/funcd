@@ -27,7 +27,7 @@ func (a *cli) quarantineReturnCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "return <kvstore|bucket|volume> <namespace>/<name>[/<volume>]",
 		Short: "Return an object's quarantined data into it, once the object exists again and holds no data",
-		Long: "Return an object's quarantined data into it (ADR-0288). Apply the object again first: the return refuses " +
+		Long: "Return an object's quarantined data into it. Apply the object again first: the return refuses " +
 			"an object that is missing or whose data is not empty, and nothing returns on its own. A volume is " +
 			"<namespace>/<function>/<volume>. Without --since, the newest entry returns; a return cut short resumes " +
 			"when run again.",

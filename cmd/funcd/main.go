@@ -119,9 +119,9 @@ func newRootCmd(out io.Writer) *cobra.Command {
 		},
 	}
 	root.Flags().BoolVar(&memoryOnly, "memory", false,
-		"run fully in memory (ephemeral — no disk); default is file-backed/durable (ADR-0043)")
+		"run fully in memory (ephemeral — no disk); default is file-backed/durable")
 	root.Flags().StringVar(&configPath, "config", "",
-		"path to funcdconfig.yaml (else $FUNCD_CONFIG, ./funcdconfig.yaml, /etc/funcd/funcdconfig.yaml; ADR-0061)")
+		"path to funcdconfig.yaml (else $FUNCD_CONFIG, ./funcdconfig.yaml, /etc/funcd/funcdconfig.yaml)")
 	root.AddCommand(&cobra.Command{
 		Use:   "version",
 		Short: "Print the build identity and exit",
