@@ -1,6 +1,6 @@
 ---
 title: Secrets
-description: Values that a Function or a Lake reads, each read decided by Cedar.
+description: Values that a Function or a Lake reads and that a Function may write, each read and write decided by Cedar.
 ---
 
 ![A Function's ctx.secret call goes to its local API, which asks Cedar whether the Function may secret::read each Secret that it binds. On allow, funcd resolves the bound Secrets from the metastore, and on deny the read is refused with 403](../../assets/secrets.drawio.svg)
@@ -9,13 +9,19 @@ A Secret holds named values, its `spec.data`, in a namespace. A Function names t
 `spec.bindings.secret`, and a Workflow step and a Lake bind Secrets the same way. A Function reads the values with
 `ctx.secret.get` and `ctx.secret.list` through its local API, so they never reach the worker's environment. Each read
 asks funcd, with no cache: a changed Secret shows at the next read, without a restart. A read resolves every Secret
-that the Function binds, and when two of them hold the same key, the later Secret's value wins.
+that the Function binds, and when two of them hold the same key, the later Secret's value wins. A Function can also
+write a key of a Secret that it binds, with `ctx.secret.put`, or remove one, when it is the Secret's owner or a role
+allows it to write the Secret. The next read of each Function that binds the Secret shows the change.
 
 Each read asks Cedar whether the Function may `secret::read` each Secret that it binds. The built-in policy
-`secret-read-binding` allows a bound Secret, and no built-in role grants `secret::read`. A namespace Policy can forbid
-a Secret. Each of the Function's next reads then fails with 403, even for a key that another Secret holds, and its
-workers stop being ready within `runtime.supervisionPeriod` (10 s by default). With no ready worker, the Function is
-`Degraded` and its calls wait. Once the forbid goes, the next check makes the workers ready again.
+`secret-read-binding` allows a bound Secret. The built-in roles `Secret Data Reader` and `Secret Data Writer` also
+hold `secret::read`, but a read names only the Secrets that the Function binds, so neither role lets it read more.
+Each write asks Cedar whether the Function may `secret::write` the Secret: the built-in policy allows only the
+Secret's owner and the principals that a role such as `Secret Data Writer` names. A namespace Policy can forbid a read
+or a write of a Secret. After a forbid of reads, each of the Function's next reads fails with 403, even for a key that
+another Secret holds, and its workers stop being ready within `runtime.supervisionPeriod` (10 s by default). With no
+ready worker, the Function is `Degraded` and its calls wait. Once the forbid goes, the next check makes the workers
+ready again. A forbid of writes refuses each write with 403, and leaves the workers ready.
 
 funcd stores Secrets in the metastore. It encrypts them at rest when `secrets.encryptionKeyFile` names a key file.
 Without one, it stores them unencrypted and logs a warning at startup. People read and write Secrets through the API,

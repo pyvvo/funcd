@@ -1,16 +1,17 @@
 ---
 title: Secrets
-description: Create a Secret, declare and bind it in a Function, and read its values from the handler.
+description: Create a Secret, bind it in a Function, read its values, and write its keys from the Functions that may.
 ---
 
 ## Usage
 
 A Secret holds named values, such as an API key, that a Function reads but that stay out of its code and its
 configuration. A Function declares and binds each Secret that it reads, and its handler reads the values through
-`ctx.secret`, the Secret client in the context that every handler receives. funcd puts no value of a Secret in the
-environment of a [worker](../../../platform/workloads/index.md#runtime), where the Function's code runs. The
-[Platform page](../../../platform/services/secrets.md) explains how funcd stores and checks Secrets; this page shows
-how to use them.
+`ctx.secret`, the Secret client in the context that every handler receives. The Function that a Secret names as its
+owner, and a Function that a role allows, can also write the keys of a Secret that they bind. funcd puts no value of a
+Secret in the environment of a [worker](../../../platform/workloads/index.md#runtime), where the Function's code
+runs. The [Platform page](../../../platform/services/secrets.md) explains how funcd stores and checks Secrets; this
+page shows how to use them.
 
 The first example, env-echo, reads two keys of a Secret and returns their values. The steps below start the example
 on the local computer and call it: the response contains `"secret":"s3cr3t"`, the value of the key `API_KEY`. Then
@@ -46,7 +47,7 @@ the Function:
 - The Function **binds** the Secret under `spec.bindings.secret`. A binding can name only a Secret that `spec.secrets`
   declares, and the binding is what allows the Function to read the Secret, as [Access](#access) explains.
 
-The handler reads the values with the two methods of `ctx.secret`:
+The handler reads the values with two methods of `ctx.secret`:
 
 - `get` returns the value of one key, or `undefined` (`None` in Python) when no bound Secret holds the key or when the
   key starts with `FUNCD_`.
@@ -55,7 +56,7 @@ The handler reads the values with the two methods of `ctx.secret`:
 The declared keys are a check, not a filter: the handler can read every key of a bound Secret, except a key that
 starts with `FUNCD_`. Each call of `get` or `list` asks funcd, with no cache, so each call returns the current values.
 When two bound Secrets hold the same key, the handler reads the value of the Secret that comes later in
-`spec.bindings.secret`.
+`spec.bindings.secret`. Two other methods write keys, as [Write a key of a Secret](#write-a-key-of-a-secret) explains.
 
 The [Spec](spec.md) tab lists the fields of a Secret, and the Function's
 [Spec tab](../../workloads/function/spec.md#functionspecsecrets) lists those of `spec.secrets`. An App declares the
@@ -120,28 +121,84 @@ The response contains the new value, and no worker restarted: the terminal that 
 
 To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
 
+## Write a key of a Secret
+
+A Function writes the keys of a Secret whose `spec.owner` names it. The owner is one Function of the Secret's
+namespace, and it writes only while it binds the Secret. The Secret `oauth` of this manifest names the Function
+`refresher` as its owner:
+
+::include[../../../../../api/types/v1alpha1/examples/secrets/writers.yaml#owner]
+
+The complete file,
+[api/types/v1alpha1/examples/secrets/writers.yaml](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/secrets/writers.yaml),
+also holds `refresher` and a second Function, `api`, which both declare and bind `oauth` as `env-echo` declares and
+binds `app-secret` in the first example.
+
+The owner's handler writes with two methods of `ctx.secret`. The first argument of each names a Secret of the
+Function's `spec.bindings.secret`, and neither method returns a value:
+
+- `put(binding, key, value)` sets the key to the value, a string.
+- `del(binding, key)` in TypeScript, and `delete(binding, key)` in Python, removes the key. Removing a key that the
+  Secret does not hold is no error.
+
+When funcd refuses a write, the method throws an error, or raises a `RuntimeError` in Python, as [Errors](#errors)
+lists. The [Spec](spec.md#handler-api) tab's Handler API gives the signature of each method in both languages. No
+runnable example writes a Secret yet.
+
+The next read of each Function that binds the Secret returns the change, with no restart, unless a Secret that comes
+later in that Function's `spec.bindings.secret` holds the same key. A write changes keys only: it never creates or
+deletes the Secret itself. funcd checks a written key as it checks the keys of an applied Secret, and a written value
+as a read does: the key must be an environment variable name, and the value must be UTF-8 text without a NUL byte. A
+key that starts with `FUNCD_` is stored, but no read returns it.
+
+## Let another Function write a Secret
+
+A Secret has at most one owner. To let another Function write it too, grant that Function the built-in role
+`Secret Data Writer` with a RolesAssignment. Its scope names one Secret, with the kind `Secret` and the Secret's name,
+or the whole namespace, with the kind `Namespace`. This RolesAssignment lets `api` write `oauth`:
+
+::include[../../../../../api/types/v1alpha1/examples/secrets/writers.yaml#rolesassignment]
+
+Like the owner, `api` writes only a Secret that it binds, with the same methods. The built-in role
+`Secret Data Reader` allows no write, and it lets a Function read nothing more than its bindings do: `ctx.secret` reads
+only the Secrets that the Function binds, and each binding already allows the read. Both roles act only for a
+Function, because funcd reads and writes a Secret for no Identity. The Security page explains how to
+[choose a role](../../security-and-networking/security/index.md#choose-a-role).
+
 ## Access
 
-A Function needs no role assignment to read the Secrets that it binds. Each entry of `spec.bindings.secret` lets the
-Function read that Secret through `ctx.secret`. At each read, funcd asks Cedar whether the Function may perform the
-action `secret::read` on each Secret that it binds. The
+A Function needs no role assignment to:
+
+- **Read the Secrets it binds.** Each entry of `spec.bindings.secret` lets the Function read that Secret through
+  `ctx.secret`. At each read, funcd asks Cedar whether the Function may perform the action `secret::read` on each
+  Secret that it binds.
+- **Write the Secret it owns.** The Function that `spec.owner` names can write the Secret's keys while it binds the
+  Secret. At each write, funcd asks Cedar whether the Function may perform the action `secret::write` on that Secret.
+
+Any other write needs a role. The smallest built-in role that allows writing is `Secret Data Writer`, which
+[Let another Function write a Secret](#let-another-function-write-a-secret) grants. The built-in roles `Reader`,
+`Contributor` and `Owner` include no Secret action. The
 [Security](../../../platform/security-and-networking/security.md) page explains where funcd asks Cedar.
 
-No role lets a Function read more: `ctx.secret` never reads a Secret that the Function does not bind, and no built-in
-role includes `secret::read`. `ctx.secret` only reads, and never changes a Secret.
-
-funcd supplies the binding rule as a built-in policy, which it applies in every namespace, so nothing needs to be
-written or installed. In Cedar, the built-in policy reads:
+funcd supplies these rules as a built-in policy, which it applies in every namespace, so nothing needs to be written
+or installed. In Cedar, the built-in policy reads:
 
 ```cedar title="Built-in Secrets policy"
 @id("secret-read-binding")
 permit(principal, action == Action::"secret::read", resource)
   when { principal has secretBindings && principal.secretBindings.contains(resource) };
+
+@id("secret-write-base")
+permit(principal, action == Action::"secret::write", resource);
+
+@id("secret-single-writer")
+forbid(principal, action == Action::"secret::write", resource)
+  unless { resource has writers && resource.writers.contains(principal) };
 ```
 
-A [Policy](../../security-and-networking/security/spec.md#policy) of the namespace can deny a read that a binding
-allows, because a `forbid` statement overrides every `permit`. This Policy forbids the Function `env-echo` to read the
-Secret `app-secret`:
+A [Policy](../../security-and-networking/security/index.md#write-a-policy) of the namespace can deny a read or a
+write that these rules allow, because a `forbid` statement overrides every `permit`. This Policy forbids the Function
+`env-echo` to read the Secret `app-secret`:
 
 ::include[../../../../../api/types/v1alpha1/examples/secrets/forbid-read.yaml#policy]
 
@@ -157,19 +214,23 @@ While the Policy exists:
 Once the Policy is deleted, the next read succeeds, and the workers are ready again within
 `runtime.supervisionPeriod`, with no change to the Function.
 
-A Function binds only Secrets of its own namespace, and a Policy decides only the reads of its own namespace's
-Functions and Secrets.
+A `forbid` of the action `secret::write` denies writes in the same way, those of the owner included: each write fails
+with the HTTP status 403 and names the Policy. It does not change the Function's readiness, which checks only reads.
+
+A Function binds only Secrets of its own namespace, and a RolesAssignment or a Policy decides only the reads and the
+writes of its own namespace's Functions and Secrets.
 
 People read and write Secrets through funcd's API, where the role of the caller's credential decides, not Cedar: an
 admin, or a developer of the Secret's namespace, can read and write Secrets, and a viewer can never read one. A Policy
-does not change these reads. The funcd [Spec](../../running-funcd/spec.md#funcdconfigyaml) tab describes the roles
-under `auth.credentials`.
+does not change these reads and writes. The funcd [Spec](../../running-funcd/spec.md#funcdconfigyaml) tab describes
+the roles under `auth.credentials`.
 
 ## Data storage
 
 funcd stores each Secret in its metastore, the store that holds every object of the API. With `storage.mode: file`,
 the default, the metastore is on disk, in the `store` folder of `storage.dataDir` unless `storage.metastoreDir` names
 another folder, and the Secrets survive a restart. With `storage.mode: memory`, the Secrets are lost when funcd stops.
+A key that a Function writes is stored in the same Secret, in the same way.
 
 By default, the metastore holds the Secrets unencrypted, and with `storage.mode: file`, funcd logs a warning at start.
 To encrypt them, set `secrets.encryptionKeyFile` to a file that holds a key of exactly 32 bytes: funcd then encrypts
@@ -188,8 +249,8 @@ one of these reasons:
 - `SecretResolveFailed`: a bound Secret holds a value that is not UTF-8 text, or that contains a NUL byte. Binary data
   therefore takes two base64 encodings in a manifest: the first turns it into text, and the second is the encoding
   that every value of `spec.data` has. The handler reads the text of the first encoding, and decodes it once. A value
-  that `funcdctl dev` takes from the shell or from an envFile, as [Run it locally](#run-it-locally) explains, is
-  stored as it is, so there binary data is encoded once.
+  that a Function writes, or that `funcdctl dev` takes from the shell or from an envFile, as
+  [Run it locally](#run-it-locally) explains, is stored as it is, so binary data in it is encoded once.
 - `DependencyNotReady`: a Policy forbids a read, as [Access](#access) explains. The message names the binding, such as
   `secret binding "app-secret": …`.
 
@@ -210,9 +271,12 @@ A forbid shows on the `Ready` condition: a Function that has served becomes `Deg
 
 ## Changes and deletion
 
-- The Function's next read returns a changed value, with no restart, as the first example shows. A Lake is the
-  exception: its engine reads its Secrets only when it starts, so a changed value replaces the engine, as the Lake's
+- The Function's next read returns a changed value, with no restart, whether a person or a Function changed it, as the
+  first example shows, unless a Secret that comes later in its `spec.bindings.secret` holds the same key. A Lake reads
+  differently: its engine reads its Secrets only when it starts, so a changed value replaces the engine, as the Lake's
   [Spec](../lake/spec.md#lakespecbindings) tab says.
+- A person's apply of a Secret replaces its data, so a key that a Function wrote is gone after the apply unless the
+  applied manifest holds it.
 - When a bound Secret loses a key, `get` returns `undefined` (`None` in Python) for that key, and `list` leaves it
   out. The other keys read as before. When `spec.secrets` declares the lost key, funcd starts no new worker for the
   Function until the key is back.
@@ -221,6 +285,9 @@ A forbid shows on the `Ready` condition: a Function that has served becomes `Deg
   `list` throws an error (raises one in Python) with the HTTP status 404. env-echo then returns empty strings. funcd
   starts no new worker for the Function until the Secret exists again with every declared key.
 - In both cases, a worker that serves goes on serving, and the Function stays `Ready`, as [Status](#status) explains.
+- When a person names as a Secret's owner a Function that binds the Secret and shares its workers with other
+  Functions, through [`spec.pooling`](../../workloads/function/spec.md#functionspecpooling), funcd moves the Function to
+  other workers: an owner never shares a worker with a Function that does not own the same Secrets.
 - Deleting a Function, a Workflow or an App never deletes a Secret that it declares or binds.
 
 ## Errors
@@ -235,6 +302,18 @@ A forbid shows on the `Ready` condition: a Function that has served becomes `Deg
   message holds the status 403 and the rule, such as `context.secret.get failed: 403 …` and
   `cedar: forbidden by policy default/forbid-app-secret#0`. A handler that does not catch the error, such as
   env-echo's, makes the call fail with the HTTP status 500.
+- A write that funcd refuses throws an error, or raises a `RuntimeError` in Python, whose message, such as
+  `context.secret.put failed: 403 …`, holds one of these HTTP statuses:
+  - 403: the first argument names a Secret that the Function does not bind, such as
+    `function "refresher" in "default" does not bind Secret "app-secret"`; or the Function is neither the owner nor a
+    writer that a role names, `cedar: forbidden by policy builtin/secret-single-writer`; or a Policy forbids the
+    write.
+  - 404: the bound Secret does not exist.
+  - 400: the key is not an environment variable name, or the value is not UTF-8 text or contains a NUL byte. Nothing
+    is written.
+  - 413: the request is over 1 MiB, the value with the JSON that carries it.
+  - 409: other writes changed the Secret during each of 5 attempts. Nothing is written, and the call can be made
+    again.
 
 ## Run it locally
 
@@ -267,6 +346,10 @@ $ curl -s -X POST http://127.0.0.1:8080/function/env-echo
 
 The worker does not get these values in its environment either: it inherits only a few variables of the shell, such
 as `PATH` and `HOME`. After the example stops, `git checkout examples/env-echo/secret.yaml` brings the file back.
+
+Writes work under `funcdctl dev` as on a platform: the owner and the writers that a RolesAssignment names write, and
+`funcdctl dev` grants no Secret role of its own. When it applies the folder again after a saved file, it applies each
+Secret of the folder again too, which replaces the keys that a Function wrote.
 
 ## Examples
 

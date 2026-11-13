@@ -216,8 +216,9 @@ A Workflow declares the stores that its steps use at the root of its spec:
   [`spec.sql`](spec.md#workflowspecsql) and [`spec.lakes`](spec.md#workflowspeclakes) declare KV stores, Buckets, SQL
   databases and Lakes. [`spec.configMaps`](spec.md#workflowspecconfigmaps) and
   [`spec.secrets`](spec.md#workflowspecsecrets) declare the settings and the Secrets that the steps read.
-- An entry with a `name` defines a store, and the store's owner, such as the `owner` of a KV table or of a SQL
-  database, names a step: the Function that funcd creates for that step is the owner, which can write the store. An
+- An entry with a `name` defines a store. Its owner, such as the `owner` of a KV table or of a SQL database, names a
+  step, and the Function that funcd creates for that step is the owner, which can write the store; a SQL database's
+  owner can also name a Lake that the Workflow declares. An
   entry with `ref` declares an existing store instead. A declaration gives no access by itself: a step reaches a
   store only through its own bindings.
 - Each step binds what its code uses under

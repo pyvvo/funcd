@@ -5,3 +5,13 @@
 @id("secret-read-binding")
 permit(principal, action == Action::"secret::read", resource)
   when { principal has secretBindings && principal.secretBindings.contains(resource) };
+
+// write: single-writer, the KV and SQL pair (ADR-0327). The base permit lets any principal write; the forbid overrides
+// it unless the principal is in the Secret's `writers` set, its owner plus writer-role grants. A Secret with neither, or
+// a missing one, has no `writers` attr, so the forbid always fires.
+@id("secret-write-base")
+permit(principal, action == Action::"secret::write", resource);
+
+@id("secret-single-writer")
+forbid(principal, action == Action::"secret::write", resource)
+  unless { resource has writers && resource.writers.contains(principal) };

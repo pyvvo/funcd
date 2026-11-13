@@ -44,6 +44,9 @@ func (writerList) BlobWriters(context.Context, v1.NamespaceName, string, string)
 func (writerList) KVWriters(context.Context, v1.NamespaceName, string, string) []cedartypes.EntityUID {
 	return nil
 }
+func (writerList) SecretWriters(context.Context, v1.NamespaceName, string) []cedartypes.EntityUID {
+	return nil
+}
 func (w writerList) SQLWriters(_ context.Context, ns v1.NamespaceName, db string) []cedartypes.EntityUID {
 	if db != "todo-db" {
 		return nil
