@@ -69,33 +69,27 @@ func (l *Lister) KVWriters(ctx context.Context, ns v1.NamespaceName, kvStore, ta
 // SQLWriters returns the principals whose grant covering the SQL database holds sql::write (ADR-0233): a role
 // writing only KV or blob, such as Contributor, makes no database writer.
 func (l *Lister) SQLWriters(ctx context.Context, ns v1.NamespaceName, database string) []cedartypes.EntityUID {
-	return l.writers(ctx, ns, func(g cedar.WriterGrant) bool {
-		if !slices.Contains(g.Writes, string(auth.ActionSQLWrite)) {
-			return false
-		}
-		switch sc := g.Scope; sc.Kind {
-		case v1.ScopeKindNamespace:
-			return true
-		case v1.ScopeKindSQLDatabase:
-			return sc.Name == database
-		default:
-			return false
-		}
-	})
+	return l.writersOf(ctx, ns, auth.ActionSQLWrite, v1.ScopeKindSQLDatabase, database)
 }
 
 // SecretWriters returns the principals whose grant covering the Secret holds secret::write (ADR-0327): a role writing
 // only KV, blob or SQL, such as Contributor, makes no Secret writer.
 func (l *Lister) SecretWriters(ctx context.Context, ns v1.NamespaceName, secret string) []cedartypes.EntityUID {
+	return l.writersOf(ctx, ns, auth.ActionSecretWrite, v1.ScopeKindSecret, secret)
+}
+
+// writersOf returns the principals whose grant holds write on the namespace, or on the one resource of scope kind
+// named name.
+func (l *Lister) writersOf(ctx context.Context, ns v1.NamespaceName, write auth.Action, kind v1.ScopeKind, name string) []cedartypes.EntityUID {
 	return l.writers(ctx, ns, func(g cedar.WriterGrant) bool {
-		if !slices.Contains(g.Writes, string(auth.ActionSecretWrite)) {
+		if !slices.Contains(g.Writes, string(write)) {
 			return false
 		}
 		switch sc := g.Scope; sc.Kind {
 		case v1.ScopeKindNamespace:
 			return true
-		case v1.ScopeKindSecret:
-			return sc.Name == secret
+		case kind:
+			return sc.Name == name
 		default:
 			return false
 		}

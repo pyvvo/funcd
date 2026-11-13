@@ -203,9 +203,7 @@ func TestScenarioSecretApplyReplacesWrittenKeys(t *testing.T) {
 func TestScenarioSecretOwnerSplitsThePool(t *testing.T) {
 	t.Parallel()
 	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node not on PATH")
-	}
+	require.NoError(t, err)
 	r, _ := newPolicyRig(t, WithPoolShim(node, langmod.PoolShim(t)))
 	r.applyOAuth(t, "", map[string][]byte{"STAY": []byte("s")})
 	r.writerFn(t, "refresher", true)
