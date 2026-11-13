@@ -38,8 +38,8 @@ the table is lost when it stops; [Run it locally](#run-it-locally) explains how 
 The example's folder holds four resource files, which `funcdctl dev` applies:
 
 - `secret.yaml` defines the Secret `lake-quack-token`. Its key `QUACK_TOKEN` holds the token that the Lake's engine
-  accepts. The Lake's gateway puts that token in place of the caller's own token once it allows the caller, so no
-  caller holds it.
+  accepts; on a platform, the engine does not start without it. The Lake's gateway puts that token in place of the
+  caller's own token once it allows the caller, so no caller holds it.
 - `configmap.yaml` defines the ConfigMap `lake-engine-config`, which sets the engine's memory limit and its number of
   threads with the keys `DUCKDB_MEMORY_LIMIT` and `DUCKDB_THREADS`. The engine of `funcdctl dev` does not apply them,
   as [Run it locally](#run-it-locally) says.
@@ -59,10 +59,11 @@ which `funcdctl dev` skips.
 
 For each Lake binding, funcd gives the Function's worker two environment variables, named after the alias:
 `FUNCD_LAKE_LAKE_URL` holds the address of the Lake's gateway, and `FUNCD_LAKE_LAKE_TOKEN` holds a token of the
-Function's own, which the gateway checks. The handler reads both variables. A Python handler receives its context as
-the argument `context`, and [`context.lake.get("lake")`](spec.md#handler-api) returns the same two values, as `url`
-and `token`. The handler then opens a DuckDB database in memory, loads DuckDB's `quack` extension, and runs the call's
-SQL on the Lake with `quack_query`, which sends the statement and the token to the gateway and returns the rows.
+Function's own, which the gateway checks. The handler reads both variables. A Python handler receives its context as its
+first argument, named `context` in the example, and [`context.lake.get("lake")`](spec.md#handler-api) returns the same
+two values, as `url` and `token`. The handler then opens a DuckDB database in memory, loads DuckDB's `quack` extension,
+and runs the call's SQL on the Lake with `quack_query`, which sends the statement and the token to the gateway and
+returns the rows.
 
 The handler needs the `duckdb` package. On a platform, the Function's bundle carries it, with the `quack` extension.
 Under `funcdctl dev`, the steps below install it in a virtual environment, and `funcdctl dev` points the handler at the
