@@ -831,7 +831,7 @@ components:
                       pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                       type: string
                     owner:
-                      description: The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step. With no owner, only those writers can write it.
+                      description: The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step or a lake that the Workflow declares. With no owner, only those writers can write it.
                       maxLength: 63
                       minLength: 1
                       pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -1236,7 +1236,7 @@ components:
                 pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                 type: string
               owner:
-                description: The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step. With no owner, only those writers can write it.
+                description: The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step or a lake that the Workflow declares. With no owner, only those writers can write it.
                 maxLength: 63
                 minLength: 1
                 pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -1266,7 +1266,7 @@ components:
             additionalProperties: false
             properties:
               buckets:
-                description: "The Buckets for the steps to bind. An entry with a name defines a bucket, each prefix owner naming a step or a declared lake; a ref entry binds an existing one. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares."
+                description: "The Buckets for the steps to bind. An entry with a name defines a bucket, each prefix owner naming a step or a declared lake; a ref entry declares an existing one. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares."
                 items:
                   additionalProperties: false
                   properties:
@@ -1303,7 +1303,7 @@ components:
                   - array
                   - "null"
               configMaps:
-                description: "The ConfigMaps for the steps to bind: an entry with a name defines one, deleted with the Workflow, and a ref entry binds an existing one. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares."
+                description: "The ConfigMaps for the steps to bind: an entry with a name defines one, deleted with the Workflow, and a ref entry declares an existing one. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares."
                 items:
                   additionalProperties: false
                   properties:
@@ -1332,7 +1332,7 @@ components:
                 $ref: "#/components/schemas/WorkflowContract"
                 description: A contract the author declares for the run input and output. funcd checks its schemas at apply, but runs are checked against the contract it derives from the steps, in status.contract, not against this one.
               kv:
-                description: "The KV stores for the steps to bind. An entry with a name defines a store, each table owner naming a step; a ref entry binds an existing one. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares."
+                description: "The KV stores for the steps to bind. An entry with a name defines a store, each table owner naming a step; a ref entry declares an existing one. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares."
                 items:
                   additionalProperties: false
                   properties:
@@ -1369,7 +1369,7 @@ components:
                   - array
                   - "null"
               lakes:
-                description: "The Lakes for the steps to bind: an entry with a name defines one, deleted with the Workflow, and a ref entry binds an existing one. A defined lake may not share a step's name, and its buckets, ConfigMaps and Secrets are declared at the Workflow's root. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares."
+                description: "The Lakes for the steps to bind: an entry with a name defines one, deleted with the Workflow, and a ref entry declares an existing one. A defined lake may not share a step's name, and its buckets, ConfigMaps and Secrets are declared at the Workflow's root. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares."
                 items:
                   additionalProperties: false
                   properties:
@@ -1542,7 +1542,7 @@ components:
                   - array
                   - "null"
               sql:
-                description: "The SQL databases for the steps to bind. An entry with a name defines a database, its owner naming a step or a declared lake; a ref entry binds an existing one. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares."
+                description: "The SQL databases for the steps to bind. An entry with a name defines a database, its owner naming a step or a declared lake; a ref entry declares an existing one. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares."
                 items:
                   additionalProperties: false
                   properties:
@@ -1559,7 +1559,7 @@ components:
                       pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                       type: string
                     owner:
-                      description: The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step. With no owner, only those writers can write it.
+                      description: The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step or a lake that the Workflow declares. With no owner, only those writers can write it.
                       maxLength: 63
                       minLength: 1
                       pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -3083,7 +3083,7 @@ components:
                 pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                 type: string
               owner:
-                description: The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step. With no owner, only those writers can write it.
+                description: The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step or a lake that the Workflow declares. With no owner, only those writers can write it.
                 maxLength: 63
                 minLength: 1
                 pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -4946,7 +4946,7 @@ components:
       additionalProperties: false
       properties:
         owner:
-          description: The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step. With no owner, only those writers can write it.
+          description: The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step or a lake that the Workflow declares. With no owner, only those writers can write it.
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -5805,7 +5805,7 @@ components:
           format: int64
           type: integer
         phase:
-          description: "Where the run is in its lifecycle: Pending until it starts. Succeeded, Failed and Cancelled are final."
+          description: "Where the run is in its lifecycle: empty before the run starts, Pending while it waits for its Workflow, a child it calls or a step's Function to be ready, Running while its steps run. Succeeded, Failed and Cancelled are final."
           enum:
             - Pending
             - Running
@@ -5839,7 +5839,7 @@ components:
       additionalProperties: false
       properties:
         buckets:
-          description: "The Buckets for the steps to bind. An entry with a name defines a bucket, each prefix owner naming a step or a declared lake; a ref entry binds an existing one. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares."
+          description: "The Buckets for the steps to bind. An entry with a name defines a bucket, each prefix owner naming a step or a declared lake; a ref entry declares an existing one. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares."
           items:
             additionalProperties: false
             properties:
@@ -5876,7 +5876,7 @@ components:
             - array
             - "null"
         configMaps:
-          description: "The ConfigMaps for the steps to bind: an entry with a name defines one, deleted with the Workflow, and a ref entry binds an existing one. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares."
+          description: "The ConfigMaps for the steps to bind: an entry with a name defines one, deleted with the Workflow, and a ref entry declares an existing one. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares."
           items:
             additionalProperties: false
             properties:
@@ -5905,7 +5905,7 @@ components:
           $ref: "#/components/schemas/WorkflowContract"
           description: A contract the author declares for the run input and output. funcd checks its schemas at apply, but runs are checked against the contract it derives from the steps, in status.contract, not against this one.
         kv:
-          description: "The KV stores for the steps to bind. An entry with a name defines a store, each table owner naming a step; a ref entry binds an existing one. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares."
+          description: "The KV stores for the steps to bind. An entry with a name defines a store, each table owner naming a step; a ref entry declares an existing one. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares."
           items:
             additionalProperties: false
             properties:
@@ -5942,7 +5942,7 @@ components:
             - array
             - "null"
         lakes:
-          description: "The Lakes for the steps to bind: an entry with a name defines one, deleted with the Workflow, and a ref entry binds an existing one. A defined lake may not share a step's name, and its buckets, ConfigMaps and Secrets are declared at the Workflow's root. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares."
+          description: "The Lakes for the steps to bind: an entry with a name defines one, deleted with the Workflow, and a ref entry declares an existing one. A defined lake may not share a step's name, and its buckets, ConfigMaps and Secrets are declared at the Workflow's root. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares."
           items:
             additionalProperties: false
             properties:
@@ -6103,7 +6103,7 @@ components:
             - array
             - "null"
         sql:
-          description: "The SQL databases for the steps to bind. An entry with a name defines a database, its owner naming a step or a declared lake; a ref entry binds an existing one. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares."
+          description: "The SQL databases for the steps to bind. An entry with a name defines a database, its owner naming a step or a declared lake; a ref entry declares an existing one. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares."
           items:
             additionalProperties: false
             properties:
@@ -6120,7 +6120,7 @@ components:
                 pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                 type: string
               owner:
-                description: The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step. With no owner, only those writers can write it.
+                description: The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step or a lake that the Workflow declares. With no owner, only those writers can write it.
                 maxLength: 63
                 minLength: 1
                 pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
