@@ -9,8 +9,9 @@ A Secret holds named values, such as an API key, that a Function reads but that 
 configuration. A Function declares and binds each Secret that it reads, and its handler reads the values through
 `ctx.secret`, the Secret client in the context that every handler receives. A Function can also change a bound
 Secret's keys if it owns the Secret or has a role that allows writes. funcd puts no value of a Secret in the
-environment of a [worker](../../../platform/workloads/index.md#runtime), where the Function's code runs. The [Platform page](../../../platform/services/secrets.md) explains how funcd stores and checks Secrets; this
-page shows how to use them.
+environment of a [worker](../../../platform/workloads/index.md#runtime), where the Function's code runs. The
+[Platform page](../../../platform/services/secrets.md) explains how funcd stores and checks Secrets; this page shows
+how to use them.
 
 The first example, env-echo, reads two keys of a Secret and returns their values. The steps below start the example
 on the local computer and call it: the response contains `"secret":"s3cr3t"`, the value of the key `API_KEY`. Then
@@ -122,19 +123,18 @@ To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
 
 ## Write a key of a Secret
 
-A Function writes the keys of a Secret whose `spec.owner` names it. The owner is one Function of the Secret's
-namespace, and it writes only while it binds the Secret. A step of a Workflow writes as the Function that it calls: a
-step that names an `image` runs as the Function `<workflow>-<step>`, which funcd creates for the step, and a step that
-names an existing Function by `ref` runs as that Function. To let a step write a Secret, the Secret's `spec.owner`
-names that Function.
+The example secret-writer writes a key of a Secret, reads the key back, and deletes it. The Function that writes is
+the Secret's owner: a Function writes the keys of a Secret whose `spec.owner` names it. The owner is one Function of
+the Secret's namespace, and it writes only while it binds the Secret; [Access](#access) explains which other
+Functions can write. The example's Secret holds one key, `TOKEN`, whose first value is a dummy, `token-v1`.
 
-The example secret-writer writes a key of a Secret, reads it back, and deletes it. Its Secret holds one key, `TOKEN`,
-whose first value is a dummy, `token-v1`. The steps below start the example on the local computer and call the
-Secret's owner twice: the first call writes `token-v2` into `TOKEN`, and its response contains `"token":"token-v2"`,
-the value that the owner reads after its write; the second call deletes `TOKEN`, and its response contains
-`"token":null`. The example needs funcdctl, git and curl, as the first example does, and the runtime of its language
-on the `PATH`: Node.js for TypeScript, or Python 3.12 or later as `python3` for Python. As in the first example,
-`funcdctl dev` runs each Function from the code in the folder, not from the `image` that its manifest names.
+The steps below start the example on the local computer and call the Secret's owner twice: the first call writes
+`token-v2` into `TOKEN`, and its response contains `"token":"token-v2"`, the value that the owner reads after its
+write; the second call deletes `TOKEN`, and its response contains `"token":null`. The example's two handlers return
+the value of `TOKEN` only to show it: a handler that serves real callers does not return a Secret's value. The
+example needs funcdctl, git and curl, as the first example does, and the runtime of its language on the `PATH`:
+Node.js for TypeScript, or Python 3.12 or later as `python3` for Python. As in the first example, `funcdctl dev` runs
+each Function from the code in the folder, not from the `image` that its manifest names.
 
 The owner's handler writes with two methods of `ctx.secret`. The first argument of each names a Secret of the
 Function's `spec.bindings.secret`:
@@ -155,8 +155,9 @@ as a read does: the key must be an environment variable name, and the value must
 key that starts with `FUNCD_` is stored, but no read returns it.
 
 The example's Functions declare `TOKEN` under `spec.secrets`, so funcd starts no new worker for them while the Secret
-lacks `TOKEN`, as [Changes and deletion](#changes-and-deletion) explains. Their `scaling.minReplicas: 1` keeps one
-worker of each Function running, so a call still reaches it after the delete.
+lacks `TOKEN`, as [Changes and deletion](#changes-and-deletion) explains. A worker that already serves goes on
+serving: the example sets no `scaling.idleTimeout`, and without one, funcd never reclaims an idle worker. The
+Functions' `scaling.minReplicas: 1` starts the worker of each Function before its first call.
 
 ### TypeScript
 
@@ -352,7 +353,10 @@ A Function needs no role assignment to:
   `ctx.secret`. At each read, funcd asks Cedar whether the Function may perform the action `secret::read` on each
   Secret that it binds.
 - **Write the Secret it owns.** The Function that `spec.owner` names can write the Secret's keys while it binds the
-  Secret. At each write, funcd asks Cedar whether the Function may perform the action `secret::write` on that Secret.
+  Secret. A step of a Workflow writes as the Function that it calls: a step that names an `image` runs as the
+  Function `<workflow>-<step>`, which funcd creates for the step, and a step that names an existing Function by `ref`
+  runs as that Function. To let a step write a Secret, the Secret's `spec.owner` names that Function. At each write,
+  funcd asks Cedar whether the Function may perform the action `secret::write` on that Secret.
 
 Any other write needs a role. funcd has two built-in roles for Secrets:
 
