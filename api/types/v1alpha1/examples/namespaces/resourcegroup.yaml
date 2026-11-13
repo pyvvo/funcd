@@ -1,0 +1,10 @@
+# region resourcegroup
+apiVersion: funcd.io/v1alpha1
+kind: ResourceGroup
+metadata:
+  name: rg1
+  namespace: default
+  resourceGroup: rg1
+spec:
+  description: The resources of the guide's examples
+# endregion resourcegroup

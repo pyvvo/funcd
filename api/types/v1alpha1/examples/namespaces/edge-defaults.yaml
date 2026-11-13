@@ -1,0 +1,37 @@
+# region namespace
+apiVersion: funcd.io/v1alpha1
+kind: Namespace
+metadata:
+  name: billing
+spec:
+  edgeDefaults:
+    auth:
+      mode: authenticated
+# endregion namespace
+---
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: invoices
+  namespace: billing
+  resourceGroup: rg1
+spec:
+  runtime: nodejs22
+  handler: handle
+  image: registry.example.com/invoices:1.0.0
+---
+# region open
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: status
+  namespace: billing
+  resourceGroup: rg1
+spec:
+  runtime: nodejs22
+  handler: handle
+  image: registry.example.com/status:1.0.0
+  ingress:
+    auth:
+      mode: open
+# endregion open

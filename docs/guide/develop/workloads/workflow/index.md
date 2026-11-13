@@ -114,11 +114,12 @@ To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
 
 ## Read a run's logs
 
-[`funcdctl workflow logs`](../../tools/funcdctl/spec.md#funcdctl-workflow-logs) prints the log records of one run:
-those of each step's Function, the steps of its child runs included, which funcd finds by the run's trace ID. A
-record shows there once funcd has written it to storage: a funcd server does that within `funclog.segmentMaxAge`, 10
-seconds by default, and `funcdctl dev` within a second. While the example of [Usage](#usage) runs, this command prints
-the records of the run `run-1`, with each record's attributes:
+[`funcdctl workflow logs`](../../tools/funcdctl/spec.md#funcdctl-workflow-logs) prints the log records of one run: those
+of each step's Function, the steps of its child runs included, which funcd finds by the run's trace ID. A record shows
+there only after funcd has written it to storage: a funcd server writes the records in segments up to
+`funclog.segmentMaxAge` old, 10 seconds by default, and `funcdctl dev` in segments up to about a second old, so repeat
+the command until the records appear. While the example of [Usage](#usage) runs, this command prints the records of the
+run `run-1`, with each record's attributes:
 
 ```console
 $ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token workflow logs run-1 -o wide

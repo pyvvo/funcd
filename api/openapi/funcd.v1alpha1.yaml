@@ -3606,13 +3606,13 @@ components:
       additionalProperties: false
       properties:
         bucket:
-          description: The Bucket that holds the Lake's files, in the Lake's namespace.
+          description: A Bucket of the same namespace.
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         prefix:
-          description: The prefix of that Bucket, which this Lake must own.
+          description: A prefix of that Bucket.
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
       required:
@@ -3895,7 +3895,7 @@ components:
       additionalProperties: false
       properties:
         defaultExposure:
-          description: "Whether the namespace's Functions and Sites answer at their own address, such as /function/<name>, while their spec.ingress.enabled is unset: implicit, or empty, turns it on, and explicit turns it off. Routes you write and Routes an App declares stay on, though in the default namespace explicit refuses one with no host (HostRequired)."
+          description: "Whether the namespace's Functions and Sites answer at their own address, such as /function/<name>, while their spec.ingress.enabled is unset: implicit, or empty, turns it on, and explicit turns it off. The namespace's other Routes, an App's included, stay on, though in the default namespace explicit refuses one with no host (HostRequired)."
           enum:
             - ""
             - implicit

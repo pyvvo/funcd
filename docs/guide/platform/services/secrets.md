@@ -3,7 +3,7 @@ title: Secrets
 description: Values that a Function or a Lake reads and that a Function may write, each read and write decided by Cedar.
 ---
 
-![A Function's ctx.secret call goes to its local API, which asks Cedar whether the Function may secret::read each Secret that it binds. On allow, funcd resolves the bound Secrets from the metastore, and on deny the read is refused with 403](../../assets/secrets.drawio.svg)
+![A Function's ctx.secret get or list call goes to its local API, which asks Cedar whether the Function may secret::read each Secret that it binds. On allow, funcd resolves the bound Secrets from the metastore, and on deny the read is refused with 403](../../assets/secrets.drawio.svg)
 
 A Secret holds named values, its `spec.data`, in a namespace. A Function names the Secrets that it reads in
 `spec.bindings.secret`, and a Workflow step and a Lake bind Secrets the same way. A Function reads the values with

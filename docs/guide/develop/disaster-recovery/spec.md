@@ -8,6 +8,8 @@ This page lists the spec and status fields of Backup, BackupSchedule and Restore
 
 ## Backup
 
+::include[../../../../api/types/v1alpha1/examples/disaster-recovery/backup.yaml#backup]
+
 | apiVersion | kind |
 | --- | --- |
 | `funcd.io/v1alpha1` | `Backup` |
@@ -44,6 +46,8 @@ This page lists the spec and status fields of Backup, BackupSchedule and Restore
 | `volume` | string, a DNS-1123 label | With kind Function, the name of the Function's local volume that the member is. |
 
 ## BackupSchedule
+
+::include[../../../../api/types/v1alpha1/examples/disaster-recovery/backupschedule.yaml#backupschedule]
 
 | apiVersion | kind |
 | --- | --- |
@@ -101,6 +105,8 @@ This page lists the spec and status fields of Backup, BackupSchedule and Restore
 
 ## Restore
 
+::include[../../../../api/types/v1alpha1/examples/disaster-recovery/restore.yaml#restore]
+
 | apiVersion | kind |
 | --- | --- |
 | `funcd.io/v1alpha1` | `Restore` |
@@ -128,8 +134,8 @@ This page lists the spec and status fields of Backup, BackupSchedule and Restore
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `bucket` | string, required, a DNS-1123 label | The Bucket that holds the Lake's files, in the Lake's namespace. |
-| `prefix` | string, required, a DNS-1123 label | The prefix of that Bucket, which this Lake must own. |
+| `bucket` | string, required, a DNS-1123 label | A Bucket of the same namespace. |
+| `prefix` | string, required, a DNS-1123 label | A prefix of that Bucket. |
 
 ### `Restore.spec.source`
 

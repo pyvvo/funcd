@@ -179,8 +179,8 @@ This page lists the spec and status fields of Workflow and WorkflowRun, each wit
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `bucket` | string, required, a DNS-1123 label | The Bucket that holds the Lake's files, in the Lake's namespace. |
-| `prefix` | string, required, a DNS-1123 label | The prefix of that Bucket, which this Lake must own. |
+| `bucket` | string, required, a DNS-1123 label | A Bucket of the same namespace. |
+| `prefix` | string, required, a DNS-1123 label | A prefix of that Bucket. |
 
 ### `Workflow.spec.lakes[].resources`
 
