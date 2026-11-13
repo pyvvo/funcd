@@ -131,11 +131,12 @@ an image changes it under these conditions:
 - `funcdctl dev` pushes every build itself, and renders the template and applies the App again each time one of its
   inputs changes, which [Run it locally](#run-it-locally) lists.
 - On a funcd server, [`funcdctl app deploy`](../../tools/funcdctl/spec.md#funcdctl-app-deploy) renders the template
-  with the digest that its `app.lock` file pins for each image. A template that `funcdctl push --template` pushed always
-  holds such a lock. A new build therefore reaches the App only through a new lock, which
+  with a digest for each image: the digest that the template's `app.lock` file pins, or, for a template folder without
+  `app.lock`, the digest that the image's tag names at that deploy. A template that `funcdctl push --template` pushed
+  always holds such a lock, so a new build reaches its App through a new lock, which
   [`funcdctl app lock`](../../tools/funcdctl/spec.md#funcdctl-app-lock) writes, such as for a new tag of the image.
   For a template folder that holds `app.lock`, `funcdctl app deploy` only warns when a locked tag now names another
-  digest; a template folder without `app.lock` has its images resolved at each deploy.
+  digest.
 
 While the first example runs, change `timeout` in `apps/volumes/values/redeploy.yaml` from `31s` to `45s`, and save
 the file. `funcdctl dev` applies the new spec and follows the revision `volumes-2`: while the changed Function
@@ -241,8 +242,9 @@ which the Route `/api` serves, returns both records, as `migration` and `release
 
 An App declares no role assignment. A part that writes a table that another part owns needs a role that allows it,
 from a RolesAssignment applied beside the App, as the KV page's [Access](../../services/kv/index.md#access) section
-explains. The todo template's
-[`grants.yaml`](https://github.com/pyvvo/funcd-functions/blob/main/apps/todo/grants.yaml) gives `todo-migrate` the
+explains. The todo example's
+[`grants.yaml`](https://github.com/pyvvo/funcd-functions/blob/main/apps/todo/grants.yaml), a file beside its
+template, gives `todo-migrate` the
 right to write the table `todos` of the store `todo-store`, which `todo-api` owns and the hook of version 1.1.0
 rewrites. The hooks of version 1.0.0 write only their own tables, so the steps below need no role.
 
@@ -281,7 +283,7 @@ $ curl -s -X POST -H 'content-type: application/json' -d '{"op":"list"}' http://
 
 `migration` and `release` hold what the two hooks received: the event `install` and the revision `todo-1`.
 `greeting` is the default of the template's value `greeting`, which a ConfigMap of the App passes to `todo-api`. Read
-the revision's record of the calls, and repeat the command until it lists both calls:
+the revision's record of the calls, and repeat the command until both calls show the phase `"Ready"`:
 
 ```console
 $ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token get apprevision todo-1 -n default -o json
@@ -326,16 +328,17 @@ of these:
 - `Failed`: the latest revision failed: a pre-hook failed, or a part was still pending when `app.upgradeTimeout` ran
   out.
 
-The condition `Ready` explains the phase. It is `False` while funcd has stopped writing the parts or a part is
-pending. Otherwise, it is `Unknown`, with the reason `NotStarted`, while a Function part has not run yet, and `True`
-once every part is ready. When it is `False`, its reason says why, with a message that names the part, such as
-`KVStore/todo-store: exists and is not owned by App/todo`:
+The condition `Ready` explains the phase. It is `False` while funcd has stopped writing the parts, a part is pending,
+a pre-hook has not succeeded or a post-hook has failed, and while the latest revision is `Failed`, even once its parts
+are ready. Otherwise, it is `Unknown`, with the reason `NotStarted`, while a Function part has not run since it
+changed, and `True` once every part is ready. When it is `False`, its reason says why, with a message that names the
+part, such as `KVStore/todo-store: exists and is not owned by App/todo`:
 
 - `Progressing`: a rollout writes the parts, or waits for a part or a pre-hook.
 - `ChildNotReady`: a part is not ready; the message holds the part's own reason.
 - `ChildNotOwned`: an object of a part's name exists, and the App does not own it, such as a store that a deleted App
   kept. funcd writes no part until the object is gone, or until the App names it with `ref` instead.
-- `ChildInvalid`: the store refused to write a part. funcd writes no part after it, and the message holds the
+- `ChildInvalid`: funcd refused the write of a part. It writes no part after that one, and the message holds the
   refusal.
 - `SecretNotFound` or `SecretKeyMissing`: a Secret that the App declares, or one of its keys, does not exist. funcd
   writes no part until it exists.
@@ -356,7 +359,10 @@ that funcd has not deleted yet.
 [`funcdctl app history <app>`](../../tools/funcdctl/spec.md#funcdctl-app-history) lists an App's revisions by number,
 with the `version` of each, its phase and the time of its creation. A revision is `Deploying` until it becomes
 current, `Ready` once it is or has been current, and `Failed` when it did not become current.
-`funcdctl get apprevision <name> -n <namespace> -o json` prints a revision, whose three conditions explain its phase:
+`funcdctl get apprevision <name> -n <namespace> -o json` prints a revision, whose three conditions explain its phase.
+`Applied` and `ChildrenReady` record the rollout: funcd updates them only while the revision is the newest one and its
+phase is `Deploying`, and after that only `Current` changes. `todo-1` of the hooks example therefore keeps
+`ChildrenReady` at `Unknown`, with the reason `NotStarted`, even after calls start its parts.
 
 - `Applied` is `True` once funcd has written each part of the revision, or found it unchanged. It is `False` with the
   reason `Progressing` while a pre-hook has not succeeded, with `HookFailed` when a pre-hook failed, and otherwise
@@ -474,10 +480,11 @@ To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
 
 ## Errors
 
-- When `funcdctl app deploy` or `funcdctl dev` renders a template, it checks the App before it applies anything. A
-  value that the template's `valuesSchema` refuses, an `app.yaml` or a file of `resources` that funcdctl cannot read,
-  or an entry that breaks a rule stops it with nothing applied, and the message names the file and the entry, such as
-  `resources/files.yaml: functions[0]`.
+- When `funcdctl app deploy` or `funcdctl dev` renders a template, it checks the App before it applies anything, and a
+  refusal applies nothing. A value that the template's `valuesSchema` refuses gives a message that contains
+  `values do not match valuesSchema`, followed by the value at fault. An `app.yaml` or a file of `resources` that
+  funcdctl cannot read gives a message that names the file. An entry that breaks a rule gives a message that names the
+  file and the entry, such as `resources/files.yaml: functions[0]`.
 - The server refuses an App, and stores nothing, when its spec breaks a rule, with a message that names the entry,
   such as `spec.functions[0]` for an App manifest that `funcdctl apply` sends. It also refuses a part that names a
   Secret that `spec.secrets` does not declare, with a message that names the entry, such as
