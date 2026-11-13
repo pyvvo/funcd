@@ -43,6 +43,8 @@ This page lists the spec and status fields of Namespace and ResourceGroup, each 
 
 ## ResourceGroup
 
+::include[../../../../../api/types/v1alpha1/examples/namespaces/resourcegroup.yaml#resourcegroup]
+
 | apiVersion | kind |
 | --- | --- |
 | `funcd.io/v1alpha1` | `ResourceGroup` |
