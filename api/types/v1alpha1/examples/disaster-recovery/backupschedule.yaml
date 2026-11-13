@@ -46,6 +46,8 @@ spec:
     AWS_SECRET_ACCESS_KEY: S3AzK3hna2svYnIwZ1IyRi8yM2xoMnpMcXg0QndBS1MxV2xOY2hTZXFhST0=
 ---
 # region backupschedule
+# Test values: backups-key holds the S3 key pair that the banner of funcdctl dev prints, and restore.yaml publishes the
+# identity of the first recipient, so neither protects anything.
 apiVersion: funcd.io/v1alpha1
 kind: BackupSchedule
 metadata:

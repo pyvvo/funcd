@@ -21,7 +21,7 @@ The example needs four programs:
 - funcdctl, installed as the [Install](../../get-started/install.md) page shows. That page installs the dev build of
   funcdctl, which includes the `funcdctl dev` command.
 - git, which copies the repositories of the example and of funcd.
-- curl 8.0 or later, which calls the Function and signs the S3 requests with its `--aws-sigv4` option.
+- curl, which calls the Function and signs the S3 requests with its `--aws-sigv4` option.
 - Node.js on the `PATH`, which runs the example's Function.
 
 `funcdctl dev` starts a local platform and runs the resource files of one folder on it, here `examples/s3-roundtrip`
@@ -58,14 +58,16 @@ holds the BackupSchedule `lakehouse-nightly`, which this excerpt shows:
   its host name.
 - [`target.credentialsSecret`](spec.md#backupschedulespectarget) names the Secret `backups-key`, which holds the S3
   key pair that each Backup writes with, under the keys `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. On the local
-  computer, it is the key pair that `funcdctl dev` gives the Function `s3-roundtrip`, which the banner of
-  `funcdctl dev` prints. That Function owns the prefix `default` of `backups`, where each Backup of the namespace
-  `default` writes its copy.
-- [`encryption.recipients`](spec.md#backupschedulespecencryption) lists two **recipients** of age, a file encryption
-  format: a recipient is a public key, and the matching **identity**, a private key, opens what is sealed to it. funcd
-  seals the files of each store in a Backup's copy to every recipient, so the identity of any one of them opens the
-  copy. These two are test keys: the example publishes the identity of the first one, so a copy sealed to them
-  protects nothing.
+  computer, it holds, in base64, the key pair that `funcdctl dev` gives the Function `s3-roundtrip` and prints in its
+  banner. `funcdctl dev` derives that key pair from a constant published in its code, so the key pair protects
+  nothing. The Function owns the prefix `default` of `backups`, where each Backup of the namespace `default` writes its
+  copy.
+- [`encryption.recipients`](spec.md#backupschedulespecencryption) lists two **recipients** of
+  [age](https://github.com/FiloSottile/age/blob/main/README.md), a file encryption format: a recipient is a public key,
+  and the matching **identity**, a private key, opens what is sealed to it. funcd seals the files of each store in a
+  Backup's copy to every recipient, so the identity of any one of them opens the copy. These two are test keys: the
+  example publishes the identity of the first one, so a copy sealed to them protects nothing. For real copies, replace
+  them with recipients of new keys, which the `age-keygen` command of age creates, as age's README explains.
 
 The same file holds the Bucket `backups`, the Secret `backups-key`, and a RolesAssignment that lets `s3-roundtrip`
 list and read the prefix `default` of `backups`, as a Restore needs. It also holds the Backup `lakehouse-now`, which
@@ -116,9 +118,13 @@ The command prints the Backup as JSON. Under `status`, `"phase"` is `"Succeeded"
 the copy holds, its **members**: here the Bucket `lakehouse`, with the size of its encrypted copy in bytes. `"path"`
 names the copy's folder on the target, `default/lakehouse-now-<uid>/`, where `<uid>` is the Backup's unique ID;
 `"recipients"` holds a fingerprint of each recipient; and `"expireTime"`, 30 days after the Backup's creation, is when
-funcd deletes this record. A Backup that ends in the phase `Failed` stays `Failed`, since funcd does not try it
-again, and the steps below need a Backup that `Succeeded`: the reason of its condition `Ready` says why it failed, as
-[Status](#status) explains.
+funcd deletes this record.
+
+A Backup that ends in the phase `Failed` stays `Failed`: funcd does not try it again, and applying the unchanged file
+again changes nothing. The reason of its condition `Ready` says why it failed, as [Status](#status) explains. The
+steps below need a Backup that `Succeeded`: once the cause is fixed, delete the Backup with
+`funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token delete backup lakehouse-now -n default`, then apply
+`backup.yaml` again, which creates a new Backup of the same name.
 
 The file
 [`restore.yaml`](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/disaster-recovery/restore.yaml)
@@ -164,8 +170,10 @@ $ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token get restore la
 ```
 
 Under `status`, `"phase"` is `"Succeeded"`, and the condition `Ready` has the status `"True"`. A Restore that ends in
-the phase `Failed` stays `Failed`, and the last step needs a Restore that `Succeeded`: the reason of its condition
-`Ready` says why it failed, as [Status](#status) explains.
+the phase `Failed` stays `Failed`, as a Backup does, and the reason of its condition `Ready` says why, as
+[Status](#status) explains. The last step needs a Restore that `Succeeded`: once the cause is fixed, delete the
+Restore with `funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token delete restore lakehouse-restore -n default`,
+then apply `restore.yaml` again.
 
 Read the restored object through the S3 gateway, with the key pair of `s3-roundtrip`. The `--print-env` flag of
 `funcdctl dev` prints that key pair, the region and the address of the S3 gateway as `export` lines, without starting
@@ -239,24 +247,28 @@ takes.
 ## Restore stores in place
 
 A member that sets [`inPlace: true`](spec.md#restorespecmembers) instead of `as` is loaded back into its own store,
-whose data it replaces. Such a Restore needs the permission to update the Namespace, which only an admin has, and
-funcd runs one at a time in each namespace: it refuses a second one while the first has not ended. The Restore goes
-through these steps:
+whose data it replaces. A Function's local volume is the exception: funcd loads it in place only when it is empty, or
+when the Function's condition `DataMissing` names it, after a loss of the volume while funcd was stopped. Such a
+Restore needs the permission to update the Namespace, which only an admin has, and funcd runs one at a time in each
+namespace: it refuses a second one while the first has not ended. The Restore goes through these steps:
 
 1. While its Backup is `Pending` or `Running`, the Restore is `Pending`. It then creates an **export**, a Backup of
-   the restored Backup's schedule named `<restore>-before`, which its `status.export` names, and waits for it: the
-   export keeps a copy of the data that the Restore replaces. A failed export fails the Restore with the reason
-   `ExportFailed`, and nothing is written.
+   the restored Backup's schedule named `<restore>-before`, which its `status.export` names, and waits for it. The
+   export copies what the schedule's `scope` names when the export runs, which can differ from the members that the
+   Restore replaces. A failed export fails the Restore with the reason `ExportFailed`, and nothing is written.
 2. The Restore turns `Running`. While the namespace keeps serving, it reads the whole copy and checks every part, then
-   checks each member and its destination. A failed check fails the Restore, and nothing is written.
+   checks each member and its destination. A failed check fails the Restore, and nothing is written. For a member in
+   place, this check finds only a store that does not exist: a volume that is not empty is found at its load.
 3. It **holds** the namespace: the namespace's Functions refuse calls with the HTTP status 503 and the header
-   `Retry-After: 30`, and its Sites keep serving their files. Until the loads end, it also stops the processes that
-   run each Function whose volume it loads, and the process that serves each Lake that it loads.
+   `Retry-After: 30`, and its Sites keep serving their files. Until its loads end, it also stops the workers, the
+   processes that run a Function's code, of each Function whose volume it loads, and the engine, the process that
+   serves a Lake, of each Lake that it loads in place. Other workers and engines keep running.
 4. It loads each member, in the order of `members`, then lifts the hold, and ends `Succeeded`.
 
-When a load fails, the Restore clears what the loads began and ends `Failed`, and the hold stays. When funcd stops
-during a load, the next start ends the Restore `Failed` with the reason `Interrupted`, clears nothing, and keeps the
-hold. Check the stores, then lift the hold with
+When a load fails, the Restore clears what the loads began and ends `Failed`, and the hold stays: a store loaded in
+place before the failing member is then empty, and its former data remains only in the export, when the export's scope
+named that store. A volume that is not empty fails its load that way, with the reason `NotEmpty`. When funcd stops during a load, the next start ends the Restore
+`Failed` with the reason `Interrupted`, clears nothing, and keeps the hold. Check the stores, then lift the hold with
 [`funcdctl hold release --namespace`](../tools/funcdctl/spec.md#funcdctl-hold-release) and the namespace's name, which
 also needs the permission to update the Namespace, and which funcd refuses while the Restore is `Pending` or
 `Running`.
@@ -267,10 +279,15 @@ After a host loss, the operator brings the platform back with `funcd restore run
 [Platform page](../../platform/disaster-recovery.md#after-a-host-loss) explains: the platform comes back as it was at
 the time of the platform backup that the operator restores. Each namespace that has a BackupSchedule then stays held
 for its data: its Functions refuse calls from the first start. The schedule first lists its target, and records each
-whole copy made after that time as a Backup in the phase `Succeeded`. Its condition `TargetSynced` turns `True` once
-that listing has succeeded, and the schedule creates no Backup before; the condition stays `False` with the reason
-`PlatformRestored` until then, or `ListFailed` while the listing fails. The namespace's owner then applies a Restore of
-the newest Backup, and lifts the namespace's hold with `funcdctl hold release --namespace`. A namespace without a
+whole copy of its slots made after that time as a Backup in the phase `Succeeded`. A Backup made by hand, such as the
+first example's, and an export get no record, so no Restore can name their copies. The schedule's condition
+`TargetSynced` turns `True` once that listing has succeeded, and the schedule creates no Backup before; the condition
+stays `False` with the reason `PlatformRestored` until then, or `ListFailed` while the listing fails.
+`funcdctl get backupschedule <name> -n <namespace> -o json` prints the condition under `status.conditions`.
+
+An admin then applies an in-place Restore of the newest Backup, as
+[Restore stores in place](#restore-stores-in-place) explains, and once it has `Succeeded`, lifts the namespace's hold
+with `funcdctl hold release --namespace`: both need the permission to update the Namespace. A namespace without a
 BackupSchedule is not held: its Functions answer calls from the first start, with the data that the operator's restore
 of KV and Blob brought back.
 
@@ -326,9 +343,9 @@ the copies stay on the target. A Backup's `ttl` is its schedule's, unless the Ba
 `Pending`, then `Running`, then `Succeeded` or `Failed`, in one attempt. A `Failed` Backup's condition `Ready` has the
 status `False`, and its reason says why:
 
-- `ScheduleNotFound`: the schedule did not exist when the run started, with a message such as
+- `ScheduleNotFound`: the schedule did not exist when the run started, with a message that contains
   `schedule "nightly": store.Get: BackupSchedule "nightly" not found`.
-- `MemberNotFound`: a store of the scope does not exist, with a message such as
+- `MemberNotFound`: a store of the scope does not exist, with a message that contains
   `member Bucket/media: store.Get: Bucket "media" not found`.
 - `LakeUnstable`, `EngineNotReady` and `TargetUnconditional`, as the sections above explain.
 - `Failed`: any other cause, which the message names.
@@ -336,8 +353,8 @@ status `False`, and its reason says why:
 A Backup that is `Running` when funcd stops ends at the next start: `Succeeded` with the reason `FoundOnTarget` when
 its copy is whole on the target, else `Failed` with the reason `Interrupted`.
 
-A BackupSchedule is `Ready`. Its condition `Ready` has the reason `SameProvider` when its target is a bucket on the
-endpoint of funcd's own blob store, since one failure of that provider takes both. Its status also gives the newest
+A BackupSchedule is `Ready`. Its condition `Ready` has the reason `SameProvider` when its URL names another bucket on
+the endpoint of `blob.target`, the funcd server's own blob store, since one failure of that provider takes both. Its status also gives the newest
 slot that it took, `lastScheduleTime`; the completion of its newest Backup that `Succeeded`, `lastSuccessTime`; the
 start of the oldest one, `earliestRestorePoint`, the oldest point that a Restore can go back to; and the Backup that
 is `Pending` or `Running`, `active`. `rpoRisk` is `true` when the schedule has fallen behind, as the
@@ -348,9 +365,9 @@ A Restore is `Pending` while it waits for its Backup and, in place, for its expo
 and loads, then `Succeeded` or `Failed`. The reason of a `Failed` Restore says why:
 
 - `BackupNotReady`: the Backup does not exist, or is `Failed`.
-- `MemberNotFound`: the copy holds no such member, or the destination does not exist, with a message such as
+- `MemberNotFound`: the copy holds no such member, or the destination does not exist, with a message that contains
   `the Backup holds no KVStore/counters-kv`.
-- `NotEmpty`: the destination holds data, with a message such as
+- `NotEmpty`: the destination holds data, with a message that contains
   `Bucket/lakehouse-copy is not empty: a Restore loads into an empty one`.
 - `Integrity`: a part of the copy does not match the manifest.
 - `EngineNotReady`: the engine of a destination database is not `Ready`.
@@ -382,8 +399,8 @@ its export needs the schedule. funcd refuses to delete an in-place Restore that 
   recipient that is not an age recipient, with a message such as
   `recipients[1] "not-a-recipient" is not one X25519 (age1…) or hybrid (age1pq1…) recipient`.
 - a BackupSchedule whose target is not an `s3://` URL, with a message such as
-  `spec.target.url "file:///var/backups": want s3://<bucket>[?…], the only target scheme`, and one whose target lies
-  inside funcd's own blob store, with a message that ends `name another bucket`.
+  `spec.target.url "file:///var/backups": want s3://<bucket>[?…], the only target scheme`, and one whose URL names
+  the bucket of `blob.target`, on its endpoint, with a message that ends `name another bucket`.
 - a BackupSchedule whose `scope` sets more than one form, with a message such as
   `spec.scope sets 2 forms: want one of kvStores, buckets, lakes, databases and volumes, app, or resourceGroup`.
 - a Backup whose `ttl` is longer than its schedule's, with a message such as
@@ -393,6 +410,9 @@ its export needs the schedule. funcd refuses to delete an in-place Restore that 
 - an in-place Restore from a credential that cannot update the Namespace, with a message such as
   `an in-place Restore needs update on Namespace "default": developer may not act on cluster-scoped kind "Namespace"`,
   and a second in-place Restore of a namespace while the first has not ended.
+- an in-place Restore while the hold of an earlier in-place Restore, whose load did not complete, stands, with the HTTP
+  status 409 and a message that contains `whose load did not complete`: check the store, then lift the hold with
+  `funcdctl hold release --namespace`.
 
 A Backup or a Restore that funcd accepts can still fail while it runs: its status names the reason, as
 [Status](#status) explains.
@@ -401,11 +421,9 @@ A Backup or a Restore that funcd accepts can still fail while it runs: its statu
 
 `funcdctl dev` runs BackupSchedules, Backups and Restores as a funcd server does, with these differences:
 
-- The first example's target is one of its own Buckets, which its S3 gateway serves at the port that `--s3port` sets.
-  The target's URL names port 8082, so the example needs `--s3port 8082`.
-- It derives the S3 key pair of each Function from a fixed secret, so a key pair is the same at each run, and its
-  banner prints the key pair of the folder's first Function. A funcd server derives its key pairs from a secret of its
-  own, so the key pair in the example's Secret works only with `funcdctl dev`.
+- It derives the S3 key pair of each Function from a constant, so a key pair is the same at each run, and its banner
+  prints the key pair of the folder's first Function. A funcd server derives its key pairs from a secret of its own,
+  so the key pair in the first example's Secret works only with `funcdctl dev`.
 - Its token, `funcd-dev-token`, is a developer of the namespace `default`, so it cannot update the Namespace: an
   in-place Restore and `funcdctl hold release --namespace` are refused.
 - It keeps its objects and its Buckets in memory, so the schedules, the Backups, the Restores and the copies kept in
