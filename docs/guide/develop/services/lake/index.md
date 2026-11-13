@@ -5,7 +5,7 @@ description: Declare a Lake over a Bucket prefix, bind it to a Function, and cre
 
 ## Usage
 
-A Lake is a SQL database whose tables a Function creates and queries with SQL, and whose data funcd keeps in a
+A Lake is a SQL database whose tables a Function creates and queries with SQL, and whose data files funcd keeps in a
 Bucket, as [Data storage](#data-storage) explains. A Function queries a Lake that it binds, through the Lake's gateway,
 as [Access](#access) explains. The [Platform page](../../../platform/services/lake.md) explains how a Lake works inside
 funcd; this page shows how to use one.
