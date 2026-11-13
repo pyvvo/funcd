@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.43.0](https://github.com/pyvvo/funcd/compare/v0.42.0...v0.43.0) (2026-11-13)
+
+
+### Features
+
+* **api:** each feature's Spec page is generated from the described fields of its kinds ([674e79b](https://github.com/pyvvo/funcd/commit/674e79b56d3b5b09f8332122941d4f00607562c6))
+* **guide:** the guide's examples are tested files that its pages include (ADR-0325) ([#1447](https://github.com/pyvvo/funcd/issues/1447)) ([6542f35](https://github.com/pyvvo/funcd/commit/6542f35613a8d6e46f98cea71a60a36d8aef5ead))
+* **guide:** the Spec tab shows each kind's tested example and the handler API, and a template keeps the Usage tabs alike ([#1449](https://github.com/pyvvo/funcd/issues/1449)) ([b12ccdf](https://github.com/pyvvo/funcd/commit/b12ccdf6260edeecac11691c8a30f7e1e860f931))
+* **guide:** the Spec tabs of funcd and funcdctl come from the config struct and the command trees ([3f32932](https://github.com/pyvvo/funcd/commit/3f32932691ff375a9b3dd2851ac997cf8d065a54))
+
+
+### Bug Fixes
+
+* **funcdctl:** a flag's default is the same on every machine and holds no variable's value ([#1446](https://github.com/pyvvo/funcd/issues/1446)) ([112d438](https://github.com/pyvvo/funcd/commit/112d43860e647b6d17c0ad01234037064668ad62))
+
 ## [0.42.0](https://github.com/pyvvo/funcd/compare/v0.41.0...v0.42.0) (2026-11-11)
 
 
