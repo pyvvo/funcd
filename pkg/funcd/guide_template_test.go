@@ -107,6 +107,15 @@ func TestLaneFoldersHoldEveryKVExample(t *testing.T) {
 	require.False(t, run["github.com/pyvvo/funcd-functions apps/todo/dr"], "a folder inside an example is not one")
 }
 
+// The sql-examples lane's dir, examples, holds several examples: each one it stages from that dir is run.
+func TestLaneFoldersHoldEachExampleOfALaneDirWithSeveral(t *testing.T) {
+	t.Parallel()
+	run := laneFolders(t)
+	require.True(t, run["github.com/pyvvo/funcd-python examples/sql-readings"])
+	require.True(t, run["github.com/pyvvo/funcd-python examples/sql-orders"])
+	require.False(t, run["github.com/pyvvo/funcd-functions apps/todo/sql"], "a folder inside an example is not one")
+}
+
 func readTemplate(t *testing.T) pageTemplate {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("..", "..", ".claude", "skills", "develop-page", "template.yaml"))
@@ -284,7 +293,8 @@ func statements(lines []string) string {
 }
 
 // laneFolders is the set of "<module> <folder>" that a lane runs: each lane's dir, and the example folder (the first
-// two segments) of each file that it stages from a language module; a fixture that funcd stages is no example.
+// two segments) of each file that it stages from a language module, by `from` or as a path in its dir, so a lane whose
+// dir holds several examples runs each of them; a fixture that funcd stages is no example.
 func laneFolders(t *testing.T) map[string]bool {
 	t.Helper()
 	module := func(m string) string {
@@ -301,6 +311,9 @@ func laneFolders(t *testing.T) map[string]bool {
 		for _, st := range lane.Stage {
 			if parts := strings.SplitN(st.From, "/", 3); st.Module != "" && len(parts) == 3 {
 				run[st.Module+" "+parts[0]+"/"+parts[1]] = true
+			}
+			if parts := strings.SplitN(lane.Dir+"/"+st.Path, "/", 3); st.Path != "" && lane.Module != "" && len(parts) == 3 {
+				run[lane.Module+" "+parts[0]+"/"+parts[1]] = true
 			}
 		}
 	}
