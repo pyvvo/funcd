@@ -124,6 +124,19 @@
       "depends_on": [
         "ADR-0235"
       ]
+    },
+    {
+      "id": "P-H",
+      "title": "Graph queries on a SQL database",
+      "features": [
+        "F239"
+      ],
+      "depends_on": [
+        "ADR-0232",
+        "ADR-0233",
+        "ADR-0234",
+        "ADR-0237"
+      ]
     }
   ],
   "waves": {
@@ -142,6 +155,9 @@
       "ADR-0236",
       "ADR-0237",
       "ADR-0238"
+    ],
+    "5": [
+      "P-H"
     ]
   }
 }
