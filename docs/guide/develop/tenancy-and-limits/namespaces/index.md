@@ -31,9 +31,10 @@ port of the control plane, so the commands below use the ports 8080 and 8081.
 Each resource names its group in [`metadata.resourceGroup`](../../common-definitions.md#objectmeta). The Function
 `log-burst`, in the example's
 [`burst.yaml`](https://github.com/pyvvo/funcd-typescript/blob/main/examples/log-burst/burst.yaml), names the group
-`rg1`. A group exists as soon as a resource names it, but funcd deletes a group only through an object of its own, a
-**ResourceGroup**. The ResourceGroup `rg1`, in the file `api/types/v1alpha1/examples/namespaces/resourcegroup.yaml` of
-funcd's repository, names itself as its group, since every object of a namespace names one. Its
+`rg1`. funcd deletes a group only through an object of the group's name, a **ResourceGroup**. Naming a group in
+`metadata.resourceGroup` creates no ResourceGroup, and the resources of a group need none, so the steps below create
+the ResourceGroup `rg1`, from the file `api/types/v1alpha1/examples/namespaces/resourcegroup.yaml` of funcd's
+repository. It names itself as its group, since every object of a namespace names one, and its
 [`description`](spec.md#resourcegroupspec) is free text that funcd does not read:
 
 ::include[../../../../../api/types/v1alpha1/examples/namespaces/resourcegroup.yaml#resourcegroup]
@@ -101,26 +102,35 @@ may reserve. A namespace needs no Namespace: without one, or with one that sets 
 A Namespace belongs to no namespace, so it sets no `metadata.namespace`.
 
 Only an admin credential creates, changes, reads or deletes a Namespace, and `funcdctl dev` has none. The tasks below
-that use a Namespace therefore need a funcd server, which runs on Linux, as the [Install](../../../get-started/install.md)
-page shows, with an admin credential: an entry of `auth.credentials` in funcd's configuration file whose `role` is
-`admin`, and whose `tokenFile` names the file that holds its token. The funcd
-[Spec](../../running-funcd/spec.md#funcdconfigyaml) tab describes these keys. The built-in token `funcd-dev-token`, and
-a token that `auth.token` sets, are developer credentials, which get the HTTP status 403 for a Namespace; once
-`auth.credentials` is set, the built-in token no longer works. [Access](#access) lists what each role may do.
+that use a Namespace therefore need a funcd server, which runs on Linux, as the
+[Install](../../../get-started/install.md) page shows, with an admin credential: an entry of `auth.credentials` in
+funcd's configuration file whose `role` is `admin`, and whose `tokenFile` names the file that holds its token. The
+funcd [Spec](../../running-funcd/spec.md#funcdconfigyaml) tab describes these keys. The built-in token `funcd-dev-token`, and
+a token that `auth.token` sets, are developer credentials, which get the HTTP status 403 for a Namespace.
+`auth.credentials` replaces `auth.token`: funcd refuses to start when `auth.token`, or an `auth.namespaces` other than
+its default, is set beside it, and the built-in token no longer works. Every other credential, such as a developer or
+a viewer of a namespace, then needs an entry of its own, whose `namespaces` lists the namespaces where it acts.
+[Access](#access) lists what each role may do.
 
 With the admin's token in the variable `ADMIN_TOKEN`, a command such as
 `funcdctl --server http://127.0.0.1:8080 --token "$ADMIN_TOKEN" apply -f namespace.yaml` applies a file that holds a
-Namespace to a server whose API listens at `127.0.0.1:8080`, the default address. The files of the tasks below, in
+Namespace to a server whose API listens at `127.0.0.1:8080`, the default address. The files of the next two tasks, in
 funcd's repository under `api/types/v1alpha1/examples/namespaces`, also hold Functions whose `image` names
-`registry.example.com`: replace each with an [artifact](../../../platform/workloads/artifacts.md) that the server can
-pull.
+`registry.example.com`. Replace each with the reference of an
+[artifact](../../../platform/workloads/artifacts.md) that the server can pull: `funcdctl push <path> <ref>` packs a
+Function's build and pushes it, then prints the reference with its digest, as the
+[reference of `funcdctl push`](../../tools/funcdctl/spec.md#funcdctl-push) describes.
 
 The calls below go to funcd's **edge**, the part of funcd that receives the calls from outside funcd, at the address
-that `server.dataPlaneAddr` sets, such as `127.0.0.1:8081`. Each call names a namespace's host in its `Host` header,
-as curl does with `-H 'Host: shop.localhost'`;
-[Reach a namespace at its own host](#reach-a-namespace-at-its-own-host) explains these hosts.
+that `server.dataPlaneAddr` sets. Its default, `127.0.0.1:0`, takes a free port, so set it to a fixed address, such as
+`127.0.0.1:8081`, before calling it. Each call names a namespace's host in its `Host` header, as curl does with
+`-H 'Host: shop.localhost'`; [Reach a namespace at its own host](#reach-a-namespace-at-its-own-host) explains these
+hosts.
 
 ## Turn off the Functions' own addresses
+
+This task needs a funcd server on Linux and an admin credential, as
+[Set a namespace's defaults](#set-a-namespaces-defaults) explains.
 
 Each Function and each Site of a namespace answers at an address of its own: `/function/<name>` for a Function,
 `/site/<name>` for a Site, or the host and the path that its `spec.ingress` sets. A Namespace whose
@@ -156,7 +166,10 @@ In the namespace `default`, which has no host of its own, `explicit` also turns 
 the reason `HostRequired`, as
 [Choose the host of a Route](../../security-and-networking/networking/index.md#choose-the-host-of-a-route) explains.
 
-## Ask every caller of a namespace to authenticate
+## Set the default authentication of a namespace
+
+This task needs a funcd server on Linux and an admin credential, as
+[Set a namespace's defaults](#set-a-namespaces-defaults) explains.
 
 A Namespace whose [`edgeDefaults.auth.mode`](spec.md#namespacespecedgedefaultsauth) is `authenticated` asks callers for
 a token on every address of the namespace that sets no mode of its own: the Routes and their rules, and the addresses
@@ -180,8 +193,9 @@ What a call to `/function/invoices` on the host `billing.localhost` gets depends
   call whose token funcd does not know gets 401 with `invalid credential`. A call with the token of a credential that
   does not act in `billing` gets 403, such as
   `not authorized to invoke billing/invoices: developer not scoped to namespace "billing"` for a developer of
-  `default`. A call with an admin's token, or with the token of a developer or a viewer of `billing`, reaches the
-  Function, which receives it without its `Authorization` and `X-Api-Key` headers.
+  `default`. A call with an admin's token, or with the token of a developer or a viewer whose entry of
+  `auth.credentials` lists `billing` in its `namespaces`, reaches the Function, which receives it without its
+  `Authorization` and `X-Api-Key` headers.
 
 A call to `/function/status` reaches `status` with no token. A call to the address of a Function that does not exist,
 or whose address is off, gets the same 401 before its 404, so a caller without a token cannot tell which names exist.
@@ -190,20 +204,32 @@ Networking page explains the modes of Routes and their rules.
 
 ## Reach a namespace at its own host
 
-Every namespace other than `default` answers on a host of its own, `<namespace>.<server.baseDomain>`, and on every
-name under it, such as `api.shop.localhost`. [`server.baseDomain`](../../running-funcd/spec.md#funcdconfigyaml) is
-`localhost` by default, so the namespace `shop` answers on `shop.localhost`. On that host, a call to
-`/function/<name>` reaches the Function of that name in that namespace, and a Route of the namespace that sets no host
-answers; its `status.host` names the host.
+This task needs a funcd server on Linux, since `funcdctl dev` runs the namespace `default` only. It needs no Namespace
+and no admin credential, but applying the namespace's resources needs a credential that acts in the namespace: the
+built-in token, or the token of `auth.token`, acts only in the namespaces that `auth.namespaces` lists, `default` by
+default, so list the namespace there, or use an entry of `auth.credentials` whose `namespaces` lists it.
+
+Every namespace other than `default` has a host of its own, `<namespace>.<server.baseDomain>`.
+[`server.baseDomain`](../../running-funcd/spec.md#funcdconfigyaml) is `localhost` by default, so the namespace `shop`
+has the host `shop.localhost`. On that host, and on the names under it, such as `api.shop.localhost`:
+
+- A Route of the namespace that sets no host, such as the Route of a Site that sets none, answers on the namespace's
+  host alone, not on a name under it, and its `status.host` names that host.
+- A call to `/function/<name>` reaches the Function of that name in that namespace, on the namespace's host and on
+  every name under it.
+- A Route of the namespace whose host is a name under the namespace's host, such as `api.shop.localhost`, answers on
+  that name.
 
 The namespace `default` has no host of its own. A call to `/function/<name>` on a host that names no namespace, such as
 `localhost` or `127.0.0.1`, goes to the namespace that its `X-Funcd-Namespace` header names, else to `default`. On a
-namespace's host, the header changes nothing. A namespace's host needs no Namespace and no admin credential, but it
-needs a funcd server, since `funcdctl dev` runs the namespace `default` only.
+namespace's host, the header changes nothing.
 [Choose the host of a Route](../../security-and-networking/networking/index.md#choose-the-host-of-a-route) gives the
-rules of a Route's host.
+other rules of a Route's host, such as when a Route of `default` answers on a namespace's host.
 
 ## Limit the volume space of a namespace
+
+This task needs a funcd server on Linux and an admin credential, as
+[Set a namespace's defaults](#set-a-namespaces-defaults) explains.
 
 A Namespace's [`volumeBudget`](spec.md#namespacespec) limits the volume space that the namespace's Functions reserve:
 each local volume's size from its apply until the volume is removed, and each emptyDir volume's size while its worker
@@ -257,9 +283,11 @@ The [Spec](spec.md) tab gives the range of each field.
 
 ## Changes and deletion
 
-- A change to a Namespace's `defaultExposure` or `edgeDefaults` applies to the next call at a Function's own address,
-  since funcd reads the Namespace at each call. The Routes that Functions and Sites own follow once funcd has processed
-  them.
+- A change to a Namespace's `defaultExposure` applies to the next call at a Function's address `/function/<name>`,
+  since funcd reads the Namespace at each such call. The Routes that Functions and Sites own turn on or off when funcd
+  checks them again, within `controller.routeResyncInterval`, 10 seconds by default.
+- A change to a Namespace's `edgeDefaults` applies to the next call on every address of the namespace that sets no
+  mode of its own, a Route that a Function or a Site owns included, since funcd reads the Namespace at each such call.
 - funcd reads a Namespace's `volumeBudget` at each new reservation of volume space.
 - Deleting a Namespace removes its settings alone: every resource of the namespace keeps running, new resources can
   still be created there, and each setting returns to its default.
@@ -276,8 +304,8 @@ The [Spec](spec.md) tab gives the range of each field.
 - **403** for a Namespace with a developer's or a viewer's token, such as
   `update Namespace in "" denied: developer may not act on cluster-scoped kind "Namespace"`. A developer or a viewer
   also gets 403 in a namespace that its credential does not name.
-- **409** for a delete of a ResourceGroup that has members: `ResourceGroup "rg1" still has 1 member(s): Function/log-burst;
-  delete them first, or delete with force`.
+- **409** for a delete of a ResourceGroup that has members, such as
+  `ResourceGroup "rg1" still has 1 member(s): Function/log-burst; delete them first, or delete with force`.
 - **404** for a delete of a group that no ResourceGroup creates, such as `store.Get: ResourceGroup "dev" not found`.
 - **409** ending with `VolumeBudget` for a Function whose local volume does not fit the namespace's budget.
 
@@ -291,7 +319,7 @@ by the kind, the name and the reason:
 
 A call to a namespace's Functions meets the 404 of an address that is off, and the 401 and 403 of an address that asks
 for a token, as [Turn off the Functions' own addresses](#turn-off-the-functions-own-addresses) and
-[Ask every caller of a namespace to authenticate](#ask-every-caller-of-a-namespace-to-authenticate) explain.
+[Set the default authentication of a namespace](#set-the-default-authentication-of-a-namespace) explain.
 
 ## Run it locally
 
@@ -299,18 +327,19 @@ for a token, as [Turn off the Functions' own addresses](#turn-off-the-functions-
 
 - It runs the namespace `default` only, and stops on a resource of another namespace.
 - Its token is a developer credential of `default`, so it cannot apply, read or list a Namespace. A Namespace in its
-  folder stops it at start, with the message
-  `funcdctl dev: apply Namespace "default": sdk: controlplane.authz: update Namespace in "" denied: developer may not act on cluster-scoped kind "Namespace"`.
-  The namespace `default` keeps its defaults there: its Functions and Sites answer at their own addresses, unless
-  their `spec.ingress` says otherwise, and no default asks callers to authenticate.
+  folder stops it at start, with a message such as
+  `funcdctl: funcdctl dev: apply Namespace "default": sdk: controlplane.authz: update Namespace in "" denied: developer may not act on cluster-scoped kind "Namespace"`
+  for a Namespace named `default`. The namespace `default` keeps its defaults there: its Functions and Sites answer at
+  their own addresses, unless their `spec.ingress` says otherwise, and no default asks callers to authenticate.
 - It gives the group `dev` to each object of its folder that names no group, and to the objects that it writes for its
   Functions. It creates no ResourceGroup `dev`, so a delete of that group gets 404.
 
 `funcdctl dev` keeps its data in memory, where it is lost when `funcdctl dev` stops. With the `--persist` flag, it
 keeps its state between runs in `.funcd-dev`, a folder that it creates in the current folder, or in the folder that
-`--persist-to` names: the metastore, which holds the ResourceGroups and the other objects that it applied, the data of
-its services, and the copies of the builds that it runs. To start again from nothing, delete that folder after
-`funcdctl dev` stops. The [reference of `funcdctl dev`](../../tools/funcdctl/spec.md#funcdctl-dev) lists its flags.
+`--persist-to` names: the metastore, which holds the objects of its folder and those that `funcdctl apply` sent to it,
+such as the ResourceGroup of the first example, the data of its services, and the copies of the builds that it runs.
+To start again from nothing, delete that folder after `funcdctl dev` stops. The
+[reference of `funcdctl dev`](../../tools/funcdctl/spec.md#funcdctl-dev) lists its flags.
 
 ## Examples
 
