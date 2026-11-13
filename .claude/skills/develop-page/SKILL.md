@@ -105,7 +105,8 @@ Every page shares the reader contract of `template.yaml`'s first section; the wo
 
 - No ADR number and no internal name on a page.
 - No manifest or handler code in a fence: only `sh`, `bash` or `console` blocks, and none of them holds a manifest,
-  in YAML or in JSON.
+  in YAML or in JSON. A `cedar` block quotes one of the built-in policies in `internal/auth/cedar/` exactly, without
+  its comments; the template test checks it.
 - Code from a language repo sits under its language's `### TypeScript` or `### Python` heading, wherever it appears.
   The site shows each run of these sections as one group of language tabs, and a section runs to the next heading, so
   the text that holds for both languages comes before them.

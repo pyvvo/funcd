@@ -73,6 +73,7 @@ func TestTemplateRefusesABrokenPage(t *testing.T) {
 		`"Access" appears twice`,
 		"an Examples link points at examples/no-such-example, which no lane in scripts/lanes.yaml runs",
 		"an Examples link points at shim, which no lane in scripts/lanes.yaml runs",
+		"a cedar block that quotes no built-in policy",
 	} {
 		require.Contains(t, problems, want)
 	}
@@ -131,21 +132,33 @@ func templateProblems(t *testing.T, tpl pageTemplate, file string) []string {
 	language := map[string]string{"funcd-typescript": "TypeScript", "funcd-python": "Python"}
 	var problems, headings []string
 	var examples [][]string
-	fence, section, sub, lane := "", "", "", false
+	var cedar []string
+	policies := builtInPolicies(t)
+	fence, section, sub, lane, cedarAt := "", "", "", false, 0
 	for i, line := range strings.Split(string(data), "\n") {
 		n, trimmed, inFence := i+1, strings.TrimSpace(line), fence != ""
 		switch {
 		case inFence && strings.HasPrefix(trimmed, fence):
 			fence = ""
+			if cedarAt > 0 && !slices.Contains(policies, statements(cedar)) {
+				problems = append(problems, fmt.Sprintf("line %d: a cedar block that quotes no built-in policy; quote one of internal/auth/cedar exactly", cedarAt))
+			}
+			cedar, cedarAt = nil, 0
 		case inFence:
 			if manifest.MatchString(line) {
 				problems = append(problems, fmt.Sprintf("line %d: a manifest inside a fence; include it from a tested file", n))
 			}
+			if cedarAt > 0 {
+				cedar = append(cedar, line)
+			}
 		case fenceOpen.MatchString(trimmed):
 			m := fenceOpen.FindStringSubmatch(trimmed)
 			fence = m[1]
-			if !slices.Contains([]string{"sh", "bash", "console"}, m[2]) {
-				problems = append(problems, fmt.Sprintf("line %d: a %q fence; show code through ::include, and commands as sh, bash or console", n, m[2]))
+			switch {
+			case m[2] == "cedar":
+				cedarAt = n
+			case !slices.Contains([]string{"sh", "bash", "console"}, m[2]):
+				problems = append(problems, fmt.Sprintf("line %d: a %q fence; show code through ::include, commands as sh, bash or console, and a built-in policy as cedar", n, m[2]))
 			}
 		case strings.HasPrefix(line, "## "):
 			section, sub = strings.TrimPrefix(line, "## "), ""
@@ -241,6 +254,33 @@ func templateProblems(t *testing.T, tpl pageTemplate, file string) []string {
 		}
 	}
 	return problems
+}
+
+// builtInPolicies returns the statements of each built-in Cedar policy that funcd ships (internal/auth/cedar), the
+// form in which a page may quote one.
+func builtInPolicies(t *testing.T) []string {
+	t.Helper()
+	files, err := filepath.Glob(filepath.Join("..", "..", "internal", "auth", "cedar", "builtin_*.cedar"))
+	require.NoError(t, err)
+	require.NotEmpty(t, files)
+	var out []string
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		require.NoError(t, err)
+		out = append(out, statements(strings.Split(string(data), "\n")))
+	}
+	return out
+}
+
+// statements drops a policy's comment lines and blank lines, which a page may leave out or word for its reader.
+func statements(lines []string) string {
+	var kept []string
+	for _, l := range lines {
+		if t := strings.TrimSpace(l); t != "" && !strings.HasPrefix(t, "//") {
+			kept = append(kept, strings.TrimRight(l, " \t"))
+		}
+	}
+	return strings.Join(kept, "\n")
 }
 
 // laneFolders is the set of "<module> <folder>" that a lane runs: each lane's dir, and the example folder (the first

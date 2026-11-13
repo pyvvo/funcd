@@ -196,14 +196,46 @@ directory, unless `kvstore.dataDir` names another folder. `storage.mode: memory`
 
 ## Access
 
-A binding lets a Function read a table. Writing the table takes write permission: the table's owner has it, and
-another principal, a Function or an Identity, gets it when a RolesAssignment grants `kv::write` on the table, on its
-store, or on the whole namespace. The built-in roles `KV Data Writer`, `Contributor` and `Owner` include `kv::write`,
-and a Role that an operator defines can include it too. A grant names a store as `<store>`, or one table as `<store>/<table>`, such as `claims-kv/claims`. The
-[Security](../../security-and-networking/security/spec.md) Spec tab lists the fields of a RolesAssignment.
+funcd checks every KV call with a built-in Cedar policy. funcd applies the policy in every namespace, beside any Policy
+that an operator writes, and a Policy cannot lift its `forbid` rule:
+
+```cedar
+@id("kv-read-binding")
+permit(principal, action == Action::"kv::read", resource)
+  when { principal has kvBindings && principal.kvBindings.contains(resource) };
+
+@id("kv-write-base")
+permit(principal, action == Action::"kv::write", resource);
+
+@id("kv-single-writer")
+forbid(principal, action == Action::"kv::write", resource)
+  unless { resource has writers && resource.writers.contains(principal) };
+```
+
+A Function gets two grants from its own manifest, with no role to assign:
+
+- **Read.** Each entry of `spec.bindings.kv` adds its table to the Function's `kvBindings`, so `kv-read-binding`
+  permits `kv::read` on that table. A binding grants reading only, never writing.
+- **Write.** The table's owner is in the table's `writers`, so `kv-write-base` permits its `kv::write` and
+  `kv-single-writer` does not forbid it. A principal outside `writers` cannot write: `kv-single-writer` forbids its
+  writes.
+
+Any other write takes a RolesAssignment, which adds a principal, a Function or an Identity, to a table's `writers`.
+The smallest built-in role for it is `KV Data Writer`, which holds `kv::read` and `kv::write`. A grant's scope is one
+table, written as `<store>/<table>`, a store, written as `<store>`, or the whole namespace. The kv-claim example
+gives `pyclaim` write access to the table `claims` of the store `claims-kv`:
+
+::include[../../../../../api/types/v1alpha1/examples/kv/writer-role.yaml#rolesassignment]
+
+The built-in roles `Contributor` and `Owner` also hold `kv::write`, with read and write access to buckets, and a Role
+that an operator
+defines can hold it too. A read of a table that the principal does not bind needs a grant as well, such as the
+built-in role `KV Data Reader`, which holds `kv::read`. The [Security](../../security-and-networking/security/spec.md)
+Spec tab lists the fields of a RolesAssignment.
 
 A binding can name only a store that its own Function declares, by `name` or by `ref`. funcd rejects a binding to any
-other store.
+other store. A call that the policy denies fails with the HTTP status 403, and its message names the rule, such as
+`cedar: forbidden by policy builtin/kv-single-writer`.
 
 ## Run it locally
 
