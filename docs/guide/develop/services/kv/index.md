@@ -23,16 +23,17 @@ The example needs four programs:
 
 `funcdctl dev` starts a local platform and runs the resource files of one folder on it. The example's manifest names
 an `image`, the bundle that `funcdctl push` writes for a platform to run. `funcdctl dev` does not use that image: it
-runs the Function from the code in the folder. It keeps the KV data in memory, and it prints the URL of each Function.
+runs the Function from the code in the folder. `funcdctl dev` keeps the KV data in memory and prints the URL of each
+Function.
 The `--gport` flag sets the port of that URL, so the commands below use port 8080.
 
-The example's manifest connects the Function to its data in three steps:
+The example's manifest connects the Function to its data:
 
 - It declares a **store** under `spec.kv`, with one **table**. A table is a separate set of keys inside the store.
 - The table sets no `owner`, so the Function that declares the store becomes the table's owner. The owner can write
   the table.
-- A **binding** under `spec.bindings.kv` connects the table to the Function and gives it an alias. The handler passes
-  that alias to `ctx.kv`. funcd rejects a `ctx.kv` call that uses an alias that no binding declares.
+- A **binding** under `spec.bindings.kv` connects the table to the Function and gives the table an alias. The handler
+  passes that alias to `ctx.kv`. funcd rejects a `ctx.kv` call that uses an alias that no binding declares.
 
 The [Spec](spec.md) tab lists every field of a store and every method of `ctx.kv`, in TypeScript and in Python.
 
@@ -101,34 +102,37 @@ To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
 The kv-counter handler reads the count, adds one, and writes the result. When two calls for the same name run at the
 same moment, both can read the same count and write the same new count, so one increment is lost.
 
-A conditional write lets a handler detect that another caller changed a key first. It writes only while its condition
-holds, and its result tells the caller whether it wrote:
+A conditional write lets a handler detect that another caller changed a key first. A conditional write changes the
+key only while its condition holds, and its result tells the caller whether the write happened:
 
 - `putIfAbsent` (`put_if_absent` in Python) creates a key only when the key does not exist. A key that has expired
-  counts as absent. It returns the key's new version, or `null` (`None` in Python) when the key exists.
+  counts as absent. A successful `putIfAbsent` returns the key's new version; when the key exists, `putIfAbsent`
+  returns `null` (`None` in Python).
 - `compareAndSet` (`compare_and_set` in Python) replaces a key only when the key still has a given version. The
-  caller gets that version from `getEntry` (`get_entry` in Python), which returns a key's value with its version. It
-  returns the new version, or `null` (`None`) when the key does not have that version.
-- `delIf` (`delete_if` in Python) deletes a key only when the key still has a given version. It returns `true`, or
-  `false` (`False`) when the key does not have that version.
+  caller gets that version from `getEntry` (`get_entry` in Python), which returns a key's value with its version. A
+  successful `compareAndSet` returns the key's new version; when the key does not have the given version,
+  `compareAndSet` returns `null` (`None`).
+- `delIf` (`delete_if` in Python) deletes a key only when the key still has a given version. A successful `delIf`
+  returns `true` (`True` in Python); when the key does not have the given version, `delIf` returns `false`
+  (`False`).
 
 When several callers create the same absent key at the same moment, exactly one `putIfAbsent` succeeds. When several
 callers replace or delete the same key with the same version, exactly one `compareAndSet` or `delIf` succeeds. A
-caller whose write failed has not changed the key. To keep its update, it reads the key again, with its new version,
-and retries.
+caller whose write failed has not changed the key. To keep its update, the caller reads the key again, with the key's
+new version, and retries.
 
 ## Hold a claim on a key
 
-The kv-claim example uses conditional writes to hold a claim: a key that one caller holds until it releases the key or
-the key expires. Each call sends a `key`, a `holder` that names the caller, and an `op`:
+The kv-claim example uses conditional writes to hold a claim: a key that one caller holds until that caller releases
+the key or the key expires. Each call sends a `key`, a `holder` that names the caller, and an `op`:
 
 - `claim` creates the key with `putIfAbsent`.
 - `renew` replaces the key with `compareAndSet`, using the `version` that the holder received when it won.
 - `release` deletes the key with `delIf`, using that `version`.
 
-A call that wins answers `"won":true` with the key's new version; a successful release answers with an empty version
-and holder. A call that loses answers `"won":false` with the key's current version and holder, which are empty when
-the key no longer exists.
+A successful call returns a response with `"won":true` and the key's new version; after a successful release, the
+response's version and holder are empty. A failed call returns a response with `"won":false` and the key's current
+version and holder, which are empty when the key no longer exists.
 
 A claim can expire. A write with a `ttl`, a number of whole seconds, makes the key expire after that time. A write
 without a `ttl` leaves the key with no expiry. A holder keeps its claim by renewing it with a new `ttl` before the
@@ -158,8 +162,8 @@ handler is
 
 ## Share a store between Functions
 
-A store can also be a resource of its own, a KVStore, that several Functions use. In a KVStore, each table's `owner`
-field names the Function that owns the table and can write it:
+To share a store between Functions, create it as a separate KVStore, and set the `owner` of each table to the
+Function that writes the table:
 
 ::include[../../../../../api/types/v1alpha1/examples/kv/kvstore.yaml#kvstore]
 
@@ -167,8 +171,9 @@ Each Function that uses the store declares it by `ref` under `spec.kv`, and bind
 
 ::include[../../../../../api/types/v1alpha1/examples/kv/kvstore.yaml#binding]
 
-A Function that binds the table can read it. A Function other than the owner can write it only through a grant that
-[Access](#access) describes. When a table of a KVStore sets no `owner`, only such a grant lets anyone write the table.
+Every Function that binds the table can read it. To write the table, a Function other than the owner needs the write
+permission that [Access](#access) describes. When a table of a KVStore sets no `owner`, only that permission lets a
+principal write the table.
 
 ## Limits and quotas
 
@@ -179,26 +184,23 @@ A store's `spec.quota` sets its limits:
 - `maxValueBytes` limits the size of each value. When it is not set, the limit is 1 MiB.
 - `maxKeyBytes` limits the size of each key. When it is not set, the limit is 1 KiB.
 
-A write of a value or a key above its limit gets the HTTP status 413. A write that would take the store above its
-total size gets the HTTP status 507. The [Spec](spec.md) tab gives the range of each field.
+A write whose value or key is above its limit fails with the HTTP status 413. A write that would take the store above
+its total size fails with the HTTP status 507. The [Spec](spec.md) tab gives the range of each field.
 
 ## Where the data lives
 
 By default, funcd keeps KV data in memory, and the data is lost when funcd stops. To keep the data on disk, set
 `kvstore.engine: badger` in funcd's configuration. funcd then stores the data in the `kv` folder of its data
-directory, unless `kvstore.dataDir` names another folder. The setting `storage.mode: memory` overrides the engine:
-under it, the KV data stays in memory.
+directory, unless `kvstore.dataDir` names another folder. `storage.mode: memory` keeps KV data in memory even when
+`kvstore.engine` is `badger`.
 
 ## Access
 
-A table's owner can write the table. Another principal, a Function or an Identity, can write the table when a
-RolesAssignment grants it `kv::write` on the table, on its store, or on the whole namespace. The built-in roles
-`KV Data Writer`, `Contributor` and `Owner` include `kv::write`, and a Role that an operator defines can include it
-too. A grant names a store as `<store>`, or one table as `<store>/<table>`, such as `claims-kv/claims`. The
+A binding lets a Function read a table. Writing the table takes write permission: the table's owner has it, and
+another principal, a Function or an Identity, gets it when a RolesAssignment grants `kv::write` on the table, on its
+store, or on the whole namespace. The built-in roles `KV Data Writer`, `Contributor` and `Owner` include `kv::write`,
+and a Role that an operator defines can include it too. A grant names a store as `<store>`, or one table as `<store>/<table>`, such as `claims-kv/claims`. The
 [Security](../../security-and-networking/security/spec.md) Spec tab lists the fields of a RolesAssignment.
-
-A Function reads a table through its binding. A Function that binds a table but holds no right to write it can read
-the table but cannot write it.
 
 A binding can name only a store that its own Function declares, by `name` or by `ref`. funcd rejects a binding to any
 other store.
