@@ -1,7 +1,7 @@
 # ADR-0326: Secret files that other users can open warn at start
 
-- **Status**: Accepted (2026-11-13), by the decider with choices 1 to 3 of its brief as proposed; judged once: no Blocker or
-  Major, six Minors folded in
+- **Status**: Reviewing (2026-11-13); Accepted (2026-11-13), by the decider with choices 1 to 3 of its brief as proposed;
+  judged once: no Blocker or Major, six Minors folded in
 - **Date**: 2026-11-13
 - **Deciders**: green-0-rabbit
 - **Tags**: security, config, daemon, secrets

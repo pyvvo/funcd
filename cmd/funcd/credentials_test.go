@@ -799,3 +799,75 @@ func TestIssue717_ShorthandTrimsOrRefusesUnusableValues(t *testing.T) {
 		})
 	}
 }
+
+// openSecretFileContent is the content of every secret file below; no log line may hold it.
+const openSecretFileContent = "open-secret-key-32-bytes-long!!!"
+
+// scenario: exposed-secret-file-warns (ADR-0326)
+func TestScenarioExposedSecretFileWarns(t *testing.T) {
+	for _, c := range []struct {
+		key  string
+		mode fs.FileMode
+		set  func(cfg *config.Config, path string)
+	}{
+		{"secrets.encryptionKeyFile", 0o644, func(cfg *config.Config, p string) { cfg.Secrets.EncryptionKeyFile = p }},
+		{"backup.credentialsFile", 0o640, func(cfg *config.Config, p string) { cfg.Backup.CredentialsFile = p }},
+		{"blob.credentialsFile", 0o604, func(cfg *config.Config, p string) { cfg.Blob.CredentialsFile = p }},
+		{"kvstore.backup.credentialsFile", 0o660, func(cfg *config.Config, p string) { cfg.Kvstore.Backup.CredentialsFile = p }},
+		{"s3gateway.masterSecretFile", 0o640, func(cfg *config.Config, p string) { cfg.S3Gateway.MasterSecretFile = p }},
+		{"server.tls.keyFile", 0o644, func(cfg *config.Config, p string) { cfg.Server.TLS.KeyFile = p }},
+	} {
+		t.Run(c.key, func(t *testing.T) {
+			path := tokenFile(t, t.TempDir(), "secret", openSecretFileContent, c.mode)
+			cfg := config.Defaults()
+			c.set(&cfg, path)
+			logs := &syncBuf{}
+			warnExposedSecretFiles(cfg, os.Geteuid(), debugLogger(logs))
+			out := logs.String()
+			require.Equal(t, 1, strings.Count(out, "secret file open to other users"), out)
+			require.Contains(t, out, "key="+c.key+" path="+path+" ", "the warning names this key and its own path")
+			require.Contains(t, out, fmt.Sprintf("has mode %#o, open to group or others: chmod 0600", c.mode))
+			require.NotContains(t, out, openSecretFileContent, "a file's content reached the log")
+		})
+	}
+
+	t.Run("another-owner", func(t *testing.T) {
+		cfg := config.Defaults()
+		cfg.Secrets.EncryptionKeyFile = tokenFile(t, t.TempDir(), "secret.key", openSecretFileContent, 0o600)
+		euid := os.Geteuid() + 1
+		if os.Geteuid() == 0 {
+			// Root passes the owner rule, so the file goes to another user while the daemon stays root.
+			require.NoError(t, os.Chown(cfg.Secrets.EncryptionKeyFile, 1, 1))
+			euid = 0
+		}
+		logs := &syncBuf{}
+		warnExposedSecretFiles(cfg, euid, debugLogger(logs))
+		require.Equal(t, 1, strings.Count(logs.String(), "secret file open to other users"), logs.String())
+		require.Contains(t, logs.String(), "is owned by uid")
+	})
+}
+
+// scenario: private-secret-file-is-quiet (ADR-0326)
+func TestScenarioPrivateSecretFileIsQuiet(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Defaults()
+	cfg.Secrets.EncryptionKeyFile = tokenFile(t, dir, "secret.key", openSecretFileContent, 0o600)
+	cfg.Backup.CredentialsFile = tokenFile(t, dir, "backup", openSecretFileContent, 0o400)
+	cfg.Blob.CredentialsFile = filepath.Join(dir, "missing")
+	logs := &syncBuf{}
+	warnExposedSecretFiles(cfg, os.Geteuid(), debugLogger(logs))
+	require.Empty(t, logs.String(), "0600, 0400, unset and a missing path log nothing here")
+}
+
+// TestServeWarnsOnAnOpenSecretFile: serve names a secret file other users can open, and still serves (ADR-0326
+// Decision 3).
+func TestServeWarnsOnAnOpenSecretFile(t *testing.T) {
+	path := tokenFile(t, t.TempDir(), "secret.key", openSecretFileContent, 0o644)
+	addr := freeAddr(t)
+	logs := serveDaemon(t, "server:\n  listenAddr: "+addr+"\nauth:\n  token: "+legacyToken+
+		"\nsecrets:\n  encryptionKeyFile: \""+path+"\"\n")
+	waitServed(t, addr, legacyToken, v1.KindFunction, "default")
+	require.Equal(t, 1, strings.Count(logs.String(), "secret file open to other users"), logs.String())
+	require.Contains(t, logs.String(), "secrets.encryptionKeyFile")
+	require.NotContains(t, logs.String(), openSecretFileContent, "the key reached the log")
+}
