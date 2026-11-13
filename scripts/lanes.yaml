@@ -349,6 +349,73 @@ kv-claim:
     tries: 60
   venom: e2e/kv-claim.venom.yml
 
+secret-writer:
+  description: In JS and in Python, a Secret's owner writes and deletes a key through context.secret, and a function that binds the Secret without owning it is refused with 403 until a Secret Data Writer grant (ADR-0327, ADR-0328).
+  module: github.com/pyvvo/funcd-typescript
+  dir: examples/secret-writer
+  # Each language has its own Secret, owner and user, so the Python side stages under py/ via {from, to}. Each
+  # fixtures/grant.yaml is staged, not applied: the Venom suite applies it after the user's write is refused.
+  stage:
+    - token-owner.mjs
+    - token-owner.contract.yaml
+    - token-user.mjs
+    - token-user.contract.yaml
+    - secret.yaml
+    - token-owner.yaml
+    - token-user.yaml
+    - fixtures/grant.yaml
+    - from: e2e/fixtures/secret-writer-funcdconfig.yaml
+      to: funcdconfig.yaml
+    - from: examples/secret-writer/src/py-token-owner/main.py
+      module: github.com/pyvvo/funcd-python
+      to: py/py-token-owner.py
+    - from: examples/secret-writer/py-token-owner.contract.yaml
+      module: github.com/pyvvo/funcd-python
+      to: py/py-token-owner.contract.yaml
+    - from: examples/secret-writer/src/py-token-user/main.py
+      module: github.com/pyvvo/funcd-python
+      to: py/py-token-user.py
+    - from: examples/secret-writer/py-token-user.contract.yaml
+      module: github.com/pyvvo/funcd-python
+      to: py/py-token-user.contract.yaml
+    - from: examples/secret-writer/secret.yaml
+      module: github.com/pyvvo/funcd-python
+      to: py/secret.yaml
+    - from: examples/secret-writer/py-token-owner.yaml
+      module: github.com/pyvvo/funcd-python
+      to: py/py-token-owner.yaml
+    - from: examples/secret-writer/py-token-user.yaml
+      module: github.com/pyvvo/funcd-python
+      to: py/py-token-user.yaml
+    - from: examples/secret-writer/fixtures/grant.yaml
+      module: github.com/pyvvo/funcd-python
+      to: py/fixtures/grant.yaml
+  push:
+    - artifact: token-owner.mjs
+      ref: token-owner
+    - artifact: token-user.mjs
+      ref: token-user
+    - artifact: py/py-token-owner.py
+      ref: py-token-owner
+    - artifact: py/py-token-user.py
+      ref: py-token-user
+  apply:
+    - secret.yaml
+    - token-owner.yaml
+    - token-user.yaml
+    - py/secret.yaml
+    - py/py-token-owner.yaml
+    - py/py-token-user.yaml
+  ready:
+    kind: function
+    names:
+      - token-owner
+      - token-user
+      - py-token-owner
+      - py-token-user
+    tries: 60
+  venom: e2e/secret-writer.venom.yml
+
 workflow:
   description: A Workflow (ingest→score→{hi|lo}→report→wait→pass) mixing materialized function steps with engine-native built-ins (a blocking wait + a pass transform), driven on real containerd (ADR-0094 + ADR-0096).
   module: github.com/pyvvo/funcd-typescript

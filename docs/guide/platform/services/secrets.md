@@ -11,7 +11,8 @@ A Secret holds named values, its `spec.data`, in a namespace. A Function names t
 asks funcd, with no cache: a changed Secret shows at the next read, without a restart. A read resolves every Secret
 that the Function binds, and when two of them hold the same key, the later Secret's value wins. A Function can also
 write a key of a Secret that it binds, with `ctx.secret.put`, or remove one, when it is the Secret's owner or a role
-allows it to write the Secret. The next read of each Function that binds the Secret shows the change.
+allows it to write the Secret. The next read of each Function that binds the Secret shows the change, unless a
+Secret that comes later in that Function's `spec.bindings.secret` holds the same key.
 
 Each read asks Cedar whether the Function may `secret::read` each Secret that it binds. The built-in policy
 `secret-read-binding` allows a bound Secret. The built-in roles `Secret Data Reader` and `Secret Data Writer` also
