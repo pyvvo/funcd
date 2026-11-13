@@ -571,7 +571,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | `ingress` | object, [`App.spec.sites[].ingress`](#appspecsitesingress) | Where the edge serves the Site: its own address and its rules, through a Route of the Site's name that the Site writes. A Route of that name that the Site does not own leaves the Site not Ready. |
 | `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
-| `runtimeConfig` | object, [`App.spec.sites[].runtimeConfig`](#appspecsitesruntimeconfig) | Values each deployment sets without a rebuild, served as config.json beside the bundle. The file is public: never put a secret in it. |
+| `runtimeConfig` | object, [`App.spec.sites[].runtimeConfig`](#appspecsitesruntimeconfig) | Values each deployment sets without a rebuild, served as config.json beside the bundle. Every client that can load the Site can read it: never put a secret in it. |
 | `spa` | boolean | Serve the index, with status 200, for a path under the bundle's path that matches no file, so that a client-side router handles it. ingress.rules never fall back to it: a missing file there is 404. |
 
 ### `App.spec.sites[].bindings`

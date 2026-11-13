@@ -42,7 +42,7 @@ type SiteSpec struct {
 	Ingress SiteIngress `json:"ingress" doc:"Where the edge serves the Site: its own address and its rules, through a Route of the Site's name that the Site writes. A Route of that name that the Site does not own leaves the Site not Ready."`
 	// RuntimeConfig makes the Site serve one generated config.json beside its bundle (ADR-0239). Not the function
 	// runtime.
-	RuntimeConfig *SiteRuntimeConfig `json:"runtimeConfig,omitempty" doc:"Values each deployment sets without a rebuild, served as config.json beside the bundle. The file is public: never put a secret in it."`
+	RuntimeConfig *SiteRuntimeConfig `json:"runtimeConfig,omitempty" doc:"Values each deployment sets without a rebuild, served as config.json beside the bundle. Every client that can load the Site can read it: never put a secret in it."`
 }
 
 // SiteRuntimeConfig holds the members of a Site's generated config.json (ADR-0239).

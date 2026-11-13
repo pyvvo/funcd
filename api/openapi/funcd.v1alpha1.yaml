@@ -1210,7 +1210,7 @@ components:
                 type: string
               runtimeConfig:
                 $ref: "#/components/schemas/SiteRuntimeConfig"
-                description: "Values each deployment sets without a rebuild, served as config.json beside the bundle. The file is public: never put a secret in it."
+                description: "Values each deployment sets without a rebuild, served as config.json beside the bundle. Every client that can load the Site can read it: never put a secret in it."
               spa:
                 description: "Serve the index, with status 200, for a path under the bundle's path that matches no file, so that a client-side router handles it. ingress.rules never fall back to it: a missing file there is 404."
                 type: boolean
@@ -5373,7 +5373,7 @@ components:
           description: "Where the edge serves the Site: its own address and its rules, through a Route of the Site's name that the Site writes. A Route of that name that the Site does not own leaves the Site not Ready."
         runtimeConfig:
           $ref: "#/components/schemas/SiteRuntimeConfig"
-          description: "Values each deployment sets without a rebuild, served as config.json beside the bundle. The file is public: never put a secret in it."
+          description: "Values each deployment sets without a rebuild, served as config.json beside the bundle. Every client that can load the Site can read it: never put a secret in it."
         spa:
           description: "Serve the index, with status 200, for a path under the bundle's path that matches no file, so that a client-side router handles it. ingress.rules never fall back to it: a missing file there is 404."
           type: boolean
