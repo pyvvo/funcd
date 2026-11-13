@@ -10,14 +10,14 @@ import (
 type Ingress struct {
 	// Enabled turns the resource's own address on or off. Unset: a Function or a Site follows its namespace's
 	// defaultExposure (implicit on, explicit off) and a Lake is off.
-	Enabled *bool `json:"enabled,omitempty"`
+	Enabled *bool `json:"enabled,omitempty" doc:"Turns the resource's own address on or off. Unset, it is on unless the namespace's spec.defaultExposure is explicit; a Lake's address is on only when this is true."`
 	// Host is the exact host of the resource's own address; "" is the namespace host (ADR-0240).
-	Host string `json:"host,omitempty"`
+	Host string `json:"host,omitempty" doc:"The exact host of the resource's own address. Empty is the namespace's host, <namespace>.<server.baseDomain>, or, in the default namespace, any host that no other namespace reserves."`
 	// Path is the edge path of the resource's own address; "" is "/" when Host is set, else
 	// /function/<name>, /site/<name> or /lake/<name>.
-	Path string `json:"path,omitempty"`
+	Path string `json:"path,omitempty" doc:"The edge path of the resource's own address, which begins with / and does not end with / unless it is /. Empty is / when host is set, else /function/<name>, /site/<name> or /lake/<name> by kind."`
 	// Auth is the edge stance of the resource's own address; nil is the namespace default.
-	Auth *RouteAuth `json:"auth,omitempty"`
+	Auth *RouteAuth `json:"auth,omitempty" doc:"How the edge checks callers at the resource's own address; unset, the namespace's spec.edgeDefaults.auth decides, else open. A Lake refuses it, since the Lake gateway checks each caller."`
 }
 
 // EnabledIn reports whether a Function's or a Site's own address is on in a namespace of mode (ADR-0241 Decision 2).

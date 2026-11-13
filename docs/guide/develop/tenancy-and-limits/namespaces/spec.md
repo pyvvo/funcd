@@ -16,22 +16,22 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `defaultExposure` | string, one of `""`, `implicit`, `explicit` |  |
-| `edgeDefaults` | object, [`Namespace.spec.edgeDefaults`](#namespacespecedgedefaults) |  |
-| `volumeBudget` | string, a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB) |  |
-| `volumeBudgetBytes` | integer, at least 0 |  |
+| `defaultExposure` | string, one of `""`, `implicit`, `explicit` | Whether the namespace's Functions and Sites answer at their own address, such as /function/&lt;name&gt;, while their spec.ingress.enabled is unset: implicit, or empty, turns it on, and explicit turns it off. Routes you write and Routes an App declares stay on, though in the default namespace explicit refuses one with no host (HostRequired). |
+| `edgeDefaults` | object, [`Namespace.spec.edgeDefaults`](#namespacespecedgedefaults) | The namespace's edge defaults, which apply where a Route or a Function's or Site's spec.ingress sets no value of its own. |
+| `volumeBudget` | string, a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB) | The most volume space the namespace's Functions may reserve: each local volume's size from apply until the volume is removed, and each worker's emptyDir while the worker exists. Apply refuses a local volume that does not fit (VolumeBudget), and a worker whose emptyDir does not fit is not created. Set volumeBudget or volumeBudgetBytes, not both; neither, or 0, means no budget. |
+| `volumeBudgetBytes` | integer, at least 0 | The same budget as volumeBudget, as a number of bytes. Set volumeBudget or volumeBudgetBytes, not both; 0 means no budget. |
 
 ### `Namespace.spec.edgeDefaults`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `auth` | object, [`Namespace.spec.edgeDefaults.auth`](#namespacespecedgedefaultsauth) |  |
+| `auth` | object, [`Namespace.spec.edgeDefaults.auth`](#namespacespecedgedefaultsauth) | The default edge authentication of the namespace's Routes and of its Functions' and Sites' own addresses, used where a rule, its Route and spec.ingress.auth set none; unset is open. It is a default, not a floor: a rule or a Route that sets open stays open. |
 
 ### `Namespace.spec.edgeDefaults.auth`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `mode` | string, one of `""`, `authenticated`, `open` |  |
+| `mode` | string, one of `""`, `authenticated`, `open` | authenticated admits only a caller whose token, sent as Authorization: Bearer or X-Api-Key, may get the namespace's Functions; others get 401 or 403, and every caller gets 401 while server.auth.edge is off. open, or empty, admits anyone. |
 
 ### `Namespace.status`
 
@@ -51,7 +51,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `description` | string |  |
+| `description` | string | Free text about the group; funcd does not read it. |
 
 ### `ResourceGroup.status`
 

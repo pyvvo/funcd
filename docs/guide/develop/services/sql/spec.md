@@ -16,9 +16,9 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `owner` | string, a DNS-1123 label |  |
-| `quota` | object, [`SQLDatabase.spec.quota`](#sqldatabasespecquota) |  |
-| `resources` | object, [`SQLDatabase.spec.resources`](#sqldatabasespecresources) |  |
+| `owner` | string, a DNS-1123 label | The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step. With no owner, only those writers can write it. |
+| `quota` | object, [`SQLDatabase.spec.quota`](#sqldatabasespecquota) | A cap on the database's total size, the bytes of its pages in use. Once it is reached, an execute gets 507 unless each of its statements is a DELETE or a DROP. A change keeps the engine running. |
+| `resources` | object, [`SQLDatabase.spec.resources`](#sqldatabasespecresources) | The cpu and memory of the database's engine. An empty memory means 256Mi, and an empty cpu sets no cpu limit. A change replaces the running engine. |
 
 ### `SQLDatabase.spec.quota`
 
@@ -31,14 +31,14 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `cpu` | string |  |
-| `memory` | string |  |
+| `cpu` | string | The CPU cap of the worker or engine it sizes, as a number of cores of at least 0.01, such as 0.5 or 2. Empty takes the default of the resource that declares it, or no cap when there is none. Only the containerd runtime enforces it. |
+| `memory` | string | The memory cap of the worker or engine it sizes, such as 256Mi or 4GiB: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B, above zero. Empty takes the default of the resource that declares it, or no cap when there is none. Only the containerd runtime enforces it, and there a worker that passes it is killed. |
 
 ### `SQLDatabase.status`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `bindings` | integer |  |
+| `bindings` | integer | The number of Functions whose spec.bindings.sql names the database. |
 | `conditions` | array of [Condition](../../common-definitions.md#condition) | The conditions that explain the phase. |
 | `observedGeneration` | integer | The generation of the spec that funcd last acted on. |
 | `phase` | string, one of `Pending`, `Deploying`, `Ready`, `Idle`, `Degraded`, `Failed`, `Terminating` | Where the object is in its lifecycle. |

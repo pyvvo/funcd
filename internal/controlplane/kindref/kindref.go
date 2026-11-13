@@ -380,7 +380,7 @@ func (r *renderer) section(title string, level int, s *huma.Schema, path, owner 
 		}
 		r.fields[owner+"."+f] = desc
 		kind := r.describe(node, path+"."+f, owner+"."+f, required[f], &nested)
-		rows = append(rows, "| `"+f+"` | "+cell(kind)+" | "+cell(desc)+" |")
+		rows = append(rows, "| `"+f+"` | "+cell(kind)+" | "+cell(escaped(desc))+" |")
 	}
 	r.lines = append(r.lines, "", strings.Repeat("#", level)+" "+title, "")
 	r.lines = append(r.lines, rows...)
@@ -514,6 +514,12 @@ var unslugged = regexp.MustCompile(`[^a-z0-9 _-]`)
 // slug is the heading id the site gives a heading (github-slugger, which fumadocs uses).
 func slug(heading string) string {
 	return strings.ReplaceAll(unslugged.ReplaceAllString(strings.ToLower(heading), ""), " ", "-")
+}
+
+// escaped writes as entities the characters of a description that Markdown and MDX would read as markup: <name> as an
+// HTML tag, {} as an expression. The funcd and funcdctl Spec pages escape them the same way.
+func escaped(desc string) string {
+	return strings.NewReplacer("<", "&lt;", ">", "&gt;", "{", "&#123;", "}", "&#125;").Replace(desc)
 }
 
 func cell(text string) string {

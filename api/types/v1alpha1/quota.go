@@ -51,7 +51,7 @@ func (q SizeQuota) Validate(op, path string) error {
 type BucketQuota struct {
 	SizeQuota `json:",inline"`
 	// MaxObjectBytes caps one object (a write past it gets 413, ADR-0148); 0 ⇒ only s3gateway.maxUploadBytes applies.
-	MaxObjectBytes int64 `json:"maxObjectBytes,omitempty" minimum:"0"`
+	MaxObjectBytes int64 `json:"maxObjectBytes,omitempty" minimum:"0" doc:"The largest object a write may store, in bytes. A larger write gets 413, or EntityTooLarge over S3, and while it is set funcd refuses to sign a presigned PUT URL for the Bucket, with 403. 0 sets no cap of the Bucket's own, so only funcd's upload limits apply, such as s3gateway.maxUploadBytes."`
 }
 
 // KVStoreQuota is a KVStore's caps (ADR-0292): its total size and the per-value and per-key caps moved from the spec's

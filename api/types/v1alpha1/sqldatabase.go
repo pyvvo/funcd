@@ -17,16 +17,16 @@ type SQLDatabase struct {
 // SQLDatabaseSpec is the desired state of a SQLDatabase: the engine's cpu and memory bounds and the Function that may
 // write (ADR-0233). An empty memory bound means the reconciler's default (256Mi); the spec is not rewritten.
 type SQLDatabaseSpec struct {
-	Resources ResourceSpec `json:"resources,omitempty"`
-	Owner     ObjectName   `json:"owner,omitempty"`
+	Resources ResourceSpec `json:"resources,omitempty" doc:"The cpu and memory of the database's engine. An empty memory means 256Mi, and an empty cpu sets no cpu limit. A change replaces the running engine."`
+	Owner     ObjectName   `json:"owner,omitempty" doc:"The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step. With no owner, only those writers can write it."`
 	// Quota caps the database's total size (ADR-0292).
-	Quota SizeQuota `json:"quota,omitzero"`
+	Quota SizeQuota `json:"quota,omitzero" doc:"A cap on the database's total size, the bytes of its pages in use. Once it is reached, an execute gets 507 unless each of its statements is a DELETE or a DROP. A change keeps the engine running."`
 }
 
 // SQLDatabaseStatus is the observed state of a SQLDatabase. Bindings counts the Functions that bind it.
 type SQLDatabaseStatus struct {
 	Status   `json:",inline"`
-	Bindings int `json:"bindings,omitempty"`
+	Bindings int `json:"bindings,omitempty" doc:"The number of Functions whose spec.bindings.sql names the database."`
 }
 
 // GroupVersionKind returns the constant GVK for SQLDatabase.

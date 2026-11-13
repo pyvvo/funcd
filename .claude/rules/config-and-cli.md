@@ -18,5 +18,4 @@ paths:
 - A command that only the `-tags dev` build registers carries the cobra annotation `build: dev`.
 - A tag is a raw string literal: it cannot hold a backtick.
 - After a change, run `scripts/agent/d just generate`: it updates `docs/guide/develop/running-funcd/spec.md` and
-  `docs/guide/develop/tools/funcdctl/spec.md`. Remove each key you describe from
-  `internal/reference/testdata/undescribed-config.txt`.
+  `docs/guide/develop/tools/funcdctl/spec.md`. `TestEveryConfigKeyIsDescribed` refuses a key with no tag.

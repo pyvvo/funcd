@@ -27,26 +27,26 @@ type Lake struct {
 // the engine's recorded resource sizing.
 type LakeSpec struct {
 	// Bindings are what the engine uses (ADR-0246): the lakehouse buckets, its ConfigMaps and its Secrets.
-	Bindings LakeBindings `json:"bindings"`
+	Bindings LakeBindings `json:"bindings" doc:"What the Lake's engine uses: Bucket prefixes, and the ConfigMaps and Secrets of its environment."`
 	// Location names the bound (bucket, prefix) the Lake's files live under; the prefix must be OWNED by this Lake
 	// (single-writer). Its catalog, a DuckDB file (ADR-0271), lives in the catalog store under the same location
 	// (ADR-0293).
-	Location LakeLocation `json:"location"`
+	Location LakeLocation `json:"location" doc:"The Bucket prefix that holds the Lake's files, one of the Lake's bindings.blob. The Lake waits in Pending, with the reason PrefixNotOwned, until the prefix's owner is this Lake. The Lake's catalog is kept outside the Bucket, under the same location, so a Lake located where another was finds that Lake's files and catalog."`
 	// Resources sizes the engine (cpu/mem); DuckDB is memory-hungry. Validate refuses a value that does not parse, and
 	// the provider-runtime maps it onto runtime.Limits (ADR-0087, ADR-0291 Decision 2).
-	Resources ResourceSpec `json:"resources,omitempty"`
+	Resources ResourceSpec `json:"resources,omitempty" doc:"The cpu and memory of the Lake's engine. An empty cpu or memory sets no limit on it, and a change replaces the running engine."`
 	// Ingress declares the edge exposure of this lake's lake::query PEP proxy (ADR-0138, ADR-0241), on only
 	// with enabled: true; its default path is /lake/<name>. Once Ready, the reconciler programs an edge
 	// entry to the PEP PROXY (never the engine), so an external caller is PEP'd on lake::query exactly like an
 	// internal one; auth is refused, since the proxy authenticates. Exposure is a network path, not a grant.
-	Ingress *Ingress `json:"ingress,omitempty"`
+	Ingress *Ingress `json:"ingress,omitempty" doc:"Exposes the Lake gateway at the edge, only when enabled is true and while the Lake is Ready. The path defaults to /lake/<name>, or / with a host. Setting auth is refused, since the Lake gateway checks each caller itself."`
 	// Buckets, ConfigMaps and SecretDeclarations are what a standalone Lake declares at its root (ADR-0251):
 	// by name it owns the Bucket or ConfigMap, which carries its marker; by ref it binds an existing one. An owner left
 	// out of a prefix is the Lake (the lake-store-owner admission). A lake nested in a Function or an
 	// App declares nothing here: its declarer's root holds them.
-	Buckets            []BucketEntry       `json:"buckets,omitempty"`
-	ConfigMaps         []ConfigMapEntry    `json:"configMaps,omitempty"`
-	SecretDeclarations []SecretDeclaration `json:"secrets,omitempty"`
+	Buckets            []BucketEntry       `json:"buckets,omitempty" doc:"The Buckets that a Lake applied on its own declares: by name the Lake creates the Bucket, an omitted prefix owner being the Lake, and a Bucket of that name that is not the Lake's holds it in Pending with StoreNotOwned; by ref it binds an existing one. Each Bucket that the Lake's bindings.blob names must be declared here. A lake that another resource declares sets none."`
+	ConfigMaps         []ConfigMapEntry    `json:"configMaps,omitempty" doc:"The ConfigMaps that a Lake applied on its own declares: by name the Lake defines one, and a ConfigMap of its stored name that is not the Lake's holds it in Pending with StoreNotOwned; by ref it binds an existing one. Each ConfigMap that the Lake's bindings.config names must be declared here. A lake that another resource declares sets none."`
+	SecretDeclarations []SecretDeclaration `json:"secrets,omitempty" doc:"The Secrets that a Lake applied on its own declares, with the keys its engine reads. Each Secret that the Lake's bindings.secret names must be declared here, and the Lake waits in Pending, with SecretNotFound or SecretKeyMissing, while one is missing or lacks a key. A lake that another resource declares sets none."`
 }
 
 // HasRootEntries reports whether the spec declares anything at its root (ADR-0251), which only a standalone
@@ -84,9 +84,9 @@ func LakeCatalogKey(l LakeLocation) string {
 // Validate.
 type LakeLocation struct {
 	// Bucket is the name of a Bucket in this service's namespace.
-	Bucket ObjectName `json:"bucket"`
+	Bucket ObjectName `json:"bucket" doc:"The Bucket that holds the Lake's files, in the Lake's namespace."`
 	// Prefix is a sub-domain (BucketPrefix.name) of that bucket; a DNS-1123 label.
-	Prefix string `json:"prefix" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"`
+	Prefix string `json:"prefix" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" doc:"The prefix of that Bucket, which this Lake must own."`
 }
 
 // LakeStatus is the observed state of a Lake (ADR-0086): the reconciler reflects
@@ -98,12 +98,12 @@ type LakeStatus struct {
 	Status `json:",inline"`
 	// Function is the engine identity, "<name>-duckdb" (computed by the reconciler). No Function object has this
 	// name: the engine runs as the provider worker named for the Lake (ADR-0086, repointed at the engine).
-	Function ObjectName `json:"function,omitempty"`
+	Function ObjectName `json:"function,omitempty" doc:"funcd sets it to <name>-duckdb, after the Lake's name. funcd makes no object of that name and does not read it."`
 	// Endpoint is the published Quack URL — the backing function's ingress path (computed).
-	Endpoint string `json:"endpoint,omitempty"`
+	Endpoint string `json:"endpoint,omitempty" doc:"While the Lake is Ready, the host and port of its Lake gateway, which a Function that binds the Lake gets as FUNCD_LAKE_<ALIAS>_URL. In any other phase it is empty or holds the engine's own address."`
 	// ProxyPort is the port of the lake's PEP proxy listener (ADR-0162), recorded so a restarted daemon binds the
 	// same port again and the URL consumers hold keeps reaching this lake (computed).
-	ProxyPort int `json:"proxyPort,omitempty"`
+	ProxyPort int `json:"proxyPort,omitempty" doc:"The port of the Lake gateway. funcd binds it again after a restart, so the address that Functions binding the Lake hold keeps working; when the port is taken, funcd binds a new one, and their address changes."`
 }
 
 // GroupVersionKind returns the constant GVK for Lake.

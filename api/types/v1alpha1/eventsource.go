@@ -21,26 +21,26 @@ type EventSource struct {
 type EventSourceSpec struct {
 	// Timer is the timer source kind (V1): named events, each on its own interval or cron schedule. The webhook
 	// source kind is a named follow-on (it needs an eventing-ingress gateway decision).
-	Timer *TimerSource `json:"timer,omitempty"`
+	Timer *TimerSource `json:"timer,omitempty" doc:"Events that fire on a schedule, each on its own interval or cron expression; a firing's data is an empty object. Exactly one of timer, blob and sql."`
 	// Blob is the object-store source kind (ADR-0119, F83): named events that fire on object-created under
 	// a watched Bucket prefix, detected by a poll watcher over the ADR-0007 blob.Bucket List seam.
-	Blob *BlobSource `json:"blob,omitempty"`
+	Blob *BlobSource `json:"blob,omitempty" doc:"Events that fire on new and rewritten objects of a Bucket in this namespace, which funcd lists every eventing.blobPollInterval. A firing's data has the fields bucket, key, size, version and time, the object's modification time. Exactly one of timer, blob and sql."`
 	// SQL is the SQL change-feed source kind (ADR-0235, F132): named events that fire on a row change of a table of
 	// a SQLDatabase in this namespace, from the changes its engine posts to funcd.
-	SQL *SQLSource `json:"sql,omitempty"`
+	SQL *SQLSource `json:"sql,omitempty" doc:"Events that fire on row changes in a SQLDatabase of this namespace. A firing's data has the fields op, table, rowId and index, and before, after and commitTimestamp when the change carries them; when before and after together pass 256 KiB, both are dropped and truncated is true. Exactly one of timer, blob and sql."`
 }
 
 // SQLSource hosts the sql kind's named events (ADR-0235).
 type SQLSource struct {
-	Database ObjectName `json:"database"`
-	Events   []SQLEvent `json:"events"` // ≥1; unique names
+	Database ObjectName `json:"database" doc:"The SQLDatabase, in this namespace, whose row changes fire the events. Until it exists, the source is not Ready, with reason DatabaseNotFound."`
+	Events   []SQLEvent `json:"events" doc:"The source's events: at least one, with unique names, each watching one table."` // ≥1; unique names
 }
 
 // SQLEvent is one named row-change event: a table and the changes it fires on (empty ⇒ all three, by Normalize).
 type SQLEvent struct {
-	Name  ObjectName      `json:"name"`
-	Table string          `json:"table"`
-	On    []SQLChangeType `json:"on,omitempty"`
+	Name  ObjectName      `json:"name" doc:"The event's name, unique among the source's events: the type of each CloudEvent it fires, and the event a Sensor dependency names."`
+	Table string          `json:"table" doc:"The table whose row changes fire the event, matched by its exact name, case included."`
+	On    []SQLChangeType `json:"on,omitempty" doc:"The row changes that fire the event: Insert, Update or Delete. Empty means all three."`
 }
 
 // SQLChangeType is a row change (ADR-0235).
@@ -55,14 +55,14 @@ const (
 
 // TimerSource hosts the timer kind's named events (ADR-0108).
 type TimerSource struct {
-	Events []TimerEvent `json:"events"` // ≥1; unique names
+	Events []TimerEvent `json:"events" doc:"The timer's events: at least one, with unique names, each firing on its own schedule."` // ≥1; unique names
 }
 
 // TimerEvent is one named timer event: a DNS-1123 name and its own schedule, an interval or a cron expression in a
 // time zone (ADR-0211). Each fires independently and publishes a named CloudEvent (source=<eventsource> URI,
 // type=<name>).
 type TimerEvent struct {
-	Name ObjectName `json:"name"`
+	Name ObjectName `json:"name" doc:"The event's name, unique among the source's events: the type of each CloudEvent it fires, and the event a Sensor dependency names."`
 	// Interval is the tick period (ADR-0023): the floor bars a fire-storm, the ceiling an unbounded one. Validate
 	// checks the bounds, also at store.Create (ADR-0194).
 	Interval Duration `json:"interval,omitempty" doc:"The tick period: 100ms to 24h. Exactly one of interval and cron."`
@@ -73,16 +73,16 @@ type TimerEvent struct {
 // BlobSource hosts the blob kind's named events over one Bucket (ADR-0119, F83): a poll watcher lists the
 // Bucket's prefixes and fires a named CloudEvent per new object.
 type BlobSource struct {
-	Bucket ObjectName  `json:"bucket"` // the ADR-0080 Bucket resource to watch (this namespace)
-	Events []BlobEvent `json:"events"` // ≥1; unique names
+	Bucket ObjectName  `json:"bucket" doc:"The Bucket, in this namespace, whose objects fire the events. Until it exists, the source is not Ready, with reason BucketNotFound, and watches nothing."` // the ADR-0080 Bucket resource to watch (this namespace)
+	Events []BlobEvent `json:"events" doc:"The source's events: at least one, with unique names, each watching the objects under its prefix."`                                                        // ≥1; unique names
 }
 
 // BlobEvent is one named object-store event: a DNS-1123 name, a key prefix, and the object lifecycle events
 // it fires on (ADR-0119).
 type BlobEvent struct {
-	Name   ObjectName      `json:"name"`
-	Prefix string          `json:"prefix,omitempty"` // only objects under this key prefix fire ("" = whole bucket)
-	On     []BlobEventType `json:"on,omitempty"`     // default [Created] (set in normalize); only Created supported in V1
+	Name   ObjectName      `json:"name" doc:"The event's name, unique among the source's events: the type of each CloudEvent it fires, and the event a Sensor dependency names."`
+	Prefix string          `json:"prefix,omitempty" doc:"The key prefix the event watches: only objects whose key starts with it fire, and empty means the whole Bucket. When the source is created or this prefix changes, the objects already under it fire too, to the Sensors subscribed then: an object that no Sensor got counts as seen."` // only objects under this key prefix fire ("" = whole bucket)
+	On     []BlobEventType `json:"on,omitempty" doc:"The object changes that fire the event. Created, the only one, fires for each new object and again when an object is rewritten with another size or modification time; empty means Created."`                                                                                                // default [Created] (set in normalize); only Created supported in V1
 }
 
 // BlobEventType is an object lifecycle event. V1: Created only (Removed/Updated are a named follow-on).

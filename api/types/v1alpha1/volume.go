@@ -28,13 +28,13 @@ func (VolumeType) Schema(huma.Registry) *huma.Schema {
 // VolumeEntry is one volume a Function declares at its root (ADR-0262 Decision 1): by name it owns the volume, by ref
 // it adopts a retained local volume no live Function holds.
 type VolumeEntry struct {
-	Name ObjectName `json:"name,omitempty"`
-	Ref  ObjectName `json:"ref,omitempty"`
-	Type VolumeType `json:"type"`
+	Name ObjectName `json:"name,omitempty" doc:"The volume's name, unique in the list; set name or ref, not both. The code reads the directory's path from FUNCD_VOLUME_<NAME>, the name or ref upper-cased."`
+	Ref  ObjectName `json:"ref,omitempty" doc:"Instead of name: a retained local volume that this Function, or an earlier Function of the same name, dropped with retain, and that the Function takes over; with no such volume, it waits in Pending with VolumeNotFound. Only a local volume takes a ref; it sets no deletion and states the retained volume's own size, since apply refuses another size."`
+	Type VolumeType `json:"type" doc:"emptyDir is a new empty directory for each worker, removed with it; local is one durable directory that keeps its files through a crash, a redeploy and a scale to zero. A Function with a local volume runs at most 1 replica, and while it redeploys, its old and new workers hold the volume at once."`
 	// Size and SizeBytes are the volume's size, exactly one of them set (ADR-0266): "2GiB", or a byte count.
-	Size      ByteSize       `json:"size,omitempty"`
-	SizeBytes int64          `json:"sizeBytes,omitempty" minimum:"1"`
-	Deletion  DeletionPolicy `json:"deletion,omitempty"`
+	Size      ByteSize       `json:"size,omitempty" doc:"The volume's size, the most its directory may hold, above zero; set size or sizeBytes, not both. Apply refuses a local volume whose size changes, or that does not fit both the capacity that volumes.capacity or volumes.capacityBytes sets and the namespace's spec.volumeBudget."`
+	SizeBytes int64          `json:"sizeBytes,omitempty" minimum:"1" doc:"The same size as a number of bytes. Set size or sizeBytes, not both."`
+	Deletion  DeletionPolicy `json:"deletion,omitempty" doc:"Only for a local volume declared by name: retain, the default, keeps the volume and its files with no owner when the Function drops it or is deleted, so that a ref can take it again; delete removes them."`
 }
 
 // Bytes is the entry's size in bytes, from whichever form is set (0 when neither is valid).

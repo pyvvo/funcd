@@ -27,22 +27,22 @@ type Identity struct {
 // IdentitySpec declares a managed identity and how its credential is issued.
 type IdentitySpec struct {
 	// Type is the identity flavor. V1: only "external". Required.
-	Type IdentityType `json:"type" enum:"external"`
+	Type IdentityType `json:"type" enum:"external" doc:"What the Identity stands for: external, a caller outside funcd that authenticates with the credential funcd issues. The credential grants nothing: a RolesAssignment or a Policy grants the Identity its access."`
 	// CredentialSecretName is the owned Secret the issued keypair is written to. Empty ⇒ the Identity's
 	// own name.
-	CredentialSecretName ObjectName `json:"credentialSecretName,omitempty"`
+	CredentialSecretName ObjectName `json:"credentialSecretName,omitempty" doc:"The Secret, in the Identity's namespace, that funcd writes the credential to and deletes with the Identity: the S3 key pair as accessKeyId and secretAccessKey, and the Lake token as lakeToken. Empty means the Identity's name. funcd leaves alone a Secret of that name that no Identity of this name controls, and the Identity then stays Pending with reason SecretNotOwned; a Secret left by a deleted Identity of the same name is issued again."`
 	// Rotate, when incremented past status.observedRotate, forces the controller to reissue the secret
 	// (rotation). The access key id is stable; only the secret changes.
-	Rotate int64 `json:"rotate,omitempty"`
+	Rotate int64 `json:"rotate,omitempty" doc:"Raise it above status.observedRotate to rotate the credential: funcd writes a new secretAccessKey and lakeToken under the same access key id, and the old ones stop authenticating, with no overlap."`
 }
 
 // IdentityStatus is the observed credential state.
 type IdentityStatus struct {
 	Status `json:",inline"`
 	// AccessKeyID is the issued, stable SigV4 access key id (the secret lives only in the owned Secret).
-	AccessKeyID string `json:"accessKeyId,omitempty"`
+	AccessKeyID string `json:"accessKeyId,omitempty" doc:"The access key id of the issued key pair, also in the Secret. funcd derives it from the Identity's namespace and name, so it stays the same when the credential rotates."`
 	// ObservedRotate mirrors the spec.rotate the currently-issued secret corresponds to.
-	ObservedRotate int64 `json:"observedRotate,omitempty"`
+	ObservedRotate int64 `json:"observedRotate,omitempty" doc:"The spec.rotate value that funcd last acted on: a rotation is done once it equals spec.rotate."`
 }
 
 // GroupVersionKind returns the constant GVK for Identity.

@@ -2,12 +2,10 @@ package reference
 
 import (
 	"errors"
-	"flag"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
-	"slices"
 	"strings"
 	"testing"
 
@@ -17,22 +15,11 @@ import (
 	"github.com/pyvvo/funcd/internal/platform/config"
 )
 
-//nolint:gochecknoglobals // the -update flag of this package's tests
-var update = flag.Bool("update", false, "rewrite testdata/undescribed-config.txt from config.Config")
-
-const listFile = "testdata/undescribed-config.txt"
-
-// TestEveryConfigKeyIsDescribed holds every key of funcdconfig.yaml to a doc tag that names no ADR, but the keys that
-// testdata/undescribed-config.txt lists; that list only shrinks (ADR-0324 Decision 2). go test -run
-// TestEveryConfigKeyIsDescribed -update rewrites it.
+// TestEveryConfigKeyIsDescribed holds every key of funcdconfig.yaml to a doc tag written for users that names no ADR
+// (ADR-0324 Decision 2).
 func TestEveryConfigKeyIsDescribed(t *testing.T) {
 	keys := ConfigKeys(config.Defaults())
-	got := undescribed(keys)
-	if *update {
-		require.NoError(t, os.WriteFile(listFile, []byte(strings.Join(got, "\n")+"\n"), 0o644))
-		return
-	}
-	require.NoError(t, checkList(got, readList(t)))
+	require.NoError(t, check(undescribed(keys)))
 	for _, k := range keys {
 		require.NotRegexp(t, `\bADR-\d{4}\b`, k.Description, "%s: a description is written for users and names no ADR",
 			k.Path)
@@ -42,8 +29,9 @@ func TestEveryConfigKeyIsDescribed(t *testing.T) {
 // scenario: undescribed-config-key-refused
 func TestScenarioUndescribedConfigKeyRefused(t *testing.T) {
 	got := undescribed(keysOf(reflect.ValueOf(testConfig{}), ""))
-	require.ErrorContains(t, checkList(got, nil), "server.newKey")
-	require.ErrorContains(t, checkList(got, []string{"server.newKey", "server.described"}), "server.described")
+	err := check(got)
+	require.ErrorContains(t, err, "server.newKey")
+	require.NotContains(t, err.Error(), "server.described")
 }
 
 type testConfig struct {
@@ -148,25 +136,10 @@ func undescribed(keys []ConfigKey) []string {
 	return out
 }
 
-// checkList fails on an undescribed key that the list does not hold, and on a listed key that is no longer
-// undescribed: the list only shrinks.
-func checkList(got, listed []string) error {
-	var problems []string
-	if missing := slices.DeleteFunc(slices.Clone(got), func(k string) bool { return slices.Contains(listed, k) }); len(missing) > 0 {
-		problems = append(problems, "keys with no description, which need a doc tag written for users: "+strings.Join(missing, ", "))
-	}
-	if stale := slices.DeleteFunc(slices.Clone(listed), func(k string) bool { return slices.Contains(got, k) }); len(stale) > 0 {
-		problems = append(problems, "listed keys that have a description or are gone, to remove from "+listFile+": "+strings.Join(stale, ", "))
-	}
-	if len(problems) == 0 {
+// check fails on a key with no description, naming each one.
+func check(got []string) error {
+	if len(got) == 0 {
 		return nil
 	}
-	return errors.New(strings.Join(problems, "; "))
-}
-
-func readList(t *testing.T) []string {
-	t.Helper()
-	b, err := os.ReadFile(listFile)
-	require.NoError(t, err)
-	return slices.DeleteFunc(strings.Split(strings.TrimSpace(string(b)), "\n"), func(s string) bool { return s == "" })
+	return errors.New("keys with no description, which need a doc tag written for users: " + strings.Join(got, ", "))
 }

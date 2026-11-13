@@ -16,16 +16,16 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `buckets` | array of [`Workflow.spec.buckets[]`](#workflowspecbuckets) |  |
-| `configMaps` | array of [`Workflow.spec.configMaps[]`](#workflowspecconfigmaps) |  |
-| `contract` | object, [`Workflow.spec.contract`](#workflowspeccontract) |  |
-| `kv` | array of [`Workflow.spec.kv[]`](#workflowspeckv) |  |
-| `lakes` | array of [`Workflow.spec.lakes[]`](#workflowspeclakes) |  |
-| `onFailure` | string, a DNS-1123 label |  |
-| `pooling` | object, [`Workflow.spec.pooling`](#workflowspecpooling) |  |
-| `secrets` | array of [`Workflow.spec.secrets[]`](#workflowspecsecrets) |  |
-| `sql` | array of [`Workflow.spec.sql[]`](#workflowspecsql) |  |
-| `steps` | array of [`Workflow.spec.steps[]`](#workflowspecsteps), required |  |
+| `buckets` | array of [`Workflow.spec.buckets[]`](#workflowspecbuckets) | The Buckets for the steps to bind. An entry with a name defines a bucket, each prefix owner naming a step or a declared lake; a ref entry binds an existing one. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares. |
+| `configMaps` | array of [`Workflow.spec.configMaps[]`](#workflowspecconfigmaps) | The ConfigMaps for the steps to bind: an entry with a name defines one, deleted with the Workflow, and a ref entry binds an existing one. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares. |
+| `contract` | object, [`Workflow.spec.contract`](#workflowspeccontract) | A contract the author declares for the run input and output. funcd checks its schemas at apply, but runs are checked against the contract it derives from the steps, in status.contract, not against this one. |
+| `kv` | array of [`Workflow.spec.kv[]`](#workflowspeckv) | The KV stores for the steps to bind. An entry with a name defines a store, each table owner naming a step; a ref entry binds an existing one. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares. |
+| `lakes` | array of [`Workflow.spec.lakes[]`](#workflowspeclakes) | The Lakes for the steps to bind: an entry with a name defines one, deleted with the Workflow, and a ref entry binds an existing one. A defined lake may not share a step's name, and its buckets, ConfigMaps and Secrets are declared at the Workflow's root. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares. |
+| `onFailure` | string, a DNS-1123 label | The name of a function step that funcd calls once, without retry, when a run fails. Its input is an object of workflow, run, failedStep, reason and input, the run input. It is not part of the step order, so it sets no dependsOn, when or params and no step depends on it; its result never changes the run's phase, and a cancelled run does not call it. |
+| `pooling` | object, [`Workflow.spec.pooling`](#workflowspecpooling) | How the image steps' Functions share workers and stay warm. A step's function.pooling replaces it for that step. |
+| `secrets` | array of [`Workflow.spec.secrets[]`](#workflowspecsecrets) | The Secrets the steps bind, with the keys they read. Until each Secret exists and holds its keys, the Workflow is not Ready and no run of it starts. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares. |
+| `sql` | array of [`Workflow.spec.sql[]`](#workflowspecsql) | The SQL databases for the steps to bind. An entry with a name defines a database, its owner naming a step or a declared lake; a ref entry binds an existing one. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares. |
+| `steps` | array of [`Workflow.spec.steps[]`](#workflowspecsteps), required | The steps each run executes, at least one. They run in list order unless dependsOn says otherwise, and the first step takes the run input. |
 | `timeout` | string, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | The wall-clock bound on a whole run, paused time excluded: 0s to 168h; 0s or unset means no bound. |
 
 ### `Workflow.spec.buckets[]`
@@ -34,24 +34,24 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | --- | --- | --- |
 | `deletion` | string, one of `retain`, `delete` | retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them. |
 | `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
-| `prefixes` | array of [`Workflow.spec.buckets[].prefixes[]`](#workflowspecbucketsprefixes) |  |
-| `quota` | object, [`Workflow.spec.buckets[].quota`](#workflowspecbucketsquota) |  |
+| `prefixes` | array of [`Workflow.spec.buckets[].prefixes[]`](#workflowspecbucketsprefixes) | The Bucket's prefixes, each a key space with its own owner and cap. Prefix names are unique within the Bucket. A Function or a Lake that binds a prefix the Bucket does not list waits, with the reason BucketNotFound. |
+| `quota` | object, [`Workflow.spec.buckets[].quota`](#workflowspecbucketsquota) | Caps on the Bucket's total size and on each object. While the Bucket has a size cap, funcd refuses to sign a presigned PUT URL for it, with 403. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 
 ### `Workflow.spec.buckets[].prefixes[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `name` | string, required, a DNS-1123 label |  |
-| `owner` | object, [`Workflow.spec.buckets[].prefixes[].owner`](#workflowspecbucketsprefixesowner) |  |
-| `quota` | object, [`Workflow.spec.buckets[].prefixes[].quota`](#workflowspecbucketsprefixesquota) |  |
+| `name` | string, required, a DNS-1123 label | The prefix's name, unique within the Bucket. Over S3, it is the first segment of each object's key. |
+| `owner` | object, [`Workflow.spec.buckets[].prefixes[].owner`](#workflowspecbucketsprefixesowner) | The one Function or Lake that may write the prefix, besides the writers that a RolesAssignment names. In a Bucket that a Function or a Lake declares by name, an omitted owner is that Function or Lake. The prefix that a Site serves its bundle from must have no owner, since the Site writes its builds there; the prefixes of a Site's ingress rules may have one. |
+| `quota` | object, [`Workflow.spec.buckets[].prefixes[].quota`](#workflowspecbucketsprefixesquota) | A cap on the prefix's total size: a write into the prefix must fit both this cap and the Bucket's, and while it is set funcd refuses to sign a presigned PUT URL into the prefix, with 403. It also caps a Lake's files under the prefix, though not the Lake's catalog. |
 
 ### `Workflow.spec.buckets[].prefixes[].owner`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `kind` | string, required, one of `Function`, `Lake` |  |
-| `name` | string, required, a DNS-1123 label |  |
+| `kind` | string, required, one of `Function`, `Lake` | The writer's kind. A Function and a Lake may share a name, so the kind says which one writes. |
+| `name` | string, required, a DNS-1123 label | The writer's name, in the Bucket's namespace. In a Workflow's buckets, a Function owner names a step and a Lake owner a lake that the Workflow declares. |
 
 ### `Workflow.spec.buckets[].prefixes[].quota`
 
@@ -65,24 +65,24 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `maxBytes` | integer, at least 0 | The same cap as a number of bytes. Set maxSize or maxBytes, not both. |
-| `maxObjectBytes` | integer, at least 0 |  |
+| `maxObjectBytes` | integer, at least 0 | The largest object a write may store, in bytes. A larger write gets 413, or EntityTooLarge over S3, and while it is set funcd refuses to sign a presigned PUT URL for the Bucket, with 403. 0 sets no cap of the Bucket's own, so only funcd's upload limits apply, such as s3gateway.maxUploadBytes. |
 | `maxSize` | string, a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB) | The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507. |
 
 ### `Workflow.spec.configMaps[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `data` | map of string to string |  |
-| `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as <name>-<hash of data>, and the config of each part that names it is set to that stored name. |
+| `data` | map of string to string | Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through. |
+| `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as &lt;name&gt;-&lt;hash of data&gt;, and the config of each part that names it is set to that stored name. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 
 ### `Workflow.spec.contract`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `dialect` | string |  |
-| `input` | any JSON value |  |
-| `output` | any JSON value |  |
+| `dialect` | string | The URI of the JSON Schema dialect that input and output follow. funcd checks nothing against it. |
+| `input` | any JSON value | The JSON Schema of the input. A declared one must be an object, and each property it does not require must declare a default. |
+| `output` | any JSON value | The JSON Schema of the output. A declared one must be an object, and each property it does not require must declare a default. |
 
 ### `Workflow.spec.kv[]`
 
@@ -92,7 +92,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
 | `quota` | object, [`Workflow.spec.kv[].quota`](#workflowspeckvquota) | Caps on the store's total size, on each value and on each key. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
-| `tables` | array of [`Workflow.spec.kv[].tables[]`](#workflowspeckvtables) | The store's tables. A table is a key space with at most one writer, its owner. Table names are unique within the store, and a store with no table has nothing a Function can write. |
+| `tables` | array of [`Workflow.spec.kv[].tables[]`](#workflowspeckvtables) | The store's tables. A table is a key space that only its owner and the writers that a RolesAssignment names may write. Table names are unique within the store, and a store with no table has nothing a Function can write. |
 
 ### `Workflow.spec.kv[].quota`
 
@@ -108,37 +108,37 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `name` | string, required, a DNS-1123 label | The table's name, unique within the store. |
-| `owner` | string, a DNS-1123 label | The Function that owns the table, in the store's namespace. The owner writes the table, and so does a principal that a RolesAssignment grants kv::write on the table, its store or its namespace, such as the KV Data Writer role. In a store that a Function declares, the owner defaults to that Function; in a KVStore applied on its own, a table with no owner is written only through such a grant. Every Function, the owner included, reaches the table through an entry of its spec.bindings.kv. |
+| `owner` | string, a DNS-1123 label | The Function that owns the table, in the store's namespace. The owner writes the table, and so does a principal that a RolesAssignment grants kv::write on the table, its store or its namespace, such as the KV Data Writer role. In a store that a Function declares, the owner defaults to that Function; in one that a Workflow declares, it names a step, and the Function that funcd creates for that step is the owner; in a KVStore applied on its own, a table with no owner is written only through such a grant. Every Function, the owner included, reaches the table through an entry of its spec.bindings.kv. |
 
 ### `Workflow.spec.lakes[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `bindings` | object, [`Workflow.spec.lakes[].bindings`](#workflowspeclakesbindings) |  |
-| `buckets` | array of [`Workflow.spec.lakes[].buckets[]`](#workflowspeclakesbuckets) |  |
-| `configMaps` | array of [`Workflow.spec.lakes[].configMaps[]`](#workflowspeclakesconfigmaps) |  |
-| `ingress` | object, [`Workflow.spec.lakes[].ingress`](#workflowspeclakesingress) |  |
-| `location` | object, [`Workflow.spec.lakes[].location`](#workflowspeclakeslocation) |  |
+| `bindings` | object, [`Workflow.spec.lakes[].bindings`](#workflowspeclakesbindings) | What the Lake's engine uses: Bucket prefixes, and the ConfigMaps and Secrets of its environment. |
+| `buckets` | array of [`Workflow.spec.lakes[].buckets[]`](#workflowspeclakesbuckets) | The Buckets that a Lake applied on its own declares: by name the Lake creates the Bucket, an omitted prefix owner being the Lake, and a Bucket of that name that is not the Lake's holds it in Pending with StoreNotOwned; by ref it binds an existing one. Each Bucket that the Lake's bindings.blob names must be declared here. A lake that another resource declares sets none. |
+| `configMaps` | array of [`Workflow.spec.lakes[].configMaps[]`](#workflowspeclakesconfigmaps) | The ConfigMaps that a Lake applied on its own declares: by name the Lake defines one, and a ConfigMap of its stored name that is not the Lake's holds it in Pending with StoreNotOwned; by ref it binds an existing one. Each ConfigMap that the Lake's bindings.config names must be declared here. A lake that another resource declares sets none. |
+| `ingress` | object, [`Workflow.spec.lakes[].ingress`](#workflowspeclakesingress) | Exposes the Lake gateway at the edge, only when enabled is true and while the Lake is Ready. The path defaults to /lake/&lt;name&gt;, or / with a host. Setting auth is refused, since the Lake gateway checks each caller itself. |
+| `location` | object, [`Workflow.spec.lakes[].location`](#workflowspeclakeslocation) | The Bucket prefix that holds the Lake's files, one of the Lake's bindings.blob. The Lake waits in Pending, with the reason PrefixNotOwned, until the prefix's owner is this Lake. The Lake's catalog is kept outside the Bucket, under the same location, so a Lake located where another was finds that Lake's files and catalog. |
 | `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
-| `resources` | object, [`Workflow.spec.lakes[].resources`](#workflowspeclakesresources) |  |
-| `secrets` | array of [`Workflow.spec.lakes[].secrets[]`](#workflowspeclakessecrets) |  |
+| `resources` | object, [`Workflow.spec.lakes[].resources`](#workflowspeclakesresources) | The cpu and memory of the Lake's engine. An empty cpu or memory sets no limit on it, and a change replaces the running engine. |
+| `secrets` | array of [`Workflow.spec.lakes[].secrets[]`](#workflowspeclakessecrets) | The Secrets that a Lake applied on its own declares, with the keys its engine reads. Each Secret that the Lake's bindings.secret names must be declared here, and the Lake waits in Pending, with SecretNotFound or SecretKeyMissing, while one is missing or lacks a key. A lake that another resource declares sets none. |
 
 ### `Workflow.spec.lakes[].bindings`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `blob` | array of [`Workflow.spec.lakes[].bindings.blob[]`](#workflowspeclakesbindingsblob), required |  |
-| `config` | array of string values, each a DNS-1123 label |  |
-| `secret` | array of string values, each a DNS-1123 label |  |
+| `blob` | array of [`Workflow.spec.lakes[].bindings.blob[]`](#workflowspeclakesbindingsblob), required | The Bucket prefixes the engine may read, each under an alias. It writes only a prefix whose owner is this Lake, and the Lake's location must be one of them. |
+| `config` | array of string values, each a DNS-1123 label | ConfigMaps whose data the engine gets as environment variables. Only QUACK_TOKEN and the DUCKDB_ keys pass, DUCKDB_EXTENSION_DIRECTORY excepted, and a bound Secret's value wins over a ConfigMap's for the same key. A missing ConfigMap holds the Lake in Pending, with the reason BindingResolveFailed. |
+| `secret` | array of string values, each a DNS-1123 label | Secrets whose data the engine gets as environment variables, such as its QUACK_TOKEN; the same keys pass as for config. funcd asks Cedar, as the Lake, for secret::read on each: a forbidden Secret holds the Lake in Pending, with the reason BindingResolveFailed, as does a missing one in a lake that another resource declares. A changed value replaces the engine. |
 
 ### `Workflow.spec.lakes[].bindings.blob[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `alias` | string, required, a DNS-1123 label |  |
-| `bucket` | string, required, a DNS-1123 label |  |
-| `prefix` | string, required, a DNS-1123 label |  |
+| `alias` | string, required, a DNS-1123 label | The binding's name, unique in the list; code that reaches the prefix through ctx.blob passes it. |
+| `bucket` | string, required, a DNS-1123 label | The Bucket, in the same namespace, that holds the prefix. |
+| `prefix` | string, required, a DNS-1123 label | The prefix, by its name in the Bucket's prefixes. |
 
 ### `Workflow.spec.lakes[].buckets[]`
 
@@ -146,70 +146,70 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | --- | --- | --- |
 | `deletion` | string, one of `retain`, `delete` | retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them. |
 | `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
-| `prefixes` | array of [`Workflow.spec.buckets[].prefixes[]`](#workflowspecbucketsprefixes) |  |
-| `quota` | object, [`Workflow.spec.buckets[].quota`](#workflowspecbucketsquota) |  |
+| `prefixes` | array of [`Workflow.spec.buckets[].prefixes[]`](#workflowspecbucketsprefixes) | The Bucket's prefixes, each a key space with its own owner and cap. Prefix names are unique within the Bucket. A Function or a Lake that binds a prefix the Bucket does not list waits, with the reason BucketNotFound. |
+| `quota` | object, [`Workflow.spec.buckets[].quota`](#workflowspecbucketsquota) | Caps on the Bucket's total size and on each object. While the Bucket has a size cap, funcd refuses to sign a presigned PUT URL for it, with 403. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 
 ### `Workflow.spec.lakes[].configMaps[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `data` | map of string to string |  |
-| `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as <name>-<hash of data>, and the config of each part that names it is set to that stored name. |
+| `data` | map of string to string | Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through. |
+| `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as &lt;name&gt;-&lt;hash of data&gt;, and the config of each part that names it is set to that stored name. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 
 ### `Workflow.spec.lakes[].ingress`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `auth` | object, [`Workflow.spec.lakes[].ingress.auth`](#workflowspeclakesingressauth) |  |
-| `enabled` | boolean |  |
-| `host` | string |  |
-| `path` | string |  |
+| `auth` | object, [`Workflow.spec.lakes[].ingress.auth`](#workflowspeclakesingressauth) | How the edge checks callers at the resource's own address; unset, the namespace's spec.edgeDefaults.auth decides, else open. A Lake refuses it, since the Lake gateway checks each caller. |
+| `enabled` | boolean | Turns the resource's own address on or off. Unset, it is on unless the namespace's spec.defaultExposure is explicit; a Lake's address is on only when this is true. |
+| `host` | string | The exact host of the resource's own address. Empty is the namespace's host, &lt;namespace&gt;.&lt;server.baseDomain&gt;, or, in the default namespace, any host that no other namespace reserves. |
+| `path` | string | The edge path of the resource's own address, which begins with / and does not end with / unless it is /. Empty is / when host is set, else /function/&lt;name&gt;, /site/&lt;name&gt; or /lake/&lt;name&gt; by kind. |
 
 ### `Workflow.spec.lakes[].ingress.auth`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `mode` | string, one of `""`, `authenticated`, `open` |  |
+| `mode` | string, one of `""`, `authenticated`, `open` | How the edge checks callers. authenticated requires a bearer token, or an X-Api-Key header, of an identity that RBAC lets get Functions in the namespace: 401 without a valid one, 403 when it may not. open lets anonymous callers in. Empty takes the enclosing stance, if any, else the namespace's spec.edgeDefaults.auth.mode, else open. |
 
 ### `Workflow.spec.lakes[].location`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `bucket` | string, required, a DNS-1123 label |  |
-| `prefix` | string, required, a DNS-1123 label |  |
+| `bucket` | string, required, a DNS-1123 label | The Bucket that holds the Lake's files, in the Lake's namespace. |
+| `prefix` | string, required, a DNS-1123 label | The prefix of that Bucket, which this Lake must own. |
 
 ### `Workflow.spec.lakes[].resources`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `cpu` | string |  |
-| `memory` | string |  |
+| `cpu` | string | The CPU cap of the worker or engine it sizes, as a number of cores of at least 0.01, such as 0.5 or 2. Empty takes the default of the resource that declares it, or no cap when there is none. Only the containerd runtime enforces it. |
+| `memory` | string | The memory cap of the worker or engine it sizes, such as 256Mi or 4GiB: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B, above zero. Empty takes the default of the resource that declares it, or no cap when there is none. Only the containerd runtime enforces it, and there a worker that passes it is killed. |
 
 ### `Workflow.spec.lakes[].secrets[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `description` | string | What the Secret is for, for the installer who provides it. |
-| `keys` | array of string values, required, each matching `^[A-Za-z_][A-Za-z0-9_]*$` | The keys the parts read: the Secret's data must hold each of them. |
-| `name` | string, required, a DNS-1123 label | The name of a Secret in the App's namespace. The platform holds its value; the App never writes it. |
+| `keys` | array of string values, required, each matching `^[A-Za-z_][A-Za-z0-9_]*$` | The keys read from the Secret: its data must hold each of them. |
+| `name` | string, required, a DNS-1123 label | The name of a Secret in the namespace of the resource that declares it. funcd holds its value; the resource never writes it. |
 
 ### `Workflow.spec.pooling`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `minReplicas` | integer, 0 to 15 |  |
-| `mode` | string, one of `shared`, `isolated` |  |
-| `worker` | string, a DNS-1123 label |  |
+| `minReplicas` | integer, 0 to 15 | The workers kept warm for each image step's Function. 0, the default, scales a step's Function to zero after 5 minutes without a call, so its next call waits for a cold start. |
+| `mode` | string, one of `shared`, `isolated` | shared, the default, runs each image step's Function in the pool worker that worker names, shared with the steps of the same runtime that bind and own the same data; isolated gives each step's Function a worker of its own. Only the process runtime pools, for node runtimes and, with Python 3.14 or later, python ones; elsewhere shared runs each step's Function solo too. |
+| `worker` | string, a DNS-1123 label | The pool worker's name when mode is shared; empty means the Workflow's name. isolated ignores it. |
 
 ### `Workflow.spec.secrets[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `description` | string | What the Secret is for, for the installer who provides it. |
-| `keys` | array of string values, required, each matching `^[A-Za-z_][A-Za-z0-9_]*$` | The keys the parts read: the Secret's data must hold each of them. |
-| `name` | string, required, a DNS-1123 label | The name of a Secret in the App's namespace. The platform holds its value; the App never writes it. |
+| `keys` | array of string values, required, each matching `^[A-Za-z_][A-Za-z0-9_]*$` | The keys read from the Secret: its data must hold each of them. |
+| `name` | string, required, a DNS-1123 label | The name of a Secret in the namespace of the resource that declares it. funcd holds its value; the resource never writes it. |
 
 ### `Workflow.spec.sql[]`
 
@@ -217,121 +217,121 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | --- | --- | --- |
 | `deletion` | string, one of `retain`, `delete` | retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them. |
 | `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
-| `owner` | string, a DNS-1123 label |  |
-| `quota` | object, [`Workflow.spec.buckets[].prefixes[].quota`](#workflowspecbucketsprefixesquota) |  |
+| `owner` | string, a DNS-1123 label | The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step. With no owner, only those writers can write it. |
+| `quota` | object, [`Workflow.spec.buckets[].prefixes[].quota`](#workflowspecbucketsprefixesquota) | A cap on the database's total size, the bytes of its pages in use. Once it is reached, an execute gets 507 unless each of its statements is a DELETE or a DROP. A change keeps the engine running. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
-| `resources` | object, [`Workflow.spec.lakes[].resources`](#workflowspeclakesresources) |  |
+| `resources` | object, [`Workflow.spec.lakes[].resources`](#workflowspeclakesresources) | The cpu and memory of the database's engine. An empty memory means 256Mi, and an empty cpu sets no cpu limit. A change replaces the running engine. |
 
 ### `Workflow.spec.steps[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `builtin` | object, [`Workflow.spec.steps[].builtin`](#workflowspecstepsbuiltin) |  |
-| `dependsOn` | array of string values, each a DNS-1123 label |  |
-| `function` | object, [`Workflow.spec.steps[].function`](#workflowspecstepsfunction) |  |
-| `join` | string, one of `all`, `any` |  |
-| `name` | string, required, a DNS-1123 label |  |
-| `params` | any JSON value |  |
-| `when` | object, [`Workflow.spec.steps[].when`](#workflowspecstepswhen) |  |
-| `workflow` | object, [`Workflow.spec.steps[].workflow`](#workflowspecstepsworkflow) |  |
+| `builtin` | object, [`Workflow.spec.steps[].builtin`](#workflowspecstepsbuiltin) | A step that funcd runs itself, with no Function: a wait or a pass. Exactly one of function, builtin and workflow. |
+| `dependsOn` | array of string values, each a DNS-1123 label | The steps this step follows; empty means the step listed before it, not counting the onFailure step. With one parent the step's input is that parent's output, with several an object of their outputs keyed by step name. Each name is another step, not the onFailure step, and the steps form no cycle. |
+| `function` | object, [`Workflow.spec.steps[].function`](#workflowspecstepsfunction) | A step that calls a Function: one funcd creates from an image for this step, or an existing one by ref. Exactly one of function, builtin and workflow. |
+| `join` | string, one of `all`, `any` | How the step waits on its parents: all, the default, runs it when every parent succeeded and skips it otherwise; any waits until every parent has ended, then runs it on the outputs of those that succeeded, or skips it if none did. |
+| `name` | string, required, a DNS-1123 label | The step's name, unique among the steps. dependsOn, onFailure, store owners and step.&lt;name&gt;.output in expressions refer to the step by it, and an image step's Function is named &lt;workflow&gt;-&lt;step&gt;. |
+| `params` | any JSON value | A JSON object merged over the step's input, its keys winning: a function step gets the result as its input, and a workflow step passes it to the child run. Its values must fit the step's input contract, and a field it sets need not come from a parent. A wait ignores it, and the onFailure step sets none. |
+| `when` | object, [`Workflow.spec.steps[].when`](#workflowspecstepswhen) | A condition the step runs on: when it is false, the step is Skipped, and so are the steps after it that need it to succeed. The onFailure step has none. |
+| `workflow` | object, [`Workflow.spec.steps[].workflow`](#workflowspecstepsworkflow) | A step that runs another Workflow as a child run: the step's input, params included, is the child's input, and the child's output is the step's output. A child that does not succeed fails the step, and a Workflow that reaches itself through such steps is never Ready. Exactly one of function, builtin and workflow. |
 
 ### `Workflow.spec.steps[].builtin`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `pass` | string |  |
-| `wait` | string |  |
+| `pass` | string | A $&#123;&#123; &#125;&#125; JavaScript expression whose value is the step's output, over input, the run input, and step.&lt;name&gt;.output of each step it follows. It is checked only when the step runs: an error fails the step. Exactly one of wait and pass. |
+| `wait` | string | How long the step waits before it succeeds with its input as its output: a duration such as 30s, checked at apply, or a $&#123;&#123; &#125;&#125; expression that must yield one when the step runs. The wait counts toward the run's timeout, and a cancel ends it. Exactly one of wait and pass. |
 
 ### `Workflow.spec.steps[].function`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `bindings` | object, [`Workflow.spec.steps[].function.bindings`](#workflowspecstepsfunctionbindings) |  |
-| `image` | string |  |
-| `pooling` | object, [`Workflow.spec.pooling`](#workflowspecpooling) |  |
-| `ref` | string, a DNS-1123 label |  |
-| `retry` | object, [`Workflow.spec.steps[].function.retry`](#workflowspecstepsfunctionretry) |  |
+| `bindings` | object, [`Workflow.spec.steps[].function.bindings`](#workflowspecstepsfunctionbindings) | What the step's code uses, copied onto an image step's Function: each store, lake, ConfigMap and Secret it names must be declared at the root of the Workflow or of its App. A ref step ignores it: the Function it names keeps its own. |
+| `image` | string | The artifact of the step's own Function, &lt;workflow&gt;-&lt;step&gt;, which funcd creates with the runtime the artifact declares and its handle export. That name must fit in 63 characters. Exactly one of image and ref. |
+| `pooling` | object, [`Workflow.spec.pooling`](#workflowspecpooling) | Replaces the Workflow's pooling for this step's Function, as a whole: a field it leaves unset takes its default, not the Workflow's value. A ref step ignores it. |
+| `ref` | string, a DNS-1123 label | The name of an existing Function in the namespace that the step calls; funcd does not create or change it, and a run waits while it is missing. A Function whose protocol is http fails the step. Exactly one of image and ref. |
+| `retry` | object, [`Workflow.spec.steps[].function.retry`](#workflowspecstepsfunctionretry) | How a failed call is tried again. A 5xx answer, a timeout or a transport error is retried, while a 4xx answer or an output over workflow.payloadLimit fails the step at once. Unset, the step gets workflow.defaultRetry attempts with workflow.defaultRetryBackoff; the onFailure step is called once. |
 | `timeout` | string, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | The per-step invocation bound: 0s to 24h; 0s or unset means workflow.defaultStepTimeout. |
 
 ### `Workflow.spec.steps[].function.bindings`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `blob` | array of [`Workflow.spec.lakes[].bindings.blob[]`](#workflowspeclakesbindingsblob) |  |
-| `config` | array of string values, each a DNS-1123 label |  |
-| `kv` | array of [`Workflow.spec.steps[].function.bindings.kv[]`](#workflowspecstepsfunctionbindingskv) |  |
-| `lake` | array of [`Workflow.spec.steps[].function.bindings.lake[]`](#workflowspecstepsfunctionbindingslake) |  |
-| `secret` | array of string values, each a DNS-1123 label |  |
-| `sql` | array of [`Workflow.spec.steps[].function.bindings.sql[]`](#workflowspecstepsfunctionbindingssql) |  |
+| `blob` | array of [`Workflow.spec.lakes[].bindings.blob[]`](#workflowspeclakesbindingsblob) | The Bucket prefixes the step's code reaches through ctx.blob, and over S3 while the S3 gateway is on, each under its alias; each Bucket must be declared at the root, in buckets. The binding grants reads; only the prefix's owner and the writers that a RolesAssignment names may write. |
+| `config` | array of string values, each a DNS-1123 label | ConfigMaps whose keys each worker of the step gets as environment variables when it starts; each must be declared at the root, in configMaps. A key that starts with FUNCD_, or that a bound Secret holds, is left out. |
+| `kv` | array of [`Workflow.spec.steps[].function.bindings.kv[]`](#workflowspecstepsfunctionbindingskv) | The KV tables the step's code reaches through ctx.kv, each under its alias; each store must be declared at the root, in kv. The binding grants reads; only the table's owner and the writers that a RolesAssignment names may write. |
+| `lake` | array of [`Workflow.spec.steps[].function.bindings.lake[]`](#workflowspecstepsfunctionbindingslake) | The Lakes the step's code queries, each under its alias; each must be declared at the root, in lakes. The step's Function waits until every bound Lake is Ready. |
+| `secret` | array of string values, each a DNS-1123 label | Secrets whose keys the step's code reads through ctx.secret, on each read; each must be declared at the root, in secrets. No value reaches the worker's environment. |
+| `sql` | array of [`Workflow.spec.steps[].function.bindings.sql[]`](#workflowspecstepsfunctionbindingssql) | The SQLDatabases the step's code queries through ctx.sql, each under its alias; each must be declared at the root, in sql. The binding grants reads; only the database's owner and the writers that a RolesAssignment names may write. |
 
 ### `Workflow.spec.steps[].function.bindings.kv[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `alias` | string, required, a DNS-1123 label |  |
-| `store` | string, required, a DNS-1123 label |  |
-| `table` | string, required, a DNS-1123 label |  |
+| `alias` | string, required, a DNS-1123 label | The binding's name, unique in the list, which the code passes to ctx.kv. |
+| `store` | string, required, a DNS-1123 label | The KVStore, in the same namespace, that holds the table. |
+| `table` | string, required, a DNS-1123 label | The table, by its name in the store's tables. |
 
 ### `Workflow.spec.steps[].function.bindings.lake[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `alias` | string, required, a DNS-1123 label |  |
-| `lake` | string, required, a DNS-1123 label |  |
+| `alias` | string, required, a DNS-1123 label | The binding's name, unique in the list. Each worker reads the Lake's address and its token from FUNCD_LAKE_&lt;ALIAS&gt;_URL and FUNCD_LAKE_&lt;ALIAS&gt;_TOKEN, the alias upper-cased. |
+| `lake` | string, required, a DNS-1123 label | The Lake to query, in the same namespace. |
 
 ### `Workflow.spec.steps[].function.bindings.sql[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `alias` | string, required, a DNS-1123 label |  |
-| `database` | string, required, a DNS-1123 label |  |
+| `alias` | string, required, a DNS-1123 label | The binding's name, unique in the list, which the code passes to ctx.sql. |
+| `database` | string, required, a DNS-1123 label | The SQLDatabase to query, in the same namespace. |
 
 ### `Workflow.spec.steps[].function.retry`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `backoff` | string, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | The base of the exponential retry backoff: 0s to 1h; 0s or unset means workflow.defaultRetryBackoff. |
-| `maxAttempts` | integer, 1 to 100 |  |
+| `maxAttempts` | integer, 1 to 100 | How many calls the step may make, the first included: 1 means no retry. Unset means workflow.defaultRetry. A call that a funcd restart cuts runs again, even past this count. |
 
 ### `Workflow.spec.steps[].when`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `condition` | string, required |  |
+| `condition` | string, required | A $&#123;&#123; &#125;&#125; JavaScript expression that yields true or false, over input, the run input, and step.&lt;name&gt;.output of each step it follows. It is type-checked against the steps' contracts before the Workflow is Ready; one that cannot be evaluated when the step is reached fails the run. |
 
 ### `Workflow.spec.steps[].workflow`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `ref` | string, a DNS-1123 label |  |
+| `ref` | string, a DNS-1123 label | The child Workflow's name, in the same namespace; it must be set. A run waits while the child is missing or not Ready, then runs it as it was when the run started. |
 
 ### `Workflow.status`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `conditions` | array of [Condition](../../common-definitions.md#condition) | The conditions that explain the phase. |
-| `contract` | object, [`Workflow.spec.contract`](#workflowspeccontract) |  |
+| `contract` | object, [`Workflow.spec.contract`](#workflowspeccontract) | The run input and output schemas funcd derives once every step type-checks: the first step's input, and the output of the step that ends the run, or an object keyed by step name when several do. A new run's input is checked against it. |
 | `observedGeneration` | integer | The generation of the spec that funcd last acted on. |
 | `phase` | string, one of `Pending`, `Deploying`, `Ready`, `Idle`, `Degraded`, `Failed`, `Terminating` | Where the object is in its lifecycle. |
-| `runs` | object, [`Workflow.status.runs`](#workflowstatusruns) |  |
-| `steps` | array of [`Workflow.status.steps[]`](#workflowstatussteps) |  |
+| `runs` | object, [`Workflow.status.runs`](#workflowstatusruns) | The Workflow's runs: those not finished yet by name, and how many ended in each final phase. |
+| `steps` | array of [`Workflow.status.steps[]`](#workflowstatussteps) | Each function and workflow step at the last type check, with its resolved image and its contract. A ref step whose Function is missing or serves HTTP has no entry. |
 
 ### `Workflow.status.runs`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `active` | array of string values, each a DNS-1123 label |  |
-| `cancelled` | integer |  |
-| `failed` | integer |  |
-| `succeeded` | integer |  |
+| `active` | array of string values, each a DNS-1123 label | The runs not finished yet, newest first. |
+| `cancelled` | integer | The number of runs that ended Cancelled since the Workflow was created. Deleting a run does not lower it. |
+| `failed` | integer | The number of runs that ended Failed since the Workflow was created. Deleting a run does not lower it. |
+| `succeeded` | integer | The number of runs that ended Succeeded since the Workflow was created. Deleting a run does not lower it. |
 
 ### `Workflow.status.steps[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `contract` | object, [`Workflow.spec.contract`](#workflowspeccontract) |  |
-| `image` | string |  |
-| `name` | string, required, a DNS-1123 label |  |
+| `contract` | object, [`Workflow.spec.contract`](#workflowspeccontract) | The step's input and output schemas: read from its image, or the child Workflow's status.contract for a workflow step. |
+| `image` | string | The image the step's contract comes from, as &lt;image&gt;@&lt;digest&gt; once it resolves to a digest: a ref step's Function's image, and workflow://&lt;child&gt; for a workflow step. |
+| `name` | string, required, a DNS-1123 label | The step's name. |
 
 ## WorkflowRun
 
@@ -343,19 +343,19 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `cancel` | boolean |  |
-| `input` | any JSON value |  |
-| `paused` | boolean |  |
-| `replay` | object, [`WorkflowRun.spec.replay`](#workflowrunspecreplay) |  |
-| `workflow` | string, required, a DNS-1123 label |  |
+| `cancel` | boolean | When true, the run is cancelled: nothing more starts, the calls in flight are closed and their late answers dropped, though a call may already have done its work, and the run ends Cancelled without calling its onFailure step. It wins over paused, a finished run ignores it, and funcdctl workflow cancel sets it. |
+| `input` | any JSON value | The run input: the first step receives it, and expressions read it as input. Over workflow.payloadLimit bytes, or off the input schema in the Workflow's status.contract, it is refused at apply or fails the run when it starts. It is fixed once the run is created; a replay sets none and takes its source's. |
+| `paused` | boolean | When true, the run pauses: no step or retry starts, the calls in flight finish, and paused time does not count toward the run's timeout. A run created paused waits to start, and a finished run ignores it. funcdctl workflow pause and resume set and clear it. |
+| `replay` | object, [`WorkflowRun.spec.replay`](#workflowrunspecreplay) | Starts the run from a finished run, as funcdctl workflow replay does: replay.from and each step that depends on it run again, and the others keep the source's outputs. It is fixed once the run is created and leaves input empty; a source that cannot seed the run fails it, and its ReplaySeeded condition says why. |
+| `workflow` | string, required, a DNS-1123 label | The Workflow to run, in the run's namespace, fixed once the run is created. The run stays Pending while that Workflow, a child it calls or a step's Function is missing or not ready. |
 
 ### `WorkflowRun.spec.replay`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `allowDrift` | boolean |  |
-| `from` | string, required, a DNS-1123 label |  |
-| `run` | string, required, a DNS-1123 label |  |
+| `allowDrift` | boolean | Lets the replay re-run an image step whose artifact digest changed since the source run, on the current artifact; a child workflow's steps count too. false, the default, fails the replay with DigestDrift instead. |
+| `from` | string, required, a DNS-1123 label | The step to re-run from: it and every step that depends on it run again, a step the source never ran runs too, and the others keep the source's outputs. It is not the onFailure step, and no step outside that set may have failed or been cancelled in the source. |
+| `run` | string, required, a DNS-1123 label | The finished run to replay: a run of the same Workflow in this namespace that workflow.retention has not removed yet. |
 
 ### `WorkflowRun.status`
 
@@ -363,29 +363,29 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | --- | --- | --- |
 | `conditions` | array of [Condition](../../common-definitions.md#condition) | The conditions that explain the phase. |
 | `observedGeneration` | integer | The generation of the spec that funcd last acted on. |
-| `phase` | string, one of `Pending`, `Running`, `Paused`, `Succeeded`, `Failed`, `Cancelled` |  |
-| `pins` | array of [`WorkflowRun.status.pins[]`](#workflowrunstatuspins) |  |
-| `steps` | array of [`WorkflowRun.status.steps[]`](#workflowrunstatussteps) |  |
-| `traceId` | string |  |
-| `workflowUID` | string |  |
+| `phase` | string, one of `Pending`, `Running`, `Paused`, `Succeeded`, `Failed`, `Cancelled` | Where the run is in its lifecycle: Pending until it starts. Succeeded, Failed and Cancelled are final. |
+| `pins` | array of [`WorkflowRun.status.pins[]`](#workflowrunstatuspins) | The Function revisions the run calls, pinned before it starts: one for each Function its steps call, ref targets and child workflows' steps included. Until the run ends or is cancelled, funcd keeps these revisions, and an edit to the Workflow or a Function does not change the code the run calls. |
+| `steps` | array of [`WorkflowRun.status.steps[]`](#workflowrunstatussteps) | Each step of the run in spec order, the onFailure step included: its phase, attempts, times and error. |
+| `traceId` | string | The run's W3C trace ID, 32 lowercase hex characters, which every step call joins, a child workflow's included. funcdctl workflow logs reads the run's logs by it. |
+| `workflowUID` | string | The UID of the Workflow when the run started. A started run whose Workflow is deleted, or re-created under a new UID, is cancelled. |
 
 ### `WorkflowRun.status.pins[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `function` | string, required, a DNS-1123 label |  |
-| `functionUID` | string, required |  |
-| `imageDigest` | string |  |
-| `revision` | string, required, a DNS-1123 label |  |
+| `function` | string, required, a DNS-1123 label | The name of a Function the run's steps call. |
+| `functionUID` | string, required | That Function's UID when the run started: a Function re-created under the name is not the pinned one, and a step that calls it fails. |
+| `imageDigest` | string | The digest of that Revision's image; empty for a file:// artifact, which has none. |
+| `revision` | string, required, a DNS-1123 label | The Revision the run calls: the Function's current revision when the run started. |
 
 ### `WorkflowRun.status.steps[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `attempts` | integer |  |
-| `endedAt` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) |  |
-| `error` | string |  |
-| `name` | string, required, a DNS-1123 label |  |
-| `phase` | string, one of `Pending`, `Running`, `Succeeded`, `Failed`, `Skipped`, `Cancelled` |  |
-| `revision` | string |  |
-| `startedAt` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) |  |
+| `attempts` | integer | The calls made to the step's Function, each carrying its number in the X-Funcd-Attempt header; 0 for a builtin or workflow step. |
+| `endedAt` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the step succeeded, failed or was cancelled while running. |
+| `error` | string | Why the step failed, or that it was cancelled while running: the first line of the cause, cut at 512 bytes. |
+| `name` | string, required, a DNS-1123 label | The step's name. |
+| `phase` | string, one of `Pending`, `Running`, `Succeeded`, `Failed`, `Skipped`, `Cancelled` | Where the step is. It is Skipped when its when.condition is false, its join cannot be met or a step it depends on failed; a running step that a failure elsewhere stops goes back to Pending. |
+| `revision` | string | The step's image with the digest it resolved to when the run started; empty for a builtin or workflow step. A replay compares it to detect a changed artifact. |
+| `startedAt` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the step started running. |

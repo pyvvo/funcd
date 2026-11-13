@@ -12,7 +12,7 @@ type ResourceGroup struct {
 // ResourceGroupSpec holds the desired state.
 // Behavioral fields (cascade-delete behavior) owned by controller ADR (F08).
 type ResourceGroupSpec struct {
-	Description string `json:"description,omitempty"`
+	Description string `json:"description,omitempty" doc:"Free text about the group; funcd does not read it."`
 }
 
 // ResourceGroupStatus holds the observed state.

@@ -16,18 +16,18 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `credentialSecretName` | string, a DNS-1123 label |  |
-| `rotate` | integer |  |
-| `type` | string, required, one of `external` |  |
+| `credentialSecretName` | string, a DNS-1123 label | The Secret, in the Identity's namespace, that funcd writes the credential to and deletes with the Identity: the S3 key pair as accessKeyId and secretAccessKey, and the Lake token as lakeToken. Empty means the Identity's name. funcd leaves alone a Secret of that name that no Identity of this name controls, and the Identity then stays Pending with reason SecretNotOwned; a Secret left by a deleted Identity of the same name is issued again. |
+| `rotate` | integer | Raise it above status.observedRotate to rotate the credential: funcd writes a new secretAccessKey and lakeToken under the same access key id, and the old ones stop authenticating, with no overlap. |
+| `type` | string, required, one of `external` | What the Identity stands for: external, a caller outside funcd that authenticates with the credential funcd issues. The credential grants nothing: a RolesAssignment or a Policy grants the Identity its access. |
 
 ### `Identity.status`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `accessKeyId` | string |  |
+| `accessKeyId` | string | The access key id of the issued key pair, also in the Secret. funcd derives it from the Identity's namespace and name, so it stays the same when the credential rotates. |
 | `conditions` | array of [Condition](../../common-definitions.md#condition) | The conditions that explain the phase. |
 | `observedGeneration` | integer | The generation of the spec that funcd last acted on. |
-| `observedRotate` | integer |  |
+| `observedRotate` | integer | The spec.rotate value that funcd last acted on: a rotation is done once it equals spec.rotate. |
 | `phase` | string, one of `Pending`, `Deploying`, `Ready`, `Idle`, `Degraded`, `Failed`, `Terminating` | Where the object is in its lifecycle. |
 
 ## Role
@@ -40,7 +40,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `actions` | array of string values, required |  |
+| `actions` | array of string values, required | The actions the role grants, at least one, such as s3::read, kv::write or lake::query. An action that funcd does not know grants nothing. |
 
 ## RolesAssignment
 
@@ -52,38 +52,38 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `assignments` | array of [`RolesAssignment.spec.assignments[]`](#rolesassignmentspecassignments), required |  |
-| `principal` | object, [`RolesAssignment.spec.principal`](#rolesassignmentspecprincipal) |  |
-| `scope` | object, [`RolesAssignment.spec.scope`](#rolesassignmentspecscope) |  |
+| `assignments` | array of [`RolesAssignment.spec.assignments[]`](#rolesassignmentspecassignments), required | The grants, at least one: each entry grants one role to a principal at a scope. funcd refuses an entry that sets no principal while spec.principal is unset, and likewise for the scope. |
+| `principal` | object, [`RolesAssignment.spec.principal`](#rolesassignmentspecprincipal) | The principal of each entry that sets none. |
+| `scope` | object, [`RolesAssignment.spec.scope`](#rolesassignmentspecscope) | The scope of each entry that sets none. |
 
 ### `RolesAssignment.spec.assignments[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `principal` | object, [`RolesAssignment.spec.principal`](#rolesassignmentspecprincipal) |  |
-| `roleRef` | object, [`RolesAssignment.spec.assignments[].roleRef`](#rolesassignmentspecassignmentsroleref), required |  |
-| `scope` | object, [`RolesAssignment.spec.scope`](#rolesassignmentspecscope) |  |
+| `principal` | object, [`RolesAssignment.spec.principal`](#rolesassignmentspecprincipal) | Who the entry grants its role to. When unset, spec.principal. |
+| `roleRef` | object, [`RolesAssignment.spec.assignments[].roleRef`](#rolesassignmentspecassignmentsroleref), required | The role the entry grants. |
+| `scope` | object, [`RolesAssignment.spec.scope`](#rolesassignmentspecscope) | Where the entry's role applies. When unset, spec.scope. |
 
 ### `RolesAssignment.spec.assignments[].roleRef`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `kind` | string, required, one of `BuiltinRole`, `Role` |  |
-| `name` | string, required |  |
+| `kind` | string, required, one of `BuiltinRole`, `Role` | Where the role comes from: BuiltinRole for one of funcd's built-in roles, Role for a Role of the RolesAssignment's namespace. |
+| `name` | string, required | The role's name. A built-in role is one of Blob Data Reader, Blob Data Writer, KV Data Reader, KV Data Writer, SQL Data Reader, SQL Data Writer, Lake Query Reader, Lake Contributor, Function Invoker, Reader, Contributor and Owner; the last three cover Bucket and KV data only. A name that matches no role grants nothing. |
 
 ### `RolesAssignment.spec.principal`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `kind` | string, required, one of `Function`, `Identity` |  |
-| `name` | string, required, a DNS-1123 label |  |
+| `kind` | string, required, one of `Function`, `Identity` | The kind of the principal: a Function, or an Identity for a caller outside funcd. |
+| `name` | string, required, a DNS-1123 label | The principal's name, in the RolesAssignment's namespace. funcd does not check that it exists. |
 
 ### `RolesAssignment.spec.scope`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `kind` | string, required, one of `Namespace`, `BucketPrefix`, `KVStore`, `Lake`, `SQLDatabase` |  |
-| `name` | string |  |
+| `kind` | string, required, one of `Namespace`, `BucketPrefix`, `KVStore`, `Lake`, `SQLDatabase` | What the grant covers: with Namespace, every resource of the RolesAssignment's namespace; with another kind, the one resource that name gives, in that namespace. |
+| `name` | string | The resource for each kind: &lt;bucket&gt;/&lt;prefix&gt; for one prefix of a Bucket, &lt;store&gt; for every table of a KVStore or &lt;store&gt;/&lt;table&gt; for one, &lt;lake&gt; for a Lake and &lt;database&gt; for a SQLDatabase. A Namespace scope covers the whole namespace, whatever its name. |
 
 ## Policy
 
@@ -95,4 +95,4 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `cedar` | string, required |  |
+| `cedar` | string, required | One or more Cedar permit or forbid statements, which apply with funcd's built-in rules to each request whose principal and resource are both in the Policy's namespace; a forbid wins over any permit. Each statement names one action funcd knows, such as kv::read, and its principal and resource scopes name only entity types funcd knows and, for a type with a namespace, ids that begin with the Policy's namespace and a slash. funcd refuses text that does not parse, holds no statement or breaks these rules. |

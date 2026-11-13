@@ -12,9 +12,9 @@ import (
 // its one check and runtime.LimitsFrom its one mapping onto the worker's limits, which the runtime driver enforces.
 type ResourceSpec struct {
 	// CPU is a number of cores, at least MinCPU (e.g. "0.5" or "2").
-	CPU string `json:"cpu,omitempty"`
+	CPU string `json:"cpu,omitempty" doc:"The CPU cap of the worker or engine it sizes, as a number of cores of at least 0.01, such as 0.5 or 2. Empty takes the default of the resource that declares it, or no cap when there is none. Only the containerd runtime enforces it."`
 	// Memory is a size in ByteSize's grammar (ADR-0266), e.g. "256Mi" or "4GiB".
-	Memory string `json:"memory,omitempty"`
+	Memory string `json:"memory,omitempty" doc:"The memory cap of the worker or engine it sizes, such as 256Mi or 4GiB: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B, above zero. Empty takes the default of the resource that declares it, or no cap when there is none. Only the containerd runtime enforces it, and there a worker that passes it is killed."`
 }
 
 // MinCPU is the smallest cpu a ResourceSpec takes: a hundredth of a core keeps the CFS quota above the kernel's floor.

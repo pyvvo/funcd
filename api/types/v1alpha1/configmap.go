@@ -19,7 +19,7 @@ type ConfigMap struct {
 // ConfigMapSpec holds the configuration data. map[string]string is allowed under ADR-0002
 // (the any-ban targets interface{}/any/map[string]any).
 type ConfigMapSpec struct {
-	Data map[string]string `json:"data,omitempty"`
+	Data map[string]string `json:"data,omitempty" doc:"Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through."`
 }
 
 // GroupVersionKind returns the constant GVK for ConfigMap.
