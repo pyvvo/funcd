@@ -2,6 +2,7 @@ package cedar
 
 import (
 	"context"
+	"slices"
 	"strings"
 
 	cedartypes "github.com/cedar-policy/cedar-go/types"
@@ -128,6 +129,34 @@ func (reg *Registry) KnownAction(a auth.Action) bool {
 		}
 	}
 	return false
+}
+
+// Actions lists the registered capabilities' actions, sorted: the vocabulary that KnownAction accepts.
+func (reg *Registry) Actions() []string {
+	var out []string
+	for _, c := range reg.caps {
+		for _, a := range c.Actions {
+			out = append(out, string(a))
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// EntityTypes lists the registered capabilities' entity types, sorted and each once: the vocabulary that
+// KnownEntityType accepts.
+func (reg *Registry) EntityTypes() []string {
+	var out []string
+	for _, c := range reg.caps {
+		if c.EmitsEntityType != "" {
+			out = append(out, string(c.EmitsEntityType))
+		}
+		for _, et := range c.SupportingEntityTypes {
+			out = append(out, string(et))
+		}
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // KnownEntityType reports whether t is one of the registered capabilities' entity types (primary

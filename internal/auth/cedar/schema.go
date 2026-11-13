@@ -175,11 +175,13 @@ func validateCedar(text string) ([]policyScope, error) {
 			return nil, fault.Invalidf(op, "cedar policy must name a specific action (e.g. action == Action::%q)", string(auth.ActionKVRead))
 		}
 		if !KnownAction(sc.Action.Entity.ID) {
-			return nil, fault.Invalidf(op, "cedar policy references unknown action %q (curated: kv::read, kv::write, link::invoke, s3::read, s3::write)", sc.Action.Entity.ID)
+			return nil, fault.Invalidf(op, "cedar policy references unknown action %q (curated: %s)", sc.Action.Entity.ID,
+				strings.Join(defaultRegistry.Actions(), ", "))
 		}
 		for _, e := range append(sc.Principal.named(), sc.Resource.named()...) {
 			if !KnownEntityType(e.Type) {
-				return nil, fault.Invalidf(op, "cedar policy references unknown entity type %q (curated: Function, KVStore, KVTable, Bucket, BlobPrefix, S3Identity)", e.Type)
+				return nil, fault.Invalidf(op, "cedar policy references unknown entity type %q (curated: %s)", e.Type,
+					strings.Join(defaultRegistry.EntityTypes(), ", "))
 			}
 		}
 		scopes = append(scopes, sc)
