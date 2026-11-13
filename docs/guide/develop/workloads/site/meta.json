@@ -1,4 +1,4 @@
 {
   "title": "Site",
-  "pages": ["spec"]
+  "pages": ["index", "spec"]
 }

@@ -1,0 +1,56 @@
+apiVersion: funcd.io/v1alpha1
+kind: Bucket
+metadata:
+  name: reports
+  namespace: default
+  resourceGroup: rg1
+spec:
+  prefixes:
+    - name: app
+    - name: exports
+      owner:
+        kind: Function
+        name: export
+---
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: export
+  namespace: default
+  resourceGroup: rg1
+spec:
+  buckets:
+    - ref: reports
+  bindings:
+    blob:
+      - alias: exports
+        bucket: reports
+        prefix: exports
+  runtime: nodejs22
+  handler: handle
+  image: registry.example.com/export:1.0.0
+---
+# region site
+apiVersion: funcd.io/v1alpha1
+kind: Site
+metadata:
+  name: reports
+  namespace: default
+  resourceGroup: rg1
+spec:
+  image: registry.example.com/reports-web:2.0.0
+  buckets:
+    - ref: reports
+  bindings:
+    blob:
+      - bucket: reports
+        prefix: app
+  spa: true
+  ingress:
+    path: /reports
+    auth:
+      mode: open
+    rules:
+      - path: /reports/data
+        prefix: exports
+# endregion site

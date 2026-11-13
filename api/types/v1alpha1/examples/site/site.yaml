@@ -1,0 +1,22 @@
+# region site
+apiVersion: funcd.io/v1alpha1
+kind: Site
+metadata:
+  name: handbook
+  namespace: default
+  resourceGroup: rg1
+spec:
+  image: registry.example.com/handbook-web:1.4.0
+  buckets:
+    - name: handbook
+  bindings:
+    blob:
+      - bucket: handbook
+        prefix: web
+  spa: true
+  ingress:
+    path: /handbook
+    baseHref: true
+    auth:
+      mode: open
+# endregion site
