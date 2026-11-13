@@ -36,6 +36,10 @@ paths:
   example that `funcdctl dev` runs with it, a tool's command with the tool, and a server configuration by starting
   `funcd --config` with it. Run it with only the tools the page declares on the `PATH`, and send each step as soon as
   the step before it returns: a startup banner or a create acknowledgement is no sign that the work is ready or done,
-  so a step that depends on asynchronous work first shows what to wait for and how to check it again.
+  so a step that depends on asynchronous work first shows what to wait for and how to check it again. A name in a
+  list is no sign of completion either: check the stated phase itself, and repeat the check until it holds.
+- Keep the state that a task needs: a task that uses what an earlier task started keeps it running until the last
+  step that needs it, and says where to stop it; a task that needs a state the page has already stopped or replaced
+  gives the exact steps to start or set it up again.
 - Diagrams are `.drawio.svg` files in `docs/guide/assets/`, linked with a relative path. A diagram never repeats a path
   that another diagram already shows.
