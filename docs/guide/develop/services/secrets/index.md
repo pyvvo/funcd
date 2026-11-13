@@ -38,8 +38,9 @@ the Function:
 - The Secret `app-secret` holds two keys, `API_KEY` and `SHARED`, under `spec.data`. Each value is written in base64,
   and each key is an environment variable name: a letter or an underscore, then letters, digits and underscores.
 - The ConfigMap `app-config` holds two settings that are not secret, `APP_MODE` and `SHARED`. funcd gives the keys of
-  a bound ConfigMap to each worker as environment variables, except a key that starts with `FUNCD_` and a key that a
-  bound Secret also holds, such as `SHARED`.
+  a bound ConfigMap to each worker as environment variables, with the exceptions that the
+  [Configuration](../../workloads/configuration/index.md#usage) page lists. One of them applies here: a key that a
+  bound Secret also holds, such as `SHARED`, is left out.
 - The Function `env-echo` **declares** the Secret under `spec.secrets`, with the keys that its code reads. The
   Function waits in `Pending` until the Secret exists and holds every declared key.
 - The Function **binds** the Secret under `spec.bindings.secret`. A binding can name only a Secret that `spec.secrets`
