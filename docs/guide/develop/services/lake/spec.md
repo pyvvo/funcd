@@ -8,6 +8,8 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 ## Lake
 
+::include[../../../../../api/types/v1alpha1/examples/lake/lake.yaml#lake]
+
 | apiVersion | kind |
 | --- | --- |
 | `funcd.io/v1alpha1` | `Lake` |
