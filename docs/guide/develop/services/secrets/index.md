@@ -141,7 +141,7 @@ Function's `spec.bindings.secret`:
 
 - `put(binding, key, value)` sets the key to the value, a string.
 - `del(binding, key)` in TypeScript, and `delete(binding, key)` in Python, removes the key. Removing a key that the
-  Secret does not hold is no error, whatever the key's name: the example's handler removes `TOKEN` twice.
+  Secret does not hold is no error: the example's handler removes `TOKEN` twice.
 
 Neither method returns a value. In TypeScript, each returns a promise, which the handler awaits, so that the write is
 done before the handler reads the key again. When funcd refuses a write, the method throws an error, or raises a
@@ -256,8 +256,8 @@ To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
 A Secret has at most one owner. To let another Function write it too, grant that Function the built-in role
 `Secret Data Writer` with a RolesAssignment. Its scope names one Secret, with the kind `Secret` and the Secret's name,
 or the whole namespace, with the kind `Namespace`. Like the owner, the Function writes only a Secret that it binds,
-with the same methods. funcd reads the RolesAssignments of the namespace at each write, so a write sent once the
-RolesAssignment is applied succeeds.
+with the same methods. funcd reads the RolesAssignments of the namespace at each write, so the grant takes effect at
+the next write. A Policy that forbids the write still wins over the grant, as [Access](#access) explains.
 
 The second Function of the example secret-writer, `token-user` in TypeScript and `py-token-user` in Python, declares
 and binds the Secret of the previous section in the same way as the owner, but it does not own the Secret. Each call
@@ -353,10 +353,11 @@ A Function needs no role assignment to:
   `ctx.secret`. At each read, funcd asks Cedar whether the Function may perform the action `secret::read` on each
   Secret that it binds.
 - **Write the Secret it owns.** The Function that `spec.owner` names can write the Secret's keys while it binds the
-  Secret. A step of a Workflow writes as the Function that it calls: a step that names an `image` runs as the
-  Function `<workflow>-<step>`, which funcd creates for the step, and a step that names an existing Function by `ref`
-  runs as that Function. To let a step write a Secret, the Secret's `spec.owner` names that Function. At each write,
-  funcd asks Cedar whether the Function may perform the action `secret::write` on that Secret.
+  Secret. A Workflow's function step writes as the Function that it calls: a function step that names an `image`
+  runs as the Function `<workflow>-<step>`, which funcd creates for the step, and a function step that names an
+  existing Function by `ref` runs as that Function. To let a function step write a Secret, the Secret's `spec.owner`
+  names that Function. At each write, funcd asks Cedar whether the Function may perform the action `secret::write` on
+  that Secret.
 
 Any other write needs a role. funcd has two built-in roles for Secrets:
 
@@ -416,6 +417,12 @@ People read and write Secrets through funcd's API, where the role of the caller'
 admin, or a developer of the Secret's namespace, can read and write Secrets, and a viewer can never read one. A Policy
 does not change these reads and writes. The funcd [Spec](../../running-funcd/spec.md#funcdconfigyaml) tab describes
 the roles under `auth.credentials`.
+
+## Limits and quotas
+
+A put sends its value to funcd in a JSON body, `{"value": "<text>"}`, which holds at most 1 MiB, the JSON around the
+value included. A put whose body is larger fails with the HTTP status 413, and nothing is written. A delete sends no
+body, so this limit applies to a put only.
 
 ## Data storage
 
@@ -495,8 +502,8 @@ A forbid shows on the `Ready` condition: a Function that has served becomes `Deg
   `cedar: forbidden by policy default/forbid-app-secret#0`. A handler that does not catch the error, such as
   env-echo's, makes the call fail with the HTTP status 500.
 - A write that funcd refuses throws an error, or raises a `RuntimeError` in Python, whose message, such as
-  `context.secret.put failed: 403 …`, holds one of these HTTP statuses. A put and a delete can fail with the first
-  three; only a put can fail with the last two:
+  `context.secret.put failed: 403 …`, holds the HTTP status. The refusals of a write include these: a put and a
+  delete can fail with the first three, and a put also with the last two:
   - 403: the first argument names a Secret that the Function does not bind, such as
     `function "token-owner" in "default" does not bind Secret "app-secret"`; or the Function is neither the owner nor
     a writer that a role names, `cedar: forbidden by policy builtin/secret-single-writer`; or a Policy forbids the
@@ -506,9 +513,10 @@ A forbid shows on the `Ready` condition: a Function that has served becomes `Deg
     again.
   - 400, for a put only: the key is not an environment variable name, or the value is not UTF-8 text or contains a
     NUL byte. Nothing is written.
-  - 413, for a put only: the request is over 1 MiB, the value with the JSON that carries it.
-- A delete, `del` in TypeScript and `delete` in Python, of a key that the Secret does not hold succeeds, whatever the
-  key's name: a delete fails only with 403, 404 or 409.
+  - 413, for a put only: the request is over 1 MiB, the value with the JSON that carries it, as
+    [Limits and quotas](#limits-and-quotas) explains.
+- A delete, `del` in TypeScript and `delete` in Python, of a key that the Secret does not hold is no error, as the
+  example's second delete of `TOKEN` shows.
 
 ## Run it locally
 
