@@ -40,8 +40,9 @@ The Route `api` has one rule:
 - Its [`backend.function`](spec.md#routespecrulesbackend) names the Function that the rule calls, `devices-api`,
   which must be in the Route's namespace.
 
-The Route sets no [`host`](spec.md#routespec), so, in the namespace `default`, it answers on every host except the
-hosts that other namespaces use; [Choose the host of a Route](#choose-the-host-of-a-route) explains hosts.
+The Route sets no [`host`](spec.md#routespec), so, in the namespace `default`, it answers on every host except another
+namespace's own host, `<namespace>.<server.baseDomain>`, while that namespace uses it;
+[Choose the host of a Route](#choose-the-host-of-a-route) gives the details.
 
 Before it calls the Function, the edge removes the rule's path from the request: a request for `/api/devices` reaches
 the app as `/devices`. Since `devices-api` serves HTTP, the request's `X-Forwarded-Prefix` header holds the part that
