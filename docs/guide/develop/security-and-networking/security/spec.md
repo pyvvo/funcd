@@ -8,6 +8,8 @@ This page lists the spec and status fields of Identity, Role, RolesAssignment an
 
 ## Identity
 
+::include[../../../../../api/types/v1alpha1/examples/security/identity.yaml#identity]
+
 | apiVersion | kind |
 | --- | --- |
 | `funcd.io/v1alpha1` | `Identity` |
@@ -32,6 +34,8 @@ This page lists the spec and status fields of Identity, Role, RolesAssignment an
 
 ## Role
 
+::include[../../../../../api/types/v1alpha1/examples/security/role.yaml#role]
+
 | apiVersion | kind |
 | --- | --- |
 | `funcd.io/v1alpha1` | `Role` |
@@ -43,6 +47,8 @@ This page lists the spec and status fields of Identity, Role, RolesAssignment an
 | `actions` | array of string values, required | The actions the role grants, at least one, such as s3::read, kv::write or lake::query. An action that funcd does not know grants nothing. |
 
 ## RolesAssignment
+
+::include[../../../../../api/types/v1alpha1/examples/security/rolesassignment.yaml#rolesassignment]
 
 | apiVersion | kind |
 | --- | --- |
@@ -86,6 +92,8 @@ This page lists the spec and status fields of Identity, Role, RolesAssignment an
 | `name` | string | The resource for each kind: &lt;bucket&gt;/&lt;prefix&gt; for one prefix of a Bucket, &lt;store&gt; for every table of a KVStore or &lt;store&gt;/&lt;table&gt; for one, &lt;lake&gt; for a Lake and &lt;database&gt; for a SQLDatabase. A Namespace scope covers the whole namespace, whatever its name. |
 
 ## Policy
+
+::include[../../../../../api/types/v1alpha1/examples/security/policy.yaml#policy]
 
 | apiVersion | kind |
 | --- | --- |
