@@ -1,76 +1,56 @@
 ---
 title: Workflow
-description: Run a Workflow, start runs with an input, read each step's status and the run's logs, branch on a step's output, and pause, cancel or replay a run.
+description: Run a Workflow, start runs and read their steps and logs, branch on a step's output, share a database between steps, and retry, pause, cancel or replay a run.
 ---
 
 ## Usage
 
-A Workflow is a list of **steps**. Each execution of a Workflow is a **run**: a WorkflowRun object that holds the
-run's input and the state of each step. funcd runs the steps of a run in the order that the Workflow sets. The first
-step receives the run's input, and each later step receives the output of the step listed before it, or of the steps
-that it names. A step calls a Function, runs another Workflow as a **child run**, or is a **built-in step**, which
-funcd runs itself, with no Function. The [Platform page](../../../platform/workloads/workflow.md) explains how funcd
-drives a run; this page shows how to run a Workflow, start its runs and read their state.
+A Workflow runs a series of steps for each input that it receives, and passes the output of each step on to the
+steps after it. A step calls a Function, runs another Workflow, or is one of the simple steps that funcd runs itself.
+The [Platform page](../../../platform/workloads/workflow.md) explains how funcd drives a Workflow; this page shows how
+to run one, start it with an input and follow what it does.
 
-The first example runs a Workflow of two steps on the local computer, starts one run of it with an input, and reads
-the run's status. In TypeScript, the Workflow `pipeline` calls a Function, then runs a second Workflow, `scorer`, as a
-child run. In Python, the Workflow `readings` stores a batch of a sensor's values in a SQL database, then reads them
-back to summarize them. In both languages, the run ends in the phase `Succeeded`, and so does each of its steps.
+The first example runs the Workflow `pipeline` of the TypeScript example `workflow` on the local computer, starts it
+once with the amount 4, and reads the result. The run ends in the phase `Succeeded`, and the log line of its last
+step holds 40, the score that this step computed from the amount 4.
 
-The example needs these programs:
+The example needs three programs:
 
 - funcdctl, installed as the [Install](../../../get-started/install.md) page shows. That page installs the dev build
-  of funcdctl, which includes the `funcdctl dev` command and the SQL engine that the Python example's database needs.
+  of funcdctl, which includes the `funcdctl dev` command.
 - git, which copies the example's repository.
-- For TypeScript, Node.js on the `PATH`, which runs the example's steps.
-- For Python, [uv](https://docs.astral.sh/uv/) on the `PATH`. The example's steps import Python packages, such as
-  SQLAlchemy, that uv installs before it starts `funcdctl dev`. uv also downloads a Python interpreter when the
-  computer has none of version 3.12 or later.
+- Node.js on the `PATH`, which runs the example's steps.
 
-`funcdctl dev` starts a local platform and runs the resource files of one folder on it. A step that names an `image`,
-the [artifact](../../../platform/workloads/artifacts.md) that a platform pulls, runs as a Function that funcd creates
-for the step, named `<workflow>-<step>`. `funcdctl dev` does not pull that image: it runs the step's Function from the
-code in the folder that the image's tag names, and reads the step's **contract**, the JSON Schema of the input that
-the step accepts and of the output that it returns, from the contract file of the same name. For the image
-`oci-layout:///mnt/funcd-deps/registry:ingest`, the tag is `ingest`, the code is `ingest.mjs` in TypeScript, and the
-contract file is `ingest.contract.yaml`. [Run it locally](#run-it-locally) gives the complete rules.
-
-`funcdctl dev` also prints the address of its control plane, which a `funcdctl` command reaches with `--server` and
-the token `funcd-dev-token`. The `--cport` flag sets the port of the control plane, and `--gport` the port of each
-Function's URL, so the commands below use the ports 8081 and 8080.
-
-[`funcdctl workflow run`](../../tools/funcdctl/spec.md#funcdctl-workflow-run) starts a run: it creates a WorkflowRun
-of the Workflow that it names, with the name that follows and the input that `--input` gives as JSON. Without a
-name, funcd names the run after the Workflow, with a generated suffix. A run's name can be used only once in a
-namespace, so a second run takes a new name.
-[`funcdctl workflow describe`](../../tools/funcdctl/spec.md#funcdctl-workflow-describe) prints the run's phase and,
-for each step, its phase, the number of calls made to the step's Function (`attempts`), and how long the step ran.
-A run is `Pending` until it starts and `Running` while its steps run; it ends `Succeeded`, `Failed` or `Cancelled`.
-funcd starts a run a moment after `funcdctl workflow run` has created it, so `describe`, right after it, can print an
-empty phase and no step, or a phase such as `Running`: repeat `describe` until the phase reads `Succeeded`.
-[Status](#status) explains each phase, and the [Spec](spec.md) tab describes every field of a Workflow and of a
-WorkflowRun.
+`funcdctl dev` starts a local platform and runs the resource files of one folder on it. It prints the address of its
+control plane, which a `funcdctl` command reaches with `--server` and the token `funcd-dev-token`. The `--cport` flag
+sets the port of the control plane, so the commands below use the port 8081.
 
 ### TypeScript
 
-The Workflow `scorer`, in `examples/workflow/child.yaml`, has one step, `s`. Its image has the tag `score`, so
-`funcdctl dev` runs `score.mjs` as the Function `scorer-s`:
+The Workflow `scorer`, in `examples/workflow/child.yaml`, has a single **step**, `s`. A step that names an `image`,
+the [artifact](../../../platform/workloads/artifacts.md) that a platform pulls, runs as a Function that funcd creates
+for the step and names `<workflow>-<step>`, here `scorer-s`. `funcdctl dev` does not pull that image: it runs the code
+in the folder that the image's tag, the part after the last `:`, names. The tag `score` names `score.mjs`, and the
+file `score.contract.yaml` holds the step's **contract**, the JSON Schema of the input that the step accepts and of
+the output that it returns:
 
 ::include[../../../../../_repos/funcd-typescript/examples/workflow/child.yaml]
 
-The Workflow `pipeline`, in `examples/workflow/parent.yaml`, has two steps. The step `feed` runs `ingest.mjs` as the
-Function `pipeline-feed`. The step `sub` sets no [`dependsOn`](spec.md#workflowspecsteps), so it follows the step
-listed before it, `feed`, and takes feed's output as its input. `sub` names the Workflow `scorer` under
-[`workflow.ref`](spec.md#workflowspecstepsworkflow), so it runs `scorer` as a child run: the step's input becomes the
-child run's input, and the child run's output becomes the step's output.
+The Workflow `pipeline`, in `examples/workflow/parent.yaml`, has two steps. Each **run** of a Workflow, one execution
+of it with an input, starts at its first step: here `feed`, which runs `ingest.mjs` as the Function `pipeline-feed`
+and receives the run's input. The step `sub` names `feed` under [`dependsOn`](spec.md#workflowspecsteps), so it runs
+once `feed` has succeeded, and receives the output of `feed` as its input; a step that sets no `dependsOn` follows
+the step listed before it. `sub` names the Workflow `scorer` under
+[`workflow.ref`](spec.md#workflowspecstepsworkflow), so it runs `scorer` as a **child run**: the step's input becomes
+the input of the child run, and the output of the child run becomes the step's output.
 
 ::include[../../../../../_repos/funcd-typescript/examples/workflow/parent.yaml]
 
 Both Workflows set [`pooling`](spec.md#workflowspecpooling): `mode: isolated` gives the Function of each step a
 [worker](../../../platform/workloads/index.md#runtime) of its own, a process that runs the Function's code, and
-`minReplicas: 1` keeps that worker running while no run calls it. Each step's handler is a
-Function's handler, which the [Function](../function/index.md) page explains: it receives the step's input in
-`event.data`, and its return value becomes the step's output. The handler of `ingest`, in
+`minReplicas: 1` keeps that worker running while no call comes. Each step's handler is a Function's handler, which
+the [Function](../function/index.md) page explains: it receives the step's input in `event.data`, and its return
+value becomes the step's output. The handler of `ingest`, in
 [`src/ingest/main.ts`](https://github.com/pyvvo/funcd-typescript/blob/main/examples/workflow/src/ingest/main.ts),
 logs the amount and returns it. The handler of `score`, in `src/score/main.ts`, multiplies the amount by 10, logs the
 result with `context.log`, and returns both numbers. `funcdctl dev` runs their builds, `ingest.mjs` and `score.mjs`,
@@ -78,128 +58,88 @@ which the repository holds already built:
 
 ::include[../../../../../_repos/funcd-typescript/examples/workflow/src/score/main.ts]
 
-The folder holds two more `.yaml` files. `funcdctl dev` skips `funcdconfig.yaml`, a configuration file for a funcd
-server. It applies `workflow.yaml`, the Workflow `orders`, which [Branch on a step's output](#branch-on-a-steps-output)
-describes; `orders` does not become Ready under `funcdctl dev`, as [Run it locally](#run-it-locally) explains.
+Besides the contract files, the folder holds two more `.yaml` files at its top level. `funcdctl dev` skips
+`funcdconfig.yaml`, a configuration file for a funcd server, and applies `workflow.yaml`, the Workflow `orders`, which
+[Branch on a step's output](#branch-on-a-steps-output) describes.
+
+[`funcdctl workflow run`](../../tools/funcdctl/spec.md#funcdctl-workflow-run) starts a run: it creates a WorkflowRun
+object, with the name that follows the Workflow's name and the input that `--input` gives as JSON. Without a name,
+funcd names the run after the Workflow, with a generated suffix. Two runs that exist at the same time in a namespace
+cannot share a name, but a new run can take the name of a run that was deleted.
+[`funcdctl workflow describe`](../../tools/funcdctl/spec.md#funcdctl-workflow-describe) prints the run's
+phase; for each step, its phase, the number of calls made to the step's Function (`attempts`) and how long the step
+ran; and the run's **trace ID**, an identifier that each call of the run carries and by which funcd finds the run's
+log records.
+
+funcd starts a run a moment after `funcdctl workflow run` has created it, and until then `describe` prints no phase
+and no step. A run that starts at once is `Running` until it ends `Succeeded`, `Failed` or `Cancelled`; a run that
+waits to start, such as for its Workflow to become Ready, is `Pending` meanwhile. Repeat `describe` until the phase
+reads `Succeeded`, `Failed` or `Cancelled`. [Status](#status) explains each phase, and the [Spec](spec.md) tab
+describes every field of a Workflow and of a WorkflowRun.
 
 Clone the repository, and start the example from the repository's root folder:
 
 ```console
 $ git clone https://github.com/pyvvo/funcd-typescript
 $ cd funcd-typescript
-$ funcdctl dev examples/workflow --gport 8080 --cport 8081
+$ funcdctl dev examples/workflow --cport 8081
 ```
 
 In another terminal, start a run of `pipeline` with the amount 4, then read the run, again until its phase reads
-`Succeeded`:
+`Succeeded`, `Failed` or `Cancelled`:
 
 ```console
 $ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token workflow run pipeline run-1 --input '{"amount":4}'
 started WorkflowRun/run-1
 $ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token workflow describe run-1
 RUN run-1   phase: Succeeded
-  feed   phase: Succeeded   attempts: 1   duration: 2ms
-  sub   phase: Succeeded   duration: 103ms
-trace: 60fd921d6c7c6264de34142651e64a5b
+  feed   phase: Succeeded   attempts: 1   duration: 52ms
+  sub   phase: Succeeded   duration: 2ms
+trace: e5c86be4e947979338a5dac957c36c34
 full logs: funcdctl workflow logs run-1
 ```
 
-The run lasts a fraction of a second, because each step's worker is already running; the durations and the trace ID
-differ at each run. `sub` shows no attempts, because the step calls no Function itself: the step `s` of its child run
-calls `scorer-s`. To check that each step received the output of the one before it, read the lines that the steps
-logged in the terminal that runs `funcdctl dev`, where the times differ at each run. `pipeline-feed` logged the
-amount 4, and `scorer-s` logged 40, the score of the amount that `feed` passed on:
+The durations and the trace ID differ at each run. `sub` shows no attempts, because the step calls no Function
+itself: the step `s` of its child run calls `scorer-s`. To check that each step received the output of the one before
+it, read the lines that the steps logged in the terminal that runs `funcdctl dev`, where the times differ at each run.
+`pipeline-feed` logged the amount 4, and `scorer-s` logged 40, the score of the amount that `feed` passed on:
 
 ```console
-  17:08:57  pipeline-feed INFO   ingest args=["ingest",4]
-  17:08:57  scorer-s     INFO   score args=["score",40]
+  17:35:15  pipeline-feed INFO   ingest args=["ingest",4]
+  17:35:15  scorer-s     INFO   score args=["score",40]
 ```
-
-To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
-
-### Python
-
-The Workflow `readings`, in `examples/sql-readings/workflow.yaml`, declares the SQL database `readings-db` under
-[`spec.sql`](spec.md#workflowspecsql), and names its step `ingest` as the database's `owner`. The owner is the step's
-Function, `readings-ingest`, which can therefore write the database. Each step binds the database with the alias `app`
-under [`function.bindings.sql`](spec.md#workflowspecstepsfunctionbindingssql), which lets the step's code read the
-database. The step `summarize` names `ingest` in [`dependsOn`](spec.md#workflowspecsteps), so it runs after `ingest`
-and takes ingest's output as its input:
-
-::include[../../../../../_repos/funcd-python/examples/sql-readings/workflow.yaml]
-
-Each step's handler is a Function's handler, which the [Function](../function/index.md) page explains: it receives the
-step's input in `event["data"]`, and its return value becomes the step's output. The handler of `ingest`, in
-`src/ingest/main.py`, creates the table and its index when they do not exist, stores the values after the ones that
-the sensor already has, and returns the sensor's name and the number of values that it stored. `execute` and `rows`,
-from the example's package `readings_core`, compile each SQLAlchemy statement into SQL text and send it through
-`context.sql`, which the [SQL](../../services/sql/index.md) page explains. The handler of `summarize`, in
-[`src/summarize/main.py`](https://github.com/pyvvo/funcd-python/blob/main/examples/sql-readings/src/summarize/main.py),
-reads the values back and returns their count, mean, lowest and highest value, and the three latest values:
-
-::include[../../../../../_repos/funcd-python/examples/sql-readings/src/ingest/main.py]
-
-The folder's `pyproject.toml` names the entry of each step under `[tool.funcd-bundle.functions]`, such as
-`src/ingest/main.py` for `ingest`. For the database, `funcdctl dev` starts a database engine on the local computer,
-and deletes the database's data when it stops, unless it runs with `--persist`, which
-[Run it locally](#run-it-locally) describes.
-
-Clone the repository, go to the example's folder, and start the example with `uv run`:
-
-```console
-$ git clone https://github.com/pyvvo/funcd-python
-$ cd funcd-python/examples/sql-readings
-$ uv run funcdctl dev . --gport 8080 --cport 8081
-```
-
-`uv run` installs the packages that the example's lock file, `uv.lock`, names into a virtual environment in the
-folder, `.venv`. It then runs `funcdctl dev` with that environment's `python3` first on the `PATH`, and `funcdctl dev`
-runs the steps with that `python3`.
-
-In another terminal, start a run of `readings` with four values of the sensor `greenhouse`, then read the run, again
-until its phase reads `Succeeded`:
-
-```console
-$ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token workflow run readings run-1 --input '{"sensor":"greenhouse","values":[21.5,22.0,23.5,22.5]}'
-started WorkflowRun/run-1
-$ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token workflow describe run-1
-RUN run-1   phase: Succeeded
-  ingest   phase: Succeeded   attempts: 1   duration: 1s63ms
-  summarize   phase: Succeeded   attempts: 1   duration: 233ms
-trace: 163c42fd9846e7c0eeeacfccc1f4545d
-full logs: funcdctl workflow logs run-1
-```
-
-A run that starts just after `funcdctl dev` has started can take a second or more, and the durations and the trace
-ID differ at each run. `summarize` ran once `ingest` had succeeded, and read back the values that `ingest` stored.
 
 To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
 
 ## Read a run's logs
 
 [`funcdctl workflow logs`](../../tools/funcdctl/spec.md#funcdctl-workflow-logs) prints the log records of one run:
-those of each step's Function, the steps of its child runs included. funcd finds them by the run's trace ID, which
-`describe` prints and which each call of the run carries. A record shows there once funcd has written it to storage:
-a funcd server does that within `funclog.segmentMaxAge`, 10 seconds by default, and `funcdctl dev` within a second.
-While the TypeScript example of [Usage](#usage) runs, this command prints the records of the run `run-1`, with each
-record's attributes:
+those of each step's Function, the steps of its child runs included, which funcd finds by the run's trace ID. A
+record shows there once funcd has written it to storage: a funcd server does that within `funclog.segmentMaxAge`, 10
+seconds by default, and `funcdctl dev` within a second. While the example of [Usage](#usage) runs, this command prints
+the records of the run `run-1`, with each record's attributes:
 
 ```console
 $ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token workflow logs run-1 -o wide
-2026-11-13T16:08:57.227Z [INFO] 0 ingest source=console inv=a098a005f6b7e3e2 trace=60fd921d6c7c6264de34142651e64a5b args=["ingest",4]
-2026-11-13T16:08:57.329Z [INFO] 0 score source=console inv=c720650fbf8a031b trace=60fd921d6c7c6264de34142651e64a5b args=["score",40]
+2026-11-13T16:35:15.491Z [INFO] 0 ingest source=console inv=4631a4b503407a8a trace=e5c86be4e947979338a5dac957c36c34 args=["ingest",4]
+2026-11-13T16:35:15.493Z [INFO] 0 score source=console inv=babcd4d53d7f7995 trace=e5c86be4e947979338a5dac957c36c34 args=["score",40]
 ```
 
 Each line shows the record's time, its severity, the number of the worker that wrote it and its message. `-o wide`
-adds the record's attributes: `args` holds the arguments of the `context.log` call, `inv` identifies the call of the
-step's Function, and `trace` is the run's trace ID. The times and the values of `inv` and `trace` differ at each run.
-The Python example's steps log nothing, so the command prints no record for its run.
+adds the record's attributes:
 
-`--step` keeps the records of one step's Function, such as `--step feed`. A built-in step and a workflow step have no
-Function of their own, so `--step sub` fails with the message
-`step "sub" is a builtin/sub-workflow step and has no single function to read`. `--severity`, `--since` and `--limit`
-filter the records as for `funcdctl logs`, which the [Function](../function/index.md#read-a-functions-logs) page
-describes; by default, the command prints the most recent 1000 records.
+- `source` says how the code wrote the record: `console` for a `console` call or a `context.log` call in TypeScript,
+  `logging` for the `logging` module in Python, and `stdout` or `stderr` for a line written to standard output or to
+  standard error.
+- `inv` identifies the call of the step's Function, and `trace` is the run's trace ID.
+- `args` holds the arguments of the `console` or `context.log` call.
+
+The times and the values of `inv` and `trace` differ at each run. `--step` keeps the records of one step's Function,
+such as `--step feed`. A built-in step and a workflow step have no Function of their own, so `--step sub` fails with
+the message `step "sub" is a builtin/sub-workflow step and has no single function to read`. `--severity`, `--since`
+and `--limit` filter the records as for `funcdctl logs`, which the
+[Function](../function/index.md#read-a-functions-logs) page describes; by default, the command prints the most recent
+1000 records.
 
 ## Branch on a step's output
 
@@ -207,9 +147,11 @@ By default, a step runs once each of its parents, the steps that it follows, has
 changes that:
 
 - A step's [`when.condition`](spec.md#workflowspecstepswhen) is a JavaScript expression between `${{` and `}}` that
-  yields `true` or `false`. The expression reads `input`, the run's input, and `step.<name>.output`, the output of
-  each step that the step follows. A step whose condition is false is `Skipped`, and so are the steps after it that
-  need it to succeed.
+  yields `true` or `false`. It reads `input`, the run's input, and `step.<name>.output`, the output of a parent whose
+  output has a schema: a parent that calls a Function, from the Function's contract, or that runs a child run, from
+  the child Workflow's contract. A built-in step's output has no schema, so a condition that reads it is refused with
+  the reason `WhenTypeError`. A step whose condition is false is `Skipped`, and so are the steps after it that need it
+  to succeed.
 - A step's [`join`](spec.md#workflowspecsteps) sets how it waits for its parents. With `all`, the default, the step
   runs only when every parent has succeeded, and is `Skipped` otherwise. With `any`, it waits until every parent has
   ended, then runs on the outputs of those that succeeded, and is `Skipped` if none did. A step with several parents
@@ -231,9 +173,8 @@ reads whichever is present:
 
 ::include[../../../../../_repos/funcd-typescript/examples/workflow/workflow.yaml]
 
-On a funcd server, a run of `orders` with the amount 4 gets the score 40, so `hi` runs and `lo` is `Skipped`; with the
-amount 2, `lo` runs and `hi` is `Skipped`. `funcdctl dev` does not run `orders`, because it cannot check these
-conditions, as [Run it locally](#run-it-locally) explains.
+On a platform, a run of `orders` with the amount 4 gets the score 40, so `hi` runs and `lo` is `Skipped`; with the
+amount 2, `lo` runs and `hi` is `Skipped`. In both cases, `report`, `settle` and `summary` succeed.
 
 ## Wait or reshape data without a Function
 
@@ -262,8 +203,12 @@ The steps of a run pass data to each other in their outputs:
 - A run's input and each step's output hold at most `workflow.payloadLimit` bytes, which
   [Limits and quotas](#limits-and-quotas) describes.
 
-For larger data, or for data that the steps of several runs share, the steps use a store that the Workflow declares
-at its root, as the Python example of [Usage](#usage) does with its SQL database:
+For larger data, or for data that several runs share, the steps use a store that the Workflow declares, as
+[Share a database between steps](#share-a-database-between-steps) shows.
+
+## Share a database between steps
+
+A Workflow declares the stores that its steps use at the root of its spec:
 
 - [`spec.kv`](spec.md#workflowspeckv), [`spec.buckets`](spec.md#workflowspecbuckets),
   [`spec.sql`](spec.md#workflowspecsql) and [`spec.lakes`](spec.md#workflowspeclakes) declare KV stores, Buckets, SQL
@@ -278,6 +223,72 @@ at its root, as the Python example of [Usage](#usage) does with its SQL database
   owner and the principals that a role allows can write it, as the [KV](../../services/kv/index.md#access) page
   explains for a KV table.
 
+The Python example sql-readings stores a batch of a sensor's values in a SQL database in one step, and summarizes
+them in the next. It needs funcdctl and git, as the first example does, and [uv](https://docs.astral.sh/uv/) on the
+`PATH`. The example's steps import Python packages, such as SQLAlchemy, that uv installs before it starts
+`funcdctl dev`, and uv also downloads a Python interpreter when the computer has none of version 3.12 or later. The
+dev build of funcdctl includes the SQL engine that `funcdctl dev` starts for each SQL database. `funcdctl dev`
+deletes the database's data when it stops, unless it runs with `--persist`, which [Run it locally](#run-it-locally)
+describes.
+
+### Python
+
+The Workflow `readings`, in `examples/sql-readings/workflow.yaml`, declares the SQL database `readings-db` and names
+its step `ingest` as the database's `owner`, so the Function `readings-ingest` can write the database. Each step binds
+the database with the alias `app`, which lets the step's code read it. The step `summarize` names `ingest` in
+`dependsOn`, so it runs once `ingest` has succeeded:
+
+::include[../../../../../_repos/funcd-python/examples/sql-readings/workflow.yaml]
+
+Each step's handler receives the step's input in `event["data"]`, and its return value becomes the step's output. The
+handler of `ingest`, in `src/ingest/main.py`, creates the table and its index when they do not exist, stores the
+values after the ones that the sensor already has, and returns the sensor's name and the number of values that it
+stored. `execute` and `rows`, from the example's package `readings_core`, compile each SQLAlchemy statement into SQL
+text and send it through `context.sql`, which the [SQL](../../services/sql/index.md) page explains. The handler of
+`summarize`, in
+[`src/summarize/main.py`](https://github.com/pyvvo/funcd-python/blob/main/examples/sql-readings/src/summarize/main.py),
+reads the values back and returns their count, mean, lowest and highest value, and the three latest values:
+
+::include[../../../../../_repos/funcd-python/examples/sql-readings/src/ingest/main.py]
+
+The folder's `pyproject.toml` names the entry of each step under `[tool.funcd-bundle.functions]`, such as
+`src/ingest/main.py` for `ingest`. The folder's `run.yaml` holds a WorkflowRun, `readings-run-1`, with four values of
+the sensor `greenhouse`. `funcdctl dev` applies it with the other files of the folder, so this run starts as soon as
+`funcdctl dev` has started:
+
+::include[../../../../../_repos/funcd-python/examples/sql-readings/run.yaml]
+
+Clone the repository, go to the example's folder, and start the example with `uv run`:
+
+```console
+$ git clone https://github.com/pyvvo/funcd-python
+$ cd funcd-python/examples/sql-readings
+$ uv run funcdctl dev . --cport 8081
+```
+
+`uv run` installs the packages that the example's lock file, `uv.lock`, names into a virtual environment in the
+folder, `.venv`. It then runs `funcdctl dev` with that environment's `python3` first on the `PATH`, and `funcdctl dev`
+runs the steps with that `python3`.
+
+In another terminal, read the run that `run.yaml` started, again until its phase reads `Succeeded`, `Failed` or
+`Cancelled`:
+
+```console
+$ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token workflow describe readings-run-1
+RUN readings-run-1   phase: Succeeded
+  ingest   phase: Succeeded   attempts: 1   duration: 1s54ms
+  summarize   phase: Succeeded   attempts: 1   duration: 230ms
+trace: 293c42211458963a246f563da7f19a6d
+full logs: funcdctl workflow logs readings-run-1
+```
+
+The first run after `funcdctl dev` has started can take a second or more, and the durations and the trace ID differ at
+each run. `summarize` ran once `ingest` had succeeded, and read back the values that `ingest` stored. Another run of
+`readings` for the same sensor adds its values after the ones that the database already holds: a run started with
+`funcdctl workflow run` and the input of `run.yaml` stores the same four values a second time.
+
+To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
+
 ## Retry a step and handle a failed run
 
 A step that calls a Function fails when the Function answers with an error or does not answer in time:
@@ -285,9 +296,11 @@ A step that calls a Function fails when the Function answers with an error or do
 - A 5xx answer, a timeout or a transport error is retried. A 4xx answer, such as the 422 of a call whose input does
   not match the step's contract, fails the step at once.
 - [`function.retry.maxAttempts`](spec.md#workflowspecstepsfunctionretry) sets how many calls the step may make, the
-  first one included, and `retry.backoff` sets the wait before the second call, which doubles at each later call, up
-  to one hour. A step that sets no `retry` makes `workflow.defaultRetry` calls, 1 by default, so it is not retried
-  unless the server's configuration raises that number.
+  first one included. A step that sets no `retry` makes `workflow.defaultRetry` calls, 1 by default, so it is not
+  retried unless the server's configuration raises that number.
+- `retry.backoff` sets the wait before the second call, which doubles at each later call, up to one hour. A step that
+  sets no `backoff` waits `workflow.defaultRetryBackoff`, 0 seconds by default, so its calls follow each other at
+  once.
 - [`function.timeout`](spec.md#workflowspecstepsfunction) bounds each call, or `workflow.defaultStepTimeout`, 300
   seconds by default, when it is not set. A call that takes longer fails, and the step calls again while it has
   calls left.
@@ -320,8 +333,8 @@ that has ended ignores both: `funcdctl workflow pause` still prints `paused <run
 
 [`funcdctl workflow replay`](../../tools/funcdctl/spec.md#funcdctl-workflow-replay) starts a new run from a run that
 has ended. The step that `--from` names, and each step that depends on it, run again; the other steps keep the
-outputs that they had in the source run. While the TypeScript example of [Usage](#usage) runs, replay `run-1` from its
-step `sub`, under the name `run-2`, and read the new run, again until its phase reads `Succeeded`:
+outputs that they had in the source run. While the example of [Usage](#usage) runs, replay `run-1` from its step
+`sub`, under the name `run-2`, and read the new run, again until its phase reads `Succeeded`, `Failed` or `Cancelled`:
 
 ```console
 $ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token workflow replay run-1 --from sub --name run-2
@@ -331,7 +344,7 @@ RUN run-2   phase: Succeeded
   feed   phase: Succeeded
   sub   phase: Succeeded   duration: 1ms
 replay of: run-1 (from sub)
-trace: 1d4c38f820f58e48246ca8cf628ced4d
+trace: 682e64a6e91d67d9847a012df0fe9eb2
 full logs: funcdctl workflow logs run-2
 ```
 
@@ -406,23 +419,25 @@ the contract of each step that calls a Function or runs a child run, and `status
 not ended, with a count of the runs that ended in each final phase.
 
 [`funcdctl workflow runs`](../../tools/funcdctl/spec.md#funcdctl-workflow-runs) lists the runs of a namespace, newest
-first, and `--phase` keeps those of one phase. A run's phase is one of these:
+first, and `--phase` keeps those of one phase. A run has no phase until funcd starts it or makes it wait, and then
+one of these:
 
 - `Pending`: the run waits to start, such as for its Workflow to become Ready. The reason of its `Ready` condition
   says what it waits for, such as `WorkflowNotFound` or `WorkflowNotReady`, and `describe` prints it.
 - `Running`: its steps run.
 - `Paused`: the run is paused, as [Pause, resume or cancel a run](#pause-resume-or-cancel-a-run) explains.
 - `Succeeded`, `Failed` or `Cancelled`: the run has ended. A failed run's reason is `StepFailed`, `RunTimedOut`,
-  `InputSchemaMismatch` for an input that does not match the Workflow's contract, `PayloadLimitExceeded` or
-  `SubworkflowDepthExceeded`. A replay that cannot start from its source run fails with the condition `ReplaySeeded`
-  set to `False`.
+  `InputSchemaMismatch` for an input that does not match the Workflow's contract, `PayloadLimitExceeded`,
+  `SubworkflowDepthExceeded`, or `RunRecordTooLarge` for a run whose state is too large for the store of the run
+  state. A replay that cannot start from its source run fails with the condition `ReplaySeeded` set to `False`.
 
 Each step of a run is `Pending`, `Running`, `Succeeded`, `Failed`, `Skipped` or `Cancelled`. A step is `Skipped` when
 its condition is false, its join cannot be met, or a step that it depends on failed. `status.steps` of a WorkflowRun
 also holds each step's attempts, start and end times, and, for a failed step, the first line of the error, cut at 512
 bytes. A run's status holds no step's output: a step whose result must be read after the run writes it to a store,
-as [Pass data between steps](#pass-data-between-steps) explains. `status.pins` names the revision of each Function that
-the run calls, which [Changes and deletion](#changes-and-deletion) explains.
+as [Share a database between steps](#share-a-database-between-steps) shows. `status.pins` names the **revision** of
+each Function that the run calls, the version of the Function's spec that funcd runs, which
+[Changes and deletion](#changes-and-deletion) explains.
 
 ## Changes and deletion
 
@@ -450,62 +465,35 @@ depend on each other, or `step "s" must set exactly one of function, builtin, or
 A run is refused when it is created:
 
 - when `funcdctl workflow run` names a run that exists, with the message `WorkflowRun "run-1" already exists`;
-- on a funcd server, when its input does not match the contract of its Workflow, once the Workflow is Ready, with a
+- on a platform, when its input does not match the contract of its Workflow, once the Workflow is Ready, with a
   message that starts with `run input does not match workflow "pipeline" contract (InputSchemaMismatch)` and names
   each field at fault;
 - when its input is larger than `workflow.payloadLimit`, with the HTTP status 413.
 
-A step whose Function refuses its input fails the run. While the TypeScript example of [Usage](#usage) runs, start a
-run of `pipeline` whose amount is text, then read the run, again until its phase reads `Failed`:
-
-```console
-$ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token workflow run pipeline run-3 --input '{"amount":"four"}'
-started WorkflowRun/run-3
-$ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token workflow describe run-3
-RUN run-3   phase: Failed
-condition: Ready=False   reason: StepFailed   message: workflow.engine: step "feed" failed after retries: workflow.dispatch: default/pipeline-feed rejected the step (422): {"error":"event data does not match the input contract","details":[{"path":"/amount","message":"got string, want number"}]}
-  feed   phase: Failed   attempts: 1   duration: 1ms   error: workflow.dispatch: default/pipeline-feed rejected the step (422): {"error":"event data does not match the input contract","details":[{"path":"/amount","message":"got string, want number"}]}
-  sub   phase: Skipped
-trace: 59b12e20016a6e95c30681bb6ff59324
-full logs: funcdctl workflow logs run-3
-```
-
-The Function `pipeline-feed` refused the input with 422, which fails the step at once, and `sub`, which depends on
-it, is `Skipped`. The duration and the trace ID differ at each run. `funcdctl dev` creates such a run, because it
-reads no step's contract for the Workflow, as [Run it locally](#run-it-locally) explains; a funcd server refuses it
-when it is created, with the reason `InputSchemaMismatch`.
+A step whose Function refuses its input with the HTTP status 422 fails at once, and the run fails with it. `describe`
+then shows the run `Failed`, with the reason `StepFailed`; the step `Failed`, with an error such as
+`workflow.dispatch: default/pipeline-feed rejected the step (422)` followed by the Function's answer; and the steps
+after it `Skipped`.
 
 ## Run it locally
 
 `funcdctl dev` differs from a funcd server in these ways for a Workflow:
 
-- It runs the Function of each image step from the build that the image's tag names: the tag is the part after the
-  last `:`, so an image with a digest or with no tag stops `funcdctl dev`. For Node.js, the build is `<tag>.mjs`, in
-  the folder or in its `dist` folder, with its contract file beside it. For Python, it is the entry that
-  `[tool.funcd-bundle.functions]` of the folder's `pyproject.toml` names for the tag, else `src/main.py` when the
-  folder has the tag's name, else `<tag>.py`, with the contract file at the folder's root.
+- It runs the Function of each image step from the build that the image's tag names, so an image with a digest or with
+  no tag stops `funcdctl dev`. For Node.js, the build is `<tag>.mjs`, in the folder or in its `dist` folder, with its
+  contract file beside it. For Python, it is the entry that the `[tool.funcd-bundle.functions]` table of the folder's
+  `pyproject.toml` names for the tag. Without that table, it is `src/main.py` when the folder has the tag's name, else
+  `<tag>.py`; the contract file is at the folder's root.
+- It applies every resource file at the top level of the folder, so a WorkflowRun that such a file holds, such as
+  `run.yaml` in [Share a database between steps](#share-a-database-between-steps), starts with `funcdctl dev`.
 - It runs each step's Function in a worker of its own, even when `pooling.mode` is `shared`.
+- It keeps one worker running for each Function of the folder, but not for the Function of a step: a step's Function
+  follows the Workflow's `pooling`, so with `minReplicas` 0, the default, it stops its worker after about 5 minutes
+  without a call, and the next call waits for a new worker to start.
 - When a step's build or contract file changes, it copies the build to a new path and applies the Workflow again,
   within about a second, so the step's Function takes a new revision. A run that has started keeps the revision that
   it pinned. A step added after `funcdctl dev` started does not run: `funcdctl dev` logs
   `restart funcdctl dev to run a Workflow step added after it started`.
-- It reads no step's contract for the Workflow, only for each call: the Workflow's derived contract accepts any
-  object, and funcd checks each call of a step's Function against that step's own contract. A run whose input does
-  not match the first step's contract is therefore created, and fails at its first step, as [Errors](#errors) shows.
-- For the same reason, it cannot check a `when` condition that reads a step's output. A Workflow with such a condition
-  stays `Pending`, with the reason `WhenTypeError`, and its runs wait.
-
-The TypeScript example's `orders` is such a Workflow. While the example runs, a run of `orders` waits in the phase
-`Pending`, with the reason `WorkflowNotReady`, once funcd has read it:
-
-```console
-$ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token workflow run orders run-4 --input '{"amount":4}'
-started WorkflowRun/run-4
-$ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token workflow describe run-4
-RUN run-4   phase: Pending
-condition: Ready=False   reason: WorkflowNotReady   message: workflow "orders" is not Ready (WhenTypeError): step "hi" when: expr.check: reference "step.score.output.score" is not rooted in this context (position 1); waiting
-full logs: funcdctl workflow logs run-4
-```
 
 `funcdctl dev` keeps its state in memory, where it is lost when `funcdctl dev` stops. With the `--persist` flag, it
 keeps the objects that it applied and the data of the stores between runs in `.funcd-dev`, as the
