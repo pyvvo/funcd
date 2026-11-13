@@ -1,0 +1,48 @@
+# region namespace
+apiVersion: funcd.io/v1alpha1
+kind: Namespace
+metadata:
+  name: shop
+spec:
+  defaultExposure: explicit
+# endregion namespace
+---
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: orders
+  namespace: shop
+  resourceGroup: rg1
+spec:
+  runtime: nodejs22
+  handler: handle
+  image: registry.example.com/orders:1.0.0
+---
+# region enabled
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: catalog
+  namespace: shop
+  resourceGroup: rg1
+spec:
+  runtime: nodejs22
+  handler: handle
+  image: registry.example.com/catalog:1.0.0
+  ingress:
+    enabled: true
+# endregion enabled
+---
+# region route
+apiVersion: funcd.io/v1alpha1
+kind: Route
+metadata:
+  name: orders
+  namespace: shop
+  resourceGroup: rg1
+spec:
+  rules:
+    - path: /orders
+      backend:
+        function: orders
+# endregion route
