@@ -8,6 +8,8 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 ## Secret
 
+::include[../../../../../api/types/v1alpha1/examples/secrets/secret.yaml#secret]
+
 | apiVersion | kind |
 | --- | --- |
 | `funcd.io/v1alpha1` | `Secret` |
