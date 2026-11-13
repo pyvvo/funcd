@@ -5,26 +5,17 @@ description: Install an App from its template, read its status and its parts, ch
 
 ## Usage
 
-An App declares a whole app in one resource. Its **parts** are the objects that funcd writes from it: its Functions,
-Workflows, Sites and Routes, its stores (KV stores, Buckets, SQL databases and Lakes), its EventSources and Sensors,
-its ConfigMaps and its BackupSchedules. The App also names the Secrets that its parts read, and its hooks, Functions
-that funcd calls when the App changes. funcd reports each part in the App's status and deletes the parts that a new
-version of the App drops, so the app is installed, upgraded, rolled back and deleted as one. The
-[Platform page](../../../platform/workloads/app.md) explains how funcd rolls an App out; this page shows how to install
-an App from its template, follow its revisions, roll it back and delete it.
-
-funcdctl installs an App from an **App template**: a folder that holds an `app.yaml` file beside a `resources`
-folder. `app.yaml` names the App, its version and the images of its code, and describes the **values** that the
-template takes, with their defaults. Each file of `resources` holds sections of the App's spec, in which a `${{ … }}`
-expression reads a value, the App's name or the reference of an image; under `when`, `app.yaml` can make a file of
-`resources` depend on a condition over the values. funcdctl renders a template into an App on the local computer,
-with the values of the files that `-f` names: `funcdctl app deploy` then applies the App to a funcd server, and
-`funcdctl dev` applies it to a local platform. An App is also an ordinary resource, so `funcdctl apply` applies an App
-manifest with no template, such as the example of the [Spec](spec.md#app) tab.
+An App declares a whole app in one resource: its Functions, its Routes, its stores and the other objects that make up
+the app, which funcd writes as the App's **parts**. funcd installs, upgrades, rolls back and deletes the parts as one,
+and reports each of them in the App's status. The [Platform page](../../../platform/workloads/app.md) explains how
+funcd rolls an App out; this page shows how to install an App from its template, follow its revisions, roll it back and
+delete it.
 
 The first example, volumes, is an App of two Functions, each with a Route. The steps below install it on the local
-computer from its template and a values file, call both Functions through their Routes, and read the App's status: the
-phase is `Ready`, the revision `volumes-1` is current, and each part is `Ready`.
+computer from its template and a values file, call both Functions through their Routes, and read the App's status.
+funcd rolls out each version of an App's spec as a **revision**, named after the App and a number that grows by one at
+each change, so the first revision of this App is `volumes-1`. At the end, the App's phase is `Ready`, `volumes-1` is
+its current revision, and each part is `Ready`.
 
 The example needs four programs:
 
@@ -33,6 +24,12 @@ The example needs four programs:
 - git, which copies the example's repository.
 - curl, which calls the Functions.
 - Node.js on the `PATH`, which runs the example's Functions.
+
+The example installs the App from an **App template**: a folder that holds an `app.yaml` file beside a `resources`
+folder. `app.yaml` names the App, its version and the images of its code, and describes the **values** that the
+template takes, with their defaults. Each file of `resources` holds sections of the App's spec. funcdctl renders the
+template into an App on the local computer, with the values of the files that `-f` names: `funcdctl app deploy` then
+applies the App to a funcd server, and `funcdctl dev` applies it to a local platform.
 
 The example's folder, `apps/volumes` in the funcd-functions repository, holds the template in `app`, the code of its
 Functions in `functions/ts`, and values files in `values`. The template's
@@ -67,15 +64,13 @@ Function, at the paths `/files` and `/peer`:
 `funcdctl dev` looks up the build of each image by the image's key: here `functions/ts/files.mjs`, which the repository
 holds already built, for the image `files`. `funcdctl dev` pushes each build into an OCI image layout, a folder that
 holds images as a registry does, in its own state folder, and uses that folder in place of the template's `registry`.
-It then renders the template with the values of the `-f` files, and applies the App. It prints the address of each
-Route, and the address of its control plane, which a `funcdctl` command reaches with `--server` and the token
+It then renders the template with the values of the `-f` files, and applies the App. Its banner shows the address of
+each Route, and the address of its control plane, which a `funcdctl` command reaches with `--server` and the token
 `funcd-dev-token`. The `--gport` flag sets the port of the Routes' addresses, and `--cport` the port of the control
 plane, so the commands below use the ports 8080 and 8081.
 
-funcd rolls out each version of an App's spec as a **revision**, an AppRevision named after the App and a number that
-grows by one at each change of the spec, such as `volumes-1`. A rollout writes the parts, and once no part is still
-pending, the revision becomes the App's current revision. The [Spec](spec.md) tab describes every field of an App and
-of an AppRevision.
+A rollout writes the parts, and once no part is still pending, the revision becomes the App's current revision. The
+[Spec](spec.md) tab describes every field of an App and of an AppRevision, the object that records a revision.
 
 Clone the repository, and start the example from the repository's root folder:
 
@@ -85,9 +80,10 @@ $ cd funcd-functions
 $ funcdctl dev apps/volumes/app -f apps/volumes/values/redeploy.yaml --build apps/volumes/functions/ts --gport 8080 --cport 8081
 ```
 
-`funcdctl dev` prints its banner once it has applied the App, then follows the rollout: it prints the revision's name,
-a line for each part whose state changes, and `App volumes deployed in <duration>` once the revision `volumes-1` is
-current. Once that line shows, read the App in another terminal:
+`funcdctl dev` applies the App, prints its banner, and follows the rollout: it prints the revision's name, a line for
+each part whose state changes, a line with the App's `Ready` condition, such as `App/volumes Ready=Unknown NotStarted`,
+and `App volumes deployed in <duration>` once the revision `volumes-1` is current. The banner can come before or after
+the first of these lines. Once the line `App volumes deployed in <duration>` shows, read the App in another terminal:
 
 ```console
 $ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token get app volumes -n default -o json
@@ -98,8 +94,10 @@ The command prints the App as JSON. `spec` holds the App that the template rende
 `"currentRevision"` is `"volumes-1"`. `"children"` lists each part with its state: the Routes are `"Ready"`, and the
 Functions are `"NotStarted"`. A Function that sets neither `replicas` nor `scaling.minReplicas` runs no worker until
 its first call, as [Scale a Function to zero](../function/index.md#scale-a-function-to-zero) explains, and its part is
-`NotStarted` until then. A rollout does not wait for a `NotStarted` part, but while one remains, the App's `Ready`
-condition has the status `"Unknown"` and the reason `NotStarted`.
+`NotStarted` until then. A rollout does not wait for a `NotStarted` part, and while one remains, the App's `Ready`
+condition has the status `"Unknown"` and the reason `NotStarted`. funcd does not start such a part to check it: a part
+whose new build cannot load shows the fault only when a call starts the part. Calls to it then get the HTTP status 503,
+and the App turns `Degraded`.
 
 Call each Function through its Route: write a note with `volumes-files`, read it back, and list the files of
 `volumes-peer`:
@@ -120,16 +118,24 @@ until each child is `"Ready"`: the `Ready` condition then has the status `"True"
 $ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token get app volumes -n default -o json
 ```
 
-To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
+Keep the example running: the next two sections change this App and roll it back, and the first of them reads the
+note again. Pressing Ctrl-C in the terminal that runs `funcdctl dev` stops the example, and `funcdctl dev` then loses
+the App and the note, as [Run it locally](#run-it-locally) explains.
 
 ## Change a value and roll out a new revision
 
 Each change of an App's spec, other than a pause or a resume, makes a new revision, and an apply of the same spec makes
-none. A new values file, a new version of the template or a new build of an image changes the spec that the template
-renders: on a funcd server,
-[`funcdctl app deploy`](../../tools/funcdctl/spec.md#funcdctl-app-deploy) renders and applies it, and `funcdctl dev`
-renders the template and applies the App again each time one of its inputs is saved: a file of the template, a values
-file or a build.
+none. A new values file or a new version of the template changes the spec that the template renders. A new build of
+an image changes it under these conditions:
+
+- `funcdctl dev` pushes every build itself, and renders the template and applies the App again each time one of its
+  inputs changes, which [Run it locally](#run-it-locally) lists.
+- On a funcd server, [`funcdctl app deploy`](../../tools/funcdctl/spec.md#funcdctl-app-deploy) renders the template
+  with the digest that its `app.lock` file pins for each image. A template that `funcdctl push --template` pushed always
+  holds such a lock. A new build therefore reaches the App only through a new lock, which
+  [`funcdctl app lock`](../../tools/funcdctl/spec.md#funcdctl-app-lock) writes, such as for a new tag of the image.
+  For a template folder that holds `app.lock`, `funcdctl app deploy` only warns when a locked tag now names another
+  digest; a template folder without `app.lock` has its images resolved at each deploy.
 
 While the first example runs, change `timeout` in `apps/volumes/values/redeploy.yaml` from `31s` to `45s`, and save
 the file. `funcdctl dev` applies the new spec and follows the revision `volumes-2`: while the changed Function
@@ -155,6 +161,8 @@ $ curl -s -X POST -H 'content-type: application/json' -d '{"op":"read","name":"n
 {"text":"hello"}
 ```
 
+Keep the example running for the next section.
+
 ## Roll back to an earlier revision
 
 [`funcdctl app rollback <app> <number>`](../../tools/funcdctl/spec.md#funcdctl-app-rollback) applies the spec of an
@@ -164,8 +172,10 @@ whose `deletion` is `delete` and that a later revision dropped comes back empty.
 and its 10 newest other revisions, a number that the server setting `app.revisionHistory` sets, and deletes the older
 ones, so a rollback can name only a revision that funcd keeps.
 
-With `--dry-run`, the command prints what the rollback would do and changes nothing: the revision that it would create,
-and each part that it would create, update or delete. While the first example runs, check the rollback to revision 1,
+With `--dry-run`, the command changes nothing and prints what the rollback would do: the revision that it would create,
+then a line for each part that it would `create`, `update` or `prune`, then a `hook <name>` line for each hook call of
+the new revision. When the rollout would stop at a part, such as at an object of another owner, that part's line is
+the only part line, with the reason in parentheses. While the first example runs, check the rollback to revision 1,
 then run it:
 
 ```console
@@ -225,9 +235,16 @@ Its template's `resources/hooks.yaml` declares the Function `todo-warm` and the 
 
 ::include[../../../../../_repos/funcd-functions/apps/todo/app/resources/hooks.yaml]
 
-Each hook records its call in a table of a KV store: `todo-migrate` under the key `last` of the table `meta`, and
-`todo-warm` under the key `last` of the table `warm`. The `list` operation of the Function `todo-api`, which the Route
-`/api` serves, returns both records, as `migration` and `release`.
+Each hook records its call in a table of a KV store that it owns: `todo-migrate` under the key `last` of the table
+`meta`, and `todo-warm` under the key `last` of the table `warm`. The `list` operation of the Function `todo-api`,
+which the Route `/api` serves, returns both records, as `migration` and `release`.
+
+An App declares no role assignment. A part that writes a table that another part owns needs a role that allows it,
+from a RolesAssignment applied beside the App, as the KV page's [Access](../../services/kv/index.md#access) section
+explains. The todo template's
+[`grants.yaml`](https://github.com/pyvvo/funcd-functions/blob/main/apps/todo/grants.yaml) gives `todo-migrate` the
+right to write the table `todos` of the store `todo-store`, which `todo-api` owns and the hook of version 1.1.0
+rewrites. The hooks of version 1.0.0 write only their own tables, so the steps below need no role.
 
 The example needs the programs of the first example, and Python 3.12 or later as `python3` on the `PATH`, which runs
 its Python Functions, such as `todo-warm`. The Python Functions of its version 1.0.0 import only Python's standard
@@ -274,9 +291,9 @@ The command prints the revision as JSON. Its `spec` holds the App's spec when th
 `spec.hookInput` the input of its hook calls. Under `status`, `"hooks"` lists the two calls, `"preApply"` to
 `todo-migrate` and `"postApply"` to `todo-warm`, each with the phase `"Ready"` and the name of the Invocation that
 records it. Each later revision calls the hooks again, with the event `upgrade`, or `rollback` for a revision whose
-spec is that of an earlier revision that was current. [Changes and deletion](#changes-and-deletion) deletes this App.
+spec is that of an earlier revision that was current.
 
-To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
+Keep the example running: [Changes and deletion](#changes-and-deletion) deletes this App.
 
 ## Limits and quotas
 
@@ -309,14 +326,17 @@ of these:
 - `Failed`: the latest revision failed: a pre-hook failed, or a part was still pending when `app.upgradeTimeout` ran
   out.
 
-The condition `Ready` explains the phase. It is `True` when every part is ready, and `Unknown`, with the reason
-`NotStarted`, while a Function part has not run yet. Otherwise it is `False`, and its reason says why, with a message
-that names the part, such as `KVStore/todo-store: exists and is not owned by App/todo`:
+The condition `Ready` explains the phase. It is `False` while funcd has stopped writing the parts or a part is
+pending. Otherwise, it is `Unknown`, with the reason `NotStarted`, while a Function part has not run yet, and `True`
+once every part is ready. When it is `False`, its reason says why, with a message that names the part, such as
+`KVStore/todo-store: exists and is not owned by App/todo`:
 
 - `Progressing`: a rollout writes the parts, or waits for a part or a pre-hook.
 - `ChildNotReady`: a part is not ready; the message holds the part's own reason.
 - `ChildNotOwned`: an object of a part's name exists, and the App does not own it, such as a store that a deleted App
   kept. funcd writes no part until the object is gone, or until the App names it with `ref` instead.
+- `ChildInvalid`: the store refused to write a part. funcd writes no part after it, and the message holds the
+  refusal.
 - `SecretNotFound` or `SecretKeyMissing`: a Secret that the App declares, or one of its keys, does not exist. funcd
   writes no part until it exists.
 - `RequirementNotMet`: an App that `spec.requires` names does not exist, is not `Ready`, or has a version out of the
@@ -335,11 +355,19 @@ that funcd has not deleted yet.
 
 [`funcdctl app history <app>`](../../tools/funcdctl/spec.md#funcdctl-app-history) lists an App's revisions by number,
 with the `version` of each, its phase and the time of its creation. A revision is `Deploying` until it becomes
-current, `Ready` once it is or has been current, and `Failed` when it did not become current: when it ran out of time,
-when a pre-hook failed, or when a newer revision replaced it during its rollout.
-`funcdctl get apprevision <name> -n <namespace> -o json` prints a revision, with its conditions `Applied`,
-`ChildrenReady` and `Current`. `Current` is `False`, with the reason `Replaced`, on a revision that was current before.
-The [Spec](spec.md#apprevisionstatus) tab describes the conditions.
+current, `Ready` once it is or has been current, and `Failed` when it did not become current.
+`funcdctl get apprevision <name> -n <namespace> -o json` prints a revision, whose three conditions explain its phase:
+
+- `Applied` is `True` once funcd has written each part of the revision, or found it unchanged. It is `False` with the
+  reason `Progressing` while a pre-hook has not succeeded, with `HookFailed` when a pre-hook failed, and otherwise
+  with the reason and the message of the stop, such as `ChildNotOwned`.
+- `ChildrenReady` is `True` when every part is ready, and `Unknown`, with the reason `NotStarted`, while a Function
+  part has not run. It is `False` with `Progressing`, or `RefNotFound`, while a part is pending, and with
+  `ChildNotReady` once the revision has failed at its deadline; the message names the part.
+- `Current` is `True` on the App's current revision. Otherwise it is `False`: with the reason `Progressing` while the
+  revision rolls out; `Replaced` on a revision that was current before; `Superseded` on a revision that was still
+  rolling out when a newer revision was created; `ChildNotReady` on a revision that failed at its deadline; and
+  `HookFailed` on a revision that a pre-hook failed.
 
 ## Changes and deletion
 
@@ -354,9 +382,9 @@ funcd rolls it out in this order:
    beside the one that serves.
 4. Once no part is pending, the revision becomes current, and funcd calls the post-hooks.
 5. Once the post-hooks have succeeded, funcd deletes the parts that the new spec dropped, which are `Pruning` until
-   then. A dropped store whose `deletion` is `delete` goes with its data; a store whose `deletion` is `retain`, the
-   default, stays, with its data. A dropped part also stays while a run of a Workflow holds it or another object uses
-   it.
+   then. A dropped KV store, Bucket or SQL database whose `deletion` is `delete` goes with its data; one whose
+   `deletion` is `retain`, the default, stays, with its data. A dropped part also stays while a run of a Workflow holds
+   it or another object uses it.
 
 When a revision fails, at the end of `app.upgradeTimeout` or on a failed pre-hook, `status.currentRevision` keeps
 naming the revision before it, but the parts that the rollout wrote keep the new spec: a Route, a Site, a Sensor or an
@@ -366,19 +394,31 @@ the same spec creates no revision: a new spec, such as a fix or a rollback, star
 pre-hook failed goes on once `funcdctl app retry` has called the hook again and the call has succeeded.
 
 A change to the data of a ConfigMap that the App defines writes a new ConfigMap, under a new name, points each part
-that names it at the new one, and deletes the old one with the other dropped parts. A part that another writer
-changes or deletes is written back at the next pass, and `status.lastSelfHeal` names the last one.
+that names it at the new one, and deletes the old one with the other dropped parts. When another writer changes or
+deletes a part, funcd writes the part back as soon as it sees the change, and `status.lastSelfHeal` names the last
+part written back.
 
 [`funcdctl app pause <app>`](../../tools/funcdctl/spec.md#funcdctl-app-pause) sets the App's `spec.paused`: funcd then
 creates no revision, writes or deletes no part and calls no hook, until
-[`funcdctl app resume <app>`](../../tools/funcdctl/spec.md#funcdctl-app-resume) clears it. An apply of a manifest
-without `paused` resumes the App, while `funcdctl app deploy` and `funcdctl app rollback` keep the pause.
+[`funcdctl app resume <app>`](../../tools/funcdctl/spec.md#funcdctl-app-resume) clears it. `funcdctl app deploy` and
+`funcdctl app rollback` keep the pause. An App is also an ordinary resource, so `funcdctl apply` applies an App
+manifest with no template, such as the example of the [Spec](spec.md#app) tab; such an apply of a manifest without
+`paused` resumes the App.
 
 [`funcdctl app delete <app>`](../../tools/funcdctl/spec.md#funcdctl-app-delete) deletes an App, waits until funcd has
 deleted its parts, its revisions and the objects that they own, and prints a line for each object that went and for
-each store that stayed. funcd deletes a store whose `deletion` is `delete`, with its data. It keeps a store whose
-`deletion` is `retain`, with its data, and an object that the App names with `ref`, a Secret and a Backup. While the
-todo example of [Run hooks on each new revision](#run-hooks-on-each-new-revision) runs, delete the App:
+each store that stayed:
+
+- A KV store, Bucket or SQL database whose `deletion` is `delete` goes with its data. One whose `deletion` is
+  `retain` stays, with its data.
+- A Lake of the App always goes, but its files stay in its Bucket when that Bucket stays.
+- A `local` volume of a Function whose `deletion` is `retain`, the default, stays with its files and no owner, until
+  [`funcdctl volume delete`](../../tools/funcdctl/spec.md#funcdctl-volume-delete) deletes it or a Function of the same
+  name takes it back with `ref`. `funcdctl app delete` prints no line for such a volume, such as each volume `data` of
+  the first example.
+- An object that the App names with `ref`, a Secret and a Backup stay.
+
+While the todo example of [Run hooks on each new revision](#run-hooks-on-each-new-revision) runs, delete the App:
 
 ```console
 $ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token app delete todo
@@ -424,18 +464,24 @@ object still uses a store that it deletes; an interrupt stops the wait, not the 
 A kept store belongs to no App. An App of the same name that declares it by `name` stops at it: its `Ready` condition
 is `False`, with the reason `ChildNotOwned` and the message `KVStore/todo-store: exists and is not owned by App/todo`.
 `funcdctl dev` shows it at the next change of one of its inputs, when it applies the App again. To take a kept store
-back, declare it with `ref`, as the todo template does when the values file
+back, declare it with `ref`, or delete the store first. Under `when`, `app.yaml` can make a file of `resources` depend
+on a condition over the values: the todo template declares its kept stores by `name` in `resources/kept.yaml` and by
+`ref` in `resources/kept-ref.yaml`, and the values file
 [`values/reinstall.yaml`](https://github.com/pyvvo/funcd-functions/blob/main/apps/todo/values/reinstall.yaml) sets
-its value `keptStores`, or delete the store first.
+the value `keptStores` that selects the second file.
+
+To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
 
 ## Errors
 
-- `funcdctl app deploy` and `funcdctl dev` render the template before they apply anything, so a value that the
-  template's `valuesSchema` refuses, or an `app.yaml` or a file of `resources` that funcdctl cannot read, stops them
-  with nothing applied.
-- An apply refuses an App whose spec breaks a rule, with a message that names the entry, such as `spec.functions[0]`,
-  and stores nothing: for example, a name longer than 52 characters, a part that names a Secret that `spec.secrets`
-  does not declare, or a part that declares a store of its own instead of binding one that the App declares.
+- When `funcdctl app deploy` or `funcdctl dev` renders a template, it checks the App before it applies anything. A
+  value that the template's `valuesSchema` refuses, an `app.yaml` or a file of `resources` that funcdctl cannot read,
+  or an entry that breaks a rule stops it with nothing applied, and the message names the file and the entry, such as
+  `resources/files.yaml: functions[0]`.
+- The server refuses an App, and stores nothing, when its spec breaks a rule, with a message that names the entry,
+  such as `spec.functions[0]` for an App manifest that `funcdctl apply` sends. It also refuses a part that names a
+  Secret that `spec.secrets` does not declare, with a message that names the entry, such as
+  `spec.functions[0].bindings.secret[0]`.
 - A rollout that funcd cannot complete leaves the App `Deploying`, `Degraded` or `Failed`, and the reason and the
   message of its `Ready` condition name the part, as [Status](#status) lists.
 - `funcdctl app rollback` refuses a revision that funcd does not keep, with a message such as
@@ -453,21 +499,23 @@ its value `keptStores`, or delete the store first.
 differences:
 
 - It takes each image from a local build, which `--build` names, and pushes it into an OCI image layout in its state
-  folder, which replaces the template's `registry`. It neither reads nor writes the template's `app.lock`, the file in
-  which [`funcdctl app lock`](../../tools/funcdctl/spec.md#funcdctl-app-lock) pins each image to a digest.
+  folder, which replaces the template's `registry`. It neither reads nor writes the template's `app.lock`.
 - It changes nothing else in the App but its hooks, which it drops unless `--hooks` is set. Unlike a folder of
   resource files, whose Functions `funcdctl dev` keeps running, an App's Function parts keep their own `replicas`, so a
-  part that sets none runs no worker until its first call.
+  part that sets none runs no worker until its first call. A save of a build that cannot load therefore still prints
+  `reloaded in <duration>` when its part has not run: the fault shows at the part's first call, as the HTTP status
+  503 with a message such as `function default/<part> is Failed (ShapeInvalid)`.
 - It creates each Secret that the App declares, unless a file that `--apply` names defines it, with each key from the
   environment variable of the key's name, else from the `envFile` or the `env` of its `funcdctl.config.yaml` file.
   When no source holds a key, it stops with a message such as
   `App todo declares Secret todo-api-keys with key TODO_API_TOKEN; set it in the shell or under dev.env in funcdctl.config.yaml`.
 - `--apply` names a file of resource documents that it applies before the App, again when the file changes, and
-  deletes once they leave the file. An App declares no role assignment, so a role that a part needs, such as for a
-  hook to write a table that another part owns, comes in through such a file.
-- It renders and applies the template again within about a second after a save of a file of the template, a values
-  file, an `--apply` file or a build, and prints `reloaded in <duration>` once the new revision is current. A reload
-  that fails is printed, and the last App keeps running. For a revision that does not become current, it prints
+  deletes once they leave the file, such as the RolesAssignments that an App needs beside it.
+- It renders and applies the template again within about a second after one of its inputs changes: a file of the
+  template folder, a values file, an `--apply` file, a `--build` folder or path, or the `build`, `values`, `apply` or
+  `env` keys of its `funcdctl.config.yaml` file and the file that its `envFile` names. It prints
+  `reloaded in <duration>` once the new revision is current. A reload that fails is printed, and the last App keeps
+  running. For a revision that does not become current, it prints
   `the new revision did not become current; save a fix, or run funcdctl app retry` with the reason, and keeps running.
 - It refuses an App that requires another App, with a message such as
   `App todo requires App todo-shared ^1.0.0: funcdctl dev does not run an App that requires another yet`, and an image
@@ -478,12 +526,13 @@ differences:
 
 Without the `--persist` flag, `funcdctl dev` keeps the App, its revisions and the data of its stores in memory, and its
 volumes in a temporary folder, and loses them when it stops. It keeps the images that it pushed, and a record of the
-processes that it starts, in a state folder of its own, `funcd/dev/<id>` in the user's cache folder, such as
-`~/.cache` on Linux or `~/Library/Caches` on macOS, where `<id>` stands for the template folder. With `--persist`, it
+processes that it starts, in a folder of its own, `funcd/dev/<id>` in the user's cache folder, such as `~/.cache` on
+Linux or `~/Library/Caches` on macOS, where `<id>` stands for the template folder. That folder holds no data of the
+platform, and `funcdctl dev` reuses it at its next run, so nothing needs to be deleted there. With `--persist`, it
 keeps all of its state between runs in `.funcd-dev`, a folder that it creates in the current folder, or in the folder
 that `--persist-to` names: the objects that it applied, the App's revisions included, the data of the stores, the
 volumes and the images that it pushed. A restart with the same inputs creates no revision. To start again from
-nothing, delete `.funcd-dev` and the state folder after `funcdctl dev` stops. The
+nothing, delete that folder after `funcdctl dev` stops. The
 [reference of `funcdctl dev`](../../tools/funcdctl/spec.md#funcdctl-dev) lists its flags and the keys of
 `funcdctl.config.yaml`.
 
