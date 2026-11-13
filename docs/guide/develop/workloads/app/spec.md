@@ -8,6 +8,8 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 ## App
 
+::include[../../../../../api/types/v1alpha1/examples/app/app.yaml#app]
+
 | apiVersion | kind |
 | --- | --- |
 | `funcd.io/v1alpha1` | `App` |
