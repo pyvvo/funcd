@@ -49,13 +49,11 @@ The example's manifests connect the Function to its data:
   handler does not use the alias: it names the Bucket and the object's key, whose first segment is the prefix, as in
   `gold/roundtrip-001.txt`. `ctx.blob` takes the alias instead.
 
-While a binding names a Bucket or a prefix that does not exist yet, funcd holds the Function in `Pending`, with the
-reason `BucketNotFound`, and starts it once the prefix exists, so the two files can be applied in either order.
-
 The folder also holds a RolesAssignment, which [Access](#access) explains, and resources that this page does not use:
-a Workflow, an EventSource, a Sensor and two Sites. `funcdctl dev` applies them all. The first example exists in
-TypeScript only; [Use ctx.blob instead of an S3 client](#use-ctxblob-instead-of-an-s3-client) also gives the Python
-names of the blob client's methods.
+a Workflow, an EventSource, a Sensor and two Sites. `funcdctl dev` applies them all. It skips `funcdconfig.yaml`, a
+configuration of the funcd server, which the example uses on a platform to turn the S3 gateway on. The first example
+exists in TypeScript only; [Use ctx.blob instead of an S3 client](#use-ctxblob-instead-of-an-s3-client) points to the
+client that TypeScript and Python handlers share.
 
 The [Spec](spec.md) tab lists every field of a Bucket.
 
@@ -108,24 +106,17 @@ To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
 
 ## Use ctx.blob instead of an S3 client
 
-A handler can reach the objects of the prefixes it binds through `ctx.blob`, with no S3 client and no S3 gateway. Each
-method of `ctx.blob` takes the alias of a binding as its first argument and, except `list`, the key of an object as its
-second. A key is relative to the bound prefix: under the alias `gold` of the first example, the key
-`roundtrip-001.txt` names the object that the S3 gateway shows as `gold/roundtrip-001.txt`.
+A handler can reach the objects of the prefixes that its Function binds through `ctx.blob`, the blob client of its
+context, in TypeScript and in Python. `ctx.blob` needs no S3 client, no key pair and no S3 gateway, which a platform
+runs only when its operator turns it on, so it suits a handler that reads and writes only the prefixes it binds. An S3
+client suits code or tools that already speak S3, a read through a role instead of a binding, and an object larger than
+a `ctx.blob` write can carry, as [Limits and quotas](#limits-and-quotas) says.
 
-- `put` stores bytes under a key: a `Uint8Array` in TypeScript, `bytes` in Python. `get` returns those bytes, or
-  `null` (`None` in Python) when the object does not exist.
-- `del` (`delete` in Python) deletes an object.
-- `list` returns the keys of the bound prefix's objects, without the prefix itself. Its optional second argument keeps
-  only the keys that start with it.
-- `signedUrl` (`signed_url` in Python) asks for a presigned URL, a link that allows requests of one method on one
-  object, without credentials, until it expires. None of the blob stores that funcd runs on signs such URLs, so even
-  a valid call fails, with the HTTP status 503. Before that, funcd refuses with 403 a URL for a request that the
-  caller may not make, and a PUT URL into a Bucket or a prefix that has a size limit.
-
-`ctx.blob` follows the same policy as the S3 gateway, and reaches only the prefixes that the Function binds: a call
-whose alias no binding of the Function declares fails with the HTTP status 403. A write needs the ownership of the
-prefix or a role, as [Access](#access) explains.
+Each method of `ctx.blob` takes the alias of a binding as its first argument, and the keys that it takes and returns
+are relative to the bound prefix: under the alias `gold` of the first example, the key `roundtrip-001.txt` names the
+object that the S3 gateway shows as `gold/roundtrip-001.txt`. A call whose alias no binding of the Function declares
+fails with the HTTP status 403, and a write needs the ownership of the prefix or a role, as [Access](#access) explains.
+The [Handler API](spec.md#handler-api) on the Spec tab lists the methods of `ctx.blob` in TypeScript and in Python.
 
 ## Share a Bucket between Functions
 
@@ -141,6 +132,10 @@ both Functions, is
 [api/types/v1alpha1/examples/bucket/bucket.yaml](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/bucket/bucket.yaml).
 
 ::include[../../../../../api/types/v1alpha1/examples/bucket/bucket.yaml#binding]
+
+While a binding names a Bucket or a prefix that does not exist yet, funcd holds the Function in `Pending`, with the
+reason `BucketNotFound`, and starts it once the prefix exists. A Bucket and the Functions that use it can therefore be
+applied in any order.
 
 Every Function that binds a prefix can read it. To write a prefix that it does not own, a Function needs a role, as
 [Access](#access) describes. When a prefix of a Bucket applied on its own sets no `owner`, only a role lets a principal
@@ -175,6 +170,7 @@ write access to the prefix `shared` of the Bucket `lakehouse`:
 
 For a read without a binding, the smallest built-in role is `Blob Data Reader`, which allows reading objects. A
 Function makes such a read through the S3 gateway, since `ctx.blob` reaches only the prefixes that the Function binds.
+That read needs the gateway on, and a key pair, which funcd gives only to a Function that binds at least one prefix.
 The built-in roles `Reader`, `Contributor` and `Owner` also cover Bucket data: `Reader` allows reading objects and KV
 keys, and `Contributor` and `Owner` allow reading and writing both. A Role that an operator defines can grant
 `s3::read` or `s3::write` too. The Security reference [lists the built-in
@@ -215,9 +211,20 @@ A write whose object is larger than `maxObjectBytes` fails with the HTTP status 
 `EntityTooLarge`. A write that would take the Bucket or the prefix above its total size fails with the HTTP status
 507, or with the S3 error `QuotaExceeded`.
 
-funcd sets two limits of its own, whatever the Bucket sets. A `put` through `ctx.blob` carries at most 64 MiB, and a
-larger one fails with the HTTP status 413. The S3 gateway takes at most 1 GiB in one PUT or multipart upload, a limit
-that the operator changes with `s3gateway.maxUploadBytes`; a larger upload fails with the S3 error `EntityTooLarge`.
+funcd also sets limits of its own, whatever the Bucket sets:
+
+- A `put` through `ctx.blob` carries at most 64 MiB, and a larger one fails with the HTTP status 413.
+- The S3 gateway takes at most 1 GiB in one PUT or multipart upload, a limit that the operator changes with
+  `s3gateway.maxUploadBytes`; a larger upload fails with the S3 error `EntityTooLarge`. The parts of the multipart
+  uploads in flight hold at most that size for one principal, and three times it in all; past that, a part gets the
+  S3 error `SlowDown`, which asks the client to retry.
+- funcd keeps free space on the filesystem of its data directory: 2 GiB, unless `storage.minFreeSize` sets another
+  size. A write into any Bucket, with or without a quota, fails with the HTTP status 507, or with the S3 error
+  `QuotaExceeded`, when it would take the free space below that size. `storage.minFreeSize: 0` turns this limit off,
+  and it does not apply under `storage.mode: memory`.
+- A namespace holds at most 100 Buckets: a request that creates a Bucket past that number fails with the HTTP status
+  400.
+
 The [Spec](spec.md) tab gives the range of each field.
 
 ## Data storage
@@ -230,19 +237,22 @@ lost when funcd stops, and funcd then ignores the `blob` keys.
 
 ## Changes and deletion
 
-A request to delete a Bucket and the deletion of the Function that declares it follow different rules:
+A request to delete a Bucket and the deletion of a Function that declares it follow different rules:
 
 - **A request to delete the Bucket itself.** funcd refuses it, with the HTTP status 409, while a binding of a Function
   names the Bucket, or while one of its prefixes holds objects. funcd refuses in the same way an update of the Bucket
   that removes a prefix that a binding names or that holds objects. To delete such a Bucket, remove its bindings and
   delete its objects first.
-- **The deletion of the Function that declares the Bucket by `name`.** The `deletion` setting of the Function's entry
-  under `spec.buckets` decides. With `retain`, the default, the Bucket stays with its objects. With `delete`, funcd
-  deletes the Bucket and its objects after the Function is deleted: unlike a request to delete the Bucket, this
-  deletion goes ahead while the prefixes hold objects.
+- **The deletion of a Function that declares the Bucket.** A Function that declares the Bucket by `ref` leaves the
+  Bucket unchanged when it is deleted. For a Function that declares the Bucket by `name`, the `deletion` setting of
+  its entry under `spec.buckets` decides. With `retain`, the default, the Bucket stays with its objects. With
+  `delete`, funcd deletes the Bucket and its objects after the Function is deleted: unlike a request to delete the
+  Bucket, this deletion goes ahead while the prefixes hold objects.
 
-A new Function of the same name does not own a Bucket that stayed: if it declares the Bucket by `name`, it waits in
-`Pending` with the reason `StoreNotOwned`, so it declares the Bucket by `ref` instead.
+To use a Bucket that stayed, declare it by `ref` in the new Function. A new Function of the same name that declares the
+Bucket by `name` waits in `Pending` with the reason `StoreNotOwned`, since the Bucket still belongs to the deleted
+Function. The owner of a prefix is a name, so under `ref` a new Function of the same name writes again the prefixes
+that name it as their owner.
 
 ## Run it locally
 
@@ -251,13 +261,14 @@ A new Function of the same name does not own a Bucket that stayed: if it declare
 metastore data between runs, in the folder `.funcd-dev` of the current directory, or in the folder that `--persist-to`
 names.
 
-`funcdctl dev` differs from a platform in two more ways that matter for a Bucket:
+`funcdctl dev` also differs from a platform in these ways that matter for a Bucket:
 
 - It always runs the S3 gateway, on a free port that it chooses, or on the port that `--s3port` sets. Its banner
   prints the gateway's address and, under S3 CREDENTIALS, the key pair of the folder's first Function, as `export`
-  lines. An S3 client that runs with those variables, such as the aws CLI, reads the prefixes that this Function
-  binds. `funcdctl dev <dir> --s3port <port> --print-env` prints the same lines without starting the platform, for a
-  session started with the same `--s3port`.
+  lines. An S3 client that runs with those variables, such as the aws CLI, acts as that Function: it reads the
+  prefixes that the Function binds and, through the role that the next item describes, writes every prefix.
+  `funcdctl dev <dir> --s3port <port> --print-env` prints the same lines without starting the platform, for a session
+  started with the same `--s3port`.
 - It gives each Function of the folder a role that allows writing every prefix of the namespace's Buckets, which a
   platform does not give. A write that succeeds locally can therefore fail with the HTTP status 403 once deployed, as
   the first example's `denied` shows. That role allows no read: reading still needs a binding, a role or a Policy
