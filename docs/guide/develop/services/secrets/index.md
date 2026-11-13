@@ -242,9 +242,9 @@ A forbid shows on the `Ready` condition: a Function that has served becomes `Deg
 between runs in the `metastore` folder of its persist folder: `.funcd-dev`, which it creates in the current folder,
 unless `--persist-to` names another folder. The Secrets' values are stored there unencrypted, because `funcdctl dev`
 sets no encryption key. To remove them, delete the persist folder after `funcdctl dev` stops: `.funcd-dev`, or the
-folder that `--persist-to` names. Deleting it clears all the state that the local platform stored, its KV, blob and
-metastore data, Secrets included. Keep the persist folder out of version control, for example with a `.funcd-dev/` line
-in `.gitignore`: the example's repository does not ignore it, so `git status` lists it.
+folder that `--persist-to` names. Deleting it clears all the state that the local platform stored, its metastore, KV,
+blob, SQL, lake and volume data, Secrets included. Keep the persist folder out of version control, for example with a
+`.funcd-dev/` line in `.gitignore`: the example's repository does not ignore it, so `git status` lists it.
 
 `funcdctl dev` also creates each Secret that a Function of the folder declares and that no file of the folder
 defines. It takes the value of each declared key from the shell's environment, else from the file that `dev.envFile`
