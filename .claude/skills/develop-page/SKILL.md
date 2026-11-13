@@ -68,18 +68,21 @@ Every page shares the reader contract of `template.yaml`'s first section; the wo
 8. **Write** in the guide's voice, around the reader's task: the first section's example is the one that
    `template.yaml` names for the feature's type (service, workload, tool or cross-cutting), a free section is one task
    under a heading that names it, and an optional section appears only when it explains a real decision or behavior.
-   Run the first example before keeping it, as its route runs it: a tool's command with the tool itself; a resource
-   manifest, such as a namespace or a grant, by applying it to a running platform with no push; the server's
-   configuration file by starting funcd with `--config`; and a service or workload example as follows: `scripts/example-copy.sh js/<example>` (or
-   `python/<example>`) prints a writable copy of a lane example, and `scripts/agent/d go run -tags dev ./cmd/funcdctl
-   dev <that folder>` runs it as it stands. dev runs each Function from its local build, which it finds by the
-   Function's name (`<name>.mjs`, or the Python entry), in place of its `image` (`cmd/funcdctl/dev_folder.go`). Call
-   it on the gateway address that dev prints, then stop dev with SIGINT (Ctrl-C).
+   Run the first example before keeping it, exactly as the page documents it: each command in order, from a fresh
+   clone, with funcdctl as the Install page installs it (or a `-tags dev` build of the release it names), with the
+   runtimes on the `PATH` and outside the development shell. Record the versions. A helper such as
+   `scripts/example-copy.sh`, or a copy of a module, is a different test and does not count. A tool's command runs with
+   the tool itself; a resource manifest, such as a namespace or a grant, is applied to a running platform with no
+   push; the server's configuration file starts funcd with `--config`. `funcdctl dev` runs each Function from its
+   local build, which it finds by the Function's name (`<name>.mjs`, or the Python entry), in place of its `image`
+   (`cmd/funcdctl/dev_folder.go`).
 9. **Check**: `scripts/agent/d just generate`; `go test` for `TestDevelopPagesFollowTheTemplate`,
    `TestScenarioGuideIncludesResolve` and `TestScenarioGuideExamplesApply` (`pkg/funcd`), and for kindref when its
    tables changed; then the site's build, in funcd-frontend's `packages/docs`, with `FUNCD_DIR` set to the funcd
    worktree (`yarn build`, whose last step, `check-includes.ts`, fails on an include that did not render). On the
-   tool route: `just generate`, then the page tests of `cmd/funcd` and of `cmd/funcdctl` with `-tags dev`.
+   tool route: `just generate`, then the page tests of `cmd/funcd` and of `cmd/funcdctl` with `-tags dev`. A preview
+   is reviewed only once it shows the revision under review: open it with a query that names the revision
+   (`?rev=<commit>`), and find a sentence that the revision added.
 10. **Critique**: one subagent per page, reused across rounds, checks the page against the code, the template and the
     reader, briefed with the files, not your conclusions. Fix what the page owns; route the rest (an issue, a board
     card, a question in the PR).
