@@ -33,7 +33,7 @@ func TestScenarioGuideExamplesApply(t *testing.T) {
 		require.Contains(t, files, file, "every example file is applied")
 	}
 	for _, inc := range guideIncludes(t, filepath.Join("docs", "guide")) {
-		if file, pinned := inc.target(t); pinned && filepath.Ext(file) == ".yaml" {
+		if file, pinned := inc.target(t); pinned && filepath.Ext(file) == ".yaml" && !inAppTemplate(file) {
 			require.Contains(t, files, file, "every lane manifest that a page includes is applied")
 		}
 	}
@@ -147,7 +147,7 @@ func marksRegion(content, region string) bool {
 }
 
 // guideManifests lists the files under api/types/v1alpha1/examples and the YAML files that the guide's pages include
-// from a pinned repo.
+// from a pinned repo, except the resources of an App template.
 func guideManifests(t *testing.T) []string {
 	t.Helper()
 	var files []string
@@ -160,12 +160,32 @@ func guideManifests(t *testing.T) []string {
 		})
 	require.NoError(t, err)
 	for _, inc := range guideIncludes(t, filepath.Join("docs", "guide")) {
-		if file, pinned := inc.target(t); pinned && filepath.Ext(file) == ".yaml" {
+		if file, pinned := inc.target(t); pinned && filepath.Ext(file) == ".yaml" && !inAppTemplate(file) {
 			files = append(files, file)
 		}
 	}
 	slices.Sort(files)
 	return slices.Compact(files)
+}
+
+// inAppTemplate reports whether file is one of an App template's resources, which sit in resources/ beside app.yaml:
+// a fragment that its App renders, not a manifest that funcdctl apply sends, so the template's own tests run it, as
+// internal/testkit/langmod's TestExampleResourcesDecode leaves it to them.
+func inAppTemplate(file string) bool {
+	dir := filepath.Dir(file)
+	if filepath.Base(dir) != "resources" {
+		return false
+	}
+	fi, err := os.Stat(filepath.Join(filepath.Dir(dir), "app.yaml"))
+	return err == nil && fi.Mode().IsRegular()
+}
+
+// An App template's resource is left out of the manifests that the guide applies, and a lane manifest is not.
+func TestAppTemplateResourceIsNoGuideManifest(t *testing.T) {
+	t.Parallel()
+	fns := langmod.Dir(t, langmod.Functions)
+	require.True(t, inAppTemplate(filepath.Join(fns, "apps", "site-config", "app", "resources", "site.yaml")))
+	require.False(t, inAppTemplate(filepath.Join(fns, "apps", "site-config", "sites", "preview.yaml")))
 }
 
 // applyOnFreshPlatform applies file's documents in order, as funcdctl apply sends them, to a platform assembled over
