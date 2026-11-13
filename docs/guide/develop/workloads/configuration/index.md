@@ -7,15 +7,8 @@ description: Give a Function settings that are not secret through a ConfigMap, a
 
 A ConfigMap holds settings that are not secret, such as a mode or a log level, as keys with string values. A Function
 binds a ConfigMap, and each [worker](../../../platform/workloads/index.md#runtime) of the Function, a process that runs
-its code, gets the ConfigMap's keys as environment variables when it starts, with three exceptions:
-
-- A key that starts with `FUNCD_` is left out, because funcd reserves that prefix for the variables that it sets
-  itself. funcd logs a warning for each key that it leaves out this way.
-- A key that a bound Secret also holds is left out. The handler reads the Secret's value through
-  [`ctx.secret`](../../services/secrets/index.md) instead.
-- While funcd's [S3 gateway](../../services/bucket/index.md) runs, a Function that binds a Bucket gets the
-  `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` that funcd issues it, in place of a ConfigMap's values for these
-  two keys.
+its code, gets the ConfigMap's keys as environment variables when it starts, except the few keys that
+[Choose a ConfigMap's keys](#choose-a-configmaps-keys) lists.
 
 The [Platform page](../../../platform/workloads/configuration.md) explains how each kind of workload uses ConfigMaps
 and Secrets; this page shows how a Function uses a ConfigMap.
@@ -96,14 +89,27 @@ The response shows where each value comes from:
 
 To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
 
+## Choose a ConfigMap's keys
+
+Each key of a ConfigMap is the name of an environment variable, as [Errors](#errors) details. A worker gets every key
+of the ConfigMaps that its Function binds, with three exceptions:
+
+- A key that starts with `FUNCD_` is left out, because funcd reserves that prefix for the variables that it sets
+  itself. funcd logs a warning for each key that it leaves out this way.
+- A key that a bound Secret also holds is left out. The handler reads the Secret's value through
+  [`ctx.secret`](../../services/secrets/index.md) instead, as the first example does with `SHARED`.
+- While funcd's [S3 gateway](../../services/bucket/index.md) runs, a Function that binds a Bucket gets the
+  `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` that funcd issues it, in place of a ConfigMap's values for these
+  two keys.
+
 ## Read a setting through ctx.config
 
 A handler can read its settings through `ctx.config`, the configuration client in the context that every handler
 receives, instead of reading its environment:
 
 - `ctx.config.get(key)` returns the value that `key` has in the worker's environment, when a bound ConfigMap holds the
-  key and the exceptions at the top of this page do not leave it out. For any other key, such as `PATH`, it returns
-  `undefined` in TypeScript and `None` in Python.
+  key and no exception of [Choose a ConfigMap's keys](#choose-a-configmaps-keys) leaves it out. For any other key,
+  such as `PATH`, it returns `undefined` in TypeScript and `None` in Python.
 - `ctx.config.list()` returns the keys that `get` returns a value for, sorted.
 
 Both methods have the same names in TypeScript and in Python. They read the worker's environment and do not call
@@ -140,9 +146,9 @@ application share:
 ## Override a shared setting
 
 When two ConfigMaps that a Function binds hold the same key, the worker gets the value of the ConfigMap listed later in
-`spec.bindings.config`, within the exceptions at the top of this page. The Function `report` binds the shared
-ConfigMap first and a ConfigMap of its own second, so its workers get `LOG_LEVEL` set to `debug` and `TIMEZONE` set
-to `Europe/Paris`:
+`spec.bindings.config`, within the exceptions of [Choose a ConfigMap's keys](#choose-a-configmaps-keys). The Function
+`report` binds the shared ConfigMap first and a ConfigMap of its own second, so its workers get `LOG_LEVEL` set to
+`debug` and `TIMEZONE` set to `Europe/Paris`:
 
 ::include[../../../../../api/types/v1alpha1/examples/configuration/configmap.yaml#function]
 
@@ -171,10 +177,11 @@ the new values. Once the Function is `Ready` again, funcd deletes the old Config
 names it.
 
 funcd does not refuse the deletion of a ConfigMap that a Function binds, and the deletion changes nothing at once: the
-Function stays `Ready`, and its running workers keep serving with the values that they started with. For a Function
-that sets no `spec.pooling.worker`, funcd finds the ConfigMap missing only when the Function next needs a new worker,
-such as when a worker stops or the Function's spec changes; a pooled Function finds it at its next check. funcd then
-starts no new worker while the ConfigMap is missing:
+Function stays `Ready`, and its running workers keep serving with the values that they started with. funcd finds the
+ConfigMap missing only when the Function next needs a new worker, such as when a worker stops or the Function's spec
+changes. A Function that shares its workers with other Functions, through
+[`spec.pooling`](../function/spec.md#functionspecpooling), is the exception: funcd finds the missing ConfigMap at the
+Function's next check. funcd then starts no new worker while the ConfigMap is missing:
 
 - While a worker still serves, the Function stays `Ready`, and its `RevisionReady` condition has the reason
   `ConfigResolveFailed`.
