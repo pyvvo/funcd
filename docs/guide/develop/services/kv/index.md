@@ -187,7 +187,7 @@ A store's `spec.quota` sets its limits:
 A write whose value or key is above its limit fails with the HTTP status 413. A write that would take the store above
 its total size fails with the HTTP status 507. The [Spec](spec.md) tab gives the range of each field.
 
-## Where the data lives
+## Data storage
 
 By default, funcd keeps KV data in memory, and the data is lost when funcd stops. To keep the data on disk, set
 `kvstore.engine: badger` in funcd's configuration. funcd then stores the data in the `kv` folder of its data
@@ -196,10 +196,10 @@ directory, unless `kvstore.dataDir` names another folder. `storage.mode: memory`
 
 ## Access
 
-funcd checks every KV call with a built-in Cedar policy. funcd applies the policy in every namespace, beside any Policy
-that an operator writes, and a Policy cannot lift its `forbid` rule:
+funcd checks every KV call with a built-in Cedar policy, which it ships as `builtin_kv.cedar`. funcd applies the
+policy in every namespace, beside any Policy that an operator writes, and a Policy cannot lift its `forbid` rule:
 
-```cedar
+```cedar title="builtin_kv.cedar"
 @id("kv-read-binding")
 permit(principal, action == Action::"kv::read", resource)
   when { principal has kvBindings && principal.kvBindings.contains(resource) };

@@ -26,10 +26,17 @@ free:
 optional:
   - heading: Limits and quotas
     holds: The limits a reader meets, from doc tags and constants, with a link to the Spec tab.
-  - heading: Where the data lives
-    holds: Engines and durability.
+  - heading: Data storage
+    holds: >-
+      Only for a feature that stores data: where the data is stored, whether it survives a restart, the default, the
+      setting that changes that, and any setting that overrides it.
   - heading: Access
-    holds: Bindings, owners, roles and policies.
+    holds: >-
+      Only for a feature whose calls a built-in Cedar policy checks. First what a Function gets by itself from its
+      declaration, binding or ownership, each with its Cedar action; then what a reader must configure for anything
+      else: the smallest built-in role, its scope and a tested RolesAssignment, included as YAML. The shipped policy is
+      quoted in a cedar block titled with its file name, and a denial shows its status and the rule that its message
+      names.
   - heading: Status
     holds: The conditions a reader checks, and how.
   - heading: Changes and deletion
