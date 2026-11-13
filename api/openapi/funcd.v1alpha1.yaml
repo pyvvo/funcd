@@ -2648,7 +2648,7 @@ components:
             - array
             - "null"
         secret:
-          description: Secrets whose keys the code reads through ctx.secret, on each read and with no cache, a later Secret's value winning for a key that both hold. No value reaches the worker's environment, and no worker starts until each one can be read.
+          description: Secrets whose keys the code reads through ctx.secret, on each read and with no cache, a later Secret's value winning for a key that both hold. No value reaches the worker's environment. No worker starts while a bound Secret is missing, and a worker whose Function a Policy forbids to read one is not ready.
           items:
             maxLength: 63
             minLength: 1
