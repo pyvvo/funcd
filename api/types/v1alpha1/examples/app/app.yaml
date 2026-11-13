@@ -9,7 +9,6 @@ spec:
   version: 1.0.0
   kv:
     - name: guestbook-entries
-      deletion: retain
       tables:
         - name: entries
           owner: guestbook-api
