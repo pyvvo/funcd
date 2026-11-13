@@ -8,6 +8,8 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 ## Workflow
 
+::include[../../../../../api/types/v1alpha1/examples/workflow/workflow.yaml#workflow]
+
 | apiVersion | kind |
 | --- | --- |
 | `funcd.io/v1alpha1` | `Workflow` |
@@ -334,6 +336,8 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | `name` | string, required, a DNS-1123 label | The step's name. |
 
 ## WorkflowRun
+
+::include[../../../../../api/types/v1alpha1/examples/workflow/workflowrun.yaml#workflowrun]
 
 | apiVersion | kind |
 | --- | --- |

@@ -1,0 +1,24 @@
+apiVersion: funcd.io/v1alpha1
+kind: Workflow
+metadata:
+  name: orders
+  namespace: default
+  resourceGroup: rg1
+spec:
+  steps:
+    - name: ingest
+      function:
+        image: registry.example/orders-ingest:1.0.0
+---
+# region workflowrun
+apiVersion: funcd.io/v1alpha1
+kind: WorkflowRun
+metadata:
+  name: orders-run-1
+  namespace: default
+  resourceGroup: rg1
+spec:
+  workflow: orders
+  input:
+    amount: 4
+# endregion workflowrun
