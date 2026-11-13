@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.44.0](https://github.com/pyvvo/funcd/compare/v0.43.0...v0.44.0) (2026-11-13)
+
+
+### Features
+
+* **funcd:** a secret file that other users can open warns at start (ADR-0326) ([#1453](https://github.com/pyvvo/funcd/issues/1453)) ([33104f3](https://github.com/pyvvo/funcd/commit/33104f35794cc79b936e495de8a03a9affb3b905))
+* **secrets:** a Function writes the Secrets it owns through ctx.secret.put and del, and built-in roles name Secret readers and writers ([9ac3971](https://github.com/pyvvo/funcd/commit/9ac39716f0b46b6f0d80d41936a904a4250f9734))
+
+
+### Bug Fixes
+
+* **install:** the install script names stdin for its checksum check, which macOS's sha256sum needs ([#1454](https://github.com/pyvvo/funcd/issues/1454)) ([cbbaa1b](https://github.com/pyvvo/funcd/commit/cbbaa1b53112c94df51da058f5f2a77f8583af38))
+
 ## [0.43.0](https://github.com/pyvvo/funcd/compare/v0.42.0...v0.43.0) (2026-11-13)
 
 
