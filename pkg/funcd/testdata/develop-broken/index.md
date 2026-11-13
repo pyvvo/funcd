@@ -6,7 +6,7 @@ description: A page that breaks every rule of the develop-page template.
 ## Overview
 
 ADR-0001 is named here, [a tag](https://github.com/pyvvo/funcd-typescript/tree/v0.27.0/examples/kv-counter) is
-linked, and so is [a release](https://github.com/pyvvo/funcd-python/releases/tag/v0.22.0).
+linked, and so are [a release](https://github.com/pyvvo/funcd-python/releases/tag/v0.22.0) and [a comparison](https://github.com/pyvvo/funcd-python/compare/v0.21.0...v0.22.0).
 
 ```yaml
 apiVersion: funcd.io/v1alpha1

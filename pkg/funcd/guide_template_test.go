@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -68,6 +67,7 @@ func TestTemplateRefusesABrokenPage(t *testing.T) {
 		"names an ADR",
 		"line 8: a link to funcd-typescript at v0.27.0; link to main",
 		"line 9: a link to funcd-python at v0.22.0; link to main",
+		"line 9: a link to funcd-python at v0.21.0; link to main",
 		`line 24: code from funcd-typescript sits under a "### TypeScript" heading`,
 		`line 28: a hand-written "Method" table`,
 		`"Access" appears twice`,
@@ -102,6 +102,8 @@ func TestLaneFoldersHoldEveryKVExample(t *testing.T) {
 	}
 	require.False(t, run["github.com/pyvvo/funcd-typescript examples"], "a staged file's top folder is not an example")
 	require.False(t, run["github.com/pyvvo/funcd-typescript shim"])
+	require.False(t, run["github.com/pyvvo/funcd e2e/fixtures"], "a fixture that funcd stages is no example")
+	require.False(t, run["github.com/pyvvo/funcd-functions apps/todo/dr"], "a folder inside an example is not one")
 }
 
 func readTemplate(t *testing.T) pageTemplate {
@@ -123,7 +125,9 @@ func templateProblems(t *testing.T, tpl pageTemplate, file string) []string {
 	manifest := regexp.MustCompile(`(^|[\s{,])"?apiVersion"?\s*:`)
 	laneCode := regexp.MustCompile(`^::include\[[^\]]*_repos/(funcd-typescript|funcd-python)/`)
 	table := regexp.MustCompile(`^\|\s*(Method|Field|Key)\s*\|`)
-	link := regexp.MustCompile(`\]\(https://github\.com/pyvvo/([a-z-]+)/(tree|blob|releases/tag)/([^/)\s]+)/?([^)\s]*)\)`)
+	link := regexp.MustCompile(`\]\(https://github\.com/pyvvo/([a-z-]+)(/[^)\s]*)?\)`)
+	tree := regexp.MustCompile(`^/(?:tree|blob)/([^/]+)/?(.*)$`)
+	version := regexp.MustCompile(`v\d+\.\d+\.\d+`)
 	language := map[string]string{"funcd-typescript": "TypeScript", "funcd-python": "Python"}
 	var problems, headings []string
 	var examples [][]string
@@ -161,11 +165,18 @@ func templateProblems(t *testing.T, tpl pageTemplate, file string) []string {
 			continue
 		}
 		for _, m := range link.FindAllStringSubmatch(line, -1) {
-			if m[2] == "releases/tag" || m[3] != "main" {
-				problems = append(problems, fmt.Sprintf("line %d: a link to %s at %s; link to main", n, m[1], m[3]))
+			repo, rest, ref, folder := m[1], m[2], "", ""
+			if tm := tree.FindStringSubmatch(rest); tm != nil {
+				ref, folder = tm[1], strings.TrimSuffix(tm[2], "/")
+			}
+			switch v := version.FindString(rest); {
+			case v != "":
+				problems = append(problems, fmt.Sprintf("line %d: a link to %s at %s; link to main", n, repo, v))
+			case ref != "" && ref != "main":
+				problems = append(problems, fmt.Sprintf("line %d: a link to %s at %s; link to main", n, repo, ref))
 			}
 			if section == tpl.Last.Heading {
-				examples = append(examples, m)
+				examples = append(examples, []string{repo, folder, strings.TrimPrefix(rest, "/")})
 			}
 		}
 	}
@@ -216,9 +227,13 @@ func templateProblems(t *testing.T, tpl pageTemplate, file string) []string {
 	}
 	run := laneFolders(t)
 	for _, m := range examples {
-		module, folder := "github.com/pyvvo/"+m[1], strings.TrimSuffix(m[4], "/")
+		module, folder := "github.com/pyvvo/"+m[0], m[1]
 		if !run[module+" "+folder] {
-			problems = append(problems, fmt.Sprintf("an Examples link points at %s, which no lane in scripts/lanes.yaml runs", folder))
+			shown := folder
+			if shown == "" {
+				shown = m[2]
+			}
+			problems = append(problems, fmt.Sprintf("an Examples link points at %s, which no lane in scripts/lanes.yaml runs", shown))
 			continue
 		}
 		if _, err := os.Stat(filepath.Join(langmod.Dir(t, module), filepath.FromSlash(folder))); err != nil {
@@ -228,8 +243,8 @@ func templateProblems(t *testing.T, tpl pageTemplate, file string) []string {
 	return problems
 }
 
-// laneFolders is the set of "<module> <folder>" that a lane runs: each lane's dir, and each folder of two or more
-// segments that holds a file it stages from another module.
+// laneFolders is the set of "<module> <folder>" that a lane runs: each lane's dir, and the example folder (the first
+// two segments) of each file that it stages from a language module; a fixture that funcd stages is no example.
 func laneFolders(t *testing.T) map[string]bool {
 	t.Helper()
 	module := func(m string) string {
@@ -244,8 +259,8 @@ func laneFolders(t *testing.T) map[string]bool {
 			run[module(lane.Module)+" "+lane.Dir] = true
 		}
 		for _, st := range lane.Stage {
-			for dir := path.Dir(st.From); st.From != "" && strings.Contains(dir, "/"); dir = path.Dir(dir) {
-				run[module(st.Module)+" "+dir] = true
+			if parts := strings.SplitN(st.From, "/", 3); st.Module != "" && len(parts) == 3 {
+				run[st.Module+" "+parts[0]+"/"+parts[1]] = true
 			}
 		}
 	}

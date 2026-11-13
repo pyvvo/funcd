@@ -93,7 +93,6 @@ func TestScenarioExamplesBuildWithTheTools(t *testing.T) {
 	}
 }
 
-// stagedFiles maps each staged layout path of a lane to its source file in the pinned module (or funcd).
 // readLanes reads scripts/lanes.yaml, the lane registry, by lane name.
 func readLanes(t *testing.T) map[string]laneSpec {
 	t.Helper()
@@ -104,6 +103,7 @@ func readLanes(t *testing.T) map[string]laneSpec {
 	return lanes
 }
 
+// stagedFiles maps each staged layout path of a lane to its source file in the pinned module (or funcd).
 func stagedFiles(t *testing.T, lane laneSpec) map[string]string {
 	t.Helper()
 	moduleRoot := func(mod string) string {
