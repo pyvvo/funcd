@@ -34,9 +34,10 @@ tool.
 
 `funcdctl dev` packs a Site's bundle itself only for a Site of an **App template**, a folder that holds an `app.yaml`
 file beside a `resources` folder, from which funcdctl renders an [App](../../../platform/workloads/app.md), one
-resource that declares a whole app. For a Site's image, `funcdctl dev` packs the folder that
-`--build <image>=<folder>` names and pushes it to a registry in its own state folder. It then renders the template with
-the values of the files that `-f` names, and applies the App, which writes the Site.
+resource that declares a whole app. For a Site's image, `funcdctl dev` packs the folder that `--build <key>=<folder>`
+names, where `<key>` is the image's key under `images` in `app.yaml`. It pushes the bundle into an OCI image layout, a
+folder that holds images as a registry does, in its own state folder. It then renders the template with the values of
+the files that `-f` names, and applies the App, which writes the Site.
 [Run it locally](#run-it-locally) says what `funcdctl dev` does with a Site outside an App template.
 
 `funcdctl dev` prints the address of each Site, and the address of its control plane, which a `funcdctl` command
@@ -57,16 +58,19 @@ expression takes a value from the template: `app.name` is the App's name, `site-
 ::include[../../../../../_repos/funcd-functions/apps/site-config/app/resources/site.yaml]
 
 - [`bindings.blob`](spec.md#sitespecbindingsblob) names the Bucket `site-config-web` and its prefix `web`, which holds
-  the Site's bundles. In an App, the App declares the Bucket under its own `buckets`, with its own `deletion` setting,
-  so the Site declares none.
-- [`ingress`](spec.md#sitespecingress) sets where the edge serves the Site: on the host `site-config.staging.test`, at
-  the path `/`, since it sets a host and no `path`, and to every caller, since `auth.mode` is `open`. With
-  `baseHref: true`, funcd serves the index with a `<base href>` element that holds the Site's path, so the app's
-  relative URLs, such as `app.js` and `config.json`, resolve under that path.
+  the Site's bundles. In an App, the App declares the Bucket under its own `buckets`, so the Site declares none. The
+  App's `deletion: delete` makes funcd delete the Bucket, with every bundle in it, when the App is deleted; with
+  `retain`, the default, the Bucket and its bundles stay.
+- [`ingress`](spec.md#sitespecingress) sets where the edge serves the Site, through the **Site's Route**: a
+  [Route](../../security-and-networking/networking/index.md) of the Site's name, which the Site writes and owns. Here
+  the edge serves the Site on the host `site-config.staging.test`, at the path `/`, since `ingress` sets a host and no
+  `path`, and to every caller, since `auth.mode` is `open`. With `baseHref: true`, funcd serves the index with a
+  `<base href>` element that holds the Site's path, so the app's relative URLs, such as `app.js` and `config.json`,
+  resolve under that path.
 - [`spa`](spec.md#sitespec) serves the index for a path that matches no file, so that the app's own router handles a
   link such as `/vehicles/42`.
 - [`runtimeConfig`](spec.md#sitespecruntimeconfig) makes funcd generate `config.json` from its `values` and from the
-  keys of a ConfigMap. The template's
+  keys of a [ConfigMap](../configuration/index.md). The template's
   [`resources/flags.yaml`](https://github.com/pyvvo/funcd-functions/blob/main/apps/site-config/app/resources/flags.yaml)
   declares that ConfigMap, which holds `NEW_DASHBOARD`.
 
@@ -87,11 +91,12 @@ Site's status, and repeat the command until the status shows the phase `Ready`:
 $ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token get site site-config-web -n default -o json
 ```
 
-The command prints the Site as JSON. Until the App has written the Site, it fails with a message that ends with
+The command prints the Site as JSON. Until the App has written the Site, it fails with a message that contains
 `Site "site-config-web" not found`. Under `status`, `"phase"` is `"Ready"` once the Site serves its bundle: the
 condition `Ready` then has the status `"True"` and the reason `Materialized`. `"digest"` names the bundle that the Site
-serves, `"servingPrefix"` names the folder of the Bucket that holds it, `web/sha256-<hex>/`, and `"objects": 2` and
-`"bytes": 1050` count the bundle's two files. [Status](#status) explains the other reasons.
+serves, and `"servingPrefix"` names the folder of the Bucket that holds it, `web/sha256-<hex>/`. `"objects"` counts the
+bundle's files, here `index.html` and `app.js`, and `"bytes"` their total size. [Status](#status) explains the other
+reasons.
 
 The terminal that runs `funcdctl dev` prints the Site's address, `http://site-config.staging.test:8080/`. That host
 name does not resolve on the local computer, so the commands below use curl's `--resolve` option, which sends the
@@ -164,9 +169,9 @@ at `/handbook`:
 
 ::include[../../../../../api/types/v1alpha1/examples/site/site.yaml#site]
 
-- `image` names a bundle that `funcdctl push --site <folder> <ref>` pushed to a registry. The command prints the
-  bundle's reference with its digest; the [reference of `funcdctl push`](../../tools/funcdctl/spec.md#funcdctl-push)
-  describes it.
+- `image` names a bundle that `funcdctl push --site <folder> <ref>` pushed to a registry that funcd can pull from. The
+  command prints the bundle's reference with its digest; the
+  [reference of `funcdctl push`](../../tools/funcdctl/spec.md#funcdctl-push) describes it.
 - Outside an App, a Site declares exactly one Bucket under [`buckets`](spec.md#sitespecbuckets), the Bucket that
   `bindings.blob` names. By `name`, as here, the Site creates the Bucket, with the prefix and no owner for it. By
   `ref`, the Site uses a Bucket that exists, which must hold the prefix with no owner, and it never changes that
@@ -176,8 +181,8 @@ at `/handbook`:
   so the bundle's URLs must already hold the path.
 
 A Route can also serve a Site's bundle: a rule whose [`backend.site`](../../security-and-networking/networking/spec.md#routespecrulesbackend)
-names the Site serves the bundle that the Site serves now, and its `config.json`, at the rule's path, and follows each
-new bundle. Such a Route can serve a Function beside the bundle on one host. With `ingress.enabled: false`, the
+names the Site serves the Site's current bundle, and its `config.json`, at the rule's path, and follows each new
+bundle. Such a Route can serve a Function beside the bundle on one host. With `ingress.enabled: false`, the
 Site's own address is off, and only such a Route serves the bundle. The
 [Networking](../../../platform/security-and-networking/networking.md) page explains how the edge matches a host and a
 path.
@@ -212,24 +217,33 @@ A Site's [`ingress.auth.mode`](spec.md#sitespecingressauth) decides who may fetc
 same mode:
 
 - `open`, as in the first example, lets every caller fetch them, with no credential.
-- `authenticated` requires a bearer token, or an `X-Api-Key` header, of an identity that may get the Functions of the
-  Site's namespace. A request without a valid credential gets the HTTP status 401, and a request whose identity may not
-  get those Functions gets 403.
-- When the mode is not set, the Namespace's `spec.edgeDefaults.auth.mode` decides, else the mode is `open`.
+- `authenticated` asks each caller for a credential, and what the edge accepts depends on the server setting
+  [`server.auth.edge`](../../running-funcd/spec.md#funcdconfigyaml). With its default, `false`, the edge has no
+  authenticator, so every request to the Site gets the HTTP status 401, with a message that contains
+  `authentication required but no authenticator is configured`, whether it carries a token or not; `funcdctl dev`
+  behaves the same way. With `server.auth.edge` set to `true`, a request needs the token of one of the server's
+  credentials, in an `Authorization: Bearer <token>` header or an `X-Api-Key` header, and the credential's role must
+  allow it to get the Functions of the Site's namespace. A request without a valid token gets 401, and a request whose
+  credential may not get those Functions gets 403.
+- When the mode is not set, the Namespace's
+  [`spec.edgeDefaults.auth`](../../tenancy-and-limits/namespaces/spec.md#namespacespecedgedefaultsauth) decides, else
+  the mode is `open`.
 
-Every file of an `open` Site is public, `config.json` included. The
-[Networking](../../../platform/security-and-networking/networking.md) page explains how the edge checks callers.
+Every file of an `open` Site is public, `config.json` included. The Networking page's
+[Ask callers to authenticate](../../security-and-networking/networking/index.md#ask-callers-to-authenticate) section
+explains the credentials and their roles.
 
 ## Limits and quotas
 
 - `config.json` holds at most 32 KiB (32768 bytes). `funcdctl apply` refuses `values` that alone pass that size. When
-  the ConfigMap takes the file past it, the Site is not `Ready`, with the reason `RuntimeConfigTooLarge`, and its last
-  `config.json` keeps serving.
+  the ConfigMap takes the file past it, or when the file is larger than the Bucket's `maxObjectBytes`, the Site is not
+  `Ready`, with the reason `RuntimeConfigTooLarge`, and its last `config.json` keeps serving.
 - A Site's bundles count against the [quota](../../services/bucket/spec.md#bucketspecquota) of its Bucket and of its
   prefix. A file larger than the Bucket's `maxObjectBytes` stops the deployment with the reason `MaterializeFailed`. A
   bundle that does not fit in the quota, or that would take the free space of funcd's data directory below
-  `storage.minFreeSize`, stops it with the reason `QuotaExceeded`. funcd does not retry either deployment until the
-  Site or its Bucket changes, or funcd restarts; the previous bundle keeps serving meanwhile.
+  `storage.minFreeSize`, stops it with the reason `QuotaExceeded`. funcd retries such a deployment only when the
+  Site, its Bucket, the Site's Route or the ConfigMap that `runtimeConfig` names changes, or when funcd restarts; the
+  previous bundle keeps serving meanwhile.
 
 The [Spec](spec.md) tab gives the range of each field, and the funcd
 [Spec](../../running-funcd/spec.md#funcdconfigyaml) tab describes `storage.minFreeSize`.
@@ -237,8 +251,8 @@ The [Spec](spec.md) tab gives the range of each field, and the funcd
 ## Data storage
 
 A Site keeps its bundles in its Bucket: each bundle in the folder `<prefix>/sha256-<hex>/` of its digest, and its
-`config.json` in `<prefix>/_runtime/<site>/`. funcd removes no bundle, so the Bucket holds every bundle that the Site
-has deployed, and the Bucket's quota counts them all. The Bucket page's [Data storage](../../services/bucket/index.md#data-storage)
+`config.json` in `<prefix>/_runtime/<site>/`. funcd removes no bundle while the Bucket exists, so the Bucket holds
+every bundle that the Site has deployed, and the Bucket's quota counts them all. The Bucket page's [Data storage](../../services/bucket/index.md#data-storage)
 section says where funcd keeps a Bucket's objects and whether they survive a restart.
 
 ## Status
@@ -247,13 +261,15 @@ section says where funcd keeps a Bucket's objects and whether they survive a res
 `Ready` while the condition `Ready` is `True`, and `Pending` otherwise; a Site has no other phase.
 
 The condition `Ready` is `True`, with the reason `Materialized`, once the bundle is in the Bucket and the Site's Route
-serves it. When it is `False`, its reason says why:
+is set to serve it. `Ready` does not mean that the Site's own address answers: a Site whose address is off, through
+`ingress.enabled: false`, or with `ingress.enabled` unset in a namespace whose `defaultExposure` is `explicit`, is
+`Ready` too, and its address answers 404. When the condition is `False`, its reason says why:
 
 - `ArtifactNotFound`: funcd cannot find the image, or cannot fetch the bundle at its digest.
 - `DigestUnresolved`: the image names no tag and no digest, or names an artifact that is not a Site's bundle, such as
   a Function's.
-- `IndexMissing`: the bundle holds no index file, the file that [`index`](spec.md#sitespec) names, `index.html` by
-  default.
+- `IndexMissing`: the bundle holds no index file: the file that [`index`](spec.md#sitespec) names, else the file that
+  the server setting `site.defaultIndex` names, `index.html` by default.
 - `MaterializeFailed`: the Bucket refused a file of the bundle, such as a file larger than its `maxObjectBytes`, or the
   bundle holds a `_runtime` entry at its root, a name that funcd keeps for the files that it generates.
 - `QuotaExceeded`: the bundle or `config.json` does not fit, as [Limits and quotas](#limits-and-quotas) explains.
@@ -267,11 +283,12 @@ serves it. When it is `False`, its reason says why:
 - `RouteNotReady`: the Site's Route does not serve yet, or cannot serve, such as when a rule's Bucket does not exist or
   another Route already serves the same host and path. The message holds the Route's own reason.
 - `ConfigMapNotFound`: the ConfigMap that `runtimeConfig.configMap` names does not exist. The bundle still deploys.
-- `RuntimeConfigTooLarge`: `config.json` would be larger than 32 KiB.
+- `RuntimeConfigTooLarge`: `config.json` would be larger than 32 KiB, or than the Bucket's `maxObjectBytes`.
 
-`status.digest` names the bundle that the Site's Route serves, `status.servingPrefix` names its folder in the Bucket,
-and `status.objects` and `status.bytes` count its files, without the files that funcd generates. Before the first
-deployment, `digest` is empty; after a deployment that failed, it still names the previous bundle.
+`status.digest` names the bundle that the Site's Route is set to serve, `status.servingPrefix` names its folder in the
+Bucket, and `status.objects` and `status.bytes` count its files and their total size, without the files that funcd
+generates. Before the first deployment, `digest` is empty; after a deployment that failed, it still names the previous
+bundle.
 
 ## Changes and deletion
 
@@ -297,59 +314,68 @@ After a new bundle, a browser loads the new index at its next request: the edge 
 file whose name holds a hexadecimal hash of 8 or more characters, such as `app.3f9a2c1b.js`, for a year, since a
 bundler gives a changed file a new hash. The edge answers a conditional request with 304 when the file has not changed.
 
-Deleting a Site deletes its Route soon after, and the Site's address then answers 404. The Bucket stays, with every
-bundle that the Site deployed and its `config.json`. The Bucket page's
+Deleting a Site deletes its Route soon after, and the Site's address then answers 404. Deleting a Site never deletes
+its Bucket: the Bucket stays, with every bundle that the Site deployed and its `config.json`. A Site created again under
+the same name that declares that Bucket by `name` is not `Ready`, with the reason `StoreNotOwned`, since the Bucket
+still belongs to the deleted Site: declare it by `ref` instead. A Site of an App goes when the App is deleted, and the
+App's `deletion` setting decides whether its Bucket goes too: with `delete`, as in the first example, funcd deletes the
+Bucket and every bundle in it. The Bucket page's
 [Changes and deletion](../../services/bucket/index.md#changes-and-deletion) section explains how to delete a Bucket.
 
 ## Errors
 
 A browser or another client of a Site meets these HTTP statuses:
 
-- **404** with the message `no route for "<path>"` when no Site or Route answers on that host and path, such as before
-  the Site's first bundle serves, after the Site is deleted, or on a host that the Site does not answer.
-- **404** with the message `no such object` for a path that matches no file, under a Site without `spa` or under a
-  rule.
+- **404** with a message that contains `no route for` when no Site or Route answers on that host and path, such as
+  before the Site's first bundle serves, while its own address is off, after the Site is deleted, or on a host that the
+  Site does not answer.
+- **404** with a message that contains `no such object` for a path that matches no file, under a Site without `spa` or
+  under a rule.
 - **405** for a method other than GET and HEAD, with the header `Allow: GET, HEAD`.
 - **401** or **403** when the Site asks for authentication, as [Access](#access) explains.
 
 `funcdctl apply` refuses a Site:
 
-- whose `buckets` does not hold exactly one entry, the Bucket that `bindings.blob` names, with a message such as
-  `spec.buckets must declare exactly the one Bucket spec.bindings.blob names, not 0`;
-- whose Bucket entry sets `deletion: delete`, with a message that begins with
+- whose `buckets` does not hold exactly one entry, the Bucket that `bindings.blob` names, with a message that contains
+  `spec.buckets must declare exactly the one Bucket spec.bindings.blob names`;
+- whose Bucket entry sets `deletion: delete`, with a message that contains
   `spec.buckets[0].deletion "delete" is not implemented`;
 - whose Bucket entry by `ref` lists `prefixes`, since a Site never changes a Bucket that it refers to;
 - whose rule has the path `/`, the bundle's path, the path of another rule or the path of `config.json`;
 - whose `runtimeConfig.values` alone make `config.json` larger than 32 KiB;
-- whose prefix differs from the prefix that the Site was created with, with a message such as
-  `spec.bindings.blob[0].prefix is immutable ("web" → "app")`.
+- whose prefix differs from the prefix that the Site was created with, with a message that contains
+  `spec.bindings.blob[0].prefix is immutable`.
 
 ## Run it locally
 
 `funcdctl dev` differs from a funcd server in these ways for a Site:
 
 - It needs Node.js, or Python 3.12 or later as `python3`, on the `PATH`, or the interpreter that `FUNCD_NODE` or
-  `FUNCD_PYTHON` names, even when it runs no Function. Without one, it stops at its start with the message
-  `no runtime found on PATH (need node or python3; set FUNCD_NODE / FUNCD_PYTHON)`.
-- It packs a Site's bundle only for a Site of an App template, from the folder that `--build <image>=<folder>` names.
+  `FUNCD_PYTHON` names, even when it runs no Function. Without one, it stops at its start with a message that contains
+  `no runtime found on PATH`.
+- It packs a Site's bundle only for a Site of an App template, from the folder that `--build <key>=<folder>` names.
   When a file of that folder changes, it packs and pushes the folder again, and the Site deploys the new bundle. When
   the folder is empty or holds no index at that moment, as while a build tool writes it, the Site keeps its last
   bundle, and `funcdctl dev` prints a line that ends with `keeping its last build`.
-- With `liveReload: true` in the `funcdctl.config.yaml` file of the current folder, it reloads the open pages of a
-  Site after each new bundle.
-- In a folder of resource files, it applies a Site as it is written and packs nothing for it, so the Site's `image`
-  must name an artifact that funcd can pull. The Sites `bi` and `docs` of the s3-roundtrip example name a registry of
-  the test platform that runs them, so under `funcdctl dev` they stay `Pending`, with the reason `ArtifactNotFound`.
+- For an App template, with `dev.liveReload: true` in the `funcdctl.config.yaml` file of the current folder, it reloads
+  the open pages of a Site after each new bundle.
+- It runs a folder of resource files only when the folder holds a Function or a Workflow image step, so a folder that
+  holds only a Site does not run: `funcdctl dev` stops with a message that contains
+  `holds no Function or Workflow image step to run`. Beside a Function, it applies a Site as it is written and packs
+  nothing for it, so the Site's `image` must name an artifact that funcd can pull. The Sites `bi` and `docs` of the
+  s3-roundtrip example name a registry of the test platform that runs them, so under `funcdctl dev` they stay
+  `Pending`, with the reason `ArtifactNotFound`.
 - It runs the namespace `default` only.
-- Its edge has no authenticator, so a Site whose `ingress.auth.mode` is `authenticated` answers 401 to every request,
-  with the message `authentication required but no authenticator is configured`.
+- Its edge has no authenticator, as on a server whose `server.auth.edge` is `false`, so a Site whose
+  `ingress.auth.mode` is `authenticated` answers 401 to every request, with a message that contains
+  `authentication required but no authenticator is configured`.
 
 Without the `--persist` flag, `funcdctl dev` keeps the Bucket's files in memory, so the bundles that the Site deployed
-are lost when it stops. It keeps the bundles that it packed in a state folder of its own, `funcd/dev/<id>` in the
-user's cache folder, such as `~/.cache` on Linux or `~/Library/Caches` on macOS, where `<id>` stands for the template
-folder. With `--persist`, it keeps its state and the Bucket's files between runs in `.funcd-dev`, a folder that it
-creates in the current folder, or in the folder that `--persist-to` names. To start again from nothing, delete
-`.funcd-dev` and the state folder after `funcdctl dev` stops. The
+are lost when it stops. It keeps the bundles that it packed, and a record of the processes that it starts, in a state
+folder of its own, `funcd/dev/<id>` in the user's cache folder, such as `~/.cache` on Linux or `~/Library/Caches` on
+macOS, where `<id>` stands for the template folder. With `--persist`, it keeps its state and the Bucket's files between
+runs in `.funcd-dev`, a folder that it creates in the current folder, or in the folder that `--persist-to` names. To
+start again from nothing, delete `.funcd-dev` and the state folder after `funcdctl dev` stops. The
 [reference of `funcdctl dev`](../../tools/funcdctl/spec.md#funcdctl-dev) lists its flags and the keys of
 `funcdctl.config.yaml`.
 
