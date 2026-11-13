@@ -3606,13 +3606,13 @@ components:
       additionalProperties: false
       properties:
         bucket:
-          description: The Bucket that holds the Lake's files, in the Lake's namespace.
+          description: A Bucket of the same namespace.
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         prefix:
-          description: The prefix of that Bucket, which this Lake must own.
+          description: A prefix of that Bucket.
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
       required:
