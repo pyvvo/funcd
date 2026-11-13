@@ -14068,5 +14068,20 @@
     "dod_total": 8,
     "report": "docs/reviews/issue-1441-fix-claude-opus-5-5-4.md",
     "notes": "batch 4 (141 config keys; the config list, its script, test and CI step deleted), 2 rounds; 0B/2M/11m, all model and fixed: what quarantine return takes, the private containerd's restart, pins on constants that funcd does not apply, 10 wording minors. Routed: five unnamed default literals in cmd/funcd"
+  },
+  {
+    "date": "2026-11-13",
+    "adr": "0326",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "model_attributed": 1,
+    "dod_passed": 16,
+    "dod_total": 16,
+    "report": "docs/reviews/adr-0326-implementation-claude-opus-5-5.md",
+    "notes": "1 round; 0B/0M/1m, model: the warn test sets the six keys at once and takes the key-path pairs from secretFiles, so a key that reads another key's field passes (overlay mutant ok). The ADR's three Done-when mutants fail as required. The egress rows moved verbatim to a new Egress chapter (security.md was at the 16 KiB cap). Routed: rebase onto 872e6d11 and regenerate spec.md; the ADR is in no commit yet"
   }
 ]
