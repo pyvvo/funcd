@@ -1,0 +1,51 @@
+apiVersion: funcd.io/v1alpha1
+kind: Bucket
+metadata:
+  name: lakehouse
+  namespace: default
+  resourceGroup: rg1
+spec:
+  prefixes:
+    - name: gold
+      owner:
+        kind: Function
+        name: s3-roundtrip
+    - name: shared
+---
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: s3-roundtrip
+  namespace: default
+  resourceGroup: rg1
+spec:
+  buckets:
+    - ref: lakehouse
+  bindings:
+    blob:
+      - alias: gold
+        bucket: lakehouse
+        prefix: gold
+  runtime: nodejs22
+  handler: handle
+  image: registry.example.com/s3-roundtrip:1.0.0
+---
+# region rolesassignment
+apiVersion: funcd.io/v1alpha1
+kind: RolesAssignment
+metadata:
+  name: s3-roundtrip-shared-writer
+  namespace: default
+  resourceGroup: rg1
+spec:
+  principal:
+    kind: Function
+    name: s3-roundtrip
+  assignments:
+    - roleRef:
+        kind: BuiltinRole
+        name: Blob Data Writer
+      scope:
+        kind: BucketPrefix
+        name: lakehouse/shared
+# endregion rolesassignment

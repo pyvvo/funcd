@@ -1,0 +1,61 @@
+# region bucket
+apiVersion: funcd.io/v1alpha1
+kind: Bucket
+metadata:
+  name: media
+  namespace: default
+  resourceGroup: rg1
+spec:
+  quota:
+    maxSize: 1Gi
+  prefixes:
+    - name: uploads
+      owner:
+        kind: Function
+        name: ingest
+    - name: thumbnails
+      owner:
+        kind: Function
+        name: resize
+# endregion bucket
+---
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: ingest
+  namespace: default
+  resourceGroup: rg1
+spec:
+  buckets:
+    - ref: media
+  bindings:
+    blob:
+      - alias: uploads
+        bucket: media
+        prefix: uploads
+  runtime: nodejs22
+  handler: handle
+  image: registry.example.com/ingest:1.0.0
+---
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: resize
+  namespace: default
+  resourceGroup: rg1
+# region binding
+spec:
+  buckets:
+    - ref: media
+  bindings:
+    blob:
+      - alias: uploads
+        bucket: media
+        prefix: uploads
+      - alias: thumbnails
+        bucket: media
+        prefix: thumbnails
+# endregion binding
+  runtime: nodejs22
+  handler: handle
+  image: registry.example.com/resize:1.0.0
