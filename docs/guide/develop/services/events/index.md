@@ -86,8 +86,9 @@ The names differ at each run, and each tick adds one. With `-o json`, the comman
 `status` holds `"phase": "Ready"`, and a `startTime` 10 seconds after the one before.
 
 To check that each tick reached `log-burst`, read the records of the severity `ERROR` and above that the Function
-wrote. Each call writes five of them: the line written to standard error, and four errors. The times, and the order of
-the lines that one call writes, differ at each run:
+wrote. Each call writes five of them: the line written to standard error, and four errors. A record shows only once
+funcd has written it to storage, which `funcdctl dev` does within a second: repeat the command until the records
+appear. The times, and the order of the lines that one call writes, differ at each run:
 
 ```console
 $ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token logs log-burst -n default --severity error
@@ -137,8 +138,9 @@ The names differ at each run, and each tick adds one. With `-o json`, the comman
 `status` holds `"phase": "Ready"`, and a `startTime` 10 seconds after the one before.
 
 To check that each tick reached `log-burst`, read the records of the severity `ERROR` and above that the Function
-wrote. Each call writes four of them: the line written to standard error, and three errors. The times differ at each
-run:
+wrote. Each call writes four of them: the line written to standard error, and three errors. A record shows only once
+funcd has written it to storage, which `funcdctl dev` does within a second: repeat the command until the records
+appear. The times differ at each run:
 
 ```console
 $ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token logs log-burst -n default --severity error
