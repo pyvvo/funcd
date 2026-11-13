@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
-	"github.com/pyvvo/funcd/internal/function"
 	"github.com/pyvvo/funcd/internal/store"
 )
 
@@ -20,15 +19,16 @@ func TestScenarioPastAdmissionBlocked(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		change func(*v1.Function)
+		reason string
 	}{
-		{"lots", func(fn *v1.Function) { fn.Spec.Resources.CPU = "lots" }},
+		{"lots", func(fn *v1.Function) { fn.Spec.Resources.CPU = "lots" }, "ResourcesInvalid"},
 		{"pooled", func(fn *v1.Function) {
 			fn.Spec.Resources.Memory = "256Mi"
 			fn.Spec.Pooling.Worker = "w1"
-		}},
+		}, "ResourcesWithPooling"},
 	} {
 		h := newShimHarness(t, http.StatusOK, false, withNodePool)
-		h.create(t, tc.name, tc.change)
+		h.create(t, tc.name, func(*v1.Function) {})
 		fn := h.getFn(t, tc.name)
 		tc.change(fn)
 		raw, err := json.Marshal(fn)
@@ -43,10 +43,8 @@ func TestScenarioPastAdmissionBlocked(t *testing.T) {
 		require.Equal(t, v1.PhaseFailed, fn.Status.Phase, "%s", tc.name)
 		ready, ok := fn.Status.Conditions.Get("Ready")
 		require.True(t, ok, "%s: Ready condition is set", tc.name)
-		require.Equal(t, "ShapeInvalid", ready.Reason, "%s", tc.name)
-		shape, ok := fn.Status.Conditions.Get("ShapeValid")
-		require.True(t, ok, "%s: ShapeValid condition is set", tc.name)
-		require.Contains(t, shape.Message, "spec.resources", "%s", tc.name)
+		require.Equal(t, tc.reason, ready.Reason, "%s", tc.name)
+		require.Contains(t, ready.Message, "spec.resources", "%s", tc.name)
 		require.Zero(t, h.rt.createAttempts(), "%s: no worker is created", tc.name)
 	}
 }
