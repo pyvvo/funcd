@@ -74,6 +74,8 @@ A region opens and closes with a comment: `// #region <name>` and `// #endregion
 - No manifest or handler code in a fence: only `sh`, `bash` or `console` blocks, and none of them holds a manifest,
   in YAML or in JSON.
 - Code from a language repo sits under its language's `### TypeScript` or `### Python` heading, wherever it appears.
+  The site shows each run of these sections as one group of language tabs, and a section runs to the next heading, so
+  the text that holds for both languages comes before them.
 - No hand-written table of methods, fields or keys: the Spec tabs hold them.
 - Links to a pyvvo repository point at its main branch, never at a tag: only `go.mod` names a language-module version.
   An Examples link points at a folder that a lane in `scripts/lanes.yaml` runs, which exists at the pinned version.

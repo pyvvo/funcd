@@ -6,12 +6,13 @@ first:
   holds: >-
     What the feature is for, in two or three sentences that link its Platform page, then the quick start. With a
     handler: a "### TypeScript" and a "### Python" subsection for each language that has a lane example, each with
-    its own lane example's manifest region and handler region. Without a handler: the smallest manifest or manifests,
-    and how to apply and check them.
+    its own lane example's manifest region and handler region, after the text both languages share. Without a
+    handler: the smallest manifest or manifests, and how to apply and check them.
 free:
   holds: >-
     The feature's own topics, under descriptive headings, between the first section and the optional ones: prose and
-    included regions, the code of each language under its own "### TypeScript" or "### Python" heading.
+    included regions, the code of each language under its own "### TypeScript" or "### Python" heading, after the
+    text both languages share.
 optional:
   - heading: Limits and quotas
     holds: The limits a reader meets, from doc tags and constants, with a link to the Spec tab.

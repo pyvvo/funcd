@@ -1,0 +1,5 @@
+{
+  "title": "Workloads",
+  "icon": "Boxes",
+  "pages": ["function", "app", "site", "workflow", "configuration"]
+}
