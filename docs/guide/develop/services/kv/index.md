@@ -196,8 +196,29 @@ directory, unless `kvstore.dataDir` names another folder. `storage.mode: memory`
 
 ## Access
 
-funcd checks every KV call with a built-in Cedar policy, which it ships as `builtin_kv.cedar`. funcd applies the
-policy in every namespace, beside any Policy that an operator writes, and a Policy cannot lift its `forbid` rule:
+A Function gets two grants from its own manifest, with no role to assign. funcd checks both with Cedar, as the
+[Security](../../../platform/security-and-networking/security.md) page explains:
+
+- **Read.** A binding works as a read grant. Each entry of `spec.bindings.kv` adds its table to the Function's
+  `kvBindings`, which allows the Cedar action `kv::read` on that table. A binding grants reading only, never writing.
+- **Write.** Ownership works as a write grant. The table's owner is in the table's `writers`, which allows the Cedar
+  action `kv::write`. A principal outside `writers` cannot write the table.
+
+Any other write needs a role. A RolesAssignment adds a principal, a Function or an Identity, to a table's `writers`.
+The smallest built-in role for it is `KV Data Writer`, which holds `kv::read` and `kv::write`. A grant's scope is one
+table, written as `<store>/<table>`, a store, written as `<store>`, or the whole namespace. The kv-claim example
+gives `pyclaim` write access to the table `claims` of the store `claims-kv`:
+
+::include[../../../../../api/types/v1alpha1/examples/kv/writer-role.yaml#rolesassignment]
+
+The built-in roles `Contributor` and `Owner` also hold `kv::write`, with read and write access to buckets, and a Role
+that an operator defines can hold it too. A read of a table that the principal does not bind needs a grant as well,
+such as the built-in role `KV Data Reader`, which holds `kv::read`. The
+[Security](../../security-and-networking/security/spec.md) Spec tab lists the fields of a RolesAssignment.
+
+funcd enforces these rules with a built-in Cedar policy, which it ships as `builtin_kv.cedar`. The policy is part of
+funcd and applies in every namespace, so nothing needs to be written or installed. A Policy that an operator writes
+applies beside it and cannot lift its `forbid` rule:
 
 ```cedar title="builtin_kv.cedar"
 @id("kv-read-binding")
@@ -212,26 +233,8 @@ forbid(principal, action == Action::"kv::write", resource)
   unless { resource has writers && resource.writers.contains(principal) };
 ```
 
-A Function gets two grants from its own manifest, with no role to assign:
-
-- **Read.** Each entry of `spec.bindings.kv` adds its table to the Function's `kvBindings`, so `kv-read-binding`
-  permits `kv::read` on that table. A binding grants reading only, never writing.
-- **Write.** The table's owner is in the table's `writers`, so `kv-write-base` permits its `kv::write` and
-  `kv-single-writer` does not forbid it. A principal outside `writers` cannot write: `kv-single-writer` forbids its
-  writes.
-
-Any other write takes a RolesAssignment, which adds a principal, a Function or an Identity, to a table's `writers`.
-The smallest built-in role for it is `KV Data Writer`, which holds `kv::read` and `kv::write`. A grant's scope is one
-table, written as `<store>/<table>`, a store, written as `<store>`, or the whole namespace. The kv-claim example
-gives `pyclaim` write access to the table `claims` of the store `claims-kv`:
-
-::include[../../../../../api/types/v1alpha1/examples/kv/writer-role.yaml#rolesassignment]
-
-The built-in roles `Contributor` and `Owner` also hold `kv::write`, with read and write access to buckets, and a Role
-that an operator
-defines can hold it too. A read of a table that the principal does not bind needs a grant as well, such as the
-built-in role `KV Data Reader`, which holds `kv::read`. The [Security](../../security-and-networking/security/spec.md)
-Spec tab lists the fields of a RolesAssignment.
+`kv-read-binding` is the read grant of a binding. `kv-write-base` allows every write, and `kv-single-writer` forbids a
+write by any principal outside the table's `writers`.
 
 A binding can name only a store that its own Function declares, by `name` or by `ref`. funcd rejects a binding to any
 other store. A call that the policy denies fails with the HTTP status 403, and its message names the rule, such as
