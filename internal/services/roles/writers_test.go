@@ -204,6 +204,29 @@ func TestSQLWriters(t *testing.T) {
 	require.ElementsMatch(t, []string{"data/migrate", "data/batch"}, got)
 }
 
+// ADR-0327: Secret Data Writer on the Secret or the namespace makes a Secret writer; Secret Data Reader, and a role
+// writing only KV, blob or SQL, even namespace-wide, does not.
+func TestSecretWriters(t *testing.T) {
+	st := store.New(memory.New())
+	grant := func(name, fn, role string, scope v1.ScopeRef) {
+		assign(t, st, name, v1.RolesAssignmentSpec{
+			Principal:   &v1.PrincipalRef{Kind: v1.PrincipalKindFunction, Name: v1.ObjectName(fn)},
+			Assignments: []v1.AssignmentEntry{{RoleRef: v1.RoleRef{Kind: v1.RoleRefKindBuiltin, Name: role}, Scope: &scope}},
+		})
+	}
+	grant("secret-writer", "refresher", "Secret Data Writer", v1.ScopeRef{Kind: v1.ScopeKindSecret, Name: "oauth"})
+	grant("ns-writer", "rotator", "Secret Data Writer", v1.ScopeRef{Kind: v1.ScopeKindNamespace})
+	grant("reader", "api", "Secret Data Reader", v1.ScopeRef{Kind: v1.ScopeKindNamespace})
+	grant("contributor", "kv-writer", "Contributor", v1.ScopeRef{Kind: v1.ScopeKindNamespace})
+	grant("sql-writer", "migrate", "SQL Data Writer", v1.ScopeRef{Kind: v1.ScopeKindNamespace})
+	grant("other-secret", "audit", "Secret Data Writer", v1.ScopeRef{Kind: v1.ScopeKindSecret, Name: "audit-keys"})
+	var got []string
+	for _, uid := range NewLister(st).SecretWriters(context.Background(), "data", "oauth") {
+		got = append(got, string(uid.ID))
+	}
+	require.ElementsMatch(t, []string{"data/refresher", "data/rotator"}, got)
+}
+
 // ADR-0233: SQL Data Writer, even namespace-wide, makes no KV or blob writer.
 func TestSQLWriterMakesNoKVOrBlobWriter(t *testing.T) {
 	st := store.New(memory.New())

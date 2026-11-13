@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -112,6 +113,62 @@ func TestScenarioSecretDenied(t *testing.T) {
 		rec := do(t, h, http.MethodGet, path, "")
 		require.Equal(t, http.StatusForbidden, rec.Code, "%s: %s", path, rec.Body.String())
 	}
+	rec := do(t, h, http.MethodPut, "/secret/api-keys/STRIPE_KEY", `{"value":"x"}`)
+	require.Equal(t, http.StatusForbidden, rec.Code, "a denied secret::write: %s", rec.Body.String())
+	rec = do(t, h, http.MethodDelete, "/secret/api-keys/STRIPE_KEY", "")
+	require.Equal(t, http.StatusForbidden, rec.Code, "a denied secret::write: %s", rec.Body.String())
+}
+
+// PUT and DELETE /secret/{binding}/{key} write one key of a Secret the caller binds, and the next read shows it; the
+// delete of a missing key is 204, a Secret the caller does not bind is 403 (ADR-0327 Decision 4).
+func TestSecretWriteRoutes(t *testing.T) {
+	t.Parallel()
+	h := secretHandler(t, true)
+	rec := do(t, h, http.MethodPut, "/secret/api-keys/TOKEN", `{"value":"t2"}`)
+	require.Equal(t, http.StatusNoContent, rec.Code, rec.Body.String())
+	require.JSONEq(t, `{"value":"t2"}`, do(t, h, http.MethodGet, "/secret/TOKEN", "").Body.String())
+
+	for range 2 {
+		rec = do(t, h, http.MethodDelete, "/secret/api-keys/TOKEN", "")
+		require.Equal(t, http.StatusNoContent, rec.Code, rec.Body.String())
+	}
+	require.Equal(t, http.StatusNotFound, do(t, h, http.MethodGet, "/secret/TOKEN", "").Code)
+
+	rec = do(t, h, http.MethodPut, "/secret/other/TOKEN", `{"value":"t2"}`)
+	require.Equal(t, http.StatusForbidden, rec.Code, "a Secret the caller does not bind: %s", rec.Body.String())
+}
+
+// scenario: secret-write-checks-the-value — a key that is not an environment-variable name, a value with a NUL or a
+// body that is not {"value": …} is 400 and writes nothing, a body over 1 MiB is 413, and a bound Secret that does not
+// exist is 404 (ADR-0327 Decision 4).
+func TestScenarioSecretWriteChecksTheValue(t *testing.T) {
+	t.Parallel()
+	st := secretStore(t, "fn")
+	obj, _ := v1.NewObject(v1.KindFunction)
+	gone := obj.(*v1.Function)
+	gone.Name, gone.Namespace, gone.ResourceGroup = "gone", "team-a", "rg1"
+	gone.Spec.Runtime, gone.Spec.Handler, gone.Spec.Image = "nodejs22", "handle", "file:///unused.mjs"
+	gone.Spec.Bindings.Secret = []v1.ObjectName{"missing"}
+	_, err := st.Create(context.Background(), gone)
+	require.NoError(t, err)
+	f := secretFacade(t, st, true)
+	h := local.NewHandler(local.Ref{Namespace: "team-a", Function: "fn"}, nil, nil, nil, nil, nil, local.WithFacets(local.SecretFacet(f)))
+
+	for _, tc := range []struct{ path, body string }{
+		{"/secret/api-keys/bad-key", `{"value":"v"}`},
+		{"/secret/api-keys/TOKEN", `{"value":"a\u0000b"}`},
+		{"/secret/api-keys/TOKEN", `not json`},
+	} {
+		rec := do(t, h, http.MethodPut, tc.path, tc.body)
+		require.Equal(t, http.StatusBadRequest, rec.Code, "%s %s: %s", tc.path, tc.body, rec.Body.String())
+	}
+	big := `{"value":"` + strings.Repeat("v", 1<<20) + `"}`
+	require.Equal(t, http.StatusRequestEntityTooLarge, do(t, h, http.MethodPut, "/secret/api-keys/TOKEN", big).Code)
+	require.JSONEq(t, `{"keys":["MODE","STRIPE_KEY"]}`, do(t, h, http.MethodGet, "/secret", "").Body.String(), "nothing written")
+
+	missing := local.NewHandler(local.Ref{Namespace: "team-a", Function: "gone"}, nil, nil, nil, nil, nil, local.WithFacets(local.SecretFacet(f)))
+	rec := do(t, missing, http.MethodPut, "/secret/missing/TOKEN", `{"value":"v"}`)
+	require.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
 }
 
 // scenario: secret-pooled-member — on a pool's local API each member reads the pool's Secrets as itself, a member

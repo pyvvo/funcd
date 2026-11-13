@@ -143,6 +143,7 @@ New words: Placed, Stopping, Ended.
 | `serverHeaderTimeout` | 5s | `internal/workernode/local/local.go` |
 | `serverIdleTimeout` | 30s | `internal/workernode/local/local.go` |
 | `defaultTimeout` | 30s | `internal/workernode/local/resolver.go` |
+| `maxSecretBytes` | 1MiB | `internal/workernode/local/secret.go` |
 | `MaxSQLStatements` | 500 | `internal/workernode/local/sql.go` |
 | `maxSQLBytes` | 1MiB | `internal/workernode/local/sql.go` |
 

@@ -84,6 +84,24 @@ func (l *Lister) SQLWriters(ctx context.Context, ns v1.NamespaceName, database s
 	})
 }
 
+// SecretWriters returns the principals whose grant covering the Secret holds secret::write (ADR-0327): a role writing
+// only KV, blob or SQL, such as Contributor, makes no Secret writer.
+func (l *Lister) SecretWriters(ctx context.Context, ns v1.NamespaceName, secret string) []cedartypes.EntityUID {
+	return l.writers(ctx, ns, func(g cedar.WriterGrant) bool {
+		if !slices.Contains(g.Writes, string(auth.ActionSecretWrite)) {
+			return false
+		}
+		switch sc := g.Scope; sc.Kind {
+		case v1.ScopeKindNamespace:
+			return true
+		case v1.ScopeKindSecret:
+			return sc.Name == secret
+		default:
+			return false
+		}
+	})
+}
+
 // writers lists the namespace's RolesAssignments and collects the writer principals whose scope covers.
 func (l *Lister) writers(ctx context.Context, ns v1.NamespaceName, covers func(cedar.WriterGrant) bool) []cedartypes.EntityUID {
 	lst, err := l.store.List(ctx, v1.KindRolesAssignment.GVK(), store.ListOptions{Namespace: ns})

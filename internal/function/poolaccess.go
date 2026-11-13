@@ -19,8 +19,8 @@ import (
 )
 
 // accessIndex is what a namespace grants its Functions outside their specs, built once per pass: per Function, the
-// KV tables ("kv/<store>/<table>"), Bucket prefixes ("blob/<bucket>/<prefix>") and SQL databases ("sql/<database>") it
-// owns, and the grants it holds
+// KV tables ("kv/<store>/<table>"), Bucket prefixes ("blob/<bucket>/<prefix>"), SQL databases ("sql/<database>") and
+// Secrets ("secret/<name>", ADR-0327) it owns, and the grants it holds
 // through RolesAssignments, EgressPolicies and Policies, each named by what it grants.
 type accessIndex struct{ owned, grants map[v1.ObjectName][]string }
 
@@ -32,8 +32,8 @@ func (r *Reconciler) pooled(fn *v1.Function) bool {
 	return fn.Spec.Pooling.Worker != "" && r.poolHostFor(fn.Spec.Runtime) != nil && len(fn.Spec.Volumes) == 0
 }
 
-// accessIn lists the namespace's KVStores, Buckets, SQLDatabases, RolesAssignments, EgressPolicies and Policies once each into an
-// accessIndex. An absent referent adds nothing; a List error fails the pass.
+// accessIn lists the namespace's KVStores, Buckets, SQLDatabases, Secrets, RolesAssignments, EgressPolicies and Policies once
+// each into an accessIndex. An absent referent adds nothing; a List error fails the pass.
 func (r *Reconciler) accessIn(ctx context.Context, ns v1.NamespaceName) (accessIndex, error) {
 	const op = "function.accessIn"
 	idx := accessIndex{owned: map[v1.ObjectName][]string{}, grants: map[v1.ObjectName][]string{}}
@@ -77,6 +77,15 @@ func (r *Reconciler) accessIn(ctx context.Context, ns v1.NamespaceName) (accessI
 	for _, o := range dbs {
 		if db, ok := o.(*v1.SQLDatabase); ok && db.Spec.Owner != "" {
 			idx.owned[db.Spec.Owner] = append(idx.owned[db.Spec.Owner], "sql/"+string(db.Name))
+		}
+	}
+	secrets, err := list(v1.KindSecret)
+	if err != nil {
+		return accessIndex{}, err
+	}
+	for _, o := range secrets {
+		if sec, ok := o.(*v1.Secret); ok && sec.Spec.Owner != "" {
+			idx.owned[sec.Spec.Owner] = append(idx.owned[sec.Spec.Owner], "secret/"+string(sec.Name))
 		}
 	}
 	ras, err := list(v1.KindRolesAssignment)
@@ -167,7 +176,8 @@ func (r *Reconciler) poolKeyFor(fn *v1.Function, idx accessIndex) (pooling.PoolK
 	for _, o := range idx.owned[fn.Name] {
 		if strings.HasPrefix(o, "blob/") || slices.ContainsFunc(fn.Spec.Bindings.KV, func(b v1.FunctionKV) bool {
 			return o == "kv/"+string(b.Store)+"/"+b.Table
-		}) || slices.ContainsFunc(fn.Spec.Bindings.SQL, func(b v1.FunctionSQL) bool { return o == "sql/"+string(b.Database) }) {
+		}) || slices.ContainsFunc(fn.Spec.Bindings.SQL, func(b v1.FunctionSQL) bool { return o == "sql/"+string(b.Database) }) ||
+			slices.ContainsFunc(fn.Spec.Bindings.Secret, func(s v1.ObjectName) bool { return o == "secret/"+string(s) }) {
 			owned = append(owned, o)
 		}
 	}
@@ -179,8 +189,14 @@ func (r *Reconciler) poolKeyFor(fn *v1.Function, idx accessIndex) (pooling.PoolK
 	return pooling.KeyOf(fn, owned, slices.Compact(grants))
 }
 
-// MapAccess maps a KVStore, Bucket, SQLDatabase, RolesAssignment, EgressPolicy or Policy change to every Function of its namespace
-// that declares a pool worker, Idle included: the change can move each to another pool.
+// AccessKinds are the kinds accessIn lists: a change to one can move a pooled Function to another pool, so the platform
+// maps each kind's changes through MapAccess (ADR-0158 Decision 5; a Secret names its owner, ADR-0327 Decision 6).
+func AccessKinds() []v1.Kind {
+	return []v1.Kind{v1.KindKVStore, v1.KindBucket, v1.KindSQLDatabase, v1.KindSecret, v1.KindRolesAssignment, v1.KindEgressPolicy, v1.KindPolicy}
+}
+
+// MapAccess maps a change to one of AccessKinds to every Function of its namespace that declares a pool worker, Idle
+// included: the change can move each to another pool.
 func (r *Reconciler) MapAccess(ctx context.Context, obj v1.Object) []controller.Request {
 	ns := obj.GetNamespace()
 	res, err := r.store.List(ctx, v1.KindFunction.GVK(), store.ListOptions{Namespace: ns})

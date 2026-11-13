@@ -17,4 +17,5 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `data` | map of string to string | The Secret's values by key, each in base64. Each key is an environment-variable name: a letter or an underscore, then letters, digits and underscores; a key that starts with FUNCD_ never reaches a workload. Each value must be UTF-8 text with no NUL byte: a Function or a Lake that binds a Secret holding another value does not start. |
+| `owner` | string, a DNS-1123 label | The one Function that may write the Secret's keys through ctx.secret, in its namespace, besides the writers that a RolesAssignment names, such as the Secret Data Writer role. The Function writes only while it binds the Secret. With no owner, only those writers can write it. An apply of the Secret replaces its data, keys a Function wrote included. |
 | `type` | string, one of `Opaque` | funcd does not read it. |
