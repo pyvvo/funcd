@@ -132,12 +132,10 @@ func (reg *Registry) KnownAction(a auth.Action) bool {
 }
 
 // Actions lists the registered capabilities' actions, sorted: the vocabulary that KnownAction accepts.
-func (reg *Registry) Actions() []string {
-	var out []string
+func (reg *Registry) Actions() []auth.Action {
+	var out []auth.Action
 	for _, c := range reg.caps {
-		for _, a := range c.Actions {
-			out = append(out, string(a))
-		}
+		out = append(out, c.Actions...)
 	}
 	slices.Sort(out)
 	return out
@@ -145,15 +143,13 @@ func (reg *Registry) Actions() []string {
 
 // EntityTypes lists the registered capabilities' entity types, sorted and each once: the vocabulary that
 // KnownEntityType accepts.
-func (reg *Registry) EntityTypes() []string {
-	var out []string
+func (reg *Registry) EntityTypes() []cedartypes.EntityType {
+	var out []cedartypes.EntityType
 	for _, c := range reg.caps {
 		if c.EmitsEntityType != "" {
-			out = append(out, string(c.EmitsEntityType))
+			out = append(out, c.EmitsEntityType)
 		}
-		for _, et := range c.SupportingEntityTypes {
-			out = append(out, string(et))
-		}
+		out = append(out, c.SupportingEntityTypes...)
 	}
 	slices.Sort(out)
 	return slices.Compact(out)

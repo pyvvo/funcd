@@ -48,9 +48,8 @@ const (
 	entityTypeSecret = "Secret"
 )
 
-// defaultRegistry is the assembled capability registry (ADR-0116): the three migrated capabilities
-// (kv, invoke, s3) + the two default principal sources (Function, Lake; each resolves only its
-// own principal type, ADR-0175). The
+// defaultRegistry is the assembled capability registry (ADR-0116): every capability below + the two default
+// principal sources (Function, Lake; each resolves only its own principal type, ADR-0175). The
 // schema vocabulary (KnownAction/KnownEntityType), the built-in PolicySet (Builtins), and the default
 // EntityProvider are all assembled from it — replacing the hand-listed curatedActions/curatedEntityTypes
 // maps. A new capability registers here (or in a consumer's own Registry) with no shared-code edit. The
@@ -149,6 +148,15 @@ func ValidateCedarInNamespace(ns v1.NamespaceName, text string) error {
 	return nil
 }
 
+// listed joins a vocabulary for a refusal message.
+func listed[T ~string](items []T) string {
+	out := make([]string, len(items))
+	for i, it := range items {
+		out[i] = string(it)
+	}
+	return strings.Join(out, ", ")
+}
+
 func validateCedar(text string) ([]policyScope, error) {
 	const op = "cedar.ValidateCedar"
 	list, err := cedar.NewPolicyListFromBytes("policy", []byte(text))
@@ -176,12 +184,12 @@ func validateCedar(text string) ([]policyScope, error) {
 		}
 		if !KnownAction(sc.Action.Entity.ID) {
 			return nil, fault.Invalidf(op, "cedar policy references unknown action %q (curated: %s)", sc.Action.Entity.ID,
-				strings.Join(defaultRegistry.Actions(), ", "))
+				listed(defaultRegistry.Actions()))
 		}
 		for _, e := range append(sc.Principal.named(), sc.Resource.named()...) {
 			if !KnownEntityType(e.Type) {
 				return nil, fault.Invalidf(op, "cedar policy references unknown entity type %q (curated: %s)", e.Type,
-					strings.Join(defaultRegistry.EntityTypes(), ", "))
+					listed(defaultRegistry.EntityTypes()))
 			}
 		}
 		scopes = append(scopes, sc)

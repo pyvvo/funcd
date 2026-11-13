@@ -1,6 +1,8 @@
 package cedar_test
 
 import (
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -79,19 +81,28 @@ func TestUnknownActionAndTypeRefusalsListTheVocabulary(t *testing.T) {
 	require.ErrorContains(t, actionErr, `unknown action "s3::delete"`)
 	typeErr := cedar.ValidateCedar(`permit(principal, action == Action::"kv::read", resource in Foo::"default/x");`)
 	require.ErrorContains(t, typeErr, `unknown entity type "Foo"`)
+	actions, types := listedIn(t, actionErr), listedIn(t, typeErr)
 	for _, c := range []cedar.Capability{cedar.KVCapability(), cedar.InvokeCapability(), cedar.S3Capability(),
 		cedar.EgressCapability(), cedar.LakeCapability(), cedar.SQLCapability(), cedar.SecretCapability()} {
 		for _, a := range c.Actions {
 			require.True(t, cedar.KnownAction(string(a)), "%s is in the vocabulary", a)
-			require.ErrorContains(t, actionErr, string(a), "the action refusal lists %s", a)
+			require.Contains(t, actions, string(a), "the action refusal lists %s", a)
 		}
-		types := []string{string(c.EmitsEntityType)}
+		want := []string{string(c.EmitsEntityType)}
 		for _, et := range c.SupportingEntityTypes {
-			types = append(types, string(et))
+			want = append(want, string(et))
 		}
-		for _, et := range types {
+		for _, et := range want {
 			require.True(t, cedar.KnownEntityType(et), "%s is in the vocabulary", et)
-			require.ErrorContains(t, typeErr, et, "the entity type refusal lists %s", et)
+			require.Contains(t, types, et, "the entity type refusal lists %s", et)
 		}
 	}
+}
+
+// listedIn returns the items of the "(curated: a, b)" list that ends a refusal.
+func listedIn(t *testing.T, err error) []string {
+	t.Helper()
+	m := regexp.MustCompile(`\(curated: ([^)]*)\)$`).FindStringSubmatch(err.Error())
+	require.Len(t, m, 2, "the refusal ends with its list: %v", err)
+	return strings.Split(m[1], ", ")
 }
