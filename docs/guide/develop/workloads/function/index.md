@@ -5,15 +5,13 @@ description: Run a Function, call it, read its status and its logs, call one Fun
 
 ## Usage
 
-A Function is code that funcd runs when the Function is called. The code exports a **handler**. For each call, a
-[worker](../../../platform/workloads/index.md#runtime) of the Function, a process that runs its code, calls the
-handler with two arguments: a context, through which the handler logs and reaches other Functions and its stores,
-and an **event**, which holds the call's input in `event.data` (`event["data"]` in Python). funcd puts the JSON body
-of the call in `data`, except a JSON object with a top-level `data` or `specversion` key, which funcd takes as the
-event itself. The handler's return value becomes the response. The
-[Platform page](../../../platform/workloads/function.md) explains who calls a Function and what it binds; this page
-shows how to run a Function, call it and read its state. A Function can also take HTTP requests instead of events,
-as [Serve HTTP requests](#serve-http-requests) explains.
+A Function is code that funcd runs when the Function is called. For each call, a
+[worker](../../../platform/workloads/index.md#runtime) of the Function, a process that runs its code, calls the code's
+**handler** with a context, through which the handler logs and reaches other Functions and its stores, and an
+**event**, which holds the call's JSON body in `event.data` (`event["data"]` in Python); the handler's return value
+becomes the response. The [Platform page](../../../platform/workloads/function.md) explains who calls a Function and
+what it binds; this page shows how to run a Function that takes events, call it and read its state, and
+[Serve HTTP requests](#serve-http-requests) shows a Function that takes HTTP requests instead.
 
 The first example, log-burst, writes a burst of log lines at each call: its handler logs through `console` in
 TypeScript or through the `logging` module in Python, and writes one more line to standard output and one to standard
@@ -319,7 +317,8 @@ lets the Function call its target through `ctx.invoke` or `ctx.fetch`. These two
 the caller's own links: funcd looks the alias up in those links before it asks Cedar, the policy engine that decides
 what a Function may do, so a call whose alias no link declares fails with the HTTP status 403, whatever role the
 Function has. The error that `ctx.invoke` throws then
-holds a message such as `caller default/front declares no link "nope" (no link is no grant)`. For each call over a
+holds the response's JSON body, with a message such as `caller default/front declares no link \"nope\" (no link is no
+grant)`. For each call over a
 link, funcd then asks Cedar whether the caller may perform the action `link::invoke` on the target. The
 [Security](../../../platform/security-and-networking/security.md) page explains where funcd asks Cedar.
 
@@ -350,7 +349,8 @@ an address answers and whether the caller must authenticate, as the
   one second after the deadline. A handler that blocks its worker, such as a TypeScript loop that never awaits or a
   Python `time.sleep`, makes the worker fail its liveness check, the periodic check by which funcd finds a worker that
   no longer answers; in Python, from 11 seconds after the deadline. funcd then replaces the worker once the check has
-  failed for `runtime.livenessTimeout`, 30 seconds by default. A handler reads the time left before its deadline with
+  failed for `runtime.livenessTimeout`, 30 seconds by default. A blocked member of a TypeScript pool is ended by the
+  pool's host instead. A handler reads the time left before its deadline with
   [`ctx.remainingMs`](spec.md#handler-api), `remaining_ms` in Python, which returns `null` (`None`) when the call has
   no deadline.
 - A call over a link waits for the target's result until the link's `timeout`, 30 seconds by default and at most 5
@@ -396,7 +396,8 @@ Three conditions explain the phase:
 - `RevisionReady` says whether the revision of the latest spec serves. While that revision starts beside the serving
   one, it is `False` with the reason `Progressing`. [Changes and deletion](#changes-and-deletion) explains revisions.
 - `ShapeValid` says whether a worker of the latest spec has loaded the handler. It is `False` with the reason
-  `ShapeInvalid` when the code has no export of the name that `handler` gives, or when the code fails to load.
+  `ShapeInvalid` when the code has no export of the name that `handler` gives, when the code fails to load, or when
+  no worker became ready within `runtime.bootTimeout`, 1 minute by default.
 
 A Function whose `spec.ingress` sets a host or a path also has the condition `IngressReady`, which reports its own
 Route. `status.replicas` counts the ready workers, `status.servingRevision` names the revision whose workers take the
@@ -436,11 +437,14 @@ funcdctl: sdk: admission.link-deletion-protection: function "greeter" is linked 
 
 A caller of a Function meets these HTTP statuses, each with a message in the body:
 
-- **400** when the body is not JSON: the message is `invalid CloudEvent JSON`.
+- **400** when the body of a call to a Function that takes events is not JSON: the message is
+  `invalid CloudEvent JSON`. A Function that takes HTTP requests gets the body as it is.
 - **401** or **403** when the Function's address asks for authentication, through
-  [`spec.ingress.auth`](spec.md#functionspecingressauth) or the Namespace's defaults: 401 for a call without a valid
-  bearer token or `X-Api-Key` header, and 403 for a caller whose token does not allow it to get the namespace's
-  Functions.
+  [`spec.ingress.auth`](spec.md#functionspecingressauth) or the Namespace's defaults. On a server whose
+  `server.auth.edge` is `true`, a call without a valid bearer token or `X-Api-Key` header gets 401, and a caller whose
+  token does not allow it to get the namespace's Functions gets 403. With `server.auth.edge` at its default, `false`,
+  the server has no authenticator, and every call to such an address gets 401 with the message
+  `authentication required but no authenticator is configured`.
 - **404** when no Function answers at the address, such as `function default/nope is not exposed by name` for a
   Function that does not exist.
 - **413** when the body holds more than 1 MiB.
@@ -482,8 +486,9 @@ the call.
 - It runs each worker as a process of the local user, with no isolation and no limit on its CPU or its memory, and it
   prints each log line in its terminal.
 - It runs the namespace `default` only, and stops on a resource of another namespace.
-- Its edge has no authenticator, so it answers 401 to every call to a Function whose address asks for
-  authentication, with the message `authentication required but no authenticator is configured`.
+- Its edge has no authenticator, as on a server whose `server.auth.edge` is `false`, so it answers 401 to every call
+  to a Function whose address asks for authentication, with the message
+  `authentication required but no authenticator is configured`.
 
 `funcdctl dev` keeps its state in memory, where it is lost when `funcdctl dev` stops. With the `--persist` flag, it
 keeps its state between runs in `.funcd-dev`, a folder that it creates in the current folder, or in the folder that
