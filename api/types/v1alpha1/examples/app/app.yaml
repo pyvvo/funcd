@@ -1,0 +1,32 @@
+# region app
+apiVersion: funcd.io/v1alpha1
+kind: App
+metadata:
+  name: guestbook
+  namespace: default
+  resourceGroup: rg1
+spec:
+  version: 1.0.0
+  kv:
+    - name: guestbook-entries
+      deletion: retain
+      tables:
+        - name: entries
+          owner: guestbook-api
+  functions:
+    - name: guestbook-api
+      runtime: nodejs22
+      handler: handle
+      image: registry.example.com/guestbook-api:1.0.0
+      bindings:
+        kv:
+          - alias: entries
+            store: guestbook-entries
+            table: entries
+  routes:
+    - name: guestbook-api
+      rules:
+        - path: /guestbook
+          backend:
+            function: guestbook-api
+# endregion app
