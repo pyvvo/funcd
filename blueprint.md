@@ -117,8 +117,9 @@ In order to make this platform self-contained, we will need to implement the fol
       environment variables, read through `context.config` and `context.lake` (ADR-0245, which adds the
       `FUNCD_CONFIG_KEYS` key list); its bound **secrets** never enter the environment: `context.secret` reads each
       one from funcd (ADR-0249), and Cedar decides each read as the Function, `secret::read` per bound Secret, in its
-      readiness check too (ADR-0321); it writes a key of a bound Secret through `context.secret.put` and `delete` when
-      it is the Secret's owner or a writer-role grant names it, `secret::write` (ADR-0327). **Writes require
+      readiness check too (ADR-0321); it writes a key of a bound Secret through `context.secret.put` and `del`
+      (Python `delete`, ADR-0328) when it is the Secret's owner or a writer-role grant names it, `secret::write`
+      (ADR-0327). **Writes require
       `caller == table.owner`**; **reads** are
       coarse within the namespace (the V1.1 trust boundary) — **fine-grained per-function authz is delegated to
       the PDP/Cedar IAM ADR**, where authorization belongs (KV does not hand-roll RBAC; Cedar policies persist as
