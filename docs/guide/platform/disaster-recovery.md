@@ -41,8 +41,10 @@ after its `ttl`, 720 h by default. funcd does not retry a failed Backup: the nex
 A Restore loads members of a Succeeded Backup. Each member goes into an empty store that `as` names, or back into its
 own store (`inPlace`). An in-place Restore needs `update` on the Namespace, so an admin applies it, and only one runs
 at a time in each namespace. It first takes a Backup named `<restore>-before`, then reads the whole copy and checks
-every member. Only then does it hold the namespace: its Functions refuse calls, its Sites keep serving their files,
-and its engines and workers stop. It loads each member in order, and it lifts the hold when every member is loaded.
+every member. Only then does it hold the namespace: its Functions refuse calls and its Sites keep serving their files.
+Until its loads end, it stops the workers of each Function whose volume it loads and the engine of each Lake that it
+loads in place; other workers and engines keep running. It loads each member in order, and it lifts the hold when
+every member is loaded.
 When a load fails, the hold stays until `funcdctl hold release --namespace`.
 
 ## After a host loss
