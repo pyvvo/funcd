@@ -130,7 +130,7 @@ prefix or a role, as [Access](#access) explains.
 ## Share a Bucket between Functions
 
 The Bucket of the first example is a resource of its own, which the Function declares by `ref`. Several Functions can
-share such a Bucket. Set the `owner` of each prefix to the Function that writes the prefix:
+share such a Bucket. Set the `owner` of each prefix to a Function, which can then write the prefix without a role:
 
 ::include[../../../../../api/types/v1alpha1/examples/bucket/bucket.yaml#bucket]
 
@@ -142,9 +142,9 @@ both Functions, is
 
 ::include[../../../../../api/types/v1alpha1/examples/bucket/bucket.yaml#binding]
 
-Every Function that binds a prefix can read it. To write a prefix that it does not own, a Function needs the
-permission that [Access](#access) describes. When a prefix of a Bucket applied on its own sets no `owner`, only that
-permission lets a principal write the prefix.
+Every Function that binds a prefix can read it. To write a prefix that it does not own, a Function needs a role, as
+[Access](#access) describes. When a prefix of a Bucket applied on its own sets no `owner`, only a role lets a principal
+write the prefix.
 
 A Function can also declare a Bucket by `name` under `spec.buckets`. funcd then creates the Bucket, and each of its
 prefixes that sets no `owner` gets that Function as its owner. [Changes and deletion](#changes-and-deletion) explains
@@ -159,7 +159,8 @@ A Function needs no role assignment to:
 - **Write the prefixes it owns.** The owner of a prefix can write it. No other principal can write the prefix unless
   a role allows it.
 
-Both hold through `ctx.blob` and through the S3 gateway. Any other access needs a role. A RolesAssignment gives a
+Both hold through `ctx.blob` and through the S3 gateway. Any other write needs a role. A read of a prefix that the
+principal does not bind needs a role, or a permit in a Policy that an operator writes. A RolesAssignment gives a
 principal, a Function or an Identity, a role on one prefix or on the whole namespace. An
 [Identity](../../security-and-networking/security/spec.md#identityspec) stands for a client outside funcd, which
 reaches the Buckets through the S3 gateway with the key pair that funcd writes into the Identity's Secret.
@@ -172,17 +173,17 @@ write access to the prefix `shared` of the Bucket `lakehouse`:
 
 ::include[../../../../../api/types/v1alpha1/examples/bucket/writer-role.yaml#rolesassignment]
 
-A principal that reads a prefix without binding it needs a role as well, such as `Blob Data Reader`, which allows
-reading objects. A Function makes such a read through the S3 gateway, since `ctx.blob` reaches only the prefixes that
-the Function binds. The built-in roles `Reader`, `Contributor` and `Owner` also cover Bucket data: `Reader` allows
-reading objects and KV keys, and `Contributor` and `Owner` allow reading and writing both. A Role that an operator
-defines can grant `s3::read` or `s3::write` too. The Security reference [lists the built-in
+For a read without a binding, the smallest built-in role is `Blob Data Reader`, which allows reading objects. A
+Function makes such a read through the S3 gateway, since `ctx.blob` reaches only the prefixes that the Function binds.
+The built-in roles `Reader`, `Contributor` and `Owner` also cover Bucket data: `Reader` allows reading objects and KV
+keys, and `Contributor` and `Owner` allow reading and writing both. A Role that an operator defines can grant
+`s3::read` or `s3::write` too. The Security reference [lists the built-in
 roles](../../security-and-networking/security/spec.md#rolesassignmentspecassignmentsroleref) and [explains how
 assignments pair each role with a scope](../../security-and-networking/security/spec.md#rolesassignmentspecassignments).
 
 funcd supplies these rules as a built-in policy, which it applies in every namespace, so nothing needs to be written
-or installed. A Policy that an operator writes applies beside it, and cannot allow a write that the built-in policy
-forbids. In Cedar, the built-in policy reads:
+or installed. A Policy that an operator writes applies beside it: it can permit a read, but it cannot allow a write
+that the built-in policy forbids. In Cedar, the built-in policy reads:
 
 ```cedar title="Built-in Bucket policy"
 @id("s3-read-binding")
@@ -229,14 +230,19 @@ lost when funcd stops, and funcd then ignores the `blob` keys.
 
 ## Changes and deletion
 
-funcd refuses to delete a Bucket, with the HTTP status 409, while a binding of a Function names the Bucket, or while
-one of its prefixes holds objects. It refuses in the same way an update that removes a prefix that a binding names or
-that holds objects. To delete a Bucket, remove its bindings and delete its objects first.
+A request to delete a Bucket and the deletion of the Function that declares it follow different rules:
 
-A Bucket that a Function declares by `name` stays, with its objects, when the Function is deleted. A new Function of
-the same name does not own that Bucket: if it declares the Bucket by `name`, it waits in `Pending` with the reason
-`StoreNotOwned`, so it declares the Bucket by `ref` instead. With `deletion: delete` on the entry under
-`spec.buckets`, funcd deletes the Bucket and its objects after the Function is deleted.
+- **A request to delete the Bucket itself.** funcd refuses it, with the HTTP status 409, while a binding of a Function
+  names the Bucket, or while one of its prefixes holds objects. funcd refuses in the same way an update of the Bucket
+  that removes a prefix that a binding names or that holds objects. To delete such a Bucket, remove its bindings and
+  delete its objects first.
+- **The deletion of the Function that declares the Bucket by `name`.** The `deletion` setting of the Function's entry
+  under `spec.buckets` decides. With `retain`, the default, the Bucket stays with its objects. With `delete`, funcd
+  deletes the Bucket and its objects after the Function is deleted: unlike a request to delete the Bucket, this
+  deletion goes ahead while the prefixes hold objects.
+
+A new Function of the same name does not own a Bucket that stayed: if it declares the Bucket by `name`, it waits in
+`Pending` with the reason `StoreNotOwned`, so it declares the Bucket by `ref` instead.
 
 ## Run it locally
 
@@ -254,7 +260,8 @@ names.
   session started with the same `--s3port`.
 - It gives each Function of the folder a role that allows writing every prefix of the namespace's Buckets, which a
   platform does not give. A write that succeeds locally can therefore fail with the HTTP status 403 once deployed, as
-  the first example's `denied` shows. Reading still needs a binding or a role.
+  the first example's `denied` shows. That role allows no read: reading still needs a binding, a role or a Policy
+  permit.
 
 The [reference of `funcdctl dev`](../../tools/funcdctl/spec.md#funcdctl-dev) lists its flags.
 
