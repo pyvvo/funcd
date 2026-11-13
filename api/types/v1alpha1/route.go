@@ -38,7 +38,7 @@ type RouteSpec struct {
 
 // RouteAuth is the F77 auth stance on a Route.
 type RouteAuth struct {
-	Mode AuthMode `json:"mode,omitempty"`
+	Mode AuthMode `json:"mode,omitempty" doc:"How the edge checks callers. authenticated requires a bearer token, or an X-Api-Key header, of an identity that RBAC lets get Functions in the namespace: 401 without a valid one, 403 when it may not. open lets anonymous callers in. Empty takes the enclosing stance, if any, else the namespace's spec.edgeDefaults.auth.mode, else open."`
 }
 
 // AuthMode selects whether the edge authenticates the caller for a target (ADR-0113, F77).

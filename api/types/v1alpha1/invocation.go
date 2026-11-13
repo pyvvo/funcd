@@ -12,9 +12,9 @@ type Invocation struct {
 // Behavioral fields (retention policy) owned by F16.
 type InvocationStatus struct {
 	Status    `json:",inline"`
-	StartTime Timestamp `json:"startTime,omitzero"`
-	EndTime   Timestamp `json:"endTime,omitzero"`
-	Error     string    `json:"error,omitempty"`
+	StartTime Timestamp `json:"startTime,omitzero" doc:"When the call started; for a Sensor's action, its first attempt."`
+	EndTime   Timestamp `json:"endTime,omitzero" doc:"When the call ended, after its last attempt."`
+	Error     string    `json:"error,omitempty" doc:"Why the call failed, on a Failed record; empty when it succeeded."`
 }
 
 // GroupVersionKind returns the constant GVK for Invocation.

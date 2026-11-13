@@ -81,18 +81,18 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `auth` | object, [`Site.spec.ingress.auth`](#sitespecingressauth) |  |
-| `baseHref` | boolean | Serve a copy of the bundle's index whose <base href> is the Site's mount, so a bundle built with relative URLs runs at any path, deep links included. |
-| `enabled` | boolean |  |
-| `host` | string |  |
-| `path` | string |  |
+| `auth` | object, [`Site.spec.ingress.auth`](#sitespecingressauth) | How the edge checks callers at the resource's own address; unset, the namespace's spec.edgeDefaults.auth decides, else open. A Lake refuses it, since the Lake gateway checks each caller. |
+| `baseHref` | boolean | Serve a copy of the bundle's index whose &lt;base href&gt; is the Site's mount, so a bundle built with relative URLs runs at any path, deep links included. |
+| `enabled` | boolean | Turns the resource's own address on or off. Unset, it is on unless the namespace's spec.defaultExposure is explicit; a Lake's address is on only when this is true. |
+| `host` | string | The exact host of the resource's own address. Empty is the namespace's host, &lt;namespace&gt;.&lt;server.baseDomain&gt;, or, in the default namespace, any host that no other namespace reserves. |
+| `path` | string | The edge path of the resource's own address, which begins with / and does not end with / unless it is /. Empty is / when host is set, else /function/&lt;name&gt;, /site/&lt;name&gt; or /lake/&lt;name&gt; by kind. |
 | `rules` | array of [`Site.spec.ingress.rules[]`](#sitespecingressrules) |  |
 
 ### `Site.spec.ingress.auth`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `mode` | string, one of `""`, `authenticated`, `open` |  |
+| `mode` | string, one of `""`, `authenticated`, `open` | How the edge checks callers. authenticated requires a bearer token, or an X-Api-Key header, of an identity that RBAC lets get Functions in the namespace: 401 without a valid one, 403 when it may not. open lets anonymous callers in. Empty takes the enclosing stance, if any, else the namespace's spec.edgeDefaults.auth.mode, else open. |
 
 ### `Site.spec.ingress.rules[]`
 

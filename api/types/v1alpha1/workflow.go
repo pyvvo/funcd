@@ -25,31 +25,31 @@ type Workflow struct {
 type WorkflowSpec struct {
 	// Steps are the workflow's steps. List order chains implicitly (no dependsOn ⇒
 	// the previous step); dependsOn declares explicit edges.
-	Steps []WorkflowStep `json:"steps"`
+	Steps []WorkflowStep `json:"steps" doc:"The steps each run executes, at least one. They run in list order unless dependsOn says otherwise, and the first step takes the run input."`
 	// KVStores and Buckets are the stores the Workflow declares at its root (ADR-0248): by name it owns them and their
 	// table and prefix owners name steps, materialized to the step Functions; by ref it binds an existing one.
-	KVStores []KVStoreEntry `json:"kv,omitempty"`
-	Buckets  []BucketEntry  `json:"buckets,omitempty"`
+	KVStores []KVStoreEntry `json:"kv,omitempty" doc:"The KV stores for the steps to bind. An entry with a name defines a store, each table owner naming a step; a ref entry binds an existing one. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares."`
+	Buckets  []BucketEntry  `json:"buckets,omitempty" doc:"The Buckets for the steps to bind. An entry with a name defines a bucket, each prefix owner naming a step or a declared lake; a ref entry binds an existing one. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares."`
 	// SQLDatabases, Lakes, ConfigMaps and SecretDeclarations are the rest of what the Workflow's steps bind
 	// (ADR-0250): a database's or a prefix's owner names a step, or a lake the root declares; a defined ConfigMap
 	// or lake goes with the Workflow; a declared Secret holds its keys before any step is materialized.
-	SQLDatabases       []SQLDatabaseEntry  `json:"sql,omitempty"`
-	Lakes              []LakeEntry         `json:"lakes,omitempty"`
-	ConfigMaps         []ConfigMapEntry    `json:"configMaps,omitempty"`
-	SecretDeclarations []SecretDeclaration `json:"secrets,omitempty"`
+	SQLDatabases       []SQLDatabaseEntry  `json:"sql,omitempty" doc:"The SQL databases for the steps to bind. An entry with a name defines a database, its owner naming a step or a declared lake; a ref entry binds an existing one. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares."`
+	Lakes              []LakeEntry         `json:"lakes,omitempty" doc:"The Lakes for the steps to bind: an entry with a name defines one, deleted with the Workflow, and a ref entry binds an existing one. A defined lake may not share a step's name, and its buckets, ConfigMaps and Secrets are declared at the Workflow's root. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares."`
+	ConfigMaps         []ConfigMapEntry    `json:"configMaps,omitempty" doc:"The ConfigMaps for the steps to bind: an entry with a name defines one, deleted with the Workflow, and a ref entry binds an existing one. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares."`
+	SecretDeclarations []SecretDeclaration `json:"secrets,omitempty" doc:"The Secrets the steps bind, with the keys they read. Until each Secret exists and holds its keys, the Workflow is not Ready and no run of it starts. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares."`
 	// Contract is the optional declared I/O contract (ADR-0090 shape); nil ⇒ the
 	// effective contract is derived (F65). Every optional property must carry a
 	// default (the total-defaults rule).
-	Contract *WorkflowContract `json:"contract,omitempty"`
+	Contract *WorkflowContract `json:"contract,omitempty" doc:"A contract the author declares for the run input and output. funcd checks its schemas at apply, but runs are checked against the contract it derives from the steps, in status.contract, not against this one."`
 	// Timeout is the wall-clock bound on a whole run (paused time excluded); 0 ⇒ none.
 	Timeout Duration `json:"timeout,omitempty" doc:"The wall-clock bound on a whole run, paused time excluded: 0s to 168h; 0s or unset means no bound."`
 	// OnFailure names a handler function step (defined in Steps, excluded from the DAG)
 	// invoked once when the run ends Failed. Empty ⇒ no handler.
-	OnFailure ObjectName `json:"onFailure,omitempty"`
+	OnFailure ObjectName `json:"onFailure,omitempty" doc:"The name of a function step that funcd calls once, without retry, when a run fails. Its input is an object of workflow, run, failedStep, reason and input, the run input. It is not part of the step order, so it sets no dependsOn, when or params and no step depends on it; its result never changes the run's phase, and a cancelled run does not call it."`
 	// Pooling configures how the workflow's materialized step Functions are pooled and
 	// kept warm (ADR-0046 worker pooling + ADR-0016 scaling). Empty ⇒ the default: all
 	// image steps share one pool. A step may override it with its own step.pooling.
-	Pooling WorkflowPooling `json:"pooling,omitempty"`
+	Pooling WorkflowPooling `json:"pooling,omitempty" doc:"How the image steps' Functions share workers and stay warm. A step's function.pooling replaces it for that step."`
 }
 
 // WorkflowPooling governs how a workflow's materialized step Functions are grouped
@@ -59,14 +59,14 @@ type WorkflowPooling struct {
 	// Mode is "shared" (default — image steps of the same runtime co-locate in one
 	// worker pool, saving memory) or "isolated" (each step runs in its own solo
 	// worker / container).
-	Mode PoolingMode `json:"mode,omitempty"`
+	Mode PoolingMode `json:"mode,omitempty" doc:"shared, the default, runs each image step's Function in the pool worker that worker names, shared with the steps of the same runtime that bind and own the same data; isolated gives each step's Function a worker of its own. Only the process runtime pools, for node runtimes and, with Python 3.14 or later, python ones; elsewhere shared runs each step's Function solo too."`
 	// Worker names the shared pool when Mode is shared; empty ⇒ the workflow's name.
 	// Steps of different runtimes never share a worker (the pool is per-runtime); this
 	// is the logical pool name they group under.
-	Worker string `json:"worker,omitempty" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"`
+	Worker string `json:"worker,omitempty" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" doc:"The pool worker's name when mode is shared; empty means the Workflow's name. isolated ignores it."`
 	// MinReplicas keeps warm workers: 0 scales to zero (cold start on the first step of
 	// the pool), ≥1 avoids the cold-start latency.
-	MinReplicas int `json:"minReplicas,omitempty" minimum:"0" maximum:"15"`
+	MinReplicas int `json:"minReplicas,omitempty" minimum:"0" maximum:"15" doc:"The workers kept warm for each image step's Function. 0, the default, scales a step's Function to zero after 5 minutes without a call, so its next call waits for a cold start."`
 }
 
 // PoolingMode selects shared-pool vs isolated-container materialization.
@@ -88,24 +88,24 @@ func (PoolingMode) Schema(huma.Registry) *huma.Schema {
 // (Workflow runs a child workflow, F70), plus the orchestration fields common to every kind (ADR-0096).
 type WorkflowStep struct {
 	// Name is the step's name; a DNS-1123 label, unique within the workflow.
-	Name ObjectName `json:"name"`
+	Name ObjectName `json:"name" doc:"The step's name, unique among the steps. dependsOn, onFailure, store owners and step.<name>.output in expressions refer to the step by it, and an image step's Function is named <workflow>-<step>."`
 	// Function is a dispatched step: an owned image (materialized) or a ref to an existing Function.
-	Function *FunctionStep `json:"function,omitempty"`
+	Function *FunctionStep `json:"function,omitempty" doc:"A step that calls a Function: one funcd creates from an image for this step, or an existing one by ref. Exactly one of function, builtin and workflow."`
 	// Builtin is an engine-native step (wait / pass) — run in-process, never dispatched.
-	Builtin *BuiltinStep `json:"builtin,omitempty"`
+	Builtin *BuiltinStep `json:"builtin,omitempty" doc:"A step that funcd runs itself, with no Function: a wait or a pass. Exactly one of function, builtin and workflow."`
 	// Workflow runs a child Workflow as a step (a sub-workflow, F70/ADR-0099).
-	Workflow *WorkflowRef `json:"workflow,omitempty"`
+	Workflow *WorkflowRef `json:"workflow,omitempty" doc:"A step that runs another Workflow as a child run: the step's input, params included, is the child's input, and the child's output is the step's output. A child that does not succeed fails the step, and a Workflow that reaches itself through such steps is never Ready. Exactly one of function, builtin and workflow."`
 	// DependsOn names the parent steps; empty ⇒ follows the previous step in list order.
-	DependsOn []ObjectName `json:"dependsOn,omitempty"`
+	DependsOn []ObjectName `json:"dependsOn,omitempty" doc:"The steps this step follows; empty means the step listed before it, not counting the onFailure step. With one parent the step's input is that parent's output, with several an object of their outputs keyed by step name. Each name is another step, not the onFailure step, and the steps form no cycle."`
 	// Join is the fan-in mode: "all" (default) requires every parent Succeeded, "any"
 	// requires one (exclusive-branch merges).
-	Join JoinMode `json:"join,omitempty"`
+	Join JoinMode `json:"join,omitempty" doc:"How the step waits on its parents: all, the default, runs it when every parent succeeded and skips it otherwise; any waits until every parent has ended, then runs it on the outputs of those that succeeded, or skips it if none did."`
 	// When is an optional gate condition (ADR-0095 native-JS boolean); false ⇒ Skipped.
-	When *StepWhen `json:"when,omitempty"`
+	When *StepWhen `json:"when,omitempty" doc:"A condition the step runs on: when it is false, the step is Skipped, and so are the steps after it that need it to succeed. The onFailure step has none."`
 	// Params is a static overlay merged over the step's flowing input (static wins). For a function
 	// step it overlays the dispatched input; a pass expression sees the overlaid input; a wait
 	// ignores it (output = input verbatim). The onFailure handler takes none (FailureContext only).
-	Params json.RawMessage `json:"params,omitempty"`
+	Params json.RawMessage `json:"params,omitempty" doc:"A JSON object merged over the step's input, its keys winning: a function step gets the result as its input, and a workflow step passes it to the child run. Its values must fit the step's input contract, and a field it sets need not come from a parent. A wait ignores it, and the onFailure step sets none."`
 }
 
 // FunctionStep is a dispatched step (ADR-0096): sourced from an OWNED Image (materialized into
@@ -113,18 +113,18 @@ type WorkflowStep struct {
 // here, so an engine-native (Builtin) step cannot express them by construction.
 type FunctionStep struct {
 	// Image is a full OCI artifact reference the workflow owns and materializes into a Function.
-	Image string `json:"image,omitempty"`
+	Image string `json:"image,omitempty" doc:"The artifact of the step's own Function, <workflow>-<step>, which funcd creates with the runtime the artifact declares and its handle export. That name must fit in 63 characters. Exactly one of image and ref."`
 	// Ref references an existing Function in the namespace (a shared service).
-	Ref ObjectName `json:"ref,omitempty"`
+	Ref ObjectName `json:"ref,omitempty" doc:"The name of an existing Function in the namespace that the step calls; funcd does not create or change it, and a run waits while it is missing. A Function whose protocol is http fails the step. Exactly one of image and ref."`
 	// Retry is the per-step retry policy; nil ⇒ the engine default.
-	Retry *StepRetry `json:"retry,omitempty"`
+	Retry *StepRetry `json:"retry,omitempty" doc:"How a failed call is tried again. A 5xx answer, a timeout or a transport error is retried, while a 4xx answer or an output over workflow.payloadLimit fails the step at once. Unset, the step gets workflow.defaultRetry attempts with workflow.defaultRetryBackoff; the onFailure step is called once."`
 	// Timeout is the per-step invocation bound; 0 ⇒ the engine default.
 	Timeout Duration `json:"timeout,omitempty" doc:"The per-step invocation bound: 0s to 24h; 0s or unset means workflow.defaultStepTimeout."`
 	// Pooling overrides the workflow-level pooling for this step's materialized Function
 	// (nil ⇒ inherit spec.pooling); image steps only.
-	Pooling *WorkflowPooling `json:"pooling,omitempty"`
+	Pooling *WorkflowPooling `json:"pooling,omitempty" doc:"Replaces the Workflow's pooling for this step's Function, as a whole: a field it leaves unset takes its default, not the Workflow's value. A ref step ignores it."`
 	// Bindings are the step's bindings (ADR-0246), copied onto its materialized Function.
-	Bindings StepBindings `json:"bindings,omitzero"`
+	Bindings StepBindings `json:"bindings,omitzero" doc:"What the step's code uses, copied onto an image step's Function: each store, lake, ConfigMap and Secret it names must be declared at the root of the Workflow or of its App. A ref step ignores it: the Function it names keeps its own."`
 }
 
 // BuiltinStep is an engine-native step (ADR-0096) — a nested kind-union of exactly one of Wait /
@@ -134,15 +134,15 @@ type BuiltinStep struct {
 	// to one. The step blocks in-engine for the duration (on the run context, so the
 	// run-timeout interrupts it), then passes its flowing input through as output. A normal step —
 	// Running then Succeeded; no special state.
-	Wait string `json:"wait,omitempty"`
+	Wait string `json:"wait,omitempty" doc:"How long the step waits before it succeeds with its input as its output: a duration such as 30s, checked at apply, or a ${{ }} expression that must yield one when the step runs. The wait counts toward the run's timeout, and a cancel ends it. Exactly one of wait and pass."`
 	// Pass is a ${{ }} goja Select expression over the step's flowing input + prior step outputs;
 	// its result is the step's output. No dispatch.
-	Pass string `json:"pass,omitempty"`
+	Pass string `json:"pass,omitempty" doc:"A ${{ }} JavaScript expression whose value is the step's output, over input, the run input, and step.<name>.output of each step it follows. It is checked only when the step runs: an error fails the step. Exactly one of wait and pass."`
 }
 
 // WorkflowRef references a child Workflow by name — a sub-workflow step (F70/ADR-0099).
 type WorkflowRef struct {
-	Ref ObjectName `json:"ref,omitempty"`
+	Ref ObjectName `json:"ref,omitempty" doc:"The child Workflow's name, in the same namespace; it must be set. A run waits while the child is missing or not Ready, then runs it as it was when the run started."`
 }
 
 // JoinMode is a step's fan-in mode.
@@ -163,12 +163,12 @@ func (JoinMode) Schema(huma.Registry) *huma.Schema {
 // StepWhen holds a native-JS boolean condition (ADR-0095 Condition mode) evaluated
 // against direct-parent outputs and the run input.
 type StepWhen struct {
-	Condition string `json:"condition"`
+	Condition string `json:"condition" doc:"A ${{ }} JavaScript expression that yields true or false, over input, the run input, and step.<name>.output of each step it follows. It is type-checked against the steps' contracts before the Workflow is Ready; one that cannot be evaluated when the step is reached fails the run."`
 }
 
 // StepRetry is a per-step retry policy: attempts and exponential backoff.
 type StepRetry struct {
-	MaxAttempts int      `json:"maxAttempts,omitempty" minimum:"1" maximum:"100"`
+	MaxAttempts int      `json:"maxAttempts,omitempty" minimum:"1" maximum:"100" doc:"How many calls the step may make, the first included: 1 means no retry. Unset means workflow.defaultRetry. A call that a funcd restart cuts runs again, even past this count."`
 	Backoff     Duration `json:"backoff,omitempty" doc:"The base of the exponential retry backoff: 0s to 1h; 0s or unset means workflow.defaultRetryBackoff."`
 }
 
@@ -189,34 +189,34 @@ func (DeletionPolicy) Schema(huma.Registry) *huma.Schema {
 
 // WorkflowContract is a declared or derived I/O contract (ADR-0090 ContractBlob shape).
 type WorkflowContract struct {
-	Dialect string          `json:"dialect,omitempty"`
-	Input   json.RawMessage `json:"input,omitempty"`
-	Output  json.RawMessage `json:"output,omitempty"`
+	Dialect string          `json:"dialect,omitempty" doc:"The URI of the JSON Schema dialect that input and output follow. funcd checks nothing against it."`
+	Input   json.RawMessage `json:"input,omitempty" doc:"The JSON Schema of the input. A declared one must be an object, and each property it does not require must declare a default."`
+	Output  json.RawMessage `json:"output,omitempty" doc:"The JSON Schema of the output. A declared one must be an object, and each property it does not require must declare a default."`
 }
 
 // WorkflowStatus is the observed state: phase, the effective contract, the resolved
 // step graph (F65 fills it), and the run link (CronJob status.active pattern).
 type WorkflowStatus struct {
 	Status   `json:",inline"`
-	Contract *WorkflowContract    `json:"contract,omitempty"`
-	Steps    []WorkflowStepStatus `json:"steps,omitempty"`
-	Runs     *WorkflowRunLinks    `json:"runs,omitempty"`
+	Contract *WorkflowContract    `json:"contract,omitempty" doc:"The run input and output schemas funcd derives once every step type-checks: the first step's input, and the output of the step that ends the run, or an object keyed by step name when several do. A new run's input is checked against it."`
+	Steps    []WorkflowStepStatus `json:"steps,omitempty" doc:"Each function and workflow step at the last type check, with its resolved image and its contract. A ref step whose Function is missing or serves HTTP has no entry."`
+	Runs     *WorkflowRunLinks    `json:"runs,omitempty" doc:"The Workflow's runs: those not finished yet by name, and how many ended in each final phase."`
 }
 
 // WorkflowStepStatus is one step's resolved digest-pinned image + cached contract.
 type WorkflowStepStatus struct {
-	Name     ObjectName        `json:"name"`
-	Image    string            `json:"image,omitempty"`
-	Contract *WorkflowContract `json:"contract,omitempty"`
+	Name     ObjectName        `json:"name" doc:"The step's name."`
+	Image    string            `json:"image,omitempty" doc:"The image the step's contract comes from, as <image>@<digest> once it resolves to a digest: a ref step's Function's image, and workflow://<child> for a workflow step."`
+	Contract *WorkflowContract `json:"contract,omitempty" doc:"The step's input and output schemas: read from its image, or the child Workflow's status.contract for a workflow step."`
 }
 
 // WorkflowRunLinks links a Workflow to its runs: active (in-flight) names + lifetime
 // terminal-phase counts. Bounded (active-only); history lives in engine state.
 type WorkflowRunLinks struct {
-	Active    []ObjectName `json:"active,omitempty"`
-	Succeeded int          `json:"succeeded,omitempty"`
-	Failed    int          `json:"failed,omitempty"`
-	Cancelled int          `json:"cancelled,omitempty"`
+	Active    []ObjectName `json:"active,omitempty" doc:"The runs not finished yet, newest first."`
+	Succeeded int          `json:"succeeded,omitempty" doc:"The number of runs that ended Succeeded since the Workflow was created. Deleting a run does not lower it."`
+	Failed    int          `json:"failed,omitempty" doc:"The number of runs that ended Failed since the Workflow was created. Deleting a run does not lower it."`
+	Cancelled int          `json:"cancelled,omitempty" doc:"The number of runs that ended Cancelled since the Workflow was created. Deleting a run does not lower it."`
 }
 
 // StepFunctionName is the name of the Function an image step materializes into: <workflow>-<step> (ADR-0094).

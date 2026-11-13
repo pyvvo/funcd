@@ -20,12 +20,12 @@ type AppRevision struct {
 
 // AppRevisionSpec names the App and the revision's number, and holds a frozen copy of the App spec.
 type AppRevisionSpec struct {
-	App    ObjectRef `json:"app"`
-	Number int64     `json:"number" minimum:"1" maximum:"9999999999"`
-	Spec   AppSpec   `json:"spec"`
+	App    ObjectRef `json:"app" doc:"The App this revision belongs to."`
+	Number int64     `json:"number" minimum:"1" maximum:"9999999999" doc:"The revision's number: 1 for the App's first revision, then one more than the latest. The revision is named <app>-<number>, and funcdctl app rollback takes this number."`
+	Spec   AppSpec   `json:"spec" doc:"The App's spec when this revision was created, without spec.paused. It never changes."`
 	// HookInput is the data of this revision's hook calls, set by the stamp when the spec has a hook (ADR-0214
 	// Decision 2).
-	HookInput *AppHookInput `json:"hookInput,omitempty"`
+	HookInput *AppHookInput `json:"hookInput,omitempty" doc:"The data that each hook call of this revision receives, fixed when the revision was created. Set only when its spec has a hook."`
 }
 
 // AppRevisionStatus is the rollout record (Decision 5): phase Deploying, Ready or Failed, and the conditions Applied,
@@ -34,19 +34,19 @@ type AppRevisionStatus struct {
 	Status `json:",inline"`
 	// StartedAt is when the requirements were met, the stamp time when none waited; nil while the revision waits; the
 	// rollout deadline (ADR-0212 Decision 6) needs it (ADR-0219 Decision 3).
-	StartedAt *Timestamp `json:"startedAt,omitempty"`
+	StartedAt *Timestamp `json:"startedAt,omitempty" doc:"When the rollout started: when the revision was created, or, when it waited for required Apps, once they were all met; unset while it waits. The rollout fails if it is not complete app.upgradeTimeout after the latest of this time, a resume of the App, the release of a hold and the end of the last pre-hook call, unless a pre-hook call is running."`
 	// Hooks records every hook call of the revision, retries included, in call order (ADR-0214 Decision 6).
-	Hooks []AppHookCall `json:"hooks,omitempty"`
+	Hooks []AppHookCall `json:"hooks,omitempty" doc:"The hook calls of this revision in call order, a retried call included. A call that ends during a stop of funcd, a hold or a pause of the App is not recorded and is made again."`
 }
 
 // AppHookCall is one recorded hook call (ADR-0214 Decision 6): its point, its Function, the Invocation that records
 // it, its outcome and its end, a start term of the rollout deadline.
 type AppHookCall struct {
-	Point      string     `json:"point" enum:"preApply,postApply"`
-	Function   ObjectName `json:"function"`
-	Invocation ObjectName `json:"invocation"`
-	Phase      Phase      `json:"phase"`
-	EndTime    Timestamp  `json:"endTime"`
+	Point      string     `json:"point" enum:"preApply,postApply" doc:"The hook list the call was made for."`
+	Function   ObjectName `json:"function" doc:"The hook Function that was called."`
+	Invocation ObjectName `json:"invocation" doc:"The Invocation that records the call, with its start, end and error. It belongs to this revision and is deleted with it."`
+	Phase      Phase      `json:"phase" doc:"Ready when the call succeeded and Failed when it did not; no other phase appears here."`
+	EndTime    Timestamp  `json:"endTime" doc:"When the call ended."`
 }
 
 // AppRevisionName is the name of the App's AppRevision number n: <app>-<n>.

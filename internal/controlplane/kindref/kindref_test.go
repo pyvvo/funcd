@@ -94,6 +94,26 @@ func TestHandlerSectionGroupsOverloads(t *testing.T) {
 	require.ErrorContains(t, err, "the TypeScript shim has no ctx.kv")
 }
 
+// A description reaches the page as text: Markdown would drop <name> as an HTML tag, and MDX read {} as an expression.
+func TestDescriptionMarkupIsEscaped(t *testing.T) {
+	pages, err := Render(controlplane.SpecAPI().OpenAPI())
+	require.NoError(t, err)
+	require.Contains(t, string(pages["develop/workloads/function/spec.md"]), "at /function/&lt;name&gt;")
+	require.Contains(t, string(pages["develop/workloads/workflow/spec.md"]), "$&#123;&#123; &#125;&#125;")
+	for path, page := range pages {
+		for _, line := range strings.Split(string(page), "\n") {
+			cells := strings.Split(line, " | ")
+			if !strings.HasPrefix(line, "| `") || len(cells) < 3 {
+				continue
+			}
+			desc := cells[len(cells)-1]
+			require.NotContainsf(t, desc, "<", "%s: %s", path, line)
+			require.NotContainsf(t, desc, "{", "%s: %s", path, line)
+			require.NotContainsf(t, desc, "}", "%s: %s", path, line)
+		}
+	}
+}
+
 // scenario: every-kind-in-one-feature
 func TestScenarioEveryKindInOneFeature(t *testing.T) {
 	listed := map[v1.Kind]int{}

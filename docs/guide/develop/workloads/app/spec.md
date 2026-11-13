@@ -16,23 +16,23 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `backupSchedules` | array of [`App.spec.backupSchedules[]`](#appspecbackupschedules) |  |
-| `buckets` | array of [`App.spec.buckets[]`](#appspecbuckets) |  |
-| `configMaps` | array of [`App.spec.configMaps[]`](#appspecconfigmaps) |  |
-| `eventSources` | array of [`App.spec.eventSources[]`](#appspeceventsources) |  |
-| `functions` | array of [`App.spec.functions[]`](#appspecfunctions) |  |
-| `hooks` | object, [`App.spec.hooks`](#appspechooks) |  |
-| `kv` | array of [`App.spec.kv[]`](#appspeckv) |  |
-| `lakes` | array of [`App.spec.lakes[]`](#appspeclakes) |  |
-| `paused` | boolean |  |
-| `requires` | array of [`App.spec.requires[]`](#appspecrequires) |  |
-| `routes` | array of [`App.spec.routes[]`](#appspecroutes) |  |
-| `secrets` | array of [`App.spec.secrets[]`](#appspecsecrets) |  |
-| `sensors` | array of [`App.spec.sensors[]`](#appspecsensors) |  |
-| `sites` | array of [`App.spec.sites[]`](#appspecsites) |  |
-| `sql` | array of [`App.spec.sql[]`](#appspecsql) |  |
-| `version` | string |  |
-| `workflows` | array of [`App.spec.workflows[]`](#appspecworkflows) |  |
+| `backupSchedules` | array of [`App.spec.backupSchedules[]`](#appspecbackupschedules) | The BackupSchedules that the App declares or refers to; no two entries name the same one. An entry with an empty scope backs up this App: each object that its kv, buckets, sql and lakes entries name, and its Functions' local volumes. |
+| `buckets` | array of [`App.spec.buckets[]`](#appspecbuckets) | The Buckets that the App declares or refers to; no two entries name the same one. A Bucket that an earlier App of this name kept is not this App's: refer to it with a ref entry, since declaring it by name stops the rollout with ChildNotOwned. |
+| `configMaps` | array of [`App.spec.configMaps[]`](#appspecconfigmaps) | The ConfigMaps that the App defines or refers to, written before every other part; no two entries name the same one. A change to a defined entry's data writes a new ConfigMap, changes each part that names it to the new one, and prunes the old one with the other dropped parts. |
+| `eventSources` | array of [`App.spec.eventSources[]`](#appspeceventsources) | The EventSources that the App declares or refers to; no two entries name the same one. |
+| `functions` | array of [`App.spec.functions[]`](#appspecfunctions) | The Functions that the App declares or refers to; no two entries name the same one. An entry leaves kv, buckets, sql, lakes, configMaps and secrets empty, and each store, Lake, ConfigMap and Secret it binds is one that the App's lists of those names declare. A workflows step that sets function.image is written as a Function named &lt;workflow&gt;-&lt;step&gt;, a name no entry may declare. |
+| `hooks` | object, [`App.spec.hooks`](#appspechooks) | Functions of this App that funcd calls for each new revision whose spec has them: preApply before the revision's parts change, postApply once it is current. Each call is recorded in the revision's status.hooks; a call that ends during a stop of funcd, a hold or a pause is not recorded and is made again, so a hook must be safe to repeat. |
+| `kv` | array of [`App.spec.kv[]`](#appspeckv) | The KVStores that the App declares or refers to; no two entries name the same one. A store that an earlier App of this name kept is not this App's: refer to it with a ref entry, since declaring it by name stops the rollout with ChildNotOwned. |
+| `lakes` | array of [`App.spec.lakes[]`](#appspeclakes) | The Lakes that the App declares or refers to; no two entries name the same one. An entry leaves buckets, configMaps and secrets empty; each Bucket and Secret it binds is declared in the App's buckets and secrets. |
+| `paused` | boolean | While true, funcd only sets the App's Paused condition: it creates no revision, writes or deletes no part and calls no hook. Changing it creates no revision, and a rollout in progress gets a full app.upgradeTimeout again on resume. An apply without it resumes the App; funcdctl app deploy and app rollback keep it as it is. |
+| `requires` | array of [`App.spec.requires[]`](#appspecrequires) | The Apps of this namespace that this App needs. A new revision waits, with no time limit and no part written, until each one exists, is Ready with its spec rolled out and has a spec.version in the range. An App this one requires cannot be deleted, nor updated from inside the range to outside it once this App has started a rollout, and a requirement cycle is refused. |
+| `routes` | array of [`App.spec.routes[]`](#appspecroutes) | The Routes that the App declares or refers to; no two entries name the same one, and none declares a Route under the name of a Site that sites declares, since each Site writes a Route of its own name. |
+| `secrets` | array of [`App.spec.secrets[]`](#appspecsecrets) | The Secrets that the App's parts read and the keys they read, never their values; no two entries name the same one. An apply whose parts name an undeclared Secret is refused, and while a declared Secret or key is missing, funcd writes no part and reports SecretNotFound or SecretKeyMissing. |
+| `sensors` | array of [`App.spec.sensors[]`](#appspecsensors) | The Sensors that the App declares or refers to; no two entries name the same one. |
+| `sites` | array of [`App.spec.sites[]`](#appspecsites) | The Sites that the App declares or refers to; no two entries name the same one. An entry leaves buckets empty: the Site refers to the Bucket it serves, which the App's buckets declare or which exists already. Each declared Site writes a Route of its own name, which no routes entry may declare. |
+| `sql` | array of [`App.spec.sql[]`](#appspecsql) | The SQLDatabases that the App declares or refers to; no two entries name the same one. A database that an earlier App of this name kept is not this App's: refer to it with a ref entry, since declaring it by name stops the rollout with ChildNotOwned. |
+| `version` | string | A free label for this version of the App, shown by funcdctl app history and passed to the hooks; funcdctl app deploy sets it to the template's version. A range in another App's spec.requires matches it only when it is a SemVer 2.0.0 version, such as 1.4.0 with no v prefix. |
+| `workflows` | array of [`App.spec.workflows[]`](#appspecworkflows) | The Workflows that the App declares or refers to; no two entries name the same one. An entry leaves kv, buckets, sql, lakes, configMaps and secrets empty, and each store, Lake, ConfigMap and Secret its steps bind is one that the App's lists of those names declare. A step that sets function.image is written as a Function named &lt;workflow&gt;-&lt;step&gt;, a name that no functions entry or other step may take. |
 
 ### `App.spec.backupSchedules[]`
 
@@ -118,7 +118,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `data` | map of string to string |  |
-| `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as <name>-<hash of data>, and the config of each part that names it is set to that stored name. |
+| `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as &lt;name&gt;-&lt;hash of data&gt;, and the config of each part that names it is set to that stored name. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 
 ### `App.spec.eventSources[]`
@@ -180,77 +180,77 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `bindings` | object, [`App.spec.functions[].bindings`](#appspecfunctionsbindings) |  |
-| `buckets` | array of [`App.spec.functions[].buckets[]`](#appspecfunctionsbuckets) |  |
-| `configMaps` | array of [`App.spec.functions[].configMaps[]`](#appspecfunctionsconfigmaps) |  |
-| `handler` | string, matching `^[A-Za-z_][A-Za-z0-9_.]*$` |  |
-| `image` | string |  |
-| `imageDigest` | string, a sha256 digest |  |
-| `ingress` | object, [`App.spec.functions[].ingress`](#appspecfunctionsingress) |  |
-| `kv` | array of [`App.spec.functions[].kv[]`](#appspecfunctionskv) |  |
-| `lakes` | array of [`App.spec.functions[].lakes[]`](#appspecfunctionslakes) |  |
+| `bindings` | object, [`App.spec.functions[].bindings`](#appspecfunctionsbindings) | What the code may use: KV tables, Bucket prefixes, SQL databases, Lakes and other Functions, each under an alias, and ConfigMaps and Secrets. A binding is the grant: a call on an alias with no binding is refused with 403. Each store, Lake, ConfigMap and Secret it names must be declared at the root, in this spec's kv, buckets, sql, lakes, configMaps or secrets, or in the App's for an App's part. |
+| `buckets` | array of [`App.spec.functions[].buckets[]`](#appspecfunctionsbuckets) | The Buckets the Function declares: by name it creates and owns one, and a Bucket of that name that it does not own holds it in Pending with StoreNotOwned; by ref it uses an existing one. spec.bindings.blob binds only a declared Bucket, and a prefix with no owner gets the Function as its owner. An App's part declares none and binds those that the App declares. |
+| `configMaps` | array of [`App.spec.functions[].configMaps[]`](#appspecfunctionsconfigmaps) | The ConfigMaps the Function declares: by name it defines one from its data, which goes with the Function, by ref it uses an existing one. spec.bindings.config binds only a declared ConfigMap, and a defined one that the spec no longer defines is deleted once the Function is Ready again and nothing else names it. An App's part declares none. |
+| `handler` | string, matching `^[A-Za-z_][A-Za-z0-9_.]*$` | The name of the export that the shim calls in the code, such as handle. A Function without one, or whose code has no such export, fails with ShapeInvalid. |
+| `image` | string | The OCI reference of the code's artifact: a registry reference with a tag or a digest, or an oci-layout:// reference to a layout on the server's disk. A Function whose image is missing, or cannot be resolved or pulled, starts no worker. |
+| `imageDigest` | string, a sha256 digest | The sha256 digest that funcd pulls the image by and checks it against. Unset, funcd resolves the image to its digest when it creates the Revision of a new spec and keeps that digest, so a tag that moves later changes nothing. |
+| `ingress` | object, [`App.spec.functions[].ingress`](#appspecfunctionsingress) | The Function's own address at the edge. With no host and no path, it answers by name at /function/&lt;name&gt;; a host or a path gives it a Route of its own in place of that address, which its IngressReady condition reports. Its path may not be /function or under it. |
+| `kv` | array of [`App.spec.functions[].kv[]`](#appspecfunctionskv) | The KVStores the Function declares: by name it creates and owns one, and a store of that name that it does not own holds it in Pending with StoreNotOwned; by ref it uses an existing one. spec.bindings.kv binds only a declared store. An App's part declares none and binds those that the App declares. |
+| `lakes` | array of [`App.spec.functions[].lakes[]`](#appspecfunctionslakes) | The Lakes the Function declares: by name it creates one that goes with the Function, by ref it uses an existing one. spec.bindings.lake binds only a declared Lake, and a Lake declared by name declares nothing at its own root: it binds the Function's buckets, configMaps and secrets. An App's part declares none. |
 | `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
-| `pooling` | object, [`App.spec.functions[].pooling`](#appspecfunctionspooling) |  |
-| `protocol` | string, one of `""`, `cloudevent`, `http` |  |
+| `pooling` | object, [`App.spec.functions[].pooling`](#appspecfunctionspooling) | Whether the Function shares a worker with other Functions; unset, it runs in workers of its own. |
+| `protocol` | string, one of `""`, `cloudevent`, `http` | How funcd calls the code. cloudevent, the default, passes each call to the handler as a CloudEvent. http passes each edge request to the handler, an http(app) export: only the edge and another Function's ctx.fetch over a link reach it, and it needs a node runtime and no pooling.worker. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
-| `replicas` | integer, 0 to 15 |  |
-| `resources` | object, [`App.spec.functions[].resources`](#appspecfunctionsresources) |  |
-| `runtime` | string, a DNS-1123 label |  |
-| `scaling` | object, [`App.spec.functions[].scaling`](#appspecfunctionsscaling) |  |
-| `secrets` | array of [`App.spec.functions[].secrets[]`](#appspecfunctionssecrets) |  |
-| `sql` | array of [`App.spec.functions[].sql[]`](#appspecfunctionssql) |  |
+| `replicas` | integer, 0 to 15 | How many workers run while the Function is awake: at least 1 once a call wakes it, and at least scaling.minReplicas. Every call goes to the lowest listening replica, and the others are spares. With minReplicas 0, replicas above 0 also starts workers before the first call, but not after a sleep. A local volume allows at most 1. |
+| `resources` | object, [`App.spec.functions[].resources`](#appspecfunctionsresources) | The CPU and memory caps of each of the Function's workers; a field left empty takes functions.defaultResources. Only the containerd runtime enforces them, and they cannot be set with pooling.worker. |
+| `runtime` | string, a DNS-1123 label | The runtime that runs the code, such as nodejs22 or python314. A Function without one fails with ShapeInvalid, and one whose runtime this node cannot run fails with RuntimeUnavailable. |
+| `scaling` | object, [`App.spec.functions[].scaling`](#appspecfunctionsscaling) | Scale to zero: with minReplicas 0, the default, and an idleTimeout, a Function with no traffic goes Idle and its workers stop until the next call wakes it. |
+| `secrets` | array of [`App.spec.functions[].secrets[]`](#appspecfunctionssecrets) | The Secrets of the namespace that the bindings may name, each with the keys the code reads; spec.bindings.secret names only a declared Secret. The Function waits in Pending, with SecretNotFound or SecretKeyMissing, until each one exists with every declared key. An App's part declares none and binds those that the App declares. |
+| `sql` | array of [`App.spec.functions[].sql[]`](#appspecfunctionssql) | The SQLDatabases the Function declares: by name it creates and owns one, and a database of that name that it does not own holds it in Pending with StoreNotOwned; by ref it uses an existing one. spec.bindings.sql binds only a declared database, and a database with no owner gets the Function as its owner. An App's part declares none and binds those that the App declares. |
 | `timeout` | string, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | Bounds an external invoke until its response starts: 0s to 1h; 0s or unset means invoke.defaultTimeout. |
-| `volumes` | array of [`App.spec.functions[].volumes[]`](#appspecfunctionsvolumes) |  |
+| `volumes` | array of [`App.spec.functions[].volumes[]`](#appspecfunctionsvolumes) | The directories the Function's workers mount. Apply refuses a Function with one unless runtime.mode is containerd and volumes.capacity or volumes.capacityBytes is set. A Function with a volume runs solo, even with pooling.worker. |
 
 ### `App.spec.functions[].bindings`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `blob` | array of [`App.spec.functions[].bindings.blob[]`](#appspecfunctionsbindingsblob) |  |
-| `config` | array of string values, each a DNS-1123 label |  |
-| `kv` | array of [`App.spec.functions[].bindings.kv[]`](#appspecfunctionsbindingskv) |  |
-| `lake` | array of [`App.spec.functions[].bindings.lake[]`](#appspecfunctionsbindingslake) |  |
-| `links` | array of [`App.spec.functions[].bindings.links[]`](#appspecfunctionsbindingslinks) |  |
-| `secret` | array of string values, each a DNS-1123 label |  |
-| `sql` | array of [`App.spec.functions[].bindings.sql[]`](#appspecfunctionsbindingssql) |  |
+| `blob` | array of [`App.spec.functions[].bindings.blob[]`](#appspecfunctionsbindingsblob) | The Bucket prefixes the code reaches through ctx.blob, and over S3 while the S3 gateway is on, each under its alias. The binding grants reads; only the prefix's owner and the writers that a RolesAssignment names may write. A Bucket or prefix that does not exist yet holds the Function in Pending with BucketNotFound. |
+| `config` | array of string values, each a DNS-1123 label | ConfigMaps whose keys each worker gets as environment variables when it starts, a later ConfigMap's value winning for a key that both hold. A key that starts with FUNCD_, or that a bound Secret holds, is left out, and a missing ConfigMap holds the Function Failed with ConfigResolveFailed. |
+| `kv` | array of [`App.spec.functions[].bindings.kv[]`](#appspecfunctionsbindingskv) | The KV tables the code reaches through ctx.kv, each under its alias. The binding grants reads; only the table's owner and the writers that a RolesAssignment names may write. A store or table that does not exist yet holds the Function in Pending with KVStoreNotFound. |
+| `lake` | array of [`App.spec.functions[].bindings.lake[]`](#appspecfunctionsbindingslake) | The Lakes the code queries, each under its alias. The Function waits in Pending with LakeNotReady until every bound Lake is Ready. |
+| `links` | array of [`App.spec.functions[].bindings.links[]`](#appspecfunctionsbindingslinks) | The Functions the code calls, each under its alias: through ctx.invoke one whose protocol is cloudevent, through ctx.fetch one whose protocol is http. Each target must exist in the namespace when this Function is applied, the namespace's links form no cycle, and a Function that a link targets cannot be deleted until the link goes. |
+| `secret` | array of string values, each a DNS-1123 label | Secrets whose keys the code reads through ctx.secret, on each read and with no cache, a later Secret's value winning for a key that both hold. No value reaches the worker's environment, and no worker starts until each one can be read. |
+| `sql` | array of [`App.spec.functions[].bindings.sql[]`](#appspecfunctionsbindingssql) | The SQLDatabases the code queries through ctx.sql, each under its alias. The binding grants reads; only the database's owner and the writers that a RolesAssignment names may write. A database that does not exist yet holds the Function in Pending with SQLDatabaseNotFound. |
 
 ### `App.spec.functions[].bindings.blob[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `alias` | string, required, a DNS-1123 label |  |
-| `bucket` | string, required, a DNS-1123 label |  |
-| `prefix` | string, required, a DNS-1123 label |  |
+| `alias` | string, required, a DNS-1123 label | The binding's name, unique in the list; code that reaches the prefix through ctx.blob passes it. |
+| `bucket` | string, required, a DNS-1123 label | The Bucket, in the same namespace, that holds the prefix. |
+| `prefix` | string, required, a DNS-1123 label | The prefix, by its name in the Bucket's prefixes. |
 
 ### `App.spec.functions[].bindings.kv[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `alias` | string, required, a DNS-1123 label |  |
-| `store` | string, required, a DNS-1123 label |  |
-| `table` | string, required, a DNS-1123 label |  |
+| `alias` | string, required, a DNS-1123 label | The binding's name, unique in the list, which the code passes to ctx.kv. |
+| `store` | string, required, a DNS-1123 label | The KVStore, in the same namespace, that holds the table. |
+| `table` | string, required, a DNS-1123 label | The table, by its name in the store's tables. |
 
 ### `App.spec.functions[].bindings.lake[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `alias` | string, required, a DNS-1123 label |  |
-| `lake` | string, required, a DNS-1123 label |  |
+| `alias` | string, required, a DNS-1123 label | The binding's name, unique in the list. Each worker reads the Lake's address and its token from FUNCD_LAKE_&lt;ALIAS&gt;_URL and FUNCD_LAKE_&lt;ALIAS&gt;_TOKEN, the alias upper-cased. |
+| `lake` | string, required, a DNS-1123 label | The Lake to query, in the same namespace. |
 
 ### `App.spec.functions[].bindings.links[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `alias` | string, required, a DNS-1123 label |  |
-| `target` | string, required, a DNS-1123 label |  |
+| `alias` | string, required, a DNS-1123 label | The link's name, unique in the list, which the code passes to ctx.invoke or ctx.fetch. |
+| `target` | string, required, a DNS-1123 label | The Function to call, in the same namespace. |
 | `timeout` | string, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | Bounds the synchronous call, a cold-start wake included: 0s to 5m; 0s or unset means the 30s link default. |
 
 ### `App.spec.functions[].bindings.sql[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `alias` | string, required, a DNS-1123 label |  |
-| `database` | string, required, a DNS-1123 label |  |
+| `alias` | string, required, a DNS-1123 label | The binding's name, unique in the list, which the code passes to ctx.sql. |
+| `database` | string, required, a DNS-1123 label | The SQLDatabase to query, in the same namespace. |
 
 ### `App.spec.functions[].buckets[]`
 
@@ -267,23 +267,23 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `data` | map of string to string |  |
-| `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as <name>-<hash of data>, and the config of each part that names it is set to that stored name. |
+| `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as &lt;name&gt;-&lt;hash of data&gt;, and the config of each part that names it is set to that stored name. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 
 ### `App.spec.functions[].ingress`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `auth` | object, [`App.spec.functions[].ingress.auth`](#appspecfunctionsingressauth) |  |
-| `enabled` | boolean |  |
-| `host` | string |  |
-| `path` | string |  |
+| `auth` | object, [`App.spec.functions[].ingress.auth`](#appspecfunctionsingressauth) | How the edge checks callers at the resource's own address; unset, the namespace's spec.edgeDefaults.auth decides, else open. A Lake refuses it, since the Lake gateway checks each caller. |
+| `enabled` | boolean | Turns the resource's own address on or off. Unset, it is on unless the namespace's spec.defaultExposure is explicit; a Lake's address is on only when this is true. |
+| `host` | string | The exact host of the resource's own address. Empty is the namespace's host, &lt;namespace&gt;.&lt;server.baseDomain&gt;, or, in the default namespace, any host that no other namespace reserves. |
+| `path` | string | The edge path of the resource's own address, which begins with / and does not end with / unless it is /. Empty is / when host is set, else /function/&lt;name&gt;, /site/&lt;name&gt; or /lake/&lt;name&gt; by kind. |
 
 ### `App.spec.functions[].ingress.auth`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `mode` | string, one of `""`, `authenticated`, `open` |  |
+| `mode` | string, one of `""`, `authenticated`, `open` | How the edge checks callers. authenticated requires a bearer token, or an X-Api-Key header, of an identity that RBAC lets get Functions in the namespace: 401 without a valid one, 403 when it may not. open lets anonymous callers in. Empty takes the enclosing stance, if any, else the namespace's spec.edgeDefaults.auth.mode, else open. |
 
 ### `App.spec.functions[].kv[]`
 
@@ -348,7 +348,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `data` | map of string to string |  |
-| `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as <name>-<hash of data>, and the config of each part that names it is set to that stored name. |
+| `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as &lt;name&gt;-&lt;hash of data&gt;, and the config of each part that names it is set to that stored name. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 
 ### `App.spec.functions[].lakes[].location`
@@ -363,37 +363,37 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `description` | string | What the Secret is for, for the installer who provides it. |
-| `keys` | array of string values, required, each matching `^[A-Za-z_][A-Za-z0-9_]*$` | The keys the parts read: the Secret's data must hold each of them. |
-| `name` | string, required, a DNS-1123 label | The name of a Secret in the App's namespace. The platform holds its value; the App never writes it. |
+| `keys` | array of string values, required, each matching `^[A-Za-z_][A-Za-z0-9_]*$` | The keys read from the Secret: its data must hold each of them. |
+| `name` | string, required, a DNS-1123 label | The name of a Secret in the namespace of the resource that declares it. funcd holds its value; the resource never writes it. |
 
 ### `App.spec.functions[].pooling`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `worker` | string |  |
+| `worker` | string | A worker id, a DNS-1123 label: Functions of the namespace that name it, run the same runtime, are in the same resource group and have the same bindings, owned data and grants share one worker, which status.pool names. Empty, the default, runs the Function solo. Only the process runtime pools, for node runtimes and, when the server's Python is 3.14 or later, python ones; anywhere else the Function runs solo too. A pool takes the first 16 Functions by name, and the others wait in Pending with PoolFull. |
 
 ### `App.spec.functions[].resources`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `cpu` | string |  |
-| `memory` | string |  |
+| `cpu` | string | The CPU cap of the worker or engine it sizes, as a number of cores of at least 0.01, such as 0.5 or 2. Empty takes the default of the resource that declares it, or no cap when there is none. Only the containerd runtime enforces it. |
+| `memory` | string | The memory cap of the worker or engine it sizes, such as 256Mi or 4GiB: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B, above zero. Empty takes the default of the resource that declares it, or no cap when there is none. Only the containerd runtime enforces it, and there a worker that passes it is killed. |
 
 ### `App.spec.functions[].scaling`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `idleTimeout` | string, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | The idle time before a worker is reclaimed: 0s to 24h; 0s or unset disables reclaim. |
-| `maxReplicas` | integer, 0 to 15 |  |
-| `minReplicas` | integer, 0 to 15 |  |
+| `maxReplicas` | integer, 0 to 15 | Above 0, the most that minReplicas may be; 0, the default, sets no bound. It starts no worker: replicas and minReplicas alone decide how many run. |
+| `minReplicas` | integer, 0 to 15 | The fewest workers the Function keeps. 0, the default, lets idleTimeout scale it to zero; above 0, it never sleeps. It may not exceed maxReplicas when that is above 0, and a local volume allows at most 1. |
 
 ### `App.spec.functions[].secrets[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `description` | string | What the Secret is for, for the installer who provides it. |
-| `keys` | array of string values, required, each matching `^[A-Za-z_][A-Za-z0-9_]*$` | The keys the parts read: the Secret's data must hold each of them. |
-| `name` | string, required, a DNS-1123 label | The name of a Secret in the App's namespace. The platform holds its value; the App never writes it. |
+| `keys` | array of string values, required, each matching `^[A-Za-z_][A-Za-z0-9_]*$` | The keys read from the Secret: its data must hold each of them. |
+| `name` | string, required, a DNS-1123 label | The name of a Secret in the namespace of the resource that declares it. funcd holds its value; the resource never writes it. |
 
 ### `App.spec.functions[].sql[]`
 
@@ -410,25 +410,25 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `deletion` | string, one of `retain`, `delete` |  |
-| `name` | string, a DNS-1123 label |  |
-| `ref` | string, a DNS-1123 label |  |
-| `size` | string, a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB) |  |
-| `sizeBytes` | integer, at least 1 |  |
-| `type` | string, required, one of `emptyDir`, `local` |  |
+| `deletion` | string, one of `retain`, `delete` | Only for a local volume declared by name: retain, the default, keeps the volume and its files with no owner when the Function drops it or is deleted, so that a ref can take it again; delete removes them. |
+| `name` | string, a DNS-1123 label | The volume's name, unique in the list; set name or ref, not both. The code reads the directory's path from FUNCD_VOLUME_&lt;NAME&gt;, the name or ref upper-cased. |
+| `ref` | string, a DNS-1123 label | Instead of name: a retained local volume that this Function, or an earlier Function of the same name, dropped with retain, and that the Function takes over; with no such volume, it waits in Pending with VolumeNotFound. Only a local volume takes a ref; it sets no deletion and states the retained volume's own size, since apply refuses another size. |
+| `size` | string, a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB) | The volume's size, the most its directory may hold, above zero; set size or sizeBytes, not both. Apply refuses a local volume whose size changes, or that does not fit both the capacity that volumes.capacity or volumes.capacityBytes sets and the namespace's spec.volumeBudget. |
+| `sizeBytes` | integer, at least 1 | The same size as a number of bytes. Set size or sizeBytes, not both. |
+| `type` | string, required, one of `emptyDir`, `local` | emptyDir is a new empty directory for each worker, removed with it; local is one durable directory that keeps its files through a crash, a redeploy and a scale to zero. A Function with a local volume runs at most 1 replica, and while it redeploys, its old and new workers hold the volume at once. |
 
 ### `App.spec.hooks`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `postApply` | array of [`App.spec.hooks.postApply[]`](#appspechookspostapply) |  |
-| `preApply` | array of [`App.spec.hooks.postApply[]`](#appspechookspostapply) |  |
+| `postApply` | array of [`App.spec.hooks.postApply[]`](#appspechookspostapply) | Called in order, one at a time, once the revision is current, with no deadline. A failed call makes the App Degraded with HookFailed and holds the later post-hooks until funcdctl app retry calls it again; dropped parts are deleted only once every post-hook has succeeded. |
+| `preApply` | array of [`App.spec.hooks.postApply[]`](#appspechookspostapply) | Called in order, one at a time, before the revision's other parts change: until all have succeeded, funcd writes only the pre-hook Functions and what they bind. A failed call fails the revision with HookFailed, and funcdctl app retry calls it again; a pre-hook whose Function or SQL database is not ready when app.upgradeTimeout runs out fails it too. A pre-hook may not link to a functions entry that is neither a ref entry nor a pre-hook, which is written after them. |
 
 ### `App.spec.hooks.postApply[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `function` | string, required, a DNS-1123 label |  |
+| `function` | string, required, a DNS-1123 label | The name of a functions entry of this App, not a ref entry, at most once per list. funcd calls it with a CloudEvent whose type is the list's name and whose data is the revision's spec.hookInput. The call fails on an answer of 400 or more, on a Function with protocol http, or when no answer starts within the Function's spec.timeout, else invoke.defaultTimeout, its wake included. |
 
 ### `App.spec.kv[]`
 
@@ -469,7 +469,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `data` | map of string to string |  |
-| `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as <name>-<hash of data>, and the config of each part that names it is set to that stored name. |
+| `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as &lt;name&gt;-&lt;hash of data&gt;, and the config of each part that names it is set to that stored name. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 
 ### `App.spec.lakes[].secrets[]`
@@ -477,15 +477,15 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `description` | string | What the Secret is for, for the installer who provides it. |
-| `keys` | array of string values, required, each matching `^[A-Za-z_][A-Za-z0-9_]*$` | The keys the parts read: the Secret's data must hold each of them. |
-| `name` | string, required, a DNS-1123 label | The name of a Secret in the App's namespace. The platform holds its value; the App never writes it. |
+| `keys` | array of string values, required, each matching `^[A-Za-z_][A-Za-z0-9_]*$` | The keys read from the Secret: its data must hold each of them. |
+| `name` | string, required, a DNS-1123 label | The name of a Secret in the namespace of the resource that declares it. funcd holds its value; the resource never writes it. |
 
 ### `App.spec.requires[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `app` | string, required, a DNS-1123 label |  |
-| `version` | string |  |
+| `app` | string, required, a DNS-1123 label | The name of an App of this namespace that this App needs; no two entries name the same App. It need not exist yet: the revision waits for it. |
+| `version` | string | An npm-style version range, such as ^2.0.0, that the required App's spec.version must be in; empty accepts any version, even none. A range matches only a SemVer 2.0.0 version, and a prerelease only when the range holds one. |
 
 ### `App.spec.routes[]`
 
@@ -513,7 +513,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `function` | string, a DNS-1123 label |  |
-| `site` | string, a DNS-1123 label | A Site of this Route's namespace: the rule serves the build that Site serves now, and its config.json at <path>/config.json, following each new build. A Prefix rule; the Route may not carry the Site's own name. |
+| `site` | string, a DNS-1123 label | A Site of this Route's namespace: the rule serves the build that Site serves now, and its config.json at &lt;path&gt;/config.json, following each new build. A Prefix rule; the Route may not carry the Site's own name. |
 | `static` | object, [`App.spec.routes[].rules[].backend.static`](#appspecroutesrulesbackendstatic) |  |
 
 ### `App.spec.routes[].rules[].backend.static`
@@ -530,8 +530,8 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `description` | string | What the Secret is for, for the installer who provides it. |
-| `keys` | array of string values, required, each matching `^[A-Za-z_][A-Za-z0-9_]*$` | The keys the parts read: the Secret's data must hold each of them. |
-| `name` | string, required, a DNS-1123 label | The name of a Secret in the App's namespace. The platform holds its value; the App never writes it. |
+| `keys` | array of string values, required, each matching `^[A-Za-z_][A-Za-z0-9_]*$` | The keys read from the Secret: its data must hold each of them. |
+| `name` | string, required, a DNS-1123 label | The name of a Secret in the namespace of the resource that declares it. funcd holds its value; the resource never writes it. |
 
 ### `App.spec.sensors[]`
 
@@ -601,11 +601,11 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `auth` | object, [`App.spec.functions[].ingress.auth`](#appspecfunctionsingressauth) |  |
-| `baseHref` | boolean | Serve a copy of the bundle's index whose <base href> is the Site's mount, so a bundle built with relative URLs runs at any path, deep links included. |
-| `enabled` | boolean |  |
-| `host` | string |  |
-| `path` | string |  |
+| `auth` | object, [`App.spec.functions[].ingress.auth`](#appspecfunctionsingressauth) | How the edge checks callers at the resource's own address; unset, the namespace's spec.edgeDefaults.auth decides, else open. A Lake refuses it, since the Lake gateway checks each caller. |
+| `baseHref` | boolean | Serve a copy of the bundle's index whose &lt;base href&gt; is the Site's mount, so a bundle built with relative URLs runs at any path, deep links included. |
+| `enabled` | boolean | Turns the resource's own address on or off. Unset, it is on unless the namespace's spec.defaultExposure is explicit; a Lake's address is on only when this is true. |
+| `host` | string | The exact host of the resource's own address. Empty is the namespace's host, &lt;namespace&gt;.&lt;server.baseDomain&gt;, or, in the default namespace, any host that no other namespace reserves. |
+| `path` | string | The edge path of the resource's own address, which begins with / and does not end with / unless it is /. Empty is / when host is set, else /function/&lt;name&gt;, /site/&lt;name&gt; or /lake/&lt;name&gt; by kind. |
 | `rules` | array of [`App.spec.sites[].ingress.rules[]`](#appspecsitesingressrules) |  |
 
 ### `App.spec.sites[].ingress.rules[]`
@@ -638,18 +638,18 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `buckets` | array of [`App.spec.workflows[].buckets[]`](#appspecworkflowsbuckets) |  |
-| `configMaps` | array of [`App.spec.workflows[].configMaps[]`](#appspecworkflowsconfigmaps) |  |
-| `contract` | object, [`App.spec.workflows[].contract`](#appspecworkflowscontract) |  |
-| `kv` | array of [`App.spec.workflows[].kv[]`](#appspecworkflowskv) |  |
-| `lakes` | array of [`App.spec.workflows[].lakes[]`](#appspecworkflowslakes) |  |
+| `buckets` | array of [`App.spec.workflows[].buckets[]`](#appspecworkflowsbuckets) | The Buckets for the steps to bind. An entry with a name defines a bucket, each prefix owner naming a step or a declared lake; a ref entry binds an existing one. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares. |
+| `configMaps` | array of [`App.spec.workflows[].configMaps[]`](#appspecworkflowsconfigmaps) | The ConfigMaps for the steps to bind: an entry with a name defines one, deleted with the Workflow, and a ref entry binds an existing one. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares. |
+| `contract` | object, [`App.spec.workflows[].contract`](#appspecworkflowscontract) | A contract the author declares for the run input and output. funcd checks its schemas at apply, but runs are checked against the contract it derives from the steps, in status.contract, not against this one. |
+| `kv` | array of [`App.spec.workflows[].kv[]`](#appspecworkflowskv) | The KV stores for the steps to bind. An entry with a name defines a store, each table owner naming a step; a ref entry binds an existing one. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares. |
+| `lakes` | array of [`App.spec.workflows[].lakes[]`](#appspecworkflowslakes) | The Lakes for the steps to bind: an entry with a name defines one, deleted with the Workflow, and a ref entry binds an existing one. A defined lake may not share a step's name, and its buckets, ConfigMaps and Secrets are declared at the Workflow's root. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares. |
 | `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
-| `onFailure` | string, a DNS-1123 label |  |
-| `pooling` | object, [`App.spec.workflows[].pooling`](#appspecworkflowspooling) |  |
+| `onFailure` | string, a DNS-1123 label | The name of a function step that funcd calls once, without retry, when a run fails. Its input is an object of workflow, run, failedStep, reason and input, the run input. It is not part of the step order, so it sets no dependsOn, when or params and no step depends on it; its result never changes the run's phase, and a cancelled run does not call it. |
+| `pooling` | object, [`App.spec.workflows[].pooling`](#appspecworkflowspooling) | How the image steps' Functions share workers and stay warm. A step's function.pooling replaces it for that step. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
-| `secrets` | array of [`App.spec.workflows[].secrets[]`](#appspecworkflowssecrets) |  |
-| `sql` | array of [`App.spec.workflows[].sql[]`](#appspecworkflowssql) |  |
-| `steps` | array of [`App.spec.workflows[].steps[]`](#appspecworkflowssteps) |  |
+| `secrets` | array of [`App.spec.workflows[].secrets[]`](#appspecworkflowssecrets) | The Secrets the steps bind, with the keys they read. Until each Secret exists and holds its keys, the Workflow is not Ready and no run of it starts. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares. |
+| `sql` | array of [`App.spec.workflows[].sql[]`](#appspecworkflowssql) | The SQL databases for the steps to bind. An entry with a name defines a database, its owner naming a step or a declared lake; a ref entry binds an existing one. An App's spec.workflows[] entry must leave it empty: its steps bind what the App declares. |
+| `steps` | array of [`App.spec.workflows[].steps[]`](#appspecworkflowssteps) | The steps each run executes, at least one. They run in list order unless dependsOn says otherwise, and the first step takes the run input. |
 | `timeout` | string, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | The wall-clock bound on a whole run, paused time excluded: 0s to 168h; 0s or unset means no bound. |
 
 ### `App.spec.workflows[].buckets[]`
@@ -667,16 +667,16 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `data` | map of string to string |  |
-| `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as <name>-<hash of data>, and the config of each part that names it is set to that stored name. |
+| `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as &lt;name&gt;-&lt;hash of data&gt;, and the config of each part that names it is set to that stored name. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 
 ### `App.spec.workflows[].contract`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `dialect` | string |  |
-| `input` | any JSON value |  |
-| `output` | any JSON value |  |
+| `dialect` | string | The URI of the JSON Schema dialect that input and output follow. funcd checks nothing against it. |
+| `input` | any JSON value | The JSON Schema of the input. A declared one must be an object, and each property it does not require must declare a default. |
+| `output` | any JSON value | The JSON Schema of the output. A declared one must be an object, and each property it does not require must declare a default. |
 
 ### `App.spec.workflows[].kv[]`
 
@@ -717,7 +717,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `data` | map of string to string |  |
-| `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as <name>-<hash of data>, and the config of each part that names it is set to that stored name. |
+| `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as &lt;name&gt;-&lt;hash of data&gt;, and the config of each part that names it is set to that stored name. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 
 ### `App.spec.workflows[].lakes[].secrets[]`
@@ -725,24 +725,24 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `description` | string | What the Secret is for, for the installer who provides it. |
-| `keys` | array of string values, required, each matching `^[A-Za-z_][A-Za-z0-9_]*$` | The keys the parts read: the Secret's data must hold each of them. |
-| `name` | string, required, a DNS-1123 label | The name of a Secret in the App's namespace. The platform holds its value; the App never writes it. |
+| `keys` | array of string values, required, each matching `^[A-Za-z_][A-Za-z0-9_]*$` | The keys read from the Secret: its data must hold each of them. |
+| `name` | string, required, a DNS-1123 label | The name of a Secret in the namespace of the resource that declares it. funcd holds its value; the resource never writes it. |
 
 ### `App.spec.workflows[].pooling`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `minReplicas` | integer, 0 to 15 |  |
-| `mode` | string, one of `shared`, `isolated` |  |
-| `worker` | string, a DNS-1123 label |  |
+| `minReplicas` | integer, 0 to 15 | The workers kept warm for each image step's Function. 0, the default, scales a step's Function to zero after 5 minutes without a call, so its next call waits for a cold start. |
+| `mode` | string, one of `shared`, `isolated` | shared, the default, runs each image step's Function in the pool worker that worker names, shared with the steps of the same runtime that bind and own the same data; isolated gives each step's Function a worker of its own. Only the process runtime pools, for node runtimes and, with Python 3.14 or later, python ones; elsewhere shared runs each step's Function solo too. |
+| `worker` | string, a DNS-1123 label | The pool worker's name when mode is shared; empty means the Workflow's name. isolated ignores it. |
 
 ### `App.spec.workflows[].secrets[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `description` | string | What the Secret is for, for the installer who provides it. |
-| `keys` | array of string values, required, each matching `^[A-Za-z_][A-Za-z0-9_]*$` | The keys the parts read: the Secret's data must hold each of them. |
-| `name` | string, required, a DNS-1123 label | The name of a Secret in the App's namespace. The platform holds its value; the App never writes it. |
+| `keys` | array of string values, required, each matching `^[A-Za-z_][A-Za-z0-9_]*$` | The keys read from the Secret: its data must hold each of them. |
+| `name` | string, required, a DNS-1123 label | The name of a Secret in the namespace of the resource that declares it. funcd holds its value; the resource never writes it. |
 
 ### `App.spec.workflows[].sql[]`
 
@@ -759,120 +759,120 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `builtin` | object, [`App.spec.workflows[].steps[].builtin`](#appspecworkflowsstepsbuiltin) |  |
-| `dependsOn` | array of string values, each a DNS-1123 label |  |
-| `function` | object, [`App.spec.workflows[].steps[].function`](#appspecworkflowsstepsfunction) |  |
-| `join` | string, one of `all`, `any` |  |
-| `name` | string, required, a DNS-1123 label |  |
-| `params` | any JSON value |  |
-| `when` | object, [`App.spec.workflows[].steps[].when`](#appspecworkflowsstepswhen) |  |
-| `workflow` | object, [`App.spec.workflows[].steps[].workflow`](#appspecworkflowsstepsworkflow) |  |
+| `builtin` | object, [`App.spec.workflows[].steps[].builtin`](#appspecworkflowsstepsbuiltin) | A step that funcd runs itself, with no Function: a wait or a pass. Exactly one of function, builtin and workflow. |
+| `dependsOn` | array of string values, each a DNS-1123 label | The steps this step follows; empty means the step listed before it, not counting the onFailure step. With one parent the step's input is that parent's output, with several an object of their outputs keyed by step name. Each name is another step, not the onFailure step, and the steps form no cycle. |
+| `function` | object, [`App.spec.workflows[].steps[].function`](#appspecworkflowsstepsfunction) | A step that calls a Function: one funcd creates from an image for this step, or an existing one by ref. Exactly one of function, builtin and workflow. |
+| `join` | string, one of `all`, `any` | How the step waits on its parents: all, the default, runs it when every parent succeeded and skips it otherwise; any waits until every parent has ended, then runs it on the outputs of those that succeeded, or skips it if none did. |
+| `name` | string, required, a DNS-1123 label | The step's name, unique among the steps. dependsOn, onFailure, store owners and step.&lt;name&gt;.output in expressions refer to the step by it, and an image step's Function is named &lt;workflow&gt;-&lt;step&gt;. |
+| `params` | any JSON value | A JSON object merged over the step's input, its keys winning: a function step gets the result as its input, and a workflow step passes it to the child run. Its values must fit the step's input contract, and a field it sets need not come from a parent. A wait ignores it, and the onFailure step sets none. |
+| `when` | object, [`App.spec.workflows[].steps[].when`](#appspecworkflowsstepswhen) | A condition the step runs on: when it is false, the step is Skipped, and so are the steps after it that need it to succeed. The onFailure step has none. |
+| `workflow` | object, [`App.spec.workflows[].steps[].workflow`](#appspecworkflowsstepsworkflow) | A step that runs another Workflow as a child run: the step's input, params included, is the child's input, and the child's output is the step's output. A child that does not succeed fails the step, and a Workflow that reaches itself through such steps is never Ready. Exactly one of function, builtin and workflow. |
 
 ### `App.spec.workflows[].steps[].builtin`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `pass` | string |  |
-| `wait` | string |  |
+| `pass` | string | A $&#123;&#123; &#125;&#125; JavaScript expression whose value is the step's output, over input, the run input, and step.&lt;name&gt;.output of each step it follows. It is checked only when the step runs: an error fails the step. Exactly one of wait and pass. |
+| `wait` | string | How long the step waits before it succeeds with its input as its output: a duration such as 30s, checked at apply, or a $&#123;&#123; &#125;&#125; expression that must yield one when the step runs. The wait counts toward the run's timeout, and a cancel ends it. Exactly one of wait and pass. |
 
 ### `App.spec.workflows[].steps[].function`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `bindings` | object, [`App.spec.workflows[].steps[].function.bindings`](#appspecworkflowsstepsfunctionbindings) |  |
-| `image` | string |  |
-| `pooling` | object, [`App.spec.workflows[].pooling`](#appspecworkflowspooling) |  |
-| `ref` | string, a DNS-1123 label |  |
-| `retry` | object, [`App.spec.workflows[].steps[].function.retry`](#appspecworkflowsstepsfunctionretry) |  |
+| `bindings` | object, [`App.spec.workflows[].steps[].function.bindings`](#appspecworkflowsstepsfunctionbindings) | What the step's code uses, copied onto an image step's Function: each store, lake, ConfigMap and Secret it names must be declared at the root of the Workflow or of its App. A ref step ignores it: the Function it names keeps its own. |
+| `image` | string | The artifact of the step's own Function, &lt;workflow&gt;-&lt;step&gt;, which funcd creates with the runtime the artifact declares and its handle export. That name must fit in 63 characters. Exactly one of image and ref. |
+| `pooling` | object, [`App.spec.workflows[].pooling`](#appspecworkflowspooling) | Replaces the Workflow's pooling for this step's Function, as a whole: a field it leaves unset takes its default, not the Workflow's value. A ref step ignores it. |
+| `ref` | string, a DNS-1123 label | The name of an existing Function in the namespace that the step calls; funcd does not create or change it, and a run waits while it is missing. A Function whose protocol is http fails the step. Exactly one of image and ref. |
+| `retry` | object, [`App.spec.workflows[].steps[].function.retry`](#appspecworkflowsstepsfunctionretry) | How a failed call is tried again. A 5xx answer, a timeout or a transport error is retried, while a 4xx answer or an output over workflow.payloadLimit fails the step at once. Unset, the step gets workflow.defaultRetry attempts with workflow.defaultRetryBackoff; the onFailure step is called once. |
 | `timeout` | string, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | The per-step invocation bound: 0s to 24h; 0s or unset means workflow.defaultStepTimeout. |
 
 ### `App.spec.workflows[].steps[].function.bindings`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `blob` | array of [`App.spec.functions[].bindings.blob[]`](#appspecfunctionsbindingsblob) |  |
-| `config` | array of string values, each a DNS-1123 label |  |
-| `kv` | array of [`App.spec.functions[].bindings.kv[]`](#appspecfunctionsbindingskv) |  |
-| `lake` | array of [`App.spec.functions[].bindings.lake[]`](#appspecfunctionsbindingslake) |  |
-| `secret` | array of string values, each a DNS-1123 label |  |
-| `sql` | array of [`App.spec.functions[].bindings.sql[]`](#appspecfunctionsbindingssql) |  |
+| `blob` | array of [`App.spec.functions[].bindings.blob[]`](#appspecfunctionsbindingsblob) | The Bucket prefixes the step's code reaches through ctx.blob, and over S3 while the S3 gateway is on, each under its alias; each Bucket must be declared at the root, in buckets. The binding grants reads; only the prefix's owner and the writers that a RolesAssignment names may write. |
+| `config` | array of string values, each a DNS-1123 label | ConfigMaps whose keys each worker of the step gets as environment variables when it starts; each must be declared at the root, in configMaps. A key that starts with FUNCD_, or that a bound Secret holds, is left out. |
+| `kv` | array of [`App.spec.functions[].bindings.kv[]`](#appspecfunctionsbindingskv) | The KV tables the step's code reaches through ctx.kv, each under its alias; each store must be declared at the root, in kv. The binding grants reads; only the table's owner and the writers that a RolesAssignment names may write. |
+| `lake` | array of [`App.spec.functions[].bindings.lake[]`](#appspecfunctionsbindingslake) | The Lakes the step's code queries, each under its alias; each must be declared at the root, in lakes. The step's Function waits until every bound Lake is Ready. |
+| `secret` | array of string values, each a DNS-1123 label | Secrets whose keys the step's code reads through ctx.secret, on each read; each must be declared at the root, in secrets. No value reaches the worker's environment. |
+| `sql` | array of [`App.spec.functions[].bindings.sql[]`](#appspecfunctionsbindingssql) | The SQLDatabases the step's code queries through ctx.sql, each under its alias; each must be declared at the root, in sql. The binding grants reads; only the database's owner and the writers that a RolesAssignment names may write. |
 
 ### `App.spec.workflows[].steps[].function.retry`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `backoff` | string, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | The base of the exponential retry backoff: 0s to 1h; 0s or unset means workflow.defaultRetryBackoff. |
-| `maxAttempts` | integer, 1 to 100 |  |
+| `maxAttempts` | integer, 1 to 100 | How many calls the step may make, the first included: 1 means no retry. Unset means workflow.defaultRetry. A call that a funcd restart cuts runs again, even past this count. |
 
 ### `App.spec.workflows[].steps[].when`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `condition` | string, required |  |
+| `condition` | string, required | A $&#123;&#123; &#125;&#125; JavaScript expression that yields true or false, over input, the run input, and step.&lt;name&gt;.output of each step it follows. It is type-checked against the steps' contracts before the Workflow is Ready; one that cannot be evaluated when the step is reached fails the run. |
 
 ### `App.spec.workflows[].steps[].workflow`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `ref` | string, a DNS-1123 label |  |
+| `ref` | string, a DNS-1123 label | The child Workflow's name, in the same namespace; it must be set. A run waits while the child is missing or not Ready, then runs it as it was when the run started. |
 
 ### `App.status`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `children` | array of [`App.status.children[]`](#appstatuschildren) |  |
+| `children` | array of [`App.status.children[]`](#appstatuschildren) | One line per entry of configMaps, kv, buckets, sql, functions, workflows, eventSources, sensors, routes, sites, lakes and backupSchedules, ref entries included, in that order, which is the order funcd writes them. Then one Pruning line per dropped object not deleted yet. |
 | `conditions` | array of [Condition](../../common-definitions.md#condition) | The conditions that explain the phase. |
-| `currentRevision` | string, a DNS-1123 label |  |
-| `lastSelfHeal` | object, [`App.status.lastSelfHeal`](#appstatuslastselfheal) |  |
-| `latestRevision` | string, a DNS-1123 label |  |
+| `currentRevision` | string, a DNS-1123 label | The AppRevision whose rollout last completed, empty until one has. After a failed rollout the parts keep the newer spec, so it names the last complete rollout, not what runs. |
+| `lastSelfHeal` | object, [`App.status.lastSelfHeal`](#appstatuslastselfheal) | The last part that funcd wrote back after another writer changed or deleted it, and when. |
+| `latestRevision` | string, a DNS-1123 label | The newest AppRevision, created for the latest spec. It differs from currentRevision while a rollout waits or runs, and after one fails. |
 | `observedGeneration` | integer | The generation of the spec that funcd last acted on. |
 | `phase` | string, one of `Pending`, `Deploying`, `Ready`, `Idle`, `Degraded`, `Failed`, `Terminating` | Where the object is in its lifecycle. |
-| `plan` | object, [`App.status.plan`](#appstatusplan) |  |
-| `requiredBy` | array of string values, each a DNS-1123 label |  |
-| `requires` | array of [`App.status.requires[]`](#appstatusrequires) |  |
-| `version` | string |  |
+| `plan` | object, [`App.status.plan`](#appstatusplan) | What the write would make the rollout do, set only in the answer to a dry-run write (dryRun=true) and never stored. It leaves timing out: a hold, a pause or an unmet requirement does not show. |
+| `requiredBy` | array of string values, each a DNS-1123 label | The Apps of this namespace whose spec.requires names this App, sorted by name. |
+| `requires` | array of [`App.status.requires[]`](#appstatusrequires) | The state of each spec.requires entry, in its order. |
+| `version` | string | The spec.version of the current revision. |
 
 ### `App.status.children[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `kind` | string, required |  |
-| `name` | string, required, a DNS-1123 label |  |
-| `reason` | string |  |
-| `state` | string, required, one of `Ready`, `NotStarted`, `Pending`, `Pruning` |  |
+| `kind` | string, required | The object's kind. |
+| `name` | string, required, a DNS-1123 label | The object's name: a ref entry's target, and for a defined ConfigMap its stored name. |
+| `reason` | string | Why the part is not Ready, such as RefNotFound, Progressing, ChildNotOwned, ChildInvalid, StepNotReady or the part's own reason. For a Pruning object, why it is kept, such as NotCurrent until the new revision is current, RunHeld while a run holds the Function, or InUse: &lt;Kind&gt;/&lt;name&gt;. |
+| `state` | string, required, one of `Ready`, `NotStarted`, `Pending`, `Pruning` | Ready when the part exists and is ready. NotStarted for a Function that has not run since it changed, such as one scaled to zero: it does not hold up the rollout, and it makes the App's Ready condition Unknown rather than True. Pending while the part is missing or not ready, and Pruning for a dropped object not deleted yet, which the App's Ready condition leaves out. |
 
 ### `App.status.lastSelfHeal`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `at` | string, required, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) |  |
-| `kind` | string, required |  |
-| `name` | string, required, a DNS-1123 label |  |
+| `at` | string, required, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When funcd wrote it back. |
+| `kind` | string, required | The kind of the part written back. |
+| `name` | string, required, a DNS-1123 label | The name of the part written back. |
 
 ### `App.status.plan`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `hooks` | array of string values |  |
-| `parts` | array of [`App.status.plan.parts[]`](#appstatusplanparts) |  |
-| `revision` | string, a DNS-1123 label |  |
+| `hooks` | array of string values | The hook Functions the new revision would call, in call order: preApply, then postApply, a Function in both lists twice. Empty when the write would create no revision. |
+| `parts` | array of [`App.status.plan.parts[]`](#appstatusplanparts) | The parts the write would create or update, in the order of status.children, then the objects it would prune. Where the rollout would stop, it holds only the line of that stop. |
+| `revision` | string, a DNS-1123 label | The AppRevision the write would create. Empty when the latest revision has this spec already, or when an object of another owner holds that name, which parts then shows. |
 
 ### `App.status.plan.parts[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `action` | string, one of `create`, `update`, `prune` |  |
-| `kind` | string, required |  |
-| `name` | string, required, a DNS-1123 label |  |
-| `reason` | string |  |
+| `action` | string, one of `create`, `update`, `prune` | What the write would do to the object. Empty on the line of a declared Secret where the rollout would stop. |
+| `kind` | string, required | The object's kind. |
+| `name` | string, required, a DNS-1123 label | The object's name; for a defined ConfigMap, its stored name. |
+| `reason` | string | Set only on the line where the rollout would stop: ChildNotOwned when an object of another owner holds the name, SecretNotFound or SecretKeyMissing for a declared Secret. |
 
 ### `App.status.requires[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `app` | string, required, a DNS-1123 label |  |
-| `met` | boolean, required |  |
-| `version` | string |  |
+| `app` | string, required, a DNS-1123 label | The required App, as its spec.requires entry names it. |
+| `met` | boolean, required | Whether the required App exists, has a spec.version the range accepts, and is Ready with that spec rolled out. |
+| `version` | string | The required App's spec.version, empty when it sets none or does not exist. |
 
 ## AppRevision
 
@@ -884,10 +884,10 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `app` | object, [`AppRevision.spec.app`](#apprevisionspecapp), required |  |
-| `hookInput` | object, [`AppRevision.spec.hookInput`](#apprevisionspechookinput) |  |
-| `number` | integer, required, 1 to 9999999999 |  |
-| `spec` | object, [`App.spec`](#appspec), required |  |
+| `app` | object, [`AppRevision.spec.app`](#apprevisionspecapp), required | The App this revision belongs to. |
+| `hookInput` | object, [`AppRevision.spec.hookInput`](#apprevisionspechookinput) | The data that each hook call of this revision receives, fixed when the revision was created. Set only when its spec has a hook. |
+| `number` | integer, required, 1 to 9999999999 | The revision's number: 1 for the App's first revision, then one more than the latest. The revision is named &lt;app&gt;-&lt;number&gt;, and funcdctl app rollback takes this number. |
+| `spec` | object, [`App.spec`](#appspec), required | The App's spec when this revision was created, without spec.paused. It never changes. |
 
 ### `AppRevision.spec.app`
 
@@ -901,29 +901,29 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `app` | string, required, a DNS-1123 label |  |
-| `event` | string, required, one of `install`, `upgrade`, `rollback` |  |
-| `from` | string, a DNS-1123 label |  |
-| `fromVersion` | string |  |
-| `to` | string, required, a DNS-1123 label |  |
-| `toVersion` | string |  |
+| `app` | string, required, a DNS-1123 label | The App's name. |
+| `event` | string, required, one of `install`, `upgrade`, `rollback` | install when the App had no current revision, rollback when the spec equals that of a kept revision that was current once, upgrade otherwise. |
+| `from` | string, a DNS-1123 label | The App's current revision when this one was created, empty on an install. |
+| `fromVersion` | string | The spec.version of the from revision, empty on an install or when it sets none. |
+| `to` | string, required, a DNS-1123 label | This revision's name. |
+| `toVersion` | string | This revision's spec.version, empty when it sets none. |
 
 ### `AppRevision.status`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `conditions` | array of [Condition](../../common-definitions.md#condition) | The conditions that explain the phase. |
-| `hooks` | array of [`AppRevision.status.hooks[]`](#apprevisionstatushooks) |  |
+| `hooks` | array of [`AppRevision.status.hooks[]`](#apprevisionstatushooks) | The hook calls of this revision in call order, a retried call included. A call that ends during a stop of funcd, a hold or a pause of the App is not recorded and is made again. |
 | `observedGeneration` | integer | The generation of the spec that funcd last acted on. |
 | `phase` | string, one of `Pending`, `Deploying`, `Ready`, `Idle`, `Degraded`, `Failed`, `Terminating` | Where the object is in its lifecycle. |
-| `startedAt` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) |  |
+| `startedAt` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the rollout started: when the revision was created, or, when it waited for required Apps, once they were all met; unset while it waits. The rollout fails if it is not complete app.upgradeTimeout after the latest of this time, a resume of the App, the release of a hold and the end of the last pre-hook call, unless a pre-hook call is running. |
 
 ### `AppRevision.status.hooks[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `endTime` | string, required, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) |  |
-| `function` | string, required, a DNS-1123 label |  |
-| `invocation` | string, required, a DNS-1123 label |  |
-| `phase` | string, required, one of `Pending`, `Deploying`, `Ready`, `Idle`, `Degraded`, `Failed`, `Terminating` |  |
-| `point` | string, required, one of `preApply`, `postApply` |  |
+| `endTime` | string, required, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the call ended. |
+| `function` | string, required, a DNS-1123 label | The hook Function that was called. |
+| `invocation` | string, required, a DNS-1123 label | The Invocation that records the call, with its start, end and error. It belongs to this revision and is deleted with it. |
+| `phase` | string, required, one of `Pending`, `Deploying`, `Ready`, `Idle`, `Degraded`, `Failed`, `Terminating` | Ready when the call succeeded and Failed when it did not; no other phase appears here. |
+| `point` | string, required, one of `preApply`, `postApply` | The hook list the call was made for. |

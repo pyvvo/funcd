@@ -16,75 +16,75 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `bindings` | object, [`Function.spec.bindings`](#functionspecbindings) |  |
-| `buckets` | array of [`Function.spec.buckets[]`](#functionspecbuckets) |  |
-| `configMaps` | array of [`Function.spec.configMaps[]`](#functionspecconfigmaps) |  |
-| `handler` | string, matching `^[A-Za-z_][A-Za-z0-9_.]*$` |  |
-| `image` | string |  |
-| `imageDigest` | string, a sha256 digest |  |
-| `ingress` | object, [`Function.spec.ingress`](#functionspecingress) |  |
-| `kv` | array of [`Function.spec.kv[]`](#functionspeckv) |  |
-| `lakes` | array of [`Function.spec.lakes[]`](#functionspeclakes) |  |
-| `pooling` | object, [`Function.spec.pooling`](#functionspecpooling) |  |
-| `protocol` | string, one of `""`, `cloudevent`, `http` |  |
-| `replicas` | integer, 0 to 15 |  |
-| `resources` | object, [`Function.spec.resources`](#functionspecresources) |  |
-| `runtime` | string, a DNS-1123 label |  |
-| `scaling` | object, [`Function.spec.scaling`](#functionspecscaling) |  |
-| `secrets` | array of [`Function.spec.secrets[]`](#functionspecsecrets) |  |
-| `sql` | array of [`Function.spec.sql[]`](#functionspecsql) |  |
+| `bindings` | object, [`Function.spec.bindings`](#functionspecbindings) | What the code may use: KV tables, Bucket prefixes, SQL databases, Lakes and other Functions, each under an alias, and ConfigMaps and Secrets. A binding is the grant: a call on an alias with no binding is refused with 403. Each store, Lake, ConfigMap and Secret it names must be declared at the root, in this spec's kv, buckets, sql, lakes, configMaps or secrets, or in the App's for an App's part. |
+| `buckets` | array of [`Function.spec.buckets[]`](#functionspecbuckets) | The Buckets the Function declares: by name it creates and owns one, and a Bucket of that name that it does not own holds it in Pending with StoreNotOwned; by ref it uses an existing one. spec.bindings.blob binds only a declared Bucket, and a prefix with no owner gets the Function as its owner. An App's part declares none and binds those that the App declares. |
+| `configMaps` | array of [`Function.spec.configMaps[]`](#functionspecconfigmaps) | The ConfigMaps the Function declares: by name it defines one from its data, which goes with the Function, by ref it uses an existing one. spec.bindings.config binds only a declared ConfigMap, and a defined one that the spec no longer defines is deleted once the Function is Ready again and nothing else names it. An App's part declares none. |
+| `handler` | string, matching `^[A-Za-z_][A-Za-z0-9_.]*$` | The name of the export that the shim calls in the code, such as handle. A Function without one, or whose code has no such export, fails with ShapeInvalid. |
+| `image` | string | The OCI reference of the code's artifact: a registry reference with a tag or a digest, or an oci-layout:// reference to a layout on the server's disk. A Function whose image is missing, or cannot be resolved or pulled, starts no worker. |
+| `imageDigest` | string, a sha256 digest | The sha256 digest that funcd pulls the image by and checks it against. Unset, funcd resolves the image to its digest when it creates the Revision of a new spec and keeps that digest, so a tag that moves later changes nothing. |
+| `ingress` | object, [`Function.spec.ingress`](#functionspecingress) | The Function's own address at the edge. With no host and no path, it answers by name at /function/&lt;name&gt;; a host or a path gives it a Route of its own in place of that address, which its IngressReady condition reports. Its path may not be /function or under it. |
+| `kv` | array of [`Function.spec.kv[]`](#functionspeckv) | The KVStores the Function declares: by name it creates and owns one, and a store of that name that it does not own holds it in Pending with StoreNotOwned; by ref it uses an existing one. spec.bindings.kv binds only a declared store. An App's part declares none and binds those that the App declares. |
+| `lakes` | array of [`Function.spec.lakes[]`](#functionspeclakes) | The Lakes the Function declares: by name it creates one that goes with the Function, by ref it uses an existing one. spec.bindings.lake binds only a declared Lake, and a Lake declared by name declares nothing at its own root: it binds the Function's buckets, configMaps and secrets. An App's part declares none. |
+| `pooling` | object, [`Function.spec.pooling`](#functionspecpooling) | Whether the Function shares a worker with other Functions; unset, it runs in workers of its own. |
+| `protocol` | string, one of `""`, `cloudevent`, `http` | How funcd calls the code. cloudevent, the default, passes each call to the handler as a CloudEvent. http passes each edge request to the handler, an http(app) export: only the edge and another Function's ctx.fetch over a link reach it, and it needs a node runtime and no pooling.worker. |
+| `replicas` | integer, 0 to 15 | How many workers run while the Function is awake: at least 1 once a call wakes it, and at least scaling.minReplicas. Every call goes to the lowest listening replica, and the others are spares. With minReplicas 0, replicas above 0 also starts workers before the first call, but not after a sleep. A local volume allows at most 1. |
+| `resources` | object, [`Function.spec.resources`](#functionspecresources) | The CPU and memory caps of each of the Function's workers; a field left empty takes functions.defaultResources. Only the containerd runtime enforces them, and they cannot be set with pooling.worker. |
+| `runtime` | string, a DNS-1123 label | The runtime that runs the code, such as nodejs22 or python314. A Function without one fails with ShapeInvalid, and one whose runtime this node cannot run fails with RuntimeUnavailable. |
+| `scaling` | object, [`Function.spec.scaling`](#functionspecscaling) | Scale to zero: with minReplicas 0, the default, and an idleTimeout, a Function with no traffic goes Idle and its workers stop until the next call wakes it. |
+| `secrets` | array of [`Function.spec.secrets[]`](#functionspecsecrets) | The Secrets of the namespace that the bindings may name, each with the keys the code reads; spec.bindings.secret names only a declared Secret. The Function waits in Pending, with SecretNotFound or SecretKeyMissing, until each one exists with every declared key. An App's part declares none and binds those that the App declares. |
+| `sql` | array of [`Function.spec.sql[]`](#functionspecsql) | The SQLDatabases the Function declares: by name it creates and owns one, and a database of that name that it does not own holds it in Pending with StoreNotOwned; by ref it uses an existing one. spec.bindings.sql binds only a declared database, and a database with no owner gets the Function as its owner. An App's part declares none and binds those that the App declares. |
 | `timeout` | string, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | Bounds an external invoke until its response starts: 0s to 1h; 0s or unset means invoke.defaultTimeout. |
-| `volumes` | array of [`Function.spec.volumes[]`](#functionspecvolumes) |  |
+| `volumes` | array of [`Function.spec.volumes[]`](#functionspecvolumes) | The directories the Function's workers mount. Apply refuses a Function with one unless runtime.mode is containerd and volumes.capacity or volumes.capacityBytes is set. A Function with a volume runs solo, even with pooling.worker. |
 
 ### `Function.spec.bindings`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `blob` | array of [`Function.spec.bindings.blob[]`](#functionspecbindingsblob) |  |
-| `config` | array of string values, each a DNS-1123 label |  |
-| `kv` | array of [`Function.spec.bindings.kv[]`](#functionspecbindingskv) |  |
-| `lake` | array of [`Function.spec.bindings.lake[]`](#functionspecbindingslake) |  |
-| `links` | array of [`Function.spec.bindings.links[]`](#functionspecbindingslinks) |  |
-| `secret` | array of string values, each a DNS-1123 label |  |
-| `sql` | array of [`Function.spec.bindings.sql[]`](#functionspecbindingssql) |  |
+| `blob` | array of [`Function.spec.bindings.blob[]`](#functionspecbindingsblob) | The Bucket prefixes the code reaches through ctx.blob, and over S3 while the S3 gateway is on, each under its alias. The binding grants reads; only the prefix's owner and the writers that a RolesAssignment names may write. A Bucket or prefix that does not exist yet holds the Function in Pending with BucketNotFound. |
+| `config` | array of string values, each a DNS-1123 label | ConfigMaps whose keys each worker gets as environment variables when it starts, a later ConfigMap's value winning for a key that both hold. A key that starts with FUNCD_, or that a bound Secret holds, is left out, and a missing ConfigMap holds the Function Failed with ConfigResolveFailed. |
+| `kv` | array of [`Function.spec.bindings.kv[]`](#functionspecbindingskv) | The KV tables the code reaches through ctx.kv, each under its alias. The binding grants reads; only the table's owner and the writers that a RolesAssignment names may write. A store or table that does not exist yet holds the Function in Pending with KVStoreNotFound. |
+| `lake` | array of [`Function.spec.bindings.lake[]`](#functionspecbindingslake) | The Lakes the code queries, each under its alias. The Function waits in Pending with LakeNotReady until every bound Lake is Ready. |
+| `links` | array of [`Function.spec.bindings.links[]`](#functionspecbindingslinks) | The Functions the code calls, each under its alias: through ctx.invoke one whose protocol is cloudevent, through ctx.fetch one whose protocol is http. Each target must exist in the namespace when this Function is applied, the namespace's links form no cycle, and a Function that a link targets cannot be deleted until the link goes. |
+| `secret` | array of string values, each a DNS-1123 label | Secrets whose keys the code reads through ctx.secret, on each read and with no cache, a later Secret's value winning for a key that both hold. No value reaches the worker's environment, and no worker starts until each one can be read. |
+| `sql` | array of [`Function.spec.bindings.sql[]`](#functionspecbindingssql) | The SQLDatabases the code queries through ctx.sql, each under its alias. The binding grants reads; only the database's owner and the writers that a RolesAssignment names may write. A database that does not exist yet holds the Function in Pending with SQLDatabaseNotFound. |
 
 ### `Function.spec.bindings.blob[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `alias` | string, required, a DNS-1123 label |  |
-| `bucket` | string, required, a DNS-1123 label |  |
-| `prefix` | string, required, a DNS-1123 label |  |
+| `alias` | string, required, a DNS-1123 label | The binding's name, unique in the list; code that reaches the prefix through ctx.blob passes it. |
+| `bucket` | string, required, a DNS-1123 label | The Bucket, in the same namespace, that holds the prefix. |
+| `prefix` | string, required, a DNS-1123 label | The prefix, by its name in the Bucket's prefixes. |
 
 ### `Function.spec.bindings.kv[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `alias` | string, required, a DNS-1123 label |  |
-| `store` | string, required, a DNS-1123 label |  |
-| `table` | string, required, a DNS-1123 label |  |
+| `alias` | string, required, a DNS-1123 label | The binding's name, unique in the list, which the code passes to ctx.kv. |
+| `store` | string, required, a DNS-1123 label | The KVStore, in the same namespace, that holds the table. |
+| `table` | string, required, a DNS-1123 label | The table, by its name in the store's tables. |
 
 ### `Function.spec.bindings.lake[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `alias` | string, required, a DNS-1123 label |  |
-| `lake` | string, required, a DNS-1123 label |  |
+| `alias` | string, required, a DNS-1123 label | The binding's name, unique in the list. Each worker reads the Lake's address and its token from FUNCD_LAKE_&lt;ALIAS&gt;_URL and FUNCD_LAKE_&lt;ALIAS&gt;_TOKEN, the alias upper-cased. |
+| `lake` | string, required, a DNS-1123 label | The Lake to query, in the same namespace. |
 
 ### `Function.spec.bindings.links[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `alias` | string, required, a DNS-1123 label |  |
-| `target` | string, required, a DNS-1123 label |  |
+| `alias` | string, required, a DNS-1123 label | The link's name, unique in the list, which the code passes to ctx.invoke or ctx.fetch. |
+| `target` | string, required, a DNS-1123 label | The Function to call, in the same namespace. |
 | `timeout` | string, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | Bounds the synchronous call, a cold-start wake included: 0s to 5m; 0s or unset means the 30s link default. |
 
 ### `Function.spec.bindings.sql[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `alias` | string, required, a DNS-1123 label |  |
-| `database` | string, required, a DNS-1123 label |  |
+| `alias` | string, required, a DNS-1123 label | The binding's name, unique in the list, which the code passes to ctx.sql. |
+| `database` | string, required, a DNS-1123 label | The SQLDatabase to query, in the same namespace. |
 
 ### `Function.spec.buckets[]`
 
@@ -131,23 +131,23 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `data` | map of string to string |  |
-| `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as <name>-<hash of data>, and the config of each part that names it is set to that stored name. |
+| `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as &lt;name&gt;-&lt;hash of data&gt;, and the config of each part that names it is set to that stored name. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 
 ### `Function.spec.ingress`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `auth` | object, [`Function.spec.ingress.auth`](#functionspecingressauth) |  |
-| `enabled` | boolean |  |
-| `host` | string |  |
-| `path` | string |  |
+| `auth` | object, [`Function.spec.ingress.auth`](#functionspecingressauth) | How the edge checks callers at the resource's own address; unset, the namespace's spec.edgeDefaults.auth decides, else open. A Lake refuses it, since the Lake gateway checks each caller. |
+| `enabled` | boolean | Turns the resource's own address on or off. Unset, it is on unless the namespace's spec.defaultExposure is explicit; a Lake's address is on only when this is true. |
+| `host` | string | The exact host of the resource's own address. Empty is the namespace's host, &lt;namespace&gt;.&lt;server.baseDomain&gt;, or, in the default namespace, any host that no other namespace reserves. |
+| `path` | string | The edge path of the resource's own address, which begins with / and does not end with / unless it is /. Empty is / when host is set, else /function/&lt;name&gt;, /site/&lt;name&gt; or /lake/&lt;name&gt; by kind. |
 
 ### `Function.spec.ingress.auth`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `mode` | string, one of `""`, `authenticated`, `open` |  |
+| `mode` | string, one of `""`, `authenticated`, `open` | How the edge checks callers. authenticated requires a bearer token, or an X-Api-Key header, of an identity that RBAC lets get Functions in the namespace: 401 without a valid one, 403 when it may not. open lets anonymous callers in. Empty takes the enclosing stance, if any, else the namespace's spec.edgeDefaults.auth.mode, else open. |
 
 ### `Function.spec.kv[]`
 
@@ -212,7 +212,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `data` | map of string to string |  |
-| `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as <name>-<hash of data>, and the config of each part that names it is set to that stored name. |
+| `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as &lt;name&gt;-&lt;hash of data&gt;, and the config of each part that names it is set to that stored name. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 
 ### `Function.spec.lakes[].location`
@@ -227,37 +227,37 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `description` | string | What the Secret is for, for the installer who provides it. |
-| `keys` | array of string values, required, each matching `^[A-Za-z_][A-Za-z0-9_]*$` | The keys the parts read: the Secret's data must hold each of them. |
-| `name` | string, required, a DNS-1123 label | The name of a Secret in the App's namespace. The platform holds its value; the App never writes it. |
+| `keys` | array of string values, required, each matching `^[A-Za-z_][A-Za-z0-9_]*$` | The keys read from the Secret: its data must hold each of them. |
+| `name` | string, required, a DNS-1123 label | The name of a Secret in the namespace of the resource that declares it. funcd holds its value; the resource never writes it. |
 
 ### `Function.spec.pooling`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `worker` | string |  |
+| `worker` | string | A worker id, a DNS-1123 label: Functions of the namespace that name it, run the same runtime, are in the same resource group and have the same bindings, owned data and grants share one worker, which status.pool names. Empty, the default, runs the Function solo. Only the process runtime pools, for node runtimes and, when the server's Python is 3.14 or later, python ones; anywhere else the Function runs solo too. A pool takes the first 16 Functions by name, and the others wait in Pending with PoolFull. |
 
 ### `Function.spec.resources`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `cpu` | string |  |
-| `memory` | string |  |
+| `cpu` | string | The CPU cap of the worker or engine it sizes, as a number of cores of at least 0.01, such as 0.5 or 2. Empty takes the default of the resource that declares it, or no cap when there is none. Only the containerd runtime enforces it. |
+| `memory` | string | The memory cap of the worker or engine it sizes, such as 256Mi or 4GiB: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B, above zero. Empty takes the default of the resource that declares it, or no cap when there is none. Only the containerd runtime enforces it, and there a worker that passes it is killed. |
 
 ### `Function.spec.scaling`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `idleTimeout` | string, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | The idle time before a worker is reclaimed: 0s to 24h; 0s or unset disables reclaim. |
-| `maxReplicas` | integer, 0 to 15 |  |
-| `minReplicas` | integer, 0 to 15 |  |
+| `maxReplicas` | integer, 0 to 15 | Above 0, the most that minReplicas may be; 0, the default, sets no bound. It starts no worker: replicas and minReplicas alone decide how many run. |
+| `minReplicas` | integer, 0 to 15 | The fewest workers the Function keeps. 0, the default, lets idleTimeout scale it to zero; above 0, it never sleeps. It may not exceed maxReplicas when that is above 0, and a local volume allows at most 1. |
 
 ### `Function.spec.secrets[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `description` | string | What the Secret is for, for the installer who provides it. |
-| `keys` | array of string values, required, each matching `^[A-Za-z_][A-Za-z0-9_]*$` | The keys the parts read: the Secret's data must hold each of them. |
-| `name` | string, required, a DNS-1123 label | The name of a Secret in the App's namespace. The platform holds its value; the App never writes it. |
+| `keys` | array of string values, required, each matching `^[A-Za-z_][A-Za-z0-9_]*$` | The keys read from the Secret: its data must hold each of them. |
+| `name` | string, required, a DNS-1123 label | The name of a Secret in the namespace of the resource that declares it. funcd holds its value; the resource never writes it. |
 
 ### `Function.spec.sql[]`
 
@@ -274,26 +274,26 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `deletion` | string, one of `retain`, `delete` |  |
-| `name` | string, a DNS-1123 label |  |
-| `ref` | string, a DNS-1123 label |  |
-| `size` | string, a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB) |  |
-| `sizeBytes` | integer, at least 1 |  |
-| `type` | string, required, one of `emptyDir`, `local` |  |
+| `deletion` | string, one of `retain`, `delete` | Only for a local volume declared by name: retain, the default, keeps the volume and its files with no owner when the Function drops it or is deleted, so that a ref can take it again; delete removes them. |
+| `name` | string, a DNS-1123 label | The volume's name, unique in the list; set name or ref, not both. The code reads the directory's path from FUNCD_VOLUME_&lt;NAME&gt;, the name or ref upper-cased. |
+| `ref` | string, a DNS-1123 label | Instead of name: a retained local volume that this Function, or an earlier Function of the same name, dropped with retain, and that the Function takes over; with no such volume, it waits in Pending with VolumeNotFound. Only a local volume takes a ref; it sets no deletion and states the retained volume's own size, since apply refuses another size. |
+| `size` | string, a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB) | The volume's size, the most its directory may hold, above zero; set size or sizeBytes, not both. Apply refuses a local volume whose size changes, or that does not fit both the capacity that volumes.capacity or volumes.capacityBytes sets and the namespace's spec.volumeBudget. |
+| `sizeBytes` | integer, at least 1 | The same size as a number of bytes. Set size or sizeBytes, not both. |
+| `type` | string, required, one of `emptyDir`, `local` | emptyDir is a new empty directory for each worker, removed with it; local is one durable directory that keeps its files through a crash, a redeploy and a scale to zero. A Function with a local volume runs at most 1 replica, and while it redeploys, its old and new workers hold the volume at once. |
 
 ### `Function.status`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `conditions` | array of [Condition](../../common-definitions.md#condition) | The conditions that explain the phase. |
-| `currentRevision` | string |  |
-| `drainingRevision` | string |  |
-| `drainingSince` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) |  |
+| `currentRevision` | string | The Revision of the latest spec, named after the Function and its generation. While it differs from servingRevision, its workers come up beside the serving ones. |
+| `drainingRevision` | string | The Revision that the last switch moved the calls from, while any of its workers still drain: each stops once it is idle, no sooner than runtime.handOutSettle after the switch, or at runtime.drainGrace with its calls cut. Cleared with drainingSince once none drains. A worker that an open workflow run pins is not counted and stays until the run ends. A pooled Function leaves it empty. |
+| `drainingSince` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the last switch moved the calls off drainingRevision; cleared with it. |
 | `observedGeneration` | integer | The generation of the spec that funcd last acted on. |
 | `phase` | string, one of `Pending`, `Deploying`, `Ready`, `Idle`, `Degraded`, `Failed`, `Terminating` | Where the object is in its lifecycle. |
-| `pool` | string |  |
-| `replicas` | integer |  |
-| `servingRevision` | string |  |
+| `pool` | string | The pool worker the Function runs in, as &lt;runtime&gt;/&lt;worker&gt;/&lt;access&gt;, where access is a hash of its bindings, owned data, grants and resource group. Empty when it runs solo. |
+| `replicas` | integer | How many of the serving revision's workers are ready. |
+| `servingRevision` | string | The Revision whose workers take the calls; calls move to currentRevision once its workers are ready. Empty until a first worker is ready, and again while the Function wants no worker, such as while it sleeps. |
 
 ## Revision
 
@@ -305,12 +305,12 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `function` | object, [`Revision.spec.function`](#revisionspecfunction), required |  |
-| `handler` | string, matching `^[A-Za-z_][A-Za-z0-9_.]*$` |  |
-| `image` | string |  |
-| `imageDigest` | string, a sha256 digest |  |
-| `number` | integer, required, at least 1 |  |
-| `runtime` | string, a DNS-1123 label |  |
+| `function` | object, [`Revision.spec.function`](#revisionspecfunction), required | The Function whose spec this Revision snapshots. |
+| `handler` | string, matching `^[A-Za-z_][A-Za-z0-9_.]*$` | The export that the Revision's workers call: the Function's spec.handler when funcd created the Revision. |
+| `image` | string | The artifact that the Revision's workers run: the Function's spec.image when funcd created the Revision. |
+| `imageDigest` | string, a sha256 digest | The digest that the Revision's workers pull the image by: the Function's spec.imageDigest, or the digest that its image resolved to when funcd created the Revision. It never changes, even when a tag moves. |
+| `number` | integer, required, at least 1 | The generation of the Function's spec that this Revision snapshots. |
+| `runtime` | string, a DNS-1123 label | The runtime that the Revision's workers run: the Function's spec.runtime when funcd created the Revision. |
 
 ### `Revision.spec.function`
 
@@ -339,8 +339,8 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `conditions` | array of [Condition](../../common-definitions.md#condition) | The conditions that explain the phase. |
-| `endTime` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) |  |
-| `error` | string |  |
+| `endTime` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the call ended, after its last attempt. |
+| `error` | string | Why the call failed, on a Failed record; empty when it succeeded. |
 | `observedGeneration` | integer | The generation of the spec that funcd last acted on. |
 | `phase` | string, one of `Pending`, `Deploying`, `Ready`, `Idle`, `Degraded`, `Failed`, `Terminating` | Where the object is in its lifecycle. |
-| `startTime` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) |  |
+| `startTime` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the call started; for a Sensor's action, its first attempt. |

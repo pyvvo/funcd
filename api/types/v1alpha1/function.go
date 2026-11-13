@@ -52,24 +52,24 @@ type FunctionSpec struct {
 	// Scaling configures scale-to-zero / idle reclaim (ADR-0016, F11). V1 honors
 	// MinReplicas (0 enables scale-to-zero) and IdleTimeout (0 disables reclaim);
 	// MaxReplicas is recorded for forward-compatibility (1→N autoscaling is V3).
-	Scaling Scaling `json:"scaling,omitempty"`
+	Scaling Scaling `json:"scaling,omitempty" doc:"Scale to zero: with minReplicas 0, the default, and an idleTimeout, a Function with no traffic goes Idle and its workers stop until the next call wakes it."`
 	// Runtime is the runtime class / language image (e.g. "nodejs22", "python312") — F13/ADR-0020.
 	// Typed RuntimeName so its DNS-1123 constraint reaches the OpenAPI schema (ADR-0048).
-	Runtime RuntimeName `json:"runtime,omitempty"`
+	Runtime RuntimeName `json:"runtime,omitempty" doc:"The runtime that runs the code, such as nodejs22 or python314. A Function without one fails with ShapeInvalid, and one whose runtime this node cannot run fails with RuntimeUnavailable."`
 	// Handler is the entrypoint the shim resolves at materialization (e.g. "app.handler") — F13.
-	Handler string `json:"handler,omitempty" pattern:"^[A-Za-z_][A-Za-z0-9_.]*$"`
+	Handler string `json:"handler,omitempty" pattern:"^[A-Za-z_][A-Za-z0-9_.]*$" doc:"The name of the export that the shim calls in the code, such as handle. A Function without one, or whose code has no such export, fails with ShapeInvalid."`
 	// Protocol is how the shim calls the code (ADR-0243): "cloudevent", the default, or "http", an http(app) export
 	// that serves every request and that only the edge calls.
-	Protocol FunctionProtocol `json:"protocol,omitempty"`
+	Protocol FunctionProtocol `json:"protocol,omitempty" doc:"How funcd calls the code. cloudevent, the default, passes each call to the handler as a CloudEvent. http passes each edge request to the handler, an http(app) export: only the edge and another Function's ctx.fetch over a link reach it, and it needs a node runtime and no pooling.worker."`
 	// Image is the source artifact OCI ref (oci-layout:// · file:// · a bare registry ref; the tag at the
 	// string end), pulled + served by the runtime — F13/ADR-0020, flattened by ADR-0097 (was spec.artifact.uri).
-	Image string `json:"image,omitempty"`
+	Image string `json:"image,omitempty" doc:"The OCI reference of the code's artifact: a registry reference with a tag or a digest, or an oci-layout:// reference to a layout on the server's disk. A Function whose image is missing, or cannot be resolved or pulled, starts no worker."`
 	// ImageDigest is the content digest pinned into the stamped Revision ("what was validated ships"),
 	// system-set at materialization (ADR-0035) — ADR-0097 (was spec.artifact.digest).
-	ImageDigest string `json:"imageDigest,omitempty" pattern:"^sha256:[a-f0-9]{64}$"`
+	ImageDigest string `json:"imageDigest,omitempty" pattern:"^sha256:[a-f0-9]{64}$" doc:"The sha256 digest that funcd pulls the image by and checks it against. Unset, funcd resolves the image to its digest when it creates the Revision of a new spec and keeps that digest, so a tag that moves later changes nothing."`
 	// Replicas is the manual replica count (>=0); the effective count also honors Scaling + the
 	// activator's wake (ADR-0016/0020) — F13.
-	Replicas int `json:"replicas,omitempty" minimum:"0" maximum:"15"`
+	Replicas int `json:"replicas,omitempty" minimum:"0" maximum:"15" doc:"How many workers run while the Function is awake: at least 1 once a call wakes it, and at least scaling.minReplicas. Every call goes to the lowest listening replica, and the others are spares. With minReplicas 0, replicas above 0 also starts workers before the first call, but not after a sleep. A local volume allows at most 1."`
 	// Timeout bounds an external invoke until its response starts; 0 ⇒ invoke.defaultTimeout. External
 	// invokes only: links and steps keep their own limits (ADR-0151).
 	Timeout Duration `json:"timeout,omitempty" doc:"Bounds an external invoke until its response starts: 0s to 1h; 0s or unset means invoke.defaultTimeout."`
@@ -77,53 +77,53 @@ type FunctionSpec struct {
 	// worker, the default). Functions sharing (namespace, runtime, Pooling.Worker) and the same
 	// access (bindings, owned data, grants) co-locate as handlers in one pool worker; status.pool
 	// names it.
-	Pooling Pooling `json:"pooling,omitempty"`
+	Pooling Pooling `json:"pooling,omitempty" doc:"Whether the Function shares a worker with other Functions; unset, it runs in workers of its own."`
 	// Resources sizes each solo worker (ADR-0291): its cpu and memory, enforced by the runtime driver; an empty field
 	// takes functions.defaultResources. Not with pooling.worker: a pool's heap cap is pool-wide.
-	Resources ResourceSpec `json:"resources,omitzero"`
+	Resources ResourceSpec `json:"resources,omitzero" doc:"The CPU and memory caps of each of the Function's workers; a field left empty takes functions.defaultResources. Only the containerd runtime enforces them, and they cannot be set with pooling.worker."`
 	// Bindings are what the Function's code uses (ADR-0246): each binding is its grant, named like the ctx accessor
 	// that reaches it.
-	Bindings FunctionBindings `json:"bindings,omitzero"`
+	Bindings FunctionBindings `json:"bindings,omitzero" doc:"What the code may use: KV tables, Bucket prefixes, SQL databases, Lakes and other Functions, each under an alias, and ConfigMaps and Secrets. A binding is the grant: a call on an alias with no binding is refused with 403. Each store, Lake, ConfigMap and Secret it names must be declared at the root, in this spec's kv, buckets, sql, lakes, configMaps or secrets, or in the App's for an App's part."`
 	// KVStores, Buckets, SQLDatabases, Lakes and ConfigMaps are what the Function declares at its root
 	// (ADR-0248): by name it owns the resource, which carries its marker; by ref it binds an existing one. An owner
 	// left out of a store's tables, prefixes or database is the Function (the function-store-owner admission).
-	KVStores     []KVStoreEntry     `json:"kv,omitempty"`
-	Buckets      []BucketEntry      `json:"buckets,omitempty"`
-	SQLDatabases []SQLDatabaseEntry `json:"sql,omitempty"`
-	Lakes        []LakeEntry        `json:"lakes,omitempty"`
-	ConfigMaps   []ConfigMapEntry   `json:"configMaps,omitempty"`
+	KVStores     []KVStoreEntry     `json:"kv,omitempty" doc:"The KVStores the Function declares: by name it creates and owns one, and a store of that name that it does not own holds it in Pending with StoreNotOwned; by ref it uses an existing one. spec.bindings.kv binds only a declared store. An App's part declares none and binds those that the App declares."`
+	Buckets      []BucketEntry      `json:"buckets,omitempty" doc:"The Buckets the Function declares: by name it creates and owns one, and a Bucket of that name that it does not own holds it in Pending with StoreNotOwned; by ref it uses an existing one. spec.bindings.blob binds only a declared Bucket, and a prefix with no owner gets the Function as its owner. An App's part declares none and binds those that the App declares."`
+	SQLDatabases []SQLDatabaseEntry `json:"sql,omitempty" doc:"The SQLDatabases the Function declares: by name it creates and owns one, and a database of that name that it does not own holds it in Pending with StoreNotOwned; by ref it uses an existing one. spec.bindings.sql binds only a declared database, and a database with no owner gets the Function as its owner. An App's part declares none and binds those that the App declares."`
+	Lakes        []LakeEntry        `json:"lakes,omitempty" doc:"The Lakes the Function declares: by name it creates one that goes with the Function, by ref it uses an existing one. spec.bindings.lake binds only a declared Lake, and a Lake declared by name declares nothing at its own root: it binds the Function's buckets, configMaps and secrets. An App's part declares none."`
+	ConfigMaps   []ConfigMapEntry   `json:"configMaps,omitempty" doc:"The ConfigMaps the Function declares: by name it defines one from its data, which goes with the Function, by ref it uses an existing one. spec.bindings.config binds only a declared ConfigMap, and a defined one that the spec no longer defines is deleted once the Function is Ready again and nothing else names it. An App's part declares none."`
 	// SecretDeclarations are the Secrets the Function's bindings name, with the keys it reads (ADR-0213 Decision 8).
-	SecretDeclarations []SecretDeclaration `json:"secrets,omitempty"`
+	SecretDeclarations []SecretDeclaration `json:"secrets,omitempty" doc:"The Secrets of the namespace that the bindings may name, each with the keys the code reads; spec.bindings.secret names only a declared Secret. The Function waits in Pending, with SecretNotFound or SecretKeyMissing, until each one exists with every declared key. An App's part declares none and binds those that the App declares."`
 	// Volumes are the directories the Function owns (ADR-0262): emptyDir per worker, local durable; its code reads each
 	// one's path from FUNCD_VOLUME_<NAME>.
-	Volumes []VolumeEntry `json:"volumes,omitempty"`
+	Volumes []VolumeEntry `json:"volumes,omitempty" doc:"The directories the Function's workers mount. Apply refuses a Function with one unless runtime.mode is containerd and volumes.capacity or volumes.capacityBytes is set. A Function with a volume runs solo, even with pooling.worker."`
 	// Ingress is the Function's edge exposure (ADR-0241): unset, it answers by name at /function/<name> while its
 	// namespace is implicit; a host or a path gives it a Route of its own.
-	Ingress *Ingress `json:"ingress,omitempty"`
+	Ingress *Ingress `json:"ingress,omitempty" doc:"The Function's own address at the edge. With no host and no path, it answers by name at /function/<name>; a host or a path gives it a Route of its own in place of that address, which its IngressReady condition reports. Its path may not be /function or under it."`
 }
 
 // FunctionSQL binds this function to a SQLDatabase of its namespace under a local alias (ADR-0233).
 type FunctionSQL struct {
-	Alias    string     `json:"alias" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"`
-	Database ObjectName `json:"database"`
+	Alias    string     `json:"alias" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" doc:"The binding's name, unique in the list, which the code passes to ctx.sql."`
+	Database ObjectName `json:"database" doc:"The SQLDatabase to query, in the same namespace."`
 }
 
 // FunctionLake binds this function to a Lake it consumes (ADR-0091, F61). Declaring the
 // binding is the grant: funcd injects FUNCD_LAKE_<ALIAS>_URL/_TOKEN, and (V2) grants egress.
 type FunctionLake struct {
 	// Alias names the FUNCD_LAKE_<ALIAS>_* env pair; a DNS-1123 label, unique within Lakes.
-	Alias string `json:"alias" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"`
+	Alias string `json:"alias" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" doc:"The binding's name, unique in the list. Each worker reads the Lake's address and its token from FUNCD_LAKE_<ALIAS>_URL and FUNCD_LAKE_<ALIAS>_TOKEN, the alias upper-cased."`
 	// Lake is the name of a Lake in this function's namespace.
-	Lake ObjectName `json:"lake"`
+	Lake ObjectName `json:"lake" doc:"The Lake to query, in the same namespace."`
 }
 
 // FunctionLink declares one synchronous RPC dependency: a local alias bound to a target Function
 // in the same namespace (ADR-0064, F33). The latest-Ready revision of the target is called.
 type FunctionLink struct {
 	// Alias is the local name the handler passes to invoke; a DNS-1123 label, unique within Links.
-	Alias string `json:"alias" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"`
+	Alias string `json:"alias" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" doc:"The link's name, unique in the list, which the code passes to ctx.invoke or ctx.fetch."`
 	// Target is the name of a Function in this function's namespace.
-	Target ObjectName `json:"target"`
+	Target ObjectName `json:"target" doc:"The Function to call, in the same namespace."`
 	// Timeout bounds the synchronous wait (incl. a cold-start wake).
 	Timeout Duration `json:"timeout,omitempty" doc:"Bounds the synchronous call, a cold-start wake included: 0s to 5m; 0s or unset means the 30s link default."`
 }
@@ -134,11 +134,11 @@ type FunctionLink struct {
 // owner. Mirrors FunctionLink (the wrangler/spec.bindings.links convention).
 type FunctionKV struct {
 	// Alias is the local handle the handler passes to context.kv; a DNS-1123 label, unique within KV.
-	Alias string `json:"alias" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"`
+	Alias string `json:"alias" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" doc:"The binding's name, unique in the list, which the code passes to ctx.kv."`
 	// Store is the name of a KVStore in this function's namespace.
-	Store ObjectName `json:"store"`
+	Store ObjectName `json:"store" doc:"The KVStore, in the same namespace, that holds the table."`
 	// Table is a sub-domain (KVStore.spec.tables[].name) of that store; a DNS-1123 label.
-	Table string `json:"table" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"`
+	Table string `json:"table" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" doc:"The table, by its name in the store's tables."`
 }
 
 // FunctionBlob declares one blob (S3) binding (ADR-0080, F47): a local alias bound to a (bucket, prefix)
@@ -146,11 +146,11 @@ type FunctionKV struct {
 // prefix's owner. Mirrors FunctionKV (the wrangler/spec.bindings.kv convention).
 type FunctionBlob struct {
 	// Alias is the local handle; a DNS-1123 label, unique within Blob.
-	Alias string `json:"alias" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"`
+	Alias string `json:"alias" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" doc:"The binding's name, unique in the list; code that reaches the prefix through ctx.blob passes it."`
 	// Bucket is the name of a Bucket in this function's namespace.
-	Bucket ObjectName `json:"bucket"`
+	Bucket ObjectName `json:"bucket" doc:"The Bucket, in the same namespace, that holds the prefix."`
 	// Prefix is a sub-domain (BucketPrefix.name) of that bucket; a DNS-1123 label.
-	Prefix string `json:"prefix" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"`
+	Prefix string `json:"prefix" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" doc:"The prefix, by its name in the Bucket's prefixes."`
 }
 
 // FunctionProtocol is how funcd calls a Function's code (ADR-0243).
@@ -182,32 +182,32 @@ func (p FunctionProtocol) Normalized() FunctionProtocol {
 type Pooling struct {
 	// Worker is an owner-chosen worker id. Empty ⇒ solo (own worker). Functions sharing
 	// (namespace, runtime, Worker) co-locate as handlers in one worker_threads pool worker.
-	Worker string `json:"worker,omitempty"`
+	Worker string `json:"worker,omitempty" doc:"A worker id, a DNS-1123 label: Functions of the namespace that name it, run the same runtime, are in the same resource group and have the same bindings, owned data and grants share one worker, which status.pool names. Empty, the default, runs the Function solo. Only the process runtime pools, for node runtimes and, when the server's Python is 3.14 or later, python ones; anywhere else the Function runs solo too. A pool takes the first 16 Functions by name, and the others wait in Pending with PoolFull."`
 }
 
 // Scaling is the F11 scale-to-zero policy on a Function (ADR-0016). Field validation
 // (non-negative, MinReplicas ≤ MaxReplicas) is the API server's admission job (P-L/F07);
 // the activator reads these defensively.
 type Scaling struct {
-	MinReplicas int      `json:"minReplicas,omitempty" minimum:"0" maximum:"15"` // 0 enables scale-to-zero
-	MaxReplicas int      `json:"maxReplicas,omitempty" minimum:"0" maximum:"15"` // recorded; 1→N enforcement is V3
+	MinReplicas int      `json:"minReplicas,omitempty" minimum:"0" maximum:"15" doc:"The fewest workers the Function keeps. 0, the default, lets idleTimeout scale it to zero; above 0, it never sleeps. It may not exceed maxReplicas when that is above 0, and a local volume allows at most 1."` // 0 enables scale-to-zero
+	MaxReplicas int      `json:"maxReplicas,omitempty" minimum:"0" maximum:"15" doc:"Above 0, the most that minReplicas may be; 0, the default, sets no bound. It starts no worker: replicas and minReplicas alone decide how many run."`                                                           // recorded; 1→N enforcement is V3
 	IdleTimeout Duration `json:"idleTimeout,omitempty" doc:"The idle time before a worker is reclaimed: 0s to 24h; 0s or unset disables reclaim."`
 }
 
 // FunctionStatus holds the observed state. Behavioral fields appended by F11/F13.
 type FunctionStatus struct {
 	Status          `json:",inline"`
-	Replicas        int    `json:"replicas,omitempty"`        // workers that listened and get calls (ADR-0161)
-	CurrentRevision string `json:"currentRevision,omitempty"` // the latest stamped Revision name (ADR-0020)
+	Replicas        int    `json:"replicas,omitempty" doc:"How many of the serving revision's workers are ready."`                                                                                                                    // workers that listened and get calls (ADR-0161)
+	CurrentRevision string `json:"currentRevision,omitempty" doc:"The Revision of the latest spec, named after the Function and its generation. While it differs from servingRevision, its workers come up beside the serving ones."` // the latest stamped Revision name (ADR-0020)
 	// ServingRevision is the Revision whose workers receive the calls (ADR-0143); empty until the first deploy serves,
 	// and again once no replica is desired.
-	ServingRevision string `json:"servingRevision,omitempty"`
+	ServingRevision string `json:"servingRevision,omitempty" doc:"The Revision whose workers take the calls; calls move to currentRevision once its workers are ready. Empty until a first worker is ready, and again while the Function wants no worker, such as while it sleeps."`
 	// DrainingRevision is the Revision demoted at the last switch while any of its workers remain, and DrainingSince
 	// the time of that switch (ADR-0143); both are cleared together.
-	DrainingRevision string     `json:"drainingRevision,omitempty"`
-	DrainingSince    *Timestamp `json:"drainingSince,omitempty"`
+	DrainingRevision string     `json:"drainingRevision,omitempty" doc:"The Revision that the last switch moved the calls from, while any of its workers still drain: each stops once it is idle, no sooner than runtime.handOutSettle after the switch, or at runtime.drainGrace with its calls cut. Cleared with drainingSince once none drains. A worker that an open workflow run pins is not counted and stays until the run ends. A pooled Function leaves it empty."`
+	DrainingSince    *Timestamp `json:"drainingSince,omitempty" doc:"When the last switch moved the calls off drainingRevision; cleared with it."`
 	// Pool is the pool worker a pooled Function runs in, "<runtime>/<worker>/<access>"; empty when solo.
-	Pool string `json:"pool,omitempty"`
+	Pool string `json:"pool,omitempty" doc:"The pool worker the Function runs in, as <runtime>/<worker>/<access>, where access is a hash of its bindings, owned data, grants and resource group. Empty when it runs solo."`
 }
 
 // GroupVersionKind returns the constant GVK for Function.

@@ -25,7 +25,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `mode` | string, one of `""`, `authenticated`, `open` |  |
+| `mode` | string, one of `""`, `authenticated`, `open` | How the edge checks callers. authenticated requires a bearer token, or an X-Api-Key header, of an identity that RBAC lets get Functions in the namespace: 401 without a valid one, 403 when it may not. open lets anonymous callers in. Empty takes the enclosing stance, if any, else the namespace's spec.edgeDefaults.auth.mode, else open. |
 
 ### `Route.spec.rules[]`
 
@@ -42,7 +42,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `function` | string, a DNS-1123 label |  |
-| `site` | string, a DNS-1123 label | A Site of this Route's namespace: the rule serves the build that Site serves now, and its config.json at <path>/config.json, following each new build. A Prefix rule; the Route may not carry the Site's own name. |
+| `site` | string, a DNS-1123 label | A Site of this Route's namespace: the rule serves the build that Site serves now, and its config.json at &lt;path&gt;/config.json, following each new build. A Prefix rule; the Route may not carry the Site's own name. |
 | `static` | object, [`Route.spec.rules[].backend.static`](#routespecrulesbackendstatic) |  |
 
 ### `Route.spec.rules[].backend.static`

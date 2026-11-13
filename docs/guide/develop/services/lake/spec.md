@@ -36,9 +36,9 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `alias` | string, required, a DNS-1123 label |  |
-| `bucket` | string, required, a DNS-1123 label |  |
-| `prefix` | string, required, a DNS-1123 label |  |
+| `alias` | string, required, a DNS-1123 label | The binding's name, unique in the list; code that reaches the prefix through ctx.blob passes it. |
+| `bucket` | string, required, a DNS-1123 label | The Bucket, in the same namespace, that holds the prefix. |
+| `prefix` | string, required, a DNS-1123 label | The prefix, by its name in the Bucket's prefixes. |
 
 ### `Lake.spec.buckets[]`
 
@@ -85,23 +85,23 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `data` | map of string to string |  |
-| `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as <name>-<hash of data>, and the config of each part that names it is set to that stored name. |
+| `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as &lt;name&gt;-&lt;hash of data&gt;, and the config of each part that names it is set to that stored name. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 
 ### `Lake.spec.ingress`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `auth` | object, [`Lake.spec.ingress.auth`](#lakespecingressauth) |  |
-| `enabled` | boolean |  |
-| `host` | string |  |
-| `path` | string |  |
+| `auth` | object, [`Lake.spec.ingress.auth`](#lakespecingressauth) | How the edge checks callers at the resource's own address; unset, the namespace's spec.edgeDefaults.auth decides, else open. A Lake refuses it, since the Lake gateway checks each caller. |
+| `enabled` | boolean | Turns the resource's own address on or off. Unset, it is on unless the namespace's spec.defaultExposure is explicit; a Lake's address is on only when this is true. |
+| `host` | string | The exact host of the resource's own address. Empty is the namespace's host, &lt;namespace&gt;.&lt;server.baseDomain&gt;, or, in the default namespace, any host that no other namespace reserves. |
+| `path` | string | The edge path of the resource's own address, which begins with / and does not end with / unless it is /. Empty is / when host is set, else /function/&lt;name&gt;, /site/&lt;name&gt; or /lake/&lt;name&gt; by kind. |
 
 ### `Lake.spec.ingress.auth`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `mode` | string, one of `""`, `authenticated`, `open` |  |
+| `mode` | string, one of `""`, `authenticated`, `open` | How the edge checks callers. authenticated requires a bearer token, or an X-Api-Key header, of an identity that RBAC lets get Functions in the namespace: 401 without a valid one, 403 when it may not. open lets anonymous callers in. Empty takes the enclosing stance, if any, else the namespace's spec.edgeDefaults.auth.mode, else open. |
 
 ### `Lake.spec.location`
 
@@ -114,16 +114,16 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `cpu` | string |  |
-| `memory` | string |  |
+| `cpu` | string | The CPU cap of the worker or engine it sizes, as a number of cores of at least 0.01, such as 0.5 or 2. Empty takes the default of the resource that declares it, or no cap when there is none. Only the containerd runtime enforces it. |
+| `memory` | string | The memory cap of the worker or engine it sizes, such as 256Mi or 4GiB: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B, above zero. Empty takes the default of the resource that declares it, or no cap when there is none. Only the containerd runtime enforces it, and there a worker that passes it is killed. |
 
 ### `Lake.spec.secrets[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `description` | string | What the Secret is for, for the installer who provides it. |
-| `keys` | array of string values, required, each matching `^[A-Za-z_][A-Za-z0-9_]*$` | The keys the parts read: the Secret's data must hold each of them. |
-| `name` | string, required, a DNS-1123 label | The name of a Secret in the App's namespace. The platform holds its value; the App never writes it. |
+| `keys` | array of string values, required, each matching `^[A-Za-z_][A-Za-z0-9_]*$` | The keys read from the Secret: its data must hold each of them. |
+| `name` | string, required, a DNS-1123 label | The name of a Secret in the namespace of the resource that declares it. funcd holds its value; the resource never writes it. |
 
 ### `Lake.status`
 

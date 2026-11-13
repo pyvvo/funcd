@@ -37,59 +37,59 @@ type App struct {
 // name it (ADR-0213 Decision 4), then the other sections in this order (Decision 2).
 type AppSpec struct {
 	// Version is a free label; a requirement's range matches it only when it is a SemVer 2.0.0 version (ADR-0219).
-	Version string `json:"version,omitempty"`
+	Version string `json:"version,omitempty" doc:"A free label for this version of the App, shown by funcdctl app history and passed to the hooks; funcdctl app deploy sets it to the template's version. A range in another App's spec.requires matches it only when it is a SemVer 2.0.0 version, such as 1.4.0 with no v prefix."`
 	// Paused stops every write of the App (ADR-0212); it is not part of an AppRevision.
-	Paused bool `json:"paused,omitempty"`
+	Paused bool `json:"paused,omitempty" doc:"While true, funcd only sets the App's Paused condition: it creates no revision, writes or deletes no part and calls no hook. Changing it creates no revision, and a rollout in progress gets a full app.upgradeTimeout again on resume. An apply without it resumes the App; funcdctl app deploy and app rollback keep it as it is."`
 	// Requires names the shared Apps of this namespace that this App needs before it rolls out (ADR-0219).
-	Requires []AppRequirement `json:"requires,omitempty"`
-	KV       []KVStoreEntry   `json:"kv,omitempty"`
-	Buckets  []BucketEntry    `json:"buckets,omitempty"`
+	Requires []AppRequirement `json:"requires,omitempty" doc:"The Apps of this namespace that this App needs. A new revision waits, with no time limit and no part written, until each one exists, is Ready with its spec rolled out and has a spec.version in the range. An App this one requires cannot be deleted, nor updated from inside the range to outside it once this App has started a rollout, and a requirement cycle is refused."`
+	KV       []KVStoreEntry   `json:"kv,omitempty" doc:"The KVStores that the App declares or refers to; no two entries name the same one. A store that an earlier App of this name kept is not this App's: refer to it with a ref entry, since declaring it by name stops the rollout with ChildNotOwned."`
+	Buckets  []BucketEntry    `json:"buckets,omitempty" doc:"The Buckets that the App declares or refers to; no two entries name the same one. A Bucket that an earlier App of this name kept is not this App's: refer to it with a ref entry, since declaring it by name stops the rollout with ChildNotOwned."`
 	// SQL declares the App's SQL databases (ADR-0236), stores like kv and buckets.
-	SQL          []SQLDatabaseEntry `json:"sql,omitempty"`
-	Functions    []AppFunction      `json:"functions,omitempty"`
-	Workflows    []AppWorkflow      `json:"workflows,omitempty"`
-	EventSources []AppEventSource   `json:"eventSources,omitempty"`
-	Sensors      []AppSensor        `json:"sensors,omitempty"`
-	Routes       []AppRoute         `json:"routes,omitempty"`
-	Sites        []AppSite          `json:"sites,omitempty"`
-	Lakes        []LakeEntry        `json:"lakes,omitempty"`
-	ConfigMaps   []ConfigMapEntry   `json:"configMaps,omitempty"`
+	SQL          []SQLDatabaseEntry `json:"sql,omitempty" doc:"The SQLDatabases that the App declares or refers to; no two entries name the same one. A database that an earlier App of this name kept is not this App's: refer to it with a ref entry, since declaring it by name stops the rollout with ChildNotOwned."`
+	Functions    []AppFunction      `json:"functions,omitempty" doc:"The Functions that the App declares or refers to; no two entries name the same one. An entry leaves kv, buckets, sql, lakes, configMaps and secrets empty, and each store, Lake, ConfigMap and Secret it binds is one that the App's lists of those names declare. A workflows step that sets function.image is written as a Function named <workflow>-<step>, a name no entry may declare."`
+	Workflows    []AppWorkflow      `json:"workflows,omitempty" doc:"The Workflows that the App declares or refers to; no two entries name the same one. An entry leaves kv, buckets, sql, lakes, configMaps and secrets empty, and each store, Lake, ConfigMap and Secret its steps bind is one that the App's lists of those names declare. A step that sets function.image is written as a Function named <workflow>-<step>, a name that no functions entry or other step may take."`
+	EventSources []AppEventSource   `json:"eventSources,omitempty" doc:"The EventSources that the App declares or refers to; no two entries name the same one."`
+	Sensors      []AppSensor        `json:"sensors,omitempty" doc:"The Sensors that the App declares or refers to; no two entries name the same one."`
+	Routes       []AppRoute         `json:"routes,omitempty" doc:"The Routes that the App declares or refers to; no two entries name the same one, and none declares a Route under the name of a Site that sites declares, since each Site writes a Route of its own name."`
+	Sites        []AppSite          `json:"sites,omitempty" doc:"The Sites that the App declares or refers to; no two entries name the same one. An entry leaves buckets empty: the Site refers to the Bucket it serves, which the App's buckets declare or which exists already. Each declared Site writes a Route of its own name, which no routes entry may declare."`
+	Lakes        []LakeEntry        `json:"lakes,omitempty" doc:"The Lakes that the App declares or refers to; no two entries name the same one. An entry leaves buckets, configMaps and secrets empty; each Bucket and Secret it binds is declared in the App's buckets and secrets."`
+	ConfigMaps   []ConfigMapEntry   `json:"configMaps,omitempty" doc:"The ConfigMaps that the App defines or refers to, written before every other part; no two entries name the same one. A change to a defined entry's data writes a new ConfigMap, changes each part that names it to the new one, and prunes the old one with the other dropped parts."`
 	// BackupSchedules backs up the App's stores (ADR-0222 Decision 2); an entry with an empty scope backs up this App.
-	BackupSchedules []AppBackupSchedule `json:"backupSchedules,omitempty"`
+	BackupSchedules []AppBackupSchedule `json:"backupSchedules,omitempty" doc:"The BackupSchedules that the App declares or refers to; no two entries name the same one. An entry with an empty scope backs up this App: each object that its kv, buckets, sql and lakes entries name, and its Functions' local volumes."`
 	// Secrets declares the Secrets the parts name, never their values (ADR-0213 Decision 6).
-	Secrets []SecretDeclaration `json:"secrets,omitempty"`
+	Secrets []SecretDeclaration `json:"secrets,omitempty" doc:"The Secrets that the App's parts read and the keys they read, never their values; no two entries name the same one. An apply whose parts name an undeclared Secret is refused, and while a declared Secret or key is missing, funcd writes no part and reports SecretNotFound or SecretKeyMissing."`
 	// Hooks names the Functions of this App called before its parts change and after a new revision is current
 	// (ADR-0214).
-	Hooks *AppHooks `json:"hooks,omitempty"`
+	Hooks *AppHooks `json:"hooks,omitempty" doc:"Functions of this App that funcd calls for each new revision whose spec has them: preApply before the revision's parts change, postApply once it is current. Each call is recorded in the revision's status.hooks; a call that ends during a stop of funcd, a hold or a pause is not recorded and is made again, so a hook must be safe to repeat."`
 }
 
 // AppHooks are the App's lifecycle hooks (ADR-0214 Decision 1), each list called in order: preApply before the parts
 // change, postApply once the new revision is current.
 type AppHooks struct {
-	PreApply  []AppHook `json:"preApply,omitempty"`
-	PostApply []AppHook `json:"postApply,omitempty"`
+	PreApply  []AppHook `json:"preApply,omitempty" doc:"Called in order, one at a time, before the revision's other parts change: until all have succeeded, funcd writes only the pre-hook Functions and what they bind. A failed call fails the revision with HookFailed, and funcdctl app retry calls it again; a pre-hook whose Function or SQL database is not ready when app.upgradeTimeout runs out fails it too. A pre-hook may not link to a functions entry that is neither a ref entry nor a pre-hook, which is written after them."`
+	PostApply []AppHook `json:"postApply,omitempty" doc:"Called in order, one at a time, once the revision is current, with no deadline. A failed call makes the App Degraded with HookFailed and holds the later post-hooks until funcdctl app retry calls it again; dropped parts are deleted only once every post-hook has succeeded."`
 }
 
 // AppHook names the functions entry of this App, not a ref, that a hook point calls.
 type AppHook struct {
-	Function ObjectName `json:"function"`
+	Function ObjectName `json:"function" doc:"The name of a functions entry of this App, not a ref entry, at most once per list. funcd calls it with a CloudEvent whose type is the list's name and whose data is the revision's spec.hookInput. The call fails on an answer of 400 or more, on a Function with protocol http, or when no answer starts within the Function's spec.timeout, else invoke.defaultTimeout, its wake included."`
 }
 
 // AppHookInput is the data of each hook call of one AppRevision, fixed at its stamp (ADR-0214 Decision 2).
 type AppHookInput struct {
-	Event       string     `json:"event" enum:"install,upgrade,rollback"`
-	App         ObjectName `json:"app"`
-	From        ObjectName `json:"from,omitempty"`
-	To          ObjectName `json:"to"`
-	FromVersion string     `json:"fromVersion,omitempty"`
-	ToVersion   string     `json:"toVersion,omitempty"`
+	Event       string     `json:"event" enum:"install,upgrade,rollback" doc:"install when the App had no current revision, rollback when the spec equals that of a kept revision that was current once, upgrade otherwise."`
+	App         ObjectName `json:"app" doc:"The App's name."`
+	From        ObjectName `json:"from,omitempty" doc:"The App's current revision when this one was created, empty on an install."`
+	To          ObjectName `json:"to" doc:"This revision's name."`
+	FromVersion string     `json:"fromVersion,omitempty" doc:"The spec.version of the from revision, empty on an install or when it sets none."`
+	ToVersion   string     `json:"toVersion,omitempty" doc:"This revision's spec.version, empty when it sets none."`
 }
 
 // AppRequirement is a requires entry (ADR-0219 Decision 1): an App of the same namespace and an npm-style version range.
 type AppRequirement struct {
-	App ObjectName `json:"app"`
+	App ObjectName `json:"app" doc:"The name of an App of this namespace that this App needs; no two entries name the same App. It need not exist yet: the revision waits for it."`
 	// Version is an npm-style range such as ^2.0.0; empty accepts any version, even none.
-	Version string `json:"version,omitempty"`
+	Version string `json:"version,omitempty" doc:"An npm-style version range, such as ^2.0.0, that the required App's spec.version must be in; empty accepts any version, even none. A range matches only a SemVer 2.0.0 version, and a prerelease only when the range holds one."`
 }
 
 // Matches reports whether version satisfies the range (ADR-0219 Decision 1): always for an empty range; otherwise
@@ -230,7 +230,7 @@ func (ConfigMapEntry) Schema(r huma.Registry) *huma.Schema {
 func (SecretDeclaration) Schema(huma.Registry) *huma.Schema {
 	one := 1
 	name := dnsLabelSchema()
-	name.Description = "The name of a Secret in the App's namespace. The platform holds its value; the App never writes it."
+	name.Description = "The name of a Secret in the namespace of the resource that declares it. funcd holds its value; the resource never writes it."
 	return &huma.Schema{
 		Type: huma.TypeObject,
 		Properties: map[string]*huma.Schema{
@@ -238,7 +238,7 @@ func (SecretDeclaration) Schema(huma.Registry) *huma.Schema {
 			"description": {Type: huma.TypeString, Description: "What the Secret is for, for the installer who provides it."},
 			"keys": {
 				Type:        huma.TypeArray,
-				Description: "The keys the parts read: the Secret's data must hold each of them.",
+				Description: "The keys read from the Secret: its data must hold each of them.",
 				MinItems:    &one,
 				Items:       &huma.Schema{Type: huma.TypeString, Pattern: envName.String()},
 			},
@@ -369,18 +369,18 @@ func (e LakeEntry) MarshalJSON() ([]byte, error) {
 // (ADR-0220).
 type AppStatus struct {
 	Status          `json:",inline"`
-	CurrentRevision ObjectName `json:"currentRevision,omitempty"`
-	LatestRevision  ObjectName `json:"latestRevision,omitempty"`
+	CurrentRevision ObjectName `json:"currentRevision,omitempty" doc:"The AppRevision whose rollout last completed, empty until one has. After a failed rollout the parts keep the newer spec, so it names the last complete rollout, not what runs."`
+	LatestRevision  ObjectName `json:"latestRevision,omitempty" doc:"The newest AppRevision, created for the latest spec. It differs from currentRevision while a rollout waits or runs, and after one fails."`
 	// Version is the spec.version of the current revision.
-	Version      string       `json:"version,omitempty"`
-	Children     []AppChild   `json:"children,omitempty"`
-	LastSelfHeal *AppSelfHeal `json:"lastSelfHeal,omitempty"`
+	Version      string       `json:"version,omitempty" doc:"The spec.version of the current revision."`
+	Children     []AppChild   `json:"children,omitempty" doc:"One line per entry of configMaps, kv, buckets, sql, functions, workflows, eventSources, sensors, routes, sites, lakes and backupSchedules, ref entries included, in that order, which is the order funcd writes them. Then one Pruning line per dropped object not deleted yet."`
+	LastSelfHeal *AppSelfHeal `json:"lastSelfHeal,omitempty" doc:"The last part that funcd wrote back after another writer changed or deleted it, and when."`
 	// Requires is the state of each spec.requires entry, in its order (ADR-0219 Decision 5).
-	Requires []AppRequirementState `json:"requires,omitempty"`
+	Requires []AppRequirementState `json:"requires,omitempty" doc:"The state of each spec.requires entry, in its order."`
 	// RequiredBy is every App of the namespace whose spec.requires names this one, sorted by name.
-	RequiredBy []ObjectName `json:"requiredBy,omitempty"`
+	RequiredBy []ObjectName `json:"requiredBy,omitempty" doc:"The Apps of this namespace whose spec.requires names this App, sorted by name."`
 	// Plan is what the write would do (ADR-0220 Decision 5), set only in a dry-run answer and never stored.
-	Plan *AppPlan `json:"plan,omitempty"`
+	Plan *AppPlan `json:"plan,omitempty" doc:"What the write would make the rollout do, set only in the answer to a dry-run write (dryRun=true) and never stored. It leaves timing out: a hold, a pause or an unmet requirement does not show."`
 }
 
 // AppPlan is what a write of the App would make its rollout do (ADR-0220 Decision 5): the revision the stamp would
@@ -388,18 +388,18 @@ type AppStatus struct {
 // call order (ADR-0214 Decision 9). It says what, not when.
 type AppPlan struct {
 	// Revision is empty for an unchanged spec.
-	Revision ObjectName `json:"revision,omitempty"`
-	Parts    []PlanPart `json:"parts,omitempty"`
-	Hooks    []string   `json:"hooks,omitempty"`
+	Revision ObjectName `json:"revision,omitempty" doc:"The AppRevision the write would create. Empty when the latest revision has this spec already, or when an object of another owner holds that name, which parts then shows."`
+	Parts    []PlanPart `json:"parts,omitempty" doc:"The parts the write would create or update, in the order of status.children, then the objects it would prune. Where the rollout would stop, it holds only the line of that stop."`
+	Hooks    []string   `json:"hooks,omitempty" doc:"The hook Functions the new revision would call, in call order: preApply, then postApply, a Function in both lists twice. Empty when the write would create no revision."`
 }
 
 // PlanPart is one line of a plan: a part and its action, or the part where a pass would stop and the reason
 // (ChildNotOwned, SecretNotFound or SecretKeyMissing); a Secret stop has no action.
 type PlanPart struct {
-	Kind   Kind       `json:"kind"`
-	Name   ObjectName `json:"name"`
-	Action PlanAction `json:"action,omitempty"`
-	Reason string     `json:"reason,omitempty"`
+	Kind   Kind       `json:"kind" doc:"The object's kind."`
+	Name   ObjectName `json:"name" doc:"The object's name; for a defined ConfigMap, its stored name."`
+	Action PlanAction `json:"action,omitempty" doc:"What the write would do to the object. Empty on the line of a declared Secret where the rollout would stop."`
+	Reason string     `json:"reason,omitempty" doc:"Set only on the line where the rollout would stop: ChildNotOwned when an object of another owner holds the name, SecretNotFound or SecretKeyMissing for a declared Secret."`
 }
 
 // PlanAction is what the rollout does to a part (ADR-0220).
@@ -419,24 +419,24 @@ func (PlanAction) Schema(huma.Registry) *huma.Schema {
 
 // AppRequirementState is one requires entry's state: the required App's spec.version and whether it is met.
 type AppRequirementState struct {
-	App     ObjectName `json:"app"`
-	Version string     `json:"version,omitempty"`
-	Met     bool       `json:"met"`
+	App     ObjectName `json:"app" doc:"The required App, as its spec.requires entry names it."`
+	Version string     `json:"version,omitempty" doc:"The required App's spec.version, empty when it sets none or does not exist."`
+	Met     bool       `json:"met" doc:"Whether the required App exists, has a spec.version the range accepts, and is Ready with that spec rolled out."`
 }
 
 // AppSelfHeal is the last part the App wrote back (ADR-0212 Decision 2).
 type AppSelfHeal struct {
-	Kind Kind       `json:"kind"`
-	Name ObjectName `json:"name"`
-	At   Timestamp  `json:"at"`
+	Kind Kind       `json:"kind" doc:"The kind of the part written back."`
+	Name ObjectName `json:"name" doc:"The name of the part written back."`
+	At   Timestamp  `json:"at" doc:"When funcd wrote it back."`
 }
 
 // AppChild is a declared part, or a dropped object not yet deleted (state Pruning), with its state and reason.
 type AppChild struct {
-	Kind   Kind          `json:"kind"`
-	Name   ObjectName    `json:"name"`
-	State  AppChildState `json:"state"`
-	Reason string        `json:"reason,omitempty"`
+	Kind   Kind          `json:"kind" doc:"The object's kind."`
+	Name   ObjectName    `json:"name" doc:"The object's name: a ref entry's target, and for a defined ConfigMap its stored name."`
+	State  AppChildState `json:"state" doc:"Ready when the part exists and is ready. NotStarted for a Function that has not run since it changed, such as one scaled to zero: it does not hold up the rollout, and it makes the App's Ready condition Unknown rather than True. Pending while the part is missing or not ready, and Pruning for a dropped object not deleted yet, which the App's Ready condition leaves out."`
+	Reason string        `json:"reason,omitempty" doc:"Why the part is not Ready, such as RefNotFound, Progressing, ChildNotOwned, ChildInvalid, StepNotReady or the part's own reason. For a Pruning object, why it is kept, such as NotCurrent until the new revision is current, RunHeld while a run holds the Function, or InUse: <Kind>/<name>."`
 }
 
 // AppChildState is the state of an App's child (Decision 5).
