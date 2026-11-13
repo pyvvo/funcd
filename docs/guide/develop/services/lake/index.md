@@ -5,11 +5,10 @@ description: Declare a Lake over a Bucket prefix, bind it to a Function, and cre
 
 ## Usage
 
-A Lake is a SQL database whose tables live in a Bucket: a DuckDB engine writes the tables' data as Parquet files under
-a prefix of the Bucket, and records the tables in a catalog, which also keeps the rows of a small write. A Function
-queries a Lake that it binds, through the Lake's gateway, which checks the caller when the caller opens a session,
-before the engine runs any of its statements. The [Platform page](../../../platform/services/lake.md) explains how a
-Lake works inside funcd; this page shows how to use one.
+A Lake is a SQL database whose tables a Function creates and queries with SQL, and whose data funcd keeps in a
+Bucket, as [Data storage](#data-storage) explains. A Function queries a Lake that it binds, through the Lake's gateway,
+as [Access](#access) explains. The [Platform page](../../../platform/services/lake.md) explains how a Lake works inside
+funcd; this page shows how to use one.
 
 The first example, lake-quack, exists in Python only. It creates a table in a Lake and reads it back. Its Function,
 `lake-reader`, takes a SQL statement, runs it on the Lake, and returns the rows of the result. The steps below start
@@ -274,8 +273,10 @@ by `name`:
   declares the Bucket by `name` waits with the reason `StoreNotOwned`, since the Bucket still belongs to the deleted
   Lake. funcd refuses a request to delete the Bucket, or to remove the prefix from it, with the HTTP status 409, while
   the prefix holds objects or a Lake's catalog, such as
-  `still holds its Lake catalog funcd.lake-catalogs/lakehouse/gold/_ducklake/catalog.db`. Once no Lake is located
-  there, a principal that may write the prefix can delete that catalog through the S3 gateway, under that name.
+  `still holds its Lake catalog funcd.lake-catalogs/lakehouse/gold/_ducklake/catalog.db`. Through the S3 gateway, that
+  catalog is the object `lakehouse/gold/_ducklake/catalog.db` of the S3 bucket `funcd.lake-catalogs`: the Bucket, the
+  prefix, then `_ducklake/catalog.db`. Once no Lake is located there, a principal that may write the prefix can delete
+  that object.
 - With `delete`, funcd deletes the Bucket after the Lake, with its objects and the catalog of each Lake located on its
   prefixes.
 
@@ -320,9 +321,10 @@ That engine differs from a platform's engine:
 
 The catalog's file is in a temporary folder, so the Lake's tables are lost when `funcdctl dev` stops. With the
 `--persist` flag, `funcdctl dev` keeps each Lake's catalog in the `lake` folder of its persist folder, and the Lake's
-files with the blob data: `.funcd-dev` in the current folder, unless `--persist-to` names another one. The next run
-with `--persist` finds the tables again. The
-[reference of `funcdctl dev`](../../tools/funcdctl/spec.md#funcdctl-dev) lists its flags.
+files with the blob data: `.funcd-dev` in the current folder, unless `--persist-to` names another one. The next run with
+`--persist` finds the tables again. To remove them, delete the persist folder after `funcdctl dev` stops; that clears
+all the state that the local platform stored: its metastore, KV, blob, SQL, lake and volume data. The [reference of
+`funcdctl dev`](../../tools/funcdctl/spec.md#funcdctl-dev) lists its flags.
 
 ## Examples
 

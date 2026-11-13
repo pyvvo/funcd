@@ -5,12 +5,9 @@ description: Run a Function, call it, read its status and its logs, call one Fun
 
 ## Usage
 
-A Function is code that funcd runs when the Function is called. For each call, a
-[worker](../../../platform/workloads/index.md#runtime) of the Function, a process that runs its code, calls the code's
-**handler** with a context, through which the handler logs and reaches other Functions and its stores, and an
-**event**, which holds the call's JSON body in `event.data` (`event["data"]` in Python); the handler's return value
-becomes the response. The [Platform page](../../../platform/workloads/function.md) explains who calls a Function and
-what it binds; this page shows how to run a Function that takes events, call it and read its state, and
+A Function is code that funcd runs when the Function is called: the code's **handler** answers each call. The
+[Platform page](../../../platform/workloads/function.md) explains who calls a Function and what it binds; this page
+shows how to run a Function that takes events, call it and read its state, and
 [Serve HTTP requests](#serve-http-requests) shows a Function that takes HTTP requests instead.
 
 The first example, log-burst, writes a burst of log lines at each call: its handler logs through `console` in
@@ -51,6 +48,12 @@ The example's manifest and contract decide how the Function runs and what it acc
   checks the data of each call against it before a worker gets the call, and refuses data that does not match with
   the HTTP status 422. The example accepts a JSON object whose fields are all optional, so the call below sends an
   empty object, `{}`; a call with no body gets 422.
+
+For each call, a [worker](../../../platform/workloads/index.md#runtime) of the Function, a process that runs its code,
+calls the handler with two arguments. The first is the context, through which the handler logs and reaches other
+Functions and its stores. The second is the **event**. In the first example, the call's JSON body reaches the handler
+as `event.data` (`event["data"]` in Python); [Call another Function](#call-another-function) gives the exception, a
+body that is itself an event. The handler's return value becomes the response.
 
 funcd runs each version of a Function's spec as a **revision**, named after the Function and a number that grows by
 one at each change of the spec, such as `log-burst-1`. The status that the steps below read names the revision that
@@ -493,8 +496,8 @@ the call.
 `funcdctl dev` keeps its state in memory, where it is lost when `funcdctl dev` stops. With the `--persist` flag, it
 keeps its state between runs in `.funcd-dev`, a folder that it creates in the current folder, or in the folder that
 `--persist-to` names: the metastore, which holds the objects that it applied, the KV, blob, SQL, Lake and volume data,
-and the copies of the builds that it runs. To start again from nothing, delete that folder after `funcdctl dev` stops. The
-[reference of `funcdctl dev`](../../tools/funcdctl/spec.md#funcdctl-dev) lists its flags.
+and the copies of the builds that it runs. To start again from nothing, delete that folder after `funcdctl dev` stops.
+The [reference of `funcdctl dev`](../../tools/funcdctl/spec.md#funcdctl-dev) lists its flags.
 
 ## Examples
 

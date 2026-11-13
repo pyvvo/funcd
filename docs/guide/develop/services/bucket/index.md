@@ -260,7 +260,8 @@ prefixes that name it as their owner.
 `funcdctl dev` keeps the objects in memory, so they are lost when `funcdctl dev` stops, whatever
 [Data storage](#data-storage) says about a server. With the `--persist` flag, `funcdctl dev` keeps the Buckets'
 objects between runs, in the `blob` folder of `.funcd-dev` in the current directory, or of the folder that
-`--persist-to` names.
+`--persist-to` names. To remove them, delete that persist folder after `funcdctl dev` stops; that clears all the state
+that the local platform stored: its metastore, KV, blob, SQL, lake and volume data.
 
 `funcdctl dev` also differs from a platform in these ways that matter for a Bucket:
 

@@ -12,8 +12,10 @@ paths:
   words ("starts a worker", not "wakes"). Define a term before using it and keep exact identifiers. Avoid internal
   slang, vague adjectives and long noun chains, and never shorten a useful explanation until it becomes cryptic.
 - Order a page around the reader's task: lead with the goal and the expected result, and introduce a term where the
-  example first needs it, not in a glossary before the task. A setting that the next step needs for access,
-  persistence or cost is stated before that step, and a step links the exact Spec field or method that it uses.
+  example first needs it, not in a glossary before the task. A short introduction is never made by joining
+  definitions into one long sentence: keep it to the purpose, and move storage and access internals to the section
+  that needs them. A setting that the next step needs for access, persistence or cost is stated before that step, and
+  a step links the exact Spec field or method that it uses.
 - State a default together with its exceptions, and keep both the same wherever the page mentions them.
 - Give every "only", "exactly one" or "never" its scope, such as the same key or the same version.
 - Label an excerpt as an excerpt, explain each name it uses but does not define, and link the complete file beside
