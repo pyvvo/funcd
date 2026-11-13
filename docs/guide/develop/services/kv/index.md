@@ -177,7 +177,7 @@ principal write the table.
 
 ## Access
 
-A Function can already do two things with its own tables, with no role to assign:
+A Function needs no role assignment to:
 
 - **Read the tables it binds.** Each entry of `spec.bindings.kv` lets the Function read that table. A binding allows
   reading only, never writing.
@@ -193,8 +193,8 @@ example gives `pyclaim` write access to the table `claims` of the store `claims-
 
 The built-in roles `Contributor` and `Owner` also allow writing keys, together with reading and writing buckets, and a
 Role that an operator defines can allow it too. A principal that reads a table without binding it needs a role as
-well, such as `KV Data Reader`, which allows reading keys. A RolesAssignment's [`roleRef`](../../security-and-networking/security/spec.md#rolesassignmentspecassignmentsroleref)
-names every built-in role, and its [`assignments`](../../security-and-networking/security/spec.md#rolesassignmentspecassignments) pair each role with a scope.
+well, such as `KV Data Reader`, which allows reading keys. The Security reference [lists the built-in roles](../../security-and-networking/security/spec.md#rolesassignmentspecassignmentsroleref)
+and [explains how assignments pair each role with a scope](../../security-and-networking/security/spec.md#rolesassignmentspecassignments).
 
 funcd supplies these rules as a built-in policy, which it applies in every namespace, so nothing needs to be written
 or installed. A Policy that an operator writes applies beside it, and cannot allow a write that the built-in policy
@@ -212,10 +212,6 @@ permit(principal, action == Action::"kv::write", resource);
 forbid(principal, action == Action::"kv::write", resource)
   unless { resource has writers && resource.writers.contains(principal) };
 ```
-
-In this policy, `kv-read-binding` allows `kv::read` on each table in the Function's `kvBindings`, which holds the
-tables that it binds. `kv-write-base` allows every `kv::write`, and `kv-single-writer` forbids one by any principal
-outside the table's `writers`: the table's owner and the principals that a role allows to write.
 
 A binding can name only a store that its own Function declares, by `name` or by `ref`. funcd rejects a binding to any
 other store. A call that the policy denies fails with the HTTP status 403, and its message names the rule, such as

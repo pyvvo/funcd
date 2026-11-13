@@ -20,6 +20,8 @@ paths:
   it.
 - Use conventional technical terms: a method returns a value, a response contains a field, a caller has
   permission. Repeat the name of an operation or a setting when a pronoun could refer to more than one.
+- Keep what a field does apart from what its reference page documents: a field such as `roleRef` names one role, and
+  the reference lists every role.
 - Title a code block for what it shows, such as "Built-in KV policy". A file name is a title only when the reader
   creates, opens or edits that file.
 - Write no empty section and no summary that repeats the page.
