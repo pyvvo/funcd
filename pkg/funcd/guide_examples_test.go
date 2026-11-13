@@ -61,7 +61,7 @@ func TestScenarioGuideIncludesResolve(t *testing.T) {
 	problems := includeProblems(t, filepath.Join("pkg", "funcd", "testdata", "guide-broken"))
 	require.Len(t, problems, 3, "%v", problems)
 	require.Contains(t, problems[0], "no-such-file.yaml")
-	require.Contains(t, problems[1], "own-store.yaml#no-such-region")
+	require.Contains(t, problems[1], "kvstore.yaml#no-such-region")
 	require.Contains(t, problems[2], "attributes")
 	for _, problem := range problems {
 		require.Contains(t, problem, filepath.Join("guide-broken", "page.md"), "a problem names its page")

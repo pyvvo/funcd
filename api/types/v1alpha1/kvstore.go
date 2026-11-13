@@ -48,9 +48,9 @@ type KVStoreSpec struct {
 type KVTable struct {
 	// Name is the sub-domain name; a DNS-1123 label, unique within the store.
 	Name string `json:"name" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" doc:"The table's name, unique within the store."`
-	// Owner is the single writer: a Function in this store's namespace. Empty ⇒ no writer (read-only
-	// through the facade). Cross-resource validity (the owner exists) is an admission, not Validate.
-	Owner ObjectName `json:"owner,omitempty" doc:"The one Function that may write the table, in the store's namespace. In a store that a Function declares, it defaults to that Function. In a KVStore applied on its own, an empty owner means that no Function can write the table. Every Function, the owner included, reaches the table through an entry of its spec.bindings.kv."`
+	// Owner is a writer by default, a Function in this store's namespace; a writer-role grant adds others (ADR-0136).
+	// Cross-resource validity (the owner exists) is an admission, not Validate.
+	Owner ObjectName `json:"owner,omitempty" doc:"The Function that owns the table, in the store's namespace. The owner writes the table, and so does a principal that a RolesAssignment grants kv::write on the table, its store or its namespace, such as the KV Data Writer role. In a store that a Function declares, the owner defaults to that Function; in a KVStore applied on its own, a table with no owner is written only through such a grant. Every Function, the owner included, reaches the table through an entry of its spec.bindings.kv."`
 }
 
 // KVStoreStatus is the observed state of a KVStore (ADR-0072/0073): the reconciler sets Ready and the

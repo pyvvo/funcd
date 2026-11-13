@@ -3232,7 +3232,7 @@ components:
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         owner:
-          description: The one Function that may write the table, in the store's namespace. In a store that a Function declares, it defaults to that Function. In a KVStore applied on its own, an empty owner means that no Function can write the table. Every Function, the owner included, reaches the table through an entry of its spec.bindings.kv.
+          description: The Function that owns the table, in the store's namespace. The owner writes the table, and so does a principal that a RolesAssignment grants kv::write on the table, its store or its namespace, such as the KV Data Writer role. In a store that a Function declares, the owner defaults to that Function; in a KVStore applied on its own, a table with no owner is written only through such a grant. Every Function, the owner included, reaches the table through an entry of its spec.bindings.kv.
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$

@@ -5,6 +5,7 @@ import (
 	"flag"
 	"os"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -33,6 +34,64 @@ func TestScenarioSpecTabGenerated(t *testing.T) {
 	require.Contains(t, kv, "](../../common-definitions.md#objectmeta)")
 	require.Contains(t, kv, "](../../../platform/services/kv.md)")
 	require.Contains(t, kv, "| `conditions` | array of [Condition](../../common-definitions.md#condition)")
+	require.Contains(t, kv, "## KVStore\n\n::include[../../../../../api/types/v1alpha1/examples/kv/kvstore.yaml#kvstore]")
+	require.Contains(t, kv, "## Handler API")
+	require.Contains(t, kv, "### `ctx.kv`\n\n#### TypeScript")
+	require.Contains(t, kv, "| `getText(binding: string, key: string): Promise<string \\| null>` |")
+	require.Contains(t, kv, "#### Python")
+	require.Contains(t, kv, "| `get_str(binding: str, key: str) -> str \\| None` |")
+}
+
+// TestEveryHandlerMethodIsDescribed holds every client and method that a Spec page lists under its Handler API to a
+// doc written for users, in each language: present, and naming no ADR.
+func TestEveryHandlerMethodIsDescribed(t *testing.T) {
+	adr := regexp.MustCompile(`\bADR-\d{4}\b`)
+	for feature, names := range clients {
+		for _, name := range names {
+			views, err := handlerClients(name, languages)
+			require.NoError(t, err)
+			for i, c := range views {
+				where := languages[i].name + " " + ctxName(name) + " (" + feature + ")"
+				require.NotEmpty(t, c.Doc, "%s: the client has no doc", where)
+				require.NotRegexp(t, adr, c.Doc, "%s: a doc is written for users and names no ADR", where)
+				for _, m := range c.Methods {
+					require.NotEmpty(t, m.Doc, "%s: %s has no doc", where, m.Name)
+					require.NotRegexp(t, adr, m.Doc, "%s: %s's doc names an ADR", where, m.Name)
+				}
+			}
+		}
+	}
+}
+
+func TestProseFitsATableCell(t *testing.T) {
+	for in, want := range map[string]string{
+		"a | b\n  c":                      `a \| b c`,
+		"x < y > z, {a}":                  "x &lt; y &gt; z, &#123;a&#125;",
+		"`get(k) <T> | null {}` then <b>": "`get(k) <T> \\| null {}` then &lt;b&gt;",
+		"``{\"columns\": [x]}`` {y}":      "``{\"columns\": [x]}`` &#123;y&#125;",
+		"``a ` b`` <c>":                   "``a ` b`` &lt;c&gt;",
+		"``a ``` b`` <c> `d`":             "``a ``` b`` &lt;c&gt; `d`",
+		"it`s <here>":                     "it`s &lt;here&gt;",
+	} {
+		require.Equal(t, want, prose(in), "prose(%q)", in)
+	}
+}
+
+func TestHandlerSectionGroupsOverloads(t *testing.T) {
+	api := []byte(`{"clients": [{"name": "", "doc": "The call's context.", "methods": [
+		{"name": "log", "signature": "log(msg: string): void", "doc": ""},
+		{"name": "log", "signature": "log(level: Level, msg: string): void", "doc": "Writes a line."},
+		{"name": "put", "signature": "put(k: string): void", "doc": "First."},
+		{"name": "put", "signature": "put(k: string, v: string): void", "doc": "Second."}]}]}`)
+	lines, err := handlerSection([]string{""}, []language{{"TypeScript", api}})
+	require.NoError(t, err)
+	page := strings.Join(lines, "\n")
+	require.Contains(t, page, "### `ctx`\n\n#### TypeScript\n\nThe call's context.")
+	require.Contains(t, page, "| `log(msg: string): void` or `log(level: Level, msg: string): void` | Writes a line. |")
+	require.Contains(t, page, "| `put(k: string): void` or `put(k: string, v: string): void` | First. |")
+	require.NotContains(t, page, "Second.")
+	_, err = handlerSection([]string{"kv"}, []language{{"TypeScript", api}})
+	require.ErrorContains(t, err, "the TypeScript shim has no ctx.kv")
 }
 
 // scenario: every-kind-in-one-feature

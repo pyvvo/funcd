@@ -69,11 +69,7 @@ func TestScenarioExamplesBuildWithTheTools(t *testing.T) {
 		}))
 	}
 
-	data, err := os.ReadFile(filepath.Join("..", "..", "scripts", "lanes.yaml"))
-	require.NoError(t, err)
-	var lanes map[string]laneSpec
-	require.NoError(t, yaml.Unmarshal(data, &lanes))
-	for name, lane := range lanes {
+	for name, lane := range readLanes(t) {
 		staged := stagedFiles(t, lane)
 		for _, push := range lane.Push {
 			if push.Site {
@@ -95,6 +91,16 @@ func TestScenarioExamplesBuildWithTheTools(t *testing.T) {
 			require.NoError(t, serr, "lane %s stages the contract file of %s from %s", name, push.Artifact, src)
 		}
 	}
+}
+
+// readLanes reads scripts/lanes.yaml, the lane registry, by lane name.
+func readLanes(t *testing.T) map[string]laneSpec {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", "scripts", "lanes.yaml"))
+	require.NoError(t, err)
+	var lanes map[string]laneSpec
+	require.NoError(t, yaml.Unmarshal(data, &lanes))
+	return lanes
 }
 
 // stagedFiles maps each staged layout path of a lane to its source file in the pinned module (or funcd).
