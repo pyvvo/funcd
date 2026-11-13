@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -120,6 +121,82 @@ func TestScenarioDevWorkflowSteps(t *testing.T) {
 		_, err := os.Stat(firstDir)
 		return os.IsNotExist(err)
 	}, 30*time.Second, 100*time.Millisecond, "the old copy goes once the step serves the new one")
+}
+
+// scoreContract types a step that takes {n} and returns {n, score}; sumContract types one that needs an integer rows.
+const (
+	scoreContract = `runtime: nodejs22
+input:
+  type: object
+  properties:
+    n:
+      type: number
+  required:
+    - n
+output:
+  type: object
+  properties:
+    n:
+      type: number
+    score:
+      type: number
+  required:
+    - n
+    - score
+`
+	sumContract = `runtime: nodejs22
+input:
+  type: object
+  properties:
+    rows:
+      type: integer
+  required:
+    - rows
+output:
+  type: object
+`
+)
+
+// Dev checks a Workflow against the contract files of its step builds, as a platform checks it against their artifacts
+// (ADR-0098 Decision 1, ADR-0247 Decision 7): a when that reads a parent's output is Ready and branches the run, and an
+// edge into a step that needs a field its parent does not return is EdgeTypeMismatch.
+func TestDevChecksAWorkflowAgainstItsBuildContracts(t *testing.T) {
+	requireNode(t)
+	when := func(cond string) string { return "      when:\n        condition: \"" + cond + "\"\n" }
+	dir := devProject(t, merge(
+		map[string]string{
+			"orders.yaml": workflowDoc("orders", imageStep("score", "score", "")+
+				imageStep("hi", "hi", "score")+when("${{ step.score.output.score > 30 }}")+
+				imageStep("lo", "lo", "score")+when("${{ step.score.output.score <= 30 }}")),
+			"miswired.yaml":       workflowDoc("miswired", imageStep("score", "score", "")+imageStep("sum", "sum", "score")),
+			"score.mjs":           "export function handle(ctx, event) { return { n: event.data.n, score: event.data.n * 40 }; }\n",
+			"score.contract.yaml": scoreContract,
+			"sum.mjs":             "export function handle() { return {}; }\n",
+			"sum.contract.yaml":   sumContract,
+		},
+		stepBuild("hi", "hi"), stepBuild("lo", "lo"),
+	))
+	inst := runDev(t, dir)
+	readyOf := func(c *assert.CollectT, name v1.ObjectName) v1.Condition {
+		obj, err := inst.client.Get(context.Background(), v1.KindWorkflow, "default", name)
+		if !assert.NoError(c, err) {
+			return v1.Condition{}
+		}
+		cond, _ := obj.(*v1.Workflow).Status.Conditions.Get("Ready")
+		return cond
+	}
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		cond := readyOf(c, "orders")
+		assert.Equal(c, v1.ConditionTrue, cond.Status, "orders is %s: %s", cond.Reason, cond.Message)
+	}, 20*time.Second, 50*time.Millisecond, "a when that reads its parent's output type-checks")
+	got := runWorkflow(t, inst, "orders", "run-01")
+	require.Equal(t, v1.StepSucceeded, runStepPhase(got, "hi"), "a score of 40 runs hi")
+	require.Equal(t, v1.StepSkipped, runStepPhase(got, "lo"), "and skips lo")
+
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		cond := readyOf(c, "miswired")
+		assert.Equal(c, "EdgeTypeMismatch", cond.Reason, "miswired is %s: %s", cond.Status, cond.Message)
+	}, 20*time.Second, 50*time.Millisecond, "an edge whose parent does not return a required field is refused")
 }
 
 // TestIssue428_DevReloadsEditedWorkflow — ADR-0247 Decision 8: an edit to the workflow file re-applies the Workflow
