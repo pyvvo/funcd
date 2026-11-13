@@ -81,13 +81,21 @@ the list holds a name:
 ```console
 $ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token get invocations -n default
 NAME
-inv-a7243a861b3b8866dcf4
-inv-d8fb88ff2069dbc6229d
+inv-fc98965dbd0db0765f25
 ```
 
-The names are random, so they differ at each run, and the list, sorted by name, grows by one at each tick. With
-`-o json`, the command prints each Invocation in full: its `status` holds `"phase": "Ready"` and a `startTime`, and the
-start times of the Invocations lie 10 seconds apart.
+The names are random, so they differ at each run, and the list, sorted by name, grows by one at each tick. A name in
+the list tells that an action has ended, not how: read the Invocation, with a name that the list printed, and check its
+phase:
+
+```console
+$ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token get invocation inv-fc98965dbd0db0765f25 -n default -o json
+```
+
+The command prints the Invocation as JSON. Under `status`, `"phase"` is `"Ready"`, since `log-burst` answered the call,
+and `startTime` and `endTime` give when the action started and ended; the `startTime` of the next tick's Invocation
+comes 10 seconds later. funcd writes an Invocation only once its action has ended, so its phase does not change
+afterwards.
 
 To check that each tick reached `log-burst`, read the records of the severity `ERROR` and above that the Function
 wrote. Each call writes five of them: the line written to standard error, and four errors. A record shows only once
@@ -96,16 +104,11 @@ appear. The times, and the order of the lines that one call writes, differ at ea
 
 ```console
 $ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token logs log-burst -n default --severity error
-2026-11-13T17:05:49.846Z [ERROR] 0 burst stderr default
-2026-11-13T17:05:49.847Z [ERROR] 0 item failed
-2026-11-13T17:05:49.847Z [ERROR] 0 item failed
-2026-11-13T17:05:49.848Z [ERROR] 0 item failed
-2026-11-13T17:05:49.848Z [ERROR] 0 item failed
-2026-11-13T17:05:59.824Z [ERROR] 0 item failed
-2026-11-13T17:05:59.824Z [ERROR] 0 item failed
-2026-11-13T17:05:59.824Z [ERROR] 0 burst stderr default
-2026-11-13T17:05:59.825Z [ERROR] 0 item failed
-2026-11-13T17:05:59.825Z [ERROR] 0 item failed
+2026-11-13T18:08:00.944Z [ERROR] 0 item failed
+2026-11-13T18:08:00.944Z [ERROR] 0 burst stderr default
+2026-11-13T18:08:00.945Z [ERROR] 0 item failed
+2026-11-13T18:08:00.945Z [ERROR] 0 item failed
+2026-11-13T18:08:00.946Z [ERROR] 0 item failed
 ```
 
 The terminal that runs `funcdctl dev` prints every line of each call too. To stop the example, press Ctrl-C in that
@@ -134,13 +137,21 @@ the list holds a name:
 ```console
 $ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token get invocations -n default
 NAME
-inv-300d0c577a89346f5bdd
-inv-f0524923837ca70a4b56
+inv-440f82136f11ea321a07
 ```
 
-The names are random, so they differ at each run, and the list, sorted by name, grows by one at each tick. With
-`-o json`, the command prints each Invocation in full: its `status` holds `"phase": "Ready"` and a `startTime`, and the
-start times of the Invocations lie 10 seconds apart.
+The names are random, so they differ at each run, and the list, sorted by name, grows by one at each tick. A name in
+the list tells that an action has ended, not how: read the Invocation, with a name that the list printed, and check its
+phase:
+
+```console
+$ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token get invocation inv-440f82136f11ea321a07 -n default -o json
+```
+
+The command prints the Invocation as JSON. Under `status`, `"phase"` is `"Ready"`, since `log-burst` answered the call,
+and `startTime` and `endTime` give when the action started and ended; the `startTime` of the next tick's Invocation
+comes 10 seconds later. funcd writes an Invocation only once its action has ended, so its phase does not change
+afterwards.
 
 To check that each tick reached `log-burst`, read the records of the severity `ERROR` and above that the Function
 wrote. Each call writes four of them: the line written to standard error, and three errors. A record shows only once
@@ -149,14 +160,10 @@ appear. The times differ at each run:
 
 ```console
 $ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token logs log-burst -n default --severity error
-2026-11-13T17:06:39.493Z [ERROR] 0 burst stderr
-2026-11-13T17:06:39.495Z [ERROR] 0 item 0 failed validation
-2026-11-13T17:06:39.496Z [ERROR] 0 item 1 failed validation
-2026-11-13T17:06:39.496Z [ERROR] 0 item 2 failed validation
-2026-11-13T17:06:49.493Z [ERROR] 0 burst stderr
-2026-11-13T17:06:49.495Z [ERROR] 0 item 0 failed validation
-2026-11-13T17:06:49.495Z [ERROR] 0 item 1 failed validation
-2026-11-13T17:06:49.495Z [ERROR] 0 item 2 failed validation
+2026-11-13T18:08:30.267Z [ERROR] 0 burst stderr
+2026-11-13T18:08:30.269Z [ERROR] 0 item 0 failed validation
+2026-11-13T18:08:30.269Z [ERROR] 0 item 1 failed validation
+2026-11-13T18:08:30.269Z [ERROR] 0 item 2 failed validation
 ```
 
 The terminal that runs `funcdctl dev` prints every line of each call too. To stop the example, press Ctrl-C in that
@@ -236,20 +243,31 @@ $ curl -s -X POST -H 'content-type: application/json' -d '{"inv":"001"}' http://
 {"put":true,"get":true,"list":1,"denied":false,"granted":true}
 $ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token workflow runs
 NAME
-gold-ingest-run-2e3f5f63
+gold-ingest-run-7634b281
 ```
 
-The run is named after the Sensor and its action, with a random suffix that differs at each run. Read the run, with
-the name that the list printed:
+The run is named after the Sensor and its action, with a random suffix that differs at each run. A name in the list
+does not tell whether the run has ended: read the run's phase, with the name that the list printed, again until it
+reads `Succeeded`, `Failed` or `Cancelled`:
 
 ```console
-$ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token get workflowrun gold-ingest-run-2e3f5f63 -n default -o json
+$ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token workflow describe gold-ingest-run-7634b281
+RUN gold-ingest-run-7634b281   phase: Succeeded
+  echo   phase: Succeeded   duration: 0s
+trace: bb7489fb793dbffa27e039f4b2cf3408
+full logs: funcdctl workflow logs gold-ingest-run-7634b281
 ```
 
-The command prints the run as JSON. Under `spec`, `"input"` is `{"file": "gold/roundtrip-001.txt"}`, the key that the
-event carried, and under `status`, `"phase"` is `"Succeeded"`. A call with the tag `002` writes another object and
-starts another run. A call with the tag `001` again writes `gold/roundtrip-001.txt` anew, with a new modification time,
-and starts another run too. To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
+The trace ID differs at each run. To check that the run received the key of the object, print the run as JSON:
+
+```console
+$ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token get workflowrun gold-ingest-run-7634b281 -n default -o json
+```
+
+Under `spec`, `"input"` is `{"file": "gold/roundtrip-001.txt"}`, the key that the event carried. A call with the tag
+`002` writes another object and starts another run. A call with the tag `001` again writes `gold/roundtrip-001.txt`
+anew, with a new modification time, and starts another run too. To stop the example, press Ctrl-C in the terminal that
+runs `funcdctl dev`.
 
 The action succeeds once funcd has created the run: what the run does afterwards, a failure included, shows in the
 run's own phase, and leaves no dead letter, which [Handle a delivery that fails](#handle-a-delivery-that-fails)
@@ -336,20 +354,28 @@ CloudEvent, the Sensor, the action, the number of attempts and the reason, and r
 [`funcdctl eventing dlq`](../../tools/funcdctl/spec.md#funcdctl-eventing-dlq) lists, describes, replays or discards the
 dead letters of a namespace.
 
-To see one, make the first example's action fail. While the first example runs, in either language, replace the
-content of `examples/log-burst/ticker.yaml` with this manifest, whose action passes the input `{"items": "many"}`.
-`log-burst`'s contract refuses it: the TypeScript Function wants a number in `items`, and the Python Function accepts
-no field named `items`:
+To see one, run the first example again, in either language, with an action that fails. The first example and the
+one of [React to a new object in a Bucket](#react-to-a-new-object-in-a-bucket) end with Ctrl-C; stop the one that
+still runs, if any, since both use the same ports. In the root folder of the repository cloned in [Usage](#usage),
+replace the content of `examples/log-burst/ticker.yaml` with this manifest, whose action passes the input
+`{"items": "many"}`. `log-burst`'s contract refuses that input: the TypeScript Function wants a number in `items`, and
+the Python Function accepts no field named `items`:
 
 ::include[../../../../../api/types/v1alpha1/examples/events/dead-letter.yaml#dead-letter]
 
-`funcdctl dev` applies the saved file within about a second, and the next tick fails. Wait 10 seconds, then list the
-dead letters, newest first, again until the list holds one. Each line shows the dead letter's identifier, its Sensor,
+Then start the example as in [Usage](#usage):
+
+```console
+$ funcdctl dev examples/log-burst --cport 8081
+```
+
+The first tick, about 10 seconds after the banner, fails. Wait 10 seconds, then, in another terminal, list the dead
+letters, newest first, again until the list holds one. Each line shows the dead letter's identifier, its Sensor,
 its EventSource and event, its action, the number of attempts and the reason. In TypeScript, the reason reads:
 
 ```console
 $ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token eventing dlq list
-01M7B049Y7YR64JJ4W69DDT52A	burst-on-tick	ticker/tick	action=burst	attempts=3	reason=sensor: function default/log-burst returned status 422: {"error":"event data does not match the input contract","details":[{"path":"/items","message":"got string, want number"}]}
+01M7B1JTZ6P6WHF86MT0JFKYJV	burst-on-tick	ticker/tick	action=burst	attempts=3	reason=sensor: function default/log-burst returned status 422: {"error":"event data does not match the input contract","details":[{"path":"/items","message":"got string, want number"}]}
 ```
 
 In Python, the message of the reason is `additional properties 'items' not allowed`. The identifiers differ at each
@@ -369,15 +395,16 @@ Under `spec`, the entry of `do` then holds only `"name": "burst"`, `"on": "tick"
 the dead letter with the identifier that the list printed:
 
 ```console
-$ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token eventing dlq replay 01M7B049Y7YR64JJ4W69DDT52A
-replayed 01M7B049Y7YR64JJ4W69DDT52A (delivered; entry removed)
+$ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token eventing dlq replay 01M7B1JTZ6P6WHF86MT0JFKYJV
+replayed 01M7B1JTZ6P6WHF86MT0JFKYJV (delivered; entry removed)
 ```
 
 The action no longer sets an input, so `log-burst` receives the event's empty object and answers, and funcd removes
 the dead letter. A replay records an Invocation of its own. When the delivery fails again, funcd keeps the dead letter,
 with its count of attempts set back to 0 and the new reason, and the command fails with a message that contains
 `delivery failed (entry re-parked)`. `funcdctl eventing dlq discard` with an identifier deletes a dead letter without
-delivering it.
+delivering it. To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`: `ticker.yaml` holds the
+first manifest again, as at the end of [Usage](#usage).
 
 A `workflow` action fails for the first two causes above, or when funcd cannot create the run. Once the run exists, the
 action has succeeded, so a run that fails later leaves no dead letter: the run's phase reports it, as the Workflow

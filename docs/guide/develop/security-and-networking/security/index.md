@@ -117,7 +117,11 @@ gateway, and `-w '\n'` ends the answer with a line break. The read succeeds, bec
 reading the prefix `gold`. The write fails with the S3 error `AccessDenied` and the HTTP status 403, because the role
 allows no writing and `analyst` is not the prefix's owner. The `RequestId` and the `HostId` differ at each run.
 
-To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
+Keep the example running: [Choose a role](#choose-a-role), [Choose the scope of a grant](#choose-the-scope-of-a-grant)
+and [Write a Policy](#write-a-policy) apply more objects to it, and use `KEY_ID` and `SECRET_KEY` in the second
+terminal. Pressing Ctrl-C in the terminal that runs `funcdctl dev` stops the example, and `funcdctl dev` then loses the
+Identity, its credential and the objects of the Bucket. To start again, repeat the steps above from `funcdctl dev`
+on: the Identity then gets a new secret.
 
 ## Choose a role
 
@@ -292,6 +296,8 @@ $ curl -s -o /dev/null -w '%{http_code}\n' --aws-sigv4 aws:amz:us-east-1:s3 --us
 The write that `object-writer` allows is refused while the Policy exists, and allowed again from the next request once
 the Policy is deleted.
 
+To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
+
 funcd checks a Policy when it is applied. It refuses text that does not parse or holds no statement, and a statement
 that does not name exactly one action that funcd knows. It also refuses an entity that a statement's principal or
 resource names with `==` or `in`, when funcd does not know its type or the entity belongs to another namespace;
@@ -440,8 +446,9 @@ in these ways:
   reaches.
 - It gives each Function of its folder the Role `dev-blob-writer`, which allows `s3::write`, on the whole namespace,
   through a RolesAssignment named `dev-blob-writer-<function>`, which a server does not give. While the first example
-  runs, `funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token get roles -n default` lists
-  `dev-blob-writer`, and `get rolesassignments` with the same flags lists `dev-blob-writer-s3-roundtrip`. A write that
+  runs, as [Usage](#usage) starts it,
+  `funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token get roles -n default` lists `dev-blob-writer`, and
+  `get rolesassignments` with the same flags lists `dev-blob-writer-s3-roundtrip`. A write that
   succeeds locally can therefore fail once deployed, as the Bucket page's
   [Run it locally](../../services/bucket/index.md#run-it-locally) section explains. A Policy's `forbid` still applies
   to these Functions.
