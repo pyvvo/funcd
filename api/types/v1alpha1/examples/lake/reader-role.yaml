@@ -1,0 +1,66 @@
+apiVersion: funcd.io/v1alpha1
+kind: Secret
+metadata:
+  name: lake-quack-token
+  namespace: default
+  resourceGroup: rg1
+spec:
+  data:
+    QUACK_TOKEN: ZnVuY2QtY2F0YWxvZy10b2tlbg==
+---
+apiVersion: funcd.io/v1alpha1
+kind: Lake
+metadata:
+  name: lake
+  namespace: default
+  resourceGroup: rg1
+spec:
+  buckets:
+    - name: lakehouse
+      prefixes:
+        - name: gold
+  secrets:
+    - name: lake-quack-token
+      keys:
+        - QUACK_TOKEN
+  bindings:
+    blob:
+      - alias: gold
+        bucket: lakehouse
+        prefix: gold
+    secret:
+      - lake-quack-token
+  location:
+    bucket: lakehouse
+    prefix: gold
+  ingress:
+    enabled: true
+---
+apiVersion: funcd.io/v1alpha1
+kind: Identity
+metadata:
+  name: analyst
+  namespace: default
+  resourceGroup: rg1
+spec:
+  type: external
+---
+# region rolesassignment
+apiVersion: funcd.io/v1alpha1
+kind: RolesAssignment
+metadata:
+  name: analyst-queries-lake
+  namespace: default
+  resourceGroup: rg1
+spec:
+  principal:
+    kind: Identity
+    name: analyst
+  assignments:
+    - roleRef:
+        kind: BuiltinRole
+        name: Lake Query Reader
+      scope:
+        kind: Lake
+        name: lake
+# endregion rolesassignment

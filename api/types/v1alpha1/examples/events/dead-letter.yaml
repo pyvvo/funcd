@@ -1,0 +1,31 @@
+# region dead-letter
+apiVersion: funcd.io/v1alpha1
+kind: EventSource
+metadata:
+  name: ticker
+  namespace: default
+  resourceGroup: rg1
+spec:
+  timer:
+    events:
+      - name: tick
+        interval: 10s
+---
+apiVersion: funcd.io/v1alpha1
+kind: Sensor
+metadata:
+  name: burst-on-tick
+  namespace: default
+  resourceGroup: rg1
+spec:
+  on:
+    - name: tick
+      source: ticker
+      event: tick
+  do:
+    - name: burst
+      on: tick
+      function: log-burst
+      input:
+        items: many
+# endregion dead-letter

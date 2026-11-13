@@ -1,0 +1,31 @@
+# region sqldatabase
+apiVersion: funcd.io/v1alpha1
+kind: SQLDatabase
+metadata:
+  name: notes-db
+  namespace: default
+  resourceGroup: rg1
+spec:
+  owner: notes
+  quota:
+    maxSize: 1Gi
+  resources:
+    memory: 512Mi
+# endregion sqldatabase
+---
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: notes
+  namespace: default
+  resourceGroup: rg1
+spec:
+  sql:
+    - ref: notes-db
+  bindings:
+    sql:
+      - alias: app
+        database: notes-db
+  runtime: nodejs22
+  handler: handle
+  image: registry.example.com/notes:1.0.0

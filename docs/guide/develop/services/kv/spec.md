@@ -4,7 +4,7 @@ title: "KVStore spec and handler API"
 description: "Every field of KVStore, then the methods a handler calls on ctx.kv."
 ---
 
-The spec and the status of each kind of this feature, as funcd's API schema states them. The [Platform page](../../../platform/services/kv.md) explains the concept, and the `metadata` of every kind is [the same](../../common-definitions.md#objectmeta).
+This page lists the spec and status fields of KVStore, each with its type, its limits and its description. The [Platform page](../../../platform/services/kv.md) explains the concept, and the `metadata` of every kind is [the same](../../common-definitions.md#objectmeta).
 
 ## KVStore
 
@@ -27,7 +27,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | --- | --- | --- |
 | `maxBytes` | integer, at least 0 | The same cap as a number of bytes. Set maxSize or maxBytes, not both. |
 | `maxKeyBytes` | integer, 0 to 64000 | The longest key, in bytes. 0 means 1024 (1 KiB). |
-| `maxSize` | string, a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB) | The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507. |
+| `maxSize` | string, a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB) | The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507 in a KV store or a Bucket; a SQL execute call gets 507 once the database holds the cap. |
 | `maxValueBytes` | integer, 0 to 1048576 | The largest value a write may store, in bytes. 0 means 1048576 (1 MiB). |
 
 ### `KVStore.spec.tables[]`

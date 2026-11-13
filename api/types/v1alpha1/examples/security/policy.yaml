@@ -1,0 +1,24 @@
+apiVersion: funcd.io/v1alpha1
+kind: Identity
+metadata:
+  name: analyst
+  namespace: default
+  resourceGroup: rg1
+spec:
+  type: external
+---
+# region policy
+apiVersion: funcd.io/v1alpha1
+kind: Policy
+metadata:
+  name: analyst-writes-nothing
+  namespace: default
+  resourceGroup: rg1
+spec:
+  cedar: |
+    forbid(
+      principal == Identity::"default/analyst",
+      action == Action::"s3::write",
+      resource in Bucket::"default/lakehouse"
+    );
+# endregion policy

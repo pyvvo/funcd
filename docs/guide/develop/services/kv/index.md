@@ -239,8 +239,10 @@ directory, unless `kvstore.dataDir` names another folder. `storage.mode: memory`
 ## Run it locally
 
 `funcdctl dev` keeps the KV data in memory, so the data is lost when `funcdctl dev` stops, whatever
-[Data storage](#data-storage) says about a server. With the `--persist` flag, `funcdctl dev` keeps the KV, blob and
-metastore data in a local folder between runs.
+[Data storage](#data-storage) says about a server. With the `--persist` flag, `funcdctl dev` keeps the KV data between
+runs, in the `kv` folder of `.funcd-dev` in the current directory, or of the folder that `--persist-to` names. To
+remove it, delete that persist folder after `funcdctl dev` stops; that clears all the state that the local platform
+stored: its metastore, KV, blob, SQL, lake and volume data.
 
 ## Examples
 

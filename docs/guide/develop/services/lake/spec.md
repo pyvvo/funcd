@@ -4,9 +4,11 @@ title: "Lake spec"
 description: "Every field of Lake: its type, its limits and its description."
 ---
 
-The spec and the status of each kind of this feature, as funcd's API schema states them. The [Platform page](../../../platform/services/lake.md) explains the concept, and the `metadata` of every kind is [the same](../../common-definitions.md#objectmeta).
+This page lists the spec and status fields of Lake, each with its type, its limits and its description. The [Platform page](../../../platform/services/lake.md) explains the concept, and the `metadata` of every kind is [the same](../../common-definitions.md#objectmeta).
 
 ## Lake
+
+::include[../../../../../api/types/v1alpha1/examples/lake/lake.yaml#lake]
 
 | apiVersion | kind |
 | --- | --- |
@@ -29,7 +31,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `blob` | array of [`Lake.spec.bindings.blob[]`](#lakespecbindingsblob), required | The Bucket prefixes the engine may read, each under an alias. It writes only a prefix whose owner is this Lake, and the Lake's location must be one of them. |
-| `config` | array of string values, each a DNS-1123 label | ConfigMaps whose data the engine gets as environment variables. Only QUACK_TOKEN and the DUCKDB_ keys pass, DUCKDB_EXTENSION_DIRECTORY excepted, and a bound Secret's value wins over a ConfigMap's for the same key. A missing ConfigMap holds the Lake in Pending, with the reason BindingResolveFailed. |
+| `config` | array of string values, each a DNS-1123 label | ConfigMaps whose data the engine gets as environment variables. Only QUACK_TOKEN and the DUCKDB\_ keys pass, DUCKDB_EXTENSION_DIRECTORY excepted, and a bound Secret's value wins over a ConfigMap's for the same key. A missing ConfigMap holds the Lake in Pending, with the reason BindingResolveFailed. |
 | `secret` | array of string values, each a DNS-1123 label | Secrets whose data the engine gets as environment variables, such as its QUACK_TOKEN; the same keys pass as for config. funcd asks Cedar, as the Lake, for secret::read on each: a forbidden Secret holds the Lake in Pending, with the reason BindingResolveFailed, as does a missing one in a lake that another resource declares. A changed value replaces the engine. |
 
 ### `Lake.spec.bindings.blob[]`
@@ -70,7 +72,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `maxBytes` | integer, at least 0 | The same cap as a number of bytes. Set maxSize or maxBytes, not both. |
-| `maxSize` | string, a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB) | The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507. |
+| `maxSize` | string, a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB) | The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507 in a KV store or a Bucket; a SQL execute call gets 507 once the database holds the cap. |
 
 ### `Lake.spec.buckets[].quota`
 
@@ -78,13 +80,13 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | --- | --- | --- |
 | `maxBytes` | integer, at least 0 | The same cap as a number of bytes. Set maxSize or maxBytes, not both. |
 | `maxObjectBytes` | integer, at least 0 | The largest object a write may store, in bytes. A larger write gets 413, or EntityTooLarge over S3, and while it is set funcd refuses to sign a presigned PUT URL for the Bucket, with 403. 0 sets no cap of the Bucket's own, so only funcd's upload limits apply, such as s3gateway.maxUploadBytes. |
-| `maxSize` | string, a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB) | The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507. |
+| `maxSize` | string, a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB) | The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507 in a KV store or a Bucket; a SQL execute call gets 507 once the database holds the cap. |
 
 ### `Lake.spec.configMaps[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `data` | map of string to string | Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through. |
+| `data` | map of string to string | Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and \_, not starting with a digit. Each value must be UTF-8 text with no NUL byte: a Function or a Lake that binds a ConfigMap holding another value does not start. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD\_ or that a bound Secret also holds; and while the S3 gateway is on, a Function that binds a Bucket gets the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY that funcd issues it, in place of the ConfigMap's. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through. |
 | `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as &lt;name&gt;-&lt;hash of data&gt;, and the config of each part that names it is set to that stored name. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 
@@ -101,7 +103,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `mode` | string, one of `""`, `authenticated`, `open` | How the edge checks callers. authenticated requires a bearer token, or an X-Api-Key header, of an identity that RBAC lets get Functions in the namespace: 401 without a valid one, 403 when it may not. open lets anonymous callers in. Empty takes the enclosing stance, if any, else the namespace's spec.edgeDefaults.auth.mode, else open. |
+| `mode` | string, one of `""`, `authenticated`, `open` | How the edge checks callers. authenticated requires a bearer token, or an X-Api-Key header, of an identity that RBAC lets get Functions in the namespace: 401 without a valid one, 403 when it may not; while server.auth.edge is off, every caller gets 401. open lets anonymous callers in. Empty takes the enclosing stance, if any, else the namespace's spec.edgeDefaults.auth.mode, else open. |
 
 ### `Lake.spec.location`
 
@@ -115,7 +117,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `cpu` | string | The CPU cap of the worker or engine it sizes, as a number of cores of at least 0.01, such as 0.5 or 2. Empty takes the default of the resource that declares it, or no cap when there is none. Only the containerd runtime enforces it. |
-| `memory` | string | The memory cap of the worker or engine it sizes, such as 256Mi or 4GiB: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B, above zero. Empty takes the default of the resource that declares it, or no cap when there is none. Only the containerd runtime enforces it, and there a worker that passes it is killed. |
+| `memory` | string | The memory cap of the worker or engine it sizes, such as 256Mi or 4GiB: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B, above zero. Empty takes the default of the resource that declares it, or no cap when there is none. Only the containerd runtime enforces it, and there a worker that uses more memory than the cap is killed. |
 
 ### `Lake.spec.secrets[]`
 
@@ -130,7 +132,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `conditions` | array of [Condition](../../common-definitions.md#condition) | The conditions that explain the phase. |
-| `endpoint` | string | While the Lake is Ready, the host and port of its Lake gateway, which a Function that binds the Lake gets as FUNCD_LAKE_&lt;ALIAS&gt;_URL. In any other phase it is empty or holds the engine's own address. |
+| `endpoint` | string | While the Lake is Ready, the host and port of its Lake gateway, which a Function that binds the Lake gets as FUNCD_LAKE\_&lt;ALIAS&gt;\_URL. In any other phase it is empty or holds the engine's own address. |
 | `function` | string, a DNS-1123 label | funcd sets it to &lt;name&gt;-duckdb, after the Lake's name. funcd makes no object of that name and does not read it. |
 | `observedGeneration` | integer | The generation of the spec that funcd last acted on. |
 | `phase` | string, one of `Pending`, `Deploying`, `Ready`, `Idle`, `Degraded`, `Failed`, `Terminating` | Where the object is in its lifecycle. |

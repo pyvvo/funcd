@@ -4,9 +4,11 @@ title: "Route and EgressPolicy spec"
 description: "Every field of Route and EgressPolicy: its type, its limits and its description."
 ---
 
-The spec and the status of each kind of this feature, as funcd's API schema states them. The [Platform page](../../../platform/security-and-networking/networking.md) explains the concept, and the `metadata` of every kind is [the same](../../common-definitions.md#objectmeta).
+This page lists the spec and status fields of Route and EgressPolicy, each with its type, its limits and its description. The [Platform page](../../../platform/security-and-networking/networking.md) explains the concept, and the `metadata` of every kind is [the same](../../common-definitions.md#objectmeta).
 
 ## Route
+
+::include[../../../../../api/types/v1alpha1/examples/networking/route.yaml#route]
 
 | apiVersion | kind |
 | --- | --- |
@@ -25,7 +27,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `mode` | string, one of `""`, `authenticated`, `open` | How the edge checks callers. authenticated requires a bearer token, or an X-Api-Key header, of an identity that RBAC lets get Functions in the namespace: 401 without a valid one, 403 when it may not. open lets anonymous callers in. Empty takes the enclosing stance, if any, else the namespace's spec.edgeDefaults.auth.mode, else open. |
+| `mode` | string, one of `""`, `authenticated`, `open` | How the edge checks callers. authenticated requires a bearer token, or an X-Api-Key header, of an identity that RBAC lets get Functions in the namespace: 401 without a valid one, 403 when it may not; while server.auth.edge is off, every caller gets 401. open lets anonymous callers in. Empty takes the enclosing stance, if any, else the namespace's spec.edgeDefaults.auth.mode, else open. |
 
 ### `Route.spec.rules[]`
 
@@ -65,6 +67,8 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 ## EgressPolicy
 
+::include[../../../../../api/types/v1alpha1/examples/networking/egresspolicy.yaml#egresspolicy]
+
 | apiVersion | kind |
 | --- | --- |
 | `funcd.io/v1alpha1` | `EgressPolicy` |
@@ -88,4 +92,4 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `cidrs` | array of string values | Address ranges, such as 10.0.0.0/8, that the dialled address must fall in. A host reached by name needs a domains entry too, since funcd answers a worker's lookup only for a name that a domain rule applying to it allows. |
-| `domains` | array of string values | Host names in lower case: exact, such as api.x.com, or a wildcard, such as *.x.com, which matches every name under x.com but not x.com. A connection matches a name only at an address that the worker's own lookup of it through funcd returned, within the answer's TTL, and never at an address that is not globally reachable, such as a private one, which needs a cidrs entry. |
+| `domains` | array of string values | Host names in lower case: exact, such as api.x.com, or a wildcard, such as \*.x.com, which matches every name under x.com but not x.com. A connection matches a name only at an address that the worker's own lookup of it through funcd returned, within the answer's TTL, and never at an address that is not globally reachable, such as a private one, which needs a cidrs entry. |

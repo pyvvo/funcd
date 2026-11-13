@@ -1,0 +1,15 @@
+# region egresspolicy
+apiVersion: funcd.io/v1alpha1
+kind: EgressPolicy
+metadata:
+  name: allow-example-subdomains
+  namespace: default
+  resourceGroup: rg1
+spec:
+  rules:
+    - to:
+        domains:
+          - "*.example.com"
+      ports:
+        - 443
+# endregion egresspolicy

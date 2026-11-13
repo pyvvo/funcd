@@ -4,9 +4,11 @@ title: "EventSource and Sensor spec"
 description: "Every field of EventSource and Sensor: its type, its limits and its description."
 ---
 
-The spec and the status of each kind of this feature, as funcd's API schema states them. The [Platform page](../../../platform/services/events.md) explains the concept, and the `metadata` of every kind is [the same](../../common-definitions.md#objectmeta).
+This page lists the spec and status fields of EventSource and Sensor, each with its type, its limits and its description. The [Platform page](../../../platform/services/events.md) explains the concept, and the `metadata` of every kind is [the same](../../common-definitions.md#objectmeta).
 
 ## EventSource
+
+::include[../../../../../api/types/v1alpha1/examples/events/eventsource.yaml#eventsource]
 
 | apiVersion | kind |
 | --- | --- |
@@ -74,6 +76,8 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | `phase` | string, one of `Pending`, `Deploying`, `Ready`, `Idle`, `Degraded`, `Failed`, `Terminating` | Where the object is in its lifecycle. |
 
 ## Sensor
+
+::include[../../../../../api/types/v1alpha1/examples/events/sensor.yaml#sensor]
 
 | apiVersion | kind |
 | --- | --- |

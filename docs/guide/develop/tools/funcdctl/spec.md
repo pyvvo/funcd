@@ -397,8 +397,8 @@ For an App template the file also takes watch, a list of name, run and dir: dev 
 | `--cport` | int | `0` | fixed control-plane port (for `funcdctl --server`: apply, workflow run); 0 ⇒ a random free port |
 | `--gport` | int | `0` | fixed gateway (function-invoke) port; 0 ⇒ a random free port |
 | `--hooks` | bool | `false` | keep the App's preApply and postApply hooks, called on each new revision (App mode) |
-| `--persist` | bool | `false` | persist KV/blob/metastore to a local dir between runs (default: ephemeral in-memory) |
-| `--persist-to` | string | `.funcd-dev` | directory for --persist state (per-service subdirs: metastore/kv/blob) |
+| `--persist` | bool | `false` | keep the metastore, KV, blob, SQL, lake and volume data between runs, in the --persist-to directory (default: in memory or in temporary directories, gone when dev stops) |
+| `--persist-to` | string | `.funcd-dev` | directory for --persist state, one subdirectory per service: metastore, kv, blob, lake, sql, volumes and bundles |
 | `--print-env` | bool | `false` | print the dev S3 credentials as `export …` lines and exit (no server); pair with a fixed --s3port. Use: eval "$(funcdctl dev &lt;dir&gt; --s3port 3006 --print-env)" |
 | `--s3port` | int | `0` | fixed S3-frontend port; 0 ⇒ a random free port |
 | `-f`, `--values` | stringArray | `[]` | an App template's values file; repeat it to merge files in order (App mode) |

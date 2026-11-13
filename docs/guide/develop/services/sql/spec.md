@@ -4,9 +4,11 @@ title: "SQLDatabase spec"
 description: "Every field of SQLDatabase: its type, its limits and its description."
 ---
 
-The spec and the status of each kind of this feature, as funcd's API schema states them. The [Platform page](../../../platform/services/sql.md) explains the concept, and the `metadata` of every kind is [the same](../../common-definitions.md#objectmeta).
+This page lists the spec and status fields of SQLDatabase, each with its type, its limits and its description. The [Platform page](../../../platform/services/sql.md) explains the concept, and the `metadata` of every kind is [the same](../../common-definitions.md#objectmeta).
 
 ## SQLDatabase
+
+::include[../../../../../api/types/v1alpha1/examples/sql/sqldatabase.yaml#sqldatabase]
 
 | apiVersion | kind |
 | --- | --- |
@@ -16,7 +18,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `owner` | string, a DNS-1123 label | The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step. With no owner, only those writers can write it. |
+| `owner` | string, a DNS-1123 label | The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step or a lake that the Workflow declares. With no owner, only those writers can write it. |
 | `quota` | object, [`SQLDatabase.spec.quota`](#sqldatabasespecquota) | A cap on the database's total size, the bytes of its pages in use. Once it is reached, an execute gets 507 unless each of its statements is a DELETE or a DROP. A change keeps the engine running. |
 | `resources` | object, [`SQLDatabase.spec.resources`](#sqldatabasespecresources) | The cpu and memory of the database's engine. An empty memory means 256Mi, and an empty cpu sets no cpu limit. A change replaces the running engine. |
 
@@ -25,14 +27,14 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `maxBytes` | integer, at least 0 | The same cap as a number of bytes. Set maxSize or maxBytes, not both. |
-| `maxSize` | string, a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB) | The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507. |
+| `maxSize` | string, a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB) | The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507 in a KV store or a Bucket; a SQL execute call gets 507 once the database holds the cap. |
 
 ### `SQLDatabase.spec.resources`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `cpu` | string | The CPU cap of the worker or engine it sizes, as a number of cores of at least 0.01, such as 0.5 or 2. Empty takes the default of the resource that declares it, or no cap when there is none. Only the containerd runtime enforces it. |
-| `memory` | string | The memory cap of the worker or engine it sizes, such as 256Mi or 4GiB: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B, above zero. Empty takes the default of the resource that declares it, or no cap when there is none. Only the containerd runtime enforces it, and there a worker that passes it is killed. |
+| `memory` | string | The memory cap of the worker or engine it sizes, such as 256Mi or 4GiB: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B, above zero. Empty takes the default of the resource that declares it, or no cap when there is none. Only the containerd runtime enforces it, and there a worker that uses more memory than the cap is killed. |
 
 ### `SQLDatabase.status`
 

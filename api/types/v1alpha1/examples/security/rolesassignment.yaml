@@ -1,0 +1,30 @@
+apiVersion: funcd.io/v1alpha1
+kind: Identity
+metadata:
+  name: analyst
+  namespace: default
+  resourceGroup: rg1
+spec:
+  type: external
+---
+# region rolesassignment
+apiVersion: funcd.io/v1alpha1
+kind: RolesAssignment
+metadata:
+  name: analyst-reads-namespace
+  namespace: default
+  resourceGroup: rg1
+spec:
+  principal:
+    kind: Identity
+    name: analyst
+  scope:
+    kind: Namespace
+  assignments:
+    - roleRef:
+        kind: BuiltinRole
+        name: Blob Data Reader
+    - roleRef:
+        kind: BuiltinRole
+        name: Lake Query Reader
+# endregion rolesassignment

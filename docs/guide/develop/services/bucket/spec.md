@@ -4,7 +4,7 @@ title: "Bucket spec"
 description: "Every field of Bucket: its type, its limits and its description."
 ---
 
-The spec and the status of each kind of this feature, as funcd's API schema states them. The [Platform page](../../../platform/services/bucket.md) explains the concept, and the `metadata` of every kind is [the same](../../common-definitions.md#objectmeta).
+This page lists the spec and status fields of Bucket, each with its type, its limits and its description. The [Platform page](../../../platform/services/bucket.md) explains the concept, and the `metadata` of every kind is [the same](../../common-definitions.md#objectmeta).
 
 ## Bucket
 
@@ -41,7 +41,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `maxBytes` | integer, at least 0 | The same cap as a number of bytes. Set maxSize or maxBytes, not both. |
-| `maxSize` | string, a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB) | The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507. |
+| `maxSize` | string, a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB) | The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507 in a KV store or a Bucket; a SQL execute call gets 507 once the database holds the cap. |
 
 ### `Bucket.spec.quota`
 
@@ -49,7 +49,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | --- | --- | --- |
 | `maxBytes` | integer, at least 0 | The same cap as a number of bytes. Set maxSize or maxBytes, not both. |
 | `maxObjectBytes` | integer, at least 0 | The largest object a write may store, in bytes. A larger write gets 413, or EntityTooLarge over S3, and while it is set funcd refuses to sign a presigned PUT URL for the Bucket, with 403. 0 sets no cap of the Bucket's own, so only funcd's upload limits apply, such as s3gateway.maxUploadBytes. |
-| `maxSize` | string, a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB) | The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507. |
+| `maxSize` | string, a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB) | The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507 in a KV store or a Bucket; a SQL execute call gets 507 once the database holds the cap. |
 
 ### `Bucket.status`
 

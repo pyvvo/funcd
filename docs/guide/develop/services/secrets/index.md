@@ -38,8 +38,9 @@ the Function:
 - The Secret `app-secret` holds two keys, `API_KEY` and `SHARED`, under `spec.data`. Each value is written in base64,
   and each key is an environment variable name: a letter or an underscore, then letters, digits and underscores.
 - The ConfigMap `app-config` holds two settings that are not secret, `APP_MODE` and `SHARED`. funcd gives the keys of
-  a bound ConfigMap to each worker as environment variables, except a key that starts with `FUNCD_` and a key that a
-  bound Secret also holds, such as `SHARED`.
+  a bound ConfigMap to each worker as environment variables, with the exceptions that the Configuration page lists
+  under [Choose a ConfigMap's keys](../../workloads/configuration/index.md#choose-a-configmaps-keys). One of them
+  applies here: a key that a bound Secret also holds, such as `SHARED`, is left out.
 - The Function `env-echo` **declares** the Secret under `spec.secrets`, with the keys that its code reads. The
   Function waits in `Pending` until the Secret exists and holds every declared key.
 - The Function **binds** the Secret under `spec.bindings.secret`. A binding can name only a Secret that `spec.secrets`
@@ -240,9 +241,10 @@ A forbid shows on the `Ready` condition: a Function that has served becomes `Deg
 `funcdctl dev` keeps its Secrets in memory, so they are gone when it stops. With the `--persist` flag, it keeps them
 between runs in the `metastore` folder of its persist folder: `.funcd-dev`, which it creates in the current folder,
 unless `--persist-to` names another folder. The Secrets' values are stored there unencrypted, because `funcdctl dev`
-sets no encryption key. To remove them, delete that folder after `funcdctl dev` stops. Keep the folder out of version
-control, for example with a `.funcd-dev/` line in `.gitignore`: the example's repository does not ignore it, so
-`git status` lists it.
+sets no encryption key. To remove them, delete the persist folder after `funcdctl dev` stops: `.funcd-dev`, or the
+folder that `--persist-to` names. Deleting it clears all the state that the local platform stored, its metastore, KV,
+blob, SQL, lake and volume data, Secrets included. Keep the persist folder out of version control, for example with a
+`.funcd-dev/` line in `.gitignore`: the example's repository does not ignore it, so `git status` lists it.
 
 `funcdctl dev` also creates each Secret that a Function of the folder declares and that no file of the folder
 defines. It takes the value of each declared key from the shell's environment, else from the file that `dev.envFile`
