@@ -171,9 +171,17 @@ $ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token get restore la
 
 Under `status`, `"phase"` is `"Succeeded"`, and the condition `Ready` has the status `"True"`. A Restore that ends in
 the phase `Failed` stays `Failed`, as a Backup does, and the reason of its condition `Ready` says why, as
-[Status](#status) explains. The last step needs a Restore that `Succeeded`: once the cause is fixed, delete the
-Restore with `funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token delete restore lakehouse-restore -n default`,
-then apply `restore.yaml` again.
+[Status](#status) explains. The last step needs a Restore that `Succeeded`, and a new Restore needs an empty
+`lakehouse-copy`:
+
+- A Restore that failed with the reason `NotEmpty` found data in `lakehouse-copy`, and one that failed with the reason
+  `Interrupted` clears nothing that it loaded, so a new Restore would fail with `NotEmpty` too. To start again with an
+  empty `lakehouse-copy`, stop `funcdctl dev` with Ctrl-C, start it again with the same command, and repeat every step
+  from the call of the Function: without `--persist`, `funcdctl dev` keeps no data, so the restart also empties
+  `lakehouse`, and the Backup and its copy are gone.
+- After any other failure, `lakehouse-copy` is still empty. Once the cause is fixed, delete the Restore with
+  `funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token delete restore lakehouse-restore -n default`,
+  then apply `restore.yaml` again.
 
 Read the restored object through the S3 gateway, with the key pair of `s3-roundtrip`. The `--print-env` flag of
 `funcdctl dev` prints that key pair, the region and the address of the S3 gateway as `export` lines, without starting
@@ -258,7 +266,8 @@ namespace: it refuses a second one while the first has not ended. The Restore go
    Restore replaces. A failed export fails the Restore with the reason `ExportFailed`, and nothing is written.
 2. The Restore turns `Running`. While the namespace keeps serving, it reads the whole copy and checks every part, then
    checks each member and its destination. A failed check fails the Restore, and nothing is written. For a member in
-   place, this check finds only a store that does not exist: a volume that is not empty is found at its load.
+   place, this check finds a member that the copy does not hold and a store that does not exist, but not a volume that
+   is not empty, which is found at its load.
 3. It **holds** the namespace: the namespace's Functions refuse calls with the HTTP status 503 and the header
    `Retry-After: 30`, and its Sites keep serving their files. Until its loads end, it also stops the workers, the
    processes that run a Function's code, of each Function whose volume it loads, and the engine, the process that
@@ -267,8 +276,9 @@ namespace: it refuses a second one while the first has not ended. The Restore go
 
 When a load fails, the Restore clears what the loads began and ends `Failed`, and the hold stays: a store loaded in
 place before the failing member is then empty, and its former data remains only in the export, when the export's scope
-named that store. A volume that is not empty fails its load that way, with the reason `NotEmpty`. When funcd stops during a load, the next start ends the Restore
-`Failed` with the reason `Interrupted`, clears nothing, and keeps the hold. Check the stores, then lift the hold with
+named that store. A volume that is not empty fails its load that way, with the reason `NotEmpty`. When funcd stops
+during a load, the next start ends the Restore `Failed` with the reason `Interrupted`, clears nothing, and keeps the
+hold. Check the stores, then lift the hold with
 [`funcdctl hold release --namespace`](../tools/funcdctl/spec.md#funcdctl-hold-release) and the namespace's name, which
 also needs the permission to update the Namespace, and which funcd refuses while the Restore is `Pending` or
 `Running`.
@@ -354,12 +364,12 @@ A Backup that is `Running` when funcd stops ends at the next start: `Succeeded` 
 its copy is whole on the target, else `Failed` with the reason `Interrupted`.
 
 A BackupSchedule is `Ready`. Its condition `Ready` has the reason `SameProvider` when its URL names another bucket on
-the endpoint of `blob.target`, the funcd server's own blob store, since one failure of that provider takes both. Its status also gives the newest
-slot that it took, `lastScheduleTime`; the completion of its newest Backup that `Succeeded`, `lastSuccessTime`; the
-start of the oldest one, `earliestRestorePoint`, the oldest point that a Restore can go back to; and the Backup that
-is `Pending` or `Running`, `active`. `rpoRisk` is `true` when the schedule has fallen behind, as the
-[Spec](spec.md#backupschedulestatus) tab defines, and stays `false` while the schedule is paused: when it turns
-`true`, funcd logs `workload backup rpo at risk`.
+the endpoint of `blob.target`, the funcd server's own blob store, since one failure of that provider takes both. Its
+status also gives the newest slot that it took, `lastScheduleTime`; the completion of its newest Backup that
+`Succeeded`, `lastSuccessTime`; the start of the oldest one, `earliestRestorePoint`, the oldest point that a Restore can
+go back to; and the Backup that is `Pending` or `Running`, `active`. `rpoRisk` is `true` when the schedule has fallen
+behind, as the [Spec](spec.md#backupschedulestatus) tab defines, and stays `false` while the schedule is paused: when it
+turns `true`, funcd logs `workload backup rpo at risk`.
 
 A Restore is `Pending` while it waits for its Backup and, in place, for its export, `Running` while it checks the copy
 and loads, then `Succeeded` or `Failed`. The reason of a `Failed` Restore says why:
