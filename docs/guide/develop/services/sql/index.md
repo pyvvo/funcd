@@ -36,12 +36,13 @@ computer, and logs the line `dev sql engine ready`, with the database's name, on
 `funcdctl dev` stops, it deletes the database's data, unless the `--persist` flag keeps it, as
 [Run it locally](#run-it-locally) explains. `funcdctl dev` prints a banner with the URL of each Function. The
 `--gport` flag sets the port of that URL, so the commands below use port 8080. The banner can appear before the
-engine is ready: a call sent then waits until the engine and the Function's worker are ready, and then answers.
+engine is ready: a call sent then waits until the engine and the Function's worker are ready, and then answers. The
+wait lasts at most `invoke.activationTimeout`, 30 seconds by default, after which the call gets the HTTP status 503.
 
 The example's manifests connect the Functions to the database:
 
 - A **SQLDatabase**, a resource of its own, defines the database. Its `owner` names the Function that owns the
-  database, which can write it.
+  database: that Function can write it.
 - Each Function declares the database by `ref` under
   [`spec.sql`](../../workloads/function/spec.md#functionspecsql), because the database is a separate resource, and
   binds it under [`spec.bindings.sql`](../../workloads/function/spec.md#functionspecbindingssql) with the alias
@@ -135,8 +136,8 @@ email of their customer:
 ::include[../../../../../_repos/funcd-python/examples/sql-orders/src/orders/main.py]
 
 The folder's `grant.yaml` gives the role `SQL Data Writer` to `orders-migrate` and to `audit`. `audit` records each
-change of the table `orders` in the table `order_events`. funcd receives each row change of a database from the
-database's engine, the database's change feed. `changes.yaml` declares an EventSource, a resource that emits events,
+change of the table `orders` in the table `order_events`. The database's engine reports each row change to funcd;
+that stream of row changes is the database's change feed. `changes.yaml` declares an EventSource, a resource that emits events,
 with a `sql` source under its field [`spec.sql`](../events/spec.md#eventsourcespecsql), which turns each change of the
 table `orders` into an event. The file also declares a [Sensor](../events/spec.md#sensor), a resource that runs an
 action when an event arrives: this Sensor calls `audit` with each such event, so the order that the steps below place
