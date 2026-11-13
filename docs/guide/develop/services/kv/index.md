@@ -192,8 +192,8 @@ example gives `pyclaim` write access to the table `claims` of the store `claims-
 ::include[../../../../../api/types/v1alpha1/examples/kv/writer-role.yaml#rolesassignment]
 
 The built-in roles `Contributor` and `Owner` also allow writing keys, together with reading and writing buckets, and a
-Role that an operator defines can allow it too. A principal that reads a table without binding it needs a role as
-well, such as `KV Data Reader`, which allows reading keys. The Security reference [lists the built-in roles](../../security-and-networking/security/spec.md#rolesassignmentspecassignmentsroleref)
+Role that an operator defines can allow it too. No role lets a principal read a table that it does not bind:
+`ctx.kv` takes only a binding's alias, and no other client reaches KV keys. The Security reference [lists the built-in roles](../../security-and-networking/security/spec.md#rolesassignmentspecassignmentsroleref)
 and [explains how assignments pair each role with a scope](../../security-and-networking/security/spec.md#rolesassignmentspecassignments).
 
 funcd supplies these rules as a built-in policy, which it applies in every namespace, so nothing needs to be written
