@@ -74,10 +74,17 @@ with their records, in one `ctx.sql.execute` call:
 
 The handler of `notes` builds its statements with Drizzle. `funcdDrizzle`, from `@funcd-dev/drizzle`, gives Drizzle a
 database that sends each statement that starts with `SELECT` or `WITH` to `ctx.sql.queryValues`, and each other
-statement to `ctx.sql.execute`. The operation `add` creates the notebook on its first use and adds the note, and
-`list` returns the notes with the name of their notebook:
+statement to `ctx.sql.execute`. The two excerpts below come from `src/notes/main.ts`
+([the complete file](https://github.com/pyvvo/funcd-typescript/blob/main/examples/sql-notes/src/notes/main.ts)), where
+`d` is that database, `input` is the call's data, and `notes` and `notebooks` are the tables of `src/db/schema.ts`. The
+operation `add` creates the notebook on its first use, through `notebookId`, and adds the note:
 
-::include[../../../../../_repos/funcd-typescript/examples/sql-notes/src/notes/main.ts]
+::include[../../../../../_repos/funcd-typescript/examples/sql-notes/src/notes/main.ts#add]
+
+The operation `list`, the `default` branch of the same `switch`, returns the notes with the name of their notebook,
+highest `priority` first:
+
+::include[../../../../../_repos/funcd-typescript/examples/sql-notes/src/notes/main.ts#list]
 
 The folder holds both handlers already built, as `notes.mjs` and `notes-migrate.mjs`, so the example needs no build
 step.
@@ -129,11 +136,19 @@ script of the example rendered from its Alembic revisions. It records each migra
 ::include[../../../../../_repos/funcd-python/examples/sql-orders/src/orders-migrate/main.py]
 
 The handler of `orders` builds its statements with SQLModel. The package `orders_core` compiles each statement into
-SQL text and parameters, and sends it with `context.sql.query` or `context.sql.execute`. The operation `place` adds
-the customer on its first order and the order itself in one `execute` call, and `list` returns the orders with the
-email of their customer:
+SQL text and parameters, and sends it with `context.sql.query` or `context.sql.execute`. The two excerpts below come
+from `src/orders/main.py`
+([the complete file](https://github.com/pyvvo/funcd-python/blob/main/examples/sql-orders/src/orders/main.py)), where
+`execute` and `rows` are the functions of `orders_core.sqlrun` that send the statements, `Customer` and `Order` are the
+models of `orders_core.models`, and `data` is the call's data. The operation `place` adds the customer on its first
+order and the order itself in one `execute` call:
 
-::include[../../../../../_repos/funcd-python/examples/sql-orders/src/orders/main.py]
+::include[../../../../../_repos/funcd-python/examples/sql-orders/src/orders/main.py#place]
+
+The operation `list`, which `handle` runs for every `op` that its `match` does not name, returns the orders with the
+email of their customer; when the call gives an `email`, it returns that customer's orders only:
+
+::include[../../../../../_repos/funcd-python/examples/sql-orders/src/orders/main.py#list]
 
 The folder's `grant.yaml` gives the role `SQL Data Writer` to `orders-migrate` and to `audit`. `audit` records each
 change of the table `orders` in the table `order_events`. The database's engine reports each row change to funcd;

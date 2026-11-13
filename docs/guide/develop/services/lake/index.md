@@ -78,17 +78,23 @@ The [Spec](spec.md) tab lists every field of a Lake.
 
 ### Python
 
-The Lake `lake`, in `lake.yaml`:
+The Lake `lake`, in `lake.yaml`, without the file's opening comment
+([the complete file](https://github.com/pyvvo/funcd-python/blob/main/examples/lake-quack/lake.yaml)):
 
-::include[../../../../../_repos/funcd-python/examples/lake-quack/lake.yaml]
+::include[../../../../../_repos/funcd-python/examples/lake-quack/lake.yaml#lake]
 
-The Function `lake-reader`, in `consumer.yaml`, declares and binds the Lake:
+The Function `lake-reader`, in `consumer.yaml`, declares and binds the Lake; the excerpt leaves out the file's opening
+comment ([the complete file](https://github.com/pyvvo/funcd-python/blob/main/examples/lake-quack/consumer.yaml)):
 
-::include[../../../../../_repos/funcd-python/examples/lake-quack/consumer.yaml]
+::include[../../../../../_repos/funcd-python/examples/lake-quack/consumer.yaml#manifest]
 
-The handler, in `src/main.py`, reads the binding's address and token, and runs the SQL of the call on the Lake:
+The handler, the function `handle` of `src/main.py`, reads the binding's address and token, and runs the SQL of the
+call on the Lake. In this excerpt
+([the complete file](https://github.com/pyvvo/funcd-python/blob/main/examples/lake-quack/src/main.py)), `FuncInput`
+and `FuncOutput` describe the call's data and its response, and `_quack_uri` adds the `quack://` scheme to the
+gateway's address:
 
-::include[../../../../../_repos/funcd-python/examples/lake-quack/src/main.py]
+::include[../../../../../_repos/funcd-python/examples/lake-quack/src/main.py#handler]
 
 Clone the repository, create a virtual environment in its root folder, install the `duckdb` package in it, and start
 the example with the environment's `python3` first on the `PATH`:
