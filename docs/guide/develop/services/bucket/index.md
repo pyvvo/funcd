@@ -52,8 +52,8 @@ The example's manifests connect the Function to its data:
 The folder also holds a RolesAssignment, which [Access](#access) explains, and resources that this page does not use:
 a Workflow, an EventSource, a Sensor and two Sites. `funcdctl dev` applies them all. It skips `funcdconfig.yaml`, a
 configuration of the funcd server, which the example uses on a platform to turn the S3 gateway on. The first example
-exists in TypeScript only; [Use ctx.blob instead of an S3 client](#use-ctxblob-instead-of-an-s3-client) points to the
-client that TypeScript and Python handlers share.
+exists in TypeScript only; [Use ctx.blob instead of an S3 client](#use-ctxblob-instead-of-an-s3-client) points to
+`ctx.blob`, which handlers in both languages have.
 
 The [Spec](spec.md) tab lists every field of a Bucket.
 
@@ -216,8 +216,9 @@ funcd also sets limits of its own, whatever the Bucket sets:
 - A `put` through `ctx.blob` carries at most 64 MiB, and a larger one fails with the HTTP status 413.
 - The S3 gateway takes at most 1 GiB in one PUT or multipart upload, a limit that the operator changes with
   `s3gateway.maxUploadBytes`; a larger upload fails with the S3 error `EntityTooLarge`. The parts of the multipart
-  uploads in flight hold at most that size for one principal, and three times it in all; past that, a part gets the
-  S3 error `SlowDown`, which asks the client to retry.
+  uploads in flight hold at most that size for one principal, and twice that size in all; with the copies that
+  completing uploads assemble, at most three times that size. Past those limits, a part, or a Complete whose copy
+  does not fit, gets the S3 error `SlowDown`, which asks the client to retry.
 - funcd keeps free space on the filesystem of its data directory: 2 GiB, unless `storage.minFreeSize` sets another
   size. A write into any Bucket, with or without a quota, fails with the HTTP status 507, or with the S3 error
   `QuotaExceeded`, when it would take the free space below that size. `storage.minFreeSize: 0` turns this limit off,
@@ -251,8 +252,8 @@ A request to delete a Bucket and the deletion of a Function that declares it fol
 
 To use a Bucket that stayed, declare it by `ref` in the new Function. A new Function of the same name that declares the
 Bucket by `name` waits in `Pending` with the reason `StoreNotOwned`, since the Bucket still belongs to the deleted
-Function. The owner of a prefix is a name, so under `ref` a new Function of the same name writes again the prefixes
-that name it as their owner.
+Function. The owner of a prefix is a name, so a new Function of the same name, under `ref`, can write again the
+prefixes that name it as their owner.
 
 ## Run it locally
 
