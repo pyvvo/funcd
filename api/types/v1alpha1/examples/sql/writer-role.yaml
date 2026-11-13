@@ -1,0 +1,45 @@
+apiVersion: funcd.io/v1alpha1
+kind: SQLDatabase
+metadata:
+  name: notes-db
+  namespace: default
+  resourceGroup: rg1
+spec:
+  owner: notes
+---
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: notes-migrate
+  namespace: default
+  resourceGroup: rg1
+spec:
+  sql:
+    - ref: notes-db
+  bindings:
+    sql:
+      - alias: app
+        database: notes-db
+  runtime: nodejs22
+  handler: handle
+  image: registry.example.com/notes-migrate:1.0.0
+---
+# region rolesassignment
+apiVersion: funcd.io/v1alpha1
+kind: RolesAssignment
+metadata:
+  name: notes-migrate-writes-notes-db
+  namespace: default
+  resourceGroup: rg1
+spec:
+  assignments:
+    - principal:
+        kind: Function
+        name: notes-migrate
+      roleRef:
+        kind: BuiltinRole
+        name: SQL Data Writer
+      scope:
+        kind: SQLDatabase
+        name: notes-db
+# endregion rolesassignment

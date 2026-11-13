@@ -8,6 +8,8 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 ## SQLDatabase
 
+::include[../../../../../api/types/v1alpha1/examples/sql/sqldatabase.yaml#sqldatabase]
+
 | apiVersion | kind |
 | --- | --- |
 | `funcd.io/v1alpha1` | `SQLDatabase` |
