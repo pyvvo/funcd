@@ -58,7 +58,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `maxBytes` | integer, at least 0 | The same cap as a number of bytes. Set maxSize or maxBytes, not both. |
-| `maxSize` | string, a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB) | The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507 in a KV store or a Bucket; a SQL database answers its writes 507 once it holds the cap. |
+| `maxSize` | string, a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB) | The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507 in a KV store or a Bucket; a SQL execute call gets 507 once the database holds the cap. |
 
 ### `Workflow.spec.buckets[].quota`
 
@@ -66,7 +66,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | --- | --- | --- |
 | `maxBytes` | integer, at least 0 | The same cap as a number of bytes. Set maxSize or maxBytes, not both. |
 | `maxObjectBytes` | integer, at least 0 | The largest object a write may store, in bytes. A larger write gets 413, or EntityTooLarge over S3, and while it is set funcd refuses to sign a presigned PUT URL for the Bucket, with 403. 0 sets no cap of the Bucket's own, so only funcd's upload limits apply, such as s3gateway.maxUploadBytes. |
-| `maxSize` | string, a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB) | The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507 in a KV store or a Bucket; a SQL database answers its writes 507 once it holds the cap. |
+| `maxSize` | string, a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB) | The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507 in a KV store or a Bucket; a SQL execute call gets 507 once the database holds the cap. |
 
 ### `Workflow.spec.configMaps[]`
 
@@ -100,7 +100,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | --- | --- | --- |
 | `maxBytes` | integer, at least 0 | The same cap as a number of bytes. Set maxSize or maxBytes, not both. |
 | `maxKeyBytes` | integer, 0 to 64000 | The longest key, in bytes. 0 means 1024 (1 KiB). |
-| `maxSize` | string, a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB) | The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507 in a KV store or a Bucket; a SQL database answers its writes 507 once it holds the cap. |
+| `maxSize` | string, a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB) | The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507 in a KV store or a Bucket; a SQL execute call gets 507 once the database holds the cap. |
 | `maxValueBytes` | integer, 0 to 1048576 | The largest value a write may store, in bytes. 0 means 1048576 (1 MiB). |
 
 ### `Workflow.spec.kv[].tables[]`
@@ -171,7 +171,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `mode` | string, one of `""`, `authenticated`, `open` | How the edge checks callers. authenticated requires a bearer token, or an X-Api-Key header, of an identity that RBAC lets get Functions in the namespace: 401 without a valid one, 403 when it may not. open lets anonymous callers in. Empty takes the enclosing stance, if any, else the namespace's spec.edgeDefaults.auth.mode, else open. |
+| `mode` | string, one of `""`, `authenticated`, `open` | How the edge checks callers. authenticated requires a bearer token, or an X-Api-Key header, of an identity that RBAC lets get Functions in the namespace: 401 without a valid one, 403 when it may not; while server.auth.edge is off, every caller gets 401. open lets anonymous callers in. Empty takes the enclosing stance, if any, else the namespace's spec.edgeDefaults.auth.mode, else open. |
 
 ### `Workflow.spec.lakes[].location`
 

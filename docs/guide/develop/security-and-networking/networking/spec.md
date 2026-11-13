@@ -25,7 +25,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `mode` | string, one of `""`, `authenticated`, `open` | How the edge checks callers. authenticated requires a bearer token, or an X-Api-Key header, of an identity that RBAC lets get Functions in the namespace: 401 without a valid one, 403 when it may not. open lets anonymous callers in. Empty takes the enclosing stance, if any, else the namespace's spec.edgeDefaults.auth.mode, else open. |
+| `mode` | string, one of `""`, `authenticated`, `open` | How the edge checks callers. authenticated requires a bearer token, or an X-Api-Key header, of an identity that RBAC lets get Functions in the namespace: 401 without a valid one, 403 when it may not; while server.auth.edge is off, every caller gets 401. open lets anonymous callers in. Empty takes the enclosing stance, if any, else the namespace's spec.edgeDefaults.auth.mode, else open. |
 
 ### `Route.spec.rules[]`
 

@@ -2120,7 +2120,7 @@ components:
           minimum: 0
           type: integer
         maxSize:
-          description: The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507 in a KV store or a Bucket; a SQL database answers its writes 507 once it holds the cap.
+          description: The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507 in a KV store or a Bucket; a SQL execute call gets 507 once the database holds the cap.
           pattern: ^[0-9]{1,15}((Ki|Mi|Gi|Ti)B?)?$
           patternDescription: "a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB)"
           type: string
@@ -3475,7 +3475,7 @@ components:
           minimum: 0
           type: integer
         maxSize:
-          description: The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507 in a KV store or a Bucket; a SQL database answers its writes 507 once it holds the cap.
+          description: The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507 in a KV store or a Bucket; a SQL execute call gets 507 once the database holds the cap.
           pattern: ^[0-9]{1,15}((Ki|Mi|Gi|Ti)B?)?$
           patternDescription: "a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB)"
           type: string
@@ -4712,7 +4712,7 @@ components:
       additionalProperties: false
       properties:
         mode:
-          description: "How the edge checks callers. authenticated requires a bearer token, or an X-Api-Key header, of an identity that RBAC lets get Functions in the namespace: 401 without a valid one, 403 when it may not. open lets anonymous callers in. Empty takes the enclosing stance, if any, else the namespace's spec.edgeDefaults.auth.mode, else open."
+          description: "How the edge checks callers. authenticated requires a bearer token, or an X-Api-Key header, of an identity that RBAC lets get Functions in the namespace: 401 without a valid one, 403 when it may not; while server.auth.edge is off, every caller gets 401. open lets anonymous callers in. Empty takes the enclosing stance, if any, else the namespace's spec.edgeDefaults.auth.mode, else open."
           enum:
             - ""
             - authenticated
@@ -5431,7 +5431,7 @@ components:
           minimum: 0
           type: integer
         maxSize:
-          description: The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507 in a KV store or a Bucket; a SQL database answers its writes 507 once it holds the cap.
+          description: The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507 in a KV store or a Bucket; a SQL execute call gets 507 once the database holds the cap.
           pattern: ^[0-9]{1,15}((Ki|Mi|Gi|Ti)B?)?$
           patternDescription: "a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB)"
           type: string
