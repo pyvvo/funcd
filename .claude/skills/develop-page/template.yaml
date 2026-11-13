@@ -1,0 +1,40 @@
+# The shape of a feature's Usage page, docs/guide/develop/<group>/<feature>/index.md. The develop-page skill writes
+# pages to it, its Rules hold what applies across sections, and pkg/funcd's TestDevelopPagesFollowTheTemplate holds
+# every feature page to both.
+first:
+  heading: Usage
+  holds: >-
+    What the feature is for, in two or three sentences that link its Platform page, then the quick start. With a
+    handler: a "### TypeScript" and a "### Python" subsection for each language that has a lane example, each with
+    its own lane example's manifest region and handler region. Without a handler: the smallest manifest or manifests,
+    and how to apply and check them.
+free:
+  holds: >-
+    The feature's own topics, under descriptive headings, between the first section and the optional ones: prose and
+    included regions, the code of each language under its own "### TypeScript" or "### Python" heading.
+optional:
+  - heading: Limits and quotas
+    holds: The limits a reader meets, from doc tags and constants, with a link to the Spec tab.
+  - heading: Where the data lives
+    holds: Engines and durability.
+  - heading: Access
+    holds: Bindings, owners, roles and policies.
+  - heading: Status
+    holds: The conditions a reader checks, and how.
+  - heading: Changes and deletion
+    holds: What an update or a delete does to running work and data.
+  - heading: Errors
+    holds: The refusals and failures a reader meets, and what they mean.
+  - heading: Run it locally
+    holds: What funcdctl dev does for the feature.
+last:
+  heading: Examples
+  holds: >-
+    Required when the page includes a lane example: one link or more, each to a folder that a lane in
+    scripts/lanes.yaml runs, on its repository's main branch; each folder exists in the module that go.mod pins.
+refused:
+  - Read and write
+  - Quotas
+  - Variants
+  - Methods
+  - API
