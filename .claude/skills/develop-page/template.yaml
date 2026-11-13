@@ -1,18 +1,28 @@
 # The shape of a feature's Usage page, docs/guide/develop/<group>/<feature>/index.md. The develop-page skill writes
-# pages to it, its Rules hold what applies across sections, and pkg/funcd's TestDevelopPagesFollowTheTemplate holds
-# every feature page to both.
+# pages to it, .claude/rules/docs-guide.md holds the writing rules, and pkg/funcd's TestDevelopPagesFollowTheTemplate
+# holds every feature page to its sections. It fixes outcomes and an order, not a full outline: a section appears
+# only when it explains a real task, decision or behavior of the feature.
 first:
   heading: Usage
   holds: >-
-    What the feature is for, in two or three sentences that link its Platform page, then the quick start. With a
-    handler: a "### TypeScript" and a "### Python" subsection for each language that has a lane example, each with
-    its own lane example's manifest region and handler region, after the text both languages share. Without a
-    handler: the smallest manifest or manifests, and how to apply and check them.
+    What the feature is for, in two or three sentences that link its Platform page, then the first usable example:
+    the reader's goal in one sentence; the prerequisites, or links to them; the working directory; every input; the
+    commands; the expected result; and a step that checks it. A setting that the example needs for access or
+    persistence is stated before the step it affects. The example runs the way its type needs: funcdctl dev for a
+    service or a workload, a resource manifest such as a namespace or a grant applied to a running platform, the
+    tool itself for a tool, and funcd --config for the server's configuration. Each language that has a lane example
+    gets its own "### TypeScript" or "### Python" section after the text both languages share, and the two sections
+    perform the same task.
+  example:
+    service: a handler that uses the service, its manifest, the command that runs it, a call, and the answer that shows the result
+    workload: the smallest manifest of the kind, the command that applies it, a call or a watch, and the status that shows it works
+    tool: one task done with the tool, its command and its output; the installation is linked, not repeated
+    cross-cutting: the actions that produce the feature's result, such as a grant applied and the call that it allows
 free:
   holds: >-
-    The feature's own topics, under descriptive headings, between the first section and the optional ones: prose and
-    included regions, the code of each language under its own "### TypeScript" or "### Python" heading, after the
-    text both languages share.
+    One task per section, under a heading that names the task, such as "Renew a claim", between the first section and
+    the optional ones: prose and included regions, each language's code under its own heading after the text both
+    share. A task that a reader meets when calls race, such as a conditional write, gets its own section.
 optional:
   - heading: Limits and quotas
     holds: The limits a reader meets, from doc tags and constants, with a link to the Spec tab.
@@ -27,7 +37,11 @@ optional:
   - heading: Errors
     holds: The refusals and failures a reader meets, and what they mean.
   - heading: Run it locally
-    holds: What funcdctl dev does for the feature.
+    holds: What funcdctl dev does for the feature, beyond the first example.
+  - heading: Deploy it
+    holds: >-
+      Run the first example on a platform and verify its result. Push an artifact only when required; apply resource
+      manifests with funcdctl apply; start funcd with --config for the server's configuration.
 last:
   heading: Examples
   holds: >-

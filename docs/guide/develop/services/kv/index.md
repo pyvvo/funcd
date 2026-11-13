@@ -14,7 +14,9 @@ In a store that a Function declares itself, as both examples below do, a table t
 Function, which writes it. A Function reaches a table only through an entry of its `spec.bindings.kv`; without one,
 `ctx.kv` on that alias is refused.
 
-The kv-counter example counts the calls for each name. In a clone of the example's repository, `funcdctl dev
+The kv-counter example counts the calls for each name. Running it takes funcdctl, installed as
+[Install](../../../get-started/install.md) shows, git, and the language's runtime on the `PATH`: Node.js for
+TypeScript, or Python 3.12 or later as `python3`. From the root of a clone of the example's repository, `funcdctl dev
 examples/kv-counter` runs it on a local platform as it stands: it runs the Function from its local build in place of
 its `image`, keeps the KV data in memory and prints the URL of each Function. `--gport` fixes the port of that URL.
 
@@ -27,9 +29,12 @@ The example in funcd-typescript declares a store, `counters-kv`, and binds its t
 
 ::include[../../../../../_repos/funcd-typescript/examples/kv-counter/src/main.ts#handler]
 
-Run it, then call it twice from another terminal; the count goes up:
+Clone the repository and run the example from its root, then call it twice from another terminal; the count goes
+up:
 
 ```console
+$ git clone https://github.com/pyvvo/funcd-typescript
+$ cd funcd-typescript
 $ funcdctl dev examples/kv-counter --gport 8080
 ```
 
@@ -49,9 +54,12 @@ The example in funcd-python declares its own store, `py-counters`, and binds it 
 
 ::include[../../../../../_repos/funcd-python/examples/kv-counter/src/main.py#handler]
 
-Run it, then call it twice from another terminal; the count goes up:
+Clone the repository and run the example from its root, then call it twice from another terminal; the count goes
+up:
 
 ```console
+$ git clone https://github.com/pyvvo/funcd-python
+$ cd funcd-python
 $ funcdctl dev examples/kv-counter --gport 8080
 ```
 
