@@ -231,7 +231,8 @@ same mode:
 
 Every file of an `open` Site is public, `config.json` included. The Networking page's
 [Ask callers to authenticate](../../security-and-networking/networking/index.md#ask-callers-to-authenticate) section
-explains the credentials and their roles.
+explains the credentials, and its [Access](../../security-and-networking/networking/index.md#access) section the roles
+that they need.
 
 ## Limits and quotas
 
