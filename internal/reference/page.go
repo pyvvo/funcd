@@ -8,6 +8,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Marker is the first line of each page's front matter.
@@ -39,11 +41,79 @@ func Stale(path string, page []byte) error {
 	return nil
 }
 
-// cell makes text fit one Markdown table cell. The guide's pages are MDX, so the characters that open a tag or an
-// expression become entities.
-func cell(text string) string {
-	return strings.NewReplacer("|", `\|`, "<", "&lt;", ">", "&gt;", "{", "&#123;", "}", "&#125;").
-		Replace(strings.Join(strings.Fields(text), " "))
+// Cell makes text fit one Markdown table cell of an MDX page; it serves a paragraph too. Outside code spans it escapes
+// a pipe, the characters that open a tag or an expression, every * and ~, and an _ beside anything but a letter or a
+// digit: Markdown reads those as emphasis or strikethrough, while an _ inside a word, as in FUNCD_TOKEN, stays text.
+// Inside a code span only a pipe is escaped. A code span opens with a run of backticks and closes at the next run of
+// the same length, as CommonMark reads it, so a reStructuredText span between two double backticks stays code; a run
+// that nothing closes is text.
+func Cell(text string) string {
+	text = strings.Join(strings.Fields(text), " ")
+	var out strings.Builder
+	for text != "" {
+		open := strings.IndexByte(text, '`')
+		if open < 0 {
+			out.WriteString(plain(text))
+			break
+		}
+		out.WriteString(plain(text[:open]))
+		run := len(text[open:]) - len(strings.TrimLeft(text[open:], "`"))
+		fence := text[open : open+run]
+		end := closingRun(text[open+run:], run)
+		if end < 0 {
+			out.WriteString(fence)
+			text = text[open+run:]
+			continue
+		}
+		out.WriteString(fence + strings.ReplaceAll(text[open+run:open+run+end], "|", `\|`) + fence)
+		text = text[open+run+end+run:]
+	}
+	return out.String()
+}
+
+// plain escapes text outside a code span, as Cell says.
+func plain(text string) string {
+	markup := strings.NewReplacer("|", `\|`, "<", "&lt;", ">", "&gt;", "{", "&#123;", "}", "&#125;", "*", `\*`,
+		"~", `\~`)
+	var out strings.Builder
+	for text != "" {
+		under := strings.IndexByte(text, '_')
+		if under < 0 {
+			out.WriteString(markup.Replace(text))
+			break
+		}
+		out.WriteString(markup.Replace(text[:under]))
+		before, _ := utf8.DecodeLastRuneInString(out.String())
+		after, _ := utf8.DecodeRuneInString(text[under+1:])
+		if word(before) && word(after) {
+			out.WriteByte('_')
+		} else {
+			out.WriteString(`\_`)
+		}
+		text = text[under+1:]
+	}
+	return out.String()
+}
+
+func word(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }
+
+// closingRun is the index in text of the first run of exactly n backticks, or -1.
+func closingRun(text string, n int) int {
+	for i := 0; i < len(text); {
+		if text[i] != '`' {
+			i++
+			continue
+		}
+		j := i
+		for j < len(text) && text[j] == '`' {
+			j++
+		}
+		if j-i == n {
+			return i
+		}
+		i = j
+	}
+	return -1
 }
 
 // code wraps a non-empty value in a code span.

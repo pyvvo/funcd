@@ -21,6 +21,7 @@ import (
 
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/api/types/v1alpha1/examples"
+	"github.com/pyvvo/funcd/internal/reference"
 )
 
 // Feature is one page of the Developer chapter and the kinds its Spec tab lists. Its Spec page is
@@ -160,10 +161,16 @@ func featurePage(schemas map[string]*huma.Schema, fields map[string]string, f Fe
 		title = list + " spec and handler API"
 		description = "Every field of " + list + ", then the methods a handler calls on " + join(calls) + "."
 	}
+	parts := "spec"
+	for _, k := range f.Kinds {
+		if s, ok := schemas[string(k)]; ok && s.Properties["status"] != nil {
+			parts = "spec and status"
+		}
+	}
 	lines := front(title, description)
-	lines = append(lines, "", "The spec and the status of each kind of this feature, as funcd's API schema states them. "+
-		"The [Platform page]("+up+"../platform/"+f.Path+".md) explains the concept, and the `metadata` of every kind "+
-		"is [the same]("+r.common+"#objectmeta).")
+	lines = append(lines, "", "This page lists the "+parts+" fields of "+list+", each with its type, its limits and "+
+		"its description. The [Platform page]("+up+"../platform/"+f.Path+".md) explains the concept, and the `metadata` "+
+		"of every kind is [the same]("+r.common+"#objectmeta).")
 	for _, k := range f.Kinds {
 		kind, ok := schemas[string(k)]
 		if !ok {
@@ -252,7 +259,7 @@ func handlerSection(names []string, langs []language) ([]string, error) {
 		}
 		lines = append(lines, "", "### `"+ctxName(name)+"`")
 		for i, c := range views {
-			lines = append(lines, "", "#### "+langs[i].name, "", prose(c.Doc), "", "| Method | What it does |",
+			lines = append(lines, "", "#### "+langs[i].name, "", reference.Cell(c.Doc), "", "| Method | What it does |",
 				"| --- | --- |")
 			var order []string
 			rows := map[string][]handlerMethod{}
@@ -271,7 +278,7 @@ func handlerSection(names []string, langs []language) ([]string, error) {
 						doc = m.Doc
 					}
 				}
-				lines = append(lines, "| "+strings.Join(signatures, " or ")+" | "+prose(doc)+" |")
+				lines = append(lines, "| "+strings.Join(signatures, " or ")+" | "+reference.Cell(doc)+" |")
 			}
 		}
 	}
@@ -284,54 +291,6 @@ func ctxName(name string) string {
 		return "ctx"
 	}
 	return "ctx." + name
-}
-
-// prose makes a doc comment fit a Markdown table cell of an MDX page: it escapes a pipe everywhere, and outside code
-// spans the characters that open a tag or an expression. A code span opens with a run of backticks and closes at the
-// next run of the same length, as CommonMark reads it, so a reStructuredText span between two double backticks stays
-// code; a run that nothing closes is text.
-func prose(text string) string {
-	text = strings.Join(strings.Fields(text), " ")
-	escape := strings.NewReplacer("|", `\|`, "<", "&lt;", ">", "&gt;", "{", "&#123;", "}", "&#125;")
-	var out strings.Builder
-	for text != "" {
-		open := strings.IndexByte(text, '`')
-		if open < 0 {
-			out.WriteString(escape.Replace(text))
-			break
-		}
-		out.WriteString(escape.Replace(text[:open]))
-		run := len(text[open:]) - len(strings.TrimLeft(text[open:], "`"))
-		fence := text[open : open+run]
-		end := closingRun(text[open+run:], run)
-		if end < 0 {
-			out.WriteString(fence)
-			text = text[open+run:]
-			continue
-		}
-		out.WriteString(fence + strings.ReplaceAll(text[open+run:open+run+end], "|", `\|`) + fence)
-		text = text[open+run+end+run:]
-	}
-	return out.String()
-}
-
-// closingRun is the index in text of the first run of exactly n backticks, or -1.
-func closingRun(text string, n int) int {
-	for i := 0; i < len(text); {
-		if text[i] != '`' {
-			i++
-			continue
-		}
-		j := i
-		for j < len(text) && text[j] == '`' {
-			j++
-		}
-		if j-i == n {
-			return i
-		}
-		i = j
-	}
-	return -1
 }
 
 // renderer writes the field tables of one page. A schema the page already shows, or a common one, is linked rather
@@ -380,7 +339,7 @@ func (r *renderer) section(title string, level int, s *huma.Schema, path, owner 
 		}
 		r.fields[owner+"."+f] = desc
 		kind := r.describe(node, path+"."+f, owner+"."+f, required[f], &nested)
-		rows = append(rows, "| `"+f+"` | "+cell(kind)+" | "+cell(escaped(desc))+" |")
+		rows = append(rows, "| `"+f+"` | "+reference.Cell(kind)+" | "+reference.Cell(desc)+" |")
 	}
 	r.lines = append(r.lines, "", strings.Repeat("#", level)+" "+title, "")
 	r.lines = append(r.lines, rows...)
@@ -514,16 +473,6 @@ var unslugged = regexp.MustCompile(`[^a-z0-9 _-]`)
 // slug is the heading id the site gives a heading (github-slugger, which fumadocs uses).
 func slug(heading string) string {
 	return strings.ReplaceAll(unslugged.ReplaceAllString(strings.ToLower(heading), ""), " ", "-")
-}
-
-// escaped writes as entities the characters of a description that Markdown and MDX would read as markup: <name> as an
-// HTML tag, {} as an expression. The funcd and funcdctl Spec pages escape them the same way.
-func escaped(desc string) string {
-	return strings.NewReplacer("<", "&lt;", ">", "&gt;", "{", "&#123;", "}", "&#125;").Replace(desc)
-}
-
-func cell(text string) string {
-	return strings.ReplaceAll(strings.Join(strings.Fields(text), " "), "|", `\|`)
 }
 
 func join(names []string) string {

@@ -4,7 +4,7 @@ title: "SQLDatabase spec"
 description: "Every field of SQLDatabase: its type, its limits and its description."
 ---
 
-The spec and the status of each kind of this feature, as funcd's API schema states them. The [Platform page](../../../platform/services/sql.md) explains the concept, and the `metadata` of every kind is [the same](../../common-definitions.md#objectmeta).
+This page lists the spec and status fields of SQLDatabase, each with its type, its limits and its description. The [Platform page](../../../platform/services/sql.md) explains the concept, and the `metadata` of every kind is [the same](../../common-definitions.md#objectmeta).
 
 ## SQLDatabase
 
@@ -18,7 +18,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `owner` | string, a DNS-1123 label | The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step. With no owner, only those writers can write it. |
+| `owner` | string, a DNS-1123 label | The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step or a lake that the Workflow declares. With no owner, only those writers can write it. |
 | `quota` | object, [`SQLDatabase.spec.quota`](#sqldatabasespecquota) | A cap on the database's total size, the bytes of its pages in use. Once it is reached, an execute gets 507 unless each of its statements is a DELETE or a DROP. A change keeps the engine running. |
 | `resources` | object, [`SQLDatabase.spec.resources`](#sqldatabasespecresources) | The cpu and memory of the database's engine. An empty memory means 256Mi, and an empty cpu sets no cpu limit. A change replaces the running engine. |
 

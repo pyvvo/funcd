@@ -55,20 +55,6 @@ func TestEveryHandlerMethodIsDescribed(t *testing.T) {
 	}
 }
 
-func TestProseFitsATableCell(t *testing.T) {
-	for in, want := range map[string]string{
-		"a | b\n  c":                      `a \| b c`,
-		"x < y > z, {a}":                  "x &lt; y &gt; z, &#123;a&#125;",
-		"`get(k) <T> | null {}` then <b>": "`get(k) <T> \\| null {}` then &lt;b&gt;",
-		"``{\"columns\": [x]}`` {y}":      "``{\"columns\": [x]}`` &#123;y&#125;",
-		"``a ` b`` <c>":                   "``a ` b`` &lt;c&gt;",
-		"``a ``` b`` <c> `d`":             "``a ``` b`` &lt;c&gt; `d`",
-		"it`s <here>":                     "it`s &lt;here&gt;",
-	} {
-		require.Equal(t, want, prose(in), "prose(%q)", in)
-	}
-}
-
 func TestHandlerSectionGroupsOverloads(t *testing.T) {
 	api := []byte(`{"clients": [{"name": "", "doc": "The call's context.", "methods": [
 		{"name": "log", "signature": "log(msg: string): void", "doc": ""},
@@ -86,12 +72,22 @@ func TestHandlerSectionGroupsOverloads(t *testing.T) {
 	require.ErrorContains(t, err, "the TypeScript shim has no ctx.kv")
 }
 
-// A description reaches the page as text: Markdown would drop <name> as an HTML tag, and MDX read {} as an expression.
+// spans are a description's code spans; emphasis is a *, a ~ or an _ at a word's edge that no backslash escapes.
+var (
+	spans    = regexp.MustCompile("(`+)[^`]*`+")
+	emphasis = regexp.MustCompile(`(^|[^\\])[*~]|(^|[^\\\pL\pN])_|(^|[^\\])_($|[^\pL\pN])`)
+)
+
+// A description reaches the page as text: Markdown would drop <name> as an HTML tag, read {} as an expression, and
+// read * ~ and an _ at a word's edge as emphasis or strikethrough (FUNCD_ showed as FUNCD).
 func TestDescriptionMarkupIsEscaped(t *testing.T) {
 	pages, err := Render(controlplane.SpecAPI().OpenAPI())
 	require.NoError(t, err)
 	require.Contains(t, string(pages["develop/workloads/function/spec.md"]), "at /function/&lt;name&gt;")
 	require.Contains(t, string(pages["develop/workloads/workflow/spec.md"]), "$&#123;&#123; &#125;&#125;")
+	lake := string(pages["develop/services/lake/spec.md"])
+	require.Contains(t, lake, "ASCII letters, digits and \\_, not starting with a digit")
+	require.Contains(t, lake, "except a key that starts with FUNCD\\_ or that a bound Secret also holds")
 	for path, page := range pages {
 		for _, line := range strings.Split(string(page), "\n") {
 			cells := strings.Split(line, " | ")
@@ -102,6 +98,7 @@ func TestDescriptionMarkupIsEscaped(t *testing.T) {
 			require.NotContainsf(t, desc, "<", "%s: %s", path, line)
 			require.NotContainsf(t, desc, "{", "%s: %s", path, line)
 			require.NotContainsf(t, desc, "}", "%s: %s", path, line)
+			require.NotRegexpf(t, emphasis, spans.ReplaceAllString(desc, ""), "%s: %s", path, line)
 		}
 	}
 }

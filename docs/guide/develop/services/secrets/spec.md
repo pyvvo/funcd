@@ -4,7 +4,7 @@ title: "Secret spec"
 description: "Every field of Secret: its type, its limits and its description."
 ---
 
-The spec and the status of each kind of this feature, as funcd's API schema states them. The [Platform page](../../../platform/services/secrets.md) explains the concept, and the `metadata` of every kind is [the same](../../common-definitions.md#objectmeta).
+This page lists the spec fields of Secret, each with its type, its limits and its description. The [Platform page](../../../platform/services/secrets.md) explains the concept, and the `metadata` of every kind is [the same](../../common-definitions.md#objectmeta).
 
 ## Secret
 
@@ -18,5 +18,5 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `data` | map of string to string | The Secret's values by key, each in base64. Each key is an environment-variable name: a letter or an underscore, then letters, digits and underscores; a key that starts with FUNCD_ never reaches a workload. Each value must be UTF-8 text with no NUL byte: a Function or a Lake that binds a Secret holding another value does not start. |
+| `data` | map of string to string | The Secret's values by key, each in base64. Each key is an environment-variable name: a letter or an underscore, then letters, digits and underscores; a key that starts with FUNCD\_ never reaches a workload. Each value must be UTF-8 text with no NUL byte: a Function or a Lake that binds a Secret holding another value does not start. |
 | `type` | string, one of `Opaque` | funcd does not read it. |

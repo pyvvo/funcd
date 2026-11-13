@@ -12,7 +12,8 @@ shows how to run one, start it with an input and follow what it does.
 
 The first example runs the Workflow `pipeline` of the TypeScript example `workflow` on the local computer, starts it
 once with the amount 4, and reads the result. The run ends in the phase `Succeeded`, and the log line of the child run's
-step, `scorer-s`, holds 40, the score that it computed from the amount 4.
+step, `scorer-s`, holds 40, the score that it computed from the amount 4. The first example is in TypeScript; steps in
+Python run the same way, as [Share a database between steps](#share-a-database-between-steps) shows.
 
 The example needs three programs:
 
@@ -198,8 +199,9 @@ The steps of a run pass data to each other in their outputs:
 - The first step receives the run's input. A step with one parent receives that parent's output, and a step with
   several parents receives an object of their outputs keyed by step name, as `report` does in
   [Branch on a step's output](#branch-on-a-steps-output).
-- A step's [`params`](spec.md#workflowspecsteps), a JSON object, is merged over its input, and its keys win. A step
-  can thus receive a fixed value that no parent returns.
+- A step's [`params`](spec.md#workflowspecsteps), a JSON object, is merged over its input, and its keys win: a step
+  that calls a Function gets the result as its input, and a step that runs a child Workflow passes it to the child
+  run, so such a step can receive a fixed value that no parent returns. A wait step ignores `params`.
 - A run's input and each step's output hold at most `workflow.payloadLimit` bytes, which
   [Limits and quotas](#limits-and-quotas) describes.
 
@@ -216,7 +218,8 @@ A Workflow declares the stores that its steps use at the root of its spec:
   [`spec.secrets`](spec.md#workflowspecsecrets) declare the settings and the Secrets that the steps read.
 - An entry with a `name` defines a store, and the store's owner, such as the `owner` of a KV table or of a SQL
   database, names a step: the Function that funcd creates for that step is the owner, which can write the store. An
-  entry with `ref` binds an existing store instead.
+  entry with `ref` declares an existing store instead. A declaration gives no access by itself: a step reaches a
+  store only through its own bindings.
 - Each step binds what its code uses under
   [`function.bindings`](spec.md#workflowspecstepsfunctionbindings), and each store that a binding names must be
   declared at the root. A binding to a KV table, a Bucket prefix or a SQL database lets the step read it; only its
@@ -496,9 +499,9 @@ after it `Skipped`.
   `restart funcdctl dev to run a Workflow step added after it started`.
 
 `funcdctl dev` keeps its state in memory, where it is lost when `funcdctl dev` stops. With the `--persist` flag, it
-keeps the objects that it applied and the data of the stores between runs in `.funcd-dev`, as the
-[Function](../function/index.md#run-it-locally) page describes; the run state stays in memory even then. To start
-again from nothing, delete the `.funcd-dev` folder after `funcdctl dev` stops.
+keeps the objects that it applied and the data of the stores between runs in `.funcd-dev`, or in the folder that
+`--persist-to` names, as the [Function](../function/index.md#run-it-locally) page describes; the run state stays in
+memory even then. To start again from nothing, delete that persist folder after `funcdctl dev` stops.
 
 ## Examples
 

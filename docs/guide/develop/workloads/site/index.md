@@ -10,10 +10,6 @@ prefix of a Bucket, and its [edge](../../../platform/security-and-networking/net
 receives the calls from outside funcd, serves them from there. The [Platform page](../../../platform/workloads/site.md)
 explains how a Site deploys; this page shows how to run a Site, check what it serves and read its status.
 
-A Site's [`image`](spec.md#sitespec) names its **bundle**: the app's built files, packed into an OCI artifact by
-`funcdctl push --site`. funcd copies each bundle into a folder of its own in that prefix, named after the bundle's
-digest, so a Site can deploy a new bundle while the previous one keeps serving.
-
 The first example, site-config, serves the bundle of a small web app, and a `config.json` file that funcd generates
 beside the bundle from values that each deployment sets. The app reads `config.json` when it starts. The steps below
 start the example on the local computer, read the Site's status until it shows the phase `Ready`, and fetch the Site's
@@ -31,6 +27,10 @@ The example needs four programs:
 
 The example's app is already built: its folder `web` holds `index.html` and `app.js`, so the example needs no build
 tool.
+
+A Site's [`image`](spec.md#sitespec) names its **bundle**: the app's built files, packed into an OCI artifact by
+`funcdctl push --site`. funcd copies each bundle into a folder of its own in that prefix, named after the bundle's
+digest, so a Site can deploy a new bundle while the previous one keeps serving.
 
 `funcdctl dev` packs a Site's bundle itself only for a Site of an **App template**, a folder that holds an `app.yaml`
 file beside a `resources` folder, from which funcdctl renders an [App](../../../platform/workloads/app.md), one
@@ -154,7 +154,7 @@ $ curl -s --resolve site-config.staging.test:8080:127.0.0.1 http://site-config.s
 The Site's `status.digest` names the same bundle as in the first example: only `config.json` changed. In the same
 way, a change to `values` or to the ConfigMap rewrites only `config.json`.
 
-The file is public, as every file of the Site: never put a secret in `values` or in the ConfigMap.
+Every client that can load the Site can read its `config.json`: never put a secret in `values` or in the ConfigMap.
 [Limits and quotas](#limits-and-quotas) gives the file's size limit.
 
 To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
@@ -231,7 +231,8 @@ same mode:
 
 Every file of an `open` Site is public, `config.json` included. The Networking page's
 [Ask callers to authenticate](../../security-and-networking/networking/index.md#ask-callers-to-authenticate) section
-explains the credentials and their roles.
+explains the credentials, and its [Access](../../security-and-networking/networking/index.md#access) section the roles
+that they need.
 
 ## Limits and quotas
 
@@ -371,12 +372,13 @@ A browser or another client of a Site meets these HTTP statuses:
   `authentication required but no authenticator is configured`.
 
 Without the `--persist` flag, `funcdctl dev` keeps the Bucket's files in memory, so the bundles that the Site deployed
-are lost when it stops. It keeps the bundles that it packed, and a record of the processes that it starts, in a state
-folder of its own, `funcd/dev/<id>` in the user's cache folder, such as `~/.cache` on Linux or `~/Library/Caches` on
-macOS, where `<id>` stands for the template folder. With `--persist`, it keeps its state and the Bucket's files between
-runs in `.funcd-dev`, a folder that it creates in the current folder, or in the folder that `--persist-to` names. To
-start again from nothing, delete `.funcd-dev` and the state folder after `funcdctl dev` stops. The
-[reference of `funcdctl dev`](../../tools/funcdctl/spec.md#funcdctl-dev) lists its flags and the keys of
+are lost when it stops. With `--persist`, it keeps its state and the Bucket's files between runs in `.funcd-dev`, a
+folder that it creates in the current folder, or in the folder that `--persist-to` names; to start again from nothing,
+delete that folder after `funcdctl dev` stops. Without `--persist`, it keeps the bundles that it packed, and a record of
+the processes that it starts, in a folder of its own, `funcd/dev/<id>` in the user's cache folder, such as `~/.cache` on
+Linux or `~/Library/Caches` on macOS, where `<id>` stands for the template folder. That folder holds no data of the
+platform, and `funcdctl dev` reuses it at its next run, so nothing needs to be deleted there.
+The [reference of `funcdctl dev`](../../tools/funcdctl/spec.md#funcdctl-dev) lists its flags and the keys of
 `funcdctl.config.yaml`.
 
 ## Examples

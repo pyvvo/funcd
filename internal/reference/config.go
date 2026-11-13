@@ -161,11 +161,11 @@ func ConfigTable(keys []ConfigKey) []byte {
 		if k.Limits != "" {
 			kind += ", " + k.Limits
 		}
-		description := cell(k.Description)
+		description := Cell(k.Description)
 		if k.Env != "" {
 			description = strings.TrimSpace(description + " Variable: " + code(k.Env) + ".")
 		}
-		fmt.Fprintf(&b, "| %s | %s | %s | %s |\n", code(k.Path), cell(kind), code(k.Default), description)
+		fmt.Fprintf(&b, "| %s | %s | %s | %s |\n", code(k.Path), Cell(kind), code(k.Default), description)
 	}
 	return b.Bytes()
 }
