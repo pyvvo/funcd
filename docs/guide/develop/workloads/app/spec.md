@@ -38,40 +38,40 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `encryption` | object, [`App.spec.backupSchedules[].encryption`](#appspecbackupschedulesencryption) |  |
+| `encryption` | object, [`App.spec.backupSchedules[].encryption`](#appspecbackupschedulesencryption) | The age recipients that seal the member files of each Backup. It is required: a schedule with fewer than 2 recipients is refused. |
 | `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
-| `paused` | boolean |  |
+| `paused` | boolean | While true, the schedule creates no Backup and rpoRisk stays false; a Backup created by hand still runs. Once it is false again, the slots missed meanwhile collapse into one Backup. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
-| `schedule` | string |  |
-| `scope` | object, [`App.spec.backupSchedules[].scope`](#appspecbackupschedulesscope) |  |
-| `target` | object, [`App.spec.backupSchedules[].target`](#appspecbackupschedulestarget) |  |
-| `timeZone` | string |  |
-| `ttl` | string, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) |  |
+| `schedule` | string | The cron slots at which the schedule creates a Backup: 5 fields (minute hour day-of-month month day-of-week) or a macro such as @daily, in timeZone. Slots missed during downtime, a pause or a hold collapse into one Backup, and a slot that comes while one of the schedule's Backups is Pending or Running creates none. |
+| `scope` | object, [`App.spec.backupSchedules[].scope`](#appspecbackupschedulesscope) | The stores each Backup copies, in one form: the lists kvStores, buckets, lakes, databases and volumes, or app, or resourceGroup. funcd resolves it at each run: a member or App it names that is missing then fails the Backup with reason MemberNotFound, and a scope of more than workloadBackup.maxCopyMembers members fails it with no copy written. In an App's spec.backupSchedules entry, an empty scope backs up that App. |
+| `target` | object, [`App.spec.backupSchedules[].target`](#appspecbackupschedulestarget) | Where each Backup writes its copy: an S3 bucket and the Secret of its write key. |
+| `timeZone` | string | The IANA time zone of schedule, such as Europe/Paris; UTC when empty. |
+| `ttl` | string, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | How long funcd keeps each Backup's record after its creation; 0s or unset means 720h. Only the record goes: the copy stays on the target until the target's own lifecycle rule expires it. A Backup may set a shorter spec.ttl, never a longer one. |
 
 ### `App.spec.backupSchedules[].encryption`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `recipients` | array of string values, required |  |
+| `recipients` | array of string values, required | The age recipients, each entry one recipient: at least 2 distinct ones, such as an owner's and a recovery one, all X25519 or all hybrid (age1pq1). Every member file of each Backup is sealed to all of them, so the identity of any one opens it. The copy's manifest.yaml, which names the members, their files' sizes and these recipients' fingerprints, is not sealed. |
 
 ### `App.spec.backupSchedules[].scope`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `app` | string, a DNS-1123 label |  |
-| `buckets` | array of string values, each a DNS-1123 label |  |
-| `databases` | array of string values, each a DNS-1123 label |  |
-| `kvStores` | array of string values, each a DNS-1123 label |  |
-| `lakes` | array of string values, each a DNS-1123 label |  |
-| `resourceGroup` | string, a DNS-1123 label |  |
-| `volumes` | array of string values |  |
+| `app` | string, a DNS-1123 label | An App of the namespace: each Backup copies the stores of its kv, buckets, lakes and sql entries, ref entries included, and the local volumes of the Functions it declares. Set it alone, with no other scope field. |
+| `buckets` | array of string values, each a DNS-1123 label | Buckets of the namespace to copy, by name, each once. A Bucket's copy holds none of the data of the Lakes located on its prefixes: each of them is copied as a member of its own. |
+| `databases` | array of string values, each a DNS-1123 label | SQLDatabases of the namespace to copy, by name, each once. A database whose engine is not Ready fails the Backup with reason EngineNotReady. |
+| `kvStores` | array of string values, each a DNS-1123 label | KVStores of the namespace to copy, by name, each once. |
+| `lakes` | array of string values, each a DNS-1123 label | Lakes of the namespace to copy, by name, each once. A Lake located on a prefix of a listed Bucket is copied without being named here. A Lake that deletes files during each of a run's copies, as a busy one may, fails the Backup with reason LakeUnstable, and so does a Bucket that brings it in. |
+| `resourceGroup` | string, a DNS-1123 label | A resource group of the namespace: each Backup copies its KVStores, Buckets, Lakes and SQLDatabases, but not its Functions' local volumes. Set it alone, with no other scope field. |
+| `volumes` | array of string values | Local volumes of the namespace's Functions to copy, each as &lt;function&gt;/&lt;name&gt;, both DNS-1123 labels, and listed once. A volume is read live, file by file, so its copy is not a single point in time. |
 
 ### `App.spec.backupSchedules[].target`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `credentialsSecret` | string, required, a DNS-1123 label |  |
-| `url` | string, required |  |
+| `credentialsSecret` | string, required, a DNS-1123 label | A Secret of the namespace with AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and, optionally, AWS_SESSION_TOKEN: the key each Backup writes with. It needs only put and list on the bucket. |
+| `url` | string, required | The s3:// URL of the bucket that receives the copies, its options as query parameters, such as s3://backups?region=eu-west-3. The bucket of blob.target is refused, and another bucket on its endpoint is accepted with reason SameProvider on the schedule's Ready condition: one failure of that provider takes both. The bucket must accept a create-if-absent put (If-None-Match: *): a bucket that refuses it fails each Backup with reason TargetUnconditional. |
 
 ### `App.spec.buckets[]`
 
@@ -117,7 +117,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `data` | map of string to string |  |
+| `data` | map of string to string | Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through. |
 | `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as &lt;name&gt;-&lt;hash of data&gt;, and the config of each part that names it is set to that stored name. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 
@@ -266,7 +266,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `data` | map of string to string |  |
+| `data` | map of string to string | Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through. |
 | `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as &lt;name&gt;-&lt;hash of data&gt;, and the config of each part that names it is set to that stored name. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 
@@ -347,7 +347,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `data` | map of string to string |  |
+| `data` | map of string to string | Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through. |
 | `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as &lt;name&gt;-&lt;hash of data&gt;, and the config of each part that names it is set to that stored name. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 
@@ -468,7 +468,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `data` | map of string to string |  |
+| `data` | map of string to string | Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through. |
 | `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as &lt;name&gt;-&lt;hash of data&gt;, and the config of each part that names it is set to that stored name. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 
@@ -491,39 +491,39 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `auth` | object, [`App.spec.functions[].ingress.auth`](#appspecfunctionsingressauth) |  |
-| `enabled` | boolean |  |
-| `host` | string |  |
+| `auth` | object, [`App.spec.functions[].ingress.auth`](#appspecfunctionsingressauth) | The edge authentication of the rules that set none. Unset uses the Namespace's spec.edgeDefaults.auth, else open. |
+| `enabled` | boolean | false turns the Route off: it serves nothing, leaves its paths to other Routes and reports Disabled. Unset is true, except on a Route that a Site or a Function owns in a namespace whose defaultExposure is explicit. |
+| `host` | string | The host the rules answer on, matched in lower case and without a port or a trailing dot. Empty is the namespace host, &lt;namespace&gt;.&lt;server.baseDomain&gt;, or, in the default namespace, every host except another namespace's own host, &lt;other&gt;.&lt;server.baseDomain&gt; or a name under it, while that namespace uses it; a host that another namespace's Route names is not excluded, and the longer matching path wins there. In the default namespace, an explicit defaultExposure refuses an empty host (HostRequired). A host that names another namespace, &lt;other&gt;.&lt;server.baseDomain&gt; or a name under it, is refused (HostReserved) while that namespace uses it, and always for a rule at or under /function. |
 | `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
-| `rules` | array of [`App.spec.routes[].rules[]`](#appspecroutesrules) |  |
+| `rules` | array of [`App.spec.routes[].rules[]`](#appspecroutesrules) | The path rules, at least one; two rules may not have the same path and the same methods. Across all Routes, the longest matching path wins, and a rule with a host wins a tie. A Route serves all its rules or none: a missing backend or one conflicting rule keeps every rule off. |
 
 ### `App.spec.routes[].rules[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `auth` | object, [`App.spec.functions[].ingress.auth`](#appspecfunctionsingressauth) |  |
-| `backend` | object, [`App.spec.routes[].rules[].backend`](#appspecroutesrulesbackend), required |  |
-| `methods` | array of string values, each one of `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS` |  |
-| `path` | string, required |  |
-| `pathType` | string, one of `""`, `Prefix`, `Exact` |  |
+| `auth` | object, [`App.spec.functions[].ingress.auth`](#appspecfunctionsingressauth) | The edge authentication of this rule's requests. Unset uses the Route's auth, then the Namespace's spec.edgeDefaults.auth, then open. |
+| `backend` | object, [`App.spec.routes[].rules[].backend`](#appspecroutesrulesbackend), required | What the rule serves: set exactly one of function, static and site. |
+| `methods` | array of string values, each one of `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS` | The request methods the rule matches; empty matches every method. |
+| `path` | string, required | The path the rule matches, starting with /. In the default namespace, a Route with no host may not have a rule at or under /function, the path that calls Functions by name (ReservedPath). |
+| `pathType` | string, one of `""`, `Prefix`, `Exact` | Prefix, the default, matches path and every path under it by whole segments, so /api matches /api/x but not /apix; a trailing slash changes nothing, and / matches every path. Exact matches path alone. The backend receives the rest of the path, or / for an Exact rule. |
 
 ### `App.spec.routes[].rules[].backend`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `function` | string, a DNS-1123 label |  |
+| `function` | string, a DNS-1123 label | A Function of the Route's namespace that the rule calls; the Route is not Ready (BackendNotFound) while it is missing. A request whose rest of the path lies under /health/ gets 404 and reaches no worker. |
 | `site` | string, a DNS-1123 label | A Site of this Route's namespace: the rule serves the build that Site serves now, and its config.json at &lt;path&gt;/config.json, following each new build. A Prefix rule; the Route may not carry the Site's own name. |
-| `static` | object, [`App.spec.routes[].rules[].backend.static`](#appspecroutesrulesbackendstatic) |  |
+| `static` | object, [`App.spec.routes[].rules[].backend.static`](#appspecroutesrulesbackendstatic) | Serves the objects of a Bucket prefix directly, with no Function. It answers GET and HEAD, and 405 to any other method. |
 
 ### `App.spec.routes[].rules[].backend.static`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `bucket` | string, required, a DNS-1123 label |  |
-| `index` | string |  |
-| `prefix` | string |  |
-| `spa` | boolean |  |
+| `bucket` | string, required, a DNS-1123 label | A Bucket of the Route's namespace whose objects the rule serves; the Route is not Ready (BucketNotFound) while it is missing. |
+| `index` | string | The object, relative to prefix, served at the rule's root; index.html when empty. A path ending in / gets the file of the index's name in that folder. It may not start with /. |
+| `prefix` | string | The key prefix in the Bucket that the rule serves, ending in /; empty serves the whole Bucket. A request reads the object at this prefix plus the rest of its path. |
+| `spa` | boolean | Serve the index, with 200, for a path that matches no object, so that a client-side router handles it; when false, such a path gets 404. |
 
 ### `App.spec.secrets[]`
 
@@ -564,28 +564,28 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `bindings` | object, [`App.spec.sites[].bindings`](#appspecsitesbindings) |  |
-| `buckets` | array of [`App.spec.sites[].buckets[]`](#appspecsitesbuckets) |  |
-| `image` | string |  |
-| `index` | string |  |
-| `ingress` | object, [`App.spec.sites[].ingress`](#appspecsitesingress) |  |
+| `bindings` | object, [`App.spec.sites[].bindings`](#appspecsitesbindings) | Where the Site stores and serves its bundles: one Bucket prefix, in blob. |
+| `buckets` | array of [`App.spec.sites[].buckets[]`](#appspecsitesbuckets) | Exactly the one Bucket that bindings.blob names, never with deletion: delete; a Site in an App sets none and refers to that Bucket by ref. By name, the Site creates the Bucket with that prefix, without an owner, and the prefixes listed here, which may not repeat it; a Bucket of that name that the Site did not create leaves the Site not Ready. By ref, the Site is Ready only once the Bucket holds that prefix without an owner, and it never changes the Bucket. |
+| `image` | string | The OCI artifact of the Site's static files, which funcdctl push --site makes, named by a tag or a digest. funcd resolves a tag to a digest when the spec changes, so a tag that moves after a deploy changes nothing until the spec changes again. Each deployed bundle stays in the Bucket, so pointing image back at an earlier one serves it again without an upload. A bundle with a _runtime entry at its root does not deploy: funcd keeps that name for the files it generates. |
+| `index` | string | The bundle's file served for /, by its file name for any other path that ends in /, and with spa for a path that matches no file. It is a path in the bundle, with no leading /; a bundle without it does not deploy, and the previous one keeps serving. Empty means site.defaultIndex, index.html by default. |
+| `ingress` | object, [`App.spec.sites[].ingress`](#appspecsitesingress) | Where the edge serves the Site: its own address and its rules, through a Route of the Site's name that the Site writes. A Route of that name that the Site does not own leaves the Site not Ready. |
 | `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 | `runtimeConfig` | object, [`App.spec.sites[].runtimeConfig`](#appspecsitesruntimeconfig) | Values each deployment sets without a rebuild, served as config.json beside the bundle. The file is public: never put a secret in it. |
-| `spa` | boolean |  |
+| `spa` | boolean | Serve the index, with status 200, for a path under the bundle's path that matches no file, so that a client-side router handles it. ingress.rules never fall back to it: a missing file there is 404. |
 
 ### `App.spec.sites[].bindings`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `blob` | array of [`App.spec.sites[].bindings.blob[]`](#appspecsitesbindingsblob), required |  |
+| `blob` | array of [`App.spec.sites[].bindings.blob[]`](#appspecsitesbindingsblob), required | Exactly one entry: the Bucket and the prefix that hold the Site's bundles. |
 
 ### `App.spec.sites[].bindings.blob[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `bucket` | string, required, a DNS-1123 label |  |
-| `prefix` | string, required, a DNS-1123 label |  |
+| `bucket` | string, required, a DNS-1123 label | The Bucket that holds the Site's bundles, in the Site's namespace. |
+| `prefix` | string, required, a DNS-1123 label | The prefix of that Bucket under which the Site stores each bundle, at &lt;prefix&gt;/sha256-&lt;hex&gt;/, and the config.json that runtimeConfig generates. It cannot change once the Site exists: a new prefix needs a new Site. |
 
 ### `App.spec.sites[].buckets[]`
 
@@ -606,22 +606,22 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | `enabled` | boolean | Turns the resource's own address on or off. Unset, it is on unless the namespace's spec.defaultExposure is explicit; a Lake's address is on only when this is true. |
 | `host` | string | The exact host of the resource's own address. Empty is the namespace's host, &lt;namespace&gt;.&lt;server.baseDomain&gt;, or, in the default namespace, any host that no other namespace reserves. |
 | `path` | string | The edge path of the resource's own address, which begins with / and does not end with / unless it is /. Empty is / when host is set, else /function/&lt;name&gt;, /site/&lt;name&gt; or /lake/&lt;name&gt; by kind. |
-| `rules` | array of [`App.spec.sites[].ingress.rules[]`](#appspecsitesingressrules) |  |
+| `rules` | array of [`App.spec.sites[].ingress.rules[]`](#appspecsitesingressrules) | More Bucket prefixes the Site serves, each at its own path, with the bundle's host, auth and enabled. A rule may sit below the bundle's path, since the longest matching path wins, and a missing file there is 404, never the bundle's index. |
 
 ### `App.spec.sites[].ingress.rules[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `bucket` | string, a DNS-1123 label |  |
-| `path` | string, required |  |
-| `prefix` | string, required, a DNS-1123 label |  |
+| `bucket` | string, a DNS-1123 label | A Bucket of the Site's namespace, which buckets need not declare; empty means the Bucket of bindings.blob. While it does not exist, the Site's Route serves nothing, the bundle included, and the Site is not Ready. |
+| `path` | string, required | The path where the prefix is served, matching it and every path below it. It begins with / and may not be /, another rule's path or the bundle's path, which is ingress.path or its default. With runtimeConfig, it may not be the path of config.json either. |
+| `prefix` | string, required, a DNS-1123 label | The prefix of that Bucket served at path: &lt;path&gt;/&lt;key&gt; reads the object &lt;prefix&gt;/&lt;key&gt; as the Bucket holds it, since nothing is copied. |
 
 ### `App.spec.sites[].runtimeConfig`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `configMap` | string, a DNS-1123 label |  |
-| `values` | map of string to string |  |
+| `configMap` | string, a DNS-1123 label | A ConfigMap of the Site's namespace whose data adds keys to config.json; a key of values wins over the same key here. In an App, it may name one of the App's configMaps entries. While it does not exist, the Site is not Ready, though its bundle still deploys and its last config.json, if any, keeps serving; a change to it rewrites only the file. |
+| `values` | map of string to string | Keys and the string values that config.json gives them; a key here wins over the same key from configMap. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. The file holds at most 32768 bytes (32 KiB): values that alone pass it are refused, and a file that configMap takes past it leaves the Site not Ready, serving its last config.json, if any. |
 
 ### `App.spec.sql[]`
 
@@ -666,7 +666,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `data` | map of string to string |  |
+| `data` | map of string to string | Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through. |
 | `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as &lt;name&gt;-&lt;hash of data&gt;, and the config of each part that names it is set to that stored name. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 
@@ -716,7 +716,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `data` | map of string to string |  |
+| `data` | map of string to string | Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through. |
 | `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as &lt;name&gt;-&lt;hash of data&gt;, and the config of each part that names it is set to that stored name. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 

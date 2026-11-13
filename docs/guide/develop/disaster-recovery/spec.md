@@ -16,32 +16,32 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `schedule` | string, required, a DNS-1123 label |  |
-| `ttl` | string, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) |  |
+| `schedule` | string, required, a DNS-1123 label | The BackupSchedule of the namespace whose scope, target and recipients the run uses, read when the run starts: a schedule gone by then fails the Backup with reason ScheduleNotFound. The schedule's status counts every Backup that names it. |
+| `ttl` | string, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | How long funcd keeps the record after its creation; 0s or unset means the schedule's ttl, or 720h when the schedule does not exist. A ttl longer than the schedule's is refused. |
 
 ### `Backup.status`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `completionTime` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) |  |
+| `completionTime` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the run ended, Succeeded or Failed. |
 | `conditions` | array of [Condition](../common-definitions.md#condition) | The conditions that explain the phase. |
-| `expireTime` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) |  |
-| `members` | array of [`Backup.status.members[]`](#backupstatusmembers) |  |
+| `expireTime` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When funcd deletes this record, once the run has ended: the Backup's creation plus its spec.ttl, else plus its schedule's ttl. The copy on the target stays until the target's own lifecycle rule removes it. |
+| `members` | array of [`Backup.status.members[]`](#backupstatusmembers) | The stores the copy holds, which a Restore names as they are listed here. A Bucket's member holds none of the data of the Lakes located on its prefixes: each of them is a member of its own. |
 | `observedGeneration` | integer | The generation of the spec that funcd last acted on. |
-| `path` | string |  |
-| `phase` | string, one of `Pending`, `Running`, `Paused`, `Succeeded`, `Failed`, `Cancelled` |  |
-| `recipients` | array of string values |  |
-| `startTime` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) |  |
-| `target` | string |  |
+| `path` | string | The copy's directory on the target, &lt;namespace&gt;/&lt;backup&gt;-&lt;uid&gt;/. |
+| `phase` | string, one of `Pending`, `Running`, `Paused`, `Succeeded`, `Failed`, `Cancelled` | Pending, then Running, then Succeeded or Failed, in one attempt: funcd does not retry a failed Backup. A Backup that was Running when funcd stopped ends at the next start, Succeeded with reason FoundOnTarget when its copy is whole on the target, else Failed with reason Interrupted. |
+| `recipients` | array of string values | Fingerprints of the age recipients the copy is sealed to, sorted. A Restore whose identity matches none of them fails, its message naming both sets of fingerprints. A Backup recorded with reason FoundOnTarget lists none. |
+| `startTime` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the run began. |
+| `target` | string | The target URL the run wrote to: its schedule's spec.target.url at the time. A Restore reads the copy there. |
 
 ### `Backup.status.members[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `bytes` | integer |  |
-| `kind` | string, required |  |
-| `name` | string, required, a DNS-1123 label |  |
-| `volume` | string, a DNS-1123 label |  |
+| `bytes` | integer | The size of the member's sealed copy on the target, in bytes. |
+| `kind` | string, required | The member's kind: KVStore, Bucket, Lake, SQLDatabase, or Function for a Function's local volume. |
+| `name` | string, required, a DNS-1123 label | The member's name: the store's, or for a volume, its Function's. |
+| `volume` | string, a DNS-1123 label | With kind Function, the name of the Function's local volume that the member is. |
 
 ## BackupSchedule
 
@@ -53,51 +53,51 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `encryption` | object, [`BackupSchedule.spec.encryption`](#backupschedulespecencryption) |  |
-| `paused` | boolean |  |
-| `schedule` | string, required |  |
-| `scope` | object, [`BackupSchedule.spec.scope`](#backupschedulespecscope), required |  |
-| `target` | object, [`BackupSchedule.spec.target`](#backupschedulespectarget), required |  |
-| `timeZone` | string |  |
-| `ttl` | string, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) |  |
+| `encryption` | object, [`BackupSchedule.spec.encryption`](#backupschedulespecencryption) | The age recipients that seal the member files of each Backup. It is required: a schedule with fewer than 2 recipients is refused. |
+| `paused` | boolean | While true, the schedule creates no Backup and rpoRisk stays false; a Backup created by hand still runs. Once it is false again, the slots missed meanwhile collapse into one Backup. |
+| `schedule` | string, required | The cron slots at which the schedule creates a Backup: 5 fields (minute hour day-of-month month day-of-week) or a macro such as @daily, in timeZone. Slots missed during downtime, a pause or a hold collapse into one Backup, and a slot that comes while one of the schedule's Backups is Pending or Running creates none. |
+| `scope` | object, [`BackupSchedule.spec.scope`](#backupschedulespecscope), required | The stores each Backup copies, in one form: the lists kvStores, buckets, lakes, databases and volumes, or app, or resourceGroup. funcd resolves it at each run: a member or App it names that is missing then fails the Backup with reason MemberNotFound, and a scope of more than workloadBackup.maxCopyMembers members fails it with no copy written. In an App's spec.backupSchedules entry, an empty scope backs up that App. |
+| `target` | object, [`BackupSchedule.spec.target`](#backupschedulespectarget), required | Where each Backup writes its copy: an S3 bucket and the Secret of its write key. |
+| `timeZone` | string | The IANA time zone of schedule, such as Europe/Paris; UTC when empty. |
+| `ttl` | string, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | How long funcd keeps each Backup's record after its creation; 0s or unset means 720h. Only the record goes: the copy stays on the target until the target's own lifecycle rule expires it. A Backup may set a shorter spec.ttl, never a longer one. |
 
 ### `BackupSchedule.spec.encryption`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `recipients` | array of string values, required |  |
+| `recipients` | array of string values, required | The age recipients, each entry one recipient: at least 2 distinct ones, such as an owner's and a recovery one, all X25519 or all hybrid (age1pq1). Every member file of each Backup is sealed to all of them, so the identity of any one opens it. The copy's manifest.yaml, which names the members, their files' sizes and these recipients' fingerprints, is not sealed. |
 
 ### `BackupSchedule.spec.scope`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `app` | string, a DNS-1123 label |  |
-| `buckets` | array of string values, each a DNS-1123 label |  |
-| `databases` | array of string values, each a DNS-1123 label |  |
-| `kvStores` | array of string values, each a DNS-1123 label |  |
-| `lakes` | array of string values, each a DNS-1123 label |  |
-| `resourceGroup` | string, a DNS-1123 label |  |
-| `volumes` | array of string values |  |
+| `app` | string, a DNS-1123 label | An App of the namespace: each Backup copies the stores of its kv, buckets, lakes and sql entries, ref entries included, and the local volumes of the Functions it declares. Set it alone, with no other scope field. |
+| `buckets` | array of string values, each a DNS-1123 label | Buckets of the namespace to copy, by name, each once. A Bucket's copy holds none of the data of the Lakes located on its prefixes: each of them is copied as a member of its own. |
+| `databases` | array of string values, each a DNS-1123 label | SQLDatabases of the namespace to copy, by name, each once. A database whose engine is not Ready fails the Backup with reason EngineNotReady. |
+| `kvStores` | array of string values, each a DNS-1123 label | KVStores of the namespace to copy, by name, each once. |
+| `lakes` | array of string values, each a DNS-1123 label | Lakes of the namespace to copy, by name, each once. A Lake located on a prefix of a listed Bucket is copied without being named here. A Lake that deletes files during each of a run's copies, as a busy one may, fails the Backup with reason LakeUnstable, and so does a Bucket that brings it in. |
+| `resourceGroup` | string, a DNS-1123 label | A resource group of the namespace: each Backup copies its KVStores, Buckets, Lakes and SQLDatabases, but not its Functions' local volumes. Set it alone, with no other scope field. |
+| `volumes` | array of string values | Local volumes of the namespace's Functions to copy, each as &lt;function&gt;/&lt;name&gt;, both DNS-1123 labels, and listed once. A volume is read live, file by file, so its copy is not a single point in time. |
 
 ### `BackupSchedule.spec.target`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `credentialsSecret` | string, required, a DNS-1123 label |  |
-| `url` | string, required |  |
+| `credentialsSecret` | string, required, a DNS-1123 label | A Secret of the namespace with AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and, optionally, AWS_SESSION_TOKEN: the key each Backup writes with. It needs only put and list on the bucket. |
+| `url` | string, required | The s3:// URL of the bucket that receives the copies, its options as query parameters, such as s3://backups?region=eu-west-3. The bucket of blob.target is refused, and another bucket on its endpoint is accepted with reason SameProvider on the schedule's Ready condition: one failure of that provider takes both. The bucket must accept a create-if-absent put (If-None-Match: *): a bucket that refuses it fails each Backup with reason TargetUnconditional. |
 
 ### `BackupSchedule.status`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `active` | string, a DNS-1123 label |  |
+| `active` | string, a DNS-1123 label | A Backup of the schedule that is Pending or Running, empty when none is. |
 | `conditions` | array of [Condition](../common-definitions.md#condition) | The conditions that explain the phase. |
-| `earliestRestorePoint` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) |  |
-| `lastScheduleTime` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) |  |
-| `lastSuccessTime` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) |  |
+| `earliestRestorePoint` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the oldest of the schedule's Succeeded Backups that still exist started: the oldest point a Restore can go back to. |
+| `lastScheduleTime` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | The newest slot the schedule has taken, whether it created a Backup or, finding one of its Backups still Pending or Running, created none. |
+| `lastSuccessTime` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the newest of the schedule's Succeeded Backups that still exist completed. |
 | `observedGeneration` | integer | The generation of the spec that funcd last acted on. |
 | `phase` | string, one of `Pending`, `Deploying`, `Ready`, `Idle`, `Degraded`, `Failed`, `Terminating` | Where the object is in its lifecycle. |
-| `rpoRisk` | boolean |  |
+| `rpoRisk` | boolean | True when the schedule has fallen behind: the first slot after the start of its newest Succeeded Backup, or after its creation when there is none, has passed with that slot's Backup Failed or missing, or a second slot has passed. It stays false while the schedule is paused. funcd logs workload backup rpo at risk when it turns true. |
 
 ## Restore
 
@@ -109,20 +109,20 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `backup` | string, required, a DNS-1123 label |  |
-| `members` | array of [`Restore.spec.members[]`](#restorespecmembers), required |  |
-| `source` | object, [`Restore.spec.source`](#restorespecsource), required |  |
+| `backup` | string, required, a DNS-1123 label | The Backup to load, in the Restore's namespace. The Restore waits while it is Pending or Running, and fails with reason BackupNotReady when it is missing or Failed. |
+| `members` | array of [`Restore.spec.members[]`](#restorespecmembers), required | The members of the Backup to load, at least one and each once, loaded in this order after funcd has checked the whole copy and every destination. A Bucket's member leaves its destination's Lake prefixes as they are: to restore those Lakes, name them as members too. |
+| `source` | object, [`Restore.spec.source`](#restorespecsource), required | The Secrets that read the Backup's copy and open its seal. |
 
 ### `Restore.spec.members[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `as` | string, a DNS-1123 label |  |
-| `asLocation` | object, [`Restore.spec.members[].asLocation`](#restorespecmembersaslocation) |  |
-| `inPlace` | boolean |  |
-| `kind` | string, required |  |
-| `name` | string, required, a DNS-1123 label |  |
-| `volume` | string, a DNS-1123 label |  |
+| `as` | string, a DNS-1123 label | The destination: the name of an existing, empty store of the member's kind in the namespace, or for a volume, of a Function whose local volume of that name is empty. A SQLDatabase is empty with no table, view, index or trigger and no Function binding it. Exactly one of as, asLocation and inPlace; a Lake takes asLocation or inPlace. |
+| `asLocation` | object, [`Restore.spec.members[].asLocation`](#restorespecmembersaslocation) | For a Lake: the bucket and prefix that receive its copy, where no Lake is located and nothing is stored yet; a Lake located there afterwards reads it. The bucket must exist and may not be one this Restore restores in place. Exactly one of as, asLocation and inPlace. |
+| `inPlace` | boolean | Load the member back into its own store, replacing its data; a Function's volume is loaded only when empty or named by its Function's DataMissing condition. The Restore then needs update on the Namespace, as an admin has, and another in-place Restore of the namespace is refused until it ends. It first takes the export Backup that status.export names, which needs the restored Backup's schedule, then holds the namespace while it loads: a failed load keeps the hold until funcdctl hold release --namespace. Exactly one of as, asLocation and inPlace. |
+| `kind` | string, required | The member's kind, as the Backup's status.members lists it: KVStore, Bucket, Lake, SQLDatabase, or Function for a Function's local volume. |
+| `name` | string, required, a DNS-1123 label | The member's name, as the Backup's status.members lists it: the store's, or for a volume, its Function's. A member the copy does not hold fails the Restore with reason MemberNotFound. |
+| `volume` | string, a DNS-1123 label | With kind Function, which needs it, the name of the Function's local volume that the member is. Any other kind takes none. |
 
 ### `Restore.spec.members[].asLocation`
 
@@ -135,16 +135,16 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `credentialsSecret` | string, required, a DNS-1123 label |  |
-| `identitySecret` | string, a DNS-1123 label |  |
+| `credentialsSecret` | string, required, a DNS-1123 label | A Secret of the namespace with AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and, optionally, AWS_SESSION_TOKEN: the key the Restore reads the copy with, at the Backup's status.target. A read-only key is enough. |
+| `identitySecret` | string, a DNS-1123 label | A Secret of the namespace whose AGE_IDENTITY key holds age identities, X25519 or hybrid and not passphrase-encrypted, one of them for a recipient the Backup is sealed to. It is required: a Restore without it is refused. |
 
 ### `Restore.status`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `completionTime` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) |  |
+| `completionTime` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the Restore ended, Succeeded or Failed. |
 | `conditions` | array of [Condition](../common-definitions.md#condition) | The conditions that explain the phase. |
-| `export` | string, a DNS-1123 label |  |
+| `export` | string, a DNS-1123 label | The Backup that an in-place Restore takes before it loads, &lt;restore&gt;-before, of the restored Backup's schedule. Empty when no member is in place. |
 | `observedGeneration` | integer | The generation of the spec that funcd last acted on. |
-| `phase` | string, one of `Pending`, `Running`, `Paused`, `Succeeded`, `Failed`, `Cancelled` |  |
-| `startTime` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) |  |
+| `phase` | string, one of `Pending`, `Running`, `Paused`, `Succeeded`, `Failed`, `Cancelled` | Pending while it waits for its Backup and, in place, for its export; Running while it checks the whole copy and loads; then Succeeded or Failed. A Restore that was Running when funcd stopped ends Failed with reason Interrupted. |
+| `startTime` | string, an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z) | When the Restore turned Running, once its Backup and any export had Succeeded. |

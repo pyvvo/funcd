@@ -25,21 +25,21 @@ type Site struct {
 type SiteSpec struct {
 	// Image is the site bundle OCI ref (oci-layout://<dir>[:<tag>] or a registry ref; a tag or a
 	// digest). A tag is resolved to a digest once per spec generation — the author never types one.
-	Image string `json:"image"`
+	Image string `json:"image" doc:"The OCI artifact of the Site's static files, which funcdctl push --site makes, named by a tag or a digest. funcd resolves a tag to a digest when the spec changes, so a tag that moves after a deploy changes nothing until the spec changes again. Each deployed bundle stays in the Bucket, so pointing image back at an earlier one serves it again without an upload. A bundle with a _runtime entry at its root does not deploy: funcd keeps that name for the files it generates."`
 	// Buckets declares exactly the one Bucket its bindings.blob names (ADR-0248 Decision 7): by name the Site creates
 	// it with its served prefix and no owner, and refuses an existing one without its marker; by ref the served prefix
 	// must exist without an owner, and the Site never edits the Bucket. deletion: delete is refused (ADR-0139).
-	Buckets []BucketEntry `json:"buckets,omitempty"`
+	Buckets []BucketEntry `json:"buckets,omitempty" doc:"Exactly the one Bucket that bindings.blob names, never with deletion: delete; a Site in an App sets none and refers to that Bucket by ref. By name, the Site creates the Bucket with that prefix, without an owner, and the prefixes listed here, which may not repeat it; a Bucket of that name that the Site did not create leaves the Site not Ready. By ref, the Site is Ready only once the Bucket holds that prefix without an owner, and it never changes the Bucket."`
 	// Bindings names the served prefix: one alias-free {bucket, prefix}; objects land under <prefix>/<digest-slug>/.
 	// The prefix is immutable after creation (the site-prefix-immutable admission).
-	Bindings SiteBindings `json:"bindings,omitzero"`
+	Bindings SiteBindings `json:"bindings,omitzero" doc:"Where the Site stores and serves its bundles: one Bucket prefix, in blob."`
 	// Index is the document served for "/" / a directory / (when SPA) a miss. Default "index.html".
-	Index string `json:"index,omitempty"`
+	Index string `json:"index,omitempty" doc:"The bundle's file served for /, by its file name for any other path that ends in /, and with spa for a path that matches no file. It is a path in the bundle, with no leading /; a bundle without it does not deploy, and the previous one keeps serving. Empty means site.defaultIndex, index.html by default."`
 	// SPA serves Index (200) for an un-matched path under the bundle rule so a client-side router owns
 	// routing. It NEVER applies to a data mount (Ingress.Rules), whose miss is always 404.
-	SPA bool `json:"spa,omitempty"`
+	SPA bool `json:"spa,omitempty" doc:"Serve the index, with status 200, for a path under the bundle's path that matches no file, so that a client-side router handles it. ingress.rules never fall back to it: a missing file there is 404."`
 	// Ingress declares the Site-owned Route (named after the Site). Required in V1.
-	Ingress SiteIngress `json:"ingress"`
+	Ingress SiteIngress `json:"ingress" doc:"Where the edge serves the Site: its own address and its rules, through a Route of the Site's name that the Site writes. A Route of that name that the Site does not own leaves the Site not Ready."`
 	// RuntimeConfig makes the Site serve one generated config.json beside its bundle (ADR-0239). Not the function
 	// runtime.
 	RuntimeConfig *SiteRuntimeConfig `json:"runtimeConfig,omitempty" doc:"Values each deployment sets without a rebuild, served as config.json beside the bundle. The file is public: never put a secret in it."`
@@ -48,9 +48,9 @@ type SiteSpec struct {
 // SiteRuntimeConfig holds the members of a Site's generated config.json (ADR-0239).
 type SiteRuntimeConfig struct {
 	// Values are keys and their string values; a key here wins over the same key from ConfigMap.
-	Values map[string]string `json:"values,omitempty"`
+	Values map[string]string `json:"values,omitempty" doc:"Keys and the string values that config.json gives them; a key here wins over the same key from configMap. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. The file holds at most 32768 bytes (32 KiB): values that alone pass it are refused, and a file that configMap takes past it leaves the Site not Ready, serving its last config.json, if any."`
 	// ConfigMap names a ConfigMap of the Site's namespace whose data adds keys.
-	ConfigMap ObjectName `json:"configMap,omitempty"`
+	ConfigMap ObjectName `json:"configMap,omitempty" doc:"A ConfigMap of the Site's namespace whose data adds keys to config.json; a key of values wins over the same key here. In an App, it may name one of the App's configMaps entries. While it does not exist, the Site is not Ready, though its bundle still deploys and its last config.json, if any, keeps serving; a change to it rewrites only the file."`
 }
 
 const (
@@ -111,17 +111,17 @@ type SiteIngress struct {
 	BaseHref bool `json:"baseHref,omitempty" doc:"Serve a copy of the bundle's index whose <base href> is the Site's mount, so a bundle built with relative URLs runs at any path, deep links included."`
 	// Rules are additional bucket prefixes served alongside the app (the data the app fetches). A rule
 	// MAY nest under Path (e.g. /bi/data under /bi) — longest-path-first gives the nested rule priority.
-	Rules []SiteRule `json:"rules,omitempty"`
+	Rules []SiteRule `json:"rules,omitempty" doc:"More Bucket prefixes the Site serves, each at its own path, with the bundle's host, auth and enabled. A rule may sit below the bundle's path, since the longest matching path wins, and a missing file there is 404, never the bundle's index."`
 }
 
 // SiteRule serves one bucket prefix at an edge path. Never SPA: a miss is 404, not the app shell.
 type SiteRule struct {
 	// Path is the edge path; must begin "/" and must not be "/" (that is the bundle's).
-	Path string `json:"path"`
+	Path string `json:"path" doc:"The path where the prefix is served, matching it and every path below it. It begins with / and may not be /, another rule's path or the bundle's path, which is ingress.path or its default. With runtimeConfig, it may not be the path of config.json either."`
 	// Bucket names a Bucket in this Site's namespace; "" ⇒ the Site's own Bucket.
-	Bucket ObjectName `json:"bucket,omitempty"`
+	Bucket ObjectName `json:"bucket,omitempty" doc:"A Bucket of the Site's namespace, which buckets need not declare; empty means the Bucket of bindings.blob. While it does not exist, the Site's Route serves nothing, the bundle included, and the Site is not Ready."`
 	// Prefix is the Bucket sub-domain served at Path.
-	Prefix string `json:"prefix" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"`
+	Prefix string `json:"prefix" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" doc:"The prefix of that Bucket served at path: <path>/<key> reads the object <prefix>/<key> as the Bucket holds it, since nothing is copied."`
 }
 
 // SiteStatus is the observed state: which build is live and where it is served from. Every field is
@@ -131,12 +131,12 @@ type SiteRule struct {
 type SiteStatus struct {
 	Status `json:",inline"`
 	// Digest is the manifest digest the owned Route currently serves.
-	Digest string `json:"digest,omitempty" pattern:"^sha256:[a-f0-9]{64}$"`
+	Digest string `json:"digest,omitempty" pattern:"^sha256:[a-f0-9]{64}$" doc:"The digest of the bundle that the Site's Route is set to serve, empty before the first deploy. A deploy that fails leaves the previous bundle's digest."`
 	// ServingPrefix is the digest-scoped key prefix the owned Route is programmed with.
-	ServingPrefix string `json:"servingPrefix,omitempty"`
+	ServingPrefix string `json:"servingPrefix,omitempty" doc:"Where that bundle's files are in the Bucket: <prefix>/sha256-<hex>/, from the prefix of spec.bindings.blob and the digest."`
 	// Objects and Bytes are the materialized bundle's observed size.
-	Objects int   `json:"objects,omitempty"`
-	Bytes   int64 `json:"bytes,omitempty"`
+	Objects int   `json:"objects,omitempty" doc:"The number of that bundle's files in the Bucket, without the files funcd generates for the Site. It reads 0 while the Site cannot resolve its image or use its Bucket."`
+	Bytes   int64 `json:"bytes,omitempty" doc:"The total size, in bytes, of the files that objects counts."`
 }
 
 // EffectivePath is where the bundle is served (ADR-0140): spec.ingress.path, else "/" when

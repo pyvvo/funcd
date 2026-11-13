@@ -57,11 +57,11 @@ func (b StepBindings) FunctionBindings() FunctionBindings {
 
 // SiteBindings are a Site's bindings (ADR-0248 Decision 7): its served prefix, one alias-free entry.
 type SiteBindings struct {
-	Blob []BlobRef `json:"blob"` // exactly one
+	Blob []BlobRef `json:"blob" doc:"Exactly one entry: the Bucket and the prefix that hold the Site's bundles."` // exactly one
 }
 
 // BlobRef names a (bucket, prefix) sub-domain without an alias.
 type BlobRef struct {
-	Bucket ObjectName `json:"bucket"`
-	Prefix string     `json:"prefix" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"`
+	Bucket ObjectName `json:"bucket" doc:"The Bucket that holds the Site's bundles, in the Site's namespace."`
+	Prefix string     `json:"prefix" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" doc:"The prefix of that Bucket under which the Site stores each bundle, at <prefix>/sha256-<hex>/, and the config.json that runtimeConfig generates. It cannot change once the Site exists: a new prefix needs a new Site."`
 }

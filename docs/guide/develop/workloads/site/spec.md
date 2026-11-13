@@ -16,26 +16,26 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `bindings` | object, [`Site.spec.bindings`](#sitespecbindings) |  |
-| `buckets` | array of [`Site.spec.buckets[]`](#sitespecbuckets) |  |
-| `image` | string, required |  |
-| `index` | string |  |
-| `ingress` | object, [`Site.spec.ingress`](#sitespecingress), required |  |
+| `bindings` | object, [`Site.spec.bindings`](#sitespecbindings) | Where the Site stores and serves its bundles: one Bucket prefix, in blob. |
+| `buckets` | array of [`Site.spec.buckets[]`](#sitespecbuckets) | Exactly the one Bucket that bindings.blob names, never with deletion: delete; a Site in an App sets none and refers to that Bucket by ref. By name, the Site creates the Bucket with that prefix, without an owner, and the prefixes listed here, which may not repeat it; a Bucket of that name that the Site did not create leaves the Site not Ready. By ref, the Site is Ready only once the Bucket holds that prefix without an owner, and it never changes the Bucket. |
+| `image` | string, required | The OCI artifact of the Site's static files, which funcdctl push --site makes, named by a tag or a digest. funcd resolves a tag to a digest when the spec changes, so a tag that moves after a deploy changes nothing until the spec changes again. Each deployed bundle stays in the Bucket, so pointing image back at an earlier one serves it again without an upload. A bundle with a _runtime entry at its root does not deploy: funcd keeps that name for the files it generates. |
+| `index` | string | The bundle's file served for /, by its file name for any other path that ends in /, and with spa for a path that matches no file. It is a path in the bundle, with no leading /; a bundle without it does not deploy, and the previous one keeps serving. Empty means site.defaultIndex, index.html by default. |
+| `ingress` | object, [`Site.spec.ingress`](#sitespecingress), required | Where the edge serves the Site: its own address and its rules, through a Route of the Site's name that the Site writes. A Route of that name that the Site does not own leaves the Site not Ready. |
 | `runtimeConfig` | object, [`Site.spec.runtimeConfig`](#sitespecruntimeconfig) | Values each deployment sets without a rebuild, served as config.json beside the bundle. The file is public: never put a secret in it. |
-| `spa` | boolean |  |
+| `spa` | boolean | Serve the index, with status 200, for a path under the bundle's path that matches no file, so that a client-side router handles it. ingress.rules never fall back to it: a missing file there is 404. |
 
 ### `Site.spec.bindings`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `blob` | array of [`Site.spec.bindings.blob[]`](#sitespecbindingsblob), required |  |
+| `blob` | array of [`Site.spec.bindings.blob[]`](#sitespecbindingsblob), required | Exactly one entry: the Bucket and the prefix that hold the Site's bundles. |
 
 ### `Site.spec.bindings.blob[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `bucket` | string, required, a DNS-1123 label |  |
-| `prefix` | string, required, a DNS-1123 label |  |
+| `bucket` | string, required, a DNS-1123 label | The Bucket that holds the Site's bundles, in the Site's namespace. |
+| `prefix` | string, required, a DNS-1123 label | The prefix of that Bucket under which the Site stores each bundle, at &lt;prefix&gt;/sha256-&lt;hex&gt;/, and the config.json that runtimeConfig generates. It cannot change once the Site exists: a new prefix needs a new Site. |
 
 ### `Site.spec.buckets[]`
 
@@ -86,7 +86,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | `enabled` | boolean | Turns the resource's own address on or off. Unset, it is on unless the namespace's spec.defaultExposure is explicit; a Lake's address is on only when this is true. |
 | `host` | string | The exact host of the resource's own address. Empty is the namespace's host, &lt;namespace&gt;.&lt;server.baseDomain&gt;, or, in the default namespace, any host that no other namespace reserves. |
 | `path` | string | The edge path of the resource's own address, which begins with / and does not end with / unless it is /. Empty is / when host is set, else /function/&lt;name&gt;, /site/&lt;name&gt; or /lake/&lt;name&gt; by kind. |
-| `rules` | array of [`Site.spec.ingress.rules[]`](#sitespecingressrules) |  |
+| `rules` | array of [`Site.spec.ingress.rules[]`](#sitespecingressrules) | More Bucket prefixes the Site serves, each at its own path, with the bundle's host, auth and enabled. A rule may sit below the bundle's path, since the longest matching path wins, and a missing file there is 404, never the bundle's index. |
 
 ### `Site.spec.ingress.auth`
 
@@ -98,25 +98,25 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `bucket` | string, a DNS-1123 label |  |
-| `path` | string, required |  |
-| `prefix` | string, required, a DNS-1123 label |  |
+| `bucket` | string, a DNS-1123 label | A Bucket of the Site's namespace, which buckets need not declare; empty means the Bucket of bindings.blob. While it does not exist, the Site's Route serves nothing, the bundle included, and the Site is not Ready. |
+| `path` | string, required | The path where the prefix is served, matching it and every path below it. It begins with / and may not be /, another rule's path or the bundle's path, which is ingress.path or its default. With runtimeConfig, it may not be the path of config.json either. |
+| `prefix` | string, required, a DNS-1123 label | The prefix of that Bucket served at path: &lt;path&gt;/&lt;key&gt; reads the object &lt;prefix&gt;/&lt;key&gt; as the Bucket holds it, since nothing is copied. |
 
 ### `Site.spec.runtimeConfig`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `configMap` | string, a DNS-1123 label |  |
-| `values` | map of string to string |  |
+| `configMap` | string, a DNS-1123 label | A ConfigMap of the Site's namespace whose data adds keys to config.json; a key of values wins over the same key here. In an App, it may name one of the App's configMaps entries. While it does not exist, the Site is not Ready, though its bundle still deploys and its last config.json, if any, keeps serving; a change to it rewrites only the file. |
+| `values` | map of string to string | Keys and the string values that config.json gives them; a key here wins over the same key from configMap. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. The file holds at most 32768 bytes (32 KiB): values that alone pass it are refused, and a file that configMap takes past it leaves the Site not Ready, serving its last config.json, if any. |
 
 ### `Site.status`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `bytes` | integer |  |
+| `bytes` | integer | The total size, in bytes, of the files that objects counts. |
 | `conditions` | array of [Condition](../../common-definitions.md#condition) | The conditions that explain the phase. |
-| `digest` | string, a sha256 digest |  |
-| `objects` | integer |  |
+| `digest` | string, a sha256 digest | The digest of the bundle that the Site's Route is set to serve, empty before the first deploy. A deploy that fails leaves the previous bundle's digest. |
+| `objects` | integer | The number of that bundle's files in the Bucket, without the files funcd generates for the Site. It reads 0 while the Site cannot resolve its image or use its Bucket. |
 | `observedGeneration` | integer | The generation of the spec that funcd last acted on. |
 | `phase` | string, one of `Pending`, `Deploying`, `Ready`, `Idle`, `Degraded`, `Failed`, `Terminating` | Where the object is in its lifecycle. |
-| `servingPrefix` | string |  |
+| `servingPrefix` | string | Where that bundle's files are in the Bucket: &lt;prefix&gt;/sha256-&lt;hex&gt;/, from the prefix of spec.bindings.blob and the digest. |

@@ -16,10 +16,10 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `auth` | object, [`Route.spec.auth`](#routespecauth) |  |
-| `enabled` | boolean |  |
-| `host` | string |  |
-| `rules` | array of [`Route.spec.rules[]`](#routespecrules), required |  |
+| `auth` | object, [`Route.spec.auth`](#routespecauth) | The edge authentication of the rules that set none. Unset uses the Namespace's spec.edgeDefaults.auth, else open. |
+| `enabled` | boolean | false turns the Route off: it serves nothing, leaves its paths to other Routes and reports Disabled. Unset is true, except on a Route that a Site or a Function owns in a namespace whose defaultExposure is explicit. |
+| `host` | string | The host the rules answer on, matched in lower case and without a port or a trailing dot. Empty is the namespace host, &lt;namespace&gt;.&lt;server.baseDomain&gt;, or, in the default namespace, every host except another namespace's own host, &lt;other&gt;.&lt;server.baseDomain&gt; or a name under it, while that namespace uses it; a host that another namespace's Route names is not excluded, and the longer matching path wins there. In the default namespace, an explicit defaultExposure refuses an empty host (HostRequired). A host that names another namespace, &lt;other&gt;.&lt;server.baseDomain&gt; or a name under it, is refused (HostReserved) while that namespace uses it, and always for a rule at or under /function. |
+| `rules` | array of [`Route.spec.rules[]`](#routespecrules), required | The path rules, at least one; two rules may not have the same path and the same methods. Across all Routes, the longest matching path wins, and a rule with a host wins a tie. A Route serves all its rules or none: a missing backend or one conflicting rule keeps every rule off. |
 
 ### `Route.spec.auth`
 
@@ -31,35 +31,35 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `auth` | object, [`Route.spec.auth`](#routespecauth) |  |
-| `backend` | object, [`Route.spec.rules[].backend`](#routespecrulesbackend), required |  |
-| `methods` | array of string values, each one of `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS` |  |
-| `path` | string, required |  |
-| `pathType` | string, one of `""`, `Prefix`, `Exact` |  |
+| `auth` | object, [`Route.spec.auth`](#routespecauth) | The edge authentication of this rule's requests. Unset uses the Route's auth, then the Namespace's spec.edgeDefaults.auth, then open. |
+| `backend` | object, [`Route.spec.rules[].backend`](#routespecrulesbackend), required | What the rule serves: set exactly one of function, static and site. |
+| `methods` | array of string values, each one of `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS` | The request methods the rule matches; empty matches every method. |
+| `path` | string, required | The path the rule matches, starting with /. In the default namespace, a Route with no host may not have a rule at or under /function, the path that calls Functions by name (ReservedPath). |
+| `pathType` | string, one of `""`, `Prefix`, `Exact` | Prefix, the default, matches path and every path under it by whole segments, so /api matches /api/x but not /apix; a trailing slash changes nothing, and / matches every path. Exact matches path alone. The backend receives the rest of the path, or / for an Exact rule. |
 
 ### `Route.spec.rules[].backend`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `function` | string, a DNS-1123 label |  |
+| `function` | string, a DNS-1123 label | A Function of the Route's namespace that the rule calls; the Route is not Ready (BackendNotFound) while it is missing. A request whose rest of the path lies under /health/ gets 404 and reaches no worker. |
 | `site` | string, a DNS-1123 label | A Site of this Route's namespace: the rule serves the build that Site serves now, and its config.json at &lt;path&gt;/config.json, following each new build. A Prefix rule; the Route may not carry the Site's own name. |
-| `static` | object, [`Route.spec.rules[].backend.static`](#routespecrulesbackendstatic) |  |
+| `static` | object, [`Route.spec.rules[].backend.static`](#routespecrulesbackendstatic) | Serves the objects of a Bucket prefix directly, with no Function. It answers GET and HEAD, and 405 to any other method. |
 
 ### `Route.spec.rules[].backend.static`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `bucket` | string, required, a DNS-1123 label |  |
-| `index` | string |  |
-| `prefix` | string |  |
-| `spa` | boolean |  |
+| `bucket` | string, required, a DNS-1123 label | A Bucket of the Route's namespace whose objects the rule serves; the Route is not Ready (BucketNotFound) while it is missing. |
+| `index` | string | The object, relative to prefix, served at the rule's root; index.html when empty. A path ending in / gets the file of the index's name in that folder. It may not start with /. |
+| `prefix` | string | The key prefix in the Bucket that the rule serves, ending in /; empty serves the whole Bucket. A request reads the object at this prefix plus the rest of its path. |
+| `spa` | boolean | Serve the index, with 200, for a path that matches no object, so that a client-side router handles it; when false, such a path gets 404. |
 
 ### `Route.status`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `conditions` | array of [Condition](../../common-definitions.md#condition) | The conditions that explain the phase. |
-| `host` | string |  |
+| `host` | string | The host the Route claims, whether or not it is Ready: spec.host in lower case without a port or a trailing dot, else the namespace host. It is empty for any host, as for a Route of the default namespace with no host, and while a backend is missing. |
 | `observedGeneration` | integer | The generation of the spec that funcd last acted on. |
 | `phase` | string, one of `Pending`, `Deploying`, `Ready`, `Idle`, `Degraded`, `Failed`, `Terminating` | Where the object is in its lifecycle. |
 
@@ -73,19 +73,19 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `appliesTo` | array of string values, each a DNS-1123 label |  |
-| `rules` | array of [`EgressPolicy.spec.rules[]`](#egresspolicyspecrules), required |  |
+| `appliesTo` | array of string values, each a DNS-1123 label | The Functions of the namespace, by name, that the rules apply to; empty applies them to every Function of the namespace. |
+| `rules` | array of [`EgressPolicy.spec.rules[]`](#egresspolicyspecrules), required | One to 64 rules, each allowing outbound TCP connections; the rules of every EgressPolicy of the namespace add up. With server.network.egress on, on Linux with containerd, a connection that nothing allows is refused; otherwise the rules change nothing. |
 
 ### `EgressPolicy.spec.rules[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `ports` | array of integer values |  |
-| `to` | object, [`EgressPolicy.spec.rules[].to`](#egresspolicyspecrulesto), required |  |
+| `ports` | array of integer values | The destination ports the rule allows, each 1 to 65535, at most 32; empty allows every port. |
+| `to` | object, [`EgressPolicy.spec.rules[].to`](#egresspolicyspecrulesto), required | Where the rule allows connections to: at least one domain or CIDR, and at most 64 of them together. A connection matches the rule when it goes to one of them on one of the rule's ports. |
 
 ### `EgressPolicy.spec.rules[].to`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `cidrs` | array of string values |  |
-| `domains` | array of string values |  |
+| `cidrs` | array of string values | Address ranges, such as 10.0.0.0/8, that the dialled address must fall in. A host reached by name needs a domains entry too, since funcd answers a worker's lookup only for a name that a domain rule applying to it allows. |
+| `domains` | array of string values | Host names in lower case: exact, such as api.x.com, or a wildcard, such as *.x.com, which matches every name under x.com but not x.com. A connection matches a name only at an address that the worker's own lookup of it through funcd returned, within the answer's TTL, and never at an address that is not globally reachable, such as a private one, which needs a cidrs entry. |

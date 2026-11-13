@@ -14,5 +14,4 @@ paths:
 - A type that several kinds reach is described without naming one of them.
 - A tag is a raw string literal: it cannot hold a backtick.
 - After a change, run `scripts/agent/d just generate`: it updates `api/openapi/funcd.v1alpha1.yaml` and the Spec pages
-  (`docs/guide/develop/**/spec.md`). Remove each field you describe from
-  `internal/controlplane/kindref/testdata/undescribed.txt`.
+  (`docs/guide/develop/**/spec.md`). `TestEveryFieldIsDescribed` refuses a field with no tag.

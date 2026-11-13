@@ -25,15 +25,15 @@ type Route struct {
 type RouteSpec struct {
 	// Host is an exact host match. "" is the namespace host <namespace>.<baseDomain>, or for default any host but
 	// reserved ones (ADR-0240); an `explicit` default requires a non-empty Host (ADR-0110).
-	Host string `json:"host,omitempty"`
+	Host string `json:"host,omitempty" doc:"The host the rules answer on, matched in lower case and without a port or a trailing dot. Empty is the namespace host, <namespace>.<server.baseDomain>, or, in the default namespace, every host except another namespace's own host, <other>.<server.baseDomain> or a name under it, while that namespace uses it; a host that another namespace's Route names is not excluded, and the longer matching path wins there. In the default namespace, an explicit defaultExposure refuses an empty host (HostRequired). A host that names another namespace, <other>.<server.baseDomain> or a name under it, is refused (HostReserved) while that namespace uses it, and always for a rule at or under /function."`
 	// Rules lists the path rules, matched longest-prefix-first. At least one is required.
-	Rules []RouteRule `json:"rules"`
+	Rules []RouteRule `json:"rules" doc:"The path rules, at least one; two rules may not have the same path and the same methods. Across all Routes, the longest matching path wins, and a rule with a host wins a tie. A Route serves all its rules or none: a missing backend or one conflicting rule keeps every rule off."`
 	// Auth is the edge authentication stance for this Route's rules (ADR-0113, F77); a rule's own auth beats it, and
 	// nil inherits the namespace default, else open (ADR-0241 Decision 8).
-	Auth *RouteAuth `json:"auth,omitempty"`
+	Auth *RouteAuth `json:"auth,omitempty" doc:"The edge authentication of the rules that set none. Unset uses the Namespace's spec.edgeDefaults.auth, else open."`
 	// Enabled, false, keeps the Route Disabled: it serves and claims nothing. Unset is true, except for a Route a
 	// Site or a Function owns in an explicit namespace (ADR-0241 Decision 6).
-	Enabled *bool `json:"enabled,omitempty"`
+	Enabled *bool `json:"enabled,omitempty" doc:"false turns the Route off: it serves nothing, leaves its paths to other Routes and reports Disabled. Unset is true, except on a Route that a Site or a Function owns in a namespace whose defaultExposure is explicit."`
 }
 
 // RouteAuth is the F77 auth stance on a Route.
@@ -58,12 +58,12 @@ func (AuthMode) Schema(huma.Registry) *huma.Schema {
 
 // RouteRule matches a path (+ optional methods) and names the backend Function.
 type RouteRule struct {
-	Path     string       `json:"path"`               // must begin "/"
-	PathType PathType     `json:"pathType,omitempty"` // Exact | Prefix (default Prefix)
-	Methods  []HTTPMethod `json:"methods,omitempty"`  // empty ⇒ all methods
-	Backend  RouteBackend `json:"backend"`
+	Path     string       `json:"path" doc:"The path the rule matches, starting with /. In the default namespace, a Route with no host may not have a rule at or under /function, the path that calls Functions by name (ReservedPath)."`                                                                                               // must begin "/"
+	PathType PathType     `json:"pathType,omitempty" doc:"Prefix, the default, matches path and every path under it by whole segments, so /api matches /api/x but not /apix; a trailing slash changes nothing, and / matches every path. Exact matches path alone. The backend receives the rest of the path, or / for an Exact rule."` // Exact | Prefix (default Prefix)
+	Methods  []HTTPMethod `json:"methods,omitempty" doc:"The request methods the rule matches; empty matches every method."`                                                                                                                                                                                                            // empty ⇒ all methods
+	Backend  RouteBackend `json:"backend" doc:"What the rule serves: set exactly one of function, static and site."`
 	// Auth is this rule's stance; nil is the Route's spec.auth (ADR-0241 Decision 8).
-	Auth *RouteAuth `json:"auth,omitempty"`
+	Auth *RouteAuth `json:"auth,omitempty" doc:"The edge authentication of this rule's requests. Unset uses the Route's auth, then the Namespace's spec.edgeDefaults.auth, then open."`
 }
 
 // RouteBackend is an exactly-one-of union (ADR-0120, F82, ADR-0242): a Function backend (the activator hop), a Static
@@ -72,9 +72,9 @@ type RouteRule struct {
 type RouteBackend struct {
 	// Function is the target Function in this Route's namespace. Optional since F82: a static-only
 	// rule sets no function (the `omitempty` reflects the union — exactly one arm is set).
-	Function ObjectName `json:"function,omitempty"`
+	Function ObjectName `json:"function,omitempty" doc:"A Function of the Route's namespace that the rule calls; the Route is not Ready (BackendNotFound) while it is missing. A request whose rest of the path lies under /health/ gets 404 and reaches no worker."`
 	// Static serves a Bucket-prefix static site directly through the edge (F82); nil ⇒ a function backend.
-	Static *StaticBackend `json:"static,omitempty"`
+	Static *StaticBackend `json:"static,omitempty" doc:"Serves the objects of a Bucket prefix directly, with no Function. It answers GET and HEAD, and 405 to any other method."`
 	// Site serves the current build of the named Site in this Route's namespace (ADR-0242).
 	Site ObjectName `json:"site,omitempty" doc:"A Site of this Route's namespace: the rule serves the build that Site serves now, and its config.json at <path>/config.json, following each new build. A Prefix rule; the Route may not carry the Site's own name."`
 }
@@ -86,15 +86,15 @@ type RouteBackend struct {
 type StaticBackend struct {
 	// Bucket is the Bucket in THIS Route's namespace whose objects are served (binding-as-grant:
 	// the Route reads only this declared Bucket; the reconciler validates it exists → BucketNotFound).
-	Bucket ObjectName `json:"bucket"`
+	Bucket ObjectName `json:"bucket" doc:"A Bucket of the Route's namespace whose objects the rule serves; the Route is not Ready (BucketNotFound) while it is missing."`
 	// Prefix is the key prefix within the Bucket that roots the site; it ends with "/" (e.g. "bi/") so it
 	// never also matches a sibling prefix; "" ⇒ the bucket root.
-	Prefix string `json:"prefix,omitempty"`
+	Prefix string `json:"prefix,omitempty" doc:"The key prefix in the Bucket that the rule serves, ending in /; empty serves the whole Bucket. A request reads the object at this prefix plus the rest of its path."`
 	// Index is the document served for "/" / a directory / (when SPA) a miss. Default "index.html".
-	Index string `json:"index,omitempty"`
+	Index string `json:"index,omitempty" doc:"The object, relative to prefix, served at the rule's root; index.html when empty. A path ending in / gets the file of the index's name in that folder. It may not start with /."`
 	// SPA, when true, serves Index (200) for any un-matched path so a client-side router owns routing;
 	// when false, an un-matched path is 404.
-	SPA bool `json:"spa,omitempty"`
+	SPA bool `json:"spa,omitempty" doc:"Serve the index, with 200, for a path that matches no object, so that a client-side router handles it; when false, such a path gets 404."`
 }
 
 // PathType selects exact vs segment-prefix matching.
@@ -143,7 +143,7 @@ type RouteStatus struct {
 	Status `json:",inline"`
 	// Host is the host the Route claims: spec.host, else its namespace host, else "" (any host but reserved ones)
 	// (ADR-0240).
-	Host string `json:"host,omitempty"`
+	Host string `json:"host,omitempty" doc:"The host the Route claims, whether or not it is Ready: spec.host in lower case without a port or a trailing dot, else the namespace host. It is empty for any host, as for a Route of the default namespace with no host, and while a backend is missing."`
 }
 
 // GroupVersionKind returns the constant GVK for Route.

@@ -43,29 +43,29 @@ const (
 // PrincipalRef names the grantee: a typed {kind, name}. This is the "principal side is no longer
 // Function-only" generalization (ADR-0135/0136).
 type PrincipalRef struct {
-	Kind PrincipalKind `json:"kind" enum:"Function,Identity"`
-	Name ObjectName    `json:"name"`
+	Kind PrincipalKind `json:"kind" enum:"Function,Identity" doc:"The kind of the principal: a Function, or an Identity for a caller outside funcd."`
+	Name ObjectName    `json:"name" doc:"The principal's name, in the RolesAssignment's namespace. funcd does not check that it exists."`
 }
 
 // RoleRef names the role: a built-in name or a custom Role.
 type RoleRef struct {
-	Kind RoleRefKind `json:"kind" enum:"BuiltinRole,Role"`
-	Name string      `json:"name"`
+	Kind RoleRefKind `json:"kind" enum:"BuiltinRole,Role" doc:"Where the role comes from: BuiltinRole for one of funcd's built-in roles, Role for a Role of the RolesAssignment's namespace."`
+	Name string      `json:"name" doc:"The role's name. A built-in role is one of Blob Data Reader, Blob Data Writer, KV Data Reader, KV Data Writer, SQL Data Reader, SQL Data Writer, Lake Query Reader, Lake Contributor, Function Invoker, Reader, Contributor and Owner; the last three cover Bucket and KV data only. A name that matches no role grants nothing."`
 }
 
 // ScopeRef names the scope: a namespace, a bucket prefix, or a kv store. Name is the scope-relative name
 // ("<bucket>/<prefix>" for BucketPrefix; the namespace is the assignment's own namespace).
 type ScopeRef struct {
-	Kind ScopeKind `json:"kind" enum:"Namespace,BucketPrefix,KVStore,Lake,SQLDatabase"`
-	Name string    `json:"name,omitempty"`
+	Kind ScopeKind `json:"kind" enum:"Namespace,BucketPrefix,KVStore,Lake,SQLDatabase" doc:"What the grant covers: with Namespace, every resource of the RolesAssignment's namespace; with another kind, the one resource that name gives, in that namespace."`
+	Name string    `json:"name,omitempty" doc:"The resource for each kind: <bucket>/<prefix> for one prefix of a Bucket, <store> for every table of a KVStore or <store>/<table> for one, <lake> for a Lake and <database> for a SQLDatabase. A Namespace scope covers the whole namespace, whatever its name."`
 }
 
 // AssignmentEntry is one (principal, role, scope) grant. Principal/Scope inherit the RolesAssignment's
 // top-level defaults when omitted.
 type AssignmentEntry struct {
-	Principal *PrincipalRef `json:"principal,omitempty"`
-	RoleRef   RoleRef       `json:"roleRef"`
-	Scope     *ScopeRef     `json:"scope,omitempty"`
+	Principal *PrincipalRef `json:"principal,omitempty" doc:"Who the entry grants its role to. When unset, spec.principal."`
+	RoleRef   RoleRef       `json:"roleRef" doc:"The role the entry grants."`
+	Scope     *ScopeRef     `json:"scope,omitempty" doc:"Where the entry's role applies. When unset, spec.scope."`
 }
 
 // RolesAssignment grants MANY roles in one object (ADR-0136, FEAT-0008/F101): each entry is a
@@ -80,9 +80,9 @@ type RolesAssignment struct {
 
 // RolesAssignmentSpec carries the default principal/scope + the assignment entries.
 type RolesAssignmentSpec struct {
-	Principal   *PrincipalRef     `json:"principal,omitempty"`
-	Scope       *ScopeRef         `json:"scope,omitempty"`
-	Assignments []AssignmentEntry `json:"assignments"`
+	Principal   *PrincipalRef     `json:"principal,omitempty" doc:"The principal of each entry that sets none."`
+	Scope       *ScopeRef         `json:"scope,omitempty" doc:"The scope of each entry that sets none."`
+	Assignments []AssignmentEntry `json:"assignments" doc:"The grants, at least one: each entry grants one role to a principal at a scope. funcd refuses an entry that sets no principal while spec.principal is unset, and likewise for the scope."`
 }
 
 // GroupVersionKind returns the constant GVK for RolesAssignment.

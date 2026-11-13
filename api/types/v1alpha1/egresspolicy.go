@@ -49,23 +49,23 @@ type EgressPolicy struct {
 // EgressPolicySpec is an allow-list of egress rules, optionally scoped to named Functions.
 type EgressPolicySpec struct {
 	// Rules is the allow-list; each grants egress to its `to` on its `ports`. At least one required.
-	Rules []EgressRule `json:"rules"`
+	Rules []EgressRule `json:"rules" doc:"One to 64 rules, each allowing outbound TCP connections; the rules of every EgressPolicy of the namespace add up. With server.network.egress on, on Linux with containerd, a connection that nothing allows is refused; otherwise the rules change nothing."`
 	// AppliesTo scopes every rule to these Functions (by name, this namespace); empty ⇒ the whole namespace.
-	AppliesTo []ObjectName `json:"appliesTo,omitempty"`
+	AppliesTo []ObjectName `json:"appliesTo,omitempty" doc:"The Functions of the namespace, by name, that the rules apply to; empty applies them to every Function of the namespace."`
 }
 
 // EgressRule permits egress to a destination set on a port set.
 type EgressRule struct {
 	// To is the destination match; at least one of domains/cidrs is required (Validate enforces).
-	To EgressTo `json:"to"`
+	To EgressTo `json:"to" doc:"Where the rule allows connections to: at least one domain or CIDR, and at most 64 of them together. A connection matches the rule when it goes to one of them on one of the rule's ports."`
 	// Ports are the destination ports (1..65535); empty ⇒ any port to the matched destination.
-	Ports []int `json:"ports,omitempty"`
+	Ports []int `json:"ports,omitempty" doc:"The destination ports the rule allows, each 1 to 65535, at most 32; empty allows every port."`
 }
 
 // EgressTo is a destination match: SNI/Host domains (wildcard "*.x.com" ok) and/or CIDRs.
 type EgressTo struct {
-	Domains []string `json:"domains,omitempty"`
-	CIDRs   []string `json:"cidrs,omitempty"`
+	Domains []string `json:"domains,omitempty" doc:"Host names in lower case: exact, such as api.x.com, or a wildcard, such as *.x.com, which matches every name under x.com but not x.com. A connection matches a name only at an address that the worker's own lookup of it through funcd returned, within the answer's TTL, and never at an address that is not globally reachable, such as a private one, which needs a cidrs entry."`
+	CIDRs   []string `json:"cidrs,omitempty" doc:"Address ranges, such as 10.0.0.0/8, that the dialled address must fall in. A host reached by name needs a domains entry too, since funcd answers a worker's lookup only for a name that a domain rule applying to it allows."`
 }
 
 // GroupVersionKind returns the constant GVK for EgressPolicy.

@@ -130,7 +130,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `data` | map of string to string |  |
+| `data` | map of string to string | Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through. |
 | `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as &lt;name&gt;-&lt;hash of data&gt;, and the config of each part that names it is set to that stored name. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 
@@ -211,7 +211,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `data` | map of string to string |  |
+| `data` | map of string to string | Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through. |
 | `name` | string, a DNS-1123 label | The ConfigMap's name, at most 52 characters. It is stored as &lt;name&gt;-&lt;hash of data&gt;, and the config of each part that names it is set to that stored name. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 

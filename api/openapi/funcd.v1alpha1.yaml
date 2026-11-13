@@ -369,6 +369,7 @@ components:
             properties:
               encryption:
                 $ref: "#/components/schemas/BackupEncryption"
+                description: "The age recipients that seal the member files of each Backup. It is required: a schedule with fewer than 2 recipients is refused."
               name:
                 description: The object's name. It takes the namespace and resource group of the resource that declares it.
                 maxLength: 63
@@ -376,6 +377,7 @@ components:
                 pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                 type: string
               paused:
+                description: While true, the schedule creates no Backup and rpoRisk stays false; a Backup created by hand still runs. Once it is false again, the slots missed meanwhile collapse into one Backup.
                 type: boolean
               ref:
                 description: The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field.
@@ -384,14 +386,19 @@ components:
                 pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                 type: string
               schedule:
+                description: "The cron slots at which the schedule creates a Backup: 5 fields (minute hour day-of-month month day-of-week) or a macro such as @daily, in timeZone. Slots missed during downtime, a pause or a hold collapse into one Backup, and a slot that comes while one of the schedule's Backups is Pending or Running creates none."
                 type: string
               scope:
                 $ref: "#/components/schemas/BackupScope"
+                description: "The stores each Backup copies, in one form: the lists kvStores, buckets, lakes, databases and volumes, or app, or resourceGroup. funcd resolves it at each run: a member or App it names that is missing then fails the Backup with reason MemberNotFound, and a scope of more than workloadBackup.maxCopyMembers members fails it with no copy written. In an App's spec.backupSchedules entry, an empty scope backs up that App."
               target:
                 $ref: "#/components/schemas/BackupTarget"
+                description: "Where each Backup writes its copy: an S3 bucket and the Secret of its write key."
               timeZone:
+                description: The IANA time zone of schedule, such as Europe/Paris; UTC when empty.
                 type: string
               ttl:
+                description: "How long funcd keeps each Backup's record after its creation; 0s or unset means 720h. Only the record goes: the copy stays on the target until the target's own lifecycle rule expires it. A Backup may set a shorter spec.ttl, never a longer one."
                 pattern: ^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$
                 patternDescription: "a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms)"
                 type: string
@@ -444,6 +451,7 @@ components:
               data:
                 additionalProperties:
                   type: string
+                description: "Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through."
                 type: object
               name:
                 description: The ConfigMap's name, at most 52 characters. It is stored as <name>-<hash of data>, and the config of each part that names it is set to that stored name.
@@ -544,6 +552,7 @@ components:
                     data:
                       additionalProperties:
                         type: string
+                      description: "Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through."
                       type: object
                     name:
                       description: The ConfigMap's name, at most 52 characters. It is stored as <name>-<hash of data>, and the config of each part that names it is set to that stored name.
@@ -665,6 +674,7 @@ components:
                           data:
                             additionalProperties:
                               type: string
+                            description: "Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through."
                             type: object
                           name:
                             description: The ConfigMap's name, at most 52 characters. It is stored as <name>-<hash of data>, and the config of each part that names it is set to that stored name.
@@ -951,6 +961,7 @@ components:
                     data:
                       additionalProperties:
                         type: string
+                      description: "Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through."
                       type: object
                     name:
                       description: The ConfigMap's name, at most 52 characters. It is stored as <name>-<hash of data>, and the config of each part that names it is set to that stored name.
@@ -1038,9 +1049,12 @@ components:
             properties:
               auth:
                 $ref: "#/components/schemas/RouteAuth"
+                description: The edge authentication of the rules that set none. Unset uses the Namespace's spec.edgeDefaults.auth, else open.
               enabled:
+                description: "false turns the Route off: it serves nothing, leaves its paths to other Routes and reports Disabled. Unset is true, except on a Route that a Site or a Function owns in a namespace whose defaultExposure is explicit."
                 type: boolean
               host:
+                description: The host the rules answer on, matched in lower case and without a port or a trailing dot. Empty is the namespace host, <namespace>.<server.baseDomain>, or, in the default namespace, every host except another namespace's own host, <other>.<server.baseDomain> or a name under it, while that namespace uses it; a host that another namespace's Route names is not excluded, and the longer matching path wins there. In the default namespace, an explicit defaultExposure refuses an empty host (HostRequired). A host that names another namespace, <other>.<server.baseDomain> or a name under it, is refused (HostReserved) while that namespace uses it, and always for a rule at or under /function.
                 type: string
               name:
                 description: The object's name. It takes the namespace and resource group of the resource that declares it.
@@ -1055,6 +1069,7 @@ components:
                 pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                 type: string
               rules:
+                description: "The path rules, at least one; two rules may not have the same path and the same methods. Across all Routes, the longest matching path wins, and a rule with a host wins a tie. A Route serves all its rules or none: a missing backend or one conflicting rule keeps every rule off."
                 items:
                   $ref: "#/components/schemas/RouteRule"
                 type:
@@ -1134,7 +1149,9 @@ components:
             properties:
               bindings:
                 $ref: "#/components/schemas/SiteBindings"
+                description: "Where the Site stores and serves its bundles: one Bucket prefix, in blob."
               buckets:
+                description: "Exactly the one Bucket that bindings.blob names, never with deletion: delete; a Site in an App sets none and refers to that Bucket by ref. By name, the Site creates the Bucket with that prefix, without an owner, and the prefixes listed here, which may not repeat it; a Bucket of that name that the Site did not create leaves the Site not Ready. By ref, the Site is Ready only once the Bucket holds that prefix without an owner, and it never changes the Bucket."
                 items:
                   additionalProperties: false
                   properties:
@@ -1171,11 +1188,14 @@ components:
                   - array
                   - "null"
               image:
+                description: "The OCI artifact of the Site's static files, which funcdctl push --site makes, named by a tag or a digest. funcd resolves a tag to a digest when the spec changes, so a tag that moves after a deploy changes nothing until the spec changes again. Each deployed bundle stays in the Bucket, so pointing image back at an earlier one serves it again without an upload. A bundle with a _runtime entry at its root does not deploy: funcd keeps that name for the files it generates."
                 type: string
               index:
+                description: The bundle's file served for /, by its file name for any other path that ends in /, and with spa for a path that matches no file. It is a path in the bundle, with no leading /; a bundle without it does not deploy, and the previous one keeps serving. Empty means site.defaultIndex, index.html by default.
                 type: string
               ingress:
                 $ref: "#/components/schemas/SiteIngress"
+                description: "Where the edge serves the Site: its own address and its rules, through a Route of the Site's name that the Site writes. A Route of that name that the Site does not own leaves the Site not Ready."
               name:
                 description: The object's name. It takes the namespace and resource group of the resource that declares it.
                 maxLength: 63
@@ -1192,6 +1212,7 @@ components:
                 $ref: "#/components/schemas/SiteRuntimeConfig"
                 description: "Values each deployment sets without a rebuild, served as config.json beside the bundle. The file is public: never put a secret in it."
               spa:
+                description: "Serve the index, with status 200, for a path under the bundle's path that matches no file, so that a client-side router handles it. ingress.rules never fall back to it: a missing file there is 404."
                 type: boolean
             type: object
           type:
@@ -1289,6 +1310,7 @@ components:
                     data:
                       additionalProperties:
                         type: string
+                      description: "Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through."
                       type: object
                     name:
                       description: The ConfigMap's name, at most 52 characters. It is stored as <name>-<hash of data>, and the config of each part that names it is set to that stored name.
@@ -1399,6 +1421,7 @@ components:
                           data:
                             additionalProperties:
                               type: string
+                            description: "Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through."
                             type: object
                           name:
                             description: The ConfigMap's name, at most 52 characters. It is stored as <name>-<hash of data>, and the config of each part that names it is set to that stored name.
@@ -1650,10 +1673,13 @@ components:
       properties:
         principal:
           $ref: "#/components/schemas/PrincipalRef"
+          description: Who the entry grants its role to. When unset, spec.principal.
         roleRef:
           $ref: "#/components/schemas/RoleRef"
+          description: The role the entry grants.
         scope:
           $ref: "#/components/schemas/ScopeRef"
+          description: Where the entry's role applies. When unset, spec.scope.
       required:
         - roleRef
       type: object
@@ -1680,6 +1706,7 @@ components:
       additionalProperties: false
       properties:
         recipients:
+          description: "The age recipients, each entry one recipient: at least 2 distinct ones, such as an owner's and a recovery one, all X25519 or all hybrid (age1pq1). Every member file of each Backup is sealed to all of them, so the identity of any one opens it. The copy's manifest.yaml, which names the members, their files' sizes and these recipients' fingerprints, is not sealed."
           items:
             type: string
           type:
@@ -1692,16 +1719,20 @@ components:
       additionalProperties: false
       properties:
         bytes:
+          description: The size of the member's sealed copy on the target, in bytes.
           format: int64
           type: integer
         kind:
+          description: "The member's kind: KVStore, Bucket, Lake, SQLDatabase, or Function for a Function's local volume."
           type: string
         name:
+          description: "The member's name: the store's, or for a volume, its Function's."
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         volume:
+          description: With kind Function, the name of the Function's local volume that the member is.
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -1734,17 +1765,24 @@ components:
       properties:
         encryption:
           $ref: "#/components/schemas/BackupEncryption"
+          description: "The age recipients that seal the member files of each Backup. It is required: a schedule with fewer than 2 recipients is refused."
         paused:
+          description: While true, the schedule creates no Backup and rpoRisk stays false; a Backup created by hand still runs. Once it is false again, the slots missed meanwhile collapse into one Backup.
           type: boolean
         schedule:
+          description: "The cron slots at which the schedule creates a Backup: 5 fields (minute hour day-of-month month day-of-week) or a macro such as @daily, in timeZone. Slots missed during downtime, a pause or a hold collapse into one Backup, and a slot that comes while one of the schedule's Backups is Pending or Running creates none."
           type: string
         scope:
           $ref: "#/components/schemas/BackupScope"
+          description: "The stores each Backup copies, in one form: the lists kvStores, buckets, lakes, databases and volumes, or app, or resourceGroup. funcd resolves it at each run: a member or App it names that is missing then fails the Backup with reason MemberNotFound, and a scope of more than workloadBackup.maxCopyMembers members fails it with no copy written. In an App's spec.backupSchedules entry, an empty scope backs up that App."
         target:
           $ref: "#/components/schemas/BackupTarget"
+          description: "Where each Backup writes its copy: an S3 bucket and the Secret of its write key."
         timeZone:
+          description: The IANA time zone of schedule, such as Europe/Paris; UTC when empty.
           type: string
         ttl:
+          description: "How long funcd keeps each Backup's record after its creation; 0s or unset means 720h. Only the record goes: the copy stays on the target until the target's own lifecycle rule expires it. A Backup may set a shorter spec.ttl, never a longer one."
           pattern: ^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$
           patternDescription: "a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms)"
           type: string
@@ -1757,6 +1795,7 @@ components:
       additionalProperties: false
       properties:
         active:
+          description: A Backup of the schedule that is Pending or Running, empty when none is.
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -1769,16 +1808,19 @@ components:
             - array
             - "null"
         earliestRestorePoint:
+          description: "When the oldest of the schedule's Succeeded Backups that still exist started: the oldest point a Restore can go back to."
           format: date-time
           pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
           patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
           type: string
         lastScheduleTime:
+          description: The newest slot the schedule has taken, whether it created a Backup or, finding one of its Backups still Pending or Running, created none.
           format: date-time
           pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
           patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
           type: string
         lastSuccessTime:
+          description: When the newest of the schedule's Succeeded Backups that still exist completed.
           format: date-time
           pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
           patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
@@ -1799,17 +1841,20 @@ components:
             - Terminating
           type: string
         rpoRisk:
+          description: "True when the schedule has fallen behind: the first slot after the start of its newest Succeeded Backup, or after its creation when there is none, has passed with that slot's Backup Failed or missing, or a second slot has passed. It stays false while the schedule is paused. funcd logs workload backup rpo at risk when it turns true."
           type: boolean
       type: object
     BackupScope:
       additionalProperties: false
       properties:
         app:
+          description: "An App of the namespace: each Backup copies the stores of its kv, buckets, lakes and sql entries, ref entries included, and the local volumes of the Functions it declares. Set it alone, with no other scope field."
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         buckets:
+          description: "Buckets of the namespace to copy, by name, each once. A Bucket's copy holds none of the data of the Lakes located on its prefixes: each of them is copied as a member of its own."
           items:
             maxLength: 63
             minLength: 1
@@ -1819,6 +1864,7 @@ components:
             - array
             - "null"
         databases:
+          description: SQLDatabases of the namespace to copy, by name, each once. A database whose engine is not Ready fails the Backup with reason EngineNotReady.
           items:
             maxLength: 63
             minLength: 1
@@ -1828,6 +1874,7 @@ components:
             - array
             - "null"
         kvStores:
+          description: KVStores of the namespace to copy, by name, each once.
           items:
             maxLength: 63
             minLength: 1
@@ -1837,6 +1884,7 @@ components:
             - array
             - "null"
         lakes:
+          description: Lakes of the namespace to copy, by name, each once. A Lake located on a prefix of a listed Bucket is copied without being named here. A Lake that deletes files during each of a run's copies, as a busy one may, fails the Backup with reason LakeUnstable, and so does a Bucket that brings it in.
           items:
             maxLength: 63
             minLength: 1
@@ -1846,11 +1894,13 @@ components:
             - array
             - "null"
         resourceGroup:
+          description: "A resource group of the namespace: each Backup copies its KVStores, Buckets, Lakes and SQLDatabases, but not its Functions' local volumes. Set it alone, with no other scope field."
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         volumes:
+          description: Local volumes of the namespace's Functions to copy, each as <function>/<name>, both DNS-1123 labels, and listed once. A volume is read live, file by file, so its copy is not a single point in time.
           items:
             type: string
           type:
@@ -1861,11 +1911,13 @@ components:
       additionalProperties: false
       properties:
         schedule:
+          description: "The BackupSchedule of the namespace whose scope, target and recipients the run uses, read when the run starts: a schedule gone by then fails the Backup with reason ScheduleNotFound. The schedule's status counts every Backup that names it."
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         ttl:
+          description: How long funcd keeps the record after its creation; 0s or unset means the schedule's ttl, or 720h when the schedule does not exist. A ttl longer than the schedule's is refused.
           pattern: ^([0-9]+h([0-9]+m)?([0-9]+s)?([0-9]+ms)?|[0-9]+m([0-9]+s)?([0-9]+ms)?|[0-9]+s([0-9]+ms)?|[0-9]+ms)$
           patternDescription: "a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms)"
           type: string
@@ -1876,6 +1928,7 @@ components:
       additionalProperties: false
       properties:
         completionTime:
+          description: When the run ended, Succeeded or Failed.
           format: date-time
           pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
           patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
@@ -1888,11 +1941,13 @@ components:
             - array
             - "null"
         expireTime:
+          description: "When funcd deletes this record, once the run has ended: the Backup's creation plus its spec.ttl, else plus its schedule's ttl. The copy on the target stays until the target's own lifecycle rule removes it."
           format: date-time
           pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
           patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
           type: string
         members:
+          description: "The stores the copy holds, which a Restore names as they are listed here. A Bucket's member holds none of the data of the Lakes located on its prefixes: each of them is a member of its own."
           items:
             $ref: "#/components/schemas/BackupMember"
           type:
@@ -1903,8 +1958,10 @@ components:
           format: int64
           type: integer
         path:
+          description: The copy's directory on the target, <namespace>/<backup>-<uid>/.
           type: string
         phase:
+          description: "Pending, then Running, then Succeeded or Failed, in one attempt: funcd does not retry a failed Backup. A Backup that was Running when funcd stopped ends at the next start, Succeeded with reason FoundOnTarget when its copy is whole on the target, else Failed with reason Interrupted."
           enum:
             - Pending
             - Running
@@ -1914,28 +1971,33 @@ components:
             - Cancelled
           type: string
         recipients:
+          description: Fingerprints of the age recipients the copy is sealed to, sorted. A Restore whose identity matches none of them fails, its message naming both sets of fingerprints. A Backup recorded with reason FoundOnTarget lists none.
           items:
             type: string
           type:
             - array
             - "null"
         startTime:
+          description: When the run began.
           format: date-time
           pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
           patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
           type: string
         target:
+          description: "The target URL the run wrote to: its schedule's spec.target.url at the time. A Restore reads the copy there."
           type: string
       type: object
     BackupTarget:
       additionalProperties: false
       properties:
         credentialsSecret:
+          description: "A Secret of the namespace with AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and, optionally, AWS_SESSION_TOKEN: the key each Backup writes with. It needs only put and list on the bucket."
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         url:
+          description: "The s3:// URL of the bucket that receives the copies, its options as query parameters, such as s3://backups?region=eu-west-3. The bucket of blob.target is refused, and another bucket on its endpoint is accepted with reason SameProvider on the schedule's Ready condition: one failure of that provider takes both. The bucket must accept a create-if-absent put (If-None-Match: *): a bucket that refuses it fails each Backup with reason TargetUnconditional."
           type: string
       required:
         - url
@@ -1967,11 +2029,13 @@ components:
       additionalProperties: false
       properties:
         bucket:
+          description: The Bucket that holds the Site's bundles, in the Site's namespace.
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         prefix:
+          description: "The prefix of that Bucket under which the Site stores each bundle, at <prefix>/sha256-<hex>/, and the config.json that runtimeConfig generates. It cannot change once the Site exists: a new prefix needs a new Site."
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
       required:
@@ -2165,6 +2229,7 @@ components:
         data:
           additionalProperties:
             type: string
+          description: "Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through."
           type: object
       type: object
     DeadLetter:
@@ -2259,6 +2324,7 @@ components:
       additionalProperties: false
       properties:
         mode:
+          description: "authenticated admits only a caller whose token, sent as Authorization: Bearer or X-Api-Key, may get the namespace's Functions; others get 401 or 403, and every caller gets 401 while server.auth.edge is off. open, or empty, admits anyone."
           enum:
             - ""
             - authenticated
@@ -2270,6 +2336,7 @@ components:
       properties:
         auth:
           $ref: "#/components/schemas/EdgeAuth"
+          description: "The default edge authentication of the namespace's Routes and of its Functions' and Sites' own addresses, used where a rule, its Route and spec.ingress.auth set none; unset is open. It is a default, not a floor: a rule or a Route that sets open stays open."
       type: object
     EgressPolicy:
       additionalProperties: false
@@ -2292,6 +2359,7 @@ components:
       additionalProperties: false
       properties:
         appliesTo:
+          description: The Functions of the namespace, by name, that the rules apply to; empty applies them to every Function of the namespace.
           items:
             maxLength: 63
             minLength: 1
@@ -2301,6 +2369,7 @@ components:
             - array
             - "null"
         rules:
+          description: One to 64 rules, each allowing outbound TCP connections; the rules of every EgressPolicy of the namespace add up. With server.network.egress on, on Linux with containerd, a connection that nothing allows is refused; otherwise the rules change nothing.
           items:
             $ref: "#/components/schemas/EgressRule"
           type:
@@ -2313,6 +2382,7 @@ components:
       additionalProperties: false
       properties:
         ports:
+          description: The destination ports the rule allows, each 1 to 65535, at most 32; empty allows every port.
           items:
             format: int64
             type: integer
@@ -2321,6 +2391,7 @@ components:
             - "null"
         to:
           $ref: "#/components/schemas/EgressTo"
+          description: "Where the rule allows connections to: at least one domain or CIDR, and at most 64 of them together. A connection matches the rule when it goes to one of them on one of the rule's ports."
       required:
         - to
       type: object
@@ -2328,12 +2399,14 @@ components:
       additionalProperties: false
       properties:
         cidrs:
+          description: Address ranges, such as 10.0.0.0/8, that the dialled address must fall in. A host reached by name needs a domains entry too, since funcd answers a worker's lookup only for a name that a domain rule applying to it allows.
           items:
             type: string
           type:
             - array
             - "null"
         domains:
+          description: "Host names in lower case: exact, such as api.x.com, or a wildcard, such as *.x.com, which matches every name under x.com but not x.com. A connection matches a name only at an address that the worker's own lookup of it through funcd returned, within the answer's TTL, and never at an address that is not globally reachable, such as a private one, which needs a cidrs entry."
           items:
             type: string
           type:
@@ -2743,6 +2816,7 @@ components:
               data:
                 additionalProperties:
                   type: string
+                description: "Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through."
                 type: object
               name:
                 description: The ConfigMap's name, at most 52 characters. It is stored as <name>-<hash of data>, and the config of each part that names it is set to that stored name.
@@ -2864,6 +2938,7 @@ components:
                     data:
                       additionalProperties:
                         type: string
+                      description: "Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through."
                       type: object
                     name:
                       description: The ConfigMap's name, at most 52 characters. It is stored as <name>-<hash of data>, and the config of each part that names it is set to that stored name.
@@ -3223,14 +3298,17 @@ components:
       additionalProperties: false
       properties:
         credentialSecretName:
+          description: "The Secret, in the Identity's namespace, that funcd writes the credential to and deletes with the Identity: the S3 key pair as accessKeyId and secretAccessKey, and the Lake token as lakeToken. Empty means the Identity's name. funcd leaves alone a Secret of that name that no Identity of this name controls, and the Identity then stays Pending with reason SecretNotOwned; a Secret left by a deleted Identity of the same name is issued again."
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         rotate:
+          description: "Raise it above status.observedRotate to rotate the credential: funcd writes a new secretAccessKey and lakeToken under the same access key id, and the old ones stop authenticating, with no overlap."
           format: int64
           type: integer
         type:
+          description: "What the Identity stands for: external, a caller outside funcd that authenticates with the credential funcd issues. The credential grants nothing: a RolesAssignment or a Policy grants the Identity its access."
           enum:
             - external
           type: string
@@ -3241,6 +3319,7 @@ components:
       additionalProperties: false
       properties:
         accessKeyId:
+          description: The access key id of the issued key pair, also in the Secret. funcd derives it from the Identity's namespace and name, so it stays the same when the credential rotates.
           type: string
         conditions:
           description: The conditions that explain the phase.
@@ -3254,6 +3333,7 @@ components:
           format: int64
           type: integer
         observedRotate:
+          description: "The spec.rotate value that funcd last acted on: a rotation is done once it equals spec.rotate."
           format: int64
           type: integer
         phase:
@@ -3590,6 +3670,7 @@ components:
               data:
                 additionalProperties:
                   type: string
+                description: "Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through."
                 type: object
               name:
                 description: The ConfigMap's name, at most 52 characters. It is stored as <name>-<hash of data>, and the config of each part that names it is set to that stored name.
@@ -3814,6 +3895,7 @@ components:
       additionalProperties: false
       properties:
         defaultExposure:
+          description: "Whether the namespace's Functions and Sites answer at their own address, such as /function/<name>, while their spec.ingress.enabled is unset: implicit, or empty, turns it on, and explicit turns it off. Routes you write and Routes an App declares stay on, though in the default namespace explicit refuses one with no host (HostRequired)."
           enum:
             - ""
             - implicit
@@ -3821,11 +3903,14 @@ components:
           type: string
         edgeDefaults:
           $ref: "#/components/schemas/EdgeDefaults"
+          description: The namespace's edge defaults, which apply where a Route or a Function's or Site's spec.ingress sets no value of its own.
         volumeBudget:
+          description: "The most volume space the namespace's Functions may reserve: each local volume's size from apply until the volume is removed, and each worker's emptyDir while the worker exists. Apply refuses a local volume that does not fit (VolumeBudget), and a worker whose emptyDir does not fit is not created. Set volumeBudget or volumeBudgetBytes, not both; neither, or 0, means no budget."
           pattern: ^[0-9]{1,15}((Ki|Mi|Gi|Ti)B?)?$
           patternDescription: "a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB)"
           type: string
         volumeBudgetBytes:
+          description: The same budget as volumeBudget, as a number of bytes. Set volumeBudget or volumeBudgetBytes, not both; 0 means no budget.
           format: int64
           minimum: 0
           type: integer
@@ -4074,6 +4159,7 @@ components:
       additionalProperties: false
       properties:
         cedar:
+          description: One or more Cedar permit or forbid statements, which apply with funcd's built-in rules to each request whose principal and resource are both in the Policy's namespace; a forbid wins over any permit. Each statement names one action funcd knows, such as kv::read, and its principal and resource scopes name only entity types funcd knows and, for a type with a namespace, ids that begin with the Policy's namespace and a slash. funcd refuses text that does not parse, holds no statement or breaks these rules.
           type: string
       required:
         - cedar
@@ -4108,11 +4194,13 @@ components:
       additionalProperties: false
       properties:
         kind:
+          description: "The kind of the principal: a Function, or an Identity for a caller outside funcd."
           enum:
             - Function
             - Identity
           type: string
         name:
+          description: The principal's name, in the RolesAssignment's namespace. funcd does not check that it exists.
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -4239,6 +4327,7 @@ components:
       additionalProperties: false
       properties:
         description:
+          description: Free text about the group; funcd does not read it.
           type: string
       type: object
     ResourceGroupStatus:
@@ -4300,22 +4389,28 @@ components:
       additionalProperties: false
       properties:
         as:
+          description: "The destination: the name of an existing, empty store of the member's kind in the namespace, or for a volume, of a Function whose local volume of that name is empty. A SQLDatabase is empty with no table, view, index or trigger and no Function binding it. Exactly one of as, asLocation and inPlace; a Lake takes asLocation or inPlace."
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         asLocation:
           $ref: "#/components/schemas/LakeLocation"
+          description: "For a Lake: the bucket and prefix that receive its copy, where no Lake is located and nothing is stored yet; a Lake located there afterwards reads it. The bucket must exist and may not be one this Restore restores in place. Exactly one of as, asLocation and inPlace."
         inPlace:
+          description: "Load the member back into its own store, replacing its data; a Function's volume is loaded only when empty or named by its Function's DataMissing condition. The Restore then needs update on the Namespace, as an admin has, and another in-place Restore of the namespace is refused until it ends. It first takes the export Backup that status.export names, which needs the restored Backup's schedule, then holds the namespace while it loads: a failed load keeps the hold until funcdctl hold release --namespace. Exactly one of as, asLocation and inPlace."
           type: boolean
         kind:
+          description: "The member's kind, as the Backup's status.members lists it: KVStore, Bucket, Lake, SQLDatabase, or Function for a Function's local volume."
           type: string
         name:
+          description: "The member's name, as the Backup's status.members lists it: the store's, or for a volume, its Function's. A member the copy does not hold fails the Restore with reason MemberNotFound."
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         volume:
+          description: With kind Function, which needs it, the name of the Function's local volume that the member is. Any other kind takes none.
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -4328,11 +4423,13 @@ components:
       additionalProperties: false
       properties:
         credentialsSecret:
+          description: "A Secret of the namespace with AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and, optionally, AWS_SESSION_TOKEN: the key the Restore reads the copy with, at the Backup's status.target. A read-only key is enough."
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         identitySecret:
+          description: "A Secret of the namespace whose AGE_IDENTITY key holds age identities, X25519 or hybrid and not passphrase-encrypted, one of them for a recipient the Backup is sealed to. It is required: a Restore without it is refused."
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -4344,11 +4441,13 @@ components:
       additionalProperties: false
       properties:
         backup:
+          description: The Backup to load, in the Restore's namespace. The Restore waits while it is Pending or Running, and fails with reason BackupNotReady when it is missing or Failed.
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         members:
+          description: "The members of the Backup to load, at least one and each once, loaded in this order after funcd has checked the whole copy and every destination. A Bucket's member leaves its destination's Lake prefixes as they are: to restore those Lakes, name them as members too."
           items:
             $ref: "#/components/schemas/RestoreMember"
           type:
@@ -4356,6 +4455,7 @@ components:
             - "null"
         source:
           $ref: "#/components/schemas/RestoreSource"
+          description: The Secrets that read the Backup's copy and open its seal.
       required:
         - backup
         - source
@@ -4365,6 +4465,7 @@ components:
       additionalProperties: false
       properties:
         completionTime:
+          description: When the Restore ended, Succeeded or Failed.
           format: date-time
           pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
           patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
@@ -4377,6 +4478,7 @@ components:
             - array
             - "null"
         export:
+          description: The Backup that an in-place Restore takes before it loads, <restore>-before, of the restored Backup's schedule. Empty when no member is in place.
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -4386,6 +4488,7 @@ components:
           format: int64
           type: integer
         phase:
+          description: Pending while it waits for its Backup and, in place, for its export; Running while it checks the whole copy and loads; then Succeeded or Failed. A Restore that was Running when funcd stopped ends Failed with reason Interrupted.
           enum:
             - Pending
             - Running
@@ -4395,6 +4498,7 @@ components:
             - Cancelled
           type: string
         startTime:
+          description: When the Restore turned Running, once its Backup and any export had Succeeded.
           format: date-time
           pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$
           patternDescription: an RFC3339 UTC timestamp with exactly 3 fractional digits (2026-10-07T20:03:35.965Z)
@@ -4524,11 +4628,13 @@ components:
       additionalProperties: false
       properties:
         kind:
+          description: "Where the role comes from: BuiltinRole for one of funcd's built-in roles, Role for a Role of the RolesAssignment's namespace."
           enum:
             - BuiltinRole
             - Role
           type: string
         name:
+          description: The role's name. A built-in role is one of Blob Data Reader, Blob Data Writer, KV Data Reader, KV Data Writer, SQL Data Reader, SQL Data Writer, Lake Query Reader, Lake Contributor, Function Invoker, Reader, Contributor and Owner; the last three cover Bucket and KV data only. A name that matches no role grants nothing.
           type: string
       required:
         - kind
@@ -4538,6 +4644,7 @@ components:
       additionalProperties: false
       properties:
         actions:
+          description: The actions the role grants, at least one, such as s3::read, kv::write or lake::query. An action that funcd does not know grants nothing.
           items:
             type: string
           type:
@@ -4567,6 +4674,7 @@ components:
       additionalProperties: false
       properties:
         assignments:
+          description: "The grants, at least one: each entry grants one role to a principal at a scope. funcd refuses an entry that sets no principal while spec.principal is unset, and likewise for the scope."
           items:
             $ref: "#/components/schemas/AssignmentEntry"
           type:
@@ -4574,8 +4682,10 @@ components:
             - "null"
         principal:
           $ref: "#/components/schemas/PrincipalRef"
+          description: The principal of each entry that sets none.
         scope:
           $ref: "#/components/schemas/ScopeRef"
+          description: The scope of each entry that sets none.
       required:
         - assignments
       type: object
@@ -4613,6 +4723,7 @@ components:
       additionalProperties: false
       properties:
         function:
+          description: A Function of the Route's namespace that the rule calls; the Route is not Ready (BackendNotFound) while it is missing. A request whose rest of the path lies under /health/ gets 404 and reaches no worker.
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -4625,15 +4736,19 @@ components:
           type: string
         static:
           $ref: "#/components/schemas/StaticBackend"
+          description: Serves the objects of a Bucket prefix directly, with no Function. It answers GET and HEAD, and 405 to any other method.
       type: object
     RouteRule:
       additionalProperties: false
       properties:
         auth:
           $ref: "#/components/schemas/RouteAuth"
+          description: The edge authentication of this rule's requests. Unset uses the Route's auth, then the Namespace's spec.edgeDefaults.auth, then open.
         backend:
           $ref: "#/components/schemas/RouteBackend"
+          description: "What the rule serves: set exactly one of function, static and site."
         methods:
+          description: The request methods the rule matches; empty matches every method.
           items:
             enum:
               - GET
@@ -4648,8 +4763,10 @@ components:
             - array
             - "null"
         path:
+          description: The path the rule matches, starting with /. In the default namespace, a Route with no host may not have a rule at or under /function, the path that calls Functions by name (ReservedPath).
           type: string
         pathType:
+          description: Prefix, the default, matches path and every path under it by whole segments, so /api matches /api/x but not /apix; a trailing slash changes nothing, and / matches every path. Exact matches path alone. The backend receives the rest of the path, or / for an Exact rule.
           enum:
             - ""
             - Prefix
@@ -4664,11 +4781,15 @@ components:
       properties:
         auth:
           $ref: "#/components/schemas/RouteAuth"
+          description: The edge authentication of the rules that set none. Unset uses the Namespace's spec.edgeDefaults.auth, else open.
         enabled:
+          description: "false turns the Route off: it serves nothing, leaves its paths to other Routes and reports Disabled. Unset is true, except on a Route that a Site or a Function owns in a namespace whose defaultExposure is explicit."
           type: boolean
         host:
+          description: The host the rules answer on, matched in lower case and without a port or a trailing dot. Empty is the namespace host, <namespace>.<server.baseDomain>, or, in the default namespace, every host except another namespace's own host, <other>.<server.baseDomain> or a name under it, while that namespace uses it; a host that another namespace's Route names is not excluded, and the longer matching path wins there. In the default namespace, an explicit defaultExposure refuses an empty host (HostRequired). A host that names another namespace, <other>.<server.baseDomain> or a name under it, is refused (HostReserved) while that namespace uses it, and always for a rule at or under /function.
           type: string
         rules:
+          description: "The path rules, at least one; two rules may not have the same path and the same methods. Across all Routes, the longest matching path wins, and a rule with a host wins a tie. A Route serves all its rules or none: a missing backend or one conflicting rule keeps every rule off."
           items:
             $ref: "#/components/schemas/RouteRule"
           type:
@@ -4688,6 +4809,7 @@ components:
             - array
             - "null"
         host:
+          description: "The host the Route claims, whether or not it is Ready: spec.host in lower case without a port or a trailing dot, else the namespace host. It is empty for any host, as for a Route of the default namespace with no host, and while a backend is missing."
           type: string
         observedGeneration:
           description: The generation of the spec that funcd last acted on.
@@ -4934,6 +5056,7 @@ components:
       additionalProperties: false
       properties:
         kind:
+          description: "What the grant covers: with Namespace, every resource of the RolesAssignment's namespace; with another kind, the one resource that name gives, in that namespace."
           enum:
             - Namespace
             - BucketPrefix
@@ -4942,6 +5065,7 @@ components:
             - SQLDatabase
           type: string
         name:
+          description: "The resource for each kind: <bucket>/<prefix> for one prefix of a Bucket, <store> for every table of a KVStore or <store>/<table> for one, <lake> for a Lake and <database> for a SQLDatabase. A Namespace scope covers the whole namespace, whatever its name."
           type: string
       required:
         - kind
@@ -5125,6 +5249,7 @@ components:
       additionalProperties: false
       properties:
         blob:
+          description: "Exactly one entry: the Bucket and the prefix that hold the Site's bundles."
           items:
             $ref: "#/components/schemas/BlobRef"
           type:
@@ -5152,6 +5277,7 @@ components:
           description: The edge path of the resource's own address, which begins with / and does not end with / unless it is /. Empty is / when host is set, else /function/<name>, /site/<name> or /lake/<name> by kind.
           type: string
         rules:
+          description: More Bucket prefixes the Site serves, each at its own path, with the bundle's host, auth and enabled. A rule may sit below the bundle's path, since the longest matching path wins, and a missing file there is 404, never the bundle's index.
           items:
             $ref: "#/components/schemas/SiteRule"
           type:
@@ -5162,13 +5288,16 @@ components:
       additionalProperties: false
       properties:
         bucket:
+          description: A Bucket of the Site's namespace, which buckets need not declare; empty means the Bucket of bindings.blob. While it does not exist, the Site's Route serves nothing, the bundle included, and the Site is not Ready.
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         path:
+          description: The path where the prefix is served, matching it and every path below it. It begins with / and may not be /, another rule's path or the bundle's path, which is ingress.path or its default. With runtimeConfig, it may not be the path of config.json either.
           type: string
         prefix:
+          description: "The prefix of that Bucket served at path: <path>/<key> reads the object <prefix>/<key> as the Bucket holds it, since nothing is copied."
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
       required:
@@ -5179,6 +5308,7 @@ components:
       additionalProperties: false
       properties:
         configMap:
+          description: A ConfigMap of the Site's namespace whose data adds keys to config.json; a key of values wins over the same key here. In an App, it may name one of the App's configMaps entries. While it does not exist, the Site is not Ready, though its bundle still deploys and its last config.json, if any, keeps serving; a change to it rewrites only the file.
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
@@ -5186,6 +5316,7 @@ components:
         values:
           additionalProperties:
             type: string
+          description: "Keys and the string values that config.json gives them; a key here wins over the same key from configMap. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. The file holds at most 32768 bytes (32 KiB): values that alone pass it are refused, and a file that configMap takes past it leaves the Site not Ready, serving its last config.json, if any."
           type: object
       type: object
     SiteSpec:
@@ -5193,7 +5324,9 @@ components:
       properties:
         bindings:
           $ref: "#/components/schemas/SiteBindings"
+          description: "Where the Site stores and serves its bundles: one Bucket prefix, in blob."
         buckets:
+          description: "Exactly the one Bucket that bindings.blob names, never with deletion: delete; a Site in an App sets none and refers to that Bucket by ref. By name, the Site creates the Bucket with that prefix, without an owner, and the prefixes listed here, which may not repeat it; a Bucket of that name that the Site did not create leaves the Site not Ready. By ref, the Site is Ready only once the Bucket holds that prefix without an owner, and it never changes the Bucket."
           items:
             additionalProperties: false
             properties:
@@ -5230,15 +5363,19 @@ components:
             - array
             - "null"
         image:
+          description: "The OCI artifact of the Site's static files, which funcdctl push --site makes, named by a tag or a digest. funcd resolves a tag to a digest when the spec changes, so a tag that moves after a deploy changes nothing until the spec changes again. Each deployed bundle stays in the Bucket, so pointing image back at an earlier one serves it again without an upload. A bundle with a _runtime entry at its root does not deploy: funcd keeps that name for the files it generates."
           type: string
         index:
+          description: The bundle's file served for /, by its file name for any other path that ends in /, and with spa for a path that matches no file. It is a path in the bundle, with no leading /; a bundle without it does not deploy, and the previous one keeps serving. Empty means site.defaultIndex, index.html by default.
           type: string
         ingress:
           $ref: "#/components/schemas/SiteIngress"
+          description: "Where the edge serves the Site: its own address and its rules, through a Route of the Site's name that the Site writes. A Route of that name that the Site does not own leaves the Site not Ready."
         runtimeConfig:
           $ref: "#/components/schemas/SiteRuntimeConfig"
           description: "Values each deployment sets without a rebuild, served as config.json beside the bundle. The file is public: never put a secret in it."
         spa:
+          description: "Serve the index, with status 200, for a path under the bundle's path that matches no file, so that a client-side router handles it. ingress.rules never fall back to it: a missing file there is 404."
           type: boolean
       required:
         - image
@@ -5248,6 +5385,7 @@ components:
       additionalProperties: false
       properties:
         bytes:
+          description: The total size, in bytes, of the files that objects counts.
           format: int64
           type: integer
         conditions:
@@ -5258,9 +5396,11 @@ components:
             - array
             - "null"
         digest:
+          description: The digest of the bundle that the Site's Route is set to serve, empty before the first deploy. A deploy that fails leaves the previous bundle's digest.
           pattern: ^sha256:[a-f0-9]{64}$
           type: string
         objects:
+          description: The number of that bundle's files in the Bucket, without the files funcd generates for the Site. It reads 0 while the Site cannot resolve its image or use its Bucket.
           format: int64
           type: integer
         observedGeneration:
@@ -5279,6 +5419,7 @@ components:
             - Terminating
           type: string
         servingPrefix:
+          description: "Where that bundle's files are in the Bucket: <prefix>/sha256-<hex>/, from the prefix of spec.bindings.blob and the digest."
           type: string
       type: object
     SizeQuota:
@@ -5299,15 +5440,19 @@ components:
       additionalProperties: false
       properties:
         bucket:
+          description: A Bucket of the Route's namespace whose objects the rule serves; the Route is not Ready (BucketNotFound) while it is missing.
           maxLength: 63
           minLength: 1
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         index:
+          description: The object, relative to prefix, served at the rule's root; index.html when empty. A path ending in / gets the file of the index's name in that folder. It may not start with /.
           type: string
         prefix:
+          description: The key prefix in the Bucket that the rule serves, ending in /; empty serves the whole Bucket. A request reads the object at this prefix plus the rest of its path.
           type: string
         spa:
+          description: Serve the index, with 200, for a path that matches no object, so that a client-side router handles it; when false, such a path gets 404.
           type: boolean
       required:
         - bucket
@@ -5738,6 +5883,7 @@ components:
               data:
                 additionalProperties:
                   type: string
+                description: "Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through."
                 type: object
               name:
                 description: The ConfigMap's name, at most 52 characters. It is stored as <name>-<hash of data>, and the config of each part that names it is set to that stored name.
@@ -5848,6 +5994,7 @@ components:
                     data:
                       additionalProperties:
                         type: string
+                      description: "Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through."
                       type: object
                     name:
                       description: The ConfigMap's name, at most 52 characters. It is stored as <name>-<hash of data>, and the config of each part that names it is set to that stored name.

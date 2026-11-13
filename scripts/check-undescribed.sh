@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# check-undescribed.sh <base>: fails when a list of fields or config keys without a description gained a line since
-# the commit <base> (ADR-0323 Decision 5, ADR-0324 Decision 2); an entry that is added, renamed or moved gets a doc tag
-# instead. A list that <base> does not hold yet passes, and a <base> it cannot read fails.
+# check-undescribed.sh <base>: fails when the list of config keys without a description gained a line since the commit
+# <base> (ADR-0324 Decision 2); a key that is added, renamed or moved gets a doc tag instead. A list that <base> does
+# not hold yet passes, and a <base> it cannot read fails.
 set -euo pipefail
 export LC_ALL=C
-lists=(internal/controlplane/kindref/testdata/undescribed.txt internal/reference/testdata/undescribed-config.txt)
+lists=(internal/reference/testdata/undescribed-config.txt)
 base=${1:?usage: check-undescribed.sh <base commit>}
 if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
 	echo "check-undescribed: cannot read the base commit ${base}" >&2

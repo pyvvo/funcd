@@ -114,7 +114,7 @@ jobs:
           key: go-${{ runner.os }}-${{ hashFiles('go.sum') }}
           restore-keys: go-${{ runner.os }}-
 
-      - name: Check that the list of fields without a description does not grow (ADR-0323)
+      - name: Check that the list of config keys without a description does not grow (ADR-0324)
         if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}

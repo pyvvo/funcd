@@ -33,13 +33,13 @@ type BackupSchedule struct {
 // BackupScheduleSpec is the definition (Decision 1): a cron schedule in a time zone (ADR-0211), the Backups' ttl, the
 // scope, the target and the recipients.
 type BackupScheduleSpec struct {
-	Schedule   string           `json:"schedule"`
-	TimeZone   string           `json:"timeZone,omitempty"`
-	TTL        Duration         `json:"ttl,omitempty"`
-	Paused     bool             `json:"paused,omitempty"`
-	Scope      BackupScope      `json:"scope"`
-	Target     BackupTarget     `json:"target"`
-	Encryption BackupEncryption `json:"encryption,omitempty"`
+	Schedule   string           `json:"schedule" doc:"The cron slots at which the schedule creates a Backup: 5 fields (minute hour day-of-month month day-of-week) or a macro such as @daily, in timeZone. Slots missed during downtime, a pause or a hold collapse into one Backup, and a slot that comes while one of the schedule's Backups is Pending or Running creates none."`
+	TimeZone   string           `json:"timeZone,omitempty" doc:"The IANA time zone of schedule, such as Europe/Paris; UTC when empty."`
+	TTL        Duration         `json:"ttl,omitempty" doc:"How long funcd keeps each Backup's record after its creation; 0s or unset means 720h. Only the record goes: the copy stays on the target until the target's own lifecycle rule expires it. A Backup may set a shorter spec.ttl, never a longer one."`
+	Paused     bool             `json:"paused,omitempty" doc:"While true, the schedule creates no Backup and rpoRisk stays false; a Backup created by hand still runs. Once it is false again, the slots missed meanwhile collapse into one Backup."`
+	Scope      BackupScope      `json:"scope" doc:"The stores each Backup copies, in one form: the lists kvStores, buckets, lakes, databases and volumes, or app, or resourceGroup. funcd resolves it at each run: a member or App it names that is missing then fails the Backup with reason MemberNotFound, and a scope of more than workloadBackup.maxCopyMembers members fails it with no copy written. In an App's spec.backupSchedules entry, an empty scope backs up that App."`
+	Target     BackupTarget     `json:"target" doc:"Where each Backup writes its copy: an S3 bucket and the Secret of its write key."`
+	Encryption BackupEncryption `json:"encryption,omitempty" doc:"The age recipients that seal the member files of each Backup. It is required: a schedule with fewer than 2 recipients is refused."`
 }
 
 // EffectiveTTL is spec.ttl, DefaultBackupTTL when unset.
@@ -53,36 +53,36 @@ func (s BackupScheduleSpec) EffectiveTTL() Duration {
 // BackupScope names the members in one form (Decision 2): names, an App, or a ResourceGroup. In each form a Bucket brings in
 // the Lakes on its prefixes as their own members, since its copy holds none of their data (ADR-0312).
 type BackupScope struct {
-	KVStores  []ObjectName `json:"kvStores,omitempty"`
-	Buckets   []ObjectName `json:"buckets,omitempty"`
-	Lakes     []ObjectName `json:"lakes,omitempty"`
-	Databases []ObjectName `json:"databases,omitempty"`
+	KVStores  []ObjectName `json:"kvStores,omitempty" doc:"KVStores of the namespace to copy, by name, each once."`
+	Buckets   []ObjectName `json:"buckets,omitempty" doc:"Buckets of the namespace to copy, by name, each once. A Bucket's copy holds none of the data of the Lakes located on its prefixes: each of them is copied as a member of its own."`
+	Lakes     []ObjectName `json:"lakes,omitempty" doc:"Lakes of the namespace to copy, by name, each once. A Lake located on a prefix of a listed Bucket is copied without being named here. A Lake that deletes files during each of a run's copies, as a busy one may, fails the Backup with reason LakeUnstable, and so does a Bucket that brings it in."`
+	Databases []ObjectName `json:"databases,omitempty" doc:"SQLDatabases of the namespace to copy, by name, each once. A database whose engine is not Ready fails the Backup with reason EngineNotReady."`
 	// Volumes are local Function volumes, each "<function>/<name>" (ADR-0262 Decision 11).
-	Volumes       []string          `json:"volumes,omitempty"`
-	App           ObjectName        `json:"app,omitempty"`
-	ResourceGroup ResourceGroupName `json:"resourceGroup,omitempty"`
+	Volumes       []string          `json:"volumes,omitempty" doc:"Local volumes of the namespace's Functions to copy, each as <function>/<name>, both DNS-1123 labels, and listed once. A volume is read live, file by file, so its copy is not a single point in time."`
+	App           ObjectName        `json:"app,omitempty" doc:"An App of the namespace: each Backup copies the stores of its kv, buckets, lakes and sql entries, ref entries included, and the local volumes of the Functions it declares. Set it alone, with no other scope field."`
+	ResourceGroup ResourceGroupName `json:"resourceGroup,omitempty" doc:"A resource group of the namespace: each Backup copies its KVStores, Buckets, Lakes and SQLDatabases, but not its Functions' local volumes. Set it alone, with no other scope field."`
 }
 
 // BackupTarget is an s3:// URL and the Secret of its write credential (Decision 6).
 type BackupTarget struct {
-	URL               string     `json:"url"`
-	CredentialsSecret ObjectName `json:"credentialsSecret"`
+	URL               string     `json:"url" doc:"The s3:// URL of the bucket that receives the copies, its options as query parameters, such as s3://backups?region=eu-west-3. The bucket of blob.target is refused, and another bucket on its endpoint is accepted with reason SameProvider on the schedule's Ready condition: one failure of that provider takes both. The bucket must accept a create-if-absent put (If-None-Match: *): a bucket that refuses it fails each Backup with reason TargetUnconditional."`
+	CredentialsSecret ObjectName `json:"credentialsSecret" doc:"A Secret of the namespace with AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and, optionally, AWS_SESSION_TOKEN: the key each Backup writes with. It needs only put and list on the bucket."`
 }
 
 // BackupEncryption is the age recipients every Backup is sealed to (Decision 6).
 type BackupEncryption struct {
-	Recipients []string `json:"recipients"`
+	Recipients []string `json:"recipients" doc:"The age recipients, each entry one recipient: at least 2 distinct ones, such as an owner's and a recovery one, all X25519 or all hybrid (age1pq1). Every member file of each Backup is sealed to all of them, so the identity of any one opens it. The copy's manifest.yaml, which names the members, their files' sizes and these recipients' fingerprints, is not sealed."`
 }
 
 // BackupScheduleStatus is the observed state (Decision 9): the slot last taken, the last success, the oldest stored
 // Succeeded Backup, the Backup running and the RPO alert.
 type BackupScheduleStatus struct {
 	Status               `json:",inline"`
-	LastScheduleTime     *Timestamp `json:"lastScheduleTime,omitempty"`
-	LastSuccessTime      *Timestamp `json:"lastSuccessTime,omitempty"`
-	EarliestRestorePoint *Timestamp `json:"earliestRestorePoint,omitempty"`
-	Active               ObjectName `json:"active,omitempty"`
-	RPORisk              bool       `json:"rpoRisk,omitempty"`
+	LastScheduleTime     *Timestamp `json:"lastScheduleTime,omitempty" doc:"The newest slot the schedule has taken, whether it created a Backup or, finding one of its Backups still Pending or Running, created none."`
+	LastSuccessTime      *Timestamp `json:"lastSuccessTime,omitempty" doc:"When the newest of the schedule's Succeeded Backups that still exist completed."`
+	EarliestRestorePoint *Timestamp `json:"earliestRestorePoint,omitempty" doc:"When the oldest of the schedule's Succeeded Backups that still exist started: the oldest point a Restore can go back to."`
+	Active               ObjectName `json:"active,omitempty" doc:"A Backup of the schedule that is Pending or Running, empty when none is."`
+	RPORisk              bool       `json:"rpoRisk,omitempty" doc:"True when the schedule has fallen behind: the first slot after the start of its newest Succeeded Backup, or after its creation when there is none, has passed with that slot's Backup Failed or missing, or a second slot has passed. It stays false while the schedule is paused. funcd logs workload backup rpo at risk when it turns true."`
 }
 
 // Backup is a namespaced, status-bearing run record (ADR-0222): one copy of its schedule's members, made per slot, by
@@ -97,32 +97,32 @@ type Backup struct {
 // BackupSpec names the schedule whose scope, target and recipients the run uses; ttl, at most the schedule's,
 // overrides it.
 type BackupSpec struct {
-	Schedule ObjectName `json:"schedule"`
-	TTL      Duration   `json:"ttl,omitempty"`
+	Schedule ObjectName `json:"schedule" doc:"The BackupSchedule of the namespace whose scope, target and recipients the run uses, read when the run starts: a schedule gone by then fails the Backup with reason ScheduleNotFound. The schedule's status counts every Backup that names it."`
+	TTL      Duration   `json:"ttl,omitempty" doc:"How long funcd keeps the record after its creation; 0s or unset means the schedule's ttl, or 720h when the schedule does not exist. A ttl longer than the schedule's is refused."`
 }
 
 // BackupStatus is the run (Decision 4): its phase, times, where it wrote, what and to whom.
 type BackupStatus struct {
 	Status `json:",inline"`
 	// Phase shadows Status.Phase, as WorkflowRunStatus's: Pending → Running → Succeeded | Failed.
-	Phase          RunPhase       `json:"phase,omitempty"`
-	StartTime      *Timestamp     `json:"startTime,omitempty"`
-	CompletionTime *Timestamp     `json:"completionTime,omitempty"`
-	ExpireTime     *Timestamp     `json:"expireTime,omitempty"`
-	Target         string         `json:"target,omitempty"`
-	Path           string         `json:"path,omitempty"`
-	Members        []BackupMember `json:"members,omitempty"`
+	Phase          RunPhase       `json:"phase,omitempty" doc:"Pending, then Running, then Succeeded or Failed, in one attempt: funcd does not retry a failed Backup. A Backup that was Running when funcd stopped ends at the next start, Succeeded with reason FoundOnTarget when its copy is whole on the target, else Failed with reason Interrupted."`
+	StartTime      *Timestamp     `json:"startTime,omitempty" doc:"When the run began."`
+	CompletionTime *Timestamp     `json:"completionTime,omitempty" doc:"When the run ended, Succeeded or Failed."`
+	ExpireTime     *Timestamp     `json:"expireTime,omitempty" doc:"When funcd deletes this record, once the run has ended: the Backup's creation plus its spec.ttl, else plus its schedule's ttl. The copy on the target stays until the target's own lifecycle rule removes it."`
+	Target         string         `json:"target,omitempty" doc:"The target URL the run wrote to: its schedule's spec.target.url at the time. A Restore reads the copy there."`
+	Path           string         `json:"path,omitempty" doc:"The copy's directory on the target, <namespace>/<backup>-<uid>/."`
+	Members        []BackupMember `json:"members,omitempty" doc:"The stores the copy holds, which a Restore names as they are listed here. A Bucket's member holds none of the data of the Lakes located on its prefixes: each of them is a member of its own."`
 	// Recipients are the fingerprints of the recipients the run sealed to (ADR-0204 Decision 3).
-	Recipients []string `json:"recipients,omitempty"`
+	Recipients []string `json:"recipients,omitempty" doc:"Fingerprints of the age recipients the copy is sealed to, sorted. A Restore whose identity matches none of them fails, its message naming both sets of fingerprints. A Backup recorded with reason FoundOnTarget lists none."`
 }
 
 // BackupMember is one store a Backup copied and the bytes it stored.
 type BackupMember struct {
-	Kind  Kind       `json:"kind"`
-	Name  ObjectName `json:"name"`
-	Bytes int64      `json:"bytes,omitempty"`
+	Kind  Kind       `json:"kind" doc:"The member's kind: KVStore, Bucket, Lake, SQLDatabase, or Function for a Function's local volume."`
+	Name  ObjectName `json:"name" doc:"The member's name: the store's, or for a volume, its Function's."`
+	Bytes int64      `json:"bytes,omitempty" doc:"The size of the member's sealed copy on the target, in bytes."`
 	// Volume, with Kind Function, names the Function's local volume the member is (ADR-0262 Decision 11).
-	Volume ObjectName `json:"volume,omitempty"`
+	Volume ObjectName `json:"volume,omitempty" doc:"With kind Function, the name of the Function's local volume that the member is."`
 }
 
 // Restore is a namespaced, status-bearing request (ADR-0222 Decision 7): load members of a Succeeded Backup into
@@ -136,15 +136,15 @@ type Restore struct {
 
 // RestoreSpec names the Backup, the Secrets that read and open it, and each member's target.
 type RestoreSpec struct {
-	Backup  ObjectName      `json:"backup"`
-	Source  RestoreSource   `json:"source"`
-	Members []RestoreMember `json:"members"`
+	Backup  ObjectName      `json:"backup" doc:"The Backup to load, in the Restore's namespace. The Restore waits while it is Pending or Running, and fails with reason BackupNotReady when it is missing or Failed."`
+	Source  RestoreSource   `json:"source" doc:"The Secrets that read the Backup's copy and open its seal."`
+	Members []RestoreMember `json:"members" doc:"The members of the Backup to load, at least one and each once, loaded in this order after funcd has checked the whole copy and every destination. A Bucket's member leaves its destination's Lake prefixes as they are: to restore those Lakes, name them as members too."`
 }
 
 // RestoreSource is the Secret of the read credential (get and list) and the Secret holding AGE_IDENTITY.
 type RestoreSource struct {
-	CredentialsSecret ObjectName `json:"credentialsSecret"`
-	IdentitySecret    ObjectName `json:"identitySecret,omitempty"`
+	CredentialsSecret ObjectName `json:"credentialsSecret" doc:"A Secret of the namespace with AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and, optionally, AWS_SESSION_TOKEN: the key the Restore reads the copy with, at the Backup's status.target. A read-only key is enough."`
+	IdentitySecret    ObjectName `json:"identitySecret,omitempty" doc:"A Secret of the namespace whose AGE_IDENTITY key holds age identities, X25519 or hybrid and not passphrase-encrypted, one of them for a recipient the Backup is sealed to. It is required: a Restore without it is refused."`
 }
 
 // RestoreMember is one member of the Backup and exactly one target: as (an empty KVStore, Bucket or SQLDatabase, or
@@ -152,23 +152,23 @@ type RestoreSource struct {
 // inPlace. A Bucket's member acts only outside the prefixes of the Lakes on its destination, so restoring a Lake takes
 // naming that Lake too (ADR-0312).
 type RestoreMember struct {
-	Kind       Kind          `json:"kind"`
-	Name       ObjectName    `json:"name"`
-	As         ObjectName    `json:"as,omitempty"`
-	AsLocation *LakeLocation `json:"asLocation,omitempty"`
-	InPlace    bool          `json:"inPlace,omitempty"`
+	Kind       Kind          `json:"kind" doc:"The member's kind, as the Backup's status.members lists it: KVStore, Bucket, Lake, SQLDatabase, or Function for a Function's local volume."`
+	Name       ObjectName    `json:"name" doc:"The member's name, as the Backup's status.members lists it: the store's, or for a volume, its Function's. A member the copy does not hold fails the Restore with reason MemberNotFound."`
+	As         ObjectName    `json:"as,omitempty" doc:"The destination: the name of an existing, empty store of the member's kind in the namespace, or for a volume, of a Function whose local volume of that name is empty. A SQLDatabase is empty with no table, view, index or trigger and no Function binding it. Exactly one of as, asLocation and inPlace; a Lake takes asLocation or inPlace."`
+	AsLocation *LakeLocation `json:"asLocation,omitempty" doc:"For a Lake: the bucket and prefix that receive its copy, where no Lake is located and nothing is stored yet; a Lake located there afterwards reads it. The bucket must exist and may not be one this Restore restores in place. Exactly one of as, asLocation and inPlace."`
+	InPlace    bool          `json:"inPlace,omitempty" doc:"Load the member back into its own store, replacing its data; a Function's volume is loaded only when empty or named by its Function's DataMissing condition. The Restore then needs update on the Namespace, as an admin has, and another in-place Restore of the namespace is refused until it ends. It first takes the export Backup that status.export names, which needs the restored Backup's schedule, then holds the namespace while it loads: a failed load keeps the hold until funcdctl hold release --namespace. Exactly one of as, asLocation and inPlace."`
 	// Volume, with Kind Function, makes the member that Function's local volume; as names another Function whose
 	// empty volume of that name receives it (ADR-0262 Decision 11).
-	Volume ObjectName `json:"volume,omitempty"`
+	Volume ObjectName `json:"volume,omitempty" doc:"With kind Function, which needs it, the name of the Function's local volume that the member is. Any other kind takes none."`
 }
 
 // RestoreStatus is the request's run: its phase, times and, in place, the export Backup.
 type RestoreStatus struct {
 	Status         `json:",inline"`
-	Phase          RunPhase   `json:"phase,omitempty"`
-	StartTime      *Timestamp `json:"startTime,omitempty"`
-	CompletionTime *Timestamp `json:"completionTime,omitempty"`
-	Export         ObjectName `json:"export,omitempty"`
+	Phase          RunPhase   `json:"phase,omitempty" doc:"Pending while it waits for its Backup and, in place, for its export; Running while it checks the whole copy and loads; then Succeeded or Failed. A Restore that was Running when funcd stopped ends Failed with reason Interrupted."`
+	StartTime      *Timestamp `json:"startTime,omitempty" doc:"When the Restore turned Running, once its Backup and any export had Succeeded."`
+	CompletionTime *Timestamp `json:"completionTime,omitempty" doc:"When the Restore ended, Succeeded or Failed."`
+	Export         ObjectName `json:"export,omitempty" doc:"The Backup that an in-place Restore takes before it loads, <restore>-before, of the restored Backup's schedule. Empty when no member is in place."`
 }
 
 // AppBackupSchedule is a backupSchedules entry of an App (ADR-0222 Decision 2): a BackupSchedule the App declares by

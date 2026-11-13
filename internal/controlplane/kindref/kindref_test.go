@@ -2,11 +2,8 @@ package kindref
 
 import (
 	"errors"
-	"flag"
-	"os"
 	"reflect"
 	"regexp"
-	"slices"
 	"strings"
 	"testing"
 
@@ -16,11 +13,6 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/controlplane"
 )
-
-//nolint:gochecknoglobals // the -update flag of this package's tests
-var update = flag.Bool("update", false, "rewrite testdata/undescribed.txt from the API document")
-
-const listFile = "testdata/undescribed.txt"
 
 // scenario: spec-tab-generated
 func TestScenarioSpecTabGenerated(t *testing.T) {
@@ -132,17 +124,11 @@ func TestScenarioEveryKindInOneFeature(t *testing.T) {
 	require.Empty(t, listed, "kinds that v1.AllKinds() does not return")
 }
 
-// TestEveryFieldIsDescribed holds every field a Spec page shows to a description, but the fields that
-// testdata/undescribed.txt lists; that list only shrinks (ADR-0323 Decision 2). go test -run TestEveryFieldIsDescribed
-// -update rewrites it.
+// TestEveryFieldIsDescribed holds every field a Spec page shows to a description written for users (ADR-0323
+// Decision 2).
 func TestEveryFieldIsDescribed(t *testing.T) {
 	doc := controlplane.SpecAPI().OpenAPI()
-	got := Undescribed(doc)
-	if *update {
-		require.NoError(t, os.WriteFile(listFile, []byte(strings.Join(got, "\n")+"\n"), 0o644))
-		return
-	}
-	require.NoError(t, check(got, readList(t)))
+	require.NoError(t, check(Undescribed(doc)))
 	_, fields, err := render(doc.Components.Schemas.Map(), Features)
 	require.NoError(t, err)
 	for path, desc := range fields {
@@ -153,14 +139,9 @@ func TestEveryFieldIsDescribed(t *testing.T) {
 // scenario: undescribed-field-refused
 func TestScenarioUndescribedFieldRefused(t *testing.T) {
 	got := undescribedOf(t, reflect.TypeFor[testKind]())
-	require.ErrorContains(t, check(got, nil), "TestKindSpec.newField")
-}
-
-// scenario: undescribed-list-only-shrinks
-func TestScenarioUndescribedListOnlyShrinks(t *testing.T) {
-	got := undescribedOf(t, reflect.TypeFor[testKind]())
-	err := check(got, []string{"TestKindSpec.newField", "TestKindSpec.described"})
-	require.ErrorContains(t, err, "TestKindSpec.described")
+	err := check(got)
+	require.ErrorContains(t, err, "TestKindSpec.newField")
+	require.NotContains(t, err.Error(), "TestKindSpec.described")
 }
 
 type testKindSpec struct {
@@ -187,25 +168,10 @@ func undescribedOf(t *testing.T, kind reflect.Type) []string {
 	return undescribed(fields)
 }
 
-// check fails on an undescribed field that the list does not hold, and on a listed field that is no longer
-// undescribed: the list only shrinks.
-func check(got, listed []string) error {
-	var problems []string
-	if missing := slices.DeleteFunc(slices.Clone(got), func(f string) bool { return slices.Contains(listed, f) }); len(missing) > 0 {
-		problems = append(problems, "fields with no description, which need a doc tag written for users: "+strings.Join(missing, ", "))
-	}
-	if stale := slices.DeleteFunc(slices.Clone(listed), func(f string) bool { return slices.Contains(got, f) }); len(stale) > 0 {
-		problems = append(problems, "listed fields that have a description or are gone, to remove from "+listFile+": "+strings.Join(stale, ", "))
-	}
-	if len(problems) == 0 {
+// check fails on a field with no description, naming each one.
+func check(got []string) error {
+	if len(got) == 0 {
 		return nil
 	}
-	return errors.New(strings.Join(problems, "; "))
-}
-
-func readList(t *testing.T) []string {
-	t.Helper()
-	b, err := os.ReadFile(listFile)
-	require.NoError(t, err)
-	return slices.DeleteFunc(strings.Split(strings.TrimSpace(string(b)), "\n"), func(s string) bool { return s == "" })
+	return errors.New("fields with no description, which need a doc tag written for users: " + strings.Join(got, ", "))
 }

@@ -22,4 +22,5 @@ func TestDocNamesTheConstant(t *testing.T) {
 	doctag.Names(t, spec, "SecretDeclarations", ownedstore.ReasonSecretNotFound, ownedstore.ReasonSecretKeyMissing)
 	doctag.Names(t, reflect.TypeFor[v1.Pooling](), "Worker", string(condPoolFull), strconv.Itoa(defaultPoolLimit))
 	doctag.Names(t, reflect.TypeFor[v1.VolumeEntry](), "Ref", reasonVolumeNotFound)
+	doctag.Names(t, reflect.TypeFor[v1.NamespaceSpec](), "VolumeBudget", reasonVolumeBudget)
 }
