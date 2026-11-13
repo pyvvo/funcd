@@ -1,0 +1,16 @@
+# region eventsource
+apiVersion: funcd.io/v1alpha1
+kind: EventSource
+metadata:
+  name: schedules
+  namespace: default
+  resourceGroup: rg1
+spec:
+  timer:
+    events:
+      - name: every-minute
+        interval: 1m
+      - name: nightly
+        cron: "30 2 * * *"
+        timeZone: Europe/Paris
+# endregion eventsource

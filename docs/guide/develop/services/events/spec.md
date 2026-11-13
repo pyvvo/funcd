@@ -8,6 +8,8 @@ This page lists the spec and status fields of EventSource and Sensor, each with 
 
 ## EventSource
 
+::include[../../../../../api/types/v1alpha1/examples/events/eventsource.yaml#eventsource]
+
 | apiVersion | kind |
 | --- | --- |
 | `funcd.io/v1alpha1` | `EventSource` |
@@ -74,6 +76,8 @@ This page lists the spec and status fields of EventSource and Sensor, each with 
 | `phase` | string, one of `Pending`, `Deploying`, `Ready`, `Idle`, `Degraded`, `Failed`, `Terminating` | Where the object is in its lifecycle. |
 
 ## Sensor
+
+::include[../../../../../api/types/v1alpha1/examples/events/sensor.yaml#sensor]
 
 | apiVersion | kind |
 | --- | --- |
