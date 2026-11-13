@@ -1,6 +1,6 @@
 # ADR-0328: The TypeScript Secret client deletes with del, as its KV and Blob clients do (amends ADR-0327)
 
-- **Status**: Reviewing (2026-11-13, implemented with ADR-0327); Accepted (2026-11-13), by the decider, after one round of an independent judge (a subagent): accept,
+- **Status**: Implemented (2026-11-13), review passed with no finding ([report](../reviews/adr-0328-implementation-claude-opus-5-5.md)); Reviewing (2026-11-13, implemented with ADR-0327); Accepted (2026-11-13), by the decider, after one round of an independent judge (a subagent): accept,
   its Minor and its Nit folded
 - **Date**: 2026-11-13
 - **Deciders**: green-0-rabbit

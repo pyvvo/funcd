@@ -1,6 +1,6 @@
 # ADR-0327: A Function writes the Secrets it owns, and built-in roles name Secret readers and writers (amends ADR-0321)
 
-- **Status**: Reviewing (2026-11-13, implementation done; the shims' releases and pins follow); Accepted (2026-11-13), by the decider, with the six choices derived from "copy KV and SQL" confirmed as
+- **Status**: Implemented (2026-11-13), review passed with two Minors, both closed ([report](../reviews/adr-0327-implementation-claude-opus-5-5.md)); Reviewing (2026-11-13, implementation done; the shims' releases and pins follow); Accepted (2026-11-13), by the decider, with the six choices derived from "copy KV and SQL" confirmed as
   written, after two rounds of an independent judge (a subagent): round 1's Major, four Minors and four Nits and
   round 2's Minor and Nits folded
 - **Superseded in part by**: [ADR-0328](0328-the-typescript-secret-client-deletes-with-del.md) (2026-11-13) — Decision 5's TypeScript `delete` and its other mentions: TypeScript deletes with `ctx.secret.del(binding, key)`, as its KV and Blob clients; Python keeps `delete`.
