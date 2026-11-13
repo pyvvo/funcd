@@ -8,6 +8,8 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 ## EventSource
 
+::include[../../../../../api/types/v1alpha1/examples/events/eventsource.yaml#eventsource]
+
 | apiVersion | kind |
 | --- | --- |
 | `funcd.io/v1alpha1` | `EventSource` |
@@ -74,6 +76,8 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | `phase` | string, one of `Pending`, `Deploying`, `Ready`, `Idle`, `Degraded`, `Failed`, `Terminating` | Where the object is in its lifecycle. |
 
 ## Sensor
+
+::include[../../../../../api/types/v1alpha1/examples/events/sensor.yaml#sensor]
 
 | apiVersion | kind |
 | --- | --- |
