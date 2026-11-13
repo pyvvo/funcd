@@ -2120,7 +2120,7 @@ components:
           minimum: 0
           type: integer
         maxSize:
-          description: The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507.
+          description: The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507 in a KV store or a Bucket; a SQL database answers its writes 507 once it holds the cap.
           pattern: ^[0-9]{1,15}((Ki|Mi|Gi|Ti)B?)?$
           patternDescription: "a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB)"
           type: string
@@ -3475,7 +3475,7 @@ components:
           minimum: 0
           type: integer
         maxSize:
-          description: The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507.
+          description: The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507 in a KV store or a Bucket; a SQL database answers its writes 507 once it holds the cap.
           pattern: ^[0-9]{1,15}((Ki|Mi|Gi|Ti)B?)?$
           patternDescription: "a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB)"
           type: string
@@ -4363,7 +4363,7 @@ components:
           description: The CPU cap of the worker or engine it sizes, as a number of cores of at least 0.01, such as 0.5 or 2. Empty takes the default of the resource that declares it, or no cap when there is none. Only the containerd runtime enforces it.
           type: string
         memory:
-          description: "The memory cap of the worker or engine it sizes, such as 256Mi or 4GiB: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B, above zero. Empty takes the default of the resource that declares it, or no cap when there is none. Only the containerd runtime enforces it, and there a worker that passes it is killed."
+          description: "The memory cap of the worker or engine it sizes, such as 256Mi or 4GiB: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B, above zero. Empty takes the default of the resource that declares it, or no cap when there is none. Only the containerd runtime enforces it, and there a worker that uses more memory than the cap is killed."
           type: string
       type: object
     Restore:
@@ -5431,7 +5431,7 @@ components:
           minimum: 0
           type: integer
         maxSize:
-          description: The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507.
+          description: The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507 in a KV store or a Bucket; a SQL database answers its writes 507 once it holds the cap.
           pattern: ^[0-9]{1,15}((Ki|Mi|Gi|Ti)B?)?$
           patternDescription: "a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB)"
           type: string

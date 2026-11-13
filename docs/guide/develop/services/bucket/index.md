@@ -31,10 +31,10 @@ JavaScript, so the example needs no install step. `funcdctl dev` keeps the Bucke
 URL of each Function. The `--gport` flag sets the port of that URL, so the commands below use port 8080.
 
 `funcdctl dev` also runs funcd's **S3 gateway**, a server that answers S3 requests for the Buckets. While the gateway
-runs, funcd gives each worker of a Function that binds a prefix the gateway's address and an S3 key pair of the
-Function's own, in the standard AWS environment variables `AWS_ENDPOINT_URL_S3`, `AWS_REGION`, `AWS_ACCESS_KEY_ID` and
-`AWS_SECRET_ACCESS_KEY`. On a platform, the gateway runs only when the operator sets `s3gateway.enabled: true` in
-funcd's configuration.
+runs, funcd gives each [worker](../../../platform/workloads/index.md#runtime), a process that runs a Function's code, of
+a Function that binds a prefix the gateway's address and an S3 key pair of the Function's own, in the standard AWS
+environment variables `AWS_ENDPOINT_URL_S3`, `AWS_REGION`, `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. On a
+platform, the gateway runs only when the operator sets `s3gateway.enabled: true` in funcd's configuration.
 
 The example's manifests connect the Function to its data:
 
@@ -258,9 +258,9 @@ prefixes that name it as their owner.
 ## Run it locally
 
 `funcdctl dev` keeps the objects in memory, so they are lost when `funcdctl dev` stops, whatever
-[Data storage](#data-storage) says about a server. With the `--persist` flag, `funcdctl dev` keeps the KV, blob and
-metastore data between runs, in the folder `.funcd-dev` of the current directory, or in the folder that `--persist-to`
-names.
+[Data storage](#data-storage) says about a server. With the `--persist` flag, `funcdctl dev` keeps the Buckets'
+objects between runs, in the `blob` folder of `.funcd-dev` in the current directory, or of the folder that
+`--persist-to` names.
 
 `funcdctl dev` also differs from a platform in these ways that matter for a Bucket:
 

@@ -362,7 +362,7 @@ an address answers and whether the caller must authenticate, as the
   more fails at once with the HTTP status 429.
 - [`resources`](spec.md#functionspecresources) sets the CPU and the memory of each worker of a Function that runs in
   workers of its own. A field left empty takes the server's `functions.defaultResources`, 1 CPU and 512 MiB by
-  default. Only the containerd runtime enforces them, and it kills a worker that passes its memory.
+  default. Only the containerd runtime enforces them, and it kills a worker that uses more memory than its limit.
 - A log record longer than `funclog.maxRecordBytes`, 64 KiB by default, is cut and marked as truncated.
 
 The funcd [Spec](../../running-funcd/spec.md#funcdconfigyaml) tab describes each server setting above, and this

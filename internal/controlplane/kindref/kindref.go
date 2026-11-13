@@ -155,7 +155,7 @@ func featurePage(schemas map[string]*huma.Schema, fields map[string]string, f Fe
 	if cs := clients[f.Path]; len(cs) > 0 {
 		calls := make([]string, len(cs))
 		for i, c := range cs {
-			calls[i] = "ctx." + c
+			calls[i] = ctxName(c)
 		}
 		title = list + " spec and handler API"
 		description = "Every field of " + list + ", then the methods a handler calls on " + join(calls) + "."
