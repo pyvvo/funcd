@@ -114,6 +114,8 @@ spec:
         name: lakehouse-copy/gold
 ---
 # region restore
+# Test values: backups-key holds the S3 key pair that the banner of funcdctl dev prints, and backups-identity holds the
+# published identity of the first recipient of the copy.
 apiVersion: funcd.io/v1alpha1
 kind: Restore
 metadata:
