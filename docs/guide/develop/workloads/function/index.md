@@ -7,13 +7,20 @@ description: Run a Function, call it, read its status and its logs, call one Fun
 
 A Function is code that funcd runs when the Function is called. The code exports a **handler**. For each call, a
 [worker](../../../platform/workloads/index.md#runtime) of the Function, a process that runs its code, calls the
-handler with a context and the call's data, and the handler's return value becomes the response. The
+handler with two arguments: a context, through which the handler logs and reaches other Functions and its stores,
+and an **event**, which holds the call's input in `event.data` (`event["data"]` in Python). funcd puts the JSON body
+of the call in `data`, except a JSON object with a top-level `data` or `specversion` key, which funcd takes as the
+event itself. The handler's return value becomes the response. The
 [Platform page](../../../platform/workloads/function.md) explains who calls a Function and what it binds; this page
-shows how to run a Function, call it and read its state.
+shows how to run a Function, call it and read its state. A Function can also take HTTP requests instead of events,
+as [Serve HTTP requests](#serve-http-requests) explains.
 
-The first example, log-burst, writes more than a hundred log lines at each call and returns how many it wrote. The
-steps below start the example on the local computer, call it once, and read the Function's status: the response
-contains `"emitted":115` in TypeScript and `"emitted":100` in Python, and the status shows the phase `Ready`.
+The first example, log-burst, writes a burst of log lines at each call: its handler logs through `console` in
+TypeScript or through the `logging` module in Python, and writes one more line to standard output and one to standard
+error. It returns `emitted`, the number of its `console` or `logging` calls, which leaves out the two direct lines.
+The steps below start the example on the local computer, call it once, and read the Function's status: the response
+contains `"emitted":115` in TypeScript and `"emitted":100` in Python, and the status shows the [phase](#status)
+`Ready`.
 
 The example needs four programs:
 
@@ -24,9 +31,10 @@ The example needs four programs:
 - The runtime of the example's language on the `PATH`: Node.js for TypeScript, or Python 3.12 or later as `python3`.
 
 `funcdctl dev` starts a local platform and runs the resource files of one folder on it. The example's manifest names
-an `image`, the [artifact](../../../platform/workloads/artifacts.md) that a platform pulls: the code, its contract and
-its runtime, which `funcdctl push` packs. `funcdctl dev` does not use that image: it runs the Function from the code
-in the folder, and reads the Function's contract from the folder's `log-burst.contract.yaml` file. `funcdctl dev`
+an `image`, the [artifact](../../../platform/workloads/artifacts.md) that a platform pulls: the code, its **contract**,
+which describes the input that the Function accepts and the result that it returns, and its runtime, which
+`funcdctl push` packs together. `funcdctl dev` does not use that image: it runs the Function from the code in the
+folder, and reads the Function's contract from the folder's `log-burst.contract.yaml` file. `funcdctl dev`
 prints the URL of each Function, and the address of its control plane, which a `funcdctl` command reaches with
 `--server` and the token `funcd-dev-token`. The `--gport` flag sets the port of each Function's URL, and `--cport` the
 port of the control plane, so the commands below use the ports 8080 and 8081.
@@ -46,7 +54,11 @@ The example's manifest and contract decide how the Function runs and what it acc
   the HTTP status 422. The example accepts a JSON object whose fields are all optional, so the call below sends an
   empty object, `{}`; a call with no body gets 422.
 
-The [Spec](spec.md) tab describes every field of a Function and of its status.
+funcd runs each version of a Function's spec as a **revision**, named after the Function and a number that grows by
+one at each change of the spec, such as `log-burst-1`. The status that the steps below read names the revision that
+takes the calls; [Status](#status) explains the phase and the conditions, and
+[Changes and deletion](#changes-and-deletion) explains how a new revision takes over. The [Spec](spec.md) tab
+describes every field of a Function and of its status.
 
 ### TypeScript
 
@@ -145,9 +157,11 @@ funcd keeps the log lines of each Function's workers as records, each with a tim
 - each call of [`ctx.log`](spec.md#handler-api), the log method of the context that every handler receives, as
   `INFO`: in TypeScript, `ctx.log` writes as `console.log` does, and in Python, it prints to standard output.
 
-`funcdctl logs` prints the records of one Function, the most recent 1000 by default. While the first example runs,
-this command prints the records of the severity `ERROR` and above. After one call of the TypeScript example, these are
-the line written to standard error and the four errors; the times differ at each run:
+`funcdctl logs` prints the records of one Function, the most recent 1000 by default. A record shows there once funcd
+has written it to storage: a funcd server does that within `funclog.segmentMaxAge`, 10 seconds by default, and
+`funcdctl dev` within a second. While the first example runs, this command prints the records of the severity `ERROR`
+and above. After one call of the TypeScript example, these are the line written to standard error and the four
+errors; the times differ at each run:
 
 ```console
 $ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token logs log-burst -n default --severity error
@@ -163,15 +177,13 @@ keeps the records of a recent period, such as `15m`, and `-o wide` adds each rec
 arguments of a `console` call. The [reference of `funcdctl logs`](../../tools/funcdctl/spec.md#funcdctl-logs) lists
 its flags.
 
-A record shows in `funcdctl logs` once funcd has written it to storage. A funcd server does that within
-`funclog.segmentMaxAge`, 10 seconds by default, and `funcdctl dev` within a second.
-
 ## Call another Function
 
-A Function calls another Function of its namespace over a **link**, which it declares under
+A Function calls another Function of its [namespace](../../../platform/tenancy-and-limits/namespaces.md) over a
+**link**, which it declares under
 [`spec.bindings.links`](spec.md#functionspecbindingslinks): an `alias`, the name that its code uses, and a `target`,
-the Function that the link calls. The handler calls [`ctx.invoke`](spec.md#handler-api) with the alias and the input
-of the call, and gets the target's result. funcd checks the input against the target's contract, as for a call from
+the Function that the link calls. The handler calls [`ctx.invoke`](spec.md#handler-api) with the alias and an input
+for the target, and gets the target's result. funcd checks the input against the target's contract, as for a call from
 outside funcd. When the call fails, `ctx.invoke` throws an error, or raises a `RuntimeError` in Python, whose message
 holds the HTTP status and the answer, such as the target's 422 for an input that does not match its contract.
 
@@ -194,7 +206,10 @@ has the same name, `invoke`.
 ### TypeScript
 
 The handler of `front`, in `examples/fn-to-fn/src/front/main.ts`, calls `context.invoke` with the alias `greeter` and
-forwards the `name` of its own input. The handler of `greeter`, in
+the input `{ data: { name } }`, where `name` comes from its own input. funcd builds the target's event from that input
+as from the body of an outside call: an object with a top-level `data` or `specversion` key is the event itself, so
+`greeter` gets `{ name }` as its `event.data`, and any other input becomes `event.data` as it is. The handler of
+`greeter`, in
 [`src/greeter/main.ts`](https://github.com/pyvvo/funcd-typescript/blob/main/examples/fn-to-fn/src/greeter/main.ts),
 returns a greeting for that name:
 
@@ -231,8 +246,9 @@ To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
 By default, a Function's handler gets the data of each call and returns a result. A Function whose
 [`protocol`](spec.md#functionspec) is `http` gets each HTTP request instead, with its method, its path, its headers
 and its body, and its handler answers it as a web server does. Such a Function runs on a Node.js runtime, never shares
-a worker with other Functions, and funcd checks no contract on its requests. Only a call through funcd's edge and
-another Function's `ctx.fetch` reach it.
+a worker with other Functions, and funcd checks no contract on its requests. Only a call through funcd's
+[edge](../../../platform/security-and-networking/networking.md), the part of funcd that receives the calls from
+outside funcd, and another Function's `ctx.fetch` reach it.
 
 ### TypeScript
 
@@ -248,8 +264,7 @@ the Hono framework and keeps its devices in the worker's memory:
 
 The app gets the part of the path after the Function's address: a request for `/function/devices-api/devices`
 reaches the app as `/devices`, and the request's `X-Forwarded-Prefix` header holds the part that funcd removed,
-`/function/devices-api`. From the root
-folder of the funcd-typescript repository, start the example:
+`/function/devices-api`. From the root folder of the funcd-typescript repository, start the example:
 
 ```console
 $ funcdctl dev examples/http-api --gport 8080
@@ -275,7 +290,7 @@ To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
 
 A Function that sets neither [`replicas`](spec.md#functionspec) nor
 [`scaling.minReplicas`](spec.md#functionspecscaling) runs no worker until its first call. That call starts a worker,
-waits until the worker is ready, then reaches the handler. With
+waits until the worker is ready, then reaches the handler: this wait is a **cold start**. With
 [`scaling.idleTimeout`](spec.md#functionspecscaling), funcd also stops the Function's workers once the Function has
 served no call for that long: its phase becomes `Idle`, and the next call starts a worker again. Without
 `idleTimeout`, a worker that has started keeps running. The Function `pdf-render` stops its workers after 5 minutes
@@ -301,9 +316,11 @@ The funcd [Spec](../../running-funcd/spec.md#funcdconfigyaml) tab describes `inv
 
 A Function needs no role assignment to call the Functions that its links name. Each entry of `spec.bindings.links`
 lets the Function call its target through `ctx.invoke` or `ctx.fetch`. These two methods reach only the targets of
-the caller's own links: funcd looks the alias up in those links before it asks Cedar, so a call whose alias no link
-declares fails with the HTTP status 403, whatever role the Function has. For each call over a link, funcd then
-asks Cedar whether the caller may perform the action `link::invoke` on the target. The
+the caller's own links: funcd looks the alias up in those links before it asks Cedar, the policy engine that decides
+what a Function may do, so a call whose alias no link declares fails with the HTTP status 403, whatever role the
+Function has. The error that `ctx.invoke` throws then
+holds a message such as `caller default/front declares no link "nope" (no link is no grant)`. For each call over a
+link, funcd then asks Cedar whether the caller may perform the action `link::invoke` on the target. The
 [Security](../../../platform/security-and-networking/security.md) page explains where funcd asks Cedar.
 
 funcd supplies the link rule as a built-in policy, which it applies in every namespace, so nothing needs to be
@@ -328,13 +345,19 @@ an address answers and whether the caller must authenticate, as the
 - The body of a call through the edge holds at most 1 MiB. A larger body gets the HTTP status 413.
 - A call through the edge must start its response within the Function's [`timeout`](spec.md#functionspec), or
   within `invoke.defaultTimeout`, 60 seconds by default, when `timeout` is not set. The time counts from the call's
-  arrival, and a cold start counts. Past it, the caller gets the HTTP status 504, and the handler can still run for up
-  to a second, so a caller that retries can repeat its effects. A handler reads the time left before its deadline with
+  arrival, and a cold start counts. Past it, the caller gets the HTTP status 504, but the handler goes on, so a caller
+  that retries can repeat its effects. A TypeScript handler runs until it ends. A Python handler gets an exception
+  one second after the deadline. A handler that blocks its worker, such as a TypeScript loop that never awaits or a
+  Python `time.sleep`, makes the worker fail its liveness check, the periodic check by which funcd finds a worker that
+  no longer answers; in Python, from 11 seconds after the deadline. funcd then replaces the worker once the check has
+  failed for `runtime.livenessTimeout`, 30 seconds by default. A handler reads the time left before its deadline with
   [`ctx.remainingMs`](spec.md#handler-api), `remaining_ms` in Python, which returns `null` (`None`) when the call has
   no deadline.
 - A call over a link waits for the target's result until the link's `timeout`, 30 seconds by default and at most 5
-  minutes, a cold start of the target included; past it, the call fails with the HTTP status 503. Its input and the
-  target's result hold at most 1 MiB each, and a larger one gets the HTTP status 413.
+  minutes, a cold start of the target included; past it, the call fails with the HTTP status 503. Its input holds at
+  most 1 MiB, and a larger one gets the HTTP status 413. A result larger than 1 MiB gets 500 when the target's
+  contract checks results, because funcd checks at most 1 MiB of a result; when the contract accepts any result, and
+  through `ctx.fetch`, it gets 413.
 - At most `invoke.maxNestedInFlight` calls over links to one Function, 10 by default, can be in flight at once. One
   more fails at once with the HTTP status 429.
 - [`resources`](spec.md#functionspecresources) sets the CPU and the memory of each worker of a Function that runs in
@@ -358,10 +381,12 @@ phase is one of these:
 - `Idle`: no worker runs, and the next call starts one.
 - `Degraded`: the Function has served, but no worker is ready now, such as while funcd replaces a worker that
   stopped. Calls wait for a ready worker.
-- `Failed`: the Function cannot run, such as when its handler cannot load (`ShapeInvalid`), its runtime is missing
-  (`RuntimeUnavailable`), its image cannot be resolved (`ArtifactUnresolved`) or a worker cannot start
+- `Failed`: the Function cannot run, such as when its handler cannot load, or when its first worker does not become
+  ready within `runtime.bootTimeout`, 1 minute by default (`ShapeInvalid`, with a message such as
+  `the handler did not become ready within 1m0s` for the second case); when its runtime is missing
+  (`RuntimeUnavailable`); when its image cannot be resolved (`ArtifactUnresolved`); or when a worker cannot start
   (`StartFailed`). funcd refuses its calls at once with the HTTP status 503. funcd tries a worker that cannot start
-  again after a growing wait, but a handler that cannot load stays `Failed` until the spec changes.
+  again after a growing wait, but a `ShapeInvalid` Function stays `Failed` until its spec changes.
 
 Three conditions explain the phase:
 
@@ -379,8 +404,8 @@ calls, and `status.currentRevision` names the revision of the latest spec.
 
 ## Changes and deletion
 
-Each change to a Function's spec creates a **revision**, a read-only copy of the spec, named after the Function and
-the generation of its spec, such as `log-burst-2`. funcd starts the new revision's workers beside the serving ones,
+Each change to a Function's spec creates a new revision, a read-only copy of the spec, whose number is one higher,
+such as `log-burst-2` after `log-burst-1`. funcd starts the new revision's workers beside the serving ones,
 and moves the calls to them once every new worker is ready, even when only `replicas` or `scaling` changed. Each old
 worker stops once it is idle, but no sooner than `runtime.handOutSettle` after the switch, 2 seconds by default. A
 worker that is still busy `runtime.drainGrace` after the switch, 30 seconds by default, stops with its calls cut.
@@ -395,8 +420,9 @@ A revision keeps the digest that the Function's `image` named when funcd created
 the same tag therefore runs only after the next change to the spec: give the new code a new tag, or set
 [`imageDigest`](spec.md#functionspec).
 
-A delete removes the Function at once. funcd stops its workers with no drain, so the calls in flight are cut, and
-the Function's address stops answering. The Function's revisions go with it. A KVStore, Bucket or SQLDatabase that
+A delete removes the Function at once. funcd stops its workers without waiting for their calls, so the calls in
+flight are cut, and the Function's address stops answering. The Function's revisions go with it, and so do a Lake and
+a [ConfigMap](../configuration/index.md) that the Function declares by `name`. A KVStore, Bucket or SQLDatabase that
 the Function declares by `name` stays, with its data, unless its `deletion` is `delete`.
 
 funcd refuses to delete a Function that another Function's link targets. While the fn-to-fn example runs:
@@ -410,6 +436,11 @@ funcdctl: sdk: admission.link-deletion-protection: function "greeter" is linked 
 
 A caller of a Function meets these HTTP statuses, each with a message in the body:
 
+- **400** when the body is not JSON: the message is `invalid CloudEvent JSON`.
+- **401** or **403** when the Function's address asks for authentication, through
+  [`spec.ingress.auth`](spec.md#functionspecingressauth) or the Namespace's defaults: 401 for a call without a valid
+  bearer token or `X-Api-Key` header, and 403 for a caller whose token does not allow it to get the namespace's
+  Functions.
 - **404** when no Function answers at the address, such as `function default/nope is not exposed by name` for a
   Function that does not exist.
 - **413** when the body holds more than 1 MiB.
@@ -443,24 +474,28 @@ the call.
 - It runs each Function from its build in the folder, which it finds by the Function's name: `<name>.mjs`, in the
   folder or in its `dist` folder, for Node.js. For Python, it runs the entry that `[tool.funcd-bundle.functions]` of
   the folder's `pyproject.toml` names, else `src/main.py` when the folder has the Function's name, else `<name>.py`.
-  It reads the contract from `<name>.contract.yaml`, and stops when the contract and the manifest name different
-  runtimes.
+  It reads the contract from `<name>.contract.yaml` or `<name>.contract.json`, and stops when the contract and the
+  manifest name different runtimes.
 - It replaces the Function's `image` with the path of that build, and its `imageDigest` with a digest of the build. A
   saved change to the build or to the contract therefore starts a new revision within about a second.
 - It sets `replicas` and `scaling.minReplicas` to 1, so each Function keeps one worker running and never goes `Idle`.
 - It runs each worker as a process of the local user, with no isolation and no limit on its CPU or its memory, and it
   prints each log line in its terminal.
 - It runs the namespace `default` only, and stops on a resource of another namespace.
+- Its edge has no authenticator, so it answers 401 to every call to a Function whose address asks for
+  authentication, with the message `authentication required but no authenticator is configured`.
 
-`funcdctl dev` keeps its state in memory, where it is lost when `funcdctl dev` stops, unless the `--persist` flag
-keeps it between runs in a local folder. The [reference of `funcdctl dev`](../../tools/funcdctl/spec.md#funcdctl-dev)
-lists its flags.
+`funcdctl dev` keeps its state in memory, where it is lost when `funcdctl dev` stops. With the `--persist` flag, it
+keeps its state between runs in `.funcd-dev`, a folder that it creates in the current folder, or in the folder that
+`--persist-to` names: the metastore, which holds the objects that it applied, the KV, blob, SQL, Lake and volume data,
+and the copies of the builds that it runs. To start again from nothing, delete that folder after `funcdctl dev` stops. The
+[reference of `funcdctl dev`](../../tools/funcdctl/spec.md#funcdctl-dev) lists its flags.
 
 ## Examples
 
 - [log-burst in TypeScript](https://github.com/pyvvo/funcd-typescript/tree/main/examples/log-burst) and
   [in Python](https://github.com/pyvvo/funcd-python/tree/main/examples/log-burst): a Function that writes a burst of
-  log lines and returns how many it wrote.
+  log lines and returns how many `console` or `logging` calls it made.
 - [fn-to-fn in TypeScript](https://github.com/pyvvo/funcd-typescript/tree/main/examples/fn-to-fn): a Function that
   calls another Function over a link.
 - [http-api in TypeScript](https://github.com/pyvvo/funcd-typescript/tree/main/examples/http-api): a Function that
