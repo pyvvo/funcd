@@ -5,14 +5,14 @@ description: Run a Workflow, start runs and read their steps and logs, branch on
 
 ## Usage
 
-A Workflow runs a series of steps for each input that it receives, and passes the output of each step on to the
-steps after it. A step calls a Function, runs another Workflow, or is one of the simple steps that funcd runs itself.
-The [Platform page](../../../platform/workloads/workflow.md) explains how funcd drives a Workflow; this page shows how
-to run one, start it with an input and follow what it does.
+A Workflow runs a series of steps for each input that it receives, and passes the output of each step on to the steps
+after it. A step calls a Function, runs another Workflow, or is a **built-in step**, which funcd runs itself, with no
+Function. The [Platform page](../../../platform/workloads/workflow.md) explains how funcd drives a Workflow; this page
+shows how to run one, start it with an input and follow what it does.
 
 The first example runs the Workflow `pipeline` of the TypeScript example `workflow` on the local computer, starts it
-once with the amount 4, and reads the result. The run ends in the phase `Succeeded`, and the log line of its last
-step holds 40, the score that this step computed from the amount 4.
+once with the amount 4, and reads the result. The run ends in the phase `Succeeded`, and the log line of the child run's
+step, `scorer-s`, holds 40, the score that it computed from the amount 4.
 
 The example needs three programs:
 
@@ -27,11 +27,11 @@ sets the port of the control plane, so the commands below use the port 8081.
 
 ### TypeScript
 
-The Workflow `scorer`, in `examples/workflow/child.yaml`, has a single **step**, `s`. A step that names an `image`,
-the [artifact](../../../platform/workloads/artifacts.md) that a platform pulls, runs as a Function that funcd creates
-for the step and names `<workflow>-<step>`, here `scorer-s`. `funcdctl dev` does not pull that image: it runs the code
-in the folder that the image's tag, the part after the last `:`, names. The tag `score` names `score.mjs`, and the
-file `score.contract.yaml` holds the step's **contract**, the JSON Schema of the input that the step accepts and of
+The Workflow `scorer`, in `examples/workflow/child.yaml`, has a single **step**, `s`. A step that names an `image`, the
+[artifact](../../../platform/workloads/artifacts.md) that a platform pulls, runs as a Function that funcd creates for
+the step and names `<workflow>-<step>`, here `scorer-s`. `funcdctl dev` does not pull that image: it runs the build in
+the example's folder whose name is the image's tag, the part after the last `:`. The tag `score` names `score.mjs`, and
+the file `score.contract.yaml` holds the step's **contract**, the JSON Schema of the input that the step accepts and of
 the output that it returns:
 
 ::include[../../../../../_repos/funcd-typescript/examples/workflow/child.yaml]
@@ -149,9 +149,9 @@ changes that:
 - A step's [`when.condition`](spec.md#workflowspecstepswhen) is a JavaScript expression between `${{` and `}}` that
   yields `true` or `false`. It reads `input`, the run's input, and `step.<name>.output`, the output of a parent whose
   output has a schema: a parent that calls a Function, from the Function's contract, or that runs a child run, from
-  the child Workflow's contract. A built-in step's output has no schema, so a condition that reads it is refused with
-  the reason `WhenTypeError`. A step whose condition is false is `Skipped`, and so are the steps after it that need it
-  to succeed.
+  the child Workflow's contract. A built-in step's output has no schema, so funcd holds a Workflow whose condition
+  reads it `Pending`, with the reason `WhenTypeError`. A step whose condition is false is `Skipped`, and so are the
+  steps after it that need it to succeed.
 - A step's [`join`](spec.md#workflowspecsteps) sets how it waits for its parents. With `all`, the default, the step
   runs only when every parent has succeeded, and is `Skipped` otherwise. With `any`, it waits until every parent has
   ended, then runs on the outputs of those that succeeded, and is `Skipped` if none did. A step with several parents
@@ -178,8 +178,8 @@ amount 2, `lo` runs and `hi` is `Skipped`. In both cases, `report`, `settle` and
 
 ## Wait or reshape data without a Function
 
-The last two steps of `orders`, in the manifest above, are built-in steps, which funcd runs itself, with no Function
-and no worker:
+The last two steps of `orders`, in the manifest above, are built-in steps, which run with no Function and no
+worker:
 
 - `settle` sets [`builtin.wait`](spec.md#workflowspecstepsbuiltin) to `2s`: the step waits two seconds, then succeeds
   with its input as its output. A wait can also be a `${{ }}` expression that yields a duration when the step runs.
