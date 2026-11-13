@@ -1,0 +1,27 @@
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: greeter
+  namespace: default
+  resourceGroup: rg1
+spec:
+  runtime: nodejs22
+  handler: handle
+  image: registry.example.com/greeter:1.0.0
+---
+# region link
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: front
+  namespace: default
+  resourceGroup: rg1
+spec:
+  runtime: nodejs22
+  handler: handle
+  image: registry.example.com/front:1.0.0
+  bindings:
+    links:
+      - alias: greeter
+        target: greeter
+# endregion link

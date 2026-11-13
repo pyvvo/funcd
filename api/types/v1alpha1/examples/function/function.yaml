@@ -1,0 +1,14 @@
+# region function
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: pdf-render
+  namespace: default
+  resourceGroup: rg1
+spec:
+  runtime: nodejs22
+  handler: handle
+  image: registry.example.com/pdf-render:1.0.0
+  scaling:
+    idleTimeout: 5m
+# endregion function
