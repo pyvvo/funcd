@@ -4634,7 +4634,7 @@ components:
             - Role
           type: string
         name:
-          description: The role's name. A built-in role is one of Blob Data Reader, Blob Data Writer, KV Data Reader, KV Data Writer, SQL Data Reader, SQL Data Writer, Lake Query Reader, Lake Contributor, Function Invoker, Reader, Contributor and Owner; the last three cover Bucket and KV data only. A name that matches no role grants nothing.
+          description: The role's name. A built-in role is one of Blob Data Reader, Blob Data Writer, KV Data Reader, KV Data Writer, SQL Data Reader, SQL Data Writer, Secret Data Reader, Secret Data Writer, Lake Query Reader, Lake Contributor, Function Invoker, Reader, Contributor and Owner; the last three cover Bucket and KV data only. A name that matches no role grants nothing.
           type: string
       required:
         - kind
@@ -5063,9 +5063,10 @@ components:
             - KVStore
             - Lake
             - SQLDatabase
+            - Secret
           type: string
         name:
-          description: "The resource for each kind: <bucket>/<prefix> for one prefix of a Bucket, <store> for every table of a KVStore or <store>/<table> for one, <lake> for a Lake and <database> for a SQLDatabase. A Namespace scope covers the whole namespace, whatever its name."
+          description: "The resource for each kind: <bucket>/<prefix> for one prefix of a Bucket, <store> for every table of a KVStore or <store>/<table> for one, <lake> for a Lake, <database> for a SQLDatabase and <secret> for a Secret. A Namespace scope covers the whole namespace, whatever its name."
           type: string
       required:
         - kind
@@ -5096,6 +5097,12 @@ components:
             type: string
           description: "The Secret's values by key, each in base64. Each key is an environment-variable name: a letter or an underscore, then letters, digits and underscores; a key that starts with FUNCD_ never reaches a workload. Each value must be UTF-8 text with no NUL byte: a Function or a Lake that binds a Secret holding another value does not start."
           type: object
+        owner:
+          description: The one Function that may write the Secret's keys through ctx.secret, in its namespace, besides the writers that a RolesAssignment names, such as the Secret Data Writer role. The Function writes only while it binds the Secret. With no owner, only those writers can write it. An apply of the Secret replaces its data, keys a Function wrote included.
+          maxLength: 63
+          minLength: 1
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+          type: string
         type:
           description: funcd does not read it.
           enum:

@@ -37,6 +37,13 @@ func TestRolesAssignmentValidate(t *testing.T) {
 	require.NoError(t, ra.Validate())
 	require.Equal(t, KindRolesAssignment.GVK(), ra.GroupVersionKind())
 
+	// a Secret scope names one Secret (ADR-0327)
+	ra.Spec.Assignments = []AssignmentEntry{{
+		RoleRef: RoleRef{Kind: RoleRefKindBuiltin, Name: "Secret Data Writer"},
+		Scope:   &ScopeRef{Kind: ScopeKindSecret, Name: "oauth"},
+	}}
+	require.NoError(t, ra.Validate())
+
 	// no entries → error
 	ra.Spec.Assignments = nil
 	require.Error(t, ra.Validate())
@@ -45,4 +52,18 @@ func TestRolesAssignmentValidate(t *testing.T) {
 	ra.Spec.Principal = nil
 	ra.Spec.Assignments = []AssignmentEntry{{RoleRef: RoleRef{Kind: RoleRefKindBuiltin, Name: "Reader"}, Scope: &ScopeRef{Kind: ScopeKindNamespace}}}
 	require.Error(t, ra.Validate())
+}
+
+// A Secret's owner names a Function, as a SQLDatabase's does (ADR-0327 Decision 2): a DNS label, or none.
+func TestSecretOwnerIsAFunctionName(t *testing.T) {
+	t.Parallel()
+	obj, ok := NewObject(KindSecret)
+	require.True(t, ok)
+	sec := obj.(*Secret)
+	sec.Namespace, sec.Name, sec.ResourceGroup = "data", "oauth", "rg1"
+	require.NoError(t, sec.Validate(), "no owner")
+	sec.Spec.Owner = "refresher"
+	require.NoError(t, sec.Validate())
+	sec.Spec.Owner = "Not_A_Name"
+	require.ErrorContains(t, sec.Validate(), "spec.owner")
 }

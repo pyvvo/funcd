@@ -14083,5 +14083,35 @@
     "dod_total": 16,
     "report": "docs/reviews/adr-0326-implementation-claude-opus-5-5.md",
     "notes": "1 round; 0B/0M/1m, model: the warn test sets the six keys at once and takes the key-path pairs from secretFiles, so a key that reads another key's field passes (overlay mutant ok). The ADR's three Done-when mutants fail as required. The egress rows moved verbatim to a new Egress chapter (security.md was at the 16 KiB cap). Routed: rebase onto 872e6d11 and regenerate spec.md; the ADR is in no commit yet"
+  },
+  {
+    "date": "2026-11-13",
+    "adr": "0327",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 2,
+    "model_attributed": 2,
+    "dod_passed": 19,
+    "dod_total": 19,
+    "report": "docs/reviews/adr-0327-implementation-claude-opus-5-5.md",
+    "notes": "pass in round 2, independent subagent review; 2 minors (model), both closed: the missing-Secret row was rewritten during the move the ADR calls unchanged (a correct fix, now named in the PR body), and the gate's audit flagged SecretWriters as a copy of SQLWriters (ef4e1d5e: both call writersOf, audit PASS); 25 Secret e2e pass on the pinned shims v0.28.0 and v0.23.0, which match the reviewed commits but for a doc line; key-write.fizz passes with its 5 mutants failing, 4 oracle tests; gate ci-full PASS"
+  },
+  {
+    "date": "2026-11-13",
+    "adr": "0328",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 7,
+    "dod_total": 7,
+    "report": "docs/reviews/adr-0328-implementation-claude-opus-5-5.md",
+    "notes": "pass, independent subagent review with ADR-0327; no finding: funcd-typescript v0.28.0's SecretClient has put and del and no delete, funcd-python v0.23.0 keeps put and delete, the TypeScript e2e handler deletes with ctx.secret.del, and the secrets.md row is titled put, del or delete"
   }
 ]

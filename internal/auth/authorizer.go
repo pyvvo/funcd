@@ -91,6 +91,9 @@ const (
 	// ActionSecretRead is the Cedar action for a read of a Secret's values (ADR-0321): a declared spec.bindings.secret
 	// binding grants it, to a Function or a Lake; a namespace Policy forbid revokes it. Resource = a Secret.
 	ActionSecretRead Action = "secret::read"
+	// ActionSecretWrite is the Cedar action for a write of one key of a Secret (ADR-0327): permitted only to the Secret's
+	// writers, its owner plus writer-role grants, as kv::write is. Resource = a Secret.
+	ActionSecretWrite Action = "secret::write"
 )
 
 // Identity is an authenticated principal (resolved by authn from a token / API key).

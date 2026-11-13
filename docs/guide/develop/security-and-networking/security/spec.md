@@ -69,7 +69,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `kind` | string, required, one of `BuiltinRole`, `Role` | Where the role comes from: BuiltinRole for one of funcd's built-in roles, Role for a Role of the RolesAssignment's namespace. |
-| `name` | string, required | The role's name. A built-in role is one of Blob Data Reader, Blob Data Writer, KV Data Reader, KV Data Writer, SQL Data Reader, SQL Data Writer, Lake Query Reader, Lake Contributor, Function Invoker, Reader, Contributor and Owner; the last three cover Bucket and KV data only. A name that matches no role grants nothing. |
+| `name` | string, required | The role's name. A built-in role is one of Blob Data Reader, Blob Data Writer, KV Data Reader, KV Data Writer, SQL Data Reader, SQL Data Writer, Secret Data Reader, Secret Data Writer, Lake Query Reader, Lake Contributor, Function Invoker, Reader, Contributor and Owner; the last three cover Bucket and KV data only. A name that matches no role grants nothing. |
 
 ### `RolesAssignment.spec.principal`
 
@@ -82,8 +82,8 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `kind` | string, required, one of `Namespace`, `BucketPrefix`, `KVStore`, `Lake`, `SQLDatabase` | What the grant covers: with Namespace, every resource of the RolesAssignment's namespace; with another kind, the one resource that name gives, in that namespace. |
-| `name` | string | The resource for each kind: &lt;bucket&gt;/&lt;prefix&gt; for one prefix of a Bucket, &lt;store&gt; for every table of a KVStore or &lt;store&gt;/&lt;table&gt; for one, &lt;lake&gt; for a Lake and &lt;database&gt; for a SQLDatabase. A Namespace scope covers the whole namespace, whatever its name. |
+| `kind` | string, required, one of `Namespace`, `BucketPrefix`, `KVStore`, `Lake`, `SQLDatabase`, `Secret` | What the grant covers: with Namespace, every resource of the RolesAssignment's namespace; with another kind, the one resource that name gives, in that namespace. |
+| `name` | string | The resource for each kind: &lt;bucket&gt;/&lt;prefix&gt; for one prefix of a Bucket, &lt;store&gt; for every table of a KVStore or &lt;store&gt;/&lt;table&gt; for one, &lt;lake&gt; for a Lake, &lt;database&gt; for a SQLDatabase and &lt;secret&gt; for a Secret. A Namespace scope covers the whole namespace, whatever its name. |
 
 ## Policy
 

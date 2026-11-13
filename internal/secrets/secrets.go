@@ -92,13 +92,18 @@ func (r *Resolver) ResolveEnv(ctx context.Context, id auth.Identity, ns v1.Names
 
 // authorizeRead asks secret::read on Secret name as id's workload principal (ADR-0321).
 func (r *Resolver) authorizeRead(ctx context.Context, op string, id auth.Identity, ns v1.NamespaceName, name string) error {
-	dec, err := r.authz.Authorize(ctx, auth.Request{Identity: id, Verb: auth.VerbGet, Kind: v1.KindSecret, Namespace: ns,
-		Action: auth.ActionSecretRead, Resource: &auth.EntityRef{Type: v1.KindSecret, Namespace: ns, Name: v1.ObjectName(name)}})
+	return r.authorize(ctx, op, id, ns, name, auth.ActionSecretRead, auth.VerbGet, "read")
+}
+
+// authorize asks action on Secret name as id's workload principal; a deny is fault.Forbidden naming what was denied.
+func (r *Resolver) authorize(ctx context.Context, op string, id auth.Identity, ns v1.NamespaceName, name string, action auth.Action, verb auth.Verb, what string) error {
+	dec, err := r.authz.Authorize(ctx, auth.Request{Identity: id, Verb: verb, Kind: v1.KindSecret, Namespace: ns,
+		Action: action, Resource: &auth.EntityRef{Type: v1.KindSecret, Namespace: ns, Name: v1.ObjectName(name)}})
 	if err != nil {
 		return fault.Wrapf(err, fault.Internal, op, "authorize")
 	}
 	if !dec.Allowed {
-		return fault.Forbiddenf(op, "read secret %q in %q denied: %s", name, ns, dec.Reason)
+		return fault.Forbiddenf(op, "%s secret %q in %q denied: %s", what, name, ns, dec.Reason)
 	}
 	return nil
 }
@@ -107,6 +112,12 @@ func (r *Resolver) authorizeRead(ctx context.Context, op string, id auth.Identit
 // read it. It reads no Secret, so a missing one passes and the start check alone answers for it.
 func (r *Resolver) CheckRead(ctx context.Context, id auth.Identity, ns v1.NamespaceName, name string) error {
 	return r.authorizeRead(ctx, "secrets.CheckRead", id, ns, name)
+}
+
+// CheckWrite asks secret::write on Secret name as id's workload principal (ADR-0327 Decision 1): may it write the
+// Secret's keys. The decision reads the stored Secret's owner, so the caller asks after its own read of it.
+func (r *Resolver) CheckWrite(ctx context.Context, id auth.Identity, ns v1.NamespaceName, name string) error {
+	return r.authorize(ctx, "secrets.CheckWrite", id, ns, name, auth.ActionSecretWrite, auth.VerbUpdate, "write")
 }
 
 // InjectorIdentity is the namespace-scoped developer identity a Function's start check resolves its secrets as when no
