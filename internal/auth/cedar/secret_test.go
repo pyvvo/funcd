@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	cedartypes "github.com/cedar-policy/cedar-go/types"
 	"github.com/stretchr/testify/require"
 
 	"github.com/pyvvo/funcd/api/fault"
@@ -13,11 +14,12 @@ import (
 	"github.com/pyvvo/funcd/internal/auth/cedar"
 )
 
-// secretMeta holds the Functions, Lakes and custom Roles of "default".
+// secretMeta holds the Functions, Lakes, Secrets and custom Roles of "default".
 type secretMeta struct {
-	fns   map[v1.ObjectName]*v1.Function
-	lakes map[v1.ObjectName]*v1.Lake
-	roles map[v1.ObjectName]*v1.Role
+	fns     map[v1.ObjectName]*v1.Function
+	lakes   map[v1.ObjectName]*v1.Lake
+	secrets map[v1.ObjectName]*v1.Secret
+	roles   map[v1.ObjectName]*v1.Role
 }
 
 func (m secretMeta) Get(_ context.Context, gvk v1.GroupVersionKind, ns v1.NamespaceName, name v1.ObjectName) (v1.Object, error) {
@@ -34,6 +36,10 @@ func (m secretMeta) Get(_ context.Context, gvk v1.GroupVersionKind, ns v1.Namesp
 		case v1.KindRole:
 			if r, ok := m.roles[name]; ok {
 				return r, nil
+			}
+		case v1.KindSecret:
+			if sec, ok := m.secrets[name]; ok {
+				return sec, nil
 			}
 		}
 	}
@@ -155,4 +161,105 @@ func TestScenarioSecretRolesGrantNothing(t *testing.T) {
 		`forbid(principal == Function::"default/reports", action == Action::"secret::read", resource == Secret::"default/api-keys");`)
 	require.False(t, secretRead(t, secretDriver(t, m, append(custom, forbid)...), fnPrincipal("default", "reports"), "api-keys").Allowed,
 		"a grant never lifts a forbid")
+}
+
+// grantedWriters is a WriterLister naming, for each Secret, the Functions a writer-role grant covers.
+type grantedWriters map[v1.ObjectName][]v1.ObjectName
+
+func (grantedWriters) BlobWriters(context.Context, v1.NamespaceName, string, string) []cedartypes.EntityUID {
+	return nil
+}
+func (grantedWriters) KVWriters(context.Context, v1.NamespaceName, string, string) []cedartypes.EntityUID {
+	return nil
+}
+func (grantedWriters) SQLWriters(context.Context, v1.NamespaceName, string) []cedartypes.EntityUID {
+	return nil
+}
+func (g grantedWriters) SecretWriters(_ context.Context, ns v1.NamespaceName, secret string) []cedartypes.EntityUID {
+	var out []cedartypes.EntityUID
+	for _, fn := range g[v1.ObjectName(secret)] {
+		out = append(out, cedartypes.NewEntityUID("Function", cedartypes.String(string(ns)+"/"+string(fn))))
+	}
+	return out
+}
+
+// writeMeta is newSecretMeta with Secret oauth, owned by checkout, and Secret plain, owned by no one.
+func writeMeta() secretMeta {
+	m := newSecretMeta()
+	sec := func(name, owner v1.ObjectName) *v1.Secret {
+		return &v1.Secret{ObjectMeta: v1.ObjectMeta{Name: name, Namespace: "default", ResourceGroup: "rg1"}, Spec: v1.SecretSpec{Owner: owner}}
+	}
+	m.secrets = map[v1.ObjectName]*v1.Secret{"oauth": sec("oauth", "checkout"), "plain": sec("plain", "")}
+	return m
+}
+
+// secretWriteDriver is the PDP over the secret capability with writers w, as the root registry builds it.
+func secretWriteDriver(t *testing.T, m secretMeta, w cedar.WriterLister, policies ...v1.Policy) auth.Authorizer {
+	t.Helper()
+	reg, err := cedar.NewRegistry([]cedar.Capability{cedar.KVCapability(), cedar.SecretCapabilityWithWriters(w)},
+		[]cedar.PrincipalSource{cedar.FunctionPrincipalSource(), cedar.LakePrincipalSource()})
+	require.NoError(t, err)
+	ep, err := reg.EntityProvider(m)
+	require.NoError(t, err)
+	d, err := cedar.New(cedar.Deps{Entities: ep, Policies: fixedPolicies{policies: policies, rev: "1"}, Builtins: reg.Builtins()})
+	require.NoError(t, err)
+	return d
+}
+
+func secretWrite(t *testing.T, a auth.Authorizer, principal *auth.EntityRef, secret v1.ObjectName) auth.Decision {
+	t.Helper()
+	return authorize(t, a, principal, auth.ActionSecretWrite, &auth.EntityRef{Type: v1.KindSecret, Namespace: "default", Name: secret})
+}
+
+// secret::write is permitted only to the Secret's writers, its owner and the writer-role grants, as kv::write is; a
+// Secret with neither, or a missing one, has none; a Policy forbid revokes a write (ADR-0327 Decision 1).
+func TestSecretCapability_OnlyWritersWrite(t *testing.T) {
+	t.Parallel()
+	m := writeMeta()
+	a := secretWriteDriver(t, m, grantedWriters{"oauth": {"reports"}})
+	require.True(t, secretWrite(t, a, fnPrincipal("default", "checkout"), "oauth").Allowed, "the owner")
+	require.True(t, secretWrite(t, a, fnPrincipal("default", "reports"), "oauth").Allowed, "a writer-role grant")
+	d := secretWrite(t, a, fnPrincipal("default", "stranger"), "oauth")
+	require.False(t, d.Allowed, "neither")
+	require.Contains(t, d.Reason, "builtin/secret-single-writer")
+	require.False(t, secretWrite(t, a, fnPrincipal("default", "checkout"), "plain").Allowed, "no owner and no grant")
+	require.False(t, secretWrite(t, a, fnPrincipal("default", "checkout"), "gone").Allowed, "a missing Secret")
+	require.False(t, secretWrite(t, a, lakeRef("lake"), "quack").Allowed, "a Lake owns no Secret")
+	require.True(t, secretRead(t, a, fnPrincipal("default", "checkout"), "api-keys").Allowed, "reads stay the binding's")
+
+	text := `forbid(principal == Function::"default/checkout", action == Action::"secret::write", resource == Secret::"default/oauth");`
+	require.NoError(t, cedar.ValidateCedarInNamespace("default", text))
+	d = secretWrite(t, secretWriteDriver(t, m, nil, namespacePolicy("no-writes", text)), fnPrincipal("default", "checkout"), "oauth")
+	require.False(t, d.Allowed)
+	require.True(t, strings.HasPrefix(d.Reason, "cedar: forbidden by policy "), d.Reason)
+}
+
+// The built-in Secret roles (ADR-0327 Decision 3): Secret Data Writer on one Secret is a writer of that Secret, its
+// read a permit on it alone; Secret Data Reader makes no writer; a write grant is never a permit.
+func TestSecretRoles_WriterJoinsTheWritersOfItsScope(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	roles := cedar.NewRoleResolver(newSecretMeta())
+	grant := func(role string, scope v1.ScopeRef) *v1.RolesAssignment {
+		return &v1.RolesAssignment{
+			ObjectMeta: v1.ObjectMeta{Name: "grant", Namespace: "default", ResourceGroup: "rg1"},
+			Spec: v1.RolesAssignmentSpec{
+				Principal:   &v1.PrincipalRef{Kind: v1.PrincipalKindFunction, Name: "reports"},
+				Assignments: []v1.AssignmentEntry{{RoleRef: v1.RoleRef{Kind: v1.RoleRefKindBuiltin, Name: role}, Scope: &scope}},
+			},
+		}
+	}
+	writer := grant("Secret Data Writer", v1.ScopeRef{Kind: v1.ScopeKindSecret, Name: "oauth"})
+	ws := cedar.WriterGrants(ctx, writer, roles)
+	require.Len(t, ws, 1)
+	require.Equal(t, []string{string(auth.ActionSecretWrite)}, ws[0].Writes)
+	pols, err := cedar.CompileRolesAssignment(ctx, writer, roles)
+	require.NoError(t, err)
+	require.Len(t, pols, 1)
+	require.Contains(t, pols[0].Spec.Cedar, `Secret::"default/oauth"`, "the scope is that one Secret")
+	require.Contains(t, pols[0].Spec.Cedar, string(auth.ActionSecretRead))
+	require.NotContains(t, pols[0].Spec.Cedar, string(auth.ActionSecretWrite), "a write grant is a writer, never a permit")
+
+	require.Empty(t, cedar.WriterGrants(ctx, grant("Secret Data Reader", v1.ScopeRef{Kind: v1.ScopeKindNamespace}), roles),
+		"the reader makes no writer")
 }

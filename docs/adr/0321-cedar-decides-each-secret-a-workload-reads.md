@@ -4,6 +4,7 @@
   two Majors and six Minors and round 2's four points folded, one Nit declined with its reason; experiment 0019 rerun
   on the final rules
 - **Superseded in part by**: [ADR-0322](0322-a-lakes-forbidden-secret-is-told-in-the-lakes-chapter.md) (2026-11-11) — its Behavior rows section: a Function's forbidden Secret is told in security.md, a Lake's in services.md, and workers.md's binding row cites ADR-0321.
+- **Superseded in part by**: [ADR-0327](0327-a-function-writes-the-secrets-it-owns.md) (2026-11-13) — Decision 2's "No built-in role holds `secret::read`" (`Secret Data Reader` and `Secret Data Writer` hold it); Decision 4's "it reads no Secret" (a decision reads the Secret for its owner; a missing one still passes); the Scope's "Secret writes (F236, #1432); a role that grants a read"; and the review checklist's "no built-in role holds `secret::read`" and "reads no Secret".
 - **Date**: 2026-11-11
 - **Deciders**: green-0-rabbit
 - **Tags**: secrets, authorization, cedar, local-api, health, lake

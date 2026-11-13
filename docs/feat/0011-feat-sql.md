@@ -37,8 +37,8 @@ match. Feature status: `idea → adr → accepted → reviewing → implemented`
 
 F127 comes first: a SQL engine keeps its data on disk, and the add-on runtime keeps none today. F128 builds on it.
 F129, F131 and F132 build on F128. F130 and F133 build on F128 and F129, because a migration hook and the dev loop
-both run SQL from functions. F136 lets the change feed work with no address configured. F134 and F135 are ideas,
-not built in this epoch.
+both run SQL from functions. F136 lets the change feed work with no address configured. F239, added on 2026-11-13,
+builds on F128 and F129. F134 and F135 are ideas, not built in this epoch.
 
 ```mermaid
 flowchart LR
@@ -51,6 +51,8 @@ flowchart LR
     F128 --> F133["F133 SQL in funcdctl dev"]
     F129 --> F133
     F132 --> F136["F136 Bridge address"]
+    F128 --> F239["F239 Graph queries"]
+    F129 --> F239
 ```
 
 | # | Feature | Builds on | ADR(s) | Status |
@@ -66,6 +68,7 @@ flowchart LR
 | F135 | **Shared SQL server**: many apps' databases on one engine, with funcd checking the tables and the action of every statement in the daemon before it runs. Recorded as an idea when dedicated engines were chosen on 2026-10-12, so it is not built in this epoch. **Why**: dedicated engines cost about 5 MB each at rest, plus 5 to 8 MB for each engine's containerd shim; a shared server would save both, at the price of statement checks and one write log for every app. | F128 · F129 | — | idea |
 | F136 | **The bridge address**: the address containers call funcd back on (the change feed, the lake proxies, the S3 endpoint) comes from the container network funcd creates, with nothing to configure. **Why**: an install without `lake.proxyHost` silently lost the change feed, and a SQL feature depended on a lake field. | F132 | [ADR-0238](../adr/0238-container-bridge-address.md) | implemented |
 | F169 | **A Drizzle package for `context.sql`**: a TypeScript function queries its database with Drizzle, and an App applies its drizzle-kit migrations, through one package funcd ships, instead of a copy of the adapter in each App. **Why**: three hand-copied adapters had drifted, and each change to `context.sql` meant a hand fix in every App. Tracked in #1140. | F129, F130 | [ADR-0258](../adr/0258-typescript-drizzle-package.md) | implemented |
+| F239 | **Graph queries on a SQL database**: a function keeps a graph in its SQL database, reads and changes it with Cypher, and runs graph algorithms on it, such as PageRank, Louvain communities, shortest paths and connected components, through `context.sql`. Added on 2026-11-13. **Why**: agents keep their memory and their knowledge as graphs, and the blueprint plans a graph service. Experiment 0020 ran the GraphQLite extension (MIT) in funcd's rqlite engine: it answered correctly through `query` and `execute`, and the graph survived restarts and backups, but only from an engine that can load an extension, which the static engine of ADR-0232 cannot. Tracked in #1456. | F128 · F129 | — | idea |
 
 ## How it lands on funcd (high level)
 
@@ -145,6 +148,9 @@ each feature passes its checks:
 - **F132**: an insert, an update and a delete each start the Sensor's action, also after an engine restart, and a
   change the engine delivers twice starts it once.
 - **F133**: `funcdctl dev` runs a function that binds a database, its migrations and its queries, as in production.
+- **F239**: a function reads and changes a graph in its database with Cypher and runs graph algorithms on it, through
+  `context.sql`, in production and in `funcdctl dev`; a write sent with `query` is refused; a value that a write
+  acknowledged reads the same after the engine is killed and after a backup is restored.
 
 ## Out of scope (tracked elsewhere)
 
@@ -171,3 +177,4 @@ each feature passes its checks:
 | Whether the platform backup also copies every database | no, for now: [ADR-0234](../adr/0234-sql-backup-and-restore.md) Decision 6 |
 | The shape of a change event, and how a duplicate delivery is dropped | one CloudEvent per row change; a Raft-index watermark per database and engine epoch drops a redelivery, and the event `id` lets a function drop the repeat a daemon crash can cause: [ADR-0235](../adr/0235-sql-change-feed.md) Decisions 3 and 5 |
 | The containerd shim cost per engine | 5 to 8 MB of private memory per engine (12 to 15 MB RSS), measured on 2026-10-13 on the `sql` lane's VM (arm64, three to eight shims running), so with the engine's 4 to 7 MB a database costs about 10 to 15 MB; not yet measured on the target box, as [ADR-0232](../adr/0232-sql-database-resource-and-rqlite-engine.md) asked |
+| F239: how the engine carries a graph extension, since the static engine of [ADR-0232](../adr/0232-sql-database-resource-and-rqlite-engine.md) Decision 3 loads none; whether every database gets it; and how a new database stays empty for a restore, a Cypher write keeps its values when the engine applies its log again, and a write's `RETURN` reaches the function | open: F239's ADR (#1456) |

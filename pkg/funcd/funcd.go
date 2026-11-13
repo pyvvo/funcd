@@ -664,7 +664,7 @@ func (p *Platform) buildControlPlane() error {
 		// ADR-0137 (F102): LakeCapability makes the live PDP understand lake::query; the per-Lake
 		// PEP proxy that calls it is not yet wired here — see TODO(ADR-0137) in internal/services/lake/reconcile.go.
 		[]cedarauth.Capability{cedarauth.KVCapabilityWithWriters(writerLister), cedarauth.InvokeCapability(), s3Cap, cedarauth.EgressCapability(), cedarauth.LakeCapability(),
-			cedarauth.SQLCapabilityWithWriters(writerLister), cedarauth.SecretCapability()},
+			cedarauth.SQLCapabilityWithWriters(writerLister), cedarauth.SecretCapabilityWithWriters(writerLister)},
 		[]cedarauth.PrincipalSource{cedarauth.FunctionPrincipalSource(), cedarauth.LakePrincipalSource()},
 	)
 	if err != nil {
@@ -885,7 +885,7 @@ func (p *Platform) buildControlPlane() error {
 	ctrl.Watches(v1.KindRevision.GVK(), fnReconciler.MapRevision)
 	ctrl.Watches(v1.KindRestore.GVK(), fnReconciler.MapRestore) // a Restore into a volume clears DataMissing (ADR-0262)
 	// a change to what a namespace grants its Functions can move a pooled one to another pool
-	for _, k := range []v1.Kind{v1.KindKVStore, v1.KindBucket, v1.KindSQLDatabase, v1.KindRolesAssignment, v1.KindEgressPolicy, v1.KindPolicy} {
+	for _, k := range function.AccessKinds() {
 		ctrl.Watches(k.GVK(), fnReconciler.MapAccess)
 	}
 	ctrl.Watches(v1.KindFunction.GVK(), fnReconciler.MapPoolDisplaced) // an asleep member a newcomer displaces (ADR-0193)

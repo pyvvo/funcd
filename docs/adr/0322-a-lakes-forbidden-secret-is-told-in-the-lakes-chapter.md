@@ -3,6 +3,7 @@
 - **Status**: Implemented (2026-11-11), review passed with no finding ([report](../reviews/adr-0322-implementation-claude-opus-5-5.md)); Reviewing (2026-11-11, implemented with ADR-0321); Accepted (2026-11-11), under the decider's delegation
   ("Don't need acceptance brief run it till completion"), after two rounds of an independent judge (a subagent), every
   finding folded
+- **Superseded in part by**: [ADR-0327](0327-a-function-writes-the-secrets-it-owns.md) (2026-11-13) — its Decision's security.md row: the new Secrets chapter tells a Function's forbidden Secret, with the other Secret rows.
 - **Date**: 2026-11-11
 - **Deciders**: green-0-rabbit
 - **Tags**: behavior, secrets, lake

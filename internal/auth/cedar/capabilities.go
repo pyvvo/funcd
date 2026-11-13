@@ -552,21 +552,29 @@ func sqlResource(ctx context.Context, r MetaReader, resource auth.EntityRef, wri
 		return nil, false, fault.Internalf(op, "object %q is not a SQLDatabase", resource.Name)
 	}
 	attrs["resourceGroup"] = cedartypes.String(db.ResourceGroup)
+	var listed []cedartypes.EntityUID
+	if writers != nil {
+		listed = writers.SQLWriters(ctx, resource.Namespace, string(resource.Name))
+	}
+	addOwnerAndWriters(attrs, db.Namespace, db.Spec.Owner, listed)
+	return cedartypes.EntityMap{uid: {UID: uid, Attributes: cedartypes.NewRecord(attrs)}}, true, nil
+}
+
+// addOwnerAndWriters sets a resource's `owner`, its owner Function when named, and `writers`, that owner plus the
+// writer-role grants listed (ADR-0136); a resource with neither gets no `writers`, so a single-writer forbid fires.
+func addOwnerAndWriters(attrs cedartypes.RecordMap, ns v1.NamespaceName, owner v1.ObjectName, listed []cedartypes.EntityUID) {
 	var writerVals []cedartypes.Value
-	if db.Spec.Owner != "" {
-		ownerUID := functionUID(db.Namespace, db.Spec.Owner)
+	if owner != "" {
+		ownerUID := functionUID(ns, owner)
 		attrs["owner"] = ownerUID
 		writerVals = append(writerVals, ownerUID)
 	}
-	if writers != nil {
-		for _, w := range writers.SQLWriters(ctx, resource.Namespace, string(resource.Name)) {
-			writerVals = append(writerVals, w)
-		}
+	for _, w := range listed {
+		writerVals = append(writerVals, w)
 	}
 	if len(writerVals) > 0 {
 		attrs["writers"] = cedartypes.NewSet(writerVals...)
 	}
-	return cedartypes.EntityMap{uid: {UID: uid, Attributes: cedartypes.NewRecord(attrs)}}, true, nil
 }
 
 //go:embed builtin_secret.cedar
@@ -576,15 +584,23 @@ func secretUID(ns v1.NamespaceName, name v1.ObjectName) cedartypes.EntityUID {
 	return cedartypes.NewEntityUID(entityTypeSecret, cedartypes.String(string(ns)+"/"+string(name)))
 }
 
-// SecretCapability is the secret::read capability (ADR-0321): a Function's or a Lake's spec.bindings.secret → the
-// `secretBindings` Set of Secret entity-refs (binding-as-read-grant); the resource is the Secret read. Read-shaped: no
-// writers set and no write action, and no built-in role holds it.
-func SecretCapability() Capability {
+// SecretCapability is the secret::read and secret::write capability (ADR-0321, ADR-0327): a Function's or a Lake's
+// spec.bindings.secret → the `secretBindings` Set of Secret entity-refs (binding-as-read-grant); the resource is the
+// Secret with its owner and `writers`. Owner-only writers.
+func SecretCapability() Capability { return secretCapability(nil) }
+
+// SecretCapabilityWithWriters is SecretCapability with a WriterLister, so a writer-role RolesAssignment joins a Secret's
+// `writers` set (ADR-0327).
+func SecretCapabilityWithWriters(w WriterLister) Capability { return secretCapability(w) }
+
+func secretCapability(writers WriterLister) Capability {
 	return Capability{
 		Name:            "secret",
-		Actions:         []auth.Action{auth.ActionSecretRead},
+		Actions:         []auth.Action{auth.ActionSecretRead, auth.ActionSecretWrite},
 		EmitsEntityType: entityTypeSecret,
-		Resource:        secretResource,
+		Resource: func(ctx context.Context, r MetaReader, resource auth.EntityRef) (cedartypes.EntityMap, bool, error) {
+			return secretResource(ctx, r, resource, writers)
+		},
 		PrincipalBinding: PrincipalBinding{
 			Attr: "secretBindings",
 			Bind: func(ns v1.NamespaceName, src PrincipalObject) []cedartypes.EntityUID {
@@ -608,14 +624,30 @@ func SecretCapability() Capability {
 	}
 }
 
-// secretResource materializes the Secret as a bare entity with its namespace attr, which a Namespace-scoped
-// RolesAssignment grant reads; no MetaReader read, so a missing Secret is still an evaluable entity.
-func secretResource(_ context.Context, _ MetaReader, resource auth.EntityRef) (cedartypes.EntityMap, bool, error) {
+// secretResource materializes the Secret with its namespace, owner and writers, as sqlResource does (ADR-0327 Decision
+// 1). A missing Secret is a bare entity with its namespace, which a Namespace-scoped grant reads and no write passes.
+func secretResource(ctx context.Context, r MetaReader, resource auth.EntityRef, writers WriterLister) (cedartypes.EntityMap, bool, error) {
+	const op = "cedar.SecretCapability.Resource"
 	if resource.Type != v1.KindSecret {
 		return nil, false, nil
 	}
-	rUID := secretUID(resource.Namespace, resource.Name)
-	return cedartypes.EntityMap{
-		rUID: {UID: rUID, Attributes: cedartypes.NewRecord(cedartypes.RecordMap{"namespace": cedartypes.String(resource.Namespace)})},
-	}, true, nil
+	uid := secretUID(resource.Namespace, resource.Name)
+	attrs := cedartypes.RecordMap{"namespace": cedartypes.String(resource.Namespace)}
+	obj, err := r.Get(ctx, v1.KindSecret.GVK(), resource.Namespace, resource.Name)
+	switch {
+	case fault.KindOf(err) == fault.NotFound:
+		return cedartypes.EntityMap{uid: {UID: uid, Attributes: cedartypes.NewRecord(attrs)}}, true, nil
+	case err != nil:
+		return nil, false, fault.Wrapf(err, fault.Internal, op, "get secret %q", resource.Name)
+	}
+	sec, ok := obj.(*v1.Secret)
+	if !ok {
+		return nil, false, fault.Internalf(op, "object %q is not a Secret", resource.Name)
+	}
+	var listed []cedartypes.EntityUID
+	if writers != nil {
+		listed = writers.SecretWriters(ctx, resource.Namespace, string(resource.Name))
+	}
+	addOwnerAndWriters(attrs, sec.Namespace, sec.Spec.Owner, listed)
+	return cedartypes.EntityMap{uid: {UID: uid, Attributes: cedartypes.NewRecord(attrs)}}, true, nil
 }

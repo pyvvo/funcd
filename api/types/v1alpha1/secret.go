@@ -1,6 +1,10 @@
 package v1alpha1
 
-import huma "github.com/danielgtaylor/huma/v2"
+import (
+	huma "github.com/danielgtaylor/huma/v2"
+
+	"github.com/pyvvo/funcd/api/fault"
+)
 
 // Secret is a namespaced, pure-data resource for sensitive configuration.
 // Secret does NOT have status — it implements Object, not StatusObject.
@@ -10,11 +14,13 @@ type Secret struct {
 	Spec       SecretSpec `json:"spec"`
 }
 
-// SecretSpec holds the secret data. SecretType is an open typed-string discriminator
-// whose enumerated values are owned by the secrets ADR (F15).
+// SecretSpec holds the secret data and the Function that may write it (ADR-0327). SecretType is an open typed-string
+// discriminator whose enumerated values are owned by the secrets ADR (F15).
 type SecretSpec struct {
 	Type SecretType        `json:"type,omitempty" doc:"funcd does not read it."`
 	Data map[string][]byte `json:"data,omitempty" doc:"The Secret's values by key, each in base64. Each key is an environment-variable name: a letter or an underscore, then letters, digits and underscores; a key that starts with FUNCD_ never reaches a workload. Each value must be UTF-8 text with no NUL byte: a Function or a Lake that binds a Secret holding another value does not start."`
+	// Owner may write the Secret's keys through ctx.secret, as a KV table's owner writes the table (ADR-0327).
+	Owner ObjectName `json:"owner,omitempty" doc:"The one Function that may write the Secret's keys through ctx.secret, in its namespace, besides the writers that a RolesAssignment names, such as the Secret Data Writer role. The Function writes only while it binds the Secret. With no owner, only those writers can write it. An apply of the Secret replaces its data, keys a Function wrote included."`
 }
 
 // SecretType is an open typed-string discriminator for secret kinds.
@@ -35,8 +41,12 @@ func (s *Secret) GroupVersionKind() GroupVersionKind { return KindSecret.GVK() }
 // Validate performs envelope validation, then the data-key rule JSON Schema can't express
 // (ADR-0048): every data key is an env-var name. The `type` enum is schema-enforced at the edge.
 func (s *Secret) Validate() error {
+	const op = "Secret.Validate"
 	if err := validateMeta(s.TypeMeta, &s.ObjectMeta, KindSecret); err != nil {
 		return err
 	}
-	return validateEnvKeys("Secret.Validate", s.Spec.Data)
+	if s.Spec.Owner != "" && !dnsLabel.MatchString(string(s.Spec.Owner)) {
+		return fault.Invalidf(op, "spec.owner %q is not a valid Function name", s.Spec.Owner)
+	}
+	return validateEnvKeys(op, s.Spec.Data)
 }

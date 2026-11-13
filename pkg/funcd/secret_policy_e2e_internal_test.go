@@ -51,8 +51,8 @@ func (e *countingEngine) Teardown(ctx context.Context, ref provider.ProviderRef)
 }
 
 // newPolicyRig is a platform on the real node shim with Secret api-keys (STRIPE_KEY sk, MODE prod) in namespace
-// default and a fake Lake engine that counts its stops.
-func newPolicyRig(t *testing.T) (*secretRig, *countingEngine) {
+// default and a fake Lake engine that counts its stops; extra options join the platform's.
+func newPolicyRig(t *testing.T, extra ...Option) (*secretRig, *countingEngine) {
 	t.Helper()
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -61,8 +61,8 @@ func newPolicyRig(t *testing.T) (*secretRig, *countingEngine) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	t.Cleanup(srv.Close)
 	engine := &countingEngine{envEngine: &envEngine{addr: strings.TrimPrefix(srv.URL, "http://")}}
-	p, err := New(InMemory(), WithoutLogCompaction(), WithRuntimeShim(node, langmod.NodeShim(t)),
-		WithLakeProviderRuntime(engine), WithPacing(asleepPacing(50*time.Millisecond)))
+	p, err := New(append([]Option{InMemory(), WithoutLogCompaction(), WithRuntimeShim(node, langmod.NodeShim(t)),
+		WithLakeProviderRuntime(engine), WithPacing(asleepPacing(50 * time.Millisecond))}, extra...)...)
 	require.NoError(t, err)
 	runCtx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

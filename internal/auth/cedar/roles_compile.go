@@ -15,18 +15,20 @@ import (
 // The funcd data-plane action strings a Role may grant. Write actions gate the single-writer forbid via
 // the `writers` set (WriterGrants); the rest compile to Cedar permits (CompileRolesAssignment).
 const (
-	actionS3Read     = "s3::read"
-	actionS3Write    = "s3::write"
-	actionKVRead     = "kv::read"
-	actionKVWrite    = "kv::write"
-	actionLinkInvoke = "link::invoke"
-	actionLakeQuery  = "lake::query" // == string(auth.ActionLakeQuery); read-shaped (a permit, ADR-0137)
-	actionSQLRead    = "sql::read"
-	actionSQLWrite   = "sql::write"
+	actionS3Read      = "s3::read"
+	actionS3Write     = "s3::write"
+	actionKVRead      = "kv::read"
+	actionKVWrite     = "kv::write"
+	actionLinkInvoke  = "link::invoke"
+	actionLakeQuery   = "lake::query" // == string(auth.ActionLakeQuery); read-shaped (a permit, ADR-0137)
+	actionSQLRead     = "sql::read"
+	actionSQLWrite    = "sql::write"
+	actionSecretRead  = "secret::read"
+	actionSecretWrite = "secret::write"
 )
 
 func isWriteAction(a string) bool {
-	return a == actionS3Write || a == actionKVWrite || a == actionSQLWrite
+	return a == actionS3Write || a == actionKVWrite || a == actionSQLWrite || a == actionSecretWrite
 }
 
 // builtinRoles is the fixed DATA-PLANE role lake (ADR-0136). Managing assignments is control-plane
@@ -42,6 +44,10 @@ var builtinRoles = map[string][]string{
 	// ADR-0233: Reader, Contributor and Owner stay without SQL, so an existing namespace grant gains no database.
 	"SQL Data Reader": {actionSQLRead},
 	"SQL Data Writer": {actionSQLRead, actionSQLWrite},
+	// ADR-0327: the binding stays the read grant, so the reader adds nothing to a workload that binds the Secret; the
+	// writer joins its writers. Reader, Contributor and Owner stay without Secret actions, as without SQL.
+	"Secret Data Reader": {actionSecretRead},
+	"Secret Data Writer": {actionSecretRead, actionSecretWrite},
 	// ADR-0137 (F102): lake::query is read-shaped. "Lake Contributor" is a forward-compat alias —
 	// byte-identical to the reader today, reserved to gain lake::write when the deferred DDL grant lands.
 	"Lake Query Reader": {actionLakeQuery},
@@ -63,6 +69,7 @@ type WriterLister interface {
 	BlobWriters(ctx context.Context, ns v1.NamespaceName, bucket, prefix string) []cedartypes.EntityUID
 	KVWriters(ctx context.Context, ns v1.NamespaceName, store, table string) []cedartypes.EntityUID
 	SQLWriters(ctx context.Context, ns v1.NamespaceName, database string) []cedartypes.EntityUID
+	SecretWriters(ctx context.Context, ns v1.NamespaceName, secret string) []cedartypes.EntityUID
 }
 
 // storeRoleResolver resolves built-in roles from the lake and custom Roles from the metastore.
@@ -199,6 +206,10 @@ func scopeHead(ns v1.NamespaceName, s v1.ScopeRef) (resHead estNode, whenBody es
 		// name is "<database>" → SQLDatabase::"<ns>/<database>" (ADR-0233).
 		id := string(ns) + "/" + s.Name
 		return map[string]estNode{"op": "==", "entity": map[string]estNode{"type": entityTypeSQLDatabase, "id": id}}, nil, true
+	case v1.ScopeKindSecret:
+		// name is "<secret>" → Secret::"<ns>/<secret>" (ADR-0327).
+		id := string(ns) + "/" + s.Name
+		return map[string]estNode{"op": "==", "entity": map[string]estNode{"type": entityTypeSecret, "id": id}}, nil, true
 	case v1.ScopeKindKVStore:
 		// name is "<store>" (whole store → resource in KVStore) or "<store>/<table>" (exact table).
 		if strings.Contains(s.Name, "/") {
