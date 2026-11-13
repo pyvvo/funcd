@@ -85,3 +85,30 @@ func TestInstallScriptRefusesABuildThatFailsItsChecksum(t *testing.T) {
 	require.Contains(t, out, "does not match its checksum in SHA256SUMS")
 	require.NoFileExists(t, filepath.Join(dir, "funcdctl"))
 }
+
+// macOS ships a sha256sum that reads a check file only as an operand: `sha256sum -c` with the checksum line on stdin
+// prints its usage and exits 1. The script must name stdin, which every checker it may pick accepts, or the documented
+// install refuses a download whose checksum is right.
+func TestInstallScriptChecksWithASha256sumThatReadsNoBareStdin(t *testing.T) {
+	check := ""
+	if tool, err := exec.LookPath("sha256sum"); err == nil {
+		check = "'" + tool + "'"
+	} else {
+		tool, err := exec.LookPath("shasum")
+		require.NoError(t, err, "the test needs sha256sum or shasum")
+		check = "'" + tool + "' -a 256"
+	}
+	bin := t.TempDir()
+	fake := "#!/bin/sh\n" +
+		"if [ \"$1\" = -c ] && [ $# -eq 1 ]; then echo 'usage: sha256sum [-bctwz] [files ...]' >&2; exit 1; fi\n" +
+		"exec " + check + " \"$@\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "sha256sum"), []byte(fake), 0o755))
+	mux := http.NewServeMux()
+	release(mux, "/latest/download", "v9.9.9", "")
+
+	dir, out, err := installFuncdctl(t, mux, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	require.NoError(t, err, out)
+	got, err := exec.Command(filepath.Join(dir, "funcdctl")).Output()
+	require.NoError(t, err)
+	require.Equal(t, "funcdctl v9.9.9\n", string(got))
+}
