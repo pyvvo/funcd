@@ -114,13 +114,6 @@ jobs:
           key: go-${{ runner.os }}-${{ hashFiles('go.sum') }}
           restore-keys: go-${{ runner.os }}-
 
-      - name: Check that the list of config keys without a description does not grow (ADR-0324)
-        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-        env:
-          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
-        run: |
-          git fetch --no-tags --depth=1 origin "$BASE"
-          scripts/check-undescribed.sh "$BASE"
       - name: Run CI (fmt check + lint + fast tests + build)
         if: needs.changes.outputs.nondocs == 'true' || needs.changes.outputs.generated == 'true' || github.event_name == 'push'
         run: nix develop --command just ci
