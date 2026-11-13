@@ -28,9 +28,10 @@ optional:
     holds: >-
       Only for a feature whose calls an authorizer checks. First what a Function gets by itself from its declaration,
       binding or ownership, each with its Cedar action, linking the Security page; then, when a role exists and is
-      needed, the smallest built-in role, its scope and a tested RolesAssignment, included as YAML; then the shipped
-      policy, quoted in a cedar block titled with its file name and labelled as part of funcd; then the scope rules and
-      a denial that a reader may meet. A feature with no role or no policy leaves that part out.
+      needed, the smallest built-in role, its scope and a tested RolesAssignment, included as YAML; then the policy
+      that funcd supplies, quoted in a cedar block titled for what it is, such as "Built-in KV policy"; then the scope
+      rules and a denial that a reader may meet. The automatic part says what a Function can do in ordinary words; the
+      policy's internal names stay in its block. A feature with no role or no policy leaves that part out.
   - heading: Limits and quotas
     holds: The limits a reader meets, from doc tags and constants, with a link to the Spec tab.
   - heading: Data storage

@@ -20,6 +20,8 @@ paths:
   it.
 - Use conventional technical terms: a method returns a value, a response contains a field, a caller has
   permission. Repeat the name of an operation or a setting when a pronoun could refer to more than one.
+- Title a code block for what it shows, such as "Built-in KV policy". A file name is a title only when the reader
+  creates, opens or edits that file.
 - Write no empty section and no summary that repeats the page.
 - The Platform chapter explains concepts only: no spec fields, YAML or funcdctl commands. Those belong to the Developer
   chapter, `docs/guide/develop/`.
