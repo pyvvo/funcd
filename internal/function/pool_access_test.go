@@ -70,11 +70,41 @@ func TestPoolKeyCountsOwnedBoundTablesAndOwnedPrefixes(t *testing.T) {
 	require.Equal(t, pooling.AccessHashOf(v1.FunctionSpec{}, []string{"blob/k/raw"}, group), access("writer"), "an owned prefix counts unbound")
 }
 
+// The access counts a Secret only when the Function both owns and binds it, as a KV table (ADR-0327 Decision 6): a
+// write needs the binding, so an owner that binds nothing gains no write.
+func TestPoolKeyCountsAnOwnedBoundSecret(t *testing.T) {
+	t.Parallel()
+	h := newShimHarness(t, http.StatusOK, false, withSwitch, withNodePool)
+	h.createObj(t, v1.KindSecret, "oauth", func(o v1.Object) { o.(*v1.Secret).Spec.Owner = "refresher" })
+	h.createObj(t, v1.KindSecret, "spare", func(o v1.Object) { o.(*v1.Secret).Spec.Owner = "idle-owner" })
+	bound := v1.FunctionSpec{Bindings: v1.FunctionBindings{Secret: []v1.ObjectName{"oauth"}}}
+	for _, n := range []string{"refresher", "api"} {
+		h.create(t, n, func(fn *v1.Function) {
+			fn.Spec.Pooling.Worker = "agents"
+			fn.Spec.Bindings.Secret = bound.Bindings.Secret
+		})
+	}
+	h.create(t, "idle-owner", func(fn *v1.Function) { fn.Spec.Pooling.Worker = "agents" })
+	got := h.pools(t, "refresher", "api", "idle-owner")
+	access := func(n string) string {
+		key, ok := pooling.ParsePool("default", got[n])
+		require.True(t, ok, n)
+		return key.AccessHash
+	}
+	group := []string{"group/rg1"}
+	require.Equal(t, pooling.AccessHashOf(bound, []string{"secret/oauth"}, group), access("refresher"), "an owned and bound Secret counts")
+	require.Equal(t, pooling.AccessHashOf(bound, nil, group), access("api"), "a Secret another Function owns counts as a binding only")
+	require.Equal(t, pooling.AccessHashOf(v1.FunctionSpec{}, nil, group), access("idle-owner"), "an owned Secret not bound does not count")
+}
+
 // A pass whose access index cannot be read fails and reclaims nothing; once the List answers, the pool a spec change
-// left is reclaimed. One subtest per List the index makes.
+// left is reclaimed. One subtest per List the index makes, each a kind whose change the platform watches.
 func TestPoolAccessListErrorFailsThePassAndReclaimsNothing(t *testing.T) {
 	t.Parallel()
-	for _, k := range []v1.Kind{v1.KindKVStore, v1.KindBucket, v1.KindRolesAssignment, v1.KindEgressPolicy, v1.KindPolicy} {
+	kinds := function.AccessKinds()
+	require.ElementsMatch(t, []v1.Kind{v1.KindKVStore, v1.KindBucket, v1.KindSQLDatabase, v1.KindSecret, v1.KindRolesAssignment,
+		v1.KindEgressPolicy, v1.KindPolicy}, kinds, "a kind the index lists is a kind the platform watches")
+	for _, k := range kinds {
 		t.Run(string(k), func(t *testing.T) {
 			t.Parallel()
 			fs := &listFailStore{fail: k}

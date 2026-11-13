@@ -81,12 +81,13 @@ func LakeCatalogKey(l LakeLocation) string {
 // LakeLocation names the bound (bucket, prefix) of a Lake's files (ADR-0086). The prefix must be OWNED by this Lake
 // (single-writer); the catalog, a DuckDB file (ADR-0271), lives in the catalog store under the same location
 // (ADR-0293). Cross-resource validity (the bucket/prefix exist, owner is this Lake) is the reconciler's job, NOT
-// Validate.
+// Validate. A Restore's asLocation reuses it for where a Lake's copy loads, before any Lake is located there
+// (ADR-0312 Decision 10), so its field tags name no Lake: each field that holds one states its own rules.
 type LakeLocation struct {
-	// Bucket is the name of a Bucket in this service's namespace.
-	Bucket ObjectName `json:"bucket" doc:"The Bucket that holds the Lake's files, in the Lake's namespace."`
+	// Bucket is the name of a Bucket in the namespace of the object that holds the location.
+	Bucket ObjectName `json:"bucket" doc:"A Bucket of the same namespace."`
 	// Prefix is a sub-domain (BucketPrefix.name) of that bucket; a DNS-1123 label.
-	Prefix string `json:"prefix" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" doc:"The prefix of that Bucket, which this Lake must own."`
+	Prefix string `json:"prefix" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" doc:"A prefix of that Bucket."`
 }
 
 // LakeStatus is the observed state of a Lake (ADR-0086): the reconciler reflects

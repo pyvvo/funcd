@@ -188,16 +188,31 @@ func TestAppTemplateResourceIsNoGuideManifest(t *testing.T) {
 	require.False(t, inAppTemplate(filepath.Join(fns, "apps", "site-config", "sites", "preview.yaml")))
 }
 
+// The credentials an example applies with: a developer of the namespace default, as funcdctl dev's token is, and an
+// admin, the only role that may apply a cluster-scoped kind such as a Namespace.
+const (
+	guideDeveloperToken = "guide-developer-token"
+	guideAdminToken     = "guide-admin-token"
+)
+
 // applyOnFreshPlatform applies file's documents in order, as funcdctl apply sends them, to a platform assembled over
 // memory, whose write path runs the daemon's validation and admissions. InMemory sets no runtime shim, so the platform
-// fetches no image and runs no function code.
+// fetches no image and runs no function code. A file that holds a cluster-scoped kind applies with the admin
+// credential, and any other file with the developer's.
 func applyOnFreshPlatform(t *testing.T, file string) error {
 	t.Helper()
 	data, err := os.ReadFile(file)
 	require.NoError(t, err)
 	docs, err := sdk.DecodeManifestDocuments(data)
 	require.NoError(t, err, file)
-	p, err := funcd.New(funcd.InMemory())
+	token := guideDeveloperToken
+	if slices.ContainsFunc(docs, func(d sdk.ManifestDocument) bool { return !d.Object.GroupVersionKind().Kind.Namespaced() }) {
+		token = guideAdminToken
+	}
+	p, err := funcd.New(funcd.InMemory(), funcd.WithCredentials(
+		funcd.Credential{Token: guideDeveloperToken, Role: "developer", Namespaces: []string{"default"}},
+		funcd.Credential{Token: guideAdminToken, Role: "admin"},
+	))
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -210,7 +225,7 @@ func applyOnFreshPlatform(t *testing.T, file string) error {
 			t.Error("Run did not return")
 		}
 	})
-	client, err := sdk.New("http://"+p.Addr(), sdk.WithToken(funcd.DevToken))
+	client, err := sdk.New("http://"+p.Addr(), sdk.WithToken(token))
 	require.NoError(t, err)
 	for _, doc := range docs {
 		if _, err := client.Apply(ctx, doc.Object); err != nil {

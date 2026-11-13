@@ -1,16 +1,16 @@
 # SQL delivery plan — ADR sequencing to ship FEAT-0011
 
-- **Status**: Complete — the eight ADRs, ADR-0231 to ADR-0238, are Implemented (2026-10-12); ADR-0238 (F136, the bridge
-  address) joined after the first seven. The computed sections record the order they were built in; F134 and F135
-  remain ideas, outside this plan.
+- **Status**: Active — the eight ADRs, ADR-0231 to ADR-0238, are Implemented (2026-10-12); ADR-0238 (F136, the bridge
+  address) joined after the first seven. F239 (graph queries) joined on 2026-11-13 as `P-H`, with no ADR yet. The
+  computed sections record the order the eight were built in; F134 and F135 remain ideas, outside this plan.
 - **Date**: 2026-10-12
 - **Realizes**: [FEAT-0011 (SQL databases)](../feat/0011-feat-sql.md)
 - **Process**: [ADR-0000](../adr/0000-adr-process.md) · skills `/adr` → `/adr-judge` → `/adr-impl` → `/adr-impl-review`
 
 ## Purpose & how to read this
 
-This file sequences the ADRs that realize FEAT-0011's seven planned features (F127 to F133, no gaps) so that the epoch
-becomes implementable without dead-ends or stalls. F134 and F135 are ideas and get no item. It is a *plan*, not a
+This file sequences the ADRs that realize FEAT-0011's seven planned features (F127 to F133, no gaps), and the later F136
+and F239, so that the epoch becomes implementable without dead-ends or stalls. F134 and F135 are ideas and get no item. It is a *plan*, not a
 decision: it commits to no architecture, which is the ADRs' job. The slate comes from the
 [design report](../reports/sql-provider-design.md), whose decisions and open questions each ADR takes up.
 [dr-delivery-plan.md](dr-delivery-plan.md) covers FEAT-0009; this plan is separate because FEAT-0011 is a later epoch.
@@ -34,6 +34,7 @@ one wave ahead of the build track.
 | ADR-0235 | SQL change feed: row changes as named events | F132 | ADR-0232, ADR-0108 |
 | ADR-0237 | SQL in funcdctl dev: the engine as a local process | F133 | ADR-0232, ADR-0233, ADR-0125 |
 | ADR-0238 | The container bridge address: one setting, derived from the containerd subnet, read by the change feed, the lake proxies and the S3 endpoint | F136 | ADR-0235 |
+| P-H | Graph queries on a SQL database: Cypher and graph algorithms through `context.sql` | F239 | ADR-0232, ADR-0233, ADR-0234, ADR-0237 |
 
 Two merges are deliberate. ADR-0232 joins the kind, its engine image and its lifecycle, since an engine is never deployed
 without its resource. ADR-0233 joins the binding, the PEP, Cedar, the roles and the shim helpers, since they form one access
@@ -54,6 +55,8 @@ Each dependency is grounded in one line:
   hold (ADR-0206); it copies the engines of ADR-0232.
 - ADR-0235 publishes named events (ADR-0108) from the engines of ADR-0232.
 - ADR-0237 runs ADR-0232's engine as a process under `funcdctl dev` (ADR-0125), for functions that call it through ADR-0233.
+- P-H changes the engine of ADR-0232 and the dev engine of ADR-0237, is reached through ADR-0233's calls, and meets
+  ADR-0234's backups and its rule for an empty restore destination (experiment 0020 found all four).
 
 ## Build dependency graph
 
@@ -89,6 +92,7 @@ flowchart TB
     ADR_0235["ADR-0235 · F132<br/>SQL change feed"]
     ADR_0237["ADR-0237 · F133<br/>SQL in funcdctl dev"]
     ADR_0238["ADR-0238 · F136<br/>The container bridge address"]
+    P_H["P-H · F239<br/>Graph queries on a SQL database"]
 
     ADR_0032 --> ADR_0231
     ADR_0087 --> ADR_0231
@@ -120,6 +124,10 @@ flowchart TB
     ADR_0233 --> ADR_0237
     ADR_0125 --> ADR_0237
     ADR_0235 --> ADR_0238
+    ADR_0232 --> P_H
+    ADR_0233 --> P_H
+    ADR_0234 --> P_H
+    ADR_0237 --> P_H
 ```
 
 ## Build waves (computed)
@@ -131,6 +139,7 @@ flowchart TB
 | 2 | ADR-0232 |
 | 3 | ADR-0233, ADR-0234, ADR-0235 |
 | 4 | ADR-0236, ADR-0237, ADR-0238 |
+| 5 | P-H |
 
 Why each tier:
 
@@ -139,6 +148,8 @@ Why each tier:
 - **Tier 3**: ADR-0233, ADR-0234 and ADR-0235 each need only the databases of ADR-0232, so they build in parallel.
 - **Tier 4**: ADR-0236 and ADR-0237 need both the databases of ADR-0232 and the function access of ADR-0233;
   ADR-0238 needs the change feed of ADR-0235.
+- **Tier 5**: P-H needs the engine of ADR-0232, the calls of ADR-0233, the backups of ADR-0234 and the dev engine of
+  ADR-0237.
 
 ### Cross-cutting sequencing notes
 
@@ -169,9 +180,9 @@ Why each tier:
 
 ## Critical path & the exit-criterion spine
 
-Critical path (5 items, the longest build chain):
+Critical path (6 items, the longest build chain):
 
-  ADR-0032 → ADR-0231 → ADR-0232 → ADR-0233 → ADR-0236
+  ADR-0032 → ADR-0231 → ADR-0232 → ADR-0233 → ADR-0237 → P-H
 
 | Exit-criterion clause (FEAT-0011) | Needs (items) |
 |---|---|
@@ -189,13 +200,15 @@ Critical path (5 items, the longest build chain):
 | F131: a scheduled, encrypted backup; a restore into a new name; the in-place restore rules | ADR-0234 |
 | F132: an insert, an update and a delete start the action, also after an engine restart; a duplicate starts it once | ADR-0235 |
 | F133: `funcdctl dev` runs a function that binds a database, its migrations and its queries | ADR-0237 |
+| F239: Cypher reads and writes and graph algorithms through `context.sql`; `query` stays read-only; acknowledged values survive a killed engine and a backup | P-H |
 
-Every clause has an item. The exit criterion is met at tier 4, when ADR-0236 and ADR-0237 land; ADR-0234 and ADR-0235 land in tier 3.
+Every clause has an item. The first eight features were met at tier 4, when ADR-0236 and ADR-0237 landed; F239 is met
+at tier 5, when P-H lands.
 
 ## Parallelization & sequencing notes
 
-- **Leaves:** ADR-0234, ADR-0237 and ADR-0238: nothing depends on them and they are off the critical path, so they have slack; the
-  exit criterion still needs ADR-0234 and ADR-0237.
+- **Leaves:** ADR-0236 and ADR-0238: nothing depends on them and they are off the critical path, so they have slack;
+  the exit criterion still needs ADR-0236.
 - **Parallel inside tiers:** ADR-0233, ADR-0234 and ADR-0235 in tier 3; ADR-0236, ADR-0237 and ADR-0238 in tier 4.
 - **Riskiest ADRs:** ADR-0233 (the authorization surface), ADR-0231 (data reclaim) and ADR-0235 (duplicate delivery).
 - **Not planned:** F134 (external access) and F135 (a shared server) are ideas; they get items only if the decider
@@ -219,3 +232,5 @@ drafted, note its number against its plan id in the caveats below.
 - If a drafted ADR reveals a missed dependency, update `sql-plan.json` and re-run the tool; re-validate the graph. The
   accepted ADR still wins for architecture; this plan only tracks ordering.
 - The open questions of FEAT-0011 are decided inside these ADRs; none needs an item of its own.
+- `P-H` (F239) has no ADR yet; its feature issue is #1456. Experiment 0020 measured the GraphQLite extension in the
+  rqlite engine and lists what its ADR has to settle.

@@ -8,6 +8,8 @@ This page lists the spec and status fields of Namespace and ResourceGroup, each 
 
 ## Namespace
 
+::include[../../../../../api/types/v1alpha1/examples/namespaces/namespace.yaml#namespace]
+
 | apiVersion | kind |
 | --- | --- |
 | `funcd.io/v1alpha1` | `Namespace` |
@@ -16,7 +18,7 @@ This page lists the spec and status fields of Namespace and ResourceGroup, each 
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `defaultExposure` | string, one of `""`, `implicit`, `explicit` | Whether the namespace's Functions and Sites answer at their own address, such as /function/&lt;name&gt;, while their spec.ingress.enabled is unset: implicit, or empty, turns it on, and explicit turns it off. Routes you write and Routes an App declares stay on, though in the default namespace explicit refuses one with no host (HostRequired). |
+| `defaultExposure` | string, one of `""`, `implicit`, `explicit` | Whether the namespace's Functions and Sites answer at their own address, such as /function/&lt;name&gt;, while their spec.ingress.enabled is unset: implicit, or empty, turns it on, and explicit turns it off. The namespace's other Routes, an App's included, stay on, though in the default namespace explicit refuses one with no host (HostRequired). |
 | `edgeDefaults` | object, [`Namespace.spec.edgeDefaults`](#namespacespecedgedefaults) | The namespace's edge defaults, which apply where a Route or a Function's or Site's spec.ingress sets no value of its own. |
 | `volumeBudget` | string, a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB) | The most volume space the namespace's Functions may reserve: each local volume's size from apply until the volume is removed, and each worker's emptyDir while the worker exists. Apply refuses a local volume that does not fit (VolumeBudget), and a worker whose emptyDir does not fit is not created. Set volumeBudget or volumeBudgetBytes, not both; neither, or 0, means no budget. |
 | `volumeBudgetBytes` | integer, at least 0 | The same budget as volumeBudget, as a number of bytes. Set volumeBudget or volumeBudgetBytes, not both; 0 means no budget. |
@@ -42,6 +44,8 @@ This page lists the spec and status fields of Namespace and ResourceGroup, each 
 | `phase` | string, one of `Pending`, `Deploying`, `Ready`, `Idle`, `Degraded`, `Failed`, `Terminating` | Where the object is in its lifecycle. |
 
 ## ResourceGroup
+
+::include[../../../../../api/types/v1alpha1/examples/namespaces/resourcegroup.yaml#resourcegroup]
 
 | apiVersion | kind |
 | --- | --- |

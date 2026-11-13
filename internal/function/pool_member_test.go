@@ -26,6 +26,8 @@ func (h *shimHarness) createObj(t *testing.T, k v1.Kind, name string, change fun
 		o.Name, o.Namespace, o.ResourceGroup = v1.ObjectName(name), "default", "rg1"
 	case *v1.Bucket:
 		o.Name, o.Namespace, o.ResourceGroup = v1.ObjectName(name), "default", "rg1"
+	case *v1.Secret:
+		o.Name, o.Namespace, o.ResourceGroup = v1.ObjectName(name), "default", "rg1"
 	case *v1.RolesAssignment:
 		o.Name, o.Namespace, o.ResourceGroup = v1.ObjectName(name), "default", "rg1"
 	case *v1.EgressPolicy:

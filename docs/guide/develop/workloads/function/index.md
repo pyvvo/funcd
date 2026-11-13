@@ -158,11 +158,12 @@ funcd keeps the log lines of each Function's workers as records, each with a tim
 - each call of [`ctx.log`](spec.md#handler-api), the log method of the context that every handler receives, as
   `INFO`: in TypeScript, `ctx.log` writes as `console.log` does, and in Python, it prints to standard output.
 
-`funcdctl logs` prints the records of one Function, the most recent 1000 by default. A record shows there once funcd
-has written it to storage: a funcd server does that within `funclog.segmentMaxAge`, 10 seconds by default, and
-`funcdctl dev` within a second. While the first example runs, this command prints the records of the severity `ERROR`
-and above. After one call of the TypeScript example, these are the line written to standard error and the four
-errors; the times differ at each run:
+`funcdctl logs` prints the records of one Function, the most recent 1000 by default. A record shows there only after
+funcd has written it to storage: a funcd server writes the records in segments up to `funclog.segmentMaxAge` old, 10
+seconds by default, and `funcdctl dev` in segments up to about a second old, so repeat the command until the records
+appear. While the first example runs, this command prints the records of the severity `ERROR` and above. After one call
+of the TypeScript example, these are the line written to standard error and the four errors; the times differ at each
+run:
 
 ```console
 $ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token logs log-burst -n default --severity error
