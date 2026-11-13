@@ -21,7 +21,7 @@ The example needs five programs:
   of funcdctl, which includes the `funcdctl dev` command.
 - git, which copies the repositories of the example and of funcd.
 - curl 8.0 or later, which calls the Function and signs the S3 requests with its `--aws-sigv4` option.
-- jq, which reads one value of the JSON that funcdctl prints.
+- jq 1.6 or later, which reads one value of the JSON that funcdctl prints and decodes it with `@base64d`.
 - Node.js on the `PATH`, which runs the example's Function.
 
 `funcdctl dev` starts a local platform and runs the resource files of one folder on it. It also runs funcd's **S3
@@ -270,7 +270,8 @@ that starts with its namespace, except the last one:
 - `NetDestination::"<ip>:<port>"`, the address and the port of an outbound connection, is the resource of
   `egress::connect`. Its attributes are `ip`, `port` and `domains`: the names that the Function's
   [worker](../../../platform/workloads/index.md#runtime), the process that runs its code, looked up through funcd and
-  that resolved to that address. The [Networking](../networking/index.md#allow-a-functions-outbound-connections) page
+  that resolved to that address, while those answers have not expired. For an address that is not globally
+  reachable, such as a private address, or an address of the node, `domains` is empty. The [Networking](../networking/index.md#allow-a-functions-outbound-connections) page
   explains outbound connections.
 
 Each other entity has the attribute `namespace`, except a table, a store, a prefix or a Bucket whose store or Bucket
