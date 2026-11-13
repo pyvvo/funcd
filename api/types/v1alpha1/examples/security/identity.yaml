@@ -1,0 +1,30 @@
+# region identity
+apiVersion: funcd.io/v1alpha1
+kind: Identity
+metadata:
+  name: analyst
+  namespace: default
+  resourceGroup: rg1
+spec:
+  type: external
+# endregion identity
+---
+# region grant
+apiVersion: funcd.io/v1alpha1
+kind: RolesAssignment
+metadata:
+  name: analyst-reads-gold
+  namespace: default
+  resourceGroup: rg1
+spec:
+  principal:
+    kind: Identity
+    name: analyst
+  assignments:
+    - roleRef:
+        kind: BuiltinRole
+        name: Blob Data Reader
+      scope:
+        kind: BucketPrefix
+        name: lakehouse/gold
+# endregion grant
