@@ -30,11 +30,12 @@ runs the Function from the built file in the folder, `s3-roundtrip.mjs`, which a
 JavaScript, so the example needs no install step. `funcdctl dev` keeps the Bucket's objects in memory and prints the
 URL of each Function. The `--gport` flag sets the port of that URL, so the commands below use port 8080.
 
-`funcdctl dev` also runs funcd's **S3 gateway**, a server that answers S3 requests for the Buckets. While the gateway
-runs, funcd gives each [worker](../../../platform/workloads/index.md#runtime), a process that runs a Function's code, of
-a Function that binds a prefix the gateway's address and an S3 key pair of the Function's own, in the standard AWS
-environment variables `AWS_ENDPOINT_URL_S3`, `AWS_REGION`, `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. On a
-platform, the gateway runs only when the operator sets `s3gateway.enabled: true` in funcd's configuration.
+`funcdctl dev` also runs funcd's **S3 gateway**, a server that answers S3 requests for the Buckets. A Function's code
+runs in its [workers](../../../platform/workloads/index.md#runtime), processes that funcd starts. While the gateway
+runs, each worker of a Function that binds a prefix gets the gateway's address and an S3 key pair of the Function's
+own, in the standard AWS environment variables `AWS_ENDPOINT_URL_S3`, `AWS_REGION`, `AWS_ACCESS_KEY_ID` and
+`AWS_SECRET_ACCESS_KEY`. On a platform, the gateway runs only when the operator sets `s3gateway.enabled: true` in
+funcd's configuration.
 
 The example's manifests connect the Function to its data:
 
