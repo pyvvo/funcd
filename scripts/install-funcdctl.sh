@@ -47,10 +47,11 @@ release=${release%-"$os-$arch"}
 echo "Downloading funcdctl $release for $os-$arch"
 curl -fL --progress-bar "$base/$file" -o "$tmp/$file" || fail "could not download $base/$file"
 
+# "-" names stdin: macOS's sha256sum reads a check file only as an operand.
 if command -v sha256sum >/dev/null 2>&1; then
-  check='sha256sum -c'
+  check='sha256sum -c -'
 else
-  check='shasum -a 256 -c'
+  check='shasum -a 256 -c -'
 fi
 (cd "$tmp" && grep " $file\$" SHA256SUMS | $check >/dev/null 2>&1) || fail "$file does not match its checksum in SHA256SUMS"
 
