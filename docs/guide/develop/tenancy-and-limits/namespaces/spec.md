@@ -8,6 +8,8 @@ This page lists the spec and status fields of Namespace and ResourceGroup, each 
 
 ## Namespace
 
+::include[../../../../../api/types/v1alpha1/examples/namespaces/namespace.yaml#namespace]
+
 | apiVersion | kind |
 | --- | --- |
 | `funcd.io/v1alpha1` | `Namespace` |

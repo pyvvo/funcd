@@ -1,0 +1,6 @@
+apiVersion: funcd.io/v1alpha1
+kind: Namespace
+metadata:
+  name: media
+spec:
+  volumeBudget: 4Gi
