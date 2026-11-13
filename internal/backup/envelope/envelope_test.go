@@ -21,6 +21,7 @@ import (
 
 	"filippo.io/age"
 	"github.com/stretchr/testify/require"
+	"sigs.k8s.io/yaml"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
@@ -62,6 +63,24 @@ func randomKey(t *testing.T) []byte {
 	_, err := rand.Read(b)
 	require.NoError(t, err)
 	return b
+}
+
+// keyWithFloatFingerprint returns a key whose fingerprint reads as a YAML float, such as 1968597610524e61, which
+// sigs.k8s.io/yaml reads back into a string as +Inf unless the manifest quotes it. About one random key in 1300 has
+// one.
+func keyWithFloatFingerprint(t *testing.T) []byte {
+	t.Helper()
+	for i := range 100_000 {
+		k := sha256.Sum256(fmt.Appendf(nil, "master-%d", i))
+		fp := envelope.Fingerprint(k[:])
+		j, err := yaml.YAMLToJSON([]byte(fp))
+		require.NoError(t, err)
+		if j[0] != '"' && strings.Contains(fp, "e") {
+			return k[:]
+		}
+	}
+	require.FailNow(t, "no key with a float fingerprint")
+	return nil
 }
 
 func x25519(t *testing.T) *age.X25519Identity {
@@ -252,7 +271,7 @@ func TestScenarioPlaintextSecretsRefused(t *testing.T) {
 // (nor the start log) holds K, M or SHA-256(M).
 func TestScenarioManifestNamesKeys(t *testing.T) {
 	t.Parallel()
-	k, mk := randomKey(t), randomKey(t)
+	k, mk := randomKey(t), keyWithFloatFingerprint(t)
 	a, b := x25519(t).Recipient().String(), x25519(t).Recipient().String()
 	s, logs := newSealer(t, envelope.Config{Recipients: []string{recipientsFile(t, a, b)}, SecretsKey: k, Master: mk})
 	dir := t.TempDir()
@@ -267,8 +286,13 @@ func TestScenarioManifestNamesKeys(t *testing.T) {
 	require.Len(t, manifests, 1)
 	raw, err := os.ReadFile(manifests[0])
 	require.NoError(t, err)
-	require.Contains(t, string(raw), "secretsKey: "+envelope.Fingerprint(k))
-	require.Contains(t, string(raw), "masterSecret: "+envelope.Fingerprint(mk))
+	var onDisk struct {
+		SecretsKey   string `json:"secretsKey"`
+		MasterSecret string `json:"masterSecret"`
+	}
+	require.NoError(t, yaml.Unmarshal(raw, &onDisk))
+	require.Equal(t, envelope.Fingerprint(k), onDisk.SecretsKey)
+	require.Equal(t, envelope.Fingerprint(mk), onDisk.MasterSecret)
 	require.Equal(t, backup.Keys{SecretsKey: envelope.Fingerprint(k), MasterSecret: envelope.Fingerprint(mk),
 		Recipients: wantRecipients}, m.Keys)
 
