@@ -1,0 +1,34 @@
+# region configmap
+apiVersion: funcd.io/v1alpha1
+kind: ConfigMap
+metadata:
+  name: shared-settings
+  namespace: default
+  resourceGroup: rg1
+spec:
+  data:
+    LOG_LEVEL: info
+    TIMEZONE: Europe/Paris
+# endregion configmap
+---
+# region function
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: report
+  namespace: default
+  resourceGroup: rg1
+spec:
+  runtime: nodejs22
+  handler: handle
+  image: registry.example.com/report:1.0.0
+  configMaps:
+    - ref: shared-settings
+    - name: report-settings
+      data:
+        LOG_LEVEL: debug
+  bindings:
+    config:
+      - shared-settings
+      - report-settings
+# endregion function
