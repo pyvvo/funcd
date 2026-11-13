@@ -34,7 +34,8 @@ the bug rule in `.claude/CLAUDE.md`: a row points at what to read and proves not
 | [Platform lifecycle](platform-lifecycle.md) | start order, hold, safe mode, restart, stop, upgrade |
 | [Controller](controller.md) | how a write becomes a pass, retries, owners and collection |
 | [Admission](admission.md) | what the API does with a write, Namespaces, ResourceGroups |
-| [Security](security.md) | who may act, Secrets, egress |
+| [Security](security.md) | who may act, Secrets |
+| [Egress](egress.md) | a worker's outbound traffic and lookups |
 | [Workers](workers.md) | a worker's boot, crash, liveness and stop, volumes, logs |
 | [Functions](functions.md) | phases, gates, wake and idle, revisions, pools |
 | [Calls](calls.md) | a call from the listener to a worker, routes, Sites, deadlines |

@@ -180,6 +180,8 @@ func serve(parent context.Context, configPath string, memoryFlag *bool, out io.W
 			err = loggedError{err}
 		}
 	}()
+	// ADR-0326 Decision 3: a secret file other users can open is named once, before any store opens; the start goes on.
+	warnExposedSecretFiles(cfg, os.Geteuid(), root)
 
 	// ADR-0297 Decision 2: before this start counts, the Lake scratch an earlier run left goes, and each step below waits
 	// while the stores' newest files would not fit or it fails with ENOSPC; a stop during a wait records no failed start.

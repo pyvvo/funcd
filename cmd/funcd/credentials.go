@@ -201,3 +201,39 @@ func checkTokenFile(fi os.FileInfo, euid int) error {
 	}
 	return nil
 }
+
+// secretFile is one set key of ADR-0326 Decision 1 and the path it names.
+type secretFile struct{ key, path string }
+
+// secretFiles returns the set keys of ADR-0326 Decision 1, the secret files other than token files, in its order.
+func secretFiles(cfg config.Config) []secretFile {
+	all := []secretFile{
+		{"secrets.encryptionKeyFile", cfg.Secrets.EncryptionKeyFile},
+		{"backup.credentialsFile", cfg.Backup.CredentialsFile},
+		{"blob.credentialsFile", cfg.Blob.CredentialsFile},
+		{"kvstore.backup.credentialsFile", cfg.Kvstore.Backup.CredentialsFile},
+		{"s3gateway.masterSecretFile", cfg.S3Gateway.MasterSecretFile},
+		{"server.tls.keyFile", cfg.Server.TLS.KeyFile},
+	}
+	set := all[:0]
+	for _, f := range all {
+		if f.path != "" {
+			set = append(set, f)
+		}
+	}
+	return set
+}
+
+// warnExposedSecretFiles logs one warning per file of secretFiles that checkTokenFile refuses for euid, and never fails:
+// the start goes on (ADR-0326 Decisions 2 and 3). A path that does not stat is left to its loader.
+func warnExposedSecretFiles(cfg config.Config, euid int, log *slog.Logger) {
+	for _, f := range secretFiles(cfg) {
+		fi, err := os.Stat(f.path)
+		if err != nil {
+			continue
+		}
+		if err := checkTokenFile(fi, euid); err != nil {
+			log.Warn("funcd: secret file open to other users", "key", f.key, "path", f.path, "problem", err.Error())
+		}
+	}
+}
