@@ -171,9 +171,10 @@ the new values. Once the Function is `Ready` again, funcd deletes the old Config
 names it.
 
 funcd does not refuse the deletion of a ConfigMap that a Function binds, and the deletion changes nothing at once: the
-Function stays `Ready`, and its running workers keep serving with the values that they started with. funcd finds the
-ConfigMap missing only when the Function next needs a new worker, such as when a worker stops or the Function's spec
-changes, and it then starts no new worker while the ConfigMap is missing:
+Function stays `Ready`, and its running workers keep serving with the values that they started with. For a Function
+that sets no `spec.pooling.worker`, funcd finds the ConfigMap missing only when the Function next needs a new worker,
+such as when a worker stops or the Function's spec changes; a pooled Function finds it at its next check. funcd then
+starts no new worker while the ConfigMap is missing:
 
 - While a worker still serves, the Function stays `Ready`, and its `RevisionReady` condition has the reason
   `ConfigResolveFailed`.
@@ -201,8 +202,7 @@ Deleting a Function deletes the ConfigMaps that it defines. A ConfigMap that it 
   exists.
 - **A value that is not UTF-8 text, or that holds a NUL byte.** A worker cannot get such a value in its environment,
   so funcd starts no worker of a Function that binds the ConfigMap: the Function is `Failed`, with the reason
-  `ConfigResolveFailed` and a message that names the ConfigMap and the key. funcd does not check the value again by
-  itself: once the value is fixed, the Function starts at the next change to its spec.
+  `ConfigResolveFailed` and a message that names the ConfigMap and the key.
 - **A defined ConfigMap that another Function already defines.** The Function waits in `Pending` with the reason
   `StoreNotOwned`, as [Define the settings in the Function](#define-the-settings-in-the-function) describes.
 
