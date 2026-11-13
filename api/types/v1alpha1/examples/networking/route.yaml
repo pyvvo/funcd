@@ -1,0 +1,26 @@
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: devices-api
+  namespace: default
+  resourceGroup: rg1
+spec:
+  runtime: nodejs22
+  handler: handle
+  protocol: http
+  image: registry.example.com/devices-api:1.0.0
+---
+# region route
+apiVersion: funcd.io/v1alpha1
+kind: Route
+metadata:
+  name: devices
+  namespace: default
+  resourceGroup: rg1
+spec:
+  host: devices.example.com
+  rules:
+    - path: /
+      backend:
+        function: devices-api
+# endregion route
