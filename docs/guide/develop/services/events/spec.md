@@ -16,45 +16,45 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `blob` | object, [`EventSource.spec.blob`](#eventsourcespecblob) |  |
-| `sql` | object, [`EventSource.spec.sql`](#eventsourcespecsql) |  |
-| `timer` | object, [`EventSource.spec.timer`](#eventsourcespectimer) |  |
+| `blob` | object, [`EventSource.spec.blob`](#eventsourcespecblob) | Events that fire on new and rewritten objects of a Bucket in this namespace, which funcd lists every eventing.blobPollInterval. A firing's data has the fields bucket, key, size, version and time, the object's modification time. Exactly one of timer, blob and sql. |
+| `sql` | object, [`EventSource.spec.sql`](#eventsourcespecsql) | Events that fire on row changes in a SQLDatabase of this namespace. A firing's data has the fields op, table, rowId and index, and before, after and commitTimestamp when the change carries them; when before and after together pass 256 KiB, both are dropped and truncated is true. Exactly one of timer, blob and sql. |
+| `timer` | object, [`EventSource.spec.timer`](#eventsourcespectimer) | Events that fire on a schedule, each on its own interval or cron expression; a firing's data is an empty object. Exactly one of timer, blob and sql. |
 
 ### `EventSource.spec.blob`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `bucket` | string, required, a DNS-1123 label |  |
-| `events` | array of [`EventSource.spec.blob.events[]`](#eventsourcespecblobevents), required |  |
+| `bucket` | string, required, a DNS-1123 label | The Bucket, in this namespace, whose objects fire the events. Until it exists, the source is not Ready, with reason BucketNotFound, and watches nothing. |
+| `events` | array of [`EventSource.spec.blob.events[]`](#eventsourcespecblobevents), required | The source's events: at least one, with unique names, each watching the objects under its prefix. |
 
 ### `EventSource.spec.blob.events[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `name` | string, required, a DNS-1123 label |  |
-| `on` | array of string values |  |
-| `prefix` | string |  |
+| `name` | string, required, a DNS-1123 label | The event's name, unique among the source's events: the type of each CloudEvent it fires, and the event a Sensor dependency names. |
+| `on` | array of string values | The object changes that fire the event. Created, the only one, fires for each new object and again when an object is rewritten with another size or modification time; empty means Created. |
+| `prefix` | string | The key prefix the event watches: only objects whose key starts with it fire, and empty means the whole Bucket. When the source is created or this prefix changes, the objects already under it fire too, to the Sensors subscribed then: an object that no Sensor got counts as seen. |
 
 ### `EventSource.spec.sql`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `database` | string, required, a DNS-1123 label |  |
-| `events` | array of [`EventSource.spec.sql.events[]`](#eventsourcespecsqlevents), required |  |
+| `database` | string, required, a DNS-1123 label | The SQLDatabase, in this namespace, whose row changes fire the events. Until it exists, the source is not Ready, with reason DatabaseNotFound. |
+| `events` | array of [`EventSource.spec.sql.events[]`](#eventsourcespecsqlevents), required | The source's events: at least one, with unique names, each watching one table. |
 
 ### `EventSource.spec.sql.events[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `name` | string, required, a DNS-1123 label |  |
-| `on` | array of string values |  |
-| `table` | string, required |  |
+| `name` | string, required, a DNS-1123 label | The event's name, unique among the source's events: the type of each CloudEvent it fires, and the event a Sensor dependency names. |
+| `on` | array of string values | The row changes that fire the event: Insert, Update or Delete. Empty means all three. |
+| `table` | string, required | The table whose row changes fire the event, matched by its exact name, case included. |
 
 ### `EventSource.spec.timer`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `events` | array of [`EventSource.spec.timer.events[]`](#eventsourcespectimerevents), required |  |
+| `events` | array of [`EventSource.spec.timer.events[]`](#eventsourcespectimerevents), required | The timer's events: at least one, with unique names, each firing on its own schedule. |
 
 ### `EventSource.spec.timer.events[]`
 
@@ -62,7 +62,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | --- | --- | --- |
 | `cron` | string | A cron expression: 5 fields (minute hour day-of-month month day-of-week) or a macro such as @daily. Exactly one of interval and cron. |
 | `interval` | string, a duration: whole numbers with the units h, m, s and ms, largest unit first (10m, 1h30m, 500ms) | The tick period: 100ms to 24h. Exactly one of interval and cron. |
-| `name` | string, required, a DNS-1123 label |  |
+| `name` | string, required, a DNS-1123 label | The event's name, unique among the source's events: the type of each CloudEvent it fires, and the event a Sensor dependency names. |
 | `timeZone` | string | The IANA time zone of cron, such as Europe/Paris; UTC when empty. Only with cron. |
 
 ### `EventSource.status`
@@ -83,26 +83,26 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `do` | array of [`Sensor.spec.do[]`](#sensorspecdo), required |  |
-| `on` | array of [`Sensor.spec.on[]`](#sensorspecon), required |  |
+| `do` | array of [`Sensor.spec.do[]`](#sensorspecdo), required | The actions the Sensor runs: at least one, with unique names. An event runs every action whose on names its dependency; a failed action is tried eventing.deliveryAttempts times in all, then stored as a dead letter, which funcdctl eventing dlq list shows; while eventing.maxQueuedPerSensor deliveries wait, a new one becomes a dead letter with no attempt. |
+| `on` | array of [`Sensor.spec.on[]`](#sensorspecon), required | The events the Sensor subscribes to, as named dependencies: at least one, with unique names. |
 
 ### `Sensor.spec.do[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `function` | string, a DNS-1123 label |  |
-| `input` | any JSON value |  |
-| `name` | string, required, a DNS-1123 label |  |
-| `on` | string, required, a DNS-1123 label |  |
-| `workflow` | string, a DNS-1123 label |  |
+| `function` | string, a DNS-1123 label | Each event calls this Function, in the Sensor's namespace, with the CloudEvent, whose data is the action's input; funcd starts a worker first when none runs. A Function whose protocol is http is never called: the Sensor is not Ready, with reason TargetServesHTTP, and each event for this action ends as a dead letter. Exactly one of workflow and function. |
+| `input` | any JSON value | What the action passes: the run's input, or the data of the CloudEvent the Function receives. Absent or null, it is the event's data; otherwise it is a JSON object whose top-level values are literals, or strings that are a single $&#123;&#123; &#125;&#125; expression reading event.id, event.source, event.type, event.time or event.data. An input that is not an object, or holds an invalid expression, makes the Sensor not Ready, with reason InvalidInput, and then none of its actions runs. |
+| `name` | string, required, a DNS-1123 label | The action's name, unique among the Sensor's actions. Dead letters record it, and a WorkflowRun it starts is named after the Sensor and this name, with a random suffix. |
+| `on` | string, required, a DNS-1123 label | The name of the dependency whose events run this action, one of the Sensor's on entries. |
+| `workflow` | string, a DNS-1123 label | Each event starts a WorkflowRun of this Workflow, in the Sensor's namespace and resource group, with the action's input. The action succeeds once the run is created; a run whose input breaks the Workflow's contract or passes workflow.payloadLimit fails at its start. Exactly one of workflow and function. |
 
 ### `Sensor.spec.on[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `event` | string, required, a DNS-1123 label |  |
-| `name` | string, required, a DNS-1123 label |  |
-| `source` | string, required, a DNS-1123 label |  |
+| `event` | string, required, a DNS-1123 label | The name of one of that EventSource's events, which is the type of each CloudEvent the dependency receives. |
+| `name` | string, required, a DNS-1123 label | The dependency's name, unique among the Sensor's dependencies; an action's on names it. |
+| `source` | string, required, a DNS-1123 label | The name of an EventSource in the Sensor's namespace. |
 
 ### `Sensor.status`
 

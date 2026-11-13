@@ -128,8 +128,8 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `bucket` | string, required, a DNS-1123 label |  |
-| `prefix` | string, required, a DNS-1123 label |  |
+| `bucket` | string, required, a DNS-1123 label | The Bucket that holds the Lake's files, in the Lake's namespace. |
+| `prefix` | string, required, a DNS-1123 label | The prefix of that Bucket, which this Lake must own. |
 
 ### `Restore.spec.source`
 

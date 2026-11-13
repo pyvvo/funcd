@@ -40,7 +40,7 @@ type KVStoreSpec struct {
 	// Tables are the store's sub-domains (ADR-0073): each is a key space <ns>/<store>/<table>/ with a
 	// single-writer Owner. Table names are unique within the store (so a table has exactly one owner by
 	// construction). Empty ⇒ a store with no writable sub-domains.
-	Tables []KVTable `json:"tables,omitempty" doc:"The store's tables. A table is a key space with at most one writer, its owner. Table names are unique within the store, and a store with no table has nothing a Function can write."`
+	Tables []KVTable `json:"tables,omitempty" doc:"The store's tables. A table is a key space that only its owner and the writers that a RolesAssignment names may write. Table names are unique within the store, and a store with no table has nothing a Function can write."`
 }
 
 // KVTable is one sub-domain of a KVStore (ADR-0073): a named key space with a single-writer owner.
@@ -50,7 +50,7 @@ type KVTable struct {
 	Name string `json:"name" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" doc:"The table's name, unique within the store."`
 	// Owner is a writer by default, a Function in this store's namespace; a writer-role grant adds others (ADR-0136).
 	// Cross-resource validity (the owner exists) is an admission, not Validate.
-	Owner ObjectName `json:"owner,omitempty" doc:"The Function that owns the table, in the store's namespace. The owner writes the table, and so does a principal that a RolesAssignment grants kv::write on the table, its store or its namespace, such as the KV Data Writer role. In a store that a Function declares, the owner defaults to that Function; in a KVStore applied on its own, a table with no owner is written only through such a grant. Every Function, the owner included, reaches the table through an entry of its spec.bindings.kv."`
+	Owner ObjectName `json:"owner,omitempty" doc:"The Function that owns the table, in the store's namespace. The owner writes the table, and so does a principal that a RolesAssignment grants kv::write on the table, its store or its namespace, such as the KV Data Writer role. In a store that a Function declares, the owner defaults to that Function; in one that a Workflow declares, it names a step, and the Function that funcd creates for that step is the owner; in a KVStore applied on its own, a table with no owner is written only through such a grant. Every Function, the owner included, reaches the table through an entry of its spec.bindings.kv."`
 }
 
 // KVStoreStatus is the observed state of a KVStore (ADR-0072/0073): the reconciler sets Ready and the

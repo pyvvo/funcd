@@ -28,28 +28,28 @@ type BucketSpec struct {
 	// Prefixes are the bucket's sub-domains (ADR-0080): the medallion layers, each a key prefix with a
 	// single-writer Owner. Prefix names are unique within the bucket (so a prefix has exactly one owner
 	// by construction). Empty ⇒ a bucket with no writable sub-domains.
-	Prefixes []BucketPrefix `json:"prefixes"`
+	Prefixes []BucketPrefix `json:"prefixes" doc:"The Bucket's prefixes, each a key space with its own owner and cap. Prefix names are unique within the Bucket. A Function or a Lake that binds a prefix the Bucket does not list waits, with the reason BucketNotFound."`
 	// Quota caps the bucket's total size and each object (ADR-0292).
-	Quota BucketQuota `json:"quota,omitzero"`
+	Quota BucketQuota `json:"quota,omitzero" doc:"Caps on the Bucket's total size and on each object. While the Bucket has a size cap, funcd refuses to sign a presigned PUT URL for it, with 403."`
 }
 
 // BucketPrefix is one sub-domain of a Bucket (ADR-0080): a named key prefix with a single-writer owner.
 // Mirrors KVTable. The leading segment of an S3 key selects the prefix; the rest is the object path.
 type BucketPrefix struct {
 	// Name is the key prefix; a DNS-1123 label, unique within the bucket. The medallion layer.
-	Name string `json:"name" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"`
+	Name string `json:"name" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" doc:"The prefix's name, unique within the Bucket. Over S3, it is the first segment of each object's key."`
 	// Owner is the single writer, a Function or a Lake in this bucket's namespace, named with its kind (ADR-0275).
 	// Zero ⇒ no writer (read-only).
-	Owner PrefixOwner `json:"owner,omitzero"`
+	Owner PrefixOwner `json:"owner,omitzero" doc:"The one Function or Lake that may write the prefix, besides the writers that a RolesAssignment names. In a Bucket that a Function or a Lake declares by name, an omitted owner is that Function or Lake. The prefix that a Site serves its bundle from must have no owner, since the Site writes its builds there; the prefixes of a Site's ingress rules may have one."`
 	// Quota caps the prefix's total size (ADR-0292); a Lake's prefix quota is the Lake's cap.
-	Quota SizeQuota `json:"quota,omitzero"`
+	Quota SizeQuota `json:"quota,omitzero" doc:"A cap on the prefix's total size: a write into the prefix must fit both this cap and the Bucket's, and while it is set funcd refuses to sign a presigned PUT URL into the prefix, with 403. It also caps a Lake's files under the prefix, though not the Lake's catalog."`
 }
 
 // PrefixOwner is a Bucket prefix's single writer, named with its kind (ADR-0275): a Function and a Lake may share a
 // name (ADR-0152), so the name alone does not say which writes.
 type PrefixOwner struct {
-	Kind Kind       `json:"kind" enum:"Function,Lake"`
-	Name ObjectName `json:"name"`
+	Kind Kind       `json:"kind" enum:"Function,Lake" doc:"The writer's kind. A Function and a Lake may share a name, so the kind says which one writes."`
+	Name ObjectName `json:"name" doc:"The writer's name, in the Bucket's namespace. In a Workflow's buckets, a Function owner names a step and a Lake owner a lake that the Workflow declares."`
 }
 
 // FunctionOwner names Function name as a prefix's owner.

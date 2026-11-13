@@ -92,24 +92,24 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | --- | --- | --- |
 | `deletion` | string, one of `retain`, `delete` | retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them. |
 | `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
-| `prefixes` | array of [`Function.spec.buckets[].prefixes[]`](#functionspecbucketsprefixes) |  |
-| `quota` | object, [`Function.spec.buckets[].quota`](#functionspecbucketsquota) |  |
+| `prefixes` | array of [`Function.spec.buckets[].prefixes[]`](#functionspecbucketsprefixes) | The Bucket's prefixes, each a key space with its own owner and cap. Prefix names are unique within the Bucket. A Function or a Lake that binds a prefix the Bucket does not list waits, with the reason BucketNotFound. |
+| `quota` | object, [`Function.spec.buckets[].quota`](#functionspecbucketsquota) | Caps on the Bucket's total size and on each object. While the Bucket has a size cap, funcd refuses to sign a presigned PUT URL for it, with 403. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 
 ### `Function.spec.buckets[].prefixes[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `name` | string, required, a DNS-1123 label |  |
-| `owner` | object, [`Function.spec.buckets[].prefixes[].owner`](#functionspecbucketsprefixesowner) |  |
-| `quota` | object, [`Function.spec.buckets[].prefixes[].quota`](#functionspecbucketsprefixesquota) |  |
+| `name` | string, required, a DNS-1123 label | The prefix's name, unique within the Bucket. Over S3, it is the first segment of each object's key. |
+| `owner` | object, [`Function.spec.buckets[].prefixes[].owner`](#functionspecbucketsprefixesowner) | The one Function or Lake that may write the prefix, besides the writers that a RolesAssignment names. In a Bucket that a Function or a Lake declares by name, an omitted owner is that Function or Lake. The prefix that a Site serves its bundle from must have no owner, since the Site writes its builds there; the prefixes of a Site's ingress rules may have one. |
+| `quota` | object, [`Function.spec.buckets[].prefixes[].quota`](#functionspecbucketsprefixesquota) | A cap on the prefix's total size: a write into the prefix must fit both this cap and the Bucket's, and while it is set funcd refuses to sign a presigned PUT URL into the prefix, with 403. It also caps a Lake's files under the prefix, though not the Lake's catalog. |
 
 ### `Function.spec.buckets[].prefixes[].owner`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `kind` | string, required, one of `Function`, `Lake` |  |
-| `name` | string, required, a DNS-1123 label |  |
+| `kind` | string, required, one of `Function`, `Lake` | The writer's kind. A Function and a Lake may share a name, so the kind says which one writes. |
+| `name` | string, required, a DNS-1123 label | The writer's name, in the Bucket's namespace. In a Workflow's buckets, a Function owner names a step and a Lake owner a lake that the Workflow declares. |
 
 ### `Function.spec.buckets[].prefixes[].quota`
 
@@ -123,7 +123,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `maxBytes` | integer, at least 0 | The same cap as a number of bytes. Set maxSize or maxBytes, not both. |
-| `maxObjectBytes` | integer, at least 0 |  |
+| `maxObjectBytes` | integer, at least 0 | The largest object a write may store, in bytes. A larger write gets 413, or EntityTooLarge over S3, and while it is set funcd refuses to sign a presigned PUT URL for the Bucket, with 403. 0 sets no cap of the Bucket's own, so only funcd's upload limits apply, such as s3gateway.maxUploadBytes. |
 | `maxSize` | string, a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB) | The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507. |
 
 ### `Function.spec.configMaps[]`
@@ -157,7 +157,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
 | `quota` | object, [`Function.spec.kv[].quota`](#functionspeckvquota) | Caps on the store's total size, on each value and on each key. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
-| `tables` | array of [`Function.spec.kv[].tables[]`](#functionspeckvtables) | The store's tables. A table is a key space with at most one writer, its owner. Table names are unique within the store, and a store with no table has nothing a Function can write. |
+| `tables` | array of [`Function.spec.kv[].tables[]`](#functionspeckvtables) | The store's tables. A table is a key space that only its owner and the writers that a RolesAssignment names may write. Table names are unique within the store, and a store with no table has nothing a Function can write. |
 
 ### `Function.spec.kv[].quota`
 
@@ -173,29 +173,29 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `name` | string, required, a DNS-1123 label | The table's name, unique within the store. |
-| `owner` | string, a DNS-1123 label | The Function that owns the table, in the store's namespace. The owner writes the table, and so does a principal that a RolesAssignment grants kv::write on the table, its store or its namespace, such as the KV Data Writer role. In a store that a Function declares, the owner defaults to that Function; in a KVStore applied on its own, a table with no owner is written only through such a grant. Every Function, the owner included, reaches the table through an entry of its spec.bindings.kv. |
+| `owner` | string, a DNS-1123 label | The Function that owns the table, in the store's namespace. The owner writes the table, and so does a principal that a RolesAssignment grants kv::write on the table, its store or its namespace, such as the KV Data Writer role. In a store that a Function declares, the owner defaults to that Function; in one that a Workflow declares, it names a step, and the Function that funcd creates for that step is the owner; in a KVStore applied on its own, a table with no owner is written only through such a grant. Every Function, the owner included, reaches the table through an entry of its spec.bindings.kv. |
 
 ### `Function.spec.lakes[]`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `bindings` | object, [`Function.spec.lakes[].bindings`](#functionspeclakesbindings) |  |
-| `buckets` | array of [`Function.spec.lakes[].buckets[]`](#functionspeclakesbuckets) |  |
-| `configMaps` | array of [`Function.spec.lakes[].configMaps[]`](#functionspeclakesconfigmaps) |  |
-| `ingress` | object, [`Function.spec.ingress`](#functionspecingress) |  |
-| `location` | object, [`Function.spec.lakes[].location`](#functionspeclakeslocation) |  |
+| `bindings` | object, [`Function.spec.lakes[].bindings`](#functionspeclakesbindings) | What the Lake's engine uses: Bucket prefixes, and the ConfigMaps and Secrets of its environment. |
+| `buckets` | array of [`Function.spec.lakes[].buckets[]`](#functionspeclakesbuckets) | The Buckets that a Lake applied on its own declares: by name the Lake creates the Bucket, an omitted prefix owner being the Lake, and a Bucket of that name that is not the Lake's holds it in Pending with StoreNotOwned; by ref it binds an existing one. Each Bucket that the Lake's bindings.blob names must be declared here. A lake that another resource declares sets none. |
+| `configMaps` | array of [`Function.spec.lakes[].configMaps[]`](#functionspeclakesconfigmaps) | The ConfigMaps that a Lake applied on its own declares: by name the Lake defines one, and a ConfigMap of its stored name that is not the Lake's holds it in Pending with StoreNotOwned; by ref it binds an existing one. Each ConfigMap that the Lake's bindings.config names must be declared here. A lake that another resource declares sets none. |
+| `ingress` | object, [`Function.spec.ingress`](#functionspecingress) | Exposes the Lake gateway at the edge, only when enabled is true and while the Lake is Ready. The path defaults to /lake/&lt;name&gt;, or / with a host. Setting auth is refused, since the Lake gateway checks each caller itself. |
+| `location` | object, [`Function.spec.lakes[].location`](#functionspeclakeslocation) | The Bucket prefix that holds the Lake's files, one of the Lake's bindings.blob. The Lake waits in Pending, with the reason PrefixNotOwned, until the prefix's owner is this Lake. The Lake's catalog is kept outside the Bucket, under the same location, so a Lake located where another was finds that Lake's files and catalog. |
 | `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
-| `resources` | object, [`Function.spec.resources`](#functionspecresources) |  |
-| `secrets` | array of [`Function.spec.lakes[].secrets[]`](#functionspeclakessecrets) |  |
+| `resources` | object, [`Function.spec.resources`](#functionspecresources) | The cpu and memory of the Lake's engine. An empty cpu or memory sets no limit on it, and a change replaces the running engine. |
+| `secrets` | array of [`Function.spec.lakes[].secrets[]`](#functionspeclakessecrets) | The Secrets that a Lake applied on its own declares, with the keys its engine reads. Each Secret that the Lake's bindings.secret names must be declared here, and the Lake waits in Pending, with SecretNotFound or SecretKeyMissing, while one is missing or lacks a key. A lake that another resource declares sets none. |
 
 ### `Function.spec.lakes[].bindings`
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `blob` | array of [`Function.spec.bindings.blob[]`](#functionspecbindingsblob), required |  |
-| `config` | array of string values, each a DNS-1123 label |  |
-| `secret` | array of string values, each a DNS-1123 label |  |
+| `blob` | array of [`Function.spec.bindings.blob[]`](#functionspecbindingsblob), required | The Bucket prefixes the engine may read, each under an alias. It writes only a prefix whose owner is this Lake, and the Lake's location must be one of them. |
+| `config` | array of string values, each a DNS-1123 label | ConfigMaps whose data the engine gets as environment variables. Only QUACK_TOKEN and the DUCKDB_ keys pass, DUCKDB_EXTENSION_DIRECTORY excepted, and a bound Secret's value wins over a ConfigMap's for the same key. A missing ConfigMap holds the Lake in Pending, with the reason BindingResolveFailed. |
+| `secret` | array of string values, each a DNS-1123 label | Secrets whose data the engine gets as environment variables, such as its QUACK_TOKEN; the same keys pass as for config. funcd asks Cedar, as the Lake, for secret::read on each: a forbidden Secret holds the Lake in Pending, with the reason BindingResolveFailed, as does a missing one in a lake that another resource declares. A changed value replaces the engine. |
 
 ### `Function.spec.lakes[].buckets[]`
 
@@ -203,8 +203,8 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | --- | --- | --- |
 | `deletion` | string, one of `retain`, `delete` | retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them. |
 | `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
-| `prefixes` | array of [`Function.spec.buckets[].prefixes[]`](#functionspecbucketsprefixes) |  |
-| `quota` | object, [`Function.spec.buckets[].quota`](#functionspecbucketsquota) |  |
+| `prefixes` | array of [`Function.spec.buckets[].prefixes[]`](#functionspecbucketsprefixes) | The Bucket's prefixes, each a key space with its own owner and cap. Prefix names are unique within the Bucket. A Function or a Lake that binds a prefix the Bucket does not list waits, with the reason BucketNotFound. |
+| `quota` | object, [`Function.spec.buckets[].quota`](#functionspecbucketsquota) | Caps on the Bucket's total size and on each object. While the Bucket has a size cap, funcd refuses to sign a presigned PUT URL for it, with 403. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
 
 ### `Function.spec.lakes[].configMaps[]`
@@ -219,8 +219,8 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `bucket` | string, required, a DNS-1123 label |  |
-| `prefix` | string, required, a DNS-1123 label |  |
+| `bucket` | string, required, a DNS-1123 label | The Bucket that holds the Lake's files, in the Lake's namespace. |
+| `prefix` | string, required, a DNS-1123 label | The prefix of that Bucket, which this Lake must own. |
 
 ### `Function.spec.lakes[].secrets[]`
 
@@ -265,10 +265,10 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | --- | --- | --- |
 | `deletion` | string, one of `retain`, `delete` | retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them. |
 | `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
-| `owner` | string, a DNS-1123 label |  |
-| `quota` | object, [`Function.spec.buckets[].prefixes[].quota`](#functionspecbucketsprefixesquota) |  |
+| `owner` | string, a DNS-1123 label | The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step. With no owner, only those writers can write it. |
+| `quota` | object, [`Function.spec.buckets[].prefixes[].quota`](#functionspecbucketsprefixesquota) | A cap on the database's total size, the bytes of its pages in use. Once it is reached, an execute gets 507 unless each of its statements is a DELETE or a DROP. A change keeps the engine running. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
-| `resources` | object, [`Function.spec.resources`](#functionspecresources) |  |
+| `resources` | object, [`Function.spec.resources`](#functionspecresources) | The cpu and memory of the database's engine. An empty memory means 256Mi, and an empty cpu sets no cpu limit. A change replaces the running engine. |
 
 ### `Function.spec.volumes[]`
 

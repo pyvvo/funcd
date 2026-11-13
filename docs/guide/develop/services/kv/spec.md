@@ -19,7 +19,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `quota` | object, [`KVStore.spec.quota`](#kvstorespecquota) | Caps on the store's total size, on each value and on each key. |
-| `tables` | array of [`KVStore.spec.tables[]`](#kvstorespectables) | The store's tables. A table is a key space with at most one writer, its owner. Table names are unique within the store, and a store with no table has nothing a Function can write. |
+| `tables` | array of [`KVStore.spec.tables[]`](#kvstorespectables) | The store's tables. A table is a key space that only its owner and the writers that a RolesAssignment names may write. Table names are unique within the store, and a store with no table has nothing a Function can write. |
 
 ### `KVStore.spec.quota`
 
@@ -35,7 +35,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `name` | string, required, a DNS-1123 label | The table's name, unique within the store. |
-| `owner` | string, a DNS-1123 label | The Function that owns the table, in the store's namespace. The owner writes the table, and so does a principal that a RolesAssignment grants kv::write on the table, its store or its namespace, such as the KV Data Writer role. In a store that a Function declares, the owner defaults to that Function; in a KVStore applied on its own, a table with no owner is written only through such a grant. Every Function, the owner included, reaches the table through an entry of its spec.bindings.kv. |
+| `owner` | string, a DNS-1123 label | The Function that owns the table, in the store's namespace. The owner writes the table, and so does a principal that a RolesAssignment grants kv::write on the table, its store or its namespace, such as the KV Data Writer role. In a store that a Function declares, the owner defaults to that Function; in one that a Workflow declares, it names a step, and the Function that funcd creates for that step is the owner; in a KVStore applied on its own, a table with no owner is written only through such a grant. Every Function, the owner included, reaches the table through an entry of its spec.bindings.kv. |
 
 ### `KVStore.status`
 

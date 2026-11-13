@@ -43,11 +43,11 @@ type StepBindings struct {
 type LakeBindings struct {
 	// Blob binds the lakehouse buckets the engine may read and write, projected onto its backing Function so ADR-0085
 	// injects the keypair; the prefix the lake lives under must be owned by this service (single-writer).
-	Blob []FunctionBlob `json:"blob"`
+	Blob []FunctionBlob `json:"blob" doc:"The Bucket prefixes the engine may read, each under an alias. It writes only a prefix whose owner is this Lake, and the Lake's location must be one of them."`
 	// Config names ConfigMaps whose Data is injected into the engine as env vars: engine tuning (DUCKDB_*).
-	Config []ObjectName `json:"config,omitempty"`
+	Config []ObjectName `json:"config,omitempty" doc:"ConfigMaps whose data the engine gets as environment variables. Only QUACK_TOKEN and the DUCKDB_ keys pass, DUCKDB_EXTENSION_DIRECTORY excepted, and a bound Secret's value wins over a ConfigMap's for the same key. A missing ConfigMap holds the Lake in Pending, with the reason BindingResolveFailed."`
 	// Secret names Secrets whose Data is injected into the engine as env vars: the Quack token (QUACK_TOKEN).
-	Secret []ObjectName `json:"secret,omitempty"`
+	Secret []ObjectName `json:"secret,omitempty" doc:"Secrets whose data the engine gets as environment variables, such as its QUACK_TOKEN; the same keys pass as for config. funcd asks Cedar, as the Lake, for secret::read on each: a forbidden Secret holds the Lake in Pending, with the reason BindingResolveFailed, as does a missing one in a lake that another resource declares. A changed value replaces the engine."`
 }
 
 // FunctionBindings returns the step's bindings as a Function's, without links.

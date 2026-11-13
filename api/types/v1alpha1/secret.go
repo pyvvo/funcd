@@ -13,8 +13,8 @@ type Secret struct {
 // SecretSpec holds the secret data. SecretType is an open typed-string discriminator
 // whose enumerated values are owned by the secrets ADR (F15).
 type SecretSpec struct {
-	Type SecretType        `json:"type,omitempty"`
-	Data map[string][]byte `json:"data,omitempty"`
+	Type SecretType        `json:"type,omitempty" doc:"funcd does not read it."`
+	Data map[string][]byte `json:"data,omitempty" doc:"The Secret's values by key, each in base64. Each key is an environment-variable name: a letter or an underscore, then letters, digits and underscores; a key that starts with FUNCD_ never reaches a workload. Each value must be UTF-8 text with no NUL byte: a Function or a Lake that binds a Secret holding another value does not start."`
 }
 
 // SecretType is an open typed-string discriminator for secret kinds.

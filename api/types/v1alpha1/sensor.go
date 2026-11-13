@@ -20,27 +20,27 @@ type Sensor struct {
 // SensorSpec binds event dependencies to actions (ADR-0109).
 type SensorSpec struct {
 	// On lists the named event dependencies this Sensor subscribes to (≥1, unique names).
-	On []Dependency `json:"on"`
+	On []Dependency `json:"on" doc:"The events the Sensor subscribes to, as named dependencies: at least one, with unique names."`
 	// Do lists the named actions (≥1, unique names); each is bound to one dependency via On.
-	Do []Action `json:"do"`
+	Do []Action `json:"do" doc:"The actions the Sensor runs: at least one, with unique names. An event runs every action whose on names its dependency; a failed action is tried eventing.deliveryAttempts times in all, then stored as a dead letter, which funcdctl eventing dlq list shows; while eventing.maxQueuedPerSensor deliveries wait, a new one becomes a dead letter with no attempt."`
 }
 
 // Dependency is a named, tuple-addressed event dependency: (source, event) in this namespace.
 type Dependency struct {
-	Name   ObjectName `json:"name"`
-	Source ObjectName `json:"source"` // the EventSource name
-	Event  ObjectName `json:"event"`  // the named event of that source
+	Name   ObjectName `json:"name" doc:"The dependency's name, unique among the Sensor's dependencies; an action's on names it."`
+	Source ObjectName `json:"source" doc:"The name of an EventSource in the Sensor's namespace."`                                                      // the EventSource name
+	Event  ObjectName `json:"event" doc:"The name of one of that EventSource's events, which is the type of each CloudEvent the dependency receives."` // the named event of that source
 }
 
 // Action is a named, kind-keyed reaction bound to one dependency (ADR-0109). Exactly one of
 // Workflow/Function is set. Input (optional) is a JSON object whose values are literals or `${{ event.* }}`
 // projections over the firing CloudEvent (the F73 engine); absent ⇒ the event data verbatim.
 type Action struct {
-	Name     ObjectName      `json:"name"`
-	On       ObjectName      `json:"on"`                 // the dependency (Dependency.Name) this fires on
-	Workflow ObjectName      `json:"workflow,omitempty"` // start a WorkflowRun of this Workflow
-	Function ObjectName      `json:"function,omitempty"` // invoke this Function with the CloudEvent
-	Input    json.RawMessage `json:"input,omitempty"`    // object; literals or ${{ event.* }} (checked at reconcile)
+	Name     ObjectName      `json:"name" doc:"The action's name, unique among the Sensor's actions. Dead letters record it, and a WorkflowRun it starts is named after the Sensor and this name, with a random suffix."`
+	On       ObjectName      `json:"on" doc:"The name of the dependency whose events run this action, one of the Sensor's on entries."`                                                                                                                                                                                                                                                                                                                                                                                                            // the dependency (Dependency.Name) this fires on
+	Workflow ObjectName      `json:"workflow,omitempty" doc:"Each event starts a WorkflowRun of this Workflow, in the Sensor's namespace and resource group, with the action's input. The action succeeds once the run is created; a run whose input breaks the Workflow's contract or passes workflow.payloadLimit fails at its start. Exactly one of workflow and function."`                                                                                                                                                                    // start a WorkflowRun of this Workflow
+	Function ObjectName      `json:"function,omitempty" doc:"Each event calls this Function, in the Sensor's namespace, with the CloudEvent, whose data is the action's input; funcd starts a worker first when none runs. A Function whose protocol is http is never called: the Sensor is not Ready, with reason TargetServesHTTP, and each event for this action ends as a dead letter. Exactly one of workflow and function."`                                                                                                                 // invoke this Function with the CloudEvent
+	Input    json.RawMessage `json:"input,omitempty" doc:"What the action passes: the run's input, or the data of the CloudEvent the Function receives. Absent or null, it is the event's data; otherwise it is a JSON object whose top-level values are literals, or strings that are a single ${{ }} expression reading event.id, event.source, event.type, event.time or event.data. An input that is not an object, or holds an invalid expression, makes the Sensor not Ready, with reason InvalidInput, and then none of its actions runs."` // object; literals or ${{ event.* }} (checked at reconcile)
 }
 
 // SensorStatus holds the observed state (Ready/NotReady with a reason).
