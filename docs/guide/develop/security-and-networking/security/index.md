@@ -129,12 +129,12 @@ object of a namespace. An entry of a RolesAssignment names one or the other in i
 
 A role is needed only beyond what a principal gets without one, which [Access](#access) lists: an Identity gets
 nothing, and a Function reads what it binds and writes what it owns. A role also allows only the requests that its
-principal can send. A Function reaches a KV store, a Bucket prefix or a SQL database through a client of its context,
-such as `ctx.kv`, which takes the alias of a **binding**, the entry under `spec.bindings` that connects the store to
-the Function. A role creates no declaration, no binding and no link, and never makes valid an alias that no binding
-declares: through these clients, it lets a Function write a table, a prefix or a database that the Function binds,
-never reach one that it does not bind. An Identity's credential works only at the S3 gateway and at the gateway of a
-Lake. Each built-in role therefore serves these principals:
+principal can send. A Function reaches a KV store, a Bucket prefix, a SQL database or a Secret through a client of its
+context, such as `ctx.kv`, which takes the alias of a **binding**, the entry under `spec.bindings` that connects the
+store to the Function. A role creates no declaration, no binding and no link, and never makes valid an alias that no
+binding declares: through these clients, it lets a Function write a table, a prefix, a database or a Secret that the
+Function binds, never reach one that it does not bind. An Identity's credential works only at the S3 gateway and at
+the gateway of a Lake. Each built-in role therefore serves these principals:
 
 - `Blob Data Reader` allows `s3::read`, and `Blob Data Writer` allows `s3::read` and `s3::write`. An Identity uses them
   through the S3 gateway, as the first example does. A Function uses them through the S3 gateway too, with the key
@@ -143,6 +143,10 @@ Lake. Each built-in role therefore serves these principals:
 - `KV Data Writer` allows `kv::read` and `kv::write`, and `SQL Data Writer` allows `sql::read` and `sql::write`. A
   Function uses them to write a table or a database that it binds and does not own, as the
   [KV](../../services/kv/index.md#access) and [SQL](../../services/sql/index.md#access) pages show.
+- `Secret Data Reader` allows `secret::read`, and `Secret Data Writer` allows `secret::read` and `secret::write`. A
+  Function uses `Secret Data Writer` to write a Secret that it binds and does not own, as the
+  [Secrets](../../services/secrets/index.md#let-another-function-write-a-secret) page shows. `Secret Data Reader` adds
+  nothing to a binding, which already allows each read that a Function makes.
 - `Lake Query Reader` and `Lake Contributor` both allow `lake::query`. An Identity uses them to query a Lake through
   the Lake's gateway, with the `lakeToken` of its Secret, as the [Lake](../../services/lake/index.md#access) page
   shows.
@@ -194,6 +198,7 @@ RolesAssignment's namespace:
   whole.
 - `KVStore` covers every table of a store, with the name `<store>`, or one table, with the name `<store>/<table>`.
 - `SQLDatabase` and `Lake`, with the name of the database or of the Lake, cover that one resource.
+- `Secret`, with the name of the Secret, covers that one Secret.
 
 A role's actions apply only to the resources of their kind: `Blob Data Writer` on a `KVStore` scope allows nothing.
 The [principal](spec.md#rolesassignmentspecprincipal) is a Function or an Identity of the RolesAssignment's namespace.
@@ -240,7 +245,8 @@ The Policy's [`cedar`](spec.md#policyspec) field holds one or more statements. E
 
 - The principal: `principal` alone matches every principal, and `principal == <entity>` one principal.
 - The action: `action == Action::"<action>"` names exactly one of these actions: `s3::read`, `s3::write`, `kv::read`,
-  `kv::write`, `sql::read`, `sql::write`, `lake::query`, `secret::read`, `link::invoke` and `egress::connect`.
+  `kv::write`, `sql::read`, `sql::write`, `lake::query`, `secret::read`, `secret::write`, `link::invoke` and
+  `egress::connect`.
 - The resource: `resource` alone matches every resource, `resource == <entity>` one resource, and
   `resource in <entity>` also every resource that the entity holds.
 - A `when` or `unless` clause adds a condition on the attributes of the principal and of the resource.
@@ -256,7 +262,7 @@ that starts with its namespace, except the last one:
 - `KVTable::"<namespace>/<store>/<table>"` is the resource of `kv::read` and `kv::write`, and
   `KVStore::"<namespace>/<store>"` holds the tables of the store.
 - `SQLDatabase::"<namespace>/<database>"` is the resource of `sql::read` and `sql::write`, and
-  `Secret::"<namespace>/<name>"` the resource of `secret::read`.
+  `Secret::"<namespace>/<name>"` the resource of `secret::read` and `secret::write`.
 - `NetDestination::"<ip>:<port>"`, the address and the port of an outbound connection, is the resource of
   `egress::connect`. Its attributes are `ip`, `port` and `domains`: the names that the Function's
   [worker](../../../platform/workloads/index.md#runtime), the process that runs its code, looked up through funcd and
@@ -314,9 +320,9 @@ quotes the built-in policy that funcd applies to it, where funcd has one:
   `kv::read`, `s3::read` and `sql::read`, and writes those that it owns, with `kv::write`, `s3::write` and `sql::write`
   ([KV](../../services/kv/index.md#access), [Bucket](../../services/bucket/index.md#access),
   [SQL](../../services/sql/index.md#access)). It queries the Lakes that it binds, with `lake::query`
-  ([Lake](../../services/lake/index.md#access)), reads the Secrets that it binds, with `secret::read`
-  ([Secrets](../../services/secrets/index.md#access)), and calls the Functions that its links name, with `link::invoke`
-  ([Function](../../workloads/function/index.md#access)).
+  ([Lake](../../services/lake/index.md#access)), reads the Secrets that it binds, with `secret::read`, and writes those
+  that it owns, with `secret::write` ([Secrets](../../services/secrets/index.md#access)), and calls the Functions that
+  its links name, with `link::invoke` ([Function](../../workloads/function/index.md#access)).
 - A Lake's engine reads the prefixes and the Secrets that the Lake binds, and writes the prefix that the Lake owns
   ([Lake](../../services/lake/index.md#access)).
 - An Identity gets nothing: each of its requests needs a role or a `permit`.

@@ -124,24 +124,32 @@ To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
 ## Write a key of a Secret
 
 A Function writes the keys of a Secret whose `spec.owner` names it. The owner is one Function of the Secret's
-namespace, and it writes only while it binds the Secret. In this example, the Function `refresher` refreshes an OAuth
-token and keeps it in the Secret `oauth`, which another Function, `api`, binds and reads:
+namespace, and it writes only while it binds the Secret. The Secret `oauth` of this manifest names the Function
+`refresher` as its owner:
 
 ::include[../../../../../api/types/v1alpha1/examples/secrets/writers.yaml#owner]
 
-`refresher` declares and binds `oauth` as `env-echo` declares and binds `app-secret` in the first example. Its handler
-writes with two methods of `ctx.secret`, whose first argument names the Secret, one of the Function's
-`spec.bindings.secret`:
+The complete file,
+[api/types/v1alpha1/examples/secrets/writers.yaml](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/secrets/writers.yaml),
+also holds `refresher` and a second Function, `api`, which both declare and bind `oauth` as `env-echo` declares and
+binds `app-secret` in the first example.
 
-- `put(binding, key, value)` sets a key to a text value, such as `ctx.secret.put("oauth", "TOKEN", token)`.
-- `del(binding, key)` in TypeScript, and `delete(binding, key)` in Python, removes a key. Removing a key that the Secret
-  does not hold is no error.
+The owner's handler writes with two methods of `ctx.secret`. The first argument of each names a Secret of the
+Function's `spec.bindings.secret`, and neither method returns a value:
 
-Both methods return nothing, and they throw an error, or raise a `RuntimeError` in Python, when funcd refuses the
-write, as [Errors](#errors) lists. The next read of each Function that binds the Secret returns the change, with no
-restart. A write changes keys only: it never creates or deletes the Secret itself. funcd checks a written key as it
-checks the keys of an applied Secret, and a written value as a read does: the key must be an environment variable name,
-and the value must be UTF-8 text without a NUL byte. A key that starts with `FUNCD_` is stored, but no read returns it.
+- `put(binding, key, value)` sets the key to the value, a string.
+- `del(binding, key)` in TypeScript, and `delete(binding, key)` in Python, removes the key. Removing a key that the
+  Secret does not hold is no error.
+
+When funcd refuses a write, the method throws an error, or raises a `RuntimeError` in Python, as [Errors](#errors)
+lists. The [Spec](spec.md#handler-api) tab's Handler API gives the signature of each method in both languages. No
+runnable example writes a Secret yet.
+
+The next read of each Function that binds the Secret returns the change, with no restart, unless a Secret that comes
+later in that Function's `spec.bindings.secret` holds the same key. A write changes keys only: it never creates or
+deletes the Secret itself. funcd checks a written key as it checks the keys of an applied Secret, and a written value
+as a read does: the key must be an environment variable name, and the value must be UTF-8 text without a NUL byte. A
+key that starts with `FUNCD_` is stored, but no read returns it.
 
 ## Let another Function write a Secret
 
@@ -264,8 +272,9 @@ A forbid shows on the `Ready` condition: a Function that has served becomes `Deg
 ## Changes and deletion
 
 - The Function's next read returns a changed value, with no restart, whether a person or a Function changed it, as the
-  first example shows. A Lake is the exception: its engine reads its Secrets only when it starts, so a changed value
-  replaces the engine, as the Lake's [Spec](../lake/spec.md#lakespecbindings) tab says.
+  first example shows, unless a Secret that comes later in its `spec.bindings.secret` holds the same key. A Lake reads
+  differently: its engine reads its Secrets only when it starts, so a changed value replaces the engine, as the Lake's
+  [Spec](../lake/spec.md#lakespecbindings) tab says.
 - A person's apply of a Secret replaces its data, so a key that a Function wrote is gone after the apply unless the
   applied manifest holds it.
 - When a bound Secret loses a key, `get` returns `undefined` (`None` in Python) for that key, and `list` leaves it
