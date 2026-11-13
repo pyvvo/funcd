@@ -12,11 +12,12 @@ are written in SQLite's dialect of SQL. A Function binds the database, and its h
 them.
 
 The first example creates the tables of a new database from its migrations, adds a row, and reads the rows back. In
-TypeScript, the example sql-notes keeps notes; in Python, the example sql-orders keeps orders. Each example runs two
-Functions over one database: a migration Function, which applies the migrations, and the database's owner, which adds
-and lists the rows. The steps below start the example on the local computer and call both Functions: the migration
-Function returns `"applied":2`, the number of migrations that it applied, and the list that the owner returns contains
-the row that the call before it added.
+TypeScript, the example sql-notes keeps notes; in Python, the example sql-orders keeps orders. Over one database, each
+example runs a migration Function, which applies the migrations, and the database's owner, which adds and lists the
+rows; the Python example also runs a third Function, `audit`, which records each change of an order. The steps below
+start the example on the local computer and call the migration Function and the owner: the migration Function returns
+`"applied":2`, the number of migrations that it applied, and the list that the owner returns contains the row that the
+call before it added.
 
 The example needs these programs:
 
@@ -31,12 +32,16 @@ The example needs these programs:
 `funcdctl dev` starts a local platform and runs the resource files of one folder on it. The example's manifests name
 an `image`, the bundle that `funcdctl push` writes for a platform to run. `funcdctl dev` does not use that image: it
 runs each Function from the code in the folder. For each SQLDatabase, `funcdctl dev` starts an engine on the local
-computer, and deletes the database's data when `funcdctl dev` stops. It prints the URL of each Function. The
-`--gport` flag sets the port of that URL, so the commands below use port 8080.
+computer, and logs the line `dev sql engine ready`, with the database's name, once the engine answers. When
+`funcdctl dev` stops, it deletes the database's data, unless the `--persist` flag keeps it, as
+[Run it locally](#run-it-locally) explains. `funcdctl dev` prints a banner with the URL of each Function. The
+`--gport` flag sets the port of that URL, so the commands below use port 8080. The banner can appear before the
+engine is ready: a call sent then waits until the engine and the Function's worker are ready, and then answers.
 
 The example's manifests connect the Functions to the database:
 
-- A **SQLDatabase**, a resource of its own, defines the database. Its `owner` names the Function that can write it.
+- A **SQLDatabase**, a resource of its own, defines the database. Its `owner` names the Function that owns the
+  database, which can write it.
 - Each Function declares the database by `ref` under
   [`spec.sql`](../../workloads/function/spec.md#functionspecsql), because the database is a separate resource, and
   binds it under [`spec.bindings.sql`](../../workloads/function/spec.md#functionspecbindingssql) with the alias
@@ -61,8 +66,8 @@ The Function `notes`, in `notes.yaml`, declares and binds `notes-db`. The Functi
 
 The handler of `notes-migrate` applies the migrations of the folder `drizzle`, which drizzle-kit generated from the
 schema in `src/db/schema.ts`. `applyMigrations`, from the package `@funcd-dev/drizzle`, records each migration that it
-applies in the table `_migrations`, and applies the migrations that the table does not record yet, with their
-records, in one `ctx.sql.execute` call:
+applies in the table `_migrations`. It applies the migrations that are newer than the newest record of that table,
+with their records, in one `ctx.sql.execute` call:
 
 ::include[../../../../../_repos/funcd-typescript/examples/sql-notes/src/notes-migrate/main.ts]
 
@@ -130,10 +135,12 @@ email of their customer:
 ::include[../../../../../_repos/funcd-python/examples/sql-orders/src/orders/main.py]
 
 The folder's `grant.yaml` gives the role `SQL Data Writer` to `orders-migrate` and to `audit`. `audit` records each
-change of the table `orders` in the table `order_events`: `changes.yaml` declares an EventSource of the kind `sql`,
-which turns each change of the table into an event, and a Sensor that calls `audit` with each such event, so the
-order that the steps below place reaches `audit` too. The Events [Spec](../events/spec.md#eventsourcespecsql) tab
-describes such an EventSource.
+change of the table `orders` in the table `order_events`. funcd receives each row change of a database from the
+database's engine, the database's change feed. `changes.yaml` declares an EventSource, a resource that emits events,
+with a `sql` source under its field [`spec.sql`](../events/spec.md#eventsourcespecsql), which turns each change of the
+table `orders` into an event. The file also declares a [Sensor](../events/spec.md#sensor), a resource that runs an
+action when an event arrives: this Sensor calls `audit` with each such event, so the order that the steps below place
+reaches `audit` too.
 
 Clone the repository, go to the example's folder, and start the example with `uv run`:
 
@@ -187,12 +194,12 @@ article's id in the result's `values`. The operation `search` reads with `ctx.sq
 object keyed by column name. The index is an FTS5 table, the full-text search of SQLite, and SQLite's `json_each` turns
 the JSON array of each article's tags into rows.
 
-A transaction never spans two calls. When a statement fails, the whole call fails with the HTTP status 400, its
-message names the statement by its position in the call, counted from 0, such as `statement 1: …` for the second
-statement, and none of the call's statements applies. The first example relies on this: the operation `move` of
-`notes` creates the target notebook and moves the notes in one call, the operation `place` of `orders` adds the
-customer and the order in one call, and each migration Function applies its migrations with their records in one
-call.
+A transaction never spans two calls. When the engine rejects a statement, such as one that names a missing table, the
+whole call fails with the HTTP status 400, its message names the statement by its position in the call, counted from
+0, such as `statement 1: …` for the second statement, and none of the call's statements applies. The first example
+relies on this: the operation `move` of `notes` creates the target notebook and moves the notes in one call, the
+operation `place` of `orders` adds the customer and the order in one call, and each migration Function applies its
+migrations with their records in one call.
 
 ### TypeScript
 
@@ -234,8 +241,9 @@ A Function needs no role assignment to:
   `name` has that Function as its owner, unless the entry names another one. No other principal can write the
   database unless a role allows it.
 
-funcd checks reading for each `query` and `queryValues` call, and both reading and writing for each `execute` call,
-even one whose statements only read, since a statement with a `RETURNING` clause writes and reads at once.
+funcd checks reading for each call of `query` or `queryValues` (`query_values` in Python), and both reading and
+writing for each `execute` call, even one whose statements only read, since a statement with a `RETURNING` clause
+writes and reads at once.
 
 Any other write needs a role. A RolesAssignment gives a Function a role on one database, or on every database of its
 namespace. The smallest built-in role that allows writing is `SQL Data Writer`, which allows reading and writing. To
@@ -250,9 +258,6 @@ allows. The built-in roles `Reader`, `Contributor` and `Owner` do not cover SQL 
 gives one of them on the namespace allows no write into a database. A Role that an operator defines can grant
 `sql::write` too. The Security reference [lists the built-in roles](../../security-and-networking/security/spec.md#rolesassignmentspecassignmentsroleref)
 and [explains how assignments pair each role with a scope](../../security-and-networking/security/spec.md#rolesassignmentspecassignments).
-
-No role and no Policy lets a Function reach a database that it does not bind: `ctx.sql` names a database by the alias
-of a binding, and funcd refuses an alias that no binding of the Function declares, with the HTTP status 403.
 
 funcd supplies these rules as a built-in policy, which it applies in every namespace, so nothing needs to be written
 or installed. A Policy that an operator writes applies beside it, and cannot allow a write that the built-in policy
@@ -272,7 +277,9 @@ forbid(principal, action == Action::"sql::write", resource)
 ```
 
 A binding can name only a database that its own Function declares, by `name` or by `ref`: funcd rejects a binding to
-any other database. A call that the policy denies fails with the HTTP status 403, and its message names the rule, such
+any other database. No role and no Policy lets a Function reach a database that it does not bind: `ctx.sql` names a
+database by the alias of a binding, and funcd refuses an alias that no binding of the Function declares, with the HTTP
+status 403. A call that the policy denies fails with the HTTP status 403, and its message names the rule, such
 as `cedar: forbidden by policy builtin/sql-single-writer`.
 
 ## Limits and quotas
@@ -299,10 +306,12 @@ funcd also limits each `ctx.sql` call, whatever the database sets:
   of results. A larger call or answer fails with the HTTP status 413.
 - A call that runs longer than `sql.callTimeout`, 30 seconds by default, fails with the HTTP status 503.
 
-A namespace holds at most `sql.maxDatabasesPerNamespace` SQLDatabases, 20 by default, and funcd refuses to create one
-more, with the HTTP status 400; a negative value of the key removes that cap. The operator sets both keys in funcd's
-configuration, which the funcd [Spec](../../running-funcd/spec.md#funcdconfigyaml) tab describes. The [Spec](spec.md)
-tab gives the range of each field of a SQLDatabase.
+funcd refuses an API request that creates a SQLDatabase, such as `funcdctl apply` of one, in a namespace that already
+holds `sql.maxDatabasesPerNamespace` SQLDatabases, 20 by default, with the HTTP status 400 and a message such as
+`namespace "default" already holds the maximum 20 SQLDatabases`; a negative value of the key removes that cap. The
+operator sets both keys in funcd's configuration, which the funcd
+[Spec](../../running-funcd/spec.md#funcdconfigyaml) tab describes. The [Spec](spec.md) tab gives the range of each
+field of a SQLDatabase.
 
 ## Data storage
 
@@ -324,8 +333,10 @@ starts, with the reason `EngineNotReady`, or with `EngineConvergeFailed` when fu
 a server that runs the process runtime; funcd's log gives the cause. It is `Ready` once the engine answers. Its
 `status.bindings` counts the Functions that bind it.
 
-On a server, a database that was `Ready` and comes back without its data folder starts empty and `Ready`. Its
-`DataMissing` condition is then `True`, with the reason `NoDirectory`, until a Restore into the database succeeds.
+On a server whose `storage.mode` is `file`, the default, a database that was `Ready` and comes back without its data
+folder starts empty and `Ready`. Its `DataMissing` condition is then `True`, with the reason `NoDirectory`, until a
+Restore into the database succeeds. With `storage.mode: memory`, and under `funcdctl dev`, no database shows this
+condition.
 
 A Function reports a database that it cannot use, with one of these reasons:
 
@@ -367,16 +378,17 @@ by `ref` instead.
 ## Errors
 
 When funcd refuses a `ctx.sql` call, the method throws an error in TypeScript, and raises a `RuntimeError` in Python.
-The error's message holds the method, the HTTP status and funcd's explanation, such as
+The error's message starts with `context.sql.execute failed` for `execute`, and with `context.sql.query failed` for
+`query` and for `queryValues` (`query_values` in Python). The HTTP status and funcd's explanation follow, such as
 `context.sql.query failed: 400 …` followed by `statement 0: no such table: orders`. A library such as Drizzle can
 wrap that error in one of its own. A handler that does not catch the error makes the call to the Function fail with
 the HTTP status 500.
 
 - **An alias that no binding declares**: 403, with a message such as `has no SQL binding for alias "other"`.
 - **A call that the policy denies**: 403, as [Access](#access) explains.
-- **A statement that fails**: 400, with a message that names the statement by its position, such as
+- **A statement that the engine rejects**: 400, with a message that names the statement by its position, such as
   `statement 0: no such table: orders`. None of the call's statements applies.
-- **A statement that writes, sent through `query` or `queryValues`**: 400, with the message
+- **A statement that writes, sent through `query` or `queryValues` (`query_values` in Python)**: 400, with the message
   `attempt to change database via query operation`.
 - **A parameter that is a list or an object**: 400. A parameter is a string, a number, a boolean or null.
 - **A call or an answer over the limits** that [Limits and quotas](#limits-and-quotas) gives: 413.
@@ -388,18 +400,19 @@ with a message such as `spec.bindings.sql[0]: SQLDatabase "orders-db" is not dec
 
 ## Run it locally
 
-`funcdctl dev` runs the engine of each database as a process on the local computer, not in a container, and logs a
-line `dev sql engine ready`, with the database's name, once the engine answers. The engine listens on a loopback port
-and accepts only funcd's own credential, so a handler reaches the database through `ctx.sql` only, as on a server.
-`funcdctl dev` does not enforce `spec.resources`.
+`funcdctl dev` runs the engine of each database as a process on the local computer, not in a container, and does not
+enforce `spec.resources`.
 
 `funcdctl dev` keeps the data of each database in a temporary folder, which it deletes when it stops, whatever
 [Data storage](#data-storage) says about a server. With the `--persist` flag, it keeps the data between runs, in the
 `sql` folder of its persist folder: `.funcd-dev` in the current folder, unless `--persist-to` names another folder.
+To empty the databases, delete that `sql` folder after `funcdctl dev` stops: at the next run, each database starts
+empty. Deleting the whole persist folder instead clears all the state that `funcdctl dev` keeps, its metastore, KV,
+blob, SQL, lake and volume data. Neither example repository ignores the persist folder, so `git status` lists it.
 
 Unlike for Buckets, `funcdctl dev` gives the Functions no role on SQL databases: a write that a platform refuses, such
 as a write by a Function that neither owns the database nor holds a role on it, fails locally too, with the HTTP
-status 403. An EventSource of the kind `sql` fires under `funcdctl dev` too: the Sensor of the Python example calls
+status 403. An EventSource with a `sql` source fires under `funcdctl dev` too: the Sensor of the Python example calls
 `audit` with each change of the table `orders`.
 
 A funcdctl built without the SQL engine refuses to start on a folder that holds a SQLDatabase, or a Function or a
