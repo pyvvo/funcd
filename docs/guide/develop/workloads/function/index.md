@@ -493,11 +493,13 @@ the call.
   to a Function whose address asks for authentication, with the message
   `authentication required but no authenticator is configured`.
 
-`funcdctl dev` keeps its state in memory, where it is lost when `funcdctl dev` stops. With the `--persist` flag, it
-keeps its state between runs in `.funcd-dev`, a folder that it creates in the current folder, or in the folder that
-`--persist-to` names: the metastore, which holds the objects that it applied, the KV, blob, SQL, Lake and volume data,
-and the copies of the builds that it runs. To start again from nothing, delete that folder after `funcdctl dev` stops.
-The [reference of `funcdctl dev`](../../tools/funcdctl/spec.md#funcdctl-dev) lists its flags.
+`funcdctl dev` keeps its data in memory, where it is lost when `funcdctl dev` stops. It keeps only a record of the
+processes that it starts, so that it can stop them after a crash, in `funcd/dev/<id>/process` under the user's cache
+folder, `<id>` naming the project folder. With the `--persist` flag, it keeps its state between runs in `.funcd-dev`, a
+folder that it creates in the current folder, or in the folder that `--persist-to` names: the metastore, which holds the
+objects that it applied, the KV, blob, SQL, Lake and volume data, and the copies of the builds that it runs. To start
+again from nothing, delete that folder after `funcdctl dev` stops. The
+[reference of `funcdctl dev`](../../tools/funcdctl/spec.md#funcdctl-dev) lists its flags.
 
 ## Examples
 
