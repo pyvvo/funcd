@@ -216,6 +216,21 @@ By default, funcd keeps KV data in memory, and the data is lost when funcd stops
 the data in the `kv` folder of its data directory, unless `kvstore.dataDir` names another folder.
 `storage.mode: memory` keeps KV data in memory even when `kvstore.engine` is `badger`.
 
+## Status
+
+`funcdctl get kvstore counters-kv -n default -o json` prints the status of the TypeScript example's store, and
+`funcdctl get function counter -n default -o json` that of its Function; in Python, they are `py-counters` and
+`pycounter`. With `funcdctl dev`, add the `--server` and `--token` flags that its banner prints. A store's
+`status.tables` counts the tables that it declares, and `status.bindings` the bindings that name it.
+
+| Phase or condition | Reason | Meaning |
+| --- | --- | --- |
+| KVStore `Ready` | | funcd's KV engine answers. |
+| KVStore `Degraded` | `StorageUnreachable` | funcd's KV engine did not answer its last check, which funcd repeats every `health.storageProbeInterval`, 10 seconds by default. The message of the `Ready` condition gives the error. The store becomes `Ready` again by itself once a check passes. |
+| Function `Pending` | `KVStoreNotFound` | A store or a table that the Function binds does not exist. The Function starts once it exists. |
+| Function `Pending` | `StoreNotOwned` | A store that the Function declares by `name` exists and is not the Function's, as [Changes and deletion](#changes-and-deletion) describes. |
+| Any other reason | | See the [Function's Status](../../workloads/function/index.md#status). |
+
 ## Changes and deletion
 
 - funcd refuses a request to delete a KVStore while a binding names it or while it holds keys. To delete the store,
