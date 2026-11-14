@@ -267,6 +267,50 @@ func TestReconcileIsIdempotent(t *testing.T) {
 	require.Len(t, runs(t, st), 1, "re-reconcile must not create duplicate subscriptions")
 }
 
+// A spec edit that keeps the Sensor's verdict still stamps Ready with the new generation (ADR-0109 Decision 2): an App
+// counts a part Ready only at its generation (ADR-0199 Decision 5), so a stale stamp fails the App's rollout.
+func TestSpecEditRestampsReadyCondition(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		action v1.Action
+		status v1.ConditionStatus
+	}{
+		{"bound", v1.Action{Name: "build", On: "d", Workflow: "ci"}, v1.ConditionTrue},
+		{"target serves http", v1.Action{Name: "call", On: "d", Function: "api"}, v1.ConditionFalse},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st, _, _, r := harness(t)
+			ctx := context.Background()
+			fn := &v1.Function{TypeMeta: v1.TypeMeta{APIVersion: v1.KindFunction.GVK().APIVersion(), Kind: v1.KindFunction},
+				ObjectMeta: v1.ObjectMeta{Name: "api", Namespace: "team-a", ResourceGroup: "rg1"},
+				Spec:       v1.FunctionSpec{Runtime: "nodejs22", Handler: "index.handler", Image: "oci-layout://api:1", Protocol: v1.ProtocolHTTP}}
+			_, err := st.Create(ctx, fn)
+			require.NoError(t, err)
+			createSensor(t, st, "s", []v1.Dependency{dep("d", "git", "push")}, []v1.Action{tc.action})
+			_, err = r.Reconcile(ctx, reqOf("s"))
+			require.NoError(t, err)
+
+			obj, err := st.Get(ctx, v1.KindSensor.GVK(), "team-a", "s")
+			require.NoError(t, err)
+			se := obj.(*v1.Sensor)
+			se.Spec.On[0].Event = "tag"
+			_, err = st.Update(ctx, se)
+			require.NoError(t, err)
+			_, err = r.Reconcile(ctx, reqOf("s"))
+			require.NoError(t, err)
+
+			obj, err = st.Get(ctx, v1.KindSensor.GVK(), "team-a", "s")
+			require.NoError(t, err)
+			se = obj.(*v1.Sensor)
+			c, ok := se.Status.Conditions.Get("Ready")
+			require.True(t, ok)
+			require.Equal(t, int64(2), se.Generation)
+			require.Equal(t, tc.status, c.Status)
+			require.Equal(t, se.Generation, c.ObservedGeneration, "Ready observes the edited spec")
+		})
+	}
+}
+
 // scenario: stateless-independent-firings — two firings ⇒ two independent runs.
 func TestStatelessIndependentFirings(t *testing.T) {
 	st, fan, _, r := harness(t)
