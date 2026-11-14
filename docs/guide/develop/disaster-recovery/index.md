@@ -7,76 +7,30 @@ description: Back up the stores of a namespace to an S3 bucket on a schedule, an
 
 A **BackupSchedule** copies stores of a namespace, such as KV stores, Buckets and SQL databases, to a **backup
 target**, a bucket of an S3 service, at the times of a cron schedule. Each copy is a **Backup**, and a **Restore**
-loads stores from a Backup, into other, empty stores or back into the stores that the copy came from. The
-[Platform page](../../platform/disaster-recovery.md) explains what funcd copies and how a platform comes back after a
-host loss; this page shows how to back up the stores of a namespace and restore them.
+loads stores from a Backup, into other, empty stores or back into the stores that the copy came from. See
+[how disaster recovery works](../../platform/disaster-recovery.md) for what funcd copies and how a platform comes back
+after a host loss.
 
-The first example backs up the Bucket of the s3-roundtrip example and restores it under a new name. The steps below
-start the example on the local computer, write an object into its Bucket `lakehouse`, take a Backup of the Bucket and
-restore it into an empty Bucket, `lakehouse-copy`: the Backup and the Restore end in the phase `Succeeded`, and the
-object read back from `lakehouse-copy` holds `roundtrip-001`, the content that the example wrote.
+The first example backs up the Bucket `lakehouse` of the s3-roundtrip example and restores it into an empty Bucket,
+`lakehouse-copy`: the Backup and the Restore end in the phase `Succeeded`, and the object read back from
+`lakehouse-copy` holds `roundtrip-001`, the content that the example wrote.
 
-The example needs four programs:
+Install the [dev build of funcdctl](../../get-started/install.md), Git and curl, which calls the Function and signs
+the S3 requests with its `--aws-sigv4` option, and put Node.js on the `PATH`.
 
-- funcdctl, installed as the [Install](../../get-started/install.md) page shows. That page installs the dev build of
-  funcdctl, which includes the `funcdctl dev` command.
-- git, which copies the repositories of the example and of funcd.
-- curl, which calls the Function and signs the S3 requests with its `--aws-sigv4` option.
-- Node.js on the `PATH`, which runs the example's Function.
-
-`funcdctl dev` starts a local platform and runs the resource files of one folder on it, here `examples/s3-roundtrip`
-of the funcd-typescript repository. That folder holds the Bucket `lakehouse` and the Function `s3-roundtrip`, which
-the [Bucket](../services/bucket/index.md) page explains: at each call, the Function writes an object named after the
+`funcdctl dev` starts a local platform and applies the resource files of one folder, here `examples/s3-roundtrip` of
+the funcd-typescript repository: the Bucket `lakehouse` and the Function `s3-roundtrip`, which the
+[Bucket](../services/bucket/index.md) page explains. At each call, the Function writes an object named after the
 call's tag into the prefix `gold` of `lakehouse`. `funcdctl dev` also runs funcd's **S3 gateway**, a server that
-answers S3 requests for the Buckets, and prints the address of its control plane, which a `funcdctl` command reaches
-with `--server` and the token `funcd-dev-token`. The `--gport`, `--cport` and `--s3port` flags set the ports of the
-Functions' URLs, of the control plane and of the S3 gateway, so the commands below use the ports 8080, 8081 and 8082.
-`funcdctl dev` keeps its objects and its Buckets in memory, so all that the steps below create is lost when it stops,
-unless it runs with `--persist`, as [Run it locally](#run-it-locally) explains.
+answers S3 requests for the Buckets. A `funcdctl` command reaches the local control plane with `--server` and the
+token `funcd-dev-token`. The `--gport`, `--cport` and `--s3port` flags set the ports of the Functions' URLs, of the
+control plane and of the S3 gateway, so the commands use the ports 8080, 8081 and 8082. `funcdctl dev` keeps its
+objects and its Buckets in memory, so all that the steps create is lost when it stops, unless it runs with
+`--persist`, as [Run it locally](#run-it-locally) explains.
 
-A Backup writes its copy to the target over the S3 protocol. On the local computer, the example's target is a Bucket
-of the same platform, `backups`, which the S3 gateway serves on port 8082. Such a target only shows how the kinds
-work: a copy kept on the platform that it protects is lost with that platform, so a real target is a bucket of another
-S3 provider.
-
-The objects of the example are files of the funcd repository, under `api/types/v1alpha1/examples/disaster-recovery/`.
-The file
-[`backup.yaml`](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/disaster-recovery/backup.yaml)
-holds the BackupSchedule `lakehouse-nightly`, which this excerpt shows:
-
-::include[../../../../api/types/v1alpha1/examples/disaster-recovery/backup.yaml#backupschedule]
-
-- [`schedule`](spec.md#backupschedulespec) holds a cron expression, whose times are the schedule's **slots**: at each
-  slot, here every day at 03:00, the schedule creates a Backup. funcd reads the expression in the time zone that
-  `timeZone` names, and in UTC when `timeZone` is empty. The example does not wait for a slot, since it creates a
-  Backup by hand.
-- [`scope`](spec.md#backupschedulespecscope) names the stores that each Backup copies, here the Bucket `lakehouse`.
-- [`target.url`](spec.md#backupschedulespectarget) names the bucket that receives the copies, `backups`, with the
-  options of the S3 client as query parameters: `endpoint`, the address of the S3 service, here the S3 gateway at
-  port 8082, which `funcdctl dev` therefore runs with `--s3port 8082`; `region`, here `us-east-1`, the one region of
-  the S3 gateway; and `use_path_style=true`, which puts the bucket's name in the path of each request rather than in
-  its host name.
-- [`target.credentialsSecret`](spec.md#backupschedulespectarget) names the Secret `backups-key`, which holds the S3
-  key pair that each Backup writes with, under the keys `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. On the local
-  computer, it holds, in base64, the key pair that `funcdctl dev` gives the Function `s3-roundtrip` and prints in its
-  banner. `funcdctl dev` derives that key pair from a constant published in its code, so the key pair protects
-  nothing. The Function owns the prefix `default` of `backups`, where each Backup of the namespace `default` writes its
-  copy.
-- [`encryption.recipients`](spec.md#backupschedulespecencryption) lists two **recipients** of
-  [age](https://github.com/FiloSottile/age/blob/main/README.md), a file encryption format: a recipient is a public key,
-  and the matching **identity**, a private key, opens what is sealed to it. funcd seals the files of each store in a
-  Backup's copy to every recipient, so the identity of any one of them opens the copy. These two are test keys: the
-  example publishes the identity of the first one, so a copy sealed to them protects nothing. For real copies, replace
-  them with recipients of new keys, which the `age-keygen` command of age creates, as age's README explains.
-
-The same file holds the Bucket `backups`, the Secret `backups-key`, and a RolesAssignment that lets `s3-roundtrip`
-list and read the prefix `default` of `backups`, as a Restore needs. It also holds the Backup `lakehouse-now`, which
-names the schedule. A Backup made by hand runs without waiting for a slot, and copies what the schedule's `scope`
-names to the schedule's target:
-
-::include[../../../../api/types/v1alpha1/examples/disaster-recovery/backup.yaml#backup]
-
-The [Spec](spec.md) tab describes every field of a BackupSchedule, a Backup and a Restore.
+The example's target is a Bucket of the same platform, `backups`, which the S3 gateway serves on port 8082. Such a
+target only shows how the kinds work: a copy kept on the platform that it protects is lost with that platform, so a
+real target is a bucket of another S3 provider.
 
 Clone both repositories into one folder, and start the example from the root folder of funcd-typescript:
 
@@ -96,7 +50,9 @@ $ curl -s -X POST -H 'content-type: application/json' -d '{"inv":"001"}' http://
 {"put":true,"get":true,"list":1,"denied":false,"granted":true}
 ```
 
-Apply the schedule and the Backup:
+Apply the schedule and a Backup, from the file
+[`backup.yaml`](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/disaster-recovery/backup.yaml)
+of the funcd clone:
 
 ```console
 $ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token apply -f funcd/api/types/v1alpha1/examples/disaster-recovery/backup.yaml
@@ -122,32 +78,46 @@ funcd deletes this record.
 
 A Backup that ends in the phase `Failed` stays `Failed`: funcd does not try it again, and applying the unchanged file
 again changes nothing. The reason of its condition `Ready` says why it failed, as [Status](#status) explains. The
-steps below need a Backup that `Succeeded`: once the cause is fixed, delete the Backup with
+steps need a Backup that `Succeeded`: once the cause is fixed, delete the Backup with
 `funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token delete backup lakehouse-now -n default`, then apply
 `backup.yaml` again, which creates a new Backup of the same name.
 
-The file
-[`restore.yaml`](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/disaster-recovery/restore.yaml)
-holds the Restore `lakehouse-restore`, which this excerpt shows:
+`backup.yaml` holds the BackupSchedule `lakehouse-nightly`:
 
-::include[../../../../api/types/v1alpha1/examples/disaster-recovery/restore.yaml#restore]
+::include[../../../../api/types/v1alpha1/examples/disaster-recovery/backup.yaml#backupschedule]
 
-- [`backup`](spec.md#restorespec) names the Backup to load. A Restore waits while its Backup is `Pending` or
-  `Running`.
-- [`source.credentialsSecret`](spec.md#restorespecsource) names the Secret of the S3 key pair that reads the copy,
-  from the target that the Backup's `status.target` names. Here it is the same key pair as the schedule's, which the
-  RolesAssignment lets read.
-- [`source.identitySecret`](spec.md#restorespecsource) names the Secret `backups-identity`, whose key `AGE_IDENTITY`
-  holds the identity of the first recipient.
-- Each entry of [`members`](spec.md#restorespecmembers) names a store of the copy by its `kind` and its `name`, as
-  the Backup's `status.members` lists it, and `as` names the store that receives it: an existing, empty store of the
-  same kind.
+- [`schedule`](spec.md#backupschedulespec) holds a cron expression, whose times are the schedule's **slots**: at each
+  slot, here every day at 03:00, the schedule creates a Backup. funcd reads the expression in the time zone that
+  `timeZone` names, and in UTC when `timeZone` is empty. The example does not wait for a slot, since it creates a
+  Backup by hand.
+- [`scope`](spec.md#backupschedulespecscope) names the stores that each Backup copies, here the Bucket `lakehouse`.
+- [`target.url`](spec.md#backupschedulespectarget) names the bucket that receives the copies, `backups`, as an
+  `s3://` URL with the options of the S3 client as query parameters: `endpoint`, the address of the S3 service, here
+  the S3 gateway at port 8082, which `funcdctl dev` therefore runs with `--s3port 8082`; `region`, here `us-east-1`,
+  the one region of the S3 gateway; and `use_path_style=true`, which puts the bucket's name in the path of each
+  request rather than in its host name.
+- [`target.credentialsSecret`](spec.md#backupschedulespectarget) names the Secret `backups-key`, which holds the S3
+  key pair that each Backup writes with, under the keys `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. Here it
+  holds, in base64, the key pair that `funcdctl dev` gives the Function `s3-roundtrip` and prints in its banner.
+  `funcdctl dev` derives that key pair from a constant published in its code, so the key pair protects nothing. The
+  Function owns the prefix `default` of `backups`, where each Backup of the namespace `default` writes its copy.
+- [`encryption.recipients`](spec.md#backupschedulespecencryption) lists two **recipients** of
+  [age](https://github.com/FiloSottile/age/blob/main/README.md), a file encryption format: a recipient is a public key,
+  and the matching **identity**, a private key, opens what is sealed to it. funcd seals the files of each store in a
+  Backup's copy to every recipient, so the identity of any one of them opens the copy. These two are test keys: the
+  example publishes the identity of the first one, so a copy sealed to them protects nothing. For real copies, replace
+  them with recipients of new keys, which the `age-keygen` command of age creates, as age's README explains.
 
-The same file holds the Secret `backups-identity`, the empty Bucket `lakehouse-copy`, and a RolesAssignment that lets
-`s3-roundtrip` read the prefix `gold` of `lakehouse-copy`, which the last step uses. It also holds the objects of
-`backup.yaml`, unchanged, so that it can be applied on its own.
+The same file holds the Bucket `backups`, the Secret `backups-key`, a RolesAssignment that lets `s3-roundtrip` list and
+read the prefix `default` of `backups`, as a Restore needs, and the Backup `lakehouse-now`, which names the schedule. A
+Backup made by hand runs without waiting for a slot, and copies what the schedule's `scope` names to the schedule's
+target:
 
-Apply it:
+::include[../../../../api/types/v1alpha1/examples/disaster-recovery/backup.yaml#backup]
+
+Apply the Restore, from the file
+[`restore.yaml`](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/disaster-recovery/restore.yaml),
+which also holds the objects of `backup.yaml`, unchanged, so that it can be applied on its own:
 
 ```console
 $ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token apply -f funcd/api/types/v1alpha1/examples/disaster-recovery/restore.yaml
@@ -196,11 +166,30 @@ roundtrip-001
 The URL names the Bucket, then the object's key. The option `--aws-sigv4 aws:amz:us-east-1:s3` signs the request as
 an S3 client does, and `-w '\n'` ends the answer with a line break.
 
-To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
+Press Ctrl-C in the first terminal to stop the example.
+
+The Restore `lakehouse-restore` of `restore.yaml`:
+
+::include[../../../../api/types/v1alpha1/examples/disaster-recovery/restore.yaml#restore]
+
+- [`backup`](spec.md#restorespec) names the Backup to load. A Restore waits while its Backup is `Pending` or
+  `Running`.
+- [`source.credentialsSecret`](spec.md#restorespecsource) names the Secret of the S3 key pair that reads the copy,
+  from the target that the Backup's `status.target` names. Here it is the same key pair as the schedule's, which the
+  RolesAssignment lets read.
+- [`source.identitySecret`](spec.md#restorespecsource) names the Secret `backups-identity`, whose key `AGE_IDENTITY`
+  holds the identity of the first recipient.
+- Each entry of [`members`](spec.md#restorespecmembers) names a store of the copy by its `kind` and its `name`, as
+  the Backup's `status.members` lists it, and `as` names the store that receives it: an existing, empty store of the
+  same kind.
+
+The same file holds the Secret `backups-identity`, the empty Bucket `lakehouse-copy`, and a RolesAssignment that lets
+`s3-roundtrip` read the prefix `gold` of `lakehouse-copy`, which the last step uses. The [Spec](spec.md) tab describes
+every field of a BackupSchedule, a Backup and a Restore.
 
 ## Choose what a Backup copies
 
-A schedule's [`scope`](spec.md#backupschedulespecscope) names the stores in one of three forms: lists of names, under
+A schedule's [`scope`](spec.md#backupschedulespecscope) names the stores in exactly one of three forms: lists of names, under
 `kvStores`, `buckets`, `lakes`, `databases` and `volumes`, where a volume is a Function's local volume written as
 `<function>/<name>`; `app`, the stores and the volumes of an App; or `resourceGroup`, the stores of a resource group,
 without volumes. funcd resolves the scope when each Backup starts, and the Backup's `status.members` lists each store
@@ -281,7 +270,8 @@ during a load, the next start ends the Restore `Failed` with the reason `Interru
 hold. Check the stores, then lift the hold with
 [`funcdctl hold release --namespace`](../tools/funcdctl/spec.md#funcdctl-hold-release) and the namespace's name, which
 also needs the permission to update the Namespace, and which funcd refuses while the Restore is `Pending` or
-`Running`.
+`Running`. While that hold stands, funcd refuses a new in-place Restore of the namespace: check the stores, then lift
+the hold first.
 
 ## Bring a namespace back after a host loss
 
@@ -322,6 +312,8 @@ the role `Blob Data Reader`, which the [Security](../security-and-networking/sec
 
 - A BackupSchedule needs at least two distinct recipients, all X25519 keys, which start with `age1`, or all hybrid
   keys, which start with `age1pq1`.
+- A BackupSchedule's target is an `s3://` URL, the only target scheme, and names another bucket than the one of
+  `blob.target`, the funcd server's own blob store, on its endpoint.
 - A BackupSchedule's name has at most 54 characters, and a Restore's at most 56, so that the names that funcd builds
   from them stay valid: `<schedule>-<slot>`, where `<slot>` is the slot's time in minutes since 1970, for the Backups of
   a schedule, and `<restore>-before` for an export.
@@ -349,43 +341,40 @@ the copies stay on the target. A Backup's `ttl` is its schedule's, unless the Ba
 
 ## Status
 
-`funcdctl get backup <name> -n <namespace> -o json` prints a Backup's status, as the first example shows. A Backup is
-`Pending`, then `Running`, then `Succeeded` or `Failed`, in one attempt. A `Failed` Backup's condition `Ready` has the
-status `False`, and its reason says why:
+`funcdctl get backup <name> -n <namespace> -o json` prints a Backup's status, as the first example shows, and
+`get backupschedule` and `get restore` print those of a schedule and a Restore. With `funcdctl dev`, add the
+`--server` and `--token` flags of the first example. A Backup is `Pending`, then `Running`, then `Succeeded` or
+`Failed`, in one attempt. A Restore is `Pending` while it waits for its Backup and, in place, for its export, `Running`
+while it checks the copy and loads, then `Succeeded` or `Failed`. A `Failed` one's condition `Ready` has the status
+`False`, and its reason says why.
 
-- `ScheduleNotFound`: the schedule did not exist when the run started, with a message that contains
-  `schedule "nightly": store.Get: BackupSchedule "nightly" not found`.
-- `MemberNotFound`: a store of the scope does not exist, with a message that contains
-  `member Bucket/media: store.Get: Bucket "media" not found`.
-- `LakeUnstable`, `EngineNotReady` and `TargetUnconditional`, as the sections above explain.
-- `Failed`: any other cause, which the message names.
+| Phase or condition | Reason | Meaning |
+| --- | --- | --- |
+| Backup `Failed` | `ScheduleNotFound` | The schedule did not exist when the run started. |
+| Backup `Failed` | `MemberNotFound` | A store of the scope does not exist. The message names it. |
+| Backup `Failed` | `LakeUnstable` | A Lake deleted files during each of three copies, as [Choose what a Backup copies](#choose-what-a-backup-copies) explains. |
+| Backup `Failed` | `EngineNotReady` | The engine of a SQL database of the scope is not `Ready`. |
+| Backup `Failed` | `TargetUnconditional` | The target refuses a write only where no object exists yet, as [Data storage](#data-storage) explains. |
+| Backup `Succeeded` | `FoundOnTarget` | The Backup was `Running` when funcd stopped, and its copy is whole on the target. |
+| Backup `Failed` | `Interrupted` | The Backup was `Running` when funcd stopped, and its copy is not whole. |
+| Backup `Failed` | `Failed` | Any other cause, which the message names. |
+| BackupSchedule `Ready` | `SameProvider` | The URL names another bucket on the endpoint of `blob.target`, the funcd server's own blob store, so one failure of that provider takes both. |
+| BackupSchedule `TargetSynced` condition `False` | `PlatformRestored` or `ListFailed` | After a platform restore, the schedule has not yet listed its target, or the listing fails. It creates no Backup until the condition is `True`, as [Bring a namespace back after a host loss](#bring-a-namespace-back-after-a-host-loss) explains. |
+| Restore `Failed` | `BackupNotReady` | The Backup does not exist, or is `Failed`. |
+| Restore `Failed` | `MemberNotFound` | The copy holds no such member, or the destination does not exist. |
+| Restore `Failed` | `NotEmpty` | The destination holds data: a Restore loads into an empty one. |
+| Restore `Failed` | `Integrity` | A part of the copy does not match the manifest. |
+| Restore `Failed` | `EngineNotReady` | The engine of a destination database is not `Ready`. |
+| Restore `Failed` | `ExportFailed` or `ScheduleNotFound` | In place: the export failed, or the schedule that it needs does not exist. |
+| Restore `Failed` | `NamespaceHeld` | In place: an earlier Restore's load did not complete, and its hold stands. |
+| Restore `Failed` | `Interrupted` | funcd stopped while the Restore was `Running`. |
+| Restore `Failed` | `Failed` | Any other cause, such as an identity that matches none of the recipients, whose message names the fingerprints of both. |
 
-A Backup that is `Running` when funcd stops ends at the next start: `Succeeded` with the reason `FoundOnTarget` when
-its copy is whole on the target, else `Failed` with the reason `Interrupted`.
-
-A BackupSchedule is `Ready`. Its condition `Ready` has the reason `SameProvider` when its URL names another bucket on
-the endpoint of `blob.target`, the funcd server's own blob store, since one failure of that provider takes both. Its
-status also gives the newest slot that it took, `lastScheduleTime`; the completion of its newest Backup that
-`Succeeded`, `lastSuccessTime`; the start of the oldest one, `earliestRestorePoint`, the oldest point that a Restore can
-go back to; and the Backup that is `Pending` or `Running`, `active`. `rpoRisk` is `true` when the schedule has fallen
-behind, as the [Spec](spec.md#backupschedulestatus) tab defines, and stays `false` while the schedule is paused: when it
-turns `true`, funcd logs `workload backup rpo at risk`.
-
-A Restore is `Pending` while it waits for its Backup and, in place, for its export, `Running` while it checks the copy
-and loads, then `Succeeded` or `Failed`. The reason of a `Failed` Restore says why:
-
-- `BackupNotReady`: the Backup does not exist, or is `Failed`.
-- `MemberNotFound`: the copy holds no such member, or the destination does not exist, with a message that contains
-  `the Backup holds no KVStore/counters-kv`.
-- `NotEmpty`: the destination holds data, with a message that contains
-  `Bucket/lakehouse-copy is not empty: a Restore loads into an empty one`.
-- `Integrity`: a part of the copy does not match the manifest.
-- `EngineNotReady`: the engine of a destination database is not `Ready`.
-- `ExportFailed` and `ScheduleNotFound`, in place: the export failed, or the schedule that it needs does not exist.
-- `NamespaceHeld`, in place: an earlier Restore's load did not complete, and its hold stands.
-- `Interrupted`: funcd stopped while the Restore was `Running`.
-- `Failed`: any other cause, such as an identity that matches none of the recipients, whose message names the
-  fingerprints of both.
+A BackupSchedule's status also gives the newest slot that it took, `lastScheduleTime`; the completion of its newest
+Backup that `Succeeded`, `lastSuccessTime`; the start of the oldest one, `earliestRestorePoint`, the oldest point that a
+Restore can go back to; and the Backup that is `Pending` or `Running`, `active`. `rpoRisk` is `true` when the schedule
+has fallen behind, as the [Spec](spec.md#backupschedulestatus) tab defines, and stays `false` while the schedule is
+paused: when it turns `true`, funcd logs `workload backup rpo at risk`.
 
 ## Changes and deletion
 
@@ -400,32 +389,15 @@ target, but no Restore can name it any more. A Backup outlives its schedule and 
 Restore into another store still loads it, while an in-place Restore fails with the reason `ScheduleNotFound`, since
 its export needs the schedule. funcd refuses to delete an in-place Restore that has not ended.
 
-## Errors
+## CLI errors
 
-`funcdctl apply` refuses:
+These local errors stop a command before any server answers:
 
-- a BackupSchedule with fewer than two recipients, with a message such as
-  `spec.encryption.recipients has 1 recipient(s): want at least 2 (an owner and a recovery one)`, and one with a
-  recipient that is not an age recipient, with a message such as
-  `recipients[1] "not-a-recipient" is not one X25519 (age1…) or hybrid (age1pq1…) recipient`.
-- a BackupSchedule whose target is not an `s3://` URL, with a message such as
-  `spec.target.url "file:///var/backups": want s3://<bucket>[?…], the only target scheme`, and one whose URL names
-  the bucket of `blob.target`, on its endpoint, with a message that ends `name another bucket`.
-- a BackupSchedule whose `scope` sets more than one form, with a message such as
-  `spec.scope sets 2 forms: want one of kvStores, buckets, lakes, databases and volumes, app, or resourceGroup`.
-- a Backup whose `ttl` is longer than its schedule's, with a message such as
-  `spec.ttl 1000h exceeds the ttl 720h of schedule "lakehouse-nightly"`.
-- a change to the spec of a Backup or a Restore, with a message such as
-  `Backup spec is immutable: create another one`.
-- an in-place Restore from a credential that cannot update the Namespace, with a message such as
-  `an in-place Restore needs update on Namespace "default": developer may not act on cluster-scoped kind "Namespace"`,
-  and a second in-place Restore of a namespace while the first has not ended.
-- an in-place Restore while the hold of an earlier in-place Restore, whose load did not complete, stands, with the HTTP
-  status 409 and a message that contains `whose load did not complete`: check the store, then lift the hold with
-  `funcdctl hold release --namespace`.
-
-A Backup or a Restore that funcd accepts can still fail while it runs: its status names the reason, as
-[Status](#status) explains.
+| Error | Action |
+| --- | --- |
+| `no node interpreter found for the node handler` | `funcdctl dev` found no Node.js. Put Node.js on the `PATH`, or set `FUNCD_NODE` to the path of `node`. |
+| `--rpo <duration>: a cron fires at most once a minute, so want at least 2m` | Give `funcdctl backup plan schedule` an RPO of 2 minutes or more. |
+| `-f <file> holds <n> BackupSchedule documents: want one` | Give `funcdctl backup plan schedule` a file that holds one BackupSchedule. |
 
 ## Run it locally
 
