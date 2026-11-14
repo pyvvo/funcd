@@ -560,6 +560,7 @@ func (f *fakeRuntime) specFor(name v1.ObjectName) (runtime.WorkerSpec, bool) {
 type shimHarness struct {
 	r        *function.Reconciler
 	st       store.Store
+	eng      store.Engine
 	rt       *fakeRuntime
 	gw       gateway.Gateway
 	artifact string
@@ -592,7 +593,8 @@ func newShimHarness(t *testing.T, readyStatus int, runtimeFailed bool, opts ...f
 	artifact := filepath.Join(t.TempDir(), "handler.mjs")
 	require.NoError(t, os.WriteFile(artifact, []byte("export function handle() {}\n"), 0o600))
 
-	st := store.New(memory.New())
+	eng := memory.New()
+	st := store.New(eng)
 	rt = newFakeRuntime(host, port)
 	rt.failed = runtimeFailed
 	sch, err := singlenode.New("local", v1.HostPlatform())
@@ -614,7 +616,7 @@ func newShimHarness(t *testing.T, readyStatus int, runtimeFailed bool, opts ...f
 	}
 	r, err := function.NewReconciler(deps)
 	require.NoError(t, err)
-	return &shimHarness{r: r, st: st, rt: rt, gw: gw, artifact: artifact, deps: deps}
+	return &shimHarness{r: r, st: st, eng: eng, rt: rt, gw: gw, artifact: artifact, deps: deps}
 }
 
 func (h *shimHarness) createFn(t *testing.T, name string) {
