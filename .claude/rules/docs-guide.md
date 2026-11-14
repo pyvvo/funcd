@@ -58,6 +58,8 @@ paths:
   list is no sign of completion either: check the stated phase itself, and repeat the check until it holds.
 - Keep the state that a task needs: a task that uses what an earlier task started keeps it running until the last
   step that needs it, and says where to stop it; a task that needs a state the page has already stopped or replaced
-  gives the exact steps to start or set it up again.
+  gives the exact steps to start or set it up again. Check it by running the tasks in order, tracking the current
+  folder, the running processes and their ports, and the credential variables: each later task says whether it reuses
+  them or starts fresh, so that it never clones into a clone or reuses a stopped process.
 - Diagrams are `.drawio.svg` files in `docs/guide/assets/`, linked with a relative path. A diagram never repeats a path
   that another diagram already shows.
