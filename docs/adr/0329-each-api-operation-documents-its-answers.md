@@ -9,9 +9,9 @@
 - **Relates to**: [ADR-0005](0005-api-surface-code-first-huma.md) (the registrations are the source of the committed
   spec) · [ADR-0323](0323-each-features-spec-tab-is-generated-from-its-described-fields.md) (the Spec tabs and
   `kindref`, which this extends) · [ADR-0210](0210-api-optimistic-concurrency-if-match.md) (a stale `If-Match` answers
-  409) · [ADR-0220](0220-dry-run-engine.md) (`dryRun`) · [ADR-0058](0058-contract-codegen-from-code-types.md) (the
-  contract check behind a call's 422 and 500) ·
-  [ADR-0313](0313-one-place-says-what-the-platform-does-and-who-decided-it.md) (behavior rows)
+  409) · [ADR-0303](0303-funcd-checks-every-call-against-its-contract.md) (a call's 422 and 500) ·
+  [ADR-0313](0313-one-place-says-what-the-platform-does-and-who-decided-it.md) (the behavior rows that list a call's
+  answers)
 
 ## Context & Need
 
@@ -23,34 +23,40 @@ and what to do about them. The rewrite of the Develop guide (#1463) moved 153 su
 this reference.
 
 The readers are people and agents who write a client or debug a call. They read a feature's Spec tab, which `kindref`
-generates (ADR-0323), or the `/docs` page that each funcd server serves, which huma renders from the same spec.
+generates (ADR-0323), or the `/docs` page that each funcd server serves, which huma renders from the live control
+plane's document: the same operations, without the Function call.
 
 ## Scenarios
 
 - `scenario: operation-shows-its-answers`: given the KV Spec tab, when a reader looks up `replaceKVStore`, then they see
   its method, path, parameters and authentication, and one row for each status it answers, with the problem type, when
   it happens and what to do.
-- `scenario: function-call-documented`: given the Function Spec tab, then `POST /function/{name}` shows its 200, its 422
-  and 500 with their `{error, details}` bodies, and its 503.
+- `scenario: function-call-documented`: given the Function Spec tab, when a reader looks up `invokeFunction`, then each
+  answer that a row of `docs/behavior/calls.md` gives a `POST /function/{name}` appears, with its body and its ADR.
 - `scenario: unlisted-answer-fails`: given a described operation, when a test's call to it gets a status that the
-  operation does not list, then the tests fail and name the operation and the status.
-- `scenario: listed-answer-unproven-fails`: given a described operation that lists a status, when no test's call got
-  that status, then the tests fail and name both.
+  operation does not list, then `TestMain` fails and names the operation and the status.
+- `scenario: listed-answer-unproven-fails`: given a described operation that lists a status, when a full, passing run of
+  `pkg/funcd`'s tests never got it, then `TestMain` fails and names both.
+- `scenario: filtered-run-checks-only-unlisted`: given a run filtered with `-run` or `-skip`, or a failing run, when
+  `TestMain` ends, then it checks only that no answer was unlisted.
 - `scenario: undocumented-operation-refused`: given an operation with no summary, or with no answer but its success and
   `default`, when it is not on the list of operations not yet described, then `TestEveryOperationIsDescribed` fails.
-- `scenario: no-adr-in-description`: given an operation, parameter or response description that names an ADR, then
-  `TestEveryOperationIsDescribed` fails.
+- `scenario: undescribed-list-never-grows`: given a pull request that adds a line to that list, when CI runs, then the
+  check fails.
+- `scenario: no-adr-in-description`: given an operation, parameter or response description that names an ADR, when
+  `TestEveryOperationIsDescribed` runs, then it fails and names the description.
 
 ## Scope
 
-In: the operations that the control plane registers, and the Function call on the gateway; the HTTP API section of each
-Spec tab; the guard that holds the listed answers to the observed ones; the rollout list; the pilot (KVStore and the
-Function call).
+In: the operations that the control plane registers; `invokeFunction`, `POST /function/{name}` on the gateway; the HTTP
+API section of each Spec tab; the guard; the rollout list; the pilot (KVStore and `invokeFunction`).
 
 Out:
 - Response bodies, statuses and headers: nothing changes on the wire. A machine-readable error cause is a later ADR.
 - The errors of `ctx.*` calls in a handler (31 of the 153 rows): they belong in the Spec tabs' Handler API tables,
   which come from the shims' doc comments in funcd-typescript and funcd-python.
+- The gateway's other calls: an http Function's other methods and paths (ADR-0243), calls through a Route or a
+  namespace host (ADR-0240, ADR-0241), and `/health/` (ADR-0316).
 - The S3 gateway's errors, which follow S3, and funcdctl's local errors, which the pages' CLI errors tables hold.
 - An interactive page on the docs site (see Alternatives).
 
@@ -79,29 +85,45 @@ Out:
 
 ## Decision
 
-1. **Each operation describes its answers.** An operation carries a summary, the bearer security scheme, and one
-   response for each status that it answers. Each response lists its cases, each with a problem type, when it happens
-   and what the caller does, in the extension `x-funcd-cases`, and its description is written from them, so `/docs`
-   shows them. `registerNamespacedCRUD`, `registerNamespacedRead` and `registerClusterCRUD` give each verb its shared
-   cases; an operation adds its own, such as `replaceKVStore`'s 409 for a stale `If-Match` (ADR-0210).
-2. **The Function call is documented.** `SpecAPI` registers `invokeFunction`, `POST /function/{name}`, with the gateway
-   as its server. It answers 200 with the handler's result, 422 and 500 with `{error, details}` from the contract check
-   (`internal/contractcheck`), and 503 with a problem from the activator when the Function failed or did not become ready
-   in time. The control plane does not serve it; the spec and the Function Spec tab show it.
+1. **Each operation describes its answers.** A described operation carries a summary, the security schemes `bearer`
+   and `apiKey` (`X-Api-Key`), either of which authenticates, and one response for each status that it answers. Each
+   response lists its cases, each with a problem type, when it happens and what the caller does, in the extension
+   `x-funcd-cases`, and its description is written from them, so `/docs` shows them. `registerNamespacedCRUD`,
+   `registerNamespacedRead` and `registerClusterCRUD` give each verb its shared cases, such as the 409 of a stale
+   `If-Match` (ADR-0210) on replace and delete, but only for a kind whose operations are described; the others keep
+   today's responses until their pull request. An operation adds its own cases, such as `handoverKVStore`'s 409 when
+   the Workflow does not declare the store in `spec.kv`.
+2. **The Function call is documented.** `SpecAPI` registers `invokeFunction`, `POST /function/{name}`, with the
+   namespace from the `X-Funcd-Namespace` header or the namespace's host, and a server whose URL is the variable
+   `{gateway}`, the address that `server.dataPlaneAddr` sets. Its security is optional, since a namespace's stance
+   decides it. Its cases are the rows of `docs/behavior/calls.md` that this call can produce, each citing its ADR: 400
+   (#90), 401 and 403 (ADR-0316), 404 (ADR-0241), 413 (ADR-0134), 422 and 500 `{error, details}` (ADR-0303), 429
+   (ADR-0112, ADR-0147), 503 (ADR-0155, ADR-0176, ADR-0303) and 504 (ADR-0151), and 200 with the handler's result. The
+   control plane does not serve it.
 3. **Each Spec tab gets an HTTP API section.** `kindref` writes it after the kinds' tables and the Handler API. For each
-   operation of the feature's kinds it shows a heading from the summary, the method, path, operation ID and
-   authentication, a table of parameters, the body and the answer linked to their tables on the page, and a table of
-   statuses with the problem type, when and what to do.
-4. **The listed answers are the observed ones.** `pkg/funcd` records the operation ID and status of every answer that
-   its tests' platforms give. Its `TestMain` fails when a described operation gave a status that it does not list, or
-   lists a status that no test got, and names the operation and the status.
-5. **Rollout.** `TestEveryOperationIsDescribed` fails on an operation with no summary, or with no answer but its success
-   and `default`, that `testdata/undescribed-operations.txt` does not list, and on a listed operation that is
-   described. The list starts with every operation except KVStore's and `invokeFunction`. Each later pull request
-   describes one feature and removes its lines; that feature's deferred error rows are its checklist. A new operation is
-   described when it is registered.
-6. **Descriptions are for users.** A description of an operation, parameter or response that names an ADR fails
-   `TestEveryOperationIsDescribed`. The `If-Match` and `dryRun` descriptions lose their ADR references.
+   operation it shows a heading from the summary, the method, path, operation ID and authentication, a table of
+   parameters, the body and the answer linked to their tables on the page, and a table of statuses with the problem
+   type, when and what to do. The operations tagged `Hold` and `PlatformBackup` go on the disaster recovery tab, and
+   those tagged `DeadLetter` on the events tab. The operations of `kindref.Omitted` kinds get no section and stay off the
+   rollout list.
+4. **The listed answers are the observed ones.** The test binary of `pkg/funcd` installs a recorder through a test-only
+   hook, and `New` wraps the control plane's and the gateway's handlers outermost with it, so the 401 that the
+   authentication middleware writes is seen. It resolves each answer to an operation by method and path against
+   `SpecAPI`'s paths; `invokeFunction` is only `POST /function/{name}`, and an answer that resolves to no operation is
+   not recorded. `TestMain` compares the answers with `SpecAPI().OpenAPI()`. It always fails when a described
+   operation gave a status that it does not list. On a full run that passed, with no `-run` and no `-skip`, it also
+   fails when a described operation lists a status that no test got. Each failure names the operation and the status.
+5. **Rollout.** An operation is described when `testdata/undescribed-operations.txt` does not list it.
+   `TestEveryOperationIsDescribed` fails when the list differs from `UndescribedOperations`, so a described operation
+   leaves the list in the pull request that describes it. A CI step fails a pull request or a merge group whose list
+   gains a line against its base commit. The list starts with every operation except KVStore's and `invokeFunction`.
+   Each later pull request describes one feature; its deferred error rows are its checklist.
+6. **Responses under huma.** `Describe` writes `op.Responses` and never `op.Errors`, which would make huma add 422 and
+   500 and overwrite their descriptions. A problem case refers to `FaultError`, which huma registers on every
+   operation; another case names its body schema, such as `ContractError` for `{error, details}`. A described operation
+   lists no `default`: its listed answers are all it answers.
+7. **Descriptions are for users.** A description of an operation, parameter or response that names an ADR fails
+   `TestEveryOperationIsDescribed`. The `If-Match`, `dryRun` and ResourceGroup `force` descriptions lose theirs.
 
 ## Design model
 
@@ -109,12 +131,12 @@ None. The decision adds no lifecycle, race, timer or delivery; it describes answ
 
 ## Behavior rows
 
-None. No platform behavior changes.
+None. No platform behavior changes; `invokeFunction`'s cases come from the rows of `calls.md`.
 
 ## Temporary workarounds
 
 `testdata/undescribed-operations.txt` lets the rollout go one feature at a time. Exit: the list is empty, and the test
-drops it.
+and the CI step drop it.
 
 ## Contracts
 
@@ -124,32 +146,30 @@ drops it.
 // ErrorCase is one documented failure of an operation.
 type ErrorCase struct {
 	Status int    // e.g. http.StatusConflict
-	Type   string // the problem type, e.g. "urn:funcd:problem:conflict"; "" for a body that is not a problem
-	When   string // one sentence, e.g. "If-Match names an older version."
-	Fix    string // one sentence, e.g. "Read the store again, then retry."
+	Type   string // the problem type, e.g. "urn:funcd:problem:conflict"; "" when Body names another schema
+	Body   string // "" for a problem (FaultError); else the component schema of the body, e.g. "ContractError"
+	When   string // one sentence, e.g. "The Workflow does not declare the store in spec.kv."
+	Fix    string // one sentence, e.g. "Declare the store in the Workflow's spec.kv, then retry."
 }
 
-// Describe returns op with its summary, the bearer security scheme, and one response per status of cases, whose
-// description is written from the cases and whose extension "x-funcd-cases" lists them.
+// Describe returns op with its summary, the bearer and apiKey schemes, and one response per status of cases, whose
+// description is written from the cases and whose extension "x-funcd-cases" lists them. It never sets op.Errors.
 func Describe(op huma.Operation, summary string, cases ...ErrorCase) huma.Operation
 ```
 
 ```go
 // package kindref
 
-// Render (ADR-0323) also writes each feature's HTTP API section, from the operations tagged with the feature's kinds.
+// Render (ADR-0323) also writes each feature's HTTP API section.
 
-// UndescribedOperations returns, sorted, the ID of every operation with no summary, or with no response but its
-// success and default.
+// UndescribedOperations returns, sorted, the ID of every operation of a kind not in Omitted that has no summary, or
+// no response but its success and default.
 func UndescribedOperations(doc *huma.OpenAPI) []string
 ```
 
 ```go
-// package funcd
-
-// WithAnswerRecorder calls record with the operation ID and status of every answer that the platform's control plane
-// and gateway give. Tests use it; a server never sets it.
-func WithAnswerRecorder(record func(operationID string, status int)) Option
+// package funcd, in export_test.go: the test binary's hook, safe for concurrent use; a server never sets it.
+func SetAnswerRecorderForTest(record func(operationID string, status int))
 ```
 
 | Consumes | Exposes | Read by |
@@ -160,38 +180,45 @@ func WithAnswerRecorder(record func(operationID string, status int)) Option
 
 ## Implementation plan
 
-1. `internal/controlplane/describe.go`: `ErrorCase`, `Describe`, the bearer scheme registered once, and the shared
-   cases per verb, which the three helpers apply.
+1. `internal/controlplane/describe.go`: `ErrorCase`, `Describe`, the two schemes registered once, and each verb's
+   shared cases, which the three helpers apply to described kinds.
 2. KVStore's operations, `handoverKVStore` included: summaries and their own cases, from the KV rows deferred by #1463.
-3. `internal/controlplane/spec.go`: `invokeFunction` in `SpecAPI`.
+3. `internal/controlplane/spec.go`: `invokeFunction` in `SpecAPI`, with `ContractError` and the gateway server.
 4. `internal/controlplane/kindref`: the HTTP API section, `UndescribedOperations`, `testdata/undescribed-operations.txt`
-   and `TestEveryOperationIsDescribed`.
-5. `pkg/funcd`: `WithAnswerRecorder`; `api_answers_test.go`, which provokes each listed case of KVStore's operations
-   and of `invokeFunction`; `TestMain` compares the answers with the spec.
-6. The `If-Match` and `dryRun` descriptions reworded.
+   and `TestEveryOperationIsDescribed`. `scripts/check-list-only-shrinks.sh <base> <file>` and its ci.yml step, which
+   fetches the base commit and fails when it cannot read it.
+5. `pkg/funcd`: the recorder in `New`, `SetAnswerRecorderForTest` in `export_test.go`, `TestMain`'s comparison in
+   `main_test.go`, and `api_answers_test.go`, which provokes each case of KVStore's operations and of `invokeFunction`
+   outside the e2e build, with `WithRuntime` for the cases that need a worker.
+6. The `If-Match`, `dryRun` and `force` descriptions reworded.
 7. `scripts/agent/d just generate`, then `scripts/agent/d just ci`.
 
 Tests: `TestScenarioOperationShowsItsAnswers`, `TestScenarioFunctionCallDocumented`, `TestScenarioUnlistedAnswerFails`,
-`TestScenarioListedAnswerUnprovenFails`, `TestScenarioUndocumentedOperationRefused` and
-`TestScenarioNoADRInDescription`. The two guard scenarios run the comparison on a fixed set of answers.
+`TestScenarioListedAnswerUnprovenFails`, `TestScenarioFilteredRunChecksOnlyUnlisted`,
+`TestScenarioUndocumentedOperationRefused`, `TestScenarioUndescribedListNeverGrows` (in `scripts/generated_test.go`, on
+a scratch repository) and `TestScenarioNoADRInDescription`. The three guard scenarios run the comparison on a fixed set
+of answers.
 
 Definition of done: `just ci` passes; a second `just generate` changes nothing; the KV Spec tab shows the HTTP API
-section of its operations; the spec holds `invokeFunction`; the list holds every operation except the pilot's; `/docs`
-shows the cases of `replaceKVStore`.
+section of its operations; the spec holds `invokeFunction` with every case of Decision 2; the list holds every other
+operation of a kind not omitted; `/docs` shows the cases of `replaceKVStore`; a run of one test passes.
 
 ## Review checklist
 
 - [ ] Every KVStore operation and `invokeFunction` has a summary and lists each status that its tests get, and no other.
-- [ ] Each listed case has a problem type (or none for a body that is not a problem), a when and a fix.
-- [ ] `invokeFunction` names the gateway as its server, and the control plane does not route it.
+- [ ] Each listed case has a problem type or a body schema, a when and a fix.
+- [ ] `invokeFunction` names the gateway server and optional security, and the control plane does not route it.
+- [ ] No described operation has `op.Errors` or a `default` response.
 - [ ] No response body, status or header changed.
 - [ ] No description of an operation, parameter or response names an ADR.
-- [ ] The list of operations not yet described holds every other operation, and no line was added for a new one.
+- [ ] The recorder wraps both servers outermost and is set only by the test binary.
+- [ ] A run filtered with `-run` passes when its tests pass.
 - [ ] The guard's tests run outside the e2e build.
 
 ## Consequences
 
-- A reader gets each operation's answers from the Spec tab or `/docs`, and every answer is proven by a test.
+- A reader gets each described operation's answers from the Spec tab or `/docs`, and every listed answer is proven by
+  a test. Operations not yet described keep today's responses.
 - A new operation needs its cases and a test for each; a shared verb set keeps most of them to one line.
 - The remaining features follow in one pull request each, about a dozen, each checked against its deferred rows.
 - The guard sees only the calls that the tests make: an untested path can still return an unlisted status.
@@ -200,12 +227,13 @@ shows the cases of `replaceKVStore`.
 
 - Each verb's shared set is the set that the pilot's tests observe on KVStore; the pilot's pull request confirms it.
 - The 31 handler API rows: a pull request in each language repository, then a version bump in funcd.
-- The S3 gateway's errors: a later section of the Bucket Spec tab.
+- The S3 gateway's errors and the gateway's other calls: later sections of the Bucket, Function and Networking tabs.
 
 ## References
 
 - pyvvo/funcd#1463: the Develop rewrite and its deferred error rows.
+- `docs/behavior/calls.md`: the rows that list a call's answers and the ADR behind each.
 - `api/fault/problem.go` (the problem types and statuses), `internal/controlplane/middleware/authn.go` (401),
-  `internal/contractcheck/contractcheck.go` (422, 500), `internal/activator/activator.go` (503).
+  `internal/contractcheck/contractcheck.go` (422, 500).
 - The fumadocs OpenAPI integration, the rejected alternative:
   https://www.fumadocs.dev/docs/react-router/integrations/openapi
