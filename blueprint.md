@@ -930,6 +930,9 @@ Removed from the draft list:
 - Plugins, kubectl-style ([ADR-0319](docs/adr/0319-funcdctl-runs-kubectl-style-plugins.md)): `funcdctl <name>` runs an executable `funcdctl-<name>` from PATH in funcdctl's place when `<name>` is a plain word and no built-in command, and hands it `FUNCDCTL`, `FUNCDCTL_VERSION`, `FUNCD_SERVER` and `FUNCD_TOKEN`, so an App ships its own CLI. `funcdctl plugin list` shows them.
 - Client config in `~/.funcd/config.yaml` (contexts: server URL, token, default namespace).
 - The SDK and CLI consume the generated OpenAPI client, so CLI, SDK, and server cannot drift from the spec.
+- Each operation of the spec lists the answers it gives, with when and what to do, and tests hold the list to the
+  handlers' real answers; each feature's Spec tab and funcd's `/docs` page show them
+  ([ADR-0329](docs/adr/0329-each-api-operation-documents-its-answers.md)).
 
 ### Control-plane API & IaC
 
