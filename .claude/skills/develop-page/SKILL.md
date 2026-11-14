@@ -77,6 +77,9 @@ Every page shares the reader contract of `template.yaml`'s first section; the wo
    Keep only text needed to perform the task, choose a setting, check the result or recover from a failure. Remove
    repeated explanations and commentary that restates code. Keep complete English and every required input,
    access requirement, wait, expected result, retry step and data-loss warning.
+   When the page replaces an earlier version, check its coverage concept by concept against that version: list each
+   concept and task the earlier page explained and the section that explains it now, or the reference catalogue it
+   moved to. Brevity never drops a concept a reader or an LLM needs to use the feature.
    Run the first example before keeping it, exactly as the page documents it: each command in order, in an
    environment that contains only the prerequisites the page declares, with the documented release of each tool it
    uses. When the workflow starts from a repository, start from a fresh clone. Record the versions. A helper such as
