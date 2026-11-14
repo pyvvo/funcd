@@ -97,11 +97,10 @@ funcd refuses to start when `auth.token`, or an `auth.namespaces` other than its
 built-in token stops working. Every other credential, such as a developer or a viewer of a namespace, then needs an
 entry of its own, whose `namespaces` lists the namespaces where it acts.
 
-With the admin's token in the variable `ADMIN_TOKEN`, a command such as
-`funcdctl --server http://127.0.0.1:8080 --token "$ADMIN_TOKEN" apply -f namespace.yaml` applies a file that holds a
-Namespace to a server whose API listens at its default address, `127.0.0.1:8080`. The files of the next tasks, in
-funcd's repository under `api/types/v1alpha1/examples/namespaces`, also hold Functions whose `image` names
-`registry.example.com`. Replace each with the reference of an
+Each of the next tasks applies one complete file of funcd's repository, from the root folder of a clone of it, with
+the admin's token in the variable `ADMIN_TOKEN`, to a server whose API listens at its default address,
+`127.0.0.1:8080`. Besides a Namespace, the files of the exposure and the authentication tasks hold Functions whose
+`image` names `registry.example.com`. Replace each with the reference of an
 [artifact](../../../platform/workloads/artifacts.md) that the server can pull, which
 [`funcdctl push <path> <ref>`](../../tools/funcdctl/spec.md#funcdctl-push) prints with its digest after it packs and
 pushes a Function's build.
@@ -124,7 +123,8 @@ them off:
 
 ::include[../../../../../api/types/v1alpha1/examples/namespaces/namespace.yaml#namespace]
 
-The same file holds the Function `orders`, which sets no `spec.ingress`, and the Function `catalog`, which turns its
+The complete file, [api/types/v1alpha1/examples/namespaces/namespace.yaml](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/namespaces/namespace.yaml), also holds the
+Function `orders`, which sets no `spec.ingress`, and the Function `catalog`, which turns its
 own address on again with [`spec.ingress.enabled`](../../workloads/function/spec.md#functionspecingress) set to
 `true`:
 
@@ -161,7 +161,8 @@ of the Functions and Sites. `open`, or no value, lets every caller in. The Names
 
 ::include[../../../../../api/types/v1alpha1/examples/namespaces/edge-defaults.yaml#namespace]
 
-The same file holds the Function `invoices`, which sets no mode, and the Function `status`, whose
+The complete file, [api/types/v1alpha1/examples/namespaces/edge-defaults.yaml](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/namespaces/edge-defaults.yaml), also holds
+the Function `invoices`, which sets no mode, and the Function `status`, whose
 [`spec.ingress.auth`](../../workloads/function/spec.md#functionspecingressauth) keeps its address open: a mode that a
 Function, a Route or a rule sets wins over the Namespace's default.
 
@@ -219,6 +220,9 @@ exists. A Function declares its volumes under
 4 GiB:
 
 ::include[../../../../../api/types/v1alpha1/examples/namespaces/volume-budget.yaml]
+
+Apply [api/types/v1alpha1/examples/namespaces/volume-budget.yaml](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/namespaces/volume-budget.yaml) with
+`funcdctl --server http://127.0.0.1:8080 --token "$ADMIN_TOKEN" apply -f api/types/v1alpha1/examples/namespaces/volume-budget.yaml`.
 
 `volumeBudgetBytes` sets the same budget as a number of bytes; set one of the two, not both. Without either, or with
 0, the namespace has no budget, and only the server's volume capacity limits its volumes. In `media`:

@@ -137,11 +137,16 @@ Functions' `scaling.minReplicas: 1` starts the worker of each Function before it
 ### TypeScript
 
 The folder holds both handlers already built, as `token-owner.mjs` and `token-user.mjs`, so the example needs no build
-step. Clone the repository and start the example from its root folder:
+step. Without the clone of the first example, clone the repository first:
 
 ```console
 $ git clone https://github.com/pyvvo/funcd-typescript
 $ cd funcd-typescript
+```
+
+In the root folder of the funcd-typescript repository, start the example:
+
+```console
 $ funcdctl dev examples/secret-writer --gport 8080
 ```
 
