@@ -21,6 +21,10 @@ paths:
   field descriptions and other reference detail; remove repeated facts and commentary that restates code.
   Shortening must keep complete English, required inputs, access, waits, expected results, retry steps and
   relevant data-loss behavior.
+- A rewrite keeps every useful concept and task of the page it replaces, so that a human or an LLM still learns how
+  to use the feature: check its coverage concept by concept against the earlier page, not by word count or
+  unchanged commands. A concept leaves Usage only as part of a full reference catalogue, which goes to the API
+  Reference.
 - In Develop Usage pages, keep Status in a table of phases or conditions, reasons and meanings. Keep local CLI
   errors in a table with the message or cause and the action to take. Comprehensive operation, request/response
   and error catalogues belong to the separate API Reference, generated from authoritative schemas and operation
