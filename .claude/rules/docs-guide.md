@@ -21,7 +21,9 @@ paths:
   commands or in the task it serves, and the first example links it. Keep a sentence only when it helps perform the
   task, choose a setting, check the result or recover. Link concepts, field descriptions and other reference detail;
   remove repeated facts and commentary that restates code. Shortening must keep complete English, required inputs,
-  access, waits, expected results, retry steps and relevant data-loss behavior.
+  access, waits, expected results, retry steps and relevant data-loss behavior. It also keeps every condition and
+  qualifier: a deadline still says that only its expiry fails the call, a wait says what it waits for, and words such
+  as only, can, unless and if keep their scope, so that an option never reads as a restriction.
 - A rewrite keeps every useful concept and task of the page it replaces, so that a human or an LLM still learns how
   to use the feature: check its coverage concept by concept against the earlier page, not by word count or
   unchanged commands. A concept leaves Usage only as part of a full reference catalogue, which goes to the API
