@@ -18,36 +18,12 @@ Install the [dev build of funcdctl](../../../get-started/install.md), Git, curl,
 language: Node.js for TypeScript, or Python 3.12 or later for Python. Put the runtime on the `PATH`, Python as
 `python3`.
 
-`funcdctl dev` starts a local platform, runs the Functions of one folder on it, and prints the URL of each Function.
-`--gport` sets the port of these URLs, and `--cport` the port of the control plane, which a `funcdctl` command
-reaches with `--server` and the token `funcd-dev-token`.
-
-On a platform, a Function runs from its `image`, an [artifact](../../../platform/workloads/artifacts.md) that
-[`funcdctl push`](../../tools/funcdctl/spec.md#funcdctl-push) packs from the code, its runtime and its **contract**.
-The contract names the runtime and holds the JSON Schema of the input that the Function accepts and of the result
-that it returns. `funcdctl dev` does not use the image: it runs the code in the folder, and reads the contract from
-the folder's `log-burst.contract.yaml` file
-([TypeScript](https://github.com/pyvvo/funcd-typescript/blob/main/examples/log-burst/log-burst.contract.yaml),
-[Python](https://github.com/pyvvo/funcd-python/blob/main/examples/log-burst/log-burst.contract.yaml)).
-
-funcd refuses a call whose data does not match the contract with the HTTP status 422, before the call reaches the
-handler, and answers with the HTTP status 500 when the handler's result does not match. The example accepts a JSON
-object whose fields are all optional, so the call below sends an empty object, `{}`; a call with no body gets 422.
-
-For each call, a [worker](../../../platform/workloads/index.md#runtime), a process that runs the code, calls the
-handler with the context, through which the handler logs and reaches other Functions and its stores, and the
-**event**. The call's JSON body reaches the handler as `event.data` (`event["data"]` in Python), unless the body is
-itself an event, as [Call another Function](#call-another-function) explains. The handler's return value becomes the
-response.
-
-In the manifest, [`runtime`](spec.md#functionspec) names the runtime that runs the code,
-[`handler`](spec.md#functionspec) names the export that the worker calls, and [`replicas`](spec.md#functionspec) and
-[`scaling.minReplicas`](spec.md#functionspecscaling), both `1`, keep one worker running from the start, even while no
-call comes.
-
-funcd runs each version of a Function's spec as a **revision**, named after the Function and a number that grows by
-one at each change of the spec, such as `log-burst-1`. The [Spec](spec.md) tab describes every field of a Function
-and of its status.
+`funcdctl dev` starts a local platform, applies the resource files of one folder to it, and prints the URL of each
+Function. It runs each Function from the code in the folder, not from the manifest's `image`, the
+[artifact](../../../platform/workloads/artifacts.md) that [`funcdctl push`](../../tools/funcdctl/spec.md#funcdctl-push)
+packs from the code, its runtime and its [contract](#write-a-handler-and-its-contract) for a platform to run.
+`--gport` sets the port of the URLs, and `--cport` the port of the control plane, which a `funcdctl` command reaches
+with `--server` and the token `funcd-dev-token`.
 
 ### TypeScript
 
@@ -86,10 +62,11 @@ $ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token get function l
 ```
 
 Under `status`, `"phase"` is `"Ready"`, and the conditions `ShapeValid`, `Ready` and `RevisionReady` have the status
-`"True"`. `"replicas": 1` counts the ready worker, and `"servingRevision": "log-burst-1"` names the revision whose
-worker takes the calls.
+`"True"`. `"replicas": 1` counts the ready [worker](../../../platform/workloads/index.md#runtime), the process that
+runs the code, and `"servingRevision": "log-burst-1"` names the [revision](#changes-and-deletion) whose worker takes
+the calls.
 
-To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
+Keep the example running for [Read a Function's logs](#read-a-functions-logs), which stops it.
 
 ### Python
 
@@ -128,24 +105,25 @@ $ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token get function l
 ```
 
 Under `status`, `"phase"` is `"Ready"`, and the conditions `ShapeValid`, `Ready` and `RevisionReady` have the status
-`"True"`. `"replicas": 1` counts the ready worker, and `"servingRevision": "log-burst-1"` names the revision whose
-worker takes the calls.
+`"True"`. `"replicas": 1` counts the ready [worker](../../../platform/workloads/index.md#runtime), the process that
+runs the code, and `"servingRevision": "log-burst-1"` names the [revision](#changes-and-deletion) whose worker takes
+the calls.
 
-To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
+Keep the example running for [Read a Function's logs](#read-a-functions-logs), which stops it.
 
 ## Read a Function's logs
 
-funcd keeps each log line of a Function's workers as a record with a time and a severity: each `console` call in
-TypeScript or `logging` call in Python, as the first example shows; each line written to standard output, as `INFO`,
-or to standard error, as `ERROR`; and each call of [`ctx.log`](spec.md#handler-api), the log method of the context,
-as `INFO`.
+`funcdctl logs` prints the log records of one Function, the most recent 1000 by default. funcd keeps each log line of
+a Function's workers as a record with a time and a severity: each `console` call in TypeScript or `logging` call in
+Python, as the first example shows; each line written to standard output, as `INFO`, or to standard error, as
+`ERROR`; and each call of [`ctx.log`](spec.md#handler-api), the log method of the context that every handler
+receives, as `INFO`.
 
-`funcdctl logs` prints the records of one Function, the most recent 1000 by default. A record shows there only after
-funcd has written it to storage: a funcd server writes the records in segments up to `funclog.segmentMaxAge` old, 10
-seconds by default, and `funcdctl dev` in segments up to about a second old, so repeat the command until the records
-appear. While the first example runs, this command prints the records of the severity `ERROR` and above. After one
-call of the TypeScript example, these are the line written to standard error and the four errors; the times differ at
-each run:
+A record shows in `funcdctl logs` only after funcd has written it to storage: a funcd server writes the records in
+segments up to `funclog.segmentMaxAge` old, 10 seconds by default, and `funcdctl dev` in segments up to about a second
+old, so repeat the command until the records appear. While the first example runs, this command prints the records of
+the severity `ERROR` and above. After one call of the TypeScript example, these are the line written to standard
+error and the four errors; the times differ at each run:
 
 ```console
 $ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token logs log-burst -n default --severity error
@@ -160,6 +138,29 @@ Each line shows the record's time, its severity, the number of the worker that w
 keeps the records of a recent period, such as `15m`, and `-o wide` adds each record's attributes, such as the
 arguments of a `console` call. The [reference of `funcdctl logs`](../../tools/funcdctl/spec.md#funcdctl-logs) lists
 its flags.
+
+To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
+
+## Write a handler and its contract
+
+A Function's code exports a handler, which answers each call, and its **contract** describes the input that the
+Function accepts and the result that it returns. The manifest's [`handler`](spec.md#functionspec) names the export,
+and [`runtime`](spec.md#functionspec) names the runtime that runs the code.
+
+For each call, a worker calls the handler with two arguments. The first is the context, through which the handler
+logs and reaches other Functions and its stores. The second is the **event**: the call's JSON body reaches the
+handler as `event.data` (`event["data"]` in Python), unless the body is itself an event, as
+[Call another Function](#call-another-function) explains. The handler's return value becomes the response. The
+[Spec](spec.md) tab describes every field of a Function and of its status, and the methods of the context.
+
+The contract names the runtime and holds the JSON Schema of the input and of the result. funcd refuses a call whose
+data does not match the contract with the HTTP status 422,
+before the call reaches the handler, and answers with the HTTP status 500 when the handler's result does not match.
+The contract of log-burst, the `log-burst.contract.yaml` file of the example's folder
+([TypeScript](https://github.com/pyvvo/funcd-typescript/blob/main/examples/log-burst/log-burst.contract.yaml),
+[Python](https://github.com/pyvvo/funcd-python/blob/main/examples/log-burst/log-burst.contract.yaml)), accepts a JSON
+object whose fields are all optional, so the first example's call sends an empty object, `{}`; a call with no body
+gets 422. [Run it locally](#run-it-locally) says where `funcdctl dev` finds a Function's build and its contract.
 
 ## Call another Function
 
@@ -259,10 +260,10 @@ $ curl -s http://127.0.0.1:8080/function/devices-api/devices
 [{"id":"1","name":"truck-7"}]
 ```
 
-The folder's Route `api`, in `route.yaml`, serves the same app at `/api`, so `http://127.0.0.1:8080/api/devices`
-returns the same list. The [Networking](../../../platform/security-and-networking/networking.md) page explains how a
-Route reaches a Function, and the Networking [Spec](../../security-and-networking/networking/spec.md#route) tab
-describes a Route's fields.
+The folder's Route `api`, in `route.yaml`, which `funcdctl dev` applies with the Function, serves the same app at
+`/api`, so `http://127.0.0.1:8080/api/devices` returns the same list. The
+[Networking](../../../platform/security-and-networking/networking.md) page explains how a Route reaches a Function,
+and the Networking [Spec](../../security-and-networking/networking/spec.md#route) tab describes a Route's fields.
 
 To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
 
@@ -284,7 +285,8 @@ without a call:
   passed. The calls that arrive while a worker starts share that wait.
 - `scaling.minReplicas` above 0 keeps that many workers running, and the Function never goes `Idle`. `replicas` above
   0 with `minReplicas` 0 starts workers before the first call, but once the Function has gone `Idle`, only a call
-  starts a worker again.
+  starts a worker again. The first example sets both to 1, so one worker runs from the start, even while no call
+  comes.
 - More than one replica gives spare workers, not more capacity: every call goes to the lowest-numbered worker that
   listens.
 - `funcdctl dev` sets `replicas` and `minReplicas` to 1, so a Function never goes `Idle` there.
@@ -300,11 +302,6 @@ the policy engine that decides what a Function may do, whether the caller may pe
 the target. The [Security](../../../platform/security-and-networking/security.md) page explains where funcd asks
 Cedar.
 
-`ctx.invoke` and `ctx.fetch` reach only the targets of the caller's own links: funcd looks the alias up in those links
-before it asks Cedar, so a call whose alias no link declares fails with the HTTP status 403, whatever role the
-Function has. The error that `ctx.invoke` throws then holds the response's JSON body, with a message such as
-`caller default/front declares no link \"nope\" (no link is no grant)`.
-
 funcd supplies the link rule as a built-in policy, which it applies in every namespace, so nothing needs to be
 written or installed. In Cedar, the built-in policy reads:
 
@@ -314,8 +311,12 @@ permit(principal, action == Action::"link::invoke", resource)
   when { principal has links && principal.links.contains(resource) };
 ```
 
-A [Policy](../../security-and-networking/security/spec.md#policy) of the namespace can forbid a call that a link
-allows, because a `forbid` statement overrides every `permit`. Such a call fails with the HTTP status 403.
+`ctx.invoke` and `ctx.fetch` reach only the targets of the caller's own links: funcd looks the alias up in those links
+before it asks Cedar, so a call whose alias no link declares fails with the HTTP status 403, whatever role the
+Function has. The error that `ctx.invoke` throws then holds the response's JSON body, with a message such as
+`caller default/front declares no link \"nope\" (no link is no grant)`. A
+[Policy](../../security-and-networking/security/spec.md#policy) of the namespace can forbid a call that a link
+allows, because a `forbid` statement overrides every `permit`. Such a call fails with the HTTP status 403 too.
 
 A client outside funcd calls a Function through funcd's edge, at `/function/<name>` or through a Route. The
 Function's [`spec.ingress`](spec.md#functionspecingress), the defaults of its Namespace and the Routes decide whether
@@ -361,8 +362,8 @@ page's [Spec](spec.md) tab gives the range of each field.
 
 Read `status.phase` and the conditions with the status command of the first example. The condition `Ready` says
 whether a worker serves, `RevisionReady` whether the revision of the latest spec serves, and `ShapeValid` whether a
-worker of the latest spec has loaded the handler. While a condition is not `True`, its reason and its message say why;
-for a phase, the table gives the reason of `Ready`.
+worker of the latest spec has loaded the handler. A condition that is not `True` names a reason, and its message,
+when it has one, says more. Each phase row gives a reason that `Ready` has in that phase.
 
 | Phase or condition | Reason | Meaning |
 | --- | --- | --- |
@@ -370,15 +371,16 @@ for a phase, the table gives the reason of `Ready`.
 | `Deploying` | `ShimNotReady` | Workers are starting, and none serves yet, such as for a new Function or one that a call wakes. |
 | `Ready` | | A worker is ready, and calls reach it. |
 | `Idle` | `NoReplicas` | No worker runs. The next call starts one. |
-| `Degraded` | | The Function has served, but no worker is ready now, such as while funcd replaces a worker that stopped. Calls wait for a ready worker. |
-| `Failed` | `ShapeInvalid` | The handler cannot load, or the first worker did not become ready within `runtime.bootTimeout`, 1 minute by default, which the message `the handler did not become ready within 1m0s` reports. The Function stays `Failed` until its spec changes. |
+| `Degraded` | `Restarting` | The Function has served, but no worker is ready now, such as while funcd replaces a worker that stopped. Calls wait for a ready worker. |
+| `Failed` | `ShapeInvalid` | The handler cannot load, or the first worker did not become ready within `runtime.bootTimeout`, 1 minute by default. The Function stays `Failed` until its spec changes. |
 | `Failed` | `RuntimeUnavailable` | The Function's runtime is missing. |
 | `Failed` | `ArtifactUnresolved` | The image cannot be resolved. |
 | `Failed` | `StartFailed` | A worker cannot start. funcd tries again after a growing wait. |
+| `Failed` | Another reason, such as `NoMatchingPlatform`, `ContractMissing`, `ContractInvalid` or `ConfigResolveFailed` | The Function cannot run. The message of the `Ready` condition says why. |
 | `Ready` condition | `CrashLoopBackOff` | A worker stopped before it listened, and funcd waits before it starts the worker again. |
 | `RevisionReady` condition | `Progressing` | The revision of the latest spec is starting beside the serving one. |
-| `RevisionReady` condition | `ShapeInvalid` | The revision of the latest spec cannot load its handler. The serving revision keeps the calls and the phase. |
-| `ShapeValid` condition | `ShapeInvalid` | No worker of the latest spec has loaded the handler: the code has no export that `handler` names, the code fails to load, or no worker became ready within `runtime.bootTimeout`. |
+| `RevisionReady` condition | `ShapeInvalid` | The revision of the latest spec cannot load its handler. After a change, the serving revision keeps the calls and the phase. |
+| `ShapeValid` condition | `ShapeInvalid` | No worker of the latest spec has loaded the handler: the code has no export that `handler` names, the code fails to load, or no worker became ready within `runtime.bootTimeout`. The message gives the load error, or `the handler did not become ready within 1m0s` in the last case. |
 | `IngressReady` condition | | Reports the Function's own Route. Only a Function whose `spec.ingress` sets a host or a path has it. |
 
 funcd refuses the calls of a `Failed` Function at once with the HTTP status 503. `status.currentRevision` names the
@@ -386,8 +388,9 @@ revision of the latest spec, and the [status reference](spec.md#functionstatus) 
 
 ## Changes and deletion
 
-- Each change to a Function's spec creates a new revision, a read-only copy of the spec, whose number is one higher,
-  such as `log-burst-2` after `log-burst-1`. `funcdctl get revisions -n <namespace>` lists the revisions.
+- funcd runs each version of a Function's spec as a **revision**, a read-only copy of the spec named after the
+  Function and a number that grows by one at each change, such as `log-burst-2` after `log-burst-1`.
+  `funcdctl get revisions -n <namespace>` lists the revisions.
 - funcd starts the new revision's workers beside the serving ones, and moves the calls to them once every new worker
   is ready, even when only `replicas` or `scaling` changed. Each old worker stops once it is idle, but no sooner than
   `runtime.handOutSettle` after the switch, 2 seconds by default. A worker that is still busy `runtime.drainGrace`
@@ -405,10 +408,14 @@ revision of the latest spec, and the [status reference](spec.md#functionstatus) 
 
 ## CLI errors
 
-`funcdctl dev` stops at its start with these local errors:
+`funcdctl dev` stops at its start, before it serves any Function, when it meets one of these local errors:
 
 | Error | Action |
 | --- | --- |
+| `no node interpreter found for the node handler` | Put Node.js on the `PATH`, or set `FUNCD_NODE` to the path of `node`. |
+| `no python interpreter found for the python handler` | Put Python 3.12 or later on the `PATH` as `python3`, or set `FUNCD_PYTHON` to its path. |
+| `cannot load the runtime shim (needs Python ≥3.12; set FUNCD_PYTHON)` | Put Python 3.12 or later on the `PATH` as `python3`, or set `FUNCD_PYTHON` to its path. |
+| `no build of "<name>"` or `no contract file for "<name>"` | Build the Function, or name its build and its contract file after it, where [Run it locally](#run-it-locally) says that `funcdctl dev` looks. The message names the paths that it looked at. |
 | A Function's manifest and contract file `disagree on the runtime or protocol`. | Name the same `runtime` and `protocol` in both files. |
 | A resource is in another namespace: `funcdctl dev runs namespace default only`. | Set the resource's namespace to `default`. |
 
