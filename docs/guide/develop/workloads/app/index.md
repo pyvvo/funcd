@@ -33,7 +33,9 @@ $ funcdctl dev apps/volumes/app -f apps/volumes/values/redeploy.yaml --build app
 
 [`app/app.yaml`](https://github.com/pyvvo/funcd-functions/blob/main/apps/volumes/app/app.yaml) names the App
 `volumes`, its version `1.0.0` and its image `files`, and takes two values: `registry`, and `timeout`, whose default
-is `30s`. [`values/redeploy.yaml`](https://github.com/pyvvo/funcd-functions/blob/main/apps/volumes/values/redeploy.yaml)
+is `30s`. An `app.yaml` that names images must set their `registry`, here from the value `registry`; `funcdctl dev`
+replaces it with its own. A template folder holds only `app.yaml`, `app.lock` and `resources/*.yaml`, so the builds
+and the values files sit beside it, in `apps/volumes`. [`values/redeploy.yaml`](https://github.com/pyvvo/funcd-functions/blob/main/apps/volumes/values/redeploy.yaml)
 sets `timeout` to `31s`. `resources/files.yaml` declares the two Functions; funcdctl replaces each `${{ … }}`
 expression when it renders the template, with the App's name, the reference of the image `files` and the value
 `timeout`:
@@ -458,7 +460,9 @@ differences:
 
 - It takes each image from a local build that `--build` names, and pushes it into an OCI image layout, a folder that
   holds images as a registry does, in its state folder, which replaces the template's `registry`. It neither reads
-  nor writes `app.lock`.
+  nor writes `app.lock`. A Function's contract file sits beside its build, with the build's name, such as
+  `api.contract.yaml` beside `api.mjs`, and a contract outside the
+  [part of JSON Schema that funcd supports](../function/index.md#write-a-handler-and-its-contract) stops the push.
 - It changes nothing else in the App but its hooks, which it drops unless `--hooks` is set. Unlike the Functions of a
   folder of resource files, which `funcdctl dev` keeps running, an App's Function parts keep their own `replicas`, so a
   part that sets none runs no worker until its first call. A save of a build that cannot load therefore still prints

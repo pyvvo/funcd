@@ -193,6 +193,8 @@ date, with one `ctx.sql.execute` call that takes a list of statements. The opera
 `ctx.sql.query`, which returns each row as an object keyed by column name. The index is an FTS5 table, the full-text
 search of SQLite, and SQLite's `json_each` turns the JSON array of each article's tags into rows.
 
+Each statement of a list is its SQL text, or its text with its parameters, such as
+`['DELETE FROM articles WHERE id = ?', [7]]` in TypeScript or `('DELETE FROM articles WHERE id = ?', [7])` in Python.
 `execute` runs its list of statements in one transaction, which applies all of them or none, and a transaction never
 spans two calls. When the engine rejects a statement, such as one that names a missing table, the whole call fails,
 none of its statements applies, and the message names the statement by its position in the call, counted from 0, such

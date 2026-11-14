@@ -160,6 +160,12 @@ file of the example's folder
 object whose fields are all optional, so the first example's call sends an empty object, `{}`; a call with no body
 gets 422. [Run it locally](#run-it-locally) says where `funcdctl dev` finds a Function's build and its contract.
 
+A contract uses only the part of JSON Schema that every runtime supports. Each object lists its `properties` and sets
+`additionalProperties: false`, or is a map, with no `properties` and the schema of its values under
+`additionalProperties`. The empty schema `{}` accepts any JSON value, and a union is a `oneOf` with a `discriminator`.
+`$ref`, `anyOf`, `allOf`, `not` and `if` are not supported. `funcdctl push` refuses a contract that uses another
+construct, and its error names the construct and what to use instead.
+
 ### TypeScript
 
 The first example's handler is `examples/log-burst/src/main.ts`:
@@ -260,7 +266,8 @@ Hono framework and keeps its devices in the worker's memory:
 
 ::include[../../../../../_repos/funcd-typescript/examples/http-api/src/main.ts]
 
-A route of the app reaches the Function's context, such as its KV bindings, as `c.env.funcd`.
+A route of the app reaches the Function's context as `c.env.funcd`, with all its bindings, such as `c.env.funcd.kv`
+and `c.env.funcd.sql`.
 
 The app gets the part of the path after the Function's address: a request for `/function/devices-api/devices`
 reaches the app as `/devices`, and the request's `X-Forwarded-Prefix` header holds the part that funcd removed,
