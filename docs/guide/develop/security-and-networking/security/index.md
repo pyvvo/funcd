@@ -6,39 +6,50 @@ description: Create an Identity for a client outside funcd, give roles to it and
 ## Usage
 
 funcd checks each request for data that a Function or a client outside funcd sends, and refuses it unless something
-allows it. The [Platform page](../../../platform/security-and-networking/security.md) explains where funcd checks a
-request; this page shows how to give access and how to remove it.
+allows it. This page shows how to give access and how to remove it; the
+[Platform page](../../../platform/security-and-networking/security.md) explains where funcd checks a request.
 
-The first example gives a client outside funcd read access to the objects that a Function writes into a Bucket. The
-client is curl, which sends S3 requests with a key pair that funcd issues. The steps below start the Bucket example
-s3-roundtrip on the local computer, let its Function write an object, then create an **Identity**, the object that
-stands for the client in funcd, and give it a role: the client reads the object, whose content is `roundtrip-001`, and
-its write into the same prefix fails with the S3 error `AccessDenied`.
+The first example gives a client outside funcd, curl, read access to the objects that a Function writes into a
+Bucket. It starts the Bucket example s3-roundtrip on the local computer, lets its Function write an object, then
+creates an **Identity**, the object that stands for the client in funcd, and gives it a role: the client reads the
+object, whose content is `roundtrip-001`, and its write into the same prefix fails with the S3 error `AccessDenied`.
 
 The example needs five programs:
 
-- funcdctl, installed as the [Install](../../../get-started/install.md) page shows. That page installs the dev build
-  of funcdctl, which includes the `funcdctl dev` command.
-- git, which copies the repositories of the example and of funcd.
-- curl 8.0 or later, which calls the Function and signs the S3 requests with its `--aws-sigv4` option.
-- jq 1.6 or later, which reads one value of the JSON that funcdctl prints and decodes it with `@base64d`.
+- the [dev build of funcdctl](../../../get-started/install.md), which includes the `funcdctl dev` command;
+- Git, which copies the repositories of the example and of funcd;
+- curl 8.0 or later, which calls the Function and signs the S3 requests with its `--aws-sigv4` option;
+- jq 1.6 or later, which reads one value of the JSON that funcdctl prints and decodes it with `@base64d`;
 - Node.js on the `PATH`, which runs the example's Function.
 
 `funcdctl dev` starts a local platform and runs the resource files of one folder on it. It also runs funcd's **S3
-gateway**, a server that answers S3 requests for the Buckets, and prints the address of its control plane, which a
-`funcdctl` command reaches with `--server` and the token `funcd-dev-token`. The `--gport`, `--cport` and `--s3port`
-flags set the ports of the Functions' URLs, of the control plane and of the S3 gateway, so the commands below use the
-ports 8080, 8081 and 8082.
+gateway**, a server that answers S3 requests for the Buckets. The `--gport`, `--cport` and `--s3port` flags set the
+ports of the Functions' URLs, of the control plane, which a `funcdctl` command reaches with `--server` and the token
+`funcd-dev-token`, and of the S3 gateway.
 
-The example's folder, `examples/s3-roundtrip` of the funcd-typescript repository, holds the Bucket `lakehouse` and the
-Function `s3-roundtrip`, which the [Bucket](../../services/bucket/index.md) page explains. The Function is the
-**owner** of the Bucket's prefix `gold`, a separate set of objects inside the Bucket: the owner of a prefix writes it
-with no role. At each call, the Function writes into `gold` an object named after the call's tag. The folder also
-holds resources that this page does not use.
+Clone both repositories into one folder, and start the example from the root folder of funcd-typescript:
 
-The client gets its access from two objects of the funcd repository's file
-`api/types/v1alpha1/examples/security/identity.yaml`. The Identity `analyst` stands for curl, and its
-[`type`](spec.md#identityspec), `external`, means a caller outside funcd:
+```console
+$ git clone https://github.com/pyvvo/funcd-typescript
+$ git clone https://github.com/pyvvo/funcd
+$ cd funcd-typescript
+$ funcdctl dev examples/s3-roundtrip --gport 8080 --cport 8081 --s3port 8082
+```
+
+The folder holds the Bucket `lakehouse` and the Function `s3-roundtrip`, which the
+[Bucket](../../services/bucket/index.md) page explains, and resources that this page does not use. The Function is
+the **owner** of the Bucket's prefix `gold`, a separate set of objects inside the Bucket: the owner of a prefix writes
+it with no role. In another terminal, in the folder that holds both clones, call the Function once with the tag
+`001`. It writes the object `gold/roundtrip-001.txt`, and its response reports each step, as the Bucket page explains:
+
+```console
+$ curl -s -X POST -H 'content-type: application/json' -d '{"inv":"001"}' http://127.0.0.1:8080/function/s3-roundtrip
+{"put":true,"get":true,"list":1,"denied":false,"granted":true}
+```
+
+The client gets its access from two objects of funcd's file `api/types/v1alpha1/examples/security/identity.yaml`.
+The Identity `analyst` stands for curl, and its [`type`](spec.md#identityspec), `external`, means a caller outside
+funcd:
 
 ::include[../../../../../api/types/v1alpha1/examples/security/identity.yaml#identity]
 
@@ -55,25 +66,6 @@ A **RolesAssignment** gives roles. Each of its [entries](spec.md#rolesassignment
 
 ::include[../../../../../api/types/v1alpha1/examples/security/identity.yaml#grant]
 
-The [Spec](spec.md) tab describes every field of an Identity, a Role, a RolesAssignment and a Policy.
-
-Clone both repositories into one folder, and start the example from the root folder of funcd-typescript:
-
-```console
-$ git clone https://github.com/pyvvo/funcd-typescript
-$ git clone https://github.com/pyvvo/funcd
-$ cd funcd-typescript
-$ funcdctl dev examples/s3-roundtrip --gport 8080 --cport 8081 --s3port 8082
-```
-
-In another terminal, in the folder that holds both clones, call the Function once with the tag `001`. It writes the
-object `gold/roundtrip-001.txt`, and its response reports each step, as the Bucket page explains:
-
-```console
-$ curl -s -X POST -H 'content-type: application/json' -d '{"inv":"001"}' http://127.0.0.1:8080/function/s3-roundtrip
-{"put":true,"get":true,"list":1,"denied":false,"granted":true}
-```
-
 Apply the Identity and its RolesAssignment:
 
 ```console
@@ -89,9 +81,9 @@ the phase is `Ready`:
 $ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token get identity analyst -n default -o json
 ```
 
-The command prints the Identity as JSON. Under `status`, `"phase"` is `"Ready"`, the condition `Ready` has the status
-`"True"`, and `"accessKeyId"` is `"FUNCIDMRSWMYLVNR2AAYLOMFWHS43U"`. funcd derives the access key ID from the
-Identity's namespace and name, so it is the same at each run.
+Under `status`, `"phase"` is `"Ready"`, the condition `Ready` has the status `"True"`, and `"accessKeyId"` is
+`"FUNCIDMRSWMYLVNR2AAYLOMFWHS43U"`. funcd derives the access key ID from the Identity's namespace and name, so it is
+the same at each run.
 
 Read the key pair from the Secret `analyst`. funcdctl prints each value of a Secret in base64, so jq takes the value
 out of the JSON and decodes it with `@base64d`:
@@ -307,8 +299,9 @@ To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
 
 funcd checks a Policy when it is applied. It refuses text that does not parse or holds no statement, and a statement
 that does not name exactly one action that funcd knows. It also refuses an entity that a statement's principal or
-resource names with `==` or `in`, when funcd does not know its type or the entity belongs to another namespace;
-[Errors](#errors) quotes the messages. funcd checks nothing else in a statement: it accepts an unknown type in a test
+resource names with `==` or `in`, when funcd does not know its type or the entity belongs to another namespace. The
+refusal names the rule that the text breaks, such as `cedar policy references unknown action "s3::delete"`. funcd
+checks nothing else in a statement: it accepts an unknown type in a test
 such as `principal is User`, and any entity or attribute that a `when` or `unless` condition names. A Policy decides
 only the requests whose principal and resource are both in its namespace.
 
@@ -338,7 +331,25 @@ quotes the built-in policy that funcd applies to it, where funcd has one:
 
 Any other access needs a role, as [Choose a role](#choose-a-role) and
 [Choose the scope of a grant](#choose-the-scope-of-a-grant) explain, or a Policy's `permit`, as
-[Write a Policy](#write-a-policy) explains.
+[Write a Policy](#write-a-policy) explains. For a client that reads objects, the smallest built-in role is
+`Blob Data Reader` on one `BucketPrefix`, as the first example's RolesAssignment `analyst-reads-gold` gives it.
+
+A request that funcd denies reads differently at each place that checks it:
+
+- Through the S3 gateway, the answer is the S3 error `AccessDenied`, with the HTTP status 403, and names no rule, as
+  the first example shows.
+- Through a Lake's gateway, the session's first request gets 403 with the message `lake query denied`, as the
+  [Lake](../../services/lake/index.md#access) page explains.
+- Through a client of a Function's context, the call fails with 403, and the error's message names the `forbid` that
+  matched: `cedar: forbidden by policy builtin/<rule>` for a built-in rule, such as `builtin/kv-single-writer`, and
+  `cedar: forbidden by policy <namespace>/<policy>#<n>` for the statement `n` of a Policy, counted from 0, such as
+  `default/forbid-app-secret#0` on the [Secrets](../../services/secrets/index.md#access) page.
+- An outbound connection that nothing allows meets the refusals that
+  [Allow a Function's outbound connections](../networking/index.md#allow-a-functions-outbound-connections) on the
+  Networking page describes.
+
+To clear a denial, give the principal a role that allows the action on a scope that holds the resource, or remove the
+Policy statement that the message names.
 
 funcd's API decides who may create, change and read the objects of this page with role-based access control (RBAC),
 not with Cedar: the role of the caller's credential decides, as for every object of the API. funcd's configuration
@@ -352,7 +363,9 @@ sets the credentials, in `auth.token` and `auth.credentials`, which the funcd
 - A `viewer` reads these objects in the namespaces of its credential, but never a Secret, so it cannot read an
   Identity's credential.
 
-The roles that a RolesAssignment gives apply to data only: no role, not even `Owner`, lets a principal create or change
+An API request that the caller's role does not allow fails with 403, such as
+`get Secret in "default" denied: viewer may not act on kind "Secret"` for a viewer that reads a Secret. The roles that
+a RolesAssignment gives apply to data only: no role, not even `Owner`, lets a principal create or change
 a RolesAssignment.
 
 The calls from outside funcd to a Function through funcd's **edge**, the part of funcd that receives them, are checked
@@ -369,17 +382,17 @@ and the credential of each Identity in its Secret, as it stores every Secret: un
 
 ## Status
 
-`funcdctl get identity <name> -n <namespace> -o json` prints an Identity's status, as the first example shows:
+`funcdctl get identity <name> -n <namespace> -o json` prints an Identity's status, as the first example shows. The
+condition `Ready` explains the phase:
 
-- `phase` is `Ready` once funcd has written the credential into the Secret, and `Pending` when funcd cannot write it.
-  The condition `Ready` explains the phase. It is `True` once the credential is issued, and otherwise `False` with a
-  reason: `SecretNotOwned` when the Secret that the Identity names exists and no Identity of that name controls it,
-  with a message such as `secret not owned: secret "app-secret" is not controlled by identity "analyst"`, or
-  `SecretIssueFailed` when funcd could not write the Secret. funcd checks an Identity with `SecretNotOwned` again every
-  `runtime.supervisionPeriod`, 10 seconds by default.
-- `accessKeyId` holds the access key ID of the key pair, which funcd derives from the Identity's namespace and name.
-- `observedRotate` holds the [`rotate`](spec.md#identityspec) value of the credential that funcd issued last, as
-  [Changes and deletion](#changes-and-deletion) explains.
+| Phase | Condition `Ready` | Meaning |
+| --- | --- | --- |
+| `Ready` | `True`, with no reason | funcd has written the credential into the Secret. |
+| `Pending` | `False`, `SecretNotOwned` | The Secret that the Identity names exists, and no Identity of that name controls it, with a message such as `secret not owned: secret "app-secret" is not controlled by identity "analyst"`. Name another Secret, one that does not exist yet, in `credentialSecretName`. Delete the existing Secret instead only when nothing else uses it: it may hold an App's data or another Identity's credential. funcd checks the Identity again every `runtime.supervisionPeriod`, 10 seconds by default. |
+| `Pending` | `False`, `SecretIssueFailed` | funcd could not write the Secret. The condition's message gives the cause. |
+
+`status.accessKeyId` holds the access key ID of the key pair, and `status.observedRotate` the [`rotate`](spec.md#identityspec) value of the credential that funcd issued
+last, as [Changes and deletion](#changes-and-deletion) explains.
 
 A Role, a RolesAssignment and a Policy have no status: a request that they should allow or refuse shows whether they
 apply, as the steps above do.
@@ -406,40 +419,20 @@ apply, as the steps above do.
   the Function's access, so funcd moves the Function to a shared worker of Functions with the same access: while it
   moves, its calls get the HTTP status 404, then 503 until that worker has loaded it.
 
-## Errors
+## CLI errors
 
-`funcdctl apply` refuses an object of this page that breaks a rule, with a message that names the field or the
-statement at fault, such as:
+These errors stop a command before any server answers. `funcdctl apply` checks each document before it sends it, and
+its message starts with `manifest is invalid (<kind> "<name>")`:
 
-- `spec.type must be "external" (got "internal")` for an Identity;
-- `spec.actions must list at least one action` for a Role;
-- `spec.assignments[0] has no principal (and no top-level default)`, the same for the scope, and
-  `spec.assignments[0].scope.kind "Bucket" is invalid` for a RolesAssignment;
-- for a Policy, a message that names the rule that the text breaks, such as
-  `admission.policy-validity: Policy "<name>" has invalid Cedar: cedar.ValidateCedar: cedar policy references unknown action "s3::delete"`.
-  The other rules read `cedar.ValidateCedar: cedar policy does not parse`,
-  `cedar.ValidateCedar: cedar policy must name a specific action`,
-  `cedar.ValidateCedar: cedar policy references unknown entity type "User"` and
-  `cedar.ValidateCedarInNamespace: cedar policy statement 0 names Identity::"other/analyst" outside the Policy's namespace "default"`.
-
-A request that funcd denies reads differently at each place that checks it:
-
-- Through the S3 gateway, the answer is the S3 error `AccessDenied`, with the HTTP status 403, and names no rule, as
-  the first example shows. A request signed with an access key ID that the gateway does not know, such as that of a
-  deleted Identity, gets `InvalidAccessKeyId`, and one signed with a wrong secret, such as one that a rotation
-  replaced, gets `SignatureDoesNotMatch`, both with 403.
-- Through a Lake's gateway, the session's first request gets 403 with the message `lake query denied`, as the
-  [Lake](../../services/lake/index.md#access) page explains.
-- Through a client of a Function's context, the call fails with 403, and the error's message names the `forbid` that
-  matched: `cedar: forbidden by policy builtin/<rule>` for a built-in rule, such as `builtin/kv-single-writer`, and
-  `cedar: forbidden by policy <namespace>/<policy>#<n>` for the statement `n` of a Policy, counted from 0, such as
-  `default/forbid-app-secret#0` on the [Secrets](../../services/secrets/index.md#access) page.
-- An outbound connection that nothing allows meets the refusals that
-  [Allow a Function's outbound connections](../networking/index.md#allow-a-functions-outbound-connections) on the
-  Networking page describes.
-
-An API request that the caller's role does not allow fails with 403, such as
-`get Secret in "default" denied: viewer may not act on kind "Secret"` for a viewer that reads a Secret.
+| Error | Action |
+| --- | --- |
+| `no node interpreter found for the node handler` | `funcdctl dev` found no Node.js for the example's Function. Put Node.js on the `PATH`, or set `FUNCD_NODE` to the path of `node`. |
+| `<folder> holds no Function or Workflow image step to run` | `funcdctl dev` does not start on a folder of Identities and grants alone. Start an example that holds a Function, and apply them to it, as the first example does. |
+| `<file>: <kind> "<name>" is in namespace "<namespace>"; funcdctl dev runs namespace default only` | Remove `metadata.namespace` from the object, set it to `default`, or apply the file to a funcd server. |
+| `spec.type must be "external" (got "<type>")` | Set the Identity's `type` to `external`. |
+| `spec.actions must list at least one action` | List an action in the Role's `actions`. |
+| `spec.assignments[<n>] has no principal (and no top-level default)`, `has no scope`, or `roleRef.name is required` | Set the entry's `principal`, `scope` or `roleRef.name`, or `spec.principal` or `spec.scope` for every entry. |
+| `spec.assignments[<n>].scope.kind "<kind>" is invalid`, or the same for `principal.kind` or `roleRef.kind` | Use a kind that the [Spec](spec.md#rolesassignmentspecassignments) tab lists. |
 
 ## Run it locally
 
@@ -460,19 +453,17 @@ in these ways:
   succeeds locally can therefore fail once deployed, as the Bucket page's
   [Run it locally](../../services/bucket/index.md#run-it-locally) section explains. A Policy's `forbid` still applies
   to these Functions.
-- It refuses a folder that holds no Function and no Workflow step with an image, with the message
-  `holds no Function or Workflow image step to run`. A folder of Identities and grants alone does not start: apply
-  them to a running example, as the first example does.
+- It does not start on a folder that holds no Function and no Workflow step with an image, as
+  [CLI errors](#cli-errors) shows.
 - Its edge has no authenticator, as the Networking page's [Run it locally](../networking/index.md#run-it-locally)
   section explains.
 
 `funcdctl dev` keeps its objects in memory, where they are lost when it stops, so each run issues a new secret for an
-Identity, under the same access key ID. With the `--persist` flag, it keeps them between runs in the metastore of its
-persist folder: `.funcd-dev` in the current folder, unless `--persist-to` names another folder. The credentials of the
-Identities are stored there unencrypted, because `funcdctl dev` sets no encryption key. To remove them, delete the
-persist folder after `funcdctl dev` stops; that clears all the state that the local platform stored: its metastore,
-KV, blob, SQL, lake and volume data. The [reference of `funcdctl dev`](../../tools/funcdctl/spec.md#funcdctl-dev)
-lists its flags.
+Identity, under the same access key ID. With the `--persist` flag, it keeps them between runs in `.funcd-dev`, in the
+current folder, or in the folder that `--persist-to` names, and stores the Identities' credentials there unencrypted,
+because it sets no encryption key. To remove them, delete that folder after `funcdctl dev` stops, which clears all the
+state of the local platform. The [reference of `funcdctl dev`](../../tools/funcdctl/spec.md#funcdctl-dev) lists its
+flags.
 
 ## Examples
 
