@@ -12,8 +12,8 @@ Bucket. A Function queries a Lake that it binds through the Lake's gateway. See
 The lake-quack example, in Python only, creates a table in a Lake and reads it back. Its Function, `lake-reader`,
 takes a SQL statement, runs it on the Lake, and returns the rows of the result.
 
-Install the [dev build of funcdctl](../../../get-started/install.md), which includes the DuckDB engine that serves a
-Lake under `funcdctl dev`, Git and curl, and put Python 3.12 or later on the `PATH` as `python3`, with its standard
+Install Git, curl and the [dev build of funcdctl](../../../get-started/install.md); the dev build includes the DuckDB
+engine that serves a Lake under `funcdctl dev`. Put Python 3.12 or later on the `PATH` as `python3`, with its standard
 `venv` module. The steps install the Python package `duckdb` from PyPI, so they need access to it.
 
 `funcdctl dev` starts a local platform, applies the resource files of one folder, and prints the URL of each Function,

@@ -15,8 +15,8 @@ TypeScript, sql-notes keeps notes, and in Python, sql-orders keeps orders. Each 
 which applies the migrations, and the database's owner, which adds and lists the rows. The Python example also runs a
 third Function, `audit`, which records each change of an order.
 
-Install the [dev build of funcdctl](../../../get-started/install.md), which includes the SQL engine, Git and curl. For
-TypeScript, put Node.js on the `PATH`. For Python, put [uv](https://docs.astral.sh/uv/) on the `PATH`: the example's
+Install Git, curl and the [dev build of funcdctl](../../../get-started/install.md); the dev build includes the SQL
+engine. For TypeScript, put Node.js on the `PATH`. For Python, put [uv](https://docs.astral.sh/uv/) on the `PATH`: the example's
 Functions import packages, such as SQLModel, that uv installs before it starts `funcdctl dev`.
 
 `funcdctl dev` starts a local platform, applies the resource files of one folder, and prints the URL of each Function,
