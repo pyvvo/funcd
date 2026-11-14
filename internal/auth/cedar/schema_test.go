@@ -1,6 +1,8 @@
 package cedar_test
 
 import (
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -69,4 +71,38 @@ func TestIssue676_IsInScopeUnknownEntityTypeRejected(t *testing.T) {
 			require.ErrorContains(t, err, `unknown entity type "Foo"`)
 		})
 	}
+}
+
+// The refusal of an unknown action or entity type lists the vocabulary funcd accepts, which every capability adds to
+// (ADR-0116), so an action such as secret::read or a type such as Secret appears there as soon as it is known.
+func TestUnknownActionAndTypeRefusalsListTheVocabulary(t *testing.T) {
+	t.Parallel()
+	actionErr := cedar.ValidateCedar(`permit(principal, action == Action::"s3::delete", resource);`)
+	require.ErrorContains(t, actionErr, `unknown action "s3::delete"`)
+	typeErr := cedar.ValidateCedar(`permit(principal, action == Action::"kv::read", resource in Foo::"default/x");`)
+	require.ErrorContains(t, typeErr, `unknown entity type "Foo"`)
+	actions, types := listedIn(t, actionErr), listedIn(t, typeErr)
+	for _, c := range []cedar.Capability{cedar.KVCapability(), cedar.InvokeCapability(), cedar.S3Capability(),
+		cedar.EgressCapability(), cedar.LakeCapability(), cedar.SQLCapability(), cedar.SecretCapability()} {
+		for _, a := range c.Actions {
+			require.True(t, cedar.KnownAction(string(a)), "%s is in the vocabulary", a)
+			require.Contains(t, actions, string(a), "the action refusal lists %s", a)
+		}
+		want := []string{string(c.EmitsEntityType)}
+		for _, et := range c.SupportingEntityTypes {
+			want = append(want, string(et))
+		}
+		for _, et := range want {
+			require.True(t, cedar.KnownEntityType(et), "%s is in the vocabulary", et)
+			require.Contains(t, types, et, "the entity type refusal lists %s", et)
+		}
+	}
+}
+
+// listedIn returns the items of the "(curated: a, b)" list that ends a refusal.
+func listedIn(t *testing.T, err error) []string {
+	t.Helper()
+	m := regexp.MustCompile(`\(curated: ([^)]*)\)$`).FindStringSubmatch(err.Error())
+	require.Len(t, m, 2, "the refusal ends with its list: %v", err)
+	return strings.Split(m[1], ", ")
 }
