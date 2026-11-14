@@ -112,9 +112,9 @@ holds claims with conditional writes. Each call sends a `key`, a `holder` that n
 - `renew` replaces the key with `compareAndSet`, using the `version` that the holder received when it won.
 - `release` deletes the key with `delIf`, using that `version`.
 
-A call that wins returns `"won":true` and the key's new version; after a release, the version and the holder are
-empty. A call that loses returns `"won":false` and the key's current version and holder, which are empty when the key
-no longer exists.
+A call that wins returns a response with `"won":true` and the key's new version; after a release, the version and the
+holder are empty. A call that loses returns a response with `"won":false` and the key's current version and holder,
+which are empty when the key no longer exists.
 
 A write with a `ttl`, a number of whole seconds, makes the key expire after that time, and a write without a `ttl`
 leaves the key with no expiry. A holder keeps its claim by renewing it with a new `ttl` before the claim expires.
@@ -162,10 +162,10 @@ A Function needs no role for these [actions](../../security-and-networking/secur
   never write it.
 - **Write the tables that it owns** (`kv::write`).
 
-Any other write needs a role. A RolesAssignment gives a principal, a Function or an Identity, a role on one table, on
-a store, or on the whole namespace. The smallest built-in role that allows writing is `KV Data Writer`, which allows
-reading and writing keys. Its scope names one table as `<store>/<table>`, or a store as `<store>`. The kv-claim
-example gives `pyclaim` write access to the table `claims` of the store `claims-kv`:
+Any other write needs a role. A RolesAssignment gives a Function a role on one table, on a store, or on the whole
+namespace. The smallest built-in role that allows writing is `KV Data Writer`, which allows reading and writing
+keys. Its scope names one table as `<store>/<table>`, or a store as `<store>`. The kv-claim example gives `pyclaim`
+write access to the table `claims` of the store `claims-kv`:
 
 ::include[../../../../../api/types/v1alpha1/examples/kv/writer-role.yaml#rolesassignment]
 
@@ -191,10 +191,11 @@ forbid(principal, action == Action::"kv::write", resource)
   unless { resource has writers && resource.writers.contains(principal) };
 ```
 
-A binding can name only a store that its own Function declares, by `name` or by `ref`. No role lets a principal read
-a table that it does not bind: `ctx.kv` takes only a binding's alias, and no other client reaches KV keys. A call that
-the policy denies fails with the HTTP status 403, and its message names the rule, such as
-`cedar: forbidden by policy builtin/kv-single-writer`.
+A binding can name only a store that its own Function declares, by `name` or by `ref`. No role lets a Function read a
+table that it does not bind: `ctx.kv` takes only a binding's alias, and no other client reaches KV keys. A call that
+the policy denies fails with the HTTP status 403, and its message names the rule. A write by a Function that neither
+owns the table nor holds a writer role fails with `cedar: forbidden by policy builtin/kv-single-writer`: give the
+Function a writer role, as above.
 
 ## Limits and quotas
 
@@ -214,6 +215,29 @@ By default, funcd keeps KV data in memory, and the data is lost when funcd stops
 `kvstore.engine: badger` in [funcd's configuration](../../running-funcd/spec.md#funcdconfigyaml). funcd then stores
 the data in the `kv` folder of its data directory, unless `kvstore.dataDir` names another folder.
 `storage.mode: memory` keeps KV data in memory even when `kvstore.engine` is `badger`.
+
+## Changes and deletion
+
+- funcd refuses a request to delete a KVStore while a binding names it or while it holds keys. To delete the store,
+  remove its bindings and delete its keys first.
+- Removing a table from a store deletes the table's keys. funcd refuses to remove a table from a KVStore while a
+  binding names the table, so remove those bindings first.
+- When a Function that declares a store by `name` is deleted, the
+  [`deletion`](../../workloads/function/spec.md#functionspeckv) setting of its entry decides: `retain`, the default,
+  keeps the store and its keys, and `delete` deletes them.
+- To use a store that stayed, declare it by `ref` in the new Function. A new Function of the same name that declares
+  the store by `name` waits in `Pending` with the reason `StoreNotOwned`, since the store still belongs to the deleted
+  Function.
+
+## CLI errors
+
+`funcdctl dev` stops before it serves the example when it meets one of these local setup errors:
+
+| Error | Action |
+| --- | --- |
+| `no node interpreter found for the node handler` | Put Node.js on the `PATH`, or set `FUNCD_NODE` to the path of `node`. |
+| `no python interpreter found for the python handler` | Put Python 3.12 or later on the `PATH` as `python3`, or set `FUNCD_PYTHON` to its path. |
+| `cannot load the runtime shim (needs Python ≥3.12; set FUNCD_PYTHON)` | Put Python 3.12 or later on the `PATH` as `python3`, or set `FUNCD_PYTHON` to its path. |
 
 ## Run it locally
 
