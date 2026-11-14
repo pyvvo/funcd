@@ -351,7 +351,6 @@ all its rules or none, so one rule at fault keeps the whole Route off. The condi
 | `Pending` | `Disabled` | The Route's [`enabled`](spec.md#routespec) is `false`, or the Route is one that a Function or a Site owns in a namespace whose `defaultExposure` is `explicit`, and its `enabled` is not set. It leaves its paths to the other Routes. |
 | `Pending` | `HostReserved`, `ReservedPath` or `HostRequired` | The Route's host or a rule's path breaks a rule of [Choose the host of a Route](#choose-the-host-of-a-route). |
 | `Pending` | `RouteConflict` | Another Route keeps one of the Route's paths, as [Choose which rule serves a request](#choose-which-rule-serves-a-request) explains. |
-| `Pending` | `EdgeStarting` | The edge holds a Route that a Function or a Site owns until it has loaded its table of Routes. Repeat the check. |
 | `Pending` | Another reason | Read the condition's reason and message in the same output. |
 
 `status.host` names the host that the Route claims. It is empty for a Route of the namespace `default` that sets no
