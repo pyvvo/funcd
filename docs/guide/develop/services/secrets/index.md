@@ -121,8 +121,9 @@ with no restart, unless a Secret that comes later in that Function's `spec.bindi
 
 A write changes keys only: it never creates or deletes the Secret itself. funcd checks a written key as it checks the
 keys of an applied Secret, and a written value as a read does: the key must be an environment variable name, and the
-value must be UTF-8 text without a NUL byte. A key that starts with `FUNCD_` is stored, but no read returns it. When
-other writes change the Secret during each of 5 attempts, nothing is written: make the call again.
+value must be UTF-8 text without a NUL byte. A write fails, and changes nothing, when the Secret does not exist or when
+a key or a value fails these checks. A key that starts with `FUNCD_` is stored, but no read returns it. When other
+writes change the Secret during each of 5 attempts, nothing is written: make the call again.
 
 When funcd refuses a write, the method throws an error in TypeScript, and raises a `RuntimeError` in Python, whose
 message names the method, the HTTP status and funcd's explanation, such as `context.secret.put failed: 403 …`. A
