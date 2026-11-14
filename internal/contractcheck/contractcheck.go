@@ -133,7 +133,14 @@ func contractOf(ctx context.Context, src Source, c *invoke.Call) (*Pair, *invoke
 	return pair, nil
 }
 
-// check answers ADR-0058's {error, details} with status when doc breaks v's contract.
+// ContractViolation is the body of a call that breaks its contract, 422 for the input and 500 for the result
+// (ADR-0058's {error, details}).
+type ContractViolation struct {
+	Error   string            `json:"error" doc:"What broke the contract: the event data or the handler's result."`
+	Details []contract.Detail `json:"details" doc:"Each value that breaks the contract, with where it is and why."`
+}
+
+// check answers a ContractViolation with status when doc breaks v's contract.
 func check(v *contract.Validator, doc []byte, status int, message string) *invoke.Refusal {
 	details, err := v.Validate(doc)
 	if err != nil {
@@ -142,9 +149,6 @@ func check(v *contract.Validator, doc []byte, status int, message string) *invok
 	if len(details) == 0 {
 		return nil
 	}
-	body, _ := json.Marshal(struct {
-		Error   string            `json:"error"`
-		Details []contract.Detail `json:"details"`
-	}{Error: message, Details: details})
+	body, _ := json.Marshal(ContractViolation{Error: message, Details: details})
 	return &invoke.Refusal{Status: status, Header: http.Header{"Content-Type": {"application/json"}}, Body: body}
 }

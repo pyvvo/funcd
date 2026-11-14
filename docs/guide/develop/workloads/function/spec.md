@@ -373,3 +373,60 @@ The per-invocation context the shim passes to the handler.
 | `log(*args: object) -> None` | Prints the arguments, separated by spaces, as one line on standard output, which funcd keeps as a log line at level INFO. |
 | `invoke(alias: str, payload: Any) -> Any` | Calls the function that the link named ``alias`` targets, and returns its result parsed from JSON, or ``None`` when it returns nothing. The target's ``event["data"]`` is ``payload``, except that a dict with a top-level ``"data"`` or ``"specversion"`` key is taken as the whole CloudEvent, so ``event["data"]`` is only its ``"data"`` value: send such a dict inside an envelope, as ``{"specversion": "1.0", "data": payload}``. The link's timeout, 30 seconds by default, bounds the call. Fails with the HTTP status 403 when the function declares no link named ``alias``, 409 when the target serves HTTP, 422 when ``payload`` does not match the target's contract, and the target's status when its handler fails, such as 500. |
 | `remaining_ms() -> int \| None` | The whole milliseconds left before the call's deadline, 0 once it has passed, or ``None`` when the call has none. |
+
+## HTTP API
+
+Each operation of these kinds, with its parameters, its body and its answer, and every status that it answers. A refusal's body is a problem+json document whose type the status table gives, unless the table names another body.
+
+| Authentication | How a call sends it |
+| --- | --- |
+| `bearer` | A credential of funcd's config, sent as Authorization: Bearer followed by its token. |
+| `apiKey` | A credential of funcd's config, sent in the X-Api-Key header. |
+
+### Call a Function
+
+A call needs a credential when the Function's spec.ingress.auth.mode, else its namespace's spec.edgeDefaults.auth.mode, is authenticated; else it needs none.
+
+| Method | Path | Operation ID | Authentication |
+| --- | --- | --- | --- |
+| `POST` | `/function/{name}` | `invokeFunction` | none, `bearer` or `apiKey` |
+
+It is served at `{gateway}`, funcd's gateway, which serves the calls of Functions. `{gateway}` is the address that server.dataPlaneAddr sets. Its default takes a free port, so set a fixed one, such as 127.0.0.1:8081.
+
+| Parameter | In | Type and limits | Description |
+| --- | --- | --- | --- |
+| `name` | path | string, required, a DNS-1123 label | The Function's name. |
+| `X-Funcd-Namespace` | header | string, a DNS-1123 label | The Function's namespace, when the Host header names none, as shop.localhost names shop; without either, default. |
+
+Body: any JSON value. Answer: any JSON value.
+
+| Status | Problem type | When | What to do |
+| --- | --- | --- | --- |
+| 200 |  | The handler's result. |  |
+| 400 | `urn:funcd:problem:invalid` | The body did not arrive within the gateway's read timeout. | Send the whole request at once, without pausing. |
+| 401 | `urn:funcd:problem:unauthorized` | The namespace's stance asks for a credential, and the call carries none, or one that funcd does not know; or server.auth.edge is off, so funcd cannot check one. | Send a credential of funcd's config as a bearer token in the Authorization header, or in X-Api-Key. |
+| 403 | `urn:funcd:problem:forbidden` | The credential's role or namespaces do not allow it to call Functions in the namespace. | Use a credential of the namespace, such as its developer's. |
+| 404 | `urn:funcd:problem:not-found` | The namespace holds no Function of that name that answers at its own address: it does not exist, its ingress is off, or its ingress names a host or a path of its own. | Check the name and the namespace, or call the Function at the address that its ingress names. |
+| 413 | `urn:funcd:problem:payload-too-large` | The body is larger than 1 MiB, the most that funcd reads to build the call's event. | Send a smaller body, or pass large data by reference, such as a Bucket key. |
+| 422 | [`ContractViolation`](#contractviolation) | The event data does not match the Function's input contract; nothing reached its worker. | Correct the values that details names. |
+| 429 | `urn:funcd:problem:resource-exhausted` | The call is over the rate that server.limits sets. | Retry after the seconds that the Retry-After header gives. |
+| 500 | [`ContractViolation`](#contractviolation) | The handler's result does not match the Function's output contract, so funcd sends this instead. | Correct the handler, or its output contract. |
+| 503 | `urn:funcd:problem:unavailable` | The gateway already serves as many calls at once as server.limits.maxInFlight allows. | Retry the call later. |
+| 503 | `urn:funcd:problem:unavailable` | The worker failed during the call, before its answer. funcd does not retry the call. | Retry it, if the handler may run twice. |
+| 503 | `urn:funcd:problem:unavailable` | funcd could not read the namespace's settings, so it does not know how to serve the call. | Retry the call later. |
+| 503 | `urn:funcd:problem:unavailable` | funcd cannot read the Function's contract. | Retry the call later. |
+| 504 | `urn:funcd:problem:deadline-exceeded` | The worker did not start its answer within the call's deadline: the Function's spec.timeout, else invoke.defaultTimeout. | Make the handler answer sooner, or raise its spec.timeout. |
+
+#### `ContractViolation`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `details` | array of [`ContractViolation.details[]`](#contractviolationdetails), required | Each value that breaks the contract, with where it is and why. |
+| `error` | string, required | What broke the contract: the event data or the handler's result. |
+
+#### `ContractViolation.details[]`
+
+| Field | Type and limits | Description |
+| --- | --- | --- |
+| `message` | string, required | Why the value breaks the contract, for people to read. |
+| `path` | string, required | The value's place, as an RFC 6901 JSON Pointer; empty is the whole document. |

@@ -126,7 +126,7 @@ func TestScenarioEveryKindInOneFeature(t *testing.T) {
 func TestEveryFieldIsDescribed(t *testing.T) {
 	doc := controlplane.SpecAPI().OpenAPI()
 	require.NoError(t, check(Undescribed(doc)))
-	_, fields, err := render(doc.Components.Schemas.Map(), Features)
+	_, fields, err := render(documentOf(doc), Features)
 	require.NoError(t, err)
 	for path, desc := range fields {
 		require.NotContains(t, desc, "ADR-", "%s: a description is written for users and names no ADR", path)
@@ -160,7 +160,7 @@ func undescribedOf(t *testing.T, kind reflect.Type) []string {
 		schemas[name] = &huma.Schema{Type: huma.TypeObject}
 	}
 	name := huma.DefaultSchemaNamer(kind, "")
-	_, fields, err := render(schemas, []Feature{{Path: "test/kind", Kinds: []v1.Kind{v1.Kind(name)}}})
+	_, fields, err := render(document{schemas: schemas}, []Feature{{Path: "test/kind", Kinds: []v1.Kind{v1.Kind(name)}}})
 	require.NoError(t, err)
 	return undescribed(fields)
 }

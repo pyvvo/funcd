@@ -23,6 +23,33 @@ func TestScenarioStaleGeneratedFileFailsCI(t *testing.T) {
 	require.Contains(t, out, page)
 }
 
+// scenario: undescribed-list-never-grows
+func TestScenarioUndescribedListNeverGrows(t *testing.T) {
+	const list = "internal/controlplane/kindref/testdata/undescribed-operations.txt"
+	dir := scratchRepo(t, map[string]string{list: "createApp\ngetApp\n"})
+	base := gitOut(t, dir, "rev-parse", "HEAD")
+
+	putFile(t, dir, list, "getApp\n")
+	out, err := runCheck(t, dir, "check-list-only-shrinks.sh", base, list)
+	require.NoError(t, err, "a list that shrinks passes: %s", out)
+
+	putFile(t, dir, list, "createApp\ngetApp\nlistApps\n")
+	out, err = runCheck(t, dir, "check-list-only-shrinks.sh", base, list)
+	require.Error(t, err)
+	require.Contains(t, out, "listApps")
+	require.NotContains(t, out, "getApp")
+
+	out, err = runCheck(t, dir, "check-list-only-shrinks.sh", strings.Repeat("0", 40), list)
+	require.Error(t, err, "a base it cannot read fails")
+	require.Contains(t, out, "cannot read the base commit")
+
+	fresh := scratchRepo(t, map[string]string{"README.md": "no list yet\n"})
+	before := gitOut(t, fresh, "rev-parse", "HEAD")
+	putFile(t, fresh, list, "createApp\n")
+	out, err = runCheck(t, fresh, "check-list-only-shrinks.sh", before, list)
+	require.NoError(t, err, "the pull request that creates the list passes: %s", out)
+}
+
 // scratchRepo returns a repository with one commit that holds files.
 func scratchRepo(t *testing.T, files map[string]string) string {
 	t.Helper()

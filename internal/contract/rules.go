@@ -20,8 +20,8 @@ import (
 
 // Detail is one entry of a 422 or 500 body's details (ADR-0301 Decision 3).
 type Detail struct {
-	Path    string `json:"path"`    // RFC 6901 JSON Pointer to the failing value; "" is the root
-	Message string `json:"message"` // for people; the wording is not part of the contract
+	Path    string `json:"path" doc:"The value's place, as an RFC 6901 JSON Pointer; empty is the whole document."`
+	Message string `json:"message" doc:"Why the value breaks the contract, for people to read."` // its wording is not part of the contract
 }
 
 // Option configures Compile.

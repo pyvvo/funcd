@@ -1,7 +1,8 @@
 # ADR-0329: Each API operation documents its answers, and its feature's Spec tab shows them
 
-- **Status**: Accepted (2026-11-14), on the decider's go, after two rounds of an independent judge (a subagent): round
-  1 asked for another draft (one Blocker, three Majors); round 2 found no Blocker or Major, and its seven Minors are folded
+- **Status**: Reviewing (2026-11-15, implemented); Accepted (2026-11-14), on the decider's go, after two rounds of an
+  independent judge (a subagent): round 1 asked for another draft (one Blocker, three Majors); round 2 found no Blocker
+  or Major, and its seven Minors are folded
 - **Date**: 2026-11-14
 - **Deciders**: green-0-rabbit
 - **Tags**: api, docs, codegen
