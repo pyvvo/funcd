@@ -149,6 +149,7 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req controller.Reque
 		wf.Status.Conditions.Set(v1.Condition{Type: condSchemaMismatch, Status: v1.ConditionFalse, Reason: "EdgesTypeChecked", ObservedGeneration: wf.Generation})
 		wf.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue, Reason: "EdgesTypeChecked", ObservedGeneration: wf.Generation})
 	}
+	wf.Status.ObservedGeneration = wf.Generation
 	if _, uerr := r.store.Update(ctx, wf); uerr != nil {
 		return controller.Result{}, uerr
 	}
@@ -180,10 +181,11 @@ func stale(wf *v1.Workflow) bool {
 // re-enqueue wf through its own watch.
 func (r *WorkflowReconciler) notReady(ctx context.Context, wf *v1.Workflow, reason, msg string) error {
 	if c, ok := wf.Status.Conditions.Get(condReady); ok && wf.Status.Phase == v1.PhasePending &&
-		c.Status == v1.ConditionFalse && c.Reason == reason && c.Message == msg && !stale(wf) {
+		c.Status == v1.ConditionFalse && c.Reason == reason && c.Message == msg && !stale(wf) &&
+		wf.Status.ObservedGeneration == wf.Generation {
 		return nil
 	}
-	wf.Status.Phase = v1.PhasePending
+	wf.Status.Phase, wf.Status.ObservedGeneration = v1.PhasePending, wf.Generation
 	wf.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: msg, ObservedGeneration: wf.Generation})
 	if _, err := r.store.Update(ctx, wf); err != nil && fault.KindOf(err) != fault.Conflict {
 		return err

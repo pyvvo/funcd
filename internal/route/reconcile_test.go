@@ -361,3 +361,48 @@ func TestScenario_route_loses_to_earlier_lake(t *testing.T) {
 	require.Equal(t, "http://lake-proxy", m.Upstream, "the lake serves the claim")
 	require.Equal(t, []router.Owner{cat.Owner}, notified, "the lake, held until the Route table loaded, is re-run")
 }
+
+// status.observedGeneration is the generation that funcd last acted on (api/types/v1alpha1/status.go), so the write that
+// stamps Ready sets it too, on either verdict and after an edit, and once on a Route that an earlier funcd stamped
+// without it.
+func TestStatusObservesGeneration(t *testing.T) {
+	for name, tc := range map[string]struct {
+		backend string
+		want    v1.ConditionStatus
+	}{
+		"ready":           {backend: "orders-fn", want: v1.ConditionTrue},
+		"backend missing": {backend: "ghost-fn", want: v1.ConditionFalse},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx, st, _, rec := setup(t)
+			seedFunction(t, st, "default", "orders-fn")
+			seedRoute(t, st, "default", "orders", "", "/orders", tc.backend)
+			reconciled := func(gen int64) *v1.Route {
+				t.Helper()
+				reconcile(t, rec, "default", "orders")
+				obj, err := st.Get(ctx, v1.KindRoute.GVK(), "default", "orders")
+				require.NoError(t, err)
+				rt := obj.(*v1.Route)
+				c, ok := rt.Status.Conditions.Get("Ready")
+				require.True(t, ok)
+				require.Equal(t, gen, rt.Generation)
+				require.Equal(t, tc.want, c.Status)
+				require.Equal(t, gen, c.ObservedGeneration)
+				require.Equal(t, gen, rt.Status.ObservedGeneration)
+				return rt
+			}
+			rt := reconciled(1)
+
+			rt.Spec.Rules[0].Path = "/v2/orders"
+			_, err := st.Update(ctx, rt)
+			require.NoError(t, err)
+			rt = reconciled(2)
+
+			rt.Status.ObservedGeneration = 0 // as an earlier funcd left it
+			_, err = st.Update(ctx, rt)
+			require.NoError(t, err)
+			rt = reconciled(2)
+			require.Equal(t, rt.ResourceVersion, reconciled(2).ResourceVersion, "a converged Route is not written again")
+		})
+	}
+}
