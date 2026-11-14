@@ -112,6 +112,14 @@ Every page shares the reader contract of `template.yaml`'s first section; the wo
     ran. The page carries none of it.
 12. **Stop** when the checks pass, the critic has no finding the page owns, the fresh reader finished the first
     example, and the fact ledger has no open line.
+13. **Before a guide-wide rewrite or rollout ships**, run a fresh-app gate on the frozen build: freeze the built docs
+    (llms.txt and the expanded Markdown) and the CLI and SDK versions, then give several small independent agents,
+    in bounded batches within the agent cap, only an application idea and llms.txt. Each builds a new app from
+    scratch, such as a to-do app with a frontend and a backend, runs it, and shows its user flow working; a
+    plausible manifest or a copied example does not pass. Sort each failure into a documentation gap, an environment
+    problem or the model's own assumption, retry a model-suspect failure with another model on the identical packet
+    (and name only a model that actually ran), fix the pages a gap shows, refreeze, and rerun the affected idea and a
+    fresh one. The PR reports the ideas, the build, the models, the apps and their runtime results.
 
 ## Rules
 
