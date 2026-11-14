@@ -150,7 +150,8 @@ handler as `event.data` (`event["data"]` in Python), unless the body is itself a
 [Call another Function](#call-another-function) explains. The handler's return value becomes the response. The
 [Spec](spec.md) tab describes every field of a Function and of its status, and the methods of the context.
 
-The contract names the runtime and holds the JSON Schema of the input and of the result. funcd refuses a call whose
+The contract file names the `runtime` and holds the JSON Schema of the input under `input` and of the result under
+`output`. funcd refuses a call whose
 data does not match the contract with the HTTP status 422, before the call reaches the handler, and answers with the
 HTTP status 500 when the handler's result does not match. The contract of log-burst, the `log-burst.contract.yaml`
 file of the example's folder
@@ -241,7 +242,9 @@ To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
 By default, a Function's handler gets the data of each call and returns a result. A Function whose
 [`protocol`](spec.md#functionspec) is `http` gets each HTTP request instead, with its method, its path, its headers
 and its body, and its handler answers it as a web server does. Such a Function runs on a Node.js runtime and never
-shares a worker with other Functions, and funcd checks no contract on its requests. Only a call through funcd's
+shares a worker with other Functions, and funcd checks no contract on its requests: its contract file names the
+`runtime` and `protocol: http`, as its manifest does, and has no `input` or `output`. The handler answers each request
+with the status and body that it chooses, such as 400 for a request that it refuses. Only a call through funcd's
 [edge](../../../platform/security-and-networking/networking.md), the part of funcd that receives the calls from
 outside funcd, and another Function's `ctx.fetch` reach it.
 
@@ -256,6 +259,8 @@ app, in [`src/app.ts`](https://github.com/pyvvo/funcd-typescript/blob/main/examp
 Hono framework and keeps its devices in the worker's memory:
 
 ::include[../../../../../_repos/funcd-typescript/examples/http-api/src/main.ts]
+
+A route of the app reaches the Function's context, such as its KV bindings, as `c.env.funcd`.
 
 The app gets the part of the path after the Function's address: a request for `/function/devices-api/devices`
 reaches the app as `/devices`, and the request's `X-Forwarded-Prefix` header holds the part that funcd removed,
