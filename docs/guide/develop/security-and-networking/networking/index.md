@@ -394,7 +394,7 @@ The funcd [Spec](../../running-funcd/spec.md#funcdconfigyaml) tab describes `con
 ## Errors
 
 A caller of a Route meets these HTTP statuses, each with a message in the body, besides the
-[errors of the Function](../../workloads/function/index.md#errors) that the Route calls:
+errors of the [Function](../../workloads/function/index.md) that the Route calls:
 
 - **401** for a rule whose mode is `authenticated`: `authentication required but no authenticator is configured` when
   `server.auth.edge` is `false`, its default, and in `funcdctl dev`; when it is `true`,
