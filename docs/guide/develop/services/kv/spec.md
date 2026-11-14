@@ -63,7 +63,7 @@ The key-value tables that the function binds, by alias: read, write and list the
 | `getEntry(binding: string, key: string): Promise<KVEntry \| null>` | The key's value with its version, or null when the key does not exist. |
 | `getText(binding: string, key: string): Promise<string \| null>` | The key's value decoded as UTF-8 text, or null when the key does not exist. |
 | `getJSON<T = unknown>(binding: string, key: string): Promise<T \| null>` | The key's value parsed as JSON, or null when the key does not exist. Write it with put(binding, key, JSON.stringify(value)). |
-| `put(binding: string, key: string, value: Uint8Array \| string, opts?: PutOptions): Promise<void>` | Writes the value. opts.ttl, in whole seconds, sets the key's expiry; a put without it leaves the key with none. Only the table's owner can write. |
+| `put(binding: string, key: string, value: Uint8Array \| string, opts?: PutOptions): Promise<void>` | Writes the value. opts.ttl, in whole seconds, sets the key's expiry; a put without it leaves the key with none. Only the table's owner and the writers that a RolesAssignment names can write. |
 | `putIfAbsent(binding: string, key: string, value: Uint8Array \| string, opts?: PutOptions): Promise<string \| null>` | Creates the key: its new version, or null when it exists (an expired key does not). |
 | `compareAndSet(binding: string, key: string, value: Uint8Array \| string, version: string, opts?: PutOptions): Promise<string \| null>` | Replaces the key while it is at version: its new version, or null when it is not. |
 | `del(binding: string, key: string): Promise<void>` | Deletes the key. |
@@ -80,7 +80,7 @@ The key-value tables that the function binds, by alias: read, write and list the
 | `get_entry(binding: str, key: str) -> KVEntry \| None` | The key's value with its version, or ``None`` when the key does not exist. |
 | `get_str(binding: str, key: str) -> str \| None` | The key's value decoded as UTF-8 text, or ``None`` when the key does not exist. |
 | `get_json(binding: str, key: str) -> object \| None` | The key's value parsed as JSON, or ``None`` when the key does not exist. Write it with ``put(binding, key, json.dumps(value))``. |
-| `put(binding: str, key: str, value: bytes \| str, *, ttl: int \| None = None) -> None` | Writes the value. ``ttl``, in whole seconds, sets the key's expiry; a put without it leaves the key with none. Only the table's owner can write. |
+| `put(binding: str, key: str, value: bytes \| str, *, ttl: int \| None = None) -> None` | Writes the value. ``ttl``, in whole seconds, sets the key's expiry; a put without it leaves the key with none. Only the table's owner and the writers that a RolesAssignment names can write. |
 | `put_if_absent(binding: str, key: str, value: bytes \| str, *, ttl: int \| None = None) -> str \| None` | Creates the key: its new version, or ``None`` when it exists (an expired key does not). |
 | `compare_and_set(binding: str, key: str, value: bytes \| str, version: str, *, ttl: int \| None = None) -> str \| None` | Replaces the key while it is at ``version``: its new version, or ``None`` when it is not. |
 | `delete(binding: str, key: str) -> None` | Deletes the key. |
