@@ -434,8 +434,9 @@ A request that funcd denies reads differently at each place that checks it:
   matched: `cedar: forbidden by policy builtin/<rule>` for a built-in rule, such as `builtin/kv-single-writer`, and
   `cedar: forbidden by policy <namespace>/<policy>#<n>` for the statement `n` of a Policy, counted from 0, such as
   `default/forbid-app-secret#0` on the [Secrets](../../services/secrets/index.md#access) page.
-- An outbound connection that nothing allows meets the refusals that the Networking page's
-  [Errors](../networking/index.md#errors) section lists.
+- An outbound connection that nothing allows meets the refusals that
+  [Allow a Function's outbound connections](../networking/index.md#allow-a-functions-outbound-connections) on the
+  Networking page describes.
 
 An API request that the caller's role does not allow fails with 403, such as
 `get Secret in "default" denied: viewer may not act on kind "Secret"` for a viewer that reads a Secret.
