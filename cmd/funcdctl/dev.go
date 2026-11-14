@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -315,14 +316,14 @@ func (a *cli) bootDev(ctx context.Context, op string, folder *devFolder, cfg dev
 	}
 
 	inst := &devInstance{runErr: make(chan error, 1), logger: logger, functions: names, workflows: folder.workflowNames(),
-		runtimes: &devRuntimes{byImage: map[string]v1.RuntimeName{}}}
+		images: &devImages{}}
 	// On any error after this point, run the cleanups we accumulated so a failed boot leaves nothing behind.
 	defer func() {
 		if err != nil {
 			inst.unwind(0)
 		}
 	}()
-	sess := &devSession{folder: folder, plan: plan, stateDirs: plan.watchSkips(processDir), runtimes: inst.runtimes,
+	sess := &devSession{folder: folder, plan: plan, stateDirs: plan.watchSkips(processDir), images: inst.images,
 		bundles: map[v1.ObjectName]string{}, seen: map[v1.ObjectName]string{}, file: cfg.file, secrets: cfg.secrets}
 	desired, berr := sess.prepare(op, inst, folder, secrets, logger)
 	if berr != nil {
@@ -415,28 +416,60 @@ func writerGrants(names []string) []v1.Object {
 	return out
 }
 
-// devRuntimes is dev's workflow.RuntimeResolver (ADR-0247 Decision 7): a step's image is the file:// copy of its
-// build, whose runtime comes from the build's contract file, since there is no OCI manifest to read it from.
-type devRuntimes struct {
+// devImages is dev's workflow.RuntimeResolver and workflow.ContractResolver (ADR-0247 Decision 7): an image names a
+// build dev delivered, a step's file:// copy or a Function's bundle entry, and its runtime and I/O contract come from
+// the build's contract file, since there is no OCI manifest to read them from. The Workflow reconciler checks a
+// Workflow against them as it checks one against pushed artifacts (ADR-0098).
+type devImages struct {
 	mu      sync.Mutex
-	byImage map[string]v1.RuntimeName
+	byImage map[string]devBuild
 }
 
-func (r *devRuntimes) set(image string, rt v1.RuntimeName) {
+func (r *devImages) set(image string, b devBuild) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.byImage[image] = rt
-}
-
-// Runtime returns the runtime of the build image is a copy of.
-func (r *devRuntimes) Runtime(_ context.Context, image string) (v1.RuntimeName, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	rt, ok := r.byImage[image]
-	if !ok {
-		return "", fault.NotFoundf("funcdctl dev", "%s is not a step build of this session", image)
+	if r.byImage == nil {
+		r.byImage = map[string]devBuild{}
 	}
-	return rt, nil
+	r.byImage[image] = b
+}
+
+// build returns the build image names.
+func (r *devImages) build(image string) (devBuild, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	b, ok := r.byImage[image]
+	if !ok {
+		return devBuild{}, fault.NotFoundf("funcdctl dev", "%s is not a build of this session", image)
+	}
+	return b, nil
+}
+
+// Runtime returns the runtime of the build image names.
+func (r *devImages) Runtime(_ context.Context, image string) (v1.RuntimeName, error) {
+	b, err := r.build(image)
+	if err != nil {
+		return "", err
+	}
+	return b.contract.Runtime, nil
+}
+
+// Contract returns the contract push would bake from the build image names (an http Function's has none), and no
+// digest, since the image path names the build.
+func (r *devImages) Contract(_ context.Context, image string) (v1.WorkflowContract, string, error) {
+	var c v1.WorkflowContract
+	b, err := r.build(image)
+	if err != nil {
+		return c, "", err
+	}
+	blob, err := b.contractBlob()
+	if err != nil || blob == nil {
+		return c, "", err
+	}
+	if err := json.Unmarshal(blob, &c); err != nil {
+		return c, "", fault.Wrapf(err, fault.Internal, "funcdctl dev", "decode the contract of %s", image)
+	}
+	return c, "", nil
 }
 
 // applyBoot applies desired in dependency order (applyOrdered) and, over a durable metastore, prunes what an earlier
@@ -498,7 +531,7 @@ type devSession struct {
 	folder    *devFolder
 	plan      persistPlan
 	stateDirs []string
-	runtimes  *devRuntimes
+	images    *devImages
 	bundles   map[v1.ObjectName]string // Function → its bundle directory
 	seen      map[v1.ObjectName]string // Function or step → the fingerprint last delivered
 	stepRoot  string                   // where the step copies live
@@ -565,7 +598,8 @@ func (s *devSession) prepare(op string, inst *devInstance, folder *devFolder, se
 }
 
 // deliverFunction delivers fn's build into its bundle when it changed and points the Function at it, with one replica
-// and the build's fingerprint as its imageDigest, so a rebuild rolls a new revision (ADR-0143).
+// and the build's fingerprint as its imageDigest, so a rebuild rolls a new revision (ADR-0143). A Workflow step that
+// refs the Function is checked against the build's contract file.
 func (s *devSession) deliverFunction(op string, inst *devInstance, folder *devFolder, fn *devFunction) error {
 	name := fn.fn.Name
 	dir, ok := s.bundles[name]
@@ -593,6 +627,7 @@ func (s *devSession) deliverFunction(op string, inst *devInstance, folder *devFo
 	fn.fn.Spec.ImageDigest = fp
 	fn.fn.Spec.Replicas = 1
 	fn.fn.Spec.Scaling.MinReplicas = 1
+	s.images.set(fn.fn.Spec.Image, fn.build)
 	return nil
 }
 
@@ -631,7 +666,7 @@ func (s *devSession) deliverStep(op string, inst *devInstance, folder *devFolder
 		s.stepDirs[st.name] = dir
 	}
 	st.workflow.Spec.Steps[st.index].Function.Image = image
-	s.runtimes.set(image, st.build.contract.Runtime)
+	s.images.set(image, st.build)
 	return nil
 }
 
@@ -889,7 +924,7 @@ type devInstance struct {
 	functions  []string // the Functions dev runs: each Function, then each Workflow image step's
 	workflows  []string // the folder's Workflows
 	lakes      []string // the Lakes the embedded duckdb+quack engine serves; nil if none
-	runtimes   *devRuntimes
+	images     *devImages
 	// artifactDir, when set, runs the parts from the OCI images dev pushed, pulled into it (App mode, ADR-0253).
 	artifactDir string
 	// app is the App dev deployed (App mode); the banner names it, its Routes and its Sites instead of the Functions.
@@ -1011,12 +1046,11 @@ func (a *cli) devPlatformOptions(ctx context.Context, op string, folder *devFold
 		funcd.InMemory(),
 		funcd.WithRuntime(rt),
 		funcd.WithMaterializer(function.NewFileMaterializer()),
-		// A step's file:// copy carries no OCI artifact, so the production F65 resolver can never inspect it. An untyped
-		// resolver makes the typed-edge gate a no-op and the Workflow reaches Ready (funcd still checks each step's
-		// call against its OWN contract, ADR-0303); the runtime comes from the build's contract file (ADR-0247
-		// Decision 7).
-		funcd.WithWorkflowContractResolver(devWorkflowContracts{}),
-		funcd.WithWorkflowRuntimeResolver(inst.runtimes),
+		// A step's file:// copy carries no OCI artifact for the production resolvers to inspect: its runtime and its
+		// contract come from its build's contract file (ADR-0247 Decision 7), so the F65 gate checks the Workflow's edges
+		// and when conditions as on a platform (ADR-0098).
+		funcd.WithWorkflowContractResolver(inst.images),
+		funcd.WithWorkflowRuntimeResolver(inst.images),
 	}
 	if inst.artifactDir != "" {
 		// An App's parts are OCI images in dev's layout, pulled and resolved as a deploy pulls them (ADR-0253).
@@ -1480,17 +1514,6 @@ func linkSources(op, srcDir, bundleDir string) error {
 		}
 	}
 	return nil
-}
-
-// devWorkflowContracts is the `funcdctl dev` workflow ContractResolver (ADR-0125): from-source steps have
-// no OCI metadata to inspect, so every step is reported untyped (an empty contract). The F65 typed-edge
-// gate then no-ops and the Workflow reaches Ready; the gateway still checks each step's call against its
-// delivered contract (ADR-0303) — the dev fidelity trade is only the cross-step typed-edge check.
-type devWorkflowContracts struct{}
-
-// Contract reports every from-source step as untyped (empty contract, no digest, no error).
-func (devWorkflowContracts) Contract(_ context.Context, _ string) (v1.WorkflowContract, string, error) {
-	return v1.WorkflowContract{}, "", nil
 }
 
 // orderFunctionsByLinks returns the Functions ordered so a link's target precedes the caller that binds

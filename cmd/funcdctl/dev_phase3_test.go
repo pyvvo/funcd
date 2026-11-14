@@ -11,10 +11,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/controller"
+	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/store/memory"
+	"github.com/pyvvo/funcd/internal/workflow"
 )
 
 // waitFuncsReady blocks until every named function reports Ready — reconcile → materialize → shim boot → readiness
@@ -120,6 +125,128 @@ func TestScenarioDevWorkflowSteps(t *testing.T) {
 		_, err := os.Stat(firstDir)
 		return os.IsNotExist(err)
 	}, 30*time.Second, 100*time.Millisecond, "the old copy goes once the step serves the new one")
+}
+
+// scoreContract types a step that takes {n} and returns {n, score}; sumContract types one that needs an integer rows.
+const (
+	scoreContract = `runtime: nodejs22
+input:
+  type: object
+  properties:
+    n:
+      type: number
+  required:
+    - n
+output:
+  type: object
+  properties:
+    n:
+      type: number
+    score:
+      type: number
+  required:
+    - n
+    - score
+`
+	sumContract = `runtime: nodejs22
+input:
+  type: object
+  properties:
+    rows:
+      type: integer
+  required:
+    - rows
+output:
+  type: object
+`
+)
+
+// Dev checks a Workflow against the contract files of its step builds, as a platform checks it against their artifacts
+// (ADR-0098 Decisions 1 and 2, ADR-0247 Decision 7): a when that reads a parent's output is Ready and branches the run, a
+// run whose input misses a field the first step requires is refused at apply, and an edge into an image step or into a
+// ref step's Function that needs a field its parent does not return is EdgeTypeMismatch.
+func TestDevChecksAWorkflowAgainstItsBuildContracts(t *testing.T) {
+	requireNode(t)
+	when := func(cond string) string { return "      when:\n        condition: \"" + cond + "\"\n" }
+	dir := devProject(t, merge(
+		map[string]string{
+			"orders.yaml": workflowDoc("orders", imageStep("score", "score", "")+
+				imageStep("hi", "hi", "score")+when("${{ step.score.output.score > 30 }}")+
+				imageStep("lo", "lo", "score")+when("${{ step.score.output.score <= 30 }}")),
+			"miswired.yaml": workflowDoc("miswired", imageStep("score", "score", "")+imageStep("sum", "sum", "score")),
+			"refwired.yaml": workflowDoc("refwired", imageStep("score", "score", "")+
+				"    - name: sum\n      function:\n        ref: sum\n      dependsOn:\n        - score\n"),
+			"score.mjs":           "export function handle(ctx, event) { return { n: event.data.n, score: event.data.n * 40 }; }\n",
+			"score.contract.yaml": scoreContract,
+			"sum.yaml":            fnDoc("sum", "nodejs22", ""),
+			"sum.mjs":             "export function handle() { return {}; }\n",
+			"sum.contract.yaml":   sumContract,
+		},
+		stepBuild("hi", "hi"), stepBuild("lo", "lo"),
+	))
+	inst := runDev(t, dir)
+	ctx := context.Background()
+	readyOf := func(c *assert.CollectT, name v1.ObjectName) v1.Condition {
+		obj, err := inst.client.Get(ctx, v1.KindWorkflow, "default", name)
+		if !assert.NoError(c, err) {
+			return v1.Condition{}
+		}
+		cond, _ := obj.(*v1.Workflow).Status.Conditions.Get("Ready")
+		return cond
+	}
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		cond := readyOf(c, "orders")
+		assert.Equal(c, v1.ConditionTrue, cond.Status, "orders is %s: %s", cond.Reason, cond.Message)
+	}, 20*time.Second, 50*time.Millisecond, "a when that reads its parent's output type-checks")
+	got := runWorkflow(t, inst, "orders", "run-01")
+	require.Equal(t, v1.StepSucceeded, runStepPhase(got, "hi"), "a score of 40 runs hi")
+	require.Equal(t, v1.StepSkipped, runStepPhase(got, "lo"), "and skips lo")
+	_, err := inst.client.Apply(ctx, &v1.WorkflowRun{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflowRun.GVK().APIVersion(), Kind: v1.KindWorkflowRun},
+		ObjectMeta: v1.ObjectMeta{Name: "run-02", Namespace: "default", ResourceGroup: "dev"},
+		Spec:       v1.WorkflowRunSpec{Workflow: "orders", Input: json.RawMessage(`{}`)},
+	})
+	require.ErrorContains(t, err, `(InputSchemaMismatch): "n" (want number) is missing`, "a run without the n score requires is refused")
+
+	for name, into := range map[v1.ObjectName]string{"miswired": "an image step", "refwired": "a ref step's Function"} {
+		require.EventuallyWithT(t, func(c *assert.CollectT) {
+			cond := readyOf(c, name)
+			assert.Equal(c, "EdgeTypeMismatch", cond.Reason, "%s is %s: %s", name, cond.Status, cond.Message)
+		}, 20*time.Second, 50*time.Millisecond, "an edge into %s that needs a field its parent does not return is refused", into)
+	}
+}
+
+// An image that no build of the session names is NotFound, as an image that is not pushed is on a platform: a Workflow
+// whose ref step names a Function of such an image gets no verdict and is requeued, instead of reaching Ready untyped
+// (ADR-0098 Decision 1).
+func TestDevImagesRequeueAnImageOfNoBuild(t *testing.T) {
+	ctx := context.Background()
+	s := store.New(memory.New())
+	t.Cleanup(func() { _ = s.Close() })
+	fn := &v1.Function{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindFunction.GVK().APIVersion(), Kind: v1.KindFunction},
+		ObjectMeta: v1.ObjectMeta{Name: "other", Namespace: devNamespace, ResourceGroup: devResourceGroup},
+	}
+	fn.Spec.Runtime, fn.Spec.Handler, fn.Spec.Image = "nodejs22", "handle", "oci-layout:///deps/registry:other"
+	wf := &v1.Workflow{
+		TypeMeta:   v1.TypeMeta{APIVersion: v1.KindWorkflow.GVK().APIVersion(), Kind: v1.KindWorkflow},
+		ObjectMeta: v1.ObjectMeta{Name: "w", Namespace: devNamespace, ResourceGroup: devResourceGroup},
+		Spec:       v1.WorkflowSpec{Steps: []v1.WorkflowStep{{Name: "a", Function: &v1.FunctionStep{Ref: "other"}}}},
+	}
+	for _, obj := range []v1.Object{fn, wf} {
+		_, err := s.Create(ctx, obj)
+		require.NoError(t, err)
+	}
+	images := &devImages{}
+	r := workflow.NewWorkflowReconciler(s, workflow.NewMaterializer(s, images, nil, 0), images, nil, 0)
+	res, err := r.Reconcile(ctx, controller.Request{GVK: v1.KindWorkflow.GVK(), Namespace: devNamespace, Name: "w"})
+	require.NoError(t, err)
+	require.Positive(t, res.RequeueAfter, "the Workflow waits for the image")
+	got, err := s.Get(ctx, v1.KindWorkflow.GVK(), devNamespace, "w")
+	require.NoError(t, err)
+	conds := got.(*v1.Workflow).Status.Conditions
+	_, verdict := conds.Get("Ready")
+	require.False(t, verdict, "an image of no build gives the Workflow no verdict: %+v", conds)
 }
 
 // TestIssue428_DevReloadsEditedWorkflow — ADR-0247 Decision 8: an edit to the workflow file re-applies the Workflow
