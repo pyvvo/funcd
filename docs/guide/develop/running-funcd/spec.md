@@ -195,7 +195,7 @@ funcd — the single-binary serverless platform daemon
 | Flag | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--config` | string |  | path to funcdconfig.yaml (else $FUNCD_CONFIG, ./funcdconfig.yaml, /etc/funcd/funcdconfig.yaml) |
-| `--memory` | bool | `false` | run fully in memory (ephemeral — no disk); default is file-backed/durable |
+| `--memory` | bool | `false` | keep the platform's data in memory, lost when funcd stops (storage.mode memory); working files such as sockets still go under storage.dataDir; default is file-backed/durable |
 
 ## `funcd bench`
 
