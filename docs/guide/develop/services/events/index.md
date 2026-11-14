@@ -7,55 +7,45 @@ description: Call a Function or start a Workflow run when something happens, on 
 
 An **EventSource** turns something that happens into **events**: a timer that fires on a schedule, a new object in a
 Bucket, or a row change in a SQL database. A **Sensor** subscribes to some of these events and runs an action for each
-one: it calls a Function, or it starts a run of a Workflow. The [Platform page](../../../platform/services/events.md)
-explains how funcd carries the events; this page shows how to declare them and act on them.
+one: it calls a Function, or it starts a run of a Workflow. See [how funcd carries events](../../../platform/services/events.md)
+for the concept.
 
-The first example calls a Function every 10 seconds. The EventSource `ticker` fires its event `tick` every 10 seconds,
-and the Sensor `burst-on-tick` calls the Function `log-burst` at each tick. `log-burst` is the first example of the
-[Function](../../workloads/function/index.md) page: at each call, it writes a burst of log lines. The steps below run
-`log-burst` on the local computer with the EventSource and the Sensor, then read what each tick leaves behind: a new
-**Invocation**, the record that funcd keeps each time a Sensor runs an action, with the phase `Ready`, and the lines
-that `log-burst` wrote during that call.
+The first example calls a Function every 10 seconds: the EventSource `ticker` fires its event `tick` every 10 seconds,
+and the Sensor `burst-on-tick` calls the Function `log-burst`, the first example of the
+[Function](../../workloads/function/index.md) page, which writes a burst of log lines at each call. Each tick leaves
+an **Invocation**, the record that funcd keeps each time a Sensor runs an action, and the lines that `log-burst` wrote.
 
-The examples of this page need these programs:
+Install the [dev build of funcdctl](../../../get-started/install.md) and Git, and put the runtime of the example's
+language on the `PATH`: Node.js for TypeScript, or Python 3.12 or later as `python3`.
 
-- funcdctl, installed as the [Install](../../../get-started/install.md) page shows. That page installs the dev build
-  of funcdctl, which includes the `funcdctl dev` command.
-- git, which copies the repository that holds the Function.
-- The runtime of the example's language on the `PATH`: Node.js for TypeScript, or Python 3.12 or later as `python3`.
-- curl, which calls a Function in [React to a new object in a Bucket](#react-to-a-new-object-in-a-bucket). The first
-  example does not use it.
+`funcdctl dev` starts a local platform and applies every resource file at the top level of one folder, here
+`examples/log-burst` of the language repository, which declares only the Function `log-burst`. A `funcdctl` command
+reaches the local control plane with `--server` and the token `funcd-dev-token`; the `--cport` flag sets its port, so
+the commands use the port 8081. `funcdctl dev` runs the
+[namespace](../../../platform/tenancy-and-limits/namespaces.md) `default` only, which the manifest names.
 
-`funcdctl dev` starts a local platform and applies to it every resource file at the top level of one folder, here
-`examples/log-burst` of the language repository: that folder declares only the Function `log-burst`, with its code,
-and this page supplies the EventSource and the Sensor in a manifest that the steps below save into the folder.
-`funcdctl dev` prints the address of its control plane, which a `funcdctl` command reaches with `--server` and the
-token `funcd-dev-token`. The `--cport` flag sets the port of the control plane, so the commands below use the
-port 8081. `funcdctl dev` runs the [namespace](../../../platform/tenancy-and-limits/namespaces.md) `default` only, which
-the manifests below name.
-
-This manifest holds the EventSource and the Sensor. The steps below save it as `ticker.yaml`:
+The steps save this manifest, which holds the EventSource and the Sensor, into the folder as `ticker.yaml`:
 
 ::include[../../../../../api/types/v1alpha1/examples/events/sensor.yaml#ticker]
 
-- The EventSource `ticker` has a [`timer`](spec.md#eventsourcespectimer) source with one event, `tick`. The event
-  fires once per [`interval`](spec.md#eventsourcespectimerevents), 10 seconds, counted from the moment funcd created
-  the EventSource, so the first tick comes 10 seconds after it.
+- The EventSource `ticker` has a [`timer`](spec.md#eventsourcespectimer) source with one event, `tick`, which fires
+  once per [`interval`](spec.md#eventsourcespectimerevents), counted from the moment funcd created the EventSource, so
+  the first tick comes 10 seconds after it.
 - The Sensor `burst-on-tick` subscribes to that event under [`on`](spec.md#sensorspecon). Each entry of `on` is a
   **dependency**: a name, here `tick`, for the event that `event` names in the EventSource that `source` names.
 - Under [`do`](spec.md#sensorspecdo), the action `burst` runs for each event of the dependency that its `on` names,
-  and calls the Function that `function` names. funcd starts a [worker](../../../platform/workloads/index.md#runtime)
-  of the Function, a process that runs its code, first when none runs.
+  and calls the Function that `function` names; an action names either a `function` or a `workflow`, never both.
+  funcd starts a [worker](../../../platform/workloads/index.md#runtime) of the Function, a process that runs its code,
+  first when none runs.
 
-At each call, the Function's handler receives the event as a **CloudEvent**, the envelope that the CloudEvents
-specification defines for an event. The CloudEvent's `type` is the event's name, `tick`, and its `data` holds the
-event's data: for a timer, an empty object, `{}`. funcd checks that data against the Function's
-[contract](../../workloads/function/index.md#usage), the JSON Schema of the input that the Function accepts, as it does
-for a call from outside funcd, and `log-burst` accepts it, since every field of its input is optional.
-[Read the event in the handler](#read-the-event-in-the-handler) describes the CloudEvent's other fields. The
-Invocation of each action is `Ready` once the Function has answered without an error, and `Failed` once every attempt
-has failed, as [Handle a delivery that fails](#handle-a-delivery-that-fails) explains. The [Spec](spec.md) tab
-describes every field of an EventSource and of a Sensor, and the Function's Spec tab describes the
+The Function receives each event as a **CloudEvent**, the envelope that the CloudEvents specification defines, whose
+`data` holds the event's data: for a timer, an empty object, `{}`. funcd checks that data against the Function's
+[contract](../../workloads/function/index.md#usage), the JSON Schema of the input that the Function accepts, as for a
+call from outside funcd; `log-burst` accepts it, since every field of its input is optional.
+[Read the event in the handler](#read-the-event-in-the-handler) describes the CloudEvent. An Invocation is `Ready`
+once the Function has answered without an error, and `Failed` once the delivery ends as a dead letter, as
+[Handle a delivery that fails](#handle-a-delivery-that-fails) explains. The [Spec](spec.md) tab describes every field
+of an EventSource and of a Sensor, and the Function's Spec tab describes the
 [Invocation](../../workloads/function/spec.md#invocation).
 
 ### TypeScript
@@ -226,7 +216,8 @@ has a single built-in step, `echo`, which ends with its input as its output; the
 
 ::include[../../../../../_repos/funcd-typescript/examples/s3-roundtrip/drop-sensor.yaml]
 
-From the root folder of the funcd-typescript repository, cloned as in the first example, start the example:
+From the root folder of the funcd-typescript repository, cloned as in the first example, start the example.
+The steps also need curl, which calls the Function `s3-roundtrip`:
 
 ```console
 $ funcdctl dev examples/s3-roundtrip --gport 8080 --cport 8081
@@ -350,7 +341,8 @@ attempts in all, 3 by default. When the last attempt fails, funcd keeps the deli
 CloudEvent, the Sensor, the action, the number of attempts and the reason, and records the action's Invocation as
 `Failed`, with the reason as its `error`. Nothing delivers a dead letter again by itself:
 [`funcdctl eventing dlq`](../../tools/funcdctl/spec.md#funcdctl-eventing-dlq) lists, describes, replays or discards the
-dead letters of a namespace.
+dead letters of a namespace. Its `list` and `describe` need the right to read the Sensors of the namespace, and
+`replay` and `discard` the right to delete them, since a dead letter is a failed action of a Sensor.
 
 To see one, run the first example again, in either language, with an action that fails. The first example and the
 one of [React to a new object in a Bucket](#react-to-a-new-object-in-a-bucket) end with Ctrl-C; stop the one that
@@ -447,28 +439,22 @@ stops. funcd keeps the Invocations with its other objects, and no sweep removes 
 ## Status
 
 `funcdctl get eventsource <name> -n <namespace> -o json` prints an EventSource's status, and
-`funcdctl get sensor <name> -n <namespace> -o json` a Sensor's. Each has a phase, `Ready` or `Pending`, and a `Ready`
-condition that explains it:
+`funcdctl get sensor <name> -n <namespace> -o json` a Sensor's, each with its phase and a `Ready` condition that
+explains it. With `funcdctl dev`, add the `--server` and `--token` flags of the first example. The outcome of each
+action shows in its Invocation, as the first example shows, and the dead letters in `funcdctl eventing dlq list`.
 
-- A timer EventSource is `Ready` once funcd has registered its events. A blob or sql EventSource is `Ready`, with the
-  reason `Watching`, while its Bucket or its SQLDatabase exists. Until then it is `Pending`, with the reason
-  `BucketNotFound` or `DatabaseNotFound`, and watches nothing; funcd checks again every
-  `eventing.bucketRecheckInterval`, 15 seconds by default.
-- A blob EventSource also has the condition `SeenListSaved` set to `False`, with the reason `SaveFailed`, while funcd
-  cannot save the keys that one of its events has fired for. Its message names each such event.
-- A Sensor is `Ready`, with the reason `Bound`, once it has subscribed to its events. It is `Pending`, with the reason
-  `InvalidInput`, when the input of an action is not valid, as
-  [Shape the input of an action](#shape-the-input-of-an-action) explains: it then subscribes to nothing. It is
-  `Pending`, with the reason `TargetServesHTTP`, when an action names a Function whose `protocol` is `http`, which only
-  funcd's [edge](../../../platform/security-and-networking/networking.md), the part of funcd that receives the calls
-  from outside funcd, calls: the Sensor stays subscribed, and each event of that action ends as a dead letter.
-
-For example, an action `burst` whose input sets its field `file` to `${{ event.nope }}`, a field that no event has,
-leaves the Sensor `Pending` with the message
-`action "burst" field "file": expr.check: unknown field "nope" under "event" (position 1)`.
-
-The outcome of each action shows in its Invocation, as the first example shows, and the dead letters in
-`funcdctl eventing dlq list`.
+| Phase or condition | Reason | Meaning |
+| --- | --- | --- |
+| Timer EventSource `Ready` | | funcd has registered its events. |
+| Blob or sql EventSource `Ready` | `Watching` | Its Bucket or its SQLDatabase exists, and funcd watches it. |
+| Blob or sql EventSource `Pending` | `BucketNotFound` or `DatabaseNotFound` | Its Bucket or its SQLDatabase does not exist, and it watches nothing. funcd checks again every `eventing.bucketRecheckInterval`, 15 seconds by default. |
+| Blob EventSource `SeenListSaved` condition `False` | `SaveFailed` | funcd cannot save the keys that one of its events has fired for. The message names each such event. |
+| Sensor `Ready` | `Bound` | The Sensor has subscribed to its events. |
+| Sensor `Pending` | `InvalidInput` | The input of an action is not valid, as [Shape the input of an action](#shape-the-input-of-an-action) explains, and the Sensor subscribes to nothing. The message names the action and the field, such as `action "burst" field "file": expr.check: unknown field "nope" under "event" (position 1)` for `${{ event.nope }}`. |
+| Sensor `Pending` | `TargetServesHTTP` | An action names a Function whose `protocol` is `http`, which only funcd's [edge](../../../platform/security-and-networking/networking.md), the part of funcd that receives the calls from outside funcd, calls. The Sensor stays subscribed, and each event of that action ends as a dead letter. |
+| Invocation `Ready` | | The action ended without an error. |
+| Invocation `Failed` | | The delivery ended as a dead letter: after its attempts, or at once when the retry queue refused it. The Invocation's `error` holds the reason, as the dead letter does. |
+| Any other reason | | The message of the `Ready` condition gives the cause. |
 
 ## Changes and deletion
 
@@ -491,30 +477,15 @@ deliveries, and stops its actions. Its dead letters stay, but a replay of one fa
 Under `funcdctl dev`, deleting the file that holds an EventSource or a Sensor deletes it: removing `ticker.yaml` from
 the folder of the first example stops the ticks.
 
-## Errors
+## CLI errors
 
-`funcdctl apply` refuses an EventSource or a Sensor that breaks a rule of its spec, with a message that names the
-field, such as:
+`funcdctl dev` stops before it serves the first example when it meets one of these local setup errors:
 
-- `spec.timer.events[0] ("tick") must set exactly one schedule (interval or cron), got 2` for an event that sets both
-  `interval` and `cron`;
-- `spec.timer.events[0].interval 50ms is out of bounds: want [100ms, 24h]`;
-- `spec.do[0] ("burst") must set exactly one action kind (workflow or function), got 2` for an action that names both
-  a Function and a Workflow.
-
-`funcdctl apply` also refuses an EventSource or a Sensor without `metadata.resourceGroup`, with the message
-`resourceGroup is required for kind "<Kind>"`, where `<Kind>` is `EventSource` or `Sensor`. `funcdctl dev` gives the
-resource group `dev` to an object of its folder that names none.
-
-A failed delivery leaves its reason in the dead letter and in the Invocation, such as
-`sensor: function default/log-burst returned status 422: …`, followed by the start of the Function's answer, as
-[Handle a delivery that fails](#handle-a-delivery-that-fails) shows, or one of the reasons of
-[Limits and quotas](#limits-and-quotas), [Data storage](#data-storage) and
-[Changes and deletion](#changes-and-deletion).
-
-`funcdctl eventing dlq list` and `describe` need the right to read the Sensors of the namespace, and `replay` and
-`discard` the right to delete them, since a dead letter is a failed action of a Sensor. A caller without that right
-gets the HTTP status 403.
+| Error | Action |
+| --- | --- |
+| `no node interpreter found for the node handler` | Put Node.js on the `PATH`, or set `FUNCD_NODE` to the path of `node`. |
+| `no python interpreter found for the python handler` | Put Python 3.12 or later on the `PATH` as `python3`, or set `FUNCD_PYTHON` to its path. |
+| `cannot load the runtime shim (needs Python ≥3.12; set FUNCD_PYTHON)` | Put Python 3.12 or later on the `PATH` as `python3`, or set `FUNCD_PYTHON` to its path. |
 
 ## Run it locally
 
@@ -526,6 +497,8 @@ gets the HTTP status 403.
   file.
 - It applies the EventSources and the Sensors of its folder after the Functions and the Workflows, deletes those whose
   file leaves the folder, and applies a saved change within about a second.
+- It gives the resource group `dev` to an object of its folder that names none. On a server, an EventSource or a
+  Sensor must set `metadata.resourceGroup`.
 - It keeps the event store in memory, even with `--persist`: the dead letters, and the keys that each blob source has
   fired for, are lost when `funcdctl dev` stops.
 
