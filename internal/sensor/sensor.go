@@ -192,7 +192,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 	// firing. A defect makes the Sensor NotReady (and drops any stale subscriptions) — fail at the gate.
 	if reason, msg, ok := r.staticCheck(se); !ok {
 		r.cancelAll(k)
-		se.Status.Phase = v1.PhasePending
+		se.Status.Phase, se.Status.ObservedGeneration = v1.PhasePending, se.Generation
 		se.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: capMsg(msg), ObservedGeneration: se.Generation})
 		return controller.Result{}, r.updateStatus(ctx, se)
 	}
@@ -226,8 +226,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		want.Status, want.Reason, want.Message, phase = v1.ConditionFalse, reason, capMsg(msg), v1.PhasePending
 	}
 	if cur, ok := se.Status.Conditions.Get(condReady); !ok || cur.Status != want.Status || cur.Reason != want.Reason ||
-		cur.Message != want.Message || cur.ObservedGeneration != want.ObservedGeneration || se.Status.Phase != phase {
-		se.Status.Phase = phase
+		cur.Message != want.Message || cur.ObservedGeneration != want.ObservedGeneration || se.Status.Phase != phase ||
+		se.Status.ObservedGeneration != se.Generation {
+		se.Status.Phase, se.Status.ObservedGeneration = phase, se.Generation
 		se.Status.Conditions.Set(want)
 		return controller.Result{}, r.updateStatus(ctx, se)
 	}

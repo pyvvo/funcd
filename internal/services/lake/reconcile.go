@@ -198,7 +198,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 			endpoint = purl
 		}
 		cs.Status.Endpoint = endpoint
-		cs.Status.Phase = v1.PhaseReady
+		cs.Status.Phase, cs.Status.ObservedGeneration = v1.PhaseReady, cs.Generation
 		cs.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue, ObservedGeneration: cs.Generation})
 		r.setCatalogSaved(ctx, cs, st.Report)
 		// ADR-0138: OPT-IN external edge exposure — program an edge entry to the PEP PROXY (proxyURL,
@@ -227,7 +227,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		if reason == "" {
 			reason = "EngineNotReady"
 		}
-		cs.Status.Phase = v1.PhasePending
+		cs.Status.Phase, cs.Status.ObservedGeneration = v1.PhasePending, cs.Generation
 		cs.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, ObservedGeneration: cs.Generation})
 	}
 	if _, uerr := r.store.Update(ctx, cs); uerr != nil {
@@ -352,7 +352,7 @@ func (r *Reconciler) holdNotReady(ctx context.Context, cs *v1.Lake, reason, mess
 func setHeld(cs *v1.Lake, reason, message string) {
 	cs.Status.Function = v1.ObjectName(engineName(string(cs.Name)))
 	cs.Status.Endpoint = ""
-	cs.Status.Phase = v1.PhasePending
+	cs.Status.Phase, cs.Status.ObservedGeneration = v1.PhasePending, cs.Generation
 	cs.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: message, ObservedGeneration: cs.Generation})
 }
 

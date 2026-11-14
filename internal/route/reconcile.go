@@ -204,11 +204,12 @@ func (r *Reconciler) firstBackendProblem(ctx context.Context, rt *v1.Route) (rea
 	return "", "", nil
 }
 
-// applyStatus sets rt's Ready condition, phase and host from res and reports whether they changed.
+// applyStatus sets rt's Ready condition, phase, host and observed generation from res and reports whether they changed.
 func applyStatus(rt *v1.Route, res evalResult) bool {
 	prev, had := rt.Status.Conditions.Get(condReady)
-	prevPhase, prevHost := rt.Status.Phase, rt.Status.Host
+	prevPhase, prevHost, prevObserved := rt.Status.Phase, rt.Status.Host, rt.Status.ObservedGeneration
 	rt.Status.Host = res.host
+	rt.Status.ObservedGeneration = rt.Generation
 	if res.ready {
 		rt.Status.Phase = v1.PhaseReady
 		rt.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue, Reason: "Programmed", ObservedGeneration: rt.Generation})
@@ -217,7 +218,8 @@ func applyStatus(rt *v1.Route, res evalResult) bool {
 		rt.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: res.reason, Message: res.message, ObservedGeneration: rt.Generation})
 	}
 	cur, _ := rt.Status.Conditions.Get(condReady)
-	return !had || cur != prev || rt.Status.Phase != prevPhase || rt.Status.Host != prevHost
+	return !had || cur != prev || rt.Status.Phase != prevPhase || rt.Status.Host != prevHost ||
+		rt.Status.ObservedGeneration != prevObserved
 }
 
 // The verdicts of a site rule (ADR-0242 Decision 4).

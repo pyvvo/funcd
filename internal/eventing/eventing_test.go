@@ -352,6 +352,75 @@ func TestTimerSourceReadyObservesGeneration(t *testing.T) {
 	require.Equal(t, es.ResourceVersion, getSource(t, st, "nightly").ResourceVersion, "a converged timer source is not rewritten")
 }
 
+// status.observedGeneration is the generation that funcd last acted on (api/types/v1alpha1/status.go), so the write that
+// stamps Ready sets it too, on each kind of source and verdict and after an edit, and once on a source that an earlier
+// funcd stamped without it.
+func TestStatusObservesGeneration(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	editBlob := func(es *v1.EventSource) { es.Spec.Blob.Events[0].Prefix = "in/" }
+	for name, tc := range map[string]struct {
+		create func(t *testing.T, st store.Store)
+		edit   func(es *v1.EventSource)
+		want   v1.ConditionStatus
+	}{
+		"timer": {
+			create: func(t *testing.T, st store.Store) { createTimerSource(t, st, "src", timerEvent("tick", time.Minute)) },
+			edit: func(es *v1.EventSource) {
+				es.Spec.Timer.Events = append(es.Spec.Timer.Events, timerEvent("hourly", time.Hour))
+			},
+			want: v1.ConditionTrue,
+		},
+		"blob watching": {
+			create: func(t *testing.T, st store.Store) {
+				createBucket(t, st, "raw")
+				createBlobSource(t, st, "src", "raw", v1.BlobEvent{Name: "arrived", Prefix: "drop/"})
+			},
+			edit: editBlob,
+			want: v1.ConditionTrue,
+		},
+		"blob bucket missing": {
+			create: func(t *testing.T, st store.Store) {
+				createBlobSource(t, st, "src", "raw", v1.BlobEvent{Name: "arrived", Prefix: "drop/"})
+			},
+			edit: editBlob,
+			want: v1.ConditionFalse,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			st := newStore()
+			tc.create(t, st)
+			src := newBlobSource(t, st)
+			reconciled := func(gen int64) *v1.EventSource {
+				t.Helper()
+				_, err := src.Reconcile(ctx, reqOf("src"))
+				require.NoError(t, err)
+				es := getSource(t, st, "src")
+				c, ok := es.Status.Conditions.Get("Ready")
+				require.True(t, ok)
+				require.Equal(t, gen, es.Generation)
+				require.Equal(t, tc.want, c.Status)
+				require.Equal(t, gen, c.ObservedGeneration)
+				require.Equal(t, gen, es.Status.ObservedGeneration)
+				return es
+			}
+			es := reconciled(1)
+
+			tc.edit(es)
+			_, err := st.Update(ctx, es)
+			require.NoError(t, err)
+			es = reconciled(2)
+
+			es.Status.ObservedGeneration = 0 // as an earlier funcd left it
+			_, err = st.Update(ctx, es)
+			require.NoError(t, err)
+			es = reconciled(2)
+			require.Equal(t, es.ResourceVersion, reconciled(2).ResourceVersion, "a converged source is not written again")
+		})
+	}
+}
+
 // scriptLister is a BucketLister scripted per Bucket, filtered by prefix.
 type scriptLister struct {
 	mu   sync.Mutex

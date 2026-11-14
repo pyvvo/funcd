@@ -175,8 +175,9 @@ func (s *Source) Reconcile(ctx context.Context, req controller.Request) (control
 	}
 	cur, hasReady := es.Status.Conditions.Get(condReady)
 	_, seenCond := es.Status.Conditions.Get(condSeenListSaved)
-	if es.Status.Phase != v1.PhaseReady || !hasReady || cur.Status != v1.ConditionTrue || cur.ObservedGeneration != es.Generation || seenCond {
-		es.Status.Phase = v1.PhaseReady
+	if es.Status.Phase != v1.PhaseReady || !hasReady || cur.Status != v1.ConditionTrue || cur.ObservedGeneration != es.Generation || seenCond ||
+		es.Status.ObservedGeneration != es.Generation {
+		es.Status.Phase, es.Status.ObservedGeneration = v1.PhaseReady, es.Generation
 		es.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue, ObservedGeneration: es.Generation})
 		es.Status.Conditions = slices.DeleteFunc(es.Status.Conditions, func(c v1.Condition) bool { return c.Type == condSeenListSaved })
 		if _, err := s.store.Update(ctx, es); err != nil {
@@ -212,10 +213,11 @@ func (s *Source) reconcileBlob(ctx context.Context, es *v1.EventSource) (control
 
 // setWatching records es Ready, reason Watching, unless its status already says so.
 func (s *Source) setWatching(ctx context.Context, es *v1.EventSource, op string) error {
-	if cur, ok := es.Status.Conditions.Get(condReady); ok && cur.Status == v1.ConditionTrue && cur.ObservedGeneration == es.Generation && es.Status.Phase == v1.PhaseReady {
+	if cur, ok := es.Status.Conditions.Get(condReady); ok && cur.Status == v1.ConditionTrue && cur.ObservedGeneration == es.Generation &&
+		es.Status.Phase == v1.PhaseReady && es.Status.ObservedGeneration == es.Generation {
 		return nil
 	}
-	es.Status.Phase = v1.PhaseReady
+	es.Status.Phase, es.Status.ObservedGeneration = v1.PhaseReady, es.Generation
 	es.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionTrue, Reason: "Watching", ObservedGeneration: es.Generation})
 	if _, err := s.store.Update(ctx, es); err != nil {
 		return fault.Wrapf(err, fault.KindOf(err), op, "set eventsource ready")
@@ -250,7 +252,7 @@ func normalizedBlob(es *v1.EventSource) *v1.BlobSource {
 
 // setNotReady marks a blob or SQL source NotReady with a reason/message (ADR-0119, mirroring Route BackendNotFound).
 func (s *Source) setNotReady(ctx context.Context, es *v1.EventSource, reason, msg string) error {
-	es.Status.Phase = v1.PhasePending
+	es.Status.Phase, es.Status.ObservedGeneration = v1.PhasePending, es.Generation
 	es.Status.Conditions.Set(v1.Condition{Type: condReady, Status: v1.ConditionFalse, Reason: reason, Message: msg, ObservedGeneration: es.Generation})
 	es.Status.Conditions = slices.DeleteFunc(es.Status.Conditions, func(c v1.Condition) bool { return c.Type == condSeenListSaved })
 	if _, err := s.store.Update(ctx, es); err != nil {

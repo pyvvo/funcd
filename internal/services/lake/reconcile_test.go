@@ -409,7 +409,8 @@ func TestReconcile_ready_reflects_provider_status(t *testing.T) {
 }
 
 // ADR-0199 Decision 5: every Ready the reconciler writes (engine Ready, engine not Ready, held for a missing
-// Bucket) records the generation it observed, also after a spec change.
+// Bucket) records the generation it observed, also after a spec change. The same write sets status.observedGeneration,
+// the generation that funcd last acted on (api/types/v1alpha1/status.go).
 func TestReadyObservesGeneration(t *testing.T) {
 	for name, tc := range map[string]struct {
 		bucket bool
@@ -438,6 +439,7 @@ func TestReadyObservesGeneration(t *testing.T) {
 			cond, ok := get().Status.Conditions.Get("Ready")
 			require.True(t, ok)
 			require.Equal(t, int64(1), cond.ObservedGeneration)
+			require.Equal(t, int64(1), get().Status.ObservedGeneration)
 
 			cs := get()
 			cs.Spec.Resources.Memory = "4Gi"
@@ -450,6 +452,10 @@ func TestReadyObservesGeneration(t *testing.T) {
 			require.True(t, ok)
 			require.Equal(t, tc.want, cond.Status)
 			require.Equal(t, cs.Generation, cond.ObservedGeneration)
+			require.Equal(t, cs.Generation, cs.Status.ObservedGeneration)
+
+			reconcileOnce(t, r, "lake")
+			require.Equal(t, cs.ResourceVersion, get().ResourceVersion, "a converged Lake is not written again")
 		})
 	}
 }

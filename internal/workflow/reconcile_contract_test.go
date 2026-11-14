@@ -591,3 +591,46 @@ func TestFanInWithUntypedParent(t *testing.T) {
 		})
 	}
 }
+
+// status.observedGeneration is the generation that funcd last acted on (api/types/v1alpha1/status.go), so the write that
+// stamps Ready sets it too, on the contract gate's verdict and on a refused materialization and after an edit, and once
+// on a Workflow that an earlier funcd stamped without it.
+func TestStatusObservesGeneration(t *testing.T) {
+	pushed := fakeContracts{byImage: map[string]v1.WorkflowContract{"oci:a": {}, "oci:b": {}}}
+	for name, tc := range map[string]struct {
+		kv   []v1.KVStoreEntry
+		want v1.ConditionStatus
+	}{
+		"type checked":       {want: v1.ConditionTrue},
+		"kv store not owned": {kv: []v1.KVStoreEntry{storeKV("shared", v1.DeletionRetain)}, want: v1.ConditionFalse},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := newStore(t)
+			apiKVStore(t, s, "shared")
+			storedWorkflow(t, s, "wf", []string{"a"}, tc.kv...)
+			reconciled := func(gen int64) *v1.Workflow {
+				t.Helper()
+				wf, _ := reconcileByName(t, s, pushed, "wf")
+				c, _ := wf.Status.Conditions.Get(condReady)
+				if wf.Generation != gen || c.Status != tc.want || c.ObservedGeneration != gen || wf.Status.ObservedGeneration != gen {
+					t.Fatalf("generation=%d Ready=%+v status.observedGeneration=%d, want generation %d, Ready %s and both at %d",
+						wf.Generation, c, wf.Status.ObservedGeneration, gen, tc.want, gen)
+				}
+				return wf
+			}
+			reconciled(1)
+
+			editWF(t, s, "wf", fnStep("b", "oci:b", "a"))
+			wf := reconciled(2)
+
+			wf.Status.ObservedGeneration = 0 // as an earlier funcd left it
+			if _, err := s.Update(context.Background(), wf); err != nil {
+				t.Fatalf("clear status.observedGeneration: %v", err)
+			}
+			wf = reconciled(2)
+			if rv := reconciled(2).ResourceVersion; rv != wf.ResourceVersion {
+				t.Fatalf("a converged Workflow is written again: resourceVersion %s, then %s", wf.ResourceVersion, rv)
+			}
+		})
+	}
+}
