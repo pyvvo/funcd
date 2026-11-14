@@ -44,7 +44,8 @@ that it returns:
 The Workflow `pipeline`, in `examples/workflow/parent.yaml`, starts each run at its first step, `feed`, which runs
 `ingest.mjs` as the Function `pipeline-feed` and receives the run's input. The step `sub` names `feed` under
 [`dependsOn`](spec.md#workflowspecsteps), so it runs once `feed` has succeeded and receives the output of `feed`; a
-step that sets no `dependsOn` follows the step listed before it. `sub` names `scorer` under
+step that sets no `dependsOn` follows the step listed before it, and each name under `dependsOn` is a step of the
+Workflow. `sub` names `scorer` under
 [`workflow.ref`](spec.md#workflowspecstepsworkflow), so it runs `scorer` as a **child run**, whose input is the step's
 input and whose output becomes the step's output:
 
@@ -412,11 +413,12 @@ and the field.
 | Workflow `Pending` | `WhenTypeError` | A `when` condition reads a field that a parent's output does not have, uses a field as a value of another type, or reads a built-in step's output. |
 | Workflow `Pending` | `WorkflowCycle` | The Workflow reaches itself through workflow steps. |
 | Workflow `Pending` | `StoreNotOwned`, or `KVStoreNotOwned` for a KV store | A store that the Workflow defines by name belongs to another object. |
-| Workflow `Pending` | Another reason | Such as while a step's image has not reached its registry: funcd checks it again within `workflow.artifactPollInterval`, 5 seconds by default. The message gives the cause. |
+| Workflow with no phase, or `Pending` | `ArtifactNotReady`, after an edit | A step's image has not reached its registry, or a child Workflow is missing or not Ready. On a first apply the Workflow has no phase and no `Ready` condition while it waits. A Workflow that was Ready and is then edited is `Pending` with this reason. funcd checks again every `workflow.artifactPollInterval`, 5 seconds by default, and the runs wait. |
+| Workflow `Pending` | Another reason, such as `MaterializeFailed` | The message gives the cause. |
 | Run `Pending` | `WorkflowNotFound` or `WorkflowNotReady` | The run waits to start, for its Workflow to exist or to become Ready. |
 | Run `Running` | none | Its steps run. |
 | Run `Paused` | none | The run is paused, as [Pause, resume or cancel a run](#pause-resume-or-cancel-a-run) explains. |
-| Run `Succeeded` | none: `Ready` is `True` | Every step ended, and the run succeeded. |
+| Run `Succeeded` | none | Every step ended, and the run succeeded. |
 | Run `Cancelled` | none | The run was cancelled. |
 | Run `Failed` | `StepFailed` | A step failed, as [Retry a step and handle a failed run](#retry-a-step-and-handle-a-failed-run) explains. |
 | Run `Failed` | `RunTimedOut` | The run passed the Workflow's `timeout`. |
@@ -424,9 +426,11 @@ and the field.
 | Run `Failed` | `PayloadLimitExceeded` | An input or an output is larger than `workflow.payloadLimit`. |
 | Run `Failed` | `SubworkflowDepthExceeded` | Child runs nest more than 8 levels deep. |
 | Run `Failed` | `RunRecordTooLarge` | The run's state is too large for the store of the run state. |
-| Run `ReplaySeeded` condition | `False`, such as `DigestDrift` | A replay cannot start from its source run, as [Replay a run from a step](#replay-a-run-from-a-step) explains. |
+| Run `Failed`, with the condition `ReplaySeeded` `False` | `DigestDrift` or `SeedInvalid` | A replay cannot start from its source run, as [Replay a run from a step](#replay-a-run-from-a-step) explains. |
 
-A run has no phase until funcd starts it or makes it wait. Each step of a run is `Pending`, `Running`, `Succeeded`,
+A run has no phase until funcd starts it or makes it wait. Its `Ready` condition is `False` while it waits and when it
+fails, with the reason of the table, and turns `True` when a run that waited starts; a run that never waited has none.
+Each step of a run is `Pending`, `Running`, `Succeeded`,
 `Failed`, `Skipped` or `Cancelled`; a step is `Skipped` when its condition is false, its join cannot be met, or a step
 that it depends on failed. `status.steps` of a WorkflowRun holds each step's attempts, start and end times, and, for a
 failed step, the first line of the error, cut at 512 bytes. A run's status holds no step's output: a result that must
