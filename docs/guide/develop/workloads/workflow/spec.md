@@ -34,7 +34,7 @@ This page lists the spec and status fields of Workflow and WorkflowRun, each wit
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `deletion` | string, one of `retain`, `delete` | retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them. |
+| `deletion` | string, one of `retain`, `delete` | retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry. |
 | `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
 | `prefixes` | array of [`Workflow.spec.buckets[].prefixes[]`](#workflowspecbucketsprefixes) | The Bucket's prefixes, each a key space with its own owner and cap. Prefix names are unique within the Bucket. A Function or a Lake that binds a prefix the Bucket does not list waits, with the reason BucketNotFound. |
 | `quota` | object, [`Workflow.spec.buckets[].quota`](#workflowspecbucketsquota) | Caps on the Bucket's total size and on each object. While the Bucket has a size cap, funcd refuses to sign a presigned PUT URL for it, with 403. |
@@ -90,7 +90,7 @@ This page lists the spec and status fields of Workflow and WorkflowRun, each wit
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `deletion` | string, one of `retain`, `delete` | retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them. |
+| `deletion` | string, one of `retain`, `delete` | retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry. |
 | `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
 | `quota` | object, [`Workflow.spec.kv[].quota`](#workflowspeckvquota) | Caps on the store's total size, on each value and on each key. |
 | `ref` | string, a DNS-1123 label | The name of an existing object of this kind in the namespace of the resource that declares it. A ref entry sets no other field. |
@@ -146,7 +146,7 @@ This page lists the spec and status fields of Workflow and WorkflowRun, each wit
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `deletion` | string, one of `retain`, `delete` | retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them. |
+| `deletion` | string, one of `retain`, `delete` | retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry. |
 | `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
 | `prefixes` | array of [`Workflow.spec.buckets[].prefixes[]`](#workflowspecbucketsprefixes) | The Bucket's prefixes, each a key space with its own owner and cap. Prefix names are unique within the Bucket. A Function or a Lake that binds a prefix the Bucket does not list waits, with the reason BucketNotFound. |
 | `quota` | object, [`Workflow.spec.buckets[].quota`](#workflowspecbucketsquota) | Caps on the Bucket's total size and on each object. While the Bucket has a size cap, funcd refuses to sign a presigned PUT URL for it, with 403. |
@@ -217,7 +217,7 @@ This page lists the spec and status fields of Workflow and WorkflowRun, each wit
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `deletion` | string, one of `retain`, `delete` | retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them. |
+| `deletion` | string, one of `retain`, `delete` | retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry. |
 | `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
 | `owner` | string, a DNS-1123 label | The one Function that may write the database, in its namespace, besides the writers that a RolesAssignment names. In a database that a Function declares by name, it defaults to that Function, and in a Workflow's sql it names a step or a lake that the Workflow declares. With no owner, only those writers can write it. |
 | `quota` | object, [`Workflow.spec.buckets[].prefixes[].quota`](#workflowspecbucketsprefixesquota) | A cap on the database's total size, the bytes of its pages in use. Once it is reached, an execute gets 507 unless each of its statements is a DELETE or a DROP. A change keeps the engine running. |

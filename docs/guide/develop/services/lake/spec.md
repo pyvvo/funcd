@@ -46,7 +46,7 @@ This page lists the spec and status fields of Lake, each with its type, its limi
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `deletion` | string, one of `retain`, `delete` | retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them. |
+| `deletion` | string, one of `retain`, `delete` | retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry. |
 | `name` | string, a DNS-1123 label | The object's name. It takes the namespace and resource group of the resource that declares it. |
 | `prefixes` | array of [`Lake.spec.buckets[].prefixes[]`](#lakespecbucketsprefixes) | The Bucket's prefixes, each a key space with its own owner and cap. Prefix names are unique within the Bucket. A Function or a Lake that binds a prefix the Bucket does not list waits, with the reason BucketNotFound. |
 | `quota` | object, [`Lake.spec.buckets[].quota`](#lakespecbucketsquota) | Caps on the Bucket's total size and on each object. While the Bucket has a size cap, funcd refuses to sign a presigned PUT URL for it, with 403. |

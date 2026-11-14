@@ -412,7 +412,7 @@ components:
             additionalProperties: false
             properties:
               deletion:
-                description: retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them.
+                description: retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry.
                 enum:
                   - retain
                   - delete
@@ -513,7 +513,7 @@ components:
                   additionalProperties: false
                   properties:
                     deletion:
-                      description: retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them.
+                      description: retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry.
                       enum:
                         - retain
                         - delete
@@ -590,7 +590,7 @@ components:
                   additionalProperties: false
                   properties:
                     deletion:
-                      description: retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them.
+                      description: retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry.
                       enum:
                         - retain
                         - delete
@@ -635,7 +635,7 @@ components:
                         additionalProperties: false
                         properties:
                           deletion:
-                            description: retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them.
+                            description: retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry.
                             enum:
                               - retain
                               - delete
@@ -819,7 +819,7 @@ components:
                   additionalProperties: false
                   properties:
                     deletion:
-                      description: retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them.
+                      description: retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry.
                       enum:
                         - retain
                         - delete
@@ -877,7 +877,7 @@ components:
             additionalProperties: false
             properties:
               deletion:
-                description: retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them.
+                description: retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry.
                 enum:
                   - retain
                   - delete
@@ -922,7 +922,7 @@ components:
                   additionalProperties: false
                   properties:
                     deletion:
-                      description: retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them.
+                      description: retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry.
                       enum:
                         - retain
                         - delete
@@ -1156,7 +1156,7 @@ components:
                   additionalProperties: false
                   properties:
                     deletion:
-                      description: retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them.
+                      description: retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry.
                       enum:
                         - retain
                         - delete
@@ -1224,7 +1224,7 @@ components:
             additionalProperties: false
             properties:
               deletion:
-                description: retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them.
+                description: retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry.
                 enum:
                   - retain
                   - delete
@@ -1271,7 +1271,7 @@ components:
                   additionalProperties: false
                   properties:
                     deletion:
-                      description: retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them.
+                      description: retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry.
                       enum:
                         - retain
                         - delete
@@ -1337,7 +1337,7 @@ components:
                   additionalProperties: false
                   properties:
                     deletion:
-                      description: retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them.
+                      description: retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry.
                       enum:
                         - retain
                         - delete
@@ -1382,7 +1382,7 @@ components:
                         additionalProperties: false
                         properties:
                           deletion:
-                            description: retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them.
+                            description: retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry.
                             enum:
                               - retain
                               - delete
@@ -1547,7 +1547,7 @@ components:
                   additionalProperties: false
                   properties:
                     deletion:
-                      description: retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them.
+                      description: retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry.
                       enum:
                         - retain
                         - delete
@@ -2777,7 +2777,7 @@ components:
             additionalProperties: false
             properties:
               deletion:
-                description: retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them.
+                description: retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry.
                 enum:
                   - retain
                   - delete
@@ -2854,7 +2854,7 @@ components:
             additionalProperties: false
             properties:
               deletion:
-                description: retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them.
+                description: retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry.
                 enum:
                   - retain
                   - delete
@@ -2899,7 +2899,7 @@ components:
                   additionalProperties: false
                   properties:
                     deletion:
-                      description: retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them.
+                      description: retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry.
                       enum:
                         - retain
                         - delete
@@ -3071,7 +3071,7 @@ components:
             additionalProperties: false
             properties:
               deletion:
-                description: retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them.
+                description: retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry.
                 enum:
                   - retain
                   - delete
@@ -3631,7 +3631,7 @@ components:
             additionalProperties: false
             properties:
               deletion:
-                description: retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them.
+                description: retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry.
                 enum:
                   - retain
                   - delete
@@ -5338,7 +5338,7 @@ components:
             additionalProperties: false
             properties:
               deletion:
-                description: retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them.
+                description: retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry.
                 enum:
                   - retain
                   - delete
@@ -5851,7 +5851,7 @@ components:
             additionalProperties: false
             properties:
               deletion:
-                description: retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them.
+                description: retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry.
                 enum:
                   - retain
                   - delete
@@ -5917,7 +5917,7 @@ components:
             additionalProperties: false
             properties:
               deletion:
-                description: retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them.
+                description: retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry.
                 enum:
                   - retain
                   - delete
@@ -5962,7 +5962,7 @@ components:
                   additionalProperties: false
                   properties:
                     deletion:
-                      description: retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them.
+                      description: retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry.
                       enum:
                         - retain
                         - delete
@@ -6115,7 +6115,7 @@ components:
             additionalProperties: false
             properties:
               deletion:
-                description: retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them.
+                description: retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry.
                 enum:
                   - retain
                   - delete
