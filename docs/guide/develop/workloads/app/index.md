@@ -19,9 +19,9 @@ values of the files that `-f` names:
 Install the [dev build of funcdctl](../../../get-started/install.md), Git and curl, and put Node.js on the `PATH`.
 
 `--build` names a folder in which `funcdctl dev` looks up each image's build by the image's key, here the prebuilt
-`functions/ts/files.mjs` for the image `files`; [Run it locally](#run-it-locally) says where it puts the builds. `--gport` sets the port of the Routes' addresses,
-and `--cport` the port of the control plane, which a `funcdctl` command reaches with `--server` and the token
-`funcd-dev-token`.
+`functions/ts/files.mjs` for the image `files`; [Run it locally](#run-it-locally) says where it puts the builds.
+`--gport` sets the port of the Routes' addresses, and `--cport` the port of the control plane, which a `funcdctl`
+command reaches with `--server` and the token `funcd-dev-token`.
 
 Clone the repository and start the example from its root folder:
 
@@ -227,9 +227,10 @@ such as `collect.mjs` for the image `collect`; the Python Functions in `apps/tod
 Site's files, as `web=apps/todo/web`.
 
 The App declares the Secret `todo-api-keys`, with the key `TODO_API_TOKEN`, which `todo-api` reads to check the token
-of a call that adds a todo. `funcdctl dev` creates each Secret that the App declares, with the value of each key from
-the environment variable of the key's name, so the command sets `TODO_API_TOKEN`; [Run it locally](#run-it-locally)
-gives the other sources of a key.
+of a call that adds a todo. A part can bind only a Secret that the App declares under `spec.secrets`.
+`funcdctl dev` creates each Secret that the App declares, with the value of each key from the environment variable of
+the key's name, so the command sets `TODO_API_TOKEN`; [Run it locally](#run-it-locally) gives the other sources of a
+key.
 
 From the root folder of the funcd-functions repository, start the todo example with its hooks:
 
@@ -285,13 +286,16 @@ page's [Spec](spec.md) tab gives the range of each field.
 Read the App's phase and its `Ready` condition with `funcdctl get app <name> -n <namespace> -o json`, as the first
 example does. When `Ready` is `False`, its message names the part, such as
 `KVStore/todo-store: exists and is not owned by App/todo`. Each phase row gives a reason that `Ready` has in that phase.
+When funcd stops writing the parts, `Ready` has the stop's own reason, one of the `Ready` condition rows, in any
+phase: `Deploying` while the latest revision is not current, such as at a first install or a reinstall that stops at
+a kept store, `Degraded` once it is current, and `Failed` when it has failed.
 
 | Phase or condition | Reason | Meaning |
 | --- | --- | --- |
 | `Deploying` | `Progressing` | The latest revision is not current yet: it waits for the Apps that it requires, calls its pre-hooks or writes its parts. |
 | `Ready` | none: `Ready` is `True` | The latest revision is current, and every part is ready. |
 | `Ready` | `NotStarted` (`Ready` is `Unknown`) | The latest revision is current, and a Function part has not run since it changed. |
-| `Degraded` | `ChildNotReady` | The latest revision is current, but a part is pending again; the message holds the part's own reason. funcd also reports `Degraded` when it stopped writing the parts, with the stop's reason, such as `SecretNotFound`. |
+| `Degraded` | `ChildNotReady` | The latest revision is current, but a part is pending again; the message holds the part's own reason. |
 | `Degraded` | `HookFailed` | A post-hook call failed. The message names the hook's Function and the Invocation that records the call. Run `funcdctl app retry`. |
 | `Failed` | `HookFailed` | A pre-hook call failed the latest revision. Run `funcdctl app retry` once the hook can succeed. |
 | `Failed` | `ChildNotReady` | A part was still pending when `app.upgradeTimeout` ran out. The revision stays `Failed`, and `Ready` stays `False`, even once its parts are ready: apply a new spec, such as a fix or a rollback. |
@@ -444,7 +448,7 @@ nothing. `funcdctl dev` also stops at its start, before it serves the App, on it
 | `no python interpreter found for the python handler` | Put Python 3.12 or later on the `PATH` as `python3`, or set `FUNCD_PYTHON` to its path. |
 | `cannot load the runtime shim (needs Python ≥3.12; set FUNCD_PYTHON)` | Put Python 3.12 or later on the `PATH` as `python3`, or set `FUNCD_PYTHON` to its path. |
 | `App todo declares Secret todo-api-keys with key TODO_API_TOKEN; set it in the shell or under dev.env in funcdctl.config.yaml` | Set the key in the environment, or in a source that [Run it locally](#run-it-locally) lists. |
-| A message that names an image that no `--build` holds | Name the image's build with `--build`, such as `--build api=<path>`. |
+| `no build of images.<key> in the --build folders <dirs>; name it with --build <key>=<path>` | Write the build in one of those folders, or name it with `--build <key>=<path>`. When `funcdctl.config.yaml` names `watch` commands, `funcdctl dev` waits for the build instead of stopping. |
 | `App todo requires App todo-shared ^1.0.0: funcdctl dev does not run an App that requires another yet` | Run the App on a funcd server with `funcdctl app deploy`. |
 
 ## Run it locally
@@ -453,7 +457,8 @@ nothing. `funcdctl dev` also stops at its start, before it serves the App, on it
 differences:
 
 - It takes each image from a local build that `--build` names, and pushes it into an OCI image layout, a folder that
-  holds images as a registry does, in its state folder, which replaces the template's `registry`. It neither reads nor writes `app.lock`.
+  holds images as a registry does, in its state folder, which replaces the template's `registry`. It neither reads
+  nor writes `app.lock`.
 - It changes nothing else in the App but its hooks, which it drops unless `--hooks` is set. Unlike the Functions of a
   folder of resource files, which `funcdctl dev` keeps running, an App's Function parts keep their own `replicas`, so a
   part that sets none runs no worker until its first call. A save of a build that cannot load therefore still prints
