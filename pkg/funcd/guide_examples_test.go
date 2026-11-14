@@ -28,8 +28,8 @@ import (
 // and every ::include of a page names a file, and a region, that exist.
 
 // scenario: examples-apply
+// Not parallel: each manifest starts a platform, and the package's timing-sensitive tests must not run beside them.
 func TestScenarioGuideExamplesApply(t *testing.T) {
-	t.Parallel()
 	files := guideManifests(t)
 	examples, err := filepath.Glob(filepath.Join("..", "..", "api", "types", "v1alpha1", "examples", "*", "*.yaml"))
 	require.NoError(t, err)
