@@ -5,24 +5,26 @@
 first:
   heading: Usage
   holds: >-
-    What the feature is for, in two or three sentences that link its Platform page, then the first usable example:
-    the reader's goal in one sentence; the prerequisites, or links to them; the working directory; every input; the
+    State the purpose and task briefly, then reach the first runnable example. Link the Platform page rather
+    than repeating its concepts. Give the prerequisites, the working directory, every input, the
     commands; the expected result; and a step that checks it. A setting that the example needs for access or
     persistence is stated before the step it affects. The example runs the way its type needs: funcdctl dev for a
     service or a workload, a resource manifest such as a namespace or a grant applied to a running platform, the
     tool itself for a tool, and funcd --config for the server's configuration. Each language that has a lane example
     gets its own "### TypeScript" or "### Python" section after the text both languages share, and the two sections
-    perform the same task.
+    perform the same task. Keep only explanation needed for the task; link reference detail. Brevity must preserve
+    complete English, required setup, access, waits, verification, recovery and data-loss behavior.
   example:
     service: a handler that uses the service, its manifest, the command that runs it, a call, and the answer that shows the result
-    workload: the smallest manifest of the kind, the command that applies it, a call or a watch, and the status that shows it works
+    workload: a small workload, the command that starts or applies it, a call or a watch, and its expected status; include or link its manifest where the task needs it
     tool: one task done with the tool, its command and its output; the installation is linked, not repeated
     cross-cutting: the actions that produce the feature's result, such as a grant applied and the call that it allows
 free:
   holds: >-
     One task per section, under a heading that names the task, such as "Renew a claim", between the first section and
     the optional ones: prose and included regions, each language's code under its own heading after the text both
-    share. A task that a reader meets when calls race, such as a conditional write, gets its own section.
+    share. A task that a reader meets when calls race, such as a conditional write, gets its own section. Remove
+    explanations that repeat another section or merely describe the code.
 optional:
   - heading: Access
     holds: >-
@@ -39,11 +41,21 @@ optional:
       Only for a feature that stores data on the server: where it is stored, the default, whether it survives a
       restart, and the settings that change or override that.
   - heading: Status
-    holds: The conditions a reader checks, and how.
+    holds: >-
+      A compact table of phases or conditions, reasons and meanings, with the command that checks them. Keep
+      exceptions that change the next action, such as Ready without an exposed address, and necessary recovery steps.
   - heading: Changes and deletion
     holds: What an update or a delete does to running work and data.
+  - heading: CLI errors
+    holds: >-
+      Local command or setup failures, in a table with the message or cause and the action to take. HTTP response
+      errors and server-validation errors belong in the separate API Reference, even when a CLI prints them.
+      Omit this section when no relevant local CLI failure exists.
   - heading: Errors
-    holds: The refusals and failures a reader meets, and what they mean.
+    legacy: true
+    holds: >-
+      An unchanged page may retain this heading until it is rewritten. New and rewritten pages use CLI errors
+      for local failures and move HTTP/API catalogues to the reference.
   - heading: Run it locally
     holds: >-
       What is specific to local development: its prerequisites and behavior, how it differs from a deployed service,

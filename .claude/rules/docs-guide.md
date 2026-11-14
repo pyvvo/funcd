@@ -16,6 +16,16 @@ paths:
   definitions into one long sentence: keep it to the purpose, and move storage and access internals to the section
   that needs them. A setting that the next step needs for access, persistence or cost is stated before that step, and
   a step links the exact Spec field or method that it uses.
+- Keep a Develop guide short: reach a runnable example after a brief purpose and its prerequisites. Keep a
+  sentence only when it helps perform the task, choose a setting, check the result or recover. Link concepts,
+  field descriptions and other reference detail; remove repeated facts and commentary that restates code.
+  Shortening must keep complete English, required inputs, access, waits, expected results, retry steps and
+  relevant data-loss behavior.
+- In Develop Usage pages, keep Status in a table of phases or conditions, reasons and meanings. Keep local CLI
+  errors in a table with the message or cause and the action to take. Comprehensive operation, request/response
+  and error catalogues belong to the separate API Reference, generated from authoritative schemas and operation
+  metadata. Keep the minimal payloads, response examples and recovery steps needed by the Usage task. HTTP and
+  server-validation failures remain API errors when a CLI prints them.
 - State a default together with its exceptions, and keep both the same wherever the page mentions them.
 - Give every "only", "exactly one" or "never" its scope, such as the same key or the same version.
 - Label an excerpt as an excerpt, explain each name it uses but does not define, and link the complete file beside

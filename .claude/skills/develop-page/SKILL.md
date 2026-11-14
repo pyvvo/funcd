@@ -6,14 +6,16 @@ description: Write or update one page of the Developer chapter of funcd's user g
 # develop-page
 
 One feature page of the Developer chapter, written to one shape so a person or an agent finds the same things in the
-same place. KV (`docs/guide/develop/services/kv/index.md`) is the reference page: read it before writing another.
+same place. Site (`docs/guide/develop/workloads/site/index.md`) is the approved concise example: read it before
+writing another. Its length is an example, not a word limit. For the roles and Cedar policy of a service, also
+read the Access section of KV (`docs/guide/develop/services/kv/index.md`).
 
 ## What is generated, what is written
 
 | Part | Source | Written by |
 | --- | --- | --- |
 | Spec tab (`spec.md`): each kind's tested example, its spec and status fields, the Handler API in each language | the Go types' `doc` tags, `api/types/v1alpha1/examples/`, the shims' `api.json` | `just generate` (kindref); never edit it |
-| Usage tab (`index.md`): the sections of `template.yaml`, prose and `::include` lines | this skill | this skill |
+| Usage tab (`index.md`): short tasks, tested examples, Status and local CLI error tables | this skill and `template.yaml` | this skill |
 | Code on a page | a tested file: a manifest under `api/types/v1alpha1/examples/<feature>/`, or a region of a lane example in a language repo | this skill adds it when missing |
 
 kindref (`internal/controlplane/kindref/kindref.go`) holds two tables: `Features`, each feature's path and kinds, and
@@ -42,7 +44,7 @@ Every page shares the reader contract of `template.yaml`'s first section; the wo
 ## Steps
 
 1. **Read** `template.yaml` (beside this file), the rules in `.claude/rules/` whose `paths` cover `docs/guide/`, the
-   KV page and the pages of the feature's group, so the new page reads like its siblings.
+   Site page and the pages of the feature's group. Read KV's Access section when the feature uses roles or Cedar.
 2. **Gather**, and rank the sources when they disagree: the code on origin/main (the code path, not its comments),
    its tests, the behavior registry's rows (`docs/behavior/`), Implemented ADRs, then the Platform page. The feature's
    kinds and fields are on its Spec page; its handler API is in the shims' `api.json`; `scripts/lanes.yaml` names the
@@ -58,8 +60,12 @@ Every page shares the reader contract of `template.yaml`'s first section; the wo
    a doc in both shims' `api.json` that names no ADR, or `TestEveryHandlerMethodIsDescribed` fails. A missing or
    internal doc is fixed in the language repo: one PR and one release per repo, then the `go get` bump in funcd.
 6. **Plan the sections** from the template: which optional ones apply, which free topics the feature needs. The
-   first section links the Platform page instead of repeating it. Describe a field or a method on the Spec tab, not
-   in a hand-written table.
+   first section reaches a runnable example after a short purpose and its prerequisites. Link concepts and Spec
+   fields instead of repeating them. Comprehensive operation, request/response and error catalogues belong in a
+   separate API Reference, generated from authoritative schemas and operation metadata. Keep the minimal request
+   payloads, response examples and recovery steps needed to run and verify the Usage example.
+   A server error remains an API error when a CLI prints it. The navigation dropdown and reference generation
+   are separate work; link that reference only once it exists.
 7. **Add missing examples.** A manifest a page shows without a handler goes under
    `api/types/v1alpha1/examples/<feature>/`, one scenario per file with every object it needs;
    `TestScenarioGuideExamplesApply` applies it. Handler code comes from a lane example, marked by a region, each
@@ -68,6 +74,9 @@ Every page shares the reader contract of `template.yaml`'s first section; the wo
 8. **Write** in the guide's voice, around the reader's task: the first section's example is the one that
    `template.yaml` names for the feature's type (service, workload, tool or cross-cutting), a free section is one task
    under a heading that names it, and an optional section appears only when it explains a real decision or behavior.
+   Keep only text needed to perform the task, choose a setting, check the result or recover from a failure. Remove
+   repeated explanations and commentary that restates code. Keep complete English and every required input,
+   access requirement, wait, expected result, retry step and data-loss warning.
    Run the first example before keeping it, exactly as the page documents it: each command in order, in an
    environment that contains only the prerequisites the page declares, with the documented release of each tool it
    uses. When the workflow starts from a repository, start from a fresh clone. Record the versions. A helper such as
@@ -111,6 +120,11 @@ Every page shares the reader contract of `template.yaml`'s first section; the wo
   The site shows each run of these sections as one group of language tabs, and a section runs to the next heading, so
   the text that holds for both languages comes before them.
 - No hand-written table of methods, fields or keys: the Spec tabs hold them.
+- Keep Status as a table of phases or conditions, reasons and meanings, with the command that checks them.
+  Keep local CLI errors in a `CLI errors` table with the message or cause and the action to take. These tables
+  must not become HTTP/API catalogues.
+- The template retains `Errors` only for unchanged pages awaiting migration. A new or rewritten page uses
+  `CLI errors` for local command/setup failures and moves API errors out of Usage.
 - Links to a pyvvo repository point at its main branch, never at a tag: only `go.mod` names a language-module version.
   An Examples link points at a folder that a lane in `scripts/lanes.yaml` runs, which exists at the pinned version.
 - A page's facts are checked in the code; a doc tag or a comment that disagrees with the code is a finding, not a
