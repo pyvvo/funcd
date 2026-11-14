@@ -172,8 +172,9 @@ forbid(principal, action == Action::"s3::write", resource)
   unless { resource has writers && resource.writers.contains(principal) };
 ```
 
-A request that the policy denies fails with the HTTP status 403: through `ctx.blob`, its message names the rule, such
-as `cedar: forbidden by policy builtin/s3-single-writer`; through the S3 gateway, its error code is `AccessDenied`. A
+`ctx.blob` refuses a call whose alias no binding of its Function declares. A request that the policy denies fails
+with the HTTP status 403: through `ctx.blob`, its message names the rule, such as
+`cedar: forbidden by policy builtin/s3-single-writer`; through the S3 gateway, its error code is `AccessDenied`. A
 write by a principal that neither owns the prefix nor holds a writer role meets that rule: give the principal a writer
 role, as above.
 
@@ -214,6 +215,20 @@ versions, unless `blob.allowUnversioned` is `true`. `storage.mode: memory` keeps
 lost when funcd stops, and funcd then ignores the `blob` keys. These keys are in
 [funcd's configuration](../../running-funcd/spec.md#funcdconfigyaml).
 
+## Status
+
+`funcdctl get bucket lakehouse -n default -o json` prints the status of the first example's Bucket, and
+`funcdctl get function s3-roundtrip -n default -o json` that of its Function. With `funcdctl dev`, add the `--server`
+and `--token` flags that its banner prints.
+
+| Phase or condition | Reason | Meaning |
+| --- | --- | --- |
+| Bucket `Ready` | | funcd's blob store answers. |
+| Bucket `Degraded` | `StorageUnreachable` | funcd's blob store did not answer its last check, which funcd repeats every `health.storageProbeInterval`, 10 seconds by default. The message of the `Ready` condition gives the error. The Bucket becomes `Ready` again by itself once a check passes. |
+| Function `Pending` | `BucketNotFound` | A Bucket or a prefix that the Function binds does not exist. The Function starts once it exists. |
+| Function `Pending` | `StoreNotOwned` | A Bucket that the Function declares by `name` exists and is not the Function's, as [Changes and deletion](#changes-and-deletion) describes. |
+| Any other reason | | See the [Function's Status](../../workloads/function/index.md#status). |
+
 ## Changes and deletion
 
 - funcd refuses a request to delete a Bucket while a binding names it or while one of its prefixes holds objects. It
@@ -235,8 +250,6 @@ lost when funcd stops, and funcd then ignores the `blob` keys. These keys are in
 | Error | Action |
 | --- | --- |
 | `no node interpreter found for the node handler` | Put Node.js on the `PATH`, or set `FUNCD_NODE` to the path of `node`. |
-| `no python interpreter found for the python handler` | Put Python 3.12 or later on the `PATH` as `python3`, or set `FUNCD_PYTHON` to its path. |
-| `cannot load the runtime shim (needs Python ≥3.12; set FUNCD_PYTHON)` | Put Python 3.12 or later on the `PATH` as `python3`, or set `FUNCD_PYTHON` to its path. |
 | `no build of "<name>"` | Build the Function, or name its build after it, where the [Function page](../../workloads/function/index.md#run-it-locally) says that `funcdctl dev` looks. The message names the paths that it looked at. |
 
 ## Run it locally
