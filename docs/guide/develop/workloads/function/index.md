@@ -165,6 +165,11 @@ The first example's handler is `examples/log-burst/src/main.ts`:
 
 ::include[../../../../../_repos/funcd-typescript/examples/log-burst/src/main.ts]
 
+To run a handler of your own, bundle it with
+[`@funcd-dev/vite-plugin`](https://github.com/pyvvo/funcd-typescript#bundle-your-functions): `vite build` writes
+`dist/<name>.mjs`, with the handler's dependencies inlined, and copies `<name>.contract.yaml` beside it, where
+`funcdctl dev` finds them.
+
 ### Python
 
 The first example's handler is `examples/log-burst/src/main.py`:
