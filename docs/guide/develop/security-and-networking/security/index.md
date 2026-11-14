@@ -388,7 +388,7 @@ condition `Ready` explains the phase:
 | Phase | Condition `Ready` | Meaning |
 | --- | --- | --- |
 | `Ready` | `True`, with no reason | funcd has written the credential into the Secret. |
-| `Pending` | `False`, `SecretNotOwned` | The Secret that the Identity names exists, and no Identity of that name controls it, with a message such as `secret not owned: secret "app-secret" is not controlled by identity "analyst"`. Name another Secret in `credentialSecretName`, or delete that Secret: funcd checks the Identity again every `runtime.supervisionPeriod`, 10 seconds by default. |
+| `Pending` | `False`, `SecretNotOwned` | The Secret that the Identity names exists, and no Identity of that name controls it, with a message such as `secret not owned: secret "app-secret" is not controlled by identity "analyst"`. Name another Secret, one that does not exist yet, in `credentialSecretName`. Delete the existing Secret instead only when nothing else uses it: it may hold an App's data or another Identity's credential. funcd checks the Identity again every `runtime.supervisionPeriod`, 10 seconds by default. |
 | `Pending` | `False`, `SecretIssueFailed` | funcd could not write the Secret. The condition's message gives the cause. |
 
 `status.accessKeyId` holds the access key ID of the key pair, and `status.observedRotate` the [`rotate`](spec.md#identityspec) value of the credential that funcd issued
@@ -431,7 +431,7 @@ its message starts with `manifest is invalid (<kind> "<name>")`:
 | `<file>: <kind> "<name>" is in namespace "<namespace>"; funcdctl dev runs namespace default only` | Remove `metadata.namespace` from the object, set it to `default`, or apply the file to a funcd server. |
 | `spec.type must be "external" (got "<type>")` | Set the Identity's `type` to `external`. |
 | `spec.actions must list at least one action` | List an action in the Role's `actions`. |
-| `spec.assignments[<n>] has no principal (and no top-level default)`, or `has no scope` | Set the entry's `principal` or `scope`, or `spec.principal` or `spec.scope` for every entry. |
+| `spec.assignments[<n>] has no principal (and no top-level default)`, `has no scope`, or `roleRef.name is required` | Set the entry's `principal`, `scope` or `roleRef.name`, or `spec.principal` or `spec.scope` for every entry. |
 | `spec.assignments[<n>].scope.kind "<kind>" is invalid`, or the same for `principal.kind` or `roleRef.kind` | Use a kind that the [Spec](spec.md#rolesassignmentspecassignments) tab lists. |
 
 ## Run it locally
