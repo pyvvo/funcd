@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.44.1](https://github.com/pyvvo/funcd/compare/v0.44.0...v0.44.1) (2026-11-14)
+
+
+### Bug Fixes
+
+* **auth:** a Policy's refusal of an unknown action or entity type lists every one funcd knows ([#1459](https://github.com/pyvvo/funcd/issues/1459)) ([e2000b8](https://github.com/pyvvo/funcd/commit/e2000b884198a2c990c9d599559cff6f3c32d025))
+
 ## [0.44.0](https://github.com/pyvvo/funcd/compare/v0.43.0...v0.44.0) (2026-11-13)
 
 
