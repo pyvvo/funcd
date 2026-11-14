@@ -9,6 +9,10 @@ funcd is the server: one binary that runs the control plane, the data plane and 
 file, it starts with every key at its default. `funcd --memory` keeps everything in memory, with nothing on disk,
 which suits a test or a first try.
 
+With no `auth` keys, funcd accepts the built-in token `funcd-dev-token`, in the namespace `default`, and only on
+loopback. To reach funcd from another machine, set `server.listenAddr` and `auth.credentials`, which the
+[Spec](spec.md#funcdconfigyaml) tab describes.
+
 ## The configuration file
 
 funcd reads its settings from one file, `funcdconfig.yaml`: the file that `--config` names, else the one that
