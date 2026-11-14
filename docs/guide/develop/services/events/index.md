@@ -201,21 +201,6 @@ only.
 
 ### TypeScript
 
-The EventSource `gold-drops`, in `examples/s3-roundtrip/drop-source.yaml`, fires its event `arrived` for each object
-under the prefix `gold/` of the Bucket `lakehouse`:
-
-::include[../../../../../_repos/funcd-typescript/examples/s3-roundtrip/drop-source.yaml]
-
-The Sensor `gold-ingest`, in `drop-sensor.yaml`, starts a run of the Workflow `ingest` for each such event. The
-[`input`](spec.md#sensorspecdo) of its action sets the run's input to an object with one field, `file`, whose value the
-expression `${{ event.data.key }}` reads from the event: the key of the object. [Shape the input of an
-action](#shape-the-input-of-an-action) explains such expressions. The Workflow `ingest`, in
-[`ingest-workflow.yaml`](https://github.com/pyvvo/funcd-typescript/blob/main/examples/s3-roundtrip/ingest-workflow.yaml),
-has a single built-in step, `echo`, which ends with its input as its output; the
-[Workflow](../../workloads/workflow/index.md) page explains runs and built-in steps.
-
-::include[../../../../../_repos/funcd-typescript/examples/s3-roundtrip/drop-sensor.yaml]
-
 From the root folder of the funcd-typescript repository, cloned as in the first example, start the example.
 The steps also need curl, which calls the Function `s3-roundtrip`:
 
@@ -257,6 +242,21 @@ Under `spec`, `"input"` is `{"file": "gold/roundtrip-001.txt"}`, the key that th
 `002` writes another object and starts another run. A call with the tag `001` again writes `gold/roundtrip-001.txt`
 anew, with a new modification time, and starts another run too. To stop the example, press Ctrl-C in the terminal that
 runs `funcdctl dev`.
+
+The EventSource `gold-drops`, in `examples/s3-roundtrip/drop-source.yaml`, fires its event `arrived` for each object
+under the prefix `gold/` of the Bucket `lakehouse`:
+
+::include[../../../../../_repos/funcd-typescript/examples/s3-roundtrip/drop-source.yaml]
+
+The Sensor `gold-ingest`, in `drop-sensor.yaml`, starts a run of the Workflow `ingest` for each such event. The
+[`input`](spec.md#sensorspecdo) of its action sets the run's input to an object with one field, `file`, whose value the
+expression `${{ event.data.key }}` reads from the event: the key of the object. [Shape the input of an
+action](#shape-the-input-of-an-action) explains such expressions. The Workflow `ingest`, in
+[`ingest-workflow.yaml`](https://github.com/pyvvo/funcd-typescript/blob/main/examples/s3-roundtrip/ingest-workflow.yaml),
+has a single built-in step, `echo`, which ends with its input as its output; the
+[Workflow](../../workloads/workflow/index.md) page explains runs and built-in steps.
+
+::include[../../../../../_repos/funcd-typescript/examples/s3-roundtrip/drop-sensor.yaml]
 
 The action succeeds once funcd has created the run: what the run does afterwards, a failure included, shows in the
 run's own phase, and leaves no dead letter, which [Handle a delivery that fails](#handle-a-delivery-that-fails)

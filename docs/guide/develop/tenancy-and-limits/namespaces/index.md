@@ -134,7 +134,8 @@ It also holds the Route `orders`, which serves the Function `orders` at the path
 
 ::include[../../../../../api/types/v1alpha1/examples/namespaces/namespace.yaml#route]
 
-With the file applied, the calls on the host `shop.localhost` get these answers:
+Replace the images of `orders` and `catalog`, then apply the file with
+`funcdctl --server http://127.0.0.1:8080 --token "$ADMIN_TOKEN" apply -f api/types/v1alpha1/examples/namespaces/namespace.yaml`. With the file applied, the calls on the host `shop.localhost` get these answers:
 
 - A call to `/function/orders` gets the HTTP status 404 with the message `function shop/orders is not exposed by name`,
   and starts no worker.
@@ -167,6 +168,9 @@ the Function `invoices`, which sets no mode, and the Function `status`, whose
 Function, a Route or a rule sets wins over the Namespace's default.
 
 ::include[../../../../../api/types/v1alpha1/examples/namespaces/edge-defaults.yaml#open]
+
+Replace the images of `invoices` and `status`, then apply the file with
+`funcdctl --server http://127.0.0.1:8080 --token "$ADMIN_TOKEN" apply -f api/types/v1alpha1/examples/namespaces/edge-defaults.yaml`.
 
 A call to `/function/invoices` on the host `billing.localhost` gets one of these answers, which depend on the server
 setting `server.auth.edge` that the funcd [Spec](../../running-funcd/spec.md#funcdconfigyaml) tab describes:
