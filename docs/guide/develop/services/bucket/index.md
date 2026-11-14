@@ -12,7 +12,7 @@ See [how Buckets work](../../../platform/services/bucket.md) for the concept.
 
 The s3-roundtrip example writes an object with an S3 client and reads it back. Each call sends a tag; the Function
 writes an object named after the tag into the prefix `gold`, reads it back, and counts the objects under `gold`. The
-example exists in TypeScript only; a Python handler uses `ctx.blob`, as
+example exists in TypeScript only. `ctx.blob` is available in both languages, as
 [Use ctx.blob instead of an S3 client](#use-ctxblob-instead-of-an-s3-client) shows.
 
 Install the [dev build of funcdctl](../../../get-started/install.md), Git and curl, and put Node.js on the `PATH`.
