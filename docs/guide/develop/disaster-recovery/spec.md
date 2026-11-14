@@ -4,9 +4,11 @@ title: "Backup, BackupSchedule and Restore spec"
 description: "Every field of Backup, BackupSchedule and Restore: its type, its limits and its description."
 ---
 
-The spec and the status of each kind of this feature, as funcd's API schema states them. The [Platform page](../../platform/disaster-recovery.md) explains the concept, and the `metadata` of every kind is [the same](../common-definitions.md#objectmeta).
+This page lists the spec and status fields of Backup, BackupSchedule and Restore, each with its type, its limits and its description. The [Platform page](../../platform/disaster-recovery.md) explains the concept, and the `metadata` of every kind is [the same](../common-definitions.md#objectmeta).
 
 ## Backup
+
+::include[../../../../api/types/v1alpha1/examples/disaster-recovery/backup.yaml#backup]
 
 | apiVersion | kind |
 | --- | --- |
@@ -44,6 +46,8 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | `volume` | string, a DNS-1123 label | With kind Function, the name of the Function's local volume that the member is. |
 
 ## BackupSchedule
+
+::include[../../../../api/types/v1alpha1/examples/disaster-recovery/backupschedule.yaml#backupschedule]
 
 | apiVersion | kind |
 | --- | --- |
@@ -84,7 +88,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | Field | Type and limits | Description |
 | --- | --- | --- |
 | `credentialsSecret` | string, required, a DNS-1123 label | A Secret of the namespace with AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and, optionally, AWS_SESSION_TOKEN: the key each Backup writes with. It needs only put and list on the bucket. |
-| `url` | string, required | The s3:// URL of the bucket that receives the copies, its options as query parameters, such as s3://backups?region=eu-west-3. The bucket of blob.target is refused, and another bucket on its endpoint is accepted with reason SameProvider on the schedule's Ready condition: one failure of that provider takes both. The bucket must accept a create-if-absent put (If-None-Match: *): a bucket that refuses it fails each Backup with reason TargetUnconditional. |
+| `url` | string, required | The s3:// URL of the bucket that receives the copies, its options as query parameters, such as s3://backups?region=eu-west-3. The bucket of blob.target is refused, and another bucket on its endpoint is accepted with reason SameProvider on the schedule's Ready condition: one failure of that provider takes both. The bucket must accept a create-if-absent put (If-None-Match: \*): a bucket that refuses it fails each Backup with reason TargetUnconditional. |
 
 ### `BackupSchedule.status`
 
@@ -100,6 +104,8 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | `rpoRisk` | boolean | True when the schedule has fallen behind: the first slot after the start of its newest Succeeded Backup, or after its creation when there is none, has passed with that slot's Backup Failed or missing, or a second slot has passed. It stays false while the schedule is paused. funcd logs workload backup rpo at risk when it turns true. |
 
 ## Restore
+
+::include[../../../../api/types/v1alpha1/examples/disaster-recovery/restore.yaml#restore]
 
 | apiVersion | kind |
 | --- | --- |
@@ -128,8 +134,8 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 | Field | Type and limits | Description |
 | --- | --- | --- |
-| `bucket` | string, required, a DNS-1123 label | The Bucket that holds the Lake's files, in the Lake's namespace. |
-| `prefix` | string, required, a DNS-1123 label | The prefix of that Bucket, which this Lake must own. |
+| `bucket` | string, required, a DNS-1123 label | A Bucket of the same namespace. |
+| `prefix` | string, required, a DNS-1123 label | A prefix of that Bucket. |
 
 ### `Restore.spec.source`
 

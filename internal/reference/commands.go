@@ -129,7 +129,7 @@ func CommandTables(cmds []Command) []byte {
 			if f.Shorthand != "" {
 				name = code("-"+f.Shorthand) + ", " + name
 			}
-			fmt.Fprintf(&b, "| %s | %s | %s | %s |\n", name, f.Type, code(f.Default), cell(f.Usage))
+			fmt.Fprintf(&b, "| %s | %s | %s | %s |\n", name, f.Type, code(f.Default), Cell(f.Usage))
 		}
 	}
 	return b.Bytes()

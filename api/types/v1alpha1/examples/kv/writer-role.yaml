@@ -1,0 +1,57 @@
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: claim
+  namespace: default
+  resourceGroup: rg1
+spec:
+  kv:
+    - name: claims-kv
+      tables:
+        - name: claims
+  bindings:
+    kv:
+      - alias: claims
+        store: claims-kv
+        table: claims
+  runtime: nodejs22
+  handler: handle
+  image: registry.example.com/claim:1.0.0
+---
+apiVersion: funcd.io/v1alpha1
+kind: Function
+metadata:
+  name: pyclaim
+  namespace: default
+  resourceGroup: rg1
+spec:
+  kv:
+    - ref: claims-kv
+  bindings:
+    kv:
+      - alias: claims
+        store: claims-kv
+        table: claims
+  runtime: python314
+  handler: handle
+  image: registry.example.com/pyclaim:1.0.0
+---
+# region rolesassignment
+apiVersion: funcd.io/v1alpha1
+kind: RolesAssignment
+metadata:
+  name: pyclaim-writes-claims
+  namespace: default
+  resourceGroup: rg1
+spec:
+  principal:
+    kind: Function
+    name: pyclaim
+  assignments:
+    - roleRef:
+        kind: BuiltinRole
+        name: KV Data Writer
+      scope:
+        kind: KVStore
+        name: claims-kv/claims
+# endregion rolesassignment

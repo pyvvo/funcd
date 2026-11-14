@@ -1,0 +1,40 @@
+apiVersion: funcd.io/v1alpha1
+kind: Identity
+metadata:
+  name: analyst
+  namespace: default
+  resourceGroup: rg1
+spec:
+  type: external
+---
+# region role
+apiVersion: funcd.io/v1alpha1
+kind: Role
+metadata:
+  name: object-writer
+  namespace: default
+  resourceGroup: rg1
+spec:
+  actions:
+    - s3::write
+# endregion role
+---
+# region grant
+apiVersion: funcd.io/v1alpha1
+kind: RolesAssignment
+metadata:
+  name: analyst-writes-shared
+  namespace: default
+  resourceGroup: rg1
+spec:
+  principal:
+    kind: Identity
+    name: analyst
+  assignments:
+    - roleRef:
+        kind: Role
+        name: object-writer
+      scope:
+        kind: BucketPrefix
+        name: lakehouse/shared
+# endregion grant

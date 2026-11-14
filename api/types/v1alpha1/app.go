@@ -951,7 +951,7 @@ func entrySchema(r huma.Registry, spec reflect.Type, deletion bool) *huma.Schema
 	props["name"], props["ref"] = name, ref
 	if deletion {
 		d := DeletionPolicy("").Schema(r)
-		d.Description = "retain (the default) keeps the store and its data when the resource that declares it drops it or is deleted; delete removes them."
+		d.Description = "retain (the default) keeps the store and its data when the resource that declares it is deleted, and delete removes them. An App applies the same choice when it drops the entry."
 		props["deletion"] = d
 	}
 	return &huma.Schema{Type: huma.TypeObject, Properties: props, AdditionalProperties: false}

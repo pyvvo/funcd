@@ -1,0 +1,37 @@
+apiVersion: funcd.io/v1alpha1
+kind: Secret
+metadata:
+  name: lake-token
+  namespace: default
+  resourceGroup: rg1
+spec:
+  data:
+    QUACK_TOKEN: ZGVtby1sYWtlLXRva2Vu
+---
+# region lake
+apiVersion: funcd.io/v1alpha1
+kind: Lake
+metadata:
+  name: analytics
+  namespace: default
+  resourceGroup: rg1
+spec:
+  buckets:
+    - name: warehouse
+      prefixes:
+        - name: tables
+  secrets:
+    - name: lake-token
+      keys:
+        - QUACK_TOKEN
+  bindings:
+    blob:
+      - alias: tables
+        bucket: warehouse
+        prefix: tables
+    secret:
+      - lake-token
+  location:
+    bucket: warehouse
+    prefix: tables
+# endregion lake

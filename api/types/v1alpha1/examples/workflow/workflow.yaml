@@ -1,0 +1,18 @@
+# region workflow
+apiVersion: funcd.io/v1alpha1
+kind: Workflow
+metadata:
+  name: orders
+  namespace: default
+  resourceGroup: rg1
+spec:
+  steps:
+    - name: ingest
+      function:
+        image: registry.example/orders-ingest:1.0.0
+    - name: hold
+      builtin:
+        wait: 30s
+      dependsOn:
+        - ingest
+# endregion workflow

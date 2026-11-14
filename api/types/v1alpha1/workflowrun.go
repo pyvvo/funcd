@@ -58,7 +58,7 @@ type ReplaySeed struct {
 type WorkflowRunStatus struct {
 	Status `json:",inline"`
 	// Phase shadows the embedded Status.Phase: a run has its own phases (ADR-0094), not the resource ones.
-	Phase RunPhase        `json:"phase,omitempty" doc:"Where the run is in its lifecycle: Pending until it starts. Succeeded, Failed and Cancelled are final."`
+	Phase RunPhase        `json:"phase,omitempty" doc:"Where the run is in its lifecycle: empty before the run starts, Pending while it waits for its Workflow, a child it calls or a step's Function to be ready, Running while its steps run. Succeeded, Failed and Cancelled are final."`
 	Steps []RunStepStatus `json:"steps,omitempty" doc:"Each step of the run in spec order, the onFailure step included: its phase, attempts, times and error."`
 	// TraceID is the run's W3C trace (ADR-0102), mirrored from the engine record (ADR-0100) so
 	// `describe` shows it and `funcdctl workflow logs <run>` (ADR-0106) resolves a run to its logs.

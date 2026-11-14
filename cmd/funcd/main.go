@@ -119,7 +119,7 @@ func newRootCmd(out io.Writer) *cobra.Command {
 		},
 	}
 	root.Flags().BoolVar(&memoryOnly, "memory", false,
-		"run fully in memory (ephemeral — no disk); default is file-backed/durable")
+		"keep the platform's data in memory, lost when funcd stops (storage.mode memory); working files such as sockets still go under storage.dataDir; default is file-backed/durable")
 	root.Flags().StringVar(&configPath, "config", "",
 		"path to funcdconfig.yaml (else $FUNCD_CONFIG, ./funcdconfig.yaml, /etc/funcd/funcdconfig.yaml)")
 	root.AddCommand(&cobra.Command{

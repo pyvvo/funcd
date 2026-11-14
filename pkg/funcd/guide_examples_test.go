@@ -1,3 +1,8 @@
+//go:build !e2e
+
+// These tests start one platform per guide manifest. The e2e build leaves them out, so that they do not compete with
+// its timing-sensitive scenarios; `go test ./...` runs them.
+
 package funcd_test
 
 import (
@@ -23,8 +28,8 @@ import (
 // and every ::include of a page names a file, and a region, that exist.
 
 // scenario: examples-apply
+// Not parallel: each manifest starts a platform, and the package's timing-sensitive tests must not run beside them.
 func TestScenarioGuideExamplesApply(t *testing.T) {
-	t.Parallel()
 	files := guideManifests(t)
 	examples, err := filepath.Glob(filepath.Join("..", "..", "api", "types", "v1alpha1", "examples", "*", "*.yaml"))
 	require.NoError(t, err)
@@ -33,13 +38,14 @@ func TestScenarioGuideExamplesApply(t *testing.T) {
 		require.Contains(t, files, file, "every example file is applied")
 	}
 	for _, inc := range guideIncludes(t, filepath.Join("docs", "guide")) {
-		if file, pinned := inc.target(t); pinned && filepath.Ext(file) == ".yaml" {
+		if file, pinned := inc.target(t); pinned && filepath.Ext(file) == ".yaml" && !inAppTemplate(file) {
 			require.Contains(t, files, file, "every lane manifest that a page includes is applied")
 		}
 	}
+	// One platform at a time: dozens of fresh platforms at once churn the ephemeral ports that other tests of the
+	// package re-bind, such as TestShutdownReleasesTheLoopbackFeedPort.
 	for _, file := range files {
 		t.Run(filepath.Base(file), func(t *testing.T) {
-			t.Parallel()
 			require.NoError(t, applyOnFreshPlatform(t, file))
 		})
 	}
@@ -147,7 +153,7 @@ func marksRegion(content, region string) bool {
 }
 
 // guideManifests lists the files under api/types/v1alpha1/examples and the YAML files that the guide's pages include
-// from a pinned repo.
+// from a pinned repo, except the resources of an App template.
 func guideManifests(t *testing.T) []string {
 	t.Helper()
 	var files []string
@@ -160,7 +166,7 @@ func guideManifests(t *testing.T) []string {
 		})
 	require.NoError(t, err)
 	for _, inc := range guideIncludes(t, filepath.Join("docs", "guide")) {
-		if file, pinned := inc.target(t); pinned && filepath.Ext(file) == ".yaml" {
+		if file, pinned := inc.target(t); pinned && filepath.Ext(file) == ".yaml" && !inAppTemplate(file) {
 			files = append(files, file)
 		}
 	}
@@ -168,16 +174,51 @@ func guideManifests(t *testing.T) []string {
 	return slices.Compact(files)
 }
 
+// inAppTemplate reports whether file is one of an App template's resources, which sit in resources/ beside app.yaml:
+// a fragment that its App renders, not a manifest that funcdctl apply sends, so the template's own tests run it, as
+// internal/testkit/langmod's TestExampleResourcesDecode leaves it to them.
+func inAppTemplate(file string) bool {
+	dir := filepath.Dir(file)
+	if filepath.Base(dir) != "resources" {
+		return false
+	}
+	fi, err := os.Stat(filepath.Join(filepath.Dir(dir), "app.yaml"))
+	return err == nil && fi.Mode().IsRegular()
+}
+
+// An App template's resource is left out of the manifests that the guide applies, and a lane manifest is not.
+func TestAppTemplateResourceIsNoGuideManifest(t *testing.T) {
+	t.Parallel()
+	fns := langmod.Dir(t, langmod.Functions)
+	require.True(t, inAppTemplate(filepath.Join(fns, "apps", "site-config", "app", "resources", "site.yaml")))
+	require.False(t, inAppTemplate(filepath.Join(fns, "apps", "site-config", "sites", "preview.yaml")))
+}
+
+// The credentials an example applies with: a developer of the namespace default, as funcdctl dev's token is, and an
+// admin, the only role that may apply a cluster-scoped kind such as a Namespace.
+const (
+	guideDeveloperToken = "guide-developer-token"
+	guideAdminToken     = "guide-admin-token"
+)
+
 // applyOnFreshPlatform applies file's documents in order, as funcdctl apply sends them, to a platform assembled over
 // memory, whose write path runs the daemon's validation and admissions. InMemory sets no runtime shim, so the platform
-// fetches no image and runs no function code.
+// fetches no image and runs no function code. A file that holds a cluster-scoped kind applies with the admin
+// credential, and any other file with the developer's.
 func applyOnFreshPlatform(t *testing.T, file string) error {
 	t.Helper()
 	data, err := os.ReadFile(file)
 	require.NoError(t, err)
 	docs, err := sdk.DecodeManifestDocuments(data)
 	require.NoError(t, err, file)
-	p, err := funcd.New(funcd.InMemory())
+	token := guideDeveloperToken
+	if slices.ContainsFunc(docs, func(d sdk.ManifestDocument) bool { return !d.Object.GroupVersionKind().Kind.Namespaced() }) {
+		token = guideAdminToken
+	}
+	p, err := funcd.New(funcd.InMemory(), funcd.WithCredentials(
+		funcd.Credential{Token: guideDeveloperToken, Role: "developer", Namespaces: []string{"default"}},
+		funcd.Credential{Token: guideAdminToken, Role: "admin"},
+	))
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -190,7 +231,7 @@ func applyOnFreshPlatform(t *testing.T, file string) error {
 			t.Error("Run did not return")
 		}
 	})
-	client, err := sdk.New("http://"+p.Addr(), sdk.WithToken(funcd.DevToken))
+	client, err := sdk.New("http://"+p.Addr(), sdk.WithToken(token))
 	require.NoError(t, err)
 	for _, doc := range docs {
 		if _, err := client.Apply(ctx, doc.Object); err != nil {

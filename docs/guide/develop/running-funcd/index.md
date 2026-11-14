@@ -6,8 +6,13 @@ description: Start the funcd server, give it its settings in a file or in variab
 ## Usage
 
 funcd is the server: one binary that runs the control plane, the data plane and the Functions. With no configuration
-file, it starts with every key at its default. `funcd --memory` keeps everything in memory, with nothing on disk,
-which suits a test or a first try.
+file, it starts with every key at its default. `funcd --memory` keeps the platform's data in memory, so that it
+is lost when funcd stops, which suits a test or a first try. funcd still writes some working files, such as its
+sockets, under `storage.dataDir`.
+
+With no `auth` keys, funcd accepts the built-in token `funcd-dev-token`, in the namespace `default`, and only on
+loopback. To reach funcd from another machine, set `server.listenAddr` and `auth.credentials`, which the
+[Spec](spec.md#funcdconfigyaml) tab describes.
 
 ## The configuration file
 

@@ -4,9 +4,11 @@ title: "Identity, Role, RolesAssignment and Policy spec"
 description: "Every field of Identity, Role, RolesAssignment and Policy: its type, its limits and its description."
 ---
 
-The spec and the status of each kind of this feature, as funcd's API schema states them. The [Platform page](../../../platform/security-and-networking/security.md) explains the concept, and the `metadata` of every kind is [the same](../../common-definitions.md#objectmeta).
+This page lists the spec and status fields of Identity, Role, RolesAssignment and Policy, each with its type, its limits and its description. The [Platform page](../../../platform/security-and-networking/security.md) explains the concept, and the `metadata` of every kind is [the same](../../common-definitions.md#objectmeta).
 
 ## Identity
+
+::include[../../../../../api/types/v1alpha1/examples/security/identity.yaml#identity]
 
 | apiVersion | kind |
 | --- | --- |
@@ -32,6 +34,8 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 
 ## Role
 
+::include[../../../../../api/types/v1alpha1/examples/security/role.yaml#role]
+
 | apiVersion | kind |
 | --- | --- |
 | `funcd.io/v1alpha1` | `Role` |
@@ -43,6 +47,8 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | `actions` | array of string values, required | The actions the role grants, at least one, such as s3::read, kv::write or lake::query. An action that funcd does not know grants nothing. |
 
 ## RolesAssignment
+
+::include[../../../../../api/types/v1alpha1/examples/security/rolesassignment.yaml#rolesassignment]
 
 | apiVersion | kind |
 | --- | --- |
@@ -86,6 +92,8 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | `name` | string | The resource for each kind: &lt;bucket&gt;/&lt;prefix&gt; for one prefix of a Bucket, &lt;store&gt; for every table of a KVStore or &lt;store&gt;/&lt;table&gt; for one, &lt;lake&gt; for a Lake, &lt;database&gt; for a SQLDatabase and &lt;secret&gt; for a Secret. A Namespace scope covers the whole namespace, whatever its name. |
 
 ## Policy
+
+::include[../../../../../api/types/v1alpha1/examples/security/policy.yaml#policy]
 
 | apiVersion | kind |
 | --- | --- |

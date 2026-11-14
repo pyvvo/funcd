@@ -20,7 +20,7 @@ type Namespace struct {
 // are unchanged on upgrade.
 type NamespaceSpec struct {
 	// DefaultExposure switches the public data-plane front door. Empty/absent ⇒ implicit.
-	DefaultExposure ExposureMode `json:"defaultExposure,omitempty" doc:"Whether the namespace's Functions and Sites answer at their own address, such as /function/<name>, while their spec.ingress.enabled is unset: implicit, or empty, turns it on, and explicit turns it off. Routes you write and Routes an App declares stay on, though in the default namespace explicit refuses one with no host (HostRequired)."`
+	DefaultExposure ExposureMode `json:"defaultExposure,omitempty" doc:"Whether the namespace's Functions and Sites answer at their own address, such as /function/<name>, while their spec.ingress.enabled is unset: implicit, or empty, turns it on, and explicit turns it off. The namespace's other Routes, an App's included, stay on, though in the default namespace explicit refuses one with no host (HostRequired)."`
 	// EdgeDefaults carries the namespace-wide edge policy defaults merged under each Route
 	// (F74–F78 add fields; empty in F79).
 	EdgeDefaults *EdgeDefaults `json:"edgeDefaults,omitempty" doc:"The namespace's edge defaults, which apply where a Route or a Function's or Site's spec.ingress sets no value of its own."`

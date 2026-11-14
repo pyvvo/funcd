@@ -5,9 +5,10 @@ import (
 )
 
 // SizeQuota caps what a store or a Bucket prefix holds in total (ADR-0292): maxSize in ByteSize's grammar (ADR-0266) or
-// maxBytes in bytes, at most one; neither means no cap. A write that would pass it gets 507.
+// maxBytes in bytes, at most one; neither means no cap. A KV store or a Bucket refuses a write that would pass it; a SQL
+// database refuses its writes once it is reached.
 type SizeQuota struct {
-	MaxSize  ByteSize `json:"maxSize,omitempty" doc:"The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507."`
+	MaxSize  ByteSize `json:"maxSize,omitempty" doc:"The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507 in a KV store or a Bucket; a SQL execute call gets 507 once the database holds the cap."`
 	MaxBytes int64    `json:"maxBytes,omitempty" minimum:"0" doc:"The same cap as a number of bytes. Set maxSize or maxBytes, not both."`
 }
 

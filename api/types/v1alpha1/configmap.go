@@ -19,7 +19,7 @@ type ConfigMap struct {
 // ConfigMapSpec holds the configuration data. map[string]string is allowed under ADR-0002
 // (the any-ban targets interface{}/any/map[string]any).
 type ConfigMapSpec struct {
-	Data map[string]string `json:"data,omitempty" doc:"Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through."`
+	Data map[string]string `json:"data,omitempty" doc:"Keys and their string values, for settings that are not secret. Each key is an environment variable name: ASCII letters, digits and _, not starting with a digit. Each value must be UTF-8 text with no NUL byte: a Function or a Lake that binds a ConfigMap holding another value does not start. Each worker of a Function that lists the ConfigMap in bindings.config gets each key as an environment variable when it starts, except a key that starts with FUNCD_ or that a bound Secret also holds; and while the S3 gateway is on, a Function that binds a Bucket gets the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY that funcd issues it, in place of the ConfigMap's. A Lake that lists it gives its engine only the keys that the Lake's bindings.config lets through."`
 }
 
 // GroupVersionKind returns the constant GVK for ConfigMap.

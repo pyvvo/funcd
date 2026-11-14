@@ -4,7 +4,7 @@ title: "KVStore spec and handler API"
 description: "Every field of KVStore, then the methods a handler calls on ctx.kv."
 ---
 
-The spec and the status of each kind of this feature, as funcd's API schema states them. The [Platform page](../../../platform/services/kv.md) explains the concept, and the `metadata` of every kind is [the same](../../common-definitions.md#objectmeta).
+This page lists the spec and status fields of KVStore, each with its type, its limits and its description. The [Platform page](../../../platform/services/kv.md) explains the concept, and the `metadata` of every kind is [the same](../../common-definitions.md#objectmeta).
 
 ## KVStore
 
@@ -27,7 +27,7 @@ The spec and the status of each kind of this feature, as funcd's API schema stat
 | --- | --- | --- |
 | `maxBytes` | integer, at least 0 | The same cap as a number of bytes. Set maxSize or maxBytes, not both. |
 | `maxKeyBytes` | integer, 0 to 64000 | The longest key, in bytes. 0 means 1024 (1 KiB). |
-| `maxSize` | string, a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB) | The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507. |
+| `maxSize` | string, a size: 1 to 15 digits and an optional binary unit, Ki, Mi, Gi or Ti, with or without a B (512Ki, 2GiB) | The cap on the total size held, above zero. Set maxSize or maxBytes, not both; neither means no cap. A write that would pass the cap gets 507 in a KV store or a Bucket; a SQL execute call gets 507 once the database holds the cap. |
 | `maxValueBytes` | integer, 0 to 1048576 | The largest value a write may store, in bytes. 0 means 1048576 (1 MiB). |
 
 ### `KVStore.spec.tables[]`
@@ -63,7 +63,7 @@ The key-value tables that the function binds, by alias: read, write and list the
 | `getEntry(binding: string, key: string): Promise<KVEntry \| null>` | The key's value with its version, or null when the key does not exist. |
 | `getText(binding: string, key: string): Promise<string \| null>` | The key's value decoded as UTF-8 text, or null when the key does not exist. |
 | `getJSON<T = unknown>(binding: string, key: string): Promise<T \| null>` | The key's value parsed as JSON, or null when the key does not exist. Write it with put(binding, key, JSON.stringify(value)). |
-| `put(binding: string, key: string, value: Uint8Array \| string, opts?: PutOptions): Promise<void>` | Writes the value. opts.ttl, in whole seconds, sets the key's expiry; a put without it leaves the key with none. Only the table's owner can write. |
+| `put(binding: string, key: string, value: Uint8Array \| string, opts?: PutOptions): Promise<void>` | Writes the value. opts.ttl, in whole seconds, sets the key's expiry; a put without it leaves the key with none. Only the table's owner and the writers that a RolesAssignment names can write. |
 | `putIfAbsent(binding: string, key: string, value: Uint8Array \| string, opts?: PutOptions): Promise<string \| null>` | Creates the key: its new version, or null when it exists (an expired key does not). |
 | `compareAndSet(binding: string, key: string, value: Uint8Array \| string, version: string, opts?: PutOptions): Promise<string \| null>` | Replaces the key while it is at version: its new version, or null when it is not. |
 | `del(binding: string, key: string): Promise<void>` | Deletes the key. |
@@ -80,7 +80,7 @@ The key-value tables that the function binds, by alias: read, write and list the
 | `get_entry(binding: str, key: str) -> KVEntry \| None` | The key's value with its version, or ``None`` when the key does not exist. |
 | `get_str(binding: str, key: str) -> str \| None` | The key's value decoded as UTF-8 text, or ``None`` when the key does not exist. |
 | `get_json(binding: str, key: str) -> object \| None` | The key's value parsed as JSON, or ``None`` when the key does not exist. Write it with ``put(binding, key, json.dumps(value))``. |
-| `put(binding: str, key: str, value: bytes \| str, *, ttl: int \| None = None) -> None` | Writes the value. ``ttl``, in whole seconds, sets the key's expiry; a put without it leaves the key with none. Only the table's owner can write. |
+| `put(binding: str, key: str, value: bytes \| str, *, ttl: int \| None = None) -> None` | Writes the value. ``ttl``, in whole seconds, sets the key's expiry; a put without it leaves the key with none. Only the table's owner and the writers that a RolesAssignment names can write. |
 | `put_if_absent(binding: str, key: str, value: bytes \| str, *, ttl: int \| None = None) -> str \| None` | Creates the key: its new version, or ``None`` when it exists (an expired key does not). |
 | `compare_and_set(binding: str, key: str, value: bytes \| str, version: str, *, ttl: int \| None = None) -> str \| None` | Replaces the key while it is at ``version``: its new version, or ``None`` when it is not. |
 | `delete(binding: str, key: str) -> None` | Deletes the key. |

@@ -1,0 +1,134 @@
+# The Bucket lakehouse of the s3-roundtrip example, copied every night at 03:00 UTC to the Bucket backups of the same
+# local platform, which funcdctl dev serves through its S3 gateway on port 8082. This target only shows how the kinds
+# work: a copy kept on the platform that it protects is lost with that platform. backups-key holds the S3 key pair that
+# funcdctl dev gives the Function s3-roundtrip, the owner of the prefix default of backups. The two age recipients are
+# test keys: restore.yaml publishes the identity of the first one, so a copy sealed to them protects nothing.
+# The Restore lakehouse-restore loads that copy into the empty Bucket lakehouse-copy with the test identity of
+# backups-identity, and the Function s3-roundtrip may read the prefix gold of the copy.
+apiVersion: funcd.io/v1alpha1
+kind: Bucket
+metadata:
+  name: backups
+  namespace: default
+  resourceGroup: rg1
+spec:
+  prefixes:
+    - name: default
+      owner:
+        kind: Function
+        name: s3-roundtrip
+---
+apiVersion: funcd.io/v1alpha1
+kind: RolesAssignment
+metadata:
+  name: s3-roundtrip-reads-backups
+  namespace: default
+  resourceGroup: rg1
+spec:
+  principal:
+    kind: Function
+    name: s3-roundtrip
+  assignments:
+    - roleRef:
+        kind: BuiltinRole
+        name: Blob Data Reader
+      scope:
+        kind: BucketPrefix
+        name: backups/default
+---
+apiVersion: funcd.io/v1alpha1
+kind: Secret
+metadata:
+  name: backups-key
+  namespace: default
+  resourceGroup: rg1
+spec:
+  data:
+    AWS_ACCESS_KEY_ID: RlVOQ0RJWUFHSVpMR01GMldZNUFBT01aUzI0VFBPVlhHSTVEU05GWUE=
+    AWS_SECRET_ACCESS_KEY: S3AzK3hna2svYnIwZ1IyRi8yM2xoMnpMcXg0QndBS1MxV2xOY2hTZXFhST0=
+---
+apiVersion: funcd.io/v1alpha1
+kind: BackupSchedule
+metadata:
+  name: lakehouse-nightly
+  namespace: default
+  resourceGroup: rg1
+spec:
+  schedule: 0 3 * * *
+  scope:
+    buckets:
+      - lakehouse
+  target:
+    url: s3://backups?endpoint=http://127.0.0.1:8082&region=us-east-1&use_path_style=true
+    credentialsSecret: backups-key
+  encryption:
+    recipients:
+      - age1gvngj00ucwlleuk898r0s3umcacr5mxhkv4fy67evygxsmlgpanq43ttm3
+      - age1263g0rath75xcgy9wh9cd6p9tpdn6wq35t5fa5pajnna4u7tgyhsxd384c
+---
+apiVersion: funcd.io/v1alpha1
+kind: Backup
+metadata:
+  name: lakehouse-now
+  namespace: default
+  resourceGroup: rg1
+spec:
+  schedule: lakehouse-nightly
+---
+apiVersion: funcd.io/v1alpha1
+kind: Secret
+metadata:
+  name: backups-identity
+  namespace: default
+  resourceGroup: rg1
+spec:
+  data:
+    AGE_IDENTITY: QUdFLVNFQ1JFVC1LRVktMVJDMDc4NU0wNkRaSjg0RzVNSFVNV1pUR0ZNVllRNDk0SjRERDVKOVg4TExTOVMwTDdFMlFKNzVTUTU=
+---
+apiVersion: funcd.io/v1alpha1
+kind: Bucket
+metadata:
+  name: lakehouse-copy
+  namespace: default
+  resourceGroup: rg1
+spec:
+  prefixes:
+    - name: gold
+---
+apiVersion: funcd.io/v1alpha1
+kind: RolesAssignment
+metadata:
+  name: s3-roundtrip-reads-copy
+  namespace: default
+  resourceGroup: rg1
+spec:
+  principal:
+    kind: Function
+    name: s3-roundtrip
+  assignments:
+    - roleRef:
+        kind: BuiltinRole
+        name: Blob Data Reader
+      scope:
+        kind: BucketPrefix
+        name: lakehouse-copy/gold
+---
+# region restore
+# Test values: backups-key holds the S3 key pair that the banner of funcdctl dev prints, and backups-identity holds the
+# published identity of the first recipient of the copy.
+apiVersion: funcd.io/v1alpha1
+kind: Restore
+metadata:
+  name: lakehouse-restore
+  namespace: default
+  resourceGroup: rg1
+spec:
+  backup: lakehouse-now
+  source:
+    credentialsSecret: backups-key
+    identitySecret: backups-identity
+  members:
+    - kind: Bucket
+      name: lakehouse
+      as: lakehouse-copy
+# endregion restore

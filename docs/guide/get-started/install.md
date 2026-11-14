@@ -16,7 +16,14 @@ curl -fsSL https://pyvvo.github.io/funcd/install.sh | sh
 The [install script](https://github.com/pyvvo/funcd/blob/main/scripts/install-funcdctl.sh) downloads the latest
 release of funcdctl for the current system, in the dev build, which also runs Functions on the local machine with
 `funcdctl dev`. It checks the download against the release's `SHA256SUMS` and installs it as
-`/usr/local/bin/funcdctl`, through sudo when that folder is not writable. Check that it runs:
+`/usr/local/bin/funcdctl`, through sudo when that folder is not writable. To install it in another folder, such as one
+that needs no sudo, set `FUNCDCTL_INSTALL_DIR`, and put that folder on the `PATH`:
+
+```sh
+curl -fsSL https://pyvvo.github.io/funcd/install.sh | FUNCDCTL_INSTALL_DIR="$HOME/.local/bin" sh
+```
+
+Check that it runs:
 
 ```sh
 funcdctl --help

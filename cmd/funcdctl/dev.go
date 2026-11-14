@@ -118,9 +118,11 @@ func (a *cli) devCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&cfg.persist, "persist", false,
-		"persist KV/blob/metastore to a local dir between runs (default: ephemeral in-memory)")
+		"keep the metastore, KV, blob, SQL, lake and volume data between runs, in the --persist-to directory "+
+			"(default: in memory or in temporary directories, gone when dev stops)")
 	cmd.Flags().StringVar(&cfg.persistTo, "persist-to", devPersistDir,
-		"directory for --persist state (per-service subdirs: metastore/kv/blob)")
+		"directory for --persist state, one subdirectory per service: metastore, kv, blob, lake, sql, volumes and "+
+			"bundles")
 	cmd.Flags().IntVar(&cfg.gport, "gport", 0,
 		"fixed gateway (function-invoke) port; 0 ⇒ a random free port")
 	cmd.Flags().IntVar(&cfg.s3port, "s3port", 0,
@@ -755,7 +757,7 @@ const (
 	// SDK needs AWS_REGION set for SigV4 even against a local endpoint.
 	devS3Region = "us-east-1"
 	// devPersistDir is the default `--persist-to` directory (gitignored). Per-service subdirs
-	// (metastore/kv/blob) live under it (Decision 7).
+	// (metastore, kv, blob, lake, sql, volumes, bundles: resolvePersistPlan) live under it (Decision 7).
 	devPersistDir = ".funcd-dev"
 	// devReloadPoll is how often `funcdctl dev` checks each handler source for an edit (hot-reload).
 	devReloadPoll = 300 * time.Millisecond

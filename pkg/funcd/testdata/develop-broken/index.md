@@ -43,3 +43,7 @@ EOF
 - [the shim](https://github.com/pyvvo/funcd-typescript/tree/main/shim)
 
 ## Notes
+
+```cedar
+permit(principal, action, resource);
+```
