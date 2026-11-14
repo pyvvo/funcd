@@ -16,11 +16,12 @@ paths:
   definitions into one long sentence: keep it to the purpose, and move storage and access internals to the section
   that needs them. A setting that the next step needs for access, persistence or cost is stated before that step, and
   a step links the exact Spec field or method that it uses.
-- Keep a Develop guide short: reach a runnable example after a brief purpose and its prerequisites. Keep a
-  sentence only when it helps perform the task, choose a setting, check the result or recover. Link concepts,
-  field descriptions and other reference detail; remove repeated facts and commentary that restates code.
-  Shortening must keep complete English, required inputs, access, waits, expected results, retry steps and
-  relevant data-loss behavior.
+- Keep a Develop guide short: reach a runnable example after a brief purpose and its prerequisites, counted in the
+  rendered page with every include expanded. A long included file, such as a whole handler, comes after the first
+  commands or in the task it serves, and the first example links it. Keep a sentence only when it helps perform the
+  task, choose a setting, check the result or recover. Link concepts, field descriptions and other reference detail;
+  remove repeated facts and commentary that restates code. Shortening must keep complete English, required inputs,
+  access, waits, expected results, retry steps and relevant data-loss behavior.
 - A rewrite keeps every useful concept and task of the page it replaces, so that a human or an LLM still learns how
   to use the feature: check its coverage concept by concept against the earlier page, not by word count or
   unchanged commands. A concept leaves Usage only as part of a full reference catalogue, which goes to the API

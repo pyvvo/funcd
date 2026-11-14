@@ -59,13 +59,14 @@ Every page shares the reader contract of `template.yaml`'s first section; the wo
    To list a client under Handler API, add it to `clients`; first check that each of its methods has
    a doc in both shims' `api.json` that names no ADR, or `TestEveryHandlerMethodIsDescribed` fails. A missing or
    internal doc is fixed in the language repo: one PR and one release per repo, then the `go get` bump in funcd.
-6. **Plan the sections** from the template: which optional ones apply, which free topics the feature needs. The
-   first section reaches a runnable example after a short purpose and its prerequisites. Link concepts and Spec
+6. **Plan the sections** from the template: which optional ones apply, which free topics the feature needs. The first
+   section reaches a runnable example after a short purpose and its prerequisites, counted in the rendered page with
+   every include expanded: a long included file goes after the first commands or into its task. Link concepts and Spec
    fields instead of repeating them. Comprehensive operation, request/response and error catalogues belong in a
    separate API Reference, generated from authoritative schemas and operation metadata. Keep the minimal request
-   payloads, response examples and recovery steps needed to run and verify the Usage example.
-   A server error remains an API error when a CLI prints it. The navigation dropdown and reference generation
-   are separate work; link that reference only once it exists.
+   payloads, response examples and recovery steps needed to run and verify the Usage example. A server error remains
+   an API error when a CLI prints it. The navigation dropdown and reference generation are separate work; link that
+   reference only once it exists.
 7. **Add missing examples.** A manifest a page shows without a handler goes under
    `api/types/v1alpha1/examples/<feature>/`, one scenario per file with every object it needs;
    `TestScenarioGuideExamplesApply` applies it. Handler code comes from a lane example, marked by a region, each
