@@ -1,3 +1,8 @@
+//go:build !e2e
+
+// These tests start one platform per guide manifest. The e2e build leaves them out, so that they do not compete with
+// its timing-sensitive scenarios; `go test ./...` runs them.
+
 package funcd_test
 
 import (
