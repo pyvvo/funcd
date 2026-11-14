@@ -5,9 +5,9 @@ description: Serve a static web app with settings for each deployment.
 
 ## Usage
 
-A Site serves a static web app from a Bucket. This example runs a built app locally and gives it a `config.json` for the staging environment. See [how Sites work](/funcd/docs/platform/workloads/site.md) for the concept.
+A Site serves a static web app from a Bucket. This example runs a built app locally and gives it a `config.json` for the staging environment. See [how Sites work](../../../platform/workloads/site.md) for the concept.
 
-Install the [dev build of funcdctl](/funcd/docs/get-started/install.md), Git, curl, and either Node.js or Python 3.12 or later. Put Node.js or `python3` on the `PATH`. The example needs no build step.
+Install the [dev build of funcdctl](../../../get-started/install.md), Git, curl, and either Node.js or Python 3.12 or later. Put Node.js or `python3` on the `PATH`. The example needs no build step.
 
 Clone the example and start it:
 
@@ -17,7 +17,7 @@ $ cd funcd-functions
 $ funcdctl dev apps/site-config/app -f apps/site-config/values/staging.yaml --build web=apps/site-config/web --gport 8080 --cport 8081
 ```
 
-The first argument, `apps/site-config/app`, is an [App template](/funcd/docs/develop/workloads/app.md#usage): a folder that holds `app.yaml` beside a `resources` folder. funcdctl renders the template into an App with the values of the `-f` files. [`app.yaml`](https://github.com/pyvvo/funcd-functions/blob/main/apps/site-config/app/app.yaml) names the image `web` under `images`, and each file of `resources` holds sections of the App's spec: [`site.yaml`](https://github.com/pyvvo/funcd-functions/blob/main/apps/site-config/app/resources/site.yaml) declares the Site and its Bucket, and sets the Site's `image` to `${{ images.web }}`. `--build web=apps/site-config/web` packs that folder as the image `web`. For another frontend, use the same three parts: a key under `images`, the Site's `image` set to `${{ images.<key> }}`, and `--build <key>=<folder>` naming the folder that its build writes.
+The first argument, `apps/site-config/app`, is an [App template](../app/index.md#usage): a folder that holds `app.yaml` beside a `resources` folder. funcdctl renders the template into an App with the values of the `-f` files. [`app.yaml`](https://github.com/pyvvo/funcd-functions/blob/main/apps/site-config/app/app.yaml) names the image `web` under `images`, and each file of `resources` holds sections of the App's spec: [`site.yaml`](https://github.com/pyvvo/funcd-functions/blob/main/apps/site-config/app/resources/site.yaml) declares the Site and its Bucket, and sets the Site's `image` to `${{ images.web }}`. `--build web=apps/site-config/web` packs that folder as the image `web`. For another frontend, use the same three parts: a key under `images`, the Site's `image` set to `${{ images.<key> }}`, and `--build <key>=<folder>` naming the folder that its build writes.
 
 In another terminal, repeat this command until `status.phase` is `Ready`. The Site may not exist yet while the App starts.
 
@@ -41,7 +41,7 @@ Press Ctrl-C in the first terminal to stop the example.
 
 ## Set runtime configuration
 
-[`runtimeConfig`](/funcd/docs/develop/workloads/site/spec.md#sitespecruntimeconfig) generates `config.json` from a ConfigMap and explicit values. Explicit values win when both define the same key. Every client that can load the Site can read this file. Do not put secrets in it.
+[`runtimeConfig`](spec.md#sitespecruntimeconfig) generates `config.json` from a ConfigMap and explicit values. Explicit values win when both define the same key. Every client that can load the Site can read this file. Do not put secrets in it.
 
 Start the example again with the additional values file:
 
@@ -60,34 +60,34 @@ The bundle is unchanged. Only `config.json` changes. Press Ctrl-C to stop the ex
 
 ## Serve an app at a path
 
-Set `ingress.path` to the app's path. Without `ingress.path`, a Site that sets `ingress.host` answers at `/`, as in the first example, and any other Site answers at `/site/<name>`. A Site's host follows the rules in [Choose the host of a Route](/funcd/docs/develop/security-and-networking/networking.md#choose-the-host-of-a-route). With `baseHref: true`, funcd adds the path to the index so relative URLs and deep links resolve correctly.
+Set `ingress.path` to the app's path. Without `ingress.path`, a Site that sets `ingress.host` answers at `/`, as in the first example, and any other Site answers at `/site/<name>`. A Site's host follows the rules in [Choose the host of a Route](../../security-and-networking/networking/index.md#choose-the-host-of-a-route). With `baseHref: true`, funcd adds the path to the index so relative URLs and deep links resolve correctly.
 
-This [complete manifest](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/site/site.yaml) serves an app at `/handbook`. Replace `image` with the reference of a bundle published with [`funcdctl push --site`](/funcd/docs/develop/tools/funcdctl/spec.md#funcdctl-push).
+This [complete manifest](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/site/site.yaml) serves an app at `/handbook`. Replace `image` with the reference of a bundle published with [`funcdctl push --site`](../../tools/funcdctl/spec.md#funcdctl-push).
 
 ::include[../../../../../api/types/v1alpha1/examples/site/site.yaml#site]
 
-At `/handbook`, the Site serves its index: the file that [`index`](/funcd/docs/develop/workloads/site/spec.md#sitespec) names, else the server's [`site.defaultIndex`](/funcd/docs/develop/running-funcd/spec.md#funcdconfigyaml), `index.html` by default. With `spa: true`, a path under `/handbook` that matches no file also gets the index, so that the app's own router handles a deep link such as `/handbook/chapters/3`.
+At `/handbook`, the Site serves its index: the file that [`index`](spec.md#sitespec) names, else the server's [`site.defaultIndex`](../../running-funcd/spec.md#funcdconfigyaml), `index.html` by default. With `spa: true`, a path under `/handbook` that matches no file also gets the index, so that the app's own router handles a deep link such as `/handbook/chapters/3`.
 
-The Site creates its declared Bucket. Use `ref` instead of `name` to use an existing Bucket. Its bundle prefix must have no owner. See the [Site fields](/funcd/docs/develop/workloads/site/spec.md#sitespec) for other settings.
+The Site creates its declared Bucket. Use `ref` instead of `name` to use an existing Bucket. Its bundle prefix must have no owner. See the [Site fields](spec.md#sitespec) for other settings.
 
-To serve files that a Function writes, add [`ingress.rules`](/funcd/docs/develop/workloads/site/spec.md#sitespecingressrules) for their Bucket prefix. The [reports example](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/site/rules.yaml) serves exported files at `/reports/data` beside its app. These paths serve the stored files directly and do not use the app's SPA fallback.
+To serve files that a Function writes, add [`ingress.rules`](spec.md#sitespecingressrules) for their Bucket prefix. The [reports example](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/site/rules.yaml) serves exported files at `/reports/data` beside its app. These paths serve the stored files directly and do not use the app's SPA fallback.
 
 ## Serve the app and a Function on one host
 
-A Site serves its own address through a Route of the Site's name, which the Site creates and owns. To serve the app and a Function on one host, apply a Route of another name, as the site-config example's [`sites/app-route.yaml`](https://github.com/pyvvo/funcd-functions/blob/main/apps/site-config/sites/app-route.yaml) does: its rule at `/` names the Site in [`backend.site`](/funcd/docs/develop/security-and-networking/networking/spec.md#routespecrulesbackend), and its rule at `/api` names a Function in `backend.function`. A `backend.site` rule serves the Site's current bundle and its `config.json`. The rule with the longest matching path serves each request. While the Site does not exist or serves no bundle, that Route serves none of its rules.
+A Site serves its own address through a Route of the Site's name, which the Site creates and owns. To serve the app and a Function on one host, apply a Route of another name, as the site-config example's [`sites/app-route.yaml`](https://github.com/pyvvo/funcd-functions/blob/main/apps/site-config/sites/app-route.yaml) does: its rule at `/` names the Site in [`backend.site`](../../security-and-networking/networking/spec.md#routespecrulesbackend), and its rule at `/api` names a Function in `backend.function`. A `backend.site` rule serves the Site's current bundle and its `config.json`. The rule with the longest matching path serves each request. While the Site does not exist or serves no bundle, that Route serves none of its rules.
 
-Set the Site's [`ingress.enabled`](/funcd/docs/develop/workloads/site/spec.md#sitespecingress) to `false` so that only that Route serves the bundle: the Site's own address is then off, and the Site can still be `Ready`. With `baseHref: true`, also set the Site's `ingress.path` to the rule's path: the index's `<base href>` is the Site's own path, even while its address is off.
+Set the Site's [`ingress.enabled`](spec.md#sitespecingress) to `false` so that only that Route serves the bundle: the Site's own address is then off, and the Site can still be `Ready`. With `baseHref: true`, also set the Site's `ingress.path` to the rule's path: the index's `<base href>` is the Site's own path, even while its address is off.
 
 ## Access
 
-Set [`ingress.auth.mode`](/funcd/docs/develop/workloads/site/spec.md#sitespecingressauth) to `open` for public access or `authenticated` to require a credential. When unset, the Namespace's defaults apply, otherwise access is open.
+Set [`ingress.auth.mode`](spec.md#sitespecingressauth) to `open` for public access or `authenticated` to require a credential. When unset, the Namespace's defaults apply, otherwise access is open.
 
-Authenticated access requires `server.auth.edge: true` and a credential allowed to get Functions in the Site's namespace. `funcdctl dev` has no edge authenticator. See [authentication and roles](/funcd/docs/develop/security-and-networking/networking.md#ask-callers-to-authenticate).
+Authenticated access requires `server.auth.edge: true` and a credential allowed to get Functions in the Site's namespace. `funcdctl dev` has no edge authenticator. See [authentication and roles](../../security-and-networking/networking/index.md#ask-callers-to-authenticate).
 
 ## Limits and quotas
 
 - `config.json` must fit within 32 KiB and the Bucket's `maxObjectBytes`.
-- Bundle files and previous bundles count against the [Bucket and prefix quotas](/funcd/docs/develop/services/bucket/spec.md#bucketspecquota). A deployment also needs enough free space for `storage.minFreeSize`.
+- Bundle files and previous bundles count against the [Bucket and prefix quotas](../../services/bucket/spec.md#bucketspecquota). A deployment also needs enough free space for `storage.minFreeSize`.
 
 After freeing space, update the Site or its Bucket, or restart funcd, to retry a failed deployment.
 
@@ -95,7 +95,7 @@ After freeing space, update the Site or its Bucket, or restart funcd, to retry a
 
 The Bucket keeps every deployed bundle. Deleting a Site keeps its Bucket and data. If the Site belongs to an App, the App's `deletion` setting decides whether to keep or delete its Bucket. The first example uses `delete`.
 
-See [Bucket storage](/funcd/docs/develop/services/bucket.md#data-storage) for storage settings and persistence.
+See [Bucket storage](../../services/bucket/index.md#data-storage) for storage settings and persistence.
 
 ## Status
 
@@ -117,14 +117,14 @@ Read `status.phase` and the `Ready` condition with the command in the first exam
 | `Pending` | `ConfigMapNotFound` | The runtime ConfigMap does not exist. The bundle can still deploy. |
 | `Pending` | `RuntimeConfigTooLarge` | `config.json` exceeds 32 KiB or the Bucket's object size limit. |
 
-A disabled address can still have the phase `Ready`. Check [`ingress.enabled`](/funcd/docs/develop/workloads/site/spec.md#sitespecingress) if the Site is ready but its address is off. The [status reference](/funcd/docs/develop/workloads/site/spec.md#sitestatus) describes the remaining fields.
+A disabled address can still have the phase `Ready`. Check [`ingress.enabled`](spec.md#sitespecingress) if the Site is ready but its address is off. The [status reference](spec.md#sitestatus) describes the remaining fields.
 
 ## Changes and deletion
 
 - Deploy a new bundle with a new tag or digest in `image`. Moving an existing tag alone does not deploy it. The previous bundle keeps serving until the new one is ready, and keeps serving if deployment fails.
 - Change `runtimeConfig` or its ConfigMap to update only `config.json`.
 - Change `ingress.path` to move the app without copying its bundle again.
-- The bundle prefix in [`bindings.blob`](/funcd/docs/develop/workloads/site/spec.md#sitespecbindingsblob) cannot change while the Site exists: a new prefix needs a new Site.
+- The bundle prefix in [`bindings.blob`](spec.md#sitespecbindingsblob) cannot change while the Site exists: a new prefix needs a new Site.
 - To restore an earlier bundle, set `image` to that bundle's reference.
 - To recreate a deleted Site using its retained Bucket, declare the Bucket by `ref`.
 
