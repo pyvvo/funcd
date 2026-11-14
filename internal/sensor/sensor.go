@@ -226,7 +226,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req controller.Request) (con
 		want.Status, want.Reason, want.Message, phase = v1.ConditionFalse, reason, capMsg(msg), v1.PhasePending
 	}
 	if cur, ok := se.Status.Conditions.Get(condReady); !ok || cur.Status != want.Status || cur.Reason != want.Reason ||
-		cur.Message != want.Message || se.Status.Phase != phase {
+		cur.Message != want.Message || cur.ObservedGeneration != want.ObservedGeneration || se.Status.Phase != phase {
 		se.Status.Phase = phase
 		se.Status.Conditions.Set(want)
 		return controller.Result{}, r.updateStatus(ctx, se)
