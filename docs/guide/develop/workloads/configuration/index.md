@@ -18,9 +18,8 @@ Install the [dev build of funcdctl](../../../get-started/install.md), Git and cu
 The Function declares the ConfigMap by `ref` under [`spec.configMaps`](../function/spec.md#functionspecconfigmaps),
 since the ConfigMap is a separate resource, and binds it under
 [`spec.bindings.config`](../function/spec.md#functionspecbindings). A binding can name only a ConfigMap that its
-Function declares, or, for a Function of an App, one that the App declares. The Function declares the Secret under
-`spec.secrets`, with the keys that its code reads, and binds it under `spec.bindings.secret`. The [Spec](spec.md) tab
-describes a ConfigMap's `data`.
+Function declares, or, for a Function of an App, one that the App declares. The [Spec](spec.md) tab describes a
+ConfigMap's `data`.
 
 `funcdctl dev` starts a local platform, runs the resource files of one folder on it, and prints the URL of each
 Function, on the port that `--gport` sets. It runs the Function from its build in the folder, `env-echo.mjs`, which
@@ -34,9 +33,10 @@ The ConfigMap `app-config` sets `APP_MODE` to `prod` and `SHARED` to `from-confi
 
 ::include[../../../../../_repos/funcd-typescript/examples/env-echo/configmap.yaml]
 
-The Function `env-echo` declares and binds the ConfigMap `app-config` and the Secret
+The Function `env-echo` declares and binds the ConfigMap `app-config`. It also declares the Secret
 [`app-secret`](https://github.com/pyvvo/funcd-typescript/blob/main/examples/env-echo/secret.yaml), which holds
-`API_KEY` and `SHARED`:
+`API_KEY` and `SHARED`, under `spec.secrets` with the keys that its code reads, and binds it under
+`spec.bindings.secret`:
 
 ::include[../../../../../_repos/funcd-typescript/examples/env-echo/function.yaml]
 
@@ -134,7 +134,7 @@ prints them under `status`; with `funcdctl dev`, add the `--server` and `--token
 | Phase or condition | Reason | Meaning |
 | --- | --- | --- |
 | `Failed` | `ConfigResolveFailed` | No worker runs, and funcd starts none: a bound ConfigMap is missing, or holds a value that is not UTF-8 text or that holds a NUL byte. The message of the `Ready` condition names the ConfigMap, and the key for a bad value. Calls fail with the HTTP status 503. When the ConfigMap is missing, create it: funcd checks for it every `controller.referentPollInterval`, 2 seconds by default, and starts the workers once it exists. |
-| `RevisionReady` condition | `ConfigResolveFailed` | A bound ConfigMap was deleted while a worker still serves: the phase stays `Ready`, and funcd starts no new worker. Create the ConfigMap again: funcd checks every `runtime.supervisionPeriod`, 10 seconds by default. |
+| `RevisionReady` condition | `ConfigResolveFailed` | The latest revision cannot start for one of the reasons of the `Failed` row, while a worker of the serving revision keeps the calls: the phase stays `Ready`. Fix or create the ConfigMap: funcd checks again every `runtime.supervisionPeriod`, 10 seconds by default. Once no worker is left, the Function is `Failed`. |
 | `Pending` | `StoreNotOwned` | A ConfigMap that the Function defines exists under its stored name and does not belong to the Function, as [Define the settings in the Function](#define-the-settings-in-the-function) describes. Declare the shared settings by `ref`. |
 | Another phase or reason | | The [Function's Status](../function/index.md#status) explains it. |
 
