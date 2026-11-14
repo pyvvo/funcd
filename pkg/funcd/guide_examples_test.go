@@ -42,9 +42,10 @@ func TestScenarioGuideExamplesApply(t *testing.T) {
 			require.Contains(t, files, file, "every lane manifest that a page includes is applied")
 		}
 	}
+	// One platform at a time: dozens of fresh platforms at once churn the ephemeral ports that other tests of the
+	// package re-bind, such as TestShutdownReleasesTheLoopbackFeedPort.
 	for _, file := range files {
 		t.Run(filepath.Base(file), func(t *testing.T) {
-			t.Parallel()
 			require.NoError(t, applyOnFreshPlatform(t, file))
 		})
 	}
