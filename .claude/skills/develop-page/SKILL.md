@@ -95,31 +95,36 @@ Every page shares the reader contract of `template.yaml`'s first section; the wo
    tool route: `just generate`, then the page tests of `cmd/funcd` and of `cmd/funcdctl` with `-tags dev`. A preview
    is reviewed only once it shows the revision under review: open it with a query that names the revision
    (`?rev=<commit>`), and find a sentence that the revision added.
-10. **Critique**: one subagent per page, reused across rounds, checks the page against the code, the template and the
-    reader, briefed with the files, not your conclusions. Fix what the page owns; route the rest (an issue, a board
-    card, a question in the PR). After each round of fixes, read the whole page again from the top, so that a fix
-    reaches every sentence with the same problem, not only the one quoted.
-11. **Fresh-reader check**: an agent other than the writer reads what the site publishes, not the source: after the
-    site's build, the page's Markdown copy with its includes expanded (`build/client/docs/<page path>.md` in
-    funcd-frontend's `packages/docs`, which the site serves at the page's URL plus `.md`) and its Spec page's copy. It
-    first checks that each copy is complete: no `::include` line is left, every code block is present, and each link
-    resolves from the copy's own URL. It may
-    follow the links that the page names as prerequisites or examples, and runs the first example in the documented
-    environment, but never reads funcd's code to fill a gap: each step it cannot do and each term it cannot resolve is
-    a finding. Its report keeps what it ran apart from what it only read, and puts a source or renderer problem in a
-    part of its own. The PR description carries the report with the commit and the checks, and names each kind of
-    evidence apart: the critic's code-checked review, the fresh reader's docs-only reading, and each run, with what
-    ran. The page carries none of it.
+10. **Critique**: a critic subagent other than the writer checks the page against the code, the template and the
+    reader, briefed with the files, not your conclusions. Across several pages, keep one critic and resume it for each
+    page instead of starting a new one, and keep each writer for its related pages the same way: they keep the shared
+    instructions, the facts already verified with their sources and the coverage evidence, read the next page, its
+    Spec and Platform pages and the semantic diff, and reopen the code only for a new or changed claim or when a cited
+    source changed version. Fix what the page owns; route the rest (an issue, a board card, a question in the PR).
+    After each round of fixes, read the whole page again from the top, so that a fix reaches every sentence with the
+    same problem, not only the one quoted.
+11. **Fresh-reader check**: an agent other than the writer reads the whole of what the site publishes, even after a
+    small change, not the source: after the site's build, the page's Markdown copy with its includes expanded
+    (`build/client/docs/<page path>.md` in funcd-frontend's `packages/docs`, which the site serves at the page's URL
+    plus `.md`) and its Spec page's copy. It first checks that each copy is complete: no `::include` line is left,
+    every code block is present, and each link resolves from the copy's own URL. It may follow the links that the page
+    names as prerequisites or examples, and runs the first example in the documented environment, but never reads
+    funcd's code to fill a gap: each step it cannot do and each term it cannot resolve is a finding. Its report keeps
+    what it ran apart from what it only read, and puts a source or renderer problem in a part of its own. The PR
+    description carries the report with the commit and the checks, and names each kind of evidence apart: the critic's
+    code-checked review, the fresh reader's docs-only reading, and each run, with what ran. The page carries none of
+    it.
 12. **Stop** when the checks pass, the critic has no finding the page owns, the fresh reader finished the first
     example, and the fact ledger has no open line.
 13. **Before a guide-wide rewrite or rollout ships**, run a fresh-app gate on the frozen build: freeze the built docs
-    (llms.txt and the expanded Markdown) and the CLI and SDK versions, then give several small independent agents,
-    in bounded batches within the agent cap, only an application idea and llms.txt. Each builds a new app from
-    scratch, such as a to-do app with a frontend and a backend, runs it, and shows its user flow working; a
-    plausible manifest or a copied example does not pass. Sort each failure into a documentation gap, an environment
-    problem or the model's own assumption, retry a model-suspect failure with another model on the identical packet
-    (and name only a model that actually ran), fix the pages a gap shows, refreeze, and rerun the affected idea and a
-    fresh one. The PR reports the ideas, the build, the models, the apps and their runtime results.
+    (llms.txt and the expanded Markdown) and the CLI and SDK versions, then give several small new agents, none of
+    which wrote or checked a page, in bounded batches within the agent cap, only an application idea and llms.txt.
+    Each builds a new app from scratch, such as a to-do app with a frontend and a backend, runs it, and shows its user
+    flow working; a plausible manifest or a copied example does not pass. Sort each failure into a documentation gap,
+    an environment problem or the model's own assumption, retry a model-suspect failure with another model on the
+    identical packet (and name only a model that actually ran), fix the pages a gap shows, refreeze, and rerun the
+    affected idea and a fresh one. The PR reports the ideas, the build, the models, the apps and their runtime
+    results.
 
 ## Rules
 
