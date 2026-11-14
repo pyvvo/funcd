@@ -120,12 +120,17 @@ Every page shares the reader contract of `template.yaml`'s first section; the wo
 13. **Before a guide-wide rewrite or rollout ships**, run a fresh-app gate on the frozen build: freeze the built docs
     (llms.txt and the expanded Markdown) and the CLI and SDK versions, then give several small new agents, none of
     which wrote or checked a page, in bounded batches within the agent cap, only an application idea and llms.txt.
-    Each builds a new app from scratch, such as a to-do app with a frontend and a backend, runs it, and shows its user
-    flow working; a plausible manifest or a copied example does not pass. Sort each failure into a documentation gap,
-    an environment problem or the model's own assumption, retry a model-suspect failure with another model on the
+    Check each idea against the public docs first: an idea that the docs say cannot be built, such as an HTTP Function
+    in Python, is an invalid task, not a gap. Start each probe with no project context and record how: a subagent of a
+    session in this repository receives its CLAUDE.md and memory, so a probe runs from an empty folder outside it.
+    Every file that the pages link and the change adds is reachable from the packet, through a recorded mirror in a
+    trial copy. Each probe builds a new app from scratch, such as a to-do app with a frontend and a backend, runs it,
+    and shows its user flow working; a plausible manifest or a copied example does not pass, and a second agent reruns
+    the flow from the recorded commands. Sort each failure into a documentation gap, an environment or harness
+    problem, an invalid task or the model's own assumption, retry a model-suspect failure with another model on the
     identical packet (and name only a model that actually ran), fix the pages a gap shows, refreeze, and rerun the
-    affected idea and a fresh one. The PR reports the ideas, the build, the models, the apps and their runtime
-    results.
+    affected idea and a fresh one. The PR reports the ideas, the build, the models with their token use, the pages
+    each probe read, the apps and their runtime results.
 
 ## Rules
 
