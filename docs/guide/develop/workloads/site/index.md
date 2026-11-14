@@ -80,7 +80,7 @@ Set the Site's [`ingress.enabled`](spec.md#sitespecingress) to `false` so that o
 
 ## Access
 
-Set [`ingress.auth.mode`](spec.md#sitespecingressauth) to `open` for public access or `authenticated` to require a credential. When unset, the Namespace's defaults apply, otherwise access is open. This setting covers the Site's own address only: a Route of another name that serves the Site, as in [Serve the app and a Function on one host](#serve-the-app-and-a-function-on-one-host), applies the [`auth`](../../security-and-networking/networking/spec.md#routespecrules) of its own rules, and `sites/app-route.yaml` keeps both of its rules `open`.
+Set [`ingress.auth.mode`](spec.md#sitespecingressauth) to `open` for public access or `authenticated` to require a credential. If the mode is unset, funcd uses the Namespace's default. If the Namespace sets no default, access is open. This setting covers the Site's own address only: a Route of another name that serves the Site, as in [Serve the app and a Function on one host](#serve-the-app-and-a-function-on-one-host), applies the [`auth`](../../security-and-networking/networking/spec.md#routespecrules) of its own rules, and `sites/app-route.yaml` keeps both of its rules `open`.
 
 Authenticated access requires `server.auth.edge: true` and a credential allowed to get Functions in the Site's namespace. `funcdctl dev` has no edge authenticator. See [authentication and roles](../../security-and-networking/networking/index.md#ask-callers-to-authenticate).
 
