@@ -153,7 +153,7 @@ func marksRegion(content, region string) bool {
 }
 
 // guideManifests lists the files under api/types/v1alpha1/examples and the YAML files that the guide's pages include
-// from a pinned repo, except the resources of an App template.
+// from a pinned repo, except the files of an App template.
 func guideManifests(t *testing.T) []string {
 	t.Helper()
 	var files []string
@@ -174,11 +174,16 @@ func guideManifests(t *testing.T) []string {
 	return slices.Compact(files)
 }
 
-// inAppTemplate reports whether file is one of an App template's resources, which sit in resources/ beside app.yaml:
-// a fragment that its App renders, not a manifest that funcdctl apply sends, so the template's own tests run it, as
-// internal/testkit/langmod's TestExampleResourcesDecode leaves it to them.
+// inAppTemplate reports whether file is a file of an App template: its app.yaml, beside a resources/ folder, or one of
+// its resources, which sit in resources/ beside app.yaml. Neither is a manifest that funcdctl apply sends: the App
+// renders them, so the template's own tests run them, as internal/testkit/langmod's TestExampleResourcesDecode leaves
+// it to them.
 func inAppTemplate(file string) bool {
 	dir := filepath.Dir(file)
+	if filepath.Base(file) == "app.yaml" {
+		fi, err := os.Stat(filepath.Join(dir, "resources"))
+		return err == nil && fi.IsDir()
+	}
 	if filepath.Base(dir) != "resources" {
 		return false
 	}
@@ -186,10 +191,12 @@ func inAppTemplate(file string) bool {
 	return err == nil && fi.Mode().IsRegular()
 }
 
-// An App template's resource is left out of the manifests that the guide applies, and a lane manifest is not.
+// An App template's app.yaml and its resources are left out of the manifests that the guide applies, and a lane
+// manifest is not.
 func TestAppTemplateResourceIsNoGuideManifest(t *testing.T) {
 	t.Parallel()
 	fns := langmod.Dir(t, langmod.Functions)
+	require.True(t, inAppTemplate(filepath.Join(fns, "apps", "volumes", "app", "app.yaml")))
 	require.True(t, inAppTemplate(filepath.Join(fns, "apps", "site-config", "app", "resources", "site.yaml")))
 	require.False(t, inAppTemplate(filepath.Join(fns, "apps", "site-config", "sites", "preview.yaml")))
 }

@@ -31,14 +31,20 @@ $ cd funcd-functions
 $ funcdctl dev apps/volumes/app -f apps/volumes/values/redeploy.yaml --build apps/volumes/functions/ts --gport 8080 --cport 8081
 ```
 
-[`app/app.yaml`](https://github.com/pyvvo/funcd-functions/blob/main/apps/volumes/app/app.yaml) names the App
-`volumes`, its version `1.0.0` and its image `files`, and takes two values: `registry`, and `timeout`, whose default
-is `30s`. An `app.yaml` that names images must set their `registry`, here from the value `registry`; `funcdctl dev`
-replaces it with its own. A template folder holds only `app.yaml`, `app.lock` and `resources/*.yaml`, so the builds
-and the values files sit beside it, in `apps/volumes`. [`values/redeploy.yaml`](https://github.com/pyvvo/funcd-functions/blob/main/apps/volumes/values/redeploy.yaml)
-sets `timeout` to `31s`. `resources/files.yaml` declares the two Functions; funcdctl replaces each `${{ … }}`
-expression when it renders the template, with the App's name, the reference of the image `files` and the value
-`timeout`:
+`app/app.yaml` names the App `volumes`, its version `1.0.0` and its image `files`, and declares under `valuesSchema`
+the two values that the template takes, `registry`, and `timeout`, whose default is `30s`:
+
+::include[../../../../../_repos/funcd-functions/apps/volumes/app/app.yaml]
+
+An `app.yaml` holds only these keys and `when`, which [Changes and deletion](#changes-and-deletion) describes. One that
+names images must set their `registry`, here from the value `registry`; `funcdctl dev` replaces it with its own. A
+template folder holds only `app.yaml`, `app.lock` and `resources/*.yaml`, so the builds and the values files sit
+beside it, in `apps/volumes`. [`values/redeploy.yaml`](https://github.com/pyvvo/funcd-functions/blob/main/apps/volumes/values/redeploy.yaml)
+sets `timeout` to `31s`. `resources/files.yaml` declares the two Functions. A part, such as a Function, declares no
+store of its own: a file of `resources` declares each KV store, Bucket, SQL database, Lake, ConfigMap and Secret at
+its top level, under `kv`, `buckets`, `sql`, `lakes`, `configMaps` or `secrets`, and the part binds it. funcdctl
+replaces each `${{ … }}` expression when it renders the template, with the App's name, the reference of the image
+`files` and the value `timeout`:
 
 ::include[../../../../../_repos/funcd-functions/apps/volumes/app/resources/files.yaml]
 
