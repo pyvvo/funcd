@@ -43,7 +43,7 @@ The Function receives each event as a **CloudEvent**, the envelope that the Clou
 [contract](../../workloads/function/index.md#usage), the JSON Schema of the input that the Function accepts, as for a
 call from outside funcd; `log-burst` accepts it, since every field of its input is optional.
 [Read the event in the handler](#read-the-event-in-the-handler) describes the CloudEvent. An Invocation is `Ready`
-once the Function has answered without an error, and `Failed` once every attempt has failed, as
+once the Function has answered without an error, and `Failed` once the delivery ends as a dead letter, as
 [Handle a delivery that fails](#handle-a-delivery-that-fails) explains. The [Spec](spec.md) tab describes every field
 of an EventSource and of a Sensor, and the Function's Spec tab describes the
 [Invocation](../../workloads/function/spec.md#invocation).
@@ -453,7 +453,7 @@ action shows in its Invocation, as the first example shows, and the dead letters
 | Sensor `Pending` | `InvalidInput` | The input of an action is not valid, as [Shape the input of an action](#shape-the-input-of-an-action) explains, and the Sensor subscribes to nothing. The message names the action and the field, such as `action "burst" field "file": expr.check: unknown field "nope" under "event" (position 1)` for `${{ event.nope }}`. |
 | Sensor `Pending` | `TargetServesHTTP` | An action names a Function whose `protocol` is `http`, which only funcd's [edge](../../../platform/security-and-networking/networking.md), the part of funcd that receives the calls from outside funcd, calls. The Sensor stays subscribed, and each event of that action ends as a dead letter. |
 | Invocation `Ready` | | The action ended without an error. |
-| Invocation `Failed` | | Every attempt failed. The Invocation's `error` holds the reason, as the dead letter does. |
+| Invocation `Failed` | | The delivery ended as a dead letter: after its attempts, or at once when the retry queue refused it. The Invocation's `error` holds the reason, as the dead letter does. |
 | Any other reason | | The message of the `Ready` condition gives the cause. |
 
 ## Changes and deletion
