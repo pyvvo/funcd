@@ -5,50 +5,38 @@ description: Declare a key-value store, bind its tables to a Function, and read 
 
 ## Usage
 
-A KV store keeps data as keys and values, grouped in tables. A Function's handler reads and writes those keys through
-`ctx.kv`, the KV client in the context that every handler receives. The
-[Platform page](../../../platform/services/kv.md) explains how KV works inside funcd; this page shows how to use it.
+A KV store keeps keys and their values in tables, each a separate set of keys inside the store. A Function's handler
+reads and writes the keys through `ctx.kv`, the KV client of the context that every handler receives. See
+[how KV works](../../../platform/services/kv.md) for the concept.
 
-The first example, kv-counter, counts calls by name. Each call sends a name, and the Function adds one to the count
-stored under that name and returns the new count. The steps below start the example on the local computer and call it
-twice with the same name: the first response contains `"count":1`, and the second contains `"count":2`.
+The kv-counter example counts calls by name: each call sends a name, and the Function adds one to the count stored
+under that name and returns the new count.
 
-The example needs four programs:
+Install the [dev build of funcdctl](../../../get-started/install.md), Git and curl, and put the runtime of the
+example's language on the `PATH`: Node.js for TypeScript, or Python 3.12 or later as `python3`.
 
-- funcdctl, installed as the [Install](../../../get-started/install.md) page shows. That page installs the dev build
-  of funcdctl, which includes the `funcdctl dev` command.
-- git, which copies the example's repository.
-- curl, which calls the Function.
-- The runtime of the example's language on the `PATH`: Node.js for TypeScript, or Python 3.12 or later as `python3`.
+The example's Function declares a store under [`spec.kv`](../../workloads/function/spec.md#functionspeckv), with one
+table. The table sets no `owner`, so the Function that declares the store owns the table and can write it;
+[Access](#access) explains who else can. A **binding** under
+[`spec.bindings.kv`](../../workloads/function/spec.md#functionspecbindingskv) connects the table to the Function under
+an alias, which the handler passes to `ctx.kv`. The [Spec](spec.md) tab lists every field of a store and every method
+of [`ctx.kv`](spec.md#ctxkv).
 
-`funcdctl dev` starts a local platform and runs the resource files of one folder on it. The example's manifest names
-an `image`, the bundle that `funcdctl push` writes for a platform to run. `funcdctl dev` does not use that image: it
-runs the Function from the code in the folder. `funcdctl dev` keeps the KV data in memory and prints the URL of each
-Function.
-The `--gport` flag sets the port of that URL, so the commands below use port 8080.
-
-The example's manifest connects the Function to its data:
-
-- It declares a **store** under `spec.kv`, with one **table**. A table is a separate set of keys inside the store.
-- The table sets no `owner`, so the Function that declares the store becomes the table's owner. The owner can write
-  the table; [Access](#access) explains who else can.
-- A **binding** under `spec.bindings.kv` connects the table to the Function and gives the table an alias. The handler
-  passes that alias to `ctx.kv`. funcd rejects a `ctx.kv` call that uses an alias that no binding declares.
-
-The [Spec](spec.md) tab lists every field of a store and every method of `ctx.kv`, in TypeScript and in Python.
+`funcdctl dev` starts a local platform, runs the resource files of one folder on it, and prints the URL of each
+Function, on the port that `--gport` sets. It runs the Function from the code in the folder, not from the manifest's
+`image`, the bundle that `funcdctl push` writes for a platform to run.
 
 ### TypeScript
 
-The Function `counter` declares the store `counters-kv`, with the table `table-counters`, and binds the table with the
-alias `counters`:
+The Function `counter` binds its table with the alias `counters`:
 
 ::include[../../../../../_repos/funcd-typescript/examples/kv-counter/counter.yaml#manifest]
 
-The handler reads the current count with `getText`, adds one, and writes the new count with `put`:
+Its handler reads the count with `getText`, adds one, and writes it with `put`:
 
 ::include[../../../../../_repos/funcd-typescript/examples/kv-counter/src/main.ts#handler]
 
-Clone the repository, and start the example from the repository's root folder:
+Clone the repository and start the example from its root folder:
 
 ```console
 $ git clone https://github.com/pyvvo/funcd-typescript
@@ -65,20 +53,19 @@ $ curl -s -X POST -H 'content-type: application/json' -d '{"name":"ada"}' http:/
 {"name":"ada","count":2}
 ```
 
-To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
+Press Ctrl-C in the first terminal to stop the example.
 
 ### Python
 
-The Function `pycounter` declares the store `py-counters`, with the table `table-counters`, and binds the table with
-the alias `pycounters`:
+The Function `pycounter` binds its table with the alias `pycounters`:
 
 ::include[../../../../../_repos/funcd-python/examples/kv-counter/counter.yaml#manifest]
 
-The handler reads the current count with `get_str`, adds one, and writes the new count with `put`:
+Its handler reads the count with `get_str`, adds one, and writes it with `put`:
 
 ::include[../../../../../_repos/funcd-python/examples/kv-counter/src/main.py#handler]
 
-Clone the repository, and start the example from the repository's root folder:
+Clone the repository and start the example from its root folder:
 
 ```console
 $ git clone https://github.com/pyvvo/funcd-python
@@ -95,54 +82,46 @@ $ curl -s -X POST -H 'content-type: application/json' -d '{"name":"ada"}' http:/
 {"name":"ada","count":2}
 ```
 
-To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
+Press Ctrl-C in the first terminal to stop the example.
 
 ## Write a key only while a condition holds
 
-The kv-counter handler reads the count, adds one, and writes the result. When two calls for the same name run at the
-same moment, both can read the same count and write the same new count, so one increment is lost.
+When two kv-counter calls for the same name run at the same moment, both can read the same count and write the same
+new count, so one increment is lost. A conditional write lets the handler detect that another caller changed the key
+first: it changes the key only while its condition holds, and its result tells the caller whether the write happened:
 
-A conditional write lets a handler detect that another caller changed a key first. A conditional write changes the
-key only while its condition holds, and its result tells the caller whether the write happened:
-
-- `putIfAbsent` (`put_if_absent` in Python) creates a key only when the key does not exist. A key that has expired
-  counts as absent. A successful `putIfAbsent` returns the key's new version; when the key exists, `putIfAbsent`
-  returns `null` (`None` in Python).
-- `compareAndSet` (`compare_and_set` in Python) replaces a key only when the key still has a given version. The
-  caller gets that version from `getEntry` (`get_entry` in Python), which returns a key's value with its version. A
-  successful `compareAndSet` returns the key's new version; when the key does not have the given version,
-  `compareAndSet` returns `null` (`None`).
-- `delIf` (`delete_if` in Python) deletes a key only when the key still has a given version. A successful `delIf`
-  returns `true` (`True` in Python); when the key does not have the given version, `delIf` returns `false`
-  (`False`).
+- `putIfAbsent` (`put_if_absent` in Python) creates a key only when the key does not exist; a key that has expired
+  counts as absent. It returns the key's new version, or `null` (`None` in Python) when the key exists.
+- `compareAndSet` (`compare_and_set`) replaces a key only when the key still has a given version, which `getEntry`
+  (`get_entry`) returns with the key's value. It returns the key's new version, or `null` (`None`) when the key does
+  not have that version.
+- `delIf` (`delete_if`) deletes a key only when the key still has a given version. It returns `true` (`True`), or
+  `false` (`False`) when the key does not have that version.
 
 When several callers create the same absent key at the same moment, exactly one `putIfAbsent` succeeds. When several
 callers replace or delete the same key with the same version, exactly one `compareAndSet` or `delIf` succeeds. A
-caller whose write failed has not changed the key. To keep its update, the caller reads the key again, with the key's
-new version, and retries.
+caller whose write failed has not changed the key: to keep its update, it reads the key again, with the key's new
+version, and retries.
 
 ## Hold a claim on a key
 
-The kv-claim example uses conditional writes to hold a claim: a key that one caller holds until that caller releases
-the key or the key expires. Each call sends a `key`, a `holder` that names the caller, and an `op`:
+A claim is a key that one caller holds until that caller releases the key or the key expires. The kv-claim example
+holds claims with conditional writes. Each call sends a `key`, a `holder` that names the caller, and an `op`:
 
 - `claim` creates the key with `putIfAbsent`.
 - `renew` replaces the key with `compareAndSet`, using the `version` that the holder received when it won.
 - `release` deletes the key with `delIf`, using that `version`.
 
-A successful call returns a response with `"won":true` and the key's new version; after a successful release, the
-response's version and holder are empty. A failed call returns a response with `"won":false` and the key's current
-version and holder, which are empty when the key no longer exists.
+A call that wins returns `"won":true` and the key's new version; after a release, the version and the holder are
+empty. A call that loses returns `"won":false` and the key's current version and holder, which are empty when the key
+no longer exists.
 
-A claim can expire. A write with a `ttl`, a number of whole seconds, makes the key expire after that time. A write
-without a `ttl` leaves the key with no expiry. A holder keeps its claim by renewing it with a new `ttl` before the
-claim expires.
+A write with a `ttl`, a number of whole seconds, makes the key expire after that time, and a write without a `ttl`
+leaves the key with no expiry. A holder keeps its claim by renewing it with a new `ttl` before the claim expires.
 
 The TypeScript Function `claim` declares the store `claims-kv` and owns its table `claims`. The Python Function
-`pyclaim` writes the same table through a writer role, which [Access](#access) explains, so both Functions compete
-for the same claims.
-
-The excerpts below show only the conditional write of each handler; they do not run on their own.
+`pyclaim` writes the same table through a writer role, which [Access](#access) shows, so both Functions compete for the
+same claims. The excerpts below show only the conditional write of each handler; they do not run on their own.
 
 ### TypeScript
 
@@ -162,27 +141,26 @@ handler is
 
 ## Share a store between Functions
 
-To share a store between Functions, create it as a separate KVStore, and set the `owner` of each table to the
-Function that writes the table:
+Create the store as a separate KVStore, and set the `owner` of each table to the Function that writes the table:
 
 ::include[../../../../../api/types/v1alpha1/examples/kv/kvstore.yaml#kvstore]
 
-Each Function that uses the store declares it by `ref` under `spec.kv`, and binds the table as in the first example:
+Each Function that uses the store declares it by `ref` under `spec.kv` and binds the table, as this excerpt of the
+Function `counter`, from the
+[complete example](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/kv/kvstore.yaml), shows:
 
 ::include[../../../../../api/types/v1alpha1/examples/kv/kvstore.yaml#binding]
 
-Every Function that binds the table can read it. To write the table, a Function other than the owner needs the write
-permission that [Access](#access) describes. When a table of a KVStore sets no `owner`, only that permission lets a
-principal write the table.
+Every Function that binds the table can read it. A Function other than the owner needs a role to write it, as
+[Access](#access) explains, and a table of a KVStore that sets no `owner` is written only through such a role.
 
 ## Access
 
-A Function needs no role assignment to:
+A Function needs no role for these [actions](../../security-and-networking/security/index.md#choose-a-role):
 
-- **Read the tables it binds.** Each entry of `spec.bindings.kv` lets the Function read that table. A binding allows
-  reading only, never writing.
-- **Write the tables it owns.** The owner of a table can write it. No other principal can write the table unless a
-  role allows it.
+- **Read the tables that it binds** (`kv::read`). Each entry of `spec.bindings.kv` lets the Function read that table,
+  never write it.
+- **Write the tables that it owns** (`kv::write`).
 
 Any other write needs a role. A RolesAssignment gives a principal, a Function or an Identity, a role on one table, on
 a store, or on the whole namespace. The smallest built-in role that allows writing is `KV Data Writer`, which allows
@@ -192,13 +170,13 @@ example gives `pyclaim` write access to the table `claims` of the store `claims-
 ::include[../../../../../api/types/v1alpha1/examples/kv/writer-role.yaml#rolesassignment]
 
 The built-in roles `Contributor` and `Owner` also allow writing keys, together with reading and writing buckets, and a
-Role that an operator defines can allow it too. No role lets a principal read a table that it does not bind:
-`ctx.kv` takes only a binding's alias, and no other client reaches KV keys. The Security reference [lists the built-in roles](../../security-and-networking/security/spec.md#rolesassignmentspecassignmentsroleref)
-and [explains how assignments pair each role with a scope](../../security-and-networking/security/spec.md#rolesassignmentspecassignments).
+Role that an operator defines can allow it too. The Security reference
+[lists the built-in roles](../../security-and-networking/security/spec.md#rolesassignmentspecassignmentsroleref) and
+[explains how assignments pair each role with a scope](../../security-and-networking/security/spec.md#rolesassignmentspecassignments).
 
-funcd supplies these rules as a built-in policy, which it applies in every namespace, so nothing needs to be written
-or installed. A Policy that an operator writes applies beside it, and cannot allow a write that the built-in policy
-forbids. In Cedar, the built-in policy reads:
+funcd applies these rules as a built-in policy in every namespace, so nothing needs to be written or installed. A
+[Policy](../../security-and-networking/security/index.md#write-a-policy) that an operator writes applies beside it,
+and cannot allow a write that the built-in policy forbids. In Cedar, the built-in policy reads:
 
 ```cedar title="Built-in KV policy"
 @id("kv-read-binding")
@@ -213,36 +191,37 @@ forbid(principal, action == Action::"kv::write", resource)
   unless { resource has writers && resource.writers.contains(principal) };
 ```
 
-A binding can name only a store that its own Function declares, by `name` or by `ref`. funcd rejects a binding to any
-other store. A call that the policy denies fails with the HTTP status 403, and its message names the rule, such as
+A binding can name only a store that its own Function declares, by `name` or by `ref`. No role lets a principal read
+a table that it does not bind: `ctx.kv` takes only a binding's alias, and no other client reaches KV keys. A call that
+the policy denies fails with the HTTP status 403, and its message names the rule, such as
 `cedar: forbidden by policy builtin/kv-single-writer`.
 
 ## Limits and quotas
 
-A store's `spec.quota` sets its limits:
+A store's [`spec.quota`](spec.md#kvstorespecquota) sets its limits:
 
 - `maxSize` or `maxBytes` limits the total size of the store. Set one of the two, not both. Without either, the store
   has no size limit.
 - `maxValueBytes` limits the size of each value. When it is not set, the limit is 1 MiB.
 - `maxKeyBytes` limits the size of each key. When it is not set, the limit is 1 KiB.
 
-A write whose value or key is above its limit fails with the HTTP status 413. A write that would take the store above
-its total size fails with the HTTP status 507. The [Spec](spec.md) tab gives the range of each field.
+A write fails when its key or its value is above its limit, or when it would take the store above its total size. The
+[Spec](spec.md) tab gives the range of each field.
 
 ## Data storage
 
 By default, funcd keeps KV data in memory, and the data is lost when funcd stops. To keep the data on disk, set
-`kvstore.engine: badger` in funcd's configuration. funcd then stores the data in the `kv` folder of its data
-directory, unless `kvstore.dataDir` names another folder. `storage.mode: memory` keeps KV data in memory even when
-`kvstore.engine` is `badger`.
+`kvstore.engine: badger` in [funcd's configuration](../../running-funcd/spec.md#funcdconfigyaml). funcd then stores
+the data in the `kv` folder of its data directory, unless `kvstore.dataDir` names another folder.
+`storage.mode: memory` keeps KV data in memory even when `kvstore.engine` is `badger`.
 
 ## Run it locally
 
-`funcdctl dev` keeps the KV data in memory, so the data is lost when `funcdctl dev` stops, whatever
-[Data storage](#data-storage) says about a server. With the `--persist` flag, `funcdctl dev` keeps the KV data between
-runs, in the `kv` folder of `.funcd-dev` in the current directory, or of the folder that `--persist-to` names. To
-remove it, delete that persist folder after `funcdctl dev` stops; that clears all the state that the local platform
-stored: its metastore, KV, blob, SQL, lake and volume data.
+`funcdctl dev` keeps KV data in memory, whatever [Data storage](#data-storage) says about a server, so the data is
+lost when `funcdctl dev` stops. With `--persist`, it keeps the KV data between runs, in the `kv` folder of
+`.funcd-dev` in the current directory, or of the folder that `--persist-to` names. Deleting `.funcd-dev`, or the
+`--persist-to` folder, after `funcdctl dev` stops clears all the state that the local platform stored: its resources
+and its KV, blob, SQL, lake and volume data.
 
 ## Examples
 
