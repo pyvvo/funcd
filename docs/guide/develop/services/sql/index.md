@@ -203,7 +203,8 @@ the order in one call, and each migration Function applies its migrations with t
 parameter is a string, a number, a boolean or null, never a list or an object. When funcd refuses a `ctx.sql` call,
 the method throws an error in TypeScript, and raises a `RuntimeError` in Python, whose message names the method, the
 HTTP status and funcd's explanation, such as `context.sql.query failed: 400 …` followed by
-`statement 0: no such table: orders`. A library such as Drizzle can wrap that error in one of its own. A handler that
+`statement 0: no such table: orders`. The error of a `queryValues` (`query_values`) call also starts with
+`context.sql.query failed`, and that of an `execute` call with `context.sql.execute failed`. A library such as Drizzle can wrap that error in one of its own. A handler that
 does not catch the error makes the call to the Function fail with the HTTP status 500.
 
 ### TypeScript
@@ -337,7 +338,7 @@ Restore loads a copy back, into the same database or into an empty one. The
 | SQLDatabase `Ready` | | The engine answers. |
 | SQLDatabase `DataMissing` condition `True` | `NoDirectory` | On a server whose `storage.mode` is `file`, the default, a database that was `Ready` came back without its data folder: it starts empty and `Ready`, and keeps this condition until a Restore into it succeeds. No database shows it with `storage.mode: memory` or under `funcdctl dev`. |
 | Function `Pending` | `SQLDatabaseNotFound` | A database that the Function binds does not exist. The Function starts once it exists. |
-| Function `Deploying` | `DependencyNotReady` | The engine of a database that the Function binds is not `Ready`. The workers run but are not ready, and each `ctx.sql` call fails. |
+| Function `Deploying`, `Degraded` or `Ready` | `DependencyNotReady` | The engine of a database that the Function binds is not `Ready`, and each `ctx.sql` call fails. A Function that never served is `Deploying`. One that served is `Degraded` once no worker is ready, and stays `Ready`, with this reason on its `True` `Ready` condition, while some workers are. |
 | Function `Pending` | `StoreNotOwned` | A database that the Function declares by `name` exists and is not the Function's, as [Changes and deletion](#changes-and-deletion) describes. |
 | Any other reason | | The `Ready` condition's reason and message, read with the commands above, give the cause. |
 
