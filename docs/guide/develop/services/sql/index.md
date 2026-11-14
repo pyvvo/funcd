@@ -23,8 +23,9 @@ Functions import packages, such as SQLModel, that uv installs before it starts `
 on the port that `--gport` sets. It runs each Function from the code in the folder, not from the manifest's `image`,
 the bundle that `funcdctl push` writes for a platform to run. For each SQLDatabase, it starts an engine on the local
 computer and logs `dev sql engine ready`, with the database's name, once the engine answers. The banner can appear
-before that: a call sent then waits until the engine and the Function's worker are ready, for at most
-`invoke.activationTimeout`, 30 seconds by default, and then fails; send it again. `funcdctl dev` deletes the
+before that: a call sent then waits until the engine and the Function's worker are ready. If they are not ready
+within `invoke.activationTimeout`, 30 seconds by default, the call fails; send it again once they are ready.
+`funcdctl dev` deletes the
 databases' data when it stops, unless `--persist` keeps it, as [Run it locally](#run-it-locally) explains.
 
 In each example, a **SQLDatabase** names its **owner**, the Function that can write it. Each Function declares the
