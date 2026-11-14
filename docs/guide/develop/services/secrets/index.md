@@ -1,17 +1,17 @@
 ---
 title: Secrets
-description: Create a Secret, bind it in a Function, read its values, and write its keys from the Functions that may.
+description: Create a Secret, bind it in a Function, read its values, and control which Functions can change its values.
 ---
 
 ## Usage
 
 A Secret holds named values, such as an API key, that a Function reads but that stay out of its code and its
 configuration. A Function declares and binds each Secret that it reads, and its handler reads the values through
-`ctx.secret`, the Secret client in the context that every handler receives. The Function that a Secret names as its
-owner, and a Function that a role allows, can also write the keys of a Secret that they bind. funcd puts no value of a
-Secret in the environment of a [worker](../../../platform/workloads/index.md#runtime), where the Function's code
-runs. The [Platform page](../../../platform/services/secrets.md) explains how funcd stores and checks Secrets; this
-page shows how to use them.
+`ctx.secret`, the Secret client in the context that every handler receives. A Function can also change a bound
+Secret's keys if it owns the Secret or has a role that allows writes. funcd puts no value of a Secret in the
+environment of a [worker](../../../platform/workloads/index.md#runtime), where the Function's code runs. The
+[Platform page](../../../platform/services/secrets.md) explains how funcd stores and checks Secrets; this page shows
+how to use them.
 
 The first example, env-echo, reads two keys of a Secret and returns their values. The steps below start the example
 on the local computer and call it: the response contains `"secret":"s3cr3t"`, the value of the key `API_KEY`. Then
@@ -123,27 +123,30 @@ To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
 
 ## Write a key of a Secret
 
-A Function writes the keys of a Secret whose `spec.owner` names it. The owner is one Function of the Secret's
-namespace, and it writes only while it binds the Secret. The Secret `oauth` of this manifest names the Function
-`refresher` as its owner:
+The example secret-writer writes a key of a Secret, reads the key back, and deletes it. The Function that writes is
+the Secret's owner: a Function writes the keys of a Secret whose `spec.owner` names it. The owner is one Function of
+the Secret's namespace, and it writes only while it binds the Secret; [Access](#access) explains which other
+Functions can write. The example's Secret holds one key, `TOKEN`, whose first value is a dummy, `token-v1`.
 
-::include[../../../../../api/types/v1alpha1/examples/secrets/writers.yaml#owner]
-
-The complete file,
-[api/types/v1alpha1/examples/secrets/writers.yaml](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/secrets/writers.yaml),
-also holds `refresher` and a second Function, `api`, which both declare and bind `oauth` as `env-echo` declares and
-binds `app-secret` in the first example.
+The steps below start the example on the local computer and call the Secret's owner twice: the first call writes
+`token-v2` into `TOKEN`, and its response contains `"token":"token-v2"`, the value that the owner reads after its
+write; the second call deletes `TOKEN`, and its response contains `"token":null`. The example's two handlers return
+the value of `TOKEN` only to show it: a handler that serves real callers does not return a Secret's value. The
+example needs funcdctl, git and curl, as the first example does, and the runtime of its language on the `PATH`:
+Node.js for TypeScript, or Python 3.12 or later as `python3` for Python. As in the first example, `funcdctl dev` runs
+each Function from the code in the folder, not from the `image` that its manifest names.
 
 The owner's handler writes with two methods of `ctx.secret`. The first argument of each names a Secret of the
-Function's `spec.bindings.secret`, and neither method returns a value:
+Function's `spec.bindings.secret`:
 
 - `put(binding, key, value)` sets the key to the value, a string.
 - `del(binding, key)` in TypeScript, and `delete(binding, key)` in Python, removes the key. Removing a key that the
-  Secret does not hold is no error.
+  Secret does not hold is no error: the example's handler removes `TOKEN` twice.
 
-When funcd refuses a write, the method throws an error, or raises a `RuntimeError` in Python, as [Errors](#errors)
-lists. The [Spec](spec.md#handler-api) tab's Handler API gives the signature of each method in both languages. No
-runnable example writes a Secret yet.
+Neither method returns a value. In TypeScript, each returns a promise, which the handler awaits, so that the write is
+done before the handler reads the key again. When funcd refuses a write, the method throws an error, or raises a
+`RuntimeError` in Python, as [Errors](#errors) lists. The [Spec](spec.md#handler-api) tab's Handler API gives the
+signature of each method in both languages.
 
 The next read of each Function that binds the Secret returns the change, with no restart, unless a Secret that comes
 later in that Function's `spec.bindings.secret` holds the same key. A write changes keys only: it never creates or
@@ -151,19 +154,196 @@ deletes the Secret itself. funcd checks a written key as it checks the keys of a
 as a read does: the key must be an environment variable name, and the value must be UTF-8 text without a NUL byte. A
 key that starts with `FUNCD_` is stored, but no read returns it.
 
+The example's Functions declare `TOKEN` under `spec.secrets`, so funcd starts no new worker for them while the Secret
+lacks `TOKEN`, as [Changes and deletion](#changes-and-deletion) explains. A worker that already serves goes on
+serving: the example sets no `scaling.idleTimeout`, and without one, funcd never reclaims an idle worker. The
+Functions' `scaling.minReplicas: 1` starts the worker of each Function before its first call.
+
+### TypeScript
+
+The Secret `demo-token`, in
+[examples/secret-writer/secret.yaml](https://github.com/pyvvo/funcd-typescript/blob/main/examples/secret-writer/secret.yaml),
+names the Function `token-owner` as its owner. Its value is in base64, as every value of `spec.data` is:
+`dG9rZW4tdjE=` is `token-v1`.
+
+::include[../../../../../_repos/funcd-typescript/examples/secret-writer/secret.yaml#secret]
+
+The Function `token-owner`, in
+[examples/secret-writer/token-owner.yaml](https://github.com/pyvvo/funcd-typescript/blob/main/examples/secret-writer/token-owner.yaml),
+declares and binds `demo-token`, as `env-echo` declares and binds `app-secret` in the first example:
+
+::include[../../../../../_repos/funcd-typescript/examples/secret-writer/token-owner.yaml#function]
+
+The handler of `token-owner` takes the call's input from `event.data`, whose type is `FuncInput`: the operation `op`,
+which is `put` or `delete`, and the `value` that a put writes into `TOKEN`. After the write, it reads `TOKEN` with
+`ctx.secret.get` and returns the value, or `null` when the Secret no longer holds the key. The types `CloudEvent`
+and `FunctionContext`, of the call's event and of the context, come from `@funcd-dev/shim`, the package of funcd's
+TypeScript types. This excerpt of
+[examples/secret-writer/src/token-owner/main.ts](https://github.com/pyvvo/funcd-typescript/blob/main/examples/secret-writer/src/token-owner/main.ts)
+leaves out only the file's first comment:
+
+::include[../../../../../_repos/funcd-typescript/examples/secret-writer/src/token-owner/main.ts#handler]
+
+The folder holds both handlers already built, as `token-owner.mjs` and `token-user.mjs`, so the example needs no build
+step. Clone the repository, and start the example from the repository's root folder:
+
+```console
+$ git clone https://github.com/pyvvo/funcd-typescript
+$ cd funcd-typescript
+$ funcdctl dev examples/secret-writer --gport 8080
+```
+
+In another terminal, write `TOKEN`, then delete it:
+
+```console
+$ curl -s -X POST -H 'content-type: application/json' -d '{"op":"put","value":"token-v2"}' http://127.0.0.1:8080/function/token-owner
+{"token":"token-v2"}
+$ curl -s -X POST -H 'content-type: application/json' -d '{"op":"delete"}' http://127.0.0.1:8080/function/token-owner
+{"token":null}
+```
+
+To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
+
+### Python
+
+The Secret `py-demo-token`, in
+[examples/secret-writer/secret.yaml](https://github.com/pyvvo/funcd-python/blob/main/examples/secret-writer/secret.yaml),
+names the Function `py-token-owner` as its owner. Its value is in base64, as every value of `spec.data` is:
+`dG9rZW4tdjE=` is `token-v1`.
+
+::include[../../../../../_repos/funcd-python/examples/secret-writer/secret.yaml#secret]
+
+The Function `py-token-owner`, in
+[examples/secret-writer/py-token-owner.yaml](https://github.com/pyvvo/funcd-python/blob/main/examples/secret-writer/py-token-owner.yaml),
+declares and binds `py-demo-token`, as `env-echo` declares and binds `app-secret` in the first example:
+
+::include[../../../../../_repos/funcd-python/examples/secret-writer/py-token-owner.yaml#function]
+
+The handler of `py-token-owner` takes the call's input from `event["data"]`, whose type is `FuncInput`: the operation
+`op`, which is `put` or `delete`, and the `value` that a put writes into `TOKEN`. After the write, it reads `TOKEN`
+with `context.secret.get` and returns the value, or `None` when the Secret no longer holds the key; the response shows
+`None` as `null`. The types `CloudEvent` and `FunctionContext`, of the call's event and of the context, come from
+`funcd_shim`, the package of funcd's Python types. This excerpt of
+[examples/secret-writer/src/py-token-owner/main.py](https://github.com/pyvvo/funcd-python/blob/main/examples/secret-writer/src/py-token-owner/main.py)
+leaves out only the file's first docstring:
+
+::include[../../../../../_repos/funcd-python/examples/secret-writer/src/py-token-owner/main.py#handler]
+
+The folder's `pyproject.toml` lists the entry of each Function under `[tool.funcd-bundle.functions]`, and
+`funcdctl dev` runs each entry with the `python3` of the `PATH`. Neither handler imports a third-party package, so
+the example needs no installation step. Clone the repository, and start the example from the repository's root
+folder:
+
+```console
+$ git clone https://github.com/pyvvo/funcd-python
+$ cd funcd-python
+$ funcdctl dev examples/secret-writer --gport 8080
+```
+
+In another terminal, write `TOKEN`, then delete it:
+
+```console
+$ curl -s -X POST -H 'content-type: application/json' -d '{"op":"put","value":"token-v2"}' http://127.0.0.1:8080/function/py-token-owner
+{"token":"token-v2"}
+$ curl -s -X POST -H 'content-type: application/json' -d '{"op":"delete"}' http://127.0.0.1:8080/function/py-token-owner
+{"token":null}
+```
+
+To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
+
 ## Let another Function write a Secret
 
 A Secret has at most one owner. To let another Function write it too, grant that Function the built-in role
 `Secret Data Writer` with a RolesAssignment. Its scope names one Secret, with the kind `Secret` and the Secret's name,
-or the whole namespace, with the kind `Namespace`. This RolesAssignment lets `api` write `oauth`:
+or the whole namespace, with the kind `Namespace`. Like the owner, the Function writes only a Secret that it binds,
+with the same methods. funcd reads the RolesAssignments of the namespace at each write, so the grant takes effect at
+the next write. A Policy that forbids the write still wins over the grant, as [Access](#access) explains.
 
-::include[../../../../../api/types/v1alpha1/examples/secrets/writers.yaml#rolesassignment]
+The second Function of the example secret-writer, `token-user` in TypeScript and `py-token-user` in Python, declares
+and binds the Secret of the previous section in the same way as the owner, but it does not own the Secret. Each call
+reads `TOKEN`, then tries to write the call's `value` into it. When funcd refuses the write, the handler returns the
+value that it read and the message of the error in `error`; otherwise, it returns `TOKEN` as it reads it after the
+write. The RolesAssignment that grants this Function `Secret Data Writer` on the Secret is in the example's
+`fixtures` folder. `funcdctl dev` applies only the files at the top of the folder, so it does not apply this
+RolesAssignment.
 
-Like the owner, `api` writes only a Secret that it binds, with the same methods. The built-in role
-`Secret Data Reader` allows no write, and it lets a Function read nothing more than its bindings do: `ctx.secret` reads
-only the Secrets that the Function binds, and each binding already allows the read. Both roles act only for a
-Function, because funcd reads and writes a Secret for no Identity. The Security page explains how to
-[choose a role](../../security-and-networking/security/index.md#choose-a-role).
+The steps below start the example again, call the second Function, apply the RolesAssignment, and call the Function
+again. The first call returns `"token":"token-v1"` and an error that holds the HTTP status 403 and names the rule
+`builtin/secret-single-writer` of the built-in policy that [Access](#access) quotes. The Secret holds `token-v1` again
+because each start of `funcdctl dev` applies the folder's `secret.yaml` again. The second
+call writes `token-v2` and returns it.
+
+To apply the RolesAssignment, a `funcdctl` command reaches the control plane of the local platform, whose address
+`funcdctl dev` prints, with `--server` and the token `funcd-dev-token`. The `--cport` flag sets the port of the
+control plane, so the commands below use the port 8081.
+
+### TypeScript
+
+The RolesAssignment `token-user-writes`, in
+[examples/secret-writer/fixtures/grant.yaml](https://github.com/pyvvo/funcd-typescript/blob/main/examples/secret-writer/fixtures/grant.yaml),
+grants `token-user` the role `Secret Data Writer` on `demo-token`:
+
+::include[../../../../../_repos/funcd-typescript/examples/secret-writer/fixtures/grant.yaml#grant]
+
+The handler of `token-user` takes the `value` to write from `event.data`. This excerpt of
+[examples/secret-writer/src/token-user/main.ts](https://github.com/pyvvo/funcd-typescript/blob/main/examples/secret-writer/src/token-user/main.ts)
+leaves out only the file's first comment:
+
+::include[../../../../../_repos/funcd-typescript/examples/secret-writer/src/token-user/main.ts#handler]
+
+In the root folder of the funcd-typescript repository, start the example again:
+
+```console
+$ funcdctl dev examples/secret-writer --gport 8080 --cport 8081
+```
+
+In another terminal, in the same folder, call `token-user`, apply the RolesAssignment, and call `token-user` again:
+
+```console
+$ curl -s -X POST -H 'content-type: application/json' -d '{"value":"token-v2"}' http://127.0.0.1:8080/function/token-user
+{"token":"token-v1","error":"context.secret.put failed: 403 {\"type\":\"urn:funcd:problem:forbidden\",\"title\":\"Forbidden\",\"status\":403,\"detail\":\"secrets.CheckWrite: write secret \\\"demo-token\\\" in \\\"default\\\" denied: cedar: forbidden by policy builtin/secret-single-writer\"}\n"}
+$ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token apply -f examples/secret-writer/fixtures/grant.yaml
+applied RolesAssignment/token-user-writes
+$ curl -s -X POST -H 'content-type: application/json' -d '{"value":"token-v2"}' http://127.0.0.1:8080/function/token-user
+{"token":"token-v2"}
+```
+
+To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
+
+### Python
+
+The RolesAssignment `py-token-user-writes`, in
+[examples/secret-writer/fixtures/grant.yaml](https://github.com/pyvvo/funcd-python/blob/main/examples/secret-writer/fixtures/grant.yaml),
+grants `py-token-user` the role `Secret Data Writer` on `py-demo-token`:
+
+::include[../../../../../_repos/funcd-python/examples/secret-writer/fixtures/grant.yaml#grant]
+
+The handler of `py-token-user` takes the `value` to write from `event["data"]`, and catches the `RuntimeError` of a
+refused write. This excerpt of
+[examples/secret-writer/src/py-token-user/main.py](https://github.com/pyvvo/funcd-python/blob/main/examples/secret-writer/src/py-token-user/main.py)
+leaves out only the file's first docstring:
+
+::include[../../../../../_repos/funcd-python/examples/secret-writer/src/py-token-user/main.py#handler]
+
+In the root folder of the funcd-python repository, start the example again:
+
+```console
+$ funcdctl dev examples/secret-writer --gport 8080 --cport 8081
+```
+
+In another terminal, in the same folder, call `py-token-user`, apply the RolesAssignment, and call `py-token-user`
+again:
+
+```console
+$ curl -s -X POST -H 'content-type: application/json' -d '{"value":"token-v2"}' http://127.0.0.1:8080/function/py-token-user
+{"token":"token-v1","error":"context.secret.put failed: 403 {\"type\":\"urn:funcd:problem:forbidden\",\"title\":\"Forbidden\",\"status\":403,\"detail\":\"secrets.CheckWrite: write secret \\\"py-demo-token\\\" in \\\"default\\\" denied: cedar: forbidden by policy builtin/secret-single-writer\"}\n"}
+$ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token apply -f examples/secret-writer/fixtures/grant.yaml
+applied RolesAssignment/py-token-user-writes
+$ curl -s -X POST -H 'content-type: application/json' -d '{"value":"token-v2"}' http://127.0.0.1:8080/function/py-token-user
+{"token":"token-v2"}
+```
+
+To stop the example, press Ctrl-C in the terminal that runs `funcdctl dev`.
 
 ## Access
 
@@ -173,12 +353,25 @@ A Function needs no role assignment to:
   `ctx.secret`. At each read, funcd asks Cedar whether the Function may perform the action `secret::read` on each
   Secret that it binds.
 - **Write the Secret it owns.** The Function that `spec.owner` names can write the Secret's keys while it binds the
-  Secret. At each write, funcd asks Cedar whether the Function may perform the action `secret::write` on that Secret.
+  Secret. A Workflow's function step writes as the Function that it calls: a function step that names an `image`
+  runs as the Function `<workflow>-<step>`, which funcd creates for the step, and a function step that names an
+  existing Function by `ref` runs as that Function. To let a function step write a Secret, the Secret's `spec.owner`
+  names that Function. At each write, funcd asks Cedar whether the Function may perform the action `secret::write` on
+  that Secret.
 
-Any other write needs a role. The smallest built-in role that allows writing is `Secret Data Writer`, which
-[Let another Function write a Secret](#let-another-function-write-a-secret) grants. The built-in roles `Reader`,
-`Contributor` and `Owner` include no Secret action. The
-[Security](../../../platform/security-and-networking/security.md) page explains where funcd asks Cedar.
+Any other write needs a role. funcd has two built-in roles for Secrets:
+
+- `Secret Data Writer` allows the actions `secret::read` and `secret::write`. It is the smallest role that lets a
+  Function write a Secret that it binds and does not own, as
+  [Let another Function write a Secret](#let-another-function-write-a-secret) shows.
+- `Secret Data Reader` allows the action `secret::read` only. It lets a Function read nothing more than its bindings
+  do: `ctx.secret` reads only the Secrets that the Function binds, and each binding already allows the read.
+
+Both roles act only for a Function, because funcd reads and writes a Secret for no Identity. The built-in roles
+`Reader`, `Contributor` and `Owner` include no Secret action. The Security page explains how to
+[choose a role](../../security-and-networking/security/index.md#choose-a-role), and the
+[Security](../../../platform/security-and-networking/security.md) page of the Platform chapter explains where funcd
+asks Cedar.
 
 funcd supplies these rules as a built-in policy, which it applies in every namespace, so nothing needs to be written
 or installed. In Cedar, the built-in policy reads:
@@ -224,6 +417,12 @@ People read and write Secrets through funcd's API, where the role of the caller'
 admin, or a developer of the Secret's namespace, can read and write Secrets, and a viewer can never read one. A Policy
 does not change these reads and writes. The funcd [Spec](../../running-funcd/spec.md#funcdconfigyaml) tab describes
 the roles under `auth.credentials`.
+
+## Limits and quotas
+
+A put sends its value to funcd in a JSON body, `{"value": "<text>"}`, which holds at most 1 MiB, the JSON around the
+value included. A put whose body is larger fails with the HTTP status 413, and nothing is written. A delete sends no
+body, so this limit applies to a put only.
 
 ## Data storage
 
@@ -303,23 +502,28 @@ A forbid shows on the `Ready` condition: a Function that has served becomes `Deg
   `cedar: forbidden by policy default/forbid-app-secret#0`. A handler that does not catch the error, such as
   env-echo's, makes the call fail with the HTTP status 500.
 - A write that funcd refuses throws an error, or raises a `RuntimeError` in Python, whose message, such as
-  `context.secret.put failed: 403 …`, holds one of these HTTP statuses:
+  `context.secret.put failed: 403 …`, holds the HTTP status. The refusals of a write include these: a put and a
+  delete can fail with the first three, and a put also with the last two:
   - 403: the first argument names a Secret that the Function does not bind, such as
-    `function "refresher" in "default" does not bind Secret "app-secret"`; or the Function is neither the owner nor a
-    writer that a role names, `cedar: forbidden by policy builtin/secret-single-writer`; or a Policy forbids the
+    `function "token-owner" in "default" does not bind Secret "app-secret"`; or the Function is neither the owner nor
+    a writer that a role names, `cedar: forbidden by policy builtin/secret-single-writer`; or a Policy forbids the
     write.
   - 404: the bound Secret does not exist.
-  - 400: the key is not an environment variable name, or the value is not UTF-8 text or contains a NUL byte. Nothing
-    is written.
-  - 413: the request is over 1 MiB, the value with the JSON that carries it.
   - 409: other writes changed the Secret during each of 5 attempts. Nothing is written, and the call can be made
     again.
+  - 400, for a put only: the key is not an environment variable name, or the value is not UTF-8 text or contains a
+    NUL byte. Nothing is written.
+  - 413, for a put only: the request is over 1 MiB, the value with the JSON that carries it, as
+    [Limits and quotas](#limits-and-quotas) explains.
+- A delete, `del` in TypeScript and `delete` in Python, of a key that the Secret does not hold is no error, as the
+  example's second delete of `TOKEN` shows.
 
 ## Run it locally
 
 `funcdctl dev` keeps its Secrets in memory, so they are gone when it stops. With the `--persist` flag, it keeps them
 between runs in the `metastore` folder of its persist folder: `.funcd-dev`, which it creates in the current folder,
-unless `--persist-to` names another folder. The Secrets' values are stored there unencrypted, because `funcdctl dev`
+unless `--persist-to` names another folder. Each start still applies the folder's Secrets again, which replaces the
+keys that a Function wrote. The Secrets' values are stored there unencrypted, because `funcdctl dev`
 sets no encryption key. To remove them, delete the persist folder after `funcdctl dev` stops: `.funcd-dev`, or the
 folder that `--persist-to` names. Deleting it clears all the state that the local platform stored, its metastore, KV,
 blob, SQL, lake and volume data, Secrets included. Keep the persist folder out of version control, for example with a
@@ -348,10 +552,16 @@ The worker does not get these values in its environment either: it inherits only
 as `PATH` and `HOME`. After the example stops, `git checkout examples/env-echo/secret.yaml` brings the file back.
 
 Writes work under `funcdctl dev` as on a platform: the owner and the writers that a RolesAssignment names write, and
-`funcdctl dev` grants no Secret role of its own. When it applies the folder again after a saved file, it applies each
-Secret of the folder again too, which replaces the keys that a Function wrote.
+`funcdctl dev` grants no Secret role of its own, as
+[Let another Function write a Secret](#let-another-function-write-a-secret) shows. At each start, with `--persist` too,
+and each time it applies the folder again after a saved file, it applies each Secret of the folder again, which
+replaces the keys that a Function wrote.
 
 ## Examples
 
 - [env-echo in TypeScript](https://github.com/pyvvo/funcd-typescript/tree/main/examples/env-echo): a Function that
   reads two keys of a Secret through `ctx.secret`, and a setting of a ConfigMap from its environment.
+- [secret-writer in TypeScript](https://github.com/pyvvo/funcd-typescript/tree/main/examples/secret-writer) and
+  [in Python](https://github.com/pyvvo/funcd-python/tree/main/examples/secret-writer): the owner of a Secret, which
+  writes and deletes one of its keys through `ctx.secret`, and another Function, which writes the key once a
+  RolesAssignment gives it the role `Secret Data Writer`.
