@@ -243,9 +243,8 @@ credential, as for every object of the API. funcd's configuration sets the crede
   act in the namespaces that `auth.namespaces` lists, `default` by default.
 - A `viewer` reads ResourceGroups in the namespaces of its credential, and changes nothing.
 
-A developer or a viewer gets the HTTP status 403 for any request on a Namespace.
-
-It acts only in the namespaces of its credential. Elsewhere, each request gets the HTTP status
+A developer or a viewer gets the HTTP status 403 for any request on a Namespace, and acts only in the namespaces of
+its credential. Elsewhere, each request gets the HTTP status
 403, with a message such as `list Function in "shop" denied: developer not scoped to namespace "shop"`: list the
 namespace in the `namespaces` of the credential's entry, or use a credential that acts there. A forced delete of a
 group deletes each member with the caller's own credential, so it needs the right to delete each of them. The
@@ -295,6 +294,7 @@ These errors stop a command before any server answers:
 | `manifest is invalid (<kind> "<name>")`, followed by `resourceGroup is required for kind "<kind>"` | `funcdctl apply` checks each document before it sends it. Set `metadata.resourceGroup` on every object of a namespace. |
 | `manifest is invalid (Namespace "<name>")`, followed by a value that `must be implicit or explicit` or `must be authenticated or open` | Set `defaultExposure` or `edgeDefaults.auth.mode` to a value that the [Spec](spec.md#namespacespec) tab lists. |
 | `manifest is invalid (Namespace "<name>")`, followed by `spec.volumeBudget and spec.volumeBudgetBytes are both set: want at most one` | Keep one of the two budgets. |
+| `manifest is invalid (Namespace "<name>")`, followed by `spec.volumeBudget` and the reason the size does not parse | Write `spec.volumeBudget` as a size that the [Spec](spec.md#namespacespec) tab describes. |
 
 ## Run it locally
 
