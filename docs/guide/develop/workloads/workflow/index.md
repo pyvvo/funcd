@@ -240,9 +240,9 @@ A Workflow declares the stores that its steps use at the root of its spec:
   owner can also name a Lake that the Workflow declares. An
   entry with `ref` declares an existing store instead. A declaration gives no access by itself: a step reaches a
   store only through its own bindings.
-- Each step binds what its code uses under
+- Each image step binds what its code uses under
   [`function.bindings`](spec.md#workflowspecstepsfunctionbindings), and each store that a binding names must be
-  declared at the root. A binding to a KV table, a Bucket prefix or a SQL database lets the step read it; only its
+  declared at the root. A `ref` step ignores `function.bindings`: the Function that it names keeps its own. A binding to a KV table, a Bucket prefix or a SQL database lets the step read it; only its
   owner and the principals that a role allows can write it, as the [KV](../../services/kv/index.md#access) page
   explains for a KV table.
 
@@ -423,7 +423,7 @@ and the field.
 | Run `Failed` | `StepFailed` | A step failed, as [Retry a step and handle a failed run](#retry-a-step-and-handle-a-failed-run) explains. |
 | Run `Failed` | `RunTimedOut` | The run passed the Workflow's `timeout`. |
 | Run `Failed` | `InputSchemaMismatch` | The input does not match the Workflow's contract. |
-| Run `Failed` | `PayloadLimitExceeded` | An input or an output is larger than `workflow.payloadLimit`. |
+| Run `Failed` | `PayloadLimitExceeded` | The run's input is larger than `workflow.payloadLimit` when the run starts. A step output that is too large fails its step with no retry, and the run with `StepFailed`. |
 | Run `Failed` | `SubworkflowDepthExceeded` | Child runs nest more than 8 levels deep. |
 | Run `Failed` | `RunRecordTooLarge` | The run's state is too large for the store of the run state. |
 | Run `Failed`, with the condition `ReplaySeeded` `False` | `DigestDrift` or `SeedInvalid` | A replay cannot start from its source run, as [Replay a run from a step](#replay-a-run-from-a-step) explains. |
