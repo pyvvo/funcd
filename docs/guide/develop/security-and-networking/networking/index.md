@@ -5,62 +5,26 @@ description: Serve a Function at a path and a host of its own with a Route, ask 
 
 ## Usage
 
-funcd's edge is the part of funcd that receives the calls from outside funcd. A Route tells the edge where to answer:
-each rule of a Route matches a path, and sends the requests on that path to a Function, to the files of a Bucket or to
-a Site. An EgressPolicy works in the other direction: on a server that controls outbound connections, it lists where
-the [workers](../../../platform/workloads/index.md#runtime) of a Function, the processes that run its code, may
-connect. The [Platform page](../../../platform/security-and-networking/networking.md) explains how a call reaches a
-worker and how a worker reaches the rest; this page shows how to write a Route and an EgressPolicy.
+A Route tells funcd's edge, the part of funcd that receives the calls from outside funcd, where to answer: each rule
+of a Route matches a path and sends the requests on that path to a Function, to the files of a Bucket or to a Site. An
+EgressPolicy works in the other direction: on a server that controls outbound connections, it lists where the
+[workers](../../../platform/workloads/index.md#runtime) of a Function, the processes that run its code, may connect.
+The [Platform page](../../../platform/security-and-networking/networking.md) explains how a call reaches a worker and
+how a worker reaches the rest.
 
-The first example, http-api, serves the Function `devices-api` at the path `/api` through the Route `api`.
-`devices-api` is a web app that keeps a list of devices;
-[Serve HTTP requests](../../workloads/function/index.md#serve-http-requests) on the Function page explains how it
-answers HTTP requests. The steps below start the example on the local computer, wait until the Route is ready, then
-create a device and list the devices through the Route: the Route's status shows the phase `Ready`, and the list
-contains the new device.
+The first example, http-api, serves the Function `devices-api`, a web app that keeps a list of devices, at the path
+`/api` through the Route `api`, then creates a device and lists the devices through the Route. It exists in
+TypeScript only, since a Function that serves HTTP runs on Node.js.
 
-The example needs four programs:
-
-- funcdctl, installed as the [Install](../../../get-started/install.md) page shows. That page installs the dev build
-  of funcdctl, which includes the `funcdctl dev` command.
-- git, which copies the example's repository.
-- curl, which calls the Function.
-- Node.js on the `PATH`, which runs the example's Function.
-
-`funcdctl dev` starts a local platform, applies the resource files of one folder to it, and serves the edge on the
-local computer. The `--gport` flag sets the port of the edge, and `--cport` the port of the control plane, which a
-`funcdctl` command reaches with `--server` and the token `funcd-dev-token`. The commands below use the ports 8080 and
-8081.
-
-The Route `api` has one rule:
-
-- Its [`path`](spec.md#routespecrules) is `/api`. It sets no [`pathType`](spec.md#routespecrules), so the type is
-  `Prefix`: the rule matches `/api` and every path under it by whole segments, such as `/api/devices`, but not
-  `/apix`.
-- Its [`backend.function`](spec.md#routespecrulesbackend) names the Function that the rule calls, `devices-api`,
-  which must be in the Route's namespace.
-
-The Route sets no [`host`](spec.md#routespec), so, in the namespace `default`, it answers on every host except another
-namespace's own host, `<namespace>.<server.baseDomain>`, while that namespace uses it;
-[Choose the host of a Route](#choose-the-host-of-a-route) gives the details.
-
-Before it calls the Function, the edge removes the rule's path from the request: a request for `/api/devices` reaches
-the app as `/devices`. Since `devices-api` serves HTTP, the request's `X-Forwarded-Prefix` header holds the part that
-the edge removed, `/api`. The Route adds an address to the Function: here, the Function's own address,
-`/function/devices-api`, keeps answering.
-
-The example exists in TypeScript only, since a Function that serves HTTP runs on Node.js.
+Install the [dev build of funcdctl](../../../get-started/install.md), which includes the `funcdctl dev` command, Git,
+curl and Node.js, and put Node.js on the `PATH`. `funcdctl dev` starts a local platform, applies the resource files of
+one folder to it and serves the edge on the local computer. Its `--gport` flag sets the port of the edge, and
+`--cport` the port of the control plane, which a `funcdctl` command reaches with `--server` and the token
+`funcd-dev-token`.
 
 ### TypeScript
 
-The Route `api`, in `examples/http-api/route.yaml`:
-
-::include[../../../../../_repos/funcd-typescript/examples/http-api/route.yaml]
-
-The folder also holds the Function `devices-api`, in
-[`devices.yaml`](https://github.com/pyvvo/funcd-typescript/blob/main/examples/http-api/devices.yaml), its build
-`devices-api.mjs`, which the repository holds already built, and a configuration file for a funcd server, which
-`funcdctl dev` skips. Clone the repository, and start the example from the repository's root folder:
+Clone the repository, and start the example from the repository's root folder:
 
 ```console
 $ git clone https://github.com/pyvvo/funcd-typescript
@@ -79,7 +43,29 @@ $ funcdctl --server http://127.0.0.1:8081 --token funcd-dev-token get route api 
 
 The command prints the Route as JSON. Under `status`, `"phase"` is `"Ready"`, and the condition `Ready` has the
 status `"True"` and the reason `Programmed`: the edge serves every rule of the Route. [Status](#status) explains the
-other reasons. Then create a device through the Route, and list the devices:
+other reasons.
+
+The folder holds the Route `api`, in `examples/http-api/route.yaml`, the Function `devices-api`, in
+[`devices.yaml`](https://github.com/pyvvo/funcd-typescript/blob/main/examples/http-api/devices.yaml), its build
+`devices-api.mjs`, which the repository holds already built, and a configuration file for a funcd server, which
+`funcdctl dev` skips. [Serve HTTP requests](../../workloads/function/index.md#serve-http-requests) on the Function
+page explains how `devices-api` answers HTTP requests. The Route `api` has one rule:
+
+::include[../../../../../_repos/funcd-typescript/examples/http-api/route.yaml]
+
+- Its [`path`](spec.md#routespecrules) is `/api`. It sets no [`pathType`](spec.md#routespecrules), so the type is
+  `Prefix`: the rule matches `/api` and every path under it by whole segments, such as `/api/devices`, but not
+  `/apix`.
+- Its [`backend.function`](spec.md#routespecrulesbackend) names the Function that the rule calls, `devices-api`,
+  which must be in the Route's namespace.
+- The Route sets no [`host`](spec.md#routespec), so, in the namespace `default`, it answers on every host except the
+  host of another namespace while that namespace uses it, as
+  [Choose the host of a Route](#choose-the-host-of-a-route) explains.
+
+The edge removes the rule's path from the request before it calls the Function: a request for `/api/devices` reaches
+the app as `/devices`, and its `X-Forwarded-Prefix` header holds the part that the edge removed, `/api`. The Route
+adds an address to the Function: its own address, `/function/devices-api`, keeps answering. Create a device through
+the Route, and list the devices:
 
 ```console
 $ curl -s -X POST -H 'content-type: application/json' -d '{"name":"truck-7"}' http://127.0.0.1:8080/api/devices
@@ -148,7 +134,8 @@ under `/function` itself and belongs to that namespace. A rule at `/`, of that n
 such a request there.
 
 A request that no rule matches, and that is not addressed to a Function's own address, gets the HTTP status 404 with
-the message `no route for "<path>"`.
+the message `no route for "<path>"`. A request whose path, after the rule's path, lies under `/health/` also gets 404
+and reaches no worker: funcd keeps those paths for its own checks of a worker.
 
 Two rules conflict when their Routes claim the same host, the one that `status.host` shows, have the same path, a
 trailing slash aside, and have a method in common. Only one Route then keeps that path: the first in this order.
@@ -186,12 +173,10 @@ What a call to an `authenticated` rule needs depends on the server setting
   get those Functions gets 403; [Access](#access) names the roles. The Function receives the call without these two
   headers.
 
-The mode of a Route covers only the requests through its rules. A Function's own address, `/function/<name>`, has a
-mode of its own: the Function's [`spec.ingress.auth`](../../workloads/function/spec.md#functionspecingressauth), else
-the default of its Namespace, else open. A mode in `spec.ingress.auth` wins over the Namespace's default, so the mode
-`open` there keeps the address open in a namespace whose default is `authenticated`. Beside an authenticated Route,
-the address therefore stays open unless `spec.ingress.auth` asks for authentication, or sets no mode while the
-Namespace's default asks for it. The address answers only while it is on:
+The mode of a Route covers only the requests through its rules. A Function's own address, `/function/<name>`, takes
+the mode of the Function's [`spec.ingress.auth`](../../workloads/function/spec.md#functionspecingressauth), else the
+default of its Namespace, else open, so beside an authenticated Route it stays open unless one of these asks for
+authentication. The address answers only while it is on:
 [`spec.ingress.enabled`](../../workloads/function/spec.md#functionspecingress) set to `false` turns it off, and so
 does a Namespace whose `defaultExposure` is `explicit`, while `enabled` is not set. A host or a path in
 `spec.ingress` replaces the address with a Route that the Function owns.
@@ -278,7 +263,9 @@ returned, until that answer expires. Two consequences follow:
 - A domain rule never allows an address that is not globally reachable, such as a private address, even when the
   lookup returns one: such an address needs a CIDR rule that holds it.
 
-A refused connection opens, then ends once funcd has decided: on the ports 80 and 8080, it gets an HTTP answer with
+A worker that has just started can neither connect nor look a name up until funcd has registered it, within
+`server.network.workerSyncInterval`, 2 seconds by default. A refused connection opens, then ends once funcd has
+decided: on the ports 80 and 8080, it gets an HTTP answer with
 the status 403 and the message `egress denied by funcd EgressPolicy`, and on any other port, it is closed. funcd writes
 each decision to its own log, not to the Function's logs, as a record whose message is `egress decision`, with the
 namespace, the Function, the domain, the address, the port, `allowed` and the reason. A refused lookup gives a record
@@ -341,8 +328,7 @@ A Function's outbound connections and the calls through the edge are checked by 
 - An EgressPolicy holds 1 to 64 rules. Each rule names at most 64 domains and CIDRs together, and at most 32 ports,
   each from 1 to 65535. `funcdctl apply` refuses a policy beyond these limits.
 - A call to a Function through the edge, through a Route or at the Function's own address, holds a body of at most
-  1 MiB, a cap that no setting changes: a larger body gets the HTTP status 413 with the message
-  `request body exceeds 1048576 bytes`.
+  1 MiB, a cap that no setting changes: a larger body gets the HTTP status 413.
 - [`server.limits`](../../running-funcd/spec.md#funcdconfigyaml) sets the other limits of the edge, which apply to
   every call through a Route: a request rate, a cap on the calls in flight and a cap of its own on the size of a
   request's body, each off by default. The Function page lists the
@@ -352,22 +338,21 @@ This page's [Spec](spec.md) tab gives the range of each field.
 
 ## Status
 
-`funcdctl get route <name> -n <namespace> -o json` prints a Route's status, as the first example shows. Its phase is
-`Ready` while the edge serves every rule of the Route, and `Pending` otherwise. A Route serves all its rules or none,
-so one rule at fault keeps the whole Route off. The condition `Ready` explains the phase: it is `True` with the reason
-`Programmed`, or `False` with one of these reasons:
+`funcdctl get route <name> -n <namespace> -o json` prints a Route's status, as the first example shows. A Route serves
+all its rules or none, so one rule at fault keeps the whole Route off. The condition `Ready` explains the phase:
 
-- `BackendNotFound`, `BucketNotFound` or `SiteNotFound`: the Function, the Bucket or the Site that a rule names does
-  not exist in the Route's namespace, with a message such as `backend function "nope" not found`. `SiteNotReady`: the
-  Site that a rule names serves nothing yet. funcd checks such a Route again every `controller.referentPollInterval`,
-  2 seconds by default, so the Route serves soon after its backend exists.
-- `Disabled`: the Route's [`enabled`](spec.md#routespec) is `false`, or the Route is one that a Function or a Site
-  owns in a namespace whose `defaultExposure` is `explicit`, and its `enabled` is not set. A disabled Route leaves its
-  paths to the other Routes.
-- `HostReserved`, `ReservedPath` or `HostRequired`: the Route's host or a rule's path breaks a rule of
-  [Choose the host of a Route](#choose-the-host-of-a-route).
-- `RouteConflict`: another Route keeps one of the Route's paths, as
-  [Choose which rule serves a request](#choose-which-rule-serves-a-request) explains.
+| Phase | Reason | Meaning |
+| --- | --- | --- |
+| `Ready` | `Programmed` | The edge serves every rule of the Route. |
+| `Pending` | `BackendNotFound` | The Function that a rule names does not exist in the Route's namespace, with a message such as `backend function "nope" not found`. funcd checks again every `controller.referentPollInterval`, 2 seconds by default, so the Route serves soon after the Function exists. |
+| `Pending` | `BucketNotFound` | The Bucket that a rule names does not exist in the Route's namespace. funcd checks again every `controller.referentPollInterval`. |
+| `Pending` | `SiteNotFound` | The Site that a rule names does not exist in the Route's namespace. funcd checks again every `controller.referentPollInterval`. |
+| `Pending` | `SiteNotReady` | The Site that a rule names serves nothing yet. funcd checks again every `controller.referentPollInterval`. |
+| `Pending` | `Disabled` | The Route's [`enabled`](spec.md#routespec) is `false`, or the Route is one that a Function or a Site owns in a namespace whose `defaultExposure` is `explicit`, and its `enabled` is not set. It leaves its paths to the other Routes. |
+| `Pending` | `HostReserved`, `ReservedPath` or `HostRequired` | The Route's host or a rule's path breaks a rule of [Choose the host of a Route](#choose-the-host-of-a-route). |
+| `Pending` | `RouteConflict` | Another Route keeps one of the Route's paths, as [Choose which rule serves a request](#choose-which-rule-serves-a-request) explains. |
+| `Pending` | `EdgeStarting` | The edge holds a Route that a Function or a Site owns until it has loaded its table of Routes. Repeat the check. |
+| `Pending` | Another reason | Read the condition's reason and message in the same output. |
 
 `status.host` names the host that the Route claims. It is empty for a Route of the namespace `default` that sets no
 host, and while a backend is missing.
@@ -391,37 +376,18 @@ the `egress decision` records in funcd's log show what they allow.
 The funcd [Spec](../../running-funcd/spec.md#funcdconfigyaml) tab describes `controller.routeResyncInterval` and
 `controller.referentPollInterval`.
 
-## Errors
+## CLI errors
 
-A caller of a Route meets these HTTP statuses, each with a message in the body, besides the
-errors of the [Function](../../workloads/function/index.md) that the Route calls:
+These errors stop a command before any server answers:
 
-- **401** for a rule whose mode is `authenticated`: `authentication required but no authenticator is configured` when
-  `server.auth.edge` is `false`, its default, and in `funcdctl dev`; when it is `true`,
-  `missing bearer token or API key` for a call without a credential, and `invalid credential` for a credential that
-  the server does not know.
-- **403** for a rule whose mode is `authenticated`, when the caller's credential may not get the Functions of the
-  namespace: `not authorized to invoke <namespace>/<name>`, followed by the reason.
-- **404** `no route for "<path>"` when no rule matches the request's host, path and method, and the request is not
-  addressed to a Function's own address. A request whose path, after the rule's path, lies under `/health/` also
-  gets 404 and reaches no worker: funcd keeps those paths for its own checks of a worker.
-
-On a server with egress control on, a worker's outbound connection meets these refusals:
-
-- A connection that nothing allows gets, on the ports 80 and 8080, an HTTP answer with the status 403 and the message
-  `egress denied by funcd EgressPolicy`; on any other port, it is closed.
-- A lookup of a name that no domain rule allows is refused, which most libraries report as a temporary
-  name-resolution error.
-- A worker that has just started can neither connect nor look a name up until funcd has registered it, within
-  `server.network.workerSyncInterval`, 2 seconds by default.
-
-`funcdctl apply` refuses a Route or an EgressPolicy whose fields break their rules, and names the field, with messages
-such as:
-
-- `spec.rules[0].path "api" must begin with '/'`
-- `spec.rules[0].backend must set exactly one of function, static or site`
-- `spec.rules[0].to must set at least one of domains/cidrs`
-- `spec.rules[0].to.domains "*" is not a valid domain or "*."-wildcard`
+| Error | Action |
+| --- | --- |
+| `no node interpreter found for the node handler` | `funcdctl dev` found no Node.js for the examples' Functions. Put Node.js on the `PATH`, or set `FUNCD_NODE` to the path of `node`. |
+| `manifest is invalid (<kind> "<name>")`, followed by the field and the rule it breaks, such as `spec.rules[0].path "api" must begin with '/'` | `funcdctl apply` checks each Route and EgressPolicy before it sends it. Correct the field that the message names, as the [Spec](spec.md) tab describes it. |
+| `manifest is invalid`, followed by `spec.rules[0].backend must set exactly one of function, static or site` | Give the rule one backend. |
+| `manifest is invalid`, followed by `spec.rules[0].to must set at least one of domains/cidrs` | List a domain or a CIDR in the rule's `to`. |
+| `manifest is invalid`, followed by `spec.rules[0].to.domains "*" is not a valid domain or "*."-wildcard` | Write an exact host name, or a wildcard that starts with `*.`. |
+| `<file>: <kind> "<name>" is in namespace "<namespace>"; funcdctl dev runs namespace default only` | Remove `metadata.namespace` from the object, set it to `default`, or apply the file to a funcd server. |
 
 ## Run it locally
 
@@ -429,22 +395,19 @@ such as:
 
 - It serves the Routes of its folder on its edge, at the port that `--gport` sets. It runs the namespace `default`
   only, and stops on a resource of another namespace, so a Route that sets no host answers on every host.
-- It prints its banner once it has applied the folder's resource files, which can be before the edge serves a Route:
-  read the Route's status until its phase is `Ready`, as the first example does.
 - Its edge has no authenticator, as on a server whose `server.auth.edge` is `false`, so every call to a rule whose
   mode is `authenticated` gets 401.
 - It controls no outbound connection: its workers run as processes of the local user, and they connect to every
   address. It applies an EgressPolicy, which `funcdctl get egresspolicy` lists, but the policy changes nothing, and
   its banner ends with a warning that begins `⚠ egress is NOT isolated in dev`.
 
-`funcdctl dev` keeps its data in memory, where it is lost when `funcdctl dev` stops. It keeps only a record of the
-processes that it starts, so that it can stop them after a crash, in `funcd/dev/<id>/process` under the user's cache
-folder, `<id>` naming the project folder. With the `--persist` flag, it keeps its state between runs in `.funcd-dev`, a
-folder that it creates in the current folder, or in the folder that `--persist-to` names: the metastore, which holds
-the Routes, the EgressPolicies and the other objects that it applied, the data of its services, and the copies of the
-builds that it runs. To start again from nothing, delete that folder
-after `funcdctl dev` stops. The [reference of `funcdctl dev`](../../tools/funcdctl/spec.md#funcdctl-dev) lists its
-flags.
+`funcdctl dev` keeps its state in memory, where it is lost when `funcdctl dev` stops, except a record of the processes
+that it starts, so that it can stop them after a crash, in `funcd/dev/<id>/process` under the user's cache folder,
+`<id>` naming the project folder. With the `--persist` flag, it keeps its state between runs in `.funcd-dev`, in the
+current folder, or in the folder that `--persist-to` names: the Routes, the EgressPolicies and the other objects that
+it applied, the data of its services, and the copies of the builds that it runs. To start again from nothing, delete
+that folder after `funcdctl dev` stops. The [reference of `funcdctl dev`](../../tools/funcdctl/spec.md#funcdctl-dev)
+lists its flags.
 
 ## Examples
 
