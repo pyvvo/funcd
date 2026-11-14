@@ -123,8 +123,9 @@ them off:
 
 ::include[../../../../../api/types/v1alpha1/examples/namespaces/namespace.yaml#namespace]
 
-The complete file, [api/types/v1alpha1/examples/namespaces/namespace.yaml](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/namespaces/namespace.yaml), also holds the
-Function `orders`, which sets no `spec.ingress`, and the Function `catalog`, which turns its
+The complete file,
+[api/types/v1alpha1/examples/namespaces/namespace.yaml](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/namespaces/namespace.yaml),
+also holds the Function `orders`, which sets no `spec.ingress`, and the Function `catalog`, which turns its
 own address on again with [`spec.ingress.enabled`](../../workloads/function/spec.md#functionspecingress) set to
 `true`:
 
@@ -135,7 +136,8 @@ It also holds the Route `orders`, which serves the Function `orders` at the path
 ::include[../../../../../api/types/v1alpha1/examples/namespaces/namespace.yaml#route]
 
 Replace the images of `orders` and `catalog`, then apply the file with
-`funcdctl --server http://127.0.0.1:8080 --token "$ADMIN_TOKEN" apply -f api/types/v1alpha1/examples/namespaces/namespace.yaml`. With the file applied, the calls on the host `shop.localhost` get these answers:
+`funcdctl --server http://127.0.0.1:8080 --token "$ADMIN_TOKEN" apply -f api/types/v1alpha1/examples/namespaces/namespace.yaml`.
+With the file applied, the calls on the host `shop.localhost` get these answers:
 
 - A call to `/function/orders` gets the HTTP status 404 with the message `function shop/orders is not exposed by name`,
   and starts no worker.
@@ -162,8 +164,9 @@ of the Functions and Sites. `open`, or no value, lets every caller in. The Names
 
 ::include[../../../../../api/types/v1alpha1/examples/namespaces/edge-defaults.yaml#namespace]
 
-The complete file, [api/types/v1alpha1/examples/namespaces/edge-defaults.yaml](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/namespaces/edge-defaults.yaml), also holds
-the Function `invoices`, which sets no mode, and the Function `status`, whose
+The complete file,
+[api/types/v1alpha1/examples/namespaces/edge-defaults.yaml](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/namespaces/edge-defaults.yaml),
+also holds the Function `invoices`, which sets no mode, and the Function `status`, whose
 [`spec.ingress.auth`](../../workloads/function/spec.md#functionspecingressauth) keeps its address open: a mode that a
 Function, a Route or a rule sets wins over the Namespace's default.
 
@@ -225,7 +228,8 @@ exists. A Function declares its volumes under
 
 ::include[../../../../../api/types/v1alpha1/examples/namespaces/volume-budget.yaml]
 
-Apply [api/types/v1alpha1/examples/namespaces/volume-budget.yaml](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/namespaces/volume-budget.yaml) with
+Apply
+[api/types/v1alpha1/examples/namespaces/volume-budget.yaml](https://github.com/pyvvo/funcd/blob/main/api/types/v1alpha1/examples/namespaces/volume-budget.yaml) with
 `funcdctl --server http://127.0.0.1:8080 --token "$ADMIN_TOKEN" apply -f api/types/v1alpha1/examples/namespaces/volume-budget.yaml`.
 
 `volumeBudgetBytes` sets the same budget as a number of bytes; set one of the two, not both. Without either, or with
