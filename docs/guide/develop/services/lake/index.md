@@ -248,8 +248,9 @@ while it is `Ready`.
   24 hours by default. A change to `spec.ingress`, to a quota or to a `deletion` setting keeps the running engine.
 - During a replacement, the old engine lets the running queries end for up to 5 seconds while it goes on saving,
   cancels the queries that still run, and saves its catalog a last time. Until the new engine answers, the Lake is
-  `Pending` with the reason `EngineNotReady`, and its gateway refuses each request: send a cancelled or refused query
-  again once the Lake is `Ready`.
+  `Pending` with the reason `EngineNotReady`, and its gateway refuses each request. Once the Lake is `Ready`, send a
+  refused query or a cancelled read again. Before you send a cancelled write again, check whether it applied: the last
+  save can keep a write whose answer never arrived.
 - funcd does not refuse to delete a Lake that holds tables or that a Function binds. The Lake's engine stops. A
   Function that binds the Lake keeps its worker, its `RevisionReady` condition gets the reason `LakeNotReady`, and
   the gateway refuses its queries. While a Function binds the Lake, its gateway keeps the address, so a Lake applied
