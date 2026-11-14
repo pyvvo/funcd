@@ -31,10 +31,8 @@ The manifest, `examples/log-burst/burst.yaml`, declares the Function `log-burst`
 
 ::include[../../../../../_repos/funcd-typescript/examples/log-burst/burst.yaml]
 
-The handler, in `examples/log-burst/src/main.ts`, logs through `console`. `funcdctl dev` runs its build,
-`log-burst.mjs`, which the repository already holds:
-
-::include[../../../../../_repos/funcd-typescript/examples/log-burst/src/main.ts]
+The handler, [`src/main.ts`](https://github.com/pyvvo/funcd-typescript/blob/main/examples/log-burst/src/main.ts),
+logs through `console`, and `funcdctl dev` runs its build, `log-burst.mjs`, which the repository already holds.
 
 Clone the repository, and start the example from the repository's root folder:
 
@@ -74,10 +72,9 @@ The manifest, `examples/log-burst/handler.yaml`, declares the Function `log-burs
 
 ::include[../../../../../_repos/funcd-python/examples/log-burst/handler.yaml]
 
-The handler, in `examples/log-burst/src/main.py`, logs through the standard `logging` module. `funcdctl dev` runs
-`src/main.py` as it is, because the example's folder has the Function's name:
-
-::include[../../../../../_repos/funcd-python/examples/log-burst/src/main.py]
+The handler, [`src/main.py`](https://github.com/pyvvo/funcd-python/blob/main/examples/log-burst/src/main.py), logs
+through the standard `logging` module, and `funcdctl dev` runs `src/main.py` as it is, because the example's folder
+has the Function's name.
 
 Clone the repository, and start the example from the repository's root folder:
 
@@ -154,13 +151,25 @@ handler as `event.data` (`event["data"]` in Python), unless the body is itself a
 [Spec](spec.md) tab describes every field of a Function and of its status, and the methods of the context.
 
 The contract names the runtime and holds the JSON Schema of the input and of the result. funcd refuses a call whose
-data does not match the contract with the HTTP status 422,
-before the call reaches the handler, and answers with the HTTP status 500 when the handler's result does not match.
-The contract of log-burst, the `log-burst.contract.yaml` file of the example's folder
+data does not match the contract with the HTTP status 422, before the call reaches the handler, and answers with the
+HTTP status 500 when the handler's result does not match. The contract of log-burst, the `log-burst.contract.yaml`
+file of the example's folder
 ([TypeScript](https://github.com/pyvvo/funcd-typescript/blob/main/examples/log-burst/log-burst.contract.yaml),
 [Python](https://github.com/pyvvo/funcd-python/blob/main/examples/log-burst/log-burst.contract.yaml)), accepts a JSON
 object whose fields are all optional, so the first example's call sends an empty object, `{}`; a call with no body
 gets 422. [Run it locally](#run-it-locally) says where `funcdctl dev` finds a Function's build and its contract.
+
+### TypeScript
+
+The first example's handler is `examples/log-burst/src/main.ts`:
+
+::include[../../../../../_repos/funcd-typescript/examples/log-burst/src/main.ts]
+
+### Python
+
+The first example's handler is `examples/log-burst/src/main.py`:
+
+::include[../../../../../_repos/funcd-python/examples/log-burst/src/main.py]
 
 ## Call another Function
 
