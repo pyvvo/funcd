@@ -26,7 +26,7 @@ To install another release, set `FUNCDCTL_VERSION`:
 
 <!-- x-release-please-start-version -->
 ```sh
-curl -fsSL https://pyvvo.github.io/funcd/install.sh | FUNCDCTL_VERSION=v0.44.0 sh
+curl -fsSL https://pyvvo.github.io/funcd/install.sh | FUNCDCTL_VERSION=v0.44.1 sh
 ```
 <!-- x-release-please-end -->
 
