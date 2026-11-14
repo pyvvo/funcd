@@ -263,8 +263,8 @@ namespace: it refuses a second one while the first has not ended. The Restore go
    serves a Lake, of each Lake that it loads in place. Other workers and engines keep running.
 4. It loads each member, in the order of `members`, then lifts the hold, and ends `Succeeded`.
 
-When a load fails, the Restore clears what the loads began and ends `Failed`, and the hold stays: a store loaded in
-place before the failing member is then empty, and its former data remains only in the export, when the export's scope
+When a step after the hold fails, the Restore ends `Failed`, and the hold stays. A failed load first clears what the
+loads began: a store loaded in place before the failing member is then empty, and its former data remains only in the export, when the export's scope
 named that store. A volume that is not empty fails its load that way, with the reason `NotEmpty`. When funcd stops
 during a load, the next start ends the Restore `Failed` with the reason `Interrupted`, clears nothing, and keeps the
 hold. Check the stores, then lift the hold with
@@ -358,7 +358,7 @@ while it checks the copy and loads, then `Succeeded` or `Failed`. A `Failed` one
 | Backup `Succeeded` | `FoundOnTarget` | The Backup was `Running` when funcd stopped, and its copy is whole on the target. |
 | Backup `Failed` | `Interrupted` | The Backup was `Running` when funcd stopped, and its copy is not whole. |
 | Backup `Failed` | `Failed` | Any other cause, which the message names. |
-| BackupSchedule `Ready` | `SameProvider` | The URL names another bucket on the endpoint of `blob.target`, the funcd server's own blob store, so one failure of that provider takes both. |
+| BackupSchedule `Ready` | none, or `SameProvider` | The schedule runs. `SameProvider`, on a `True` condition, only warns: the URL names another bucket on the endpoint of `blob.target`, the funcd server's own blob store, so one failure of that provider takes both. |
 | BackupSchedule `TargetSynced` condition `False` | `PlatformRestored` or `ListFailed` | After a platform restore, the schedule has not yet listed its target, or the listing fails. It creates no Backup until the condition is `True`, as [Bring a namespace back after a host loss](#bring-a-namespace-back-after-a-host-loss) explains. |
 | Restore `Failed` | `BackupNotReady` | The Backup does not exist, or is `Failed`. |
 | Restore `Failed` | `MemberNotFound` | The copy holds no such member, or the destination does not exist. |
