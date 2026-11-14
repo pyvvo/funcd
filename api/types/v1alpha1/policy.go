@@ -21,8 +21,8 @@ type Policy struct {
 
 // PolicySpec is the desired state of a Policy (ADR-0074): the Cedar policy text.
 type PolicySpec struct {
-	// Cedar is one or more Cedar permit/forbid statements (validated by the policy-validity admission
-	// against the curated action/entity schema — kv::read/kv::write; Function/KVStore/KVTable).
+	// Cedar is one or more Cedar permit/forbid statements, validated by the policy-validity admission against the
+	// actions and entity types of the registered capabilities (internal/auth/cedar, ADR-0116).
 	Cedar string `json:"cedar" doc:"One or more Cedar permit or forbid statements, which apply with funcd's built-in rules to each request whose principal and resource are both in the Policy's namespace; a forbid wins over any permit. Each statement names one action funcd knows, such as kv::read, and its principal and resource scopes name only entity types funcd knows and, for a type with a namespace, ids that begin with the Policy's namespace and a slash. funcd refuses text that does not parse, holds no statement or breaks these rules."`
 }
 

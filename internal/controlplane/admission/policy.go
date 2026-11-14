@@ -13,8 +13,8 @@ import (
 type policyValidity struct{}
 
 // NewPolicyValidityAdmission returns the Validating admission that enforces ADR-0074's Policy rules
-// on a Policy Create/Update: spec.cedar PARSES as Cedar and references only the curated actions +
-// entity types (kv::read/kv::write; Function/KVStore/KVTable), and its scopes name no entity of another
+// on a Policy Create/Update: spec.cedar PARSES as Cedar and references only the actions and entity types of the
+// registered capabilities (ADR-0116), and its scopes name no entity of another
 // namespace (ADR-0177). An un-parseable, off-schema or foreign-namespace Policy
 // is rejected (fault.Invalid) before it reaches the metastore — so the cedar driver can rely on
 // every stored Policy compiling. (Shape cloned from the link/KV validity admissions.)

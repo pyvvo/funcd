@@ -14,8 +14,8 @@ type Role struct {
 	Spec       RoleSpec `json:"spec"`
 }
 
-// RoleSpec is the action set. Actions are funcd data-plane action strings ("s3::read", "s3::write",
-// "kv::read", "kv::write", "link::invoke") — kept as strings so api/types imports no internal package.
+// RoleSpec is the action set. Actions are funcd data-plane action strings, such as "s3::read" or "kv::write" —
+// kept as strings so api/types imports no internal package.
 type RoleSpec struct {
 	Actions []string `json:"actions" doc:"The actions the role grants, at least one, such as s3::read, kv::write or lake::query. An action that funcd does not know grants nothing."`
 }

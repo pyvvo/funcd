@@ -48,9 +48,8 @@ const (
 	entityTypeSecret = "Secret"
 )
 
-// defaultRegistry is the assembled capability registry (ADR-0116): the three migrated capabilities
-// (kv, invoke, s3) + the two default principal sources (Function, Lake; each resolves only its
-// own principal type, ADR-0175). The
+// defaultRegistry is the assembled capability registry (ADR-0116): every capability below + the two default
+// principal sources (Function, Lake; each resolves only its own principal type, ADR-0175). The
 // schema vocabulary (KnownAction/KnownEntityType), the built-in PolicySet (Builtins), and the default
 // EntityProvider are all assembled from it — replacing the hand-listed curatedActions/curatedEntityTypes
 // maps. A new capability registers here (or in a consumer's own Registry) with no shared-code edit. The
@@ -149,6 +148,15 @@ func ValidateCedarInNamespace(ns v1.NamespaceName, text string) error {
 	return nil
 }
 
+// listed joins a vocabulary for a refusal message.
+func listed[T ~string](items []T) string {
+	out := make([]string, len(items))
+	for i, it := range items {
+		out[i] = string(it)
+	}
+	return strings.Join(out, ", ")
+}
+
 func validateCedar(text string) ([]policyScope, error) {
 	const op = "cedar.ValidateCedar"
 	list, err := cedar.NewPolicyListFromBytes("policy", []byte(text))
@@ -175,11 +183,13 @@ func validateCedar(text string) ([]policyScope, error) {
 			return nil, fault.Invalidf(op, "cedar policy must name a specific action (e.g. action == Action::%q)", string(auth.ActionKVRead))
 		}
 		if !KnownAction(sc.Action.Entity.ID) {
-			return nil, fault.Invalidf(op, "cedar policy references unknown action %q (curated: kv::read, kv::write, link::invoke, s3::read, s3::write)", sc.Action.Entity.ID)
+			return nil, fault.Invalidf(op, "cedar policy references unknown action %q (curated: %s)", sc.Action.Entity.ID,
+				listed(defaultRegistry.Actions()))
 		}
 		for _, e := range append(sc.Principal.named(), sc.Resource.named()...) {
 			if !KnownEntityType(e.Type) {
-				return nil, fault.Invalidf(op, "cedar policy references unknown entity type %q (curated: Function, KVStore, KVTable, Bucket, BlobPrefix, S3Identity)", e.Type)
+				return nil, fault.Invalidf(op, "cedar policy references unknown entity type %q (curated: %s)", e.Type,
+					listed(defaultRegistry.EntityTypes()))
 			}
 		}
 		scopes = append(scopes, sc)

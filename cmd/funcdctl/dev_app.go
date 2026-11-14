@@ -164,7 +164,7 @@ func (a *cli) startDevApp(ctx context.Context, dir string, cfg devConfig, logger
 		return nil, err
 	}
 	inst := &devInstance{runErr: make(chan error, 1), logger: logger, functions: folder.names(), workflows: folder.workflowNames(),
-		runtimes: &devRuntimes{byImage: map[string]v1.RuntimeName{}}, artifactDir: filepath.Join(root, "artifacts"),
+		images: &devImages{}, artifactDir: filepath.Join(root, "artifacts"),
 		s3Name: appKeypairName(d.app), app: d.app, commands: cmds, live: s.live}
 	if cmds != nil {
 		inst.cleanup = append(inst.cleanup, func() { _ = cmds.stop() })

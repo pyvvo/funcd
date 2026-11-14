@@ -1056,8 +1056,8 @@ func (p *Platform) buildControlPlane() error {
 			// (ADR-0121): the Lake / Function reconcilers wait for the referent (Waiting condition).
 			// ADR-0139 Site: spec.bindings.blob[0].prefix is immutable on Update (the prefix permanently holds the site's bundles).
 			admission.NewSitePrefixImmutableAdmission(),
-			// ADR-0074 Policy validity: spec.cedar parses + references only the curated schema
-			// (kv::read/kv::write; Function/KVStore/KVTable) — so every stored Policy compiles.
+			// ADR-0074 Policy validity: spec.cedar parses + references only the actions and entity types of the
+			// registered capabilities (ADR-0116) — so every stored Policy compiles.
 			admission.NewPolicyValidityAdmission(),
 			// ADR-0248 Decision 2: a binding names what its root declares; a Function's own stores default their
 			// owner to it and its config bindings name the stored ConfigMaps.
