@@ -6,6 +6,7 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/kvstore"
 	"github.com/pyvvo/funcd/internal/services"
 )
 
@@ -66,7 +67,7 @@ func (m *metaResolver) Resolve(ctx context.Context, ns v1.NamespaceName, fn v1.O
 	fobj, err := m.r.Get(ctx, v1.KindFunction.GVK(), ns, fn)
 	if err != nil {
 		if fault.KindOf(err) == fault.NotFound {
-			return Binding{}, fault.Forbiddenf(op, "function %q in %q not found; no KV binding for alias %q", fn, ns, alias)
+			return Binding{}, kvstore.ErrCallerMissing.Errorf(op, "function %q in %q not found; no KV binding for alias %q", fn, ns, alias)
 		}
 		return Binding{}, fault.Wrapf(err, fault.Internal, op, "get function %q", fn)
 	}
@@ -82,7 +83,7 @@ func (m *metaResolver) Resolve(ctx context.Context, ns v1.NamespaceName, fn v1.O
 		}
 	}
 	if bind == nil {
-		return Binding{}, fault.Forbiddenf(op, "function %q in %q has no KV binding for alias %q", fn, ns, alias)
+		return Binding{}, kvstore.ErrNoBinding.Errorf(op, "function %q in %q has no KV binding for alias %q", fn, ns, alias)
 	}
 
 	// Read the target store for the table's owner + caps. A dangling binding (store/table gone) is
@@ -90,7 +91,7 @@ func (m *metaResolver) Resolve(ctx context.Context, ns v1.NamespaceName, fn v1.O
 	sobj, err := m.r.Get(ctx, v1.KindKVStore.GVK(), ns, bind.Store)
 	if err != nil {
 		if fault.KindOf(err) == fault.NotFound {
-			return Binding{}, fault.Forbiddenf(op, "binding %q references missing store %q", alias, bind.Store)
+			return Binding{}, kvstore.ErrStoreMissing.Errorf(op, "binding %q references missing store %q", alias, bind.Store)
 		}
 		return Binding{}, fault.Wrapf(err, fault.Internal, op, "get kvstore %q", bind.Store)
 	}
@@ -108,7 +109,7 @@ func (m *metaResolver) Resolve(ctx context.Context, ns v1.NamespaceName, fn v1.O
 		}
 	}
 	if !found {
-		return Binding{}, fault.Forbiddenf(op, "binding %q references missing table %q in store %q", alias, bind.Table, bind.Store)
+		return Binding{}, kvstore.ErrTableMissing.Errorf(op, "binding %q references missing table %q in store %q", alias, bind.Table, bind.Store)
 	}
 
 	b := Binding{

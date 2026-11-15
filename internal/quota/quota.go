@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/platform/clock"
 )
@@ -203,9 +202,9 @@ func (b *Book) Admit(ctx context.Context, r Request) (Settle, error) {
 	}
 	used := u.measured + u.settled + u.reserved
 	if r.Bytes == Unknown {
-		return nil, fault.InsufficientStoragef(op, "%s holds %d of its %d bytes (spec.quota): delete to make room", r.Subject, used, u.limit)
+		return nil, ErrExceeded.Errorf(op, "%s holds %d of its %d bytes (spec.quota): delete to make room", r.Subject, used, u.limit)
 	}
-	return nil, fault.InsufficientStoragef(op, "%s holds %d of its %d bytes (spec.quota): a write of %d bytes would pass it",
+	return nil, ErrExceeded.Errorf(op, "%s holds %d of its %d bytes (spec.quota): a write of %d bytes would pass it",
 		r.Subject, used, u.limit, r.Bytes)
 }
 
@@ -307,7 +306,7 @@ func (b *Book) ready(ctx context.Context, u *usage, s Subject) error {
 		return nil
 	}
 	if err := b.refresh(ctx, u, s); err != nil {
-		return fault.Wrapf(err, fault.Unavailable, "quota.Admit", "read the quota of %s", s)
+		return ErrUnreadable.Wrapf(err, "quota.Admit", "read the quota of %s", s)
 	}
 	return nil
 }
@@ -354,14 +353,14 @@ func (b *Book) awaitMeasure(ctx context.Context, u *usage, s Subject, epoch uint
 	select {
 	case <-landed:
 	case <-ctx.Done():
-		return fault.Wrapf(ctx.Err(), fault.Unavailable, "quota.Admit", "measure %s", s)
+		return ErrUnreadable.Wrapf(ctx.Err(), "quota.Admit", "measure %s", s)
 	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if u.epoch > epoch {
 		return nil
 	}
-	return fault.Unavailablef("quota.Admit", "could not measure %s; retry", s)
+	return ErrUnreadable.Errorf("quota.Admit", "could not measure %s; retry", s)
 }
 
 // startMeasure starts a measure of s; u.mu is held and none runs.

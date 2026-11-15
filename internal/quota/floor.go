@@ -9,7 +9,6 @@ import (
 	"github.com/dustin/go-humanize"
 	"golang.org/x/sys/unix"
 
-	"github.com/pyvvo/funcd/api/fault"
 	"github.com/pyvvo/funcd/internal/platform/clock"
 )
 
@@ -73,7 +72,7 @@ func (f *Floor) Check(_ context.Context, bytes int64) error {
 		f.admitted += bytes
 		return nil
 	}
-	return fault.InsufficientStoragef("quota.Floor",
+	return ErrFloorReached.Errorf("quota.Floor",
 		"the data filesystem is below storage.minFreeSize, or this write would take it there: writes are refused until space is freed")
 }
 

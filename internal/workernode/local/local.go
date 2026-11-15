@@ -183,33 +183,55 @@ func NewHandler(caller Ref, res Resolver, inv Invoker, authz auth.Authorizer, de
 		}
 	}
 	if deps != nil {
-		mux.HandleFunc("GET "+dependenciesPath, func(w http.ResponseWriter, r *http.Request) {
-			serveDependencies(w, r, caller, deps)
-		})
+		registerHealth(mux, logger, caller, deps)
 	}
-	mux.HandleFunc("POST /invoke/{alias}", func(w http.ResponseWriter, r *http.Request) {
+	registerInvoke(mux, logger, caller, callerIdentity, res, inv, authz)
+	api := opaqueKeys(mux)
+	fetch := wrap(logger, fetchPattern, fetchCauses(), func(w http.ResponseWriter, r *http.Request) error {
+		return serveFetch(w, r, caller, callerIdentity, res, inv, authz, logger)
+	})
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A fetch path is the target's (ADR-0243 Decision 6): it goes around ServeMux, which would clean and decode it.
+		if strings.HasPrefix(r.URL.EscapedPath(), fetchPattern) {
+			fetch(w, r)
+			return
+		}
+		api.ServeHTTP(w, r)
+	})
+}
+
+// registerHealth adds GET /health/dependencies (ADR-0215 Decision 3), which answers no error: its 503 carries a
+// dependency report, not a problem.
+func registerHealth(mux facetMux, logger *slog.Logger, caller Ref, deps DependencyChecker) {
+	handle(mux, logger, "GET "+dependenciesPath, []*fault.KnownCause{}, func(w http.ResponseWriter, r *http.Request) error {
+		serveDependencies(w, r, caller, deps)
+		return nil
+	})
+}
+
+// registerInvoke adds POST /invoke/{alias} (ADR-0064/0075): the caller's link to alias resolves its target, the PDP
+// checks it, and the target's answer comes back, a non-2xx one verbatim.
+func registerInvoke(mux facetMux, logger *slog.Logger, caller Ref, identity auth.Identity, res Resolver, inv Invoker,
+	authz auth.Authorizer) {
+	handle(mux, logger, "POST /invoke/{alias}", nil, func(w http.ResponseWriter, r *http.Request) error {
 		const op = "workernode.local.invoke"
 		start := time.Now()
 		alias := r.PathValue("alias")
 		input, err := readBody(w, r, op, maxInvokeBytes)
 		if err != nil {
-			fault.WriteProblem(w, err)
-			return
+			return err
 		}
 		target, protocol, timeout, err := res.Resolve(r.Context(), caller, alias)
 		if err != nil {
 			logger.Warn("fn-to-fn invoke denied", "caller", caller.String(), "alias", alias, "reason", err.Error())
-			fault.WriteProblem(w, err) // Forbidden (no link) / NotFound (unknown target)
-			return
+			return err // Forbidden (no link) / NotFound (unknown target)
 		}
 		if protocol == v1.ProtocolHTTP {
-			fault.WriteProblem(w, fault.Conflictf(op, "%s serves HTTP; call it with context.fetch, not invoke", target))
-			return
+			return fault.Conflictf(op, "%s serves HTTP; call it with context.fetch, not invoke", target)
 		}
-		if err := authorizeLink(r.Context(), authz, callerIdentity, target, op); err != nil {
+		if err := authorizeLink(r.Context(), authz, identity, target, op); err != nil {
 			logger.Warn("fn-to-fn invoke refused", "caller", caller.String(), "alias", alias, "target", target.String(), "err", err.Error())
-			fault.WriteProblem(w, err)
-			return
+			return err
 		}
 		out, err := inv.Invoke(withTraceparent(r.Context(), r.Header.Get(traceparentHeader)), target, input, timeout)
 		durMs := time.Since(start).Milliseconds()
@@ -221,32 +243,22 @@ func NewHandler(caller Ref, res Resolver, inv Invoker, authz auth.Authorizer, de
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(ue.Status)
 				_, _ = w.Write(ue.Body)
-				return
+				return nil
 			}
 			if fe := (*fault.Error)(nil); errors.As(err, &fe) && fe.Op == NestedCapOp {
 				logger.Warn("fn-to-fn invoke refused: nested in-flight cap", "caller", caller.String(), "alias", alias,
 					"target", target.String(), "err", err.Error())
-				fault.WriteProblem(w, err) // 429, no Retry-After (ADR-0147)
-				return
+				return err // 429, no Retry-After (ADR-0147)
 			}
 			logger.Warn("fn-to-fn invoke failed", "caller", caller.String(), "alias", alias,
 				"target", target.String(), "durationMs", durMs, "err", err.Error())
-			fault.WriteProblem(w, err) // transport / cold-wake timeout → 503 etc.
-			return
+			return err // transport / cold-wake timeout → 503 etc.
 		}
 		logger.Info("fn-to-fn invoke", "caller", caller.String(), "alias", alias,
 			"target", target.String(), "durationMs", durMs)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(out)
-	})
-	api := opaqueKeys(mux)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// A fetch path is the target's (ADR-0243 Decision 6): it goes around ServeMux, which would clean and decode it.
-		if rest, ok := strings.CutPrefix(r.URL.EscapedPath(), "/fetch/"); ok {
-			serveFetch(w, r, rest, caller, callerIdentity, res, inv, authz, logger)
-			return
-		}
-		api.ServeHTTP(w, r)
+		return nil
 	})
 }
 
@@ -254,37 +266,32 @@ func NewHandler(caller Ref, res Resolver, inv Invoker, authz auth.Authorizer, de
 // API refused before it reached the target (ADR-0243 Decision 6).
 const FetchReplyHeader = "X-Funcd-Fetch-Reply"
 
-// serveFetch answers a context.fetch call, /fetch/<alias><path> with rest the escaped path after /fetch/ (ADR-0243
-// Decision 6): the same link, PDP and nested-cap checks as invoke, a target that serves HTTP, and the target's reply
-// written back whole with its status and headers. The path reaches the target percent-encoded as the caller sent it.
-func serveFetch(w http.ResponseWriter, r *http.Request, rest string, caller Ref, identity auth.Identity, res Resolver,
-	inv Invoker, authz auth.Authorizer, logger *slog.Logger) {
+// serveFetch answers a context.fetch call, /fetch/<alias><path> (ADR-0243 Decision 6): the same link, PDP and
+// nested-cap checks as invoke, a target that serves HTTP, and the target's reply written back whole with its status
+// and headers. The path reaches the target percent-encoded as the caller sent it.
+func serveFetch(w http.ResponseWriter, r *http.Request, caller Ref, identity auth.Identity, res Resolver,
+	inv Invoker, authz auth.Authorizer, logger *slog.Logger) error {
 	const op = "workernode.local.fetch"
-	rawAlias, path, found := strings.Cut(rest, "/")
+	rawAlias, path, found := strings.Cut(strings.TrimPrefix(r.URL.EscapedPath(), fetchPattern), "/")
 	alias, aerr := url.PathUnescape(rawAlias)
 	if !found || aerr != nil || alias == "" {
-		fault.WriteProblem(w, fault.NotFoundf(op, "no fetch route %s: want /fetch/<alias>/<path>", r.URL.EscapedPath()))
-		return
+		return fault.NotFoundf(op, "no fetch route %s: want /fetch/<alias>/<path>", r.URL.EscapedPath())
 	}
 	body, err := readBody(w, r, op, maxInvokeBytes)
 	if err != nil {
-		fault.WriteProblem(w, err)
-		return
+		return err
 	}
 	target, protocol, timeout, err := res.Resolve(r.Context(), caller, alias)
 	if err != nil {
 		logger.Warn("fn-to-fn fetch denied", "caller", caller.String(), "alias", alias, "reason", err.Error())
-		fault.WriteProblem(w, err)
-		return
+		return err
 	}
 	if protocol != v1.ProtocolHTTP {
-		fault.WriteProblem(w, fault.Conflictf(op, "%s does not serve HTTP; call it with context.invoke, not fetch", target))
-		return
+		return fault.Conflictf(op, "%s does not serve HTTP; call it with context.invoke, not fetch", target)
 	}
 	if err := authorizeLink(r.Context(), authz, identity, target, op); err != nil {
 		logger.Warn("fn-to-fn fetch refused", "caller", caller.String(), "alias", alias, "target", target.String(), "err", err.Error())
-		fault.WriteProblem(w, err)
-		return
+		return err
 	}
 	header := r.Header.Clone()
 	header.Del(MemberHeader)
@@ -293,8 +300,7 @@ func serveFetch(w http.ResponseWriter, r *http.Request, rest string, caller Ref,
 	}, timeout)
 	if err != nil {
 		logger.Warn("fn-to-fn fetch failed", "caller", caller.String(), "alias", alias, "target", target.String(), "err", err.Error())
-		fault.WriteProblem(w, err)
-		return
+		return err
 	}
 	for key, values := range reply.Header {
 		for _, v := range values {
@@ -304,6 +310,7 @@ func serveFetch(w http.ResponseWriter, r *http.Request, rest string, caller Ref,
 	w.Header().Set(FetchReplyHeader, "1")
 	w.WriteHeader(reply.Status)
 	_, _ = w.Write(reply.Body)
+	return nil
 }
 
 // authorizeLink is the PDP gate of a link call (ADR-0075): a declared link is permitted by the built-in unless a
@@ -379,7 +386,7 @@ func opaqueKeys(mux http.Handler) http.Handler {
 }
 
 // readBody reads r's body capped at limit bytes (a DoS guard). An over-cap body is PayloadTooLarge
-// (413, as on the data plane, ADR-0134); any other read failure is Invalid.
+// (413, as on the data plane, ADR-0134); any other read failure is Invalid. Every client shares both causes.
 func readBody(w http.ResponseWriter, r *http.Request, op string, limit int64) ([]byte, error) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	if err == nil {
@@ -387,9 +394,9 @@ func readBody(w http.ResponseWriter, r *http.Request, op string, limit int64) ([
 	}
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
-		return nil, fault.PayloadTooLargef(op, "request body exceeds %d bytes", limit)
+		return nil, ErrBodyTooLarge.Errorf(op, "request body exceeds %d bytes", limit)
 	}
-	return nil, fault.Invalidf(op, "could not read request body")
+	return nil, ErrBodyUnreadable.Errorf(op, "could not read request body")
 }
 
 // newServer builds the local API's http.Server. IdleTimeout closes a keep-alive connection left idle

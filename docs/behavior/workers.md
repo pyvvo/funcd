@@ -138,6 +138,7 @@ New words: Placed, Stopping, Ended.
 | `maxSignExpiry` | 168h | `internal/workernode/local/blob.go` |
 | `minSignExpiry` | 1s | `internal/workernode/local/blob.go` |
 | `maxKVBytes` | `v1.MaxValueBytesLimit` | `internal/workernode/local/kv.go` |
+| `maxTTLSeconds` | `math.MaxInt64 / int64(time.Second)` | `internal/workernode/local/kv.go` |
 | `DependencyCheckBudget` | 50ms | `internal/workernode/local/local.go` |
 | `maxInvokeBytes` | 1MiB | `internal/workernode/local/local.go` |
 | `serverHeaderTimeout` | 5s | `internal/workernode/local/local.go` |

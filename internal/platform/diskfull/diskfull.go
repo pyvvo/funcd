@@ -9,14 +9,13 @@ import (
 	"github.com/pyvvo/funcd/api/fault"
 )
 
-// Wrapf wraps a store write's error as fault.Wrapf does: fault.InsufficientStorage when it matches syscall.ENOSPC,
-// fault.Internal otherwise.
+// Wrapf wraps a store write's error as fault.Wrapf does: raised from ErrDiskFull, of kind fault.InsufficientStorage,
+// when it matches syscall.ENOSPC, and fault.Internal otherwise.
 func Wrapf(err error, op, format string, a ...any) *fault.Error {
-	kind := fault.Internal
 	if Is(err) {
-		kind = fault.InsufficientStorage
+		return ErrDiskFull.Wrapf(err, op, format, a...)
 	}
-	return fault.Wrapf(err, kind, op, format, a...)
+	return fault.Wrapf(err, fault.Internal, op, format, a...)
 }
 
 // Is reports whether err matches syscall.ENOSPC.
