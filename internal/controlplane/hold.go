@@ -365,7 +365,8 @@ func releaseHoldCases() []ErrorCase {
 		problem(fault.Conflict, "A namespace of the body is not held; the namespaces before it are released.",
 			"Release the namespaces after it again, without it."),
 		problem(fault.Conflict, "A namespace of the body is held by an in-place Restore that is Pending or Running; the "+
-			"namespaces before it are released.", "Release the namespace once the Restore has ended."),
+			"namespaces before it are released.", "Release the namespaces after it again; release this one once the "+
+			"Restore has ended."),
 		badQuery()}, bodyCases())
 }
 
@@ -376,10 +377,13 @@ func returnQuarantinedCases() []ErrorCase {
 			"with the volume; a SQL database's directory goes back by hand, with funcd stopped."),
 		problem(fault.Invalid, "The kind is Function and the body names no volume, or it names a volume with another kind.",
 			"Name the volume with kind Function only."),
-		problem(fault.NotFound, "The quarantine holds no entry of the object, or none of that since.",
-			"Read the entries under quarantine in funcdctl hold status."),
+		problem(fault.NotFound, "The quarantine holds no entry of the object, or none of that since, that is kept or "+
+			"returning; a moving entry, which a failed move leaves, does not return.", "Read the entries under "+
+			"quarantine in funcdctl hold status; a moving entry returns once a later start of funcd has finished its "+
+			"move."),
 		problem(fault.Conflict, "The KVStore, the Bucket or the Function does not exist, or the Function declares no "+
-			"local volume of that name.", "Apply the object again, then return its data."),
+			"local volume of that name.", "Apply the KVStore or the Bucket again, or the Function with the volume in "+
+			"its spec.volumes, then return its data."),
 		problem(fault.Conflict, "The object holds data: an entry returns only into an empty KVStore, Bucket or volume.",
 			"Delete what the object holds, if it is not needed, then return its data."),
 		problem(fault.Unavailable, "This funcd server keeps no quarantine of that kind, such as of volumes while "+
