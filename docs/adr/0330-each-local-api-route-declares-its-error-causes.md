@@ -1,7 +1,6 @@
 # ADR-0330: Each local API route declares the error causes it answers, and one interceptor writes and checks them
 
-- **Status**: Proposed (2026-11-15). Rounds 1 and 2 of an independent judge (a subagent) were folded; the decider then
-  asked that each cause be defined once, so round 3 judges this revision
+- **Status**: Proposed (2026-11-15), after three rounds of an independent judge (a subagent), whose findings are folded
 - **Date**: 2026-11-15
 - **Deciders**: green-0-rabbit
 - **Tags**: api, docs, errors
@@ -20,10 +19,10 @@
 A handler reaches funcd through its `ctx`: `ctx.kv`, `ctx.blob`, `ctx.sql`, `ctx.secret`, `ctx.invoke` and
 `ctx.fetch` call the worker node's local API in `internal/workernode/local`, through routes such as
 `PUT /kv/{binding}/{key...}`, while `ctx.config` and `ctx.lake` read the environment. A route answers a failure as a
-problem of one of `api/fault`'s twelve kinds, through 38 calls of `fault.WriteProblem`, one of them the pool
-dispatcher's. Each failure is created by a bare constructor where it happens, such as `fault.PayloadTooLargef` in
-`internal/services/kv/kv.go:168`, so nothing names its cause: no route and no test can tell the two 413s of
-`PUT /kv` apart.
+problem of one of `api/fault`'s twelve kinds, through 38 calls of `fault.WriteProblem`. Each failure is created by a
+bare constructor where it happens, such as `fault.PayloadTooLargef` in `internal/services/kv/kv.go:168`, so nothing
+names its cause: no route and no test can tell apart the three 413s of `PUT /kv`, the body over the API's limit and
+the value or the key over the store's caps.
 
 The Spec tabs' Handler API tables, which `kindref` renders from each shim's `api.json` (ADR-0323), say what each
 method does but not how it fails. The Develop rewrite (#1463) moved about 31 such rows off the Usage pages, and
@@ -48,7 +47,8 @@ ADR-0329 left them out of the HTTP API reference. What a method surfaces also di
 - `scenario: one-error-writer`: given the code of `internal/workernode/local`, when a function writes a problem other
   than through the interceptor, then a test fails and names the file; the pool's member refusal is the one exemption.
 - `scenario: every-method-mapped`: given the two shims' `api.json`, when a method has no entry in `kindref`'s table, or
-  its entry names a pattern that `local.Endpoints` lacks, then the Spec generation fails and names it.
+  its entry names a pattern that `local.Endpoints` lacks or excepts a cause that its endpoint does not list, then the
+  Spec generation fails and names it.
 - `scenario: facets-match`: given a built platform, when its facet segments differ from the facet segments of
   `local.Endpoints`, then a `pkg/funcd` test fails.
 
@@ -72,7 +72,6 @@ Out:
 - One place writes every error of the local API.
 - A method's rows show what that method surfaces, not every answer of its route.
 - Tests enforce the declarations; reviewers do not. The guard runs outside the e2e build.
-- Production behaviour and the wire do not depend on the documentation.
 
 ## Alternatives considered
 
@@ -90,14 +89,17 @@ Out:
 
 ## Decision
 
-1. **A cause is a sentinel.** `api/fault` gains `Cause`: an error value with a name, a kind, when it happens and what
-   the caller does, defined once, as `io.EOF` or `fs.ErrNotExist` are. The failing code makes its error from it:
-   `kvstore.ErrValueOverCap.Errorf(op, format, args...)` returns a `*fault.Error` of the cause's kind whose new `Cause`
-   field holds it. `(*Error).Is` matches that field, so `errors.Is(err, kvstore.ErrValueOverCap)` holds through any
-   wrapping; the field is not part of the error's text, so the problem's `detail` is the text it is today.
+1. **A cause is a sentinel.** `api/fault` gains `Cause`: an immutable error value with a name, a kind, when it happens
+   and what the caller does, made only by `NewCause` and defined once, as `io.EOF` or `fs.ErrNotExist` are. The failing
+   code raises its error from it, with `Errorf`, or `Wrapf` around a lower error: a `*fault.Error` of the cause's kind
+   whose new `Cause` field holds it. `(*Error).Is` matches that field, so `errors.Is` finds the cause through any
+   wrapping, and `fault.CauseOf` returns the first cause in a chain, as `KindOf` returns the kind. The field is not
+   printed, so the problem's `detail` is the text it is today. `fault.go`'s comments call `Err` the wrapped error, and
+   `LogCause` keeps its meaning.
 2. **Where a cause lives.** In the lowest package that both its raiser and the endpoints that answer it import: the
-   KV store's causes in `internal/kvstore`, which `internal/services/kv` and `internal/workernode/local` import; the
-   quota's in `internal/quota`; a cause that only the local API raises, such as its two 412s, in `local`.
+   KV service's causes in `internal/kvstore`, the lowest package that `internal/services/kv` and
+   `internal/workernode/local` share; the quota's in `internal/quota`; a cause that only the local API raises, such as a
+   missing key's 404, its two 412s and `readBody`'s, in `local`.
 3. **One interceptor.** Each endpoint registers through `handle`, or, when its dispatch bypasses the mux as fetch's
    does (ADR-0243 Decision 6), is wrapped by `wrap`. The handler returns its error before it writes any status, and the
    interceptor answers a non-nil one through `fault.WriteProblem`. Every `fault.WriteProblem` call of the package goes
@@ -107,20 +109,20 @@ Out:
    empty list, one that answers no error.
 5. **Internal.** An error of kind `internal` is implicit on every endpoint: never declared, warned or compared. Each
    Handler API table that holds a method calling the local API says once that such a method can fail with 500.
-6. **Production.** When a described endpoint answers an error whose cause it does not declare, or that has no cause,
-   the answer is unchanged, and funcd logs one warning per endpoint and cause (or kind) in the process.
+6. **Production.** When a described endpoint answers an error whose cause it does not declare, that has no cause, or
+   whose kind is not its cause's, the answer is unchanged, and funcd logs one warning per endpoint and cause (or kind) in the process.
 7. **Tests.** `local.SetErrorRecorderForTest` installs a process-wide hook that receives the pattern, the cause and the
    kind of every error the interceptor answers. `pkg/funcd`'s `TestMain` adds the described endpoints to ADR-0329's
-   comparison: an undeclared cause, or an error with none, always fails; a declared cause that no test got fails on a
+   comparison: an undeclared cause, an error with none, or a kind that is not its cause's always fails; a declared cause that no test got fails on a
    full run that passed, as `checksAll` decides. Only `pkg/funcd`'s tests run the real facades; `local`'s own fakes
-   prove the interceptor, not a declaration. The source scan of `one-error-writer` also refuses a call of
-   `SetErrorRecorderForTest` from a file that is not a test.
+   prove the interceptor, not a declaration. A scan of the module refuses a call of `SetErrorRecorderForTest`
+   from a file that is not a test.
 8. **Docs.** `local.Endpoints` builds the four facets over nil ports and the built-in endpoints on a recorder, to
    which `handle` passes its causes through a type assertion, so `facetMux` (ADR-0310) is unchanged; fetch's causes
    are one value that `NewHandler`'s `wrap` call and `Endpoints` both read. `kindref` calls it itself, so `Render`
    (ADR-0323) keeps its signature. `kindref`'s table names, for each language and method, its endpoint or none (`log`,
    `remainingMs`, `config.get`, `config.list`, `lake.get`), and the causes of that endpoint that the method does not
-   surface: those its shim returns as a value (`kvstore.ErrNotFound` under `kv.get`) and those it never provokes.
+   surface: those its shim returns as a value (`local.ErrKeyNotFound` under `kv.get`) and those it never provokes.
    Under each method, `kindref` writes one row per remaining cause: the status and problem type that `api/fault` gives
    its kind, when and what to do.
 9. **Rollout.** `internal/workernode/local/testdata/undescribed-endpoints.txt` lists the endpoints with nil causes; a
@@ -147,17 +149,19 @@ test and the CI call drop it.
 ```go
 // package fault (additions; no existing signature changes)
 
-// Cause is one named reason for an error, defined once; it is an error, so errors.Is can find it.
-type Cause struct {
-	Name string // unique in its package, e.g. "value-over-cap"
-	Kind Kind
-	When string // one sentence, e.g. "The value is larger than the store's cap."
-	Fix  string // one sentence, e.g. "Store a smaller value, or raise the store's cap."
-}
+// Cause is one named reason for an error, made only by NewCause; it is an error, so errors.Is can find it.
+type Cause struct{ /* unexported, immutable: name, kind, when, fix */ }
 
+// NewCause names its cause "<package>.<name>", e.g. "kvstore.value-over-cap"; when and fix are one sentence each.
 func NewCause(k Kind, name, when, fix string) *Cause
-func (c *Cause) Error() string                                // its name
-func (c *Cause) Errorf(op, format string, a ...any) *Error // an Error of c's kind whose Cause is c
+func (c *Cause) Name() string
+func (c *Cause) Kind() Kind
+func (c *Cause) When() string
+func (c *Cause) Fix() string
+func (c *Cause) Error() string                                       // its name
+func (c *Cause) Errorf(op, format string, a ...any) *Error           // an Error of c's kind whose Cause is c
+func (c *Cause) Wrapf(err error, op, format string, a ...any) *Error // the same, around a lower error
+func CauseOf(err error) *Cause                                       // the first cause in err's chain, or nil
 
 // Error gains Cause *Cause, which Error() does not print, and
 func (e *Error) Is(target error) bool // true when target is e.Cause
@@ -200,7 +204,8 @@ var methods map[string]map[string]methodEndpoint //nolint:gochecknoglobals // an
 
 1. `api/fault`: `Cause`, `NewCause`, `Errorf`, the `Cause` field and `Is`; `TestScenarioCauseKeepsTheDetail`.
 2. `internal/kvstore`, `internal/quota` and `local`: the KV causes; `internal/services/kv` (`kv.go`, `resolver.go`),
-   `internal/quota` (`quota.go`) and `local/kv.go` raise them.
+   `internal/quota` (`quota.go`), `local/kv.go` and `local/local.go` (`readBody`) raise them. The drivers on these
+   paths stay bare: they raise only internal wraps, or conditions that `local` rules out first.
 3. `internal/workernode/local`: `handle`, `wrap`, `Endpoint`, `Endpoints`, the hook and the warning; every endpoint
    moves to `handle` or `wrap`, the KV ones with their causes, the others with nil; `TestScenarioUndeclaredCauseLogged`,
    `TestScenarioOneErrorWriter` and `TestEveryEndpointIsDescribedOrListed`.
@@ -230,8 +235,6 @@ holds every endpoint but KV's and health; no problem's `detail` changed.
 - A reader of a Handler API table sees how each method fails, and every row is proven by a test.
 - Each cause has one definition that its raiser, its endpoints and `kindref` share, and the compiler checks every
   reference. Other code can test a cause with `errors.Is`.
-- A new error on a described endpoint needs a cause; one with none fails the tests. The rollout moves each client's
-  raising sites to causes.
 - The shims need no change, and one set of causes serves both languages. `kindref`'s table must follow a shim that
   starts or stops returning an error as a value; its test catches a renamed method or endpoint, not that change.
 - The guard sees only the calls that the tests make: an untested path can still answer an undeclared cause.
@@ -247,5 +250,4 @@ holds every endpoint but KV's and health; no problem's `detail` changed.
 - pyvvo/funcd#1463: the Develop rewrite and its deferred rows; ADR-0329's open question on the handler API rows.
 - `api/fault/fault.go` (`Error`, `Unwrap`, `KindOf`, `Wrapf`) and `problem.go` (`detailOf`); `internal/workernode/local`
   (`facet.go`, `kv.go`, `local.go`, `manager.go`); `internal/services/kv` and `internal/quota` (the KV raising sites);
-  `pkg/funcd/binding_providers.go` and `providers.go` (the facets); the shims' `kv.ts`, `blob.ts`, `secret.ts`, `kv.py`
-  and `secret.py` (the errors they return as values).
+  `pkg/funcd/binding_providers.go` and `providers.go` (the facets).
