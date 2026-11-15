@@ -14173,5 +14173,20 @@
     "dod_total": 17,
     "report": "docs/reviews/adr-0329-rollout-function-claude-opus-5-5-2.md",
     "notes": "Function rollout, round 2 (74f5f0e7): round 1's Minor is closed. invokeFunction's 19 cases and its success are rows, the exemption is gone, and a 503 case with no row fails. 1 Major (model): the dropped own-path ask was the only test of servedByName's ingress.path branch (ADR-0241 D4), and a mutant that drops it survives every non-e2e test. The in-flight row and the idle-connection close are deterministic. The decider's rulings of 2026-11-15 settle round 1's three routed items. DoD 16/17: just ci was not rerun, as asked."
+  },
+  {
+    "date": "2026-11-15",
+    "adr": "0329",
+    "phase": "implementation",
+    "model": "claude-opus-5-5",
+    "verdict": "pass",
+    "blockers": 0,
+    "majors": 0,
+    "minors": 0,
+    "model_attributed": 0,
+    "dod_passed": 16,
+    "dod_total": 17,
+    "report": "docs/reviews/adr-0329-rollout-function-claude-opus-5-5-3.md",
+    "notes": "Function rollout, round 3 (55baec8f): round 2's Major is closed. TestExposure_ByNameFollowsEnabled covers a Function with a path of its own, and the mutant that drops the path half of servedByName now fails it (404 expected, 503 received). internal/dataplane passes under -race; vet and lint are clean. No finding is open. DoD 16/17: just ci was not rerun, as asked."
   }
 ]
