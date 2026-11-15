@@ -283,7 +283,8 @@ func kvCauseRows(envs kvEnvs) []causeRow {
 
 // causeMatrices are the matrices of the described services, by the first segment of their endpoints' paths.
 func causeMatrices() map[string][]causeRow {
-	return map[string][]causeRow{"kv": kvCauseRows(kvEnvs{})}
+	return map[string][]causeRow{"kv": kvCauseRows(kvEnvs{}), "blob": blobCauseRows(blobEnvs{}),
+		"secret": secretCauseRows(secretEnvs{})}
 }
 
 // TestEveryDeclaredCauseHasARow holds each described endpoint's declared causes to the matrix of its service: one row
@@ -293,14 +294,23 @@ func TestEveryDeclaredCauseHasARow(t *testing.T) {
 	endpoints := local.Endpoints()
 	require.NoError(t, checkCauseRows(endpoints, causeMatrices()))
 	rows := kvCauseRows(kvEnvs{})
-	require.EqualError(t, checkCauseRows(endpoints, map[string][]causeRow{"kv": rows[1:]}),
+	withKV := func(kv []causeRow) map[string][]causeRow {
+		matrices := causeMatrices()
+		if kv == nil {
+			delete(matrices, "kv")
+		} else {
+			matrices["kv"] = kv
+		}
+		return matrices
+	}
+	require.EqualError(t, checkCauseRows(endpoints, withKV(rows[1:])),
 		rows[0].endpoint+" declares "+rows[0].cause.Name()+", which no row of the kv matrix proves")
-	require.EqualError(t, checkCauseRows(endpoints, map[string][]causeRow{"kv": append(rows, rows[0])}),
+	require.EqualError(t, checkCauseRows(endpoints, withKV(append(rows, rows[0]))),
 		rows[0].endpoint+" has 2 rows for "+rows[0].cause.Name()+" in the kv matrix")
 	stray := causeRow{endpoint: "GET /kv/{binding}", cause: local.ErrKeyNotFound}
-	require.EqualError(t, checkCauseRows(endpoints, map[string][]causeRow{"kv": append(rows, stray)}),
+	require.EqualError(t, checkCauseRows(endpoints, withKV(append(rows, stray))),
 		"the kv matrix has a row for GET /kv/{binding} and local.key-not-found, which the endpoint does not declare")
-	require.EqualError(t, checkCauseRows(endpoints, nil), "the kv service declares causes and has no matrix")
+	require.EqualError(t, checkCauseRows(endpoints, withKV(nil)), "the kv service declares causes and has no matrix")
 }
 
 // checkCauseRows fails on a declared cause with no row in its service's matrix or with two, on a row whose endpoint

@@ -7,11 +7,13 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"time"
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/internal/blob"
+	"github.com/pyvvo/funcd/internal/quota"
 )
 
 // maxBlobBytes caps a blob value buffered in memory (a DoS guard on the local API, ADR-0127). Larger
@@ -45,12 +47,24 @@ func BlobFacet(b Blob) Facet {
 // (list, ?prefix=…), and GET /blob/{binding}/{key...}?sign=1 (a presigned URL; ?method= exactly GET, PUT or
 // DELETE, ?expiry= an ADR-0194 duration in whole seconds from 1s to 168h, ADR-0198) — routed to b with the
 // sandbox's fixed namespace + function (ADR-0127/0073). Errors are RFC 9457 (binding/owner denial → 403, missing
-// object → 404, over a cap → 413, bad input → 400, engine → 500); a bad method or expiry is 400 before the PDP.
+// object → 404, over a cap → 413, bad input → 400, engine → 500); a bad method or expiry is 400 before the PDP. Each
+// endpoint declares its known causes (ADR-0330): a write to a missing Bucket is denied before its lookup, and funcd's
+// file store refuses a key on a read, a write or a delete, but not on a sign, which opens no file.
 func registerBlob(mux facetMux, caller Ref, b Blob, logger *slog.Logger) {
 	ns := caller.Namespace
 	fn := caller.Function
+	resolve := []*fault.KnownCause{blob.ErrCallerMissing, blob.ErrNoBinding}
+	keyRules := []*fault.KnownCause{blob.ErrKeyNotUTF8, blob.ErrKeyReserved, blob.ErrKeyUnstorable}
+	get := slices.Concat(resolve, []*fault.KnownCause{blob.ErrReadDenied, blob.ErrWriteDenied, blob.ErrBucketMissing,
+		blob.ErrObjectNotFound, ErrSignMethodInvalid, ErrSignExpiryInvalid, blob.ErrSignPutCapped, blob.ErrSignUnsupported},
+		keyRules)
+	put := slices.Concat([]*fault.KnownCause{ErrBodyTooLarge, ErrBodyUnreadable}, resolve,
+		[]*fault.KnownCause{blob.ErrWriteDenied, blob.ErrObjectOverCap, quota.ErrFloorReached, quota.ErrExceeded,
+			quota.ErrUnreadable}, keyRules)
+	del := slices.Concat(resolve, []*fault.KnownCause{blob.ErrWriteDenied, blob.ErrObjectNotFound}, keyRules)
+	list := slices.Concat(resolve, []*fault.KnownCause{blob.ErrReadDenied, blob.ErrBucketMissing})
 
-	handle(mux, logger, "GET /blob/{binding}/{key...}", nil, func(w http.ResponseWriter, r *http.Request) error {
+	handle(mux, logger, "GET /blob/{binding}/{key...}", get, func(w http.ResponseWriter, r *http.Request) error {
 		const op = "workernode.local.blob.get"
 		binding := r.PathValue("binding")
 		key := r.PathValue("key")
@@ -74,14 +88,14 @@ func registerBlob(mux facetMux, caller Ref, b Blob, logger *slog.Logger) {
 			return err
 		}
 		if !found {
-			return fault.NotFoundf(op, "object %q not found in binding %q", key, binding)
+			return blob.ErrObjectNotFound.Errorf(op, "object %q not found in binding %q", key, binding)
 		}
 		w.Header().Set("Content-Type", "application/octet-stream")
 		_, _ = w.Write(v)
 		return nil
 	})
 
-	handle(mux, logger, "PUT /blob/{binding}/{key...}", nil, func(w http.ResponseWriter, r *http.Request) error {
+	handle(mux, logger, "PUT /blob/{binding}/{key...}", put, func(w http.ResponseWriter, r *http.Request) error {
 		const op = "workernode.local.blob.put"
 		body, err := readBody(w, r, op, maxBlobBytes)
 		if err != nil {
@@ -95,7 +109,7 @@ func registerBlob(mux facetMux, caller Ref, b Blob, logger *slog.Logger) {
 		return nil
 	})
 
-	handle(mux, logger, "DELETE /blob/{binding}/{key...}", nil, func(w http.ResponseWriter, r *http.Request) error {
+	handle(mux, logger, "DELETE /blob/{binding}/{key...}", del, func(w http.ResponseWriter, r *http.Request) error {
 		if err := b.Delete(r.Context(), ns, fn, r.PathValue("binding"), r.PathValue("key")); err != nil {
 			logger.Warn("blob delete denied/failed", "caller", caller.String(), "binding", r.PathValue("binding"), "err", err.Error())
 			return err
@@ -104,7 +118,7 @@ func registerBlob(mux facetMux, caller Ref, b Blob, logger *slog.Logger) {
 		return nil
 	})
 
-	handle(mux, logger, "GET /blob/{binding}", nil, func(w http.ResponseWriter, r *http.Request) error {
+	handle(mux, logger, "GET /blob/{binding}", list, func(w http.ResponseWriter, r *http.Request) error {
 		keys, err := b.List(r.Context(), ns, fn, r.PathValue("binding"), r.URL.Query().Get("prefix"))
 		if err != nil {
 			logger.Warn("blob list denied/failed", "caller", caller.String(), "binding", r.PathValue("binding"), "err", err.Error())
@@ -129,7 +143,7 @@ func signOptsFromQuery(q url.Values) (blob.SignOptions, error) {
 		case string(blob.SignGet), string(blob.SignPut), string(blob.SignDelete):
 			opts.Method = blob.SignMethod(m)
 		default:
-			return blob.SignOptions{}, fault.Invalidf(op, "method %q is not GET, PUT or DELETE", m)
+			return blob.SignOptions{}, ErrSignMethodInvalid.Errorf(op, "method %q is not GET, PUT or DELETE", m)
 		}
 	}
 	if !q.Has("expiry") {
@@ -138,11 +152,11 @@ func signOptsFromQuery(q url.Values) (blob.SignOptions, error) {
 	e := q.Get("expiry")
 	d, err := v1.ParseDuration(e)
 	if err != nil {
-		return blob.SignOptions{}, fault.Invalidf(op, "expiry %q is not a duration string such as 10m or 1h30m", e)
+		return blob.SignOptions{}, ErrSignExpiryInvalid.Errorf(op, "expiry %q is not a duration string such as 10m or 1h30m", e)
 	}
 	opts.Expiry = time.Duration(d)
 	if opts.Expiry%time.Second != 0 || opts.Expiry < minSignExpiry || opts.Expiry > maxSignExpiry {
-		return blob.SignOptions{}, fault.Invalidf(op, "expiry %q must be a whole number of seconds from 1s to 168h", e)
+		return blob.SignOptions{}, ErrSignExpiryInvalid.Errorf(op, "expiry %q must be a whole number of seconds from 1s to 168h", e)
 	}
 	return opts, nil
 }

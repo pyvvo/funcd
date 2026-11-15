@@ -287,20 +287,20 @@ func (k *bucket) checkKey(op, key string) error {
 		return fault.Invalidf(op, "an empty key names the bucket root, not an object, on the file backend")
 	}
 	if !utf8.ValidString(key) {
-		return fault.Invalidf(op, "%q: a key must be valid UTF-8 on the file backend", key)
+		return blob.ErrKeyNotUTF8.Errorf(op, "%q: a key must be valid UTF-8 on the file backend", key)
 	}
 	for _, suffix := range []string{fileAttrsSuffix, fileTempSuffix} {
 		if strings.HasSuffix(key, suffix) {
-			return fault.Invalidf(op, "%q: the %q suffix is reserved by the file backend", key, suffix)
+			return blob.ErrKeyReserved.Errorf(op, "%q: the %q suffix is reserved by the file backend", key, suffix)
 		}
 	}
 	if strings.Contains(key, fileEscapePrefix) {
-		return fault.Invalidf(op, "%q: the %q escape is reserved by the file backend", key, fileEscapePrefix)
+		return blob.ErrKeyReserved.Errorf(op, "%q: the %q escape is reserved by the file backend", key, fileEscapePrefix)
 	}
 	segs := strings.Split(key, "/")
 	for i, s := range segs {
 		if s == "." || (s == ".." && i == len(segs)-1) || (s == "" && i == 0 && len(segs) > 1) {
-			return fault.Invalidf(op, "%q would alias another key on the file backend", key)
+			return blob.ErrKeyReserved.Errorf(op, "%q would alias another key on the file backend", key)
 		}
 	}
 	return nil
@@ -761,6 +761,9 @@ func (k *bucket) SignedURL(ctx context.Context, key string, opts blob.SignOption
 		expiry = defaultExpiry
 	}
 	u, err := k.b.SignedURL(ctx, key, &gcblob.SignedURLOptions{Method: method, Expiry: expiry})
+	if gcerrors.Code(err) == gcerrors.Unimplemented {
+		return "", blob.ErrSignUnsupported.Wrapf(err, "blob.SignedURL", "operation not supported by this backend")
+	}
 	if err != nil {
 		return "", mapErr("blob.SignedURL", key, err)
 	}
@@ -808,13 +811,17 @@ func (k *bucket) Close() error {
 // mapErr translates gocloud error codes to api/fault kinds (ADR-0007 §3), wrapping
 // the gocloud cause so errors.Is/As can still reach it (fault.Error.Unwrap). A missing key and a key the
 // backend cannot hold are 4xx, whose detail keeps the whole text, so they carry only the key and the OS's reason.
+// Each names its known cause (ADR-0330); of gocloud's invalid arguments, only a key that is not UTF-8 is the key's.
 func mapErr(op, key string, err error) error {
 	switch gcerrors.Code(err) {
 	case gcerrors.NotFound:
-		return fault.NotFoundf(op, "%q not found", key)
+		return blob.ErrObjectNotFound.Errorf(op, "%q not found", key)
 	case gcerrors.Unimplemented:
 		return fault.Wrapf(err, fault.Unavailable, op, "operation not supported by this backend")
 	case gcerrors.InvalidArgument:
+		if !utf8.ValidString(key) {
+			return blob.ErrKeyNotUTF8.Wrapf(err, op, "invalid argument for %q", key)
+		}
 		return fault.Wrapf(err, fault.Invalid, op, "invalid argument for %q", key)
 	}
 	// fileblob reports a key its OS path cannot hold as Unknown: a name past the OS limit, or
@@ -823,7 +830,7 @@ func mapErr(op, key string, err error) error {
 	var errno syscall.Errno
 	if errors.As(err, &errno) && (errno == syscall.ENAMETOOLONG || errno == syscall.ENOTDIR ||
 		errno == syscall.EISDIR || errno == syscall.EEXIST) {
-		return fault.Wrapf(errno, fault.Invalid, op, "%q cannot be stored by this backend", key)
+		return blob.ErrKeyUnstorable.Wrapf(errno, op, "%q cannot be stored by this backend", key)
 	}
 	return fault.Wrapf(err, fault.Internal, op, "%s failed for %q", op, key)
 }

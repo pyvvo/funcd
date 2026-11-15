@@ -9,8 +9,10 @@ import (
 	"strings"
 
 	"github.com/pyvvo/funcd/api/fault"
+	"github.com/pyvvo/funcd/internal/blob"
 	"github.com/pyvvo/funcd/internal/kvstore"
 	"github.com/pyvvo/funcd/internal/reference"
+	"github.com/pyvvo/funcd/internal/secrets"
 	"github.com/pyvvo/funcd/internal/workernode/local"
 )
 
@@ -48,6 +50,20 @@ func methodTable() map[string]map[string]methodEndpoint {
 	del := methodEndpoint{Endpoint: kvDelete, Except: slices.Concat(conditions,
 		[]*fault.KnownCause{local.ErrDeleteIfNoneMatch, local.ErrIfMatchMalformed, kvstore.ErrNoConditional})}
 	delIf := methodEndpoint{Endpoint: kvDelete, Except: slices.Concat(conditions, []*fault.KnownCause{local.ErrDeleteIfNoneMatch})}
+	// A blob or a secret get returns any 404 as no value. A blob get sends no ?sign=, and a sign opens no object, so it
+	// meets neither a missing one nor the file store's key rules. No shim sends a key that is not UTF-8, which it cannot
+	// encode, or a body that it does not send whole.
+	sign := []*fault.KnownCause{blob.ErrWriteDenied, local.ErrSignMethodInvalid, local.ErrSignExpiryInvalid,
+		blob.ErrSignPutCapped, blob.ErrSignUnsupported}
+	blobRead := methodEndpoint{Endpoint: blobKey, Except: slices.Concat(sign,
+		[]*fault.KnownCause{blob.ErrObjectNotFound, blob.ErrBucketMissing, blob.ErrKeyNotUTF8})}
+	blobSign := methodEndpoint{Endpoint: blobKey, Except: []*fault.KnownCause{blob.ErrObjectNotFound, blob.ErrKeyNotUTF8,
+		blob.ErrKeyReserved, blob.ErrKeyUnstorable}}
+	blobWrite := methodEndpoint{Endpoint: blobPut, Except: []*fault.KnownCause{local.ErrBodyUnreadable, blob.ErrKeyNotUTF8}}
+	blobDelete := methodEndpoint{Endpoint: blobDel, Except: []*fault.KnownCause{blob.ErrKeyNotUTF8}}
+	secretRead := methodEndpoint{Endpoint: secretKey, Except: []*fault.KnownCause{local.ErrSecretKeyNotFound,
+		secrets.ErrCallerMissing, secrets.ErrSecretMissing}}
+	secretWrite := methodEndpoint{Endpoint: secretPut, Except: []*fault.KnownCause{local.ErrBodyUnreadable}}
 	at := func(endpoint string) methodEndpoint { return methodEndpoint{Endpoint: endpoint} }
 	return map[string]map[string]methodEndpoint{
 		"TypeScript": {
@@ -55,11 +71,11 @@ func methodTable() map[string]map[string]methodEndpoint {
 			"kv.get": read, "kv.getEntry": read, "kv.getText": read, "kv.getJSON": read,
 			"kv.put": put, "kv.putIfAbsent": put, "kv.compareAndSet": compareAndSet,
 			"kv.del": del, "kv.delIf": delIf, "kv.list": at(kvList),
-			"blob.get": at(blobKey), "blob.put": at(blobPut), "blob.del": at(blobDel), "blob.list": at(blobList),
-			"blob.signedUrl": at(blobKey),
+			"blob.get": blobRead, "blob.put": blobWrite, "blob.del": blobDelete, "blob.list": at(blobList),
+			"blob.signedUrl": blobSign,
 			"sql.query":      at(sqlQuery), "sql.queryValues": at(sqlQuery), "sql.execute": at(sqlExec),
 			"config.get": {}, "config.list": {},
-			"secret.get": at(secretKey), "secret.list": at(secret), "secret.put": at(secretPut), "secret.del": at(secDel),
+			"secret.get": secretRead, "secret.list": at(secret), "secret.put": secretWrite, "secret.del": at(secDel),
 			"lake.get": {},
 		},
 		"Python": {
@@ -67,11 +83,11 @@ func methodTable() map[string]map[string]methodEndpoint {
 			"kv.get": read, "kv.get_entry": read, "kv.get_str": read, "kv.get_json": read,
 			"kv.put": put, "kv.put_if_absent": put, "kv.compare_and_set": compareAndSet,
 			"kv.delete": del, "kv.delete_if": delIf, "kv.list": at(kvList),
-			"blob.get": at(blobKey), "blob.put": at(blobPut), "blob.delete": at(blobDel), "blob.list": at(blobList),
-			"blob.signed_url": at(blobKey),
+			"blob.get": blobRead, "blob.put": blobWrite, "blob.delete": blobDelete, "blob.list": at(blobList),
+			"blob.signed_url": blobSign,
 			"sql.query":       at(sqlQuery), "sql.query_values": at(sqlQuery), "sql.execute": at(sqlExec),
 			"config.get": {}, "config.list": {},
-			"secret.get": at(secretKey), "secret.list": at(secret), "secret.put": at(secretPut), "secret.delete": at(secDel),
+			"secret.get": secretRead, "secret.list": at(secret), "secret.put": secretWrite, "secret.delete": at(secDel),
 			"lake.get": {},
 		},
 	}

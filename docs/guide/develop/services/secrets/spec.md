@@ -41,6 +41,31 @@ The Secrets that the function binds. get and list read their keys and values at 
 
 Each method here that calls funcd can also fail with the status 500 and the problem type `urn:funcd:problem:internal`, when funcd meets an error that it did not expect; funcd logs its cause.
 
+When funcd refuses a call, the method fails with an error that holds funcd's status and problem type. This table gives them for each method, with when each happens and what to do.
+
+| Method | Status | Problem type | When | What to do |
+| --- | --- | --- | --- | --- |
+| `get` | 400 | `urn:funcd:problem:invalid` | A Secret's value is not UTF-8 text, or it holds a NUL byte. | Store the value as UTF-8 text with no NUL byte, such as in base64. |
+| `get` | 403 | `urn:funcd:problem:forbidden` | A Policy forbids the Function to read a Secret that it binds. | Change or remove the Policy that forbids secret::read on the Secret. |
+| `list` | 400 | `urn:funcd:problem:invalid` | A Secret's value is not UTF-8 text, or it holds a NUL byte. | Store the value as UTF-8 text with no NUL byte, such as in base64. |
+| `list` | 403 | `urn:funcd:problem:forbidden` | A Policy forbids the Function to read a Secret that it binds. | Change or remove the Policy that forbids secret::read on the Secret. |
+| `list` | 404 | `urn:funcd:problem:not-found` | The calling Function no longer exists, so it binds no Secret. | Call from a Function that exists; a deleted Function's worker stops. |
+| `list` | 404 | `urn:funcd:problem:not-found` | A Secret that the Function binds does not exist. | Create the Secret, or remove it from the Function's spec.bindings.secret. |
+| `put` | 400 | `urn:funcd:problem:invalid` | The body of the write is not &#123;"value": "&lt;text&gt;"&#125;, as when the value is not a string. | Write the value as a string. |
+| `put` | 400 | `urn:funcd:problem:invalid` | A Secret's value is not UTF-8 text, or it holds a NUL byte. | Store the value as UTF-8 text with no NUL byte, such as in base64. |
+| `put` | 400 | `urn:funcd:problem:invalid` | The key is not an environment-variable name: a letter or an underscore, then letters, digits and underscores. | Use such a key. |
+| `put` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.secret does not list the Secret. | Add the Secret to spec.bindings.secret, or write a Secret that the Function binds. |
+| `put` | 403 | `urn:funcd:problem:forbidden` | The Function does not own the Secret, no RolesAssignment makes it a writer, or a Policy forbids the write. | Write from the Secret's owner, or grant the Function secret::write with a RolesAssignment, such as the Secret Data Writer role. |
+| `put` | 404 | `urn:funcd:problem:not-found` | The calling Function no longer exists, so it binds no Secret. | Call from a Function that exists; a deleted Function's worker stops. |
+| `put` | 404 | `urn:funcd:problem:not-found` | A Secret that the Function binds does not exist. | Create the Secret, or remove it from the Function's spec.bindings.secret. |
+| `put` | 409 | `urn:funcd:problem:conflict` | The Secret changed under each attempt to write it, as when other writes of it run at the same time. | Retry the write. |
+| `put` | 413 | `urn:funcd:problem:payload-too-large` | The request's body is larger than the local API takes for the call. | Send a smaller body. |
+| `del` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.secret does not list the Secret. | Add the Secret to spec.bindings.secret, or write a Secret that the Function binds. |
+| `del` | 403 | `urn:funcd:problem:forbidden` | The Function does not own the Secret, no RolesAssignment makes it a writer, or a Policy forbids the write. | Write from the Secret's owner, or grant the Function secret::write with a RolesAssignment, such as the Secret Data Writer role. |
+| `del` | 404 | `urn:funcd:problem:not-found` | The calling Function no longer exists, so it binds no Secret. | Call from a Function that exists; a deleted Function's worker stops. |
+| `del` | 404 | `urn:funcd:problem:not-found` | A Secret that the Function binds does not exist. | Create the Secret, or remove it from the Function's spec.bindings.secret. |
+| `del` | 409 | `urn:funcd:problem:conflict` | The Secret changed under each attempt to write it, as when other writes of it run at the same time. | Retry the write. |
+
 #### Python
 
 The Secrets that the function binds. ``get`` and ``list`` read their keys and values at each call, with no cache, so a changed Secret shows at the next read; a key that starts with ``FUNCD_`` is never read: ``get`` returns ``None`` for it, and ``list`` leaves it out. ``put`` and ``delete`` change one key of a bound Secret that the function may write, as the Secret's owner or through a writer role such as Secret Data Writer.
@@ -53,6 +78,31 @@ The Secrets that the function binds. ``get`` and ``list`` read their keys and va
 | `delete(binding: str, key: str) -> None` | Removes key from Secret ``binding``, which the function binds and may write, as for ``put``; a key that the Secret lacks is no error. Fails with the HTTP status 403 when the function does not bind the Secret or may not write it, 404 when the Secret does not exist, and 409 when the Secret changed under each of 5 attempts to write it. |
 
 Each method here that calls funcd can also fail with the status 500 and the problem type `urn:funcd:problem:internal`, when funcd meets an error that it did not expect; funcd logs its cause.
+
+When funcd refuses a call, the method fails with an error that holds funcd's status and problem type. This table gives them for each method, with when each happens and what to do.
+
+| Method | Status | Problem type | When | What to do |
+| --- | --- | --- | --- | --- |
+| `get` | 400 | `urn:funcd:problem:invalid` | A Secret's value is not UTF-8 text, or it holds a NUL byte. | Store the value as UTF-8 text with no NUL byte, such as in base64. |
+| `get` | 403 | `urn:funcd:problem:forbidden` | A Policy forbids the Function to read a Secret that it binds. | Change or remove the Policy that forbids secret::read on the Secret. |
+| `list` | 400 | `urn:funcd:problem:invalid` | A Secret's value is not UTF-8 text, or it holds a NUL byte. | Store the value as UTF-8 text with no NUL byte, such as in base64. |
+| `list` | 403 | `urn:funcd:problem:forbidden` | A Policy forbids the Function to read a Secret that it binds. | Change or remove the Policy that forbids secret::read on the Secret. |
+| `list` | 404 | `urn:funcd:problem:not-found` | The calling Function no longer exists, so it binds no Secret. | Call from a Function that exists; a deleted Function's worker stops. |
+| `list` | 404 | `urn:funcd:problem:not-found` | A Secret that the Function binds does not exist. | Create the Secret, or remove it from the Function's spec.bindings.secret. |
+| `put` | 400 | `urn:funcd:problem:invalid` | The body of the write is not &#123;"value": "&lt;text&gt;"&#125;, as when the value is not a string. | Write the value as a string. |
+| `put` | 400 | `urn:funcd:problem:invalid` | A Secret's value is not UTF-8 text, or it holds a NUL byte. | Store the value as UTF-8 text with no NUL byte, such as in base64. |
+| `put` | 400 | `urn:funcd:problem:invalid` | The key is not an environment-variable name: a letter or an underscore, then letters, digits and underscores. | Use such a key. |
+| `put` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.secret does not list the Secret. | Add the Secret to spec.bindings.secret, or write a Secret that the Function binds. |
+| `put` | 403 | `urn:funcd:problem:forbidden` | The Function does not own the Secret, no RolesAssignment makes it a writer, or a Policy forbids the write. | Write from the Secret's owner, or grant the Function secret::write with a RolesAssignment, such as the Secret Data Writer role. |
+| `put` | 404 | `urn:funcd:problem:not-found` | The calling Function no longer exists, so it binds no Secret. | Call from a Function that exists; a deleted Function's worker stops. |
+| `put` | 404 | `urn:funcd:problem:not-found` | A Secret that the Function binds does not exist. | Create the Secret, or remove it from the Function's spec.bindings.secret. |
+| `put` | 409 | `urn:funcd:problem:conflict` | The Secret changed under each attempt to write it, as when other writes of it run at the same time. | Retry the write. |
+| `put` | 413 | `urn:funcd:problem:payload-too-large` | The request's body is larger than the local API takes for the call. | Send a smaller body. |
+| `delete` | 403 | `urn:funcd:problem:forbidden` | The Function's spec.bindings.secret does not list the Secret. | Add the Secret to spec.bindings.secret, or write a Secret that the Function binds. |
+| `delete` | 403 | `urn:funcd:problem:forbidden` | The Function does not own the Secret, no RolesAssignment makes it a writer, or a Policy forbids the write. | Write from the Secret's owner, or grant the Function secret::write with a RolesAssignment, such as the Secret Data Writer role. |
+| `delete` | 404 | `urn:funcd:problem:not-found` | The calling Function no longer exists, so it binds no Secret. | Call from a Function that exists; a deleted Function's worker stops. |
+| `delete` | 404 | `urn:funcd:problem:not-found` | A Secret that the Function binds does not exist. | Create the Secret, or remove it from the Function's spec.bindings.secret. |
+| `delete` | 409 | `urn:funcd:problem:conflict` | The Secret changed under each attempt to write it, as when other writes of it run at the same time. | Retry the write. |
 
 ## HTTP API
 
