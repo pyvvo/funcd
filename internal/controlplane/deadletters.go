@@ -137,8 +137,10 @@ func replayCases() []ErrorCase {
 			"Point the action at a Function that does not serve HTTP, then retry."),
 		problem(fault.Invalid, "The action's input in the Sensor is not a JSON object, or holds an expression that "+
 			"does not evaluate; the dead letter stays.", "Correct the action's input in the Sensor, then retry."),
-		problem(fault.Unavailable, "The platform or the namespace is held, so funcd delivers no event.",
-			"Retry once the hold is released, which funcdctl hold release does."),
+		problem(fault.Unavailable, "The platform is held, or the namespace is held for its data or while a Restore "+
+			"loads it, so funcd delivers no event.", "Retry once the hold is released: funcdctl hold release releases "+
+			"the platform's hold, and funcdctl hold release --namespace the namespace's, once any Restore that loads it "+
+			"has ended."),
 		problem(fault.Unavailable, "The delivery failed again, such as on a Function that is missing, has no ready "+
 			"worker or answers an error; the dead letter stays, with its attempts reset and the new reason.",
 			"Correct what the dead letter's reason names, then retry."),

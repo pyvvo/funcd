@@ -30,7 +30,7 @@ type DeadLetter struct {
 	Source    v1.ObjectName    `json:"source" doc:"The EventSource of the event, as the Sensor's dependency names it."`
 	Event     v1.ObjectName    `json:"event" doc:"The name of the event, as the Sensor's dependency names it."`
 	Action    string           `json:"action" doc:"The name of the Sensor's action that failed."`
-	Payload   json.RawMessage  `json:"payload" doc:"The CloudEvent that the action was to deliver, as JSON. A replay delivers it again."`
+	Payload   json.RawMessage  `json:"payload" doc:"The CloudEvent that fired the action, as JSON, not the input that the action builds from it. A replay runs the Sensor's current action on it again."`
 	Attempts  int              `json:"attempts" doc:"The delivery attempts made before funcd parked the action: 0 when it parked the action before any attempt, such as when the Sensor's queue was full, and after a replay that failed."`
 	Reason    string           `json:"reason" doc:"Why the last attempt failed, or why funcd parked the action before its attempts ran out."`
 	FailedAt  v1.Timestamp     `json:"failedAt" doc:"When funcd parked the action, or when its last replay failed."`

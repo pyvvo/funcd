@@ -2281,7 +2281,7 @@ components:
           pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
           type: string
         payload:
-          description: The CloudEvent that the action was to deliver, as JSON. A replay delivers it again.
+          description: The CloudEvent that fired the action, as JSON, not the input that the action builds from it. A replay runs the Sensor's current action on it again.
         reason:
           description: Why the last attempt failed, or why funcd parked the action before its attempts ran out.
           type: string
@@ -8034,12 +8034,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/FaultError"
           description: |-
-            - `urn:funcd:problem:unavailable`: The platform or the namespace is held, so funcd delivers no event. Retry once the hold is released, which funcdctl hold release does.
+            - `urn:funcd:problem:unavailable`: The platform is held, or the namespace is held for its data or while a Restore loads it, so funcd delivers no event. Retry once the hold is released: funcdctl hold release releases the platform's hold, and funcdctl hold release --namespace the namespace's, once any Restore that loads it has ended.
             - `urn:funcd:problem:unavailable`: The delivery failed again, such as on a Function that is missing, has no ready worker or answers an error; the dead letter stays, with its attempts reset and the new reason. Correct what the dead letter's reason names, then retry.
           x-funcd-cases:
             - type: urn:funcd:problem:unavailable
-              when: The platform or the namespace is held, so funcd delivers no event.
-              fix: Retry once the hold is released, which funcdctl hold release does.
+              when: The platform is held, or the namespace is held for its data or while a Restore loads it, so funcd delivers no event.
+              fix: "Retry once the hold is released: funcdctl hold release releases the platform's hold, and funcdctl hold release --namespace the namespace's, once any Restore that loads it has ended."
             - type: urn:funcd:problem:unavailable
               when: The delivery failed again, such as on a Function that is missing, has no ready worker or answers an error; the dead letter stays, with its attempts reset and the new reason.
               fix: Correct what the dead letter's reason names, then retry.
