@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -29,9 +30,26 @@ type LogQuerier interface {
 type logsInput struct {
 	Namespace v1.NamespaceName `path:"namespace" doc:"The Function's namespace."`
 	Name      v1.ObjectName    `path:"name" doc:"The Function's name."`
-	Since     string           `query:"since" doc:"Only the lines since then: a duration back from now, such as 15m or 1h30m, or a UTC timestamp with three fractional digits, such as 2026-10-07T22:00:00.000Z. Left out, the lines from the first."`
-	Severity  string           `query:"severity" doc:"Only the lines at this level or above: trace, debug, info, warn, error or fatal."`
-	Limit     int              `query:"limit" doc:"The most lines to answer, the most recent ones: 1000 when left out, and at most 10000."`
+	LogFilters
+}
+
+// LogFilters are the query parameters that every logs read takes. It is exported because huma skips unexported
+// embedded fields.
+type LogFilters struct {
+	Since    string `query:"since" doc:"Only the lines since then: a duration back from now, such as 15m or 1h30m, or a UTC timestamp with three fractional digits, such as 2026-10-07T22:00:00.000Z. Left out, the lines from the first."`
+	Severity string `query:"severity" doc:"Only the lines at this level or above: trace, debug, info, warn, error or fatal."`
+	Limit    int    `query:"limit" doc:"The most lines to answer, the most recent ones: 1000 when left out, and at most 10000."`
+}
+
+// logFilterCases are the answers of the parameters that LogFilters holds.
+func logFilterCases() []ErrorCase {
+	return []ErrorCase{
+		problem(fault.Invalid, "The since parameter is neither a duration, such as 15m, nor a UTC timestamp with "+
+			"three fractional digits, such as 2026-10-07T22:00:00.000Z.", "Send since in one of those two forms."),
+		problem(fault.Invalid, "The severity parameter is none of trace, debug, info, warn, error and fatal.",
+			"Send one of those levels, or leave severity out."),
+		blank(http.StatusUnprocessableEntity, "The limit parameter is not an integer.", "Send limit as a whole number."),
+	}
 }
 
 type logsOutput struct {
@@ -51,13 +69,8 @@ func RegisterLogs(api huma.API, q LogQuerier, authz auth.Authorizer) {
 		Method:      http.MethodGet,
 		Path:        "/apis/funcd.io/v1alpha1/namespaces/{namespace}/functions/{name}/logs",
 		Tags:        []string{"Function"},
-	}, "Read the logs of a Function", unauthorized(), forbidden("read Functions in the namespace"),
-		problem(fault.Invalid, "The since parameter is neither a duration, such as 15m, nor a UTC timestamp with "+
-			"three fractional digits, such as 2026-10-07T22:00:00.000Z.", "Send since in one of those two forms."),
-		problem(fault.Invalid, "The severity parameter is none of trace, debug, info, warn, error and fatal.",
-			"Send one of those levels, or leave severity out."),
-		badPath("namespace or the name"),
-		blank(http.StatusUnprocessableEntity, "The limit parameter is not an integer.", "Send limit as a whole number."),
+	}, "Read the logs of a Function", slices.Concat([]ErrorCase{unauthorized(),
+		forbidden("read Functions in the namespace"), badPath("namespace or the name")}, logFilterCases())...,
 	), func(ctx context.Context, in *logsInput) (*logsOutput, error) {
 		if err := authorizeLogs(ctx, authz, in.Namespace); err != nil {
 			return nil, wrapFaultError(err)
@@ -200,12 +213,10 @@ func resolveStepFunction(workflow v1.ObjectName, spec *v1.WorkflowSpec, step v1.
 // runLogsInput is the run-scoped logs read request (ADR-0106): the same filters as logsInput plus the
 // optional --step drill-down. The path params are typed, so huma confines the namespace at the boundary.
 type runLogsInput struct {
-	Namespace v1.NamespaceName `path:"namespace"`
-	Name      v1.ObjectName    `path:"name"`
-	Since     string           `query:"since" doc:"a duration (15m, 1h30m, 500ms) or a UTC timestamp with exactly 3 fractional digits (2026-10-07T22:00:00.000Z); empty ⇒ no lower bound"`
-	Severity  string           `query:"severity" doc:"minimum level: trace|debug|info|warn|error|fatal"`
-	Limit     int              `query:"limit" doc:"max records returned, most-recent first-bounded; default 1000, capped 10000"`
-	Step      string           `query:"step" doc:"narrow to one step's function (the --step drill-down)"`
+	Namespace v1.NamespaceName `path:"namespace" doc:"The run's namespace."`
+	Name      v1.ObjectName    `path:"name" doc:"The run's name."`
+	LogFilters
+	Step string `query:"step" doc:"Only the lines of one step's Function, named by the step's name in the run's Workflow. Left out, the lines of every Function that the run called, those of its child workflows included."`
 }
 
 // RegisterWorkflowRunLogs registers GET …/workflowruns/{name}/logs (ADR-0106): it authorizes get/WorkflowRun
@@ -213,12 +224,21 @@ type runLogsInput struct {
 // (the whole composition). NewServer calls it when a run-log querier is configured; spec generation uses the
 // stub so the route is documented in the committed OpenAPI.
 func RegisterWorkflowRunLogs(api huma.API, q WorkflowRunLogQuerier, authz auth.Authorizer) {
-	huma.Register(api, huma.Operation{
+	huma.Register(api, Describe(huma.Operation{
 		OperationID: "getWorkflowRunLogs",
 		Method:      http.MethodGet,
 		Path:        "/apis/funcd.io/v1alpha1/namespaces/{namespace}/workflowruns/{name}/logs",
 		Tags:        []string{"WorkflowRun"},
-	}, func(ctx context.Context, in *runLogsInput) (*logsOutput, error) {
+	}, "Read the logs of a WorkflowRun", slices.Concat([]ErrorCase{unauthorized(),
+		forbidden("read WorkflowRuns in the namespace"),
+		problem(fault.NotFound, "No WorkflowRun of that name exists in the namespace.", "Check the name and the namespace."),
+		badPath("namespace or the name")}, logFilterCases(), []ErrorCase{
+		problem(fault.Invalid, "The run has started, and the step parameter names no step of its Workflow.",
+			"Send the name of one of its steps, or leave step out."),
+		problem(fault.Invalid, "The run has started, and the step parameter names a builtin or workflow step, which "+
+			"calls no Function of its own.", "Name a function step, or leave step out."),
+	})...,
+	), func(ctx context.Context, in *runLogsInput) (*logsOutput, error) {
 		if err := authorizeRunLogs(ctx, authz, in.Namespace); err != nil {
 			return nil, wrapFaultError(err)
 		}

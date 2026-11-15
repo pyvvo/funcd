@@ -24,16 +24,16 @@ import (
 // verbatim, plus the provenance to re-find the action on the LIVE Sensor spec. It is built from the Sensor's in-memory delivery unit (the dependency's
 // source/event tuple), never by re-parsing the CloudEvent.
 type DeadLetter struct {
-	ID        string           `json:"id"`        // ULID — time-sortable within a namespace (cheap cap eviction)
-	Namespace v1.NamespaceName `json:"namespace"` //
-	Sensor    v1.ObjectName    `json:"sensor"`    // the Sensor whose action failed
-	Source    v1.ObjectName    `json:"source"`    // the EventSource — from the delivery unit's dependency tuple
-	Event     v1.ObjectName    `json:"event"`     // the event name — from the delivery unit's dependency tuple
-	Action    string           `json:"action"`    // the Sensor action name (do[].name)
-	Payload   json.RawMessage  `json:"payload"`   // the full CloudEvent JSON (re-injected verbatim on replay)
-	Attempts  int              `json:"attempts"`  // delivery attempts made before dead-lettering (0 if never attempted)
-	Reason    string           `json:"reason"`    // the terminal delivery error, or the park reason (ADR-0156)
-	FailedAt  v1.Timestamp     `json:"failedAt"`  //
+	ID        string           `json:"id" doc:"The dead letter's ID, a ULID that funcd mints when it parks the action."` // time-sortable: the count cap evicts the oldest cheaply
+	Namespace v1.NamespaceName `json:"namespace" doc:"The namespace of the Sensor."`
+	Sensor    v1.ObjectName    `json:"sensor" doc:"The Sensor whose action failed."`
+	Source    v1.ObjectName    `json:"source" doc:"The EventSource of the event, as the Sensor's dependency names it."`
+	Event     v1.ObjectName    `json:"event" doc:"The name of the event, as the Sensor's dependency names it."`
+	Action    string           `json:"action" doc:"The name of the Sensor's action that failed."`
+	Payload   json.RawMessage  `json:"payload" doc:"The CloudEvent that the action was to deliver, as JSON. A replay delivers it again."`
+	Attempts  int              `json:"attempts" doc:"The delivery attempts made before funcd parked the action: 0 when it parked the action before any attempt, such as when the Sensor's queue was full, and after a replay that failed."`
+	Reason    string           `json:"reason" doc:"Why the last attempt failed, or why funcd parked the action before its attempts ran out."`
+	FailedAt  v1.Timestamp     `json:"failedAt" doc:"When funcd parked the action, or when its last replay failed."`
 }
 
 // Store is the dead-letter queue port (ADR-0002 §1) — bus-driver-independent. Records are engine-owned
