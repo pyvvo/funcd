@@ -79,10 +79,14 @@ func registerEventSource(api huma.API, h Handlers) {
 // ===== ConfigMap (namespaced) =====
 
 func registerConfigMap(api huma.API, h Handlers) {
+	// The KVStore marker migration's completion record (refuseMigrationRecord) refuses every write.
+	reserved := []ErrorCase{problem(fault.Conflict, "The ConfigMap is kvstore-marker-migration in funcd-system, a "+
+		"record that funcd keeps for itself.", "Use another ConfigMap: only funcd writes this one.")}
 	registerNamespacedCRUD(api, crudRoutes[v1.ConfigMap]{
 		kind: "ConfigMap", kinds: "ConfigMaps", path: "configmaps",
 		list: h.ListConfigMaps, create: h.CreateConfigMap, get: h.GetConfigMap,
 		replace: h.ReplaceConfigMap, remove: h.DeleteConfigMap,
+		cases: &kindCases{create: reserved, replace: reserved, remove: reserved},
 	})
 }
 
@@ -92,6 +96,7 @@ func registerSecret(api huma.API, h Handlers) {
 	registerNamespacedCRUD(api, crudRoutes[v1.Secret]{
 		kind: "Secret", kinds: "Secrets", path: "secrets",
 		list: h.ListSecrets, create: h.CreateSecret, get: h.GetSecret, replace: h.ReplaceSecret, remove: h.DeleteSecret,
+		cases: &kindCases{},
 	})
 }
 
@@ -181,27 +186,51 @@ type KVStoreHandover struct {
 
 // madeByLiveOwner is the 409 of a write to a store that a Function, a Workflow or an App made and that still exists
 // (refuseLiveMarked).
-func madeByLiveOwner(kind string) ErrorCase {
-	return problem(fault.Conflict, "The Function, Workflow or App that made the "+kind+" still exists, and owns it.",
+func madeByLiveOwner(kind string) ErrorCase { return madeByLive(kind, "Function, Workflow or App") }
+
+// madeByLive is madeByLiveOwner for a kind that makers make, such as a Bucket, which a Lake or a Site makes too.
+func madeByLive(kind, makers string) ErrorCase {
+	return problem(fault.Conflict, "The "+makers+" that made the "+kind+" still exists, and owns it.",
 		"Change the "+kind+" through that owner, or delete the owner first.")
 }
 
 // ===== Bucket (namespaced) — ADR-0080 =====
 
 func registerBucket(api huma.API, h Handlers) {
+	// A Lake's catalog lives outside the Bucket and keeps its prefix as an object does (ADR-0293).
+	const catalogFix = "Once no Lake is located on the prefix, delete the catalog through the S3 gateway, as a " +
+		"writer of the prefix: the detail names its S3 bucket and key."
 	registerNamespacedCRUD(api, crudRoutes[v1.Bucket]{
 		kind: "Bucket", kinds: "Buckets", path: "buckets",
 		list: h.ListBuckets, create: h.CreateBucket, get: h.GetBucket, replace: h.ReplaceBucket, remove: h.DeleteBucket,
+		cases: &kindCases{
+			create: []ErrorCase{problem(fault.Invalid, "The namespace already holds 100 Buckets, the most that funcd "+
+				"allows.", "Delete a Bucket that the namespace no longer needs.")},
+			replace: []ErrorCase{madeByLive("Bucket", "Function, Workflow, App, Lake or Site"),
+				problem(fault.Conflict, "The spec drops a prefix that a Function's spec.bindings.blob still names.",
+					"Remove that binding from the Function first."),
+				problem(fault.Conflict, "The spec drops a prefix that still holds objects.",
+					"Delete the prefix's objects first."),
+				problem(fault.Conflict, "The spec drops a prefix that still holds a Lake's catalog.", catalogFix)},
+			remove: []ErrorCase{
+				problem(fault.Conflict, "A Function's spec.bindings.blob still names the Bucket.",
+					"Remove that binding from the Function first."),
+				problem(fault.Conflict, "A prefix of the Bucket still holds objects.", "Delete the prefix's objects first."),
+				problem(fault.Conflict, "A prefix of the Bucket still holds a Lake's catalog.", catalogFix)},
+		},
 	})
 }
 
 // ===== Lake (namespaced) — ADR-0086 =====
 
 func registerLake(api huma.API, h Handlers) {
+	undeclared := []ErrorCase{problem(fault.Invalid, "A binding names a Bucket, a ConfigMap or a Secret that the spec "+
+		"does not declare, such as a Bucket missing from spec.buckets.", "Declare it in the spec, or bind one that it declares.")}
 	registerNamespacedCRUD(api, crudRoutes[v1.Lake]{
 		kind: "Lake", kinds: "Lakes", path: "lakes",
 		list: h.ListLakes, create: h.CreateLake, get: h.GetLake,
 		replace: h.ReplaceLake, remove: h.DeleteLake,
+		cases: &kindCases{create: undeclared, replace: undeclared},
 	})
 }
 
@@ -212,6 +241,19 @@ func registerSQLDatabase(api huma.API, h Handlers) {
 		kind: "SQLDatabase", kinds: "SQLDatabases", path: "sqldatabases",
 		list: h.ListSQLDatabases, create: h.CreateSQLDatabase, get: h.GetSQLDatabase,
 		replace: h.ReplaceSQLDatabase, remove: h.DeleteSQLDatabase,
+		cases: &kindCases{
+			create: []ErrorCase{problem(fault.Invalid,
+				"The namespace already holds the most SQLDatabases that sql.maxDatabasesPerNamespace allows.",
+				"Delete a SQLDatabase that the namespace no longer needs, or ask the operator to raise the cap.")},
+			replace: []ErrorCase{madeByLiveOwner("SQLDatabase")},
+			remove: []ErrorCase{
+				problem(fault.Conflict, "A Function's spec.bindings.sql still names the database.",
+					"Remove that binding from the Function first."),
+				problem(fault.Conflict, "The database still holds a table.", "Drop its tables first."),
+				// The check fails closed (ADR-0232 Decision 7).
+				problem(fault.Conflict, "funcd cannot ask the database's engine whether it holds a table: the engine "+
+					"does not answer, or it is not Ready and the database has data.", "Retry once the SQLDatabase is Ready.")},
+		},
 	})
 }
 
