@@ -29,12 +29,17 @@ type platformBackupOutput struct {
 // cluster-scoped WorkerNode, so only an admin reads it; a failed listing of the target is 503. A nil s (no backup
 // stream on) reads enabled: false.
 func RegisterPlatformBackup(api huma.API, s BackupStatuser, authz auth.Authorizer) {
-	huma.Register(api, huma.Operation{
+	huma.Register(api, Describe(huma.Operation{
 		OperationID: "getPlatformBackup",
 		Method:      http.MethodGet,
 		Path:        "/apis/funcd.io/v1alpha1/platformbackup",
 		Tags:        []string{"PlatformBackup"},
-	}, func(ctx context.Context, _ *struct{}) (*platformBackupOutput, error) {
+	}, "Read the status of the platform backup", unauthorized(),
+		drForbidden("read the status of the platform backup"),
+		problem(fault.Unavailable, "funcd could not list backup.target, where the platform backup writes: the bucket "+
+			"does not exist, the URL is wrong, or the target fails.", "Check backup.target and the key of "+
+			"backup.credentialsFile, then read the status again."),
+	), func(ctx context.Context, _ *struct{}) (*platformBackupOutput, error) {
 		if err := authorizePlatformBackup(ctx, authz); err != nil {
 			return nil, wrapFaultError(err)
 		}

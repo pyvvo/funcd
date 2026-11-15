@@ -48,29 +48,29 @@ type Inputs struct {
 // Status is the platform backup's status (Decision 4). Its times come from the target's listing, so they survive a
 // restart; LastFailure and Streams are since the start.
 type Status struct {
-	Enabled              bool              `json:"enabled"`
-	Held                 bool              `json:"held"`
-	RPORisk              bool              `json:"rpoRisk"`
-	Interval             v1.Duration       `json:"interval"`
-	RPO                  v1.Duration       `json:"rpo"`
-	LastFailure          *Failure          `json:"lastFailure,omitempty"`
-	LastSuccessTime      *v1.Timestamp     `json:"lastSuccessTime,omitempty"`
-	LastVerifiedTime     *v1.Timestamp     `json:"lastVerifiedTime,omitempty"`
-	EarliestRestorePoint *v1.Timestamp     `json:"earliestRestorePoint,omitempty"`
-	NextRunTime          *v1.Timestamp     `json:"nextRunTime,omitempty"`
-	Streams              map[string]Stream `json:"streams,omitempty"`
+	Enabled              bool              `json:"enabled" doc:"True when funcd runs the platform backup, which needs backup.target and storage.mode file."`
+	Held                 bool              `json:"held" doc:"True while the platform is held: the platform backup waits for the release."`
+	RPORisk              bool              `json:"rpoRisk" doc:"True when no verified generation is newer than backup.objectives.rpo; funcd then logs backup rpo at risk. funcdctl backup verify clears it."`
+	Interval             v1.Duration       `json:"interval" doc:"How often the platform backup runs: backup.interval."`
+	RPO                  v1.Duration       `json:"rpo" doc:"The most data that a loss may take: backup.objectives.rpo."`
+	LastFailure          *Failure          `json:"lastFailure,omitempty" doc:"The last run that failed since funcd started; a run that succeeds clears it."`
+	LastSuccessTime      *v1.Timestamp     `json:"lastSuccessTime,omitempty" doc:"When the newest complete generation on the target was written."`
+	LastVerifiedTime     *v1.Timestamp     `json:"lastVerifiedTime,omitempty" doc:"When the newest generation that funcdctl backup verify checked was written; absent when none is verified or its original has expired."`
+	EarliestRestorePoint *v1.Timestamp     `json:"earliestRestorePoint,omitempty" doc:"When the oldest generation that funcd restore run can load was written."`
+	NextRunTime          *v1.Timestamp     `json:"nextRunTime,omitempty" doc:"When the next run is due."`
+	Streams              map[string]Stream `json:"streams,omitempty" doc:"The runs of the other backups since funcd started, by stream: blob for the mirror of Blob's files, kv for the KV backup."`
 }
 
 // Stream is what a sibling backup reported through Recorder since the start.
 type Stream struct {
-	LastSuccessTime *v1.Timestamp `json:"lastSuccessTime,omitempty"`
-	LastFailure     *Failure      `json:"lastFailure,omitempty"`
+	LastSuccessTime *v1.Timestamp `json:"lastSuccessTime,omitempty" doc:"When the stream's last run that succeeded ended."`
+	LastFailure     *Failure      `json:"lastFailure,omitempty" doc:"The stream's last run that failed; a run that succeeds clears it."`
 }
 
 // Failure is a failed run: when it ended and its error.
 type Failure struct {
-	Time  v1.Timestamp `json:"time"`
-	Error string       `json:"error"`
+	Time  v1.Timestamp `json:"time" doc:"When the run ended."`
+	Error string       `json:"error" doc:"Why the run failed."`
 }
 
 // Runner runs the platform backup and keeps its status in memory.

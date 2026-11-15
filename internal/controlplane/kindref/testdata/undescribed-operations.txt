@@ -1,6 +1,4 @@
 createApp
-createBackup
-createBackupSchedule
 createBucket
 createConfigMap
 createEgressPolicy
@@ -10,7 +8,6 @@ createLake
 createNamespace
 createPolicy
 createResourceGroup
-createRestore
 createRole
 createRolesAssignment
 createRoute
@@ -21,8 +18,6 @@ createSite
 createWorkflow
 createWorkflowRun
 deleteApp
-deleteBackup
-deleteBackupSchedule
 deleteBucket
 deleteConfigMap
 deleteEgressPolicy
@@ -32,7 +27,6 @@ deleteLake
 deleteNamespace
 deletePolicy
 deleteResourceGroup
-deleteRestore
 deleteRole
 deleteRolesAssignment
 deleteRoute
@@ -45,21 +39,16 @@ deleteWorkflowRun
 discardDeadLetter
 getApp
 getAppRevision
-getBackup
-getBackupSchedule
 getBucket
 getConfigMap
 getDeadLetter
 getEgressPolicy
 getEventSource
-getHold
 getIdentity
 getLake
 getNamespace
-getPlatformBackup
 getPolicy
 getResourceGroup
-getRestore
 getRole
 getRolesAssignment
 getRoute
@@ -72,8 +61,6 @@ getWorkflowRun
 getWorkflowRunLogs
 listAppRevisions
 listApps
-listBackupSchedules
-listBackups
 listBuckets
 listConfigMaps
 listDeadLetters
@@ -84,7 +71,6 @@ listLakes
 listNamespaces
 listPolicies
 listResourceGroups
-listRestores
 listRoles
 listRolesAssignments
 listRoutes
@@ -94,10 +80,7 @@ listSensors
 listSites
 listWorkflowRuns
 listWorkflows
-releaseHold
 replaceApp
-replaceBackup
-replaceBackupSchedule
 replaceBucket
 replaceConfigMap
 replaceEgressPolicy
@@ -107,7 +90,6 @@ replaceLake
 replaceNamespace
 replacePolicy
 replaceResourceGroup
-replaceRestore
 replaceRole
 replaceRolesAssignment
 replaceRoute
@@ -119,4 +101,3 @@ replaceWorkflow
 replaceWorkflowRun
 replayDeadLetter
 retryApp
-returnQuarantined
