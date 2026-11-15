@@ -364,6 +364,8 @@ The per-invocation context the shim passes to the handler.
 | `fetch(alias: string, path: string, init?: RequestInit): Promise<Response>` | Sends an HTTP request to the function that the link named alias targets, which serves HTTP, and returns its reply as a Response, whatever its status. path starts with "/" and may carry a query; init sets the method, the headers and the body, as for the global fetch. The request body and the reply are each at most 1 MiB, and the link's timeout, 30 seconds by default, bounds the call. Fails with the HTTP status 403 when the function declares no link named alias, and 409 when the target does not serve HTTP. |
 | `remainingMs(): number \| null` | The whole milliseconds left before the call's deadline, 0 once it has passed, or null when the call has none. |
 
+Each method here that calls funcd can also fail with the status 500 and the problem type `urn:funcd:problem:internal`, when funcd meets an error that it did not expect; funcd logs its cause.
+
 #### Python
 
 The per-invocation context the shim passes to the handler.
@@ -373,6 +375,8 @@ The per-invocation context the shim passes to the handler.
 | `log(*args: object) -> None` | Prints the arguments, separated by spaces, as one line on standard output, which funcd keeps as a log line at level INFO. |
 | `invoke(alias: str, payload: Any) -> Any` | Calls the function that the link named ``alias`` targets, and returns its result parsed from JSON, or ``None`` when it returns nothing. The target's ``event["data"]`` is ``payload``, except that a dict with a top-level ``"data"`` or ``"specversion"`` key is taken as the whole CloudEvent, so ``event["data"]`` is only its ``"data"`` value: send such a dict inside an envelope, as ``{"specversion": "1.0", "data": payload}``. The link's timeout, 30 seconds by default, bounds the call. Fails with the HTTP status 403 when the function declares no link named ``alias``, 409 when the target serves HTTP, 422 when ``payload`` does not match the target's contract, and the target's status when its handler fails, such as 500. |
 | `remaining_ms() -> int \| None` | The whole milliseconds left before the call's deadline, 0 once it has passed, or ``None`` when the call has none. |
+
+Each method here that calls funcd can also fail with the status 500 and the problem type `urn:funcd:problem:internal`, when funcd meets an error that it did not expect; funcd logs its cause.
 
 ## HTTP API
 

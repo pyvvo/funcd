@@ -77,6 +77,8 @@ The Bucket prefixes that the function binds, by alias: read, write, delete and l
 | `list(binding: string, prefix?: string): Promise<string[]>` | The keys that start with prefix; without a prefix, every key under the binding's prefix. |
 | `signedUrl(binding: string, key: string, opts?: SignOptions): Promise<string>` | A presigned URL that lets its holder send an opts.method request, GET by default, for the object until opts.expiry passes: a duration such as "10m" or "1h30m", in whole seconds from 1s to 168h, or 15 minutes when unset. Any other expiry, "" included, fails with the HTTP status 400. A PUT or DELETE URL needs permission to write the prefix, and a PUT URL fails with the HTTP status 403 when the Bucket sets maxObjectBytes or a size quota applies to the Bucket or the prefix, since funcd could not enforce it on the upload. No blob store that funcd opens signs URLs, so a call that passes these checks fails with the HTTP status 503. |
 
+Each method here that calls funcd can also fail with the status 500 and the problem type `urn:funcd:problem:internal`, when funcd meets an error that it did not expect; funcd logs its cause.
+
 #### Python
 
 The Bucket prefixes that the function binds, by alias: read, write, delete and list their objects, whose keys are relative to the binding's prefix.
@@ -88,3 +90,5 @@ The Bucket prefixes that the function binds, by alias: read, write, delete and l
 | `delete(binding: str, key: str) -> None` | Deletes the object, and fails with the HTTP status 404 when it does not exist. Only the prefix's owner and the writers that a RolesAssignment names can delete. |
 | `list(binding: str, prefix: str = '') -> list[str]` | The keys that start with ``prefix``; without a prefix, every key under the binding's prefix. |
 | `signed_url(binding: str, key: str, method: str = 'GET', expiry: str \| None = None) -> str` | A presigned URL that lets its holder send a ``method`` request for the object until ``expiry`` passes: a duration string such as ``"10m"`` or ``"1h30m"``, in whole seconds from 1s to 168h, or 15 minutes when ``None``. A method other than ``GET``, ``PUT`` or ``DELETE``, or any other expiry, ``""`` included, fails with the HTTP status 400; an ``expiry`` that is not a string raises ``TypeError`` before any request. A ``PUT`` or ``DELETE`` URL needs permission to write the prefix, and a ``PUT`` URL fails with the HTTP status 403 when the Bucket sets ``maxObjectBytes`` or a size quota applies to the Bucket or the prefix, since funcd could not enforce it on the upload. No blob store that funcd opens signs URLs, so a call that passes these checks fails with the HTTP status 503. |
+
+Each method here that calls funcd can also fail with the status 500 and the problem type `urn:funcd:problem:internal`, when funcd meets an error that it did not expect; funcd logs its cause.

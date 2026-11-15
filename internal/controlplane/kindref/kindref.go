@@ -22,6 +22,7 @@ import (
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
 	"github.com/pyvvo/funcd/api/types/v1alpha1/examples"
 	"github.com/pyvvo/funcd/internal/reference"
+	"github.com/pyvvo/funcd/internal/workernode/local"
 )
 
 // Feature is one page of the Developer chapter and the kinds its Spec tab lists. Its Spec page is
@@ -220,7 +221,7 @@ func featurePage(d document, fields map[string]string, f Feature) ([]byte, error
 		}
 	}
 	if cs := clients[f.Path]; len(cs) > 0 {
-		section, err := handlerSection(cs, languages)
+		section, err := handlerDocs{langs: languages, methods: methods, endpoints: local.Endpoints()}.section(cs)
 		if err != nil {
 			return nil, err
 		}
@@ -271,19 +272,24 @@ func handlerClients(name string, langs []language) ([]handlerClient, error) {
 	return out, nil
 }
 
-// handlerSection lists, for each client, its methods in each language, from that language's own api.json: the
-// languages name and describe their methods in their own way, so their tables stay apart. Overloads share a row.
-func handlerSection(names []string, langs []language) ([]string, error) {
+// section lists, for each client, its methods in each language, from that language's own api.json: the languages
+// name and describe their methods in their own way, so their tables stay apart. Overloads share a row. Each table is
+// followed by the errors its methods surface (ADR-0330 Decision 8), and fails on a method the table of methods does
+// not map.
+func (h handlerDocs) section(names []string) ([]string, error) {
 	lines := []string{"", "## Handler API", "", "The methods a handler calls on its context's clients, " +
 		"in each language funcd ships a shim for."}
 	for _, name := range names {
-		views, err := handlerClients(name, langs)
+		views, err := handlerClients(name, h.langs)
 		if err != nil {
 			return nil, err
 		}
 		lines = append(lines, "", "### `"+ctxName(name)+"`")
 		for i, c := range views {
-			lines = append(lines, "", "#### "+langs[i].name, "", reference.Cell(c.Doc), "", "| Method | What it does |",
+			if err := h.check(h.langs[i].name, c); err != nil {
+				return nil, err
+			}
+			lines = append(lines, "", "#### "+h.langs[i].name, "", reference.Cell(c.Doc), "", "| Method | What it does |",
 				"| --- | --- |")
 			var order []string
 			rows := map[string][]handlerMethod{}
@@ -304,6 +310,7 @@ func handlerSection(names []string, langs []language) ([]string, error) {
 				}
 				lines = append(lines, "| "+strings.Join(signatures, " or ")+" | "+reference.Cell(doc)+" |")
 			}
+			lines = append(lines, h.failures(h.langs[i].name, c)...)
 		}
 	}
 	return lines, nil
