@@ -71,6 +71,7 @@ jobs:
             generated:
               - 'docs/guide/develop/**/spec.md'
               - 'docs/guide/develop/common-definitions.md'
+              - 'docs/guide/api/**'
 
   # Fast lane — runs on every change but a docs-only one (and always on push to main). The heavy
   # pkg/funcd e2e suite is build-tagged out of `just ci`, so this is fmt + lint + fast tests +

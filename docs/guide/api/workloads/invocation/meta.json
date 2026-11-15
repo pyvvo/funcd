@@ -1,0 +1,10 @@
+{
+  "title": "Invocation",
+  "pages": [
+    "list",
+    "create",
+    "get",
+    "replace",
+    "delete"
+  ]
+}

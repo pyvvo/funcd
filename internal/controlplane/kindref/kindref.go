@@ -1,7 +1,8 @@
 // Package kindref writes the Spec page of each feature of the user guide's Developer chapter from funcd's OpenAPI
 // document (ADR-0323): every field of the spec and the status of the feature's kinds, with its type, its limits and
 // its description, each kind's tested example when it has one, and the methods a handler calls on the feature's ctx
-// clients, read from the language shims' api.json.
+// clients, read from the language shims' api.json. It also lays out the API reference of the docs site, which
+// renders each operation from the same document (ADR-0331).
 package kindref
 
 import (
@@ -108,21 +109,35 @@ func Render(doc *huma.OpenAPI) (map[string][]byte, error) {
 }
 
 // Undescribed returns, sorted, the schema path ("FunctionSpec.handler") of every field that Render shows with no
-// description.
+// description, and of every field of the API reference's schemas that no Spec page shows (ADR-0331 Decision 3.2).
 func Undescribed(doc *huma.OpenAPI) []string {
-	_, fields, _ := render(documentOf(doc), Features)
+	fields, _ := fieldsOf(documentOf(doc))
 	return undescribed(fields)
 }
 
-// document is what the pages show of the OpenAPI document: its schemas, its operations and its security schemes.
+// fieldsOf renders every page and returns, by schema path, the description of each field that the pages or the API
+// reference show.
+func fieldsOf(d document) (map[string]string, error) {
+	_, fields, err := render(d, Features)
+	if err != nil {
+		return nil, err
+	}
+	referenceFields(d, fields)
+	return fields, nil
+}
+
+// document is what the pages show of the OpenAPI document: its schemas, its operations and the path of each one's
+// page in the API reference.
 type document struct {
 	schemas map[string]*huma.Schema
 	ops     []operation
-	schemes map[string]*huma.SecurityScheme
+	paths   map[string]string
 }
 
 func documentOf(doc *huma.OpenAPI) document {
-	return document{schemas: doc.Components.Schemas.Map(), ops: operationsOf(doc), schemes: doc.Components.SecuritySchemes}
+	ops := operationsOf(doc)
+	pages, _ := referencePages(ops)
+	return document{schemas: doc.Components.Schemas.Map(), ops: ops, paths: pathsOf(pages)}
 }
 
 func undescribed(fields map[string]string) []string {
@@ -227,9 +242,7 @@ func featurePage(d document, fields map[string]string, f Feature) ([]byte, error
 		}
 		r.lines = append(r.lines, section...)
 	}
-	if err := r.httpSection(d, f); err != nil {
-		return nil, err
-	}
+	r.lines = append(r.lines, httpSection(d, f, up)...)
 	return page(append(lines, r.lines...)), nil
 }
 

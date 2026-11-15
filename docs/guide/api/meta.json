@@ -1,0 +1,11 @@
+{
+  "root": true,
+  "title": "API reference",
+  "description": "The operations of funcd's control plane API",
+  "icon": "SquareCode",
+  "pages": [
+    "index",
+    "workloads",
+    "services"
+  ]
+}
