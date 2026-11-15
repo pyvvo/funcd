@@ -7,13 +7,14 @@ import (
 	"net/http"
 )
 
-// Problem is an RFC 9457 application/problem+json body.
+// Problem is an RFC 9457 application/problem+json body. Its doc tags describe the error body of the API reference
+// (ADR-0331 Decision 3.2); they change nothing on the wire.
 type Problem struct {
-	Type     string `json:"type"`
-	Title    string `json:"title"`
-	Status   int    `json:"status"`
-	Detail   string `json:"detail"`
-	Instance string `json:"instance,omitempty"`
+	Type     string `json:"type" doc:"The problem type, a URI that names the error, such as urn:funcd:problem:conflict, or about:blank when the status alone names it, as for a body that breaks the schema."`
+	Title    string `json:"title" doc:"A short summary of the problem type, such as Conflict."`
+	Status   int    `json:"status" doc:"The HTTP status code of the answer."`
+	Detail   string `json:"detail" doc:"What went wrong in this call, for people to read, such as the field that breaks the schema and its location."`
+	Instance string `json:"instance,omitempty" doc:"A URI that names this occurrence of the problem. funcd does not set it."`
 }
 
 // kindProblem maps each Kind to its problem+json type URI and HTTP status.

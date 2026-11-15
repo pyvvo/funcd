@@ -1,0 +1,9 @@
+{
+  "title": "Workloads",
+  "icon": "Boxes",
+  "pages": [
+    "function",
+    "revision",
+    "invocation"
+  ]
+}

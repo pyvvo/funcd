@@ -12,15 +12,27 @@ import (
 
 // scenario: stale-generated-file-fails-ci
 func TestScenarioStaleGeneratedFileFailsCI(t *testing.T) {
-	page := "docs/guide/develop/services/kv/spec.md"
-	dir := scratchRepo(t, map[string]string{page: "as generated\n", "api/openapi/funcd.v1alpha1.yaml": "spec\n"})
+	generated := []string{"docs/guide/develop/services/kv/spec.md", "api/openapi/reference-paths.json",
+		"docs/guide/api/meta.json", "docs/guide/api/services/kvstore/meta.json"}
+	files := map[string]string{"api/openapi/funcd.v1alpha1.yaml": "spec\n", "docs/guide/api/index.md": "by hand\n"}
+	for _, name := range generated {
+		files[name] = "as generated\n"
+	}
+	dir := scratchRepo(t, files)
 	out, err := runCheck(t, dir, "check-generated.sh")
 	require.NoError(t, err, out)
 
-	putFile(t, dir, page, "as regenerated\n")
+	for _, name := range generated {
+		putFile(t, dir, name, "as regenerated\n")
+		out, err = runCheck(t, dir, "check-generated.sh")
+		require.Error(t, err, name)
+		require.Contains(t, out, name)
+		putFile(t, dir, name, "as generated\n")
+	}
+	putFile(t, dir, "docs/guide/api/workloads/function/meta.json", "new\n")
 	out, err = runCheck(t, dir, "check-generated.sh")
-	require.Error(t, err)
-	require.Contains(t, out, page)
+	require.Error(t, err, "a new folder of the reference is not committed")
+	require.Contains(t, out, "docs/guide/api/workloads/")
 }
 
 // scratchRepo returns a repository with one commit that holds files.

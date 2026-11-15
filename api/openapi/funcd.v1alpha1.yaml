@@ -2629,15 +2629,20 @@ components:
       additionalProperties: false
       properties:
         detail:
+          description: What went wrong in this call, for people to read, such as the field that breaks the schema and its location.
           type: string
         instance:
+          description: A URI that names this occurrence of the problem. funcd does not set it.
           type: string
         status:
+          description: The HTTP status code of the answer.
           format: int64
           type: integer
         title:
+          description: A short summary of the problem type, such as Conflict.
           type: string
         type:
+          description: The problem type, a URI that names the error, such as urn:funcd:problem:conflict, or about:blank when the status alone names it, as for a body that breaks the schema.
           type: string
       required:
         - type

@@ -1,14 +1,18 @@
 // Command specgen writes the huma-generated OpenAPI 3.1 spec to the committed path.
-// It builds the API with stub handlers and writes the YAML output deterministically.
+// It builds the API with stub handlers and writes the YAML output deterministically. With -guide, it also writes the
+// guide's Spec pages (ADR-0323) and the API reference's layout beside them (ADR-0331).
 // Usage: go run ./cmd/specgen/ -out ../../api/openapi/funcd.v1alpha1.yaml [-guide ../../docs/guide]
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -20,7 +24,8 @@ import (
 
 func main() {
 	outPath := flag.String("out", "api/openapi/funcd.v1alpha1.yaml", "output path for the OpenAPI YAML spec")
-	guide := flag.String("guide", "", "the user guide's directory: write each feature's Spec page under it (ADR-0323)")
+	guide := flag.String("guide", "", "the user guide's directory, a repository's docs/guide: write each feature's Spec "+
+		"page under it (ADR-0323), and the API reference's layout (ADR-0331)")
 	flag.Parse()
 
 	api := controlplane.SpecAPI()
@@ -47,7 +52,11 @@ func main() {
 	fmt.Fprintf(os.Stderr, "specgen: wrote %s\n", *outPath)
 
 	if *guide != "" {
-		if err := writeGuide(*guide, api.OpenAPI()); err != nil {
+		err := writeGuide(*guide, api.OpenAPI())
+		if err == nil {
+			err = writeReference(*guide, api.OpenAPI())
+		}
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "specgen: %v\n", err)
 			os.Exit(1)
 		}
@@ -85,6 +94,110 @@ func writeGuide(dir string, doc *huma.OpenAPI) error {
 		fmt.Fprintf(os.Stderr, "specgen: removed %s\n", rel)
 		return os.Remove(path)
 	})
+}
+
+// writeReference writes the API reference's layout, whose files kindref names from the repository root: the
+// repository that holds guide as its docs/guide. It reads the title and icon of each section of the guide's Develop
+// chapter, and deletes each meta.json under the guide's api folder that kindref no longer returns, with each folder
+// that this leaves empty (ADR-0331 Decision 3.2).
+func writeReference(guide string, doc *huma.OpenAPI) error {
+	guide = filepath.Clean(guide)
+	if filepath.Base(guide) != "guide" || filepath.Base(filepath.Dir(guide)) != "docs" {
+		return fmt.Errorf("the guide %s is not a repository's docs/guide, from whose root the API reference's files are named", guide)
+	}
+	root := filepath.Dir(filepath.Dir(guide))
+	sections, err := guideSections(filepath.Join(guide, "develop"))
+	if err != nil {
+		return err
+	}
+	files, err := kindref.ReferenceFiles(doc, sections)
+	if err != nil {
+		return err
+	}
+	for rel, body := range files {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, body, 0o644); err != nil {
+			return err
+		}
+	}
+	return removeStale(root, filepath.Join(guide, "api"), files)
+}
+
+// guideSections reads the title and icon of each section of the Develop chapter: a folder of develop with a
+// meta.json, by the folder's name.
+func guideSections(develop string) (map[string]kindref.SectionMeta, error) {
+	entries, err := os.ReadDir(develop)
+	if err != nil {
+		return nil, err
+	}
+	sections := map[string]kindref.SectionMeta{}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		path := filepath.Join(develop, e.Name(), "meta.json")
+		b, err := os.ReadFile(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		var section kindref.SectionMeta
+		if err := json.Unmarshal(b, &section); err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+		sections[e.Name()] = section
+	}
+	return sections, nil
+}
+
+// removeStale deletes each meta.json under dir whose path from root files does not hold, then each folder under dir
+// that this leaves empty.
+func removeStale(root, dir string, files map[string][]byte) error {
+	var folders []string
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		switch {
+		case err != nil:
+			return err
+		case d.IsDir():
+			if path != dir {
+				folders = append(folders, path)
+			}
+			return nil
+		case d.Name() != "meta.json":
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		if _, ok := files[filepath.ToSlash(rel)]; ok {
+			return nil
+		}
+		fmt.Fprintf(os.Stderr, "specgen: removed %s\n", rel)
+		return os.Remove(path)
+	})
+	if err != nil {
+		return err
+	}
+	// WalkDir lists a folder before the folders in it, so the reverse order empties a folder's children first.
+	slices.Reverse(folders)
+	for _, folder := range folders {
+		entries, err := os.ReadDir(folder)
+		if err != nil {
+			return err
+		}
+		if len(entries) == 0 {
+			if err := os.Remove(folder); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // generated reports whether the page at path carries kindref's marker as its front matter's first line.

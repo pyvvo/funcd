@@ -1,0 +1,23 @@
+{
+  "createFunction": "workloads/function/create",
+  "createInvocation": "workloads/invocation/create",
+  "createKVStore": "services/kvstore/create",
+  "deleteFunction": "workloads/function/delete",
+  "deleteInvocation": "workloads/invocation/delete",
+  "deleteKVStore": "services/kvstore/delete",
+  "deleteVolume": "workloads/function/delete-volume",
+  "getFunction": "workloads/function/get",
+  "getFunctionLogs": "workloads/function/get-logs",
+  "getInvocation": "workloads/invocation/get",
+  "getKVStore": "services/kvstore/get",
+  "getRevision": "workloads/revision/get",
+  "handoverKVStore": "services/kvstore/handover",
+  "invokeFunction": "workloads/function/invoke",
+  "listFunctions": "workloads/function/list",
+  "listInvocations": "workloads/invocation/list",
+  "listKVStores": "services/kvstore/list",
+  "listRevisions": "workloads/revision/list",
+  "replaceFunction": "workloads/function/replace",
+  "replaceInvocation": "workloads/invocation/replace",
+  "replaceKVStore": "services/kvstore/replace"
+}
