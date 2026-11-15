@@ -267,8 +267,8 @@ func registerInvoke(mux facetMux, logger *slog.Logger, caller Ref, identity auth
 // callCauses are the causes that invoke and fetch both answer, which funcd raises itself: the target's reply, whatever
 // its status, is no error of theirs.
 func callCauses() []*fault.KnownCause {
-	return []*fault.KnownCause{ErrBodyTooLarge, ErrBodyUnreadable, ErrNoLink, ErrLinkDenied, ErrNestedCapReached,
-		ErrReplyCutOff, ErrReplyTooLarge}
+	return []*fault.KnownCause{ErrBodyTooLarge, ErrBodyUnreadable, ErrNoLink, ErrLinkTargetMissing, ErrLinkDenied,
+		ErrNestedCapReached, ErrReplyCutOff, ErrReplyTooLarge}
 }
 
 // FetchReplyHeader marks a context.fetch answer that is the target's reply, so the shim tells it from a call the local

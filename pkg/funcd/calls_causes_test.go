@@ -15,6 +15,8 @@ import (
 
 	"github.com/pyvvo/funcd/api/fault"
 	v1 "github.com/pyvvo/funcd/api/types/v1alpha1"
+	"github.com/pyvvo/funcd/internal/store"
+	"github.com/pyvvo/funcd/internal/store/memory"
 	"github.com/pyvvo/funcd/internal/workernode/local"
 	"github.com/pyvvo/funcd/pkg/funcd"
 )
@@ -22,12 +24,14 @@ import (
 // callCauseEnv runs a platform whose workers are the test's handlers and whose nested in-flight cap is 1, with the call
 // matrices' Functions in its default namespace: crash, big and held, of protocol p, which their workers serve, crash
 // cutting its reply off after its first byte, big replying past 1 MiB and held keeping each call until the test ends;
-// other, of the other protocol, has no worker. caller links them as c, b, h and o, and denied links big as d, which a
-// Policy forbids it to call. One call of caller to held is in flight once it returns.
+// other, of the other protocol, has no worker, and gone is deleted through the store once caller links it. caller links
+// them as c, b, h, o and g, and denied links big as d, which a Policy forbids it to call. One call of caller to held is
+// in flight once it returns.
 func callCauseEnv(t *testing.T, p v1.FunctionProtocol) *causeEnv {
 	t.Helper()
 	workers := newFakeWorkers()
-	plat := answersPlatform(t, funcd.WithRuntime(workers), funcd.WithRuntimeShim("node", "shim.mjs"),
+	st := store.New(memory.New())
+	plat := answersPlatform(t, funcd.WithStore(st), funcd.WithRuntime(workers), funcd.WithRuntimeShim("node", "shim.mjs"),
 		funcd.WithNestedInFlightCap(1))
 	c, base := answersClient(), "http://"+plat.Addr()
 	t.Cleanup(c.CloseIdleConnections)
@@ -64,10 +68,15 @@ func callCauseEnv(t *testing.T, p v1.FunctionProtocol) *causeEnv {
 		other.Spec.Protocol = v1.ProtocolHTTP
 	}
 	create(t, c, base, other)
+	create(t, c, base, function("gone"))
 	caller := function("caller")
 	caller.Spec.Bindings.Links = []v1.FunctionLink{{Alias: "c", Target: "crash"}, {Alias: "b", Target: "big"},
-		{Alias: "h", Target: "held", Timeout: v1.Duration(5 * time.Minute)}, {Alias: "o", Target: "other"}}
+		{Alias: "h", Target: "held", Timeout: v1.Duration(5 * time.Minute)}, {Alias: "o", Target: "other"},
+		{Alias: "g", Target: "gone"}}
 	create(t, c, base, caller)
+	// The collector and an App's prune delete through the store, past link-deletion-protection (ADR-0170); no version,
+	// since gone's reconciler may write its status meanwhile.
+	require.NoError(t, st.Delete(context.Background(), v1.KindFunction.GVK(), "default", "gone", ""))
 	denied := function("denied")
 	denied.Spec.Bindings.Links = []v1.FunctionLink{{Alias: "d", Target: "big"}}
 	create(t, c, base, denied)
@@ -126,6 +135,7 @@ func invokeCauseRows(env *causeEnv) []causeRow {
 		row(local.ErrBodyUnreadable, "caller", causeRequest{
 			raw: "POST /invoke/b HTTP/1.1\r\nHost: local\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n"}),
 		row(local.ErrNoLink, "caller", invoke("ghost", `{}`)),
+		row(local.ErrLinkTargetMissing, "caller", invoke("g", `{}`)),
 		row(local.ErrTargetServesHTTP, "caller", invoke("o", `{}`)),
 		row(local.ErrLinkDenied, "denied", invoke("d", `{}`)),
 		row(local.ErrNestedCapReached, "caller", invoke("h", `{}`)),
@@ -154,6 +164,7 @@ func fetchCauseRows(env *causeEnv) []causeRow {
 		row(local.ErrBodyUnreadable, "caller", causeRequest{
 			raw: "POST /fetch/b/ HTTP/1.1\r\nHost: local\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n"}),
 		row(local.ErrNoLink, "caller", fetch("ghost/")),
+		row(local.ErrLinkTargetMissing, "caller", fetch("g/")),
 		row(local.ErrTargetNotHTTP, "caller", fetch("o/")),
 		row(local.ErrLinkDenied, "denied", fetch("d/")),
 		row(local.ErrNestedCapReached, "caller", fetch("h/")),
