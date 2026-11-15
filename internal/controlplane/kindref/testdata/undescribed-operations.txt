@@ -1,4 +1,3 @@
-createApp
 createBackup
 createBackupSchedule
 createBucket
@@ -17,10 +16,8 @@ createRoute
 createSQLDatabase
 createSecret
 createSensor
-createSite
 createWorkflow
 createWorkflowRun
-deleteApp
 deleteBackup
 deleteBackupSchedule
 deleteBucket
@@ -39,12 +36,9 @@ deleteRoute
 deleteSQLDatabase
 deleteSecret
 deleteSensor
-deleteSite
 deleteWorkflow
 deleteWorkflowRun
 discardDeadLetter
-getApp
-getAppRevision
 getBackup
 getBackupSchedule
 getBucket
@@ -66,12 +60,9 @@ getRoute
 getSQLDatabase
 getSecret
 getSensor
-getSite
 getWorkflow
 getWorkflowRun
 getWorkflowRunLogs
-listAppRevisions
-listApps
 listBackupSchedules
 listBackups
 listBuckets
@@ -91,11 +82,9 @@ listRoutes
 listSQLDatabases
 listSecrets
 listSensors
-listSites
 listWorkflowRuns
 listWorkflows
 releaseHold
-replaceApp
 replaceBackup
 replaceBackupSchedule
 replaceBucket
@@ -114,9 +103,7 @@ replaceRoute
 replaceSQLDatabase
 replaceSecret
 replaceSensor
-replaceSite
 replaceWorkflow
 replaceWorkflowRun
 replayDeadLetter
-retryApp
 returnQuarantined

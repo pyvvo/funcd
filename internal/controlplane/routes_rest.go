@@ -307,16 +307,46 @@ func registerSite(api huma.API, h Handlers) {
 	registerNamespacedCRUD(api, crudRoutes[v1.Site]{
 		kind: "Site", kinds: "Sites", path: "sites",
 		list: h.ListSites, create: h.CreateSite, get: h.GetSite, replace: h.ReplaceSite, remove: h.DeleteSite,
+		cases: &kindCases{replace: []ErrorCase{problem(fault.Invalid, "The spec changes spec.bindings.blob[0].prefix, "+
+			"which holds the Site's bundles and is never removed from the Bucket.",
+			"Keep the prefix. A new prefix needs a new Site, under another name.")}},
 	})
 }
 
 // ===== App (namespaced) — ADR-0199, FEAT-0010/F113 =====
 
 func registerApp(api huma.API, h Handlers) {
+	writes := appWrites()
 	registerNamespacedCRUD(api, crudRoutes[v1.App]{
 		kind: "App", kinds: "Apps", path: "apps",
 		list: h.ListApps, create: h.CreateApp, get: h.GetApp, replace: h.ReplaceApp, remove: h.DeleteApp,
+		cases: &kindCases{create: writes, replace: slices.Concat(writes, []ErrorCase{
+			problem(fault.Invalid, "A ref entry names an object that the App controls, such as a part that an earlier "+
+				"spec declared by name.", "Declare it by name again; to keep a store as a ref, apply it with "+
+				"deletion: retain first."),
+			problem(fault.Conflict, "The new spec.version is outside the range that another App, once started, "+
+				"requires of the App in its spec.requires.", "Widen that App's range first, or keep a version within it."),
+		}), remove: []ErrorCase{problem(fault.Conflict, "Another App's spec.requires names the App.",
+			"Remove that requirement first.")}},
 	})
+}
+
+// appWrites are the cases an App's create and replace add to their verb's: the rules of the app-parts admission
+// (ADR-0199 Decision 3, ADR-0213 Decision 7), which runs each part through the admissions of its kind, and the cycle of
+// app-requires (ADR-0219 Decision 7).
+func appWrites() []ErrorCase {
+	return []ErrorCase{
+		problem(fault.Invalid, "A Function, a Lake or a Workflow's image step of the App binds a Secret that "+
+			"spec.secrets does not declare.", "Declare the Secret in spec.secrets, or remove it from the bindings."),
+		problem(fault.Invalid, "The App's spec.requires would close a cycle among the namespace's Apps, such as an "+
+			"App that requires itself.", "Remove a requirement of the cycle."),
+		problem(fault.Invalid, "A part breaks a rule that a write of its kind is held to, such as a Function's link "+
+			"to a Function that neither the App nor the namespace holds; the detail names the part's entry, such as "+
+			"spec.functions[0].", "Correct that entry as the detail says."),
+		problem(fault.Conflict, "A part conflicts with what the namespace or funcd holds, as a write of its kind "+
+			"would, such as a Function's local volume that does not fit in volumes.capacity; the detail names the "+
+			"part's entry.", "Resolve what the detail names, then apply the App again."),
+	}
 }
 
 // ===== AppRevision (namespaced, read-only) — ADR-0200, FEAT-0010/F114 =====
@@ -324,7 +354,7 @@ func registerApp(api huma.API, h Handlers) {
 func registerAppRevision(api huma.API, h Handlers) {
 	registerNamespacedRead(api, crudRoutes[v1.AppRevision]{
 		kind: "AppRevision", kinds: "AppRevisions", path: "apprevisions",
-		list: h.ListAppRevisions, get: h.GetAppRevision,
+		list: h.ListAppRevisions, get: h.GetAppRevision, cases: &kindCases{},
 	})
 }
 
