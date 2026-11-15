@@ -118,6 +118,11 @@ func TestScenarioFunctionCallDocumented(t *testing.T) {
 		{503, "`urn:funcd:problem:unavailable`", "ADR-0155", "The worker failed during the call"},
 		{503, "`urn:funcd:problem:unavailable`", "ADR-0176", "could not read the namespace's settings"},
 		{503, "`urn:funcd:problem:unavailable`", "ADR-0303", "cannot read the Function's contract"},
+		{503, "`urn:funcd:problem:unavailable`", "ADR-0290", "The namespace is held for its data"},
+		{503, "`urn:funcd:problem:unavailable`", "ADR-0290", "The namespace is held while a Restore loads it"},
+		{503, "`urn:funcd:problem:unavailable`", "ADR-0161", "within invoke.activationTimeout"},
+		{503, "`urn:funcd:problem:unavailable`", "ADR-0169", "The Function is Failed"},
+		{503, "`urn:funcd:problem:unavailable`", "ADR-0028", "funcd is stopping"},
 		{504, "`urn:funcd:problem:deadline-exceeded`", "ADR-0151", "within the call's deadline"},
 	} {
 		row := "\n| " + strconv.Itoa(want.status) + " | " + want.body + " | "

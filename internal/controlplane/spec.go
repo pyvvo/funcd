@@ -92,6 +92,17 @@ func invokeCases() []ErrorCase {
 		problem(fault.Unavailable, "funcd could not read the namespace's settings, so it does not know how to serve the "+
 			"call.", "Retry the call later."),
 		problem(fault.Unavailable, "funcd cannot read the Function's contract.", "Retry the call later."),
+		problem(fault.Unavailable, "The namespace is held for its data, so funcd refuses its calls until the hold is "+
+			"released.", "Retry after the seconds that the Retry-After header gives; funcdctl hold release "+
+			"--namespace releases the hold."),
+		problem(fault.Unavailable, "The namespace is held while a Restore loads it.",
+			"Retry after the seconds that the Retry-After header gives, once the Restore has ended."),
+		problem(fault.Unavailable, "No worker of the Function became ready within invoke.activationTimeout, 30 s by "+
+			"default.", "Retry the call; if it keeps failing, read the Function's status for why its worker is not ready."),
+		problem(fault.Unavailable, "The Function is Failed; the detail names the reason, such as ShapeInvalid.",
+			"Correct what the Function's status names, such as its artifact, then retry."),
+		problem(fault.Unavailable, "funcd is stopping, and the call was waiting for a worker of the Function to "+
+			"become ready.", "Retry the call once funcd runs again."),
 		problem(fault.DeadlineExceeded, "The worker did not start its answer within the call's deadline: the "+
 			"Function's spec.timeout, else invoke.defaultTimeout.", "Make the handler answer sooner, or raise its spec.timeout."),
 	}
