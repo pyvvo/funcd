@@ -284,7 +284,8 @@ func kvCauseRows(envs kvEnvs) []causeRow {
 // causeMatrices are the matrices of the described services, by the first segment of their endpoints' paths.
 func causeMatrices() map[string][]causeRow {
 	return map[string][]causeRow{"kv": kvCauseRows(kvEnvs{}), "blob": blobCauseRows(blobEnvs{}),
-		"secret": secretCauseRows(secretEnvs{})}
+		"secret": secretCauseRows(secretEnvs{}), "sql": sqlCauseRows(sqlEnvs{}), "invoke": invokeCauseRows(nil),
+		"fetch": fetchCauseRows(nil)}
 }
 
 // TestEveryDeclaredCauseHasARow holds each described endpoint's declared causes to the matrix of its service: one row
@@ -294,11 +295,11 @@ func TestEveryDeclaredCauseHasARow(t *testing.T) {
 	endpoints := local.Endpoints()
 	require.NoError(t, checkCauseRows(endpoints, causeMatrices()))
 	rows := kvCauseRows(kvEnvs{})
+	// withKV is every service's matrix but kv's, which is kv, or none when kv is nil: each case changes kv's alone.
 	withKV := func(kv []causeRow) map[string][]causeRow {
 		matrices := causeMatrices()
-		if kv == nil {
-			delete(matrices, "kv")
-		} else {
+		delete(matrices, "kv")
+		if kv != nil {
 			matrices["kv"] = kv
 		}
 		return matrices
